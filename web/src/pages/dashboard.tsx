@@ -1,8 +1,10 @@
+import { type FormEvent, useCallback, useState } from "react";
 import { Link, useParams } from "react-router";
-import { FolderKanban, Plus } from "lucide-react";
+import { FolderKanban, Plus, X } from "lucide-react";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { useProjectStore } from "@/stores/project";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   Card,
   CardContent,
@@ -15,7 +17,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 export function DashboardPage() {
   const { wsSlug } = useParams();
   const { currentWorkspace } = useWorkspaceStore();
-  const { projects, isLoading } = useProjectStore();
+  const { projects, isLoading, createProject } = useProjectStore();
+  const [showForm, setShowForm] = useState(false);
 
   return (
     <div className="space-y-6">
@@ -28,11 +31,19 @@ export function DashboardPage() {
             Workspace overview and project navigation
           </p>
         </div>
-        <Button>
+        <Button onClick={() => setShowForm(true)}>
           <Plus className="h-4 w-4" />
           New Project
         </Button>
       </div>
+
+      {showForm && currentWorkspace && (
+        <CreateProjectForm
+          workspaceId={currentWorkspace.id}
+          onCreate={createProject}
+          onClose={() => setShowForm(false)}
+        />
+      )}
 
       {isLoading ? (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -48,7 +59,7 @@ export function DashboardPage() {
             </Card>
           ))}
         </div>
-      ) : projects.length === 0 ? (
+      ) : projects.length === 0 && !showForm ? (
         <Card>
           <CardContent className="flex flex-col items-center justify-center py-12">
             <FolderKanban className="mb-4 h-12 w-12 text-muted-foreground" />
@@ -56,7 +67,7 @@ export function DashboardPage() {
             <p className="mb-4 text-sm text-muted-foreground">
               Create your first project to start managing tasks.
             </p>
-            <Button>
+            <Button onClick={() => setShowForm(true)}>
               <Plus className="h-4 w-4" />
               Create Project
             </Button>
@@ -93,5 +104,113 @@ export function DashboardPage() {
         </div>
       )}
     </div>
+  );
+}
+
+function CreateProjectForm({
+  workspaceId,
+  onCreate,
+  onClose,
+}: {
+  workspaceId: string;
+  onCreate: (workspaceId: string, req: { name: string; slug: string; description?: string }) => Promise<unknown>;
+  onClose: () => void;
+}) {
+  const [name, setName] = useState("");
+  const [slug, setSlug] = useState("");
+  const [description, setDescription] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
+
+  const handleNameChange = useCallback((value: string) => {
+    setName(value);
+    setSlug(
+      value
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-|-$/g, ""),
+    );
+  }, []);
+
+  const handleSubmit = useCallback(
+    async (e: FormEvent) => {
+      e.preventDefault();
+      if (!name.trim() || !slug.trim()) return;
+      setError(null);
+      setCreating(true);
+      try {
+        await onCreate(workspaceId, {
+          name: name.trim(),
+          slug: slug.trim(),
+          description: description.trim() || undefined,
+        });
+        onClose();
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to create project");
+      } finally {
+        setCreating(false);
+      }
+    },
+    [name, slug, description, workspaceId, onCreate, onClose],
+  );
+
+  return (
+    <Card>
+      <CardHeader className="flex flex-row items-center justify-between pb-3">
+        <CardTitle className="text-base">New Project</CardTitle>
+        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onClose}>
+          <X className="h-4 w-4" />
+        </Button>
+      </CardHeader>
+      <form onSubmit={handleSubmit}>
+        <CardContent className="space-y-3">
+          {error && (
+            <div className="rounded-lg bg-destructive/10 p-3 text-sm text-destructive">
+              {error}
+            </div>
+          )}
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="space-y-1">
+              <label htmlFor="proj-name" className="text-sm font-medium">Name</label>
+              <Input
+                id="proj-name"
+                placeholder="My Project"
+                value={name}
+                onChange={(e) => handleNameChange(e.target.value)}
+                required
+                autoFocus
+              />
+            </div>
+            <div className="space-y-1">
+              <label htmlFor="proj-slug" className="text-sm font-medium">Slug</label>
+              <Input
+                id="proj-slug"
+                placeholder="my-project"
+                value={slug}
+                onChange={(e) => setSlug(e.target.value)}
+                required
+              />
+            </div>
+          </div>
+          <div className="space-y-1">
+            <label htmlFor="proj-desc" className="text-sm font-medium">Description</label>
+            <Input
+              id="proj-desc"
+              placeholder="Optional description"
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+            />
+          </div>
+        </CardContent>
+        <div className="flex justify-end gap-2 px-6 pb-4">
+          <Button type="button" variant="outline" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button type="submit" disabled={creating}>
+            {creating ? "Creating..." : "Create"}
+          </Button>
+        </div>
+      </form>
+    </Card>
   );
 }
