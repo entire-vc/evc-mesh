@@ -24,6 +24,9 @@ import {
 import { useTaskStore } from "@/stores/task";
 import { useProjectStore } from "@/stores/project";
 import { useCustomFieldStore } from "@/stores/custom-field";
+import { useAgentStore } from "@/stores/agent";
+import { useAuthStore } from "@/stores/auth";
+import { useWorkspaceStore } from "@/stores/workspace";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -43,7 +46,7 @@ import {
   priorityConfig,
   statusCategoryConfig,
 } from "@/lib/utils";
-import type { Priority } from "@/types";
+import type { AssigneeType, Priority } from "@/types";
 
 type TabId = "comments" | "activity" | "subtasks" | "artifacts";
 
@@ -63,6 +66,9 @@ export function TaskDetailPage() {
   const { statuses, fetchStatuses } = useProjectStore();
   const { fields: customFieldDefs, fetchFields: fetchCustomFields } =
     useCustomFieldStore();
+  const { agents, fetchAgents } = useAgentStore();
+  const { user } = useAuthStore();
+  const { currentWorkspace } = useWorkspaceStore();
 
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<TabId>("comments");
@@ -96,6 +102,13 @@ export function TaskDetailPage() {
     }
     void load();
   }, [taskId, fetchTask, fetchStatuses, fetchCustomFields, statuses.length, statuses]);
+
+  // Fetch agents for assignee dropdown
+  useEffect(() => {
+    if (currentWorkspace) {
+      void fetchAgents(currentWorkspace.id);
+    }
+  }, [currentWorkspace, fetchAgents]);
 
   // Sync title draft with current task
   useEffect(() => {
@@ -142,6 +155,22 @@ export function TaskDetailPage() {
   const handlePriorityChange = async (priority: Priority) => {
     if (!currentTask || priority === currentTask.priority) return;
     await updateTask(currentTask.id, { priority });
+  };
+
+  const handleAssigneeChange = async (value: string) => {
+    if (!currentTask) return;
+    if (value === "unassigned") {
+      await updateTask(currentTask.id, {
+        assignee_id: null,
+        assignee_type: "unassigned",
+      });
+    } else {
+      const [type, id] = value.split(":");
+      await updateTask(currentTask.id, {
+        assignee_id: id,
+        assignee_type: type as AssigneeType,
+      });
+    }
   };
 
   const handleCustomFieldChange = useCallback(
@@ -358,25 +387,36 @@ export function TaskDetailPage() {
                   <User className="h-3.5 w-3.5" />
                   Assignee
                 </label>
-                {currentTask.assignee_id ? (
-                  <div className="flex items-center gap-2 text-sm">
-                    {currentTask.assignee_type === "agent" ? (
-                      <Bot className="h-4 w-4 text-violet-500" />
+                <div className="flex items-center gap-2">
+                  {currentTask.assignee_id && (
+                    currentTask.assignee_type === "agent" ? (
+                      <Bot className="h-4 w-4 shrink-0 text-violet-500" />
                     ) : (
-                      <User className="h-4 w-4 text-sky-500" />
+                      <User className="h-4 w-4 shrink-0 text-sky-500" />
+                    )
+                  )}
+                  <Select
+                    value={
+                      currentTask.assignee_id
+                        ? `${currentTask.assignee_type}:${currentTask.assignee_id}`
+                        : "unassigned"
+                    }
+                    onChange={(e) => void handleAssigneeChange(e.target.value)}
+                    className="h-8 text-xs"
+                  >
+                    <option value="unassigned">Unassigned</option>
+                    {user && (
+                      <option value={`user:${user.id}`}>
+                        {user.name} (you)
+                      </option>
                     )}
-                    <span className="font-medium capitalize">
-                      {currentTask.assignee_type}
-                    </span>
-                    <span className="text-xs text-muted-foreground">
-                      ({currentTask.assignee_id.slice(0, 8)})
-                    </span>
-                  </div>
-                ) : (
-                  <span className="text-sm text-muted-foreground">
-                    Unassigned
-                  </span>
-                )}
+                    {agents.map((agent) => (
+                      <option key={agent.id} value={`agent:${agent.id}`}>
+                        {agent.name} (agent)
+                      </option>
+                    ))}
+                  </Select>
+                </div>
               </div>
 
               <Separator />

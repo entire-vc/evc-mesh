@@ -1,4 +1,4 @@
-import { type FormEvent, useState } from "react";
+import { type FormEvent, useEffect, useState } from "react";
 import {
   Dialog,
   DialogContent,
@@ -13,7 +13,10 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select } from "@/components/ui/select";
 import { useTaskStore } from "@/stores/task";
 import { useProjectStore } from "@/stores/project";
-import type { Priority, CreateTaskRequest } from "@/types";
+import { useAgentStore } from "@/stores/agent";
+import { useAuthStore } from "@/stores/auth";
+import { useWorkspaceStore } from "@/stores/workspace";
+import type { AssigneeType, Priority, CreateTaskRequest } from "@/types";
 
 interface CreateTaskDialogProps {
   open: boolean;
@@ -36,14 +39,26 @@ export function CreateTaskDialog({
 }: CreateTaskDialogProps) {
   const { currentProject, statuses } = useProjectStore();
   const { createTask } = useTaskStore();
+  const { agents, fetchAgents } = useAgentStore();
+  const { user } = useAuthStore();
+  const { currentWorkspace } = useWorkspaceStore();
 
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [priority, setPriority] = useState<Priority>("none");
   const [labelsRaw, setLabelsRaw] = useState("");
   const [statusId, setStatusId] = useState(defaultStatusId ?? "");
+  // "unassigned" | "user:{id}" | "agent:{id}"
+  const [assigneeValue, setAssigneeValue] = useState("unassigned");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Fetch agents when dialog opens
+  useEffect(() => {
+    if (open && currentWorkspace) {
+      void fetchAgents(currentWorkspace.id);
+    }
+  }, [open, currentWorkspace, fetchAgents]);
 
   // Reset form when dialog opens
   const handleOpenChange = (nextOpen: boolean) => {
@@ -53,6 +68,7 @@ export function CreateTaskDialog({
       setPriority("none");
       setLabelsRaw("");
       setStatusId(defaultStatusId ?? "");
+      setAssigneeValue("unassigned");
       setError(null);
     }
     onOpenChange(nextOpen);
@@ -75,11 +91,21 @@ export function CreateTaskDialog({
         .map((l) => l.trim())
         .filter(Boolean);
 
+      let assigneeId: string | undefined;
+      let assigneeType: AssigneeType | undefined;
+      if (assigneeValue !== "unassigned") {
+        const [type, id] = assigneeValue.split(":");
+        assigneeId = id;
+        assigneeType = type as AssigneeType;
+      }
+
       const req: CreateTaskRequest = {
         title: title.trim(),
         description: description.trim() || undefined,
         priority,
         labels: labels.length > 0 ? labels : undefined,
+        assignee_id: assigneeId,
+        assignee_type: assigneeType,
       };
 
       // If a specific status was chosen, we create the task and then move it
@@ -185,6 +211,27 @@ export function CreateTaskDialog({
               value={labelsRaw}
               onChange={(e) => setLabelsRaw(e.target.value)}
             />
+          </div>
+
+          <div className="space-y-1.5">
+            <label htmlFor="ct-assignee" className="text-sm font-medium">
+              Assignee
+            </label>
+            <Select
+              id="ct-assignee"
+              value={assigneeValue}
+              onChange={(e) => setAssigneeValue(e.target.value)}
+            >
+              <option value="unassigned">Unassigned</option>
+              {user && (
+                <option value={`user:${user.id}`}>{user.name} (you)</option>
+              )}
+              {agents.map((agent) => (
+                <option key={agent.id} value={`agent:${agent.id}`}>
+                  {agent.name} (agent)
+                </option>
+              ))}
+            </Select>
           </div>
 
           {error && (
