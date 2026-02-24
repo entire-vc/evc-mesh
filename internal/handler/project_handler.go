@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 	"strconv"
 
@@ -118,6 +119,7 @@ func (h *ProjectHandler) Create(c echo.Context) error {
 	}
 
 	if err := h.projectService.Create(c.Request().Context(), project); err != nil {
+		log.Printf("DEBUG project.Create error: type=%T value=%v", err, err)
 		return handleError(c, err)
 	}
 
