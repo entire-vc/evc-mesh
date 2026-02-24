@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -393,6 +394,6 @@ func handleError(c echo.Context, err error) error {
 		}
 	}
 
-	c.Logger().Errorf("unhandled error: %v", err)
+	log.Printf("ERROR %s %s: %v", c.Request().Method, c.Request().URL.Path, err)
 	return c.JSON(http.StatusInternalServerError, apierror.InternalError(""))
 }
