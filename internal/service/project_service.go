@@ -16,15 +16,16 @@ import (
 var defaultStatuses = []struct {
 	Name      string
 	Slug      string
+	Color     string
 	Category  domain.StatusCategory
 	IsDefault bool
 	Position  int
 }{
-	{Name: "Backlog", Slug: "backlog", Category: domain.StatusCategoryBacklog, IsDefault: false, Position: 0},
-	{Name: "Todo", Slug: "todo", Category: domain.StatusCategoryTodo, IsDefault: true, Position: 1},
-	{Name: "In Progress", Slug: "in_progress", Category: domain.StatusCategoryInProgress, IsDefault: false, Position: 2},
-	{Name: "Review", Slug: "review", Category: domain.StatusCategoryReview, IsDefault: false, Position: 3},
-	{Name: "Done", Slug: "done", Category: domain.StatusCategoryDone, IsDefault: false, Position: 4},
+	{Name: "Backlog", Slug: "backlog", Color: "#6B7280", Category: domain.StatusCategoryBacklog, IsDefault: false, Position: 0},
+	{Name: "Todo", Slug: "todo", Color: "#3B82F6", Category: domain.StatusCategoryTodo, IsDefault: true, Position: 1},
+	{Name: "In Progress", Slug: "in_progress", Color: "#F59E0B", Category: domain.StatusCategoryInProgress, IsDefault: false, Position: 2},
+	{Name: "Review", Slug: "review", Color: "#8B5CF6", Category: domain.StatusCategoryReview, IsDefault: false, Position: 3},
+	{Name: "Done", Slug: "done", Color: "#10B981", Category: domain.StatusCategoryDone, IsDefault: false, Position: 4},
 }
 
 type projectService struct {
@@ -83,6 +84,7 @@ func (s *projectService) Create(ctx context.Context, project *domain.Project) er
 			ProjectID: project.ID,
 			Name:      ds.Name,
 			Slug:      ds.Slug,
+			Color:     ds.Color,
 			Category:  ds.Category,
 			IsDefault: ds.IsDefault,
 			Position:  ds.Position,
