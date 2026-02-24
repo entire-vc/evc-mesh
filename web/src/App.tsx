@@ -1,3 +1,4 @@
+import { Component, type ErrorInfo, type ReactNode } from "react";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router";
 import { AppLayout } from "@/components/layout/app-layout";
 import { LoginPage } from "@/pages/login";
@@ -11,8 +12,52 @@ import { AgentDashboardPage } from "@/pages/agent-dashboard";
 import { EventFeedPage } from "@/pages/event-feed";
 import { TimelinePage } from "@/pages/timeline";
 
+class ErrorBoundary extends Component<
+  { children: ReactNode },
+  { error: Error | null }
+> {
+  state: { error: Error | null } = { error: null };
+
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error("React ErrorBoundary caught:", error, info.componentStack);
+  }
+
+  render() {
+    if (this.state.error) {
+      return (
+        <div style={{ padding: 40, fontFamily: "monospace" }}>
+          <h1 style={{ color: "red" }}>Application Error</h1>
+          <pre style={{ whiteSpace: "pre-wrap", marginTop: 16 }}>
+            {this.state.error.message}
+          </pre>
+          <pre
+            style={{ whiteSpace: "pre-wrap", marginTop: 8, color: "#666" }}
+          >
+            {this.state.error.stack}
+          </pre>
+          <button
+            onClick={() => {
+              this.setState({ error: null });
+              window.location.href = "/";
+            }}
+            style={{ marginTop: 16, padding: "8px 16px", cursor: "pointer" }}
+          >
+            Reload
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 export function App() {
   return (
+    <ErrorBoundary>
     <BrowserRouter>
       <Routes>
         <Route path="/login" element={<LoginPage />} />
@@ -50,5 +95,6 @@ export function App() {
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>
+    </ErrorBoundary>
   );
 }
