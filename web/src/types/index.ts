@@ -148,8 +148,8 @@ export interface Task {
   position: number;
   due_date: string | null;
   estimated_hours: number | null;
-  custom_fields: Record<string, unknown>;
-  labels: string[];
+  custom_fields: Record<string, unknown> | null;
+  labels: string[] | null;
   created_by: string;
   created_by_type: ActorType;
   created_at: string;

@@ -27,7 +27,7 @@ export function AppLayout() {
     fetchWorkspaces,
     setCurrentWorkspaceBySlug,
   } = useWorkspaceStore();
-  const { fetchProjects, setCurrentProjectBySlug, currentProject } =
+  const { projects, fetchProjects, setCurrentProjectBySlug, currentProject } =
     useProjectStore();
   const wsConnect = useWebSocketStore((s) => s.connect);
   const wsDisconnect = useWebSocketStore((s) => s.disconnect);
@@ -62,15 +62,15 @@ export function AppLayout() {
     }
   }, [currentWorkspace, fetchProjects]);
 
-  // Resolve project slug
+  // Resolve project slug (re-runs when projects finish loading)
   useEffect(() => {
-    if (projectSlug) {
+    if (projectSlug && projects.length > 0) {
       setCurrentProjectBySlug(projectSlug);
     } else if (!projectSlug && currentProject) {
       // Clear current project when navigating away from a project route
       useProjectStore.setState({ currentProject: null });
     }
-  }, [projectSlug, setCurrentProjectBySlug, currentProject]);
+  }, [projectSlug, projects, setCurrentProjectBySlug, currentProject]);
 
   // Initialize WebSocket connection when workspace is available.
   useEffect(() => {

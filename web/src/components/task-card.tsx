@@ -57,7 +57,7 @@ export const TaskCard = forwardRef<HTMLDivElement, TaskCardProps>(
                 {pConfig.label}
               </Badge>
             )}
-            {task.labels.map((label) => (
+            {(task.labels ?? []).map((label) => (
               <Badge key={label} variant="outline" className="text-[10px]">
                 {label}
               </Badge>

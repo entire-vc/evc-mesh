@@ -402,9 +402,9 @@ export function TaskDetailPage() {
                   <Tag className="h-3.5 w-3.5" />
                   Labels
                 </label>
-                {currentTask.labels.length > 0 ? (
+                {(currentTask.labels ?? []).length > 0 ? (
                   <div className="flex flex-wrap gap-1">
-                    {currentTask.labels.map((label) => (
+                    {(currentTask.labels ?? []).map((label) => (
                       <Badge key={label} variant="secondary" className="text-xs">
                         {label}
                       </Badge>
