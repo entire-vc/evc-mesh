@@ -3,6 +3,7 @@ import { api } from "@/lib/api";
 import type {
   CreateProjectRequest,
   CreateStatusRequest,
+  PaginatedResponse,
   Project,
   TaskStatus,
 } from "@/types";
@@ -49,10 +50,10 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   fetchProjects: async (workspaceId: string) => {
     set({ isLoading: true });
     try {
-      const projects = await api<Project[]>(
+      const page = await api<PaginatedResponse<Project>>(
         `/api/v1/workspaces/${workspaceId}/projects`,
       );
-      set({ projects, isLoading: false });
+      set({ projects: page.items, isLoading: false });
     } catch {
       set({ isLoading: false });
     }
