@@ -107,13 +107,14 @@ func (h *ProjectHandler) Create(c echo.Context) error {
 	}
 
 	project := &domain.Project{
-		ID:          uuid.New(),
-		WorkspaceID: wsID,
-		Name:        req.Name,
-		Slug:        req.Slug,
-		Description: req.Description,
-		Icon:        req.Icon,
-		Settings:    req.Settings,
+		ID:                  uuid.New(),
+		WorkspaceID:         wsID,
+		Name:                req.Name,
+		Slug:                req.Slug,
+		Description:         req.Description,
+		Icon:                req.Icon,
+		Settings:            req.Settings,
+		DefaultAssigneeType: domain.DefaultAssigneeNone,
 	}
 
 	if err := h.projectService.Create(c.Request().Context(), project); err != nil {

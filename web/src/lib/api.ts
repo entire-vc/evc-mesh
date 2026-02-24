@@ -140,10 +140,10 @@ export async function api<T>(
   if (!res.ok) {
     const err = data as ApiError;
     throw new ApiRequestError(
-      err.error || "Request failed",
-      err.code || "UNKNOWN",
+      err.message || err.error || "Request failed",
+      String(err.code || "UNKNOWN"),
       res.status,
-      err.details,
+      err.validation || err.details,
     );
   }
 

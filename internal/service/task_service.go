@@ -85,6 +85,11 @@ func (s *taskService) Create(ctx context.Context, task *domain.Task) error {
 	return s.taskRepo.Create(ctx, task)
 }
 
+// GetDefaultStatus returns the default task status for a project.
+func (s *taskService) GetDefaultStatus(ctx context.Context, projectID uuid.UUID) (*domain.TaskStatus, error) {
+	return s.statusRepo.GetDefaultForProject(ctx, projectID)
+}
+
 // GetByID retrieves a task by its ID.
 func (s *taskService) GetByID(ctx context.Context, id uuid.UUID) (*domain.Task, error) {
 	task, err := s.taskRepo.GetByID(ctx, id)

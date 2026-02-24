@@ -132,6 +132,10 @@ func (m *mockTaskService) GetMyTasks(_ context.Context, assigneeID uuid.UUID, _ 
 	return result, nil
 }
 
+func (m *mockTaskService) GetDefaultStatus(_ context.Context, projectID uuid.UUID) (*domain.TaskStatus, error) {
+	return &domain.TaskStatus{ID: uuid.New(), Name: "To Do", IsDefault: true}, nil
+}
+
 type mockTaskStatusService struct {
 	statuses map[uuid.UUID][]domain.TaskStatus
 }

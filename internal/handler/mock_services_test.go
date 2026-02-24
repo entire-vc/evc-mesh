@@ -305,16 +305,17 @@ func (m *MockActivityLogService) ListByTask(ctx context.Context, taskID uuid.UUI
 
 // MockTaskService implements service.TaskService for testing.
 type MockTaskService struct {
-	CreateFunc        func(ctx context.Context, task *domain.Task) error
-	GetByIDFunc       func(ctx context.Context, id uuid.UUID) (*domain.Task, error)
-	UpdateFunc        func(ctx context.Context, task *domain.Task) error
-	DeleteFunc        func(ctx context.Context, id uuid.UUID) error
-	ListFunc          func(ctx context.Context, projectID uuid.UUID, filter repository.TaskFilter, pg pagination.Params) (*pagination.Page[domain.Task], error)
-	MoveTaskFunc      func(ctx context.Context, taskID uuid.UUID, input service.MoveTaskInput) error
-	AssignTaskFunc    func(ctx context.Context, taskID uuid.UUID, input service.AssignTaskInput) error
-	CreateSubtaskFunc func(ctx context.Context, parentTaskID uuid.UUID, input service.CreateSubtaskInput) (*domain.Task, error)
-	ListSubtasksFunc  func(ctx context.Context, parentTaskID uuid.UUID) ([]domain.Task, error)
-	GetMyTasksFunc    func(ctx context.Context, assigneeID uuid.UUID, assigneeType domain.AssigneeType) ([]domain.Task, error)
+	CreateFunc           func(ctx context.Context, task *domain.Task) error
+	GetByIDFunc          func(ctx context.Context, id uuid.UUID) (*domain.Task, error)
+	UpdateFunc           func(ctx context.Context, task *domain.Task) error
+	DeleteFunc           func(ctx context.Context, id uuid.UUID) error
+	ListFunc             func(ctx context.Context, projectID uuid.UUID, filter repository.TaskFilter, pg pagination.Params) (*pagination.Page[domain.Task], error)
+	MoveTaskFunc         func(ctx context.Context, taskID uuid.UUID, input service.MoveTaskInput) error
+	AssignTaskFunc       func(ctx context.Context, taskID uuid.UUID, input service.AssignTaskInput) error
+	CreateSubtaskFunc    func(ctx context.Context, parentTaskID uuid.UUID, input service.CreateSubtaskInput) (*domain.Task, error)
+	ListSubtasksFunc     func(ctx context.Context, parentTaskID uuid.UUID) ([]domain.Task, error)
+	GetMyTasksFunc       func(ctx context.Context, assigneeID uuid.UUID, assigneeType domain.AssigneeType) ([]domain.Task, error)
+	GetDefaultStatusFunc func(ctx context.Context, projectID uuid.UUID) (*domain.TaskStatus, error)
 }
 
 func (m *MockTaskService) Create(ctx context.Context, task *domain.Task) error {
@@ -385,6 +386,13 @@ func (m *MockTaskService) GetMyTasks(ctx context.Context, assigneeID uuid.UUID, 
 		return m.GetMyTasksFunc(ctx, assigneeID, assigneeType)
 	}
 	return nil, nil
+}
+
+func (m *MockTaskService) GetDefaultStatus(ctx context.Context, projectID uuid.UUID) (*domain.TaskStatus, error) {
+	if m.GetDefaultStatusFunc != nil {
+		return m.GetDefaultStatusFunc(ctx, projectID)
+	}
+	return &domain.TaskStatus{ID: uuid.New(), Name: "To Do", IsDefault: true}, nil
 }
 
 // MockAgentService implements service.AgentService for testing.

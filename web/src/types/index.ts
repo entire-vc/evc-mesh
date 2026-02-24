@@ -329,9 +329,11 @@ export interface RegisterAgentResponse {
 
 // API error type
 export interface ApiError {
-  error: string;
-  code: string;
+  error?: string;
+  message?: string;
+  code: string | number;
   details?: Record<string, string>;
+  validation?: Record<string, string>;
 }
 
 // WebSocket / EventBus types

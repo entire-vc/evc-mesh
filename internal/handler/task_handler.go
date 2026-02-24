@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -12,6 +13,7 @@ import (
 	"github.com/lib/pq"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	mw "github.com/entire-vc/evc-mesh/internal/middleware"
 	"github.com/entire-vc/evc-mesh/internal/repository"
 	"github.com/entire-vc/evc-mesh/internal/service"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
@@ -36,6 +38,7 @@ type createTaskRequest struct {
 	Title        string              `json:"title"`
 	Description  string              `json:"description"`
 	Priority     domain.Priority     `json:"priority"`
+	StatusID     string              `json:"status_id"`
 	AssigneeID   *uuid.UUID          `json:"assignee_id"`
 	AssigneeType domain.AssigneeType `json:"assignee_type"`
 	Labels       []string            `json:"labels"`
@@ -78,16 +81,49 @@ func (h *TaskHandler) Create(c echo.Context) error {
 		}))
 	}
 
+	// Resolve status: use provided status_id or fall back to the project's default.
+	var statusID uuid.UUID
+	if req.StatusID != "" {
+		statusID, err = uuid.Parse(req.StatusID)
+		if err != nil {
+			return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid status_id"))
+		}
+	} else {
+		defaultStatus, err := h.taskService.GetDefaultStatus(c.Request().Context(), projectID)
+		if err != nil || defaultStatus == nil {
+			return c.JSON(http.StatusBadRequest, apierror.BadRequest("project has no default status; provide status_id"))
+		}
+		statusID = defaultStatus.ID
+	}
+
+	// Resolve assignee type (default to "unassigned").
+	assigneeType := req.AssigneeType
+	if assigneeType == "" {
+		assigneeType = domain.AssigneeTypeUnassigned
+	}
+
+	// Resolve priority (default to "medium").
+	priority := req.Priority
+	if priority == "" {
+		priority = domain.PriorityMedium
+	}
+
+	// Resolve creator from auth context.
+	createdBy, _ := mw.GetUserID(c)
+
 	task := &domain.Task{
-		ID:           uuid.New(),
-		ProjectID:    projectID,
-		Title:        req.Title,
-		Description:  req.Description,
-		Priority:     req.Priority,
-		AssigneeID:   req.AssigneeID,
-		AssigneeType: req.AssigneeType,
-		Labels:       pq.StringArray(req.Labels),
-		CustomFields: req.CustomFields,
+		ID:            uuid.New(),
+		ProjectID:     projectID,
+		StatusID:      statusID,
+		Title:         req.Title,
+		Description:   req.Description,
+		Priority:      priority,
+		AssigneeID:    req.AssigneeID,
+		AssigneeType:  assigneeType,
+		Labels:        pq.StringArray(req.Labels),
+		CustomFields:  req.CustomFields,
+		CreatedBy:     createdBy,
+		CreatedByType: domain.ActorTypeUser,
 	}
 
 	if err := h.taskService.Create(c.Request().Context(), task); err != nil {
@@ -342,5 +378,21 @@ func handleError(c echo.Context, err error) error {
 	if apiErr, ok := err.(*apierror.Error); ok {
 		return c.JSON(apiErr.StatusCode(), apiErr)
 	}
+
+	var pqErr *pq.Error
+	if errors.As(err, &pqErr) {
+		switch pqErr.Code {
+		case "23505": // unique_violation
+			return c.JSON(http.StatusConflict, apierror.Conflict("already exists"))
+		case "23503": // foreign_key_violation
+			return c.JSON(http.StatusBadRequest, apierror.BadRequest("referenced entity not found"))
+		case "23514": // check_violation
+			return c.JSON(http.StatusBadRequest, apierror.BadRequest("value violates constraint"))
+		case "22P02": // invalid_text_representation (bad enum)
+			return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid value for field"))
+		}
+	}
+
+	c.Logger().Errorf("unhandled error: %v", err)
 	return c.JSON(http.StatusInternalServerError, apierror.InternalError(""))
 }

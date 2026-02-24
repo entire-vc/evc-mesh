@@ -151,10 +151,11 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   },
 
   reorderStatuses: async (projectId: string, statusIds: string[]) => {
-    const statuses = await api<TaskStatus[]>(
+    await api(
       `/api/v1/projects/${projectId}/statuses/reorder`,
       { method: "PUT", body: { status_ids: statusIds } },
     );
-    set({ statuses });
+    // Backend returns {"status":"ok"}, re-fetch to get ordered list
+    await get().fetchStatuses(projectId);
   },
 }));
