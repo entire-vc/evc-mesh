@@ -1,0 +1,1917 @@
+openapi: "3.0.3"
+
+info:
+  title: EVC Mesh API
+  description: |
+    REST API for EVC Mesh -- a multi-agent task management platform.
+    Provides workspace, project, task, comment, artifact, agent, and event-bus
+    endpoints for both human users (JWT) and AI agents (API key).
+  version: "0.1.0"
+  contact:
+    name: EVC Mesh Team
+
+servers:
+  - url: http://localhost:8005
+    description: Local development
+
+security:
+  - BearerAuth: []
+  - AgentKeyAuth: []
+
+components:
+  # ------------------------------------------------------------------
+  # Security schemes
+  # ------------------------------------------------------------------
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT access token obtained via /auth/login or /auth/refresh.
+    AgentKeyAuth:
+      type: apiKey
+      in: header
+      name: X-Agent-Key
+      description: Agent API key in the format agk_{workspace_slug}_{random}.
+
+  # ------------------------------------------------------------------
+  # Reusable schemas
+  # ------------------------------------------------------------------
+  schemas:
+    # ---------- Error ----------
+    Error:
+      type: object
+      required: [error, code]
+      properties:
+        error:
+          type: string
+        code:
+          type: string
+        details:
+          type: object
+          additionalProperties:
+            type: string
+
+    # ---------- Pagination wrapper ----------
+    PaginatedResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items: {}
+        total:
+          type: integer
+        page:
+          type: integer
+        per_page:
+          type: integer
+        has_more:
+          type: boolean
+
+    # ---------- Auth ----------
+    TokenPair:
+      type: object
+      properties:
+        access_token:
+          type: string
+        refresh_token:
+          type: string
+
+    AuthResponse:
+      type: object
+      properties:
+        user:
+          $ref: "#/components/schemas/User"
+        tokens:
+          $ref: "#/components/schemas/TokenPair"
+
+    # ---------- Core domain ----------
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+        name:
+          type: string
+        avatar_url:
+          type: string
+        is_active:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    Workspace:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        slug:
+          type: string
+        owner_id:
+          type: string
+          format: uuid
+        settings:
+          type: object
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    Project:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        workspace_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: string
+        slug:
+          type: string
+        icon:
+          type: string
+        settings:
+          type: object
+        default_assignee_type:
+          type: string
+          enum: [user, agent, none]
+        is_archived:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    TaskStatus:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        project_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        slug:
+          type: string
+        color:
+          type: string
+        position:
+          type: integer
+        category:
+          type: string
+          enum: [backlog, todo, in_progress, review, done, cancelled]
+        is_default:
+          type: boolean
+
+    Task:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        project_id:
+          type: string
+          format: uuid
+        status_id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        description:
+          type: string
+        assignee_id:
+          type: string
+          format: uuid
+          nullable: true
+        assignee_type:
+          type: string
+          enum: [user, agent, unassigned]
+        priority:
+          type: string
+          enum: [urgent, high, medium, low, none]
+        parent_task_id:
+          type: string
+          format: uuid
+          nullable: true
+        position:
+          type: integer
+        due_date:
+          type: string
+          format: date-time
+          nullable: true
+        estimated_hours:
+          type: number
+          nullable: true
+        custom_fields:
+          type: object
+        labels:
+          type: array
+          items:
+            type: string
+        created_by:
+          type: string
+          format: uuid
+        created_by_type:
+          type: string
+          enum: [user, agent, system]
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    Comment:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        task_id:
+          type: string
+          format: uuid
+        parent_comment_id:
+          type: string
+          format: uuid
+          nullable: true
+        author_id:
+          type: string
+          format: uuid
+        author_type:
+          type: string
+          enum: [user, agent, system]
+        body:
+          type: string
+        metadata:
+          type: object
+        is_internal:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    Artifact:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        task_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        artifact_type:
+          type: string
+          enum: [file, code, log, report, link, image, data]
+        mime_type:
+          type: string
+        storage_key:
+          type: string
+        storage_url:
+          type: string
+        size_bytes:
+          type: integer
+          format: int64
+        checksum_sha256:
+          type: string
+        metadata:
+          type: object
+        uploaded_by:
+          type: string
+          format: uuid
+        uploaded_by_type:
+          type: string
+          enum: [user, agent]
+        created_at:
+          type: string
+          format: date-time
+
+    Agent:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        workspace_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        slug:
+          type: string
+        agent_type:
+          type: string
+          enum: [claude_code, openclaw, cline, aider, custom]
+        api_key_prefix:
+          type: string
+        capabilities:
+          type: object
+        status:
+          type: string
+          enum: [online, offline, busy, error]
+        last_heartbeat:
+          type: string
+          format: date-time
+          nullable: true
+        current_task_id:
+          type: string
+          format: uuid
+          nullable: true
+        total_tasks_completed:
+          type: integer
+        total_errors:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    EventBusMessage:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        project_id:
+          type: string
+          format: uuid
+        agent_id:
+          type: string
+          format: uuid
+        event_type:
+          type: string
+          enum: [summary, status_change, context_update, error, dependency_resolved, custom]
+        subject:
+          type: string
+        payload:
+          type: object
+        task_id:
+          type: string
+          format: uuid
+          nullable: true
+        tags:
+          type: array
+          items:
+            type: string
+        created_at:
+          type: string
+          format: date-time
+        expires_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    ActivityLogEntry:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        workspace_id:
+          type: string
+          format: uuid
+        entity_type:
+          type: string
+        entity_id:
+          type: string
+          format: uuid
+        action:
+          type: string
+        actor_id:
+          type: string
+          format: uuid
+        actor_type:
+          type: string
+          enum: [user, agent, system]
+        changes:
+          type: object
+        created_at:
+          type: string
+          format: date-time
+
+    # ---------- Task Dependency ----------
+    TaskDependency:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        task_id:
+          type: string
+          format: uuid
+        depends_on_task_id:
+          type: string
+          format: uuid
+        dependency_type:
+          type: string
+          enum: [blocks, relates_to, is_child_of]
+        created_at:
+          type: string
+          format: date-time
+
+    # ---------- Custom Field Definition ----------
+    CustomFieldDefinition:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        project_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        slug:
+          type: string
+        field_type:
+          type: string
+          enum: [text, number, date, datetime, select, multiselect, url, email, checkbox, user_ref, agent_ref, json]
+        description:
+          type: string
+        options:
+          type: object
+          description: Configuration for select/multiselect fields (e.g. allowed values)
+        default_value:
+          description: Default value for the field (type depends on field_type)
+        is_required:
+          type: boolean
+        is_visible_to_agents:
+          type: boolean
+        position:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+
+  # ------------------------------------------------------------------
+  # Reusable parameters
+  # ------------------------------------------------------------------
+  parameters:
+    PageParam:
+      name: page
+      in: query
+      schema:
+        type: integer
+        default: 1
+    PageSizeParam:
+      name: page_size
+      in: query
+      schema:
+        type: integer
+        default: 50
+
+# ====================================================================
+# Paths
+# ====================================================================
+paths:
+  # ------------------------------------------------------------------
+  # Health
+  # ------------------------------------------------------------------
+  /health:
+    get:
+      tags: [Health]
+      summary: Health check
+      security: []
+      responses:
+        "200":
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  service:
+                    type: string
+
+  # ------------------------------------------------------------------
+  # Auth
+  # ------------------------------------------------------------------
+  /api/v1/auth/register:
+    post:
+      tags: [Auth]
+      summary: Register a new user
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password, name]
+              properties:
+                email:
+                  type: string
+                password:
+                  type: string
+                name:
+                  type: string
+      responses:
+        "201":
+          description: User created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResponse"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/auth/login:
+    post:
+      tags: [Auth]
+      summary: Log in with email and password
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email:
+                  type: string
+                password:
+                  type: string
+      responses:
+        "200":
+          description: Authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResponse"
+        "401":
+          description: Invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/auth/refresh:
+    post:
+      tags: [Auth]
+      summary: Refresh an access token
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refresh_token]
+              properties:
+                refresh_token:
+                  type: string
+      responses:
+        "200":
+          description: New token pair
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tokens:
+                    $ref: "#/components/schemas/TokenPair"
+        "401":
+          description: Invalid or expired refresh token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/auth/me:
+    get:
+      tags: [Auth]
+      summary: Get current user
+      responses:
+        "200":
+          description: Current user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+
+  /api/v1/auth/logout:
+    post:
+      tags: [Auth]
+      summary: Logout (revoke all refresh tokens for the current user)
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Successfully logged out
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+
+  # ------------------------------------------------------------------
+  # Workspaces
+  # ------------------------------------------------------------------
+  /api/v1/workspaces:
+    get:
+      tags: [Workspaces]
+      summary: List workspaces for the current user
+      responses:
+        "200":
+          description: List of workspaces
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Workspace"
+    post:
+      tags: [Workspaces]
+      summary: Create a workspace
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, slug]
+              properties:
+                name:
+                  type: string
+                slug:
+                  type: string
+                settings:
+                  type: object
+      responses:
+        "201":
+          description: Workspace created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Workspace"
+
+  /api/v1/workspaces/{ws_id}:
+    parameters:
+      - name: ws_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Workspaces]
+      summary: Get workspace by ID
+      responses:
+        "200":
+          description: Workspace
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Workspace"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    patch:
+      tags: [Workspaces]
+      summary: Update workspace
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                settings:
+                  type: object
+      responses:
+        "200":
+          description: Updated workspace
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Workspace"
+    delete:
+      tags: [Workspaces]
+      summary: Delete workspace
+      responses:
+        "204":
+          description: Deleted
+
+  # ------------------------------------------------------------------
+  # Projects
+  # ------------------------------------------------------------------
+  /api/v1/workspaces/{ws_id}/projects:
+    parameters:
+      - name: ws_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Projects]
+      summary: List projects in a workspace
+      responses:
+        "200":
+          description: List of projects
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Project"
+    post:
+      tags: [Projects]
+      summary: Create a project
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, slug]
+              properties:
+                name:
+                  type: string
+                slug:
+                  type: string
+                description:
+                  type: string
+                icon:
+                  type: string
+                settings:
+                  type: object
+      responses:
+        "201":
+          description: Project created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Project"
+
+  /api/v1/projects/{proj_id}:
+    parameters:
+      - name: proj_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Projects]
+      summary: Get project by ID
+      responses:
+        "200":
+          description: Project
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Project"
+    patch:
+      tags: [Projects]
+      summary: Update project
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                description:
+                  type: string
+                icon:
+                  type: string
+                is_archived:
+                  type: boolean
+      responses:
+        "200":
+          description: Updated project
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Project"
+    delete:
+      tags: [Projects]
+      summary: Delete project
+      responses:
+        "204":
+          description: Deleted
+
+  # ------------------------------------------------------------------
+  # Task Statuses
+  # ------------------------------------------------------------------
+  /api/v1/projects/{proj_id}/statuses:
+    parameters:
+      - name: proj_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Task Statuses]
+      summary: List statuses for a project
+      responses:
+        "200":
+          description: List of statuses
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/TaskStatus"
+    post:
+      tags: [Task Statuses]
+      summary: Create a status
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, slug, color, category]
+              properties:
+                name:
+                  type: string
+                slug:
+                  type: string
+                color:
+                  type: string
+                category:
+                  type: string
+                  enum: [backlog, todo, in_progress, review, done, cancelled]
+                position:
+                  type: integer
+                is_default:
+                  type: boolean
+      responses:
+        "201":
+          description: Status created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TaskStatus"
+
+  /api/v1/projects/{proj_id}/statuses/{status_id}:
+    parameters:
+      - name: proj_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: status_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    patch:
+      tags: [Task Statuses]
+      summary: Update a status
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                color:
+                  type: string
+                category:
+                  type: string
+      responses:
+        "200":
+          description: Updated status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TaskStatus"
+
+  /api/v1/projects/{proj_id}/statuses/reorder:
+    parameters:
+      - name: proj_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    put:
+      tags: [Task Statuses]
+      summary: Reorder statuses
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status_ids]
+              properties:
+                status_ids:
+                  type: array
+                  items:
+                    type: string
+                    format: uuid
+      responses:
+        "200":
+          description: Statuses reordered
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/TaskStatus"
+
+  # ------------------------------------------------------------------
+  # Tasks
+  # ------------------------------------------------------------------
+  /api/v1/projects/{proj_id}/tasks:
+    parameters:
+      - name: proj_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Tasks]
+      summary: List tasks in a project
+      description: |
+        Supports filtering by status, assignee_type, priority, labels, and search.
+        Custom field filters use the `custom.` prefix:
+        - `custom.{slug}=value` -- exact match
+        - `custom.{slug}_gte=N` -- numeric greater-than-or-equal
+        - `custom.{slug}_lte=N` -- numeric less-than-or-equal
+      parameters:
+        - $ref: "#/components/parameters/PageParam"
+        - $ref: "#/components/parameters/PageSizeParam"
+        - name: status
+          in: query
+          description: Filter by status UUID
+          schema:
+            type: string
+            format: uuid
+        - name: assignee_type
+          in: query
+          description: "Filter by assignee type: user, agent, unassigned"
+          schema:
+            type: string
+            enum: [user, agent, unassigned]
+        - name: priority
+          in: query
+          description: "Filter by priority: urgent, high, medium, low, none"
+          schema:
+            type: string
+            enum: [urgent, high, medium, low, none]
+        - name: labels
+          in: query
+          description: Filter by label
+          schema:
+            type: string
+        - name: search
+          in: query
+          description: Search in title and description
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Paginated list of tasks
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/PaginatedResponse"
+                  - type: object
+                    properties:
+                      items:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/Task"
+    post:
+      tags: [Tasks]
+      summary: Create a task
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title]
+              properties:
+                title:
+                  type: string
+                description:
+                  type: string
+                priority:
+                  type: string
+                  enum: [urgent, high, medium, low, none]
+                assignee_id:
+                  type: string
+                  format: uuid
+                assignee_type:
+                  type: string
+                  enum: [user, agent, unassigned]
+                labels:
+                  type: array
+                  items:
+                    type: string
+                custom_fields:
+                  type: object
+      responses:
+        "201":
+          description: Task created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Task"
+
+  /api/v1/tasks/{task_id}:
+    parameters:
+      - name: task_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Tasks]
+      summary: Get task by ID
+      responses:
+        "200":
+          description: Task
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Task"
+    patch:
+      tags: [Tasks]
+      summary: Update a task
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title:
+                  type: string
+                description:
+                  type: string
+                priority:
+                  type: string
+                assignee_id:
+                  type: string
+                  format: uuid
+                  nullable: true
+                assignee_type:
+                  type: string
+                labels:
+                  type: array
+                  items:
+                    type: string
+                status_id:
+                  type: string
+                  format: uuid
+                due_date:
+                  type: string
+                  format: date-time
+                  nullable: true
+                estimated_hours:
+                  type: number
+                  nullable: true
+      responses:
+        "200":
+          description: Updated task
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Task"
+    delete:
+      tags: [Tasks]
+      summary: Delete a task
+      responses:
+        "204":
+          description: Deleted
+
+  /api/v1/tasks/{task_id}/move:
+    parameters:
+      - name: task_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [Tasks]
+      summary: Move a task to a different status or position
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status_id:
+                  type: string
+                  format: uuid
+                position:
+                  type: integer
+      responses:
+        "200":
+          description: Moved task
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Task"
+
+  /api/v1/tasks/{task_id}/subtasks:
+    parameters:
+      - name: task_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Tasks]
+      summary: List subtasks of a task
+      responses:
+        "200":
+          description: List of subtasks
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Task"
+
+  # ------------------------------------------------------------------
+  # Dependencies
+  # ------------------------------------------------------------------
+  /api/v1/tasks/{task_id}/dependencies:
+    parameters:
+      - name: task_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Dependencies]
+      summary: List dependencies for a task
+      responses:
+        "200":
+          description: List of dependencies
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/TaskDependency"
+    post:
+      tags: [Dependencies]
+      summary: Add a dependency between tasks
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [depends_on_task_id]
+              properties:
+                depends_on_task_id:
+                  type: string
+                  format: uuid
+                dependency_type:
+                  type: string
+                  enum: [blocks, relates_to, is_child_of]
+                  default: blocks
+      responses:
+        "201":
+          description: Dependency created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TaskDependency"
+
+  /api/v1/tasks/{task_id}/dependencies/{dep_id}:
+    parameters:
+      - name: task_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: dep_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    delete:
+      tags: [Dependencies]
+      summary: Remove a dependency
+      responses:
+        "204":
+          description: Deleted
+
+  /api/v1/projects/{proj_id}/dependency-graph:
+    parameters:
+      - name: proj_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Dependencies]
+      summary: Get the full dependency graph for a project
+      description: |
+        Returns all tasks in the project together with all their inter-task
+        dependencies in a single response, avoiding N+1 client-side fetches.
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Dependency graph
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tasks:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Task"
+                  dependencies:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/TaskDependency"
+
+  # ------------------------------------------------------------------
+  # Custom Fields
+  # ------------------------------------------------------------------
+  /api/v1/projects/{proj_id}/custom-fields:
+    parameters:
+      - name: proj_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Custom Fields]
+      summary: List custom field definitions for a project
+      responses:
+        "200":
+          description: List of custom field definitions
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/CustomFieldDefinition"
+    post:
+      tags: [Custom Fields]
+      summary: Create a custom field definition
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, slug, field_type]
+              properties:
+                name:
+                  type: string
+                slug:
+                  type: string
+                field_type:
+                  type: string
+                  enum: [text, number, date, datetime, select, multiselect, url, email, checkbox, user_ref, agent_ref, json]
+                description:
+                  type: string
+                options:
+                  type: object
+                default_value: {}
+                is_required:
+                  type: boolean
+                is_visible_to_agents:
+                  type: boolean
+      responses:
+        "201":
+          description: Custom field definition created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CustomFieldDefinition"
+
+  /api/v1/custom-fields/{field_id}:
+    parameters:
+      - name: field_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Custom Fields]
+      summary: Get custom field definition by ID
+      responses:
+        "200":
+          description: Custom field definition
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CustomFieldDefinition"
+    patch:
+      tags: [Custom Fields]
+      summary: Update a custom field definition
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                description:
+                  type: string
+                options:
+                  type: object
+                default_value: {}
+                is_required:
+                  type: boolean
+                is_visible_to_agents:
+                  type: boolean
+      responses:
+        "200":
+          description: Updated custom field definition
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CustomFieldDefinition"
+    delete:
+      tags: [Custom Fields]
+      summary: Delete a custom field definition
+      responses:
+        "204":
+          description: Deleted
+
+  /api/v1/projects/{proj_id}/custom-fields/reorder:
+    parameters:
+      - name: proj_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    put:
+      tags: [Custom Fields]
+      summary: Reorder custom field definitions
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [field_ids]
+              properties:
+                field_ids:
+                  type: array
+                  items:
+                    type: string
+                    format: uuid
+      responses:
+        "200":
+          description: Fields reordered
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/CustomFieldDefinition"
+
+  # ------------------------------------------------------------------
+  # Comments
+  # ------------------------------------------------------------------
+  /api/v1/tasks/{task_id}/comments:
+    parameters:
+      - name: task_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Comments]
+      summary: List comments on a task
+      responses:
+        "200":
+          description: List of comments
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Comment"
+    post:
+      tags: [Comments]
+      summary: Add a comment to a task
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [body]
+              properties:
+                body:
+                  type: string
+                parent_comment_id:
+                  type: string
+                  format: uuid
+                is_internal:
+                  type: boolean
+      responses:
+        "201":
+          description: Comment created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Comment"
+
+  /api/v1/comments/{comment_id}:
+    parameters:
+      - name: comment_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    patch:
+      tags: [Comments]
+      summary: Update a comment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                body:
+                  type: string
+      responses:
+        "200":
+          description: Updated comment
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Comment"
+    delete:
+      tags: [Comments]
+      summary: Delete a comment
+      responses:
+        "204":
+          description: Deleted
+
+  # ------------------------------------------------------------------
+  # Artifacts
+  # ------------------------------------------------------------------
+  /api/v1/tasks/{task_id}/artifacts:
+    parameters:
+      - name: task_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Artifacts]
+      summary: List artifacts for a task
+      parameters:
+        - $ref: "#/components/parameters/PageParam"
+        - $ref: "#/components/parameters/PageSizeParam"
+      responses:
+        "200":
+          description: Paginated list of artifacts
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/PaginatedResponse"
+                  - type: object
+                    properties:
+                      items:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/Artifact"
+    post:
+      tags: [Artifacts]
+      summary: Upload an artifact
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [name, file]
+              properties:
+                name:
+                  type: string
+                file:
+                  type: string
+                  format: binary
+                artifact_type:
+                  type: string
+                  enum: [file, code, log, report, link, image, data]
+                metadata:
+                  type: string
+                  description: JSON-encoded metadata
+      responses:
+        "201":
+          description: Artifact uploaded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Artifact"
+
+  /api/v1/artifacts/{artifact_id}:
+    parameters:
+      - name: artifact_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Artifacts]
+      summary: Get artifact metadata
+      responses:
+        "200":
+          description: Artifact
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Artifact"
+    delete:
+      tags: [Artifacts]
+      summary: Delete an artifact
+      responses:
+        "204":
+          description: Deleted
+
+  /api/v1/artifacts/{artifact_id}/download:
+    parameters:
+      - name: artifact_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Artifacts]
+      summary: Get presigned download URL (redirects to the file)
+      responses:
+        "307":
+          description: Redirect to presigned URL
+          headers:
+            Location:
+              schema:
+                type: string
+                format: uri
+
+  # ------------------------------------------------------------------
+  # Agents
+  # ------------------------------------------------------------------
+  /api/v1/workspaces/{ws_id}/agents:
+    parameters:
+      - name: ws_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Agents]
+      summary: List agents in a workspace
+      responses:
+        "200":
+          description: List of agents
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Agent"
+    post:
+      tags: [Agents]
+      summary: Register a new agent
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, agent_type]
+              properties:
+                name:
+                  type: string
+                agent_type:
+                  type: string
+                  enum: [claude_code, openclaw, cline, aider, custom]
+                capabilities:
+                  type: object
+      responses:
+        "201":
+          description: Agent registered
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  agent:
+                    $ref: "#/components/schemas/Agent"
+                  api_key:
+                    type: string
+                    description: Raw API key (only returned once at registration)
+
+  /api/v1/agents/{agent_id}:
+    parameters:
+      - name: agent_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Agents]
+      summary: Get agent by ID
+      responses:
+        "200":
+          description: Agent
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Agent"
+    patch:
+      tags: [Agents]
+      summary: Update an agent
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                agent_type:
+                  type: string
+                  enum: [claude_code, openclaw, cline, aider, custom]
+                capabilities:
+                  type: object
+      responses:
+        "200":
+          description: Updated agent
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Agent"
+    delete:
+      tags: [Agents]
+      summary: Delete an agent (soft delete)
+      security:
+        - BearerAuth: []
+      responses:
+        "204":
+          description: Deleted
+
+  /api/v1/agents/{agent_id}/regenerate-key:
+    parameters:
+      - name: agent_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [Agents]
+      summary: Regenerate API key for an agent
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: New API key generated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  api_key:
+                    type: string
+                    description: New raw API key (only returned once)
+
+  /api/v1/agents/heartbeat:
+    post:
+      tags: [Agents]
+      summary: Send agent heartbeat
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status:
+                  type: string
+                  enum: [online, busy, error]
+                current_task_id:
+                  type: string
+                  format: uuid
+      responses:
+        "200":
+          description: Heartbeat accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Agent"
+
+  # ------------------------------------------------------------------
+  # Events
+  # ------------------------------------------------------------------
+  /api/v1/projects/{proj_id}/events:
+    parameters:
+      - name: proj_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Events]
+      summary: List events in a project
+      parameters:
+        - $ref: "#/components/parameters/PageParam"
+        - $ref: "#/components/parameters/PageSizeParam"
+      responses:
+        "200":
+          description: Paginated list of events
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/PaginatedResponse"
+                  - type: object
+                    properties:
+                      items:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/EventBusMessage"
+    post:
+      tags: [Events]
+      summary: Publish an event
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [event_type, subject, payload]
+              properties:
+                event_type:
+                  type: string
+                  enum: [summary, status_change, context_update, error, dependency_resolved, custom]
+                subject:
+                  type: string
+                payload:
+                  type: object
+                task_id:
+                  type: string
+                  format: uuid
+                tags:
+                  type: array
+                  items:
+                    type: string
+                ttl_hours:
+                  type: integer
+      responses:
+        "201":
+          description: Event published
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EventBusMessage"
+
+  /api/v1/events/{event_id}:
+    parameters:
+      - name: event_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Events]
+      summary: Get event by ID
+      responses:
+        "200":
+          description: Event
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EventBusMessage"
+
+  # ------------------------------------------------------------------
+  # Activity Log
+  # ------------------------------------------------------------------
+  /api/v1/workspaces/{ws_id}/activity:
+    parameters:
+      - name: ws_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Activity]
+      summary: List activity log for a workspace
+      parameters:
+        - $ref: "#/components/parameters/PageParam"
+        - $ref: "#/components/parameters/PageSizeParam"
+      responses:
+        "200":
+          description: Activity log entries
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ActivityLogEntry"
+
+  /api/v1/tasks/{task_id}/activity:
+    parameters:
+      - name: task_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Activity]
+      summary: List activity log for a task
+      responses:
+        "200":
+          description: Activity log entries
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ActivityLogEntry"

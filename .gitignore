@@ -1,0 +1,53 @@
+# Internal development documentation (not public)
+dev-docs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Go binaries and build artifacts
+bin/
+/api
+/mcp
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Go test binary
+*.test
+
+# Go coverage output
+*.out
+coverage.html
+
+# Go vendor directory (we use modules)
+vendor/
+
+# Environment files
+.env
+.env.*
+!.env.example
+!.env.development
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Docker volumes (local dev)
+docker-data/
+
+# Node.js / Frontend
+node_modules/
+dist/
+
+# Temporary files
+tmp/
+*.tmp

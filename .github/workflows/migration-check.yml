@@ -1,0 +1,50 @@
+name: Migration Check
+
+on:
+  push:
+    paths:
+      - 'migrations/**'
+  pull_request:
+    paths:
+      - 'migrations/**'
+
+jobs:
+  migrate:
+    name: Validate Migrations
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: mesh
+          POSTGRES_PASSWORD: mesh
+          POSTGRES_DB: mesh
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U mesh"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Install goose
+        run: go install github.com/pressly/goose/v3/cmd/goose@latest
+      - name: Migrate up
+        env:
+          GOOSE_DRIVER: postgres
+          GOOSE_DBSTRING: "postgres://mesh:mesh@localhost:5432/mesh?sslmode=disable"
+        run: goose -dir migrations up
+      - name: Migrate down to zero
+        env:
+          GOOSE_DRIVER: postgres
+          GOOSE_DBSTRING: "postgres://mesh:mesh@localhost:5432/mesh?sslmode=disable"
+        run: goose -dir migrations down-to 0
+      - name: Migrate up again (idempotency check)
+        env:
+          GOOSE_DRIVER: postgres
+          GOOSE_DBSTRING: "postgres://mesh:mesh@localhost:5432/mesh?sslmode=disable"
+        run: goose -dir migrations up

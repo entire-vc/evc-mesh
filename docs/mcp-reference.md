@@ -1,0 +1,787 @@
+# MCP Tool Reference
+
+## Overview
+
+evc-mesh exposes **23 MCP tools** via the [Model Context Protocol](https://modelcontextprotocol.io/).
+Supported transports: **stdio** (default), **SSE** (HTTP Server-Sent Events on port 8081).
+
+Tools are organized into 4 categories:
+
+| Category | Tools | Description |
+|----------|-------|-------------|
+| Project & Task Management | 10 | CRUD for projects, tasks, subtasks, dependencies, assignments |
+| Comments & Artifacts | 5 | Task comments, file uploads, artifact retrieval |
+| Event Bus | 5 | Publish/subscribe events, context aggregation |
+| Utility | 3 | Heartbeat, error reporting, self-assigned task listing |
+
+---
+
+## Configuration
+
+### Stdio Mode (recommended for Claude Code)
+
+Add to your project's `.claude.json` or `~/.claude.json`:
+
+```json
+{
+  "mcpServers": {
+    "evc-mesh": {
+      "command": "./evc-mesh-mcp",
+      "args": ["--transport", "stdio"],
+      "env": {
+        "MESH_AGENT_KEY": "agk_your-workspace_your-key",
+        "DB_HOST": "localhost",
+        "DB_PORT": "5437",
+        "DB_USER": "mesh",
+        "DB_PASSWORD": "mesh",
+        "DB_NAME": "mesh",
+        "REDIS_HOST": "localhost",
+        "REDIS_PORT": "6383",
+        "NATS_URL": "nats://localhost:4223",
+        "S3_ENDPOINT": "localhost:9002",
+        "S3_ACCESS_KEY_ID": "minioadmin",
+        "S3_SECRET_ACCESS_KEY": "minioadmin",
+        "S3_BUCKET": "mesh-artifacts"
+      }
+    }
+  }
+}
+```
+
+If running from source instead of a binary:
+
+```json
+{
+  "mcpServers": {
+    "evc-mesh": {
+      "command": "go",
+      "args": ["run", "./cmd/mcp"],
+      "cwd": "/path/to/evc-mesh",
+      "env": {
+        "MESH_AGENT_KEY": "agk_your-workspace_your-key"
+      }
+    }
+  }
+}
+```
+
+### SSE Mode (for remote / multi-client use)
+
+```bash
+./evc-mesh-mcp --transport sse --host 0.0.0.0 --port 8081
+```
+
+Connect via: `http://localhost:8081/sse`
+
+---
+
+## Environment Variables
+
+| Variable | Default | Required | Description |
+|----------|---------|----------|-------------|
+| `MESH_AGENT_KEY` | -- | Yes | Agent API key in format `agk_{workspace_slug}_{random}` |
+| `MESH_MCP_HOST` | `0.0.0.0` | No | SSE server bind host |
+| `MESH_MCP_PORT` | `8081` | No | SSE server bind port |
+| `DB_HOST` | `localhost` | No | PostgreSQL host |
+| `DB_PORT` | `5437` | No | PostgreSQL port |
+| `DB_USER` | `mesh` | No | PostgreSQL user |
+| `DB_PASSWORD` | `mesh` | No | PostgreSQL password |
+| `DB_NAME` | `mesh` | No | PostgreSQL database name |
+| `DB_SSL_MODE` | `disable` | No | PostgreSQL SSL mode |
+| `REDIS_HOST` | `localhost` | No | Redis host |
+| `REDIS_PORT` | `6383` | No | Redis port |
+| `REDIS_PASSWORD` | -- | No | Redis password |
+| `NATS_URL` | `nats://localhost:4223` | No | NATS JetStream URL |
+| `S3_ENDPOINT` | `localhost:9002` | No | S3/MinIO endpoint |
+| `S3_ACCESS_KEY_ID` | `minioadmin` | No | S3 access key |
+| `S3_SECRET_ACCESS_KEY` | `minioadmin` | No | S3 secret key |
+| `S3_BUCKET` | `mesh-artifacts` | No | S3 bucket name |
+| `S3_REGION` | `us-east-1` | No | S3 region |
+| `S3_USE_SSL` | `false` | No | Use SSL for S3 |
+
+---
+
+## Tools
+
+### Project & Task Management (10 tools)
+
+#### 1. `list_projects`
+
+List available projects in the workspace.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `workspace_id` | string | No | Agent's workspace | Workspace ID |
+| `include_archived` | boolean | No | `false` | Include archived projects |
+
+**Example request:**
+```json
+{
+  "name": "list_projects",
+  "arguments": {
+    "include_archived": false
+  }
+}
+```
+
+**Example response:**
+```json
+[
+  {
+    "id": "550e8400-e29b-41d4-a716-446655440000",
+    "name": "Backend API",
+    "slug": "backend-api",
+    "workspace_id": "...",
+    "is_archived": false
+  }
+]
+```
+
+---
+
+#### 2. `get_project`
+
+Get project details with statuses and custom fields.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `project_id` | string | **Yes** | -- | Project ID |
+
+**Example request:**
+```json
+{
+  "name": "get_project",
+  "arguments": {
+    "project_id": "550e8400-e29b-41d4-a716-446655440000"
+  }
+}
+```
+
+---
+
+#### 3. `list_tasks`
+
+List tasks with filters.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `project_id` | string | **Yes** | -- | Project ID |
+| `status_category` | string | No | -- | Filter by status category: `backlog`, `todo`, `in_progress`, `review`, `done`, `cancelled` |
+| `assignee_type` | string | No | -- | Filter by assignee type: `user`, `agent`, `unassigned` |
+| `priority` | string | No | -- | Filter by priority: `urgent`, `high`, `medium`, `low`, `none` |
+| `labels` | string[] | No | -- | Filter by labels |
+| `search` | string | No | -- | Search in title and description |
+| `limit` | number | No | `50` | Max results to return (max 200) |
+| `sort` | string | No | -- | Sort field: `created_at`, `updated_at`, `priority`, `due_date` |
+
+**Example request:**
+```json
+{
+  "name": "list_tasks",
+  "arguments": {
+    "project_id": "550e8400-e29b-41d4-a716-446655440000",
+    "status_category": "in_progress",
+    "assignee_type": "agent",
+    "limit": 20
+  }
+}
+```
+
+---
+
+#### 4. `get_task`
+
+Get full task details with optional comments, artifacts, and dependencies.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `task_id` | string | **Yes** | -- | Task ID |
+| `include_comments` | boolean | No | `false` | Include comments |
+| `include_artifacts` | boolean | No | `false` | Include artifacts |
+| `include_dependencies` | boolean | No | `false` | Include dependencies |
+
+**Example request:**
+```json
+{
+  "name": "get_task",
+  "arguments": {
+    "task_id": "a1b2c3d4-...",
+    "include_comments": true,
+    "include_dependencies": true
+  }
+}
+```
+
+---
+
+#### 5. `create_task`
+
+Create a new task in a project.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `project_id` | string | **Yes** | -- | Project ID |
+| `title` | string | **Yes** | -- | Task title |
+| `description` | string | No | -- | Task description |
+| `status_slug` | string | No | Project default | Status slug (e.g. `todo`) |
+| `priority` | string | No | `medium` | Priority: `urgent`, `high`, `medium`, `low`, `none` |
+| `assignee_id` | string | No | -- | Assignee ID (user or agent UUID) |
+| `assignee_type` | string | No | `unassigned` | Assignee type: `user`, `agent` |
+| `labels` | string[] | No | -- | Task labels |
+| `custom_fields` | object | No | -- | Custom field values as key-value pairs |
+| `parent_task_id` | string | No | -- | Parent task ID for subtask |
+| `due_date` | string | No | -- | Due date in RFC3339 format |
+| `estimated_hours` | number | No | -- | Estimated hours for the task |
+
+**Example request:**
+```json
+{
+  "name": "create_task",
+  "arguments": {
+    "project_id": "550e8400-...",
+    "title": "Implement user authentication",
+    "description": "Add JWT-based auth with refresh tokens",
+    "priority": "high",
+    "labels": ["backend", "security"],
+    "custom_fields": {
+      "complexity": "high",
+      "story_points": 8
+    }
+  }
+}
+```
+
+---
+
+#### 6. `update_task`
+
+Update task fields.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `task_id` | string | **Yes** | -- | Task ID |
+| `title` | string | No | -- | New title |
+| `description` | string | No | -- | New description |
+| `priority` | string | No | -- | New priority |
+| `labels` | string[] | No | -- | New labels |
+| `custom_fields` | object | No | -- | Custom field values to update |
+| `due_date` | string | No | -- | Due date in RFC3339 format |
+| `estimated_hours` | number | No | -- | Estimated hours |
+
+**Example request:**
+```json
+{
+  "name": "update_task",
+  "arguments": {
+    "task_id": "a1b2c3d4-...",
+    "priority": "urgent",
+    "labels": ["backend", "security", "blocked"]
+  }
+}
+```
+
+---
+
+#### 7. `move_task`
+
+Move task to a different status.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `task_id` | string | **Yes** | -- | Task ID |
+| `status_slug` | string | **Yes** | -- | Target status slug (e.g. `in_progress`, `done`) |
+| `comment` | string | No | -- | Optional comment to add when moving |
+
+**Example request:**
+```json
+{
+  "name": "move_task",
+  "arguments": {
+    "task_id": "a1b2c3d4-...",
+    "status_slug": "done",
+    "comment": "Implementation complete, all tests passing"
+  }
+}
+```
+
+---
+
+#### 8. `create_subtask`
+
+Create a subtask under a parent task.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `parent_task_id` | string | **Yes** | -- | Parent task ID |
+| `title` | string | **Yes** | -- | Subtask title |
+| `description` | string | No | -- | Subtask description |
+| `priority` | string | No | `medium` | Priority: `urgent`, `high`, `medium`, `low`, `none` |
+
+**Example request:**
+```json
+{
+  "name": "create_subtask",
+  "arguments": {
+    "parent_task_id": "a1b2c3d4-...",
+    "title": "Write unit tests for auth middleware",
+    "priority": "high"
+  }
+}
+```
+
+---
+
+#### 9. `add_dependency`
+
+Add a dependency between two tasks.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `task_id` | string | **Yes** | -- | Task ID |
+| `depends_on_task_id` | string | **Yes** | -- | ID of the task this depends on |
+| `dependency_type` | string | No | `blocks` | Dependency type: `blocks`, `relates_to`, `is_child_of` |
+
+**Example request:**
+```json
+{
+  "name": "add_dependency",
+  "arguments": {
+    "task_id": "a1b2c3d4-...",
+    "depends_on_task_id": "e5f6g7h8-...",
+    "dependency_type": "blocks"
+  }
+}
+```
+
+---
+
+#### 10. `assign_task`
+
+Assign a task to a user or agent.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `task_id` | string | **Yes** | -- | Task ID |
+| `assignee_id` | string | No | -- | Assignee UUID. Omit to unassign |
+| `assignee_type` | string | No | `agent` | Assignee type: `user`, `agent` |
+| `assign_to_self` | boolean | No | `false` | Assign to the calling agent |
+
+**Example request (assign to self):**
+```json
+{
+  "name": "assign_task",
+  "arguments": {
+    "task_id": "a1b2c3d4-...",
+    "assign_to_self": true
+  }
+}
+```
+
+**Example request (unassign):**
+```json
+{
+  "name": "assign_task",
+  "arguments": {
+    "task_id": "a1b2c3d4-..."
+  }
+}
+```
+
+---
+
+### Comments & Artifacts (5 tools)
+
+#### 11. `add_comment`
+
+Add a comment to a task.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `task_id` | string | **Yes** | -- | Task ID |
+| `body` | string | **Yes** | -- | Comment body (markdown supported) |
+| `is_internal` | boolean | No | `false` | Mark as internal (agent-only visible) |
+| `parent_comment_id` | string | No | -- | Parent comment ID for threading |
+| `metadata` | object | No | -- | Additional metadata as key-value pairs |
+
+**Example request:**
+```json
+{
+  "name": "add_comment",
+  "arguments": {
+    "task_id": "a1b2c3d4-...",
+    "body": "Completed the database schema migration. 3 new tables added.",
+    "is_internal": true,
+    "metadata": {
+      "tables_added": "3",
+      "migration_file": "20240215_add_custom_fields.sql"
+    }
+  }
+}
+```
+
+---
+
+#### 12. `list_comments`
+
+List comments on a task.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `task_id` | string | **Yes** | -- | Task ID |
+| `include_internal` | boolean | No | `true` | Include internal (agent-only) comments |
+| `limit` | number | No | `50` | Max comments to return |
+
+**Example request:**
+```json
+{
+  "name": "list_comments",
+  "arguments": {
+    "task_id": "a1b2c3d4-...",
+    "include_internal": true,
+    "limit": 20
+  }
+}
+```
+
+---
+
+#### 13. `upload_artifact`
+
+Upload an artifact (file, code, log, etc.) to a task.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `task_id` | string | **Yes** | -- | Task ID |
+| `name` | string | **Yes** | -- | Artifact filename |
+| `content` | string | **Yes** | -- | Artifact content (text or base64-encoded) |
+| `artifact_type` | string | No | `file` | Type: `file`, `code`, `log`, `report`, `link`, `image`, `data` |
+| `mime_type` | string | No | Auto-detected | MIME type. Auto-detected from name if omitted |
+| `metadata` | object | No | -- | Additional metadata |
+
+**Example request:**
+```json
+{
+  "name": "upload_artifact",
+  "arguments": {
+    "task_id": "a1b2c3d4-...",
+    "name": "test-results.json",
+    "content": "{\"passed\": 42, \"failed\": 0, \"skipped\": 2}",
+    "artifact_type": "report",
+    "metadata": {
+      "test_framework": "pytest",
+      "duration_seconds": "12.5"
+    }
+  }
+}
+```
+
+---
+
+#### 14. `list_artifacts`
+
+List artifacts attached to a task.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `task_id` | string | **Yes** | -- | Task ID |
+
+**Example request:**
+```json
+{
+  "name": "list_artifacts",
+  "arguments": {
+    "task_id": "a1b2c3d4-..."
+  }
+}
+```
+
+---
+
+#### 15. `get_artifact`
+
+Get artifact details and optionally its content.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `artifact_id` | string | **Yes** | -- | Artifact ID |
+| `include_content` | boolean | No | `false` | Include content for text files under 1MB |
+
+**Example request:**
+```json
+{
+  "name": "get_artifact",
+  "arguments": {
+    "artifact_id": "b2c3d4e5-...",
+    "include_content": true
+  }
+}
+```
+
+---
+
+### Event Bus (5 tools)
+
+#### 16. `publish_event`
+
+Publish an event to the event bus.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `project_id` | string | **Yes** | -- | Project ID |
+| `event_type` | string | **Yes** | -- | Event type: `summary`, `status_change`, `context_update`, `error`, `dependency_resolved`, `custom` |
+| `subject` | string | **Yes** | -- | Event subject line |
+| `payload` | object | **Yes** | -- | Event payload as key-value pairs |
+| `task_id` | string | No | -- | Related task ID |
+| `tags` | string[] | No | -- | Event tags for filtering |
+| `ttl_hours` | number | No | `24` | Time-to-live in hours |
+
+**Example request:**
+```json
+{
+  "name": "publish_event",
+  "arguments": {
+    "project_id": "550e8400-...",
+    "event_type": "status_change",
+    "subject": "Task moved to review",
+    "payload": {
+      "task_id": "a1b2c3d4-...",
+      "from_status": "in_progress",
+      "to_status": "review"
+    },
+    "tags": ["backend", "review-ready"]
+  }
+}
+```
+
+---
+
+#### 17. `publish_summary`
+
+Publish a work summary event (convenience wrapper for `publish_event` with `type=summary`).
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `project_id` | string | **Yes** | -- | Project ID |
+| `task_id` | string | No | -- | Related task ID |
+| `summary` | string | **Yes** | -- | Summary of work done |
+| `key_decisions` | string[] | No | -- | Key decisions made |
+| `artifacts_created` | string[] | No | -- | Artifacts created |
+| `blockers` | string[] | No | -- | Current blockers |
+| `next_steps` | string[] | No | -- | Suggested next steps |
+| `metrics` | object | No | -- | Metrics (lines changed, tests passed, etc.) |
+
+**Example request:**
+```json
+{
+  "name": "publish_summary",
+  "arguments": {
+    "project_id": "550e8400-...",
+    "task_id": "a1b2c3d4-...",
+    "summary": "Implemented JWT authentication with refresh token rotation",
+    "key_decisions": [
+      "Used HS256 for JWT signing",
+      "Refresh tokens stored in Redis with 7-day TTL"
+    ],
+    "artifacts_created": ["auth_middleware.go", "auth_test.go"],
+    "next_steps": ["Add rate limiting", "Implement password reset"],
+    "metrics": {
+      "lines_added": "450",
+      "lines_removed": "12",
+      "tests_added": "18"
+    }
+  }
+}
+```
+
+---
+
+#### 18. `get_context`
+
+Get enriched context from the event bus.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `project_id` | string | **Yes** | -- | Project ID |
+| `since` | string | No | -- | Only events after this timestamp (RFC3339) |
+| `event_types` | string[] | No | -- | Filter by event types |
+| `tags` | string[] | No | -- | Filter by tags |
+| `limit` | number | No | `50` | Max events to return |
+
+**Example request:**
+```json
+{
+  "name": "get_context",
+  "arguments": {
+    "project_id": "550e8400-...",
+    "since": "2025-02-24T00:00:00Z",
+    "event_types": ["summary", "error"],
+    "limit": 10
+  }
+}
+```
+
+---
+
+#### 19. `get_task_context`
+
+Get all context for a task: details, comments, events, artifacts, dependencies.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `task_id` | string | **Yes** | -- | Task ID |
+
+**Example request:**
+```json
+{
+  "name": "get_task_context",
+  "arguments": {
+    "task_id": "a1b2c3d4-..."
+  }
+}
+```
+
+**Example response structure:**
+```json
+{
+  "task": { "id": "...", "title": "...", "status": "..." },
+  "comments": [...],
+  "events": [...],
+  "artifacts": [...],
+  "dependencies": [...]
+}
+```
+
+---
+
+#### 20. `subscribe_events`
+
+Subscribe to events (placeholder -- returns subscription info).
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `project_id` | string | **Yes** | -- | Project ID |
+| `event_types` | string[] | No | -- | Event types to subscribe to |
+
+> **Note:** This tool is a placeholder for future real-time subscription support.
+> Currently it returns subscription metadata but does not establish a persistent connection.
+
+**Example request:**
+```json
+{
+  "name": "subscribe_events",
+  "arguments": {
+    "project_id": "550e8400-...",
+    "event_types": ["summary", "error", "dependency_resolved"]
+  }
+}
+```
+
+---
+
+### Utility (3 tools)
+
+#### 21. `heartbeat`
+
+Send a heartbeat to indicate the agent is alive.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `current_task_id` | string | No | -- | ID of the task currently being worked on |
+| `status` | string | No | -- | Agent status: `online`, `busy`, `error` |
+
+**Example request:**
+```json
+{
+  "name": "heartbeat",
+  "arguments": {
+    "status": "busy",
+    "current_task_id": "a1b2c3d4-..."
+  }
+}
+```
+
+---
+
+#### 22. `get_my_tasks`
+
+Get tasks assigned to the calling agent.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `status_category` | string | No | -- | Filter by status category |
+| `project_id` | string | No | -- | Filter by project |
+| `limit` | number | No | `50` | Max results |
+
+**Example request:**
+```json
+{
+  "name": "get_my_tasks",
+  "arguments": {
+    "status_category": "in_progress"
+  }
+}
+```
+
+---
+
+#### 23. `report_error`
+
+Report an error encountered during work.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `task_id` | string | No | -- | Related task ID |
+| `error_message` | string | **Yes** | -- | Error message |
+| `stack_trace` | string | No | -- | Stack trace or details |
+| `severity` | string | No | `medium` | Severity: `low`, `medium`, `high`, `critical` |
+| `recoverable` | boolean | No | `true` | Whether the error is recoverable |
+
+**Example request:**
+```json
+{
+  "name": "report_error",
+  "arguments": {
+    "task_id": "a1b2c3d4-...",
+    "error_message": "Failed to connect to external API: connection timeout",
+    "severity": "high",
+    "recoverable": true
+  }
+}
+```
+
+---
+
+## Error Handling
+
+All tools return errors in a consistent format:
+
+```json
+{
+  "isError": true,
+  "content": [
+    {
+      "type": "text",
+      "text": "error: invalid task_id: UUID must be a valid UUID"
+    }
+  ]
+}
+```
+
+Common error conditions:
+- **Invalid UUID** -- parameter is not a valid UUID format
+- **Not found** -- referenced entity does not exist
+- **Permission denied** -- agent lacks access to the workspace/project
+- **Validation error** -- required field missing or invalid value
+
+## Authentication
+
+MCP tools authenticate using the `MESH_AGENT_KEY` environment variable. The key format is:
+
+```
+agk_{workspace_slug}_{random_string}
+```
+
+The agent key is generated when registering an agent through the REST API or the web UI.
+It is shown only once at creation time -- store it securely.
+
+To regenerate a lost key, use `POST /api/v1/agents/{agent_id}/regenerate-key` via the REST API.
