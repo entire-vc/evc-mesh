@@ -18,7 +18,8 @@ export function App() {
         <Route path="/login" element={<LoginPage />} />
         <Route path="/register" element={<RegisterPage />} />
         <Route element={<AppLayout />}>
-          <Route index element={<Navigate to="/login" replace />} />
+          {/* Index route is handled by AppLayout redirects — no element needed */}
+          <Route index element={null} />
           <Route path="w/:wsSlug" element={<DashboardPage />} />
           <Route
             path="w/:wsSlug/agents"
