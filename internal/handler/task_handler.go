@@ -376,9 +376,7 @@ func (h *TaskHandler) ListSubtasks(c echo.Context) error {
 
 // handleError inspects the error type and returns appropriate JSON response.
 func handleError(c echo.Context, err error) error {
-	log.Printf("DEBUG handleError: type=%T value=%v", err, err)
 	if apiErr, ok := err.(*apierror.Error); ok {
-		log.Printf("DEBUG handleError: apierror code=%d msg=%s", apiErr.Code, apiErr.Message)
 		return c.JSON(apiErr.StatusCode(), apiErr)
 	}
 
