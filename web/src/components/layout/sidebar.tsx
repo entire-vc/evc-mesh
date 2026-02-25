@@ -14,6 +14,7 @@ import {
   Target,
 } from "lucide-react";
 import { cn } from "@/lib/cn";
+import { MeshIcon } from "@/components/mesh-icon";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { useProjectStore } from "@/stores/project";
 import { Button } from "@/components/ui/button";
@@ -48,8 +49,8 @@ export function Sidebar({ collapsed }: SidebarProps) {
   if (collapsed) {
     return (
       <aside className="flex h-full w-12 flex-col items-center border-r border-sidebar-border bg-sidebar py-4">
-        <div className="mb-4 flex h-8 w-8 items-center justify-center rounded-lg bg-sidebar-primary text-xs font-bold text-primary-foreground">
-          {currentWorkspace?.name.charAt(0).toUpperCase() || "M"}
+        <div className="mb-4 flex h-8 w-8 items-center justify-center rounded-lg bg-sidebar-primary text-primary-foreground">
+          <MeshIcon size={18} />
         </div>
         <Separator className="mb-4 w-8" />
         <nav className="flex flex-col items-center gap-2">
@@ -148,8 +149,8 @@ export function Sidebar({ collapsed }: SidebarProps) {
       <div className="p-3">
         <DropdownMenu>
           <DropdownMenuTrigger className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-sm font-semibold text-sidebar-foreground hover:bg-sidebar-accent">
-            <div className="flex h-6 w-6 items-center justify-center rounded bg-sidebar-primary text-[10px] font-bold text-primary-foreground">
-              {currentWorkspace?.name.charAt(0).toUpperCase() || "M"}
+            <div className="flex h-6 w-6 items-center justify-center rounded bg-sidebar-primary text-primary-foreground">
+              <MeshIcon size={14} />
             </div>
             <span className="flex-1 truncate text-left">
               {currentWorkspace?.name || "Select workspace"}

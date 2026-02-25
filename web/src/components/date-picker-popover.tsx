@@ -1,29 +1,48 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Calendar } from "lucide-react";
+import { Calendar, X } from "lucide-react";
 import { cn } from "@/lib/cn";
 
 interface DatePickerPopoverProps {
+  /** ISO date string (YYYY-MM-DD) or datetime-local string (YYYY-MM-DDTHH:mm) */
   value: string | null;
   onChange: (date: string | null) => void;
   placeholder?: string;
   className?: string;
   showClearButton?: boolean;
+  /** Use datetime-local input instead of date */
+  includeTime?: boolean;
 }
 
 function parseDateParts(isoDate: string): [number, number, number] {
-  const parts = isoDate.split("-").map(Number);
+  const dateOnly = isoDate.split("T")[0] ?? isoDate;
+  const parts = dateOnly.split("-").map(Number);
   return [parts[0] ?? 0, parts[1] ?? 1, parts[2] ?? 1];
 }
 
-function formatDisplayDate(isoDate: string): string {
-  // isoDate is YYYY-MM-DD; parse as local date to avoid UTC offset shift.
+function parseTimeParts(isoDate: string): [number, number] {
+  const timePart = isoDate.split("T")[1];
+  if (!timePart) return [0, 0];
+  const parts = timePart.split(":").map(Number);
+  return [parts[0] ?? 0, parts[1] ?? 0];
+}
+
+function formatDisplayDate(isoDate: string, includeTime?: boolean): string {
   const [year, month, day] = parseDateParts(isoDate);
   const d = new Date(year, month - 1, day);
-  return d.toLocaleDateString("en-US", {
+  const dateStr = d.toLocaleDateString("en-US", {
     month: "short",
     day: "numeric",
     year: "numeric",
   });
+  if (includeTime) {
+    const [hours, minutes] = parseTimeParts(isoDate);
+    if (hours || minutes) {
+      const h = String(hours).padStart(2, "0");
+      const m = String(minutes).padStart(2, "0");
+      return `${dateStr} ${h}:${m}`;
+    }
+  }
+  return dateStr;
 }
 
 function isPast(isoDate: string): boolean {
@@ -40,6 +59,7 @@ export function DatePickerPopover({
   placeholder = "Set due date",
   className,
   showClearButton = true,
+  includeTime = false,
 }: DatePickerPopoverProps) {
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -62,7 +82,7 @@ export function DatePickerPopover({
   // Focus the date input when popover opens.
   useEffect(() => {
     if (open && inputRef.current) {
-      inputRef.current.focus();
+      inputRef.current.showPicker?.();
     }
   }, [open]);
 
@@ -79,11 +99,12 @@ export function DatePickerPopover({
     (e: React.ChangeEvent<HTMLInputElement>) => {
       const raw = e.target.value;
       onChange(raw || null);
-      if (raw) {
+      // Only auto-close for date-only; datetime users may still pick time
+      if (raw && !includeTime) {
         setOpen(false);
       }
     },
-    [onChange],
+    [onChange, includeTime],
   );
 
   const handleClear = useCallback(() => {
@@ -92,6 +113,7 @@ export function DatePickerPopover({
   }, [onChange]);
 
   const past = value ? isPast(value) : false;
+  const inputType = includeTime ? "datetime-local" : "date";
 
   return (
     <div
@@ -116,18 +138,30 @@ export function DatePickerPopover({
         <Calendar
           className={cn("h-3.5 w-3.5 shrink-0", past && value && "text-red-500")}
         />
-        <span>{value ? formatDisplayDate(value) : placeholder}</span>
+        <span>{value ? formatDisplayDate(value, includeTime) : placeholder}</span>
+        {showClearButton && value && (
+          <span
+            role="button"
+            className="ml-0.5 rounded-full p-0.5 hover:bg-muted"
+            onClick={(e) => {
+              e.stopPropagation();
+              handleClear();
+            }}
+          >
+            <X className="h-3 w-3" />
+          </span>
+        )}
       </button>
 
       {/* Popover */}
       {open && (
-        <div className="absolute left-0 top-full z-50 mt-1 min-w-[220px] rounded-lg border border-border bg-popover p-3 text-popover-foreground shadow-lg">
+        <div className="absolute left-0 top-full z-50 mt-1 min-w-[240px] rounded-lg border border-border bg-popover p-3 text-popover-foreground shadow-lg">
           <p className="mb-2 text-xs font-medium text-muted-foreground">
-            Pick a date
+            {includeTime ? "Pick date & time" : "Pick a date"}
           </p>
           <input
             ref={inputRef}
-            type="date"
+            type={inputType}
             value={value ?? ""}
             onChange={handleDateChange}
             className={cn(
@@ -135,18 +169,32 @@ export function DatePickerPopover({
               "transition-colors focus:outline-none focus:ring-2 focus:ring-ring",
             )}
           />
-          {showClearButton && value && (
-            <button
-              type="button"
-              onClick={handleClear}
-              className={cn(
-                "mt-2 w-full rounded-md px-2 py-1 text-xs text-muted-foreground",
-                "transition-colors hover:bg-accent hover:text-accent-foreground",
-              )}
-            >
-              Clear date
-            </button>
-          )}
+          <div className="mt-2 flex items-center gap-2">
+            {includeTime && value && (
+              <button
+                type="button"
+                onClick={() => setOpen(false)}
+                className={cn(
+                  "flex-1 rounded-md bg-primary px-2 py-1 text-xs text-primary-foreground",
+                  "transition-colors hover:bg-primary/90",
+                )}
+              >
+                Done
+              </button>
+            )}
+            {showClearButton && value && (
+              <button
+                type="button"
+                onClick={handleClear}
+                className={cn(
+                  "flex-1 rounded-md px-2 py-1 text-xs text-muted-foreground",
+                  "transition-colors hover:bg-accent hover:text-accent-foreground",
+                )}
+              >
+                Clear
+              </button>
+            )}
+          </div>
         </div>
       )}
     </div>

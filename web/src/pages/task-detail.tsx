@@ -9,7 +9,6 @@ import { useNavigate, useParams } from "react-router";
 import {
   ArrowLeft,
   Bot,
-  Calendar,
   Clock,
   Copy,
   Hourglass,
@@ -40,6 +39,7 @@ import { CommentList } from "@/components/comment-list";
 import { ActivityLog } from "@/components/activity-log";
 import { SubtaskList } from "@/components/subtask-list";
 import { CustomFieldRenderer } from "@/components/custom-field-renderer";
+import { DatePickerPopover } from "@/components/date-picker-popover";
 import { VCSLinks } from "@/components/vcs-links";
 import { cn } from "@/lib/cn";
 import {
@@ -454,18 +454,17 @@ export function TaskDetailPage() {
               {/* Due date */}
               <div className="space-y-1.5">
                 <label className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-                  <Calendar className="h-3.5 w-3.5" />
                   Due Date
                 </label>
-                <Input
-                  type="datetime-local"
+                <DatePickerPopover
                   value={
                     currentTask.due_date
                       ? toDateTimeLocal(currentTask.due_date)
-                      : ""
+                      : null
                   }
-                  onChange={(e) => void handleDueDateChange(e.target.value)}
-                  className="h-8 text-xs"
+                  onChange={(val) => void handleDueDateChange(val ?? "")}
+                  includeTime
+                  placeholder="Set due date"
                 />
               </div>
 

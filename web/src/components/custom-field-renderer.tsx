@@ -4,6 +4,7 @@ import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
+import { DatePickerPopover } from "@/components/date-picker-popover";
 import { cn } from "@/lib/cn";
 import type { CustomFieldDefinition } from "@/types";
 
@@ -109,21 +110,22 @@ export function CustomFieldRenderer({
 
     case "date":
       return (
-        <Input
-          type="datetime-local"
-          value={(value as string) ?? ""}
-          onChange={(e) => onChange(e.target.value || null)}
-          className={cn("h-8 text-xs", compact && "h-7")}
+        <DatePickerPopover
+          value={(value as string) ?? null}
+          onChange={(val) => onChange(val)}
+          placeholder={getPlaceholder(field.options, `Set ${field.name}...`)}
+          className={compact ? "text-xs" : ""}
         />
       );
 
     case "datetime":
       return (
-        <Input
-          type="datetime-local"
-          value={(value as string) ?? ""}
-          onChange={(e) => onChange(e.target.value || null)}
-          className={cn("h-8 text-xs", compact && "h-7")}
+        <DatePickerPopover
+          value={(value as string) ?? null}
+          onChange={(val) => onChange(val)}
+          includeTime
+          placeholder={getPlaceholder(field.options, `Set ${field.name}...`)}
+          className={compact ? "text-xs" : ""}
         />
       );
 

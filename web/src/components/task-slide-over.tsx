@@ -8,7 +8,6 @@ import {
 } from "react";
 import {
   Bot,
-  Calendar,
   Check,
   Clock,
   Copy,
@@ -42,6 +41,7 @@ import { ArtifactList } from "@/components/artifact-list";
 import { VCSLinks } from "@/components/vcs-links";
 import { DependencyList } from "@/components/dependency-list";
 import { CustomFieldRenderer } from "@/components/custom-field-renderer";
+import { DatePickerPopover } from "@/components/date-picker-popover";
 import { DescriptionEditor } from "@/components/description-editor";
 import { cn } from "@/lib/cn";
 import {
@@ -675,20 +675,19 @@ export function TaskSlideOver({
                     {showDueDate && (
                       <>
                         <label className="flex items-center gap-1 pt-1 text-xs text-muted-foreground">
-                          <Calendar className="h-3 w-3" />
                           Due Date
                         </label>
-                        <Input
-                          type="datetime-local"
+                        <DatePickerPopover
                           value={
                             currentTask.due_date
                               ? toDateTimeLocal(currentTask.due_date)
-                              : ""
+                              : null
                           }
-                          onChange={(e) =>
-                            void handleDueDateChange(e.target.value)
+                          onChange={(val) =>
+                            void handleDueDateChange(val ?? "")
                           }
-                          className="h-7 text-xs"
+                          includeTime
+                          placeholder="Set due date"
                         />
                       </>
                     )}
