@@ -977,3 +977,69 @@ func (s *Server) handleReportError(ctx context.Context, request mcpsdk.CallToolR
 
 	return jsonResult(resp)
 }
+
+// ============================================================================
+// 24. register_sub_agent
+// ============================================================================
+
+func (s *Server) handleRegisterSubAgent(ctx context.Context, request mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
+	session := s.getSession(ctx)
+	if session == nil {
+		return errResult("not authenticated: no agent session")
+	}
+
+	name := mcpsdk.ParseString(request, "name", "")
+	if name == "" {
+		return errResult("name is required")
+	}
+
+	agentType := mcpsdk.ParseString(request, "agent_type", "")
+	if agentType == "" {
+		return errResult("agent_type is required")
+	}
+
+	capabilities := mcpsdk.ParseStringMap(request, "capabilities", nil)
+
+	result, err := s.getRESTClient(ctx).RegisterSubAgent(
+		ctx,
+		session.WorkspaceID.String(),
+		session.AgentID.String(),
+		name,
+		agentType,
+		capabilities,
+	)
+	if err != nil {
+		return errResult("failed to register sub-agent: %v", err)
+	}
+
+	return jsonResult(result)
+}
+
+// ============================================================================
+// 25. list_sub_agents
+// ============================================================================
+
+func (s *Server) handleListSubAgents(ctx context.Context, request mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
+	session := s.getSession(ctx)
+	if session == nil {
+		return errResult("not authenticated: no agent session")
+	}
+
+	// agent_id defaults to the calling agent.
+	agentID := mcpsdk.ParseString(request, "agent_id", "")
+	if agentID == "" {
+		agentID = session.AgentID.String()
+	}
+
+	recursive := mcpsdk.ParseBoolean(request, "recursive", false)
+
+	agents, err := s.getRESTClient(ctx).ListSubAgents(ctx, agentID, recursive)
+	if err != nil {
+		return errResult("failed to list sub-agents: %v", err)
+	}
+
+	return jsonResult(map[string]any{
+		"agents": agents,
+		"count":  len(agents),
+	})
+}

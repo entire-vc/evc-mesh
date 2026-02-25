@@ -19,29 +19,31 @@ import (
 
 // agentRow is the DB row representation (includes deleted_at that the domain model does not have).
 type agentRow struct {
-	ID                  uuid.UUID       `db:"id"`
-	WorkspaceID         uuid.UUID       `db:"workspace_id"`
-	Name                string          `db:"name"`
-	Slug                string          `db:"slug"`
-	AgentType           domain.AgentType `db:"agent_type"`
-	APIKeyHash          string          `db:"api_key_hash"`
-	APIKeyPrefix        string          `db:"api_key_prefix"`
-	Capabilities        json.RawMessage `db:"capabilities"`
+	ID                  uuid.UUID          `db:"id"`
+	WorkspaceID         uuid.UUID          `db:"workspace_id"`
+	ParentAgentID       *uuid.UUID         `db:"parent_agent_id"`
+	Name                string             `db:"name"`
+	Slug                string             `db:"slug"`
+	AgentType           domain.AgentType   `db:"agent_type"`
+	APIKeyHash          string             `db:"api_key_hash"`
+	APIKeyPrefix        string             `db:"api_key_prefix"`
+	Capabilities        json.RawMessage    `db:"capabilities"`
 	Status              domain.AgentStatus `db:"status"`
-	LastHeartbeat       *time.Time      `db:"last_heartbeat"`
-	CurrentTaskID       *uuid.UUID      `db:"current_task_id"`
-	Settings            json.RawMessage `db:"settings"`
-	TotalTasksCompleted int             `db:"total_tasks_completed"`
-	TotalErrors         int             `db:"total_errors"`
-	CreatedAt           time.Time       `db:"created_at"`
-	UpdatedAt           time.Time       `db:"updated_at"`
-	DeletedAt           *time.Time      `db:"deleted_at"`
+	LastHeartbeat       *time.Time         `db:"last_heartbeat"`
+	CurrentTaskID       *uuid.UUID         `db:"current_task_id"`
+	Settings            json.RawMessage    `db:"settings"`
+	TotalTasksCompleted int                `db:"total_tasks_completed"`
+	TotalErrors         int                `db:"total_errors"`
+	CreatedAt           time.Time          `db:"created_at"`
+	UpdatedAt           time.Time          `db:"updated_at"`
+	DeletedAt           *time.Time         `db:"deleted_at"`
 }
 
 func (r *agentRow) toDomain() domain.Agent {
 	return domain.Agent{
 		ID:                  r.ID,
 		WorkspaceID:         r.WorkspaceID,
+		ParentAgentID:       r.ParentAgentID,
 		Name:                r.Name,
 		Slug:                r.Slug,
 		AgentType:           r.AgentType,
@@ -80,17 +82,17 @@ func NewAgentRepo(db *sqlx.DB) *AgentRepo {
 func (r *AgentRepo) Create(ctx context.Context, agent *domain.Agent) error {
 	const q = `
 		INSERT INTO agents (
-			id, workspace_id, name, slug, agent_type,
+			id, workspace_id, parent_agent_id, name, slug, agent_type,
 			api_key_hash, api_key_prefix, capabilities, status,
 			last_heartbeat, current_task_id, settings,
 			total_tasks_completed, total_errors,
 			created_at, updated_at
 		) VALUES (
-			$1, $2, $3, $4, $5,
-			$6, $7, $8, $9,
-			$10, $11, $12,
-			$13, $14,
-			$15, $16
+			$1, $2, $3, $4, $5, $6,
+			$7, $8, $9, $10,
+			$11, $12, $13,
+			$14, $15,
+			$16, $17
 		)
 	`
 	capabilities := agent.Capabilities
@@ -102,7 +104,7 @@ func (r *AgentRepo) Create(ctx context.Context, agent *domain.Agent) error {
 		settings = json.RawMessage(`{}`)
 	}
 	_, err := r.db.ExecContext(ctx, q,
-		agent.ID, agent.WorkspaceID, agent.Name, agent.Slug, agent.AgentType,
+		agent.ID, agent.WorkspaceID, agent.ParentAgentID, agent.Name, agent.Slug, agent.AgentType,
 		agent.APIKeyHash, agent.APIKeyPrefix, capabilities, agent.Status,
 		agent.LastHeartbeat, agent.CurrentTaskID, settings,
 		agent.TotalTasksCompleted, agent.TotalErrors,
@@ -140,12 +142,12 @@ func (r *AgentRepo) GetByAPIKeyPrefix(ctx context.Context, workspaceID uuid.UUID
 func (r *AgentRepo) Update(ctx context.Context, agent *domain.Agent) error {
 	const q = `
 		UPDATE agents
-		SET name = $2, slug = $3, agent_type = $4,
-		    api_key_hash = $5, api_key_prefix = $6,
-		    capabilities = $7, status = $8,
-		    last_heartbeat = $9, current_task_id = $10,
-		    settings = $11, total_tasks_completed = $12,
-		    total_errors = $13, updated_at = $14
+		SET parent_agent_id = $2, name = $3, slug = $4, agent_type = $5,
+		    api_key_hash = $6, api_key_prefix = $7,
+		    capabilities = $8, status = $9,
+		    last_heartbeat = $10, current_task_id = $11,
+		    settings = $12, total_tasks_completed = $13,
+		    total_errors = $14, updated_at = $15
 		WHERE id = $1 AND deleted_at IS NULL
 	`
 	capabilities := agent.Capabilities
@@ -157,7 +159,7 @@ func (r *AgentRepo) Update(ctx context.Context, agent *domain.Agent) error {
 		settings = json.RawMessage(`{}`)
 	}
 	res, err := r.db.ExecContext(ctx, q,
-		agent.ID, agent.Name, agent.Slug, agent.AgentType,
+		agent.ID, agent.ParentAgentID, agent.Name, agent.Slug, agent.AgentType,
 		agent.APIKeyHash, agent.APIKeyPrefix,
 		capabilities, agent.Status,
 		agent.LastHeartbeat, agent.CurrentTaskID,
@@ -211,6 +213,11 @@ func (r *AgentRepo) List(ctx context.Context, workspaceID uuid.UUID, filter repo
 		args = append(args, pattern)
 		argIdx++
 	}
+	if filter.ParentAgentID != nil {
+		conditions = append(conditions, fmt.Sprintf("parent_agent_id = $%d", argIdx))
+		args = append(args, *filter.ParentAgentID)
+		argIdx++
+	}
 
 	where := "WHERE " + joinAnd(conditions)
 	order := orderClause(pg, allowedSortColumns{
@@ -235,6 +242,33 @@ func (r *AgentRepo) List(ctx context.Context, workspaceID uuid.UUID, filter repo
 	}
 
 	return pagination.NewPage(agentRowsToSlice(rows), totalCount, pg), nil
+}
+
+// GetSubAgentTree returns all descendant agents of parentID using a recursive CTE,
+// limited to 10 levels of depth. Results are ordered by depth then created_at.
+func (r *AgentRepo) GetSubAgentTree(ctx context.Context, parentID uuid.UUID) ([]domain.Agent, error) {
+	const q = `
+		WITH RECURSIVE agent_tree AS (
+			SELECT *, 1 AS depth FROM agents
+			WHERE parent_agent_id = $1 AND deleted_at IS NULL
+			UNION ALL
+			SELECT a.*, t.depth + 1 FROM agents a
+			INNER JOIN agent_tree t ON a.parent_agent_id = t.id
+			WHERE a.deleted_at IS NULL AND t.depth < 10
+		)
+		SELECT id, workspace_id, parent_agent_id, name, slug, agent_type,
+		       api_key_hash, api_key_prefix, capabilities, status,
+		       last_heartbeat, current_task_id, settings,
+		       total_tasks_completed, total_errors,
+		       created_at, updated_at, deleted_at
+		FROM agent_tree
+		ORDER BY depth, created_at
+	`
+	var rows []agentRow
+	if err := r.db.SelectContext(ctx, &rows, q, parentID); err != nil {
+		return nil, err
+	}
+	return agentRowsToSlice(rows), nil
 }
 
 func (r *AgentRepo) UpdateHeartbeat(ctx context.Context, id uuid.UUID) error {

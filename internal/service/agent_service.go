@@ -111,16 +111,17 @@ func (s *agentService) Register(ctx context.Context, input RegisterAgentInput) (
 	now := timeNow()
 
 	agent := &domain.Agent{
-		ID:           uuid.New(),
-		WorkspaceID:  input.WorkspaceID,
-		Name:         input.Name,
-		Slug:         slugify(input.Name),
-		AgentType:    input.AgentType,
-		APIKeyHash:   string(hash),
-		APIKeyPrefix: prefix,
-		Status:       domain.AgentStatusOffline,
-		CreatedAt:    now,
-		UpdatedAt:    now,
+		ID:            uuid.New(),
+		WorkspaceID:   input.WorkspaceID,
+		ParentAgentID: input.ParentAgentID,
+		Name:          input.Name,
+		Slug:          slugify(input.Name),
+		AgentType:     input.AgentType,
+		APIKeyHash:    string(hash),
+		APIKeyPrefix:  prefix,
+		Status:        domain.AgentStatusOffline,
+		CreatedAt:     now,
+		UpdatedAt:     now,
 	}
 
 	// Capabilities are stored as-is; marshalling happens at the repo layer.
@@ -213,6 +214,33 @@ func (s *agentService) Authenticate(ctx context.Context, workspaceSlug, apiKey s
 	}
 
 	return agent, nil
+}
+
+// ListSubAgents returns direct children (recursive=false) or all descendants
+// (recursive=true, depth limited to 10) of the given parent agent.
+func (s *agentService) ListSubAgents(ctx context.Context, parentID uuid.UUID, recursive bool) ([]domain.Agent, error) {
+	// Verify parent agent exists first.
+	parent, err := s.agentRepo.GetByID(ctx, parentID)
+	if err != nil {
+		return nil, err
+	}
+	if parent == nil {
+		return nil, apierror.NotFound("Agent")
+	}
+
+	if recursive {
+		return s.agentRepo.GetSubAgentTree(ctx, parentID)
+	}
+
+	// Non-recursive: list only direct children (ignore pagination limits — return all).
+	filter := repository.AgentFilter{
+		ParentAgentID: &parentID,
+	}
+	page, err := s.agentRepo.List(ctx, parent.WorkspaceID, filter, pagination.Params{Page: 1, PageSize: 1000})
+	if err != nil {
+		return nil, err
+	}
+	return page.Items, nil
 }
 
 // RotateAPIKey generates a new API key for the agent, replacing the old one.

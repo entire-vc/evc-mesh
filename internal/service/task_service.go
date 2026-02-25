@@ -26,6 +26,7 @@ type taskService struct {
 	activityRepo   repository.ActivityLogRepository
 	customFieldSvc CustomFieldService
 	projectRepo    repository.ProjectRepository
+	autoTransSvc   AutoTransitionService
 }
 
 // NewTaskService returns a new TaskService backed by the given repositories.
@@ -64,6 +65,19 @@ func WithProjectRepo(pr repository.ProjectRepository) TaskServiceOption {
 	return func(s *taskService) {
 		s.projectRepo = pr
 	}
+}
+
+// WithAutoTransitionService sets the auto-transition service that fires after status changes.
+func WithAutoTransitionService(ats AutoTransitionService) TaskServiceOption {
+	return func(s *taskService) {
+		s.autoTransSvc = ats
+	}
+}
+
+// SetAutoTransitionService implements TaskServiceAutoTransitionConfigurable,
+// allowing the auto-transition service to be wired after construction.
+func (s *taskService) SetAutoTransitionService(svc AutoTransitionService) {
+	s.autoTransSvc = svc
 }
 
 // Create validates and persists a new task.
@@ -156,10 +170,22 @@ func (s *taskService) Delete(ctx context.Context, id uuid.UUID) error {
 	if existing == nil {
 		return apierror.NotFound("Task")
 	}
+
+	parentID := existing.ParentTaskID
+
 	if err := s.taskRepo.Delete(ctx, id); err != nil {
 		return err
 	}
 	s.logActivity(ctx, existing.ProjectID, id, "task.deleted", nil)
+
+	// After deleting a subtask, re-check whether the parent's remaining
+	// subtasks are all complete and an auto-transition should fire.
+	if parentID != nil && s.autoTransSvc != nil {
+		if atErr := s.autoTransSvc.CheckSubtaskCompletion(ctx, *parentID); atErr != nil {
+			log.Printf("[auto-transition] WARNING: CheckSubtaskCompletion after delete for parent %s failed: %v", *parentID, atErr)
+		}
+	}
+
 	return nil
 }
 
@@ -219,6 +245,17 @@ func (s *taskService) MoveTask(ctx context.Context, taskID uuid.UUID, input Move
 		changes["position"] = *input.Position
 	}
 	s.logActivity(ctx, task.ProjectID, taskID, "task.moved", changes)
+
+	// Fire auto-transition checks when the status changed.
+	if input.StatusID != nil && s.autoTransSvc != nil {
+		// Look up the new status category so EvaluateOnTaskMove can decide what to do.
+		if newStatus, err := s.statusRepo.GetByID(ctx, *input.StatusID); err == nil && newStatus != nil {
+			if atErr := s.autoTransSvc.EvaluateOnTaskMove(ctx, taskID, newStatus.Category); atErr != nil {
+				log.Printf("[auto-transition] WARNING: EvaluateOnTaskMove for task %s failed: %v", taskID, atErr)
+			}
+		}
+	}
+
 	return nil
 }
 

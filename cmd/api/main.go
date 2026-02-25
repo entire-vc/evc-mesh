@@ -59,6 +59,7 @@ func main() {
 	userRepo := postgres.NewUserRepo(db)
 	refreshTokenRepo := postgres.NewRefreshTokenRepo(db)
 	workspaceMemberRepo := postgres.NewWorkspaceMemberRepo(db)
+	webhookRepo := postgres.NewWebhookRepo(db)
 
 	// 5. Create auth service.
 	authService := auth.NewService(
@@ -79,6 +80,15 @@ func main() {
 		service.WithCustomFieldService(customFieldService),
 		service.WithProjectRepo(projectRepo),
 	)
+
+	// Wire auto-transition service. It calls taskService.MoveTask, so taskService must already
+	// exist. We inject it back via the configurable interface to trigger transitions on status
+	// changes without introducing an import cycle.
+	autoTransitionSvc := service.NewAutoTransitionService(taskRepo, taskStatusRepo, taskDependencyRepo, taskService)
+	if configurable, ok := taskService.(service.TaskServiceAutoTransitionConfigurable); ok {
+		configurable.SetAutoTransitionService(autoTransitionSvc)
+	}
+
 	taskStatusService := service.NewTaskStatusService(taskStatusRepo, taskRepo, activityLogRepo)
 	agentService := service.NewAgentService(agentRepo, activityLogRepo, workspaceRepo)
 
@@ -87,6 +97,7 @@ func main() {
 	depService := service.NewTaskDependencyService(taskDependencyRepo, taskRepo, activityLogRepo)
 	eventBusService := service.NewEventBusService(eventBusRepo, activityLogRepo)
 	activityLogService := service.NewActivityLogService(activityLogRepo)
+	webhookService := service.NewWebhookService(webhookRepo)
 
 	// customFieldService was already created above (before taskService, for CF value validation).
 
@@ -144,6 +155,7 @@ func main() {
 	activityHandler := handler.NewActivityHandler(activityLogService)
 	customFieldHandler := handler.NewCustomFieldHandler(customFieldService)
 	taskContextHandler := handler.NewTaskContextHandler(taskService, commentService, artifactService, depService, eventBusService)
+	webhookHandler := handler.NewWebhookHandler(webhookService)
 
 	// 8. Create Echo instance with global middleware.
 	e := echo.New()
@@ -284,18 +296,28 @@ func main() {
 	// Agent routes.
 	api.GET("/workspaces/:ws_id/agents", agentHandler.List)
 	api.POST("/workspaces/:ws_id/agents", agentHandler.Register, rbac(mw.PermRegisterAgent))
+	api.GET("/agents/me", agentHandler.Me)
+	api.GET("/agents/me/tasks", agentHandler.GetMyTasks)
+	api.POST("/agents/heartbeat", agentHandler.Heartbeat)
 	api.GET("/agents/:agent_id", agentHandler.GetByID)
 	api.PATCH("/agents/:agent_id", agentHandler.Update, rbac(mw.PermDeleteAgent))
 	api.DELETE("/agents/:agent_id", agentHandler.Delete, rbac(mw.PermDeleteAgent))
 	api.POST("/agents/:agent_id/regenerate-key", agentHandler.RegenerateKey, rbac(mw.PermDeleteAgent))
-	api.GET("/agents/me", agentHandler.Me)
-	api.GET("/agents/me/tasks", agentHandler.GetMyTasks)
-	api.POST("/agents/heartbeat", agentHandler.Heartbeat)
+	api.GET("/agents/:agent_id/sub-agents", agentHandler.ListSubAgents)
 
 	// Event bus routes.
 	api.GET("/projects/:proj_id/events", eventHandler.List)
 	api.POST("/projects/:proj_id/events", eventHandler.Create, rbac(mw.PermPublishEvent))
 	api.GET("/events/:event_id", eventHandler.GetByID)
+
+	// Webhook routes.
+	api.POST("/workspaces/:ws_id/webhooks", webhookHandler.Create, rbac(mw.PermManageWebhooks))
+	api.GET("/workspaces/:ws_id/webhooks", webhookHandler.List, rbac(mw.PermManageWebhooks))
+	api.GET("/webhooks/:webhook_id", webhookHandler.GetByID, rbac(mw.PermManageWebhooks))
+	api.PATCH("/webhooks/:webhook_id", webhookHandler.Update, rbac(mw.PermManageWebhooks))
+	api.DELETE("/webhooks/:webhook_id", webhookHandler.Delete, rbac(mw.PermManageWebhooks))
+	api.GET("/webhooks/:webhook_id/deliveries", webhookHandler.ListDeliveries, rbac(mw.PermManageWebhooks))
+	api.POST("/webhooks/:webhook_id/test", webhookHandler.Test, rbac(mw.PermManageWebhooks))
 
 	// Activity log routes.
 	api.GET("/workspaces/:ws_id/activity", activityHandler.ListByWorkspace, rbac(mw.PermExportAuditLog))

@@ -66,6 +66,13 @@ type TaskService interface {
 	GetDefaultStatus(ctx context.Context, projectID uuid.UUID) (*domain.TaskStatus, error)
 }
 
+// TaskServiceAutoTransitionConfigurable extends TaskService with the ability
+// to wire an optional AutoTransitionService at runtime.
+type TaskServiceAutoTransitionConfigurable interface {
+	TaskService
+	SetAutoTransitionService(svc AutoTransitionService)
+}
+
 // TaskStatusService provides business logic for task status management.
 type TaskStatusService interface {
 	Create(ctx context.Context, status *domain.TaskStatus) error
@@ -129,10 +136,11 @@ type ArtifactService interface {
 
 // RegisterAgentInput holds parameters for registering a new agent.
 type RegisterAgentInput struct {
-	WorkspaceID  uuid.UUID        `json:"workspace_id"`
-	Name         string           `json:"name"`
-	AgentType    domain.AgentType `json:"agent_type"`
-	Capabilities map[string]any   `json:"capabilities"`
+	WorkspaceID   uuid.UUID        `json:"workspace_id"`
+	Name          string           `json:"name"`
+	AgentType     domain.AgentType `json:"agent_type"`
+	Capabilities  map[string]any   `json:"capabilities"`
+	ParentAgentID *uuid.UUID       `json:"parent_agent_id,omitempty"`
 }
 
 // RegisterAgentOutput holds the result of agent registration, including the raw API key.
@@ -151,6 +159,10 @@ type AgentService interface {
 	Heartbeat(ctx context.Context, agentID uuid.UUID) error
 	Authenticate(ctx context.Context, workspaceSlug, apiKey string) (*domain.Agent, error)
 	RotateAPIKey(ctx context.Context, agentID uuid.UUID) (string, error)
+	// ListSubAgents returns child agents of a parent.
+	// When recursive is true, all descendants (up to 10 levels) are returned via a CTE.
+	// When recursive is false, only direct children are returned.
+	ListSubAgents(ctx context.Context, parentID uuid.UUID, recursive bool) ([]domain.Agent, error)
 }
 
 // PublishEventInput holds parameters for publishing an event to the bus.
@@ -196,4 +208,17 @@ type ActivityLogService interface {
 	Log(ctx context.Context, entry *domain.ActivityLog) error
 	List(ctx context.Context, workspaceID uuid.UUID, filter repository.ActivityLogFilter, pg pagination.Params) (*pagination.Page[domain.ActivityLog], error)
 	ListByTask(ctx context.Context, taskID uuid.UUID, pg pagination.Params) (*pagination.Page[domain.ActivityLog], error)
+}
+
+// WebhookService provides business logic for outbound webhook management.
+type WebhookService interface {
+	Create(ctx context.Context, input domain.CreateWebhookInput) (*domain.WebhookConfig, error)
+	GetByID(ctx context.Context, id uuid.UUID) (*domain.WebhookConfig, error)
+	Update(ctx context.Context, id uuid.UUID, input domain.UpdateWebhookInput) (*domain.WebhookConfig, error)
+	Delete(ctx context.Context, id uuid.UUID) error
+	ListByWorkspace(ctx context.Context, workspaceID uuid.UUID) ([]domain.WebhookConfig, error)
+	ListDeliveries(ctx context.Context, webhookID uuid.UUID, limit int) ([]domain.WebhookDelivery, error)
+	// Dispatch finds active webhooks for the given event type and fires HTTP POSTs
+	// asynchronously (fire-and-forget). It never blocks or returns an error to the caller.
+	Dispatch(ctx context.Context, workspaceID uuid.UUID, eventType string, payload any)
 }

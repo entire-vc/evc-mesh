@@ -835,6 +835,21 @@ func (m *MockAgentRepository) UpdateStatus(_ context.Context, id uuid.UUID, stat
 	return nil
 }
 
+func (m *MockAgentRepository) GetSubAgentTree(_ context.Context, parentID uuid.UUID) ([]domain.Agent, error) {
+	if m.errToReturn != nil {
+		return nil, m.errToReturn
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var result []domain.Agent
+	for _, a := range m.items {
+		if a.ParentAgentID != nil && *a.ParentAgentID == parentID {
+			result = append(result, *a)
+		}
+	}
+	return result, nil
+}
+
 // ---------------------------------------------------------------------------
 // MockEventBusMessageRepository
 // ---------------------------------------------------------------------------

@@ -73,32 +73,8 @@ type WebhookDispatchPayload struct {
 }
 
 // ---------------------------------------------------------------------------
-// WebhookRepository interface (to be added to internal/repository/interfaces.go)
+// Local mock repository for tests (uses local Webhook type, not domain.WebhookConfig)
 // ---------------------------------------------------------------------------
-
-type WebhookRepository interface {
-	Create(ctx context.Context, wh *Webhook) error
-	GetByID(ctx context.Context, id uuid.UUID) (*Webhook, error)
-	Update(ctx context.Context, wh *Webhook) error
-	Delete(ctx context.Context, id uuid.UUID) error
-	ListByWorkspace(ctx context.Context, workspaceID uuid.UUID) ([]Webhook, error)
-	ListActiveByEvent(ctx context.Context, workspaceID uuid.UUID, event WebhookEvent) ([]Webhook, error)
-}
-
-// ---------------------------------------------------------------------------
-// WebhookService interface (to be added to internal/service/interfaces.go)
-// ---------------------------------------------------------------------------
-
-type WebhookService interface {
-	Create(ctx context.Context, wh *Webhook) error
-	Update(ctx context.Context, wh *Webhook) error
-	Delete(ctx context.Context, id uuid.UUID) error
-	List(ctx context.Context, workspaceID uuid.UUID) ([]Webhook, error)
-	// Dispatch sends the event to all active webhooks subscribed to that event type.
-	Dispatch(ctx context.Context, workspaceID uuid.UUID, event WebhookEvent, payload map[string]any) error
-	// ComputeSignature returns the HMAC-SHA256 hex signature for the given body and secret.
-	ComputeSignature(secret string, body []byte) string
-}
 
 // ---------------------------------------------------------------------------
 // In-memory mock repository for tests

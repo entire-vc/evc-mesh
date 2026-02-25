@@ -327,6 +327,20 @@ func (s *Server) registerTools() {
 		mcpsdk.WithString("severity", mcpsdk.Description("Severity: low, medium, high, critical."), mcpsdk.DefaultString("medium")),
 		mcpsdk.WithBoolean("recoverable", mcpsdk.Description("Whether the error is recoverable."), mcpsdk.DefaultBool(true)),
 	), s.handleReportError)
+
+	// --- Agent Hierarchy ---
+	s.mcpServer.AddTool(mcpsdk.NewTool("register_sub_agent",
+		mcpsdk.WithDescription("Register a sub-agent under the calling agent."),
+		mcpsdk.WithString("name", mcpsdk.Required(), mcpsdk.Description("Sub-agent name.")),
+		mcpsdk.WithString("agent_type", mcpsdk.Required(), mcpsdk.Description("Agent type: claude_code, openclaw, cline, aider, custom.")),
+		mcpsdk.WithObject("capabilities", mcpsdk.Description("Agent capabilities as key-value pairs.")),
+	), s.handleRegisterSubAgent)
+
+	s.mcpServer.AddTool(mcpsdk.NewTool("list_sub_agents",
+		mcpsdk.WithDescription("List sub-agents of an agent."),
+		mcpsdk.WithString("agent_id", mcpsdk.Description("Parent agent ID. Defaults to the calling agent.")),
+		mcpsdk.WithBoolean("recursive", mcpsdk.Description("Return all descendants (up to 10 levels deep)."), mcpsdk.DefaultBool(false)),
+	), s.handleListSubAgents)
 }
 
 // --- Helper functions ---

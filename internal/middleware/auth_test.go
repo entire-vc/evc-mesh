@@ -249,6 +249,9 @@ func (m *mockAgentService) Heartbeat(_ context.Context, _ uuid.UUID) error { ret
 func (m *mockAgentService) RotateAPIKey(_ context.Context, _ uuid.UUID) (string, error) {
 	return "", nil
 }
+func (m *mockAgentService) ListSubAgents(_ context.Context, _ uuid.UUID, _ bool) ([]domain.Agent, error) {
+	return nil, nil
+}
 
 func (m *mockAgentService) Authenticate(ctx context.Context, workspaceSlug, apiKey string) (*domain.Agent, error) {
 	if m.AuthenticateFunc != nil {

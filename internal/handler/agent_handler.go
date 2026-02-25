@@ -33,9 +33,10 @@ func NewAgentHandlerWithTaskService(as service.AgentService, ts service.TaskServ
 
 // registerAgentRequest represents the JSON body for registering a new agent.
 type registerAgentRequest struct {
-	Name         string           `json:"name"`
-	AgentType    domain.AgentType `json:"agent_type"`
-	Capabilities map[string]any   `json:"capabilities"`
+	Name          string           `json:"name"`
+	AgentType     domain.AgentType `json:"agent_type"`
+	Capabilities  map[string]any   `json:"capabilities"`
+	ParentAgentID *uuid.UUID       `json:"parent_agent_id,omitempty"`
 }
 
 // listAgentsQuery represents query parameters for listing agents.
@@ -105,10 +106,11 @@ func (h *AgentHandler) Register(c echo.Context) error {
 	}
 
 	input := service.RegisterAgentInput{
-		WorkspaceID:  wsID,
-		Name:         req.Name,
-		AgentType:    req.AgentType,
-		Capabilities: req.Capabilities,
+		WorkspaceID:   wsID,
+		Name:          req.Name,
+		AgentType:     req.AgentType,
+		Capabilities:  req.Capabilities,
+		ParentAgentID: req.ParentAgentID,
 	}
 
 	output, err := h.agentService.Register(c.Request().Context(), input)
@@ -254,6 +256,29 @@ func (h *AgentHandler) Me(c echo.Context) error {
 	}
 
 	return c.JSON(http.StatusOK, agent)
+}
+
+// ListSubAgents handles GET /agents/:agent_id/sub-agents
+// Returns child agents of the specified agent.
+// Query parameter ?recursive=true returns all descendants up to 10 levels deep.
+func (h *AgentHandler) ListSubAgents(c echo.Context) error {
+	agentIDStr := c.Param("agent_id")
+	agentID, err := uuid.Parse(agentIDStr)
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid agent_id"))
+	}
+
+	recursive := c.QueryParam("recursive") == "true"
+
+	agents, err := h.agentService.ListSubAgents(c.Request().Context(), agentID, recursive)
+	if err != nil {
+		return handleError(c, err)
+	}
+
+	return c.JSON(http.StatusOK, map[string]any{
+		"agents": agents,
+		"count":  len(agents),
+	})
 }
 
 // GetMyTasks handles GET /agents/me/tasks

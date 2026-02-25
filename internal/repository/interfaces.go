@@ -126,9 +126,10 @@ type ArtifactRepository interface {
 
 // AgentFilter defines filtering options for listing agents.
 type AgentFilter struct {
-	Status    *domain.AgentStatus
-	AgentType *domain.AgentType
-	Search    string
+	Status        *domain.AgentStatus
+	AgentType     *domain.AgentType
+	Search        string
+	ParentAgentID *uuid.UUID
 }
 
 // AgentRepository manages persistence for agents.
@@ -141,6 +142,9 @@ type AgentRepository interface {
 	List(ctx context.Context, workspaceID uuid.UUID, filter AgentFilter, pg pagination.Params) (*pagination.Page[domain.Agent], error)
 	UpdateHeartbeat(ctx context.Context, id uuid.UUID) error
 	UpdateStatus(ctx context.Context, id uuid.UUID, status domain.AgentStatus) error
+	// GetSubAgentTree returns all agents that are descendants of parentID using a recursive CTE
+	// limited to 10 levels of depth, ordered by depth then created_at.
+	GetSubAgentTree(ctx context.Context, parentID uuid.UUID) ([]domain.Agent, error)
 }
 
 // EventBusMessageFilter defines filtering options for listing event bus messages.
@@ -210,4 +214,19 @@ type WorkspaceMemberRepository interface {
 	// GetRole returns the role string for a given workspace + user combination.
 	// Returns an error if the membership does not exist.
 	GetRole(ctx context.Context, workspaceID, userID uuid.UUID) (string, error)
+}
+
+// WebhookRepository manages persistence for webhook configurations and deliveries.
+type WebhookRepository interface {
+	Create(ctx context.Context, webhook *domain.WebhookConfig) error
+	GetByID(ctx context.Context, id uuid.UUID) (*domain.WebhookConfig, error)
+	Update(ctx context.Context, id uuid.UUID, input domain.UpdateWebhookInput) (*domain.WebhookConfig, error)
+	Delete(ctx context.Context, id uuid.UUID) error
+	ListByWorkspace(ctx context.Context, workspaceID uuid.UUID) ([]domain.WebhookConfig, error)
+	ListActiveByEvent(ctx context.Context, workspaceID uuid.UUID, eventType string) ([]domain.WebhookConfig, error)
+	IncrementFailure(ctx context.Context, id uuid.UUID) error
+	ResetFailure(ctx context.Context, id uuid.UUID) error
+	Deactivate(ctx context.Context, id uuid.UUID) error
+	CreateDelivery(ctx context.Context, delivery *domain.WebhookDelivery) error
+	ListDeliveries(ctx context.Context, webhookID uuid.UUID, limit int) ([]domain.WebhookDelivery, error)
 }

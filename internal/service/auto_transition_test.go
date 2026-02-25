@@ -12,138 +12,435 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// Auto-transition rule tests.
+// Auto-transition service tests.
 //
-// Contract for Phase 5-OSS auto-transitions:
-//   - When all subtasks of a parent task reach the "done" category,
-//     the parent task automatically moves to a configured target status.
+// Contract:
+//   - When ALL subtasks of a parent task reach "done" or "cancelled" category,
+//     the parent task automatically moves to "review" (or "done" if no review).
+//   - Only triggers if the parent is currently "in_progress".
 //   - When a blocking dependency is resolved (moved to "done"),
-//     the dependent task becomes unblocked (moved out of "blocked" status).
+//     dependent tasks in "backlog" are moved to "todo".
 //   - No transition occurs when some subtasks are still in progress.
-//   - No transition occurs when no auto-transition rule is configured.
-//   - Rules are scoped per-project and stored in a dedicated table.
-//
-// Implementation note:
-//   The auto-transition logic will be called:
-//   a) After every TaskService.MoveTask() call.
-//   b) By a background worker polling for rule triggers.
-//
-// Tests that require implementation are marked t.Skip().
-// Tests validating domain logic that can run now are fully implemented.
+//   - No transition occurs when the parent is already in a terminal state.
 // ---------------------------------------------------------------------------
 
-// AutoTransitionTrigger defines what event activates the rule.
-type AutoTransitionTrigger string
+// buildAutoTransitionFixture creates a fresh set of mocks and a wired AutoTransitionService
+// along with a TaskService (so MoveTask actually writes to the mock task repo).
+func buildAutoTransitionFixture() (
+	AutoTransitionService,
+	*MockTaskRepository,
+	*MockTaskStatusRepository,
+	*MockTaskDependencyRepository,
+) {
+	taskRepo := NewMockTaskRepository()
+	statusRepo := NewMockTaskStatusRepository()
+	depRepo := NewMockTaskDependencyRepository()
+	activityRepo := NewMockActivityLogRepository()
 
-const (
-	// TriggerAllSubtasksDone fires when all direct subtasks reach the "done" category.
-	TriggerAllSubtasksDone AutoTransitionTrigger = "all_subtasks_done"
-	// TriggerBlockingDepResolved fires when a blocking dependency moves to "done".
-	TriggerBlockingDepResolved AutoTransitionTrigger = "blocking_dependency_resolved"
-)
+	// Create a real taskService so that MoveTask writes back to taskRepo.
+	taskSvc := NewTaskService(taskRepo, statusRepo, depRepo, activityRepo)
+	atSvc := NewAutoTransitionService(taskRepo, statusRepo, depRepo, taskSvc)
 
-// AutoTransitionRule defines a project-level rule for automatic task transitions.
-type AutoTransitionRule struct {
-	ID              uuid.UUID             `json:"id"`
-	ProjectID       uuid.UUID             `json:"project_id"`
-	Trigger         AutoTransitionTrigger `json:"trigger"`
-	TargetStatusID  uuid.UUID             `json:"target_status_id"`
-	IsEnabled       bool                  `json:"is_enabled"`
+	return atSvc, taskRepo, statusRepo, depRepo
+}
+
+// seedStatus creates and stores a TaskStatus in the mock repo.
+func seedStatus(repo *MockTaskStatusRepository, projectID uuid.UUID, category domain.StatusCategory, name string) *domain.TaskStatus {
+	s := &domain.TaskStatus{
+		ID:        uuid.New(),
+		ProjectID: projectID,
+		Category:  category,
+		Name:      name,
+	}
+	repo.items[s.ID] = s
+	return s
+}
+
+// seedTask creates and stores a Task in the mock repo.
+func seedTask(repo *MockTaskRepository, projectID uuid.UUID, statusID uuid.UUID, parentID *uuid.UUID, title string) *domain.Task {
+	t := &domain.Task{
+		ID:           uuid.New(),
+		ProjectID:    projectID,
+		StatusID:     statusID,
+		Title:        title,
+		ParentTaskID: parentID,
+		AssigneeType: domain.AssigneeTypeUnassigned,
+	}
+	repo.items[t.ID] = t
+	return t
 }
 
 // ---------------------------------------------------------------------------
-// AutoTransitionService interface (to be added to service/interfaces.go)
-// ---------------------------------------------------------------------------
-
-type AutoTransitionService interface {
-	// EvaluateOnTaskMove checks and applies any auto-transition rules triggered
-	// by a task being moved to a new status.
-	EvaluateOnTaskMove(ctx context.Context, taskID uuid.UUID, newStatusCategory domain.StatusCategory) error
-	// ListRules returns all auto-transition rules for a project.
-	ListRules(ctx context.Context, projectID uuid.UUID) ([]AutoTransitionRule, error)
-	// CreateRule creates a new auto-transition rule.
-	CreateRule(ctx context.Context, rule *AutoTransitionRule) error
-	// DeleteRule removes an auto-transition rule.
-	DeleteRule(ctx context.Context, ruleID uuid.UUID) error
-}
-
-// ---------------------------------------------------------------------------
-// Tests
+// CheckSubtaskCompletion tests
 // ---------------------------------------------------------------------------
 
 func TestAutoTransition_AllSubtasksDone_TriggersParentMove(t *testing.T) {
-	t.Skip("TODO: implement AutoTransitionService in internal/service/auto_transition_service.go")
-	// Setup:
-	//   - Parent task P in status "in_progress".
-	//   - Project has rule: TriggerAllSubtasksDone → target status "done".
-	//   - Subtask A is already "done".
-	//   - Subtask B is "in_progress".
-	// When:
-	//   - Subtask B is moved to "done" (MoveTask called).
-	// Then:
-	//   - AutoTransitionService.EvaluateOnTaskMove is triggered.
-	//   - Parent task P is moved to the configured target "done" status.
+	ctx := context.Background()
+	svc, taskRepo, statusRepo, _ := buildAutoTransitionFixture()
+
+	projectID := uuid.New()
+	inProgressStatus := seedStatus(statusRepo, projectID, domain.StatusCategoryInProgress, "In Progress")
+	doneStatus := seedStatus(statusRepo, projectID, domain.StatusCategoryDone, "Done")
+	reviewStatus := seedStatus(statusRepo, projectID, domain.StatusCategoryReview, "Review")
+
+	// Parent task in "in_progress".
+	parent := seedTask(taskRepo, projectID, inProgressStatus.ID, nil, "Parent Task")
+
+	// Three subtasks all in "done".
+	seedTask(taskRepo, projectID, doneStatus.ID, &parent.ID, "Subtask A")
+	seedTask(taskRepo, projectID, doneStatus.ID, &parent.ID, "Subtask B")
+	seedTask(taskRepo, projectID, doneStatus.ID, &parent.ID, "Subtask C")
+
+	err := svc.CheckSubtaskCompletion(ctx, parent.ID)
+	require.NoError(t, err)
+
+	// Parent should have moved to "review".
+	updated := taskRepo.items[parent.ID]
+	require.NotNil(t, updated)
+	assert.Equal(t, reviewStatus.ID, updated.StatusID, "parent should move to review when all subtasks are done")
+}
+
+func TestAutoTransition_AllSubtasksDone_FallsToDoneWhenNoReview(t *testing.T) {
+	ctx := context.Background()
+	svc, taskRepo, statusRepo, _ := buildAutoTransitionFixture()
+
+	projectID := uuid.New()
+	inProgressStatus := seedStatus(statusRepo, projectID, domain.StatusCategoryInProgress, "In Progress")
+	doneStatus := seedStatus(statusRepo, projectID, domain.StatusCategoryDone, "Done")
+	// No "review" status in this project.
+
+	parent := seedTask(taskRepo, projectID, inProgressStatus.ID, nil, "Parent Task")
+	seedTask(taskRepo, projectID, doneStatus.ID, &parent.ID, "Subtask A")
+
+	err := svc.CheckSubtaskCompletion(ctx, parent.ID)
+	require.NoError(t, err)
+
+	updated := taskRepo.items[parent.ID]
+	assert.Equal(t, doneStatus.ID, updated.StatusID, "should fall back to done when no review status exists")
 }
 
 func TestAutoTransition_NotAllSubtasksDone_NoTransition(t *testing.T) {
-	t.Skip("TODO: implement AutoTransitionService in internal/service/auto_transition_service.go")
-	// Setup:
-	//   - Parent task P in status "in_progress".
-	//   - Project has rule: TriggerAllSubtasksDone → target "done".
-	//   - Subtask A is "done", Subtask B is "in_progress", Subtask C is "todo".
-	// When:
-	//   - Subtask A is moved to "done" (already done, but A was previously "in_progress").
-	// Then:
-	//   - Parent task P is NOT moved (B and C are still not done).
+	ctx := context.Background()
+	svc, taskRepo, statusRepo, _ := buildAutoTransitionFixture()
+
+	projectID := uuid.New()
+	inProgressStatus := seedStatus(statusRepo, projectID, domain.StatusCategoryInProgress, "In Progress")
+	doneStatus := seedStatus(statusRepo, projectID, domain.StatusCategoryDone, "Done")
+	todoStatus := seedStatus(statusRepo, projectID, domain.StatusCategoryTodo, "To Do")
+	seedStatus(statusRepo, projectID, domain.StatusCategoryReview, "Review")
+
+	parent := seedTask(taskRepo, projectID, inProgressStatus.ID, nil, "Parent Task")
+	seedTask(taskRepo, projectID, doneStatus.ID, &parent.ID, "Subtask A")
+	seedTask(taskRepo, projectID, todoStatus.ID, &parent.ID, "Subtask B") // not done
+
+	originalStatusID := parent.StatusID
+
+	err := svc.CheckSubtaskCompletion(ctx, parent.ID)
+	require.NoError(t, err)
+
+	updated := taskRepo.items[parent.ID]
+	assert.Equal(t, originalStatusID, updated.StatusID, "parent should NOT move when some subtasks are still pending")
 }
 
-func TestAutoTransition_NoRuleConfigured_NoTransition(t *testing.T) {
-	t.Skip("TODO: implement AutoTransitionService in internal/service/auto_transition_service.go")
-	// Setup:
-	//   - Parent task P with subtasks all in "done".
-	//   - Project has NO auto-transition rules.
-	// When:
-	//   - Last subtask is moved to "done".
-	// Then:
-	//   - Parent task P status is unchanged.
+func TestAutoTransition_CancelledSubtasksCountAsDone(t *testing.T) {
+	ctx := context.Background()
+	svc, taskRepo, statusRepo, _ := buildAutoTransitionFixture()
+
+	projectID := uuid.New()
+	inProgressStatus := seedStatus(statusRepo, projectID, domain.StatusCategoryInProgress, "In Progress")
+	doneStatus := seedStatus(statusRepo, projectID, domain.StatusCategoryDone, "Done")
+	cancelledStatus := seedStatus(statusRepo, projectID, domain.StatusCategoryCancelled, "Cancelled")
+	reviewStatus := seedStatus(statusRepo, projectID, domain.StatusCategoryReview, "Review")
+
+	parent := seedTask(taskRepo, projectID, inProgressStatus.ID, nil, "Parent Task")
+	seedTask(taskRepo, projectID, doneStatus.ID, &parent.ID, "Subtask A")
+	seedTask(taskRepo, projectID, cancelledStatus.ID, &parent.ID, "Subtask B") // cancelled counts as terminal
+
+	err := svc.CheckSubtaskCompletion(ctx, parent.ID)
+	require.NoError(t, err)
+
+	updated := taskRepo.items[parent.ID]
+	assert.Equal(t, reviewStatus.ID, updated.StatusID, "cancelled subtasks should count as terminal for auto-transition")
 }
 
-func TestAutoTransition_BlockingDepResolved_UnblocksDependent(t *testing.T) {
-	t.Skip("TODO: implement AutoTransitionService in internal/service/auto_transition_service.go")
-	// Setup:
-	//   - Task B has dependency: B is_blocked_by A (DependencyTypeBlocks).
-	//   - Task B is in status "blocked" (a custom status with category "blocked").
-	//   - Project has rule: TriggerBlockingDepResolved → target status "todo".
-	// When:
-	//   - Task A is moved to "done".
-	// Then:
-	//   - AutoTransitionService detects that A's dependency is resolved.
-	//   - Task B is moved to status "todo" (or the configured target).
+func TestAutoTransition_ParentAlreadyDone_NoTransition(t *testing.T) {
+	ctx := context.Background()
+	svc, taskRepo, statusRepo, _ := buildAutoTransitionFixture()
+
+	projectID := uuid.New()
+	doneStatus := seedStatus(statusRepo, projectID, domain.StatusCategoryDone, "Done")
+	seedStatus(statusRepo, projectID, domain.StatusCategoryReview, "Review")
+
+	// Parent already in "done" — should not be touched.
+	parent := seedTask(taskRepo, projectID, doneStatus.ID, nil, "Parent Task")
+	seedTask(taskRepo, projectID, doneStatus.ID, &parent.ID, "Subtask A")
+
+	err := svc.CheckSubtaskCompletion(ctx, parent.ID)
+	require.NoError(t, err)
+
+	updated := taskRepo.items[parent.ID]
+	assert.Equal(t, doneStatus.ID, updated.StatusID, "parent already done — should not be moved")
 }
 
-func TestAutoTransition_DisabledRule_NoTransition(t *testing.T) {
-	t.Skip("TODO: implement AutoTransitionService in internal/service/auto_transition_service.go")
-	// Setup:
-	//   - Rule exists but IsEnabled = false.
-	// When:
-	//   - Trigger condition is met.
-	// Then:
-	//   - No auto-transition occurs.
-}
+func TestAutoTransition_NoSubtasks_NoTransition(t *testing.T) {
+	ctx := context.Background()
+	svc, taskRepo, statusRepo, _ := buildAutoTransitionFixture()
 
-func TestAutoTransition_TaskWithNoSubtasks_NoTransition(t *testing.T) {
-	t.Skip("TODO: implement AutoTransitionService in internal/service/auto_transition_service.go")
-	// Setup:
-	//   - Task P has no subtasks.
-	//   - Rule: TriggerAllSubtasksDone configured.
-	// When:
-	//   - Task P itself is moved.
-	// Then:
-	//   - No recursive transition (task is its own leaf, rule does not apply).
+	projectID := uuid.New()
+	inProgressStatus := seedStatus(statusRepo, projectID, domain.StatusCategoryInProgress, "In Progress")
+	seedStatus(statusRepo, projectID, domain.StatusCategoryReview, "Review")
+
+	parent := seedTask(taskRepo, projectID, inProgressStatus.ID, nil, "Leaf Task")
+	// No subtasks.
+
+	err := svc.CheckSubtaskCompletion(ctx, parent.ID)
+	require.NoError(t, err)
+
+	updated := taskRepo.items[parent.ID]
+	assert.Equal(t, inProgressStatus.ID, updated.StatusID, "task with no subtasks should not be auto-transitioned")
 }
 
 // ---------------------------------------------------------------------------
-// Tests: AutoTransitionRule domain logic (run NOW — no service needed)
+// CheckDependencyResolution tests
+// ---------------------------------------------------------------------------
+
+func TestAutoTransition_BlockingDepResolved_UnblocksDependent(t *testing.T) {
+	ctx := context.Background()
+	svc, taskRepo, statusRepo, depRepo := buildAutoTransitionFixture()
+
+	projectID := uuid.New()
+	doneStatus := seedStatus(statusRepo, projectID, domain.StatusCategoryDone, "Done")
+	backlogStatus := seedStatus(statusRepo, projectID, domain.StatusCategoryBacklog, "Backlog")
+	todoStatus := seedStatus(statusRepo, projectID, domain.StatusCategoryTodo, "To Do")
+
+	// Task A (blocker) is now done.
+	taskA := seedTask(taskRepo, projectID, doneStatus.ID, nil, "Task A (blocker)")
+	// Task B depends on Task A and is in backlog.
+	taskB := seedTask(taskRepo, projectID, backlogStatus.ID, nil, "Task B (blocked)")
+
+	// Dependency: B blocks depends on A.
+	dep := &domain.TaskDependency{
+		ID:              uuid.New(),
+		TaskID:          taskB.ID,
+		DependsOnTaskID: taskA.ID,
+		DependencyType:  domain.DependencyTypeBlocks,
+	}
+	depRepo.items[dep.ID] = dep
+
+	err := svc.CheckDependencyResolution(ctx, taskA.ID)
+	require.NoError(t, err)
+
+	updated := taskRepo.items[taskB.ID]
+	require.NotNil(t, updated)
+	assert.Equal(t, todoStatus.ID, updated.StatusID, "task B should move to todo when its blocker is resolved")
+}
+
+func TestAutoTransition_PartialDepResolved_NoUnblock(t *testing.T) {
+	ctx := context.Background()
+	svc, taskRepo, statusRepo, depRepo := buildAutoTransitionFixture()
+
+	projectID := uuid.New()
+	doneStatus := seedStatus(statusRepo, projectID, domain.StatusCategoryDone, "Done")
+	inProgressStatus := seedStatus(statusRepo, projectID, domain.StatusCategoryInProgress, "In Progress")
+	backlogStatus := seedStatus(statusRepo, projectID, domain.StatusCategoryBacklog, "Backlog")
+	seedStatus(statusRepo, projectID, domain.StatusCategoryTodo, "To Do")
+
+	// Task A is done, Task C is still in progress.
+	taskA := seedTask(taskRepo, projectID, doneStatus.ID, nil, "Task A")
+	taskC := seedTask(taskRepo, projectID, inProgressStatus.ID, nil, "Task C")
+	// Task B depends on BOTH A and C.
+	taskB := seedTask(taskRepo, projectID, backlogStatus.ID, nil, "Task B")
+
+	dep1 := &domain.TaskDependency{
+		ID:             uuid.New(),
+		TaskID:         taskB.ID,
+		DependsOnTaskID: taskA.ID,
+		DependencyType: domain.DependencyTypeBlocks,
+	}
+	dep2 := &domain.TaskDependency{
+		ID:             uuid.New(),
+		TaskID:         taskB.ID,
+		DependsOnTaskID: taskC.ID,
+		DependencyType: domain.DependencyTypeBlocks,
+	}
+	depRepo.items[dep1.ID] = dep1
+	depRepo.items[dep2.ID] = dep2
+
+	// Resolving A alone should NOT unblock B (C is still in progress).
+	err := svc.CheckDependencyResolution(ctx, taskA.ID)
+	require.NoError(t, err)
+
+	updated := taskRepo.items[taskB.ID]
+	assert.Equal(t, backlogStatus.ID, updated.StatusID, "task B should remain in backlog while task C is still blocking")
+}
+
+func TestAutoTransition_RelatesToDepResolved_NoUnblock(t *testing.T) {
+	ctx := context.Background()
+	svc, taskRepo, statusRepo, depRepo := buildAutoTransitionFixture()
+
+	projectID := uuid.New()
+	doneStatus := seedStatus(statusRepo, projectID, domain.StatusCategoryDone, "Done")
+	backlogStatus := seedStatus(statusRepo, projectID, domain.StatusCategoryBacklog, "Backlog")
+	seedStatus(statusRepo, projectID, domain.StatusCategoryTodo, "To Do")
+
+	taskA := seedTask(taskRepo, projectID, doneStatus.ID, nil, "Task A")
+	taskB := seedTask(taskRepo, projectID, backlogStatus.ID, nil, "Task B")
+
+	// relates_to dependency should NOT trigger unblocking.
+	dep := &domain.TaskDependency{
+		ID:              uuid.New(),
+		TaskID:          taskB.ID,
+		DependsOnTaskID: taskA.ID,
+		DependencyType:  domain.DependencyTypeRelatesTo,
+	}
+	depRepo.items[dep.ID] = dep
+
+	err := svc.CheckDependencyResolution(ctx, taskA.ID)
+	require.NoError(t, err)
+
+	updated := taskRepo.items[taskB.ID]
+	assert.Equal(t, backlogStatus.ID, updated.StatusID, "relates_to deps should not trigger unblocking")
+}
+
+func TestAutoTransition_DependentNotInBacklog_NoUnblock(t *testing.T) {
+	ctx := context.Background()
+	svc, taskRepo, statusRepo, depRepo := buildAutoTransitionFixture()
+
+	projectID := uuid.New()
+	doneStatus := seedStatus(statusRepo, projectID, domain.StatusCategoryDone, "Done")
+	inProgressStatus := seedStatus(statusRepo, projectID, domain.StatusCategoryInProgress, "In Progress")
+	seedStatus(statusRepo, projectID, domain.StatusCategoryTodo, "To Do")
+
+	taskA := seedTask(taskRepo, projectID, doneStatus.ID, nil, "Task A")
+	// Task B is in "in_progress" (not "backlog") — should not be touched.
+	taskB := seedTask(taskRepo, projectID, inProgressStatus.ID, nil, "Task B")
+
+	dep := &domain.TaskDependency{
+		ID:              uuid.New(),
+		TaskID:          taskB.ID,
+		DependsOnTaskID: taskA.ID,
+		DependencyType:  domain.DependencyTypeBlocks,
+	}
+	depRepo.items[dep.ID] = dep
+
+	err := svc.CheckDependencyResolution(ctx, taskA.ID)
+	require.NoError(t, err)
+
+	updated := taskRepo.items[taskB.ID]
+	assert.Equal(t, inProgressStatus.ID, updated.StatusID, "dependent task not in backlog should not be moved")
+}
+
+// ---------------------------------------------------------------------------
+// EvaluateOnTaskMove integration test
+// ---------------------------------------------------------------------------
+
+func TestAutoTransition_EvaluateOnTaskMove_TriggersBothChecks(t *testing.T) {
+	ctx := context.Background()
+	svc, taskRepo, statusRepo, depRepo := buildAutoTransitionFixture()
+
+	projectID := uuid.New()
+	inProgressStatus := seedStatus(statusRepo, projectID, domain.StatusCategoryInProgress, "In Progress")
+	doneStatus := seedStatus(statusRepo, projectID, domain.StatusCategoryDone, "Done")
+	backlogStatus := seedStatus(statusRepo, projectID, domain.StatusCategoryBacklog, "Backlog")
+	reviewStatus := seedStatus(statusRepo, projectID, domain.StatusCategoryReview, "Review")
+	todoStatus := seedStatus(statusRepo, projectID, domain.StatusCategoryTodo, "To Do")
+
+	// Parent with one subtask (the task being moved).
+	parent := seedTask(taskRepo, projectID, inProgressStatus.ID, nil, "Parent")
+	subtask := seedTask(taskRepo, projectID, doneStatus.ID, &parent.ID, "The subtask")
+
+	// Dependent task blocked by the subtask.
+	dependent := seedTask(taskRepo, projectID, backlogStatus.ID, nil, "Dependent")
+	dep := &domain.TaskDependency{
+		ID:              uuid.New(),
+		TaskID:          dependent.ID,
+		DependsOnTaskID: subtask.ID,
+		DependencyType:  domain.DependencyTypeBlocks,
+	}
+	depRepo.items[dep.ID] = dep
+
+	// EvaluateOnTaskMove should trigger both parent and dependency checks.
+	err := svc.EvaluateOnTaskMove(ctx, subtask.ID, domain.StatusCategoryDone)
+	require.NoError(t, err)
+
+	// Parent should move to review.
+	updatedParent := taskRepo.items[parent.ID]
+	assert.Equal(t, reviewStatus.ID, updatedParent.StatusID, "parent should move to review")
+
+	// Dependent should move to todo.
+	updatedDependent := taskRepo.items[dependent.ID]
+	assert.Equal(t, todoStatus.ID, updatedDependent.StatusID, "dependent should move to todo")
+}
+
+func TestAutoTransition_EvaluateOnTaskMove_NonDoneCategory_NoTrigger(t *testing.T) {
+	ctx := context.Background()
+	svc, taskRepo, statusRepo, _ := buildAutoTransitionFixture()
+
+	projectID := uuid.New()
+	inProgressStatus := seedStatus(statusRepo, projectID, domain.StatusCategoryInProgress, "In Progress")
+	seedStatus(statusRepo, projectID, domain.StatusCategoryReview, "Review")
+
+	parent := seedTask(taskRepo, projectID, inProgressStatus.ID, nil, "Parent")
+	subtask := seedTask(taskRepo, projectID, inProgressStatus.ID, &parent.ID, "Subtask")
+
+	// Moving to "in_progress" should not trigger any auto-transition.
+	err := svc.EvaluateOnTaskMove(ctx, subtask.ID, domain.StatusCategoryInProgress)
+	require.NoError(t, err)
+
+	updatedParent := taskRepo.items[parent.ID]
+	assert.Equal(t, inProgressStatus.ID, updatedParent.StatusID, "parent should not move when subtask is not done")
+}
+
+// ---------------------------------------------------------------------------
+// Rule management tests
+// ---------------------------------------------------------------------------
+
+func TestAutoTransition_CreateAndListRules(t *testing.T) {
+	ctx := context.Background()
+	svc, _, _, _ := buildAutoTransitionFixture()
+
+	projectID := uuid.New()
+	rule := &AutoTransitionRule{
+		ProjectID:      projectID,
+		Trigger:        TriggerAllSubtasksDone,
+		TargetStatusID: uuid.New(),
+		IsEnabled:      true,
+	}
+
+	err := svc.CreateRule(ctx, rule)
+	require.NoError(t, err)
+	assert.NotEqual(t, uuid.Nil, rule.ID, "rule ID should be auto-generated")
+
+	rules, err := svc.ListRules(ctx, projectID)
+	require.NoError(t, err)
+	assert.Len(t, rules, 1)
+	assert.Equal(t, TriggerAllSubtasksDone, rules[0].Trigger)
+}
+
+func TestAutoTransition_DeleteRule(t *testing.T) {
+	ctx := context.Background()
+	svc, _, _, _ := buildAutoTransitionFixture()
+
+	projectID := uuid.New()
+	rule := &AutoTransitionRule{
+		ProjectID:      projectID,
+		Trigger:        TriggerBlockingDepResolved,
+		TargetStatusID: uuid.New(),
+		IsEnabled:      true,
+	}
+	require.NoError(t, svc.CreateRule(ctx, rule))
+
+	// Delete it.
+	err := svc.DeleteRule(ctx, rule.ID)
+	require.NoError(t, err)
+
+	rules, err := svc.ListRules(ctx, projectID)
+	require.NoError(t, err)
+	assert.Empty(t, rules, "rule should be deleted")
+}
+
+// ---------------------------------------------------------------------------
+// AutoTransitionRule domain logic (pure, no service needed)
 // ---------------------------------------------------------------------------
 
 func TestAutoTransitionRule_DomainLogic(t *testing.T) {
@@ -175,14 +472,13 @@ func TestAutoTransitionRule_DomainLogic(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Tests: Subtask completion check — pure logic (runs NOW)
+// Pure logic helper tests (run without service)
 // ---------------------------------------------------------------------------
 
-// allSubtasksDone is the pure function that the auto-transition service will use.
-// It checks whether every subtask in the list has a "done" category status.
+// allSubtasksDone mirrors the logic used in CheckSubtaskCompletion for testing.
 func allSubtasksDone(subtasks []domain.Task, statusCategoryByID map[uuid.UUID]domain.StatusCategory) bool {
 	if len(subtasks) == 0 {
-		return false // no subtasks → rule does not apply
+		return false
 	}
 	for _, st := range subtasks {
 		cat, ok := statusCategoryByID[st.StatusID]
@@ -240,11 +536,7 @@ func TestAllSubtasksDone_Logic(t *testing.T) {
 	})
 }
 
-// ---------------------------------------------------------------------------
-// Tests: hasUnresolvedBlockingDeps — pure logic (runs NOW)
-// ---------------------------------------------------------------------------
-
-// hasUnresolvedBlockingDeps checks whether a task still has unresolved "blocks" dependencies.
+// hasUnresolvedBlockingDeps mirrors the hasUnresolvedBlockers logic for testing.
 func hasUnresolvedBlockingDeps(deps []domain.TaskDependency, statusCategoryByTaskID map[uuid.UUID]domain.StatusCategory) bool {
 	for _, dep := range deps {
 		if dep.DependencyType != domain.DependencyTypeBlocks {
@@ -252,7 +544,7 @@ func hasUnresolvedBlockingDeps(deps []domain.TaskDependency, statusCategoryByTas
 		}
 		cat, ok := statusCategoryByTaskID[dep.DependsOnTaskID]
 		if !ok || cat != domain.StatusCategoryDone {
-			return true // blocking task is not done yet
+			return true
 		}
 	}
 	return false
@@ -286,7 +578,6 @@ func TestHasUnresolvedBlockingDeps_Logic(t *testing.T) {
 		deps := []domain.TaskDependency{
 			{ID: uuid.New(), DependsOnTaskID: blockerInProgressID, DependencyType: domain.DependencyTypeRelatesTo},
 		}
-		// relates_to never blocks, even if not done.
 		assert.False(t, hasUnresolvedBlockingDeps(deps, categoryMap))
 	})
 
@@ -296,12 +587,10 @@ func TestHasUnresolvedBlockingDeps_Logic(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Tests: Integration sketch using existing mock repos (runs NOW)
+// Integration sketch using existing mock repos
 // ---------------------------------------------------------------------------
 
 func TestAutoTransition_WithExistingMocks_SubtaskStatusCheck(t *testing.T) {
-	// This test validates that the existing mock repos support the data queries
-	// needed for auto-transition. No new service needed.
 	ctx := context.Background()
 	taskRepo := NewMockTaskRepository()
 	statusRepo := NewMockTaskStatusRepository()
@@ -310,7 +599,6 @@ func TestAutoTransition_WithExistingMocks_SubtaskStatusCheck(t *testing.T) {
 	doneStatusID := uuid.New()
 	todoStatusID := uuid.New()
 
-	// Seed statuses.
 	statusRepo.items[doneStatusID] = &domain.TaskStatus{
 		ID:        doneStatusID,
 		ProjectID: projectID,
@@ -324,7 +612,6 @@ func TestAutoTransition_WithExistingMocks_SubtaskStatusCheck(t *testing.T) {
 		Name:      "To Do",
 	}
 
-	// Create parent task.
 	parentID := uuid.New()
 	taskRepo.items[parentID] = &domain.Task{
 		ID:        parentID,
@@ -333,7 +620,6 @@ func TestAutoTransition_WithExistingMocks_SubtaskStatusCheck(t *testing.T) {
 		Title:     "Parent Task",
 	}
 
-	// Create subtasks — all done.
 	for i := 0; i < 3; i++ {
 		childID := uuid.New()
 		taskRepo.items[childID] = &domain.Task{
@@ -345,22 +631,18 @@ func TestAutoTransition_WithExistingMocks_SubtaskStatusCheck(t *testing.T) {
 		}
 	}
 
-	// Retrieve subtasks using the mock repo.
 	subtasks, err := taskRepo.ListSubtasks(ctx, parentID)
 	require.NoError(t, err)
 	assert.Len(t, subtasks, 3, "should have 3 subtasks")
 
-	// Build category map from status repo.
 	statusByID := map[uuid.UUID]domain.StatusCategory{}
 	for id, s := range statusRepo.items {
 		statusByID[id] = s.Category
 	}
 
-	// All subtasks should be "done".
 	result := allSubtasksDone(subtasks, statusByID)
 	assert.True(t, result, "all subtasks are done — auto-transition should fire")
 
-	// Now make one subtask not done.
 	for id, t2 := range taskRepo.items {
 		if t2.ParentTaskID != nil && *t2.ParentTaskID == parentID {
 			taskRepo.items[id].StatusID = todoStatusID

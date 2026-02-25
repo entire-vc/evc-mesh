@@ -6,6 +6,7 @@ import {
   Bot,
   Columns3,
   GitBranch,
+  Info,
   List,
   Loader2,
   User,
@@ -23,30 +24,30 @@ import type { Task, TaskDependency, StatusCategory } from "@/types";
 // ---------------------------------------------------------------------------
 
 const NODE_WIDTH = 220;
-const NODE_HEIGHT = 80;
-const COL_GAP = 80;
-const ROW_GAP = 24;
-const PADDING = 40;
+const NODE_HEIGHT = 88;
+const COL_GAP = 100;
+const ROW_GAP = 32;
+const PADDING = 48;
 
 const STATUS_CATEGORY_COLORS: Record<StatusCategory, string> = {
   backlog: "#9ca3af",
-  todo: "#9ca3af",
-  in_progress: "#3b82f6",
-  review: "#f59e0b",
+  todo: "#60a5fa",
+  in_progress: "#f59e0b",
+  review: "#a78bfa",
   done: "#22c55e",
   cancelled: "#ef4444",
 };
 
 const STATUS_CATEGORY_BG: Record<StatusCategory, string> = {
-  backlog: "bg-gray-50 border-gray-300 dark:bg-gray-900 dark:border-gray-700",
-  todo: "bg-gray-50 border-gray-300 dark:bg-gray-900 dark:border-gray-700",
+  backlog: "bg-gray-50 border-gray-200 dark:bg-gray-900 dark:border-gray-700",
+  todo: "bg-blue-50 border-blue-200 dark:bg-blue-950 dark:border-blue-800",
   in_progress:
-    "bg-blue-50 border-blue-300 dark:bg-blue-950 dark:border-blue-800",
+    "bg-amber-50 border-amber-200 dark:bg-amber-950 dark:border-amber-800",
   review:
-    "bg-amber-50 border-amber-300 dark:bg-amber-950 dark:border-amber-800",
-  done: "bg-green-50 border-green-300 dark:bg-green-950 dark:border-green-800",
+    "bg-violet-50 border-violet-200 dark:bg-violet-950 dark:border-violet-800",
+  done: "bg-green-50 border-green-200 dark:bg-green-950 dark:border-green-800",
   cancelled:
-    "bg-red-50 border-red-300 dark:bg-red-950 dark:border-red-800",
+    "bg-red-50 border-red-200 dark:bg-red-950 dark:border-red-800",
 };
 
 // ---------------------------------------------------------------------------
@@ -62,7 +63,8 @@ interface NodePosition {
 }
 
 // ---------------------------------------------------------------------------
-// Layout algorithm: assign layers (columns) via longest-path layering
+// Layout algorithm: assign layers (columns) via longest-path layering.
+// Only tasks that participate in "blocks" relationships are included.
 // ---------------------------------------------------------------------------
 
 function buildLayeredLayout(
@@ -71,21 +73,14 @@ function buildLayeredLayout(
 ): { nodes: NodePosition[]; width: number; height: number } {
   const taskMap = new Map(tasks.map((t) => [t.id, t]));
 
-  // Build adjacency: blockedBy[taskId] = set of tasks that block it
-  // A dependency with type "blocks" means: depends_on_task blocks task_id
-  // So task_id is blocked by depends_on_task_id
+  // blockedBy[taskId] = set of task IDs that block taskId
+  // A "blocks" dependency: depends_on_task_id blocks task_id
   const blockedBy = new Map<string, Set<string>>();
-  const blocks = new Map<string, Set<string>>();
 
   for (const dep of deps) {
     if (dep.dependency_type !== "blocks") continue;
-    // task_id is blocked by depends_on_task_id
     if (!blockedBy.has(dep.task_id)) blockedBy.set(dep.task_id, new Set());
     blockedBy.get(dep.task_id)!.add(dep.depends_on_task_id);
-
-    if (!blocks.has(dep.depends_on_task_id))
-      blocks.set(dep.depends_on_task_id, new Set());
-    blocks.get(dep.depends_on_task_id)!.add(dep.task_id);
   }
 
   // All task IDs participating in blocking relationships
@@ -96,7 +91,7 @@ function buildLayeredLayout(
     inGraph.add(dep.depends_on_task_id);
   }
 
-  // Assign columns via topological order (longest path)
+  // Assign columns via longest-path topological layering
   const colAssignment = new Map<string, number>();
 
   function assignCol(taskId: string, visited: Set<string>): number {
@@ -113,7 +108,7 @@ function buildLayeredLayout(
     let maxBlockerCol = 0;
     for (const blockerId of blockers) {
       if (taskMap.has(blockerId)) {
-        const c = assignCol(blockerId, visited);
+        const c = assignCol(blockerId, new Set(visited));
         maxBlockerCol = Math.max(maxBlockerCol, c + 1);
       }
     }
@@ -121,38 +116,17 @@ function buildLayeredLayout(
     return maxBlockerCol;
   }
 
-  // Assign columns for tasks in blocking graph
   for (const taskId of inGraph) {
     if (taskMap.has(taskId)) {
       assignCol(taskId, new Set());
     }
   }
 
-  // Standalone tasks (not in any blocking relationship)
-  const standaloneIds = tasks
-    .filter((t) => !inGraph.has(t.id))
-    .map((t) => t.id);
-
   // Group tasks by column
   const columnGroups = new Map<number, string[]>();
   for (const [taskId, col] of colAssignment) {
     if (!columnGroups.has(col)) columnGroups.set(col, []);
     columnGroups.get(col)!.push(taskId);
-  }
-
-  // Find max column used in blocking graph
-  const maxCol =
-    columnGroups.size > 0
-      ? Math.max(...Array.from(columnGroups.keys()))
-      : -1;
-
-  // Place standalone tasks in a separate column at the end
-  const standaloneCol = maxCol + 1;
-  if (standaloneIds.length > 0) {
-    columnGroups.set(standaloneCol, standaloneIds);
-    for (const id of standaloneIds) {
-      colAssignment.set(id, standaloneCol);
-    }
   }
 
   // Build node positions
@@ -163,8 +137,8 @@ function buildLayeredLayout(
   for (const col of sortedCols) {
     const group = columnGroups.get(col)!;
     maxRows = Math.max(maxRows, group.length);
+    const colIndex = sortedCols.indexOf(col);
     for (let row = 0; row < group.length; row++) {
-      const colIndex = sortedCols.indexOf(col);
       nodes.push({
         taskId: group[row]!,
         col: colIndex,
@@ -176,8 +150,41 @@ function buildLayeredLayout(
   }
 
   const totalCols = sortedCols.length || 1;
-  const width = PADDING * 2 + totalCols * NODE_WIDTH + (totalCols - 1) * COL_GAP;
-  const height = PADDING * 2 + maxRows * NODE_HEIGHT + (maxRows - 1) * ROW_GAP;
+  const numRows = maxRows || 1;
+  const width =
+    PADDING * 2 + totalCols * NODE_WIDTH + (totalCols - 1) * COL_GAP;
+  const height =
+    PADDING * 2 + numRows * NODE_HEIGHT + Math.max(0, numRows - 1) * ROW_GAP;
+
+  return { nodes, width: Math.max(width, 400), height: Math.max(height, 200) };
+}
+
+// Standalone layout: grid of all tasks with no dependencies
+function buildStandaloneLayout(
+  tasks: Task[],
+  cols = 4,
+): { nodes: NodePosition[]; width: number; height: number } {
+  const nodes: NodePosition[] = [];
+  for (let i = 0; i < tasks.length; i++) {
+    const col = i % cols;
+    const row = Math.floor(i / cols);
+    nodes.push({
+      taskId: tasks[i]!.id,
+      col,
+      row,
+      x: PADDING + col * (NODE_WIDTH + COL_GAP),
+      y: PADDING + row * (NODE_HEIGHT + ROW_GAP),
+    });
+  }
+
+  const numRows = Math.ceil(tasks.length / cols);
+  const numCols = Math.min(tasks.length, cols);
+  const width =
+    PADDING * 2 + numCols * NODE_WIDTH + Math.max(0, numCols - 1) * COL_GAP;
+  const height =
+    PADDING * 2 +
+    numRows * NODE_HEIGHT +
+    Math.max(0, numRows - 1) * ROW_GAP;
 
   return { nodes, width: Math.max(width, 400), height: Math.max(height, 200) };
 }
@@ -198,18 +205,18 @@ function DependencyArrow({
   const endX = to.x;
   const endY = to.y + NODE_HEIGHT / 2;
 
-  // Cubic bezier for a smooth horizontal arrow
-  const cpOffset = Math.min(Math.abs(endX - startX) * 0.4, 60);
-  const path = `M ${startX} ${startY} C ${startX + cpOffset} ${startY}, ${endX - cpOffset} ${endY}, ${endX} ${endY}`;
+  // Horizontal bezier with adaptive control point offset
+  const cpOffset = Math.min(Math.abs(endX - startX) * 0.45, 80);
+  const d = `M ${startX} ${startY} C ${startX + cpOffset} ${startY}, ${endX - cpOffset} ${endY}, ${endX} ${endY}`;
 
   return (
     <g>
       <path
-        d={path}
+        d={d}
         fill="none"
         stroke="currentColor"
         strokeWidth={1.5}
-        className="text-muted-foreground/40"
+        className="text-muted-foreground/50"
         markerEnd="url(#arrowhead)"
       />
     </g>
@@ -232,7 +239,7 @@ function TaskNode({
   onClick: () => void;
 }) {
   const pConfig = priorityConfig[task.priority];
-  const borderColor = STATUS_CATEGORY_COLORS[category];
+  const accentColor = STATUS_CATEGORY_COLORS[category];
   const bgClass = STATUS_CATEGORY_BG[category];
 
   return (
@@ -244,16 +251,19 @@ function TaskNode({
     >
       <div
         className={cn(
-          "flex h-full cursor-pointer flex-col justify-between rounded-lg border-2 p-2.5 transition-shadow hover:shadow-md",
+          "flex h-full cursor-pointer flex-col justify-between rounded-lg border-2 px-3 py-2.5 transition-all hover:shadow-md hover:brightness-95 active:scale-[0.98]",
           bgClass,
         )}
-        style={{ borderLeftColor: borderColor, borderLeftWidth: 3 }}
+        style={{ borderLeftColor: accentColor, borderLeftWidth: 4 }}
         onClick={onClick}
       >
-        <p className="truncate text-xs font-semibold leading-tight text-foreground">
+        <p
+          className="line-clamp-2 text-xs font-semibold leading-snug text-foreground"
+          title={task.title}
+        >
           {task.title}
         </p>
-        <div className="flex items-center justify-between gap-1">
+        <div className="mt-1 flex items-center justify-between gap-1">
           <div className="flex items-center gap-1">
             {task.priority !== "none" && (
               <Badge
@@ -299,6 +309,8 @@ export function TimelinePage() {
   const [deps, setDeps] = useState<TaskDependency[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // When tasks exist but no blocking deps, allow user to show all tasks anyway
+  const [showAllTasks, setShowAllTasks] = useState(false);
   const svgContainerRef = useRef<HTMLDivElement>(null);
 
   // Fetch statuses
@@ -313,6 +325,7 @@ export function TimelinePage() {
     if (!currentProject) return;
     setLoading(true);
     setError(null);
+    setShowAllTasks(false);
     api<DependencyGraphResponse>(
       `/api/v1/projects/${currentProject.id}/dependency-graph`,
     )
@@ -337,31 +350,66 @@ export function TimelinePage() {
     return map;
   }, [statuses]);
 
-  // Build the layout
-  const layout = useMemo(() => {
-    if (graphTasks.length === 0) return null;
-    return buildLayeredLayout(graphTasks, deps);
-  }, [graphTasks, deps]);
+  // Blocking deps only (edges rendered as arrows)
+  const blockingDeps = useMemo(
+    () => deps.filter((d) => d.dependency_type === "blocks"),
+    [deps],
+  );
 
-  // Build lookup maps
+  // Tasks that participate in at least one "blocks" dependency
+  const connectedTaskIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const d of blockingDeps) {
+      ids.add(d.task_id);
+      ids.add(d.depends_on_task_id);
+    }
+    return ids;
+  }, [blockingDeps]);
+
+  const hasDependencies = blockingDeps.length > 0;
+
+  // Tasks to use for DAG layout (only connected ones)
+  const dagTasks = useMemo(
+    () => graphTasks.filter((t) => connectedTaskIds.has(t.id)),
+    [graphTasks, connectedTaskIds],
+  );
+
+  // Build the DAG layout (only connected tasks)
+  const dagLayout = useMemo(() => {
+    if (dagTasks.length === 0) return null;
+    return buildLayeredLayout(dagTasks, blockingDeps);
+  }, [dagTasks, blockingDeps]);
+
+  // Build standalone grid layout (all tasks)
+  const standaloneLayout = useMemo(() => {
+    if (graphTasks.length === 0) return null;
+    return buildStandaloneLayout(graphTasks);
+  }, [graphTasks]);
+
+  // Build lookup maps for the active layout
+  const activeLayout = hasDependencies
+    ? dagLayout
+    : showAllTasks
+      ? standaloneLayout
+      : null;
+
   const taskMap = useMemo(
     () => new Map(graphTasks.map((t) => [t.id, t])),
     [graphTasks],
   );
-  const nodeMap = useMemo(() => {
-    if (!layout) return new Map<string, NodePosition>();
-    return new Map(layout.nodes.map((n) => [n.taskId, n]));
-  }, [layout]);
 
-  // Blocking edges for arrows
-  const blockingEdges = useMemo(() => {
-    return deps.filter(
-      (d) =>
-        d.dependency_type === "blocks" &&
-        nodeMap.has(d.task_id) &&
-        nodeMap.has(d.depends_on_task_id),
+  const nodeMap = useMemo(() => {
+    if (!activeLayout) return new Map<string, NodePosition>();
+    return new Map(activeLayout.nodes.map((n) => [n.taskId, n]));
+  }, [activeLayout]);
+
+  // Edges that have both endpoints in the layout
+  const visibleEdges = useMemo(() => {
+    if (!hasDependencies) return [];
+    return blockingDeps.filter(
+      (d) => nodeMap.has(d.task_id) && nodeMap.has(d.depends_on_task_id),
     );
-  }, [deps, nodeMap]);
+  }, [blockingDeps, hasDependencies, nodeMap]);
 
   const handleTaskClick = useCallback(
     (taskId: string) => {
@@ -370,7 +418,10 @@ export function TimelinePage() {
     [navigate, wsSlug, projectSlug],
   );
 
+  // ---------------------------------------------------------------------------
   // Render states
+  // ---------------------------------------------------------------------------
+
   if (!currentProject) {
     return (
       <div className="flex items-center justify-center py-12">
@@ -398,9 +449,7 @@ export function TimelinePage() {
             variant="ghost"
             size="sm"
             className="h-7 gap-1.5 px-3 text-xs"
-            onClick={() =>
-              navigate(`/w/${wsSlug}/p/${projectSlug}`)
-            }
+            onClick={() => navigate(`/w/${wsSlug}/p/${projectSlug}`)}
           >
             <Columns3 className="h-3.5 w-3.5" />
             Board
@@ -409,9 +458,7 @@ export function TimelinePage() {
             variant="ghost"
             size="sm"
             className="h-7 gap-1.5 px-3 text-xs"
-            onClick={() =>
-              navigate(`/w/${wsSlug}/p/${projectSlug}/list`)
-            }
+            onClick={() => navigate(`/w/${wsSlug}/p/${projectSlug}/list`)}
           >
             <List className="h-3.5 w-3.5" />
             List
@@ -430,7 +477,7 @@ export function TimelinePage() {
       {/* Error */}
       {error && (
         <div className="flex items-center gap-2 rounded-lg border border-red-300 bg-red-50 p-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-950 dark:text-red-400">
-          <AlertTriangle className="h-4 w-4" />
+          <AlertTriangle className="h-4 w-4 shrink-0" />
           {error}
         </div>
       )}
@@ -444,68 +491,107 @@ export function TimelinePage() {
           </span>
         </div>
       ) : graphTasks.length === 0 ? (
+        /* No tasks at all */
         <div className="flex flex-col items-center justify-center py-20">
-          <GitBranch className="mb-4 h-12 w-12 text-muted-foreground" />
+          <GitBranch className="mb-4 h-12 w-12 text-muted-foreground/50" />
           <h3 className="mb-2 text-lg font-semibold">No tasks yet</h3>
-          <p className="text-sm text-muted-foreground">
-            Create tasks and add dependencies to see the timeline graph.
+          <p className="max-w-sm text-center text-sm text-muted-foreground">
+            Create tasks and add blocking dependencies between them to see the
+            dependency graph.
           </p>
         </div>
-      ) : layout && layout.nodes.length > 0 ? (
+      ) : !hasDependencies && !showAllTasks ? (
+        /* Tasks exist but no blocking dependencies */
+        <div className="flex flex-col items-center justify-center py-20">
+          <Info className="mb-4 h-12 w-12 text-muted-foreground/50" />
+          <h3 className="mb-2 text-lg font-semibold">No dependencies found</h3>
+          <p className="mb-6 max-w-sm text-center text-sm text-muted-foreground">
+            Add blocking dependencies between tasks to see the dependency graph.
+            You can set a dependency when editing a task.
+          </p>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setShowAllTasks(true)}
+          >
+            Show all {graphTasks.length} tasks anyway
+          </Button>
+        </div>
+      ) : activeLayout ? (
         <>
           {/* Legend */}
-          <div className="flex flex-wrap items-center gap-4 text-xs text-muted-foreground">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-muted-foreground">
             <span className="font-medium">Legend:</span>
-            <span className="flex items-center gap-1">
-              <span className="inline-block h-2.5 w-2.5 rounded-full bg-gray-400" />
-              Backlog/To Do
-            </span>
-            <span className="flex items-center gap-1">
-              <span className="inline-block h-2.5 w-2.5 rounded-full bg-blue-500" />
-              In Progress
-            </span>
-            <span className="flex items-center gap-1">
-              <span className="inline-block h-2.5 w-2.5 rounded-full bg-amber-500" />
-              Review
-            </span>
-            <span className="flex items-center gap-1">
-              <span className="inline-block h-2.5 w-2.5 rounded-full bg-green-500" />
-              Done
-            </span>
-            <span className="flex items-center gap-1">
-              <ArrowRight className="h-3 w-3" />
-              blocks
-            </span>
+            {(
+              [
+                ["backlog", "Backlog"],
+                ["todo", "To Do"],
+                ["in_progress", "In Progress"],
+                ["review", "Review"],
+                ["done", "Done"],
+                ["cancelled", "Cancelled"],
+              ] as [StatusCategory, string][]
+            ).map(([cat, label]) => (
+              <span key={cat} className="flex items-center gap-1">
+                <span
+                  className="inline-block h-2.5 w-2.5 rounded-full"
+                  style={{ backgroundColor: STATUS_CATEGORY_COLORS[cat] }}
+                />
+                {label}
+              </span>
+            ))}
+            {hasDependencies && (
+              <span className="flex items-center gap-1">
+                <ArrowRight className="h-3 w-3" />
+                blocks
+              </span>
+            )}
           </div>
+
+          {/* "showing all tasks" notice */}
+          {!hasDependencies && showAllTasks && (
+            <div className="flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-700 dark:border-blue-800 dark:bg-blue-950 dark:text-blue-400">
+              <Info className="h-3.5 w-3.5 shrink-0" />
+              No blocking dependencies — showing all tasks as a grid. Add
+              dependencies in task details to see the graph.
+              <button
+                className="ml-auto shrink-0 underline hover:no-underline"
+                onClick={() => setShowAllTasks(false)}
+              >
+                Hide
+              </button>
+            </div>
+          )}
 
           {/* DAG SVG */}
           <div
             ref={svgContainerRef}
-            className="overflow-auto rounded-xl border border-border bg-muted/30 p-0"
+            className="overflow-auto rounded-xl border border-border bg-muted/20 p-0"
+            style={{ minHeight: 200 }}
           >
             <svg
-              width={layout.width}
-              height={layout.height}
+              width={activeLayout.width}
+              height={activeLayout.height}
               className="block"
             >
               <defs>
                 <marker
                   id="arrowhead"
-                  markerWidth="8"
-                  markerHeight="6"
-                  refX="8"
-                  refY="3"
+                  markerWidth="10"
+                  markerHeight="7"
+                  refX="9"
+                  refY="3.5"
                   orient="auto"
                 >
                   <polygon
-                    points="0 0, 8 3, 0 6"
-                    className="fill-muted-foreground/40"
+                    points="0 0, 10 3.5, 0 7"
+                    className="fill-muted-foreground/50"
                   />
                 </marker>
               </defs>
 
               {/* Arrows */}
-              {blockingEdges.map((dep) => {
+              {visibleEdges.map((dep) => {
                 const fromNode = nodeMap.get(dep.depends_on_task_id);
                 const toNode = nodeMap.get(dep.task_id);
                 if (!fromNode || !toNode) return null;
@@ -519,11 +605,11 @@ export function TimelinePage() {
               })}
 
               {/* Task nodes */}
-              {layout.nodes.map((node) => {
+              {activeLayout.nodes.map((node) => {
                 const task = taskMap.get(node.taskId);
                 if (!task) return null;
                 const category =
-                  statusCategoryMap.get(task.status_id) ?? "todo";
+                  statusCategoryMap.get(task.status_id) ?? "backlog";
                 return (
                   <TaskNode
                     key={node.taskId}
@@ -537,42 +623,28 @@ export function TimelinePage() {
             </svg>
           </div>
 
-          {/* Stats */}
-          <div className="flex gap-6 text-xs text-muted-foreground">
+          {/* Stats footer */}
+          <div className="flex flex-wrap gap-6 text-xs text-muted-foreground">
             <span>
-              {graphTasks.length} task{graphTasks.length !== 1 ? "s" : ""}
+              {activeLayout.nodes.length} task
+              {activeLayout.nodes.length !== 1 ? "s" : ""} shown
             </span>
-            <span>
-              {blockingEdges.length} blocking relationship
-              {blockingEdges.length !== 1 ? "s" : ""}
-            </span>
-            <span>
-              {
-                graphTasks.filter(
-                  (t) =>
-                    !deps.some(
-                      (d) =>
-                        d.dependency_type === "blocks" &&
-                        (d.task_id === t.id ||
-                          d.depends_on_task_id === t.id),
-                    ),
-                ).length
-              }{" "}
-              standalone
-            </span>
+            {hasDependencies && (
+              <>
+                <span>
+                  {visibleEdges.length} blocking relationship
+                  {visibleEdges.length !== 1 ? "s" : ""}
+                </span>
+                {graphTasks.length - dagTasks.length > 0 && (
+                  <span>
+                    {graphTasks.length - dagTasks.length} standalone (not shown)
+                  </span>
+                )}
+              </>
+            )}
           </div>
         </>
-      ) : (
-        <div className="flex flex-col items-center justify-center py-20">
-          <GitBranch className="mb-4 h-12 w-12 text-muted-foreground" />
-          <h3 className="mb-2 text-lg font-semibold">
-            No dependency graph to display
-          </h3>
-          <p className="text-sm text-muted-foreground">
-            Add blocking dependencies between tasks to see the timeline.
-          </p>
-        </div>
-      )}
+      ) : null}
     </div>
   );
 }

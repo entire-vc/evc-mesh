@@ -462,3 +462,7 @@ func (m *MockAgentService) RotateAPIKey(ctx context.Context, agentID uuid.UUID) 
 	}
 	return "", nil
 }
+
+func (m *MockAgentService) ListSubAgents(ctx context.Context, parentID uuid.UUID, recursive bool) ([]domain.Agent, error) {
+	return nil, nil
+}

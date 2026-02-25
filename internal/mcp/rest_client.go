@@ -424,3 +424,43 @@ func (c *RESTClient) UpdateAgent(ctx context.Context, agentID string, body map[s
 	}
 	return result, nil
 }
+
+// RegisterSubAgent creates a sub-agent under the given parent agent.
+// The parentID is embedded in the request body as parent_agent_id.
+func (c *RESTClient) RegisterSubAgent(ctx context.Context, workspaceID, parentID, name, agentType string, capabilities map[string]any) (map[string]any, error) {
+	body := map[string]any{
+		"name":            name,
+		"agent_type":      agentType,
+		"parent_agent_id": parentID,
+	}
+	if capabilities != nil {
+		body["capabilities"] = capabilities
+	}
+	var result map[string]any
+	if err := c.doJSON(ctx, http.MethodPost, "/api/v1/workspaces/"+workspaceID+"/agents", body, &result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+// ListSubAgents returns the sub-agents of a given agent.
+// When recursive is true, all descendants (up to 10 levels) are returned.
+func (c *RESTClient) ListSubAgents(ctx context.Context, agentID string, recursive bool) ([]map[string]any, error) {
+	path := "/api/v1/agents/" + agentID + "/sub-agents"
+	if recursive {
+		path += "?recursive=true"
+	}
+	var result map[string]any
+	if err := c.doJSON(ctx, http.MethodGet, path, nil, &result); err != nil {
+		return nil, err
+	}
+	// Response is {"agents": [...], "count": N}
+	agents, _ := result["agents"].([]any)
+	out := make([]map[string]any, 0, len(agents))
+	for _, a := range agents {
+		if m, ok := a.(map[string]any); ok {
+			out = append(out, m)
+		}
+	}
+	return out, nil
+}
