@@ -44,3 +44,12 @@ func (s *activityLogService) ListByTask(ctx context.Context, taskID uuid.UUID, p
 	pg.Normalize()
 	return s.activityRepo.ListByTask(ctx, taskID, pg)
 }
+
+// Export returns up to limit activity log entries matching the filter, for CSV/JSON export.
+func (s *activityLogService) Export(ctx context.Context, workspaceID uuid.UUID, filter repository.ActivityLogFilter, limit int) ([]domain.ActivityLog, error) {
+	const maxLimit = 10000
+	if limit <= 0 || limit > maxLimit {
+		limit = maxLimit
+	}
+	return s.activityRepo.Export(ctx, workspaceID, filter, limit)
+}

@@ -13,6 +13,7 @@ import (
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 	"github.com/pressly/goose/v3"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/redis/go-redis/v9"
 
@@ -161,6 +162,9 @@ func main() {
 	e := echo.New()
 	e.HideBanner = true
 
+	// Prometheus metrics — registered early so every request is counted.
+	e.Use(mw.Metrics())
+
 	e.Use(middleware.RequestLoggerWithConfig(middleware.RequestLoggerConfig{
 		LogURI:    true,
 		LogStatus: true,
@@ -176,6 +180,9 @@ func main() {
 		AllowMethods: []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
 		AllowHeaders: []string{"Authorization", "Content-Type", "X-Agent-Key", "X-Request-ID"},
 	}))
+
+	// Prometheus metrics scrape endpoint (unauthenticated, bind to internal network in prod).
+	e.GET("/metrics", echo.WrapHandler(promhttp.Handler()))
 
 	// Health check.
 	e.GET("/health", func(c echo.Context) error {
@@ -321,6 +328,7 @@ func main() {
 
 	// Activity log routes.
 	api.GET("/workspaces/:ws_id/activity", activityHandler.ListByWorkspace, rbac(mw.PermExportAuditLog))
+	api.GET("/workspaces/:ws_id/activity/export", activityHandler.Export, rbac(mw.PermExportAuditLog))
 	api.GET("/tasks/:task_id/activity", activityHandler.ListByTask)
 
 	// 10. Start server with graceful shutdown.

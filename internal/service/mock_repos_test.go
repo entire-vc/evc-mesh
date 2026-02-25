@@ -976,6 +976,37 @@ func (m *MockActivityLogRepository) ListByTask(_ context.Context, taskID uuid.UU
 	return pagination.NewPage(all, len(all), pg), nil
 }
 
+func (m *MockActivityLogRepository) Export(_ context.Context, workspaceID uuid.UUID, filter repository.ActivityLogFilter, limit int) ([]domain.ActivityLog, error) {
+	if m.errToReturn != nil {
+		return nil, m.errToReturn
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var all []domain.ActivityLog
+	for _, entry := range m.items {
+		if entry.WorkspaceID != workspaceID {
+			continue
+		}
+		if filter.EntityType != nil && entry.EntityType != *filter.EntityType {
+			continue
+		}
+		if filter.Action != nil && entry.Action != *filter.Action {
+			continue
+		}
+		if filter.From != nil && entry.CreatedAt.Before(*filter.From) {
+			continue
+		}
+		if filter.To != nil && entry.CreatedAt.After(*filter.To) {
+			continue
+		}
+		all = append(all, *entry)
+		if len(all) >= limit {
+			break
+		}
+	}
+	return all, nil
+}
+
 // ---------------------------------------------------------------------------
 // MockStorageClient
 // ---------------------------------------------------------------------------

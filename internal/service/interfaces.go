@@ -208,6 +208,8 @@ type ActivityLogService interface {
 	Log(ctx context.Context, entry *domain.ActivityLog) error
 	List(ctx context.Context, workspaceID uuid.UUID, filter repository.ActivityLogFilter, pg pagination.Params) (*pagination.Page[domain.ActivityLog], error)
 	ListByTask(ctx context.Context, taskID uuid.UUID, pg pagination.Params) (*pagination.Page[domain.ActivityLog], error)
+	// Export returns up to limit activity log entries matching the filter, for CSV/JSON export.
+	Export(ctx context.Context, workspaceID uuid.UUID, filter repository.ActivityLogFilter, limit int) ([]domain.ActivityLog, error)
 }
 
 // WebhookService provides business logic for outbound webhook management.

@@ -71,6 +71,17 @@ func (r *ActivityLogRepo) List(ctx context.Context, workspaceID uuid.UUID, filte
 		args = append(args, *filter.Action)
 		argIdx++
 	}
+	if filter.From != nil {
+		conditions = append(conditions, fmt.Sprintf("created_at >= $%d", argIdx))
+		args = append(args, *filter.From)
+		argIdx++
+	}
+	if filter.To != nil {
+		conditions = append(conditions, fmt.Sprintf("created_at <= $%d", argIdx))
+		args = append(args, *filter.To)
+		argIdx++
+	}
+	_ = argIdx // suppress ineffassign after last conditional block
 
 	where := "WHERE " + joinAnd(conditions)
 
@@ -89,6 +100,64 @@ func (r *ActivityLogRepo) List(ctx context.Context, workspaceID uuid.UUID, filte
 	}
 
 	return pagination.NewPage(entries, totalCount, pg), nil
+}
+
+// Export returns all matching activity log entries up to the given limit without pagination.
+// It re-uses the same dynamic WHERE-clause builder as List.
+func (r *ActivityLogRepo) Export(ctx context.Context, workspaceID uuid.UUID, filter repository.ActivityLogFilter, limit int) ([]domain.ActivityLog, error) {
+	args := []interface{}{workspaceID} // $1
+	conditions := []string{"workspace_id = $1"}
+	argIdx := 2
+
+	if filter.EntityType != nil {
+		conditions = append(conditions, fmt.Sprintf("entity_type = $%d", argIdx))
+		args = append(args, *filter.EntityType)
+		argIdx++
+	}
+	if filter.EntityID != nil {
+		conditions = append(conditions, fmt.Sprintf("entity_id = $%d", argIdx))
+		args = append(args, *filter.EntityID)
+		argIdx++
+	}
+	if filter.ActorID != nil {
+		conditions = append(conditions, fmt.Sprintf("actor_id = $%d", argIdx))
+		args = append(args, *filter.ActorID)
+		argIdx++
+	}
+	if filter.ActorType != nil {
+		conditions = append(conditions, fmt.Sprintf("actor_type = $%d", argIdx))
+		args = append(args, *filter.ActorType)
+		argIdx++
+	}
+	if filter.Action != nil {
+		conditions = append(conditions, fmt.Sprintf("action = $%d", argIdx))
+		args = append(args, *filter.Action)
+		argIdx++
+	}
+	if filter.From != nil {
+		conditions = append(conditions, fmt.Sprintf("created_at >= $%d", argIdx))
+		args = append(args, *filter.From)
+		argIdx++
+	}
+	if filter.To != nil {
+		conditions = append(conditions, fmt.Sprintf("created_at <= $%d", argIdx))
+		args = append(args, *filter.To)
+		argIdx++
+	}
+	_ = argIdx // suppress unused variable warning after last conditional block
+
+	where := "WHERE " + joinAnd(conditions)
+	dataQ := fmt.Sprintf(
+		`SELECT * FROM activity_log %s ORDER BY created_at DESC LIMIT $%d`,
+		where, len(args)+1,
+	)
+	args = append(args, limit)
+
+	var entries []domain.ActivityLog
+	if err := r.db.SelectContext(ctx, &entries, dataQ, args...); err != nil {
+		return nil, err
+	}
+	return entries, nil
 }
 
 // ListByTask returns a paginated list of activity log entries for a specific task.

@@ -171,6 +171,8 @@ type ActivityLogFilter struct {
 	ActorID    *uuid.UUID
 	ActorType  *domain.ActorType
 	Action     *string
+	From       *time.Time
+	To         *time.Time
 }
 
 // ActivityLogRepository manages persistence for activity log entries.
@@ -178,6 +180,8 @@ type ActivityLogRepository interface {
 	Create(ctx context.Context, entry *domain.ActivityLog) error
 	List(ctx context.Context, workspaceID uuid.UUID, filter ActivityLogFilter, pg pagination.Params) (*pagination.Page[domain.ActivityLog], error)
 	ListByTask(ctx context.Context, taskID uuid.UUID, pg pagination.Params) (*pagination.Page[domain.ActivityLog], error)
+	// Export returns all matching entries (up to limit) without pagination, used for CSV/JSON export.
+	Export(ctx context.Context, workspaceID uuid.UUID, filter ActivityLogFilter, limit int) ([]domain.ActivityLog, error)
 }
 
 // UserRepository manages persistence for users.
