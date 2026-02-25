@@ -1,0 +1,189 @@
+/* Extracted from @entire-vc/evc-brandkit - Mesh theme */
+
+/*
+ * Mesh Theme — Entire VC Brandkit
+ *
+ * Semantic color tokens for the Mesh product theme.
+ * Primary hue: teal (HSL 180 / 172).
+ * Supports light mode (:root) and dark mode (.dark).
+ *
+ * Usage: import this file before any component styles. All tokens are
+ * consumed by Tailwind CSS @theme aliases defined in index.css.
+ */
+
+/* ------------------------------------------------------------------ */
+/* Typefaces                                                            */
+/* ------------------------------------------------------------------ */
+
+/*
+ * --font-sans  : Inter (variable) — primary UI font
+ * --font-mono  : JetBrains Mono   — code blocks, task IDs, agent keys
+ *
+ * These are declared in index.css @theme because Tailwind 4 requires
+ * font tokens inside @theme, but the family names are defined here as
+ * the canonical source of truth.
+ */
+:root {
+  --mesh-font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --mesh-font-mono: "JetBrains Mono", ui-monospace, monospace;
+}
+
+/* ------------------------------------------------------------------ */
+/* Primitive palette (HSL raw values, no hsl() wrapper)               */
+/* These are consumed by the semantic tokens below.                    */
+/* ------------------------------------------------------------------ */
+
+:root {
+  /* Teal scale — primary brand color */
+  --mesh-teal-50:  180 30% 97%;
+  --mesh-teal-100: 180 30% 95%;
+  --mesh-teal-200: 180 28% 90%;
+  --mesh-teal-300: 180 36% 80%;
+  --mesh-teal-400: 180 50% 60%;
+  --mesh-teal-500: 180 100% 21%;   /* primary light */
+  --mesh-teal-600: 180 100% 18%;
+  --mesh-teal-700: 180 100% 14%;
+
+  /* Teal accent (lighter for dark mode primary) */
+  --mesh-teal-accent-400: 172 66% 50%;
+  --mesh-teal-accent-500: 172 70% 44%;
+
+  /* Neutral (teal-tinted grey scale) */
+  --mesh-neutral-50:  180 20% 98%;
+  --mesh-neutral-100: 180 20% 96%;
+  --mesh-neutral-200: 180 18% 90%;
+  --mesh-neutral-300: 180 15% 75%;
+  --mesh-neutral-400: 180 10% 55%;
+  --mesh-neutral-500: 180 10% 40%;
+  --mesh-neutral-700: 180 15% 27%;
+  --mesh-neutral-800: 180 23% 15%;
+  --mesh-neutral-900: 180 23% 8%;
+
+  /* Dark surface scale */
+  --mesh-dark-base:    180 29% 6%;
+  --mesh-dark-surface: 180 35% 9%;
+  --mesh-dark-raised:  180 36% 12%;
+  --mesh-dark-overlay: 180 32% 17%;
+  --mesh-dark-border:  180 30% 20%;
+  --mesh-dark-sidebar: 180 45% 4%;
+
+  /* Semantic status colors */
+  --mesh-success:     142 76% 36%;
+  --mesh-success-dk:  142 71% 45%;
+  --mesh-warning:     38 92% 50%;
+  --mesh-destructive: 0 84% 60%;
+  --mesh-destructive-dk: 0 91% 71%;
+
+  /* Border radius base */
+  --mesh-radius: 0.5rem;
+}
+
+/* ------------------------------------------------------------------ */
+/* Semantic tokens — light mode                                        */
+/* ------------------------------------------------------------------ */
+
+:root {
+  /* Surfaces */
+  --background:   0 0% 100%;
+  --foreground:   var(--mesh-neutral-900);
+
+  --card:             0 0% 100%;
+  --card-foreground:  var(--mesh-neutral-900);
+
+  --popover:            0 0% 100%;
+  --popover-foreground: var(--mesh-neutral-900);
+
+  /* Brand / interactive */
+  --primary:            var(--mesh-teal-500);
+  --primary-foreground: 0 0% 100%;
+
+  --secondary:            var(--mesh-teal-100);
+  --secondary-foreground: var(--mesh-neutral-900);
+
+  --accent:            var(--mesh-teal-500);
+  --accent-foreground: 0 0% 100%;
+
+  /* Neutral surfaces */
+  --muted:            var(--mesh-neutral-100);
+  --muted-foreground: var(--mesh-neutral-500);
+
+  /* Feedback */
+  --destructive:            var(--mesh-destructive);
+  --destructive-foreground: 0 0% 100%;
+
+  --success:            var(--mesh-success);
+  --success-foreground: 0 0% 100%;
+
+  --warning:            var(--mesh-warning);
+  --warning-foreground: 0 0% 100%;
+
+  /* Form chrome */
+  --border: var(--mesh-teal-200);
+  --input:  var(--mesh-teal-200);
+  --ring:   var(--mesh-teal-500);
+
+  /* Border radius */
+  --radius: var(--mesh-radius);
+
+  /* Sidebar */
+  --sidebar-background: 180 26% 96%;
+  --sidebar-foreground: var(--mesh-neutral-700);
+  --sidebar-primary:    var(--mesh-teal-500);
+  --sidebar-accent:     180 36% 95%;
+  --sidebar-border:     var(--mesh-teal-200);
+}
+
+/* ------------------------------------------------------------------ */
+/* Semantic tokens — dark mode                                         */
+/* ------------------------------------------------------------------ */
+
+.dark {
+  /* Surfaces */
+  --background:   var(--mesh-dark-base);
+  --foreground:   180 67% 94%;
+
+  --card:             var(--mesh-dark-surface);
+  --card-foreground:  180 67% 94%;
+
+  --popover:            var(--mesh-dark-surface);
+  --popover-foreground: 180 67% 94%;
+
+  /* Brand / interactive */
+  --primary:            var(--mesh-teal-accent-400);
+  --primary-foreground: 180 45% 4%;
+
+  --secondary:            var(--mesh-dark-overlay);
+  --secondary-foreground: 180 67% 94%;
+
+  --accent:            var(--mesh-teal-accent-400);
+  --accent-foreground: 180 45% 4%;
+
+  /* Neutral surfaces */
+  --muted:            var(--mesh-dark-raised);
+  --muted-foreground: var(--mesh-neutral-400);
+
+  /* Feedback */
+  --destructive:            var(--mesh-destructive-dk);
+  --destructive-foreground: 0 0% 100%;
+
+  --success:            var(--mesh-success-dk);
+  --success-foreground: 0 0% 100%;
+
+  --warning:            var(--mesh-warning);
+  --warning-foreground: 0 0% 100%;
+
+  /* Form chrome */
+  --border: var(--mesh-dark-border);
+  --input:  var(--mesh-dark-border);
+  --ring:   var(--mesh-teal-accent-400);
+
+  /* Border radius — same across modes */
+  --radius: var(--mesh-radius);
+
+  /* Sidebar */
+  --sidebar-background: var(--mesh-dark-sidebar);
+  --sidebar-foreground: var(--mesh-neutral-400);
+  --sidebar-primary:    var(--mesh-teal-accent-400);
+  --sidebar-accent:     var(--mesh-dark-raised);
+  --sidebar-border:     var(--mesh-dark-border);
+}
