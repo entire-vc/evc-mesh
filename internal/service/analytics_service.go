@@ -190,7 +190,7 @@ type agentTaskQueryRow struct {
 func (s *analyticsService) queryAgentMetrics(ctx context.Context, filter AnalyticsFilter) (*AgentMetrics, error) {
 	const countQ = `
 		SELECT COUNT(*) AS total,
-		       COUNT(*) FILTER (WHERE status = 'active') AS active_count
+		       COUNT(*) FILTER (WHERE status IN ('online', 'busy')) AS active_count
 		FROM agents
 		WHERE workspace_id = $1 AND deleted_at IS NULL
 	`
