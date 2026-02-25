@@ -488,6 +488,70 @@ func (h *TaskHandler) CreateSubtask(c echo.Context) error {
 	return c.JSON(http.StatusCreated, subtask)
 }
 
+// bulkUpdateRequest represents the JSON body for bulk-updating multiple tasks.
+type bulkUpdateRequest struct {
+	TaskIDs []uuid.UUID       `json:"task_ids"`
+	Updates bulkUpdateFields  `json:"updates"`
+}
+
+// bulkUpdateFields holds the optional fields that can be changed in a bulk update.
+type bulkUpdateFields struct {
+	StatusID     *uuid.UUID           `json:"status_id,omitempty"`
+	Priority     *domain.Priority     `json:"priority,omitempty"`
+	AssigneeID   *uuid.UUID           `json:"assignee_id,omitempty"`
+	AssigneeType *domain.AssigneeType `json:"assignee_type,omitempty"`
+	Labels       *[]string            `json:"labels,omitempty"`
+}
+
+// bulkUpdateResponse is returned after a bulk update operation.
+type bulkUpdateResponse struct {
+	Updated int      `json:"updated"`
+	Errors  []string `json:"errors,omitempty"`
+}
+
+// BulkUpdate handles POST /projects/:proj_id/tasks/bulk-update
+func (h *TaskHandler) BulkUpdate(c echo.Context) error {
+	projectIDStr := c.Param("proj_id")
+	projectID, err := uuid.Parse(projectIDStr)
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid proj_id"))
+	}
+
+	var req bulkUpdateRequest
+	if err := c.Bind(&req); err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
+	}
+
+	if len(req.TaskIDs) == 0 {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("task_ids must not be empty"))
+	}
+	if len(req.TaskIDs) > 100 {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("max 100 tasks per bulk update"))
+	}
+
+	// Require at least one field to update.
+	u := req.Updates
+	if u.StatusID == nil && u.Priority == nil && u.AssigneeID == nil && u.AssigneeType == nil && u.Labels == nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("at least one field in updates is required"))
+	}
+
+	input := service.BulkUpdateTasksInput{
+		TaskIDs:      req.TaskIDs,
+		StatusID:     u.StatusID,
+		Priority:     u.Priority,
+		AssigneeID:   u.AssigneeID,
+		AssigneeType: u.AssigneeType,
+		Labels:       u.Labels,
+	}
+
+	result := h.taskService.BulkUpdate(c.Request().Context(), projectID, input)
+
+	return c.JSON(http.StatusOK, bulkUpdateResponse{
+		Updated: result.Updated,
+		Errors:  result.Errors,
+	})
+}
+
 // handleError inspects the error type and returns appropriate JSON response.
 func handleError(c echo.Context, err error) error {
 	if apiErr, ok := err.(*apierror.Error); ok {

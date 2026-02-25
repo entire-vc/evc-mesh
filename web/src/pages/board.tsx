@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate, useParams } from "react-router";
+import { useParams } from "react-router";
 import {
   DndContext,
   DragOverlay,
@@ -19,12 +19,10 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import {
+  AlertTriangle,
   Columns3,
-  GitBranch,
-  List,
+  Flag,
   Plus,
-  Search,
-  SlidersHorizontal,
 } from "lucide-react";
 import { useProjectStore } from "@/stores/project";
 import { useTaskStore } from "@/stores/task";
@@ -32,22 +30,54 @@ import { useCustomFieldStore } from "@/stores/custom-field";
 import { useWebSocket } from "@/hooks/use-websocket";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Input } from "@/components/ui/input";
-import { Select } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { TaskCard } from "@/components/task-card";
 import { CreateTaskDialog } from "@/components/create-task-dialog";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+import { TaskSlideOver } from "@/components/task-slide-over";
 import { toast } from "@/components/ui/toast";
 import { SavedViewsMenu } from "@/components/saved-views-menu";
-import type { Task, TaskStatus, CustomFieldDefinition, WSMessage, SavedView } from "@/types";
+import { ViewTabBar } from "@/components/view-tab-bar";
+import { BoardToolbar, type GroupBy, type SortBy } from "@/components/board-toolbar";
+import { AssigneeAvatar } from "@/components/assignee-avatar";
+import type { Task, TaskStatus, WSMessage, SavedView, Priority, StatusCategory } from "@/types";
+
+// ---------------------------------------------------------------------------
+// Priority metadata (for GroupBy=priority columns)
+// ---------------------------------------------------------------------------
+
+const PRIORITY_ORDER: Record<Priority, number> = {
+  urgent: 0,
+  high: 1,
+  medium: 2,
+  low: 3,
+  none: 4,
+};
+
+const PRIORITY_COLORS: Record<Priority, string> = {
+  urgent: "#ef4444",
+  high: "#f97316",
+  medium: "#eab308",
+  low: "#60a5fa",
+  none: "#9ca3af",
+};
+
+// ---------------------------------------------------------------------------
+// Generic column descriptor (works for all GroupBy modes)
+// ---------------------------------------------------------------------------
+
+interface BoardCol {
+  id: string; // droppable column id prefix value
+  title: string;
+  color: string;
+  // For status mode: the underlying TaskStatus
+  status?: TaskStatus;
+  // For priority mode: the Priority value
+  priority?: Priority;
+  // For assignee mode: assignee_id or "unassigned"
+  assigneeId?: string;
+  assigneeName?: string;
+  assigneeType?: "user" | "agent" | "unassigned";
+}
 
 // ---------------------------------------------------------------------------
 // Sortable task card wrapper
@@ -55,12 +85,12 @@ import type { Task, TaskStatus, CustomFieldDefinition, WSMessage, SavedView } fr
 
 interface SortableTaskCardProps {
   task: Task;
-  statusId: string;
-  customFields?: CustomFieldDefinition[];
+  columnId: string;
+  statusCategory?: StatusCategory;
   onClick: () => void;
 }
 
-function SortableTaskCard({ task, statusId, customFields, onClick }: SortableTaskCardProps) {
+function SortableTaskCard({ task, columnId, statusCategory, onClick }: SortableTaskCardProps) {
   const {
     attributes,
     listeners,
@@ -70,7 +100,7 @@ function SortableTaskCard({ task, statusId, customFields, onClick }: SortableTas
     isDragging,
   } = useSortable({
     id: task.id,
-    data: { task, statusId },
+    data: { task, columnId },
   });
 
   const style: React.CSSProperties = {
@@ -81,7 +111,7 @@ function SortableTaskCard({ task, statusId, customFields, onClick }: SortableTas
 
   return (
     <div ref={setNodeRef} style={style} {...attributes} {...listeners}>
-      <TaskCard task={task} isDragging={isDragging} customFields={customFields} onClick={onClick} />
+      <TaskCard task={task} isDragging={isDragging} statusCategory={statusCategory} onClick={onClick} />
     </div>
   );
 }
@@ -91,15 +121,15 @@ function SortableTaskCard({ task, statusId, customFields, onClick }: SortableTas
 // ---------------------------------------------------------------------------
 
 interface BoardColumnProps {
-  status: TaskStatus;
+  col: BoardCol;
   tasks: Task[];
-  customFields?: CustomFieldDefinition[];
-  onAddTask: (statusId: string) => void;
+  dndEnabled: boolean;
+  onAddTask: (statusId?: string) => void;
   onTaskClick: (task: Task) => void;
 }
 
-function BoardColumn({ status, tasks, customFields, onAddTask, onTaskClick }: BoardColumnProps) {
-  const { setNodeRef, isOver } = useDroppable({ id: `column-${status.id}` });
+function BoardColumn({ col, tasks, dndEnabled, onAddTask, onTaskClick }: BoardColumnProps) {
+  const { setNodeRef, isOver } = useDroppable({ id: `column-${col.id}` });
 
   const taskIds = useMemo(() => tasks.map((t) => t.id), [tasks]);
 
@@ -107,39 +137,56 @@ function BoardColumn({ status, tasks, customFields, onAddTask, onTaskClick }: Bo
     <div className="w-72 shrink-0">
       <div className="mb-3 flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <div
-            className="h-2.5 w-2.5 rounded-full"
-            style={{ backgroundColor: status.color }}
-          />
-          <span className="text-sm font-semibold">{status.name}</span>
+          {/* Column header indicator */}
+          {col.priority ? (
+            <PriorityIcon priority={col.priority} />
+          ) : col.assigneeId ? (
+            <AssigneeAvatar
+              name={col.assigneeName}
+              type={col.assigneeType}
+              size="sm"
+            />
+          ) : (
+            <div
+              className="h-2.5 w-2.5 rounded-full"
+              style={{ backgroundColor: col.color }}
+            />
+          )}
+          <span className="text-sm font-semibold">{col.title}</span>
           <Badge variant="secondary" className="text-xs">
             {tasks.length}
           </Badge>
         </div>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-6 w-6"
-          onClick={() => onAddTask(status.id)}
-        >
-          <Plus className="h-3 w-3" />
-        </Button>
+        {col.status && (
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-6 w-6"
+            onClick={() => onAddTask(col.status!.id)}
+          >
+            <Plus className="h-3 w-3" />
+          </Button>
+        )}
       </div>
 
       <div
         ref={setNodeRef}
         className={
           "min-h-[60px] space-y-2 rounded-xl bg-muted/50 p-2 transition-colors" +
-          (isOver ? " ring-2 ring-primary/30 bg-muted/70" : "")
+          (isOver ? " ring-2 ring-primary/30 bg-muted/70" : "") +
+          (!dndEnabled ? " opacity-90" : "")
         }
       >
-        <SortableContext items={taskIds} strategy={verticalListSortingStrategy}>
+        <SortableContext
+          items={dndEnabled ? taskIds : []}
+          strategy={verticalListSortingStrategy}
+        >
           {tasks.map((task) => (
             <SortableTaskCard
               key={task.id}
               task={task}
-              statusId={status.id}
-              customFields={customFields}
+              columnId={col.id}
+              statusCategory={col.status?.category}
               onClick={() => onTaskClick(task)}
             />
           ))}
@@ -156,36 +203,59 @@ function BoardColumn({ status, tasks, customFields, onAddTask, onTaskClick }: Bo
 }
 
 // ---------------------------------------------------------------------------
+// Tiny priority icon for column headers
+// ---------------------------------------------------------------------------
+
+function PriorityIcon({ priority }: { priority: Priority }) {
+  const color = PRIORITY_COLORS[priority];
+  const Icon = priority === "urgent" ? AlertTriangle : Flag;
+  return <Icon className="h-3.5 w-3.5" style={{ color }} />;
+}
+
+// ---------------------------------------------------------------------------
+// Sort helper — sort tasks within a column by the given SortBy value
+// ---------------------------------------------------------------------------
+
+function sortTasks(tasks: Task[], sortBy: SortBy): Task[] {
+  if (sortBy === "manual") {
+    return [...tasks].sort((a, b) => a.position - b.position);
+  }
+  return [...tasks].sort((a, b) => {
+    switch (sortBy) {
+      case "priority":
+        return PRIORITY_ORDER[a.priority] - PRIORITY_ORDER[b.priority];
+      case "due_date": {
+        const da = a.due_date ? new Date(a.due_date).getTime() : Infinity;
+        const db = b.due_date ? new Date(b.due_date).getTime() : Infinity;
+        return da - db;
+      }
+      case "created":
+        return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+      case "title":
+        return a.title.localeCompare(b.title);
+      default:
+        return a.position - b.position;
+    }
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Position calculation helpers
 // ---------------------------------------------------------------------------
 
-function calculatePosition(
-  tasks: Task[],
-  targetIndex: number,
-): number {
-  if (tasks.length === 0) {
-    return 1;
-  }
-
-  // Inserting at the beginning
+function calculatePosition(tasks: Task[], targetIndex: number): number {
+  if (tasks.length === 0) return 1;
   if (targetIndex <= 0) {
     const first = tasks[0];
     return first ? first.position - 1 : 1;
   }
-
-  // Inserting at the end
   if (targetIndex >= tasks.length) {
     const last = tasks[tasks.length - 1];
     return last ? last.position + 1 : 1;
   }
-
-  // Inserting between two items
   const prev = tasks[targetIndex - 1];
   const next = tasks[targetIndex];
-  if (prev && next) {
-    return (prev.position + next.position) / 2;
-  }
-
+  if (prev && next) return (prev.position + next.position) / 2;
   return targetIndex;
 }
 
@@ -195,9 +265,8 @@ function calculatePosition(
 
 export function BoardPage() {
   const { wsSlug, projectSlug } = useParams();
-  const navigate = useNavigate();
   const { currentProject, statuses, fetchStatuses } = useProjectStore();
-  const { tasksByStatus, isLoading, fetchTasks, moveTask } = useTaskStore();
+  const { tasks, tasksByStatus, isLoading, fetchTasks, moveTask } = useTaskStore();
   const { fields: customFieldDefs, fetchFields: fetchCustomFields } =
     useCustomFieldStore();
 
@@ -205,18 +274,21 @@ export function BoardPage() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [dialogStatusId, setDialogStatusId] = useState<string | undefined>();
 
+  // Slide-over state
+  const [slideOverTaskId, setSlideOverTaskId] = useState<string | null>(null);
+
   // Drag state
   const [activeTask, setActiveTask] = useState<Task | null>(null);
 
-  // Filter state
+  // ---- Toolbar state ----
+  const [groupBy, setGroupBy] = useState<GroupBy>("status");
+  const [sortBy, setSortBy] = useState<SortBy>("manual");
+  const [showClosed, setShowClosed] = useState(false);
+  const [showSubtasks, setShowSubtasks] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [priorityFilter, setPriorityFilter] = useState<string>("all");
   const [assigneeFilter, setAssigneeFilter] = useState<string>("all");
-
-  // Custom field filters: { [fieldSlug]: filterValue }
-  const [customFieldFilters, setCustomFieldFilters] = useState<
-    Record<string, unknown>
-  >({});
+  const [customFieldFilters, setCustomFieldFilters] = useState<Record<string, unknown>>({});
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -227,13 +299,9 @@ export function BoardPage() {
   // Debounce ref to avoid re-fetching too rapidly on burst events.
   const refetchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const debouncedRefetch = useCallback(() => {
-    if (refetchTimer.current) {
-      clearTimeout(refetchTimer.current);
-    }
+    if (refetchTimer.current) clearTimeout(refetchTimer.current);
     refetchTimer.current = setTimeout(() => {
-      if (currentProject) {
-        fetchTasks(currentProject.id);
-      }
+      if (currentProject) fetchTasks(currentProject.id);
     }, 500);
   }, [currentProject, fetchTasks]);
 
@@ -244,15 +312,11 @@ export function BoardPage() {
     onEvent: useCallback(
       (event: WSMessage) => {
         const eventType = event.type;
-
-        // Show toast for summary events.
         if (eventType === "summary") {
           const data = event.data as Record<string, unknown>;
           const subject = (data.subject as string) || "Agent summary";
           toast(subject);
         }
-
-        // Refresh board data on task-related events.
         if (
           eventType === "status_change" ||
           eventType === "context_update" ||
@@ -284,158 +348,258 @@ export function BoardPage() {
 
   // Filterable custom fields (select, checkbox, number)
   const filterableFields = useMemo(
-    () =>
-      customFieldDefs.filter((f) =>
-        ["select", "checkbox", "number"].includes(f.field_type),
-      ),
+    () => customFieldDefs.filter((f) => ["select", "checkbox", "number"].includes(f.field_type)),
     [customFieldDefs],
   );
 
-  // Filtered tasks by status
-  const filteredTasksByStatus = useMemo(() => {
-    const result: Record<string, Task[]> = {};
-    for (const status of sortedStatuses) {
-      const tasks = tasksByStatus[status.id] ?? [];
-      result[status.id] = tasks.filter((task) => {
-        if (
-          searchQuery &&
-          !task.title.toLowerCase().includes(searchQuery.toLowerCase())
-        ) {
-          return false;
-        }
-        if (
-          priorityFilter !== "all" &&
-          task.priority !== priorityFilter
-        ) {
-          return false;
-        }
-        if (
-          assigneeFilter !== "all" &&
-          task.assignee_type !== assigneeFilter
-        ) {
-          return false;
-        }
-        // Custom field filters
-        for (const [slug, filterValue] of Object.entries(customFieldFilters)) {
-          if (filterValue == null || filterValue === "" || filterValue === "all") {
-            continue;
-          }
-          const fieldDef = customFieldDefs.find((f) => f.slug === slug);
-          if (!fieldDef) continue;
+  // ---------------------------------------------------------------------------
+  // Base task filter (search + priority + assignee + custom fields + subtasks)
+  // Applied before grouping.
+  // ---------------------------------------------------------------------------
 
-          const taskValue = task.custom_fields?.[slug];
+  const filteredTasks = useMemo(() => {
+    return tasks.filter((task) => {
+      // Subtask filter
+      if (!showSubtasks && task.parent_task_id) return false;
 
-          if (fieldDef.field_type === "select") {
-            if (taskValue !== filterValue) return false;
-          } else if (fieldDef.field_type === "checkbox") {
-            const boolFilter = filterValue === "checked";
-            if (Boolean(taskValue) !== boolFilter) return false;
-          } else if (fieldDef.field_type === "number") {
-            const numVal = taskValue != null ? Number(taskValue) : null;
-            const fv = filterValue as { min?: number; max?: number };
-            if (fv.min != null && (numVal == null || numVal < fv.min)) return false;
-            if (fv.max != null && (numVal == null || numVal > fv.max)) return false;
-          }
+      // Search
+      if (searchQuery && !task.title.toLowerCase().includes(searchQuery.toLowerCase())) {
+        return false;
+      }
+      // Priority
+      if (priorityFilter !== "all" && task.priority !== priorityFilter) return false;
+      // Assignee
+      if (assigneeFilter !== "all" && task.assignee_type !== assigneeFilter) return false;
+
+      // Custom field filters
+      for (const [slug, filterValue] of Object.entries(customFieldFilters)) {
+        if (filterValue == null || filterValue === "" || filterValue === "all") continue;
+        const fieldDef = customFieldDefs.find((f) => f.slug === slug);
+        if (!fieldDef) continue;
+        const taskValue = task.custom_fields?.[slug];
+        if (fieldDef.field_type === "select") {
+          if (taskValue !== filterValue) return false;
+        } else if (fieldDef.field_type === "checkbox") {
+          const boolFilter = filterValue === "checked";
+          if (Boolean(taskValue) !== boolFilter) return false;
+        } else if (fieldDef.field_type === "number") {
+          const numVal = taskValue != null ? Number(taskValue) : null;
+          const fv = filterValue as { min?: number; max?: number };
+          if (fv.min != null && (numVal == null || numVal < fv.min)) return false;
+          if (fv.max != null && (numVal == null || numVal > fv.max)) return false;
         }
+      }
+      return true;
+    });
+  }, [tasks, showSubtasks, searchQuery, priorityFilter, assigneeFilter, customFieldFilters, customFieldDefs]);
+
+  // ---------------------------------------------------------------------------
+  // Build columns + task groups based on groupBy
+  // ---------------------------------------------------------------------------
+
+  const { columns, tasksByColumn } = useMemo((): {
+    columns: BoardCol[];
+    tasksByColumn: Record<string, Task[]>;
+  } => {
+    if (groupBy === "status") {
+      // ------ Status grouping (original behavior) ------
+      const closedCategories: StatusCategory[] = ["done", "cancelled"];
+
+      const visibleStatuses = sortedStatuses.filter((s) => {
+        if (!showClosed && closedCategories.includes(s.category)) return false;
         return true;
       });
+
+      const cols: BoardCol[] = visibleStatuses.map((s) => ({
+        id: s.id,
+        title: s.name,
+        color: s.color,
+        status: s,
+      }));
+
+      const byCol: Record<string, Task[]> = {};
+      for (const col of cols) {
+        const raw = tasksByStatus[col.id] ?? [];
+        // Apply global filters
+        const filtered = raw.filter((t) => filteredTasks.some((ft) => ft.id === t.id));
+        byCol[col.id] = sortTasks(filtered, sortBy);
+      }
+
+      return { columns: cols, tasksByColumn: byCol };
     }
-    return result;
-  }, [sortedStatuses, tasksByStatus, searchQuery, priorityFilter, assigneeFilter, customFieldFilters, customFieldDefs]);
+
+    if (groupBy === "priority") {
+      // ------ Priority grouping ------
+      const priorities: Priority[] = ["urgent", "high", "medium", "low", "none"];
+
+      const cols: BoardCol[] = priorities.map((p) => ({
+        id: `priority-${p}`,
+        title:
+          p === "urgent"
+            ? "Urgent"
+            : p === "high"
+              ? "High"
+              : p === "medium"
+                ? "Medium"
+                : p === "low"
+                  ? "Low"
+                  : "No Priority",
+        color: PRIORITY_COLORS[p],
+        priority: p,
+      }));
+
+      const byCol: Record<string, Task[]> = {};
+      for (const col of cols) {
+        const pri = col.priority!;
+        const filtered = filteredTasks.filter((t) => t.priority === pri);
+        byCol[col.id] = sortTasks(filtered, sortBy);
+      }
+
+      return { columns: cols, tasksByColumn: byCol };
+    }
+
+    // ------ Assignee grouping ------
+    // Derive unique assignees from all filtered tasks
+    const seenIds = new Set<string>();
+    const assignees: Array<{
+      id: string;
+      name: string | null;
+      type: "user" | "agent" | "unassigned";
+    }> = [];
+
+    for (const t of filteredTasks) {
+      const key = t.assignee_id ?? "unassigned";
+      if (!seenIds.has(key)) {
+        seenIds.add(key);
+        assignees.push({
+          id: key,
+          name: t.assignee_name ?? null,
+          type:
+            t.assignee_type === "user" || t.assignee_type === "agent"
+              ? t.assignee_type
+              : "unassigned",
+        });
+      }
+    }
+
+    // Sort: named assignees first, then unassigned
+    assignees.sort((a, b) => {
+      if (a.id === "unassigned") return 1;
+      if (b.id === "unassigned") return -1;
+      return (a.name ?? "").localeCompare(b.name ?? "");
+    });
+
+    // Ensure there's always an "Unassigned" column
+    if (!seenIds.has("unassigned")) {
+      assignees.push({ id: "unassigned", name: "Unassigned", type: "unassigned" });
+    }
+
+    const cols: BoardCol[] = assignees.map((a) => ({
+      id: `assignee-${a.id}`,
+      title: a.name ?? "Unassigned",
+      color: "#9ca3af",
+      assigneeId: a.id,
+      assigneeName: a.name ?? undefined,
+      assigneeType: a.type,
+    }));
+
+    const byCol: Record<string, Task[]> = {};
+    for (const col of cols) {
+      const aId = col.assigneeId!;
+      const filtered = filteredTasks.filter(
+        (t) => (t.assignee_id ?? "unassigned") === aId,
+      );
+      byCol[col.id] = sortTasks(filtered, sortBy);
+    }
+
+    return { columns: cols, tasksByColumn: byCol };
+  }, [
+    groupBy,
+    sortBy,
+    showClosed,
+    sortedStatuses,
+    tasksByStatus,
+    filteredTasks,
+  ]);
+
+  // DnD is only fully active when groupBy === 'status'
+  // (we disable cross-column drag for other groupings to keep status intact)
+  const dndEnabled = groupBy === "status";
 
   // ----- Drag handlers -----
 
   const handleDragStart = useCallback((event: DragStartEvent) => {
-    const data = event.active.data.current as
-      | { task: Task; statusId: string }
-      | undefined;
-    if (data?.task) {
-      setActiveTask(data.task);
-    }
+    const data = event.active.data.current as { task: Task; columnId: string } | undefined;
+    if (data?.task) setActiveTask(data.task);
   }, []);
 
   const findColumnId = useCallback(
     (overId: string | number): string | null => {
-      // If the overId is "column-<statusId>" it is the droppable column itself
       const colPrefix = "column-";
       const strId = String(overId);
-      if (strId.startsWith(colPrefix)) {
-        return strId.slice(colPrefix.length);
-      }
+      if (strId.startsWith(colPrefix)) return strId.slice(colPrefix.length);
 
       // Otherwise it is a task id; find which column it belongs to
-      for (const status of sortedStatuses) {
-        const tasks = filteredTasksByStatus[status.id] ?? [];
-        if (tasks.some((t) => t.id === strId)) {
-          return status.id;
-        }
+      for (const col of columns) {
+        const colTasks = tasksByColumn[col.id] ?? [];
+        if (colTasks.some((t) => t.id === strId)) return col.id;
       }
       return null;
     },
-    [sortedStatuses, filteredTasksByStatus],
+    [columns, tasksByColumn],
   );
 
   const handleDragOver = useCallback((_event: DragOverEvent) => {
-    // We handle everything in DragEnd for simplicity, but DragOver
-    // could be used for live preview reordering.
+    // Handled in DragEnd
   }, []);
 
   const handleDragEnd = useCallback(
     async (event: DragEndEvent) => {
       setActiveTask(null);
+      if (!dndEnabled) return;
 
       const { active, over } = event;
       if (!over) return;
 
-      const activeData = active.data.current as
-        | { task: Task; statusId: string }
-        | undefined;
+      const activeData = active.data.current as { task: Task; columnId: string } | undefined;
       if (!activeData) return;
 
       const draggedTask = activeData.task;
-      const sourceStatusId = activeData.statusId;
-      const targetStatusId = findColumnId(over.id);
+      const sourceColId = activeData.columnId;
+      const targetColId = findColumnId(over.id);
 
-      if (!targetStatusId) return;
+      if (!targetColId) return;
 
-      const targetTasks = (filteredTasksByStatus[targetStatusId] ?? []).filter(
+      // For status grouping, targetColId IS the status id
+      const targetStatusId = targetColId;
+
+      const targetTasks = (tasksByColumn[targetColId] ?? []).filter(
         (t) => t.id !== draggedTask.id,
       );
 
-      // Determine drop index
-      let dropIndex = targetTasks.length; // default: end
-
+      let dropIndex = targetTasks.length;
       const overStr = String(over.id);
       if (!overStr.startsWith("column-")) {
-        // Dropped on a specific task -- find its index
         const idx = targetTasks.findIndex((t) => t.id === overStr);
-        if (idx !== -1) {
-          dropIndex = idx;
-        }
+        if (idx !== -1) dropIndex = idx;
       }
 
       const newPosition = calculatePosition(targetTasks, dropIndex);
 
-      // If nothing changed, skip
-      if (sourceStatusId === targetStatusId && draggedTask.position === newPosition) {
-        return;
-      }
+      if (sourceColId === targetColId && draggedTask.position === newPosition) return;
 
       await moveTask(draggedTask.id, {
         status_id: targetStatusId,
         position: newPosition,
       });
     },
-    [findColumnId, filteredTasksByStatus, moveTask],
+    [dndEnabled, findColumnId, tasksByColumn, moveTask],
   );
 
-  const handleDragCancel = useCallback(() => {
-    setActiveTask(null);
-  }, []);
+  const handleDragCancel = useCallback(() => setActiveTask(null), []);
 
   // ----- New task helpers -----
 
-  // Apply a saved view: restore its filters/sort to local state.
   const handleApplyView = useCallback((view: SavedView) => {
     const filters = view.filters ?? {};
     setSearchQuery((filters.search as string) ?? "");
@@ -449,12 +613,9 @@ export function BoardPage() {
     setDialogOpen(true);
   }, []);
 
-  const handleTaskClick = useCallback(
-    (task: Task) => {
-      navigate(`/w/${wsSlug}/p/${projectSlug}/t/${task.id}`);
-    },
-    [navigate, wsSlug, projectSlug],
-  );
+  const handleTaskClick = useCallback((task: Task) => {
+    setSlideOverTaskId(task.id);
+  }, []);
 
   // ----- Render -----
 
@@ -469,260 +630,55 @@ export function BoardPage() {
   }
 
   return (
-    <div className="space-y-4">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <Columns3 className="h-5 w-5 text-muted-foreground" />
-          <h1 className="text-2xl font-bold tracking-tight">
-            {currentProject.name}
-          </h1>
-        </div>
-        <div className="flex items-center gap-3">
-          {/* View toggle */}
-          <div className="flex items-center gap-1 rounded-lg border border-border bg-muted/50 p-1">
-            <Button
-              variant="secondary"
-              size="sm"
-              className="h-7 gap-1.5 px-3 text-xs"
-            >
-              <Columns3 className="h-3.5 w-3.5" />
-              Board
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-7 gap-1.5 px-3 text-xs"
-              onClick={() =>
-                navigate(`/w/${wsSlug}/p/${projectSlug}/list`)
-              }
-            >
-              <List className="h-3.5 w-3.5" />
-              List
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-7 gap-1.5 px-3 text-xs"
-              onClick={() =>
-                navigate(`/w/${wsSlug}/p/${projectSlug}/timeline`)
-              }
-            >
-              <GitBranch className="h-3.5 w-3.5" />
-              Timeline
-            </Button>
-          </div>
-          <Button onClick={() => openCreateDialog()}>
-            <Plus className="h-4 w-4" />
-            New Task
-          </Button>
-        </div>
+    <div className="flex flex-col gap-3">
+      {/* Page title */}
+      <div className="flex items-center gap-3">
+        <Columns3 className="h-5 w-5 text-muted-foreground" />
+        <h1 className="text-2xl font-bold tracking-tight">{currentProject.name}</h1>
       </div>
 
-      {/* Filter bar */}
-      <div className="flex flex-wrap items-center gap-3">
-        <div className="relative w-64">
-          <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            placeholder="Search tasks..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="pl-8"
-          />
-        </div>
+      {/* View tab bar */}
+      <ViewTabBar
+        currentView="board"
+        wsSlug={wsSlug ?? ""}
+        projectSlug={projectSlug ?? ""}
+      />
 
-        <Select
-          value={priorityFilter}
-          onChange={(e) => setPriorityFilter(e.target.value)}
-          className="w-36"
-        >
-          <option value="all">All Priorities</option>
-          <option value="urgent">Urgent</option>
-          <option value="high">High</option>
-          <option value="medium">Medium</option>
-          <option value="low">Low</option>
-          <option value="none">None</option>
-        </Select>
-
-        <Select
-          value={assigneeFilter}
-          onChange={(e) => setAssigneeFilter(e.target.value)}
-          className="w-40"
-        >
-          <option value="all">All Assignees</option>
-          <option value="user">User</option>
-          <option value="agent">Agent</option>
-          <option value="unassigned">Unassigned</option>
-        </Select>
-
-        {/* Custom field filters */}
-        {filterableFields.length > 0 && (
-          <DropdownMenu>
-            <DropdownMenuTrigger>
-              <Button variant="outline" size="sm" className="h-9 gap-1.5 text-xs">
-                <SlidersHorizontal className="h-3.5 w-3.5" />
-                Custom Filters
-                {Object.values(customFieldFilters).some(
-                  (v) => v != null && v !== "" && v !== "all",
-                ) && (
-                  <Badge variant="secondary" className="ml-1 h-4 px-1 text-[10px]">
-                    {
-                      Object.values(customFieldFilters).filter(
-                        (v) => v != null && v !== "" && v !== "all",
-                      ).length
-                    }
-                  </Badge>
-                )}
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent className="w-56 p-2" align="start">
-              <DropdownMenuLabel>Filter by Custom Fields</DropdownMenuLabel>
-              <DropdownMenuSeparator />
-              <div className="space-y-3 p-1" onClick={(e) => e.stopPropagation()}>
-                {filterableFields.map((field) => (
-                  <div key={field.id} className="space-y-1">
-                    <label className="text-xs font-medium text-muted-foreground">
-                      {field.name}
-                    </label>
-                    {field.field_type === "select" && (
-                      <Select
-                        value={
-                          (customFieldFilters[field.slug] as string) ?? "all"
-                        }
-                        onChange={(e) => {
-                          setCustomFieldFilters((prev) => ({
-                            ...prev,
-                            [field.slug]: e.target.value,
-                          }));
-                        }}
-                        className="h-7 text-xs"
-                      >
-                        <option value="all">All</option>
-                        {(
-                          (field.options?.choices ?? []) as {
-                            label: string;
-                            value: string;
-                          }[]
-                        ).map((c) => (
-                          <option key={c.value} value={c.value}>
-                            {c.label}
-                          </option>
-                        ))}
-                      </Select>
-                    )}
-                    {field.field_type === "checkbox" && (
-                      <Select
-                        value={
-                          (customFieldFilters[field.slug] as string) ?? "all"
-                        }
-                        onChange={(e) => {
-                          setCustomFieldFilters((prev) => ({
-                            ...prev,
-                            [field.slug]: e.target.value,
-                          }));
-                        }}
-                        className="h-7 text-xs"
-                      >
-                        <option value="all">All</option>
-                        <option value="checked">Checked</option>
-                        <option value="unchecked">Unchecked</option>
-                      </Select>
-                    )}
-                    {field.field_type === "number" && (
-                      <div className="flex items-center gap-1">
-                        <Input
-                          type="number"
-                          placeholder="Min"
-                          className="h-7 w-20 text-xs"
-                          value={
-                            (
-                              customFieldFilters[field.slug] as {
-                                min?: number;
-                                max?: number;
-                              }
-                            )?.min ?? ""
-                          }
-                          onChange={(e) => {
-                            const prev = (customFieldFilters[field.slug] as {
-                              min?: number;
-                              max?: number;
-                            }) ?? {};
-                            setCustomFieldFilters((s) => ({
-                              ...s,
-                              [field.slug]: {
-                                ...prev,
-                                min: e.target.value
-                                  ? Number(e.target.value)
-                                  : undefined,
-                              },
-                            }));
-                          }}
-                        />
-                        <span className="text-xs text-muted-foreground">-</span>
-                        <Input
-                          type="number"
-                          placeholder="Max"
-                          className="h-7 w-20 text-xs"
-                          value={
-                            (
-                              customFieldFilters[field.slug] as {
-                                min?: number;
-                                max?: number;
-                              }
-                            )?.max ?? ""
-                          }
-                          onChange={(e) => {
-                            const prev = (customFieldFilters[field.slug] as {
-                              min?: number;
-                              max?: number;
-                            }) ?? {};
-                            setCustomFieldFilters((s) => ({
-                              ...s,
-                              [field.slug]: {
-                                ...prev,
-                                max: e.target.value
-                                  ? Number(e.target.value)
-                                  : undefined,
-                              },
-                            }));
-                          }}
-                        />
-                      </div>
-                    )}
-                  </div>
-                ))}
-                {Object.values(customFieldFilters).some(
-                  (v) => v != null && v !== "" && v !== "all",
-                ) && (
-                  <>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuItem
-                      onClick={() => setCustomFieldFilters({})}
-                      className="justify-center text-xs text-destructive"
-                    >
-                      Clear custom filters
-                    </DropdownMenuItem>
-                  </>
-                )}
-              </div>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        )}
+      {/* Toolbar */}
+      <div className="flex flex-wrap items-center gap-2">
+        <BoardToolbar
+          groupBy={groupBy}
+          onGroupByChange={setGroupBy}
+          sortBy={sortBy}
+          onSortByChange={setSortBy}
+          showClosed={showClosed}
+          onShowClosedChange={setShowClosed}
+          showSubtasks={showSubtasks}
+          onShowSubtasksChange={setShowSubtasks}
+          searchQuery={searchQuery}
+          onSearchQueryChange={setSearchQuery}
+          priorityFilter={priorityFilter}
+          onPriorityFilterChange={setPriorityFilter}
+          assigneeFilter={assigneeFilter}
+          onAssigneeFilterChange={setAssigneeFilter}
+          customFieldFilters={customFieldFilters}
+          onCustomFieldFiltersChange={setCustomFieldFilters}
+          filterableFields={filterableFields}
+          onNewTask={() => openCreateDialog()}
+        />
 
         {/* Saved views */}
-        {currentProject && (
-          <SavedViewsMenu
-            projectId={currentProject.id}
-            currentViewType="board"
-            currentFilters={{
-              search: searchQuery,
-              priority: priorityFilter,
-              assignee: assigneeFilter,
-              custom_fields: customFieldFilters,
-            }}
-            onApplyView={handleApplyView}
-          />
-        )}
+        <SavedViewsMenu
+          projectId={currentProject.id}
+          currentViewType="board"
+          currentFilters={{
+            search: searchQuery,
+            priority: priorityFilter,
+            assignee: assigneeFilter,
+            custom_fields: customFieldFilters,
+          }}
+          onApplyView={handleApplyView}
+        />
       </div>
 
       {/* Board */}
@@ -746,26 +702,30 @@ export function BoardPage() {
           onDragCancel={handleDragCancel}
         >
           <div className="flex gap-4 overflow-x-auto pb-4">
-            {sortedStatuses.map((status) => (
+            {columns.map((col) => (
               <BoardColumn
-                key={status.id}
-                status={status}
-                tasks={filteredTasksByStatus[status.id] ?? []}
-                customFields={customFieldDefs}
+                key={col.id}
+                col={col}
+                tasks={tasksByColumn[col.id] ?? []}
+                dndEnabled={dndEnabled}
                 onAddTask={openCreateDialog}
                 onTaskClick={handleTaskClick}
               />
             ))}
 
-            {statuses.length === 0 && (
+            {columns.length === 0 && (
               <div className="flex w-full items-center justify-center py-12">
                 <div className="text-center">
                   <Columns3 className="mx-auto mb-4 h-12 w-12 text-muted-foreground" />
                   <h3 className="mb-2 text-lg font-semibold">
-                    No statuses configured
+                    {statuses.length === 0
+                      ? "No statuses configured"
+                      : "No tasks match filters"}
                   </h3>
                   <p className="text-sm text-muted-foreground">
-                    Configure task statuses in project settings to use the board.
+                    {statuses.length === 0
+                      ? "Configure task statuses in project settings to use the board."
+                      : "Try adjusting your filters or grouping."}
                   </p>
                 </div>
               </div>
@@ -775,7 +735,7 @@ export function BoardPage() {
           <DragOverlay>
             {activeTask ? (
               <div className="w-72">
-                <TaskCard task={activeTask} isDragging customFields={customFieldDefs} />
+                <TaskCard task={activeTask} isDragging />
               </div>
             ) : null}
           </DragOverlay>
@@ -787,6 +747,15 @@ export function BoardPage() {
         open={dialogOpen}
         onOpenChange={setDialogOpen}
         defaultStatusId={dialogStatusId}
+      />
+
+      {/* Task slide-over */}
+      <TaskSlideOver
+        taskId={slideOverTaskId}
+        onClose={() => setSlideOverTaskId(null)}
+        onTaskUpdated={() => {
+          if (currentProject) fetchTasks(currentProject.id);
+        }}
       />
     </div>
   );

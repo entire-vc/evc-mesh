@@ -58,6 +58,12 @@ type Task struct {
 	CreatedAt      time.Time       `json:"created_at" db:"created_at"`
 	UpdatedAt      time.Time       `json:"updated_at" db:"updated_at"`
 	CompletedAt    *time.Time      `json:"completed_at" db:"completed_at"`
+
+	// Computed fields — populated by enriched list/get queries, not stored columns.
+	SubtaskCount  int     `json:"subtask_count"`
+	AssigneeName  *string `json:"assignee_name,omitempty"`
+	ArtifactCount int     `json:"artifact_count"`
+	VCSLinkCount  int     `json:"vcs_link_count"`
 }
 
 // DependencyType represents the relationship between two tasks.

@@ -5,26 +5,25 @@ import {
   useRef,
   useState,
 } from "react";
-import { useNavigate, useParams, useSearchParams } from "react-router";
+import { useParams, useSearchParams } from "react-router";
 import {
+  AlignLeft,
   ArrowDown,
   ArrowUp,
   ArrowUpDown,
-  Bot,
-  ChevronLeft,
+  ChevronDown,
   ChevronRight,
-  Columns3,
   GitBranch,
   List,
   Loader2,
+  Paperclip,
+  Plus,
   Trash2,
-  User,
   X,
 } from "lucide-react";
 import { useProjectStore } from "@/stores/project";
 import { useTaskStore } from "@/stores/task";
 import { useCustomFieldStore } from "@/stores/custom-field";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
@@ -37,12 +36,25 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { AssigneeAvatar } from "@/components/assignee-avatar";
+import { PriorityFlag } from "@/components/priority-flag";
 import { CustomFieldRenderer } from "@/components/custom-field-renderer";
 import { SavedViewsMenu } from "@/components/saved-views-menu";
+import { ViewTabBar } from "@/components/view-tab-bar";
+import { TaskSlideOver } from "@/components/task-slide-over";
+import { ColumnPicker, type ColumnDef } from "@/components/column-picker";
 import { toast } from "@/components/ui/toast";
 import { cn } from "@/lib/cn";
-import { formatDate, priorityConfig } from "@/lib/utils";
-import type { CustomFieldDefinition, Priority, SavedView, Task, UpdateTaskRequest } from "@/types";
+import { formatDate } from "@/lib/utils";
+import { api } from "@/lib/api";
+import type {
+  CustomFieldDefinition,
+  Priority,
+  SavedView,
+  Task,
+  TaskStatus,
+  UpdateTaskRequest,
+} from "@/types";
 
 // ---------------------------------------------------------------------------
 // Sort configuration
@@ -79,21 +91,32 @@ interface EditingCell {
 }
 
 // ---------------------------------------------------------------------------
+// Status group
+// ---------------------------------------------------------------------------
+
+interface StatusGroup {
+  status: TaskStatus;
+  tasks: Task[];
+}
+
+// ---------------------------------------------------------------------------
 // List View page
 // ---------------------------------------------------------------------------
 
 export function ListViewPage() {
   const { wsSlug, projectSlug } = useParams();
-  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const { currentProject, statuses, fetchStatuses } = useProjectStore();
-  const { tasks, isLoading, total, hasMore, fetchTasks, updateTask, deleteTask } =
+  const { tasks, isLoading, total, hasMore, fetchTasks, updateTask, deleteTask, createTask } =
     useTaskStore();
   const { fields: customFieldDefs, fetchFields: fetchCustomFields } =
     useCustomFieldStore();
 
   const [sortField, setSortField] = useState<SortField>("title");
   const [sortDir, setSortDir] = useState<SortDir>("asc");
+
+  // Slide-over state
+  const [slideOverTaskId, setSlideOverTaskId] = useState<string | null>(null);
 
   // Selection state
   const [selectedTaskIds, setSelectedTaskIds] = useState<Set<string>>(new Set());
@@ -106,6 +129,31 @@ export function ListViewPage() {
     null,
   );
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+
+  // Group collapsed state: Set of status IDs that are collapsed
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
+
+  // Subtask expansion state
+  const [expandedTasks, setExpandedTasks] = useState<Set<string>>(new Set());
+  const [subtaskMap, setSubtaskMap] = useState<Record<string, Task[]>>({});
+  const [loadingSubtasks, setLoadingSubtasks] = useState<Set<string>>(new Set());
+
+  // Inline add task per group
+  const [addingInGroup, setAddingInGroup] = useState<string | null>(null);
+  const [addingTitle, setAddingTitle] = useState("");
+  const addInputRef = useRef<HTMLInputElement>(null);
+
+  // Column visibility state
+  const DEFAULT_VISIBLE_COLUMNS = new Set([
+    "name",
+    "status",
+    "priority",
+    "assignee",
+    "due_date",
+  ]);
+  const [visibleColumns, setVisibleColumns] = useState<Set<string>>(
+    DEFAULT_VISIBLE_COLUMNS,
+  );
 
   // Derive pagination from URL search params
   const page = Math.max(1, Number(searchParams.get("page")) || 1);
@@ -126,11 +174,18 @@ export function ListViewPage() {
     setSelectedTaskIds(new Set());
   }, [page]);
 
-  // Status lookup
+  // Focus add input when a group add row opens
+  useEffect(() => {
+    if (addingInGroup !== null) {
+      setTimeout(() => addInputRef.current?.focus(), 0);
+    }
+  }, [addingInGroup]);
+
+  // Status lookup map: id -> status
   const statusMap = useMemo(() => {
-    const map = new Map<string, { name: string; color: string; position: number }>();
+    const map = new Map<string, TaskStatus>();
     for (const s of statuses) {
-      map.set(s.id, { name: s.name, color: s.color, position: s.position });
+      map.set(s.id, s);
     }
     return map;
   }, [statuses]);
@@ -139,6 +194,43 @@ export function ListViewPage() {
   const sortedFieldDefs = useMemo(
     () => [...customFieldDefs].sort((a, b) => a.position - b.position),
     [customFieldDefs],
+  );
+
+  // Build allColumns from static defs + dynamic custom fields
+  const allColumns = useMemo((): ColumnDef[] => {
+    const staticCols: ColumnDef[] = [
+      { key: "name", label: "Name", visible: true, required: true },
+      { key: "status", label: "Status", visible: visibleColumns.has("status") },
+      { key: "priority", label: "Priority", visible: visibleColumns.has("priority") },
+      { key: "assignee", label: "Assignee", visible: visibleColumns.has("assignee") },
+      { key: "due_date", label: "Due Date", visible: visibleColumns.has("due_date") },
+      { key: "labels", label: "Labels", visible: visibleColumns.has("labels") },
+      {
+        key: "estimated_hours",
+        label: "Estimate",
+        visible: visibleColumns.has("estimated_hours"),
+      },
+      { key: "created_at", label: "Created", visible: visibleColumns.has("created_at") },
+    ];
+    const cfCols: ColumnDef[] = sortedFieldDefs.map((f) => ({
+      key: `cf:${f.slug}`,
+      label: f.name,
+      visible: visibleColumns.has(`cf:${f.slug}`),
+    }));
+    return [...staticCols, ...cfCols];
+  }, [sortedFieldDefs, visibleColumns]);
+
+  const handleColumnChange = useCallback(
+    (updated: { key: string; visible: boolean }[]) => {
+      const next = new Set<string>();
+      for (const { key, visible } of updated) {
+        if (visible) next.add(key);
+      }
+      // "name" is always visible (required)
+      next.add("name");
+      setVisibleColumns(next);
+    },
+    [],
   );
 
   // Toggle sort
@@ -154,7 +246,7 @@ export function ListViewPage() {
     [sortField],
   );
 
-  // Sorted tasks
+  // Sorted tasks (within each group, they'll be sorted by this)
   const sortedTasks = useMemo(() => {
     const arr = [...tasks];
     arr.sort((a, b) => {
@@ -215,20 +307,165 @@ export function ListViewPage() {
     return arr;
   }, [tasks, sortField, sortDir, statusMap, sortedFieldDefs]);
 
+  // Group sorted tasks by status, ordered by status position
+  const statusGroups = useMemo((): StatusGroup[] => {
+    // Sort statuses by position
+    const sortedStatuses = [...statuses].sort((a, b) => a.position - b.position);
+
+    // Build a map from status_id -> tasks
+    const tasksByStatus = new Map<string, Task[]>();
+    for (const task of sortedTasks) {
+      // Only top-level tasks (no parent) in grouping
+      if (task.parent_task_id) continue;
+      const arr = tasksByStatus.get(task.status_id) ?? [];
+      arr.push(task);
+      tasksByStatus.set(task.status_id, arr);
+    }
+
+    // Build groups only for statuses that have tasks (or all statuses)
+    const groups: StatusGroup[] = [];
+    for (const status of sortedStatuses) {
+      const groupTasks = tasksByStatus.get(status.id) ?? [];
+      // Only include groups that have tasks
+      if (groupTasks.length > 0) {
+        groups.push({ status, tasks: groupTasks });
+      }
+    }
+
+    // Also handle tasks with status_id not in statuses list (edge case)
+    const knownStatusIds = new Set(sortedStatuses.map((s) => s.id));
+    const unknownTasks = sortedTasks.filter(
+      (t) => !t.parent_task_id && !knownStatusIds.has(t.status_id),
+    );
+    if (unknownTasks.length > 0) {
+      // Create a synthetic group
+      groups.push({
+        status: {
+          id: "unknown",
+          project_id: "",
+          name: "Unknown",
+          slug: "unknown",
+          color: "#9ca3af",
+          position: 9999,
+          category: "backlog",
+          is_default: false,
+          auto_transition: {},
+        },
+        tasks: unknownTasks,
+      });
+    }
+
+    return groups;
+  }, [sortedTasks, statuses]);
+
+  // ---------------------------------------------------------------------------
+  // Group collapse helpers
+  // ---------------------------------------------------------------------------
+
+  const toggleGroup = useCallback((statusId: string) => {
+    setCollapsedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(statusId)) {
+        next.delete(statusId);
+      } else {
+        next.add(statusId);
+      }
+      return next;
+    });
+  }, []);
+
+  // ---------------------------------------------------------------------------
+  // Subtask expansion helpers
+  // ---------------------------------------------------------------------------
+
+  const toggleSubtasks = useCallback(
+    async (taskId: string) => {
+      setExpandedTasks((prev) => {
+        const next = new Set(prev);
+        if (next.has(taskId)) {
+          next.delete(taskId);
+          return next;
+        }
+        next.add(taskId);
+        return next;
+      });
+
+      // Fetch subtasks if not yet loaded
+      if (!subtaskMap[taskId]) {
+        setLoadingSubtasks((prev) => new Set(prev).add(taskId));
+        try {
+          const result = await api<{ items: Task[] }>(`/api/v1/tasks/${taskId}/subtasks`);
+          setSubtaskMap((prev) => ({
+            ...prev,
+            [taskId]: result.items ?? [],
+          }));
+        } catch {
+          toast.error("Failed to load subtasks");
+          // Remove from expanded if failed
+          setExpandedTasks((prev) => {
+            const next = new Set(prev);
+            next.delete(taskId);
+            return next;
+          });
+        } finally {
+          setLoadingSubtasks((prev) => {
+            const next = new Set(prev);
+            next.delete(taskId);
+            return next;
+          });
+        }
+      }
+    },
+    [subtaskMap],
+  );
+
+  // ---------------------------------------------------------------------------
+  // Inline add task helpers
+  // ---------------------------------------------------------------------------
+
+  const startAddInGroup = useCallback((statusId: string) => {
+    setAddingInGroup(statusId);
+    setAddingTitle("");
+  }, []);
+
+  const cancelAdd = useCallback(() => {
+    setAddingInGroup(null);
+    setAddingTitle("");
+  }, []);
+
+  const commitAdd = useCallback(async () => {
+    if (!addingTitle.trim() || !addingInGroup || !currentProject) return;
+    const title = addingTitle.trim();
+    const statusId = addingInGroup;
+    setAddingInGroup(null);
+    setAddingTitle("");
+    try {
+      await createTask(currentProject.id, {
+        title,
+        // Pass status_id via a cast — backend handles it
+        ...(({ status_id: statusId } as unknown) as Record<string, unknown>),
+      } as Parameters<typeof createTask>[1]);
+      await fetchTasks(currentProject.id, { page, page_size: perPage });
+      toast.success("Task created");
+    } catch {
+      toast.error("Failed to create task");
+    }
+  }, [addingTitle, addingInGroup, currentProject, createTask, fetchTasks, page, perPage]);
+
   // ---------------------------------------------------------------------------
   // Selection helpers
   // ---------------------------------------------------------------------------
 
   const allSelected =
     sortedTasks.length > 0 &&
-    sortedTasks.every((t) => selectedTaskIds.has(t.id));
+    sortedTasks.filter((t) => !t.parent_task_id).every((t) => selectedTaskIds.has(t.id));
   const someSelected = selectedTaskIds.size > 0;
 
   const toggleSelectAll = useCallback(() => {
     if (allSelected) {
       setSelectedTaskIds(new Set());
     } else {
-      setSelectedTaskIds(new Set(sortedTasks.map((t) => t.id)));
+      setSelectedTaskIds(new Set(sortedTasks.filter((t) => !t.parent_task_id).map((t) => t.id)));
     }
   }, [allSelected, sortedTasks]);
 
@@ -250,7 +487,6 @@ export function ListViewPage() {
 
   const startEdit = useCallback(
     (taskId: string, field: string) => {
-      // Close any open edit first
       setEditingCell({ taskId, field });
     },
     [],
@@ -343,11 +579,10 @@ export function ListViewPage() {
 
   const handleTaskClick = useCallback(
     (task: Task) => {
-      // Don't navigate if editing or selecting
       if (editingCell?.taskId === task.id) return;
-      navigate(`/w/${wsSlug}/p/${projectSlug}/t/${task.id}`);
+      setSlideOverTaskId(task.id);
     },
-    [navigate, wsSlug, projectSlug, editingCell],
+    [editingCell],
   );
 
   // Apply a saved view: restore sort from its configuration.
@@ -377,6 +612,19 @@ export function ListViewPage() {
     [searchParams, setSearchParams, perPage],
   );
 
+  // Column count for colSpan calculations (checkbox + visible columns)
+  const columnCount =
+    1 + // checkbox (always visible)
+    (visibleColumns.has("name") ? 1 : 0) +
+    (visibleColumns.has("status") ? 1 : 0) +
+    (visibleColumns.has("priority") ? 1 : 0) +
+    (visibleColumns.has("assignee") ? 1 : 0) +
+    (visibleColumns.has("due_date") ? 1 : 0) +
+    (visibleColumns.has("labels") ? 1 : 0) +
+    (visibleColumns.has("estimated_hours") ? 1 : 0) +
+    (visibleColumns.has("created_at") ? 1 : 0) +
+    sortedFieldDefs.filter((f) => visibleColumns.has(`cf:${f.slug}`)).length;
+
   if (!currentProject) {
     return (
       <div className="flex items-center justify-center py-12">
@@ -398,48 +646,26 @@ export function ListViewPage() {
           </h1>
         </div>
 
-        <div className="flex items-center gap-2">
-          {/* Saved views */}
-          <SavedViewsMenu
-            projectId={currentProject.id}
-            currentViewType="list"
-            currentSortBy={sortField}
-            currentSortOrder={sortDir}
-            onApplyView={handleApplyView}
-          />
+        {/* Saved views — top-right */}
+        <SavedViewsMenu
+          projectId={currentProject.id}
+          currentViewType="list"
+          currentSortBy={sortField}
+          currentSortOrder={sortDir}
+          onApplyView={handleApplyView}
+        />
+      </div>
 
-          {/* View toggle */}
-          <div className="flex items-center gap-1 rounded-lg border border-border bg-muted/50 p-1">
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-7 gap-1.5 px-3 text-xs"
-              onClick={() => navigate(`/w/${wsSlug}/p/${projectSlug}`)}
-            >
-              <Columns3 className="h-3.5 w-3.5" />
-              Board
-            </Button>
-            <Button
-              variant="secondary"
-              size="sm"
-              className="h-7 gap-1.5 px-3 text-xs"
-            >
-              <List className="h-3.5 w-3.5" />
-              List
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-7 gap-1.5 px-3 text-xs"
-              onClick={() =>
-                navigate(`/w/${wsSlug}/p/${projectSlug}/timeline`)
-              }
-            >
-              <GitBranch className="h-3.5 w-3.5" />
-              Timeline
-            </Button>
-          </div>
-        </div>
+      {/* View tab bar */}
+      <ViewTabBar
+        currentView="list"
+        wsSlug={wsSlug ?? ""}
+        projectSlug={projectSlug ?? ""}
+      />
+
+      {/* Toolbar: column picker */}
+      <div className="flex items-center justify-end">
+        <ColumnPicker columns={allColumns} onChange={handleColumnChange} />
       </div>
 
       {/* Table */}
@@ -487,180 +713,492 @@ export function ListViewPage() {
                     onSort={handleSort}
                     className="min-w-[240px]"
                   />
-                  <SortableHeader
-                    label="Status"
-                    field="status"
-                    currentField={sortField}
-                    dir={sortDir}
-                    onSort={handleSort}
-                    className="min-w-[120px]"
-                  />
-                  <SortableHeader
-                    label="Priority"
-                    field="priority"
-                    currentField={sortField}
-                    dir={sortDir}
-                    onSort={handleSort}
-                    className="min-w-[100px]"
-                  />
-                  <SortableHeader
-                    label="Assignee"
-                    field="assignee"
-                    currentField={sortField}
-                    dir={sortDir}
-                    onSort={handleSort}
-                    className="min-w-[100px]"
-                  />
-                  <SortableHeader
-                    label="Due Date"
-                    field="due_date"
-                    currentField={sortField}
-                    dir={sortDir}
-                    onSort={handleSort}
-                    className="min-w-[110px]"
-                  />
-                  {/* Dynamic custom field columns */}
-                  {sortedFieldDefs.map((field) => (
+                  {visibleColumns.has("status") && (
                     <SortableHeader
-                      key={field.id}
-                      label={field.name}
-                      field={field.slug}
+                      label="Status"
+                      field="status"
+                      currentField={sortField}
+                      dir={sortDir}
+                      onSort={handleSort}
+                      className="min-w-[120px]"
+                    />
+                  )}
+                  {visibleColumns.has("priority") && (
+                    <SortableHeader
+                      label="Priority"
+                      field="priority"
                       currentField={sortField}
                       dir={sortDir}
                       onSort={handleSort}
                       className="min-w-[100px]"
                     />
-                  ))}
+                  )}
+                  {visibleColumns.has("assignee") && (
+                    <SortableHeader
+                      label="Assignee"
+                      field="assignee"
+                      currentField={sortField}
+                      dir={sortDir}
+                      onSort={handleSort}
+                      className="min-w-[100px]"
+                    />
+                  )}
+                  {visibleColumns.has("due_date") && (
+                    <SortableHeader
+                      label="Due Date"
+                      field="due_date"
+                      currentField={sortField}
+                      dir={sortDir}
+                      onSort={handleSort}
+                      className="min-w-[110px]"
+                    />
+                  )}
+                  {visibleColumns.has("labels") && (
+                    <th className="px-3 py-2 text-xs font-medium text-muted-foreground">
+                      Labels
+                    </th>
+                  )}
+                  {visibleColumns.has("estimated_hours") && (
+                    <th className="px-3 py-2 text-xs font-medium text-muted-foreground">
+                      Estimate
+                    </th>
+                  )}
+                  {visibleColumns.has("created_at") && (
+                    <th className="px-3 py-2 text-xs font-medium text-muted-foreground">
+                      Created
+                    </th>
+                  )}
+                  {/* Dynamic custom field columns */}
+                  {sortedFieldDefs
+                    .filter((f) => visibleColumns.has(`cf:${f.slug}`))
+                    .map((field) => (
+                      <SortableHeader
+                        key={field.id}
+                        label={field.name}
+                        field={field.slug}
+                        currentField={sortField}
+                        dir={sortDir}
+                        onSort={handleSort}
+                        className="min-w-[100px]"
+                      />
+                    ))}
                 </tr>
               </thead>
               <tbody>
-                {sortedTasks.map((task) => {
-                  const isSelected = selectedTaskIds.has(task.id);
+                {statusGroups.map((group) => {
+                  const isCollapsed = collapsedGroups.has(group.status.id);
+                  const isAddingHere = addingInGroup === group.status.id;
 
                   return (
-                    <tr
-                      key={task.id}
-                      className={cn(
-                        "border-b border-border transition-colors last:border-b-0",
-                        isSelected
-                          ? "bg-primary/5"
-                          : "hover:bg-muted/30",
-                      )}
-                    >
-                      {/* Checkbox */}
-                      <td
-                        className="w-10 px-3 py-2"
-                        onClick={(e) => e.stopPropagation()}
+                    <>
+                      {/* Group header row */}
+                      <tr
+                        key={`group-${group.status.id}`}
+                        className="border-b border-border bg-muted/30 hover:bg-muted/50 transition-colors"
                       >
-                        <input
-                          type="checkbox"
-                          checked={isSelected}
-                          onChange={() => toggleSelectTask(task.id)}
-                          className="h-4 w-4 rounded border-input cursor-pointer"
-                          aria-label={`Select task ${task.title}`}
-                        />
-                      </td>
+                        <td colSpan={columnCount} className="px-3 py-2">
+                          <div className="flex items-center justify-between">
+                            <button
+                              type="button"
+                              className="flex items-center gap-2 text-left"
+                              onClick={() => toggleGroup(group.status.id)}
+                              aria-expanded={!isCollapsed}
+                            >
+                              {isCollapsed ? (
+                                <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
+                              ) : (
+                                <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+                              )}
+                              <span
+                                className="inline-block h-2 w-2 rounded-full flex-shrink-0"
+                                style={{ backgroundColor: group.status.color }}
+                              />
+                              <span className="text-xs font-semibold tracking-wide uppercase text-foreground/80">
+                                {group.status.name}
+                              </span>
+                              <span className="text-xs text-muted-foreground font-normal">
+                                ({group.tasks.length})
+                              </span>
+                            </button>
+                            <button
+                              type="button"
+                              className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors px-2 py-0.5 rounded hover:bg-muted"
+                              onClick={() => startAddInGroup(group.status.id)}
+                            >
+                              <Plus className="h-3 w-3" />
+                              Add Task
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
 
-                      {/* Title */}
-                      <TitleCell
-                        task={task}
-                        isEditing={
-                          editingCell?.taskId === task.id &&
-                          editingCell.field === "title"
-                        }
-                        onStartEdit={() => startEdit(task.id, "title")}
-                        onSave={(title) => saveCell(task.id, { title })}
-                        onCancel={cancelEdit}
-                        onNavigate={() => handleTaskClick(task)}
-                      />
+                      {/* Task rows for this group */}
+                      {!isCollapsed && group.tasks.map((task) => {
+                        const isSelected = selectedTaskIds.has(task.id);
+                        const isExpanded = expandedTasks.has(task.id);
+                        const isLoadingSubtask = loadingSubtasks.has(task.id);
+                        const subtasks = subtaskMap[task.id] ?? [];
 
-                      {/* Status */}
-                      <StatusCell
-                        task={task}
-                        statusMap={statusMap}
-                        statuses={statuses}
-                        isEditing={
-                          editingCell?.taskId === task.id &&
-                          editingCell.field === "status"
-                        }
-                        onStartEdit={() => startEdit(task.id, "status")}
-                        onSave={(statusId) =>
-                          saveCell(task.id, { status_id: statusId })
-                        }
-                        onCancel={cancelEdit}
-                      />
+                        return (
+                          <>
+                            <tr
+                              key={task.id}
+                              className={cn(
+                                "border-b border-border transition-colors last:border-b-0",
+                                isSelected
+                                  ? "bg-primary/5"
+                                  : "hover:bg-muted/30",
+                              )}
+                            >
+                              {/* Checkbox */}
+                              <td
+                                className="w-10 px-3 py-2"
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={isSelected}
+                                  onChange={() => toggleSelectTask(task.id)}
+                                  className="h-4 w-4 rounded border-input cursor-pointer"
+                                  aria-label={`Select task ${task.title}`}
+                                />
+                              </td>
 
-                      {/* Priority */}
-                      <PriorityCell
-                        task={task}
-                        isEditing={
-                          editingCell?.taskId === task.id &&
-                          editingCell.field === "priority"
-                        }
-                        onStartEdit={() => startEdit(task.id, "priority")}
-                        onSave={(priority) =>
-                          saveCell(task.id, { priority: priority as Priority })
-                        }
-                        onCancel={cancelEdit}
-                      />
+                              {/* Title */}
+                              <EnhancedTitleCell
+                                task={task}
+                                statusColor={statusMap.get(task.status_id)?.color}
+                                isEditing={
+                                  editingCell?.taskId === task.id &&
+                                  editingCell.field === "title"
+                                }
+                                isExpanded={isExpanded}
+                                isLoadingSubtask={isLoadingSubtask}
+                                onToggleSubtasks={() => toggleSubtasks(task.id)}
+                                onStartEdit={() => startEdit(task.id, "title")}
+                                onSave={(title) => saveCell(task.id, { title })}
+                                onCancel={cancelEdit}
+                                onNavigate={() => handleTaskClick(task)}
+                              />
 
-                      {/* Assignee (read-only for now — needs user/agent picker) */}
-                      <td className="px-3 py-2">
-                        <div className="flex items-center gap-1">
-                          {task.assignee_type === "agent" ? (
-                            <Bot className="h-3.5 w-3.5 text-violet-500" />
-                          ) : task.assignee_type === "user" ? (
-                            <User className="h-3.5 w-3.5 text-sky-500" />
-                          ) : (
-                            <span className="text-xs text-muted-foreground">
-                              --
-                            </span>
-                          )}
-                          {task.assignee_id && (
-                            <span className="text-xs text-muted-foreground">
-                              {task.assignee_id.slice(0, 8)}
-                            </span>
-                          )}
-                        </div>
-                      </td>
+                              {/* Status */}
+                              {visibleColumns.has("status") && (
+                                <StatusCell
+                                  task={task}
+                                  statusMap={statusMap}
+                                  statuses={statuses}
+                                  isEditing={
+                                    editingCell?.taskId === task.id &&
+                                    editingCell.field === "status"
+                                  }
+                                  onStartEdit={() => startEdit(task.id, "status")}
+                                  onSave={(statusId) =>
+                                    saveCell(task.id, { status_id: statusId })
+                                  }
+                                  onCancel={cancelEdit}
+                                />
+                              )}
 
-                      {/* Due Date */}
-                      <DueDateCell
-                        task={task}
-                        isEditing={
-                          editingCell?.taskId === task.id &&
-                          editingCell.field === "due_date"
-                        }
-                        onStartEdit={() => startEdit(task.id, "due_date")}
-                        onSave={(due_date) => saveCell(task.id, { due_date })}
-                        onCancel={cancelEdit}
-                      />
+                              {/* Priority */}
+                              {visibleColumns.has("priority") && (
+                                <EnhancedPriorityCell
+                                  task={task}
+                                  isEditing={
+                                    editingCell?.taskId === task.id &&
+                                    editingCell.field === "priority"
+                                  }
+                                  onStartEdit={() => startEdit(task.id, "priority")}
+                                  onSave={(priority) =>
+                                    saveCell(task.id, { priority: priority as Priority })
+                                  }
+                                  onCancel={cancelEdit}
+                                />
+                              )}
 
-                      {/* Custom field columns */}
-                      {sortedFieldDefs.map((field) => (
-                        <CustomFieldCell
-                          key={field.id}
-                          task={task}
-                          field={field}
-                          isEditing={
-                            editingCell?.taskId === task.id &&
-                            editingCell.field === field.slug
-                          }
-                          onStartEdit={() =>
-                            startEdit(task.id, field.slug)
-                          }
-                          onSave={(value) =>
-                            saveCell(task.id, {
-                              custom_fields: {
-                                ...(task.custom_fields ?? {}),
-                                [field.slug]: value,
-                              },
-                            })
-                          }
-                          onCancel={cancelEdit}
-                        />
-                      ))}
-                    </tr>
+                              {/* Assignee */}
+                              {visibleColumns.has("assignee") && (
+                                <td className="px-3 py-2">
+                                  <AssigneeAvatar
+                                    name={task.assignee_name ?? undefined}
+                                    type={task.assignee_type as "user" | "agent" | "unassigned"}
+                                    size="sm"
+                                  />
+                                </td>
+                              )}
+
+                              {/* Due Date */}
+                              {visibleColumns.has("due_date") && (
+                                <DueDateCell
+                                  task={task}
+                                  statusCategory={statusMap.get(task.status_id)?.category}
+                                  isEditing={
+                                    editingCell?.taskId === task.id &&
+                                    editingCell.field === "due_date"
+                                  }
+                                  onStartEdit={() => startEdit(task.id, "due_date")}
+                                  onSave={(due_date) => saveCell(task.id, { due_date })}
+                                  onCancel={cancelEdit}
+                                />
+                              )}
+
+                              {/* Labels */}
+                              {visibleColumns.has("labels") && (
+                                <td className="px-3 py-2">
+                                  <div className="flex flex-wrap gap-1">
+                                    {(task.labels ?? []).slice(0, 3).map((label) => (
+                                      <span
+                                        key={label}
+                                        className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground"
+                                      >
+                                        {label}
+                                      </span>
+                                    ))}
+                                    {(task.labels ?? []).length > 3 && (
+                                      <span className="text-[10px] text-muted-foreground">
+                                        +{(task.labels ?? []).length - 3}
+                                      </span>
+                                    )}
+                                  </div>
+                                </td>
+                              )}
+
+                              {/* Estimated hours */}
+                              {visibleColumns.has("estimated_hours") && (
+                                <td className="px-3 py-2 text-xs text-muted-foreground">
+                                  {task.estimated_hours != null
+                                    ? `${task.estimated_hours}h`
+                                    : "--"}
+                                </td>
+                              )}
+
+                              {/* Created at */}
+                              {visibleColumns.has("created_at") && (
+                                <td className="px-3 py-2 text-xs text-muted-foreground">
+                                  {formatDate(task.created_at)}
+                                </td>
+                              )}
+
+                              {/* Custom field columns */}
+                              {sortedFieldDefs
+                                .filter((f) => visibleColumns.has(`cf:${f.slug}`))
+                                .map((field) => (
+                                  <CustomFieldCell
+                                    key={field.id}
+                                    task={task}
+                                    field={field}
+                                    isEditing={
+                                      editingCell?.taskId === task.id &&
+                                      editingCell.field === field.slug
+                                    }
+                                    onStartEdit={() =>
+                                      startEdit(task.id, field.slug)
+                                    }
+                                    onSave={(value) =>
+                                      saveCell(task.id, {
+                                        custom_fields: {
+                                          ...(task.custom_fields ?? {}),
+                                          [field.slug]: value,
+                                        },
+                                      })
+                                    }
+                                    onCancel={cancelEdit}
+                                  />
+                                ))}
+                            </tr>
+
+                            {/* Subtask rows */}
+                            {isExpanded && (
+                              isLoadingSubtask ? (
+                                <tr key={`${task.id}-subtask-loading`} className="border-b border-border">
+                                  <td colSpan={columnCount} className="px-3 py-2 pl-12">
+                                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                                      <Loader2 className="h-3 w-3 animate-spin" />
+                                      Loading subtasks...
+                                    </div>
+                                  </td>
+                                </tr>
+                              ) : subtasks.length === 0 ? (
+                                <tr key={`${task.id}-subtask-empty`} className="border-b border-border">
+                                  <td colSpan={columnCount} className="px-3 py-2 pl-12">
+                                    <span className="text-xs text-muted-foreground">No subtasks</span>
+                                  </td>
+                                </tr>
+                              ) : subtasks.map((subtask) => {
+                                const subtaskStatus = statusMap.get(subtask.status_id);
+                                return (
+                                  <tr
+                                    key={`subtask-${subtask.id}`}
+                                    className="border-b border-border transition-colors hover:bg-muted/20 opacity-90"
+                                  >
+                                    {/* Checkbox (subtask) */}
+                                    <td className="w-10 px-3 py-1.5" onClick={(e) => e.stopPropagation()}>
+                                      {/* No checkbox for subtasks */}
+                                    </td>
+
+                                    {/* Subtask title */}
+                                    <td
+                                      className="cursor-pointer px-3 py-1.5 pl-10"
+                                      onClick={() => handleTaskClick(subtask)}
+                                    >
+                                      <div className="flex items-center gap-1.5">
+                                        <span className="text-muted-foreground/50 text-xs mr-0.5">└</span>
+                                        {subtaskStatus && (
+                                          <span
+                                            className="inline-block h-1.5 w-1.5 rounded-full flex-shrink-0"
+                                            style={{ backgroundColor: subtaskStatus.color }}
+                                          />
+                                        )}
+                                        <span className="text-xs text-muted-foreground hover:text-foreground transition-colors">
+                                          {subtask.title}
+                                        </span>
+                                      </div>
+                                    </td>
+
+                                    {/* Subtask status */}
+                                    {visibleColumns.has("status") && (
+                                      <td className="px-3 py-1.5">
+                                        {subtaskStatus && (
+                                          <div className="flex items-center gap-1.5">
+                                            <span
+                                              className="inline-block h-2 w-2 rounded-full"
+                                              style={{ backgroundColor: subtaskStatus.color }}
+                                            />
+                                            <span className="text-xs text-muted-foreground">{subtaskStatus.name}</span>
+                                          </div>
+                                        )}
+                                      </td>
+                                    )}
+
+                                    {/* Subtask priority */}
+                                    {visibleColumns.has("priority") && (
+                                      <td className="px-3 py-1.5">
+                                        <PriorityFlag priority={subtask.priority} size="sm" />
+                                      </td>
+                                    )}
+
+                                    {/* Subtask assignee */}
+                                    {visibleColumns.has("assignee") && (
+                                      <td className="px-3 py-1.5">
+                                        <AssigneeAvatar
+                                          name={subtask.assignee_name ?? undefined}
+                                          type={subtask.assignee_type as "user" | "agent" | "unassigned"}
+                                          size="sm"
+                                        />
+                                      </td>
+                                    )}
+
+                                    {/* Subtask due date */}
+                                    {visibleColumns.has("due_date") && (
+                                      <td className="px-3 py-1.5">
+                                        <span className={cn("text-xs", getDateClass(subtask.due_date, subtaskStatus?.category))}>
+                                          {subtask.due_date ? formatDate(subtask.due_date) : "--"}
+                                        </span>
+                                      </td>
+                                    )}
+
+                                    {/* Subtask labels */}
+                                    {visibleColumns.has("labels") && (
+                                      <td className="px-3 py-1.5">
+                                        <span className="text-xs text-muted-foreground/50">--</span>
+                                      </td>
+                                    )}
+
+                                    {/* Subtask estimated_hours */}
+                                    {visibleColumns.has("estimated_hours") && (
+                                      <td className="px-3 py-1.5">
+                                        <span className="text-xs text-muted-foreground/50">--</span>
+                                      </td>
+                                    )}
+
+                                    {/* Subtask created_at */}
+                                    {visibleColumns.has("created_at") && (
+                                      <td className="px-3 py-1.5">
+                                        <span className="text-xs text-muted-foreground/50">
+                                          {formatDate(subtask.created_at)}
+                                        </span>
+                                      </td>
+                                    )}
+
+                                    {/* Custom field placeholders for subtasks */}
+                                    {sortedFieldDefs
+                                      .filter((f) => visibleColumns.has(`cf:${f.slug}`))
+                                      .map((field) => (
+                                        <td key={field.id} className="px-3 py-1.5">
+                                          <span className="text-xs text-muted-foreground/50">--</span>
+                                        </td>
+                                      ))}
+                                  </tr>
+                                );
+                              })
+                            )}
+                          </>
+                        );
+                      })}
+
+                      {/* Inline add task row */}
+                      {!isCollapsed && isAddingHere && (
+                        <tr key={`add-${group.status.id}`} className="border-b border-border bg-muted/10">
+                          <td className="w-10 px-3 py-2" />
+                          <td colSpan={columnCount - 1} className="px-3 py-2">
+                            <div className="flex items-center gap-2">
+                              <span
+                                className="inline-block h-2 w-2 rounded-full flex-shrink-0"
+                                style={{ backgroundColor: group.status.color }}
+                              />
+                              <Input
+                                ref={addInputRef}
+                                value={addingTitle}
+                                onChange={(e) => setAddingTitle(e.target.value)}
+                                placeholder="Task title..."
+                                className="h-7 text-xs flex-1"
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter") {
+                                    e.preventDefault();
+                                    void commitAdd();
+                                  }
+                                  if (e.key === "Escape") {
+                                    cancelAdd();
+                                  }
+                                }}
+                                onBlur={() => {
+                                  if (!addingTitle.trim()) {
+                                    cancelAdd();
+                                  }
+                                }}
+                              />
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-7 px-2 text-xs"
+                                onClick={cancelAdd}
+                              >
+                                <X className="h-3.5 w-3.5" />
+                              </Button>
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+
+                      {/* "Add Task" footer row per group (always visible when not collapsed) */}
+                      {!isCollapsed && !isAddingHere && (
+                        <tr key={`add-footer-${group.status.id}`} className="border-b border-border">
+                          <td className="w-10 px-3 py-1.5" />
+                          <td
+                            colSpan={columnCount - 1}
+                            className="px-3 py-1.5"
+                          >
+                            <button
+                              type="button"
+                              className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                              onClick={() => startAddInGroup(group.status.id)}
+                            >
+                              <Plus className="h-3 w-3" />
+                              Add Task
+                            </button>
+                          </td>
+                        </tr>
+                      )}
+                    </>
                   );
                 })}
               </tbody>
@@ -684,7 +1222,7 @@ export function ListViewPage() {
                   disabled={page <= 1}
                   onClick={() => goToPage(page - 1)}
                 >
-                  <ChevronLeft className="mr-0.5 h-3.5 w-3.5" />
+                  <ChevronRight className="mr-0.5 h-3.5 w-3.5 rotate-180" />
                   Previous
                 </Button>
                 <span className="tabular-nums">
@@ -755,8 +1293,35 @@ export function ListViewPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Task slide-over */}
+      <TaskSlideOver
+        taskId={slideOverTaskId}
+        onClose={() => setSlideOverTaskId(null)}
+        onTaskUpdated={() => {
+          if (currentProject) {
+            fetchTasks(currentProject.id, { page, page_size: perPage });
+          }
+        }}
+      />
     </div>
   );
+}
+
+// ---------------------------------------------------------------------------
+// Helper: compute due date CSS class
+// ---------------------------------------------------------------------------
+
+function getDateClass(
+  dueDate: string | null | undefined,
+  statusCategory: string | undefined,
+): string {
+  if (!dueDate) return "text-muted-foreground";
+  const isTerminal = statusCategory === "done" || statusCategory === "cancelled";
+  if (!isTerminal && new Date(dueDate) < new Date()) {
+    return "text-red-500 font-medium";
+  }
+  return "text-muted-foreground";
 }
 
 // ---------------------------------------------------------------------------
@@ -871,17 +1436,25 @@ function BulkActionBar({
 // Inline editing cell components
 // ---------------------------------------------------------------------------
 
-// Title cell
-function TitleCell({
+// Enhanced title cell with visual indicators and subtask expansion
+function EnhancedTitleCell({
   task,
+  statusColor,
   isEditing,
+  isExpanded,
+  isLoadingSubtask,
+  onToggleSubtasks,
   onStartEdit,
   onSave,
   onCancel,
   onNavigate,
 }: {
   task: Task;
+  statusColor?: string;
   isEditing: boolean;
+  isExpanded: boolean;
+  isLoadingSubtask: boolean;
+  onToggleSubtasks: () => void;
   onStartEdit: () => void;
   onSave: (title: string) => void;
   onCancel: () => void;
@@ -930,6 +1503,11 @@ function TitleCell({
     );
   }
 
+  const hasSubtasks = (task.subtask_count ?? 0) > 0;
+  const hasDescription = !!task.description;
+  const artifactCount = task.artifact_count ?? 0;
+  const subtaskCount = task.subtask_count ?? 0;
+
   return (
     <td
       className="cursor-pointer px-3 py-2"
@@ -939,7 +1517,65 @@ function TitleCell({
       }}
       onClick={onNavigate}
     >
-      <span className="font-medium hover:text-primary">{task.title}</span>
+      <div className="flex items-center gap-1.5">
+        {/* Subtask expand toggle */}
+        {hasSubtasks ? (
+          <button
+            type="button"
+            className="flex-shrink-0 p-0.5 rounded hover:bg-muted transition-colors"
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggleSubtasks();
+            }}
+            aria-label={isExpanded ? "Collapse subtasks" : "Expand subtasks"}
+          >
+            {isLoadingSubtask ? (
+              <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />
+            ) : isExpanded ? (
+              <ChevronDown className="h-3 w-3 text-muted-foreground" />
+            ) : (
+              <ChevronRight className="h-3 w-3 text-muted-foreground" />
+            )}
+          </button>
+        ) : (
+          <span className="w-4 flex-shrink-0" />
+        )}
+
+        {/* Status color dot */}
+        {statusColor && (
+          <span
+            className="inline-block h-2 w-2 rounded-full flex-shrink-0"
+            style={{ backgroundColor: statusColor }}
+          />
+        )}
+
+        {/* Title */}
+        <span className="font-medium hover:text-primary truncate">
+          {task.title}
+        </span>
+
+        {/* Visual indicators */}
+        <span className="flex items-center gap-1 ml-1 flex-shrink-0">
+          {hasDescription && (
+            <AlignLeft
+              className="h-3 w-3 text-muted-foreground/60"
+              aria-label="Has description"
+            />
+          )}
+          {artifactCount > 0 && (
+            <span className="flex items-center gap-0.5 text-muted-foreground/60">
+              <Paperclip className="h-3 w-3" aria-hidden="true" />
+              <span className="text-[10px]">{artifactCount}</span>
+            </span>
+          )}
+          {subtaskCount > 0 && (
+            <span className="flex items-center gap-0.5 text-muted-foreground/60">
+              <GitBranch className="h-3 w-3" aria-hidden="true" />
+              <span className="text-[10px]">{subtaskCount}</span>
+            </span>
+          )}
+        </span>
+      </div>
     </td>
   );
 }
@@ -955,8 +1591,8 @@ function StatusCell({
   onCancel,
 }: {
   task: Task;
-  statusMap: Map<string, { name: string; color: string; position: number }>;
-  statuses: { id: string; name: string; color: string }[];
+  statusMap: Map<string, TaskStatus>;
+  statuses: TaskStatus[];
   isEditing: boolean;
   onStartEdit: () => void;
   onSave: (statusId: string) => void;
@@ -1014,8 +1650,8 @@ function StatusCell({
   );
 }
 
-// Priority cell
-function PriorityCell({
+// Enhanced priority cell using PriorityFlag
+function EnhancedPriorityCell({
   task,
   isEditing,
   onStartEdit,
@@ -1028,8 +1664,6 @@ function PriorityCell({
   onSave: (priority: string) => void;
   onCancel: () => void;
 }) {
-  const pConfig = priorityConfig[task.priority];
-
   if (isEditing) {
     return (
       <td
@@ -1067,29 +1701,22 @@ function PriorityCell({
         onStartEdit();
       }}
     >
-      {task.priority !== "none" ? (
-        <Badge
-          variant="secondary"
-          className={cn("text-[10px]", pConfig.color)}
-        >
-          {pConfig.label}
-        </Badge>
-      ) : (
-        <span className="text-xs text-muted-foreground">--</span>
-      )}
+      <PriorityFlag priority={task.priority} size="sm" />
     </td>
   );
 }
 
-// Due date cell
+// Due date cell with overdue styling
 function DueDateCell({
   task,
+  statusCategory,
   isEditing,
   onStartEdit,
   onSave,
   onCancel,
 }: {
   task: Task;
+  statusCategory?: string;
   isEditing: boolean;
   onStartEdit: () => void;
   onSave: (due_date: string | null) => void;
@@ -1135,6 +1762,8 @@ function DueDateCell({
     );
   }
 
+  const dateClass = getDateClass(task.due_date, statusCategory);
+
   return (
     <td
       className="cursor-pointer px-3 py-2"
@@ -1143,7 +1772,7 @@ function DueDateCell({
         onStartEdit();
       }}
     >
-      <span className="text-xs">
+      <span className={cn("text-xs", dateClass)}>
         {task.due_date ? formatDate(task.due_date) : "--"}
       </span>
     </td>
@@ -1203,7 +1832,6 @@ function CustomFieldCell({
           }}
           compact
         />
-        {/* For text/number/url/email/date — save on blur is handled by the inner inputs */}
       </td>
     );
   }

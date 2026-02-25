@@ -22,30 +22,76 @@ import (
 // safeSlugRe validates that a custom field slug is a safe SQL identifier.
 var safeSlugRe = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
 
+// taskEnrichedSelect is the SELECT clause used for all task queries that need
+// computed fields. It appends 4 correlated subqueries to the base columns so
+// that callers always receive subtask_count, assignee_name, artifact_count,
+// and vcs_link_count without extra round-trips.
+//
+// The alias "t" must exist in the surrounding FROM clause (e.g. FROM tasks t
+// or when tasks is the only table and no alias is used, replace "t." with "").
+// We provide two variants below: one without a table alias (for plain
+// FROM tasks queries) and one with "t." (for joined queries).
+const taskBaseColsNoAlias = `
+	id, project_id, status_id, title, description,
+	assignee_id, assignee_type, priority, parent_task_id, position,
+	due_date, estimated_hours, custom_fields, labels,
+	task_number, created_by, created_by_type, created_at, updated_at,
+	completed_at, deleted_at`
+
+const taskComputedCols = `
+	(SELECT COUNT(*) FROM tasks st WHERE st.parent_task_id = tasks.id AND st.deleted_at IS NULL) AS subtask_count,
+	(SELECT COUNT(*) FROM artifacts a WHERE a.task_id = tasks.id) AS artifact_count,
+	(SELECT COUNT(*) FROM vcs_links v WHERE v.task_id = tasks.id) AS vcs_link_count,
+	CASE
+		WHEN tasks.assignee_type = 'agent' THEN
+			(SELECT name FROM agents WHERE id = tasks.assignee_id AND deleted_at IS NULL)
+		WHEN tasks.assignee_type = 'user' THEN
+			(SELECT display_name FROM users WHERE id = tasks.assignee_id)
+		ELSE NULL
+	END AS assignee_name`
+
+const taskComputedColsAliased = `
+	(SELECT COUNT(*) FROM tasks st WHERE st.parent_task_id = t.id AND st.deleted_at IS NULL) AS subtask_count,
+	(SELECT COUNT(*) FROM artifacts a WHERE a.task_id = t.id) AS artifact_count,
+	(SELECT COUNT(*) FROM vcs_links v WHERE v.task_id = t.id) AS vcs_link_count,
+	CASE
+		WHEN t.assignee_type = 'agent' THEN
+			(SELECT name FROM agents WHERE id = t.assignee_id AND deleted_at IS NULL)
+		WHEN t.assignee_type = 'user' THEN
+			(SELECT display_name FROM users WHERE id = t.assignee_id)
+		ELSE NULL
+	END AS assignee_name`
+
 // taskRow is the DB row representation (includes task_number and deleted_at
-// that the domain model does not have).
+// that the domain model does not have, plus 4 computed enrichment fields).
 type taskRow struct {
-	ID             uuid.UUID       `db:"id"`
-	ProjectID      uuid.UUID       `db:"project_id"`
-	StatusID       uuid.UUID       `db:"status_id"`
-	Title          string          `db:"title"`
-	Description    string          `db:"description"`
-	AssigneeID     *uuid.UUID      `db:"assignee_id"`
+	ID             uuid.UUID           `db:"id"`
+	ProjectID      uuid.UUID           `db:"project_id"`
+	StatusID       uuid.UUID           `db:"status_id"`
+	Title          string              `db:"title"`
+	Description    string              `db:"description"`
+	AssigneeID     *uuid.UUID          `db:"assignee_id"`
 	AssigneeType   domain.AssigneeType `db:"assignee_type"`
-	Priority       domain.Priority `db:"priority"`
-	ParentTaskID   *uuid.UUID      `db:"parent_task_id"`
-	Position       float64         `db:"position"`
-	DueDate        *time.Time      `db:"due_date"`
-	EstimatedHours *float64        `db:"estimated_hours"`
-	CustomFields   json.RawMessage `db:"custom_fields"`
-	Labels         pq.StringArray  `db:"labels"`
-	TaskNumber     int             `db:"task_number"`
-	CreatedBy      uuid.UUID       `db:"created_by"`
-	CreatedByType  domain.ActorType `db:"created_by_type"`
-	CreatedAt      time.Time       `db:"created_at"`
-	UpdatedAt      time.Time       `db:"updated_at"`
-	CompletedAt    *time.Time      `db:"completed_at"`
-	DeletedAt      *time.Time      `db:"deleted_at"`
+	Priority       domain.Priority     `db:"priority"`
+	ParentTaskID   *uuid.UUID          `db:"parent_task_id"`
+	Position       float64             `db:"position"`
+	DueDate        *time.Time          `db:"due_date"`
+	EstimatedHours *float64            `db:"estimated_hours"`
+	CustomFields   json.RawMessage     `db:"custom_fields"`
+	Labels         pq.StringArray      `db:"labels"`
+	TaskNumber     int                 `db:"task_number"`
+	CreatedBy      uuid.UUID           `db:"created_by"`
+	CreatedByType  domain.ActorType    `db:"created_by_type"`
+	CreatedAt      time.Time           `db:"created_at"`
+	UpdatedAt      time.Time           `db:"updated_at"`
+	CompletedAt    *time.Time          `db:"completed_at"`
+	DeletedAt      *time.Time          `db:"deleted_at"`
+
+	// Computed enrichment fields populated by enriched queries.
+	SubtaskCount  int     `db:"subtask_count"`
+	AssigneeName  *string `db:"assignee_name"`
+	ArtifactCount int     `db:"artifact_count"`
+	VCSLinkCount  int     `db:"vcs_link_count"`
 }
 
 func (r *taskRow) toDomain() domain.Task {
@@ -69,6 +115,10 @@ func (r *taskRow) toDomain() domain.Task {
 		CreatedAt:      r.CreatedAt,
 		UpdatedAt:      r.UpdatedAt,
 		CompletedAt:    r.CompletedAt,
+		SubtaskCount:   r.SubtaskCount,
+		AssigneeName:   r.AssigneeName,
+		ArtifactCount:  r.ArtifactCount,
+		VCSLinkCount:   r.VCSLinkCount,
 	}
 }
 
@@ -123,7 +173,8 @@ func (r *TaskRepo) Create(ctx context.Context, task *domain.Task) error {
 }
 
 func (r *TaskRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.Task, error) {
-	const q = `SELECT * FROM tasks WHERE id = $1 AND deleted_at IS NULL`
+	q := `SELECT ` + taskBaseColsNoAlias + `, ` + taskComputedCols + `
+		FROM tasks WHERE id = $1 AND deleted_at IS NULL`
 	var row taskRow
 	if err := r.db.GetContext(ctx, &row, q, id); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -286,8 +337,8 @@ func (r *TaskRepo) List(ctx context.Context, projectID uuid.UUID, filter reposit
 		return nil, err
 	}
 
-	// Data
-	dataQ := fmt.Sprintf(`SELECT * FROM tasks %s %s %s`, where, order, paginationClause(pg))
+	// Data — use enriched select to populate computed fields in a single query.
+	dataQ := fmt.Sprintf(`SELECT `+taskBaseColsNoAlias+`, `+taskComputedCols+` FROM tasks %s %s %s`, where, order, paginationClause(pg))
 	var rows []taskRow
 	if err := r.db.SelectContext(ctx, &rows, dataQ, args...); err != nil {
 		return nil, err
@@ -297,11 +348,10 @@ func (r *TaskRepo) List(ctx context.Context, projectID uuid.UUID, filter reposit
 }
 
 func (r *TaskRepo) ListByAssignee(ctx context.Context, assigneeID uuid.UUID, assigneeType domain.AssigneeType) ([]domain.Task, error) {
-	const q = `
-		SELECT * FROM tasks
+	q := `SELECT ` + taskBaseColsNoAlias + `, ` + taskComputedCols + `
+		FROM tasks
 		WHERE assignee_id = $1 AND assignee_type = $2 AND deleted_at IS NULL
-		ORDER BY created_at ASC
-	`
+		ORDER BY created_at ASC`
 	var rows []taskRow
 	if err := r.db.SelectContext(ctx, &rows, q, assigneeID, assigneeType); err != nil {
 		return nil, err
@@ -310,11 +360,10 @@ func (r *TaskRepo) ListByAssignee(ctx context.Context, assigneeID uuid.UUID, ass
 }
 
 func (r *TaskRepo) ListSubtasks(ctx context.Context, parentTaskID uuid.UUID) ([]domain.Task, error) {
-	const q = `
-		SELECT * FROM tasks
+	q := `SELECT ` + taskBaseColsNoAlias + `, ` + taskComputedCols + `
+		FROM tasks
 		WHERE parent_task_id = $1 AND deleted_at IS NULL
-		ORDER BY position ASC, created_at ASC
-	`
+		ORDER BY position ASC, created_at ASC`
 	var rows []taskRow
 	if err := r.db.SelectContext(ctx, &rows, q, parentTaskID); err != nil {
 		return nil, err
@@ -388,8 +437,11 @@ func (r *TaskRepo) ListByStatusCategory(ctx context.Context, workspaceID uuid.UU
 		return nil, err
 	}
 
-	const dataQ = `
-		SELECT t.*
+	dataQ := `SELECT t.id, t.project_id, t.status_id, t.title, t.description,
+		t.assignee_id, t.assignee_type, t.priority, t.parent_task_id, t.position,
+		t.due_date, t.estimated_hours, t.custom_fields, t.labels,
+		t.task_number, t.created_by, t.created_by_type, t.created_at, t.updated_at,
+		t.completed_at, t.deleted_at, ` + taskComputedColsAliased + `
 		FROM tasks t
 		INNER JOIN task_statuses ts ON ts.id = t.status_id
 		INNER JOIN projects p ON p.id = t.project_id
@@ -398,8 +450,7 @@ func (r *TaskRepo) ListByStatusCategory(ctx context.Context, workspaceID uuid.UU
 		  AND t.deleted_at IS NULL
 		  AND p.deleted_at IS NULL
 		ORDER BY t.created_at DESC
-		LIMIT $3 OFFSET $4
-	`
+		LIMIT $3 OFFSET $4`
 	var rows []taskRow
 	if err := r.db.SelectContext(ctx, &rows, dataQ, workspaceID, category, pg.Limit(), pg.Offset()); err != nil {
 		return nil, err

@@ -4,10 +4,8 @@ import {
   AlertTriangle,
   ArrowRight,
   Bot,
-  Columns3,
   GitBranch,
   Info,
-  List,
   Loader2,
   User,
 } from "lucide-react";
@@ -17,6 +15,7 @@ import { priorityConfig } from "@/lib/utils";
 import { useProjectStore } from "@/stores/project";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { ViewTabBar } from "@/components/view-tab-bar";
 import type { Task, TaskDependency, StatusCategory } from "@/types";
 
 // ---------------------------------------------------------------------------
@@ -437,44 +436,19 @@ export function TimelinePage() {
   return (
     <div className="space-y-4">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <GitBranch className="h-5 w-5 text-muted-foreground" />
-          <h1 className="text-2xl font-bold tracking-tight">
-            {currentProject.name}
-          </h1>
-        </div>
-
-        {/* View toggle */}
-        <div className="flex items-center gap-1 rounded-lg border border-border bg-muted/50 p-1">
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-7 gap-1.5 px-3 text-xs"
-            onClick={() => navigate(`/w/${wsSlug}/p/${projectSlug}`)}
-          >
-            <Columns3 className="h-3.5 w-3.5" />
-            Board
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-7 gap-1.5 px-3 text-xs"
-            onClick={() => navigate(`/w/${wsSlug}/p/${projectSlug}/list`)}
-          >
-            <List className="h-3.5 w-3.5" />
-            List
-          </Button>
-          <Button
-            variant="secondary"
-            size="sm"
-            className="h-7 gap-1.5 px-3 text-xs"
-          >
-            <GitBranch className="h-3.5 w-3.5" />
-            Timeline
-          </Button>
-        </div>
+      <div className="flex items-center gap-3">
+        <GitBranch className="h-5 w-5 text-muted-foreground" />
+        <h1 className="text-2xl font-bold tracking-tight">
+          {currentProject.name}
+        </h1>
       </div>
+
+      {/* View tab bar */}
+      <ViewTabBar
+        currentView="timeline"
+        wsSlug={wsSlug ?? ""}
+        projectSlug={projectSlug ?? ""}
+      />
 
       {/* Error */}
       {error && (

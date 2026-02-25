@@ -292,6 +292,7 @@ func main() {
 	// Task routes.
 	api.GET("/projects/:proj_id/tasks", taskHandler.List)
 	api.POST("/projects/:proj_id/tasks", taskHandler.Create, rbac(mw.PermCreateTask))
+	api.POST("/projects/:proj_id/tasks/bulk-update", taskHandler.BulkUpdate, rbac(mw.PermUpdateTask))
 	api.GET("/tasks/:task_id", taskHandler.GetByID)
 	api.PATCH("/tasks/:task_id", taskHandler.Update, rbac(mw.PermUpdateTask))
 	api.DELETE("/tasks/:task_id", taskHandler.Delete, rbac(mw.PermDeleteTask))

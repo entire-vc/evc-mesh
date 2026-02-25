@@ -52,6 +52,22 @@ type CreateSubtaskInput struct {
 	Priority    domain.Priority `json:"priority"`
 }
 
+// BulkUpdateTasksInput holds parameters for a bulk task update operation.
+type BulkUpdateTasksInput struct {
+	TaskIDs      []uuid.UUID          `json:"task_ids"`
+	StatusID     *uuid.UUID           `json:"status_id,omitempty"`
+	Priority     *domain.Priority     `json:"priority,omitempty"`
+	AssigneeID   *uuid.UUID           `json:"assignee_id,omitempty"`
+	AssigneeType *domain.AssigneeType `json:"assignee_type,omitempty"`
+	Labels       *[]string            `json:"labels,omitempty"`
+}
+
+// BulkUpdateTasksResult holds the outcome of a bulk update operation.
+type BulkUpdateTasksResult struct {
+	Updated int
+	Errors  []string
+}
+
 // TaskService provides business logic for task management.
 type TaskService interface {
 	Create(ctx context.Context, task *domain.Task) error
@@ -65,6 +81,7 @@ type TaskService interface {
 	ListSubtasks(ctx context.Context, parentTaskID uuid.UUID) ([]domain.Task, error)
 	GetMyTasks(ctx context.Context, assigneeID uuid.UUID, assigneeType domain.AssigneeType) ([]domain.Task, error)
 	GetDefaultStatus(ctx context.Context, projectID uuid.UUID) (*domain.TaskStatus, error)
+	BulkUpdate(ctx context.Context, projectID uuid.UUID, input BulkUpdateTasksInput) BulkUpdateTasksResult
 }
 
 // TaskServiceAutoTransitionConfigurable extends TaskService with the ability

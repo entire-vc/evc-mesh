@@ -316,6 +316,7 @@ type MockTaskService struct {
 	ListSubtasksFunc     func(ctx context.Context, parentTaskID uuid.UUID) ([]domain.Task, error)
 	GetMyTasksFunc       func(ctx context.Context, assigneeID uuid.UUID, assigneeType domain.AssigneeType) ([]domain.Task, error)
 	GetDefaultStatusFunc func(ctx context.Context, projectID uuid.UUID) (*domain.TaskStatus, error)
+	BulkUpdateFunc       func(ctx context.Context, projectID uuid.UUID, input service.BulkUpdateTasksInput) service.BulkUpdateTasksResult
 }
 
 func (m *MockTaskService) Create(ctx context.Context, task *domain.Task) error {
@@ -393,6 +394,13 @@ func (m *MockTaskService) GetDefaultStatus(ctx context.Context, projectID uuid.U
 		return m.GetDefaultStatusFunc(ctx, projectID)
 	}
 	return &domain.TaskStatus{ID: uuid.New(), Name: "To Do", IsDefault: true}, nil
+}
+
+func (m *MockTaskService) BulkUpdate(ctx context.Context, projectID uuid.UUID, input service.BulkUpdateTasksInput) service.BulkUpdateTasksResult {
+	if m.BulkUpdateFunc != nil {
+		return m.BulkUpdateFunc(ctx, projectID, input)
+	}
+	return service.BulkUpdateTasksResult{Updated: len(input.TaskIDs)}
 }
 
 // MockAgentService implements service.AgentService for testing.

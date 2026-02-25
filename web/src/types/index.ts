@@ -144,6 +144,7 @@ export interface Task {
   description: string;
   assignee_id: string | null;
   assignee_type: AssigneeType;
+  assignee_name?: string | null;
   priority: Priority;
   parent_task_id: string | null;
   position: number;
@@ -156,6 +157,9 @@ export interface Task {
   created_at: string;
   updated_at: string;
   completed_at: string | null;
+  subtask_count?: number;
+  artifact_count?: number;
+  vcs_link_count?: number;
 }
 
 export interface Comment {

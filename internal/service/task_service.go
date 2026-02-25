@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"strings"
 	"time"
@@ -320,6 +321,80 @@ func (s *taskService) CreateSubtask(ctx context.Context, parentTaskID uuid.UUID,
 // ListSubtasks returns all direct child tasks of the given parent.
 func (s *taskService) ListSubtasks(ctx context.Context, parentTaskID uuid.UUID) ([]domain.Task, error) {
 	return s.taskRepo.ListSubtasks(ctx, parentTaskID)
+}
+
+// BulkUpdate applies a set of field changes to multiple tasks within a project.
+// Each task is processed independently: failures are collected and returned without
+// aborting the batch. Only tasks that belong to projectID are modified.
+func (s *taskService) BulkUpdate(ctx context.Context, projectID uuid.UUID, input BulkUpdateTasksInput) BulkUpdateTasksResult {
+	result := BulkUpdateTasksResult{}
+
+	for _, taskID := range input.TaskIDs {
+		if err := s.bulkUpdateOne(ctx, projectID, taskID, input); err != nil {
+			result.Errors = append(result.Errors, fmt.Sprintf("task %s: %v", taskID, err))
+		} else {
+			result.Updated++
+		}
+	}
+
+	return result
+}
+
+// bulkUpdateOne applies updates to a single task, verifying project membership.
+func (s *taskService) bulkUpdateOne(ctx context.Context, projectID, taskID uuid.UUID, input BulkUpdateTasksInput) error {
+	task, err := s.taskRepo.GetByID(ctx, taskID)
+	if err != nil {
+		return err
+	}
+	if task == nil {
+		return apierror.NotFound("Task")
+	}
+	if task.ProjectID != projectID {
+		return apierror.BadRequest("task does not belong to the project")
+	}
+
+	// If status_id is provided, delegate to MoveTask which handles CompletedAt,
+	// activity logging, and auto-transitions.
+	if input.StatusID != nil {
+		if err := s.MoveTask(ctx, taskID, MoveTaskInput{StatusID: input.StatusID}); err != nil {
+			return err
+		}
+		// Re-fetch so the subsequent Update call works on the latest state.
+		task, err = s.taskRepo.GetByID(ctx, taskID)
+		if err != nil {
+			return err
+		}
+		if task == nil {
+			return apierror.NotFound("Task")
+		}
+	}
+
+	// Apply remaining scalar fields (priority, assignee, labels).
+	changed := false
+	if input.Priority != nil {
+		task.Priority = *input.Priority
+		changed = true
+	}
+	if input.AssigneeID != nil {
+		task.AssigneeID = input.AssigneeID
+		changed = true
+	}
+	if input.AssigneeType != nil {
+		task.AssigneeType = *input.AssigneeType
+		changed = true
+	}
+	if input.Labels != nil {
+		task.Labels = *input.Labels
+		changed = true
+	}
+
+	if changed {
+		if err := s.Update(ctx, task); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // GetMyTasks returns all tasks assigned to the given actor.
