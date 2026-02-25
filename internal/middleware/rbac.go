@@ -29,6 +29,7 @@ const (
 	PermManageCF        Permission = "manage_custom_fields"
 	PermExportAuditLog  Permission = "export_audit_log"
 	PermManageWebhooks  Permission = "manage_webhooks"
+	PermManageRules     Permission = "manage_rules"
 )
 
 // permissionMatrix maps a role name to the set of permissions it holds.
@@ -54,6 +55,7 @@ var permissionMatrix = map[string]map[Permission]bool{
 		PermManageCF:        true,
 		PermExportAuditLog:  true,
 		PermManageWebhooks:  true,
+		PermManageRules:     true,
 	},
 	domain.RoleAdmin: {
 		// Admin has the same permissions as owner.
@@ -72,6 +74,7 @@ var permissionMatrix = map[string]map[Permission]bool{
 		PermManageCF:        true,
 		PermExportAuditLog:  true,
 		PermManageWebhooks:  true,
+		PermManageRules:     true,
 	},
 	domain.RoleMember: {
 		PermCreateProject:  true,

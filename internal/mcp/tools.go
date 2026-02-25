@@ -1016,6 +1016,81 @@ func (s *Server) handleRegisterSubAgent(ctx context.Context, request mcpsdk.Call
 }
 
 // ============================================================================
+// 26. get_my_rules
+// ============================================================================
+
+func (s *Server) handleGetMyRules(ctx context.Context, request mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
+	session := s.getSession(ctx)
+	if session == nil {
+		return errResult("not authenticated: no agent session")
+	}
+
+	wsID := session.WorkspaceID.String()
+	projectID := mcpsdk.ParseString(request, "project_id", "")
+
+	var path string
+	if projectID != "" {
+		path = fmt.Sprintf("/api/v1/projects/%s/rules/effective", projectID)
+	} else {
+		path = fmt.Sprintf("/api/v1/workspaces/%s/rules/effective", wsID)
+	}
+
+	result, err := s.getRESTClient(ctx).GetEffectiveRules(ctx, path)
+	if err != nil {
+		return errResult("failed to get rules: %v", err)
+	}
+
+	rules, _ := result["items"].([]interface{})
+	summary := buildRulesSummary(rules)
+
+	return jsonResult(map[string]any{
+		"rules":   rules,
+		"summary": summary,
+		"count":   len(rules),
+	})
+}
+
+// ============================================================================
+// 27. get_project_rules
+// ============================================================================
+
+func (s *Server) handleGetProjectRules(ctx context.Context, request mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
+	projectID := mcpsdk.ParseString(request, "project_id", "")
+	if projectID == "" {
+		return errResult("project_id is required")
+	}
+
+	result, err := s.getRESTClient(ctx).GetEffectiveRules(ctx, fmt.Sprintf("/api/v1/projects/%s/rules", projectID))
+	if err != nil {
+		return errResult("failed to get project rules: %v", err)
+	}
+
+	return jsonResult(result)
+}
+
+// buildRulesSummary generates a plain-English summary of effective rules for LLMs.
+func buildRulesSummary(rules []interface{}) string {
+	if len(rules) == 0 {
+		return "No governance rules apply to you in this context."
+	}
+
+	summary := fmt.Sprintf("%d rule(s) apply: ", len(rules))
+	for i, r := range rules {
+		rMap, ok := r.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		name, _ := rMap["name"].(string)
+		enforcement, _ := rMap["enforcement"].(string)
+		if i > 0 {
+			summary += "; "
+		}
+		summary += fmt.Sprintf("%s (%s)", name, enforcement)
+	}
+	return summary
+}
+
+// ============================================================================
 // 25. list_sub_agents
 // ============================================================================
 

@@ -273,6 +273,26 @@ type VCSLinkRepository interface {
 	ListByTask(ctx context.Context, taskID uuid.UUID) ([]domain.VCSLink, error)
 }
 
+// RuleRepository manages persistence for governance rules.
+type RuleRepository interface {
+	Create(ctx context.Context, rule *domain.Rule) error
+	GetByID(ctx context.Context, id uuid.UUID) (*domain.Rule, error)
+	Update(ctx context.Context, rule *domain.Rule) error
+	Delete(ctx context.Context, id uuid.UUID) error
+	// ListByWorkspace returns rules scoped to the workspace (scope=workspace).
+	ListByWorkspace(ctx context.Context, workspaceID uuid.UUID, includeDisabled bool) ([]domain.Rule, error)
+	// ListByProject returns rules scoped to a project (scope=project).
+	ListByProject(ctx context.Context, projectID uuid.UUID, includeDisabled bool) ([]domain.Rule, error)
+	// ListByAgent returns rules scoped to a specific agent (scope=agent).
+	ListByAgent(ctx context.Context, agentID uuid.UUID, includeDisabled bool) ([]domain.Rule, error)
+	// GetEffective fetches all candidate rules for inheritance resolution across workspace,
+	// project, and agent scopes. The caller filters and resolves inheritance.
+	GetEffective(ctx context.Context, workspaceID uuid.UUID, projectID *uuid.UUID, agentID *uuid.UUID) ([]domain.Rule, error)
+	// CountByAssigneeAndStatusCategory counts tasks for an assignee in given status categories.
+	// Used by evaluators to check capacity limits without importing taskRepo.
+	CountTasksByAssigneeAndCategory(ctx context.Context, workspaceID uuid.UUID, assigneeID uuid.UUID, assigneeType string, categories []string) (int, error)
+}
+
 // IntegrationRepository manages persistence for workspace integration configurations.
 type IntegrationRepository interface {
 	Upsert(ctx context.Context, cfg *domain.IntegrationConfig) error

@@ -464,3 +464,13 @@ func (c *RESTClient) ListSubAgents(ctx context.Context, agentID string, recursiv
 	}
 	return out, nil
 }
+
+// GetEffectiveRules calls the given rules path and returns the response.
+// path should be a full API path like /api/v1/workspaces/{id}/rules/effective.
+func (c *RESTClient) GetEffectiveRules(ctx context.Context, path string) (map[string]any, error) {
+	var result map[string]any
+	if err := c.doJSON(ctx, http.MethodGet, path, nil, &result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}

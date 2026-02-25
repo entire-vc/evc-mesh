@@ -28,6 +28,7 @@ type taskService struct {
 	customFieldSvc CustomFieldService
 	projectRepo    repository.ProjectRepository
 	autoTransSvc   AutoTransitionService
+	ruleSvc        RuleService
 }
 
 // NewTaskService returns a new TaskService backed by the given repositories.
@@ -72,6 +73,13 @@ func WithProjectRepo(pr repository.ProjectRepository) TaskServiceOption {
 func WithAutoTransitionService(ats AutoTransitionService) TaskServiceOption {
 	return func(s *taskService) {
 		s.autoTransSvc = ats
+	}
+}
+
+// WithRuleService sets the optional rule service for governance rule evaluation on task operations.
+func WithRuleService(rs RuleService) TaskServiceOption {
+	return func(s *taskService) {
+		s.ruleSvc = rs
 	}
 }
 
@@ -245,6 +253,24 @@ func (s *taskService) MoveTask(ctx context.Context, taskID uuid.UUID, input Move
 		}
 		if status.ProjectID != task.ProjectID {
 			return apierror.BadRequest("status does not belong to the same project as the task")
+		}
+
+		// Evaluate governance rules before applying the move.
+		if s.ruleSvc != nil {
+			if violations, evalErr := s.evaluateRulesForMove(ctx, task, status, input); evalErr != nil {
+				log.Printf("[rules] WARNING: rule evaluation failed for task %s: %v", taskID, evalErr)
+			} else if len(violations) > 0 {
+				// Find blocking violations.
+				var blockingViolations []domain.RuleViolation
+				for _, v := range violations {
+					if v.Enforcement == domain.RuleEnforcementBlock {
+						blockingViolations = append(blockingViolations, v)
+					}
+				}
+				if len(blockingViolations) > 0 {
+					return &RuleViolationError{Violations: blockingViolations}
+				}
+			}
 		}
 
 		task.StatusID = *input.StatusID
@@ -468,4 +494,52 @@ func (s *taskService) logActivity(ctx context.Context, projectID, entityID uuid.
 	if err := s.activityRepo.Create(ctx, entry); err != nil {
 		log.Printf("[activity] WARNING: failed to log %s for task %s: %v", action, entityID, err)
 	}
+}
+
+// RuleViolationError is returned when a governance rule blocks an action.
+type RuleViolationError struct {
+	Violations []domain.RuleViolation
+}
+
+func (e *RuleViolationError) Error() string {
+	return fmt.Sprintf("action blocked by %d governance rule(s)", len(e.Violations))
+}
+
+// evaluateRulesForMove evaluates governance rules before a MoveTask operation.
+// Returns violations; the caller decides whether to block.
+func (s *taskService) evaluateRulesForMove(ctx context.Context, task *domain.Task, targetStatus *domain.TaskStatus, _ MoveTaskInput) ([]domain.RuleViolation, error) {
+	if s.ruleSvc == nil {
+		return nil, nil
+	}
+
+	actorID, actorType := actorctx.FromContext(ctx)
+
+	// Resolve workspace_id.
+	var wsID uuid.UUID
+	if s.projectRepo != nil {
+		if proj, err := s.projectRepo.GetByID(ctx, task.ProjectID); err == nil && proj != nil {
+			wsID = proj.WorkspaceID
+		}
+	}
+	if wsID == uuid.Nil {
+		return nil, nil
+	}
+
+	taskID := task.ID
+	projID := task.ProjectID
+	statusID := targetStatus.ID
+
+	input := EvaluateInput{
+		Action:         "move_task",
+		TaskID:         &taskID,
+		Task:           task,
+		TargetStatusID: &statusID,
+		TargetStatus:   targetStatus,
+		ActorID:        actorID,
+		ActorType:      actorType,
+		WorkspaceID:    wsID,
+		ProjectID:      &projID,
+	}
+
+	return s.ruleSvc.Evaluate(ctx, input)
 }

@@ -67,6 +67,7 @@ func main() {
 	integrationRepo := postgres.NewIntegrationRepo(db)
 	projectUpdateRepo := postgres.NewProjectUpdateRepo(db)
 	initiativeRepo := postgres.NewInitiativeRepo(db)
+	ruleRepo := postgres.NewRuleRepo(db)
 
 	// 5. Create auth service.
 	authService := auth.NewService(
@@ -83,9 +84,16 @@ func main() {
 	customFieldDefRepo := postgres.NewCustomFieldDefinitionRepo(db)
 	customFieldService := service.NewCustomFieldService(customFieldDefRepo, activityLogRepo)
 
+	// Rule service is created before taskService so it can be injected as an option.
+	ruleService := service.NewRuleService(ruleRepo, activityLogRepo,
+		service.WithRuleCommentRepo(commentRepo),
+		service.WithRuleTaskRepo(taskRepo),
+	)
+
 	taskService := service.NewTaskService(taskRepo, taskStatusRepo, taskDependencyRepo, activityLogRepo,
 		service.WithCustomFieldService(customFieldService),
 		service.WithProjectRepo(projectRepo),
+		service.WithRuleService(ruleService),
 	)
 
 	// Wire auto-transition service. It calls taskService.MoveTask, so taskService must already
@@ -177,6 +185,7 @@ func main() {
 	projectUpdateHandler := handler.NewProjectUpdateHandler(projectUpdateService)
 	initiativeHandler := handler.NewInitiativeHandler(initiativeService)
 	triageHandler := handler.NewTriageHandler(triageService)
+	ruleHandler := handler.NewRuleHandler(ruleService)
 
 	// 8. Create Echo instance with global middleware.
 	e := echo.New()
@@ -392,6 +401,18 @@ func main() {
 
 	// Triage inbox route.
 	api.GET("/workspaces/:ws_id/triage", triageHandler.List)
+
+	// Governance rule routes.
+	api.POST("/workspaces/:ws_id/rules", ruleHandler.CreateWorkspaceRule, rbac(mw.PermManageRules))
+	api.GET("/workspaces/:ws_id/rules", ruleHandler.ListWorkspaceRules)
+	api.GET("/workspaces/:ws_id/rules/effective", ruleHandler.GetWorkspaceEffectiveRules)
+	api.POST("/projects/:proj_id/rules", ruleHandler.CreateProjectRule, rbac(mw.PermManageRules))
+	api.GET("/projects/:proj_id/rules", ruleHandler.ListProjectRules)
+	api.GET("/projects/:proj_id/rules/effective", ruleHandler.GetProjectEffectiveRules)
+	api.GET("/rules/:rule_id", ruleHandler.GetRule)
+	api.PATCH("/rules/:rule_id", ruleHandler.UpdateRule, rbac(mw.PermManageRules))
+	api.DELETE("/rules/:rule_id", ruleHandler.DeleteRule, rbac(mw.PermManageRules))
+	api.POST("/rules/evaluate", ruleHandler.EvaluateRules)
 
 	// Spark catalog routes (optional; only registered when MESH_SPARK_ENABLED=true).
 	if cfg.Spark.Enabled {

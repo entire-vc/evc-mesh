@@ -552,8 +552,24 @@ func (h *TaskHandler) BulkUpdate(c echo.Context) error {
 	})
 }
 
+// ruleViolationAPIResponse is the JSON shape for 422 rule violation responses.
+type ruleViolationAPIResponse struct {
+	Error      string                 `json:"error"`
+	Message    string                 `json:"message"`
+	Violations []domain.RuleViolation `json:"violations"`
+}
+
 // handleError inspects the error type and returns appropriate JSON response.
 func handleError(c echo.Context, err error) error {
+	var ruleErr *service.RuleViolationError
+	if errors.As(err, &ruleErr) {
+		return c.JSON(http.StatusUnprocessableEntity, ruleViolationAPIResponse{
+			Error:      "rule_violation",
+			Message:    "Action blocked by governance rules",
+			Violations: ruleErr.Violations,
+		})
+	}
+
 	if apiErr, ok := err.(*apierror.Error); ok {
 		return c.JSON(apiErr.StatusCode(), apiErr)
 	}

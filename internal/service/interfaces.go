@@ -322,6 +322,21 @@ type IntegrationService interface {
 	ListByWorkspace(ctx context.Context, workspaceID uuid.UUID) ([]domain.IntegrationConfig, error)
 }
 
+// RuleService provides business logic for governance rule management.
+type RuleService interface {
+	Create(ctx context.Context, input CreateRuleInput) (*domain.Rule, error)
+	GetByID(ctx context.Context, id uuid.UUID) (*domain.Rule, error)
+	Update(ctx context.Context, id uuid.UUID, input UpdateRuleInput) (*domain.Rule, error)
+	Delete(ctx context.Context, id uuid.UUID) error
+	ListByWorkspace(ctx context.Context, workspaceID uuid.UUID, includeDisabled bool) ([]domain.Rule, error)
+	ListByProject(ctx context.Context, projectID uuid.UUID, includeDisabled bool) ([]domain.Rule, error)
+	ListByAgent(ctx context.Context, agentID uuid.UUID, includeDisabled bool) ([]domain.Rule, error)
+	// GetEffective resolves inheritance and returns the effective rules for the given context.
+	GetEffective(ctx context.Context, ruleCtx RuleContext) ([]domain.Rule, error)
+	// Evaluate runs effective rules through evaluators and returns violations.
+	Evaluate(ctx context.Context, input EvaluateInput) ([]domain.RuleViolation, error)
+}
+
 // AnalyticsMetrics holds aggregated workspace/project metrics.
 type AnalyticsMetrics struct {
 	TaskMetrics  TaskMetrics  `json:"task_metrics"`

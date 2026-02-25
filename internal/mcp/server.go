@@ -341,6 +341,17 @@ func (s *Server) registerTools() {
 		mcpsdk.WithString("agent_id", mcpsdk.Description("Parent agent ID. Defaults to the calling agent.")),
 		mcpsdk.WithBoolean("recursive", mcpsdk.Description("Return all descendants (up to 10 levels deep)."), mcpsdk.DefaultBool(false)),
 	), s.handleListSubAgents)
+
+	// --- Governance Rules ---
+	s.mcpServer.AddTool(mcpsdk.NewTool("get_my_rules",
+		mcpsdk.WithDescription("Get all governance rules that apply to you. Call at the start of work to understand constraints and behavioral requirements."),
+		mcpsdk.WithString("project_id", mcpsdk.Description("Optional project ID to get project-specific effective rules.")),
+	), s.handleGetMyRules)
+
+	s.mcpServer.AddTool(mcpsdk.NewTool("get_project_rules",
+		mcpsdk.WithDescription("Get all rules configured for a project (all scopes: workspace + project)."),
+		mcpsdk.WithString("project_id", mcpsdk.Required(), mcpsdk.Description("Project ID.")),
+	), s.handleGetProjectRules)
 }
 
 // --- Helper functions ---
