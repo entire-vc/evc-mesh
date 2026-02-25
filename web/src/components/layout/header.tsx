@@ -1,5 +1,5 @@
 import { useCallback, useState } from "react";
-import { Link, useParams } from "react-router";
+import { Link, useLocation, useParams } from "react-router";
 import {
   ChevronRight,
   LogOut,
@@ -21,9 +21,20 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { ViewTabBar } from "@/components/view-tab-bar";
 
 interface HeaderProps {
   onToggleSidebar: () => void;
+}
+
+function useCurrentView(): "board" | "list" | "timeline" | null {
+  const location = useLocation();
+  const path = location.pathname;
+  if (path.endsWith("/list")) return "list";
+  if (path.endsWith("/timeline")) return "timeline";
+  // Check if we're on a project page (board is the default project view)
+  if (/\/w\/[^/]+\/p\/[^/]+\/?$/.test(path)) return "board";
+  return null;
 }
 
 export function Header({ onToggleSidebar }: HeaderProps) {
@@ -31,6 +42,7 @@ export function Header({ onToggleSidebar }: HeaderProps) {
   const { user, logout } = useAuthStore();
   const { currentWorkspace } = useWorkspaceStore();
   const { currentProject } = useProjectStore();
+  const currentView = useCurrentView();
   const [isDark, setIsDark] = useState(
     document.documentElement.classList.contains("dark"),
   );
@@ -77,6 +89,16 @@ export function Header({ onToggleSidebar }: HeaderProps) {
           </>
         )}
       </nav>
+
+      {/* View tabs — shown when inside a project */}
+      {currentView && wsSlug && projectSlug && (
+        <ViewTabBar
+          currentView={currentView}
+          wsSlug={wsSlug}
+          projectSlug={projectSlug}
+          className="ml-4"
+        />
+      )}
 
       <div className="flex-1" />
 

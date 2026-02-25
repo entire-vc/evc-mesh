@@ -15,7 +15,6 @@ import { priorityConfig } from "@/lib/utils";
 import { useProjectStore } from "@/stores/project";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { ViewTabBar } from "@/components/view-tab-bar";
 import type { Task, TaskDependency, StatusCategory } from "@/types";
 
 // ---------------------------------------------------------------------------
@@ -442,13 +441,6 @@ export function TimelinePage() {
           {currentProject.name}
         </h1>
       </div>
-
-      {/* View tab bar */}
-      <ViewTabBar
-        currentView="timeline"
-        wsSlug={wsSlug ?? ""}
-        projectSlug={projectSlug ?? ""}
-      />
 
       {/* Error */}
       {error && (

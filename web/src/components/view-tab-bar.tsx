@@ -1,7 +1,12 @@
 import { useNavigate } from "react-router";
-import { Columns3, GitBranch, List, Plus } from "lucide-react";
+import { Columns3, GitBranch, List, MoreVertical } from "lucide-react";
 import { cn } from "@/lib/cn";
-import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 interface ViewTabBarProps {
   currentView: "board" | "list" | "timeline";
@@ -40,12 +45,7 @@ export function ViewTabBar({
   const navigate = useNavigate();
 
   return (
-    <div
-      className={cn(
-        "flex items-center gap-0 border-b border-border",
-        className,
-      )}
-    >
+    <div className={cn("flex items-center gap-0", className)}>
       {TABS.map(({ id, label, Icon, path }) => {
         const isActive = currentView === id;
         return (
@@ -70,18 +70,30 @@ export function ViewTabBar({
         );
       })}
 
-      {/* Divider + Add View placeholder */}
-      <div className="ml-2 flex items-center border-l border-border pl-2">
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-7 gap-1 px-2 text-xs text-muted-foreground hover:text-foreground"
-          title="Add view (coming soon)"
-          disabled
-        >
-          <Plus className="h-3 w-3" />
-          View
-        </Button>
+      {/* View options menu */}
+      <div className="ml-1 flex items-center border-l border-border pl-1">
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button
+              className="flex h-7 w-7 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
+              title="View options"
+            >
+              <MoreVertical className="h-3.5 w-3.5" />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start">
+            {TABS.map(({ id, label, Icon, path }) => (
+              <DropdownMenuItem
+                key={id}
+                onClick={() => navigate(path(wsSlug, projectSlug))}
+                className={cn(currentView === id && "font-medium")}
+              >
+                <Icon className="mr-2 h-3.5 w-3.5" />
+                {label}
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
     </div>
   );

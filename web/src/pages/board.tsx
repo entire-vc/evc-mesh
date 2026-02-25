@@ -36,7 +36,6 @@ import { CreateTaskDialog } from "@/components/create-task-dialog";
 import { TaskSlideOver } from "@/components/task-slide-over";
 import { toast } from "@/components/ui/toast";
 import { SavedViewsMenu } from "@/components/saved-views-menu";
-import { ViewTabBar } from "@/components/view-tab-bar";
 import { BoardToolbar, type GroupBy, type SortBy } from "@/components/board-toolbar";
 import { AssigneeAvatar } from "@/components/assignee-avatar";
 import type { Task, TaskStatus, WSMessage, SavedView, Priority, StatusCategory } from "@/types";
@@ -631,13 +630,6 @@ export function BoardPage() {
 
   return (
     <div className="flex flex-col gap-3">
-      {/* View tab bar */}
-      <ViewTabBar
-        currentView="board"
-        wsSlug={wsSlug ?? ""}
-        projectSlug={projectSlug ?? ""}
-      />
-
       {/* Toolbar */}
       <div className="flex flex-wrap items-center gap-2">
         <BoardToolbar

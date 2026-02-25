@@ -40,7 +40,6 @@ import { AssigneeAvatar } from "@/components/assignee-avatar";
 import { PriorityFlag } from "@/components/priority-flag";
 import { CustomFieldRenderer } from "@/components/custom-field-renderer";
 import { SavedViewsMenu } from "@/components/saved-views-menu";
-import { ViewTabBar } from "@/components/view-tab-bar";
 import { TaskSlideOver } from "@/components/task-slide-over";
 import { ColumnPicker, type ColumnDef } from "@/components/column-picker";
 import { toast } from "@/components/ui/toast";
@@ -104,7 +103,7 @@ interface StatusGroup {
 // ---------------------------------------------------------------------------
 
 export function ListViewPage() {
-  const { wsSlug, projectSlug } = useParams();
+  const { projectSlug } = useParams();
   const [searchParams, setSearchParams] = useSearchParams();
   const { currentProject, statuses, fetchStatuses } = useProjectStore();
   const { tasks, isLoading, total, hasMore, fetchTasks, updateTask, deleteTask, createTask } =
@@ -649,12 +648,6 @@ export function ListViewPage() {
         />
       </div>
 
-      {/* View tab bar */}
-      <ViewTabBar
-        currentView="list"
-        wsSlug={wsSlug ?? ""}
-        projectSlug={projectSlug ?? ""}
-      />
 
       {/* Toolbar: column picker */}
       <div className="flex items-center justify-end">
