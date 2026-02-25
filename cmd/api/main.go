@@ -196,7 +196,7 @@ func main() {
 
 	// --- Protected routes (JWT or Agent Key) ---
 	api := v1.Group("")
-	api.Use(mw.JWTAuth(authService))
+	api.Use(mw.DualAuth(authService, agentService))
 	api.Use(mw.WorkspaceRLS(db, projectRepo))
 
 	// Auth - protected.

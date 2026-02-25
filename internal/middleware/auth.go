@@ -87,6 +87,41 @@ func AgentKeyAuth(agentService service.AgentService) echo.MiddlewareFunc {
 	}
 }
 
+// DualAuth requires either a valid JWT Bearer token or a valid agent API key.
+// Returns 401 if neither is present or valid.
+func DualAuth(authService *auth.Service, agentService service.AgentService) echo.MiddlewareFunc {
+	return func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			// Try JWT Bearer token first.
+			if tokenString, err := extractBearerToken(c); err == nil {
+				if claims, err := authService.ValidateAccessToken(tokenString); err == nil {
+					if userID, err := uuid.Parse(claims.Subject); err == nil {
+						c.Set(ContextKeyAuthType, AuthTypeUser)
+						c.Set(ContextKeyUserID, userID)
+						c.Set(ContextKeyEmail, claims.Email)
+						return next(c)
+					}
+				}
+			}
+
+			// Try Agent Key.
+			if apiKey := c.Request().Header.Get("X-Agent-Key"); apiKey != "" {
+				if slug, err := parseWorkspaceSlugFromKey(apiKey); err == nil {
+					if agent, err := agentService.Authenticate(c.Request().Context(), slug, apiKey); err == nil {
+						c.Set(ContextKeyAuthType, AuthTypeAgent)
+						c.Set(ContextKeyAgentID, agent.ID)
+						c.Set(ContextKeyWorkspaceID, agent.WorkspaceID)
+						return next(c)
+					}
+				}
+				return unauthorizedJSON(c, "Invalid agent API key")
+			}
+
+			return unauthorizedJSON(c, "Authentication required")
+		}
+	}
+}
+
 // OptionalAuth tries JWT first, then agent key. If neither is present,
 // the request passes through without authentication context.
 func OptionalAuth(authService *auth.Service, agentService service.AgentService) echo.MiddlewareFunc {

@@ -40,6 +40,7 @@ type createTaskRequest struct {
 	Description  string              `json:"description"`
 	Priority     domain.Priority     `json:"priority"`
 	StatusID     string              `json:"status_id"`
+	ParentTaskID *uuid.UUID          `json:"parent_task_id"`
 	AssigneeID   *uuid.UUID          `json:"assignee_id"`
 	AssigneeType domain.AssigneeType `json:"assignee_type"`
 	Labels       []string            `json:"labels"`
@@ -110,7 +111,15 @@ func (h *TaskHandler) Create(c echo.Context) error {
 	}
 
 	// Resolve creator from auth context.
-	createdBy, _ := mw.GetUserID(c)
+	var createdBy uuid.UUID
+	var createdByType domain.ActorType
+	if mw.IsAgent(c) {
+		createdBy, _ = mw.GetAgentID(c)
+		createdByType = domain.ActorTypeAgent
+	} else {
+		createdBy, _ = mw.GetUserID(c)
+		createdByType = domain.ActorTypeUser
+	}
 
 	task := &domain.Task{
 		ID:            uuid.New(),
@@ -119,12 +128,13 @@ func (h *TaskHandler) Create(c echo.Context) error {
 		Title:         req.Title,
 		Description:   req.Description,
 		Priority:      priority,
+		ParentTaskID:  req.ParentTaskID,
 		AssigneeID:    req.AssigneeID,
 		AssigneeType:  assigneeType,
 		Labels:        pq.StringArray(req.Labels),
 		CustomFields:  req.CustomFields,
 		CreatedBy:     createdBy,
-		CreatedByType: domain.ActorTypeUser,
+		CreatedByType: createdByType,
 	}
 
 	if err := h.taskService.Create(c.Request().Context(), task); err != nil {

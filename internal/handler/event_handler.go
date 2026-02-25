@@ -8,6 +8,7 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	mw "github.com/entire-vc/evc-mesh/internal/middleware"
 	"github.com/entire-vc/evc-mesh/internal/repository"
 	"github.com/entire-vc/evc-mesh/internal/service"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
@@ -130,15 +131,20 @@ func (h *EventHandler) Create(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid payload"))
 	}
 
+	// Resolve workspace_id from auth context (agent key sets it)
+	// or fall back to looking up the project.
+	wsID, _ := mw.GetWorkspaceID(c)
+
 	input := service.PublishEventInput{
-		ProjectID:  projID,
-		TaskID:     req.TaskID,
-		AgentID:    agentID,
-		EventType:  req.EventType,
-		Subject:    req.Subject,
-		Payload:    payloadMap,
-		Tags:       req.Tags,
-		TTLSeconds: req.TTLSeconds,
+		WorkspaceID: wsID,
+		ProjectID:   projID,
+		TaskID:      req.TaskID,
+		AgentID:     agentID,
+		EventType:   req.EventType,
+		Subject:     req.Subject,
+		Payload:     payloadMap,
+		Tags:        req.Tags,
+		TTLSeconds:  req.TTLSeconds,
 	}
 
 	event, err := h.eventService.Publish(c.Request().Context(), input)
