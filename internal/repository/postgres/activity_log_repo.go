@@ -13,6 +13,18 @@ import (
 	"github.com/entire-vc/evc-mesh/pkg/pagination"
 )
 
+// activityEnrichedSelect provides columns for activity log queries including
+// actor_name resolved via correlated subquery (same pattern as task assignee_name).
+const activityEnrichedSelect = `SELECT a.id, a.workspace_id, a.entity_type, a.entity_id,
+	a.action, a.actor_id, a.actor_type, a.changes, a.created_at,
+	CASE
+		WHEN a.actor_type = 'agent' THEN
+			(SELECT name FROM agents WHERE id = a.actor_id AND deleted_at IS NULL)
+		WHEN a.actor_type = 'user' THEN
+			(SELECT display_name FROM users WHERE id = a.actor_id)
+		ELSE NULL
+	END AS actor_name`
+
 // ActivityLogRepo implements repository.ActivityLogRepository with PostgreSQL.
 type ActivityLogRepo struct {
 	db *sqlx.DB
@@ -43,41 +55,41 @@ func (r *ActivityLogRepo) List(ctx context.Context, workspaceID uuid.UUID, filte
 	pg.Normalize()
 
 	args := []interface{}{workspaceID} // $1
-	conditions := []string{"workspace_id = $1"}
+	conditions := []string{"a.workspace_id = $1"}
 	argIdx := 2
 
 	if filter.EntityType != nil {
-		conditions = append(conditions, fmt.Sprintf("entity_type = $%d", argIdx))
+		conditions = append(conditions, fmt.Sprintf("a.entity_type = $%d", argIdx))
 		args = append(args, *filter.EntityType)
 		argIdx++
 	}
 	if filter.EntityID != nil {
-		conditions = append(conditions, fmt.Sprintf("entity_id = $%d", argIdx))
+		conditions = append(conditions, fmt.Sprintf("a.entity_id = $%d", argIdx))
 		args = append(args, *filter.EntityID)
 		argIdx++
 	}
 	if filter.ActorID != nil {
-		conditions = append(conditions, fmt.Sprintf("actor_id = $%d", argIdx))
+		conditions = append(conditions, fmt.Sprintf("a.actor_id = $%d", argIdx))
 		args = append(args, *filter.ActorID)
 		argIdx++
 	}
 	if filter.ActorType != nil {
-		conditions = append(conditions, fmt.Sprintf("actor_type = $%d", argIdx))
+		conditions = append(conditions, fmt.Sprintf("a.actor_type = $%d", argIdx))
 		args = append(args, *filter.ActorType)
 		argIdx++
 	}
 	if filter.Action != nil {
-		conditions = append(conditions, fmt.Sprintf("action = $%d", argIdx))
+		conditions = append(conditions, fmt.Sprintf("a.action = $%d", argIdx))
 		args = append(args, *filter.Action)
 		argIdx++
 	}
 	if filter.From != nil {
-		conditions = append(conditions, fmt.Sprintf("created_at >= $%d", argIdx))
+		conditions = append(conditions, fmt.Sprintf("a.created_at >= $%d", argIdx))
 		args = append(args, *filter.From)
 		argIdx++
 	}
 	if filter.To != nil {
-		conditions = append(conditions, fmt.Sprintf("created_at <= $%d", argIdx))
+		conditions = append(conditions, fmt.Sprintf("a.created_at <= $%d", argIdx))
 		args = append(args, *filter.To)
 		argIdx++
 	}
@@ -86,14 +98,14 @@ func (r *ActivityLogRepo) List(ctx context.Context, workspaceID uuid.UUID, filte
 	where := "WHERE " + joinAnd(conditions)
 
 	// Count
-	countQ := fmt.Sprintf(`SELECT COUNT(*) FROM activity_log %s`, where)
+	countQ := fmt.Sprintf(`SELECT COUNT(*) FROM activity_log a %s`, where)
 	var totalCount int
 	if err := r.db.GetContext(ctx, &totalCount, countQ, args...); err != nil {
 		return nil, err
 	}
 
 	// Data
-	dataQ := fmt.Sprintf(`SELECT * FROM activity_log %s ORDER BY created_at DESC %s`, where, paginationClause(pg))
+	dataQ := fmt.Sprintf(activityEnrichedSelect+` FROM activity_log a %s ORDER BY a.created_at DESC %s`, where, paginationClause(pg))
 	var entries []domain.ActivityLog
 	if err := r.db.SelectContext(ctx, &entries, dataQ, args...); err != nil {
 		return nil, err
@@ -106,41 +118,41 @@ func (r *ActivityLogRepo) List(ctx context.Context, workspaceID uuid.UUID, filte
 // It re-uses the same dynamic WHERE-clause builder as List.
 func (r *ActivityLogRepo) Export(ctx context.Context, workspaceID uuid.UUID, filter repository.ActivityLogFilter, limit int) ([]domain.ActivityLog, error) {
 	args := []interface{}{workspaceID} // $1
-	conditions := []string{"workspace_id = $1"}
+	conditions := []string{"a.workspace_id = $1"}
 	argIdx := 2
 
 	if filter.EntityType != nil {
-		conditions = append(conditions, fmt.Sprintf("entity_type = $%d", argIdx))
+		conditions = append(conditions, fmt.Sprintf("a.entity_type = $%d", argIdx))
 		args = append(args, *filter.EntityType)
 		argIdx++
 	}
 	if filter.EntityID != nil {
-		conditions = append(conditions, fmt.Sprintf("entity_id = $%d", argIdx))
+		conditions = append(conditions, fmt.Sprintf("a.entity_id = $%d", argIdx))
 		args = append(args, *filter.EntityID)
 		argIdx++
 	}
 	if filter.ActorID != nil {
-		conditions = append(conditions, fmt.Sprintf("actor_id = $%d", argIdx))
+		conditions = append(conditions, fmt.Sprintf("a.actor_id = $%d", argIdx))
 		args = append(args, *filter.ActorID)
 		argIdx++
 	}
 	if filter.ActorType != nil {
-		conditions = append(conditions, fmt.Sprintf("actor_type = $%d", argIdx))
+		conditions = append(conditions, fmt.Sprintf("a.actor_type = $%d", argIdx))
 		args = append(args, *filter.ActorType)
 		argIdx++
 	}
 	if filter.Action != nil {
-		conditions = append(conditions, fmt.Sprintf("action = $%d", argIdx))
+		conditions = append(conditions, fmt.Sprintf("a.action = $%d", argIdx))
 		args = append(args, *filter.Action)
 		argIdx++
 	}
 	if filter.From != nil {
-		conditions = append(conditions, fmt.Sprintf("created_at >= $%d", argIdx))
+		conditions = append(conditions, fmt.Sprintf("a.created_at >= $%d", argIdx))
 		args = append(args, *filter.From)
 		argIdx++
 	}
 	if filter.To != nil {
-		conditions = append(conditions, fmt.Sprintf("created_at <= $%d", argIdx))
+		conditions = append(conditions, fmt.Sprintf("a.created_at <= $%d", argIdx))
 		args = append(args, *filter.To)
 		argIdx++
 	}
@@ -148,7 +160,7 @@ func (r *ActivityLogRepo) Export(ctx context.Context, workspaceID uuid.UUID, fil
 
 	where := "WHERE " + joinAnd(conditions)
 	dataQ := fmt.Sprintf(
-		`SELECT * FROM activity_log %s ORDER BY created_at DESC LIMIT $%d`,
+		activityEnrichedSelect+` FROM activity_log a %s ORDER BY a.created_at DESC LIMIT $%d`,
 		where, len(args)+1,
 	)
 	args = append(args, limit)
@@ -164,14 +176,14 @@ func (r *ActivityLogRepo) Export(ctx context.Context, workspaceID uuid.UUID, fil
 func (r *ActivityLogRepo) ListByTask(ctx context.Context, taskID uuid.UUID, pg pagination.Params) (*pagination.Page[domain.ActivityLog], error) {
 	pg.Normalize()
 
-	const countQ = `SELECT COUNT(*) FROM activity_log WHERE entity_type = 'task' AND entity_id = $1`
+	const countQ = `SELECT COUNT(*) FROM activity_log a WHERE a.entity_type = 'task' AND a.entity_id = $1`
 	var totalCount int
 	if err := r.db.GetContext(ctx, &totalCount, countQ, taskID); err != nil {
 		return nil, err
 	}
 
 	dataQ := fmt.Sprintf(
-		`SELECT * FROM activity_log WHERE entity_type = 'task' AND entity_id = $1 ORDER BY created_at DESC %s`,
+		activityEnrichedSelect+` FROM activity_log a WHERE a.entity_type = 'task' AND a.entity_id = $1 ORDER BY a.created_at DESC %s`,
 		paginationClause(pg),
 	)
 	var entries []domain.ActivityLog

@@ -168,6 +168,7 @@ export interface Comment {
   parent_comment_id: string | null;
   author_id: string;
   author_type: ActorType;
+  author_name?: string;
   body: string;
   metadata: Record<string, unknown>;
   is_internal: boolean;

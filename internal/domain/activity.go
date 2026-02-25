@@ -19,4 +19,7 @@ type ActivityLog struct {
 	ActorType   ActorType       `json:"actor_type" db:"actor_type"`
 	Changes     json.RawMessage `json:"changes" db:"changes"`
 	CreatedAt   time.Time       `json:"created_at" db:"created_at"`
+
+	// Computed (not a DB column — populated via subquery in SELECT).
+	ActorName *string `json:"actor_name,omitempty" db:"actor_name"`
 }

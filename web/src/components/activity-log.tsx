@@ -19,6 +19,7 @@ interface ActivityLogEntry {
   action: string;
   actor_id: string;
   actor_type: "user" | "agent" | "system";
+  actor_name?: string;
   changes: Record<string, { old: unknown; new: unknown }>;
   created_at: string;
 }
@@ -166,8 +167,8 @@ export function ActivityLog({ taskId }: ActivityLogProps) {
             {/* Content */}
             <div className="min-w-0 flex-1">
               <p className="text-sm">
-                <span className="font-medium capitalize">
-                  {entry.actor_type}
+                <span className="font-medium">
+                  {entry.actor_name || entry.actor_type}
                 </span>
                 {" "}
                 {formatActionDescription(entry)}

@@ -16,6 +16,18 @@ import (
 	"github.com/entire-vc/evc-mesh/pkg/pagination"
 )
 
+// commentEnrichedSelect provides columns for comment queries including
+// author_name resolved via correlated subquery (same pattern as task assignee_name).
+const commentEnrichedSelect = `SELECT c.id, c.task_id, c.parent_comment_id, c.author_id, c.author_type,
+	c.body, c.metadata, c.is_internal, c.created_at, c.updated_at,
+	CASE
+		WHEN c.author_type = 'agent' THEN
+			(SELECT name FROM agents WHERE id = c.author_id AND deleted_at IS NULL)
+		WHEN c.author_type = 'user' THEN
+			(SELECT display_name FROM users WHERE id = c.author_id)
+		ELSE NULL
+	END AS author_name`
+
 // CommentRepo implements repository.CommentRepository with PostgreSQL.
 type CommentRepo struct {
 	db *sqlx.DB
@@ -45,7 +57,7 @@ func (r *CommentRepo) Create(ctx context.Context, comment *domain.Comment) error
 }
 
 func (r *CommentRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.Comment, error) {
-	const q = `SELECT * FROM comments WHERE id = $1`
+	const q = commentEnrichedSelect + ` FROM comments c WHERE c.id = $1`
 	var comment domain.Comment
 	if err := r.db.GetContext(ctx, &comment, q, id); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -96,11 +108,11 @@ func (r *CommentRepo) ListByTask(ctx context.Context, taskID uuid.UUID, filter r
 	pg.Normalize()
 
 	args := []interface{}{taskID} // $1
-	conditions := []string{"task_id = $1", "parent_comment_id IS NULL"}
+	conditions := []string{"c.task_id = $1", "c.parent_comment_id IS NULL"}
 	argIdx := 2
 
 	if !filter.IncludeInternal {
-		conditions = append(conditions, fmt.Sprintf("is_internal = $%d", argIdx))
+		conditions = append(conditions, fmt.Sprintf("c.is_internal = $%d", argIdx))
 		args = append(args, false)
 		argIdx++
 	}
@@ -108,14 +120,14 @@ func (r *CommentRepo) ListByTask(ctx context.Context, taskID uuid.UUID, filter r
 	where := "WHERE " + joinAnd(conditions)
 
 	// Count
-	countQ := fmt.Sprintf(`SELECT COUNT(*) FROM comments %s`, where)
+	countQ := fmt.Sprintf(`SELECT COUNT(*) FROM comments c %s`, where)
 	var totalCount int
 	if err := r.db.GetContext(ctx, &totalCount, countQ, args...); err != nil {
 		return nil, err
 	}
 
 	// Data -- top-level comments ordered by creation time
-	dataQ := fmt.Sprintf(`SELECT * FROM comments %s ORDER BY created_at ASC %s`, where, paginationClause(pg))
+	dataQ := fmt.Sprintf(commentEnrichedSelect+` FROM comments c %s ORDER BY c.created_at ASC %s`, where, paginationClause(pg))
 	var comments []domain.Comment
 	if err := r.db.SelectContext(ctx, &comments, dataQ, args...); err != nil {
 		return nil, err
@@ -125,7 +137,7 @@ func (r *CommentRepo) ListByTask(ctx context.Context, taskID uuid.UUID, filter r
 }
 
 func (r *CommentRepo) ListReplies(ctx context.Context, parentCommentID uuid.UUID) ([]domain.Comment, error) {
-	const q = `SELECT * FROM comments WHERE parent_comment_id = $1 ORDER BY created_at ASC`
+	q := commentEnrichedSelect + ` FROM comments c WHERE c.parent_comment_id = $1 ORDER BY c.created_at ASC`
 	var comments []domain.Comment
 	if err := r.db.SelectContext(ctx, &comments, q, parentCommentID); err != nil {
 		return nil, err

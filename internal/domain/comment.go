@@ -20,4 +20,7 @@ type Comment struct {
 	IsInternal      bool            `json:"is_internal" db:"is_internal"`
 	CreatedAt       time.Time       `json:"created_at" db:"created_at"`
 	UpdatedAt       time.Time       `json:"updated_at" db:"updated_at"`
+
+	// Computed (not a DB column — populated via subquery in SELECT).
+	AuthorName *string `json:"author_name,omitempty" db:"author_name"`
 }
