@@ -61,7 +61,7 @@ function formatFieldName(field: string): string {
 }
 
 function formatActionDescription(entry: ActivityLogEntry): string {
-  const changeKeys = Object.keys(entry.changes);
+  const changeKeys = Object.keys(entry.changes ?? {});
 
   if (changeKeys.length === 0) {
     // No detailed changes -- use action as-is
@@ -149,7 +149,7 @@ export function ActivityLog({ taskId }: ActivityLogProps) {
     <div className="space-y-0">
       {entries.map((entry, index) => {
         const isLast = index === entries.length - 1;
-        const changeKeys = Object.keys(entry.changes);
+        const changeKeys = Object.keys(entry.changes ?? {});
 
         return (
           <div key={entry.id} className="relative flex gap-3 pb-4">
@@ -177,7 +177,7 @@ export function ActivityLog({ taskId }: ActivityLogProps) {
               {changeKeys.length > 0 && (
                 <div className="mt-1.5 space-y-1">
                   {changeKeys.map((field) => {
-                    const change = entry.changes[field];
+                    const change = (entry.changes ?? {})[field];
                     if (!change) return null;
                     return (
                       <div

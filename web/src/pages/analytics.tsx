@@ -253,13 +253,13 @@ export function AnalyticsPage() {
   }, [fetchMetrics]);
 
   const statusData = metrics
-    ? Object.entries(metrics.task_metrics.by_status_category).map(
+    ? Object.entries(metrics.task_metrics.by_status_category ?? {}).map(
         ([label, value]) => ({ label, value, color: STATUS_COLORS[label] }),
       )
     : [];
 
   const priorityData = metrics
-    ? Object.entries(metrics.task_metrics.by_priority).map(([label, value]) => ({
+    ? Object.entries(metrics.task_metrics.by_priority ?? {}).map(([label, value]) => ({
         label,
         value,
         color: PRIORITY_COLORS[label],
@@ -388,13 +388,13 @@ export function AnalyticsPage() {
           <CardContent>
             {loading ? (
               <Skeleton className="h-24 w-full" />
-            ) : metrics && metrics.agent_metrics.tasks_by_agent.length > 0 ? (
+            ) : metrics && (metrics.agent_metrics.tasks_by_agent ?? []).length > 0 ? (
               <div className="space-y-1">
                 <div className="grid grid-cols-3 text-xs font-medium text-muted-foreground border-b pb-2 mb-2">
                   <span className="col-span-2">Agent</span>
                   <span className="text-right">Completed</span>
                 </div>
-                {metrics.agent_metrics.tasks_by_agent.map((row, idx) => (
+                {(metrics.agent_metrics.tasks_by_agent ?? []).map((row, idx) => (
                   <div
                     key={row.agent_id}
                     className="grid grid-cols-3 items-center py-1.5 text-sm"
@@ -444,9 +444,9 @@ export function AnalyticsPage() {
               {loading ? (
                 <Skeleton className="h-24 w-full" />
               ) : metrics &&
-                Object.keys(metrics.event_metrics.by_type).length > 0 ? (
+                Object.keys(metrics.event_metrics.by_type ?? {}).length > 0 ? (
                 <HorizontalBarChart
-                  data={Object.entries(metrics.event_metrics.by_type).map(
+                  data={Object.entries(metrics.event_metrics.by_type ?? {}).map(
                     ([label, value]) => ({ label, value }),
                   )}
                 />

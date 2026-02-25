@@ -178,7 +178,7 @@ export function TaskDetailPage() {
     async (slug: string, newValue: unknown) => {
       if (!currentTask) return;
       await updateTask(currentTask.id, {
-        custom_fields: { ...currentTask.custom_fields, [slug]: newValue },
+        custom_fields: { ...(currentTask.custom_fields ?? {}), [slug]: newValue },
       });
     },
     [currentTask, updateTask],

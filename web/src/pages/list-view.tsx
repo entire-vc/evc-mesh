@@ -652,7 +652,7 @@ export function ListViewPage() {
                           onSave={(value) =>
                             saveCell(task.id, {
                               custom_fields: {
-                                ...task.custom_fields,
+                                ...(task.custom_fields ?? {}),
                                 [field.slug]: value,
                               },
                             })

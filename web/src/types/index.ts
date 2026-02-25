@@ -5,6 +5,7 @@ export type Priority = "urgent" | "high" | "medium" | "low" | "none";
 export type ActorType = "user" | "agent" | "system";
 export type StatusCategory =
   | "backlog"
+  | "triage"
   | "todo"
   | "in_progress"
   | "review"

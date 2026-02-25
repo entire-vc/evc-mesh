@@ -414,7 +414,7 @@ function AgentDetailDialog({
           )}
 
           {/* Capabilities */}
-          {agent.capabilities && Object.keys(agent.capabilities).length > 0 && (
+          {agent.capabilities && Object.keys(agent.capabilities ?? {}).length > 0 && (
             <div className="space-y-1">
               <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
                 Capabilities
@@ -426,7 +426,7 @@ function AgentDetailDialog({
           )}
 
           {/* Config template */}
-          {agent.config && Object.keys(agent.config).length > 0 && (
+          {agent.config && Object.keys(agent.config ?? {}).length > 0 && (
             <div className="space-y-1">
               <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
                 Config template

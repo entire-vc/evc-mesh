@@ -45,6 +45,7 @@ export const statusCategoryConfig: Record<
   { label: string; color: string }
 > = {
   backlog: { label: "Backlog", color: "bg-gray-400" },
+  triage: { label: "Triage", color: "bg-amber-400" },
   todo: { label: "To Do", color: "bg-blue-400" },
   in_progress: { label: "In Progress", color: "bg-yellow-400" },
   review: { label: "Review", color: "bg-purple-400" },

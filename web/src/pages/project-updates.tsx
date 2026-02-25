@@ -122,7 +122,7 @@ function UpdateCard({ update }: { update: ProjectUpdate }) {
               {update.metrics.tasks_total > 0 && (
                 <div className="text-center">
                   <p className="text-xl font-bold">
-                    {Math.round((update.metrics.tasks_completed / update.metrics.tasks_total) * 100)}%
+                    {Math.round(((update.metrics.tasks_completed ?? 0) / (update.metrics.tasks_total || 1)) * 100)}%
                   </p>
                   <p className="text-xs text-muted-foreground">Complete</p>
                 </div>
@@ -132,15 +132,15 @@ function UpdateCard({ update }: { update: ProjectUpdate }) {
           <div className="grid gap-4 sm:grid-cols-3">
             <div>
               <h4 className="text-sm font-semibold text-emerald-700 dark:text-emerald-400 mb-2">Highlights</h4>
-              <BulletList items={update.highlights} />
+              <BulletList items={update.highlights ?? []} />
             </div>
             <div>
               <h4 className="text-sm font-semibold text-red-700 dark:text-red-400 mb-2">Blockers</h4>
-              <BulletList items={update.blockers} />
+              <BulletList items={update.blockers ?? []} />
             </div>
             <div>
               <h4 className="text-sm font-semibold text-blue-700 dark:text-blue-400 mb-2">Next Steps</h4>
-              <BulletList items={update.next_steps} />
+              <BulletList items={update.next_steps ?? []} />
             </div>
           </div>
         </CardContent>

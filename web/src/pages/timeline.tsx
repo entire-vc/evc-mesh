@@ -31,6 +31,7 @@ const PADDING = 48;
 
 const STATUS_CATEGORY_COLORS: Record<StatusCategory, string> = {
   backlog: "#9ca3af",
+  triage: "#f59e0b",
   todo: "#60a5fa",
   in_progress: "#f59e0b",
   review: "#a78bfa",
@@ -40,6 +41,7 @@ const STATUS_CATEGORY_COLORS: Record<StatusCategory, string> = {
 
 const STATUS_CATEGORY_BG: Record<StatusCategory, string> = {
   backlog: "bg-gray-50 border-gray-200 dark:bg-gray-900 dark:border-gray-700",
+  triage: "bg-amber-50 border-amber-200 dark:bg-amber-950 dark:border-amber-800",
   todo: "bg-blue-50 border-blue-200 dark:bg-blue-950 dark:border-blue-800",
   in_progress:
     "bg-amber-50 border-amber-200 dark:bg-amber-950 dark:border-amber-800",
