@@ -58,6 +58,23 @@ func WorkspaceRLS(db *sqlx.DB, projectRepo repository.ProjectRepository) echo.Mi
 				}
 			}
 
+			// 2b. Try task_id route parameter -> look up task's workspace via project.
+			if !resolved {
+				if taskIDStr := c.Param("task_id"); taskIDStr != "" {
+					if taskID, err := uuid.Parse(taskIDStr); err == nil {
+						var resolvedWsID uuid.UUID
+						err := db.QueryRowContext(c.Request().Context(),
+							"SELECT p.workspace_id FROM tasks t JOIN projects p ON t.project_id = p.id WHERE t.id = $1 AND t.deleted_at IS NULL",
+							taskID,
+						).Scan(&resolvedWsID)
+						if err == nil {
+							wsID = resolvedWsID
+							resolved = true
+						}
+					}
+				}
+			}
+
 			// 3. Try workspace_id from auth context (set by agent key auth).
 			if !resolved {
 				if ctxWsID, err := GetWorkspaceID(c); err == nil {

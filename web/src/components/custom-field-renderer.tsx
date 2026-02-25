@@ -110,7 +110,7 @@ export function CustomFieldRenderer({
     case "date":
       return (
         <Input
-          type="date"
+          type="datetime-local"
           value={(value as string) ?? ""}
           onChange={(e) => onChange(e.target.value || null)}
           className={cn("h-8 text-xs", compact && "h-7")}

@@ -286,6 +286,9 @@ export interface CreateTaskRequest {
   assignee_type?: AssigneeType;
   labels?: string[];
   custom_fields?: Record<string, unknown>;
+  due_date?: string | null;
+  estimated_hours?: number | null;
+  status_id?: string;
 }
 
 export interface UpdateTaskRequest {

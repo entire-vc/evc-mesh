@@ -9,10 +9,13 @@ import {
 import {
   Bot,
   Calendar,
+  Check,
   Clock,
+  Copy,
   ExternalLink,
   Hourglass,
   ListTree,
+  Loader2,
   Package,
   Pencil,
   SlidersHorizontal,
@@ -44,9 +47,12 @@ import { cn } from "@/lib/cn";
 import {
   formatDate,
   formatRelative,
+  fromDateTimeLocal,
   priorityConfig,
   statusCategoryConfig,
+  toDateTimeLocal,
 } from "@/lib/utils";
+import { toast } from "@/components/ui/toast";
 import type { AssigneeType, Priority } from "@/types";
 
 // ---------------------------------------------------------------------------
@@ -77,7 +83,8 @@ export function TaskSlideOver({
   onClose,
   onTaskUpdated,
 }: TaskSlideOverProps) {
-  const { currentTask, fetchTask, updateTask, moveTask } = useTaskStore();
+  const { currentTask, fetchTask, updateTask, moveTask, duplicateTask } =
+    useTaskStore();
   const { statuses, fetchStatuses, currentProject } = useProjectStore();
   const { fields: customFieldDefs, fetchFields: fetchCustomFields } =
     useCustomFieldStore();
@@ -102,6 +109,11 @@ export function TaskSlideOver({
   // Inline estimated hours editing
   const [editingHours, setEditingHours] = useState(false);
   const [hoursDraft, setHoursDraft] = useState("");
+
+  // Description autosave state
+  const [descSaving, setDescSaving] = useState(false);
+  const [descSaved, setDescSaved] = useState(false);
+  const descTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Label adding
   const [addingLabel, setAddingLabel] = useState(false);
@@ -199,8 +211,12 @@ export function TaskSlideOver({
       setTitleDraft(currentTask.title);
       return;
     }
-    await updateTask(currentTask.id, { title: titleDraft.trim() });
-    onTaskUpdated?.();
+    try {
+      await updateTask(currentTask.id, { title: titleDraft.trim() });
+      onTaskUpdated?.();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to update title");
+    }
   }, [currentTask, titleDraft, updateTask, onTaskUpdated]);
 
   const handleTitleKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
@@ -211,60 +227,125 @@ export function TaskSlideOver({
     }
   };
 
-  const handleDescriptionSave = useCallback(async () => {
-    setEditingDescription(false);
+  // Flush description to backend (used by debounce and blur)
+  const flushDescription = useCallback(async () => {
     if (!currentTask) return;
     const trimmed = descDraft.trim();
     if (trimmed === (currentTask.description ?? "")) return;
-    await updateTask(currentTask.id, { description: trimmed || undefined });
-    onTaskUpdated?.();
+    setDescSaving(true);
+    try {
+      await updateTask(currentTask.id, { description: trimmed || undefined });
+      onTaskUpdated?.();
+      setDescSaved(true);
+      setTimeout(() => setDescSaved(false), 1500);
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "Failed to save description",
+      );
+    } finally {
+      setDescSaving(false);
+    }
   }, [currentTask, descDraft, updateTask, onTaskUpdated]);
+
+  // Debounced autosave for description (2s after last keystroke)
+  useEffect(() => {
+    if (!editingDescription) return;
+    if (descTimerRef.current) clearTimeout(descTimerRef.current);
+    descTimerRef.current = setTimeout(() => {
+      void flushDescription();
+    }, 2000);
+    return () => {
+      if (descTimerRef.current) clearTimeout(descTimerRef.current);
+    };
+  }, [descDraft, editingDescription, flushDescription]);
 
   const handleStatusChange = async (statusId: string) => {
     if (!currentTask || statusId === currentTask.status_id) return;
-    await moveTask(currentTask.id, { status_id: statusId });
-    if (taskId) await fetchTask(taskId);
-    onTaskUpdated?.();
+    try {
+      await moveTask(currentTask.id, { status_id: statusId });
+      if (taskId) await fetchTask(taskId);
+      onTaskUpdated?.();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to change status");
+    }
   };
 
   const handlePriorityChange = async (priority: Priority) => {
     if (!currentTask || priority === currentTask.priority) return;
-    await updateTask(currentTask.id, { priority });
-    onTaskUpdated?.();
+    try {
+      await updateTask(currentTask.id, { priority });
+      onTaskUpdated?.();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to change priority");
+    }
   };
 
   const handleAssigneeChange = async (value: string) => {
     if (!currentTask) return;
-    if (value === "unassigned") {
-      await updateTask(currentTask.id, {
-        assignee_id: null,
-        assignee_type: "unassigned",
-      });
-    } else {
-      const [type, id] = value.split(":");
-      await updateTask(currentTask.id, {
-        assignee_id: id,
-        assignee_type: type as AssigneeType,
-      });
+    try {
+      if (value === "unassigned") {
+        await updateTask(currentTask.id, {
+          assignee_id: null,
+          assignee_type: "unassigned",
+        });
+      } else {
+        const [type, id] = value.split(":");
+        await updateTask(currentTask.id, {
+          assignee_id: id,
+          assignee_type: type as AssigneeType,
+        });
+      }
+      onTaskUpdated?.();
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "Failed to change assignee",
+      );
     }
-    onTaskUpdated?.();
   };
 
   const handleDueDateChange = async (value: string) => {
     if (!currentTask) return;
-    await updateTask(currentTask.id, {
-      due_date: value || null,
-    });
-    onTaskUpdated?.();
+    try {
+      await updateTask(currentTask.id, {
+        due_date: value ? fromDateTimeLocal(value) : null,
+      });
+      onTaskUpdated?.();
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "Failed to change due date",
+      );
+    }
   };
+
+  const handleDuplicate = useCallback(async () => {
+    if (!currentTask) return;
+    try {
+      const newTask = await duplicateTask(currentTask);
+      onTaskUpdated?.();
+      toast.success("Task duplicated");
+      if (newTask?.id) {
+        await fetchTask(newTask.id);
+      }
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "Failed to duplicate task",
+      );
+    }
+  }, [currentTask, duplicateTask, fetchTask, onTaskUpdated]);
 
   const handleHoursSave = useCallback(async () => {
     setEditingHours(false);
     if (!currentTask) return;
     const num = hoursDraft.trim() === "" ? null : Number(hoursDraft);
     if (num === currentTask.estimated_hours) return;
-    await updateTask(currentTask.id, { estimated_hours: num });
-    onTaskUpdated?.();
+    try {
+      await updateTask(currentTask.id, { estimated_hours: num });
+      onTaskUpdated?.();
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "Failed to update estimate",
+      );
+    }
   }, [currentTask, hoursDraft, updateTask, onTaskUpdated]);
 
   const handleHoursKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
@@ -289,16 +370,26 @@ export function TaskSlideOver({
     const labels = [...(currentTask.labels ?? []), newLabel];
     setAddingLabel(false);
     setLabelDraft("");
-    await updateTask(currentTask.id, { labels });
-    onTaskUpdated?.();
+    try {
+      await updateTask(currentTask.id, { labels });
+      onTaskUpdated?.();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to add label");
+    }
   }, [currentTask, labelDraft, updateTask, onTaskUpdated]);
 
   const handleRemoveLabel = useCallback(
     async (label: string) => {
       if (!currentTask) return;
       const labels = (currentTask.labels ?? []).filter((l) => l !== label);
-      await updateTask(currentTask.id, { labels });
-      onTaskUpdated?.();
+      try {
+        await updateTask(currentTask.id, { labels });
+        onTaskUpdated?.();
+      } catch (err) {
+        toast.error(
+          err instanceof Error ? err.message : "Failed to remove label",
+        );
+      }
     },
     [currentTask, updateTask, onTaskUpdated],
   );
@@ -306,10 +397,19 @@ export function TaskSlideOver({
   const handleCustomFieldChange = useCallback(
     async (slug: string, newValue: unknown) => {
       if (!currentTask) return;
-      await updateTask(currentTask.id, {
-        custom_fields: { ...(currentTask.custom_fields ?? {}), [slug]: newValue },
-      });
-      onTaskUpdated?.();
+      try {
+        await updateTask(currentTask.id, {
+          custom_fields: {
+            ...(currentTask.custom_fields ?? {}),
+            [slug]: newValue,
+          },
+        });
+        onTaskUpdated?.();
+      } catch (err) {
+        toast.error(
+          err instanceof Error ? err.message : "Failed to update field",
+        );
+      }
     },
     [currentTask, updateTask, onTaskUpdated],
   );
@@ -379,15 +479,25 @@ export function TaskSlideOver({
           </div>
           <div className="flex shrink-0 items-center gap-2">
             {currentTask && (
-              <a
-                href={`/w/${currentProject?.slug ?? ""}/p/${currentProject?.slug ?? ""}/t/${currentTask.id}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex items-center gap-1 rounded p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                title="Open full page"
-              >
-                <ExternalLink className="h-4 w-4" />
-              </a>
+              <>
+                <button
+                  type="button"
+                  onClick={() => void handleDuplicate()}
+                  className="flex items-center gap-1 rounded p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                  title="Duplicate task"
+                >
+                  <Copy className="h-4 w-4" />
+                </button>
+                <a
+                  href={`/w/${currentProject?.slug ?? ""}/p/${currentProject?.slug ?? ""}/t/${currentTask.id}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-1 rounded p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                  title="Open full page"
+                >
+                  <ExternalLink className="h-4 w-4" />
+                </a>
+              </>
             )}
             <button
               type="button"
@@ -569,10 +679,10 @@ export function TaskSlideOver({
                           Due Date
                         </label>
                         <Input
-                          type="date"
+                          type="datetime-local"
                           value={
                             currentTask.due_date
-                              ? currentTask.due_date.slice(0, 10)
+                              ? toDateTimeLocal(currentTask.due_date)
                               : ""
                           }
                           onChange={(e) =>
@@ -759,22 +869,32 @@ export function TaskSlideOver({
                       Description
                     </h3>
                     {editingDescription && (
-                      <div className="flex gap-2">
-                        <Button
-                          size="sm"
-                          onClick={() => void handleDescriptionSave()}
-                        >
-                          Save
-                        </Button>
+                      <div className="flex items-center gap-2">
+                        {descSaving && (
+                          <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
+                            <Loader2 className="h-3 w-3 animate-spin" />
+                            Saving…
+                          </span>
+                        )}
+                        {descSaved && !descSaving && (
+                          <span className="flex items-center gap-1 text-[11px] text-green-600">
+                            <Check className="h-3 w-3" />
+                            Saved
+                          </span>
+                        )}
                         <Button
                           size="sm"
                           variant="ghost"
                           onClick={() => {
-                            setEditingDescription(false);
-                            setDescDraft(currentTask.description ?? "");
+                            // Flush pending changes, then exit edit mode
+                            if (descTimerRef.current)
+                              clearTimeout(descTimerRef.current);
+                            void flushDescription().then(() =>
+                              setEditingDescription(false),
+                            );
                           }}
                         >
-                          Cancel
+                          Done
                         </Button>
                       </div>
                     )}

@@ -1,5 +1,5 @@
 import { format, formatDistanceToNow, parseISO } from "date-fns";
-import type { Priority, StatusCategory } from "@/types";
+import type { Priority, StatusCategory, Task, CreateTaskRequest } from "@/types";
 
 export function formatDate(dateString: string): string {
   return format(parseISO(dateString), "MMM d, yyyy");
@@ -27,6 +27,34 @@ export function formatBytes(bytes: number): string {
   const sizes = ["B", "KB", "MB", "GB"];
   const i = Math.floor(Math.log(bytes) / Math.log(k));
   return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`;
+}
+
+// Convert ISO/RFC3339 string to datetime-local input format (YYYY-MM-DDTHH:mm)
+export function toDateTimeLocal(dateString: string): string {
+  const date = parseISO(dateString);
+  return format(date, "yyyy-MM-dd'T'HH:mm");
+}
+
+// Convert datetime-local input value to RFC3339 for backend
+export function fromDateTimeLocal(dtLocal: string): string {
+  return new Date(dtLocal).toISOString();
+}
+
+// Build a CreateTaskRequest that duplicates an existing task
+export function buildDuplicateRequest(task: Task): CreateTaskRequest {
+  return {
+    title: `${task.title} (copy)`,
+    description: task.description || undefined,
+    priority: task.priority,
+    status_id: task.status_id,
+    labels: task.labels?.length ? [...task.labels] : undefined,
+    assignee_id: task.assignee_id ?? undefined,
+    assignee_type:
+      task.assignee_type !== "unassigned" ? task.assignee_type : undefined,
+    custom_fields: task.custom_fields ?? undefined,
+    due_date: task.due_date ?? undefined,
+    estimated_hours: task.estimated_hours ?? undefined,
+  };
 }
 
 export const priorityConfig: Record<

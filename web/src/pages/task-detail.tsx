@@ -11,6 +11,7 @@ import {
   Bot,
   Calendar,
   Clock,
+  Copy,
   Hourglass,
   MessageSquare,
   Activity,
@@ -44,8 +45,10 @@ import { cn } from "@/lib/cn";
 import {
   formatDate,
   formatRelative,
+  fromDateTimeLocal,
   priorityConfig,
   statusCategoryConfig,
+  toDateTimeLocal,
 } from "@/lib/utils";
 import type { AssigneeType, Priority } from "@/types";
 
@@ -63,7 +66,8 @@ const priorities: Priority[] = ["urgent", "high", "medium", "low", "none"];
 export function TaskDetailPage() {
   const { wsSlug, projectSlug, taskId } = useParams();
   const navigate = useNavigate();
-  const { currentTask, fetchTask, updateTask, moveTask } = useTaskStore();
+  const { currentTask, fetchTask, updateTask, moveTask, duplicateTask } =
+    useTaskStore();
   const { statuses, fetchStatuses } = useProjectStore();
   const { fields: customFieldDefs, fetchFields: fetchCustomFields } =
     useCustomFieldStore();
@@ -174,6 +178,23 @@ export function TaskDetailPage() {
     }
   };
 
+  const handleDueDateChange = async (value: string) => {
+    if (!currentTask) return;
+    await updateTask(currentTask.id, {
+      due_date: value ? fromDateTimeLocal(value) : null,
+    });
+  };
+
+  const handleDuplicate = useCallback(async () => {
+    if (!currentTask) return;
+    const newTask = await duplicateTask(currentTask);
+    if (newTask?.id) {
+      navigate(
+        `/w/${wsSlug}/p/${projectSlug}/t/${newTask.id}`,
+      );
+    }
+  }, [currentTask, duplicateTask, navigate, wsSlug, projectSlug]);
+
   const handleCustomFieldChange = useCallback(
     async (slug: string, newValue: unknown) => {
       if (!currentTask) return;
@@ -211,7 +232,7 @@ export function TaskDetailPage() {
   return (
     <div className="mx-auto max-w-6xl space-y-6 px-4">
       {/* Header */}
-      <div className="flex items-center gap-4">
+      <div className="flex items-center justify-between">
         <Button
           variant="ghost"
           size="sm"
@@ -219,6 +240,14 @@ export function TaskDetailPage() {
         >
           <ArrowLeft className="h-4 w-4" />
           Back to board
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => void handleDuplicate()}
+        >
+          <Copy className="mr-1 h-3.5 w-3.5" />
+          Duplicate
         </Button>
       </div>
 
@@ -428,11 +457,16 @@ export function TaskDetailPage() {
                   <Calendar className="h-3.5 w-3.5" />
                   Due Date
                 </label>
-                <span className="text-sm">
-                  {currentTask.due_date
-                    ? formatDate(currentTask.due_date)
-                    : "No due date"}
-                </span>
+                <Input
+                  type="datetime-local"
+                  value={
+                    currentTask.due_date
+                      ? toDateTimeLocal(currentTask.due_date)
+                      : ""
+                  }
+                  onChange={(e) => void handleDueDateChange(e.target.value)}
+                  className="h-8 text-xs"
+                />
               </div>
 
               <Separator />

@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { api } from "@/lib/api";
+import { buildDuplicateRequest } from "@/lib/utils";
 import type {
   CreateTaskRequest,
   MoveTaskRequest,
@@ -28,6 +29,7 @@ interface TaskState {
   updateTask: (taskId: string, req: UpdateTaskRequest) => Promise<Task>;
   deleteTask: (taskId: string) => Promise<void>;
   moveTask: (taskId: string, req: MoveTaskRequest) => Promise<void>;
+  duplicateTask: (task: Task) => Promise<Task>;
 
   groupByStatus: () => void;
 }
@@ -114,6 +116,17 @@ export const useTaskStore = create<TaskState>((set, get) => ({
         state.currentTask?.id === taskId ? null : state.currentTask,
     }));
     get().groupByStatus();
+  },
+
+  duplicateTask: async (task: Task): Promise<Task> => {
+    const req = buildDuplicateRequest(task);
+    const newTask = await api<Task>(
+      `/api/v1/projects/${task.project_id}/tasks`,
+      { method: "POST", body: req },
+    );
+    set((state) => ({ tasks: [...state.tasks, newTask] }));
+    get().groupByStatus();
+    return newTask;
   },
 
   moveTask: async (taskId: string, req: MoveTaskRequest) => {
