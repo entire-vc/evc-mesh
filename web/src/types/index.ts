@@ -533,7 +533,7 @@ export interface CreateVCSLinkRequest {
 
 // Integration types
 
-export type IntegrationProvider = "slack" | "github";
+export type IntegrationProvider = "slack" | "github" | "spark" | "mcp";
 
 export interface IntegrationConfig {
   id: string;

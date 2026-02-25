@@ -87,7 +87,7 @@ func (h *IntegrationHandler) Configure(c echo.Context) error {
 
 	provider := domain.IntegrationProvider(req.Provider)
 	switch provider {
-	case domain.IntegrationProviderSlack, domain.IntegrationProviderGitHub:
+	case domain.IntegrationProviderSlack, domain.IntegrationProviderGitHub, domain.IntegrationProviderSpark, domain.IntegrationProviderMCP:
 	default:
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("unsupported provider: "+req.Provider))
 	}

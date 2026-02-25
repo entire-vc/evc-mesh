@@ -5,7 +5,9 @@ import {
   Circle,
   Github,
   MessageSquare,
+  Server,
   Settings,
+  Sparkles,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { useWorkspaceStore } from "@/stores/workspace";
@@ -43,6 +45,20 @@ const PROVIDERS: ProviderMeta[] = [
       "Send task updates and agent activity notifications to Slack channels.",
     icon: MessageSquare,
     comingSoon: true,
+  },
+  {
+    id: "spark",
+    name: "Spark Agent Catalog",
+    description:
+      "Browse and install AI agents from the Spark catalog into your workspace.",
+    icon: Sparkles,
+  },
+  {
+    id: "mcp",
+    name: "MCP Server",
+    description:
+      "Connect AI agents (Claude Code, Cline, Aider) via Model Context Protocol. Supports stdio and SSE transports.",
+    icon: Server,
   },
 ];
 
@@ -245,6 +261,68 @@ export function IntegrationsPage() {
                         Slack integration is planned for a future release.
                         Configure notification channels and event triggers.
                       </p>
+                    </CardContent>
+                  )}
+
+                  {provider.id === "spark" && isActive && (
+                    <CardContent className="pt-0">
+                      <div className="rounded-lg border border-dashed border-border bg-muted/30 p-3">
+                        <p className="text-xs text-muted-foreground">
+                          Spark catalog is enabled. Go to{" "}
+                          <a
+                            href={`/w/${currentWorkspace?.slug}/spark`}
+                            className="text-primary hover:underline font-medium"
+                          >
+                            Spark Catalog
+                          </a>{" "}
+                          to browse and install agents.
+                        </p>
+                      </div>
+                    </CardContent>
+                  )}
+
+                  {provider.id === "mcp" && isActive && (
+                    <CardContent className="pt-0">
+                      <div className="space-y-3">
+                        <div className="rounded-lg border border-dashed border-border bg-muted/30 p-3">
+                          <p className="text-xs font-medium text-muted-foreground mb-1">
+                            SSE Endpoint
+                          </p>
+                          <code className="block rounded bg-background px-2 py-1.5 text-xs font-mono select-all">
+                            {window.location.origin}/mcp/sse
+                          </code>
+                        </div>
+
+                        <div className="rounded-lg border border-dashed border-border bg-muted/30 p-3">
+                          <p className="text-xs font-medium text-muted-foreground mb-1">
+                            Claude Code / Cline — .mcp.json
+                          </p>
+                          <pre className="rounded bg-background px-2 py-1.5 text-xs font-mono overflow-x-auto select-all whitespace-pre">{`{
+  "mcpServers": {
+    "evc-mesh": {
+      "command": "mesh-mcp",
+      "env": {
+        "MESH_API_URL": "${window.location.origin}",
+        "MESH_AGENT_KEY": "agk_<your_agent_key>"
+      }
+    }
+  }
+}`}</pre>
+                        </div>
+
+                        <p className="text-xs text-muted-foreground">
+                          Register an agent in{" "}
+                          <a
+                            href={`/w/${currentWorkspace?.slug}/agents`}
+                            className="text-primary hover:underline font-medium"
+                          >
+                            Agents
+                          </a>{" "}
+                          to get an API key, then use it in{" "}
+                          <code className="rounded bg-muted px-1">MESH_AGENT_KEY</code>.
+                          MCP provides 25 tools: task management, comments, events, artifacts, and more.
+                        </p>
+                      </div>
                     </CardContent>
                   )}
                 </Card>
