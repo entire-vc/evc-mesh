@@ -24,6 +24,7 @@ import (
 	mw "github.com/entire-vc/evc-mesh/internal/middleware"
 	"github.com/entire-vc/evc-mesh/internal/repository/postgres"
 	"github.com/entire-vc/evc-mesh/internal/service"
+	"github.com/entire-vc/evc-mesh/internal/spark"
 	"github.com/entire-vc/evc-mesh/internal/storage"
 	wsHub "github.com/entire-vc/evc-mesh/internal/ws"
 )
@@ -61,6 +62,7 @@ func main() {
 	refreshTokenRepo := postgres.NewRefreshTokenRepo(db)
 	workspaceMemberRepo := postgres.NewWorkspaceMemberRepo(db)
 	webhookRepo := postgres.NewWebhookRepo(db)
+	savedViewRepo := postgres.NewSavedViewRepo(db)
 
 	// 5. Create auth service.
 	authService := auth.NewService(
@@ -99,6 +101,7 @@ func main() {
 	eventBusService := service.NewEventBusService(eventBusRepo, activityLogRepo)
 	activityLogService := service.NewActivityLogService(activityLogRepo)
 	webhookService := service.NewWebhookService(webhookRepo)
+	savedViewService := service.NewSavedViewService(savedViewRepo)
 
 	// customFieldService was already created above (before taskService, for CF value validation).
 
@@ -157,6 +160,7 @@ func main() {
 	customFieldHandler := handler.NewCustomFieldHandler(customFieldService)
 	taskContextHandler := handler.NewTaskContextHandler(taskService, commentService, artifactService, depService, eventBusService)
 	webhookHandler := handler.NewWebhookHandler(webhookService)
+	savedViewHandler := handler.NewSavedViewHandler(savedViewService)
 
 	// 8. Create Echo instance with global middleware.
 	e := echo.New()
@@ -326,10 +330,28 @@ func main() {
 	api.GET("/webhooks/:webhook_id/deliveries", webhookHandler.ListDeliveries, rbac(mw.PermManageWebhooks))
 	api.POST("/webhooks/:webhook_id/test", webhookHandler.Test, rbac(mw.PermManageWebhooks))
 
+	// Saved view routes.
+	api.GET("/projects/:proj_id/views", savedViewHandler.List)
+	api.POST("/projects/:proj_id/views", savedViewHandler.Create)
+	api.GET("/views/:view_id", savedViewHandler.GetByID)
+	api.PATCH("/views/:view_id", savedViewHandler.Update)
+	api.DELETE("/views/:view_id", savedViewHandler.Delete)
+
 	// Activity log routes.
 	api.GET("/workspaces/:ws_id/activity", activityHandler.ListByWorkspace, rbac(mw.PermExportAuditLog))
 	api.GET("/workspaces/:ws_id/activity/export", activityHandler.Export, rbac(mw.PermExportAuditLog))
 	api.GET("/tasks/:task_id/activity", activityHandler.ListByTask)
+
+	// Spark catalog routes (optional; only registered when MESH_SPARK_ENABLED=true).
+	if cfg.Spark.Enabled {
+		sparkClient := spark.NewClient(cfg.Spark.URL)
+		sparkHandler := handler.NewSparkHandler(sparkClient, agentService)
+		api.GET("/spark/agents", sparkHandler.Search)
+		api.GET("/spark/agents/popular", sparkHandler.Popular)
+		api.GET("/spark/agents/:agent_id", sparkHandler.GetByID)
+		api.POST("/spark/agents/:agent_id/install", sparkHandler.Install)
+		log.Printf("Spark catalog integration enabled (base URL: %s)", cfg.Spark.URL)
+	}
 
 	// 10. Start server with graceful shutdown.
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)

@@ -46,7 +46,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { toast } from "@/components/ui/toast";
-import type { Task, TaskStatus, CustomFieldDefinition, WSMessage } from "@/types";
+import { SavedViewsMenu } from "@/components/saved-views-menu";
+import type { Task, TaskStatus, CustomFieldDefinition, WSMessage, SavedView } from "@/types";
 
 // ---------------------------------------------------------------------------
 // Sortable task card wrapper
@@ -434,6 +435,15 @@ export function BoardPage() {
 
   // ----- New task helpers -----
 
+  // Apply a saved view: restore its filters/sort to local state.
+  const handleApplyView = useCallback((view: SavedView) => {
+    const filters = view.filters ?? {};
+    setSearchQuery((filters.search as string) ?? "");
+    setPriorityFilter((filters.priority as string) ?? "all");
+    setAssigneeFilter((filters.assignee as string) ?? "all");
+    setCustomFieldFilters((filters.custom_fields as Record<string, unknown>) ?? {});
+  }, []);
+
   const openCreateDialog = useCallback((statusId?: string) => {
     setDialogStatusId(statusId);
     setDialogOpen(true);
@@ -697,6 +707,21 @@ export function BoardPage() {
               </div>
             </DropdownMenuContent>
           </DropdownMenu>
+        )}
+
+        {/* Saved views */}
+        {currentProject && (
+          <SavedViewsMenu
+            projectId={currentProject.id}
+            currentViewType="board"
+            currentFilters={{
+              search: searchQuery,
+              priority: priorityFilter,
+              assignee: assigneeFilter,
+              custom_fields: customFieldFilters,
+            }}
+            onApplyView={handleApplyView}
+          />
         )}
       </div>
 

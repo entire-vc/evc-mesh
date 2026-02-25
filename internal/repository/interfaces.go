@@ -220,6 +220,15 @@ type WorkspaceMemberRepository interface {
 	GetRole(ctx context.Context, workspaceID, userID uuid.UUID) (string, error)
 }
 
+// SavedViewRepository manages persistence for saved views.
+type SavedViewRepository interface {
+	Create(ctx context.Context, view *domain.SavedView) error
+	GetByID(ctx context.Context, id uuid.UUID) (*domain.SavedView, error)
+	Update(ctx context.Context, id uuid.UUID, input domain.UpdateSavedViewInput) (*domain.SavedView, error)
+	Delete(ctx context.Context, id uuid.UUID) error
+	ListByProject(ctx context.Context, projectID uuid.UUID, userID uuid.UUID) ([]domain.SavedView, error)
+}
+
 // WebhookRepository manages persistence for webhook configurations and deliveries.
 type WebhookRepository interface {
 	Create(ctx context.Context, webhook *domain.WebhookConfig) error

@@ -7,6 +7,7 @@ import {
   LayoutDashboard,
   Plus,
   Settings,
+  Sparkles,
 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { useWorkspaceStore } from "@/stores/workspace";
@@ -33,6 +34,7 @@ export function Sidebar({ collapsed }: SidebarProps) {
   const { projects } = useProjectStore();
 
   const isAgentsRoute = location.pathname.endsWith("/agents");
+  const isSparkRoute = location.pathname.endsWith("/spark");
   const isEventsRoute = location.pathname.endsWith("/events");
 
   if (collapsed) {
@@ -57,6 +59,15 @@ export function Sidebar({ collapsed }: SidebarProps) {
             )}
           >
             <Bot className="h-4 w-4" />
+          </Link>
+          <Link
+            to={wsSlug ? `/w/${wsSlug}/spark` : "/"}
+            className={cn(
+              "flex h-8 w-8 items-center justify-center rounded-lg text-sidebar-foreground hover:bg-sidebar-accent",
+              isSparkRoute && "bg-sidebar-accent text-sidebar-primary",
+            )}
+          >
+            <Sparkles className="h-4 w-4" />
           </Link>
           <Link
             to={wsSlug ? `/w/${wsSlug}/events` : "/"}
@@ -127,7 +138,7 @@ export function Sidebar({ collapsed }: SidebarProps) {
           to={wsSlug ? `/w/${wsSlug}` : "/"}
           className={cn(
             "flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-sidebar-foreground hover:bg-sidebar-accent",
-            !projectSlug && !isAgentsRoute && !isEventsRoute && "bg-sidebar-accent font-medium",
+            !projectSlug && !isAgentsRoute && !isSparkRoute && !isEventsRoute && "bg-sidebar-accent font-medium",
           )}
         >
           <LayoutDashboard className="h-4 w-4" />
@@ -142,6 +153,16 @@ export function Sidebar({ collapsed }: SidebarProps) {
         >
           <Bot className="h-4 w-4" />
           Agents
+        </Link>
+        <Link
+          to={wsSlug ? `/w/${wsSlug}/spark` : "/"}
+          className={cn(
+            "flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-sidebar-foreground hover:bg-sidebar-accent",
+            isSparkRoute && "bg-sidebar-accent font-medium",
+          )}
+        >
+          <Sparkles className="h-4 w-4" />
+          Spark Catalog
         </Link>
         <Link
           to={wsSlug ? `/w/${wsSlug}/events` : "/"}

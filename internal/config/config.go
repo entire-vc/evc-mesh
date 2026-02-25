@@ -18,6 +18,15 @@ type Config struct {
 	Auth      AuthConfig
 	CORS      CORSConfig
 	RateLimit RateLimitConfig
+	Spark     SparkConfig
+}
+
+// SparkConfig holds configuration for the Spark agent catalog integration.
+type SparkConfig struct {
+	// URL is the base URL of the Spark catalog API.
+	URL string
+	// Enabled controls whether Spark catalog routes are registered.
+	Enabled bool
 }
 
 // CORSConfig holds cross-origin resource sharing settings.
@@ -146,6 +155,10 @@ func Load() *Config {
 			Enabled: getEnvBool("MESH_RATE_LIMIT_ENABLED", true),
 			AuthRPM: getEnvInt("MESH_RATE_LIMIT_AUTH_RPM", 20),
 			APIRPM:  getEnvInt("MESH_RATE_LIMIT_API_RPM", 600),
+		},
+		Spark: SparkConfig{
+			URL:     getEnv("MESH_SPARK_URL", "https://spark.entire.vc"),
+			Enabled: getEnvBool("MESH_SPARK_ENABLED", false),
 		},
 	}
 }

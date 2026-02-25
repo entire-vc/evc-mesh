@@ -11,6 +11,7 @@ import { ProjectSettingsPage } from "@/pages/project-settings";
 import { AgentDashboardPage } from "@/pages/agent-dashboard";
 import { EventFeedPage } from "@/pages/event-feed";
 import { TimelinePage } from "@/pages/timeline";
+import { SparkPage } from "@/pages/spark";
 
 class ErrorBoundary extends Component<
   { children: ReactNode },
@@ -69,6 +70,10 @@ export function App() {
           <Route
             path="w/:wsSlug/agents"
             element={<AgentDashboardPage />}
+          />
+          <Route
+            path="w/:wsSlug/spark"
+            element={<SparkPage />}
           />
           <Route
             path="w/:wsSlug/events"

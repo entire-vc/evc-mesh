@@ -327,6 +327,72 @@ export interface RegisterAgentResponse {
   api_key: string; // Only returned once at registration
 }
 
+// Spark catalog types
+
+export interface SparkAgentManifest {
+  id: string;
+  name: string;
+  description: string;
+  agent_type: AgentType | string;
+  version: string;
+  author: string;
+  capabilities: Record<string, unknown>;
+  config: Record<string, unknown>;
+  tags: string[];
+  downloads: number;
+  rating: number;
+  created_at: string;
+}
+
+export interface SparkInstallResponse {
+  agent: Agent;
+  api_key: string;
+  spark: {
+    id: string;
+    version: string;
+    author: string;
+  };
+}
+
+// Saved view types
+
+export type ViewType = "board" | "list" | "timeline";
+
+export interface SavedView {
+  id: string;
+  project_id: string;
+  name: string;
+  view_type: ViewType;
+  filters: Record<string, unknown>;
+  sort_by: string | null;
+  sort_order: string | null;
+  columns: string[] | null;
+  is_shared: boolean;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateSavedViewRequest {
+  name: string;
+  view_type?: ViewType;
+  filters?: Record<string, unknown>;
+  sort_by?: string;
+  sort_order?: string;
+  columns?: string[];
+  is_shared?: boolean;
+}
+
+export interface UpdateSavedViewRequest {
+  name?: string;
+  view_type?: ViewType;
+  filters?: Record<string, unknown>;
+  sort_by?: string;
+  sort_order?: string;
+  columns?: string[];
+  is_shared?: boolean;
+}
+
 // API error type
 export interface ApiError {
   error?: string;

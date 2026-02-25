@@ -212,6 +212,15 @@ type ActivityLogService interface {
 	Export(ctx context.Context, workspaceID uuid.UUID, filter repository.ActivityLogFilter, limit int) ([]domain.ActivityLog, error)
 }
 
+// SavedViewService provides business logic for saved view management.
+type SavedViewService interface {
+	Create(ctx context.Context, input domain.CreateSavedViewInput) (*domain.SavedView, error)
+	GetByID(ctx context.Context, id uuid.UUID) (*domain.SavedView, error)
+	Update(ctx context.Context, id uuid.UUID, input domain.UpdateSavedViewInput, callerID uuid.UUID) (*domain.SavedView, error)
+	Delete(ctx context.Context, id uuid.UUID, callerID uuid.UUID) error
+	ListByProject(ctx context.Context, projectID uuid.UUID, userID uuid.UUID) ([]domain.SavedView, error)
+}
+
 // WebhookService provides business logic for outbound webhook management.
 type WebhookService interface {
 	Create(ctx context.Context, input domain.CreateWebhookInput) (*domain.WebhookConfig, error)
