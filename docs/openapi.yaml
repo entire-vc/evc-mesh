@@ -1055,6 +1055,17 @@ paths:
                 assignee_type:
                   type: string
                   enum: [user, agent, unassigned]
+                status_id:
+                  type: string
+                  format: uuid
+                parent_task_id:
+                  type: string
+                  format: uuid
+                due_date:
+                  type: string
+                  format: date-time
+                estimated_hours:
+                  type: number
                 labels:
                   type: array
                   items:

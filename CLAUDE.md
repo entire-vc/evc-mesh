@@ -105,13 +105,17 @@ Data Layer — PostgreSQL 16 (JSONB) | Redis 7 (cache/pubsub) | NATS JetStream (
 Key differences between specs (dev-docs/specs/) and actual code:
 
 - **Custom field routes**: Spec has nested `/projects/:id/custom-fields/:field_id`, impl uses flat `/custom-fields/:field_id`
-- **Custom field options**: Spec has `{value, label, color}[]`, impl uses flat `string[]` in generic `Record<string, unknown>`
-- **Artifact API**: REST artifact endpoints use stub service in API server; only MCP artifact tools work (direct S3)
-- **Agent CRUD**: Spec has PATCH/DELETE/regenerate-key; only GET + heartbeat implemented
-- **Auth logout**: Spec has POST /auth/logout with Redis JWT blacklist; not implemented
-- **Custom field filtering**: Spec has server-side `custom.{slug}=value` query params; only client-side filtering implemented
+- **Custom field options**: Spec has `{value, label, color}[]`, impl supports both formats (auto-detect)
 - **Timeline**: Spec describes Gantt-like view; implemented as DAG dependency graph
-- **Soft delete**: Spec requires deleted_at; physical DELETE used
+- **Auth**: DualAuth middleware accepts JWT OR Agent Key on all routes. Casdoor OIDC deferred to Phase 5
+
+Resolved gaps (Phase 4.1):
+- ~~Artifact S3 stub~~ → real S3 client wired
+- ~~Agent CRUD~~ → PATCH/DELETE/regenerate-key + GET /agents/me implemented
+- ~~Auth logout~~ → POST /auth/logout revokes refresh tokens
+- ~~CF filtering~~ → server-side JSONB queries with slug regex validation
+- ~~Soft delete~~ → implemented for agents, repos filter deleted_at IS NULL
+- ~~Activity logging~~ → task CRUD writes to activity_log (task.created/updated/deleted/moved/assigned)
 
 Always check actual code, not just specs, when implementing features.
 
