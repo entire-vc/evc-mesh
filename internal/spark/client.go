@@ -1,6 +1,10 @@
 // Package spark provides a client for the Spark agent catalog API.
 // When the Spark API is unreachable, methods return empty results rather than errors
 // to allow graceful degradation.
+//
+// Spark API lives at /api/v1/assets (not /agents). The client maps Spark's
+// AssetListOut / AssetOut response shapes to the AgentManifest struct that
+// Mesh understands.
 package spark
 
 import (
@@ -19,20 +23,75 @@ const (
 	defaultLimit   = 20
 )
 
-// AgentManifest represents an agent listing from the Spark catalog.
+// AgentManifest represents an agent listing from the Spark catalog,
+// normalised to the shape the Mesh frontend expects.
 type AgentManifest struct {
-	ID           string            `json:"id"`
-	Name         string            `json:"name"`
-	Description  string            `json:"description"`
-	AgentType    string            `json:"agent_type"` // claude_code, openclaw, cline, aider, custom
-	Version      string            `json:"version"`
-	Author       string            `json:"author"`
-	Capabilities map[string]any    `json:"capabilities"`
-	Config       map[string]any    `json:"config"` // template config for local install
-	Tags         []string          `json:"tags"`
-	Downloads    int               `json:"downloads"`
-	Rating       float64           `json:"rating"`
-	CreatedAt    string            `json:"created_at"`
+	ID           string         `json:"id"`
+	Name         string         `json:"name"`
+	Description  string         `json:"description"`
+	AgentType    string         `json:"agent_type"` // claude_code, openclaw, cline, aider, custom
+	Version      string         `json:"version"`
+	Author       string         `json:"author"`
+	Capabilities map[string]any `json:"capabilities"`
+	Config       map[string]any `json:"config"` // template config for local install
+	Tags         []string       `json:"tags"`
+	Downloads    int            `json:"downloads"`
+	Rating       float64        `json:"rating"`
+	CreatedAt    string         `json:"created_at"`
+}
+
+// sparkAssetListItem mirrors Spark's AssetListOut schema (list endpoints).
+type sparkAssetListItem struct {
+	ID               string   `json:"id"`
+	Type             string   `json:"type"` // agent, skill, prompt, etc.
+	Title            string   `json:"title"`
+	Slug             string   `json:"slug"`
+	ShortDescription string   `json:"short_description"`
+	AITags           []string `json:"ai_tags"`
+	AuthorUserID     string   `json:"author_user_id"`
+	PricingType      string   `json:"pricing_type"`
+	DownloadsCount   int      `json:"downloads_count"`
+	RatingAvg        float64  `json:"rating_avg"`
+	RatingCount      int      `json:"rating_count"`
+	IsFeatured       bool     `json:"is_featured"`
+	IsVerified       bool     `json:"is_verified"`
+	CreatedAt        string   `json:"created_at"`
+}
+
+// sparkAssetDetail mirrors Spark's AssetOut schema (single-item endpoint).
+type sparkAssetDetail struct {
+	sparkAssetListItem
+	DescriptionMD string         `json:"description_md"`
+	Version       string         `json:"version"`
+	AuthorName    string         `json:"author_name"`
+	InlineContent string         `json:"inline_content"`
+	MetadataJSON  map[string]any `json:"metadata_json"`
+}
+
+func (a *sparkAssetListItem) toManifest() AgentManifest {
+	return AgentManifest{
+		ID:          a.ID,
+		Name:        a.Title,
+		Description: a.ShortDescription,
+		AgentType:   a.Type,
+		Author:      a.AuthorUserID,
+		Tags:        a.AITags,
+		Downloads:   a.DownloadsCount,
+		Rating:      a.RatingAvg,
+		CreatedAt:   a.CreatedAt,
+	}
+}
+
+func (a *sparkAssetDetail) toManifest() AgentManifest {
+	m := a.sparkAssetListItem.toManifest()
+	m.Version = a.Version
+	if a.AuthorName != "" {
+		m.Author = a.AuthorName
+	}
+	if a.MetadataJSON != nil {
+		m.Capabilities = a.MetadataJSON
+	}
+	return m
 }
 
 // Client wraps HTTP calls to the Spark agent catalog API.
@@ -59,18 +118,19 @@ func (c *Client) Search(ctx context.Context, query string, tags []string, limit 
 	}
 
 	params := url.Values{}
+	params.Set("asset_type", "agent")
+	params.Set("page_size", fmt.Sprintf("%d", limit))
 	if query != "" {
 		params.Set("q", query)
 	}
 	if len(tags) > 0 {
-		params.Set("tags", strings.Join(tags, ","))
+		params.Set("ai", strings.Join(tags, ","))
 	}
-	params.Set("limit", fmt.Sprintf("%d", limit))
 
-	endpoint := fmt.Sprintf("%s/api/v1/agents?%s", c.baseURL, params.Encode())
+	endpoint := fmt.Sprintf("%s/api/v1/assets?%s", c.baseURL, params.Encode())
 
 	var result struct {
-		Items []AgentManifest `json:"items"`
+		Items []sparkAssetListItem `json:"items"`
 	}
 
 	if err := c.get(ctx, endpoint, &result); err != nil {
@@ -78,23 +138,26 @@ func (c *Client) Search(ctx context.Context, query string, tags []string, limit 
 		return []AgentManifest{}, nil
 	}
 
-	if result.Items == nil {
-		return []AgentManifest{}, nil
+	out := make([]AgentManifest, 0, len(result.Items))
+	for _, item := range result.Items {
+		out = append(out, item.toManifest())
 	}
-	return result.Items, nil
+	return out, nil
 }
 
 // GetByID returns a single agent manifest from the Spark catalog.
+// Accepts a Spark asset ID or slug.
 // Returns nil (not error) when Spark is unreachable.
 func (c *Client) GetByID(ctx context.Context, id string) (*AgentManifest, error) {
-	endpoint := fmt.Sprintf("%s/api/v1/agents/%s", c.baseURL, url.PathEscape(id))
+	endpoint := fmt.Sprintf("%s/api/v1/assets/%s", c.baseURL, url.PathEscape(id))
 
-	var manifest AgentManifest
-	if err := c.get(ctx, endpoint, &manifest); err != nil {
+	var detail sparkAssetDetail
+	if err := c.get(ctx, endpoint, &detail); err != nil {
 		return nil, fmt.Errorf("spark: get agent %s: %w", id, err)
 	}
 
-	return &manifest, nil
+	m := detail.toManifest()
+	return &m, nil
 }
 
 // ListPopular returns the most downloaded agents from the Spark catalog.
@@ -105,13 +168,14 @@ func (c *Client) ListPopular(ctx context.Context, limit int) ([]AgentManifest, e
 	}
 
 	params := url.Values{}
-	params.Set("sort", "downloads")
-	params.Set("limit", fmt.Sprintf("%d", limit))
+	params.Set("asset_type", "agent")
+	params.Set("sort", "popular")
+	params.Set("page_size", fmt.Sprintf("%d", limit))
 
-	endpoint := fmt.Sprintf("%s/api/v1/agents?%s", c.baseURL, params.Encode())
+	endpoint := fmt.Sprintf("%s/api/v1/assets?%s", c.baseURL, params.Encode())
 
 	var result struct {
-		Items []AgentManifest `json:"items"`
+		Items []sparkAssetListItem `json:"items"`
 	}
 
 	if err := c.get(ctx, endpoint, &result); err != nil {
@@ -119,10 +183,11 @@ func (c *Client) ListPopular(ctx context.Context, limit int) ([]AgentManifest, e
 		return []AgentManifest{}, nil
 	}
 
-	if result.Items == nil {
-		return []AgentManifest{}, nil
+	out := make([]AgentManifest, 0, len(result.Items))
+	for _, item := range result.Items {
+		out = append(out, item.toManifest())
 	}
-	return result.Items, nil
+	return out, nil
 }
 
 // get performs an HTTP GET request and decodes the JSON response into dest.
