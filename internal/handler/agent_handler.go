@@ -227,3 +227,24 @@ func (h *AgentHandler) Heartbeat(c echo.Context) error {
 
 	return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
 }
+
+// Me handles GET /agents/me
+// Returns the current agent's profile based on the API key used for auth.
+func (h *AgentHandler) Me(c echo.Context) error {
+	agentIDVal := c.Get("agent_id")
+	if agentIDVal == nil {
+		return c.JSON(http.StatusUnauthorized, apierror.Unauthorized("agent API key required"))
+	}
+
+	agentID, ok := agentIDVal.(uuid.UUID)
+	if !ok {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid agent_id in context"))
+	}
+
+	agent, err := h.agentService.GetByID(c.Request().Context(), agentID)
+	if err != nil {
+		return handleError(c, err)
+	}
+
+	return c.JSON(http.StatusOK, agent)
+}

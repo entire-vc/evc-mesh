@@ -266,6 +266,7 @@ func main() {
 	api.PATCH("/agents/:agent_id", agentHandler.Update)
 	api.DELETE("/agents/:agent_id", agentHandler.Delete)
 	api.POST("/agents/:agent_id/regenerate-key", agentHandler.RegenerateKey)
+	api.GET("/agents/me", agentHandler.Me)
 	api.POST("/agents/heartbeat", agentHandler.Heartbeat)
 
 	// Event bus routes.
