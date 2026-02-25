@@ -343,3 +343,68 @@ func (r *TaskRepo) CountByStatus(ctx context.Context, projectID uuid.UUID) (map[
 	}
 	return result, nil
 }
+
+// CountByStatusCategory returns task counts grouped by status category for a project.
+func (r *TaskRepo) CountByStatusCategory(ctx context.Context, projectID uuid.UUID) (map[domain.StatusCategory]int, error) {
+	const q = `
+		SELECT ts.category, COUNT(t.id) AS cnt
+		FROM tasks t
+		INNER JOIN task_statuses ts ON ts.id = t.status_id
+		WHERE t.project_id = $1 AND t.deleted_at IS NULL
+		GROUP BY ts.category
+	`
+	type row struct {
+		Category domain.StatusCategory `db:"category"`
+		Cnt      int                   `db:"cnt"`
+	}
+	var rows []row
+	if err := r.db.SelectContext(ctx, &rows, q, projectID); err != nil {
+		return nil, err
+	}
+	result := make(map[domain.StatusCategory]int, len(rows))
+	for _, r := range rows {
+		result[r.Category] = r.Cnt
+	}
+	return result, nil
+}
+
+// ListByStatusCategory returns paginated tasks across all projects in a workspace
+// that have a status matching the given category.
+func (r *TaskRepo) ListByStatusCategory(ctx context.Context, workspaceID uuid.UUID, category domain.StatusCategory, pg pagination.Params) (*pagination.Page[domain.Task], error) {
+	pg.Normalize()
+
+	const countQ = `
+		SELECT COUNT(t.id)
+		FROM tasks t
+		INNER JOIN task_statuses ts ON ts.id = t.status_id
+		INNER JOIN projects p ON p.id = t.project_id
+		WHERE p.workspace_id = $1
+		  AND ts.category = $2
+		  AND t.deleted_at IS NULL
+		  AND p.deleted_at IS NULL
+	`
+	var totalCount int
+	if err := r.db.GetContext(ctx, &totalCount, countQ, workspaceID, category); err != nil {
+		return nil, err
+	}
+
+	const dataQ = `
+		SELECT t.*
+		FROM tasks t
+		INNER JOIN task_statuses ts ON ts.id = t.status_id
+		INNER JOIN projects p ON p.id = t.project_id
+		WHERE p.workspace_id = $1
+		  AND ts.category = $2
+		  AND t.deleted_at IS NULL
+		  AND p.deleted_at IS NULL
+		ORDER BY t.created_at DESC
+		LIMIT $3 OFFSET $4
+	`
+	var rows []taskRow
+	if err := r.db.SelectContext(ctx, &rows, dataQ, workspaceID, category, pg.Limit(), pg.Offset()); err != nil {
+		return nil, err
+	}
+
+	items := taskRowsToSlice(rows)
+	return pagination.NewPage(items, totalCount, pg), nil
+}

@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"io"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -221,6 +222,59 @@ type SavedViewService interface {
 	ListByProject(ctx context.Context, projectID uuid.UUID, userID uuid.UUID) ([]domain.SavedView, error)
 }
 
+// CreateProjectUpdateInput holds the fields for creating a project update.
+type CreateProjectUpdateInput struct {
+	ProjectID  uuid.UUID       `json:"project_id"`
+	Title      string          `json:"title"`
+	Status     domain.UpdateStatus `json:"status"`
+	Summary    string          `json:"summary"`
+	Highlights []domain.TextItem `json:"highlights"`
+	Blockers   []domain.TextItem `json:"blockers"`
+	NextSteps  []domain.TextItem `json:"next_steps"`
+	CreatedBy  uuid.UUID       `json:"created_by"`
+}
+
+// ProjectUpdateService provides business logic for project updates.
+type ProjectUpdateService interface {
+	Create(ctx context.Context, input CreateProjectUpdateInput) (*domain.ProjectUpdate, error)
+	List(ctx context.Context, projectID uuid.UUID, pg pagination.Params) (*pagination.Page[domain.ProjectUpdate], error)
+	GetLatest(ctx context.Context, projectID uuid.UUID) (*domain.ProjectUpdate, error)
+}
+
+// CreateInitiativeInput holds the fields for creating an initiative.
+type CreateInitiativeInput struct {
+	WorkspaceID uuid.UUID        `json:"workspace_id"`
+	Name        string           `json:"name"`
+	Description string           `json:"description"`
+	Status      domain.InitiativeStatus `json:"status"`
+	TargetDate  *time.Time       `json:"target_date"`
+	CreatedBy   uuid.UUID        `json:"created_by"`
+}
+
+// UpdateInitiativeInput holds the fields for partially updating an initiative.
+type UpdateInitiativeInput struct {
+	Name        *string          `json:"name"`
+	Description *string          `json:"description"`
+	Status      *domain.InitiativeStatus `json:"status"`
+	TargetDate  *time.Time       `json:"target_date"`
+}
+
+// InitiativeService provides business logic for initiative management.
+type InitiativeService interface {
+	Create(ctx context.Context, input CreateInitiativeInput) (*domain.Initiative, error)
+	GetByID(ctx context.Context, id uuid.UUID) (*domain.Initiative, error)
+	Update(ctx context.Context, id uuid.UUID, input UpdateInitiativeInput) (*domain.Initiative, error)
+	Delete(ctx context.Context, id uuid.UUID) error
+	List(ctx context.Context, workspaceID uuid.UUID) ([]domain.Initiative, error)
+	LinkProject(ctx context.Context, initiativeID, projectID uuid.UUID) error
+	UnlinkProject(ctx context.Context, initiativeID, projectID uuid.UUID) error
+}
+
+// TriageService provides business logic for the triage inbox.
+type TriageService interface {
+	ListTriageTasks(ctx context.Context, workspaceID uuid.UUID, pg pagination.Params) (*pagination.Page[domain.Task], error)
+}
+
 // WebhookService provides business logic for outbound webhook management.
 type WebhookService interface {
 	Create(ctx context.Context, input domain.CreateWebhookInput) (*domain.WebhookConfig, error)
@@ -232,4 +286,78 @@ type WebhookService interface {
 	// Dispatch finds active webhooks for the given event type and fires HTTP POSTs
 	// asynchronously (fire-and-forget). It never blocks or returns an error to the caller.
 	Dispatch(ctx context.Context, workspaceID uuid.UUID, eventType string, payload any)
+}
+
+// VCSLinkService provides business logic for VCS link management.
+type VCSLinkService interface {
+	Create(ctx context.Context, input domain.CreateVCSLinkInput) (*domain.VCSLink, error)
+	GetByID(ctx context.Context, id uuid.UUID) (*domain.VCSLink, error)
+	Delete(ctx context.Context, id uuid.UUID) error
+	ListByTask(ctx context.Context, taskID uuid.UUID) ([]domain.VCSLink, error)
+}
+
+// IntegrationService provides business logic for workspace integration configs.
+type IntegrationService interface {
+	Configure(ctx context.Context, input domain.CreateIntegrationInput) (*domain.IntegrationConfig, error)
+	GetByID(ctx context.Context, id uuid.UUID) (*domain.IntegrationConfig, error)
+	Update(ctx context.Context, id uuid.UUID, input domain.UpdateIntegrationInput) (*domain.IntegrationConfig, error)
+	Delete(ctx context.Context, id uuid.UUID) error
+	ListByWorkspace(ctx context.Context, workspaceID uuid.UUID) ([]domain.IntegrationConfig, error)
+}
+
+// AnalyticsMetrics holds aggregated workspace/project metrics.
+type AnalyticsMetrics struct {
+	TaskMetrics  TaskMetrics  `json:"task_metrics"`
+	AgentMetrics AgentMetrics `json:"agent_metrics"`
+	EventMetrics EventMetrics `json:"event_metrics"`
+	Timeline     []DayMetric  `json:"timeline"`
+}
+
+// TaskMetrics holds task-level aggregated data.
+type TaskMetrics struct {
+	Total               int            `json:"total"`
+	ByStatusCategory    map[string]int `json:"by_status_category"`
+	ByPriority          map[string]int `json:"by_priority"`
+	CreatedThisPeriod   int            `json:"created_this_period"`
+	CompletedThisPeriod int            `json:"completed_this_period"`
+}
+
+// AgentMetrics holds agent-level aggregated data.
+type AgentMetrics struct {
+	TotalAgents  int            `json:"total_agents"`
+	ActiveAgents int            `json:"active_agents"`
+	TasksByAgent []AgentTaskRow `json:"tasks_by_agent"`
+}
+
+// AgentTaskRow holds per-agent task completion stats.
+type AgentTaskRow struct {
+	AgentID   uuid.UUID `json:"agent_id"`
+	AgentName string    `json:"agent_name"`
+	Completed int       `json:"completed"`
+}
+
+// EventMetrics holds event bus aggregated data.
+type EventMetrics struct {
+	TotalEvents int            `json:"total_events"`
+	ByType      map[string]int `json:"by_type"`
+}
+
+// DayMetric holds the daily task creation/completion counts.
+type DayMetric struct {
+	Date      string `json:"date"`
+	Created   int    `json:"created"`
+	Completed int    `json:"completed"`
+}
+
+// AnalyticsFilter defines the filtering parameters for analytics queries.
+type AnalyticsFilter struct {
+	WorkspaceID uuid.UUID
+	ProjectID   *uuid.UUID
+	From        time.Time
+	To          time.Time
+}
+
+// AnalyticsService provides business logic for analytics queries.
+type AnalyticsService interface {
+	GetMetrics(ctx context.Context, filter AnalyticsFilter) (*AnalyticsMetrics, error)
 }

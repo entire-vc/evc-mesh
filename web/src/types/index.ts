@@ -393,6 +393,74 @@ export interface UpdateSavedViewRequest {
   is_shared?: boolean;
 }
 
+// Project update types
+
+export type UpdateStatus = "on_track" | "at_risk" | "off_track" | "completed";
+
+export interface TextItem {
+  text: string;
+}
+
+export interface ProjectUpdateMetrics {
+  tasks_completed: number;
+  tasks_total: number;
+  tasks_in_progress: number;
+}
+
+export interface ProjectUpdate {
+  id: string;
+  project_id: string;
+  title: string;
+  status: UpdateStatus;
+  summary: string;
+  highlights: TextItem[];
+  blockers: TextItem[];
+  next_steps: TextItem[];
+  metrics: ProjectUpdateMetrics;
+  created_by: string;
+  created_at: string;
+}
+
+export interface CreateProjectUpdateRequest {
+  title: string;
+  status?: UpdateStatus;
+  summary: string;
+  highlights?: TextItem[];
+  blockers?: TextItem[];
+  next_steps?: TextItem[];
+}
+
+// Initiative types
+
+export type InitiativeStatus = "active" | "completed" | "archived";
+
+export interface Initiative {
+  id: string;
+  workspace_id: string;
+  name: string;
+  description: string;
+  status: InitiativeStatus;
+  target_date: string | null;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+  linked_projects?: Project[];
+}
+
+export interface CreateInitiativeRequest {
+  name: string;
+  description?: string;
+  status?: InitiativeStatus;
+  target_date?: string | null;
+}
+
+export interface UpdateInitiativeRequest {
+  name?: string;
+  description?: string;
+  status?: InitiativeStatus;
+  target_date?: string | null;
+}
+
 // API error type
 export interface ApiError {
   error?: string;
@@ -424,4 +492,76 @@ export interface WSMessage {
   channel: string;
   data: Record<string, unknown>;
   timestamp: string;
+}
+
+// VCS Link types
+
+export type VCSProvider = "github" | "gitlab";
+export type VCSLinkType = "pr" | "commit" | "branch";
+export type VCSLinkStatus = "open" | "merged" | "closed";
+
+export interface VCSLink {
+  id: string;
+  task_id: string;
+  provider: VCSProvider;
+  link_type: VCSLinkType;
+  external_id: string;
+  url: string;
+  title: string;
+  status: VCSLinkStatus | "";
+  metadata: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface CreateVCSLinkRequest {
+  provider?: VCSProvider;
+  link_type: VCSLinkType;
+  external_id: string;
+  url: string;
+  title?: string;
+  status?: VCSLinkStatus;
+}
+
+// Integration types
+
+export type IntegrationProvider = "slack" | "github";
+
+export interface IntegrationConfig {
+  id: string;
+  workspace_id: string;
+  provider: IntegrationProvider;
+  config: Record<string, unknown>;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+// Analytics types
+
+export interface AnalyticsMetrics {
+  task_metrics: {
+    total: number;
+    by_status_category: Record<string, number>;
+    by_priority: Record<string, number>;
+    created_this_period: number;
+    completed_this_period: number;
+  };
+  agent_metrics: {
+    total_agents: number;
+    active_agents: number;
+    tasks_by_agent: Array<{
+      agent_id: string;
+      agent_name: string;
+      completed: number;
+    }>;
+  };
+  event_metrics: {
+    total_events: number;
+    by_type: Record<string, number>;
+  };
+  timeline: Array<{
+    date: string;
+    created: number;
+    completed: number;
+  }>;
 }

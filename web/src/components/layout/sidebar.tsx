@@ -1,13 +1,17 @@
 import { Link, useLocation, useParams } from "react-router";
 import {
   Activity,
+  BarChart2,
   Bot,
   ChevronDown,
   FolderKanban,
+  Inbox,
   LayoutDashboard,
+  Plug,
   Plus,
   Settings,
   Sparkles,
+  Target,
 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { useWorkspaceStore } from "@/stores/workspace";
@@ -36,6 +40,10 @@ export function Sidebar({ collapsed }: SidebarProps) {
   const isAgentsRoute = location.pathname.endsWith("/agents");
   const isSparkRoute = location.pathname.endsWith("/spark");
   const isEventsRoute = location.pathname.endsWith("/events");
+  const isAnalyticsRoute = location.pathname.endsWith("/analytics");
+  const isIntegrationsRoute = location.pathname.endsWith("/integrations");
+  const isInitiativesRoute = location.pathname.endsWith("/initiatives");
+  const isTriageRoute = location.pathname.endsWith("/triage");
 
   if (collapsed) {
     return (
@@ -77,6 +85,42 @@ export function Sidebar({ collapsed }: SidebarProps) {
             )}
           >
             <Activity className="h-4 w-4" />
+          </Link>
+          <Link
+            to={wsSlug ? `/w/${wsSlug}/analytics` : "/"}
+            className={cn(
+              "flex h-8 w-8 items-center justify-center rounded-lg text-sidebar-foreground hover:bg-sidebar-accent",
+              isAnalyticsRoute && "bg-sidebar-accent text-sidebar-primary",
+            )}
+          >
+            <BarChart2 className="h-4 w-4" />
+          </Link>
+          <Link
+            to={wsSlug ? `/w/${wsSlug}/integrations` : "/"}
+            className={cn(
+              "flex h-8 w-8 items-center justify-center rounded-lg text-sidebar-foreground hover:bg-sidebar-accent",
+              isIntegrationsRoute && "bg-sidebar-accent text-sidebar-primary",
+            )}
+          >
+            <Plug className="h-4 w-4" />
+          </Link>
+          <Link
+            to={wsSlug ? `/w/${wsSlug}/initiatives` : "/"}
+            className={cn(
+              "flex h-8 w-8 items-center justify-center rounded-lg text-sidebar-foreground hover:bg-sidebar-accent",
+              isInitiativesRoute && "bg-sidebar-accent text-sidebar-primary",
+            )}
+          >
+            <Target className="h-4 w-4" />
+          </Link>
+          <Link
+            to={wsSlug ? `/w/${wsSlug}/triage` : "/"}
+            className={cn(
+              "flex h-8 w-8 items-center justify-center rounded-lg text-sidebar-foreground hover:bg-sidebar-accent",
+              isTriageRoute && "bg-sidebar-accent text-sidebar-primary",
+            )}
+          >
+            <Inbox className="h-4 w-4" />
           </Link>
           {projects.map((project) => (
             <Link
@@ -138,7 +182,7 @@ export function Sidebar({ collapsed }: SidebarProps) {
           to={wsSlug ? `/w/${wsSlug}` : "/"}
           className={cn(
             "flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-sidebar-foreground hover:bg-sidebar-accent",
-            !projectSlug && !isAgentsRoute && !isSparkRoute && !isEventsRoute && "bg-sidebar-accent font-medium",
+            !projectSlug && !isAgentsRoute && !isSparkRoute && !isEventsRoute && !isAnalyticsRoute && !isIntegrationsRoute && !isInitiativesRoute && !isTriageRoute && "bg-sidebar-accent font-medium",
           )}
         >
           <LayoutDashboard className="h-4 w-4" />
@@ -173,6 +217,46 @@ export function Sidebar({ collapsed }: SidebarProps) {
         >
           <Activity className="h-4 w-4" />
           Events
+        </Link>
+        <Link
+          to={wsSlug ? `/w/${wsSlug}/analytics` : "/"}
+          className={cn(
+            "flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-sidebar-foreground hover:bg-sidebar-accent",
+            isAnalyticsRoute && "bg-sidebar-accent font-medium",
+          )}
+        >
+          <BarChart2 className="h-4 w-4" />
+          Analytics
+        </Link>
+        <Link
+          to={wsSlug ? `/w/${wsSlug}/integrations` : "/"}
+          className={cn(
+            "flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-sidebar-foreground hover:bg-sidebar-accent",
+            isIntegrationsRoute && "bg-sidebar-accent font-medium",
+          )}
+        >
+          <Plug className="h-4 w-4" />
+          Integrations
+        </Link>
+        <Link
+          to={wsSlug ? `/w/${wsSlug}/initiatives` : "/"}
+          className={cn(
+            "flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-sidebar-foreground hover:bg-sidebar-accent",
+            isInitiativesRoute && "bg-sidebar-accent font-medium",
+          )}
+        >
+          <Target className="h-4 w-4" />
+          Initiatives
+        </Link>
+        <Link
+          to={wsSlug ? `/w/${wsSlug}/triage` : "/"}
+          className={cn(
+            "flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-sidebar-foreground hover:bg-sidebar-accent",
+            isTriageRoute && "bg-sidebar-accent font-medium",
+          )}
+        >
+          <Inbox className="h-4 w-4" />
+          Triage Inbox
         </Link>
 
         <div className="mt-4">

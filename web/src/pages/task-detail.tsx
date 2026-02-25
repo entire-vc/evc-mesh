@@ -39,6 +39,7 @@ import { CommentList } from "@/components/comment-list";
 import { ActivityLog } from "@/components/activity-log";
 import { SubtaskList } from "@/components/subtask-list";
 import { CustomFieldRenderer } from "@/components/custom-field-renderer";
+import { VCSLinks } from "@/components/vcs-links";
 import { cn } from "@/lib/cn";
 import {
   formatDate,
@@ -504,6 +505,11 @@ export function TaskDetailPage() {
                   </div>
                 </>
               )}
+
+              <Separator />
+
+              {/* VCS Links */}
+              <VCSLinks taskId={currentTask.id} />
 
               <Separator />
 

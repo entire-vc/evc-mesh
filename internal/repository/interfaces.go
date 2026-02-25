@@ -68,6 +68,8 @@ type TaskRepository interface {
 	ListByAssignee(ctx context.Context, assigneeID uuid.UUID, assigneeType domain.AssigneeType) ([]domain.Task, error)
 	ListSubtasks(ctx context.Context, parentTaskID uuid.UUID) ([]domain.Task, error)
 	CountByStatus(ctx context.Context, projectID uuid.UUID) (map[uuid.UUID]int, error)
+	CountByStatusCategory(ctx context.Context, projectID uuid.UUID) (map[domain.StatusCategory]int, error)
+	ListByStatusCategory(ctx context.Context, workspaceID uuid.UUID, category domain.StatusCategory, pg pagination.Params) (*pagination.Page[domain.Task], error)
 }
 
 // TaskStatusRepository manages persistence for task statuses.
@@ -229,6 +231,25 @@ type SavedViewRepository interface {
 	ListByProject(ctx context.Context, projectID uuid.UUID, userID uuid.UUID) ([]domain.SavedView, error)
 }
 
+// ProjectUpdateRepository manages persistence for project status updates.
+type ProjectUpdateRepository interface {
+	Create(ctx context.Context, update *domain.ProjectUpdate) error
+	List(ctx context.Context, projectID uuid.UUID, pg pagination.Params) (*pagination.Page[domain.ProjectUpdate], error)
+	GetLatest(ctx context.Context, projectID uuid.UUID) (*domain.ProjectUpdate, error)
+}
+
+// InitiativeRepository manages persistence for initiatives.
+type InitiativeRepository interface {
+	Create(ctx context.Context, initiative *domain.Initiative) error
+	GetByID(ctx context.Context, id uuid.UUID) (*domain.Initiative, error)
+	Update(ctx context.Context, initiative *domain.Initiative) error
+	Delete(ctx context.Context, id uuid.UUID) error
+	List(ctx context.Context, workspaceID uuid.UUID) ([]domain.Initiative, error)
+	LinkProject(ctx context.Context, initiativeID, projectID uuid.UUID) error
+	UnlinkProject(ctx context.Context, initiativeID, projectID uuid.UUID) error
+	ListLinkedProjects(ctx context.Context, initiativeID uuid.UUID) ([]domain.Project, error)
+}
+
 // WebhookRepository manages persistence for webhook configurations and deliveries.
 type WebhookRepository interface {
 	Create(ctx context.Context, webhook *domain.WebhookConfig) error
@@ -242,4 +263,22 @@ type WebhookRepository interface {
 	Deactivate(ctx context.Context, id uuid.UUID) error
 	CreateDelivery(ctx context.Context, delivery *domain.WebhookDelivery) error
 	ListDeliveries(ctx context.Context, webhookID uuid.UUID, limit int) ([]domain.WebhookDelivery, error)
+}
+
+// VCSLinkRepository manages persistence for VCS links.
+type VCSLinkRepository interface {
+	Create(ctx context.Context, link *domain.VCSLink) error
+	GetByID(ctx context.Context, id uuid.UUID) (*domain.VCSLink, error)
+	Delete(ctx context.Context, id uuid.UUID) error
+	ListByTask(ctx context.Context, taskID uuid.UUID) ([]domain.VCSLink, error)
+}
+
+// IntegrationRepository manages persistence for workspace integration configurations.
+type IntegrationRepository interface {
+	Upsert(ctx context.Context, cfg *domain.IntegrationConfig) error
+	GetByID(ctx context.Context, id uuid.UUID) (*domain.IntegrationConfig, error)
+	GetByProvider(ctx context.Context, workspaceID uuid.UUID, provider domain.IntegrationProvider) (*domain.IntegrationConfig, error)
+	Update(ctx context.Context, id uuid.UUID, input domain.UpdateIntegrationInput) (*domain.IntegrationConfig, error)
+	Delete(ctx context.Context, id uuid.UUID) error
+	ListByWorkspace(ctx context.Context, workspaceID uuid.UUID) ([]domain.IntegrationConfig, error)
 }

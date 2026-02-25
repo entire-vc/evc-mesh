@@ -63,6 +63,10 @@ func main() {
 	workspaceMemberRepo := postgres.NewWorkspaceMemberRepo(db)
 	webhookRepo := postgres.NewWebhookRepo(db)
 	savedViewRepo := postgres.NewSavedViewRepo(db)
+	vcsLinkRepo := postgres.NewVCSLinkRepo(db)
+	integrationRepo := postgres.NewIntegrationRepo(db)
+	projectUpdateRepo := postgres.NewProjectUpdateRepo(db)
+	initiativeRepo := postgres.NewInitiativeRepo(db)
 
 	// 5. Create auth service.
 	authService := auth.NewService(
@@ -102,6 +106,12 @@ func main() {
 	activityLogService := service.NewActivityLogService(activityLogRepo)
 	webhookService := service.NewWebhookService(webhookRepo)
 	savedViewService := service.NewSavedViewService(savedViewRepo)
+	vcsLinkService := service.NewVCSLinkService(vcsLinkRepo)
+	integrationService := service.NewIntegrationService(integrationRepo)
+	analyticsService := service.NewAnalyticsService(db)
+	projectUpdateService := service.NewProjectUpdateService(projectUpdateRepo, projectRepo, taskRepo, taskStatusRepo)
+	initiativeService := service.NewInitiativeService(initiativeRepo, projectRepo)
+	triageService := service.NewTriageService(taskRepo)
 
 	// customFieldService was already created above (before taskService, for CF value validation).
 
@@ -161,6 +171,12 @@ func main() {
 	taskContextHandler := handler.NewTaskContextHandler(taskService, commentService, artifactService, depService, eventBusService)
 	webhookHandler := handler.NewWebhookHandler(webhookService)
 	savedViewHandler := handler.NewSavedViewHandler(savedViewService)
+	vcsLinkHandler := handler.NewVCSLinkHandler(vcsLinkService)
+	integrationHandler := handler.NewIntegrationHandler(integrationService)
+	analyticsHandler := handler.NewAnalyticsHandler(analyticsService)
+	projectUpdateHandler := handler.NewProjectUpdateHandler(projectUpdateService)
+	initiativeHandler := handler.NewInitiativeHandler(initiativeService)
+	triageHandler := handler.NewTriageHandler(triageService)
 
 	// 8. Create Echo instance with global middleware.
 	e := echo.New()
@@ -341,6 +357,40 @@ func main() {
 	api.GET("/workspaces/:ws_id/activity", activityHandler.ListByWorkspace, rbac(mw.PermExportAuditLog))
 	api.GET("/workspaces/:ws_id/activity/export", activityHandler.Export, rbac(mw.PermExportAuditLog))
 	api.GET("/tasks/:task_id/activity", activityHandler.ListByTask)
+
+	// VCS link routes.
+	api.GET("/tasks/:task_id/vcs-links", vcsLinkHandler.List)
+	api.POST("/tasks/:task_id/vcs-links", vcsLinkHandler.Create, rbac(mw.PermUpdateTask))
+	api.DELETE("/vcs-links/:link_id", vcsLinkHandler.Delete, rbac(mw.PermUpdateTask))
+
+	// GitHub webhook receiver (public — no auth, HMAC optional in future).
+	e.POST("/webhooks/github", vcsLinkHandler.GitHubWebhook)
+
+	// Integration config routes.
+	api.GET("/workspaces/:ws_id/integrations", integrationHandler.List)
+	api.POST("/workspaces/:ws_id/integrations", integrationHandler.Configure, rbac(mw.PermManageWebhooks))
+	api.PATCH("/integrations/:int_id", integrationHandler.Update, rbac(mw.PermManageWebhooks))
+	api.DELETE("/integrations/:int_id", integrationHandler.Delete, rbac(mw.PermManageWebhooks))
+
+	// Analytics routes.
+	api.GET("/workspaces/:ws_id/analytics", analyticsHandler.GetMetrics)
+
+	// Project update routes.
+	api.POST("/projects/:proj_id/updates", projectUpdateHandler.Create)
+	api.GET("/projects/:proj_id/updates", projectUpdateHandler.List)
+	api.GET("/projects/:proj_id/updates/latest", projectUpdateHandler.GetLatest)
+
+	// Initiative routes.
+	api.POST("/workspaces/:ws_id/initiatives", initiativeHandler.Create, rbac(mw.PermCreateProject))
+	api.GET("/workspaces/:ws_id/initiatives", initiativeHandler.List)
+	api.GET("/initiatives/:init_id", initiativeHandler.GetByID)
+	api.PATCH("/initiatives/:init_id", initiativeHandler.Update, rbac(mw.PermCreateProject))
+	api.DELETE("/initiatives/:init_id", initiativeHandler.Delete, rbac(mw.PermDeleteProject))
+	api.POST("/initiatives/:init_id/projects", initiativeHandler.LinkProject, rbac(mw.PermCreateProject))
+	api.DELETE("/initiatives/:init_id/projects/:proj_id", initiativeHandler.UnlinkProject, rbac(mw.PermCreateProject))
+
+	// Triage inbox route.
+	api.GET("/workspaces/:ws_id/triage", triageHandler.List)
 
 	// Spark catalog routes (optional; only registered when MESH_SPARK_ENABLED=true).
 	if cfg.Spark.Enabled {

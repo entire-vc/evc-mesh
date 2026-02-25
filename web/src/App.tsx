@@ -12,6 +12,11 @@ import { AgentDashboardPage } from "@/pages/agent-dashboard";
 import { EventFeedPage } from "@/pages/event-feed";
 import { TimelinePage } from "@/pages/timeline";
 import { SparkPage } from "@/pages/spark";
+import { AnalyticsPage } from "@/pages/analytics";
+import { IntegrationsPage } from "@/pages/integrations";
+import { InitiativesPage } from "@/pages/initiatives";
+import { TriagePage } from "@/pages/triage";
+import { ProjectUpdatesPage } from "@/pages/project-updates";
 
 class ErrorBoundary extends Component<
   { children: ReactNode },
@@ -79,6 +84,22 @@ export function App() {
             path="w/:wsSlug/events"
             element={<EventFeedPage />}
           />
+          <Route
+            path="w/:wsSlug/analytics"
+            element={<AnalyticsPage />}
+          />
+          <Route
+            path="w/:wsSlug/integrations"
+            element={<IntegrationsPage />}
+          />
+          <Route
+            path="w/:wsSlug/initiatives"
+            element={<InitiativesPage />}
+          />
+          <Route
+            path="w/:wsSlug/triage"
+            element={<TriagePage />}
+          />
           <Route path="w/:wsSlug/p/:projectSlug" element={<BoardPage />} />
           <Route
             path="w/:wsSlug/p/:projectSlug/list"
@@ -87,6 +108,10 @@ export function App() {
           <Route
             path="w/:wsSlug/p/:projectSlug/timeline"
             element={<TimelinePage />}
+          />
+          <Route
+            path="w/:wsSlug/p/:projectSlug/updates"
+            element={<ProjectUpdatesPage />}
           />
           <Route
             path="w/:wsSlug/p/:projectSlug/t/:taskId"
