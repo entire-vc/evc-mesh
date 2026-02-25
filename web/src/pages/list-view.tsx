@@ -638,14 +638,7 @@ export function ListViewPage() {
   return (
     <div className="space-y-4">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <List className="h-5 w-5 text-muted-foreground" />
-          <h1 className="text-2xl font-bold tracking-tight">
-            {currentProject.name}
-          </h1>
-        </div>
-
+      <div className="flex items-center justify-end">
         {/* Saved views — top-right */}
         <SavedViewsMenu
           projectId={currentProject.id}

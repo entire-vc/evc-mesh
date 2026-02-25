@@ -111,8 +111,8 @@ func (s *taskService) Create(ctx context.Context, task *domain.Task) error {
 		return err
 	}
 	s.logActivity(ctx, task.ProjectID, task.ID, "task.created", map[string]interface{}{
-		"title":    task.Title,
-		"priority": task.Priority,
+		"title":    map[string]interface{}{"old": nil, "new": task.Title},
+		"priority": map[string]interface{}{"old": nil, "new": string(task.Priority)},
 	})
 	return nil
 }
@@ -158,7 +158,31 @@ func (s *taskService) Update(ctx context.Context, task *domain.Task) error {
 	if err := s.taskRepo.Update(ctx, task); err != nil {
 		return err
 	}
-	s.logActivity(ctx, task.ProjectID, task.ID, "task.updated", nil)
+
+	// Build diff between existing and updated task.
+	changes := map[string]interface{}{}
+	if existing.Title != task.Title {
+		changes["title"] = map[string]interface{}{"old": existing.Title, "new": task.Title}
+	}
+	if existing.Description != task.Description {
+		changes["description"] = map[string]interface{}{"old": existing.Description, "new": task.Description}
+	}
+	if existing.Priority != task.Priority {
+		changes["priority"] = map[string]interface{}{"old": string(existing.Priority), "new": string(task.Priority)}
+	}
+	if existing.AssigneeID != task.AssigneeID {
+		changes["assignee_id"] = map[string]interface{}{"old": existing.AssigneeID, "new": task.AssigneeID}
+	}
+	if existing.AssigneeType != task.AssigneeType {
+		changes["assignee_type"] = map[string]interface{}{"old": string(existing.AssigneeType), "new": string(task.AssigneeType)}
+	}
+	if existing.DueDate != task.DueDate {
+		changes["due_date"] = map[string]interface{}{"old": existing.DueDate, "new": task.DueDate}
+	}
+	if existing.EstimatedHours != task.EstimatedHours {
+		changes["estimated_hours"] = map[string]interface{}{"old": existing.EstimatedHours, "new": task.EstimatedHours}
+	}
+	s.logActivity(ctx, task.ProjectID, task.ID, "task.updated", changes)
 	return nil
 }
 
@@ -208,6 +232,9 @@ func (s *taskService) MoveTask(ctx context.Context, taskID uuid.UUID, input Move
 		return apierror.NotFound("Task")
 	}
 
+	oldStatusID := task.StatusID
+	oldPosition := task.Position
+
 	if input.StatusID != nil {
 		status, err := s.statusRepo.GetByID(ctx, *input.StatusID)
 		if err != nil {
@@ -238,14 +265,14 @@ func (s *taskService) MoveTask(ctx context.Context, taskID uuid.UUID, input Move
 	if err := s.taskRepo.Update(ctx, task); err != nil {
 		return err
 	}
-	changes := map[string]interface{}{}
+	moveChanges := map[string]interface{}{}
 	if input.StatusID != nil {
-		changes["status_id"] = input.StatusID.String()
+		moveChanges["status_id"] = map[string]interface{}{"old": oldStatusID.String(), "new": input.StatusID.String()}
 	}
 	if input.Position != nil {
-		changes["position"] = *input.Position
+		moveChanges["position"] = map[string]interface{}{"old": oldPosition, "new": *input.Position}
 	}
-	s.logActivity(ctx, task.ProjectID, taskID, "task.moved", changes)
+	s.logActivity(ctx, task.ProjectID, taskID, "task.moved", moveChanges)
 
 	// Fire auto-transition checks when the status changed.
 	if input.StatusID != nil && s.autoTransSvc != nil {
@@ -270,6 +297,9 @@ func (s *taskService) AssignTask(ctx context.Context, taskID uuid.UUID, input As
 		return apierror.NotFound("Task")
 	}
 
+	oldAssigneeID := task.AssigneeID
+	oldAssigneeType := task.AssigneeType
+
 	task.AssigneeID = input.AssigneeID
 	task.AssigneeType = input.AssigneeType
 	task.UpdatedAt = timeNow()
@@ -278,8 +308,8 @@ func (s *taskService) AssignTask(ctx context.Context, taskID uuid.UUID, input As
 		return err
 	}
 	s.logActivity(ctx, task.ProjectID, taskID, "task.assigned", map[string]interface{}{
-		"assignee_id":   input.AssigneeID,
-		"assignee_type": input.AssigneeType,
+		"assignee_id":   map[string]interface{}{"old": oldAssigneeID, "new": input.AssigneeID},
+		"assignee_type": map[string]interface{}{"old": string(oldAssigneeType), "new": string(input.AssigneeType)},
 	})
 	return nil
 }
@@ -312,8 +342,8 @@ func (s *taskService) CreateSubtask(ctx context.Context, parentTaskID uuid.UUID,
 		return nil, err
 	}
 	s.logActivity(ctx, child.ProjectID, child.ID, "task.created", map[string]interface{}{
-		"title":          child.Title,
-		"parent_task_id": parentTaskID.String(),
+		"title":          map[string]interface{}{"old": nil, "new": child.Title},
+		"parent_task_id": map[string]interface{}{"old": nil, "new": parentTaskID.String()},
 	})
 	return child, nil
 }

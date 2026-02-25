@@ -631,12 +631,6 @@ export function BoardPage() {
 
   return (
     <div className="flex flex-col gap-3">
-      {/* Page title */}
-      <div className="flex items-center gap-3">
-        <Columns3 className="h-5 w-5 text-muted-foreground" />
-        <h1 className="text-2xl font-bold tracking-tight">{currentProject.name}</h1>
-      </div>
-
       {/* View tab bar */}
       <ViewTabBar
         currentView="board"
