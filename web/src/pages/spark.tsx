@@ -107,11 +107,9 @@ export function SparkPage() {
               Enable the Spark Agent Catalog integration to browse and install AI
               agents into your workspace.
             </p>
-            <Button asChild>
-              <Link to={`/w/${currentWorkspace?.slug}/integrations`}>
-                Go to Integrations
-              </Link>
-            </Button>
+            <Link to={`/w/${currentWorkspace?.slug}/integrations`}>
+              <Button>Go to Integrations</Button>
+            </Link>
           </CardContent>
         </Card>
       </div>
