@@ -8,7 +8,9 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"github.com/entire-vc/evc-mesh/internal/auth"
+	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/service"
+	"github.com/entire-vc/evc-mesh/pkg/actorctx"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 )
 
@@ -51,6 +53,10 @@ func JWTAuth(authService *auth.Service) echo.MiddlewareFunc {
 			c.Set(ContextKeyUserID, userID)
 			c.Set(ContextKeyEmail, claims.Email)
 
+			// Propagate actor into Go context for service layer.
+			goCtx := actorctx.WithActor(c.Request().Context(), userID, domain.ActorTypeUser)
+			c.SetRequest(c.Request().WithContext(goCtx))
+
 			return next(c)
 		}
 	}
@@ -82,6 +88,10 @@ func AgentKeyAuth(agentService service.AgentService) echo.MiddlewareFunc {
 			c.Set(ContextKeyAgentID, agent.ID)
 			c.Set(ContextKeyWorkspaceID, agent.WorkspaceID)
 
+			// Propagate actor into Go context for service layer.
+			goCtx := actorctx.WithActor(c.Request().Context(), agent.ID, domain.ActorTypeAgent)
+			c.SetRequest(c.Request().WithContext(goCtx))
+
 			return next(c)
 		}
 	}
@@ -99,6 +109,9 @@ func DualAuth(authService *auth.Service, agentService service.AgentService) echo
 						c.Set(ContextKeyAuthType, AuthTypeUser)
 						c.Set(ContextKeyUserID, userID)
 						c.Set(ContextKeyEmail, claims.Email)
+						// Propagate actor into Go context for service layer.
+						goCtx := actorctx.WithActor(c.Request().Context(), userID, domain.ActorTypeUser)
+						c.SetRequest(c.Request().WithContext(goCtx))
 						return next(c)
 					}
 				}
@@ -111,6 +124,9 @@ func DualAuth(authService *auth.Service, agentService service.AgentService) echo
 						c.Set(ContextKeyAuthType, AuthTypeAgent)
 						c.Set(ContextKeyAgentID, agent.ID)
 						c.Set(ContextKeyWorkspaceID, agent.WorkspaceID)
+						// Propagate actor into Go context for service layer.
+						goCtx := actorctx.WithActor(c.Request().Context(), agent.ID, domain.ActorTypeAgent)
+						c.SetRequest(c.Request().WithContext(goCtx))
 						return next(c)
 					}
 				}
@@ -134,6 +150,9 @@ func OptionalAuth(authService *auth.Service, agentService service.AgentService) 
 						c.Set(ContextKeyAuthType, AuthTypeUser)
 						c.Set(ContextKeyUserID, userID)
 						c.Set(ContextKeyEmail, claims.Email)
+						// Propagate actor into Go context for service layer.
+						goCtx := actorctx.WithActor(c.Request().Context(), userID, domain.ActorTypeUser)
+						c.SetRequest(c.Request().WithContext(goCtx))
 						return next(c)
 					}
 				}
@@ -146,6 +165,9 @@ func OptionalAuth(authService *auth.Service, agentService service.AgentService) 
 						c.Set(ContextKeyAuthType, AuthTypeAgent)
 						c.Set(ContextKeyAgentID, agent.ID)
 						c.Set(ContextKeyWorkspaceID, agent.WorkspaceID)
+						// Propagate actor into Go context for service layer.
+						goCtx := actorctx.WithActor(c.Request().Context(), agent.ID, domain.ActorTypeAgent)
+						c.SetRequest(c.Request().WithContext(goCtx))
 						return next(c)
 					}
 				}

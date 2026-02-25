@@ -77,6 +77,7 @@ func main() {
 
 	taskService := service.NewTaskService(taskRepo, taskStatusRepo, taskDependencyRepo, activityLogRepo,
 		service.WithCustomFieldService(customFieldService),
+		service.WithProjectRepo(projectRepo),
 	)
 	taskStatusService := service.NewTaskStatusService(taskStatusRepo, taskRepo, activityLogRepo)
 	agentService := service.NewAgentService(agentRepo, activityLogRepo, workspaceRepo)

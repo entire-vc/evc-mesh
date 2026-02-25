@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
@@ -36,26 +37,30 @@ func NewTaskHandler(ts service.TaskService) *TaskHandler {
 
 // createTaskRequest represents the JSON body for creating a task.
 type createTaskRequest struct {
-	Title        string              `json:"title"`
-	Description  string              `json:"description"`
-	Priority     domain.Priority     `json:"priority"`
-	StatusID     string              `json:"status_id"`
-	ParentTaskID *uuid.UUID          `json:"parent_task_id"`
-	AssigneeID   *uuid.UUID          `json:"assignee_id"`
-	AssigneeType domain.AssigneeType `json:"assignee_type"`
-	Labels       []string            `json:"labels"`
-	CustomFields json.RawMessage     `json:"custom_fields"`
+	Title          string              `json:"title"`
+	Description    string              `json:"description"`
+	Priority       domain.Priority     `json:"priority"`
+	StatusID       string              `json:"status_id"`
+	ParentTaskID   *uuid.UUID          `json:"parent_task_id"`
+	AssigneeID     *uuid.UUID          `json:"assignee_id"`
+	AssigneeType   domain.AssigneeType `json:"assignee_type"`
+	DueDate        *time.Time          `json:"due_date"`
+	EstimatedHours *float64            `json:"estimated_hours"`
+	Labels         []string            `json:"labels"`
+	CustomFields   json.RawMessage     `json:"custom_fields"`
 }
 
 // updateTaskRequest represents the JSON body for partially updating a task.
 type updateTaskRequest struct {
-	Title        *string              `json:"title"`
-	Description  *string              `json:"description"`
-	Priority     *domain.Priority     `json:"priority"`
-	AssigneeID   *uuid.UUID           `json:"assignee_id"`
-	AssigneeType *domain.AssigneeType `json:"assignee_type"`
-	Labels       *[]string            `json:"labels"`
-	CustomFields json.RawMessage      `json:"custom_fields"`
+	Title          *string              `json:"title"`
+	Description    *string              `json:"description"`
+	Priority       *domain.Priority     `json:"priority"`
+	AssigneeID     *uuid.UUID           `json:"assignee_id"`
+	AssigneeType   *domain.AssigneeType `json:"assignee_type"`
+	DueDate        *time.Time           `json:"due_date"`
+	EstimatedHours *float64             `json:"estimated_hours"`
+	Labels         *[]string            `json:"labels"`
+	CustomFields   json.RawMessage      `json:"custom_fields"`
 }
 
 // moveTaskRequest represents the JSON body for moving a task.
@@ -122,19 +127,21 @@ func (h *TaskHandler) Create(c echo.Context) error {
 	}
 
 	task := &domain.Task{
-		ID:            uuid.New(),
-		ProjectID:     projectID,
-		StatusID:      statusID,
-		Title:         req.Title,
-		Description:   req.Description,
-		Priority:      priority,
-		ParentTaskID:  req.ParentTaskID,
-		AssigneeID:    req.AssigneeID,
-		AssigneeType:  assigneeType,
-		Labels:        pq.StringArray(req.Labels),
-		CustomFields:  req.CustomFields,
-		CreatedBy:     createdBy,
-		CreatedByType: createdByType,
+		ID:             uuid.New(),
+		ProjectID:      projectID,
+		StatusID:       statusID,
+		Title:          req.Title,
+		Description:    req.Description,
+		Priority:       priority,
+		ParentTaskID:   req.ParentTaskID,
+		AssigneeID:     req.AssigneeID,
+		AssigneeType:   assigneeType,
+		DueDate:        req.DueDate,
+		EstimatedHours: req.EstimatedHours,
+		Labels:         pq.StringArray(req.Labels),
+		CustomFields:   req.CustomFields,
+		CreatedBy:      createdBy,
+		CreatedByType:  createdByType,
 	}
 
 	if err := h.taskService.Create(c.Request().Context(), task); err != nil {
@@ -194,6 +201,12 @@ func (h *TaskHandler) Update(c echo.Context) error {
 	}
 	if req.AssigneeType != nil {
 		task.AssigneeType = *req.AssigneeType
+	}
+	if req.DueDate != nil {
+		task.DueDate = req.DueDate
+	}
+	if req.EstimatedHours != nil {
+		task.EstimatedHours = req.EstimatedHours
 	}
 	if req.Labels != nil {
 		task.Labels = pq.StringArray(*req.Labels)

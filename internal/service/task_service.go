@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"log"
 	"strings"
 	"time"
 
@@ -10,6 +11,7 @@ import (
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/repository"
+	"github.com/entire-vc/evc-mesh/pkg/actorctx"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 	"github.com/entire-vc/evc-mesh/pkg/pagination"
 )
@@ -18,11 +20,12 @@ import (
 var timeNow = time.Now
 
 type taskService struct {
-	taskRepo         repository.TaskRepository
-	statusRepo       repository.TaskStatusRepository
-	depRepo          repository.TaskDependencyRepository
-	activityRepo     repository.ActivityLogRepository
-	customFieldSvc   CustomFieldService
+	taskRepo       repository.TaskRepository
+	statusRepo     repository.TaskStatusRepository
+	depRepo        repository.TaskDependencyRepository
+	activityRepo   repository.ActivityLogRepository
+	customFieldSvc CustomFieldService
+	projectRepo    repository.ProjectRepository
 }
 
 // NewTaskService returns a new TaskService backed by the given repositories.
@@ -56,6 +59,13 @@ func WithCustomFieldService(cfs CustomFieldService) TaskServiceOption {
 	}
 }
 
+// WithProjectRepo sets the project repository used to resolve workspace_id for activity logging.
+func WithProjectRepo(pr repository.ProjectRepository) TaskServiceOption {
+	return func(s *taskService) {
+		s.projectRepo = pr
+	}
+}
+
 // Create validates and persists a new task.
 func (s *taskService) Create(ctx context.Context, task *domain.Task) error {
 	if strings.TrimSpace(task.Title) == "" {
@@ -82,7 +92,14 @@ func (s *taskService) Create(ctx context.Context, task *domain.Task) error {
 	task.CreatedAt = now
 	task.UpdatedAt = now
 
-	return s.taskRepo.Create(ctx, task)
+	if err := s.taskRepo.Create(ctx, task); err != nil {
+		return err
+	}
+	s.logActivity(ctx, task.ProjectID, task.ID, "task.created", map[string]interface{}{
+		"title":    task.Title,
+		"priority": task.Priority,
+	})
+	return nil
 }
 
 // GetDefaultStatus returns the default task status for a project.
@@ -123,7 +140,11 @@ func (s *taskService) Update(ctx context.Context, task *domain.Task) error {
 	}
 
 	task.UpdatedAt = timeNow()
-	return s.taskRepo.Update(ctx, task)
+	if err := s.taskRepo.Update(ctx, task); err != nil {
+		return err
+	}
+	s.logActivity(ctx, task.ProjectID, task.ID, "task.updated", nil)
+	return nil
 }
 
 // Delete removes a task after verifying it exists.
@@ -135,7 +156,11 @@ func (s *taskService) Delete(ctx context.Context, id uuid.UUID) error {
 	if existing == nil {
 		return apierror.NotFound("Task")
 	}
-	return s.taskRepo.Delete(ctx, id)
+	if err := s.taskRepo.Delete(ctx, id); err != nil {
+		return err
+	}
+	s.logActivity(ctx, existing.ProjectID, id, "task.deleted", nil)
+	return nil
 }
 
 // List returns a paginated list of tasks for the given project.
@@ -183,7 +208,18 @@ func (s *taskService) MoveTask(ctx context.Context, taskID uuid.UUID, input Move
 	}
 
 	task.UpdatedAt = timeNow()
-	return s.taskRepo.Update(ctx, task)
+	if err := s.taskRepo.Update(ctx, task); err != nil {
+		return err
+	}
+	changes := map[string]interface{}{}
+	if input.StatusID != nil {
+		changes["status_id"] = input.StatusID.String()
+	}
+	if input.Position != nil {
+		changes["position"] = *input.Position
+	}
+	s.logActivity(ctx, task.ProjectID, taskID, "task.moved", changes)
+	return nil
 }
 
 // AssignTask assigns or unassigns a task.
@@ -200,7 +236,14 @@ func (s *taskService) AssignTask(ctx context.Context, taskID uuid.UUID, input As
 	task.AssigneeType = input.AssigneeType
 	task.UpdatedAt = timeNow()
 
-	return s.taskRepo.Update(ctx, task)
+	if err := s.taskRepo.Update(ctx, task); err != nil {
+		return err
+	}
+	s.logActivity(ctx, task.ProjectID, taskID, "task.assigned", map[string]interface{}{
+		"assignee_id":   input.AssigneeID,
+		"assignee_type": input.AssigneeType,
+	})
+	return nil
 }
 
 // CreateSubtask creates a child task under the given parent.
@@ -230,6 +273,10 @@ func (s *taskService) CreateSubtask(ctx context.Context, parentTaskID uuid.UUID,
 	if err := s.taskRepo.Create(ctx, child); err != nil {
 		return nil, err
 	}
+	s.logActivity(ctx, child.ProjectID, child.ID, "task.created", map[string]interface{}{
+		"title":          child.Title,
+		"parent_task_id": parentTaskID.String(),
+	})
 	return child, nil
 }
 
@@ -241,4 +288,42 @@ func (s *taskService) ListSubtasks(ctx context.Context, parentTaskID uuid.UUID) 
 // GetMyTasks returns all tasks assigned to the given actor.
 func (s *taskService) GetMyTasks(ctx context.Context, assigneeID uuid.UUID, assigneeType domain.AssigneeType) ([]domain.Task, error) {
 	return s.taskRepo.ListByAssignee(ctx, assigneeID, assigneeType)
+}
+
+// logActivity writes an activity log entry. Failures are logged but not propagated.
+func (s *taskService) logActivity(ctx context.Context, projectID, entityID uuid.UUID, action string, changes map[string]interface{}) {
+	if s.activityRepo == nil {
+		return
+	}
+
+	// Resolve workspace_id from project.
+	var wsID uuid.UUID
+	if s.projectRepo != nil {
+		if proj, err := s.projectRepo.GetByID(ctx, projectID); err == nil && proj != nil {
+			wsID = proj.WorkspaceID
+		}
+	}
+	if wsID == uuid.Nil {
+		log.Printf("[activity] WARNING: could not resolve workspace_id for project %s, skipping", projectID)
+		return
+	}
+
+	// Extract actor from Go context (set by auth middleware).
+	actorID, actorType := actorctx.FromContext(ctx)
+
+	changesJSON, _ := json.Marshal(changes)
+	entry := &domain.ActivityLog{
+		ID:          uuid.New(),
+		WorkspaceID: wsID,
+		EntityType:  "task",
+		EntityID:    entityID,
+		Action:      action,
+		ActorID:     actorID,
+		ActorType:   actorType,
+		Changes:     changesJSON,
+		CreatedAt:   timeNow(),
+	}
+	if err := s.activityRepo.Create(ctx, entry); err != nil {
+		log.Printf("[activity] WARNING: failed to log %s for task %s: %v", action, entityID, err)
+	}
 }
