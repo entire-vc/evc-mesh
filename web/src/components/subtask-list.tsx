@@ -25,7 +25,7 @@ export function SubtaskList({ taskId }: SubtaskListProps) {
       const data = await api<Task[]>(
         `/api/v1/tasks/${taskId}/subtasks`,
       );
-      setSubtasks(data);
+      setSubtasks(data ?? []);
     } catch {
       // silently fail
     } finally {

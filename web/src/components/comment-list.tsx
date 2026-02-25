@@ -13,7 +13,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import type { ActorType, Comment, CreateCommentRequest } from "@/types";
+import type { ActorType, Comment, CreateCommentRequest, PaginatedResponse } from "@/types";
 
 interface CommentListProps {
   taskId: string;
@@ -146,10 +146,10 @@ export function CommentList({ taskId }: CommentListProps) {
 
   const fetchComments = useCallback(async () => {
     try {
-      const data = await api<Comment[]>(
+      const data = await api<PaginatedResponse<Comment>>(
         `/api/v1/tasks/${taskId}/comments`,
       );
-      setComments(data);
+      setComments(data.items ?? []);
     } catch {
       // silently fail — will show empty list
     } finally {

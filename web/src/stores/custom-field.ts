@@ -32,7 +32,7 @@ export const useCustomFieldStore = create<CustomFieldState>((set) => ({
       const fields = await api<CustomFieldDefinition[]>(
         `/api/v1/projects/${projectId}/custom-fields`,
       );
-      set({ fields, isLoading: false });
+      set({ fields: fields ?? [], isLoading: false });
     } catch {
       set({ isLoading: false });
     }

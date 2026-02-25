@@ -53,7 +53,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       const page = await api<PaginatedResponse<Project>>(
         `/api/v1/workspaces/${workspaceId}/projects`,
       );
-      set({ projects: page.items, isLoading: false });
+      set({ projects: page.items ?? [], isLoading: false });
     } catch {
       set({ isLoading: false });
     }
@@ -112,7 +112,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     const statuses = await api<TaskStatus[]>(
       `/api/v1/projects/${projectId}/statuses`,
     );
-    set({ statuses });
+    set({ statuses: statuses ?? [] });
   },
 
   createStatus: async (

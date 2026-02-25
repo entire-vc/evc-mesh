@@ -29,7 +29,7 @@ export const useAgentStore = create<AgentState>((set) => ({
       const response = await api<PaginatedResponse<Agent>>(
         `/api/v1/workspaces/${workspaceId}/agents`,
       );
-      set({ agents: response.items, isLoading: false });
+      set({ agents: response.items ?? [], isLoading: false });
     } catch {
       set({ isLoading: false });
     }

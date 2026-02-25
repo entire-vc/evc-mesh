@@ -53,7 +53,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
         { params: { page_size: "200", ...params } },
       );
       set({
-        tasks: data.items,
+        tasks: data.items ?? [],
         total: data.total_count ?? data.total ?? 0,
         page: data.page,
         perPage: data.per_page ?? data.page_size ?? 50,
