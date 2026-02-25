@@ -78,44 +78,6 @@ export function SparkPage() {
       });
   }, [currentWorkspace]);
 
-  // Load popular agents on mount — only when Spark is enabled.
-  useEffect(() => {
-    if (sparkEnabled) {
-      fetchPopular(20);
-    }
-  }, [fetchPopular, sparkEnabled]);
-
-  // Show a loading state until the integration check resolves.
-  if (sparkEnabled === null) {
-    return (
-      <div className="space-y-4 p-2">
-        <Skeleton className="h-8 w-48" />
-        <Skeleton className="h-4 w-80" />
-      </div>
-    );
-  }
-
-  // If Spark integration is not enabled, show a gate screen.
-  if (!sparkEnabled) {
-    return (
-      <div className="flex h-full items-center justify-center p-8">
-        <Card className="max-w-md w-full">
-          <CardContent className="flex flex-col items-center py-10 text-center">
-            <Sparkles className="mb-4 h-12 w-12 text-muted-foreground" />
-            <h2 className="mb-2 text-lg font-semibold">Spark catalog is not enabled</h2>
-            <p className="mb-6 text-sm text-muted-foreground">
-              Enable the Spark Agent Catalog integration to browse and install AI
-              agents into your workspace.
-            </p>
-            <Link to={`/w/${currentWorkspace?.slug}/integrations`}>
-              <Button>Go to Integrations</Button>
-            </Link>
-          </CardContent>
-        </Card>
-      </div>
-    );
-  }
-
   const handleSearch = useCallback(async () => {
     setHasSearched(true);
     await search(query, activeTags, 20);
@@ -158,6 +120,44 @@ export function SparkPage() {
     },
     [selectAgent],
   );
+
+  // Load popular agents on mount — only when Spark is enabled.
+  useEffect(() => {
+    if (sparkEnabled) {
+      fetchPopular(20);
+    }
+  }, [fetchPopular, sparkEnabled]);
+
+  // Show a loading state until the integration check resolves.
+  if (sparkEnabled === null) {
+    return (
+      <div className="space-y-4 p-2">
+        <Skeleton className="h-8 w-48" />
+        <Skeleton className="h-4 w-80" />
+      </div>
+    );
+  }
+
+  // If Spark integration is not enabled, show a gate screen.
+  if (!sparkEnabled) {
+    return (
+      <div className="flex h-full items-center justify-center p-8">
+        <Card className="max-w-md w-full">
+          <CardContent className="flex flex-col items-center py-10 text-center">
+            <Sparkles className="mb-4 h-12 w-12 text-muted-foreground" />
+            <h2 className="mb-2 text-lg font-semibold">Spark catalog is not enabled</h2>
+            <p className="mb-6 text-sm text-muted-foreground">
+              Enable the Spark Agent Catalog integration to browse and install AI
+              agents into your workspace.
+            </p>
+            <Link to={`/w/${currentWorkspace?.slug}/integrations`}>
+              <Button>Go to Integrations</Button>
+            </Link>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
 
   const displayedAgents = hasSearched ? agents : popularAgents;
   const sectionTitle = hasSearched ? "Search results" : "Popular agents";
