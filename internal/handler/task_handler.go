@@ -397,6 +397,97 @@ func (h *TaskHandler) ListSubtasks(c echo.Context) error {
 	return c.JSON(http.StatusOK, subtasks)
 }
 
+// assignTaskRequest represents the JSON body for assigning a task.
+type assignTaskRequest struct {
+	AssigneeID   *uuid.UUID          `json:"assignee_id"`
+	AssigneeType domain.AssigneeType `json:"assignee_type"`
+}
+
+// AssignTask handles POST /tasks/:task_id/assign
+func (h *TaskHandler) AssignTask(c echo.Context) error {
+	taskIDStr := c.Param("task_id")
+	taskID, err := uuid.Parse(taskIDStr)
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid task_id"))
+	}
+
+	var req assignTaskRequest
+	if err := c.Bind(&req); err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
+	}
+
+	assigneeType := req.AssigneeType
+	if assigneeType == "" {
+		if req.AssigneeID == nil {
+			assigneeType = domain.AssigneeTypeUnassigned
+		} else {
+			assigneeType = domain.AssigneeTypeAgent
+		}
+	}
+
+	input := service.AssignTaskInput{
+		AssigneeID:   req.AssigneeID,
+		AssigneeType: assigneeType,
+	}
+
+	if err := h.taskService.AssignTask(c.Request().Context(), taskID, input); err != nil {
+		return handleError(c, err)
+	}
+
+	// Return the updated task.
+	task, err := h.taskService.GetByID(c.Request().Context(), taskID)
+	if err != nil {
+		return handleError(c, err)
+	}
+
+	return c.JSON(http.StatusOK, task)
+}
+
+// createSubtaskRequest represents the JSON body for creating a subtask.
+type createSubtaskRequest struct {
+	Title       string          `json:"title"`
+	Description string          `json:"description"`
+	Priority    domain.Priority `json:"priority"`
+}
+
+// CreateSubtask handles POST /tasks/:task_id/subtasks
+func (h *TaskHandler) CreateSubtask(c echo.Context) error {
+	parentTaskIDStr := c.Param("task_id")
+	parentTaskID, err := uuid.Parse(parentTaskIDStr)
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid task_id"))
+	}
+
+	var req createSubtaskRequest
+	if err := c.Bind(&req); err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
+	}
+
+	if req.Title == "" {
+		return c.JSON(http.StatusBadRequest, apierror.ValidationError(map[string]string{
+			"title": "title is required",
+		}))
+	}
+
+	priority := req.Priority
+	if priority == "" {
+		priority = domain.PriorityMedium
+	}
+
+	input := service.CreateSubtaskInput{
+		Title:       req.Title,
+		Description: req.Description,
+		Priority:    priority,
+	}
+
+	subtask, err := h.taskService.CreateSubtask(c.Request().Context(), parentTaskID, input)
+	if err != nil {
+		return handleError(c, err)
+	}
+
+	return c.JSON(http.StatusCreated, subtask)
+}
+
 // handleError inspects the error type and returns appropriate JSON response.
 func handleError(c echo.Context, err error) error {
 	if apiErr, ok := err.(*apierror.Error); ok {

@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -214,6 +215,17 @@ func (r *mockWorkspaceMemberRepo) GetByWorkspaceAndUser(_ context.Context, wsID,
 		}
 	}
 	return nil, nil
+}
+
+func (r *mockWorkspaceMemberRepo) GetRole(_ context.Context, wsID, userID uuid.UUID) (string, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, m := range r.items {
+		if m.WorkspaceID == wsID && m.UserID == userID {
+			return m.Role, nil
+		}
+	}
+	return "", fmt.Errorf("user is not a member of this workspace")
 }
 
 // ---------------------------------------------------------------------------

@@ -139,10 +139,11 @@ func main() {
 	commentHandler := handler.NewCommentHandler(commentService)
 	artifactHandler := handler.NewArtifactHandler(artifactService)
 	depHandler := handler.NewDependencyHandler(depService, taskService)
-	agentHandler := handler.NewAgentHandler(agentService)
+	agentHandler := handler.NewAgentHandlerWithTaskService(agentService, taskService)
 	eventHandler := handler.NewEventHandler(eventBusService)
 	activityHandler := handler.NewActivityHandler(activityLogService)
 	customFieldHandler := handler.NewCustomFieldHandler(customFieldService)
+	taskContextHandler := handler.NewTaskContextHandler(taskService, commentService, artifactService, depService, eventBusService)
 
 	// 8. Create Echo instance with global middleware.
 	e := echo.New()
@@ -159,7 +160,7 @@ func main() {
 	e.Use(middleware.Recover())
 	e.Use(middleware.RequestID())
 	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
-		AllowOrigins: []string{"*"},
+		AllowOrigins: cfg.CORS.AllowOrigins,
 		AllowMethods: []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
 		AllowHeaders: []string{"Authorization", "Content-Type", "X-Agent-Key", "X-Request-ID"},
 	}))
@@ -191,6 +192,12 @@ func main() {
 
 	// --- Public routes (no auth required) ---
 	authGroup := v1.Group("/auth")
+	// Rate-limit auth endpoints by IP to prevent brute-force attacks.
+	authGroup.Use(mw.RateLimit(mw.RateLimitConfig{
+		Enabled: cfg.RateLimit.Enabled,
+		RPM:     cfg.RateLimit.AuthRPM,
+		KeyFunc: mw.RateLimitKeyByIP,
+	}))
 	authGroup.POST("/register", authHandler.Register)
 	authGroup.POST("/login", authHandler.Login)
 	authGroup.POST("/refresh", authHandler.Refresh)
@@ -199,24 +206,35 @@ func main() {
 	api := v1.Group("")
 	api.Use(mw.DualAuth(authService, agentService))
 	api.Use(mw.WorkspaceRLS(db, projectRepo))
+	// Rate-limit API endpoints by authenticated actor (user/agent ID).
+	api.Use(mw.RateLimit(mw.RateLimitConfig{
+		Enabled: cfg.RateLimit.Enabled,
+		RPM:     cfg.RateLimit.APIRPM,
+		KeyFunc: mw.RateLimitKeyByActor,
+	}))
 
 	// Auth - protected.
 	api.GET("/auth/me", authHandler.Me)
 	api.POST("/auth/logout", authHandler.Logout)
+
+	// rbac is a shorthand helper to create per-route RBAC middleware.
+	rbac := func(perm mw.Permission) echo.MiddlewareFunc {
+		return mw.RequirePermission(perm, workspaceMemberRepo)
+	}
 
 	// Workspace routes.
 	api.GET("/workspaces", workspaceHandler.List)
 	api.POST("/workspaces", workspaceHandler.Create)
 	api.GET("/workspaces/:ws_id", workspaceHandler.GetByID)
 	api.PATCH("/workspaces/:ws_id", workspaceHandler.Update)
-	api.DELETE("/workspaces/:ws_id", workspaceHandler.Delete)
+	api.DELETE("/workspaces/:ws_id", workspaceHandler.Delete, rbac(mw.PermDeleteWorkspace))
 
 	// Project routes.
 	api.GET("/workspaces/:ws_id/projects", projectHandler.List)
-	api.POST("/workspaces/:ws_id/projects", projectHandler.Create)
+	api.POST("/workspaces/:ws_id/projects", projectHandler.Create, rbac(mw.PermCreateProject))
 	api.GET("/projects/:proj_id", projectHandler.GetByID)
 	api.PATCH("/projects/:proj_id", projectHandler.Update)
-	api.DELETE("/projects/:proj_id", projectHandler.Delete)
+	api.DELETE("/projects/:proj_id", projectHandler.Delete, rbac(mw.PermDeleteProject))
 
 	// Task status routes.
 	api.GET("/projects/:proj_id/statuses", statusHandler.List)
@@ -226,57 +244,61 @@ func main() {
 
 	// Custom field routes.
 	api.GET("/projects/:proj_id/custom-fields", customFieldHandler.List)
-	api.POST("/projects/:proj_id/custom-fields", customFieldHandler.Create)
+	api.POST("/projects/:proj_id/custom-fields", customFieldHandler.Create, rbac(mw.PermManageCF))
 	api.GET("/custom-fields/:field_id", customFieldHandler.GetByID)
-	api.PATCH("/custom-fields/:field_id", customFieldHandler.Update)
-	api.DELETE("/custom-fields/:field_id", customFieldHandler.Delete)
-	api.PUT("/projects/:proj_id/custom-fields/reorder", customFieldHandler.Reorder)
+	api.PATCH("/custom-fields/:field_id", customFieldHandler.Update, rbac(mw.PermManageCF))
+	api.DELETE("/custom-fields/:field_id", customFieldHandler.Delete, rbac(mw.PermManageCF))
+	api.PUT("/projects/:proj_id/custom-fields/reorder", customFieldHandler.Reorder, rbac(mw.PermManageCF))
 
 	// Task routes.
 	api.GET("/projects/:proj_id/tasks", taskHandler.List)
-	api.POST("/projects/:proj_id/tasks", taskHandler.Create)
+	api.POST("/projects/:proj_id/tasks", taskHandler.Create, rbac(mw.PermCreateTask))
 	api.GET("/tasks/:task_id", taskHandler.GetByID)
-	api.PATCH("/tasks/:task_id", taskHandler.Update)
-	api.DELETE("/tasks/:task_id", taskHandler.Delete)
-	api.POST("/tasks/:task_id/move", taskHandler.MoveTask)
+	api.PATCH("/tasks/:task_id", taskHandler.Update, rbac(mw.PermUpdateTask))
+	api.DELETE("/tasks/:task_id", taskHandler.Delete, rbac(mw.PermDeleteTask))
+	api.POST("/tasks/:task_id/move", taskHandler.MoveTask, rbac(mw.PermUpdateTask))
 	api.GET("/tasks/:task_id/subtasks", taskHandler.ListSubtasks)
+	api.POST("/tasks/:task_id/subtasks", taskHandler.CreateSubtask, rbac(mw.PermCreateTask))
+	api.POST("/tasks/:task_id/assign", taskHandler.AssignTask, rbac(mw.PermUpdateTask))
+	api.GET("/tasks/:task_id/context", taskContextHandler.GetTaskContext)
 
 	// Dependency routes.
 	api.GET("/tasks/:task_id/dependencies", depHandler.List)
-	api.POST("/tasks/:task_id/dependencies", depHandler.Create)
-	api.DELETE("/tasks/:task_id/dependencies/:dep_id", depHandler.Delete)
+	api.POST("/tasks/:task_id/dependencies", depHandler.Create, rbac(mw.PermUpdateTask))
+	api.DELETE("/tasks/:task_id/dependencies/:dep_id", depHandler.Delete, rbac(mw.PermUpdateTask))
 	api.GET("/projects/:proj_id/dependency-graph", depHandler.DependencyGraph)
 
 	// Comment routes.
 	api.GET("/tasks/:task_id/comments", commentHandler.List)
-	api.POST("/tasks/:task_id/comments", commentHandler.Create)
-	api.PATCH("/comments/:comment_id", commentHandler.Update)
-	api.DELETE("/comments/:comment_id", commentHandler.Delete)
+	api.POST("/tasks/:task_id/comments", commentHandler.Create, rbac(mw.PermAddComment))
+	api.PATCH("/comments/:comment_id", commentHandler.Update, rbac(mw.PermAddComment))
+	api.DELETE("/comments/:comment_id", commentHandler.Delete, rbac(mw.PermAddComment))
 
 	// Artifact routes.
 	api.GET("/tasks/:task_id/artifacts", artifactHandler.List)
-	api.POST("/tasks/:task_id/artifacts", artifactHandler.Upload)
+	api.POST("/tasks/:task_id/artifacts", artifactHandler.Upload, rbac(mw.PermUploadArtifact))
 	api.GET("/artifacts/:artifact_id", artifactHandler.GetByID)
 	api.GET("/artifacts/:artifact_id/download", artifactHandler.Download)
-	api.DELETE("/artifacts/:artifact_id", artifactHandler.Delete)
+	api.DELETE("/artifacts/:artifact_id", artifactHandler.Delete, rbac(mw.PermUploadArtifact))
 
 	// Agent routes.
 	api.GET("/workspaces/:ws_id/agents", agentHandler.List)
-	api.POST("/workspaces/:ws_id/agents", agentHandler.Register)
+	api.POST("/workspaces/:ws_id/agents", agentHandler.Register, rbac(mw.PermRegisterAgent))
 	api.GET("/agents/:agent_id", agentHandler.GetByID)
-	api.PATCH("/agents/:agent_id", agentHandler.Update)
-	api.DELETE("/agents/:agent_id", agentHandler.Delete)
-	api.POST("/agents/:agent_id/regenerate-key", agentHandler.RegenerateKey)
+	api.PATCH("/agents/:agent_id", agentHandler.Update, rbac(mw.PermDeleteAgent))
+	api.DELETE("/agents/:agent_id", agentHandler.Delete, rbac(mw.PermDeleteAgent))
+	api.POST("/agents/:agent_id/regenerate-key", agentHandler.RegenerateKey, rbac(mw.PermDeleteAgent))
 	api.GET("/agents/me", agentHandler.Me)
+	api.GET("/agents/me/tasks", agentHandler.GetMyTasks)
 	api.POST("/agents/heartbeat", agentHandler.Heartbeat)
 
 	// Event bus routes.
 	api.GET("/projects/:proj_id/events", eventHandler.List)
-	api.POST("/projects/:proj_id/events", eventHandler.Create)
+	api.POST("/projects/:proj_id/events", eventHandler.Create, rbac(mw.PermPublishEvent))
 	api.GET("/events/:event_id", eventHandler.GetByID)
 
 	// Activity log routes.
-	api.GET("/workspaces/:ws_id/activity", activityHandler.ListByWorkspace)
+	api.GET("/workspaces/:ws_id/activity", activityHandler.ListByWorkspace, rbac(mw.PermExportAuditLog))
 	api.GET("/tasks/:task_id/activity", activityHandler.ListByTask)
 
 	// 10. Start server with graceful shutdown.

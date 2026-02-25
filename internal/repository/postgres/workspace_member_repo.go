@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 
 	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
@@ -43,4 +44,18 @@ func (r *WorkspaceMemberRepo) GetByWorkspaceAndUser(ctx context.Context, workspa
 		return nil, err
 	}
 	return &member, nil
+}
+
+// GetRole returns the workspace_role for a specific workspace + user combination.
+// Returns an error (sql.ErrNoRows wrapped) if the membership does not exist.
+func (r *WorkspaceMemberRepo) GetRole(ctx context.Context, workspaceID, userID uuid.UUID) (string, error) {
+	const q = `SELECT role FROM workspace_members WHERE workspace_id = $1 AND user_id = $2`
+	var role string
+	if err := r.db.GetContext(ctx, &role, q, workspaceID, userID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", fmt.Errorf("user is not a member of this workspace: %w", sql.ErrNoRows)
+		}
+		return "", fmt.Errorf("GetRole: %w", err)
+	}
+	return role, nil
 }

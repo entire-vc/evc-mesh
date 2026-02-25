@@ -1,0 +1,101 @@
+package handler
+
+import (
+	"net/http"
+
+	"github.com/google/uuid"
+	"github.com/labstack/echo/v4"
+
+	"github.com/entire-vc/evc-mesh/internal/repository"
+	"github.com/entire-vc/evc-mesh/internal/service"
+	"github.com/entire-vc/evc-mesh/pkg/apierror"
+	"github.com/entire-vc/evc-mesh/pkg/pagination"
+)
+
+// TaskContextHandler handles the GET /tasks/:task_id/context endpoint.
+// It aggregates task details, comments, artifacts, dependencies, and events.
+type TaskContextHandler struct {
+	taskService           service.TaskService
+	commentService        service.CommentService
+	artifactService       service.ArtifactService
+	taskDependencyService service.TaskDependencyService
+	eventBusService       service.EventBusService
+}
+
+// NewTaskContextHandler creates a new TaskContextHandler.
+func NewTaskContextHandler(
+	taskService service.TaskService,
+	commentService service.CommentService,
+	artifactService service.ArtifactService,
+	taskDependencyService service.TaskDependencyService,
+	eventBusService service.EventBusService,
+) *TaskContextHandler {
+	return &TaskContextHandler{
+		taskService:           taskService,
+		commentService:        commentService,
+		artifactService:       artifactService,
+		taskDependencyService: taskDependencyService,
+		eventBusService:       eventBusService,
+	}
+}
+
+// GetTaskContext handles GET /tasks/:task_id/context.
+// Returns a comprehensive view of the task including all related data.
+func (h *TaskContextHandler) GetTaskContext(c echo.Context) error {
+	taskIDStr := c.Param("task_id")
+	taskID, err := uuid.Parse(taskIDStr)
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid task_id"))
+	}
+
+	task, err := h.taskService.GetByID(c.Request().Context(), taskID)
+	if err != nil {
+		return handleError(c, err)
+	}
+	if task == nil {
+		return c.JSON(http.StatusNotFound, apierror.NotFound("Task"))
+	}
+
+	resp := map[string]any{
+		"task": task,
+	}
+
+	// Comments — best effort.
+	commentFilter := repository.CommentFilter{IncludeInternal: true}
+	commentPg := pagination.Params{Page: 1, PageSize: 100, SortBy: "created_at", SortDir: "asc"}
+	commentPg.Normalize()
+	if commentPage, err := h.commentService.ListByTask(c.Request().Context(), taskID, commentFilter, commentPg); err == nil {
+		resp["comments"] = commentPage.Items
+	} else {
+		resp["comments"] = []any{}
+	}
+
+	// Artifacts — best effort.
+	artifactPg := pagination.Params{Page: 1, PageSize: 100, SortBy: "created_at", SortDir: "desc"}
+	artifactPg.Normalize()
+	if artifactPage, err := h.artifactService.ListByTask(c.Request().Context(), taskID, artifactPg); err == nil {
+		resp["artifacts"] = artifactPage.Items
+	} else {
+		resp["artifacts"] = []any{}
+	}
+
+	// Dependencies — best effort.
+	if deps, err := h.taskDependencyService.ListByTask(c.Request().Context(), taskID); err == nil {
+		resp["dependencies"] = deps
+	} else {
+		resp["dependencies"] = []any{}
+	}
+
+	// Events — best effort.
+	eventOpts := service.GetContextOptions{
+		TaskID: &taskID,
+		Limit:  50,
+	}
+	if events, err := h.eventBusService.GetContext(c.Request().Context(), task.ProjectID, eventOpts); err == nil {
+		resp["events"] = events
+	} else {
+		resp["events"] = []any{}
+	}
+
+	return c.JSON(http.StatusOK, resp)
+}

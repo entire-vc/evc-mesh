@@ -4,17 +4,37 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
 // Config holds all application configuration, loaded from environment variables.
 type Config struct {
-	Server   ServerConfig
-	Database DatabaseConfig
-	Redis    RedisConfig
-	NATS     NATSConfig
-	S3       S3Config
-	Auth     AuthConfig
+	Server    ServerConfig
+	Database  DatabaseConfig
+	Redis     RedisConfig
+	NATS      NATSConfig
+	S3        S3Config
+	Auth      AuthConfig
+	CORS      CORSConfig
+	RateLimit RateLimitConfig
+}
+
+// CORSConfig holds cross-origin resource sharing settings.
+type CORSConfig struct {
+	// AllowOrigins is a comma-separated list of allowed origins.
+	// Use "*" to allow all origins (development default).
+	AllowOrigins []string
+}
+
+// RateLimitConfig holds rate limiting settings.
+type RateLimitConfig struct {
+	// Enabled controls whether rate limiting is active.
+	Enabled bool
+	// AuthRPM is the maximum requests per minute for auth endpoints (per IP).
+	AuthRPM int
+	// APIRPM is the maximum requests per minute for API endpoints (per actor).
+	APIRPM int
 }
 
 // ServerConfig holds HTTP server settings.
@@ -119,6 +139,14 @@ func Load() *Config {
 			CasdoorClientID: getEnv("CASDOOR_CLIENT_ID", ""),
 			AgentKeyPrefix:  getEnv("AGENT_KEY_PREFIX", "agk"),
 		},
+		CORS: CORSConfig{
+			AllowOrigins: getEnvStringSlice("MESH_CORS_ORIGINS", []string{"*"}),
+		},
+		RateLimit: RateLimitConfig{
+			Enabled: getEnvBool("MESH_RATE_LIMIT_ENABLED", true),
+			AuthRPM: getEnvInt("MESH_RATE_LIMIT_AUTH_RPM", 20),
+			APIRPM:  getEnvInt("MESH_RATE_LIMIT_API_RPM", 600),
+		},
 	}
 }
 
@@ -156,4 +184,24 @@ func getEnvDuration(key string, defaultVal time.Duration) time.Duration {
 		}
 	}
 	return defaultVal
+}
+
+// getEnvStringSlice reads a comma-separated env var and returns a slice of trimmed strings.
+// Falls back to defaultVal if the variable is not set or empty.
+func getEnvStringSlice(key string, defaultVal []string) []string {
+	val, ok := os.LookupEnv(key)
+	if !ok || strings.TrimSpace(val) == "" {
+		return defaultVal
+	}
+	parts := strings.Split(val, ",")
+	result := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if trimmed := strings.TrimSpace(p); trimmed != "" {
+			result = append(result, trimmed)
+		}
+	}
+	if len(result) == 0 {
+		return defaultVal
+	}
+	return result
 }

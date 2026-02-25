@@ -1,6 +1,10 @@
 // Package mcp contains MCP (Model Context Protocol) tool handlers.
 // These tools provide an agent-friendly interface for task management,
 // event bus interaction, and artifact handling.
+//
+// Architecture: tools call the REST API via RESTClient instead of
+// accessing the database directly. This decouples the MCP server from
+// the data layer and allows the MCP server to run as a lightweight proxy.
 package mcp
 
 import (
@@ -8,17 +12,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/google/uuid"
-	"github.com/lib/pq"
 	mcpsdk "github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
-
-	"github.com/entire-vc/evc-mesh/internal/domain"
-	"github.com/entire-vc/evc-mesh/internal/repository"
-	"github.com/entire-vc/evc-mesh/internal/service"
-	"github.com/entire-vc/evc-mesh/pkg/pagination"
 )
 
 // AgentSession holds the authenticated agent context for the MCP session.
@@ -31,6 +28,9 @@ type AgentSession struct {
 
 // agentSessionKey is the context key for storing AgentSession in context.
 type agentSessionKey struct{}
+
+// restClientKey is the context key for storing a per-request RESTClient in context (SSE mode).
+type restClientKey struct{}
 
 // ContextWithSession returns a new context with the given AgentSession attached.
 func ContextWithSession(ctx context.Context, session *AgentSession) context.Context {
@@ -45,22 +45,45 @@ func SessionFromContext(ctx context.Context) *AgentSession {
 	return nil
 }
 
-// Server wraps an mcp-go MCPServer with all evc-mesh services.
-type Server struct {
-	mcpServer *mcpserver.MCPServer
-	session   *AgentSession // static session for stdio mode; nil for SSE mode
+// ContextWithRESTClient returns a new context with the given RESTClient attached.
+// Used in SSE mode to inject per-connection REST clients.
+func ContextWithRESTClient(ctx context.Context, client *RESTClient) context.Context {
+	return context.WithValue(ctx, restClientKey{}, client)
+}
 
-	workspaceService      service.WorkspaceService
-	projectService        service.ProjectService
-	taskService           service.TaskService
-	taskStatusService     service.TaskStatusService
-	taskDependencyService service.TaskDependencyService
-	commentService        service.CommentService
-	artifactService       service.ArtifactService
-	agentService          service.AgentService
-	eventBusService       service.EventBusService
-	activityLogService    service.ActivityLogService
-	customFieldService    service.CustomFieldService
+// RESTClientFromContext retrieves a per-request RESTClient from context.
+// Returns nil if none was injected (stdio mode uses the server's shared client).
+func RESTClientFromContext(ctx context.Context) *RESTClient {
+	if client, ok := ctx.Value(restClientKey{}).(*RESTClient); ok {
+		return client
+	}
+	return nil
+}
+
+// NewAgentSession creates an AgentSession by parsing UUID strings from the REST API response.
+// Returns an error if any UUID is malformed.
+func NewAgentSession(agentID, workspaceID, agentName, agentType string) (AgentSession, error) {
+	aID, err := uuid.Parse(agentID)
+	if err != nil {
+		return AgentSession{}, fmt.Errorf("invalid agent_id %q: %w", agentID, err)
+	}
+	wsID, err := uuid.Parse(workspaceID)
+	if err != nil {
+		return AgentSession{}, fmt.Errorf("invalid workspace_id %q: %w", workspaceID, err)
+	}
+	return AgentSession{
+		AgentID:     aID,
+		WorkspaceID: wsID,
+		AgentName:   agentName,
+		AgentType:   agentType,
+	}, nil
+}
+
+// Server wraps an mcp-go MCPServer with a REST API client.
+type Server struct {
+	mcpServer  *mcpserver.MCPServer
+	session    *AgentSession // static session for stdio mode; nil for SSE mode
+	restClient *RESTClient   // default REST client; may be overridden per-request in SSE mode
 }
 
 // getSession returns the AgentSession for the current request.
@@ -73,38 +96,30 @@ func (s *Server) getSession(ctx context.Context) *AgentSession {
 	return s.session
 }
 
-// ServerConfig holds all services needed to build the MCP server.
+// getRESTClient returns the REST client for the current request.
+// In SSE mode, a per-connection client may be stored in context.
+// Falls back to the shared client for stdio mode.
+func (s *Server) getRESTClient(ctx context.Context) *RESTClient {
+	if client := RESTClientFromContext(ctx); client != nil {
+		return client
+	}
+	return s.restClient
+}
+
+// ServerConfig holds all configuration needed to build the MCP server.
 type ServerConfig struct {
-	Session               *AgentSession
-	WorkspaceService      service.WorkspaceService
-	ProjectService        service.ProjectService
-	TaskService           service.TaskService
-	TaskStatusService     service.TaskStatusService
-	TaskDependencyService service.TaskDependencyService
-	CommentService        service.CommentService
-	ArtifactService       service.ArtifactService
-	AgentService          service.AgentService
-	EventBusService       service.EventBusService
-	ActivityLogService    service.ActivityLogService
-	CustomFieldService    service.CustomFieldService
+	// Session is the static agent session for stdio mode. Nil for SSE mode.
+	Session *AgentSession
+	// RESTClient is the HTTP client used to call the Mesh REST API.
+	RESTClient *RESTClient
 }
 
 // NewServer creates a new MCP server with all tools registered.
 func NewServer(cfg ServerConfig) *Server {
 	s := &Server{
-		mcpServer:             mcpserver.NewMCPServer("evc-mesh-mcp", "0.1.0"),
-		session:               cfg.Session,
-		workspaceService:      cfg.WorkspaceService,
-		projectService:        cfg.ProjectService,
-		taskService:           cfg.TaskService,
-		taskStatusService:     cfg.TaskStatusService,
-		taskDependencyService: cfg.TaskDependencyService,
-		commentService:        cfg.CommentService,
-		artifactService:       cfg.ArtifactService,
-		agentService:          cfg.AgentService,
-		eventBusService:       cfg.EventBusService,
-		activityLogService:    cfg.ActivityLogService,
-		customFieldService:    cfg.CustomFieldService,
+		mcpServer:  mcpserver.NewMCPServer("evc-mesh-mcp", "0.1.0"),
+		session:    cfg.Session,
+		restClient: cfg.RESTClient,
 	}
 
 	s.registerTools()
@@ -324,18 +339,6 @@ func parseUUID(s string) (uuid.UUID, error) {
 	return uuid.Parse(s)
 }
 
-// optionalUUID parses a UUID string, returning nil if empty.
-func optionalUUID(s string) (*uuid.UUID, error) {
-	if s == "" {
-		return nil, nil
-	}
-	id, err := uuid.Parse(s)
-	if err != nil {
-		return nil, err
-	}
-	return &id, nil
-}
-
 // jsonResult marshals the value to JSON and returns a text result.
 func jsonResult(v any) (*mcpsdk.CallToolResult, error) {
 	data, err := json.Marshal(v)
@@ -348,37 +351,6 @@ func jsonResult(v any) (*mcpsdk.CallToolResult, error) {
 // errResult returns an error tool result with a formatted message.
 func errResult(format string, args ...any) (*mcpsdk.CallToolResult, error) {
 	return mcpsdk.NewToolResultError(fmt.Sprintf(format, args...)), nil
-}
-
-// resolveStatusBySlug looks up a status UUID from slug within a project.
-func (s *Server) resolveStatusBySlug(ctx context.Context, projectID uuid.UUID, slug string) (*domain.TaskStatus, error) {
-	statuses, err := s.taskStatusService.ListByProject(ctx, projectID)
-	if err != nil {
-		return nil, err
-	}
-	for i := range statuses {
-		if statuses[i].Slug == slug {
-			return &statuses[i], nil
-		}
-	}
-	return nil, fmt.Errorf("status '%s' not found in project", slug)
-}
-
-// defaultStatusForProject returns the default status for a project.
-func (s *Server) defaultStatusForProject(ctx context.Context, projectID uuid.UUID) (*domain.TaskStatus, error) {
-	statuses, err := s.taskStatusService.ListByProject(ctx, projectID)
-	if err != nil {
-		return nil, err
-	}
-	for i := range statuses {
-		if statuses[i].IsDefault {
-			return &statuses[i], nil
-		}
-	}
-	if len(statuses) > 0 {
-		return &statuses[0], nil
-	}
-	return nil, fmt.Errorf("no statuses defined for project")
 }
 
 // parseStringSlice extracts a string slice from request arguments.
@@ -451,43 +423,49 @@ func detectMIMEType(name string) string {
 	}
 }
 
-// defaultPagination returns default pagination params.
-func defaultPagination(limit int) pagination.Params {
-	if limit <= 0 {
-		limit = pagination.DefaultPageSize
+// truncate shortens a string to at most maxLen characters.
+func truncate(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
 	}
-	if limit > pagination.MaxPageSize {
-		limit = pagination.MaxPageSize
-	}
-	pg := pagination.Params{
-		Page:     1,
-		PageSize: limit,
-		SortBy:   "created_at",
-		SortDir:  "desc",
-	}
-	pg.Normalize()
-	return pg
+	return s[:maxLen] + "..."
 }
 
-// resolveStatusesByCategory returns status IDs matching a category in a project.
-func (s *Server) resolveStatusesByCategory(ctx context.Context, projectID uuid.UUID, category string) ([]uuid.UUID, error) {
-	statuses, err := s.taskStatusService.ListByProject(ctx, projectID)
+// resolveStatusSlug looks up a status UUID from its slug by querying the REST API.
+// Returns the status ID and name on success.
+func (s *Server) resolveStatusSlug(ctx context.Context, projectID, slug string) (string, string, error) {
+	statuses, err := s.getRESTClient(ctx).GetProjectStatuses(ctx, projectID)
 	if err != nil {
-		return nil, err
+		return "", "", fmt.Errorf("get statuses: %w", err)
 	}
-	var ids []uuid.UUID
-	cat := domain.StatusCategory(category)
 	for _, st := range statuses {
-		if st.Category == cat {
-			ids = append(ids, st.ID)
+		stSlug, _ := st["slug"].(string)
+		if stSlug == slug {
+			stID, _ := st["id"].(string)
+			stName, _ := st["name"].(string)
+			return stID, stName, nil
 		}
 	}
-	return ids, nil
+	return "", "", fmt.Errorf("status '%s' not found in project", slug)
 }
 
-// Compile-time assertion that these types are used to avoid import warnings.
-var (
-	_ = pq.StringArray{}
-	_ = repository.ProjectFilter{}
-	_ = time.Now
-)
+// defaultStatusForProject returns the default status ID for a project by querying the REST API.
+func (s *Server) defaultStatusForProject(ctx context.Context, projectID string) (string, error) {
+	statuses, err := s.getRESTClient(ctx).GetProjectStatuses(ctx, projectID)
+	if err != nil {
+		return "", fmt.Errorf("get statuses: %w", err)
+	}
+	// First pass: find the default status.
+	for _, st := range statuses {
+		if isDefault, _ := st["is_default"].(bool); isDefault {
+			stID, _ := st["id"].(string)
+			return stID, nil
+		}
+	}
+	// Second pass: return first status.
+	if len(statuses) > 0 {
+		stID, _ := statuses[0]["id"].(string)
+		return stID, nil
+	}
+	return "", fmt.Errorf("no statuses defined for project")
+}

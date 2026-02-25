@@ -17,11 +17,18 @@ import (
 // AgentHandler handles HTTP requests for agent management.
 type AgentHandler struct {
 	agentService service.AgentService
+	taskService  service.TaskService // optional, used for GetMyTasks
 }
 
 // NewAgentHandler creates a new AgentHandler with the given service.
 func NewAgentHandler(as service.AgentService) *AgentHandler {
 	return &AgentHandler{agentService: as}
+}
+
+// NewAgentHandlerWithTaskService creates an AgentHandler that also supports
+// the GET /agents/me/tasks endpoint.
+func NewAgentHandlerWithTaskService(as service.AgentService, ts service.TaskService) *AgentHandler {
+	return &AgentHandler{agentService: as, taskService: ts}
 }
 
 // registerAgentRequest represents the JSON body for registering a new agent.
@@ -247,4 +254,32 @@ func (h *AgentHandler) Me(c echo.Context) error {
 	}
 
 	return c.JSON(http.StatusOK, agent)
+}
+
+// GetMyTasks handles GET /agents/me/tasks
+// Returns tasks assigned to the current agent.
+func (h *AgentHandler) GetMyTasks(c echo.Context) error {
+	if h.taskService == nil {
+		return c.JSON(http.StatusNotImplemented, apierror.InternalError("task service not configured"))
+	}
+
+	agentIDVal := c.Get("agent_id")
+	if agentIDVal == nil {
+		return c.JSON(http.StatusUnauthorized, apierror.Unauthorized("agent API key required"))
+	}
+
+	agentID, ok := agentIDVal.(uuid.UUID)
+	if !ok {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid agent_id in context"))
+	}
+
+	tasks, err := h.taskService.GetMyTasks(c.Request().Context(), agentID, domain.AssigneeTypeAgent)
+	if err != nil {
+		return handleError(c, err)
+	}
+
+	return c.JSON(http.StatusOK, map[string]any{
+		"tasks": tasks,
+		"count": len(tasks),
+	})
 }

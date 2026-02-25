@@ -1,20 +1,13 @@
 package mcp
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"time"
 
-	"github.com/google/uuid"
-	"github.com/lib/pq"
 	mcpsdk "github.com/mark3labs/mcp-go/mcp"
-
-	"github.com/entire-vc/evc-mesh/internal/domain"
-	"github.com/entire-vc/evc-mesh/internal/repository"
-	"github.com/entire-vc/evc-mesh/internal/service"
-	"github.com/entire-vc/evc-mesh/pkg/pagination"
 )
 
 // ============================================================================
@@ -30,68 +23,48 @@ func (s *Server) handleListProjects(ctx context.Context, request mcpsdk.CallTool
 	wsIDStr := mcpsdk.ParseString(request, "workspace_id", "")
 	includeArchived := mcpsdk.ParseBoolean(request, "include_archived", false)
 
-	wsID := session.WorkspaceID
+	wsID := session.WorkspaceID.String()
 	if wsIDStr != "" {
-		parsed, err := parseUUID(wsIDStr)
-		if err != nil {
-			return errResult("invalid workspace_id: %v", err)
-		}
-		wsID = parsed
+		wsID = wsIDStr
 	}
 
-	filter := repository.ProjectFilter{}
-	if !includeArchived {
-		f := false
-		filter.IsArchived = &f
-	}
-
-	pg := defaultPagination(0)
-	pg.SortDir = "asc"
-	pg.SortBy = "name"
-
-	page, err := s.projectService.List(ctx, wsID, filter, pg)
+	result, err := s.getRESTClient(ctx).ListProjects(ctx, wsID, includeArchived)
 	if err != nil {
 		return errResult("failed to list projects: %v", err)
 	}
 
-	return jsonResult(page)
+	return jsonResult(result)
 }
 
 // ============================================================================
 // 2. get_project
 // ============================================================================
 
-type getProjectResponse struct {
-	Project      *domain.Project               `json:"project"`
-	Statuses     []domain.TaskStatus           `json:"statuses"`
-	CustomFields []domain.CustomFieldDefinition `json:"custom_fields"`
-}
-
 func (s *Server) handleGetProject(ctx context.Context, request mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
-	projectID, err := parseUUID(mcpsdk.ParseString(request, "project_id", ""))
-	if err != nil {
-		return errResult("invalid project_id: %v", err)
+	projectID := mcpsdk.ParseString(request, "project_id", "")
+	if projectID == "" {
+		return errResult("project_id is required")
 	}
 
-	project, err := s.projectService.GetByID(ctx, projectID)
+	project, err := s.getRESTClient(ctx).GetProject(ctx, projectID)
 	if err != nil {
 		return errResult("failed to get project: %v", err)
 	}
 
-	statuses, err := s.taskStatusService.ListByProject(ctx, projectID)
+	statuses, err := s.getRESTClient(ctx).GetProjectStatuses(ctx, projectID)
 	if err != nil {
 		return errResult("failed to list statuses: %v", err)
 	}
 
-	fields, err := s.customFieldService.ListVisibleToAgents(ctx, projectID)
+	fields, err := s.getRESTClient(ctx).GetProjectCustomFields(ctx, projectID)
 	if err != nil {
 		return errResult("failed to list custom fields: %v", err)
 	}
 
-	return jsonResult(getProjectResponse{
-		Project:      project,
-		Statuses:     statuses,
-		CustomFields: fields,
+	return jsonResult(map[string]any{
+		"project":       project,
+		"statuses":      statuses,
+		"custom_fields": fields,
 	})
 }
 
@@ -100,98 +73,110 @@ func (s *Server) handleGetProject(ctx context.Context, request mcpsdk.CallToolRe
 // ============================================================================
 
 func (s *Server) handleListTasks(ctx context.Context, request mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
-	projectID, err := parseUUID(mcpsdk.ParseString(request, "project_id", ""))
-	if err != nil {
-		return errResult("invalid project_id: %v", err)
+	projectID := mcpsdk.ParseString(request, "project_id", "")
+	if projectID == "" {
+		return errResult("project_id is required")
 	}
 
-	filter := repository.TaskFilter{
-		Search: mcpsdk.ParseString(request, "search", ""),
-		Labels: parseStringSlice(request, "labels"),
+	params := map[string]string{}
+
+	if search := mcpsdk.ParseString(request, "search", ""); search != "" {
+		params["search"] = search
+	}
+	if at := mcpsdk.ParseString(request, "assignee_type", ""); at != "" {
+		params["assignee_type"] = at
+	}
+	if p := mcpsdk.ParseString(request, "priority", ""); p != "" {
+		params["priority"] = p
+	}
+	if labels := parseStringSlice(request, "labels"); len(labels) > 0 {
+		params["labels"] = labels[0] // API supports single label filter
+	}
+	if sort := mcpsdk.ParseString(request, "sort", ""); sort != "" {
+		params["sort_by"] = sort
 	}
 
-	// Status category filter: resolve to status IDs.
+	// status_category: we need to resolve it to a status_id via the API.
+	// The REST API accepts status= as a UUID. We query statuses and filter.
 	if cat := mcpsdk.ParseString(request, "status_category", ""); cat != "" {
-		ids, err := s.resolveStatusesByCategory(ctx, projectID, cat)
+		statuses, err := s.getRESTClient(ctx).GetProjectStatuses(ctx, projectID)
 		if err != nil {
 			return errResult("failed to resolve status category: %v", err)
 		}
-		filter.StatusIDs = ids
+		// Find first status matching the category and use it.
+		// Note: REST API only supports single status_id filter.
+		for _, st := range statuses {
+			stCat, _ := st["category"].(string)
+			if stCat == cat {
+				stID, _ := st["id"].(string)
+				params["status"] = stID
+				break
+			}
+		}
 	}
 
-	if at := mcpsdk.ParseString(request, "assignee_type", ""); at != "" {
-		assigneeType := domain.AssigneeType(at)
-		filter.AssigneeType = &assigneeType
+	limit := mcpsdk.ParseInt(request, "limit", 50)
+	if limit > 0 {
+		params["page_size"] = strconv.Itoa(limit)
 	}
 
-	if p := mcpsdk.ParseString(request, "priority", ""); p != "" {
-		priority := domain.Priority(p)
-		filter.Priority = &priority
-	}
-
-	limit := mcpsdk.ParseInt(request, "limit", pagination.DefaultPageSize)
-	pg := defaultPagination(limit)
-	if sort := mcpsdk.ParseString(request, "sort", ""); sort != "" {
-		pg.SortBy = sort
-	}
-
-	page, err := s.taskService.List(ctx, projectID, filter, pg)
+	result, err := s.getRESTClient(ctx).ListTasks(ctx, projectID, params)
 	if err != nil {
 		return errResult("failed to list tasks: %v", err)
 	}
 
-	return jsonResult(page)
+	return jsonResult(result)
 }
 
 // ============================================================================
 // 4. get_task
 // ============================================================================
 
-type getTaskResponse struct {
-	Task         *domain.Task             `json:"task"`
-	Comments     []domain.Comment         `json:"comments,omitempty"`
-	Artifacts    []domain.Artifact        `json:"artifacts,omitempty"`
-	Dependencies []domain.TaskDependency  `json:"dependencies,omitempty"`
-}
-
 func (s *Server) handleGetTask(ctx context.Context, request mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
-	taskID, err := parseUUID(mcpsdk.ParseString(request, "task_id", ""))
-	if err != nil {
-		return errResult("invalid task_id: %v", err)
+	taskID := mcpsdk.ParseString(request, "task_id", "")
+	if taskID == "" {
+		return errResult("task_id is required")
 	}
 
-	task, err := s.taskService.GetByID(ctx, taskID)
+	task, err := s.getRESTClient(ctx).GetTask(ctx, taskID)
 	if err != nil {
 		return errResult("failed to get task: %v", err)
 	}
 
-	resp := getTaskResponse{Task: task}
+	resp := map[string]any{
+		"task": task,
+	}
 
 	if mcpsdk.ParseBoolean(request, "include_comments", false) {
-		pg := defaultPagination(100)
-		filter := repository.CommentFilter{IncludeInternal: true}
-		page, err := s.commentService.ListByTask(ctx, taskID, filter, pg)
+		page, err := s.getRESTClient(ctx).GetTaskComments(ctx, taskID)
 		if err != nil {
 			return errResult("failed to list comments: %v", err)
 		}
-		resp.Comments = page.Items
+		if items, ok := page["items"]; ok {
+			resp["comments"] = items
+		} else {
+			resp["comments"] = []any{}
+		}
 	}
 
 	if mcpsdk.ParseBoolean(request, "include_artifacts", false) {
-		pg := defaultPagination(100)
-		page, err := s.artifactService.ListByTask(ctx, taskID, pg)
+		page, err := s.getRESTClient(ctx).GetTaskArtifacts(ctx, taskID)
 		if err != nil {
 			return errResult("failed to list artifacts: %v", err)
 		}
-		resp.Artifacts = page.Items
+		if items, ok := page["items"]; ok {
+			resp["artifacts"] = items
+		} else {
+			resp["artifacts"] = []any{}
+		}
 	}
 
 	if mcpsdk.ParseBoolean(request, "include_dependencies", false) {
-		deps, err := s.taskDependencyService.ListByTask(ctx, taskID)
+		deps, err := s.getRESTClient(ctx).GetTaskDependencies(ctx, taskID)
 		if err != nil {
 			return errResult("failed to list dependencies: %v", err)
 		}
-		resp.Dependencies = deps
+		resp["dependencies"] = deps
 	}
 
 	return jsonResult(resp)
@@ -207,9 +192,9 @@ func (s *Server) handleCreateTask(ctx context.Context, request mcpsdk.CallToolRe
 		return errResult("not authenticated: no agent session")
 	}
 
-	projectID, err := parseUUID(mcpsdk.ParseString(request, "project_id", ""))
-	if err != nil {
-		return errResult("invalid project_id: %v", err)
+	projectID := mcpsdk.ParseString(request, "project_id", "")
+	if projectID == "" {
+		return errResult("project_id is required")
 	}
 
 	title := mcpsdk.ParseString(request, "title", "")
@@ -217,79 +202,53 @@ func (s *Server) handleCreateTask(ctx context.Context, request mcpsdk.CallToolRe
 		return errResult("title is required")
 	}
 
-	// Resolve status.
-	var statusID uuid.UUID
+	body := map[string]any{
+		"title":         title,
+		"assignee_type": mcpsdk.ParseString(request, "assignee_type", "unassigned"),
+		"priority":      mcpsdk.ParseString(request, "priority", "medium"),
+	}
+
+	// Resolve status slug to status_id.
 	if slug := mcpsdk.ParseString(request, "status_slug", ""); slug != "" {
-		st, err := s.resolveStatusBySlug(ctx, projectID, slug)
+		stID, _, err := s.resolveStatusSlug(ctx, projectID, slug)
 		if err != nil {
 			return errResult("invalid status_slug: %v", err)
 		}
-		statusID = st.ID
-	} else {
-		st, err := s.defaultStatusForProject(ctx, projectID)
-		if err != nil {
-			return errResult("failed to resolve default status: %v", err)
-		}
-		statusID = st.ID
+		body["status_id"] = stID
 	}
+	// If no status_slug provided, REST API will use project default.
 
-	// Parse optional fields.
-	assigneeID, err := optionalUUID(mcpsdk.ParseString(request, "assignee_id", ""))
-	if err != nil {
-		return errResult("invalid assignee_id: %v", err)
+	if desc := mcpsdk.ParseString(request, "description", ""); desc != "" {
+		body["description"] = desc
 	}
-
-	parentTaskID, err := optionalUUID(mcpsdk.ParseString(request, "parent_task_id", ""))
-	if err != nil {
-		return errResult("invalid parent_task_id: %v", err)
+	if assigneeID := mcpsdk.ParseString(request, "assignee_id", ""); assigneeID != "" {
+		body["assignee_id"] = assigneeID
 	}
-
-	var dueDate *time.Time
+	if parentTaskID := mcpsdk.ParseString(request, "parent_task_id", ""); parentTaskID != "" {
+		body["parent_task_id"] = parentTaskID
+	}
 	if dueDateStr := mcpsdk.ParseString(request, "due_date", ""); dueDateStr != "" {
-		t, err := time.Parse(time.RFC3339, dueDateStr)
-		if err != nil {
+		if _, err := time.Parse(time.RFC3339, dueDateStr); err != nil {
 			return errResult("invalid due_date format: %v", err)
 		}
-		dueDate = &t
+		body["due_date"] = dueDateStr
 	}
-
-	var estimatedHours *float64
 	if eh := mcpsdk.ParseFloat64(request, "estimated_hours", 0); eh > 0 {
-		estimatedHours = &eh
+		body["estimated_hours"] = eh
 	}
-
-	// Custom fields.
-	var customFields json.RawMessage
+	if labels := parseStringSlice(request, "labels"); len(labels) > 0 {
+		body["labels"] = labels
+	}
 	if cfMap := mcpsdk.ParseStringMap(request, "custom_fields", nil); cfMap != nil {
-		cfBytes, err := json.Marshal(cfMap)
-		if err != nil {
-			return errResult("invalid custom_fields: %v", err)
-		}
-		customFields = cfBytes
+		body["custom_fields"] = cfMap
 	}
 
-	task := &domain.Task{
-		ProjectID:      projectID,
-		StatusID:       statusID,
-		Title:          title,
-		Description:    mcpsdk.ParseString(request, "description", ""),
-		AssigneeID:     assigneeID,
-		AssigneeType:   domain.AssigneeType(mcpsdk.ParseString(request, "assignee_type", "unassigned")),
-		Priority:       domain.Priority(mcpsdk.ParseString(request, "priority", "medium")),
-		ParentTaskID:   parentTaskID,
-		DueDate:        dueDate,
-		EstimatedHours: estimatedHours,
-		CustomFields:   customFields,
-		Labels:         pq.StringArray(parseStringSlice(request, "labels")),
-		CreatedBy:      session.AgentID,
-		CreatedByType:  domain.ActorTypeAgent,
-	}
-
-	if err := s.taskService.Create(ctx, task); err != nil {
+	result, err := s.getRESTClient(ctx).CreateTask(ctx, projectID, body)
+	if err != nil {
 		return errResult("failed to create task: %v", err)
 	}
 
-	return jsonResult(task)
+	return jsonResult(result)
 }
 
 // ============================================================================
@@ -297,56 +256,53 @@ func (s *Server) handleCreateTask(ctx context.Context, request mcpsdk.CallToolRe
 // ============================================================================
 
 func (s *Server) handleUpdateTask(ctx context.Context, request mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
-	taskID, err := parseUUID(mcpsdk.ParseString(request, "task_id", ""))
-	if err != nil {
-		return errResult("invalid task_id: %v", err)
-	}
-
-	task, err := s.taskService.GetByID(ctx, taskID)
-	if err != nil {
-		return errResult("failed to get task: %v", err)
+	taskID := mcpsdk.ParseString(request, "task_id", "")
+	if taskID == "" {
+		return errResult("task_id is required")
 	}
 
 	args := request.GetArguments()
+	body := map[string]any{}
 
 	if _, ok := args["title"]; ok {
-		task.Title = mcpsdk.ParseString(request, "title", task.Title)
+		body["title"] = mcpsdk.ParseString(request, "title", "")
 	}
 	if _, ok := args["description"]; ok {
-		task.Description = mcpsdk.ParseString(request, "description", task.Description)
+		body["description"] = mcpsdk.ParseString(request, "description", "")
 	}
 	if _, ok := args["priority"]; ok {
-		task.Priority = domain.Priority(mcpsdk.ParseString(request, "priority", string(task.Priority)))
+		body["priority"] = mcpsdk.ParseString(request, "priority", "")
 	}
 	if _, ok := args["labels"]; ok {
-		task.Labels = pq.StringArray(parseStringSlice(request, "labels"))
+		body["labels"] = parseStringSlice(request, "labels")
 	}
 	if _, ok := args["custom_fields"]; ok {
 		cfMap := mcpsdk.ParseStringMap(request, "custom_fields", nil)
 		if cfMap != nil {
-			cfBytes, err := json.Marshal(cfMap)
-			if err != nil {
-				return errResult("invalid custom_fields: %v", err)
-			}
-			task.CustomFields = cfBytes
+			body["custom_fields"] = cfMap
 		}
 	}
 	if dueDateStr := mcpsdk.ParseString(request, "due_date", ""); dueDateStr != "" {
-		t, err := time.Parse(time.RFC3339, dueDateStr)
-		if err != nil {
+		if _, err := time.Parse(time.RFC3339, dueDateStr); err != nil {
 			return errResult("invalid due_date format: %v", err)
 		}
-		task.DueDate = &t
+		body["due_date"] = dueDateStr
 	}
-	if eh := mcpsdk.ParseFloat64(request, "estimated_hours", 0); eh > 0 {
-		task.EstimatedHours = &eh
+	if _, ok := args["estimated_hours"]; ok {
+		eh := mcpsdk.ParseFloat64(request, "estimated_hours", 0)
+		body["estimated_hours"] = eh
 	}
 
-	if err := s.taskService.Update(ctx, task); err != nil {
+	if len(body) == 0 {
+		return errResult("no fields to update")
+	}
+
+	result, err := s.getRESTClient(ctx).UpdateTask(ctx, taskID, body)
+	if err != nil {
 		return errResult("failed to update task: %v", err)
 	}
 
-	return jsonResult(task)
+	return jsonResult(result)
 }
 
 // ============================================================================
@@ -359,9 +315,9 @@ func (s *Server) handleMoveTask(ctx context.Context, request mcpsdk.CallToolRequ
 		return errResult("not authenticated: no agent session")
 	}
 
-	taskID, err := parseUUID(mcpsdk.ParseString(request, "task_id", ""))
-	if err != nil {
-		return errResult("invalid task_id: %v", err)
+	taskID := mcpsdk.ParseString(request, "task_id", "")
+	if taskID == "" {
+		return errResult("task_id is required")
 	}
 
 	statusSlug := mcpsdk.ParseString(request, "status_slug", "")
@@ -369,48 +325,48 @@ func (s *Server) handleMoveTask(ctx context.Context, request mcpsdk.CallToolRequ
 		return errResult("status_slug is required")
 	}
 
-	// Look up the task to get its project_id.
-	task, err := s.taskService.GetByID(ctx, taskID)
+	// We need the project_id to resolve the status slug.
+	// Get the task first to find its project_id.
+	task, err := s.getRESTClient(ctx).GetTask(ctx, taskID)
 	if err != nil {
 		return errResult("failed to get task: %v", err)
 	}
 
+	projectID, _ := task["project_id"].(string)
+	if projectID == "" {
+		return errResult("task has no project_id")
+	}
+
 	// Resolve slug to status ID.
-	status, err := s.resolveStatusBySlug(ctx, task.ProjectID, statusSlug)
+	stID, stName, err := s.resolveStatusSlug(ctx, projectID, statusSlug)
 	if err != nil {
 		return errResult("invalid status_slug: %v", err)
 	}
 
-	input := service.MoveTaskInput{
-		StatusID: &status.ID,
-	}
-
-	if err := s.taskService.MoveTask(ctx, taskID, input); err != nil {
+	if err := s.getRESTClient(ctx).MoveTask(ctx, taskID, map[string]any{
+		"status_id": stID,
+	}); err != nil {
 		return errResult("failed to move task: %v", err)
 	}
 
-	// Optionally add a comment about the move.
+	// Add optional comment.
 	if commentBody := mcpsdk.ParseString(request, "comment", ""); commentBody != "" {
-		comment := &domain.Comment{
-			TaskID:     taskID,
-			AuthorID:   session.AgentID,
-			AuthorType: domain.ActorTypeAgent,
-			Body:       commentBody,
-			IsInternal: false,
-		}
 		// Best-effort: don't fail the move if comment creation fails.
-		_ = s.commentService.Create(ctx, comment)
+		_, _ = s.getRESTClient(ctx).AddComment(ctx, taskID, map[string]any{
+			"body":        commentBody,
+			"is_internal": false,
+		})
 	}
 
 	// Return updated task.
-	updatedTask, err := s.taskService.GetByID(ctx, taskID)
+	updatedTask, err := s.getRESTClient(ctx).GetTask(ctx, taskID)
 	if err != nil {
 		return errResult("task moved but failed to reload: %v", err)
 	}
 
 	return jsonResult(map[string]any{
 		"task":       updatedTask,
-		"new_status": status,
+		"new_status": map[string]any{"id": stID, "slug": statusSlug, "name": stName},
 	})
 }
 
@@ -419,9 +375,9 @@ func (s *Server) handleMoveTask(ctx context.Context, request mcpsdk.CallToolRequ
 // ============================================================================
 
 func (s *Server) handleCreateSubtask(ctx context.Context, request mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
-	parentTaskID, err := parseUUID(mcpsdk.ParseString(request, "parent_task_id", ""))
-	if err != nil {
-		return errResult("invalid parent_task_id: %v", err)
+	parentTaskID := mcpsdk.ParseString(request, "parent_task_id", "")
+	if parentTaskID == "" {
+		return errResult("parent_task_id is required")
 	}
 
 	title := mcpsdk.ParseString(request, "title", "")
@@ -429,18 +385,20 @@ func (s *Server) handleCreateSubtask(ctx context.Context, request mcpsdk.CallToo
 		return errResult("title is required")
 	}
 
-	input := service.CreateSubtaskInput{
-		Title:       title,
-		Description: mcpsdk.ParseString(request, "description", ""),
-		Priority:    domain.Priority(mcpsdk.ParseString(request, "priority", "medium")),
+	body := map[string]any{
+		"title":    title,
+		"priority": mcpsdk.ParseString(request, "priority", "medium"),
+	}
+	if desc := mcpsdk.ParseString(request, "description", ""); desc != "" {
+		body["description"] = desc
 	}
 
-	subtask, err := s.taskService.CreateSubtask(ctx, parentTaskID, input)
+	result, err := s.getRESTClient(ctx).CreateSubtask(ctx, parentTaskID, body)
 	if err != nil {
 		return errResult("failed to create subtask: %v", err)
 	}
 
-	return jsonResult(subtask)
+	return jsonResult(result)
 }
 
 // ============================================================================
@@ -448,27 +406,27 @@ func (s *Server) handleCreateSubtask(ctx context.Context, request mcpsdk.CallToo
 // ============================================================================
 
 func (s *Server) handleAddDependency(ctx context.Context, request mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
-	taskID, err := parseUUID(mcpsdk.ParseString(request, "task_id", ""))
+	taskID := mcpsdk.ParseString(request, "task_id", "")
+	if taskID == "" {
+		return errResult("task_id is required")
+	}
+
+	dependsOnID := mcpsdk.ParseString(request, "depends_on_task_id", "")
+	if dependsOnID == "" {
+		return errResult("depends_on_task_id is required")
+	}
+
+	body := map[string]any{
+		"depends_on_task_id": dependsOnID,
+		"dependency_type":    mcpsdk.ParseString(request, "dependency_type", "blocks"),
+	}
+
+	result, err := s.getRESTClient(ctx).AddDependency(ctx, taskID, body)
 	if err != nil {
-		return errResult("invalid task_id: %v", err)
-	}
-
-	dependsOnID, err := parseUUID(mcpsdk.ParseString(request, "depends_on_task_id", ""))
-	if err != nil {
-		return errResult("invalid depends_on_task_id: %v", err)
-	}
-
-	dep := &domain.TaskDependency{
-		TaskID:          taskID,
-		DependsOnTaskID: dependsOnID,
-		DependencyType:  domain.DependencyType(mcpsdk.ParseString(request, "dependency_type", "blocks")),
-	}
-
-	if err := s.taskDependencyService.Create(ctx, dep); err != nil {
 		return errResult("failed to add dependency: %v", err)
 	}
 
-	return jsonResult(dep)
+	return jsonResult(result)
 }
 
 // ============================================================================
@@ -481,46 +439,33 @@ func (s *Server) handleAssignTask(ctx context.Context, request mcpsdk.CallToolRe
 		return errResult("not authenticated: no agent session")
 	}
 
-	taskID, err := parseUUID(mcpsdk.ParseString(request, "task_id", ""))
-	if err != nil {
-		return errResult("invalid task_id: %v", err)
+	taskID := mcpsdk.ParseString(request, "task_id", "")
+	if taskID == "" {
+		return errResult("task_id is required")
 	}
 
+	body := map[string]any{}
 	assignToSelf := mcpsdk.ParseBoolean(request, "assign_to_self", false)
 
-	var assigneeID *uuid.UUID
-	assigneeType := domain.AssigneeType(mcpsdk.ParseString(request, "assignee_type", "agent"))
-
 	if assignToSelf {
-		assigneeID = &session.AgentID
-		assigneeType = domain.AssigneeTypeAgent
+		body["assignee_id"] = session.AgentID.String()
+		body["assignee_type"] = "agent"
 	} else {
-		parsed, err := optionalUUID(mcpsdk.ParseString(request, "assignee_id", ""))
-		if err != nil {
-			return errResult("invalid assignee_id: %v", err)
-		}
-		assigneeID = parsed
-		if assigneeID == nil {
-			assigneeType = domain.AssigneeTypeUnassigned
+		assigneeID := mcpsdk.ParseString(request, "assignee_id", "")
+		if assigneeID != "" {
+			body["assignee_id"] = assigneeID
+			body["assignee_type"] = mcpsdk.ParseString(request, "assignee_type", "agent")
+		} else {
+			body["assignee_type"] = "unassigned"
 		}
 	}
 
-	input := service.AssignTaskInput{
-		AssigneeID:   assigneeID,
-		AssigneeType: assigneeType,
-	}
-
-	if err := s.taskService.AssignTask(ctx, taskID, input); err != nil {
+	result, err := s.getRESTClient(ctx).AssignTask(ctx, taskID, body)
+	if err != nil {
 		return errResult("failed to assign task: %v", err)
 	}
 
-	// Return updated task.
-	updatedTask, err := s.taskService.GetByID(ctx, taskID)
-	if err != nil {
-		return errResult("task assigned but failed to reload: %v", err)
-	}
-
-	return jsonResult(updatedTask)
+	return jsonResult(result)
 }
 
 // ============================================================================
@@ -533,9 +478,9 @@ func (s *Server) handleAddComment(ctx context.Context, request mcpsdk.CallToolRe
 		return errResult("not authenticated: no agent session")
 	}
 
-	taskID, err := parseUUID(mcpsdk.ParseString(request, "task_id", ""))
-	if err != nil {
-		return errResult("invalid task_id: %v", err)
+	taskID := mcpsdk.ParseString(request, "task_id", "")
+	if taskID == "" {
+		return errResult("task_id is required")
 	}
 
 	body := mcpsdk.ParseString(request, "body", "")
@@ -543,35 +488,28 @@ func (s *Server) handleAddComment(ctx context.Context, request mcpsdk.CallToolRe
 		return errResult("body is required")
 	}
 
-	parentCommentID, err := optionalUUID(mcpsdk.ParseString(request, "parent_comment_id", ""))
-	if err != nil {
-		return errResult("invalid parent_comment_id: %v", err)
+	reqBody := map[string]any{
+		"body":        body,
+		"is_internal": mcpsdk.ParseBoolean(request, "is_internal", false),
 	}
 
-	var metadata json.RawMessage
+	if parentID := mcpsdk.ParseString(request, "parent_comment_id", ""); parentID != "" {
+		reqBody["parent_comment_id"] = parentID
+	}
+
 	if metaMap := mcpsdk.ParseStringMap(request, "metadata", nil); metaMap != nil {
 		metaBytes, err := json.Marshal(metaMap)
-		if err != nil {
-			return errResult("invalid metadata: %v", err)
+		if err == nil {
+			reqBody["metadata"] = json.RawMessage(metaBytes)
 		}
-		metadata = metaBytes
 	}
 
-	comment := &domain.Comment{
-		TaskID:          taskID,
-		ParentCommentID: parentCommentID,
-		AuthorID:        session.AgentID,
-		AuthorType:      domain.ActorTypeAgent,
-		Body:            body,
-		Metadata:        metadata,
-		IsInternal:      mcpsdk.ParseBoolean(request, "is_internal", false),
-	}
-
-	if err := s.commentService.Create(ctx, comment); err != nil {
+	result, err := s.getRESTClient(ctx).AddComment(ctx, taskID, reqBody)
+	if err != nil {
 		return errResult("failed to create comment: %v", err)
 	}
 
-	return jsonResult(comment)
+	return jsonResult(result)
 }
 
 // ============================================================================
@@ -579,24 +517,28 @@ func (s *Server) handleAddComment(ctx context.Context, request mcpsdk.CallToolRe
 // ============================================================================
 
 func (s *Server) handleListComments(ctx context.Context, request mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
-	taskID, err := parseUUID(mcpsdk.ParseString(request, "task_id", ""))
-	if err != nil {
-		return errResult("invalid task_id: %v", err)
+	taskID := mcpsdk.ParseString(request, "task_id", "")
+	if taskID == "" {
+		return errResult("task_id is required")
 	}
 
-	limit := mcpsdk.ParseInt(request, "limit", pagination.DefaultPageSize)
-	pg := defaultPagination(limit)
-
-	filter := repository.CommentFilter{
-		IncludeInternal: mcpsdk.ParseBoolean(request, "include_internal", true),
+	params := map[string]string{}
+	includeInternal := mcpsdk.ParseBoolean(request, "include_internal", true)
+	if includeInternal {
+		params["include_internal"] = "true"
 	}
 
-	page, err := s.commentService.ListByTask(ctx, taskID, filter, pg)
+	limit := mcpsdk.ParseInt(request, "limit", 50)
+	if limit > 0 {
+		params["page_size"] = strconv.Itoa(limit)
+	}
+
+	result, err := s.getRESTClient(ctx).ListComments(ctx, taskID, params)
 	if err != nil {
 		return errResult("failed to list comments: %v", err)
 	}
 
-	return jsonResult(page)
+	return jsonResult(result)
 }
 
 // ============================================================================
@@ -609,9 +551,9 @@ func (s *Server) handleUploadArtifact(ctx context.Context, request mcpsdk.CallTo
 		return errResult("not authenticated: no agent session")
 	}
 
-	taskID, err := parseUUID(mcpsdk.ParseString(request, "task_id", ""))
-	if err != nil {
-		return errResult("invalid task_id: %v", err)
+	taskID := mcpsdk.ParseString(request, "task_id", "")
+	if taskID == "" {
+		return errResult("task_id is required")
 	}
 
 	name := mcpsdk.ParseString(request, "name", "")
@@ -629,25 +571,14 @@ func (s *Server) handleUploadArtifact(ctx context.Context, request mcpsdk.CallTo
 		mimeType = detectMIMEType(name)
 	}
 
-	contentBytes := []byte(content)
+	artifactType := mcpsdk.ParseString(request, "artifact_type", "file")
 
-	input := service.UploadArtifactInput{
-		TaskID:         taskID,
-		Name:           name,
-		ArtifactType:   domain.ArtifactType(mcpsdk.ParseString(request, "artifact_type", "file")),
-		MimeType:       mimeType,
-		UploadedBy:     session.AgentID,
-		UploadedByType: domain.UploaderTypeAgent,
-		Reader:         bytes.NewReader(contentBytes),
-		Size:           int64(len(contentBytes)),
-	}
-
-	artifact, err := s.artifactService.Upload(ctx, input)
+	result, err := s.getRESTClient(ctx).UploadArtifact(ctx, taskID, name, artifactType, mimeType, []byte(content))
 	if err != nil {
 		return errResult("failed to upload artifact: %v", err)
 	}
 
-	return jsonResult(artifact)
+	return jsonResult(result)
 }
 
 // ============================================================================
@@ -655,18 +586,17 @@ func (s *Server) handleUploadArtifact(ctx context.Context, request mcpsdk.CallTo
 // ============================================================================
 
 func (s *Server) handleListArtifacts(ctx context.Context, request mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
-	taskID, err := parseUUID(mcpsdk.ParseString(request, "task_id", ""))
-	if err != nil {
-		return errResult("invalid task_id: %v", err)
+	taskID := mcpsdk.ParseString(request, "task_id", "")
+	if taskID == "" {
+		return errResult("task_id is required")
 	}
 
-	pg := defaultPagination(100)
-	page, err := s.artifactService.ListByTask(ctx, taskID, pg)
+	result, err := s.getRESTClient(ctx).ListArtifacts(ctx, taskID)
 	if err != nil {
 		return errResult("failed to list artifacts: %v", err)
 	}
 
-	return jsonResult(page)
+	return jsonResult(result)
 }
 
 // ============================================================================
@@ -674,12 +604,12 @@ func (s *Server) handleListArtifacts(ctx context.Context, request mcpsdk.CallToo
 // ============================================================================
 
 func (s *Server) handleGetArtifact(ctx context.Context, request mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
-	artifactID, err := parseUUID(mcpsdk.ParseString(request, "artifact_id", ""))
-	if err != nil {
-		return errResult("invalid artifact_id: %v", err)
+	artifactID := mcpsdk.ParseString(request, "artifact_id", "")
+	if artifactID == "" {
+		return errResult("artifact_id is required")
 	}
 
-	artifact, err := s.artifactService.GetByID(ctx, artifactID)
+	artifact, err := s.getRESTClient(ctx).GetArtifact(ctx, artifactID)
 	if err != nil {
 		return errResult("failed to get artifact: %v", err)
 	}
@@ -689,7 +619,7 @@ func (s *Server) handleGetArtifact(ctx context.Context, request mcpsdk.CallToolR
 	}
 
 	if mcpsdk.ParseBoolean(request, "include_content", false) {
-		downloadURL, err := s.artifactService.GetDownloadURL(ctx, artifactID)
+		downloadURL, err := s.getRESTClient(ctx).GetArtifactDownloadURL(ctx, artifactID)
 		if err != nil {
 			resp["content_error"] = fmt.Sprintf("failed to get download URL: %v", err)
 		} else {
@@ -710,9 +640,9 @@ func (s *Server) handlePublishEvent(ctx context.Context, request mcpsdk.CallTool
 		return errResult("not authenticated: no agent session")
 	}
 
-	projectID, err := parseUUID(mcpsdk.ParseString(request, "project_id", ""))
-	if err != nil {
-		return errResult("invalid project_id: %v", err)
+	projectID := mcpsdk.ParseString(request, "project_id", "")
+	if projectID == "" {
+		return errResult("project_id is required")
 	}
 
 	eventType := mcpsdk.ParseString(request, "event_type", "")
@@ -730,31 +660,28 @@ func (s *Server) handlePublishEvent(ctx context.Context, request mcpsdk.CallTool
 		payload = map[string]any{}
 	}
 
-	taskID, err := optionalUUID(mcpsdk.ParseString(request, "task_id", ""))
-	if err != nil {
-		return errResult("invalid task_id: %v", err)
-	}
-
 	ttlHours := mcpsdk.ParseInt(request, "ttl_hours", 24)
 
-	input := service.PublishEventInput{
-		WorkspaceID: session.WorkspaceID,
-		ProjectID:   projectID,
-		TaskID:      taskID,
-		AgentID:     &session.AgentID,
-		EventType:   domain.EventType(eventType),
-		Subject:     subject,
-		Payload:     payload,
-		Tags:        parseStringSlice(request, "tags"),
-		TTLSeconds:  ttlHours * 3600,
+	body := map[string]any{
+		"event_type":  eventType,
+		"subject":     subject,
+		"payload":     payload,
+		"ttl_seconds": ttlHours * 3600,
 	}
 
-	msg, err := s.eventBusService.Publish(ctx, input)
+	if taskID := mcpsdk.ParseString(request, "task_id", ""); taskID != "" {
+		body["task_id"] = taskID
+	}
+	if tags := parseStringSlice(request, "tags"); len(tags) > 0 {
+		body["tags"] = tags
+	}
+
+	result, err := s.getRESTClient(ctx).PublishEvent(ctx, projectID, body)
 	if err != nil {
 		return errResult("failed to publish event: %v", err)
 	}
 
-	return jsonResult(msg)
+	return jsonResult(result)
 }
 
 // ============================================================================
@@ -767,19 +694,14 @@ func (s *Server) handlePublishSummary(ctx context.Context, request mcpsdk.CallTo
 		return errResult("not authenticated: no agent session")
 	}
 
-	projectID, err := parseUUID(mcpsdk.ParseString(request, "project_id", ""))
-	if err != nil {
-		return errResult("invalid project_id: %v", err)
+	projectID := mcpsdk.ParseString(request, "project_id", "")
+	if projectID == "" {
+		return errResult("project_id is required")
 	}
 
 	summary := mcpsdk.ParseString(request, "summary", "")
 	if summary == "" {
 		return errResult("summary is required")
-	}
-
-	taskID, err := optionalUUID(mcpsdk.ParseString(request, "task_id", ""))
-	if err != nil {
-		return errResult("invalid task_id: %v", err)
 	}
 
 	payload := map[string]any{
@@ -804,24 +726,24 @@ func (s *Server) handlePublishSummary(ctx context.Context, request mcpsdk.CallTo
 		payload["metrics"] = metrics
 	}
 
-	input := service.PublishEventInput{
-		WorkspaceID: session.WorkspaceID,
-		ProjectID:   projectID,
-		TaskID:      taskID,
-		AgentID:     &session.AgentID,
-		EventType:   domain.EventTypeSummary,
-		Subject:     fmt.Sprintf("Work summary from %s", session.AgentName),
-		Payload:     payload,
-		Tags:        []string{"summary", session.AgentName},
-		TTLSeconds:  24 * 3600,
+	body := map[string]any{
+		"event_type":  "summary",
+		"subject":     fmt.Sprintf("Work summary from %s", session.AgentName),
+		"payload":     payload,
+		"tags":        []string{"summary", session.AgentName},
+		"ttl_seconds": 24 * 3600,
 	}
 
-	msg, err := s.eventBusService.Publish(ctx, input)
+	if taskID := mcpsdk.ParseString(request, "task_id", ""); taskID != "" {
+		body["task_id"] = taskID
+	}
+
+	result, err := s.getRESTClient(ctx).PublishEvent(ctx, projectID, body)
 	if err != nil {
 		return errResult("failed to publish summary: %v", err)
 	}
 
-	return jsonResult(msg)
+	return jsonResult(result)
 }
 
 // ============================================================================
@@ -829,89 +751,62 @@ func (s *Server) handlePublishSummary(ctx context.Context, request mcpsdk.CallTo
 // ============================================================================
 
 func (s *Server) handleGetContext(ctx context.Context, request mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
-	projectID, err := parseUUID(mcpsdk.ParseString(request, "project_id", ""))
-	if err != nil {
-		return errResult("invalid project_id: %v", err)
+	projectID := mcpsdk.ParseString(request, "project_id", "")
+	if projectID == "" {
+		return errResult("project_id is required")
 	}
 
-	opts := service.GetContextOptions{
-		Limit: mcpsdk.ParseInt(request, "limit", 50),
-		Tags:  parseStringSlice(request, "tags"),
+	params := map[string]string{}
+
+	limit := mcpsdk.ParseInt(request, "limit", 50)
+	if limit > 0 {
+		params["page_size"] = strconv.Itoa(limit)
 	}
 
 	if eventTypes := parseStringSlice(request, "event_types"); len(eventTypes) > 0 {
-		et := domain.EventType(eventTypes[0])
-		opts.EventType = &et
+		params["event_type"] = eventTypes[0]
 	}
 
-	events, err := s.eventBusService.GetContext(ctx, projectID, opts)
+	if tags := parseStringSlice(request, "tags"); len(tags) > 0 {
+		params["tags"] = tags[0]
+	}
+
+	result, err := s.getRESTClient(ctx).GetContext(ctx, projectID, params)
 	if err != nil {
 		return errResult("failed to get context: %v", err)
 	}
 
-	return jsonResult(map[string]any{
-		"events": events,
-		"count":  len(events),
-	})
+	// Normalize to match expected format with events + count.
+	if items, ok := result["items"]; ok {
+		count := 0
+		if arr, ok := items.([]any); ok {
+			count = len(arr)
+		}
+		return jsonResult(map[string]any{
+			"events": items,
+			"count":  count,
+		})
+	}
+
+	return jsonResult(result)
 }
 
 // ============================================================================
 // 19. get_task_context
 // ============================================================================
 
-type taskContextResponse struct {
-	Task         *domain.Task              `json:"task"`
-	Comments     []domain.Comment          `json:"comments"`
-	Artifacts    []domain.Artifact         `json:"artifacts"`
-	Dependencies []domain.TaskDependency   `json:"dependencies"`
-	Events       []domain.EventBusMessage  `json:"events"`
-}
-
 func (s *Server) handleGetTaskContext(ctx context.Context, request mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
-	taskID, err := parseUUID(mcpsdk.ParseString(request, "task_id", ""))
+	taskID := mcpsdk.ParseString(request, "task_id", "")
+	if taskID == "" {
+		return errResult("task_id is required")
+	}
+
+	result, err := s.getRESTClient(ctx).GetTaskContext(ctx, taskID)
 	if err != nil {
-		return errResult("invalid task_id: %v", err)
+		return errResult("failed to get task context: %v", err)
 	}
 
-	task, err := s.taskService.GetByID(ctx, taskID)
-	if err != nil {
-		return errResult("failed to get task: %v", err)
-	}
-
-	resp := taskContextResponse{Task: task}
-
-	// Comments.
-	commentPg := defaultPagination(100)
-	commentFilter := repository.CommentFilter{IncludeInternal: true}
-	commentPage, err := s.commentService.ListByTask(ctx, taskID, commentFilter, commentPg)
-	if err == nil {
-		resp.Comments = commentPage.Items
-	}
-
-	// Artifacts.
-	artifactPg := defaultPagination(100)
-	artifactPage, err := s.artifactService.ListByTask(ctx, taskID, artifactPg)
-	if err == nil {
-		resp.Artifacts = artifactPage.Items
-	}
-
-	// Dependencies.
-	deps, err := s.taskDependencyService.ListByTask(ctx, taskID)
-	if err == nil {
-		resp.Dependencies = deps
-	}
-
-	// Events.
-	eventOpts := service.GetContextOptions{
-		TaskID: &taskID,
-		Limit:  50,
-	}
-	events, err := s.eventBusService.GetContext(ctx, task.ProjectID, eventOpts)
-	if err == nil {
-		resp.Events = events
-	}
-
-	return jsonResult(resp)
+	return jsonResult(result)
 }
 
 // ============================================================================
@@ -946,24 +841,29 @@ func (s *Server) handleHeartbeat(ctx context.Context, request mcpsdk.CallToolReq
 		return errResult("not authenticated: no agent session")
 	}
 
-	if err := s.agentService.Heartbeat(ctx, session.AgentID); err != nil {
+	result, err := s.getRESTClient(ctx).Heartbeat(ctx)
+	if err != nil {
 		return errResult("heartbeat failed: %v", err)
 	}
 
-	// Update agent status if provided.
-	if status := mcpsdk.ParseString(request, "status", ""); status != "" {
-		agent, err := s.agentService.GetByID(ctx, session.AgentID)
-		if err == nil && agent != nil {
-			agent.Status = domain.AgentStatus(status)
-			if taskIDStr := mcpsdk.ParseString(request, "current_task_id", ""); taskIDStr != "" {
-				if taskID, err := parseUUID(taskIDStr); err == nil {
-					agent.CurrentTaskID = &taskID
-				}
-			}
-			_ = s.agentService.Update(ctx, agent)
+	// If status or current_task_id are provided, update the agent.
+	status := mcpsdk.ParseString(request, "status", "")
+	currentTaskID := mcpsdk.ParseString(request, "current_task_id", "")
+
+	if status != "" || currentTaskID != "" {
+		updateBody := map[string]any{}
+		if status != "" {
+			updateBody["status"] = status
 		}
+		if currentTaskID != "" {
+			updateBody["current_task_id"] = currentTaskID
+		}
+		// Best-effort agent update.
+		_, _ = s.getRESTClient(ctx).UpdateAgent(ctx, session.AgentID.String(), updateBody)
 	}
 
+	// Return a consistent response regardless of what the REST API returned.
+	_ = result
 	return jsonResult(map[string]any{
 		"status":    "ok",
 		"agent_id":  session.AgentID.String(),
@@ -981,36 +881,26 @@ func (s *Server) handleGetMyTasks(ctx context.Context, request mcpsdk.CallToolRe
 		return errResult("not authenticated: no agent session")
 	}
 
-	tasks, err := s.taskService.GetMyTasks(ctx, session.AgentID, domain.AssigneeTypeAgent)
+	params := map[string]string{}
+
+	if projID := mcpsdk.ParseString(request, "project_id", ""); projID != "" {
+		params["project_id"] = projID
+	}
+	if cat := mcpsdk.ParseString(request, "status_category", ""); cat != "" {
+		params["status_category"] = cat
+	}
+
+	limit := mcpsdk.ParseInt(request, "limit", 50)
+	if limit > 0 {
+		params["page_size"] = strconv.Itoa(limit)
+	}
+
+	result, err := s.getRESTClient(ctx).GetAgentTasks(ctx, params)
 	if err != nil {
 		return errResult("failed to get tasks: %v", err)
 	}
 
-	// Filter by project if specified.
-	if projIDStr := mcpsdk.ParseString(request, "project_id", ""); projIDStr != "" {
-		projID, err := parseUUID(projIDStr)
-		if err != nil {
-			return errResult("invalid project_id: %v", err)
-		}
-		filtered := make([]domain.Task, 0)
-		for _, t := range tasks {
-			if t.ProjectID == projID {
-				filtered = append(filtered, t)
-			}
-		}
-		tasks = filtered
-	}
-
-	// Apply limit.
-	limit := mcpsdk.ParseInt(request, "limit", 50)
-	if limit > 0 && len(tasks) > limit {
-		tasks = tasks[:limit]
-	}
-
-	return jsonResult(map[string]any{
-		"tasks": tasks,
-		"count": len(tasks),
-	})
+	return jsonResult(result)
 }
 
 // ============================================================================
@@ -1028,15 +918,9 @@ func (s *Server) handleReportError(ctx context.Context, request mcpsdk.CallToolR
 		return errResult("error_message is required")
 	}
 
-	taskID, err := optionalUUID(mcpsdk.ParseString(request, "task_id", ""))
-	if err != nil {
-		return errResult("invalid task_id: %v", err)
-	}
-
 	severity := mcpsdk.ParseString(request, "severity", "medium")
 	recoverable := mcpsdk.ParseBoolean(request, "recoverable", true)
 
-	// Build payload.
 	payload := map[string]any{
 		"error_message": errorMessage,
 		"severity":      severity,
@@ -1049,58 +933,47 @@ func (s *Server) handleReportError(ctx context.Context, request mcpsdk.CallToolR
 		payload["stack_trace"] = stackTrace
 	}
 
-	// Find a project ID: use the task's project if a task is specified.
-	var projectID uuid.UUID
-	if taskID != nil {
-		task, err := s.taskService.GetByID(ctx, *taskID)
-		if err == nil && task != nil {
-			projectID = task.ProjectID
+	taskID := mcpsdk.ParseString(request, "task_id", "")
+
+	// If we have a task_id, look up its project_id and publish an error event.
+	var eventID string
+	if taskID != "" {
+		task, err := s.getRESTClient(ctx).GetTask(ctx, taskID)
+		if err == nil {
+			projectID, _ := task["project_id"].(string)
+			if projectID != "" {
+				eventBody := map[string]any{
+					"event_type":  "error",
+					"subject":     fmt.Sprintf("Error from %s: %s", session.AgentName, truncate(errorMessage, 100)),
+					"payload":     payload,
+					"tags":        []string{"error", severity},
+					"ttl_seconds": 72 * 3600,
+					"task_id":     taskID,
+				}
+				eventResult, pubErr := s.getRESTClient(ctx).PublishEvent(ctx, projectID, eventBody)
+				if pubErr == nil {
+					if id, ok := eventResult["id"].(string); ok {
+						eventID = id
+					}
+				}
+			}
 		}
 	}
 
-	// Publish error event if we have a project context.
-	var eventMsg *domain.EventBusMessage
-	if projectID != uuid.Nil {
-		input := service.PublishEventInput{
-			WorkspaceID: session.WorkspaceID,
-			ProjectID:   projectID,
-			TaskID:      taskID,
-			AgentID:     &session.AgentID,
-			EventType:   domain.EventTypeError,
-			Subject:     fmt.Sprintf("Error from %s: %s", session.AgentName, truncate(errorMessage, 100)),
-			Payload:     payload,
-			Tags:        []string{"error", severity},
-			TTLSeconds:  72 * 3600, // 72 hours for errors
-		}
-
-		eventMsg, _ = s.eventBusService.Publish(ctx, input)
-	}
-
-	// Update agent error count.
-	agent, err := s.agentService.GetByID(ctx, session.AgentID)
-	if err == nil && agent != nil {
-		agent.TotalErrors++
-		if !recoverable {
-			agent.Status = domain.AgentStatusError
-		}
-		_ = s.agentService.Update(ctx, agent)
+	// Best-effort: update agent error status.
+	if !recoverable {
+		_, _ = s.getRESTClient(ctx).UpdateAgent(ctx, session.AgentID.String(), map[string]any{
+			"status": "error",
+		})
 	}
 
 	resp := map[string]any{
 		"status":   "reported",
 		"severity": severity,
 	}
-	if eventMsg != nil {
-		resp["event_id"] = eventMsg.ID.String()
+	if eventID != "" {
+		resp["event_id"] = eventID
 	}
 
 	return jsonResult(resp)
-}
-
-// truncate shortens a string to at most maxLen characters.
-func truncate(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen] + "..."
 }

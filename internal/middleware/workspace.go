@@ -73,6 +73,8 @@ func WorkspaceRLS(db *sqlx.DB, projectRepo repository.ProjectRepository) echo.Mi
 					log.Printf("WARNING: failed to set app.current_workspace_id: %v", err)
 					// Non-fatal: continue without RLS context rather than blocking the request.
 				}
+				// Also store in Echo context so RBAC middleware (and handlers) can read it.
+				c.Set(ContextKeyWorkspaceID, wsID)
 			}
 
 			return next(c)

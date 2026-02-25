@@ -207,4 +207,7 @@ type RefreshTokenRepository interface {
 type WorkspaceMemberRepository interface {
 	Create(ctx context.Context, member *domain.WorkspaceMember) error
 	GetByWorkspaceAndUser(ctx context.Context, workspaceID, userID uuid.UUID) (*domain.WorkspaceMember, error)
+	// GetRole returns the role string for a given workspace + user combination.
+	// Returns an error if the membership does not exist.
+	GetRole(ctx context.Context, workspaceID, userID uuid.UUID) (string, error)
 }
