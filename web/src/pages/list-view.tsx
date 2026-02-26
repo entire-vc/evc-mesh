@@ -42,6 +42,12 @@ import { CustomFieldRenderer } from "@/components/custom-field-renderer";
 import { SavedViewsMenu } from "@/components/saved-views-menu";
 import { TaskSlideOver } from "@/components/task-slide-over";
 import { ColumnPicker, type ColumnDef } from "@/components/column-picker";
+import {
+  TagFilterDropdown,
+  CustomFieldFilterDialog,
+  applyViewFilters,
+  type CFFilters,
+} from "@/components/view-filters";
 import { toast } from "@/components/ui/toast";
 import { cn } from "@/lib/cn";
 import { formatDate } from "@/lib/utils";
@@ -141,6 +147,10 @@ export function ListViewPage() {
   const [addingInGroup, setAddingInGroup] = useState<string | null>(null);
   const [addingTitle, setAddingTitle] = useState("");
   const addInputRef = useRef<HTMLInputElement>(null);
+
+  // Tag + custom field filter state
+  const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  const [cfFilters, setCFFilters] = useState<CFFilters>({});
 
   // Column visibility state
   const DEFAULT_VISIBLE_COLUMNS = new Set([
@@ -245,6 +255,17 @@ export function ListViewPage() {
     [sortField],
   );
 
+  // Derive all unique tags from loaded tasks (for the tag filter dropdown)
+  const allTags = useMemo(() => {
+    const tagSet = new Set<string>();
+    for (const task of tasks) {
+      for (const label of task.labels ?? []) {
+        tagSet.add(label);
+      }
+    }
+    return Array.from(tagSet).sort();
+  }, [tasks]);
+
   // Sorted tasks (within each group, they'll be sorted by this)
   const sortedTasks = useMemo(() => {
     const arr = [...tasks];
@@ -306,14 +327,20 @@ export function ListViewPage() {
     return arr;
   }, [tasks, sortField, sortDir, statusMap, sortedFieldDefs]);
 
-  // Group sorted tasks by status, ordered by status position
+  // Apply tag + CF filters on top of the sorted array
+  const filteredSortedTasks = useMemo(
+    () => applyViewFilters(sortedTasks, selectedTags, cfFilters),
+    [sortedTasks, selectedTags, cfFilters],
+  );
+
+  // Group filtered+sorted tasks by status, ordered by status position
   const statusGroups = useMemo((): StatusGroup[] => {
     // Sort statuses by position
     const sortedStatuses = [...statuses].sort((a, b) => a.position - b.position);
 
     // Build a map from status_id -> tasks
     const tasksByStatus = new Map<string, Task[]>();
-    for (const task of sortedTasks) {
+    for (const task of filteredSortedTasks) {
       // Only top-level tasks (no parent) in grouping
       if (task.parent_task_id) continue;
       const arr = tasksByStatus.get(task.status_id) ?? [];
@@ -333,7 +360,7 @@ export function ListViewPage() {
 
     // Also handle tasks with status_id not in statuses list (edge case)
     const knownStatusIds = new Set(sortedStatuses.map((s) => s.id));
-    const unknownTasks = sortedTasks.filter(
+    const unknownTasks = filteredSortedTasks.filter(
       (t) => !t.parent_task_id && !knownStatusIds.has(t.status_id),
     );
     if (unknownTasks.length > 0) {
@@ -355,7 +382,7 @@ export function ListViewPage() {
     }
 
     return groups;
-  }, [sortedTasks, statuses]);
+  }, [filteredSortedTasks, statuses]);
 
   // ---------------------------------------------------------------------------
   // Group collapse helpers
@@ -456,17 +483,17 @@ export function ListViewPage() {
   // ---------------------------------------------------------------------------
 
   const allSelected =
-    sortedTasks.length > 0 &&
-    sortedTasks.filter((t) => !t.parent_task_id).every((t) => selectedTaskIds.has(t.id));
+    filteredSortedTasks.length > 0 &&
+    filteredSortedTasks.filter((t) => !t.parent_task_id).every((t) => selectedTaskIds.has(t.id));
   const someSelected = selectedTaskIds.size > 0;
 
   const toggleSelectAll = useCallback(() => {
     if (allSelected) {
       setSelectedTaskIds(new Set());
     } else {
-      setSelectedTaskIds(new Set(sortedTasks.filter((t) => !t.parent_task_id).map((t) => t.id)));
+      setSelectedTaskIds(new Set(filteredSortedTasks.filter((t) => !t.parent_task_id).map((t) => t.id)));
     }
-  }, [allSelected, sortedTasks]);
+  }, [allSelected, filteredSortedTasks]);
 
   const toggleSelectTask = useCallback((taskId: string) => {
     setSelectedTaskIds((prev) => {
@@ -637,7 +664,24 @@ export function ListViewPage() {
   return (
     <div className="space-y-4">
       {/* Header / Toolbar */}
-      <div className="flex items-center justify-end gap-2">
+      <div className="flex flex-wrap items-center gap-2">
+        {/* Tag filter */}
+        <TagFilterDropdown
+          allTags={allTags}
+          selectedTags={selectedTags}
+          onChange={setSelectedTags}
+        />
+
+        {/* Custom field filter dialog */}
+        <CustomFieldFilterDialog
+          fields={sortedFieldDefs}
+          filters={cfFilters}
+          onChange={setCFFilters}
+        />
+
+        {/* Spacer */}
+        <div className="flex-1" />
+
         {/* Saved views */}
         <SavedViewsMenu
           projectId={currentProject.id}

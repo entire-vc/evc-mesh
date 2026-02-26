@@ -237,6 +237,7 @@ export interface Agent {
   capabilities: string[];
   metadata: Record<string, unknown>;
   last_heartbeat: string | null;
+  profile_description?: string;
   created_at: string;
   updated_at: string;
 }

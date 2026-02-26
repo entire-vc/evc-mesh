@@ -7,6 +7,7 @@ import { useAgentStore } from "@/stores/agent";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Dialog,
   DialogContent,
@@ -35,6 +36,8 @@ export function AgentDetailDialog({
   const [mode, setMode] = useState<DialogMode>("detail");
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState("");
+  const [editingDescription, setEditingDescription] = useState(false);
+  const [descriptionDraft, setDescriptionDraft] = useState("");
   const [newApiKey, setNewApiKey] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
@@ -44,6 +47,8 @@ export function AgentDetailDialog({
     setMode("detail");
     setEditingName(false);
     setNameDraft("");
+    setEditingDescription(false);
+    setDescriptionDraft("");
     setNewApiKey(null);
     setCopied(false);
     setIsLoading(false);
@@ -74,6 +79,26 @@ export function AgentDetailDialog({
       setIsLoading(false);
     }
   }, [agent, nameDraft, updateAgent]);
+
+  const handleStartEditDescription = useCallback(() => {
+    if (!agent) return;
+    setDescriptionDraft(agent.profile_description ?? "");
+    setEditingDescription(true);
+  }, [agent]);
+
+  const handleSaveDescription = useCallback(async () => {
+    if (!agent) return;
+    setIsLoading(true);
+    setError(null);
+    try {
+      await updateAgent(agent.id, { profile_description: descriptionDraft.trim() });
+      setEditingDescription(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to update description");
+    } finally {
+      setIsLoading(false);
+    }
+  }, [agent, descriptionDraft, updateAgent]);
 
   const handleRegenerateKey = useCallback(async () => {
     if (!agent) return;
@@ -352,6 +377,75 @@ export function AgentDetailDialog({
                 : "N/A"}
             </code>
           </DetailRow>
+
+          {/* Description */}
+          <div>
+            <div className="mb-1.5 flex items-center justify-between">
+              <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                Description
+              </span>
+              {!editingDescription && (
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  className="h-6 w-6"
+                  onClick={handleStartEditDescription}
+                  title="Edit description"
+                >
+                  <Pencil className="h-3 w-3" />
+                </Button>
+              )}
+            </div>
+            {editingDescription ? (
+              <div className="space-y-2">
+                <Textarea
+                  value={descriptionDraft}
+                  onChange={(e) => setDescriptionDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Escape") setEditingDescription(false);
+                    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                      void handleSaveDescription();
+                    }
+                  }}
+                  placeholder="Describe this agent's purpose, skills, or context..."
+                  className="min-h-[80px] resize-none text-sm"
+                  autoFocus
+                />
+                <div className="flex items-center gap-2">
+                  <Button
+                    size="sm"
+                    onClick={() => void handleSaveDescription()}
+                    disabled={isLoading}
+                    className="h-7 gap-1.5"
+                  >
+                    <Check className="h-3 w-3" />
+                    Save
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => setEditingDescription(false)}
+                    disabled={isLoading}
+                    className="h-7 gap-1.5"
+                  >
+                    <X className="h-3 w-3" />
+                    Cancel
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <p
+                className={cn(
+                  "text-sm",
+                  agent.profile_description
+                    ? "text-foreground"
+                    : "italic text-muted-foreground",
+                )}
+              >
+                {agent.profile_description || "No description"}
+              </p>
+            )}
+          </div>
 
           {/* Current Task */}
           {currentTask && (

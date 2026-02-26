@@ -139,9 +139,10 @@ func (h *AgentHandler) GetByID(c echo.Context) error {
 
 // updateAgentRequest represents the JSON body for updating an agent.
 type updateAgentRequest struct {
-	Name         *string          `json:"name"`
-	AgentType    *domain.AgentType `json:"agent_type"`
-	Capabilities map[string]any   `json:"capabilities"`
+	Name               *string           `json:"name"`
+	AgentType          *domain.AgentType `json:"agent_type"`
+	Capabilities       map[string]any    `json:"capabilities"`
+	ProfileDescription *string           `json:"profile_description"`
 }
 
 // Update handles PATCH /agents/:agent_id
@@ -175,6 +176,9 @@ func (h *AgentHandler) Update(c echo.Context) error {
 			return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid capabilities"))
 		}
 		agent.Capabilities = capBytes
+	}
+	if req.ProfileDescription != nil {
+		agent.ProfileDescription = *req.ProfileDescription
 	}
 
 	if err := h.agentService.Update(c.Request().Context(), agent); err != nil {

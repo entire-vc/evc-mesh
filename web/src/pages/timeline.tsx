@@ -251,7 +251,7 @@ function TaskNode({
     >
       <div
         className={cn(
-          "flex h-full cursor-pointer flex-col justify-between rounded-lg border-2 px-3 py-2.5 transition-all hover:shadow-md hover:brightness-95 active:scale-[0.98]",
+          "flex h-full cursor-pointer flex-col justify-between rounded-lg border-2 px-3 py-2.5 transition-all hover:shadow-md hover:brightness-95 dark:hover:brightness-110 active:scale-[0.98]",
           bgClass,
         )}
         style={{ borderLeftColor: accentColor, borderLeftWidth: 4 }}
@@ -434,14 +434,6 @@ export function TimelinePage() {
 
   return (
     <div className="space-y-4">
-      {/* Header */}
-      <div className="flex items-center gap-3">
-        <GitBranch className="h-5 w-5 text-muted-foreground" />
-        <h1 className="text-2xl font-bold tracking-tight">
-          {currentProject.name}
-        </h1>
-      </div>
-
       {/* Error */}
       {error && (
         <div className="flex items-center gap-2 rounded-lg border border-red-300 bg-red-50 p-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-950 dark:text-red-400">

@@ -1093,6 +1093,18 @@ export function ProjectSettingsPage() {
   const [isSavingWorkflow, setIsSavingWorkflow] = useState(false);
   const [isSavingAssignment, setIsSavingAssignment] = useState(false);
 
+  // --- Tab state ---
+  const [activeTab, setActiveTab] = useState("general");
+
+  const PROJECT_TABS = [
+    { id: "general", label: "General" },
+    { id: "statuses", label: "Statuses" },
+    { id: "custom-fields", label: "Custom Fields" },
+    { id: "members", label: "Members" },
+    { id: "workflow", label: "Workflow Rules" },
+    { id: "assignment", label: "Assignment Rules" },
+  ];
+
   // Populate general form when project changes
   useEffect(() => {
     if (currentProject) {
@@ -1176,6 +1188,7 @@ export function ProjectSettingsPage() {
     setIsSavingWorkflow(true);
     try {
       await saveWorkflowRules(currentProject.id, config);
+      await fetchWorkflowRules(currentProject.id);
     } finally {
       setIsSavingWorkflow(false);
     }
@@ -1186,6 +1199,7 @@ export function ProjectSettingsPage() {
     setIsSavingAssignment(true);
     try {
       await saveProjectAssignmentRules(currentProject.id, config);
+      await fetchEffectiveAssignmentRules(currentProject.id);
     } finally {
       setIsSavingAssignment(false);
     }
@@ -1412,12 +1426,27 @@ export function ProjectSettingsPage() {
 
   return (
     <div className="mx-auto max-w-2xl space-y-6">
-      <div className="flex items-center gap-3">
-        <Settings className="h-5 w-5 text-muted-foreground" />
-        <h1 className="text-2xl font-bold tracking-tight">Project Settings</h1>
+      {/* Tab navigation */}
+      <div className="flex gap-1 border-b border-border">
+        {PROJECT_TABS.map((tab) => (
+          <button
+            key={tab.id}
+            type="button"
+            onClick={() => setActiveTab(tab.id)}
+            className={cn(
+              "px-3 py-2 text-sm font-medium border-b-2 -mb-px transition-colors",
+              activeTab === tab.id
+                ? "border-primary text-foreground"
+                : "border-transparent text-muted-foreground hover:text-foreground",
+            )}
+          >
+            {tab.label}
+          </button>
+        ))}
       </div>
 
       {/* Section 1: General Information */}
+      {activeTab === "general" && (
       <Card>
         <CardHeader>
           <CardTitle>General Information</CardTitle>
@@ -1501,8 +1530,10 @@ export function ProjectSettingsPage() {
           </form>
         </CardContent>
       </Card>
+      )}
 
       {/* Section 2: Task Statuses */}
+      {activeTab === "statuses" && (
       <Card>
         <CardHeader>
           <div className="flex items-center justify-between">
@@ -1624,8 +1655,10 @@ export function ProjectSettingsPage() {
           )}
         </CardContent>
       </Card>
+      )}
 
       {/* Section 3: Custom Fields */}
+      {activeTab === "custom-fields" && (
       <Card>
         <CardHeader>
           <div className="flex items-center justify-between">
@@ -1742,8 +1775,10 @@ export function ProjectSettingsPage() {
           )}
         </CardContent>
       </Card>
+      )}
 
       {/* Section 4: Workflow Rules */}
+      {activeTab === "workflow" && (
       <Card>
         <CardHeader>
           <div className="flex items-center gap-2">
@@ -1768,8 +1803,10 @@ export function ProjectSettingsPage() {
           />
         </CardContent>
       </Card>
+      )}
 
       {/* Section 5: Assignment Rules */}
+      {activeTab === "assignment" && (
       <Card>
         <CardHeader>
           <div className="flex items-center gap-2">
@@ -1793,8 +1830,10 @@ export function ProjectSettingsPage() {
           />
         </CardContent>
       </Card>
+      )}
 
       {/* Section 6: Members */}
+      {activeTab === "members" && (
       <Card>
         <CardHeader>
           <div className="flex items-center justify-between">
@@ -1892,8 +1931,10 @@ export function ProjectSettingsPage() {
           )}
         </CardContent>
       </Card>
+      )}
 
       {/* Section 7: Danger Zone */}
+      {activeTab === "general" && (
       <Card className="border-destructive/50">
         <CardHeader>
           <CardTitle className="text-destructive">Danger Zone</CardTitle>
@@ -1938,6 +1979,7 @@ export function ProjectSettingsPage() {
           </div>
         </CardContent>
       </Card>
+      )}
 
       {/* --- Dialogs --- */}
 

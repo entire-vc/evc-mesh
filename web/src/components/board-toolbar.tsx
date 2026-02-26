@@ -8,8 +8,7 @@
  * parent (BoardPage) so the board columns can react to it.
  */
 
-import { Search, SlidersHorizontal, ChevronDown } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
+import { Search, ChevronDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
@@ -22,6 +21,11 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/cn";
+import {
+  TagFilterDropdown,
+  CustomFieldFilterDialog,
+  type CFFilters,
+} from "@/components/view-filters";
 import type { CustomFieldDefinition } from "@/types";
 
 // ---------------------------------------------------------------------------
@@ -60,10 +64,19 @@ export interface BoardToolbarProps {
   assigneeFilter: string;
   onAssigneeFilterChange: (v: string) => void;
 
-  // Custom field filters
+  // Tag filters
+  allTags: string[];
+  selectedTags: string[];
+  onTagsChange: (tags: string[]) => void;
+
+  // Custom field filters (new CFFilters shape)
+  cfFilters: CFFilters;
+  onCFFiltersChange: (v: CFFilters) => void;
+  filterableFields: CustomFieldDefinition[];
+
+  // Legacy custom field filters (kept for SavedViews compatibility)
   customFieldFilters: Record<string, unknown>;
   onCustomFieldFiltersChange: (v: Record<string, unknown>) => void;
-  filterableFields: CustomFieldDefinition[];
 
   // New task action
   onNewTask: () => void;
@@ -131,14 +144,16 @@ export function BoardToolbar({
   onPriorityFilterChange,
   assigneeFilter,
   onAssigneeFilterChange,
-  customFieldFilters,
-  onCustomFieldFiltersChange,
+  allTags,
+  selectedTags,
+  onTagsChange,
+  cfFilters,
+  onCFFiltersChange,
   filterableFields,
+  customFieldFilters: _customFieldFilters,
+  onCustomFieldFiltersChange: _onCustomFieldFiltersChange,
   onNewTask,
 }: BoardToolbarProps) {
-  const activeCustomFiltersCount = Object.values(customFieldFilters).filter(
-    (v) => v != null && v !== "" && v !== "all",
-  ).length;
 
   return (
     <div className="flex flex-wrap items-center gap-2">
@@ -232,161 +247,19 @@ export function BoardToolbar({
         <option value="none">None</option>
       </Select>
 
-      {/* Custom field filters */}
-      {filterableFields.length > 0 && (
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-8 gap-1.5 px-2.5 text-xs"
-            >
-              <SlidersHorizontal className="h-3.5 w-3.5" />
-              Filter
-              {activeCustomFiltersCount > 0 && (
-                <Badge
-                  variant="secondary"
-                  className="ml-0.5 h-4 px-1 text-[10px]"
-                >
-                  {activeCustomFiltersCount}
-                </Badge>
-              )}
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent className="w-56 p-2" align="start">
-            <DropdownMenuLabel>Filter by Custom Fields</DropdownMenuLabel>
-            <DropdownMenuSeparator />
-            <div
-              className="space-y-3 p-1"
-              onClick={(e) => e.stopPropagation()}
-            >
-              {filterableFields.map((field) => (
-                <div key={field.id} className="space-y-1">
-                  <label className="text-xs font-medium text-muted-foreground">
-                    {field.name}
-                  </label>
-                  {field.field_type === "select" && (
-                    <Select
-                      value={
-                        (customFieldFilters[field.slug] as string) ?? "all"
-                      }
-                      onChange={(e) => {
-                        onCustomFieldFiltersChange({
-                          ...customFieldFilters,
-                          [field.slug]: e.target.value,
-                        });
-                      }}
-                      className="h-7 text-xs"
-                    >
-                      <option value="all">All</option>
-                      {(
-                        (field.options?.choices ?? []) as {
-                          label: string;
-                          value: string;
-                        }[]
-                      ).map((c) => (
-                        <option key={c.value} value={c.value}>
-                          {c.label}
-                        </option>
-                      ))}
-                    </Select>
-                  )}
-                  {field.field_type === "checkbox" && (
-                    <Select
-                      value={
-                        (customFieldFilters[field.slug] as string) ?? "all"
-                      }
-                      onChange={(e) => {
-                        onCustomFieldFiltersChange({
-                          ...customFieldFilters,
-                          [field.slug]: e.target.value,
-                        });
-                      }}
-                      className="h-7 text-xs"
-                    >
-                      <option value="all">All</option>
-                      <option value="checked">Checked</option>
-                      <option value="unchecked">Unchecked</option>
-                    </Select>
-                  )}
-                  {field.field_type === "number" && (
-                    <div className="flex items-center gap-1">
-                      <Input
-                        type="number"
-                        placeholder="Min"
-                        className="h-7 w-20 text-xs"
-                        value={
-                          (
-                            customFieldFilters[field.slug] as {
-                              min?: number;
-                              max?: number;
-                            }
-                          )?.min ?? ""
-                        }
-                        onChange={(e) => {
-                          const prev = (customFieldFilters[field.slug] as {
-                            min?: number;
-                            max?: number;
-                          }) ?? {};
-                          onCustomFieldFiltersChange({
-                            ...customFieldFilters,
-                            [field.slug]: {
-                              ...prev,
-                              min: e.target.value
-                                ? Number(e.target.value)
-                                : undefined,
-                            },
-                          });
-                        }}
-                      />
-                      <span className="text-xs text-muted-foreground">-</span>
-                      <Input
-                        type="number"
-                        placeholder="Max"
-                        className="h-7 w-20 text-xs"
-                        value={
-                          (
-                            customFieldFilters[field.slug] as {
-                              min?: number;
-                              max?: number;
-                            }
-                          )?.max ?? ""
-                        }
-                        onChange={(e) => {
-                          const prev = (customFieldFilters[field.slug] as {
-                            min?: number;
-                            max?: number;
-                          }) ?? {};
-                          onCustomFieldFiltersChange({
-                            ...customFieldFilters,
-                            [field.slug]: {
-                              ...prev,
-                              max: e.target.value
-                                ? Number(e.target.value)
-                                : undefined,
-                            },
-                          });
-                        }}
-                      />
-                    </div>
-                  )}
-                </div>
-              ))}
-              {activeCustomFiltersCount > 0 && (
-                <>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem
-                    onClick={() => onCustomFieldFiltersChange({})}
-                    className="justify-center text-xs text-destructive"
-                  >
-                    Clear custom filters
-                  </DropdownMenuItem>
-                </>
-              )}
-            </div>
-          </DropdownMenuContent>
-        </DropdownMenu>
-      )}
+      {/* Tag filter */}
+      <TagFilterDropdown
+        allTags={allTags}
+        selectedTags={selectedTags}
+        onChange={onTagsChange}
+      />
+
+      {/* Custom field filters (full modal dialog, all field types) */}
+      <CustomFieldFilterDialog
+        fields={filterableFields}
+        filters={cfFilters}
+        onChange={onCFFiltersChange}
+      />
 
       {/* Show Closed toggle */}
       <ToggleButton

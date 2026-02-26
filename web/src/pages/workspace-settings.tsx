@@ -620,6 +620,19 @@ export function WorkspaceSettingsPage() {
   // Rules saving state
   const [isSavingRules, setIsSavingRules] = useState(false);
 
+  // Tab state
+  const [activeTab, setActiveTab] = useState("general");
+
+  const WS_TABS = [
+    { id: "general", label: "General" },
+    { id: "members", label: "Members" },
+    { id: "team", label: "Team Directory" },
+    { id: "assignment", label: "Assignment Rules" },
+    { id: "violations", label: "Violations" },
+    { id: "workflow-templates", label: "Workflow Templates" },
+    { id: "config", label: "Config" },
+  ];
+
   // Config Import/Export state
   const [isExporting, setIsExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
@@ -860,12 +873,27 @@ export function WorkspaceSettingsPage() {
 
   return (
     <div className="mx-auto max-w-2xl space-y-6">
-      <div className="flex items-center gap-3">
-        <Settings className="h-5 w-5 text-muted-foreground" />
-        <h1 className="text-2xl font-bold tracking-tight">Workspace Settings</h1>
+      {/* Tab navigation */}
+      <div className="flex gap-1 border-b border-border overflow-x-auto">
+        {WS_TABS.map((tab) => (
+          <button
+            key={tab.id}
+            type="button"
+            onClick={() => setActiveTab(tab.id)}
+            className={cn(
+              "px-3 py-2 text-sm font-medium border-b-2 -mb-px transition-colors whitespace-nowrap",
+              activeTab === tab.id
+                ? "border-primary text-foreground"
+                : "border-transparent text-muted-foreground hover:text-foreground",
+            )}
+          >
+            {tab.label}
+          </button>
+        ))}
       </div>
 
       {/* Section 1: General */}
+      {activeTab === "general" && (
       <Card>
         <CardHeader>
           <CardTitle>General</CardTitle>
@@ -919,8 +947,10 @@ export function WorkspaceSettingsPage() {
           </form>
         </CardContent>
       </Card>
+      )}
 
       {/* Section 2: Team Directory */}
+      {activeTab === "team" && (
       <Card>
         <CardHeader>
           <div className="flex items-center gap-2">
@@ -982,8 +1012,10 @@ export function WorkspaceSettingsPage() {
           )}
         </CardContent>
       </Card>
+      )}
 
       {/* Section 3: Members */}
+      {activeTab === "members" && (
       <Card>
         <CardHeader>
           <div className="flex items-center justify-between">
@@ -1107,8 +1139,10 @@ export function WorkspaceSettingsPage() {
           )}
         </CardContent>
       </Card>
+      )}
 
       {/* Section 4: Assignment Rules */}
+      {activeTab === "assignment" && (
       <Card>
         <CardHeader>
           <div className="flex items-center gap-2">
@@ -1141,8 +1175,10 @@ export function WorkspaceSettingsPage() {
           )}
         </CardContent>
       </Card>
+      )}
 
       {/* Section 5: Rule Violations */}
+      {activeTab === "violations" && (
       <Card>
         <CardHeader>
           <div className="flex items-center gap-2">
@@ -1175,8 +1211,10 @@ export function WorkspaceSettingsPage() {
           )}
         </CardContent>
       </Card>
+      )}
 
       {/* Section 6: Workflow Templates */}
+      {activeTab === "workflow-templates" && (
       <Card>
         <CardHeader>
           <div className="flex items-center gap-2">
@@ -1339,8 +1377,10 @@ export function WorkspaceSettingsPage() {
           )}
         </CardContent>
       </Card>
+      )}
 
       {/* Section 7: Config Import/Export */}
+      {activeTab === "config" && (
       <Card>
         <CardHeader>
           <div className="flex items-center gap-2">
@@ -1584,8 +1624,7 @@ export function WorkspaceSettingsPage() {
           )}
         </CardContent>
       </Card>
-
-      <Separator />
+      )}
 
       {/* Invite Member Dialog */}
       <InviteMemberDialog

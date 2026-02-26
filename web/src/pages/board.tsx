@@ -38,6 +38,7 @@ import { toast } from "@/components/ui/toast";
 import { SavedViewsMenu } from "@/components/saved-views-menu";
 import { BoardToolbar, type GroupBy, type SortBy } from "@/components/board-toolbar";
 import { AssigneeAvatar } from "@/components/assignee-avatar";
+import { applyViewFilters, type CFFilters } from "@/components/view-filters";
 import type { Task, TaskStatus, WSMessage, SavedView, Priority, StatusCategory } from "@/types";
 
 // ---------------------------------------------------------------------------
@@ -288,6 +289,9 @@ export function BoardPage() {
   const [priorityFilter, setPriorityFilter] = useState<string>("all");
   const [assigneeFilter, setAssigneeFilter] = useState<string>("all");
   const [customFieldFilters, setCustomFieldFilters] = useState<Record<string, unknown>>({});
+  // New filter state
+  const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  const [cfFilters, setCFFilters] = useState<CFFilters>({});
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -345,52 +349,43 @@ export function BoardPage() {
     [statuses],
   );
 
-  // Filterable custom fields (select, checkbox, number)
+  // All custom field defs passed to filter dialog
   const filterableFields = useMemo(
-    () => customFieldDefs.filter((f) => ["select", "checkbox", "number"].includes(f.field_type)),
+    () => [...customFieldDefs].sort((a, b) => a.position - b.position),
     [customFieldDefs],
   );
 
+  // Derive all unique tags from loaded tasks
+  const allTags = useMemo(() => {
+    const tagSet = new Set<string>();
+    for (const task of tasks) {
+      for (const label of task.labels ?? []) {
+        tagSet.add(label);
+      }
+    }
+    return Array.from(tagSet).sort();
+  }, [tasks]);
+
   // ---------------------------------------------------------------------------
-  // Base task filter (search + priority + assignee + custom fields + subtasks)
+  // Base task filter (search + priority + assignee + tags + CF + subtasks)
   // Applied before grouping.
   // ---------------------------------------------------------------------------
 
   const filteredTasks = useMemo(() => {
-    return tasks.filter((task) => {
-      // Subtask filter
+    // First pass: basic filters (subtasks, search, priority, assignee)
+    const basic = tasks.filter((task) => {
       if (!showSubtasks && task.parent_task_id) return false;
-
-      // Search
       if (searchQuery && !task.title.toLowerCase().includes(searchQuery.toLowerCase())) {
         return false;
       }
-      // Priority
       if (priorityFilter !== "all" && task.priority !== priorityFilter) return false;
-      // Assignee
       if (assigneeFilter !== "all" && task.assignee_type !== assigneeFilter) return false;
-
-      // Custom field filters
-      for (const [slug, filterValue] of Object.entries(customFieldFilters)) {
-        if (filterValue == null || filterValue === "" || filterValue === "all") continue;
-        const fieldDef = customFieldDefs.find((f) => f.slug === slug);
-        if (!fieldDef) continue;
-        const taskValue = task.custom_fields?.[slug];
-        if (fieldDef.field_type === "select") {
-          if (taskValue !== filterValue) return false;
-        } else if (fieldDef.field_type === "checkbox") {
-          const boolFilter = filterValue === "checked";
-          if (Boolean(taskValue) !== boolFilter) return false;
-        } else if (fieldDef.field_type === "number") {
-          const numVal = taskValue != null ? Number(taskValue) : null;
-          const fv = filterValue as { min?: number; max?: number };
-          if (fv.min != null && (numVal == null || numVal < fv.min)) return false;
-          if (fv.max != null && (numVal == null || numVal > fv.max)) return false;
-        }
-      }
       return true;
     });
-  }, [tasks, showSubtasks, searchQuery, priorityFilter, assigneeFilter, customFieldFilters, customFieldDefs]);
+
+    // Second pass: tag + CF filters via shared pure function
+    return applyViewFilters(basic, selectedTags, cfFilters);
+  }, [tasks, showSubtasks, searchQuery, priorityFilter, assigneeFilter, selectedTags, cfFilters]);
 
   // ---------------------------------------------------------------------------
   // Build columns + task groups based on groupBy
@@ -647,9 +642,14 @@ export function BoardPage() {
           onPriorityFilterChange={setPriorityFilter}
           assigneeFilter={assigneeFilter}
           onAssigneeFilterChange={setAssigneeFilter}
+          allTags={allTags}
+          selectedTags={selectedTags}
+          onTagsChange={setSelectedTags}
+          cfFilters={cfFilters}
+          onCFFiltersChange={setCFFilters}
+          filterableFields={filterableFields}
           customFieldFilters={customFieldFilters}
           onCustomFieldFiltersChange={setCustomFieldFilters}
-          filterableFields={filterableFields}
           onNewTask={() => openCreateDialog()}
         />
 
