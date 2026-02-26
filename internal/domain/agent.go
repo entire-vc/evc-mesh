@@ -57,6 +57,7 @@ type Agent struct {
 	MaxConcurrentTasks int             `json:"max_concurrent_tasks" db:"max_concurrent_tasks"`
 	WorkingHours       string          `json:"working_hours" db:"working_hours"`
 	ProfileDescription string          `json:"profile_description" db:"profile_description"`
+	CallbackURL        string          `json:"callback_url" db:"callback_url"`
 	CreatedAt           time.Time       `json:"created_at" db:"created_at"`
 	UpdatedAt           time.Time       `json:"updated_at" db:"updated_at"`
 }

@@ -42,6 +42,7 @@ type agentRow struct {
 	MaxConcurrentTasks int                `db:"max_concurrent_tasks"`
 	WorkingHours       string             `db:"working_hours"`
 	ProfileDescription string             `db:"profile_description"`
+	CallbackURL        string             `db:"callback_url"`
 	CreatedAt           time.Time          `db:"created_at"`
 	UpdatedAt           time.Time          `db:"updated_at"`
 	DeletedAt           *time.Time         `db:"deleted_at"`
@@ -72,6 +73,7 @@ func (r *agentRow) toDomain() domain.Agent {
 		MaxConcurrentTasks: r.MaxConcurrentTasks,
 		WorkingHours:       r.WorkingHours,
 		ProfileDescription: r.ProfileDescription,
+		CallbackURL:        r.CallbackURL,
 		CreatedAt:           r.CreatedAt,
 		UpdatedAt:           r.UpdatedAt,
 	}
@@ -104,6 +106,7 @@ func (r *AgentRepo) Create(ctx context.Context, agent *domain.Agent) error {
 			total_tasks_completed, total_errors,
 			role, responsibility_zone, escalation_to, accepts_from,
 			max_concurrent_tasks, working_hours, profile_description,
+			callback_url,
 			created_at, updated_at
 		) VALUES (
 			$1, $2, $3, $4, $5, $6,
@@ -112,7 +115,8 @@ func (r *AgentRepo) Create(ctx context.Context, agent *domain.Agent) error {
 			$14, $15,
 			$16, $17, $18, $19,
 			$20, $21, $22,
-			$23, $24
+			$23,
+			$24, $25
 		)
 	`
 	capabilities := agent.Capabilities
@@ -134,6 +138,7 @@ func (r *AgentRepo) Create(ctx context.Context, agent *domain.Agent) error {
 		agent.TotalTasksCompleted, agent.TotalErrors,
 		agent.Role, agent.ResponsibilityZone, agent.EscalationTo, acceptsFrom,
 		agent.MaxConcurrentTasks, agent.WorkingHours, agent.ProfileDescription,
+		agent.CallbackURL,
 		agent.CreatedAt, agent.UpdatedAt,
 	)
 	return err
@@ -176,7 +181,8 @@ func (r *AgentRepo) Update(ctx context.Context, agent *domain.Agent) error {
 		    total_errors = $14,
 		    role = $15, responsibility_zone = $16, escalation_to = $17, accepts_from = $18,
 		    max_concurrent_tasks = $19, working_hours = $20, profile_description = $21,
-		    updated_at = $22
+		    callback_url = $22,
+		    updated_at = $23
 		WHERE id = $1 AND deleted_at IS NULL
 	`
 	capabilities := agent.Capabilities
@@ -200,6 +206,7 @@ func (r *AgentRepo) Update(ctx context.Context, agent *domain.Agent) error {
 		agent.TotalErrors,
 		agent.Role, agent.ResponsibilityZone, agent.EscalationTo, acceptsFrom,
 		agent.MaxConcurrentTasks, agent.WorkingHours, agent.ProfileDescription,
+		agent.CallbackURL,
 		agent.UpdatedAt,
 	)
 	if err != nil {

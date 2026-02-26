@@ -101,12 +101,26 @@ func main() {
 	// Webhook service is created before taskService so it can be injected for agent wakeup dispatch.
 	webhookService := service.NewWebhookService(webhookRepo)
 
+	agentService := service.NewAgentService(agentRepo, activityLogRepo, workspaceRepo)
+
+	// Agent notification service for push mechanisms (callback_url, SSE, long-poll).
+	// Reuses the same Redis connection as the WebSocket hub (created below in step 8a).
+	// We create a dedicated client here so the notify service can be injected into taskService
+	// before wsRedis is declared later in main.
+	agentNotifyRedis := redis.NewClient(&redis.Options{
+		Addr:     cfg.Redis.Addr(),
+		Password: cfg.Redis.Password,
+		DB:       cfg.Redis.DB,
+	})
+	agentNotifySvc := service.NewAgentNotifyService(agentService, agentNotifyRedis)
+
 	taskService := service.NewTaskService(taskRepo, taskStatusRepo, taskDependencyRepo, activityLogRepo,
 		service.WithCustomFieldService(customFieldService),
 		service.WithProjectRepo(projectRepo),
 		service.WithRuleService(ruleService),
 		service.WithEventBusService(eventBusService),
 		service.WithWebhookService(webhookService),
+		service.WithAgentNotifyService(agentNotifySvc),
 	)
 
 	// Wire auto-transition service. It calls taskService.MoveTask, so taskService must already
@@ -118,7 +132,6 @@ func main() {
 	}
 
 	taskStatusService := service.NewTaskStatusService(taskStatusRepo, taskRepo, activityLogRepo)
-	agentService := service.NewAgentService(agentRepo, activityLogRepo, workspaceRepo)
 
 	// Real service implementations (replacing stubs from earlier sprints).
 	commentService := service.NewCommentService(commentRepo, taskRepo, activityLogRepo)
@@ -192,7 +205,7 @@ func main() {
 	commentHandler := handler.NewCommentHandler(commentService)
 	artifactHandler := handler.NewArtifactHandler(artifactService)
 	depHandler := handler.NewDependencyHandler(depService, taskService)
-	agentHandler := handler.NewAgentHandlerWithTaskService(agentService, taskService)
+	agentHandler := handler.NewAgentHandlerFull(agentService, taskService, agentNotifyRedis)
 	eventHandler := handler.NewEventHandler(eventBusService)
 	activityHandler := handler.NewActivityHandler(activityLogService)
 	customFieldHandler := handler.NewCustomFieldHandler(customFieldService)
@@ -369,10 +382,14 @@ func main() {
 	api.DELETE("/artifacts/:artifact_id", artifactHandler.Delete, rbac(mw.PermUploadArtifact))
 
 	// Agent routes.
+	// NOTE: /agents/me/* routes MUST be registered before /agents/:agent_id to avoid
+	// "me" being parsed as a UUID parameter.
 	api.GET("/workspaces/:ws_id/agents", agentHandler.List)
 	api.POST("/workspaces/:ws_id/agents", agentHandler.Register, rbac(mw.PermRegisterAgent))
 	api.GET("/agents/me", agentHandler.Me)
 	api.GET("/agents/me/tasks", agentHandler.GetMyTasks)
+	api.GET("/agents/me/events/stream", agentHandler.EventStream)
+	api.GET("/agents/me/tasks/poll", agentHandler.PollTasks)
 	api.POST("/agents/heartbeat", agentHandler.Heartbeat)
 	api.GET("/agents/:agent_id", agentHandler.GetByID)
 	api.PATCH("/agents/:agent_id", agentHandler.Update, rbac(mw.PermDeleteAgent))
@@ -518,6 +535,9 @@ func main() {
 	hubCancel()
 	if err := wsRedis.Close(); err != nil {
 		log.Printf("Error closing WebSocket Redis: %v", err)
+	}
+	if err := agentNotifyRedis.Close(); err != nil {
+		log.Printf("Error closing agent-notify Redis: %v", err)
 	}
 
 	// Close event bus.

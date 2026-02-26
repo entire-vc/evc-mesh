@@ -38,6 +38,8 @@ export function AgentDetailDialog({
   const [nameDraft, setNameDraft] = useState("");
   const [editingDescription, setEditingDescription] = useState(false);
   const [descriptionDraft, setDescriptionDraft] = useState("");
+  const [editingCallbackUrl, setEditingCallbackUrl] = useState(false);
+  const [callbackUrlDraft, setCallbackUrlDraft] = useState("");
   const [newApiKey, setNewApiKey] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
@@ -49,6 +51,8 @@ export function AgentDetailDialog({
     setNameDraft("");
     setEditingDescription(false);
     setDescriptionDraft("");
+    setEditingCallbackUrl(false);
+    setCallbackUrlDraft("");
     setNewApiKey(null);
     setCopied(false);
     setIsLoading(false);
@@ -99,6 +103,26 @@ export function AgentDetailDialog({
       setIsLoading(false);
     }
   }, [agent, descriptionDraft, updateAgent]);
+
+  const handleStartEditCallbackUrl = useCallback(() => {
+    if (!agent) return;
+    setCallbackUrlDraft(agent.callback_url ?? "");
+    setEditingCallbackUrl(true);
+  }, [agent]);
+
+  const handleSaveCallbackUrl = useCallback(async () => {
+    if (!agent) return;
+    setIsLoading(true);
+    setError(null);
+    try {
+      await updateAgent(agent.id, { callback_url: callbackUrlDraft.trim() });
+      setEditingCallbackUrl(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to update callback URL");
+    } finally {
+      setIsLoading(false);
+    }
+  }, [agent, callbackUrlDraft, updateAgent]);
 
   const handleRegenerateKey = useCallback(async () => {
     if (!agent) return;
@@ -444,6 +468,79 @@ export function AgentDetailDialog({
               >
                 {agent.profile_description || "No description"}
               </p>
+            )}
+          </div>
+
+          {/* Push Notifications */}
+          <div>
+            <div className="mb-1.5 flex items-center justify-between">
+              <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                Push Notifications
+              </span>
+              {!editingCallbackUrl && (
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  className="h-6 w-6"
+                  onClick={handleStartEditCallbackUrl}
+                  title="Edit callback URL"
+                >
+                  <Pencil className="h-3 w-3" />
+                </Button>
+              )}
+            </div>
+            {editingCallbackUrl ? (
+              <div className="space-y-2">
+                <Input
+                  type="url"
+                  value={callbackUrlDraft}
+                  onChange={(e) => setCallbackUrlDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Escape") setEditingCallbackUrl(false);
+                    if (e.key === "Enter") void handleSaveCallbackUrl();
+                  }}
+                  placeholder="https://your-agent.example.com/webhook"
+                  className="text-sm"
+                  autoFocus
+                />
+                <div className="flex items-center gap-2">
+                  <Button
+                    size="sm"
+                    onClick={() => void handleSaveCallbackUrl()}
+                    disabled={isLoading}
+                    className="h-7 gap-1.5"
+                  >
+                    <Check className="h-3 w-3" />
+                    Save
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => setEditingCallbackUrl(false)}
+                    disabled={isLoading}
+                    className="h-7 gap-1.5"
+                  >
+                    <X className="h-3 w-3" />
+                    Cancel
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-1">
+                <p
+                  className={cn(
+                    "break-all text-sm",
+                    agent.callback_url
+                      ? "text-foreground"
+                      : "italic text-muted-foreground",
+                  )}
+                >
+                  {agent.callback_url || "No callback URL configured"}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  When set, Mesh will POST task events (assigned, status changed) to this URL.
+                </p>
+              </div>
             )}
           </div>
 

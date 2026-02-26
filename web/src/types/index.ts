@@ -238,6 +238,7 @@ export interface Agent {
   metadata: Record<string, unknown>;
   last_heartbeat: string | null;
   profile_description?: string;
+  callback_url?: string;
   created_at: string;
   updated_at: string;
 }
