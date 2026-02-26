@@ -8,6 +8,7 @@ import { useSparkStore } from "@/stores/spark";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import { Select } from "@/components/ui/select";
 import {
   Card,
   CardContent,
@@ -24,6 +25,30 @@ import {
 } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { IntegrationConfig, SparkAgentManifest } from "@/types";
+
+// Pre-populated domain expertise tags shown as clickable badge-pills.
+const DOMAIN_TAGS = [
+  "backend",
+  "frontend",
+  "devops",
+  "data",
+  "security",
+  "testing",
+  "docs",
+  "design",
+  "mobile",
+  "infra",
+] as const;
+
+// Agent type options for the filter dropdown.
+const AGENT_TYPE_OPTIONS = [
+  { value: "all", label: "All Types" },
+  { value: "claude_code", label: "Claude Code" },
+  { value: "openclaw", label: "OpenClaw" },
+  { value: "cline", label: "Cline" },
+  { value: "aider", label: "Aider" },
+  { value: "custom", label: "Custom" },
+] as const;
 
 // Maps agent_type string to display label and color.
 function agentTypeLabel(agentType: string): { label: string; color: string } {
@@ -52,8 +77,12 @@ export function SparkPage() {
   } = useSparkStore();
 
   const [query, setQuery] = useState("");
-  const [tagInput, setTagInput] = useState("");
-  const [activeTags, setActiveTags] = useState<string[]>([]);
+  const [agentType, setAgentType] = useState("all");
+  // Domain expertise tags toggled via badge-pills.
+  const [activeDomainTags, setActiveDomainTags] = useState<string[]>([]);
+  // Custom tags added via text input (in addition to domain tags).
+  const [customTagInput, setCustomTagInput] = useState("");
+  const [customTags, setCustomTags] = useState<string[]>([]);
   const [detailOpen, setDetailOpen] = useState(false);
   const [installOpen, setInstallOpen] = useState(false);
   const [hasSearched, setHasSearched] = useState(false);
@@ -78,10 +107,13 @@ export function SparkPage() {
       });
   }, [currentWorkspace]);
 
+  // All active tags combined: domain toggles + custom additions.
+  const allActiveTags = [...activeDomainTags, ...customTags];
+
   const handleSearch = useCallback(async () => {
     setHasSearched(true);
-    await search(query, activeTags, 20);
-  }, [query, activeTags, search]);
+    await search(query, allActiveTags, 20, agentType);
+  }, [query, allActiveTags, agentType, search]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -92,19 +124,27 @@ export function SparkPage() {
     [handleSearch],
   );
 
-  const addTag = useCallback(() => {
-    const tag = tagInput.trim();
-    if (tag && !activeTags.includes(tag)) {
-      setActiveTags((prev) => [...prev, tag]);
-    }
-    setTagInput("");
-  }, [tagInput, activeTags]);
-
-  const removeTag = useCallback((tag: string) => {
-    setActiveTags((prev) => prev.filter((t) => t !== tag));
+  // Toggle a pre-defined domain tag on/off.
+  const toggleDomainTag = useCallback((tag: string) => {
+    setActiveDomainTags((prev) =>
+      prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag],
+    );
   }, []);
 
-  const handleCardClick = useCallback(
+  // Add a custom tag from the text input.
+  const addCustomTag = useCallback(() => {
+    const tag = customTagInput.trim().toLowerCase();
+    if (tag && !allActiveTags.includes(tag)) {
+      setCustomTags((prev) => [...prev, tag]);
+    }
+    setCustomTagInput("");
+  }, [customTagInput, allActiveTags]);
+
+  const removeCustomTag = useCallback((tag: string) => {
+    setCustomTags((prev) => prev.filter((t) => t !== tag));
+  }, []);
+
+  const handleCardView = useCallback(
     (agent: SparkAgentManifest) => {
       selectAgent(agent);
       setDetailOpen(true);
@@ -176,6 +216,7 @@ export function SparkPage() {
 
       {/* Search bar */}
       <div className="space-y-3">
+        {/* Row 1: query input + agent type filter + search button */}
         <div className="flex gap-2">
           <div className="relative flex-1">
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -187,37 +228,73 @@ export function SparkPage() {
               className="pl-9"
             />
           </div>
+          <Select
+            value={agentType}
+            onChange={(e) => setAgentType(e.target.value)}
+            className="w-40"
+          >
+            {AGENT_TYPE_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>
+                {opt.label}
+              </option>
+            ))}
+          </Select>
           <Button onClick={() => void handleSearch()}>Search</Button>
         </div>
 
-        {/* Tag filter */}
+        {/* Row 2: domain expertise badge-pills */}
+        <div className="space-y-2">
+          <p className="text-xs font-medium text-muted-foreground">Domain expertise</p>
+          <div className="flex flex-wrap gap-1.5">
+            {DOMAIN_TAGS.map((tag) => {
+              const active = activeDomainTags.includes(tag);
+              return (
+                <button
+                  key={tag}
+                  type="button"
+                  onClick={() => toggleDomainTag(tag)}
+                  className={cn(
+                    "inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-medium transition-colors",
+                    active
+                      ? "border-primary bg-primary text-primary-foreground"
+                      : "border-border bg-background text-muted-foreground hover:border-primary/50 hover:text-foreground",
+                  )}
+                >
+                  {tag}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Row 3: custom tag input + custom tag pills */}
         <div className="flex flex-wrap items-center gap-2">
           <div className="flex gap-2">
             <div className="relative">
               <Tag className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
               <Input
-                placeholder="Add tag..."
-                value={tagInput}
-                onChange={(e) => setTagInput(e.target.value)}
+                placeholder="Custom tag..."
+                value={customTagInput}
+                onChange={(e) => setCustomTagInput(e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === "Enter") {
                     e.preventDefault();
-                    addTag();
+                    addCustomTag();
                   }
                 }}
-                className="h-8 w-32 pl-8 text-xs"
+                className="h-8 w-36 pl-8 text-xs"
               />
             </div>
-            <Button variant="outline" size="sm" onClick={addTag} className="h-8 text-xs">
+            <Button variant="outline" size="sm" onClick={addCustomTag} className="h-8 text-xs">
               Add tag
             </Button>
           </div>
-          {activeTags.map((tag) => (
+          {customTags.map((tag) => (
             <Badge
               key={tag}
               variant="secondary"
               className="cursor-pointer gap-1 text-xs"
-              onClick={() => removeTag(tag)}
+              onClick={() => removeCustomTag(tag)}
             >
               {tag}
               <X className="h-3 w-3" />
@@ -255,7 +332,7 @@ export function SparkPage() {
                 <>
                   <h3 className="mb-2 text-lg font-semibold">No agents found</h3>
                   <p className="text-center text-sm text-muted-foreground">
-                    Try a different search query or remove some tags.
+                    Try a different search query or remove some filters.
                   </p>
                 </>
               ) : (
@@ -277,8 +354,7 @@ export function SparkPage() {
               <SparkAgentCard
                 key={agent.id}
                 agent={agent}
-                onView={() => handleCardClick(agent)}
-                onInstall={() => handleInstallClick(agent)}
+                onView={() => handleCardView(agent)}
               />
             ))}
           </div>
@@ -315,11 +391,9 @@ export function SparkPage() {
 function SparkAgentCard({
   agent,
   onView,
-  onInstall,
 }: {
   agent: SparkAgentManifest;
   onView: () => void;
-  onInstall: () => void;
 }) {
   const typeConfig = agentTypeLabel(agent.agent_type);
 
@@ -375,13 +449,14 @@ function SparkAgentCard({
 
         <Button
           size="sm"
+          variant="outline"
           className="w-full"
           onClick={(e) => {
             e.stopPropagation();
-            onInstall();
+            onView();
           }}
         >
-          Install
+          View
         </Button>
       </CardContent>
     </Card>
@@ -486,7 +561,9 @@ function AgentDetailDialog({
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             Close
           </Button>
-          <Button onClick={onInstall}>Install in workspace</Button>
+          <Button variant="default" onClick={onInstall}>
+            Install in workspace
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

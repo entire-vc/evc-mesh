@@ -4,6 +4,7 @@ import {
   ArrowDown,
   ArrowRight,
   ArrowUp,
+  Bot,
   Eye,
   GitBranch,
   GripVertical,
@@ -14,6 +15,7 @@ import {
   Shield,
   Trash2,
   Users,
+  X,
   Zap,
 } from "lucide-react";
 import { useProjectStore } from "@/stores/project";
@@ -85,6 +87,39 @@ interface WorkflowRulesSectionProps {
   onSave: (config: WorkflowRulesConfig) => Promise<void>;
   isSaving: boolean;
   statuses: TaskStatus[];
+  agents: Agent[];
+  members: WorkspaceMemberWithUser[];
+}
+
+// Parse an allowed array into typed buckets
+function parseAllowed(allowed: string[]): {
+  roles: string[];
+  agents: string[];
+  users: string[];
+} {
+  const roles: string[] = [];
+  const agentIds: string[] = [];
+  const userIds: string[] = [];
+  for (const a of allowed) {
+    if (a.startsWith("agent:")) agentIds.push(a.slice(6));
+    else if (a.startsWith("user:")) userIds.push(a.slice(5));
+    else if (a.startsWith("role:")) roles.push(a.slice(5));
+    else roles.push(a); // legacy: plain role name without prefix
+  }
+  return { roles, agents: agentIds, users: userIds };
+}
+
+// Re-build allowed array from typed buckets
+function buildAllowed(
+  roles: string[],
+  agentIds: string[],
+  userIds: string[],
+): string[] {
+  return [
+    ...roles.map((r) => `role:${r}`),
+    ...agentIds.map((id) => `agent:${id}`),
+    ...userIds.map((id) => `user:${id}`),
+  ];
 }
 
 function WorkflowRulesSection({
@@ -93,6 +128,8 @@ function WorkflowRulesSection({
   onSave,
   isSaving,
   statuses,
+  agents,
+  members,
 }: WorkflowRulesSectionProps) {
   const [enforcementMode, setEnforcementMode] = useState(
     workflowRules?.enforcement_mode ?? "advisory",
@@ -280,35 +317,228 @@ function WorkflowRulesSection({
                     <Trash2 className="h-3.5 w-3.5" />
                   </Button>
                 </div>
-                {/* Allowed actors pills */}
-                <div className="space-y-1">
+                {/* Allowed actors */}
+                <div className="space-y-2">
                   <span className="text-xs text-muted-foreground font-medium">
                     Allowed actors
                   </span>
-                  <div className="flex flex-wrap gap-1.5">
-                    {ACTOR_ROLES.map((role) => {
-                      const selected = t.allowed.includes(role);
+                  {/* Role pills */}
+                  <div className="space-y-1">
+                    <span className="text-xs text-muted-foreground">
+                      Roles
+                    </span>
+                    <div className="flex flex-wrap gap-1.5">
+                      {ACTOR_ROLES.map((role) => {
+                        const parsed = parseAllowed(t.allowed);
+                        const selected = parsed.roles.includes(role);
+                        return (
+                          <Badge
+                            key={role}
+                            variant={selected ? "default" : "outline"}
+                            className="cursor-pointer select-none capitalize"
+                            onClick={() =>
+                              setTransitions((prev) =>
+                                prev.map((r, idx) => {
+                                  if (idx !== i) return r;
+                                  const p = parseAllowed(r.allowed);
+                                  const nextRoles = selected
+                                    ? p.roles.filter((x) => x !== role)
+                                    : [...p.roles, role];
+                                  return {
+                                    ...r,
+                                    allowed: buildAllowed(
+                                      nextRoles,
+                                      p.agents,
+                                      p.users,
+                                    ),
+                                  };
+                                }),
+                              )
+                            }
+                          >
+                            {role}
+                          </Badge>
+                        );
+                      })}
+                    </div>
+                  </div>
+                  {/* Specific actors */}
+                  <div className="space-y-1.5">
+                    <span className="text-xs text-muted-foreground">
+                      Specific actors
+                    </span>
+                    {(() => {
+                      const parsed = parseAllowed(t.allowed);
+                      const hasActors =
+                        parsed.agents.length > 0 || parsed.users.length > 0;
                       return (
-                        <Badge
-                          key={role}
-                          variant={selected ? "default" : "outline"}
-                          className="cursor-pointer select-none capitalize"
-                          onClick={() =>
-                            setTransitions((prev) =>
-                              prev.map((r, idx) => {
-                                if (idx !== i) return r;
-                                const next = selected
-                                  ? r.allowed.filter((a) => a !== role)
-                                  : [...r.allowed, role];
-                                return { ...r, allowed: next };
-                              }),
-                            )
-                          }
-                        >
-                          {role}
-                        </Badge>
+                        <>
+                          {hasActors && (
+                            <div className="flex flex-wrap gap-1.5">
+                              {parsed.agents.map((agentId) => {
+                                const agent = agents.find(
+                                  (a) => a.id === agentId,
+                                );
+                                return (
+                                  <Badge
+                                    key={agentId}
+                                    variant="secondary"
+                                    className="gap-1 pr-1"
+                                  >
+                                    <Bot className="h-3 w-3" />
+                                    {agent?.name ?? agentId.slice(0, 8)}
+                                    <button
+                                      type="button"
+                                      className="ml-0.5 rounded-sm hover:bg-muted-foreground/20"
+                                      onClick={() =>
+                                        setTransitions((prev) =>
+                                          prev.map((r, idx) => {
+                                            if (idx !== i) return r;
+                                            const p = parseAllowed(r.allowed);
+                                            return {
+                                              ...r,
+                                              allowed: buildAllowed(
+                                                p.roles,
+                                                p.agents.filter(
+                                                  (id) => id !== agentId,
+                                                ),
+                                                p.users,
+                                              ),
+                                            };
+                                          }),
+                                        )
+                                      }
+                                    >
+                                      <X className="h-3 w-3" />
+                                    </button>
+                                  </Badge>
+                                );
+                              })}
+                              {parsed.users.map((userId) => {
+                                const member = members.find(
+                                  (m) => m.user_id === userId,
+                                );
+                                return (
+                                  <Badge
+                                    key={userId}
+                                    variant="secondary"
+                                    className="gap-1 pr-1"
+                                  >
+                                    <Users className="h-3 w-3" />
+                                    {member?.user?.name ?? userId.slice(0, 8)}
+                                    <button
+                                      type="button"
+                                      className="ml-0.5 rounded-sm hover:bg-muted-foreground/20"
+                                      onClick={() =>
+                                        setTransitions((prev) =>
+                                          prev.map((r, idx) => {
+                                            if (idx !== i) return r;
+                                            const p = parseAllowed(r.allowed);
+                                            return {
+                                              ...r,
+                                              allowed: buildAllowed(
+                                                p.roles,
+                                                p.agents,
+                                                p.users.filter(
+                                                  (id) => id !== userId,
+                                                ),
+                                              ),
+                                            };
+                                          }),
+                                        )
+                                      }
+                                    >
+                                      <X className="h-3 w-3" />
+                                    </button>
+                                  </Badge>
+                                );
+                              })}
+                            </div>
+                          )}
+                          {/* Add actor dropdown */}
+                          <Select
+                            value=""
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              if (!val) return;
+                              setTransitions((prev) =>
+                                prev.map((r, idx) => {
+                                  if (idx !== i) return r;
+                                  const p = parseAllowed(r.allowed);
+                                  if (val.startsWith("agent:")) {
+                                    const id = val.slice(6);
+                                    if (p.agents.includes(id)) return r;
+                                    return {
+                                      ...r,
+                                      allowed: buildAllowed(
+                                        p.roles,
+                                        [...p.agents, id],
+                                        p.users,
+                                      ),
+                                    };
+                                  } else if (val.startsWith("user:")) {
+                                    const id = val.slice(5);
+                                    if (p.users.includes(id)) return r;
+                                    return {
+                                      ...r,
+                                      allowed: buildAllowed(
+                                        p.roles,
+                                        p.agents,
+                                        [...p.users, id],
+                                      ),
+                                    };
+                                  }
+                                  return r;
+                                }),
+                              );
+                            }}
+                            className="text-sm"
+                          >
+                            <option value="">
+                              + Add agent or member...
+                            </option>
+                            {agents.length > 0 && (
+                              <optgroup label="Agents">
+                                {agents
+                                  .filter(
+                                    (a) =>
+                                      !parseAllowed(t.allowed).agents.includes(
+                                        a.id,
+                                      ),
+                                  )
+                                  .map((a) => (
+                                    <option
+                                      key={a.id}
+                                      value={`agent:${a.id}`}
+                                    >
+                                      {a.name}
+                                    </option>
+                                  ))}
+                              </optgroup>
+                            )}
+                            {members.length > 0 && (
+                              <optgroup label="Members">
+                                {members
+                                  .filter(
+                                    (m) =>
+                                      !parseAllowed(t.allowed).users.includes(
+                                        m.user_id,
+                                      ),
+                                  )
+                                  .map((m) => (
+                                    <option
+                                      key={m.user_id}
+                                      value={`user:${m.user_id}`}
+                                    >
+                                      {m.user.name} ({m.user.email})
+                                    </option>
+                                  ))}
+                              </optgroup>
+                            )}
+                          </Select>
+                        </>
                       );
-                    })}
+                    })()}
                   </div>
                 </div>
               </div>
@@ -1533,6 +1763,8 @@ export function ProjectSettingsPage() {
             onSave={handleSaveWorkflow}
             isSaving={isSavingWorkflow}
             statuses={statuses}
+            agents={agents}
+            members={workspaceMembers}
           />
         </CardContent>
       </Card>

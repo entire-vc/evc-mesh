@@ -15,7 +15,7 @@ interface SparkState {
   lastInstallResult: SparkInstallResponse | null;
 
   // Actions
-  search: (query: string, tags: string[], limit?: number) => Promise<void>;
+  search: (query: string, tags: string[], limit?: number, agentType?: string) => Promise<void>;
   fetchPopular: (limit?: number) => Promise<void>;
   fetchAgent: (agentId: string) => Promise<SparkAgentManifest | null>;
   selectAgent: (agent: SparkAgentManifest | null) => void;
@@ -33,12 +33,13 @@ export const useSparkStore = create<SparkState>((set) => ({
   error: null,
   lastInstallResult: null,
 
-  search: async (query: string, tags: string[], limit = 20) => {
+  search: async (query: string, tags: string[], limit = 20, agentType?: string) => {
     set({ isLoading: true, error: null });
     try {
       const params: Record<string, string | number | undefined> = { limit };
       if (query) params.q = query;
       if (tags.length > 0) params.tags = tags.join(",");
+      if (agentType && agentType !== "all") params.agent_type = agentType;
 
       const response = await api<{ items: SparkAgentManifest[]; count: number }>(
         "/api/v1/spark/agents",
