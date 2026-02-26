@@ -131,7 +131,7 @@ func (s *Server) MCPServer() *mcpserver.MCPServer {
 	return s.mcpServer
 }
 
-// registerTools registers all 23 MCP tools.
+// registerTools registers all 33 MCP tools.
 func (s *Server) registerTools() {
 	// --- Projects & Tasks ---
 	s.mcpServer.AddTool(mcpsdk.NewTool("list_projects",
@@ -352,6 +352,42 @@ func (s *Server) registerTools() {
 		mcpsdk.WithDescription("Get all rules configured for a project (all scopes: workspace + project)."),
 		mcpsdk.WithString("project_id", mcpsdk.Required(), mcpsdk.Description("Project ID.")),
 	), s.handleGetProjectRules)
+
+	// --- Team & Rules ---
+	s.mcpServer.AddTool(mcpsdk.NewTool("get_team_directory",
+		mcpsdk.WithDescription("Get the workspace team directory listing all agents and human members with their profiles."),
+	), s.handleGetTeamDirectory)
+
+	s.mcpServer.AddTool(mcpsdk.NewTool("get_assignment_rules",
+		mcpsdk.WithDescription("Get effective assignment rules for a project, merged from workspace and project level with source annotations."),
+		mcpsdk.WithString("project_id", mcpsdk.Required(), mcpsdk.Description("Project ID.")),
+	), s.handleGetAssignmentRules)
+
+	s.mcpServer.AddTool(mcpsdk.NewTool("get_workflow_rules",
+		mcpsdk.WithDescription("Get workflow rules for a project including allowed transitions, policies, and permissions for the calling agent."),
+		mcpsdk.WithString("project_id", mcpsdk.Required(), mcpsdk.Description("Project ID.")),
+	), s.handleGetWorkflowRules)
+
+	s.mcpServer.AddTool(mcpsdk.NewTool("update_agent_profile",
+		mcpsdk.WithDescription("Update the calling agent's profile fields such as role, capabilities, responsibility zone, and working hours."),
+		mcpsdk.WithString("role", mcpsdk.Description("Agent role (e.g. developer, reviewer, tester).")),
+		mcpsdk.WithArray("capabilities", mcpsdk.Description("List of capability strings (e.g. go, react, testing)."), mcpsdk.WithStringItems()),
+		mcpsdk.WithString("responsibility_zone", mcpsdk.Description("Area of responsibility (e.g. Backend, Frontend).")),
+		mcpsdk.WithString("escalation_to", mcpsdk.Description("Agent ID or name to escalate issues to.")),
+		mcpsdk.WithArray("accepts_from", mcpsdk.Description("Agent IDs or types this agent accepts tasks from."), mcpsdk.WithStringItems()),
+		mcpsdk.WithNumber("max_concurrent_tasks", mcpsdk.Description("Maximum number of concurrent tasks this agent can handle.")),
+		mcpsdk.WithString("working_hours", mcpsdk.Description("Working hours description (e.g. 24/7, 9-17 UTC).")),
+		mcpsdk.WithString("description", mcpsdk.Description("Human-readable description of the agent's purpose.")),
+	), s.handleUpdateAgentProfile)
+
+	s.mcpServer.AddTool(mcpsdk.NewTool("import_workspace_config",
+		mcpsdk.WithDescription("Import workspace configuration from YAML. Applies rules, statuses, and project templates defined in the YAML."),
+		mcpsdk.WithString("yaml_content", mcpsdk.Required(), mcpsdk.Description("YAML configuration content as a string.")),
+	), s.handleImportWorkspaceConfig)
+
+	s.mcpServer.AddTool(mcpsdk.NewTool("export_workspace_config",
+		mcpsdk.WithDescription("Export the current workspace configuration as YAML, including rules, project templates, and settings."),
+	), s.handleExportWorkspaceConfig)
 }
 
 // --- Helper functions ---

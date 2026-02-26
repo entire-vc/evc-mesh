@@ -474,3 +474,115 @@ func (c *RESTClient) GetEffectiveRules(ctx context.Context, path string) (map[st
 	}
 	return result, nil
 }
+
+// GetTeamDirectory returns the team directory for a workspace (agents + humans).
+func (c *RESTClient) GetTeamDirectory(ctx context.Context, workspaceID string) (map[string]any, error) {
+	var result map[string]any
+	if err := c.doJSON(ctx, http.MethodGet, "/api/v1/workspaces/"+workspaceID+"/team", nil, &result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+// GetAssignmentRules returns effective assignment rules for a project.
+func (c *RESTClient) GetAssignmentRules(ctx context.Context, projectID string) (map[string]any, error) {
+	var result map[string]any
+	if err := c.doJSON(ctx, http.MethodGet, "/api/v1/projects/"+projectID+"/rules/assignment", nil, &result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+// GetWorkflowRules returns workflow rules and caller permissions for a project.
+func (c *RESTClient) GetWorkflowRules(ctx context.Context, projectID string) (map[string]any, error) {
+	var result map[string]any
+	if err := c.doJSON(ctx, http.MethodGet, "/api/v1/projects/"+projectID+"/rules/workflow", nil, &result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+// UpdateAgentProfile updates the calling agent's profile fields.
+func (c *RESTClient) UpdateAgentProfile(ctx context.Context, agentID string, body map[string]any) (map[string]any, error) {
+	var result map[string]any
+	if err := c.doJSON(ctx, http.MethodPut, "/api/v1/agents/"+agentID+"/profile", body, &result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+// doRaw executes an HTTP request with a raw body and given Content-Type, returning the response body.
+func (c *RESTClient) doRaw(ctx context.Context, method, path, contentType string, rawBody []byte) ([]byte, int, error) {
+	var bodyReader io.Reader
+	if rawBody != nil {
+		bodyReader = bytes.NewReader(rawBody)
+	}
+
+	reqURL := c.baseURL + path
+	req, err := http.NewRequestWithContext(ctx, method, reqURL, bodyReader)
+	if err != nil {
+		return nil, 0, fmt.Errorf("create request: %w", err)
+	}
+
+	req.Header.Set("X-Agent-Key", c.agentKey)
+	if rawBody != nil {
+		req.Header.Set("Content-Type", contentType)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer resp.Body.Close()
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, resp.StatusCode, fmt.Errorf("read response: %w", err)
+	}
+
+	return data, resp.StatusCode, nil
+}
+
+// ImportWorkspaceConfig imports workspace configuration from YAML content.
+func (c *RESTClient) ImportWorkspaceConfig(ctx context.Context, workspaceID string, yamlContent string) (map[string]any, error) {
+	data, statusCode, err := c.doRaw(ctx, http.MethodPost, "/api/v1/workspaces/"+workspaceID+"/config/import", "text/yaml", []byte(yamlContent))
+	if err != nil {
+		return nil, err
+	}
+	if statusCode >= 400 {
+		var errBody map[string]any
+		_ = json.Unmarshal(data, &errBody)
+		msg := fmt.Sprintf("API error %d", statusCode)
+		if m, ok := errBody["message"].(string); ok {
+			msg = m
+		} else if m, ok := errBody["error"].(string); ok {
+			msg = m
+		}
+		return nil, fmt.Errorf("%s: %s", http.StatusText(statusCode), msg)
+	}
+	var result map[string]any
+	if err := json.Unmarshal(data, &result); err != nil {
+		return nil, fmt.Errorf("decode response: %w", err)
+	}
+	return result, nil
+}
+
+// ExportWorkspaceConfig exports workspace configuration as YAML text.
+func (c *RESTClient) ExportWorkspaceConfig(ctx context.Context, workspaceID string) (string, error) {
+	data, statusCode, err := c.doRaw(ctx, http.MethodGet, "/api/v1/workspaces/"+workspaceID+"/config/export", "", nil)
+	if err != nil {
+		return "", err
+	}
+	if statusCode >= 400 {
+		var errBody map[string]any
+		_ = json.Unmarshal(data, &errBody)
+		msg := fmt.Sprintf("API error %d", statusCode)
+		if m, ok := errBody["message"].(string); ok {
+			msg = m
+		} else if m, ok := errBody["error"].(string); ok {
+			msg = m
+		}
+		return "", fmt.Errorf("%s: %s", http.StatusText(statusCode), msg)
+	}
+	return string(data), nil
+}

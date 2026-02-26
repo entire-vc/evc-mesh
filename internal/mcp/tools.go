@@ -1118,3 +1118,150 @@ func (s *Server) handleListSubAgents(ctx context.Context, request mcpsdk.CallToo
 		"count":  len(agents),
 	})
 }
+
+// ============================================================================
+// 28. get_team_directory
+// ============================================================================
+
+func (s *Server) handleGetTeamDirectory(ctx context.Context, request mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
+	session := s.getSession(ctx)
+	if session == nil {
+		return errResult("not authenticated: no agent session")
+	}
+
+	result, err := s.getRESTClient(ctx).GetTeamDirectory(ctx, session.WorkspaceID.String())
+	if err != nil {
+		return errResult("failed to get team directory: %v", err)
+	}
+
+	return jsonResult(result)
+}
+
+// ============================================================================
+// 29. get_assignment_rules
+// ============================================================================
+
+func (s *Server) handleGetAssignmentRules(ctx context.Context, request mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
+	projectID := mcpsdk.ParseString(request, "project_id", "")
+	if projectID == "" {
+		return errResult("project_id is required")
+	}
+
+	result, err := s.getRESTClient(ctx).GetAssignmentRules(ctx, projectID)
+	if err != nil {
+		return errResult("failed to get assignment rules: %v", err)
+	}
+
+	return jsonResult(result)
+}
+
+// ============================================================================
+// 30. get_workflow_rules
+// ============================================================================
+
+func (s *Server) handleGetWorkflowRules(ctx context.Context, request mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
+	projectID := mcpsdk.ParseString(request, "project_id", "")
+	if projectID == "" {
+		return errResult("project_id is required")
+	}
+
+	result, err := s.getRESTClient(ctx).GetWorkflowRules(ctx, projectID)
+	if err != nil {
+		return errResult("failed to get workflow rules: %v", err)
+	}
+
+	return jsonResult(result)
+}
+
+// ============================================================================
+// 31. update_agent_profile
+// ============================================================================
+
+func (s *Server) handleUpdateAgentProfile(ctx context.Context, request mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
+	session := s.getSession(ctx)
+	if session == nil {
+		return errResult("not authenticated: no agent session")
+	}
+
+	args := request.GetArguments()
+	body := map[string]any{}
+
+	if _, ok := args["role"]; ok {
+		body["role"] = mcpsdk.ParseString(request, "role", "")
+	}
+	if caps := parseStringSlice(request, "capabilities"); len(caps) > 0 {
+		body["capabilities"] = caps
+	}
+	if _, ok := args["responsibility_zone"]; ok {
+		body["responsibility_zone"] = mcpsdk.ParseString(request, "responsibility_zone", "")
+	}
+	if _, ok := args["escalation_to"]; ok {
+		body["escalation_to"] = mcpsdk.ParseString(request, "escalation_to", "")
+	}
+	if accepts := parseStringSlice(request, "accepts_from"); len(accepts) > 0 {
+		body["accepts_from"] = accepts
+	}
+	if _, ok := args["max_concurrent_tasks"]; ok {
+		body["max_concurrent_tasks"] = mcpsdk.ParseInt(request, "max_concurrent_tasks", 0)
+	}
+	if _, ok := args["working_hours"]; ok {
+		body["working_hours"] = mcpsdk.ParseString(request, "working_hours", "")
+	}
+	if _, ok := args["description"]; ok {
+		body["description"] = mcpsdk.ParseString(request, "description", "")
+	}
+
+	if len(body) == 0 {
+		return errResult("no profile fields to update")
+	}
+
+	result, err := s.getRESTClient(ctx).UpdateAgentProfile(ctx, session.AgentID.String(), body)
+	if err != nil {
+		return errResult("failed to update agent profile: %v", err)
+	}
+
+	return jsonResult(result)
+}
+
+// ============================================================================
+// 32. import_workspace_config
+// ============================================================================
+
+func (s *Server) handleImportWorkspaceConfig(ctx context.Context, request mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
+	session := s.getSession(ctx)
+	if session == nil {
+		return errResult("not authenticated: no agent session")
+	}
+
+	yamlContent := mcpsdk.ParseString(request, "yaml_content", "")
+	if yamlContent == "" {
+		return errResult("yaml_content is required")
+	}
+
+	result, err := s.getRESTClient(ctx).ImportWorkspaceConfig(ctx, session.WorkspaceID.String(), yamlContent)
+	if err != nil {
+		return errResult("failed to import workspace config: %v", err)
+	}
+
+	return jsonResult(result)
+}
+
+// ============================================================================
+// 33. export_workspace_config
+// ============================================================================
+
+func (s *Server) handleExportWorkspaceConfig(ctx context.Context, request mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
+	session := s.getSession(ctx)
+	if session == nil {
+		return errResult("not authenticated: no agent session")
+	}
+
+	yamlContent, err := s.getRESTClient(ctx).ExportWorkspaceConfig(ctx, session.WorkspaceID.String())
+	if err != nil {
+		return errResult("failed to export workspace config: %v", err)
+	}
+
+	return jsonResult(map[string]any{
+		"yaml_content": yamlContent,
+	})
+}
