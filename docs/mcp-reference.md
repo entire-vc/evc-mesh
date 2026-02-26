@@ -2,25 +2,33 @@
 
 ## Overview
 
-evc-mesh exposes **23 MCP tools** via the [Model Context Protocol](https://modelcontextprotocol.io/).
+evc-mesh exposes **25 MCP tools** via the [Model Context Protocol](https://modelcontextprotocol.io/).
 Supported transports: **stdio** (default), **SSE** (HTTP Server-Sent Events on port 8081).
 
-Tools are organized into 4 categories:
+Tools are organized into 5 categories:
 
 | Category | Tools | Description |
 |----------|-------|-------------|
 | Project & Task Management | 10 | CRUD for projects, tasks, subtasks, dependencies, assignments |
 | Comments & Artifacts | 5 | Task comments, file uploads, artifact retrieval |
 | Event Bus | 5 | Publish/subscribe events, context aggregation |
+| Agent Hierarchy | 2 | Register and list sub-agents |
 | Utility | 3 | Heartbeat, error reporting, self-assigned task listing |
+
+> **Note:** The MCP server is also available as a standalone package at
+> [github.com/entire-vc/evc-mesh-mcp](https://github.com/entire-vc/evc-mesh-mcp).
 
 ---
 
 ## Configuration
 
+The MCP server connects to the Mesh REST API. It requires only two environment variables:
+`MESH_API_URL` (the URL of your Mesh instance) and `MESH_AGENT_KEY` (your agent API key).
+No direct database, Redis, or NATS access is needed.
+
 ### Stdio Mode (recommended for Claude Code)
 
-Add to your project's `.claude.json` or `~/.claude.json`:
+Add to your project's `.mcp.json` or `~/.claude.json`:
 
 ```json
 {
@@ -29,35 +37,7 @@ Add to your project's `.claude.json` or `~/.claude.json`:
       "command": "./evc-mesh-mcp",
       "args": ["--transport", "stdio"],
       "env": {
-        "MESH_AGENT_KEY": "agk_your-workspace_your-key",
-        "DB_HOST": "localhost",
-        "DB_PORT": "5437",
-        "DB_USER": "mesh",
-        "DB_PASSWORD": "mesh",
-        "DB_NAME": "mesh",
-        "REDIS_HOST": "localhost",
-        "REDIS_PORT": "6383",
-        "NATS_URL": "nats://localhost:4223",
-        "S3_ENDPOINT": "localhost:9002",
-        "S3_ACCESS_KEY_ID": "minioadmin",
-        "S3_SECRET_ACCESS_KEY": "minioadmin",
-        "S3_BUCKET": "mesh-artifacts"
-      }
-    }
-  }
-}
-```
-
-If running from source instead of a binary:
-
-```json
-{
-  "mcpServers": {
-    "evc-mesh": {
-      "command": "go",
-      "args": ["run", "./cmd/mcp"],
-      "cwd": "/path/to/evc-mesh",
-      "env": {
+        "MESH_API_URL": "https://your-mesh-instance.example.com",
         "MESH_AGENT_KEY": "agk_your-workspace_your-key"
       }
     }
@@ -65,13 +45,46 @@ If running from source instead of a binary:
 }
 ```
 
-### SSE Mode (for remote / multi-client use)
+If running from source (from the `evc-mesh-mcp` repository):
+
+```json
+{
+  "mcpServers": {
+    "evc-mesh": {
+      "command": "go",
+      "args": ["run", "."],
+      "cwd": "/path/to/evc-mesh-mcp",
+      "env": {
+        "MESH_API_URL": "https://your-mesh-instance.example.com",
+        "MESH_AGENT_KEY": "agk_your-workspace_your-key"
+      }
+    }
+  }
+}
+```
+
+### SSE Mode (for remote / multi-agent use)
+
+SSE mode allows multiple agents to connect simultaneously, each authenticating with their own key.
+
+Start the server:
 
 ```bash
-./evc-mesh-mcp --transport sse --host 0.0.0.0 --port 8081
+./evc-mesh-mcp --transport sse
+```
+
+Or set transport via environment variable:
+
+```bash
+MESH_MCP_TRANSPORT=sse MESH_API_URL=https://your-mesh-instance.example.com ./evc-mesh-mcp
 ```
 
 Connect via: `http://localhost:8081/sse`
+
+Agents authenticate per-connection using one of these methods:
+- `Authorization: Bearer agk_...` header
+- `X-Agent-Key: agk_...` header
+- `?agent_key=agk_...` query parameter
 
 ---
 
@@ -79,25 +92,11 @@ Connect via: `http://localhost:8081/sse`
 
 | Variable | Default | Required | Description |
 |----------|---------|----------|-------------|
-| `MESH_AGENT_KEY` | -- | Yes | Agent API key in format `agk_{workspace_slug}_{random}` |
+| `MESH_API_URL` | `http://localhost:8005` | Yes | Base URL of the Mesh REST API |
+| `MESH_AGENT_KEY` | -- | Yes (stdio) | Agent API key in format `agk_{workspace_slug}_{random}`. Required for stdio; provided per-connection in SSE mode |
+| `MESH_MCP_TRANSPORT` | `stdio` | No | Transport mode: `stdio` or `sse`. Overridden by the `--transport` CLI flag |
 | `MESH_MCP_HOST` | `0.0.0.0` | No | SSE server bind host |
 | `MESH_MCP_PORT` | `8081` | No | SSE server bind port |
-| `DB_HOST` | `localhost` | No | PostgreSQL host |
-| `DB_PORT` | `5437` | No | PostgreSQL port |
-| `DB_USER` | `mesh` | No | PostgreSQL user |
-| `DB_PASSWORD` | `mesh` | No | PostgreSQL password |
-| `DB_NAME` | `mesh` | No | PostgreSQL database name |
-| `DB_SSL_MODE` | `disable` | No | PostgreSQL SSL mode |
-| `REDIS_HOST` | `localhost` | No | Redis host |
-| `REDIS_PORT` | `6383` | No | Redis port |
-| `REDIS_PASSWORD` | -- | No | Redis password |
-| `NATS_URL` | `nats://localhost:4223` | No | NATS JetStream URL |
-| `S3_ENDPOINT` | `localhost:9002` | No | S3/MinIO endpoint |
-| `S3_ACCESS_KEY_ID` | `minioadmin` | No | S3 access key |
-| `S3_SECRET_ACCESS_KEY` | `minioadmin` | No | S3 secret key |
-| `S3_BUCKET` | `mesh-artifacts` | No | S3 bucket name |
-| `S3_REGION` | `us-east-1` | No | S3 region |
-| `S3_USE_SSL` | `false` | No | Use SSL for S3 |
 
 ---
 
@@ -678,9 +677,59 @@ Subscribe to events (placeholder -- returns subscription info).
 
 ---
 
+### Agent Hierarchy (2 tools)
+
+#### 21. `register_sub_agent`
+
+Register a sub-agent under the calling agent. Useful for orchestrating multi-agent workflows.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `name` | string | **Yes** | -- | Sub-agent name |
+| `agent_type` | string | **Yes** | -- | Agent type: `claude_code`, `openclaw`, `cline`, `aider`, `custom` |
+| `capabilities` | object | No | -- | Agent capabilities as key-value pairs |
+
+**Example request:**
+```json
+{
+  "name": "register_sub_agent",
+  "arguments": {
+    "name": "test-runner-agent",
+    "agent_type": "claude_code",
+    "capabilities": {
+      "languages": "go,python",
+      "can_run_tests": "true"
+    }
+  }
+}
+```
+
+---
+
+#### 22. `list_sub_agents`
+
+List sub-agents of an agent.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `agent_id` | string | No | Calling agent | Parent agent ID. Defaults to the calling agent |
+| `recursive` | boolean | No | `false` | Return all descendants (up to 10 levels deep) |
+
+**Example request:**
+```json
+{
+  "name": "list_sub_agents",
+  "arguments": {
+    "recursive": true
+  }
+}
+```
+
+---
+
 ### Utility (3 tools)
 
-#### 21. `heartbeat`
+#### 23. `heartbeat`
 
 Send a heartbeat to indicate the agent is alive.
 
@@ -702,7 +751,7 @@ Send a heartbeat to indicate the agent is alive.
 
 ---
 
-#### 22. `get_my_tasks`
+#### 24. `get_my_tasks`
 
 Get tasks assigned to the calling agent.
 
@@ -724,7 +773,7 @@ Get tasks assigned to the calling agent.
 
 ---
 
-#### 23. `report_error`
+#### 25. `report_error`
 
 Report an error encountered during work.
 
@@ -745,6 +794,48 @@ Report an error encountered during work.
     "error_message": "Failed to connect to external API: connection timeout",
     "severity": "high",
     "recoverable": true
+  }
+}
+```
+
+---
+
+### Governance (2 tools)
+
+#### `get_my_rules`
+
+Get all governance rules that apply to the calling agent. Call at the start of work to understand constraints and behavioral requirements.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `project_id` | string | No | -- | Optional project ID to get project-specific effective rules |
+
+**Example request:**
+```json
+{
+  "name": "get_my_rules",
+  "arguments": {
+    "project_id": "550e8400-..."
+  }
+}
+```
+
+---
+
+#### `get_project_rules`
+
+Get all rules configured for a project (all scopes: workspace + project).
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `project_id` | string | **Yes** | -- | Project ID |
+
+**Example request:**
+```json
+{
+  "name": "get_project_rules",
+  "arguments": {
+    "project_id": "550e8400-..."
   }
 }
 ```
@@ -775,7 +866,8 @@ Common error conditions:
 
 ## Authentication
 
-MCP tools authenticate using the `MESH_AGENT_KEY` environment variable. The key format is:
+MCP tools authenticate using the `MESH_AGENT_KEY` environment variable (stdio mode) or
+per-connection HTTP headers/query parameters (SSE mode). The key format is:
 
 ```
 agk_{workspace_slug}_{random_string}
