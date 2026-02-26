@@ -169,10 +169,10 @@ export const useRulesStore = create<RulesState>((set) => ({
   fetchViolations: async (workspaceId: string) => {
     set({ isViolationsLoading: true });
     try {
-      const data = await api<RuleViolation[]>(
+      const resp = await api<{ items: RuleViolation[]; total_count: number }>(
         `/api/v1/workspaces/${workspaceId}/violations`,
       );
-      set({ violations: data ?? [], isViolationsLoading: false });
+      set({ violations: resp?.items ?? [], isViolationsLoading: false });
     } catch {
       set({ isViolationsLoading: false });
     }

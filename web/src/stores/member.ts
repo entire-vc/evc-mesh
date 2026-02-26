@@ -63,10 +63,10 @@ export const useMemberStore = create<MemberState>((set) => ({
   fetchWorkspaceMembers: async (workspaceId: string) => {
     set({ isLoadingWorkspaceMembers: true });
     try {
-      const members = await api<WorkspaceMemberWithUser[]>(
+      const resp = await api<{ members: WorkspaceMemberWithUser[]; count: number }>(
         `/api/v1/workspaces/${workspaceId}/members`,
       );
-      set({ workspaceMembers: members ?? [], isLoadingWorkspaceMembers: false });
+      set({ workspaceMembers: resp?.members ?? [], isLoadingWorkspaceMembers: false });
     } catch {
       set({ isLoadingWorkspaceMembers: false });
     }
@@ -74,10 +74,10 @@ export const useMemberStore = create<MemberState>((set) => ({
 
   fetchMyRole: async (workspaceId: string) => {
     try {
-      const me = await api<WorkspaceMemberWithUser>(
+      const me = await api<{ role: string }>(
         `/api/v1/workspaces/${workspaceId}/members/me`,
       );
-      set({ myRole: me.role });
+      set({ myRole: (me?.role as WorkspaceRole) ?? null });
     } catch {
       set({ myRole: null });
     }
@@ -149,10 +149,10 @@ export const useMemberStore = create<MemberState>((set) => ({
   fetchProjectMembers: async (projectId: string) => {
     set({ isLoadingProjectMembers: true });
     try {
-      const members = await api<ProjectMemberWithUser[]>(
+      const resp = await api<{ members: ProjectMemberWithUser[]; count: number }>(
         `/api/v1/projects/${projectId}/members`,
       );
-      set({ projectMembers: members ?? [], isLoadingProjectMembers: false });
+      set({ projectMembers: resp?.members ?? [], isLoadingProjectMembers: false });
     } catch {
       set({ isLoadingProjectMembers: false });
     }
