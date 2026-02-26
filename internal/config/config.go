@@ -98,6 +98,7 @@ type S3Config struct {
 	Bucket          string
 	Region          string
 	UseSSL          bool
+	PublicURL       string // Optional: public base URL for presigned URLs (e.g. https://mesh.example.com/s3)
 }
 
 // AuthConfig holds authentication settings.
@@ -141,6 +142,7 @@ func Load() *Config {
 			Bucket:          getEnv("S3_BUCKET", "mesh-artifacts"),
 			Region:          getEnv("S3_REGION", "us-east-1"),
 			UseSSL:          getEnvBool("S3_USE_SSL", false),
+			PublicURL:       getEnv("S3_PUBLIC_URL", ""),
 		},
 		Auth: AuthConfig{
 			JWTSecret:       getEnv("JWT_SECRET", "change-me-in-production"),

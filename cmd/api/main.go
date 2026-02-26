@@ -155,6 +155,10 @@ func main() {
 		// This is intentional: we no longer use a stub that silently discards uploads.
 		artifactService = service.NewArtifactService(artifactRepo, nil, activityLogRepo)
 	} else {
+		if cfg.S3.PublicURL != "" {
+			s3Client.SetPublicURL(cfg.S3.PublicURL)
+			log.Printf("S3 presigned URLs will use public URL: %s", cfg.S3.PublicURL)
+		}
 		artifactService = service.NewArtifactService(artifactRepo, s3Client, activityLogRepo)
 	}
 
