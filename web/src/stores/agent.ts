@@ -2,10 +2,16 @@ import { create } from "zustand";
 import { api } from "@/lib/api";
 import type {
   Agent,
+  AgentType,
   PaginatedResponse,
   RegisterAgentRequest,
   RegisterAgentResponse,
 } from "@/types";
+
+interface RegenerateKeyResponse {
+  agent: Agent;
+  api_key: string;
+}
 
 interface AgentState {
   agents: Agent[];
@@ -17,6 +23,12 @@ interface AgentState {
     req: RegisterAgentRequest,
   ) => Promise<RegisterAgentResponse>;
   fetchAgent: (agentId: string) => Promise<Agent>;
+  updateAgent: (
+    agentId: string,
+    req: { name?: string; agent_type?: AgentType },
+  ) => Promise<Agent>;
+  deleteAgent: (agentId: string) => Promise<void>;
+  regenerateKey: (agentId: string) => Promise<RegenerateKeyResponse>;
 }
 
 export const useAgentStore = create<AgentState>((set) => ({
@@ -55,5 +67,39 @@ export const useAgentStore = create<AgentState>((set) => ({
       agents: state.agents.map((a) => (a.id === agentId ? agent : a)),
     }));
     return agent;
+  },
+
+  updateAgent: async (
+    agentId: string,
+    req: { name?: string; agent_type?: AgentType },
+  ): Promise<Agent> => {
+    const agent = await api<Agent>(`/api/v1/agents/${agentId}`, {
+      method: "PATCH",
+      body: req,
+    });
+    set((state) => ({
+      agents: state.agents.map((a) => (a.id === agentId ? agent : a)),
+    }));
+    return agent;
+  },
+
+  deleteAgent: async (agentId: string): Promise<void> => {
+    await api(`/api/v1/agents/${agentId}`, { method: "DELETE" });
+    set((state) => ({
+      agents: state.agents.filter((a) => a.id !== agentId),
+    }));
+  },
+
+  regenerateKey: async (agentId: string): Promise<RegenerateKeyResponse> => {
+    const response = await api<RegenerateKeyResponse>(
+      `/api/v1/agents/${agentId}/regenerate-key`,
+      { method: "POST" },
+    );
+    set((state) => ({
+      agents: state.agents.map((a) =>
+        a.id === agentId ? response.agent : a,
+      ),
+    }));
+    return response;
   },
 }));

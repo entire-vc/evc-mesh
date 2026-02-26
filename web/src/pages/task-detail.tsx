@@ -20,6 +20,7 @@ import {
   SlidersHorizontal,
   Tag,
   User,
+  X,
 } from "lucide-react";
 import { useTaskStore } from "@/stores/task";
 import { useProjectStore } from "@/stores/project";
@@ -50,6 +51,7 @@ import {
   statusCategoryConfig,
   toDateTimeLocal,
 } from "@/lib/utils";
+import { toast } from "@/components/ui/toast";
 import type { AssigneeType, Priority } from "@/types";
 
 type TabId = "comments" | "activity" | "subtasks" | "artifacts";
@@ -82,6 +84,11 @@ export function TaskDetailPage() {
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState("");
   const titleInputRef = useRef<HTMLInputElement>(null);
+
+  // Label adding
+  const [addingLabel, setAddingLabel] = useState(false);
+  const [labelDraft, setLabelDraft] = useState("");
+  const labelInputRef = useRef<HTMLInputElement>(null);
 
   // Load task, statuses, and custom field definitions
   useEffect(() => {
@@ -194,6 +201,45 @@ export function TaskDetailPage() {
       );
     }
   }, [currentTask, duplicateTask, navigate, wsSlug, projectSlug]);
+
+  // Focus label input when adding starts
+  useEffect(() => {
+    if (addingLabel) {
+      setTimeout(() => labelInputRef.current?.focus(), 0);
+    }
+  }, [addingLabel]);
+
+  const handleAddLabel = useCallback(async () => {
+    if (!currentTask || !labelDraft.trim()) {
+      setAddingLabel(false);
+      setLabelDraft("");
+      return;
+    }
+    const newLabel = labelDraft.trim();
+    const labels = [...(currentTask.labels ?? []), newLabel];
+    setAddingLabel(false);
+    setLabelDraft("");
+    try {
+      await updateTask(currentTask.id, { labels });
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to add label");
+    }
+  }, [currentTask, labelDraft, updateTask]);
+
+  const handleRemoveLabel = useCallback(
+    async (label: string) => {
+      if (!currentTask) return;
+      const labels = (currentTask.labels ?? []).filter((l) => l !== label);
+      try {
+        await updateTask(currentTask.id, { labels });
+      } catch (err) {
+        toast.error(
+          err instanceof Error ? err.message : "Failed to remove label",
+        );
+      }
+    },
+    [currentTask, updateTask],
+  );
 
   const handleCustomFieldChange = useCallback(
     async (slug: string, newValue: unknown) => {
@@ -344,23 +390,23 @@ export function TaskDetailPage() {
             <CardHeader className="pb-3">
               <CardTitle className="text-sm">Task Properties</CardTitle>
             </CardHeader>
-            <CardContent className="space-y-4">
+            <CardContent className="space-y-2.5">
               {/* Status */}
-              <div className="space-y-1.5">
-                <label className="text-xs font-medium text-muted-foreground">
+              <div className="flex items-center gap-3">
+                <label className="w-24 shrink-0 text-xs font-medium text-muted-foreground">
                   Status
                 </label>
-                <div className="flex items-center gap-2">
+                <div className="flex flex-1 items-center gap-2">
                   {currentStatus && (
                     <span
-                      className="inline-block h-2.5 w-2.5 shrink-0 rounded-full"
+                      className="inline-block h-2 w-2 shrink-0 rounded-full"
                       style={{ backgroundColor: currentStatus.color }}
                     />
                   )}
                   <Select
                     value={currentTask.status_id}
                     onChange={(e) => void handleStatusChange(e.target.value)}
-                    className="h-8 text-xs"
+                    className="h-7 flex-1 text-xs"
                   >
                     {statuses
                       .sort((a, b) => a.position - b.position)
@@ -370,59 +416,61 @@ export function TaskDetailPage() {
                         </option>
                       ))}
                   </Select>
+                  {category && (
+                    <Badge variant="secondary" className="shrink-0 text-[10px]">
+                      {category.label}
+                    </Badge>
+                  )}
                 </div>
-                {category && (
-                  <Badge variant="secondary" className="text-[10px]">
-                    {category.label}
-                  </Badge>
-                )}
               </div>
 
               <Separator />
 
               {/* Priority */}
-              <div className="space-y-1.5">
-                <label className="text-xs font-medium text-muted-foreground">
+              <div className="flex items-center gap-3">
+                <label className="w-24 shrink-0 text-xs font-medium text-muted-foreground">
                   Priority
                 </label>
-                <Select
-                  value={currentTask.priority}
-                  onChange={(e) =>
-                    void handlePriorityChange(e.target.value as Priority)
-                  }
-                  className="h-8 text-xs"
-                >
-                  {priorities.map((p) => {
-                    const cfg = priorityConfig[p];
-                    return (
-                      <option key={p} value={p}>
-                        {cfg.label}
-                      </option>
-                    );
-                  })}
-                </Select>
-                <Badge
-                  variant="outline"
-                  className={cn("text-[10px]", pConfig.color)}
-                >
-                  {pConfig.label}
-                </Badge>
+                <div className="flex flex-1 items-center gap-2">
+                  <Select
+                    value={currentTask.priority}
+                    onChange={(e) =>
+                      void handlePriorityChange(e.target.value as Priority)
+                    }
+                    className="h-7 flex-1 text-xs"
+                  >
+                    {priorities.map((p) => {
+                      const cfg = priorityConfig[p];
+                      return (
+                        <option key={p} value={p}>
+                          {cfg.label}
+                        </option>
+                      );
+                    })}
+                  </Select>
+                  <Badge
+                    variant="outline"
+                    className={cn("shrink-0 text-[10px]", pConfig.color)}
+                  >
+                    {pConfig.label}
+                  </Badge>
+                </div>
               </div>
 
               <Separator />
 
               {/* Assignee */}
-              <div className="space-y-1.5">
-                <label className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-                  <User className="h-3.5 w-3.5" />
+              <div className="flex items-center gap-3">
+                <label className="flex w-24 shrink-0 items-center gap-1 text-xs font-medium text-muted-foreground">
+                  <User className="h-3 w-3" />
                   Assignee
                 </label>
-                <div className="flex items-center gap-2">
+                <div className="flex flex-1 items-center gap-2">
                   {currentTask.assignee_id && (
                     currentTask.assignee_type === "agent" ? (
-                      <Bot className="h-4 w-4 shrink-0 text-violet-500" />
+                      <Bot className="h-3.5 w-3.5 shrink-0 text-violet-500" />
                     ) : (
-                      <User className="h-4 w-4 shrink-0 text-sky-500" />
+                      <User className="h-3.5 w-3.5 shrink-0 text-sky-500" />
                     )
                   )}
                   <Select
@@ -432,7 +480,7 @@ export function TaskDetailPage() {
                         : "unassigned"
                     }
                     onChange={(e) => void handleAssigneeChange(e.target.value)}
-                    className="h-8 text-xs"
+                    className="h-7 flex-1 text-xs"
                   >
                     <option value="unassigned">Unassigned</option>
                     {user && (
@@ -452,71 +500,101 @@ export function TaskDetailPage() {
               <Separator />
 
               {/* Due date */}
-              <div className="space-y-1.5">
-                <label className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+              <div className="flex items-center gap-3">
+                <label className="w-24 shrink-0 text-xs font-medium text-muted-foreground">
                   Due Date
                 </label>
-                <DatePickerPopover
-                  value={
-                    currentTask.due_date
-                      ? toDateTimeLocal(currentTask.due_date)
-                      : null
-                  }
-                  onChange={(val) => void handleDueDateChange(val ?? "")}
-                  includeTime
-                  placeholder="Set due date"
-                />
+                <div className="flex-1">
+                  <DatePickerPopover
+                    value={
+                      currentTask.due_date
+                        ? toDateTimeLocal(currentTask.due_date)
+                        : null
+                    }
+                    onChange={(val) => void handleDueDateChange(val ?? "")}
+                    includeTime
+                    placeholder="Set due date"
+                  />
+                </div>
               </div>
 
               <Separator />
 
               {/* Labels */}
-              <div className="space-y-1.5">
-                <label className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-                  <Tag className="h-3.5 w-3.5" />
+              <div className="flex items-start gap-3">
+                <label className="flex w-24 shrink-0 items-center gap-1 pt-0.5 text-xs font-medium text-muted-foreground">
+                  <Tag className="h-3 w-3" />
                   Labels
                 </label>
-                {(currentTask.labels ?? []).length > 0 ? (
-                  <div className="flex flex-wrap gap-1">
-                    {(currentTask.labels ?? []).map((label) => (
-                      <Badge key={label} variant="secondary" className="text-xs">
-                        {label}
-                      </Badge>
-                    ))}
-                  </div>
-                ) : (
-                  <span className="text-sm text-muted-foreground">
-                    No labels
-                  </span>
-                )}
+                <div className="flex flex-1 flex-wrap items-center gap-1">
+                  {(currentTask.labels ?? []).map((label) => (
+                    <Badge
+                      key={label}
+                      variant="secondary"
+                      className="cursor-pointer gap-1 text-xs hover:bg-destructive/20"
+                      onClick={() => void handleRemoveLabel(label)}
+                      title="Click to remove"
+                    >
+                      {label}
+                      <X className="h-2.5 w-2.5" />
+                    </Badge>
+                  ))}
+                  {addingLabel ? (
+                    <Input
+                      ref={labelInputRef}
+                      value={labelDraft}
+                      onChange={(e) => setLabelDraft(e.target.value)}
+                      onBlur={() => void handleAddLabel()}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") void handleAddLabel();
+                        if (e.key === "Escape") {
+                          setAddingLabel(false);
+                          setLabelDraft("");
+                        }
+                      }}
+                      className="h-6 w-24 px-1.5 text-xs"
+                      placeholder="Label..."
+                    />
+                  ) : (
+                    <button
+                      type="button"
+                      className="rounded border border-dashed border-border px-1.5 py-0.5 text-xs text-muted-foreground hover:border-primary hover:text-foreground"
+                      onClick={() => setAddingLabel(true)}
+                    >
+                      + Add
+                    </button>
+                  )}
+                </div>
               </div>
 
               {/* Custom Fields */}
               {customFieldDefs.length > 0 && (
                 <>
                   <Separator />
-                  <div className="space-y-3">
-                    <label className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-                      <SlidersHorizontal className="h-3.5 w-3.5" />
+                  <div className="space-y-2.5">
+                    <p className="flex items-center gap-1 text-xs font-medium text-muted-foreground">
+                      <SlidersHorizontal className="h-3 w-3" />
                       Custom Fields
-                    </label>
+                    </p>
                     {[...customFieldDefs]
                       .sort((a, b) => a.position - b.position)
                       .map((field) => (
-                        <div key={field.id} className="space-y-1">
-                          <label className="text-xs text-muted-foreground">
+                        <div key={field.id} className="flex items-center gap-3">
+                          <label className="w-24 shrink-0 text-xs text-muted-foreground">
                             {field.name}
                             {field.is_required && (
                               <span className="ml-0.5 text-destructive">*</span>
                             )}
                           </label>
-                          <CustomFieldRenderer
-                            field={field}
-                            value={currentTask.custom_fields?.[field.slug]}
-                            onChange={(val) =>
-                              void handleCustomFieldChange(field.slug, val)
-                            }
-                          />
+                          <div className="flex-1">
+                            <CustomFieldRenderer
+                              field={field}
+                              value={currentTask.custom_fields?.[field.slug]}
+                              onChange={(val) =>
+                                void handleCustomFieldChange(field.slug, val)
+                              }
+                            />
+                          </div>
                         </div>
                       ))}
                   </div>
@@ -527,12 +605,12 @@ export function TaskDetailPage() {
               {currentTask.estimated_hours != null && (
                 <>
                   <Separator />
-                  <div className="space-y-1.5">
-                    <label className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-                      <Hourglass className="h-3.5 w-3.5" />
-                      Estimated Hours
+                  <div className="flex items-center gap-3">
+                    <label className="flex w-24 shrink-0 items-center gap-1 text-xs font-medium text-muted-foreground">
+                      <Hourglass className="h-3 w-3" />
+                      Est. Hours
                     </label>
-                    <span className="text-sm">
+                    <span className="text-xs">
                       {currentTask.estimated_hours}h
                     </span>
                   </div>
@@ -547,21 +625,21 @@ export function TaskDetailPage() {
               <Separator />
 
               {/* Created / Updated */}
-              <div className="space-y-1.5">
-                <label className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-                  <Clock className="h-3.5 w-3.5" />
+              <div className="flex items-center gap-3">
+                <label className="flex w-24 shrink-0 items-center gap-1 text-xs font-medium text-muted-foreground">
+                  <Clock className="h-3 w-3" />
                   Created
                 </label>
-                <span className="text-sm">
+                <span className="text-xs text-muted-foreground">
                   {formatDate(currentTask.created_at)}
                 </span>
               </div>
 
-              <div className="space-y-1.5">
-                <label className="text-xs font-medium text-muted-foreground">
+              <div className="flex items-center gap-3">
+                <label className="w-24 shrink-0 text-xs font-medium text-muted-foreground">
                   Updated
                 </label>
-                <span className="text-sm">
+                <span className="text-xs text-muted-foreground">
                   {formatRelative(currentTask.updated_at)}
                 </span>
               </div>

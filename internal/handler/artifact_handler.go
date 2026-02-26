@@ -147,7 +147,7 @@ func (h *ArtifactHandler) Download(c echo.Context) error {
 		return handleError(c, err)
 	}
 
-	return c.Redirect(http.StatusTemporaryRedirect, url)
+	return c.JSON(http.StatusOK, map[string]string{"url": url})
 }
 
 // Delete handles DELETE /artifacts/:artifact_id

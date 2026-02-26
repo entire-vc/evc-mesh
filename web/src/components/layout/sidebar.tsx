@@ -48,81 +48,21 @@ export function Sidebar({ collapsed }: SidebarProps) {
 
   if (collapsed) {
     return (
-      <aside className="flex h-full w-12 flex-col items-center border-r border-sidebar-border bg-sidebar py-4">
-        <div className="mb-4 flex h-8 w-8 items-center justify-center rounded-lg bg-sidebar-primary text-primary-foreground">
-          <MeshIcon size={18} />
+      <aside className="flex h-full w-12 flex-col items-center border-r border-sidebar-border bg-sidebar">
+        <div className="flex h-14 w-full items-center justify-center border-b border-sidebar-border">
+          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-sidebar-primary text-primary-foreground">
+            <MeshIcon size={18} />
+          </div>
         </div>
-        <Separator className="mb-4 w-8" />
-        <nav className="flex flex-col items-center gap-2">
+        <nav className="flex flex-col items-center gap-2 py-3">
+          {/* Dashboard */}
           <Link
             to={wsSlug ? `/w/${wsSlug}` : "/"}
             className="flex h-8 w-8 items-center justify-center rounded-lg text-sidebar-foreground hover:bg-sidebar-accent"
           >
             <LayoutDashboard className="h-4 w-4" />
           </Link>
-          <Link
-            to={wsSlug ? `/w/${wsSlug}/agents` : "/"}
-            className={cn(
-              "flex h-8 w-8 items-center justify-center rounded-lg text-sidebar-foreground hover:bg-sidebar-accent",
-              isAgentsRoute && "bg-sidebar-accent text-sidebar-primary",
-            )}
-          >
-            <Bot className="h-4 w-4" />
-          </Link>
-          <Link
-            to={wsSlug ? `/w/${wsSlug}/spark` : "/"}
-            className={cn(
-              "flex h-8 w-8 items-center justify-center rounded-lg text-sidebar-foreground hover:bg-sidebar-accent",
-              isSparkRoute && "bg-sidebar-accent text-sidebar-primary",
-            )}
-          >
-            <Sparkles className="h-4 w-4" />
-          </Link>
-          <Link
-            to={wsSlug ? `/w/${wsSlug}/events` : "/"}
-            className={cn(
-              "flex h-8 w-8 items-center justify-center rounded-lg text-sidebar-foreground hover:bg-sidebar-accent",
-              isEventsRoute && "bg-sidebar-accent text-sidebar-primary",
-            )}
-          >
-            <Activity className="h-4 w-4" />
-          </Link>
-          <Link
-            to={wsSlug ? `/w/${wsSlug}/analytics` : "/"}
-            className={cn(
-              "flex h-8 w-8 items-center justify-center rounded-lg text-sidebar-foreground hover:bg-sidebar-accent",
-              isAnalyticsRoute && "bg-sidebar-accent text-sidebar-primary",
-            )}
-          >
-            <BarChart2 className="h-4 w-4" />
-          </Link>
-          <Link
-            to={wsSlug ? `/w/${wsSlug}/integrations` : "/"}
-            className={cn(
-              "flex h-8 w-8 items-center justify-center rounded-lg text-sidebar-foreground hover:bg-sidebar-accent",
-              isIntegrationsRoute && "bg-sidebar-accent text-sidebar-primary",
-            )}
-          >
-            <Plug className="h-4 w-4" />
-          </Link>
-          <Link
-            to={wsSlug ? `/w/${wsSlug}/initiatives` : "/"}
-            className={cn(
-              "flex h-8 w-8 items-center justify-center rounded-lg text-sidebar-foreground hover:bg-sidebar-accent",
-              isInitiativesRoute && "bg-sidebar-accent text-sidebar-primary",
-            )}
-          >
-            <Target className="h-4 w-4" />
-          </Link>
-          <Link
-            to={wsSlug ? `/w/${wsSlug}/triage` : "/"}
-            className={cn(
-              "flex h-8 w-8 items-center justify-center rounded-lg text-sidebar-foreground hover:bg-sidebar-accent",
-              isTriageRoute && "bg-sidebar-accent text-sidebar-primary",
-            )}
-          >
-            <Inbox className="h-4 w-4" />
-          </Link>
+          {/* Projects */}
           {projects.map((project) => (
             <Link
               key={project.id}
@@ -138,6 +78,78 @@ export function Sidebar({ collapsed }: SidebarProps) {
               </span>
             </Link>
           ))}
+          <div className="my-1 w-6 border-t border-sidebar-border" />
+          {/* Initiatives */}
+          <Link
+            to={wsSlug ? `/w/${wsSlug}/initiatives` : "/"}
+            className={cn(
+              "flex h-8 w-8 items-center justify-center rounded-lg text-sidebar-foreground hover:bg-sidebar-accent",
+              isInitiativesRoute && "bg-sidebar-accent text-sidebar-primary",
+            )}
+          >
+            <Target className="h-4 w-4" />
+          </Link>
+          {/* Triage */}
+          <Link
+            to={wsSlug ? `/w/${wsSlug}/triage` : "/"}
+            className={cn(
+              "flex h-8 w-8 items-center justify-center rounded-lg text-sidebar-foreground hover:bg-sidebar-accent",
+              isTriageRoute && "bg-sidebar-accent text-sidebar-primary",
+            )}
+          >
+            <Inbox className="h-4 w-4" />
+          </Link>
+          <div className="my-1 w-6 border-t border-sidebar-border" />
+          {/* Agents */}
+          <Link
+            to={wsSlug ? `/w/${wsSlug}/agents` : "/"}
+            className={cn(
+              "flex h-8 w-8 items-center justify-center rounded-lg text-sidebar-foreground hover:bg-sidebar-accent",
+              isAgentsRoute && "bg-sidebar-accent text-sidebar-primary",
+            )}
+          >
+            <Bot className="h-4 w-4" />
+          </Link>
+          {/* Spark Catalog */}
+          <Link
+            to={wsSlug ? `/w/${wsSlug}/spark` : "/"}
+            className={cn(
+              "flex h-8 w-8 items-center justify-center rounded-lg text-sidebar-foreground hover:bg-sidebar-accent",
+              isSparkRoute && "bg-sidebar-accent text-sidebar-primary",
+            )}
+          >
+            <Sparkles className="h-4 w-4" />
+          </Link>
+          {/* Analytics */}
+          <Link
+            to={wsSlug ? `/w/${wsSlug}/analytics` : "/"}
+            className={cn(
+              "flex h-8 w-8 items-center justify-center rounded-lg text-sidebar-foreground hover:bg-sidebar-accent",
+              isAnalyticsRoute && "bg-sidebar-accent text-sidebar-primary",
+            )}
+          >
+            <BarChart2 className="h-4 w-4" />
+          </Link>
+          {/* Events */}
+          <Link
+            to={wsSlug ? `/w/${wsSlug}/events` : "/"}
+            className={cn(
+              "flex h-8 w-8 items-center justify-center rounded-lg text-sidebar-foreground hover:bg-sidebar-accent",
+              isEventsRoute && "bg-sidebar-accent text-sidebar-primary",
+            )}
+          >
+            <Activity className="h-4 w-4" />
+          </Link>
+          {/* Integrations */}
+          <Link
+            to={wsSlug ? `/w/${wsSlug}/integrations` : "/"}
+            className={cn(
+              "flex h-8 w-8 items-center justify-center rounded-lg text-sidebar-foreground hover:bg-sidebar-accent",
+              isIntegrationsRoute && "bg-sidebar-accent text-sidebar-primary",
+            )}
+          >
+            <Plug className="h-4 w-4" />
+          </Link>
         </nav>
       </aside>
     );
@@ -146,7 +158,7 @@ export function Sidebar({ collapsed }: SidebarProps) {
   return (
     <aside className="flex h-full w-60 flex-col border-r border-sidebar-border bg-sidebar">
       {/* Workspace switcher */}
-      <div className="p-3">
+      <div className="flex h-14 items-center border-b border-sidebar-border px-3">
         <DropdownMenu>
           <DropdownMenuTrigger className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-sm font-semibold text-sidebar-foreground hover:bg-sidebar-accent">
             <div className="flex h-6 w-6 items-center justify-center rounded bg-sidebar-primary text-primary-foreground">
@@ -175,10 +187,9 @@ export function Sidebar({ collapsed }: SidebarProps) {
         </DropdownMenu>
       </div>
 
-      <Separator />
-
       {/* Navigation */}
       <nav className="flex-1 overflow-y-auto p-3">
+        {/* Dashboard */}
         <Link
           to={wsSlug ? `/w/${wsSlug}` : "/"}
           className={cn(
@@ -189,78 +200,9 @@ export function Sidebar({ collapsed }: SidebarProps) {
           <LayoutDashboard className="h-4 w-4" />
           Dashboard
         </Link>
-        <Link
-          to={wsSlug ? `/w/${wsSlug}/agents` : "/"}
-          className={cn(
-            "flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-sidebar-foreground hover:bg-sidebar-accent",
-            isAgentsRoute && "bg-sidebar-accent font-medium",
-          )}
-        >
-          <Bot className="h-4 w-4" />
-          Agents
-        </Link>
-        <Link
-          to={wsSlug ? `/w/${wsSlug}/spark` : "/"}
-          className={cn(
-            "flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-sidebar-foreground hover:bg-sidebar-accent",
-            isSparkRoute && "bg-sidebar-accent font-medium",
-          )}
-        >
-          <Sparkles className="h-4 w-4" />
-          Spark Catalog
-        </Link>
-        <Link
-          to={wsSlug ? `/w/${wsSlug}/events` : "/"}
-          className={cn(
-            "flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-sidebar-foreground hover:bg-sidebar-accent",
-            isEventsRoute && "bg-sidebar-accent font-medium",
-          )}
-        >
-          <Activity className="h-4 w-4" />
-          Events
-        </Link>
-        <Link
-          to={wsSlug ? `/w/${wsSlug}/analytics` : "/"}
-          className={cn(
-            "flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-sidebar-foreground hover:bg-sidebar-accent",
-            isAnalyticsRoute && "bg-sidebar-accent font-medium",
-          )}
-        >
-          <BarChart2 className="h-4 w-4" />
-          Analytics
-        </Link>
-        <Link
-          to={wsSlug ? `/w/${wsSlug}/integrations` : "/"}
-          className={cn(
-            "flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-sidebar-foreground hover:bg-sidebar-accent",
-            isIntegrationsRoute && "bg-sidebar-accent font-medium",
-          )}
-        >
-          <Plug className="h-4 w-4" />
-          Integrations
-        </Link>
-        <Link
-          to={wsSlug ? `/w/${wsSlug}/initiatives` : "/"}
-          className={cn(
-            "flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-sidebar-foreground hover:bg-sidebar-accent",
-            isInitiativesRoute && "bg-sidebar-accent font-medium",
-          )}
-        >
-          <Target className="h-4 w-4" />
-          Initiatives
-        </Link>
-        <Link
-          to={wsSlug ? `/w/${wsSlug}/triage` : "/"}
-          className={cn(
-            "flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-sidebar-foreground hover:bg-sidebar-accent",
-            isTriageRoute && "bg-sidebar-accent font-medium",
-          )}
-        >
-          <Inbox className="h-4 w-4" />
-          Triage Inbox
-        </Link>
 
-        <div className="mt-4">
+        {/* Projects */}
+        <div className="mt-3">
           <div className="flex items-center justify-between px-2 py-1">
             <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
               Projects
@@ -291,6 +233,89 @@ export function Sidebar({ collapsed }: SidebarProps) {
             )}
           </div>
         </div>
+
+        <div className="my-2 border-t border-sidebar-border" />
+
+        {/* Initiatives */}
+        <Link
+          to={wsSlug ? `/w/${wsSlug}/initiatives` : "/"}
+          className={cn(
+            "flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-sidebar-foreground hover:bg-sidebar-accent",
+            isInitiativesRoute && "bg-sidebar-accent font-medium",
+          )}
+        >
+          <Target className="h-4 w-4" />
+          Initiatives
+        </Link>
+        {/* Triage Inbox */}
+        <Link
+          to={wsSlug ? `/w/${wsSlug}/triage` : "/"}
+          className={cn(
+            "flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-sidebar-foreground hover:bg-sidebar-accent",
+            isTriageRoute && "bg-sidebar-accent font-medium",
+          )}
+        >
+          <Inbox className="h-4 w-4" />
+          Triage Inbox
+        </Link>
+
+        <div className="my-2 border-t border-sidebar-border" />
+
+        {/* Agents */}
+        <Link
+          to={wsSlug ? `/w/${wsSlug}/agents` : "/"}
+          className={cn(
+            "flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-sidebar-foreground hover:bg-sidebar-accent",
+            isAgentsRoute && "bg-sidebar-accent font-medium",
+          )}
+        >
+          <Bot className="h-4 w-4" />
+          Agents
+        </Link>
+        {/* Spark Catalog */}
+        <Link
+          to={wsSlug ? `/w/${wsSlug}/spark` : "/"}
+          className={cn(
+            "flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-sidebar-foreground hover:bg-sidebar-accent",
+            isSparkRoute && "bg-sidebar-accent font-medium",
+          )}
+        >
+          <Sparkles className="h-4 w-4" />
+          Spark Catalog
+        </Link>
+        {/* Analytics */}
+        <Link
+          to={wsSlug ? `/w/${wsSlug}/analytics` : "/"}
+          className={cn(
+            "flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-sidebar-foreground hover:bg-sidebar-accent",
+            isAnalyticsRoute && "bg-sidebar-accent font-medium",
+          )}
+        >
+          <BarChart2 className="h-4 w-4" />
+          Analytics
+        </Link>
+        {/* Events */}
+        <Link
+          to={wsSlug ? `/w/${wsSlug}/events` : "/"}
+          className={cn(
+            "flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-sidebar-foreground hover:bg-sidebar-accent",
+            isEventsRoute && "bg-sidebar-accent font-medium",
+          )}
+        >
+          <Activity className="h-4 w-4" />
+          Events
+        </Link>
+        {/* Integrations */}
+        <Link
+          to={wsSlug ? `/w/${wsSlug}/integrations` : "/"}
+          className={cn(
+            "flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-sidebar-foreground hover:bg-sidebar-accent",
+            isIntegrationsRoute && "bg-sidebar-accent font-medium",
+          )}
+        >
+          <Plug className="h-4 w-4" />
+          Integrations
+        </Link>
       </nav>
 
       {/* Footer */}

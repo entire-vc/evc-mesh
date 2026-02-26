@@ -636,9 +636,9 @@ export function ListViewPage() {
 
   return (
     <div className="space-y-4">
-      {/* Header */}
-      <div className="flex items-center justify-end">
-        {/* Saved views — top-right */}
+      {/* Header / Toolbar */}
+      <div className="flex items-center justify-end gap-2">
+        {/* Saved views */}
         <SavedViewsMenu
           projectId={currentProject.id}
           currentViewType="list"
@@ -646,11 +646,7 @@ export function ListViewPage() {
           currentSortOrder={sortDir}
           onApplyView={handleApplyView}
         />
-      </div>
-
-
-      {/* Toolbar: column picker */}
-      <div className="flex items-center justify-end">
+        {/* Column picker */}
         <ColumnPicker columns={allColumns} onChange={handleColumnChange} />
       </div>
 
