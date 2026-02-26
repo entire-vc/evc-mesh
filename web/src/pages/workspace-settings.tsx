@@ -95,9 +95,17 @@ function agentStatusColor(status: string): string {
   }
 }
 
+// Normalize capabilities: API may return object {} instead of string[].
+function asStringArray(v: unknown): string[] {
+  if (Array.isArray(v)) return v;
+  if (v && typeof v === "object") return Object.keys(v);
+  return [];
+}
+
 // ---- Team section sub-components ----
 
 function AgentRow({ agent }: { agent: TeamDirectoryAgent }) {
+  const caps = asStringArray(agent.capabilities);
   const [expanded, setExpanded] = useState(false);
   return (
     <div className="rounded-lg border border-border">
@@ -120,14 +128,14 @@ function AgentRow({ agent }: { agent: TeamDirectoryAgent }) {
         <span className="text-xs text-muted-foreground shrink-0">
           {agent.current_tasks}/{agent.max_concurrent_tasks} tasks
         </span>
-        {agent.capabilities.slice(0, 2).map((cap) => (
+        {caps.slice(0, 2).map((cap) => (
           <Badge key={cap} variant="outline" className="text-xs shrink-0">
             {cap}
           </Badge>
         ))}
-        {agent.capabilities.length > 2 && (
+        {caps.length > 2 && (
           <span className="text-xs text-muted-foreground shrink-0">
-            +{agent.capabilities.length - 2}
+            +{caps.length - 2}
           </span>
         )}
       </button>
@@ -160,11 +168,11 @@ function AgentRow({ agent }: { agent: TeamDirectoryAgent }) {
               <span className="text-muted-foreground">{agent.profile_description}</span>
             </div>
           )}
-          {agent.capabilities.length > 0 && (
+          {caps.length > 0 && (
             <div className="flex gap-2">
               <span className="text-muted-foreground w-36 shrink-0">All capabilities</span>
               <div className="flex flex-wrap gap-1">
-                {agent.capabilities.map((cap) => (
+                {caps.map((cap) => (
                   <Badge key={cap} variant="outline" className="text-xs">
                     {cap}
                   </Badge>
@@ -179,6 +187,7 @@ function AgentRow({ agent }: { agent: TeamDirectoryAgent }) {
 }
 
 function HumanRow({ human }: { human: TeamDirectoryHuman }) {
+  const caps = asStringArray(human.capabilities);
   return (
     <div className="flex items-center gap-3 py-2.5 px-3 rounded-lg border border-border">
       <Avatar
@@ -206,9 +215,9 @@ function HumanRow({ human }: { human: TeamDirectoryHuman }) {
           {human.availability}
         </Badge>
       )}
-      {human.capabilities.length > 0 && (
+      {caps.length > 0 && (
         <div className="hidden md:flex gap-1">
-          {human.capabilities.slice(0, 2).map((cap) => (
+          {caps.slice(0, 2).map((cap) => (
             <Badge key={cap} variant="outline" className="text-xs">
               {cap}
             </Badge>

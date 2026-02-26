@@ -166,20 +166,23 @@ function AgentCard({
         </div>
 
         {/* Capabilities */}
-        {agent.capabilities && agent.capabilities.length > 0 && (
+        {(() => {
+          const caps = Array.isArray(agent.capabilities) ? agent.capabilities : Object.keys(agent.capabilities ?? {});
+          return caps.length > 0 ? (
           <div className="flex flex-wrap gap-1">
-            {agent.capabilities.slice(0, 3).map((cap) => (
+            {caps.slice(0, 3).map((cap) => (
               <Badge key={cap} variant="outline" className="text-[10px]">
                 {cap}
               </Badge>
             ))}
-            {agent.capabilities.length > 3 && (
+            {caps.length > 3 && (
               <Badge variant="outline" className="text-[10px]">
-                +{agent.capabilities.length - 3}
+                +{caps.length - 3}
               </Badge>
             )}
           </div>
-        )}
+          ) : null;
+        })()}
 
         {/* API Key prefix */}
         <div className="text-xs text-muted-foreground">

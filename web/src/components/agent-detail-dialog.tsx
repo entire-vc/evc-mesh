@@ -97,20 +97,23 @@ export function AgentDetailDialog({
           )}
 
           {/* Capabilities */}
-          {agent.capabilities && agent.capabilities.length > 0 && (
+          {(() => {
+            const caps = Array.isArray(agent.capabilities) ? agent.capabilities : Object.keys(agent.capabilities ?? {});
+            return caps.length > 0 ? (
             <div>
               <p className="mb-2 text-xs font-medium uppercase tracking-wider text-muted-foreground">
                 Capabilities
               </p>
               <div className="flex flex-wrap gap-1.5">
-                {agent.capabilities.map((cap) => (
+                {caps.map((cap) => (
                   <Badge key={cap} variant="outline" className="text-xs">
                     {cap}
                   </Badge>
                 ))}
               </div>
             </div>
-          )}
+            ) : null;
+          })()}
 
           {/* Statistics */}
           {(tasksCompleted !== null || totalErrors !== null) && (
