@@ -297,11 +297,9 @@ export function EventFeedPage() {
 
   return (
     <div className="space-y-4">
-      {/* Header */}
+      {/* Toolbar */}
       <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <Activity className="h-5 w-5 text-muted-foreground" />
-          <h1 className="text-2xl font-bold tracking-tight">Event Feed</h1>
+        <div className="flex items-center gap-2">
           {isConnected ? (
             <Badge variant="success" className="gap-1">
               <Radio className="h-3 w-3 animate-pulse" />
@@ -314,7 +312,6 @@ export function EventFeedPage() {
             </Badge>
           )}
         </div>
-
         <div className="flex items-center gap-2">
           <Button
             variant={autoScroll ? "default" : "outline"}

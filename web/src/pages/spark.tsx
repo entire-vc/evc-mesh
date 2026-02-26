@@ -164,17 +164,6 @@ export function SparkPage() {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-center gap-3">
-        <Sparkles className="h-6 w-6 text-muted-foreground" />
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">Spark Catalog</h1>
-          <p className="text-muted-foreground">
-            Browse and install AI agents from the Spark catalog
-          </p>
-        </div>
-      </div>
-
       {/* Error banner */}
       {error && (
         <div className="flex items-center justify-between rounded-lg bg-destructive/10 px-4 py-3 text-sm text-destructive">

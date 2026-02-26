@@ -120,17 +120,11 @@ export function TriagePage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center gap-3">
-        <Inbox className="h-6 w-6 text-muted-foreground" />
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">Triage Inbox</h1>
-          <p className="text-muted-foreground">
-            {total > 0
-              ? `${total} task${total !== 1 ? "s" : ""} awaiting triage`
-              : "Unrouted tasks that need assignment and prioritization"}
-          </p>
-        </div>
-      </div>
+      {total > 0 && (
+        <p className="text-sm text-muted-foreground">
+          {total} task{total !== 1 ? "s" : ""} awaiting triage
+        </p>
+      )}
 
       {isLoading ? (
         <div className="space-y-2">

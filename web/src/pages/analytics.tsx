@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { useParams } from "react-router";
-import { BarChart2, CalendarDays, TrendingUp, Users, Zap } from "lucide-react";
+import { CalendarDays, TrendingUp, Users, Zap } from "lucide-react";
 import { api } from "@/lib/api";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { useProjectStore } from "@/stores/project";
@@ -268,40 +268,34 @@ export function AnalyticsPage() {
 
   return (
     <div className="flex h-full flex-col">
-      {/* Header */}
-      <div className="flex items-center justify-between border-b border-border px-6 py-4">
-        <div className="flex items-center gap-2">
-          <BarChart2 className="h-5 w-5 text-muted-foreground" />
-          <h1 className="text-lg font-semibold">Analytics</h1>
-        </div>
-        <div className="flex items-center gap-3">
-          <Select
-            value={projectFilter}
-            onChange={(e) => setProjectFilter(e.target.value)}
-            className="w-48"
-          >
-            <option value="">All Projects</option>
-            {projects.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
-          </Select>
-          <Select
-            value={String(rangeDays)}
-            onChange={(e) => setRangeDays(Number(e.target.value))}
-            className="w-40"
-          >
-            {PRESET_RANGES.map(({ label, days }) => (
-              <option key={days} value={days}>
-                {label}
-              </option>
-            ))}
-          </Select>
-        </div>
+      {/* Toolbar */}
+      <div className="flex items-center justify-end gap-3 pb-4">
+        <Select
+          value={projectFilter}
+          onChange={(e) => setProjectFilter(e.target.value)}
+          className="w-48"
+        >
+          <option value="">All Projects</option>
+          {projects.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.name}
+            </option>
+          ))}
+        </Select>
+        <Select
+          value={String(rangeDays)}
+          onChange={(e) => setRangeDays(Number(e.target.value))}
+          className="w-40"
+        >
+          {PRESET_RANGES.map(({ label, days }) => (
+            <option key={days} value={days}>
+              {label}
+            </option>
+          ))}
+        </Select>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-6 space-y-6">
+      <div className="flex-1 overflow-y-auto space-y-6">
         {/* KPI row */}
         {loading ? (
           <div className="grid grid-cols-2 gap-4 md:grid-cols-4">

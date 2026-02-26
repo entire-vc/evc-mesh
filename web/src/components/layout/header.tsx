@@ -1,12 +1,20 @@
 import { useCallback, useState } from "react";
 import { Link, useLocation, useParams } from "react-router";
 import {
+  Activity,
+  BarChart2,
+  Bot,
   ChevronRight,
+  Inbox,
+  LayoutDashboard,
   LogOut,
   Menu,
   Moon,
   Search,
+  Settings,
+  Sparkles,
   Sun,
+  Target,
 } from "lucide-react";
 import { useAuthStore } from "@/stores/auth";
 import { useWorkspaceStore } from "@/stores/workspace";
@@ -37,12 +45,46 @@ function useCurrentView(): "board" | "list" | "timeline" | null {
   return null;
 }
 
+interface WorkspacePage {
+  title: string;
+  icon: React.ComponentType<{ className?: string }>;
+}
+
+const WORKSPACE_PAGES: Array<{
+  pattern: RegExp;
+  title: string;
+  icon: React.ComponentType<{ className?: string }>;
+}> = [
+  { pattern: /\/w\/[^/]+\/?$/, title: "Dashboard", icon: LayoutDashboard },
+  { pattern: /\/w\/[^/]+\/agents\/?$/, title: "Agents", icon: Bot },
+  { pattern: /\/w\/[^/]+\/spark\/?$/, title: "Spark Catalog", icon: Sparkles },
+  { pattern: /\/w\/[^/]+\/events\/?$/, title: "Events", icon: Activity },
+  { pattern: /\/w\/[^/]+\/analytics\/?$/, title: "Analytics", icon: BarChart2 },
+  { pattern: /\/w\/[^/]+\/integrations\/?$/, title: "Integrations", icon: Settings },
+  { pattern: /\/w\/[^/]+\/initiatives\/?$/, title: "Initiatives", icon: Target },
+  { pattern: /\/w\/[^/]+\/triage\/?$/, title: "Triage Inbox", icon: Inbox },
+];
+
+function useWorkspacePage(): WorkspacePage | null {
+  const location = useLocation();
+  const path = location.pathname;
+  // Only match workspace-level pages (not project pages)
+  if (/\/w\/[^/]+\/p\//.test(path)) return null;
+  for (const entry of WORKSPACE_PAGES) {
+    if (entry.pattern.test(path)) {
+      return { title: entry.title, icon: entry.icon };
+    }
+  }
+  return null;
+}
+
 export function Header({ onToggleSidebar }: HeaderProps) {
   const { wsSlug, projectSlug } = useParams();
   const { user, logout } = useAuthStore();
   const { currentWorkspace } = useWorkspaceStore();
   const { currentProject } = useProjectStore();
   const currentView = useCurrentView();
+  const workspacePage = useWorkspacePage();
   const [isDark, setIsDark] = useState(
     document.documentElement.classList.contains("dark"),
   );
@@ -84,6 +126,15 @@ export function Header({ onToggleSidebar }: HeaderProps) {
                 >
                   {currentProject.name}
                 </Link>
+              </>
+            )}
+            {!currentProject && workspacePage && (
+              <>
+                <ChevronRight className="h-3 w-3" />
+                <span className="flex items-center gap-1.5 font-medium text-foreground">
+                  <workspacePage.icon className="h-3.5 w-3.5" />
+                  {workspacePage.title}
+                </span>
               </>
             )}
           </>

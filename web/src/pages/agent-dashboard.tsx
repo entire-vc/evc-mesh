@@ -50,17 +50,8 @@ export function AgentDashboardPage() {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <Bot className="h-6 w-6 text-muted-foreground" />
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight">Agents</h1>
-            <p className="text-muted-foreground">
-              Manage AI agents in your workspace
-            </p>
-          </div>
-        </div>
+      {/* Toolbar */}
+      <div className="flex justify-end">
         <Button onClick={() => setRegisterOpen(true)}>
           <Plus className="h-4 w-4" />
           Register Agent

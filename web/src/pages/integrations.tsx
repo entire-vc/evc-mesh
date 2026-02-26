@@ -6,7 +6,6 @@ import {
   Github,
   MessageSquare,
   Server,
-  Settings,
   Sparkles,
 } from "lucide-react";
 import { api } from "@/lib/api";
@@ -141,12 +140,7 @@ export function IntegrationsPage() {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex items-center gap-2 border-b border-border px-6 py-4">
-        <Settings className="h-5 w-5 text-muted-foreground" />
-        <h1 className="text-lg font-semibold">Integrations</h1>
-      </div>
-
-      <div className="flex-1 overflow-y-auto p-6">
+      <div className="flex-1 overflow-y-auto">
         <p className="mb-6 text-sm text-muted-foreground max-w-prose">
           Connect Entire VC Mesh with external services to automate workflows and
           keep your team in sync.
