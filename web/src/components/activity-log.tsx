@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Activity,
   ArrowRight,
@@ -8,6 +8,8 @@ import {
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { formatRelative } from "@/lib/utils";
+import { useAgentStore } from "@/stores/agent";
+import { useMemberStore } from "@/stores/member";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 
@@ -46,11 +48,45 @@ function ActorTypeIcon({ type }: { type: ActivityLogEntry["actor_type"] }) {
   return <User className="h-4 w-4 text-sky-500" />;
 }
 
-function formatValue(value: unknown): string {
+// Format ISO date strings to dd.mm.yyyy HH:MM
+function formatDateValue(iso: string): string {
+  try {
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return iso;
+    const dd = String(d.getDate()).padStart(2, "0");
+    const mm = String(d.getMonth() + 1).padStart(2, "0");
+    const yyyy = d.getFullYear();
+    const hh = String(d.getHours()).padStart(2, "0");
+    const min = String(d.getMinutes()).padStart(2, "0");
+    // Skip time if midnight (date-only field)
+    if (hh === "00" && min === "00") return `${dd}.${mm}.${yyyy}`;
+    return `${dd}.${mm}.${yyyy} ${hh}:${min}`;
+  } catch {
+    return iso;
+  }
+}
+
+// Check if a string looks like an ISO date
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}T/;
+
+// Check if a string looks like a UUID
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function formatValue(value: unknown, field?: string, nameMap?: Map<string, string>): string {
   if (value === null || value === undefined) return "none";
-  if (typeof value === "string") return value;
-  if (typeof value === "number") return String(value);
   if (typeof value === "boolean") return value ? "true" : "false";
+  if (typeof value === "number") return String(value);
+  if (typeof value === "string") {
+    // Resolve UUIDs to names for assignee/actor fields
+    if (UUID_RE.test(value) && nameMap?.has(value)) {
+      return nameMap.get(value)!;
+    }
+    // Format ISO dates
+    if (ISO_DATE_RE.test(value)) {
+      return formatDateValue(value);
+    }
+    return value;
+  }
   return JSON.stringify(value);
 }
 
@@ -61,7 +97,7 @@ function formatFieldName(field: string): string {
     .replace(/^\w/, (c) => c.toUpperCase());
 }
 
-function formatActionDescription(entry: ActivityLogEntry): string {
+function formatActionDescription(entry: ActivityLogEntry, nameMap?: Map<string, string>): string {
   const changeKeys = Object.keys(entry.changes ?? {});
 
   if (changeKeys.length === 0) {
@@ -73,8 +109,8 @@ function formatActionDescription(entry: ActivityLogEntry): string {
   const descriptions = changeKeys.map((field) => {
     const change = entry.changes[field];
     if (!change) return `${formatFieldName(field)} changed`;
-    const oldVal = formatValue(change.old);
-    const newVal = formatValue(change.new);
+    const oldVal = formatValue(change.old, field, nameMap);
+    const newVal = formatValue(change.new, field, nameMap);
     if (oldVal === "none") {
       return `${formatFieldName(field)} set to "${newVal}"`;
     }
@@ -85,11 +121,25 @@ function formatActionDescription(entry: ActivityLogEntry): string {
 }
 
 export function ActivityLog({ taskId }: ActivityLogProps) {
+  const { agents } = useAgentStore();
+  const { workspaceMembers } = useMemberStore();
   const [entries, setEntries] = useState<ActivityLogEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(false);
   const [page, setPage] = useState(1);
+
+  // Build UUID → name map from agents and members
+  const nameMap = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const a of agents) {
+      map.set(a.id, a.name);
+    }
+    for (const m of workspaceMembers) {
+      map.set(m.user_id, m.user?.name || m.user?.email || m.user_id);
+    }
+    return map;
+  }, [agents, workspaceMembers]);
 
   const fetchActivity = useCallback(
     async (pageNum: number, append: boolean) => {
@@ -171,7 +221,7 @@ export function ActivityLog({ taskId }: ActivityLogProps) {
                   {entry.actor_name || entry.actor_type}
                 </span>
                 {" "}
-                {formatActionDescription(entry)}
+                {formatActionDescription(entry, nameMap)}
               </p>
 
               {/* Detailed changes */}
@@ -189,11 +239,11 @@ export function ActivityLog({ taskId }: ActivityLogProps) {
                           {formatFieldName(field)}:
                         </span>
                         <code className="rounded bg-muted px-1 py-0.5">
-                          {formatValue(change.old)}
+                          {formatValue(change.old, field, nameMap)}
                         </code>
                         <ArrowRight className="h-3 w-3" />
                         <code className="rounded bg-muted px-1 py-0.5">
-                          {formatValue(change.new)}
+                          {formatValue(change.new, field, nameMap)}
                         </code>
                       </div>
                     );
