@@ -198,7 +198,6 @@ export function TagFilterDropdown({
         onClick={() => setOpen((v) => !v)}
       >
         <Tag className="h-3.5 w-3.5" />
-        Tags
         {activeCount > 0 && (
           <Badge variant="secondary" className="ml-0.5 h-4 px-1 text-[10px]">
             {activeCount}

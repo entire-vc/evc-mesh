@@ -90,7 +90,7 @@ This permits any website to make authenticated requests to the API using the use
 
 **Recommendation:**
 1. Make `AllowOrigins` configurable via environment variable (`CORS_ORIGINS`).
-2. Default to restrictive origins in production (e.g., `https://mesh.entire.vc`).
+2. Default to restrictive origins in production (e.g., `https://mesh.example.com`).
 3. Allow `*` only when `NODE_ENV=development` or explicit opt-in.
 
 ```go

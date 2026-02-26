@@ -127,9 +127,8 @@ export function SavedViewsMenu({
     <>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button variant="outline" size="sm" className="gap-1.5">
+          <Button variant="outline" size="sm" className="h-8 gap-1 px-2.5" title="Saved Views">
             <BookmarkCheck className="h-4 w-4" />
-            Saved Views
             <ChevronDown className="h-3 w-3 opacity-60" />
           </Button>
         </DropdownMenuTrigger>

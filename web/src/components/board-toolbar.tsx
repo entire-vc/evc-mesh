@@ -8,7 +8,7 @@
  * parent (BoardPage) so the board columns can react to it.
  */
 
-import { Search, ChevronDown } from "lucide-react";
+import { Search, ChevronDown, ArrowUpDown, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
@@ -208,7 +208,7 @@ export function BoardToolbar({
             size="sm"
             className="h-8 gap-1.5 px-2.5 text-xs"
           >
-            <span className="text-muted-foreground">Sort:</span>
+            <ArrowUpDown className="h-3.5 w-3.5 text-muted-foreground" />
             {SORT_BY_LABELS[sortBy]}
             <ChevronDown className="h-3 w-3 opacity-60" />
           </Button>
@@ -296,8 +296,8 @@ export function BoardToolbar({
       <div className="flex-1" />
 
       {/* New Task */}
-      <Button size="sm" className="h-8 gap-1.5" onClick={onNewTask}>
-        New Task
+      <Button size="sm" className="h-8 w-8 p-0" onClick={onNewTask} title="New Task">
+        <Plus className="h-4 w-4" />
       </Button>
     </div>
   );
