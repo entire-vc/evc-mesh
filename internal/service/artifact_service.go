@@ -45,6 +45,10 @@ func NewArtifactService(
 
 // Upload stores a file in S3 and creates an artifact record.
 func (s *artifactService) Upload(ctx context.Context, input UploadArtifactInput) (*domain.Artifact, error) {
+	if s.storage == nil {
+		return nil, apierror.ServiceUnavailable("storage backend not configured; set S3_ENDPOINT, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY, S3_BUCKET")
+	}
+
 	id := uuid.New()
 	storageKey := fmt.Sprintf("%s/%s/%s/%s", input.TaskID, id, input.Name, input.Name)
 
@@ -96,6 +100,10 @@ func (s *artifactService) GetDownloadURL(ctx context.Context, id uuid.UUID) (str
 		return "", apierror.NotFound("Artifact")
 	}
 
+	if s.storage == nil {
+		return "", apierror.ServiceUnavailable("storage backend not configured")
+	}
+
 	url, err := s.storage.GetPresignedURL(ctx, artifact.StorageKey, presignedURLExpiry)
 	if err != nil {
 		return "", apierror.InternalError("failed to generate download URL")
@@ -112,6 +120,10 @@ func (s *artifactService) Delete(ctx context.Context, id uuid.UUID) error {
 	}
 	if artifact == nil {
 		return apierror.NotFound("Artifact")
+	}
+
+	if s.storage == nil {
+		return apierror.ServiceUnavailable("storage backend not configured")
 	}
 
 	if err := s.storage.Delete(ctx, artifact.StorageKey); err != nil {

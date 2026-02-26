@@ -84,6 +84,14 @@ func TooManyRequests(message string) *Error {
 	return &Error{Code: http.StatusTooManyRequests, Message: message}
 }
 
+// ServiceUnavailable creates a 503 error.
+func ServiceUnavailable(message string) *Error {
+	if message == "" {
+		message = "Service unavailable"
+	}
+	return &Error{Code: http.StatusServiceUnavailable, Message: message}
+}
+
 // InternalError creates a 500 error.
 func InternalError(message string) *Error {
 	if message == "" {
