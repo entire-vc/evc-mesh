@@ -131,7 +131,7 @@ func (s *Server) MCPServer() *mcpserver.MCPServer {
 	return s.mcpServer
 }
 
-// registerTools registers all 33 MCP tools.
+// registerTools registers all 34 MCP tools.
 func (s *Server) registerTools() {
 	// --- Projects & Tasks ---
 	s.mcpServer.AddTool(mcpsdk.NewTool("list_projects",
@@ -300,9 +300,10 @@ func (s *Server) registerTools() {
 	), s.handleGetTaskContext)
 
 	s.mcpServer.AddTool(mcpsdk.NewTool("subscribe_events",
-		mcpsdk.WithDescription("Subscribe to events (placeholder - returns subscription info)."),
+		mcpsdk.WithDescription("Configure push notification delivery for task events. Optionally sets a callback URL that Mesh will POST events to. Returns SSE and long-poll endpoint URLs for alternative delivery mechanisms."),
 		mcpsdk.WithString("project_id", mcpsdk.Required(), mcpsdk.Description("Project ID.")),
 		mcpsdk.WithArray("event_types", mcpsdk.Description("Event types to subscribe to."), mcpsdk.WithStringItems()),
+		mcpsdk.WithString("callback_url", mcpsdk.Description("Optional URL where Mesh will POST task events (task.assigned, task.created, task.status_changed). Leave empty to only use SSE or long-polling.")),
 	), s.handleSubscribeEvents)
 
 	// --- Utility ---
@@ -388,6 +389,12 @@ func (s *Server) registerTools() {
 	s.mcpServer.AddTool(mcpsdk.NewTool("export_workspace_config",
 		mcpsdk.WithDescription("Export the current workspace configuration as YAML, including rules, project templates, and settings."),
 	), s.handleExportWorkspaceConfig)
+
+	// --- Push Notifications ---
+	s.mcpServer.AddTool(mcpsdk.NewTool("poll_tasks",
+		mcpsdk.WithDescription("Long-poll for new task assignments. Blocks until a task is assigned to this agent or the timeout expires. Returns current assigned tasks and whether any change occurred."),
+		mcpsdk.WithNumber("timeout", mcpsdk.Description("Maximum seconds to wait for new assignments (default 30, max 120).")),
+	), s.handlePollTasks)
 }
 
 // --- Helper functions ---

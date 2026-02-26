@@ -142,6 +142,11 @@ func (c *RESTClient) doMultipart(ctx context.Context, path string, fields map[st
 	return nil
 }
 
+// BaseURL returns the base URL used by this client.
+func (c *RESTClient) BaseURL() string {
+	return c.baseURL
+}
+
 // Ping checks connectivity by calling GET /health.
 func (c *RESTClient) Ping(ctx context.Context) error {
 	return c.doJSON(ctx, http.MethodGet, "/health", nil, nil)
@@ -357,6 +362,16 @@ func (c *RESTClient) GetAgentTasks(ctx context.Context, params map[string]string
 	}
 	var result map[string]any
 	if err := c.doJSON(ctx, http.MethodGet, path, nil, &result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+// PollTasks long-polls for new task assignments.
+// timeoutSecs controls how long the server blocks before returning (1–120).
+func (c *RESTClient) PollTasks(ctx context.Context, timeoutSecs int) (map[string]any, error) {
+	var result map[string]any
+	if err := c.doJSON(ctx, http.MethodGet, fmt.Sprintf("/api/v1/agents/me/tasks/poll?timeout=%d", timeoutSecs), nil, &result); err != nil {
 		return nil, err
 	}
 	return result, nil

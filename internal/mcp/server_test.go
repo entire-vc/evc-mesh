@@ -953,7 +953,8 @@ func TestSubscribeEvents(t *testing.T) {
 	text := mcpsdk.GetTextFromContent(result.Content[0])
 	var resp map[string]any
 	require.NoError(t, json.Unmarshal([]byte(text), &resp))
-	assert.Equal(t, "subscribed", resp["status"])
+	assert.Equal(t, "configured", resp["status"])
+	assert.NotNil(t, resp["push_endpoints"])
 }
 
 func TestGetTaskContext(t *testing.T) {

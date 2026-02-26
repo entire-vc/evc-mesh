@@ -821,13 +821,32 @@ func (s *Server) handleSubscribeEvents(ctx context.Context, request mcpsdk.CallT
 
 	projectID := mcpsdk.ParseString(request, "project_id", "")
 	eventTypes := parseStringSlice(request, "event_types")
+	callbackURL := mcpsdk.ParseString(request, "callback_url", "")
+
+	// If callback_url is provided, persist it on the agent via PATCH /agents/{id}.
+	if callbackURL != "" {
+		client := s.getRESTClient(ctx)
+		_, err := client.UpdateAgent(ctx, session.AgentID.String(), map[string]any{
+			"callback_url": callbackURL,
+		})
+		if err != nil {
+			return errResult("failed to set callback_url: %v", err)
+		}
+	}
+
+	baseURL := s.getRESTClient(ctx).BaseURL()
 
 	return jsonResult(map[string]any{
-		"status":      "subscribed",
+		"status":      "configured",
+		"agent_id":    session.AgentID.String(),
 		"project_id":  projectID,
 		"event_types": eventTypes,
-		"agent_id":    session.AgentID.String(),
-		"message":     "Event subscription registered. Actual event delivery via push notifications will be implemented in a future release. Use get_context to poll for events.",
+		"callback_url": callbackURL,
+		"push_endpoints": map[string]any{
+			"sse":       baseURL + "/api/v1/agents/me/events/stream",
+			"long_poll": baseURL + "/api/v1/agents/me/tasks/poll?timeout=30",
+		},
+		"message": "Push notifications configured. Available mechanisms: (1) callback_url — Mesh POSTs events to your URL, (2) SSE — connect to events/stream for real-time, (3) long-poll — call tasks/poll or use the poll_tasks MCP tool to block until new assignment.",
 	})
 }
 
@@ -1264,4 +1283,29 @@ func (s *Server) handleExportWorkspaceConfig(ctx context.Context, request mcpsdk
 	return jsonResult(map[string]any{
 		"yaml_content": yamlContent,
 	})
+}
+
+// ============================================================================
+// 34. poll_tasks
+// ============================================================================
+
+func (s *Server) handlePollTasks(ctx context.Context, request mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
+	session := s.getSession(ctx)
+	if session == nil {
+		return errResult("not authenticated: no agent session")
+	}
+
+	timeout := mcpsdk.ParseInt(request, "timeout", 30)
+	if timeout < 1 {
+		timeout = 1
+	}
+	if timeout > 120 {
+		timeout = 120
+	}
+
+	result, err := s.getRESTClient(ctx).PollTasks(ctx, timeout)
+	if err != nil {
+		return errResult("poll_tasks failed: %v", err)
+	}
+	return jsonResult(result)
 }
