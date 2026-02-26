@@ -22,6 +22,7 @@ import { useMemberStore } from "@/stores/member";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { useAuthStore } from "@/stores/auth";
 import { useRulesStore } from "@/stores/rules";
+import { useAgentStore } from "@/stores/agent";
 import {
   Card,
   CardContent,
@@ -44,6 +45,7 @@ import { AddProjectMemberDialog } from "@/components/add-project-member-dialog";
 import { statusCategoryConfig } from "@/lib/utils";
 import { cn } from "@/lib/cn";
 import type {
+  Agent,
   AssignmentRulesConfig,
   CustomFieldDefinition,
   EffectiveAssignmentRules,
@@ -53,6 +55,7 @@ import type {
   TransitionRule,
   WorkflowRulesConfig,
   WorkflowRulesResponse,
+  WorkspaceMemberWithUser,
 } from "@/types";
 
 const fieldTypeLabels: Record<string, string> = {
@@ -74,11 +77,14 @@ const PRIORITIES = ["critical", "urgent", "high", "medium", "low"];
 
 // ---- Workflow Rules section component ----
 
+const ACTOR_ROLES = ["owner", "admin", "member", "viewer", "agent"] as const;
+
 interface WorkflowRulesSectionProps {
   workflowRules: WorkflowRulesResponse | null;
   isLoading: boolean;
   onSave: (config: WorkflowRulesConfig) => Promise<void>;
   isSaving: boolean;
+  statuses: TaskStatus[];
 }
 
 function WorkflowRulesSection({
@@ -86,19 +92,20 @@ function WorkflowRulesSection({
   isLoading,
   onSave,
   isSaving,
+  statuses,
 }: WorkflowRulesSectionProps) {
   const [enforcementMode, setEnforcementMode] = useState(
     workflowRules?.enforcement_mode ?? "advisory",
   );
   const [transitions, setTransitions] = useState<
-    { from: string; to: string; allowed: string; description: string }[]
+    { from: string; to: string; allowed: string[]; description: string }[]
   >(
     Object.entries(workflowRules?.transitions ?? {}).map(([key, rule]) => {
       const [from, to] = key.split("->").map((s) => s.trim());
       return {
         from: from ?? key,
         to: to ?? "",
-        allowed: (rule as TransitionRule).allowed.join(", "),
+        allowed: (rule as TransitionRule).allowed,
         description: (rule as TransitionRule).description ?? "",
       };
     }),
@@ -117,7 +124,7 @@ function WorkflowRulesSection({
         return {
           from: from ?? key,
           to: to ?? "",
-          allowed: (rule as TransitionRule).allowed.join(", "),
+          allowed: (rule as TransitionRule).allowed,
           description: (rule as TransitionRule).description ?? "",
         };
       }),
@@ -131,10 +138,7 @@ function WorkflowRulesSection({
       if (!t.from.trim() || !t.to.trim()) continue;
       const key = `${t.from.trim()} -> ${t.to.trim()}`;
       transitionsMap[key] = {
-        allowed: t.allowed
-          .split(",")
-          .map((s) => s.trim())
-          .filter(Boolean),
+        allowed: t.allowed.filter(Boolean),
         description: t.description.trim() || undefined,
       };
     }
@@ -206,7 +210,7 @@ function WorkflowRulesSection({
             onClick={() =>
               setTransitions((prev) => [
                 ...prev,
-                { from: "", to: "", allowed: "", description: "" },
+                { from: "", to: "", allowed: [], description: "" },
               ])
             }
           >
@@ -219,69 +223,94 @@ function WorkflowRulesSection({
             No transitions configured. All transitions are permitted when no rules are set.
           </p>
         ) : (
-          <div className="space-y-2">
-            {/* Header row */}
-            <div className="grid grid-cols-[1fr_auto_1fr_1fr_auto] gap-2 px-1 text-xs text-muted-foreground font-medium">
-              <span>From status</span>
-              <span />
-              <span>To status</span>
-              <span>Allowed actors</span>
-              <span />
-            </div>
+          <div className="space-y-3">
             {transitions.map((t, i) => (
               <div
                 key={i}
-                className="grid grid-cols-[1fr_auto_1fr_1fr_auto] gap-2 items-center"
+                className="rounded-lg border border-border p-3 space-y-2"
               >
-                <Input
-                  value={t.from}
-                  onChange={(e) =>
-                    setTransitions((prev) =>
-                      prev.map((r, idx) =>
-                        idx === i ? { ...r, from: e.target.value } : r,
-                      ),
-                    )
-                  }
-                  placeholder="todo"
-                  className="text-sm"
-                />
-                <ArrowRight className="h-4 w-4 text-muted-foreground shrink-0" />
-                <Input
-                  value={t.to}
-                  onChange={(e) =>
-                    setTransitions((prev) =>
-                      prev.map((r, idx) =>
-                        idx === i ? { ...r, to: e.target.value } : r,
-                      ),
-                    )
-                  }
-                  placeholder="in_progress"
-                  className="text-sm"
-                />
-                <Input
-                  value={t.allowed}
-                  onChange={(e) =>
-                    setTransitions((prev) =>
-                      prev.map((r, idx) =>
-                        idx === i ? { ...r, allowed: e.target.value } : r,
-                      ),
-                    )
-                  }
-                  placeholder="member, agent"
-                  className="text-sm"
-                  title="Comma-separated list of allowed roles or actors"
-                />
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  className="h-8 w-8 text-muted-foreground hover:text-destructive shrink-0"
-                  onClick={() =>
-                    setTransitions((prev) => prev.filter((_, idx) => idx !== i))
-                  }
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                </Button>
+                {/* From → To row */}
+                <div className="flex items-center gap-2">
+                  <Select
+                    value={t.from}
+                    onChange={(e) =>
+                      setTransitions((prev) =>
+                        prev.map((r, idx) =>
+                          idx === i ? { ...r, from: e.target.value } : r,
+                        ),
+                      )
+                    }
+                    className="flex-1 text-sm"
+                  >
+                    <option value="">Select status...</option>
+                    {statuses.map((s) => (
+                      <option key={s.id} value={s.name}>
+                        {s.name}
+                      </option>
+                    ))}
+                  </Select>
+                  <ArrowRight className="h-4 w-4 text-muted-foreground shrink-0" />
+                  <Select
+                    value={t.to}
+                    onChange={(e) =>
+                      setTransitions((prev) =>
+                        prev.map((r, idx) =>
+                          idx === i ? { ...r, to: e.target.value } : r,
+                        ),
+                      )
+                    }
+                    className="flex-1 text-sm"
+                  >
+                    <option value="">Select status...</option>
+                    {statuses.map((s) => (
+                      <option key={s.id} value={s.name}>
+                        {s.name}
+                      </option>
+                    ))}
+                  </Select>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8 text-muted-foreground hover:text-destructive shrink-0"
+                    onClick={() =>
+                      setTransitions((prev) => prev.filter((_, idx) => idx !== i))
+                    }
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+                {/* Allowed actors pills */}
+                <div className="space-y-1">
+                  <span className="text-xs text-muted-foreground font-medium">
+                    Allowed actors
+                  </span>
+                  <div className="flex flex-wrap gap-1.5">
+                    {ACTOR_ROLES.map((role) => {
+                      const selected = t.allowed.includes(role);
+                      return (
+                        <Badge
+                          key={role}
+                          variant={selected ? "default" : "outline"}
+                          className="cursor-pointer select-none capitalize"
+                          onClick={() =>
+                            setTransitions((prev) =>
+                              prev.map((r, idx) => {
+                                if (idx !== i) return r;
+                                const next = selected
+                                  ? r.allowed.filter((a) => a !== role)
+                                  : [...r.allowed, role];
+                                return { ...r, allowed: next };
+                              }),
+                            )
+                          }
+                        >
+                          {role}
+                        </Badge>
+                      );
+                    })}
+                  </div>
+                </div>
               </div>
             ))}
           </div>
@@ -345,11 +374,61 @@ function WorkflowRulesSection({
 
 // ---- Project Assignment Rules section ----
 
+// ---- AssigneeSelect helper ----
+
+function AssigneeSelect({
+  value,
+  onChange,
+  agents,
+  members,
+  placeholder = "Select assignee...",
+  className,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  agents: Agent[];
+  members: WorkspaceMemberWithUser[];
+  placeholder?: string;
+  className?: string;
+}) {
+  return (
+    <Select
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      className={className}
+    >
+      <option value="">{placeholder}</option>
+      {agents.length > 0 && (
+        <optgroup label="Agents">
+          {agents.map((a) => (
+            <option key={a.id} value={`agent:${a.id}`}>
+              {a.name}
+            </option>
+          ))}
+        </optgroup>
+      )}
+      {members.length > 0 && (
+        <optgroup label="Members">
+          {members.map((m) => (
+            <option key={m.user_id} value={`user:${m.user_id}`}>
+              {m.user.name} ({m.user.email})
+            </option>
+          ))}
+        </optgroup>
+      )}
+    </Select>
+  );
+}
+
+// ---- Project Assignment Rules section ----
+
 interface ProjectAssignmentRulesSectionProps {
   effectiveRules: EffectiveAssignmentRules | null;
   isLoading: boolean;
   onSave: (config: AssignmentRulesConfig) => Promise<void>;
   isSaving: boolean;
+  agents: Agent[];
+  members: WorkspaceMemberWithUser[];
 }
 
 function ProjectAssignmentRulesSection({
@@ -357,6 +436,8 @@ function ProjectAssignmentRulesSection({
   isLoading,
   onSave,
   isSaving,
+  agents,
+  members,
 }: ProjectAssignmentRulesSectionProps) {
   const [defaultAssignee, setDefaultAssignee] = useState(
     effectiveRules?.default_assignee?.value ?? "",
@@ -460,10 +541,12 @@ function ProjectAssignmentRulesSection({
           <label className="text-sm font-medium">Default Assignee</label>
           <SourceBadge source={effectiveRules?.default_assignee?.source} />
         </div>
-        <Input
+        <AssigneeSelect
           value={defaultAssignee}
-          onChange={(e) => setDefaultAssignee(e.target.value)}
-          placeholder='e.g. agent:claude-code or user:alice'
+          onChange={setDefaultAssignee}
+          agents={agents}
+          members={members}
+          placeholder="None (inherit from workspace)"
         />
         <p className="text-xs text-muted-foreground">
           Overrides workspace-level default assignee for this project.
@@ -507,16 +590,17 @@ function ProjectAssignmentRulesSection({
                   className="flex-1"
                 />
                 <ArrowRight className="h-4 w-4 text-muted-foreground shrink-0" />
-                <Input
+                <AssigneeSelect
                   value={rule.assignee}
-                  onChange={(e) =>
+                  onChange={(val) =>
                     setByType((prev) =>
                       prev.map((r, idx) =>
-                        idx === i ? { ...r, assignee: e.target.value } : r,
+                        idx === i ? { ...r, assignee: val } : r,
                       ),
                     )
                   }
-                  placeholder="Assignee"
+                  agents={agents}
+                  members={members}
                   className="flex-1"
                 />
                 <Button
@@ -581,16 +665,17 @@ function ProjectAssignmentRulesSection({
                   ))}
                 </Select>
                 <ArrowRight className="h-4 w-4 text-muted-foreground shrink-0" />
-                <Input
+                <AssigneeSelect
                   value={rule.assignee}
-                  onChange={(e) =>
+                  onChange={(val) =>
                     setByPriority((prev) =>
                       prev.map((r, idx) =>
-                        idx === i ? { ...r, assignee: e.target.value } : r,
+                        idx === i ? { ...r, assignee: val } : r,
                       ),
                     )
                   }
-                  placeholder="Assignee"
+                  agents={agents}
+                  members={members}
                   className="flex-1"
                 />
                 <Button
@@ -633,14 +718,15 @@ function ProjectAssignmentRulesSection({
                 <span className="text-xs text-muted-foreground w-5 shrink-0">
                   {i + 1}.
                 </span>
-                <Input
+                <AssigneeSelect
                   value={val}
-                  onChange={(e) =>
+                  onChange={(newVal) =>
                     setFallbackChain((prev) =>
-                      prev.map((v, idx) => (idx === i ? e.target.value : v)),
+                      prev.map((v, idx) => (idx === i ? newVal : v)),
                     )
                   }
-                  placeholder="agent:slug or user:email"
+                  agents={agents}
+                  members={members}
                   className="flex-1"
                 />
                 <Button
@@ -726,6 +812,8 @@ export function ProjectSettingsPage() {
     saveProjectAssignmentRules,
   } = useRulesStore();
 
+  const { agents, fetchAgents } = useAgentStore();
+
   // --- General info form state ---
   const [name, setName] = useState("");
   const [slug, setSlug] = useState("");
@@ -802,6 +890,13 @@ export function ProjectSettingsPage() {
     fetchWorkflowRules,
     fetchEffectiveAssignmentRules,
   ]);
+
+  // Fetch workspace members and agents for assignment selects
+  useEffect(() => {
+    if (currentWorkspace?.id) {
+      void fetchAgents(currentWorkspace.id);
+    }
+  }, [currentWorkspace?.id, fetchAgents]);
 
   // Fetch workspace members for the add-member dialog
   useEffect(() => {
@@ -1437,6 +1532,7 @@ export function ProjectSettingsPage() {
             isLoading={isWorkflowLoading}
             onSave={handleSaveWorkflow}
             isSaving={isSavingWorkflow}
+            statuses={statuses}
           />
         </CardContent>
       </Card>
@@ -1460,6 +1556,8 @@ export function ProjectSettingsPage() {
             isLoading={isProjRulesLoading}
             onSave={handleSaveAssignment}
             isSaving={isSavingAssignment}
+            agents={agents}
+            members={workspaceMembers}
           />
         </CardContent>
       </Card>
