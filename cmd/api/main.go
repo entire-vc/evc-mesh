@@ -61,6 +61,7 @@ func main() {
 	userRepo := postgres.NewUserRepo(db)
 	refreshTokenRepo := postgres.NewRefreshTokenRepo(db)
 	workspaceMemberRepo := postgres.NewWorkspaceMemberRepo(db)
+	projectMemberRepo := postgres.NewProjectMemberRepo(db)
 	webhookRepo := postgres.NewWebhookRepo(db)
 	savedViewRepo := postgres.NewSavedViewRepo(db)
 	vcsLinkRepo := postgres.NewVCSLinkRepo(db)
@@ -68,6 +69,9 @@ func main() {
 	projectUpdateRepo := postgres.NewProjectUpdateRepo(db)
 	initiativeRepo := postgres.NewInitiativeRepo(db)
 	ruleRepo := postgres.NewRuleRepo(db)
+	wsRuleRepo := postgres.NewWorkspaceRuleRepo(db)
+	projRuleRepo := postgres.NewProjectRuleRepo(db)
+	ruleViolationLogRepo := postgres.NewRuleViolationLogRepo(db)
 
 	// 5. Create auth service.
 	authService := auth.NewService(
@@ -94,11 +98,15 @@ func main() {
 	// Task mutations (create/update/move/delete) will auto-publish events.
 	eventBusService := service.NewEventBusService(eventBusRepo, activityLogRepo)
 
+	// Webhook service is created before taskService so it can be injected for agent wakeup dispatch.
+	webhookService := service.NewWebhookService(webhookRepo)
+
 	taskService := service.NewTaskService(taskRepo, taskStatusRepo, taskDependencyRepo, activityLogRepo,
 		service.WithCustomFieldService(customFieldService),
 		service.WithProjectRepo(projectRepo),
 		service.WithRuleService(ruleService),
 		service.WithEventBusService(eventBusService),
+		service.WithWebhookService(webhookService),
 	)
 
 	// Wire auto-transition service. It calls taskService.MoveTask, so taskService must already
@@ -116,7 +124,10 @@ func main() {
 	commentService := service.NewCommentService(commentRepo, taskRepo, activityLogRepo)
 	depService := service.NewTaskDependencyService(taskDependencyRepo, taskRepo, activityLogRepo)
 	activityLogService := service.NewActivityLogService(activityLogRepo)
-	webhookService := service.NewWebhookService(webhookRepo)
+
+	// Member services.
+	workspaceMemberService := service.NewWorkspaceMemberService(workspaceMemberRepo, userRepo, projectMemberRepo, activityLogRepo)
+	projectMemberService := service.NewProjectMemberService(projectMemberRepo, workspaceMemberRepo, projectRepo)
 	savedViewService := service.NewSavedViewService(savedViewRepo)
 	vcsLinkService := service.NewVCSLinkService(vcsLinkRepo)
 	integrationService := service.NewIntegrationService(integrationRepo)
@@ -124,6 +135,7 @@ func main() {
 	projectUpdateService := service.NewProjectUpdateService(projectUpdateRepo, projectRepo, taskRepo, taskStatusRepo)
 	initiativeService := service.NewInitiativeService(initiativeRepo, projectRepo)
 	triageService := service.NewTriageService(taskRepo)
+	rulesService := service.NewRulesService(wsRuleRepo, projRuleRepo, ruleViolationLogRepo, agentRepo, workspaceMemberRepo, workspaceRepo, projectRepo)
 
 	// customFieldService was already created above (before taskService, for CF value validation).
 
@@ -190,6 +202,9 @@ func main() {
 	initiativeHandler := handler.NewInitiativeHandler(initiativeService)
 	triageHandler := handler.NewTriageHandler(triageService)
 	ruleHandler := handler.NewRuleHandler(ruleService)
+	rulesHandler := handler.NewRulesHandler(rulesService)
+	workspaceMemberHandler := handler.NewWorkspaceMemberHandler(workspaceMemberService)
+	projectMemberHandler := handler.NewProjectMemberHandler(projectMemberService)
 
 	// 8. Create Echo instance with global middleware.
 	e := echo.New()
@@ -281,12 +296,27 @@ func main() {
 	api.PATCH("/workspaces/:ws_id", workspaceHandler.Update)
 	api.DELETE("/workspaces/:ws_id", workspaceHandler.Delete, rbac(mw.PermDeleteWorkspace))
 
+	// Workspace member routes.
+	// NOTE: /members/me MUST be registered before /members/:user_id to avoid "me" being parsed as UUID.
+	api.GET("/workspaces/:ws_id/members", workspaceMemberHandler.List)
+	api.GET("/workspaces/:ws_id/members/me", workspaceMemberHandler.Me)
+	api.POST("/workspaces/:ws_id/members", workspaceMemberHandler.Add, rbac(mw.PermManageMembers))
+	api.PATCH("/workspaces/:ws_id/members/:user_id", workspaceMemberHandler.UpdateRole, rbac(mw.PermManageMembers))
+	api.DELETE("/workspaces/:ws_id/members/:user_id", workspaceMemberHandler.Remove, rbac(mw.PermManageMembers))
+	api.GET("/workspaces/:ws_id/users/search", workspaceMemberHandler.SearchUsers)
+
 	// Project routes.
 	api.GET("/workspaces/:ws_id/projects", projectHandler.List)
 	api.POST("/workspaces/:ws_id/projects", projectHandler.Create, rbac(mw.PermCreateProject))
 	api.GET("/projects/:proj_id", projectHandler.GetByID)
 	api.PATCH("/projects/:proj_id", projectHandler.Update)
 	api.DELETE("/projects/:proj_id", projectHandler.Delete, rbac(mw.PermDeleteProject))
+
+	// Project member routes.
+	api.GET("/projects/:proj_id/members", projectMemberHandler.List)
+	api.POST("/projects/:proj_id/members", projectMemberHandler.Add, rbac(mw.PermManageMembers))
+	api.PATCH("/projects/:proj_id/members/:user_id", projectMemberHandler.UpdateRole, rbac(mw.PermManageMembers))
+	api.DELETE("/projects/:proj_id/members/:user_id", projectMemberHandler.Remove, rbac(mw.PermManageMembers))
 
 	// Task status routes.
 	api.GET("/projects/:proj_id/statuses", statusHandler.List)
@@ -405,6 +435,32 @@ func main() {
 
 	// Triage inbox route.
 	api.GET("/workspaces/:ws_id/triage", triageHandler.List)
+
+	// Team Directory routes (Sprint 20).
+	api.GET("/workspaces/:ws_id/team", rulesHandler.GetTeamDirectory)
+	api.PUT("/agents/:agent_id/profile", rulesHandler.UpdateAgentProfile)
+
+	// Assignment Rules routes (Sprint 20).
+	api.GET("/workspaces/:ws_id/rules/assignment", rulesHandler.GetWorkspaceAssignmentRules)
+	api.PUT("/workspaces/:ws_id/rules/assignment", rulesHandler.SetWorkspaceAssignmentRules, rbac(mw.PermManageMembers))
+	api.GET("/projects/:proj_id/rules/assignment", rulesHandler.GetEffectiveAssignmentRules)
+	api.PUT("/projects/:proj_id/rules/assignment", rulesHandler.SetProjectAssignmentRules, rbac(mw.PermManageMembers))
+
+	// Workflow Rules routes (Sprint 20).
+	api.GET("/projects/:proj_id/rules/workflow", rulesHandler.GetProjectWorkflowRules)
+	api.PUT("/projects/:proj_id/rules/workflow", rulesHandler.SetProjectWorkflowRules, rbac(mw.PermManageMembers))
+
+	// Violation Log routes (Sprint 20).
+	api.GET("/workspaces/:ws_id/violations", rulesHandler.ListViolations)
+
+	// Config Import/Export routes (Sprint 21).
+	api.POST("/workspaces/:ws_id/config/import", rulesHandler.ImportConfig, rbac(mw.PermManageMembers))
+	api.GET("/workspaces/:ws_id/config/export", rulesHandler.ExportConfig)
+	api.POST("/workspaces/:ws_id/team/import", rulesHandler.ImportTeam, rbac(mw.PermManageMembers))
+
+	// Workflow Templates routes (Sprint 21).
+	api.GET("/workspaces/:ws_id/rules/workflow-templates", rulesHandler.GetWorkflowTemplates)
+	api.PUT("/workspaces/:ws_id/rules/workflow-templates", rulesHandler.SetWorkflowTemplates, rbac(mw.PermManageMembers))
 
 	// Governance rule routes.
 	api.POST("/workspaces/:ws_id/rules", ruleHandler.CreateWorkspaceRule, rbac(mw.PermManageRules))

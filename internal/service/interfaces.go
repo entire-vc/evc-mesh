@@ -322,6 +322,25 @@ type IntegrationService interface {
 	ListByWorkspace(ctx context.Context, workspaceID uuid.UUID) ([]domain.IntegrationConfig, error)
 }
 
+// WorkspaceMemberService provides business logic for workspace member management.
+type WorkspaceMemberService interface {
+	ListMembers(ctx context.Context, workspaceID uuid.UUID) ([]domain.WorkspaceMemberWithUser, error)
+	AddMember(ctx context.Context, workspaceID uuid.UUID, email, role string, invitedBy uuid.UUID) (*domain.WorkspaceMemberWithUser, error)
+	UpdateMemberRole(ctx context.Context, workspaceID, targetUserID uuid.UUID, newRole string) error
+	RemoveMember(ctx context.Context, workspaceID, targetUserID uuid.UUID) error
+	GetMyRole(ctx context.Context, workspaceID, userID uuid.UUID) (string, error)
+	// SearchUsers searches for users by email or name and annotates each result with membership status.
+	SearchUsers(ctx context.Context, workspaceID uuid.UUID, query string) ([]domain.UserWithMemberStatus, error)
+}
+
+// ProjectMemberService provides business logic for project member management.
+type ProjectMemberService interface {
+	ListMembers(ctx context.Context, projectID uuid.UUID) ([]domain.ProjectMemberWithUser, error)
+	AddMember(ctx context.Context, projectID, userID uuid.UUID, role string) (*domain.ProjectMemberWithUser, error)
+	UpdateMemberRole(ctx context.Context, projectID, userID uuid.UUID, newRole string) error
+	RemoveMember(ctx context.Context, projectID, userID uuid.UUID) error
+}
+
 // RuleService provides business logic for governance rule management.
 type RuleService interface {
 	Create(ctx context.Context, input CreateRuleInput) (*domain.Rule, error)
@@ -335,6 +354,36 @@ type RuleService interface {
 	GetEffective(ctx context.Context, ruleCtx RuleContext) ([]domain.Rule, error)
 	// Evaluate runs effective rules through evaluators and returns violations.
 	Evaluate(ctx context.Context, input EvaluateInput) ([]domain.RuleViolation, error)
+}
+
+// RulesService provides business logic for the workspace/project rules system (Sprint 20).
+type RulesService interface {
+	// Team Directory
+	GetTeamDirectory(ctx context.Context, workspaceID uuid.UUID) (*domain.TeamDirectory, error)
+	UpdateAgentProfile(ctx context.Context, agentID uuid.UUID, profile domain.AgentProfileUpdate) error
+
+	// Assignment Rules
+	GetWorkspaceAssignmentRules(ctx context.Context, workspaceID uuid.UUID) (*domain.AssignmentRulesConfig, error)
+	SetWorkspaceAssignmentRules(ctx context.Context, workspaceID uuid.UUID, config domain.AssignmentRulesConfig) error
+	GetEffectiveAssignmentRules(ctx context.Context, projectID uuid.UUID) (*domain.EffectiveAssignmentRules, error)
+	SetProjectAssignmentRules(ctx context.Context, projectID uuid.UUID, config domain.AssignmentRulesConfig) error
+
+	// Workflow Rules
+	GetProjectWorkflowRules(ctx context.Context, projectID uuid.UUID, callerAgentID *uuid.UUID) (*domain.WorkflowRulesResponse, error)
+	SetProjectWorkflowRules(ctx context.Context, projectID uuid.UUID, config domain.WorkflowRulesConfig) error
+
+	// Violations
+	ListViolations(ctx context.Context, workspaceID uuid.UUID, limit int) ([]domain.RuleViolationLog, error)
+	LogViolation(ctx context.Context, v *domain.RuleViolationLog) error
+
+	// Config Import/Export (Sprint 21)
+	ImportConfig(ctx context.Context, workspaceID uuid.UUID, yamlData []byte) (*domain.ImportResult, error)
+	ExportConfig(ctx context.Context, workspaceID uuid.UUID) ([]byte, error)
+	ImportTeam(ctx context.Context, workspaceID uuid.UUID, yamlData []byte) (*domain.TeamImportResult, error)
+
+	// Workflow Templates (Sprint 21)
+	GetWorkflowTemplates(ctx context.Context, workspaceID uuid.UUID) (map[string]domain.WorkflowRulesConfig, error)
+	SetWorkflowTemplates(ctx context.Context, workspaceID uuid.UUID, templates map[string]domain.WorkflowRulesConfig) error
 }
 
 // AnalyticsMetrics holds aggregated workspace/project metrics.

@@ -30,6 +30,7 @@ type taskService struct {
 	autoTransSvc   AutoTransitionService
 	ruleSvc        RuleService
 	eventBusSvc    EventBusService
+	webhookSvc     WebhookService
 }
 
 // NewTaskService returns a new TaskService backed by the given repositories.
@@ -92,6 +93,14 @@ func WithEventBusService(ebs EventBusService) TaskServiceOption {
 	}
 }
 
+// WithWebhookService sets the optional webhook service.
+// When set, task lifecycle events (created, assigned, status changed) dispatch outbound webhooks.
+func WithWebhookService(ws WebhookService) TaskServiceOption {
+	return func(s *taskService) {
+		s.webhookSvc = ws
+	}
+}
+
 // SetAutoTransitionService implements TaskServiceAutoTransitionConfigurable,
 // allowing the auto-transition service to be wired after construction.
 func (s *taskService) SetAutoTransitionService(svc AutoTransitionService) {
@@ -131,6 +140,21 @@ func (s *taskService) Create(ctx context.Context, task *domain.Task) error {
 		"title":    map[string]interface{}{"old": nil, "new": task.Title},
 		"priority": map[string]interface{}{"old": nil, "new": string(task.Priority)},
 	})
+
+	// Dispatch webhook for task.created (agent wakeup pipeline).
+	if s.webhookSvc != nil && s.projectRepo != nil {
+		if proj, err := s.projectRepo.GetByID(ctx, task.ProjectID); err == nil && proj != nil {
+			go s.webhookSvc.Dispatch(ctx, proj.WorkspaceID, "task.created", map[string]interface{}{
+				"task_id":     task.ID,
+				"project_id":  task.ProjectID,
+				"title":       task.Title,
+				"priority":    string(task.Priority),
+				"assignee_id": task.AssigneeID,
+				"status_id":   task.StatusID,
+			})
+		}
+	}
+
 	return nil
 }
 
@@ -187,7 +211,8 @@ func (s *taskService) Update(ctx context.Context, task *domain.Task) error {
 	if existing.Priority != task.Priority {
 		changes["priority"] = map[string]interface{}{"old": string(existing.Priority), "new": string(task.Priority)}
 	}
-	if existing.AssigneeID != task.AssigneeID {
+	assigneeChanged := existing.AssigneeID != task.AssigneeID
+	if assigneeChanged {
 		changes["assignee_id"] = map[string]interface{}{"old": existing.AssigneeID, "new": task.AssigneeID}
 	}
 	if existing.AssigneeType != task.AssigneeType {
@@ -200,6 +225,19 @@ func (s *taskService) Update(ctx context.Context, task *domain.Task) error {
 		changes["estimated_hours"] = map[string]interface{}{"old": existing.EstimatedHours, "new": task.EstimatedHours}
 	}
 	s.logActivity(ctx, task.ProjectID, task.ID, "task.updated", changes)
+
+	// Dispatch webhook for task.assigned when the assignee changes (agent wakeup pipeline).
+	if assigneeChanged && s.webhookSvc != nil && s.projectRepo != nil {
+		if proj, err := s.projectRepo.GetByID(ctx, task.ProjectID); err == nil && proj != nil {
+			go s.webhookSvc.Dispatch(ctx, proj.WorkspaceID, "task.assigned", map[string]interface{}{
+				"task_id":      task.ID,
+				"project_id":   task.ProjectID,
+				"assignee_id":  task.AssigneeID,
+				"assignee_type": string(task.AssigneeType),
+			})
+		}
+	}
+
 	return nil
 }
 
@@ -316,6 +354,18 @@ func (s *taskService) MoveTask(ctx context.Context, taskID uuid.UUID, input Move
 			if atErr := s.autoTransSvc.EvaluateOnTaskMove(ctx, taskID, newStatus.Category); atErr != nil {
 				log.Printf("[auto-transition] WARNING: EvaluateOnTaskMove for task %s failed: %v", taskID, atErr)
 			}
+		}
+	}
+
+	// Dispatch webhook for task.status_changed (agent wakeup pipeline).
+	if input.StatusID != nil && s.webhookSvc != nil && s.projectRepo != nil {
+		if proj, err := s.projectRepo.GetByID(ctx, task.ProjectID); err == nil && proj != nil {
+			go s.webhookSvc.Dispatch(ctx, proj.WorkspaceID, "task.status_changed", map[string]interface{}{
+				"task_id":       task.ID,
+				"project_id":    task.ProjectID,
+				"old_status_id": oldStatusID,
+				"new_status_id": *input.StatusID,
+			})
 		}
 	}
 

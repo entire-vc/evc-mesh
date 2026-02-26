@@ -295,18 +295,33 @@ export function Sidebar({ collapsed }: SidebarProps) {
 
       {/* Footer */}
       <Separator />
-      <div className="p-3">
-        <Link
-          to={
-            wsSlug && projectSlug
-              ? `/w/${wsSlug}/p/${projectSlug}/settings`
-              : "#"
-          }
-          className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-sidebar-foreground hover:bg-sidebar-accent"
-        >
-          <Settings className="h-4 w-4" />
-          Settings
-        </Link>
+      <div className="p-3 space-y-0.5">
+        {wsSlug && (
+          <Link
+            to={`/w/${wsSlug}/settings`}
+            className={cn(
+              "flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-sidebar-foreground hover:bg-sidebar-accent",
+              location.pathname === `/w/${wsSlug}/settings` &&
+                "bg-sidebar-accent font-medium",
+            )}
+          >
+            <Settings className="h-4 w-4" />
+            Workspace Settings
+          </Link>
+        )}
+        {wsSlug && projectSlug && (
+          <Link
+            to={`/w/${wsSlug}/p/${projectSlug}/settings`}
+            className={cn(
+              "flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-sidebar-foreground hover:bg-sidebar-accent",
+              location.pathname === `/w/${wsSlug}/p/${projectSlug}/settings` &&
+                "bg-sidebar-accent font-medium",
+            )}
+          >
+            <Settings className="h-4 w-4" />
+            Project Settings
+          </Link>
+        )}
       </div>
     </aside>
   );

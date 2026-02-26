@@ -35,6 +35,7 @@ export type EventType =
   | "dependency_resolved"
   | "custom";
 export type WorkspaceRole = "owner" | "admin" | "member" | "viewer";
+export type ProjectRole = "admin" | "member" | "viewer";
 export type DefaultAssigneeType = "user" | "agent" | "none";
 
 // Custom field types
@@ -108,6 +109,48 @@ export interface WorkspaceMember {
   role: WorkspaceRole;
   created_at: string;
   updated_at: string;
+}
+
+export interface WorkspaceMemberWithUser {
+  id: string;
+  workspace_id: string;
+  user_id: string;
+  role: WorkspaceRole;
+  invited_by: string | null;
+  created_at: string;
+  updated_at: string;
+  user: {
+    id: string;
+    email: string;
+    name: string;
+    avatar_url: string;
+  };
+}
+
+export interface ProjectMember {
+  id: string;
+  project_id: string;
+  user_id: string;
+  role: ProjectRole;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ProjectMemberWithUser extends ProjectMember {
+  user: {
+    id: string;
+    email: string;
+    name: string;
+    avatar_url: string;
+  };
+}
+
+export interface UserSearchResult {
+  id: string;
+  email: string;
+  name: string;
+  avatar_url: string;
+  is_member: boolean;
 }
 
 export interface Project {
@@ -468,6 +511,112 @@ export interface UpdateInitiativeRequest {
   description?: string;
   status?: InitiativeStatus;
   target_date?: string | null;
+}
+
+// Team Directory
+export interface TeamDirectoryAgent {
+  id: string;
+  name: string;
+  slug: string;
+  status: string;
+  role: string;
+  capabilities: string[];
+  responsibility_zone: string;
+  escalation_to: unknown;
+  accepts_from: string[];
+  max_concurrent_tasks: number;
+  working_hours: string;
+  profile_description: string;
+  current_tasks: number;
+}
+
+export interface TeamDirectoryHuman {
+  id: string;
+  name: string;
+  email: string;
+  avatar_url: string;
+  role: string;
+  capabilities: string[];
+  responsibility_zone: string;
+  availability: string;
+}
+
+export interface TeamDirectory {
+  workspace: string;
+  agents: TeamDirectoryAgent[];
+  humans: TeamDirectoryHuman[];
+}
+
+// Rules
+export interface AssignmentRulesConfig {
+  default_assignee?: string;
+  by_type?: Record<string, string>;
+  by_priority?: Record<string, string>;
+  fallback_chain?: string[];
+}
+
+export interface EffectiveAssignmentRule {
+  value: string;
+  source: string;
+}
+
+export interface EffectiveAssignmentRules {
+  default_assignee?: EffectiveAssignmentRule;
+  by_type?: Record<string, EffectiveAssignmentRule>;
+  by_priority?: Record<string, EffectiveAssignmentRule>;
+  fallback_chain?: string[];
+}
+
+export interface TransitionRule {
+  allowed: string[];
+  description?: string;
+  on_transition?: { auto_assign?: boolean; set_reviewer?: string; notify?: string[] };
+  requires?: { approval?: boolean };
+}
+
+export interface WorkflowRulesConfig {
+  statuses?: string[];
+  transitions?: Record<string, TransitionRule>;
+  enforcement_mode?: string;
+  policies?: Record<string, { allowed: string[] }>;
+}
+
+export interface WorkflowRulesResponse extends WorkflowRulesConfig {
+  my_permissions?: {
+    my_role: string;
+    my_name: string;
+    can_transition: Record<string, boolean>;
+    can_create_tasks: boolean;
+    can_delete_tasks: boolean;
+    can_reassign: boolean;
+  };
+}
+
+export interface RuleViolation {
+  id: string;
+  workspace_id: string;
+  project_id?: string;
+  actor_id: string;
+  actor_type: string;
+  rule_type: string;
+  violation_detail: unknown;
+  action_taken: string;
+  created_at: string;
+}
+
+// Config Import/Export types
+
+export interface ImportResult {
+  team?: { agents_updated: number; humans_updated: number; errors?: string[] };
+  assignment_rules?: { updated: boolean };
+  workflow_templates?: { created: number; updated: number };
+  warnings: string[];
+}
+
+export interface TeamImportResult {
+  agents_updated: number;
+  humans_updated: number;
+  errors?: string[];
 }
 
 // API error type

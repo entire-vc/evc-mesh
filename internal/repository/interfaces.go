@@ -192,6 +192,8 @@ type UserRepository interface {
 	GetByID(ctx context.Context, id uuid.UUID) (*domain.User, error)
 	GetByEmail(ctx context.Context, email string) (*domain.User, error)
 	Update(ctx context.Context, user *domain.User) error
+	// SearchUsers returns users whose email or display_name match the query (ILIKE), up to limit.
+	SearchUsers(ctx context.Context, query string, limit int) ([]domain.User, error)
 }
 
 // RefreshToken represents a stored refresh token record.
@@ -220,6 +222,28 @@ type WorkspaceMemberRepository interface {
 	// GetRole returns the role string for a given workspace + user combination.
 	// Returns an error if the membership does not exist.
 	GetRole(ctx context.Context, workspaceID, userID uuid.UUID) (string, error)
+	// List returns all members of a workspace with user details joined.
+	List(ctx context.Context, workspaceID uuid.UUID) ([]domain.WorkspaceMemberWithUser, error)
+	// UpdateRole changes the role for a given workspace + user.
+	UpdateRole(ctx context.Context, workspaceID, userID uuid.UUID, role string) error
+	// Delete removes the workspace membership for the given user.
+	Delete(ctx context.Context, workspaceID, userID uuid.UUID) error
+	// CountOwners returns the number of members with the "owner" role in the workspace.
+	CountOwners(ctx context.Context, workspaceID uuid.UUID) (int, error)
+}
+
+// ProjectMemberRepository manages persistence for project-level members.
+type ProjectMemberRepository interface {
+	Create(ctx context.Context, member *domain.ProjectMember) error
+	GetByProjectAndUser(ctx context.Context, projectID, userID uuid.UUID) (*domain.ProjectMember, error)
+	// List returns all members of a project with user details joined.
+	List(ctx context.Context, projectID uuid.UUID) ([]domain.ProjectMemberWithUser, error)
+	// UpdateRole changes the role for a given project + user.
+	UpdateRole(ctx context.Context, projectID, userID uuid.UUID, role string) error
+	// Delete removes the project membership for the given user.
+	Delete(ctx context.Context, projectID, userID uuid.UUID) error
+	// DeleteByWorkspaceAndUser removes all project memberships for a user across a workspace.
+	DeleteByWorkspaceAndUser(ctx context.Context, workspaceID, userID uuid.UUID) error
 }
 
 // SavedViewRepository manages persistence for saved views.
@@ -291,6 +315,28 @@ type RuleRepository interface {
 	// CountByAssigneeAndStatusCategory counts tasks for an assignee in given status categories.
 	// Used by evaluators to check capacity limits without importing taskRepo.
 	CountTasksByAssigneeAndCategory(ctx context.Context, workspaceID uuid.UUID, assigneeID uuid.UUID, assigneeType string, categories []string) (int, error)
+}
+
+// WorkspaceRuleConfigRepository manages persistence for workspace-level rule configs.
+type WorkspaceRuleConfigRepository interface {
+	Upsert(ctx context.Context, rule *domain.WorkspaceRuleConfig) error
+	GetByType(ctx context.Context, workspaceID uuid.UUID, ruleType string) (*domain.WorkspaceRuleConfig, error)
+	ListByWorkspace(ctx context.Context, workspaceID uuid.UUID) ([]domain.WorkspaceRuleConfig, error)
+	Delete(ctx context.Context, workspaceID uuid.UUID, ruleType string) error
+}
+
+// ProjectRuleConfigRepository manages persistence for project-level rule configs.
+type ProjectRuleConfigRepository interface {
+	Upsert(ctx context.Context, rule *domain.ProjectRuleConfig) error
+	GetByType(ctx context.Context, projectID uuid.UUID, ruleType string) (*domain.ProjectRuleConfig, error)
+	ListByProject(ctx context.Context, projectID uuid.UUID) ([]domain.ProjectRuleConfig, error)
+	Delete(ctx context.Context, projectID uuid.UUID, ruleType string) error
+}
+
+// RuleViolationLogRepository manages persistence for rule violation log entries.
+type RuleViolationLogRepository interface {
+	Create(ctx context.Context, v *domain.RuleViolationLog) error
+	ListByWorkspace(ctx context.Context, workspaceID uuid.UUID, limit int) ([]domain.RuleViolationLog, error)
 }
 
 // IntegrationRepository manages persistence for workspace integration configurations.

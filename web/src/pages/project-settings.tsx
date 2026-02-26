@@ -2,16 +2,26 @@ import { type FormEvent, useCallback, useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router";
 import {
   ArrowDown,
+  ArrowRight,
   ArrowUp,
   Eye,
+  GitBranch,
   GripVertical,
   Pencil,
   Plus,
+  Save,
   Settings,
+  Shield,
   Trash2,
+  Users,
+  Zap,
 } from "lucide-react";
 import { useProjectStore } from "@/stores/project";
 import { useCustomFieldStore } from "@/stores/custom-field";
+import { useMemberStore } from "@/stores/member";
+import { useWorkspaceStore } from "@/stores/workspace";
+import { useAuthStore } from "@/stores/auth";
+import { useRulesStore } from "@/stores/rules";
 import {
   Card,
   CardContent,
@@ -24,12 +34,26 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
+import { Avatar } from "@/components/ui/avatar";
+import { Select } from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
 import { StatusDialog } from "@/components/status-dialog";
 import { CustomFieldDialog } from "@/components/custom-field-dialog";
 import { ConfirmDialog } from "@/components/confirm-dialog";
+import { AddProjectMemberDialog } from "@/components/add-project-member-dialog";
 import { statusCategoryConfig } from "@/lib/utils";
 import { cn } from "@/lib/cn";
-import type { CustomFieldDefinition, TaskStatus } from "@/types";
+import type {
+  AssignmentRulesConfig,
+  CustomFieldDefinition,
+  EffectiveAssignmentRules,
+  ProjectMemberWithUser,
+  ProjectRole,
+  TaskStatus,
+  TransitionRule,
+  WorkflowRulesConfig,
+  WorkflowRulesResponse,
+} from "@/types";
 
 const fieldTypeLabels: Record<string, string> = {
   text: "Text",
@@ -45,6 +69,619 @@ const fieldTypeLabels: Record<string, string> = {
   agent_ref: "Agent Ref",
   json: "JSON",
 };
+
+const PRIORITIES = ["critical", "urgent", "high", "medium", "low"];
+
+// ---- Workflow Rules section component ----
+
+interface WorkflowRulesSectionProps {
+  workflowRules: WorkflowRulesResponse | null;
+  isLoading: boolean;
+  onSave: (config: WorkflowRulesConfig) => Promise<void>;
+  isSaving: boolean;
+}
+
+function WorkflowRulesSection({
+  workflowRules,
+  isLoading,
+  onSave,
+  isSaving,
+}: WorkflowRulesSectionProps) {
+  const [enforcementMode, setEnforcementMode] = useState(
+    workflowRules?.enforcement_mode ?? "advisory",
+  );
+  const [transitions, setTransitions] = useState<
+    { from: string; to: string; allowed: string; description: string }[]
+  >(
+    Object.entries(workflowRules?.transitions ?? {}).map(([key, rule]) => {
+      const [from, to] = key.split("->").map((s) => s.trim());
+      return {
+        from: from ?? key,
+        to: to ?? "",
+        allowed: (rule as TransitionRule).allowed.join(", "),
+        description: (rule as TransitionRule).description ?? "",
+      };
+    }),
+  );
+  const [feedback, setFeedback] = useState<{
+    type: "success" | "error";
+    message: string;
+  } | null>(null);
+
+  // Sync if workflowRules changes from fetch
+  useEffect(() => {
+    setEnforcementMode(workflowRules?.enforcement_mode ?? "advisory");
+    setTransitions(
+      Object.entries(workflowRules?.transitions ?? {}).map(([key, rule]) => {
+        const [from, to] = key.split("->").map((s) => s.trim());
+        return {
+          from: from ?? key,
+          to: to ?? "",
+          allowed: (rule as TransitionRule).allowed.join(", "),
+          description: (rule as TransitionRule).description ?? "",
+        };
+      }),
+    );
+  }, [workflowRules]);
+
+  const handleSave = async () => {
+    setFeedback(null);
+    const transitionsMap: Record<string, TransitionRule> = {};
+    for (const t of transitions) {
+      if (!t.from.trim() || !t.to.trim()) continue;
+      const key = `${t.from.trim()} -> ${t.to.trim()}`;
+      transitionsMap[key] = {
+        allowed: t.allowed
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean),
+        description: t.description.trim() || undefined,
+      };
+    }
+    const config: WorkflowRulesConfig = {
+      enforcement_mode: enforcementMode,
+      transitions: transitionsMap,
+    };
+    try {
+      await onSave(config);
+      setFeedback({ type: "success", message: "Workflow rules saved." });
+    } catch (err) {
+      setFeedback({
+        type: "error",
+        message: err instanceof Error ? err.message : "Failed to save rules",
+      });
+    }
+  };
+
+  if (isLoading) {
+    return (
+      <div className="space-y-3">
+        <Skeleton className="h-9 w-full" />
+        <Skeleton className="h-9 w-full" />
+        <Skeleton className="h-9 w-3/4" />
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-5">
+      {/* Enforcement mode */}
+      <div className="space-y-1.5">
+        <label className="text-sm font-medium">Enforcement Mode</label>
+        <div className="flex gap-2">
+          <Button
+            type="button"
+            variant={enforcementMode === "advisory" ? "default" : "outline"}
+            size="sm"
+            onClick={() => setEnforcementMode("advisory")}
+          >
+            Advisory
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled
+            title="Coming soon"
+          >
+            Strict
+            <Badge variant="secondary" className="ml-1.5 text-xs">
+              Soon
+            </Badge>
+          </Button>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Advisory mode warns on violations but does not block actions.
+        </p>
+      </div>
+
+      {/* Transitions table */}
+      <div className="space-y-2">
+        <div className="flex items-center justify-between">
+          <label className="text-sm font-medium">Allowed Transitions</label>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() =>
+              setTransitions((prev) => [
+                ...prev,
+                { from: "", to: "", allowed: "", description: "" },
+              ])
+            }
+          >
+            <Plus className="h-3.5 w-3.5" />
+            Add Transition
+          </Button>
+        </div>
+        {transitions.length === 0 ? (
+          <p className="text-xs text-muted-foreground">
+            No transitions configured. All transitions are permitted when no rules are set.
+          </p>
+        ) : (
+          <div className="space-y-2">
+            {/* Header row */}
+            <div className="grid grid-cols-[1fr_auto_1fr_1fr_auto] gap-2 px-1 text-xs text-muted-foreground font-medium">
+              <span>From status</span>
+              <span />
+              <span>To status</span>
+              <span>Allowed actors</span>
+              <span />
+            </div>
+            {transitions.map((t, i) => (
+              <div
+                key={i}
+                className="grid grid-cols-[1fr_auto_1fr_1fr_auto] gap-2 items-center"
+              >
+                <Input
+                  value={t.from}
+                  onChange={(e) =>
+                    setTransitions((prev) =>
+                      prev.map((r, idx) =>
+                        idx === i ? { ...r, from: e.target.value } : r,
+                      ),
+                    )
+                  }
+                  placeholder="todo"
+                  className="text-sm"
+                />
+                <ArrowRight className="h-4 w-4 text-muted-foreground shrink-0" />
+                <Input
+                  value={t.to}
+                  onChange={(e) =>
+                    setTransitions((prev) =>
+                      prev.map((r, idx) =>
+                        idx === i ? { ...r, to: e.target.value } : r,
+                      ),
+                    )
+                  }
+                  placeholder="in_progress"
+                  className="text-sm"
+                />
+                <Input
+                  value={t.allowed}
+                  onChange={(e) =>
+                    setTransitions((prev) =>
+                      prev.map((r, idx) =>
+                        idx === i ? { ...r, allowed: e.target.value } : r,
+                      ),
+                    )
+                  }
+                  placeholder="member, agent"
+                  className="text-sm"
+                  title="Comma-separated list of allowed roles or actors"
+                />
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8 text-muted-foreground hover:text-destructive shrink-0"
+                  onClick={() =>
+                    setTransitions((prev) => prev.filter((_, idx) => idx !== i))
+                  }
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* My permissions (read-only, from backend) */}
+      {workflowRules?.my_permissions && (
+        <div className="rounded-lg border border-border bg-muted/30 p-3 space-y-2">
+          <div className="flex items-center gap-2">
+            <Shield className="h-4 w-4 text-muted-foreground" />
+            <span className="text-sm font-medium">
+              My permissions ({workflowRules.my_permissions.my_role})
+            </span>
+          </div>
+          <div className="flex flex-wrap gap-2 text-xs">
+            {workflowRules.my_permissions.can_create_tasks && (
+              <Badge variant="outline">Create tasks</Badge>
+            )}
+            {workflowRules.my_permissions.can_delete_tasks && (
+              <Badge variant="outline">Delete tasks</Badge>
+            )}
+            {workflowRules.my_permissions.can_reassign && (
+              <Badge variant="outline">Reassign</Badge>
+            )}
+            {Object.entries(
+              workflowRules.my_permissions.can_transition,
+            ).map(([key, allowed]) => (
+              <Badge
+                key={key}
+                variant={allowed ? "secondary" : "outline"}
+                className={cn(!allowed && "opacity-50")}
+              >
+                {allowed ? "" : "no "}{key.replace("->", "→")}
+              </Badge>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {feedback && (
+        <p
+          className={cn(
+            "text-sm",
+            feedback.type === "success" ? "text-green-600" : "text-destructive",
+          )}
+        >
+          {feedback.message}
+        </p>
+      )}
+
+      <div className="flex justify-end">
+        <Button type="button" onClick={handleSave} disabled={isSaving}>
+          <Save className="h-4 w-4" />
+          {isSaving ? "Saving..." : "Save Rules"}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+// ---- Project Assignment Rules section ----
+
+interface ProjectAssignmentRulesSectionProps {
+  effectiveRules: EffectiveAssignmentRules | null;
+  isLoading: boolean;
+  onSave: (config: AssignmentRulesConfig) => Promise<void>;
+  isSaving: boolean;
+}
+
+function ProjectAssignmentRulesSection({
+  effectiveRules,
+  isLoading,
+  onSave,
+  isSaving,
+}: ProjectAssignmentRulesSectionProps) {
+  const [defaultAssignee, setDefaultAssignee] = useState(
+    effectiveRules?.default_assignee?.value ?? "",
+  );
+  const [byType, setByType] = useState<{ type: string; assignee: string }[]>(
+    Object.entries(effectiveRules?.by_type ?? {}).map(([type, rule]) => ({
+      type,
+      assignee: rule.value,
+    })),
+  );
+  const [byPriority, setByPriority] = useState<
+    { priority: string; assignee: string }[]
+  >(
+    Object.entries(effectiveRules?.by_priority ?? {}).map(
+      ([priority, rule]) => ({ priority, assignee: rule.value }),
+    ),
+  );
+  const [fallbackChain, setFallbackChain] = useState<string[]>(
+    effectiveRules?.fallback_chain ?? [],
+  );
+  const [feedback, setFeedback] = useState<{
+    type: "success" | "error";
+    message: string;
+  } | null>(null);
+
+  // Sync when effectiveRules loads
+  useEffect(() => {
+    setDefaultAssignee(effectiveRules?.default_assignee?.value ?? "");
+    setByType(
+      Object.entries(effectiveRules?.by_type ?? {}).map(([type, rule]) => ({
+        type,
+        assignee: rule.value,
+      })),
+    );
+    setByPriority(
+      Object.entries(effectiveRules?.by_priority ?? {}).map(
+        ([priority, rule]) => ({ priority, assignee: rule.value }),
+      ),
+    );
+    setFallbackChain(effectiveRules?.fallback_chain ?? []);
+  }, [effectiveRules]);
+
+  const handleSave = async () => {
+    setFeedback(null);
+    const config: AssignmentRulesConfig = {};
+    if (defaultAssignee.trim()) {
+      config.default_assignee = defaultAssignee.trim();
+    }
+    if (byType.length > 0) {
+      config.by_type = Object.fromEntries(
+        byType
+          .filter((r) => r.type.trim() && r.assignee.trim())
+          .map((r) => [r.type.trim(), r.assignee.trim()]),
+      );
+    }
+    if (byPriority.length > 0) {
+      config.by_priority = Object.fromEntries(
+        byPriority
+          .filter((r) => r.priority && r.assignee.trim())
+          .map((r) => [r.priority, r.assignee.trim()]),
+      );
+    }
+    if (fallbackChain.some((v) => v.trim())) {
+      config.fallback_chain = fallbackChain.filter((v) => v.trim());
+    }
+    try {
+      await onSave(config);
+      setFeedback({ type: "success", message: "Project assignment rules saved." });
+    } catch (err) {
+      setFeedback({
+        type: "error",
+        message: err instanceof Error ? err.message : "Failed to save rules",
+      });
+    }
+  };
+
+  if (isLoading) {
+    return (
+      <div className="space-y-3">
+        <Skeleton className="h-9 w-full" />
+        <Skeleton className="h-9 w-3/4" />
+      </div>
+    );
+  }
+
+  // Source badge helper
+  const SourceBadge = ({ source }: { source?: string }) => {
+    if (!source || source === "project") return null;
+    return (
+      <Badge variant="outline" className="text-xs ml-1.5">
+        Inherited from {source}
+      </Badge>
+    );
+  };
+
+  return (
+    <div className="space-y-5">
+      {/* Default assignee */}
+      <div className="space-y-1.5">
+        <div className="flex items-center">
+          <label className="text-sm font-medium">Default Assignee</label>
+          <SourceBadge source={effectiveRules?.default_assignee?.source} />
+        </div>
+        <Input
+          value={defaultAssignee}
+          onChange={(e) => setDefaultAssignee(e.target.value)}
+          placeholder='e.g. agent:claude-code or user:alice'
+        />
+        <p className="text-xs text-muted-foreground">
+          Overrides workspace-level default assignee for this project.
+        </p>
+      </div>
+
+      {/* By type rules */}
+      <div className="space-y-2">
+        <div className="flex items-center justify-between">
+          <label className="text-sm font-medium">By Task Type</label>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() =>
+              setByType((prev) => [...prev, { type: "", assignee: "" }])
+            }
+          >
+            <Plus className="h-3.5 w-3.5" />
+            Add Rule
+          </Button>
+        </div>
+        {byType.length === 0 ? (
+          <p className="text-xs text-muted-foreground">
+            No type-based rules for this project.
+          </p>
+        ) : (
+          <div className="space-y-2">
+            {byType.map((rule, i) => (
+              <div key={i} className="flex items-center gap-2">
+                <Input
+                  value={rule.type}
+                  onChange={(e) =>
+                    setByType((prev) =>
+                      prev.map((r, idx) =>
+                        idx === i ? { ...r, type: e.target.value } : r,
+                      ),
+                    )
+                  }
+                  placeholder="Task type"
+                  className="flex-1"
+                />
+                <ArrowRight className="h-4 w-4 text-muted-foreground shrink-0" />
+                <Input
+                  value={rule.assignee}
+                  onChange={(e) =>
+                    setByType((prev) =>
+                      prev.map((r, idx) =>
+                        idx === i ? { ...r, assignee: e.target.value } : r,
+                      ),
+                    )
+                  }
+                  placeholder="Assignee"
+                  className="flex-1"
+                />
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8 text-muted-foreground hover:text-destructive shrink-0"
+                  onClick={() =>
+                    setByType((prev) => prev.filter((_, idx) => idx !== i))
+                  }
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* By priority */}
+      <div className="space-y-2">
+        <div className="flex items-center justify-between">
+          <label className="text-sm font-medium">By Priority</label>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() =>
+              setByPriority((prev) => [
+                ...prev,
+                { priority: "medium", assignee: "" },
+              ])
+            }
+          >
+            <Plus className="h-3.5 w-3.5" />
+            Add Rule
+          </Button>
+        </div>
+        {byPriority.length === 0 ? (
+          <p className="text-xs text-muted-foreground">
+            No priority-based rules for this project.
+          </p>
+        ) : (
+          <div className="space-y-2">
+            {byPriority.map((rule, i) => (
+              <div key={i} className="flex items-center gap-2">
+                <Select
+                  value={rule.priority}
+                  onChange={(e) =>
+                    setByPriority((prev) =>
+                      prev.map((r, idx) =>
+                        idx === i ? { ...r, priority: e.target.value } : r,
+                      ),
+                    )
+                  }
+                  className="flex-1"
+                >
+                  {PRIORITIES.map((p) => (
+                    <option key={p} value={p} className="capitalize">
+                      {p.charAt(0).toUpperCase() + p.slice(1)}
+                    </option>
+                  ))}
+                </Select>
+                <ArrowRight className="h-4 w-4 text-muted-foreground shrink-0" />
+                <Input
+                  value={rule.assignee}
+                  onChange={(e) =>
+                    setByPriority((prev) =>
+                      prev.map((r, idx) =>
+                        idx === i ? { ...r, assignee: e.target.value } : r,
+                      ),
+                    )
+                  }
+                  placeholder="Assignee"
+                  className="flex-1"
+                />
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8 text-muted-foreground hover:text-destructive shrink-0"
+                  onClick={() =>
+                    setByPriority((prev) => prev.filter((_, idx) => idx !== i))
+                  }
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Fallback chain */}
+      <div className="space-y-2">
+        <div className="flex items-center justify-between">
+          <label className="text-sm font-medium">Fallback Chain</label>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => setFallbackChain((prev) => [...prev, ""])}
+          >
+            <Plus className="h-3.5 w-3.5" />
+            Add
+          </Button>
+        </div>
+        {fallbackChain.length === 0 ? (
+          <p className="text-xs text-muted-foreground">No fallback chain for this project.</p>
+        ) : (
+          <div className="space-y-2">
+            {fallbackChain.map((val, i) => (
+              <div key={i} className="flex items-center gap-2">
+                <span className="text-xs text-muted-foreground w-5 shrink-0">
+                  {i + 1}.
+                </span>
+                <Input
+                  value={val}
+                  onChange={(e) =>
+                    setFallbackChain((prev) =>
+                      prev.map((v, idx) => (idx === i ? e.target.value : v)),
+                    )
+                  }
+                  placeholder="agent:slug or user:email"
+                  className="flex-1"
+                />
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8 text-muted-foreground hover:text-destructive shrink-0"
+                  onClick={() =>
+                    setFallbackChain((prev) => prev.filter((_, idx) => idx !== i))
+                  }
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {feedback && (
+        <p
+          className={cn(
+            "text-sm",
+            feedback.type === "success" ? "text-green-600" : "text-destructive",
+          )}
+        >
+          {feedback.message}
+        </p>
+      )}
+
+      <div className="flex justify-end">
+        <Button type="button" onClick={handleSave} disabled={isSaving}>
+          <Save className="h-4 w-4" />
+          {isSaving ? "Saving..." : "Save Rules"}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+// ---- Main page ----
 
 export function ProjectSettingsPage() {
   const { wsSlug, projectSlug } = useParams();
@@ -65,6 +702,29 @@ export function ProjectSettingsPage() {
     deleteField,
     reorderFields,
   } = useCustomFieldStore();
+
+  const { currentWorkspace } = useWorkspaceStore();
+  const { user } = useAuthStore();
+  const {
+    workspaceMembers,
+    projectMembers,
+    isLoadingProjectMembers,
+    fetchWorkspaceMembers,
+    fetchProjectMembers,
+    updateProjectMemberRole,
+    removeProjectMember,
+  } = useMemberStore();
+
+  const {
+    workflowRules,
+    isWorkflowLoading,
+    fetchWorkflowRules,
+    saveWorkflowRules,
+    effectiveAssignmentRules,
+    isProjRulesLoading,
+    fetchEffectiveAssignmentRules,
+    saveProjectAssignmentRules,
+  } = useRulesStore();
 
   // --- General info form state ---
   const [name, setName] = useState("");
@@ -98,11 +758,22 @@ export function ProjectSettingsPage() {
   const [isDeletingField, setIsDeletingField] = useState(false);
   const [fieldError, setFieldError] = useState<string | null>(null);
 
+  // --- Project members state ---
+  const [addMemberDialogOpen, setAddMemberDialogOpen] = useState(false);
+  const [memberToRemove, setMemberToRemove] =
+    useState<ProjectMemberWithUser | null>(null);
+  const [isRemovingMember, setIsRemovingMember] = useState(false);
+  const [memberError, setMemberError] = useState<string | null>(null);
+
   // --- Danger zone state ---
   const [archiveDialogOpen, setArchiveDialogOpen] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [isArchiving, setIsArchiving] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+
+  // --- Rules saving state ---
+  const [isSavingWorkflow, setIsSavingWorkflow] = useState(false);
+  const [isSavingAssignment, setIsSavingAssignment] = useState(false);
 
   // Populate general form when project changes
   useEffect(() => {
@@ -114,13 +785,30 @@ export function ProjectSettingsPage() {
     }
   }, [currentProject]);
 
-  // Fetch statuses and custom fields on mount
+  // Fetch statuses, custom fields, members, and rules on mount
   useEffect(() => {
     if (currentProject) {
       fetchStatuses(currentProject.id);
       fetchFields(currentProject.id);
+      fetchProjectMembers(currentProject.id);
+      void fetchWorkflowRules(currentProject.id);
+      void fetchEffectiveAssignmentRules(currentProject.id);
     }
-  }, [currentProject, fetchStatuses, fetchFields]);
+  }, [
+    currentProject,
+    fetchStatuses,
+    fetchFields,
+    fetchProjectMembers,
+    fetchWorkflowRules,
+    fetchEffectiveAssignmentRules,
+  ]);
+
+  // Fetch workspace members for the add-member dialog
+  useEffect(() => {
+    if (currentWorkspace?.id) {
+      fetchWorkspaceMembers(currentWorkspace.id);
+    }
+  }, [currentWorkspace?.id, fetchWorkspaceMembers]);
 
   // --- General info handlers ---
   const handleSaveGeneral = async (e: FormEvent) => {
@@ -154,6 +842,27 @@ export function ProjectSettingsPage() {
       });
     } finally {
       setIsSavingGeneral(false);
+    }
+  };
+
+  // --- Rules handlers ---
+  const handleSaveWorkflow = async (config: WorkflowRulesConfig) => {
+    if (!currentProject) return;
+    setIsSavingWorkflow(true);
+    try {
+      await saveWorkflowRules(currentProject.id, config);
+    } finally {
+      setIsSavingWorkflow(false);
+    }
+  };
+
+  const handleSaveAssignment = async (config: AssignmentRulesConfig) => {
+    if (!currentProject) return;
+    setIsSavingAssignment(true);
+    try {
+      await saveProjectAssignmentRules(currentProject.id, config);
+    } finally {
+      setIsSavingAssignment(false);
     }
   };
 
@@ -294,6 +1003,40 @@ export function ProjectSettingsPage() {
     },
     [currentProject, sortedFields, reorderFields],
   );
+
+  // --- Project member handlers ---
+  const handleProjectMemberRoleChange = async (
+    member: ProjectMemberWithUser,
+    newRole: ProjectRole,
+  ) => {
+    if (!currentProject) return;
+    try {
+      await updateProjectMemberRole(currentProject.id, member.user_id, newRole);
+    } catch {
+      // Silently fail — role will revert since store didn't update
+    }
+  };
+
+  const handleOpenRemoveMember = (member: ProjectMemberWithUser) => {
+    setMemberToRemove(member);
+    setMemberError(null);
+  };
+
+  const handleConfirmRemoveMember = async () => {
+    if (!currentProject || !memberToRemove) return;
+    setIsRemovingMember(true);
+    setMemberError(null);
+    try {
+      await removeProjectMember(currentProject.id, memberToRemove.user_id);
+      setMemberToRemove(null);
+    } catch (err) {
+      setMemberError(
+        err instanceof Error ? err.message : "Failed to remove member",
+      );
+    } finally {
+      setIsRemovingMember(false);
+    }
+  };
 
   // --- Danger zone handlers ---
   const handleArchiveProject = async () => {
@@ -675,7 +1418,152 @@ export function ProjectSettingsPage() {
         </CardContent>
       </Card>
 
-      {/* Section 4: Danger Zone */}
+      {/* Section 4: Workflow Rules */}
+      <Card>
+        <CardHeader>
+          <div className="flex items-center gap-2">
+            <GitBranch className="h-4 w-4 text-muted-foreground" />
+            <div className="space-y-1.5">
+              <CardTitle>Workflow Rules</CardTitle>
+              <CardDescription>
+                Configure allowed status transitions and enforcement mode for this project
+              </CardDescription>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent>
+          <WorkflowRulesSection
+            workflowRules={workflowRules}
+            isLoading={isWorkflowLoading}
+            onSave={handleSaveWorkflow}
+            isSaving={isSavingWorkflow}
+          />
+        </CardContent>
+      </Card>
+
+      {/* Section 5: Assignment Rules */}
+      <Card>
+        <CardHeader>
+          <div className="flex items-center gap-2">
+            <Zap className="h-4 w-4 text-muted-foreground" />
+            <div className="space-y-1.5">
+              <CardTitle>Assignment Rules</CardTitle>
+              <CardDescription>
+                Project-level assignment overrides. Rules marked "Inherited from workspace" come from workspace settings.
+              </CardDescription>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent>
+          <ProjectAssignmentRulesSection
+            effectiveRules={effectiveAssignmentRules}
+            isLoading={isProjRulesLoading}
+            onSave={handleSaveAssignment}
+            isSaving={isSavingAssignment}
+          />
+        </CardContent>
+      </Card>
+
+      {/* Section 6: Members */}
+      <Card>
+        <CardHeader>
+          <div className="flex items-center justify-between">
+            <div className="space-y-1.5">
+              <CardTitle>Members</CardTitle>
+              <CardDescription>
+                Members added here have access to this project. If no members are added, all workspace members can access this project.
+              </CardDescription>
+            </div>
+            <Button size="sm" onClick={() => setAddMemberDialogOpen(true)}>
+              <Plus className="h-4 w-4" />
+              Add Member
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {isLoadingProjectMembers ? (
+            <div className="space-y-3">
+              {[1, 2].map((i) => (
+                <div key={i} className="flex items-center gap-3">
+                  <Skeleton className="h-8 w-8 rounded-full" />
+                  <div className="flex-1 space-y-1.5">
+                    <Skeleton className="h-4 w-32" />
+                    <Skeleton className="h-3 w-48" />
+                  </div>
+                  <Skeleton className="h-8 w-24" />
+                </div>
+              ))}
+            </div>
+          ) : projectMembers.length === 0 ? (
+            <div className="py-8 text-center">
+              <Users className="mx-auto mb-2 h-8 w-8 text-muted-foreground" />
+              <p className="text-sm text-muted-foreground">
+                No specific members added. All workspace members can access this project.
+              </p>
+            </div>
+          ) : (
+            <div className="divide-y divide-border">
+              {projectMembers.map((member) => {
+                const isMe = member.user_id === user?.id;
+                return (
+                  <div
+                    key={member.id}
+                    className="flex items-center gap-3 py-3 first:pt-0 last:pb-0"
+                  >
+                    <Avatar
+                      src={member.user.avatar_url || undefined}
+                      name={member.user.name || member.user.email}
+                      size="md"
+                    />
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-1.5">
+                        <span className="truncate text-sm font-medium">
+                          {member.user.name}
+                        </span>
+                        {isMe && (
+                          <span className="text-xs text-muted-foreground">(you)</span>
+                        )}
+                      </div>
+                      <p className="truncate text-xs text-muted-foreground">
+                        {member.user.email}
+                      </p>
+                    </div>
+                    <Select
+                      value={member.role}
+                      onChange={(e) =>
+                        void handleProjectMemberRoleChange(
+                          member,
+                          e.target.value as ProjectRole,
+                        )
+                      }
+                      className="w-28 text-sm"
+                    >
+                      <option value="admin">Admin</option>
+                      <option value="member">Member</option>
+                      <option value="viewer">Viewer</option>
+                    </Select>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                      onClick={() => handleOpenRemoveMember(member)}
+                      title="Remove from project"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {memberError && (
+            <p className="mt-3 text-sm text-destructive">{memberError}</p>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Section 7: Danger Zone */}
       <Card className="border-destructive/50">
         <CardHeader>
           <CardTitle className="text-destructive">Danger Zone</CardTitle>
@@ -722,6 +1610,33 @@ export function ProjectSettingsPage() {
       </Card>
 
       {/* --- Dialogs --- */}
+
+      {/* Add Project Member Dialog */}
+      <AddProjectMemberDialog
+        open={addMemberDialogOpen}
+        onClose={() => setAddMemberDialogOpen(false)}
+        projectId={currentProject.id}
+        workspaceMembers={workspaceMembers}
+      />
+
+      {/* Remove Project Member Confirmation */}
+      <ConfirmDialog
+        open={!!memberToRemove}
+        onClose={() => {
+          setMemberToRemove(null);
+          setMemberError(null);
+        }}
+        onConfirm={handleConfirmRemoveMember}
+        title="Remove Member"
+        description={
+          memberToRemove
+            ? `Are you sure you want to remove ${memberToRemove.user.name} from this project?`
+            : ""
+        }
+        confirmText="Remove Member"
+        variant="destructive"
+        isLoading={isRemovingMember}
+      />
 
       {/* Status Create/Edit Dialog */}
       <StatusDialog

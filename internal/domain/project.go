@@ -16,6 +16,29 @@ const (
 	DefaultAssigneeNone  DefaultAssigneeType = "none"
 )
 
+// ProjectRoleAdmin, ProjectRoleMember, ProjectRoleViewer are the valid project-level roles.
+const (
+	ProjectRoleAdmin  = "admin"
+	ProjectRoleMember = "member"
+	ProjectRoleViewer = "viewer"
+)
+
+// ProjectMember represents a user's explicit membership in a project with a specific role.
+type ProjectMember struct {
+	ID        uuid.UUID `json:"id" db:"id"`
+	ProjectID uuid.UUID `json:"project_id" db:"project_id"`
+	UserID    uuid.UUID `json:"user_id" db:"user_id"`
+	Role      string    `json:"role" db:"role"`
+	CreatedAt time.Time `json:"created_at" db:"created_at"`
+	UpdatedAt time.Time `json:"updated_at" db:"updated_at"`
+}
+
+// ProjectMemberWithUser embeds ProjectMember with the associated user's brief info.
+type ProjectMemberWithUser struct {
+	ProjectMember
+	User UserBrief `json:"user"`
+}
+
 // Project belongs to a Workspace and contains tasks, statuses, and custom fields.
 type Project struct {
 	ID                  uuid.UUID           `json:"id" db:"id"`

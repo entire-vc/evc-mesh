@@ -68,3 +68,20 @@ func (r *UserRepo) Update(ctx context.Context, user *domain.User) error {
 	)
 	return err
 }
+
+// SearchUsers returns up to limit users whose email or display_name match the query (ILIKE).
+func (r *UserRepo) SearchUsers(ctx context.Context, query string, limit int) ([]domain.User, error) {
+	const q = `
+		SELECT id, email, password_hash, display_name, avatar_url, is_active, created_at, updated_at
+		FROM users
+		WHERE email ILIKE $1 OR display_name ILIKE $1
+		ORDER BY display_name
+		LIMIT $2
+	`
+	pattern := "%" + query + "%"
+	var users []domain.User
+	if err := r.db.SelectContext(ctx, &users, q, pattern, limit); err != nil {
+		return nil, err
+	}
+	return users, nil
+}

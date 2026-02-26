@@ -17,6 +17,7 @@ import { IntegrationsPage } from "@/pages/integrations";
 import { InitiativesPage } from "@/pages/initiatives";
 import { TriagePage } from "@/pages/triage";
 import { ProjectUpdatesPage } from "@/pages/project-updates";
+import { WorkspaceSettingsPage } from "@/pages/workspace-settings";
 
 class ErrorBoundary extends Component<
   { children: ReactNode },
@@ -116,6 +117,10 @@ export function App() {
           <Route
             path="w/:wsSlug/p/:projectSlug/t/:taskId"
             element={<TaskDetailPage />}
+          />
+          <Route
+            path="w/:wsSlug/settings"
+            element={<WorkspaceSettingsPage />}
           />
           <Route
             path="w/:wsSlug/p/:projectSlug/settings"

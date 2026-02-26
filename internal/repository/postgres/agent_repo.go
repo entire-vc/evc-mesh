@@ -34,6 +34,14 @@ type agentRow struct {
 	Settings            json.RawMessage    `db:"settings"`
 	TotalTasksCompleted int                `db:"total_tasks_completed"`
 	TotalErrors         int                `db:"total_errors"`
+	ExternalAgentID     *string            `db:"external_agent_id"`
+	Role               string             `db:"role"`
+	ResponsibilityZone string             `db:"responsibility_zone"`
+	EscalationTo       json.RawMessage    `db:"escalation_to"`
+	AcceptsFrom        json.RawMessage    `db:"accepts_from"`
+	MaxConcurrentTasks int                `db:"max_concurrent_tasks"`
+	WorkingHours       string             `db:"working_hours"`
+	ProfileDescription string             `db:"profile_description"`
 	CreatedAt           time.Time          `db:"created_at"`
 	UpdatedAt           time.Time          `db:"updated_at"`
 	DeletedAt           *time.Time         `db:"deleted_at"`
@@ -56,6 +64,14 @@ func (r *agentRow) toDomain() domain.Agent {
 		Settings:            r.Settings,
 		TotalTasksCompleted: r.TotalTasksCompleted,
 		TotalErrors:         r.TotalErrors,
+		ExternalAgentID:     r.ExternalAgentID,
+		Role:               r.Role,
+		ResponsibilityZone: r.ResponsibilityZone,
+		EscalationTo:       r.EscalationTo,
+		AcceptsFrom:        r.AcceptsFrom,
+		MaxConcurrentTasks: r.MaxConcurrentTasks,
+		WorkingHours:       r.WorkingHours,
+		ProfileDescription: r.ProfileDescription,
 		CreatedAt:           r.CreatedAt,
 		UpdatedAt:           r.UpdatedAt,
 	}
@@ -86,13 +102,17 @@ func (r *AgentRepo) Create(ctx context.Context, agent *domain.Agent) error {
 			api_key_hash, api_key_prefix, capabilities, status,
 			last_heartbeat, current_task_id, settings,
 			total_tasks_completed, total_errors,
+			role, responsibility_zone, escalation_to, accepts_from,
+			max_concurrent_tasks, working_hours, profile_description,
 			created_at, updated_at
 		) VALUES (
 			$1, $2, $3, $4, $5, $6,
 			$7, $8, $9, $10,
 			$11, $12, $13,
 			$14, $15,
-			$16, $17
+			$16, $17, $18, $19,
+			$20, $21, $22,
+			$23, $24
 		)
 	`
 	capabilities := agent.Capabilities
@@ -103,11 +123,17 @@ func (r *AgentRepo) Create(ctx context.Context, agent *domain.Agent) error {
 	if settings == nil {
 		settings = json.RawMessage(`{}`)
 	}
+	acceptsFrom := agent.AcceptsFrom
+	if acceptsFrom == nil {
+		acceptsFrom = json.RawMessage(`["*"]`)
+	}
 	_, err := r.db.ExecContext(ctx, q,
 		agent.ID, agent.WorkspaceID, agent.ParentAgentID, agent.Name, agent.Slug, agent.AgentType,
 		agent.APIKeyHash, agent.APIKeyPrefix, capabilities, agent.Status,
 		agent.LastHeartbeat, agent.CurrentTaskID, settings,
 		agent.TotalTasksCompleted, agent.TotalErrors,
+		agent.Role, agent.ResponsibilityZone, agent.EscalationTo, acceptsFrom,
+		agent.MaxConcurrentTasks, agent.WorkingHours, agent.ProfileDescription,
 		agent.CreatedAt, agent.UpdatedAt,
 	)
 	return err
@@ -147,7 +173,10 @@ func (r *AgentRepo) Update(ctx context.Context, agent *domain.Agent) error {
 		    capabilities = $8, status = $9,
 		    last_heartbeat = $10, current_task_id = $11,
 		    settings = $12, total_tasks_completed = $13,
-		    total_errors = $14, updated_at = $15
+		    total_errors = $14,
+		    role = $15, responsibility_zone = $16, escalation_to = $17, accepts_from = $18,
+		    max_concurrent_tasks = $19, working_hours = $20, profile_description = $21,
+		    updated_at = $22
 		WHERE id = $1 AND deleted_at IS NULL
 	`
 	capabilities := agent.Capabilities
@@ -158,13 +187,20 @@ func (r *AgentRepo) Update(ctx context.Context, agent *domain.Agent) error {
 	if settings == nil {
 		settings = json.RawMessage(`{}`)
 	}
+	acceptsFrom := agent.AcceptsFrom
+	if acceptsFrom == nil {
+		acceptsFrom = json.RawMessage(`["*"]`)
+	}
 	res, err := r.db.ExecContext(ctx, q,
 		agent.ID, agent.ParentAgentID, agent.Name, agent.Slug, agent.AgentType,
 		agent.APIKeyHash, agent.APIKeyPrefix,
 		capabilities, agent.Status,
 		agent.LastHeartbeat, agent.CurrentTaskID,
 		settings, agent.TotalTasksCompleted,
-		agent.TotalErrors, agent.UpdatedAt,
+		agent.TotalErrors,
+		agent.Role, agent.ResponsibilityZone, agent.EscalationTo, acceptsFrom,
+		agent.MaxConcurrentTasks, agent.WorkingHours, agent.ProfileDescription,
+		agent.UpdatedAt,
 	)
 	if err != nil {
 		return err
@@ -259,7 +295,9 @@ func (r *AgentRepo) GetSubAgentTree(ctx context.Context, parentID uuid.UUID) ([]
 		SELECT id, workspace_id, parent_agent_id, name, slug, agent_type,
 		       api_key_hash, api_key_prefix, capabilities, status,
 		       last_heartbeat, current_task_id, settings,
-		       total_tasks_completed, total_errors,
+		       total_tasks_completed, total_errors, external_agent_id,
+		       role, responsibility_zone, escalation_to, accepts_from,
+		       max_concurrent_tasks, working_hours, profile_description,
 		       created_at, updated_at, deleted_at
 		FROM agent_tree
 		ORDER BY depth, created_at

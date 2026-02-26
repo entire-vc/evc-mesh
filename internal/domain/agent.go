@@ -46,6 +46,17 @@ type Agent struct {
 	Settings            json.RawMessage `json:"settings" db:"settings"`
 	TotalTasksCompleted int             `json:"total_tasks_completed" db:"total_tasks_completed"`
 	TotalErrors         int             `json:"total_errors" db:"total_errors"`
+	ExternalAgentID     *string         `json:"external_agent_id,omitempty" db:"external_agent_id"`
+	// Profile fields (Sprint 20 — team directory & assignment rules)
+	// Note: AgentType above is the automation category (claude_code/openclaw/etc).
+	// Role is the team role (developer/lead/reviewer/etc).
+	Role               string          `json:"role" db:"role"`
+	ResponsibilityZone string          `json:"responsibility_zone" db:"responsibility_zone"`
+	EscalationTo       json.RawMessage `json:"escalation_to,omitempty" db:"escalation_to"`
+	AcceptsFrom        json.RawMessage `json:"accepts_from" db:"accepts_from"`
+	MaxConcurrentTasks int             `json:"max_concurrent_tasks" db:"max_concurrent_tasks"`
+	WorkingHours       string          `json:"working_hours" db:"working_hours"`
+	ProfileDescription string          `json:"profile_description" db:"profile_description"`
 	CreatedAt           time.Time       `json:"created_at" db:"created_at"`
 	UpdatedAt           time.Time       `json:"updated_at" db:"updated_at"`
 }

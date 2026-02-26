@@ -69,6 +69,10 @@ func (r *mockUserRepo) Update(_ context.Context, user *domain.User) error {
 	return nil
 }
 
+func (r *mockUserRepo) SearchUsers(_ context.Context, _ string, _ int) ([]domain.User, error) {
+	return nil, nil
+}
+
 type mockRefreshTokenRepo struct {
 	mu     sync.RWMutex
 	tokens map[string]*repository.RefreshToken
@@ -224,6 +228,22 @@ func (r *mockWorkspaceMemberRepo) GetRole(_ context.Context, wsID, userID uuid.U
 		}
 	}
 	return "", fmt.Errorf("user is not a member of this workspace")
+}
+
+func (r *mockWorkspaceMemberRepo) List(_ context.Context, _ uuid.UUID) ([]domain.WorkspaceMemberWithUser, error) {
+	return nil, nil
+}
+
+func (r *mockWorkspaceMemberRepo) UpdateRole(_ context.Context, _, _ uuid.UUID, _ string) error {
+	return nil
+}
+
+func (r *mockWorkspaceMemberRepo) Delete(_ context.Context, _, _ uuid.UUID) error {
+	return nil
+}
+
+func (r *mockWorkspaceMemberRepo) CountOwners(_ context.Context, _ uuid.UUID) (int, error) {
+	return 0, nil
 }
 
 // ---------------------------------------------------------------------------
