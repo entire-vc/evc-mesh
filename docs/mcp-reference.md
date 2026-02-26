@@ -2,18 +2,21 @@
 
 ## Overview
 
-evc-mesh exposes **25 MCP tools** via the [Model Context Protocol](https://modelcontextprotocol.io/).
+evc-mesh exposes **34 MCP tools** via the [Model Context Protocol](https://modelcontextprotocol.io/).
 Supported transports: **stdio** (default), **SSE** (HTTP Server-Sent Events on port 8081).
 
-Tools are organized into 5 categories:
+Tools are organized into 8 categories:
 
 | Category | Tools | Description |
 |----------|-------|-------------|
 | Project & Task Management | 10 | CRUD for projects, tasks, subtasks, dependencies, assignments |
 | Comments & Artifacts | 5 | Task comments, file uploads, artifact retrieval |
 | Event Bus | 5 | Publish/subscribe events, context aggregation |
-| Agent Hierarchy | 2 | Register and list sub-agents |
 | Utility | 3 | Heartbeat, error reporting, self-assigned task listing |
+| Agent Hierarchy | 2 | Register and list sub-agents |
+| Governance Rules | 2 | Agent-applicable rules, project rules |
+| Team & Configuration | 6 | Team directory, assignment/workflow rules, agent profiles, config import/export |
+| Push Notifications | 1 | Long-poll for task assignments |
 
 > **Note:** The MCP server is also available as a standalone package at
 > [github.com/entire-vc/evc-mesh-mcp](https://github.com/entire-vc/evc-mesh-mcp).
@@ -654,23 +657,36 @@ Get all context for a task: details, comments, events, artifacts, dependencies.
 
 #### 20. `subscribe_events`
 
-Subscribe to events (placeholder -- returns subscription info).
+Configure push notification delivery for task events. Optionally sets a callback URL that Mesh will POST events to. Returns SSE and long-poll endpoint URLs for alternative delivery mechanisms.
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | `project_id` | string | **Yes** | -- | Project ID |
 | `event_types` | string[] | No | -- | Event types to subscribe to |
+| `callback_url` | string | No | -- | URL where Mesh will POST task events (task.assigned, task.status_changed). Leave empty to only use SSE or long-polling |
 
-> **Note:** This tool is a placeholder for future real-time subscription support.
-> Currently it returns subscription metadata but does not establish a persistent connection.
+See [Agent Push Notifications](agent-push-notifications.md) for full details on delivery mechanisms.
 
-**Example request:**
+**Example request (set callback URL):**
 ```json
 {
   "name": "subscribe_events",
   "arguments": {
     "project_id": "550e8400-...",
-    "event_types": ["summary", "error", "dependency_resolved"]
+    "event_types": ["summary", "error", "dependency_resolved"],
+    "callback_url": "https://your-agent.example.com/hooks/mesh"
+  }
+}
+```
+
+**Example response:**
+```json
+{
+  "status": "configured",
+  "callback_url": "https://your-agent.example.com/hooks/mesh",
+  "push_endpoints": {
+    "sse": "https://mesh.example.com/api/v1/agents/me/events/stream",
+    "long_poll": "https://mesh.example.com/api/v1/agents/me/tasks/poll?timeout=30"
   }
 }
 ```
@@ -800,9 +816,9 @@ Report an error encountered during work.
 
 ---
 
-### Governance (2 tools)
+### Governance Rules (2 tools)
 
-#### `get_my_rules`
+#### 26. `get_my_rules`
 
 Get all governance rules that apply to the calling agent. Call at the start of work to understand constraints and behavioral requirements.
 
@@ -822,7 +838,7 @@ Get all governance rules that apply to the calling agent. Call at the start of w
 
 ---
 
-#### `get_project_rules`
+#### 27. `get_project_rules`
 
 Get all rules configured for a project (all scopes: workspace + project).
 
@@ -837,6 +853,175 @@ Get all rules configured for a project (all scopes: workspace + project).
   "arguments": {
     "project_id": "550e8400-..."
   }
+}
+```
+
+---
+
+### Team & Configuration (6 tools)
+
+#### 28. `get_team_directory`
+
+Get the workspace team directory listing all agents and human members with their profiles.
+
+No parameters required.
+
+**Example request:**
+```json
+{
+  "name": "get_team_directory",
+  "arguments": {}
+}
+```
+
+---
+
+#### 29. `get_assignment_rules`
+
+Get effective assignment rules for a project, merged from workspace and project level with source annotations.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `project_id` | string | **Yes** | -- | Project ID |
+
+**Example request:**
+```json
+{
+  "name": "get_assignment_rules",
+  "arguments": {
+    "project_id": "550e8400-..."
+  }
+}
+```
+
+---
+
+#### 30. `get_workflow_rules`
+
+Get workflow rules for a project including allowed transitions, policies, and permissions for the calling agent.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `project_id` | string | **Yes** | -- | Project ID |
+
+**Example request:**
+```json
+{
+  "name": "get_workflow_rules",
+  "arguments": {
+    "project_id": "550e8400-..."
+  }
+}
+```
+
+---
+
+#### 31. `update_agent_profile`
+
+Update the calling agent's profile fields such as role, capabilities, responsibility zone, and working hours.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `role` | string | No | -- | Agent role (e.g. developer, reviewer, tester) |
+| `capabilities` | string[] | No | -- | List of capability strings (e.g. go, react, testing) |
+| `responsibility_zone` | string | No | -- | Area of responsibility (e.g. Backend, Frontend) |
+| `escalation_to` | string | No | -- | Agent ID or name to escalate issues to |
+| `accepts_from` | string[] | No | -- | Agent IDs or types this agent accepts tasks from |
+| `max_concurrent_tasks` | number | No | -- | Maximum number of concurrent tasks |
+| `working_hours` | string | No | -- | Working hours description (e.g. 24/7, 9-17 UTC) |
+| `description` | string | No | -- | Human-readable description of the agent's purpose |
+
+**Example request:**
+```json
+{
+  "name": "update_agent_profile",
+  "arguments": {
+    "role": "developer",
+    "capabilities": ["go", "react", "testing"],
+    "responsibility_zone": "Backend",
+    "max_concurrent_tasks": 3,
+    "working_hours": "24/7"
+  }
+}
+```
+
+---
+
+#### 32. `import_workspace_config`
+
+Import workspace configuration from YAML. Applies rules, statuses, and project templates defined in the YAML.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `yaml_content` | string | **Yes** | -- | YAML configuration content as a string |
+
+**Example request:**
+```json
+{
+  "name": "import_workspace_config",
+  "arguments": {
+    "yaml_content": "version: 1\nworkspace_rules:\n  assignment:\n    ..."
+  }
+}
+```
+
+---
+
+#### 33. `export_workspace_config`
+
+Export the current workspace configuration as YAML, including rules, project templates, and settings.
+
+No parameters required.
+
+**Example request:**
+```json
+{
+  "name": "export_workspace_config",
+  "arguments": {}
+}
+```
+
+---
+
+### Push Notifications (1 tool)
+
+#### 34. `poll_tasks`
+
+Long-poll for new task assignments. Blocks until a task is assigned to this agent or the timeout expires. Returns current assigned tasks and whether any change occurred.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `timeout` | number | No | `30` | Maximum seconds to wait for new assignments (max 120) |
+
+See [Agent Push Notifications](agent-push-notifications.md) for full details on push delivery mechanisms (callback URL, SSE, long-poll).
+
+**Example request:**
+```json
+{
+  "name": "poll_tasks",
+  "arguments": {
+    "timeout": 60
+  }
+}
+```
+
+**Example response (new task assigned):**
+```json
+{
+  "tasks": [
+    {"id": "a1b2c3d4-...", "title": "Fix auth bug", "priority": "high"}
+  ],
+  "count": 1,
+  "changed": true
+}
+```
+
+**Example response (timeout, no changes):**
+```json
+{
+  "tasks": [],
+  "count": 0,
+  "changed": false
 }
 ```
 
