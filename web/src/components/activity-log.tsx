@@ -72,7 +72,7 @@ const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}T/;
 // Check if a string looks like a UUID
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-function formatValue(value: unknown, field?: string, nameMap?: Map<string, string>): string {
+function formatValue(value: unknown, _field?: string, nameMap?: Map<string, string>): string {
   if (value === null || value === undefined) return "none";
   if (typeof value === "boolean") return value ? "true" : "false";
   if (typeof value === "number") return String(value);
