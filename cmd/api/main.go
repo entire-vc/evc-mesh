@@ -90,10 +90,15 @@ func main() {
 		service.WithRuleTaskRepo(taskRepo),
 	)
 
+	// Event bus service is created early so it can be injected into taskService.
+	// Task mutations (create/update/move/delete) will auto-publish events.
+	eventBusService := service.NewEventBusService(eventBusRepo, activityLogRepo)
+
 	taskService := service.NewTaskService(taskRepo, taskStatusRepo, taskDependencyRepo, activityLogRepo,
 		service.WithCustomFieldService(customFieldService),
 		service.WithProjectRepo(projectRepo),
 		service.WithRuleService(ruleService),
+		service.WithEventBusService(eventBusService),
 	)
 
 	// Wire auto-transition service. It calls taskService.MoveTask, so taskService must already
@@ -110,7 +115,6 @@ func main() {
 	// Real service implementations (replacing stubs from earlier sprints).
 	commentService := service.NewCommentService(commentRepo, taskRepo, activityLogRepo)
 	depService := service.NewTaskDependencyService(taskDependencyRepo, taskRepo, activityLogRepo)
-	eventBusService := service.NewEventBusService(eventBusRepo, activityLogRepo)
 	activityLogService := service.NewActivityLogService(activityLogRepo)
 	webhookService := service.NewWebhookService(webhookRepo)
 	savedViewService := service.NewSavedViewService(savedViewRepo)

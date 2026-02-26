@@ -29,6 +29,7 @@ type taskService struct {
 	projectRepo    repository.ProjectRepository
 	autoTransSvc   AutoTransitionService
 	ruleSvc        RuleService
+	eventBusSvc    EventBusService
 }
 
 // NewTaskService returns a new TaskService backed by the given repositories.
@@ -80,6 +81,14 @@ func WithAutoTransitionService(ats AutoTransitionService) TaskServiceOption {
 func WithRuleService(rs RuleService) TaskServiceOption {
 	return func(s *taskService) {
 		s.ruleSvc = rs
+	}
+}
+
+// WithEventBusService sets the optional event bus service.
+// When set, task mutations (create/update/move/delete) automatically publish events.
+func WithEventBusService(ebs EventBusService) TaskServiceOption {
+	return func(s *taskService) {
+		s.eventBusSvc = ebs
 	}
 }
 
@@ -458,7 +467,8 @@ func (s *taskService) GetMyTasks(ctx context.Context, assigneeID uuid.UUID, assi
 	return s.taskRepo.ListByAssignee(ctx, assigneeID, assigneeType)
 }
 
-// logActivity writes an activity log entry. Failures are logged but not propagated.
+// logActivity writes an activity log entry and publishes an event bus message.
+// Failures are logged but not propagated.
 func (s *taskService) logActivity(ctx context.Context, projectID, entityID uuid.UUID, action string, changes map[string]interface{}) {
 	if s.activityRepo == nil {
 		return
@@ -493,6 +503,55 @@ func (s *taskService) logActivity(ctx context.Context, projectID, entityID uuid.
 	}
 	if err := s.activityRepo.Create(ctx, entry); err != nil {
 		log.Printf("[activity] WARNING: failed to log %s for task %s: %v", action, entityID, err)
+	}
+
+	// Also publish to the event bus so the Events page shows task activity.
+	s.publishTaskEvent(ctx, wsID, projectID, entityID, actorID, actorType, action, changes)
+}
+
+// publishTaskEvent publishes a task mutation as an event bus message.
+// This bridges the gap between activity_log (audit) and event_bus_messages (feed).
+func (s *taskService) publishTaskEvent(ctx context.Context, wsID, projectID, taskID, actorID uuid.UUID, actorType domain.ActorType, action string, changes map[string]interface{}) {
+	if s.eventBusSvc == nil {
+		return
+	}
+
+	// Map activity actions to event types.
+	eventType := domain.EventTypeCustom
+	switch action {
+	case "task.created", "task.deleted":
+		eventType = domain.EventTypeStatusChange
+	case "task.moved", "task.assigned":
+		eventType = domain.EventTypeStatusChange
+	case "task.updated":
+		eventType = domain.EventTypeContextUpdate
+	}
+
+	payload := map[string]any{
+		"task_id":    taskID.String(),
+		"action":     action,
+		"actor_id":   actorID,
+		"actor_type": actorType,
+	}
+	// Merge changes into payload.
+	for k, v := range changes {
+		payload[k] = v
+	}
+
+	taskIDPtr := &taskID
+	input := PublishEventInput{
+		WorkspaceID: wsID,
+		ProjectID:   projectID,
+		TaskID:      taskIDPtr,
+		EventType:   eventType,
+		Subject:     action,
+		Payload:     payload,
+		Tags:        []string{"auto", "task"},
+		TTLSeconds:  86400, // 24h
+	}
+
+	if _, err := s.eventBusSvc.Publish(ctx, input); err != nil {
+		log.Printf("[event_bus] WARNING: failed to publish %s event for task %s: %v", action, taskID, err)
 	}
 }
 
