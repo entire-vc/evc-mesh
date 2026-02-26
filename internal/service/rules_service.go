@@ -78,7 +78,7 @@ func (s *rulesService) GetTeamDirectory(ctx context.Context, workspaceID uuid.UU
 			Role:               a.Role,
 			Capabilities:       a.Capabilities,
 			ResponsibilityZone: a.ResponsibilityZone,
-			EscalationTo:       a.EscalationTo,
+			EscalationTo:       derefRawMessage(a.EscalationTo),
 			AcceptsFrom:        a.AcceptsFrom,
 			MaxConcurrentTasks: a.MaxConcurrentTasks,
 			WorkingHours:       a.WorkingHours,
@@ -130,7 +130,9 @@ func (s *rulesService) UpdateAgentProfile(ctx context.Context, agentID uuid.UUID
 		agent.Capabilities = profile.Capabilities
 	}
 	agent.ResponsibilityZone = profile.ResponsibilityZone
-	agent.EscalationTo = profile.EscalationTo
+	if profile.EscalationTo != nil {
+		agent.EscalationTo = &profile.EscalationTo
+	}
 	if profile.AcceptsFrom != nil {
 		agent.AcceptsFrom = profile.AcceptsFrom
 	}
@@ -664,5 +666,13 @@ func (s *rulesService) importTeamConfig(ctx context.Context, workspaceID uuid.UU
 	}
 
 	return result, nil
+}
+
+// derefRawMessage safely dereferences a *json.RawMessage, returning nil if the pointer is nil.
+func derefRawMessage(p *json.RawMessage) json.RawMessage {
+	if p == nil {
+		return nil
+	}
+	return *p
 }
 

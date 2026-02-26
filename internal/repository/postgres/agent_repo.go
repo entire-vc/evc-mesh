@@ -37,7 +37,7 @@ type agentRow struct {
 	ExternalAgentID     *string            `db:"external_agent_id"`
 	Role               string             `db:"role"`
 	ResponsibilityZone string             `db:"responsibility_zone"`
-	EscalationTo       json.RawMessage    `db:"escalation_to"`
+	EscalationTo       *json.RawMessage   `db:"escalation_to"`
 	AcceptsFrom        json.RawMessage    `db:"accepts_from"`
 	MaxConcurrentTasks int                `db:"max_concurrent_tasks"`
 	WorkingHours       string             `db:"working_hours"`

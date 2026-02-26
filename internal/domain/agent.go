@@ -52,7 +52,7 @@ type Agent struct {
 	// Role is the team role (developer/lead/reviewer/etc).
 	Role               string          `json:"role" db:"role"`
 	ResponsibilityZone string          `json:"responsibility_zone" db:"responsibility_zone"`
-	EscalationTo       json.RawMessage `json:"escalation_to,omitempty" db:"escalation_to"`
+	EscalationTo       *json.RawMessage `json:"escalation_to,omitempty" db:"escalation_to"`
 	AcceptsFrom        json.RawMessage `json:"accepts_from" db:"accepts_from"`
 	MaxConcurrentTasks int             `json:"max_concurrent_tasks" db:"max_concurrent_tasks"`
 	WorkingHours       string          `json:"working_hours" db:"working_hours"`
