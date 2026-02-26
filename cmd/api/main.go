@@ -387,6 +387,7 @@ func main() {
 	api.GET("/workspaces/:ws_id/agents", agentHandler.List)
 	api.POST("/workspaces/:ws_id/agents", agentHandler.Register, rbac(mw.PermRegisterAgent))
 	api.GET("/agents/me", agentHandler.Me)
+	api.PATCH("/agents/me", agentHandler.UpdateMe)
 	api.GET("/agents/me/tasks", agentHandler.GetMyTasks)
 	api.GET("/agents/me/events/stream", agentHandler.EventStream)
 	api.GET("/agents/me/tasks/poll", agentHandler.PollTasks)

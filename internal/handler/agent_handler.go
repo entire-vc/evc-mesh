@@ -289,6 +289,50 @@ func (h *AgentHandler) Me(c echo.Context) error {
 	return c.JSON(http.StatusOK, agent)
 }
 
+// updateMeRequest represents the JSON body for self-service agent profile updates.
+// Only safe fields — no name/type/capabilities changes (those require admin).
+type updateMeRequest struct {
+	ProfileDescription *string `json:"profile_description"`
+	CallbackURL        *string `json:"callback_url"`
+}
+
+// UpdateMe handles PATCH /agents/me
+// Allows an agent to update its own profile (callback_url, profile_description)
+// without requiring admin permissions.
+func (h *AgentHandler) UpdateMe(c echo.Context) error {
+	agentIDVal := c.Get("agent_id")
+	if agentIDVal == nil {
+		return c.JSON(http.StatusUnauthorized, apierror.Unauthorized("agent API key required"))
+	}
+	agentID, ok := agentIDVal.(uuid.UUID)
+	if !ok {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid agent_id in context"))
+	}
+
+	var req updateMeRequest
+	if err := c.Bind(&req); err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
+	}
+
+	agent, err := h.agentService.GetByID(c.Request().Context(), agentID)
+	if err != nil {
+		return handleError(c, err)
+	}
+
+	if req.ProfileDescription != nil {
+		agent.ProfileDescription = *req.ProfileDescription
+	}
+	if req.CallbackURL != nil {
+		agent.CallbackURL = *req.CallbackURL
+	}
+
+	if err := h.agentService.Update(c.Request().Context(), agent); err != nil {
+		return handleError(c, err)
+	}
+
+	return c.JSON(http.StatusOK, agent)
+}
+
 // ListSubAgents handles GET /agents/:agent_id/sub-agents
 // Returns child agents of the specified agent.
 // Query parameter ?recursive=true returns all descendants up to 10 levels deep.

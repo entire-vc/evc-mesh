@@ -823,10 +823,10 @@ func (s *Server) handleSubscribeEvents(ctx context.Context, request mcpsdk.CallT
 	eventTypes := parseStringSlice(request, "event_types")
 	callbackURL := mcpsdk.ParseString(request, "callback_url", "")
 
-	// If callback_url is provided, persist it on the agent via PATCH /agents/{id}.
+	// If callback_url is provided, persist it on the agent via PATCH /agents/me (self-service, no admin RBAC).
 	if callbackURL != "" {
 		client := s.getRESTClient(ctx)
-		_, err := client.UpdateAgent(ctx, session.AgentID.String(), map[string]any{
+		_, err := client.UpdateMe(ctx, map[string]any{
 			"callback_url": callbackURL,
 		})
 		if err != nil {

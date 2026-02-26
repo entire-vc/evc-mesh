@@ -440,6 +440,15 @@ func (c *RESTClient) UpdateAgent(ctx context.Context, agentID string, body map[s
 	return result, nil
 }
 
+// UpdateMe updates the calling agent's own profile via PATCH /agents/me (no admin RBAC required).
+func (c *RESTClient) UpdateMe(ctx context.Context, body map[string]any) (map[string]any, error) {
+	var result map[string]any
+	if err := c.doJSON(ctx, http.MethodPatch, "/api/v1/agents/me", body, &result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
 // RegisterSubAgent creates a sub-agent under the given parent agent.
 // The parentID is embedded in the request body as parent_agent_id.
 func (c *RESTClient) RegisterSubAgent(ctx context.Context, workspaceID, parentID, name, agentType string, capabilities map[string]any) (map[string]any, error) {
