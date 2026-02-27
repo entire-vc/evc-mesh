@@ -2,7 +2,6 @@ import { ChevronLeft, ChevronRight, Filter, Search } from "lucide-react";
 import { format } from "date-fns";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Badge } from "@/components/ui/badge";
 
 interface CalendarToolbarProps {
   currentMonth: Date;

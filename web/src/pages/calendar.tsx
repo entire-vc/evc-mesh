@@ -17,7 +17,7 @@ import { toast } from "@/components/ui/toast";
 import type { Task, WSMessage, SavedView } from "@/types";
 
 export function CalendarPage() {
-  const { wsSlug, projectSlug } = useParams();
+  const { wsSlug } = useParams();
   const { currentProject, statuses, fetchStatuses } = useProjectStore();
   const { tasks, isLoading, fetchTasks } = useTaskStore();
   const { fetchFields: fetchCustomFields } = useCustomFieldStore();
