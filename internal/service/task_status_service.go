@@ -64,6 +64,7 @@ func (s *taskStatusService) Create(ctx context.Context, status *domain.TaskStatu
 }
 
 // Update validates that the status exists and persists changes.
+// It merges only the non-zero fields from the incoming status onto the existing record.
 func (s *taskStatusService) Update(ctx context.Context, status *domain.TaskStatus) error {
 	existing, err := s.statusRepo.GetByID(ctx, status.ID)
 	if err != nil {
@@ -73,7 +74,34 @@ func (s *taskStatusService) Update(ctx context.Context, status *domain.TaskStatu
 		return apierror.NotFound("TaskStatus")
 	}
 
-	return s.statusRepo.Update(ctx, status)
+	// Merge: apply non-zero incoming fields onto existing.
+	if status.Name != "" {
+		existing.Name = status.Name
+		// Auto-regenerate slug when name changes (unless slug is explicitly set).
+		if status.Slug == "" {
+			existing.Slug = slugify(status.Name)
+		}
+	}
+	if status.Slug != "" {
+		existing.Slug = status.Slug
+	}
+	if status.Color != "" {
+		existing.Color = status.Color
+	}
+	if status.Category != "" {
+		existing.Category = status.Category
+	}
+	if status.AutoTransition != nil {
+		existing.AutoTransition = status.AutoTransition
+	}
+
+	if err := s.statusRepo.Update(ctx, existing); err != nil {
+		return err
+	}
+
+	// Copy merged state back so the handler can return the full record.
+	*status = *existing
+	return nil
 }
 
 // Delete removes a task status after verifying it exists and no tasks reference it.

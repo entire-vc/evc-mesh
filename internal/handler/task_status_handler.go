@@ -31,6 +31,7 @@ type createTaskStatusRequest struct {
 // updateTaskStatusRequest represents the JSON body for updating a task status.
 type updateTaskStatusRequest struct {
 	Name     *string                `json:"name"`
+	Slug     *string                `json:"slug"`
 	Color    *string                `json:"color"`
 	Category *domain.StatusCategory `json:"category"`
 }
@@ -111,6 +112,9 @@ func (h *TaskStatusHandler) Update(c echo.Context) error {
 
 	if req.Name != nil {
 		status.Name = *req.Name
+	}
+	if req.Slug != nil {
+		status.Slug = *req.Slug
 	}
 	if req.Color != nil {
 		status.Color = *req.Color
