@@ -75,6 +75,23 @@ func WorkspaceRLS(db *sqlx.DB, projectRepo repository.ProjectRepository) echo.Mi
 				}
 			}
 
+			// 2c. Try agent_id route parameter -> look up agent's workspace_id.
+			if !resolved {
+				if agentIDStr := c.Param("agent_id"); agentIDStr != "" {
+					if agentID, err := uuid.Parse(agentIDStr); err == nil {
+						var resolvedWsID uuid.UUID
+						err := db.QueryRowContext(c.Request().Context(),
+							"SELECT workspace_id FROM agents WHERE id = $1 AND deleted_at IS NULL",
+							agentID,
+						).Scan(&resolvedWsID)
+						if err == nil {
+							wsID = resolvedWsID
+							resolved = true
+						}
+					}
+				}
+			}
+
 			// 3. Try workspace_id from auth context (set by agent key auth).
 			if !resolved {
 				if ctxWsID, err := GetWorkspaceID(c); err == nil {
