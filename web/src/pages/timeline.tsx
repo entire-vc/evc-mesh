@@ -37,17 +37,16 @@ const STATUS_CATEGORY_COLORS: Record<StatusCategory, string> = {
   cancelled: "#ef4444",
 };
 
+// Use CSS-variable classes (bg-card) instead of dark: variants to ensure
+// correct rendering inside SVG foreignObject where dark: may not propagate.
 const STATUS_CATEGORY_BG: Record<StatusCategory, string> = {
-  backlog: "bg-gray-50 border-gray-200 dark:bg-gray-900 dark:border-gray-700",
-  triage: "bg-amber-50 border-amber-200 dark:bg-amber-950 dark:border-amber-800",
-  todo: "bg-blue-50 border-blue-200 dark:bg-blue-950 dark:border-blue-800",
-  in_progress:
-    "bg-amber-50 border-amber-200 dark:bg-amber-950 dark:border-amber-800",
-  review:
-    "bg-violet-50 border-violet-200 dark:bg-violet-950 dark:border-violet-800",
-  done: "bg-green-50 border-green-200 dark:bg-green-950 dark:border-green-800",
-  cancelled:
-    "bg-red-50 border-red-200 dark:bg-red-950 dark:border-red-800",
+  backlog: "bg-card border-border",
+  triage: "bg-card border-amber-500/30",
+  todo: "bg-card border-blue-500/30",
+  in_progress: "bg-card border-amber-500/30",
+  review: "bg-card border-violet-500/30",
+  done: "bg-card border-green-500/30",
+  cancelled: "bg-card border-red-500/30",
 };
 
 // ---------------------------------------------------------------------------
@@ -251,7 +250,7 @@ function TaskNode({
     >
       <div
         className={cn(
-          "flex h-full cursor-pointer flex-col justify-between rounded-lg border-2 px-3 py-2.5 transition-all hover:shadow-md hover:brightness-95 dark:hover:brightness-110 active:scale-[0.98]",
+          "flex h-full cursor-pointer flex-col justify-between rounded-lg border-2 px-3 py-2.5 text-card-foreground transition-all hover:shadow-md hover:brightness-95 dark:hover:brightness-110 active:scale-[0.98]",
           bgClass,
         )}
         style={{ borderLeftColor: accentColor, borderLeftWidth: 4 }}

@@ -1,6 +1,9 @@
 @import "tailwindcss";
 @import "./styles/brandkit.css";
 
+/* Class-based dark mode: .dark class on <html> toggles dark variant */
+@custom-variant dark (&:is(.dark *));
+
 @theme {
   --font-sans: var(--mesh-font-sans);
   --font-mono: var(--mesh-font-mono);
