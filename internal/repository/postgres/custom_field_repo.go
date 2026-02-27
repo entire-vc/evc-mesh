@@ -35,9 +35,13 @@ func (r *CustomFieldDefinitionRepo) Create(ctx context.Context, field *domain.Cu
 	if options == nil {
 		options = json.RawMessage(`{}`)
 	}
+	defaultValue := field.DefaultValue
+	if defaultValue == nil {
+		defaultValue = json.RawMessage(`null`)
+	}
 	_, err := r.db.ExecContext(ctx, q,
 		field.ID, field.ProjectID, field.Name, field.Slug,
-		field.FieldType, field.Description, options, field.DefaultValue,
+		field.FieldType, field.Description, options, defaultValue,
 		field.IsRequired, field.IsVisibleToAgents, field.Position, field.CreatedAt,
 	)
 	return err
@@ -67,9 +71,13 @@ func (r *CustomFieldDefinitionRepo) Update(ctx context.Context, field *domain.Cu
 	if options == nil {
 		options = json.RawMessage(`{}`)
 	}
+	defaultValue := field.DefaultValue
+	if defaultValue == nil {
+		defaultValue = json.RawMessage(`null`)
+	}
 	res, err := r.db.ExecContext(ctx, q,
 		field.ID, field.Name, field.Slug, field.FieldType,
-		field.Description, options, field.DefaultValue,
+		field.Description, options, defaultValue,
 		field.IsRequired, field.IsVisibleToAgents, field.Position,
 	)
 	if err != nil {
