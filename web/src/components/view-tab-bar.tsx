@@ -1,5 +1,5 @@
 import { useNavigate } from "react-router";
-import { Columns3, GitBranch, List, MoreVertical } from "lucide-react";
+import { Calendar, Columns3, GitBranch, List, MoreVertical } from "lucide-react";
 import { cn } from "@/lib/cn";
 import {
   DropdownMenu,
@@ -9,7 +9,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 
 interface ViewTabBarProps {
-  currentView: "board" | "list" | "timeline";
+  currentView: "board" | "list" | "timeline" | "calendar";
   wsSlug: string;
   projectSlug: string;
   className?: string;
@@ -33,6 +33,12 @@ const TABS = [
     label: "Timeline",
     Icon: GitBranch,
     path: (ws: string, proj: string) => `/w/${ws}/p/${proj}/timeline`,
+  },
+  {
+    id: "calendar" as const,
+    label: "Calendar",
+    Icon: Calendar,
+    path: (ws: string, proj: string) => `/w/${ws}/p/${proj}/calendar`,
   },
 ] as const;
 

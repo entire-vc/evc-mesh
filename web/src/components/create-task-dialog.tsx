@@ -22,6 +22,7 @@ interface CreateTaskDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   defaultStatusId?: string;
+  defaultDueDate?: string;
 }
 
 const priorities: { value: Priority; label: string }[] = [
@@ -36,6 +37,7 @@ export function CreateTaskDialog({
   open,
   onOpenChange,
   defaultStatusId,
+  defaultDueDate,
 }: CreateTaskDialogProps) {
   const { currentProject, statuses } = useProjectStore();
   const { createTask } = useTaskStore();
@@ -48,29 +50,34 @@ export function CreateTaskDialog({
   const [priority, setPriority] = useState<Priority>("none");
   const [labelsRaw, setLabelsRaw] = useState("");
   const [statusId, setStatusId] = useState(defaultStatusId ?? "");
+  const [dueDate, setDueDate] = useState(defaultDueDate ?? "");
   // "unassigned" | "user:{id}" | "agent:{id}"
   const [assigneeValue, setAssigneeValue] = useState("unassigned");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Fetch agents when dialog opens
-  useEffect(() => {
-    if (open && currentWorkspace) {
-      void fetchAgents(currentWorkspace.id);
-    }
-  }, [open, currentWorkspace, fetchAgents]);
+  const resetForm = () => {
+    setTitle("");
+    setDescription("");
+    setPriority("none");
+    setLabelsRaw("");
+    setStatusId(defaultStatusId ?? "");
+    setDueDate(defaultDueDate ?? "");
+    setAssigneeValue("unassigned");
+    setError(null);
+  };
 
-  // Reset form when dialog opens
-  const handleOpenChange = (nextOpen: boolean) => {
-    if (nextOpen) {
-      setTitle("");
-      setDescription("");
-      setPriority("none");
-      setLabelsRaw("");
-      setStatusId(defaultStatusId ?? "");
-      setAssigneeValue("unassigned");
-      setError(null);
+  // Fetch agents and reset form when dialog opens
+  useEffect(() => {
+    if (open) {
+      resetForm();
+      if (currentWorkspace) {
+        void fetchAgents(currentWorkspace.id);
+      }
     }
+  }, [open, currentWorkspace, fetchAgents]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleOpenChange = (nextOpen: boolean) => {
     onOpenChange(nextOpen);
   };
 
@@ -106,6 +113,7 @@ export function CreateTaskDialog({
         labels: labels.length > 0 ? labels : undefined,
         assignee_id: assigneeId,
         assignee_type: assigneeType,
+        due_date: dueDate || undefined,
       };
 
       // If a specific status was chosen, we create the task and then move it
@@ -117,6 +125,7 @@ export function CreateTaskDialog({
         await moveTask(task.id, { status_id: statusId });
       }
 
+      resetForm();
       handleOpenChange(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create task");
@@ -210,6 +219,18 @@ export function CreateTaskDialog({
               placeholder="Comma-separated labels"
               value={labelsRaw}
               onChange={(e) => setLabelsRaw(e.target.value)}
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <label htmlFor="ct-due-date" className="text-sm font-medium">
+              Due Date
+            </label>
+            <Input
+              id="ct-due-date"
+              type="date"
+              value={dueDate}
+              onChange={(e) => setDueDate(e.target.value)}
             />
           </div>
 

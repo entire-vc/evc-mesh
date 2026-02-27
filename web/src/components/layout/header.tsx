@@ -35,11 +35,12 @@ interface HeaderProps {
   onToggleSidebar: () => void;
 }
 
-function useCurrentView(): "board" | "list" | "timeline" | null {
+function useCurrentView(): "board" | "list" | "timeline" | "calendar" | null {
   const location = useLocation();
   const path = location.pathname;
   if (path.endsWith("/list")) return "list";
   if (path.endsWith("/timeline")) return "timeline";
+  if (path.endsWith("/calendar")) return "calendar";
   // Check if we're on a project page (board is the default project view)
   if (/\/w\/[^/]+\/p\/[^/]+\/?$/.test(path)) return "board";
   return null;

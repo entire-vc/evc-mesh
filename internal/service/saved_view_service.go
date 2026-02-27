@@ -17,6 +17,7 @@ var validViewTypes = map[string]bool{
 	"board":    true,
 	"list":     true,
 	"timeline": true,
+	"calendar": true,
 }
 
 // savedViewService implements SavedViewService.

@@ -831,10 +831,12 @@ func TestTaskHandler_ListSubtasks_Success(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusOK, rec.Code)
 
-	var result []domain.Task
-	err = json.Unmarshal(rec.Body.Bytes(), &result)
+	var wrapper struct {
+		Items []domain.Task `json:"items"`
+	}
+	err = json.Unmarshal(rec.Body.Bytes(), &wrapper)
 	require.NoError(t, err)
-	assert.Len(t, result, 2)
+	assert.Len(t, wrapper.Items, 2)
 }
 
 func TestTaskHandler_ListSubtasks_Empty(t *testing.T) {
@@ -859,10 +861,12 @@ func TestTaskHandler_ListSubtasks_Empty(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusOK, rec.Code)
 
-	var result []domain.Task
-	err = json.Unmarshal(rec.Body.Bytes(), &result)
+	var wrapper struct {
+		Items []domain.Task `json:"items"`
+	}
+	err = json.Unmarshal(rec.Body.Bytes(), &wrapper)
 	require.NoError(t, err)
-	assert.Empty(t, result)
+	assert.Empty(t, wrapper.Items)
 }
 
 func TestTaskHandler_ListSubtasks_InvalidUUID(t *testing.T) {

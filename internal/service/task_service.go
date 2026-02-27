@@ -21,17 +21,18 @@ import (
 var timeNow = time.Now
 
 type taskService struct {
-	taskRepo       repository.TaskRepository
-	statusRepo     repository.TaskStatusRepository
-	depRepo        repository.TaskDependencyRepository
-	activityRepo   repository.ActivityLogRepository
-	customFieldSvc CustomFieldService
-	projectRepo    repository.ProjectRepository
-	autoTransSvc   AutoTransitionService
-	ruleSvc        RuleService
-	eventBusSvc    EventBusService
-	webhookSvc     WebhookService
-	agentNotifySvc AgentNotifyService
+	taskRepo        repository.TaskRepository
+	statusRepo      repository.TaskStatusRepository
+	depRepo         repository.TaskDependencyRepository
+	activityRepo    repository.ActivityLogRepository
+	customFieldSvc  CustomFieldService
+	projectRepo     repository.ProjectRepository
+	autoTransSvc    AutoTransitionService
+	ruleSvc         RuleService
+	rulesConfigSvc  RulesService
+	eventBusSvc     EventBusService
+	webhookSvc      WebhookService
+	agentNotifySvc  AgentNotifyService
 }
 
 // NewTaskService returns a new TaskService backed by the given repositories.
@@ -111,6 +112,14 @@ func WithAgentNotifyService(ans AgentNotifyService) TaskServiceOption {
 	}
 }
 
+// WithRulesConfigService sets the optional rules configuration service.
+// When set, task creation will apply auto-assign rules from project/workspace config.
+func WithRulesConfigService(rcs RulesService) TaskServiceOption {
+	return func(s *taskService) {
+		s.rulesConfigSvc = rcs
+	}
+}
+
 // SetAutoTransitionService implements TaskServiceAutoTransitionConfigurable,
 // allowing the auto-transition service to be wired after construction.
 func (s *taskService) SetAutoTransitionService(svc AutoTransitionService) {
@@ -133,6 +142,11 @@ func (s *taskService) Create(ctx context.Context, task *domain.Task) error {
 				return err
 			}
 		}
+	}
+
+	// Apply auto-assign rules if the task has no assignee.
+	if task.AssigneeType == domain.AssigneeTypeUnassigned || task.AssigneeType == "" {
+		s.applyAutoAssign(ctx, task)
 	}
 
 	if task.ID == uuid.Nil {
@@ -573,6 +587,54 @@ func (s *taskService) bulkUpdateOne(ctx context.Context, projectID, taskID uuid.
 // GetMyTasks returns all tasks assigned to the given actor.
 func (s *taskService) GetMyTasks(ctx context.Context, assigneeID uuid.UUID, assigneeType domain.AssigneeType) ([]domain.Task, error) {
 	return s.taskRepo.ListByAssignee(ctx, assigneeID, assigneeType)
+}
+
+// applyAutoAssign applies assignment rules to a task if no assignee is set.
+// It checks by_priority, default_assignee, then fallback_chain in order.
+// Failures are logged but never block task creation.
+func (s *taskService) applyAutoAssign(ctx context.Context, task *domain.Task) {
+	if s.rulesConfigSvc == nil {
+		return
+	}
+
+	effective, err := s.rulesConfigSvc.GetEffectiveAssignmentRules(ctx, task.ProjectID)
+	if err != nil {
+		log.Printf("[auto-assign] WARNING: failed to get assignment rules for project %s: %v", task.ProjectID, err)
+		return
+	}
+
+	var assigneeID string
+
+	// 1. Check by_priority[task.priority]
+	if effective.ByPriority != nil {
+		if rule, ok := effective.ByPriority[string(task.Priority)]; ok && rule.Value != "" {
+			assigneeID = rule.Value
+		}
+	}
+
+	// 2. Fallback to default_assignee
+	if assigneeID == "" && effective.DefaultAssignee != nil && effective.DefaultAssignee.Value != "" {
+		assigneeID = effective.DefaultAssignee.Value
+	}
+
+	// 3. Fallback to first in fallback_chain
+	if assigneeID == "" && len(effective.FallbackChain) > 0 {
+		assigneeID = effective.FallbackChain[0]
+	}
+
+	if assigneeID == "" {
+		return
+	}
+
+	parsed, err := uuid.Parse(assigneeID)
+	if err != nil {
+		log.Printf("[auto-assign] WARNING: invalid assignee UUID %q in rules: %v", assigneeID, err)
+		return
+	}
+
+	task.AssigneeID = &parsed
+	task.AssigneeType = domain.AssigneeTypeAgent
+	log.Printf("[auto-assign] assigned task %q to agent %s via rules", task.Title, assigneeID)
 }
 
 // logActivity writes an activity log entry and publishes an event bus message.

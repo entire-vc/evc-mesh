@@ -17,6 +17,7 @@ import { IntegrationsPage } from "@/pages/integrations";
 import { InitiativesPage } from "@/pages/initiatives";
 import { TriagePage } from "@/pages/triage";
 import { ProjectUpdatesPage } from "@/pages/project-updates";
+import { CalendarPage } from "@/pages/calendar";
 import { WorkspaceSettingsPage } from "@/pages/workspace-settings";
 
 class ErrorBoundary extends Component<
@@ -109,6 +110,10 @@ export function App() {
           <Route
             path="w/:wsSlug/p/:projectSlug/timeline"
             element={<TimelinePage />}
+          />
+          <Route
+            path="w/:wsSlug/p/:projectSlug/calendar"
+            element={<CalendarPage />}
           />
           <Route
             path="w/:wsSlug/p/:projectSlug/updates"

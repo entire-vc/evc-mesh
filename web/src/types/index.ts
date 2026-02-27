@@ -410,7 +410,7 @@ export interface SparkInstallResponse {
 
 // Saved view types
 
-export type ViewType = "board" | "list" | "timeline";
+export type ViewType = "board" | "list" | "timeline" | "calendar";
 
 export interface SavedView {
   id: string;

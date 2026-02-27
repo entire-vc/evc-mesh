@@ -394,7 +394,7 @@ func (h *TaskHandler) ListSubtasks(c echo.Context) error {
 		return handleError(c, err)
 	}
 
-	return c.JSON(http.StatusOK, subtasks)
+	return c.JSON(http.StatusOK, map[string]any{"items": subtasks})
 }
 
 // assignTaskRequest represents the JSON body for assigning a task.

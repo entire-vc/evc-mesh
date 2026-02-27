@@ -22,10 +22,10 @@ export function SubtaskList({ taskId }: SubtaskListProps) {
 
   const fetchSubtasks = useCallback(async () => {
     try {
-      const data = await api<Task[]>(
+      const data = await api<{ items: Task[] }>(
         `/api/v1/tasks/${taskId}/subtasks`,
       );
-      setSubtasks(data ?? []);
+      setSubtasks(data.items ?? []);
     } catch {
       // silently fail
     } finally {

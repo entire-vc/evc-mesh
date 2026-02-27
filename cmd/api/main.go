@@ -114,6 +114,9 @@ func main() {
 	})
 	agentNotifySvc := service.NewAgentNotifyService(agentService, agentNotifyRedis)
 
+	// RulesService (assignment/workflow config) is created before taskService for auto-assign injection.
+	rulesService := service.NewRulesService(wsRuleRepo, projRuleRepo, ruleViolationLogRepo, agentRepo, workspaceMemberRepo, workspaceRepo, projectRepo)
+
 	taskService := service.NewTaskService(taskRepo, taskStatusRepo, taskDependencyRepo, activityLogRepo,
 		service.WithCustomFieldService(customFieldService),
 		service.WithProjectRepo(projectRepo),
@@ -121,6 +124,7 @@ func main() {
 		service.WithEventBusService(eventBusService),
 		service.WithWebhookService(webhookService),
 		service.WithAgentNotifyService(agentNotifySvc),
+		service.WithRulesConfigService(rulesService),
 	)
 
 	// Wire auto-transition service. It calls taskService.MoveTask, so taskService must already
@@ -148,9 +152,8 @@ func main() {
 	projectUpdateService := service.NewProjectUpdateService(projectUpdateRepo, projectRepo, taskRepo, taskStatusRepo)
 	initiativeService := service.NewInitiativeService(initiativeRepo, projectRepo)
 	triageService := service.NewTriageService(taskRepo)
-	rulesService := service.NewRulesService(wsRuleRepo, projRuleRepo, ruleViolationLogRepo, agentRepo, workspaceMemberRepo, workspaceRepo, projectRepo)
 
-	// customFieldService was already created above (before taskService, for CF value validation).
+	// rulesService and customFieldService were already created above (before taskService).
 
 	// Initialize S3 storage client for artifacts.
 	var artifactService service.ArtifactService
