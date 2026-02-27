@@ -243,7 +243,14 @@ func (h *AgentHandler) RegenerateKey(c echo.Context) error {
 		return handleError(c, err)
 	}
 
-	return c.JSON(http.StatusOK, map[string]string{
+	// Re-fetch agent so the response includes the updated record.
+	agent, err := h.agentService.GetByID(c.Request().Context(), agentID)
+	if err != nil {
+		return handleError(c, err)
+	}
+
+	return c.JSON(http.StatusOK, map[string]any{
+		"agent":   agent,
 		"api_key": newKey,
 	})
 }
