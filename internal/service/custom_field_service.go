@@ -162,6 +162,9 @@ func validateFieldOptions(ft domain.FieldType, opts json.RawMessage) error {
 }
 
 // validateSelectOptions ensures select/multiselect options contain a valid "choices" array.
+// Accepts two formats:
+//   - Simple:   ["value1", "value2"]
+//   - Advanced: [{"value": "v1", "label": "Label 1", "color": "#ff0000"}, ...]
 func validateSelectOptions(parsed map[string]json.RawMessage) error {
 	choicesRaw, ok := parsed["choices"]
 	if !ok {
@@ -170,17 +173,41 @@ func validateSelectOptions(parsed map[string]json.RawMessage) error {
 		})
 	}
 
-	var choices []string
-	if err := json.Unmarshal(choicesRaw, &choices); err != nil {
+	// Try simple string array first.
+	var simpleChoices []string
+	if err := json.Unmarshal(choicesRaw, &simpleChoices); err == nil {
+		if len(simpleChoices) == 0 {
+			return apierror.ValidationError(map[string]string{
+				"options": "choices must contain at least one option",
+			})
+		}
+		return nil
+	}
+
+	// Try advanced object array: [{value, label?, color?}, ...]
+	var advancedChoices []struct {
+		Value string `json:"value"`
+		Label string `json:"label"`
+		Color string `json:"color"`
+	}
+	if err := json.Unmarshal(choicesRaw, &advancedChoices); err != nil {
 		return apierror.ValidationError(map[string]string{
-			"options": "choices must be an array of strings",
+			"options": "choices must be an array of strings or objects with {value, label?, color?}",
 		})
 	}
 
-	if len(choices) == 0 {
+	if len(advancedChoices) == 0 {
 		return apierror.ValidationError(map[string]string{
 			"options": "choices must contain at least one option",
 		})
+	}
+
+	for i, c := range advancedChoices {
+		if c.Value == "" {
+			return apierror.ValidationError(map[string]string{
+				"options": fmt.Sprintf("choice at index %d must have a non-empty value", i),
+			})
+		}
 	}
 
 	return nil
@@ -498,7 +525,8 @@ func validateMultiselectValue(def *domain.CustomFieldDefinition, val interface{}
 	return ""
 }
 
-// extractChoices extracts the "choices" string array from field options JSON.
+// extractChoices extracts the choice values from field options JSON.
+// Supports both simple ["a","b"] and advanced [{value:"a",...}] formats.
 func extractChoices(opts json.RawMessage) []string {
 	if len(opts) == 0 || string(opts) == "{}" || string(opts) == "null" {
 		return nil
@@ -511,9 +539,26 @@ func extractChoices(opts json.RawMessage) []string {
 	if !ok {
 		return nil
 	}
+
+	// Try simple string array.
 	var choices []string
-	if err := json.Unmarshal(choicesRaw, &choices); err != nil {
-		return nil
+	if err := json.Unmarshal(choicesRaw, &choices); err == nil {
+		return choices
 	}
-	return choices
+
+	// Try advanced object array.
+	var advanced []struct {
+		Value string `json:"value"`
+	}
+	if err := json.Unmarshal(choicesRaw, &advanced); err == nil {
+		result := make([]string, 0, len(advanced))
+		for _, c := range advanced {
+			if c.Value != "" {
+				result = append(result, c.Value)
+			}
+		}
+		return result
+	}
+
+	return nil
 }
