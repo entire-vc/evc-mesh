@@ -138,7 +138,11 @@ func main() {
 	taskStatusService := service.NewTaskStatusService(taskStatusRepo, taskRepo, activityLogRepo)
 
 	// Real service implementations (replacing stubs from earlier sprints).
-	commentService := service.NewCommentService(commentRepo, taskRepo, activityLogRepo)
+	commentService := service.NewCommentService(commentRepo, taskRepo, activityLogRepo,
+		service.WithCommentAgentNotify(agentNotifySvc),
+		service.WithCommentStatusRepo(taskStatusRepo),
+		service.WithCommentProjectRepo(projectRepo),
+	)
 	depService := service.NewTaskDependencyService(taskDependencyRepo, taskRepo, activityLogRepo)
 	activityLogService := service.NewActivityLogService(activityLogRepo)
 

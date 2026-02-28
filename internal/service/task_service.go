@@ -180,15 +180,9 @@ func (s *taskService) Create(ctx context.Context, task *domain.Task) error {
 	}
 
 	// Notify assigned agent via push mechanisms (callback_url, SSE, long-poll).
-	if s.agentNotifySvc != nil && task.AssigneeType == domain.AssigneeTypeAgent && task.AssigneeID != nil {
-		s.agentNotifySvc.NotifyAgent(ctx, *task.AssigneeID, AgentNotification{
-			EventType: "task.assigned",
-			TaskID:    task.ID,
-			ProjectID: task.ProjectID,
-			Payload:   map[string]any{"title": task.Title, "priority": string(task.Priority)},
-			Timestamp: time.Now(),
-		})
-	}
+	s.notifyAssignedAgent(ctx, task, "task.assigned", map[string]any{
+		"assignee_id": map[string]any{"old": nil, "new": task.AssigneeID},
+	})
 
 	return nil
 }
@@ -274,13 +268,9 @@ func (s *taskService) Update(ctx context.Context, task *domain.Task) error {
 	}
 
 	// Notify newly assigned agent via push mechanisms (callback_url, SSE, long-poll).
-	if assigneeChanged && s.agentNotifySvc != nil && task.AssigneeType == domain.AssigneeTypeAgent && task.AssigneeID != nil {
-		s.agentNotifySvc.NotifyAgent(ctx, *task.AssigneeID, AgentNotification{
-			EventType: "task.assigned",
-			TaskID:    task.ID,
-			ProjectID: task.ProjectID,
-			Payload:   map[string]any{"title": task.Title, "priority": string(task.Priority)},
-			Timestamp: time.Now(),
+	if assigneeChanged {
+		s.notifyAssignedAgent(ctx, task, "task.assigned", map[string]any{
+			"assignee_id": map[string]any{"old": existing.AssigneeID, "new": task.AssigneeID},
 		})
 	}
 
@@ -416,16 +406,9 @@ func (s *taskService) MoveTask(ctx context.Context, taskID uuid.UUID, input Move
 	}
 
 	// Notify assigned agent about status change via push mechanisms (SSE, long-poll, callback).
-	if input.StatusID != nil && s.agentNotifySvc != nil && task.AssigneeType == domain.AssigneeTypeAgent && task.AssigneeID != nil {
-		s.agentNotifySvc.NotifyAgent(ctx, *task.AssigneeID, AgentNotification{
-			EventType: "task.status_changed",
-			TaskID:    task.ID,
-			ProjectID: task.ProjectID,
-			Payload: map[string]any{
-				"old_status_id": oldStatusID.String(),
-				"new_status_id": input.StatusID.String(),
-			},
-			Timestamp: timeNow(),
+	if input.StatusID != nil {
+		s.notifyAssignedAgent(ctx, task, "task.status_changed", map[string]any{
+			"status_id": map[string]any{"old": oldStatusID.String(), "new": input.StatusID.String()},
 		})
 	}
 
@@ -458,15 +441,10 @@ func (s *taskService) AssignTask(ctx context.Context, taskID uuid.UUID, input As
 	})
 
 	// Notify newly assigned agent via push mechanisms (callback_url, SSE, long-poll).
-	if s.agentNotifySvc != nil && input.AssigneeType == domain.AssigneeTypeAgent && input.AssigneeID != nil {
-		s.agentNotifySvc.NotifyAgent(ctx, *input.AssigneeID, AgentNotification{
-			EventType: "task.assigned",
-			TaskID:    task.ID,
-			ProjectID: task.ProjectID,
-			Payload:   map[string]any{"title": task.Title, "priority": string(task.Priority)},
-			Timestamp: time.Now(),
-		})
-	}
+	s.notifyAssignedAgent(ctx, task, "task.assigned", map[string]any{
+		"assignee_id":   map[string]any{"old": oldAssigneeID, "new": input.AssigneeID},
+		"assignee_type": map[string]any{"old": string(oldAssigneeType), "new": string(input.AssigneeType)},
+	})
 
 	return nil
 }
@@ -635,6 +613,67 @@ func (s *taskService) applyAutoAssign(ctx context.Context, task *domain.Task) {
 	task.AssigneeID = &parsed
 	task.AssigneeType = domain.AssigneeTypeAgent
 	log.Printf("[auto-assign] assigned task %q to agent %s via rules", task.Title, assigneeID)
+}
+
+// buildTaskSnapshot creates a map representation of a task for webhook payloads.
+// Description is truncated to 500 characters per spec.
+func (s *taskService) buildTaskSnapshot(ctx context.Context, task *domain.Task) map[string]any {
+	desc := task.Description
+	if len(desc) > 500 {
+		desc = desc[:500]
+	}
+
+	snap := map[string]any{
+		"id":            task.ID,
+		"project_id":    task.ProjectID,
+		"title":         task.Title,
+		"priority":      string(task.Priority),
+		"description":   desc,
+		"assignee_id":   task.AssigneeID,
+		"assignee_type": string(task.AssigneeType),
+		"labels":        task.Labels,
+	}
+
+	// Resolve status info.
+	if status, err := s.statusRepo.GetByID(ctx, task.StatusID); err == nil && status != nil {
+		snap["status"] = map[string]any{
+			"id":       status.ID,
+			"name":     status.Name,
+			"category": string(status.Category),
+		}
+	}
+
+	// Include assignee_name if available from enriched query.
+	if task.AssigneeName != nil {
+		snap["assignee_name"] = *task.AssigneeName
+	}
+
+	return snap
+}
+
+// notifyAssignedAgent sends a push notification to the assigned agent if it's an agent type.
+func (s *taskService) notifyAssignedAgent(ctx context.Context, task *domain.Task, eventType string, changes map[string]any) {
+	if s.agentNotifySvc == nil || task.AssigneeType != domain.AssigneeTypeAgent || task.AssigneeID == nil {
+		return
+	}
+
+	var wsID uuid.UUID
+	if s.projectRepo != nil {
+		if proj, err := s.projectRepo.GetByID(ctx, task.ProjectID); err == nil && proj != nil {
+			wsID = proj.WorkspaceID
+		}
+	}
+
+	s.agentNotifySvc.NotifyAgent(ctx, *task.AssigneeID, AgentNotification{
+		EventType:   eventType,
+		Timestamp:   timeNow(),
+		WorkspaceID: wsID,
+		Task:        s.buildTaskSnapshot(ctx, task),
+		AgentID:     *task.AssigneeID,
+		Changes:     changes,
+		TaskID:      task.ID,
+		ProjectID:   task.ProjectID,
+	})
 }
 
 // logActivity writes an activity log entry and publishes an event bus message.

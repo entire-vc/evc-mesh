@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"strings"
@@ -15,12 +16,18 @@ import (
 )
 
 // AgentNotification is the payload sent to an agent via push mechanisms.
+// It follows the spec format with a full task snapshot and change diff.
 type AgentNotification struct {
-	EventType string         `json:"event_type"` // task.assigned, task.created, task.status_changed
-	TaskID    uuid.UUID      `json:"task_id"`
-	ProjectID uuid.UUID      `json:"project_id"`
-	Payload   map[string]any `json:"payload"`
-	Timestamp time.Time      `json:"timestamp"`
+	EventType   string         `json:"event_type"`              // task.assigned, task.created, task.status_changed, task.commented
+	Timestamp   time.Time      `json:"timestamp"`               //nolint:all
+	WorkspaceID uuid.UUID      `json:"workspace_id"`            //nolint:all
+	Task        map[string]any `json:"task"`                    // Full task snapshot
+	AgentID     uuid.UUID      `json:"agent_id"`                // Target agent
+	Changes     map[string]any `json:"changes,omitempty"`       // {field: {old, new}}
+	Comment     map[string]any `json:"comment,omitempty"`       // For task.commented events
+	TaskID      uuid.UUID      `json:"task_id,omitempty"`       // Kept for Redis/SSE consumers
+	ProjectID   uuid.UUID      `json:"project_id,omitempty"`    // Kept for Redis/SSE consumers
+	Payload     map[string]any `json:"payload,omitempty"`       // Deprecated — kept for backwards compat
 }
 
 // AgentNotifyService sends push notifications to agents via callback URL and Redis pub/sub.
@@ -37,6 +44,9 @@ type agentNotifyService struct {
 	rdb      *redis.Client
 	client   *http.Client
 }
+
+// Retry backoff intervals for 5xx / timeout failures.
+var callbackRetryBackoffs = []time.Duration{10 * time.Second, 60 * time.Second, 300 * time.Second}
 
 // NewAgentNotifyService returns a new AgentNotifyService.
 func NewAgentNotifyService(agentSvc AgentService, rdb *redis.Client) AgentNotifyService {
@@ -62,8 +72,6 @@ func (s *agentNotifyService) NotifyAgent(ctx context.Context, agentID uuid.UUID,
 }
 
 func (s *agentNotifyService) dispatch(agentID uuid.UUID, event AgentNotification) {
-	// Use a background context: the original request context may be cancelled
-	// before we finish dispatching.
 	bgCtx := context.Background()
 
 	// Look up the agent to get its callback_url.
@@ -85,31 +93,58 @@ func (s *agentNotifyService) dispatch(agentID uuid.UUID, event AgentNotification
 		log.Printf("[agent-notify] failed to publish to Redis channel %s: %v", channel, pubErr)
 	}
 
-	// 2. If the agent has a callback_url, fire an HTTP POST.
+	// 2. If the agent has a callback_url, fire an HTTP POST with retry.
 	if strings.TrimSpace(agent.CallbackURL) == "" {
 		return
 	}
 
-	req, err := http.NewRequest(http.MethodPost, agent.CallbackURL, bytes.NewReader(payloadBytes))
-	if err != nil {
-		log.Printf("[agent-notify] failed to build callback request for agent %s (url: %s): %v", agentID, agent.CallbackURL, err)
-		return
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Mesh-Event", event.EventType)
-	req.Header.Set("X-Mesh-Agent", agentID.String())
-	req.Header.Set("User-Agent", "evc-mesh-agent-notify/1.0")
+	deliveryID := uuid.New().String()
+	s.deliverWithRetry(agent.CallbackURL, agentID, event.EventType, deliveryID, payloadBytes)
+}
 
-	resp, err := s.client.Do(req)
-	if err != nil {
-		log.Printf("[agent-notify] callback POST failed for agent %s (url: %s): %v", agentID, agent.CallbackURL, err)
-		return
-	}
-	defer resp.Body.Close()
+// deliverWithRetry POSTs the payload to callbackURL. On 5xx or timeout it retries
+// up to 3 times with backoff (10s, 60s, 300s). 4xx errors are not retried.
+func (s *agentNotifyService) deliverWithRetry(callbackURL string, agentID uuid.UUID, eventType, deliveryID string, body []byte) {
+	for attempt := 0; attempt <= len(callbackRetryBackoffs); attempt++ {
+		if attempt > 0 {
+			time.Sleep(callbackRetryBackoffs[attempt-1])
+		}
 
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		log.Printf("[agent-notify] callback POST for agent %s returned non-2xx status: %d", agentID, resp.StatusCode)
+		req, err := http.NewRequest(http.MethodPost, callbackURL, bytes.NewReader(body))
+		if err != nil {
+			log.Printf("[agent-notify] failed to build callback request for agent %s: %v", agentID, err)
+			return
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Mesh-Event", eventType)
+		req.Header.Set("X-Mesh-Delivery", deliveryID)
+		req.Header.Set("X-Mesh-Agent", agentID.String())
+		req.Header.Set("User-Agent", "evc-mesh-agent-notify/1.0")
+
+		resp, err := s.client.Do(req)
+		if err != nil {
+			log.Printf("[agent-notify] callback POST failed for agent %s (attempt %d, url: %s): %v", agentID, attempt+1, callbackURL, err)
+			continue // timeout or network error — retry
+		}
+		io.Copy(io.Discard, resp.Body) //nolint:errcheck
+		resp.Body.Close()
+
+		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			if attempt > 0 {
+				log.Printf("[agent-notify] callback delivered for agent %s after %d retries", agentID, attempt)
+			}
+			return // success
+		}
+
+		if resp.StatusCode >= 400 && resp.StatusCode < 500 {
+			log.Printf("[agent-notify] callback POST for agent %s returned %d (4xx) — not retrying", agentID, resp.StatusCode)
+			return // 4xx — do not retry
+		}
+
+		log.Printf("[agent-notify] callback POST for agent %s returned %d (attempt %d/%d)", agentID, resp.StatusCode, attempt+1, len(callbackRetryBackoffs)+1)
 	}
+
+	log.Printf("[agent-notify] callback delivery exhausted for agent %s (delivery: %s)", agentID, deliveryID)
 }
 
 // Ensure agentNotifyService satisfies the AgentNotifyService interface.

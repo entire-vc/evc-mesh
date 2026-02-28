@@ -12,10 +12,39 @@ import (
 	"github.com/entire-vc/evc-mesh/pkg/pagination"
 )
 
+// truncateDesc truncates a string to maxLen characters.
+func truncateDesc(s string, maxLen int) string {
+	if len(s) > maxLen {
+		return s[:maxLen]
+	}
+	return s
+}
+
 type commentService struct {
-	commentRepo  repository.CommentRepository
-	taskRepo     repository.TaskRepository
-	activityRepo repository.ActivityLogRepository
+	commentRepo    repository.CommentRepository
+	taskRepo       repository.TaskRepository
+	activityRepo   repository.ActivityLogRepository
+	agentNotifySvc AgentNotifyService
+	statusRepo     repository.TaskStatusRepository
+	projectRepo    repository.ProjectRepository
+}
+
+// CommentServiceOption configures optional dependencies for CommentService.
+type CommentServiceOption func(*commentService)
+
+// WithCommentAgentNotify sets the agent notification service on the comment service.
+func WithCommentAgentNotify(ans AgentNotifyService) CommentServiceOption {
+	return func(s *commentService) { s.agentNotifySvc = ans }
+}
+
+// WithCommentStatusRepo sets the status repo for building task snapshots.
+func WithCommentStatusRepo(r repository.TaskStatusRepository) CommentServiceOption {
+	return func(s *commentService) { s.statusRepo = r }
+}
+
+// WithCommentProjectRepo sets the project repo for resolving workspace_id.
+func WithCommentProjectRepo(r repository.ProjectRepository) CommentServiceOption {
+	return func(s *commentService) { s.projectRepo = r }
 }
 
 // NewCommentService returns a new CommentService backed by the given repositories.
@@ -23,12 +52,17 @@ func NewCommentService(
 	commentRepo repository.CommentRepository,
 	taskRepo repository.TaskRepository,
 	activityRepo repository.ActivityLogRepository,
+	opts ...CommentServiceOption,
 ) CommentService {
-	return &commentService{
+	s := &commentService{
 		commentRepo:  commentRepo,
 		taskRepo:     taskRepo,
 		activityRepo: activityRepo,
 	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 // Create validates and persists a new comment.
@@ -72,7 +106,59 @@ func (s *commentService) Create(ctx context.Context, comment *domain.Comment) er
 	comment.CreatedAt = now
 	comment.UpdatedAt = now
 
-	return s.commentRepo.Create(ctx, comment)
+	if err := s.commentRepo.Create(ctx, comment); err != nil {
+		return err
+	}
+
+	// Notify assigned agent about the new comment.
+	if s.agentNotifySvc != nil && task.AssigneeType == domain.AssigneeTypeAgent && task.AssigneeID != nil {
+		var wsID uuid.UUID
+		if s.projectRepo != nil {
+			if proj, err := s.projectRepo.GetByID(ctx, task.ProjectID); err == nil && proj != nil {
+				wsID = proj.WorkspaceID
+			}
+		}
+
+		taskSnap := map[string]any{
+			"id":            task.ID,
+			"project_id":    task.ProjectID,
+			"title":         task.Title,
+			"priority":      string(task.Priority),
+			"description":   truncateDesc(task.Description, 500),
+			"assignee_id":   task.AssigneeID,
+			"assignee_type": string(task.AssigneeType),
+			"labels":        task.Labels,
+		}
+		if s.statusRepo != nil {
+			if status, err := s.statusRepo.GetByID(ctx, task.StatusID); err == nil && status != nil {
+				taskSnap["status"] = map[string]any{
+					"id": status.ID, "name": status.Name, "category": string(status.Category),
+				}
+			}
+		}
+
+		commentBody := comment.Body
+		if len(commentBody) > 500 {
+			commentBody = commentBody[:500]
+		}
+
+		s.agentNotifySvc.NotifyAgent(ctx, *task.AssigneeID, AgentNotification{
+			EventType:   "task.commented",
+			Timestamp:   now,
+			WorkspaceID: wsID,
+			Task:        taskSnap,
+			AgentID:     *task.AssigneeID,
+			Comment: map[string]any{
+				"id":        comment.ID,
+				"body":      commentBody,
+				"author_id": comment.AuthorID,
+			},
+			TaskID:    task.ID,
+			ProjectID: task.ProjectID,
+		})
+	}
+
+	return nil
 }
 
 // Update validates that the comment exists and persists body changes.
