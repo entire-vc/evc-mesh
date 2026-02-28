@@ -55,6 +55,7 @@ func JWTAuth(authService *auth.Service) echo.MiddlewareFunc {
 
 			// Propagate actor into Go context for service layer.
 			goCtx := actorctx.WithActor(c.Request().Context(), userID, domain.ActorTypeUser)
+			goCtx = actorctx.WithActorName(goCtx, claims.Name)
 			c.SetRequest(c.Request().WithContext(goCtx))
 
 			return next(c)
@@ -90,6 +91,7 @@ func AgentKeyAuth(agentService service.AgentService) echo.MiddlewareFunc {
 
 			// Propagate actor into Go context for service layer.
 			goCtx := actorctx.WithActor(c.Request().Context(), agent.ID, domain.ActorTypeAgent)
+			goCtx = actorctx.WithActorName(goCtx, agent.Name)
 			c.SetRequest(c.Request().WithContext(goCtx))
 
 			return next(c)
@@ -111,6 +113,7 @@ func DualAuth(authService *auth.Service, agentService service.AgentService) echo
 						c.Set(ContextKeyEmail, claims.Email)
 						// Propagate actor into Go context for service layer.
 						goCtx := actorctx.WithActor(c.Request().Context(), userID, domain.ActorTypeUser)
+						goCtx = actorctx.WithActorName(goCtx, claims.Name)
 						c.SetRequest(c.Request().WithContext(goCtx))
 						return next(c)
 					}
@@ -126,6 +129,7 @@ func DualAuth(authService *auth.Service, agentService service.AgentService) echo
 						c.Set(ContextKeyWorkspaceID, agent.WorkspaceID)
 						// Propagate actor into Go context for service layer.
 						goCtx := actorctx.WithActor(c.Request().Context(), agent.ID, domain.ActorTypeAgent)
+						goCtx = actorctx.WithActorName(goCtx, agent.Name)
 						c.SetRequest(c.Request().WithContext(goCtx))
 						return next(c)
 					}
@@ -152,6 +156,7 @@ func OptionalAuth(authService *auth.Service, agentService service.AgentService) 
 						c.Set(ContextKeyEmail, claims.Email)
 						// Propagate actor into Go context for service layer.
 						goCtx := actorctx.WithActor(c.Request().Context(), userID, domain.ActorTypeUser)
+						goCtx = actorctx.WithActorName(goCtx, claims.Name)
 						c.SetRequest(c.Request().WithContext(goCtx))
 						return next(c)
 					}
@@ -167,6 +172,7 @@ func OptionalAuth(authService *auth.Service, agentService service.AgentService) 
 						c.Set(ContextKeyWorkspaceID, agent.WorkspaceID)
 						// Propagate actor into Go context for service layer.
 						goCtx := actorctx.WithActor(c.Request().Context(), agent.ID, domain.ActorTypeAgent)
+						goCtx = actorctx.WithActorName(goCtx, agent.Name)
 						c.SetRequest(c.Request().WithContext(goCtx))
 						return next(c)
 					}

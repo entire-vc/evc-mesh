@@ -23,6 +23,9 @@ type AgentNotification struct {
 	WorkspaceID uuid.UUID      `json:"workspace_id"`            //nolint:all
 	Task        map[string]any `json:"task"`                    // Full task snapshot
 	AgentID     uuid.UUID      `json:"agent_id"`                // Target agent
+	ActorID     uuid.UUID      `json:"actor_id"`                // Who initiated the action
+	ActorType   string         `json:"actor_type"`              // "agent" | "user"
+	ActorName   string         `json:"actor_name"`              // Display name of actor
 	Changes     map[string]any `json:"changes,omitempty"`       // {field: {old, new}}
 	Comment     map[string]any `json:"comment,omitempty"`       // For task.commented events
 	TaskID      uuid.UUID      `json:"task_id,omitempty"`       // Kept for Redis/SSE consumers

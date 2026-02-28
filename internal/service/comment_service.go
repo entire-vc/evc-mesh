@@ -8,6 +8,7 @@ import (
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/repository"
+	"github.com/entire-vc/evc-mesh/pkg/actorctx"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 	"github.com/entire-vc/evc-mesh/pkg/pagination"
 )
@@ -142,12 +143,19 @@ func (s *commentService) Create(ctx context.Context, comment *domain.Comment) er
 			commentBody = commentBody[:500]
 		}
 
+		// Extract actor info from request context.
+		actorID, actorType := actorctx.FromContext(ctx)
+		actorName := actorctx.NameFromContext(ctx)
+
 		s.agentNotifySvc.NotifyAgent(ctx, *task.AssigneeID, AgentNotification{
 			EventType:   "task.commented",
 			Timestamp:   now,
 			WorkspaceID: wsID,
 			Task:        taskSnap,
 			AgentID:     *task.AssigneeID,
+			ActorID:     actorID,
+			ActorType:   string(actorType),
+			ActorName:   actorName,
 			Comment: map[string]any{
 				"id":        comment.ID,
 				"body":      commentBody,

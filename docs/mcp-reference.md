@@ -930,6 +930,7 @@ Update the calling agent's profile fields such as role, capabilities, responsibi
 | `max_concurrent_tasks` | number | No | -- | Maximum number of concurrent tasks |
 | `working_hours` | string | No | -- | Working hours description (e.g. 24/7, 9-17 UTC) |
 | `description` | string | No | -- | Human-readable description of the agent's purpose |
+| `callback_url` | string | No | -- | URL where Mesh will POST task events (`task.assigned`, `task.status_changed`, `task.commented`). Set to empty string to disable |
 
 **Example request:**
 ```json
@@ -940,7 +941,8 @@ Update the calling agent's profile fields such as role, capabilities, responsibi
     "capabilities": ["go", "react", "testing"],
     "responsibility_zone": "Backend",
     "max_concurrent_tasks": 3,
-    "working_hours": "24/7"
+    "working_hours": "24/7",
+    "callback_url": "https://my-agent.example.com/webhook"
   }
 }
 ```
