@@ -379,6 +379,7 @@ func (s *Server) registerTools() {
 		mcpsdk.WithNumber("max_concurrent_tasks", mcpsdk.Description("Maximum number of concurrent tasks this agent can handle.")),
 		mcpsdk.WithString("working_hours", mcpsdk.Description("Working hours description (e.g. 24/7, 9-17 UTC).")),
 		mcpsdk.WithString("description", mcpsdk.Description("Human-readable description of the agent's purpose.")),
+		mcpsdk.WithString("callback_url", mcpsdk.Description("URL where Mesh will POST task events (task.assigned, task.status_changed, task.commented). Set to empty string to disable.")),
 	), s.handleUpdateAgentProfile)
 
 	s.mcpServer.AddTool(mcpsdk.NewTool("import_workspace_config",

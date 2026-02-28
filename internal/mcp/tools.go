@@ -1230,16 +1230,38 @@ func (s *Server) handleUpdateAgentProfile(ctx context.Context, request mcpsdk.Ca
 		body["description"] = mcpsdk.ParseString(request, "description", "")
 	}
 
-	if len(body) == 0 {
+	// callback_url goes to PATCH /agents/me (self-service), not PUT /agents/:id/profile.
+	var callbackURLUpdate bool
+	if _, ok := args["callback_url"]; ok {
+		callbackURLUpdate = true
+	}
+
+	if len(body) == 0 && !callbackURLUpdate {
 		return errResult("no profile fields to update")
 	}
 
-	result, err := s.getRESTClient(ctx).UpdateAgentProfile(ctx, session.AgentID.String(), body)
-	if err != nil {
-		return errResult("failed to update agent profile: %v", err)
+	var profileResult map[string]any
+	if len(body) > 0 {
+		var err error
+		profileResult, err = s.getRESTClient(ctx).UpdateAgentProfile(ctx, session.AgentID.String(), body)
+		if err != nil {
+			return errResult("failed to update agent profile: %v", err)
+		}
 	}
 
-	return jsonResult(result)
+	// Persist callback_url via PATCH /agents/me.
+	if callbackURLUpdate {
+		cbURL := mcpsdk.ParseString(request, "callback_url", "")
+		if _, err := s.getRESTClient(ctx).UpdateMe(ctx, map[string]any{"callback_url": cbURL}); err != nil {
+			return errResult("failed to update callback_url: %v", err)
+		}
+		if profileResult == nil {
+			profileResult = map[string]any{}
+		}
+		profileResult["callback_url"] = cbURL
+	}
+
+	return jsonResult(profileResult)
 }
 
 // ============================================================================
