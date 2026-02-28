@@ -113,7 +113,7 @@ export function CreateTaskDialog({
         labels: labels.length > 0 ? labels : undefined,
         assignee_id: assigneeId,
         assignee_type: assigneeType,
-        due_date: dueDate || undefined,
+        due_date: dueDate ? `${dueDate}T00:00:00Z` : undefined,
       };
 
       // If a specific status was chosen, we create the task and then move it
