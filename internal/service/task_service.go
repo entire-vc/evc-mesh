@@ -667,7 +667,6 @@ func (s *taskService) notifyAssignedAgent(ctx context.Context, task *domain.Task
 	// Extract actor info from request context (set by auth middleware).
 	actorID, actorType := actorctx.FromContext(ctx)
 	actorName := actorctx.NameFromContext(ctx)
-	log.Printf("[agent-notify] actor: id=%s type=%s name=%q for event %s", actorID, actorType, actorName, eventType)
 
 	s.agentNotifySvc.NotifyAgent(ctx, *task.AssigneeID, AgentNotification{
 		EventType:   eventType,
