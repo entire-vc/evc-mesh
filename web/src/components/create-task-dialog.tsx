@@ -114,16 +114,10 @@ export function CreateTaskDialog({
         assignee_id: assigneeId,
         assignee_type: assigneeType,
         due_date: dueDate ? `${dueDate}T00:00:00Z` : undefined,
+        status_id: statusId || undefined,
       };
 
-      // If a specific status was chosen, we create the task and then move it
-      // The API creates tasks in the default status; we move after if needed
-      const task = await createTask(currentProject.id, req);
-
-      if (statusId && statusId !== task.status_id) {
-        const { moveTask } = useTaskStore.getState();
-        await moveTask(task.id, { status_id: statusId });
-      }
+      await createTask(currentProject.id, req);
 
       resetForm();
       handleOpenChange(false);
