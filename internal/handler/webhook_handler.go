@@ -182,25 +182,21 @@ func (h *WebhookHandler) ListDeliveries(c echo.Context) error {
 	})
 }
 
-// Test handles POST /webhooks/:webhook_id/test — sends a test event to the webhook URL.
+// Test handles POST /webhooks/:webhook_id/test — sends a test delivery directly to the webhook URL.
 func (h *WebhookHandler) Test(c echo.Context) error {
 	webhookID, err := parseWebhookID(c)
 	if err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid webhook_id"))
 	}
 
-	wh, err := h.webhookService.GetByID(c.Request().Context(), webhookID)
-	if err != nil {
+	// Verify the webhook exists before accepting the request.
+	if _, err := h.webhookService.GetByID(c.Request().Context(), webhookID); err != nil {
 		return handleError(c, err)
 	}
 
-	// Fire a test event asynchronously.
-	testPayload := map[string]any{
-		"event":      "webhook.test",
-		"webhook_id": wh.ID.String(),
-		"message":    "This is a test delivery from evc-mesh",
-	}
-	go h.webhookService.Dispatch(c.Request().Context(), wh.WorkspaceID, "webhook.test", testPayload)
+	// Fire a test delivery directly to the webhook URL, bypassing event subscription filtering.
+	// TestDelivery is fire-and-forget and records the delivery in the log.
+	h.webhookService.TestDelivery(c.Request().Context(), webhookID)
 
 	return c.JSON(http.StatusAccepted, map[string]string{
 		"status":  "dispatched",

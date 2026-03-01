@@ -59,10 +59,11 @@ type RuleContext struct {
 
 // ruleService implements RuleService.
 type ruleService struct {
-	ruleRepo     repository.RuleRepository
-	activityRepo repository.ActivityLogRepository
-	commentRepo  repository.CommentRepository
-	taskRepo     repository.TaskRepository
+	ruleRepo       repository.RuleRepository
+	activityRepo   repository.ActivityLogRepository
+	commentRepo    repository.CommentRepository
+	taskRepo       repository.TaskRepository
+	taskStatusRepo repository.TaskStatusRepository
 }
 
 // NewRuleService returns a new RuleService.
@@ -95,6 +96,13 @@ func WithRuleCommentRepo(cr repository.CommentRepository) RuleServiceOption {
 func WithRuleTaskRepo(tr repository.TaskRepository) RuleServiceOption {
 	return func(s *ruleService) {
 		s.taskRepo = tr
+	}
+}
+
+// WithRuleTaskStatusRepo sets the task status repository for evaluators.
+func WithRuleTaskStatusRepo(tsr repository.TaskStatusRepository) RuleServiceOption {
+	return func(s *ruleService) {
+		s.taskStatusRepo = tsr
 	}
 }
 
@@ -281,9 +289,10 @@ func (s *ruleService) Evaluate(ctx context.Context, input EvaluateInput) ([]doma
 	}
 
 	deps := evaluatorDeps{
-		commentRepo: s.commentRepo,
-		taskRepo:    s.taskRepo,
-		ruleRepo:    s.ruleRepo,
+		commentRepo:    s.commentRepo,
+		taskRepo:       s.taskRepo,
+		taskStatusRepo: s.taskStatusRepo,
+		ruleRepo:       s.ruleRepo,
 	}
 
 	var violations []domain.RuleViolation

@@ -20,9 +20,10 @@ type RuleEvaluator func(ctx context.Context, rule domain.Rule, input EvaluateInp
 // evaluatorDeps groups read-only repositories used by evaluators.
 // All fields are optional; evaluators should degrade gracefully if nil.
 type evaluatorDeps struct {
-	commentRepo repository.CommentRepository
-	taskRepo    repository.TaskRepository
-	ruleRepo    repository.RuleRepository
+	commentRepo    repository.CommentRepository
+	taskRepo       repository.TaskRepository
+	taskStatusRepo repository.TaskStatusRepository
+	ruleRepo       repository.RuleRepository
 }
 
 // EvaluateInput holds everything an evaluator needs to know about the action being evaluated.
@@ -168,16 +169,20 @@ func evalRequireSubtasksDone(ctx context.Context, rule domain.Rule, input Evalua
 		return nil, nil
 	}
 
-	// We need status categories for subtasks. We can only check via task status.
-	// For simplicity, we check whether CompletedAt is set (done category sets this).
-	// This avoids a per-subtask status lookup.
 	for _, st := range subtasks {
 		if st.CompletedAt != nil {
 			continue // done
 		}
-		// If allow_cancelled is true, tasks that were soft-cancelled are also OK.
-		// Since we don't have category here without an extra query, we check CompletedAt only.
-		// This is a conservative check; the full evaluation would need status categories.
+
+		// If allow_cancelled is enabled, check whether this subtask's status category
+		// is "cancelled" before treating it as a blocker. This requires a status lookup.
+		if cfg.AllowCancelled && deps.taskStatusRepo != nil {
+			status, err := deps.taskStatusRepo.GetByID(ctx, st.StatusID)
+			if err == nil && status != nil && status.Category == domain.StatusCategoryCancelled {
+				continue // cancelled subtasks are acceptable when allow_cancelled is set
+			}
+		}
+
 		return &domain.RuleViolation{
 			RuleID:      rule.ID,
 			RuleName:    rule.Name,

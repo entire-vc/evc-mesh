@@ -167,6 +167,7 @@ type updateAgentRequest struct {
 	Capabilities       map[string]any    `json:"capabilities"`
 	ProfileDescription *string           `json:"profile_description"`
 	CallbackURL        *string           `json:"callback_url"`
+	CurrentTaskID      *uuid.UUID        `json:"current_task_id"`
 }
 
 // Update handles PATCH /agents/:agent_id
@@ -206,6 +207,9 @@ func (h *AgentHandler) Update(c echo.Context) error {
 	}
 	if req.CallbackURL != nil {
 		agent.CallbackURL = *req.CallbackURL
+	}
+	if req.CurrentTaskID != nil {
+		agent.CurrentTaskID = req.CurrentTaskID
 	}
 
 	if err := h.agentService.Update(c.Request().Context(), agent); err != nil {

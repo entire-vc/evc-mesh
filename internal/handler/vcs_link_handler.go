@@ -1,6 +1,12 @@
 package handler
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/hex"
+	"encoding/json"
+	"io"
 	"net/http"
 	"strings"
 
@@ -14,12 +20,18 @@ import (
 
 // VCSLinkHandler handles HTTP requests for VCS link management.
 type VCSLinkHandler struct {
-	vcsService service.VCSLinkService
+	vcsService          service.VCSLinkService
+	githubWebhookSecret string // HMAC-SHA256 secret for GitHub webhook validation; empty = skip validation
 }
 
 // NewVCSLinkHandler creates a new VCSLinkHandler.
 func NewVCSLinkHandler(svc service.VCSLinkService) *VCSLinkHandler {
 	return &VCSLinkHandler{vcsService: svc}
+}
+
+// NewVCSLinkHandlerWithSecret creates a VCSLinkHandler with GitHub webhook HMAC validation.
+func NewVCSLinkHandlerWithSecret(svc service.VCSLinkService, githubWebhookSecret string) *VCSLinkHandler {
+	return &VCSLinkHandler{vcsService: svc, githubWebhookSecret: githubWebhookSecret}
 }
 
 // createVCSLinkRequest is the JSON body for creating a VCS link.
@@ -158,14 +170,33 @@ type gitHubRepoPayload struct {
 
 // GitHubWebhook handles POST /webhooks/github — receives GitHub webhook events.
 // It auto-links tasks when commit messages or PR titles contain MESH-{task_id_prefix}.
+// When MESH_GITHUB_WEBHOOK_SECRET is set, the X-Hub-Signature-256 header is validated
+// using HMAC-SHA256. Requests without a valid signature are rejected with 401.
 func (h *VCSLinkHandler) GitHubWebhook(c echo.Context) error {
 	event := c.Request().Header.Get("X-GitHub-Event")
 	if event == "" {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("missing X-GitHub-Event header"))
 	}
 
+	// Read the raw body so we can (a) verify the HMAC signature and (b) decode JSON.
+	rawBody, err := io.ReadAll(c.Request().Body)
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("failed to read request body"))
+	}
+
+	// Validate HMAC-SHA256 signature when a secret is configured.
+	if h.githubWebhookSecret != "" {
+		sig := c.Request().Header.Get("X-Hub-Signature-256")
+		if sig == "" {
+			return c.JSON(http.StatusUnauthorized, apierror.Unauthorized("missing X-Hub-Signature-256 header"))
+		}
+		if !verifyGitHubSignature(rawBody, sig, h.githubWebhookSecret) {
+			return c.JSON(http.StatusUnauthorized, apierror.Unauthorized("invalid webhook signature"))
+		}
+	}
+
 	var payload GitHubWebhookPayload
-	if err := c.Bind(&payload); err != nil {
+	if jsonErr := decodeJSON(rawBody, &payload); jsonErr != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid payload"))
 	}
 
@@ -226,6 +257,30 @@ func (h *VCSLinkHandler) GitHubWebhook(c echo.Context) error {
 	}
 
 	return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// verifyGitHubSignature validates the X-Hub-Signature-256 header value against the
+// HMAC-SHA256 of body using secret. The header format is "sha256=<hex>".
+// Uses constant-time comparison to prevent timing attacks.
+func verifyGitHubSignature(body []byte, sigHeader, secret string) bool {
+	const prefix = "sha256="
+	if !strings.HasPrefix(sigHeader, prefix) {
+		return false
+	}
+	hexSig := sigHeader[len(prefix):]
+	gotSig, err := hex.DecodeString(hexSig)
+	if err != nil {
+		return false
+	}
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write(body)
+	expected := mac.Sum(nil)
+	return subtle.ConstantTimeCompare(gotSig, expected) == 1
+}
+
+// decodeJSON unmarshals JSON bytes into v.
+func decodeJSON(data []byte, v any) error {
+	return json.Unmarshal(data, v)
 }
 
 // extractMeshTaskID looks for a MESH-{uuid_prefix} pattern in the text

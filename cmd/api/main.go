@@ -115,7 +115,9 @@ func main() {
 	agentNotifySvc := service.NewAgentNotifyService(agentService, agentNotifyRedis)
 
 	// RulesService (assignment/workflow config) is created before taskService for auto-assign injection.
-	rulesService := service.NewRulesService(wsRuleRepo, projRuleRepo, ruleViolationLogRepo, agentRepo, workspaceMemberRepo, workspaceRepo, projectRepo)
+	rulesService := service.NewRulesServiceWithOptions(wsRuleRepo, projRuleRepo, ruleViolationLogRepo, agentRepo, workspaceMemberRepo, workspaceRepo, projectRepo,
+		service.WithRulesRuleRepo(ruleRepo),
+	)
 
 	taskService := service.NewTaskService(taskRepo, taskStatusRepo, taskDependencyRepo, activityLogRepo,
 		service.WithCustomFieldService(customFieldService),
@@ -219,7 +221,7 @@ func main() {
 	taskContextHandler := handler.NewTaskContextHandler(taskService, commentService, artifactService, depService, eventBusService)
 	webhookHandler := handler.NewWebhookHandler(webhookService)
 	savedViewHandler := handler.NewSavedViewHandler(savedViewService)
-	vcsLinkHandler := handler.NewVCSLinkHandler(vcsLinkService)
+	vcsLinkHandler := handler.NewVCSLinkHandlerWithSecret(vcsLinkService, cfg.Webhook.GitHubSecret)
 	integrationHandler := handler.NewIntegrationHandler(integrationService)
 	analyticsHandler := handler.NewAnalyticsHandler(analyticsService)
 	projectUpdateHandler := handler.NewProjectUpdateHandler(projectUpdateService)

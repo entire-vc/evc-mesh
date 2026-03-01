@@ -303,6 +303,10 @@ type WebhookService interface {
 	// Dispatch finds active webhooks for the given event type and fires HTTP POSTs
 	// asynchronously (fire-and-forget). It never blocks or returns an error to the caller.
 	Dispatch(ctx context.Context, workspaceID uuid.UUID, eventType string, payload any)
+	// TestDelivery sends a test HTTP POST directly to the webhook's URL, bypassing
+	// event subscription filtering. The delivery is recorded in the delivery log.
+	// It is asynchronous and always returns immediately.
+	TestDelivery(ctx context.Context, webhookID uuid.UUID)
 }
 
 // VCSLinkService provides business logic for VCS link management.

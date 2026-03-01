@@ -23,6 +23,7 @@ type rulesService struct {
 	memberRepo    repository.WorkspaceMemberRepository
 	workspaceRepo repository.WorkspaceRepository
 	projectRepo   repository.ProjectRepository
+	ruleRepo      repository.RuleRepository // optional; used for task count queries in team directory
 }
 
 // NewRulesService creates a new rulesService.
@@ -44,6 +45,43 @@ func NewRulesService(
 		workspaceRepo: workspaceRepo,
 		projectRepo:   projectRepo,
 	}
+}
+
+// WithRuleRepo sets the RuleRepository on the rulesService, enabling real task
+// count queries in GetTeamDirectory.
+func WithRulesRuleRepo(rr repository.RuleRepository) func(*rulesService) {
+	return func(s *rulesService) { s.ruleRepo = rr }
+}
+
+// applyRulesOptions applies functional options to a rulesService.
+func applyRulesOptions(s *rulesService, opts []func(*rulesService)) {
+	for _, opt := range opts {
+		opt(s)
+	}
+}
+
+// NewRulesServiceWithOptions creates a rulesService with optional functional options.
+func NewRulesServiceWithOptions(
+	wsRuleRepo repository.WorkspaceRuleConfigRepository,
+	projRuleRepo repository.ProjectRuleConfigRepository,
+	violationRepo repository.RuleViolationLogRepository,
+	agentRepo repository.AgentRepository,
+	memberRepo repository.WorkspaceMemberRepository,
+	workspaceRepo repository.WorkspaceRepository,
+	projectRepo repository.ProjectRepository,
+	opts ...func(*rulesService),
+) RulesService {
+	s := &rulesService{
+		wsRuleRepo:    wsRuleRepo,
+		projRuleRepo:  projRuleRepo,
+		violationRepo: violationRepo,
+		agentRepo:     agentRepo,
+		memberRepo:    memberRepo,
+		workspaceRepo: workspaceRepo,
+		projectRepo:   projectRepo,
+	}
+	applyRulesOptions(s, opts)
+	return s
 }
 
 // --------------------------------------------------------------------------
@@ -68,8 +106,20 @@ func (s *rulesService) GetTeamDirectory(ctx context.Context, workspaceID uuid.UU
 		return nil, fmt.Errorf("list agents: %w", err)
 	}
 
+	// activeCategories are the status categories that count as current work.
+	activeCategories := []string{
+		string(domain.StatusCategoryTodo),
+		string(domain.StatusCategoryInProgress),
+	}
+
 	agents := make([]domain.TeamDirectoryAgent, 0, len(agentPage.Items))
 	for _, a := range agentPage.Items {
+		currentTasks := 0
+		if s.ruleRepo != nil {
+			if cnt, err := s.ruleRepo.CountTasksByAssigneeAndCategory(ctx, workspaceID, a.ID, string(domain.AssigneeTypeAgent), activeCategories); err == nil {
+				currentTasks = cnt
+			}
+		}
 		agents = append(agents, domain.TeamDirectoryAgent{
 			ID:                 a.ID,
 			Name:               a.Name,
@@ -83,7 +133,7 @@ func (s *rulesService) GetTeamDirectory(ctx context.Context, workspaceID uuid.UU
 			MaxConcurrentTasks: a.MaxConcurrentTasks,
 			WorkingHours:       a.WorkingHours,
 			ProfileDescription: a.ProfileDescription,
-			CurrentTasks:       0, // TODO: enrich with task count if needed
+			CurrentTasks:       currentTasks,
 		})
 	}
 

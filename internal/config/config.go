@@ -19,6 +19,7 @@ type Config struct {
 	CORS      CORSConfig
 	RateLimit RateLimitConfig
 	Spark     SparkConfig
+	Webhook   WebhookConfig
 }
 
 // SparkConfig holds configuration for the Spark agent catalog integration.
@@ -109,6 +110,13 @@ type AuthConfig struct {
 	AgentKeyPrefix  string
 }
 
+// WebhookConfig holds inbound webhook validation settings.
+type WebhookConfig struct {
+	// GitHubSecret is the HMAC-SHA256 secret for validating GitHub webhook payloads.
+	// If empty, signature validation is skipped (backward-compatible).
+	GitHubSecret string
+}
+
 // Load reads configuration from environment variables with sensible defaults.
 func Load() *Config {
 	return &Config{
@@ -161,6 +169,9 @@ func Load() *Config {
 		Spark: SparkConfig{
 			URL:     getEnv("MESH_SPARK_URL", "https://spark.entire.vc"),
 			Enabled: getEnvBool("MESH_SPARK_ENABLED", false),
+		},
+		Webhook: WebhookConfig{
+			GitHubSecret: getEnv("MESH_GITHUB_WEBHOOK_SECRET", ""),
 		},
 	}
 }

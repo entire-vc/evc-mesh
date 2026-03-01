@@ -157,6 +157,29 @@ func (s *webhookService) Dispatch(ctx context.Context, workspaceID uuid.UUID, ev
 	}
 }
 
+// TestDelivery fetches the webhook by ID and fires a single test HTTP POST directly
+// to its URL, bypassing event subscription filtering. The call is asynchronous.
+func (s *webhookService) TestDelivery(ctx context.Context, webhookID uuid.UUID) {
+	wh, err := s.repo.GetByID(ctx, webhookID)
+	if err != nil || wh == nil {
+		log.Printf("[webhook] TestDelivery: webhook %s not found: %v", webhookID, err)
+		return
+	}
+
+	payload := map[string]any{
+		"event":      "webhook.test",
+		"webhook_id": wh.ID.String(),
+		"message":    "This is a test delivery from evc-mesh",
+	}
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		log.Printf("[webhook] TestDelivery: marshal payload: %v", err)
+		return
+	}
+
+	go s.dispatchOne(*wh, "webhook.test", payloadBytes)
+}
+
 // dispatchOne sends a single webhook delivery with up to webhookMaxAttempts retries.
 func (s *webhookService) dispatchOne(wh domain.WebhookConfig, eventType string, payloadBytes []byte) {
 	deliveryID := uuid.New()
@@ -167,6 +190,7 @@ func (s *webhookService) dispatchOne(wh domain.WebhookConfig, eventType string, 
 		lastBody     *string
 		lastDuration *int
 		success      bool
+		lastAttempt  int
 	)
 
 	for attempt := 1; attempt <= webhookMaxAttempts; attempt++ {
@@ -174,6 +198,7 @@ func (s *webhookService) dispatchOne(wh domain.WebhookConfig, eventType string, 
 			time.Sleep(backoffs[attempt-2])
 		}
 
+		lastAttempt = attempt
 		status, body, duration, err := s.sendHTTP(wh, eventType, deliveryID, payloadBytes, attempt)
 		lastDuration = &duration
 		if err == nil {
@@ -199,7 +224,7 @@ func (s *webhookService) dispatchOne(wh domain.WebhookConfig, eventType string, 
 		ResponseBody:   lastBody,
 		DurationMs:     lastDuration,
 		Success:        success,
-		Attempt:        webhookMaxAttempts,
+		Attempt:        lastAttempt,
 		CreatedAt:      time.Now(),
 	}
 

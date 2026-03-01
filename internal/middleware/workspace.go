@@ -1,7 +1,6 @@
 package middleware
 
 import (
-	"fmt"
 	"log"
 
 	"github.com/google/uuid"
@@ -20,12 +19,12 @@ import (
 //  2. proj_id route parameter -> look up project's workspace_id
 //  3. workspace_id from auth context (agent key auth sets this)
 //
-// NOTE: SET (session-level) is used instead of SET LOCAL (transaction-scoped)
-// because Echo handlers do not run inside a DB transaction by default.
-// Connection pooling (sqlx/database/sql) may reuse connections, so the
-// variable persists until reset. This is acceptable for correctness since
-// we set it on every request. A future improvement would be to wrap
-// each handler in a transaction and use SET LOCAL.
+// NOTE: set_config('app.current_workspace_id', $1, true) is used with the
+// is_local flag set to true, which makes the value transaction-scoped (equivalent
+// to SET LOCAL). Echo handlers do not run inside an explicit transaction, so the
+// value effectively lasts until the end of the connection's implicit transaction.
+// We set it on every request so connections reused from the pool always have a
+// fresh value before handler execution.
 func WorkspaceRLS(db *sqlx.DB, projectRepo repository.ProjectRepository) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
@@ -101,9 +100,15 @@ func WorkspaceRLS(db *sqlx.DB, projectRepo repository.ProjectRepository) echo.Mi
 			}
 
 			// Set the session variable if we resolved a workspace ID.
+			// Use set_config with the transaction-local flag (third arg = true) so the
+			// value is scoped to the current transaction. The parameterized form prevents
+			// any SQL injection through the workspace ID value.
 			if resolved {
-				q := fmt.Sprintf("SET app.current_workspace_id = '%s'", wsID.String())
-				if _, err := db.ExecContext(c.Request().Context(), q); err != nil {
+				var setCfgResult string
+				if err := db.QueryRowContext(c.Request().Context(),
+					"SELECT set_config('app.current_workspace_id', $1, true)",
+					wsID.String(),
+				).Scan(&setCfgResult); err != nil {
 					log.Printf("WARNING: failed to set app.current_workspace_id: %v", err)
 					// Non-fatal: continue without RLS context rather than blocking the request.
 				}
