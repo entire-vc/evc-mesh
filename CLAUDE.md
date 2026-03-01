@@ -6,13 +6,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Entire VC Mesh** — task management platform for coordinating humans and AI agents (Claude Code, OpenClaw, Cline, Aider) in a unified workspace. Kanban system with customizable fields/workflows, dual interface (Web UI for humans, MCP/REST API for agents), and event bus for inter-agent context sharing.
 
-**Status:** Phase 1-4 complete. Phase 4.1 (Core Stabilization) next → Phase 5 (Enterprise, separate repo) → Phase 6 (Public Launch).
+**Status:** Phase 1-8 OSS complete. Preparing for public release. Enterprise features in separate repo.
 
-**What's built:** REST API (46 routes) + React frontend (10 pages, 7 stores) + MCP server (23 tools, stdio + SSE) + Agent Dashboard + NATS JetStream event bus + WebSocket real-time + Timeline DAG + Custom Fields (12 types, CRUD + validation + rendering) + List View + Board/Timeline/List view toggle.
+**What's built:** REST API (~100 routes) + React frontend (18 pages, 13 stores) + MCP server (34 tools, stdio + SSE) + Agent Dashboard + NATS JetStream event bus + WebSocket real-time + Timeline DAG + Custom Fields (12 types) + Board/List/Timeline/Calendar views + Webhooks + Analytics + Initiatives + Rules engine + Config import/export + Go SDK.
 
-**Next: Phase 4.1** — Core stabilization before open-source release. Spec: `dev-docs/specs/07-phase-4.1-core-stabilization.md`. Key items: RLS middleware, soft delete, CF value validation, server-side CF filtering, S3 wiring, agent CRUD, auth logout, OpenAPI update.
+**Next:** Bug fixes from code audit (see ROADMAP Sprint BF-10), documentation update (OpenAPI 65+ missing routes), pre-release hardening.
 
-**Repo strategy:** `evc-mesh` (MIT, goes public at Phase 6) + `evc-mesh-enterprise` (Commercial, always private). Phase 4.1 hardens core. Phase 5 builds enterprise features in separate repo.
+**Repo strategy:** `evc-mesh` (MIT, goes public at release) + `evc-mesh-enterprise` (Commercial, always private).
 
 ## Documentation
 
@@ -87,7 +87,7 @@ Data Layer — PostgreSQL 16 (JSONB) | Redis 7 (cache/pubsub) | NATS JetStream (
 - **PKs:** UUID everywhere (not integer — designed for distributed systems)
 - **Timestamps:** TIMESTAMPTZ (no timezone ambiguity)
 - **Custom fields:** JSONB column on `tasks` table, definitions in `custom_field_definitions` per project
-- **Soft deletes:** via `updated_at`, no physical deletion
+- **Soft deletes:** via `deleted_at` column, repos filter `deleted_at IS NULL`
 - **Task statuses:** customizable per project with semantic categories (`backlog`, `todo`, `in_progress`, `review`, `done`, `cancelled`) — agents use categories, not status names
 - **Auth:** Bearer JWT for users, `X-Agent-Key: agk_{workspace_slug}_{random}` for agents (bcrypt hashed)
 - **Multi-tenancy:** `workspace_id` on every table, NATS subjects per workspace, S3 prefixes per workspace
@@ -137,6 +137,19 @@ Always check actual code, not just specs, when implementing features.
 
 - Documentation and user-facing text: Russian
 - Code, comments, variable names, API fields: English
+
+## Task Polling (MCP)
+
+At the **start of every session**, check for assigned tasks:
+
+```
+mcp__evc-mesh__get_my_tasks(status_category: "todo")
+mcp__evc-mesh__get_my_tasks(status_category: "in_progress")
+```
+
+If there are tasks — report them to the user before proceeding.
+After fixing a task: `mcp__evc-mesh__move_task` → "review", `mcp__evc-mesh__add_comment` with summary.
+**Never close tasks yourself** — move to "review" and reassign to the creator.
 
 ## Subagent Guidelines
 
