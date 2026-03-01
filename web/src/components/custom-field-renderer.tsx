@@ -1,12 +1,15 @@
 import type React from "react";
-import { useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { DatePickerPopover } from "@/components/date-picker-popover";
 import { cn } from "@/lib/cn";
-import type { CustomFieldDefinition } from "@/types";
+import { useWorkspaceStore } from "@/stores/workspace";
+import { useMemberStore } from "@/stores/member";
+import { useAgentStore } from "@/stores/agent";
+import type { Agent, CustomFieldDefinition, WorkspaceMemberWithUser } from "@/types";
 
 // Determine whether to use dark or light text on a given background color.
 function getContrastColor(hexColor: string): string {
@@ -50,6 +53,238 @@ function getPlaceholder(
 ): string {
   const p = options?.placeholder;
   return typeof p === "string" ? p : fallback;
+}
+
+// ---------------------------------------------------------------------------
+// Searchable dropdown select for user_ref / agent_ref field types
+// ---------------------------------------------------------------------------
+
+interface RefSelectOption {
+  id: string;
+  label: string;
+  sublabel?: string;
+  badge: string;
+}
+
+function RefSelect({
+  value,
+  onChange,
+  options,
+  placeholder,
+  compact,
+}: {
+  value: string;
+  onChange: (id: string | null) => void;
+  options: RefSelectOption[];
+  placeholder: string;
+  compact?: boolean;
+}) {
+  const [query, setQuery] = useState("");
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  const filtered = useMemo(() => {
+    const q = query.toLowerCase();
+    if (!q) return options;
+    return options.filter(
+      (o) =>
+        o.label.toLowerCase().includes(q) ||
+        (o.sublabel ?? "").toLowerCase().includes(q),
+    );
+  }, [query, options]);
+
+  const selectedOption = options.find((o) => o.id === value);
+
+  // Close dropdown on outside click.
+  useEffect(() => {
+    if (!open) return;
+    function handleClick(e: MouseEvent) {
+      if (
+        containerRef.current &&
+        !containerRef.current.contains(e.target as Node)
+      ) {
+        setOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [open]);
+
+  return (
+    <div ref={containerRef} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className={cn(
+          "flex w-full items-center justify-between rounded-md border border-input bg-background px-3 text-left text-xs shadow-sm hover:bg-accent/50 focus:outline-none focus:ring-1 focus:ring-ring",
+          compact ? "h-7" : "h-8",
+        )}
+      >
+        {selectedOption ? (
+          <span className="flex items-center gap-1.5 truncate">
+            <Badge variant="secondary" className="px-1 py-0 text-[10px]">
+              {selectedOption.badge}
+            </Badge>
+            <span className="truncate">{selectedOption.label}</span>
+          </span>
+        ) : (
+          <span className="text-muted-foreground">{placeholder}</span>
+        )}
+        <svg
+          className="ml-1 h-3 w-3 shrink-0 text-muted-foreground"
+          fill="none"
+          stroke="currentColor"
+          viewBox="0 0 24 24"
+        >
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth={2}
+            d="M19 9l-7 7-7-7"
+          />
+        </svg>
+      </button>
+
+      {open && (
+        <div className="absolute z-50 mt-1 w-full rounded-md border border-border bg-popover shadow-lg">
+          <div className="p-1">
+            <Input
+              autoFocus
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search..."
+              className="h-7 text-xs"
+            />
+          </div>
+          <ul className="max-h-48 overflow-y-auto py-1">
+            {filtered.length === 0 ? (
+              <li className="px-3 py-2 text-xs text-muted-foreground">
+                No results
+              </li>
+            ) : (
+              filtered.map((opt) => (
+                <li key={opt.id}>
+                  <button
+                    type="button"
+                    className={cn(
+                      "flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs hover:bg-accent",
+                      value === opt.id && "bg-accent/50 font-medium",
+                    )}
+                    onClick={() => {
+                      onChange(opt.id === value ? null : opt.id);
+                      setOpen(false);
+                      setQuery("");
+                    }}
+                  >
+                    <Badge variant="secondary" className="px-1 py-0 text-[10px] shrink-0">
+                      {opt.badge}
+                    </Badge>
+                    <span className="flex-1 truncate">{opt.label}</span>
+                    {opt.sublabel && (
+                      <span className="truncate text-muted-foreground">
+                        {opt.sublabel}
+                      </span>
+                    )}
+                  </button>
+                </li>
+              ))
+            )}
+          </ul>
+          {selectedOption && (
+            <div className="border-t border-border px-3 py-1.5">
+              <button
+                type="button"
+                className="text-xs text-destructive hover:underline"
+                onClick={() => {
+                  onChange(null);
+                  setOpen(false);
+                  setQuery("");
+                }}
+              >
+                Clear selection
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// UserRefSelect wraps RefSelect, loading workspace members on mount.
+function UserRefSelect({
+  value,
+  onChange,
+  compact,
+}: {
+  value: string;
+  onChange: (id: string | null) => void;
+  compact?: boolean;
+}) {
+  const { currentWorkspace } = useWorkspaceStore();
+  const { workspaceMembers, fetchWorkspaceMembers } = useMemberStore();
+
+  useEffect(() => {
+    if (currentWorkspace && workspaceMembers.length === 0) {
+      fetchWorkspaceMembers(currentWorkspace.id);
+    }
+  }, [currentWorkspace, workspaceMembers.length, fetchWorkspaceMembers]);
+
+  const options: RefSelectOption[] = workspaceMembers.map(
+    (m: WorkspaceMemberWithUser) => ({
+      id: m.user_id,
+      label: m.user.name || m.user.email,
+      sublabel: m.user.email,
+      badge: m.role,
+    }),
+  );
+
+  return (
+    <RefSelect
+      value={value}
+      onChange={onChange}
+      options={options}
+      placeholder="Select user..."
+      compact={compact}
+    />
+  );
+}
+
+// AgentRefSelect wraps RefSelect, loading workspace agents on mount.
+function AgentRefSelect({
+  value,
+  onChange,
+  compact,
+}: {
+  value: string;
+  onChange: (id: string | null) => void;
+  compact?: boolean;
+}) {
+  const { currentWorkspace } = useWorkspaceStore();
+  const { agents, fetchAgents } = useAgentStore();
+
+  useEffect(() => {
+    if (currentWorkspace && agents.length === 0) {
+      fetchAgents(currentWorkspace.id);
+    }
+  }, [currentWorkspace, agents.length, fetchAgents]);
+
+  const options: RefSelectOption[] = agents.map((a: Agent) => ({
+    id: a.id,
+    label: a.name,
+    sublabel: a.agent_type,
+    badge: a.status,
+  }));
+
+  return (
+    <RefSelect
+      value={value}
+      onChange={onChange}
+      options={options}
+      placeholder="Select agent..."
+      compact={compact}
+    />
+  );
 }
 
 export interface CustomFieldRendererProps {
@@ -214,14 +449,20 @@ export function CustomFieldRenderer({
       );
 
     case "user_ref":
+      return (
+        <UserRefSelect
+          value={(value as string) ?? ""}
+          onChange={onChange}
+          compact={compact}
+        />
+      );
+
     case "agent_ref":
       return (
-        <Input
-          type="text"
+        <AgentRefSelect
           value={(value as string) ?? ""}
-          onChange={(e) => onChange(e.target.value || null)}
-          placeholder={`Enter ${field.field_type === "user_ref" ? "user" : "agent"} ID...`}
-          className={cn("h-8 text-xs", compact && "h-7")}
+          onChange={onChange}
+          compact={compact}
         />
       );
 

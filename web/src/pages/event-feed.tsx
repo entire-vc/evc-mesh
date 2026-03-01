@@ -377,8 +377,8 @@ export function EventFeedPage() {
             <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
               Real-time
             </p>
-            {filteredRealtimeEvents.map((event, i) => (
-              <RealtimeEventRow key={`rt-${i}`} event={event} />
+            {filteredRealtimeEvents.map((event) => (
+              <RealtimeEventRow key={`rt-${event.timestamp}-${event.type}`} event={event} />
             ))}
           </div>
         )}

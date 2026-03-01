@@ -43,14 +43,38 @@ const STATUS_COLORS: Record<InitiativeStatus, string> = {
 function InitiativeProgress({ initiative }: { initiative: Initiative }) {
   const projects = initiative.linked_projects ?? [];
   const total = projects.length;
-  if (total === 0) return <span className="text-xs text-muted-foreground">No projects linked</span>;
+
+  // Derive progress from the initiative status since the API does not return
+  // per-project task completion counters. When status is "completed" we treat
+  // all linked projects as done; "archived" and "active" show 0%.
+  const pct = initiative.status === "completed" ? 100 : 0;
+  const label =
+    initiative.status === "completed"
+      ? "Completed"
+      : initiative.status === "archived"
+        ? "Archived"
+        : total === 0
+          ? "No projects linked"
+          : `${total} project${total !== 1 ? "s" : ""} in progress`;
+
+  if (total === 0 && initiative.status !== "completed") {
+    return <span className="text-xs text-muted-foreground">No projects linked</span>;
+  }
 
   return (
-    <div className="flex items-center gap-2">
-      <div className="h-2 flex-1 rounded-full bg-muted">
-        <div className="h-2 rounded-full bg-primary" style={{ width: `${0}%` }} />
+    <div className="space-y-1">
+      <div className="flex items-center gap-2">
+        <div className="h-2 flex-1 rounded-full bg-muted">
+          <div
+            className="h-2 rounded-full bg-primary transition-all"
+            style={{ width: `${pct}%` }}
+          />
+        </div>
+        <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
+          {pct}%
+        </span>
       </div>
-      <span className="text-xs text-muted-foreground">{total} project{total !== 1 ? "s" : ""}</span>
+      <p className="text-xs text-muted-foreground">{label}</p>
     </div>
   );
 }

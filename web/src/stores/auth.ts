@@ -15,7 +15,7 @@ interface AuthState {
   initialize: () => Promise<void>;
   login: (req: LoginRequest) => Promise<void>;
   register: (req: RegisterRequest) => Promise<void>;
-  logout: () => void;
+  logout: () => Promise<void>;
   fetchMe: () => Promise<void>;
 }
 
@@ -60,7 +60,13 @@ export const useAuthStore = create<AuthState>((set) => ({
     set({ user: data.user, isAuthenticated: true });
   },
 
-  logout: () => {
+  logout: async () => {
+    try {
+      await api("/api/v1/auth/logout", { method: "POST" });
+    } catch {
+      // Ignore errors — backend may be unreachable or token already expired.
+      // We always clear local state regardless.
+    }
     clearTokens();
     set({ user: null, isAuthenticated: false });
   },

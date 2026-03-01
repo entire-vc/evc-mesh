@@ -245,9 +245,14 @@ export function TaskDetailPage() {
       return;
     }
     const newLabel = labelDraft.trim();
-    const labels = [...(currentTask.labels ?? []), newLabel];
+    const existingLabels = currentTask.labels ?? [];
+    const isDuplicate = existingLabels.some(
+      (l) => l.toLowerCase() === newLabel.toLowerCase(),
+    );
     setAddingLabel(false);
     setLabelDraft("");
+    if (isDuplicate) return;
+    const labels = [...existingLabels, newLabel];
     try {
       await updateTask(currentTask.id, { labels });
     } catch (err) {

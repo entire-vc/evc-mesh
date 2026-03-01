@@ -184,12 +184,10 @@ function AgentCard({
           ) : null;
         })()}
 
-        {/* API Key prefix */}
+        {/* API Key indicator — hash is never meaningful to display */}
         <div className="text-xs text-muted-foreground">
           <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px]">
-            {agent.api_key_hash
-              ? `${agent.api_key_hash.substring(0, 16)}...`
-              : "N/A"}
+            {agent.api_key_hash ? "agk_••••••••" : "no key"}
           </code>
         </div>
       </CardContent>

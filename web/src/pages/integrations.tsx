@@ -314,7 +314,7 @@ export function IntegrationsPage() {
                           </a>{" "}
                           to get an API key, then use it in{" "}
                           <code className="rounded bg-muted px-1">MESH_AGENT_KEY</code>.
-                          MCP provides 25 tools: task management, comments, events, artifacts, and more.
+                          MCP provides 34 tools: task management, comments, events, artifacts, and more.
                         </p>
                       </div>
                     </CardContent>

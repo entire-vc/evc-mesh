@@ -79,9 +79,11 @@ export function DashboardPage() {
                       <CardTitle className="text-base">
                         {project.name}
                       </CardTitle>
-                      <CardDescription className="text-xs">
-                        {project.slug}
-                      </CardDescription>
+                      {project.description && (
+                        <CardDescription className="text-xs">
+                          {project.description}
+                        </CardDescription>
+                      )}
                     </div>
                   </div>
                 </CardHeader>

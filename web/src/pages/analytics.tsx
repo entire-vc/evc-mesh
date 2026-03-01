@@ -14,21 +14,23 @@ import type { AnalyticsMetrics } from "@/types";
 // Palette for charts
 // ---------------------------------------------------------------------------
 
+// Colors use Tailwind utility classes applied via className; these CSS-variable-
+// based values are safe in both light and dark mode.
 const STATUS_COLORS: Record<string, string> = {
-  backlog: "#94a3b8",
-  todo: "#60a5fa",
-  in_progress: "#f59e0b",
-  review: "#a78bfa",
-  done: "#34d399",
-  cancelled: "#f87171",
+  backlog: "hsl(var(--muted-foreground))",
+  todo: "hsl(var(--chart-1, 210 100% 66%))",
+  in_progress: "hsl(var(--chart-2, 38 92% 50%))",
+  review: "hsl(var(--chart-3, 265 83% 73%))",
+  done: "hsl(var(--chart-4, 158 64% 52%))",
+  cancelled: "hsl(var(--destructive))",
 };
 
 const PRIORITY_COLORS: Record<string, string> = {
-  urgent: "#ef4444",
-  high: "#f97316",
-  medium: "#eab308",
-  low: "#22c55e",
-  none: "#94a3b8",
+  urgent: "hsl(var(--destructive))",
+  high: "hsl(var(--chart-2, 24 95% 53%))",
+  medium: "hsl(var(--chart-5, 45 93% 47%))",
+  low: "hsl(var(--chart-4, 142 71% 45%))",
+  none: "hsl(var(--muted-foreground))",
 };
 
 // ---------------------------------------------------------------------------
@@ -55,7 +57,7 @@ function HorizontalBarChart({ data, height = 20 }: BarChartProps) {
               className="absolute inset-y-0 left-0 rounded-sm"
               style={{
                 width: `${(value / max) * 100}%`,
-                backgroundColor: color ?? "#14b8a6",
+                backgroundColor: color ?? "hsl(var(--primary))",
                 minWidth: value > 0 ? 4 : 0,
               }}
             />
@@ -140,14 +142,14 @@ function TimelineChart({ data }: TimelineChartProps) {
         })}
 
         {/* Area fills */}
-        <path d={toArea("created")} fill="#14b8a6" fillOpacity={0.15} />
-        <path d={toArea("completed")} fill="#a78bfa" fillOpacity={0.15} />
+        <path d={toArea("created")} fill="hsl(var(--primary))" fillOpacity={0.15} />
+        <path d={toArea("completed")} fill="hsl(var(--chart-3, 265 83% 73%))" fillOpacity={0.15} />
 
         {/* Lines */}
         <path
           d={toPath("created")}
           fill="none"
-          stroke="#14b8a6"
+          stroke="hsl(var(--primary))"
           strokeWidth={1.5}
           strokeLinejoin="round"
           strokeLinecap="round"
@@ -155,7 +157,7 @@ function TimelineChart({ data }: TimelineChartProps) {
         <path
           d={toPath("completed")}
           fill="none"
-          stroke="#a78bfa"
+          stroke="hsl(var(--chart-3, 265 83% 73%))"
           strokeWidth={1.5}
           strokeLinejoin="round"
           strokeLinecap="round"
