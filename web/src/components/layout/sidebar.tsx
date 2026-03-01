@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { Link, useLocation, useParams } from "react-router";
 import {
   Activity,
@@ -27,6 +28,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Separator } from "@/components/ui/separator";
+import { CreateProjectDialog } from "@/components/create-project-dialog";
 
 interface SidebarProps {
   collapsed: boolean;
@@ -37,6 +39,7 @@ export function Sidebar({ collapsed }: SidebarProps) {
   const location = useLocation();
   const { workspaces, currentWorkspace } = useWorkspaceStore();
   const { projects } = useProjectStore();
+  const [showCreateProject, setShowCreateProject] = useState(false);
 
   const isAgentsRoute = location.pathname.endsWith("/agents");
   const isSparkRoute = location.pathname.endsWith("/spark");
@@ -207,7 +210,12 @@ export function Sidebar({ collapsed }: SidebarProps) {
             <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
               Projects
             </span>
-            <Button variant="ghost" size="icon" className="h-5 w-5">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-5 w-5"
+              onClick={() => setShowCreateProject(true)}
+            >
               <Plus className="h-3 w-3" />
             </Button>
           </div>
@@ -348,6 +356,11 @@ export function Sidebar({ collapsed }: SidebarProps) {
           </Link>
         )}
       </div>
+
+      <CreateProjectDialog
+        open={showCreateProject}
+        onOpenChange={setShowCreateProject}
+      />
     </aside>
   );
 }
