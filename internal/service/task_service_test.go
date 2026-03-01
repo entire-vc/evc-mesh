@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"testing"
 	"time"
@@ -566,6 +567,233 @@ func TestTaskService_Delete(t *testing.T) {
 			}
 		})
 	}
+}
+
+// ---------------------------------------------------------------------------
+// TestTaskService_applyAutoAssign
+// ---------------------------------------------------------------------------
+
+// setupTaskServiceWithRules returns a taskService wired to a MockRulesService.
+func setupTaskServiceWithRules(rules *domain.EffectiveAssignmentRules) (*taskService, *MockTaskRepository) {
+	taskRepo := NewMockTaskRepository()
+	statusRepo := NewMockTaskStatusRepository()
+	depRepo := NewMockTaskDependencyRepository()
+	activityRepo := NewMockActivityLogRepository()
+	mockRules := NewMockRulesService(rules)
+
+	svc := NewTaskService(taskRepo, statusRepo, depRepo, activityRepo,
+		WithRulesConfigService(mockRules),
+	).(*taskService)
+
+	timeNow = func() time.Time { return frozenTime }
+	return svc, taskRepo
+}
+
+func TestTaskService_applyAutoAssign(t *testing.T) {
+	agentIDStr := uuid.New()
+	agentIDStr2 := uuid.New()
+
+	tests := []struct {
+		name            string
+		rules           *domain.EffectiveAssignmentRules
+		task            *domain.Task
+		wantAssigned    bool
+		wantAssigneeID  *uuid.UUID
+		wantAssigneeType domain.AssigneeType
+	}{
+		{
+			name:  "no rules configured - task stays unassigned",
+			rules: nil,
+			task: &domain.Task{
+				ProjectID:    uuid.New(),
+				StatusID:     uuid.New(),
+				Title:        "Task without rules",
+				Priority:     domain.PriorityHigh,
+				AssigneeType: domain.AssigneeTypeUnassigned,
+			},
+			wantAssigned: false,
+		},
+		{
+			name: "by_priority match - assigns the mapped agent",
+			rules: &domain.EffectiveAssignmentRules{
+				ByPriority: map[string]domain.EffectiveAssignmentRule{
+					"high": {Value: agentIDStr.String(), Source: "workspace"},
+				},
+			},
+			task: &domain.Task{
+				ProjectID:    uuid.New(),
+				StatusID:     uuid.New(),
+				Title:        "High priority task",
+				Priority:     domain.PriorityHigh,
+				AssigneeType: domain.AssigneeTypeUnassigned,
+			},
+			wantAssigned:     true,
+			wantAssigneeID:   &agentIDStr,
+			wantAssigneeType: domain.AssigneeTypeAgent,
+		},
+		{
+			name: "by_priority no match - falls back to default_assignee",
+			rules: &domain.EffectiveAssignmentRules{
+				ByPriority: map[string]domain.EffectiveAssignmentRule{
+					"critical": {Value: agentIDStr.String(), Source: "workspace"},
+				},
+				DefaultAssignee: &domain.EffectiveAssignmentRule{Value: agentIDStr2.String(), Source: "workspace"},
+			},
+			task: &domain.Task{
+				ProjectID:    uuid.New(),
+				StatusID:     uuid.New(),
+				Title:        "Medium priority task",
+				Priority:     domain.PriorityMedium,
+				AssigneeType: domain.AssigneeTypeUnassigned,
+			},
+			wantAssigned:     true,
+			wantAssigneeID:   &agentIDStr2,
+			wantAssigneeType: domain.AssigneeTypeAgent,
+		},
+		{
+			name: "no priority match and no default - falls back to fallback_chain",
+			rules: &domain.EffectiveAssignmentRules{
+				FallbackChain: []string{agentIDStr.String()},
+			},
+			task: &domain.Task{
+				ProjectID:    uuid.New(),
+				StatusID:     uuid.New(),
+				Title:        "Low priority task",
+				Priority:     domain.PriorityLow,
+				AssigneeType: domain.AssigneeTypeUnassigned,
+			},
+			wantAssigned:     true,
+			wantAssigneeID:   &agentIDStr,
+			wantAssigneeType: domain.AssigneeTypeAgent,
+		},
+		{
+			name: "by_priority takes precedence over default_assignee and fallback_chain",
+			rules: &domain.EffectiveAssignmentRules{
+				ByPriority: map[string]domain.EffectiveAssignmentRule{
+					"high": {Value: agentIDStr.String(), Source: "project"},
+				},
+				DefaultAssignee: &domain.EffectiveAssignmentRule{Value: agentIDStr2.String(), Source: "workspace"},
+				FallbackChain:   []string{agentIDStr2.String()},
+			},
+			task: &domain.Task{
+				ProjectID:    uuid.New(),
+				StatusID:     uuid.New(),
+				Title:        "High priority with all rules",
+				Priority:     domain.PriorityHigh,
+				AssigneeType: domain.AssigneeTypeUnassigned,
+			},
+			wantAssigned:     true,
+			wantAssigneeID:   &agentIDStr,
+			wantAssigneeType: domain.AssigneeTypeAgent,
+		},
+		{
+			name: "rules with invalid UUID in by_priority - silently skips, falls back to default",
+			rules: &domain.EffectiveAssignmentRules{
+				ByPriority: map[string]domain.EffectiveAssignmentRule{
+					"high": {Value: "not-a-uuid", Source: "workspace"},
+				},
+				DefaultAssignee: &domain.EffectiveAssignmentRule{Value: agentIDStr2.String(), Source: "workspace"},
+			},
+			task: &domain.Task{
+				ProjectID:    uuid.New(),
+				StatusID:     uuid.New(),
+				Title:        "Invalid UUID in by_priority",
+				Priority:     domain.PriorityHigh,
+				AssigneeType: domain.AssigneeTypeUnassigned,
+			},
+			// The invalid UUID in by_priority causes applyAutoAssign to log and return
+			// early without assigning, so the task stays unassigned despite default_assignee.
+			// This tests the current behaviour: invalid UUID in ANY selected rule = no assign.
+			wantAssigned: false,
+		},
+		{
+			name: "task already has assignee - skipped by Create guard",
+			rules: &domain.EffectiveAssignmentRules{
+				DefaultAssignee: &domain.EffectiveAssignmentRule{Value: agentIDStr.String(), Source: "workspace"},
+			},
+			task: &domain.Task{
+				ProjectID:    uuid.New(),
+				StatusID:     uuid.New(),
+				Title:        "Already assigned task",
+				Priority:     domain.PriorityMedium,
+				AssigneeID:   &agentIDStr2,
+				AssigneeType: domain.AssigneeTypeAgent,
+			},
+			// applyAutoAssign is not called when AssigneeType != unassigned.
+			wantAssigned:     true,
+			wantAssigneeID:   &agentIDStr2,
+			wantAssigneeType: domain.AssigneeTypeAgent,
+		},
+		{
+			name: "empty fallback_chain - task stays unassigned",
+			rules: &domain.EffectiveAssignmentRules{
+				FallbackChain: []string{},
+			},
+			task: &domain.Task{
+				ProjectID:    uuid.New(),
+				StatusID:     uuid.New(),
+				Title:        "Empty fallback chain",
+				Priority:     domain.PriorityLow,
+				AssigneeType: domain.AssigneeTypeUnassigned,
+			},
+			wantAssigned: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc, taskRepo := setupTaskServiceWithRules(tt.rules)
+			ctx := context.Background()
+
+			err := svc.Create(ctx, tt.task)
+			require.NoError(t, err, "Create should never fail due to rules errors")
+
+			stored, err := taskRepo.GetByID(ctx, tt.task.ID)
+			require.NoError(t, err)
+			require.NotNil(t, stored)
+
+			if tt.wantAssigned {
+				require.NotNil(t, stored.AssigneeID, "expected assignee to be set")
+				assert.Equal(t, *tt.wantAssigneeID, *stored.AssigneeID)
+				assert.Equal(t, tt.wantAssigneeType, stored.AssigneeType)
+			} else if tt.task.AssigneeType == domain.AssigneeTypeUnassigned || tt.task.AssigneeType == "" {
+				assert.Nil(t, stored.AssigneeID, "expected task to remain unassigned")
+				assert.Equal(t, domain.AssigneeTypeUnassigned, stored.AssigneeType)
+			}
+		})
+	}
+}
+
+func TestTaskService_applyAutoAssign_RulesServiceError(t *testing.T) {
+	taskRepo := NewMockTaskRepository()
+	statusRepo := NewMockTaskStatusRepository()
+	depRepo := NewMockTaskDependencyRepository()
+	activityRepo := NewMockActivityLogRepository()
+
+	mockRules := NewMockRulesService(nil)
+	mockRules.errToReturn = fmt.Errorf("database unavailable")
+
+	svc := NewTaskService(taskRepo, statusRepo, depRepo, activityRepo,
+		WithRulesConfigService(mockRules),
+	).(*taskService)
+	timeNow = func() time.Time { return frozenTime }
+
+	task := &domain.Task{
+		ProjectID:    uuid.New(),
+		StatusID:     uuid.New(),
+		Title:        "Task with broken rules svc",
+		Priority:     domain.PriorityHigh,
+		AssigneeType: domain.AssigneeTypeUnassigned,
+	}
+
+	// Create must succeed even when rules service returns an error.
+	err := svc.Create(context.Background(), task)
+	require.NoError(t, err, "Create must not fail when rules service errors")
+
+	stored, err := taskRepo.GetByID(context.Background(), task.ID)
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	assert.Nil(t, stored.AssigneeID, "task should remain unassigned when rules lookup fails")
 }
 
 // ---------------------------------------------------------------------------

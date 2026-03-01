@@ -1067,3 +1067,72 @@ func (m *MockStorageClient) Delete(_ context.Context, key string) error {
 	delete(m.objects, key)
 	return nil
 }
+
+// ---------------------------------------------------------------------------
+// MockRulesService — minimal stub that implements RulesService for task tests.
+// Only GetEffectiveAssignmentRules is exercised by applyAutoAssign; all other
+// methods panic to make test gaps immediately obvious.
+// ---------------------------------------------------------------------------
+
+type MockRulesService struct {
+	effectiveRules *domain.EffectiveAssignmentRules
+	errToReturn    error
+}
+
+func NewMockRulesService(rules *domain.EffectiveAssignmentRules) *MockRulesService {
+	return &MockRulesService{effectiveRules: rules}
+}
+
+func (m *MockRulesService) GetEffectiveAssignmentRules(_ context.Context, _ uuid.UUID) (*domain.EffectiveAssignmentRules, error) {
+	if m.errToReturn != nil {
+		return nil, m.errToReturn
+	}
+	if m.effectiveRules == nil {
+		return &domain.EffectiveAssignmentRules{}, nil
+	}
+	return m.effectiveRules, nil
+}
+
+// Remaining RulesService methods — not exercised by task tests.
+func (m *MockRulesService) GetTeamDirectory(_ context.Context, _ uuid.UUID) (*domain.TeamDirectory, error) {
+	panic("MockRulesService.GetTeamDirectory not implemented")
+}
+func (m *MockRulesService) UpdateAgentProfile(_ context.Context, _ uuid.UUID, _ domain.AgentProfileUpdate) error {
+	panic("MockRulesService.UpdateAgentProfile not implemented")
+}
+func (m *MockRulesService) GetWorkspaceAssignmentRules(_ context.Context, _ uuid.UUID) (*domain.AssignmentRulesConfig, error) {
+	panic("MockRulesService.GetWorkspaceAssignmentRules not implemented")
+}
+func (m *MockRulesService) SetWorkspaceAssignmentRules(_ context.Context, _ uuid.UUID, _ domain.AssignmentRulesConfig) error {
+	panic("MockRulesService.SetWorkspaceAssignmentRules not implemented")
+}
+func (m *MockRulesService) SetProjectAssignmentRules(_ context.Context, _ uuid.UUID, _ domain.AssignmentRulesConfig) error {
+	panic("MockRulesService.SetProjectAssignmentRules not implemented")
+}
+func (m *MockRulesService) GetProjectWorkflowRules(_ context.Context, _ uuid.UUID, _ *uuid.UUID) (*domain.WorkflowRulesResponse, error) {
+	panic("MockRulesService.GetProjectWorkflowRules not implemented")
+}
+func (m *MockRulesService) SetProjectWorkflowRules(_ context.Context, _ uuid.UUID, _ domain.WorkflowRulesConfig) error {
+	panic("MockRulesService.SetProjectWorkflowRules not implemented")
+}
+func (m *MockRulesService) ListViolations(_ context.Context, _ uuid.UUID, _ int) ([]domain.RuleViolationLog, error) {
+	panic("MockRulesService.ListViolations not implemented")
+}
+func (m *MockRulesService) LogViolation(_ context.Context, _ *domain.RuleViolationLog) error {
+	panic("MockRulesService.LogViolation not implemented")
+}
+func (m *MockRulesService) ImportConfig(_ context.Context, _ uuid.UUID, _ []byte) (*domain.ImportResult, error) {
+	panic("MockRulesService.ImportConfig not implemented")
+}
+func (m *MockRulesService) ExportConfig(_ context.Context, _ uuid.UUID) ([]byte, error) {
+	panic("MockRulesService.ExportConfig not implemented")
+}
+func (m *MockRulesService) ImportTeam(_ context.Context, _ uuid.UUID, _ []byte) (*domain.TeamImportResult, error) {
+	panic("MockRulesService.ImportTeam not implemented")
+}
+func (m *MockRulesService) GetWorkflowTemplates(_ context.Context, _ uuid.UUID) (map[string]domain.WorkflowRulesConfig, error) {
+	panic("MockRulesService.GetWorkflowTemplates not implemented")
+}
+func (m *MockRulesService) SetWorkflowTemplates(_ context.Context, _ uuid.UUID, _ map[string]domain.WorkflowRulesConfig) error {
+	panic("MockRulesService.SetWorkflowTemplates not implemented")
+}
