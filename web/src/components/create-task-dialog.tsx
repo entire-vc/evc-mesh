@@ -1,4 +1,4 @@
-import { type FormEvent, useEffect, useState } from "react";
+import { type FormEvent, useEffect, useRef, useState } from "react";
 import {
   Dialog,
   DialogContent,
@@ -9,14 +9,15 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
 import { Select } from "@/components/ui/select";
+import { MarkdownEditor, type PendingImage } from "@/components/markdown-editor";
 import { useTaskStore } from "@/stores/task";
 import { useProjectStore } from "@/stores/project";
 import { useAgentStore } from "@/stores/agent";
 import { useAuthStore } from "@/stores/auth";
 import { useWorkspaceStore } from "@/stores/workspace";
-import type { AssigneeType, Priority, CreateTaskRequest } from "@/types";
+import { getAccessToken } from "@/lib/api";
+import type { AssigneeType, Artifact, Priority, CreateTaskRequest } from "@/types";
 
 interface CreateTaskDialogProps {
   open: boolean;
@@ -56,6 +57,9 @@ export function CreateTaskDialog({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Pending images pasted before task is created
+  const pendingImagesRef = useRef<PendingImage[]>([]);
+
   const resetForm = () => {
     setTitle("");
     setDescription("");
@@ -65,6 +69,7 @@ export function CreateTaskDialog({
     setDueDate(defaultDueDate ?? "");
     setAssigneeValue("unassigned");
     setError(null);
+    pendingImagesRef.current = [];
   };
 
   // Fetch agents and reset form when dialog opens
@@ -117,7 +122,53 @@ export function CreateTaskDialog({
         status_id: statusId || undefined,
       };
 
-      await createTask(currentProject.id, req);
+      const createdTask = await createTask(currentProject.id, req);
+
+      // Upload any images that were pasted before the task existed
+      if (pendingImagesRef.current.length > 0 && createdTask?.id) {
+        let updatedDescription = description.trim();
+        const token = getAccessToken();
+        const baseUrl = import.meta.env.VITE_API_URL || "";
+
+        for (const pending of pendingImagesRef.current) {
+          try {
+            const form = new FormData();
+            form.append("file", pending.file, pending.file.name);
+            form.append("name", pending.file.name);
+            form.append("artifact_type", "image");
+
+            const headers: HeadersInit = {};
+            if (token) headers["Authorization"] = `Bearer ${token}`;
+
+            const res = await fetch(
+              `${baseUrl}/api/v1/tasks/${createdTask.id}/artifacts`,
+              { method: "POST", headers, body: form },
+            );
+
+            if (res.ok) {
+              const artifact = (await res.json()) as Artifact;
+              const realMd = `![${pending.file.name}](${artifact.storage_url})`;
+              updatedDescription = updatedDescription.replace(
+                pending.placeholder,
+                realMd,
+              );
+            }
+          } catch {
+            // leave the placeholder in place — not fatal
+          }
+        }
+
+        // If description changed (URLs replaced), patch the task
+        if (updatedDescription !== description.trim()) {
+          try {
+            await useTaskStore
+              .getState()
+              .updateTask(createdTask.id, { description: updatedDescription });
+          } catch {
+            // non-fatal: task is created, images are uploaded, link is cosmetic
+          }
+        }
+      }
 
       resetForm();
       handleOpenChange(false);
@@ -155,15 +206,18 @@ export function CreateTaskDialog({
           </div>
 
           <div className="space-y-1.5">
-            <label htmlFor="ct-desc" className="text-sm font-medium">
+            <label className="text-sm font-medium">
               Description
             </label>
-            <Textarea
-              id="ct-desc"
-              placeholder="Optional description..."
+            <MarkdownEditor
               value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              rows={3}
+              onChange={setDescription}
+              projectId={currentProject?.id}
+              placeholder="Optional description... (Markdown supported, paste images)"
+              rows={4}
+              onPendingImage={(pending) => {
+                pendingImagesRef.current.push(pending);
+              }}
             />
           </div>
 

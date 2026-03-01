@@ -5,6 +5,8 @@ import {
   useRef,
   useState,
 } from "react";
+import { MarkdownEditor } from "@/components/markdown-editor";
+import { MarkdownRenderer } from "@/components/markdown-renderer";
 import { useNavigate, useParams } from "react-router";
 import {
   ArrowLeft,
@@ -85,6 +87,10 @@ export function TaskDetailPage() {
   const [titleDraft, setTitleDraft] = useState("");
   const titleInputRef = useRef<HTMLInputElement>(null);
 
+  // Description editing
+  const [editingDescription, setEditingDescription] = useState(false);
+  const [descriptionDraft, setDescriptionDraft] = useState("");
+
   // Label adding
   const [addingLabel, setAddingLabel] = useState(false);
   const [labelDraft, setLabelDraft] = useState("");
@@ -156,6 +162,29 @@ export function TaskDetailPage() {
       if (currentTask) setTitleDraft(currentTask.title);
     }
   };
+
+  const handleDescriptionEdit = useCallback(() => {
+    if (!currentTask) return;
+    setDescriptionDraft(currentTask.description ?? "");
+    setEditingDescription(true);
+  }, [currentTask]);
+
+  const handleDescriptionSave = useCallback(async () => {
+    setEditingDescription(false);
+    if (!currentTask) return;
+    const trimmed = descriptionDraft.trim();
+    const original = currentTask.description ?? "";
+    if (trimmed === original) return;
+    try {
+      await updateTask(currentTask.id, {
+        description: trimmed || undefined,
+      });
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "Failed to update description",
+      );
+    }
+  }, [currentTask, descriptionDraft, updateTask]);
 
   const handleStatusChange = async (statusId: string) => {
     if (!currentTask || statusId === currentTask.status_id) return;
@@ -329,18 +358,63 @@ export function TaskDetailPage() {
         <div className="space-y-6 lg:col-span-2">
           {/* Description */}
           <div>
-            <h2 className="mb-2 text-sm font-semibold text-muted-foreground">
-              Description
-            </h2>
-            <div className="rounded-lg border border-border p-4 text-sm">
-              {currentTask.description ? (
-                <div className="whitespace-pre-wrap">{currentTask.description}</div>
-              ) : (
-                <span className="text-muted-foreground">
-                  No description provided.
-                </span>
+            <div className="mb-2 flex items-center justify-between">
+              <h2 className="text-sm font-semibold text-muted-foreground">
+                Description
+              </h2>
+              {!editingDescription && (
+                <button
+                  type="button"
+                  className="flex items-center gap-1 rounded px-1.5 py-0.5 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                  onClick={handleDescriptionEdit}
+                >
+                  <Pencil className="h-3 w-3" />
+                  Edit
+                </button>
               )}
             </div>
+
+            {editingDescription ? (
+              <div className="space-y-2">
+                <MarkdownEditor
+                  value={descriptionDraft}
+                  onChange={setDescriptionDraft}
+                  taskId={currentTask.id}
+                  projectId={currentTask.project_id}
+                  placeholder="Add a description..."
+                  rows={8}
+                />
+                <div className="flex gap-2">
+                  <Button
+                    size="sm"
+                    onClick={() => void handleDescriptionSave()}
+                  >
+                    Save
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setEditingDescription(false)}
+                  >
+                    Cancel
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <div
+                className="min-h-[48px] cursor-pointer rounded-lg border border-border p-4 transition-colors hover:border-primary/50"
+                onClick={handleDescriptionEdit}
+                title="Click to edit description"
+              >
+                {currentTask.description ? (
+                  <MarkdownRenderer content={currentTask.description} />
+                ) : (
+                  <span className="text-sm text-muted-foreground">
+                    No description provided. Click to add one.
+                  </span>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Tabs */}
