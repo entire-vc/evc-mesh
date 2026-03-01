@@ -473,6 +473,478 @@ components:
           type: string
           format: date-time
 
+    # ---------- Workspace Member ----------
+    WorkspaceMember:
+      type: object
+      properties:
+        workspace_id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+          format: uuid
+        role:
+          type: string
+          enum: [owner, admin, member, viewer]
+        invited_by:
+          type: string
+          format: uuid
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        user:
+          $ref: "#/components/schemas/User"
+
+    # ---------- Project Member ----------
+    ProjectMember:
+      type: object
+      properties:
+        project_id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+          format: uuid
+        role:
+          type: string
+          enum: [admin, member, viewer]
+        created_at:
+          type: string
+          format: date-time
+        user:
+          $ref: "#/components/schemas/User"
+
+    # ---------- Webhook ----------
+    WebhookConfig:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        workspace_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        url:
+          type: string
+        events:
+          type: array
+          items:
+            type: string
+        is_active:
+          type: boolean
+        failure_count:
+          type: integer
+        created_by:
+          type: string
+          format: uuid
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    WebhookDelivery:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        webhook_id:
+          type: string
+          format: uuid
+        event_type:
+          type: string
+        payload:
+          type: object
+        response_status:
+          type: integer
+          nullable: true
+        response_body:
+          type: string
+          nullable: true
+        error:
+          type: string
+          nullable: true
+        delivered_at:
+          type: string
+          format: date-time
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+
+    # ---------- Saved View ----------
+    SavedView:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        project_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        view_type:
+          type: string
+          enum: [board, list, timeline]
+        filters:
+          type: object
+        sort_by:
+          type: string
+          nullable: true
+        sort_order:
+          type: string
+          enum: [asc, desc]
+          nullable: true
+        columns:
+          type: array
+          items:
+            type: string
+        is_shared:
+          type: boolean
+        created_by:
+          type: string
+          format: uuid
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    # ---------- VCS Link ----------
+    VCSLink:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        task_id:
+          type: string
+          format: uuid
+        provider:
+          type: string
+          enum: [github, gitlab]
+        link_type:
+          type: string
+          enum: [pr, commit, branch]
+        external_id:
+          type: string
+        url:
+          type: string
+        title:
+          type: string
+        status:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    # ---------- Integration ----------
+    IntegrationConfig:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        workspace_id:
+          type: string
+          format: uuid
+        provider:
+          type: string
+          enum: [slack, github, spark, mcp]
+        config:
+          type: object
+        is_active:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    # ---------- Project Update ----------
+    ProjectUpdate:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        project_id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        status:
+          type: string
+          enum: [on_track, at_risk, off_track, completed]
+        summary:
+          type: string
+        highlights:
+          type: array
+          items:
+            type: object
+            properties:
+              text:
+                type: string
+        blockers:
+          type: array
+          items:
+            type: object
+            properties:
+              text:
+                type: string
+        next_steps:
+          type: array
+          items:
+            type: object
+            properties:
+              text:
+                type: string
+        metrics:
+          type: object
+        created_by:
+          type: string
+          format: uuid
+        created_at:
+          type: string
+          format: date-time
+
+    # ---------- Initiative ----------
+    Initiative:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        workspace_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: string
+        status:
+          type: string
+          enum: [planning, active, completed, cancelled]
+        target_date:
+          type: string
+          format: date
+          nullable: true
+        projects:
+          type: array
+          items:
+            $ref: "#/components/schemas/Project"
+        created_by:
+          type: string
+          format: uuid
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    # ---------- Governance Rule ----------
+    Rule:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        workspace_id:
+          type: string
+          format: uuid
+        project_id:
+          type: string
+          format: uuid
+          nullable: true
+        scope:
+          type: string
+          enum: [workspace, project]
+        rule_type:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        config:
+          type: object
+        applies_to_actor_types:
+          type: array
+          items:
+            type: string
+        applies_to_roles:
+          type: array
+          items:
+            type: string
+        enforcement:
+          type: string
+          enum: [advisory, block]
+        priority:
+          type: integer
+        is_enabled:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    RuleViolation:
+      type: object
+      properties:
+        rule_id:
+          type: string
+          format: uuid
+        rule_name:
+          type: string
+        enforcement:
+          type: string
+          enum: [advisory, block]
+        message:
+          type: string
+
+    # ---------- Analytics ----------
+    AnalyticsMetrics:
+      type: object
+      properties:
+        workspace_id:
+          type: string
+          format: uuid
+        from:
+          type: string
+          format: date-time
+        to:
+          type: string
+          format: date-time
+        tasks_created:
+          type: integer
+        tasks_completed:
+          type: integer
+        tasks_in_progress:
+          type: integer
+        average_cycle_time_hours:
+          type: number
+          nullable: true
+        top_assignees:
+          type: array
+          items:
+            type: object
+        by_project:
+          type: array
+          items:
+            type: object
+        by_status_category:
+          type: object
+
+    # ---------- Team Directory ----------
+    TeamDirectoryEntry:
+      type: object
+      properties:
+        agent_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        role:
+          type: string
+        capabilities:
+          type: array
+          items:
+            type: string
+        zone:
+          type: string
+        max_tasks:
+          type: integer
+        working_hours:
+          type: string
+        accepts_from:
+          type: array
+          items:
+            type: string
+        escalation_agent_id:
+          type: string
+          format: uuid
+          nullable: true
+        current_task_id:
+          type: string
+          format: uuid
+          nullable: true
+        status:
+          type: string
+          enum: [online, offline, busy, error]
+
+    # ---------- Assignment Rules Config ----------
+    AssignmentRulesConfig:
+      type: object
+      properties:
+        strategy:
+          type: string
+          enum: [manual, round_robin, least_loaded, capability_match]
+        capability_requirements:
+          type: array
+          items:
+            type: string
+        fallback_assignee_id:
+          type: string
+          format: uuid
+          nullable: true
+        max_tasks_per_agent:
+          type: integer
+
+    # ---------- Workflow Rules Config ----------
+    WorkflowRulesConfig:
+      type: object
+      properties:
+        allowed_transitions:
+          type: array
+          items:
+            type: object
+            properties:
+              from:
+                type: string
+              to:
+                type: string
+              requires_role:
+                type: string
+        required_fields_by_status:
+          type: object
+        auto_assign_on_status:
+          type: object
+
+    # ---------- Spark Catalog ----------
+    SparkAgentManifest:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        version:
+          type: string
+        author:
+          type: string
+        agent_type:
+          type: string
+        capabilities:
+          type: object
+        config:
+          type: object
+        tags:
+          type: array
+          items:
+            type: string
+
   # ------------------------------------------------------------------
   # Reusable parameters
   # ------------------------------------------------------------------
@@ -1703,6 +2175,7 @@ paths:
     get:
       tags: [Agents]
       summary: Get agent by ID
+      operationId: getAgentByID
       responses:
         "200":
           description: Agent
@@ -1710,9 +2183,16 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Agent"
+        "404":
+          description: Agent not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
     patch:
       tags: [Agents]
-      summary: Update an agent
+      summary: Update an agent (admin)
+      operationId: updateAgent
       security:
         - BearerAuth: []
       requestBody:
@@ -1729,6 +2209,15 @@ paths:
                   enum: [claude_code, openclaw, cline, aider, custom]
                 capabilities:
                   type: object
+                profile_description:
+                  type: string
+                callback_url:
+                  type: string
+                  format: uri
+                current_task_id:
+                  type: string
+                  format: uuid
+                  nullable: true
       responses:
         "200":
           description: Updated agent
@@ -1736,14 +2225,39 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Agent"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Agent not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
     delete:
       tags: [Agents]
-      summary: Delete an agent (soft delete)
+      summary: Delete an agent
+      operationId: deleteAgent
       security:
         - BearerAuth: []
       responses:
         "204":
-          description: Deleted
+          description: Agent deleted
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Agent not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
 
   /api/v1/agents/{agent_id}/regenerate-key:
     parameters:
@@ -1755,20 +2269,35 @@ paths:
           format: uuid
     post:
       tags: [Agents]
-      summary: Regenerate API key for an agent
+      summary: Regenerate an agent's API key
+      operationId: regenerateAgentKey
       security:
         - BearerAuth: []
       responses:
         "200":
-          description: New API key generated
+          description: New API key and updated agent
           content:
             application/json:
               schema:
                 type: object
                 properties:
+                  agent:
+                    $ref: "#/components/schemas/Agent"
                   api_key:
                     type: string
-                    description: New raw API key (only returned once)
+                    description: Plaintext API key — only returned once
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Agent not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
 
   /api/v1/agents/heartbeat:
     post:
@@ -1917,6 +2446,10 @@ paths:
     get:
       tags: [Activity]
       summary: List activity log for a task
+      operationId: listTaskActivity
+      parameters:
+        - $ref: "#/components/parameters/PageParam"
+        - $ref: "#/components/parameters/PageSizeParam"
       responses:
         "200":
           description: Activity log entries
@@ -1926,3 +2459,2741 @@ paths:
                 type: array
                 items:
                   $ref: "#/components/schemas/ActivityLogEntry"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  # ------------------------------------------------------------------
+  # Activity — export
+  # ------------------------------------------------------------------
+  /api/v1/workspaces/{ws_id}/activity/export:
+    parameters:
+      - name: ws_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Activity]
+      summary: Export workspace audit log as CSV or JSON
+      operationId: exportActivity
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: format
+          in: query
+          description: "Output format: json (default) or csv"
+          schema:
+            type: string
+            enum: [json, csv]
+        - name: from
+          in: query
+          description: Start of time range (ISO 8601, e.g. 2024-01-01T00:00:00Z)
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          description: End of time range (ISO 8601)
+          schema:
+            type: string
+            format: date-time
+        - name: entity_type
+          in: query
+          schema:
+            type: string
+        - name: action
+          in: query
+          schema:
+            type: string
+        - name: limit
+          in: query
+          description: Maximum number of entries (max 10000, default 1000)
+          schema:
+            type: integer
+            maximum: 10000
+      responses:
+        "200":
+          description: Audit log export (JSON array or CSV file)
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ActivityLogEntry"
+            text/csv:
+              schema:
+                type: string
+                format: binary
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  # ------------------------------------------------------------------
+  # Workspace Members
+  # ------------------------------------------------------------------
+  /api/v1/workspaces/{ws_id}/members:
+    parameters:
+      - name: ws_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Members]
+      summary: List workspace members
+      operationId: listWorkspaceMembers
+      responses:
+        "200":
+          description: List of workspace members
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  members:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/WorkspaceMember"
+                  count:
+                    type: integer
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    post:
+      tags: [Members]
+      summary: Add a member to the workspace
+      operationId: addWorkspaceMember
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, role]
+              properties:
+                email:
+                  type: string
+                  format: email
+                role:
+                  type: string
+                  enum: [owner, admin, member, viewer]
+      responses:
+        "201":
+          description: Member added
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkspaceMember"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/workspaces/{ws_id}/members/me:
+    parameters:
+      - name: ws_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Members]
+      summary: Get the current user's workspace membership and role
+      operationId: getMyWorkspaceMembership
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Current user's role in the workspace
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  workspace_id:
+                    type: string
+                    format: uuid
+                  user_id:
+                    type: string
+                    format: uuid
+                  role:
+                    type: string
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/workspaces/{ws_id}/members/{user_id}:
+    parameters:
+      - name: ws_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: user_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    patch:
+      tags: [Members]
+      summary: Update a workspace member's role
+      operationId: updateWorkspaceMemberRole
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [role]
+              properties:
+                role:
+                  type: string
+                  enum: [owner, admin, member, viewer]
+      responses:
+        "200":
+          description: Role updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Member not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    delete:
+      tags: [Members]
+      summary: Remove a member from the workspace
+      operationId: removeWorkspaceMember
+      security:
+        - BearerAuth: []
+      responses:
+        "204":
+          description: Member removed
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Member not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/workspaces/{ws_id}/users/search:
+    parameters:
+      - name: ws_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Members]
+      summary: Search users within a workspace
+      operationId: searchWorkspaceUsers
+      parameters:
+        - name: q
+          in: query
+          description: Search query (email or name)
+          schema:
+            type: string
+      responses:
+        "200":
+          description: List of matching users with membership status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  users:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                          format: uuid
+                        email:
+                          type: string
+                        name:
+                          type: string
+                        is_member:
+                          type: boolean
+                  count:
+                    type: integer
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  # ------------------------------------------------------------------
+  # Project Members
+  # ------------------------------------------------------------------
+  /api/v1/projects/{proj_id}/members:
+    parameters:
+      - name: proj_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Members]
+      summary: List project members
+      operationId: listProjectMembers
+      responses:
+        "200":
+          description: List of project members
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  members:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ProjectMember"
+                  count:
+                    type: integer
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    post:
+      tags: [Members]
+      summary: Add a member to a project
+      operationId: addProjectMember
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [user_id, role]
+              properties:
+                user_id:
+                  type: string
+                  format: uuid
+                role:
+                  type: string
+                  enum: [admin, member, viewer]
+      responses:
+        "201":
+          description: Member added
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectMember"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/projects/{proj_id}/members/{user_id}:
+    parameters:
+      - name: proj_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: user_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    patch:
+      tags: [Members]
+      summary: Update a project member's role
+      operationId: updateProjectMemberRole
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [role]
+              properties:
+                role:
+                  type: string
+                  enum: [admin, member, viewer]
+      responses:
+        "200":
+          description: Role updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    delete:
+      tags: [Members]
+      summary: Remove a member from a project
+      operationId: removeProjectMember
+      security:
+        - BearerAuth: []
+      responses:
+        "204":
+          description: Member removed
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  # ------------------------------------------------------------------
+  # Agents — extended (me, update, delete, sub-agents, tasks, SSE)
+  # ------------------------------------------------------------------
+  /api/v1/agents/me:
+    get:
+      tags: [Agents]
+      summary: Get the current agent's own profile
+      operationId: getAgentMe
+      security:
+        - AgentKeyAuth: []
+      responses:
+        "200":
+          description: Current agent profile
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Agent"
+        "401":
+          description: Unauthorized (agent API key required)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    patch:
+      tags: [Agents]
+      summary: Update the current agent's own profile (self-service)
+      operationId: updateAgentMe
+      security:
+        - AgentKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                profile_description:
+                  type: string
+                callback_url:
+                  type: string
+                  format: uri
+      responses:
+        "200":
+          description: Updated agent profile
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Agent"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/agents/me/tasks:
+    get:
+      tags: [Agents]
+      summary: Get tasks assigned to the current agent
+      operationId: getAgentMyTasks
+      security:
+        - AgentKeyAuth: []
+      responses:
+        "200":
+          description: Tasks assigned to the agent
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tasks:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Task"
+                  count:
+                    type: integer
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/agents/me/tasks/poll:
+    get:
+      tags: [Agents]
+      summary: Long-poll for new tasks assigned to the current agent
+      operationId: pollAgentTasks
+      security:
+        - AgentKeyAuth: []
+      parameters:
+        - name: timeout
+          in: query
+          description: Long-poll timeout in seconds (default 30, max 120)
+          schema:
+            type: integer
+            default: 30
+            maximum: 120
+      responses:
+        "200":
+          description: Tasks (may be empty if timeout elapsed with no new tasks)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tasks:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Task"
+                  count:
+                    type: integer
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/agents/me/events/stream:
+    get:
+      tags: [Agents]
+      summary: Server-Sent Events stream for real-time agent notifications
+      operationId: agentEventStream
+      security:
+        - AgentKeyAuth: []
+      responses:
+        "200":
+          description: SSE stream (text/event-stream). Sends keepalive comments every 30s.
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/agents/{agent_id}/sub-agents:
+    parameters:
+      - name: agent_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Agents]
+      summary: List sub-agents of a parent agent
+      operationId: listSubAgents
+      parameters:
+        - name: recursive
+          in: query
+          description: If true, returns all descendants up to 10 levels deep
+          schema:
+            type: boolean
+            default: false
+      responses:
+        "200":
+          description: Sub-agents
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  agents:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Agent"
+                  count:
+                    type: integer
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/agents/{agent_id}/profile:
+    parameters:
+      - name: agent_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    put:
+      tags: [Agents]
+      summary: Update an agent's team directory profile
+      operationId: updateAgentProfile
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                role:
+                  type: string
+                capabilities:
+                  type: array
+                  items:
+                    type: string
+                zone:
+                  type: string
+                max_tasks:
+                  type: integer
+                working_hours:
+                  type: string
+                accepts_from:
+                  type: array
+                  items:
+                    type: string
+                escalation_agent_id:
+                  type: string
+                  format: uuid
+                  nullable: true
+      responses:
+        "204":
+          description: Profile updated
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Agent not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  # ------------------------------------------------------------------
+  # Webhooks
+  # ------------------------------------------------------------------
+  /api/v1/workspaces/{ws_id}/webhooks:
+    parameters:
+      - name: ws_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [Webhooks]
+      summary: Create a webhook
+      operationId: createWebhook
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, url, events]
+              properties:
+                name:
+                  type: string
+                url:
+                  type: string
+                  format: uri
+                events:
+                  type: array
+                  items:
+                    type: string
+                  example: ["task.created", "task.moved", "task.assigned"]
+      responses:
+        "201":
+          description: Webhook created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WebhookConfig"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    get:
+      tags: [Webhooks]
+      summary: List webhooks for a workspace
+      operationId: listWebhooks
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: List of webhooks
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  webhooks:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/WebhookConfig"
+                  count:
+                    type: integer
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/webhooks/{webhook_id}:
+    parameters:
+      - name: webhook_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Webhooks]
+      summary: Get a webhook by ID
+      operationId: getWebhook
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Webhook
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WebhookConfig"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Webhook not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    patch:
+      tags: [Webhooks]
+      summary: Update a webhook
+      operationId: updateWebhook
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                url:
+                  type: string
+                  format: uri
+                events:
+                  type: array
+                  items:
+                    type: string
+                is_active:
+                  type: boolean
+      responses:
+        "200":
+          description: Updated webhook
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WebhookConfig"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    delete:
+      tags: [Webhooks]
+      summary: Delete a webhook
+      operationId: deleteWebhook
+      security:
+        - BearerAuth: []
+      responses:
+        "204":
+          description: Webhook deleted
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/webhooks/{webhook_id}/deliveries:
+    parameters:
+      - name: webhook_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Webhooks]
+      summary: List delivery attempts for a webhook
+      operationId: listWebhookDeliveries
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: limit
+          in: query
+          description: Maximum number of deliveries to return (default 50, max 200)
+          schema:
+            type: integer
+            default: 50
+            maximum: 200
+      responses:
+        "200":
+          description: Webhook delivery log
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  deliveries:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/WebhookDelivery"
+                  count:
+                    type: integer
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/webhooks/{webhook_id}/test:
+    parameters:
+      - name: webhook_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [Webhooks]
+      summary: Send a test event to a webhook
+      operationId: testWebhook
+      security:
+        - BearerAuth: []
+      responses:
+        "202":
+          description: Test delivery dispatched
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  message:
+                    type: string
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  # ------------------------------------------------------------------
+  # Saved Views
+  # ------------------------------------------------------------------
+  /api/v1/projects/{proj_id}/views:
+    parameters:
+      - name: proj_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [SavedViews]
+      summary: List saved views for a project
+      operationId: listSavedViews
+      responses:
+        "200":
+          description: Saved views
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  views:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/SavedView"
+                  count:
+                    type: integer
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    post:
+      tags: [SavedViews]
+      summary: Create a saved view
+      operationId: createSavedView
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, view_type]
+              properties:
+                name:
+                  type: string
+                view_type:
+                  type: string
+                  enum: [board, list, timeline]
+                filters:
+                  type: object
+                sort_by:
+                  type: string
+                sort_order:
+                  type: string
+                  enum: [asc, desc]
+                columns:
+                  type: array
+                  items:
+                    type: string
+                is_shared:
+                  type: boolean
+                  default: false
+      responses:
+        "201":
+          description: Saved view created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SavedView"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/views/{view_id}:
+    parameters:
+      - name: view_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [SavedViews]
+      summary: Get a saved view by ID
+      operationId: getSavedView
+      responses:
+        "200":
+          description: Saved view
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SavedView"
+        "404":
+          description: View not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    patch:
+      tags: [SavedViews]
+      summary: Update a saved view
+      operationId: updateSavedView
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                view_type:
+                  type: string
+                  enum: [board, list, timeline]
+                filters:
+                  type: object
+                sort_by:
+                  type: string
+                sort_order:
+                  type: string
+                  enum: [asc, desc]
+                columns:
+                  type: array
+                  items:
+                    type: string
+                is_shared:
+                  type: boolean
+      responses:
+        "200":
+          description: Updated view
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SavedView"
+        "404":
+          description: View not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    delete:
+      tags: [SavedViews]
+      summary: Delete a saved view
+      operationId: deleteSavedView
+      responses:
+        "204":
+          description: View deleted
+        "404":
+          description: View not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  # ------------------------------------------------------------------
+  # VCS Links
+  # ------------------------------------------------------------------
+  /api/v1/tasks/{task_id}/vcs-links:
+    parameters:
+      - name: task_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [VCSLinks]
+      summary: List VCS links for a task
+      operationId: listVCSLinks
+      responses:
+        "200":
+          description: VCS links
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  vcs_links:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/VCSLink"
+                  count:
+                    type: integer
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    post:
+      tags: [VCSLinks]
+      summary: Create a VCS link for a task
+      operationId: createVCSLink
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [link_type, external_id, url]
+              properties:
+                provider:
+                  type: string
+                  enum: [github, gitlab]
+                  default: github
+                link_type:
+                  type: string
+                  enum: [pr, commit, branch]
+                external_id:
+                  type: string
+                url:
+                  type: string
+                  format: uri
+                title:
+                  type: string
+                status:
+                  type: string
+      responses:
+        "201":
+          description: VCS link created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VCSLink"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/vcs-links/{link_id}:
+    parameters:
+      - name: link_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    delete:
+      tags: [VCSLinks]
+      summary: Delete a VCS link
+      operationId: deleteVCSLink
+      responses:
+        "204":
+          description: VCS link deleted
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: VCS link not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  # ------------------------------------------------------------------
+  # GitHub Webhook Receiver (public — no auth)
+  # ------------------------------------------------------------------
+  /webhooks/github:
+    post:
+      tags: [VCSLinks]
+      summary: Receive GitHub webhook events (push, pull_request)
+      operationId: githubWebhook
+      security: []
+      parameters:
+        - name: X-GitHub-Event
+          in: header
+          required: true
+          schema:
+            type: string
+            example: pull_request
+        - name: X-Hub-Signature-256
+          in: header
+          description: HMAC-SHA256 signature (optional, required when MESH_GITHUB_WEBHOOK_SECRET is set)
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: GitHub webhook payload
+      responses:
+        "200":
+          description: Event processed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+        "400":
+          description: Bad request (missing event header or invalid payload)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Invalid HMAC signature
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  # ------------------------------------------------------------------
+  # Integrations
+  # ------------------------------------------------------------------
+  /api/v1/workspaces/{ws_id}/integrations:
+    parameters:
+      - name: ws_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Integrations]
+      summary: List integrations for a workspace
+      operationId: listIntegrations
+      responses:
+        "200":
+          description: Integrations
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  integrations:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/IntegrationConfig"
+                  count:
+                    type: integer
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    post:
+      tags: [Integrations]
+      summary: Configure a new integration
+      operationId: configureIntegration
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [provider]
+              properties:
+                provider:
+                  type: string
+                  enum: [slack, github, spark, mcp]
+                config:
+                  type: object
+                is_active:
+                  type: boolean
+                  default: true
+      responses:
+        "201":
+          description: Integration configured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IntegrationConfig"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/integrations/{int_id}:
+    parameters:
+      - name: int_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    patch:
+      tags: [Integrations]
+      summary: Update an integration
+      operationId: updateIntegration
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                config:
+                  type: object
+                is_active:
+                  type: boolean
+      responses:
+        "200":
+          description: Updated integration
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IntegrationConfig"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    delete:
+      tags: [Integrations]
+      summary: Delete an integration
+      operationId: deleteIntegration
+      security:
+        - BearerAuth: []
+      responses:
+        "204":
+          description: Integration deleted
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  # ------------------------------------------------------------------
+  # Analytics
+  # ------------------------------------------------------------------
+  /api/v1/workspaces/{ws_id}/analytics:
+    parameters:
+      - name: ws_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Analytics]
+      summary: Get workspace analytics metrics
+      operationId: getAnalyticsMetrics
+      parameters:
+        - name: from
+          in: query
+          description: Start of date range (RFC3339 or YYYY-MM-DD; default 30 days ago)
+          schema:
+            type: string
+        - name: to
+          in: query
+          description: End of date range (RFC3339 or YYYY-MM-DD; default now)
+          schema:
+            type: string
+        - name: project_id
+          in: query
+          description: Filter metrics to a specific project
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Analytics metrics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AnalyticsMetrics"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  # ------------------------------------------------------------------
+  # Project Updates
+  # ------------------------------------------------------------------
+  /api/v1/projects/{proj_id}/updates:
+    parameters:
+      - name: proj_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [ProjectUpdates]
+      summary: Post a project status update
+      operationId: createProjectUpdate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title:
+                  type: string
+                status:
+                  type: string
+                  enum: [on_track, at_risk, off_track, completed]
+                summary:
+                  type: string
+                highlights:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      text:
+                        type: string
+                blockers:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      text:
+                        type: string
+                next_steps:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      text:
+                        type: string
+      responses:
+        "201":
+          description: Project update created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectUpdate"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    get:
+      tags: [ProjectUpdates]
+      summary: List project status updates
+      operationId: listProjectUpdates
+      parameters:
+        - $ref: "#/components/parameters/PageParam"
+        - $ref: "#/components/parameters/PageSizeParam"
+      responses:
+        "200":
+          description: Paginated project updates
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaginatedResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/projects/{proj_id}/updates/latest:
+    parameters:
+      - name: proj_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [ProjectUpdates]
+      summary: Get the latest project status update
+      operationId: getLatestProjectUpdate
+      responses:
+        "200":
+          description: Latest project update
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectUpdate"
+        "404":
+          description: No updates found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  # ------------------------------------------------------------------
+  # Initiatives
+  # ------------------------------------------------------------------
+  /api/v1/workspaces/{ws_id}/initiatives:
+    parameters:
+      - name: ws_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [Initiatives]
+      summary: Create an initiative
+      operationId: createInitiative
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name:
+                  type: string
+                description:
+                  type: string
+                status:
+                  type: string
+                  enum: [planning, active, completed, cancelled]
+                  default: planning
+                target_date:
+                  type: string
+                  format: date
+                  description: ISO date YYYY-MM-DD
+      responses:
+        "201":
+          description: Initiative created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Initiative"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    get:
+      tags: [Initiatives]
+      summary: List initiatives in a workspace
+      operationId: listInitiatives
+      responses:
+        "200":
+          description: Initiatives
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Initiative"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/initiatives/{init_id}:
+    parameters:
+      - name: init_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Initiatives]
+      summary: Get an initiative by ID
+      operationId: getInitiative
+      responses:
+        "200":
+          description: Initiative
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Initiative"
+        "404":
+          description: Initiative not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    patch:
+      tags: [Initiatives]
+      summary: Update an initiative
+      operationId: updateInitiative
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                description:
+                  type: string
+                status:
+                  type: string
+                  enum: [planning, active, completed, cancelled]
+                target_date:
+                  type: string
+                  format: date
+                  nullable: true
+      responses:
+        "200":
+          description: Updated initiative
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Initiative"
+        "404":
+          description: Initiative not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    delete:
+      tags: [Initiatives]
+      summary: Delete an initiative
+      operationId: deleteInitiative
+      security:
+        - BearerAuth: []
+      responses:
+        "204":
+          description: Initiative deleted
+        "404":
+          description: Initiative not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/initiatives/{init_id}/projects:
+    parameters:
+      - name: init_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [Initiatives]
+      summary: Link a project to an initiative
+      operationId: linkProjectToInitiative
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id]
+              properties:
+                project_id:
+                  type: string
+                  format: uuid
+      responses:
+        "200":
+          description: Project linked
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/initiatives/{init_id}/projects/{proj_id}:
+    parameters:
+      - name: init_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: proj_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    delete:
+      tags: [Initiatives]
+      summary: Unlink a project from an initiative
+      operationId: unlinkProjectFromInitiative
+      security:
+        - BearerAuth: []
+      responses:
+        "204":
+          description: Project unlinked
+        "404":
+          description: Initiative or project not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  # ------------------------------------------------------------------
+  # Triage Inbox
+  # ------------------------------------------------------------------
+  /api/v1/workspaces/{ws_id}/triage:
+    parameters:
+      - name: ws_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Triage]
+      summary: List triage inbox tasks across all workspace projects
+      operationId: listTriageTasks
+      parameters:
+        - $ref: "#/components/parameters/PageParam"
+        - $ref: "#/components/parameters/PageSizeParam"
+      responses:
+        "200":
+          description: Paginated triage tasks (tasks with no status or in backlog)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaginatedResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  # ------------------------------------------------------------------
+  # Team Directory
+  # ------------------------------------------------------------------
+  /api/v1/workspaces/{ws_id}/team:
+    parameters:
+      - name: ws_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Team]
+      summary: Get team directory (agents + human members with profiles)
+      operationId: getTeamDirectory
+      responses:
+        "200":
+          description: Team directory entries
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/TeamDirectoryEntry"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  # ------------------------------------------------------------------
+  # Assignment Rules
+  # ------------------------------------------------------------------
+  /api/v1/workspaces/{ws_id}/rules/assignment:
+    parameters:
+      - name: ws_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Rules]
+      summary: Get workspace-level assignment rules
+      operationId: getWorkspaceAssignmentRules
+      responses:
+        "200":
+          description: Assignment rules config
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AssignmentRulesConfig"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    put:
+      tags: [Rules]
+      summary: Set workspace-level assignment rules
+      operationId: setWorkspaceAssignmentRules
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AssignmentRulesConfig"
+      responses:
+        "200":
+          description: Rules saved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/projects/{proj_id}/rules/assignment:
+    parameters:
+      - name: proj_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Rules]
+      summary: Get effective assignment rules for a project (workspace + project overrides)
+      operationId: getEffectiveAssignmentRules
+      responses:
+        "200":
+          description: Effective assignment rules config
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AssignmentRulesConfig"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    put:
+      tags: [Rules]
+      summary: Set project-level assignment rules (overrides workspace defaults)
+      operationId: setProjectAssignmentRules
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AssignmentRulesConfig"
+      responses:
+        "200":
+          description: Rules saved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+
+  # ------------------------------------------------------------------
+  # Workflow Rules
+  # ------------------------------------------------------------------
+  /api/v1/projects/{proj_id}/rules/workflow:
+    parameters:
+      - name: proj_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Rules]
+      summary: Get workflow rules for a project
+      operationId: getProjectWorkflowRules
+      responses:
+        "200":
+          description: Workflow rules config
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkflowRulesConfig"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    put:
+      tags: [Rules]
+      summary: Set workflow rules for a project
+      operationId: setProjectWorkflowRules
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WorkflowRulesConfig"
+      responses:
+        "200":
+          description: Workflow rules saved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+
+  # ------------------------------------------------------------------
+  # Workflow Templates
+  # ------------------------------------------------------------------
+  /api/v1/workspaces/{ws_id}/rules/workflow-templates:
+    parameters:
+      - name: ws_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Rules]
+      summary: Get workspace workflow templates
+      operationId: getWorkflowTemplates
+      responses:
+        "200":
+          description: Workflow templates keyed by template name
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties:
+                  $ref: "#/components/schemas/WorkflowRulesConfig"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    put:
+      tags: [Rules]
+      summary: Set workspace workflow templates
+      operationId: setWorkflowTemplates
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties:
+                $ref: "#/components/schemas/WorkflowRulesConfig"
+      responses:
+        "200":
+          description: Templates saved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+
+  # ------------------------------------------------------------------
+  # Governance Rules (advisory/blocking rule engine)
+  # ------------------------------------------------------------------
+  /api/v1/workspaces/{ws_id}/rules:
+    parameters:
+      - name: ws_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [GovernanceRules]
+      summary: Create a governance rule at workspace scope
+      operationId: createWorkspaceRule
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [rule_type, name, enforcement]
+              properties:
+                rule_type:
+                  type: string
+                name:
+                  type: string
+                description:
+                  type: string
+                config:
+                  type: object
+                applies_to_actor_types:
+                  type: array
+                  items:
+                    type: string
+                applies_to_roles:
+                  type: array
+                  items:
+                    type: string
+                enforcement:
+                  type: string
+                  enum: [advisory, block]
+                priority:
+                  type: integer
+                  default: 0
+      responses:
+        "201":
+          description: Rule created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Rule"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    get:
+      tags: [GovernanceRules]
+      summary: List governance rules for a workspace
+      operationId: listWorkspaceRules
+      parameters:
+        - name: include_disabled
+          in: query
+          schema:
+            type: boolean
+            default: false
+      responses:
+        "200":
+          description: Rules list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Rule"
+                  total_count:
+                    type: integer
+
+  /api/v1/workspaces/{ws_id}/rules/effective:
+    parameters:
+      - name: ws_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [GovernanceRules]
+      summary: Get effective governance rules for the current actor in a workspace
+      operationId: getWorkspaceEffectiveRules
+      responses:
+        "200":
+          description: Effective rules
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Rule"
+                  total_count:
+                    type: integer
+
+  /api/v1/projects/{proj_id}/rules:
+    parameters:
+      - name: proj_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [GovernanceRules]
+      summary: Create a governance rule at project scope
+      operationId: createProjectRule
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [rule_type, name, enforcement]
+              properties:
+                rule_type:
+                  type: string
+                name:
+                  type: string
+                description:
+                  type: string
+                config:
+                  type: object
+                applies_to_actor_types:
+                  type: array
+                  items:
+                    type: string
+                applies_to_roles:
+                  type: array
+                  items:
+                    type: string
+                enforcement:
+                  type: string
+                  enum: [advisory, block]
+                priority:
+                  type: integer
+                  default: 0
+      responses:
+        "201":
+          description: Rule created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Rule"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    get:
+      tags: [GovernanceRules]
+      summary: List governance rules for a project
+      operationId: listProjectRules
+      parameters:
+        - name: include_disabled
+          in: query
+          schema:
+            type: boolean
+            default: false
+      responses:
+        "200":
+          description: Rules list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Rule"
+                  total_count:
+                    type: integer
+
+  /api/v1/projects/{proj_id}/rules/effective:
+    parameters:
+      - name: proj_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [GovernanceRules]
+      summary: Get effective governance rules for the current actor in a project
+      operationId: getProjectEffectiveRules
+      responses:
+        "200":
+          description: Effective rules (workspace + project merged)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Rule"
+                  total_count:
+                    type: integer
+
+  /api/v1/rules/{rule_id}:
+    parameters:
+      - name: rule_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [GovernanceRules]
+      summary: Get a governance rule by ID
+      operationId: getRule
+      responses:
+        "200":
+          description: Rule
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Rule"
+        "404":
+          description: Rule not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    patch:
+      tags: [GovernanceRules]
+      summary: Update a governance rule
+      operationId: updateRule
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                description:
+                  type: string
+                config:
+                  type: object
+                applies_to_actor_types:
+                  type: array
+                  items:
+                    type: string
+                applies_to_roles:
+                  type: array
+                  items:
+                    type: string
+                enforcement:
+                  type: string
+                  enum: [advisory, block]
+                priority:
+                  type: integer
+                is_enabled:
+                  type: boolean
+      responses:
+        "200":
+          description: Updated rule
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Rule"
+        "404":
+          description: Rule not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    delete:
+      tags: [GovernanceRules]
+      summary: Delete a governance rule
+      operationId: deleteRule
+      security:
+        - BearerAuth: []
+      responses:
+        "204":
+          description: Rule deleted
+        "404":
+          description: Rule not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/rules/evaluate:
+    post:
+      tags: [GovernanceRules]
+      summary: Dry-run evaluate rules for a proposed action
+      operationId: evaluateRules
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action, workspace_id]
+              properties:
+                action:
+                  type: string
+                  description: Action to evaluate (e.g. move_task, create_task)
+                workspace_id:
+                  type: string
+                  format: uuid
+                project_id:
+                  type: string
+                  format: uuid
+                  nullable: true
+                task_id:
+                  type: string
+                  format: uuid
+                  nullable: true
+                target_status_id:
+                  type: string
+                  format: uuid
+                  nullable: true
+      responses:
+        "200":
+          description: Evaluation result with any violations
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  violations:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/RuleViolation"
+                  blocked:
+                    type: boolean
+
+  # ------------------------------------------------------------------
+  # Violations Log
+  # ------------------------------------------------------------------
+  /api/v1/workspaces/{ws_id}/violations:
+    parameters:
+      - name: ws_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [GovernanceRules]
+      summary: List rule violation log for a workspace
+      operationId: listViolations
+      parameters:
+        - name: limit
+          in: query
+          description: Maximum number of violations (default 100)
+          schema:
+            type: integer
+            default: 100
+      responses:
+        "200":
+          description: Violations log
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                  total_count:
+                    type: integer
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  # ------------------------------------------------------------------
+  # Config Import/Export
+  # ------------------------------------------------------------------
+  /api/v1/workspaces/{ws_id}/config/export:
+    parameters:
+      - name: ws_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Config]
+      summary: Export workspace config as YAML (mesh-config.yaml format)
+      operationId: exportConfig
+      responses:
+        "200":
+          description: YAML workspace config
+          content:
+            application/yaml:
+              schema:
+                type: string
+                format: binary
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/workspaces/{ws_id}/config/import:
+    parameters:
+      - name: ws_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [Config]
+      summary: Import workspace config from YAML
+      operationId: importConfig
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/yaml:
+            schema:
+              type: string
+              format: binary
+              description: YAML in mesh-config.yaml format
+      responses:
+        "200":
+          description: Import result summary
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Import result with counts of created/updated/skipped entities
+        "400":
+          description: Invalid YAML or config schema error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/workspaces/{ws_id}/team/import:
+    parameters:
+      - name: ws_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [Config]
+      summary: Bulk-import agent/human team profiles from YAML
+      operationId: importTeam
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/yaml:
+            schema:
+              type: string
+              format: binary
+              description: YAML TeamConfig with agent and human profile entries
+      responses:
+        "200":
+          description: Import result summary
+          content:
+            application/json:
+              schema:
+                type: object
+        "400":
+          description: Invalid YAML
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  # ------------------------------------------------------------------
+  # Spark Agent Catalog (optional — enabled via MESH_SPARK_ENABLED=true)
+  # ------------------------------------------------------------------
+  /api/v1/spark/agents:
+    get:
+      tags: [Spark]
+      summary: Search the Spark agent catalog
+      operationId: sparkSearchAgents
+      parameters:
+        - name: q
+          in: query
+          description: Free-text search query
+          schema:
+            type: string
+        - name: tags
+          in: query
+          description: Comma-separated list of tags to filter by
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        "200":
+          description: Matching agents from Spark catalog
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/SparkAgentManifest"
+                  count:
+                    type: integer
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/spark/agents/popular:
+    get:
+      tags: [Spark]
+      summary: Get popular agents from the Spark catalog
+      operationId: sparkPopularAgents
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        "200":
+          description: Popular agents
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/SparkAgentManifest"
+                  count:
+                    type: integer
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/spark/agents/{agent_id}:
+    parameters:
+      - name: agent_id
+        in: path
+        required: true
+        schema:
+          type: string
+          description: Spark catalog agent ID (not a UUID — Spark-assigned string)
+    get:
+      tags: [Spark]
+      summary: Get a Spark agent manifest by ID
+      operationId: sparkGetAgent
+      responses:
+        "200":
+          description: Spark agent manifest
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SparkAgentManifest"
+        "404":
+          description: Agent not found in catalog
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: Spark catalog unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/spark/agents/{agent_id}/install:
+    parameters:
+      - name: agent_id
+        in: path
+        required: true
+        schema:
+          type: string
+          description: Spark catalog agent ID
+    post:
+      tags: [Spark]
+      summary: Install a Spark catalog agent into a workspace
+      operationId: sparkInstallAgent
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [workspace_id]
+              properties:
+                workspace_id:
+                  type: string
+                  format: uuid
+      responses:
+        "201":
+          description: Agent installed and registered locally
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  agent:
+                    $ref: "#/components/schemas/Agent"
+                  api_key:
+                    type: string
+                    description: Plaintext API key — only returned once
+                  spark:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                      version:
+                        type: string
+                      author:
+                        type: string
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Agent not found in catalog
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: Spark catalog unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"

@@ -89,6 +89,7 @@ The services will be available at:
 | `S3_BUCKET` | `mesh-artifacts` | Bucket name for artifacts |
 | `S3_REGION` | `us-east-1` | S3 region |
 | `S3_USE_SSL` | `false` | Use SSL for S3 connections |
+| `S3_PUBLIC_URL` | *(empty)* | Public base URL for artifact downloads (e.g. `https://mesh.example.com/s3`). Leave empty to use presigned S3 URLs. |
 
 ### Authentication
 
@@ -99,9 +100,73 @@ The services will be available at:
 | `CASDOOR_CLIENT_ID` | *(empty)* | Casdoor client ID (optional) |
 | `AGENT_KEY_PREFIX` | `agk` | Prefix for agent API keys |
 
+### CORS
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MESH_CORS_ORIGINS` | `*` | Comma-separated list of allowed origins (e.g. `https://mesh.example.com,https://app.example.com`). Use `*` for development only. |
+
+### Rate Limiting
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MESH_RATE_LIMIT_ENABLED` | `true` | Enable or disable rate limiting globally |
+| `MESH_RATE_LIMIT_AUTH_RPM` | `20` | Maximum requests per minute for auth endpoints (per IP) |
+| `MESH_RATE_LIMIT_API_RPM` | `600` | Maximum requests per minute for API endpoints (per authenticated actor) |
+
+### Spark Catalog
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MESH_SPARK_URL` | `https://spark.entire.vc` | Spark agent catalog API base URL |
+| `MESH_SPARK_ENABLED` | `false` | Enable Spark catalog routes (`/api/v1/spark/...`) |
+
 ---
 
 ## Production Deployment
+
+### Docker Compose (Production)
+
+For production, use `docker-compose.prod.yml` instead of the default `docker-compose.yml`. It builds all services from source and adds nginx, Prometheus, and Grafana.
+
+```bash
+# Copy and fill in production env vars
+cp .env.example .env.prod
+# Edit .env.prod: set POSTGRES_PASSWORD, REDIS_PASSWORD, JWT_SECRET, MINIO_ACCESS_KEY, MINIO_SECRET_KEY
+
+# Build and start all services
+docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
+
+# Verify all services are healthy
+docker compose -f docker-compose.prod.yml ps
+```
+
+Services included in `docker-compose.prod.yml`:
+
+| Service | Port | Description |
+|---------|------|-------------|
+| `postgres` | *(internal)* | PostgreSQL 16 — required env: `POSTGRES_PASSWORD` |
+| `redis` | *(internal)* | Redis 7 with password — required env: `REDIS_PASSWORD` |
+| `nats` | *(internal)* | NATS 2.10 with JetStream enabled |
+| `minio` | *(internal)* | MinIO object storage — required env: `MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY` |
+| `api` | `${API_PORT:-8005}` | Mesh API server (Go binary, runs DB migrations on startup) |
+| `mcp` | `${MCP_PORT:-8081}` | MCP server in SSE mode for remote agents |
+| `nginx` | `${HTTP_PORT:-80}` | Nginx serving the React SPA, proxying `/api` and `/ws` to the API |
+| `prometheus` | `${PROMETHEUS_PORT:-9090}` | Prometheus scraping `/metrics` from the API |
+| `grafana` | `${GRAFANA_PORT:-3001}` | Grafana dashboards — default password: `${GRAFANA_PASSWORD:-admin}` |
+
+Required environment variables for production:
+
+```bash
+POSTGRES_PASSWORD=your-strong-db-password
+REDIS_PASSWORD=your-redis-password
+JWT_SECRET=your-32-char-minimum-secret
+MINIO_ACCESS_KEY=your-minio-access-key
+MINIO_SECRET_KEY=your-minio-secret-key
+# Optional:
+CORS_ORIGINS=https://mesh.yourdomain.com
+GRAFANA_PASSWORD=your-grafana-admin-password
+```
 
 ### Security Checklist
 
@@ -261,7 +326,7 @@ All infrastructure containers have built-in health checks. Additionally:
 
 | Service | Health Check | Expected |
 |---------|-------------|----------|
-| API | `curl http://localhost:8005/health` | `{"status":"ok","service":"evc-mesh"}` |
+| API | `curl http://localhost:8005/health` | `{"status":"ok","service":"evc-mesh-api"}` |
 | PostgreSQL | `docker compose exec postgres pg_isready -U mesh` | `accepting connections` |
 | Redis | `docker compose exec redis redis-cli ping` | `PONG` |
 | NATS | `curl http://localhost:8223/healthz` | `ok` |

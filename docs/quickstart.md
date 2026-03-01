@@ -78,7 +78,7 @@ The key looks like: `agk_my-team_a1b2c3d4e5f6...`
 
 ### 5.2 Configure MCP
 
-Add to your project's `.claude.json`:
+Add to your project's `.mcp.json`:
 
 ```json
 {
@@ -157,6 +157,6 @@ With evc-mesh connected, Claude Code can:
 ## Next Steps
 
 - Read [Self-Hosting Guide](self-hosting.md) for production deployment, backup, and security hardening
-- Read [MCP Tool Reference](mcp-reference.md) for detailed documentation on all 23 MCP tools
+- Read [MCP Tool Reference](mcp-reference.md) for detailed documentation on all 34 MCP tools
 - Read the [OpenAPI spec](openapi.yaml) or visit `http://localhost:8005/docs` for the full REST API reference
 - Set up multiple agents to explore multi-agent collaboration via the event bus
