@@ -72,6 +72,7 @@ func main() {
 	wsRuleRepo := postgres.NewWorkspaceRuleRepo(db)
 	projRuleRepo := postgres.NewProjectRuleRepo(db)
 	ruleViolationLogRepo := postgres.NewRuleViolationLogRepo(db)
+	recurringRepo := postgres.NewRecurringRepo(db)
 
 	// 5. Create auth service.
 	authService := auth.NewService(
@@ -159,6 +160,11 @@ func main() {
 	initiativeService := service.NewInitiativeService(initiativeRepo, projectRepo)
 	triageService := service.NewTriageService(taskRepo)
 
+	recurringService := service.NewRecurringService(recurringRepo, taskService,
+		service.WithCommentRepoForRecurring(commentRepo),
+		service.WithArtifactRepoForRecurring(artifactRepo),
+	)
+
 	// rulesService and customFieldService were already created above (before taskService).
 
 	// Initialize S3 storage client for artifacts.
@@ -229,6 +235,7 @@ func main() {
 	triageHandler := handler.NewTriageHandler(triageService)
 	ruleHandler := handler.NewRuleHandler(ruleService)
 	rulesHandler := handler.NewRulesHandler(rulesService)
+	recurringHandler := handler.NewRecurringHandler(recurringService)
 	workspaceMemberHandler := handler.NewWorkspaceMemberHandler(workspaceMemberService)
 	projectMemberHandler := handler.NewProjectMemberHandler(projectMemberService)
 
@@ -467,6 +474,15 @@ func main() {
 	// Triage inbox route.
 	api.GET("/workspaces/:ws_id/triage", triageHandler.List)
 
+	// Recurring task schedule routes.
+	api.POST("/projects/:proj_id/recurring", recurringHandler.Create, rbac(mw.PermCreateTask))
+	api.GET("/projects/:proj_id/recurring", recurringHandler.List)
+	api.GET("/recurring/:id", recurringHandler.GetByID)
+	api.PATCH("/recurring/:id", recurringHandler.Update, rbac(mw.PermUpdateTask))
+	api.DELETE("/recurring/:id", recurringHandler.Delete, rbac(mw.PermDeleteTask))
+	api.POST("/recurring/:id/trigger", recurringHandler.Trigger, rbac(mw.PermCreateTask))
+	api.GET("/recurring/:id/history", recurringHandler.History)
+
 	// Team Directory routes (Sprint 20).
 	api.GET("/workspaces/:ws_id/team", rulesHandler.GetTeamDirectory)
 	api.PUT("/agents/:agent_id/profile", rulesHandler.UpdateAgentProfile)
@@ -516,7 +532,31 @@ func main() {
 		log.Printf("Spark catalog integration enabled (base URL: %s)", cfg.Spark.URL)
 	}
 
-	// 10. Start server with graceful shutdown.
+	// 10. Start recurring task scheduler.
+	schedulerShutdownCh := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(60 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+				count, err := recurringService.RunDue(ctx)
+				cancel()
+				if err != nil {
+					log.Printf("[scheduler] ERROR running due schedules: %v", err)
+				} else if count > 0 {
+					log.Printf("[scheduler] Created %d recurring task instances", count)
+				}
+			case <-schedulerShutdownCh:
+				log.Println("[scheduler] Shutting down")
+				return
+			}
+		}
+	}()
+	log.Println("Recurring task scheduler started (60s interval)")
+
+	// 11. Start server with graceful shutdown.
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
 	log.Printf("Starting evc-mesh API server on %s", addr)
 
@@ -532,6 +572,9 @@ func main() {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 	log.Println("Shutting down server...")
+
+	// Stop the scheduler.
+	close(schedulerShutdownCh)
 
 	// Graceful shutdown with timeout.
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 15*time.Second)

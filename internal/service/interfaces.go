@@ -390,6 +390,67 @@ type RulesService interface {
 	SetWorkflowTemplates(ctx context.Context, workspaceID uuid.UUID, templates map[string]domain.WorkflowRulesConfig) error
 }
 
+// CreateRecurringInput holds parameters for creating a recurring schedule.
+type CreateRecurringInput struct {
+	WorkspaceID         uuid.UUID
+	ProjectID           uuid.UUID
+	TitleTemplate       string
+	DescriptionTemplate string
+	Frequency           domain.RecurringFrequency
+	CronExpr            string
+	Timezone            string
+	AssigneeID          *uuid.UUID
+	AssigneeType        domain.AssigneeType
+	Priority            domain.Priority
+	Labels              []string
+	StatusID            *uuid.UUID
+	IsActive            bool
+	StartsAt            time.Time
+	EndsAt              *time.Time
+	MaxInstances        *int
+	CreatedBy           uuid.UUID
+	CreatedByType       domain.ActorType
+}
+
+// UpdateRecurringInput holds parameters for updating a recurring schedule.
+// All fields are optional (pointer = nil means "don't change").
+type UpdateRecurringInput struct {
+	TitleTemplate       *string
+	DescriptionTemplate *string
+	Frequency           *domain.RecurringFrequency
+	CronExpr            *string
+	Timezone            *string
+	AssigneeID          *uuid.UUID
+	AssigneeType        *domain.AssigneeType
+	Priority            *domain.Priority
+	Labels              *[]string
+	StatusID            *uuid.UUID
+	IsActive            *bool
+	EndsAt              *time.Time
+	MaxInstances        *int
+}
+
+// RecurringService provides business logic for recurring task schedules.
+type RecurringService interface {
+	Create(ctx context.Context, input CreateRecurringInput) (*domain.RecurringSchedule, error)
+	GetByID(ctx context.Context, id uuid.UUID) (*domain.RecurringSchedule, error)
+	Update(ctx context.Context, id uuid.UUID, input UpdateRecurringInput) (*domain.RecurringSchedule, error)
+	Delete(ctx context.Context, id uuid.UUID) error
+	ListByProject(ctx context.Context, projectID uuid.UUID, pg pagination.Params) (*pagination.Page[domain.RecurringSchedule], error)
+
+	// TriggerNow creates the next instance immediately, ignoring next_run_at.
+	// Returns the created task instance.
+	TriggerNow(ctx context.Context, id uuid.UUID) (*domain.Task, error)
+
+	// GetHistory returns all task instances for a recurring schedule, newest first.
+	GetHistory(ctx context.Context, id uuid.UUID, pg pagination.Params) (*pagination.Page[domain.RecurringInstanceSummary], error)
+
+	// RunDue is called by the scheduler goroutine. It finds all active schedules
+	// where next_run_at <= now and creates task instances for each.
+	// Returns the number of instances created.
+	RunDue(ctx context.Context) (int, error)
+}
+
 // AnalyticsMetrics holds aggregated workspace/project metrics.
 type AnalyticsMetrics struct {
 	TaskMetrics  TaskMetrics  `json:"task_metrics"`

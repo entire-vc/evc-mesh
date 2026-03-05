@@ -648,6 +648,16 @@ func (s *taskService) buildTaskSnapshot(ctx context.Context, task *domain.Task) 
 		snap["assignee_name"] = *task.AssigneeName
 	}
 
+	// Include recurring context when the task is part of a recurring series.
+	if task.RecurringScheduleID != nil {
+		snap["recurring_schedule_id"] = task.RecurringScheduleID
+		snap["recurring_instance_number"] = task.RecurringInstanceNumber
+		snap["recurring_context"] = map[string]any{
+			"instance_number": task.RecurringInstanceNumber,
+			"history_url":     fmt.Sprintf("/api/v1/recurring/%s/history", task.RecurringScheduleID),
+		}
+	}
+
 	return snap
 }
 

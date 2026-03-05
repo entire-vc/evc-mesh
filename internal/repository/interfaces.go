@@ -339,6 +339,22 @@ type RuleViolationLogRepository interface {
 	ListByWorkspace(ctx context.Context, workspaceID uuid.UUID, limit int) ([]domain.RuleViolationLog, error)
 }
 
+// RecurringRepository manages persistence for recurring task schedules.
+type RecurringRepository interface {
+	Create(ctx context.Context, schedule *domain.RecurringSchedule) error
+	GetByID(ctx context.Context, id uuid.UUID) (*domain.RecurringSchedule, error)
+	Update(ctx context.Context, schedule *domain.RecurringSchedule) error
+	Delete(ctx context.Context, id uuid.UUID) error
+	ListByProject(ctx context.Context, projectID uuid.UUID, pg pagination.Params) (*pagination.Page[domain.RecurringSchedule], error)
+	// FindDue returns active schedules where next_run_at <= now and (last_triggered_at IS NULL OR last_triggered_at < next_run_at),
+	// using SELECT FOR UPDATE SKIP LOCKED for safe concurrent access.
+	FindDue(ctx context.Context) ([]domain.RecurringSchedule, error)
+	// IncrementInstance atomically sets instance_count, last_triggered_at, and next_run_at in one UPDATE.
+	IncrementInstance(ctx context.Context, id uuid.UUID, nextRunAt *time.Time) error
+	// GetInstanceHistory returns lightweight summaries for all task instances of a schedule.
+	GetInstanceHistory(ctx context.Context, scheduleID uuid.UUID, pg pagination.Params) (*pagination.Page[domain.RecurringInstanceSummary], error)
+}
+
 // IntegrationRepository manages persistence for workspace integration configurations.
 type IntegrationRepository interface {
 	Upsert(ctx context.Context, cfg *domain.IntegrationConfig) error

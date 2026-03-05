@@ -36,7 +36,8 @@ const taskBaseColsNoAlias = `
 	assignee_id, assignee_type, priority, parent_task_id, position,
 	due_date, estimated_hours, custom_fields, labels,
 	task_number, created_by, created_by_type, created_at, updated_at,
-	completed_at, deleted_at`
+	completed_at, deleted_at,
+	recurring_schedule_id, recurring_instance_number`
 
 const taskComputedCols = `
 	(SELECT COUNT(*) FROM tasks st WHERE st.parent_task_id = tasks.id AND st.deleted_at IS NULL) AS subtask_count,
@@ -87,6 +88,10 @@ type taskRow struct {
 	CompletedAt    *time.Time          `db:"completed_at"`
 	DeletedAt      *time.Time          `db:"deleted_at"`
 
+	// Recurring series fields.
+	RecurringScheduleID     *uuid.UUID `db:"recurring_schedule_id"`
+	RecurringInstanceNumber *int       `db:"recurring_instance_number"`
+
 	// Computed enrichment fields populated by enriched queries.
 	SubtaskCount  int     `db:"subtask_count"`
 	AssigneeName  *string `db:"assignee_name"`
@@ -115,10 +120,12 @@ func (r *taskRow) toDomain() domain.Task {
 		CreatedAt:      r.CreatedAt,
 		UpdatedAt:      r.UpdatedAt,
 		CompletedAt:    r.CompletedAt,
-		SubtaskCount:   r.SubtaskCount,
-		AssigneeName:   r.AssigneeName,
-		ArtifactCount:  r.ArtifactCount,
-		VCSLinkCount:   r.VCSLinkCount,
+		RecurringScheduleID:     r.RecurringScheduleID,
+		RecurringInstanceNumber: r.RecurringInstanceNumber,
+		SubtaskCount:            r.SubtaskCount,
+		AssigneeName:            r.AssigneeName,
+		ArtifactCount:           r.ArtifactCount,
+		VCSLinkCount:            r.VCSLinkCount,
 	}
 }
 
@@ -146,13 +153,15 @@ func (r *TaskRepo) Create(ctx context.Context, task *domain.Task) error {
 			id, project_id, status_id, title, description,
 			assignee_id, assignee_type, priority, parent_task_id, position,
 			due_date, estimated_hours, custom_fields, labels,
-			task_number, created_by, created_by_type, created_at, updated_at, completed_at
+			task_number, created_by, created_by_type, created_at, updated_at, completed_at,
+			recurring_schedule_id, recurring_instance_number
 		) VALUES (
 			$1, $2, $3, $4, $5,
 			$6, $7, $8, $9, $10,
 			$11, $12, $13, $14,
 			(SELECT COALESCE(MAX(task_number), 0) + 1 FROM tasks WHERE project_id = $2),
-			$15, $16, $17, $18, $19
+			$15, $16, $17, $18, $19,
+			$20, $21
 		)
 	`
 	customFields := task.CustomFields
@@ -168,6 +177,7 @@ func (r *TaskRepo) Create(ctx context.Context, task *domain.Task) error {
 		task.AssigneeID, task.AssigneeType, task.Priority, task.ParentTaskID, task.Position,
 		task.DueDate, task.EstimatedHours, customFields, labels,
 		task.CreatedBy, task.CreatedByType, task.CreatedAt, task.UpdatedAt, task.CompletedAt,
+		task.RecurringScheduleID, task.RecurringInstanceNumber,
 	)
 	return err
 }
@@ -193,7 +203,8 @@ func (r *TaskRepo) Update(ctx context.Context, task *domain.Task) error {
 		    assignee_id = $5, assignee_type = $6, priority = $7,
 		    parent_task_id = $8, position = $9, due_date = $10,
 		    estimated_hours = $11, custom_fields = $12, labels = $13,
-		    updated_at = $14, completed_at = $15
+		    updated_at = $14, completed_at = $15,
+		    recurring_schedule_id = $16, recurring_instance_number = $17
 		WHERE id = $1 AND deleted_at IS NULL
 	`
 	customFields := task.CustomFields
@@ -210,6 +221,7 @@ func (r *TaskRepo) Update(ctx context.Context, task *domain.Task) error {
 		task.ParentTaskID, task.Position, task.DueDate,
 		task.EstimatedHours, customFields, labels,
 		task.UpdatedAt, task.CompletedAt,
+		task.RecurringScheduleID, task.RecurringInstanceNumber,
 	)
 	if err != nil {
 		return err
@@ -441,7 +453,8 @@ func (r *TaskRepo) ListByStatusCategory(ctx context.Context, workspaceID uuid.UU
 		t.assignee_id, t.assignee_type, t.priority, t.parent_task_id, t.position,
 		t.due_date, t.estimated_hours, t.custom_fields, t.labels,
 		t.task_number, t.created_by, t.created_by_type, t.created_at, t.updated_at,
-		t.completed_at, t.deleted_at, ` + taskComputedColsAliased + `
+		t.completed_at, t.deleted_at,
+		t.recurring_schedule_id, t.recurring_instance_number, ` + taskComputedColsAliased + `
 		FROM tasks t
 		INNER JOIN task_statuses ts ON ts.id = t.status_id
 		INNER JOIN projects p ON p.id = t.project_id

@@ -59,6 +59,10 @@ type Task struct {
 	UpdatedAt      time.Time       `json:"updated_at" db:"updated_at"`
 	CompletedAt    *time.Time      `json:"completed_at" db:"completed_at"`
 
+	// Recurring series fields — populated when the task is an instance of a recurring schedule.
+	RecurringScheduleID     *uuid.UUID `json:"recurring_schedule_id,omitempty" db:"recurring_schedule_id"`
+	RecurringInstanceNumber *int       `json:"recurring_instance_number,omitempty" db:"recurring_instance_number"`
+
 	// Computed fields — populated by enriched list/get queries, not stored columns.
 	SubtaskCount  int     `json:"subtask_count"`
 	AssigneeName  *string `json:"assignee_name,omitempty"`
