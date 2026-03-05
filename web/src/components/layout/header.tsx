@@ -31,6 +31,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { ViewTabBar } from "@/components/view-tab-bar";
+import { NotificationBell } from "@/components/notification-bell";
 import { api } from "@/lib/api";
 import type { PaginatedResponse, Task } from "@/types";
 
@@ -466,6 +467,9 @@ export function Header({ onToggleSidebar }: HeaderProps) {
 
       {/* Search */}
       <TaskSearchBox wsSlug={wsSlug} />
+
+      {/* Notifications */}
+      <NotificationBell />
 
       {/* Theme toggle */}
       <Button variant="ghost" size="icon" onClick={toggleTheme}>

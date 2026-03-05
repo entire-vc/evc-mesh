@@ -1,4 +1,5 @@
 import { type FormEvent, useCallback, useEffect, useState } from "react";
+import { toast } from "@/components/ui/toast";
 import { useNavigate, useParams } from "react-router";
 import {
   ArrowDown,
@@ -51,6 +52,7 @@ import { AddProjectMemberDialog } from "@/components/add-project-member-dialog";
 import { CreateRecurringDialog } from "@/components/create-recurring-dialog";
 import { RecurringHistoryPanel } from "@/components/recurring-history-panel";
 import { useRecurringStore } from "@/stores/recurring";
+import { useTemplateStore } from "@/stores/template";
 import { statusCategoryConfig } from "@/lib/utils";
 import { cn } from "@/lib/cn";
 import type {
@@ -58,10 +60,12 @@ import type {
   AssignmentRulesConfig,
   CustomFieldDefinition,
   EffectiveAssignmentRules,
+  Priority,
   ProjectMemberWithUser,
   ProjectRole,
   RecurringSchedule,
   TaskStatus,
+  TaskTemplate,
   TransitionRule,
   WorkflowRulesConfig,
   WorkflowRulesResponse,
@@ -159,6 +163,7 @@ function WorkflowRulesSection({
     type: "success" | "error";
     message: string;
   } | null>(null);
+  const [confirmStrictOpen, setConfirmStrictOpen] = useState(false);
 
   // Sync if workflowRules changes from fetch
   useEffect(() => {
@@ -194,11 +199,13 @@ function WorkflowRulesSection({
     try {
       await onSave(config);
       setFeedback({ type: "success", message: "Workflow rules saved." });
+      toast.success("Workflow rules saved.");
     } catch (err) {
       setFeedback({
         type: "error",
         message: err instanceof Error ? err.message : "Failed to save rules",
       });
+      toast.error(err instanceof Error ? err.message : "Failed to save rules");
     }
   };
 
@@ -228,21 +235,31 @@ function WorkflowRulesSection({
           </Button>
           <Button
             type="button"
-            variant="outline"
+            variant={enforcementMode === "strict" ? "default" : "outline"}
             size="sm"
-            disabled
-            title="Coming soon"
+            onClick={() => setConfirmStrictOpen(true)}
           >
             Strict
-            <Badge variant="secondary" className="ml-1.5 text-xs">
-              Soon
-            </Badge>
           </Button>
         </div>
         <p className="text-xs text-muted-foreground">
-          Advisory mode warns on violations but does not block actions.
+          {enforcementMode === "strict"
+            ? "Strict mode blocks task actions that violate workflow rules."
+            : "Advisory mode warns on violations but does not block actions."}
         </p>
       </div>
+
+      <ConfirmDialog
+        open={confirmStrictOpen}
+        onClose={() => setConfirmStrictOpen(false)}
+        onConfirm={() => {
+          setEnforcementMode("strict");
+          setConfirmStrictOpen(false);
+        }}
+        title="Enable Strict Enforcement?"
+        description="Strict mode will block task actions that violate workflow rules. Are you sure you want to enable strict enforcement?"
+        confirmText="Enable Strict"
+      />
 
       {/* Transitions table */}
       <div className="space-y-2">
@@ -1112,6 +1129,7 @@ export function ProjectSettingsPage() {
     { id: "workflow", label: "Workflow Rules" },
     { id: "assignment", label: "Assignment Rules" },
     { id: "recurring", label: "Recurring" },
+    { id: "templates", label: "Templates" },
   ];
 
   // --- Recurring state ---
@@ -1126,6 +1144,27 @@ export function ProjectSettingsPage() {
   const [editingSchedule, setEditingSchedule] = useState<RecurringSchedule | null>(null);
   const [historySchedule, setHistorySchedule] = useState<RecurringSchedule | null>(null);
   const [recurringActionLoading, setRecurringActionLoading] = useState<string | null>(null);
+
+  // --- Templates state ---
+  const {
+    templates,
+    fetchTemplates,
+    createTemplate,
+    updateTemplate,
+    deleteTemplate,
+  } = useTemplateStore();
+  const [templateDialogOpen, setTemplateDialogOpen] = useState(false);
+  const [editingTemplate, setEditingTemplate] = useState<TaskTemplate | null>(null);
+  const [templateActionLoading, setTemplateActionLoading] = useState<string | null>(null);
+  const [templateForm, setTemplateForm] = useState({
+    name: "",
+    description: "",
+    title_template: "",
+    description_template: "",
+    priority: "medium" as Priority,
+    labels: "",
+  });
+  const [templateFormError, setTemplateFormError] = useState<string | null>(null);
 
   // Populate general form when project changes
   useEffect(() => {
@@ -1146,6 +1185,7 @@ export function ProjectSettingsPage() {
       void fetchWorkflowRules(currentProject.id);
       void fetchEffectiveAssignmentRules(currentProject.id);
       void fetchRecurringSchedules(currentProject.id);
+      void fetchTemplates(currentProject.id);
     }
   }, [
     currentProject,
@@ -1155,6 +1195,7 @@ export function ProjectSettingsPage() {
     fetchWorkflowRules,
     fetchEffectiveAssignmentRules,
     fetchRecurringSchedules,
+    fetchTemplates,
   ]);
 
   // Fetch workspace members and agents for assignment selects
@@ -2168,7 +2209,271 @@ export function ProjectSettingsPage() {
         </>
       )}
 
-      {/* Section 8: Danger Zone */}
+      {/* Section 8: Task Templates */}
+      {activeTab === "templates" && (
+      <Card>
+        <CardHeader>
+          <div className="flex items-center justify-between">
+            <div className="space-y-1.5">
+              <CardTitle>Task Templates</CardTitle>
+              <CardDescription>
+                Define reusable templates to quickly create pre-filled tasks. Templates store default values for title, description, priority, assignee, and labels.
+              </CardDescription>
+            </div>
+            <Button
+              size="sm"
+              onClick={() => {
+                setEditingTemplate(null);
+                setTemplateForm({ name: "", description: "", title_template: "", description_template: "", priority: "medium", labels: "" });
+                setTemplateFormError(null);
+                setTemplateDialogOpen(true);
+              }}
+            >
+              <Plus className="h-4 w-4" />
+              New Template
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {templates.length === 0 ? (
+            <div className="py-10 text-center">
+              <Save className="mx-auto mb-3 h-8 w-8 text-muted-foreground opacity-50" />
+              <p className="text-sm text-muted-foreground">
+                No templates yet. Create one to speed up task creation.
+              </p>
+              <Button
+                size="sm"
+                variant="outline"
+                className="mt-4"
+                onClick={() => {
+                  setEditingTemplate(null);
+                  setTemplateForm({ name: "", description: "", title_template: "", description_template: "", priority: "medium", labels: "" });
+                  setTemplateFormError(null);
+                  setTemplateDialogOpen(true);
+                }}
+              >
+                <Plus className="h-4 w-4" />
+                New Template
+              </Button>
+            </div>
+          ) : (
+            <div className="divide-y divide-border">
+              {templates.map((tmpl) => (
+                <div key={tmpl.id} className="py-4 first:pt-0 last:pb-0">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-sm font-medium truncate">{tmpl.name}</span>
+                        <Badge variant="outline" className="text-[10px] capitalize shrink-0">
+                          {tmpl.priority}
+                        </Badge>
+                      </div>
+                      {tmpl.description && (
+                        <p className="mt-0.5 text-xs text-muted-foreground truncate max-w-md">
+                          {tmpl.description}
+                        </p>
+                      )}
+                      <div className="mt-1 flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
+                        {tmpl.title_template && (
+                          <span className="truncate max-w-xs">Title: {tmpl.title_template}</span>
+                        )}
+                        {tmpl.labels && tmpl.labels.length > 0 && (
+                          <span>Labels: {tmpl.labels.join(", ")}</span>
+                        )}
+                        {tmpl.estimated_hours != null && (
+                          <span>{tmpl.estimated_hours}h estimated</span>
+                        )}
+                      </div>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-1">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8 text-muted-foreground"
+                        title="Edit template"
+                        onClick={() => {
+                          setEditingTemplate(tmpl);
+                          setTemplateForm({
+                            name: tmpl.name,
+                            description: tmpl.description ?? "",
+                            title_template: tmpl.title_template ?? "",
+                            description_template: tmpl.description_template ?? "",
+                            priority: tmpl.priority,
+                            labels: tmpl.labels ? tmpl.labels.join(", ") : "",
+                          });
+                          setTemplateFormError(null);
+                          setTemplateDialogOpen(true);
+                        }}
+                      >
+                        <Pencil className="h-4 w-4" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                        title="Delete template"
+                        disabled={templateActionLoading === `delete-${tmpl.id}`}
+                        onClick={async () => {
+                          if (!confirm(`Delete template "${tmpl.name}"?`)) return;
+                          setTemplateActionLoading(`delete-${tmpl.id}`);
+                          try {
+                            await deleteTemplate(tmpl.id);
+                          } finally {
+                            setTemplateActionLoading(null);
+                          }
+                        }}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+      )}
+
+      {/* Template create/edit dialog */}
+      {currentProject && templateDialogOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="w-full max-w-lg rounded-lg bg-card border border-border shadow-xl p-6 space-y-4">
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-semibold">
+                {editingTemplate ? "Edit Template" : "New Template"}
+              </h2>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7"
+                onClick={() => setTemplateDialogOpen(false)}
+              >
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+
+            <div className="space-y-3">
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium">
+                  Name <span className="text-destructive">*</span>
+                </label>
+                <Input
+                  placeholder="e.g. Bug Report"
+                  value={templateForm.name}
+                  onChange={(e) => setTemplateForm((f) => ({ ...f, name: e.target.value }))}
+                  autoFocus
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium">Description</label>
+                <Input
+                  placeholder="Short description of when to use this template"
+                  value={templateForm.description}
+                  onChange={(e) => setTemplateForm((f) => ({ ...f, description: e.target.value }))}
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium">Default Title</label>
+                <Input
+                  placeholder="Default task title"
+                  value={templateForm.title_template}
+                  onChange={(e) => setTemplateForm((f) => ({ ...f, title_template: e.target.value }))}
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium">Default Description</label>
+                <Textarea
+                  placeholder="Default task description"
+                  rows={3}
+                  value={templateForm.description_template}
+                  onChange={(e) => setTemplateForm((f) => ({ ...f, description_template: e.target.value }))}
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium">Priority</label>
+                  <Select
+                    value={templateForm.priority}
+                    onChange={(e) => setTemplateForm((f) => ({ ...f, priority: e.target.value as Priority }))}
+                  >
+                    {["none", "low", "medium", "high", "urgent"].map((p) => (
+                      <option key={p} value={p} className="capitalize">{p}</option>
+                    ))}
+                  </Select>
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium">Labels</label>
+                  <Input
+                    placeholder="Comma-separated"
+                    value={templateForm.labels}
+                    onChange={(e) => setTemplateForm((f) => ({ ...f, labels: e.target.value }))}
+                  />
+                </div>
+              </div>
+            </div>
+
+            {templateFormError && (
+              <p className="text-sm text-destructive">{templateFormError}</p>
+            )}
+
+            <div className="flex justify-end gap-2 pt-2">
+              <Button variant="outline" onClick={() => setTemplateDialogOpen(false)}>
+                Cancel
+              </Button>
+              <Button
+                disabled={templateActionLoading === "save"}
+                onClick={async () => {
+                  if (!templateForm.name.trim()) {
+                    setTemplateFormError("Name is required");
+                    return;
+                  }
+                  setTemplateFormError(null);
+                  setTemplateActionLoading("save");
+                  try {
+                    const labels = templateForm.labels
+                      .split(",")
+                      .map((l) => l.trim())
+                      .filter(Boolean);
+                    if (editingTemplate) {
+                      await updateTemplate(editingTemplate.id, {
+                        name: templateForm.name.trim(),
+                        description: templateForm.description.trim() || undefined,
+                        title_template: templateForm.title_template.trim() || undefined,
+                        description_template: templateForm.description_template.trim() || undefined,
+                        priority: templateForm.priority,
+                        labels,
+                      });
+                    } else {
+                      await createTemplate(currentProject.id, {
+                        name: templateForm.name.trim(),
+                        description: templateForm.description.trim() || undefined,
+                        title_template: templateForm.title_template.trim() || undefined,
+                        description_template: templateForm.description_template.trim() || undefined,
+                        priority: templateForm.priority,
+                        labels,
+                      });
+                    }
+                    setTemplateDialogOpen(false);
+                  } catch (err) {
+                    setTemplateFormError(err instanceof Error ? err.message : "Failed to save template");
+                  } finally {
+                    setTemplateActionLoading(null);
+                  }
+                }}
+              >
+                {templateActionLoading === "save" ? "Saving..." : "Save Template"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Section 9: Danger Zone */}
       {activeTab === "general" && (
       <Card className="border-destructive/50">
         <CardHeader>

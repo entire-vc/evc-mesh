@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "react-router";
-import { CalendarDays, TrendingUp, Users, Zap } from "lucide-react";
-import { api } from "@/lib/api";
+import { CalendarDays, Download, Printer, TrendingUp, Users, Zap } from "lucide-react";
+import { api, getAccessToken } from "@/lib/api";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { useProjectStore } from "@/stores/project";
 import { Select } from "@/components/ui/select";
@@ -214,6 +214,33 @@ const PRESET_RANGES = [
   { label: "Last 90 days", days: 90 },
 ];
 
+// ---------------------------------------------------------------------------
+// CSV download helper
+// ---------------------------------------------------------------------------
+
+async function downloadCSV(url: string, filename: string): Promise<void> {
+  const token = getAccessToken();
+  const headers: Record<string, string> = {};
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
+
+  const res = await fetch(url, { headers });
+  if (!res.ok) {
+    throw new Error(`Export failed: ${res.statusText}`);
+  }
+
+  const blob = await res.blob();
+  const objectUrl = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = objectUrl;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  document.body.removeChild(anchor);
+  URL.revokeObjectURL(objectUrl);
+}
+
 export function AnalyticsPage() {
   useParams();
   const { currentWorkspace } = useWorkspaceStore();
@@ -223,6 +250,14 @@ export function AnalyticsPage() {
   const [loading, setLoading] = useState(true);
   const [rangeDays, setRangeDays] = useState(30);
   const [projectFilter, setProjectFilter] = useState<string>("");
+  const [exporting, setExporting] = useState(false);
+
+  // Keep query param values in a ref so the export callback can read them
+  // without becoming a dependency of fetchMetrics.
+  const exportParamsRef = useRef<{ from: string; to: string; project_id?: string }>({
+    from: "",
+    to: "",
+  });
 
   const fetchMetrics = useCallback(async () => {
     if (!currentWorkspace) return;
@@ -237,6 +272,12 @@ export function AnalyticsPage() {
         to: to.toISOString().slice(0, 10),
       };
       if (projectFilter) params.project_id = projectFilter;
+
+      exportParamsRef.current = {
+        from: params.from ?? "",
+        to: params.to ?? "",
+        project_id: projectFilter || undefined,
+      };
 
       const qs = new URLSearchParams(params).toString();
       const data = await api<AnalyticsMetrics>(
@@ -253,6 +294,27 @@ export function AnalyticsPage() {
   useEffect(() => {
     void fetchMetrics();
   }, [fetchMetrics]);
+
+  const handleExportCSV = useCallback(async () => {
+    if (!currentWorkspace) return;
+    setExporting(true);
+    try {
+      const p = exportParamsRef.current;
+      const qs = new URLSearchParams({
+        format: "csv",
+        from: p.from,
+        to: p.to,
+        ...(p.project_id ? { project_id: p.project_id } : {}),
+      }).toString();
+      const url = `/api/v1/workspaces/${currentWorkspace.id}/analytics/export?${qs}`;
+      const filename = `analytics-${p.from || new Date().toISOString().slice(0, 10)}.csv`;
+      await downloadCSV(url, filename);
+    } catch (err) {
+      console.error("CSV export failed:", err);
+    } finally {
+      setExporting(false);
+    }
+  }, [currentWorkspace]);
 
   const statusData = metrics
     ? Object.entries(metrics.task_metrics.by_status_category ?? {}).map(
@@ -295,6 +357,27 @@ export function AnalyticsPage() {
             </option>
           ))}
         </Select>
+
+        {/* Export buttons */}
+        <button
+          type="button"
+          onClick={() => void handleExportCSV()}
+          disabled={exporting || loading}
+          className="inline-flex items-center gap-1.5 rounded-md border border-input bg-background px-3 py-1.5 text-xs font-medium shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground disabled:pointer-events-none disabled:opacity-50"
+          title="Export data as CSV"
+        >
+          <Download className="h-3.5 w-3.5" />
+          {exporting ? "Exporting..." : "Export CSV"}
+        </button>
+        <button
+          type="button"
+          onClick={() => window.print()}
+          className="inline-flex items-center gap-1.5 rounded-md border border-input bg-background px-3 py-1.5 text-xs font-medium shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground"
+          title="Print or save as PDF"
+        >
+          <Printer className="h-3.5 w-3.5" />
+          Print / PDF
+        </button>
       </div>
 
       <div className="flex-1 overflow-y-auto space-y-6">

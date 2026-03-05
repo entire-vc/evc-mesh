@@ -623,6 +623,45 @@ export interface TeamImportResult {
   errors?: string[];
 }
 
+// Notification types
+
+export interface Notification {
+  id: string;
+  workspace_id: string;
+  user_id: string | null;
+  event_type: string;
+  title: string;
+  body: string;
+  metadata: Record<string, unknown>;
+  is_read: boolean;
+  created_at: string;
+}
+
+export interface NotificationPreference {
+  id: string;
+  workspace_id: string;
+  user_id: string | null;
+  agent_id: string | null;
+  channel: string;
+  events: string[];
+  is_enabled: boolean;
+  config: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface NotificationListResponse {
+  items: Notification[];
+  unread_count: number;
+}
+
+export interface UpdateNotificationPreferencesRequest {
+  workspace_id: string;
+  channel?: string;
+  events?: string[];
+  is_enabled?: boolean;
+}
+
 // API error type
 export interface ApiError {
   error?: string;
@@ -775,6 +814,55 @@ export interface UpdateRecurringRequest {
 export interface TriggerRecurringResponse {
   task: Task;
   instance_number: number;
+}
+
+// Task template types
+
+export interface TaskTemplate {
+  id: string;
+  project_id: string;
+  name: string;
+  description: string;
+  title_template: string;
+  description_template: string;
+  priority: Priority;
+  labels: string[];
+  estimated_hours: number | null;
+  custom_fields: Record<string, unknown> | null;
+  assignee_id: string | null;
+  assignee_type: AssigneeType | null;
+  status_id: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateTemplateRequest {
+  name: string;
+  description?: string;
+  title_template?: string;
+  description_template?: string;
+  priority?: Priority;
+  labels?: string[];
+  estimated_hours?: number | null;
+  custom_fields?: Record<string, unknown>;
+  assignee_id?: string | null;
+  assignee_type?: AssigneeType | null;
+  status_id?: string | null;
+}
+
+export interface UpdateTemplateRequest {
+  name?: string;
+  description?: string;
+  title_template?: string;
+  description_template?: string;
+  priority?: Priority;
+  labels?: string[];
+  estimated_hours?: number | null;
+  custom_fields?: Record<string, unknown>;
+  assignee_id?: string | null;
+  assignee_type?: AssigneeType | null;
+  status_id?: string | null;
 }
 
 // Analytics types

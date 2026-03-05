@@ -16,6 +16,7 @@ import { useProjectStore } from "@/stores/project";
 import { useAgentStore } from "@/stores/agent";
 import { useAuthStore } from "@/stores/auth";
 import { useWorkspaceStore } from "@/stores/workspace";
+import { useTemplateStore } from "@/stores/template";
 import { getAccessToken } from "@/lib/api";
 import type { AssigneeType, Artifact, Priority, CreateTaskRequest } from "@/types";
 
@@ -45,6 +46,7 @@ export function CreateTaskDialog({
   const { agents, fetchAgents } = useAgentStore();
   const { user } = useAuthStore();
   const { currentWorkspace } = useWorkspaceStore();
+  const { templates, fetchTemplates } = useTemplateStore();
 
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -72,15 +74,18 @@ export function CreateTaskDialog({
     pendingImagesRef.current = [];
   };
 
-  // Fetch agents and reset form when dialog opens
+  // Fetch agents, templates and reset form when dialog opens
   useEffect(() => {
     if (open) {
       resetForm();
       if (currentWorkspace) {
         void fetchAgents(currentWorkspace.id);
       }
+      if (currentProject) {
+        void fetchTemplates(currentProject.id);
+      }
     }
-  }, [open, currentWorkspace, fetchAgents]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [open, currentWorkspace, currentProject, fetchAgents, fetchTemplates]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleOpenChange = (nextOpen: boolean) => {
     onOpenChange(nextOpen);
@@ -192,6 +197,33 @@ export function CreateTaskDialog({
         </DialogHeader>
 
         <form onSubmit={handleSubmit} className="mt-4 space-y-4">
+          {templates.length > 0 && (
+            <div className="space-y-1.5">
+              <label htmlFor="ct-template" className="text-sm font-medium">
+                From Template
+              </label>
+              <Select
+                id="ct-template"
+                defaultValue=""
+                onChange={(e) => {
+                  const tmpl = templates.find((t) => t.id === e.target.value);
+                  if (!tmpl) return;
+                  if (tmpl.title_template) setTitle(tmpl.title_template);
+                  if (tmpl.description_template) setDescription(tmpl.description_template);
+                  if (tmpl.priority) setPriority(tmpl.priority as Priority);
+                  if (tmpl.labels && tmpl.labels.length > 0) setLabelsRaw(tmpl.labels.join(", "));
+                }}
+              >
+                <option value="">Select a template...</option>
+                {templates.map((tmpl) => (
+                  <option key={tmpl.id} value={tmpl.id}>
+                    {tmpl.name}
+                  </option>
+                ))}
+              </Select>
+            </div>
+          )}
+
           <div className="space-y-1.5">
             <label htmlFor="ct-title" className="text-sm font-medium">
               Title <span className="text-destructive">*</span>
