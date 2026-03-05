@@ -21,20 +21,21 @@ import (
 var timeNow = time.Now
 
 type taskService struct {
-	taskRepo        repository.TaskRepository
-	statusRepo      repository.TaskStatusRepository
-	depRepo         repository.TaskDependencyRepository
-	activityRepo    repository.ActivityLogRepository
-	customFieldSvc  CustomFieldService
-	projectRepo     repository.ProjectRepository
-	autoTransSvc    AutoTransitionService
-	ruleSvc         RuleService
-	rulesConfigSvc  RulesService
-	eventBusSvc     EventBusService
-	webhookSvc      WebhookService
-	agentNotifySvc  AgentNotifyService
-	notifySvc       NotificationService
-	ctxCacheInv     ContextCacheInvalidator
+	taskRepo          repository.TaskRepository
+	statusRepo        repository.TaskStatusRepository
+	depRepo           repository.TaskDependencyRepository
+	activityRepo      repository.ActivityLogRepository
+	customFieldSvc    CustomFieldService
+	projectRepo       repository.ProjectRepository
+	projectMemberRepo repository.ProjectMemberRepository
+	autoTransSvc      AutoTransitionService
+	ruleSvc           RuleService
+	rulesConfigSvc    RulesService
+	eventBusSvc       EventBusService
+	webhookSvc        WebhookService
+	agentNotifySvc    AgentNotifyService
+	notifySvc         NotificationService
+	ctxCacheInv       ContextCacheInvalidator
 }
 
 // NewTaskService returns a new TaskService backed by the given repositories.
@@ -139,6 +140,13 @@ func WithNotificationService(ns NotificationService) TaskServiceOption {
 	}
 }
 
+// WithProjectMemberRepoTask sets the project member repo for agent auto-enrollment.
+func WithProjectMemberRepoTask(pmr repository.ProjectMemberRepository) TaskServiceOption {
+	return func(s *taskService) {
+		s.projectMemberRepo = pmr
+	}
+}
+
 // SetAutoTransitionService implements TaskServiceAutoTransitionConfigurable,
 // allowing the auto-transition service to be wired after construction.
 func (s *taskService) SetAutoTransitionService(svc AutoTransitionService) {
@@ -175,6 +183,16 @@ func (s *taskService) Create(ctx context.Context, task *domain.Task) error {
 	now := timeNow()
 	task.CreatedAt = now
 	task.UpdatedAt = now
+
+	// Auto-enroll creator agent into project members.
+	actorID, actorType := actorctx.FromContext(ctx)
+	if actorType == domain.ActorTypeAgent && actorID != uuid.Nil {
+		s.ensureAgentProjectMember(ctx, task.ProjectID, actorID)
+	}
+	// Auto-enroll assigned agent into project members.
+	if task.AssigneeType == domain.AssigneeTypeAgent && task.AssigneeID != nil {
+		s.ensureAgentProjectMember(ctx, task.ProjectID, *task.AssigneeID)
+	}
 
 	if err := s.taskRepo.Create(ctx, task); err != nil {
 		return err
@@ -468,6 +486,11 @@ func (s *taskService) AssignTask(ctx context.Context, taskID uuid.UUID, input As
 	task.AssigneeType = input.AssigneeType
 	task.UpdatedAt = timeNow()
 
+	// Auto-enroll assigned agent into project members.
+	if input.AssigneeType == domain.AssigneeTypeAgent && input.AssigneeID != nil {
+		s.ensureAgentProjectMember(ctx, task.ProjectID, *input.AssigneeID)
+	}
+
 	if err := s.taskRepo.Update(ctx, task); err != nil {
 		return err
 	}
@@ -513,6 +536,12 @@ func (s *taskService) CreateSubtask(ctx context.Context, parentTaskID uuid.UUID,
 		AssigneeType: domain.AssigneeTypeUnassigned,
 		CreatedAt:    now,
 		UpdatedAt:    now,
+	}
+
+	// Auto-enroll creator agent into project members.
+	creatorID, creatorType := actorctx.FromContext(ctx)
+	if creatorType == domain.ActorTypeAgent && creatorID != uuid.Nil {
+		s.ensureAgentProjectMember(ctx, parent.ProjectID, creatorID)
 	}
 
 	if err := s.taskRepo.Create(ctx, child); err != nil {
@@ -900,4 +929,28 @@ func (s *taskService) evaluateRulesForMove(ctx context.Context, task *domain.Tas
 	}
 
 	return s.ruleSvc.Evaluate(ctx, input)
+}
+
+// ensureAgentProjectMember auto-enrolls an agent into a project's member list
+// if it is not already a member. This is called on task assignment, task creation,
+// and subtask creation so that agents can always access the projects they work in.
+func (s *taskService) ensureAgentProjectMember(ctx context.Context, projectID, agentID uuid.UUID) {
+	if s.projectMemberRepo == nil || agentID == uuid.Nil {
+		return
+	}
+	exists, err := s.projectMemberRepo.ExistsMember(ctx, projectID, nil, &agentID)
+	if err != nil || exists {
+		return
+	}
+	member := &domain.ProjectMember{
+		ID:        uuid.New(),
+		ProjectID: projectID,
+		AgentID:   &agentID,
+		Role:      domain.ProjectRoleMember,
+		CreatedAt: timeNow(),
+		UpdatedAt: timeNow(),
+	}
+	if err := s.projectMemberRepo.Create(ctx, member); err != nil {
+		log.Printf("[task-svc] auto-enroll agent %s in project %s failed: %v", agentID, projectID, err)
+	}
 }

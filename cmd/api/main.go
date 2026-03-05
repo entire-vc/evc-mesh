@@ -152,6 +152,7 @@ func main() {
 		service.WithRulesConfigService(rulesService),
 		service.WithContextCacheInvalidator(ctxCacheSvc),
 		service.WithNotificationService(notificationService),
+		service.WithProjectMemberRepoTask(projectMemberRepo),
 	)
 
 	// Wire auto-transition service. It calls taskService.MoveTask, so taskService must already
