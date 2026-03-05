@@ -29,7 +29,7 @@ SELECT
     gen_random_uuid(),
     p.id,
     wm.user_id,
-    CASE wm.role WHEN 'owner' THEN 'admin' ELSE 'member' END,
+    (CASE wm.role WHEN 'owner' THEN 'admin' ELSE 'member' END)::project_role,
     NOW(),
     NOW()
 FROM projects p
