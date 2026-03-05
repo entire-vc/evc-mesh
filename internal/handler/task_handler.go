@@ -50,6 +50,34 @@ type createTaskRequest struct {
 	CustomFields   json.RawMessage     `json:"custom_fields"`
 }
 
+// flexTime is a *time.Time that also accepts date-only strings ("2026-03-20")
+// in addition to the standard RFC3339 format. A JSON null sets the pointer to nil
+// while still marking the field as "present" via the wasSet flag.
+type flexTime struct {
+	Time   *time.Time
+	wasSet bool // true when the JSON key was present (even if null)
+}
+
+func (f *flexTime) UnmarshalJSON(b []byte) error {
+	f.wasSet = true
+	s := strings.Trim(string(b), `"`)
+	if s == "null" || s == "" {
+		f.Time = nil
+		return nil
+	}
+	// Try RFC3339 first.
+	if t, err := time.Parse(time.RFC3339, s); err == nil {
+		f.Time = &t
+		return nil
+	}
+	// Fall back to date-only (YYYY-MM-DD).
+	if t, err := time.Parse("2006-01-02", s); err == nil {
+		f.Time = &t
+		return nil
+	}
+	return errors.New("due_date must be RFC3339 or YYYY-MM-DD")
+}
+
 // updateTaskRequest represents the JSON body for partially updating a task.
 type updateTaskRequest struct {
 	Title          *string              `json:"title"`
@@ -57,7 +85,7 @@ type updateTaskRequest struct {
 	Priority       *domain.Priority     `json:"priority"`
 	AssigneeID     *uuid.UUID           `json:"assignee_id"`
 	AssigneeType   *domain.AssigneeType `json:"assignee_type"`
-	DueDate        *time.Time           `json:"due_date"`
+	DueDate        flexTime             `json:"due_date"`
 	EstimatedHours *float64             `json:"estimated_hours"`
 	Labels         *[]string            `json:"labels"`
 	CustomFields   json.RawMessage      `json:"custom_fields"`
@@ -202,8 +230,8 @@ func (h *TaskHandler) Update(c echo.Context) error {
 	if req.AssigneeType != nil {
 		task.AssigneeType = *req.AssigneeType
 	}
-	if req.DueDate != nil {
-		task.DueDate = req.DueDate
+	if req.DueDate.wasSet {
+		task.DueDate = req.DueDate.Time // nil clears, non-nil sets
 	}
 	if req.EstimatedHours != nil {
 		task.EstimatedHours = req.EstimatedHours

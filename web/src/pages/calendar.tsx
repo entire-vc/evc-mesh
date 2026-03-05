@@ -580,7 +580,7 @@ export function CalendarPage() {
         if (currentDate === newDate) return; // same date — no-op
 
         const taskStore = useTaskStore.getState();
-        taskStore.updateTask(draggedTask.id, { due_date: newDate }).catch(() => {
+        taskStore.updateTask(draggedTask.id, { due_date: `${newDate}T00:00:00Z` }).catch(() => {
           toast("Failed to update due date");
           if (currentProject) fetchTasks(currentProject.id);
         });
