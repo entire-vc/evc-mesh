@@ -355,6 +355,15 @@ type RecurringRepository interface {
 	GetInstanceHistory(ctx context.Context, scheduleID uuid.UUID, pg pagination.Params) (*pagination.Page[domain.RecurringInstanceSummary], error)
 }
 
+// TaskTemplateRepository manages persistence for reusable task templates.
+type TaskTemplateRepository interface {
+	Create(ctx context.Context, tmpl *domain.TaskTemplate) error
+	GetByID(ctx context.Context, id uuid.UUID) (*domain.TaskTemplate, error)
+	List(ctx context.Context, projectID uuid.UUID) ([]domain.TaskTemplate, error)
+	Update(ctx context.Context, id uuid.UUID, input domain.UpdateTemplateInput) (*domain.TaskTemplate, error)
+	Delete(ctx context.Context, id uuid.UUID) error
+}
+
 // IntegrationRepository manages persistence for workspace integration configurations.
 type IntegrationRepository interface {
 	Upsert(ctx context.Context, cfg *domain.IntegrationConfig) error

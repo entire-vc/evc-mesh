@@ -26,8 +26,10 @@ type commentService struct {
 	taskRepo       repository.TaskRepository
 	activityRepo   repository.ActivityLogRepository
 	agentNotifySvc AgentNotifyService
+	notifySvc      NotificationService
 	statusRepo     repository.TaskStatusRepository
 	projectRepo    repository.ProjectRepository
+	ctxCacheInv    ContextCacheInvalidator
 }
 
 // CommentServiceOption configures optional dependencies for CommentService.
@@ -46,6 +48,18 @@ func WithCommentStatusRepo(r repository.TaskStatusRepository) CommentServiceOpti
 // WithCommentProjectRepo sets the project repo for resolving workspace_id.
 func WithCommentProjectRepo(r repository.ProjectRepository) CommentServiceOption {
 	return func(s *commentService) { s.projectRepo = r }
+}
+
+// WithCommentContextCacheInvalidator sets an optional cache invalidator that is
+// called after every comment mutation so the parent task's context cache is evicted.
+func WithCommentContextCacheInvalidator(inv ContextCacheInvalidator) CommentServiceOption {
+	return func(s *commentService) { s.ctxCacheInv = inv }
+}
+
+// WithCommentNotificationService sets the notification service for dispatching
+// in-app notifications to workspace users when a new comment is created.
+func WithCommentNotificationService(ns NotificationService) CommentServiceOption {
+	return func(s *commentService) { s.notifySvc = ns }
 }
 
 // NewCommentService returns a new CommentService backed by the given repositories.
@@ -110,6 +124,9 @@ func (s *commentService) Create(ctx context.Context, comment *domain.Comment) er
 	if err := s.commentRepo.Create(ctx, comment); err != nil {
 		return err
 	}
+	if s.ctxCacheInv != nil {
+		s.ctxCacheInv.Invalidate(ctx, comment.TaskID)
+	}
 
 	// Notify assigned agent about the new comment.
 	if s.agentNotifySvc != nil && task.AssigneeType == domain.AssigneeTypeAgent && task.AssigneeID != nil {
@@ -166,6 +183,32 @@ func (s *commentService) Create(ctx context.Context, comment *domain.Comment) er
 		})
 	}
 
+	// Dispatch in-app notification to subscribed workspace users for comment.created.
+	if s.notifySvc != nil && s.projectRepo != nil {
+		if proj, err := s.projectRepo.GetByID(ctx, task.ProjectID); err == nil && proj != nil {
+			taskIDCopy := task.ID
+			projIDCopy := task.ProjectID
+			commentBody := comment.Body
+			if len(commentBody) > 200 {
+				commentBody = commentBody[:200]
+			}
+			s.notifySvc.Notify(ctx, domain.NotificationEvent{
+				WorkspaceID: proj.WorkspaceID,
+				TaskID:      &taskIDCopy,
+				ProjectID:   &projIDCopy,
+				EventType:   "comment.created",
+				Title:       "New comment on: " + task.Title,
+				Body:        commentBody,
+				Metadata: map[string]any{
+					"task_id":    task.ID,
+					"task_title": task.Title,
+					"project_id": task.ProjectID,
+					"comment_id": comment.ID,
+				},
+			})
+		}
+	}
+
 	return nil
 }
 
@@ -183,7 +226,13 @@ func (s *commentService) Update(ctx context.Context, comment *domain.Comment) er
 	existing.Body = comment.Body
 	existing.UpdatedAt = timeNow()
 
-	return s.commentRepo.Update(ctx, existing)
+	if err := s.commentRepo.Update(ctx, existing); err != nil {
+		return err
+	}
+	if s.ctxCacheInv != nil {
+		s.ctxCacheInv.Invalidate(ctx, existing.TaskID)
+	}
+	return nil
 }
 
 // Delete removes a comment after verifying it exists.
@@ -195,7 +244,13 @@ func (s *commentService) Delete(ctx context.Context, id uuid.UUID) error {
 	if existing == nil {
 		return apierror.NotFound("Comment")
 	}
-	return s.commentRepo.Delete(ctx, id)
+	if err := s.commentRepo.Delete(ctx, id); err != nil {
+		return err
+	}
+	if s.ctxCacheInv != nil {
+		s.ctxCacheInv.Invalidate(ctx, existing.TaskID)
+	}
+	return nil
 }
 
 // ListByTask returns a paginated list of comments for the given task.

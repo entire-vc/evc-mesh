@@ -292,6 +292,16 @@ type TriageService interface {
 	ListTriageTasks(ctx context.Context, workspaceID uuid.UUID, pg pagination.Params) (*pagination.Page[domain.Task], error)
 }
 
+// SlackService sends notifications to a Slack workspace via Incoming Webhooks.
+// NotifyTaskEvent is fire-and-forget: it spawns a goroutine and never blocks the caller.
+type SlackService interface {
+	// SendMessage POSTs a SlackMessage to the given Incoming Webhook URL.
+	SendMessage(ctx context.Context, webhookURL string, message SlackMessage) error
+	// NotifyTaskEvent looks up the active Slack integration for the workspace and
+	// sends a rich notification if the event type is subscribed. Fire-and-forget.
+	NotifyTaskEvent(ctx context.Context, workspaceID uuid.UUID, event TaskEvent)
+}
+
 // WebhookService provides business logic for outbound webhook management.
 type WebhookService interface {
 	Create(ctx context.Context, input domain.CreateWebhookInput) (*domain.WebhookConfig, error)
@@ -449,6 +459,19 @@ type RecurringService interface {
 	// where next_run_at <= now and creates task instances for each.
 	// Returns the number of instances created.
 	RunDue(ctx context.Context) (int, error)
+}
+
+// TaskTemplateService provides business logic for reusable task templates.
+type TaskTemplateService interface {
+	Create(ctx context.Context, input domain.CreateTemplateInput) (*domain.TaskTemplate, error)
+	GetByID(ctx context.Context, id uuid.UUID) (*domain.TaskTemplate, error)
+	List(ctx context.Context, projectID uuid.UUID) ([]domain.TaskTemplate, error)
+	Update(ctx context.Context, id uuid.UUID, input domain.UpdateTemplateInput) (*domain.TaskTemplate, error)
+	Delete(ctx context.Context, id uuid.UUID) error
+	// CreateTaskFromTemplate instantiates a new task from the given template, applying
+	// any caller-supplied field overrides (title, description, priority, labels,
+	// assignee_id, assignee_type, status_id, estimated_hours).
+	CreateTaskFromTemplate(ctx context.Context, templateID uuid.UUID, createdBy uuid.UUID, createdByType domain.ActorType, overrides map[string]any) (*domain.Task, error)
 }
 
 // AnalyticsMetrics holds aggregated workspace/project metrics.

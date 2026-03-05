@@ -73,6 +73,8 @@ func main() {
 	projRuleRepo := postgres.NewProjectRuleRepo(db)
 	ruleViolationLogRepo := postgres.NewRuleViolationLogRepo(db)
 	recurringRepo := postgres.NewRecurringRepo(db)
+	taskTemplateRepo := postgres.NewTaskTemplateRepo(db)
+	notificationRepo := postgres.NewNotificationRepo(db)
 
 	// 5. Create auth service.
 	authService := auth.NewService(
@@ -99,8 +101,13 @@ func main() {
 	// Task mutations (create/update/move/delete) will auto-publish events.
 	eventBusService := service.NewEventBusService(eventBusRepo, activityLogRepo)
 
+	// Slack service sends notifications via Slack Incoming Webhooks when a workspace has
+	// an active Slack integration configured. It is injected into webhookService below.
+	slackService := service.NewSlackService(integrationRepo)
+
 	// Webhook service is created before taskService so it can be injected for agent wakeup dispatch.
-	webhookService := service.NewWebhookService(webhookRepo)
+	// SlackService is co-injected so that every Dispatch call also notifies Slack when configured.
+	webhookService := service.NewWebhookService(webhookRepo, service.WithSlackService(slackService))
 
 	agentService := service.NewAgentService(agentRepo, activityLogRepo, workspaceRepo)
 
@@ -115,10 +122,23 @@ func main() {
 	})
 	agentNotifySvc := service.NewAgentNotifyService(agentService, agentNotifyRedis)
 
+	// Context cache for GET /tasks/:task_id/context (60-second TTL).
+	// A dedicated Redis client is used so it can be closed independently.
+	ctxCacheRedis := redis.NewClient(&redis.Options{
+		Addr:     cfg.Redis.Addr(),
+		Password: cfg.Redis.Password,
+		DB:       cfg.Redis.DB,
+	})
+	ctxCacheSvc := service.NewContextCacheService(ctxCacheRedis)
+
 	// RulesService (assignment/workflow config) is created before taskService for auto-assign injection.
 	rulesService := service.NewRulesServiceWithOptions(wsRuleRepo, projRuleRepo, ruleViolationLogRepo, agentRepo, workspaceMemberRepo, workspaceRepo, projectRepo,
 		service.WithRulesRuleRepo(ruleRepo),
 	)
+
+	// Notification service for in-app push notifications to workspace users.
+	// Created before taskService and commentService so it can be injected as a dependency.
+	notificationService := service.NewNotificationService(notificationRepo)
 
 	taskService := service.NewTaskService(taskRepo, taskStatusRepo, taskDependencyRepo, activityLogRepo,
 		service.WithCustomFieldService(customFieldService),
@@ -128,6 +148,8 @@ func main() {
 		service.WithWebhookService(webhookService),
 		service.WithAgentNotifyService(agentNotifySvc),
 		service.WithRulesConfigService(rulesService),
+		service.WithContextCacheInvalidator(ctxCacheSvc),
+		service.WithNotificationService(notificationService),
 	)
 
 	// Wire auto-transition service. It calls taskService.MoveTask, so taskService must already
@@ -145,6 +167,8 @@ func main() {
 		service.WithCommentAgentNotify(agentNotifySvc),
 		service.WithCommentStatusRepo(taskStatusRepo),
 		service.WithCommentProjectRepo(projectRepo),
+		service.WithCommentContextCacheInvalidator(ctxCacheSvc),
+		service.WithCommentNotificationService(notificationService),
 	)
 	depService := service.NewTaskDependencyService(taskDependencyRepo, taskRepo, activityLogRepo)
 	activityLogService := service.NewActivityLogService(activityLogRepo)
@@ -165,7 +189,9 @@ func main() {
 		service.WithArtifactRepoForRecurring(artifactRepo),
 	)
 
-	// rulesService and customFieldService were already created above (before taskService).
+	taskTemplateService := service.NewTaskTemplateService(taskTemplateRepo, taskService)
+
+	// rulesService, customFieldService, and notificationService were already created above (before taskService).
 
 	// Initialize S3 storage client for artifacts.
 	var artifactService service.ArtifactService
@@ -224,7 +250,7 @@ func main() {
 	eventHandler := handler.NewEventHandler(eventBusService)
 	activityHandler := handler.NewActivityHandler(activityLogService)
 	customFieldHandler := handler.NewCustomFieldHandler(customFieldService)
-	taskContextHandler := handler.NewTaskContextHandler(taskService, commentService, artifactService, depService, eventBusService)
+	taskContextHandler := handler.NewTaskContextHandlerWithCache(taskService, commentService, artifactService, depService, eventBusService, ctxCacheSvc)
 	webhookHandler := handler.NewWebhookHandler(webhookService)
 	savedViewHandler := handler.NewSavedViewHandler(savedViewService)
 	vcsLinkHandler := handler.NewVCSLinkHandlerWithSecret(vcsLinkService, cfg.Webhook.GitHubSecret)
@@ -236,8 +262,10 @@ func main() {
 	ruleHandler := handler.NewRuleHandler(ruleService)
 	rulesHandler := handler.NewRulesHandler(rulesService)
 	recurringHandler := handler.NewRecurringHandler(recurringService)
+	taskTemplateHandler := handler.NewTaskTemplateHandler(taskTemplateService)
 	workspaceMemberHandler := handler.NewWorkspaceMemberHandler(workspaceMemberService)
 	projectMemberHandler := handler.NewProjectMemberHandler(projectMemberService)
+	notificationHandler := handler.NewNotificationHandler(notificationService)
 
 	// 8. Create Echo instance with global middleware.
 	e := echo.New()
@@ -273,12 +301,17 @@ func main() {
 		})
 	})
 
-	// 8a. WebSocket Hub for real-time event streaming.
-	wsRedis := redis.NewClient(&redis.Options{
+	// 8a. Shared Redis client used by the WebSocket hub and the rate limiter.
+	// A single client is created here so all consumers share the same connection
+	// pool rather than each opening independent connections.
+	sharedRedis := redis.NewClient(&redis.Options{
 		Addr:     cfg.Redis.Addr(),
 		Password: cfg.Redis.Password,
 		DB:       cfg.Redis.DB,
 	})
+
+	// WebSocket Hub for real-time event streaming.
+	wsRedis := sharedRedis
 	hub := wsHub.NewHub(wsRedis)
 	hubCtx, hubCancel := context.WithCancel(context.Background())
 	go hub.Run(hubCtx)
@@ -293,10 +326,12 @@ func main() {
 	// --- Public routes (no auth required) ---
 	authGroup := v1.Group("/auth")
 	// Rate-limit auth endpoints by IP to prevent brute-force attacks.
+	// Uses the Redis-backed sliding window limiter for multi-instance deployments.
 	authGroup.Use(mw.RateLimit(mw.RateLimitConfig{
-		Enabled: cfg.RateLimit.Enabled,
-		RPM:     cfg.RateLimit.AuthRPM,
-		KeyFunc: mw.RateLimitKeyByIP,
+		Enabled:     cfg.RateLimit.Enabled,
+		RPM:         cfg.RateLimit.AuthRPM,
+		KeyFunc:     mw.RateLimitKeyByIP,
+		RedisClient: sharedRedis,
 	}))
 	authGroup.POST("/register", authHandler.Register)
 	authGroup.POST("/login", authHandler.Login)
@@ -307,10 +342,12 @@ func main() {
 	api.Use(mw.DualAuth(authService, agentService))
 	api.Use(mw.WorkspaceRLS(db, projectRepo))
 	// Rate-limit API endpoints by authenticated actor (user/agent ID).
+	// Uses the Redis-backed sliding window limiter for multi-instance deployments.
 	api.Use(mw.RateLimit(mw.RateLimitConfig{
-		Enabled: cfg.RateLimit.Enabled,
-		RPM:     cfg.RateLimit.APIRPM,
-		KeyFunc: mw.RateLimitKeyByActor,
+		Enabled:     cfg.RateLimit.Enabled,
+		RPM:         cfg.RateLimit.APIRPM,
+		KeyFunc:     mw.RateLimitKeyByActor,
+		RedisClient: sharedRedis,
 	}))
 
 	// Auth - protected.
@@ -456,6 +493,7 @@ func main() {
 
 	// Analytics routes.
 	api.GET("/workspaces/:ws_id/analytics", analyticsHandler.GetMetrics)
+	api.GET("/workspaces/:ws_id/analytics/export", analyticsHandler.ExportMetrics)
 
 	// Project update routes.
 	api.POST("/projects/:proj_id/updates", projectUpdateHandler.Create)
@@ -482,6 +520,14 @@ func main() {
 	api.DELETE("/recurring/:id", recurringHandler.Delete, rbac(mw.PermDeleteTask))
 	api.POST("/recurring/:id/trigger", recurringHandler.Trigger, rbac(mw.PermCreateTask))
 	api.GET("/recurring/:id/history", recurringHandler.History)
+
+	// Task template routes.
+	api.POST("/projects/:proj_id/templates", taskTemplateHandler.Create, rbac(mw.PermCreateTask))
+	api.GET("/projects/:proj_id/templates", taskTemplateHandler.List)
+	api.GET("/templates/:tmpl_id", taskTemplateHandler.GetByID)
+	api.PATCH("/templates/:tmpl_id", taskTemplateHandler.Update, rbac(mw.PermUpdateTask))
+	api.DELETE("/templates/:tmpl_id", taskTemplateHandler.Delete, rbac(mw.PermDeleteTask))
+	api.POST("/templates/:tmpl_id/create-task", taskTemplateHandler.CreateTask, rbac(mw.PermCreateTask))
 
 	// Team Directory routes (Sprint 20).
 	api.GET("/workspaces/:ws_id/team", rulesHandler.GetTeamDirectory)
@@ -520,6 +566,12 @@ func main() {
 	api.PATCH("/rules/:rule_id", ruleHandler.UpdateRule, rbac(mw.PermManageRules))
 	api.DELETE("/rules/:rule_id", ruleHandler.DeleteRule, rbac(mw.PermManageRules))
 	api.POST("/rules/evaluate", ruleHandler.EvaluateRules)
+
+	// Notification routes.
+	api.GET("/notifications", notificationHandler.List)
+	api.POST("/notifications/mark-read", notificationHandler.MarkRead)
+	api.GET("/notifications/preferences", notificationHandler.GetPreferences)
+	api.PUT("/notifications/preferences", notificationHandler.UpdatePreferences)
 
 	// Spark catalog routes (optional; only registered when MESH_SPARK_ENABLED=true).
 	if cfg.Spark.Enabled {
@@ -584,13 +636,16 @@ func main() {
 		log.Printf("Server forced to shutdown: %v", err)
 	}
 
-	// Close WebSocket hub.
+	// Close WebSocket hub and shared Redis (also used by the rate limiter).
 	hubCancel()
-	if err := wsRedis.Close(); err != nil {
-		log.Printf("Error closing WebSocket Redis: %v", err)
+	if err := sharedRedis.Close(); err != nil {
+		log.Printf("Error closing shared Redis: %v", err)
 	}
 	if err := agentNotifyRedis.Close(); err != nil {
 		log.Printf("Error closing agent-notify Redis: %v", err)
+	}
+	if err := ctxCacheRedis.Close(); err != nil {
+		log.Printf("Error closing context-cache Redis: %v", err)
 	}
 
 	// Close event bus.

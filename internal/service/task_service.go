@@ -33,6 +33,8 @@ type taskService struct {
 	eventBusSvc     EventBusService
 	webhookSvc      WebhookService
 	agentNotifySvc  AgentNotifyService
+	notifySvc       NotificationService
+	ctxCacheInv     ContextCacheInvalidator
 }
 
 // NewTaskService returns a new TaskService backed by the given repositories.
@@ -120,6 +122,23 @@ func WithRulesConfigService(rcs RulesService) TaskServiceOption {
 	}
 }
 
+// WithContextCacheInvalidator sets an optional cache invalidator that is called
+// after every task mutation (create, update, move, delete) so that the
+// GET /tasks/:task_id/context cache stays consistent.
+func WithContextCacheInvalidator(inv ContextCacheInvalidator) TaskServiceOption {
+	return func(s *taskService) {
+		s.ctxCacheInv = inv
+	}
+}
+
+// WithNotificationService sets the optional notification service.
+// When set, task lifecycle events dispatch in-app notifications to subscribed users.
+func WithNotificationService(ns NotificationService) TaskServiceOption {
+	return func(s *taskService) {
+		s.notifySvc = ns
+	}
+}
+
 // SetAutoTransitionService implements TaskServiceAutoTransitionConfigurable,
 // allowing the auto-transition service to be wired after construction.
 func (s *taskService) SetAutoTransitionService(svc AutoTransitionService) {
@@ -160,6 +179,9 @@ func (s *taskService) Create(ctx context.Context, task *domain.Task) error {
 	if err := s.taskRepo.Create(ctx, task); err != nil {
 		return err
 	}
+	if s.ctxCacheInv != nil {
+		s.ctxCacheInv.Invalidate(ctx, task.ID)
+	}
 	s.logActivity(ctx, task.ProjectID, task.ID, "task.created", map[string]interface{}{
 		"title":    map[string]interface{}{"old": nil, "new": task.Title},
 		"priority": map[string]interface{}{"old": nil, "new": string(task.Priority)},
@@ -183,6 +205,9 @@ func (s *taskService) Create(ctx context.Context, task *domain.Task) error {
 	s.notifyAssignedAgent(ctx, task, "task.assigned", map[string]any{
 		"assignee_id": map[string]any{"old": nil, "new": task.AssigneeID},
 	})
+
+	// Dispatch in-app notification to subscribed workspace users.
+	s.dispatchUserNotification(ctx, task, "task.assigned", "Task assigned: "+task.Title, "")
 
 	return nil
 }
@@ -227,6 +252,9 @@ func (s *taskService) Update(ctx context.Context, task *domain.Task) error {
 	task.UpdatedAt = timeNow()
 	if err := s.taskRepo.Update(ctx, task); err != nil {
 		return err
+	}
+	if s.ctxCacheInv != nil {
+		s.ctxCacheInv.Invalidate(ctx, task.ID)
 	}
 
 	// Build diff between existing and updated task.
@@ -291,6 +319,9 @@ func (s *taskService) Delete(ctx context.Context, id uuid.UUID) error {
 
 	if err := s.taskRepo.Delete(ctx, id); err != nil {
 		return err
+	}
+	if s.ctxCacheInv != nil {
+		s.ctxCacheInv.Invalidate(ctx, id)
 	}
 	s.logActivity(ctx, existing.ProjectID, id, "task.deleted", nil)
 
@@ -374,6 +405,9 @@ func (s *taskService) MoveTask(ctx context.Context, taskID uuid.UUID, input Move
 	if err := s.taskRepo.Update(ctx, task); err != nil {
 		return err
 	}
+	if s.ctxCacheInv != nil {
+		s.ctxCacheInv.Invalidate(ctx, taskID)
+	}
 	moveChanges := map[string]interface{}{}
 	if input.StatusID != nil {
 		moveChanges["status_id"] = map[string]interface{}{"old": oldStatusID.String(), "new": input.StatusID.String()}
@@ -410,6 +444,8 @@ func (s *taskService) MoveTask(ctx context.Context, taskID uuid.UUID, input Move
 		s.notifyAssignedAgent(ctx, task, "task.status_changed", map[string]any{
 			"status_id": map[string]any{"old": oldStatusID.String(), "new": input.StatusID.String()},
 		})
+		// Dispatch in-app notification to subscribed workspace users.
+		s.dispatchUserNotification(ctx, task, "task.status_changed", "Task status changed: "+task.Title, "")
 	}
 
 	return nil
@@ -435,6 +471,9 @@ func (s *taskService) AssignTask(ctx context.Context, taskID uuid.UUID, input As
 	if err := s.taskRepo.Update(ctx, task); err != nil {
 		return err
 	}
+	if s.ctxCacheInv != nil {
+		s.ctxCacheInv.Invalidate(ctx, taskID)
+	}
 	s.logActivity(ctx, task.ProjectID, taskID, "task.assigned", map[string]interface{}{
 		"assignee_id":   map[string]interface{}{"old": oldAssigneeID, "new": input.AssigneeID},
 		"assignee_type": map[string]interface{}{"old": string(oldAssigneeType), "new": string(input.AssigneeType)},
@@ -445,6 +484,9 @@ func (s *taskService) AssignTask(ctx context.Context, taskID uuid.UUID, input As
 		"assignee_id":   map[string]any{"old": oldAssigneeID, "new": input.AssigneeID},
 		"assignee_type": map[string]any{"old": string(oldAssigneeType), "new": string(input.AssigneeType)},
 	})
+
+	// Dispatch in-app notification to subscribed workspace users.
+	s.dispatchUserNotification(ctx, task, "task.assigned", "Task assigned: "+task.Title, "")
 
 	return nil
 }
@@ -779,6 +821,37 @@ func (s *taskService) publishTaskEvent(ctx context.Context, wsID, projectID, tas
 	if _, err := s.eventBusSvc.Publish(ctx, input); err != nil {
 		log.Printf("[event_bus] WARNING: failed to publish %s event for task %s: %v", action, taskID, err)
 	}
+}
+
+// dispatchUserNotification sends an in-app notification to subscribed workspace users
+// for the given task event. It resolves workspace_id from the project, then fires
+// NotificationService.Notify asynchronously.
+func (s *taskService) dispatchUserNotification(ctx context.Context, task *domain.Task, eventType, title, body string) {
+	if s.notifySvc == nil || s.projectRepo == nil {
+		return
+	}
+	var wsID uuid.UUID
+	if proj, err := s.projectRepo.GetByID(ctx, task.ProjectID); err == nil && proj != nil {
+		wsID = proj.WorkspaceID
+	}
+	if wsID == uuid.Nil {
+		return
+	}
+	taskIDCopy := task.ID
+	projIDCopy := task.ProjectID
+	s.notifySvc.Notify(ctx, domain.NotificationEvent{
+		WorkspaceID: wsID,
+		TaskID:      &taskIDCopy,
+		ProjectID:   &projIDCopy,
+		EventType:   eventType,
+		Title:       title,
+		Body:        body,
+		Metadata: map[string]any{
+			"task_id":    task.ID,
+			"task_title": task.Title,
+			"project_id": task.ProjectID,
+		},
+	})
 }
 
 // RuleViolationError is returned when a governance rule blocks an action.
