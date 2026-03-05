@@ -19,6 +19,7 @@ import {
   ListTree,
   Package,
   Pencil,
+  RefreshCw,
   SlidersHorizontal,
   Tag,
   User,
@@ -44,6 +45,8 @@ import { SubtaskList } from "@/components/subtask-list";
 import { CustomFieldRenderer } from "@/components/custom-field-renderer";
 import { DatePickerPopover } from "@/components/date-picker-popover";
 import { VCSLinks } from "@/components/vcs-links";
+import { RecurringHistoryPanel } from "@/components/recurring-history-panel";
+import { useRecurringStore } from "@/stores/recurring";
 import { cn } from "@/lib/cn";
 import {
   formatDate,
@@ -79,8 +82,11 @@ export function TaskDetailPage() {
   const { user } = useAuthStore();
   const { currentWorkspace } = useWorkspaceStore();
 
+  const { schedules, fetchSchedules } = useRecurringStore();
+
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<TabId>("comments");
+  const [recurringHistoryOpen, setRecurringHistoryOpen] = useState(false);
 
   // Inline title editing
   const [editingTitle, setEditingTitle] = useState(false);
@@ -127,6 +133,13 @@ export function TaskDetailPage() {
       void fetchAgents(currentWorkspace.id);
     }
   }, [currentWorkspace, fetchAgents]);
+
+  // Fetch recurring schedules if task is part of a recurring series
+  useEffect(() => {
+    if (currentTask?.recurring_schedule_id && currentTask.project_id) {
+      void fetchSchedules(currentTask.project_id);
+    }
+  }, [currentTask?.recurring_schedule_id, currentTask?.project_id, fetchSchedules]);
 
   // Sync title draft with current task
   useEffect(() => {
@@ -696,6 +709,42 @@ export function TaskDetailPage() {
                 </>
               )}
 
+              {/* Recurring series info */}
+              {currentTask.recurring_schedule_id && (() => {
+                const schedule = schedules.find(
+                  (s) => s.id === currentTask.recurring_schedule_id,
+                );
+                return (
+                  <>
+                    <Separator />
+                    <div className="flex items-start gap-3">
+                      <label className="flex w-24 shrink-0 items-center gap-1 pt-0.5 text-xs font-medium text-muted-foreground">
+                        <RefreshCw className="h-3 w-3" />
+                        Recurring
+                      </label>
+                      <div className="flex-1 space-y-1">
+                        <p className="text-xs">
+                          Run{" "}
+                          {currentTask.recurring_instance_number != null
+                            ? `#${currentTask.recurring_instance_number}`
+                            : ""}{" "}
+                          {schedule
+                            ? `of "${schedule.title_template}"`
+                            : "of recurring schedule"}
+                        </p>
+                        <button
+                          type="button"
+                          className="rounded px-1.5 py-0.5 text-xs text-primary hover:bg-primary/10 transition-colors"
+                          onClick={() => setRecurringHistoryOpen(true)}
+                        >
+                          View history
+                        </button>
+                      </div>
+                    </div>
+                  </>
+                );
+              })()}
+
               <Separator />
 
               {/* VCS Links */}
@@ -726,6 +775,22 @@ export function TaskDetailPage() {
           </Card>
         </div>
       </div>
+
+      {/* Recurring history panel */}
+      {currentTask.recurring_schedule_id && (() => {
+        const schedule = schedules.find(
+          (s) => s.id === currentTask.recurring_schedule_id,
+        );
+        if (!schedule) return null;
+        return (
+          <RecurringHistoryPanel
+            open={recurringHistoryOpen}
+            onOpenChange={setRecurringHistoryOpen}
+            schedule={schedule}
+            currentInstanceNumber={currentTask.recurring_instance_number}
+          />
+        );
+      })()}
     </div>
   );
 }

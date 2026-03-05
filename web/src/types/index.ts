@@ -203,6 +203,8 @@ export interface Task {
   subtask_count?: number;
   artifact_count?: number;
   vcs_link_count?: number;
+  recurring_schedule_id?: string | null;
+  recurring_instance_number?: number | null;
 }
 
 export interface Comment {
@@ -694,6 +696,85 @@ export interface IntegrationConfig {
   is_active: boolean;
   created_at: string;
   updated_at: string;
+}
+
+// Recurring tasks types
+
+export type RecurringFrequency = "daily" | "weekly" | "monthly" | "custom";
+
+export interface RecurringSchedule {
+  id: string;
+  workspace_id: string;
+  project_id: string;
+  title_template: string;
+  description_template: string;
+  frequency: RecurringFrequency;
+  cron_expr: string;
+  timezone: string;
+  assignee_id: string | null;
+  assignee_type: AssigneeType;
+  priority: Priority;
+  labels: string[];
+  status_id: string | null;
+  is_active: boolean;
+  starts_at: string;
+  ends_at: string | null;
+  max_instances: number | null;
+  next_run_at: string | null;
+  last_triggered_at: string | null;
+  instance_count: number;
+  created_by: string;
+  created_by_type: ActorType;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface RecurringInstanceSummary {
+  task_id: string;
+  instance_number: number;
+  title: string;
+  status_category: StatusCategory;
+  completed_at: string | null;
+  created_at: string;
+  last_comment: string | null;
+  artifact_count: number;
+}
+
+export interface CreateRecurringRequest {
+  title_template: string;
+  description_template?: string;
+  frequency: RecurringFrequency;
+  cron_expr?: string;
+  timezone?: string;
+  assignee_id?: string;
+  assignee_type?: AssigneeType;
+  priority?: Priority;
+  labels?: string[];
+  is_active?: boolean;
+  starts_at?: string;
+  ends_at?: string;
+  max_instances?: number;
+}
+
+export interface UpdateRecurringRequest {
+  title_template?: string;
+  description_template?: string;
+  frequency?: RecurringFrequency;
+  cron_expr?: string;
+  timezone?: string;
+  assignee_id?: string | null;
+  assignee_type?: AssigneeType;
+  priority?: Priority;
+  labels?: string[];
+  is_active?: boolean;
+  starts_at?: string;
+  ends_at?: string | null;
+  max_instances?: number | null;
+}
+
+export interface TriggerRecurringResponse {
+  task: Task;
+  instance_number: number;
 }
 
 // Analytics types

@@ -1,5 +1,5 @@
 import { forwardRef, type HTMLAttributes } from "react";
-import { AlignLeft, ExternalLink, GitBranch, Paperclip } from "lucide-react";
+import { AlignLeft, ExternalLink, GitBranch, Paperclip, RefreshCw } from "lucide-react";
 import { parseISO } from "date-fns";
 import { cn } from "@/lib/cn";
 import { Badge } from "@/components/ui/badge";
@@ -59,7 +59,22 @@ export const TaskCard = forwardRef<HTMLDivElement, TaskCardProps>(
       >
         {/* Title row */}
         <div className="flex items-start justify-between gap-1.5">
-          <p className="text-sm font-medium leading-snug line-clamp-2 min-w-0">
+          <p className="text-sm font-medium leading-snug line-clamp-2 min-w-0 flex items-start gap-1">
+            {task.recurring_schedule_id && (
+              <span
+                title={
+                  task.recurring_instance_number != null
+                    ? `Recurring task #${task.recurring_instance_number}`
+                    : "Recurring task"
+                }
+                className="inline-flex items-center"
+              >
+                <RefreshCw
+                  className="mt-0.5 h-3 w-3 shrink-0 text-primary/70"
+                  aria-hidden="true"
+                />
+              </span>
+            )}
             {task.title}
           </p>
           {hasVcsLinks && (

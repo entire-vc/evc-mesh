@@ -8,8 +8,12 @@ import {
   Eye,
   GitBranch,
   GripVertical,
+  History,
+  Pause,
   Pencil,
+  Play,
   Plus,
+  RefreshCw,
   Save,
   Settings,
   Shield,
@@ -44,6 +48,9 @@ import { StatusDialog } from "@/components/status-dialog";
 import { CustomFieldDialog } from "@/components/custom-field-dialog";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { AddProjectMemberDialog } from "@/components/add-project-member-dialog";
+import { CreateRecurringDialog } from "@/components/create-recurring-dialog";
+import { RecurringHistoryPanel } from "@/components/recurring-history-panel";
+import { useRecurringStore } from "@/stores/recurring";
 import { statusCategoryConfig } from "@/lib/utils";
 import { cn } from "@/lib/cn";
 import type {
@@ -53,6 +60,7 @@ import type {
   EffectiveAssignmentRules,
   ProjectMemberWithUser,
   ProjectRole,
+  RecurringSchedule,
   TaskStatus,
   TransitionRule,
   WorkflowRulesConfig,
@@ -1103,7 +1111,21 @@ export function ProjectSettingsPage() {
     { id: "members", label: "Members" },
     { id: "workflow", label: "Workflow Rules" },
     { id: "assignment", label: "Assignment Rules" },
+    { id: "recurring", label: "Recurring" },
   ];
+
+  // --- Recurring state ---
+  const {
+    schedules: recurringSchedules,
+    fetchSchedules: fetchRecurringSchedules,
+    updateSchedule: updateRecurringSchedule,
+    deleteSchedule: deleteRecurringSchedule,
+    triggerNow: triggerRecurringNow,
+  } = useRecurringStore();
+  const [recurringDialogOpen, setRecurringDialogOpen] = useState(false);
+  const [editingSchedule, setEditingSchedule] = useState<RecurringSchedule | null>(null);
+  const [historySchedule, setHistorySchedule] = useState<RecurringSchedule | null>(null);
+  const [recurringActionLoading, setRecurringActionLoading] = useState<string | null>(null);
 
   // Populate general form when project changes
   useEffect(() => {
@@ -1123,6 +1145,7 @@ export function ProjectSettingsPage() {
       fetchProjectMembers(currentProject.id);
       void fetchWorkflowRules(currentProject.id);
       void fetchEffectiveAssignmentRules(currentProject.id);
+      void fetchRecurringSchedules(currentProject.id);
     }
   }, [
     currentProject,
@@ -1131,6 +1154,7 @@ export function ProjectSettingsPage() {
     fetchProjectMembers,
     fetchWorkflowRules,
     fetchEffectiveAssignmentRules,
+    fetchRecurringSchedules,
   ]);
 
   // Fetch workspace members and agents for assignment selects
@@ -1933,7 +1957,218 @@ export function ProjectSettingsPage() {
       </Card>
       )}
 
-      {/* Section 7: Danger Zone */}
+      {/* Section 7: Recurring Schedules */}
+      {activeTab === "recurring" && (
+      <Card>
+        <CardHeader>
+          <div className="flex items-center justify-between">
+            <div className="space-y-1.5">
+              <CardTitle>Recurring Schedules</CardTitle>
+              <CardDescription>
+                Automatically create task instances on a schedule. Recurring tasks can carry context from previous runs.
+              </CardDescription>
+            </div>
+            <Button
+              size="sm"
+              onClick={() => {
+                setEditingSchedule(null);
+                setRecurringDialogOpen(true);
+              }}
+            >
+              <Plus className="h-4 w-4" />
+              New Schedule
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {recurringSchedules.length === 0 ? (
+            <div className="py-10 text-center">
+              <RefreshCw className="mx-auto mb-3 h-8 w-8 text-muted-foreground opacity-50" />
+              <p className="text-sm text-muted-foreground">
+                No recurring schedules yet. Create one to automatically generate tasks on a schedule.
+              </p>
+              <Button
+                size="sm"
+                variant="outline"
+                className="mt-4"
+                onClick={() => {
+                  setEditingSchedule(null);
+                  setRecurringDialogOpen(true);
+                }}
+              >
+                <Plus className="h-4 w-4" />
+                New Schedule
+              </Button>
+            </div>
+          ) : (
+            <div className="divide-y divide-border">
+              {recurringSchedules.map((schedule) => (
+                <div key={schedule.id} className="py-4 first:pt-0 last:pb-0">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex items-start gap-2 min-w-0">
+                      <RefreshCw
+                        className={cn(
+                          "mt-0.5 h-4 w-4 shrink-0",
+                          schedule.is_active
+                            ? "text-primary"
+                            : "text-muted-foreground",
+                        )}
+                      />
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="text-sm font-medium truncate">
+                            {schedule.title_template}
+                          </span>
+                          <Badge
+                            variant={schedule.is_active ? "default" : "secondary"}
+                            className="text-[10px] shrink-0"
+                          >
+                            {schedule.is_active ? "Active" : "Paused"}
+                          </Badge>
+                          <Badge variant="outline" className="text-[10px] capitalize shrink-0">
+                            {schedule.frequency === "custom"
+                              ? `Custom (${schedule.cron_expr})`
+                              : schedule.frequency}
+                          </Badge>
+                        </div>
+                        <div className="mt-1 flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
+                          {schedule.assignee_type !== "unassigned" && schedule.assignee_id && (
+                            <span className="flex items-center gap-1">
+                              {schedule.assignee_type === "agent" ? (
+                                <Bot className="h-3 w-3" />
+                              ) : (
+                                <Users className="h-3 w-3" />
+                              )}
+                              {schedule.assignee_id.slice(0, 8)}...
+                            </span>
+                          )}
+                          <span className="capitalize">Priority: {schedule.priority}</span>
+                          <span>{schedule.instance_count} instance{schedule.instance_count !== 1 ? "s" : ""}</span>
+                          {schedule.next_run_at && schedule.is_active && (
+                            <span>
+                              Next:{" "}
+                              {new Date(schedule.next_run_at).toLocaleString(undefined, {
+                                dateStyle: "short",
+                                timeStyle: "short",
+                              })}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex shrink-0 items-center gap-1">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8 text-muted-foreground"
+                        title="View history"
+                        onClick={() => setHistorySchedule(schedule)}
+                      >
+                        <History className="h-4 w-4" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8 text-muted-foreground"
+                        title="Edit schedule"
+                        onClick={() => {
+                          setEditingSchedule(schedule);
+                          setRecurringDialogOpen(true);
+                        }}
+                      >
+                        <Pencil className="h-4 w-4" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8 text-muted-foreground"
+                        title={schedule.is_active ? "Pause" : "Resume"}
+                        disabled={recurringActionLoading === `toggle-${schedule.id}`}
+                        onClick={async () => {
+                          setRecurringActionLoading(`toggle-${schedule.id}`);
+                          try {
+                            await updateRecurringSchedule(schedule.id, {
+                              is_active: !schedule.is_active,
+                            });
+                          } finally {
+                            setRecurringActionLoading(null);
+                          }
+                        }}
+                      >
+                        {schedule.is_active ? (
+                          <Pause className="h-4 w-4" />
+                        ) : (
+                          <Play className="h-4 w-4" />
+                        )}
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8 text-muted-foreground"
+                        title="Trigger now"
+                        disabled={recurringActionLoading === `trigger-${schedule.id}`}
+                        onClick={async () => {
+                          setRecurringActionLoading(`trigger-${schedule.id}`);
+                          try {
+                            await triggerRecurringNow(schedule.id);
+                          } finally {
+                            setRecurringActionLoading(null);
+                          }
+                        }}
+                      >
+                        <Zap className="h-4 w-4" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                        title="Delete schedule"
+                        disabled={recurringActionLoading === `delete-${schedule.id}`}
+                        onClick={async () => {
+                          if (!confirm(`Delete schedule "${schedule.title_template}"? Existing task instances will not be deleted.`)) return;
+                          setRecurringActionLoading(`delete-${schedule.id}`);
+                          try {
+                            await deleteRecurringSchedule(schedule.id);
+                          } finally {
+                            setRecurringActionLoading(null);
+                          }
+                        }}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+      )}
+
+      {/* Recurring dialogs */}
+      {currentProject && (
+        <>
+          <CreateRecurringDialog
+            open={recurringDialogOpen}
+            onOpenChange={setRecurringDialogOpen}
+            projectId={currentProject.id}
+            editSchedule={editingSchedule ?? undefined}
+          />
+          {historySchedule && (
+            <RecurringHistoryPanel
+              open={Boolean(historySchedule)}
+              onOpenChange={(open) => {
+                if (!open) setHistorySchedule(null);
+              }}
+              schedule={historySchedule}
+            />
+          )}
+        </>
+      )}
+
+      {/* Section 8: Danger Zone */}
       {activeTab === "general" && (
       <Card className="border-destructive/50">
         <CardHeader>
