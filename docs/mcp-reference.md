@@ -2,10 +2,10 @@
 
 ## Overview
 
-evc-mesh exposes **34 MCP tools** via the [Model Context Protocol](https://modelcontextprotocol.io/).
+evc-mesh exposes **38 MCP tools** via the [Model Context Protocol](https://modelcontextprotocol.io/).
 Supported transports: **stdio** (default), **SSE** (HTTP Server-Sent Events on port 8081).
 
-Tools are organized into 8 categories:
+Tools are organized into 9 categories:
 
 | Category | Tools | Description |
 |----------|-------|-------------|
@@ -17,6 +17,7 @@ Tools are organized into 8 categories:
 | Governance Rules | 2 | Agent-applicable rules, project rules |
 | Team & Configuration | 6 | Team directory, assignment/workflow rules, agent profiles, config import/export |
 | Push Notifications | 1 | Long-poll for task assignments |
+| Recurring Tasks | 4 | Create and manage recurring task schedules and instance history |
 
 > **Note:** The MCP server is also available as a standalone package at
 > [github.com/entire-vc/evc-mesh-mcp](https://github.com/entire-vc/evc-mesh-mcp).
@@ -1024,6 +1025,168 @@ See [Agent Push Notifications](agent-push-notifications.md) for full details on 
   "tasks": [],
   "count": 0,
   "changed": false
+}
+```
+
+---
+
+### Recurring Tasks (4 tools)
+
+#### 35. `create_recurring_task`
+
+Creates a recurring task schedule that automatically spawns task instances on a schedule. Each instance gets access to the previous instance's summary. Use this for regular automated work: weekly reports, daily checks, periodic audits.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `project_id` | string | **Yes** | -- | Target project UUID |
+| `title_template` | string | **Yes** | -- | Task title template. Supports `{{.Date}}`, `{{.Number}}`, `{{.Week}}`, `{{.Month}}` |
+| `frequency` | string | **Yes** | -- | Recurrence frequency: `daily`, `weekly`, `monthly`, `custom`. Use `custom` with `cron_expr` for fine-grained control |
+| `description_template` | string | No | -- | Task description template. Supports `{{.PrevSummary}}` for previous instance context |
+| `cron_expr` | string | No | -- | 5-field cron expression (required if `frequency=custom`). Example: `0 9 * * 1` = every Monday at 9am |
+| `timezone` | string | No | `UTC` | IANA timezone for schedule evaluation |
+| `assignee_id` | string | No | -- | Agent or user UUID to assign each instance |
+| `assignee_type` | string | No | `unassigned` | Assignee type: `user`, `agent`, `unassigned` |
+| `priority` | string | No | `none` | Priority: `urgent`, `high`, `medium`, `low`, `none` |
+| `labels` | string[] | No | -- | Labels to apply to each instance |
+| `starts_at` | string | No | Now | When to start the schedule (RFC3339) |
+| `ends_at` | string | No | -- | When to stop the schedule (RFC3339). Default: no end |
+| `max_instances` | number | No | -- | Maximum number of instances to create. Default: unlimited |
+
+**Example request:**
+```json
+{
+  "name": "create_recurring_task",
+  "arguments": {
+    "project_id": "550e8400-...",
+    "title_template": "Weekly Security Audit — Week {{.Week}}",
+    "frequency": "weekly",
+    "description_template": "Perform weekly security checks.\n\nPrevious run summary:\n{{.PrevSummary}}",
+    "timezone": "Europe/Moscow",
+    "assignee_id": "a1b2c3d4-...",
+    "assignee_type": "agent",
+    "priority": "high",
+    "labels": ["security", "recurring"]
+  }
+}
+```
+
+**Example response:**
+```json
+{
+  "id": "f1e2d3c4-...",
+  "project_id": "550e8400-...",
+  "title_template": "Weekly Security Audit — Week {{.Week}}",
+  "frequency": "weekly",
+  "is_active": true,
+  "next_run_at": "2026-03-09T09:00:00Z",
+  "created_at": "2026-03-05T10:00:00Z"
+}
+```
+
+---
+
+#### 36. `list_recurring_schedules`
+
+Lists all recurring task schedules for a project.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `project_id` | string | **Yes** | -- | Project ID |
+| `active_only` | boolean | No | `true` | Only return active schedules |
+
+**Example request:**
+```json
+{
+  "name": "list_recurring_schedules",
+  "arguments": {
+    "project_id": "550e8400-...",
+    "active_only": true
+  }
+}
+```
+
+**Example response:**
+```json
+[
+  {
+    "id": "f1e2d3c4-...",
+    "title_template": "Weekly Security Audit — Week {{.Week}}",
+    "frequency": "weekly",
+    "is_active": true,
+    "next_run_at": "2026-03-09T09:00:00Z",
+    "instance_count": 12
+  }
+]
+```
+
+---
+
+#### 37. `get_recurring_history`
+
+Returns the history of all instances for a recurring task schedule. Call this when you receive a recurring task to get context on what previous instances accomplished, what issues were found, and what artifacts were produced. Use it to continue work intelligently rather than starting from scratch.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `recurring_schedule_id` | string | **Yes** | -- | UUID of the recurring schedule. Available in `task.recurring_schedule_id` field |
+| `limit` | number | No | `5` | Number of most recent instances to return. Use a higher value for deep historical context |
+
+**Example request:**
+```json
+{
+  "name": "get_recurring_history",
+  "arguments": {
+    "recurring_schedule_id": "f1e2d3c4-...",
+    "limit": 3
+  }
+}
+```
+
+**Example response:**
+```json
+{
+  "schedule_id": "f1e2d3c4-...",
+  "instances": [
+    {
+      "instance_number": 12,
+      "task_id": "a1b2c3d4-...",
+      "title": "Weekly Security Audit — Week 9",
+      "status_category": "done",
+      "summary": "Found 2 minor issues, patched both. All systems nominal.",
+      "created_at": "2026-02-26T09:00:00Z",
+      "completed_at": "2026-02-26T11:30:00Z"
+    }
+  ],
+  "total": 12
+}
+```
+
+---
+
+#### 38. `trigger_recurring_now`
+
+Immediately creates the next instance of a recurring schedule, without waiting for the scheduled time. Useful for testing schedules or for urgent out-of-cycle execution.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `recurring_schedule_id` | string | **Yes** | -- | UUID of the recurring schedule |
+
+**Example request:**
+```json
+{
+  "name": "trigger_recurring_now",
+  "arguments": {
+    "recurring_schedule_id": "f1e2d3c4-..."
+  }
+}
+```
+
+**Example response:**
+```json
+{
+  "task_id": "b2c3d4e5-...",
+  "title": "Weekly Security Audit — Week 10",
+  "instance_number": 13,
+  "created_at": "2026-03-05T10:00:00Z"
 }
 ```
 
