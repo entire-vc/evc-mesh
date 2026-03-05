@@ -27,12 +27,18 @@ type addProjectMemberRequest struct {
 	Role   string `json:"role"`
 }
 
+// addAgentMemberRequest represents the JSON body for adding an agent project member.
+type addAgentMemberRequest struct {
+	AgentID string `json:"agent_id"`
+	Role    string `json:"role"`
+}
+
 // updateProjectMemberRoleRequest represents the JSON body for updating a project member's role.
 type updateProjectMemberRoleRequest struct {
 	Role string `json:"role"`
 }
 
-// List handles GET /projects/:proj_id/members
+// List handles GET /projects/:proj_id/members — returns both user and agent members.
 func (h *ProjectMemberHandler) List(c echo.Context) error {
 	projID, err := uuid.Parse(c.Param("proj_id"))
 	if err != nil {
@@ -54,7 +60,7 @@ func (h *ProjectMemberHandler) List(c echo.Context) error {
 	})
 }
 
-// Add handles POST /projects/:proj_id/members
+// Add handles POST /projects/:proj_id/members — add a user member.
 func (h *ProjectMemberHandler) Add(c echo.Context) error {
 	projID, err := uuid.Parse(c.Param("proj_id"))
 	if err != nil {
@@ -78,6 +84,37 @@ func (h *ProjectMemberHandler) Add(c echo.Context) error {
 	}
 
 	member, err := h.svc.AddMember(c.Request().Context(), projID, userID, req.Role)
+	if err != nil {
+		return handleError(c, err)
+	}
+
+	return c.JSON(http.StatusCreated, member)
+}
+
+// AddAgent handles POST /projects/:proj_id/members/agents — add an agent member.
+func (h *ProjectMemberHandler) AddAgent(c echo.Context) error {
+	projID, err := uuid.Parse(c.Param("proj_id"))
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid project_id"))
+	}
+
+	var req addAgentMemberRequest
+	if err := c.Bind(&req); err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
+	}
+
+	if req.AgentID == "" {
+		return c.JSON(http.StatusBadRequest, apierror.ValidationError(map[string]string{
+			"agent_id": "agent_id is required",
+		}))
+	}
+
+	agentID, err := uuid.Parse(req.AgentID)
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid agent_id"))
+	}
+
+	member, err := h.svc.AddAgentMember(c.Request().Context(), projID, agentID, req.Role)
 	if err != nil {
 		return handleError(c, err)
 	}
@@ -122,6 +159,25 @@ func (h *ProjectMemberHandler) Remove(c echo.Context) error {
 	}
 
 	if err := h.svc.RemoveMember(c.Request().Context(), projID, targetUserID); err != nil {
+		return handleError(c, err)
+	}
+
+	return c.NoContent(http.StatusNoContent)
+}
+
+// RemoveAgent handles DELETE /projects/:proj_id/members/agents/:member_agent_id
+func (h *ProjectMemberHandler) RemoveAgent(c echo.Context) error {
+	projID, err := uuid.Parse(c.Param("proj_id"))
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid project_id"))
+	}
+
+	agentID, err := uuid.Parse(c.Param("member_agent_id"))
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid agent_id"))
+	}
+
+	if err := h.svc.RemoveAgentMember(c.Request().Context(), projID, agentID); err != nil {
 		return handleError(c, err)
 	}
 

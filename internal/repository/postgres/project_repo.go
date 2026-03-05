@@ -150,37 +150,51 @@ func (r *ProjectRepo) List(ctx context.Context, workspaceID uuid.UUID, filter re
 	args = append(args, workspaceID) // $1
 	argIdx := 2
 
-	conditions = append(conditions, "workspace_id = $1")
-	conditions = append(conditions, "deleted_at IS NULL")
+	conditions = append(conditions, "p.workspace_id = $1")
+	conditions = append(conditions, "p.deleted_at IS NULL")
 
 	if filter.IsArchived != nil {
-		conditions = append(conditions, fmt.Sprintf("is_archived = $%d", argIdx))
+		conditions = append(conditions, fmt.Sprintf("p.is_archived = $%d", argIdx))
 		args = append(args, *filter.IsArchived)
 		argIdx++
 	}
 	if filter.Search != "" {
 		pattern := "%" + filter.Search + "%"
-		conditions = append(conditions, fmt.Sprintf("(name ILIKE $%d OR description ILIKE $%d)", argIdx, argIdx))
+		conditions = append(conditions, fmt.Sprintf("(p.name ILIKE $%d OR p.description ILIKE $%d)", argIdx, argIdx))
 		args = append(args, pattern)
+		argIdx++
+	}
+
+	// Membership filter: JOIN project_members to restrict to user's/agent's projects.
+	memberJoin := ""
+	if filter.MemberUserID != nil {
+		memberJoin = fmt.Sprintf(" JOIN project_members pm ON pm.project_id = p.id AND pm.user_id = $%d", argIdx)
+		args = append(args, *filter.MemberUserID)
+		argIdx++
+	} else if filter.MemberAgentID != nil {
+		memberJoin = fmt.Sprintf(" JOIN project_members pm ON pm.project_id = p.id AND pm.agent_id = $%d", argIdx)
+		args = append(args, *filter.MemberAgentID)
 		argIdx++
 	}
 
 	where := "WHERE " + joinAnd(conditions)
 	order := orderClause(pg, allowedSortColumns{
-		"name":       "name",
-		"created_at": "created_at",
-		"updated_at": "updated_at",
-	}, "created_at")
+		"name":       "p.name",
+		"created_at": "p.created_at",
+		"updated_at": "p.updated_at",
+	}, "p.created_at")
+
+	fromClause := fmt.Sprintf("projects p%s", memberJoin)
 
 	// Count query
-	countQ := fmt.Sprintf(`SELECT COUNT(*) FROM projects %s`, where)
+	countQ := fmt.Sprintf(`SELECT COUNT(*) FROM %s %s`, fromClause, where)
 	var totalCount int
 	if err := r.db.GetContext(ctx, &totalCount, countQ, args...); err != nil {
 		return nil, err
 	}
 
 	// Data query
-	dataQ := fmt.Sprintf(`SELECT * FROM projects %s %s %s`, where, order, paginationClause(pg))
+	dataQ := fmt.Sprintf(`SELECT p.* FROM %s %s %s %s`, fromClause, where, order, paginationClause(pg))
 	var rows []projectRow
 	if err := r.db.SelectContext(ctx, &rows, dataQ, args...); err != nil {
 		return nil, err

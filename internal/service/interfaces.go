@@ -351,8 +351,10 @@ type WorkspaceMemberService interface {
 type ProjectMemberService interface {
 	ListMembers(ctx context.Context, projectID uuid.UUID) ([]domain.ProjectMemberWithUser, error)
 	AddMember(ctx context.Context, projectID, userID uuid.UUID, role string) (*domain.ProjectMemberWithUser, error)
+	AddAgentMember(ctx context.Context, projectID, agentID uuid.UUID, role string) (*domain.ProjectMemberWithUser, error)
 	UpdateMemberRole(ctx context.Context, projectID, userID uuid.UUID, newRole string) error
 	RemoveMember(ctx context.Context, projectID, userID uuid.UUID) error
+	RemoveAgentMember(ctx context.Context, projectID, agentID uuid.UUID) error
 }
 
 // RuleService provides business logic for governance rule management.

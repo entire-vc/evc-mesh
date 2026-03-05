@@ -2,12 +2,15 @@ package service
 
 import (
 	"context"
+	"log"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/repository"
+	"github.com/entire-vc/evc-mesh/pkg/actorctx"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 	"github.com/entire-vc/evc-mesh/pkg/pagination"
 )
@@ -29,9 +32,10 @@ var defaultStatuses = []struct {
 }
 
 type projectService struct {
-	projectRepo  repository.ProjectRepository
-	statusRepo   repository.TaskStatusRepository
-	activityRepo repository.ActivityLogRepository
+	projectRepo       repository.ProjectRepository
+	statusRepo        repository.TaskStatusRepository
+	activityRepo      repository.ActivityLogRepository
+	projectMemberRepo repository.ProjectMemberRepository
 }
 
 // NewProjectService returns a new ProjectService backed by the given repositories.
@@ -39,12 +43,25 @@ func NewProjectService(
 	projectRepo repository.ProjectRepository,
 	statusRepo repository.TaskStatusRepository,
 	activityRepo repository.ActivityLogRepository,
+	opts ...ProjectServiceOption,
 ) ProjectService {
-	return &projectService{
+	s := &projectService{
 		projectRepo:  projectRepo,
 		statusRepo:   statusRepo,
 		activityRepo: activityRepo,
 	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
+}
+
+// ProjectServiceOption is a functional option for projectService.
+type ProjectServiceOption func(*projectService)
+
+// WithProjectMemberRepo injects the project member repository for auto-adding creators.
+func WithProjectMemberRepo(repo repository.ProjectMemberRepository) ProjectServiceOption {
+	return func(s *projectService) { s.projectMemberRepo = repo }
 }
 
 // Create validates and persists a new project, then creates the default task statuses.
@@ -91,6 +108,31 @@ func (s *projectService) Create(ctx context.Context, project *domain.Project) er
 		}
 		if err := s.statusRepo.Create(ctx, status); err != nil {
 			return err
+		}
+	}
+
+	// Auto-add the creator as a project member with admin role.
+	if s.projectMemberRepo != nil {
+		actorID, actorType := actorctx.FromContext(ctx)
+		if actorID != uuid.Nil {
+			now := time.Now()
+			member := &domain.ProjectMember{
+				ID:        uuid.New(),
+				ProjectID: project.ID,
+				Role:      domain.ProjectRoleAdmin,
+				CreatedAt: now,
+				UpdatedAt: now,
+			}
+			switch actorType {
+			case domain.ActorTypeUser:
+				member.UserID = &actorID
+			case domain.ActorTypeAgent:
+				member.AgentID = &actorID
+			}
+			if err := s.projectMemberRepo.Create(ctx, member); err != nil {
+				log.Printf("WARNING: failed to auto-add creator to project_members: %v", err)
+				// Non-fatal: project is created, membership can be added manually.
+			}
 		}
 	}
 

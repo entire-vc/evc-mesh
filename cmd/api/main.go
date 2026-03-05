@@ -87,7 +87,9 @@ func main() {
 
 	// 6. Create all service instances.
 	workspaceService := service.NewWorkspaceService(workspaceRepo, activityLogRepo)
-	projectService := service.NewProjectService(projectRepo, taskStatusRepo, activityLogRepo)
+	projectService := service.NewProjectService(projectRepo, taskStatusRepo, activityLogRepo,
+		service.WithProjectMemberRepo(projectMemberRepo),
+	)
 	customFieldDefRepo := postgres.NewCustomFieldDefinitionRepo(db)
 	customFieldService := service.NewCustomFieldService(customFieldDefRepo, activityLogRepo)
 
@@ -175,7 +177,9 @@ func main() {
 
 	// Member services.
 	workspaceMemberService := service.NewWorkspaceMemberService(workspaceMemberRepo, userRepo, projectMemberRepo, activityLogRepo)
-	projectMemberService := service.NewProjectMemberService(projectMemberRepo, workspaceMemberRepo, projectRepo)
+	projectMemberService := service.NewProjectMemberService(projectMemberRepo, workspaceMemberRepo, projectRepo,
+		service.WithAgentRepo(agentRepo),
+	)
 	savedViewService := service.NewSavedViewService(savedViewRepo)
 	vcsLinkService := service.NewVCSLinkService(vcsLinkRepo)
 	integrationService := service.NewIntegrationService(integrationRepo)
@@ -378,34 +382,39 @@ func main() {
 	// Project routes.
 	api.GET("/workspaces/:ws_id/projects", projectHandler.List)
 	api.POST("/workspaces/:ws_id/projects", projectHandler.Create, rbac(mw.PermCreateProject))
-	api.GET("/projects/:proj_id", projectHandler.GetByID)
-	api.PATCH("/projects/:proj_id", projectHandler.Update)
-	api.DELETE("/projects/:proj_id", projectHandler.Delete, rbac(mw.PermDeleteProject))
+
+	// Project-scoped routes — RequireProjectMember enforces membership for :proj_id routes.
+	projAccess := mw.RequireProjectMember(db)
+	api.GET("/projects/:proj_id", projectHandler.GetByID, projAccess)
+	api.PATCH("/projects/:proj_id", projectHandler.Update, projAccess)
+	api.DELETE("/projects/:proj_id", projectHandler.Delete, projAccess, rbac(mw.PermDeleteProject))
 
 	// Project member routes.
-	api.GET("/projects/:proj_id/members", projectMemberHandler.List)
-	api.POST("/projects/:proj_id/members", projectMemberHandler.Add, rbac(mw.PermManageMembers))
-	api.PATCH("/projects/:proj_id/members/:user_id", projectMemberHandler.UpdateRole, rbac(mw.PermManageMembers))
-	api.DELETE("/projects/:proj_id/members/:user_id", projectMemberHandler.Remove, rbac(mw.PermManageMembers))
+	api.GET("/projects/:proj_id/members", projectMemberHandler.List, projAccess)
+	api.POST("/projects/:proj_id/members", projectMemberHandler.Add, projAccess, rbac(mw.PermManageMembers))
+	api.POST("/projects/:proj_id/members/agents", projectMemberHandler.AddAgent, projAccess, rbac(mw.PermManageMembers))
+	api.PATCH("/projects/:proj_id/members/:user_id", projectMemberHandler.UpdateRole, projAccess, rbac(mw.PermManageMembers))
+	api.DELETE("/projects/:proj_id/members/:user_id", projectMemberHandler.Remove, projAccess, rbac(mw.PermManageMembers))
+	api.DELETE("/projects/:proj_id/members/agents/:member_agent_id", projectMemberHandler.RemoveAgent, projAccess, rbac(mw.PermManageMembers))
 
 	// Task status routes.
-	api.GET("/projects/:proj_id/statuses", statusHandler.List)
-	api.POST("/projects/:proj_id/statuses", statusHandler.Create)
-	api.PATCH("/projects/:proj_id/statuses/:status_id", statusHandler.Update)
-	api.PUT("/projects/:proj_id/statuses/reorder", statusHandler.Reorder)
+	api.GET("/projects/:proj_id/statuses", statusHandler.List, projAccess)
+	api.POST("/projects/:proj_id/statuses", statusHandler.Create, projAccess)
+	api.PATCH("/projects/:proj_id/statuses/:status_id", statusHandler.Update, projAccess)
+	api.PUT("/projects/:proj_id/statuses/reorder", statusHandler.Reorder, projAccess)
 
 	// Custom field routes.
-	api.GET("/projects/:proj_id/custom-fields", customFieldHandler.List)
-	api.POST("/projects/:proj_id/custom-fields", customFieldHandler.Create, rbac(mw.PermManageCF))
+	api.GET("/projects/:proj_id/custom-fields", customFieldHandler.List, projAccess)
+	api.POST("/projects/:proj_id/custom-fields", customFieldHandler.Create, projAccess, rbac(mw.PermManageCF))
 	api.GET("/custom-fields/:field_id", customFieldHandler.GetByID)
 	api.PATCH("/custom-fields/:field_id", customFieldHandler.Update, rbac(mw.PermManageCF))
 	api.DELETE("/custom-fields/:field_id", customFieldHandler.Delete, rbac(mw.PermManageCF))
-	api.PUT("/projects/:proj_id/custom-fields/reorder", customFieldHandler.Reorder, rbac(mw.PermManageCF))
+	api.PUT("/projects/:proj_id/custom-fields/reorder", customFieldHandler.Reorder, projAccess, rbac(mw.PermManageCF))
 
 	// Task routes.
-	api.GET("/projects/:proj_id/tasks", taskHandler.List)
-	api.POST("/projects/:proj_id/tasks", taskHandler.Create, rbac(mw.PermCreateTask))
-	api.POST("/projects/:proj_id/tasks/bulk-update", taskHandler.BulkUpdate, rbac(mw.PermUpdateTask))
+	api.GET("/projects/:proj_id/tasks", taskHandler.List, projAccess)
+	api.POST("/projects/:proj_id/tasks", taskHandler.Create, projAccess, rbac(mw.PermCreateTask))
+	api.POST("/projects/:proj_id/tasks/bulk-update", taskHandler.BulkUpdate, projAccess, rbac(mw.PermUpdateTask))
 	api.GET("/tasks/:task_id", taskHandler.GetByID)
 	api.PATCH("/tasks/:task_id", taskHandler.Update, rbac(mw.PermUpdateTask))
 	api.DELETE("/tasks/:task_id", taskHandler.Delete, rbac(mw.PermDeleteTask))
@@ -419,7 +428,7 @@ func main() {
 	api.GET("/tasks/:task_id/dependencies", depHandler.List)
 	api.POST("/tasks/:task_id/dependencies", depHandler.Create, rbac(mw.PermUpdateTask))
 	api.DELETE("/tasks/:task_id/dependencies/:dep_id", depHandler.Delete, rbac(mw.PermUpdateTask))
-	api.GET("/projects/:proj_id/dependency-graph", depHandler.DependencyGraph)
+	api.GET("/projects/:proj_id/dependency-graph", depHandler.DependencyGraph, projAccess)
 
 	// Comment routes.
 	api.GET("/tasks/:task_id/comments", commentHandler.List)
@@ -452,8 +461,8 @@ func main() {
 	api.GET("/agents/:agent_id/sub-agents", agentHandler.ListSubAgents)
 
 	// Event bus routes.
-	api.GET("/projects/:proj_id/events", eventHandler.List)
-	api.POST("/projects/:proj_id/events", eventHandler.Create, rbac(mw.PermPublishEvent))
+	api.GET("/projects/:proj_id/events", eventHandler.List, projAccess)
+	api.POST("/projects/:proj_id/events", eventHandler.Create, projAccess, rbac(mw.PermPublishEvent))
 	api.GET("/events/:event_id", eventHandler.GetByID)
 
 	// Webhook routes.
@@ -466,8 +475,8 @@ func main() {
 	api.POST("/webhooks/:webhook_id/test", webhookHandler.Test, rbac(mw.PermManageWebhooks))
 
 	// Saved view routes.
-	api.GET("/projects/:proj_id/views", savedViewHandler.List)
-	api.POST("/projects/:proj_id/views", savedViewHandler.Create)
+	api.GET("/projects/:proj_id/views", savedViewHandler.List, projAccess)
+	api.POST("/projects/:proj_id/views", savedViewHandler.Create, projAccess)
 	api.GET("/views/:view_id", savedViewHandler.GetByID)
 	api.PATCH("/views/:view_id", savedViewHandler.Update)
 	api.DELETE("/views/:view_id", savedViewHandler.Delete)
@@ -496,9 +505,9 @@ func main() {
 	api.GET("/workspaces/:ws_id/analytics/export", analyticsHandler.ExportMetrics)
 
 	// Project update routes.
-	api.POST("/projects/:proj_id/updates", projectUpdateHandler.Create)
-	api.GET("/projects/:proj_id/updates", projectUpdateHandler.List)
-	api.GET("/projects/:proj_id/updates/latest", projectUpdateHandler.GetLatest)
+	api.POST("/projects/:proj_id/updates", projectUpdateHandler.Create, projAccess)
+	api.GET("/projects/:proj_id/updates", projectUpdateHandler.List, projAccess)
+	api.GET("/projects/:proj_id/updates/latest", projectUpdateHandler.GetLatest, projAccess)
 
 	// Initiative routes.
 	api.POST("/workspaces/:ws_id/initiatives", initiativeHandler.Create, rbac(mw.PermCreateProject))
@@ -513,8 +522,8 @@ func main() {
 	api.GET("/workspaces/:ws_id/triage", triageHandler.List)
 
 	// Recurring task schedule routes.
-	api.POST("/projects/:proj_id/recurring", recurringHandler.Create, rbac(mw.PermCreateTask))
-	api.GET("/projects/:proj_id/recurring", recurringHandler.List)
+	api.POST("/projects/:proj_id/recurring", recurringHandler.Create, projAccess, rbac(mw.PermCreateTask))
+	api.GET("/projects/:proj_id/recurring", recurringHandler.List, projAccess)
 	api.GET("/recurring/:id", recurringHandler.GetByID)
 	api.PATCH("/recurring/:id", recurringHandler.Update, rbac(mw.PermUpdateTask))
 	api.DELETE("/recurring/:id", recurringHandler.Delete, rbac(mw.PermDeleteTask))
@@ -522,8 +531,8 @@ func main() {
 	api.GET("/recurring/:id/history", recurringHandler.History)
 
 	// Task template routes.
-	api.POST("/projects/:proj_id/templates", taskTemplateHandler.Create, rbac(mw.PermCreateTask))
-	api.GET("/projects/:proj_id/templates", taskTemplateHandler.List)
+	api.POST("/projects/:proj_id/templates", taskTemplateHandler.Create, projAccess, rbac(mw.PermCreateTask))
+	api.GET("/projects/:proj_id/templates", taskTemplateHandler.List, projAccess)
 	api.GET("/templates/:tmpl_id", taskTemplateHandler.GetByID)
 	api.PATCH("/templates/:tmpl_id", taskTemplateHandler.Update, rbac(mw.PermUpdateTask))
 	api.DELETE("/templates/:tmpl_id", taskTemplateHandler.Delete, rbac(mw.PermDeleteTask))
@@ -536,12 +545,12 @@ func main() {
 	// Assignment Rules routes (Sprint 20).
 	api.GET("/workspaces/:ws_id/rules/assignment", rulesHandler.GetWorkspaceAssignmentRules)
 	api.PUT("/workspaces/:ws_id/rules/assignment", rulesHandler.SetWorkspaceAssignmentRules, rbac(mw.PermManageMembers))
-	api.GET("/projects/:proj_id/rules/assignment", rulesHandler.GetEffectiveAssignmentRules)
-	api.PUT("/projects/:proj_id/rules/assignment", rulesHandler.SetProjectAssignmentRules, rbac(mw.PermManageMembers))
+	api.GET("/projects/:proj_id/rules/assignment", rulesHandler.GetEffectiveAssignmentRules, projAccess)
+	api.PUT("/projects/:proj_id/rules/assignment", rulesHandler.SetProjectAssignmentRules, projAccess, rbac(mw.PermManageMembers))
 
 	// Workflow Rules routes (Sprint 20).
-	api.GET("/projects/:proj_id/rules/workflow", rulesHandler.GetProjectWorkflowRules)
-	api.PUT("/projects/:proj_id/rules/workflow", rulesHandler.SetProjectWorkflowRules, rbac(mw.PermManageMembers))
+	api.GET("/projects/:proj_id/rules/workflow", rulesHandler.GetProjectWorkflowRules, projAccess)
+	api.PUT("/projects/:proj_id/rules/workflow", rulesHandler.SetProjectWorkflowRules, projAccess, rbac(mw.PermManageMembers))
 
 	// Violation Log routes (Sprint 20).
 	api.GET("/workspaces/:ws_id/violations", rulesHandler.ListViolations)
@@ -559,9 +568,9 @@ func main() {
 	api.POST("/workspaces/:ws_id/rules", ruleHandler.CreateWorkspaceRule, rbac(mw.PermManageRules))
 	api.GET("/workspaces/:ws_id/rules", ruleHandler.ListWorkspaceRules)
 	api.GET("/workspaces/:ws_id/rules/effective", ruleHandler.GetWorkspaceEffectiveRules)
-	api.POST("/projects/:proj_id/rules", ruleHandler.CreateProjectRule, rbac(mw.PermManageRules))
-	api.GET("/projects/:proj_id/rules", ruleHandler.ListProjectRules)
-	api.GET("/projects/:proj_id/rules/effective", ruleHandler.GetProjectEffectiveRules)
+	api.POST("/projects/:proj_id/rules", ruleHandler.CreateProjectRule, projAccess, rbac(mw.PermManageRules))
+	api.GET("/projects/:proj_id/rules", ruleHandler.ListProjectRules, projAccess)
+	api.GET("/projects/:proj_id/rules/effective", ruleHandler.GetProjectEffectiveRules, projAccess)
 	api.GET("/rules/:rule_id", ruleHandler.GetRule)
 	api.PATCH("/rules/:rule_id", ruleHandler.UpdateRule, rbac(mw.PermManageRules))
 	api.DELETE("/rules/:rule_id", ruleHandler.DeleteRule, rbac(mw.PermManageRules))

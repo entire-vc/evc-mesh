@@ -23,20 +23,33 @@ const (
 	ProjectRoleViewer = "viewer"
 )
 
-// ProjectMember represents a user's explicit membership in a project with a specific role.
+// ProjectMember represents a user's or agent's explicit membership in a project with a specific role.
+// Exactly one of UserID or AgentID must be set (enforced by DB CHECK constraint).
 type ProjectMember struct {
-	ID        uuid.UUID `json:"id" db:"id"`
-	ProjectID uuid.UUID `json:"project_id" db:"project_id"`
-	UserID    uuid.UUID `json:"user_id" db:"user_id"`
-	Role      string    `json:"role" db:"role"`
-	CreatedAt time.Time `json:"created_at" db:"created_at"`
-	UpdatedAt time.Time `json:"updated_at" db:"updated_at"`
+	ID        uuid.UUID  `json:"id" db:"id"`
+	ProjectID uuid.UUID  `json:"project_id" db:"project_id"`
+	UserID    *uuid.UUID `json:"user_id,omitempty" db:"user_id"`
+	AgentID   *uuid.UUID `json:"agent_id,omitempty" db:"agent_id"`
+	Role      string     `json:"role" db:"role"`
+	CreatedAt time.Time  `json:"created_at" db:"created_at"`
+	UpdatedAt time.Time  `json:"updated_at" db:"updated_at"`
+}
+
+// IsUserMember returns true if this membership belongs to a user.
+func (m *ProjectMember) IsUserMember() bool {
+	return m.UserID != nil && *m.UserID != uuid.Nil
+}
+
+// IsAgentMember returns true if this membership belongs to an agent.
+func (m *ProjectMember) IsAgentMember() bool {
+	return m.AgentID != nil && *m.AgentID != uuid.Nil
 }
 
 // ProjectMemberWithUser embeds ProjectMember with the associated user's brief info.
 type ProjectMemberWithUser struct {
 	ProjectMember
-	User UserBrief `json:"user"`
+	User      *UserBrief  `json:"user,omitempty"`
+	AgentName string      `json:"agent_name,omitempty"`
 }
 
 // Project belongs to a Workspace and contains tasks, statuses, and custom fields.

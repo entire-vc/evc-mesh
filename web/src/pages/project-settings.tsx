@@ -1054,6 +1054,8 @@ export function ProjectSettingsPage() {
     fetchProjectMembers,
     updateProjectMemberRole,
     removeProjectMember,
+    addProjectAgentMember,
+    removeProjectAgentMember,
   } = useMemberStore();
 
   const {
@@ -1409,11 +1411,14 @@ export function ProjectSettingsPage() {
   );
 
   // --- Project member handlers ---
+  const userMembers = projectMembers.filter((m) => m.user_id);
+  const agentMembers = projectMembers.filter((m) => m.agent_id);
+
   const handleProjectMemberRoleChange = async (
     member: ProjectMemberWithUser,
     newRole: ProjectRole,
   ) => {
-    if (!currentProject) return;
+    if (!currentProject || !member.user_id) return;
     try {
       await updateProjectMemberRole(currentProject.id, member.user_id, newRole);
     } catch {
@@ -1431,7 +1436,11 @@ export function ProjectSettingsPage() {
     setIsRemovingMember(true);
     setMemberError(null);
     try {
-      await removeProjectMember(currentProject.id, memberToRemove.user_id);
+      if (memberToRemove.agent_id) {
+        await removeProjectAgentMember(currentProject.id, memberToRemove.agent_id);
+      } else if (memberToRemove.user_id) {
+        await removeProjectMember(currentProject.id, memberToRemove.user_id);
+      }
       setMemberToRemove(null);
     } catch (err) {
       setMemberError(
@@ -1439,6 +1448,27 @@ export function ProjectSettingsPage() {
       );
     } finally {
       setIsRemovingMember(false);
+    }
+  };
+
+  const [addAgentMemberOpen, setAddAgentMemberOpen] = useState(false);
+  const [selectedAgentId, setSelectedAgentId] = useState("");
+  const [isAddingAgent, setIsAddingAgent] = useState(false);
+
+  const handleAddAgentMember = async () => {
+    if (!currentProject || !selectedAgentId) return;
+    setIsAddingAgent(true);
+    setMemberError(null);
+    try {
+      await addProjectAgentMember(currentProject.id, selectedAgentId, "member");
+      setSelectedAgentId("");
+      setAddAgentMemberOpen(false);
+    } catch (err) {
+      setMemberError(
+        err instanceof Error ? err.message : "Failed to add agent",
+      );
+    } finally {
+      setIsAddingAgent(false);
     }
   };
 
@@ -1899,18 +1929,22 @@ export function ProjectSettingsPage() {
 
       {/* Section 6: Members */}
       {activeTab === "members" && (
+      <>
       <Card>
         <CardHeader>
           <div className="flex items-center justify-between">
             <div className="space-y-1.5">
-              <CardTitle>Members</CardTitle>
+              <CardTitle>
+                <Users className="inline h-4 w-4 mr-1.5" />
+                User Members
+              </CardTitle>
               <CardDescription>
-                Members added here have access to this project. If no members are added, all workspace members can access this project.
+                Users with access to this project. Workspace owners and admins always have access.
               </CardDescription>
             </div>
             <Button size="sm" onClick={() => setAddMemberDialogOpen(true)}>
               <Plus className="h-4 w-4" />
-              Add Member
+              Add User
             </Button>
           </div>
         </CardHeader>
@@ -1928,16 +1962,16 @@ export function ProjectSettingsPage() {
                 </div>
               ))}
             </div>
-          ) : projectMembers.length === 0 ? (
-            <div className="py-8 text-center">
+          ) : userMembers.length === 0 ? (
+            <div className="py-6 text-center">
               <Users className="mx-auto mb-2 h-8 w-8 text-muted-foreground" />
               <p className="text-sm text-muted-foreground">
-                No specific members added. All workspace members can access this project.
+                No user members added yet.
               </p>
             </div>
           ) : (
             <div className="divide-y divide-border">
-              {projectMembers.map((member) => {
+              {userMembers.map((member) => {
                 const isMe = member.user_id === user?.id;
                 return (
                   <div
@@ -1945,21 +1979,21 @@ export function ProjectSettingsPage() {
                     className="flex items-center gap-3 py-3 first:pt-0 last:pb-0"
                   >
                     <Avatar
-                      src={member.user.avatar_url || undefined}
-                      name={member.user.name || member.user.email}
+                      src={member.user?.avatar_url || undefined}
+                      name={member.user?.name || member.user?.email || ""}
                       size="md"
                     />
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-1.5">
                         <span className="truncate text-sm font-medium">
-                          {member.user.name}
+                          {member.user?.name}
                         </span>
                         {isMe && (
                           <span className="text-xs text-muted-foreground">(you)</span>
                         )}
                       </div>
                       <p className="truncate text-xs text-muted-foreground">
-                        {member.user.email}
+                        {member.user?.email}
                       </p>
                     </div>
                     <Select
@@ -1990,12 +2024,112 @@ export function ProjectSettingsPage() {
               })}
             </div>
           )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <div className="flex items-center justify-between">
+            <div className="space-y-1.5">
+              <CardTitle>
+                <Bot className="inline h-4 w-4 mr-1.5" />
+                Agent Members
+              </CardTitle>
+              <CardDescription>
+                AI agents with access to this project via API/MCP.
+              </CardDescription>
+            </div>
+            <Button size="sm" onClick={() => setAddAgentMemberOpen(true)}>
+              <Plus className="h-4 w-4" />
+              Add Agent
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {agentMembers.length === 0 ? (
+            <div className="py-6 text-center">
+              <Bot className="mx-auto mb-2 h-8 w-8 text-muted-foreground" />
+              <p className="text-sm text-muted-foreground">
+                No agent members added yet.
+              </p>
+            </div>
+          ) : (
+            <div className="divide-y divide-border">
+              {agentMembers.map((member) => (
+                <div
+                  key={member.id}
+                  className="flex items-center gap-3 py-3 first:pt-0 last:pb-0"
+                >
+                  <div className="flex h-8 w-8 items-center justify-center rounded-full bg-muted">
+                    <Bot className="h-4 w-4 text-muted-foreground" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <span className="truncate text-sm font-medium">
+                      {member.agent_name || member.agent_id?.slice(0, 8)}
+                    </span>
+                    <p className="text-xs text-muted-foreground">Agent</p>
+                  </div>
+                  <Badge variant="secondary" className="text-xs">{member.role}</Badge>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                    onClick={() => handleOpenRemoveMember(member)}
+                    title="Remove agent from project"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Add Agent Dialog - inline */}
+          {addAgentMemberOpen && (
+            <div className="mt-4 rounded-md border border-border p-4 space-y-3">
+              <p className="text-sm font-medium">Add Agent to Project</p>
+              <Select
+                value={selectedAgentId}
+                onChange={(e) => setSelectedAgentId(e.target.value)}
+                className="w-full text-sm"
+              >
+                <option value="">Select agent...</option>
+                {agents
+                  .filter((a) => !agentMembers.some((m) => m.agent_id === a.id))
+                  .map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {a.name}
+                    </option>
+                  ))}
+              </Select>
+              <div className="flex gap-2 justify-end">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    setAddAgentMemberOpen(false);
+                    setSelectedAgentId("");
+                  }}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  size="sm"
+                  disabled={!selectedAgentId || isAddingAgent}
+                  onClick={() => void handleAddAgentMember()}
+                >
+                  {isAddingAgent ? "Adding..." : "Add"}
+                </Button>
+              </div>
+            </div>
+          )}
 
           {memberError && (
             <p className="mt-3 text-sm text-destructive">{memberError}</p>
           )}
         </CardContent>
       </Card>
+      </>
       )}
 
       {/* Section 7: Recurring Schedules */}
@@ -2542,7 +2676,7 @@ export function ProjectSettingsPage() {
         title="Remove Member"
         description={
           memberToRemove
-            ? `Are you sure you want to remove ${memberToRemove.user.name} from this project?`
+            ? `Are you sure you want to remove ${memberToRemove.agent_id ? (memberToRemove.agent_name || "this agent") : (memberToRemove.user?.name || "this member")} from this project?`
             : ""
         }
         confirmText="Remove Member"

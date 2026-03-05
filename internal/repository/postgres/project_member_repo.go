@@ -24,18 +24,18 @@ func NewProjectMemberRepo(db *sqlx.DB) *ProjectMemberRepo {
 
 func (r *ProjectMemberRepo) Create(ctx context.Context, member *domain.ProjectMember) error {
 	const q = `
-		INSERT INTO project_members (id, project_id, user_id, role, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6)
+		INSERT INTO project_members (id, project_id, user_id, agent_id, role, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
 	`
 	_, err := r.db.ExecContext(ctx, q,
-		member.ID, member.ProjectID, member.UserID,
+		member.ID, member.ProjectID, member.UserID, member.AgentID,
 		member.Role, member.CreatedAt, member.UpdatedAt,
 	)
 	return err
 }
 
 func (r *ProjectMemberRepo) GetByProjectAndUser(ctx context.Context, projectID, userID uuid.UUID) (*domain.ProjectMember, error) {
-	const q = `SELECT id, project_id, user_id, role, created_at, updated_at FROM project_members WHERE project_id = $1 AND user_id = $2`
+	const q = `SELECT id, project_id, user_id, agent_id, role, created_at, updated_at FROM project_members WHERE project_id = $1 AND user_id = $2`
 	var member domain.ProjectMember
 	if err := r.db.GetContext(ctx, &member, q, projectID, userID); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -46,28 +46,44 @@ func (r *ProjectMemberRepo) GetByProjectAndUser(ctx context.Context, projectID, 
 	return &member, nil
 }
 
-// projectMemberRow is a flat DB scan struct for the JOIN query.
-type projectMemberRow struct {
-	ID         uuid.UUID `db:"id"`
-	ProjectID  uuid.UUID `db:"project_id"`
-	UserID     uuid.UUID `db:"user_id"`
-	Role       string    `db:"role"`
-	CreatedAt  time.Time `db:"created_at"`
-	UpdatedAt  time.Time `db:"updated_at"`
-	UserIDJoin uuid.UUID `db:"u_id"`
-	UserEmail  string    `db:"u_email"`
-	UserName   string    `db:"u_display_name"`
-	UserAvatar string    `db:"u_avatar_url"`
+func (r *ProjectMemberRepo) GetByProjectAndAgent(ctx context.Context, projectID, agentID uuid.UUID) (*domain.ProjectMember, error) {
+	const q = `SELECT id, project_id, user_id, agent_id, role, created_at, updated_at FROM project_members WHERE project_id = $1 AND agent_id = $2`
+	var member domain.ProjectMember
+	if err := r.db.GetContext(ctx, &member, q, projectID, agentID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &member, nil
 }
 
-// List returns all project members with their user details.
+// projectMemberRow is a flat DB scan struct for the JOIN query.
+type projectMemberRow struct {
+	ID         uuid.UUID  `db:"id"`
+	ProjectID  uuid.UUID  `db:"project_id"`
+	UserID     *uuid.UUID `db:"user_id"`
+	AgentID    *uuid.UUID `db:"agent_id"`
+	Role       string     `db:"role"`
+	CreatedAt  time.Time  `db:"created_at"`
+	UpdatedAt  time.Time  `db:"updated_at"`
+	UserIDJoin *uuid.UUID `db:"u_id"`
+	UserEmail  *string    `db:"u_email"`
+	UserName   *string    `db:"u_display_name"`
+	UserAvatar *string    `db:"u_avatar_url"`
+	AgentName  *string    `db:"a_name"`
+}
+
+// List returns all project members with their user/agent details.
 func (r *ProjectMemberRepo) List(ctx context.Context, projectID uuid.UUID) ([]domain.ProjectMemberWithUser, error) {
 	const q = `
 		SELECT
-			pm.id, pm.project_id, pm.user_id, pm.role, pm.created_at, pm.updated_at,
-			u.id AS u_id, u.email AS u_email, u.display_name AS u_display_name, u.avatar_url AS u_avatar_url
+			pm.id, pm.project_id, pm.user_id, pm.agent_id, pm.role, pm.created_at, pm.updated_at,
+			u.id AS u_id, u.email AS u_email, u.display_name AS u_display_name, u.avatar_url AS u_avatar_url,
+			a.name AS a_name
 		FROM project_members pm
-		JOIN users u ON u.id = pm.user_id
+		LEFT JOIN users u ON u.id = pm.user_id
+		LEFT JOIN agents a ON a.id = pm.agent_id
 		WHERE pm.project_id = $1
 		ORDER BY pm.created_at
 	`
@@ -78,22 +94,29 @@ func (r *ProjectMemberRepo) List(ctx context.Context, projectID uuid.UUID) ([]do
 
 	result := make([]domain.ProjectMemberWithUser, len(rows))
 	for i, row := range rows {
-		result[i] = domain.ProjectMemberWithUser{
+		m := domain.ProjectMemberWithUser{
 			ProjectMember: domain.ProjectMember{
 				ID:        row.ID,
 				ProjectID: row.ProjectID,
 				UserID:    row.UserID,
+				AgentID:   row.AgentID,
 				Role:      row.Role,
 				CreatedAt: row.CreatedAt,
 				UpdatedAt: row.UpdatedAt,
 			},
-			User: domain.UserBrief{
-				ID:        row.UserIDJoin,
-				Email:     row.UserEmail,
-				Name:      row.UserName,
-				AvatarURL: row.UserAvatar,
-			},
 		}
+		if row.UserIDJoin != nil {
+			m.User = &domain.UserBrief{
+				ID:        *row.UserIDJoin,
+				Email:     derefStr(row.UserEmail),
+				Name:      derefStr(row.UserName),
+				AvatarURL: derefStr(row.UserAvatar),
+			}
+		}
+		if row.AgentName != nil {
+			m.AgentName = *row.AgentName
+		}
+		result[i] = m
 	}
 	return result, nil
 }
@@ -112,6 +135,13 @@ func (r *ProjectMemberRepo) Delete(ctx context.Context, projectID, userID uuid.U
 	return err
 }
 
+// DeleteAgent removes the project membership for the given agent.
+func (r *ProjectMemberRepo) DeleteAgent(ctx context.Context, projectID, agentID uuid.UUID) error {
+	const q = `DELETE FROM project_members WHERE project_id = $1 AND agent_id = $2`
+	_, err := r.db.ExecContext(ctx, q, projectID, agentID)
+	return err
+}
+
 // DeleteByWorkspaceAndUser removes all project memberships for a user across a workspace.
 func (r *ProjectMemberRepo) DeleteByWorkspaceAndUser(ctx context.Context, workspaceID, userID uuid.UUID) error {
 	const q = `
@@ -123,4 +153,31 @@ func (r *ProjectMemberRepo) DeleteByWorkspaceAndUser(ctx context.Context, worksp
 	`
 	_, err := r.db.ExecContext(ctx, q, workspaceID, userID)
 	return err
+}
+
+// ExistsMember returns true if the given user or agent is a member of the project.
+func (r *ProjectMemberRepo) ExistsMember(ctx context.Context, projectID uuid.UUID, userID *uuid.UUID, agentID *uuid.UUID) (bool, error) {
+	var exists bool
+	if userID != nil {
+		err := r.db.QueryRowContext(ctx,
+			"SELECT EXISTS(SELECT 1 FROM project_members WHERE project_id = $1 AND user_id = $2)",
+			projectID, *userID,
+		).Scan(&exists)
+		return exists, err
+	}
+	if agentID != nil {
+		err := r.db.QueryRowContext(ctx,
+			"SELECT EXISTS(SELECT 1 FROM project_members WHERE project_id = $1 AND agent_id = $2)",
+			projectID, *agentID,
+		).Scan(&exists)
+		return exists, err
+	}
+	return false, nil
+}
+
+func derefStr(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
 }

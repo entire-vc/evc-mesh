@@ -130,19 +130,21 @@ export interface WorkspaceMemberWithUser {
 export interface ProjectMember {
   id: string;
   project_id: string;
-  user_id: string;
+  user_id?: string;
+  agent_id?: string;
   role: ProjectRole;
   created_at: string;
   updated_at: string;
 }
 
 export interface ProjectMemberWithUser extends ProjectMember {
-  user: {
+  user?: {
     id: string;
     email: string;
     name: string;
     avatar_url: string;
   };
+  agent_name?: string;
 }
 
 export interface UserSearchResult {

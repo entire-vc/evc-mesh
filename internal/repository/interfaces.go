@@ -22,8 +22,10 @@ type WorkspaceRepository interface {
 
 // ProjectFilter defines filtering options for listing projects.
 type ProjectFilter struct {
-	IsArchived *bool
-	Search     string
+	IsArchived    *bool
+	Search        string
+	MemberUserID  *uuid.UUID // Filter to projects where this user is a member.
+	MemberAgentID *uuid.UUID // Filter to projects where this agent is a member.
 }
 
 // ProjectRepository manages persistence for projects.
@@ -236,14 +238,19 @@ type WorkspaceMemberRepository interface {
 type ProjectMemberRepository interface {
 	Create(ctx context.Context, member *domain.ProjectMember) error
 	GetByProjectAndUser(ctx context.Context, projectID, userID uuid.UUID) (*domain.ProjectMember, error)
-	// List returns all members of a project with user details joined.
+	GetByProjectAndAgent(ctx context.Context, projectID, agentID uuid.UUID) (*domain.ProjectMember, error)
+	// List returns all members of a project with user and agent details joined.
 	List(ctx context.Context, projectID uuid.UUID) ([]domain.ProjectMemberWithUser, error)
 	// UpdateRole changes the role for a given project + user.
 	UpdateRole(ctx context.Context, projectID, userID uuid.UUID, role string) error
 	// Delete removes the project membership for the given user.
 	Delete(ctx context.Context, projectID, userID uuid.UUID) error
+	// DeleteAgent removes the project membership for the given agent.
+	DeleteAgent(ctx context.Context, projectID, agentID uuid.UUID) error
 	// DeleteByWorkspaceAndUser removes all project memberships for a user across a workspace.
 	DeleteByWorkspaceAndUser(ctx context.Context, workspaceID, userID uuid.UUID) error
+	// ExistsMember returns true if the given user or agent is a member of the project.
+	ExistsMember(ctx context.Context, projectID uuid.UUID, userID *uuid.UUID, agentID *uuid.UUID) (bool, error)
 }
 
 // SavedViewRepository manages persistence for saved views.

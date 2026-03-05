@@ -43,12 +43,18 @@ interface MemberState {
     userId: string,
     role: ProjectRole,
   ) => Promise<ProjectMemberWithUser>;
+  addProjectAgentMember: (
+    projectId: string,
+    agentId: string,
+    role: ProjectRole,
+  ) => Promise<ProjectMemberWithUser>;
   updateProjectMemberRole: (
     projectId: string,
     userId: string,
     role: ProjectRole,
   ) => Promise<void>;
   removeProjectMember: (projectId: string, userId: string) => Promise<void>;
+  removeProjectAgentMember: (projectId: string, agentId: string) => Promise<void>;
 }
 
 export const useMemberStore = create<MemberState>((set) => ({
@@ -173,6 +179,21 @@ export const useMemberStore = create<MemberState>((set) => ({
     return member;
   },
 
+  addProjectAgentMember: async (
+    projectId: string,
+    agentId: string,
+    role: ProjectRole,
+  ): Promise<ProjectMemberWithUser> => {
+    const member = await api<ProjectMemberWithUser>(
+      `/api/v1/projects/${projectId}/members/agents`,
+      { method: "POST", body: { agent_id: agentId, role } },
+    );
+    set((state) => ({
+      projectMembers: [...state.projectMembers, member],
+    }));
+    return member;
+  },
+
   updateProjectMemberRole: async (
     projectId: string,
     userId: string,
@@ -196,6 +217,17 @@ export const useMemberStore = create<MemberState>((set) => ({
     set((state) => ({
       projectMembers: state.projectMembers.filter(
         (m) => m.user_id !== userId,
+      ),
+    }));
+  },
+
+  removeProjectAgentMember: async (projectId: string, agentId: string) => {
+    await api(`/api/v1/projects/${projectId}/members/agents/${agentId}`, {
+      method: "DELETE",
+    });
+    set((state) => ({
+      projectMembers: state.projectMembers.filter(
+        (m) => m.agent_id !== agentId,
       ),
     }));
   },

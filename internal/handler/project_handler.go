@@ -9,6 +9,7 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	mw "github.com/entire-vc/evc-mesh/internal/middleware"
 	"github.com/entire-vc/evc-mesh/internal/repository"
 	"github.com/entire-vc/evc-mesh/internal/service"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
@@ -76,6 +77,19 @@ func (h *ProjectHandler) List(c echo.Context) error {
 		v, err := strconv.ParseBool(q.IsArchived)
 		if err == nil {
 			filter.IsArchived = &v
+		}
+	}
+
+	// Workspace owners/admins see all projects; others see only their memberships.
+	wsRole, _ := c.Get(mw.ContextKeyWorkspaceRole).(string)
+	if mw.IsAgent(c) {
+		// Agents always filter by membership.
+		if agentID, err := mw.GetAgentID(c); err == nil {
+			filter.MemberAgentID = &agentID
+		}
+	} else if wsRole != domain.RoleOwner && wsRole != domain.RoleAdmin {
+		if userID, err := mw.GetUserID(c); err == nil {
+			filter.MemberUserID = &userID
 		}
 	}
 

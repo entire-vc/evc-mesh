@@ -10,6 +10,9 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/repository"
 )
 
+// ContextKeyWorkspaceRole stores the workspace-level role of the current actor.
+const ContextKeyWorkspaceRole = "workspace_role"
+
 // WorkspaceRLS returns middleware that sets the PostgreSQL session variable
 // app.current_workspace_id based on the request context. This enables
 // Row-Level Security (RLS) policies at the database level.
@@ -114,6 +117,21 @@ func WorkspaceRLS(db *sqlx.DB, projectRepo repository.ProjectRepository) echo.Mi
 				}
 				// Also store in Echo context so RBAC middleware (and handlers) can read it.
 				c.Set(ContextKeyWorkspaceID, wsID)
+
+				// Resolve workspace role for the current actor so downstream middleware
+				// (e.g., RequireProjectMember) can check it without a second DB query.
+				if !IsAgent(c) {
+					if userID, err := GetUserID(c); err == nil {
+						var role string
+						err := db.QueryRowContext(c.Request().Context(),
+							"SELECT role FROM workspace_members WHERE workspace_id = $1 AND user_id = $2",
+							wsID, userID,
+						).Scan(&role)
+						if err == nil {
+							c.Set(ContextKeyWorkspaceRole, role)
+						}
+					}
+				}
 			}
 
 			return next(c)
