@@ -1,4 +1,4 @@
-import { ChevronLeft, ChevronRight, Filter, Search } from "lucide-react";
+import { ChevronLeft, ChevronRight, Filter, RefreshCw, Search } from "lucide-react";
 import { format } from "date-fns";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -13,6 +13,7 @@ interface CalendarToolbarProps {
   onToggleUnscheduled: () => void;
   searchQuery: string;
   onSearchChange: (query: string) => void;
+  onNewRecurring?: () => void;
 }
 
 export function CalendarToolbar({
@@ -25,6 +26,7 @@ export function CalendarToolbar({
   onToggleUnscheduled,
   searchQuery,
   onSearchChange,
+  onNewRecurring,
 }: CalendarToolbarProps) {
   return (
     <div className="flex items-center gap-3">
@@ -55,6 +57,13 @@ export function CalendarToolbar({
         <Filter className="mr-1.5 h-3.5 w-3.5" />
         {unscheduledCount} Unscheduled
       </Button>
+
+      {onNewRecurring && (
+        <Button variant="outline" size="sm" onClick={onNewRecurring} title="New Recurring Task">
+          <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
+          Recurring
+        </Button>
+      )}
 
       <div className="relative w-48">
         <Search className="absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />

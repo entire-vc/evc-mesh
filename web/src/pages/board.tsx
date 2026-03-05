@@ -37,6 +37,7 @@ import { TaskSlideOver } from "@/components/task-slide-over";
 import { toast } from "@/components/ui/toast";
 import { SavedViewsMenu } from "@/components/saved-views-menu";
 import { BoardToolbar, type GroupBy, type SortBy } from "@/components/board-toolbar";
+import { CreateRecurringDialog } from "@/components/create-recurring-dialog";
 import { AssigneeAvatar } from "@/components/assignee-avatar";
 import { applyViewFilters, type CFFilters } from "@/components/view-filters";
 import type { Task, TaskStatus, WSMessage, SavedView, Priority, StatusCategory } from "@/types";
@@ -607,6 +608,8 @@ export function BoardPage() {
     setDialogOpen(true);
   }, []);
 
+  const [recurringOpen, setRecurringOpen] = useState(false);
+
   const handleTaskClick = useCallback((task: Task) => {
     setSlideOverTaskId(task.id);
   }, []);
@@ -651,6 +654,7 @@ export function BoardPage() {
           customFieldFilters={customFieldFilters}
           onCustomFieldFiltersChange={setCustomFieldFilters}
           onNewTask={() => openCreateDialog()}
+          onNewRecurring={() => setRecurringOpen(true)}
         />
 
         {/* Saved views */}
@@ -733,6 +737,12 @@ export function BoardPage() {
         open={dialogOpen}
         onOpenChange={setDialogOpen}
         defaultStatusId={dialogStatusId}
+      />
+
+      <CreateRecurringDialog
+        open={recurringOpen}
+        onOpenChange={setRecurringOpen}
+        projectId={currentProject?.id ?? ""}
       />
 
       {/* Task slide-over */}

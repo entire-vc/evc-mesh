@@ -8,7 +8,7 @@
  * parent (BoardPage) so the board columns can react to it.
  */
 
-import { Search, ChevronDown, ArrowUpDown, Plus } from "lucide-react";
+import { Search, ChevronDown, ArrowUpDown, Plus, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
@@ -80,6 +80,8 @@ export interface BoardToolbarProps {
 
   // New task action
   onNewTask: () => void;
+  // Recurring task action (optional)
+  onNewRecurring?: () => void;
 }
 
 const GROUP_BY_LABELS: Record<GroupBy, string> = {
@@ -153,6 +155,7 @@ export function BoardToolbar({
   customFieldFilters: _customFieldFilters,
   onCustomFieldFiltersChange: _onCustomFieldFiltersChange,
   onNewTask,
+  onNewRecurring,
 }: BoardToolbarProps) {
 
   return (
@@ -294,6 +297,13 @@ export function BoardToolbar({
 
       {/* Spacer */}
       <div className="flex-1" />
+
+      {/* New Recurring */}
+      {onNewRecurring && (
+        <Button size="sm" variant="outline" className="h-8 w-8 p-0" onClick={onNewRecurring} title="New Recurring Task">
+          <RefreshCw className="h-4 w-4" />
+        </Button>
+      )}
 
       {/* New Task */}
       <Button size="sm" className="h-8 w-8 p-0" onClick={onNewTask} title="New Task">

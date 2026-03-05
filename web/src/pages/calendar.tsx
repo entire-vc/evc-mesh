@@ -21,6 +21,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { CalendarToolbar } from "@/components/calendar-toolbar";
 import { CreateTaskDialog } from "@/components/create-task-dialog";
+import { CreateRecurringDialog } from "@/components/create-recurring-dialog";
 import { TaskSlideOver } from "@/components/task-slide-over";
 import { SavedViewsMenu } from "@/components/saved-views-menu";
 import { toast } from "@/components/ui/toast";
@@ -406,6 +407,7 @@ export function CalendarPage() {
   // Dialog state
   const [dialogOpen, setDialogOpen] = useState(false);
   const [dialogDueDate, setDialogDueDate] = useState<string | undefined>();
+  const [recurringOpen, setRecurringOpen] = useState(false);
 
   // Slide-over state
   const [slideOverTaskId, setSlideOverTaskId] = useState<string | null>(null);
@@ -624,6 +626,7 @@ export function CalendarPage() {
           onToggleUnscheduled={() => setShowUnscheduled((v) => !v)}
           searchQuery={searchQuery}
           onSearchChange={setSearchQuery}
+          onNewRecurring={() => setRecurringOpen(true)}
         />
       </div>
 
@@ -686,6 +689,12 @@ export function CalendarPage() {
         open={dialogOpen}
         onOpenChange={setDialogOpen}
         defaultDueDate={dialogDueDate}
+      />
+
+      <CreateRecurringDialog
+        open={recurringOpen}
+        onOpenChange={setRecurringOpen}
+        projectId={currentProject?.id ?? ""}
       />
 
       {/* Task slide-over */}
