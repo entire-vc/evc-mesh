@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	mcpserver "github.com/entire-vc/evc-mesh/internal/mcp"
 
@@ -118,6 +119,11 @@ func main() {
 		srvRegistry := &serverRegistry{
 			apiURL: apiURL,
 		}
+
+		// Start TTL-based eviction goroutines: run every 5 minutes, evict
+		// entries idle for 30 minutes. Mirrors the rateLimitStore pattern.
+		sessionCache.startCleanup(5*time.Minute, 30*time.Minute)
+		srvRegistry.startCleanup(5*time.Minute, 30*time.Minute)
 
 		// Build a "router" server that dispatches to per-agent servers.
 		// Since mcp-go SSE doesn't support per-connection server selection,
@@ -246,20 +252,32 @@ func safeKeyPrefix(key string) string {
 	return key
 }
 
+// sessionCacheEntry wraps an authenticated agent session with a last-used
+// timestamp so that the cleanup goroutine can evict stale entries.
+type sessionCacheEntry struct {
+	session  *mcpserver.AgentSession
+	lastUsed time.Time
+}
+
 // agentSessionCache caches authenticated agent sessions by agent key.
 type agentSessionCache struct {
 	mu     sync.RWMutex
-	cache  map[string]*mcpserver.AgentSession
+	cache  map[string]*sessionCacheEntry
 	apiURL string
 }
 
 // GetOrAuthenticate returns a cached session or authenticates and caches it.
+// It updates lastUsed on every hit so that active agents are never evicted.
 func (c *agentSessionCache) GetOrAuthenticate(ctx context.Context, key string) (*mcpserver.AgentSession, error) {
 	c.mu.RLock()
 	if c.cache != nil {
-		if session, ok := c.cache[key]; ok {
+		if entry, ok := c.cache[key]; ok {
 			c.mu.RUnlock()
-			return session, nil
+			// Update lastUsed under write lock to record the access time.
+			c.mu.Lock()
+			entry.lastUsed = time.Now()
+			c.mu.Unlock()
+			return entry.session, nil
 		}
 	}
 	c.mu.RUnlock()
@@ -283,29 +301,65 @@ func (c *agentSessionCache) GetOrAuthenticate(ctx context.Context, key string) (
 
 	c.mu.Lock()
 	if c.cache == nil {
-		c.cache = make(map[string]*mcpserver.AgentSession)
+		c.cache = make(map[string]*sessionCacheEntry)
 	}
-	c.cache[key] = &session
+	c.cache[key] = &sessionCacheEntry{session: &session, lastUsed: time.Now()}
 	c.mu.Unlock()
 
 	log.Printf("SSE: authenticated agent %s (ID: %s)", agentName, agentID)
 	return &session, nil
 }
 
+// cleanup removes session entries that have not been accessed for idleThreshold.
+func (c *agentSessionCache) cleanup(idleThreshold time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	cutoff := time.Now().Add(-idleThreshold)
+	for key, entry := range c.cache {
+		if entry.lastUsed.Before(cutoff) {
+			delete(c.cache, key)
+		}
+	}
+}
+
+// startCleanup spawns a goroutine that periodically evicts stale session entries.
+func (c *agentSessionCache) startCleanup(cleanupInterval, idleThreshold time.Duration) {
+	go func() {
+		ticker := time.NewTicker(cleanupInterval)
+		defer ticker.Stop()
+		for range ticker.C {
+			c.cleanup(idleThreshold)
+		}
+	}()
+}
+
+// clientCacheEntry wraps a per-agent REST client with a last-used timestamp
+// so that the cleanup goroutine can evict stale entries.
+type clientCacheEntry struct {
+	client   *mcpserver.RESTClient
+	lastUsed time.Time
+}
+
 // serverRegistry caches per-agent REST clients keyed by agent API key.
 type serverRegistry struct {
 	mu     sync.RWMutex
-	cache  map[string]*mcpserver.RESTClient
+	cache  map[string]*clientCacheEntry
 	apiURL string
 }
 
-// GetClient returns a cached REST client for the given agent key, creating one if needed.
+// GetClient returns a cached REST client for the given agent key, creating one
+// if needed. It updates lastUsed on every hit so active agents are never evicted.
 func (r *serverRegistry) GetClient(key string) *mcpserver.RESTClient {
 	r.mu.RLock()
 	if r.cache != nil {
-		if client, ok := r.cache[key]; ok {
+		if entry, ok := r.cache[key]; ok {
 			r.mu.RUnlock()
-			return client
+			// Update lastUsed under write lock to record the access time.
+			r.mu.Lock()
+			entry.lastUsed = time.Now()
+			r.mu.Unlock()
+			return entry.client
 		}
 	}
 	r.mu.RUnlock()
@@ -314,10 +368,34 @@ func (r *serverRegistry) GetClient(key string) *mcpserver.RESTClient {
 
 	r.mu.Lock()
 	if r.cache == nil {
-		r.cache = make(map[string]*mcpserver.RESTClient)
+		r.cache = make(map[string]*clientCacheEntry)
 	}
-	r.cache[key] = client
+	r.cache[key] = &clientCacheEntry{client: client, lastUsed: time.Now()}
 	r.mu.Unlock()
 
 	return client
+}
+
+// cleanup removes client entries that have not been accessed for idleThreshold.
+func (r *serverRegistry) cleanup(idleThreshold time.Duration) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	cutoff := time.Now().Add(-idleThreshold)
+	for key, entry := range r.cache {
+		if entry.lastUsed.Before(cutoff) {
+			delete(r.cache, key)
+		}
+	}
+}
+
+// startCleanup spawns a goroutine that periodically evicts stale client entries.
+func (r *serverRegistry) startCleanup(cleanupInterval, idleThreshold time.Duration) {
+	go func() {
+		ticker := time.NewTicker(cleanupInterval)
+		defer ticker.Stop()
+		for range ticker.C {
+			r.cleanup(idleThreshold)
+		}
+	}()
 }

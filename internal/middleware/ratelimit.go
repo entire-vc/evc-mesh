@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/labstack/echo/v4"
+	"github.com/redis/go-redis/v9"
 	"golang.org/x/time/rate"
 
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
@@ -22,6 +23,11 @@ type RateLimitConfig struct {
 	// KeyFunc extracts the rate-limit key from the request context.
 	// A unique key (e.g. IP address or user ID) gets its own independent bucket.
 	KeyFunc func(c echo.Context) string
+	// RedisClient is an optional Redis client for distributed rate limiting.
+	// When non-nil, a Redis sliding window counter is used instead of the
+	// in-memory token bucket, enabling shared state across multiple API instances.
+	// When nil, the in-memory token bucket is used (single-instance mode).
+	RedisClient *redis.Client
 }
 
 // limiterEntry wraps a token-bucket limiter with the last-used timestamp
@@ -93,10 +99,17 @@ func (s *rateLimitStore) startCleanup(cleanupInterval, idleThreshold time.Durati
 }
 
 // RateLimit returns an Echo middleware that enforces the configured per-key
-// token-bucket rate limit. When Enabled is false the middleware is a no-op.
+// rate limit. When Enabled is false the middleware is a no-op.
+//
+// Two backends are supported:
+//   - Redis (distributed): used when cfg.RedisClient is non-nil. Implements a
+//     sliding window counter via Redis INCR+EXPIRE. Suitable for multi-instance
+//     deployments where all API servers share the same Redis.
+//   - In-memory (single-instance): used when cfg.RedisClient is nil. Implements
+//     a token-bucket algorithm via golang.org/x/time/rate.
 //
 // On limit exceeded the middleware responds with HTTP 429 and a Retry-After
-// header indicating when the next token will be available.
+// header indicating when the client may retry.
 func RateLimit(cfg RateLimitConfig) echo.MiddlewareFunc {
 	if !cfg.Enabled {
 		// No-op middleware — passes every request through.
@@ -109,6 +122,12 @@ func RateLimit(cfg RateLimitConfig) echo.MiddlewareFunc {
 		cfg.KeyFunc = RateLimitKeyByIP
 	}
 
+	// Prefer Redis-backed limiter when a client is provided.
+	if cfg.RedisClient != nil {
+		return rateLimitRedis(cfg)
+	}
+
+	// Fall back to the in-memory token-bucket limiter.
 	store := newRateLimitStore(cfg.RPM)
 	// Evict limiters not used for 10 minutes; run cleanup every 5 minutes.
 	store.startCleanup(5*time.Minute, 10*time.Minute)

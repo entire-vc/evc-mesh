@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"encoding/json"
 	"net/http"
 
 	"github.com/google/uuid"
@@ -20,9 +21,10 @@ type TaskContextHandler struct {
 	artifactService       service.ArtifactService
 	taskDependencyService service.TaskDependencyService
 	eventBusService       service.EventBusService
+	cache                 *service.ContextCacheService // optional; nil = no caching
 }
 
-// NewTaskContextHandler creates a new TaskContextHandler.
+// NewTaskContextHandler creates a new TaskContextHandler without caching.
 func NewTaskContextHandler(
 	taskService service.TaskService,
 	commentService service.CommentService,
@@ -39,13 +41,44 @@ func NewTaskContextHandler(
 	}
 }
 
+// NewTaskContextHandlerWithCache creates a new TaskContextHandler with Redis caching.
+// When cache is nil the handler behaves identically to NewTaskContextHandler.
+func NewTaskContextHandlerWithCache(
+	taskService service.TaskService,
+	commentService service.CommentService,
+	artifactService service.ArtifactService,
+	taskDependencyService service.TaskDependencyService,
+	eventBusService service.EventBusService,
+	cache *service.ContextCacheService,
+) *TaskContextHandler {
+	return &TaskContextHandler{
+		taskService:           taskService,
+		commentService:        commentService,
+		artifactService:       artifactService,
+		taskDependencyService: taskDependencyService,
+		eventBusService:       eventBusService,
+		cache:                 cache,
+	}
+}
+
 // GetTaskContext handles GET /tasks/:task_id/context.
 // Returns a comprehensive view of the task including all related data.
+//
+// Cache strategy:
+//   - On hit: return cached JSON directly (no upstream calls).
+//   - On miss: build the response, marshal it once, store in cache, return.
+//   - If Redis is unavailable the cache is skipped silently.
 func (h *TaskContextHandler) GetTaskContext(c echo.Context) error {
 	taskIDStr := c.Param("task_id")
 	taskID, err := uuid.Parse(taskIDStr)
 	if err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid task_id"))
+	}
+
+	// Cache lookup — skip on miss or unavailability.
+	if cached, ok := h.cache.Get(c.Request().Context(), taskID); ok {
+		c.Response().Header().Set(echo.HeaderContentType, echo.MIMEApplicationJSONCharsetUTF8)
+		return c.JSONBlob(http.StatusOK, cached)
 	}
 
 	task, err := h.taskService.GetByID(c.Request().Context(), taskID)
@@ -97,5 +130,14 @@ func (h *TaskContextHandler) GetTaskContext(c echo.Context) error {
 		resp["events"] = []any{}
 	}
 
+	// Marshal once and cache the result.
+	data, marshalErr := json.Marshal(resp)
+	if marshalErr == nil {
+		h.cache.Set(c.Request().Context(), taskID, data)
+		c.Response().Header().Set(echo.HeaderContentType, echo.MIMEApplicationJSONCharsetUTF8)
+		return c.JSONBlob(http.StatusOK, data)
+	}
+
+	// Fallback: let Echo marshal normally if json.Marshal unexpectedly fails.
 	return c.JSON(http.StatusOK, resp)
 }
