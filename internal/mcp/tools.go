@@ -806,6 +806,43 @@ func (s *Server) handleGetTaskContext(ctx context.Context, request mcpsdk.CallTo
 		return errResult("failed to get task context: %v", err)
 	}
 
+	// If the task is part of a recurring series, enrich the response with
+	// schedule info and previous instance summary from the history endpoint.
+	task, _ := result["task"].(map[string]any)
+	if task != nil {
+		if scheduleID, ok := task["recurring_schedule_id"].(string); ok && scheduleID != "" {
+			// Fetch the most recent instances (page_size=2: current + previous).
+			history, histErr := s.getRESTClient(ctx).GetRecurringHistory(ctx, scheduleID, map[string]string{
+				"page_size": "2",
+			})
+			if histErr == nil {
+				instanceNumber, _ := task["recurring_instance_number"].(float64)
+				recurringBlock := map[string]any{
+					"schedule_id":     scheduleID,
+					"instance_number": int(instanceNumber),
+					"history_url":     fmt.Sprintf("/api/v1/recurring/%s/history", scheduleID),
+				}
+
+				// Extract previous_instance from history items (skip current instance).
+				if items, ok := history["items"].([]any); ok {
+					for _, item := range items {
+						inst, ok := item.(map[string]any)
+						if !ok {
+							continue
+						}
+						instNum, _ := inst["instance_number"].(float64)
+						if int(instNum) < int(instanceNumber) {
+							recurringBlock["previous_instance"] = inst
+							break
+						}
+					}
+				}
+
+				result["recurring"] = recurringBlock
+			}
+		}
+	}
+
 	return jsonResult(result)
 }
 
@@ -1329,5 +1366,144 @@ func (s *Server) handlePollTasks(ctx context.Context, request mcpsdk.CallToolReq
 	if err != nil {
 		return errResult("poll_tasks failed: %v", err)
 	}
+	return jsonResult(result)
+}
+
+// ============================================================================
+// 35. create_recurring_task
+// ============================================================================
+
+func (s *Server) handleCreateRecurringTask(ctx context.Context, request mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
+	projectID := mcpsdk.ParseString(request, "project_id", "")
+	if projectID == "" {
+		return errResult("project_id is required")
+	}
+
+	titleTemplate := mcpsdk.ParseString(request, "title_template", "")
+	if titleTemplate == "" {
+		return errResult("title_template is required")
+	}
+
+	frequency := mcpsdk.ParseString(request, "frequency", "")
+	if frequency == "" {
+		return errResult("frequency is required")
+	}
+
+	body := map[string]any{
+		"title_template": titleTemplate,
+		"frequency":      frequency,
+	}
+
+	if desc := mcpsdk.ParseString(request, "description_template", ""); desc != "" {
+		body["description_template"] = desc
+	}
+	if cronExpr := mcpsdk.ParseString(request, "cron_expr", ""); cronExpr != "" {
+		body["cron_expr"] = cronExpr
+	}
+	if tz := mcpsdk.ParseString(request, "timezone", ""); tz != "" {
+		body["timezone"] = tz
+	}
+	if assigneeID := mcpsdk.ParseString(request, "assignee_id", ""); assigneeID != "" {
+		body["assignee_id"] = assigneeID
+	}
+	if assigneeType := mcpsdk.ParseString(request, "assignee_type", ""); assigneeType != "" {
+		body["assignee_type"] = assigneeType
+	}
+	if priority := mcpsdk.ParseString(request, "priority", ""); priority != "" {
+		body["priority"] = priority
+	}
+	if labels := parseStringSlice(request, "labels"); len(labels) > 0 {
+		body["labels"] = labels
+	}
+	if startsAt := mcpsdk.ParseString(request, "starts_at", ""); startsAt != "" {
+		body["starts_at"] = startsAt
+	}
+	if endsAt := mcpsdk.ParseString(request, "ends_at", ""); endsAt != "" {
+		body["ends_at"] = endsAt
+	}
+
+	args := request.GetArguments()
+	if _, ok := args["max_instances"]; ok {
+		maxInstances := mcpsdk.ParseInt(request, "max_instances", 0)
+		if maxInstances > 0 {
+			body["max_instances"] = maxInstances
+		}
+	}
+
+	result, err := s.getRESTClient(ctx).CreateRecurringSchedule(ctx, projectID, body)
+	if err != nil {
+		return errResult("failed to create recurring schedule: %v", err)
+	}
+
+	return jsonResult(result)
+}
+
+// ============================================================================
+// 36. list_recurring_schedules
+// ============================================================================
+
+func (s *Server) handleListRecurringSchedules(ctx context.Context, request mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
+	projectID := mcpsdk.ParseString(request, "project_id", "")
+	if projectID == "" {
+		return errResult("project_id is required")
+	}
+
+	activeOnly := mcpsdk.ParseBoolean(request, "active_only", true)
+
+	params := map[string]string{}
+	if activeOnly {
+		params["is_active"] = "true"
+	}
+
+	result, err := s.getRESTClient(ctx).ListRecurringSchedules(ctx, projectID, params)
+	if err != nil {
+		return errResult("failed to list recurring schedules: %v", err)
+	}
+
+	return jsonResult(result)
+}
+
+// ============================================================================
+// 37. get_recurring_history
+// ============================================================================
+
+func (s *Server) handleGetRecurringHistory(ctx context.Context, request mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
+	scheduleID := mcpsdk.ParseString(request, "recurring_schedule_id", "")
+	if scheduleID == "" {
+		return errResult("recurring_schedule_id is required")
+	}
+
+	limit := mcpsdk.ParseInt(request, "limit", 5)
+	if limit < 1 {
+		limit = 5
+	}
+
+	params := map[string]string{
+		"page_size": strconv.Itoa(limit),
+	}
+
+	result, err := s.getRESTClient(ctx).GetRecurringHistory(ctx, scheduleID, params)
+	if err != nil {
+		return errResult("failed to get recurring history: %v", err)
+	}
+
+	return jsonResult(result)
+}
+
+// ============================================================================
+// 38. trigger_recurring_now
+// ============================================================================
+
+func (s *Server) handleTriggerRecurringNow(ctx context.Context, request mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
+	scheduleID := mcpsdk.ParseString(request, "recurring_schedule_id", "")
+	if scheduleID == "" {
+		return errResult("recurring_schedule_id is required")
+	}
+
+	result, err := s.getRESTClient(ctx).TriggerRecurringNow(ctx, scheduleID)
+	if err != nil {
+		return errResult("failed to trigger recurring schedule: %v", err)
+	}
+
 	return jsonResult(result)
 }

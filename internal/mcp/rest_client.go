@@ -591,6 +591,58 @@ func (c *RESTClient) ImportWorkspaceConfig(ctx context.Context, workspaceID stri
 	return result, nil
 }
 
+// CreateRecurringSchedule creates a recurring task schedule for a project.
+func (c *RESTClient) CreateRecurringSchedule(ctx context.Context, projectID string, body map[string]any) (map[string]any, error) {
+	var result map[string]any
+	if err := c.doJSON(ctx, http.MethodPost, "/api/v1/projects/"+projectID+"/recurring", body, &result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+// ListRecurringSchedules lists recurring schedules for a project.
+func (c *RESTClient) ListRecurringSchedules(ctx context.Context, projectID string, params map[string]string) (map[string]any, error) {
+	path := "/api/v1/projects/" + projectID + "/recurring"
+	if len(params) > 0 {
+		var parts []string
+		for k, v := range params {
+			parts = append(parts, k+"="+v)
+		}
+		path += "?" + strings.Join(parts, "&")
+	}
+	var result map[string]any
+	if err := c.doJSON(ctx, http.MethodGet, path, nil, &result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+// GetRecurringHistory returns the instance history for a recurring schedule.
+func (c *RESTClient) GetRecurringHistory(ctx context.Context, scheduleID string, params map[string]string) (map[string]any, error) {
+	path := "/api/v1/recurring/" + scheduleID + "/history"
+	if len(params) > 0 {
+		var parts []string
+		for k, v := range params {
+			parts = append(parts, k+"="+v)
+		}
+		path += "?" + strings.Join(parts, "&")
+	}
+	var result map[string]any
+	if err := c.doJSON(ctx, http.MethodGet, path, nil, &result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+// TriggerRecurringNow immediately creates the next instance for a recurring schedule.
+func (c *RESTClient) TriggerRecurringNow(ctx context.Context, scheduleID string) (map[string]any, error) {
+	var result map[string]any
+	if err := c.doJSON(ctx, http.MethodPost, "/api/v1/recurring/"+scheduleID+"/trigger", nil, &result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
 // ExportWorkspaceConfig exports workspace configuration as YAML text.
 func (c *RESTClient) ExportWorkspaceConfig(ctx context.Context, workspaceID string) (string, error) {
 	data, statusCode, err := c.doRaw(ctx, http.MethodGet, "/api/v1/workspaces/"+workspaceID+"/config/export", "", nil)
