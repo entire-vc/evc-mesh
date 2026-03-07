@@ -88,6 +88,20 @@ export function AppLayout() {
     };
   }, [isAuthenticated, currentWorkspace?.slug, wsConnect, wsDisconnect]);
 
+  // Auto-collapse sidebar on mobile viewport resize
+  const location = useLocation();
+  useEffect(() => {
+    const mq = window.matchMedia("(max-width: 767px)");
+    const handler = () => { if (mq.matches) setSidebarCollapsed(true); };
+    mq.addEventListener("change", handler);
+    return () => mq.removeEventListener("change", handler);
+  }, []);
+
+  // Close sidebar on route change (mobile)
+  useEffect(() => {
+    if (window.innerWidth < 768) setSidebarCollapsed(true);
+  }, [location.pathname]);
+
   if (authLoading) {
     return (
       <div className="flex h-screen items-center justify-center bg-background">
@@ -124,20 +138,6 @@ export function AppLayout() {
   if (workspaces.length === 0) {
     return <NoWorkspacesScreen />;
   }
-
-  // Auto-collapse sidebar on mobile
-  useEffect(() => {
-    const mq = window.matchMedia("(max-width: 767px)");
-    const handler = () => { if (mq.matches) setSidebarCollapsed(true); };
-    mq.addEventListener("change", handler);
-    return () => mq.removeEventListener("change", handler);
-  }, []);
-
-  // Close sidebar on route change (mobile)
-  const location = useLocation();
-  useEffect(() => {
-    if (window.innerWidth < 768) setSidebarCollapsed(true);
-  }, [location.pathname]);
 
   return (
     <div className="flex h-screen bg-background">
