@@ -409,7 +409,7 @@ export function Header({ onToggleSidebar }: HeaderProps) {
   }, [isDark]);
 
   return (
-    <header className="flex h-14 items-center gap-4 border-b border-border bg-background px-4">
+    <header className="flex h-14 items-center gap-2 sm:gap-4 border-b border-border bg-background px-2 sm:px-4">
       <Button
         variant="ghost"
         size="icon"
@@ -420,14 +420,14 @@ export function Header({ onToggleSidebar }: HeaderProps) {
       </Button>
 
       {/* Breadcrumbs */}
-      <nav className="flex items-center gap-1 text-sm text-muted-foreground">
+      <nav className="flex min-w-0 items-center gap-1 text-sm text-muted-foreground">
         {currentWorkspace && (
           <>
             <Link
               to={`/w/${wsSlug}`}
               className="hover:text-foreground transition-colors"
             >
-              {currentWorkspace.name}
+              <span className="truncate max-w-[80px] sm:max-w-[160px]">{currentWorkspace.name}</span>
             </Link>
             {currentProject && (
               <>
@@ -436,7 +436,7 @@ export function Header({ onToggleSidebar }: HeaderProps) {
                   to={`/w/${wsSlug}/p/${projectSlug}`}
                   className="hover:text-foreground transition-colors font-medium text-foreground"
                 >
-                  {currentProject.name}
+                  <span className="truncate max-w-[100px] sm:max-w-none">{currentProject.name}</span>
                 </Link>
               </>
             )}
@@ -459,7 +459,7 @@ export function Header({ onToggleSidebar }: HeaderProps) {
           currentView={currentView}
           wsSlug={wsSlug}
           projectSlug={projectSlug}
-          className="ml-4"
+          className="ml-1 sm:ml-4"
         />
       )}
 
@@ -472,7 +472,7 @@ export function Header({ onToggleSidebar }: HeaderProps) {
       <NotificationBell />
 
       {/* Theme toggle */}
-      <Button variant="ghost" size="icon" onClick={toggleTheme}>
+      <Button variant="ghost" size="icon" onClick={toggleTheme} className="hidden sm:inline-flex">
         {isDark ? (
           <Sun className="h-4 w-4" />
         ) : (

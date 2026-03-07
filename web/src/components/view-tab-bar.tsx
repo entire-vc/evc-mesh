@@ -63,7 +63,7 @@ export function ViewTabBar({
               }
             }}
             className={cn(
-              "flex h-9 items-center gap-1.5 border-b-2 px-3 text-sm transition-colors",
+              "flex h-9 items-center gap-1.5 border-b-2 px-1.5 sm:px-3 text-sm transition-colors",
               isActive
                 ? "border-primary font-medium text-foreground"
                 : "border-transparent font-normal text-muted-foreground hover:text-foreground",
@@ -71,7 +71,7 @@ export function ViewTabBar({
             aria-current={isActive ? "page" : undefined}
           >
             <Icon className="h-3.5 w-3.5" />
-            {label}
+            <span className="hidden sm:inline">{label}</span>
           </button>
         );
       })}

@@ -1,5 +1,6 @@
 import { type FormEvent, useCallback, useEffect, useState } from "react";
-import { Navigate, Outlet, useNavigate, useParams } from "react-router";
+import { Navigate, Outlet, useLocation, useNavigate, useParams } from "react-router";
+import { cn } from "@/lib/cn";
 import { useAuthStore } from "@/stores/auth";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { useProjectStore } from "@/stores/project";
@@ -32,7 +33,9 @@ export function AppLayout() {
   const wsConnect = useWebSocketStore((s) => s.connect);
   const wsDisconnect = useWebSocketStore((s) => s.disconnect);
 
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(
+    () => window.innerWidth < 768,
+  );
   const [initialized, setInitialized] = useState(false);
 
   const toggleSidebar = useCallback(() => {
@@ -122,12 +125,48 @@ export function AppLayout() {
     return <NoWorkspacesScreen />;
   }
 
+  // Auto-collapse sidebar on mobile
+  useEffect(() => {
+    const mq = window.matchMedia("(max-width: 767px)");
+    const handler = () => { if (mq.matches) setSidebarCollapsed(true); };
+    mq.addEventListener("change", handler);
+    return () => mq.removeEventListener("change", handler);
+  }, []);
+
+  // Close sidebar on route change (mobile)
+  const location = useLocation();
+  useEffect(() => {
+    if (window.innerWidth < 768) setSidebarCollapsed(true);
+  }, [location.pathname]);
+
   return (
     <div className="flex h-screen bg-background">
-      <Sidebar collapsed={sidebarCollapsed} />
+      {/* Mobile backdrop */}
+      {!sidebarCollapsed && (
+        <div
+          className="fixed inset-0 z-30 bg-black/40 md:hidden"
+          onClick={toggleSidebar}
+          aria-hidden="true"
+        />
+      )}
+
+      {/* Sidebar — fixed overlay on mobile, inline on desktop */}
+      <div
+        className={cn(
+          "shrink-0 transition-all duration-200",
+          // Mobile: fixed overlay
+          "fixed inset-y-0 left-0 z-40 md:relative md:z-auto",
+          sidebarCollapsed
+            ? "-translate-x-full md:translate-x-0 md:w-12"
+            : "translate-x-0 w-60",
+        )}
+      >
+        <Sidebar collapsed={sidebarCollapsed} />
+      </div>
+
       <div className="flex flex-1 flex-col overflow-hidden">
         <Header onToggleSidebar={toggleSidebar} />
-        <main className="flex-1 overflow-y-auto p-6">
+        <main className="flex-1 overflow-y-auto p-3 md:p-6">
           <Outlet />
         </main>
       </div>

@@ -534,11 +534,11 @@ export function TaskSlideOver({
         {/* Content                                                             */}
         {/* ------------------------------------------------------------------ */}
         {!loading && currentTask && (
-          <div className="flex min-h-0 flex-1 overflow-hidden">
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden lg:flex-row">
             {/* ============================================================= */}
             {/* LEFT PANEL                                                      */}
             {/* ============================================================= */}
-            <div className="flex min-w-0 flex-1 flex-col overflow-y-auto border-r border-border">
+            <div className="flex min-w-0 flex-1 flex-col overflow-y-auto lg:border-r lg:border-border">
               <div className="flex-1 space-y-5 px-5 py-4">
                 {/* ---- Title --------------------------------------------- */}
                 <div className="group">
@@ -556,7 +556,7 @@ export function TaskSlideOver({
                       className="flex cursor-pointer items-start gap-2"
                       onClick={() => setEditingTitle(true)}
                     >
-                      <h2 className="flex-1 text-xl font-bold leading-tight tracking-tight">
+                      <h2 className="flex-1 text-lg font-bold leading-tight tracking-tight sm:text-xl">
                         {currentTask.title}
                       </h2>
                       <Pencil className="mt-1 h-3.5 w-3.5 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
@@ -579,7 +579,7 @@ export function TaskSlideOver({
                     </button>
                   </div>
 
-                  <div className="grid grid-cols-[auto_1fr] items-start gap-x-4 gap-y-2.5">
+                  <div className="grid grid-cols-1 items-start gap-y-2.5 sm:grid-cols-[auto_1fr] sm:gap-x-4">
                     {/* Status */}
                     <label className="flex items-center gap-1.5 pt-1 text-xs text-muted-foreground">
                       {currentStatus && (
@@ -979,7 +979,7 @@ export function TaskSlideOver({
             {/* ============================================================= */}
             {/* RIGHT PANEL — Activity + Comments                             */}
             {/* ============================================================= */}
-            <div className="flex w-[340px] shrink-0 flex-col overflow-hidden xl:w-[380px]">
+            <div className="flex w-full shrink-0 flex-col overflow-hidden border-t border-border lg:w-[340px] lg:border-t-0 xl:w-[380px]">
               {/* Tab bar */}
               <div className="flex shrink-0 border-b border-border">
                 <button

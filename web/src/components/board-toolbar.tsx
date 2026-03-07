@@ -8,7 +8,8 @@
  * parent (BoardPage) so the board columns can react to it.
  */
 
-import { Search, ChevronDown, ArrowUpDown, Plus, RefreshCw } from "lucide-react";
+import { useState } from "react";
+import { Search, ChevronDown, ChevronUp, ArrowUpDown, Plus, RefreshCw, Filter } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
@@ -157,158 +158,179 @@ export function BoardToolbar({
   onNewTask,
   onNewRecurring,
 }: BoardToolbarProps) {
+  const [filtersOpen, setFiltersOpen] = useState(false);
 
   return (
-    <div className="flex flex-wrap items-center gap-2">
-      {/* ---- Left: GroupBy + Subtasks ---- */}
-
-      {/* Group By dropdown */}
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button
-            variant="outline"
-            size="sm"
-            className="h-8 gap-1.5 px-2.5 text-xs"
-          >
-            <span className="text-muted-foreground">Group:</span>
-            {GROUP_BY_LABELS[groupBy]}
-            <ChevronDown className="h-3 w-3 opacity-60" />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="start" className="w-40">
-          <DropdownMenuLabel className="text-xs">Group by</DropdownMenuLabel>
-          <DropdownMenuSeparator />
-          {(["status", "priority", "assignee"] as GroupBy[]).map((g) => (
-            <DropdownMenuItem
-              key={g}
-              onClick={() => onGroupByChange(g)}
-              className={cn(
-                "text-sm",
-                groupBy === g && "font-medium text-primary",
-              )}
-            >
-              {GROUP_BY_LABELS[g]}
-            </DropdownMenuItem>
-          ))}
-        </DropdownMenuContent>
-      </DropdownMenu>
-
-      {/* Subtasks toggle */}
-      <ToggleButton
-        active={showSubtasks}
-        onClick={() => onShowSubtasksChange(!showSubtasks)}
-      >
-        Subtasks
-      </ToggleButton>
-
-      {/* ---- Center: Sort + Filters ---- */}
-
-      {/* Sort dropdown */}
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button
-            variant="outline"
-            size="sm"
-            className="h-8 gap-1.5 px-2.5 text-xs"
-          >
-            <ArrowUpDown className="h-3.5 w-3.5 text-muted-foreground" />
-            {SORT_BY_LABELS[sortBy]}
-            <ChevronDown className="h-3 w-3 opacity-60" />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="start" className="w-44">
-          <DropdownMenuLabel className="text-xs">Sort within column</DropdownMenuLabel>
-          <DropdownMenuSeparator />
-          {(["manual", "priority", "due_date", "created", "title"] as SortBy[]).map(
-            (s) => (
+    <div className="space-y-2">
+      {/* Primary row — always visible */}
+      <div className="flex flex-wrap items-center gap-2">
+        {/* Group By dropdown */}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="outline" size="sm" className="h-8 gap-1.5 px-2.5 text-xs">
+              <span className="text-muted-foreground">Group:</span>
+              {GROUP_BY_LABELS[groupBy]}
+              <ChevronDown className="h-3 w-3 opacity-60" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="w-40">
+            <DropdownMenuLabel className="text-xs">Group by</DropdownMenuLabel>
+            <DropdownMenuSeparator />
+            {(["status", "priority", "assignee"] as GroupBy[]).map((g) => (
               <DropdownMenuItem
-                key={s}
-                onClick={() => onSortByChange(s)}
-                className={cn(
-                  "text-sm",
-                  sortBy === s && "font-medium text-primary",
-                )}
+                key={g}
+                onClick={() => onGroupByChange(g)}
+                className={cn("text-sm", groupBy === g && "font-medium text-primary")}
               >
-                {SORT_BY_LABELS[s]}
+                {GROUP_BY_LABELS[g]}
               </DropdownMenuItem>
-            ),
-          )}
-        </DropdownMenuContent>
-      </DropdownMenu>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
 
-      {/* Priority filter (existing, kept as a compact Select) */}
-      <Select
-        value={priorityFilter}
-        onChange={(e) => onPriorityFilterChange(e.target.value)}
-        className="h-8 w-36 text-xs"
-      >
-        <option value="all">All Priorities</option>
-        <option value="urgent">Urgent</option>
-        <option value="high">High</option>
-        <option value="medium">Medium</option>
-        <option value="low">Low</option>
-        <option value="none">None</option>
-      </Select>
+        {/* Subtasks toggle */}
+        <ToggleButton active={showSubtasks} onClick={() => onShowSubtasksChange(!showSubtasks)}>
+          Subtasks
+        </ToggleButton>
 
-      {/* Tag filter */}
-      <TagFilterDropdown
-        allTags={allTags}
-        selectedTags={selectedTags}
-        onChange={onTagsChange}
-      />
+        {/* Sort + secondary filters — hidden on mobile, shown inline on desktop */}
+        <div className="hidden md:contents">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" size="sm" className="h-8 gap-1.5 px-2.5 text-xs">
+                <ArrowUpDown className="h-3.5 w-3.5 text-muted-foreground" />
+                {SORT_BY_LABELS[sortBy]}
+                <ChevronDown className="h-3 w-3 opacity-60" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-44">
+              <DropdownMenuLabel className="text-xs">Sort within column</DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              {(["manual", "priority", "due_date", "created", "title"] as SortBy[]).map((s) => (
+                <DropdownMenuItem
+                  key={s}
+                  onClick={() => onSortByChange(s)}
+                  className={cn("text-sm", sortBy === s && "font-medium text-primary")}
+                >
+                  {SORT_BY_LABELS[s]}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
 
-      {/* Custom field filters (full modal dialog, all field types) */}
-      <CustomFieldFilterDialog
-        fields={filterableFields}
-        filters={cfFilters}
-        onChange={onCFFiltersChange}
-      />
+          <Select value={priorityFilter} onChange={(e) => onPriorityFilterChange(e.target.value)} className="h-8 w-36 text-xs">
+            <option value="all">All Priorities</option>
+            <option value="urgent">Urgent</option>
+            <option value="high">High</option>
+            <option value="medium">Medium</option>
+            <option value="low">Low</option>
+            <option value="none">None</option>
+          </Select>
 
-      {/* Show Closed toggle */}
-      <ToggleButton
-        active={showClosed}
-        onClick={() => onShowClosedChange(!showClosed)}
-      >
-        Closed
-      </ToggleButton>
+          <TagFilterDropdown allTags={allTags} selectedTags={selectedTags} onChange={onTagsChange} />
+          <CustomFieldFilterDialog fields={filterableFields} filters={cfFilters} onChange={onCFFiltersChange} />
 
-      {/* Assignee filter */}
-      <Select
-        value={assigneeFilter}
-        onChange={(e) => onAssigneeFilterChange(e.target.value)}
-        className="h-8 w-36 text-xs"
-      >
-        <option value="all">All Assignees</option>
-        <option value="user">User</option>
-        <option value="agent">Agent</option>
-        <option value="unassigned">Unassigned</option>
-      </Select>
+          <ToggleButton active={showClosed} onClick={() => onShowClosedChange(!showClosed)}>
+            Closed
+          </ToggleButton>
 
-      {/* Search */}
-      <div className="relative min-w-[180px] flex-1 max-w-xs">
-        <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-        <Input
-          placeholder="Search tasks..."
-          value={searchQuery}
-          onChange={(e) => onSearchQueryChange(e.target.value)}
-          className="h-8 pl-8 text-xs"
-        />
+          <Select value={assigneeFilter} onChange={(e) => onAssigneeFilterChange(e.target.value)} className="h-8 w-36 text-xs">
+            <option value="all">All Assignees</option>
+            <option value="user">User</option>
+            <option value="agent">Agent</option>
+            <option value="unassigned">Unassigned</option>
+          </Select>
+        </div>
+
+        {/* Mobile filter toggle */}
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-8 gap-1.5 px-2.5 text-xs md:hidden"
+          onClick={() => setFiltersOpen(!filtersOpen)}
+        >
+          <Filter className="h-3.5 w-3.5" />
+          Filters
+          {filtersOpen ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+        </Button>
+
+        {/* Search */}
+        <div className="relative min-w-0 w-full sm:min-w-[140px] sm:w-auto sm:flex-1 sm:max-w-xs">
+          <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            placeholder="Search tasks..."
+            value={searchQuery}
+            onChange={(e) => onSearchQueryChange(e.target.value)}
+            className="h-8 pl-8 text-xs"
+          />
+        </div>
+
+        {/* Spacer — only on desktop */}
+        <div className="hidden sm:flex sm:flex-1" />
+
+        {/* New Recurring */}
+        {onNewRecurring && (
+          <Button size="sm" variant="outline" className="h-8 w-8 p-0" onClick={onNewRecurring} title="New Recurring Task">
+            <RefreshCw className="h-4 w-4" />
+          </Button>
+        )}
+
+        {/* New Task */}
+        <Button size="sm" className="h-8 w-8 p-0" onClick={onNewTask} title="New Task">
+          <Plus className="h-4 w-4" />
+        </Button>
       </div>
 
-      {/* Spacer */}
-      <div className="flex-1" />
+      {/* Mobile expanded filters */}
+      {filtersOpen && (
+        <div className="flex flex-wrap items-center gap-2 md:hidden">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" size="sm" className="h-8 gap-1.5 px-2.5 text-xs">
+                <ArrowUpDown className="h-3.5 w-3.5 text-muted-foreground" />
+                {SORT_BY_LABELS[sortBy]}
+                <ChevronDown className="h-3 w-3 opacity-60" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-44">
+              <DropdownMenuLabel className="text-xs">Sort within column</DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              {(["manual", "priority", "due_date", "created", "title"] as SortBy[]).map((s) => (
+                <DropdownMenuItem
+                  key={s}
+                  onClick={() => onSortByChange(s)}
+                  className={cn("text-sm", sortBy === s && "font-medium text-primary")}
+                >
+                  {SORT_BY_LABELS[s]}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
 
-      {/* New Recurring */}
-      {onNewRecurring && (
-        <Button size="sm" variant="outline" className="h-8 w-8 p-0" onClick={onNewRecurring} title="New Recurring Task">
-          <RefreshCw className="h-4 w-4" />
-        </Button>
+          <Select value={priorityFilter} onChange={(e) => onPriorityFilterChange(e.target.value)} className="h-8 w-32 text-xs">
+            <option value="all">All Priorities</option>
+            <option value="urgent">Urgent</option>
+            <option value="high">High</option>
+            <option value="medium">Medium</option>
+            <option value="low">Low</option>
+            <option value="none">None</option>
+          </Select>
+
+          <TagFilterDropdown allTags={allTags} selectedTags={selectedTags} onChange={onTagsChange} />
+          <CustomFieldFilterDialog fields={filterableFields} filters={cfFilters} onChange={onCFFiltersChange} />
+
+          <ToggleButton active={showClosed} onClick={() => onShowClosedChange(!showClosed)}>
+            Closed
+          </ToggleButton>
+
+          <Select value={assigneeFilter} onChange={(e) => onAssigneeFilterChange(e.target.value)} className="h-8 w-32 text-xs">
+            <option value="all">All Assignees</option>
+            <option value="user">User</option>
+            <option value="agent">Agent</option>
+            <option value="unassigned">Unassigned</option>
+          </Select>
+        </div>
       )}
-
-      {/* New Task */}
-      <Button size="sm" className="h-8 w-8 p-0" onClick={onNewTask} title="New Task">
-        <Plus className="h-4 w-4" />
-      </Button>
     </div>
   );
 }
