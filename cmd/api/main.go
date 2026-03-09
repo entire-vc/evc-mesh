@@ -75,6 +75,7 @@ func main() {
 	recurringRepo := postgres.NewRecurringRepo(db)
 	taskTemplateRepo := postgres.NewTaskTemplateRepo(db)
 	notificationRepo := postgres.NewNotificationRepo(db)
+	autoTransRuleRepo := postgres.NewAutoTransitionRuleRepo(db)
 
 	// 5. Create auth service.
 	authService := auth.NewService(
@@ -89,6 +90,7 @@ func main() {
 	workspaceService := service.NewWorkspaceService(workspaceRepo, activityLogRepo)
 	projectService := service.NewProjectService(projectRepo, taskStatusRepo, activityLogRepo,
 		service.WithProjectMemberRepo(projectMemberRepo),
+		service.WithAutoTransRuleRepo(autoTransRuleRepo),
 	)
 	customFieldDefRepo := postgres.NewCustomFieldDefinitionRepo(db)
 	customFieldService := service.NewCustomFieldService(customFieldDefRepo, activityLogRepo)
@@ -158,7 +160,7 @@ func main() {
 	// Wire auto-transition service. It calls taskService.MoveTask, so taskService must already
 	// exist. We inject it back via the configurable interface to trigger transitions on status
 	// changes without introducing an import cycle.
-	autoTransitionSvc := service.NewAutoTransitionService(taskRepo, taskStatusRepo, taskDependencyRepo, taskService)
+	autoTransitionSvc := service.NewAutoTransitionService(taskRepo, taskStatusRepo, taskDependencyRepo, taskService, autoTransRuleRepo)
 	if configurable, ok := taskService.(service.TaskServiceAutoTransitionConfigurable); ok {
 		configurable.SetAutoTransitionService(autoTransitionSvc)
 	}
@@ -271,6 +273,7 @@ func main() {
 	workspaceMemberHandler := handler.NewWorkspaceMemberHandler(workspaceMemberService)
 	projectMemberHandler := handler.NewProjectMemberHandler(projectMemberService)
 	notificationHandler := handler.NewNotificationHandler(notificationService)
+	autoTransHandler := handler.NewAutoTransitionHandler(autoTransitionSvc)
 
 	// 8. Create Echo instance with global middleware.
 	e := echo.New()
@@ -576,6 +579,12 @@ func main() {
 	api.PATCH("/rules/:rule_id", ruleHandler.UpdateRule, rbac(mw.PermManageRules))
 	api.DELETE("/rules/:rule_id", ruleHandler.DeleteRule, rbac(mw.PermManageRules))
 	api.POST("/rules/evaluate", ruleHandler.EvaluateRules)
+
+	// Auto-transition rule routes.
+	api.GET("/projects/:proj_id/auto-transition-rules", autoTransHandler.List, projAccess)
+	api.POST("/projects/:proj_id/auto-transition-rules", autoTransHandler.Create, projAccess, rbac(mw.PermManageRules))
+	api.PUT("/projects/:proj_id/auto-transition-rules/:rule_id", autoTransHandler.Update, projAccess, rbac(mw.PermManageRules))
+	api.DELETE("/projects/:proj_id/auto-transition-rules/:rule_id", autoTransHandler.Delete, projAccess, rbac(mw.PermManageRules))
 
 	// Notification routes.
 	api.GET("/notifications", notificationHandler.List)

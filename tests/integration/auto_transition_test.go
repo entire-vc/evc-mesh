@@ -24,8 +24,6 @@ import (
 //  6. Move subtask 3 to "done" — assert parent is automatically moved to
 //     the configured "done" status.
 func TestAutoTransition_SubtasksDone(t *testing.T) {
-	t.Skip("TODO: implement auto-transitions first")
-
 	env := NewTestEnv(t)
 	defer env.Cleanup(t)
 
@@ -166,8 +164,6 @@ func TestAutoTransition_SubtasksDone(t *testing.T) {
 //  4. Assert that task B has an activity log entry indicating it was unblocked.
 //  5. (Optional) Assert task B is auto-moved to "todo" if that rule is configured.
 func TestAutoTransition_DependencyResolved(t *testing.T) {
-	t.Skip("TODO: implement auto-transitions first")
-
 	env := NewTestEnv(t)
 	defer env.Cleanup(t)
 

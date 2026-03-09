@@ -36,6 +36,7 @@ type projectService struct {
 	statusRepo        repository.TaskStatusRepository
 	activityRepo      repository.ActivityLogRepository
 	projectMemberRepo repository.ProjectMemberRepository
+	autoTransRuleRepo repository.AutoTransitionRuleRepository
 }
 
 // NewProjectService returns a new ProjectService backed by the given repositories.
@@ -62,6 +63,11 @@ type ProjectServiceOption func(*projectService)
 // WithProjectMemberRepo injects the project member repository for auto-adding creators.
 func WithProjectMemberRepo(repo repository.ProjectMemberRepository) ProjectServiceOption {
 	return func(s *projectService) { s.projectMemberRepo = repo }
+}
+
+// WithAutoTransRuleRepo injects the auto-transition rule repository for creating default rules.
+func WithAutoTransRuleRepo(r repository.AutoTransitionRuleRepository) ProjectServiceOption {
+	return func(s *projectService) { s.autoTransRuleRepo = r }
 }
 
 // Create validates and persists a new project, then creates the default task statuses.
@@ -108,6 +114,47 @@ func (s *projectService) Create(ctx context.Context, project *domain.Project) er
 		}
 		if err := s.statusRepo.Create(ctx, status); err != nil {
 			return err
+		}
+	}
+
+	// Create default auto-transition rules for the new project.
+	if s.autoTransRuleRepo != nil {
+		statuses, _ := s.statusRepo.ListByProject(ctx, project.ID)
+		var reviewOrDoneID, todoID uuid.UUID
+		for _, st := range statuses {
+			if reviewOrDoneID == uuid.Nil && (st.Category == domain.StatusCategoryReview || st.Category == domain.StatusCategoryDone) {
+				reviewOrDoneID = st.ID
+			}
+			if todoID == uuid.Nil && st.Category == domain.StatusCategoryTodo {
+				todoID = st.ID
+			}
+		}
+		ruleNow := time.Now()
+		if reviewOrDoneID != uuid.Nil {
+			if err := s.autoTransRuleRepo.Create(ctx, &domain.AutoTransitionRule{
+				ID:             uuid.New(),
+				ProjectID:      project.ID,
+				Trigger:        domain.TriggerAllSubtasksDone,
+				TargetStatusID: reviewOrDoneID,
+				IsEnabled:      true,
+				CreatedAt:      ruleNow,
+				UpdatedAt:      ruleNow,
+			}); err != nil {
+				log.Printf("WARNING: failed to create default all_subtasks_done rule: %v", err)
+			}
+		}
+		if todoID != uuid.Nil {
+			if err := s.autoTransRuleRepo.Create(ctx, &domain.AutoTransitionRule{
+				ID:             uuid.New(),
+				ProjectID:      project.ID,
+				Trigger:        domain.TriggerBlockingDepResolved,
+				TargetStatusID: todoID,
+				IsEnabled:      true,
+				CreatedAt:      ruleNow,
+				UpdatedAt:      ruleNow,
+			}); err != nil {
+				log.Printf("WARNING: failed to create default blocking_dep_resolved rule: %v", err)
+			}
 		}
 	}
 

@@ -371,6 +371,15 @@ type TaskTemplateRepository interface {
 	Delete(ctx context.Context, id uuid.UUID) error
 }
 
+// AutoTransitionRuleRepository manages persistence for auto-transition rules.
+type AutoTransitionRuleRepository interface {
+	List(ctx context.Context, projectID uuid.UUID) ([]domain.AutoTransitionRule, error)
+	Get(ctx context.Context, id uuid.UUID) (*domain.AutoTransitionRule, error)
+	Create(ctx context.Context, rule *domain.AutoTransitionRule) error
+	Update(ctx context.Context, rule *domain.AutoTransitionRule) error
+	Delete(ctx context.Context, id uuid.UUID) error
+}
+
 // IntegrationRepository manages persistence for workspace integration configurations.
 type IntegrationRepository interface {
 	Upsert(ctx context.Context, cfg *domain.IntegrationConfig) error

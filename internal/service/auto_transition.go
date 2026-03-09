@@ -3,31 +3,13 @@ package service
 import (
 	"context"
 	"log"
+	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/repository"
 )
-
-// AutoTransitionTrigger defines what event activates an auto-transition rule.
-type AutoTransitionTrigger string
-
-const (
-	// TriggerAllSubtasksDone fires when all direct subtasks reach the "done" category.
-	TriggerAllSubtasksDone AutoTransitionTrigger = "all_subtasks_done"
-	// TriggerBlockingDepResolved fires when all blocking dependencies are in the "done" category.
-	TriggerBlockingDepResolved AutoTransitionTrigger = "blocking_dependency_resolved"
-)
-
-// AutoTransitionRule defines a project-level rule for automatic task transitions.
-type AutoTransitionRule struct {
-	ID             uuid.UUID             `json:"id"`
-	ProjectID      uuid.UUID             `json:"project_id"`
-	Trigger        AutoTransitionTrigger `json:"trigger"`
-	TargetStatusID uuid.UUID             `json:"target_status_id"`
-	IsEnabled      bool                  `json:"is_enabled"`
-}
 
 // AutoTransitionService checks and applies automatic status transitions.
 type AutoTransitionService interface {
@@ -41,9 +23,11 @@ type AutoTransitionService interface {
 	// are resolved and moves them from "backlog" to "todo" accordingly.
 	CheckDependencyResolution(ctx context.Context, resolvedTaskID uuid.UUID) error
 	// ListRules returns all auto-transition rules for a project.
-	ListRules(ctx context.Context, projectID uuid.UUID) ([]AutoTransitionRule, error)
+	ListRules(ctx context.Context, projectID uuid.UUID) ([]domain.AutoTransitionRule, error)
 	// CreateRule creates a new auto-transition rule.
-	CreateRule(ctx context.Context, rule *AutoTransitionRule) error
+	CreateRule(ctx context.Context, rule *domain.AutoTransitionRule) error
+	// UpdateRule updates an existing auto-transition rule.
+	UpdateRule(ctx context.Context, rule *domain.AutoTransitionRule) error
 	// DeleteRule removes an auto-transition rule.
 	DeleteRule(ctx context.Context, ruleID uuid.UUID) error
 }
@@ -54,25 +38,24 @@ type autoTransitionService struct {
 	statusRepo repository.TaskStatusRepository
 	depRepo    repository.TaskDependencyRepository
 	taskSvc    TaskService
-
-	// rules is an in-memory store for rules (per-project).
-	// In Phase 5 this will be replaced by a persistent repository.
-	rules map[uuid.UUID]*AutoTransitionRule
+	ruleRepo   repository.AutoTransitionRuleRepository
 }
 
 // NewAutoTransitionService creates a new AutoTransitionService.
+// ruleRepo may be nil for backwards compatibility (falls back to hardcoded category lookup).
 func NewAutoTransitionService(
 	taskRepo repository.TaskRepository,
 	statusRepo repository.TaskStatusRepository,
 	depRepo repository.TaskDependencyRepository,
 	taskSvc TaskService,
+	ruleRepo repository.AutoTransitionRuleRepository,
 ) AutoTransitionService {
 	return &autoTransitionService{
 		taskRepo:   taskRepo,
 		statusRepo: statusRepo,
 		depRepo:    depRepo,
 		taskSvc:    taskSvc,
-		rules:      make(map[uuid.UUID]*AutoTransitionRule),
+		ruleRepo:   ruleRepo,
 	}
 }
 
@@ -161,10 +144,18 @@ func (s *autoTransitionService) CheckSubtaskCompletion(ctx context.Context, pare
 		return nil
 	}
 
-	// 6. Find target status: prefer "review", fall back to "done".
-	targetStatusID, err := s.findTargetStatus(ctx, parent.ProjectID, domain.StatusCategoryReview, domain.StatusCategoryDone)
+	// 6. Check if a configured rule overrides the target status.
+	targetStatusID, err := s.resolveTargetFromRule(ctx, parent.ProjectID, domain.TriggerAllSubtasksDone)
 	if err != nil {
 		return err
+	}
+
+	// Fallback: prefer "review", fall back to "done".
+	if targetStatusID == uuid.Nil {
+		targetStatusID, err = s.findTargetStatus(ctx, parent.ProjectID, domain.StatusCategoryReview, domain.StatusCategoryDone)
+		if err != nil {
+			return err
+		}
 	}
 	if targetStatusID == uuid.Nil {
 		return nil // no suitable target status found
@@ -250,10 +241,18 @@ func (s *autoTransitionService) tryUnblockTask(ctx context.Context, taskID uuid.
 		return nil // still blocked
 	}
 
-	// All blocking deps are done — move to "todo".
-	targetStatusID, err := s.findTargetStatus(ctx, task.ProjectID, domain.StatusCategoryTodo)
+	// Check if a configured rule overrides the target status.
+	targetStatusID, err := s.resolveTargetFromRule(ctx, task.ProjectID, domain.TriggerBlockingDepResolved)
 	if err != nil {
 		return err
+	}
+
+	// Fallback: move to "todo".
+	if targetStatusID == uuid.Nil {
+		targetStatusID, err = s.findTargetStatus(ctx, task.ProjectID, domain.StatusCategoryTodo)
+		if err != nil {
+			return err
+		}
 	}
 	if targetStatusID == uuid.Nil {
 		return nil
@@ -261,6 +260,25 @@ func (s *autoTransitionService) tryUnblockTask(ctx context.Context, taskID uuid.
 
 	log.Printf("[auto-transition] Unblocking task %s (all blocking deps resolved) → moving to todo", taskID)
 	return s.taskSvc.MoveTask(ctx, taskID, MoveTaskInput{StatusID: &targetStatusID})
+}
+
+// resolveTargetFromRule looks up a configured, enabled rule for the given trigger and
+// returns its target_status_id. Returns uuid.Nil if ruleRepo is nil or no matching
+// enabled rule exists.
+func (s *autoTransitionService) resolveTargetFromRule(ctx context.Context, projectID uuid.UUID, trigger domain.AutoTransitionTrigger) (uuid.UUID, error) {
+	if s.ruleRepo == nil {
+		return uuid.Nil, nil
+	}
+	rules, err := s.ruleRepo.List(ctx, projectID)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	for _, r := range rules {
+		if r.Trigger == trigger && r.IsEnabled {
+			return r.TargetStatusID, nil
+		}
+	}
+	return uuid.Nil, nil
 }
 
 // findTargetStatus returns the first status in a project matching any of the given
@@ -320,31 +338,47 @@ func hasUnresolvedBlockers(deps []domain.TaskDependency, categoryByTaskID map[uu
 }
 
 // ---------------------------------------------------------------------------
-// Rule management (in-memory store — Phase 5 will add DB persistence)
+// Rule management — backed by AutoTransitionRuleRepository
 // ---------------------------------------------------------------------------
 
 // ListRules returns all auto-transition rules for a project.
-func (s *autoTransitionService) ListRules(ctx context.Context, projectID uuid.UUID) ([]AutoTransitionRule, error) {
-	var result []AutoTransitionRule
-	for _, r := range s.rules {
-		if r.ProjectID == projectID {
-			result = append(result, *r)
-		}
+func (s *autoTransitionService) ListRules(ctx context.Context, projectID uuid.UUID) ([]domain.AutoTransitionRule, error) {
+	if s.ruleRepo == nil {
+		return []domain.AutoTransitionRule{}, nil
 	}
-	return result, nil
+	return s.ruleRepo.List(ctx, projectID)
 }
 
 // CreateRule creates a new auto-transition rule.
-func (s *autoTransitionService) CreateRule(_ context.Context, rule *AutoTransitionRule) error {
+func (s *autoTransitionService) CreateRule(ctx context.Context, rule *domain.AutoTransitionRule) error {
 	if rule.ID == uuid.Nil {
 		rule.ID = uuid.New()
 	}
-	s.rules[rule.ID] = rule
-	return nil
+	now := time.Now()
+	if rule.CreatedAt.IsZero() {
+		rule.CreatedAt = now
+	}
+	if rule.UpdatedAt.IsZero() {
+		rule.UpdatedAt = now
+	}
+	if s.ruleRepo == nil {
+		return nil // no-op for backward compat
+	}
+	return s.ruleRepo.Create(ctx, rule)
+}
+
+// UpdateRule persists changes to an existing auto-transition rule.
+func (s *autoTransitionService) UpdateRule(ctx context.Context, rule *domain.AutoTransitionRule) error {
+	if s.ruleRepo == nil {
+		return nil
+	}
+	return s.ruleRepo.Update(ctx, rule)
 }
 
 // DeleteRule removes an auto-transition rule.
-func (s *autoTransitionService) DeleteRule(_ context.Context, ruleID uuid.UUID) error {
-	delete(s.rules, ruleID)
-	return nil
+func (s *autoTransitionService) DeleteRule(ctx context.Context, ruleID uuid.UUID) error {
+	if s.ruleRepo == nil {
+		return nil
+	}
+	return s.ruleRepo.Delete(ctx, ruleID)
 }
