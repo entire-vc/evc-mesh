@@ -920,6 +920,34 @@ components:
         auto_assign_on_status:
           type: object
 
+    # ---------- Auto-Transition Rule ----------
+    AutoTransitionRule:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        project_id:
+          type: string
+          format: uuid
+        trigger:
+          type: string
+          enum: [all_subtasks_done, blocking_dep_resolved]
+          description: Event that fires the auto-transition
+        target_status_id:
+          type: string
+          format: uuid
+          description: Status the task is moved to when the trigger fires
+        is_enabled:
+          type: boolean
+          default: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
     # ---------- Spark Catalog ----------
     SparkAgentManifest:
       type: object
@@ -1662,6 +1690,7 @@ paths:
     get:
       tags: [Tasks]
       summary: List subtasks of a task
+      operationId: listSubtasks
       responses:
         "200":
           description: List of subtasks
@@ -1671,6 +1700,216 @@ paths:
                 type: array
                 items:
                   $ref: "#/components/schemas/Task"
+        "404":
+          description: Task not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    post:
+      tags: [Tasks]
+      summary: Create a subtask under a parent task
+      operationId: createSubtask
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title]
+              properties:
+                title:
+                  type: string
+                description:
+                  type: string
+                priority:
+                  type: string
+                  enum: [urgent, high, medium, low, none]
+                  default: medium
+      responses:
+        "201":
+          description: Subtask created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Task"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/tasks/{task_id}/assign:
+    parameters:
+      - name: task_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [Tasks]
+      summary: Assign a task to a user or agent
+      operationId: assignTask
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                assignee_id:
+                  type: string
+                  format: uuid
+                  nullable: true
+                  description: UUID of the user or agent to assign. Null to unassign.
+                assignee_type:
+                  type: string
+                  enum: [user, agent, unassigned]
+      responses:
+        "200":
+          description: Updated task with new assignee
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Task"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Task not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/tasks/{task_id}/context:
+    parameters:
+      - name: task_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Tasks]
+      summary: Get full context for a task (task + comments + artifacts + dependencies + events)
+      operationId: getTaskContext
+      responses:
+        "200":
+          description: Aggregated task context
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  task:
+                    $ref: "#/components/schemas/Task"
+                  comments:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Comment"
+                  artifacts:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Artifact"
+                  dependencies:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/TaskDependency"
+                  events:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/EventBusMessage"
+        "404":
+          description: Task not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  # ------------------------------------------------------------------
+  # Bulk task update
+  # ------------------------------------------------------------------
+  /api/v1/projects/{proj_id}/tasks/bulk-update:
+    parameters:
+      - name: proj_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [Tasks]
+      summary: Bulk-update multiple tasks in a project
+      operationId: bulkUpdateTasks
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [task_ids, updates]
+              properties:
+                task_ids:
+                  type: array
+                  items:
+                    type: string
+                    format: uuid
+                  description: List of task UUIDs to update
+                updates:
+                  type: object
+                  description: Fields to apply to all listed tasks
+                  properties:
+                    status_id:
+                      type: string
+                      format: uuid
+                    priority:
+                      type: string
+                      enum: [urgent, high, medium, low, none]
+                    assignee_id:
+                      type: string
+                      format: uuid
+                      nullable: true
+                    assignee_type:
+                      type: string
+                      enum: [user, agent, unassigned]
+                    labels:
+                      type: array
+                      items:
+                        type: string
+      responses:
+        "200":
+          description: Bulk update result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  updated:
+                    type: integer
+                  failed:
+                    type: integer
+                  errors:
+                    type: array
+                    items:
+                      type: object
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
 
   # ------------------------------------------------------------------
   # Dependencies
@@ -4866,6 +5105,190 @@ paths:
                       $ref: "#/components/schemas/RuleViolation"
                   blocked:
                     type: boolean
+
+  # ------------------------------------------------------------------
+  # Auto-Transition Rules
+  # ------------------------------------------------------------------
+  /api/v1/projects/{proj_id}/auto-transition-rules:
+    parameters:
+      - name: proj_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [AutoTransitions]
+      summary: List auto-transition rules for a project
+      operationId: listAutoTransitionRules
+      security:
+        - BearerAuth: []
+        - AgentKeyAuth: []
+      responses:
+        "200":
+          description: List of auto-transition rules
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/AutoTransitionRule"
+                  total_count:
+                    type: integer
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    post:
+      tags: [AutoTransitions]
+      summary: Create an auto-transition rule for a project
+      operationId: createAutoTransitionRule
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [trigger, target_status_id]
+              properties:
+                trigger:
+                  type: string
+                  enum: [all_subtasks_done, blocking_dep_resolved]
+                target_status_id:
+                  type: string
+                  format: uuid
+                is_enabled:
+                  type: boolean
+                  default: true
+      responses:
+        "201":
+          description: Auto-transition rule created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AutoTransitionRule"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Forbidden — requires PermManageRules; agents receive 403
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/projects/{proj_id}/auto-transition-rules/{rule_id}:
+    parameters:
+      - name: proj_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: rule_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    put:
+      tags: [AutoTransitions]
+      summary: Update an auto-transition rule
+      operationId: updateAutoTransitionRule
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                target_status_id:
+                  type: string
+                  format: uuid
+                is_enabled:
+                  type: boolean
+      responses:
+        "200":
+          description: Updated auto-transition rule
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AutoTransitionRule"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Forbidden — requires PermManageRules; agents receive 403
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Rule not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    delete:
+      tags: [AutoTransitions]
+      summary: Delete an auto-transition rule
+      operationId: deleteAutoTransitionRule
+      security:
+        - BearerAuth: []
+      responses:
+        "204":
+          description: Rule deleted
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Forbidden — requires PermManageRules; agents receive 403
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Rule not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
 
   # ------------------------------------------------------------------
   # Violations Log
