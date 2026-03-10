@@ -1,6 +1,6 @@
 # Entire VC Mesh
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Go](https://img.shields.io/badge/Go-1.22+-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=white)](https://react.dev)
 [![MCP](https://img.shields.io/badge/MCP-23_tools-8B5CF6)](docs/mcp-reference.md)
@@ -167,6 +167,6 @@ Contributions are welcome. Please open an issue to discuss your proposed changes
 
 ## License
 
-This project is licensed under the [MIT License](LICENSE).
+This project is licensed under the [Apache License 2.0](LICENSE).
 
 Copyright (c) 2026 Entire VC

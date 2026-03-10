@@ -12,7 +12,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Next:** Bug fixes from code audit (see ROADMAP Sprint BF-10), documentation update (OpenAPI 65+ missing routes), pre-release hardening.
 
-**Repo strategy:** `evc-mesh` (MIT, goes public at release) + `evc-mesh-enterprise` (Commercial, always private).
+**Repo strategy:** `evc-mesh` (Apache 2.0, goes public at release) + `evc-mesh-enterprise` (Commercial, always private).
 
 ## Documentation
 
@@ -121,14 +121,14 @@ Always check actual code, not just specs, when implementing features.
 
 ## Licensing & Repository Structure
 
-**Dual-license:** MIT (core) + Commercial (enterprise).
+**Dual-license:** Apache 2.0 (core) + Commercial (enterprise).
 
-| Repo | Visibility | Content |
-|------|-----------|---------|
-| `@entire-vc/evc-mesh` | Private -> Public at release | Core: backend + frontend |
-| `@entire-vc/evc-mesh-enterprise` | Always private | Enterprise extensions (Casdoor SSO, billing, advanced RBAC) |
-| `@entire-vc/evc-mesh-mcp` | Public | MCP server (separate package) |
-| `@entire-vc/evc-mesh-openclawskill` | Public | OpenClaw skill |
+| Repo | Visibility | License | Content |
+|------|-----------|---------|---------|
+| `@entire-vc/evc-mesh` | Private -> Public at release | Apache 2.0 | Core: backend + frontend |
+| `@entire-vc/evc-mesh-enterprise` | Always private | Commercial | Enterprise extensions (Casdoor SSO, billing, advanced RBAC) |
+| `@entire-vc/evc-mesh-mcp` | Public | MIT | MCP server (separate package) |
+| `@entire-vc/evc-mesh-openclawskill` | Public | MIT | OpenClaw skill |
 
 - `docs/` — public OSS documentation (goes into public repo)
 - `dev-docs/` — internal dev docs (gitignored, never public)
