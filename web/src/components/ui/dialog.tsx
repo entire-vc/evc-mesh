@@ -5,6 +5,7 @@ import {
   useCallback,
   useEffect,
 } from "react";
+import { createPortal } from "react-dom";
 import { cn } from "@/lib/cn";
 import { X } from "lucide-react";
 
@@ -37,14 +38,15 @@ export function Dialog({ open, onOpenChange, children }: DialogProps) {
 
   if (!open) return null;
 
-  return (
+  return createPortal(
     <div
       className="fixed inset-0 z-50 flex items-center justify-center"
       onClick={handleBackdropClick}
     >
       <div className="fixed inset-0 bg-black/50" />
       <div className="relative z-50 w-full max-w-lg">{children}</div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
