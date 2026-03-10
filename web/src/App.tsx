@@ -20,6 +20,7 @@ import { ProjectUpdatesPage } from "@/pages/project-updates";
 import { CalendarPage } from "@/pages/calendar";
 import { WorkspaceSettingsPage } from "@/pages/workspace-settings";
 import NotificationSettingsPage from "@/pages/notification-settings";
+import { OrgChartPage } from "@/pages/org-chart";
 
 class ErrorBoundary extends Component<
   { children: ReactNode },
@@ -78,6 +79,10 @@ export function App() {
           <Route
             path="w/:wsSlug/agents"
             element={<AgentDashboardPage />}
+          />
+          <Route
+            path="w/:wsSlug/org-chart"
+            element={<OrgChartPage />}
           />
           <Route
             path="w/:wsSlug/spark"

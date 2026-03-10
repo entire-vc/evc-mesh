@@ -118,6 +118,8 @@ type TeamDirectoryAgent struct {
 	Name               string          `json:"name"`
 	Slug               string          `json:"slug"`
 	Status             AgentStatus     `json:"status"`
+	AgentType          AgentType       `json:"agent_type"`
+	ParentAgentID      *uuid.UUID      `json:"parent_agent_id,omitempty"`
 	Role               string          `json:"role"`
 	Capabilities       json.RawMessage `json:"capabilities"`
 	ResponsibilityZone string          `json:"responsibility_zone"`
@@ -127,6 +129,7 @@ type TeamDirectoryAgent struct {
 	WorkingHours       string          `json:"working_hours"`
 	ProfileDescription string          `json:"profile_description"`
 	CurrentTasks       int             `json:"current_tasks"`
+	Projects           []string        `json:"projects"`
 }
 
 // TeamDirectoryHuman is the human member profile for team directory API.
@@ -139,13 +142,27 @@ type TeamDirectoryHuman struct {
 	Capabilities       json.RawMessage `json:"capabilities"`
 	ResponsibilityZone string          `json:"responsibility_zone"`
 	Availability       string          `json:"availability"`
+	Projects           []string        `json:"projects"`
 }
 
-// TeamDirectory is the response for GET /workspaces/:ws_id/team.
+// TeamDirectory is the response for GET /workspaces/:ws_id/team (flat format).
 type TeamDirectory struct {
 	Workspace string               `json:"workspace"`
 	Agents    []TeamDirectoryAgent `json:"agents"`
 	Humans    []TeamDirectoryHuman `json:"humans"`
+}
+
+// TeamDirectoryAgentNode is a tree node for the hierarchical org chart view.
+type TeamDirectoryAgentNode struct {
+	TeamDirectoryAgent
+	Children []TeamDirectoryAgentNode `json:"children"`
+}
+
+// TeamDirectoryTree is the response for GET /workspaces/:ws_id/team?format=tree.
+type TeamDirectoryTree struct {
+	Workspace string                   `json:"workspace"`
+	AgentTree []TeamDirectoryAgentNode `json:"agent_tree"`
+	Humans    []TeamDirectoryHuman     `json:"humans"`
 }
 
 // EffectiveAssignmentRule is a single assignment rule value annotated with its source.

@@ -125,6 +125,8 @@ func (s *rulesService) GetTeamDirectory(ctx context.Context, workspaceID uuid.UU
 			Name:               a.Name,
 			Slug:               a.Slug,
 			Status:             a.Status,
+			AgentType:          a.AgentType,
+			ParentAgentID:      a.ParentAgentID,
 			Role:               a.Role,
 			Capabilities:       a.Capabilities,
 			ResponsibilityZone: a.ResponsibilityZone,
@@ -134,6 +136,7 @@ func (s *rulesService) GetTeamDirectory(ctx context.Context, workspaceID uuid.UU
 			WorkingHours:       a.WorkingHours,
 			ProfileDescription: a.ProfileDescription,
 			CurrentTasks:       currentTasks,
+			Projects:           []string{},
 		})
 	}
 
@@ -154,6 +157,7 @@ func (s *rulesService) GetTeamDirectory(ctx context.Context, workspaceID uuid.UU
 			Capabilities:       json.RawMessage(`[]`),
 			ResponsibilityZone: "",
 			Availability:       "business-hours",
+			Projects:           []string{},
 		})
 	}
 
@@ -162,6 +166,138 @@ func (s *rulesService) GetTeamDirectory(ctx context.Context, workspaceID uuid.UU
 		Agents:    agents,
 		Humans:    humans,
 	}, nil
+}
+
+// GetTeamDirectoryTree returns the team directory in hierarchical format with project affiliations.
+func (s *rulesService) GetTeamDirectoryTree(ctx context.Context, workspaceID uuid.UUID) (*domain.TeamDirectoryTree, error) {
+	ws, err := s.workspaceRepo.GetByID(ctx, workspaceID)
+	if err != nil {
+		return nil, fmt.Errorf("get workspace: %w", err)
+	}
+	if ws == nil {
+		return nil, fmt.Errorf("workspace not found")
+	}
+
+	// Get agents with project affiliations in one query.
+	agentsWithProjects, err := s.agentRepo.ListWithProjects(ctx, workspaceID)
+	if err != nil {
+		return nil, fmt.Errorf("list agents with projects: %w", err)
+	}
+
+	// activeCategories are the status categories that count as current work.
+	activeCategories := []string{
+		string(domain.StatusCategoryTodo),
+		string(domain.StatusCategoryInProgress),
+	}
+
+	// Build TeamDirectoryAgent list from the joint result.
+	dirAgents := make([]domain.TeamDirectoryAgent, 0, len(agentsWithProjects))
+	for _, a := range agentsWithProjects {
+		currentTasks := 0
+		if s.ruleRepo != nil {
+			if cnt, err := s.ruleRepo.CountTasksByAssigneeAndCategory(ctx, workspaceID, a.ID, string(domain.AssigneeTypeAgent), activeCategories); err == nil {
+				currentTasks = cnt
+			}
+		}
+		projects := a.Projects
+		if projects == nil {
+			projects = []string{}
+		}
+		dirAgents = append(dirAgents, domain.TeamDirectoryAgent{
+			ID:                 a.ID,
+			Name:               a.Name,
+			Slug:               a.Slug,
+			Status:             a.Status,
+			AgentType:          a.AgentType,
+			ParentAgentID:      a.ParentAgentID,
+			Role:               a.Role,
+			Capabilities:       a.Capabilities,
+			ResponsibilityZone: a.ResponsibilityZone,
+			EscalationTo:       derefRawMessage(a.EscalationTo),
+			AcceptsFrom:        a.AcceptsFrom,
+			MaxConcurrentTasks: a.MaxConcurrentTasks,
+			WorkingHours:       a.WorkingHours,
+			ProfileDescription: a.ProfileDescription,
+			CurrentTasks:       currentTasks,
+			Projects:           projects,
+		})
+	}
+
+	// Get human members with project affiliations.
+	humansWithProjects, err := s.memberRepo.ListWithProjects(ctx, workspaceID)
+	if err != nil {
+		return nil, fmt.Errorf("list members with projects: %w", err)
+	}
+
+	humans := make([]domain.TeamDirectoryHuman, 0, len(humansWithProjects))
+	for _, hwp := range humansWithProjects {
+		projects := hwp.Projects
+		if projects == nil {
+			projects = []string{}
+		}
+		humans = append(humans, domain.TeamDirectoryHuman{
+			ID:                 hwp.User.ID,
+			Name:               hwp.User.Name,
+			Email:              hwp.User.Email,
+			AvatarURL:          hwp.User.AvatarURL,
+			Role:               hwp.Role,
+			Capabilities:       json.RawMessage(`[]`),
+			ResponsibilityZone: "",
+			Availability:       "business-hours",
+			Projects:           projects,
+		})
+	}
+
+	agentTree := buildAgentTree(dirAgents)
+
+	return &domain.TeamDirectoryTree{
+		Workspace: ws.Name,
+		AgentTree: agentTree,
+		Humans:    humans,
+	}, nil
+}
+
+// buildAgentTree converts a flat list of agents into a hierarchical tree.
+// Agents without a parent (or whose parent is not found) become root nodes.
+func buildAgentTree(agents []domain.TeamDirectoryAgent) []domain.TeamDirectoryAgentNode {
+	nodeMap := make(map[uuid.UUID]*domain.TeamDirectoryAgentNode, len(agents))
+	for i := range agents {
+		n := &domain.TeamDirectoryAgentNode{
+			TeamDirectoryAgent: agents[i],
+			Children:           []domain.TeamDirectoryAgentNode{},
+		}
+		nodeMap[agents[i].ID] = n
+	}
+
+	var roots []*domain.TeamDirectoryAgentNode
+	for i := range agents {
+		node := nodeMap[agents[i].ID]
+		if agents[i].ParentAgentID != nil {
+			if parent, ok := nodeMap[*agents[i].ParentAgentID]; ok {
+				parent.Children = append(parent.Children, *node)
+				continue
+			}
+		}
+		roots = append(roots, node)
+	}
+
+	// Re-read children from the map (they may have been updated).
+	result := make([]domain.TeamDirectoryAgentNode, 0, len(roots))
+	for _, r := range roots {
+		result = append(result, buildNodeFromMap(r.ID, nodeMap))
+	}
+	return result
+}
+
+// buildNodeFromMap recursively reconstructs a node and all its children from the map.
+func buildNodeFromMap(id uuid.UUID, nodeMap map[uuid.UUID]*domain.TeamDirectoryAgentNode) domain.TeamDirectoryAgentNode {
+	node := *nodeMap[id]
+	built := make([]domain.TeamDirectoryAgentNode, 0, len(node.Children))
+	for _, child := range node.Children {
+		built = append(built, buildNodeFromMap(child.ID, nodeMap))
+	}
+	node.Children = built
+	return node
 }
 
 // UpdateAgentProfile updates the profile fields of an agent.

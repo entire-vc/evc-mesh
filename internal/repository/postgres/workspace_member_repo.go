@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/jmoiron/sqlx"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	"github.com/entire-vc/evc-mesh/internal/repository"
 )
 
 // WorkspaceMemberRepo implements repository.WorkspaceMemberRepository with PostgreSQL.
@@ -137,4 +139,64 @@ func (r *WorkspaceMemberRepo) CountOwners(ctx context.Context, workspaceID uuid.
 		return 0, err
 	}
 	return count, nil
+}
+
+// workspaceMemberWithProjectsRow is the flat DB scan struct for ListWithProjects.
+type workspaceMemberWithProjectsRow struct {
+	workspaceMemberRow
+	ProjectNames json.RawMessage `db:"project_names"`
+}
+
+// ListWithProjects returns all workspace members with their project affiliations.
+func (r *WorkspaceMemberRepo) ListWithProjects(ctx context.Context, workspaceID uuid.UUID) ([]repository.HumanWithProjects, error) {
+	const q = `
+		SELECT
+			wm.id, wm.workspace_id, wm.user_id, wm.role, wm.invited_by, wm.created_at, wm.updated_at,
+			u.id AS u_id, u.email AS u_email, u.display_name AS u_display_name, u.avatar_url AS u_avatar_url,
+			COALESCE(
+			    json_agg(DISTINCT p.name) FILTER (WHERE p.id IS NOT NULL),
+			    '[]'::json
+			) AS project_names
+		FROM workspace_members wm
+		JOIN users u ON u.id = wm.user_id
+		LEFT JOIN project_members pm ON pm.user_id = wm.user_id
+		LEFT JOIN projects p ON p.id = pm.project_id AND p.deleted_at IS NULL
+		WHERE wm.workspace_id = $1
+		GROUP BY wm.id, wm.workspace_id, wm.user_id, wm.role, wm.invited_by, wm.created_at, wm.updated_at,
+		         u.id, u.email, u.display_name, u.avatar_url
+		ORDER BY wm.created_at
+	`
+	var rows []workspaceMemberWithProjectsRow
+	if err := r.db.SelectContext(ctx, &rows, q, workspaceID); err != nil {
+		return nil, fmt.Errorf("list workspace members with projects: %w", err)
+	}
+
+	result := make([]repository.HumanWithProjects, len(rows))
+	for i, row := range rows {
+		var projects []string
+		if len(row.ProjectNames) > 0 {
+			_ = json.Unmarshal(row.ProjectNames, &projects)
+		}
+		result[i] = repository.HumanWithProjects{
+			WorkspaceMemberWithUser: domain.WorkspaceMemberWithUser{
+				WorkspaceMember: domain.WorkspaceMember{
+					ID:          row.ID,
+					WorkspaceID: row.WorkspaceID,
+					UserID:      row.UserID,
+					Role:        row.Role,
+					InvitedBy:   row.InvitedBy,
+					CreatedAt:   row.CreatedAt,
+					UpdatedAt:   row.UpdatedAt,
+				},
+				User: domain.UserBrief{
+					ID:        row.UserIDJoin,
+					Email:     row.UserEmail,
+					Name:      row.UserName,
+					AvatarURL: row.UserAvatar,
+				},
+			},
+			Projects: projects,
+		}
+	}
+	return result, nil
 }

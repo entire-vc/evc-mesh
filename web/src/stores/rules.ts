@@ -4,6 +4,7 @@ import type {
   AssignmentRulesConfig,
   EffectiveAssignmentRules,
   ImportResult,
+  OrgChartData,
   RuleViolation,
   TeamDirectory,
   TeamImportResult,
@@ -18,6 +19,11 @@ interface RulesState {
   teamDirectory: TeamDirectory | null;
   isTeamLoading: boolean;
   fetchTeamDirectory: (workspaceId: string) => Promise<void>;
+
+  // Org Chart (tree format)
+  orgChart: OrgChartData | null;
+  isOrgChartLoading: boolean;
+  fetchOrgChart: (workspaceId: string) => Promise<void>;
 
   // Assignment Rules (workspace level)
   wsAssignmentRules: AssignmentRulesConfig | null;
@@ -77,6 +83,22 @@ export const useRulesStore = create<RulesState>((set) => ({
       set({ teamDirectory: data, isTeamLoading: false });
     } catch {
       set({ isTeamLoading: false });
+    }
+  },
+
+  // Org Chart (tree format)
+  orgChart: null,
+  isOrgChartLoading: false,
+
+  fetchOrgChart: async (workspaceId: string) => {
+    set({ isOrgChartLoading: true });
+    try {
+      const data = await api<OrgChartData>(
+        `/api/v1/workspaces/${workspaceId}/team?format=tree`,
+      );
+      set({ orgChart: data, isOrgChartLoading: false });
+    } catch {
+      set({ isOrgChartLoading: false });
     }
   },
 

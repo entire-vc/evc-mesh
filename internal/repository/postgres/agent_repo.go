@@ -17,6 +17,9 @@ import (
 	"github.com/entire-vc/evc-mesh/pkg/pagination"
 )
 
+// Ensure AgentRepo implements repository.AgentRepository at compile time.
+var _ repository.AgentRepository = (*AgentRepo)(nil)
+
 // agentRow is the DB row representation (includes deleted_at that the domain model does not have).
 type agentRow struct {
 	ID                  uuid.UUID          `db:"id"`
@@ -340,4 +343,51 @@ func (r *AgentRepo) UpdateStatus(ctx context.Context, id uuid.UUID, status domai
 		return apierror.NotFound("Agent")
 	}
 	return nil
+}
+
+// agentWithProjectsRow is the raw DB row for ListWithProjects.
+type agentWithProjectsRow struct {
+	agentRow
+	ProjectNames json.RawMessage `db:"project_names"`
+}
+
+// ListWithProjects returns all agents in a workspace, each annotated with the
+// list of project names they participate in through project_members.
+func (r *AgentRepo) ListWithProjects(ctx context.Context, workspaceID uuid.UUID) ([]repository.AgentWithProjects, error) {
+	const q = `
+		SELECT a.id, a.workspace_id, a.parent_agent_id, a.name, a.slug, a.agent_type,
+		       a.api_key_hash, a.api_key_prefix, a.capabilities, a.status,
+		       a.last_heartbeat, a.current_task_id, a.settings,
+		       a.total_tasks_completed, a.total_errors, a.external_agent_id,
+		       a.role, a.responsibility_zone, a.escalation_to, a.accepts_from,
+		       a.max_concurrent_tasks, a.working_hours, a.profile_description,
+		       a.callback_url, a.created_at, a.updated_at, a.deleted_at,
+		       COALESCE(
+		           json_agg(DISTINCT p.name) FILTER (WHERE p.id IS NOT NULL),
+		           '[]'::json
+		       ) AS project_names
+		FROM agents a
+		LEFT JOIN project_members pm ON pm.agent_id = a.id
+		LEFT JOIN projects p ON p.id = pm.project_id AND p.deleted_at IS NULL
+		WHERE a.workspace_id = $1 AND a.deleted_at IS NULL
+		GROUP BY a.id
+		ORDER BY a.name
+	`
+	var rows []agentWithProjectsRow
+	if err := r.db.SelectContext(ctx, &rows, q, workspaceID); err != nil {
+		return nil, fmt.Errorf("list agents with projects: %w", err)
+	}
+
+	result := make([]repository.AgentWithProjects, len(rows))
+	for i, row := range rows {
+		var projects []string
+		if len(row.ProjectNames) > 0 {
+			_ = json.Unmarshal(row.ProjectNames, &projects)
+		}
+		result[i] = repository.AgentWithProjects{
+			Agent:    row.agentRow.toDomain(),
+			Projects: projects,
+		}
+	}
+	return result, nil
 }

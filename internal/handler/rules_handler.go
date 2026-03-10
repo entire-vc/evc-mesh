@@ -30,10 +30,20 @@ func NewRulesHandler(rs service.RulesService) *RulesHandler {
 // --------------------------------------------------------------------------
 
 // GetTeamDirectory handles GET /workspaces/:ws_id/team
+// Supports ?format=tree for hierarchical org chart output with project affiliations.
 func (h *RulesHandler) GetTeamDirectory(c echo.Context) error {
 	wsID, err := uuid.Parse(c.Param("ws_id"))
 	if err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid workspace_id"))
+	}
+
+	format := c.QueryParam("format")
+	if format == "tree" {
+		tree, err := h.rulesSvc.GetTeamDirectoryTree(c.Request().Context(), wsID)
+		if err != nil {
+			return handleError(c, err)
+		}
+		return c.JSON(http.StatusOK, tree)
 	}
 
 	dir, err := h.rulesSvc.GetTeamDirectory(c.Request().Context(), wsID)

@@ -248,6 +248,10 @@ func (r *mockWorkspaceMemberRepo) CountOwners(_ context.Context, _ uuid.UUID) (i
 	return 0, nil
 }
 
+func (r *mockWorkspaceMemberRepo) ListWithProjects(_ context.Context, _ uuid.UUID) ([]repository.HumanWithProjects, error) {
+	return nil, nil
+}
+
 // ---------------------------------------------------------------------------
 // Helper: create a test service
 // ---------------------------------------------------------------------------

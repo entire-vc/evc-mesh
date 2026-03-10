@@ -525,6 +525,8 @@ export interface TeamDirectoryAgent {
   name: string;
   slug: string;
   status: string;
+  agent_type: string;
+  parent_agent_id?: string | null;
   role: string;
   capabilities: string[];
   responsibility_zone: string;
@@ -534,6 +536,7 @@ export interface TeamDirectoryAgent {
   working_hours: string;
   profile_description: string;
   current_tasks: number;
+  projects: string[];
 }
 
 export interface TeamDirectoryHuman {
@@ -545,11 +548,23 @@ export interface TeamDirectoryHuman {
   capabilities: string[];
   responsibility_zone: string;
   availability: string;
+  projects: string[];
 }
 
 export interface TeamDirectory {
   workspace: string;
   agents: TeamDirectoryAgent[];
+  humans: TeamDirectoryHuman[];
+}
+
+// Org Chart tree types
+export interface OrgChartAgentNode extends TeamDirectoryAgent {
+  children: OrgChartAgentNode[];
+}
+
+export interface OrgChartData {
+  workspace: string;
+  agent_tree: OrgChartAgentNode[];
   humans: TeamDirectoryHuman[];
 }
 

@@ -13,6 +13,7 @@ import {
   Settings,
   Sparkles,
   Target,
+  Users,
 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { MeshIcon } from "@/components/mesh-icon";
@@ -42,6 +43,7 @@ export function Sidebar({ collapsed }: SidebarProps) {
   const [showCreateProject, setShowCreateProject] = useState(false);
 
   const isAgentsRoute = location.pathname.endsWith("/agents");
+  const isOrgChartRoute = location.pathname.endsWith("/org-chart");
   const isSparkRoute = location.pathname.endsWith("/spark");
   const isEventsRoute = location.pathname.endsWith("/events");
   const isAnalyticsRoute = location.pathname.endsWith("/analytics");
@@ -112,6 +114,16 @@ export function Sidebar({ collapsed }: SidebarProps) {
             )}
           >
             <Bot className="h-4 w-4" />
+          </Link>
+          {/* Team (Org Chart) */}
+          <Link
+            to={wsSlug ? `/w/${wsSlug}/org-chart` : "/"}
+            className={cn(
+              "flex h-8 w-8 items-center justify-center rounded-lg text-sidebar-foreground hover:bg-sidebar-accent",
+              isOrgChartRoute && "bg-sidebar-accent text-sidebar-primary",
+            )}
+          >
+            <Users className="h-4 w-4" />
           </Link>
           {/* Spark Catalog */}
           <Link
@@ -197,7 +209,7 @@ export function Sidebar({ collapsed }: SidebarProps) {
           to={wsSlug ? `/w/${wsSlug}` : "/"}
           className={cn(
             "flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-sidebar-foreground hover:bg-sidebar-accent",
-            !projectSlug && !isAgentsRoute && !isSparkRoute && !isEventsRoute && !isAnalyticsRoute && !isIntegrationsRoute && !isInitiativesRoute && !isTriageRoute && "bg-sidebar-accent font-medium",
+            !projectSlug && !isAgentsRoute && !isOrgChartRoute && !isSparkRoute && !isEventsRoute && !isAnalyticsRoute && !isIntegrationsRoute && !isInitiativesRoute && !isTriageRoute && "bg-sidebar-accent font-medium",
           )}
         >
           <LayoutDashboard className="h-4 w-4" />
@@ -279,6 +291,17 @@ export function Sidebar({ collapsed }: SidebarProps) {
         >
           <Bot className="h-4 w-4" />
           Agents
+        </Link>
+        {/* Team (Org Chart) */}
+        <Link
+          to={wsSlug ? `/w/${wsSlug}/org-chart` : "/"}
+          className={cn(
+            "flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-sidebar-foreground hover:bg-sidebar-accent",
+            isOrgChartRoute && "bg-sidebar-accent font-medium",
+          )}
+        >
+          <Users className="h-4 w-4" />
+          Team
         </Link>
         {/* Spark Catalog */}
         <Link
