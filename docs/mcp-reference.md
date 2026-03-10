@@ -2,10 +2,10 @@
 
 ## Overview
 
-evc-mesh exposes **38 MCP tools** via the [Model Context Protocol](https://modelcontextprotocol.io/).
+evc-mesh exposes **45 MCP tools** via the [Model Context Protocol](https://modelcontextprotocol.io/).
 Supported transports: **stdio** (default), **SSE** (HTTP Server-Sent Events on port 8081).
 
-Tools are organized into 9 categories:
+Tools are organized into 11 categories:
 
 | Category | Tools | Description |
 |----------|-------|-------------|
@@ -15,9 +15,11 @@ Tools are organized into 9 categories:
 | Utility | 3 | Heartbeat, error reporting, self-assigned task listing |
 | Agent Hierarchy | 2 | Register and list sub-agents |
 | Governance Rules | 2 | Agent-applicable rules, project rules |
-| Team & Configuration | 6 | Team directory, assignment/workflow rules, agent profiles, config import/export |
+| Team & Configuration | 6 | Team directory (flat/tree), assignment/workflow rules, agent profiles, config import/export |
 | Push Notifications | 1 | Long-poll for task assignments |
 | Recurring Tasks | 4 | Create and manage recurring task schedules and instance history |
+| Auto-Transition Rules | 4 | List, create, update, delete auto-transition rules per project |
+| Task Checkout | 3 | Exclusive task locking with TTL to prevent double-work |
 
 > **Note:** The MCP server is also available as a standalone package at
 > [github.com/entire-vc/evc-mesh-mcp](https://github.com/entire-vc/evc-mesh-mcp).
@@ -1187,6 +1189,225 @@ Immediately creates the next instance of a recurring schedule, without waiting f
   "title": "Weekly Security Audit — Week 10",
   "instance_number": 13,
   "created_at": "2026-03-05T10:00:00Z"
+}
+```
+
+---
+
+### Auto-Transition Rules (4 tools)
+
+#### 39. `list_auto_transition_rules`
+
+List all auto-transition rules for a project. Agents can read rules but cannot create/update/delete them (requires human admin).
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `project_id` | string | **Yes** | -- | Project ID |
+
+**Example request:**
+```json
+{
+  "name": "list_auto_transition_rules",
+  "arguments": {
+    "project_id": "550e8400-..."
+  }
+}
+```
+
+**Example response:**
+```json
+[
+  {
+    "id": "a1b2c3d4-...",
+    "project_id": "550e8400-...",
+    "trigger": "all_subtasks_done",
+    "target_status_id": "b2c3d4e5-...",
+    "is_enabled": true
+  },
+  {
+    "id": "c3d4e5f6-...",
+    "project_id": "550e8400-...",
+    "trigger": "blocking_dep_resolved",
+    "target_status_id": "d4e5f6g7-...",
+    "is_enabled": true
+  }
+]
+```
+
+---
+
+#### 40. `create_auto_transition_rule`
+
+Create a new auto-transition rule for a project. Requires `PermManageRules` permission (human admins only).
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `project_id` | string | **Yes** | -- | Project ID |
+| `trigger` | string | **Yes** | -- | Trigger event: `all_subtasks_done`, `blocking_dep_resolved` |
+| `target_status_id` | string | **Yes** | -- | UUID of the status to move the task to when trigger fires |
+| `is_enabled` | boolean | No | `true` | Whether the rule is active |
+
+**Example request:**
+```json
+{
+  "name": "create_auto_transition_rule",
+  "arguments": {
+    "project_id": "550e8400-...",
+    "trigger": "all_subtasks_done",
+    "target_status_id": "b2c3d4e5-..."
+  }
+}
+```
+
+---
+
+#### 41. `update_auto_transition_rule`
+
+Update an existing auto-transition rule. Requires `PermManageRules` permission (human admins only).
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `rule_id` | string | **Yes** | -- | Rule ID |
+| `target_status_id` | string | No | -- | New target status UUID |
+| `is_enabled` | boolean | No | -- | Enable or disable the rule |
+
+**Example request:**
+```json
+{
+  "name": "update_auto_transition_rule",
+  "arguments": {
+    "rule_id": "a1b2c3d4-...",
+    "is_enabled": false
+  }
+}
+```
+
+---
+
+#### 42. `delete_auto_transition_rule`
+
+Delete an auto-transition rule. Requires `PermManageRules` permission (human admins only).
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `rule_id` | string | **Yes** | -- | Rule ID |
+
+**Example request:**
+```json
+{
+  "name": "delete_auto_transition_rule",
+  "arguments": {
+    "rule_id": "a1b2c3d4-..."
+  }
+}
+```
+
+---
+
+### Task Checkout (3 tools)
+
+#### 43. `checkout_task`
+
+Acquire an exclusive lock on a task to prevent double-work. Only agents can checkout tasks. If the task is already checked out by another non-expired agent, the call fails with a conflict error including details about the current holder. Same-agent re-checkout is idempotent and returns a fresh token.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `task_id` | string | **Yes** | -- | Task ID to lock |
+| `ttl_minutes` | number | No | `15` | Lock duration in minutes (1-240) |
+
+**Example request:**
+```json
+{
+  "name": "checkout_task",
+  "arguments": {
+    "task_id": "a1b2c3d4-...",
+    "ttl_minutes": 30
+  }
+}
+```
+
+**Example response:**
+```json
+{
+  "task_id": "a1b2c3d4-...",
+  "checkout_token": "f1e2d3c4-...",
+  "checked_out_by": "684bd684-...",
+  "expires_at": "2026-03-10T12:30:00Z"
+}
+```
+
+**Example conflict response (409):**
+```json
+{
+  "code": 409,
+  "message": "Task is already checked out",
+  "details": {
+    "checked_out_by": "other-agent-uuid",
+    "expires_at": "2026-03-10T12:15:00Z"
+  }
+}
+```
+
+---
+
+#### 44. `release_task`
+
+Release an exclusive checkout. The `checkout_token` from the checkout response must be provided. Agents should release checkouts when done working on a task to allow others to pick it up immediately rather than waiting for TTL expiry.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `task_id` | string | **Yes** | -- | Task ID |
+| `checkout_token` | string | **Yes** | -- | Token returned by `checkout_task` |
+
+**Example request:**
+```json
+{
+  "name": "release_task",
+  "arguments": {
+    "task_id": "a1b2c3d4-...",
+    "checkout_token": "f1e2d3c4-..."
+  }
+}
+```
+
+**Example response:**
+```json
+{
+  "status": "released"
+}
+```
+
+---
+
+#### 45. `extend_checkout`
+
+Extend the TTL of an active checkout. Use this when a task takes longer than expected. The checkout must not have expired already.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `task_id` | string | **Yes** | -- | Task ID |
+| `checkout_token` | string | **Yes** | -- | Token returned by `checkout_task` |
+| `ttl_minutes` | number | No | `15` | New TTL in minutes from now (1-240) |
+
+**Example request:**
+```json
+{
+  "name": "extend_checkout",
+  "arguments": {
+    "task_id": "a1b2c3d4-...",
+    "checkout_token": "f1e2d3c4-...",
+    "ttl_minutes": 60
+  }
+}
+```
+
+**Example response:**
+```json
+{
+  "task_id": "a1b2c3d4-...",
+  "checkout_token": "f1e2d3c4-...",
+  "checked_out_by": "684bd684-...",
+  "expires_at": "2026-03-10T13:00:00Z"
 }
 ```
 

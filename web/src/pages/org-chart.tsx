@@ -30,7 +30,7 @@ function AgentCard({ agent }: { agent: OrgChartAgentNode }) {
   return (
     <Card
       className={cn(
-        "w-48 shrink-0 border-l-4 cursor-default select-none hover:shadow-md transition-shadow",
+        "w-52 shrink-0 border-l-4 cursor-default select-none hover:shadow-md transition-shadow",
         borderColor,
       )}
     >
@@ -76,7 +76,7 @@ function AgentCard({ agent }: { agent: OrgChartAgentNode }) {
 
 function HumanCard({ human }: { human: TeamDirectoryHuman }) {
   return (
-    <Card className="w-48 shrink-0 border-l-4 border-l-blue-400 hover:shadow-md transition-shadow">
+    <Card className="w-52 shrink-0 border-l-4 border-l-blue-400 hover:shadow-md transition-shadow">
       <CardContent className="p-3 space-y-1.5">
         <div className="flex items-center gap-1.5 min-w-0">
           <User className="h-3.5 w-3.5 shrink-0 text-blue-400" />
@@ -108,44 +108,54 @@ function HumanCard({ human }: { human: TeamDirectoryHuman }) {
 }
 
 // ---------------------------------------------------------------------------
-// Tree node (recursive)
+// Tree node — top-down org chart with connector lines
 // ---------------------------------------------------------------------------
 
-function AgentTreeNode({
-  node,
-  depth = 0,
-}: {
-  node: OrgChartAgentNode;
-  depth?: number;
-}) {
+function OrgTreeNode({ node }: { node: OrgChartAgentNode }) {
+  const hasChildren = node.children && node.children.length > 0;
+
   return (
-    <div
-      className={cn(
-        "relative",
-        depth > 0 && "ml-8 pl-4 border-l border-border",
-      )}
-    >
-      {depth > 0 && (
-        <div className="absolute -left-px top-6 w-4 border-t border-border" />
-      )}
+    <div className="flex flex-col items-center">
+      {/* Card */}
+      <AgentCard agent={node} />
 
-      <div className="py-1">
-        <AgentCard agent={node} />
-      </div>
+      {/* Connector lines to children */}
+      {hasChildren && (
+        <>
+          {/* Vertical line down from card */}
+          <div className="w-px h-6 bg-border" />
 
-      {node.children && node.children.length > 0 && (
-        <div className="mt-1 space-y-0">
-          {node.children.map((child) => (
-            <AgentTreeNode key={child.id} node={child} depth={depth + 1} />
-          ))}
-        </div>
+          {/* Horizontal rail + vertical drops */}
+          <div className="relative flex justify-center">
+            {/* Horizontal connector spanning all children */}
+            {node.children.length > 1 && (
+              <div
+                className="absolute top-0 h-px bg-border"
+                style={{
+                  left: `calc(${(100 / node.children.length) * 0.5}% )`,
+                  right: `calc(${(100 / node.children.length) * 0.5}% )`,
+                }}
+              />
+            )}
+
+            <div className="flex gap-8">
+              {node.children.map((child) => (
+                <div key={child.id} className="flex flex-col items-center">
+                  {/* Vertical line down to child */}
+                  <div className="w-px h-6 bg-border" />
+                  <OrgTreeNode node={child} />
+                </div>
+              ))}
+            </div>
+          </div>
+        </>
       )}
     </div>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Tree view
+// Tree view — horizontal arrangement of root nodes
 // ---------------------------------------------------------------------------
 
 function TreeView({
@@ -156,17 +166,19 @@ function TreeView({
   humans: TeamDirectoryHuman[];
 }) {
   return (
-    <div className="space-y-6">
+    <div className="space-y-10">
       {/* Agent tree */}
       {agentTree.length > 0 ? (
         <div>
-          <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">
+          <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-6">
             Agents
           </h3>
-          <div className="space-y-2">
-            {agentTree.map((root) => (
-              <AgentTreeNode key={root.id} node={root} depth={0} />
-            ))}
+          <div className="overflow-x-auto pb-4">
+            <div className="inline-flex gap-10 items-start">
+              {agentTree.map((root) => (
+                <OrgTreeNode key={root.id} node={root} />
+              ))}
+            </div>
           </div>
         </div>
       ) : (
@@ -176,10 +188,10 @@ function TreeView({
       {/* Humans */}
       {humans.length > 0 && (
         <div>
-          <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">
+          <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-4">
             Humans
           </h3>
-          <div className="flex flex-wrap gap-3">
+          <div className="flex flex-wrap gap-4">
             {humans.map((h) => (
               <HumanCard key={h.id} human={h} />
             ))}
@@ -236,7 +248,7 @@ function GridView({
   const hasUnassigned = unassignedAgents.length > 0 || unassignedHumans.length > 0;
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       {projects.map((project) => {
         const projectAgents = allAgents.filter((a) => a.projects?.includes(project));
         const projectHumans = humans.filter((h) => h.projects?.includes(project));
@@ -249,7 +261,7 @@ function GridView({
                 ({projectAgents.length + projectHumans.length})
               </span>
             </h3>
-            <div className="flex flex-wrap gap-3">
+            <div className="flex flex-wrap gap-4">
               {projectAgents.map((a) => (
                 <AgentCard key={a.id} agent={a} />
               ))}
@@ -270,7 +282,7 @@ function GridView({
               ({unassignedAgents.length + unassignedHumans.length})
             </span>
           </h3>
-          <div className="flex flex-wrap gap-3">
+          <div className="flex flex-wrap gap-4">
             {unassignedAgents.map((a) => (
               <AgentCard key={a.id} agent={a} />
             ))}
@@ -295,15 +307,15 @@ function GridView({
 function OrgChartSkeleton() {
   return (
     <div className="space-y-4">
-      {Array.from({ length: 3 }).map((_, i) => (
-        <div key={i} className="flex gap-4">
-          <Skeleton className="h-24 w-48 rounded-lg" />
-          <div className="ml-8 space-y-2">
-            <Skeleton className="h-24 w-48 rounded-lg" />
-            <Skeleton className="h-24 w-48 rounded-lg" />
-          </div>
-        </div>
-      ))}
+      <div className="flex gap-8 justify-center">
+        <Skeleton className="h-28 w-52 rounded-lg" />
+        <Skeleton className="h-28 w-52 rounded-lg" />
+        <Skeleton className="h-28 w-52 rounded-lg" />
+      </div>
+      <div className="flex gap-8 justify-center">
+        <Skeleton className="h-28 w-52 rounded-lg" />
+        <Skeleton className="h-28 w-52 rounded-lg" />
+      </div>
     </div>
   );
 }

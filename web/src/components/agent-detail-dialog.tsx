@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { AlertTriangle, Check, Copy, Pencil, RefreshCw, Trash2, X } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { agentStatusConfig, agentTypeConfig } from "@/lib/agent-utils";
@@ -175,8 +175,15 @@ export function AgentDetailDialog({
 
   if (!agent) return null;
 
+  const { agents } = useAgentStore();
   const typeConfig = agentTypeConfig[agent.agent_type];
   const statusConfig = agentStatusConfig[agent.status];
+
+  // Other agents that can be a parent (exclude self and own children to prevent cycles)
+  const parentCandidates = useMemo(
+    () => agents.filter((a) => a.id !== agent.id),
+    [agents, agent.id],
+  );
 
   const metadata = agent.metadata || {};
   const tasksCompleted =
@@ -391,6 +398,32 @@ export function AgentDetailDialog({
           {/* Registered */}
           <DetailRow label="Registered">
             <span className="text-sm">{formatDate(agent.created_at)}</span>
+          </DetailRow>
+
+          {/* Parent Agent */}
+          <DetailRow label="Parent Agent">
+            <select
+              className="h-8 rounded-md border border-input bg-background px-2 text-sm"
+              value={agent.parent_agent_id ?? ""}
+              onChange={async (e) => {
+                setIsLoading(true);
+                setError(null);
+                try {
+                  await updateAgent(agent.id, { parent_agent_id: e.target.value });
+                } catch (err) {
+                  setError(err instanceof Error ? err.message : "Failed to update parent");
+                } finally {
+                  setIsLoading(false);
+                }
+              }}
+            >
+              <option value="">None (root)</option>
+              {parentCandidates.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.name}
+                </option>
+              ))}
+            </select>
           </DetailRow>
 
           {/* API Key (masked) */}

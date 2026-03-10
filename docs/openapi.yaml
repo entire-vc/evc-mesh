@@ -948,6 +948,26 @@ components:
           type: string
           format: date-time
 
+    # ---------- Task Checkout ----------
+    CheckoutResult:
+      type: object
+      properties:
+        task_id:
+          type: string
+          format: uuid
+        checkout_token:
+          type: string
+          format: uuid
+          description: Token required for release/extend operations
+        checked_out_by:
+          type: string
+          format: uuid
+          description: Agent ID that holds the checkout
+        expires_at:
+          type: string
+          format: date-time
+          description: When the checkout expires
+
     # ---------- Spark Catalog ----------
     SparkAgentManifest:
       type: object
@@ -5285,6 +5305,162 @@ paths:
                 $ref: "#/components/schemas/Error"
         "404":
           description: Rule not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  # ------------------------------------------------------------------
+  # Task Checkout (Atomic Locking)
+  # ------------------------------------------------------------------
+  /api/v1/tasks/{task_id}/checkout:
+    parameters:
+      - name: task_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [TaskCheckout]
+      summary: Acquire exclusive checkout on a task
+      operationId: checkoutTask
+      description: |
+        Atomically locks a task for the calling agent. Returns a checkout_token
+        that must be provided for release/extend. If the task is already checked
+        out by another non-expired agent, returns 409 Conflict.
+        Same-agent re-checkout is idempotent (returns new token).
+        Only agents can checkout tasks (not human users).
+      security:
+        - AgentKeyAuth: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                ttl_minutes:
+                  type: integer
+                  description: Lock duration in minutes (1-240, default 15)
+                  default: 15
+                  minimum: 1
+                  maximum: 240
+      responses:
+        "200":
+          description: Checkout acquired
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CheckoutResult"
+        "400":
+          description: Invalid request (not an agent, bad task_id)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: Task already checked out by another agent
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code:
+                    type: integer
+                    example: 409
+                  message:
+                    type: string
+                    example: "Task is already checked out"
+                  details:
+                    type: object
+                    properties:
+                      checked_out_by:
+                        type: string
+                        format: uuid
+                      expires_at:
+                        type: string
+                        format: date-time
+    delete:
+      tags: [TaskCheckout]
+      summary: Release a task checkout
+      operationId: releaseCheckout
+      description: |
+        Releases an exclusive checkout. The checkout_token must match
+        the token returned by the checkout operation.
+      security:
+        - AgentKeyAuth: []
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [checkout_token]
+              properties:
+                checkout_token:
+                  type: string
+                  format: uuid
+                  description: Token returned by the checkout operation
+      responses:
+        "204":
+          description: Checkout released
+        "400":
+          description: Missing or invalid checkout_token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Token does not match
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    patch:
+      tags: [TaskCheckout]
+      summary: Extend a task checkout TTL
+      operationId: extendCheckout
+      description: |
+        Extends the TTL of an existing checkout. The checkout_token must match
+        and the checkout must not have expired.
+      security:
+        - AgentKeyAuth: []
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [checkout_token]
+              properties:
+                checkout_token:
+                  type: string
+                  format: uuid
+                  description: Token returned by the checkout operation
+                ttl_minutes:
+                  type: integer
+                  description: New TTL in minutes (1-240, default 15)
+                  default: 15
+                  minimum: 1
+                  maximum: 240
+      responses:
+        "200":
+          description: Checkout extended
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CheckoutResult"
+        "400":
+          description: Missing or invalid checkout_token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Token does not match or checkout expired
           content:
             application/json:
               schema:

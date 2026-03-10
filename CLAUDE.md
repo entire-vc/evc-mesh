@@ -6,11 +6,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Entire VC Mesh** — task management platform for coordinating humans and AI agents (Claude Code, OpenClaw, Cline, Aider) in a unified workspace. Kanban system with customizable fields/workflows, dual interface (Web UI for humans, MCP/REST API for agents), and event bus for inter-agent context sharing.
 
-**Status:** Phase 1-8 OSS complete. Preparing for public release. Enterprise features in separate repo.
+**Status:** Phase 1-12 OSS complete. Preparing for public release. Enterprise features in separate repo.
 
-**What's built:** REST API (~100 routes) + React frontend (18 pages, 13 stores) + MCP server (34 tools, stdio + SSE) + Agent Dashboard + NATS JetStream event bus + WebSocket real-time + Timeline DAG + Custom Fields (12 types) + Board/List/Timeline/Calendar views + Webhooks + Analytics + Initiatives + Rules engine + Config import/export + Go SDK.
+**What's built:** REST API (~125 routes) + React frontend (19 pages, 16 stores) + MCP server (45 tools, stdio + SSE) + Agent Dashboard + Org Chart + NATS JetStream event bus + WebSocket real-time + Timeline DAG + Custom Fields (12 types) + Board/List/Timeline/Calendar views + Webhooks + Analytics + Initiatives + Rules engine + Config import/export + Go SDK + Atomic Task Checkout + Auto-Transition Rules + Project-Level Membership.
 
-**Next:** Bug fixes from code audit (see ROADMAP Sprint BF-10), documentation update (OpenAPI 65+ missing routes), pre-release hardening.
+**Next:** Pre-release hardening, documentation polish, OpenAPI completeness.
 
 **Repo strategy:** `evc-mesh` (Apache 2.0, goes public at release) + `evc-mesh-enterprise` (Commercial, always private).
 

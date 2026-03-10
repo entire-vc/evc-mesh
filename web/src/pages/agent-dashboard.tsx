@@ -23,8 +23,13 @@ export function AgentDashboardPage() {
   const { agents, isLoading, fetchAgents } = useAgentStore();
 
   const [registerOpen, setRegisterOpen] = useState(false);
-  const [selectedAgent, setSelectedAgent] = useState<Agent | null>(null);
+  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
+
+  // Always get the latest agent data from the store
+  const selectedAgent = selectedAgentId
+    ? agents.find((a) => a.id === selectedAgentId) ?? null
+    : null;
 
   useEffect(() => {
     if (currentWorkspace) {
@@ -33,7 +38,7 @@ export function AgentDashboardPage() {
   }, [currentWorkspace, fetchAgents]);
 
   const handleAgentClick = useCallback((agent: Agent) => {
-    setSelectedAgent(agent);
+    setSelectedAgentId(agent.id);
     setDetailOpen(true);
   }, []);
 

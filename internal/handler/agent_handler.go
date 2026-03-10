@@ -168,6 +168,7 @@ type updateAgentRequest struct {
 	ProfileDescription *string           `json:"profile_description"`
 	CallbackURL        *string           `json:"callback_url"`
 	CurrentTaskID      *uuid.UUID        `json:"current_task_id"`
+	ParentAgentID      *string           `json:"parent_agent_id"` // UUID string or "" to clear
 }
 
 // Update handles PATCH /agents/:agent_id
@@ -210,6 +211,17 @@ func (h *AgentHandler) Update(c echo.Context) error {
 	}
 	if req.CurrentTaskID != nil {
 		agent.CurrentTaskID = req.CurrentTaskID
+	}
+	if req.ParentAgentID != nil {
+		if *req.ParentAgentID == "" {
+			agent.ParentAgentID = nil
+		} else {
+			parentID, err := uuid.Parse(*req.ParentAgentID)
+			if err != nil {
+				return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid parent_agent_id"))
+			}
+			agent.ParentAgentID = &parentID
+		}
 	}
 
 	if err := h.agentService.Update(c.Request().Context(), agent); err != nil {

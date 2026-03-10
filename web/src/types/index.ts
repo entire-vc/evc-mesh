@@ -234,6 +234,7 @@ export interface TaskDependency {
 export interface Agent {
   id: string;
   workspace_id: string;
+  parent_agent_id?: string | null;
   name: string;
   agent_type: AgentType;
   status: AgentStatus;
