@@ -31,7 +31,7 @@ export function AgentDetailDialog({
   onOpenChange,
   agent,
 }: AgentDetailDialogProps) {
-  const { updateAgent, deleteAgent, regenerateKey } = useAgentStore();
+  const { agents, updateAgent, deleteAgent, regenerateKey } = useAgentStore();
 
   const [mode, setMode] = useState<DialogMode>("detail");
   const [editingName, setEditingName] = useState(false);
@@ -173,17 +173,16 @@ export function AgentDetailDialog({
     }
   }, [newApiKey]);
 
-  if (!agent) return null;
-
-  const { agents } = useAgentStore();
-  const typeConfig = agentTypeConfig[agent.agent_type];
-  const statusConfig = agentStatusConfig[agent.status];
-
   // Other agents that can be a parent (exclude self and own children to prevent cycles)
   const parentCandidates = useMemo(
-    () => agents.filter((a) => a.id !== agent.id),
-    [agents, agent.id],
+    () => (agent ? agents.filter((a) => a.id !== agent.id) : []),
+    [agents, agent],
   );
+
+  if (!agent) return null;
+
+  const typeConfig = agentTypeConfig[agent.agent_type];
+  const statusConfig = agentStatusConfig[agent.status];
 
   const metadata = agent.metadata || {};
   const tasksCompleted =
