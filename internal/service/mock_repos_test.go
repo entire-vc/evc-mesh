@@ -317,6 +317,52 @@ func (m *MockTaskRepository) ListByStatusCategory(_ context.Context, _ uuid.UUID
 	return pagination.NewPage([]domain.Task{}, 0, pg), nil
 }
 
+func (m *MockTaskRepository) AtomicCheckout(_ context.Context, taskID, agentID uuid.UUID, token uuid.UUID, expiresAt time.Time) error {
+	if m.errToReturn != nil {
+		return m.errToReturn
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	t, ok := m.items[taskID]
+	if !ok {
+		return nil
+	}
+	t.CheckedOutBy = &agentID
+	t.CheckoutToken = &token
+	t.CheckoutExpires = &expiresAt
+	return nil
+}
+
+func (m *MockTaskRepository) ReleaseCheckout(_ context.Context, taskID uuid.UUID, _ uuid.UUID) error {
+	if m.errToReturn != nil {
+		return m.errToReturn
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	t, ok := m.items[taskID]
+	if !ok {
+		return nil
+	}
+	t.CheckedOutBy = nil
+	t.CheckoutToken = nil
+	t.CheckoutExpires = nil
+	return nil
+}
+
+func (m *MockTaskRepository) ExtendCheckout(_ context.Context, taskID uuid.UUID, _ uuid.UUID, newExpires time.Time) error {
+	if m.errToReturn != nil {
+		return m.errToReturn
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	t, ok := m.items[taskID]
+	if !ok {
+		return nil
+	}
+	t.CheckoutExpires = &newExpires
+	return nil
+}
+
 // ---------------------------------------------------------------------------
 // MockTaskStatusRepository
 // ---------------------------------------------------------------------------
@@ -864,6 +910,21 @@ func (m *MockAgentRepository) GetSubAgentTree(_ context.Context, parentID uuid.U
 	return result, nil
 }
 
+func (m *MockAgentRepository) ListWithProjects(_ context.Context, workspaceID uuid.UUID) ([]repository.AgentWithProjects, error) {
+	if m.errToReturn != nil {
+		return nil, m.errToReturn
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var result []repository.AgentWithProjects
+	for _, a := range m.items {
+		if a.WorkspaceID == workspaceID {
+			result = append(result, repository.AgentWithProjects{Agent: *a, Projects: []string{}})
+		}
+	}
+	return result, nil
+}
+
 // ---------------------------------------------------------------------------
 // MockEventBusMessageRepository
 // ---------------------------------------------------------------------------
@@ -1096,6 +1157,9 @@ func (m *MockRulesService) GetEffectiveAssignmentRules(_ context.Context, _ uuid
 // Remaining RulesService methods — not exercised by task tests.
 func (m *MockRulesService) GetTeamDirectory(_ context.Context, _ uuid.UUID) (*domain.TeamDirectory, error) {
 	panic("MockRulesService.GetTeamDirectory not implemented")
+}
+func (m *MockRulesService) GetTeamDirectoryTree(_ context.Context, _ uuid.UUID) (*domain.TeamDirectoryTree, error) {
+	panic("MockRulesService.GetTeamDirectoryTree not implemented")
 }
 func (m *MockRulesService) UpdateAgentProfile(_ context.Context, _ uuid.UUID, _ domain.AgentProfileUpdate) error {
 	panic("MockRulesService.UpdateAgentProfile not implemented")

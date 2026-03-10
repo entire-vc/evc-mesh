@@ -426,6 +426,9 @@ func main() {
 	api.GET("/tasks/:task_id/subtasks", taskHandler.ListSubtasks)
 	api.POST("/tasks/:task_id/subtasks", taskHandler.CreateSubtask, rbac(mw.PermCreateTask))
 	api.POST("/tasks/:task_id/assign", taskHandler.AssignTask, rbac(mw.PermUpdateTask))
+	api.POST("/tasks/:task_id/checkout", taskHandler.Checkout)
+	api.DELETE("/tasks/:task_id/checkout", taskHandler.ReleaseCheckout)
+	api.PATCH("/tasks/:task_id/checkout", taskHandler.ExtendCheckout)
 	api.GET("/tasks/:task_id/context", taskContextHandler.GetTaskContext)
 
 	// Dependency routes.

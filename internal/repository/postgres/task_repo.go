@@ -22,6 +22,14 @@ import (
 // safeSlugRe validates that a custom field slug is a safe SQL identifier.
 var safeSlugRe = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
 
+// ErrCheckoutConflict is returned when AtomicCheckout finds the task is already
+// checked out by a different agent and the lock has not yet expired.
+var ErrCheckoutConflict = errors.New("task is already checked out")
+
+// ErrInvalidCheckoutToken is returned when ReleaseCheckout or ExtendCheckout
+// is called with a token that does not match the stored checkout_token.
+var ErrInvalidCheckoutToken = errors.New("invalid checkout token")
+
 // taskEnrichedSelect is the SELECT clause used for all task queries that need
 // computed fields. It appends 4 correlated subqueries to the base columns so
 // that callers always receive subtask_count, assignee_name, artifact_count,
@@ -471,4 +479,85 @@ func (r *TaskRepo) ListByStatusCategory(ctx context.Context, workspaceID uuid.UU
 
 	items := taskRowsToSlice(rows)
 	return pagination.NewPage(items, totalCount, pg), nil
+}
+
+// AtomicCheckout attempts to acquire an exclusive application-level lock on the task
+// for the given agent. The UPDATE is conditional: it only succeeds when the task is
+// unchecked (checked_out_by IS NULL), the existing checkout has expired
+// (checkout_expires < now()), or the requesting agent already holds the checkout
+// (same-agent re-checkout is idempotent).
+//
+// If the task is locked by a different, non-expired agent, the UPDATE matches 0 rows
+// and ErrCheckoutConflict is returned. No SELECT FOR UPDATE is needed because the
+// single UPDATE statement is itself atomic in PostgreSQL.
+func (r *TaskRepo) AtomicCheckout(ctx context.Context, taskID, agentID uuid.UUID, token uuid.UUID, expiresAt time.Time) error {
+	const query = `
+		UPDATE tasks
+		SET checked_out_by  = $1,
+		    checkout_token   = $2,
+		    checkout_expires = $3,
+		    updated_at       = now()
+		WHERE id = $4
+		  AND deleted_at IS NULL
+		  AND (
+		        checked_out_by IS NULL
+		        OR checkout_expires < now()
+		        OR checked_out_by = $1
+		      )`
+	res, err := r.db.ExecContext(ctx, query, agentID, token, expiresAt, taskID)
+	if err != nil {
+		return err
+	}
+	rows, _ := res.RowsAffected()
+	if rows == 0 {
+		return ErrCheckoutConflict
+	}
+	return nil
+}
+
+// ReleaseCheckout clears the checkout fields on a task. The token must match the
+// stored checkout_token — this prevents a different agent from accidentally
+// releasing another agent's lock.
+func (r *TaskRepo) ReleaseCheckout(ctx context.Context, taskID uuid.UUID, token uuid.UUID) error {
+	const query = `
+		UPDATE tasks
+		SET checked_out_by  = NULL,
+		    checkout_token   = NULL,
+		    checkout_expires = NULL,
+		    updated_at       = now()
+		WHERE id = $1
+		  AND checkout_token = $2
+		  AND deleted_at IS NULL`
+	res, err := r.db.ExecContext(ctx, query, taskID, token)
+	if err != nil {
+		return err
+	}
+	rows, _ := res.RowsAffected()
+	if rows == 0 {
+		return ErrInvalidCheckoutToken
+	}
+	return nil
+}
+
+// ExtendCheckout pushes the checkout_expires deadline forward. The token must match
+// and the existing checkout must not already be expired (to prevent hijacking an
+// expired slot via extend).
+func (r *TaskRepo) ExtendCheckout(ctx context.Context, taskID uuid.UUID, token uuid.UUID, newExpires time.Time) error {
+	const query = `
+		UPDATE tasks
+		SET checkout_expires = $1,
+		    updated_at       = now()
+		WHERE id = $2
+		  AND checkout_token   = $3
+		  AND deleted_at IS NULL
+		  AND checkout_expires >= now()`
+	res, err := r.db.ExecContext(ctx, query, newExpires, taskID, token)
+	if err != nil {
+		return err
+	}
+	rows, _ := res.RowsAffected()
+	if rows == 0 {
+		return ErrInvalidCheckoutToken
+	}
+	return nil
 }

@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/repository"
+	pgRepo "github.com/entire-vc/evc-mesh/internal/repository/postgres"
 	"github.com/entire-vc/evc-mesh/pkg/actorctx"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 	"github.com/entire-vc/evc-mesh/pkg/pagination"
@@ -953,4 +955,99 @@ func (s *taskService) ensureAgentProjectMember(ctx context.Context, projectID, a
 	if err := s.projectMemberRepo.Create(ctx, member); err != nil {
 		log.Printf("[task-svc] auto-enroll agent %s in project %s failed: %v", agentID, projectID, err)
 	}
+}
+
+// CheckoutTask acquires an exclusive application-level lock on the task for the
+// calling agent. The TTL is clamped to [1, 240] minutes; default is 15.
+// Only agents may checkout — users should assign tasks instead.
+func (s *taskService) CheckoutTask(ctx context.Context, taskID uuid.UUID, ttlMinutes int) (*CheckoutResult, error) {
+	actorID, actorType := actorctx.FromContext(ctx)
+	if actorType != domain.ActorTypeAgent || actorID == uuid.Nil {
+		return nil, apierror.BadRequest("only agents can checkout tasks")
+	}
+
+	if ttlMinutes <= 0 {
+		ttlMinutes = 15
+	}
+	if ttlMinutes > 240 {
+		ttlMinutes = 240
+	}
+
+	token := uuid.New()
+	expiresAt := timeNow().Add(time.Duration(ttlMinutes) * time.Minute)
+
+	err := s.taskRepo.AtomicCheckout(ctx, taskID, actorID, token, expiresAt)
+	if err != nil {
+		if errors.Is(err, pgRepo.ErrCheckoutConflict) {
+			// Fetch the task to surface the current holder's info in the error.
+			task, fetchErr := s.taskRepo.GetByID(ctx, taskID)
+			if fetchErr == nil && task != nil && task.CheckedOutBy != nil && task.CheckoutExpires != nil {
+				return nil, &CheckoutConflictError{
+					CheckedOutBy: *task.CheckedOutBy,
+					ExpiresAt:    *task.CheckoutExpires,
+				}
+			}
+			return nil, err
+		}
+		return nil, err
+	}
+
+	return &CheckoutResult{
+		TaskID:        taskID,
+		CheckoutToken: token,
+		CheckedOutBy:  actorID,
+		ExpiresAt:     expiresAt,
+	}, nil
+}
+
+// ReleaseCheckout clears the checkout on a task. The token must match.
+func (s *taskService) ReleaseCheckout(ctx context.Context, taskID uuid.UUID, token uuid.UUID) error {
+	err := s.taskRepo.ReleaseCheckout(ctx, taskID, token)
+	if err != nil {
+		if errors.Is(err, pgRepo.ErrInvalidCheckoutToken) {
+			return apierror.Forbidden("invalid checkout token")
+		}
+		return err
+	}
+	return nil
+}
+
+// ExtendCheckout extends the TTL of an existing checkout identified by token.
+// The TTL is clamped to [1, 240] minutes; default is 15.
+func (s *taskService) ExtendCheckout(ctx context.Context, taskID uuid.UUID, token uuid.UUID, ttlMinutes int) (*CheckoutResult, error) {
+	if ttlMinutes <= 0 {
+		ttlMinutes = 15
+	}
+	if ttlMinutes > 240 {
+		ttlMinutes = 240
+	}
+
+	newExpires := timeNow().Add(time.Duration(ttlMinutes) * time.Minute)
+	err := s.taskRepo.ExtendCheckout(ctx, taskID, token, newExpires)
+	if err != nil {
+		if errors.Is(err, pgRepo.ErrInvalidCheckoutToken) {
+			return nil, apierror.Forbidden("invalid or expired checkout token")
+		}
+		return nil, err
+	}
+
+	// Fetch the task to get the agent ID for the response.
+	task, fetchErr := s.taskRepo.GetByID(ctx, taskID)
+	if fetchErr != nil || task == nil || task.CheckedOutBy == nil {
+		// Token was valid (no error from ExtendCheckout), just return what we know.
+		actorID, _ := actorctx.FromContext(ctx)
+		return &CheckoutResult{
+			TaskID:        taskID,
+			CheckoutToken: token,
+			CheckedOutBy:  actorID,
+			ExpiresAt:     newExpires,
+		}, nil
+	}
+
+	return &CheckoutResult{
+		TaskID:        taskID,
+		CheckoutToken: token,
+		CheckedOutBy:  *task.CheckedOutBy,
+		ExpiresAt:     newExpires,
+	}, nil
 }

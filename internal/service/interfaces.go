@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"time"
 
@@ -68,6 +69,25 @@ type BulkUpdateTasksResult struct {
 	Errors  []string
 }
 
+// CheckoutResult is returned when a checkout is successfully acquired or extended.
+type CheckoutResult struct {
+	TaskID        uuid.UUID `json:"task_id"`
+	CheckoutToken uuid.UUID `json:"checkout_token"`
+	CheckedOutBy  uuid.UUID `json:"checked_out_by"`
+	ExpiresAt     time.Time `json:"expires_at"`
+}
+
+// CheckoutConflictError is returned when CheckoutTask finds the task locked by
+// a different non-expired agent.
+type CheckoutConflictError struct {
+	CheckedOutBy uuid.UUID
+	ExpiresAt    time.Time
+}
+
+func (e *CheckoutConflictError) Error() string {
+	return fmt.Sprintf("task is already checked out by %s until %s", e.CheckedOutBy, e.ExpiresAt.Format(time.RFC3339))
+}
+
 // TaskService provides business logic for task management.
 type TaskService interface {
 	Create(ctx context.Context, task *domain.Task) error
@@ -82,6 +102,16 @@ type TaskService interface {
 	GetMyTasks(ctx context.Context, assigneeID uuid.UUID, assigneeType domain.AssigneeType) ([]domain.Task, error)
 	GetDefaultStatus(ctx context.Context, projectID uuid.UUID) (*domain.TaskStatus, error)
 	BulkUpdate(ctx context.Context, projectID uuid.UUID, input BulkUpdateTasksInput) BulkUpdateTasksResult
+	// CheckoutTask acquires an exclusive application-level lock on the task for the
+	// calling agent. Only agents may checkout. Returns CheckoutConflictError when the
+	// task is already locked by a different non-expired agent.
+	CheckoutTask(ctx context.Context, taskID uuid.UUID, ttlMinutes int) (*CheckoutResult, error)
+	// ReleaseCheckout releases the checkout identified by the given token.
+	// Returns an error when the token does not match.
+	ReleaseCheckout(ctx context.Context, taskID uuid.UUID, token uuid.UUID) error
+	// ExtendCheckout extends the checkout TTL identified by the given token.
+	// Returns an error when the token does not match or the checkout has expired.
+	ExtendCheckout(ctx context.Context, taskID uuid.UUID, token uuid.UUID, ttlMinutes int) (*CheckoutResult, error)
 }
 
 // TaskServiceAutoTransitionConfigurable extends TaskService with the ability
@@ -376,6 +406,8 @@ type RuleService interface {
 type RulesService interface {
 	// Team Directory
 	GetTeamDirectory(ctx context.Context, workspaceID uuid.UUID) (*domain.TeamDirectory, error)
+	// GetTeamDirectoryTree returns the team directory in hierarchical (tree) format with project affiliations.
+	GetTeamDirectoryTree(ctx context.Context, workspaceID uuid.UUID) (*domain.TeamDirectoryTree, error)
 	UpdateAgentProfile(ctx context.Context, agentID uuid.UUID, profile domain.AgentProfileUpdate) error
 
 	// Assignment Rules

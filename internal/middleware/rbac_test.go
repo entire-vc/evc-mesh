@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	"github.com/entire-vc/evc-mesh/internal/repository"
 )
 
 // ---------------------------------------------------------------------------
@@ -74,6 +75,10 @@ func (r *rbacMockMemberRepo) Delete(_ context.Context, _, _ uuid.UUID) error {
 
 func (r *rbacMockMemberRepo) CountOwners(_ context.Context, _ uuid.UUID) (int, error) {
 	return 0, nil
+}
+
+func (r *rbacMockMemberRepo) ListWithProjects(_ context.Context, _ uuid.UUID) ([]repository.HumanWithProjects, error) {
+	return nil, nil
 }
 
 // addMember is a helper to add a workspace member to the mock repo.

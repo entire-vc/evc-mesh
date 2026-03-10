@@ -72,6 +72,15 @@ type TaskRepository interface {
 	CountByStatus(ctx context.Context, projectID uuid.UUID) (map[uuid.UUID]int, error)
 	CountByStatusCategory(ctx context.Context, projectID uuid.UUID) (map[domain.StatusCategory]int, error)
 	ListByStatusCategory(ctx context.Context, workspaceID uuid.UUID, category domain.StatusCategory, pg pagination.Params) (*pagination.Page[domain.Task], error)
+	// AtomicCheckout acquires an exclusive application-level lock on the task for the
+	// given agent. Returns ErrCheckoutConflict if locked by another non-expired agent.
+	AtomicCheckout(ctx context.Context, taskID, agentID uuid.UUID, token uuid.UUID, expiresAt time.Time) error
+	// ReleaseCheckout clears the checkout fields. Returns ErrInvalidCheckoutToken when
+	// the provided token does not match.
+	ReleaseCheckout(ctx context.Context, taskID uuid.UUID, token uuid.UUID) error
+	// ExtendCheckout extends the checkout deadline. Returns ErrInvalidCheckoutToken when
+	// the provided token does not match or the checkout has already expired.
+	ExtendCheckout(ctx context.Context, taskID uuid.UUID, token uuid.UUID, newExpires time.Time) error
 }
 
 // TaskStatusRepository manages persistence for task statuses.
@@ -136,6 +145,12 @@ type AgentFilter struct {
 	ParentAgentID *uuid.UUID
 }
 
+// AgentWithProjects pairs an agent with its project affiliation names.
+type AgentWithProjects struct {
+	domain.Agent
+	Projects []string
+}
+
 // AgentRepository manages persistence for agents.
 type AgentRepository interface {
 	Create(ctx context.Context, agent *domain.Agent) error
@@ -149,6 +164,9 @@ type AgentRepository interface {
 	// GetSubAgentTree returns all agents that are descendants of parentID using a recursive CTE
 	// limited to 10 levels of depth, ordered by depth then created_at.
 	GetSubAgentTree(ctx context.Context, parentID uuid.UUID) ([]domain.Agent, error)
+	// ListWithProjects returns all agents in a workspace together with the project names
+	// they are members of (via project_members JOIN projects).
+	ListWithProjects(ctx context.Context, workspaceID uuid.UUID) ([]AgentWithProjects, error)
 }
 
 // EventBusMessageFilter defines filtering options for listing event bus messages.
@@ -217,6 +235,12 @@ type RefreshTokenRepository interface {
 	DeleteExpired(ctx context.Context) error
 }
 
+// HumanWithProjects pairs a workspace member with their project affiliation names.
+type HumanWithProjects struct {
+	domain.WorkspaceMemberWithUser
+	Projects []string
+}
+
 // WorkspaceMemberRepository manages persistence for workspace members.
 type WorkspaceMemberRepository interface {
 	Create(ctx context.Context, member *domain.WorkspaceMember) error
@@ -226,6 +250,8 @@ type WorkspaceMemberRepository interface {
 	GetRole(ctx context.Context, workspaceID, userID uuid.UUID) (string, error)
 	// List returns all members of a workspace with user details joined.
 	List(ctx context.Context, workspaceID uuid.UUID) ([]domain.WorkspaceMemberWithUser, error)
+	// ListWithProjects returns all workspace members with their project affiliations.
+	ListWithProjects(ctx context.Context, workspaceID uuid.UUID) ([]HumanWithProjects, error)
 	// UpdateRole changes the role for a given workspace + user.
 	UpdateRole(ctx context.Context, workspaceID, userID uuid.UUID, role string) error
 	// Delete removes the workspace membership for the given user.

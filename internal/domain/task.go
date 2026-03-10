@@ -63,11 +63,25 @@ type Task struct {
 	RecurringScheduleID     *uuid.UUID `json:"recurring_schedule_id,omitempty" db:"recurring_schedule_id"`
 	RecurringInstanceNumber *int       `json:"recurring_instance_number,omitempty" db:"recurring_instance_number"`
 
+	// Checkout fields — set when an agent has an exclusive application-level lock on the task.
+	CheckedOutBy    *uuid.UUID `json:"checked_out_by,omitempty" db:"checked_out_by"`
+	CheckoutToken   *uuid.UUID `json:"checkout_token,omitempty" db:"checkout_token"`
+	CheckoutExpires *time.Time `json:"checkout_expires,omitempty" db:"checkout_expires"`
+
 	// Computed fields — populated by enriched list/get queries, not stored columns.
 	SubtaskCount  int     `json:"subtask_count"`
 	AssigneeName  *string `json:"assignee_name,omitempty"`
 	ArtifactCount int     `json:"artifact_count"`
 	VCSLinkCount  int     `json:"vcs_link_count"`
+}
+
+// CheckoutInfo carries checkout state for API responses on GET task endpoints.
+// If the task has no active checkout, the field is omitted (nil pointer in the response struct).
+type CheckoutInfo struct {
+	CheckedOutBy uuid.UUID `json:"checked_out_by"`
+	AgentName    string    `json:"agent_name,omitempty"`
+	ExpiresAt    time.Time `json:"expires_at"`
+	IsExpired    bool      `json:"is_expired"`
 }
 
 // DependencyType represents the relationship between two tasks.

@@ -580,6 +580,110 @@ func (h *TaskHandler) BulkUpdate(c echo.Context) error {
 	})
 }
 
+// checkoutRequest represents the JSON body for POST /tasks/:task_id/checkout.
+type checkoutRequest struct {
+	TTLMinutes int `json:"ttl_minutes"`
+}
+
+// releaseCheckoutRequest represents the JSON body for DELETE /tasks/:task_id/checkout.
+type releaseCheckoutRequest struct {
+	CheckoutToken string `json:"checkout_token"`
+}
+
+// extendCheckoutRequest represents the JSON body for PATCH /tasks/:task_id/checkout.
+type extendCheckoutRequest struct {
+	CheckoutToken string `json:"checkout_token"`
+	TTLMinutes    int    `json:"ttl_minutes"`
+}
+
+// Checkout handles POST /tasks/:task_id/checkout
+func (h *TaskHandler) Checkout(c echo.Context) error {
+	taskID, err := uuid.Parse(c.Param("task_id"))
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid task_id"))
+	}
+
+	var req checkoutRequest
+	if err := c.Bind(&req); err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
+	}
+
+	result, err := h.taskService.CheckoutTask(c.Request().Context(), taskID, req.TTLMinutes)
+	if err != nil {
+		var conflict *service.CheckoutConflictError
+		if errors.As(err, &conflict) {
+			return c.JSON(http.StatusConflict, map[string]interface{}{
+				"code":    409,
+				"message": "Task is already checked out",
+				"details": map[string]interface{}{
+					"checked_out_by": conflict.CheckedOutBy,
+					"expires_at":     conflict.ExpiresAt,
+				},
+			})
+		}
+		return handleError(c, err)
+	}
+
+	return c.JSON(http.StatusOK, result)
+}
+
+// ReleaseCheckout handles DELETE /tasks/:task_id/checkout
+func (h *TaskHandler) ReleaseCheckout(c echo.Context) error {
+	taskID, err := uuid.Parse(c.Param("task_id"))
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid task_id"))
+	}
+
+	var req releaseCheckoutRequest
+	if err := c.Bind(&req); err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
+	}
+
+	if req.CheckoutToken == "" {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("checkout_token is required"))
+	}
+
+	token, err := uuid.Parse(req.CheckoutToken)
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid checkout_token"))
+	}
+
+	if err := h.taskService.ReleaseCheckout(c.Request().Context(), taskID, token); err != nil {
+		return handleError(c, err)
+	}
+
+	return c.NoContent(http.StatusNoContent)
+}
+
+// ExtendCheckout handles PATCH /tasks/:task_id/checkout
+func (h *TaskHandler) ExtendCheckout(c echo.Context) error {
+	taskID, err := uuid.Parse(c.Param("task_id"))
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid task_id"))
+	}
+
+	var req extendCheckoutRequest
+	if err := c.Bind(&req); err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
+	}
+
+	if req.CheckoutToken == "" {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("checkout_token is required"))
+	}
+
+	token, err := uuid.Parse(req.CheckoutToken)
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid checkout_token"))
+	}
+
+	result, err := h.taskService.ExtendCheckout(c.Request().Context(), taskID, token, req.TTLMinutes)
+	if err != nil {
+		return handleError(c, err)
+	}
+
+	return c.JSON(http.StatusOK, result)
+}
+
 // ruleViolationAPIResponse is the JSON shape for 422 rule violation responses.
 type ruleViolationAPIResponse struct {
 	Error      string                 `json:"error"`
