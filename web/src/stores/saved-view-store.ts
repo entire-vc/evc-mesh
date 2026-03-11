@@ -10,6 +10,13 @@ interface SavedViewState {
   views: SavedView[];
   isLoading: boolean;
 
+  /** Set by ViewTabBar when user clicks a saved view; consumed by pages */
+  pendingView: SavedView | null;
+  /** Pages call this after they apply the pending view's filters */
+  clearPendingView: () => void;
+  /** ViewTabBar calls this to signal a view was selected */
+  applyView: (view: SavedView) => void;
+
   fetchViews: (projectId: string) => Promise<void>;
   createView: (
     projectId: string,
@@ -25,6 +32,9 @@ interface SavedViewState {
 export const useSavedViewStore = create<SavedViewState>((set) => ({
   views: [],
   isLoading: false,
+  pendingView: null,
+  clearPendingView: () => set({ pendingView: null }),
+  applyView: (view: SavedView) => set({ pendingView: view }),
 
   fetchViews: async (projectId: string) => {
     set({ isLoading: true });

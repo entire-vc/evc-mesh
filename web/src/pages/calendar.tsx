@@ -23,10 +23,10 @@ import { CalendarToolbar } from "@/components/calendar-toolbar";
 import { CreateTaskDialog } from "@/components/create-task-dialog";
 import { CreateRecurringDialog } from "@/components/create-recurring-dialog";
 import { TaskSlideOver } from "@/components/task-slide-over";
-import { SavedViewsMenu } from "@/components/saved-views-menu";
+import { useSavedViewStore } from "@/stores/saved-view-store";
 import { toast } from "@/components/ui/toast";
 import { cn } from "@/lib/cn";
-import type { Task, WSMessage, SavedView } from "@/types";
+import type { Task, WSMessage } from "@/types";
 
 // ---------------------------------------------------------------------------
 // Drag data shape
@@ -519,16 +519,17 @@ export function CalendarPage() {
     setSlideOverTaskId(task.id);
   }, []);
 
-  // Saved view application
-  const handleApplyView = useCallback(
-    (view: SavedView) => {
-      if (view.filters) {
-        const f = view.filters as Record<string, unknown>;
+  // Listen for saved view applied from ViewTabBar
+  const { pendingView, clearPendingView } = useSavedViewStore();
+  useEffect(() => {
+    if (pendingView && pendingView.view_type === "calendar") {
+      if (pendingView.filters) {
+        const f = pendingView.filters as Record<string, unknown>;
         if (typeof f.search === "string") setSearchQuery(f.search);
       }
-    },
-    [],
-  );
+      clearPendingView();
+    }
+  }, [pendingView, clearPendingView]);
 
   // ---------------------------------------------------------------------------
   // DnD sensors — require 5px movement before drag starts (preserves clicks)
@@ -611,11 +612,6 @@ export function CalendarPage() {
     <div className="flex h-full flex-col gap-3 p-4">
       {/* Toolbar */}
       <div className="flex items-center gap-3">
-        <SavedViewsMenu
-          projectId={currentProject.id}
-          currentViewType="calendar"
-          onApplyView={handleApplyView}
-        />
         <CalendarToolbar
           currentMonth={currentMonth}
           onPrevMonth={handlePrevMonth}

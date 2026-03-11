@@ -459,6 +459,7 @@ export function Header({ onToggleSidebar }: HeaderProps) {
           currentView={currentView}
           wsSlug={wsSlug}
           projectSlug={projectSlug}
+          projectId={currentProject?.id}
           className="ml-1 sm:ml-4"
         />
       )}

@@ -39,8 +39,8 @@ import {
 import { AssigneeAvatar } from "@/components/assignee-avatar";
 import { PriorityFlag } from "@/components/priority-flag";
 import { CustomFieldRenderer } from "@/components/custom-field-renderer";
-import { SavedViewsMenu } from "@/components/saved-views-menu";
 import { TaskSlideOver } from "@/components/task-slide-over";
+import { useSavedViewStore } from "@/stores/saved-view-store";
 import { ColumnPicker, type ColumnDef } from "@/components/column-picker";
 import {
   TagFilterDropdown,
@@ -55,7 +55,6 @@ import { api } from "@/lib/api";
 import type {
   CustomFieldDefinition,
   Priority,
-  SavedView,
   Task,
   TaskStatus,
   UpdateTaskRequest,
@@ -611,15 +610,19 @@ export function ListViewPage() {
     [editingCell],
   );
 
-  // Apply a saved view: restore sort from its configuration.
-  const handleApplyView = useCallback((view: SavedView) => {
-    if (view.sort_by) {
-      setSortField(view.sort_by as SortField);
+  // Listen for saved view applied from ViewTabBar
+  const { pendingView, clearPendingView } = useSavedViewStore();
+  useEffect(() => {
+    if (pendingView && pendingView.view_type === "list") {
+      if (pendingView.sort_by) {
+        setSortField(pendingView.sort_by as SortField);
+      }
+      if (pendingView.sort_order === "asc" || pendingView.sort_order === "desc") {
+        setSortDir(pendingView.sort_order);
+      }
+      clearPendingView();
     }
-    if (view.sort_order === "asc" || view.sort_order === "desc") {
-      setSortDir(view.sort_order);
-    }
-  }, []);
+  }, [pendingView, clearPendingView]);
 
   // Pagination helpers
   const totalPages = Math.max(1, Math.ceil(total / perPage));
@@ -682,14 +685,6 @@ export function ListViewPage() {
         {/* Spacer */}
         <div className="flex-1" />
 
-        {/* Saved views */}
-        <SavedViewsMenu
-          projectId={currentProject.id}
-          currentViewType="list"
-          currentSortBy={sortField}
-          currentSortOrder={sortDir}
-          onApplyView={handleApplyView}
-        />
         {/* Column picker */}
         <ColumnPicker columns={allColumns} onChange={handleColumnChange} />
       </div>

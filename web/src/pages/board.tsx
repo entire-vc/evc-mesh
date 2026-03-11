@@ -35,12 +35,12 @@ import { TaskCard } from "@/components/task-card";
 import { CreateTaskDialog } from "@/components/create-task-dialog";
 import { TaskSlideOver } from "@/components/task-slide-over";
 import { toast } from "@/components/ui/toast";
-import { SavedViewsMenu } from "@/components/saved-views-menu";
 import { BoardToolbar, type GroupBy, type SortBy } from "@/components/board-toolbar";
+import { useSavedViewStore } from "@/stores/saved-view-store";
 import { CreateRecurringDialog } from "@/components/create-recurring-dialog";
 import { AssigneeAvatar } from "@/components/assignee-avatar";
 import { applyViewFilters, type CFFilters } from "@/components/view-filters";
-import type { Task, TaskStatus, WSMessage, SavedView, Priority, StatusCategory } from "@/types";
+import type { Task, TaskStatus, WSMessage, Priority, StatusCategory } from "@/types";
 
 // ---------------------------------------------------------------------------
 // Priority metadata (for GroupBy=priority columns)
@@ -595,13 +595,18 @@ export function BoardPage() {
 
   // ----- New task helpers -----
 
-  const handleApplyView = useCallback((view: SavedView) => {
-    const filters = view.filters ?? {};
-    setSearchQuery((filters.search as string) ?? "");
-    setPriorityFilter((filters.priority as string) ?? "all");
-    setAssigneeFilter((filters.assignee as string) ?? "all");
-    setCustomFieldFilters((filters.custom_fields as Record<string, unknown>) ?? {});
-  }, []);
+  // Listen for saved view applied from ViewTabBar
+  const { pendingView, clearPendingView } = useSavedViewStore();
+  useEffect(() => {
+    if (pendingView && pendingView.view_type === "board") {
+      const filters = pendingView.filters ?? {};
+      setSearchQuery((filters.search as string) ?? "");
+      setPriorityFilter((filters.priority as string) ?? "all");
+      setAssigneeFilter((filters.assignee as string) ?? "all");
+      setCustomFieldFilters((filters.custom_fields as Record<string, unknown>) ?? {});
+      clearPendingView();
+    }
+  }, [pendingView, clearPendingView]);
 
   const openCreateDialog = useCallback((statusId?: string) => {
     setDialogStatusId(statusId);
@@ -655,19 +660,6 @@ export function BoardPage() {
           onCustomFieldFiltersChange={setCustomFieldFilters}
           onNewTask={() => openCreateDialog()}
           onNewRecurring={() => setRecurringOpen(true)}
-        />
-
-        {/* Saved views */}
-        <SavedViewsMenu
-          projectId={currentProject.id}
-          currentViewType="board"
-          currentFilters={{
-            search: searchQuery,
-            priority: priorityFilter,
-            assignee: assigneeFilter,
-            custom_fields: customFieldFilters,
-          }}
-          onApplyView={handleApplyView}
         />
       </div>
 
