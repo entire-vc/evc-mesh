@@ -49,7 +49,6 @@ import {
   formatRelative,
   fromDateTimeLocal,
   priorityConfig,
-  statusCategoryConfig,
   toDateTimeLocal,
 } from "@/lib/utils";
 import { toast } from "@/components/ui/toast";
@@ -95,7 +94,7 @@ export function TaskSlideOver({
   const [loading, setLoading] = useState(false);
   const [bottomTab, setBottomTab] = useState<BottomTabId>("subtasks");
   const [rightTab, setRightTab] = useState<RightTabId>("comments");
-  const [hideEmpty, setHideEmpty] = useState(false);
+  const [hideEmpty, setHideEmpty] = useState(true);
 
   // Inline title editing
   const [editingTitle, setEditingTitle] = useState(false);
@@ -419,11 +418,6 @@ export function TaskSlideOver({
   const open = taskId !== null;
   const currentStatus =
     currentTask ? statuses.find((s) => s.id === currentTask.status_id) : null;
-  const category = currentStatus
-    ? statusCategoryConfig[currentStatus.category]
-    : null;
-  const pConfig = currentTask ? priorityConfig[currentTask.priority] : null;
-
   // For "hide empty" toggle — a property is "empty" if its value is null/undefined/""/[]
   function isEmpty(value: unknown): boolean {
     if (value == null || value === "") return true;
@@ -434,6 +428,8 @@ export function TaskSlideOver({
   const showDueDate = !hideEmpty || !isEmpty(currentTask?.due_date);
   const showLabels = !hideEmpty || (currentTask?.labels ?? []).length > 0;
   const showHours = !hideEmpty || currentTask?.estimated_hours != null;
+  const showVcsLinks = !hideEmpty || (currentTask?.vcs_link_count ?? 0) > 0;
+  const showDependencies = !hideEmpty; // no count on task, always show unless hideEmpty
 
   // ---- Render ---------------------------------------------------------------
 
@@ -581,7 +577,7 @@ export function TaskSlideOver({
 
                   <div className="grid grid-cols-1 items-start gap-y-2.5 sm:grid-cols-[auto_1fr] sm:gap-x-4">
                     {/* Status */}
-                    <label className="flex items-center gap-1.5 pt-1 text-xs text-muted-foreground">
+                    <label className="flex items-center gap-1 pt-1 text-xs text-muted-foreground">
                       {currentStatus && (
                         <span
                           className="inline-block h-2 w-2 shrink-0 rounded-full"
@@ -590,54 +586,37 @@ export function TaskSlideOver({
                       )}
                       Status
                     </label>
-                    <div className="flex flex-col gap-1">
-                      <Select
-                        value={currentTask.status_id}
-                        onChange={(e) => void handleStatusChange(e.target.value)}
-                        className="h-7 text-xs"
-                      >
-                        {[...statuses]
-                          .sort((a, b) => a.position - b.position)
-                          .map((s) => (
-                            <option key={s.id} value={s.id}>
-                              {s.name}
-                            </option>
-                          ))}
-                      </Select>
-                      {category && (
-                        <Badge variant="secondary" className="w-fit text-[10px]">
-                          {category.label}
-                        </Badge>
-                      )}
-                    </div>
+                    <Select
+                      value={currentTask.status_id}
+                      onChange={(e) => void handleStatusChange(e.target.value)}
+                      className="h-7 text-xs"
+                    >
+                      {[...statuses]
+                        .sort((a, b) => a.position - b.position)
+                        .map((s) => (
+                          <option key={s.id} value={s.id}>
+                            {s.name}
+                          </option>
+                        ))}
+                    </Select>
 
                     {/* Priority */}
                     <label className="pt-1 text-xs text-muted-foreground">
                       Priority
                     </label>
-                    <div className="flex flex-col gap-1">
-                      <Select
-                        value={currentTask.priority}
-                        onChange={(e) =>
-                          void handlePriorityChange(e.target.value as Priority)
-                        }
-                        className="h-7 text-xs"
-                      >
-                        {priorities.map((p) => (
-                          <option key={p} value={p}>
-                            {priorityConfig[p].label}
-                          </option>
-                        ))}
-                      </Select>
-                      {pConfig && (
-                        <Badge
-                          variant="outline"
-                          className={cn("w-fit text-[10px]", pConfig.color)}
-                        >
-                          {pConfig.label}
-                        </Badge>
-                      )}
-                    </div>
+                    <Select
+                      value={currentTask.priority}
+                      onChange={(e) =>
+                        void handlePriorityChange(e.target.value as Priority)
+                      }
+                      className="h-7 text-xs"
+                    >
+                      {priorities.map((p) => (
+                        <option key={p} value={p}>
+                          {priorityConfig[p].label}
+                        </option>
+                      ))}
+                    </Select>
 
                     {/* Assignee */}
                     <label className="flex items-center gap-1 pt-1 text-xs text-muted-foreground">
@@ -695,7 +674,7 @@ export function TaskSlideOver({
                     {/* Labels */}
                     {showLabels && (
                       <>
-                        <label className="flex items-center gap-1 pt-1.5 text-xs text-muted-foreground">
+                        <label className="flex items-center gap-1 pt-1 text-xs text-muted-foreground">
                           <Tag className="h-3 w-3" />
                           Labels
                         </label>
@@ -826,38 +805,43 @@ export function TaskSlideOver({
                       </>
                     )}
 
-                    {/* VCS Links */}
-                    <div className="col-span-2 my-1">
-                      <Separator />
-                    </div>
-                    <div className="col-span-2">
-                      <VCSLinks taskId={currentTask.id} />
-                    </div>
-
-                    {/* Dependencies */}
-                    <div className="col-span-2 my-1">
-                      <Separator />
-                    </div>
-                    <div className="col-span-2">
-                      <DependencyList taskId={currentTask.id} />
-                    </div>
-
-                    {/* Timestamps */}
-                    <div className="col-span-2 my-1">
-                      <Separator />
-                    </div>
-                    <label className="flex items-center gap-1 text-xs text-muted-foreground">
+                    {/* Timestamps — inline row alongside Due Date */}
+                    <label className="flex items-center gap-1 pt-1 text-xs text-muted-foreground">
                       <Clock className="h-3 w-3" />
                       Created
                     </label>
-                    <span className="text-xs">{formatDate(currentTask.created_at)}</span>
+                    <span className="pt-1 text-xs">{formatDate(currentTask.created_at)}</span>
 
-                    <label className="text-xs text-muted-foreground">
+                    <label className="pt-1 text-xs text-muted-foreground">
                       Updated
                     </label>
-                    <span className="text-xs text-muted-foreground">
+                    <span className="pt-1 text-xs text-muted-foreground">
                       {formatRelative(currentTask.updated_at)}
                     </span>
+
+                    {/* VCS Links */}
+                    {showVcsLinks && (
+                      <>
+                        <div className="col-span-2 my-1">
+                          <Separator />
+                        </div>
+                        <div className="col-span-2">
+                          <VCSLinks taskId={currentTask.id} />
+                        </div>
+                      </>
+                    )}
+
+                    {/* Dependencies */}
+                    {showDependencies && (
+                      <>
+                        <div className="col-span-2 my-1">
+                          <Separator />
+                        </div>
+                        <div className="col-span-2">
+                          <DependencyList taskId={currentTask.id} />
+                        </div>
+                      </>
+                    )}
                   </div>
                 </div>
 
