@@ -1,4 +1,4 @@
-import { type FormEvent, useEffect, useState } from "react";
+import { type FormEvent, type KeyboardEvent, useEffect, useRef, useState } from "react";
 import {
   Dialog,
   DialogContent,
@@ -8,9 +8,13 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
+import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
+import { DatePickerPopover } from "@/components/date-picker-popover";
+import { Bot, Tag, User, X } from "lucide-react";
 import { useRecurringStore } from "@/stores/recurring";
 import { useProjectStore } from "@/stores/project";
 import { useAgentStore } from "@/stores/agent";
@@ -105,7 +109,10 @@ export function CreateRecurringDialog({
   const [timezone, setTimezone] = useState("UTC");
   const [assigneeValue, setAssigneeValue] = useState("unassigned");
   const [priority, setPriority] = useState<Priority>("medium");
-  const [labelsRaw, setLabelsRaw] = useState("");
+  const [labels, setLabels] = useState<string[]>([]);
+  const [addingLabel, setAddingLabel] = useState(false);
+  const [labelDraft, setLabelDraft] = useState("");
+  const labelInputRef = useRef<HTMLInputElement>(null);
   const [startsAt, setStartsAt] = useState("");
   const [endsAt, setEndsAt] = useState("");
   const [maxInstances, setMaxInstances] = useState("");
@@ -123,7 +130,7 @@ export function CreateRecurringDialog({
       const aId = editSchedule.assignee_id;
       setAssigneeValue(aId ? `${aType}:${aId}` : "unassigned");
       setPriority(editSchedule.priority);
-      setLabelsRaw((editSchedule.labels ?? []).join(", "));
+      setLabels(editSchedule.labels ?? []);
       setStartsAt(editSchedule.starts_at ? editSchedule.starts_at.slice(0, 10) : "");
       setEndsAt(editSchedule.ends_at ? editSchedule.ends_at.slice(0, 10) : "");
       setMaxInstances(
@@ -139,11 +146,13 @@ export function CreateRecurringDialog({
       setTimezone("UTC");
       setAssigneeValue("unassigned");
       setPriority("medium");
-      setLabelsRaw("");
+      setLabels([]);
       setStartsAt("");
       setEndsAt("");
       setMaxInstances("");
     }
+    setAddingLabel(false);
+    setLabelDraft("");
     setError(null);
   };
 
@@ -155,6 +164,37 @@ export function CreateRecurringDialog({
       }
     }
   }, [open, editSchedule, currentWorkspace]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Focus label input when adding starts
+  useEffect(() => {
+    if (addingLabel) {
+      setTimeout(() => labelInputRef.current?.focus(), 0);
+    }
+  }, [addingLabel]);
+
+  const handleAddLabel = () => {
+    const newLabel = labelDraft.trim();
+    setAddingLabel(false);
+    setLabelDraft("");
+    if (!newLabel) return;
+    if (labels.some((l) => l.toLowerCase() === newLabel.toLowerCase())) return;
+    setLabels((prev) => [...prev, newLabel]);
+  };
+
+  const handleRemoveLabel = (label: string) => {
+    setLabels((prev) => prev.filter((l) => l !== label));
+  };
+
+  const handleLabelKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      handleAddLabel();
+    }
+    if (e.key === "Escape") {
+      setAddingLabel(false);
+      setLabelDraft("");
+    }
+  };
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -178,11 +218,6 @@ export function CreateRecurringDialog({
         assigneeId = id;
         assigneeType = type as AssigneeType;
       }
-
-      const labels = labelsRaw
-        .split(",")
-        .map((l) => l.trim())
-        .filter(Boolean);
 
       if (isEditMode && editSchedule) {
         const req: UpdateRecurringRequest = {
@@ -243,20 +278,17 @@ export function CreateRecurringDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <form onSubmit={handleSubmit} className="mt-2 max-h-[70vh] space-y-4 overflow-y-auto pr-1">
+        <form onSubmit={handleSubmit} className="mt-3 max-h-[70vh] space-y-3 overflow-y-auto pr-1">
           {/* Title template */}
-          <div className="space-y-1.5">
-            <label htmlFor="rd-title" className="text-sm font-medium">
-              Title Template <span className="text-destructive">*</span>
-            </label>
+          <div>
             <Input
-              id="rd-title"
-              placeholder='e.g. Weekly Review — {{.Date}} (#{{.Number}})'
+              placeholder="Title template *"
               value={titleTemplate}
               onChange={(e) => setTitleTemplate(e.target.value)}
+              className="text-base font-medium"
               autoFocus
             />
-            <p className="text-xs text-muted-foreground">
+            <p className="mt-1 text-[11px] text-muted-foreground">
               Variables: <code className="rounded bg-muted px-1">{"{{.Date}}"}</code>{" "}
               <code className="rounded bg-muted px-1">{"{{.Number}}"}</code>{" "}
               <code className="rounded bg-muted px-1">{"{{.Week}}"}</code>{" "}
@@ -265,85 +297,71 @@ export function CreateRecurringDialog({
           </div>
 
           {/* Description template */}
-          <div className="space-y-1.5">
-            <label htmlFor="rd-desc" className="text-sm font-medium">
-              Description Template
-            </label>
+          <div>
             <Textarea
-              id="rd-desc"
-              placeholder={"## Previous run summary\n{{.PrevSummary}}\n\n## This run\nDescribe what needs to be done..."}
+              placeholder={"Description template (Markdown)"}
               value={descriptionTemplate}
               onChange={(e) => setDescriptionTemplate(e.target.value)}
-              rows={4}
+              rows={3}
+              className="text-sm"
             />
-            <p className="text-xs text-muted-foreground">
-              Additional variable:{" "}
-              <code className="rounded bg-muted px-1">{"{{.PrevSummary}}"}</code>{" "}
-              — last comment from previous instance (truncated to 2000 chars)
+            <p className="mt-1 text-[11px] text-muted-foreground">
+              Extra: <code className="rounded bg-muted px-1">{"{{.PrevSummary}}"}</code>{" "}
+              — last comment from previous instance
             </p>
           </div>
 
           {/* Frequency */}
           <div className="space-y-1.5">
-            <label className="text-sm font-medium">Frequency</label>
-            <div className="flex gap-2 flex-wrap">
+            <label className="text-xs text-muted-foreground">Frequency</label>
+            <div className="flex flex-wrap gap-1.5">
               {FREQUENCIES.map((f) => (
-                <label
+                <button
                   key={f.value}
-                  className={`flex cursor-pointer items-center gap-1.5 rounded-md border px-3 py-2 text-sm transition-colors ${
+                  type="button"
+                  className={`rounded-md border px-2.5 py-1 text-xs transition-colors ${
                     frequency === f.value
                       ? "border-primary bg-primary/10 text-foreground"
                       : "border-border text-muted-foreground hover:border-border/80 hover:text-foreground"
                   }`}
+                  onClick={() => {
+                    setFrequency(f.value);
+                    if (f.value !== "custom" && f.cronHint) {
+                      setCronExpr(f.cronHint);
+                    }
+                  }}
                 >
-                  <input
-                    type="radio"
-                    name="rd-frequency"
-                    value={f.value}
-                    checked={frequency === f.value}
-                    onChange={() => {
-                      setFrequency(f.value);
-                      if (f.value !== "custom" && f.cronHint) {
-                        setCronExpr(f.cronHint);
-                      }
-                    }}
-                    className="sr-only"
-                  />
                   {f.label}
-                </label>
+                </button>
               ))}
             </div>
           </div>
 
-          {/* Cron expression — shown when custom, or as info for presets */}
+          {/* Cron expression — shown when custom */}
           {frequency === "custom" && (
-            <div className="space-y-1.5">
-              <label htmlFor="rd-cron" className="text-sm font-medium">
-                Cron Expression <span className="text-destructive">*</span>
-              </label>
+            <div>
               <Input
-                id="rd-cron"
-                placeholder="0 9 * * 1"
+                placeholder="Cron expression *  (e.g. 0 9 * * 1)"
                 value={cronExpr}
                 onChange={(e) => setCronExpr(e.target.value)}
-                className="font-mono"
+                className="h-7 font-mono text-xs"
               />
-              <p className="text-xs text-muted-foreground">
-                5-field cron: minute hour day month weekday.{" "}
-                Example: <code className="rounded bg-muted px-1">0 9 * * 1</code> = every Monday at 9am
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                5-field cron: minute hour day month weekday
               </p>
             </div>
           )}
 
-          {/* Timezone */}
-          <div className="space-y-1.5">
-            <label htmlFor="rd-tz" className="text-sm font-medium">
-              Timezone
-            </label>
+          <Separator />
+
+          {/* Properties grid — matching CreateTaskDialog compact style */}
+          <div className="grid grid-cols-[auto_1fr] items-center gap-x-4 gap-y-2.5">
+            {/* Timezone */}
+            <label className="text-xs text-muted-foreground">Timezone</label>
             <Select
-              id="rd-tz"
               value={timezone}
               onChange={(e) => setTimezone(e.target.value)}
+              className="h-7 text-xs"
             >
               {TIMEZONES.map((tz) => (
                 <option key={tz} value={tz}>
@@ -351,52 +369,34 @@ export function CreateRecurringDialog({
                 </option>
               ))}
             </Select>
-          </div>
 
-          <div className="grid grid-cols-2 gap-4">
             {/* Priority */}
-            <div className="space-y-1.5">
-              <label htmlFor="rd-priority" className="text-sm font-medium">
-                Priority
-              </label>
-              <Select
-                id="rd-priority"
-                value={priority}
-                onChange={(e) => setPriority(e.target.value as Priority)}
-              >
-                {PRIORITIES.map((p) => (
-                  <option key={p.value} value={p.value}>
-                    {p.label}
-                  </option>
-                ))}
-              </Select>
-            </div>
+            <label className="text-xs text-muted-foreground">Priority</label>
+            <Select
+              value={priority}
+              onChange={(e) => setPriority(e.target.value as Priority)}
+              className="h-7 text-xs"
+            >
+              {PRIORITIES.map((p) => (
+                <option key={p.value} value={p.value}>
+                  {p.label}
+                </option>
+              ))}
+            </Select>
 
-            {/* Max instances */}
-            <div className="space-y-1.5">
-              <label htmlFor="rd-max" className="text-sm font-medium">
-                Max Instances
-              </label>
-              <Input
-                id="rd-max"
-                type="number"
-                min={1}
-                placeholder="Unlimited"
-                value={maxInstances}
-                onChange={(e) => setMaxInstances(e.target.value)}
-              />
-            </div>
-          </div>
-
-          {/* Assignee */}
-          <div className="space-y-1.5">
-            <label htmlFor="rd-assignee" className="text-sm font-medium">
+            {/* Assignee */}
+            <label className="flex items-center gap-1 text-xs text-muted-foreground">
+              {assigneeValue.startsWith("agent:") ? (
+                <Bot className="h-3 w-3" />
+              ) : (
+                <User className="h-3 w-3" />
+              )}
               Assignee
             </label>
             <Select
-              id="rd-assignee"
               value={assigneeValue}
               onChange={(e) => setAssigneeValue(e.target.value)}
+              className="h-7 text-xs"
             >
               <option value="unassigned">Unassigned</option>
               {user && (
@@ -408,46 +408,71 @@ export function CreateRecurringDialog({
                 </option>
               ))}
             </Select>
-          </div>
 
-          {/* Labels */}
-          <div className="space-y-1.5">
-            <label htmlFor="rd-labels" className="text-sm font-medium">
+            {/* Max Instances */}
+            <label className="text-xs text-muted-foreground">Max Instances</label>
+            <Input
+              type="number"
+              min={1}
+              placeholder="Unlimited"
+              value={maxInstances}
+              onChange={(e) => setMaxInstances(e.target.value)}
+              className="h-7 text-xs"
+            />
+
+            {/* Starts At */}
+            <label className="text-xs text-muted-foreground">Starts At</label>
+            <DatePickerPopover
+              value={startsAt || null}
+              onChange={(val) => setStartsAt(val ?? "")}
+              placeholder="Set start date"
+            />
+
+            {/* Ends At */}
+            <label className="text-xs text-muted-foreground">Ends At</label>
+            <DatePickerPopover
+              value={endsAt || null}
+              onChange={(val) => setEndsAt(val ?? "")}
+              placeholder="No end date"
+            />
+
+            {/* Labels */}
+            <label className="flex items-center gap-1 self-start pt-1 text-xs text-muted-foreground">
+              <Tag className="h-3 w-3" />
               Labels
             </label>
-            <Input
-              id="rd-labels"
-              placeholder="Comma-separated labels"
-              value={labelsRaw}
-              onChange={(e) => setLabelsRaw(e.target.value)}
-            />
-          </div>
-
-          <div className="grid grid-cols-2 gap-4">
-            {/* Starts at */}
-            <div className="space-y-1.5">
-              <label htmlFor="rd-starts" className="text-sm font-medium">
-                Starts At
-              </label>
-              <Input
-                id="rd-starts"
-                type="date"
-                value={startsAt}
-                onChange={(e) => setStartsAt(e.target.value)}
-              />
-            </div>
-
-            {/* Ends at */}
-            <div className="space-y-1.5">
-              <label htmlFor="rd-ends" className="text-sm font-medium">
-                Ends At (optional)
-              </label>
-              <Input
-                id="rd-ends"
-                type="date"
-                value={endsAt}
-                onChange={(e) => setEndsAt(e.target.value)}
-              />
+            <div className="flex flex-wrap items-center gap-1">
+              {labels.map((label) => (
+                <Badge
+                  key={label}
+                  variant="secondary"
+                  className="cursor-pointer gap-1 text-[10px] hover:bg-destructive/20"
+                  onClick={() => handleRemoveLabel(label)}
+                  title="Click to remove"
+                >
+                  {label}
+                  <X className="h-2 w-2" />
+                </Badge>
+              ))}
+              {addingLabel ? (
+                <Input
+                  ref={labelInputRef}
+                  value={labelDraft}
+                  onChange={(e) => setLabelDraft(e.target.value)}
+                  onBlur={handleAddLabel}
+                  onKeyDown={handleLabelKeyDown}
+                  className="h-6 w-24 px-1.5 text-xs"
+                  placeholder="Label..."
+                />
+              ) : (
+                <button
+                  type="button"
+                  className="rounded border border-dashed border-border px-1.5 py-0.5 text-xs text-muted-foreground hover:border-primary hover:text-foreground"
+                  onClick={() => setAddingLabel(true)}
+                >
+                  + Add
+                </button>
+              )}
             </div>
           </div>
 
@@ -457,12 +482,13 @@ export function CreateRecurringDialog({
             <Button
               type="button"
               variant="outline"
+              size="sm"
               onClick={() => onOpenChange(false)}
               disabled={isSubmitting}
             >
               Cancel
             </Button>
-            <Button type="submit" disabled={isSubmitting}>
+            <Button type="submit" size="sm" disabled={isSubmitting}>
               {isSubmitting
                 ? isEditMode
                   ? "Saving..."
