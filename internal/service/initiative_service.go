@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+	"github.com/jmoiron/sqlx"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/repository"
@@ -14,16 +15,41 @@ import (
 type initiativeService struct {
 	initiativeRepo repository.InitiativeRepository
 	projectRepo    repository.ProjectRepository
+	db             *sqlx.DB
 }
 
 // NewInitiativeService creates a new InitiativeService.
 func NewInitiativeService(
 	initiativeRepo repository.InitiativeRepository,
 	projectRepo repository.ProjectRepository,
+	db *sqlx.DB,
 ) InitiativeService {
 	return &initiativeService{
 		initiativeRepo: initiativeRepo,
 		projectRepo:    projectRepo,
+		db:             db,
+	}
+}
+
+// enrichProgress populates TotalTasks and CompletedTasks on the initiative
+// by counting tasks across all linked projects using a single JOIN query.
+func (s *initiativeService) enrichProgress(ctx context.Context, ini *domain.Initiative) {
+	if s.db == nil {
+		return
+	}
+	const q = `
+		SELECT
+			COUNT(*) FILTER (WHERE ts.category NOT IN ('cancelled')) AS total,
+			COUNT(*) FILTER (WHERE ts.category = 'done') AS completed
+		FROM tasks t
+		JOIN task_statuses ts ON ts.id = t.status_id
+		JOIN initiative_projects ip ON ip.project_id = t.project_id
+		WHERE ip.initiative_id = $1 AND t.deleted_at IS NULL
+	`
+	var total, completed int
+	if err := s.db.QueryRowContext(ctx, q, ini.ID).Scan(&total, &completed); err == nil {
+		ini.TotalTasks = total
+		ini.CompletedTasks = completed
 	}
 }
 
@@ -82,6 +108,8 @@ func (s *initiativeService) GetByID(ctx context.Context, id uuid.UUID) (*domain.
 		return nil, err
 	}
 	ini.LinkedProjects = projects
+
+	s.enrichProgress(ctx, ini)
 
 	return ini, nil
 }
@@ -142,9 +170,16 @@ func (s *initiativeService) Delete(ctx context.Context, id uuid.UUID) error {
 	return s.initiativeRepo.Delete(ctx, id)
 }
 
-// List returns all initiatives for a workspace.
+// List returns all initiatives for a workspace with progress counts.
 func (s *initiativeService) List(ctx context.Context, workspaceID uuid.UUID) ([]domain.Initiative, error) {
-	return s.initiativeRepo.List(ctx, workspaceID)
+	items, err := s.initiativeRepo.List(ctx, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	for i := range items {
+		s.enrichProgress(ctx, &items[i])
+	}
+	return items, nil
 }
 
 // LinkProject associates a project with an initiative.

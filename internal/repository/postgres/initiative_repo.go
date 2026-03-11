@@ -117,6 +117,23 @@ func (r *InitiativeRepo) UnlinkProject(ctx context.Context, initiativeID, projec
 	return nil
 }
 
+func (r *InitiativeRepo) GetByProjectID(ctx context.Context, projectID uuid.UUID) ([]domain.Initiative, error) {
+	const q = `
+		SELECT i.* FROM initiatives i
+		INNER JOIN initiative_projects ip ON ip.initiative_id = i.id
+		WHERE ip.project_id = $1
+		ORDER BY i.name ASC
+	`
+	var items []domain.Initiative
+	if err := r.db.SelectContext(ctx, &items, q, projectID); err != nil {
+		return nil, err
+	}
+	if items == nil {
+		items = []domain.Initiative{}
+	}
+	return items, nil
+}
+
 func (r *InitiativeRepo) ListLinkedProjects(ctx context.Context, initiativeID uuid.UUID) ([]domain.Project, error) {
 	const q = `
 		SELECT p.* FROM projects p

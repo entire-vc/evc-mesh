@@ -94,6 +94,23 @@ func WorkspaceRLS(db *sqlx.DB, projectRepo repository.ProjectRepository) echo.Mi
 				}
 			}
 
+			// 2d. Try init_id route parameter -> look up initiative's workspace_id.
+			if !resolved {
+				if initIDStr := c.Param("init_id"); initIDStr != "" {
+					if initID, err := uuid.Parse(initIDStr); err == nil {
+						var resolvedWsID uuid.UUID
+						err := db.QueryRowContext(c.Request().Context(),
+							"SELECT workspace_id FROM initiatives WHERE id = $1",
+							initID,
+						).Scan(&resolvedWsID)
+						if err == nil {
+							wsID = resolvedWsID
+							resolved = true
+						}
+					}
+				}
+			}
+
 			// 3. Try workspace_id from auth context (set by agent key auth).
 			if !resolved {
 				if ctxWsID, err := GetWorkspaceID(c); err == nil {

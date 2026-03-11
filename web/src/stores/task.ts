@@ -29,6 +29,7 @@ interface TaskState {
   updateTask: (taskId: string, req: UpdateTaskRequest) => Promise<Task>;
   deleteTask: (taskId: string) => Promise<void>;
   moveTask: (taskId: string, req: MoveTaskRequest) => Promise<void>;
+  moveToProject: (taskId: string, projectId: string) => Promise<Task>;
   duplicateTask: (task: Task) => Promise<Task>;
 
   groupByStatus: () => void;
@@ -127,6 +128,20 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     set((state) => ({ tasks: [...state.tasks, newTask] }));
     get().groupByStatus();
     return newTask;
+  },
+
+  moveToProject: async (taskId: string, projectId: string): Promise<Task> => {
+    const updated = await api<Task>(`/api/v1/tasks/${taskId}/move-to-project`, {
+      method: "POST",
+      body: { project_id: projectId },
+    });
+    // Remove task from current project's local list (it moved to another project)
+    set((state) => ({
+      tasks: state.tasks.filter((t) => t.id !== taskId),
+      currentTask: state.currentTask?.id === taskId ? updated : state.currentTask,
+    }));
+    get().groupByStatus();
+    return updated;
   },
 
   moveTask: async (taskId: string, req: MoveTaskRequest) => {

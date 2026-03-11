@@ -222,6 +222,11 @@ func (s *commentService) Update(ctx context.Context, comment *domain.Comment) er
 		return apierror.NotFound("Comment")
 	}
 
+	actorID, actorType := actorctx.FromContext(ctx)
+	if existing.AuthorID != actorID || existing.AuthorType != actorType {
+		return apierror.Forbidden("you can only edit your own comments")
+	}
+
 	// Only allow body updates; preserve other fields from the existing record.
 	existing.Body = comment.Body
 	existing.UpdatedAt = timeNow()
@@ -244,6 +249,12 @@ func (s *commentService) Delete(ctx context.Context, id uuid.UUID) error {
 	if existing == nil {
 		return apierror.NotFound("Comment")
 	}
+
+	actorID, actorType := actorctx.FromContext(ctx)
+	if existing.AuthorID != actorID || existing.AuthorType != actorType {
+		return apierror.Forbidden("you can only delete your own comments")
+	}
+
 	if err := s.commentRepo.Delete(ctx, id); err != nil {
 		return err
 	}

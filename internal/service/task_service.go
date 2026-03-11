@@ -957,6 +957,62 @@ func (s *taskService) ensureAgentProjectMember(ctx context.Context, projectID, a
 	}
 }
 
+// MoveToProject moves a task to a different project. It finds the default status
+// for the target project, validates the task is not already there, calls the
+// repository to atomically update project_id/status_id/task_number, logs activity,
+// invalidates the context cache, and returns the freshly fetched task.
+func (s *taskService) MoveToProject(ctx context.Context, taskID, targetProjectID uuid.UUID) (*domain.Task, error) {
+	task, err := s.taskRepo.GetByID(ctx, taskID)
+	if err != nil {
+		return nil, err
+	}
+	if task == nil {
+		return nil, apierror.NotFound("Task")
+	}
+
+	if task.ProjectID == targetProjectID {
+		return nil, apierror.ValidationError(map[string]string{
+			"project_id": "task is already in the target project",
+		})
+	}
+
+	// Find the default status for the target project.
+	statuses, err := s.statusRepo.ListByProject(ctx, targetProjectID)
+	if err != nil {
+		return nil, err
+	}
+	if len(statuses) == 0 {
+		return nil, apierror.BadRequest("target project has no statuses")
+	}
+	// Pick the status with the lowest position (first column on the board).
+	defaultStatus := statuses[0]
+	for _, st := range statuses[1:] {
+		if st.Position < defaultStatus.Position {
+			defaultStatus = st
+		}
+	}
+
+	if err := s.taskRepo.MoveToProject(ctx, taskID, targetProjectID, defaultStatus.ID); err != nil {
+		return nil, err
+	}
+	if s.ctxCacheInv != nil {
+		s.ctxCacheInv.Invalidate(ctx, taskID)
+	}
+	s.logActivity(ctx, targetProjectID, taskID, "task.moved_to_project", map[string]interface{}{
+		"from_project_id": map[string]interface{}{"old": task.ProjectID.String(), "new": targetProjectID.String()},
+	})
+
+	// Re-fetch the updated task so the caller has the new project_id/status_id/task_number.
+	updated, err := s.taskRepo.GetByID(ctx, taskID)
+	if err != nil {
+		return nil, err
+	}
+	if updated == nil {
+		return nil, apierror.NotFound("Task")
+	}
+	return updated, nil
+}
+
 // CheckoutTask acquires an exclusive application-level lock on the task for the
 // calling agent. The TTL is clamped to [1, 240] minutes; default is 15.
 // Only agents may checkout — users should assign tasks instead.

@@ -238,7 +238,7 @@ export interface Agent {
   name: string;
   agent_type: AgentType;
   status: AgentStatus;
-  api_key_hash: string;
+  role?: string;
   capabilities: string[];
   metadata: Record<string, unknown>;
   last_heartbeat: string | null;
@@ -503,6 +503,8 @@ export interface Initiative {
   created_by: string;
   created_at: string;
   updated_at: string;
+  total_tasks?: number;
+  completed_tasks?: number;
   linked_projects?: Project[];
 }
 

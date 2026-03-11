@@ -363,6 +363,21 @@ func (m *MockTaskRepository) ExtendCheckout(_ context.Context, taskID uuid.UUID,
 	return nil
 }
 
+func (m *MockTaskRepository) MoveToProject(_ context.Context, taskID, targetProjectID, targetStatusID uuid.UUID) error {
+	if m.errToReturn != nil {
+		return m.errToReturn
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	t, ok := m.items[taskID]
+	if !ok {
+		return fmt.Errorf("task not found")
+	}
+	t.ProjectID = targetProjectID
+	t.StatusID = targetStatusID
+	return nil
+}
+
 // ---------------------------------------------------------------------------
 // MockTaskStatusRepository
 // ---------------------------------------------------------------------------

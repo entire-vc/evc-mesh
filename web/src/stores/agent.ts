@@ -25,7 +25,7 @@ interface AgentState {
   fetchAgent: (agentId: string) => Promise<Agent>;
   updateAgent: (
     agentId: string,
-    req: { name?: string; agent_type?: AgentType; profile_description?: string; callback_url?: string; parent_agent_id?: string },
+    req: { name?: string; agent_type?: AgentType; profile_description?: string; callback_url?: string; parent_agent_id?: string; role?: string },
   ) => Promise<Agent>;
   deleteAgent: (agentId: string) => Promise<void>;
   regenerateKey: (agentId: string) => Promise<RegenerateKeyResponse>;
@@ -71,7 +71,7 @@ export const useAgentStore = create<AgentState>((set) => ({
 
   updateAgent: async (
     agentId: string,
-    req: { name?: string; agent_type?: AgentType; profile_description?: string; callback_url?: string; parent_agent_id?: string },
+    req: { name?: string; agent_type?: AgentType; profile_description?: string; callback_url?: string; parent_agent_id?: string; role?: string },
   ): Promise<Agent> => {
     const agent = await api<Agent>(`/api/v1/agents/${agentId}`, {
       method: "PATCH",

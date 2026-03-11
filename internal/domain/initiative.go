@@ -29,4 +29,8 @@ type Initiative struct {
 
 	// LinkedProjects is populated by the service layer on GetByID.
 	LinkedProjects []Project `json:"linked_projects,omitempty" db:"-"`
+
+	// Progress fields — populated by service layer, not stored in DB.
+	TotalTasks     int `json:"total_tasks,omitempty" db:"-"`
+	CompletedTasks int `json:"completed_tasks,omitempty" db:"-"`
 }

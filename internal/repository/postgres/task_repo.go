@@ -539,6 +539,30 @@ func (r *TaskRepo) ReleaseCheckout(ctx context.Context, taskID uuid.UUID, token 
 	return nil
 }
 
+// MoveToProject atomically moves a task to a different project by updating
+// project_id, status_id, task_number (recalculated within the target project),
+// and updated_at in a single UPDATE statement.
+// Returns apierror.NotFound("Task") when the task does not exist or is soft-deleted.
+func (r *TaskRepo) MoveToProject(ctx context.Context, taskID, targetProjectID, targetStatusID uuid.UUID) error {
+	const q = `
+		UPDATE tasks
+		SET project_id  = $2,
+		    status_id   = $3,
+		    task_number = (SELECT COALESCE(MAX(task_number), 0) + 1 FROM tasks WHERE project_id = $2 AND deleted_at IS NULL),
+		    updated_at  = NOW()
+		WHERE id = $1 AND deleted_at IS NULL
+	`
+	res, err := r.db.ExecContext(ctx, q, taskID, targetProjectID, targetStatusID)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return apierror.NotFound("Task")
+	}
+	return nil
+}
+
 // ExtendCheckout pushes the checkout_expires deadline forward. The token must match
 // and the existing checkout must not already be expired (to prevent hijacking an
 // expired slot via extend).

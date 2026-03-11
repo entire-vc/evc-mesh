@@ -684,6 +684,43 @@ func (h *TaskHandler) ExtendCheckout(c echo.Context) error {
 	return c.JSON(http.StatusOK, result)
 }
 
+// moveToProjectRequest represents the JSON body for moving a task to another project.
+type moveToProjectRequest struct {
+	ProjectID string `json:"project_id"`
+}
+
+// MoveToProject handles POST /tasks/:task_id/move-to-project
+func (h *TaskHandler) MoveToProject(c echo.Context) error {
+	taskIDStr := c.Param("task_id")
+	taskID, err := uuid.Parse(taskIDStr)
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid task_id"))
+	}
+
+	var req moveToProjectRequest
+	if err := c.Bind(&req); err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
+	}
+
+	if req.ProjectID == "" {
+		return c.JSON(http.StatusBadRequest, apierror.ValidationError(map[string]string{
+			"project_id": "project_id is required",
+		}))
+	}
+
+	projectID, err := uuid.Parse(req.ProjectID)
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid project_id"))
+	}
+
+	task, err := h.taskService.MoveToProject(c.Request().Context(), taskID, projectID)
+	if err != nil {
+		return handleError(c, err)
+	}
+
+	return c.JSON(http.StatusOK, task)
+}
+
 // ruleViolationAPIResponse is the JSON shape for 422 rule violation responses.
 type ruleViolationAPIResponse struct {
 	Error      string                 `json:"error"`

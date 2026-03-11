@@ -188,7 +188,7 @@ func main() {
 	integrationService := service.NewIntegrationService(integrationRepo)
 	analyticsService := service.NewAnalyticsService(db)
 	projectUpdateService := service.NewProjectUpdateService(projectUpdateRepo, projectRepo, taskRepo, taskStatusRepo)
-	initiativeService := service.NewInitiativeService(initiativeRepo, projectRepo)
+	initiativeService := service.NewInitiativeService(initiativeRepo, projectRepo, db)
 	triageService := service.NewTriageService(taskRepo)
 
 	recurringService := service.NewRecurringService(recurringRepo, taskService,
@@ -257,7 +257,7 @@ func main() {
 	eventHandler := handler.NewEventHandler(eventBusService)
 	activityHandler := handler.NewActivityHandler(activityLogService)
 	customFieldHandler := handler.NewCustomFieldHandler(customFieldService)
-	taskContextHandler := handler.NewTaskContextHandlerWithCache(taskService, commentService, artifactService, depService, eventBusService, ctxCacheSvc)
+	taskContextHandler := handler.NewTaskContextHandlerWithCache(taskService, commentService, artifactService, depService, eventBusService, ctxCacheSvc, initiativeRepo)
 	webhookHandler := handler.NewWebhookHandler(webhookService)
 	savedViewHandler := handler.NewSavedViewHandler(savedViewService)
 	vcsLinkHandler := handler.NewVCSLinkHandlerWithSecret(vcsLinkService, cfg.Webhook.GitHubSecret)
@@ -423,6 +423,7 @@ func main() {
 	api.PATCH("/tasks/:task_id", taskHandler.Update, rbac(mw.PermUpdateTask))
 	api.DELETE("/tasks/:task_id", taskHandler.Delete, rbac(mw.PermDeleteTask))
 	api.POST("/tasks/:task_id/move", taskHandler.MoveTask, rbac(mw.PermUpdateTask))
+	api.POST("/tasks/:task_id/move-to-project", taskHandler.MoveToProject, rbac(mw.PermUpdateTask))
 	api.GET("/tasks/:task_id/subtasks", taskHandler.ListSubtasks)
 	api.POST("/tasks/:task_id/subtasks", taskHandler.CreateSubtask, rbac(mw.PermCreateTask))
 	api.POST("/tasks/:task_id/assign", taskHandler.AssignTask, rbac(mw.PermUpdateTask))

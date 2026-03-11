@@ -13,6 +13,7 @@ import {
   Bot,
   Clock,
   Copy,
+  FolderKanban,
   Hourglass,
   MessageSquare,
   Activity,
@@ -73,9 +74,9 @@ const priorities: Priority[] = ["urgent", "high", "medium", "low", "none"];
 export function TaskDetailPage() {
   const { wsSlug, projectSlug, taskId } = useParams();
   const navigate = useNavigate();
-  const { currentTask, fetchTask, updateTask, moveTask, duplicateTask } =
+  const { currentTask, fetchTask, updateTask, moveTask, moveToProject, duplicateTask } =
     useTaskStore();
-  const { statuses, fetchStatuses } = useProjectStore();
+  const { projects, statuses, fetchStatuses } = useProjectStore();
   const { fields: customFieldDefs, fetchFields: fetchCustomFields } =
     useCustomFieldStore();
   const { agents, fetchAgents } = useAgentStore();
@@ -232,6 +233,24 @@ export function TaskDetailPage() {
     await updateTask(currentTask.id, {
       due_date: value ? fromDateTimeLocal(value) : null,
     });
+  };
+
+  const handleProjectChange = async (targetProjectId: string) => {
+    if (!currentTask || targetProjectId === currentTask.project_id) return;
+    try {
+      const updated = await moveToProject(currentTask.id, targetProjectId);
+      // Navigate to the task in its new project context
+      const targetProject = projects.find((p) => p.id === targetProjectId);
+      if (targetProject) {
+        const ws = currentWorkspace;
+        if (ws) {
+          navigate(`/w/${ws.slug}/p/${targetProject.slug}/t/${updated.id}`);
+        }
+      }
+      toast.success("Task moved to another project");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to move task");
+    }
   };
 
   const handleDuplicate = useCallback(async () => {
@@ -483,6 +502,27 @@ export function TaskDetailPage() {
               <CardTitle className="text-sm">Task Properties</CardTitle>
             </CardHeader>
             <CardContent className="space-y-2.5">
+              {/* Project */}
+              <div className="flex items-center gap-3">
+                <label className="flex w-24 shrink-0 items-center gap-1 text-xs font-medium text-muted-foreground">
+                  <FolderKanban className="h-3 w-3" />
+                  Project
+                </label>
+                <Select
+                  value={currentTask.project_id}
+                  onChange={(e) => void handleProjectChange(e.target.value)}
+                  className="h-7 flex-1 text-xs"
+                >
+                  {projects.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+                </Select>
+              </div>
+
+              <Separator />
+
               {/* Status */}
               <div className="flex items-center gap-3">
                 <label className="w-24 shrink-0 text-xs font-medium text-muted-foreground">

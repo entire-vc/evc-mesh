@@ -81,6 +81,10 @@ type TaskRepository interface {
 	// ExtendCheckout extends the checkout deadline. Returns ErrInvalidCheckoutToken when
 	// the provided token does not match or the checkout has already expired.
 	ExtendCheckout(ctx context.Context, taskID uuid.UUID, token uuid.UUID, newExpires time.Time) error
+	// MoveToProject atomically reassigns a task to a different project, assigning it
+	// the given target status and a new task_number within that project.
+	// Returns apierror.NotFound("Task") if the task does not exist or is soft-deleted.
+	MoveToProject(ctx context.Context, taskID, targetProjectID, targetStatusID uuid.UUID) error
 }
 
 // TaskStatusRepository manages persistence for task statuses.
@@ -305,6 +309,8 @@ type InitiativeRepository interface {
 	LinkProject(ctx context.Context, initiativeID, projectID uuid.UUID) error
 	UnlinkProject(ctx context.Context, initiativeID, projectID uuid.UUID) error
 	ListLinkedProjects(ctx context.Context, initiativeID uuid.UUID) ([]domain.Project, error)
+	// GetByProjectID returns all initiatives that have the given project linked.
+	GetByProjectID(ctx context.Context, projectID uuid.UUID) ([]domain.Initiative, error)
 }
 
 // WebhookRepository manages persistence for webhook configurations and deliveries.

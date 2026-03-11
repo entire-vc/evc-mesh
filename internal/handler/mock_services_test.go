@@ -320,6 +320,7 @@ type MockTaskService struct {
 	CheckoutTaskFunc     func(ctx context.Context, taskID uuid.UUID, ttlMinutes int) (*service.CheckoutResult, error)
 	ReleaseCheckoutFunc  func(ctx context.Context, taskID uuid.UUID, token uuid.UUID) error
 	ExtendCheckoutFunc   func(ctx context.Context, taskID uuid.UUID, token uuid.UUID, ttlMinutes int) (*service.CheckoutResult, error)
+	MoveToProjectFunc    func(ctx context.Context, taskID, targetProjectID uuid.UUID) (*domain.Task, error)
 }
 
 func (m *MockTaskService) Create(ctx context.Context, task *domain.Task) error {
@@ -423,6 +424,13 @@ func (m *MockTaskService) ReleaseCheckout(ctx context.Context, taskID uuid.UUID,
 func (m *MockTaskService) ExtendCheckout(ctx context.Context, taskID uuid.UUID, token uuid.UUID, ttlMinutes int) (*service.CheckoutResult, error) {
 	if m.ExtendCheckoutFunc != nil {
 		return m.ExtendCheckoutFunc(ctx, taskID, token, ttlMinutes)
+	}
+	return nil, nil
+}
+
+func (m *MockTaskService) MoveToProject(ctx context.Context, taskID, targetProjectID uuid.UUID) (*domain.Task, error) {
+	if m.MoveToProjectFunc != nil {
+		return m.MoveToProjectFunc(ctx, taskID, targetProjectID)
 	}
 	return nil, nil
 }

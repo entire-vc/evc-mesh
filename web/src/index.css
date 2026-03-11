@@ -51,3 +51,8 @@ code,
 pre {
   font-family: var(--font-mono);
 }
+
+/* Fix native date/time picker icon invisible in dark mode */
+.dark input::-webkit-calendar-picker-indicator {
+  filter: invert(1);
+}

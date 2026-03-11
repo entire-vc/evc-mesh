@@ -12,6 +12,7 @@ import (
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/repository"
+	"github.com/entire-vc/evc-mesh/pkg/actorctx"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 	"github.com/entire-vc/evc-mesh/pkg/pagination"
 )
@@ -197,13 +198,38 @@ func TestCommentService_Create(t *testing.T) {
 func TestCommentService_Update(t *testing.T) {
 	tests := []struct {
 		name    string
-		setup   func(repo *MockCommentRepository) *domain.Comment
+		setup   func(repo *MockCommentRepository) (context.Context, *domain.Comment)
 		wantErr bool
 		errCode int
 	}{
 		{
 			name: "success - only body is updated",
-			setup: func(repo *MockCommentRepository) *domain.Comment {
+			setup: func(repo *MockCommentRepository) (context.Context, *domain.Comment) {
+				authorID := uuid.New()
+				id := uuid.New()
+				repo.items[id] = &domain.Comment{
+					ID:         id,
+					TaskID:     uuid.New(),
+					AuthorID:   authorID,
+					AuthorType: domain.ActorTypeUser,
+					Body:       "Original body",
+				}
+				ctx := actorctx.WithActor(context.Background(), authorID, domain.ActorTypeUser)
+				return ctx, &domain.Comment{ID: id, Body: "Updated body"}
+			},
+			wantErr: false,
+		},
+		{
+			name: "error - comment not found",
+			setup: func(_ *MockCommentRepository) (context.Context, *domain.Comment) {
+				return context.Background(), &domain.Comment{ID: uuid.New(), Body: "Ghost"}
+			},
+			wantErr: true,
+			errCode: http.StatusNotFound,
+		},
+		{
+			name: "error - forbidden when not the author",
+			setup: func(repo *MockCommentRepository) (context.Context, *domain.Comment) {
 				id := uuid.New()
 				repo.items[id] = &domain.Comment{
 					ID:         id,
@@ -212,25 +238,19 @@ func TestCommentService_Update(t *testing.T) {
 					AuthorType: domain.ActorTypeUser,
 					Body:       "Original body",
 				}
-				return &domain.Comment{ID: id, Body: "Updated body"}
-			},
-			wantErr: false,
-		},
-		{
-			name: "error - comment not found",
-			setup: func(_ *MockCommentRepository) *domain.Comment {
-				return &domain.Comment{ID: uuid.New(), Body: "Ghost"}
+				// actor is a different user
+				ctx := actorctx.WithActor(context.Background(), uuid.New(), domain.ActorTypeUser)
+				return ctx, &domain.Comment{ID: id, Body: "Tampered body"}
 			},
 			wantErr: true,
-			errCode: http.StatusNotFound,
+			errCode: http.StatusForbidden,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			svc, commentRepo, _, _ := setupCommentService()
-			ctx := context.Background()
-			comment := tt.setup(commentRepo)
+			ctx, comment := tt.setup(commentRepo)
 
 			err := svc.Update(ctx, comment)
 

@@ -21,6 +21,7 @@ type TaskContextHandler struct {
 	artifactService       service.ArtifactService
 	taskDependencyService service.TaskDependencyService
 	eventBusService       service.EventBusService
+	initiativeRepo        repository.InitiativeRepository
 	cache                 *service.ContextCacheService // optional; nil = no caching
 }
 
@@ -31,6 +32,7 @@ func NewTaskContextHandler(
 	artifactService service.ArtifactService,
 	taskDependencyService service.TaskDependencyService,
 	eventBusService service.EventBusService,
+	initiativeRepo repository.InitiativeRepository,
 ) *TaskContextHandler {
 	return &TaskContextHandler{
 		taskService:           taskService,
@@ -38,6 +40,7 @@ func NewTaskContextHandler(
 		artifactService:       artifactService,
 		taskDependencyService: taskDependencyService,
 		eventBusService:       eventBusService,
+		initiativeRepo:        initiativeRepo,
 	}
 }
 
@@ -50,6 +53,7 @@ func NewTaskContextHandlerWithCache(
 	taskDependencyService service.TaskDependencyService,
 	eventBusService service.EventBusService,
 	cache *service.ContextCacheService,
+	initiativeRepo repository.InitiativeRepository,
 ) *TaskContextHandler {
 	return &TaskContextHandler{
 		taskService:           taskService,
@@ -58,6 +62,7 @@ func NewTaskContextHandlerWithCache(
 		taskDependencyService: taskDependencyService,
 		eventBusService:       eventBusService,
 		cache:                 cache,
+		initiativeRepo:        initiativeRepo,
 	}
 }
 
@@ -128,6 +133,17 @@ func (h *TaskContextHandler) GetTaskContext(c echo.Context) error {
 		resp["events"] = events
 	} else {
 		resp["events"] = []any{}
+	}
+
+	// Initiative context — lightweight names only, best effort.
+	if h.initiativeRepo != nil {
+		if initiatives, err := h.initiativeRepo.GetByProjectID(c.Request().Context(), task.ProjectID); err == nil && len(initiatives) > 0 {
+			names := make([]string, len(initiatives))
+			for i, ini := range initiatives {
+				names[i] = ini.Name
+			}
+			resp["initiatives"] = names
+		}
 	}
 
 	// Marshal once and cache the result.

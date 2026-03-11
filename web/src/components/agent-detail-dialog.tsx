@@ -38,6 +38,8 @@ export function AgentDetailDialog({
   const [nameDraft, setNameDraft] = useState("");
   const [editingDescription, setEditingDescription] = useState(false);
   const [descriptionDraft, setDescriptionDraft] = useState("");
+  const [editingRole, setEditingRole] = useState(false);
+  const [roleDraft, setRoleDraft] = useState("");
   const [editingCallbackUrl, setEditingCallbackUrl] = useState(false);
   const [callbackUrlDraft, setCallbackUrlDraft] = useState("");
   const [newApiKey, setNewApiKey] = useState<string | null>(null);
@@ -51,6 +53,8 @@ export function AgentDetailDialog({
     setNameDraft("");
     setEditingDescription(false);
     setDescriptionDraft("");
+    setEditingRole(false);
+    setRoleDraft("");
     setEditingCallbackUrl(false);
     setCallbackUrlDraft("");
     setNewApiKey(null);
@@ -103,6 +107,26 @@ export function AgentDetailDialog({
       setIsLoading(false);
     }
   }, [agent, descriptionDraft, updateAgent]);
+
+  const handleStartEditRole = useCallback(() => {
+    if (!agent) return;
+    setRoleDraft(agent.role ?? "");
+    setEditingRole(true);
+  }, [agent]);
+
+  const handleSaveRole = useCallback(async () => {
+    if (!agent) return;
+    setIsLoading(true);
+    setError(null);
+    try {
+      await updateAgent(agent.id, { role: roleDraft.trim() });
+      setEditingRole(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to update role");
+    } finally {
+      setIsLoading(false);
+    }
+  }, [agent, roleDraft, updateAgent]);
 
   const handleStartEditCallbackUrl = useCallback(() => {
     if (!agent) return;
@@ -425,13 +449,53 @@ export function AgentDetailDialog({
             </select>
           </DetailRow>
 
-          {/* API Key (masked) */}
-          <DetailRow label="API Key">
-            <code className="rounded bg-muted px-2 py-0.5 font-mono text-xs">
-              {agent.api_key_hash
-                ? `${agent.api_key_hash.substring(0, 12)}...`
-                : "N/A"}
-            </code>
+          {/* Role */}
+          <DetailRow label="Role">
+            {editingRole ? (
+              <div className="flex items-center gap-2">
+                <Input
+                  value={roleDraft}
+                  onChange={(e) => setRoleDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") void handleSaveRole();
+                    if (e.key === "Escape") setEditingRole(false);
+                  }}
+                  placeholder="developer, lead, reviewer..."
+                  className="h-7 w-48 text-sm"
+                  autoFocus
+                />
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  className="h-6 w-6 shrink-0"
+                  onClick={() => void handleSaveRole()}
+                  disabled={isLoading}
+                >
+                  <Check className="h-3 w-3" />
+                </Button>
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  className="h-6 w-6 shrink-0"
+                  onClick={() => setEditingRole(false)}
+                >
+                  <X className="h-3 w-3" />
+                </Button>
+              </div>
+            ) : (
+              <div className="flex items-center gap-1.5">
+                <span className="text-sm">{agent.role || "Not set"}</span>
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  className="h-6 w-6 shrink-0"
+                  onClick={handleStartEditRole}
+                  title="Edit role"
+                >
+                  <Pencil className="h-3 w-3" />
+                </Button>
+              </div>
+            )}
           </DetailRow>
 
           {/* Description */}

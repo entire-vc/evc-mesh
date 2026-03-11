@@ -15,6 +15,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Select } from "@/components/ui/select";
+import { DatePickerPopover } from "@/components/date-picker-popover";
 import {
   Card,
   CardContent,
@@ -41,40 +42,37 @@ const STATUS_COLORS: Record<InitiativeStatus, string> = {
 };
 
 function InitiativeProgress({ initiative }: { initiative: Initiative }) {
-  const projects = initiative.linked_projects ?? [];
-  const total = projects.length;
+  const total = initiative.total_tasks ?? 0;
+  const completed = initiative.completed_tasks ?? 0;
+  const pct = total > 0 ? Math.round((completed / total) * 100) : 0;
 
-  // Derive progress from the initiative status since the API does not return
-  // per-project task completion counters. When status is "completed" we treat
-  // all linked projects as done; "archived" and "active" show 0%.
-  const pct = initiative.status === "completed" ? 100 : 0;
-  const label =
-    initiative.status === "completed"
-      ? "Completed"
-      : initiative.status === "archived"
-        ? "Archived"
-        : total === 0
-          ? "No projects linked"
-          : `${total} project${total !== 1 ? "s" : ""} in progress`;
+  if (initiative.status === "completed") {
+    return (
+      <div className="space-y-1">
+        <div className="flex items-center gap-2">
+          <div className="h-2 flex-1 rounded-full bg-muted">
+            <div className="h-2 rounded-full bg-primary transition-all" style={{ width: "100%" }} />
+          </div>
+          <span className="shrink-0 text-xs tabular-nums text-muted-foreground">100%</span>
+        </div>
+        <p className="text-xs text-muted-foreground">Completed</p>
+      </div>
+    );
+  }
 
-  if (total === 0 && initiative.status !== "completed") {
-    return <span className="text-xs text-muted-foreground">No projects linked</span>;
+  if (total === 0) {
+    return <span className="text-xs text-muted-foreground">No tasks yet</span>;
   }
 
   return (
     <div className="space-y-1">
       <div className="flex items-center gap-2">
         <div className="h-2 flex-1 rounded-full bg-muted">
-          <div
-            className="h-2 rounded-full bg-primary transition-all"
-            style={{ width: `${pct}%` }}
-          />
+          <div className="h-2 rounded-full bg-primary transition-all" style={{ width: `${pct}%` }} />
         </div>
-        <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
-          {pct}%
-        </span>
+        <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{pct}%</span>
       </div>
-      <p className="text-xs text-muted-foreground">{label}</p>
+      <p className="text-xs text-muted-foreground">{completed}/{total} tasks done</p>
     </div>
   );
 }
@@ -125,16 +123,19 @@ function InitiativeCard({
 
 function NewInitiativeForm({
   workspaceId,
+  projects,
   onClose,
 }: {
   workspaceId: string;
+  projects: Project[];
   onClose: () => void;
 }) {
-  const { createInitiative } = useInitiativeStore();
+  const { createInitiative, linkProject } = useInitiativeStore();
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [status, setStatus] = useState<InitiativeStatus>("active");
-  const [targetDate, setTargetDate] = useState("");
+  const [targetDate, setTargetDate] = useState<string | null>(null);
+  const [projectId, setProjectId] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
   const handleSubmit = useCallback(
@@ -149,7 +150,10 @@ function NewInitiativeForm({
           status,
           target_date: targetDate || null,
         };
-        await createInitiative(workspaceId, req);
+        const initiative = await createInitiative(workspaceId, req);
+        if (projectId) {
+          await linkProject(initiative.id, projectId);
+        }
         toast.success("Initiative created");
         onClose();
       } catch (err) {
@@ -158,7 +162,7 @@ function NewInitiativeForm({
         setSubmitting(false);
       }
     },
-    [name, description, status, targetDate, workspaceId, createInitiative, onClose],
+    [name, description, status, targetDate, projectId, workspaceId, createInitiative, linkProject, onClose],
   );
 
   return (
@@ -187,6 +191,18 @@ function NewInitiativeForm({
               rows={2}
             />
           </div>
+          <div className="space-y-1">
+            <label className="text-sm font-medium">Project</label>
+            <Select
+              value={projectId}
+              onChange={(e) => setProjectId(e.target.value)}
+            >
+              <option value="">No project</option>
+              {projects.map((p) => (
+                <option key={p.id} value={p.id}>{p.name}</option>
+              ))}
+            </Select>
+          </div>
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-1">
               <label className="text-sm font-medium">Status</label>
@@ -203,8 +219,8 @@ function NewInitiativeForm({
               <label className="text-sm font-medium">Target Date</label>
               <Input
                 type="date"
-                value={targetDate}
-                onChange={(e) => setTargetDate(e.target.value)}
+                value={targetDate ?? ""}
+                onChange={(e) => setTargetDate(e.target.value || null)}
               />
             </div>
           </div>
@@ -431,6 +447,7 @@ export function InitiativesPage() {
       {showForm && currentWorkspace && (
         <NewInitiativeForm
           workspaceId={currentWorkspace.id}
+          projects={projects}
           onClose={() => setShowForm(false)}
         />
       )}

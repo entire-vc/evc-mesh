@@ -169,6 +169,7 @@ type updateAgentRequest struct {
 	CallbackURL        *string           `json:"callback_url"`
 	CurrentTaskID      *uuid.UUID        `json:"current_task_id"`
 	ParentAgentID      *string           `json:"parent_agent_id"` // UUID string or "" to clear
+	Role               *string           `json:"role"`
 }
 
 // Update handles PATCH /agents/:agent_id
@@ -211,6 +212,9 @@ func (h *AgentHandler) Update(c echo.Context) error {
 	}
 	if req.CurrentTaskID != nil {
 		agent.CurrentTaskID = req.CurrentTaskID
+	}
+	if req.Role != nil {
+		agent.Role = *req.Role
 	}
 	if req.ParentAgentID != nil {
 		if *req.ParentAgentID == "" {

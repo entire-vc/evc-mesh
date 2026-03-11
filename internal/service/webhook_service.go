@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -380,7 +381,40 @@ func stringFromMap(m map[string]interface{}, key string) (string, bool) {
 	return s, ok
 }
 
-// validateWebhookURL checks that the URL is a valid http/https URL.
+// privateRanges lists CIDR blocks that must not be targeted by webhooks (SSRF prevention).
+var privateRanges = func() []*net.IPNet {
+	cidrs := []string{
+		"127.0.0.0/8",    // loopback
+		"10.0.0.0/8",     // private
+		"172.16.0.0/12",  // private
+		"192.168.0.0/16", // private
+		"169.254.0.0/16", // link-local / cloud metadata (AWS 169.254.169.254, etc.)
+		"::1/128",        // IPv6 loopback
+		"fc00::/7",       // IPv6 unique local
+		"fe80::/10",      // IPv6 link-local
+	}
+	nets := make([]*net.IPNet, 0, len(cidrs))
+	for _, cidr := range cidrs {
+		_, ipNet, err := net.ParseCIDR(cidr)
+		if err == nil {
+			nets = append(nets, ipNet)
+		}
+	}
+	return nets
+}()
+
+// isPrivateIP returns true if ip falls within any of the reserved/private ranges.
+func isPrivateIP(ip net.IP) bool {
+	for _, block := range privateRanges {
+		if block.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+// validateWebhookURL checks that the URL is a valid http/https URL and does not
+// point to a private/internal IP address (SSRF prevention).
 func validateWebhookURL(rawURL string) error {
 	if strings.TrimSpace(rawURL) == "" {
 		return apierror.ValidationError(map[string]string{
@@ -397,6 +431,22 @@ func validateWebhookURL(rawURL string) error {
 		return apierror.ValidationError(map[string]string{
 			"url": "url must use http or https scheme",
 		})
+	}
+
+	hostname := parsed.Hostname()
+	addrs, err := net.LookupHost(hostname)
+	if err != nil {
+		return apierror.ValidationError(map[string]string{
+			"url": "url hostname could not be resolved",
+		})
+	}
+	for _, addr := range addrs {
+		ip := net.ParseIP(addr)
+		if ip != nil && isPrivateIP(ip) {
+			return apierror.ValidationError(map[string]string{
+				"url": "url must not point to a private or internal address",
+			})
+		}
 	}
 	return nil
 }

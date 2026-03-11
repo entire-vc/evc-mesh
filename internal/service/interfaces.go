@@ -112,6 +112,10 @@ type TaskService interface {
 	// ExtendCheckout extends the checkout TTL identified by the given token.
 	// Returns an error when the token does not match or the checkout has expired.
 	ExtendCheckout(ctx context.Context, taskID uuid.UUID, token uuid.UUID, ttlMinutes int) (*CheckoutResult, error)
+	// MoveToProject moves a task to a different project, resetting status to the
+	// target project's default and recalculating task_number atomically.
+	// Returns an error if the task is already in the target project.
+	MoveToProject(ctx context.Context, taskID, targetProjectID uuid.UUID) (*domain.Task, error)
 }
 
 // TaskServiceAutoTransitionConfigurable extends TaskService with the ability
