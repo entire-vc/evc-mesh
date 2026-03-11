@@ -54,7 +54,6 @@ import {
   formatRelative,
   fromDateTimeLocal,
   priorityConfig,
-  statusCategoryConfig,
   toDateTimeLocal,
 } from "@/lib/utils";
 import { toast } from "@/components/ui/toast";
@@ -88,6 +87,7 @@ export function TaskDetailPage() {
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<TabId>("comments");
   const [recurringHistoryOpen, setRecurringHistoryOpen] = useState(false);
+  const [hideEmpty, setHideEmpty] = useState(true);
 
   // Inline title editing
   const [editingTitle, setEditingTitle] = useState(false);
@@ -336,10 +336,14 @@ export function TaskDetailPage() {
   }
 
   const currentStatus = statuses.find((s) => s.id === currentTask.status_id);
-  const category = currentStatus
-    ? statusCategoryConfig[currentStatus.category]
-    : null;
-  const pConfig = priorityConfig[currentTask.priority];
+
+  // Hide-empty helpers
+  const isEmpty = (v: unknown) =>
+    v === null || v === undefined || v === "" || (Array.isArray(v) && v.length === 0);
+  const showDueDate = !hideEmpty || !isEmpty(currentTask.due_date);
+  const showLabels = !hideEmpty || (currentTask.labels ?? []).length > 0;
+  const showHours = !hideEmpty || currentTask.estimated_hours != null;
+  const showVcsLinks = !hideEmpty || (currentTask.vcs_link_count ?? 0) > 0;
 
   return (
     <div className="mx-auto max-w-6xl space-y-6 px-4">
@@ -498,8 +502,15 @@ export function TaskDetailPage() {
         {/* Right side panel: 1/3 */}
         <div>
           <Card>
-            <CardHeader className="pb-3">
+            <CardHeader className="flex flex-row items-center justify-between pb-3">
               <CardTitle className="text-sm">Task Properties</CardTitle>
+              <button
+                type="button"
+                className="text-[10px] text-muted-foreground hover:text-foreground transition-colors"
+                onClick={() => setHideEmpty((v) => !v)}
+              >
+                {hideEmpty ? "Show empty" : "Hide empty"}
+              </button>
             </CardHeader>
             <CardContent className="space-y-2.5">
               {/* Project */}
@@ -548,11 +559,6 @@ export function TaskDetailPage() {
                         </option>
                       ))}
                   </Select>
-                  {category && (
-                    <Badge variant="secondary" className="shrink-0 text-[10px]">
-                      {category.label}
-                    </Badge>
-                  )}
                 </div>
               </div>
 
@@ -580,12 +586,6 @@ export function TaskDetailPage() {
                       );
                     })}
                   </Select>
-                  <Badge
-                    variant="outline"
-                    className={cn("shrink-0 text-[10px]", pConfig.color)}
-                  >
-                    {pConfig.label}
-                  </Badge>
                 </div>
               </div>
 
@@ -632,72 +632,96 @@ export function TaskDetailPage() {
               <Separator />
 
               {/* Due date */}
+              {showDueDate && (
+                <div className="flex items-center gap-3">
+                  <label className="w-24 shrink-0 text-xs font-medium text-muted-foreground">
+                    Due Date
+                  </label>
+                  <div className="flex-1">
+                    <DatePickerPopover
+                      value={
+                        currentTask.due_date
+                          ? toDateTimeLocal(currentTask.due_date)
+                          : null
+                      }
+                      onChange={(val) => void handleDueDateChange(val ?? "")}
+                      includeTime
+                      placeholder="Set due date"
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* Created / Updated */}
+              <div className="flex items-center gap-3">
+                <label className="flex w-24 shrink-0 items-center gap-1 text-xs font-medium text-muted-foreground">
+                  <Clock className="h-3 w-3" />
+                  Created
+                </label>
+                <span className="text-xs text-muted-foreground">
+                  {formatDate(currentTask.created_at)}
+                </span>
+              </div>
+
               <div className="flex items-center gap-3">
                 <label className="w-24 shrink-0 text-xs font-medium text-muted-foreground">
-                  Due Date
+                  Updated
                 </label>
-                <div className="flex-1">
-                  <DatePickerPopover
-                    value={
-                      currentTask.due_date
-                        ? toDateTimeLocal(currentTask.due_date)
-                        : null
-                    }
-                    onChange={(val) => void handleDueDateChange(val ?? "")}
-                    includeTime
-                    placeholder="Set due date"
-                  />
-                </div>
+                <span className="text-xs text-muted-foreground">
+                  {formatRelative(currentTask.updated_at)}
+                </span>
               </div>
 
               <Separator />
 
               {/* Labels */}
-              <div className="flex items-start gap-3">
-                <label className="flex w-24 shrink-0 items-center gap-1 pt-0.5 text-xs font-medium text-muted-foreground">
-                  <Tag className="h-3 w-3" />
-                  Labels
-                </label>
-                <div className="flex flex-1 flex-wrap items-center gap-1">
-                  {(currentTask.labels ?? []).map((label) => (
-                    <Badge
-                      key={label}
-                      variant="secondary"
-                      className="cursor-pointer gap-1 text-xs hover:bg-destructive/20"
-                      onClick={() => void handleRemoveLabel(label)}
-                      title="Click to remove"
-                    >
-                      {label}
-                      <X className="h-2.5 w-2.5" />
-                    </Badge>
-                  ))}
-                  {addingLabel ? (
-                    <Input
-                      ref={labelInputRef}
-                      value={labelDraft}
-                      onChange={(e) => setLabelDraft(e.target.value)}
-                      onBlur={() => void handleAddLabel()}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") void handleAddLabel();
-                        if (e.key === "Escape") {
-                          setAddingLabel(false);
-                          setLabelDraft("");
-                        }
-                      }}
-                      className="h-6 w-24 px-1.5 text-xs"
-                      placeholder="Label..."
-                    />
-                  ) : (
-                    <button
-                      type="button"
-                      className="rounded border border-dashed border-border px-1.5 py-0.5 text-xs text-muted-foreground hover:border-primary hover:text-foreground"
-                      onClick={() => setAddingLabel(true)}
-                    >
-                      + Add
-                    </button>
-                  )}
+              {showLabels && (
+                <div className="flex items-start gap-3">
+                  <label className="flex w-24 shrink-0 items-center gap-1 pt-0.5 text-xs font-medium text-muted-foreground">
+                    <Tag className="h-3 w-3" />
+                    Labels
+                  </label>
+                  <div className="flex flex-1 flex-wrap items-center gap-1">
+                    {(currentTask.labels ?? []).map((label) => (
+                      <Badge
+                        key={label}
+                        variant="secondary"
+                        className="cursor-pointer gap-1 text-xs hover:bg-destructive/20"
+                        onClick={() => void handleRemoveLabel(label)}
+                        title="Click to remove"
+                      >
+                        {label}
+                        <X className="h-2.5 w-2.5" />
+                      </Badge>
+                    ))}
+                    {addingLabel ? (
+                      <Input
+                        ref={labelInputRef}
+                        value={labelDraft}
+                        onChange={(e) => setLabelDraft(e.target.value)}
+                        onBlur={() => void handleAddLabel()}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") void handleAddLabel();
+                          if (e.key === "Escape") {
+                            setAddingLabel(false);
+                            setLabelDraft("");
+                          }
+                        }}
+                        className="h-6 w-24 px-1.5 text-xs"
+                        placeholder="Label..."
+                      />
+                    ) : (
+                      <button
+                        type="button"
+                        className="rounded border border-dashed border-border px-1.5 py-0.5 text-xs text-muted-foreground hover:border-primary hover:text-foreground"
+                        onClick={() => setAddingLabel(true)}
+                      >
+                        + Add
+                      </button>
+                    )}
+                  </div>
                 </div>
-              </div>
+              )}
 
               {/* Custom Fields */}
               {customFieldDefs.length > 0 && (
@@ -710,31 +734,35 @@ export function TaskDetailPage() {
                     </p>
                     {[...customFieldDefs]
                       .sort((a, b) => a.position - b.position)
-                      .map((field) => (
-                        <div key={field.id} className="flex items-center gap-3">
-                          <label className="w-24 shrink-0 text-xs text-muted-foreground">
-                            {field.name}
-                            {field.is_required && (
-                              <span className="ml-0.5 text-destructive">*</span>
-                            )}
-                          </label>
-                          <div className="flex-1">
-                            <CustomFieldRenderer
-                              field={field}
-                              value={currentTask.custom_fields?.[field.slug]}
-                              onChange={(val) =>
-                                void handleCustomFieldChange(field.slug, val)
-                              }
-                            />
+                      .map((field) => {
+                        const cfValue = currentTask.custom_fields?.[field.slug];
+                        if (hideEmpty && isEmpty(cfValue)) return null;
+                        return (
+                          <div key={field.id} className="flex items-center gap-3">
+                            <label className="w-24 shrink-0 text-xs text-muted-foreground">
+                              {field.name}
+                              {field.is_required && (
+                                <span className="ml-0.5 text-destructive">*</span>
+                              )}
+                            </label>
+                            <div className="flex-1">
+                              <CustomFieldRenderer
+                                field={field}
+                                value={cfValue}
+                                onChange={(val) =>
+                                  void handleCustomFieldChange(field.slug, val)
+                                }
+                              />
+                            </div>
                           </div>
-                        </div>
-                      ))}
+                        );
+                      })}
                   </div>
                 </>
               )}
 
               {/* Estimated hours */}
-              {currentTask.estimated_hours != null && (
+              {showHours && currentTask.estimated_hours != null && (
                 <>
                   <Separator />
                   <div className="flex items-center gap-3">
@@ -785,32 +813,13 @@ export function TaskDetailPage() {
                 );
               })()}
 
-              <Separator />
-
               {/* VCS Links */}
-              <VCSLinks taskId={currentTask.id} />
-
-              <Separator />
-
-              {/* Created / Updated */}
-              <div className="flex items-center gap-3">
-                <label className="flex w-24 shrink-0 items-center gap-1 text-xs font-medium text-muted-foreground">
-                  <Clock className="h-3 w-3" />
-                  Created
-                </label>
-                <span className="text-xs text-muted-foreground">
-                  {formatDate(currentTask.created_at)}
-                </span>
-              </div>
-
-              <div className="flex items-center gap-3">
-                <label className="w-24 shrink-0 text-xs font-medium text-muted-foreground">
-                  Updated
-                </label>
-                <span className="text-xs text-muted-foreground">
-                  {formatRelative(currentTask.updated_at)}
-                </span>
-              </div>
+              {showVcsLinks && (
+                <>
+                  <Separator />
+                  <VCSLinks taskId={currentTask.id} />
+                </>
+              )}
             </CardContent>
           </Card>
         </div>
