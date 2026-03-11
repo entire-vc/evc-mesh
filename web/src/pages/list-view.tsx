@@ -610,8 +610,13 @@ export function ListViewPage() {
     [editingCell],
   );
 
+  // Sync current state to saved-view store
+  const { pendingView, clearPendingView, setCurrentViewState } = useSavedViewStore();
+  useEffect(() => {
+    setCurrentViewState({ sortBy: sortField, sortOrder: sortDir });
+  }, [sortField, sortDir, setCurrentViewState]);
+
   // Listen for saved view applied from ViewTabBar
-  const { pendingView, clearPendingView } = useSavedViewStore();
   useEffect(() => {
     if (pendingView && pendingView.view_type === "list") {
       if (pendingView.sort_by) {

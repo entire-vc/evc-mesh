@@ -6,6 +6,13 @@ import type {
   UpdateSavedViewRequest,
 } from "@/types";
 
+interface CurrentViewState {
+  filters?: Record<string, unknown>;
+  sortBy?: string;
+  sortOrder?: string;
+  columns?: string[];
+}
+
 interface SavedViewState {
   views: SavedView[];
   isLoading: boolean;
@@ -16,6 +23,10 @@ interface SavedViewState {
   clearPendingView: () => void;
   /** ViewTabBar calls this to signal a view was selected */
   applyView: (view: SavedView) => void;
+
+  /** Pages write their current filter/sort state here so ViewTabBar can save it */
+  currentViewState: CurrentViewState;
+  setCurrentViewState: (state: CurrentViewState) => void;
 
   fetchViews: (projectId: string) => Promise<void>;
   createView: (
@@ -35,6 +46,8 @@ export const useSavedViewStore = create<SavedViewState>((set) => ({
   pendingView: null,
   clearPendingView: () => set({ pendingView: null }),
   applyView: (view: SavedView) => set({ pendingView: view }),
+  currentViewState: {},
+  setCurrentViewState: (state) => set({ currentViewState: state }),
 
   fetchViews: async (projectId: string) => {
     set({ isLoading: true });

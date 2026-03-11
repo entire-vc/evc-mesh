@@ -519,8 +519,13 @@ export function CalendarPage() {
     setSlideOverTaskId(task.id);
   }, []);
 
+  // Sync current state to saved-view store
+  const { pendingView, clearPendingView, setCurrentViewState } = useSavedViewStore();
+  useEffect(() => {
+    setCurrentViewState({ filters: { search: searchQuery } });
+  }, [searchQuery, setCurrentViewState]);
+
   // Listen for saved view applied from ViewTabBar
-  const { pendingView, clearPendingView } = useSavedViewStore();
   useEffect(() => {
     if (pendingView && pendingView.view_type === "calendar") {
       if (pendingView.filters) {

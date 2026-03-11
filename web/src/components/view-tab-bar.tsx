@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router";
 import {
   Bookmark,
@@ -20,6 +20,14 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { useSavedViewStore } from "@/stores/saved-view-store";
 import { toast } from "@/components/ui/toast";
 import type { ViewType } from "@/types";
@@ -30,8 +38,6 @@ interface ViewTabBarProps {
   projectSlug: string;
   projectId?: string;
   className?: string;
-  /** Callback to open the "save current view" dialog from the page */
-  onSaveView?: () => void;
 }
 
 const TABS = [
@@ -74,11 +80,22 @@ export function ViewTabBar({
   projectSlug,
   projectId,
   className,
-  onSaveView,
 }: ViewTabBarProps) {
   const navigate = useNavigate();
-  const { views, fetchViews, applyView, updateView, deleteView } =
-    useSavedViewStore();
+  const {
+    views,
+    fetchViews,
+    createView,
+    applyView,
+    updateView,
+    deleteView,
+    currentViewState,
+  } = useSavedViewStore();
+
+  const [saveDialogOpen, setSaveDialogOpen] = useState(false);
+  const [saveName, setSaveName] = useState("");
+  const [saveIsShared, setSaveIsShared] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
 
   useEffect(() => {
     if (projectId) {
@@ -93,7 +110,6 @@ export function ViewTabBar({
   const hasViews = relevantViews.length > 0;
 
   const handleApply = (view: import("@/types").SavedView) => {
-    // Navigate to the correct view type if needed
     const targetPath = VIEW_TYPE_PATH[view.view_type];
     if (targetPath && view.view_type !== currentView) {
       navigate(targetPath(wsSlug, projectSlug));
@@ -120,70 +136,83 @@ export function ViewTabBar({
     }
   };
 
+  const handleSave = async () => {
+    if (!saveName.trim() || !projectId) return;
+    setIsSaving(true);
+    try {
+      await createView(projectId, {
+        name: saveName.trim(),
+        view_type: currentView,
+        filters: currentViewState.filters,
+        sort_by: currentViewState.sortBy,
+        sort_order: currentViewState.sortOrder,
+        columns: currentViewState.columns,
+        is_shared: saveIsShared,
+      });
+      toast("View saved");
+      setSaveDialogOpen(false);
+      setSaveName("");
+      setSaveIsShared(false);
+    } catch {
+      toast("Failed to save view");
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
   return (
-    <div className={cn("flex items-center gap-0", className)}>
-      {TABS.map(({ id, label, Icon, path }) => {
-        const isActive = currentView === id;
-        return (
-          <button
-            key={id}
-            onClick={() => {
-              if (!isActive) {
-                navigate(path(wsSlug, projectSlug));
-              }
-            }}
-            className={cn(
-              "flex h-9 items-center gap-1.5 border-b-2 px-1.5 sm:px-3 text-sm transition-colors",
-              isActive
-                ? "border-primary font-medium text-foreground"
-                : "border-transparent font-normal text-muted-foreground hover:text-foreground",
-            )}
-            aria-current={isActive ? "page" : undefined}
-          >
-            <Icon className="h-3.5 w-3.5" />
-            <span className="hidden sm:inline">{label}</span>
-          </button>
-        );
-      })}
-
-      {/* View options + Saved Views menu */}
-      <div className="ml-1 flex items-center border-l border-border pl-1">
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
+    <>
+      <div className={cn("flex items-center gap-0", className)}>
+        {TABS.map(({ id, label, Icon, path }) => {
+          const isActive = currentView === id;
+          return (
             <button
-              className="flex h-7 w-7 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
-              title="Views & options"
+              key={id}
+              onClick={() => {
+                if (!isActive) {
+                  navigate(path(wsSlug, projectSlug));
+                }
+              }}
+              className={cn(
+                "flex h-9 items-center gap-1.5 border-b-2 px-1.5 sm:px-3 text-sm transition-colors",
+                isActive
+                  ? "border-primary font-medium text-foreground"
+                  : "border-transparent font-normal text-muted-foreground hover:text-foreground",
+              )}
+              aria-current={isActive ? "page" : undefined}
             >
-              <MoreVertical className="h-3.5 w-3.5" />
+              <Icon className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">{label}</span>
             </button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="w-56">
-            {/* View type switcher */}
-            {TABS.map(({ id, label, Icon, path }) => (
-              <DropdownMenuItem
-                key={id}
-                onClick={() => navigate(path(wsSlug, projectSlug))}
-                className={cn(currentView === id && "font-medium")}
-              >
-                <Icon className="mr-2 h-3.5 w-3.5" />
-                {label}
-              </DropdownMenuItem>
-            ))}
+          );
+        })}
 
-            {/* Saved Views section */}
-            {projectId && (
-              <>
-                <DropdownMenuSeparator />
+        {/* Saved Views menu */}
+        {projectId && (
+          <div className="ml-1 flex items-center border-l border-border pl-1">
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  className="flex h-7 w-7 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
+                  title="Saved views"
+                >
+                  <MoreVertical className="h-3.5 w-3.5" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className="w-56">
+                {/* Save current view */}
+                <DropdownMenuItem
+                  onClick={() => setSaveDialogOpen(true)}
+                  className="gap-2"
+                >
+                  <BookmarkPlus className="h-3.5 w-3.5" />
+                  Save current view
+                </DropdownMenuItem>
 
-                {onSaveView && (
-                  <DropdownMenuItem onClick={onSaveView} className="gap-2">
-                    <BookmarkPlus className="h-3.5 w-3.5" />
-                    Save current view
-                  </DropdownMenuItem>
-                )}
-
+                {/* Personal views */}
                 {personalViews.length > 0 && (
                   <>
+                    <DropdownMenuSeparator />
                     <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-muted-foreground">
                       My views
                     </DropdownMenuLabel>
@@ -199,8 +228,10 @@ export function ViewTabBar({
                   </>
                 )}
 
+                {/* Shared views */}
                 {sharedViews.length > 0 && (
                   <>
+                    <DropdownMenuSeparator />
                     <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-muted-foreground">
                       Shared views
                     </DropdownMenuLabel>
@@ -216,17 +247,69 @@ export function ViewTabBar({
                   </>
                 )}
 
-                {!hasViews && !onSaveView && (
+                {!hasViews && (
                   <div className="px-2 py-2 text-center text-xs text-muted-foreground">
-                    No saved views
+                    No saved views yet
                   </div>
                 )}
-              </>
-            )}
-          </DropdownMenuContent>
-        </DropdownMenu>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+        )}
       </div>
-    </div>
+
+      {/* Save view dialog */}
+      <Dialog open={saveDialogOpen} onOpenChange={setSaveDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Save current view</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 p-4">
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">View name</label>
+              <Input
+                value={saveName}
+                onChange={(e) => setSaveName(e.target.value)}
+                placeholder="e.g. My open tasks"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && saveName.trim()) {
+                    void handleSave();
+                  }
+                }}
+                autoFocus
+              />
+            </div>
+
+            <label className="flex cursor-pointer items-center gap-2">
+              <input
+                type="checkbox"
+                className="h-4 w-4 rounded border-input"
+                checked={saveIsShared}
+                onChange={(e) => setSaveIsShared(e.target.checked)}
+              />
+              <span className="text-sm">Share with team members</span>
+            </label>
+
+            <div className="flex justify-end gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setSaveDialogOpen(false)}
+              >
+                Cancel
+              </Button>
+              <Button
+                size="sm"
+                onClick={() => void handleSave()}
+                disabled={!saveName.trim() || isSaving}
+              >
+                {isSaving ? "Saving..." : "Save view"}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
 

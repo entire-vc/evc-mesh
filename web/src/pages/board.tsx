@@ -595,8 +595,20 @@ export function BoardPage() {
 
   // ----- New task helpers -----
 
+  // Sync current filter state to saved-view store (so ViewTabBar can save it)
+  const { pendingView, clearPendingView, setCurrentViewState } = useSavedViewStore();
+  useEffect(() => {
+    setCurrentViewState({
+      filters: {
+        search: searchQuery,
+        priority: priorityFilter,
+        assignee: assigneeFilter,
+        custom_fields: customFieldFilters,
+      },
+    });
+  }, [searchQuery, priorityFilter, assigneeFilter, customFieldFilters, setCurrentViewState]);
+
   // Listen for saved view applied from ViewTabBar
-  const { pendingView, clearPendingView } = useSavedViewStore();
   useEffect(() => {
     if (pendingView && pendingView.view_type === "board") {
       const filters = pendingView.filters ?? {};
