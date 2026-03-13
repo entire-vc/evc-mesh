@@ -282,7 +282,7 @@ function WsAssigneeSelect({
   );
 }
 
-const PRIORITIES = ["critical", "urgent", "high", "medium", "low"];
+const PRIORITIES = ["urgent", "high", "medium", "low", "none"];
 
 function AssignmentRulesEditor({
   initialConfig,
