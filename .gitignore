@@ -35,6 +35,10 @@ vendor/
 !.env.prod.example
 !.env.development
 
+# Claude Code
+.claude/
+CLAUDE.md
+
 # IDE
 .idea/
 .vscode/
