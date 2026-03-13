@@ -176,6 +176,13 @@ func (h *TaskHandler) Create(c echo.Context) error {
 		return handleError(c, err)
 	}
 
+	// Re-fetch the created task to populate computed fields (assignee_name,
+	// subtask_count, etc.) — especially important after auto-assign so the
+	// frontend sees the assigned agent/user name immediately.
+	if enriched, err := h.taskService.GetByID(c.Request().Context(), task.ID); err == nil && enriched != nil {
+		return c.JSON(http.StatusCreated, enriched)
+	}
+
 	return c.JSON(http.StatusCreated, task)
 }
 

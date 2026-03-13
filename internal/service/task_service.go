@@ -704,9 +704,15 @@ func (s *taskService) applyAutoAssign(ctx context.Context, task *domain.Task) {
 		candidates = append(candidates, effective.DefaultAssignee.Value)
 	}
 
-	// 4. Fallback to first in fallback_chain
+	// 4. Fallback chain — try all entries in order.
 	if len(effective.FallbackChain) > 0 {
-		candidates = append(candidates, effective.FallbackChain[0])
+		candidates = append(candidates, effective.FallbackChain...)
+	}
+
+	if len(candidates) == 0 {
+		log.Printf("[auto-assign] no matching rules for task %q (project %s, priority %s, labels %v)",
+			task.Title, task.ProjectID, task.Priority, task.Labels)
+		return
 	}
 
 	// Try each candidate until one parses successfully.
