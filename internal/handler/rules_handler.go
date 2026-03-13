@@ -104,7 +104,7 @@ func (h *RulesHandler) SetWorkspaceAssignmentRules(c echo.Context) error {
 	if err := h.rulesSvc.SetWorkspaceAssignmentRules(c.Request().Context(), wsID, cfg); err != nil {
 		return handleError(c, err)
 	}
-	return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
+	return c.JSON(http.StatusOK, cfg)
 }
 
 // GetEffectiveAssignmentRules handles GET /projects/:proj_id/rules/assignment
@@ -136,7 +136,7 @@ func (h *RulesHandler) SetProjectAssignmentRules(c echo.Context) error {
 	if err := h.rulesSvc.SetProjectAssignmentRules(c.Request().Context(), projID, cfg); err != nil {
 		return handleError(c, err)
 	}
-	return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
+	return c.JSON(http.StatusOK, cfg)
 }
 
 // --------------------------------------------------------------------------

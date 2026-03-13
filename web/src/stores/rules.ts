@@ -122,11 +122,15 @@ export const useRulesStore = create<RulesState>((set) => ({
     workspaceId: string,
     config: AssignmentRulesConfig,
   ) => {
-    const updated = await api<AssignmentRulesConfig>(
+    await api<AssignmentRulesConfig>(
       `/api/v1/workspaces/${workspaceId}/rules/assignment`,
       { method: "PUT", body: config },
     );
-    set({ wsAssignmentRules: updated });
+    // Re-fetch to ensure store has the canonical saved config
+    const saved = await api<AssignmentRulesConfig>(
+      `/api/v1/workspaces/${workspaceId}/rules/assignment`,
+    );
+    set({ wsAssignmentRules: saved });
   },
 
   // Assignment Rules (project level, effective)

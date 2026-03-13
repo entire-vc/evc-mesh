@@ -540,6 +540,11 @@ func (s *taskService) CreateSubtask(ctx context.Context, parentTaskID uuid.UUID,
 		UpdatedAt:    now,
 	}
 
+	// Apply auto-assign rules if the subtask has no assignee.
+	if child.AssigneeType == domain.AssigneeTypeUnassigned || child.AssigneeType == "" {
+		s.applyAutoAssign(ctx, child)
+	}
+
 	// Auto-enroll creator agent into project members.
 	creatorID, creatorType := actorctx.FromContext(ctx)
 	if creatorType == domain.ActorTypeAgent && creatorID != uuid.Nil {
