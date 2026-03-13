@@ -234,6 +234,52 @@ interface AssignmentRulesEditorProps {
   initialConfig: AssignmentRulesConfig;
   onSave: (config: AssignmentRulesConfig) => Promise<void>;
   isSaving: boolean;
+  agents: TeamDirectoryAgent[];
+  members: WorkspaceMemberWithUser[];
+}
+
+function WsAssigneeSelect({
+  value,
+  onChange,
+  agents,
+  members,
+  placeholder = "Select assignee...",
+  className,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  agents: TeamDirectoryAgent[];
+  members: WorkspaceMemberWithUser[];
+  placeholder?: string;
+  className?: string;
+}) {
+  return (
+    <Select
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      className={className}
+    >
+      <option value="">{placeholder}</option>
+      {agents.length > 0 && (
+        <optgroup label="Agents">
+          {agents.map((a) => (
+            <option key={a.id} value={`agent:${a.id}`}>
+              {a.name}
+            </option>
+          ))}
+        </optgroup>
+      )}
+      {members.length > 0 && (
+        <optgroup label="Members">
+          {members.map((m) => (
+            <option key={m.user_id} value={`user:${m.user_id}`}>
+              {m.user.name} ({m.user.email})
+            </option>
+          ))}
+        </optgroup>
+      )}
+    </Select>
+  );
 }
 
 const PRIORITIES = ["critical", "urgent", "high", "medium", "low"];
@@ -242,6 +288,8 @@ function AssignmentRulesEditor({
   initialConfig,
   onSave,
   isSaving,
+  agents,
+  members,
 }: AssignmentRulesEditorProps) {
   const [defaultAssignee, setDefaultAssignee] = useState(
     initialConfig.default_assignee ?? "",
@@ -306,14 +354,13 @@ function AssignmentRulesEditor({
       {/* Default assignee */}
       <div className="space-y-1.5">
         <label className="text-sm font-medium">Default Assignee</label>
-        <Input
+        <WsAssigneeSelect
           value={defaultAssignee}
-          onChange={(e) => setDefaultAssignee(e.target.value)}
-          placeholder='e.g. agent:claude-code or user:alice or role:member'
+          onChange={setDefaultAssignee}
+          agents={agents}
+          members={members}
+          placeholder="None"
         />
-        <p className="text-xs text-muted-foreground">
-          Format: <code>agent:slug</code>, <code>user:email</code>, or <code>role:member</code>
-        </p>
       </div>
 
       {/* By type rules */}
@@ -353,16 +400,18 @@ function AssignmentRulesEditor({
                   className="flex-1"
                 />
                 <ArrowRight className="h-4 w-4 text-muted-foreground shrink-0" />
-                <Input
+                <WsAssigneeSelect
                   value={rule.assignee}
-                  onChange={(e) =>
+                  onChange={(val) =>
                     setByType((prev) =>
                       prev.map((r, idx) =>
-                        idx === i ? { ...r, assignee: e.target.value } : r,
+                        idx === i ? { ...r, assignee: val } : r,
                       ),
                     )
                   }
-                  placeholder="Assignee"
+                  agents={agents}
+                  members={members}
+                  placeholder="Select assignee..."
                   className="flex-1"
                 />
                 <Button
@@ -427,16 +476,18 @@ function AssignmentRulesEditor({
                   ))}
                 </Select>
                 <ArrowRight className="h-4 w-4 text-muted-foreground shrink-0" />
-                <Input
+                <WsAssigneeSelect
                   value={rule.assignee}
-                  onChange={(e) =>
+                  onChange={(val) =>
                     setByPriority((prev) =>
                       prev.map((r, idx) =>
-                        idx === i ? { ...r, assignee: e.target.value } : r,
+                        idx === i ? { ...r, assignee: val } : r,
                       ),
                     )
                   }
-                  placeholder="Assignee"
+                  agents={agents}
+                  members={members}
+                  placeholder="Select assignee..."
                   className="flex-1"
                 />
                 <Button
@@ -482,14 +533,16 @@ function AssignmentRulesEditor({
                 <span className="text-xs text-muted-foreground w-5 shrink-0">
                   {i + 1}.
                 </span>
-                <Input
+                <WsAssigneeSelect
                   value={val}
-                  onChange={(e) =>
+                  onChange={(v) =>
                     setFallbackChain((prev) =>
-                      prev.map((v, idx) => (idx === i ? e.target.value : v)),
+                      prev.map((old, idx) => (idx === i ? v : old)),
                     )
                   }
-                  placeholder="agent:slug or user:email"
+                  agents={agents}
+                  members={members}
+                  placeholder="Select assignee..."
                   className="flex-1"
                 />
                 <Button
@@ -1171,6 +1224,8 @@ export function WorkspaceSettingsPage() {
               initialConfig={wsAssignmentRules ?? {}}
               onSave={handleSaveWsRules}
               isSaving={isSavingRules}
+              agents={teamDirectory?.agents ?? []}
+              members={workspaceMembers}
             />
           )}
         </CardContent>
