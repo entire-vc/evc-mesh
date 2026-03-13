@@ -677,15 +677,27 @@ func (s *taskService) applyAutoAssign(ctx context.Context, task *domain.Task) {
 		return
 	}
 
-	parsed, err := uuid.Parse(assigneeID)
+	// Parse assignee value which may be prefixed with type ("agent:<uuid>" or "user:<uuid>")
+	// or a plain UUID (defaults to agent for backwards compatibility).
+	assigneeType := domain.AssigneeTypeAgent
+	rawID := assigneeID
+	if strings.HasPrefix(assigneeID, "agent:") {
+		rawID = strings.TrimPrefix(assigneeID, "agent:")
+		assigneeType = domain.AssigneeTypeAgent
+	} else if strings.HasPrefix(assigneeID, "user:") {
+		rawID = strings.TrimPrefix(assigneeID, "user:")
+		assigneeType = domain.AssigneeTypeUser
+	}
+
+	parsed, err := uuid.Parse(rawID)
 	if err != nil {
 		log.Printf("[auto-assign] WARNING: invalid assignee UUID %q in rules: %v", assigneeID, err)
 		return
 	}
 
 	task.AssigneeID = &parsed
-	task.AssigneeType = domain.AssigneeTypeAgent
-	log.Printf("[auto-assign] assigned task %q to agent %s via rules", task.Title, assigneeID)
+	task.AssigneeType = assigneeType
+	log.Printf("[auto-assign] assigned task %q to %s %s via rules", task.Title, assigneeType, rawID)
 }
 
 // buildTaskSnapshot creates a map representation of a task for webhook payloads.

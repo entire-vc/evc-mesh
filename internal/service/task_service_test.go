@@ -738,6 +738,72 @@ func TestTaskService_applyAutoAssign(t *testing.T) {
 			},
 			wantAssigned: false,
 		},
+		{
+			name: "prefixed agent:<uuid> format - assigns agent correctly",
+			rules: &domain.EffectiveAssignmentRules{
+				DefaultAssignee: &domain.EffectiveAssignmentRule{Value: "agent:" + agentIDStr.String(), Source: "project"},
+			},
+			task: &domain.Task{
+				ProjectID:    uuid.New(),
+				StatusID:     uuid.New(),
+				Title:        "Prefixed agent format",
+				Priority:     domain.PriorityMedium,
+				AssigneeType: domain.AssigneeTypeUnassigned,
+			},
+			wantAssigned:     true,
+			wantAssigneeID:   &agentIDStr,
+			wantAssigneeType: domain.AssigneeTypeAgent,
+		},
+		{
+			name: "prefixed user:<uuid> format - assigns user correctly",
+			rules: &domain.EffectiveAssignmentRules{
+				DefaultAssignee: &domain.EffectiveAssignmentRule{Value: "user:" + agentIDStr.String(), Source: "project"},
+			},
+			task: &domain.Task{
+				ProjectID:    uuid.New(),
+				StatusID:     uuid.New(),
+				Title:        "Prefixed user format",
+				Priority:     domain.PriorityMedium,
+				AssigneeType: domain.AssigneeTypeUnassigned,
+			},
+			wantAssigned:     true,
+			wantAssigneeID:   &agentIDStr,
+			wantAssigneeType: domain.AssigneeTypeUser,
+		},
+		{
+			name: "prefixed agent:<uuid> in by_priority - assigns correctly",
+			rules: &domain.EffectiveAssignmentRules{
+				ByPriority: map[string]domain.EffectiveAssignmentRule{
+					"urgent": {Value: "agent:" + agentIDStr.String(), Source: "project"},
+				},
+			},
+			task: &domain.Task{
+				ProjectID:    uuid.New(),
+				StatusID:     uuid.New(),
+				Title:        "Prefixed by_priority",
+				Priority:     domain.PriorityUrgent,
+				AssigneeType: domain.AssigneeTypeUnassigned,
+			},
+			wantAssigned:     true,
+			wantAssigneeID:   &agentIDStr,
+			wantAssigneeType: domain.AssigneeTypeAgent,
+		},
+		{
+			name: "prefixed user:<uuid> in fallback_chain - assigns user correctly",
+			rules: &domain.EffectiveAssignmentRules{
+				FallbackChain: []string{"user:" + agentIDStr2.String()},
+			},
+			task: &domain.Task{
+				ProjectID:    uuid.New(),
+				StatusID:     uuid.New(),
+				Title:        "Prefixed fallback chain",
+				Priority:     domain.PriorityLow,
+				AssigneeType: domain.AssigneeTypeUnassigned,
+			},
+			wantAssigned:     true,
+			wantAssigneeID:   &agentIDStr2,
+			wantAssigneeType: domain.AssigneeTypeUser,
+		},
 	}
 
 	for _, tt := range tests {
