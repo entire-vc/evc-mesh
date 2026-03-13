@@ -641,7 +641,7 @@ func (s *taskService) GetMyTasks(ctx context.Context, assigneeID uuid.UUID, assi
 }
 
 // applyAutoAssign applies assignment rules to a task if no assignee is set.
-// It checks by_priority, default_assignee, then fallback_chain in order.
+// It checks by_type (labels), by_priority, default_assignee, then fallback_chain in order.
 // Failures are logged but never block task creation.
 func (s *taskService) applyAutoAssign(ctx context.Context, task *domain.Task) {
 	if s.rulesConfigSvc == nil {
@@ -654,50 +654,60 @@ func (s *taskService) applyAutoAssign(ctx context.Context, task *domain.Task) {
 		return
 	}
 
-	var assigneeID string
+	// Collect candidate assignee IDs in priority order.
+	// The first one that parses as a valid UUID wins.
+	var candidates []string
 
-	// 1. Check by_priority[task.priority]
-	if effective.ByPriority != nil {
-		if rule, ok := effective.ByPriority[string(task.Priority)]; ok && rule.Value != "" {
-			assigneeID = rule.Value
+	// 1. Check by_type — match task labels against type rules.
+	if len(effective.ByType) > 0 && len(task.Labels) > 0 {
+		for _, label := range task.Labels {
+			if rule, ok := effective.ByType[label]; ok && rule.Value != "" {
+				candidates = append(candidates, rule.Value)
+				break // first matching label wins
+			}
 		}
 	}
 
-	// 2. Fallback to default_assignee
-	if assigneeID == "" && effective.DefaultAssignee != nil && effective.DefaultAssignee.Value != "" {
-		assigneeID = effective.DefaultAssignee.Value
+	// 2. Check by_priority[task.priority]
+	if effective.ByPriority != nil {
+		if rule, ok := effective.ByPriority[string(task.Priority)]; ok && rule.Value != "" {
+			candidates = append(candidates, rule.Value)
+		}
 	}
 
-	// 3. Fallback to first in fallback_chain
-	if assigneeID == "" && len(effective.FallbackChain) > 0 {
-		assigneeID = effective.FallbackChain[0]
+	// 3. Fallback to default_assignee
+	if effective.DefaultAssignee != nil && effective.DefaultAssignee.Value != "" {
+		candidates = append(candidates, effective.DefaultAssignee.Value)
 	}
 
-	if assigneeID == "" {
+	// 4. Fallback to first in fallback_chain
+	if len(effective.FallbackChain) > 0 {
+		candidates = append(candidates, effective.FallbackChain[0])
+	}
+
+	// Try each candidate until one parses successfully.
+	for _, assigneeID := range candidates {
+		assigneeType := domain.AssigneeTypeAgent
+		rawID := assigneeID
+		if strings.HasPrefix(assigneeID, "agent:") {
+			rawID = strings.TrimPrefix(assigneeID, "agent:")
+			assigneeType = domain.AssigneeTypeAgent
+		} else if strings.HasPrefix(assigneeID, "user:") {
+			rawID = strings.TrimPrefix(assigneeID, "user:")
+			assigneeType = domain.AssigneeTypeUser
+		}
+
+		parsed, err := uuid.Parse(rawID)
+		if err != nil {
+			log.Printf("[auto-assign] WARNING: invalid assignee UUID %q in rules, trying next candidate: %v", assigneeID, err)
+			continue
+		}
+
+		task.AssigneeID = &parsed
+		task.AssigneeType = assigneeType
+		log.Printf("[auto-assign] assigned task %q to %s %s via rules", task.Title, assigneeType, rawID)
 		return
 	}
-
-	// Parse assignee value which may be prefixed with type ("agent:<uuid>" or "user:<uuid>")
-	// or a plain UUID (defaults to agent for backwards compatibility).
-	assigneeType := domain.AssigneeTypeAgent
-	rawID := assigneeID
-	if strings.HasPrefix(assigneeID, "agent:") {
-		rawID = strings.TrimPrefix(assigneeID, "agent:")
-		assigneeType = domain.AssigneeTypeAgent
-	} else if strings.HasPrefix(assigneeID, "user:") {
-		rawID = strings.TrimPrefix(assigneeID, "user:")
-		assigneeType = domain.AssigneeTypeUser
-	}
-
-	parsed, err := uuid.Parse(rawID)
-	if err != nil {
-		log.Printf("[auto-assign] WARNING: invalid assignee UUID %q in rules: %v", assigneeID, err)
-		return
-	}
-
-	task.AssigneeID = &parsed
-	task.AssigneeType = assigneeType
-	log.Printf("[auto-assign] assigned task %q to %s %s via rules", task.Title, assigneeType, rawID)
 }
 
 // buildTaskSnapshot creates a map representation of a task for webhook payloads.

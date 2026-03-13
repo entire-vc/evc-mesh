@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -687,7 +688,7 @@ func TestTaskService_applyAutoAssign(t *testing.T) {
 			wantAssigneeType: domain.AssigneeTypeAgent,
 		},
 		{
-			name: "rules with invalid UUID in by_priority - silently skips, falls back to default",
+			name: "rules with invalid UUID in by_priority - falls back to default_assignee",
 			rules: &domain.EffectiveAssignmentRules{
 				ByPriority: map[string]domain.EffectiveAssignmentRule{
 					"high": {Value: "not-a-uuid", Source: "workspace"},
@@ -701,10 +702,9 @@ func TestTaskService_applyAutoAssign(t *testing.T) {
 				Priority:     domain.PriorityHigh,
 				AssigneeType: domain.AssigneeTypeUnassigned,
 			},
-			// The invalid UUID in by_priority causes applyAutoAssign to log and return
-			// early without assigning, so the task stays unassigned despite default_assignee.
-			// This tests the current behaviour: invalid UUID in ANY selected rule = no assign.
-			wantAssigned: false,
+			wantAssigned:     true,
+			wantAssigneeID:   &agentIDStr2,
+			wantAssigneeType: domain.AssigneeTypeAgent,
 		},
 		{
 			name: "task already has assignee - skipped by Create guard",
@@ -737,6 +737,89 @@ func TestTaskService_applyAutoAssign(t *testing.T) {
 				AssigneeType: domain.AssigneeTypeUnassigned,
 			},
 			wantAssigned: false,
+		},
+		{
+			name: "by_type match via label - assigns the mapped agent",
+			rules: &domain.EffectiveAssignmentRules{
+				ByType: map[string]domain.EffectiveAssignmentRule{
+					"bug": {Value: agentIDStr.String(), Source: "project"},
+				},
+				DefaultAssignee: &domain.EffectiveAssignmentRule{Value: agentIDStr2.String(), Source: "workspace"},
+			},
+			task: &domain.Task{
+				ProjectID:    uuid.New(),
+				StatusID:     uuid.New(),
+				Title:        "Bug task with label",
+				Priority:     domain.PriorityMedium,
+				Labels:       pq.StringArray{"bug", "frontend"},
+				AssigneeType: domain.AssigneeTypeUnassigned,
+			},
+			wantAssigned:     true,
+			wantAssigneeID:   &agentIDStr,
+			wantAssigneeType: domain.AssigneeTypeAgent,
+		},
+		{
+			name: "by_type no label match - falls back to by_priority",
+			rules: &domain.EffectiveAssignmentRules{
+				ByType: map[string]domain.EffectiveAssignmentRule{
+					"bug": {Value: agentIDStr.String(), Source: "project"},
+				},
+				ByPriority: map[string]domain.EffectiveAssignmentRule{
+					"high": {Value: agentIDStr2.String(), Source: "workspace"},
+				},
+			},
+			task: &domain.Task{
+				ProjectID:    uuid.New(),
+				StatusID:     uuid.New(),
+				Title:        "Feature task with no matching label",
+				Priority:     domain.PriorityHigh,
+				Labels:       pq.StringArray{"feature"},
+				AssigneeType: domain.AssigneeTypeUnassigned,
+			},
+			wantAssigned:     true,
+			wantAssigneeID:   &agentIDStr2,
+			wantAssigneeType: domain.AssigneeTypeAgent,
+		},
+		{
+			name: "by_type takes precedence over by_priority when label matches",
+			rules: &domain.EffectiveAssignmentRules{
+				ByType: map[string]domain.EffectiveAssignmentRule{
+					"bug": {Value: agentIDStr.String(), Source: "project"},
+				},
+				ByPriority: map[string]domain.EffectiveAssignmentRule{
+					"high": {Value: agentIDStr2.String(), Source: "workspace"},
+				},
+			},
+			task: &domain.Task{
+				ProjectID:    uuid.New(),
+				StatusID:     uuid.New(),
+				Title:        "High priority bug",
+				Priority:     domain.PriorityHigh,
+				Labels:       pq.StringArray{"bug"},
+				AssigneeType: domain.AssigneeTypeUnassigned,
+			},
+			wantAssigned:     true,
+			wantAssigneeID:   &agentIDStr,
+			wantAssigneeType: domain.AssigneeTypeAgent,
+		},
+		{
+			name: "by_type with prefixed agent:<uuid> format",
+			rules: &domain.EffectiveAssignmentRules{
+				ByType: map[string]domain.EffectiveAssignmentRule{
+					"security": {Value: "agent:" + agentIDStr.String(), Source: "project"},
+				},
+			},
+			task: &domain.Task{
+				ProjectID:    uuid.New(),
+				StatusID:     uuid.New(),
+				Title:        "Security task",
+				Priority:     domain.PriorityMedium,
+				Labels:       pq.StringArray{"security"},
+				AssigneeType: domain.AssigneeTypeUnassigned,
+			},
+			wantAssigned:     true,
+			wantAssigneeID:   &agentIDStr,
+			wantAssigneeType: domain.AssigneeTypeAgent,
 		},
 		{
 			name: "prefixed agent:<uuid> format - assigns agent correctly",
