@@ -520,6 +520,11 @@ func (h *TaskHandler) CreateSubtask(c echo.Context) error {
 		return handleError(c, err)
 	}
 
+	// Re-fetch to populate computed fields (assignee_name, etc.) after auto-assign.
+	if enriched, err := h.taskService.GetByID(c.Request().Context(), subtask.ID); err == nil && enriched != nil {
+		return c.JSON(http.StatusCreated, enriched)
+	}
+
 	return c.JSON(http.StatusCreated, subtask)
 }
 
