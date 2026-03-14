@@ -98,6 +98,9 @@ export function TaskDetailPage() {
   const [editingDescription, setEditingDescription] = useState(false);
   const [descriptionDraft, setDescriptionDraft] = useState("");
 
+  // Artifact refresh counter — increment to trigger ArtifactList re-fetch
+  const [artifactRefreshKey, setArtifactRefreshKey] = useState(0);
+
   // Label adding
   const [addingLabel, setAddingLabel] = useState(false);
   const [labelDraft, setLabelDraft] = useState("");
@@ -424,6 +427,9 @@ export function TaskDetailPage() {
                   projectId={currentTask.project_id}
                   placeholder="Add a description..."
                   rows={8}
+                  onArtifactUploaded={() =>
+                    setArtifactRefreshKey((k) => k + 1)
+                  }
                 />
                 <div className="flex gap-2">
                   <Button
@@ -493,7 +499,10 @@ export function TaskDetailPage() {
                 <SubtaskList taskId={currentTask.id} />
               )}
               {activeTab === "artifacts" && (
-                <ArtifactList taskId={currentTask.id} />
+                <ArtifactList
+                  taskId={currentTask.id}
+                  refreshKey={artifactRefreshKey}
+                />
               )}
             </div>
           </div>

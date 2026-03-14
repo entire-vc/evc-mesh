@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { type DragEvent, useCallback, useEffect, useRef, useState } from "react";
 import {
   Database,
   Download,
@@ -9,16 +9,20 @@ import {
   Link,
   Package,
   Trash2,
+  Upload,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { formatBytes, formatRelative } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { uploadArtifact } from "@/components/markdown-editor";
 import type { Artifact, ArtifactType, PaginatedResponse } from "@/types";
 
 interface ArtifactListProps {
   taskId: string;
+  /** Increment this counter from parent to trigger a re-fetch */
+  refreshKey?: number;
 }
 
 const artifactTypeIcons: Record<ArtifactType, typeof File> = {
@@ -41,11 +45,14 @@ const artifactTypeBadgeVariant: Record<ArtifactType, "default" | "secondary" | "
   data: "outline",
 };
 
-export function ArtifactList({ taskId }: ArtifactListProps) {
+export function ArtifactList({ taskId, refreshKey }: ArtifactListProps) {
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
   const [loading, setLoading] = useState(true);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const fetchArtifacts = useCallback(async () => {
     try {
@@ -62,7 +69,59 @@ export function ArtifactList({ taskId }: ArtifactListProps) {
 
   useEffect(() => {
     void fetchArtifacts();
-  }, [fetchArtifacts]);
+  }, [fetchArtifacts, refreshKey]);
+
+  // Upload files via drag-and-drop or file picker
+  const handleUploadFiles = useCallback(
+    async (files: File[]) => {
+      if (!files.length) return;
+      setUploading(true);
+      try {
+        for (const file of files) {
+          const artifact = await uploadArtifact(taskId, file);
+          setArtifacts((prev) => [...prev, artifact]);
+        }
+      } catch {
+        // error toast could go here
+      } finally {
+        setUploading(false);
+      }
+    },
+    [taskId],
+  );
+
+  const handleDragOver = useCallback((e: DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragOver(true);
+  }, []);
+
+  const handleDragLeave = useCallback((e: DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragOver(false);
+  }, []);
+
+  const handleDrop = useCallback(
+    async (e: DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      setDragOver(false);
+      const files = Array.from(e.dataTransfer.files);
+      await handleUploadFiles(files);
+    },
+    [handleUploadFiles],
+  );
+
+  const handleFileInputChange = useCallback(
+    async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const files = e.target.files;
+      if (!files?.length) return;
+      e.target.value = "";
+      await handleUploadFiles(Array.from(files));
+    },
+    [handleUploadFiles],
+  );
 
   const handleDownload = async (artifactId: string) => {
     setDownloadingId(artifactId);
@@ -110,11 +169,49 @@ export function ArtifactList({ taskId }: ArtifactListProps) {
     );
   }
 
+  // Upload zone (shared between empty and populated states)
+  const uploadZone = (
+    <div
+      className={`flex flex-col items-center rounded-lg border-2 border-dashed px-4 py-6 transition-colors ${
+        dragOver
+          ? "border-primary bg-primary/5"
+          : "border-border hover:border-muted-foreground/50"
+      }`}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={(e) => void handleDrop(e)}
+    >
+      <Upload className="mb-2 h-6 w-6 text-muted-foreground" />
+      <p className="text-sm text-muted-foreground">
+        {uploading ? "Uploading..." : "Drop files here or"}
+      </p>
+      {!uploading && (
+        <button
+          type="button"
+          className="mt-1 text-sm font-medium text-primary hover:underline"
+          onClick={() => fileInputRef.current?.click()}
+        >
+          browse files
+        </button>
+      )}
+      <input
+        ref={fileInputRef}
+        type="file"
+        multiple
+        className="hidden"
+        onChange={(e) => void handleFileInputChange(e)}
+      />
+    </div>
+  );
+
   if (artifacts.length === 0) {
     return (
-      <div className="flex flex-col items-center py-8 text-muted-foreground">
-        <Package className="mb-2 h-8 w-8" />
-        <p className="text-sm">No artifacts uploaded yet.</p>
+      <div className="space-y-3">
+        <div className="flex flex-col items-center py-4 text-muted-foreground">
+          <Package className="mb-2 h-8 w-8" />
+          <p className="text-sm">No artifacts uploaded yet.</p>
+        </div>
+        {uploadZone}
       </div>
     );
   }
@@ -172,6 +269,7 @@ export function ArtifactList({ taskId }: ArtifactListProps) {
           </div>
         );
       })}
+      {uploadZone}
     </div>
   );
 }
