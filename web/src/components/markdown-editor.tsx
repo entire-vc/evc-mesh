@@ -142,6 +142,10 @@ export function MarkdownEditor({
   const [uploading, setUploading] = useState(false);
   const [dragOver, setDragOver] = useState(false);
 
+  // Keep a ref to the latest value so async upload callbacks don't use stale closures
+  const valueRef = useRef(value);
+  valueRef.current = value;
+
   // Combined callback for upload notifications
   const notifyUploaded = useCallback(
     (artifact: Artifact) => {
@@ -235,12 +239,11 @@ export function MarkdownEditor({
           const artifact = await uploadArtifact(taskId, renamedFile);
           const imageUrl = artifact.storage_url;
           const finalMd = `![${fileName}](${imageUrl})`;
-          onChange(value.replace(placeholder, finalMd));
+          onChange(valueRef.current.replace(placeholder, finalMd));
           notifyUploaded(artifact);
         } catch (err) {
-          // Replace placeholder with error note
           onChange(
-            value.replace(
+            valueRef.current.replace(
               placeholder,
               `<!-- image upload failed: ${err instanceof Error ? err.message : "unknown error"} -->`,
             ),
@@ -255,7 +258,7 @@ export function MarkdownEditor({
         onPendingImage?.({ file: renamedFile, placeholder });
       }
     },
-    [taskId, value, onChange, insertText, notifyUploaded, onPendingImage],
+    [taskId, onChange, insertText, notifyUploaded, onPendingImage],
   );
 
   // ---------------------------------------------------------------------------
@@ -294,11 +297,11 @@ export function MarkdownEditor({
         const finalMd = image
           ? `![${file.name}](${url})`
           : `[${file.name}](${url})`;
-        onChange(value.replace(placeholder, finalMd));
+        onChange(valueRef.current.replace(placeholder, finalMd));
         notifyUploaded(artifact);
       } catch (err) {
         onChange(
-          value.replace(
+          valueRef.current.replace(
             placeholder,
             `<!-- upload failed: ${err instanceof Error ? err.message : "unknown error"} -->`,
           ),
@@ -307,15 +310,16 @@ export function MarkdownEditor({
         setUploading(false);
       }
     },
-    [taskId, value, onChange, insertText, notifyUploaded, onPendingImage],
+    [taskId, onChange, insertText, notifyUploaded, onPendingImage],
   );
 
   const handleFileChange = useCallback(
     async (e: React.ChangeEvent<HTMLInputElement>) => {
-      const files = e.target.files;
-      if (!files?.length) return;
-      e.target.value = ""; // reset so same file can be re-selected
-      for (const file of Array.from(files)) {
+      // Copy FileList into array BEFORE resetting input — resetting clears the FileList
+      const fileList = Array.from(e.target.files ?? []);
+      if (!fileList.length) return;
+      e.target.value = "";
+      for (const file of fileList) {
         await handleUploadFile(file);
       }
     },

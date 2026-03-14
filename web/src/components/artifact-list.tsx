@@ -115,10 +115,11 @@ export function ArtifactList({ taskId, refreshKey }: ArtifactListProps) {
 
   const handleFileInputChange = useCallback(
     async (e: React.ChangeEvent<HTMLInputElement>) => {
-      const files = e.target.files;
-      if (!files?.length) return;
+      // Copy FileList into array BEFORE resetting input — resetting clears the FileList
+      const fileList = Array.from(e.target.files ?? []);
+      if (!fileList.length) return;
       e.target.value = "";
-      await handleUploadFiles(Array.from(files));
+      await handleUploadFiles(fileList);
     },
     [handleUploadFiles],
   );
