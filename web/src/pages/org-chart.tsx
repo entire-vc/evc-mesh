@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Bot, LayoutGrid, Network, Plus, User, UserPlus } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { agentStatusConfig, isAgentStale } from "@/lib/agent-utils";
@@ -15,7 +15,123 @@ import { InviteMemberDialog } from "@/components/invite-member-dialog";
 import type { Agent, OrgChartAgentNode, TeamDirectoryHuman } from "@/types";
 
 // ---------------------------------------------------------------------------
-// Agent card
+// Unified tree node — can be an agent or a human
+// ---------------------------------------------------------------------------
+
+interface UnifiedNode {
+  id: string;
+  type: "agent" | "human";
+  name: string;
+  children: UnifiedNode[];
+  agentData?: OrgChartAgentNode;
+  humanData?: TeamDirectoryHuman;
+}
+
+/**
+ * Build a single tree from agents and humans.
+ * - Agents with parent_agent_id nest under their parent agent.
+ * - Agents with supervisor_user_id nest under that human.
+ * - Humans that supervise at least one agent appear as tree nodes.
+ * - Remaining humans (no supervised agents) appear as standalone root nodes.
+ * - Root agents have neither parent_agent_id nor supervisor_user_id.
+ */
+function buildUnifiedTree(
+  agentTree: OrgChartAgentNode[],
+  humans: TeamDirectoryHuman[],
+): UnifiedNode[] {
+  // Flatten the backend agent tree to a flat list (backend already built a tree,
+  // but we rebuild from scratch to interleave humans).
+  function flattenAgents(nodes: OrgChartAgentNode[]): OrgChartAgentNode[] {
+    const result: OrgChartAgentNode[] = [];
+    for (const n of nodes) {
+      result.push(n);
+      if (n.children?.length > 0) {
+        result.push(...flattenAgents(n.children));
+      }
+    }
+    return result;
+  }
+
+  const allAgents = flattenAgents(agentTree);
+
+  // Maps for quick lookup
+  const agentNodeMap = new Map<string, UnifiedNode>();
+  const humanNodeMap = new Map<string, UnifiedNode>();
+
+  // Create unified nodes for all agents
+  for (const a of allAgents) {
+    agentNodeMap.set(a.id, {
+      id: a.id,
+      type: "agent",
+      name: a.name,
+      children: [],
+      agentData: { ...a, children: [] },
+    });
+  }
+
+  // Create unified nodes for all humans
+  for (const h of humans) {
+    humanNodeMap.set(h.id, {
+      id: h.id,
+      type: "human",
+      name: h.name,
+      children: [],
+      humanData: h,
+    });
+  }
+
+  // Build parent-child relationships
+  const childIds = new Set<string>();
+
+  for (const a of allAgents) {
+    const node = agentNodeMap.get(a.id)!;
+
+    if (a.supervisor_user_id) {
+      // Agent supervised by a human
+      const parentNode = humanNodeMap.get(a.supervisor_user_id);
+      if (parentNode) {
+        parentNode.children.push(node);
+        childIds.add(a.id);
+      }
+    } else if (a.parent_agent_id) {
+      // Agent parented by another agent
+      const parentNode = agentNodeMap.get(a.parent_agent_id);
+      if (parentNode) {
+        parentNode.children.push(node);
+        childIds.add(a.id);
+      }
+    }
+  }
+
+  // Collect root nodes: agents and humans not nested under anyone
+  const roots: UnifiedNode[] = [];
+
+  // Humans who have children (supervise agents) go first
+  for (const [, node] of humanNodeMap) {
+    if (node.children.length > 0) {
+      roots.push(node);
+    }
+  }
+
+  // Root agents (not nested under any parent)
+  for (const [id, node] of agentNodeMap) {
+    if (!childIds.has(id)) {
+      roots.push(node);
+    }
+  }
+
+  // Humans with no supervised agents go at the end
+  for (const [, node] of humanNodeMap) {
+    if (node.children.length === 0) {
+      roots.push(node);
+    }
+  }
+
+  return roots;
+}
+
+// ---------------------------------------------------------------------------
+// Card components
 // ---------------------------------------------------------------------------
 
 const statusBorderColors: Record<string, string> = {
@@ -94,13 +210,9 @@ function AgentCard({
   );
 }
 
-// ---------------------------------------------------------------------------
-// Human card
-// ---------------------------------------------------------------------------
-
 function HumanCard({ human }: { human: TeamDirectoryHuman }) {
   return (
-    <Card className="w-52 shrink-0 border-l-4 border-l-blue-400 hover:shadow-md transition-shadow">
+    <Card className="w-52 shrink-0 border-l-4 border-l-blue-400 hover:shadow-md transition-shadow cursor-default">
       <CardContent className="p-3 space-y-1.5">
         <div className="flex items-center gap-1.5 min-w-0">
           <User className="h-3.5 w-3.5 shrink-0 text-blue-400" />
@@ -132,48 +244,46 @@ function HumanCard({ human }: { human: TeamDirectoryHuman }) {
 }
 
 // ---------------------------------------------------------------------------
-// Tree node — top-down org chart with connector lines
+// Unified tree node renderer
 // ---------------------------------------------------------------------------
 
-function OrgTreeNode({
+function UnifiedTreeNodeView({
   node,
   onAgentClick,
 }: {
-  node: OrgChartAgentNode;
+  node: UnifiedNode;
   onAgentClick: (agentId: string) => void;
 }) {
-  const hasChildren = node.children && node.children.length > 0;
+  const hasChildren = node.children.length > 0;
 
   return (
     <div className="flex flex-col items-center">
       {/* Card */}
-      <AgentCard agent={node} onClick={() => onAgentClick(node.id)} />
+      {node.type === "agent" && node.agentData ? (
+        <AgentCard agent={node.agentData} onClick={() => onAgentClick(node.id)} />
+      ) : node.humanData ? (
+        <HumanCard human={node.humanData} />
+      ) : null}
 
       {/* Connector lines to children */}
       {hasChildren && (
         <>
-          {/* Vertical line down from card */}
           <div className="w-px h-6 bg-border" />
-
-          {/* Horizontal rail + vertical drops */}
           <div className="relative flex justify-center">
-            {/* Horizontal connector spanning all children */}
             {node.children.length > 1 && (
               <div
                 className="absolute top-0 h-px bg-border"
                 style={{
-                  left: `calc(${(100 / node.children.length) * 0.5}% )`,
-                  right: `calc(${(100 / node.children.length) * 0.5}% )`,
+                  left: `calc(${(100 / node.children.length) * 0.5}%)`,
+                  right: `calc(${(100 / node.children.length) * 0.5}%)`,
                 }}
               />
             )}
-
             <div className="flex gap-8">
               {node.children.map((child) => (
                 <div key={child.id} className="flex flex-col items-center">
-                  {/* Vertical line down to child */}
                   <div className="w-px h-6 bg-border" />
-                  <OrgTreeNode node={child} onAgentClick={onAgentClick} />
+                  <UnifiedTreeNodeView node={child} onAgentClick={onAgentClick} />
                 </div>
               ))}
             </div>
@@ -185,7 +295,7 @@ function OrgTreeNode({
 }
 
 // ---------------------------------------------------------------------------
-// Tree view — horizontal arrangement of root nodes
+// Tree view — unified hierarchy
 // ---------------------------------------------------------------------------
 
 function TreeView({
@@ -197,45 +307,28 @@ function TreeView({
   humans: TeamDirectoryHuman[];
   onAgentClick: (agentId: string) => void;
 }) {
-  return (
-    <div className="space-y-10">
-      {/* Agent tree */}
-      {agentTree.length > 0 ? (
-        <div>
-          <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-6">
-            Agents
-          </h3>
-          <div className="overflow-x-auto pb-4">
-            <div className="inline-flex gap-10 items-start">
-              {agentTree.map((root) => (
-                <OrgTreeNode key={root.id} node={root} onAgentClick={onAgentClick} />
-              ))}
-            </div>
-          </div>
-        </div>
-      ) : (
-        <p className="text-sm text-muted-foreground">No agents in workspace.</p>
-      )}
+  const unifiedRoots = useMemo(
+    () => buildUnifiedTree(agentTree, humans),
+    [agentTree, humans],
+  );
 
-      {/* Humans */}
-      {humans.length > 0 && (
-        <div>
-          <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-4">
-            Humans
-          </h3>
-          <div className="flex flex-wrap gap-4">
-            {humans.map((h) => (
-              <HumanCard key={h.id} human={h} />
-            ))}
-          </div>
-        </div>
-      )}
+  if (unifiedRoots.length === 0) {
+    return <p className="text-sm text-muted-foreground">No team members yet.</p>;
+  }
+
+  return (
+    <div className="overflow-x-auto pb-4">
+      <div className="inline-flex gap-10 items-start">
+        {unifiedRoots.map((root) => (
+          <UnifiedTreeNodeView key={root.id} node={root} onAgentClick={onAgentClick} />
+        ))}
+      </div>
     </div>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Grid view (grouped by project)
+// Grid view (grouped by project) — unified, no agent/human separation
 // ---------------------------------------------------------------------------
 
 function GridView({
@@ -247,7 +340,6 @@ function GridView({
   humans: TeamDirectoryHuman[];
   onAgentClick: (agentId: string) => void;
 }) {
-  // Flatten agent tree to a flat list.
   function flattenTree(nodes: OrgChartAgentNode[]): OrgChartAgentNode[] {
     const result: OrgChartAgentNode[] = [];
     for (const n of nodes) {
@@ -261,7 +353,6 @@ function GridView({
 
   const allAgents = flattenTree(agentTree);
 
-  // Collect all unique project names.
   const projectSet = new Set<string>();
   for (const a of allAgents) {
     for (const p of a.projects ?? []) projectSet.add(p);
@@ -271,7 +362,6 @@ function GridView({
   }
   const projects = Array.from(projectSet).sort();
 
-  // Agents and humans with no projects go into an "Unassigned" bucket.
   const unassignedAgents = allAgents.filter(
     (a) => !a.projects || a.projects.length === 0,
   );
@@ -296,11 +386,11 @@ function GridView({
               </span>
             </h3>
             <div className="flex flex-wrap gap-4">
-              {projectAgents.map((a) => (
-                <AgentCard key={a.id} agent={a} onClick={() => onAgentClick(a.id)} />
-              ))}
               {projectHumans.map((h) => (
                 <HumanCard key={h.id} human={h} />
+              ))}
+              {projectAgents.map((a) => (
+                <AgentCard key={a.id} agent={a} onClick={() => onAgentClick(a.id)} />
               ))}
             </div>
           </div>
@@ -317,11 +407,11 @@ function GridView({
             </span>
           </h3>
           <div className="flex flex-wrap gap-4">
-            {unassignedAgents.map((a) => (
-              <AgentCard key={a.id} agent={a} onClick={() => onAgentClick(a.id)} />
-            ))}
             {unassignedHumans.map((h) => (
               <HumanCard key={h.id} human={h} />
+            ))}
+            {unassignedAgents.map((a) => (
+              <AgentCard key={a.id} agent={a} onClick={() => onAgentClick(a.id)} />
             ))}
           </div>
         </div>
@@ -382,7 +472,6 @@ export function OrgChartPage() {
   const humans = orgChart?.humans ?? [];
   const workspaceName = orgChart?.workspace ?? currentWorkspace?.name ?? "";
 
-  // Find the full Agent object for the detail dialog (from agents store, not org chart tree)
   const selectedAgent: Agent | null = selectedAgentId
     ? agents.find((a) => a.id === selectedAgentId) ?? null
     : null;
@@ -403,7 +492,6 @@ export function OrgChartPage() {
         </div>
 
         <div className="flex items-center gap-2">
-          {/* Action buttons */}
           <Button
             variant="outline"
             size="sm"
@@ -423,7 +511,6 @@ export function OrgChartPage() {
             Invite Member
           </Button>
 
-          {/* View mode toggle */}
           <div className="flex items-center gap-1 rounded-lg border border-input bg-background p-1 ml-2">
             <button
               type="button"

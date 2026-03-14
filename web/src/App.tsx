@@ -8,7 +8,6 @@ import { BoardPage } from "@/pages/board";
 import { ListViewPage } from "@/pages/list-view";
 import { TaskDetailPage } from "@/pages/task-detail";
 import { ProjectSettingsPage } from "@/pages/project-settings";
-import { AgentDashboardPage } from "@/pages/agent-dashboard";
 import { EventFeedPage } from "@/pages/event-feed";
 import { TimelinePage } from "@/pages/timeline";
 import { SparkPage } from "@/pages/spark";
@@ -76,10 +75,6 @@ export function App() {
           {/* Index route is handled by AppLayout redirects — no element needed */}
           <Route index element={null} />
           <Route path="w/:wsSlug" element={<DashboardPage />} />
-          <Route
-            path="w/:wsSlug/agents"
-            element={<AgentDashboardPage />}
-          />
           <Route
             path="w/:wsSlug/org-chart"
             element={<OrgChartPage />}
