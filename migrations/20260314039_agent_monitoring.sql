@@ -1,9 +1,9 @@
 -- +goose Up
 
 -- Extend agents table with heartbeat detail fields
-ALTER TABLE agents ADD COLUMN IF NOT EXISTS heartbeat_status VARCHAR(20);
-ALTER TABLE agents ADD COLUMN IF NOT EXISTS heartbeat_message TEXT;
-ALTER TABLE agents ADD COLUMN IF NOT EXISTS heartbeat_metadata JSONB;
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS heartbeat_status VARCHAR(20) NOT NULL DEFAULT '';
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS heartbeat_message TEXT NOT NULL DEFAULT '';
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS heartbeat_metadata JSONB NOT NULL DEFAULT '{}';
 
 -- Index for staleness queries
 CREATE INDEX IF NOT EXISTS idx_agents_last_heartbeat
