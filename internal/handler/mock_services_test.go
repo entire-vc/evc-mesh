@@ -442,7 +442,9 @@ type MockAgentService struct {
 	UpdateFunc       func(ctx context.Context, agent *domain.Agent) error
 	DeleteFunc       func(ctx context.Context, id uuid.UUID) error
 	ListFunc         func(ctx context.Context, workspaceID uuid.UUID, filter repository.AgentFilter, pg pagination.Params) (*pagination.Page[domain.Agent], error)
-	HeartbeatFunc    func(ctx context.Context, agentID uuid.UUID) error
+	HeartbeatFunc        func(ctx context.Context, agentID uuid.UUID, input *service.HeartbeatInput) error
+	CreateActivityLogFunc func(ctx context.Context, entry *domain.AgentActivityLog) error
+	ListActivityLogFunc   func(ctx context.Context, agentID uuid.UUID, filter repository.AgentActivityLogFilter, pg pagination.Params) (*pagination.Page[domain.AgentActivityLog], error)
 	AuthenticateFunc func(ctx context.Context, workspaceSlug, apiKey string) (*domain.Agent, error)
 	RotateAPIKeyFunc func(ctx context.Context, agentID uuid.UUID) (string, error)
 }
@@ -482,11 +484,25 @@ func (m *MockAgentService) List(ctx context.Context, workspaceID uuid.UUID, filt
 	return nil, nil
 }
 
-func (m *MockAgentService) Heartbeat(ctx context.Context, agentID uuid.UUID) error {
+func (m *MockAgentService) Heartbeat(ctx context.Context, agentID uuid.UUID, input *service.HeartbeatInput) error {
 	if m.HeartbeatFunc != nil {
-		return m.HeartbeatFunc(ctx, agentID)
+		return m.HeartbeatFunc(ctx, agentID, input)
 	}
 	return nil
+}
+
+func (m *MockAgentService) CreateActivityLog(ctx context.Context, entry *domain.AgentActivityLog) error {
+	if m.CreateActivityLogFunc != nil {
+		return m.CreateActivityLogFunc(ctx, entry)
+	}
+	return nil
+}
+
+func (m *MockAgentService) ListActivityLog(ctx context.Context, agentID uuid.UUID, filter repository.AgentActivityLogFilter, pg pagination.Params) (*pagination.Page[domain.AgentActivityLog], error) {
+	if m.ListActivityLogFunc != nil {
+		return m.ListActivityLogFunc(ctx, agentID, filter, pg)
+	}
+	return pagination.NewPage([]domain.AgentActivityLog{}, 0, pg), nil
 }
 
 func (m *MockAgentService) Authenticate(ctx context.Context, workspaceSlug, apiKey string) (*domain.Agent, error) {

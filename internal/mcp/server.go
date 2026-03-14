@@ -308,9 +308,11 @@ func (s *Server) registerTools() {
 
 	// --- Utility ---
 	s.mcpServer.AddTool(mcpsdk.NewTool("heartbeat",
-		mcpsdk.WithDescription("Send a heartbeat to indicate the agent is alive."),
+		mcpsdk.WithDescription("Send a heartbeat to indicate the agent is alive. Optionally report status, message, and metadata."),
 		mcpsdk.WithString("current_task_id", mcpsdk.Description("ID of the task currently being worked on.")),
 		mcpsdk.WithString("status", mcpsdk.Description("Agent status: online, busy, error.")),
+		mcpsdk.WithString("message", mcpsdk.Description("Short human-readable status message (e.g. 'running tests', 'waiting for review').")),
+		mcpsdk.WithObject("metadata", mcpsdk.Description("Arbitrary JSON metadata to store with the heartbeat.")),
 	), s.handleHeartbeat)
 
 	s.mcpServer.AddTool(mcpsdk.NewTool("get_my_tasks",

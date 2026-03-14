@@ -2,25 +2,37 @@ package sdk
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 )
 
 // Agent represents a registered AI agent in the workspace.
 type Agent struct {
-	ID                  string  `json:"id"`
-	WorkspaceID         string  `json:"workspace_id"`
-	ParentAgentID       *string `json:"parent_agent_id,omitempty"`
-	Name                string  `json:"name"`
-	Slug                string  `json:"slug"`
-	AgentType           string  `json:"agent_type"` // claude_code|openclaw|cline|aider|custom
-	APIKeyPrefix        string  `json:"api_key_prefix"`
-	Status              string  `json:"status"` // online|offline|busy|error
-	LastHeartbeat       *string `json:"last_heartbeat,omitempty"`
-	CurrentTaskID       *string `json:"current_task_id,omitempty"`
-	TotalTasksCompleted int     `json:"total_tasks_completed"`
-	TotalErrors         int     `json:"total_errors"`
-	CreatedAt           string  `json:"created_at"`
-	UpdatedAt           string  `json:"updated_at"`
+	ID                  string          `json:"id"`
+	WorkspaceID         string          `json:"workspace_id"`
+	ParentAgentID       *string         `json:"parent_agent_id,omitempty"`
+	Name                string          `json:"name"`
+	Slug                string          `json:"slug"`
+	AgentType           string          `json:"agent_type"` // claude_code|openclaw|cline|aider|custom
+	APIKeyPrefix        string          `json:"api_key_prefix"`
+	Status              string          `json:"status"` // online|offline|busy|error
+	LastHeartbeat       *string         `json:"last_heartbeat,omitempty"`
+	HeartbeatStatus     string          `json:"heartbeat_status,omitempty"`
+	HeartbeatMessage    string          `json:"heartbeat_message,omitempty"`
+	HeartbeatMetadata   json.RawMessage `json:"heartbeat_metadata,omitempty"`
+	CurrentTaskID       *string         `json:"current_task_id,omitempty"`
+	TotalTasksCompleted int             `json:"total_tasks_completed"`
+	TotalErrors         int             `json:"total_errors"`
+	CreatedAt           string          `json:"created_at"`
+	UpdatedAt           string          `json:"updated_at"`
+}
+
+// HeartbeatOptions provides optional parameters for HeartbeatWithOptions.
+type HeartbeatOptions struct {
+	Status        string         `json:"status,omitempty"`
+	Message       string         `json:"message,omitempty"`
+	Metadata      map[string]any `json:"metadata,omitempty"`
+	CurrentTaskID string         `json:"current_task_id,omitempty"`
 }
 
 // Me returns the current agent's profile (identified by the agent key used in New()).
@@ -35,8 +47,28 @@ func (c *Client) Me(ctx context.Context) (*Agent, error) {
 // Heartbeat signals that the current agent is alive. The server updates
 // last_heartbeat and marks the agent as online.
 func (c *Client) Heartbeat(ctx context.Context) error {
-	if err := c.post(ctx, "/api/v1/agents/heartbeat", map[string]any{}, nil); err != nil {
-		return fmt.Errorf("Heartbeat: %w", err)
+	return c.HeartbeatWithOptions(ctx, nil)
+}
+
+// HeartbeatWithOptions sends a heartbeat with optional status, message, and metadata.
+func (c *Client) HeartbeatWithOptions(ctx context.Context, opts *HeartbeatOptions) error {
+	body := map[string]any{}
+	if opts != nil {
+		if opts.Status != "" {
+			body["status"] = opts.Status
+		}
+		if opts.Message != "" {
+			body["message"] = opts.Message
+		}
+		if opts.Metadata != nil {
+			body["metadata"] = opts.Metadata
+		}
+		if opts.CurrentTaskID != "" {
+			body["current_task_id"] = opts.CurrentTaskID
+		}
+	}
+	if err := c.post(ctx, "/api/v1/agents/heartbeat", body, nil); err != nil {
+		return fmt.Errorf("HeartbeatWithOptions: %w", err)
 	}
 	return nil
 }

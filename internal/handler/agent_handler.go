@@ -275,6 +275,14 @@ func (h *AgentHandler) RegenerateKey(c echo.Context) error {
 	})
 }
 
+// heartbeatRequest represents the optional JSON body for heartbeat.
+type heartbeatRequest struct {
+	Status        string         `json:"status"`
+	Message       string         `json:"message"`
+	Metadata      map[string]any `json:"metadata"`
+	CurrentTaskID *string        `json:"current_task_id"`
+}
+
 // Heartbeat handles POST /agents/heartbeat
 // The agent_id is expected to be set in the context by auth middleware.
 func (h *AgentHandler) Heartbeat(c echo.Context) error {
@@ -288,11 +296,201 @@ func (h *AgentHandler) Heartbeat(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid agent_id in context"))
 	}
 
-	if err := h.agentService.Heartbeat(c.Request().Context(), agentID); err != nil {
+	var req heartbeatRequest
+	_ = c.Bind(&req) // optional body; empty body is fine
+
+	var input *service.HeartbeatInput
+	if req.Status != "" || req.Message != "" || req.Metadata != nil || req.CurrentTaskID != nil {
+		input = &service.HeartbeatInput{
+			Status:  req.Status,
+			Message: req.Message,
+		}
+		if req.Metadata != nil {
+			b, _ := json.Marshal(req.Metadata)
+			input.Metadata = b
+		}
+		if req.CurrentTaskID != nil {
+			if id, err := uuid.Parse(*req.CurrentTaskID); err == nil {
+				input.CurrentTaskID = &id
+			}
+		}
+	}
+
+	if err := h.agentService.Heartbeat(c.Request().Context(), agentID, input); err != nil {
 		return handleError(c, err)
 	}
 
 	return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// GetAgentHeartbeat handles GET /agents/:agent_id/heartbeat
+func (h *AgentHandler) GetAgentHeartbeat(c echo.Context) error {
+	agentID, err := uuid.Parse(c.Param("agent_id"))
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid agent_id"))
+	}
+
+	agent, err := h.agentService.GetByID(c.Request().Context(), agentID)
+	if err != nil {
+		return handleError(c, err)
+	}
+	if agent == nil {
+		return c.JSON(http.StatusNotFound, apierror.NotFound("Agent"))
+	}
+
+	return c.JSON(http.StatusOK, map[string]any{
+		"agent_id":                agent.ID,
+		"status":                  agent.HeartbeatStatus,
+		"message":                 agent.HeartbeatMessage,
+		"metadata":                agent.HeartbeatMetadata,
+		"last_heartbeat_at":       agent.LastHeartbeat,
+		"seconds_since_heartbeat": agent.SecondsSinceHeartbeat(),
+		"is_stale":                agent.IsHeartbeatStale(),
+	})
+}
+
+// ListAgentActivity handles GET /agents/:agent_id/activity
+func (h *AgentHandler) ListAgentActivity(c echo.Context) error {
+	agentID, err := uuid.Parse(c.Param("agent_id"))
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid agent_id"))
+	}
+
+	var pg pagination.Params
+	if err := c.Bind(&pg); err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid pagination parameters"))
+	}
+	pg.Normalize()
+
+	filter := repository.AgentActivityLogFilter{
+		EventType: c.QueryParam("event_type"),
+	}
+	if since := c.QueryParam("since"); since != "" {
+		if t, err := time.Parse(time.RFC3339, since); err == nil {
+			filter.Since = &t
+		}
+	}
+	if until := c.QueryParam("until"); until != "" {
+		if t, err := time.Parse(time.RFC3339, until); err == nil {
+			filter.Until = &t
+		}
+	}
+
+	page, err := h.agentService.ListActivityLog(c.Request().Context(), agentID, filter, pg)
+	if err != nil {
+		return handleError(c, err)
+	}
+
+	return c.JSON(http.StatusOK, page)
+}
+
+// CreateAgentActivity handles POST /agents/:agent_id/activity
+func (h *AgentHandler) CreateAgentActivity(c echo.Context) error {
+	agentID, err := uuid.Parse(c.Param("agent_id"))
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid agent_id"))
+	}
+
+	agent, err := h.agentService.GetByID(c.Request().Context(), agentID)
+	if err != nil {
+		return handleError(c, err)
+	}
+	if agent == nil {
+		return c.JSON(http.StatusNotFound, apierror.NotFound("Agent"))
+	}
+
+	var req struct {
+		EventType string         `json:"event_type"`
+		TaskID    *string        `json:"task_id"`
+		Message   string         `json:"message"`
+		Metadata  map[string]any `json:"metadata"`
+	}
+	if err := c.Bind(&req); err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
+	}
+	if req.EventType == "" {
+		return c.JSON(http.StatusBadRequest, apierror.ValidationError(map[string]string{
+			"event_type": "event_type is required",
+		}))
+	}
+
+	entry := &domain.AgentActivityLog{
+		AgentID:     agentID,
+		WorkspaceID: agent.WorkspaceID,
+		EventType:   req.EventType,
+		Message:     req.Message,
+	}
+	if req.TaskID != nil {
+		if tid, err := uuid.Parse(*req.TaskID); err == nil {
+			entry.TaskID = &tid
+		}
+	}
+	if req.Metadata != nil {
+		b, _ := json.Marshal(req.Metadata)
+		entry.Metadata = b
+	}
+
+	if err := h.agentService.CreateActivityLog(c.Request().Context(), entry); err != nil {
+		return handleError(c, err)
+	}
+
+	return c.JSON(http.StatusCreated, entry)
+}
+
+// GetAgentsStatus handles GET /workspaces/:ws_id/agents/status
+func (h *AgentHandler) GetAgentsStatus(c echo.Context) error {
+	wsID, err := uuid.Parse(c.Param("ws_id"))
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid workspace_id"))
+	}
+
+	pg := pagination.Params{Page: 1, PageSize: 200}
+	agents, err := h.agentService.List(c.Request().Context(), wsID, repository.AgentFilter{}, pg)
+	if err != nil {
+		return handleError(c, err)
+	}
+
+	type agentStatus struct {
+		ID                    uuid.UUID  `json:"id"`
+		Name                  string     `json:"name"`
+		Status                string     `json:"status"`
+		HeartbeatStatus       string     `json:"heartbeat_status"`
+		LastHeartbeatAt       *time.Time `json:"last_heartbeat_at"`
+		SecondsSinceHeartbeat *int       `json:"seconds_since_heartbeat"`
+		IsStale               bool       `json:"is_stale"`
+		HeartbeatMessage      string     `json:"heartbeat_message,omitempty"`
+		CurrentTaskID         *uuid.UUID `json:"current_task_id,omitempty"`
+	}
+
+	var working, stale int
+	statuses := make([]agentStatus, 0, len(agents.Items))
+	for _, a := range agents.Items {
+		isStale := a.IsHeartbeatStale()
+		if isStale {
+			stale++
+		}
+		if a.Status == domain.AgentStatusOnline || a.Status == domain.AgentStatusBusy {
+			working++
+		}
+		statuses = append(statuses, agentStatus{
+			ID:                    a.ID,
+			Name:                  a.Name,
+			Status:                string(a.Status),
+			HeartbeatStatus:       a.HeartbeatStatus,
+			LastHeartbeatAt:       a.LastHeartbeat,
+			SecondsSinceHeartbeat: a.SecondsSinceHeartbeat(),
+			IsStale:               isStale,
+			HeartbeatMessage:      a.HeartbeatMessage,
+			CurrentTaskID:         a.CurrentTaskID,
+		})
+	}
+
+	return c.JSON(http.StatusOK, map[string]any{
+		"agents":        statuses,
+		"stale_count":   stale,
+		"working_count": working,
+		"total_count":   len(statuses),
+	})
 }
 
 // Me handles GET /agents/me

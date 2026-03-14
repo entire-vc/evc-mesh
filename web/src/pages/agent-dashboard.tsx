@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Bot, Plus } from "lucide-react";
 import { cn } from "@/lib/cn";
-import { agentStatusConfig, agentTypeConfig } from "@/lib/agent-utils";
+import { agentStatusConfig, agentTypeConfig, getEffectiveStatus, isAgentStale } from "@/lib/agent-utils";
 import { formatRelative } from "@/lib/utils";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { useAgentStore } from "@/stores/agent";
@@ -32,9 +32,10 @@ export function AgentDashboardPage() {
     : null;
 
   useEffect(() => {
-    if (currentWorkspace) {
-      fetchAgents(currentWorkspace.id);
-    }
+    if (!currentWorkspace) return;
+    fetchAgents(currentWorkspace.id);
+    const interval = setInterval(() => fetchAgents(currentWorkspace.id), 30_000);
+    return () => clearInterval(interval);
   }, [currentWorkspace, fetchAgents]);
 
   const handleAgentClick = useCallback((agent: Agent) => {
@@ -134,11 +135,16 @@ function AgentCard({
   onClick: () => void;
 }) {
   const typeConfig = agentTypeConfig[agent.agent_type];
-  const statusConfig = agentStatusConfig[agent.status];
+  const effectiveStatus = getEffectiveStatus(agent);
+  const statusConfig = agentStatusConfig[effectiveStatus];
+  const stale = isAgentStale(agent);
 
   return (
     <Card
-      className="cursor-pointer transition-shadow hover:shadow-md"
+      className={cn(
+        "cursor-pointer transition-shadow hover:shadow-md",
+        stale && agent.status === "online" && "border-yellow-300 dark:border-yellow-700",
+      )}
       onClick={onClick}
     >
       <CardHeader className="pb-3">
@@ -160,11 +166,19 @@ function AgentCard({
           />
           <span className="text-sm text-muted-foreground">
             {statusConfig.label}
+            {stale && agent.status === "online" && " (stale)"}
           </span>
         </div>
 
+        {/* Heartbeat message */}
+        {agent.heartbeat_message && (
+          <div className="text-xs italic text-muted-foreground truncate" title={agent.heartbeat_message}>
+            {agent.heartbeat_message}
+          </div>
+        )}
+
         {/* Last Heartbeat */}
-        <div className="text-xs text-muted-foreground">
+        <div className={cn("text-xs text-muted-foreground", stale && "text-yellow-600")}>
           {agent.last_heartbeat
             ? `Last seen ${formatRelative(agent.last_heartbeat)}`
             : "No heartbeat yet"}

@@ -33,6 +33,9 @@ type agentRow struct {
 	Capabilities        json.RawMessage    `db:"capabilities"`
 	Status              domain.AgentStatus `db:"status"`
 	LastHeartbeat       *time.Time         `db:"last_heartbeat"`
+	HeartbeatStatus     string             `db:"heartbeat_status"`
+	HeartbeatMessage    string             `db:"heartbeat_message"`
+	HeartbeatMetadata   json.RawMessage    `db:"heartbeat_metadata"`
 	CurrentTaskID       *uuid.UUID         `db:"current_task_id"`
 	Settings            json.RawMessage    `db:"settings"`
 	TotalTasksCompleted int                `db:"total_tasks_completed"`
@@ -64,6 +67,9 @@ func (r *agentRow) toDomain() domain.Agent {
 		Capabilities:        r.Capabilities,
 		Status:              r.Status,
 		LastHeartbeat:       r.LastHeartbeat,
+		HeartbeatStatus:     r.HeartbeatStatus,
+		HeartbeatMessage:    r.HeartbeatMessage,
+		HeartbeatMetadata:   r.HeartbeatMetadata,
 		CurrentTaskID:       r.CurrentTaskID,
 		Settings:            r.Settings,
 		TotalTasksCompleted: r.TotalTasksCompleted,
@@ -304,11 +310,12 @@ func (r *AgentRepo) GetSubAgentTree(ctx context.Context, parentID uuid.UUID) ([]
 		)
 		SELECT id, workspace_id, parent_agent_id, name, slug, agent_type,
 		       api_key_hash, api_key_prefix, capabilities, status,
-		       last_heartbeat, current_task_id, settings,
+		       last_heartbeat, heartbeat_status, heartbeat_message, heartbeat_metadata,
+		       current_task_id, settings,
 		       total_tasks_completed, total_errors, external_agent_id,
 		       role, responsibility_zone, escalation_to, accepts_from,
 		       max_concurrent_tasks, working_hours, profile_description,
-		       created_at, updated_at, deleted_at
+		       callback_url, created_at, updated_at, deleted_at
 		FROM agent_tree
 		ORDER BY depth, created_at
 	`
@@ -319,9 +326,29 @@ func (r *AgentRepo) GetSubAgentTree(ctx context.Context, parentID uuid.UUID) ([]
 	return agentRowsToSlice(rows), nil
 }
 
-func (r *AgentRepo) UpdateHeartbeat(ctx context.Context, id uuid.UUID) error {
-	const q = `UPDATE agents SET last_heartbeat = NOW(), status = 'online', updated_at = NOW() WHERE id = $1 AND deleted_at IS NULL`
-	res, err := r.db.ExecContext(ctx, q, id)
+func (r *AgentRepo) UpdateHeartbeat(ctx context.Context, id uuid.UUID, params *repository.UpdateHeartbeatParams) error {
+	q := `UPDATE agents SET last_heartbeat = NOW(), status = 'online', updated_at = NOW()`
+	args := []interface{}{id}
+	argIdx := 2
+	if params != nil {
+		if params.Status != "" {
+			q += fmt.Sprintf(", heartbeat_status = $%d", argIdx)
+			args = append(args, params.Status)
+			argIdx++
+		}
+		if params.Message != "" {
+			q += fmt.Sprintf(", heartbeat_message = $%d", argIdx)
+			args = append(args, params.Message)
+			argIdx++
+		}
+		if params.Metadata != nil {
+			q += fmt.Sprintf(", heartbeat_metadata = $%d", argIdx)
+			args = append(args, params.Metadata)
+			argIdx++
+		}
+	}
+	q += " WHERE id = $1 AND deleted_at IS NULL"
+	res, err := r.db.ExecContext(ctx, q, args...)
 	if err != nil {
 		return err
 	}
@@ -357,7 +384,8 @@ func (r *AgentRepo) ListWithProjects(ctx context.Context, workspaceID uuid.UUID)
 	const q = `
 		SELECT a.id, a.workspace_id, a.parent_agent_id, a.name, a.slug, a.agent_type,
 		       a.api_key_hash, a.api_key_prefix, a.capabilities, a.status,
-		       a.last_heartbeat, a.current_task_id, a.settings,
+		       a.last_heartbeat, a.heartbeat_status, a.heartbeat_message, a.heartbeat_metadata,
+		       a.current_task_id, a.settings,
 		       a.total_tasks_completed, a.total_errors, a.external_agent_id,
 		       a.role, a.responsibility_zone, a.escalation_to, a.accepts_from,
 		       a.max_concurrent_tasks, a.working_hours, a.profile_description,

@@ -314,7 +314,7 @@ func TestAgentHandler_GetByID_InternalError(t *testing.T) {
 func TestAgentHandler_Heartbeat_Success(t *testing.T) {
 	agentID := uuid.New()
 	mockSvc := &MockAgentService{
-		HeartbeatFunc: func(ctx context.Context, id uuid.UUID) error {
+		HeartbeatFunc: func(ctx context.Context, id uuid.UUID, input *service.HeartbeatInput) error {
 			assert.Equal(t, agentID, id)
 			return nil
 		},
@@ -371,7 +371,7 @@ func TestAgentHandler_Heartbeat_InvalidAgentIDType(t *testing.T) {
 func TestAgentHandler_Heartbeat_ServiceError(t *testing.T) {
 	agentID := uuid.New()
 	mockSvc := &MockAgentService{
-		HeartbeatFunc: func(ctx context.Context, id uuid.UUID) error {
+		HeartbeatFunc: func(ctx context.Context, id uuid.UUID, input *service.HeartbeatInput) error {
 			return apierror.NotFound("Agent")
 		},
 	}

@@ -269,11 +269,19 @@ func (m *mockAgentService) Delete(_ context.Context, _ uuid.UUID) error     { re
 func (m *mockAgentService) List(_ context.Context, _ uuid.UUID, _ repository.AgentFilter, _ pagination.Params) (*pagination.Page[domain.Agent], error) {
 	return nil, nil
 }
-func (m *mockAgentService) Heartbeat(_ context.Context, _ uuid.UUID) error { return nil }
+func (m *mockAgentService) Heartbeat(_ context.Context, _ uuid.UUID, _ *service.HeartbeatInput) error {
+	return nil
+}
 func (m *mockAgentService) RotateAPIKey(_ context.Context, _ uuid.UUID) (string, error) {
 	return "", nil
 }
 func (m *mockAgentService) ListSubAgents(_ context.Context, _ uuid.UUID, _ bool) ([]domain.Agent, error) {
+	return nil, nil
+}
+func (m *mockAgentService) CreateActivityLog(_ context.Context, _ *domain.AgentActivityLog) error {
+	return nil
+}
+func (m *mockAgentService) ListActivityLog(_ context.Context, _ uuid.UUID, _ repository.AgentActivityLogFilter, _ pagination.Params) (*pagination.Page[domain.AgentActivityLog], error) {
 	return nil, nil
 }
 

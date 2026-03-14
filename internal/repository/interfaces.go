@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
 	"github.com/google/uuid"
@@ -155,6 +156,13 @@ type AgentWithProjects struct {
 	Projects []string
 }
 
+// UpdateHeartbeatParams holds optional fields for the heartbeat update.
+type UpdateHeartbeatParams struct {
+	Status   string
+	Message  string
+	Metadata json.RawMessage
+}
+
 // AgentRepository manages persistence for agents.
 type AgentRepository interface {
 	Create(ctx context.Context, agent *domain.Agent) error
@@ -163,7 +171,7 @@ type AgentRepository interface {
 	Update(ctx context.Context, agent *domain.Agent) error
 	Delete(ctx context.Context, id uuid.UUID) error
 	List(ctx context.Context, workspaceID uuid.UUID, filter AgentFilter, pg pagination.Params) (*pagination.Page[domain.Agent], error)
-	UpdateHeartbeat(ctx context.Context, id uuid.UUID) error
+	UpdateHeartbeat(ctx context.Context, id uuid.UUID, params *UpdateHeartbeatParams) error
 	UpdateStatus(ctx context.Context, id uuid.UUID, status domain.AgentStatus) error
 	// GetSubAgentTree returns all agents that are descendants of parentID using a recursive CTE
 	// limited to 10 levels of depth, ordered by depth then created_at.
@@ -171,6 +179,20 @@ type AgentRepository interface {
 	// ListWithProjects returns all agents in a workspace together with the project names
 	// they are members of (via project_members JOIN projects).
 	ListWithProjects(ctx context.Context, workspaceID uuid.UUID) ([]AgentWithProjects, error)
+}
+
+// AgentActivityLogFilter defines filtering options for listing agent activity log entries.
+type AgentActivityLogFilter struct {
+	EventType string
+	Since     *time.Time
+	Until     *time.Time
+}
+
+// AgentActivityLogRepository manages persistence for agent activity log.
+type AgentActivityLogRepository interface {
+	Create(ctx context.Context, entry *domain.AgentActivityLog) error
+	List(ctx context.Context, agentID uuid.UUID, filter AgentActivityLogFilter, pg pagination.Params) (*pagination.Page[domain.AgentActivityLog], error)
+	ListByWorkspace(ctx context.Context, workspaceID uuid.UUID, filter AgentActivityLogFilter, pg pagination.Params) (*pagination.Page[domain.AgentActivityLog], error)
 }
 
 // EventBusMessageFilter defines filtering options for listing event bus messages.

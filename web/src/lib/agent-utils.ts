@@ -1,4 +1,4 @@
-import type { AgentStatus, AgentType } from "@/types";
+import type { Agent, AgentStatus, AgentType } from "@/types";
 
 export const agentTypeConfig: Record<
   AgentType,
@@ -20,3 +20,17 @@ export const agentStatusConfig: Record<
   busy: { label: "Busy", dotColor: "bg-yellow-500" },
   error: { label: "Error", dotColor: "bg-red-500" },
 };
+
+const STALE_THRESHOLD_MS = 15 * 60 * 1000; // 15 minutes
+
+/** Returns true if the agent's heartbeat is older than 15 minutes. */
+export function isAgentStale(agent: { last_heartbeat?: string | null }): boolean {
+  if (!agent.last_heartbeat) return true;
+  return Date.now() - new Date(agent.last_heartbeat).getTime() > STALE_THRESHOLD_MS;
+}
+
+/** Returns the effective display status considering staleness. */
+export function getEffectiveStatus(agent: Agent): AgentStatus {
+  if (agent.status === "online" && isAgentStale(agent)) return "offline";
+  return agent.status;
+}

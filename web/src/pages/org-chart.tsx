@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Bot, LayoutGrid, Network, User } from "lucide-react";
 import { cn } from "@/lib/cn";
-import { agentStatusConfig } from "@/lib/agent-utils";
+import { agentStatusConfig, isAgentStale } from "@/lib/agent-utils";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { useRulesStore } from "@/stores/rules";
 import { Badge } from "@/components/ui/badge";
@@ -21,17 +21,20 @@ const statusBorderColors: Record<string, string> = {
 };
 
 function AgentCard({ agent }: { agent: OrgChartAgentNode }) {
-  const statusCfg = agentStatusConfig[agent.status as keyof typeof agentStatusConfig] ?? {
-    label: agent.status,
+  const stale = agent.is_stale ?? isAgentStale(agent);
+  const effectiveStatus = agent.status === "online" && stale ? "offline" : agent.status;
+  const statusCfg = agentStatusConfig[effectiveStatus as keyof typeof agentStatusConfig] ?? {
+    label: effectiveStatus,
     dotColor: "bg-gray-400",
   };
-  const borderColor = statusBorderColors[agent.status] ?? "border-l-gray-400";
+  const borderColor = statusBorderColors[effectiveStatus] ?? "border-l-gray-400";
 
   return (
     <Card
       className={cn(
         "w-52 shrink-0 border-l-4 cursor-default select-none hover:shadow-md transition-shadow",
         borderColor,
+        stale && agent.status === "online" && "border-l-yellow-500",
       )}
     >
       <CardContent className="p-3 space-y-1.5">
@@ -48,13 +51,22 @@ function AgentCard({ agent }: { agent: OrgChartAgentNode }) {
 
         <div className="flex items-center gap-1.5">
           <span className={cn("h-2 w-2 rounded-full shrink-0", statusCfg.dotColor)} />
-          <span className="text-xs text-muted-foreground">{statusCfg.label}</span>
+          <span className="text-xs text-muted-foreground">
+            {statusCfg.label}
+            {stale && agent.status === "online" && " (stale)"}
+          </span>
           {agent.max_concurrent_tasks > 0 && (
             <span className="ml-auto text-xs text-muted-foreground tabular-nums">
               {agent.current_tasks}/{agent.max_concurrent_tasks}
             </span>
           )}
         </div>
+
+        {agent.heartbeat_message && (
+          <p className="text-xs italic text-muted-foreground truncate" title={agent.heartbeat_message}>
+            {agent.heartbeat_message}
+          </p>
+        )}
 
         {agent.projects && agent.projects.length > 0 && (
           <div className="flex flex-wrap gap-1">

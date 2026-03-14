@@ -897,29 +897,28 @@ func (s *Server) handleHeartbeat(ctx context.Context, request mcpsdk.CallToolReq
 		return errResult("not authenticated: no agent session")
 	}
 
-	result, err := s.getRESTClient(ctx).Heartbeat(ctx)
+	// Build heartbeat body from tool params.
+	body := map[string]any{}
+	if status := mcpsdk.ParseString(request, "status", ""); status != "" {
+		body["status"] = status
+	}
+	if message := mcpsdk.ParseString(request, "message", ""); message != "" {
+		body["message"] = message
+	}
+	if currentTaskID := mcpsdk.ParseString(request, "current_task_id", ""); currentTaskID != "" {
+		body["current_task_id"] = currentTaskID
+	}
+	if args := request.GetArguments(); args != nil {
+		if md, ok := args["metadata"]; ok && md != nil {
+			body["metadata"] = md
+		}
+	}
+
+	_, err := s.getRESTClient(ctx).Heartbeat(ctx, body)
 	if err != nil {
 		return errResult("heartbeat failed: %v", err)
 	}
 
-	// If status or current_task_id are provided, update the agent.
-	status := mcpsdk.ParseString(request, "status", "")
-	currentTaskID := mcpsdk.ParseString(request, "current_task_id", "")
-
-	if status != "" || currentTaskID != "" {
-		updateBody := map[string]any{}
-		if status != "" {
-			updateBody["status"] = status
-		}
-		if currentTaskID != "" {
-			updateBody["current_task_id"] = currentTaskID
-		}
-		// Best-effort agent update.
-		_, _ = s.getRESTClient(ctx).UpdateAgent(ctx, session.AgentID.String(), updateBody)
-	}
-
-	// Return a consistent response regardless of what the REST API returned.
-	_ = result
 	return jsonResult(map[string]any{
 		"status":    "ok",
 		"agent_id":  session.AgentID.String(),

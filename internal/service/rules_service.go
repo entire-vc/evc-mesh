@@ -137,6 +137,10 @@ func (s *rulesService) GetTeamDirectory(ctx context.Context, workspaceID uuid.UU
 			ProfileDescription: a.ProfileDescription,
 			CurrentTasks:       currentTasks,
 			Projects:           []string{},
+			LastHeartbeat:      a.LastHeartbeat,
+			HeartbeatStatus:    a.HeartbeatStatus,
+			HeartbeatMessage:   a.HeartbeatMessage,
+			IsStale:            a.IsHeartbeatStale(),
 		})
 	}
 
@@ -220,6 +224,10 @@ func (s *rulesService) GetTeamDirectoryTree(ctx context.Context, workspaceID uui
 			ProfileDescription: a.ProfileDescription,
 			CurrentTasks:       currentTasks,
 			Projects:           projects,
+			LastHeartbeat:      a.LastHeartbeat,
+			HeartbeatStatus:    a.HeartbeatStatus,
+			HeartbeatMessage:   a.HeartbeatMessage,
+			IsStale:            a.IsHeartbeatStale(),
 		})
 	}
 

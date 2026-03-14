@@ -377,7 +377,8 @@ func (s *taskService) MoveTask(ctx context.Context, taskID uuid.UUID, input Move
 	oldStatusID := task.StatusID
 	oldPosition := task.Position
 
-	if input.StatusID != nil {
+	statusChanged := false
+	if input.StatusID != nil && *input.StatusID != oldStatusID {
 		status, err := s.statusRepo.GetByID(ctx, *input.StatusID)
 		if err != nil {
 			return err
@@ -408,6 +409,7 @@ func (s *taskService) MoveTask(ctx context.Context, taskID uuid.UUID, input Move
 		}
 
 		task.StatusID = *input.StatusID
+		statusChanged = true
 
 		if status.Category == domain.StatusCategoryDone {
 			now := timeNow()
@@ -417,8 +419,14 @@ func (s *taskService) MoveTask(ctx context.Context, taskID uuid.UUID, input Move
 		}
 	}
 
-	if input.Position != nil {
+	positionChanged := input.Position != nil && *input.Position != oldPosition
+	if positionChanged {
 		task.Position = *input.Position
+	}
+
+	// Nothing changed — return early without touching the DB.
+	if !statusChanged && !positionChanged {
+		return nil
 	}
 
 	task.UpdatedAt = timeNow()
@@ -429,16 +437,27 @@ func (s *taskService) MoveTask(ctx context.Context, taskID uuid.UUID, input Move
 		s.ctxCacheInv.Invalidate(ctx, taskID)
 	}
 	moveChanges := map[string]interface{}{}
-	if input.StatusID != nil {
-		moveChanges["status_id"] = map[string]interface{}{"old": oldStatusID.String(), "new": input.StatusID.String()}
+	if statusChanged {
+		// Resolve status names for human-readable activity log.
+		oldName := oldStatusID.String()
+		newName := input.StatusID.String()
+		if oldStatus, err := s.statusRepo.GetByID(ctx, oldStatusID); err == nil && oldStatus != nil {
+			oldName = oldStatus.Name
+		}
+		if newStatus, err := s.statusRepo.GetByID(ctx, *input.StatusID); err == nil && newStatus != nil {
+			newName = newStatus.Name
+		}
+		moveChanges["status"] = map[string]interface{}{"old": oldName, "new": newName}
 	}
-	if input.Position != nil {
+	if positionChanged {
 		moveChanges["position"] = map[string]interface{}{"old": oldPosition, "new": *input.Position}
 	}
-	s.logActivity(ctx, task.ProjectID, taskID, "task.moved", moveChanges)
+	if len(moveChanges) > 0 {
+		s.logActivity(ctx, task.ProjectID, taskID, "task.moved", moveChanges)
+	}
 
 	// Fire auto-transition checks when the status changed.
-	if input.StatusID != nil && s.autoTransSvc != nil {
+	if statusChanged && s.autoTransSvc != nil {
 		// Look up the new status category so EvaluateOnTaskMove can decide what to do.
 		if newStatus, err := s.statusRepo.GetByID(ctx, *input.StatusID); err == nil && newStatus != nil {
 			if atErr := s.autoTransSvc.EvaluateOnTaskMove(ctx, taskID, newStatus.Category); atErr != nil {
@@ -448,7 +467,7 @@ func (s *taskService) MoveTask(ctx context.Context, taskID uuid.UUID, input Move
 	}
 
 	// Dispatch webhook for task.status_changed (agent wakeup pipeline).
-	if input.StatusID != nil && s.webhookSvc != nil && s.projectRepo != nil {
+	if statusChanged && s.webhookSvc != nil && s.projectRepo != nil {
 		if proj, err := s.projectRepo.GetByID(ctx, task.ProjectID); err == nil && proj != nil {
 			go s.webhookSvc.Dispatch(ctx, proj.WorkspaceID, "task.status_changed", map[string]interface{}{
 				"task_id":       task.ID,
@@ -460,7 +479,7 @@ func (s *taskService) MoveTask(ctx context.Context, taskID uuid.UUID, input Move
 	}
 
 	// Notify assigned agent about status change via push mechanisms (SSE, long-poll, callback).
-	if input.StatusID != nil {
+	if statusChanged {
 		s.notifyAssignedAgent(ctx, task, "task.status_changed", map[string]any{
 			"status_id": map[string]any{"old": oldStatusID.String(), "new": input.StatusID.String()},
 		})

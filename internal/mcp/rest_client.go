@@ -341,10 +341,13 @@ func (c *RESTClient) GetArtifactDownloadURL(ctx context.Context, artifactID stri
 	return c.baseURL + "/api/v1/artifacts/" + artifactID + "/download", nil
 }
 
-// Heartbeat sends a heartbeat for the agent.
-func (c *RESTClient) Heartbeat(ctx context.Context) (map[string]any, error) {
+// Heartbeat sends a heartbeat for the agent with optional status/message/metadata.
+func (c *RESTClient) Heartbeat(ctx context.Context, body map[string]any) (map[string]any, error) {
+	if body == nil {
+		body = map[string]any{}
+	}
 	var result map[string]any
-	if err := c.doJSON(ctx, http.MethodPost, "/api/v1/agents/heartbeat", map[string]any{}, &result); err != nil {
+	if err := c.doJSON(ctx, http.MethodPost, "/api/v1/agents/heartbeat", body, &result); err != nil {
 		return nil, err
 	}
 	return result, nil

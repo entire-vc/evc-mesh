@@ -113,7 +113,12 @@ func main() {
 	// SlackService is co-injected so that every Dispatch call also notifies Slack when configured.
 	webhookService := service.NewWebhookService(webhookRepo, service.WithSlackService(slackService))
 
+	agentActLogRepo := postgres.NewAgentActivityLogRepo(db)
 	agentService := service.NewAgentService(agentRepo, activityLogRepo, workspaceRepo)
+	// Wire agent activity log repository for monitoring.
+	if configurable, ok := agentService.(service.AgentServiceConfigurable); ok {
+		configurable.SetAgentActivityLogRepo(agentActLogRepo)
+	}
 
 	// Agent notification service for push mechanisms (callback_url, SSE, long-poll).
 	// Reuses the same Redis connection as the WebSocket hub (created below in step 8a).
@@ -467,6 +472,10 @@ func main() {
 	api.DELETE("/agents/:agent_id", agentHandler.Delete, rbac(mw.PermDeleteAgent))
 	api.POST("/agents/:agent_id/regenerate-key", agentHandler.RegenerateKey, rbac(mw.PermDeleteAgent))
 	api.GET("/agents/:agent_id/sub-agents", agentHandler.ListSubAgents)
+	api.GET("/agents/:agent_id/heartbeat", agentHandler.GetAgentHeartbeat)
+	api.GET("/agents/:agent_id/activity", agentHandler.ListAgentActivity)
+	api.POST("/agents/:agent_id/activity", agentHandler.CreateAgentActivity)
+	api.GET("/workspaces/:ws_id/agents/status", agentHandler.GetAgentsStatus)
 
 	// Event bus routes.
 	api.GET("/projects/:proj_id/events", eventHandler.List, projAccess)

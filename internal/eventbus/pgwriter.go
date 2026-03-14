@@ -82,10 +82,8 @@ func (eb *EventBus) processPGWriterMessage(ctx context.Context, natsMsg jetstrea
 		return
 	}
 
-	if err := eb.repo.Create(ctx, &msg); err != nil {
-		// The Create method may fail with a unique constraint violation if the event
-		// was already persisted inline. That's fine - we just log and ack.
-		log.Printf("[eventbus/pgwriter] Event %s persist (may be duplicate): %v", msg.ID, err)
+	if err := eb.repo.Upsert(ctx, &msg); err != nil {
+		log.Printf("[eventbus/pgwriter] Event %s persist error: %v", msg.ID, err)
 	}
 
 	if err := natsMsg.Ack(); err != nil {

@@ -242,6 +242,12 @@ export interface Agent {
   capabilities: string[];
   metadata: Record<string, unknown>;
   last_heartbeat: string | null;
+  heartbeat_status?: string;
+  heartbeat_message?: string;
+  heartbeat_metadata?: Record<string, unknown>;
+  current_task_id?: string | null;
+  total_tasks_completed?: number;
+  total_errors?: number;
   profile_description?: string;
   callback_url?: string;
   created_at: string;
@@ -540,6 +546,10 @@ export interface TeamDirectoryAgent {
   profile_description: string;
   current_tasks: number;
   projects: string[];
+  last_heartbeat?: string | null;
+  heartbeat_status?: string;
+  heartbeat_message?: string;
+  is_stale?: boolean;
 }
 
 export interface TeamDirectoryHuman {

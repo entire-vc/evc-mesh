@@ -26,8 +26,9 @@ const (
 )
 
 type agentService struct {
-	agentRepo    repository.AgentRepository
-	activityRepo repository.ActivityLogRepository
+	agentRepo       repository.AgentRepository
+	activityRepo    repository.ActivityLogRepository
+	agentActLogRepo repository.AgentActivityLogRepository
 	// workspaceRepo is used to resolve workspace slugs during authentication.
 	workspaceRepo repository.WorkspaceRepository
 }
@@ -43,6 +44,11 @@ func NewAgentService(
 		activityRepo:  activityRepo,
 		workspaceRepo: workspaceRepo,
 	}
+}
+
+// SetAgentActivityLogRepo wires the optional agent activity log repository.
+func (s *agentService) SetAgentActivityLogRepo(repo repository.AgentActivityLogRepository) {
+	s.agentActLogRepo = repo
 }
 
 // generateAPIKey creates a raw API key in the format: agk_{workspaceSlug}_{random_hex}.
@@ -180,12 +186,56 @@ func (s *agentService) List(ctx context.Context, workspaceID uuid.UUID, filter r
 	return s.agentRepo.List(ctx, workspaceID, filter, pg)
 }
 
-// Heartbeat updates the agent's heartbeat timestamp and sets status to online.
-func (s *agentService) Heartbeat(ctx context.Context, agentID uuid.UUID) error {
-	if err := s.agentRepo.UpdateHeartbeat(ctx, agentID); err != nil {
+// Heartbeat updates the agent's heartbeat timestamp and optionally stores status/message/metadata.
+func (s *agentService) Heartbeat(ctx context.Context, agentID uuid.UUID, input *HeartbeatInput) error {
+	var params *repository.UpdateHeartbeatParams
+	if input != nil {
+		params = &repository.UpdateHeartbeatParams{
+			Status:   input.Status,
+			Message:  input.Message,
+			Metadata: input.Metadata,
+		}
+	}
+	if err := s.agentRepo.UpdateHeartbeat(ctx, agentID, params); err != nil {
 		return err
 	}
-	return s.agentRepo.UpdateStatus(ctx, agentID, domain.AgentStatusOnline)
+
+	// Write to agent activity log (best-effort).
+	if s.agentActLogRepo != nil {
+		agent, err := s.agentRepo.GetByID(ctx, agentID)
+		if err == nil && agent != nil {
+			entry := &domain.AgentActivityLog{
+				AgentID:     agentID,
+				WorkspaceID: agent.WorkspaceID,
+				EventType:   "heartbeat",
+			}
+			if input != nil {
+				entry.Message = input.Message
+				entry.Metadata = input.Metadata
+				entry.TaskID = input.CurrentTaskID
+			}
+			_ = s.agentActLogRepo.Create(ctx, entry)
+		}
+	}
+
+	return nil
+}
+
+// CreateActivityLog writes an entry to the agent activity log.
+func (s *agentService) CreateActivityLog(ctx context.Context, entry *domain.AgentActivityLog) error {
+	if s.agentActLogRepo == nil {
+		return nil
+	}
+	return s.agentActLogRepo.Create(ctx, entry)
+}
+
+// ListActivityLog returns paginated activity log entries for a given agent.
+func (s *agentService) ListActivityLog(ctx context.Context, agentID uuid.UUID, filter repository.AgentActivityLogFilter, pg pagination.Params) (*pagination.Page[domain.AgentActivityLog], error) {
+	if s.agentActLogRepo == nil {
+		return pagination.NewPage([]domain.AgentActivityLog{}, 0, pg), nil
+	}
+	pg.Normalize()
+	return s.agentActLogRepo.List(ctx, agentID, filter, pg)
 }
 
 // Authenticate verifies an API key against the stored hash.

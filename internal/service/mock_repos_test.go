@@ -885,7 +885,7 @@ func (m *MockAgentRepository) List(_ context.Context, workspaceID uuid.UUID, _ r
 	return pagination.NewPage(all, len(all), pg), nil
 }
 
-func (m *MockAgentRepository) UpdateHeartbeat(_ context.Context, id uuid.UUID) error {
+func (m *MockAgentRepository) UpdateHeartbeat(_ context.Context, id uuid.UUID, params *repository.UpdateHeartbeatParams) error {
 	if m.errToReturn != nil {
 		return m.errToReturn
 	}
@@ -894,6 +894,11 @@ func (m *MockAgentRepository) UpdateHeartbeat(_ context.Context, id uuid.UUID) e
 	if a, ok := m.items[id]; ok {
 		now := timeNow()
 		a.LastHeartbeat = &now
+		a.Status = domain.AgentStatusOnline
+		if params != nil {
+			a.HeartbeatStatus = params.Status
+			a.HeartbeatMessage = params.Message
+		}
 	}
 	return nil
 }

@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"time"
@@ -201,6 +202,19 @@ type RegisterAgentOutput struct {
 	APIKey string        `json:"api_key"` // Only returned once at registration time
 }
 
+// AgentServiceConfigurable allows optional dependencies to be injected after construction.
+type AgentServiceConfigurable interface {
+	SetAgentActivityLogRepo(repo repository.AgentActivityLogRepository)
+}
+
+// HeartbeatInput holds optional fields for the heartbeat update.
+type HeartbeatInput struct {
+	Status        string          `json:"status"`
+	Message       string          `json:"message"`
+	Metadata      json.RawMessage `json:"metadata"`
+	CurrentTaskID *uuid.UUID      `json:"current_task_id,omitempty"`
+}
+
 // AgentService provides business logic for agent management.
 type AgentService interface {
 	Register(ctx context.Context, input RegisterAgentInput) (*RegisterAgentOutput, error)
@@ -208,13 +222,16 @@ type AgentService interface {
 	Update(ctx context.Context, agent *domain.Agent) error
 	Delete(ctx context.Context, id uuid.UUID) error
 	List(ctx context.Context, workspaceID uuid.UUID, filter repository.AgentFilter, pg pagination.Params) (*pagination.Page[domain.Agent], error)
-	Heartbeat(ctx context.Context, agentID uuid.UUID) error
+	Heartbeat(ctx context.Context, agentID uuid.UUID, input *HeartbeatInput) error
 	Authenticate(ctx context.Context, workspaceSlug, apiKey string) (*domain.Agent, error)
 	RotateAPIKey(ctx context.Context, agentID uuid.UUID) (string, error)
 	// ListSubAgents returns child agents of a parent.
 	// When recursive is true, all descendants (up to 10 levels) are returned via a CTE.
 	// When recursive is false, only direct children are returned.
 	ListSubAgents(ctx context.Context, parentID uuid.UUID, recursive bool) ([]domain.Agent, error)
+	// Agent activity log
+	CreateActivityLog(ctx context.Context, entry *domain.AgentActivityLog) error
+	ListActivityLog(ctx context.Context, agentID uuid.UUID, filter repository.AgentActivityLogFilter, pg pagination.Params) (*pagination.Page[domain.AgentActivityLog], error)
 }
 
 // PublishEventInput holds parameters for publishing an event to the bus.

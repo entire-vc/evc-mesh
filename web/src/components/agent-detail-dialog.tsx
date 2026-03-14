@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useState } from "react";
 import { AlertTriangle, Check, Copy, Pencil, RefreshCw, Trash2, X } from "lucide-react";
 import { cn } from "@/lib/cn";
-import { agentStatusConfig, agentTypeConfig } from "@/lib/agent-utils";
+import { agentStatusConfig, agentTypeConfig, getEffectiveStatus, isAgentStale } from "@/lib/agent-utils";
 import { formatDate, formatRelative } from "@/lib/utils";
 import { useAgentStore } from "@/stores/agent";
 import { Badge } from "@/components/ui/badge";
@@ -206,19 +206,12 @@ export function AgentDetailDialog({
   if (!agent) return null;
 
   const typeConfig = agentTypeConfig[agent.agent_type];
-  const statusConfig = agentStatusConfig[agent.status];
+  const effectiveStatus = getEffectiveStatus(agent);
+  const statusConfig = agentStatusConfig[effectiveStatus];
+  const stale = isAgentStale(agent);
 
-  const metadata = agent.metadata || {};
-  const tasksCompleted =
-    typeof metadata.tasks_completed === "number"
-      ? metadata.tasks_completed
-      : null;
-  const totalErrors =
-    typeof metadata.total_errors === "number" ? metadata.total_errors : null;
-  const currentTask =
-    metadata.current_task && typeof metadata.current_task === "object"
-      ? (metadata.current_task as { id?: string; title?: string })
-      : null;
+  const tasksCompleted = agent.total_tasks_completed ?? null;
+  const totalErrors = agent.total_errors ?? null;
 
   // Delete confirmation mode
   if (mode === "delete-confirm") {
@@ -406,17 +399,29 @@ export function AgentDetailDialog({
                 className={cn("h-2.5 w-2.5 rounded-full", statusConfig.dotColor)}
               />
               <span className="text-sm">{statusConfig.label}</span>
+              {stale && agent.status === "online" && (
+                <span className="text-xs text-yellow-600">(stale)</span>
+              )}
             </div>
           </DetailRow>
 
           {/* Last Heartbeat */}
           <DetailRow label="Last Heartbeat">
-            <span className="text-sm">
+            <span className={cn("text-sm", stale && "text-yellow-600")}>
               {agent.last_heartbeat
                 ? formatRelative(agent.last_heartbeat)
                 : "Never"}
             </span>
           </DetailRow>
+
+          {/* Heartbeat Message */}
+          {agent.heartbeat_message && (
+            <DetailRow label="Activity">
+              <span className="text-sm italic text-muted-foreground">
+                {agent.heartbeat_message}
+              </span>
+            </DetailRow>
+          )}
 
           {/* Registered */}
           <DetailRow label="Registered">
@@ -639,15 +644,6 @@ export function AgentDetailDialog({
               </div>
             )}
           </div>
-
-          {/* Current Task */}
-          {currentTask && (
-            <DetailRow label="Current Task">
-              <span className="text-sm">
-                {currentTask.title || currentTask.id || "In progress"}
-              </span>
-            </DetailRow>
-          )}
 
           {/* Capabilities */}
           {(() => {

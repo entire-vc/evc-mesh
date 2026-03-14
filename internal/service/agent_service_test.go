@@ -274,7 +274,7 @@ func TestAgentService_Heartbeat(t *testing.T) {
 			ctx := context.Background()
 			agentID := tt.setup(svc, ws, agentRepo)
 
-			err := svc.Heartbeat(ctx, agentID)
+			err := svc.Heartbeat(ctx, agentID, nil)
 
 			if tt.wantErr {
 				require.Error(t, err)

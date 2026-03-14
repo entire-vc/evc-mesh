@@ -42,6 +42,9 @@ type Agent struct {
 	Capabilities        json.RawMessage `json:"capabilities" db:"capabilities"`
 	Status              AgentStatus     `json:"status" db:"status"`
 	LastHeartbeat       *time.Time      `json:"last_heartbeat" db:"last_heartbeat"`
+	HeartbeatStatus     string          `json:"heartbeat_status" db:"heartbeat_status"`
+	HeartbeatMessage    string          `json:"heartbeat_message" db:"heartbeat_message"`
+	HeartbeatMetadata   json.RawMessage `json:"heartbeat_metadata" db:"heartbeat_metadata"`
 	CurrentTaskID       *uuid.UUID      `json:"current_task_id" db:"current_task_id"`
 	Settings            json.RawMessage `json:"settings" db:"settings"`
 	TotalTasksCompleted int             `json:"total_tasks_completed" db:"total_tasks_completed"`
@@ -60,4 +63,36 @@ type Agent struct {
 	CallbackURL        string          `json:"callback_url" db:"callback_url"`
 	CreatedAt           time.Time       `json:"created_at" db:"created_at"`
 	UpdatedAt           time.Time       `json:"updated_at" db:"updated_at"`
+}
+
+// DefaultHeartbeatStaleThreshold is the default time after which an agent's heartbeat is considered stale.
+const DefaultHeartbeatStaleThreshold = 15 * time.Minute
+
+// IsHeartbeatStale returns true if the agent's last heartbeat is older than the threshold.
+func (a *Agent) IsHeartbeatStale() bool {
+	if a.LastHeartbeat == nil {
+		return false
+	}
+	return time.Since(*a.LastHeartbeat) > DefaultHeartbeatStaleThreshold
+}
+
+// SecondsSinceHeartbeat returns seconds since last heartbeat, or nil if never sent.
+func (a *Agent) SecondsSinceHeartbeat() *int {
+	if a.LastHeartbeat == nil {
+		return nil
+	}
+	secs := int(time.Since(*a.LastHeartbeat).Seconds())
+	return &secs
+}
+
+// AgentActivityLog represents a single event in the agent monitoring timeline.
+type AgentActivityLog struct {
+	ID          uuid.UUID       `json:"id" db:"id"`
+	AgentID     uuid.UUID       `json:"agent_id" db:"agent_id"`
+	WorkspaceID uuid.UUID       `json:"workspace_id" db:"workspace_id"`
+	EventType   string          `json:"event_type" db:"event_type"`
+	TaskID      *uuid.UUID      `json:"task_id,omitempty" db:"task_id"`
+	Message     string          `json:"message" db:"message"`
+	Metadata    json.RawMessage `json:"metadata,omitempty" db:"metadata"`
+	CreatedAt   time.Time       `json:"created_at" db:"created_at"`
 }

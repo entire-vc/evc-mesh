@@ -130,6 +130,11 @@ type TeamDirectoryAgent struct {
 	ProfileDescription string          `json:"profile_description"`
 	CurrentTasks       int             `json:"current_tasks"`
 	Projects           []string        `json:"projects"`
+	// Heartbeat monitoring fields
+	LastHeartbeat    *time.Time `json:"last_heartbeat,omitempty"`
+	HeartbeatStatus  string     `json:"heartbeat_status,omitempty"`
+	HeartbeatMessage string     `json:"heartbeat_message,omitempty"`
+	IsStale          bool       `json:"is_stale"`
 }
 
 // TeamDirectoryHuman is the human member profile for team directory API.
