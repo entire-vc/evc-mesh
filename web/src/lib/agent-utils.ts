@@ -29,8 +29,7 @@ export function isAgentStale(agent: { last_heartbeat?: string | null }): boolean
   return Date.now() - new Date(agent.last_heartbeat).getTime() > STALE_THRESHOLD_MS;
 }
 
-/** Returns the effective display status considering staleness. */
+/** Returns the DB status as-is. Staleness is shown as a visual warning, not a status override. */
 export function getEffectiveStatus(agent: Agent): AgentStatus {
-  if (agent.status === "online" && isAgentStale(agent)) return "offline";
   return agent.status;
 }

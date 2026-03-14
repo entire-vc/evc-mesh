@@ -22,12 +22,11 @@ const statusBorderColors: Record<string, string> = {
 
 function AgentCard({ agent }: { agent: OrgChartAgentNode }) {
   const stale = agent.is_stale ?? isAgentStale(agent);
-  const effectiveStatus = agent.status === "online" && stale ? "offline" : agent.status;
-  const statusCfg = agentStatusConfig[effectiveStatus as keyof typeof agentStatusConfig] ?? {
-    label: effectiveStatus,
+  const statusCfg = agentStatusConfig[agent.status as keyof typeof agentStatusConfig] ?? {
+    label: agent.status,
     dotColor: "bg-gray-400",
   };
-  const borderColor = statusBorderColors[effectiveStatus] ?? "border-l-gray-400";
+  const borderColor = statusBorderColors[agent.status] ?? "border-l-gray-400";
 
   return (
     <Card
