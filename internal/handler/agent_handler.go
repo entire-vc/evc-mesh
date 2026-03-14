@@ -168,7 +168,8 @@ type updateAgentRequest struct {
 	ProfileDescription *string           `json:"profile_description"`
 	CallbackURL        *string           `json:"callback_url"`
 	CurrentTaskID      *uuid.UUID        `json:"current_task_id"`
-	ParentAgentID      *string           `json:"parent_agent_id"` // UUID string or "" to clear
+	ParentAgentID      *string           `json:"parent_agent_id"`      // UUID string or "" to clear
+	SupervisorUserID   *string           `json:"supervisor_user_id"`   // UUID string or "" to clear
 	Role               *string           `json:"role"`
 }
 
@@ -225,6 +226,19 @@ func (h *AgentHandler) Update(c echo.Context) error {
 				return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid parent_agent_id"))
 			}
 			agent.ParentAgentID = &parentID
+			agent.SupervisorUserID = nil // mutual exclusion
+		}
+	}
+	if req.SupervisorUserID != nil {
+		if *req.SupervisorUserID == "" {
+			agent.SupervisorUserID = nil
+		} else {
+			supervisorID, err := uuid.Parse(*req.SupervisorUserID)
+			if err != nil {
+				return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid supervisor_user_id"))
+			}
+			agent.SupervisorUserID = &supervisorID
+			agent.ParentAgentID = nil // mutual exclusion
 		}
 	}
 

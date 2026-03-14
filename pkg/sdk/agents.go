@@ -11,6 +11,7 @@ type Agent struct {
 	ID                  string          `json:"id"`
 	WorkspaceID         string          `json:"workspace_id"`
 	ParentAgentID       *string         `json:"parent_agent_id,omitempty"`
+	SupervisorUserID    *string         `json:"supervisor_user_id,omitempty"`
 	Name                string          `json:"name"`
 	Slug                string          `json:"slug"`
 	AgentType           string          `json:"agent_type"` // claude_code|openclaw|cline|aider|custom

@@ -1,9 +1,11 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { AlertTriangle, Check, Copy, Pencil, RefreshCw, Trash2, X } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { agentStatusConfig, agentTypeConfig, getEffectiveStatus, isAgentStale } from "@/lib/agent-utils";
 import { formatDate, formatRelative } from "@/lib/utils";
 import { useAgentStore } from "@/stores/agent";
+import { useMemberStore } from "@/stores/member";
+import { useWorkspaceStore } from "@/stores/workspace";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -32,6 +34,14 @@ export function AgentDetailDialog({
   agent,
 }: AgentDetailDialogProps) {
   const { agents, updateAgent, deleteAgent, regenerateKey } = useAgentStore();
+  const { currentWorkspace } = useWorkspaceStore();
+  const { workspaceMembers, fetchWorkspaceMembers } = useMemberStore();
+
+  useEffect(() => {
+    if (open && currentWorkspace) {
+      void fetchWorkspaceMembers(currentWorkspace.id);
+    }
+  }, [open, currentWorkspace, fetchWorkspaceMembers]);
 
   const [mode, setMode] = useState<DialogMode>("detail");
   const [editingName, setEditingName] = useState(false);
@@ -423,34 +433,87 @@ export function AgentDetailDialog({
             </DetailRow>
           )}
 
+          {/* Statistics — right under heartbeat */}
+          {(tasksCompleted !== null || totalErrors !== null) && (
+            <div>
+              <p className="mb-2 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                Statistics
+              </p>
+              <div className="grid grid-cols-2 gap-3">
+                {tasksCompleted !== null && (
+                  <div className="rounded-lg border border-border p-3">
+                    <p className="text-xs text-muted-foreground">
+                      Tasks Completed
+                    </p>
+                    <p className="text-lg font-semibold">{tasksCompleted}</p>
+                  </div>
+                )}
+                {totalErrors !== null && (
+                  <div className="rounded-lg border border-border p-3">
+                    <p className="text-xs text-muted-foreground">
+                      Total Errors
+                    </p>
+                    <p className="text-lg font-semibold">{totalErrors}</p>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
           {/* Registered */}
           <DetailRow label="Registered">
             <span className="text-sm">{formatDate(agent.created_at)}</span>
           </DetailRow>
 
-          {/* Parent Agent */}
-          <DetailRow label="Parent Agent">
+          {/* Supervisor (agent or human) */}
+          <DetailRow label="Supervisor">
             <select
               className="h-8 rounded-md border border-input bg-background px-2 text-sm"
-              value={agent.parent_agent_id ?? ""}
+              value={
+                agent.parent_agent_id
+                  ? `agent:${agent.parent_agent_id}`
+                  : agent.supervisor_user_id
+                    ? `user:${agent.supervisor_user_id}`
+                    : ""
+              }
               onChange={async (e) => {
                 setIsLoading(true);
                 setError(null);
                 try {
-                  await updateAgent(agent.id, { parent_agent_id: e.target.value });
+                  const val = e.target.value;
+                  if (!val) {
+                    await updateAgent(agent.id, { parent_agent_id: "", supervisor_user_id: "" });
+                  } else if (val.startsWith("agent:")) {
+                    await updateAgent(agent.id, { parent_agent_id: val.slice(6), supervisor_user_id: "" });
+                  } else if (val.startsWith("user:")) {
+                    await updateAgent(agent.id, { supervisor_user_id: val.slice(5), parent_agent_id: "" });
+                  }
                 } catch (err) {
-                  setError(err instanceof Error ? err.message : "Failed to update parent");
+                  setError(err instanceof Error ? err.message : "Failed to update supervisor");
                 } finally {
                   setIsLoading(false);
                 }
               }}
             >
               <option value="">None (root)</option>
-              {parentCandidates.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.name}
-                </option>
-              ))}
+              {parentCandidates.length > 0 && (
+                <optgroup label="Agents">
+                  {parentCandidates.map((a) => (
+                    <option key={`agent:${a.id}`} value={`agent:${a.id}`}>
+                      {a.name}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
+              {workspaceMembers.length > 0 && (
+                <optgroup label="Members">
+                  {workspaceMembers.map((m) => (
+                    <option key={`user:${m.user_id}`} value={`user:${m.user_id}`}>
+                      {m.user.name || m.user.email}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
             </select>
           </DetailRow>
 
@@ -664,32 +727,6 @@ export function AgentDetailDialog({
             ) : null;
           })()}
 
-          {/* Statistics */}
-          {(tasksCompleted !== null || totalErrors !== null) && (
-            <div>
-              <p className="mb-2 text-xs font-medium uppercase tracking-wider text-muted-foreground">
-                Statistics
-              </p>
-              <div className="grid grid-cols-2 gap-3">
-                {tasksCompleted !== null && (
-                  <div className="rounded-lg border border-border p-3">
-                    <p className="text-xs text-muted-foreground">
-                      Tasks Completed
-                    </p>
-                    <p className="text-lg font-semibold">{tasksCompleted}</p>
-                  </div>
-                )}
-                {totalErrors !== null && (
-                  <div className="rounded-lg border border-border p-3">
-                    <p className="text-xs text-muted-foreground">
-                      Total Errors
-                    </p>
-                    <p className="text-lg font-semibold">{totalErrors}</p>
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
         </div>
 
         {/* Management actions */}

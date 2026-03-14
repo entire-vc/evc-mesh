@@ -25,6 +25,7 @@ type agentRow struct {
 	ID                  uuid.UUID          `db:"id"`
 	WorkspaceID         uuid.UUID          `db:"workspace_id"`
 	ParentAgentID       *uuid.UUID         `db:"parent_agent_id"`
+	SupervisorUserID    *uuid.UUID         `db:"supervisor_user_id"`
 	Name                string             `db:"name"`
 	Slug                string             `db:"slug"`
 	AgentType           domain.AgentType   `db:"agent_type"`
@@ -59,6 +60,7 @@ func (r *agentRow) toDomain() domain.Agent {
 		ID:                  r.ID,
 		WorkspaceID:         r.WorkspaceID,
 		ParentAgentID:       r.ParentAgentID,
+		SupervisorUserID:    r.SupervisorUserID,
 		Name:                r.Name,
 		Slug:                r.Slug,
 		AgentType:           r.AgentType,
@@ -109,7 +111,7 @@ func NewAgentRepo(db *sqlx.DB) *AgentRepo {
 func (r *AgentRepo) Create(ctx context.Context, agent *domain.Agent) error {
 	const q = `
 		INSERT INTO agents (
-			id, workspace_id, parent_agent_id, name, slug, agent_type,
+			id, workspace_id, parent_agent_id, supervisor_user_id, name, slug, agent_type,
 			api_key_hash, api_key_prefix, capabilities, status,
 			last_heartbeat, current_task_id, settings,
 			total_tasks_completed, total_errors,
@@ -118,14 +120,14 @@ func (r *AgentRepo) Create(ctx context.Context, agent *domain.Agent) error {
 			callback_url,
 			created_at, updated_at
 		) VALUES (
-			$1, $2, $3, $4, $5, $6,
-			$7, $8, $9, $10,
-			$11, $12, $13,
-			$14, $15,
-			$16, $17, $18, $19,
-			$20, $21, $22,
-			$23,
-			$24, $25
+			$1, $2, $3, $4, $5, $6, $7,
+			$8, $9, $10, $11,
+			$12, $13, $14,
+			$15, $16,
+			$17, $18, $19, $20,
+			$21, $22, $23,
+			$24,
+			$25, $26
 		)
 	`
 	capabilities := agent.Capabilities
@@ -141,7 +143,7 @@ func (r *AgentRepo) Create(ctx context.Context, agent *domain.Agent) error {
 		acceptsFrom = json.RawMessage(`["*"]`)
 	}
 	_, err := r.db.ExecContext(ctx, q,
-		agent.ID, agent.WorkspaceID, agent.ParentAgentID, agent.Name, agent.Slug, agent.AgentType,
+		agent.ID, agent.WorkspaceID, agent.ParentAgentID, agent.SupervisorUserID, agent.Name, agent.Slug, agent.AgentType,
 		agent.APIKeyHash, agent.APIKeyPrefix, capabilities, agent.Status,
 		agent.LastHeartbeat, agent.CurrentTaskID, settings,
 		agent.TotalTasksCompleted, agent.TotalErrors,
@@ -182,16 +184,16 @@ func (r *AgentRepo) GetByAPIKeyPrefix(ctx context.Context, workspaceID uuid.UUID
 func (r *AgentRepo) Update(ctx context.Context, agent *domain.Agent) error {
 	const q = `
 		UPDATE agents
-		SET parent_agent_id = $2, name = $3, slug = $4, agent_type = $5,
-		    api_key_hash = $6, api_key_prefix = $7,
-		    capabilities = $8, status = $9,
-		    last_heartbeat = $10, current_task_id = $11,
-		    settings = $12, total_tasks_completed = $13,
-		    total_errors = $14,
-		    role = $15, responsibility_zone = $16, escalation_to = $17, accepts_from = $18,
-		    max_concurrent_tasks = $19, working_hours = $20, profile_description = $21,
-		    callback_url = $22,
-		    updated_at = $23
+		SET parent_agent_id = $2, supervisor_user_id = $3, name = $4, slug = $5, agent_type = $6,
+		    api_key_hash = $7, api_key_prefix = $8,
+		    capabilities = $9, status = $10,
+		    last_heartbeat = $11, current_task_id = $12,
+		    settings = $13, total_tasks_completed = $14,
+		    total_errors = $15,
+		    role = $16, responsibility_zone = $17, escalation_to = $18, accepts_from = $19,
+		    max_concurrent_tasks = $20, working_hours = $21, profile_description = $22,
+		    callback_url = $23,
+		    updated_at = $24
 		WHERE id = $1 AND deleted_at IS NULL
 	`
 	capabilities := agent.Capabilities
@@ -207,7 +209,7 @@ func (r *AgentRepo) Update(ctx context.Context, agent *domain.Agent) error {
 		acceptsFrom = json.RawMessage(`["*"]`)
 	}
 	res, err := r.db.ExecContext(ctx, q,
-		agent.ID, agent.ParentAgentID, agent.Name, agent.Slug, agent.AgentType,
+		agent.ID, agent.ParentAgentID, agent.SupervisorUserID, agent.Name, agent.Slug, agent.AgentType,
 		agent.APIKeyHash, agent.APIKeyPrefix,
 		capabilities, agent.Status,
 		agent.LastHeartbeat, agent.CurrentTaskID,
@@ -308,7 +310,7 @@ func (r *AgentRepo) GetSubAgentTree(ctx context.Context, parentID uuid.UUID) ([]
 			INNER JOIN agent_tree t ON a.parent_agent_id = t.id
 			WHERE a.deleted_at IS NULL AND t.depth < 10
 		)
-		SELECT id, workspace_id, parent_agent_id, name, slug, agent_type,
+		SELECT id, workspace_id, parent_agent_id, supervisor_user_id, name, slug, agent_type,
 		       api_key_hash, api_key_prefix, capabilities, status,
 		       last_heartbeat, heartbeat_status, heartbeat_message, heartbeat_metadata,
 		       current_task_id, settings,
@@ -382,7 +384,7 @@ type agentWithProjectsRow struct {
 // list of project names they participate in through project_members.
 func (r *AgentRepo) ListWithProjects(ctx context.Context, workspaceID uuid.UUID) ([]repository.AgentWithProjects, error) {
 	const q = `
-		SELECT a.id, a.workspace_id, a.parent_agent_id, a.name, a.slug, a.agent_type,
+		SELECT a.id, a.workspace_id, a.parent_agent_id, a.supervisor_user_id, a.name, a.slug, a.agent_type,
 		       a.api_key_hash, a.api_key_prefix, a.capabilities, a.status,
 		       a.last_heartbeat, a.heartbeat_status, a.heartbeat_message, a.heartbeat_metadata,
 		       a.current_task_id, a.settings,

@@ -120,6 +120,7 @@ type TeamDirectoryAgent struct {
 	Status             AgentStatus     `json:"status"`
 	AgentType          AgentType       `json:"agent_type"`
 	ParentAgentID      *uuid.UUID      `json:"parent_agent_id,omitempty"`
+	SupervisorUserID   *uuid.UUID      `json:"supervisor_user_id,omitempty"`
 	Role               string          `json:"role"`
 	Capabilities       json.RawMessage `json:"capabilities"`
 	ResponsibilityZone string          `json:"responsibility_zone"`

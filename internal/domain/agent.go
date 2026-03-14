@@ -34,6 +34,7 @@ type Agent struct {
 	ID                  uuid.UUID       `json:"id" db:"id"`
 	WorkspaceID         uuid.UUID       `json:"workspace_id" db:"workspace_id"`
 	ParentAgentID       *uuid.UUID      `json:"parent_agent_id,omitempty" db:"parent_agent_id"`
+	SupervisorUserID    *uuid.UUID      `json:"supervisor_user_id,omitempty" db:"supervisor_user_id"`
 	Name                string          `json:"name" db:"name"`
 	Slug                string          `json:"slug" db:"slug"`
 	AgentType           AgentType       `json:"agent_type" db:"agent_type"`

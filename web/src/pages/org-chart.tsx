@@ -1,13 +1,18 @@
 import { useEffect, useState } from "react";
-import { Bot, LayoutGrid, Network, User } from "lucide-react";
+import { Bot, LayoutGrid, Network, Plus, User, UserPlus } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { agentStatusConfig, isAgentStale } from "@/lib/agent-utils";
 import { useWorkspaceStore } from "@/stores/workspace";
+import { useAgentStore } from "@/stores/agent";
 import { useRulesStore } from "@/stores/rules";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import type { OrgChartAgentNode, TeamDirectoryHuman } from "@/types";
+import { AgentDetailDialog } from "@/components/agent-detail-dialog";
+import { RegisterAgentDialog } from "@/components/register-agent-dialog";
+import { InviteMemberDialog } from "@/components/invite-member-dialog";
+import type { Agent, OrgChartAgentNode, TeamDirectoryHuman } from "@/types";
 
 // ---------------------------------------------------------------------------
 // Agent card
@@ -20,7 +25,13 @@ const statusBorderColors: Record<string, string> = {
   error: "border-l-red-500",
 };
 
-function AgentCard({ agent }: { agent: OrgChartAgentNode }) {
+function AgentCard({
+  agent,
+  onClick,
+}: {
+  agent: OrgChartAgentNode;
+  onClick?: () => void;
+}) {
   const stale = agent.is_stale ?? isAgentStale(agent);
   const statusCfg = agentStatusConfig[agent.status as keyof typeof agentStatusConfig] ?? {
     label: agent.status,
@@ -31,10 +42,12 @@ function AgentCard({ agent }: { agent: OrgChartAgentNode }) {
   return (
     <Card
       className={cn(
-        "w-52 shrink-0 border-l-4 cursor-default select-none hover:shadow-md transition-shadow",
+        "w-52 shrink-0 border-l-4 select-none hover:shadow-md transition-shadow",
         borderColor,
         stale && agent.status === "online" && "border-l-yellow-500",
+        onClick ? "cursor-pointer" : "cursor-default",
       )}
+      onClick={onClick}
     >
       <CardContent className="p-3 space-y-1.5">
         <div className="flex items-center gap-1.5 min-w-0">
@@ -122,13 +135,19 @@ function HumanCard({ human }: { human: TeamDirectoryHuman }) {
 // Tree node — top-down org chart with connector lines
 // ---------------------------------------------------------------------------
 
-function OrgTreeNode({ node }: { node: OrgChartAgentNode }) {
+function OrgTreeNode({
+  node,
+  onAgentClick,
+}: {
+  node: OrgChartAgentNode;
+  onAgentClick: (agentId: string) => void;
+}) {
   const hasChildren = node.children && node.children.length > 0;
 
   return (
     <div className="flex flex-col items-center">
       {/* Card */}
-      <AgentCard agent={node} />
+      <AgentCard agent={node} onClick={() => onAgentClick(node.id)} />
 
       {/* Connector lines to children */}
       {hasChildren && (
@@ -154,7 +173,7 @@ function OrgTreeNode({ node }: { node: OrgChartAgentNode }) {
                 <div key={child.id} className="flex flex-col items-center">
                   {/* Vertical line down to child */}
                   <div className="w-px h-6 bg-border" />
-                  <OrgTreeNode node={child} />
+                  <OrgTreeNode node={child} onAgentClick={onAgentClick} />
                 </div>
               ))}
             </div>
@@ -172,9 +191,11 @@ function OrgTreeNode({ node }: { node: OrgChartAgentNode }) {
 function TreeView({
   agentTree,
   humans,
+  onAgentClick,
 }: {
   agentTree: OrgChartAgentNode[];
   humans: TeamDirectoryHuman[];
+  onAgentClick: (agentId: string) => void;
 }) {
   return (
     <div className="space-y-10">
@@ -187,7 +208,7 @@ function TreeView({
           <div className="overflow-x-auto pb-4">
             <div className="inline-flex gap-10 items-start">
               {agentTree.map((root) => (
-                <OrgTreeNode key={root.id} node={root} />
+                <OrgTreeNode key={root.id} node={root} onAgentClick={onAgentClick} />
               ))}
             </div>
           </div>
@@ -220,9 +241,11 @@ function TreeView({
 function GridView({
   agentTree,
   humans,
+  onAgentClick,
 }: {
   agentTree: OrgChartAgentNode[];
   humans: TeamDirectoryHuman[];
+  onAgentClick: (agentId: string) => void;
 }) {
   // Flatten agent tree to a flat list.
   function flattenTree(nodes: OrgChartAgentNode[]): OrgChartAgentNode[] {
@@ -274,7 +297,7 @@ function GridView({
             </h3>
             <div className="flex flex-wrap gap-4">
               {projectAgents.map((a) => (
-                <AgentCard key={a.id} agent={a} />
+                <AgentCard key={a.id} agent={a} onClick={() => onAgentClick(a.id)} />
               ))}
               {projectHumans.map((h) => (
                 <HumanCard key={h.id} human={h} />
@@ -295,7 +318,7 @@ function GridView({
           </h3>
           <div className="flex flex-wrap gap-4">
             {unassignedAgents.map((a) => (
-              <AgentCard key={a.id} agent={a} />
+              <AgentCard key={a.id} agent={a} onClick={() => onAgentClick(a.id)} />
             ))}
             {unassignedHumans.map((h) => (
               <HumanCard key={h.id} human={h} />
@@ -340,17 +363,33 @@ type ViewMode = "tree" | "grid";
 export function OrgChartPage() {
   const { currentWorkspace } = useWorkspaceStore();
   const { orgChart, isOrgChartLoading, fetchOrgChart } = useRulesStore();
+  const { agents, fetchAgents } = useAgentStore();
   const [viewMode, setViewMode] = useState<ViewMode>("tree");
+
+  // Dialog state
+  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
+  const [registerOpen, setRegisterOpen] = useState(false);
+  const [inviteOpen, setInviteOpen] = useState(false);
 
   useEffect(() => {
     if (currentWorkspace) {
       void fetchOrgChart(currentWorkspace.id);
+      void fetchAgents(currentWorkspace.id);
     }
-  }, [currentWorkspace, fetchOrgChart]);
+  }, [currentWorkspace, fetchOrgChart, fetchAgents]);
 
   const agentTree = orgChart?.agent_tree ?? [];
   const humans = orgChart?.humans ?? [];
   const workspaceName = orgChart?.workspace ?? currentWorkspace?.name ?? "";
+
+  // Find the full Agent object for the detail dialog (from agents store, not org chart tree)
+  const selectedAgent: Agent | null = selectedAgentId
+    ? agents.find((a) => a.id === selectedAgentId) ?? null
+    : null;
+
+  const handleAgentClick = (agentId: string) => {
+    setSelectedAgentId(agentId);
+  };
 
   return (
     <div className="flex h-full flex-col">
@@ -363,34 +402,56 @@ export function OrgChartPage() {
           )}
         </div>
 
-        {/* View mode toggle */}
-        <div className="flex items-center gap-1 rounded-lg border border-input bg-background p-1">
-          <button
-            type="button"
-            onClick={() => setViewMode("tree")}
-            className={cn(
-              "flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors",
-              viewMode === "tree"
-                ? "bg-primary text-primary-foreground"
-                : "text-muted-foreground hover:text-foreground",
-            )}
+        <div className="flex items-center gap-2">
+          {/* Action buttons */}
+          <Button
+            variant="outline"
+            size="sm"
+            className="gap-1.5"
+            onClick={() => setRegisterOpen(true)}
           >
-            <Network className="h-3.5 w-3.5" />
-            Tree
-          </button>
-          <button
-            type="button"
-            onClick={() => setViewMode("grid")}
-            className={cn(
-              "flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors",
-              viewMode === "grid"
-                ? "bg-primary text-primary-foreground"
-                : "text-muted-foreground hover:text-foreground",
-            )}
+            <Plus className="h-3.5 w-3.5" />
+            Register Agent
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            className="gap-1.5"
+            onClick={() => setInviteOpen(true)}
           >
-            <LayoutGrid className="h-3.5 w-3.5" />
-            By Project
-          </button>
+            <UserPlus className="h-3.5 w-3.5" />
+            Invite Member
+          </Button>
+
+          {/* View mode toggle */}
+          <div className="flex items-center gap-1 rounded-lg border border-input bg-background p-1 ml-2">
+            <button
+              type="button"
+              onClick={() => setViewMode("tree")}
+              className={cn(
+                "flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors",
+                viewMode === "tree"
+                  ? "bg-primary text-primary-foreground"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              <Network className="h-3.5 w-3.5" />
+              Tree
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode("grid")}
+              className={cn(
+                "flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors",
+                viewMode === "grid"
+                  ? "bg-primary text-primary-foreground"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              <LayoutGrid className="h-3.5 w-3.5" />
+              By Project
+            </button>
+          </div>
         </div>
       </div>
 
@@ -399,11 +460,36 @@ export function OrgChartPage() {
         {isOrgChartLoading ? (
           <OrgChartSkeleton />
         ) : viewMode === "tree" ? (
-          <TreeView agentTree={agentTree} humans={humans} />
+          <TreeView agentTree={agentTree} humans={humans} onAgentClick={handleAgentClick} />
         ) : (
-          <GridView agentTree={agentTree} humans={humans} />
+          <GridView agentTree={agentTree} humans={humans} onAgentClick={handleAgentClick} />
         )}
       </div>
+
+      {/* Agent detail dialog */}
+      <AgentDetailDialog
+        open={selectedAgentId !== null}
+        onOpenChange={(open) => {
+          if (!open) setSelectedAgentId(null);
+        }}
+        agent={selectedAgent}
+      />
+
+      {/* Register agent dialog */}
+      {currentWorkspace && (
+        <>
+          <RegisterAgentDialog
+            open={registerOpen}
+            onOpenChange={setRegisterOpen}
+            workspaceId={currentWorkspace.id}
+          />
+          <InviteMemberDialog
+            open={inviteOpen}
+            onClose={() => setInviteOpen(false)}
+            workspaceId={currentWorkspace.id}
+          />
+        </>
+      )}
     </div>
   );
 }

@@ -235,6 +235,7 @@ export interface Agent {
   id: string;
   workspace_id: string;
   parent_agent_id?: string | null;
+  supervisor_user_id?: string | null;
   name: string;
   agent_type: AgentType;
   status: AgentStatus;
@@ -536,6 +537,7 @@ export interface TeamDirectoryAgent {
   status: string;
   agent_type: string;
   parent_agent_id?: string | null;
+  supervisor_user_id?: string | null;
   role: string;
   capabilities: string[];
   responsibility_zone: string;
