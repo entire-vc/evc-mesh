@@ -16,13 +16,25 @@ CREATE TABLE IF NOT EXISTS memories (
 	created_at      TIMESTAMPTZ DEFAULT now(),
 	updated_at      TIMESTAMPTZ DEFAULT now(),
 	expires_at      TIMESTAMPTZ,
-	search_vector   TSVECTOR GENERATED ALWAYS AS (
-		setweight(to_tsvector('simple', coalesce(key, '')), 'A') ||
-		setweight(to_tsvector('english', coalesce(content, '')), 'B') ||
-		setweight(to_tsvector('simple', coalesce(array_to_string(tags, ' '), '')), 'A')
-	) STORED,
+	search_vector   TSVECTOR,
 	CONSTRAINT uq_memory_key_scope UNIQUE (workspace_id, project_id, agent_id, key, scope)
 );
+
+-- +goose StatementBegin
+CREATE OR REPLACE FUNCTION memories_search_vector_update() RETURNS trigger AS $$
+BEGIN
+	NEW.search_vector :=
+		setweight(to_tsvector('simple', coalesce(NEW.key, '')), 'A') ||
+		setweight(to_tsvector('simple', coalesce(NEW.content, '')), 'B') ||
+		setweight(to_tsvector('simple', coalesce(array_to_string(NEW.tags, ' '), '')), 'A');
+	RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+-- +goose StatementEnd
+
+CREATE TRIGGER trg_memories_search_vector
+	BEFORE INSERT OR UPDATE ON memories
+	FOR EACH ROW EXECUTE FUNCTION memories_search_vector_update();
 
 CREATE INDEX idx_memories_search ON memories USING GIN(search_vector);
 CREATE INDEX idx_memories_workspace_scope ON memories(workspace_id, scope);
@@ -33,4 +45,6 @@ CREATE INDEX idx_memories_relevance ON memories(relevance) WHERE relevance > 0;
 CREATE INDEX idx_memories_expires ON memories(expires_at) WHERE expires_at IS NOT NULL;
 
 -- +goose Down
+DROP TRIGGER IF EXISTS trg_memories_search_vector ON memories;
+DROP FUNCTION IF EXISTS memories_search_vector_update();
 DROP TABLE IF EXISTS memories;
