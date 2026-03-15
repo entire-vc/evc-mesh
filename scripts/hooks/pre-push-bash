@@ -1,0 +1,20 @@
+#!/bin/bash
+# Pre-push hook for Bash repos (evc-mesh-openclaw-skill)
+# Blocks direct push to main/master only (no build/test for shell scripts)
+#
+# Install: cp scripts/hooks/pre-push-bash .git/hooks/pre-push && chmod +x .git/hooks/pre-push
+
+set -e
+
+remote="$1"
+
+while read local_ref local_sha remote_ref remote_sha; do
+    if echo "$remote_ref" | grep -qE '(refs/heads/main|refs/heads/master)$'; then
+        echo "ERROR: Direct push to main/master is blocked."
+        echo "Please use a feature branch and create a PR."
+        exit 1
+    fi
+done
+
+echo "Pre-push checks passed."
+exit 0

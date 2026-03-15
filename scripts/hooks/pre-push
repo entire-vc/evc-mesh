@@ -1,0 +1,32 @@
+#!/bin/bash
+# Pre-push hook for Go repos (evc-mesh, evc-mesh-mcp)
+# Blocks direct push to main/master, runs go build + go test
+#
+# Install: cp scripts/hooks/pre-push .git/hooks/pre-push && chmod +x .git/hooks/pre-push
+
+set -e
+
+remote="$1"
+
+while read local_ref local_sha remote_ref remote_sha; do
+    if echo "$remote_ref" | grep -qE '(refs/heads/main|refs/heads/master)$'; then
+        echo "ERROR: Direct push to main/master is blocked."
+        echo "Please use a feature branch and create a PR."
+        exit 1
+    fi
+done
+
+echo "Running go build..."
+if ! go build ./...; then
+    echo "ERROR: go build failed. Push aborted."
+    exit 1
+fi
+
+echo "Running go test..."
+if ! go test ./... -count=1 -timeout 120s 2>&1; then
+    echo "ERROR: go test failed. Push aborted."
+    exit 1
+fi
+
+echo "Pre-push checks passed."
+exit 0
