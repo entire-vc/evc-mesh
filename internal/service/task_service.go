@@ -174,7 +174,9 @@ func (s *taskService) Create(ctx context.Context, task *domain.Task) error {
 	}
 
 	// Apply auto-assign rules if the task has no assignee.
-	if task.AssigneeType == domain.AssigneeTypeUnassigned || task.AssigneeType == "" {
+	// Check both AssigneeType AND AssigneeID to avoid overwriting an explicitly provided assignee
+	// (e.g. MCP may send assignee_id with default assignee_type "unassigned").
+	if (task.AssigneeType == domain.AssigneeTypeUnassigned || task.AssigneeType == "") && task.AssigneeID == nil {
 		s.applyAutoAssign(ctx, task)
 	}
 
@@ -684,6 +686,16 @@ func (s *taskService) applyAutoAssign(ctx context.Context, task *domain.Task) {
 		log.Printf("[auto-assign] WARNING: failed to get assignment rules for project %s: %v", task.ProjectID, err)
 		return
 	}
+
+	// Log effective rules for diagnostics.
+	hasRules := effective.DefaultAssignee != nil || len(effective.ByType) > 0 || len(effective.ByPriority) > 0 || len(effective.FallbackChain) > 0
+	if !hasRules {
+		log.Printf("[auto-assign] no assignment rules configured for project %s", task.ProjectID)
+		return
+	}
+	log.Printf("[auto-assign] evaluating rules for task %q (project %s, priority %s, labels %v): default=%v, by_type=%d, by_priority=%d, fallback=%d",
+		task.Title, task.ProjectID, task.Priority, task.Labels,
+		effective.DefaultAssignee != nil, len(effective.ByType), len(effective.ByPriority), len(effective.FallbackChain))
 
 	// Collect candidate assignee IDs in priority order.
 	// The first one that parses as a valid UUID wins.

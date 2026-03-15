@@ -903,6 +903,25 @@ func TestTaskService_applyAutoAssign(t *testing.T) {
 			wantAssigneeID:   &agentIDStr,
 			wantAssigneeType: domain.AssigneeTypeAgent,
 		},
+		{
+			name: "explicit assignee_id with unassigned type - skip auto-assign",
+			rules: &domain.EffectiveAssignmentRules{
+				DefaultAssignee: &domain.EffectiveAssignmentRule{Value: agentIDStr.String(), Source: "workspace"},
+			},
+			task: &domain.Task{
+				ProjectID:    uuid.New(),
+				StatusID:     uuid.New(),
+				Title:        "Explicit assignee despite unassigned type",
+				Priority:     domain.PriorityMedium,
+				AssigneeID:   &agentIDStr2,
+				AssigneeType: domain.AssigneeTypeUnassigned,
+			},
+			// Create guard checks AssigneeID != nil, so auto-assign is skipped.
+			// The task keeps its explicit assignee.
+			wantAssigned:     true,
+			wantAssigneeID:   &agentIDStr2,
+			wantAssigneeType: domain.AssigneeTypeUnassigned,
+		},
 	}
 
 	for _, tt := range tests {

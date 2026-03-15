@@ -202,10 +202,22 @@ func (s *Server) handleCreateTask(ctx context.Context, request mcpsdk.CallToolRe
 		return errResult("title is required")
 	}
 
+	assigneeType := mcpsdk.ParseString(request, "assignee_type", "")
+	assigneeID := mcpsdk.ParseString(request, "assignee_id", "")
+
+	// Infer assignee_type from assignee_id if not explicitly provided.
+	// Without this, passing assignee_id alone would default to "unassigned"
+	// and trigger auto-assign, overwriting the explicit assignee.
+	if assigneeID != "" && assigneeType == "" {
+		assigneeType = "agent" // assume agent by default for MCP callers
+	}
+
 	body := map[string]any{
-		"title":         title,
-		"assignee_type": mcpsdk.ParseString(request, "assignee_type", "unassigned"),
-		"priority":      mcpsdk.ParseString(request, "priority", "medium"),
+		"title":    title,
+		"priority": mcpsdk.ParseString(request, "priority", "medium"),
+	}
+	if assigneeType != "" {
+		body["assignee_type"] = assigneeType
 	}
 
 	// Resolve status slug to status_id.
@@ -221,7 +233,7 @@ func (s *Server) handleCreateTask(ctx context.Context, request mcpsdk.CallToolRe
 	if desc := mcpsdk.ParseString(request, "description", ""); desc != "" {
 		body["description"] = desc
 	}
-	if assigneeID := mcpsdk.ParseString(request, "assignee_id", ""); assigneeID != "" {
+	if assigneeID != "" {
 		body["assignee_id"] = assigneeID
 	}
 	if parentTaskID := mcpsdk.ParseString(request, "parent_task_id", ""); parentTaskID != "" {
