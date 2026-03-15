@@ -133,9 +133,7 @@ func (s *agentNotifyService) deliverWithRetry(callbackURL string, agentID uuid.U
 		resp.Body.Close()
 
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-			if attempt > 0 {
-				log.Printf("[agent-notify] callback delivered for agent %s after %d retries", agentID, attempt)
-			}
+			log.Printf("[agent-notify] callback delivered for agent %s (attempt %d, url: %s)", agentID, attempt+1, callbackURL)
 			return // success
 		}
 
