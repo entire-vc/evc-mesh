@@ -30,8 +30,8 @@ export const useMemoryStore = create<MemoryState>((set) => ({
     try {
       const params: Record<string, string> = { workspace_id: workspaceId };
       if (scope && scope !== "all") params.scope = scope;
-      const response = await api<Memory[]>("/api/v1/memories", { params });
-      set({ memories: response ?? [], loading: false });
+      const response = await api<{ items: Memory[]; total: number }>("/api/v1/memories", { params });
+      set({ memories: response.items ?? [], loading: false });
     } catch {
       set({ loading: false });
     }
@@ -49,21 +49,26 @@ export const useMemoryStore = create<MemoryState>((set) => ({
         workspace_id: workspaceId,
       };
       if (scope && scope !== "all") params.scope = scope;
-      const response = await api<ScoredMemory[]>("/api/v1/memories/search", {
+      const response = await api<{ items: ScoredMemory[] }>("/api/v1/memories/search", {
         params,
       });
-      set({ searchResults: response ?? [], loading: false });
+      set({ searchResults: response.items ?? [], loading: false });
     } catch {
       set({ loading: false });
     }
   },
 
   createMemory: async (data: Partial<Memory>) => {
-    const memory = await api<Memory>("/api/v1/memories", {
+    const response = await api<{ memory: Memory; outcome: string }>("/api/v1/memories", {
       method: "POST",
       body: data,
     });
-    set((state) => ({ memories: [memory, ...state.memories] }));
+    const memory = response.memory;
+    set((state) => ({
+      memories: state.memories.some((m) => m.id === memory.id)
+        ? state.memories.map((m) => (m.id === memory.id ? memory : m))
+        : [memory, ...state.memories],
+    }));
   },
 
   deleteMemory: async (id: string) => {
