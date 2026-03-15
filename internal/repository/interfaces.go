@@ -443,3 +443,23 @@ type IntegrationRepository interface {
 	Delete(ctx context.Context, id uuid.UUID) error
 	ListByWorkspace(ctx context.Context, workspaceID uuid.UUID) ([]domain.IntegrationConfig, error)
 }
+
+// MemoryRepository manages persistence for agent memories (knowledge base).
+type MemoryRepository interface {
+	Upsert(ctx context.Context, mem *domain.Memory) error
+	GetByID(ctx context.Context, id uuid.UUID) (*domain.Memory, error)
+	GetByKey(ctx context.Context, workspaceID uuid.UUID, projectID *uuid.UUID, agentID *uuid.UUID, key string, scope domain.MemoryScope) (*domain.Memory, error)
+	FullTextSearch(ctx context.Context, query string, workspaceID uuid.UUID, projectID *uuid.UUID, scope string, tags []string, limit int) ([]domain.ScoredMemory, error)
+	FindByScope(ctx context.Context, workspaceID uuid.UUID, projectID *uuid.UUID, scope string, limit int) ([]domain.Memory, error)
+	ListByWorkspaceProject(ctx context.Context, workspaceID uuid.UUID, projectID *uuid.UUID) ([]domain.Memory, error)
+	Delete(ctx context.Context, id uuid.UUID) error
+	BoostRelevance(ctx context.Context, ids []uuid.UUID) error
+}
+
+// AgentSessionRepository manages persistence for agent session tracking.
+type AgentSessionRepository interface {
+	Create(ctx context.Context, session *domain.AgentSession) error
+	Update(ctx context.Context, session *domain.AgentSession) error
+	GetActive(ctx context.Context, agentID uuid.UUID) (*domain.AgentSession, error)
+	EndStale(ctx context.Context, timeout time.Duration) (int, error)
+}

@@ -245,6 +245,9 @@ type PublishEventInput struct {
 	Payload     map[string]any   `json:"payload"`
 	Tags        []string         `json:"tags"`
 	TTLSeconds  int              `json:"ttl_seconds"`
+	// MemoryHint is an optional hint instructing the event pipeline to persist
+	// a memory entry from this event. When nil, auto-extraction rules still apply.
+	MemoryHint *domain.MemoryHint `json:"memory_hint,omitempty"`
 }
 
 // EventBusService provides business logic for the event bus.
@@ -261,6 +264,7 @@ type EventBusService interface {
 type EventBusServiceConfigurable interface {
 	EventBusService
 	SetEventBus(publisher eventbus.Publisher, workspaceRepo repository.WorkspaceRepository, projectRepo repository.ProjectRepository)
+	SetMemoryService(ms MemoryService)
 }
 
 // GetContextOptions defines options for retrieving context from the event bus.
@@ -292,14 +296,14 @@ type SavedViewService interface {
 
 // CreateProjectUpdateInput holds the fields for creating a project update.
 type CreateProjectUpdateInput struct {
-	ProjectID  uuid.UUID       `json:"project_id"`
-	Title      string          `json:"title"`
+	ProjectID  uuid.UUID           `json:"project_id"`
+	Title      string              `json:"title"`
 	Status     domain.UpdateStatus `json:"status"`
-	Summary    string          `json:"summary"`
-	Highlights []domain.TextItem `json:"highlights"`
-	Blockers   []domain.TextItem `json:"blockers"`
-	NextSteps  []domain.TextItem `json:"next_steps"`
-	CreatedBy  uuid.UUID       `json:"created_by"`
+	Summary    string              `json:"summary"`
+	Highlights []domain.TextItem   `json:"highlights"`
+	Blockers   []domain.TextItem   `json:"blockers"`
+	NextSteps  []domain.TextItem   `json:"next_steps"`
+	CreatedBy  uuid.UUID           `json:"created_by"`
 }
 
 // ProjectUpdateService provides business logic for project updates.
@@ -311,20 +315,20 @@ type ProjectUpdateService interface {
 
 // CreateInitiativeInput holds the fields for creating an initiative.
 type CreateInitiativeInput struct {
-	WorkspaceID uuid.UUID        `json:"workspace_id"`
-	Name        string           `json:"name"`
-	Description string           `json:"description"`
+	WorkspaceID uuid.UUID               `json:"workspace_id"`
+	Name        string                  `json:"name"`
+	Description string                  `json:"description"`
 	Status      domain.InitiativeStatus `json:"status"`
-	TargetDate  *time.Time       `json:"target_date"`
-	CreatedBy   uuid.UUID        `json:"created_by"`
+	TargetDate  *time.Time              `json:"target_date"`
+	CreatedBy   uuid.UUID               `json:"created_by"`
 }
 
 // UpdateInitiativeInput holds the fields for partially updating an initiative.
 type UpdateInitiativeInput struct {
-	Name        *string          `json:"name"`
-	Description *string          `json:"description"`
+	Name        *string                  `json:"name"`
+	Description *string                  `json:"description"`
 	Status      *domain.InitiativeStatus `json:"status"`
-	TargetDate  *time.Time       `json:"target_date"`
+	TargetDate  *time.Time               `json:"target_date"`
 }
 
 // InitiativeService provides business logic for initiative management.
@@ -584,4 +588,14 @@ type AnalyticsFilter struct {
 // AnalyticsService provides business logic for analytics queries.
 type AnalyticsService interface {
 	GetMetrics(ctx context.Context, filter AnalyticsFilter) (*AnalyticsMetrics, error)
+}
+
+// MemoryService provides business logic for agent persistent memory.
+type MemoryService interface {
+	Remember(ctx context.Context, mem *domain.Memory) (string, error) // returns "created" or "updated"
+	Recall(ctx context.Context, opts domain.RecallOpts) ([]domain.ScoredMemory, error)
+	GetProjectKnowledge(ctx context.Context, workspaceID uuid.UUID, projectID *uuid.UUID) ([]domain.Memory, error)
+	Forget(ctx context.Context, id uuid.UUID, actorAgentID *uuid.UUID, isAdmin bool) error
+	GetByID(ctx context.Context, id uuid.UUID) (*domain.Memory, error)
+	ExtractFromEvent(ctx context.Context, event *domain.EventBusMessage, hint *domain.MemoryHint) error
 }

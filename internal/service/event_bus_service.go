@@ -26,6 +26,7 @@ type eventBusService struct {
 	publisher     eventbus.Publisher
 	workspaceRepo repository.WorkspaceRepository
 	projectRepo   repository.ProjectRepository
+	memoryService MemoryService
 }
 
 // NewEventBusService returns a new EventBusService backed by the given repositories.
@@ -50,6 +51,12 @@ func (s *eventBusService) SetEventBus(
 	s.publisher = publisher
 	s.workspaceRepo = workspaceRepo
 	s.projectRepo = projectRepo
+}
+
+// SetMemoryService wires an optional MemoryService so that Publish() can
+// extract and persist memories from events when a MemoryHint is present.
+func (s *eventBusService) SetMemoryService(ms MemoryService) {
+	s.memoryService = ms
 }
 
 // Publish creates a new event bus message.
@@ -103,6 +110,7 @@ func (s *eventBusService) Publish(ctx context.Context, input PublishEventInput) 
 				// Fall through to direct PG write as fallback.
 			} else {
 				// Event was published to NATS, persisted to PG, and broadcast to Redis.
+				s.extractMemory(ctx, msg, input.MemoryHint)
 				return msg, nil
 			}
 		}
@@ -113,7 +121,19 @@ func (s *eventBusService) Publish(ctx context.Context, input PublishEventInput) 
 		return nil, err
 	}
 
+	s.extractMemory(ctx, msg, input.MemoryHint)
 	return msg, nil
+}
+
+// extractMemory delegates memory extraction to the MemoryService when one is configured.
+// Errors are logged but never returned to the caller — memory extraction is non-fatal.
+func (s *eventBusService) extractMemory(ctx context.Context, msg *domain.EventBusMessage, hint *domain.MemoryHint) {
+	if s.memoryService == nil {
+		return
+	}
+	if err := s.memoryService.ExtractFromEvent(ctx, msg, hint); err != nil {
+		log.Printf("[event_bus_service] WARNING: memory extraction failed for event %s: %v", msg.ID, err)
+	}
 }
 
 // List returns a paginated list of event bus messages for the given project.

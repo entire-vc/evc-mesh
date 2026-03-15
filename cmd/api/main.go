@@ -76,6 +76,7 @@ func main() {
 	taskTemplateRepo := postgres.NewTaskTemplateRepo(db)
 	notificationRepo := postgres.NewNotificationRepo(db)
 	autoTransRuleRepo := postgres.NewAutoTransitionRuleRepo(db)
+	memoryRepo := postgres.NewMemoryRepo(db)
 
 	// 5. Create auth service.
 	authService := auth.NewService(
@@ -104,6 +105,9 @@ func main() {
 	// Event bus service is created early so it can be injected into taskService.
 	// Task mutations (create/update/move/delete) will auto-publish events.
 	eventBusService := service.NewEventBusService(eventBusRepo, activityLogRepo)
+
+	// Memory service is wired into eventBusService so Publish() can extract memories.
+	memoryService := service.NewMemoryService(memoryRepo)
 
 	// Slack service sends notifications via Slack Incoming Webhooks when a workspace has
 	// an active Slack integration configured. It is injected into webhookService below.
@@ -248,6 +252,11 @@ func main() {
 		// Start background workers (PG writer + cleanup).
 		eb.Start()
 	}
+	// Wire memory service into eventBusService for memory extraction on Publish().
+	// Done outside the NATS block so memory extraction works even without NATS.
+	if configurable, ok := eventBusService.(service.EventBusServiceConfigurable); ok {
+		configurable.SetMemoryService(memoryService)
+	}
 
 	// 7. Create all handler instances.
 	authHandler := handler.NewAuthHandler(authService)
@@ -279,6 +288,7 @@ func main() {
 	projectMemberHandler := handler.NewProjectMemberHandler(projectMemberService)
 	notificationHandler := handler.NewNotificationHandler(notificationService)
 	autoTransHandler := handler.NewAutoTransitionHandler(autoTransitionSvc)
+	memoryHandler := handler.NewMemoryHandler(memoryService)
 
 	// 8. Create Echo instance with global middleware.
 	e := echo.New()
@@ -604,6 +614,16 @@ func main() {
 	api.POST("/notifications/mark-read", notificationHandler.MarkRead)
 	api.GET("/notifications/preferences", notificationHandler.GetPreferences)
 	api.PUT("/notifications/preferences", notificationHandler.UpdatePreferences)
+
+	// Memory routes.
+	// NOTE: /memories/search MUST be registered before /memories/:id to avoid
+	// "search" being parsed as a UUID parameter.
+	api.POST("/memories", memoryHandler.Remember)
+	api.GET("/memories", memoryHandler.List)
+	api.GET("/memories/search", memoryHandler.Search)
+	api.GET("/memories/:id", memoryHandler.GetByID)
+	api.DELETE("/memories/:id", memoryHandler.Delete)
+	api.GET("/projects/:proj_id/knowledge", memoryHandler.GetProjectKnowledge, projAccess)
 
 	// Spark catalog routes (optional; only registered when MESH_SPARK_ENABLED=true).
 	if cfg.Spark.Enabled {
