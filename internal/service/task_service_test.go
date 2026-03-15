@@ -887,6 +887,22 @@ func TestTaskService_applyAutoAssign(t *testing.T) {
 			wantAssigneeID:   &agentIDStr2,
 			wantAssigneeType: domain.AssigneeTypeUser,
 		},
+		{
+			name: "fallback_chain skips invalid first entry and uses second",
+			rules: &domain.EffectiveAssignmentRules{
+				FallbackChain: []string{"invalid-uuid", "agent:" + agentIDStr.String()},
+			},
+			task: &domain.Task{
+				ProjectID:    uuid.New(),
+				StatusID:     uuid.New(),
+				Title:        "Fallback chain traversal",
+				Priority:     domain.PriorityLow,
+				AssigneeType: domain.AssigneeTypeUnassigned,
+			},
+			wantAssigned:     true,
+			wantAssigneeID:   &agentIDStr,
+			wantAssigneeType: domain.AssigneeTypeAgent,
+		},
 	}
 
 	for _, tt := range tests {

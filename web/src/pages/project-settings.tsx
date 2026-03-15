@@ -87,7 +87,7 @@ const fieldTypeLabels: Record<string, string> = {
   json: "JSON",
 };
 
-const PRIORITIES = ["critical", "urgent", "high", "medium", "low"];
+const PRIORITIES = ["urgent", "high", "medium", "low", "none"];
 
 // ---- Workflow Rules section component ----
 

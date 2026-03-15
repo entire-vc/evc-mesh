@@ -104,7 +104,13 @@ func (h *RulesHandler) SetWorkspaceAssignmentRules(c echo.Context) error {
 	if err := h.rulesSvc.SetWorkspaceAssignmentRules(c.Request().Context(), wsID, cfg); err != nil {
 		return handleError(c, err)
 	}
-	return c.JSON(http.StatusOK, cfg)
+
+	// Re-fetch saved config so the response is authoritative.
+	saved, err := h.rulesSvc.GetWorkspaceAssignmentRules(c.Request().Context(), wsID)
+	if err != nil {
+		return handleError(c, err)
+	}
+	return c.JSON(http.StatusOK, saved)
 }
 
 // GetEffectiveAssignmentRules handles GET /projects/:proj_id/rules/assignment
@@ -136,7 +142,13 @@ func (h *RulesHandler) SetProjectAssignmentRules(c echo.Context) error {
 	if err := h.rulesSvc.SetProjectAssignmentRules(c.Request().Context(), projID, cfg); err != nil {
 		return handleError(c, err)
 	}
-	return c.JSON(http.StatusOK, cfg)
+
+	// Return effective (merged) rules so the frontend store stays in sync.
+	effective, err := h.rulesSvc.GetEffectiveAssignmentRules(c.Request().Context(), projID)
+	if err != nil {
+		return handleError(c, err)
+	}
+	return c.JSON(http.StatusOK, effective)
 }
 
 // --------------------------------------------------------------------------
@@ -185,7 +197,13 @@ func (h *RulesHandler) SetProjectWorkflowRules(c echo.Context) error {
 	if err := h.rulesSvc.SetProjectWorkflowRules(c.Request().Context(), projID, cfg); err != nil {
 		return handleError(c, err)
 	}
-	return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
+
+	// Re-fetch saved config so the response is authoritative.
+	saved, err := h.rulesSvc.GetProjectWorkflowRules(c.Request().Context(), projID, nil)
+	if err != nil {
+		return handleError(c, err)
+	}
+	return c.JSON(http.StatusOK, saved)
 }
 
 // --------------------------------------------------------------------------
@@ -319,6 +337,12 @@ func (h *RulesHandler) SetWorkflowTemplates(c echo.Context) error {
 	if err := h.rulesSvc.SetWorkflowTemplates(c.Request().Context(), wsID, templates); err != nil {
 		return handleError(c, err)
 	}
-	return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
+
+	// Re-fetch saved templates so the response is authoritative.
+	saved, err := h.rulesSvc.GetWorkflowTemplates(c.Request().Context(), wsID)
+	if err != nil {
+		return handleError(c, err)
+	}
+	return c.JSON(http.StatusOK, saved)
 }
 
