@@ -469,6 +469,7 @@ func main() {
 	api.POST("/tasks/:task_id/artifacts", artifactHandler.Upload, rbac(mw.PermUploadArtifact))
 	api.GET("/artifacts/:artifact_id", artifactHandler.GetByID)
 	api.GET("/artifacts/:artifact_id/download", artifactHandler.Download)
+	api.GET("/tasks/:task_id/artifacts/:artifact_id/download", artifactHandler.Download) // task-scoped alias
 	api.DELETE("/artifacts/:artifact_id", artifactHandler.Delete, rbac(mw.PermUploadArtifact))
 
 	// Agent routes.
