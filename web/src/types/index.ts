@@ -897,6 +897,28 @@ export interface UpdateTemplateRequest {
   status_id?: string | null;
 }
 
+// Memory types
+
+export interface Memory {
+  id: string;
+  workspace_id: string;
+  project_id?: string | null;
+  agent_id?: string | null;
+  key: string;
+  content: string;
+  scope: "workspace" | "project" | "agent";
+  tags: string[];
+  source_type: "agent" | "human" | "system";
+  relevance: number;
+  created_at: string;
+  updated_at: string;
+  expires_at?: string | null;
+}
+
+export interface ScoredMemory extends Memory {
+  score: number;
+}
+
 // Analytics types
 
 export interface AnalyticsMetrics {
