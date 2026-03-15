@@ -636,7 +636,7 @@ func TestTaskService_applyAutoAssign(t *testing.T) {
 			name: "by_priority no match - falls back to default_assignee",
 			rules: &domain.EffectiveAssignmentRules{
 				ByPriority: map[string]domain.EffectiveAssignmentRule{
-					"critical": {Value: agentIDStr.String(), Source: "workspace"},
+					"urgent": {Value: agentIDStr.String(), Source: "workspace"},
 				},
 				DefaultAssignee: &domain.EffectiveAssignmentRule{Value: agentIDStr2.String(), Source: "workspace"},
 			},
