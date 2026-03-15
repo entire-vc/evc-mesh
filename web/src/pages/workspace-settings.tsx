@@ -315,6 +315,23 @@ function AssignmentRulesEditor({
     message: string;
   } | null>(null);
 
+  // Sync local state when initialConfig changes (e.g. after async fetch).
+  useEffect(() => {
+    setDefaultAssignee(initialConfig.default_assignee ?? "");
+    setByType(
+      Object.entries(initialConfig.by_type ?? {}).map(([type, assignee]) => ({
+        type,
+        assignee,
+      })),
+    );
+    setByPriority(
+      Object.entries(initialConfig.by_priority ?? {}).map(
+        ([priority, assignee]) => ({ priority, assignee }),
+      ),
+    );
+    setFallbackChain(initialConfig.fallback_chain ?? []);
+  }, [initialConfig]);
+
   const handleSave = async () => {
     setFeedback(null);
     const config: AssignmentRulesConfig = {};
