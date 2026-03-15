@@ -20,6 +20,26 @@ type Config struct {
 	RateLimit RateLimitConfig
 	Spark     SparkConfig
 	Webhook   WebhookConfig
+	Embedding EmbeddingConfig
+}
+
+// EmbeddingConfig holds configuration for the optional text embedding provider.
+// When Provider is "none" (the default), all vector search operations are skipped
+// and recall falls back to keyword-only search.
+type EmbeddingConfig struct {
+	// Provider selects the embedding backend: "ollama", "openai", or "none" (default).
+	Provider string
+	// Model is the embedding model identifier (e.g. "nomic-embed-text", "text-embedding-3-small").
+	Model string
+	// Endpoint is the base URL for the embedding API.
+	// Defaults to "http://localhost:11434" for Ollama, "https://api.openai.com" for OpenAI.
+	Endpoint string
+	// APIKey is the authentication token for providers that require it (e.g. OpenAI).
+	APIKey string
+	// Dimensions is the expected output vector length (e.g. 768, 1536).
+	Dimensions int
+	// BatchSize controls how many texts are embedded in a single batch call (default: 32).
+	BatchSize int
 }
 
 // SparkConfig holds configuration for the Spark agent catalog integration.
@@ -172,6 +192,14 @@ func Load() *Config {
 		},
 		Webhook: WebhookConfig{
 			GitHubSecret: getEnv("MESH_GITHUB_WEBHOOK_SECRET", ""),
+		},
+		Embedding: EmbeddingConfig{
+			Provider:   getEnv("EMBEDDING_PROVIDER", "none"),
+			Model:      getEnv("EMBEDDING_MODEL", ""),
+			Endpoint:   getEnv("EMBEDDING_ENDPOINT", ""),
+			APIKey:     getEnv("EMBEDDING_API_KEY", ""),
+			Dimensions: getEnvInt("EMBEDDING_DIMENSIONS", 0),
+			BatchSize:  getEnvInt("EMBEDDING_BATCH_SIZE", 32),
 		},
 	}
 }

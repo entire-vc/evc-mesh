@@ -454,6 +454,13 @@ type MemoryRepository interface {
 	ListByWorkspaceProject(ctx context.Context, workspaceID uuid.UUID, projectID *uuid.UUID) ([]domain.Memory, error)
 	Delete(ctx context.Context, id uuid.UUID) error
 	BoostRelevance(ctx context.Context, ids []uuid.UUID) error
+	// VectorSearch performs application-level cosine similarity search using stored embeddings.
+	// It returns up to limit memories ranked by cosine similarity to queryVec.
+	// Results are filtered by the same workspace/project/scope/tags criteria as FullTextSearch.
+	// When no embeddings are stored, an empty slice is returned without error.
+	VectorSearch(ctx context.Context, queryVec []float32, workspaceID uuid.UUID, projectID *uuid.UUID, scope string, tags []string, limit int) ([]domain.ScoredMemory, error)
+	// UpdateEmbedding stores the embedding vector (encoded as JSON) for a single memory.
+	UpdateEmbedding(ctx context.Context, id uuid.UUID, vec []float32, model string, dim int) error
 }
 
 // AgentSessionRepository manages persistence for agent session tracking.

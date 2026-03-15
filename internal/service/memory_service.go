@@ -1,10 +1,14 @@
 package service
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
+	"math"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 	"unicode"
@@ -12,6 +16,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	"github.com/entire-vc/evc-mesh/internal/embedding"
 	"github.com/entire-vc/evc-mesh/internal/repository"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 )
@@ -20,17 +25,41 @@ import (
 // starting and ending with an alphanumeric character, at least two characters long.
 var keySlugRegex = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*[a-z0-9]$`)
 
+// rrfK is the Reciprocal Rank Fusion constant. 60 is the standard value.
+const rrfK = 60
+
+// rrfVectorWeight and rrfTextWeight control the relative contribution of vector vs keyword results.
+const (
+	rrfVectorWeight = 0.7
+	rrfTextWeight   = 0.3
+)
+
+// temporalHalfLifeDays is the half-life for the temporal decay applied to agent-scope memories.
+// Project- and workspace-scoped memories are exempt (they represent persistent knowledge).
+const temporalHalfLifeDays = 30.0
+
+// candidateMultiplier controls how many extra candidates are fetched for re-ranking.
+// FullTextSearch and VectorSearch each fetch limit * candidateMultiplier results.
+const candidateMultiplier = 3
+
 type memoryService struct {
-	memRepo repository.MemoryRepository
+	memRepo  repository.MemoryRepository
+	embedder embedding.Embedder
 }
 
-// NewMemoryService returns a new MemoryService backed by the given repository.
-func NewMemoryService(memRepo repository.MemoryRepository) MemoryService {
-	return &memoryService{memRepo: memRepo}
+// NewMemoryService returns a new MemoryService.
+// embedder may be embedding.NewNoopEmbedder() when vector search is not configured;
+// all vector operations are skipped gracefully in that case.
+func NewMemoryService(memRepo repository.MemoryRepository, embedder embedding.Embedder) MemoryService {
+	if embedder == nil {
+		embedder = embedding.NewNoopEmbedder()
+	}
+	return &memoryService{memRepo: memRepo, embedder: embedder}
 }
 
 // Remember upserts a memory entry. It returns "created" if the key did not exist before,
 // or "updated" if an existing entry was overwritten.
+// After a successful upsert, it asynchronously embeds the content when an embedder is configured.
 func (s *memoryService) Remember(ctx context.Context, mem *domain.Memory) (string, error) {
 	if mem.Key == "" {
 		return "", apierror.ValidationError(map[string]string{
@@ -69,10 +98,44 @@ func (s *memoryService) Remember(ctx context.Context, mem *domain.Memory) (strin
 	if err := s.memRepo.Upsert(ctx, mem); err != nil {
 		return "", fmt.Errorf("memory remember: upsert: %w", err)
 	}
+
+	// Async embedding — fire and forget, non-fatal.
+	if !embedding.IsNoop(s.embedder) {
+		memID := mem.ID
+		content := mem.Key + " " + mem.Content + " " + strings.Join(mem.Tags, " ")
+		go s.embedAndStore(memID, content)
+	}
+
 	return outcome, nil
 }
 
-// Recall performs a full-text search and boosts the relevance of returned results.
+// embedAndStore embeds text and persists the resulting vector for the given memory ID.
+// Called asynchronously from Remember; errors are logged but never surfaced to callers.
+func (s *memoryService) embedAndStore(id uuid.UUID, text string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	vec, err := s.embedder.Embed(ctx, text)
+	if err != nil {
+		log.Printf("memory embed: id=%s error=%v", id, err)
+		return
+	}
+	if len(vec) == 0 {
+		return
+	}
+	if err := s.memRepo.UpdateEmbedding(ctx, id, vec, s.embedder.Model(), s.embedder.Dimensions()); err != nil {
+		log.Printf("memory embed store: id=%s error=%v", id, err)
+	}
+}
+
+// Recall performs a hybrid search (keyword + optional vector) and returns ranked results.
+//
+// Algorithm:
+//  1. Always: full-text keyword search via tsvector (ts_rank_cd).
+//  2. If embedder configured: embed query → vector similarity search.
+//  3. Merge both result sets using Reciprocal Rank Fusion (RRF).
+//  4. Apply temporal decay (half-life 30d) — agent-scope memories only.
+//  5. Boost relevance of returned memories as positive feedback (non-fatal).
 func (s *memoryService) Recall(ctx context.Context, opts domain.RecallOpts) ([]domain.ScoredMemory, error) {
 	if opts.Query == "" {
 		return nil, apierror.ValidationError(map[string]string{
@@ -88,21 +151,111 @@ func (s *memoryService) Recall(ctx context.Context, opts domain.RecallOpts) ([]d
 		projID = &opts.ProjectID
 	}
 
-	results, err := s.memRepo.FullTextSearch(ctx, opts.Query, opts.WorkspaceID, projID, string(opts.Scope), opts.Tags, opts.Limit)
+	poolSize := opts.Limit * candidateMultiplier
+
+	// ── Step 1: Keyword search (always available) ──────────────────────────────
+	kwResults, err := s.memRepo.FullTextSearch(ctx, opts.Query, opts.WorkspaceID, projID, string(opts.Scope), opts.Tags, poolSize)
 	if err != nil {
 		return nil, fmt.Errorf("memory recall: full text search: %w", err)
 	}
 
-	if len(results) > 0 {
-		ids := make([]uuid.UUID, len(results))
-		for i, r := range results {
+	// ── Step 2: Vector search (only when embedder is configured) ───────────────
+	var vecResults []domain.ScoredMemory
+	if !embedding.IsNoop(s.embedder) {
+		queryVec, embedErr := s.embedder.Embed(ctx, opts.Query)
+		if embedErr != nil {
+			// Graceful degradation: log and fall back to keyword-only.
+			log.Printf("memory recall: embedding failed, using keyword-only: %v", embedErr)
+		} else if len(queryVec) > 0 {
+			vecResults, err = s.memRepo.VectorSearch(ctx, queryVec, opts.WorkspaceID, projID, string(opts.Scope), opts.Tags, poolSize)
+			if err != nil {
+				// Graceful degradation: log and continue with keyword results only.
+				log.Printf("memory recall: vector search failed, using keyword-only: %v", err)
+				vecResults = nil
+			}
+		}
+	}
+
+	// ── Step 3: RRF merge ─────────────────────────────────────────────────────
+	merged := reciprocalRankFusion(kwResults, vecResults)
+
+	// ── Step 4: Temporal decay ────────────────────────────────────────────────
+	now := time.Now()
+	lambda := math.Log(2) / temporalHalfLifeDays
+
+	for i := range merged {
+		m := &merged[i]
+		// Project- and workspace-scoped memories represent persistent knowledge
+		// (analogous to MEMORY.md in OpenClaw) and are exempt from temporal decay.
+		if m.Scope == domain.ScopeProject || m.Scope == domain.ScopeWorkspace {
+			continue
+		}
+		ageDays := now.Sub(m.UpdatedAt).Hours() / 24
+		decay := math.Exp(-lambda * ageDays)
+		m.Score *= decay
+	}
+
+	// Re-sort after decay adjustment.
+	slices.SortFunc(merged, func(a, b domain.ScoredMemory) int {
+		return cmp.Compare(b.Score, a.Score)
+	})
+
+	// ── Step 5: Trim to requested limit ───────────────────────────────────────
+	if len(merged) > opts.Limit {
+		merged = merged[:opts.Limit]
+	}
+
+	// ── Boost relevance as positive feedback (non-fatal) ─────────────────────
+	if len(merged) > 0 {
+		ids := make([]uuid.UUID, len(merged))
+		for i, r := range merged {
 			ids[i] = r.ID
 		}
-		// Boost relevance as positive feedback — non-fatal if it fails.
 		_ = s.memRepo.BoostRelevance(ctx, ids)
 	}
 
-	return results, nil
+	return merged, nil
+}
+
+// reciprocalRankFusion merges keyword and vector result lists using RRF scoring.
+// The formula is: score(d) = kwW/(k+rank_kw) + vecW/(k+rank_vec)
+// where k=60 is the standard RRF constant.
+func reciprocalRankFusion(kw, vec []domain.ScoredMemory) []domain.ScoredMemory {
+	type entry struct {
+		mem   domain.Memory
+		score float64
+	}
+	scores := make(map[uuid.UUID]*entry)
+
+	for rank, m := range kw {
+		id := m.ID
+		if _, ok := scores[id]; !ok {
+			mc := m.Memory
+			scores[id] = &entry{mem: mc}
+		}
+		scores[id].score += rrfTextWeight * (1.0 / (float64(rrfK) + float64(rank+1)))
+	}
+
+	for rank, m := range vec {
+		id := m.ID
+		if _, ok := scores[id]; !ok {
+			mc := m.Memory
+			scores[id] = &entry{mem: mc}
+		}
+		scores[id].score += rrfVectorWeight * (1.0 / (float64(rrfK) + float64(rank+1)))
+	}
+
+	result := make([]domain.ScoredMemory, 0, len(scores))
+	for _, e := range scores {
+		result = append(result, domain.ScoredMemory{
+			Memory: e.mem,
+			Score:  e.score,
+		})
+	}
+	slices.SortFunc(result, func(a, b domain.ScoredMemory) int {
+		return cmp.Compare(b.Score, a.Score)
+	})
+	return result
 }
 
 // GetProjectKnowledge returns all non-expired memories for a workspace (and optional project).
@@ -202,6 +355,14 @@ func (s *memoryService) ExtractFromEvent(ctx context.Context, event *domain.Even
 	if err := s.memRepo.Upsert(ctx, mem); err != nil {
 		return fmt.Errorf("memory extract from event: upsert: %w", err)
 	}
+
+	// Async embedding for auto-extracted memories.
+	if mem.ID != uuid.Nil && !embedding.IsNoop(s.embedder) {
+		memID := mem.ID
+		content := mem.Key + " " + mem.Content + " " + strings.Join(mem.Tags, " ")
+		go s.embedAndStore(memID, content)
+	}
+
 	return nil
 }
 
