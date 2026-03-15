@@ -33,6 +33,8 @@ const (
 
 // Memory is a persistent, searchable knowledge entry stored by an agent or the system.
 // Memories survive across agent sessions and can be recalled via full-text search.
+// When an embedding provider is configured, the Embedding field holds a dense vector
+// representation used for semantic (hybrid) recall. It is nil when vector search is disabled.
 type Memory struct {
 	ID            uuid.UUID        `json:"id" db:"id"`
 	WorkspaceID   uuid.UUID        `json:"workspace_id" db:"workspace_id"`
@@ -48,6 +50,12 @@ type Memory struct {
 	CreatedAt     time.Time        `json:"created_at" db:"created_at"`
 	UpdatedAt     time.Time        `json:"updated_at" db:"updated_at"`
 	ExpiresAt     *time.Time       `json:"expires_at,omitempty" db:"expires_at"`
+
+	// Embedding fields — populated only when an embedding provider is configured.
+	// Embedding is the raw float32 vector; it is not serialised to JSON for API responses.
+	Embedding      []float32 `json:"-" db:"-"`
+	EmbeddingModel string    `json:"-" db:"embedding_model"`
+	EmbeddingDim   int       `json:"-" db:"embedding_dim"`
 }
 
 // ScoredMemory wraps a Memory with a full-text search rank score.

@@ -19,6 +19,7 @@ import (
 
 	"github.com/entire-vc/evc-mesh/internal/auth"
 	"github.com/entire-vc/evc-mesh/internal/config"
+	"github.com/entire-vc/evc-mesh/internal/embedding"
 	"github.com/entire-vc/evc-mesh/internal/eventbus"
 	"github.com/entire-vc/evc-mesh/internal/handler"
 	mw "github.com/entire-vc/evc-mesh/internal/middleware"
@@ -106,8 +107,12 @@ func main() {
 	// Task mutations (create/update/move/delete) will auto-publish events.
 	eventBusService := service.NewEventBusService(eventBusRepo, activityLogRepo)
 
+	// Embedding provider for vector search (optional; degrades to keyword-only when "none").
+	embedder := embedding.NewEmbedder(cfg.Embedding)
+	log.Printf("Embedding provider: %s", cfg.Embedding.Provider)
+
 	// Memory service is wired into eventBusService so Publish() can extract memories.
-	memoryService := service.NewMemoryService(memoryRepo)
+	memoryService := service.NewMemoryService(memoryRepo, embedder)
 
 	// Slack service sends notifications via Slack Incoming Webhooks when a workspace has
 	// an active Slack integration configured. It is injected into webhookService below.

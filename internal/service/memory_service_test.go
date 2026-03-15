@@ -86,6 +86,14 @@ func (m *mockMemoryRepo) BoostRelevance(ctx context.Context, ids []uuid.UUID) er
 	return nil
 }
 
+func (m *mockMemoryRepo) VectorSearch(_ context.Context, _ []float32, _ uuid.UUID, _ *uuid.UUID, _ string, _ []string, _ int) ([]domain.ScoredMemory, error) {
+	return nil, nil
+}
+
+func (m *mockMemoryRepo) UpdateEmbedding(_ context.Context, _ uuid.UUID, _ []float32, _ string, _ int) error {
+	return nil
+}
+
 // Verify mockMemoryRepo satisfies the interface at compile time.
 var _ repository.MemoryRepository = (*mockMemoryRepo)(nil)
 
@@ -94,7 +102,7 @@ var _ repository.MemoryRepository = (*mockMemoryRepo)(nil)
 // ---------------------------------------------------------------------------
 
 func newMemoryService(repo *mockMemoryRepo) MemoryService {
-	return NewMemoryService(repo)
+	return NewMemoryService(repo, nil) // nil embedder → NoopEmbedder (keyword-only)
 }
 
 func baseMemory(wsID uuid.UUID) *domain.Memory {

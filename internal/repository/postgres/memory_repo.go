@@ -3,8 +3,11 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
+	"sort"
 	"time"
 
 	"github.com/google/uuid"
@@ -314,4 +317,150 @@ func (r *MemoryRepo) BoostRelevance(ctx context.Context, ids []uuid.UUID) error 
 		pq.Array(ids),
 	)
 	return err
+}
+
+// embeddingRow extends memoryRow with the raw embedding TEXT column.
+type embeddingRow struct {
+	memoryRow
+	EmbeddingJSON  *string `db:"embedding"`
+	EmbeddingModel *string `db:"embedding_model"`
+	EmbeddingDim   *int    `db:"embedding_dim"`
+}
+
+const memoryColumnsWithEmbedding = `id, workspace_id, project_id, agent_id, key, content, scope, tags,
+	source_type, source_event_id, relevance, created_at, updated_at, expires_at,
+	embedding, embedding_model, embedding_dim`
+
+// VectorSearch performs application-level cosine similarity search.
+// Embeddings are stored as JSON-encoded float32 arrays in the embedding TEXT column.
+// This approach works without the pgvector extension — similarity is computed in Go.
+// Results are filtered by workspace/project/scope/tags and sorted by cosine similarity.
+func (r *MemoryRepo) VectorSearch(ctx context.Context, queryVec []float32, workspaceID uuid.UUID, projectID *uuid.UUID, scope string, tags []string, limit int) ([]domain.ScoredMemory, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+
+	args := []interface{}{workspaceID} // $1
+	conditions := []string{
+		"workspace_id = $1",
+		"embedding IS NOT NULL",
+		"(expires_at IS NULL OR expires_at > NOW())",
+	}
+	argIdx := 2
+
+	if scope != "" {
+		conditions = append(conditions, fmt.Sprintf("scope = $%d", argIdx))
+		args = append(args, scope)
+		argIdx++
+	}
+	if projectID != nil {
+		conditions = append(conditions, fmt.Sprintf("project_id = $%d", argIdx))
+		args = append(args, *projectID)
+		argIdx++
+	}
+	if len(tags) > 0 {
+		conditions = append(conditions, fmt.Sprintf("tags && $%d", argIdx))
+		args = append(args, pq.Array(tags))
+		argIdx++
+	}
+
+	// Fetch candidates. We pull more than limit to have room for similarity ranking.
+	candidateLimit := limit * 5
+	args = append(args, candidateLimit)
+
+	q := fmt.Sprintf(`
+		SELECT %s FROM memories
+		WHERE %s
+		ORDER BY relevance DESC
+		LIMIT $%d`,
+		memoryColumnsWithEmbedding,
+		joinAnd(conditions),
+		argIdx,
+	)
+
+	var rows []embeddingRow
+	if err := r.db.SelectContext(ctx, &rows, q, args...); err != nil {
+		return nil, fmt.Errorf("vector search: select candidates: %w", err)
+	}
+	if len(rows) == 0 {
+		return nil, nil
+	}
+
+	// Decode embeddings and compute cosine similarity in application code.
+	type candidate struct {
+		mem   domain.Memory
+		score float64
+	}
+	candidates := make([]candidate, 0, len(rows))
+
+	for _, row := range rows {
+		if row.EmbeddingJSON == nil || *row.EmbeddingJSON == "" {
+			continue
+		}
+		var vec []float32
+		if err := json.Unmarshal([]byte(*row.EmbeddingJSON), &vec); err != nil {
+			// Skip corrupted embeddings silently.
+			continue
+		}
+		sim := cosineSimilarity(queryVec, vec)
+		candidates = append(candidates, candidate{
+			mem:   row.memoryRow.toDomain(),
+			score: sim,
+		})
+	}
+
+	// Sort by descending similarity.
+	sort.Slice(candidates, func(i, j int) bool {
+		return candidates[i].score > candidates[j].score
+	})
+
+	if len(candidates) > limit {
+		candidates = candidates[:limit]
+	}
+
+	result := make([]domain.ScoredMemory, len(candidates))
+	for i, c := range candidates {
+		result[i] = domain.ScoredMemory{
+			Memory: c.mem,
+			Score:  c.score,
+		}
+	}
+	return result, nil
+}
+
+// UpdateEmbedding stores the JSON-encoded embedding vector for a memory.
+func (r *MemoryRepo) UpdateEmbedding(ctx context.Context, id uuid.UUID, vec []float32, model string, dim int) error {
+	encoded, err := json.Marshal(vec)
+	if err != nil {
+		return fmt.Errorf("update embedding: encode vector: %w", err)
+	}
+	_, err = r.db.ExecContext(ctx,
+		`UPDATE memories
+		 SET embedding       = $1,
+		     embedding_model = $2,
+		     embedding_dim   = $3,
+		     updated_at      = NOW()
+		 WHERE id = $4`,
+		string(encoded), model, dim, id,
+	)
+	return err
+}
+
+// cosineSimilarity returns the cosine similarity between two float32 vectors.
+// Returns 0 when either vector is zero-length or the lengths differ.
+func cosineSimilarity(a, b []float32) float64 {
+	if len(a) == 0 || len(a) != len(b) {
+		return 0
+	}
+	var dot, normA, normB float64
+	for i := range a {
+		fa, fb := float64(a[i]), float64(b[i])
+		dot += fa * fb
+		normA += fa * fa
+		normB += fb * fb
+	}
+	if normA == 0 || normB == 0 {
+		return 0
+	}
+	return dot / (math.Sqrt(normA) * math.Sqrt(normB))
 }
