@@ -248,6 +248,10 @@ func (s *Server) handleCreateTask(ctx context.Context, request mcpsdk.CallToolRe
 		return errResult("failed to create task: %v", err)
 	}
 
+	if warn := s.contextWarning(); warn != "" {
+		result["_mesh_warning"] = warn
+	}
+
 	return jsonResult(result)
 }
 
@@ -686,6 +690,10 @@ func (s *Server) handlePublishEvent(ctx context.Context, request mcpsdk.CallTool
 		return errResult("failed to publish event: %v", err)
 	}
 
+	if warn := s.contextWarning(); warn != "" {
+		result["_mesh_warning"] = warn
+	}
+
 	return jsonResult(result)
 }
 
@@ -782,18 +790,34 @@ func (s *Server) handleGetContext(ctx context.Context, request mcpsdk.CallToolRe
 	}
 
 	// Normalize to match expected format with events + count.
+	resp := map[string]any{}
 	if items, ok := result["items"]; ok {
 		count := 0
 		if arr, ok := items.([]any); ok {
 			count = len(arr)
 		}
-		return jsonResult(map[string]any{
-			"events": items,
-			"count":  count,
-		})
+		resp["events"] = items
+		resp["count"] = count
+	} else {
+		// Pass through as-is if the response is already in the expected shape.
+		for k, v := range result {
+			resp[k] = v
+		}
 	}
 
-	return jsonResult(result)
+	// Also fetch project knowledge and merge it (non-fatal if it fails).
+	knowledge, knowledgeErr := s.getRESTClient(ctx).GetProjectKnowledge(ctx, projectID)
+	if knowledgeErr == nil {
+		// Prefer the "items" slice if present, otherwise embed the full response.
+		if items, ok := knowledge["items"]; ok {
+			resp["project_knowledge"] = items
+		} else {
+			resp["project_knowledge"] = knowledge
+		}
+	}
+	// knowledgeErr is intentionally ignored — context events are still useful without it.
+
+	return jsonResult(resp)
 }
 
 // ============================================================================
@@ -879,10 +903,10 @@ func (s *Server) handleSubscribeEvents(ctx context.Context, request mcpsdk.CallT
 	baseURL := s.getRESTClient(ctx).BaseURL()
 
 	return jsonResult(map[string]any{
-		"status":      "configured",
-		"agent_id":    session.AgentID.String(),
-		"project_id":  projectID,
-		"event_types": eventTypes,
+		"status":       "configured",
+		"agent_id":     session.AgentID.String(),
+		"project_id":   projectID,
+		"event_types":  eventTypes,
 		"callback_url": callbackURL,
 		"push_endpoints": map[string]any{
 			"sse":       baseURL + "/api/v1/agents/me/events/stream",
@@ -1601,4 +1625,35 @@ func (s *Server) handleForget(ctx context.Context, request mcpsdk.CallToolReques
 	}
 
 	return jsonResult(map[string]any{"deleted": true})
+}
+
+// ============================================================================
+// session_report
+// ============================================================================
+
+func (s *Server) handleSessionReport(ctx context.Context, request mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
+	model := mcpsdk.ParseString(request, "model", "")
+	tokensIn := int(mcpsdk.ParseFloat64(request, "tokens_in", 0))
+	tokensOut := int(mcpsdk.ParseFloat64(request, "tokens_out", 0))
+	cost := mcpsdk.ParseFloat64(request, "estimated_cost", 0)
+
+	stats := s.tracker.Stats()
+	if model != "" {
+		stats["model_used"] = model
+	}
+	if tokensIn > 0 {
+		stats["tokens_in"] = tokensIn
+	}
+	if tokensOut > 0 {
+		stats["tokens_out"] = tokensOut
+	}
+	if cost > 0 {
+		stats["estimated_cost"] = cost
+	}
+
+	score, detail := s.tracker.ComplianceScore()
+	stats["compliance_score"] = score
+	stats["compliance_detail"] = detail
+
+	return jsonResult(stats)
 }
