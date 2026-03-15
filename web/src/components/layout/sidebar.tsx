@@ -235,10 +235,12 @@ export function Sidebar({ collapsed }: SidebarProps) {
               Projects
             </span>
             <Button
+              type="button"
               variant="ghost"
               size="icon"
               className="h-5 w-5"
               onClick={() => setShowCreateProject(true)}
+              title="New project"
             >
               <Plus className="h-3 w-3" />
             </Button>
