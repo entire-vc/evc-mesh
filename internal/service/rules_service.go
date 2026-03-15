@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -471,6 +472,117 @@ func (s *rulesService) SetProjectAssignmentRules(ctx context.Context, projectID 
 		EnforcementMode: domain.RuleConfigEnforcementAdvisory,
 	}
 	return s.projRuleRepo.Upsert(ctx, rule)
+}
+
+// TestAutoAssign simulates the auto-assign logic for a given priority and labels,
+// returning detailed diagnostics about which rules would match and what the result
+// would be. This is a dry-run — no task is created or modified.
+func (s *rulesService) TestAutoAssign(ctx context.Context, projectID uuid.UUID, priority string, labels []string) (*domain.AutoAssignTestResult, error) {
+	effective, err := s.GetEffectiveAssignmentRules(ctx, projectID)
+	if err != nil {
+		return nil, fmt.Errorf("get effective assignment rules: %w", err)
+	}
+
+	result := &domain.AutoAssignTestResult{
+		Candidates: []domain.AutoAssignCandidate{},
+		Effective:  effective,
+	}
+
+	// 1. Check by_type — match labels against type rules.
+	if len(effective.ByType) > 0 && len(labels) > 0 {
+		for _, label := range labels {
+			if rule, ok := effective.ByType[label]; ok && rule.Value != "" {
+				result.Candidates = append(result.Candidates, domain.AutoAssignCandidate{
+					Value:  rule.Value,
+					Source: "by_type[" + label + "]",
+					Valid:  isValidAssigneeValue(rule.Value),
+					Reason: invalidReason(rule.Value),
+				})
+				break
+			}
+		}
+	}
+
+	// 2. Check by_priority.
+	if effective.ByPriority != nil {
+		if rule, ok := effective.ByPriority[priority]; ok && rule.Value != "" {
+			result.Candidates = append(result.Candidates, domain.AutoAssignCandidate{
+				Value:  rule.Value,
+				Source: "by_priority[" + priority + "]",
+				Valid:  isValidAssigneeValue(rule.Value),
+				Reason: invalidReason(rule.Value),
+			})
+		}
+	}
+
+	// 3. Default assignee.
+	if effective.DefaultAssignee != nil && effective.DefaultAssignee.Value != "" {
+		result.Candidates = append(result.Candidates, domain.AutoAssignCandidate{
+			Value:  effective.DefaultAssignee.Value,
+			Source: "default_assignee",
+			Valid:  isValidAssigneeValue(effective.DefaultAssignee.Value),
+			Reason: invalidReason(effective.DefaultAssignee.Value),
+		})
+	}
+
+	// 4. Fallback chain.
+	for i, v := range effective.FallbackChain {
+		result.Candidates = append(result.Candidates, domain.AutoAssignCandidate{
+			Value:  v,
+			Source: fmt.Sprintf("fallback_chain[%d]", i),
+			Valid:  isValidAssigneeValue(v),
+			Reason: invalidReason(v),
+		})
+	}
+
+	// Pick the first valid candidate.
+	for _, c := range result.Candidates {
+		if c.Valid {
+			result.WouldAssign = true
+			result.AssigneeID = c.Value
+			result.MatchedRule = c.Source
+			// Determine type from prefix.
+			if strings.HasPrefix(c.Value, "agent:") {
+				result.AssigneeType = "agent"
+				result.AssigneeID = strings.TrimPrefix(c.Value, "agent:")
+			} else if strings.HasPrefix(c.Value, "user:") {
+				result.AssigneeType = "user"
+				result.AssigneeID = strings.TrimPrefix(c.Value, "user:")
+			} else {
+				result.AssigneeType = "agent" // default
+			}
+			break
+		}
+	}
+
+	return result, nil
+}
+
+// isValidAssigneeValue checks if a value can be parsed as a valid assignee UUID.
+func isValidAssigneeValue(v string) bool {
+	raw := v
+	if strings.HasPrefix(v, "agent:") {
+		raw = strings.TrimPrefix(v, "agent:")
+	} else if strings.HasPrefix(v, "user:") {
+		raw = strings.TrimPrefix(v, "user:")
+	}
+	_, err := uuid.Parse(raw)
+	return err == nil
+}
+
+// invalidReason returns a reason string if the value is invalid, empty otherwise.
+func invalidReason(v string) string {
+	raw := v
+	if strings.HasPrefix(v, "agent:") {
+		raw = strings.TrimPrefix(v, "agent:")
+	} else if strings.HasPrefix(v, "user:") {
+		raw = strings.TrimPrefix(v, "user:")
+	}
+	_, err := uuid.Parse(raw)
+	if err != nil {
+		return fmt.Sprintf("invalid UUID: %v", err)
+	}
+	return ""
 }
 
 // --------------------------------------------------------------------------

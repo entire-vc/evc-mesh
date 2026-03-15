@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { api, getAccessToken } from "@/lib/api";
 import type {
   AssignmentRulesConfig,
+  AutoAssignTestResult,
   EffectiveAssignmentRules,
   ImportResult,
   OrgChartData,
@@ -42,6 +43,9 @@ interface RulesState {
     projectId: string,
     config: AssignmentRulesConfig,
   ) => Promise<void>;
+
+  // Auto-assign test
+  testAutoAssign: (projectId: string, priority: string, labels: string[]) => Promise<AutoAssignTestResult>;
 
   // Workflow Rules (project level)
   workflowRules: WorkflowRulesResponse | null;
@@ -162,6 +166,14 @@ export const useRulesStore = create<RulesState>((set) => ({
       `/api/v1/projects/${projectId}/rules/assignment`,
     );
     set({ effectiveAssignmentRules: effective });
+  },
+
+  // Auto-assign test
+  testAutoAssign: async (projectId: string, priority: string, labels: string[]): Promise<AutoAssignTestResult> => {
+    return api<AutoAssignTestResult>(
+      `/api/v1/projects/${projectId}/rules/assignment/test`,
+      { method: "POST", body: { priority, labels } },
+    );
   },
 
   // Workflow Rules (project level)

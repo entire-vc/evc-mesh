@@ -58,6 +58,7 @@ import { cn } from "@/lib/cn";
 import type {
   Agent,
   AssignmentRulesConfig,
+  AutoAssignTestResult,
   CustomFieldDefinition,
   EffectiveAssignmentRules,
   Priority,
@@ -684,6 +685,7 @@ interface ProjectAssignmentRulesSectionProps {
   isSaving: boolean;
   agents: Agent[];
   members: WorkspaceMemberWithUser[];
+  projectId: string;
 }
 
 function ProjectAssignmentRulesSection({
@@ -693,6 +695,7 @@ function ProjectAssignmentRulesSection({
   isSaving,
   agents,
   members,
+  projectId,
 }: ProjectAssignmentRulesSectionProps) {
   const [defaultAssignee, setDefaultAssignee] = useState(
     effectiveRules?.default_assignee?.value ?? "",
@@ -717,6 +720,12 @@ function ProjectAssignmentRulesSection({
     type: "success" | "error";
     message: string;
   } | null>(null);
+
+  // Test auto-assign state
+  const { testAutoAssign } = useRulesStore();
+  const [testPriority, setTestPriority] = useState<string>("none");
+  const [testResult, setTestResult] = useState<AutoAssignTestResult | null>(null);
+  const [isTesting, setIsTesting] = useState(false);
 
   // Sync when effectiveRules loads
   useEffect(() => {
@@ -1017,6 +1026,77 @@ function ProjectAssignmentRulesSection({
           <Save className="h-4 w-4" />
           {isSaving ? "Saving..." : "Save Rules"}
         </Button>
+      </div>
+
+      {/* Test Auto-Assign */}
+      <Separator />
+      <div className="space-y-2">
+        <label className="text-sm font-medium">Test Auto-Assign</label>
+        <p className="text-xs text-muted-foreground">
+          Simulate auto-assign for a task with the given priority. Shows which rules would match and what the result would be.
+        </p>
+        <div className="flex items-center gap-2">
+          <Select
+            value={testPriority}
+            onChange={(e) => setTestPriority(e.target.value)}
+            className="h-8 text-xs w-32"
+          >
+            {PRIORITIES.map((p) => (
+              <option key={p} value={p}>
+                {p.charAt(0).toUpperCase() + p.slice(1)}
+              </option>
+            ))}
+          </Select>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={isTesting}
+            onClick={async () => {
+              setIsTesting(true);
+              setTestResult(null);
+              try {
+                const result = await testAutoAssign(projectId, testPriority, []);
+                setTestResult(result);
+              } catch {
+                setTestResult(null);
+              } finally {
+                setIsTesting(false);
+              }
+            }}
+          >
+            <Zap className="h-3.5 w-3.5" />
+            {isTesting ? "Testing..." : "Test"}
+          </Button>
+        </div>
+        {testResult && (
+          <div className={cn(
+            "rounded-md border p-3 text-xs space-y-1.5",
+            testResult.would_assign ? "border-green-300 bg-green-50 dark:border-green-800 dark:bg-green-950" : "border-amber-300 bg-amber-50 dark:border-amber-800 dark:bg-amber-950"
+          )}>
+            <p className="font-medium">
+              {testResult.would_assign
+                ? `Would assign to ${testResult.assignee_type}:${testResult.assignee_id} via ${testResult.matched_rule}`
+                : "No matching rules — task would stay unassigned"
+              }
+            </p>
+            {testResult.candidates.length > 0 && (
+              <div>
+                <p className="text-muted-foreground">Candidates evaluated:</p>
+                <ul className="ml-3 list-disc">
+                  {testResult.candidates.map((c, i) => (
+                    <li key={i} className={c.valid ? "text-green-700 dark:text-green-400" : "text-red-600 dark:text-red-400"}>
+                      {c.source}: {c.value} {c.valid ? "(valid)" : `(invalid: ${c.reason})`}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {testResult.candidates.length === 0 && (
+              <p className="text-muted-foreground">No rules configured for priority &ldquo;{testPriority}&rdquo;.</p>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -1922,6 +2002,7 @@ export function ProjectSettingsPage() {
             isSaving={isSavingAssignment}
             agents={agents}
             members={workspaceMembers}
+            projectId={currentProject.id}
           />
         </CardContent>
       </Card>

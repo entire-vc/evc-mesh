@@ -1220,3 +1220,6 @@ func (m *MockRulesService) GetWorkflowTemplates(_ context.Context, _ uuid.UUID) 
 func (m *MockRulesService) SetWorkflowTemplates(_ context.Context, _ uuid.UUID, _ map[string]domain.WorkflowRulesConfig) error {
 	panic("MockRulesService.SetWorkflowTemplates not implemented")
 }
+func (m *MockRulesService) TestAutoAssign(_ context.Context, _ uuid.UUID, _ string, _ []string) (*domain.AutoAssignTestResult, error) {
+	panic("MockRulesService.TestAutoAssign not implemented")
+}

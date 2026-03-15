@@ -35,6 +35,8 @@ type CreateTaskInput struct {
 	Description    string         `json:"description,omitempty"`
 	Priority       string         `json:"priority,omitempty"` // urgent|high|medium|low|none
 	StatusID       string         `json:"status_id,omitempty"`
+	AssigneeID     string         `json:"assignee_id,omitempty"`
+	AssigneeType   string         `json:"assignee_type,omitempty"` // agent|user — omit for auto-assign
 	Labels         []string       `json:"labels,omitempty"`
 	DueDate        *string        `json:"due_date,omitempty"`
 	EstimatedHours *float64       `json:"estimated_hours,omitempty"`

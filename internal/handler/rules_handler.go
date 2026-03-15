@@ -139,6 +139,34 @@ func (h *RulesHandler) SetProjectAssignmentRules(c echo.Context) error {
 	return c.JSON(http.StatusOK, cfg)
 }
 
+// TestAutoAssign handles POST /projects/:proj_id/rules/assignment/test
+// It simulates auto-assign for the given priority and labels, returning
+// detailed diagnostics about which rules would match.
+func (h *RulesHandler) TestAutoAssign(c echo.Context) error {
+	projID, err := uuid.Parse(c.Param("proj_id"))
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid project_id"))
+	}
+
+	var req struct {
+		Priority string   `json:"priority"`
+		Labels   []string `json:"labels"`
+	}
+	if err := c.Bind(&req); err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
+	}
+
+	if req.Priority == "" {
+		req.Priority = "medium"
+	}
+
+	result, err := h.rulesSvc.TestAutoAssign(c.Request().Context(), projID, req.Priority, req.Labels)
+	if err != nil {
+		return handleError(c, err)
+	}
+	return c.JSON(http.StatusOK, result)
+}
+
 // --------------------------------------------------------------------------
 // Workflow Rules
 // --------------------------------------------------------------------------

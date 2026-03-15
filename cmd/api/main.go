@@ -574,6 +574,7 @@ func main() {
 	api.PUT("/workspaces/:ws_id/rules/assignment", rulesHandler.SetWorkspaceAssignmentRules, rbac(mw.PermManageMembers))
 	api.GET("/projects/:proj_id/rules/assignment", rulesHandler.GetEffectiveAssignmentRules, projAccess)
 	api.PUT("/projects/:proj_id/rules/assignment", rulesHandler.SetProjectAssignmentRules, projAccess, rbac(mw.PermManageMembers))
+	api.POST("/projects/:proj_id/rules/assignment/test", rulesHandler.TestAutoAssign, projAccess)
 
 	// Workflow Rules routes (Sprint 20).
 	api.GET("/projects/:proj_id/rules/workflow", rulesHandler.GetProjectWorkflowRules, projAccess)

@@ -678,6 +678,16 @@ func (s *taskService) applyAutoAssign(ctx context.Context, task *domain.Task) {
 		return
 	}
 
+	// Log effective rules for diagnostics.
+	hasRules := effective.DefaultAssignee != nil || len(effective.ByType) > 0 || len(effective.ByPriority) > 0 || len(effective.FallbackChain) > 0
+	if !hasRules {
+		log.Printf("[auto-assign] no assignment rules configured for project %s", task.ProjectID)
+		return
+	}
+	log.Printf("[auto-assign] evaluating rules for task %q (project %s, priority %s, labels %v): default=%v, by_type=%d, by_priority=%d, fallback=%d",
+		task.Title, task.ProjectID, task.Priority, task.Labels,
+		effective.DefaultAssignee != nil, len(effective.ByType), len(effective.ByPriority), len(effective.FallbackChain))
+
 	// Collect candidate assignee IDs in priority order.
 	// The first one that parses as a valid UUID wins.
 	var candidates []string

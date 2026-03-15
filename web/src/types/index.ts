@@ -603,6 +603,22 @@ export interface EffectiveAssignmentRules {
   fallback_chain?: string[];
 }
 
+export interface AutoAssignCandidate {
+  value: string;
+  source: string;
+  valid: boolean;
+  reason?: string;
+}
+
+export interface AutoAssignTestResult {
+  would_assign: boolean;
+  assignee_id?: string;
+  assignee_type?: string;
+  matched_rule?: string;
+  candidates: AutoAssignCandidate[];
+  effective_rules: EffectiveAssignmentRules;
+}
+
 export interface TransitionRule {
   allowed: string[];
   description?: string;

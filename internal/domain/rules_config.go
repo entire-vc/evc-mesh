@@ -185,6 +185,24 @@ type EffectiveAssignmentRules struct {
 	FallbackChain   []string                          `json:"fallback_chain,omitempty"`
 }
 
+// AutoAssignTestResult is the response for the auto-assign diagnostic endpoint.
+type AutoAssignTestResult struct {
+	WouldAssign  bool                     `json:"would_assign"`
+	AssigneeID   string                   `json:"assignee_id,omitempty"`
+	AssigneeType string                   `json:"assignee_type,omitempty"`
+	MatchedRule  string                   `json:"matched_rule,omitempty"` // "by_type", "by_priority", "default_assignee", "fallback_chain"
+	Candidates   []AutoAssignCandidate    `json:"candidates"`
+	Effective    *EffectiveAssignmentRules `json:"effective_rules"`
+}
+
+// AutoAssignCandidate is a candidate evaluated during auto-assign simulation.
+type AutoAssignCandidate struct {
+	Value  string `json:"value"`
+	Source string `json:"source"` // "by_type", "by_priority", "default_assignee", "fallback_chain"
+	Valid  bool   `json:"valid"`
+	Reason string `json:"reason,omitempty"` // why invalid
+}
+
 // WorkflowRulesResponse is the response for GET /projects/:proj_id/rules/workflow.
 type WorkflowRulesResponse struct {
 	WorkflowRulesConfig

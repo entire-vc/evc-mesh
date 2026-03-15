@@ -440,6 +440,7 @@ type RulesService interface {
 	SetWorkspaceAssignmentRules(ctx context.Context, workspaceID uuid.UUID, config domain.AssignmentRulesConfig) error
 	GetEffectiveAssignmentRules(ctx context.Context, projectID uuid.UUID) (*domain.EffectiveAssignmentRules, error)
 	SetProjectAssignmentRules(ctx context.Context, projectID uuid.UUID, config domain.AssignmentRulesConfig) error
+	TestAutoAssign(ctx context.Context, projectID uuid.UUID, priority string, labels []string) (*domain.AutoAssignTestResult, error)
 
 	// Workflow Rules
 	GetProjectWorkflowRules(ctx context.Context, projectID uuid.UUID, callerAgentID *uuid.UUID) (*domain.WorkflowRulesResponse, error)
