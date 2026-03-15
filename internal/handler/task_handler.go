@@ -176,7 +176,15 @@ func (h *TaskHandler) Create(c echo.Context) error {
 		return handleError(c, err)
 	}
 
-	return c.JSON(http.StatusCreated, task)
+	// Re-fetch the created task to populate computed fields (assignee_name,
+	// subtask_count, etc.) — especially important after auto-assign so the
+	// frontend shows the correct assignee immediately.
+	enriched, err := h.taskService.GetByID(c.Request().Context(), task.ID)
+	if err != nil || enriched == nil {
+		// Fallback to in-memory object if re-fetch fails.
+		return c.JSON(http.StatusCreated, task)
+	}
+	return c.JSON(http.StatusCreated, enriched)
 }
 
 // GetByID handles GET /tasks/:task_id
@@ -513,7 +521,12 @@ func (h *TaskHandler) CreateSubtask(c echo.Context) error {
 		return handleError(c, err)
 	}
 
-	return c.JSON(http.StatusCreated, subtask)
+	// Re-fetch to populate computed fields (assignee_name, etc.) after auto-assign.
+	enriched, err := h.taskService.GetByID(c.Request().Context(), subtask.ID)
+	if err != nil || enriched == nil {
+		return c.JSON(http.StatusCreated, subtask)
+	}
+	return c.JSON(http.StatusCreated, enriched)
 }
 
 // bulkUpdateRequest represents the JSON body for bulk-updating multiple tasks.
