@@ -1628,6 +1628,37 @@ func (s *Server) handleForget(ctx context.Context, request mcpsdk.CallToolReques
 }
 
 // ============================================================================
+// checkout_task / release_task
+// ============================================================================
+
+func (s *Server) handleCheckoutTask(ctx context.Context, request mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
+	taskID := mcpsdk.ParseString(request, "task_id", "")
+	if taskID == "" {
+		return errResult("task_id is required")
+	}
+
+	result, err := s.getRESTClient(ctx).CheckoutTask(ctx, taskID)
+	if err != nil {
+		return errResult("checkout_task failed: %v", err)
+	}
+
+	return jsonResult(result)
+}
+
+func (s *Server) handleReleaseTask(ctx context.Context, request mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
+	taskID := mcpsdk.ParseString(request, "task_id", "")
+	if taskID == "" {
+		return errResult("task_id is required")
+	}
+
+	if err := s.getRESTClient(ctx).ReleaseTask(ctx, taskID); err != nil {
+		return errResult("release_task failed: %v", err)
+	}
+
+	return jsonResult(map[string]any{"released": true, "task_id": taskID})
+}
+
+// ============================================================================
 // session_report
 // ============================================================================
 
