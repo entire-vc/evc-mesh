@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"strings"
 	"testing"
@@ -193,6 +194,84 @@ func TestArtifactService_GetDownloadURL(t *testing.T) {
 				require.NoError(t, err)
 				assert.NotEmpty(t, url)
 				assert.Contains(t, url, "https://s3.example.com/")
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestArtifactService_GetContent
+// ---------------------------------------------------------------------------
+
+func TestArtifactService_GetContent(t *testing.T) {
+	tests := []struct {
+		name    string
+		setup   func(repo *MockArtifactRepository, storage *MockStorageClient) uuid.UUID
+		wantErr bool
+		errCode int
+	}{
+		{
+			name: "success",
+			setup: func(repo *MockArtifactRepository, storage *MockStorageClient) uuid.UUID {
+				id := uuid.New()
+				key := "ws/task/id/report.pdf"
+				repo.items[id] = &domain.Artifact{
+					ID: id, Name: "report.pdf", StorageKey: key,
+					MimeType: "application/pdf", SizeBytes: 11,
+				}
+				storage.objects[key] = []byte("pdf content")
+				return id
+			},
+			wantErr: false,
+		},
+		{
+			name: "not found",
+			setup: func(_ *MockArtifactRepository, _ *MockStorageClient) uuid.UUID {
+				return uuid.New()
+			},
+			wantErr: true,
+			errCode: http.StatusNotFound,
+		},
+		{
+			name: "storage nil",
+			setup: func(repo *MockArtifactRepository, _ *MockStorageClient) uuid.UUID {
+				id := uuid.New()
+				repo.items[id] = &domain.Artifact{ID: id, Name: "test.txt", StorageKey: "k"}
+				return id
+			},
+			wantErr: true,
+			errCode: http.StatusServiceUnavailable,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc, artifactRepo, storage, _ := setupArtifactService()
+			ctx := context.Background()
+			id := tt.setup(artifactRepo, storage)
+
+			if tt.name == "storage nil" {
+				svc.storage = nil
+			}
+
+			content, err := svc.GetContent(ctx, id)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				var apiErr *apierror.Error
+				require.ErrorAs(t, err, &apiErr)
+				assert.Equal(t, tt.errCode, apiErr.Code)
+				assert.Nil(t, content)
+			} else {
+				require.NoError(t, err)
+				require.NotNil(t, content)
+				assert.Equal(t, "report.pdf", content.Name)
+				assert.Equal(t, "application/pdf", content.MimeType)
+				assert.Equal(t, int64(11), content.SizeBytes)
+				data, readErr := io.ReadAll(content.Reader)
+				require.NoError(t, readErr)
+				assert.Equal(t, "pdf content", string(data))
+				content.Reader.Close()
 			}
 		})
 	}

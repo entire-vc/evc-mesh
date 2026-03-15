@@ -178,11 +178,20 @@ type UploadArtifactInput struct {
 	Size           int64               `json:"size"`
 }
 
+// ArtifactContent holds an artifact's file content stream and metadata.
+type ArtifactContent struct {
+	Reader      io.ReadCloser
+	Name        string
+	MimeType    string
+	SizeBytes   int64
+}
+
 // ArtifactService provides business logic for artifact management.
 type ArtifactService interface {
 	Upload(ctx context.Context, input UploadArtifactInput) (*domain.Artifact, error)
 	GetByID(ctx context.Context, id uuid.UUID) (*domain.Artifact, error)
 	GetDownloadURL(ctx context.Context, id uuid.UUID) (string, error)
+	GetContent(ctx context.Context, id uuid.UUID) (*ArtifactContent, error)
 	Delete(ctx context.Context, id uuid.UUID) error
 	ListByTask(ctx context.Context, taskID uuid.UUID, pg pagination.Params) (*pagination.Page[domain.Artifact], error)
 }

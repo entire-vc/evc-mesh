@@ -469,7 +469,13 @@ func main() {
 	api.POST("/tasks/:task_id/artifacts", artifactHandler.Upload, rbac(mw.PermUploadArtifact))
 	api.GET("/artifacts/:artifact_id", artifactHandler.GetByID)
 	api.GET("/artifacts/:artifact_id/download", artifactHandler.Download)
+	api.GET("/artifacts/:artifact_id/content", artifactHandler.Content)
 	api.DELETE("/artifacts/:artifact_id", artifactHandler.Delete, rbac(mw.PermUploadArtifact))
+	// Nested artifact routes (convenience aliases — same handlers, task_id ignored).
+	api.GET("/tasks/:task_id/artifacts/:artifact_id", artifactHandler.GetByID)
+	api.GET("/tasks/:task_id/artifacts/:artifact_id/download", artifactHandler.Download)
+	api.GET("/tasks/:task_id/artifacts/:artifact_id/content", artifactHandler.Content)
+	api.DELETE("/tasks/:task_id/artifacts/:artifact_id", artifactHandler.Delete, rbac(mw.PermUploadArtifact))
 
 	// Agent routes.
 	// NOTE: /agents/me/* routes MUST be registered before /agents/:agent_id to avoid

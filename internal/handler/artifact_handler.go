@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 
 	"github.com/google/uuid"
@@ -148,6 +149,28 @@ func (h *ArtifactHandler) Download(c echo.Context) error {
 	}
 
 	return c.JSON(http.StatusOK, map[string]string{"url": url})
+}
+
+// Content handles GET /artifacts/:artifact_id/content — streams file content directly.
+func (h *ArtifactHandler) Content(c echo.Context) error {
+	artifactIDStr := c.Param("artifact_id")
+	artifactID, err := uuid.Parse(artifactIDStr)
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid artifact_id"))
+	}
+
+	content, err := h.artifactService.GetContent(c.Request().Context(), artifactID)
+	if err != nil {
+		return handleError(c, err)
+	}
+	defer content.Reader.Close()
+
+	c.Response().Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, content.Name))
+	if content.SizeBytes > 0 {
+		c.Response().Header().Set("Content-Length", fmt.Sprintf("%d", content.SizeBytes))
+	}
+
+	return c.Stream(http.StatusOK, content.MimeType, content.Reader)
 }
 
 // Delete handles DELETE /artifacts/:artifact_id

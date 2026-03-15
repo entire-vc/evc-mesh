@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -1137,6 +1138,19 @@ func (m *MockStorageClient) GetPresignedURL(_ context.Context, key string, expir
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return fmt.Sprintf("https://s3.example.com/%s?expiry=%s", key, expiry), nil
+}
+
+func (m *MockStorageClient) GetObject(_ context.Context, key string) (io.ReadCloser, string, error) {
+	if m.errToReturn != nil {
+		return nil, "", m.errToReturn
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	data, ok := m.objects[key]
+	if !ok {
+		return nil, "", fmt.Errorf("object not found: %s", key)
+	}
+	return io.NopCloser(bytes.NewReader(data)), "application/octet-stream", nil
 }
 
 func (m *MockStorageClient) Delete(_ context.Context, key string) error {

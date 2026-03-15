@@ -21,6 +21,7 @@ const presignedURLExpiry = 1 * time.Hour
 type StorageClient interface {
 	Upload(ctx context.Context, key string, reader io.Reader, size int64, contentType string) error
 	GetPresignedURL(ctx context.Context, key string, expiry time.Duration) (string, error)
+	GetObject(ctx context.Context, key string) (io.ReadCloser, string, error)
 	Delete(ctx context.Context, key string) error
 }
 
@@ -110,6 +111,41 @@ func (s *artifactService) GetDownloadURL(ctx context.Context, id uuid.UUID) (str
 	}
 
 	return url, nil
+}
+
+// GetContent returns the artifact file content streamed from S3.
+// The caller must close the returned ArtifactContent.Reader when done.
+func (s *artifactService) GetContent(ctx context.Context, id uuid.UUID) (*ArtifactContent, error) {
+	artifact, err := s.artifactRepo.GetByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if artifact == nil {
+		return nil, apierror.NotFound("Artifact")
+	}
+
+	if s.storage == nil {
+		return nil, apierror.ServiceUnavailable("storage backend not configured")
+	}
+
+	reader, contentType, err := s.storage.GetObject(ctx, artifact.StorageKey)
+	if err != nil {
+		return nil, apierror.InternalError("failed to retrieve artifact from storage")
+	}
+
+	mimeType := artifact.MimeType
+	if mimeType == "" || mimeType == "application/octet-stream" {
+		if contentType != "" {
+			mimeType = contentType
+		}
+	}
+
+	return &ArtifactContent{
+		Reader:    reader,
+		Name:      artifact.Name,
+		MimeType:  mimeType,
+		SizeBytes: artifact.SizeBytes,
+	}, nil
 }
 
 // Delete removes an artifact from S3 and the database.
