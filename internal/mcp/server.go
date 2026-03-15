@@ -84,6 +84,7 @@ type Server struct {
 	mcpServer  *mcpserver.MCPServer
 	session    *AgentSession // static session for stdio mode; nil for SSE mode
 	restClient *RESTClient   // default REST client; may be overridden per-request in SSE mode
+	tracker    *SessionTracker
 }
 
 // getSession returns the AgentSession for the current request.
@@ -120,10 +121,35 @@ func NewServer(cfg ServerConfig) *Server {
 		mcpServer:  mcpserver.NewMCPServer("evc-mesh-mcp", "0.1.0"),
 		session:    cfg.Session,
 		restClient: cfg.RESTClient,
+		tracker:    NewSessionTracker(),
 	}
 
 	s.registerTools()
 	return s
+}
+
+// tracked wraps a tool handler to record the tool call in the session tracker.
+func (s *Server) tracked(name string, handler func(ctx context.Context, req mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error)) func(ctx context.Context, req mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
+	return func(ctx context.Context, req mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
+		if s.tracker != nil {
+			s.tracker.RecordToolCall(name)
+		}
+		return handler(ctx, req)
+	}
+}
+
+// contextWarning returns a non-empty warning string when the agent has not yet
+// loaded project context (via get_project_knowledge, recall, or get_context)
+// in the current session. Returns an empty string once context has been loaded.
+func (s *Server) contextWarning() string {
+	if s.tracker == nil {
+		return ""
+	}
+	_, detail := s.tracker.ComplianceScore()
+	if !detail["called_get_project_knowledge"] && !detail["called_get_context"] {
+		return "Warning: You haven't loaded project context. Call get_project_knowledge() or get_context() first to avoid conflicting with existing decisions."
+	}
+	return ""
 }
 
 // MCPServer returns the underlying mcp-go server for use with transports.
@@ -138,12 +164,12 @@ func (s *Server) registerTools() {
 		mcpsdk.WithDescription("List available projects in the workspace."),
 		mcpsdk.WithString("workspace_id", mcpsdk.Description("Workspace ID. Defaults to agent's workspace.")),
 		mcpsdk.WithBoolean("include_archived", mcpsdk.Description("Include archived projects."), mcpsdk.DefaultBool(false)),
-	), s.handleListProjects)
+	), s.tracked("list_projects", s.handleListProjects))
 
 	s.mcpServer.AddTool(mcpsdk.NewTool("get_project",
 		mcpsdk.WithDescription("Get project details with statuses and custom fields."),
 		mcpsdk.WithString("project_id", mcpsdk.Required(), mcpsdk.Description("Project ID.")),
-	), s.handleGetProject)
+	), s.tracked("get_project", s.handleGetProject))
 
 	s.mcpServer.AddTool(mcpsdk.NewTool("list_tasks",
 		mcpsdk.WithDescription("List tasks with filters."),
@@ -155,7 +181,7 @@ func (s *Server) registerTools() {
 		mcpsdk.WithString("search", mcpsdk.Description("Search in title and description.")),
 		mcpsdk.WithNumber("limit", mcpsdk.Description("Max results to return (default 50, max 200).")),
 		mcpsdk.WithString("sort", mcpsdk.Description("Sort field: created_at, updated_at, priority, due_date.")),
-	), s.handleListTasks)
+	), s.tracked("list_tasks", s.handleListTasks))
 
 	s.mcpServer.AddTool(mcpsdk.NewTool("get_task",
 		mcpsdk.WithDescription("Get full task details with optional comments, artifacts, and dependencies."),
@@ -163,7 +189,7 @@ func (s *Server) registerTools() {
 		mcpsdk.WithBoolean("include_comments", mcpsdk.Description("Include comments."), mcpsdk.DefaultBool(false)),
 		mcpsdk.WithBoolean("include_artifacts", mcpsdk.Description("Include artifacts."), mcpsdk.DefaultBool(false)),
 		mcpsdk.WithBoolean("include_dependencies", mcpsdk.Description("Include dependencies."), mcpsdk.DefaultBool(false)),
-	), s.handleGetTask)
+	), s.tracked("get_task", s.handleGetTask))
 
 	s.mcpServer.AddTool(mcpsdk.NewTool("create_task",
 		mcpsdk.WithDescription("Create a new task in a project."),
@@ -179,7 +205,7 @@ func (s *Server) registerTools() {
 		mcpsdk.WithString("parent_task_id", mcpsdk.Description("Parent task ID for subtask.")),
 		mcpsdk.WithString("due_date", mcpsdk.Description("Due date in RFC3339 format.")),
 		mcpsdk.WithNumber("estimated_hours", mcpsdk.Description("Estimated hours for the task.")),
-	), s.handleCreateTask)
+	), s.tracked("create_task", s.handleCreateTask))
 
 	s.mcpServer.AddTool(mcpsdk.NewTool("update_task",
 		mcpsdk.WithDescription("Update task fields."),
@@ -191,14 +217,14 @@ func (s *Server) registerTools() {
 		mcpsdk.WithObject("custom_fields", mcpsdk.Description("Custom field values to update.")),
 		mcpsdk.WithString("due_date", mcpsdk.Description("Due date in RFC3339 format.")),
 		mcpsdk.WithNumber("estimated_hours", mcpsdk.Description("Estimated hours.")),
-	), s.handleUpdateTask)
+	), s.tracked("update_task", s.handleUpdateTask))
 
 	s.mcpServer.AddTool(mcpsdk.NewTool("move_task",
 		mcpsdk.WithDescription("Move task to a different status."),
 		mcpsdk.WithString("task_id", mcpsdk.Required(), mcpsdk.Description("Task ID.")),
 		mcpsdk.WithString("status_slug", mcpsdk.Required(), mcpsdk.Description("Target status slug (e.g. 'in_progress', 'done').")),
 		mcpsdk.WithString("comment", mcpsdk.Description("Optional comment to add when moving.")),
-	), s.handleMoveTask)
+	), s.tracked("move_task", s.handleMoveTask))
 
 	s.mcpServer.AddTool(mcpsdk.NewTool("create_subtask",
 		mcpsdk.WithDescription("Create a subtask under a parent task."),
@@ -206,14 +232,14 @@ func (s *Server) registerTools() {
 		mcpsdk.WithString("title", mcpsdk.Required(), mcpsdk.Description("Subtask title.")),
 		mcpsdk.WithString("description", mcpsdk.Description("Subtask description.")),
 		mcpsdk.WithString("priority", mcpsdk.Description("Priority: urgent, high, medium, low, none."), mcpsdk.DefaultString("medium")),
-	), s.handleCreateSubtask)
+	), s.tracked("create_subtask", s.handleCreateSubtask))
 
 	s.mcpServer.AddTool(mcpsdk.NewTool("add_dependency",
 		mcpsdk.WithDescription("Add a dependency between two tasks."),
 		mcpsdk.WithString("task_id", mcpsdk.Required(), mcpsdk.Description("Task ID.")),
 		mcpsdk.WithString("depends_on_task_id", mcpsdk.Required(), mcpsdk.Description("ID of the task this depends on.")),
 		mcpsdk.WithString("dependency_type", mcpsdk.Description("Dependency type: blocks, relates_to, is_child_of."), mcpsdk.DefaultString("blocks")),
-	), s.handleAddDependency)
+	), s.tracked("add_dependency", s.handleAddDependency))
 
 	s.mcpServer.AddTool(mcpsdk.NewTool("assign_task",
 		mcpsdk.WithDescription("Assign a task to a user or agent."),
@@ -221,7 +247,7 @@ func (s *Server) registerTools() {
 		mcpsdk.WithString("assignee_id", mcpsdk.Description("Assignee UUID. Omit to unassign.")),
 		mcpsdk.WithString("assignee_type", mcpsdk.Description("Assignee type: user, agent."), mcpsdk.DefaultString("agent")),
 		mcpsdk.WithBoolean("assign_to_self", mcpsdk.Description("Assign to the calling agent."), mcpsdk.DefaultBool(false)),
-	), s.handleAssignTask)
+	), s.tracked("assign_task", s.handleAssignTask))
 
 	// --- Comments & Artifacts ---
 	s.mcpServer.AddTool(mcpsdk.NewTool("add_comment",
@@ -231,14 +257,14 @@ func (s *Server) registerTools() {
 		mcpsdk.WithBoolean("is_internal", mcpsdk.Description("Mark as internal (agent-only visible)."), mcpsdk.DefaultBool(false)),
 		mcpsdk.WithString("parent_comment_id", mcpsdk.Description("Parent comment ID for threading.")),
 		mcpsdk.WithObject("metadata", mcpsdk.Description("Additional metadata as key-value pairs.")),
-	), s.handleAddComment)
+	), s.tracked("add_comment", s.handleAddComment))
 
 	s.mcpServer.AddTool(mcpsdk.NewTool("list_comments",
 		mcpsdk.WithDescription("List comments on a task."),
 		mcpsdk.WithString("task_id", mcpsdk.Required(), mcpsdk.Description("Task ID.")),
 		mcpsdk.WithBoolean("include_internal", mcpsdk.Description("Include internal (agent-only) comments."), mcpsdk.DefaultBool(true)),
 		mcpsdk.WithNumber("limit", mcpsdk.Description("Max comments to return (default 50).")),
-	), s.handleListComments)
+	), s.tracked("list_comments", s.handleListComments))
 
 	s.mcpServer.AddTool(mcpsdk.NewTool("upload_artifact",
 		mcpsdk.WithDescription("Upload an artifact (file, code, log, etc.) to a task."),
@@ -248,18 +274,18 @@ func (s *Server) registerTools() {
 		mcpsdk.WithString("artifact_type", mcpsdk.Description("Type: file, code, log, report, link, image, data."), mcpsdk.DefaultString("file")),
 		mcpsdk.WithString("mime_type", mcpsdk.Description("MIME type. Auto-detected from name if omitted.")),
 		mcpsdk.WithObject("metadata", mcpsdk.Description("Additional metadata.")),
-	), s.handleUploadArtifact)
+	), s.tracked("upload_artifact", s.handleUploadArtifact))
 
 	s.mcpServer.AddTool(mcpsdk.NewTool("list_artifacts",
 		mcpsdk.WithDescription("List artifacts attached to a task."),
 		mcpsdk.WithString("task_id", mcpsdk.Required(), mcpsdk.Description("Task ID.")),
-	), s.handleListArtifacts)
+	), s.tracked("list_artifacts", s.handleListArtifacts))
 
 	s.mcpServer.AddTool(mcpsdk.NewTool("get_artifact",
 		mcpsdk.WithDescription("Get artifact details and optionally its content."),
 		mcpsdk.WithString("artifact_id", mcpsdk.Required(), mcpsdk.Description("Artifact ID.")),
 		mcpsdk.WithBoolean("include_content", mcpsdk.Description("Include content for text files under 1MB."), mcpsdk.DefaultBool(false)),
-	), s.handleGetArtifact)
+	), s.tracked("get_artifact", s.handleGetArtifact))
 
 	// --- Event Bus ---
 	s.mcpServer.AddTool(mcpsdk.NewTool("publish_event",
@@ -272,7 +298,7 @@ func (s *Server) registerTools() {
 		mcpsdk.WithArray("tags", mcpsdk.Description("Event tags for filtering."), mcpsdk.WithStringItems()),
 		mcpsdk.WithNumber("ttl_hours", mcpsdk.Description("Time-to-live in hours (default 24).")),
 		mcpsdk.WithObject("memory", mcpsdk.Description("Optional memory hint to persist alongside the event (e.g. key decisions, conventions).")),
-	), s.handlePublishEvent)
+	), s.tracked("publish_event", s.handlePublishEvent))
 
 	s.mcpServer.AddTool(mcpsdk.NewTool("publish_summary",
 		mcpsdk.WithDescription("Publish a work summary event (convenience wrapper for publish_event with type=summary)."),
@@ -284,7 +310,7 @@ func (s *Server) registerTools() {
 		mcpsdk.WithArray("blockers", mcpsdk.Description("Current blockers."), mcpsdk.WithStringItems()),
 		mcpsdk.WithArray("next_steps", mcpsdk.Description("Suggested next steps."), mcpsdk.WithStringItems()),
 		mcpsdk.WithObject("metrics", mcpsdk.Description("Metrics (lines changed, tests passed, etc.).")),
-	), s.handlePublishSummary)
+	), s.tracked("publish_summary", s.handlePublishSummary))
 
 	s.mcpServer.AddTool(mcpsdk.NewTool("get_context",
 		mcpsdk.WithDescription("Get enriched context from the event bus."),
@@ -293,19 +319,19 @@ func (s *Server) registerTools() {
 		mcpsdk.WithArray("event_types", mcpsdk.Description("Filter by event types."), mcpsdk.WithStringItems()),
 		mcpsdk.WithArray("tags", mcpsdk.Description("Filter by tags."), mcpsdk.WithStringItems()),
 		mcpsdk.WithNumber("limit", mcpsdk.Description("Max events to return (default 50).")),
-	), s.handleGetContext)
+	), s.tracked("get_context", s.handleGetContext))
 
 	s.mcpServer.AddTool(mcpsdk.NewTool("get_task_context",
 		mcpsdk.WithDescription("Get all context for a task: details, comments, events, artifacts, dependencies."),
 		mcpsdk.WithString("task_id", mcpsdk.Required(), mcpsdk.Description("Task ID.")),
-	), s.handleGetTaskContext)
+	), s.tracked("get_task_context", s.handleGetTaskContext))
 
 	s.mcpServer.AddTool(mcpsdk.NewTool("subscribe_events",
 		mcpsdk.WithDescription("Configure push notification delivery for task events. Optionally sets a callback URL that Mesh will POST events to. Returns SSE and long-poll endpoint URLs for alternative delivery mechanisms."),
 		mcpsdk.WithString("project_id", mcpsdk.Required(), mcpsdk.Description("Project ID.")),
 		mcpsdk.WithArray("event_types", mcpsdk.Description("Event types to subscribe to."), mcpsdk.WithStringItems()),
 		mcpsdk.WithString("callback_url", mcpsdk.Description("Optional URL where Mesh will POST task events (task.assigned, task.created, task.status_changed). Leave empty to only use SSE or long-polling.")),
-	), s.handleSubscribeEvents)
+	), s.tracked("subscribe_events", s.handleSubscribeEvents))
 
 	// --- Utility ---
 	s.mcpServer.AddTool(mcpsdk.NewTool("heartbeat",
@@ -314,14 +340,14 @@ func (s *Server) registerTools() {
 		mcpsdk.WithString("status", mcpsdk.Description("Agent status: online, busy, error.")),
 		mcpsdk.WithString("message", mcpsdk.Description("Short human-readable status message (e.g. 'running tests', 'waiting for review').")),
 		mcpsdk.WithObject("metadata", mcpsdk.Description("Arbitrary JSON metadata to store with the heartbeat.")),
-	), s.handleHeartbeat)
+	), s.tracked("heartbeat", s.handleHeartbeat))
 
 	s.mcpServer.AddTool(mcpsdk.NewTool("get_my_tasks",
 		mcpsdk.WithDescription("Get tasks assigned to the calling agent."),
 		mcpsdk.WithString("status_category", mcpsdk.Description("Filter by status category.")),
 		mcpsdk.WithString("project_id", mcpsdk.Description("Filter by project.")),
 		mcpsdk.WithNumber("limit", mcpsdk.Description("Max results (default 50).")),
-	), s.handleGetMyTasks)
+	), s.tracked("get_my_tasks", s.handleGetMyTasks))
 
 	s.mcpServer.AddTool(mcpsdk.NewTool("report_error",
 		mcpsdk.WithDescription("Report an error encountered during work."),
@@ -330,7 +356,7 @@ func (s *Server) registerTools() {
 		mcpsdk.WithString("stack_trace", mcpsdk.Description("Stack trace or details.")),
 		mcpsdk.WithString("severity", mcpsdk.Description("Severity: low, medium, high, critical."), mcpsdk.DefaultString("medium")),
 		mcpsdk.WithBoolean("recoverable", mcpsdk.Description("Whether the error is recoverable."), mcpsdk.DefaultBool(true)),
-	), s.handleReportError)
+	), s.tracked("report_error", s.handleReportError))
 
 	// --- Agent Hierarchy ---
 	s.mcpServer.AddTool(mcpsdk.NewTool("register_sub_agent",
@@ -338,39 +364,39 @@ func (s *Server) registerTools() {
 		mcpsdk.WithString("name", mcpsdk.Required(), mcpsdk.Description("Sub-agent name.")),
 		mcpsdk.WithString("agent_type", mcpsdk.Required(), mcpsdk.Description("Agent type: claude_code, openclaw, cline, aider, custom.")),
 		mcpsdk.WithObject("capabilities", mcpsdk.Description("Agent capabilities as key-value pairs.")),
-	), s.handleRegisterSubAgent)
+	), s.tracked("register_sub_agent", s.handleRegisterSubAgent))
 
 	s.mcpServer.AddTool(mcpsdk.NewTool("list_sub_agents",
 		mcpsdk.WithDescription("List sub-agents of an agent."),
 		mcpsdk.WithString("agent_id", mcpsdk.Description("Parent agent ID. Defaults to the calling agent.")),
 		mcpsdk.WithBoolean("recursive", mcpsdk.Description("Return all descendants (up to 10 levels deep)."), mcpsdk.DefaultBool(false)),
-	), s.handleListSubAgents)
+	), s.tracked("list_sub_agents", s.handleListSubAgents))
 
 	// --- Governance Rules ---
 	s.mcpServer.AddTool(mcpsdk.NewTool("get_my_rules",
 		mcpsdk.WithDescription("Get all governance rules that apply to you. Call at the start of work to understand constraints and behavioral requirements."),
 		mcpsdk.WithString("project_id", mcpsdk.Description("Optional project ID to get project-specific effective rules.")),
-	), s.handleGetMyRules)
+	), s.tracked("get_my_rules", s.handleGetMyRules))
 
 	s.mcpServer.AddTool(mcpsdk.NewTool("get_project_rules",
 		mcpsdk.WithDescription("Get all rules configured for a project (all scopes: workspace + project)."),
 		mcpsdk.WithString("project_id", mcpsdk.Required(), mcpsdk.Description("Project ID.")),
-	), s.handleGetProjectRules)
+	), s.tracked("get_project_rules", s.handleGetProjectRules))
 
 	// --- Team & Rules ---
 	s.mcpServer.AddTool(mcpsdk.NewTool("get_team_directory",
 		mcpsdk.WithDescription("Get the workspace team directory listing all agents and human members with their profiles."),
-	), s.handleGetTeamDirectory)
+	), s.tracked("get_team_directory", s.handleGetTeamDirectory))
 
 	s.mcpServer.AddTool(mcpsdk.NewTool("get_assignment_rules",
 		mcpsdk.WithDescription("Get effective assignment rules for a project, merged from workspace and project level with source annotations."),
 		mcpsdk.WithString("project_id", mcpsdk.Required(), mcpsdk.Description("Project ID.")),
-	), s.handleGetAssignmentRules)
+	), s.tracked("get_assignment_rules", s.handleGetAssignmentRules))
 
 	s.mcpServer.AddTool(mcpsdk.NewTool("get_workflow_rules",
 		mcpsdk.WithDescription("Get workflow rules for a project including allowed transitions, policies, and permissions for the calling agent."),
 		mcpsdk.WithString("project_id", mcpsdk.Required(), mcpsdk.Description("Project ID.")),
-	), s.handleGetWorkflowRules)
+	), s.tracked("get_workflow_rules", s.handleGetWorkflowRules))
 
 	s.mcpServer.AddTool(mcpsdk.NewTool("update_agent_profile",
 		mcpsdk.WithDescription("Update the calling agent's profile fields such as role, capabilities, responsibility zone, and working hours."),
@@ -383,22 +409,22 @@ func (s *Server) registerTools() {
 		mcpsdk.WithString("working_hours", mcpsdk.Description("Working hours description (e.g. 24/7, 9-17 UTC).")),
 		mcpsdk.WithString("description", mcpsdk.Description("Human-readable description of the agent's purpose.")),
 		mcpsdk.WithString("callback_url", mcpsdk.Description("URL where Mesh will POST task events (task.assigned, task.status_changed, task.commented). Set to empty string to disable.")),
-	), s.handleUpdateAgentProfile)
+	), s.tracked("update_agent_profile", s.handleUpdateAgentProfile))
 
 	s.mcpServer.AddTool(mcpsdk.NewTool("import_workspace_config",
 		mcpsdk.WithDescription("Import workspace configuration from YAML. Applies rules, statuses, and project templates defined in the YAML."),
 		mcpsdk.WithString("yaml_content", mcpsdk.Required(), mcpsdk.Description("YAML configuration content as a string.")),
-	), s.handleImportWorkspaceConfig)
+	), s.tracked("import_workspace_config", s.handleImportWorkspaceConfig))
 
 	s.mcpServer.AddTool(mcpsdk.NewTool("export_workspace_config",
 		mcpsdk.WithDescription("Export the current workspace configuration as YAML, including rules, project templates, and settings."),
-	), s.handleExportWorkspaceConfig)
+	), s.tracked("export_workspace_config", s.handleExportWorkspaceConfig))
 
 	// --- Push Notifications ---
 	s.mcpServer.AddTool(mcpsdk.NewTool("poll_tasks",
 		mcpsdk.WithDescription("Long-poll for new task assignments. Blocks until a task is assigned to this agent or the timeout expires. Returns current assigned tasks and whether any change occurred."),
 		mcpsdk.WithNumber("timeout", mcpsdk.Description("Maximum seconds to wait for new assignments (default 30, max 120).")),
-	), s.handlePollTasks)
+	), s.tracked("poll_tasks", s.handlePollTasks))
 
 	// --- Recurring Tasks ---
 	s.mcpServer.AddTool(mcpsdk.NewTool("create_recurring_task",
@@ -416,24 +442,24 @@ func (s *Server) registerTools() {
 		mcpsdk.WithString("starts_at", mcpsdk.Description("When to start the schedule (RFC3339). Default: now.")),
 		mcpsdk.WithString("ends_at", mcpsdk.Description("When to stop the schedule (RFC3339). Default: no end.")),
 		mcpsdk.WithNumber("max_instances", mcpsdk.Description("Maximum number of instances to create. Default: unlimited.")),
-	), s.handleCreateRecurringTask)
+	), s.tracked("create_recurring_task", s.handleCreateRecurringTask))
 
 	s.mcpServer.AddTool(mcpsdk.NewTool("list_recurring_schedules",
 		mcpsdk.WithDescription("Lists all recurring task schedules for a project."),
 		mcpsdk.WithString("project_id", mcpsdk.Required(), mcpsdk.Description("Project ID.")),
 		mcpsdk.WithBoolean("active_only", mcpsdk.Description("Only return active schedules."), mcpsdk.DefaultBool(true)),
-	), s.handleListRecurringSchedules)
+	), s.tracked("list_recurring_schedules", s.handleListRecurringSchedules))
 
 	s.mcpServer.AddTool(mcpsdk.NewTool("get_recurring_history",
 		mcpsdk.WithDescription("Returns the history of all instances for a recurring task schedule. ALWAYS call this when you receive a recurring task — it gives you context on what previous instances accomplished, what issues were found, and what artifacts were produced. Use it to continue work intelligently rather than starting from scratch."),
 		mcpsdk.WithString("recurring_schedule_id", mcpsdk.Required(), mcpsdk.Description("UUID of the recurring schedule. Available in task.recurring_schedule_id field.")),
 		mcpsdk.WithNumber("limit", mcpsdk.Description("Number of most recent instances to return. Default: 5. Use higher value for deep historical context.")),
-	), s.handleGetRecurringHistory)
+	), s.tracked("get_recurring_history", s.handleGetRecurringHistory))
 
 	s.mcpServer.AddTool(mcpsdk.NewTool("trigger_recurring_now",
 		mcpsdk.WithDescription("Immediately creates the next instance of a recurring schedule, without waiting for the scheduled time. Useful for testing or urgent execution."),
 		mcpsdk.WithString("recurring_schedule_id", mcpsdk.Required(), mcpsdk.Description("UUID of the recurring schedule.")),
-	), s.handleTriggerRecurringNow)
+	), s.tracked("trigger_recurring_now", s.handleTriggerRecurringNow))
 
 	// --- Memory tools ---
 	s.mcpServer.AddTool(mcpsdk.NewTool("recall",
@@ -443,7 +469,7 @@ func (s *Server) registerTools() {
 		mcpsdk.WithString("scope", mcpsdk.Description("Filter by scope: workspace, project, agent, or all (default).")),
 		mcpsdk.WithArray("tags", mcpsdk.Description("Filter by tags."), mcpsdk.WithStringItems()),
 		mcpsdk.WithNumber("limit", mcpsdk.Description("Max results (default 10, max 50).")),
-	), s.handleRecall)
+	), s.tracked("recall", s.handleRecall))
 
 	s.mcpServer.AddTool(mcpsdk.NewTool("remember",
 		mcpsdk.WithDescription("Save knowledge to persistent memory. Use for decisions, conventions, preferences. UPSERT by key — calling with same key updates the existing entry."),
@@ -452,17 +478,26 @@ func (s *Server) registerTools() {
 		mcpsdk.WithString("scope", mcpsdk.Description("workspace | project | agent (default: project).")),
 		mcpsdk.WithString("project_id", mcpsdk.Description("Project ID (required for project scope).")),
 		mcpsdk.WithArray("tags", mcpsdk.Description("Tags for categorization and filtering."), mcpsdk.WithStringItems()),
-	), s.handleRemember)
+	), s.tracked("remember", s.handleRemember))
 
 	s.mcpServer.AddTool(mcpsdk.NewTool("get_project_knowledge",
 		mcpsdk.WithDescription("Get all accumulated project knowledge. Call at session start to load context. Returns workspace-level and project-level memories."),
 		mcpsdk.WithString("project_id", mcpsdk.Required(), mcpsdk.Description("Project UUID.")),
-	), s.handleGetProjectKnowledge)
+	), s.tracked("get_project_knowledge", s.handleGetProjectKnowledge))
 
 	s.mcpServer.AddTool(mcpsdk.NewTool("forget",
 		mcpsdk.WithDescription("Delete a memory entry. Agents can only delete their own agent-scope memories."),
 		mcpsdk.WithString("memory_id", mcpsdk.Required(), mcpsdk.Description("UUID of the memory to delete.")),
-	), s.handleForget)
+	), s.tracked("forget", s.handleForget))
+
+	// --- Session reporting ---
+	s.mcpServer.AddTool(mcpsdk.NewTool("session_report",
+		mcpsdk.WithDescription("Report session metrics. Call before session end. Returns compliance score and session stats."),
+		mcpsdk.WithString("model", mcpsdk.Description("LLM model used (e.g. 'claude-sonnet-4').")),
+		mcpsdk.WithNumber("tokens_in", mcpsdk.Description("Total input tokens this session.")),
+		mcpsdk.WithNumber("tokens_out", mcpsdk.Description("Total output tokens this session.")),
+		mcpsdk.WithNumber("estimated_cost", mcpsdk.Description("Estimated cost in USD.")),
+	), s.tracked("session_report", s.handleSessionReport))
 }
 
 // --- Helper functions ---
