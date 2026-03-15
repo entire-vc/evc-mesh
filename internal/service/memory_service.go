@@ -83,6 +83,11 @@ func (s *memoryService) Remember(ctx context.Context, mem *domain.Memory) (strin
 		})
 	}
 
+	// Default relevance for new memories.
+	if mem.Relevance == 0 {
+		mem.Relevance = 1.0
+	}
+
 	// Determine whether this is a create or update by checking for an existing entry.
 	existing, err := s.memRepo.GetByKey(ctx, mem.WorkspaceID, mem.ProjectID, mem.AgentID, mem.Key, mem.Scope)
 	if err != nil {
@@ -276,12 +281,12 @@ func (s *memoryService) Forget(ctx context.Context, id uuid.UUID, actorAgentID *
 	}
 
 	if !isAdmin {
-		// Non-admin agents may only delete their own agent-scope memories.
+		// Non-admin agents may only delete memories they created (matching agent_id).
 		if actorAgentID == nil {
 			return apierror.Forbidden("only admins can delete memories created by other actors")
 		}
-		if mem.Scope != domain.ScopeAgent || mem.AgentID == nil || *mem.AgentID != *actorAgentID {
-			return apierror.Forbidden("agents may only delete their own agent-scope memories")
+		if mem.AgentID == nil || *mem.AgentID != *actorAgentID {
+			return apierror.Forbidden("agents may only delete their own memories")
 		}
 	}
 

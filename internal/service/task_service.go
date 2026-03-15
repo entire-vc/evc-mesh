@@ -564,8 +564,15 @@ func (s *taskService) CreateSubtask(ctx context.Context, parentTaskID uuid.UUID,
 		s.applyAutoAssign(ctx, child)
 	}
 
-	// Auto-enroll creator agent into project members.
+	// Set creator from context (required: created_by NOT NULL, created_by_type enum).
 	creatorID, creatorType := actorctx.FromContext(ctx)
+	child.CreatedBy = creatorID
+	child.CreatedByType = creatorType
+	if child.CreatedByType == "" {
+		child.CreatedByType = domain.ActorTypeUser
+	}
+
+	// Auto-enroll creator agent into project members.
 	if creatorType == domain.ActorTypeAgent && creatorID != uuid.Nil {
 		s.ensureAgentProjectMember(ctx, parent.ProjectID, creatorID)
 	}

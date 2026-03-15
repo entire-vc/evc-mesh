@@ -8,6 +8,7 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -657,28 +658,28 @@ func (c *RESTClient) Remember(ctx context.Context, body map[string]any) (map[str
 
 // RecallMemories searches memories via full-text search with optional filters.
 func (c *RESTClient) RecallMemories(ctx context.Context, query, wsID, projectID, scope string, tags []string, limit int) (map[string]any, error) {
-	var parts []string
+	params := make(url.Values)
 	if query != "" {
-		parts = append(parts, "q="+query)
+		params.Set("q", query)
 	}
 	if wsID != "" {
-		parts = append(parts, "workspace_id="+wsID)
+		params.Set("workspace_id", wsID)
 	}
 	if projectID != "" {
-		parts = append(parts, "project_id="+projectID)
+		params.Set("project_id", projectID)
 	}
 	if scope != "" {
-		parts = append(parts, "scope="+scope)
+		params.Set("scope", scope)
 	}
 	for _, tag := range tags {
-		parts = append(parts, "tags="+tag)
+		params.Add("tags", tag)
 	}
 	if limit > 0 {
-		parts = append(parts, fmt.Sprintf("limit=%d", limit))
+		params.Set("limit", fmt.Sprintf("%d", limit))
 	}
 	path := "/api/v1/memories/search"
-	if len(parts) > 0 {
-		path += "?" + strings.Join(parts, "&")
+	if encoded := params.Encode(); encoded != "" {
+		path += "?" + encoded
 	}
 	var result map[string]any
 	if err := c.doJSON(ctx, http.MethodGet, path, nil, &result); err != nil {
