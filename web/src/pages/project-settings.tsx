@@ -87,7 +87,7 @@ const fieldTypeLabels: Record<string, string> = {
   json: "JSON",
 };
 
-const PRIORITIES = ["critical", "urgent", "high", "medium", "low"];
+const PRIORITIES = ["urgent", "high", "medium", "low", "none"];
 
 // ---- Workflow Rules section component ----
 
@@ -1265,8 +1265,9 @@ export function ProjectSettingsPage() {
     if (!currentProject) return;
     setIsSavingAssignment(true);
     try {
+      // PUT already returns effective (merged) rules and updates the store —
+      // no need for a separate GET which causes double form reinit.
       await saveProjectAssignmentRules(currentProject.id, config);
-      await fetchEffectiveAssignmentRules(currentProject.id);
     } finally {
       setIsSavingAssignment(false);
     }
