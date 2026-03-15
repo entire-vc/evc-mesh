@@ -1,4 +1,4 @@
-import { type FormEvent, type KeyboardEvent, useEffect, useRef, useState } from "react";
+import { type FormEvent, type KeyboardEvent, useCallback, useEffect, useRef, useState } from "react";
 import {
   Dialog,
   DialogContent,
@@ -65,11 +65,12 @@ export function CreateTaskDialog({
   const [assigneeValue, setAssigneeValue] = useState("unassigned");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [selectedTemplateId, setSelectedTemplateId] = useState("");
 
   // Pending images pasted before task is created
   const pendingImagesRef = useRef<PendingImage[]>([]);
 
-  const resetForm = () => {
+  const resetForm = useCallback(() => {
     setTitle("");
     setDescription("");
     setPriority("none");
@@ -79,22 +80,29 @@ export function CreateTaskDialog({
     setStatusId(defaultStatusId ?? "");
     setDueDate(defaultDueDate ?? "");
     setAssigneeValue("unassigned");
+    setIsSubmitting(false);
     setError(null);
+    setSelectedTemplateId("");
     pendingImagesRef.current = [];
-  };
+  }, [defaultStatusId, defaultDueDate]);
 
-  // Fetch agents, templates and reset form when dialog opens
+  // Reset form when dialog opens
   useEffect(() => {
     if (open) {
       resetForm();
-      if (currentWorkspace) {
-        void fetchAgents(currentWorkspace.id);
-      }
-      if (currentProject) {
-        void fetchTemplates(currentProject.id);
-      }
     }
-  }, [open, currentWorkspace, currentProject, fetchAgents, fetchTemplates]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [open, resetForm]);
+
+  // Fetch agents and templates when dialog opens or context changes
+  useEffect(() => {
+    if (!open) return;
+    if (currentWorkspace) {
+      void fetchAgents(currentWorkspace.id);
+    }
+    if (currentProject) {
+      void fetchTemplates(currentProject.id);
+    }
+  }, [open, currentWorkspace, currentProject, fetchAgents, fetchTemplates]);
 
   // Focus label input when adding starts
   useEffect(() => {
@@ -235,8 +243,9 @@ export function CreateTaskDialog({
           {/* Template selector */}
           {templates.length > 0 && (
             <Select
-              defaultValue=""
+              value={selectedTemplateId}
               onChange={(e) => {
+                setSelectedTemplateId(e.target.value);
                 const tmpl = templates.find((t) => t.id === e.target.value);
                 if (!tmpl) return;
                 if (tmpl.title_template) setTitle(tmpl.title_template);
