@@ -18,6 +18,14 @@ import (
 	mcpserver "github.com/mark3labs/mcp-go/server"
 )
 
+// Profile constants for MCP server tool sets.
+const (
+	// ProfileCore registers only the 20 essential tools for lightweight agents.
+	ProfileCore = "core"
+	// ProfileFull registers all tools (core + advanced). This is the default.
+	ProfileFull = "full"
+)
+
 // AgentSession holds the authenticated agent context for the MCP session.
 type AgentSession struct {
 	AgentID     uuid.UUID
@@ -85,6 +93,7 @@ type Server struct {
 	session    *AgentSession // static session for stdio mode; nil for SSE mode
 	restClient *RESTClient   // default REST client; may be overridden per-request in SSE mode
 	tracker    *SessionTracker
+	profile    string
 }
 
 // getSession returns the AgentSession for the current request.
@@ -113,18 +122,35 @@ type ServerConfig struct {
 	Session *AgentSession
 	// RESTClient is the HTTP client used to call the Mesh REST API.
 	RESTClient *RESTClient
+	// Profile controls which tools are registered: "core" (20 essential tools)
+	// or "full" (all tools, default).
+	Profile string
 }
 
-// NewServer creates a new MCP server with all tools registered.
+// NewServer creates a new MCP server with tools registered according to the profile.
 func NewServer(cfg ServerConfig) *Server {
+	profile := cfg.Profile
+	if profile == "" {
+		profile = ProfileFull
+	}
+
+	serverName := "evc-mesh-mcp"
+	if profile == ProfileCore {
+		serverName = "evc-mesh-mcp-core"
+	}
+
 	s := &Server{
-		mcpServer:  mcpserver.NewMCPServer("evc-mesh-mcp", "0.1.0"),
+		mcpServer:  mcpserver.NewMCPServer(serverName, "0.1.0"),
 		session:    cfg.Session,
 		restClient: cfg.RESTClient,
 		tracker:    NewSessionTracker(),
+		profile:    profile,
 	}
 
-	s.registerTools()
+	s.registerCoreTools()
+	if profile == ProfileFull {
+		s.registerAdvancedTools()
+	}
 	return s
 }
 
@@ -157,20 +183,44 @@ func (s *Server) MCPServer() *mcpserver.MCPServer {
 	return s.mcpServer
 }
 
-// registerTools registers all MCP tools.
-func (s *Server) registerTools() {
-	// --- Projects & Tasks ---
-	s.mcpServer.AddTool(mcpsdk.NewTool("list_projects",
-		mcpsdk.WithDescription("List available projects in the workspace."),
-		mcpsdk.WithString("workspace_id", mcpsdk.Description("Workspace ID. Defaults to agent's workspace.")),
-		mcpsdk.WithBoolean("include_archived", mcpsdk.Description("Include archived projects."), mcpsdk.DefaultBool(false)),
-	), s.tracked("list_projects", s.handleListProjects))
+// registerCoreTools registers the 20 essential tools with optimized, directive descriptions.
+func (s *Server) registerCoreTools() {
+	// --- ACP / Session tools ---
+	s.mcpServer.AddTool(mcpsdk.NewTool("heartbeat",
+		mcpsdk.WithDescription("Send heartbeat to stay visible. Call at session START with status=online, periodically during work with status=busy. Reports current_task_id, message, and metadata."),
+		mcpsdk.WithString("current_task_id", mcpsdk.Description("ID of the task currently being worked on.")),
+		mcpsdk.WithString("status", mcpsdk.Description("Agent status: online, busy, error.")),
+		mcpsdk.WithString("message", mcpsdk.Description("Short human-readable status message (e.g. 'running tests', 'waiting for review').")),
+		mcpsdk.WithObject("metadata", mcpsdk.Description("Arbitrary JSON metadata to store with the heartbeat.")),
+	), s.tracked("heartbeat", s.handleHeartbeat))
 
-	s.mcpServer.AddTool(mcpsdk.NewTool("get_project",
-		mcpsdk.WithDescription("Get project details with statuses and custom fields."),
+	s.mcpServer.AddTool(mcpsdk.NewTool("get_project_knowledge",
+		mcpsdk.WithDescription("Get ALL PERMANENT KNOWLEDGE for a project: decisions, conventions, accumulated context. Call at session start (ACP Step 2). Returns workspace-level + project-level memories. For RECENT events, use get_context instead."),
+		mcpsdk.WithString("project_id", mcpsdk.Required(), mcpsdk.Description("Project UUID.")),
+	), s.tracked("get_project_knowledge", s.handleGetProjectKnowledge))
+
+	s.mcpServer.AddTool(mcpsdk.NewTool("get_my_rules",
+		mcpsdk.WithDescription("Get ALL governance rules that apply to you: workflow constraints, assignment policies, behavioral requirements. Includes workspace and project-level rules with source annotations. Call at session start (ACP Step 3)."),
+		mcpsdk.WithString("project_id", mcpsdk.Description("Optional project ID to get project-specific effective rules.")),
+	), s.tracked("get_my_rules", s.handleGetMyRules))
+
+	s.mcpServer.AddTool(mcpsdk.NewTool("get_context",
+		mcpsdk.WithDescription("Get RECENT ACTIVITY for a project (last 24h by default): event stream with summaries, decisions, errors, plus accumulated project knowledge. Use for ACP Step 4 — what happened recently. For searching specific knowledge, use recall."),
 		mcpsdk.WithString("project_id", mcpsdk.Required(), mcpsdk.Description("Project ID.")),
-	), s.tracked("get_project", s.handleGetProject))
+		mcpsdk.WithString("since", mcpsdk.Description("Only events after this timestamp (RFC3339).")),
+		mcpsdk.WithArray("event_types", mcpsdk.Description("Filter by event types."), mcpsdk.WithStringItems()),
+		mcpsdk.WithArray("tags", mcpsdk.Description("Filter by tags."), mcpsdk.WithStringItems()),
+		mcpsdk.WithNumber("limit", mcpsdk.Description("Max events to return (default 50).")),
+	), s.tracked("get_context", s.handleGetContext))
 
+	s.mcpServer.AddTool(mcpsdk.NewTool("get_my_tasks",
+		mcpsdk.WithDescription("Get YOUR assigned tasks (ACP Step 5). Filter by status_category to focus on active work. Use at session start and after completing tasks to pick up the next assignment."),
+		mcpsdk.WithString("status_category", mcpsdk.Description("Filter by status category: backlog, todo, in_progress, review, done, cancelled.")),
+		mcpsdk.WithString("project_id", mcpsdk.Description("Filter by project.")),
+		mcpsdk.WithNumber("limit", mcpsdk.Description("Max results (default 50).")),
+	), s.tracked("get_my_tasks", s.handleGetMyTasks))
+
+	// --- Task CRUD ---
 	s.mcpServer.AddTool(mcpsdk.NewTool("list_tasks",
 		mcpsdk.WithDescription("List tasks with filters."),
 		mcpsdk.WithString("project_id", mcpsdk.Required(), mcpsdk.Description("Project ID.")),
@@ -192,7 +242,7 @@ func (s *Server) registerTools() {
 	), s.tracked("get_task", s.handleGetTask))
 
 	s.mcpServer.AddTool(mcpsdk.NewTool("create_task",
-		mcpsdk.WithDescription("Create a new task in a project."),
+		mcpsdk.WithDescription("Create a new task. Check get_my_tasks and list_tasks FIRST to avoid duplicates. Set status_slug for initial status (defaults to project's first status)."),
 		mcpsdk.WithString("project_id", mcpsdk.Required(), mcpsdk.Description("Project ID.")),
 		mcpsdk.WithString("title", mcpsdk.Required(), mcpsdk.Description("Task title.")),
 		mcpsdk.WithString("description", mcpsdk.Description("Task description.")),
@@ -220,12 +270,106 @@ func (s *Server) registerTools() {
 	), s.tracked("update_task", s.handleUpdateTask))
 
 	s.mcpServer.AddTool(mcpsdk.NewTool("move_task",
-		mcpsdk.WithDescription("Move task to a different status."),
+		mcpsdk.WithDescription("Change task status (e.g. todo → in_progress → done). Use status SLUGS (not UUIDs). Add a comment to explain why."),
 		mcpsdk.WithString("task_id", mcpsdk.Required(), mcpsdk.Description("Task ID.")),
 		mcpsdk.WithString("status_slug", mcpsdk.Required(), mcpsdk.Description("Target status slug (e.g. 'in_progress', 'done').")),
 		mcpsdk.WithString("comment", mcpsdk.Description("Optional comment to add when moving.")),
 	), s.tracked("move_task", s.handleMoveTask))
 
+	s.mcpServer.AddTool(mcpsdk.NewTool("assign_task",
+		mcpsdk.WithDescription("Assign a task to a user or agent."),
+		mcpsdk.WithString("task_id", mcpsdk.Required(), mcpsdk.Description("Task ID.")),
+		mcpsdk.WithString("assignee_id", mcpsdk.Description("Assignee UUID. Omit to unassign.")),
+		mcpsdk.WithString("assignee_type", mcpsdk.Description("Assignee type: user, agent."), mcpsdk.DefaultString("agent")),
+		mcpsdk.WithBoolean("assign_to_self", mcpsdk.Description("Assign to the calling agent."), mcpsdk.DefaultBool(false)),
+	), s.tracked("assign_task", s.handleAssignTask))
+
+	s.mcpServer.AddTool(mcpsdk.NewTool("get_task_context",
+		mcpsdk.WithDescription("Get EVERYTHING about ONE TASK in a single call: full details + comments + artifacts + dependencies + activity. Use when working on a specific task instead of calling get_task + list_comments + list_artifacts separately."),
+		mcpsdk.WithString("task_id", mcpsdk.Required(), mcpsdk.Description("Task ID.")),
+	), s.tracked("get_task_context", s.handleGetTaskContext))
+
+	// --- Communication ---
+	s.mcpServer.AddTool(mcpsdk.NewTool("add_comment",
+		mcpsdk.WithDescription("Add a comment to a task."),
+		mcpsdk.WithString("task_id", mcpsdk.Required(), mcpsdk.Description("Task ID.")),
+		mcpsdk.WithString("body", mcpsdk.Required(), mcpsdk.Description("Comment body (markdown supported).")),
+		mcpsdk.WithBoolean("is_internal", mcpsdk.Description("Mark as internal (agent-only visible)."), mcpsdk.DefaultBool(false)),
+		mcpsdk.WithString("parent_comment_id", mcpsdk.Description("Parent comment ID for threading.")),
+		mcpsdk.WithObject("metadata", mcpsdk.Description("Additional metadata as key-value pairs.")),
+	), s.tracked("add_comment", s.handleAddComment))
+
+	s.mcpServer.AddTool(mcpsdk.NewTool("publish_event",
+		mcpsdk.WithDescription("Publish an event to the event bus. For summaries, use event_type='summary'. Add memory={persist:true, key:'decision-name'} to also save as permanent memory. Replaces the deprecated publish_summary tool."),
+		mcpsdk.WithString("project_id", mcpsdk.Required(), mcpsdk.Description("Project ID.")),
+		mcpsdk.WithString("event_type", mcpsdk.Required(), mcpsdk.Description("Event type: summary, status_change, context_update, error, dependency_resolved, custom.")),
+		mcpsdk.WithString("subject", mcpsdk.Required(), mcpsdk.Description("Event subject line.")),
+		mcpsdk.WithObject("payload", mcpsdk.Required(), mcpsdk.Description("Event payload as key-value pairs.")),
+		mcpsdk.WithString("task_id", mcpsdk.Description("Related task ID.")),
+		mcpsdk.WithArray("tags", mcpsdk.Description("Event tags for filtering."), mcpsdk.WithStringItems()),
+		mcpsdk.WithNumber("ttl_hours", mcpsdk.Description("Time-to-live in hours (default 24).")),
+		mcpsdk.WithObject("memory", mcpsdk.Description("Optional memory hint to persist alongside the event (e.g. key decisions, conventions).")),
+	), s.tracked("publish_event", s.handlePublishEvent))
+
+	// --- Memory ---
+	s.mcpServer.AddTool(mcpsdk.NewTool("recall",
+		mcpsdk.WithDescription("SEARCH memory by keywords. Use to find a SPECIFIC piece of knowledge, e.g. 'API convention' or 'license decision'. Returns ranked results with scores. For loading ALL project knowledge at session start, use get_project_knowledge instead."),
+		mcpsdk.WithString("query", mcpsdk.Required(), mcpsdk.Description("Full-text search query.")),
+		mcpsdk.WithString("project_id", mcpsdk.Description("Filter to a specific project.")),
+		mcpsdk.WithString("scope", mcpsdk.Description("Filter by scope: workspace, project, agent, or all (default).")),
+		mcpsdk.WithArray("tags", mcpsdk.Description("Filter by tags."), mcpsdk.WithStringItems()),
+		mcpsdk.WithNumber("limit", mcpsdk.Description("Max results (default 10, max 50).")),
+	), s.tracked("recall", s.handleRecall))
+
+	s.mcpServer.AddTool(mcpsdk.NewTool("remember",
+		mcpsdk.WithDescription("Save knowledge to persistent memory. Use for decisions, conventions, preferences. UPSERT by key — calling with same key updates the existing entry."),
+		mcpsdk.WithString("key", mcpsdk.Required(), mcpsdk.Description("Slug key for UPSERT (e.g. 'api-convention', 'license-decision').")),
+		mcpsdk.WithString("content", mcpsdk.Required(), mcpsdk.Description("What to remember (markdown).")),
+		mcpsdk.WithString("scope", mcpsdk.Description("workspace | project | agent (default: project).")),
+		mcpsdk.WithString("project_id", mcpsdk.Description("Project ID (required for project scope).")),
+		mcpsdk.WithArray("tags", mcpsdk.Description("Tags for categorization and filtering."), mcpsdk.WithStringItems()),
+	), s.tracked("remember", s.handleRemember))
+
+	s.mcpServer.AddTool(mcpsdk.NewTool("forget",
+		mcpsdk.WithDescription("Delete a memory entry. Agents can only delete their own agent-scope memories."),
+		mcpsdk.WithString("memory_id", mcpsdk.Required(), mcpsdk.Description("UUID of the memory to delete.")),
+	), s.tracked("forget", s.handleForget))
+
+	// --- Utility ---
+	s.mcpServer.AddTool(mcpsdk.NewTool("list_projects",
+		mcpsdk.WithDescription("List available projects in the workspace."),
+		mcpsdk.WithString("workspace_id", mcpsdk.Description("Workspace ID. Defaults to agent's workspace.")),
+		mcpsdk.WithBoolean("include_archived", mcpsdk.Description("Include archived projects."), mcpsdk.DefaultBool(false)),
+	), s.tracked("list_projects", s.handleListProjects))
+
+	s.mcpServer.AddTool(mcpsdk.NewTool("report_error",
+		mcpsdk.WithDescription("Report an error encountered during work."),
+		mcpsdk.WithString("task_id", mcpsdk.Description("Related task ID.")),
+		mcpsdk.WithString("error_message", mcpsdk.Required(), mcpsdk.Description("Error message.")),
+		mcpsdk.WithString("stack_trace", mcpsdk.Description("Stack trace or details.")),
+		mcpsdk.WithString("severity", mcpsdk.Description("Severity: low, medium, high, critical."), mcpsdk.DefaultString("medium")),
+		mcpsdk.WithBoolean("recoverable", mcpsdk.Description("Whether the error is recoverable."), mcpsdk.DefaultBool(true)),
+	), s.tracked("report_error", s.handleReportError))
+
+	s.mcpServer.AddTool(mcpsdk.NewTool("session_report",
+		mcpsdk.WithDescription("Report session metrics. Call before session end. Returns compliance score and session stats."),
+		mcpsdk.WithString("model", mcpsdk.Description("LLM model used (e.g. 'claude-sonnet-4').")),
+		mcpsdk.WithNumber("tokens_in", mcpsdk.Description("Total input tokens this session.")),
+		mcpsdk.WithNumber("tokens_out", mcpsdk.Description("Total output tokens this session.")),
+		mcpsdk.WithNumber("estimated_cost", mcpsdk.Description("Estimated cost in USD.")),
+	), s.tracked("session_report", s.handleSessionReport))
+}
+
+// registerAdvancedTools registers tools beyond the core set.
+// These are available in the full profile only.
+func (s *Server) registerAdvancedTools() {
+	// --- Projects ---
+	s.mcpServer.AddTool(mcpsdk.NewTool("get_project",
+		mcpsdk.WithDescription("Get project details with statuses and custom fields."),
+		mcpsdk.WithString("project_id", mcpsdk.Required(), mcpsdk.Description("Project ID.")),
+	), s.tracked("get_project", s.handleGetProject))
+
+	// --- Task operations ---
 	s.mcpServer.AddTool(mcpsdk.NewTool("create_subtask",
 		mcpsdk.WithDescription("Create a subtask under a parent task."),
 		mcpsdk.WithString("parent_task_id", mcpsdk.Required(), mcpsdk.Description("Parent task ID.")),
@@ -241,24 +385,18 @@ func (s *Server) registerTools() {
 		mcpsdk.WithString("dependency_type", mcpsdk.Description("Dependency type: blocks, relates_to, is_child_of."), mcpsdk.DefaultString("blocks")),
 	), s.tracked("add_dependency", s.handleAddDependency))
 
-	s.mcpServer.AddTool(mcpsdk.NewTool("assign_task",
-		mcpsdk.WithDescription("Assign a task to a user or agent."),
-		mcpsdk.WithString("task_id", mcpsdk.Required(), mcpsdk.Description("Task ID.")),
-		mcpsdk.WithString("assignee_id", mcpsdk.Description("Assignee UUID. Omit to unassign.")),
-		mcpsdk.WithString("assignee_type", mcpsdk.Description("Assignee type: user, agent."), mcpsdk.DefaultString("agent")),
-		mcpsdk.WithBoolean("assign_to_self", mcpsdk.Description("Assign to the calling agent."), mcpsdk.DefaultBool(false)),
-	), s.tracked("assign_task", s.handleAssignTask))
+	// --- Atomic Task Checkout ---
+	s.mcpServer.AddTool(mcpsdk.NewTool("checkout_task",
+		mcpsdk.WithDescription("Atomically acquire an exclusive lock on a task. Prevents other agents from checking out the same task simultaneously. The lock is TTL-based and will expire automatically. Use before starting work on a task to ensure exclusive access."),
+		mcpsdk.WithString("task_id", mcpsdk.Required(), mcpsdk.Description("Task ID to check out.")),
+	), s.tracked("checkout_task", s.handleCheckoutTask))
+
+	s.mcpServer.AddTool(mcpsdk.NewTool("release_task",
+		mcpsdk.WithDescription("Release the exclusive lock on a task acquired via checkout_task. Call when done with the task or if you need to hand it off. The lock is also released automatically when it expires."),
+		mcpsdk.WithString("task_id", mcpsdk.Required(), mcpsdk.Description("Task ID to release.")),
+	), s.tracked("release_task", s.handleReleaseTask))
 
 	// --- Comments & Artifacts ---
-	s.mcpServer.AddTool(mcpsdk.NewTool("add_comment",
-		mcpsdk.WithDescription("Add a comment to a task."),
-		mcpsdk.WithString("task_id", mcpsdk.Required(), mcpsdk.Description("Task ID.")),
-		mcpsdk.WithString("body", mcpsdk.Required(), mcpsdk.Description("Comment body (markdown supported).")),
-		mcpsdk.WithBoolean("is_internal", mcpsdk.Description("Mark as internal (agent-only visible)."), mcpsdk.DefaultBool(false)),
-		mcpsdk.WithString("parent_comment_id", mcpsdk.Description("Parent comment ID for threading.")),
-		mcpsdk.WithObject("metadata", mcpsdk.Description("Additional metadata as key-value pairs.")),
-	), s.tracked("add_comment", s.handleAddComment))
-
 	s.mcpServer.AddTool(mcpsdk.NewTool("list_comments",
 		mcpsdk.WithDescription("List comments on a task."),
 		mcpsdk.WithString("task_id", mcpsdk.Required(), mcpsdk.Description("Task ID.")),
@@ -288,20 +426,8 @@ func (s *Server) registerTools() {
 	), s.tracked("get_artifact", s.handleGetArtifact))
 
 	// --- Event Bus ---
-	s.mcpServer.AddTool(mcpsdk.NewTool("publish_event",
-		mcpsdk.WithDescription("Publish an event to the event bus."),
-		mcpsdk.WithString("project_id", mcpsdk.Required(), mcpsdk.Description("Project ID.")),
-		mcpsdk.WithString("event_type", mcpsdk.Required(), mcpsdk.Description("Event type: summary, status_change, context_update, error, dependency_resolved, custom.")),
-		mcpsdk.WithString("subject", mcpsdk.Required(), mcpsdk.Description("Event subject line.")),
-		mcpsdk.WithObject("payload", mcpsdk.Required(), mcpsdk.Description("Event payload as key-value pairs.")),
-		mcpsdk.WithString("task_id", mcpsdk.Description("Related task ID.")),
-		mcpsdk.WithArray("tags", mcpsdk.Description("Event tags for filtering."), mcpsdk.WithStringItems()),
-		mcpsdk.WithNumber("ttl_hours", mcpsdk.Description("Time-to-live in hours (default 24).")),
-		mcpsdk.WithObject("memory", mcpsdk.Description("Optional memory hint to persist alongside the event (e.g. key decisions, conventions).")),
-	), s.tracked("publish_event", s.handlePublishEvent))
-
 	s.mcpServer.AddTool(mcpsdk.NewTool("publish_summary",
-		mcpsdk.WithDescription("Publish a work summary event (convenience wrapper for publish_event with type=summary)."),
+		mcpsdk.WithDescription("Publish a work summary event (convenience wrapper for publish_event with type=summary). Kept for backward compatibility — prefer publish_event with event_type='summary'."),
 		mcpsdk.WithString("project_id", mcpsdk.Required(), mcpsdk.Description("Project ID.")),
 		mcpsdk.WithString("task_id", mcpsdk.Description("Related task ID.")),
 		mcpsdk.WithString("summary", mcpsdk.Required(), mcpsdk.Description("Summary of work done.")),
@@ -312,51 +438,12 @@ func (s *Server) registerTools() {
 		mcpsdk.WithObject("metrics", mcpsdk.Description("Metrics (lines changed, tests passed, etc.).")),
 	), s.tracked("publish_summary", s.handlePublishSummary))
 
-	s.mcpServer.AddTool(mcpsdk.NewTool("get_context",
-		mcpsdk.WithDescription("Get enriched context from the event bus."),
-		mcpsdk.WithString("project_id", mcpsdk.Required(), mcpsdk.Description("Project ID.")),
-		mcpsdk.WithString("since", mcpsdk.Description("Only events after this timestamp (RFC3339).")),
-		mcpsdk.WithArray("event_types", mcpsdk.Description("Filter by event types."), mcpsdk.WithStringItems()),
-		mcpsdk.WithArray("tags", mcpsdk.Description("Filter by tags."), mcpsdk.WithStringItems()),
-		mcpsdk.WithNumber("limit", mcpsdk.Description("Max events to return (default 50).")),
-	), s.tracked("get_context", s.handleGetContext))
-
-	s.mcpServer.AddTool(mcpsdk.NewTool("get_task_context",
-		mcpsdk.WithDescription("Get all context for a task: details, comments, events, artifacts, dependencies."),
-		mcpsdk.WithString("task_id", mcpsdk.Required(), mcpsdk.Description("Task ID.")),
-	), s.tracked("get_task_context", s.handleGetTaskContext))
-
 	s.mcpServer.AddTool(mcpsdk.NewTool("subscribe_events",
 		mcpsdk.WithDescription("Configure push notification delivery for task events. Optionally sets a callback URL that Mesh will POST events to. Returns SSE and long-poll endpoint URLs for alternative delivery mechanisms."),
 		mcpsdk.WithString("project_id", mcpsdk.Required(), mcpsdk.Description("Project ID.")),
 		mcpsdk.WithArray("event_types", mcpsdk.Description("Event types to subscribe to."), mcpsdk.WithStringItems()),
 		mcpsdk.WithString("callback_url", mcpsdk.Description("Optional URL where Mesh will POST task events (task.assigned, task.created, task.status_changed). Leave empty to only use SSE or long-polling.")),
 	), s.tracked("subscribe_events", s.handleSubscribeEvents))
-
-	// --- Utility ---
-	s.mcpServer.AddTool(mcpsdk.NewTool("heartbeat",
-		mcpsdk.WithDescription("Send a heartbeat to indicate the agent is alive. Optionally report status, message, and metadata."),
-		mcpsdk.WithString("current_task_id", mcpsdk.Description("ID of the task currently being worked on.")),
-		mcpsdk.WithString("status", mcpsdk.Description("Agent status: online, busy, error.")),
-		mcpsdk.WithString("message", mcpsdk.Description("Short human-readable status message (e.g. 'running tests', 'waiting for review').")),
-		mcpsdk.WithObject("metadata", mcpsdk.Description("Arbitrary JSON metadata to store with the heartbeat.")),
-	), s.tracked("heartbeat", s.handleHeartbeat))
-
-	s.mcpServer.AddTool(mcpsdk.NewTool("get_my_tasks",
-		mcpsdk.WithDescription("Get tasks assigned to the calling agent."),
-		mcpsdk.WithString("status_category", mcpsdk.Description("Filter by status category.")),
-		mcpsdk.WithString("project_id", mcpsdk.Description("Filter by project.")),
-		mcpsdk.WithNumber("limit", mcpsdk.Description("Max results (default 50).")),
-	), s.tracked("get_my_tasks", s.handleGetMyTasks))
-
-	s.mcpServer.AddTool(mcpsdk.NewTool("report_error",
-		mcpsdk.WithDescription("Report an error encountered during work."),
-		mcpsdk.WithString("task_id", mcpsdk.Description("Related task ID.")),
-		mcpsdk.WithString("error_message", mcpsdk.Required(), mcpsdk.Description("Error message.")),
-		mcpsdk.WithString("stack_trace", mcpsdk.Description("Stack trace or details.")),
-		mcpsdk.WithString("severity", mcpsdk.Description("Severity: low, medium, high, critical."), mcpsdk.DefaultString("medium")),
-		mcpsdk.WithBoolean("recoverable", mcpsdk.Description("Whether the error is recoverable."), mcpsdk.DefaultBool(true)),
-	), s.tracked("report_error", s.handleReportError))
 
 	// --- Agent Hierarchy ---
 	s.mcpServer.AddTool(mcpsdk.NewTool("register_sub_agent",
@@ -372,21 +459,15 @@ func (s *Server) registerTools() {
 		mcpsdk.WithBoolean("recursive", mcpsdk.Description("Return all descendants (up to 10 levels deep)."), mcpsdk.DefaultBool(false)),
 	), s.tracked("list_sub_agents", s.handleListSubAgents))
 
-	// --- Governance Rules ---
-	s.mcpServer.AddTool(mcpsdk.NewTool("get_my_rules",
-		mcpsdk.WithDescription("Get all governance rules that apply to you. Call at the start of work to understand constraints and behavioral requirements."),
-		mcpsdk.WithString("project_id", mcpsdk.Description("Optional project ID to get project-specific effective rules.")),
-	), s.tracked("get_my_rules", s.handleGetMyRules))
-
-	s.mcpServer.AddTool(mcpsdk.NewTool("get_project_rules",
-		mcpsdk.WithDescription("Get all rules configured for a project (all scopes: workspace + project)."),
-		mcpsdk.WithString("project_id", mcpsdk.Required(), mcpsdk.Description("Project ID.")),
-	), s.tracked("get_project_rules", s.handleGetProjectRules))
-
 	// --- Team & Rules ---
 	s.mcpServer.AddTool(mcpsdk.NewTool("get_team_directory",
 		mcpsdk.WithDescription("Get the workspace team directory listing all agents and human members with their profiles."),
 	), s.tracked("get_team_directory", s.handleGetTeamDirectory))
+
+	s.mcpServer.AddTool(mcpsdk.NewTool("get_project_rules",
+		mcpsdk.WithDescription("Get all rules configured for a project (all scopes: workspace + project). Kept for backward compatibility — prefer get_my_rules for agent-scoped effective rules."),
+		mcpsdk.WithString("project_id", mcpsdk.Required(), mcpsdk.Description("Project ID.")),
+	), s.tracked("get_project_rules", s.handleGetProjectRules))
 
 	s.mcpServer.AddTool(mcpsdk.NewTool("get_assignment_rules",
 		mcpsdk.WithDescription("Get effective assignment rules for a project, merged from workspace and project level with source annotations."),
@@ -411,6 +492,7 @@ func (s *Server) registerTools() {
 		mcpsdk.WithString("callback_url", mcpsdk.Description("URL where Mesh will POST task events (task.assigned, task.status_changed, task.commented). Set to empty string to disable.")),
 	), s.tracked("update_agent_profile", s.handleUpdateAgentProfile))
 
+	// --- Config ---
 	s.mcpServer.AddTool(mcpsdk.NewTool("import_workspace_config",
 		mcpsdk.WithDescription("Import workspace configuration from YAML. Applies rules, statuses, and project templates defined in the YAML."),
 		mcpsdk.WithString("yaml_content", mcpsdk.Required(), mcpsdk.Description("YAML configuration content as a string.")),
@@ -422,7 +504,7 @@ func (s *Server) registerTools() {
 
 	// --- Push Notifications ---
 	s.mcpServer.AddTool(mcpsdk.NewTool("poll_tasks",
-		mcpsdk.WithDescription("Long-poll for new task assignments. Blocks until a task is assigned to this agent or the timeout expires. Returns current assigned tasks and whether any change occurred."),
+		mcpsdk.WithDescription("Long-poll for new task assignments. Blocks until a task is assigned to this agent or the timeout expires. Returns current assigned tasks and whether any change occurred. Kept for backward compatibility — prefer get_my_tasks for non-blocking access."),
 		mcpsdk.WithNumber("timeout", mcpsdk.Description("Maximum seconds to wait for new assignments (default 30, max 120).")),
 	), s.tracked("poll_tasks", s.handlePollTasks))
 
@@ -460,44 +542,6 @@ func (s *Server) registerTools() {
 		mcpsdk.WithDescription("Immediately creates the next instance of a recurring schedule, without waiting for the scheduled time. Useful for testing or urgent execution."),
 		mcpsdk.WithString("recurring_schedule_id", mcpsdk.Required(), mcpsdk.Description("UUID of the recurring schedule.")),
 	), s.tracked("trigger_recurring_now", s.handleTriggerRecurringNow))
-
-	// --- Memory tools ---
-	s.mcpServer.AddTool(mcpsdk.NewTool("recall",
-		mcpsdk.WithDescription("Search project and agent memory. Use at session start to load relevant context. Returns scored results."),
-		mcpsdk.WithString("query", mcpsdk.Required(), mcpsdk.Description("Full-text search query.")),
-		mcpsdk.WithString("project_id", mcpsdk.Description("Filter to a specific project.")),
-		mcpsdk.WithString("scope", mcpsdk.Description("Filter by scope: workspace, project, agent, or all (default).")),
-		mcpsdk.WithArray("tags", mcpsdk.Description("Filter by tags."), mcpsdk.WithStringItems()),
-		mcpsdk.WithNumber("limit", mcpsdk.Description("Max results (default 10, max 50).")),
-	), s.tracked("recall", s.handleRecall))
-
-	s.mcpServer.AddTool(mcpsdk.NewTool("remember",
-		mcpsdk.WithDescription("Save knowledge to persistent memory. Use for decisions, conventions, preferences. UPSERT by key — calling with same key updates the existing entry."),
-		mcpsdk.WithString("key", mcpsdk.Required(), mcpsdk.Description("Slug key for UPSERT (e.g. 'api-convention', 'license-decision').")),
-		mcpsdk.WithString("content", mcpsdk.Required(), mcpsdk.Description("What to remember (markdown).")),
-		mcpsdk.WithString("scope", mcpsdk.Description("workspace | project | agent (default: project).")),
-		mcpsdk.WithString("project_id", mcpsdk.Description("Project ID (required for project scope).")),
-		mcpsdk.WithArray("tags", mcpsdk.Description("Tags for categorization and filtering."), mcpsdk.WithStringItems()),
-	), s.tracked("remember", s.handleRemember))
-
-	s.mcpServer.AddTool(mcpsdk.NewTool("get_project_knowledge",
-		mcpsdk.WithDescription("Get all accumulated project knowledge. Call at session start to load context. Returns workspace-level and project-level memories."),
-		mcpsdk.WithString("project_id", mcpsdk.Required(), mcpsdk.Description("Project UUID.")),
-	), s.tracked("get_project_knowledge", s.handleGetProjectKnowledge))
-
-	s.mcpServer.AddTool(mcpsdk.NewTool("forget",
-		mcpsdk.WithDescription("Delete a memory entry. Agents can only delete their own agent-scope memories."),
-		mcpsdk.WithString("memory_id", mcpsdk.Required(), mcpsdk.Description("UUID of the memory to delete.")),
-	), s.tracked("forget", s.handleForget))
-
-	// --- Session reporting ---
-	s.mcpServer.AddTool(mcpsdk.NewTool("session_report",
-		mcpsdk.WithDescription("Report session metrics. Call before session end. Returns compliance score and session stats."),
-		mcpsdk.WithString("model", mcpsdk.Description("LLM model used (e.g. 'claude-sonnet-4').")),
-		mcpsdk.WithNumber("tokens_in", mcpsdk.Description("Total input tokens this session.")),
-		mcpsdk.WithNumber("tokens_out", mcpsdk.Description("Total output tokens this session.")),
-		mcpsdk.WithNumber("estimated_cost", mcpsdk.Description("Estimated cost in USD.")),
-	), s.tracked("session_report", s.handleSessionReport))
 }
 
 // --- Helper functions ---

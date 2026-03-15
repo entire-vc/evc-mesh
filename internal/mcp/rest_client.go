@@ -701,6 +701,20 @@ func (c *RESTClient) ForgetMemory(ctx context.Context, memoryID string) error {
 	return c.doJSON(ctx, http.MethodDelete, "/api/v1/memories/"+memoryID, nil, nil)
 }
 
+// CheckoutTask acquires an exclusive TTL-based lock on a task.
+func (c *RESTClient) CheckoutTask(ctx context.Context, taskID string) (map[string]any, error) {
+	var result map[string]any
+	if err := c.doJSON(ctx, http.MethodPost, "/api/v1/tasks/"+taskID+"/checkout", nil, &result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+// ReleaseTask releases the exclusive lock on a task acquired via CheckoutTask.
+func (c *RESTClient) ReleaseTask(ctx context.Context, taskID string) error {
+	return c.doJSON(ctx, http.MethodDelete, "/api/v1/tasks/"+taskID+"/checkout", nil, nil)
+}
+
 // ExportWorkspaceConfig exports workspace configuration as YAML text.
 func (c *RESTClient) ExportWorkspaceConfig(ctx context.Context, workspaceID string) (string, error) {
 	data, statusCode, err := c.doRaw(ctx, http.MethodGet, "/api/v1/workspaces/"+workspaceID+"/config/export", "", nil)

@@ -74,13 +74,20 @@ func main() {
 			log.Fatalf("Invalid agent data from API: %v", err)
 		}
 
+		// Read profile from env var; default to full.
+		profile := os.Getenv("MESH_MCP_PROFILE")
+		if profile == "" {
+			profile = mcpserver.ProfileFull
+		}
+
 		cfg := mcpserver.ServerConfig{
 			Session:    session,
 			RESTClient: restClient,
+			Profile:    profile,
 		}
 
 		srv := mcpserver.NewServer(cfg)
-		log.Println("Starting MCP server on stdio transport...")
+		log.Printf("Starting MCP server on stdio transport (profile: %s)...", profile)
 		if err := sdkserver.ServeStdio(srv.MCPServer()); err != nil {
 			log.Fatalf("MCP server error: %v", err)
 		}
@@ -125,21 +132,6 @@ func main() {
 		sessionCache.startCleanup(5*time.Minute, 30*time.Minute)
 		srvRegistry.startCleanup(5*time.Minute, 30*time.Minute)
 
-		// Build a "router" server that dispatches to per-agent servers.
-		// Since mcp-go SSE doesn't support per-connection server selection,
-		// we create ONE shared server but override the RESTClient per request
-		// by storing it in the context. The Server.getRESTClient() will read it.
-		//
-		// Simplification: use a single shared server with a per-request REST client
-		// stored in context. Add a restClientKey to context for SSE mode.
-
-		// Create a shared server with a dummy REST client (overridden per request).
-		sharedRestClient := mcpserver.NewRESTClient(apiURL, "")
-		sharedCfg := mcpserver.ServerConfig{
-			RESTClient: sharedRestClient,
-		}
-		srv := mcpserver.NewServer(sharedCfg)
-
 		host := os.Getenv("MESH_MCP_HOST")
 		if host == "" {
 			host = "0.0.0.0"
@@ -150,36 +142,64 @@ func main() {
 		}
 		addr := host + ":" + port
 		baseURL := fmt.Sprintf("http://%s:%s", host, port)
+		coreBaseURL := baseURL + "/core"
 
-		sseServer := sdkserver.NewSSEServer(
-			srv.MCPServer(),
+		// Build the shared SSE context function used by both core and full servers.
+		// It injects the authenticated agent session and per-agent REST client.
+		sseContextFunc := func(ctx context.Context, r *http.Request) context.Context {
+			key := extractAgentKeyFromRequest(r)
+			if key == "" {
+				log.Printf("SSE request without agent key from %s", r.RemoteAddr)
+				return ctx
+			}
+
+			session, err := sessionCache.GetOrAuthenticate(ctx, key)
+			if err != nil {
+				log.Printf("SSE auth failed for key %s...: %v", safeKeyPrefix(key), err)
+				return ctx
+			}
+
+			// Inject per-agent REST client and session into context.
+			perAgentClient := srvRegistry.GetClient(key)
+			ctx = mcpserver.ContextWithSession(ctx, session)
+			ctx = mcpserver.ContextWithRESTClient(ctx, perAgentClient)
+			return ctx
+		}
+
+		// Create shared REST client (unused directly; per-agent clients injected via context).
+		sharedRestClient := mcpserver.NewRESTClient(apiURL, "")
+
+		// Create the full-profile server (default, backward-compatible).
+		fullSrv := mcpserver.NewServer(mcpserver.ServerConfig{
+			RESTClient: sharedRestClient,
+			Profile:    mcpserver.ProfileFull,
+		})
+
+		// Create the core-profile server (lightweight endpoint).
+		coreSrv := mcpserver.NewServer(mcpserver.ServerConfig{
+			RESTClient: sharedRestClient,
+			Profile:    mcpserver.ProfileCore,
+		})
+
+		// Build SSE transport servers.
+		fullSSE := sdkserver.NewSSEServer(
+			fullSrv.MCPServer(),
 			sdkserver.WithBaseURL(baseURL),
 			sdkserver.WithKeepAlive(true),
-			// Inject the authenticated agent session into the context for each
-			// JSON-RPC message request.
-			sdkserver.WithSSEContextFunc(func(ctx context.Context, r *http.Request) context.Context {
-				key := extractAgentKeyFromRequest(r)
-				if key == "" {
-					log.Printf("SSE request without agent key from %s", r.RemoteAddr)
-					return ctx
-				}
-
-				session, err := sessionCache.GetOrAuthenticate(ctx, key)
-				if err != nil {
-					log.Printf("SSE auth failed for key %s...: %v", safeKeyPrefix(key), err)
-					return ctx
-				}
-
-				// Inject per-agent REST client and session into context.
-				perAgentClient := srvRegistry.GetClient(key)
-				ctx = mcpserver.ContextWithSession(ctx, session)
-				ctx = mcpserver.ContextWithRESTClient(ctx, perAgentClient)
-				return ctx
-			}),
+			sdkserver.WithSSEContextFunc(sseContextFunc),
 		)
 
-		// Wrap the SSE endpoint handler to validate agent key at connection time.
+		coreSSE := sdkserver.NewSSEServer(
+			coreSrv.MCPServer(),
+			sdkserver.WithBaseURL(coreBaseURL),
+			sdkserver.WithKeepAlive(true),
+			sdkserver.WithSSEContextFunc(sseContextFunc),
+		)
+
+		// Build HTTP mux with auth wrappers.
 		mux := http.NewServeMux()
+
+		// Full profile: /sse and /message (backward compatible).
 		mux.HandleFunc("/sse", func(w http.ResponseWriter, r *http.Request) {
 			key := extractAgentKeyFromRequest(r)
 			if key == "" {
@@ -195,14 +215,35 @@ func main() {
 				return
 			}
 
-			// Proxy to the real SSE handler.
-			sseServer.SSEHandler().ServeHTTP(w, r)
+			fullSSE.SSEHandler().ServeHTTP(w, r)
 		})
-		mux.Handle("/message", sseServer.MessageHandler())
+		mux.Handle("/message", fullSSE.MessageHandler())
+
+		// Core profile: /core/sse and /core/message.
+		mux.HandleFunc("/core/sse", func(w http.ResponseWriter, r *http.Request) {
+			key := extractAgentKeyFromRequest(r)
+			if key == "" {
+				http.Error(w, "Missing agent key: provide Authorization: Bearer agk_..., X-Agent-Key header, or ?agent_key query param", http.StatusUnauthorized)
+				return
+			}
+
+			// Validate the key at connection time to fail fast.
+			_, err := sessionCache.GetOrAuthenticate(r.Context(), key)
+			if err != nil {
+				log.Printf("SSE core connection auth failed for key %s...: %v", safeKeyPrefix(key), err)
+				http.Error(w, fmt.Sprintf("Authentication failed: %v", err), http.StatusForbidden)
+				return
+			}
+
+			coreSSE.SSEHandler().ServeHTTP(w, r)
+		})
+		mux.Handle("/core/message", coreSSE.MessageHandler())
 
 		log.Printf("Starting MCP SSE server on %s (multi-agent mode)", addr)
-		log.Printf("  SSE endpoint:     %s/sse", baseURL)
-		log.Printf("  Message endpoint: %s/message", baseURL)
+		log.Printf("  Full profile SSE endpoint:    %s/sse", baseURL)
+		log.Printf("  Full profile message endpoint: %s/message", baseURL)
+		log.Printf("  Core profile SSE endpoint:    %s/core/sse", baseURL)
+		log.Printf("  Core profile message endpoint: %s/core/message", baseURL)
 		log.Printf("  Auth: Authorization: Bearer agk_..., X-Agent-Key, or ?agent_key=agk_...")
 
 		httpServer := &http.Server{
