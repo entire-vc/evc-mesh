@@ -367,12 +367,8 @@ export function MemoryBrowserPage() {
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
-      {/* Page header */}
-      <div className="flex items-center justify-between border-b border-border px-6 py-4 shrink-0">
-        <div className="flex items-center gap-2">
-          <Brain className="h-5 w-5 text-muted-foreground" />
-          <h1 className="text-lg font-semibold">Memory Browser</h1>
-        </div>
+      {/* Action bar */}
+      <div className="flex items-center justify-end border-b border-border px-6 py-4 shrink-0">
         <Button
           variant="outline"
           size="sm"

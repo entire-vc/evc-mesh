@@ -4,18 +4,21 @@ import {
   Activity,
   BarChart2,
   Bot,
+  Brain,
   ChevronRight,
   Inbox,
   LayoutDashboard,
   Loader2,
   LogOut,
   Menu,
+  MonitorDot,
   Moon,
   Search,
   Settings,
   Sparkles,
   Sun,
   Target,
+  Users,
 } from "lucide-react";
 import { useAuthStore } from "@/stores/auth";
 import { useWorkspaceStore } from "@/stores/workspace";
@@ -368,7 +371,9 @@ const WORKSPACE_PAGES: Array<{
   icon: React.ComponentType<{ className?: string }>;
 }> = [
   { pattern: /\/w\/[^/]+\/?$/, title: "Dashboard", icon: LayoutDashboard },
-  { pattern: /\/w\/[^/]+\/agents\/?$/, title: "Agents", icon: Bot },
+  { pattern: /\/w\/[^/]+\/org-chart\/?$/, title: "Team", icon: Bot },
+  { pattern: /\/w\/[^/]+\/memories\/?$/, title: "Memory", icon: Brain },
+  { pattern: /\/w\/[^/]+\/sessions\/?$/, title: "Sessions", icon: MonitorDot },
   { pattern: /\/w\/[^/]+\/spark\/?$/, title: "Spark Catalog", icon: Sparkles },
   { pattern: /\/w\/[^/]+\/events\/?$/, title: "Events", icon: Activity },
   { pattern: /\/w\/[^/]+\/analytics\/?$/, title: "Analytics", icon: BarChart2 },
