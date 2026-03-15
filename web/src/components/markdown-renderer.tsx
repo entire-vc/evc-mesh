@@ -20,11 +20,14 @@ function escapeHtml(text: string): string {
 function renderInline(text: string): string {
   let result = escapeHtml(text);
 
-  // Images: ![alt](url)
+  // Images: ![alt](url) — alt and url are already HTML-escaped from escapeHtml above
   result = result.replace(
     /!\[([^\]]*)\]\(([^)]+)\)/g,
-    (_match, alt: string, url: string) =>
-      `<img src="${url}" alt="${escapeHtml(alt)}" style="max-width:100%;border-radius:4px;" />`,
+    (_match, alt: string, url: string) => {
+      // Restore & in URL so src works correctly (escapeHtml turned & into &amp;)
+      const srcUrl = url.replace(/&amp;/g, "&");
+      return `<img src="${srcUrl}" alt="${alt}" style="max-width:100%;border-radius:4px;" />`;
+    },
   );
 
   // Links: [text](url) — only allow safe protocols

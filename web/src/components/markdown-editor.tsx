@@ -208,6 +208,14 @@ export function MarkdownEditor({
       e.preventDefault();
       insertText("  ");
     }
+    if ((e.metaKey || e.ctrlKey) && e.key === "b") {
+      e.preventDefault();
+      handleBold();
+    }
+    if ((e.metaKey || e.ctrlKey) && e.key === "i") {
+      e.preventDefault();
+      handleItalic();
+    }
   };
 
   // ---------------------------------------------------------------------------

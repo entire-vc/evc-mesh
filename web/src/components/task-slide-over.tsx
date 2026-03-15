@@ -42,7 +42,8 @@ import { VCSLinks } from "@/components/vcs-links";
 import { DependencyList } from "@/components/dependency-list";
 import { CustomFieldRenderer } from "@/components/custom-field-renderer";
 import { DatePickerPopover } from "@/components/date-picker-popover";
-import { DescriptionEditor } from "@/components/description-editor";
+import { MarkdownEditor } from "@/components/markdown-editor";
+import { MarkdownRenderer } from "@/components/markdown-renderer";
 import { cn } from "@/lib/cn";
 import {
   formatDate,
@@ -883,10 +884,14 @@ export function TaskSlideOver({
                     )}
                   </div>
                   {editingDescription ? (
-                    <DescriptionEditor
+                    <MarkdownEditor
                       value={descDraft}
                       onChange={setDescDraft}
+                      taskId={currentTask.id}
+                      projectId={currentTask.project_id}
                       placeholder="Add a description..."
+                      rows={6}
+                      onArtifactUploaded={() => onTaskUpdated?.()}
                     />
                   ) : (
                     <div
@@ -894,9 +899,7 @@ export function TaskSlideOver({
                       onClick={() => setEditingDescription(true)}
                     >
                       {currentTask.description ? (
-                        <div className="whitespace-pre-wrap text-sm">
-                          {currentTask.description}
-                        </div>
+                        <MarkdownRenderer content={currentTask.description} />
                       ) : (
                         <span className="text-muted-foreground">
                           Add a description...
