@@ -32,6 +32,7 @@ type eventBusRow struct {
 	TTL         string          `db:"ttl"`
 	CreatedAt   time.Time       `db:"created_at"`
 	ExpiresAt   time.Time       `db:"expires_at"`
+	MemoryHint  *json.RawMessage `db:"memory_hint"`
 }
 
 func (r *eventBusRow) toDomain() domain.EventBusMessage {
