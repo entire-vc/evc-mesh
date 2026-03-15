@@ -147,14 +147,6 @@ export function SessionDashboardPage() {
 
 	return (
 		<div className="space-y-6">
-			{/* Header */}
-			<div>
-				<h1 className="text-2xl font-bold">Session Dashboard</h1>
-				<p className="mt-1 text-sm text-muted-foreground">
-					Agent heartbeat status and session activity overview
-				</p>
-			</div>
-
 			{/* Summary chips */}
 			<div className="flex flex-wrap gap-3">
 				<div className="flex items-center gap-2 rounded-lg border bg-card px-3 py-2 text-sm">

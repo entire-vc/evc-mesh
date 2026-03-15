@@ -482,10 +482,9 @@ export function OrgChartPage() {
 
   return (
     <div className="flex h-full flex-col">
-      {/* Header bar */}
+      {/* Action bar */}
       <div className="flex items-center justify-between pb-4">
         <div>
-          <h1 className="text-lg font-semibold">Team</h1>
           {workspaceName && (
             <p className="text-xs text-muted-foreground">{workspaceName}</p>
           )}
