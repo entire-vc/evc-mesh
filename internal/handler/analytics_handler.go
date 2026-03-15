@@ -136,7 +136,7 @@ func (h *AnalyticsHandler) ExportMetrics(c echo.Context) error {
 
 	filename := fmt.Sprintf("analytics-%s.csv", now.Format("2006-01-02"))
 	c.Response().Header().Set("Content-Type", "text/csv; charset=utf-8")
-	c.Response().Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
+	c.Response().Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filename))
 	c.Response().WriteHeader(http.StatusOK)
 
 	w := csv.NewWriter(c.Response())

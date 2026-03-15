@@ -54,15 +54,15 @@ const (
 
 // Webhook represents a registered webhook endpoint.
 type Webhook struct {
-	ID               uuid.UUID     `json:"id"`
-	WorkspaceID      uuid.UUID     `json:"workspace_id"`
-	URL              string        `json:"url"`
-	Secret           string        `json:"-"` // stored hashed; raw only at creation
+	ID               uuid.UUID      `json:"id"`
+	WorkspaceID      uuid.UUID      `json:"workspace_id"`
+	URL              string         `json:"url"`
+	Secret           string         `json:"-"` // stored hashed; raw only at creation
 	Events           []WebhookEvent `json:"events"`
-	IsActive         bool          `json:"is_active"`
-	ConsecutiveFails int           `json:"consecutive_fails"`
-	CreatedAt        time.Time     `json:"created_at"`
-	UpdatedAt        time.Time     `json:"updated_at"`
+	IsActive         bool           `json:"is_active"`
+	ConsecutiveFails int            `json:"consecutive_fails"`
+	CreatedAt        time.Time      `json:"created_at"`
+	UpdatedAt        time.Time      `json:"updated_at"`
 }
 
 // WebhookDispatchPayload is the body POSTed to the webhook URL.

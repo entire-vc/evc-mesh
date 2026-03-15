@@ -20,18 +20,18 @@ import (
 // The DB does NOT have a storage_url column; that field exists only in the domain model
 // and is typically computed from storage_key at the service layer.
 type artifactRow struct {
-	ID             uuid.UUID          `db:"id"`
-	TaskID         uuid.UUID          `db:"task_id"`
-	Name           string             `db:"name"`
+	ID             uuid.UUID           `db:"id"`
+	TaskID         uuid.UUID           `db:"task_id"`
+	Name           string              `db:"name"`
 	ArtifactType   domain.ArtifactType `db:"artifact_type"`
-	MimeType       string             `db:"mime_type"`
-	StorageKey     string             `db:"storage_key"`
-	SizeBytes      int64              `db:"size_bytes"`
-	ChecksumSHA256 string             `db:"checksum_sha256"`
-	Metadata       json.RawMessage    `db:"metadata"`
-	UploadedBy     uuid.UUID          `db:"uploaded_by"`
+	MimeType       string              `db:"mime_type"`
+	StorageKey     string              `db:"storage_key"`
+	SizeBytes      int64               `db:"size_bytes"`
+	ChecksumSHA256 string              `db:"checksum_sha256"`
+	Metadata       json.RawMessage     `db:"metadata"`
+	UploadedBy     uuid.UUID           `db:"uploaded_by"`
 	UploadedByType domain.UploaderType `db:"uploaded_by_type"`
-	CreatedAt      time.Time          `db:"created_at"`
+	CreatedAt      time.Time           `db:"created_at"`
 }
 
 func (r *artifactRow) toDomain() domain.Artifact {

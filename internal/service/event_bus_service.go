@@ -189,7 +189,7 @@ func (s *eventBusService) CleanupExpired(ctx context.Context) (int64, error) {
 }
 
 // resolveSlugs looks up workspace and project slugs from their UUIDs.
-func (s *eventBusService) resolveSlugs(ctx context.Context, workspaceID, projectID uuid.UUID) (string, string, error) {
+func (s *eventBusService) resolveSlugs(ctx context.Context, workspaceID, projectID uuid.UUID) (wsSlug, projSlug string, err error) {
 	workspace, err := s.workspaceRepo.GetByID(ctx, workspaceID)
 	if err != nil {
 		return "", "", fmt.Errorf("failed to get workspace %s: %w", workspaceID, err)

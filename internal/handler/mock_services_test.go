@@ -414,14 +414,14 @@ func (m *MockTaskService) CheckoutTask(ctx context.Context, taskID uuid.UUID, tt
 	return nil, nil
 }
 
-func (m *MockTaskService) ReleaseCheckout(ctx context.Context, taskID uuid.UUID, token uuid.UUID) error {
+func (m *MockTaskService) ReleaseCheckout(ctx context.Context, taskID, token uuid.UUID) error {
 	if m.ReleaseCheckoutFunc != nil {
 		return m.ReleaseCheckoutFunc(ctx, taskID, token)
 	}
 	return nil
 }
 
-func (m *MockTaskService) ExtendCheckout(ctx context.Context, taskID uuid.UUID, token uuid.UUID, ttlMinutes int) (*service.CheckoutResult, error) {
+func (m *MockTaskService) ExtendCheckout(ctx context.Context, taskID, token uuid.UUID, ttlMinutes int) (*service.CheckoutResult, error) {
 	if m.ExtendCheckoutFunc != nil {
 		return m.ExtendCheckoutFunc(ctx, taskID, token, ttlMinutes)
 	}
@@ -437,16 +437,16 @@ func (m *MockTaskService) MoveToProject(ctx context.Context, taskID, targetProje
 
 // MockAgentService implements service.AgentService for testing.
 type MockAgentService struct {
-	RegisterFunc     func(ctx context.Context, input service.RegisterAgentInput) (*service.RegisterAgentOutput, error)
-	GetByIDFunc      func(ctx context.Context, id uuid.UUID) (*domain.Agent, error)
-	UpdateFunc       func(ctx context.Context, agent *domain.Agent) error
-	DeleteFunc       func(ctx context.Context, id uuid.UUID) error
-	ListFunc         func(ctx context.Context, workspaceID uuid.UUID, filter repository.AgentFilter, pg pagination.Params) (*pagination.Page[domain.Agent], error)
-	HeartbeatFunc        func(ctx context.Context, agentID uuid.UUID, input *service.HeartbeatInput) error
+	RegisterFunc          func(ctx context.Context, input service.RegisterAgentInput) (*service.RegisterAgentOutput, error)
+	GetByIDFunc           func(ctx context.Context, id uuid.UUID) (*domain.Agent, error)
+	UpdateFunc            func(ctx context.Context, agent *domain.Agent) error
+	DeleteFunc            func(ctx context.Context, id uuid.UUID) error
+	ListFunc              func(ctx context.Context, workspaceID uuid.UUID, filter repository.AgentFilter, pg pagination.Params) (*pagination.Page[domain.Agent], error)
+	HeartbeatFunc         func(ctx context.Context, agentID uuid.UUID, input *service.HeartbeatInput) error
 	CreateActivityLogFunc func(ctx context.Context, entry *domain.AgentActivityLog) error
 	ListActivityLogFunc   func(ctx context.Context, agentID uuid.UUID, filter repository.AgentActivityLogFilter, pg pagination.Params) (*pagination.Page[domain.AgentActivityLog], error)
-	AuthenticateFunc func(ctx context.Context, workspaceSlug, apiKey string) (*domain.Agent, error)
-	RotateAPIKeyFunc func(ctx context.Context, agentID uuid.UUID) (string, error)
+	AuthenticateFunc      func(ctx context.Context, workspaceSlug, apiKey string) (*domain.Agent, error)
+	RotateAPIKeyFunc      func(ctx context.Context, agentID uuid.UUID) (string, error)
 }
 
 func (m *MockAgentService) Register(ctx context.Context, input service.RegisterAgentInput) (*service.RegisterAgentOutput, error) {

@@ -12,7 +12,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -268,9 +267,4 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
-}
-
-// uniqueEmail generates a unique email for test isolation.
-func uniqueEmail(prefix string) string {
-	return fmt.Sprintf("%s-%d@test.evc-mesh.local", prefix, time.Now().UnixNano())
 }

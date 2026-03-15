@@ -317,7 +317,7 @@ func (m *MockTaskRepository) ListByStatusCategory(_ context.Context, _ uuid.UUID
 	return pagination.NewPage([]domain.Task{}, 0, pg), nil
 }
 
-func (m *MockTaskRepository) AtomicCheckout(_ context.Context, taskID, agentID uuid.UUID, token uuid.UUID, expiresAt time.Time) error {
+func (m *MockTaskRepository) AtomicCheckout(_ context.Context, taskID, agentID, token uuid.UUID, expiresAt time.Time) error {
 	if m.errToReturn != nil {
 		return m.errToReturn
 	}
@@ -333,7 +333,7 @@ func (m *MockTaskRepository) AtomicCheckout(_ context.Context, taskID, agentID u
 	return nil
 }
 
-func (m *MockTaskRepository) ReleaseCheckout(_ context.Context, taskID uuid.UUID, _ uuid.UUID) error {
+func (m *MockTaskRepository) ReleaseCheckout(_ context.Context, taskID, _ uuid.UUID) error {
 	if m.errToReturn != nil {
 		return m.errToReturn
 	}
@@ -349,7 +349,7 @@ func (m *MockTaskRepository) ReleaseCheckout(_ context.Context, taskID uuid.UUID
 	return nil
 }
 
-func (m *MockTaskRepository) ExtendCheckout(_ context.Context, taskID uuid.UUID, _ uuid.UUID, newExpires time.Time) error {
+func (m *MockTaskRepository) ExtendCheckout(_ context.Context, taskID, _ uuid.UUID, newExpires time.Time) error {
 	if m.errToReturn != nil {
 		return m.errToReturn
 	}

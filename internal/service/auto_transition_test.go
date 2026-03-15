@@ -58,7 +58,7 @@ func seedStatus(repo *MockTaskStatusRepository, projectID uuid.UUID, category do
 }
 
 // seedTask creates and stores a Task in the mock repo.
-func seedTask(repo *MockTaskRepository, projectID uuid.UUID, statusID uuid.UUID, parentID *uuid.UUID, title string) *domain.Task {
+func seedTask(repo *MockTaskRepository, projectID, statusID uuid.UUID, parentID *uuid.UUID, title string) *domain.Task {
 	t := &domain.Task{
 		ID:           uuid.New(),
 		ProjectID:    projectID,

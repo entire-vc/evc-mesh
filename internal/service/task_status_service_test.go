@@ -208,11 +208,11 @@ func TestTaskStatusService_Reorder(t *testing.T) {
 	projectID := uuid.New()
 
 	tests := []struct {
-		name      string
-		setup     func(repo *MockTaskStatusRepository) []uuid.UUID
-		wantErr   bool
-		errCode   int
-		errMsg    string
+		name    string
+		setup   func(repo *MockTaskStatusRepository) []uuid.UUID
+		wantErr bool
+		errCode int
+		errMsg  string
 	}{
 		{
 			name: "success - all IDs belong to the project",

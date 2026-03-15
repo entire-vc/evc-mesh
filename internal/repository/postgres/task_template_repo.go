@@ -27,22 +27,22 @@ func NewTaskTemplateRepo(db *sqlx.DB) *TaskTemplateRepo {
 
 // templateRow is the DB row representation matching all columns in task_templates.
 type templateRow struct {
-	ID                  uuid.UUID              `db:"id"`
-	ProjectID           uuid.UUID              `db:"project_id"`
-	Name                string                 `db:"name"`
-	Description         string                 `db:"description"`
-	TitleTemplate       string                 `db:"title_template"`
-	DescriptionTemplate string                 `db:"description_template"`
-	Priority            domain.Priority        `db:"priority"`
-	Labels              pq.StringArray         `db:"labels"`
-	EstimatedHours      *float64               `db:"estimated_hours"`
-	CustomFields        []byte                 `db:"custom_fields"`
-	AssigneeID          *uuid.UUID             `db:"assignee_id"`
-	AssigneeType        *domain.AssigneeType   `db:"assignee_type"`
-	StatusID            *uuid.UUID             `db:"status_id"`
-	CreatedBy           *uuid.UUID             `db:"created_by"`
-	CreatedAt           time.Time              `db:"created_at"`
-	UpdatedAt           time.Time              `db:"updated_at"`
+	ID                  uuid.UUID            `db:"id"`
+	ProjectID           uuid.UUID            `db:"project_id"`
+	Name                string               `db:"name"`
+	Description         string               `db:"description"`
+	TitleTemplate       string               `db:"title_template"`
+	DescriptionTemplate string               `db:"description_template"`
+	Priority            domain.Priority      `db:"priority"`
+	Labels              pq.StringArray       `db:"labels"`
+	EstimatedHours      *float64             `db:"estimated_hours"`
+	CustomFields        []byte               `db:"custom_fields"`
+	AssigneeID          *uuid.UUID           `db:"assignee_id"`
+	AssigneeType        *domain.AssigneeType `db:"assignee_type"`
+	StatusID            *uuid.UUID           `db:"status_id"`
+	CreatedBy           *uuid.UUID           `db:"created_by"`
+	CreatedAt           time.Time            `db:"created_at"`
+	UpdatedAt           time.Time            `db:"updated_at"`
 }
 
 func (r *templateRow) toDomain() domain.TaskTemplate {
@@ -94,7 +94,7 @@ func (repo *TaskTemplateRepo) Create(ctx context.Context, tmpl *domain.TaskTempl
 		TitleTemplate:       tmpl.TitleTemplate,
 		DescriptionTemplate: tmpl.DescriptionTemplate,
 		Priority:            tmpl.Priority,
-		Labels:              pq.StringArray(tmpl.Labels),
+		Labels:              tmpl.Labels,
 		EstimatedHours:      tmpl.EstimatedHours,
 		CustomFields:        tmpl.CustomFields,
 		AssigneeID:          tmpl.AssigneeID,
@@ -165,7 +165,7 @@ func (repo *TaskTemplateRepo) Update(ctx context.Context, id uuid.UUID, input do
 		tmpl.Priority = *input.Priority
 	}
 	if input.Labels != nil {
-		tmpl.Labels = pq.StringArray(*input.Labels)
+		tmpl.Labels = *input.Labels
 	}
 	if input.EstimatedHours != nil {
 		tmpl.EstimatedHours = input.EstimatedHours
@@ -192,7 +192,7 @@ func (repo *TaskTemplateRepo) Update(ctx context.Context, id uuid.UUID, input do
 		TitleTemplate:       tmpl.TitleTemplate,
 		DescriptionTemplate: tmpl.DescriptionTemplate,
 		Priority:            tmpl.Priority,
-		Labels:              pq.StringArray(tmpl.Labels),
+		Labels:              tmpl.Labels,
 		EstimatedHours:      tmpl.EstimatedHours,
 		CustomFields:        tmpl.CustomFields,
 		AssigneeID:          tmpl.AssigneeID,

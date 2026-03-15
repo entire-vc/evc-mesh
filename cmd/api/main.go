@@ -39,14 +39,16 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to connect to database: %v", err)
 	}
-	defer db.Close()
 	log.Println("Connected to PostgreSQL")
 
 	// 3. Run database migrations.
 	if err := goose.Up(db.DB, "migrations"); err != nil {
+		db.Close()
 		log.Fatalf("Failed to run migrations: %v", err)
 	}
 	log.Println("Database migrations applied")
+
+	defer db.Close()
 
 	// 4. Create all repository instances.
 	workspaceRepo := postgres.NewWorkspaceRepo(db)

@@ -287,12 +287,12 @@ func TestPublishEvent(t *testing.T) {
 		assert.Equal(t, "summary", body["event_type"])
 		assert.Equal(t, "Sprint review complete", body["subject"])
 		respond(w, http.StatusCreated, map[string]any{
-			"id":          "event-1",
+			"id":           "event-1",
 			"workspace_id": "ws-1",
-			"project_id":  projID,
-			"event_type":  "summary",
-			"subject":     "Sprint review complete",
-			"created_at":  "2026-01-01T00:00:00Z",
+			"project_id":   projID,
+			"event_type":   "summary",
+			"subject":      "Sprint review complete",
+			"created_at":   "2026-01-01T00:00:00Z",
 		})
 	}
 
@@ -316,12 +316,12 @@ func TestGetContext(t *testing.T) {
 		respond(w, http.StatusOK, map[string]any{
 			"items": []map[string]any{
 				{
-					"id":          "ev-1",
+					"id":           "ev-1",
 					"workspace_id": "ws-1",
-					"project_id":  projID,
-					"event_type":  "summary",
-					"subject":     "Done",
-					"created_at":  "2026-01-01T00:00:00Z",
+					"project_id":   projID,
+					"event_type":   "summary",
+					"subject":      "Done",
+					"created_at":   "2026-01-01T00:00:00Z",
 				},
 			},
 			"total_count": 1,

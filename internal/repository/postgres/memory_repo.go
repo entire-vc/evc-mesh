@@ -126,7 +126,7 @@ func (r *MemoryRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.Memory,
 
 // GetByKey returns a memory by its composite natural key, or nil if not found.
 // Pass nil for projectID or agentID when those dimensions are not scoped.
-func (r *MemoryRepo) GetByKey(ctx context.Context, workspaceID uuid.UUID, projectID *uuid.UUID, agentID *uuid.UUID, key string, scope domain.MemoryScope) (*domain.Memory, error) {
+func (r *MemoryRepo) GetByKey(ctx context.Context, workspaceID uuid.UUID, projectID, agentID *uuid.UUID, key string, scope domain.MemoryScope) (*domain.Memory, error) {
 	var row memoryRow
 	err := r.db.GetContext(ctx, &row,
 		fmt.Sprintf(`SELECT %s FROM memories

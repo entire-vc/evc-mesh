@@ -168,8 +168,8 @@ type updateAgentRequest struct {
 	ProfileDescription *string           `json:"profile_description"`
 	CallbackURL        *string           `json:"callback_url"`
 	CurrentTaskID      *uuid.UUID        `json:"current_task_id"`
-	ParentAgentID      *string           `json:"parent_agent_id"`      // UUID string or "" to clear
-	SupervisorUserID   *string           `json:"supervisor_user_id"`   // UUID string or "" to clear
+	ParentAgentID      *string           `json:"parent_agent_id"`    // UUID string or "" to clear
+	SupervisorUserID   *string           `json:"supervisor_user_id"` // UUID string or "" to clear
 	Role               *string           `json:"role"`
 }
 

@@ -342,7 +342,8 @@ func parseCustomFieldFilters(c echo.Context) map[string]repository.CustomFieldFi
 		val := values[0]
 		fieldKey := strings.TrimPrefix(key, "custom.")
 
-		if strings.HasSuffix(fieldKey, "_gte") {
+		switch {
+		case strings.HasSuffix(fieldKey, "_gte"):
 			slug := strings.TrimSuffix(fieldKey, "_gte")
 			if !validSlugRe.MatchString(slug) {
 				continue
@@ -354,7 +355,7 @@ func parseCustomFieldFilters(c echo.Context) map[string]repository.CustomFieldFi
 			cf := result[slug]
 			cf.Gte = &f
 			result[slug] = cf
-		} else if strings.HasSuffix(fieldKey, "_lte") {
+		case strings.HasSuffix(fieldKey, "_lte"):
 			slug := strings.TrimSuffix(fieldKey, "_lte")
 			if !validSlugRe.MatchString(slug) {
 				continue
@@ -366,7 +367,7 @@ func parseCustomFieldFilters(c echo.Context) map[string]repository.CustomFieldFi
 			cf := result[slug]
 			cf.Lte = &f
 			result[slug] = cf
-		} else {
+		default:
 			// Exact equality.
 			if !validSlugRe.MatchString(fieldKey) {
 				continue
@@ -518,8 +519,8 @@ func (h *TaskHandler) CreateSubtask(c echo.Context) error {
 
 // bulkUpdateRequest represents the JSON body for bulk-updating multiple tasks.
 type bulkUpdateRequest struct {
-	TaskIDs []uuid.UUID       `json:"task_ids"`
-	Updates bulkUpdateFields  `json:"updates"`
+	TaskIDs []uuid.UUID      `json:"task_ids"`
+	Updates bulkUpdateFields `json:"updates"`
 }
 
 // bulkUpdateFields holds the optional fields that can be changed in a bulk update.

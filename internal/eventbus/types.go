@@ -28,7 +28,7 @@ func DefaultConfig() EventBusConfig {
 		NATSReplicas:      1,
 		StreamMaxAge:      30 * 24 * time.Hour,
 		StreamMaxBytes:    10 * 1024 * 1024 * 1024, // 10 GB
-		MaxMsgSize:        256 * 1024,               // 256 KB
+		MaxMsgSize:        256 * 1024,              // 256 KB
 		CleanupInterval:   1 * time.Hour,
 		CleanupBatchSize:  1000,
 		PGWriterBatchSize: 100,

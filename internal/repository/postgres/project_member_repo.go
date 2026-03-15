@@ -156,7 +156,7 @@ func (r *ProjectMemberRepo) DeleteByWorkspaceAndUser(ctx context.Context, worksp
 }
 
 // ExistsMember returns true if the given user or agent is a member of the project.
-func (r *ProjectMemberRepo) ExistsMember(ctx context.Context, projectID uuid.UUID, userID *uuid.UUID, agentID *uuid.UUID) (bool, error) {
+func (r *ProjectMemberRepo) ExistsMember(ctx context.Context, projectID uuid.UUID, userID, agentID *uuid.UUID) (bool, error) {
 	var exists bool
 	if userID != nil {
 		err := r.db.QueryRowContext(ctx,

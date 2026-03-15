@@ -330,7 +330,7 @@ func TestJWTAuth_ValidToken(t *testing.T) {
 	svc := newTestAuthService()
 	token := registerAndGetToken(t, svc)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/me", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/me", http.NoBody)
 	req.Header.Set("Authorization", "Bearer "+token)
 	rec := httptest.NewRecorder()
 	c := newEchoContext(req, rec)
@@ -356,7 +356,7 @@ func TestJWTAuth_ValidToken(t *testing.T) {
 func TestJWTAuth_NoToken(t *testing.T) {
 	svc := newTestAuthService()
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/me", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/me", http.NoBody)
 	rec := httptest.NewRecorder()
 	c := newEchoContext(req, rec)
 
@@ -391,7 +391,7 @@ func TestJWTAuth_ExpiredToken(t *testing.T) {
 	_, tokens, err := wrongSvc.Register(context.Background(), "expired@example.com", "StrongP4ss", "User")
 	require.NoError(t, err)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/me", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/me", http.NoBody)
 	req.Header.Set("Authorization", "Bearer "+tokens.AccessToken)
 	rec := httptest.NewRecorder()
 	c := newEchoContext(req, rec)
@@ -408,7 +408,7 @@ func TestJWTAuth_ExpiredToken(t *testing.T) {
 func TestJWTAuth_InvalidBearerFormat(t *testing.T) {
 	svc := newTestAuthService()
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/me", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/me", http.NoBody)
 	req.Header.Set("Authorization", "Basic dGVzdDp0ZXN0") // not Bearer
 	rec := httptest.NewRecorder()
 	c := newEchoContext(req, rec)
@@ -436,7 +436,7 @@ func TestAgentKeyAuth_ValidKey(t *testing.T) {
 		},
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/tasks", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/tasks", http.NoBody)
 	req.Header.Set("X-Agent-Key", "agk_my-workspace_abcdefghijklmnopqrstuvwxyz123456")
 	rec := httptest.NewRecorder()
 	c := newEchoContext(req, rec)
@@ -471,7 +471,7 @@ func TestAgentKeyAuth_InvalidKey(t *testing.T) {
 		},
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/tasks", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/tasks", http.NoBody)
 	req.Header.Set("X-Agent-Key", "agk_my-workspace_invalidkey1234567890abcdef")
 	rec := httptest.NewRecorder()
 	c := newEchoContext(req, rec)
@@ -488,7 +488,7 @@ func TestAgentKeyAuth_InvalidKey(t *testing.T) {
 func TestAgentKeyAuth_MissingHeader(t *testing.T) {
 	agentSvc := &mockAgentService{}
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/tasks", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/tasks", http.NoBody)
 	rec := httptest.NewRecorder()
 	c := newEchoContext(req, rec)
 
@@ -504,7 +504,7 @@ func TestAgentKeyAuth_MissingHeader(t *testing.T) {
 func TestAgentKeyAuth_BadKeyFormat(t *testing.T) {
 	agentSvc := &mockAgentService{}
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/tasks", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/tasks", http.NoBody)
 	req.Header.Set("X-Agent-Key", "not_an_agent_key")
 	rec := httptest.NewRecorder()
 	c := newEchoContext(req, rec)
@@ -524,7 +524,7 @@ func TestAgentKeyAuth_BadKeyFormat(t *testing.T) {
 
 func TestGetUserID_Present(t *testing.T) {
 	e := echo.New()
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 
@@ -538,7 +538,7 @@ func TestGetUserID_Present(t *testing.T) {
 
 func TestGetUserID_Missing(t *testing.T) {
 	e := echo.New()
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 
@@ -548,7 +548,7 @@ func TestGetUserID_Missing(t *testing.T) {
 
 func TestGetWorkspaceID_Present(t *testing.T) {
 	e := echo.New()
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 
@@ -562,7 +562,7 @@ func TestGetWorkspaceID_Present(t *testing.T) {
 
 func TestGetWorkspaceID_Missing(t *testing.T) {
 	e := echo.New()
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 
@@ -572,7 +572,7 @@ func TestGetWorkspaceID_Missing(t *testing.T) {
 
 func TestGetAgentID_Present(t *testing.T) {
 	e := echo.New()
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 
@@ -586,7 +586,7 @@ func TestGetAgentID_Present(t *testing.T) {
 
 func TestGetAgentID_Missing(t *testing.T) {
 	e := echo.New()
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 
@@ -596,7 +596,7 @@ func TestGetAgentID_Missing(t *testing.T) {
 
 func TestIsAgent_True(t *testing.T) {
 	e := echo.New()
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 	c.Set(ContextKeyAuthType, AuthTypeAgent)
@@ -606,7 +606,7 @@ func TestIsAgent_True(t *testing.T) {
 
 func TestIsAgent_False_User(t *testing.T) {
 	e := echo.New()
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 	c.Set(ContextKeyAuthType, AuthTypeUser)
@@ -616,7 +616,7 @@ func TestIsAgent_False_User(t *testing.T) {
 
 func TestIsAgent_False_NotSet(t *testing.T) {
 	e := echo.New()
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 
@@ -662,7 +662,7 @@ func TestOptionalAuth_NoAuth(t *testing.T) {
 	svc := newTestAuthService()
 	agentSvc := &mockAgentService{}
 
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
 	rec := httptest.NewRecorder()
 	c := newEchoContext(req, rec)
 
@@ -686,7 +686,7 @@ func TestOptionalAuth_WithJWT(t *testing.T) {
 	token := registerAndGetToken(t, svc)
 	agentSvc := &mockAgentService{}
 
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
 	req.Header.Set("Authorization", "Bearer "+token)
 	rec := httptest.NewRecorder()
 	c := newEchoContext(req, rec)
@@ -713,7 +713,7 @@ func TestOptionalAuth_WithAgentKey(t *testing.T) {
 		},
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
 	req.Header.Set("X-Agent-Key", "agk_test-ws_abcdefghijklmnopqrstuvwxyz123456")
 	rec := httptest.NewRecorder()
 	c := newEchoContext(req, rec)

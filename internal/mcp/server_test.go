@@ -157,17 +157,17 @@ func buildMockServer(state *mockAPIState) *httptest.Server {
 				}
 
 				task := map[string]any{
-					"id":             taskID,
-					"project_id":     projID,
-					"title":          body["title"],
-					"description":    stringOrEmpty(body["description"]),
-					"priority":       stringOrDefault(body["priority"], "medium"),
-					"status_id":      statusID,
-					"assignee_type":  stringOrDefault(body["assignee_type"], "unassigned"),
-					"created_by":     fx.agentID.String(),
+					"id":              taskID,
+					"project_id":      projID,
+					"title":           body["title"],
+					"description":     stringOrEmpty(body["description"]),
+					"priority":        stringOrDefault(body["priority"], "medium"),
+					"status_id":       statusID,
+					"assignee_type":   stringOrDefault(body["assignee_type"], "unassigned"),
+					"created_by":      fx.agentID.String(),
 					"created_by_type": "agent",
-					"created_at":     time.Now().UTC().Format(time.RFC3339),
-					"updated_at":     time.Now().UTC().Format(time.RFC3339),
+					"created_at":      time.Now().UTC().Format(time.RFC3339),
+					"updated_at":      time.Now().UTC().Format(time.RFC3339),
 				}
 				if ai, ok := body["assignee_id"].(string); ok {
 					task["assignee_id"] = ai
@@ -511,9 +511,9 @@ func newTestServer() (*Server, *mockAPIState) {
 func makeRequest(args map[string]any) mcpsdk.CallToolRequest {
 	return mcpsdk.CallToolRequest{
 		Params: struct {
-			Name      string            `json:"name"`
-			Arguments any               `json:"arguments,omitempty"`
-			Meta      *mcpsdk.Meta      `json:"_meta,omitempty"`
+			Name      string             `json:"name"`
+			Arguments any                `json:"arguments,omitempty"`
+			Meta      *mcpsdk.Meta       `json:"_meta,omitempty"`
 			Task      *mcpsdk.TaskParams `json:"task,omitempty"`
 		}{
 			Arguments: args,

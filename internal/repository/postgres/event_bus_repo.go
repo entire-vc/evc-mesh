@@ -20,18 +20,18 @@ import (
 // eventBusRow is the DB row representation.
 // The DB stores ttl as INTERVAL and expires_at as NOT NULL TIMESTAMPTZ.
 type eventBusRow struct {
-	ID          uuid.UUID       `db:"id"`
-	WorkspaceID uuid.UUID       `db:"workspace_id"`
-	ProjectID   uuid.UUID       `db:"project_id"`
-	TaskID      *uuid.UUID      `db:"task_id"`
-	AgentID     *uuid.UUID      `db:"agent_id"`
+	ID          uuid.UUID        `db:"id"`
+	WorkspaceID uuid.UUID        `db:"workspace_id"`
+	ProjectID   uuid.UUID        `db:"project_id"`
+	TaskID      *uuid.UUID       `db:"task_id"`
+	AgentID     *uuid.UUID       `db:"agent_id"`
 	EventType   domain.EventType `db:"event_type"`
-	Subject     string          `db:"subject"`
-	Payload     json.RawMessage `db:"payload"`
-	Tags        pq.StringArray  `db:"tags"`
-	TTL         string          `db:"ttl"`
-	CreatedAt   time.Time       `db:"created_at"`
-	ExpiresAt   time.Time       `db:"expires_at"`
+	Subject     string           `db:"subject"`
+	Payload     json.RawMessage  `db:"payload"`
+	Tags        pq.StringArray   `db:"tags"`
+	TTL         string           `db:"ttl"`
+	CreatedAt   time.Time        `db:"created_at"`
+	ExpiresAt   time.Time        `db:"expires_at"`
 }
 
 func (r *eventBusRow) toDomain() domain.EventBusMessage {
@@ -177,7 +177,6 @@ func (r *EventBusMessageRepo) List(ctx context.Context, projectID uuid.UUID, fil
 	if len(filter.Tags) > 0 {
 		conditions = append(conditions, fmt.Sprintf("tags && $%d", argIdx))
 		args = append(args, pq.Array(filter.Tags))
-		argIdx++
 	}
 
 	where := "WHERE " + joinAnd(conditions)

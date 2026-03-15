@@ -234,9 +234,9 @@ func TestCycleDetection_Logic(t *testing.T) {
 	agentB := domain.Agent{ID: uuid.New(), WorkspaceID: wsID, Name: "Agent B"}
 	agentC := domain.Agent{ID: uuid.New(), WorkspaceID: wsID, Name: "Agent C"}
 
-	repo.add(agentA, nil)               // A is root
-	repo.add(agentB, &agentA.ID)        // B is child of A
-	repo.add(agentC, &agentB.ID)        // C is child of B
+	repo.add(agentA, nil)        // A is root
+	repo.add(agentB, &agentA.ID) // B is child of A
+	repo.add(agentC, &agentB.ID) // C is child of B
 
 	t.Run("making A a child of itself is a cycle", func(t *testing.T) {
 		assert.True(t, repo.wouldCreateCycle(agentA.ID, agentA.ID))
