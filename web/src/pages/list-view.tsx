@@ -111,7 +111,7 @@ export function ListViewPage() {
   const { projectSlug } = useParams();
   const [searchParams, setSearchParams] = useSearchParams();
   const { currentProject, statuses, fetchStatuses } = useProjectStore();
-  const { tasks, isLoading, total, hasMore, fetchTasks, updateTask, deleteTask, createTask } =
+  const { tasks, isLoading, total, hasMore, fetchTasks, updateTask, moveTask, deleteTask, createTask } =
     useTaskStore();
   const { fields: customFieldDefs, fetchFields: fetchCustomFields } =
     useCustomFieldStore();
@@ -543,10 +543,20 @@ export function ListViewPage() {
       const ids = Array.from(selectedTaskIds);
       setBulkProgress({ done: 0, total: ids.length });
 
+      // Status changes go through moveTask (PATCH update ignores status_id).
+      const isStatusChange = !!updates.status_id;
+      const { status_id: statusId, ...fieldUpdates } = updates;
+
       let done = 0;
       const results = await Promise.allSettled(
         ids.map(async (id) => {
-          await updateTask(id, updates);
+          if (isStatusChange && statusId) {
+            await moveTask(id, { status_id: statusId });
+          }
+          // Apply non-status field updates if any.
+          if (Object.keys(fieldUpdates).length > 0) {
+            await updateTask(id, fieldUpdates);
+          }
           done += 1;
           setBulkProgress({ done, total: ids.length });
         }),
@@ -566,7 +576,7 @@ export function ListViewPage() {
         await fetchTasks(currentProject.id, { page, page_size: perPage });
       }
     },
-    [selectedTaskIds, updateTask, currentProject, fetchTasks, page, perPage],
+    [selectedTaskIds, updateTask, moveTask, currentProject, fetchTasks, page, perPage],
   );
 
   const runBulkDelete = useCallback(async () => {
