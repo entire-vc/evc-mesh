@@ -177,10 +177,12 @@ export function ListViewPage() {
     }
   }, [currentProject, fetchStatuses, fetchTasks, fetchCustomFields, page, perPage]);
 
-  // Clear selection when tasks change (page navigation)
+  // Clear selection and subtask cache when tasks change (page navigation, project switch)
   useEffect(() => {
     setSelectedTaskIds(new Set());
-  }, [page]);
+    setSubtaskMap({});
+    setExpandedTasks(new Set());
+  }, [page, currentProject]);
 
   // Focus add input when a group add row opens
   useEffect(() => {
@@ -405,6 +407,7 @@ export function ListViewPage() {
 
   const toggleSubtasks = useCallback(
     async (taskId: string) => {
+      let expanding = false;
       setExpandedTasks((prev) => {
         const next = new Set(prev);
         if (next.has(taskId)) {
@@ -412,11 +415,12 @@ export function ListViewPage() {
           return next;
         }
         next.add(taskId);
+        expanding = true;
         return next;
       });
 
-      // Fetch subtasks if not yet loaded
-      if (!subtaskMap[taskId]) {
+      // Always fetch fresh subtasks when expanding to avoid stale cache
+      if (expanding) {
         setLoadingSubtasks((prev) => new Set(prev).add(taskId));
         try {
           const result = await api<{ items: Task[] }>(`/api/v1/tasks/${taskId}/subtasks`);
@@ -441,7 +445,7 @@ export function ListViewPage() {
         }
       }
     },
-    [subtaskMap],
+    [],
   );
 
   // ---------------------------------------------------------------------------
