@@ -189,5 +189,11 @@ func (s *taskTemplateService) CreateTaskFromTemplate(ctx context.Context, templa
 	if err := s.taskSvc.Create(ctx, task); err != nil {
 		return nil, fmt.Errorf("taskTemplateService.CreateTaskFromTemplate: create task: %w", err)
 	}
+
+	// Re-fetch to populate computed fields (assignee_name, etc.) after auto-assign.
+	enriched, err := s.taskSvc.GetByID(ctx, task.ID)
+	if err == nil && enriched != nil {
+		return enriched, nil
+	}
 	return task, nil
 }
