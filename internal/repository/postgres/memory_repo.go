@@ -85,6 +85,10 @@ func (r *MemoryRepo) Upsert(ctx context.Context, m *domain.Memory) error {
 		tags = pq.StringArray{}
 	}
 
+	// Use ON CONFLICT (id) because the composite unique constraint
+	// uq_memory_key_scope doesn't match when project_id or agent_id is NULL
+	// (PostgreSQL treats NULLs as distinct in UNIQUE constraints).
+	// The service layer sets mem.ID = existing.ID before calling Upsert.
 	const q = `
 		INSERT INTO memories (
 			id, workspace_id, project_id, agent_id, key, content, scope,
@@ -93,7 +97,7 @@ func (r *MemoryRepo) Upsert(ctx context.Context, m *domain.Memory) error {
 			$1, $2, $3, $4, $5, $6, $7,
 			$8, $9, $10, $11, $12, $13, $14
 		)
-		ON CONFLICT ON CONSTRAINT uq_memory_key_scope DO UPDATE
+		ON CONFLICT (id) DO UPDATE
 			SET content       = EXCLUDED.content,
 			    tags          = EXCLUDED.tags,
 			    relevance     = EXCLUDED.relevance,
@@ -163,7 +167,7 @@ func (r *MemoryRepo) FullTextSearch(ctx context.Context, query string, workspace
 	args := []interface{}{workspaceID, query} // $1, $2
 	conditions := []string{
 		"workspace_id = $1",
-		"search_vector @@ plainto_tsquery('english', $2)",
+		"search_vector @@ plainto_tsquery('simple', $2)",
 		"(expires_at IS NULL OR expires_at > NOW())",
 	}
 	argIdx := 3
@@ -189,7 +193,7 @@ func (r *MemoryRepo) FullTextSearch(ctx context.Context, query string, workspace
 
 	q := fmt.Sprintf(`
 		SELECT %s,
-		       ts_rank_cd(search_vector, plainto_tsquery('english', $2)) AS score
+		       ts_rank_cd(search_vector, plainto_tsquery('simple', $2)) AS score
 		FROM memories
 		WHERE %s
 		ORDER BY score DESC, relevance DESC
