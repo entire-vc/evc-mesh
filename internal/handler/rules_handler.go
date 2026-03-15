@@ -185,7 +185,13 @@ func (h *RulesHandler) SetProjectWorkflowRules(c echo.Context) error {
 	if err := h.rulesSvc.SetProjectWorkflowRules(c.Request().Context(), projID, cfg); err != nil {
 		return handleError(c, err)
 	}
-	return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
+
+	// Return the full workflow rules response so the frontend store stays in sync.
+	resp, err := h.rulesSvc.GetProjectWorkflowRules(c.Request().Context(), projID, nil)
+	if err != nil {
+		return handleError(c, err)
+	}
+	return c.JSON(http.StatusOK, resp)
 }
 
 // --------------------------------------------------------------------------
