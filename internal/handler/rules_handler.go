@@ -367,6 +367,10 @@ func (h *RulesHandler) SetWorkflowTemplates(c echo.Context) error {
 	if err := h.rulesSvc.SetWorkflowTemplates(c.Request().Context(), wsID, templates); err != nil {
 		return handleError(c, err)
 	}
-	return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
+	saved, err := h.rulesSvc.GetWorkflowTemplates(c.Request().Context(), wsID)
+	if err != nil {
+		return handleError(c, err)
+	}
+	return c.JSON(http.StatusOK, saved)
 }
 
