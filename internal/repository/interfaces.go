@@ -461,6 +461,16 @@ type MemoryRepository interface {
 	VectorSearch(ctx context.Context, queryVec []float32, workspaceID uuid.UUID, projectID *uuid.UUID, scope string, tags []string, limit int) ([]domain.ScoredMemory, error)
 	// UpdateEmbedding stores the embedding vector (encoded as JSON) for a single memory.
 	UpdateEmbedding(ctx context.Context, id uuid.UUID, vec []float32, model string, dim int) error
+	// DecayRelevance reduces relevance by 0.05 for agent-scope memories not updated in 30+ days,
+	// capped at a floor of 0.1. Workspace and project scope memories are exempt.
+	// Returns the number of rows updated.
+	DecayRelevance(ctx context.Context) (int64, error)
+	// CleanExpired deletes memories that have a non-null expires_at in the past.
+	// Returns the number of rows deleted.
+	CleanExpired(ctx context.Context) (int64, error)
+	// ListWithNullEmbedding returns up to limit memories whose embedding column is NULL.
+	// Used by the batch embedding job.
+	ListWithNullEmbedding(ctx context.Context, workspaceID uuid.UUID, limit int) ([]domain.Memory, error)
 }
 
 // AgentSessionRepository manages persistence for agent session tracking.

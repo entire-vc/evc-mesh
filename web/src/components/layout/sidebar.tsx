@@ -9,6 +9,7 @@ import {
   FolderKanban,
   Inbox,
   LayoutDashboard,
+  MonitorDot,
   Plug,
   Plus,
   Settings,
@@ -50,6 +51,7 @@ export function Sidebar({ collapsed }: SidebarProps) {
   const isInitiativesRoute = location.pathname.endsWith("/initiatives");
   const isTriageRoute = location.pathname.endsWith("/triage");
   const isMemoriesRoute = location.pathname.endsWith("/memories");
+  const isSessionsRoute = location.pathname.endsWith("/sessions");
 
   if (collapsed) {
     return (
@@ -124,6 +126,16 @@ export function Sidebar({ collapsed }: SidebarProps) {
             )}
           >
             <Brain className="h-4 w-4" />
+          </Link>
+          {/* Sessions Dashboard */}
+          <Link
+            to={wsSlug ? `/w/${wsSlug}/sessions` : "/"}
+            className={cn(
+              "flex h-8 w-8 items-center justify-center rounded-lg text-sidebar-foreground hover:bg-sidebar-accent",
+              isSessionsRoute && "bg-sidebar-accent text-sidebar-primary",
+            )}
+          >
+            <MonitorDot className="h-4 w-4" />
           </Link>
           {/* Spark Catalog */}
           <Link
@@ -209,7 +221,7 @@ export function Sidebar({ collapsed }: SidebarProps) {
           to={wsSlug ? `/w/${wsSlug}` : "/"}
           className={cn(
             "flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-sidebar-foreground hover:bg-sidebar-accent",
-            !projectSlug && !isOrgChartRoute && !isSparkRoute && !isEventsRoute && !isAnalyticsRoute && !isIntegrationsRoute && !isInitiativesRoute && !isTriageRoute && !isMemoriesRoute && "bg-sidebar-accent font-medium",
+            !projectSlug && !isOrgChartRoute && !isSparkRoute && !isEventsRoute && !isAnalyticsRoute && !isIntegrationsRoute && !isInitiativesRoute && !isTriageRoute && !isMemoriesRoute && !isSessionsRoute && "bg-sidebar-accent font-medium",
           )}
         >
           <LayoutDashboard className="h-4 w-4" />
@@ -302,6 +314,17 @@ export function Sidebar({ collapsed }: SidebarProps) {
         >
           <Brain className="h-4 w-4" />
           Memory
+        </Link>
+        {/* Sessions Dashboard */}
+        <Link
+          to={wsSlug ? `/w/${wsSlug}/sessions` : "/"}
+          className={cn(
+            "flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-sidebar-foreground hover:bg-sidebar-accent",
+            isSessionsRoute && "bg-sidebar-accent font-medium",
+          )}
+        >
+          <MonitorDot className="h-4 w-4" />
+          Sessions
         </Link>
         {/* Spark Catalog */}
         <Link

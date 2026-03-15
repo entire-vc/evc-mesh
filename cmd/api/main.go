@@ -621,12 +621,17 @@ func main() {
 	api.PUT("/notifications/preferences", notificationHandler.UpdatePreferences)
 
 	// Memory routes.
-	// NOTE: /memories/search MUST be registered before /memories/:id to avoid
-	// "search" being parsed as a UUID parameter.
+	// NOTE: fixed-path routes (/memories/search, /memories/export, /memories/import,
+	// /memories/reindex) MUST be registered before /memories/:id to avoid the
+	// literal path segments being parsed as UUID parameters.
 	api.POST("/memories", memoryHandler.Remember)
 	api.GET("/memories", memoryHandler.List)
 	api.GET("/memories/search", memoryHandler.Search)
+	api.GET("/memories/export", memoryHandler.ExportMemories)
+	api.POST("/memories/import", memoryHandler.ImportMemories)
+	api.POST("/memories/reindex", memoryHandler.Reindex)
 	api.GET("/memories/:id", memoryHandler.GetByID)
+	api.GET("/memories/:id/related", memoryHandler.FindRelated)
 	api.DELETE("/memories/:id", memoryHandler.Delete)
 	api.GET("/projects/:proj_id/knowledge", memoryHandler.GetProjectKnowledge, projAccess)
 
@@ -664,6 +669,33 @@ func main() {
 		}
 	}()
 	log.Println("Recurring task scheduler started (60s interval)")
+
+	// 10a. Memory decay + cleanup scheduler (every 6 hours).
+	// DecayRelevance and CleanExpired are idempotent so running frequently is safe.
+	go func() {
+		ticker := time.NewTicker(6 * time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				if n, decayErr := memoryRepo.DecayRelevance(ctx); decayErr != nil {
+					log.Printf("[memory-decay] ERROR: %v", decayErr)
+				} else if n > 0 {
+					log.Printf("[memory-decay] Decayed %d stale memories", n)
+				}
+				if n, cleanErr := memoryRepo.CleanExpired(ctx); cleanErr != nil {
+					log.Printf("[memory-cleanup] ERROR: %v", cleanErr)
+				} else if n > 0 {
+					log.Printf("[memory-cleanup] Cleaned %d expired memories", n)
+				}
+				cancel()
+			case <-schedulerShutdownCh:
+				return
+			}
+		}
+	}()
+	log.Println("Memory decay scheduler started (6h interval)")
 
 	// 11. Start server with graceful shutdown.
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)

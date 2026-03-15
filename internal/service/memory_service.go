@@ -14,6 +14,7 @@ import (
 	"unicode"
 
 	"github.com/google/uuid"
+	"gopkg.in/yaml.v3"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/embedding"
@@ -445,4 +446,190 @@ func parseDuration(s string) (*time.Time, error) {
 	}
 	t := time.Now().Add(d)
 	return &t, nil
+}
+
+// memoryExportItem is the YAML representation of a single memory for export/import.
+type memoryExportItem struct {
+	Key        string   `yaml:"key"`
+	Content    string   `yaml:"content"`
+	Scope      string   `yaml:"scope"`
+	ProjectID  string   `yaml:"project_id,omitempty"`
+	Tags       []string `yaml:"tags,omitempty"`
+	SourceType string   `yaml:"source_type"`
+}
+
+// memoryExportDoc is the top-level YAML document structure.
+type memoryExportDoc struct {
+	Version  string             `yaml:"version"`
+	Memories []memoryExportItem `yaml:"memories"`
+}
+
+// ExportMemories serialises all non-expired memories for the workspace (optionally
+// filtered to a single project) as a YAML document.
+func (s *memoryService) ExportMemories(ctx context.Context, workspaceID uuid.UUID, projectID *uuid.UUID) ([]byte, error) {
+	memories, err := s.memRepo.ListByWorkspaceProject(ctx, workspaceID, projectID)
+	if err != nil {
+		return nil, fmt.Errorf("memory export: list: %w", err)
+	}
+
+	doc := memoryExportDoc{
+		Version:  "1",
+		Memories: make([]memoryExportItem, 0, len(memories)),
+	}
+	for _, m := range memories {
+		item := memoryExportItem{
+			Key:        m.Key,
+			Content:    m.Content,
+			Scope:      string(m.Scope),
+			SourceType: string(m.SourceType),
+			Tags:       m.Tags,
+		}
+		if m.ProjectID != nil {
+			item.ProjectID = m.ProjectID.String()
+		}
+		doc.Memories = append(doc.Memories, item)
+	}
+
+	data, err := yaml.Marshal(doc)
+	if err != nil {
+		return nil, fmt.Errorf("memory export: marshal yaml: %w", err)
+	}
+	return data, nil
+}
+
+// ImportMemories parses a YAML export document and upserts each memory entry.
+// Returns the count of successfully imported memories.
+func (s *memoryService) ImportMemories(ctx context.Context, workspaceID uuid.UUID, data []byte) (int, error) {
+	var doc memoryExportDoc
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return 0, apierror.BadRequest("invalid YAML: " + err.Error())
+	}
+
+	count := 0
+	for _, item := range doc.Memories {
+		if item.Key == "" || item.Content == "" {
+			continue
+		}
+		if !keySlugRegex.MatchString(item.Key) {
+			continue
+		}
+
+		scope := domain.MemoryScope(item.Scope)
+		if scope == "" {
+			scope = domain.ScopeWorkspace
+		}
+
+		var projID *uuid.UUID
+		if item.ProjectID != "" {
+			pid, err := uuid.Parse(item.ProjectID)
+			if err == nil {
+				projID = &pid
+			}
+		}
+
+		sourceType := domain.MemorySourceType(item.SourceType)
+		if sourceType == "" {
+			sourceType = domain.SourceHuman
+		}
+
+		mem := &domain.Memory{
+			WorkspaceID: workspaceID,
+			ProjectID:   projID,
+			Key:         item.Key,
+			Content:     item.Content,
+			Scope:       scope,
+			Tags:        item.Tags,
+			SourceType:  sourceType,
+			Relevance:   0.5,
+		}
+
+		if err := s.memRepo.Upsert(ctx, mem); err != nil {
+			log.Printf("memory import: upsert key=%s: %v", item.Key, err)
+			continue
+		}
+		count++
+	}
+
+	return count, nil
+}
+
+// BatchEmbed finds all memories without an embedding vector and embeds them
+// using the configured embedder. It is a no-op when the embedder is the noop variant.
+// Returns the count of memories successfully embedded.
+func (s *memoryService) BatchEmbed(ctx context.Context, workspaceID uuid.UUID) (int, error) {
+	if embedding.IsNoop(s.embedder) {
+		return 0, nil
+	}
+
+	const batchSize = 100
+	memories, err := s.memRepo.ListWithNullEmbedding(ctx, workspaceID, batchSize)
+	if err != nil {
+		return 0, fmt.Errorf("memory batch embed: list: %w", err)
+	}
+
+	count := 0
+	for _, m := range memories {
+		text := m.Key + " " + m.Content + " " + strings.Join(m.Tags, " ")
+		vec, embedErr := s.embedder.Embed(ctx, text)
+		if embedErr != nil {
+			log.Printf("memory batch embed: embed id=%s: %v", m.ID, embedErr)
+			continue
+		}
+		if len(vec) == 0 {
+			continue
+		}
+		if storeErr := s.memRepo.UpdateEmbedding(ctx, m.ID, vec, s.embedder.Model(), s.embedder.Dimensions()); storeErr != nil {
+			log.Printf("memory batch embed: store id=%s: %v", m.ID, storeErr)
+			continue
+		}
+		count++
+	}
+
+	return count, nil
+}
+
+// FindRelated returns memories related to the given memory by performing a full-text
+// search using the memory's key and tags as the query. The source memory itself is excluded.
+func (s *memoryService) FindRelated(ctx context.Context, memoryID uuid.UUID, limit int) ([]domain.ScoredMemory, error) {
+	if limit <= 0 {
+		limit = 5
+	}
+
+	mem, err := s.memRepo.GetByID(ctx, memoryID)
+	if err != nil {
+		return nil, fmt.Errorf("memory find related: get by id: %w", err)
+	}
+	if mem == nil {
+		return nil, apierror.NotFound("Memory")
+	}
+
+	// Build query from key and tags.
+	parts := []string{mem.Key}
+	parts = append(parts, mem.Tags...)
+	query := strings.Join(parts, " ")
+
+	var projID *uuid.UUID
+	if mem.ProjectID != nil {
+		projID = mem.ProjectID
+	}
+
+	// Fetch slightly more than limit to account for excluding the source memory.
+	results, err := s.memRepo.FullTextSearch(ctx, query, mem.WorkspaceID, projID, "", nil, limit+1)
+	if err != nil {
+		return nil, fmt.Errorf("memory find related: search: %w", err)
+	}
+
+	// Exclude the source memory.
+	filtered := make([]domain.ScoredMemory, 0, len(results))
+	for _, r := range results {
+		if r.ID == memoryID {
+			continue
+		}
+		filtered = append(filtered, r)
+	}
+	if len(filtered) > limit {
+		filtered = filtered[:limit]
+	}
+
+	return filtered, nil
 }
