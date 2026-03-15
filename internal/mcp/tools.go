@@ -676,6 +676,11 @@ func (s *Server) handlePublishEvent(ctx context.Context, request mcpsdk.CallTool
 		body["tags"] = tags
 	}
 
+	// Parse optional memory hint — passed through to the API for persistence.
+	if memoryHint := request.GetArguments()["memory"]; memoryHint != nil {
+		body["memory_hint"] = memoryHint
+	}
+
 	result, err := s.getRESTClient(ctx).PublishEvent(ctx, projectID, body)
 	if err != nil {
 		return errResult("failed to publish event: %v", err)
@@ -1505,4 +1510,95 @@ func (s *Server) handleTriggerRecurringNow(ctx context.Context, request mcpsdk.C
 	}
 
 	return jsonResult(result)
+}
+
+// ============================================================================
+// Memory tools
+// ============================================================================
+
+func (s *Server) handleRecall(ctx context.Context, request mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
+	session := s.getSession(ctx)
+	if session == nil {
+		return errResult("not authenticated: no agent session")
+	}
+
+	query := mcpsdk.ParseString(request, "query", "")
+	if query == "" {
+		return errResult("query is required")
+	}
+
+	scope := mcpsdk.ParseString(request, "scope", "")
+	projectID := mcpsdk.ParseString(request, "project_id", "")
+	tags := parseStringSlice(request, "tags")
+	limit := mcpsdk.ParseInt(request, "limit", 10)
+
+	result, err := s.getRESTClient(ctx).RecallMemories(ctx, query, session.WorkspaceID.String(), projectID, scope, tags, limit)
+	if err != nil {
+		return errResult("recall failed: %v", err)
+	}
+
+	return jsonResult(result)
+}
+
+func (s *Server) handleRemember(ctx context.Context, request mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
+	session := s.getSession(ctx)
+	if session == nil {
+		return errResult("not authenticated: no agent session")
+	}
+
+	key := mcpsdk.ParseString(request, "key", "")
+	content := mcpsdk.ParseString(request, "content", "")
+	if key == "" || content == "" {
+		return errResult("key and content are required")
+	}
+
+	scope := mcpsdk.ParseString(request, "scope", "project")
+	projectID := mcpsdk.ParseString(request, "project_id", "")
+	tags := parseStringSlice(request, "tags")
+
+	body := map[string]any{
+		"workspace_id": session.WorkspaceID.String(),
+		"key":          key,
+		"content":      content,
+		"scope":        scope,
+		"tags":         tags,
+		"source_type":  "agent",
+	}
+	if projectID != "" {
+		body["project_id"] = projectID
+	}
+
+	result, err := s.getRESTClient(ctx).Remember(ctx, body)
+	if err != nil {
+		return errResult("remember failed: %v", err)
+	}
+
+	return jsonResult(result)
+}
+
+func (s *Server) handleGetProjectKnowledge(ctx context.Context, request mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
+	projectID := mcpsdk.ParseString(request, "project_id", "")
+	if projectID == "" {
+		return errResult("project_id is required")
+	}
+
+	result, err := s.getRESTClient(ctx).GetProjectKnowledge(ctx, projectID)
+	if err != nil {
+		return errResult("get_project_knowledge failed: %v", err)
+	}
+
+	return jsonResult(result)
+}
+
+func (s *Server) handleForget(ctx context.Context, request mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
+	memoryID := mcpsdk.ParseString(request, "memory_id", "")
+	if memoryID == "" {
+		return errResult("memory_id is required")
+	}
+
+	if err := s.getRESTClient(ctx).ForgetMemory(ctx, memoryID); err != nil {
+		return errResult("forget failed: %v", err)
+	}
+
+	return jsonResult(map[string]any{"deleted": true})
 }

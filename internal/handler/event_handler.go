@@ -33,6 +33,7 @@ type createEventRequest struct {
 	TaskID     *uuid.UUID       `json:"task_id"`
 	Tags       []string         `json:"tags"`
 	TTLSeconds int              `json:"ttl_seconds"`
+	MemoryHint *domain.MemoryHint `json:"memory_hint"`
 }
 
 // listEventsQuery represents query parameters for listing events.
@@ -145,6 +146,7 @@ func (h *EventHandler) Create(c echo.Context) error {
 		Payload:     payloadMap,
 		Tags:        req.Tags,
 		TTLSeconds:  req.TTLSeconds,
+		MemoryHint:  req.MemoryHint,
 	}
 
 	event, err := h.eventService.Publish(c.Request().Context(), input)

@@ -131,7 +131,7 @@ func (s *Server) MCPServer() *mcpserver.MCPServer {
 	return s.mcpServer
 }
 
-// registerTools registers all 38 MCP tools.
+// registerTools registers all MCP tools.
 func (s *Server) registerTools() {
 	// --- Projects & Tasks ---
 	s.mcpServer.AddTool(mcpsdk.NewTool("list_projects",
@@ -271,6 +271,7 @@ func (s *Server) registerTools() {
 		mcpsdk.WithString("task_id", mcpsdk.Description("Related task ID.")),
 		mcpsdk.WithArray("tags", mcpsdk.Description("Event tags for filtering."), mcpsdk.WithStringItems()),
 		mcpsdk.WithNumber("ttl_hours", mcpsdk.Description("Time-to-live in hours (default 24).")),
+		mcpsdk.WithObject("memory", mcpsdk.Description("Optional memory hint to persist alongside the event (e.g. key decisions, conventions).")),
 	), s.handlePublishEvent)
 
 	s.mcpServer.AddTool(mcpsdk.NewTool("publish_summary",
@@ -433,6 +434,35 @@ func (s *Server) registerTools() {
 		mcpsdk.WithDescription("Immediately creates the next instance of a recurring schedule, without waiting for the scheduled time. Useful for testing or urgent execution."),
 		mcpsdk.WithString("recurring_schedule_id", mcpsdk.Required(), mcpsdk.Description("UUID of the recurring schedule.")),
 	), s.handleTriggerRecurringNow)
+
+	// --- Memory tools ---
+	s.mcpServer.AddTool(mcpsdk.NewTool("recall",
+		mcpsdk.WithDescription("Search project and agent memory. Use at session start to load relevant context. Returns scored results."),
+		mcpsdk.WithString("query", mcpsdk.Required(), mcpsdk.Description("Full-text search query.")),
+		mcpsdk.WithString("project_id", mcpsdk.Description("Filter to a specific project.")),
+		mcpsdk.WithString("scope", mcpsdk.Description("Filter by scope: workspace, project, agent, or all (default).")),
+		mcpsdk.WithArray("tags", mcpsdk.Description("Filter by tags."), mcpsdk.WithStringItems()),
+		mcpsdk.WithNumber("limit", mcpsdk.Description("Max results (default 10, max 50).")),
+	), s.handleRecall)
+
+	s.mcpServer.AddTool(mcpsdk.NewTool("remember",
+		mcpsdk.WithDescription("Save knowledge to persistent memory. Use for decisions, conventions, preferences. UPSERT by key — calling with same key updates the existing entry."),
+		mcpsdk.WithString("key", mcpsdk.Required(), mcpsdk.Description("Slug key for UPSERT (e.g. 'api-convention', 'license-decision').")),
+		mcpsdk.WithString("content", mcpsdk.Required(), mcpsdk.Description("What to remember (markdown).")),
+		mcpsdk.WithString("scope", mcpsdk.Description("workspace | project | agent (default: project).")),
+		mcpsdk.WithString("project_id", mcpsdk.Description("Project ID (required for project scope).")),
+		mcpsdk.WithArray("tags", mcpsdk.Description("Tags for categorization and filtering."), mcpsdk.WithStringItems()),
+	), s.handleRemember)
+
+	s.mcpServer.AddTool(mcpsdk.NewTool("get_project_knowledge",
+		mcpsdk.WithDescription("Get all accumulated project knowledge. Call at session start to load context. Returns workspace-level and project-level memories."),
+		mcpsdk.WithString("project_id", mcpsdk.Required(), mcpsdk.Description("Project UUID.")),
+	), s.handleGetProjectKnowledge)
+
+	s.mcpServer.AddTool(mcpsdk.NewTool("forget",
+		mcpsdk.WithDescription("Delete a memory entry. Agents can only delete their own agent-scope memories."),
+		mcpsdk.WithString("memory_id", mcpsdk.Required(), mcpsdk.Description("UUID of the memory to delete.")),
+	), s.handleForget)
 }
 
 // --- Helper functions ---

@@ -646,6 +646,61 @@ func (c *RESTClient) TriggerRecurringNow(ctx context.Context, scheduleID string)
 	return result, nil
 }
 
+// Remember creates or updates a memory entry (UPSERT by key within scope).
+func (c *RESTClient) Remember(ctx context.Context, body map[string]any) (map[string]any, error) {
+	var result map[string]any
+	if err := c.doJSON(ctx, http.MethodPost, "/api/v1/memories", body, &result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+// RecallMemories searches memories via full-text search with optional filters.
+func (c *RESTClient) RecallMemories(ctx context.Context, query, wsID, projectID, scope string, tags []string, limit int) (map[string]any, error) {
+	var parts []string
+	if query != "" {
+		parts = append(parts, "q="+query)
+	}
+	if wsID != "" {
+		parts = append(parts, "workspace_id="+wsID)
+	}
+	if projectID != "" {
+		parts = append(parts, "project_id="+projectID)
+	}
+	if scope != "" {
+		parts = append(parts, "scope="+scope)
+	}
+	for _, tag := range tags {
+		parts = append(parts, "tags="+tag)
+	}
+	if limit > 0 {
+		parts = append(parts, fmt.Sprintf("limit=%d", limit))
+	}
+	path := "/api/v1/memories/search"
+	if len(parts) > 0 {
+		path += "?" + strings.Join(parts, "&")
+	}
+	var result map[string]any
+	if err := c.doJSON(ctx, http.MethodGet, path, nil, &result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+// GetProjectKnowledge returns all accumulated knowledge for a project.
+func (c *RESTClient) GetProjectKnowledge(ctx context.Context, projectID string) (map[string]any, error) {
+	var result map[string]any
+	if err := c.doJSON(ctx, http.MethodGet, "/api/v1/projects/"+projectID+"/knowledge", nil, &result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+// ForgetMemory deletes a memory entry by ID.
+func (c *RESTClient) ForgetMemory(ctx context.Context, memoryID string) error {
+	return c.doJSON(ctx, http.MethodDelete, "/api/v1/memories/"+memoryID, nil, nil)
+}
+
 // ExportWorkspaceConfig exports workspace configuration as YAML text.
 func (c *RESTClient) ExportWorkspaceConfig(ctx context.Context, workspaceID string) (string, error) {
 	data, statusCode, err := c.doRaw(ctx, http.MethodGet, "/api/v1/workspaces/"+workspaceID+"/config/export", "", nil)
