@@ -350,6 +350,116 @@ func (h *MemoryHandler) GetProjectKnowledge(c echo.Context) error {
 	})
 }
 
+// ExportMemories handles GET /api/v1/memories/export
+// Returns a YAML file containing all memories for the given workspace (optionally filtered by project).
+func (h *MemoryHandler) ExportMemories(c echo.Context) error {
+	wsIDStr := c.QueryParam("workspace_id")
+	wsID, err := requireWorkspaceID(c, wsIDStr)
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, err)
+	}
+
+	var projID *uuid.UUID
+	if pidStr := c.QueryParam("project_id"); pidStr != "" {
+		pid, parseErr := uuid.Parse(pidStr)
+		if parseErr != nil {
+			return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid project_id"))
+		}
+		projID = &pid
+	}
+
+	data, err := h.memoryService.ExportMemories(c.Request().Context(), wsID, projID)
+	if err != nil {
+		return handleError(c, err)
+	}
+
+	c.Response().Header().Set("Content-Disposition", "attachment; filename=memories.yaml")
+	return c.Blob(http.StatusOK, "application/x-yaml", data)
+}
+
+// ImportMemories handles POST /api/v1/memories/import
+// Accepts a YAML body matching the export format and upserts each memory.
+func (h *MemoryHandler) ImportMemories(c echo.Context) error {
+	wsIDStr := c.QueryParam("workspace_id")
+	wsID, err := requireWorkspaceID(c, wsIDStr)
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, err)
+	}
+
+	body := c.Request().Body
+	if body == nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("request body is required"))
+	}
+	defer body.Close()
+
+	// Read the raw YAML body (limit to 10 MB to prevent abuse).
+	const maxSize = 10 * 1024 * 1024
+	buf := make([]byte, 0, 4096)
+	tmp := make([]byte, 4096)
+	for {
+		n, readErr := body.Read(tmp)
+		if n > 0 {
+			buf = append(buf, tmp[:n]...)
+		}
+		if readErr != nil {
+			break
+		}
+		if len(buf) > maxSize {
+			return c.JSON(http.StatusRequestEntityTooLarge, apierror.BadRequest("request body too large"))
+		}
+	}
+
+	count, err := h.memoryService.ImportMemories(c.Request().Context(), wsID, buf)
+	if err != nil {
+		return handleError(c, err)
+	}
+
+	return c.JSON(http.StatusOK, map[string]int{"imported": count})
+}
+
+// Reindex handles POST /api/v1/memories/reindex
+// Triggers batch embedding for all memories without an embedding vector.
+func (h *MemoryHandler) Reindex(c echo.Context) error {
+	wsIDStr := c.QueryParam("workspace_id")
+	wsID, err := requireWorkspaceID(c, wsIDStr)
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, err)
+	}
+
+	count, err := h.memoryService.BatchEmbed(c.Request().Context(), wsID)
+	if err != nil {
+		return handleError(c, err)
+	}
+
+	return c.JSON(http.StatusOK, map[string]int{"reindexed": count})
+}
+
+// FindRelated handles GET /api/v1/memories/:id/related
+// Returns memories related to the given memory ID via full-text search.
+func (h *MemoryHandler) FindRelated(c echo.Context) error {
+	idStr := c.Param("id")
+	id, err := uuid.Parse(idStr)
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid memory id"))
+	}
+
+	limit := 5
+	if limitStr := c.QueryParam("limit"); limitStr != "" {
+		if l, parseErr := strconv.Atoi(limitStr); parseErr == nil && l > 0 {
+			limit = l
+		}
+	}
+
+	results, err := h.memoryService.FindRelated(c.Request().Context(), id, limit)
+	if err != nil {
+		return handleError(c, err)
+	}
+
+	return c.JSON(http.StatusOK, map[string]interface{}{
+		"items": results,
+	})
+}
+
 // requireWorkspaceID extracts workspace_id either from the provided raw string
 // or from the Echo context (set by DualAuth middleware).
 // Returns a non-nil error when neither source yields a valid UUID.

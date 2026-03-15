@@ -597,5 +597,15 @@ type MemoryService interface {
 	GetProjectKnowledge(ctx context.Context, workspaceID uuid.UUID, projectID *uuid.UUID) ([]domain.Memory, error)
 	Forget(ctx context.Context, id uuid.UUID, actorAgentID *uuid.UUID, isAdmin bool) error
 	GetByID(ctx context.Context, id uuid.UUID) (*domain.Memory, error)
+	// ExportMemories returns YAML-encoded memories for the given workspace (optionally filtered by project).
+	ExportMemories(ctx context.Context, workspaceID uuid.UUID, projectID *uuid.UUID) ([]byte, error)
+	// ImportMemories parses a YAML export and upserts each memory. Returns the count imported.
+	ImportMemories(ctx context.Context, workspaceID uuid.UUID, data []byte) (int, error)
+	// BatchEmbed finds all memories without an embedding and embeds them using the configured embedder.
+	// Returns the count of memories that were successfully embedded.
+	BatchEmbed(ctx context.Context, workspaceID uuid.UUID) (int, error)
+	// FindRelated returns memories related to the given memory ID via full-text search on its key+tags.
+	// The source memory itself is excluded from results.
+	FindRelated(ctx context.Context, memoryID uuid.UUID, limit int) ([]domain.ScoredMemory, error)
 	ExtractFromEvent(ctx context.Context, event *domain.EventBusMessage, hint *domain.MemoryHint) error
 }

@@ -94,6 +94,18 @@ func (m *mockMemoryRepo) UpdateEmbedding(_ context.Context, _ uuid.UUID, _ []flo
 	return nil
 }
 
+func (m *mockMemoryRepo) DecayRelevance(_ context.Context) (int64, error) {
+	return 0, nil
+}
+
+func (m *mockMemoryRepo) CleanExpired(_ context.Context) (int64, error) {
+	return 0, nil
+}
+
+func (m *mockMemoryRepo) ListWithNullEmbedding(_ context.Context, _ uuid.UUID, _ int) ([]domain.Memory, error) {
+	return nil, nil
+}
+
 // Verify mockMemoryRepo satisfies the interface at compile time.
 var _ repository.MemoryRepository = (*mockMemoryRepo)(nil)
 

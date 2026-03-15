@@ -446,6 +446,64 @@ func (r *MemoryRepo) UpdateEmbedding(ctx context.Context, id uuid.UUID, vec []fl
 	return err
 }
 
+// DecayRelevance reduces relevance by 0.05 for agent-scope memories that have not been
+// updated in more than 30 days. Workspace and project scope memories are exempt.
+// The floor is 0.1 — relevance never decays below that value.
+// Returns the count of rows updated.
+func (r *MemoryRepo) DecayRelevance(ctx context.Context) (int64, error) {
+	result, err := r.db.ExecContext(ctx, `
+		UPDATE memories
+		SET relevance  = GREATEST(relevance - 0.05, 0.1),
+		    updated_at = updated_at
+		WHERE updated_at < now() - interval '30 days'
+		  AND relevance > 0.1
+		  AND scope = 'agent'
+		  AND expires_at IS NULL
+	`)
+	if err != nil {
+		return 0, fmt.Errorf("memory decay relevance: %w", err)
+	}
+	return result.RowsAffected()
+}
+
+// CleanExpired deletes all memory rows whose expires_at is non-null and in the past.
+// Returns the count of rows deleted.
+func (r *MemoryRepo) CleanExpired(ctx context.Context) (int64, error) {
+	result, err := r.db.ExecContext(ctx,
+		`DELETE FROM memories WHERE expires_at IS NOT NULL AND expires_at < now()`,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("memory clean expired: %w", err)
+	}
+	return result.RowsAffected()
+}
+
+// ListWithNullEmbedding returns up to limit memories whose embedding column is NULL.
+// Used by the batch embedding job to find un-embedded memories.
+func (r *MemoryRepo) ListWithNullEmbedding(ctx context.Context, workspaceID uuid.UUID, limit int) ([]domain.Memory, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	q := fmt.Sprintf(`
+		SELECT %s FROM memories
+		WHERE workspace_id = $1
+		  AND embedding IS NULL
+		  AND (expires_at IS NULL OR expires_at > now())
+		ORDER BY updated_at DESC
+		LIMIT $2`,
+		memoryColumns,
+	)
+	var rows []memoryRow
+	if err := r.db.SelectContext(ctx, &rows, q, workspaceID, limit); err != nil {
+		return nil, fmt.Errorf("memory list null embedding: %w", err)
+	}
+	memories := make([]domain.Memory, len(rows))
+	for i, row := range rows {
+		memories[i] = row.toDomain()
+	}
+	return memories, nil
+}
+
 // cosineSimilarity returns the cosine similarity between two float32 vectors.
 // Returns 0 when either vector is zero-length or the lengths differ.
 func cosineSimilarity(a, b []float32) float64 {
