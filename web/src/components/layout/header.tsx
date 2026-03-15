@@ -18,7 +18,6 @@ import {
   Sparkles,
   Sun,
   Target,
-  Users,
 } from "lucide-react";
 import { useAuthStore } from "@/stores/auth";
 import { useWorkspaceStore } from "@/stores/workspace";
