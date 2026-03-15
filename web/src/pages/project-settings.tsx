@@ -746,23 +746,42 @@ function ProjectAssignmentRulesSection({
 
   const handleSave = async () => {
     setFeedback(null);
+    // Only save values that are project-level overrides, not inherited workspace
+    // values. This prevents accidental workspace inheritance breakage when the
+    // user opens project settings and clicks Save without changing anything.
     const config: AssignmentRulesConfig = {};
-    if (defaultAssignee.trim()) {
-      config.default_assignee = defaultAssignee.trim();
+    const daVal = defaultAssignee.trim();
+    if (daVal) {
+      // Include if explicitly set at project level or changed from workspace value
+      const wsSource = effectiveRules?.default_assignee?.source;
+      const wsVal = effectiveRules?.default_assignee?.value ?? "";
+      if (wsSource === "project" || daVal !== wsVal) {
+        config.default_assignee = daVal;
+      }
     }
-    if (byType.length > 0) {
-      config.by_type = Object.fromEntries(
-        byType
-          .filter((r) => r.type.trim() && r.assignee.trim())
-          .map((r) => [r.type.trim(), r.assignee.trim()]),
-      );
+    const filteredByType = byType.filter((r) => r.type.trim() && r.assignee.trim());
+    if (filteredByType.length > 0) {
+      const projEntries = filteredByType.filter((r) => {
+        const eff = effectiveRules?.by_type?.[r.type.trim()];
+        return !eff || eff.source === "project" || eff.value !== r.assignee.trim();
+      });
+      if (projEntries.length > 0) {
+        config.by_type = Object.fromEntries(
+          projEntries.map((r) => [r.type.trim(), r.assignee.trim()]),
+        );
+      }
     }
-    if (byPriority.length > 0) {
-      config.by_priority = Object.fromEntries(
-        byPriority
-          .filter((r) => r.priority && r.assignee.trim())
-          .map((r) => [r.priority, r.assignee.trim()]),
-      );
+    const filteredByPriority = byPriority.filter((r) => r.priority && r.assignee.trim());
+    if (filteredByPriority.length > 0) {
+      const projEntries = filteredByPriority.filter((r) => {
+        const eff = effectiveRules?.by_priority?.[r.priority];
+        return !eff || eff.source === "project" || eff.value !== r.assignee.trim();
+      });
+      if (projEntries.length > 0) {
+        config.by_priority = Object.fromEntries(
+          projEntries.map((r) => [r.priority, r.assignee.trim()]),
+        );
+      }
     }
     if (fallbackChain.some((v) => v.trim())) {
       config.fallback_chain = fallbackChain.filter((v) => v.trim());

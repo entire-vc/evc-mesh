@@ -126,13 +126,10 @@ export const useRulesStore = create<RulesState>((set) => ({
     workspaceId: string,
     config: AssignmentRulesConfig,
   ) => {
-    await api<AssignmentRulesConfig>(
-      `/api/v1/workspaces/${workspaceId}/rules/assignment`,
-      { method: "PUT", body: config },
-    );
-    // Re-fetch to ensure store has the canonical saved config
+    // PUT now returns the DB-verified saved config (re-fetched server-side).
     const saved = await api<AssignmentRulesConfig>(
       `/api/v1/workspaces/${workspaceId}/rules/assignment`,
+      { method: "PUT", body: config },
     );
     set({ wsAssignmentRules: saved });
   },
@@ -157,13 +154,10 @@ export const useRulesStore = create<RulesState>((set) => ({
     projectId: string,
     config: AssignmentRulesConfig,
   ) => {
-    await api<AssignmentRulesConfig>(
-      `/api/v1/projects/${projectId}/rules/assignment`,
-      { method: "PUT", body: config },
-    );
-    // Re-fetch effective rules after save
+    // PUT now returns effective (merged) rules directly (re-fetched server-side).
     const effective = await api<EffectiveAssignmentRules>(
       `/api/v1/projects/${projectId}/rules/assignment`,
+      { method: "PUT", body: config },
     );
     set({ effectiveAssignmentRules: effective });
   },

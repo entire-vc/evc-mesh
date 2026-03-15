@@ -104,7 +104,14 @@ func (h *RulesHandler) SetWorkspaceAssignmentRules(c echo.Context) error {
 	if err := h.rulesSvc.SetWorkspaceAssignmentRules(c.Request().Context(), wsID, cfg); err != nil {
 		return handleError(c, err)
 	}
-	return c.JSON(http.StatusOK, cfg)
+
+	// Re-fetch the saved config from DB so the response is authoritative
+	// (matches SetProjectWorkflowRules pattern, prevents stale-cache bugs).
+	saved, err := h.rulesSvc.GetWorkspaceAssignmentRules(c.Request().Context(), wsID)
+	if err != nil {
+		return handleError(c, err)
+	}
+	return c.JSON(http.StatusOK, saved)
 }
 
 // GetEffectiveAssignmentRules handles GET /projects/:proj_id/rules/assignment
@@ -136,7 +143,14 @@ func (h *RulesHandler) SetProjectAssignmentRules(c echo.Context) error {
 	if err := h.rulesSvc.SetProjectAssignmentRules(c.Request().Context(), projID, cfg); err != nil {
 		return handleError(c, err)
 	}
-	return c.JSON(http.StatusOK, cfg)
+
+	// Return the effective (merged) rules so the frontend store stays in sync
+	// without needing a separate GET (matches SetProjectWorkflowRules pattern).
+	effective, err := h.rulesSvc.GetEffectiveAssignmentRules(c.Request().Context(), projID)
+	if err != nil {
+		return handleError(c, err)
+	}
+	return c.JSON(http.StatusOK, effective)
 }
 
 // TestAutoAssign handles POST /projects/:proj_id/rules/assignment/test
