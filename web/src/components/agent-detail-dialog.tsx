@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { AlertTriangle, Check, Copy, Pencil, RefreshCw, Trash2, X } from "lucide-react";
+import { AlertTriangle, Check, Copy, Loader2, Pencil, RefreshCw, Trash2, X } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { agentStatusConfig, agentTypeConfig, getEffectiveStatus, isAgentStale } from "@/lib/agent-utils";
 import { formatDate, formatRelative } from "@/lib/utils";
@@ -55,6 +55,8 @@ export function AgentDetailDialog({
   const [newApiKey, setNewApiKey] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [savingSupervisor, setSavingSupervisor] = useState(false);
+  const [supervisorSaved, setSupervisorSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const resetState = useCallback(() => {
@@ -70,6 +72,8 @@ export function AgentDetailDialog({
     setNewApiKey(null);
     setCopied(false);
     setIsLoading(false);
+    setSavingSupervisor(false);
+    setSupervisorSaved(false);
     setError(null);
   }, []);
 
@@ -346,7 +350,7 @@ export function AgentDetailDialog({
         className="max-h-[85vh] overflow-y-auto"
       >
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-3">
+          <DialogTitle className="group/header flex items-center gap-3">
             {editingName ? (
               <div className="flex flex-1 items-center gap-2">
                 <Input
@@ -382,10 +386,11 @@ export function AgentDetailDialog({
                 <span className="flex-1">{agent.name}</span>
                 <Button
                   size="icon"
-                  variant="ghost"
-                  className="h-7 w-7 shrink-0"
+                  variant="outline"
+                  className="h-8 w-8 shrink-0 opacity-0 transition-opacity group-hover/header:opacity-100 focus:opacity-100"
                   onClick={handleStartEditName}
                   title="Edit name"
+                  data-ph-capture-attribute-element="edit-agent-name"
                 >
                   <Pencil className="h-3.5 w-3.5" />
                 </Button>
@@ -467,54 +472,63 @@ export function AgentDetailDialog({
 
           {/* Supervisor (agent or human) */}
           <DetailRow label="Supervisor">
-            <select
-              className="h-8 rounded-md border border-input bg-background px-2 text-sm"
-              value={
-                agent.parent_agent_id
-                  ? `agent:${agent.parent_agent_id}`
-                  : agent.supervisor_user_id
-                    ? `user:${agent.supervisor_user_id}`
-                    : ""
-              }
-              onChange={async (e) => {
-                setIsLoading(true);
-                setError(null);
-                try {
-                  const val = e.target.value;
-                  if (!val) {
-                    await updateAgent(agent.id, { parent_agent_id: "", supervisor_user_id: "" });
-                  } else if (val.startsWith("agent:")) {
-                    await updateAgent(agent.id, { parent_agent_id: val.slice(6), supervisor_user_id: "" });
-                  } else if (val.startsWith("user:")) {
-                    await updateAgent(agent.id, { supervisor_user_id: val.slice(5), parent_agent_id: "" });
-                  }
-                } catch (err) {
-                  setError(err instanceof Error ? err.message : "Failed to update supervisor");
-                } finally {
-                  setIsLoading(false);
+            <div className="flex items-center gap-2">
+              <select
+                className="h-8 rounded-md border border-input bg-background px-2 text-sm disabled:opacity-50"
+                disabled={savingSupervisor}
+                value={
+                  agent.parent_agent_id
+                    ? `agent:${agent.parent_agent_id}`
+                    : agent.supervisor_user_id
+                      ? `user:${agent.supervisor_user_id}`
+                      : ""
                 }
-              }}
-            >
-              <option value="">None (root)</option>
-              {parentCandidates.length > 0 && (
-                <optgroup label="Agents">
-                  {parentCandidates.map((a) => (
-                    <option key={`agent:${a.id}`} value={`agent:${a.id}`}>
-                      {a.name}
-                    </option>
-                  ))}
-                </optgroup>
-              )}
-              {workspaceMembers.length > 0 && (
-                <optgroup label="Members">
-                  {workspaceMembers.map((m) => (
-                    <option key={`user:${m.user_id}`} value={`user:${m.user_id}`}>
-                      {m.user.name || m.user.email}
-                    </option>
-                  ))}
-                </optgroup>
-              )}
-            </select>
+                onChange={async (e) => {
+                  setSavingSupervisor(true);
+                  setSupervisorSaved(false);
+                  setError(null);
+                  try {
+                    const val = e.target.value;
+                    if (!val) {
+                      await updateAgent(agent.id, { parent_agent_id: "", supervisor_user_id: "" });
+                    } else if (val.startsWith("agent:")) {
+                      await updateAgent(agent.id, { parent_agent_id: val.slice(6), supervisor_user_id: "" });
+                    } else if (val.startsWith("user:")) {
+                      await updateAgent(agent.id, { supervisor_user_id: val.slice(5), parent_agent_id: "" });
+                    }
+                    setSupervisorSaved(true);
+                    setTimeout(() => setSupervisorSaved(false), 2000);
+                  } catch (err) {
+                    setError(err instanceof Error ? err.message : "Failed to update supervisor");
+                  } finally {
+                    setSavingSupervisor(false);
+                  }
+                }}
+                data-ph-capture-attribute-element="agent-supervisor-select"
+              >
+                <option value="">None (root)</option>
+                {parentCandidates.length > 0 && (
+                  <optgroup label="Agents">
+                    {parentCandidates.map((a) => (
+                      <option key={`agent:${a.id}`} value={`agent:${a.id}`}>
+                        {a.name}
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
+                {workspaceMembers.length > 0 && (
+                  <optgroup label="Members">
+                    {workspaceMembers.map((m) => (
+                      <option key={`user:${m.user_id}`} value={`user:${m.user_id}`}>
+                        {m.user.name || m.user.email}
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
+              </select>
+              {savingSupervisor && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
+              {supervisorSaved && <Check className="h-4 w-4 text-green-500" />}
+            </div>
           </DetailRow>
 
           {/* Role */}
@@ -551,23 +565,24 @@ export function AgentDetailDialog({
                 </Button>
               </div>
             ) : (
-              <div className="flex items-center gap-1.5">
+              <div className="group/role flex items-center gap-1.5">
                 <span className="text-sm">{agent.role || "Not set"}</span>
                 <Button
                   size="icon"
-                  variant="ghost"
-                  className="h-6 w-6 shrink-0"
+                  variant="outline"
+                  className="h-8 w-8 shrink-0 opacity-0 transition-opacity group-hover/role:opacity-100 focus:opacity-100"
                   onClick={handleStartEditRole}
                   title="Edit role"
+                  data-ph-capture-attribute-element="edit-agent-role"
                 >
-                  <Pencil className="h-3 w-3" />
+                  <Pencil className="h-3.5 w-3.5" />
                 </Button>
               </div>
             )}
           </DetailRow>
 
           {/* Description */}
-          <div>
+          <div className="group/desc">
             <div className="mb-1.5 flex items-center justify-between">
               <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
                 Description
@@ -575,12 +590,13 @@ export function AgentDetailDialog({
               {!editingDescription && (
                 <Button
                   size="icon"
-                  variant="ghost"
-                  className="h-6 w-6"
+                  variant="outline"
+                  className="h-8 w-8 opacity-0 transition-opacity group-hover/desc:opacity-100 focus:opacity-100"
                   onClick={handleStartEditDescription}
                   title="Edit description"
+                  data-ph-capture-attribute-element="edit-agent-description"
                 >
-                  <Pencil className="h-3 w-3" />
+                  <Pencil className="h-3.5 w-3.5" />
                 </Button>
               )}
             </div>
@@ -636,7 +652,7 @@ export function AgentDetailDialog({
           </div>
 
           {/* Push Notifications */}
-          <div>
+          <div className="group/callback">
             <div className="mb-1.5 flex items-center justify-between">
               <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
                 Push Notifications
@@ -644,12 +660,13 @@ export function AgentDetailDialog({
               {!editingCallbackUrl && (
                 <Button
                   size="icon"
-                  variant="ghost"
-                  className="h-6 w-6"
+                  variant="outline"
+                  className="h-8 w-8 opacity-0 transition-opacity group-hover/callback:opacity-100 focus:opacity-100"
                   onClick={handleStartEditCallbackUrl}
                   title="Edit callback URL"
+                  data-ph-capture-attribute-element="edit-agent-callback-url"
                 >
-                  <Pencil className="h-3 w-3" />
+                  <Pencil className="h-3.5 w-3.5" />
                 </Button>
               )}
             </div>
@@ -736,6 +753,7 @@ export function AgentDetailDialog({
             size="sm"
             className="gap-2"
             onClick={() => setMode("regenerate-confirm")}
+            data-ph-capture-attribute-element="regenerate-agent-key"
           >
             <RefreshCw className="h-3.5 w-3.5" />
             Regenerate Key
@@ -745,6 +763,7 @@ export function AgentDetailDialog({
             size="sm"
             className="gap-2"
             onClick={() => setMode("delete-confirm")}
+            data-ph-capture-attribute-element="delete-agent"
           >
             <Trash2 className="h-3.5 w-3.5" />
             Delete Agent
