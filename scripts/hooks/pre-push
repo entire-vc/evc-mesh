@@ -1,29 +1,41 @@
 #!/bin/bash
 # Pre-push hook for Go repos (evc-mesh, evc-mesh-mcp)
-# Blocks direct push to main/master, runs go build + go test
+# Blocks direct push to main/master, runs go build + go vet + go test
 #
-# Install: cp scripts/hooks/pre-push .git/hooks/pre-push && chmod +x .git/hooks/pre-push
+# Install:
+#   ./scripts/install-hooks.sh          # current repo
+#   ./scripts/install-hooks.sh PATH go  # another repo
 
 set -e
 
+# Navigate to repo root (hook may run from a subdirectory)
+cd "$(git rev-parse --show-toplevel)"
+
 remote="$1"
 
-while read local_ref local_sha remote_ref remote_sha; do
-    if echo "$remote_ref" | grep -qE '(refs/heads/main|refs/heads/master)$'; then
+# Block pushes to main/master
+while read -r local_ref local_sha remote_ref remote_sha; do
+    if [[ "$remote_ref" =~ refs/heads/(main|master)$ ]]; then
         echo "ERROR: Direct push to main/master is blocked."
         echo "Please use a feature branch and create a PR."
         exit 1
     fi
 done
 
-echo "Running go build..."
+echo "==> go build ./..."
 if ! go build ./...; then
     echo "ERROR: go build failed. Push aborted."
     exit 1
 fi
 
-echo "Running go test..."
-if ! go test ./... -count=1 -timeout 120s 2>&1; then
+echo "==> go vet ./..."
+if ! go vet ./...; then
+    echo "ERROR: go vet failed. Push aborted."
+    exit 1
+fi
+
+echo "==> go test ./..."
+if ! go test ./... -count=1 -timeout 120s; then
     echo "ERROR: go test failed. Push aborted."
     exit 1
 fi
