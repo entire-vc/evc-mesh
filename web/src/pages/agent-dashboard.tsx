@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Bot, Plus } from "lucide-react";
+import { Bot, Loader2, Plus } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { agentStatusConfig, agentTypeConfig, getEffectiveStatus, isAgentStale } from "@/lib/agent-utils";
 import { formatRelative } from "@/lib/utils";
@@ -58,7 +58,7 @@ export function AgentDashboardPage() {
     <div className="space-y-6">
       {/* Toolbar */}
       <div className="flex justify-end">
-        <Button onClick={() => setRegisterOpen(true)}>
+        <Button onClick={() => setRegisterOpen(true)} data-ph-capture-attribute-element="register-agent-button">
           <Plus className="h-4 w-4" />
           Register Agent
         </Button>
@@ -66,19 +66,25 @@ export function AgentDashboardPage() {
 
       {/* Content */}
       {isLoading ? (
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {Array.from({ length: 3 }).map((_, i) => (
-            <Card key={i}>
-              <CardHeader>
-                <Skeleton className="h-5 w-32" />
-                <Skeleton className="h-4 w-20" />
-              </CardHeader>
-              <CardContent>
-                <Skeleton className="h-4 w-48" />
-                <Skeleton className="mt-2 h-4 w-36" />
-              </CardContent>
-            </Card>
-          ))}
+        <div className="space-y-4">
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            Loading agents...
+          </div>
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <Card key={i} className="pointer-events-none opacity-60">
+                <CardHeader>
+                  <Skeleton className="h-5 w-32" />
+                  <Skeleton className="h-4 w-20" />
+                </CardHeader>
+                <CardContent>
+                  <Skeleton className="h-4 w-48" />
+                  <Skeleton className="mt-2 h-4 w-36" />
+                </CardContent>
+              </Card>
+            ))}
+          </div>
         </div>
       ) : agents.length === 0 ? (
         <Card>
@@ -142,10 +148,12 @@ function AgentCard({
   return (
     <Card
       className={cn(
-        "cursor-pointer transition-shadow hover:shadow-md",
+        "cursor-pointer transition-all hover:shadow-md active:scale-[0.98] active:shadow-sm",
         stale && agent.status === "online" && "border-yellow-300 dark:border-yellow-700",
       )}
       onClick={onClick}
+      data-ph-capture-attribute-element="agent-card"
+      data-ph-capture-attribute-agent-id={agent.id}
     >
       <CardHeader className="pb-3">
         <div className="flex items-start justify-between">
