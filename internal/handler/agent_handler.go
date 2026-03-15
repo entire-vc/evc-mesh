@@ -313,6 +313,11 @@ func (h *AgentHandler) Heartbeat(c echo.Context) error {
 	var req heartbeatRequest
 	_ = c.Bind(&req) // optional body; empty body is fine
 
+	// Auto-set status to "busy" when processing a task (unless explicitly set otherwise).
+	if req.CurrentTaskID != nil && *req.CurrentTaskID != "" && req.Status == "" {
+		req.Status = "busy"
+	}
+
 	var input *service.HeartbeatInput
 	if req.Status != "" || req.Message != "" || req.Metadata != nil || req.CurrentTaskID != nil {
 		input = &service.HeartbeatInput{
