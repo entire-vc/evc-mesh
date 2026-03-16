@@ -69,10 +69,10 @@ type AssignmentRulesConfig struct {
 
 // WorkflowRulesConfig is the typed structure for project workflow rules (rule_type = "workflow").
 type WorkflowRulesConfig struct {
-	Statuses        []string                    `json:"statuses,omitempty"`
-	Transitions     map[string]TransitionRule   `json:"transitions,omitempty"`
-	EnforcementMode string                      `json:"enforcement_mode,omitempty"`
-	Policies        map[string]PolicyRule       `json:"policies,omitempty"`
+	Statuses        []string                  `json:"statuses,omitempty"`
+	Transitions     map[string]TransitionRule `json:"transitions,omitempty"`
+	EnforcementMode string                    `json:"enforcement_mode,omitempty"`
+	Policies        map[string]PolicyRule     `json:"policies,omitempty"`
 }
 
 // TransitionRule defines allowed transitions from a given status.
@@ -182,7 +182,7 @@ type EffectiveAssignmentRules struct {
 	DefaultAssignee *EffectiveAssignmentRule           `json:"default_assignee,omitempty"`
 	ByType          map[string]EffectiveAssignmentRule `json:"by_type,omitempty"`
 	ByPriority      map[string]EffectiveAssignmentRule `json:"by_priority,omitempty"`
-	FallbackChain   []string                          `json:"fallback_chain,omitempty"`
+	FallbackChain   []string                           `json:"fallback_chain,omitempty"`
 }
 
 // WorkflowRulesResponse is the response for GET /projects/:proj_id/rules/workflow.
@@ -207,10 +207,10 @@ type MyPermissions struct {
 
 // MeshConfig is the unified workspace configuration format for YAML import/export.
 type MeshConfig struct {
-	Workspace         string                        `yaml:"workspace" json:"workspace"`
-	Version           int                           `yaml:"version" json:"version"`
-	Team              *TeamConfig                   `yaml:"team,omitempty" json:"team,omitempty"`
-	AssignmentRules   *AssignmentRulesConfig        `yaml:"assignment_rules,omitempty" json:"assignment_rules,omitempty"`
+	Workspace         string                         `yaml:"workspace" json:"workspace"`
+	Version           int                            `yaml:"version" json:"version"`
+	Team              *TeamConfig                    `yaml:"team,omitempty" json:"team,omitempty"`
+	AssignmentRules   *AssignmentRulesConfig         `yaml:"assignment_rules,omitempty" json:"assignment_rules,omitempty"`
 	WorkflowTemplates map[string]WorkflowRulesConfig `yaml:"workflow_templates,omitempty" json:"workflow_templates,omitempty"`
 }
 
@@ -248,7 +248,7 @@ type ImportResult struct {
 	Team              *TeamImportResult      `json:"team,omitempty"`
 	AssignmentRules   *ImportRulesResult     `json:"assignment_rules,omitempty"`
 	WorkflowTemplates *ImportTemplatesResult `json:"workflow_templates,omitempty"`
-	Warnings          []string              `json:"warnings"`
+	Warnings          []string               `json:"warnings"`
 }
 
 // TeamImportResult holds counts and errors from a team import operation.

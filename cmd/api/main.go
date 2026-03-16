@@ -39,7 +39,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to connect to database: %v", err)
 	}
-	defer db.Close()
+	defer db.Close() //nolint:errcheck
 	log.Println("Connected to PostgreSQL")
 
 	// 3. Run database migrations.

@@ -82,7 +82,7 @@ func (h *TaskContextHandler) GetTaskContext(c echo.Context) error {
 
 	// Cache lookup — skip on miss or unavailability.
 	if cached, ok := h.cache.Get(c.Request().Context(), taskID); ok {
-		c.Response().Header().Set(echo.HeaderContentType, echo.MIMEApplicationJSONCharsetUTF8)
+		c.Response().Header().Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
 		return c.JSONBlob(http.StatusOK, cached)
 	}
 
@@ -150,7 +150,7 @@ func (h *TaskContextHandler) GetTaskContext(c echo.Context) error {
 	data, marshalErr := json.Marshal(resp)
 	if marshalErr == nil {
 		h.cache.Set(c.Request().Context(), taskID, data)
-		c.Response().Header().Set(echo.HeaderContentType, echo.MIMEApplicationJSONCharsetUTF8)
+		c.Response().Header().Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
 		return c.JSONBlob(http.StatusOK, data)
 	}
 

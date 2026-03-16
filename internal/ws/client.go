@@ -15,10 +15,7 @@ const (
 	// writeWait is the time allowed to write a message to the client.
 	writeWait = 10 * time.Second
 
-	// pongWait is the time allowed to read the next pong message from the client.
-	pongWait = 60 * time.Second
-
-	// pingInterval is the interval at which pings are sent. Must be less than pongWait.
+	// pingInterval is the interval at which pings are sent.
 	pingInterval = 30 * time.Second
 
 	// maxMessageSize is the maximum message size allowed from the client.
@@ -75,7 +72,7 @@ func NewClient(conn *websocket.Conn, hub *Hub, userID uuid.UUID, workspaceSlug s
 func (c *Client) ReadPump(ctx context.Context) {
 	defer func() {
 		c.Hub.unregister <- c
-		c.Conn.Close(websocket.StatusNormalClosure, "closing")
+		c.Conn.Close(websocket.StatusNormalClosure, "closing") //nolint:errcheck
 	}()
 
 	c.Conn.SetReadLimit(maxMessageSize)
@@ -121,7 +118,7 @@ func (c *Client) WritePump(ctx context.Context) {
 	ticker := time.NewTicker(pingInterval)
 	defer func() {
 		ticker.Stop()
-		c.Conn.Close(websocket.StatusNormalClosure, "closing")
+		c.Conn.Close(websocket.StatusNormalClosure, "closing") //nolint:errcheck
 	}()
 
 	for {

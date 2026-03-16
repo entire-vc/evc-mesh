@@ -18,19 +18,19 @@ import (
 // AgentNotification is the payload sent to an agent via push mechanisms.
 // It follows the spec format with a full task snapshot and change diff.
 type AgentNotification struct {
-	EventType   string         `json:"event_type"`              // task.assigned, task.created, task.status_changed, task.commented
-	Timestamp   time.Time      `json:"timestamp"`               //nolint:all
-	WorkspaceID uuid.UUID      `json:"workspace_id"`            //nolint:all
-	Task        map[string]any `json:"task"`                    // Full task snapshot
-	AgentID     uuid.UUID      `json:"agent_id"`                // Target agent
-	ActorID     uuid.UUID      `json:"actor_id"`                // Who initiated the action
-	ActorType   string         `json:"actor_type"`              // "agent" | "user"
-	ActorName   string         `json:"actor_name"`              // Display name of actor
-	Changes     map[string]any `json:"changes,omitempty"`       // {field: {old, new}}
-	Comment     map[string]any `json:"comment,omitempty"`       // For task.commented events
-	TaskID      uuid.UUID      `json:"task_id,omitempty"`       // Kept for Redis/SSE consumers
-	ProjectID   uuid.UUID      `json:"project_id,omitempty"`    // Kept for Redis/SSE consumers
-	Payload     map[string]any `json:"payload,omitempty"`       // Deprecated — kept for backwards compat
+	EventType   string         `json:"event_type"`           // task.assigned, task.created, task.status_changed, task.commented
+	Timestamp   time.Time      `json:"timestamp"`            //nolint:all
+	WorkspaceID uuid.UUID      `json:"workspace_id"`         //nolint:all
+	Task        map[string]any `json:"task"`                 // Full task snapshot
+	AgentID     uuid.UUID      `json:"agent_id"`             // Target agent
+	ActorID     uuid.UUID      `json:"actor_id"`             // Who initiated the action
+	ActorType   string         `json:"actor_type"`           // "agent" | "user"
+	ActorName   string         `json:"actor_name"`           // Display name of actor
+	Changes     map[string]any `json:"changes,omitempty"`    // {field: {old, new}}
+	Comment     map[string]any `json:"comment,omitempty"`    // For task.commented events
+	TaskID      uuid.UUID      `json:"task_id,omitempty"`    // Kept for Redis/SSE consumers
+	ProjectID   uuid.UUID      `json:"project_id,omitempty"` // Kept for Redis/SSE consumers
+	Payload     map[string]any `json:"payload,omitempty"`    // Deprecated — kept for backwards compat
 }
 
 // AgentNotifyService sends push notifications to agents via callback URL and Redis pub/sub.
@@ -130,7 +130,7 @@ func (s *agentNotifyService) deliverWithRetry(callbackURL string, agentID uuid.U
 			continue // timeout or network error — retry
 		}
 		io.Copy(io.Discard, resp.Body) //nolint:errcheck
-		resp.Body.Close()
+		resp.Body.Close()              //nolint:errcheck
 
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 			log.Printf("[agent-notify] callback delivered for agent %s (attempt %d, url: %s)", agentID, attempt+1, callbackURL)

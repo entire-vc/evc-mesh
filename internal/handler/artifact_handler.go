@@ -74,7 +74,7 @@ func (h *ArtifactHandler) Upload(c echo.Context) error {
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, apierror.InternalError("failed to open uploaded file"))
 	}
-	defer file.Close()
+	defer file.Close() //nolint:errcheck
 
 	// Determine uploader from context.
 	var uploadedBy uuid.UUID

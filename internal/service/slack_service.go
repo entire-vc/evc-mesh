@@ -16,8 +16,8 @@ import (
 )
 
 const (
-	slackHTTPTimeout      = 5 * time.Second
-	slackDefaultBaseURL   = "https://mesh.entire.vc"
+	slackHTTPTimeout    = 5 * time.Second
+	slackDefaultBaseURL = "https://mesh.entire.vc"
 )
 
 // slackConfig is the Slack Incoming Webhook configuration stored as JSONB
@@ -30,14 +30,14 @@ type slackConfig struct {
 
 // SlackMessage is the top-level Incoming Webhook payload sent to Slack.
 type SlackMessage struct {
-	Text   string        `json:"text,omitempty"`
-	Blocks []slackBlock  `json:"blocks,omitempty"`
+	Text   string       `json:"text,omitempty"`
+	Blocks []slackBlock `json:"blocks,omitempty"`
 }
 
 // slackBlock is a Slack Block Kit element.
 type slackBlock struct {
-	Type string          `json:"type"`
-	Text *slackTextObj   `json:"text,omitempty"`
+	Type   string         `json:"type"`
+	Text   *slackTextObj  `json:"text,omitempty"`
 	Fields []slackTextObj `json:"fields,omitempty"`
 }
 
@@ -49,14 +49,14 @@ type slackTextObj struct {
 
 // TaskEvent carries the data required to build a Slack notification for a task lifecycle event.
 type TaskEvent struct {
-	EventType   string
-	TaskID      uuid.UUID
-	TaskTitle   string
-	ProjectID   uuid.UUID
-	ProjectName string
-	OldStatus   string
-	NewStatus   string
-	Priority    string
+	EventType    string
+	TaskID       uuid.UUID
+	TaskTitle    string
+	ProjectID    uuid.UUID
+	ProjectName  string
+	OldStatus    string
+	NewStatus    string
+	Priority     string
 	AssigneeName string
 	// BaseURL is the web UI base URL used to build task deep-links (e.g. "https://mesh.entire.vc").
 	BaseURL string
@@ -135,7 +135,7 @@ func (s *slackService) SendMessage(ctx context.Context, webhookURL string, messa
 	if err != nil {
 		return fmt.Errorf("http post to slack: %w", err)
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("slack returned non-2xx status: %d", resp.StatusCode)

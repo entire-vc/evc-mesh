@@ -390,7 +390,7 @@ func (h *MemoryHandler) ImportMemories(c echo.Context) error {
 	if body == nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("request body is required"))
 	}
-	defer body.Close()
+	defer body.Close() //nolint:errcheck
 
 	// Read the raw YAML body (limit to 10 MB to prevent abuse).
 	const maxSize = 10 * 1024 * 1024

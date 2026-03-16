@@ -210,7 +210,7 @@ func (h *ActivityHandler) Export(c echo.Context) error {
 func (h *ActivityHandler) exportCSV(c echo.Context, entries []domain.ActivityLog, dateTag string) error {
 	filename := fmt.Sprintf("audit-log-%s.csv", dateTag)
 	c.Response().Header().Set("Content-Type", "text/csv")
-	c.Response().Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
+	c.Response().Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename)) //nolint:gocritic // HTTP Content-Disposition needs literal quotes, not Go %q escaping
 	c.Response().WriteHeader(http.StatusOK)
 
 	w := csv.NewWriter(c.Response())
@@ -252,7 +252,7 @@ func (h *ActivityHandler) exportCSV(c echo.Context, entries []domain.ActivityLog
 func (h *ActivityHandler) exportJSON(c echo.Context, entries []domain.ActivityLog, dateTag string) error {
 	filename := fmt.Sprintf("audit-log-%s.json", dateTag)
 	c.Response().Header().Set("Content-Type", "application/json")
-	c.Response().Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
+	c.Response().Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename)) //nolint:gocritic // HTTP Content-Disposition needs literal quotes, not Go %q escaping
 	c.Response().WriteHeader(http.StatusOK)
 
 	enc := json.NewEncoder(c.Response())

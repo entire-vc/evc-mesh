@@ -278,7 +278,7 @@ func (s *webhookService) dispatchOne(wh domain.WebhookConfig, eventType string, 
 
 // sendHTTP performs a single HTTP POST to the webhook URL with HMAC-SHA256 signature headers.
 // Returns (status, body, duration_ms, error).
-func (s *webhookService) sendHTTP(wh domain.WebhookConfig, eventType string, deliveryID uuid.UUID, payloadBytes []byte, attempt int) (int, string, int, error) {
+func (s *webhookService) sendHTTP(wh domain.WebhookConfig, eventType string, deliveryID uuid.UUID, payloadBytes []byte, _ int) (int, string, int, error) {
 	start := time.Now()
 
 	// Compute HMAC-SHA256 signature.
@@ -304,7 +304,7 @@ func (s *webhookService) sendHTTP(wh domain.WebhookConfig, eventType string, del
 	if err != nil {
 		return 0, "", duration, fmt.Errorf("http post: %w", err)
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 
 	bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 	return resp.StatusCode, string(bodyBytes), duration, nil

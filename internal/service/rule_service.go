@@ -325,7 +325,7 @@ func (s *ruleService) Evaluate(ctx context.Context, input EvaluateInput) ([]doma
 // ============================================================================
 
 // resolveInheritance implements "most specific wins per rule_type, additive across types."
-func resolveInheritance(candidates []domain.Rule, ruleCtx RuleContext) []domain.Rule {
+func resolveInheritance(candidates []domain.Rule, _ RuleContext) []domain.Rule {
 	// scopeRank: lower = more specific. Agent > Project > Workspace.
 	scopeRank := map[domain.RuleScope]int{
 		domain.RuleScopeWorkspace: 0,

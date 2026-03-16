@@ -114,7 +114,6 @@ func (r *CommentRepo) ListByTask(ctx context.Context, taskID uuid.UUID, filter r
 	if !filter.IncludeInternal {
 		conditions = append(conditions, fmt.Sprintf("c.is_internal = $%d", argIdx))
 		args = append(args, false)
-		argIdx++
 	}
 
 	where := "WHERE " + joinAnd(conditions)

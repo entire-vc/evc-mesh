@@ -151,7 +151,7 @@ func (c *Client) request(ctx context.Context, method, path string, body, result 
 	if err != nil {
 		return fmt.Errorf("%s %s: %w", method, path, err)
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 
 	if resp.StatusCode >= 400 {
 		return parseAPIError(resp)

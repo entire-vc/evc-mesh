@@ -47,14 +47,14 @@ type webhookEventType = string
 
 // webhookDomain is a local test representation of a webhook.
 type webhookDomain struct {
-	ID               uuid.UUID         `json:"id"`
-	WorkspaceID      uuid.UUID         `json:"workspace_id"`
-	URL              string            `json:"url"`
+	ID               uuid.UUID          `json:"id"`
+	WorkspaceID      uuid.UUID          `json:"workspace_id"`
+	URL              string             `json:"url"`
 	Events           []webhookEventType `json:"events"`
-	IsActive         bool              `json:"is_active"`
-	ConsecutiveFails int               `json:"consecutive_fails"`
-	CreatedAt        time.Time         `json:"created_at"`
-	UpdatedAt        time.Time         `json:"updated_at"`
+	IsActive         bool               `json:"is_active"`
+	ConsecutiveFails int                `json:"consecutive_fails"`
+	CreatedAt        time.Time          `json:"created_at"`
+	UpdatedAt        time.Time          `json:"updated_at"`
 }
 
 // ---------------------------------------------------------------------------
@@ -255,9 +255,9 @@ func TestWebhookHandler_Delete(t *testing.T) {
 
 func TestWebhookHandler_RequestParsing_CreateBody(t *testing.T) {
 	type createWebhookRequest struct {
-		URL    string            `json:"url"`
+		URL    string             `json:"url"`
 		Events []webhookEventType `json:"events"`
-		Secret string            `json:"secret"`
+		Secret string             `json:"secret"`
 	}
 
 	t.Run("valid body parses correctly", func(t *testing.T) {
@@ -295,7 +295,7 @@ func TestWebhookHandler_RequestParsing_CreateBody(t *testing.T) {
 func TestWebhookHandler_RequestParsing_UpdateBody(t *testing.T) {
 	type updateWebhookRequest struct {
 		URL      *string            `json:"url"`
-		Events   []webhookEventType  `json:"events"`
+		Events   []webhookEventType `json:"events"`
 		Secret   *string            `json:"secret"`
 		IsActive *bool              `json:"is_active"`
 	}
@@ -413,7 +413,7 @@ func TestWebhookHandler_ErrorMapping(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodGet, "/", nil)
+			req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
 			rec := httptest.NewRecorder()
 			c := e.NewContext(req, rec)
 
@@ -434,7 +434,7 @@ func TestWebhookHandler_UUIDParamExtraction(t *testing.T) {
 
 	t.Run("valid UUID param is parsed correctly", func(t *testing.T) {
 		id := uuid.New()
-		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
 		rec := httptest.NewRecorder()
 		c := e.NewContext(req, rec)
 		c.SetParamNames("webhook_id")
@@ -446,7 +446,7 @@ func TestWebhookHandler_UUIDParamExtraction(t *testing.T) {
 	})
 
 	t.Run("invalid UUID param causes parse error", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
 		rec := httptest.NewRecorder()
 		c := e.NewContext(req, rec)
 		c.SetParamNames("webhook_id")
@@ -507,7 +507,7 @@ func TestWebhookHandler_AuthRequired(t *testing.T) {
 		{
 			name: "with Bearer token passes middleware",
 			setupReq: func() *http.Request {
-				req := httptest.NewRequest(http.MethodGet, "/workspaces/"+wsID.String()+"/webhooks", nil)
+				req := httptest.NewRequest(http.MethodGet, "/workspaces/"+wsID.String()+"/webhooks", http.NoBody)
 				req.Header.Set("Authorization", "Bearer some-token")
 				return req
 			},
@@ -516,7 +516,7 @@ func TestWebhookHandler_AuthRequired(t *testing.T) {
 		{
 			name: "with agent key passes middleware",
 			setupReq: func() *http.Request {
-				req := httptest.NewRequest(http.MethodGet, "/workspaces/"+wsID.String()+"/webhooks", nil)
+				req := httptest.NewRequest(http.MethodGet, "/workspaces/"+wsID.String()+"/webhooks", http.NoBody)
 				req.Header.Set("X-Agent-Key", "agk_workspace_randompart12345678901234")
 				return req
 			},

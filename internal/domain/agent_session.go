@@ -68,21 +68,21 @@ func (c ComplianceDetail) ComputeScore() float32 {
 // Sessions accumulate metrics (tool calls, tokens, cost, compliance) for monitoring
 // and are used to detect stale/abandoned sessions via EndStale.
 type AgentSession struct {
-	ID              uuid.UUID          `json:"id" db:"id"`
-	WorkspaceID     uuid.UUID          `json:"workspace_id" db:"workspace_id"`
-	AgentID         uuid.UUID          `json:"agent_id" db:"agent_id"`
-	StartedAt       time.Time          `json:"started_at" db:"started_at"`
-	EndedAt         *time.Time         `json:"ended_at,omitempty" db:"ended_at"`
-	Status          AgentSessionStatus `json:"status" db:"status"`
-	ToolCalls       int                `json:"tool_calls" db:"tool_calls"`
-	ToolBreakdown   json.RawMessage    `json:"tool_breakdown" db:"tool_breakdown"`
-	TasksTouched    []uuid.UUID        `json:"tasks_touched" db:"tasks_touched"`
-	EventsPublished int                `json:"events_published" db:"events_published"`
-	MemoriesCreated int                `json:"memories_created" db:"memories_created"`
-	ModelUsed       string             `json:"model_used" db:"model_used"`
-	TokensIn        int64              `json:"tokens_in" db:"tokens_in"`
-	TokensOut       int64              `json:"tokens_out" db:"tokens_out"`
-	EstimatedCost   float64            `json:"estimated_cost" db:"estimated_cost"`
-	ComplianceScore float32            `json:"compliance_score" db:"compliance_score"`
-	ComplianceDetail json.RawMessage   `json:"compliance_detail" db:"compliance_detail"`
+	ID               uuid.UUID          `json:"id" db:"id"`
+	WorkspaceID      uuid.UUID          `json:"workspace_id" db:"workspace_id"`
+	AgentID          uuid.UUID          `json:"agent_id" db:"agent_id"`
+	StartedAt        time.Time          `json:"started_at" db:"started_at"`
+	EndedAt          *time.Time         `json:"ended_at,omitempty" db:"ended_at"`
+	Status           AgentSessionStatus `json:"status" db:"status"`
+	ToolCalls        int                `json:"tool_calls" db:"tool_calls"`
+	ToolBreakdown    json.RawMessage    `json:"tool_breakdown" db:"tool_breakdown"`
+	TasksTouched     []uuid.UUID        `json:"tasks_touched" db:"tasks_touched"`
+	EventsPublished  int                `json:"events_published" db:"events_published"`
+	MemoriesCreated  int                `json:"memories_created" db:"memories_created"`
+	ModelUsed        string             `json:"model_used" db:"model_used"`
+	TokensIn         int64              `json:"tokens_in" db:"tokens_in"`
+	TokensOut        int64              `json:"tokens_out" db:"tokens_out"`
+	EstimatedCost    float64            `json:"estimated_cost" db:"estimated_cost"`
+	ComplianceScore  float32            `json:"compliance_score" db:"compliance_score"`
+	ComplianceDetail json.RawMessage    `json:"compliance_detail" db:"compliance_detail"`
 }

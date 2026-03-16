@@ -200,8 +200,8 @@ func evalRequireSubtasksDone(ctx context.Context, rule domain.Rule, input Evalua
 // ============================================================================
 
 type maxInProgressConfig struct {
-	Limit              int      `json:"limit"`
-	StatusCategories   []string `json:"status_categories"`
+	Limit            int      `json:"limit"`
+	StatusCategories []string `json:"status_categories"`
 }
 
 func evalMaxInProgress(ctx context.Context, rule domain.Rule, input EvaluateInput, deps evaluatorDeps) (*domain.RuleViolation, error) {

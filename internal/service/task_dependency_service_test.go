@@ -15,7 +15,7 @@ import (
 )
 
 // setupTaskDependencyService returns a taskDependencyService wired to fresh mocks.
-func setupTaskDependencyService() (*taskDependencyService, *MockTaskDependencyRepository, *MockTaskRepository, *MockActivityLogRepository) {
+func setupTaskDependencyService() (*taskDependencyService, *MockTaskDependencyRepository, *MockTaskRepository) {
 	depRepo := NewMockTaskDependencyRepository()
 	taskRepo := NewMockTaskRepository()
 	activityRepo := NewMockActivityLogRepository()
@@ -24,7 +24,7 @@ func setupTaskDependencyService() (*taskDependencyService, *MockTaskDependencyRe
 	// Freeze the clock.
 	timeNow = func() time.Time { return frozenTime }
 
-	return svc, depRepo, taskRepo, activityRepo
+	return svc, depRepo, taskRepo
 }
 
 // helper to add a task to the mock repo.
@@ -159,7 +159,7 @@ func TestTaskDependencyService_Create(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			svc, depRepo, taskRepo, _ := setupTaskDependencyService()
+			svc, depRepo, taskRepo := setupTaskDependencyService()
 			ctx := context.Background()
 			dep := tt.setup(depRepo, taskRepo)
 
@@ -189,9 +189,9 @@ func TestTaskDependencyService_Create(t *testing.T) {
 
 func TestTaskDependencyService_CheckCycle(t *testing.T) {
 	tests := []struct {
-		name           string
-		setup          func(depRepo *MockTaskDependencyRepository, taskRepo *MockTaskRepository) (taskID, dependsOnTaskID uuid.UUID)
-		wantCycle      bool
+		name      string
+		setup     func(depRepo *MockTaskDependencyRepository, taskRepo *MockTaskRepository) (taskID, dependsOnTaskID uuid.UUID)
+		wantCycle bool
 	}{
 		{
 			name: "no cycle - independent tasks",
@@ -246,7 +246,7 @@ func TestTaskDependencyService_CheckCycle(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			svc, depRepo, taskRepo, _ := setupTaskDependencyService()
+			svc, depRepo, taskRepo := setupTaskDependencyService()
 			ctx := context.Background()
 			taskID, dependsOnTaskID := tt.setup(depRepo, taskRepo)
 

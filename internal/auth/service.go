@@ -35,18 +35,18 @@ var timeNow = time.Now
 
 // Errors returned by the auth service.
 var (
-	ErrPasswordTooShort      = apierror.BadRequest("password must be at least 8 characters")
-	ErrPasswordTooLong       = apierror.BadRequest("password must be at most 128 characters")
+	ErrPasswordTooShort       = apierror.BadRequest("password must be at least 8 characters")
+	ErrPasswordTooLong        = apierror.BadRequest("password must be at most 128 characters")
 	ErrPasswordWeakComplexity = apierror.BadRequest("password must contain at least one uppercase letter, one lowercase letter, and one digit")
-	ErrInvalidEmail          = apierror.BadRequest("invalid email address")
-	ErrEmailAlreadyExists    = apierror.Conflict("a user with this email already exists")
-	ErrInvalidCredentials    = apierror.Unauthorized("invalid email or password")
-	ErrInvalidRefreshToken   = apierror.Unauthorized("invalid refresh token")
-	ErrRefreshTokenExpired   = apierror.Unauthorized("refresh token has expired")
-	ErrRefreshTokenRevoked   = apierror.Unauthorized("refresh token has been revoked")
-	ErrTokenReused           = apierror.Unauthorized("refresh token reuse detected; all sessions revoked")
-	ErrInvalidAccessToken    = apierror.Unauthorized("invalid or expired access token")
-	ErrUserInactive          = apierror.Unauthorized("user account is inactive")
+	ErrInvalidEmail           = apierror.BadRequest("invalid email address")
+	ErrEmailAlreadyExists     = apierror.Conflict("a user with this email already exists")
+	ErrInvalidCredentials     = apierror.Unauthorized("invalid email or password")
+	ErrInvalidRefreshToken    = apierror.Unauthorized("invalid refresh token")
+	ErrRefreshTokenExpired    = apierror.Unauthorized("refresh token has expired")
+	ErrRefreshTokenRevoked    = apierror.Unauthorized("refresh token has been revoked")
+	ErrTokenReused            = apierror.Unauthorized("refresh token reuse detected; all sessions revoked")
+	ErrInvalidAccessToken     = apierror.Unauthorized("invalid or expired access token")
+	ErrUserInactive           = apierror.Unauthorized("user account is inactive")
 )
 
 // Claims represents the JWT claims for an access token.

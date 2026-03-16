@@ -49,7 +49,7 @@ func NewTestEnv(t *testing.T) *TestEnv {
 	if err != nil {
 		t.Skipf("API server not available at %s, skipping integration test: %v", baseURL, err)
 	}
-	resp.Body.Close()
+	resp.Body.Close() //nolint:errcheck
 
 	// Connect to database.
 	db, err := sqlx.Connect("postgres", dbDSN)
@@ -60,7 +60,7 @@ func NewTestEnv(t *testing.T) *TestEnv {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	if err := db.PingContext(ctx); err != nil {
-		db.Close()
+		db.Close() //nolint:errcheck
 		t.Skipf("Database ping failed, skipping integration test: %v", err)
 	}
 
@@ -79,7 +79,7 @@ func (e *TestEnv) Cleanup(t *testing.T) {
 		e.cleanupFns[i]()
 	}
 	if e.DB != nil {
-		e.DB.Close()
+		e.DB.Close() //nolint:errcheck
 	}
 }
 
@@ -101,7 +101,7 @@ func (e *TestEnv) Register(t *testing.T, email, password, name string) map[strin
 	resp := e.Post(t, "/api/v1/auth/register", body)
 	if resp.StatusCode != http.StatusCreated {
 		bodyBytes, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
+		resp.Body.Close() //nolint:errcheck
 		t.Fatalf("Register failed with status %d: %s", resp.StatusCode, string(bodyBytes))
 	}
 
@@ -109,7 +109,7 @@ func (e *TestEnv) Register(t *testing.T, email, password, name string) map[strin
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		t.Fatalf("Failed to decode register response: %v", err)
 	}
-	resp.Body.Close()
+	resp.Body.Close() //nolint:errcheck
 
 	// Extract tokens.
 	tokens, ok := result["tokens"].(map[string]interface{})
@@ -131,13 +131,13 @@ func (e *TestEnv) Register(t *testing.T, email, password, name string) map[strin
 	if e.UserID != "" {
 		userID := e.UserID
 		e.OnCleanup(func() {
-			e.DB.ExecContext(context.Background(),
+			e.DB.ExecContext(context.Background(), //nolint:errcheck
 				"DELETE FROM workspace_members WHERE user_id = $1", userID)
-			e.DB.ExecContext(context.Background(),
+			e.DB.ExecContext(context.Background(), //nolint:errcheck
 				"DELETE FROM refresh_tokens WHERE user_id = $1", userID)
-			e.DB.ExecContext(context.Background(),
+			e.DB.ExecContext(context.Background(), //nolint:errcheck
 				"DELETE FROM workspaces WHERE owner_id = $1", userID)
-			e.DB.ExecContext(context.Background(),
+			e.DB.ExecContext(context.Background(), //nolint:errcheck
 				"DELETE FROM users WHERE id = $1", userID)
 		})
 	}
@@ -157,7 +157,7 @@ func (e *TestEnv) Login(t *testing.T, email, password string) map[string]interfa
 	resp := e.Post(t, "/api/v1/auth/login", body)
 	if resp.StatusCode != http.StatusOK {
 		bodyBytes, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
+		resp.Body.Close() //nolint:errcheck
 		t.Fatalf("Login failed with status %d: %s", resp.StatusCode, string(bodyBytes))
 	}
 
@@ -165,7 +165,7 @@ func (e *TestEnv) Login(t *testing.T, email, password string) map[string]interfa
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		t.Fatalf("Failed to decode login response: %v", err)
 	}
-	resp.Body.Close()
+	resp.Body.Close() //nolint:errcheck
 
 	// Extract tokens.
 	tokens, ok := result["tokens"].(map[string]interface{})
@@ -211,7 +211,7 @@ func (e *TestEnv) Delete(t *testing.T, path string) *http.Response {
 // ReadBody reads and returns the response body as bytes, then closes it.
 func (e *TestEnv) ReadBody(t *testing.T, resp *http.Response) []byte {
 	t.Helper()
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
 		t.Fatalf("Failed to read response body: %v", err)
@@ -222,7 +222,7 @@ func (e *TestEnv) ReadBody(t *testing.T, resp *http.Response) []byte {
 // DecodeJSON reads the response body into the target struct.
 func (e *TestEnv) DecodeJSON(t *testing.T, resp *http.Response, target interface{}) {
 	t.Helper()
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 	if err := json.NewDecoder(resp.Body).Decode(target); err != nil {
 		t.Fatalf("Failed to decode JSON response: %v", err)
 	}
@@ -271,6 +271,6 @@ func envOr(key, fallback string) string {
 }
 
 // uniqueEmail generates a unique email for test isolation.
-func uniqueEmail(prefix string) string {
+func uniqueEmail(prefix string) string { //nolint:unused // used by other test files in this package
 	return fmt.Sprintf("%s-%d@test.evc-mesh.local", prefix, time.Now().UnixNano())
 }
