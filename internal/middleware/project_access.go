@@ -44,7 +44,8 @@ func RequireProjectMember(db *sqlx.DB) echo.MiddlewareFunc {
 
 			// For agents: check agent_id in project_members.
 			if IsAgent(c) {
-				agentID, err := GetAgentID(c)
+				var agentID uuid.UUID
+				agentID, err = GetAgentID(c)
 				if err != nil {
 					return c.JSON(http.StatusForbidden, apierror.Forbidden("agent context required"))
 				}

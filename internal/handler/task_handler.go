@@ -106,7 +106,7 @@ func (h *TaskHandler) Create(c echo.Context) error {
 	}
 
 	var req createTaskRequest
-	if err := c.Bind(&req); err != nil {
+	if err = c.Bind(&req); err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
 	}
 
@@ -210,7 +210,7 @@ func (h *TaskHandler) Update(c echo.Context) error {
 	}
 
 	var req updateTaskRequest
-	if err := c.Bind(&req); err != nil {
+	if err = c.Bind(&req); err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
 	}
 
@@ -289,12 +289,12 @@ func (h *TaskHandler) List(c echo.Context) error {
 	}
 
 	var q listTasksQuery
-	if err := c.Bind(&q); err != nil {
+	if err = c.Bind(&q); err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid query parameters"))
 	}
 
 	var pg pagination.Params
-	if err := c.Bind(&pg); err != nil {
+	if err = c.Bind(&pg); err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid pagination parameters"))
 	}
 	pg.Normalize()
@@ -315,7 +315,8 @@ func (h *TaskHandler) List(c echo.Context) error {
 		filter.Labels = []string{q.Labels}
 	}
 	if q.Status != "" {
-		statusID, err := uuid.Parse(q.Status)
+		var statusID uuid.UUID
+		statusID, err = uuid.Parse(q.Status)
 		if err == nil {
 			filter.StatusIDs = []uuid.UUID{statusID}
 		}
@@ -447,7 +448,7 @@ func (h *TaskHandler) AssignTask(c echo.Context) error {
 	}
 
 	var req assignTaskRequest
-	if err := c.Bind(&req); err != nil {
+	if err = c.Bind(&req); err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
 	}
 
@@ -465,7 +466,7 @@ func (h *TaskHandler) AssignTask(c echo.Context) error {
 		AssigneeType: assigneeType,
 	}
 
-	if err := h.taskService.AssignTask(c.Request().Context(), taskID, input); err != nil {
+	if err = h.taskService.AssignTask(c.Request().Context(), taskID, input); err != nil {
 		return handleError(c, err)
 	}
 
@@ -494,7 +495,7 @@ func (h *TaskHandler) CreateSubtask(c echo.Context) error {
 	}
 
 	var req createSubtaskRequest
-	if err := c.Bind(&req); err != nil {
+	if err = c.Bind(&req); err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
 	}
 
@@ -616,7 +617,7 @@ func (h *TaskHandler) Checkout(c echo.Context) error {
 	}
 
 	var req checkoutRequest
-	if err := c.Bind(&req); err != nil {
+	if err = c.Bind(&req); err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
 	}
 
@@ -647,7 +648,7 @@ func (h *TaskHandler) ReleaseCheckout(c echo.Context) error {
 	}
 
 	var req releaseCheckoutRequest
-	if err := c.Bind(&req); err != nil {
+	if err = c.Bind(&req); err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
 	}
 
@@ -675,7 +676,7 @@ func (h *TaskHandler) ExtendCheckout(c echo.Context) error {
 	}
 
 	var req extendCheckoutRequest
-	if err := c.Bind(&req); err != nil {
+	if err = c.Bind(&req); err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
 	}
 
@@ -710,7 +711,7 @@ func (h *TaskHandler) MoveToProject(c echo.Context) error {
 	}
 
 	var req moveToProjectRequest
-	if err := c.Bind(&req); err != nil {
+	if err = c.Bind(&req); err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
 	}
 

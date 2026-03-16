@@ -1,8 +1,38 @@
 version: "2"
-
-run:
-  timeout: 5m
-
+linters:
+  enable:
+    - gocritic
+    - misspell
+    - unconvert
+    - unparam
+  settings:
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - style
+    govet:
+      enable:
+        - shadow
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      - linters:
+          - errcheck
+          - unparam
+        path: _test\.go
+      - linters:
+          - unparam
+          - unused
+        path: mock_
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
 formatters:
   enable:
     - gofmt
@@ -11,30 +41,9 @@ formatters:
     goimports:
       local-prefixes:
         - github.com/entire-vc/evc-mesh
-
-linters:
-  enable:
-    - errcheck
-    - govet
-    - ineffassign
-    - staticcheck
-    - unused
-    - misspell
-    - unconvert
-    - unparam
-    - gocritic
-  settings:
-    gocritic:
-      enabled-tags:
-        - diagnostic
-        - style
   exclusions:
-    rules:
-      - path: _test\.go
-        linters:
-          - errcheck
-          - unparam
-      - path: mock_
-        linters:
-          - unused
-          - unparam
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$

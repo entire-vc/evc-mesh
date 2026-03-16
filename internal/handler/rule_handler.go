@@ -67,7 +67,7 @@ func (h *RuleHandler) CreateWorkspaceRule(c echo.Context) error {
 	}
 
 	var req createRuleRequest
-	if err := c.Bind(&req); err != nil {
+	if err = c.Bind(&req); err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
 	}
 
@@ -134,7 +134,7 @@ func (h *RuleHandler) CreateProjectRule(c echo.Context) error {
 	}
 
 	var req createRuleRequest
-	if err := c.Bind(&req); err != nil {
+	if err = c.Bind(&req); err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
 	}
 
@@ -216,7 +216,7 @@ func (h *RuleHandler) UpdateRule(c echo.Context) error {
 	}
 
 	var req updateRuleRequest
-	if err := c.Bind(&req); err != nil {
+	if err = c.Bind(&req); err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
 	}
 

@@ -53,12 +53,12 @@ func (h *EventHandler) List(c echo.Context) error {
 	}
 
 	var q listEventsQuery
-	if err := c.Bind(&q); err != nil {
+	if err = c.Bind(&q); err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid query parameters"))
 	}
 
 	var pg pagination.Params
-	if err := c.Bind(&pg); err != nil {
+	if err = c.Bind(&pg); err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid pagination parameters"))
 	}
 	pg.Normalize()
@@ -70,13 +70,15 @@ func (h *EventHandler) List(c echo.Context) error {
 		filter.EventType = &et
 	}
 	if q.AgentID != "" {
-		agentID, err := uuid.Parse(q.AgentID)
+		var agentID uuid.UUID
+		agentID, err = uuid.Parse(q.AgentID)
 		if err == nil {
 			filter.AgentID = &agentID
 		}
 	}
 	if q.TaskID != "" {
-		taskID, err := uuid.Parse(q.TaskID)
+		var taskID uuid.UUID
+		taskID, err = uuid.Parse(q.TaskID)
 		if err == nil {
 			filter.TaskID = &taskID
 		}
@@ -102,7 +104,7 @@ func (h *EventHandler) Create(c echo.Context) error {
 	}
 
 	var req createEventRequest
-	if err := c.Bind(&req); err != nil {
+	if err = c.Bind(&req); err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
 	}
 
