@@ -466,6 +466,41 @@ func (s *taskService) MoveTask(ctx context.Context, taskID uuid.UUID, input Move
 		}
 	}
 
+	// Auto-reassign to creator when moved to "review" category.
+	// This ensures the person/agent who created the task gets notified for review.
+	if statusChanged {
+		if newStatus, err := s.statusRepo.GetByID(ctx, *input.StatusID); err == nil && newStatus != nil {
+			if newStatus.Category == domain.StatusCategoryReview && task.CreatedBy != uuid.Nil {
+				// Only reassign if currently assigned to someone else (the agent who did the work).
+				if task.AssigneeID != nil && *task.AssigneeID != task.CreatedBy {
+					task.AssigneeID = &task.CreatedBy
+					// Convert ActorType → AssigneeType (agent→agent, user/system→user).
+					switch task.CreatedByType {
+					case domain.ActorTypeAgent:
+						task.AssigneeType = domain.AssigneeTypeAgent
+					default:
+						task.AssigneeType = domain.AssigneeTypeUser
+					}
+					task.UpdatedAt = timeNow()
+					if err := s.taskRepo.Update(ctx, task); err != nil {
+						log.Printf("[auto-reassign] WARNING: failed to reassign task %s to creator %s: %v", taskID, task.CreatedBy, err)
+					} else {
+						log.Printf("[auto-reassign] task %s reassigned to creator %s on review", taskID, task.CreatedBy)
+						s.logActivity(ctx, task.ProjectID, taskID, "task.assigned", map[string]interface{}{
+							"assignee_id": map[string]interface{}{"old": nil, "new": task.CreatedBy.String()},
+							"reason":      "auto-reassign on review",
+						})
+						// Notify the creator about the reassignment.
+						s.notifyAssignedAgent(ctx, task, "task.assigned", map[string]any{
+							"assignee_id": map[string]any{"old": nil, "new": task.CreatedBy.String()},
+							"reason":      "auto-reassign on review",
+						})
+					}
+				}
+			}
+		}
+	}
+
 	// Dispatch webhook for task.status_changed (agent wakeup pipeline).
 	if statusChanged && s.webhookSvc != nil && s.projectRepo != nil {
 		if proj, err := s.projectRepo.GetByID(ctx, task.ProjectID); err == nil && proj != nil {
