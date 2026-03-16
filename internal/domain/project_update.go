@@ -24,8 +24,8 @@ type TextItem struct {
 
 // ProjectUpdateMetrics holds auto-populated task count metrics for an update.
 type ProjectUpdateMetrics struct {
-	TasksCompleted int `json:"tasks_completed"`
-	TasksTotal     int `json:"tasks_total"`
+	TasksCompleted  int `json:"tasks_completed"`
+	TasksTotal      int `json:"tasks_total"`
 	TasksInProgress int `json:"tasks_in_progress"`
 }
 

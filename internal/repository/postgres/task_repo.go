@@ -109,25 +109,25 @@ type taskRow struct {
 
 func (r *taskRow) toDomain() domain.Task {
 	return domain.Task{
-		ID:             r.ID,
-		ProjectID:      r.ProjectID,
-		StatusID:       r.StatusID,
-		Title:          r.Title,
-		Description:    r.Description,
-		AssigneeID:     r.AssigneeID,
-		AssigneeType:   r.AssigneeType,
-		Priority:       r.Priority,
-		ParentTaskID:   r.ParentTaskID,
-		Position:       r.Position,
-		DueDate:        r.DueDate,
-		EstimatedHours: r.EstimatedHours,
-		CustomFields:   r.CustomFields,
-		Labels:         r.Labels,
-		CreatedBy:      r.CreatedBy,
-		CreatedByType:  r.CreatedByType,
-		CreatedAt:      r.CreatedAt,
-		UpdatedAt:      r.UpdatedAt,
-		CompletedAt:    r.CompletedAt,
+		ID:                      r.ID,
+		ProjectID:               r.ProjectID,
+		StatusID:                r.StatusID,
+		Title:                   r.Title,
+		Description:             r.Description,
+		AssigneeID:              r.AssigneeID,
+		AssigneeType:            r.AssigneeType,
+		Priority:                r.Priority,
+		ParentTaskID:            r.ParentTaskID,
+		Position:                r.Position,
+		DueDate:                 r.DueDate,
+		EstimatedHours:          r.EstimatedHours,
+		CustomFields:            r.CustomFields,
+		Labels:                  r.Labels,
+		CreatedBy:               r.CreatedBy,
+		CreatedByType:           r.CreatedByType,
+		CreatedAt:               r.CreatedAt,
+		UpdatedAt:               r.UpdatedAt,
+		CompletedAt:             r.CompletedAt,
 		RecurringScheduleID:     r.RecurringScheduleID,
 		RecurringInstanceNumber: r.RecurringInstanceNumber,
 		SubtaskCount:            r.SubtaskCount,
@@ -490,7 +490,7 @@ func (r *TaskRepo) ListByStatusCategory(ctx context.Context, workspaceID uuid.UU
 // If the task is locked by a different, non-expired agent, the UPDATE matches 0 rows
 // and ErrCheckoutConflict is returned. No SELECT FOR UPDATE is needed because the
 // single UPDATE statement is itself atomic in PostgreSQL.
-func (r *TaskRepo) AtomicCheckout(ctx context.Context, taskID, agentID uuid.UUID, token uuid.UUID, expiresAt time.Time) error {
+func (r *TaskRepo) AtomicCheckout(ctx context.Context, taskID, agentID, token uuid.UUID, expiresAt time.Time) error {
 	const query = `
 		UPDATE tasks
 		SET checked_out_by  = $1,
@@ -518,7 +518,7 @@ func (r *TaskRepo) AtomicCheckout(ctx context.Context, taskID, agentID uuid.UUID
 // ReleaseCheckout clears the checkout fields on a task. The token must match the
 // stored checkout_token — this prevents a different agent from accidentally
 // releasing another agent's lock.
-func (r *TaskRepo) ReleaseCheckout(ctx context.Context, taskID uuid.UUID, token uuid.UUID) error {
+func (r *TaskRepo) ReleaseCheckout(ctx context.Context, taskID, token uuid.UUID) error {
 	const query = `
 		UPDATE tasks
 		SET checked_out_by  = NULL,
@@ -566,7 +566,7 @@ func (r *TaskRepo) MoveToProject(ctx context.Context, taskID, targetProjectID, t
 // ExtendCheckout pushes the checkout_expires deadline forward. The token must match
 // and the existing checkout must not already be expired (to prevent hijacking an
 // expired slot via extend).
-func (r *TaskRepo) ExtendCheckout(ctx context.Context, taskID uuid.UUID, token uuid.UUID, newExpires time.Time) error {
+func (r *TaskRepo) ExtendCheckout(ctx context.Context, taskID, token uuid.UUID, newExpires time.Time) error {
 	const query = `
 		UPDATE tasks
 		SET checkout_expires = $1,

@@ -68,7 +68,8 @@ func (h *RecurringHandler) Create(c echo.Context) error {
 	}
 
 	var req createRecurringRequest
-	if err := c.Bind(&req); err != nil {
+	err = c.Bind(&req)
+	if err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
 	}
 
@@ -163,7 +164,8 @@ func (h *RecurringHandler) List(c echo.Context) error {
 	}
 
 	var pg pagination.Params
-	if err := c.Bind(&pg); err != nil {
+	err = c.Bind(&pg)
+	if err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid pagination params"))
 	}
 
@@ -200,7 +202,8 @@ func (h *RecurringHandler) Update(c echo.Context) error {
 	}
 
 	var req updateRecurringRequest
-	if err := c.Bind(&req); err != nil {
+	err = c.Bind(&req)
+	if err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
 	}
 
@@ -282,7 +285,8 @@ func (h *RecurringHandler) History(c echo.Context) error {
 	}
 
 	var pg pagination.Params
-	if err := c.Bind(&pg); err != nil {
+	err = c.Bind(&pg)
+	if err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid pagination params"))
 	}
 	// Default: newest first.

@@ -39,9 +39,9 @@ func (h *RulesHandler) GetTeamDirectory(c echo.Context) error {
 
 	format := c.QueryParam("format")
 	if format == "tree" {
-		tree, err := h.rulesSvc.GetTeamDirectoryTree(c.Request().Context(), wsID)
-		if err != nil {
-			return handleError(c, err)
+		tree, treeErr := h.rulesSvc.GetTeamDirectoryTree(c.Request().Context(), wsID)
+		if treeErr != nil {
+			return handleError(c, treeErr)
 		}
 		return c.JSON(http.StatusOK, tree)
 	}
@@ -201,7 +201,7 @@ func (h *RulesHandler) ListViolations(c echo.Context) error {
 
 	limit := 100
 	if l := c.QueryParam("limit"); l != "" {
-		if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 {
+		if parsed, parseErr := strconv.Atoi(l); parseErr == nil && parsed > 0 {
 			limit = parsed
 		}
 	}
@@ -321,4 +321,3 @@ func (h *RulesHandler) SetWorkflowTemplates(c echo.Context) error {
 	}
 	return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
 }
-

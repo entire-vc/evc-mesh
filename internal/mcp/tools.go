@@ -347,10 +347,10 @@ func (s *Server) handleMoveTask(ctx context.Context, request mcpsdk.CallToolRequ
 		return errResult("invalid status_slug: %v", err)
 	}
 
-	if err := s.getRESTClient(ctx).MoveTask(ctx, taskID, map[string]any{
+	if moveErr := s.getRESTClient(ctx).MoveTask(ctx, taskID, map[string]any{
 		"status_id": stID,
-	}); err != nil {
-		return errResult("failed to move task: %v", err)
+	}); moveErr != nil {
+		return errResult("failed to move task: %v", moveErr)
 	}
 
 	// Add optional comment.

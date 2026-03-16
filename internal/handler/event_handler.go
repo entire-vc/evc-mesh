@@ -27,12 +27,12 @@ func NewEventHandler(es service.EventBusService) *EventHandler {
 
 // createEventRequest represents the JSON body for creating an event.
 type createEventRequest struct {
-	EventType  domain.EventType `json:"event_type"`
-	Subject    string           `json:"subject"`
-	Payload    map[string]any   `json:"payload"`
-	TaskID     *uuid.UUID       `json:"task_id"`
-	Tags       []string         `json:"tags"`
-	TTLSeconds int              `json:"ttl_seconds"`
+	EventType  domain.EventType   `json:"event_type"`
+	Subject    string             `json:"subject"`
+	Payload    map[string]any     `json:"payload"`
+	TaskID     *uuid.UUID         `json:"task_id"`
+	Tags       []string           `json:"tags"`
+	TTLSeconds int                `json:"ttl_seconds"`
 	MemoryHint *domain.MemoryHint `json:"memory_hint"`
 }
 
@@ -53,12 +53,14 @@ func (h *EventHandler) List(c echo.Context) error {
 	}
 
 	var q listEventsQuery
-	if err := c.Bind(&q); err != nil {
+	err = c.Bind(&q)
+	if err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid query parameters"))
 	}
 
 	var pg pagination.Params
-	if err := c.Bind(&pg); err != nil {
+	err = c.Bind(&pg)
+	if err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid pagination parameters"))
 	}
 	pg.Normalize()
@@ -70,14 +72,14 @@ func (h *EventHandler) List(c echo.Context) error {
 		filter.EventType = &et
 	}
 	if q.AgentID != "" {
-		agentID, err := uuid.Parse(q.AgentID)
-		if err == nil {
+		agentID, parseErr := uuid.Parse(q.AgentID)
+		if parseErr == nil {
 			filter.AgentID = &agentID
 		}
 	}
 	if q.TaskID != "" {
-		taskID, err := uuid.Parse(q.TaskID)
-		if err == nil {
+		taskID, parseErr := uuid.Parse(q.TaskID)
+		if parseErr == nil {
 			filter.TaskID = &taskID
 		}
 	}
@@ -102,7 +104,8 @@ func (h *EventHandler) Create(c echo.Context) error {
 	}
 
 	var req createEventRequest
-	if err := c.Bind(&req); err != nil {
+	err = c.Bind(&req)
+	if err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
 	}
 
@@ -128,7 +131,7 @@ func (h *EventHandler) Create(c echo.Context) error {
 		payloadMap = map[string]any{}
 	}
 	// Validate payload is serializable.
-	if _, err := json.Marshal(payloadMap); err != nil {
+	if _, marshalErr := json.Marshal(payloadMap); marshalErr != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid payload"))
 	}
 

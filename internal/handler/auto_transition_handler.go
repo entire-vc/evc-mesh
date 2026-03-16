@@ -53,7 +53,8 @@ func (h *AutoTransitionHandler) Create(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid project_id"))
 	}
 	var req createAutoTransitionRuleRequest
-	if err := c.Bind(&req); err != nil {
+	err = c.Bind(&req)
+	if err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
 	}
 	trigger := domain.AutoTransitionTrigger(req.Trigger)
@@ -98,7 +99,8 @@ func (h *AutoTransitionHandler) Update(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid rule_id"))
 	}
 	var req updateAutoTransitionRuleRequest
-	if err := c.Bind(&req); err != nil {
+	err = c.Bind(&req)
+	if err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
 	}
 	ctx := c.Request().Context()

@@ -32,7 +32,8 @@ func (h *ArtifactHandler) List(c echo.Context) error {
 	}
 
 	var pg pagination.Params
-	if err := c.Bind(&pg); err != nil {
+	err = c.Bind(&pg)
+	if err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid pagination parameters"))
 	}
 	pg.Normalize()

@@ -25,7 +25,7 @@ const (
 
 // BuildSubject constructs a NATS subject from workspace slug, project slug, and event type.
 // Format: events.{workspace_slug}.{project_slug}.{event_type}
-func BuildSubject(workspaceSlug, projectSlug string, eventType string) string {
+func BuildSubject(workspaceSlug, projectSlug, eventType string) string {
 	return fmt.Sprintf("%s.%s.%s.%s", SubjectPrefix, workspaceSlug, projectSlug, eventType)
 }
 

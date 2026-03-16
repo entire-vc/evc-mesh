@@ -134,7 +134,7 @@ func (r *CustomFieldDefinitionRepo) Reorder(ctx context.Context, projectID uuid.
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback() //nolint:errcheck
+	defer tx.Rollback() //nolint:errcheck // rollback is a no-op after commit; error is intentionally ignored
 
 	// Lock rows to prevent concurrent reorder.
 	const lockQ = `SELECT id FROM custom_field_definitions WHERE project_id = $1 FOR UPDATE`

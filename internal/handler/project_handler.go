@@ -59,12 +59,14 @@ func (h *ProjectHandler) List(c echo.Context) error {
 	}
 
 	var q listProjectsQuery
-	if err := c.Bind(&q); err != nil {
+	err = c.Bind(&q)
+	if err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid query parameters"))
 	}
 
 	var pg pagination.Params
-	if err := c.Bind(&pg); err != nil {
+	err = c.Bind(&pg)
+	if err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid pagination parameters"))
 	}
 	pg.Normalize()
@@ -74,8 +76,8 @@ func (h *ProjectHandler) List(c echo.Context) error {
 	}
 
 	if q.IsArchived != "" {
-		v, err := strconv.ParseBool(q.IsArchived)
-		if err == nil {
+		v, parseErr := strconv.ParseBool(q.IsArchived)
+		if parseErr == nil {
 			filter.IsArchived = &v
 		}
 	}
@@ -84,11 +86,11 @@ func (h *ProjectHandler) List(c echo.Context) error {
 	wsRole, _ := c.Get(mw.ContextKeyWorkspaceRole).(string)
 	if mw.IsAgent(c) {
 		// Agents always filter by membership.
-		if agentID, err := mw.GetAgentID(c); err == nil {
+		if agentID, agentErr := mw.GetAgentID(c); agentErr == nil {
 			filter.MemberAgentID = &agentID
 		}
 	} else if wsRole != domain.RoleOwner && wsRole != domain.RoleAdmin {
-		if userID, err := mw.GetUserID(c); err == nil {
+		if userID, userErr := mw.GetUserID(c); userErr == nil {
 			filter.MemberUserID = &userID
 		}
 	}
@@ -163,7 +165,8 @@ func (h *ProjectHandler) Update(c echo.Context) error {
 	}
 
 	var req updateProjectRequest
-	if err := c.Bind(&req); err != nil {
+	err = c.Bind(&req)
+	if err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
 	}
 

@@ -15,9 +15,6 @@ const (
 	// writeWait is the time allowed to write a message to the client.
 	writeWait = 10 * time.Second
 
-	// pongWait is the time allowed to read the next pong message from the client.
-	pongWait = 60 * time.Second
-
 	// pingInterval is the interval at which pings are sent. Must be less than pongWait.
 	pingInterval = 30 * time.Second
 

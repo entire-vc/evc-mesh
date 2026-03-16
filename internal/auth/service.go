@@ -35,18 +35,18 @@ var timeNow = time.Now
 
 // Errors returned by the auth service.
 var (
-	ErrPasswordTooShort      = apierror.BadRequest("password must be at least 8 characters")
-	ErrPasswordTooLong       = apierror.BadRequest("password must be at most 128 characters")
+	ErrPasswordTooShort       = apierror.BadRequest("password must be at least 8 characters")
+	ErrPasswordTooLong        = apierror.BadRequest("password must be at most 128 characters")
 	ErrPasswordWeakComplexity = apierror.BadRequest("password must contain at least one uppercase letter, one lowercase letter, and one digit")
-	ErrInvalidEmail          = apierror.BadRequest("invalid email address")
-	ErrEmailAlreadyExists    = apierror.Conflict("a user with this email already exists")
-	ErrInvalidCredentials    = apierror.Unauthorized("invalid email or password")
-	ErrInvalidRefreshToken   = apierror.Unauthorized("invalid refresh token")
-	ErrRefreshTokenExpired   = apierror.Unauthorized("refresh token has expired")
-	ErrRefreshTokenRevoked   = apierror.Unauthorized("refresh token has been revoked")
-	ErrTokenReused           = apierror.Unauthorized("refresh token reuse detected; all sessions revoked")
-	ErrInvalidAccessToken    = apierror.Unauthorized("invalid or expired access token")
-	ErrUserInactive          = apierror.Unauthorized("user account is inactive")
+	ErrInvalidEmail           = apierror.BadRequest("invalid email address")
+	ErrEmailAlreadyExists     = apierror.Conflict("a user with this email already exists")
+	ErrInvalidCredentials     = apierror.Unauthorized("invalid email or password")
+	ErrInvalidRefreshToken    = apierror.Unauthorized("invalid refresh token")
+	ErrRefreshTokenExpired    = apierror.Unauthorized("refresh token has expired")
+	ErrRefreshTokenRevoked    = apierror.Unauthorized("refresh token has been revoked")
+	ErrTokenReused            = apierror.Unauthorized("refresh token reuse detected; all sessions revoked")
+	ErrInvalidAccessToken     = apierror.Unauthorized("invalid or expired access token")
+	ErrUserInactive           = apierror.Unauthorized("user account is inactive")
 )
 
 // Claims represents the JWT claims for an access token.
@@ -129,7 +129,8 @@ func (s *Service) Register(ctx context.Context, email, password, name string) (*
 		UpdatedAt:    now,
 	}
 
-	if err := s.userRepo.Create(ctx, user); err != nil {
+	err = s.userRepo.Create(ctx, user)
+	if err != nil {
 		return nil, nil, err
 	}
 
@@ -142,7 +143,8 @@ func (s *Service) Register(ctx context.Context, email, password, name string) (*
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
-	if err := s.workspaceRepo.Create(ctx, ws); err != nil {
+	err = s.workspaceRepo.Create(ctx, ws)
+	if err != nil {
 		return nil, nil, err
 	}
 
@@ -155,7 +157,8 @@ func (s *Service) Register(ctx context.Context, email, password, name string) (*
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	}
-	if err := s.workspaceMemberRepo.Create(ctx, member); err != nil {
+	err = s.workspaceMemberRepo.Create(ctx, member)
+	if err != nil {
 		return nil, nil, err
 	}
 
@@ -182,7 +185,7 @@ func (s *Service) Login(ctx context.Context, email, password string) (*domain.Us
 		return nil, nil, ErrUserInactive
 	}
 
-	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)); err != nil {
+	if compareErr := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)); compareErr != nil {
 		return nil, nil, ErrInvalidCredentials
 	}
 
@@ -219,7 +222,8 @@ func (s *Service) RefreshTokens(ctx context.Context, refreshToken string) (*Toke
 	}
 
 	// Revoke the old refresh token.
-	if err := s.refreshTokenRepo.RevokeByHash(ctx, tokenHash); err != nil {
+	err = s.refreshTokenRepo.RevokeByHash(ctx, tokenHash)
+	if err != nil {
 		return nil, apierror.Wrap(err)
 	}
 
@@ -308,7 +312,7 @@ func (s *Service) generateTokenPair(user *domain.User) (*TokenPair, error) {
 
 // generateRefreshToken creates a random refresh token and its SHA-256 hash.
 // Format: rt_{64_hex_chars}
-func generateRefreshToken() (plainToken string, tokenHash string, err error) {
+func generateRefreshToken() (plainToken, tokenHash string, err error) {
 	b := make([]byte, refreshTokenRandomBytes)
 	if _, err := rand.Read(b); err != nil {
 		return "", "", err

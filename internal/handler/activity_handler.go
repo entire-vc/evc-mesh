@@ -46,12 +46,14 @@ func (h *ActivityHandler) ListByWorkspace(c echo.Context) error {
 	}
 
 	var q listActivityQuery
-	if err := c.Bind(&q); err != nil {
+	err = c.Bind(&q)
+	if err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid query parameters"))
 	}
 
 	var pg pagination.Params
-	if err := c.Bind(&pg); err != nil {
+	err = c.Bind(&pg)
+	if err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid pagination parameters"))
 	}
 	pg.Normalize()
@@ -62,14 +64,14 @@ func (h *ActivityHandler) ListByWorkspace(c echo.Context) error {
 		filter.EntityType = &q.EntityType
 	}
 	if q.EntityID != "" {
-		entityID, err := uuid.Parse(q.EntityID)
-		if err == nil {
+		entityID, parseErr := uuid.Parse(q.EntityID)
+		if parseErr == nil {
 			filter.EntityID = &entityID
 		}
 	}
 	if q.ActorID != "" {
-		actorID, err := uuid.Parse(q.ActorID)
-		if err == nil {
+		actorID, parseErr := uuid.Parse(q.ActorID)
+		if parseErr == nil {
 			filter.ActorID = &actorID
 		}
 	}
@@ -98,7 +100,8 @@ func (h *ActivityHandler) ListByTask(c echo.Context) error {
 	}
 
 	var pg pagination.Params
-	if err := c.Bind(&pg); err != nil {
+	err = c.Bind(&pg)
+	if err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid pagination parameters"))
 	}
 	pg.Normalize()
@@ -137,7 +140,8 @@ func (h *ActivityHandler) Export(c echo.Context) error {
 	}
 
 	var q exportActivityQuery
-	if err := c.Bind(&q); err != nil {
+	err = c.Bind(&q)
+	if err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid query parameters"))
 	}
 
@@ -158,8 +162,8 @@ func (h *ActivityHandler) Export(c echo.Context) error {
 	// Parse limit.
 	limit := exportDefaultLimit
 	if q.Limit != "" {
-		parsed, err := strconv.Atoi(q.Limit)
-		if err != nil || parsed <= 0 {
+		parsed, parseErr := strconv.Atoi(q.Limit)
+		if parseErr != nil || parsed <= 0 {
 			return c.JSON(http.StatusBadRequest, apierror.BadRequest("limit must be a positive integer"))
 		}
 		if parsed > exportMaxLimit {
@@ -177,15 +181,15 @@ func (h *ActivityHandler) Export(c echo.Context) error {
 		filter.Action = &q.Action
 	}
 	if q.From != "" {
-		t, err := time.Parse(time.RFC3339, q.From)
-		if err != nil {
+		t, parseErr := time.Parse(time.RFC3339, q.From)
+		if parseErr != nil {
 			return c.JSON(http.StatusBadRequest, apierror.BadRequest("from must be an ISO 8601 datetime (e.g. 2024-01-01T00:00:00Z)"))
 		}
 		filter.From = &t
 	}
 	if q.To != "" {
-		t, err := time.Parse(time.RFC3339, q.To)
-		if err != nil {
+		t, parseErr := time.Parse(time.RFC3339, q.To)
+		if parseErr != nil {
 			return c.JSON(http.StatusBadRequest, apierror.BadRequest("to must be an ISO 8601 datetime (e.g. 2024-12-31T23:59:59Z)"))
 		}
 		filter.To = &t
@@ -210,7 +214,7 @@ func (h *ActivityHandler) Export(c echo.Context) error {
 func (h *ActivityHandler) exportCSV(c echo.Context, entries []domain.ActivityLog, dateTag string) error {
 	filename := fmt.Sprintf("audit-log-%s.csv", dateTag)
 	c.Response().Header().Set("Content-Type", "text/csv")
-	c.Response().Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
+	c.Response().Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filename))
 	c.Response().WriteHeader(http.StatusOK)
 
 	w := csv.NewWriter(c.Response())
@@ -252,7 +256,7 @@ func (h *ActivityHandler) exportCSV(c echo.Context, entries []domain.ActivityLog
 func (h *ActivityHandler) exportJSON(c echo.Context, entries []domain.ActivityLog, dateTag string) error {
 	filename := fmt.Sprintf("audit-log-%s.json", dateTag)
 	c.Response().Header().Set("Content-Type", "application/json")
-	c.Response().Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
+	c.Response().Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filename))
 	c.Response().WriteHeader(http.StatusOK)
 
 	enc := json.NewEncoder(c.Response())

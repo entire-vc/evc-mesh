@@ -48,8 +48,8 @@ func (h *NotificationHandler) List(c echo.Context) error {
 
 // markReadRequest is the JSON body for marking notifications as read.
 type markReadRequest struct {
-	IDs    []string `json:"ids"`
-	MarkAll bool    `json:"mark_all"`
+	IDs     []string `json:"ids"`
+	MarkAll bool     `json:"mark_all"`
 }
 
 // MarkRead handles POST /notifications/mark-read

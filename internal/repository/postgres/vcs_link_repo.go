@@ -16,16 +16,16 @@ import (
 
 // vcsLinkRow is the DB row representation for vcs_links.
 type vcsLinkRow struct {
-	ID         uuid.UUID  `db:"id"`
-	TaskID     uuid.UUID  `db:"task_id"`
-	Provider   string     `db:"provider"`
-	LinkType   string     `db:"link_type"`
-	ExternalID string     `db:"external_id"`
-	URL        string     `db:"url"`
-	Title      string     `db:"title"`
-	Status     string     `db:"status"`
-	Metadata   []byte     `db:"metadata"`
-	CreatedAt  time.Time  `db:"created_at"`
+	ID         uuid.UUID `db:"id"`
+	TaskID     uuid.UUID `db:"task_id"`
+	Provider   string    `db:"provider"`
+	LinkType   string    `db:"link_type"`
+	ExternalID string    `db:"external_id"`
+	URL        string    `db:"url"`
+	Title      string    `db:"title"`
+	Status     string    `db:"status"`
+	Metadata   []byte    `db:"metadata"`
+	CreatedAt  time.Time `db:"created_at"`
 }
 
 func (r *vcsLinkRow) toDomain() domain.VCSLink {

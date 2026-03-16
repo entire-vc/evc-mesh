@@ -40,15 +40,15 @@ func (h *AnalyticsHandler) GetMetrics(c echo.Context) error {
 	to := now
 
 	if fromStr := c.QueryParam("from"); fromStr != "" {
-		parsed, err := parseAnalyticsDate(fromStr)
-		if err != nil {
+		parsed, parseErr := parseAnalyticsDate(fromStr)
+		if parseErr != nil {
 			return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid 'from' date"))
 		}
 		from = parsed
 	}
 	if toStr := c.QueryParam("to"); toStr != "" {
-		parsed, err := parseAnalyticsDate(toStr)
-		if err != nil {
+		parsed, parseErr := parseAnalyticsDate(toStr)
+		if parseErr != nil {
 			return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid 'to' date"))
 		}
 		to = parsed
@@ -61,8 +61,8 @@ func (h *AnalyticsHandler) GetMetrics(c echo.Context) error {
 	}
 
 	if projIDStr := c.QueryParam("project_id"); projIDStr != "" {
-		projID, err := uuid.Parse(projIDStr)
-		if err != nil {
+		projID, parseErr := uuid.Parse(projIDStr)
+		if parseErr != nil {
 			return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid project_id"))
 		}
 		filter.ProjectID = &projID
@@ -101,15 +101,15 @@ func (h *AnalyticsHandler) ExportMetrics(c echo.Context) error {
 	to := now
 
 	if fromStr := c.QueryParam("from"); fromStr != "" {
-		parsed, err := parseAnalyticsDate(fromStr)
-		if err != nil {
+		parsed, parseErr := parseAnalyticsDate(fromStr)
+		if parseErr != nil {
 			return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid 'from' date"))
 		}
 		from = parsed
 	}
 	if toStr := c.QueryParam("to"); toStr != "" {
-		parsed, err := parseAnalyticsDate(toStr)
-		if err != nil {
+		parsed, parseErr := parseAnalyticsDate(toStr)
+		if parseErr != nil {
 			return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid 'to' date"))
 		}
 		to = parsed
@@ -122,8 +122,8 @@ func (h *AnalyticsHandler) ExportMetrics(c echo.Context) error {
 	}
 
 	if projIDStr := c.QueryParam("project_id"); projIDStr != "" {
-		projID, err := uuid.Parse(projIDStr)
-		if err != nil {
+		projID, parseErr := uuid.Parse(projIDStr)
+		if parseErr != nil {
 			return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid project_id"))
 		}
 		filter.ProjectID = &projID
@@ -136,7 +136,7 @@ func (h *AnalyticsHandler) ExportMetrics(c echo.Context) error {
 
 	filename := fmt.Sprintf("analytics-%s.csv", now.Format("2006-01-02"))
 	c.Response().Header().Set("Content-Type", "text/csv; charset=utf-8")
-	c.Response().Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
+	c.Response().Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filename))
 	c.Response().WriteHeader(http.StatusOK)
 
 	w := csv.NewWriter(c.Response())

@@ -42,14 +42,14 @@ type agentRow struct {
 	TotalTasksCompleted int                `db:"total_tasks_completed"`
 	TotalErrors         int                `db:"total_errors"`
 	ExternalAgentID     *string            `db:"external_agent_id"`
-	Role               string             `db:"role"`
-	ResponsibilityZone string             `db:"responsibility_zone"`
-	EscalationTo       *json.RawMessage   `db:"escalation_to"`
-	AcceptsFrom        json.RawMessage    `db:"accepts_from"`
-	MaxConcurrentTasks int                `db:"max_concurrent_tasks"`
-	WorkingHours       string             `db:"working_hours"`
-	ProfileDescription string             `db:"profile_description"`
-	CallbackURL        string             `db:"callback_url"`
+	Role                string             `db:"role"`
+	ResponsibilityZone  string             `db:"responsibility_zone"`
+	EscalationTo        *json.RawMessage   `db:"escalation_to"`
+	AcceptsFrom         json.RawMessage    `db:"accepts_from"`
+	MaxConcurrentTasks  int                `db:"max_concurrent_tasks"`
+	WorkingHours        string             `db:"working_hours"`
+	ProfileDescription  string             `db:"profile_description"`
+	CallbackURL         string             `db:"callback_url"`
 	CreatedAt           time.Time          `db:"created_at"`
 	UpdatedAt           time.Time          `db:"updated_at"`
 	DeletedAt           *time.Time         `db:"deleted_at"`
@@ -77,14 +77,14 @@ func (r *agentRow) toDomain() domain.Agent {
 		TotalTasksCompleted: r.TotalTasksCompleted,
 		TotalErrors:         r.TotalErrors,
 		ExternalAgentID:     r.ExternalAgentID,
-		Role:               r.Role,
-		ResponsibilityZone: r.ResponsibilityZone,
-		EscalationTo:       r.EscalationTo,
-		AcceptsFrom:        r.AcceptsFrom,
-		MaxConcurrentTasks: r.MaxConcurrentTasks,
-		WorkingHours:       r.WorkingHours,
-		ProfileDescription: r.ProfileDescription,
-		CallbackURL:        r.CallbackURL,
+		Role:                r.Role,
+		ResponsibilityZone:  r.ResponsibilityZone,
+		EscalationTo:        r.EscalationTo,
+		AcceptsFrom:         r.AcceptsFrom,
+		MaxConcurrentTasks:  r.MaxConcurrentTasks,
+		WorkingHours:        r.WorkingHours,
+		ProfileDescription:  r.ProfileDescription,
+		CallbackURL:         r.CallbackURL,
 		CreatedAt:           r.CreatedAt,
 		UpdatedAt:           r.UpdatedAt,
 	}
@@ -270,7 +270,6 @@ func (r *AgentRepo) List(ctx context.Context, workspaceID uuid.UUID, filter repo
 	if filter.ParentAgentID != nil {
 		conditions = append(conditions, fmt.Sprintf("parent_agent_id = $%d", argIdx))
 		args = append(args, *filter.ParentAgentID)
-		argIdx++
 	}
 
 	where := "WHERE " + joinAnd(conditions)
@@ -346,7 +345,6 @@ func (r *AgentRepo) UpdateHeartbeat(ctx context.Context, id uuid.UUID, params *r
 		if params.Metadata != nil {
 			q += fmt.Sprintf(", heartbeat_metadata = $%d", argIdx)
 			args = append(args, params.Metadata)
-			argIdx++
 		}
 	}
 	q += " WHERE id = $1 AND deleted_at IS NULL"
@@ -415,7 +413,7 @@ func (r *AgentRepo) ListWithProjects(ctx context.Context, workspaceID uuid.UUID)
 			_ = json.Unmarshal(row.ProjectNames, &projects)
 		}
 		result[i] = repository.AgentWithProjects{
-			Agent:    row.agentRow.toDomain(),
+			Agent:    row.toDomain(),
 			Projects: projects,
 		}
 	}

@@ -44,17 +44,17 @@ func RequireProjectMember(db *sqlx.DB) echo.MiddlewareFunc {
 
 			// For agents: check agent_id in project_members.
 			if IsAgent(c) {
-				agentID, err := GetAgentID(c)
-				if err != nil {
+				agentID, agentErr := GetAgentID(c)
+				if agentErr != nil {
 					return c.JSON(http.StatusForbidden, apierror.Forbidden("agent context required"))
 				}
 
 				var exists bool
-				err = db.QueryRowContext(c.Request().Context(),
+				dbErr := db.QueryRowContext(c.Request().Context(),
 					"SELECT EXISTS(SELECT 1 FROM project_members WHERE project_id = $1 AND agent_id = $2)",
 					projID, agentID,
 				).Scan(&exists)
-				if err != nil || !exists {
+				if dbErr != nil || !exists {
 					return c.JSON(http.StatusForbidden, apierror.Forbidden("agent is not a member of this project"))
 				}
 				return next(c)

@@ -52,7 +52,8 @@ func (h *VCSLinkHandler) Create(c echo.Context) error {
 	}
 
 	var req createVCSLinkRequest
-	if err := c.Bind(&req); err != nil {
+	err = c.Bind(&req)
+	if err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
 	}
 
@@ -142,11 +143,11 @@ func (h *VCSLinkHandler) Delete(c echo.Context) error {
 
 // GitHubWebhookPayload holds the fields we care about from a GitHub webhook event.
 type GitHubWebhookPayload struct {
-	Action      string             `json:"action"`
-	PullRequest *gitHubPRPayload   `json:"pull_request"`
-	HeadCommit  *gitHubCommitInfo  `json:"head_commit"`
-	Repository  gitHubRepoPayload  `json:"repository"`
-	Ref         string             `json:"ref"` // push events: refs/heads/branch-name
+	Action      string            `json:"action"`
+	PullRequest *gitHubPRPayload  `json:"pull_request"`
+	HeadCommit  *gitHubCommitInfo `json:"head_commit"`
+	Repository  gitHubRepoPayload `json:"repository"`
+	Ref         string            `json:"ref"` // push events: refs/heads/branch-name
 }
 
 type gitHubPRPayload struct {
@@ -238,10 +239,6 @@ func (h *VCSLinkHandler) GitHubWebhook(c echo.Context) error {
 		taskID := extractMeshTaskID(commit.Message)
 		if taskID == uuid.Nil {
 			return c.JSON(http.StatusOK, map[string]string{"status": "no_task_ref"})
-		}
-		sha := commit.ID
-		if len(sha) > 12 {
-			sha = sha[:12]
 		}
 		input := domain.CreateVCSLinkInput{
 			TaskID:     taskID,
@@ -339,4 +336,3 @@ func itoa(n int) string {
 	}
 	return string(buf)
 }
-

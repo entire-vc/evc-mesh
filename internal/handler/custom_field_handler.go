@@ -35,13 +35,13 @@ type createCustomFieldRequest struct {
 
 // updateCustomFieldRequest represents the JSON body for updating a custom field definition.
 type updateCustomFieldRequest struct {
-	Name              *string          `json:"name"`
+	Name              *string           `json:"name"`
 	FieldType         *domain.FieldType `json:"field_type"`
-	Description       *string          `json:"description"`
-	Options           json.RawMessage  `json:"options"`
-	DefaultValue      json.RawMessage  `json:"default_value"`
-	IsRequired        *bool            `json:"is_required"`
-	IsVisibleToAgents *bool            `json:"is_visible_to_agents"`
+	Description       *string           `json:"description"`
+	Options           json.RawMessage   `json:"options"`
+	DefaultValue      json.RawMessage   `json:"default_value"`
+	IsRequired        *bool             `json:"is_required"`
+	IsVisibleToAgents *bool             `json:"is_visible_to_agents"`
 }
 
 // reorderCustomFieldsRequest represents the JSON body for reordering custom fields.
@@ -134,7 +134,8 @@ func (h *CustomFieldHandler) Update(c echo.Context) error {
 	}
 
 	var req updateCustomFieldRequest
-	if err := c.Bind(&req); err != nil {
+	err = c.Bind(&req)
+	if err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
 	}
 
@@ -198,7 +199,8 @@ func (h *CustomFieldHandler) Reorder(c echo.Context) error {
 	}
 
 	var req reorderCustomFieldsRequest
-	if err := c.Bind(&req); err != nil {
+	err = c.Bind(&req)
+	if err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
 	}
 
@@ -208,7 +210,8 @@ func (h *CustomFieldHandler) Reorder(c echo.Context) error {
 		}))
 	}
 
-	if err := h.fieldService.Reorder(c.Request().Context(), projID, req.FieldIDs); err != nil {
+	err = h.fieldService.Reorder(c.Request().Context(), projID, req.FieldIDs)
+	if err != nil {
 		return handleError(c, err)
 	}
 

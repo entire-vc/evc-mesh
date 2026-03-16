@@ -48,8 +48,8 @@ func (m *ProjectMember) IsAgentMember() bool {
 // ProjectMemberWithUser embeds ProjectMember with the associated user's brief info.
 type ProjectMemberWithUser struct {
 	ProjectMember
-	User      *UserBrief  `json:"user,omitempty"`
-	AgentName string      `json:"agent_name,omitempty"`
+	User      *UserBrief `json:"user,omitempty"`
+	AgentName string     `json:"agent_name,omitempty"`
 }
 
 // Project belongs to a Workspace and contains tasks, statuses, and custom fields.

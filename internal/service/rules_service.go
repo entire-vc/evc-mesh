@@ -116,7 +116,7 @@ func (s *rulesService) GetTeamDirectory(ctx context.Context, workspaceID uuid.UU
 	for _, a := range agentPage.Items {
 		currentTasks := 0
 		if s.ruleRepo != nil {
-			if cnt, err := s.ruleRepo.CountTasksByAssigneeAndCategory(ctx, workspaceID, a.ID, string(domain.AssigneeTypeAgent), activeCategories); err == nil {
+			if cnt, cntErr := s.ruleRepo.CountTasksByAssigneeAndCategory(ctx, workspaceID, a.ID, string(domain.AssigneeTypeAgent), activeCategories); cntErr == nil {
 				currentTasks = cnt
 			}
 		}
@@ -200,7 +200,7 @@ func (s *rulesService) GetTeamDirectoryTree(ctx context.Context, workspaceID uui
 	for _, a := range agentsWithProjects {
 		currentTasks := 0
 		if s.ruleRepo != nil {
-			if cnt, err := s.ruleRepo.CountTasksByAssigneeAndCategory(ctx, workspaceID, a.ID, string(domain.AssigneeTypeAgent), activeCategories); err == nil {
+			if cnt, cntErr := s.ruleRepo.CountTasksByAssigneeAndCategory(ctx, workspaceID, a.ID, string(domain.AssigneeTypeAgent), activeCategories); cntErr == nil {
 				currentTasks = cnt
 			}
 		}
@@ -586,8 +586,7 @@ func computeAgentPermissions(agent *domain.Agent, cfg domain.WorkflowRulesConfig
 // Patterns: "*" (any), "role:developer", "agent:name", "assigned".
 func isActorAllowed(agent *domain.Agent, allowed []string) bool {
 	for _, pattern := range allowed {
-		switch pattern {
-		case "*":
+		if pattern == "*" {
 			return true
 		}
 		if len(pattern) > 5 && pattern[:5] == "role:" {
@@ -871,4 +870,3 @@ func derefRawMessage(p *json.RawMessage) json.RawMessage {
 	}
 	return *p
 }
-

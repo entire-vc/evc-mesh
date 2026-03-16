@@ -25,28 +25,6 @@ func NewRuleRepo(db *sqlx.DB) *RuleRepo {
 	return &RuleRepo{db: db}
 }
 
-// ruleRow is the DB scan target for a rule row, handling TEXT[] columns.
-type ruleRow struct {
-	ID                  uuid.UUID       `db:"id"`
-	WorkspaceID         uuid.UUID       `db:"workspace_id"`
-	ProjectID           *uuid.UUID      `db:"project_id"`
-	AgentID             *uuid.UUID      `db:"agent_id"`
-	Scope               domain.RuleScope       `db:"scope"`
-	RuleType            string          `db:"rule_type"`
-	Name                string          `db:"name"`
-	Description         string          `db:"description"`
-	Config              []byte          `db:"config"`
-	AppliesToActorTypes pq.StringArray  `db:"applies_to_actor_types"`
-	AppliesToRoles      pq.StringArray  `db:"applies_to_roles"`
-	Enforcement         domain.RuleEnforcement `db:"enforcement"`
-	Priority            int             `db:"priority"`
-	IsEnabled           bool            `db:"is_enabled"`
-	CreatedBy           uuid.UUID       `db:"created_by"`
-	CreatedByType       domain.ActorType `db:"created_by_type"`
-	CreatedAt           interface{}     `db:"created_at"`
-	UpdatedAt           interface{}     `db:"updated_at"`
-}
-
 func scanRules(db *sqlx.DB, ctx context.Context, query string, args ...interface{}) ([]domain.Rule, error) {
 	rows, err := db.QueryxContext(ctx, query, args...)
 	if err != nil {
@@ -196,7 +174,7 @@ func (r *RuleRepo) ListByAgent(ctx context.Context, agentID uuid.UUID, includeDi
 // GetEffective fetches all candidate rules across workspace, project, and agent scopes
 // for inheritance resolution. All enabled rules are returned; the caller applies
 // the "most specific wins" logic.
-func (r *RuleRepo) GetEffective(ctx context.Context, workspaceID uuid.UUID, projectID *uuid.UUID, agentID *uuid.UUID) ([]domain.Rule, error) {
+func (r *RuleRepo) GetEffective(ctx context.Context, workspaceID uuid.UUID, projectID, agentID *uuid.UUID) ([]domain.Rule, error) {
 	// Build a dynamic IN-like query: always include workspace rules, optionally project and agent.
 	conds := []string{"(scope = 'workspace' AND workspace_id = $1)"}
 	args := []interface{}{workspaceID}
@@ -221,7 +199,7 @@ func (r *RuleRepo) GetEffective(ctx context.Context, workspaceID uuid.UUID, proj
 
 // CountTasksByAssigneeAndCategory counts tasks assigned to an actor in the given status categories.
 // Used by capacity limit evaluators.
-func (r *RuleRepo) CountTasksByAssigneeAndCategory(ctx context.Context, workspaceID uuid.UUID, assigneeID uuid.UUID, assigneeType string, categories []string) (int, error) {
+func (r *RuleRepo) CountTasksByAssigneeAndCategory(ctx context.Context, workspaceID, assigneeID uuid.UUID, assigneeType string, categories []string) (int, error) {
 	if len(categories) == 0 {
 		return 0, nil
 	}

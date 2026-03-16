@@ -595,11 +595,11 @@ func TestTaskService_applyAutoAssign(t *testing.T) {
 	agentIDStr2 := uuid.New()
 
 	tests := []struct {
-		name            string
-		rules           *domain.EffectiveAssignmentRules
-		task            *domain.Task
-		wantAssigned    bool
-		wantAssigneeID  *uuid.UUID
+		name             string
+		rules            *domain.EffectiveAssignmentRules
+		task             *domain.Task
+		wantAssigned     bool
+		wantAssigneeID   *uuid.UUID
 		wantAssigneeType domain.AssigneeType
 	}{
 		{

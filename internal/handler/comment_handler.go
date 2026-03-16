@@ -45,15 +45,16 @@ func (h *CommentHandler) List(c echo.Context) error {
 	}
 
 	var pg pagination.Params
-	if err := c.Bind(&pg); err != nil {
+	err = c.Bind(&pg)
+	if err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid pagination parameters"))
 	}
 	pg.Normalize()
 
 	filter := repository.CommentFilter{}
 	if v := c.QueryParam("include_internal"); v != "" {
-		b, err := strconv.ParseBool(v)
-		if err == nil {
+		b, parseErr := strconv.ParseBool(v)
+		if parseErr == nil {
 			filter.IncludeInternal = b
 		}
 	}

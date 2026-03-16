@@ -189,9 +189,9 @@ func TestTaskDependencyService_Create(t *testing.T) {
 
 func TestTaskDependencyService_CheckCycle(t *testing.T) {
 	tests := []struct {
-		name           string
-		setup          func(depRepo *MockTaskDependencyRepository, taskRepo *MockTaskRepository) (taskID, dependsOnTaskID uuid.UUID)
-		wantCycle      bool
+		name      string
+		setup     func(depRepo *MockTaskDependencyRepository, taskRepo *MockTaskRepository) (taskID, dependsOnTaskID uuid.UUID)
+		wantCycle bool
 	}{
 		{
 			name: "no cycle - independent tasks",

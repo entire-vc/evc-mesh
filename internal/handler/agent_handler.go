@@ -78,12 +78,14 @@ func (h *AgentHandler) List(c echo.Context) error {
 	}
 
 	var q listAgentsQuery
-	if err := c.Bind(&q); err != nil {
+	err = c.Bind(&q)
+	if err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid query parameters"))
 	}
 
 	var pg pagination.Params
-	if err := c.Bind(&pg); err != nil {
+	err = c.Bind(&pg)
+	if err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid pagination parameters"))
 	}
 	pg.Normalize()
@@ -118,7 +120,8 @@ func (h *AgentHandler) Register(c echo.Context) error {
 	}
 
 	var req registerAgentRequest
-	if err := c.Bind(&req); err != nil {
+	err = c.Bind(&req)
+	if err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
 	}
 
@@ -168,8 +171,8 @@ type updateAgentRequest struct {
 	ProfileDescription *string           `json:"profile_description"`
 	CallbackURL        *string           `json:"callback_url"`
 	CurrentTaskID      *uuid.UUID        `json:"current_task_id"`
-	ParentAgentID      *string           `json:"parent_agent_id"`      // UUID string or "" to clear
-	SupervisorUserID   *string           `json:"supervisor_user_id"`   // UUID string or "" to clear
+	ParentAgentID      *string           `json:"parent_agent_id"`    // UUID string or "" to clear
+	SupervisorUserID   *string           `json:"supervisor_user_id"` // UUID string or "" to clear
 	Role               *string           `json:"role"`
 }
 
@@ -182,7 +185,8 @@ func (h *AgentHandler) Update(c echo.Context) error {
 	}
 
 	var req updateAgentRequest
-	if err := c.Bind(&req); err != nil {
+	err = c.Bind(&req)
+	if err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
 	}
 
@@ -376,7 +380,8 @@ func (h *AgentHandler) ListAgentActivity(c echo.Context) error {
 	}
 
 	var pg pagination.Params
-	if err := c.Bind(&pg); err != nil {
+	err = c.Bind(&pg)
+	if err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid pagination parameters"))
 	}
 	pg.Normalize()
@@ -385,12 +390,12 @@ func (h *AgentHandler) ListAgentActivity(c echo.Context) error {
 		EventType: c.QueryParam("event_type"),
 	}
 	if since := c.QueryParam("since"); since != "" {
-		if t, err := time.Parse(time.RFC3339, since); err == nil {
+		if t, parseErr := time.Parse(time.RFC3339, since); parseErr == nil {
 			filter.Since = &t
 		}
 	}
 	if until := c.QueryParam("until"); until != "" {
-		if t, err := time.Parse(time.RFC3339, until); err == nil {
+		if t, parseErr := time.Parse(time.RFC3339, until); parseErr == nil {
 			filter.Until = &t
 		}
 	}

@@ -43,8 +43,8 @@ func main() {
 	fmt.Printf("Workspace: %s\n", me.WorkspaceID)
 
 	// Signal liveness to the server (updates last_heartbeat, sets status=online).
-	if err := client.Heartbeat(ctx); err != nil {
-		log.Printf("heartbeat warning: %v", err)
+	if heartbeatErr := client.Heartbeat(ctx); heartbeatErr != nil {
+		log.Printf("heartbeat warning: %v", heartbeatErr)
 	}
 
 	// Fetch tasks assigned to this agent.

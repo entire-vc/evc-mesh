@@ -130,7 +130,7 @@ func (r *MemoryRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.Memory,
 
 // GetByKey returns a memory by its composite natural key, or nil if not found.
 // Pass nil for projectID or agentID when those dimensions are not scoped.
-func (r *MemoryRepo) GetByKey(ctx context.Context, workspaceID uuid.UUID, projectID *uuid.UUID, agentID *uuid.UUID, key string, scope domain.MemoryScope) (*domain.Memory, error) {
+func (r *MemoryRepo) GetByKey(ctx context.Context, workspaceID uuid.UUID, projectID, agentID *uuid.UUID, key string, scope domain.MemoryScope) (*domain.Memory, error) {
 	var row memoryRow
 	err := r.db.GetContext(ctx, &row,
 		fmt.Sprintf(`SELECT %s FROM memories
@@ -211,7 +211,7 @@ func (r *MemoryRepo) FullTextSearch(ctx context.Context, query string, workspace
 	result := make([]domain.ScoredMemory, len(rows))
 	for i, row := range rows {
 		result[i] = domain.ScoredMemory{
-			Memory: row.memoryRow.toDomain(),
+			Memory: row.toDomain(),
 			Score:  row.Score,
 		}
 	}
@@ -408,7 +408,7 @@ func (r *MemoryRepo) VectorSearch(ctx context.Context, queryVec []float32, works
 		}
 		sim := cosineSimilarity(queryVec, vec)
 		candidates = append(candidates, candidate{
-			mem:   row.memoryRow.toDomain(),
+			mem:   row.toDomain(),
 			score: sim,
 		})
 	}

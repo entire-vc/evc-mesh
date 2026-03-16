@@ -26,12 +26,12 @@ func NewProjectUpdateHandler(svc service.ProjectUpdateService) *ProjectUpdateHan
 
 // createProjectUpdateRequest is the JSON body for creating a project update.
 type createProjectUpdateRequest struct {
-	Title      string             `json:"title"`
+	Title      string              `json:"title"`
 	Status     domain.UpdateStatus `json:"status"`
-	Summary    string             `json:"summary"`
-	Highlights []domain.TextItem  `json:"highlights"`
-	Blockers   []domain.TextItem  `json:"blockers"`
-	NextSteps  []domain.TextItem  `json:"next_steps"`
+	Summary    string              `json:"summary"`
+	Highlights []domain.TextItem   `json:"highlights"`
+	Blockers   []domain.TextItem   `json:"blockers"`
+	NextSteps  []domain.TextItem   `json:"next_steps"`
 }
 
 // Create handles POST /projects/:proj_id/updates
@@ -42,7 +42,8 @@ func (h *ProjectUpdateHandler) Create(c echo.Context) error {
 	}
 
 	var req createProjectUpdateRequest
-	if err := c.Bind(&req); err != nil {
+	err = c.Bind(&req)
+	if err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
 	}
 
@@ -73,7 +74,8 @@ func (h *ProjectUpdateHandler) List(c echo.Context) error {
 	}
 
 	var pg pagination.Params
-	if err := c.Bind(&pg); err != nil {
+	err = c.Bind(&pg)
+	if err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid pagination parameters"))
 	}
 	pg.Normalize()

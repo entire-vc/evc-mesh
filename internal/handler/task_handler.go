@@ -106,7 +106,8 @@ func (h *TaskHandler) Create(c echo.Context) error {
 	}
 
 	var req createTaskRequest
-	if err := c.Bind(&req); err != nil {
+	err = c.Bind(&req)
+	if err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
 	}
 
@@ -210,7 +211,8 @@ func (h *TaskHandler) Update(c echo.Context) error {
 	}
 
 	var req updateTaskRequest
-	if err := c.Bind(&req); err != nil {
+	err = c.Bind(&req)
+	if err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
 	}
 
@@ -289,12 +291,14 @@ func (h *TaskHandler) List(c echo.Context) error {
 	}
 
 	var q listTasksQuery
-	if err := c.Bind(&q); err != nil {
+	err = c.Bind(&q)
+	if err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid query parameters"))
 	}
 
 	var pg pagination.Params
-	if err := c.Bind(&pg); err != nil {
+	err = c.Bind(&pg)
+	if err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid pagination parameters"))
 	}
 	pg.Normalize()
@@ -315,8 +319,8 @@ func (h *TaskHandler) List(c echo.Context) error {
 		filter.Labels = []string{q.Labels}
 	}
 	if q.Status != "" {
-		statusID, err := uuid.Parse(q.Status)
-		if err == nil {
+		statusID, parseErr := uuid.Parse(q.Status)
+		if parseErr == nil {
 			filter.StatusIDs = []uuid.UUID{statusID}
 		}
 	}
@@ -348,7 +352,8 @@ func parseCustomFieldFilters(c echo.Context) map[string]repository.CustomFieldFi
 		val := values[0]
 		fieldKey := strings.TrimPrefix(key, "custom.")
 
-		if strings.HasSuffix(fieldKey, "_gte") {
+		switch {
+		case strings.HasSuffix(fieldKey, "_gte"):
 			slug := strings.TrimSuffix(fieldKey, "_gte")
 			if !validSlugRe.MatchString(slug) {
 				continue
@@ -360,7 +365,7 @@ func parseCustomFieldFilters(c echo.Context) map[string]repository.CustomFieldFi
 			cf := result[slug]
 			cf.Gte = &f
 			result[slug] = cf
-		} else if strings.HasSuffix(fieldKey, "_lte") {
+		case strings.HasSuffix(fieldKey, "_lte"):
 			slug := strings.TrimSuffix(fieldKey, "_lte")
 			if !validSlugRe.MatchString(slug) {
 				continue
@@ -372,7 +377,7 @@ func parseCustomFieldFilters(c echo.Context) map[string]repository.CustomFieldFi
 			cf := result[slug]
 			cf.Lte = &f
 			result[slug] = cf
-		} else {
+		default:
 			// Exact equality.
 			if !validSlugRe.MatchString(fieldKey) {
 				continue
@@ -446,7 +451,8 @@ func (h *TaskHandler) AssignTask(c echo.Context) error {
 	}
 
 	var req assignTaskRequest
-	if err := c.Bind(&req); err != nil {
+	err = c.Bind(&req)
+	if err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
 	}
 
@@ -464,7 +470,8 @@ func (h *TaskHandler) AssignTask(c echo.Context) error {
 		AssigneeType: assigneeType,
 	}
 
-	if err := h.taskService.AssignTask(c.Request().Context(), taskID, input); err != nil {
+	err = h.taskService.AssignTask(c.Request().Context(), taskID, input)
+	if err != nil {
 		return handleError(c, err)
 	}
 
@@ -493,7 +500,8 @@ func (h *TaskHandler) CreateSubtask(c echo.Context) error {
 	}
 
 	var req createSubtaskRequest
-	if err := c.Bind(&req); err != nil {
+	err = c.Bind(&req)
+	if err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
 	}
 
@@ -529,8 +537,8 @@ func (h *TaskHandler) CreateSubtask(c echo.Context) error {
 
 // bulkUpdateRequest represents the JSON body for bulk-updating multiple tasks.
 type bulkUpdateRequest struct {
-	TaskIDs []uuid.UUID       `json:"task_ids"`
-	Updates bulkUpdateFields  `json:"updates"`
+	TaskIDs []uuid.UUID      `json:"task_ids"`
+	Updates bulkUpdateFields `json:"updates"`
 }
 
 // bulkUpdateFields holds the optional fields that can be changed in a bulk update.
@@ -615,7 +623,8 @@ func (h *TaskHandler) Checkout(c echo.Context) error {
 	}
 
 	var req checkoutRequest
-	if err := c.Bind(&req); err != nil {
+	err = c.Bind(&req)
+	if err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
 	}
 
@@ -646,7 +655,8 @@ func (h *TaskHandler) ReleaseCheckout(c echo.Context) error {
 	}
 
 	var req releaseCheckoutRequest
-	if err := c.Bind(&req); err != nil {
+	err = c.Bind(&req)
+	if err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
 	}
 
@@ -659,7 +669,8 @@ func (h *TaskHandler) ReleaseCheckout(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid checkout_token"))
 	}
 
-	if err := h.taskService.ReleaseCheckout(c.Request().Context(), taskID, token); err != nil {
+	err = h.taskService.ReleaseCheckout(c.Request().Context(), taskID, token)
+	if err != nil {
 		return handleError(c, err)
 	}
 
@@ -674,7 +685,8 @@ func (h *TaskHandler) ExtendCheckout(c echo.Context) error {
 	}
 
 	var req extendCheckoutRequest
-	if err := c.Bind(&req); err != nil {
+	err = c.Bind(&req)
+	if err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
 	}
 
@@ -709,7 +721,8 @@ func (h *TaskHandler) MoveToProject(c echo.Context) error {
 	}
 
 	var req moveToProjectRequest
-	if err := c.Bind(&req); err != nil {
+	err = c.Bind(&req)
+	if err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
 	}
 
