@@ -32,9 +32,10 @@ const (
 
 // AgentHandler handles HTTP requests for agent management.
 type AgentHandler struct {
-	agentService service.AgentService
-	taskService  service.TaskService // optional, used for GetMyTasks and PollTasks
-	rdb          *redis.Client       // optional, used for SSE and long-poll
+	agentService  service.AgentService
+	taskService   service.TaskService       // optional, used for GetMyTasks and PollTasks
+	statusService service.TaskStatusService // optional, used for status_category filtering
+	rdb           *redis.Client             // optional, used for SSE and long-poll
 }
 
 // NewAgentHandler creates a new AgentHandler with the given service.
@@ -50,8 +51,8 @@ func NewAgentHandlerWithTaskService(as service.AgentService, ts service.TaskServ
 
 // NewAgentHandlerFull creates an AgentHandler with full support for task queries,
 // SSE streaming and long-polling via Redis pub/sub.
-func NewAgentHandlerFull(as service.AgentService, ts service.TaskService, rdb *redis.Client) *AgentHandler {
-	return &AgentHandler{agentService: as, taskService: ts, rdb: rdb}
+func NewAgentHandlerFull(as service.AgentService, ts service.TaskService, ss service.TaskStatusService, rdb *redis.Client) *AgentHandler {
+	return &AgentHandler{agentService: as, taskService: ts, statusService: ss, rdb: rdb}
 }
 
 // registerAgentRequest represents the JSON body for registering a new agent.
@@ -602,6 +603,7 @@ func (h *AgentHandler) ListSubAgents(c echo.Context) error {
 
 // GetMyTasks handles GET /agents/me/tasks
 // Returns tasks assigned to the current agent.
+// Optional query params: status_category (backlog|todo|in_progress|review|done|cancelled)
 func (h *AgentHandler) GetMyTasks(c echo.Context) error {
 	if h.taskService == nil {
 		return c.JSON(http.StatusNotImplemented, apierror.InternalError("task service not configured"))
@@ -620,6 +622,32 @@ func (h *AgentHandler) GetMyTasks(c echo.Context) error {
 	tasks, err := h.taskService.GetMyTasks(c.Request().Context(), agentID, domain.AssigneeTypeAgent)
 	if err != nil {
 		return handleError(c, err)
+	}
+
+	// Filter by status_category if provided.
+	// Since we don't have status category on the task itself, filter via
+	// the status service injected into the agent handler.
+	if cat := c.QueryParam("status_category"); cat != "" && h.statusService != nil {
+		categoryMap := make(map[uuid.UUID]domain.StatusCategory)
+		projectsSeen := make(map[uuid.UUID]bool)
+		for _, t := range tasks {
+			if !projectsSeen[t.ProjectID] {
+				projectsSeen[t.ProjectID] = true
+				if statuses, err := h.statusService.ListByProject(c.Request().Context(), t.ProjectID); err == nil {
+					for _, s := range statuses {
+						categoryMap[s.ID] = s.Category
+					}
+				}
+			}
+		}
+		targetCat := domain.StatusCategory(cat)
+		filtered := make([]domain.Task, 0, len(tasks))
+		for _, t := range tasks {
+			if categoryMap[t.StatusID] == targetCat {
+				filtered = append(filtered, t)
+			}
+		}
+		tasks = filtered
 	}
 
 	return c.JSON(http.StatusOK, map[string]any{
