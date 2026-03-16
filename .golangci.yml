@@ -19,21 +19,20 @@ linters:
     - unconvert
     - unparam
     - gocritic
+  settings:
+    govet:
+      shadow:
+        enable: true
+    goimports:
+      local-prefixes:
+        - github.com/entire-vc/evc-mesh
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - style
 
-settings:
-  govet:
-    shadow:
-      enable: true
-  goimports:
-    local-prefixes:
-      - github.com/entire-vc/evc-mesh
-  gocritic:
-    enabled-tags:
-      - diagnostic
-      - style
-
-issues:
-  exclude-rules:
+exclusions:
+  rules:
     - path: _test\.go
       linters:
         - errcheck
