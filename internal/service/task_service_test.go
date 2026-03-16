@@ -22,7 +22,7 @@ import (
 var frozenTime = time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
 
 // setupTaskService returns a taskService wired to fresh mocks.
-func setupTaskService() (*taskService, *MockTaskRepository, *MockTaskStatusRepository, *MockTaskDependencyRepository, *MockActivityLogRepository) {
+func setupTaskService() (*taskService, *MockTaskRepository, *MockTaskStatusRepository) {
 	taskRepo := NewMockTaskRepository()
 	statusRepo := NewMockTaskStatusRepository()
 	depRepo := NewMockTaskDependencyRepository()
@@ -32,7 +32,7 @@ func setupTaskService() (*taskService, *MockTaskRepository, *MockTaskStatusRepos
 	// Freeze the clock for deterministic tests.
 	timeNow = func() time.Time { return frozenTime }
 
-	return svc, taskRepo, statusRepo, depRepo, activityRepo
+	return svc, taskRepo, statusRepo
 }
 
 // ---------------------------------------------------------------------------
@@ -106,7 +106,7 @@ func TestTaskService_Create(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			svc, taskRepo, _, _, _ := setupTaskService()
+			svc, taskRepo, _ := setupTaskService()
 			ctx := context.Background()
 
 			err := svc.Create(ctx, tt.task)
@@ -158,7 +158,7 @@ func TestTaskService_GetByID(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			svc, taskRepo, _, _, _ := setupTaskService()
+			svc, taskRepo, _ := setupTaskService()
 			ctx := context.Background()
 			id := tt.setup(taskRepo)
 
@@ -301,7 +301,7 @@ func TestTaskService_MoveTask(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			svc, taskRepo, statusRepo, _, _ := setupTaskService()
+			svc, taskRepo, statusRepo := setupTaskService()
 			ctx := context.Background()
 			taskID, input := tt.setup(taskRepo, statusRepo)
 
@@ -406,7 +406,7 @@ func TestTaskService_AssignTask(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			svc, taskRepo, _, _, _ := setupTaskService()
+			svc, taskRepo, _ := setupTaskService()
 			ctx := context.Background()
 			taskID := tt.setup(taskRepo)
 
@@ -494,7 +494,7 @@ func TestTaskService_CreateSubtask(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			svc, taskRepo, _, _, _ := setupTaskService()
+			svc, taskRepo, _ := setupTaskService()
 			ctx := context.Background()
 			parentID := tt.setup(taskRepo)
 
@@ -549,7 +549,7 @@ func TestTaskService_Delete(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			svc, taskRepo, _, _, _ := setupTaskService()
+			svc, taskRepo, _ := setupTaskService()
 			ctx := context.Background()
 			id := tt.setup(taskRepo)
 
@@ -595,11 +595,11 @@ func TestTaskService_applyAutoAssign(t *testing.T) {
 	agentIDStr2 := uuid.New()
 
 	tests := []struct {
-		name            string
-		rules           *domain.EffectiveAssignmentRules
-		task            *domain.Task
-		wantAssigned    bool
-		wantAssigneeID  *uuid.UUID
+		name             string
+		rules            *domain.EffectiveAssignmentRules
+		task             *domain.Task
+		wantAssigned     bool
+		wantAssigneeID   *uuid.UUID
 		wantAssigneeType domain.AssigneeType
 	}{
 		{
@@ -987,7 +987,7 @@ func TestTaskService_List(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			svc, taskRepo, _, _, _ := setupTaskService()
+			svc, taskRepo, _ := setupTaskService()
 			ctx := context.Background()
 			projID := tt.setup(taskRepo)
 

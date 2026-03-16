@@ -321,4 +321,3 @@ func (h *RulesHandler) SetWorkflowTemplates(c echo.Context) error {
 	}
 	return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
 }
-

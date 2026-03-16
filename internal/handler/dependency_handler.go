@@ -26,7 +26,7 @@ func NewDependencyHandler(ds service.TaskDependencyService, ts service.TaskServi
 
 // createDependencyRequest represents the JSON body for creating a dependency.
 type createDependencyRequest struct {
-	DependsOnTaskID uuid.UUID            `json:"depends_on_task_id"`
+	DependsOnTaskID uuid.UUID             `json:"depends_on_task_id"`
 	DependencyType  domain.DependencyType `json:"dependency_type"`
 }
 

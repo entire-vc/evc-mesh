@@ -47,14 +47,14 @@ type webhookEventType = string
 
 // webhookDomain is a local test representation of a webhook.
 type webhookDomain struct {
-	ID               uuid.UUID         `json:"id"`
-	WorkspaceID      uuid.UUID         `json:"workspace_id"`
-	URL              string            `json:"url"`
+	ID               uuid.UUID          `json:"id"`
+	WorkspaceID      uuid.UUID          `json:"workspace_id"`
+	URL              string             `json:"url"`
 	Events           []webhookEventType `json:"events"`
-	IsActive         bool              `json:"is_active"`
-	ConsecutiveFails int               `json:"consecutive_fails"`
-	CreatedAt        time.Time         `json:"created_at"`
-	UpdatedAt        time.Time         `json:"updated_at"`
+	IsActive         bool               `json:"is_active"`
+	ConsecutiveFails int                `json:"consecutive_fails"`
+	CreatedAt        time.Time          `json:"created_at"`
+	UpdatedAt        time.Time          `json:"updated_at"`
 }
 
 // ---------------------------------------------------------------------------
@@ -255,9 +255,9 @@ func TestWebhookHandler_Delete(t *testing.T) {
 
 func TestWebhookHandler_RequestParsing_CreateBody(t *testing.T) {
 	type createWebhookRequest struct {
-		URL    string            `json:"url"`
+		URL    string             `json:"url"`
 		Events []webhookEventType `json:"events"`
-		Secret string            `json:"secret"`
+		Secret string             `json:"secret"`
 	}
 
 	t.Run("valid body parses correctly", func(t *testing.T) {
@@ -295,7 +295,7 @@ func TestWebhookHandler_RequestParsing_CreateBody(t *testing.T) {
 func TestWebhookHandler_RequestParsing_UpdateBody(t *testing.T) {
 	type updateWebhookRequest struct {
 		URL      *string            `json:"url"`
-		Events   []webhookEventType  `json:"events"`
+		Events   []webhookEventType `json:"events"`
 		Secret   *string            `json:"secret"`
 		IsActive *bool              `json:"is_active"`
 	}

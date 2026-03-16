@@ -20,8 +20,6 @@ import (
 func setupAgentService() (
 	*agentService,
 	*MockAgentRepository,
-	*MockActivityLogRepository,
-	*MockWorkspaceRepository,
 	*domain.Workspace,
 ) {
 	agentRepo := NewMockAgentRepository()
@@ -40,7 +38,7 @@ func setupAgentService() (
 	// Freeze the clock.
 	timeNow = func() time.Time { return frozenTime }
 
-	return svc, agentRepo, activityRepo, wsRepo, ws
+	return svc, agentRepo, ws
 }
 
 // ---------------------------------------------------------------------------
@@ -131,7 +129,7 @@ func TestAgentService_Register(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			svc, agentRepo, _, _, ws := setupAgentService()
+			svc, agentRepo, ws := setupAgentService()
 			ctx := context.Background()
 			input := tt.input(ws)
 
@@ -214,7 +212,7 @@ func TestAgentService_Authenticate(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			svc, _, _, _, ws := setupAgentService()
+			svc, _, ws := setupAgentService()
 			ctx := context.Background()
 			rawKey := tt.setup(svc, ws)
 			slug := tt.slug(ws)
@@ -270,7 +268,7 @@ func TestAgentService_Heartbeat(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			svc, agentRepo, _, _, ws := setupAgentService()
+			svc, agentRepo, ws := setupAgentService()
 			ctx := context.Background()
 			agentID := tt.setup(svc, ws, agentRepo)
 
@@ -345,7 +343,7 @@ func TestAgentService_RotateAPIKey(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			svc, _, _, _, ws := setupAgentService()
+			svc, _, ws := setupAgentService()
 			ctx := context.Background()
 			agentID, oldKey := tt.setup(svc, ws)
 

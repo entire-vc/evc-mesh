@@ -46,7 +46,7 @@ type rateLimiterState struct {
 }
 
 type rateBucket struct {
-	count      int
+	count       int
 	windowStart time.Time
 }
 
@@ -106,9 +106,9 @@ func TestRateLimiter_AllowsRequestsUnderLimit(t *testing.T) {
 
 	clock := time.Now
 	mw := testRateLimiter(rateLimitConfig{
-		Limit:  10,
-		Window: time.Minute,
-		Clock:  func() time.Time { return clock() },
+		Limit:   10,
+		Window:  time.Minute,
+		Clock:   func() time.Time { return clock() },
 		KeyFunc: func(c echo.Context) string { return "test-key" },
 	})
 	wrapped := mw(handler)
@@ -130,9 +130,9 @@ func TestRateLimiter_BlocksRequestsOverLimit(t *testing.T) {
 	const limit = 3
 
 	mw := testRateLimiter(rateLimitConfig{
-		Limit:  limit,
-		Window: time.Minute,
-		Clock:  time.Now,
+		Limit:   limit,
+		Window:  time.Minute,
+		Clock:   time.Now,
 		KeyFunc: func(c echo.Context) string { return "single-client" },
 	})
 	handler := func(c echo.Context) error {
@@ -223,7 +223,7 @@ func TestRateLimiter_ResetsAfterWindow(t *testing.T) {
 	const limit = 2
 
 	// Controllable clock: starts at t0.
-	var nowUnix int64 = time.Now().Unix()
+	nowUnix := time.Now().Unix()
 	clock := func() time.Time { return time.Unix(atomic.LoadInt64(&nowUnix), 0) }
 
 	mw := testRateLimiter(rateLimitConfig{
@@ -265,9 +265,9 @@ func TestRateLimiter_IndependentKeysDoNotInterfere(t *testing.T) {
 
 	var keyToUse string
 	mw := testRateLimiter(rateLimitConfig{
-		Limit:  limit,
-		Window: time.Minute,
-		Clock:  time.Now,
+		Limit:   limit,
+		Window:  time.Minute,
+		Clock:   time.Now,
 		KeyFunc: func(c echo.Context) string { return keyToUse },
 	})
 	handler := func(c echo.Context) error { return c.NoContent(http.StatusOK) }

@@ -29,31 +29,31 @@ func NewRecurringRepo(db *sqlx.DB) *RecurringRepo {
 
 // recurringRow is the DB row representation, matching all columns in recurring_schedules.
 type recurringRow struct {
-	ID                  uuid.UUID              `db:"id"`
-	WorkspaceID         uuid.UUID              `db:"workspace_id"`
-	ProjectID           uuid.UUID              `db:"project_id"`
-	TitleTemplate       string                 `db:"title_template"`
-	DescriptionTemplate string                 `db:"description_template"`
+	ID                  uuid.UUID                 `db:"id"`
+	WorkspaceID         uuid.UUID                 `db:"workspace_id"`
+	ProjectID           uuid.UUID                 `db:"project_id"`
+	TitleTemplate       string                    `db:"title_template"`
+	DescriptionTemplate string                    `db:"description_template"`
 	Frequency           domain.RecurringFrequency `db:"frequency"`
-	CronExpr            string                 `db:"cron_expr"`
-	Timezone            string                 `db:"timezone"`
-	AssigneeID          *uuid.UUID             `db:"assignee_id"`
-	AssigneeType        domain.AssigneeType    `db:"assignee_type"`
-	Priority            domain.Priority        `db:"priority"`
-	Labels              pq.StringArray         `db:"labels"`
-	StatusID            *uuid.UUID             `db:"status_id"`
-	IsActive            bool                   `db:"is_active"`
-	StartsAt            time.Time              `db:"starts_at"`
-	EndsAt              *time.Time             `db:"ends_at"`
-	MaxInstances        *int                   `db:"max_instances"`
-	NextRunAt           *time.Time             `db:"next_run_at"`
-	LastTriggeredAt     *time.Time             `db:"last_triggered_at"`
-	InstanceCount       int                    `db:"instance_count"`
-	CreatedBy           uuid.UUID              `db:"created_by"`
-	CreatedByType       domain.ActorType       `db:"created_by_type"`
-	CreatedAt           time.Time              `db:"created_at"`
-	UpdatedAt           time.Time              `db:"updated_at"`
-	DeletedAt           *time.Time             `db:"deleted_at"`
+	CronExpr            string                    `db:"cron_expr"`
+	Timezone            string                    `db:"timezone"`
+	AssigneeID          *uuid.UUID                `db:"assignee_id"`
+	AssigneeType        domain.AssigneeType       `db:"assignee_type"`
+	Priority            domain.Priority           `db:"priority"`
+	Labels              pq.StringArray            `db:"labels"`
+	StatusID            *uuid.UUID                `db:"status_id"`
+	IsActive            bool                      `db:"is_active"`
+	StartsAt            time.Time                 `db:"starts_at"`
+	EndsAt              *time.Time                `db:"ends_at"`
+	MaxInstances        *int                      `db:"max_instances"`
+	NextRunAt           *time.Time                `db:"next_run_at"`
+	LastTriggeredAt     *time.Time                `db:"last_triggered_at"`
+	InstanceCount       int                       `db:"instance_count"`
+	CreatedBy           uuid.UUID                 `db:"created_by"`
+	CreatedByType       domain.ActorType          `db:"created_by_type"`
+	CreatedAt           time.Time                 `db:"created_at"`
+	UpdatedAt           time.Time                 `db:"updated_at"`
+	DeletedAt           *time.Time                `db:"deleted_at"`
 }
 
 func (r *recurringRow) toDomain() domain.RecurringSchedule {
@@ -225,8 +225,8 @@ func (r *RecurringRepo) ListByProject(ctx context.Context, projectID uuid.UUID, 
 	}
 
 	order := orderClause(pg, allowedSortColumns{
-		"created_at": "created_at",
-		"updated_at": "updated_at",
+		"created_at":     "created_at",
+		"updated_at":     "updated_at",
 		"title_template": "title_template",
 	}, "created_at")
 

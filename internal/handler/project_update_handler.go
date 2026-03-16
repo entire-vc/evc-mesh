@@ -26,12 +26,12 @@ func NewProjectUpdateHandler(svc service.ProjectUpdateService) *ProjectUpdateHan
 
 // createProjectUpdateRequest is the JSON body for creating a project update.
 type createProjectUpdateRequest struct {
-	Title      string             `json:"title"`
+	Title      string              `json:"title"`
 	Status     domain.UpdateStatus `json:"status"`
-	Summary    string             `json:"summary"`
-	Highlights []domain.TextItem  `json:"highlights"`
-	Blockers   []domain.TextItem  `json:"blockers"`
-	NextSteps  []domain.TextItem  `json:"next_steps"`
+	Summary    string              `json:"summary"`
+	Highlights []domain.TextItem   `json:"highlights"`
+	Blockers   []domain.TextItem   `json:"blockers"`
+	NextSteps  []domain.TextItem   `json:"next_steps"`
 }
 
 // Create handles POST /projects/:proj_id/updates
