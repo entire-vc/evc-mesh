@@ -37,8 +37,10 @@ type ProjectService interface {
 
 // MoveTaskInput holds parameters for moving a task to a new status and/or position.
 type MoveTaskInput struct {
-	StatusID *uuid.UUID `json:"status_id"`
-	Position *float64   `json:"position"`
+	StatusID     *uuid.UUID          `json:"status_id"`
+	Position     *float64            `json:"position"`
+	AssigneeID   *uuid.UUID          `json:"assignee_id,omitempty"`   // explicit reassign (skips auto-reassign)
+	AssigneeType domain.AssigneeType `json:"assignee_type,omitempty"` // required if AssigneeID is set
 }
 
 // AssignTaskInput holds parameters for assigning a task.
