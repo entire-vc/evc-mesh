@@ -129,7 +129,8 @@ func (s *Service) Register(ctx context.Context, email, password, name string) (*
 		UpdatedAt:    now,
 	}
 
-	if err := s.userRepo.Create(ctx, user); err != nil {
+	err = s.userRepo.Create(ctx, user)
+	if err != nil {
 		return nil, nil, err
 	}
 
@@ -142,7 +143,8 @@ func (s *Service) Register(ctx context.Context, email, password, name string) (*
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
-	if err := s.workspaceRepo.Create(ctx, ws); err != nil {
+	err = s.workspaceRepo.Create(ctx, ws)
+	if err != nil {
 		return nil, nil, err
 	}
 
@@ -155,7 +157,8 @@ func (s *Service) Register(ctx context.Context, email, password, name string) (*
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	}
-	if err := s.workspaceMemberRepo.Create(ctx, member); err != nil {
+	err = s.workspaceMemberRepo.Create(ctx, member)
+	if err != nil {
 		return nil, nil, err
 	}
 
