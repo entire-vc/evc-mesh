@@ -24,6 +24,9 @@ linters:
     - unparam
     - gocritic
   settings:
+    govet:
+      enable:
+        - shadow
     gocritic:
       enabled-tags:
         - diagnostic
