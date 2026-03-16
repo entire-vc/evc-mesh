@@ -27,12 +27,12 @@ func NewEventHandler(es service.EventBusService) *EventHandler {
 
 // createEventRequest represents the JSON body for creating an event.
 type createEventRequest struct {
-	EventType  domain.EventType `json:"event_type"`
-	Subject    string           `json:"subject"`
-	Payload    map[string]any   `json:"payload"`
-	TaskID     *uuid.UUID       `json:"task_id"`
-	Tags       []string         `json:"tags"`
-	TTLSeconds int              `json:"ttl_seconds"`
+	EventType  domain.EventType   `json:"event_type"`
+	Subject    string             `json:"subject"`
+	Payload    map[string]any     `json:"payload"`
+	TaskID     *uuid.UUID         `json:"task_id"`
+	Tags       []string           `json:"tags"`
+	TTLSeconds int                `json:"ttl_seconds"`
 	MemoryHint *domain.MemoryHint `json:"memory_hint"`
 }
 
@@ -128,7 +128,7 @@ func (h *EventHandler) Create(c echo.Context) error {
 		payloadMap = map[string]any{}
 	}
 	// Validate payload is serializable.
-	if _, err := json.Marshal(payloadMap); err != nil {
+	if _, err = json.Marshal(payloadMap); err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid payload"))
 	}
 

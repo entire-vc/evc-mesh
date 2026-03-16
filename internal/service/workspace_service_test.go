@@ -15,7 +15,7 @@ import (
 )
 
 // setupWorkspaceService returns a workspaceService wired to fresh mocks.
-func setupWorkspaceService() (*workspaceService, *MockWorkspaceRepository, *MockActivityLogRepository) {
+func setupWorkspaceService() (*workspaceService, *MockWorkspaceRepository) {
 	wsRepo := NewMockWorkspaceRepository()
 	activityRepo := NewMockActivityLogRepository()
 	svc := NewWorkspaceService(wsRepo, activityRepo).(*workspaceService)
@@ -23,7 +23,7 @@ func setupWorkspaceService() (*workspaceService, *MockWorkspaceRepository, *Mock
 	// Freeze the clock.
 	timeNow = func() time.Time { return frozenTime }
 
-	return svc, wsRepo, activityRepo
+	return svc, wsRepo
 }
 
 // ---------------------------------------------------------------------------
@@ -101,7 +101,7 @@ func TestWorkspaceService_Create(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			svc, wsRepo, _ := setupWorkspaceService()
+			svc, wsRepo := setupWorkspaceService()
 			ctx := context.Background()
 
 			err := svc.Create(ctx, tt.workspace)
@@ -153,7 +153,7 @@ func TestWorkspaceService_GetByID(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			svc, wsRepo, _ := setupWorkspaceService()
+			svc, wsRepo := setupWorkspaceService()
 			ctx := context.Background()
 			id := tt.setup(wsRepo)
 
@@ -206,7 +206,7 @@ func TestWorkspaceService_GetBySlug(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			svc, wsRepo, _ := setupWorkspaceService()
+			svc, wsRepo := setupWorkspaceService()
 			ctx := context.Background()
 			slug := tt.setup(wsRepo)
 
@@ -259,7 +259,7 @@ func TestWorkspaceService_Update(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			svc, wsRepo, _ := setupWorkspaceService()
+			svc, wsRepo := setupWorkspaceService()
 			ctx := context.Background()
 			ws := tt.setup(wsRepo)
 
@@ -310,7 +310,7 @@ func TestWorkspaceService_Delete(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			svc, wsRepo, _ := setupWorkspaceService()
+			svc, wsRepo := setupWorkspaceService()
 			ctx := context.Background()
 			id := tt.setup(wsRepo)
 

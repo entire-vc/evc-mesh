@@ -18,7 +18,7 @@ const (
 	StatusCategoryDone       StatusCategory = "done"
 	StatusCategoryCancelled  StatusCategory = "cancelled"
 	// StatusCategoryTriage marks tasks that need routing / assignment before work begins.
-	StatusCategoryTriage     StatusCategory = "triage"
+	StatusCategoryTriage StatusCategory = "triage"
 )
 
 // TaskStatus is a customizable status column within a project.

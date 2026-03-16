@@ -100,7 +100,7 @@ func (s *taskTemplateService) Delete(ctx context.Context, id uuid.UUID) error {
 // overrides supplied by the caller.  Overrides are a map[string]any where keys
 // correspond to task fields: title, description, priority, labels, assignee_id,
 // assignee_type, status_id, estimated_hours.
-func (s *taskTemplateService) CreateTaskFromTemplate(ctx context.Context, templateID uuid.UUID, createdBy uuid.UUID, createdByType domain.ActorType, overrides map[string]any) (*domain.Task, error) {
+func (s *taskTemplateService) CreateTaskFromTemplate(ctx context.Context, templateID, createdBy uuid.UUID, createdByType domain.ActorType, overrides map[string]any) (*domain.Task, error) {
 	tmpl, err := s.repo.GetByID(ctx, templateID)
 	if err != nil {
 		return nil, fmt.Errorf("taskTemplateService.CreateTaskFromTemplate: fetch template: %w", err)

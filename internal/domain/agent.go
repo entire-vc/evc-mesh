@@ -54,16 +54,16 @@ type Agent struct {
 	// Profile fields (Sprint 20 — team directory & assignment rules)
 	// Note: AgentType above is the automation category (claude_code/openclaw/etc).
 	// Role is the team role (developer/lead/reviewer/etc).
-	Role               string          `json:"role" db:"role"`
-	ResponsibilityZone string          `json:"responsibility_zone" db:"responsibility_zone"`
+	Role               string           `json:"role" db:"role"`
+	ResponsibilityZone string           `json:"responsibility_zone" db:"responsibility_zone"`
 	EscalationTo       *json.RawMessage `json:"escalation_to,omitempty" db:"escalation_to"`
-	AcceptsFrom        json.RawMessage `json:"accepts_from" db:"accepts_from"`
-	MaxConcurrentTasks int             `json:"max_concurrent_tasks" db:"max_concurrent_tasks"`
-	WorkingHours       string          `json:"working_hours" db:"working_hours"`
-	ProfileDescription string          `json:"profile_description" db:"profile_description"`
-	CallbackURL        string          `json:"callback_url" db:"callback_url"`
-	CreatedAt           time.Time       `json:"created_at" db:"created_at"`
-	UpdatedAt           time.Time       `json:"updated_at" db:"updated_at"`
+	AcceptsFrom        json.RawMessage  `json:"accepts_from" db:"accepts_from"`
+	MaxConcurrentTasks int              `json:"max_concurrent_tasks" db:"max_concurrent_tasks"`
+	WorkingHours       string           `json:"working_hours" db:"working_hours"`
+	ProfileDescription string           `json:"profile_description" db:"profile_description"`
+	CallbackURL        string           `json:"callback_url" db:"callback_url"`
+	CreatedAt          time.Time        `json:"created_at" db:"created_at"`
+	UpdatedAt          time.Time        `json:"updated_at" db:"updated_at"`
 }
 
 // DefaultHeartbeatStaleThreshold is the default time after which an agent's heartbeat is considered stale.

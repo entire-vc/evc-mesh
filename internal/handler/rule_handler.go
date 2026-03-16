@@ -10,8 +10,8 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	mw "github.com/entire-vc/evc-mesh/internal/middleware"
 	"github.com/entire-vc/evc-mesh/internal/service"
-	"github.com/entire-vc/evc-mesh/pkg/apierror"
 	"github.com/entire-vc/evc-mesh/pkg/actorctx"
+	"github.com/entire-vc/evc-mesh/pkg/apierror"
 )
 
 // RuleHandler handles HTTP requests for rule management.
@@ -26,28 +26,28 @@ func NewRuleHandler(svc service.RuleService) *RuleHandler {
 
 // createRuleRequest is the request body for creating a rule.
 type createRuleRequest struct {
-	Scope               domain.RuleScope        `json:"scope"`
-	RuleType            string                  `json:"rule_type"`
-	Name                string                  `json:"name"`
-	Description         string                  `json:"description"`
-	Config              json.RawMessage         `json:"config"`
-	AppliesToActorTypes []string                `json:"applies_to_actor_types"`
-	AppliesToRoles      []string                `json:"applies_to_roles"`
-	Enforcement         domain.RuleEnforcement  `json:"enforcement"`
-	Priority            int                     `json:"priority"`
-	AgentID             *uuid.UUID              `json:"agent_id,omitempty"`
+	Scope               domain.RuleScope       `json:"scope"`
+	RuleType            string                 `json:"rule_type"`
+	Name                string                 `json:"name"`
+	Description         string                 `json:"description"`
+	Config              json.RawMessage        `json:"config"`
+	AppliesToActorTypes []string               `json:"applies_to_actor_types"`
+	AppliesToRoles      []string               `json:"applies_to_roles"`
+	Enforcement         domain.RuleEnforcement `json:"enforcement"`
+	Priority            int                    `json:"priority"`
+	AgentID             *uuid.UUID             `json:"agent_id,omitempty"`
 }
 
 // updateRuleRequest is the request body for partially updating a rule.
 type updateRuleRequest struct {
-	Name                *string                  `json:"name"`
-	Description         *string                  `json:"description"`
-	Config              json.RawMessage          `json:"config"`
-	AppliesToActorTypes []string                 `json:"applies_to_actor_types"`
-	AppliesToRoles      []string                 `json:"applies_to_roles"`
-	Enforcement         *domain.RuleEnforcement  `json:"enforcement"`
-	Priority            *int                     `json:"priority"`
-	IsEnabled           *bool                    `json:"is_enabled"`
+	Name                *string                 `json:"name"`
+	Description         *string                 `json:"description"`
+	Config              json.RawMessage         `json:"config"`
+	AppliesToActorTypes []string                `json:"applies_to_actor_types"`
+	AppliesToRoles      []string                `json:"applies_to_roles"`
+	Enforcement         *domain.RuleEnforcement `json:"enforcement"`
+	Priority            *int                    `json:"priority"`
+	IsEnabled           *bool                   `json:"is_enabled"`
 }
 
 // evaluateRuleRequest is the request body for dry-run rule evaluation.
@@ -57,13 +57,6 @@ type evaluateRuleRequest struct {
 	TargetStatusID *uuid.UUID `json:"target_status_id"`
 	WorkspaceID    uuid.UUID  `json:"workspace_id"`
 	ProjectID      *uuid.UUID `json:"project_id"`
-}
-
-// ruleViolationResponse is the 422 response body for blocked actions.
-type ruleViolationResponse struct {
-	Error      string                  `json:"error"`
-	Message    string                  `json:"message"`
-	Violations []domain.RuleViolation  `json:"violations"`
 }
 
 // CreateWorkspaceRule handles POST /workspaces/:ws_id/rules

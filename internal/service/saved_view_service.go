@@ -107,7 +107,7 @@ func (s *savedViewService) Update(ctx context.Context, id uuid.UUID, input domai
 }
 
 // Delete removes a saved view. Only the owner can delete their own view.
-func (s *savedViewService) Delete(ctx context.Context, id uuid.UUID, callerID uuid.UUID) error {
+func (s *savedViewService) Delete(ctx context.Context, id, callerID uuid.UUID) error {
 	view, err := s.GetByID(ctx, id)
 	if err != nil {
 		return err
@@ -119,6 +119,6 @@ func (s *savedViewService) Delete(ctx context.Context, id uuid.UUID, callerID uu
 }
 
 // ListByProject returns all visible saved views for a project (own + shared).
-func (s *savedViewService) ListByProject(ctx context.Context, projectID uuid.UUID, userID uuid.UUID) ([]domain.SavedView, error) {
+func (s *savedViewService) ListByProject(ctx context.Context, projectID, userID uuid.UUID) ([]domain.SavedView, error) {
 	return s.repo.ListByProject(ctx, projectID, userID)
 }

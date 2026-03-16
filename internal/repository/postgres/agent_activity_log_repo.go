@@ -80,7 +80,7 @@ func (r *AgentActivityLogRepo) List(ctx context.Context, agentID uuid.UUID, filt
 	conditions := []string{"agent_id = $1"}
 	argIdx := 2
 
-	argIdx = applyActivityFilters(&conditions, &args, argIdx, filter)
+	applyActivityFilters(&conditions, &args, argIdx, filter)
 
 	where := "WHERE " + joinAnd(conditions)
 
@@ -110,8 +110,7 @@ func (r *AgentActivityLogRepo) ListByWorkspace(ctx context.Context, workspaceID 
 	conditions := []string{"workspace_id = $1"}
 	argIdx := 2
 
-	argIdx = applyActivityFilters(&conditions, &args, argIdx, filter)
-	_ = argIdx
+	applyActivityFilters(&conditions, &args, argIdx, filter)
 
 	where := "WHERE " + joinAnd(conditions)
 
@@ -134,7 +133,7 @@ func (r *AgentActivityLogRepo) ListByWorkspace(ctx context.Context, workspaceID 
 	return pagination.NewPage(items, totalCount, pg), nil
 }
 
-func applyActivityFilters(conditions *[]string, args *[]interface{}, argIdx int, filter repository.AgentActivityLogFilter) int {
+func applyActivityFilters(conditions *[]string, args *[]interface{}, argIdx int, filter repository.AgentActivityLogFilter) {
 	if filter.EventType != "" {
 		*conditions = append(*conditions, fmt.Sprintf("event_type = $%d", argIdx))
 		*args = append(*args, filter.EventType)
@@ -150,5 +149,5 @@ func applyActivityFilters(conditions *[]string, args *[]interface{}, argIdx int,
 		*args = append(*args, *filter.Until)
 		argIdx++
 	}
-	return argIdx
+	_ = argIdx
 }

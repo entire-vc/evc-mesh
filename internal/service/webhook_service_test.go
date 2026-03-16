@@ -54,15 +54,15 @@ const (
 
 // Webhook represents a registered webhook endpoint.
 type Webhook struct {
-	ID               uuid.UUID     `json:"id"`
-	WorkspaceID      uuid.UUID     `json:"workspace_id"`
-	URL              string        `json:"url"`
-	Secret           string        `json:"-"` // stored hashed; raw only at creation
+	ID               uuid.UUID      `json:"id"`
+	WorkspaceID      uuid.UUID      `json:"workspace_id"`
+	URL              string         `json:"url"`
+	Secret           string         `json:"-"` // stored hashed; raw only at creation
 	Events           []WebhookEvent `json:"events"`
-	IsActive         bool          `json:"is_active"`
-	ConsecutiveFails int           `json:"consecutive_fails"`
-	CreatedAt        time.Time     `json:"created_at"`
-	UpdatedAt        time.Time     `json:"updated_at"`
+	IsActive         bool           `json:"is_active"`
+	ConsecutiveFails int            `json:"consecutive_fails"`
+	CreatedAt        time.Time      `json:"created_at"`
+	UpdatedAt        time.Time      `json:"updated_at"`
 }
 
 // WebhookDispatchPayload is the body POSTed to the webhook URL.
@@ -342,8 +342,8 @@ func TestWebhookService_SignatureVerification_EndToEnd(t *testing.T) {
 		receivedSignature = r.Header.Get("X-Mesh-Signature")
 
 		var p WebhookDispatchPayload
-		err := json.NewDecoder(r.Body).Decode(&p)
-		require.NoError(t, err, "body must be valid JSON")
+		decodeErr := json.NewDecoder(r.Body).Decode(&p)
+		require.NoError(t, decodeErr, "body must be valid JSON")
 		receivedEvent = string(p.Event)
 
 		w.WriteHeader(http.StatusOK)
@@ -364,7 +364,7 @@ func TestWebhookService_SignatureVerification_EndToEnd(t *testing.T) {
 
 	resp, err := client.Do(req)
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.Equal(t, string(WebhookEventTaskCreated), receivedEvent)
@@ -597,7 +597,7 @@ func TestWebhookDispatch_ProtocolContract(t *testing.T) {
 
 	resp, err := client.Do(directReq)
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.Equal(t, int64(1), atomic.LoadInt64(&requestCount), "server should receive exactly 1 request")

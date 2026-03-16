@@ -217,11 +217,7 @@ func (s *analyticsService) queryAgentMetrics(ctx context.Context, filter Analyti
 	}
 	agentTasks := make([]AgentTaskRow, len(rows))
 	for i, r := range rows {
-		agentTasks[i] = AgentTaskRow{
-			AgentID:   r.AgentID,
-			AgentName: r.AgentName,
-			Completed: r.Completed,
-		}
+		agentTasks[i] = AgentTaskRow(r)
 	}
 
 	return &AgentMetrics{

@@ -15,7 +15,7 @@ import (
 )
 
 // setupEventBusService returns an eventBusService wired to fresh mocks.
-func setupEventBusService() (*eventBusService, *MockEventBusMessageRepository, *MockActivityLogRepository) {
+func setupEventBusService() (*eventBusService, *MockEventBusMessageRepository) {
 	eventRepo := NewMockEventBusMessageRepository()
 	activityRepo := NewMockActivityLogRepository()
 	svc := NewEventBusService(eventRepo, activityRepo).(*eventBusService)
@@ -23,7 +23,7 @@ func setupEventBusService() (*eventBusService, *MockEventBusMessageRepository, *
 	// Freeze the clock.
 	timeNow = func() time.Time { return frozenTime }
 
-	return svc, eventRepo, activityRepo
+	return svc, eventRepo
 }
 
 // ---------------------------------------------------------------------------
@@ -102,7 +102,7 @@ func TestEventBusService_Publish(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			svc, eventRepo, _ := setupEventBusService()
+			svc, eventRepo := setupEventBusService()
 			ctx := context.Background()
 
 			msg, err := svc.Publish(ctx, tt.input)
@@ -129,7 +129,7 @@ func TestEventBusService_Publish(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestEventBusService_CleanupExpired(t *testing.T) {
-	svc, _, _ := setupEventBusService()
+	svc, _ := setupEventBusService()
 	ctx := context.Background()
 
 	count, err := svc.CleanupExpired(ctx)
@@ -144,7 +144,7 @@ func TestEventBusService_CleanupExpired(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestEventBusService_GetContext(t *testing.T) {
-	svc, eventRepo, _ := setupEventBusService()
+	svc, eventRepo := setupEventBusService()
 	ctx := context.Background()
 
 	projectID := uuid.New()

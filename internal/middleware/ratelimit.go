@@ -39,10 +39,10 @@ type limiterEntry struct {
 
 // rateLimitStore manages per-key token-bucket limiters.
 type rateLimitStore struct {
-	mu       sync.Mutex
-	entries  map[string]*limiterEntry
-	rps      rate.Limit // tokens per second derived from RPM
-	burst    int        // burst size (== RPM, i.e. 1 full minute of quota)
+	mu      sync.Mutex
+	entries map[string]*limiterEntry
+	rps     rate.Limit // tokens per second derived from RPM
+	burst   int        // burst size (== RPM, i.e. 1 full minute of quota)
 }
 
 func newRateLimitStore(rpm int) *rateLimitStore {

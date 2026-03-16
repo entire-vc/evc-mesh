@@ -104,7 +104,7 @@ func (s *projectMemberService) AddMember(ctx context.Context, projectID, userID 
 		UpdatedAt: now,
 	}
 
-	if err := s.memberRepo.Create(ctx, member); err != nil {
+	if err = s.memberRepo.Create(ctx, member); err != nil {
 		return nil, fmt.Errorf("project_member_service.AddMember: %w", err)
 	}
 
@@ -143,7 +143,8 @@ func (s *projectMemberService) AddAgentMember(ctx context.Context, projectID, ag
 
 	// Verify agent exists and belongs to the same workspace.
 	if s.agentRepo != nil {
-		agent, err := s.agentRepo.GetByID(ctx, agentID)
+		var agent *domain.Agent
+		agent, err = s.agentRepo.GetByID(ctx, agentID)
 		if err != nil {
 			return nil, fmt.Errorf("project_member_service.AddAgentMember: %w", err)
 		}
@@ -174,7 +175,7 @@ func (s *projectMemberService) AddAgentMember(ctx context.Context, projectID, ag
 		UpdatedAt: now,
 	}
 
-	if err := s.memberRepo.Create(ctx, member); err != nil {
+	if err = s.memberRepo.Create(ctx, member); err != nil {
 		return nil, fmt.Errorf("project_member_service.AddAgentMember: %w", err)
 	}
 

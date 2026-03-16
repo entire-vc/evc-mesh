@@ -24,11 +24,11 @@ type Event struct {
 
 // PublishEventInput is the request body for POST /projects/:id/events.
 type PublishEventInput struct {
-	EventType  string         `json:"event_type"`           // summary|status_change|context_update|error|dependency_resolved|custom
-	Subject    string         `json:"subject"`              // required human-readable subject line
-	Payload    map[string]any `json:"payload,omitempty"`    // arbitrary JSON payload
-	TaskID     *string        `json:"task_id,omitempty"`   // optional task context
-	Tags       []string       `json:"tags,omitempty"`       // searchable tags
+	EventType  string         `json:"event_type"`            // summary|status_change|context_update|error|dependency_resolved|custom
+	Subject    string         `json:"subject"`               // required human-readable subject line
+	Payload    map[string]any `json:"payload,omitempty"`     // arbitrary JSON payload
+	TaskID     *string        `json:"task_id,omitempty"`     // optional task context
+	Tags       []string       `json:"tags,omitempty"`        // searchable tags
 	TTLSeconds int            `json:"ttl_seconds,omitempty"` // 0 = no expiry
 }
 

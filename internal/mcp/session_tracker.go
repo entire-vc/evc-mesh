@@ -75,7 +75,7 @@ func (t *SessionTracker) Stats() map[string]any {
 
 // ComplianceScore computes a 0–1 score reflecting ACP (Agent Collaboration Protocol)
 // adherence for the current session. Returns the score and a per-check detail map.
-func (t *SessionTracker) ComplianceScore() (float64, map[string]bool) {
+func (t *SessionTracker) ComplianceScore() (score float64, checks map[string]bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -89,7 +89,7 @@ func (t *SessionTracker) ComplianceScore() (float64, map[string]bool) {
 		"created_memory":               t.memoriesCreated > 0,
 	}
 
-	score := 0.0
+	score = 0.0
 	if detail["called_get_me"] {
 		score += 0.10
 	}

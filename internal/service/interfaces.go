@@ -109,10 +109,10 @@ type TaskService interface {
 	CheckoutTask(ctx context.Context, taskID uuid.UUID, ttlMinutes int) (*CheckoutResult, error)
 	// ReleaseCheckout releases the checkout identified by the given token.
 	// Returns an error when the token does not match.
-	ReleaseCheckout(ctx context.Context, taskID uuid.UUID, token uuid.UUID) error
+	ReleaseCheckout(ctx context.Context, taskID, token uuid.UUID) error
 	// ExtendCheckout extends the checkout TTL identified by the given token.
 	// Returns an error when the token does not match or the checkout has expired.
-	ExtendCheckout(ctx context.Context, taskID uuid.UUID, token uuid.UUID, ttlMinutes int) (*CheckoutResult, error)
+	ExtendCheckout(ctx context.Context, taskID, token uuid.UUID, ttlMinutes int) (*CheckoutResult, error)
 	// MoveToProject moves a task to a different project, resetting status to the
 	// target project's default and recalculating task_number atomically.
 	// Returns an error if the task is already in the target project.
@@ -290,8 +290,8 @@ type SavedViewService interface {
 	Create(ctx context.Context, input domain.CreateSavedViewInput) (*domain.SavedView, error)
 	GetByID(ctx context.Context, id uuid.UUID) (*domain.SavedView, error)
 	Update(ctx context.Context, id uuid.UUID, input domain.UpdateSavedViewInput, callerID uuid.UUID) (*domain.SavedView, error)
-	Delete(ctx context.Context, id uuid.UUID, callerID uuid.UUID) error
-	ListByProject(ctx context.Context, projectID uuid.UUID, userID uuid.UUID) ([]domain.SavedView, error)
+	Delete(ctx context.Context, id, callerID uuid.UUID) error
+	ListByProject(ctx context.Context, projectID, userID uuid.UUID) ([]domain.SavedView, error)
 }
 
 // CreateProjectUpdateInput holds the fields for creating a project update.
@@ -530,7 +530,7 @@ type TaskTemplateService interface {
 	// CreateTaskFromTemplate instantiates a new task from the given template, applying
 	// any caller-supplied field overrides (title, description, priority, labels,
 	// assignee_id, assignee_type, status_id, estimated_hours).
-	CreateTaskFromTemplate(ctx context.Context, templateID uuid.UUID, createdBy uuid.UUID, createdByType domain.ActorType, overrides map[string]any) (*domain.Task, error)
+	CreateTaskFromTemplate(ctx context.Context, templateID, createdBy uuid.UUID, createdByType domain.ActorType, overrides map[string]any) (*domain.Task, error)
 }
 
 // AnalyticsMetrics holds aggregated workspace/project metrics.

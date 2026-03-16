@@ -15,7 +15,7 @@ import (
 )
 
 // setupProjectService returns a projectService wired to fresh mocks.
-func setupProjectService() (*projectService, *MockProjectRepository, *MockTaskStatusRepository, *MockActivityLogRepository) {
+func setupProjectService() (*projectService, *MockProjectRepository, *MockTaskStatusRepository) {
 	projectRepo := NewMockProjectRepository()
 	statusRepo := NewMockTaskStatusRepository()
 	activityRepo := NewMockActivityLogRepository()
@@ -24,7 +24,7 @@ func setupProjectService() (*projectService, *MockProjectRepository, *MockTaskSt
 	// Freeze the clock.
 	timeNow = func() time.Time { return frozenTime }
 
-	return svc, projectRepo, statusRepo, activityRepo
+	return svc, projectRepo, statusRepo
 }
 
 // ---------------------------------------------------------------------------
@@ -108,7 +108,7 @@ func TestProjectService_Create(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			svc, projectRepo, statusRepo, _ := setupProjectService()
+			svc, projectRepo, statusRepo := setupProjectService()
 			ctx := context.Background()
 
 			err := svc.Create(ctx, tt.project)
@@ -164,7 +164,7 @@ func TestProjectService_Archive(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			svc, projectRepo, _, _ := setupProjectService()
+			svc, projectRepo, _ := setupProjectService()
 			ctx := context.Background()
 			id := tt.setup(projectRepo)
 
@@ -222,7 +222,7 @@ func TestProjectService_Unarchive(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			svc, projectRepo, _, _ := setupProjectService()
+			svc, projectRepo, _ := setupProjectService()
 			ctx := context.Background()
 			id := tt.setup(projectRepo)
 
@@ -276,7 +276,7 @@ func TestProjectService_GetByID(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			svc, projectRepo, _, _ := setupProjectService()
+			svc, projectRepo, _ := setupProjectService()
 			ctx := context.Background()
 			id := tt.setup(projectRepo)
 

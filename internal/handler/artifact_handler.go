@@ -32,7 +32,7 @@ func (h *ArtifactHandler) List(c echo.Context) error {
 	}
 
 	var pg pagination.Params
-	if err := c.Bind(&pg); err != nil {
+	if err = c.Bind(&pg); err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid pagination parameters"))
 	}
 	pg.Normalize()
@@ -74,7 +74,7 @@ func (h *ArtifactHandler) Upload(c echo.Context) error {
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, apierror.InternalError("failed to open uploaded file"))
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	// Determine uploader from context.
 	var uploadedBy uuid.UUID

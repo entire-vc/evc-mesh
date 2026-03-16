@@ -44,7 +44,7 @@ func (m *mockMemoryRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.Mem
 	return nil, nil
 }
 
-func (m *mockMemoryRepo) GetByKey(ctx context.Context, wsID uuid.UUID, projID *uuid.UUID, agentID *uuid.UUID, key string, scope domain.MemoryScope) (*domain.Memory, error) {
+func (m *mockMemoryRepo) GetByKey(ctx context.Context, wsID uuid.UUID, projID, agentID *uuid.UUID, key string, scope domain.MemoryScope) (*domain.Memory, error) {
 	if m.getByKeyFn != nil {
 		return m.getByKeyFn(ctx, wsID, projID, agentID, key, scope)
 	}
