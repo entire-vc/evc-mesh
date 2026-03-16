@@ -185,7 +185,8 @@ func (s *Service) Login(ctx context.Context, email, password string) (*domain.Us
 		return nil, nil, ErrUserInactive
 	}
 
-	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)); err != nil {
+	err = bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password))
+	if err != nil {
 		return nil, nil, ErrInvalidCredentials
 	}
 
@@ -222,7 +223,8 @@ func (s *Service) RefreshTokens(ctx context.Context, refreshToken string) (*Toke
 	}
 
 	// Revoke the old refresh token.
-	if err := s.refreshTokenRepo.RevokeByHash(ctx, tokenHash); err != nil {
+	err = s.refreshTokenRepo.RevokeByHash(ctx, tokenHash)
+	if err != nil {
 		return nil, apierror.Wrap(err)
 	}
 

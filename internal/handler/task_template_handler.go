@@ -67,7 +67,7 @@ func (h *TaskTemplateHandler) Create(c echo.Context) error {
 	}
 
 	var req createTemplateRequest
-	if err := c.Bind(&req); err != nil {
+	if err = c.Bind(&req); err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
 	}
 
@@ -151,7 +151,7 @@ func (h *TaskTemplateHandler) Update(c echo.Context) error {
 	}
 
 	var req updateTemplateRequest
-	if err := c.Bind(&req); err != nil {
+	if err = c.Bind(&req); err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
 	}
 
@@ -201,7 +201,7 @@ func (h *TaskTemplateHandler) CreateTask(c echo.Context) error {
 	}
 
 	var req createTaskFromTemplateRequest
-	if err := c.Bind(&req); err != nil {
+	if err = c.Bind(&req); err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
 	}
 

@@ -52,7 +52,7 @@ func (h *VCSLinkHandler) Create(c echo.Context) error {
 	}
 
 	var req createVCSLinkRequest
-	if err := c.Bind(&req); err != nil {
+	if err = c.Bind(&req); err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
 	}
 

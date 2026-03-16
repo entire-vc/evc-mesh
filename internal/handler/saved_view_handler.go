@@ -62,7 +62,7 @@ func (h *SavedViewHandler) Create(c echo.Context) error {
 	}
 
 	var req createSavedViewRequest
-	if err := c.Bind(&req); err != nil {
+	if err = c.Bind(&req); err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
 	}
 
@@ -135,7 +135,7 @@ func (h *SavedViewHandler) Update(c echo.Context) error {
 	}
 
 	var req updateSavedViewRequest
-	if err := c.Bind(&req); err != nil {
+	if err = c.Bind(&req); err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
 	}
 
