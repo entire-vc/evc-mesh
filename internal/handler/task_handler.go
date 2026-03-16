@@ -176,6 +176,12 @@ func (h *TaskHandler) Create(c echo.Context) error {
 		return handleError(c, err)
 	}
 
+	// Re-fetch from DB to get enriched fields (assignee_name, subtask_count, etc.)
+	// that are populated via SQL JOINs but not available on the in-memory object.
+	if enriched, err := h.taskService.GetByID(c.Request().Context(), task.ID); err == nil && enriched != nil {
+		return c.JSON(http.StatusCreated, enriched)
+	}
+
 	return c.JSON(http.StatusCreated, task)
 }
 
@@ -511,6 +517,11 @@ func (h *TaskHandler) CreateSubtask(c echo.Context) error {
 	subtask, err := h.taskService.CreateSubtask(c.Request().Context(), parentTaskID, input)
 	if err != nil {
 		return handleError(c, err)
+	}
+
+	// Re-fetch from DB to get enriched fields (assignee_name, etc.)
+	if enriched, err := h.taskService.GetByID(c.Request().Context(), subtask.ID); err == nil && enriched != nil {
+		return c.JSON(http.StatusCreated, enriched)
 	}
 
 	return c.JSON(http.StatusCreated, subtask)
