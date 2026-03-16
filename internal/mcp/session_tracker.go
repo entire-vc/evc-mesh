@@ -75,11 +75,11 @@ func (t *SessionTracker) Stats() map[string]any {
 
 // ComplianceScore computes a 0–1 score reflecting ACP (Agent Collaboration Protocol)
 // adherence for the current session. Returns the score and a per-check detail map.
-func (t *SessionTracker) ComplianceScore() (float64, map[string]bool) {
+func (t *SessionTracker) ComplianceScore() (score float64, checks map[string]bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	detail := map[string]bool{
+	checks = map[string]bool{
 		"called_get_me":                t.toolBreakdown["get_me"] > 0 || t.toolBreakdown["heartbeat"] > 0,
 		"called_get_project_knowledge": t.toolBreakdown["get_project_knowledge"] > 0 || t.toolBreakdown["recall"] > 0,
 		"called_get_my_rules":          t.toolBreakdown["get_my_rules"] > 0,
@@ -89,28 +89,27 @@ func (t *SessionTracker) ComplianceScore() (float64, map[string]bool) {
 		"created_memory":               t.memoriesCreated > 0,
 	}
 
-	score := 0.0
-	if detail["called_get_me"] {
+	if checks["called_get_me"] {
 		score += 0.10
 	}
-	if detail["called_get_project_knowledge"] {
+	if checks["called_get_project_knowledge"] {
 		score += 0.25
 	}
-	if detail["called_get_my_rules"] {
+	if checks["called_get_my_rules"] {
 		score += 0.10
 	}
-	if detail["called_get_context"] {
+	if checks["called_get_context"] {
 		score += 0.25
 	}
-	if detail["called_get_my_tasks"] {
+	if checks["called_get_my_tasks"] {
 		score += 0.05
 	}
-	if detail["published_summary"] {
+	if checks["published_summary"] {
 		score += 0.15
 	}
-	if detail["created_memory"] {
+	if checks["created_memory"] {
 		score += 0.10
 	}
 
-	return score, detail
+	return score, checks
 }

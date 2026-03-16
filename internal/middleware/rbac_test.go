@@ -101,7 +101,7 @@ func (r *rbacMockMemberRepo) addMember(wsID, userID uuid.UUID, role string) {
 // workspace ID (simulating what DualAuth + WorkspaceRLS would set).
 func newRBACEchoContext(userID, wsID uuid.UUID) (echo.Context, *httptest.ResponseRecorder) {
 	e := echo.New()
-	req := httptest.NewRequest(http.MethodPost, "/", nil)
+	req := httptest.NewRequest(http.MethodPost, "/", http.NoBody)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 	c.Set(ContextKeyAuthType, AuthTypeUser)
@@ -113,7 +113,7 @@ func newRBACEchoContext(userID, wsID uuid.UUID) (echo.Context, *httptest.Respons
 // newRBACAgentContext creates an Echo context pre-wired as an agent.
 func newRBACAgentContext(agentID, wsID uuid.UUID) (echo.Context, *httptest.ResponseRecorder) {
 	e := echo.New()
-	req := httptest.NewRequest(http.MethodPost, "/", nil)
+	req := httptest.NewRequest(http.MethodPost, "/", http.NoBody)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 	c.Set(ContextKeyAuthType, AuthTypeAgent)
@@ -365,7 +365,7 @@ func TestRBAC_NoAuth_ReturnsForbidden(t *testing.T) {
 	repo := newRBACMockMemberRepo()
 
 	e := echo.New()
-	req := httptest.NewRequest(http.MethodPost, "/", nil)
+	req := httptest.NewRequest(http.MethodPost, "/", http.NoBody)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 	// No auth type set — simulates unauthenticated request that somehow reached RBAC.
@@ -380,7 +380,7 @@ func TestRBAC_UserWithNoWorkspaceContext_ReturnsForbidden(t *testing.T) {
 	repo := newRBACMockMemberRepo()
 
 	e := echo.New()
-	req := httptest.NewRequest(http.MethodPost, "/", nil)
+	req := httptest.NewRequest(http.MethodPost, "/", http.NoBody)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 	// User auth but no workspace_id in context.

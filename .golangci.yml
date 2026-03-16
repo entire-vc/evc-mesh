@@ -7,6 +7,10 @@ formatters:
   enable:
     - gofmt
     - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/entire-vc/evc-mesh
 
 linters:
   enable:
@@ -19,26 +23,18 @@ linters:
     - unconvert
     - unparam
     - gocritic
-
-settings:
-  govet:
-    shadow:
-      enable: true
-  goimports:
-    local-prefixes:
-      - github.com/entire-vc/evc-mesh
-  gocritic:
-    enabled-tags:
-      - diagnostic
-      - style
-
-issues:
-  exclude-rules:
-    - path: _test\.go
-      linters:
-        - errcheck
-        - unparam
-    - path: mock_
-      linters:
-        - unused
-        - unparam
+  settings:
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - style
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters:
+          - errcheck
+          - unparam
+      - path: mock_
+        linters:
+          - unused
+          - unparam

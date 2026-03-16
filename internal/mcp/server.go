@@ -648,7 +648,7 @@ func truncate(s string, maxLen int) string {
 
 // resolveStatusSlug looks up a status UUID from its slug by querying the REST API.
 // Returns the status ID and name on success.
-func (s *Server) resolveStatusSlug(ctx context.Context, projectID, slug string) (string, string, error) {
+func (s *Server) resolveStatusSlug(ctx context.Context, projectID, slug string) (statusID, statusName string, err error) {
 	statuses, err := s.getRESTClient(ctx).GetProjectStatuses(ctx, projectID)
 	if err != nil {
 		return "", "", fmt.Errorf("get statuses: %w", err)

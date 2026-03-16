@@ -187,7 +187,7 @@ func (r *SavedViewRepo) Delete(ctx context.Context, id uuid.UUID) error {
 
 // ListByProject returns all saved views for a project visible to the given user:
 // own views + shared views.
-func (r *SavedViewRepo) ListByProject(ctx context.Context, projectID uuid.UUID, userID uuid.UUID) ([]domain.SavedView, error) {
+func (r *SavedViewRepo) ListByProject(ctx context.Context, projectID, userID uuid.UUID) ([]domain.SavedView, error) {
 	const q = `
 		SELECT * FROM saved_views
 		WHERE project_id = $1

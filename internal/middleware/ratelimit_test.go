@@ -114,7 +114,7 @@ func TestRateLimiter_AllowsRequestsUnderLimit(t *testing.T) {
 	wrapped := mw(handler)
 
 	for i := 0; i < 5; i++ {
-		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
 		rec := httptest.NewRecorder()
 		c := e.NewContext(req, rec)
 
@@ -142,7 +142,7 @@ func TestRateLimiter_BlocksRequestsOverLimit(t *testing.T) {
 
 	statuses := make([]int, 5)
 	for i := 0; i < 5; i++ {
-		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
 		rec := httptest.NewRecorder()
 		c := e.NewContext(req, rec)
 
@@ -193,7 +193,7 @@ func TestRateLimiter_DifferentLimitsPerAuthType(t *testing.T) {
 	// User is blocked after userLimit requests.
 	userAllowed := 0
 	for i := 0; i < userLimit+2; i++ {
-		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
 		rec := httptest.NewRecorder()
 		c := e.NewContext(req, rec)
 		require.NoError(t, wrappedUser(c))
@@ -206,7 +206,7 @@ func TestRateLimiter_DifferentLimitsPerAuthType(t *testing.T) {
 	// Agent gets more requests through.
 	agentAllowed := 0
 	for i := 0; i < agentLimit+2; i++ {
-		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
 		rec := httptest.NewRecorder()
 		c := e.NewContext(req, rec)
 		require.NoError(t, wrappedAgent(c))
@@ -236,7 +236,7 @@ func TestRateLimiter_ResetsAfterWindow(t *testing.T) {
 	wrapped := mw(handler)
 
 	sendRequest := func() int {
-		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
 		rec := httptest.NewRecorder()
 		c := e.NewContext(req, rec)
 		require.NoError(t, wrapped(c))
@@ -275,7 +275,7 @@ func TestRateLimiter_IndependentKeysDoNotInterfere(t *testing.T) {
 
 	sendAs := func(key string) int {
 		keyToUse = key
-		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
 		rec := httptest.NewRecorder()
 		c := e.NewContext(req, rec)
 		require.NoError(t, wrapped(c))
@@ -310,7 +310,7 @@ func TestRateLimiter_ExactBoundary(t *testing.T) {
 
 	var allowed, blocked int
 	for i := 0; i < limit+1; i++ {
-		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
 		rec := httptest.NewRecorder()
 		c := e.NewContext(req, rec)
 		require.NoError(t, wrapped(c))

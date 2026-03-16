@@ -121,7 +121,7 @@ func (r *TaskStatusRepo) Reorder(ctx context.Context, projectID uuid.UUID, statu
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback() //nolint:errcheck
+	defer tx.Rollback() //nolint:errcheck // best-effort rollback
 
 	// Lock rows to prevent concurrent reorder.
 	const lockQ = `SELECT id FROM task_statuses WHERE project_id = $1 FOR UPDATE`

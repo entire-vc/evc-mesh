@@ -414,14 +414,14 @@ func (m *MockTaskService) CheckoutTask(ctx context.Context, taskID uuid.UUID, tt
 	return nil, nil
 }
 
-func (m *MockTaskService) ReleaseCheckout(ctx context.Context, taskID uuid.UUID, token uuid.UUID) error {
+func (m *MockTaskService) ReleaseCheckout(ctx context.Context, taskID, token uuid.UUID) error {
 	if m.ReleaseCheckoutFunc != nil {
 		return m.ReleaseCheckoutFunc(ctx, taskID, token)
 	}
 	return nil
 }
 
-func (m *MockTaskService) ExtendCheckout(ctx context.Context, taskID uuid.UUID, token uuid.UUID, ttlMinutes int) (*service.CheckoutResult, error) {
+func (m *MockTaskService) ExtendCheckout(ctx context.Context, taskID, token uuid.UUID, ttlMinutes int) (*service.CheckoutResult, error) {
 	if m.ExtendCheckoutFunc != nil {
 		return m.ExtendCheckoutFunc(ctx, taskID, token, ttlMinutes)
 	}
