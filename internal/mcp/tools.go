@@ -347,9 +347,16 @@ func (s *Server) handleMoveTask(ctx context.Context, request mcpsdk.CallToolRequ
 		return errResult("invalid status_slug: %v", err)
 	}
 
-	if err = s.getRESTClient(ctx).MoveTask(ctx, taskID, map[string]any{
+	moveBody := map[string]any{
 		"status_id": stID,
-	}); err != nil {
+	}
+	// Optional explicit assignee — overrides auto-reassign on review.
+	if assigneeID := mcpsdk.ParseString(request, "assignee_id", ""); assigneeID != "" {
+		moveBody["assignee_id"] = assigneeID
+		moveBody["assignee_type"] = mcpsdk.ParseString(request, "assignee_type", "agent")
+	}
+
+	if err = s.getRESTClient(ctx).MoveTask(ctx, taskID, moveBody); err != nil {
 		return errResult("failed to move task: %v", err)
 	}
 
