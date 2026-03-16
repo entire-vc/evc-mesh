@@ -82,31 +82,31 @@ func Orchestrate(ctx context.Context, client *sdk.Client) error {
 	results := make([]SubtaskResult, 0, len(subAgentConfigs))
 
 	for _, cfg := range subAgentConfigs {
-		subAgent, err := client.RegisterSubAgent(ctx, sdk.RegisterSubAgentInput{
+		subAgent, regErr := client.RegisterSubAgent(ctx, sdk.RegisterSubAgentInput{
 			Name:         cfg.Name,
 			AgentType:    cfg.AgentType,
 			Capabilities: cfg.Capabilities,
 		})
-		if err != nil {
-			log.Printf("register sub-agent %q: %v — skipping", cfg.Name, err)
+		if regErr != nil {
+			log.Printf("register sub-agent %q: %v — skipping", cfg.Name, regErr)
 			continue
 		}
 		fmt.Printf("  Spawned sub-agent: %s (id=%s)\n", subAgent.Name, subAgent.ID)
 
 		// Create a subtask under the parent task and assign it to the child agent.
-		subtask, err := client.CreateSubtask(ctx, parentTask.ID, sdk.CreateSubtaskInput{
+		subtask, subErr := client.CreateSubtask(ctx, parentTask.ID, sdk.CreateSubtaskInput{
 			Title:    fmt.Sprintf("[%s] handle portion of: %s", cfg.Name, parentTask.Title),
 			Priority: parentTask.Priority,
 		})
-		if err != nil {
-			log.Printf("create subtask for %q: %v — skipping", cfg.Name, err)
+		if subErr != nil {
+			log.Printf("create subtask for %q: %v — skipping", cfg.Name, subErr)
 			continue
 		}
 
 		// Assign subtask to the new sub-agent.
-		_, err = client.AssignTask(ctx, subtask.ID, subAgent.ID, "agent")
-		if err != nil {
-			log.Printf("assign subtask %s to %s: %v", subtask.ID, subAgent.ID, err)
+		_, assignErr := client.AssignTask(ctx, subtask.ID, subAgent.ID, "agent")
+		if assignErr != nil {
+			log.Printf("assign subtask %s to %s: %v", subtask.ID, subAgent.ID, assignErr)
 		}
 
 		results = append(results, SubtaskResult{
@@ -129,8 +129,8 @@ func Orchestrate(ctx context.Context, client *sdk.Client) error {
 	})
 
 	// Poll until all subtasks complete (done/cancelled category) or timeout.
-	if err := pollSubtasks(ctx, client, parentTask.ProjectID, results); err != nil {
-		return fmt.Errorf("poll subtasks: %w", err)
+	if pollErr := pollSubtasks(ctx, client, parentTask.ProjectID, results); pollErr != nil {
+		return fmt.Errorf("poll subtasks: %w", pollErr)
 	}
 
 	// Publish consolidated summary.
