@@ -272,7 +272,7 @@ func main() {
 	commentHandler := handler.NewCommentHandler(commentService)
 	artifactHandler := handler.NewArtifactHandler(artifactService)
 	depHandler := handler.NewDependencyHandler(depService, taskService)
-	agentHandler := handler.NewAgentHandlerFull(agentService, taskService, agentNotifyRedis)
+	agentHandler := handler.NewAgentHandlerFull(agentService, taskService, taskStatusService, agentNotifyRedis)
 	eventHandler := handler.NewEventHandler(eventBusService)
 	activityHandler := handler.NewActivityHandler(activityLogService)
 	customFieldHandler := handler.NewCustomFieldHandler(customFieldService)
