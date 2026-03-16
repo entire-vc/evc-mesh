@@ -93,8 +93,10 @@ type updateTaskRequest struct {
 
 // moveTaskRequest represents the JSON body for moving a task.
 type moveTaskRequest struct {
-	StatusID *uuid.UUID `json:"status_id"`
-	Position *float64   `json:"position"`
+	StatusID     *uuid.UUID          `json:"status_id"`
+	Position     *float64            `json:"position"`
+	AssigneeID   *uuid.UUID          `json:"assignee_id,omitempty"`
+	AssigneeType domain.AssigneeType `json:"assignee_type,omitempty"`
 }
 
 // Create handles POST /projects/:proj_id/tasks
@@ -405,8 +407,10 @@ func (h *TaskHandler) MoveTask(c echo.Context) error {
 	}
 
 	input := service.MoveTaskInput{
-		StatusID: req.StatusID,
-		Position: req.Position,
+		StatusID:     req.StatusID,
+		Position:     req.Position,
+		AssigneeID:   req.AssigneeID,
+		AssigneeType: req.AssigneeType,
 	}
 
 	if err := h.taskService.MoveTask(c.Request().Context(), taskID, input); err != nil {
