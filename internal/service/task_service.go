@@ -466,9 +466,22 @@ func (s *taskService) MoveTask(ctx context.Context, taskID uuid.UUID, input Move
 		}
 	}
 
+	// Apply explicit assignee if provided in the move request.
+	if input.AssigneeID != nil {
+		task.AssigneeID = input.AssigneeID
+		task.AssigneeType = input.AssigneeType
+		task.UpdatedAt = timeNow()
+		if err := s.taskRepo.Update(ctx, task); err != nil {
+			log.Printf("[move-assign] WARNING: failed to assign task %s: %v", taskID, err)
+		}
+		s.notifyAssignedAgent(ctx, task, "task.assigned", map[string]any{
+			"assignee_id": map[string]any{"new": input.AssigneeID.String()},
+		})
+	}
+
 	// Auto-reassign to creator when moved to "review" category.
-	// This ensures the person/agent who created the task gets notified for review.
-	if statusChanged {
+	// Skipped if an explicit assignee was provided in the move request.
+	if statusChanged && input.AssigneeID == nil {
 		if newStatus, err := s.statusRepo.GetByID(ctx, *input.StatusID); err == nil && newStatus != nil {
 			if newStatus.Category == domain.StatusCategoryReview && task.CreatedBy != uuid.Nil {
 				// Only reassign if currently assigned to someone else (the agent who did the work).
