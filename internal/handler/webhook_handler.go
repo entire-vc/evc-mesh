@@ -46,7 +46,7 @@ func (h *WebhookHandler) Create(c echo.Context) error {
 	}
 
 	var req createWebhookRequest
-	if err := c.Bind(&req); err != nil {
+	if err = c.Bind(&req); err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
 	}
 
@@ -120,7 +120,7 @@ func (h *WebhookHandler) Update(c echo.Context) error {
 	}
 
 	var req updateWebhookRequest
-	if err := c.Bind(&req); err != nil {
+	if err = c.Bind(&req); err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
 	}
 
@@ -162,7 +162,9 @@ func (h *WebhookHandler) ListDeliveries(c echo.Context) error {
 
 	limit := 50
 	if limitStr := c.QueryParam("limit"); limitStr != "" {
-		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 && l <= 200 {
+		var l int
+		var parseErr error
+		if l, parseErr = strconv.Atoi(limitStr); parseErr == nil && l > 0 && l <= 200 {
 			limit = l
 		}
 	}

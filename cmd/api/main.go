@@ -42,7 +42,7 @@ func main() {
 	log.Println("Connected to PostgreSQL")
 
 	// 3. Run database migrations.
-	if err := goose.Up(db.DB, "migrations"); err != nil {
+	if err = goose.Up(db.DB, "migrations"); err != nil {
 		_ = db.Close()
 		log.Fatalf("Failed to run migrations: %v", err)
 	}

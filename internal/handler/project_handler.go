@@ -85,11 +85,13 @@ func (h *ProjectHandler) List(c echo.Context) error {
 	wsRole, _ := c.Get(mw.ContextKeyWorkspaceRole).(string)
 	if mw.IsAgent(c) {
 		// Agents always filter by membership.
-		if agentID, err := mw.GetAgentID(c); err == nil {
+		var agentID uuid.UUID
+		if agentID, err = mw.GetAgentID(c); err == nil {
 			filter.MemberAgentID = &agentID
 		}
 	} else if wsRole != domain.RoleOwner && wsRole != domain.RoleAdmin {
-		if userID, err := mw.GetUserID(c); err == nil {
+		var userID uuid.UUID
+		if userID, err = mw.GetUserID(c); err == nil {
 			filter.MemberUserID = &userID
 		}
 	}
@@ -164,7 +166,7 @@ func (h *ProjectHandler) Update(c echo.Context) error {
 	}
 
 	var req updateProjectRequest
-	if err := c.Bind(&req); err != nil {
+	if err = c.Bind(&req); err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
 	}
 

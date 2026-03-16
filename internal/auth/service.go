@@ -129,7 +129,7 @@ func (s *Service) Register(ctx context.Context, email, password, name string) (*
 		UpdatedAt:    now,
 	}
 
-	if err := s.userRepo.Create(ctx, user); err != nil {
+	if err = s.userRepo.Create(ctx, user); err != nil {
 		return nil, nil, err
 	}
 
@@ -142,7 +142,7 @@ func (s *Service) Register(ctx context.Context, email, password, name string) (*
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
-	if err := s.workspaceRepo.Create(ctx, ws); err != nil {
+	if err = s.workspaceRepo.Create(ctx, ws); err != nil {
 		return nil, nil, err
 	}
 
@@ -155,7 +155,7 @@ func (s *Service) Register(ctx context.Context, email, password, name string) (*
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	}
-	if err := s.workspaceMemberRepo.Create(ctx, member); err != nil {
+	if err = s.workspaceMemberRepo.Create(ctx, member); err != nil {
 		return nil, nil, err
 	}
 
@@ -182,7 +182,7 @@ func (s *Service) Login(ctx context.Context, email, password string) (*domain.Us
 		return nil, nil, ErrUserInactive
 	}
 
-	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)); err != nil {
+	if err = bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)); err != nil {
 		return nil, nil, ErrInvalidCredentials
 	}
 
@@ -219,7 +219,7 @@ func (s *Service) RefreshTokens(ctx context.Context, refreshToken string) (*Toke
 	}
 
 	// Revoke the old refresh token.
-	if err := s.refreshTokenRepo.RevokeByHash(ctx, tokenHash); err != nil {
+	if err = s.refreshTokenRepo.RevokeByHash(ctx, tokenHash); err != nil {
 		return nil, apierror.Wrap(err)
 	}
 
@@ -310,7 +310,7 @@ func (s *Service) generateTokenPair(user *domain.User) (*TokenPair, error) {
 // Format: rt_{64_hex_chars}
 func generateRefreshToken() (plainToken, tokenHash string, err error) {
 	b := make([]byte, refreshTokenRandomBytes)
-	if _, err := rand.Read(b); err != nil {
+	if _, err = rand.Read(b); err != nil {
 		return "", "", err
 	}
 

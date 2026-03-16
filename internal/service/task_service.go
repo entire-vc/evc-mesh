@@ -1046,7 +1046,7 @@ func (s *taskService) MoveToProject(ctx context.Context, taskID, targetProjectID
 		}
 	}
 
-	if err := s.taskRepo.MoveToProject(ctx, taskID, targetProjectID, defaultStatus.ID); err != nil {
+	if err = s.taskRepo.MoveToProject(ctx, taskID, targetProjectID, defaultStatus.ID); err != nil {
 		return nil, err
 	}
 	if s.ctxCacheInv != nil {

@@ -119,7 +119,7 @@ func (h *AgentHandler) Register(c echo.Context) error {
 	}
 
 	var req registerAgentRequest
-	if err := c.Bind(&req); err != nil {
+	if err = c.Bind(&req); err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
 	}
 
@@ -200,7 +200,8 @@ func (h *AgentHandler) Update(c echo.Context) error {
 		agent.AgentType = *req.AgentType
 	}
 	if req.Capabilities != nil {
-		capBytes, err := json.Marshal(req.Capabilities)
+		var capBytes []byte
+		capBytes, err = json.Marshal(req.Capabilities)
 		if err != nil {
 			return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid capabilities"))
 		}

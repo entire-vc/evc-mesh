@@ -117,7 +117,7 @@ func (h *WorkspaceHandler) Update(c echo.Context) error {
 	}
 
 	var req updateWorkspaceRequest
-	if err := c.Bind(&req); err != nil {
+	if err = c.Bind(&req); err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
 	}
 

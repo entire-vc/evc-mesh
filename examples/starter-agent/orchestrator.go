@@ -82,7 +82,8 @@ func Orchestrate(ctx context.Context, client *sdk.Client) error {
 	results := make([]SubtaskResult, 0, len(subAgentConfigs))
 
 	for _, cfg := range subAgentConfigs {
-		subAgent, err := client.RegisterSubAgent(ctx, sdk.RegisterSubAgentInput{
+		var subAgent *sdk.RegisterSubAgentOutput
+		subAgent, err = client.RegisterSubAgent(ctx, sdk.RegisterSubAgentInput{
 			Name:         cfg.Name,
 			AgentType:    cfg.AgentType,
 			Capabilities: cfg.Capabilities,
@@ -94,7 +95,8 @@ func Orchestrate(ctx context.Context, client *sdk.Client) error {
 		fmt.Printf("  Spawned sub-agent: %s (id=%s)\n", subAgent.Name, subAgent.ID)
 
 		// Create a subtask under the parent task and assign it to the child agent.
-		subtask, err := client.CreateSubtask(ctx, parentTask.ID, sdk.CreateSubtaskInput{
+		var subtask *sdk.Task
+		subtask, err = client.CreateSubtask(ctx, parentTask.ID, sdk.CreateSubtaskInput{
 			Title:    fmt.Sprintf("[%s] handle portion of: %s", cfg.Name, parentTask.Title),
 			Priority: parentTask.Priority,
 		})
@@ -129,7 +131,7 @@ func Orchestrate(ctx context.Context, client *sdk.Client) error {
 	})
 
 	// Poll until all subtasks complete (done/cancelled category) or timeout.
-	if err := pollSubtasks(ctx, client, parentTask.ProjectID, results); err != nil {
+	if err = pollSubtasks(ctx, client, parentTask.ProjectID, results); err != nil {
 		return fmt.Errorf("poll subtasks: %w", err)
 	}
 
