@@ -17,7 +17,7 @@ import (
 )
 
 // setupArtifactService returns an artifactService wired to fresh mocks.
-func setupArtifactService() (*artifactService, *MockArtifactRepository, *MockStorageClient, *MockActivityLogRepository) {
+func setupArtifactService() (*artifactService, *MockArtifactRepository, *MockStorageClient) {
 	artifactRepo := NewMockArtifactRepository()
 	storage := NewMockStorageClient()
 	activityRepo := NewMockActivityLogRepository()
@@ -26,7 +26,7 @@ func setupArtifactService() (*artifactService, *MockArtifactRepository, *MockSto
 	// Freeze the clock.
 	timeNow = func() time.Time { return frozenTime }
 
-	return svc, artifactRepo, storage, activityRepo
+	return svc, artifactRepo, storage
 }
 
 // ---------------------------------------------------------------------------
@@ -74,7 +74,7 @@ func TestArtifactService_Upload(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			svc, artifactRepo, storage, _ := setupArtifactService()
+			svc, artifactRepo, storage := setupArtifactService()
 			ctx := context.Background()
 
 			artifact, err := svc.Upload(ctx, tt.input)
@@ -125,7 +125,7 @@ func TestArtifactService_GetByID(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			svc, artifactRepo, _, _ := setupArtifactService()
+			svc, artifactRepo, _ := setupArtifactService()
 			ctx := context.Background()
 			id := tt.setup(artifactRepo)
 
@@ -177,7 +177,7 @@ func TestArtifactService_GetDownloadURL(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			svc, artifactRepo, _, _ := setupArtifactService()
+			svc, artifactRepo, _ := setupArtifactService()
 			ctx := context.Background()
 			id := tt.setup(artifactRepo)
 
@@ -232,7 +232,7 @@ func TestArtifactService_Delete(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			svc, artifactRepo, storage, _ := setupArtifactService()
+			svc, artifactRepo, storage := setupArtifactService()
 			ctx := context.Background()
 			id := tt.setup(artifactRepo, storage)
 
@@ -257,7 +257,7 @@ func TestArtifactService_Delete(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestArtifactService_ListByTask(t *testing.T) {
-	svc, artifactRepo, _, _ := setupArtifactService()
+	svc, artifactRepo, _ := setupArtifactService()
 	ctx := context.Background()
 
 	taskID := uuid.New()

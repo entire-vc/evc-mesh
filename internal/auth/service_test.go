@@ -549,7 +549,7 @@ func TestValidateAccessToken_Malformed(t *testing.T) {
 func TestValidatePassword(t *testing.T) {
 	assert.NoError(t, ValidatePassword("StrongP4ss"))
 	assert.NoError(t, ValidatePassword("A1bcdefg"))
-	assert.Error(t, ValidatePassword("short1A"))  // too short
+	assert.Error(t, ValidatePassword("short1A"))   // too short
 	assert.Error(t, ValidatePassword("alllower1")) // no uppercase
 	assert.Error(t, ValidatePassword("ALLUPPER1")) // no lowercase
 	assert.Error(t, ValidatePassword("NoDigits"))  // no digit

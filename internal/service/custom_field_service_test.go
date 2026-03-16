@@ -15,7 +15,7 @@ import (
 )
 
 // setupCustomFieldService returns a customFieldService wired to fresh mocks.
-func setupCustomFieldService() (*customFieldService, *MockCustomFieldDefinitionRepository, *MockActivityLogRepository) {
+func setupCustomFieldService() (*customFieldService, *MockCustomFieldDefinitionRepository) {
 	fieldRepo := NewMockCustomFieldDefinitionRepository()
 	activityRepo := NewMockActivityLogRepository()
 	svc := NewCustomFieldService(fieldRepo, activityRepo).(*customFieldService)
@@ -23,7 +23,7 @@ func setupCustomFieldService() (*customFieldService, *MockCustomFieldDefinitionR
 	// Freeze the clock.
 	timeNow = func() time.Time { return frozenTime }
 
-	return svc, fieldRepo, activityRepo
+	return svc, fieldRepo
 }
 
 // ---------------------------------------------------------------------------
@@ -95,7 +95,7 @@ func TestCustomFieldService_Create(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			svc, fieldRepo, _ := setupCustomFieldService()
+			svc, fieldRepo := setupCustomFieldService()
 			ctx := context.Background()
 			tt.setup(fieldRepo)
 
@@ -148,7 +148,7 @@ func TestCustomFieldService_Delete(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			svc, fieldRepo, _ := setupCustomFieldService()
+			svc, fieldRepo := setupCustomFieldService()
 			ctx := context.Background()
 			id := tt.setup(fieldRepo)
 
@@ -173,7 +173,7 @@ func TestCustomFieldService_Delete(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestCustomFieldService_ListVisibleToAgents(t *testing.T) {
-	svc, fieldRepo, _ := setupCustomFieldService()
+	svc, fieldRepo := setupCustomFieldService()
 	ctx := context.Background()
 
 	projectID := uuid.New()

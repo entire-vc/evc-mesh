@@ -663,24 +663,3 @@ func (s *Server) resolveStatusSlug(ctx context.Context, projectID, slug string) 
 	}
 	return "", "", fmt.Errorf("status '%s' not found in project", slug)
 }
-
-// defaultStatusForProject returns the default status ID for a project by querying the REST API.
-func (s *Server) defaultStatusForProject(ctx context.Context, projectID string) (string, error) {
-	statuses, err := s.getRESTClient(ctx).GetProjectStatuses(ctx, projectID)
-	if err != nil {
-		return "", fmt.Errorf("get statuses: %w", err)
-	}
-	// First pass: find the default status.
-	for _, st := range statuses {
-		if isDefault, _ := st["is_default"].(bool); isDefault {
-			stID, _ := st["id"].(string)
-			return stID, nil
-		}
-	}
-	// Second pass: return first status.
-	if len(statuses) > 0 {
-		stID, _ := statuses[0]["id"].(string)
-		return stID, nil
-	}
-	return "", fmt.Errorf("no statuses defined for project")
-}

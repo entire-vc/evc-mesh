@@ -63,7 +63,7 @@ func (c *RESTClient) doJSON(ctx context.Context, method, path string, body, resu
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode >= 400 {
 		var errBody map[string]any
@@ -123,7 +123,7 @@ func (c *RESTClient) doMultipart(ctx context.Context, path string, fields map[st
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode >= 400 {
 		var errBody map[string]any
@@ -561,7 +561,7 @@ func (c *RESTClient) doRaw(ctx context.Context, method, path, contentType string
 	if err != nil {
 		return nil, 0, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {

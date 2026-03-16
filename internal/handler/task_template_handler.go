@@ -25,17 +25,17 @@ func NewTaskTemplateHandler(svc service.TaskTemplateService) *TaskTemplateHandle
 
 // createTemplateRequest is the JSON body for creating a task template.
 type createTemplateRequest struct {
-	Name                string              `json:"name"`
-	Description         string              `json:"description"`
-	TitleTemplate       string              `json:"title_template"`
-	DescriptionTemplate string              `json:"description_template"`
-	Priority            domain.Priority     `json:"priority"`
-	Labels              []string            `json:"labels"`
-	EstimatedHours      *float64            `json:"estimated_hours"`
-	CustomFields        json.RawMessage     `json:"custom_fields"`
-	AssigneeID          *uuid.UUID          `json:"assignee_id"`
+	Name                string               `json:"name"`
+	Description         string               `json:"description"`
+	TitleTemplate       string               `json:"title_template"`
+	DescriptionTemplate string               `json:"description_template"`
+	Priority            domain.Priority      `json:"priority"`
+	Labels              []string             `json:"labels"`
+	EstimatedHours      *float64             `json:"estimated_hours"`
+	CustomFields        json.RawMessage      `json:"custom_fields"`
+	AssigneeID          *uuid.UUID           `json:"assignee_id"`
 	AssigneeType        *domain.AssigneeType `json:"assignee_type"`
-	StatusID            *uuid.UUID          `json:"status_id"`
+	StatusID            *uuid.UUID           `json:"status_id"`
 }
 
 // updateTemplateRequest is the JSON body for partially updating a task template.

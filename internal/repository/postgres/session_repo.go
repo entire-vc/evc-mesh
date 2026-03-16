@@ -27,23 +27,23 @@ func NewSessionRepo(db *sqlx.DB) *SessionRepo {
 // sessionRow is the DB row representation for agent_sessions.
 // tasks_touched is stored as UUID[] — scanned via pq.GenericArray with a uuid.UUID slice target.
 type sessionRow struct {
-	ID               uuid.UUID                `db:"id"`
-	WorkspaceID      uuid.UUID                `db:"workspace_id"`
-	AgentID          uuid.UUID                `db:"agent_id"`
-	StartedAt        time.Time                `db:"started_at"`
-	EndedAt          *time.Time               `db:"ended_at"`
+	ID               uuid.UUID                 `db:"id"`
+	WorkspaceID      uuid.UUID                 `db:"workspace_id"`
+	AgentID          uuid.UUID                 `db:"agent_id"`
+	StartedAt        time.Time                 `db:"started_at"`
+	EndedAt          *time.Time                `db:"ended_at"`
 	Status           domain.AgentSessionStatus `db:"status"`
-	ToolCalls        int                      `db:"tool_calls"`
-	ToolBreakdown    json.RawMessage          `db:"tool_breakdown"`
-	TasksTouched     pq.StringArray           `db:"tasks_touched"` // scanned as strings, converted to []uuid.UUID
-	EventsPublished  int                      `db:"events_published"`
-	MemoriesCreated  int                      `db:"memories_created"`
-	ModelUsed        string                   `db:"model_used"`
-	TokensIn         int64                    `db:"tokens_in"`
-	TokensOut        int64                    `db:"tokens_out"`
-	EstimatedCost    float64                  `db:"estimated_cost"`
-	ComplianceScore  float32                  `db:"compliance_score"`
-	ComplianceDetail json.RawMessage          `db:"compliance_detail"`
+	ToolCalls        int                       `db:"tool_calls"`
+	ToolBreakdown    json.RawMessage           `db:"tool_breakdown"`
+	TasksTouched     pq.StringArray            `db:"tasks_touched"` // scanned as strings, converted to []uuid.UUID
+	EventsPublished  int                       `db:"events_published"`
+	MemoriesCreated  int                       `db:"memories_created"`
+	ModelUsed        string                    `db:"model_used"`
+	TokensIn         int64                     `db:"tokens_in"`
+	TokensOut        int64                     `db:"tokens_out"`
+	EstimatedCost    float64                   `db:"estimated_cost"`
+	ComplianceScore  float32                   `db:"compliance_score"`
+	ComplianceDetail json.RawMessage           `db:"compliance_detail"`
 }
 
 func (r *sessionRow) toDomain() domain.AgentSession {

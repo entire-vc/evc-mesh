@@ -211,7 +211,7 @@ func (r *MemoryRepo) FullTextSearch(ctx context.Context, query string, workspace
 	result := make([]domain.ScoredMemory, len(rows))
 	for i, row := range rows {
 		result[i] = domain.ScoredMemory{
-			Memory: row.memoryRow.toDomain(),
+			Memory: row.toDomain(),
 			Score:  row.Score,
 		}
 	}
@@ -408,7 +408,7 @@ func (r *MemoryRepo) VectorSearch(ctx context.Context, queryVec []float32, works
 		}
 		sim := cosineSimilarity(queryVec, vec)
 		candidates = append(candidates, candidate{
-			mem:   row.memoryRow.toDomain(),
+			mem:   row.toDomain(),
 			score: sim,
 		})
 	}

@@ -18,7 +18,7 @@ import (
 )
 
 // setupCommentService returns a commentService wired to fresh mocks.
-func setupCommentService() (*commentService, *MockCommentRepository, *MockTaskRepository, *MockActivityLogRepository) {
+func setupCommentService() (*commentService, *MockCommentRepository, *MockTaskRepository) {
 	commentRepo := NewMockCommentRepository()
 	taskRepo := NewMockTaskRepository()
 	activityRepo := NewMockActivityLogRepository()
@@ -27,7 +27,7 @@ func setupCommentService() (*commentService, *MockCommentRepository, *MockTaskRe
 	// Freeze the clock.
 	timeNow = func() time.Time { return frozenTime }
 
-	return svc, commentRepo, taskRepo, activityRepo
+	return svc, commentRepo, taskRepo
 }
 
 // ---------------------------------------------------------------------------
@@ -167,7 +167,7 @@ func TestCommentService_Create(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			svc, commentRepo, taskRepo, _ := setupCommentService()
+			svc, commentRepo, taskRepo := setupCommentService()
 			ctx := context.Background()
 			comment := tt.setup(commentRepo, taskRepo)
 
@@ -249,7 +249,7 @@ func TestCommentService_Update(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			svc, commentRepo, _, _ := setupCommentService()
+			svc, commentRepo, _ := setupCommentService()
 			ctx, comment := tt.setup(commentRepo)
 
 			err := svc.Update(ctx, comment)
@@ -306,7 +306,7 @@ func TestCommentService_ListByTask(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			svc, commentRepo, _, _ := setupCommentService()
+			svc, commentRepo, _ := setupCommentService()
 			ctx := context.Background()
 			taskID := tt.setup(commentRepo)
 

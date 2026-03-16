@@ -169,8 +169,8 @@ type updateAgentRequest struct {
 	ProfileDescription *string           `json:"profile_description"`
 	CallbackURL        *string           `json:"callback_url"`
 	CurrentTaskID      *uuid.UUID        `json:"current_task_id"`
-	ParentAgentID      *string           `json:"parent_agent_id"`      // UUID string or "" to clear
-	SupervisorUserID   *string           `json:"supervisor_user_id"`   // UUID string or "" to clear
+	ParentAgentID      *string           `json:"parent_agent_id"`    // UUID string or "" to clear
+	SupervisorUserID   *string           `json:"supervisor_user_id"` // UUID string or "" to clear
 	Role               *string           `json:"role"`
 }
 
@@ -686,7 +686,7 @@ func (h *AgentHandler) EventStream(c echo.Context) error {
 
 	// Subscribe to the agent's Redis pub/sub channel.
 	sub := h.rdb.Subscribe(c.Request().Context(), channel)
-	defer sub.Close()
+	defer func() { _ = sub.Close() }()
 
 	subCh := sub.Channel()
 	keepalive := time.NewTicker(agentSSEKeepaliveInterval)
@@ -765,7 +765,7 @@ func (h *AgentHandler) PollTasks(c echo.Context) error {
 	// Subscribe before entering the wait loop to avoid a race where a notification
 	// arrives between the subscription setup and the blocking select.
 	sub := h.rdb.Subscribe(c.Request().Context(), channel)
-	defer sub.Close()
+	defer func() { _ = sub.Close() }()
 
 	subCh := sub.Channel()
 	timer := time.NewTimer(time.Duration(timeoutSecs) * time.Second)

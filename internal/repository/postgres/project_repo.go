@@ -19,18 +19,18 @@ import (
 
 // projectRow is the DB row representation (includes deleted_at).
 type projectRow struct {
-	ID                  uuid.UUID                `db:"id"`
-	WorkspaceID         uuid.UUID                `db:"workspace_id"`
-	Name                string                   `db:"name"`
-	Description         string                   `db:"description"`
-	Slug                string                   `db:"slug"`
-	Icon                string                   `db:"icon"`
-	Settings            json.RawMessage          `db:"settings"`
+	ID                  uuid.UUID                  `db:"id"`
+	WorkspaceID         uuid.UUID                  `db:"workspace_id"`
+	Name                string                     `db:"name"`
+	Description         string                     `db:"description"`
+	Slug                string                     `db:"slug"`
+	Icon                string                     `db:"icon"`
+	Settings            json.RawMessage            `db:"settings"`
 	DefaultAssigneeType domain.DefaultAssigneeType `db:"default_assignee_type"`
-	IsArchived          bool                     `db:"is_archived"`
-	CreatedAt           time.Time                `db:"created_at"`
-	UpdatedAt           time.Time                `db:"updated_at"`
-	DeletedAt           *time.Time               `db:"deleted_at"`
+	IsArchived          bool                       `db:"is_archived"`
+	CreatedAt           time.Time                  `db:"created_at"`
+	UpdatedAt           time.Time                  `db:"updated_at"`
+	DeletedAt           *time.Time                 `db:"deleted_at"`
 }
 
 func (r *projectRow) toDomain() domain.Project {
@@ -170,11 +170,9 @@ func (r *ProjectRepo) List(ctx context.Context, workspaceID uuid.UUID, filter re
 	if filter.MemberUserID != nil {
 		memberJoin = fmt.Sprintf(" JOIN project_members pm ON pm.project_id = p.id AND pm.user_id = $%d", argIdx)
 		args = append(args, *filter.MemberUserID)
-		argIdx++
 	} else if filter.MemberAgentID != nil {
 		memberJoin = fmt.Sprintf(" JOIN project_members pm ON pm.project_id = p.id AND pm.agent_id = $%d", argIdx)
 		args = append(args, *filter.MemberAgentID)
-		argIdx++
 	}
 
 	where := "WHERE " + joinAnd(conditions)
@@ -209,7 +207,7 @@ func (r *ProjectRepo) List(ctx context.Context, workspaceID uuid.UUID, filter re
 }
 
 func joinAnd(conditions []string) string {
-	return fmt.Sprintf("%s", join(conditions, " AND "))
+	return join(conditions, " AND ")
 }
 
 func join(parts []string, sep string) string {

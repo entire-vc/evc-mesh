@@ -423,11 +423,9 @@ func memorySlugify(s string) string {
 		if unicode.IsLetter(r) || unicode.IsDigit(r) {
 			b.WriteRune(r)
 			prevHyphen = false
-		} else {
-			if !prevHyphen {
-				b.WriteRune('-')
-				prevHyphen = true
-			}
+		} else if !prevHyphen {
+			b.WriteRune('-')
+			prevHyphen = true
 		}
 	}
 

@@ -25,34 +25,12 @@ func NewRuleRepo(db *sqlx.DB) *RuleRepo {
 	return &RuleRepo{db: db}
 }
 
-// ruleRow is the DB scan target for a rule row, handling TEXT[] columns.
-type ruleRow struct {
-	ID                  uuid.UUID       `db:"id"`
-	WorkspaceID         uuid.UUID       `db:"workspace_id"`
-	ProjectID           *uuid.UUID      `db:"project_id"`
-	AgentID             *uuid.UUID      `db:"agent_id"`
-	Scope               domain.RuleScope       `db:"scope"`
-	RuleType            string          `db:"rule_type"`
-	Name                string          `db:"name"`
-	Description         string          `db:"description"`
-	Config              []byte          `db:"config"`
-	AppliesToActorTypes pq.StringArray  `db:"applies_to_actor_types"`
-	AppliesToRoles      pq.StringArray  `db:"applies_to_roles"`
-	Enforcement         domain.RuleEnforcement `db:"enforcement"`
-	Priority            int             `db:"priority"`
-	IsEnabled           bool            `db:"is_enabled"`
-	CreatedBy           uuid.UUID       `db:"created_by"`
-	CreatedByType       domain.ActorType `db:"created_by_type"`
-	CreatedAt           interface{}     `db:"created_at"`
-	UpdatedAt           interface{}     `db:"updated_at"`
-}
-
 func scanRules(db *sqlx.DB, ctx context.Context, query string, args ...interface{}) ([]domain.Rule, error) {
 	rows, err := db.QueryxContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query rules: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var rules []domain.Rule
 	for rows.Next() {

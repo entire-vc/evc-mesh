@@ -586,8 +586,7 @@ func computeAgentPermissions(agent *domain.Agent, cfg domain.WorkflowRulesConfig
 // Patterns: "*" (any), "role:developer", "agent:name", "assigned".
 func isActorAllowed(agent *domain.Agent, allowed []string) bool {
 	for _, pattern := range allowed {
-		switch pattern {
-		case "*":
+		if pattern == "*" {
 			return true
 		}
 		if len(pattern) > 5 && pattern[:5] == "role:" {
@@ -871,4 +870,3 @@ func derefRawMessage(p *json.RawMessage) json.RawMessage {
 	}
 	return *p
 }
-

@@ -15,7 +15,7 @@ import (
 )
 
 // setupTaskStatusService returns a taskStatusService wired to fresh mocks.
-func setupTaskStatusService() (*taskStatusService, *MockTaskStatusRepository, *MockTaskRepository, *MockActivityLogRepository) {
+func setupTaskStatusService() (*taskStatusService, *MockTaskStatusRepository, *MockTaskRepository) {
 	statusRepo := NewMockTaskStatusRepository()
 	taskRepo := NewMockTaskRepository()
 	activityRepo := NewMockActivityLogRepository()
@@ -24,7 +24,7 @@ func setupTaskStatusService() (*taskStatusService, *MockTaskStatusRepository, *M
 	// Freeze the clock.
 	timeNow = func() time.Time { return frozenTime }
 
-	return svc, statusRepo, taskRepo, activityRepo
+	return svc, statusRepo, taskRepo
 }
 
 // ---------------------------------------------------------------------------
@@ -95,7 +95,7 @@ func TestTaskStatusService_Create(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			svc, statusRepo, _, _ := setupTaskStatusService()
+			svc, statusRepo, _ := setupTaskStatusService()
 			ctx := context.Background()
 			tt.setup(statusRepo)
 
@@ -177,7 +177,7 @@ func TestTaskStatusService_Delete(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			svc, statusRepo, taskRepo, _ := setupTaskStatusService()
+			svc, statusRepo, taskRepo := setupTaskStatusService()
 			ctx := context.Background()
 			id := tt.setup(statusRepo, taskRepo)
 
@@ -208,11 +208,11 @@ func TestTaskStatusService_Reorder(t *testing.T) {
 	projectID := uuid.New()
 
 	tests := []struct {
-		name      string
-		setup     func(repo *MockTaskStatusRepository) []uuid.UUID
-		wantErr   bool
-		errCode   int
-		errMsg    string
+		name    string
+		setup   func(repo *MockTaskStatusRepository) []uuid.UUID
+		wantErr bool
+		errCode int
+		errMsg  string
 	}{
 		{
 			name: "success - all IDs belong to the project",
@@ -256,7 +256,7 @@ func TestTaskStatusService_Reorder(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			svc, statusRepo, _, _ := setupTaskStatusService()
+			svc, statusRepo, _ := setupTaskStatusService()
 			ctx := context.Background()
 			ids := tt.setup(statusRepo)
 
