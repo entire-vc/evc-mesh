@@ -629,9 +629,10 @@ func (s *taskService) bulkUpdateOne(ctx context.Context, projectID, taskID uuid.
 			return err
 		}
 		// Re-fetch so the subsequent Update call works on the latest state.
-		task, err = s.taskRepo.GetByID(ctx, taskID)
-		if err != nil {
-			return err
+		var fetchErr error
+		task, fetchErr = s.taskRepo.GetByID(ctx, taskID)
+		if fetchErr != nil {
+			return fetchErr
 		}
 		if task == nil {
 			return apierror.NotFound("Task")
@@ -1110,7 +1111,7 @@ func (s *taskService) CheckoutTask(ctx context.Context, taskID uuid.UUID, ttlMin
 }
 
 // ReleaseCheckout clears the checkout on a task. The token must match.
-func (s *taskService) ReleaseCheckout(ctx context.Context, taskID uuid.UUID, token uuid.UUID) error {
+func (s *taskService) ReleaseCheckout(ctx context.Context, taskID, token uuid.UUID) error {
 	err := s.taskRepo.ReleaseCheckout(ctx, taskID, token)
 	if err != nil {
 		if errors.Is(err, pgRepo.ErrInvalidCheckoutToken) {
@@ -1123,7 +1124,7 @@ func (s *taskService) ReleaseCheckout(ctx context.Context, taskID uuid.UUID, tok
 
 // ExtendCheckout extends the TTL of an existing checkout identified by token.
 // The TTL is clamped to [1, 240] minutes; default is 15.
-func (s *taskService) ExtendCheckout(ctx context.Context, taskID uuid.UUID, token uuid.UUID, ttlMinutes int) (*CheckoutResult, error) {
+func (s *taskService) ExtendCheckout(ctx context.Context, taskID, token uuid.UUID, ttlMinutes int) (*CheckoutResult, error) {
 	if ttlMinutes <= 0 {
 		ttlMinutes = 15
 	}

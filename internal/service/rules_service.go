@@ -116,7 +116,9 @@ func (s *rulesService) GetTeamDirectory(ctx context.Context, workspaceID uuid.UU
 	for _, a := range agentPage.Items {
 		currentTasks := 0
 		if s.ruleRepo != nil {
-			if cnt, err := s.ruleRepo.CountTasksByAssigneeAndCategory(ctx, workspaceID, a.ID, string(domain.AssigneeTypeAgent), activeCategories); err == nil {
+			var cnt int
+			cnt, err = s.ruleRepo.CountTasksByAssigneeAndCategory(ctx, workspaceID, a.ID, string(domain.AssigneeTypeAgent), activeCategories)
+			if err == nil {
 				currentTasks = cnt
 			}
 		}
@@ -200,7 +202,9 @@ func (s *rulesService) GetTeamDirectoryTree(ctx context.Context, workspaceID uui
 	for _, a := range agentsWithProjects {
 		currentTasks := 0
 		if s.ruleRepo != nil {
-			if cnt, err := s.ruleRepo.CountTasksByAssigneeAndCategory(ctx, workspaceID, a.ID, string(domain.AssigneeTypeAgent), activeCategories); err == nil {
+			var cnt int
+			cnt, err = s.ruleRepo.CountTasksByAssigneeAndCategory(ctx, workspaceID, a.ID, string(domain.AssigneeTypeAgent), activeCategories)
+			if err == nil {
 				currentTasks = cnt
 			}
 		}

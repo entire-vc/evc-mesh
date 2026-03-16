@@ -77,7 +77,7 @@ func (h *IntegrationHandler) Configure(c echo.Context) error {
 	}
 
 	var req configureIntegrationRequest
-	if err := c.Bind(&req); err != nil {
+	if err = c.Bind(&req); err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
 	}
 
@@ -120,7 +120,7 @@ func (h *IntegrationHandler) Update(c echo.Context) error {
 	}
 
 	var req updateIntegrationRequest
-	if err := c.Bind(&req); err != nil {
+	if err = c.Bind(&req); err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
 	}
 

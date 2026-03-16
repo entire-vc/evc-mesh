@@ -413,7 +413,7 @@ func TestWebhookHandler_ErrorMapping(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodGet, "/", nil)
+			req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
 			rec := httptest.NewRecorder()
 			c := e.NewContext(req, rec)
 
@@ -434,7 +434,7 @@ func TestWebhookHandler_UUIDParamExtraction(t *testing.T) {
 
 	t.Run("valid UUID param is parsed correctly", func(t *testing.T) {
 		id := uuid.New()
-		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
 		rec := httptest.NewRecorder()
 		c := e.NewContext(req, rec)
 		c.SetParamNames("webhook_id")
@@ -446,7 +446,7 @@ func TestWebhookHandler_UUIDParamExtraction(t *testing.T) {
 	})
 
 	t.Run("invalid UUID param causes parse error", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
 		rec := httptest.NewRecorder()
 		c := e.NewContext(req, rec)
 		c.SetParamNames("webhook_id")
@@ -507,7 +507,7 @@ func TestWebhookHandler_AuthRequired(t *testing.T) {
 		{
 			name: "with Bearer token passes middleware",
 			setupReq: func() *http.Request {
-				req := httptest.NewRequest(http.MethodGet, "/workspaces/"+wsID.String()+"/webhooks", nil)
+				req := httptest.NewRequest(http.MethodGet, "/workspaces/"+wsID.String()+"/webhooks", http.NoBody)
 				req.Header.Set("Authorization", "Bearer some-token")
 				return req
 			},
@@ -516,7 +516,7 @@ func TestWebhookHandler_AuthRequired(t *testing.T) {
 		{
 			name: "with agent key passes middleware",
 			setupReq: func() *http.Request {
-				req := httptest.NewRequest(http.MethodGet, "/workspaces/"+wsID.String()+"/webhooks", nil)
+				req := httptest.NewRequest(http.MethodGet, "/workspaces/"+wsID.String()+"/webhooks", http.NoBody)
 				req.Header.Set("X-Agent-Key", "agk_workspace_randompart12345678901234")
 				return req
 			},

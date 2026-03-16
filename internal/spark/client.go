@@ -193,7 +193,7 @@ func (c *Client) ListPopular(ctx context.Context, limit int) ([]AgentManifest, e
 // get performs an HTTP GET request and decodes the JSON response into dest.
 // Returns an error if the request fails, the response is non-2xx, or decoding fails.
 func (c *Client) get(ctx context.Context, endpoint string, dest any) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, http.NoBody)
 	if err != nil {
 		return fmt.Errorf("build request: %w", err)
 	}

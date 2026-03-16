@@ -174,7 +174,7 @@ func (r *RuleRepo) ListByAgent(ctx context.Context, agentID uuid.UUID, includeDi
 // GetEffective fetches all candidate rules across workspace, project, and agent scopes
 // for inheritance resolution. All enabled rules are returned; the caller applies
 // the "most specific wins" logic.
-func (r *RuleRepo) GetEffective(ctx context.Context, workspaceID uuid.UUID, projectID *uuid.UUID, agentID *uuid.UUID) ([]domain.Rule, error) {
+func (r *RuleRepo) GetEffective(ctx context.Context, workspaceID uuid.UUID, projectID, agentID *uuid.UUID) ([]domain.Rule, error) {
 	// Build a dynamic IN-like query: always include workspace rules, optionally project and agent.
 	conds := []string{"(scope = 'workspace' AND workspace_id = $1)"}
 	args := []interface{}{workspaceID}
@@ -199,7 +199,7 @@ func (r *RuleRepo) GetEffective(ctx context.Context, workspaceID uuid.UUID, proj
 
 // CountTasksByAssigneeAndCategory counts tasks assigned to an actor in the given status categories.
 // Used by capacity limit evaluators.
-func (r *RuleRepo) CountTasksByAssigneeAndCategory(ctx context.Context, workspaceID uuid.UUID, assigneeID uuid.UUID, assigneeType string, categories []string) (int, error) {
+func (r *RuleRepo) CountTasksByAssigneeAndCategory(ctx context.Context, workspaceID, assigneeID uuid.UUID, assigneeType string, categories []string) (int, error) {
 	if len(categories) == 0 {
 		return 0, nil
 	}

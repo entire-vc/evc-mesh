@@ -129,7 +129,7 @@ func (s *agentNotifyService) deliverWithRetry(callbackURL string, agentID uuid.U
 			log.Printf("[agent-notify] callback POST failed for agent %s (attempt %d, url: %s): %v", agentID, attempt+1, callbackURL, err)
 			continue // timeout or network error — retry
 		}
-		io.Copy(io.Discard, resp.Body) //nolint:errcheck
+		io.Copy(io.Discard, resp.Body) //nolint:errcheck // drain body to enable connection reuse
 		_ = resp.Body.Close()
 
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {

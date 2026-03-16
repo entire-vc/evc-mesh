@@ -62,7 +62,7 @@ func TestCORS_DefaultAllowsAll(t *testing.T) {
 		AllowHeaders: []string{"Content-Type", "Authorization", "X-Agent-Key"},
 	})
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/tasks", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/tasks", http.NoBody)
 	req.Header.Set("Origin", "https://totally-unknown-domain.example.com")
 	rec := httptest.NewRecorder()
 
@@ -90,7 +90,7 @@ func TestCORS_AllowlistBlocksUnknownOrigin(t *testing.T) {
 		AllowHeaders: []string{"Content-Type", "Authorization"},
 	})
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/tasks", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/tasks", http.NoBody)
 	req.Header.Set("Origin", "https://evil.attacker.com")
 	rec := httptest.NewRecorder()
 
@@ -117,7 +117,7 @@ func TestCORS_AllowlistPermitsListedOrigin(t *testing.T) {
 		AllowHeaders: []string{"Content-Type", "Authorization", "X-Agent-Key"},
 	})
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/tasks", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/tasks", http.NoBody)
 	req.Header.Set("Origin", allowedOrigin)
 	rec := httptest.NewRecorder()
 
@@ -145,7 +145,7 @@ func TestCORS_PreflightOPTIONS_ReturnsNoContent(t *testing.T) {
 		AllowHeaders: []string{"Content-Type", "Authorization", "X-Agent-Key"},
 	})
 
-	req := httptest.NewRequest(http.MethodOptions, "/api/v1/tasks", nil)
+	req := httptest.NewRequest(http.MethodOptions, "/api/v1/tasks", http.NoBody)
 	req.Header.Set("Origin", "https://app.entire.vc")
 	req.Header.Set("Access-Control-Request-Method", http.MethodPost)
 	req.Header.Set("Access-Control-Request-Headers", "Authorization, Content-Type")
@@ -182,7 +182,7 @@ func TestCORS_AgentKeyHeaderAllowed(t *testing.T) {
 		AllowHeaders: []string{"Content-Type", "Authorization", "X-Agent-Key"},
 	})
 
-	req := httptest.NewRequest(http.MethodOptions, "/api/v1/tasks", nil)
+	req := httptest.NewRequest(http.MethodOptions, "/api/v1/tasks", http.NoBody)
 	req.Header.Set("Origin", "https://app.entire.vc")
 	req.Header.Set("Access-Control-Request-Method", http.MethodGet)
 	req.Header.Set("Access-Control-Request-Headers", "X-Agent-Key")
@@ -211,7 +211,7 @@ func TestCORS_NoOriginHeader_PassesThrough(t *testing.T) {
 		AllowHeaders: []string{"Content-Type"},
 	})
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/tasks", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/tasks", http.NoBody)
 	// No Origin header — direct API call.
 	rec := httptest.NewRecorder()
 

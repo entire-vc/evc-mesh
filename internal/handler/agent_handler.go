@@ -79,12 +79,12 @@ func (h *AgentHandler) List(c echo.Context) error {
 	}
 
 	var q listAgentsQuery
-	if err := c.Bind(&q); err != nil {
+	if err = c.Bind(&q); err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid query parameters"))
 	}
 
 	var pg pagination.Params
-	if err := c.Bind(&pg); err != nil {
+	if err = c.Bind(&pg); err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid pagination parameters"))
 	}
 	pg.Normalize()
@@ -183,7 +183,7 @@ func (h *AgentHandler) Update(c echo.Context) error {
 	}
 
 	var req updateAgentRequest
-	if err := c.Bind(&req); err != nil {
+	if err = c.Bind(&req); err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
 	}
 
@@ -222,7 +222,8 @@ func (h *AgentHandler) Update(c echo.Context) error {
 		if *req.ParentAgentID == "" {
 			agent.ParentAgentID = nil
 		} else {
-			parentID, err := uuid.Parse(*req.ParentAgentID)
+			var parentID uuid.UUID
+			parentID, err = uuid.Parse(*req.ParentAgentID)
 			if err != nil {
 				return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid parent_agent_id"))
 			}
@@ -234,7 +235,8 @@ func (h *AgentHandler) Update(c echo.Context) error {
 		if *req.SupervisorUserID == "" {
 			agent.SupervisorUserID = nil
 		} else {
-			supervisorID, err := uuid.Parse(*req.SupervisorUserID)
+			var supervisorID uuid.UUID
+			supervisorID, err = uuid.Parse(*req.SupervisorUserID)
 			if err != nil {
 				return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid supervisor_user_id"))
 			}
@@ -258,7 +260,7 @@ func (h *AgentHandler) Delete(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid agent_id"))
 	}
 
-	if err := h.agentService.Delete(c.Request().Context(), agentID); err != nil {
+	if err = h.agentService.Delete(c.Request().Context(), agentID); err != nil {
 		return handleError(c, err)
 	}
 
@@ -377,7 +379,7 @@ func (h *AgentHandler) ListAgentActivity(c echo.Context) error {
 	}
 
 	var pg pagination.Params
-	if err := c.Bind(&pg); err != nil {
+	if err = c.Bind(&pg); err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid pagination parameters"))
 	}
 	pg.Normalize()
@@ -386,12 +388,14 @@ func (h *AgentHandler) ListAgentActivity(c echo.Context) error {
 		EventType: c.QueryParam("event_type"),
 	}
 	if since := c.QueryParam("since"); since != "" {
-		if t, err := time.Parse(time.RFC3339, since); err == nil {
+		var t time.Time
+		if t, err = time.Parse(time.RFC3339, since); err == nil {
 			filter.Since = &t
 		}
 	}
 	if until := c.QueryParam("until"); until != "" {
-		if t, err := time.Parse(time.RFC3339, until); err == nil {
+		var t time.Time
+		if t, err = time.Parse(time.RFC3339, until); err == nil {
 			filter.Until = &t
 		}
 	}

@@ -342,8 +342,8 @@ func TestWebhookService_SignatureVerification_EndToEnd(t *testing.T) {
 		receivedSignature = r.Header.Get("X-Mesh-Signature")
 
 		var p WebhookDispatchPayload
-		err := json.NewDecoder(r.Body).Decode(&p)
-		require.NoError(t, err, "body must be valid JSON")
+		decodeErr := json.NewDecoder(r.Body).Decode(&p)
+		require.NoError(t, decodeErr, "body must be valid JSON")
 		receivedEvent = string(p.Event)
 
 		w.WriteHeader(http.StatusOK)

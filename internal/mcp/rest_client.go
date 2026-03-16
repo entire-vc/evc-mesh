@@ -102,11 +102,11 @@ func (c *RESTClient) doMultipart(ctx context.Context, path string, fields map[st
 	if err != nil {
 		return fmt.Errorf("create form file: %w", err)
 	}
-	if _, err := fw.Write(fileContent); err != nil {
+	if _, err = fw.Write(fileContent); err != nil {
 		return fmt.Errorf("write file content: %w", err)
 	}
 
-	if err := mw.Close(); err != nil {
+	if err = mw.Close(); err != nil {
 		return fmt.Errorf("close multipart writer: %w", err)
 	}
 
@@ -540,7 +540,7 @@ func (c *RESTClient) UpdateAgentProfile(ctx context.Context, agentID string, bod
 }
 
 // doRaw executes an HTTP request with a raw body and given Content-Type, returning the response body.
-func (c *RESTClient) doRaw(ctx context.Context, method, path, contentType string, rawBody []byte) ([]byte, int, error) {
+func (c *RESTClient) doRaw(ctx context.Context, method, path, contentType string, rawBody []byte) (body []byte, statusCode int, err error) {
 	var bodyReader io.Reader
 	if rawBody != nil {
 		bodyReader = bytes.NewReader(rawBody)
@@ -572,7 +572,7 @@ func (c *RESTClient) doRaw(ctx context.Context, method, path, contentType string
 }
 
 // ImportWorkspaceConfig imports workspace configuration from YAML content.
-func (c *RESTClient) ImportWorkspaceConfig(ctx context.Context, workspaceID string, yamlContent string) (map[string]any, error) {
+func (c *RESTClient) ImportWorkspaceConfig(ctx context.Context, workspaceID, yamlContent string) (map[string]any, error) {
 	data, statusCode, err := c.doRaw(ctx, http.MethodPost, "/api/v1/workspaces/"+workspaceID+"/config/import", "text/yaml", []byte(yamlContent))
 	if err != nil {
 		return nil, err

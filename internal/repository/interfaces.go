@@ -75,13 +75,13 @@ type TaskRepository interface {
 	ListByStatusCategory(ctx context.Context, workspaceID uuid.UUID, category domain.StatusCategory, pg pagination.Params) (*pagination.Page[domain.Task], error)
 	// AtomicCheckout acquires an exclusive application-level lock on the task for the
 	// given agent. Returns ErrCheckoutConflict if locked by another non-expired agent.
-	AtomicCheckout(ctx context.Context, taskID, agentID uuid.UUID, token uuid.UUID, expiresAt time.Time) error
+	AtomicCheckout(ctx context.Context, taskID, agentID, token uuid.UUID, expiresAt time.Time) error
 	// ReleaseCheckout clears the checkout fields. Returns ErrInvalidCheckoutToken when
 	// the provided token does not match.
-	ReleaseCheckout(ctx context.Context, taskID uuid.UUID, token uuid.UUID) error
+	ReleaseCheckout(ctx context.Context, taskID, token uuid.UUID) error
 	// ExtendCheckout extends the checkout deadline. Returns ErrInvalidCheckoutToken when
 	// the provided token does not match or the checkout has already expired.
-	ExtendCheckout(ctx context.Context, taskID uuid.UUID, token uuid.UUID, newExpires time.Time) error
+	ExtendCheckout(ctx context.Context, taskID, token uuid.UUID, newExpires time.Time) error
 	// MoveToProject atomically reassigns a task to a different project, assigning it
 	// the given target status and a new task_number within that project.
 	// Returns apierror.NotFound("Task") if the task does not exist or is soft-deleted.
@@ -302,7 +302,7 @@ type ProjectMemberRepository interface {
 	// DeleteByWorkspaceAndUser removes all project memberships for a user across a workspace.
 	DeleteByWorkspaceAndUser(ctx context.Context, workspaceID, userID uuid.UUID) error
 	// ExistsMember returns true if the given user or agent is a member of the project.
-	ExistsMember(ctx context.Context, projectID uuid.UUID, userID *uuid.UUID, agentID *uuid.UUID) (bool, error)
+	ExistsMember(ctx context.Context, projectID uuid.UUID, userID, agentID *uuid.UUID) (bool, error)
 }
 
 // SavedViewRepository manages persistence for saved views.
@@ -311,7 +311,7 @@ type SavedViewRepository interface {
 	GetByID(ctx context.Context, id uuid.UUID) (*domain.SavedView, error)
 	Update(ctx context.Context, id uuid.UUID, input domain.UpdateSavedViewInput) (*domain.SavedView, error)
 	Delete(ctx context.Context, id uuid.UUID) error
-	ListByProject(ctx context.Context, projectID uuid.UUID, userID uuid.UUID) ([]domain.SavedView, error)
+	ListByProject(ctx context.Context, projectID, userID uuid.UUID) ([]domain.SavedView, error)
 }
 
 // ProjectUpdateRepository manages persistence for project status updates.
@@ -372,10 +372,10 @@ type RuleRepository interface {
 	ListByAgent(ctx context.Context, agentID uuid.UUID, includeDisabled bool) ([]domain.Rule, error)
 	// GetEffective fetches all candidate rules for inheritance resolution across workspace,
 	// project, and agent scopes. The caller filters and resolves inheritance.
-	GetEffective(ctx context.Context, workspaceID uuid.UUID, projectID *uuid.UUID, agentID *uuid.UUID) ([]domain.Rule, error)
+	GetEffective(ctx context.Context, workspaceID uuid.UUID, projectID, agentID *uuid.UUID) ([]domain.Rule, error)
 	// CountByAssigneeAndStatusCategory counts tasks for an assignee in given status categories.
 	// Used by evaluators to check capacity limits without importing taskRepo.
-	CountTasksByAssigneeAndCategory(ctx context.Context, workspaceID uuid.UUID, assigneeID uuid.UUID, assigneeType string, categories []string) (int, error)
+	CountTasksByAssigneeAndCategory(ctx context.Context, workspaceID, assigneeID uuid.UUID, assigneeType string, categories []string) (int, error)
 }
 
 // WorkspaceRuleConfigRepository manages persistence for workspace-level rule configs.
@@ -448,7 +448,7 @@ type IntegrationRepository interface {
 type MemoryRepository interface {
 	Upsert(ctx context.Context, mem *domain.Memory) error
 	GetByID(ctx context.Context, id uuid.UUID) (*domain.Memory, error)
-	GetByKey(ctx context.Context, workspaceID uuid.UUID, projectID *uuid.UUID, agentID *uuid.UUID, key string, scope domain.MemoryScope) (*domain.Memory, error)
+	GetByKey(ctx context.Context, workspaceID uuid.UUID, projectID, agentID *uuid.UUID, key string, scope domain.MemoryScope) (*domain.Memory, error)
 	FullTextSearch(ctx context.Context, query string, workspaceID uuid.UUID, projectID *uuid.UUID, scope string, tags []string, limit int) ([]domain.ScoredMemory, error)
 	FindByScope(ctx context.Context, workspaceID uuid.UUID, projectID *uuid.UUID, scope string, limit int) ([]domain.Memory, error)
 	ListByWorkspaceProject(ctx context.Context, workspaceID uuid.UUID, projectID *uuid.UUID) ([]domain.Memory, error)

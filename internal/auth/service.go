@@ -308,7 +308,7 @@ func (s *Service) generateTokenPair(user *domain.User) (*TokenPair, error) {
 
 // generateRefreshToken creates a random refresh token and its SHA-256 hash.
 // Format: rt_{64_hex_chars}
-func generateRefreshToken() (plainToken string, tokenHash string, err error) {
+func generateRefreshToken() (plainToken, tokenHash string, err error) {
 	b := make([]byte, refreshTokenRandomBytes)
 	if _, err := rand.Read(b); err != nil {
 		return "", "", err

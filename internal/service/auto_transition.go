@@ -127,9 +127,10 @@ func (s *autoTransitionService) CheckSubtaskCompletion(ctx context.Context, pare
 
 	// 4. Build a category map for statuses we encounter.
 	categoryByStatusID := make(map[uuid.UUID]domain.StatusCategory)
+	var st *domain.TaskStatus
 	for _, sub := range subtasks {
 		if _, seen := categoryByStatusID[sub.StatusID]; !seen {
-			st, err := s.statusRepo.GetByID(ctx, sub.StatusID)
+			st, err = s.statusRepo.GetByID(ctx, sub.StatusID)
 			if err != nil {
 				return err
 			}
@@ -215,19 +216,21 @@ func (s *autoTransitionService) tryUnblockTask(ctx context.Context, taskID uuid.
 
 	// Build category map for blocker tasks.
 	categoryByTaskID := make(map[uuid.UUID]domain.StatusCategory)
+	var blocker *domain.Task
+	var blockerStatus *domain.TaskStatus
 	for _, dep := range allDeps {
 		if dep.DependencyType != domain.DependencyTypeBlocks {
 			continue
 		}
 		if _, seen := categoryByTaskID[dep.DependsOnTaskID]; !seen {
-			blocker, err := s.taskRepo.GetByID(ctx, dep.DependsOnTaskID)
+			blocker, err = s.taskRepo.GetByID(ctx, dep.DependsOnTaskID)
 			if err != nil {
 				return err
 			}
 			if blocker == nil {
 				continue
 			}
-			blockerStatus, err := s.statusRepo.GetByID(ctx, blocker.StatusID)
+			blockerStatus, err = s.statusRepo.GetByID(ctx, blocker.StatusID)
 			if err != nil {
 				return err
 			}

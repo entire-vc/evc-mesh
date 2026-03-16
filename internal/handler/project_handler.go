@@ -59,12 +59,12 @@ func (h *ProjectHandler) List(c echo.Context) error {
 	}
 
 	var q listProjectsQuery
-	if err := c.Bind(&q); err != nil {
+	if err = c.Bind(&q); err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid query parameters"))
 	}
 
 	var pg pagination.Params
-	if err := c.Bind(&pg); err != nil {
+	if err = c.Bind(&pg); err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid pagination parameters"))
 	}
 	pg.Normalize()
@@ -74,7 +74,8 @@ func (h *ProjectHandler) List(c echo.Context) error {
 	}
 
 	if q.IsArchived != "" {
-		v, err := strconv.ParseBool(q.IsArchived)
+		var v bool
+		v, err = strconv.ParseBool(q.IsArchived)
 		if err == nil {
 			filter.IsArchived = &v
 		}

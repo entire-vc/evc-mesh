@@ -224,11 +224,11 @@ func (s *recurringService) Create(ctx context.Context, input CreateRecurringInpu
 	// Dry-run template to catch invalid syntax early.
 	loc, _ := time.LoadLocation(input.Timezone)
 	data := buildTemplateData(time.Now(), loc, 1, "")
-	if _, err := renderTemplate(input.TitleTemplate, data); err != nil {
+	if _, err = renderTemplate(input.TitleTemplate, data); err != nil {
 		return nil, &apierror.Error{Code: 422, Message: "invalid title_template", Details: err.Error()}
 	}
 	if input.DescriptionTemplate != "" {
-		if _, err := renderTemplate(input.DescriptionTemplate, data); err != nil {
+		if _, err = renderTemplate(input.DescriptionTemplate, data); err != nil {
 			return nil, &apierror.Error{Code: 422, Message: "invalid description_template", Details: err.Error()}
 		}
 	}

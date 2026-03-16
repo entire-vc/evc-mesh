@@ -128,7 +128,7 @@ func (h *EventHandler) Create(c echo.Context) error {
 		payloadMap = map[string]any{}
 	}
 	// Validate payload is serializable.
-	if _, err := json.Marshal(payloadMap); err != nil {
+	if _, err = json.Marshal(payloadMap); err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid payload"))
 	}
 
