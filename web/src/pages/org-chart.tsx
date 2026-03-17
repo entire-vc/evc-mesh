@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { Bot, LayoutGrid, Network, Plus, User, UserPlus } from "lucide-react";
+import { useLocation } from "react-router";
+import { Bot, Plus, User, UserPlus } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { agentStatusConfig, isAgentStale } from "@/lib/agent-utils";
 import { useWorkspaceStore } from "@/stores/workspace";
@@ -454,7 +455,10 @@ export function OrgChartPage() {
   const { currentWorkspace } = useWorkspaceStore();
   const { orgChart, isOrgChartLoading, fetchOrgChart } = useRulesStore();
   const { agents, fetchAgents } = useAgentStore();
-  const [viewMode, setViewMode] = useState<ViewMode>("tree");
+
+  // View mode from URL: /org-chart = tree, /org-chart/grid = grid
+  const location = useLocation();
+  const viewMode: ViewMode = location.pathname.endsWith("/grid") ? "grid" : "tree";
 
   // Dialog state
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
@@ -510,34 +514,6 @@ export function OrgChartPage() {
             Invite Member
           </Button>
 
-          <div className="flex items-center gap-1 rounded-lg border border-input bg-background p-1 ml-2">
-            <button
-              type="button"
-              onClick={() => setViewMode("tree")}
-              className={cn(
-                "flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors",
-                viewMode === "tree"
-                  ? "bg-primary text-primary-foreground"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
-            >
-              <Network className="h-3.5 w-3.5" />
-              Tree
-            </button>
-            <button
-              type="button"
-              onClick={() => setViewMode("grid")}
-              className={cn(
-                "flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors",
-                viewMode === "grid"
-                  ? "bg-primary text-primary-foreground"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
-            >
-              <LayoutGrid className="h-3.5 w-3.5" />
-              By Project
-            </button>
-          </div>
         </div>
       </div>
 

@@ -8,11 +8,13 @@ import {
   ChevronRight,
   Inbox,
   LayoutDashboard,
+  LayoutGrid,
   Loader2,
   LogOut,
   Menu,
   MonitorDot,
   Moon,
+  Network,
   Search,
   Settings,
   Sparkles,
@@ -360,6 +362,14 @@ function useCurrentView(): "board" | "list" | "timeline" | "calendar" | null {
   return null;
 }
 
+function useTeamView(): "tree" | "grid" | null {
+  const location = useLocation();
+  const path = location.pathname;
+  if (/\/w\/[^/]+\/org-chart\/grid\/?$/.test(path)) return "grid";
+  if (/\/w\/[^/]+\/org-chart\/?$/.test(path)) return "tree";
+  return null;
+}
+
 interface WorkspacePage {
   title: string;
   icon: React.ComponentType<{ className?: string }>;
@@ -371,7 +381,7 @@ const WORKSPACE_PAGES: Array<{
   icon: React.ComponentType<{ className?: string }>;
 }> = [
   { pattern: /\/w\/[^/]+\/?$/, title: "Dashboard", icon: LayoutDashboard },
-  { pattern: /\/w\/[^/]+\/org-chart\/?$/, title: "Team", icon: Bot },
+  { pattern: /\/w\/[^/]+\/org-chart(\/grid)?\/?$/, title: "Team", icon: Bot },
   { pattern: /\/w\/[^/]+\/memories\/?$/, title: "Memory", icon: Brain },
   { pattern: /\/w\/[^/]+\/sessions\/?$/, title: "Sessions", icon: MonitorDot },
   { pattern: /\/w\/[^/]+\/spark\/?$/, title: "Spark Catalog", icon: Sparkles },
@@ -395,12 +405,54 @@ function useWorkspacePage(): WorkspacePage | null {
   return null;
 }
 
+const TEAM_TABS = [
+  {
+    id: "tree" as const,
+    label: "Tree",
+    Icon: Network,
+    path: (ws: string) => `/w/${ws}/org-chart`,
+  },
+  {
+    id: "grid" as const,
+    label: "By Project",
+    Icon: LayoutGrid,
+    path: (ws: string) => `/w/${ws}/org-chart/grid`,
+  },
+] as const;
+
+function TeamViewTabs({ currentView, wsSlug }: { currentView: "tree" | "grid"; wsSlug: string }) {
+  const navigate = useNavigate();
+  return (
+    <div className="flex items-center gap-0 ml-1 sm:ml-4">
+      {TEAM_TABS.map(({ id, label, Icon, path }) => {
+        const isActive = currentView === id;
+        return (
+          <button
+            key={id}
+            onClick={() => { if (!isActive) navigate(path(wsSlug)); }}
+            className={cn(
+              "flex h-9 items-center gap-1.5 border-b-2 px-1.5 sm:px-3 text-sm transition-colors",
+              isActive
+                ? "border-primary font-medium text-foreground"
+                : "border-transparent font-normal text-muted-foreground hover:text-foreground",
+            )}
+          >
+            <Icon className="h-3.5 w-3.5" />
+            <span className="hidden sm:inline">{label}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 export function Header({ onToggleSidebar }: HeaderProps) {
   const { wsSlug, projectSlug } = useParams();
   const { user, logout } = useAuthStore();
   const { currentWorkspace } = useWorkspaceStore();
   const { currentProject } = useProjectStore();
   const currentView = useCurrentView();
+  const teamView = useTeamView();
   const workspacePage = useWorkspacePage();
   const [isDark, setIsDark] = useState(
     document.documentElement.classList.contains("dark"),
@@ -467,6 +519,11 @@ export function Header({ onToggleSidebar }: HeaderProps) {
           projectId={currentProject?.id}
           className="ml-1 sm:ml-4"
         />
+      )}
+
+      {/* Team view tabs — shown on org-chart page */}
+      {teamView && wsSlug && (
+        <TeamViewTabs currentView={teamView} wsSlug={wsSlug} />
       )}
 
       <div className="flex-1" />

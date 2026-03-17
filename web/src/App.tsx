@@ -82,6 +82,10 @@ export function App() {
             element={<OrgChartPage />}
           />
           <Route
+            path="w/:wsSlug/org-chart/grid"
+            element={<OrgChartPage />}
+          />
+          <Route
             path="w/:wsSlug/memories"
             element={<MemoryBrowserPage />}
           />
