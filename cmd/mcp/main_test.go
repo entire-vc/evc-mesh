@@ -9,10 +9,11 @@ import (
 	"testing"
 	"time"
 
-	mcpserver "github.com/entire-vc/evc-mesh/internal/mcp"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	mcpserver "github.com/entire-vc/evc-mesh/internal/mcp"
 )
 
 // ---------------------------------------------------------------------------
@@ -20,7 +21,7 @@ import (
 // ---------------------------------------------------------------------------
 
 func TestExtractAgentKey_BearerHeader(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/sse", nil)
+	req := httptest.NewRequest(http.MethodGet, "/sse", http.NoBody)
 	req.Header.Set("Authorization", "Bearer agk_acme_deadbeef1234")
 
 	got := extractAgentKeyFromRequest(req)
@@ -28,7 +29,7 @@ func TestExtractAgentKey_BearerHeader(t *testing.T) {
 }
 
 func TestExtractAgentKey_BearerHeader_NonAgentToken(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/sse", nil)
+	req := httptest.NewRequest(http.MethodGet, "/sse", http.NoBody)
 	req.Header.Set("Authorization", "Bearer eyJhbGciOiJIUzI1NiJ9.xxx")
 
 	got := extractAgentKeyFromRequest(req)
@@ -36,7 +37,7 @@ func TestExtractAgentKey_BearerHeader_NonAgentToken(t *testing.T) {
 }
 
 func TestExtractAgentKey_XAgentKeyHeader(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/sse", nil)
+	req := httptest.NewRequest(http.MethodGet, "/sse", http.NoBody)
 	req.Header.Set("X-Agent-Key", "agk_ws_abc123")
 
 	got := extractAgentKeyFromRequest(req)
@@ -44,7 +45,7 @@ func TestExtractAgentKey_XAgentKeyHeader(t *testing.T) {
 }
 
 func TestExtractAgentKey_XAgentKeyHeader_BadPrefix(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/sse", nil)
+	req := httptest.NewRequest(http.MethodGet, "/sse", http.NoBody)
 	req.Header.Set("X-Agent-Key", "not_an_agent_key")
 
 	got := extractAgentKeyFromRequest(req)
@@ -52,21 +53,21 @@ func TestExtractAgentKey_XAgentKeyHeader_BadPrefix(t *testing.T) {
 }
 
 func TestExtractAgentKey_QueryParam(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/sse?agent_key=agk_demo_ffffffff", nil)
+	req := httptest.NewRequest(http.MethodGet, "/sse?agent_key=agk_demo_ffffffff", http.NoBody)
 
 	got := extractAgentKeyFromRequest(req)
 	assert.Equal(t, "agk_demo_ffffffff", got)
 }
 
 func TestExtractAgentKey_QueryParam_BadPrefix(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/sse?agent_key=bad_key", nil)
+	req := httptest.NewRequest(http.MethodGet, "/sse?agent_key=bad_key", http.NoBody)
 
 	got := extractAgentKeyFromRequest(req)
 	assert.Empty(t, got)
 }
 
 func TestExtractAgentKey_Priority_BearerOverXAgentKey(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/sse", nil)
+	req := httptest.NewRequest(http.MethodGet, "/sse", http.NoBody)
 	req.Header.Set("Authorization", "Bearer agk_ws_from_bearer")
 	req.Header.Set("X-Agent-Key", "agk_ws_from_header")
 
@@ -75,7 +76,7 @@ func TestExtractAgentKey_Priority_BearerOverXAgentKey(t *testing.T) {
 }
 
 func TestExtractAgentKey_NoCredentials(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/sse", nil)
+	req := httptest.NewRequest(http.MethodGet, "/sse", http.NoBody)
 
 	got := extractAgentKeyFromRequest(req)
 	assert.Empty(t, got)
@@ -298,7 +299,7 @@ func TestSSEEndpoint_MissingKey_Returns401(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	req := httptest.NewRequest(http.MethodGet, "/sse", nil)
+	req := httptest.NewRequest(http.MethodGet, "/sse", http.NoBody)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusUnauthorized, rec.Code)
@@ -326,7 +327,7 @@ func TestSSEEndpoint_InvalidKey_Returns403(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	req := httptest.NewRequest(http.MethodGet, "/sse", nil)
+	req := httptest.NewRequest(http.MethodGet, "/sse", http.NoBody)
 	req.Header.Set("X-Agent-Key", "agk_bad_invalidkey")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -355,7 +356,7 @@ func TestSSEEndpoint_ValidKey_Passes(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	req := httptest.NewRequest(http.MethodGet, "/sse", nil)
+	req := httptest.NewRequest(http.MethodGet, "/sse", http.NoBody)
 	req.Header.Set("X-Agent-Key", "agk_test_goodkey")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -390,7 +391,7 @@ func TestSSEContextFunc_InjectsSessionAndClient(t *testing.T) {
 		return ctx
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "/sse", nil)
+	req := httptest.NewRequest(http.MethodGet, "/sse", http.NoBody)
 	req.Header.Set("X-Agent-Key", "agk_test_ctxkey")
 
 	ctx := sseContextFunc(context.Background(), req)
@@ -413,7 +414,7 @@ func TestSSEContextFunc_NoKey_ReturnsOriginalContext(t *testing.T) {
 		return ctx
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "/sse", nil)
+	req := httptest.NewRequest(http.MethodGet, "/sse", http.NoBody)
 	ctx := context.Background()
 	result := sseContextFunc(ctx, req)
 	assert.Equal(t, ctx, result, "context should not be modified without a key")
