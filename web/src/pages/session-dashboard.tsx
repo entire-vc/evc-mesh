@@ -73,7 +73,7 @@ function AgentSessionCard({ agent }: AgentSessionCardProps) {
 					/>
 					<span className="text-xs text-muted-foreground">{statusCfg.label}</span>
 					{stale && (
-						<AlertCircle className="h-3 w-3 text-yellow-500" title="Heartbeat stale" />
+						<span title="Heartbeat stale"><AlertCircle className="h-3 w-3 text-yellow-500" /></span>
 					)}
 				</div>
 			</div>

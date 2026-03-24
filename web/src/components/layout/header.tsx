@@ -20,7 +20,6 @@ import {
   Sparkles,
   Sun,
   Target,
-  Users,
 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { useAuthStore } from "@/stores/auth";
