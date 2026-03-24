@@ -157,6 +157,6 @@ With evc-mesh connected, Claude Code can:
 ## Next Steps
 
 - Read [Self-Hosting Guide](self-hosting.md) for production deployment, backup, and security hardening
-- Read [MCP Tool Reference](mcp-reference.md) for detailed documentation on all 34 MCP tools
+- Read [MCP Tool Reference](mcp-reference.md) for detailed documentation on all 45 MCP tools
 - Read the [OpenAPI spec](openapi.yaml) or visit `http://localhost:8005/docs` for the full REST API reference
 - Set up multiple agents to explore multi-agent collaboration via the event bus

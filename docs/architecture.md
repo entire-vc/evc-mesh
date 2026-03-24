@@ -201,10 +201,10 @@ See [Agent Push Notifications](agent-push-notifications.md) for details.
 ### State Management
 
 Each domain has a dedicated Zustand store:
-- `task-store.ts` — tasks, filters, board state
-- `project-store.ts` — projects, current project
-- `workspace-store.ts` — workspaces, current workspace
-- `agent-store.ts` — agent list, profiles
+- `task.ts` — tasks, filters, board state
+- `project.ts` — projects, current project
+- `workspace.ts` — workspaces, current workspace
+- `agent.ts` — agent list, profiles
 - `saved-view-store.ts` — saved filter/sort presets
 - And 11 more for specific features
 

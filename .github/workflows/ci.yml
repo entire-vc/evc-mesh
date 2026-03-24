@@ -85,10 +85,27 @@ jobs:
     needs: test
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
           cache: true
+      - name: Install frontend dependencies
+        working-directory: web
+        run: pnpm install --frozen-lockfile
+      - name: Typecheck frontend
+        working-directory: web
+        run: pnpm typecheck
+      - name: Build frontend
+        working-directory: web
+        run: pnpm build
       - name: Build API server
         run: go build -o bin/api ./cmd/api
       - name: Build MCP server
