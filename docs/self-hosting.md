@@ -131,7 +131,7 @@ For production, use `docker-compose.prod.yml` instead of the default `docker-com
 
 ```bash
 # Copy and fill in production env vars
-cp .env.example .env.prod
+cp .env.prod.example .env.prod
 # Edit .env.prod: set POSTGRES_PASSWORD, REDIS_PASSWORD, JWT_SECRET, MINIO_ACCESS_KEY, MINIO_SECRET_KEY
 
 # Build and start all services
@@ -241,10 +241,10 @@ Docker Compose creates four named volumes:
 
 | Volume | Container | Path | Description |
 |--------|-----------|------|-------------|
-| `postgres_data` | postgres | `/var/lib/postgresql/data` | Database storage |
-| `redis_data` | redis | `/data` | Redis persistence (RDB/AOF) |
-| `nats_data` | nats | `/data` | NATS JetStream storage |
-| `minio_data` | minio | `/data` | Object storage (artifacts) |
+| `pgdata` | postgres | `/var/lib/postgresql/data` | Database storage |
+| `redisdata` | redis | `/data` | Redis persistence (RDB/AOF) |
+| `natsdata` | nats | `/data` | NATS JetStream storage |
+| `miniodata` | minio | `/data` | Object storage (artifacts) |
 
 To list volumes:
 ```bash
@@ -291,7 +291,7 @@ mc mirror ./backup-artifacts/ local/mesh-artifacts
 JetStream stores data on disk in the `nats_data` volume. For backup:
 ```bash
 docker compose stop nats
-docker run --rm -v evc-mesh_nats_data:/data -v $(pwd):/backup alpine \
+docker run --rm -v evc-mesh_natsdata:/data -v $(pwd):/backup alpine \
   tar czf /backup/nats_backup.tar.gz /data
 docker compose start nats
 ```
@@ -311,7 +311,7 @@ mc mirror local/mesh-artifacts "$BACKUP_DIR/artifacts/"
 
 # NATS (stop briefly)
 docker compose stop nats
-docker run --rm -v evc-mesh_nats_data:/data -v "$BACKUP_DIR":/backup alpine \
+docker run --rm -v evc-mesh_natsdata:/data -v "$BACKUP_DIR":/backup alpine \
   tar czf /backup/nats.tar.gz /data
 docker compose start nats
 

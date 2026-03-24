@@ -317,10 +317,12 @@ func (h *TaskHandler) List(c echo.Context) error {
 		filter.Labels = []string{q.Labels}
 	}
 	if q.Status != "" {
-		var statusID uuid.UUID
-		statusID, err = uuid.Parse(q.Status)
-		if err == nil {
-			filter.StatusIDs = []uuid.UUID{statusID}
+		// Support comma-separated status UUIDs for multi-status filtering.
+		for _, raw := range strings.Split(q.Status, ",") {
+			raw = strings.TrimSpace(raw)
+			if statusID, parseErr := uuid.Parse(raw); parseErr == nil {
+				filter.StatusIDs = append(filter.StatusIDs, statusID)
+			}
 		}
 	}
 

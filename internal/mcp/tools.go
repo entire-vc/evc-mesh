@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	mcpsdk "github.com/mark3labs/mcp-go/mcp"
@@ -96,22 +97,24 @@ func (s *Server) handleListTasks(ctx context.Context, request mcpsdk.CallToolReq
 		params["sort_by"] = sort
 	}
 
-	// status_category: we need to resolve it to a status_id via the API.
-	// The REST API accepts status= as a UUID. We query statuses and filter.
+	// status_category: resolve to all matching status IDs via the API.
+	// The REST API accepts status= as comma-separated UUIDs.
 	if cat := mcpsdk.ParseString(request, "status_category", ""); cat != "" {
 		statuses, err := s.getRESTClient(ctx).GetProjectStatuses(ctx, projectID)
 		if err != nil {
 			return errResult("failed to resolve status category: %v", err)
 		}
-		// Find first status matching the category and use it.
-		// Note: REST API only supports single status_id filter.
+		var matchedIDs []string
 		for _, st := range statuses {
 			stCat, _ := st["category"].(string)
 			if stCat == cat {
-				stID, _ := st["id"].(string)
-				params["status"] = stID
-				break
+				if stID, _ := st["id"].(string); stID != "" {
+					matchedIDs = append(matchedIDs, stID)
+				}
 			}
+		}
+		if len(matchedIDs) > 0 {
+			params["status"] = strings.Join(matchedIDs, ",")
 		}
 	}
 

@@ -156,7 +156,13 @@ func NewTaskRepo(db *sqlx.DB) *TaskRepo {
 }
 
 func (r *TaskRepo) Create(ctx context.Context, task *domain.Task) error {
+	// Use pg_advisory_xact_lock to serialize task_number generation per project.
+	// Without this, concurrent INSERTs can read the same MAX(task_number) and
+	// produce duplicates (the unique constraint catches it, but we'd error out).
 	const q = `
+		WITH lock AS (
+			SELECT pg_advisory_xact_lock(hashtext($2::text))
+		)
 		INSERT INTO tasks (
 			id, project_id, status_id, title, description,
 			assignee_id, assignee_type, priority, parent_task_id, position,
@@ -545,6 +551,9 @@ func (r *TaskRepo) ReleaseCheckout(ctx context.Context, taskID, token uuid.UUID)
 // Returns apierror.NotFound("Task") when the task does not exist or is soft-deleted.
 func (r *TaskRepo) MoveToProject(ctx context.Context, taskID, targetProjectID, targetStatusID uuid.UUID) error {
 	const q = `
+		WITH lock AS (
+			SELECT pg_advisory_xact_lock(hashtext($2::text))
+		)
 		UPDATE tasks
 		SET project_id  = $2,
 		    status_id   = $3,
