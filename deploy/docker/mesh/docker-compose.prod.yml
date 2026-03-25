@@ -1,5 +1,4 @@
 services:
-  # PostgreSQL 16
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
@@ -8,40 +7,37 @@ services:
       POSTGRES_USER: mesh
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - ./volumes/postgres/data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U mesh"]
       interval: 10s
       timeout: 5s
       retries: 5
 
-  # Redis 7
   redis:
     image: redis:7-alpine
     restart: unless-stopped
     command: redis-server --requirepass ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
     volumes:
-      - redisdata:/data
+      - ./volumes/redis/data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
 
-  # NATS with JetStream
   nats:
     image: nats:2.10-alpine
     restart: unless-stopped
     command: ["--jetstream", "--store_dir", "/data", "--http_port", "8222"]
     volumes:
-      - natsdata:/data
+      - ./volumes/nats/data:/data
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:8222/healthz"]
       interval: 30s
       timeout: 5s
       retries: 3
 
-  # MinIO (S3-compatible object storage)
   minio:
     image: minio/minio:latest
     restart: unless-stopped
@@ -50,18 +46,17 @@ services:
       MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:?MINIO_ACCESS_KEY is required}
       MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:?MINIO_SECRET_KEY is required}
     volumes:
-      - miniodata:/data
+      - ./volumes/minio/data:/data
     healthcheck:
       test: ["CMD", "mc", "ready", "local"]
       interval: 30s
       timeout: 5s
       retries: 3
 
-  # Mesh API Server (Go binary + runs DB migrations on startup)
   api:
     build:
-      context: .
-      dockerfile: Dockerfile
+      context: ../../../
+      dockerfile: deploy/docker/mesh/Dockerfile
     restart: unless-stopped
     depends_on:
       postgres:
@@ -104,11 +99,10 @@ services:
       timeout: 5s
       retries: 3
 
-  # Nginx: serves React SPA + proxies /api and /ws to the API
   nginx:
     build:
-      context: .
-      dockerfile: Dockerfile.nginx
+      context: ../../../
+      dockerfile: deploy/docker/mesh/Dockerfile.nginx
     restart: unless-stopped
     depends_on:
       api:
@@ -116,11 +110,10 @@ services:
     ports:
       - "${HTTP_PORT:-80}:80"
 
-  # Mesh MCP Server (SSE mode for remote agents)
   mcp:
     build:
-      context: .
-      dockerfile: Dockerfile
+      context: ../../../
+      dockerfile: deploy/docker/mesh/Dockerfile
     restart: unless-stopped
     command: ["mesh-mcp", "--transport", "sse"]
     depends_on:
@@ -134,38 +127,30 @@ services:
       MESH_MCP_HOST: "0.0.0.0"
       MESH_MCP_PORT: "8081"
 
-  # Prometheus — scrapes /metrics from the API server
   prometheus:
     image: prom/prometheus:v2.50.0
     restart: unless-stopped
+    user: "root"
     volumes:
-      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - promdata:/prometheus
+      - ../../../monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./volumes/prometheus/data:/prometheus
     ports:
       - "${PROMETHEUS_PORT:-9090}:9090"
     depends_on:
       - api
 
-  # Grafana — dashboards for API metrics
   grafana:
     image: grafana/grafana:10.3.1
     restart: unless-stopped
+    user: "root"
     environment:
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
       GF_USERS_ALLOW_SIGN_UP: "false"
     volumes:
-      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
-      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
-      - grafanadata:/var/lib/grafana
+      - ../../../monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ../../../monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - ./volumes/grafana/data:/var/lib/grafana
     ports:
       - "${GRAFANA_PORT:-3001}:3000"
     depends_on:
       - prometheus
-
-volumes:
-  pgdata:
-  redisdata:
-  natsdata:
-  miniodata:
-  promdata:
-  grafanadata:

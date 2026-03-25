@@ -82,8 +82,10 @@ export function TaskSlideOver({
   onClose,
   onTaskUpdated,
 }: TaskSlideOverProps) {
-  const { currentTask, fetchTask, updateTask, moveTask, duplicateTask } =
-    useTaskStore();
+  const currentTask = useTaskStore((state) =>
+    taskId ? state.tasksById[taskId] ?? null : null,
+  );
+  const { fetchTask, updateTask, moveTask, duplicateTask } = useTaskStore();
   const { statuses, fetchStatuses, currentProject } = useProjectStore();
   const { fields: customFieldDefs, fetchFields: fetchCustomFields } =
     useCustomFieldStore();

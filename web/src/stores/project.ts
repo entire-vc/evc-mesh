@@ -8,11 +8,16 @@ import type {
   TaskStatus,
 } from "@/types";
 
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : "Request failed";
+}
+
 interface ProjectState {
   projects: Project[];
   currentProject: Project | null;
   statuses: TaskStatus[];
   isLoading: boolean;
+  error: string | null;
 
   fetchProjects: (workspaceId: string) => Promise<void>;
   setCurrentProject: (project: Project) => void;
@@ -46,16 +51,22 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   currentProject: null,
   statuses: [],
   isLoading: false,
+  error: null,
 
   fetchProjects: async (workspaceId: string) => {
-    set({ isLoading: true });
+    set({ isLoading: true, error: null });
     try {
       const page = await api<PaginatedResponse<Project>>(
         `/api/v1/workspaces/${workspaceId}/projects`,
       );
-      set({ projects: page.items ?? [], isLoading: false });
-    } catch {
-      set({ isLoading: false });
+      set({ projects: page.items ?? [], isLoading: false, error: null });
+    } catch (error) {
+      set({
+        projects: [],
+        currentProject: null,
+        isLoading: false,
+        error: getErrorMessage(error),
+      });
     }
   },
 
@@ -109,10 +120,15 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   },
 
   fetchStatuses: async (projectId: string) => {
-    const statuses = await api<TaskStatus[]>(
-      `/api/v1/projects/${projectId}/statuses`,
-    );
-    set({ statuses: statuses ?? [] });
+    set({ error: null });
+    try {
+      const statuses = await api<TaskStatus[]>(
+        `/api/v1/projects/${projectId}/statuses`,
+      );
+      set({ statuses: statuses ?? [], error: null });
+    } catch (error) {
+      set({ statuses: [], error: getErrorMessage(error) });
+    }
   },
 
   createStatus: async (
