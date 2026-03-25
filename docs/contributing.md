@@ -22,10 +22,10 @@ Be respectful and constructive. We are building a tool for collaborative work â€
 git clone https://github.com/entire-vc/evc-mesh && cd evc-mesh
 
 # Start infrastructure
-docker compose up -d
+cd deploy/docker/mesh && docker compose up -d
+# or from the repo root: make docker-up
 
-# Copy environment config
-cp .env.example .env
+# Edit deploy/docker/mesh/.env if you need to override local defaults
 
 # Start the API server (runs migrations automatically)
 go run ./cmd/api

@@ -14,20 +14,19 @@
 # 1. Clone the repository
 git clone https://github.com/entire-vc/evc-mesh && cd evc-mesh
 
-# 2. Copy environment file
-cp .env.example .env
-
-# 3. Edit .env -- at minimum, change JWT_SECRET!
-#    nano .env
+# 2. Edit deploy/docker/mesh/.env -- at minimum, change JWT_SECRET!
+#    nano deploy/docker/mesh/.env
 #    JWT_SECRET=your-strong-secret-at-least-32-chars
 
-# 4. Start infrastructure (PostgreSQL, Redis, NATS, MinIO)
-docker compose up -d
+# 3. Start infrastructure (PostgreSQL, Redis, NATS, MinIO)
+cd deploy/docker/mesh && docker compose up -d
+#    or from the repo root: make docker-up
 
-# 5. Build and start the API server
+# 4. Build and start the API server
+cd ../..
 go run ./cmd/api
 
-# 6. In a separate terminal, start the frontend
+# 5. In a separate terminal, start the frontend
 cd web && pnpm install && pnpm dev
 ```
 
@@ -127,15 +126,16 @@ The services will be available at:
 
 ### Docker Compose (Production)
 
-For production, use `docker-compose.prod.yml` instead of the default `docker-compose.yml`. It builds all services from source and adds nginx, Prometheus, and Grafana.
+For production, use `deploy/docker/mesh/docker-compose.prod.yml` instead of `deploy/docker/mesh/docker-compose.yml`. It builds all services from source and adds nginx, Prometheus, and Grafana.
 
 ```bash
-# Copy and fill in production env vars
-cp .env.prod.example .env.prod
-# Edit .env.prod: set POSTGRES_PASSWORD, REDIS_PASSWORD, JWT_SECRET, MINIO_ACCESS_KEY, MINIO_SECRET_KEY
+# Fill in production env vars in deploy/docker/mesh/.env
+# For a production template, start from deploy/docker/mesh/.env.prod.example
 
 # Build and start all services
-docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
+cd deploy/docker/mesh
+docker compose -f docker-compose.prod.yml --env-file .env up -d --build
+# or from the repo root: make docker-prod-up
 
 # Verify all services are healthy
 docker compose -f docker-compose.prod.yml ps
@@ -177,7 +177,7 @@ GRAFANA_PASSWORD=your-grafana-admin-password
 
 2. **Database password** -- Change `DB_PASSWORD` from the default:
    ```bash
-   # Also update docker-compose.yml POSTGRES_PASSWORD
+   # Also update deploy/docker/mesh/.env
    DB_PASSWORD=your-strong-db-password
    ```
 
@@ -185,13 +185,13 @@ GRAFANA_PASSWORD=your-grafana-admin-password
    ```bash
    S3_ACCESS_KEY_ID=your-access-key
    S3_SECRET_ACCESS_KEY=your-secret-key
-   # Also update docker-compose.yml MINIO_ROOT_USER and MINIO_ROOT_PASSWORD
+   # Also update deploy/docker/mesh/.env
    ```
 
 4. **Redis password** -- Set a password:
    ```bash
    REDIS_PASSWORD=your-redis-password
-   # Add requirepass to Redis container command in docker-compose.yml
+   # The production compose file already passes this to redis-server
    ```
 
 5. **CORS** -- Configure allowed origins (currently allows `*`). Update the API server configuration for your domain.
@@ -237,18 +237,20 @@ GRAFANA_PASSWORD=your-grafana-admin-password
 
 ## Data Persistence
 
-Docker Compose creates four named volumes:
+Docker Compose uses bind mounts rooted in `deploy/docker/mesh/volumes/`:
 
-| Volume | Container | Path | Description |
-|--------|-----------|------|-------------|
-| `pgdata` | postgres | `/var/lib/postgresql/data` | Database storage |
-| `redisdata` | redis | `/data` | Redis persistence (RDB/AOF) |
-| `natsdata` | nats | `/data` | NATS JetStream storage |
-| `miniodata` | minio | `/data` | Object storage (artifacts) |
+| Host path | Container | Path | Description |
+|-----------|-----------|------|-------------|
+| `deploy/docker/mesh/volumes/postgres/data/` | postgres | `/var/lib/postgresql/data` | Database storage |
+| `deploy/docker/mesh/volumes/redis/data/` | redis | `/data` | Redis persistence (RDB/AOF) |
+| `deploy/docker/mesh/volumes/nats/data/` | nats | `/data` | NATS JetStream storage |
+| `deploy/docker/mesh/volumes/minio/data/` | minio | `/data` | Object storage (artifacts) |
+| `deploy/docker/mesh/volumes/prometheus/data/` | prometheus | `/prometheus` | Prometheus TSDB |
+| `deploy/docker/mesh/volumes/grafana/data/` | grafana | `/var/lib/grafana` | Grafana state |
 
-To list volumes:
+To inspect the bind mount directories:
 ```bash
-docker volume ls | grep evc-mesh
+find deploy/docker/mesh/volumes -maxdepth 2 -type d
 ```
 
 ---
@@ -259,12 +261,12 @@ docker volume ls | grep evc-mesh
 
 **Backup:**
 ```bash
-docker compose exec postgres pg_dump -U mesh mesh > backup_$(date +%Y%m%d).sql
+cd deploy/docker/mesh && docker compose exec postgres pg_dump -U mesh mesh > ../../../backup_$(date +%Y%m%d).sql
 ```
 
 **Restore:**
 ```bash
-docker compose exec -T postgres psql -U mesh mesh < backup_20250224.sql
+cd deploy/docker/mesh && docker compose exec -T postgres psql -U mesh mesh < ../../../backup_20250224.sql
 ```
 
 ### MinIO (Artifacts)
@@ -288,11 +290,11 @@ mc mirror ./backup-artifacts/ local/mesh-artifacts
 
 ### NATS JetStream
 
-JetStream stores data on disk in the `nats_data` volume. For backup:
+JetStream stores data on disk in `deploy/docker/mesh/volumes/nats/data/`. For backup:
 ```bash
+cd deploy/docker/mesh
 docker compose stop nats
-docker run --rm -v evc-mesh_natsdata:/data -v $(pwd):/backup alpine \
-  tar czf /backup/nats_backup.tar.gz /data
+tar czf ../../../nats_backup.tar.gz volumes/nats/data
 docker compose start nats
 ```
 
@@ -304,16 +306,21 @@ BACKUP_DIR="./backups/$(date +%Y%m%d_%H%M%S)"
 mkdir -p "$BACKUP_DIR"
 
 # PostgreSQL
-docker compose exec -T postgres pg_dump -U mesh mesh > "$BACKUP_DIR/postgres.sql"
+(
+  cd deploy/docker/mesh
+  docker compose exec -T postgres pg_dump -U mesh mesh
+) > "$BACKUP_DIR/postgres.sql"
 
 # MinIO
 mc mirror local/mesh-artifacts "$BACKUP_DIR/artifacts/"
 
 # NATS (stop briefly)
-docker compose stop nats
-docker run --rm -v evc-mesh_natsdata:/data -v "$BACKUP_DIR":/backup alpine \
-  tar czf /backup/nats.tar.gz /data
-docker compose start nats
+(
+  cd deploy/docker/mesh
+  docker compose stop nats
+  tar czf "../../../$BACKUP_DIR/nats.tar.gz" volumes/nats/data
+  docker compose start nats
+)
 
 echo "Backup complete: $BACKUP_DIR"
 ```
@@ -327,14 +334,14 @@ All infrastructure containers have built-in health checks. Additionally:
 | Service | Health Check | Expected |
 |---------|-------------|----------|
 | API | `curl http://localhost:8005/health` | `{"status":"ok","service":"evc-mesh-api"}` |
-| PostgreSQL | `docker compose exec postgres pg_isready -U mesh` | `accepting connections` |
-| Redis | `docker compose exec redis redis-cli ping` | `PONG` |
+| PostgreSQL | `cd deploy/docker/mesh && docker compose exec postgres pg_isready -U mesh` | `accepting connections` |
+| Redis | `cd deploy/docker/mesh && docker compose exec redis redis-cli ping` | `PONG` |
 | NATS | `curl http://localhost:8223/healthz` | `ok` |
-| MinIO | `docker compose exec minio mc ready local` | exit code 0 |
+| MinIO | `cd deploy/docker/mesh && docker compose exec minio mc ready local` | exit code 0 |
 
 Check all containers at once:
 ```bash
-docker compose ps
+cd deploy/docker/mesh && docker compose ps
 ```
 
 All services should show `healthy` status.
@@ -349,10 +356,12 @@ All services should show `healthy` status.
 
 **Solution:** Wait for PostgreSQL to fully initialize:
 ```bash
+cd deploy/docker/mesh
 docker compose up -d postgres
 # Wait for health check
 until docker compose exec postgres pg_isready -U mesh; do sleep 1; done
 # Then start the API
+cd ../..
 go run ./cmd/api
 ```
 
@@ -372,7 +381,7 @@ mc mb local/mesh-artifacts
 
 **Solution:** Ensure NATS started with JetStream enabled:
 ```bash
-docker compose logs nats | grep "JetStream"
+cd deploy/docker/mesh && docker compose logs nats | grep "JetStream"
 # Should show: "JetStream is ready"
 ```
 
@@ -391,7 +400,7 @@ lsof -i :8005  # API
 lsof -i :3000  # Frontend
 ```
 
-Adjust ports in `docker-compose.yml` and `.env` if needed.
+Adjust ports in `deploy/docker/mesh/docker-compose.yml` and `deploy/docker/mesh/.env` if needed.
 
 ### Frontend build fails
 

@@ -57,3 +57,4 @@ dist/
 tmp/
 *.tmp
 .mcp.json
+deploy/docker/mesh/volumes/

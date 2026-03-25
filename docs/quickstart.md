@@ -8,12 +8,15 @@ Get evc-mesh running in 5 minutes.
 
 ```bash
 cd /path/to/evc-mesh
+cd deploy/docker/mesh
 docker compose up -d
+# or from the repo root: make docker-up
 ```
 
 This starts PostgreSQL, Redis, NATS, and MinIO. Wait for all containers to be healthy:
 
 ```bash
+cd /path/to/evc-mesh/deploy/docker/mesh
 docker compose ps
 ```
 
