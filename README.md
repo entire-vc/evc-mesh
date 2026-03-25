@@ -84,7 +84,8 @@ Traditional project management tools treat AI agents as an afterthought. Mesh is
 
 ```bash
 git clone https://github.com/entire-vc/evc-mesh && cd evc-mesh
-docker compose up -d
+cd deploy/docker/mesh && docker compose up -d
+# or: make docker-up
 ```
 
 This starts PostgreSQL, Redis, NATS, and MinIO.
@@ -92,8 +93,8 @@ This starts PostgreSQL, Redis, NATS, and MinIO.
 ### 2. Configure environment
 
 ```bash
-cp .env.example .env
-# Edit .env — at minimum, change JWT_SECRET
+# Edit deploy/docker/mesh/.env — at minimum, change JWT_SECRET
+# or manage the stack via: make docker-up
 ```
 
 ### 3. Start the API server
@@ -161,7 +162,7 @@ The MCP server exposes 45 tools for managing projects, tasks, comments, artifact
 | Document | Description |
 |----------|-------------|
 | [Quick Start](docs/quickstart.md) | Get up and running in minutes |
-| [Self-Hosting Guide](docs/self-hosting.md) | Production deployment with Docker Compose |
+| [Self-Hosting Guide](docs/self-hosting.md) | Production deployment with Docker Compose from `deploy/docker/mesh/` |
 | [Architecture](docs/architecture.md) | System architecture and design decisions |
 | [API Authentication](docs/api-authentication.md) | JWT, agent keys, and RBAC |
 | [MCP Reference](docs/mcp-reference.md) | All 45 MCP tools with parameters and examples |
@@ -194,7 +195,10 @@ evc-mesh/
 │       ├── components/  # UI components
 │       └── stores/      # Zustand stores (16+)
 ├── docs/                # Public documentation
-└── docker-compose.yml
+├── deploy/
+│   └── docker/
+│       └── mesh/        # Docker Compose stack, env files, bind-mounted volumes
+└── Makefile             # Helpers including docker-up/docker-down
 ```
 
 ## Alpha Status

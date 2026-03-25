@@ -30,13 +30,23 @@ migrate-up:
 migrate-down:
 	goose -dir migrations postgres "$(DB_DSN)" down
 
+DEPLOY_DIR := deploy/docker/mesh
+
 ## docker-up: Start local development infrastructure
 docker-up:
-	docker compose up -d
+	cd $(DEPLOY_DIR) && docker compose up -d
 
 ## docker-down: Stop local development infrastructure
 docker-down:
-	docker compose down
+	cd $(DEPLOY_DIR) && docker compose down
+
+## docker-prod-up: Start production stack (requires .env.prod)
+docker-prod-up:
+	cd $(DEPLOY_DIR) && docker compose -f docker-compose.prod.yml up -d --build
+
+## docker-prod-down: Stop production stack
+docker-prod-down:
+	cd $(DEPLOY_DIR) && docker compose -f docker-compose.prod.yml down
 
 ## generate: Generate OpenAPI spec and other codegen artifacts
 generate:

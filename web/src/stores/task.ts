@@ -9,11 +9,16 @@ import type {
   UpdateTaskRequest,
 } from "@/types";
 
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : "Request failed";
+}
+
 interface TaskState {
   tasks: Task[];
+  tasksById: Record<string, Task>;
   tasksByStatus: Record<string, Task[]>;
-  currentTask: Task | null;
   isLoading: boolean;
+  error: string | null;
   total: number;
   page: number;
   perPage: number;
@@ -23,7 +28,6 @@ interface TaskState {
     projectId: string,
     params?: Record<string, string | number | undefined>,
   ) => Promise<void>;
-  setCurrentTask: (task: Task | null) => void;
   fetchTask: (taskId: string) => Promise<Task>;
   createTask: (projectId: string, req: CreateTaskRequest) => Promise<Task>;
   updateTask: (taskId: string, req: UpdateTaskRequest) => Promise<Task>;
@@ -37,9 +41,10 @@ interface TaskState {
 
 export const useTaskStore = create<TaskState>((set, get) => ({
   tasks: [],
+  tasksById: {},
   tasksByStatus: {},
-  currentTask: null,
   isLoading: false,
+  error: null,
   total: 0,
   page: 1,
   perPage: 50,
@@ -49,34 +54,62 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     projectId: string,
     params?: Record<string, string | number | undefined>,
   ) => {
-    set({ isLoading: true });
+    set({ isLoading: true, error: null });
     try {
       const data = await api<PaginatedResponse<Task>>(
         `/api/v1/projects/${projectId}/tasks`,
         { params: { page_size: "200", ...params } },
       );
+      const items = data.items ?? [];
       set({
-        tasks: data.items ?? [],
+        tasks: items,
+        tasksById: {
+          ...get().tasksById,
+          ...Object.fromEntries(items.map((task) => [task.id, task])),
+        },
         total: data.total_count ?? data.total ?? 0,
         page: data.page,
         perPage: data.per_page ?? data.page_size ?? 50,
         hasMore: data.has_more,
         isLoading: false,
+        error: null,
       });
       get().groupByStatus();
-    } catch {
-      set({ isLoading: false });
+    } catch (error) {
+      set({
+        tasks: [],
+        tasksByStatus: {},
+        isLoading: false,
+        error: getErrorMessage(error),
+        total: 0,
+        page: 1,
+        perPage: 50,
+        hasMore: false,
+      });
     }
   },
 
-  setCurrentTask: (task: Task | null) => {
-    set({ currentTask: task });
-  },
-
   fetchTask: async (taskId: string): Promise<Task> => {
-    const task = await api<Task>(`/api/v1/tasks/${taskId}`);
-    set({ currentTask: task });
-    return task;
+    set({ error: null });
+    try {
+      const task = await api<Task>(`/api/v1/tasks/${taskId}`);
+      set((state) => ({
+        tasksById: {
+          ...state.tasksById,
+          [task.id]: task,
+        },
+        error: null,
+      }));
+      return task;
+    } catch (error) {
+      set((state) => ({
+        tasksById: Object.fromEntries(
+          Object.entries(state.tasksById).filter(([id]) => id !== taskId),
+        ),
+        error: getErrorMessage(error),
+      }));
+      throw error;
+    }
   },
 
   createTask: async (
@@ -87,7 +120,13 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       method: "POST",
       body: req,
     });
-    set((state) => ({ tasks: [...state.tasks, task] }));
+    set((state) => ({
+      tasks: [...state.tasks, task],
+      tasksById: {
+        ...state.tasksById,
+        [task.id]: task,
+      },
+    }));
     get().groupByStatus();
     return task;
   },
@@ -102,8 +141,10 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     });
     set((state) => ({
       tasks: state.tasks.map((t) => (t.id === taskId ? updated : t)),
-      currentTask:
-        state.currentTask?.id === taskId ? updated : state.currentTask,
+      tasksById: {
+        ...state.tasksById,
+        [taskId]: updated,
+      },
     }));
     get().groupByStatus();
     return updated;
@@ -113,8 +154,9 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     await api(`/api/v1/tasks/${taskId}`, { method: "DELETE" });
     set((state) => ({
       tasks: state.tasks.filter((t) => t.id !== taskId),
-      currentTask:
-        state.currentTask?.id === taskId ? null : state.currentTask,
+      tasksById: Object.fromEntries(
+        Object.entries(state.tasksById).filter(([id]) => id !== taskId),
+      ),
     }));
     get().groupByStatus();
   },
@@ -125,7 +167,13 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       `/api/v1/projects/${task.project_id}/tasks`,
       { method: "POST", body: req },
     );
-    set((state) => ({ tasks: [...state.tasks, newTask] }));
+    set((state) => ({
+      tasks: [...state.tasks, newTask],
+      tasksById: {
+        ...state.tasksById,
+        [newTask.id]: newTask,
+      },
+    }));
     get().groupByStatus();
     return newTask;
   },
@@ -138,7 +186,10 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     // Remove task from current project's local list (it moved to another project)
     set((state) => ({
       tasks: state.tasks.filter((t) => t.id !== taskId),
-      currentTask: state.currentTask?.id === taskId ? updated : state.currentTask,
+      tasksById: {
+        ...state.tasksById,
+        [taskId]: updated,
+      },
     }));
     get().groupByStatus();
     return updated;
@@ -161,6 +212,16 @@ export const useTaskStore = create<TaskState>((set, get) => ({
               }
             : t,
         ),
+        tasksById: state.tasksById[taskId]
+          ? {
+              ...state.tasksById,
+              [taskId]: {
+                ...state.tasksById[taskId],
+                status_id: req.status_id!,
+                position: req.position ?? state.tasksById[taskId]!.position,
+              },
+            }
+          : state.tasksById,
       }));
       get().groupByStatus();
     }
