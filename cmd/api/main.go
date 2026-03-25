@@ -47,6 +47,7 @@ func main() {
 		log.Fatalf("Failed to run migrations: %v", migErr)
 	}
 	log.Println("Database migrations applied")
+
 	defer func() { _ = db.Close() }()
 
 	// 4. Create all repository instances.
@@ -88,6 +89,30 @@ func main() {
 		workspaceMemberRepo,
 		cfg.Auth.JWTSecret,
 	)
+
+	// Seed default admin user if MESH_SEED_ADMIN=true and no users exist.
+	if os.Getenv("MESH_SEED_ADMIN") == "true" {
+		var count int
+		if err := db.QueryRow("SELECT COUNT(*) FROM users").Scan(&count); err == nil && count == 0 {
+			seedEmail := os.Getenv("MESH_ADMIN_EMAIL")
+			seedPass := os.Getenv("MESH_ADMIN_PASSWORD")
+			seedName := os.Getenv("MESH_ADMIN_NAME")
+			if seedEmail == "" {
+				seedEmail = "admin@localhost"
+			}
+			if seedPass == "" {
+				seedPass = "Admin123"
+			}
+			if seedName == "" {
+				seedName = "Admin"
+			}
+			if _, _, err := authService.Register(context.Background(), seedEmail, seedPass, seedName); err != nil {
+				log.Printf("Admin seed skipped: %v", err)
+			} else {
+				log.Printf("Default admin created: %s / %s", seedEmail, seedPass)
+			}
+		}
+	}
 
 	// 6. Create all service instances.
 	workspaceService := service.NewWorkspaceService(workspaceRepo, activityLogRepo)
