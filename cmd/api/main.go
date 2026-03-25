@@ -93,7 +93,7 @@ func main() {
 	// Seed default admin user if MESH_SEED_ADMIN=true and no users exist.
 	if os.Getenv("MESH_SEED_ADMIN") == "true" {
 		var count int
-		if err := db.QueryRow("SELECT COUNT(*) FROM users").Scan(&count); err == nil && count == 0 {
+		if scanErr := db.QueryRow("SELECT COUNT(*) FROM users").Scan(&count); scanErr == nil && count == 0 {
 			seedEmail := os.Getenv("MESH_ADMIN_EMAIL")
 			seedPass := os.Getenv("MESH_ADMIN_PASSWORD")
 			seedName := os.Getenv("MESH_ADMIN_NAME")
@@ -106,8 +106,8 @@ func main() {
 			if seedName == "" {
 				seedName = "Admin"
 			}
-			if _, _, err := authService.Register(context.Background(), seedEmail, seedPass, seedName); err != nil {
-				log.Printf("Admin seed skipped: %v", err)
+			if _, _, regErr := authService.Register(context.Background(), seedEmail, seedPass, seedName); regErr != nil {
+				log.Printf("Admin seed skipped: %v", regErr)
 			} else {
 				log.Printf("Default admin created: %s / %s", seedEmail, seedPass)
 			}
