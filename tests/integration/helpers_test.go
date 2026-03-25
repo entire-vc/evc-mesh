@@ -3,7 +3,7 @@
 // These tests require running Docker Compose services (postgres, redis, nats, minio)
 // and the API server. Run:
 //
-//	docker compose up -d
+//	cd deploy/docker/mesh && docker compose up -d
 //	go run ./cmd/api &
 //	go test ./tests/integration/ -v -tags=integration
 package integration

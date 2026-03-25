@@ -141,7 +141,7 @@ if cfg.Auth.JWTSecret == "change-me-in-production" || len(cfg.Auth.JWTSecret) < 
     log.Fatal("JWT_SECRET must be set to a secure value (minimum 32 characters)")
 }
 ```
-3. Document the requirement in deployment docs and `.env.example`.
+3. Document the requirement in deployment docs and `deploy/docker/mesh/.env`.
 
 ---
 
@@ -328,8 +328,8 @@ args = append(args, pattern)
 | `config.go` | `JWT_SECRET` default `"change-me-in-production"` | WARN |
 | `config.go` | MinIO default creds `minioadmin/minioadmin` | OK -- dev only |
 | `config.go` | DB default creds `mesh/mesh` | OK -- dev only |
-| `.env.example` | Not found in repo root | N/A |
-| `docker-compose.yml` | Contains dev credentials | OK -- dev only |
+| `deploy/docker/mesh/.env` | Contains local development defaults | OK -- local/dev only |
+| `deploy/docker/mesh/docker-compose.yml` | Contains dev credentials | OK -- dev only |
 
 ### Git History
 

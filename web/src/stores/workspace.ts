@@ -2,10 +2,15 @@ import { create } from "zustand";
 import { api } from "@/lib/api";
 import type { CreateWorkspaceRequest, Workspace } from "@/types";
 
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : "Failed to load workspaces";
+}
+
 interface WorkspaceState {
   workspaces: Workspace[];
   currentWorkspace: Workspace | null;
   isLoading: boolean;
+  error: string | null;
 
   fetchWorkspaces: () => Promise<void>;
   setCurrentWorkspace: (workspace: Workspace) => void;
@@ -22,14 +27,20 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   workspaces: [],
   currentWorkspace: null,
   isLoading: false,
+  error: null,
 
   fetchWorkspaces: async () => {
-    set({ isLoading: true });
+    set({ isLoading: true, error: null });
     try {
       const workspaces = await api<Workspace[]>("/api/v1/workspaces");
-      set({ workspaces, isLoading: false });
-    } catch {
-      set({ isLoading: false });
+      set({ workspaces, isLoading: false, error: null });
+    } catch (error) {
+      set({
+        workspaces: [],
+        currentWorkspace: null,
+        isLoading: false,
+        error: getErrorMessage(error),
+      });
     }
   },
 

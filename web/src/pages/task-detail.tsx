@@ -73,7 +73,10 @@ const priorities: Priority[] = ["urgent", "high", "medium", "low", "none"];
 export function TaskDetailPage() {
   const { wsSlug, projectSlug, taskId } = useParams();
   const navigate = useNavigate();
-  const { currentTask, fetchTask, updateTask, moveTask, moveToProject, duplicateTask } =
+  const currentTask = useTaskStore((state) =>
+    taskId ? state.tasksById[taskId] ?? null : null,
+  );
+  const { fetchTask, updateTask, moveTask, moveToProject, duplicateTask } =
     useTaskStore();
   const { projects, statuses, fetchStatuses } = useProjectStore();
   const { fields: customFieldDefs, fetchFields: fetchCustomFields } =
