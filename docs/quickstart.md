@@ -57,7 +57,7 @@ The frontend starts at http://localhost:3000.
 ## Step 4: Register and Create Your Workspace
 
 1. Open http://localhost:3000
-2. Click **Register** and create an account
+2. Log in with the default admin account: `admin@localhost` / `Admin123` (or register a new one)
 3. Create a **workspace** (e.g. "My Team")
 4. Create a **project** (e.g. "Backend API")
 5. Add some **tasks** via the kanban board

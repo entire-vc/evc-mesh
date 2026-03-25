@@ -95,11 +95,15 @@ services:
       S3_USE_SSL: "false"
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
       MESH_CORS_ORIGINS: ${CORS_ORIGINS:-*}
+      MESH_SEED_ADMIN: ${MESH_SEED_ADMIN:-true}
+      MESH_ADMIN_EMAIL: ${MESH_ADMIN_EMAIL:-admin@localhost}
+      MESH_ADMIN_PASSWORD: ${MESH_ADMIN_PASSWORD:-Admin123}
+      MESH_ADMIN_NAME: ${MESH_ADMIN_NAME:-Admin}
       MESH_RATE_LIMIT_ENABLED: "true"
       MESH_RATE_LIMIT_AUTH_RPM: "20"
       MESH_RATE_LIMIT_API_RPM: "600"
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8005/health"]
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "-O", "/dev/null", "http://localhost:8005/health"]
       interval: 15s
       timeout: 5s
       retries: 3
