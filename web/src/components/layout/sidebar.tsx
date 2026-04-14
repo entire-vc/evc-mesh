@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { Link, useLocation, useParams } from "react-router";
+import { useCallback, useState } from "react";
+import { Link, useLocation, useNavigate, useParams } from "react-router";
 import {
   Activity,
   BarChart2,
@@ -29,7 +29,14 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { CreateProjectDialog } from "@/components/create-project-dialog";
 
 interface SidebarProps {
@@ -39,9 +46,37 @@ interface SidebarProps {
 export function Sidebar({ collapsed }: SidebarProps) {
   const { wsSlug, projectSlug } = useParams();
   const location = useLocation();
-  const { workspaces, currentWorkspace } = useWorkspaceStore();
+  const navigate = useNavigate();
+  const { workspaces, currentWorkspace, createWorkspace } = useWorkspaceStore();
   const { projects } = useProjectStore();
   const [showCreateProject, setShowCreateProject] = useState(false);
+  const [createWsOpen, setCreateWsOpen] = useState(false);
+  const [wsName, setWsName] = useState("");
+  const [wsSlugDraft, setWsSlugDraft] = useState("");
+  const [wsCreating, setWsCreating] = useState(false);
+  const [wsError, setWsError] = useState<string | null>(null);
+
+  const handleWsNameChange = useCallback((value: string) => {
+    setWsName(value);
+    setWsSlugDraft(value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, ""));
+  }, []);
+
+  const handleCreateWs = useCallback(async () => {
+    if (!wsName.trim() || !wsSlugDraft.trim()) return;
+    setWsError(null);
+    setWsCreating(true);
+    try {
+      const ws = await createWorkspace({ name: wsName.trim(), slug: wsSlugDraft.trim() });
+      setCreateWsOpen(false);
+      setWsName("");
+      setWsSlugDraft("");
+      navigate(`/w/${ws.slug}`);
+    } catch (err) {
+      setWsError(err instanceof Error ? err.message : "Failed to create workspace");
+    } finally {
+      setWsCreating(false);
+    }
+  }, [wsName, wsSlugDraft, createWorkspace, navigate]);
 
   const isOrgChartRoute = location.pathname.endsWith("/org-chart");
   const isSparkRoute = location.pathname.endsWith("/spark");
@@ -210,6 +245,14 @@ export function Sidebar({ collapsed }: SidebarProps) {
                 </DropdownMenuItem>
               </Link>
             ))}
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              onClick={() => setCreateWsOpen(true)}
+              className="gap-2 text-muted-foreground"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              New Workspace
+            </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
@@ -407,6 +450,45 @@ export function Sidebar({ collapsed }: SidebarProps) {
         open={showCreateProject}
         onOpenChange={setShowCreateProject}
       />
+
+      {/* Create workspace dialog */}
+      <Dialog open={createWsOpen} onOpenChange={(open) => { setCreateWsOpen(open); if (!open) { setWsName(""); setWsSlugDraft(""); setWsError(null); } }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Create Workspace</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 pt-2">
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">Name</label>
+              <Input
+                value={wsName}
+                onChange={(e) => handleWsNameChange(e.target.value)}
+                placeholder="My Team"
+                autoFocus
+                onKeyDown={(e) => { if (e.key === "Enter" && wsName.trim()) void handleCreateWs(); }}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">Slug</label>
+              <Input
+                value={wsSlugDraft}
+                onChange={(e) => setWsSlugDraft(e.target.value)}
+                placeholder="my-team"
+              />
+              <p className="text-xs text-muted-foreground">Used in URLs: /w/{wsSlugDraft || "slug"}</p>
+            </div>
+            {wsError && (
+              <p className="text-sm text-destructive">{wsError}</p>
+            )}
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" size="sm" onClick={() => setCreateWsOpen(false)}>Cancel</Button>
+              <Button size="sm" onClick={() => void handleCreateWs()} disabled={!wsName.trim() || !wsSlugDraft.trim() || wsCreating}>
+                {wsCreating ? "Creating..." : "Create"}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </aside>
   );
 }
