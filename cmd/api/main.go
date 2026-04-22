@@ -115,7 +115,7 @@ func main() {
 	}
 
 	// 6. Create all service instances.
-	workspaceService := service.NewWorkspaceService(workspaceRepo, activityLogRepo)
+	workspaceService := service.NewWorkspaceService(workspaceRepo, activityLogRepo, workspaceMemberRepo)
 	projectService := service.NewProjectService(projectRepo, taskStatusRepo, activityLogRepo,
 		service.WithProjectMemberRepo(projectMemberRepo),
 		service.WithAutoTransRuleRepo(autoTransRuleRepo),

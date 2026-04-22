@@ -2,8 +2,10 @@ package service
 
 import (
 	"context"
+	"log"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -17,19 +19,25 @@ import (
 var slugPattern = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
 
 type workspaceService struct {
-	workspaceRepo repository.WorkspaceRepository
-	activityRepo  repository.ActivityLogRepository
+	workspaceRepo       repository.WorkspaceRepository
+	workspaceMemberRepo repository.WorkspaceMemberRepository
+	activityRepo        repository.ActivityLogRepository
 }
 
 // NewWorkspaceService returns a new WorkspaceService backed by the given repositories.
 func NewWorkspaceService(
 	workspaceRepo repository.WorkspaceRepository,
 	activityRepo repository.ActivityLogRepository,
+	memberRepos ...repository.WorkspaceMemberRepository,
 ) WorkspaceService {
-	return &workspaceService{
+	s := &workspaceService{
 		workspaceRepo: workspaceRepo,
 		activityRepo:  activityRepo,
 	}
+	if len(memberRepos) > 0 {
+		s.workspaceMemberRepo = memberRepos[0]
+	}
+	return s
 }
 
 // Create validates and persists a new workspace.
@@ -58,7 +66,28 @@ func (s *workspaceService) Create(ctx context.Context, workspace *domain.Workspa
 	workspace.CreatedAt = now
 	workspace.UpdatedAt = now
 
-	return s.workspaceRepo.Create(ctx, workspace)
+	if err := s.workspaceRepo.Create(ctx, workspace); err != nil {
+		return err
+	}
+
+	// Auto-add the creator as workspace owner.
+	if workspace.OwnerID != uuid.Nil && s.workspaceMemberRepo != nil {
+		now := time.Now()
+		member := &domain.WorkspaceMember{
+			ID:          uuid.New(),
+			WorkspaceID: workspace.ID,
+			UserID:      workspace.OwnerID,
+			Role:        domain.RoleOwner,
+			CreatedAt:   now,
+			UpdatedAt:   now,
+		}
+		if err := s.workspaceMemberRepo.Create(ctx, member); err != nil {
+			log.Printf("[workspace] WARNING: failed to add creator as member: %v", err)
+			// Non-fatal: workspace is created, membership can be added manually.
+		}
+	}
+
+	return nil
 }
 
 // GetByID retrieves a workspace by its ID.
