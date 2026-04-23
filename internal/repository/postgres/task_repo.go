@@ -170,10 +170,10 @@ func (r *TaskRepo) Create(ctx context.Context, task *domain.Task) error {
 			task_number, created_by, created_by_type, created_at, updated_at, completed_at,
 			recurring_schedule_id, recurring_instance_number
 		) VALUES (
-			$1, $2, $3, $4, $5,
+			$1, $2::uuid, $3, $4, $5,
 			$6, $7, $8, $9, $10,
 			$11, $12, $13, $14,
-			(SELECT COALESCE(MAX(task_number), 0) + 1 FROM tasks WHERE project_id = $2),
+			(SELECT COALESCE(MAX(task_number), 0) + 1 FROM tasks WHERE project_id = $2::uuid),
 			$15, $16, $17, $18, $19,
 			$20, $21
 		)
@@ -555,9 +555,9 @@ func (r *TaskRepo) MoveToProject(ctx context.Context, taskID, targetProjectID, t
 			SELECT pg_advisory_xact_lock(hashtext($2::text))
 		)
 		UPDATE tasks
-		SET project_id  = $2,
+		SET project_id  = $2::uuid,
 		    status_id   = $3,
-		    task_number = (SELECT COALESCE(MAX(task_number), 0) + 1 FROM tasks WHERE project_id = $2 AND deleted_at IS NULL),
+		    task_number = (SELECT COALESCE(MAX(task_number), 0) + 1 FROM tasks WHERE project_id = $2::uuid AND deleted_at IS NULL),
 		    updated_at  = NOW()
 		WHERE id = $1 AND deleted_at IS NULL
 	`
