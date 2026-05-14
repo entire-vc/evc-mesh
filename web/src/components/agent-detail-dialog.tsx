@@ -216,7 +216,6 @@ export function AgentDetailDialog({
 
   if (!agent) return null;
 
-  const typeConfig = agentTypeConfig[agent.agent_type];
   const effectiveStatus = getEffectiveStatus(agent);
   const statusConfig = agentStatusConfig[effectiveStatus];
   const stale = isAgentStale(agent);
