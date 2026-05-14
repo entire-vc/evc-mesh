@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Inbox, ArrowRight } from "lucide-react";
+import { Inbox, ArrowRight, Pencil } from "lucide-react";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { useProjectStore } from "@/stores/project";
 import { api } from "@/lib/api";
@@ -15,6 +15,7 @@ import {
   DialogTitle,
   DialogFooter,
 } from "@/components/ui/dialog";
+import { TaskSlideOver } from "@/components/task-slide-over";
 import type { PaginatedResponse, Task, TaskStatus } from "@/types";
 
 const PRIORITY_COLORS = {
@@ -174,10 +175,12 @@ function TriageTaskRow({
   task,
   projectName,
   onMove,
+  onEdit,
 }: {
   task: Task;
   projectName: string;
   onMove: (task: Task) => void;
+  onEdit: (task: Task) => void;
 }) {
   const priorityColor =
     PRIORITY_COLORS[task.priority] ?? PRIORITY_COLORS.none;
@@ -190,10 +193,16 @@ function TriageTaskRow({
     <Card>
       <CardContent className="flex items-center gap-3 py-3">
         <div className="min-w-0 flex-1">
-          <div className="mb-0.5 flex items-center gap-2">
+          <div className="mb-0.5 flex items-center gap-2 flex-wrap">
             <span className="text-xs text-muted-foreground">{projectName}</span>
             <span className="text-xs text-muted-foreground">·</span>
             <span className="text-xs text-muted-foreground">{createdDate}</span>
+            <span className="text-xs text-muted-foreground">·</span>
+            <span
+              className={`rounded-full px-1.5 py-0.5 text-[10px] font-medium ${priorityColor}`}
+            >
+              {task.priority}
+            </span>
           </div>
           <p className="truncate text-sm font-medium">{task.title}</p>
           {task.description && (
@@ -202,12 +211,16 @@ function TriageTaskRow({
             </p>
           )}
         </div>
-        <div className="flex shrink-0 items-center gap-2">
-          <span
-            className={`rounded-full px-2 py-0.5 text-xs font-medium ${priorityColor}`}
+        <div className="flex shrink-0 items-center gap-1">
+          <button
+            type="button"
+            className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+            onClick={() => onEdit(task)}
+            aria-label="Edit task"
+            title="Edit task"
           >
-            {task.priority}
-          </span>
+            <Pencil className="h-4 w-4" />
+          </button>
           <Button
             variant="ghost"
             size="sm"
@@ -233,6 +246,9 @@ export function TriagePage() {
   // Move dialog state.
   const [moveTask, setMoveTask] = useState<Task | null>(null);
   const [moveDialogOpen, setMoveDialogOpen] = useState(false);
+
+  // Edit slide-over state.
+  const [editTaskId, setEditTaskId] = useState<string | null>(null);
 
   const fetchTriage = useCallback(async (workspaceId: string) => {
     setIsLoading(true);
@@ -266,6 +282,10 @@ export function TriagePage() {
   const handleMoveClick = useCallback((task: Task) => {
     setMoveTask(task);
     setMoveDialogOpen(true);
+  }, []);
+
+  const handleEditClick = useCallback((task: Task) => {
+    setEditTaskId(task.id);
   }, []);
 
   // Remove the task from the triage list once it has been successfully moved.
@@ -311,6 +331,7 @@ export function TriagePage() {
               task={task}
               projectName={projectMap[task.project_id] ?? "Unknown Project"}
               onMove={handleMoveClick}
+              onEdit={handleEditClick}
             />
           ))}
         </div>
@@ -321,6 +342,14 @@ export function TriagePage() {
         open={moveDialogOpen}
         onOpenChange={setMoveDialogOpen}
         onMoved={handleMoved}
+      />
+
+      <TaskSlideOver
+        taskId={editTaskId}
+        onClose={() => setEditTaskId(null)}
+        onTaskUpdated={() => {
+          if (currentWorkspace) void fetchTriage(currentWorkspace.id);
+        }}
       />
     </div>
   );

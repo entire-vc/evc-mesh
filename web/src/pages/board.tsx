@@ -89,9 +89,10 @@ interface SortableTaskCardProps {
   columnId: string;
   statusCategory?: StatusCategory;
   onClick: () => void;
+  onEditClick: () => void;
 }
 
-function SortableTaskCard({ task, columnId, statusCategory, onClick }: SortableTaskCardProps) {
+function SortableTaskCard({ task, columnId, statusCategory, onClick, onEditClick }: SortableTaskCardProps) {
   const {
     attributes,
     listeners,
@@ -112,7 +113,13 @@ function SortableTaskCard({ task, columnId, statusCategory, onClick }: SortableT
 
   return (
     <div ref={setNodeRef} style={style} {...attributes} {...listeners}>
-      <TaskCard task={task} isDragging={isDragging} statusCategory={statusCategory} onClick={onClick} />
+      <TaskCard
+        task={task}
+        isDragging={isDragging}
+        statusCategory={statusCategory}
+        onClick={onClick}
+        onEditClick={() => onEditClick()}
+      />
     </div>
   );
 }
@@ -127,9 +134,10 @@ interface BoardColumnProps {
   dndEnabled: boolean;
   onAddTask: (statusId?: string) => void;
   onTaskClick: (task: Task) => void;
+  onTaskEdit: (task: Task) => void;
 }
 
-function BoardColumn({ col, tasks, dndEnabled, onAddTask, onTaskClick }: BoardColumnProps) {
+function BoardColumn({ col, tasks, dndEnabled, onAddTask, onTaskClick, onTaskEdit }: BoardColumnProps) {
   const { setNodeRef, isOver } = useDroppable({ id: `column-${col.id}` });
 
   const taskIds = useMemo(() => tasks.map((t) => t.id), [tasks]);
@@ -189,6 +197,7 @@ function BoardColumn({ col, tasks, dndEnabled, onAddTask, onTaskClick }: BoardCo
               columnId={col.id}
               statusCategory={col.status?.category}
               onClick={() => onTaskClick(task)}
+              onEditClick={() => onTaskEdit(task)}
             />
           ))}
         </SortableContext>
@@ -704,6 +713,7 @@ export function BoardPage() {
                 dndEnabled={dndEnabled}
                 onAddTask={openCreateDialog}
                 onTaskClick={handleTaskClick}
+                onTaskEdit={handleTaskClick}
               />
             ))}
 
