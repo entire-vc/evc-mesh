@@ -1546,6 +1546,68 @@ func (s *Server) handleTriggerRecurringNow(ctx context.Context, request mcpsdk.C
 	return jsonResult(result)
 }
 
+func (s *Server) handleUpdateRecurringSchedule(ctx context.Context, request mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
+	scheduleID := mcpsdk.ParseString(request, "recurring_schedule_id", "")
+	if scheduleID == "" {
+		return errResult("recurring_schedule_id is required")
+	}
+
+	body := map[string]any{}
+	if v := mcpsdk.ParseString(request, "title_template", ""); v != "" {
+		body["title_template"] = v
+	}
+	if v := mcpsdk.ParseString(request, "description_template", ""); v != "" {
+		body["description_template"] = v
+	}
+	if v := mcpsdk.ParseString(request, "frequency", ""); v != "" {
+		body["frequency"] = v
+	}
+	if v := mcpsdk.ParseString(request, "cron_expr", ""); v != "" {
+		body["cron_expr"] = v
+	}
+	if v := mcpsdk.ParseString(request, "timezone", ""); v != "" {
+		body["timezone"] = v
+	}
+	if v := mcpsdk.ParseString(request, "assignee_id", ""); v != "" {
+		body["assignee_id"] = v
+	}
+	if v := mcpsdk.ParseString(request, "assignee_type", ""); v != "" {
+		body["assignee_type"] = v
+	}
+	if v := mcpsdk.ParseString(request, "priority", ""); v != "" {
+		body["priority"] = v
+	}
+	if args := request.GetArguments(); args != nil {
+		if v, ok := args["is_active"]; ok {
+			body["is_active"] = v
+		}
+	}
+
+	if len(body) == 0 {
+		return errResult("at least one field to update is required")
+	}
+
+	result, err := s.getRESTClient(ctx).UpdateRecurringSchedule(ctx, scheduleID, body)
+	if err != nil {
+		return errResult("failed to update recurring schedule: %v", err)
+	}
+
+	return jsonResult(result)
+}
+
+func (s *Server) handleDeleteRecurringSchedule(ctx context.Context, request mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
+	scheduleID := mcpsdk.ParseString(request, "recurring_schedule_id", "")
+	if scheduleID == "" {
+		return errResult("recurring_schedule_id is required")
+	}
+
+	if err := s.getRESTClient(ctx).DeleteRecurringSchedule(ctx, scheduleID); err != nil {
+		return errResult("failed to delete recurring schedule: %v", err)
+	}
+
+	return jsonResult(map[string]any{"deleted": true})
+}
+
 // ============================================================================
 // Memory tools
 // ============================================================================

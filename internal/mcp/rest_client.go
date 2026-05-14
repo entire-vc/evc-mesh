@@ -647,6 +647,20 @@ func (c *RESTClient) TriggerRecurringNow(ctx context.Context, scheduleID string)
 	return result, nil
 }
 
+// UpdateRecurringSchedule updates a recurring schedule by ID.
+func (c *RESTClient) UpdateRecurringSchedule(ctx context.Context, scheduleID string, body map[string]any) (map[string]any, error) {
+	var result map[string]any
+	if err := c.doJSON(ctx, http.MethodPatch, "/api/v1/recurring/"+scheduleID, body, &result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+// DeleteRecurringSchedule deletes a recurring schedule by ID.
+func (c *RESTClient) DeleteRecurringSchedule(ctx context.Context, scheduleID string) error {
+	return c.doJSON(ctx, http.MethodDelete, "/api/v1/recurring/"+scheduleID, nil, nil)
+}
+
 // Remember creates or updates a memory entry (UPSERT by key within scope).
 func (c *RESTClient) Remember(ctx context.Context, body map[string]any) (map[string]any, error) {
 	var result map[string]any
