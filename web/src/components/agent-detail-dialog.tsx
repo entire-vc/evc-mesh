@@ -9,6 +9,7 @@ import { useWorkspaceStore } from "@/stores/workspace";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import {
   Dialog,
@@ -18,7 +19,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import type { Agent } from "@/types";
+import type { Agent, AgentType } from "@/types";
 
 interface AgentDetailDialogProps {
   open: boolean;
@@ -391,9 +392,17 @@ export function AgentDetailDialog({
                 </Button>
               </>
             )}
-            <Badge className={cn("text-xs", typeConfig.color)}>
-              {typeConfig.label}
-            </Badge>
+            <Select
+              value={agent.agent_type}
+              onChange={(e) => {
+                void updateAgent(agent.id, { agent_type: e.target.value as AgentType });
+              }}
+              className="h-6 w-auto min-w-[120px] text-xs"
+            >
+              {Object.entries(agentTypeConfig).map(([key, cfg]) => (
+                <option key={key} value={key}>{cfg.label}</option>
+              ))}
+            </Select>
           </DialogTitle>
         </DialogHeader>
 
