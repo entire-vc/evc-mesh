@@ -1,5 +1,5 @@
 import { forwardRef, type HTMLAttributes } from "react";
-import { AlignLeft, ExternalLink, GitBranch, Paperclip, RefreshCw } from "lucide-react";
+import { AlignLeft, ExternalLink, GitBranch, Paperclip, Pencil, RefreshCw } from "lucide-react";
 import { parseISO } from "date-fns";
 import { cn } from "@/lib/cn";
 import { Badge } from "@/components/ui/badge";
@@ -30,10 +30,12 @@ interface TaskCardProps extends HTMLAttributes<HTMLDivElement> {
   isDragging?: boolean;
   /** Optional status category — used to suppress overdue highlighting for done/cancelled tasks. */
   statusCategory?: StatusCategory;
+  /** Called when the explicit edit icon is clicked. Receives the mouse event (already stopped propagation). */
+  onEditClick?: (e: React.MouseEvent) => void;
 }
 
 export const TaskCard = forwardRef<HTMLDivElement, TaskCardProps>(
-  ({ task, isDragging, statusCategory, className, ...props }, ref) => {
+  ({ task, isDragging, statusCategory, onEditClick, className, ...props }, ref) => {
     const borderColor =
       priorityBorderColors[task.priority] ?? "border-l-transparent";
 
@@ -50,7 +52,7 @@ export const TaskCard = forwardRef<HTMLDivElement, TaskCardProps>(
       <div
         ref={ref}
         className={cn(
-          "cursor-pointer rounded-lg border border-border border-l-[3px] bg-card p-3 shadow-sm transition-shadow hover:shadow-md",
+          "group cursor-pointer rounded-lg border border-border border-l-[3px] bg-card p-3 shadow-sm transition-shadow hover:shadow-md",
           borderColor,
           isDragging && "shadow-lg opacity-90 ring-2 ring-primary/20",
           className,
@@ -77,12 +79,25 @@ export const TaskCard = forwardRef<HTMLDivElement, TaskCardProps>(
             )}
             {task.title}
           </p>
-          {hasVcsLinks && (
-            <ExternalLink
-              className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground"
-              aria-label="Has VCS links"
-            />
-          )}
+          <div className="flex items-center gap-0.5 shrink-0 mt-0.5">
+            {hasVcsLinks && (
+              <ExternalLink
+                className="h-3.5 w-3.5 text-muted-foreground"
+                aria-label="Has VCS links"
+              />
+            )}
+            {onEditClick && (
+              <button
+                type="button"
+                className="flex h-6 w-6 items-center justify-center rounded text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:bg-muted hover:text-foreground focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring"
+                onClick={(e) => { e.stopPropagation(); onEditClick(e); }}
+                aria-label="Edit task"
+                title="Edit task"
+              >
+                <Pencil className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
         </div>
 
         {/* Description indicator */}
