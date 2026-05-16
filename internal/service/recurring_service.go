@@ -5,9 +5,11 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"text/template"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/lib/pq"
@@ -35,6 +37,10 @@ type recurringService struct {
 	taskSvc       TaskService
 	commentRepo   repository.CommentRepository
 	artifactRepo  repository.ArtifactRepository
+
+	// alertFunc is called when a schedule is quarantined after repeated failures.
+	// Nil by default (alerts fall back to log.Printf only).
+	alertFunc func(scheduleID uuid.UUID, lastErr error)
 }
 
 // RecurringServiceOption configures optional dependencies for RecurringService.
@@ -68,6 +74,15 @@ func WithArtifactRepoForRecurring(ar repository.ArtifactRepository) RecurringSer
 	}
 }
 
+// WithAlertFunc registers a callback invoked when a schedule is quarantined after
+// maxConsecutiveFailures consecutive createInstance errors. The callback receives the
+// schedule ID and the triggering error. Safe for concurrent use from RunDue goroutines.
+func WithAlertFunc(fn func(scheduleID uuid.UUID, lastErr error)) RecurringServiceOption {
+	return func(s *recurringService) {
+		s.alertFunc = fn
+	}
+}
+
 // NewRecurringService creates a new RecurringService.
 func NewRecurringService(
 	recurringRepo repository.RecurringRepository,
@@ -80,6 +95,28 @@ func NewRecurringService(
 	}
 	for _, opt := range opts {
 		opt(s)
+	}
+	return s
+}
+
+// maxConsecutiveFailures is the number of consecutive createInstance failures that
+// triggers schedule quarantine (is_active=false) and an alert.
+const maxConsecutiveFailures = 3
+
+// prevSummaryMaxRunes is the maximum number of Unicode code points kept from the
+// previous instance's last comment when injecting into {{.PrevSummary}}.
+const prevSummaryMaxRunes = 500
+
+// truncateRuneSafe returns s truncated to at most maxRunes Unicode code points.
+// Unlike s[:n], this function always cuts on a rune boundary, preventing
+// invalid UTF-8 when s contains multibyte sequences (Cyrillic, emoji, etc.).
+func truncateRuneSafe(s string, maxRunes int) string {
+	runeCount := 0
+	for i := range s {
+		if runeCount == maxRunes {
+			return s[:i]
+		}
+		runeCount++
 	}
 	return s
 }
@@ -191,9 +228,10 @@ func (s *recurringService) getPreviousInstanceSummary(ctx context.Context, sched
 		return nil
 	}
 	summary := page.Items[0]
-	// Truncate PrevSummary to 500 chars for template variable.
-	if summary.LastComment != nil && len(*summary.LastComment) > 500 {
-		truncated := (*summary.LastComment)[:500]
+	// Truncate PrevSummary on a rune boundary to prevent mid-rune byte cuts
+	// that produce invalid UTF-8 when the comment contains multibyte characters.
+	if summary.LastComment != nil && utf8.RuneCountInString(*summary.LastComment) > prevSummaryMaxRunes {
+		truncated := truncateRuneSafe(*summary.LastComment, prevSummaryMaxRunes)
 		summary.LastComment = &truncated
 	}
 	return &summary
@@ -472,6 +510,13 @@ func (s *recurringService) RunDue(ctx context.Context) (int, error) {
 
 // runOneSchedule processes a single due schedule: checks limits, creates the instance, updates state.
 // Returns true if an instance was created.
+//
+// Invariants enforced here:
+//   - ≤1 instance created per tick regardless of how far behind next_run_at has drifted.
+//   - next_run_at is always advanced past the current tick, even on createInstance failure,
+//     so a poisoned schedule cannot loop every 60 s forever.
+//   - After maxConsecutiveFailures consecutive createInstance errors the schedule is
+//     quarantined (is_active=false) and alertFunc is called.
 func (s *recurringService) runOneSchedule(ctx context.Context, schedule *domain.RecurringSchedule) (bool, error) {
 	// Check ends_at.
 	if schedule.EndsAt != nil && time.Now().After(*schedule.EndsAt) {
@@ -484,22 +529,77 @@ func (s *recurringService) runOneSchedule(ctx context.Context, schedule *domain.
 		return false, nil
 	}
 
-	runAt := time.Now()
+	now := time.Now()
+
+	// Catch-up detection: if next_run_at is more than one cron interval in the past
+	// we are recovering from a scheduler outage or a quarantine. Log a WARN so ops
+	// can see that occurrences were skipped.
+	if schedule.NextRunAt != nil && schedule.NextRunAt.Before(now) {
+		firstAfterScheduled, err := computeNextRun(schedule.CronExpr, schedule.Timezone, *schedule.NextRunAt)
+		if err == nil && firstAfterScheduled != nil && firstAfterScheduled.Before(now) {
+			// Count how many occurrences we're skipping.
+			missed := 0
+			cur := *schedule.NextRunAt
+			for missed < 10_000 {
+				next, err2 := computeNextRun(schedule.CronExpr, schedule.Timezone, cur)
+				if err2 != nil || next == nil || !next.Before(now) {
+					break
+				}
+				missed++
+				cur = *next
+			}
+			log.Printf("[recurring] WARN schedule %s recovered: skipped %d missed occurrence(s) (%s → %s), creating 1 catch-up instance",
+				schedule.ID, missed, schedule.NextRunAt.Format(time.RFC3339), now.Format(time.RFC3339))
+		}
+	}
+
+	runAt := now
 	if schedule.NextRunAt != nil {
 		runAt = *schedule.NextRunAt
 	}
 
+	// Compute next_run_at as the first cron occurrence strictly after now — NOT
+	// prev+interval — so catch-up never produces a burst of back-dated instances.
+	nextRun, nextRunErr := computeNextRun(schedule.CronExpr, schedule.Timezone, now)
+	if nextRunErr != nil {
+		log.Printf("[recurring] WARNING: computeNextRun for schedule %s failed: %v", schedule.ID, nextRunErr)
+		nextRun = nil
+	}
+
 	// Create the task instance.
 	if _, err := s.createInstance(ctx, schedule, runAt); err != nil {
+		// Capture the failure count before RecordFailure so the quarantine threshold
+		// check uses the pre-DB-write value (RecordFailure increments the DB column;
+		// in tests the mock may mutate the struct in-place through the pointer).
+		priorFailures := schedule.ConsecutiveFailures
+
+		// Always advance next_run_at and record the failure in the DB so the same
+		// poisoned INSERT is not retried on every 60 s scheduler tick, even across restarts.
+		if rfErr := s.recurringRepo.RecordFailure(ctx, schedule.ID, nextRun, err.Error()); rfErr != nil {
+			log.Printf("[recurring] ERROR recording failure for schedule %s: %v", schedule.ID, rfErr)
+		}
+
+		// consecutive_failures in the DB is now priorFailures+1. Compare against threshold.
+		newFails := priorFailures + 1
+		if newFails >= maxConsecutiveFailures {
+			if qErr := s.recurringRepo.Quarantine(ctx, schedule.ID); qErr != nil {
+				log.Printf("[recurring] ERROR quarantining schedule %s: %v", schedule.ID, qErr)
+			} else {
+				log.Printf("[recurring] ERROR schedule %s quarantined after %d consecutive failures: %v", schedule.ID, newFails, err)
+				if s.alertFunc != nil {
+					s.alertFunc(schedule.ID, err)
+				}
+			}
+		}
+
 		return false, fmt.Errorf("runOneSchedule createInstance for schedule %s: %w", schedule.ID, err)
 	}
 
-	// Compute next_run_at from NOW() — not from previous next_run_at — so missed ticks
-	// don't cause multiple firings (one instance per RunDue call per schedule).
-	nextRun, err := computeNextRun(schedule.CronExpr, schedule.Timezone, time.Now())
-	if err != nil {
-		log.Printf("[recurring] WARNING: computeNextRun for schedule %s failed: %v", schedule.ID, err)
-		nextRun = nil
+	// Success: reset DB failure counter so a future failure starts fresh from 0.
+	if schedule.ConsecutiveFailures > 0 {
+		if rfErr := s.recurringRepo.ResetConsecutiveFailures(ctx, schedule.ID); rfErr != nil {
+			log.Printf("[recurring] WARNING: ResetConsecutiveFailures for schedule %s: %v", schedule.ID, rfErr)
+		}
 	}
 
 	// Atomically update instance_count, last_triggered_at, next_run_at.
@@ -546,6 +646,12 @@ func (s *recurringService) createInstance(ctx context.Context, schedule *domain.
 			return nil, fmt.Errorf("createInstance renderTemplate description: %w", err)
 		}
 	}
+
+	// Defense in depth: strip any invalid UTF-8 byte sequences from the rendered
+	// fields before the INSERT so Postgres never sees SQLSTATE 22021 regardless
+	// of what upstream data (PrevSummary, template author input) contained.
+	title = strings.ToValidUTF8(title, "")
+	description = strings.ToValidUTF8(description, "")
 
 	// Resolve status: use schedule's status_id or fall back to project default.
 	var statusID uuid.UUID
