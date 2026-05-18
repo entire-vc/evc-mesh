@@ -1626,9 +1626,34 @@ func (s *Server) handleRecall(ctx context.Context, request mcpsdk.CallToolReques
 	scope := mcpsdk.ParseString(request, "scope", "")
 	projectID := mcpsdk.ParseString(request, "project_id", "")
 	tags := parseStringSlice(request, "tags")
+	tagsAny := parseStringSlice(request, "tags_any")
 	limit := mcpsdk.ParseInt(request, "limit", 10)
+	offset := mcpsdk.ParseInt(request, "offset", 0)
+	createdBy := mcpsdk.ParseString(request, "created_by", "")
+	since := mcpsdk.ParseString(request, "since", "")
+	until := mcpsdk.ParseString(request, "until", "")
+	relevanceMin := mcpsdk.ParseFloat64(request, "relevance_min", 0)
+	applyDecay := mcpsdk.ParseBoolean(request, "apply_recency_decay", false)
+	orderBy := mcpsdk.ParseString(request, "order_by", "")
+	includeExpired := mcpsdk.ParseBoolean(request, "include_expired", false)
 
-	result, err := s.getRESTClient(ctx).RecallMemories(ctx, query, session.WorkspaceID.String(), projectID, scope, tags, limit)
+	result, err := s.getRESTClient(ctx).RecallMemories(ctx, RecallMemoriesParams{
+		Query:             query,
+		WorkspaceID:       session.WorkspaceID.String(),
+		ProjectID:         projectID,
+		Scope:             scope,
+		Tags:              tags,
+		TagsAny:           tagsAny,
+		CreatedBy:         createdBy,
+		Since:             since,
+		Until:             until,
+		RelevanceMin:      relevanceMin,
+		ApplyRecencyDecay: applyDecay,
+		OrderBy:           orderBy,
+		IncludeExpired:    includeExpired,
+		Limit:             limit,
+		Offset:            offset,
+	})
 	if err != nil {
 		return errResult("recall failed: %v", err)
 	}
@@ -1651,6 +1676,9 @@ func (s *Server) handleRemember(ctx context.Context, request mcpsdk.CallToolRequ
 	scope := mcpsdk.ParseString(request, "scope", "project")
 	projectID := mcpsdk.ParseString(request, "project_id", "")
 	tags := parseStringSlice(request, "tags")
+	relevance := mcpsdk.ParseFloat64(request, "relevance", 0)
+	expiresAt := mcpsdk.ParseString(request, "expires_at", "")
+	sourceURL := mcpsdk.ParseString(request, "source_url", "")
 
 	body := map[string]any{
 		"workspace_id": session.WorkspaceID.String(),
@@ -1663,10 +1691,65 @@ func (s *Server) handleRemember(ctx context.Context, request mcpsdk.CallToolRequ
 	if projectID != "" {
 		body["project_id"] = projectID
 	}
+	if relevance > 0 {
+		body["relevance"] = relevance
+	}
+	if expiresAt != "" {
+		body["expires_at"] = expiresAt
+	}
+	if sourceURL != "" {
+		body["source_url"] = sourceURL
+	}
 
 	result, err := s.getRESTClient(ctx).Remember(ctx, body)
 	if err != nil {
 		return errResult("remember failed: %v", err)
+	}
+
+	return jsonResult(result)
+}
+
+func (s *Server) handleSetProjectKnowledge(ctx context.Context, request mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
+	session := s.getSession(ctx)
+	if session == nil {
+		return errResult("not authenticated: no agent session")
+	}
+
+	projectID := mcpsdk.ParseString(request, "project_id", "")
+	if projectID == "" {
+		return errResult("project_id is required")
+	}
+	key := mcpsdk.ParseString(request, "key", "")
+	if key == "" {
+		return errResult("key is required")
+	}
+	value := mcpsdk.ParseString(request, "value", "")
+	if value == "" {
+		return errResult("value is required")
+	}
+
+	category := mcpsdk.ParseString(request, "category", "")
+	tags := parseStringSlice(request, "tags")
+	sourceURL := mcpsdk.ParseString(request, "source_url", "")
+
+	body := map[string]any{
+		"key":         key,
+		"value":       value,
+		"source_type": "agent",
+	}
+	if category != "" {
+		body["category"] = category
+	}
+	if len(tags) > 0 {
+		body["tags"] = tags
+	}
+	if sourceURL != "" {
+		body["source_url"] = sourceURL
+	}
+
+	result, err := s.getRESTClient(ctx).SetProjectKnowledge(ctx, projectID, body)
+	if err != nil {
+		return errResult("set_project_knowledge failed: %v", err)
 	}
 
 	return jsonResult(result)

@@ -40,6 +40,7 @@ type memoryRow struct {
 	Tags          pq.StringArray          `db:"tags"`
 	SourceType    domain.MemorySourceType `db:"source_type"`
 	SourceEventID *uuid.UUID              `db:"source_event_id"`
+	SourceURL     *string                 `db:"source_url"`
 	Relevance     float32                 `db:"relevance"`
 	CreatedAt     time.Time               `db:"created_at"`
 	UpdatedAt     time.Time               `db:"updated_at"`
@@ -58,6 +59,7 @@ func (r *memoryRow) toDomain() domain.Memory {
 		Tags:          r.Tags,
 		SourceType:    r.SourceType,
 		SourceEventID: r.SourceEventID,
+		SourceURL:     r.SourceURL,
 		Relevance:     r.Relevance,
 		CreatedAt:     r.CreatedAt,
 		UpdatedAt:     r.UpdatedAt,
@@ -66,7 +68,7 @@ func (r *memoryRow) toDomain() domain.Memory {
 }
 
 const memoryColumns = `id, workspace_id, project_id, agent_id, key, content, scope, tags,
-	source_type, source_event_id, relevance, created_at, updated_at, expires_at`
+	source_type, source_event_id, source_url, relevance, created_at, updated_at, expires_at`
 
 // Upsert inserts a new memory or updates content, tags, relevance, and expires_at on conflict.
 // The unique constraint is on (workspace_id, project_id, agent_id, key, scope).
@@ -92,21 +94,22 @@ func (r *MemoryRepo) Upsert(ctx context.Context, m *domain.Memory) error {
 	const q = `
 		INSERT INTO memories (
 			id, workspace_id, project_id, agent_id, key, content, scope,
-			tags, source_type, source_event_id, relevance, created_at, updated_at, expires_at
+			tags, source_type, source_event_id, source_url, relevance, created_at, updated_at, expires_at
 		) VALUES (
 			$1, $2, $3, $4, $5, $6, $7,
-			$8, $9, $10, $11, $12, $13, $14
+			$8, $9, $10, $11, $12, $13, $14, $15
 		)
 		ON CONFLICT (id) DO UPDATE
 			SET content       = EXCLUDED.content,
 			    tags          = EXCLUDED.tags,
 			    relevance     = EXCLUDED.relevance,
+			    source_url    = EXCLUDED.source_url,
 			    updated_at    = EXCLUDED.updated_at,
 			    expires_at    = EXCLUDED.expires_at
 	`
 	_, err := r.db.ExecContext(ctx, q,
 		m.ID, m.WorkspaceID, m.ProjectID, m.AgentID, m.Key, m.Content, m.Scope,
-		tags, m.SourceType, m.SourceEventID, m.Relevance, m.CreatedAt, m.UpdatedAt, m.ExpiresAt,
+		tags, m.SourceType, m.SourceEventID, m.SourceURL, m.Relevance, m.CreatedAt, m.UpdatedAt, m.ExpiresAt,
 	)
 	return err
 }
@@ -282,11 +285,11 @@ func (r *MemoryRepo) ListByWorkspaceProject(ctx context.Context, workspaceID uui
 	}
 
 	q := fmt.Sprintf(`
-		SELECT id, workspace_id, project_id, agent_id, key, content, scope, tags,
-		       source_type, source_event_id, relevance, created_at, updated_at, expires_at
+		SELECT %s
 		FROM memories
 		WHERE %s
 		ORDER BY relevance DESC, updated_at DESC`,
+		memoryColumns,
 		joinAnd(conditions),
 	)
 
@@ -299,6 +302,145 @@ func (r *MemoryRepo) ListByWorkspaceProject(ctx context.Context, workspaceID uui
 		memories[i] = row.toDomain()
 	}
 	return memories, nil
+}
+
+// List executes a richly-filtered query with pagination, tag filters, ordering, and optional
+// recency-decay scoring. Total is computed via a separate COUNT(*) query.
+func (r *MemoryRepo) List(ctx context.Context, filter domain.MemoryListFilter) (*domain.MemoryListResult, error) {
+	if filter.Limit <= 0 {
+		filter.Limit = 20
+	}
+	if filter.Limit > 100 {
+		filter.Limit = 100
+	}
+
+	args := []interface{}{filter.WorkspaceID} // $1
+	conditions := []string{"workspace_id = $1"}
+	argIdx := 2
+
+	if !filter.IncludeExpired {
+		conditions = append(conditions, "(expires_at IS NULL OR expires_at > NOW())")
+	}
+
+	if filter.Scope != "" {
+		conditions = append(conditions, fmt.Sprintf("scope = $%d", argIdx))
+		args = append(args, filter.Scope)
+		argIdx++
+	}
+	if filter.ProjectID != nil {
+		conditions = append(conditions, fmt.Sprintf("project_id = $%d", argIdx))
+		args = append(args, *filter.ProjectID)
+		argIdx++
+	}
+	if filter.CreatedBy != nil {
+		conditions = append(conditions, fmt.Sprintf("agent_id = $%d", argIdx))
+		args = append(args, *filter.CreatedBy)
+		argIdx++
+	}
+	if filter.Since != nil {
+		conditions = append(conditions, fmt.Sprintf("created_at >= $%d", argIdx))
+		args = append(args, *filter.Since)
+		argIdx++
+	}
+	if filter.Until != nil {
+		conditions = append(conditions, fmt.Sprintf("created_at <= $%d", argIdx))
+		args = append(args, *filter.Until)
+		argIdx++
+	}
+	if filter.RelevanceMin != nil {
+		conditions = append(conditions, fmt.Sprintf("relevance >= $%d", argIdx))
+		args = append(args, *filter.RelevanceMin)
+		argIdx++
+	}
+	if len(filter.Tags) > 0 {
+		// AND: memory must contain ALL listed tags
+		conditions = append(conditions, fmt.Sprintf("tags @> $%d", argIdx))
+		args = append(args, pq.Array(filter.Tags))
+		argIdx++
+	}
+	if len(filter.TagsAny) > 0 {
+		// OR: memory must contain AT LEAST ONE of the listed tags
+		conditions = append(conditions, fmt.Sprintf("tags && $%d", argIdx))
+		args = append(args, pq.Array(filter.TagsAny))
+		argIdx++
+	}
+
+	// Full-text search predicate (optional).
+	var tsRankExpr string
+	if filter.Query != "" {
+		conditions = append(conditions, fmt.Sprintf(
+			"search_vector @@ plainto_tsquery('simple', $%d)", argIdx))
+		args = append(args, filter.Query)
+		tsRankExpr = fmt.Sprintf("ts_rank_cd(search_vector, plainto_tsquery('simple', $%d))", argIdx)
+		argIdx++
+	}
+
+	whereClause := joinAnd(conditions)
+
+	// ── COUNT total ───────────────────────────────────────────────────────────
+	countQ := "SELECT COUNT(*) FROM memories WHERE " + whereClause
+	var total int
+	if err := r.db.GetContext(ctx, &total, countQ, args...); err != nil {
+		return nil, fmt.Errorf("memory list count: %w", err)
+	}
+
+	// ── ORDER BY ──────────────────────────────────────────────────────────────
+	decayApplied := false
+	var orderExpr string
+	switch filter.OrderBy {
+	case "relevance:desc":
+		orderExpr = "relevance DESC"
+	case "created_at:asc":
+		orderExpr = "created_at ASC"
+	case "decayed_relevance:desc":
+		// score = relevance * 0.95^(days_since_created)
+		orderExpr = "relevance * pow(0.95, EXTRACT(EPOCH FROM (NOW() - created_at)) / 86400) DESC"
+		decayApplied = true
+	default:
+		// default: created_at:desc
+		orderExpr = "created_at DESC"
+	}
+
+	// When a full-text query is present, break ties using ts_rank.
+	if tsRankExpr != "" {
+		orderExpr = tsRankExpr + " DESC, " + orderExpr
+	}
+
+	// ── LIMIT / OFFSET ────────────────────────────────────────────────────────
+	args = append(args, filter.Limit)
+	limitIdx := argIdx
+	argIdx++
+	args = append(args, filter.Offset)
+	offsetIdx := argIdx
+
+	q := fmt.Sprintf(`
+		SELECT %s
+		FROM memories
+		WHERE %s
+		ORDER BY %s
+		LIMIT $%d OFFSET $%d`,
+		memoryColumns,
+		whereClause,
+		orderExpr,
+		limitIdx,
+		offsetIdx,
+	)
+
+	var rows []memoryRow
+	if err := r.db.SelectContext(ctx, &rows, q, args...); err != nil {
+		return nil, fmt.Errorf("memory list: %w", err)
+	}
+
+	items := make([]domain.ScoredMemory, len(rows))
+	for i, row := range rows {
+		items[i] = domain.ScoredMemory{Memory: row.toDomain()}
+	}
+
+	return &domain.MemoryListResult{
+		Items:        items,
+		Total:        total,
+		DecayApplied: decayApplied,
+	}, nil
 }
 
 // Delete removes a memory entry by ID.
@@ -332,7 +474,7 @@ type embeddingRow struct {
 }
 
 const memoryColumnsWithEmbedding = `id, workspace_id, project_id, agent_id, key, content, scope, tags,
-	source_type, source_event_id, relevance, created_at, updated_at, expires_at,
+	source_type, source_event_id, source_url, relevance, created_at, updated_at, expires_at,
 	embedding, embedding_model, embedding_dim`
 
 // VectorSearch performs application-level cosine similarity search.

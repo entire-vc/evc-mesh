@@ -661,6 +661,7 @@ func main() {
 	api.GET("/memories/:id/related", memoryHandler.FindRelated)
 	api.DELETE("/memories/:id", memoryHandler.Delete)
 	api.GET("/projects/:proj_id/knowledge", memoryHandler.GetProjectKnowledge, projAccess)
+	api.POST("/projects/:proj_id/knowledge", memoryHandler.SetProjectKnowledge, projAccess)
 
 	// Spark catalog routes (optional; only registered when MESH_SPARK_ENABLED=true).
 	if cfg.Spark.Enabled {

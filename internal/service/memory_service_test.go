@@ -106,6 +106,10 @@ func (m *mockMemoryRepo) ListWithNullEmbedding(_ context.Context, _ uuid.UUID, _
 	return nil, nil
 }
 
+func (m *mockMemoryRepo) List(_ context.Context, _ domain.MemoryListFilter) (*domain.MemoryListResult, error) {
+	return &domain.MemoryListResult{}, nil
+}
+
 // Verify mockMemoryRepo satisfies the interface at compile time.
 var _ repository.MemoryRepository = (*mockMemoryRepo)(nil)
 
