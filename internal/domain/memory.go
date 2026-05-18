@@ -75,15 +75,15 @@ type RecallOpts struct {
 	Limit       int
 
 	// Extended filter params (Phase 2 — memory API extensions).
-	TagsAny          []string   // OR filter: memory must contain at least one of these tags
-	CreatedBy        *uuid.UUID // agent_id filter
-	Since            *time.Time // created_at >=
-	Until            *time.Time // created_at <=
-	RelevanceMin     *float32   // relevance >=
-	IncludeExpired   bool       // if false, filters expires_at > now() OR expires_at IS NULL
-	OrderBy          string     // "created_at:desc", "relevance:desc", "decayed_relevance:desc"
-	ApplyDecay       bool       // if true, sort by relevance * pow(0.95, days_since_created)
-	Offset           int
+	TagsAny        []string   // OR filter: memory must contain at least one of these tags
+	CreatedBy      *uuid.UUID // agent_id filter
+	Since          *time.Time // created_at >=
+	Until          *time.Time // created_at <=
+	RelevanceMin   *float32   // relevance >=
+	IncludeExpired bool       // if false, filters expires_at > now() OR expires_at IS NULL
+	OrderBy        string     // "created_at:desc", "relevance:desc", "decayed_relevance:desc"
+	ApplyDecay     bool       // if true, sort by relevance * pow(0.95, days_since_created)
+	Offset         int
 }
 
 // MemoryListFilter is the structured filter passed to the repository List method.
