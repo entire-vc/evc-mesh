@@ -670,26 +670,72 @@ func (c *RESTClient) Remember(ctx context.Context, body map[string]any) (map[str
 	return result, nil
 }
 
+// RecallMemoriesParams holds all optional parameters for memory search.
+type RecallMemoriesParams struct {
+	Query             string
+	WorkspaceID       string
+	ProjectID         string
+	Scope             string
+	Tags              []string
+	TagsAny           []string
+	CreatedBy         string
+	Since             string
+	Until             string
+	RelevanceMin      float64
+	ApplyRecencyDecay bool
+	OrderBy           string
+	IncludeExpired    bool
+	Limit             int
+	Offset            int
+}
+
 // RecallMemories searches memories via full-text search with optional filters.
-func (c *RESTClient) RecallMemories(ctx context.Context, query, wsID, projectID, scope string, tags []string, limit int) (map[string]any, error) {
+func (c *RESTClient) RecallMemories(ctx context.Context, p RecallMemoriesParams) (map[string]any, error) {
 	params := make(url.Values)
-	if query != "" {
-		params.Set("q", query)
+	if p.Query != "" {
+		params.Set("q", p.Query)
 	}
-	if wsID != "" {
-		params.Set("workspace_id", wsID)
+	if p.WorkspaceID != "" {
+		params.Set("workspace_id", p.WorkspaceID)
 	}
-	if projectID != "" {
-		params.Set("project_id", projectID)
+	if p.ProjectID != "" {
+		params.Set("project_id", p.ProjectID)
 	}
-	if scope != "" {
-		params.Set("scope", scope)
+	if p.Scope != "" {
+		params.Set("scope", p.Scope)
 	}
-	for _, tag := range tags {
+	for _, tag := range p.Tags {
 		params.Add("tags", tag)
 	}
-	if limit > 0 {
-		params.Set("limit", fmt.Sprintf("%d", limit))
+	for _, tag := range p.TagsAny {
+		params.Add("tags_any", tag)
+	}
+	if p.CreatedBy != "" {
+		params.Set("created_by", p.CreatedBy)
+	}
+	if p.Since != "" {
+		params.Set("since", p.Since)
+	}
+	if p.Until != "" {
+		params.Set("until", p.Until)
+	}
+	if p.RelevanceMin > 0 {
+		params.Set("relevance_min", fmt.Sprintf("%g", p.RelevanceMin))
+	}
+	if p.ApplyRecencyDecay {
+		params.Set("apply_recency_decay", "true")
+	}
+	if p.OrderBy != "" {
+		params.Set("order_by", p.OrderBy)
+	}
+	if p.IncludeExpired {
+		params.Set("include_expired", "true")
+	}
+	if p.Limit > 0 {
+		params.Set("limit", fmt.Sprintf("%d", p.Limit))
+	}
+	if p.Offset > 0 {
+		params.Set("offset", fmt.Sprintf("%d", p.Offset))
 	}
 	path := "/api/v1/memories/search"
 	if encoded := params.Encode(); encoded != "" {
@@ -697,6 +743,15 @@ func (c *RESTClient) RecallMemories(ctx context.Context, query, wsID, projectID,
 	}
 	var result map[string]any
 	if err := c.doJSON(ctx, http.MethodGet, path, nil, &result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+// SetProjectKnowledge upserts a project-scoped knowledge entry by key.
+func (c *RESTClient) SetProjectKnowledge(ctx context.Context, projectID string, body map[string]any) (map[string]any, error) {
+	var result map[string]any
+	if err := c.doJSON(ctx, http.MethodPost, "/api/v1/projects/"+projectID+"/knowledge", body, &result); err != nil {
 		return nil, err
 	}
 	return result, nil

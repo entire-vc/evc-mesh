@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
@@ -31,7 +32,9 @@ type rememberRequest struct {
 	Content     string             `json:"content"`
 	Scope       domain.MemoryScope `json:"scope"`
 	Tags        []string           `json:"tags,omitempty"`
+	Relevance   *float32           `json:"relevance,omitempty"`
 	ExpiresAt   *string            `json:"expires_at,omitempty"` // RFC3339 string or Go duration
+	SourceURL   *string            `json:"source_url,omitempty"`
 }
 
 // rememberResponse wraps the upserted memory with the operation outcome.
@@ -42,20 +45,49 @@ type rememberResponse struct {
 
 // listMemoriesQuery represents query params for listing memories.
 type listMemoriesQuery struct {
-	WorkspaceID string `query:"workspace_id"`
-	ProjectID   string `query:"project_id"`
-	Scope       string `query:"scope"`
-	Limit       string `query:"limit"`
+	WorkspaceID       string `query:"workspace_id"`
+	ProjectID         string `query:"project_id"`
+	Scope             string `query:"scope"`
+	Tags              string `query:"tags"`     // comma-separated, AND filter
+	TagsAny           string `query:"tags_any"` // comma-separated, OR filter
+	CreatedBy         string `query:"created_by"`
+	Since             string `query:"since"`               // RFC3339
+	Until             string `query:"until"`               // RFC3339
+	RelevanceMin      string `query:"relevance_min"`       // float
+	ApplyRecencyDecay string `query:"apply_recency_decay"` // bool
+	OrderBy           string `query:"order_by"`
+	IncludeExpired    string `query:"include_expired"` // bool
+	Limit             string `query:"limit"`
+	Offset            string `query:"offset"`
 }
 
 // searchMemoriesQuery represents query params for searching memories.
 type searchMemoriesQuery struct {
-	Q           string `query:"q"`
-	WorkspaceID string `query:"workspace_id"`
-	ProjectID   string `query:"project_id"`
-	Scope       string `query:"scope"`
-	Tags        string `query:"tags"` // comma-separated
-	Limit       string `query:"limit"`
+	Q                 string `query:"q"`
+	WorkspaceID       string `query:"workspace_id"`
+	ProjectID         string `query:"project_id"`
+	Scope             string `query:"scope"`
+	Tags              string `query:"tags"`     // comma-separated, AND filter
+	TagsAny           string `query:"tags_any"` // comma-separated, OR filter
+	CreatedBy         string `query:"created_by"`
+	Since             string `query:"since"`
+	Until             string `query:"until"`
+	RelevanceMin      string `query:"relevance_min"`
+	ApplyRecencyDecay string `query:"apply_recency_decay"`
+	OrderBy           string `query:"order_by"`
+	IncludeExpired    string `query:"include_expired"`
+	Limit             string `query:"limit"`
+	Offset            string `query:"offset"`
+}
+
+// setProjectKnowledgeRequest is the JSON body for writing a project knowledge entry.
+type setProjectKnowledgeRequest struct {
+	Key        string   `json:"key"`
+	Value      string   `json:"value"`
+	Category   string   `json:"category,omitempty"`
+	Tags       []string `json:"tags,omitempty"`
+	SourceType string   `json:"source_type,omitempty"`
+	SourceURL  *string  `json:"source_url,omitempty"`
 }
 
 // projectKnowledgeResponse is returned by GetProjectKnowledge.
@@ -109,9 +141,28 @@ func (h *MemoryHandler) Remember(c echo.Context) error {
 		Content:     req.Content,
 		Scope:       req.Scope,
 		SourceType:  sourceType,
+		SourceURL:   req.SourceURL,
 	}
 	if len(req.Tags) > 0 {
 		mem.Tags = req.Tags
+	}
+	if req.Relevance != nil {
+		mem.Relevance = *req.Relevance
+	}
+
+	// Parse optional expires_at: accept RFC3339 timestamp or Go duration string.
+	if req.ExpiresAt != nil && *req.ExpiresAt != "" {
+		if t, parseErr := time.Parse(time.RFC3339, *req.ExpiresAt); parseErr == nil {
+			mem.ExpiresAt = &t
+		} else {
+			// Try as a Go duration (e.g. "72h").
+			if d, durErr := time.ParseDuration(*req.ExpiresAt); durErr == nil {
+				t2 := time.Now().Add(d)
+				mem.ExpiresAt = &t2
+			} else {
+				return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid expires_at: must be RFC3339 timestamp or Go duration"))
+			}
+		}
 	}
 
 	outcome, err := h.memoryService.Remember(c.Request().Context(), mem)
@@ -126,7 +177,8 @@ func (h *MemoryHandler) Remember(c echo.Context) error {
 }
 
 // List handles GET /api/v1/memories
-// Returns memories filtered by workspace, project, and scope.
+// Returns memories filtered by workspace, project, scope, tags, dates, and relevance.
+// Supports pagination via limit/offset.
 func (h *MemoryHandler) List(c echo.Context) error {
 	var q listMemoriesQuery
 	if err := c.Bind(&q); err != nil {
@@ -138,62 +190,96 @@ func (h *MemoryHandler) List(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, err)
 	}
 
-	var projID *uuid.UUID
+	filter := domain.MemoryListFilter{
+		WorkspaceID: wsID,
+		Scope:       q.Scope,
+		OrderBy:     q.OrderBy,
+	}
+
 	if q.ProjectID != "" {
 		pid, parseErr := uuid.Parse(q.ProjectID)
 		if parseErr != nil {
 			return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid project_id"))
 		}
-		projID = &pid
+		filter.ProjectID = &pid
+	}
+	if q.CreatedBy != "" {
+		cid, parseErr := uuid.Parse(q.CreatedBy)
+		if parseErr != nil {
+			return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid created_by"))
+		}
+		filter.CreatedBy = &cid
+	}
+	if q.Since != "" {
+		t, parseErr := time.Parse(time.RFC3339, q.Since)
+		if parseErr != nil {
+			return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid since: must be RFC3339"))
+		}
+		filter.Since = &t
+	}
+	if q.Until != "" {
+		t, parseErr := time.Parse(time.RFC3339, q.Until)
+		if parseErr != nil {
+			return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid until: must be RFC3339"))
+		}
+		filter.Until = &t
+	}
+	if q.RelevanceMin != "" {
+		f, parseErr := strconv.ParseFloat(q.RelevanceMin, 32)
+		if parseErr != nil {
+			return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid relevance_min"))
+		}
+		rf := float32(f)
+		filter.RelevanceMin = &rf
+	}
+	if q.Tags != "" {
+		for _, t := range strings.Split(q.Tags, ",") {
+			if t = strings.TrimSpace(t); t != "" {
+				filter.Tags = append(filter.Tags, t)
+			}
+		}
+	}
+	if q.TagsAny != "" {
+		for _, t := range strings.Split(q.TagsAny, ",") {
+			if t = strings.TrimSpace(t); t != "" {
+				filter.TagsAny = append(filter.TagsAny, t)
+			}
+		}
+	}
+	filter.IncludeExpired = q.IncludeExpired == "true" || q.IncludeExpired == "1"
+	filter.ApplyDecay = q.ApplyRecencyDecay == "true" || q.ApplyRecencyDecay == "1"
+	if filter.ApplyDecay && filter.OrderBy == "" {
+		filter.OrderBy = "decayed_relevance:desc"
 	}
 
-	limit := 50
+	filter.Limit = 20
 	if q.Limit != "" {
 		if l, parseErr := strconv.Atoi(q.Limit); parseErr == nil && l > 0 {
-			limit = l
+			filter.Limit = l
+		}
+	}
+	if q.Offset != "" {
+		if o, parseErr := strconv.Atoi(q.Offset); parseErr == nil && o >= 0 {
+			filter.Offset = o
 		}
 	}
 
-	opts := domain.RecallOpts{
-		Query:       "", // empty query — use scope-based listing
-		WorkspaceID: wsID,
-		Scope:       domain.MemoryScope(q.Scope),
-		Limit:       limit,
-	}
-	if projID != nil {
-		opts.ProjectID = *projID
-	}
-
-	// Use FindByScope via service-level GetProjectKnowledge for plain listing.
-	memories, err := h.memoryService.GetProjectKnowledge(c.Request().Context(), wsID, projID)
+	result, err := h.memoryService.ListMemories(c.Request().Context(), filter)
 	if err != nil {
 		return handleError(c, err)
 	}
 
-	// Apply scope filter client-side when specified (FindByScope is used server-side in search).
-	filtered := memories
-	if opts.Scope != "" {
-		filtered = make([]domain.Memory, 0, len(memories))
-		for _, m := range memories {
-			if m.Scope == opts.Scope {
-				filtered = append(filtered, m)
-			}
-		}
-	}
-
-	// Apply limit.
-	if len(filtered) > limit {
-		filtered = filtered[:limit]
-	}
-
 	return c.JSON(http.StatusOK, map[string]interface{}{
-		"items": filtered,
-		"total": len(filtered),
+		"items":         result.Items,
+		"total":         result.Total,
+		"limit":         result.Limit,
+		"offset":        result.Offset,
+		"decay_applied": result.DecayApplied,
 	})
 }
 
 // Search handles GET /api/v1/memories/search
-// Full-text search across memories.
+// Full-text search across memories with optional extended filters.
 func (h *MemoryHandler) Search(c echo.Context) error {
 	var q searchMemoriesQuery
 	if err := c.Bind(&q); err != nil {
@@ -223,9 +309,16 @@ func (h *MemoryHandler) Search(c echo.Context) error {
 	var tags []string
 	if q.Tags != "" {
 		for _, t := range strings.Split(q.Tags, ",") {
-			t = strings.TrimSpace(t)
-			if t != "" {
+			if t = strings.TrimSpace(t); t != "" {
 				tags = append(tags, t)
+			}
+		}
+	}
+	var tagsAny []string
+	if q.TagsAny != "" {
+		for _, t := range strings.Split(q.TagsAny, ",") {
+			if t = strings.TrimSpace(t); t != "" {
+				tagsAny = append(tagsAny, t)
 			}
 		}
 	}
@@ -236,14 +329,55 @@ func (h *MemoryHandler) Search(c echo.Context) error {
 			limit = l
 		}
 	}
+	offset := 0
+	if q.Offset != "" {
+		if o, parseErr := strconv.Atoi(q.Offset); parseErr == nil && o >= 0 {
+			offset = o
+		}
+	}
 
 	opts := domain.RecallOpts{
-		Query:       q.Q,
-		WorkspaceID: wsID,
-		ProjectID:   projID,
-		Scope:       domain.MemoryScope(q.Scope),
-		Tags:        tags,
-		Limit:       limit,
+		Query:          q.Q,
+		WorkspaceID:    wsID,
+		ProjectID:      projID,
+		Scope:          domain.MemoryScope(q.Scope),
+		Tags:           tags,
+		TagsAny:        tagsAny,
+		IncludeExpired: q.IncludeExpired == "true" || q.IncludeExpired == "1",
+		OrderBy:        q.OrderBy,
+		ApplyDecay:     q.ApplyRecencyDecay == "true" || q.ApplyRecencyDecay == "1",
+		Limit:          limit,
+		Offset:         offset,
+	}
+
+	if q.CreatedBy != "" {
+		cid, parseErr := uuid.Parse(q.CreatedBy)
+		if parseErr != nil {
+			return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid created_by"))
+		}
+		opts.CreatedBy = &cid
+	}
+	if q.Since != "" {
+		t, parseErr := time.Parse(time.RFC3339, q.Since)
+		if parseErr != nil {
+			return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid since: must be RFC3339"))
+		}
+		opts.Since = &t
+	}
+	if q.Until != "" {
+		t, parseErr := time.Parse(time.RFC3339, q.Until)
+		if parseErr != nil {
+			return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid until: must be RFC3339"))
+		}
+		opts.Until = &t
+	}
+	if q.RelevanceMin != "" {
+		f, parseErr := strconv.ParseFloat(q.RelevanceMin, 32)
+		if parseErr != nil {
+			return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid relevance_min"))
+		}
+		rf := float32(f)
+		opts.RelevanceMin = &rf
 	}
 
 	results, err := h.memoryService.Recall(c.Request().Context(), opts)
@@ -252,7 +386,60 @@ func (h *MemoryHandler) Search(c echo.Context) error {
 	}
 
 	return c.JSON(http.StatusOK, map[string]interface{}{
-		"items": results,
+		"items":  results,
+		"total":  len(results),
+		"limit":  limit,
+		"offset": offset,
+	})
+}
+
+// SetProjectKnowledge handles POST /api/v1/projects/:proj_id/knowledge
+// Upserts a project-scoped knowledge entry by key.
+func (h *MemoryHandler) SetProjectKnowledge(c echo.Context) error {
+	projIDStr := c.Param("proj_id")
+	projID, err := uuid.Parse(projIDStr)
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid proj_id"))
+	}
+
+	wsID, wsErr := requireWorkspaceID(c, "")
+	if wsErr != nil {
+		return c.JSON(http.StatusBadRequest, wsErr)
+	}
+
+	var req setProjectKnowledgeRequest
+	if bindErr := c.Bind(&req); bindErr != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
+	}
+
+	// Determine actor from context.
+	var agentID *uuid.UUID
+	if agentIDVal := c.Get("agent_id"); agentIDVal != nil {
+		if aid, ok := agentIDVal.(uuid.UUID); ok {
+			agentID = &aid
+		}
+	}
+
+	input := service.SetProjectKnowledgeInput{
+		WorkspaceID: wsID,
+		ProjectID:   projID,
+		AgentID:     agentID,
+		Key:         req.Key,
+		Value:       req.Value,
+		Category:    req.Category,
+		Tags:        req.Tags,
+		SourceType:  req.SourceType,
+		SourceURL:   req.SourceURL,
+	}
+
+	mem, outcome, err := h.memoryService.SetProjectKnowledge(c.Request().Context(), input)
+	if err != nil {
+		return handleError(c, err)
+	}
+
+	return c.JSON(http.StatusOK, rememberResponse{
+		Memory:  mem,
+		Outcome: outcome,
 	})
 }
 
