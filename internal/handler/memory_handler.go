@@ -45,39 +45,39 @@ type rememberResponse struct {
 
 // listMemoriesQuery represents query params for listing memories.
 type listMemoriesQuery struct {
-	WorkspaceID        string `query:"workspace_id"`
-	ProjectID          string `query:"project_id"`
-	Scope              string `query:"scope"`
-	Tags               string `query:"tags"`     // comma-separated, AND filter
-	TagsAny            string `query:"tags_any"` // comma-separated, OR filter
-	CreatedBy          string `query:"created_by"`
-	Since              string `query:"since"`           // RFC3339
-	Until              string `query:"until"`           // RFC3339
-	RelevanceMin       string `query:"relevance_min"`   // float
-	ApplyRecencyDecay  string `query:"apply_recency_decay"` // bool
-	OrderBy            string `query:"order_by"`
-	IncludeExpired     string `query:"include_expired"` // bool
-	Limit              string `query:"limit"`
-	Offset             string `query:"offset"`
+	WorkspaceID       string `query:"workspace_id"`
+	ProjectID         string `query:"project_id"`
+	Scope             string `query:"scope"`
+	Tags              string `query:"tags"`     // comma-separated, AND filter
+	TagsAny           string `query:"tags_any"` // comma-separated, OR filter
+	CreatedBy         string `query:"created_by"`
+	Since             string `query:"since"`               // RFC3339
+	Until             string `query:"until"`               // RFC3339
+	RelevanceMin      string `query:"relevance_min"`       // float
+	ApplyRecencyDecay string `query:"apply_recency_decay"` // bool
+	OrderBy           string `query:"order_by"`
+	IncludeExpired    string `query:"include_expired"` // bool
+	Limit             string `query:"limit"`
+	Offset            string `query:"offset"`
 }
 
 // searchMemoriesQuery represents query params for searching memories.
 type searchMemoriesQuery struct {
-	Q                  string `query:"q"`
-	WorkspaceID        string `query:"workspace_id"`
-	ProjectID          string `query:"project_id"`
-	Scope              string `query:"scope"`
-	Tags               string `query:"tags"`     // comma-separated, AND filter
-	TagsAny            string `query:"tags_any"` // comma-separated, OR filter
-	CreatedBy          string `query:"created_by"`
-	Since              string `query:"since"`
-	Until              string `query:"until"`
-	RelevanceMin       string `query:"relevance_min"`
-	ApplyRecencyDecay  string `query:"apply_recency_decay"`
-	OrderBy            string `query:"order_by"`
-	IncludeExpired     string `query:"include_expired"`
-	Limit              string `query:"limit"`
-	Offset             string `query:"offset"`
+	Q                 string `query:"q"`
+	WorkspaceID       string `query:"workspace_id"`
+	ProjectID         string `query:"project_id"`
+	Scope             string `query:"scope"`
+	Tags              string `query:"tags"`     // comma-separated, AND filter
+	TagsAny           string `query:"tags_any"` // comma-separated, OR filter
+	CreatedBy         string `query:"created_by"`
+	Since             string `query:"since"`
+	Until             string `query:"until"`
+	RelevanceMin      string `query:"relevance_min"`
+	ApplyRecencyDecay string `query:"apply_recency_decay"`
+	OrderBy           string `query:"order_by"`
+	IncludeExpired    string `query:"include_expired"`
+	Limit             string `query:"limit"`
+	Offset            string `query:"offset"`
 }
 
 // setProjectKnowledgeRequest is the JSON body for writing a project knowledge entry.
@@ -408,7 +408,7 @@ func (h *MemoryHandler) SetProjectKnowledge(c echo.Context) error {
 	}
 
 	var req setProjectKnowledgeRequest
-	if err := c.Bind(&req); err != nil {
+	if bindErr := c.Bind(&req); bindErr != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
 	}
 
