@@ -544,6 +544,25 @@ func (s *Server) registerAdvancedTools() {
 		mcpsdk.WithDescription("Immediately creates the next instance of a recurring schedule, without waiting for the scheduled time. Useful for testing or urgent execution."),
 		mcpsdk.WithString("recurring_schedule_id", mcpsdk.Required(), mcpsdk.Description("UUID of the recurring schedule.")),
 	), s.tracked("trigger_recurring_now", s.handleTriggerRecurringNow))
+
+	s.mcpServer.AddTool(mcpsdk.NewTool("update_recurring_schedule",
+		mcpsdk.WithDescription("Update an existing recurring task schedule. Change title, description, frequency, assignee, priority, or deactivate it."),
+		mcpsdk.WithString("recurring_schedule_id", mcpsdk.Required(), mcpsdk.Description("UUID of the recurring schedule to update.")),
+		mcpsdk.WithString("title_template", mcpsdk.Description("New title template. Supports {{.Date}}, {{.Number}}, {{.Week}}, {{.Month}}.")),
+		mcpsdk.WithString("description_template", mcpsdk.Description("New description template. Supports {{.PrevSummary}}.")),
+		mcpsdk.WithString("frequency", mcpsdk.Description("New frequency: daily, weekly, monthly, custom.")),
+		mcpsdk.WithString("cron_expr", mcpsdk.Description("New cron expression (for custom frequency).")),
+		mcpsdk.WithString("timezone", mcpsdk.Description("New IANA timezone.")),
+		mcpsdk.WithString("assignee_id", mcpsdk.Description("New assignee UUID.")),
+		mcpsdk.WithString("assignee_type", mcpsdk.Description("New assignee type: user, agent, unassigned.")),
+		mcpsdk.WithString("priority", mcpsdk.Description("New priority: urgent, high, medium, low, none.")),
+		mcpsdk.WithBoolean("is_active", mcpsdk.Description("Set to false to pause the schedule.")),
+	), s.tracked("update_recurring_schedule", s.handleUpdateRecurringSchedule))
+
+	s.mcpServer.AddTool(mcpsdk.NewTool("delete_recurring_schedule",
+		mcpsdk.WithDescription("Delete a recurring task schedule. Existing task instances are not affected."),
+		mcpsdk.WithString("recurring_schedule_id", mcpsdk.Required(), mcpsdk.Description("UUID of the recurring schedule to delete.")),
+	), s.tracked("delete_recurring_schedule", s.handleDeleteRecurringSchedule))
 }
 
 // --- Helper functions ---

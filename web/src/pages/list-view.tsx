@@ -17,6 +17,7 @@ import {
   List,
   Loader2,
   Paperclip,
+  Pencil,
   Plus,
   Trash2,
   X,
@@ -1546,7 +1547,7 @@ function EnhancedTitleCell({
 
   return (
     <td
-      className="cursor-pointer px-3 py-2"
+      className="group cursor-pointer px-3 py-2"
       onDoubleClick={(e) => {
         e.stopPropagation();
         onStartEdit();
@@ -1611,6 +1612,17 @@ function EnhancedTitleCell({
             </span>
           )}
         </span>
+
+        {/* Edit icon — visible on row hover */}
+        <button
+          type="button"
+          className="ml-1 flex h-5 w-5 flex-shrink-0 items-center justify-center rounded text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:bg-muted hover:text-foreground focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring"
+          onClick={(e) => { e.stopPropagation(); onNavigate(); }}
+          aria-label="Edit task"
+          title="Edit task"
+        >
+          <Pencil className="h-3 w-3" />
+        </button>
       </div>
     </td>
   );
