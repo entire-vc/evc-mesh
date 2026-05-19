@@ -83,9 +83,41 @@ func (s *memoryService) Remember(ctx context.Context, mem *domain.Memory) (strin
 		})
 	}
 
+	// Validate relevance ∈ [0, 1].
+	if mem.Relevance < 0 || mem.Relevance > 1 {
+		return "", apierror.ValidationError(map[string]string{
+			"relevance": "relevance must be between 0 and 1",
+		})
+	}
 	// Default relevance for new memories.
 	if mem.Relevance == 0 {
 		mem.Relevance = 1.0
+	}
+
+	// Validate tags.
+	if len(mem.Tags) > 20 {
+		return "", apierror.ValidationError(map[string]string{
+			"tags": "maximum 20 tags allowed",
+		})
+	}
+	for _, tag := range mem.Tags {
+		if len(tag) > 64 {
+			return "", apierror.ValidationError(map[string]string{
+				"tags": "each tag must be 64 characters or fewer",
+			})
+		}
+	}
+
+	// Validate expires_at: if provided it must be in the future.
+	if mem.ExpiresAt != nil && !mem.ExpiresAt.After(time.Now()) {
+		return "", apierror.ValidationError(map[string]string{
+			"expires_at": "expires_at must be in the future",
+		})
+	}
+
+	// Apply default expires_at policy when not explicitly provided.
+	if mem.ExpiresAt == nil {
+		mem.ExpiresAt = defaultExpiresAt(mem.Scope, mem.Tags)
 	}
 
 	// Determine whether this is a create or update by checking for an existing entry.
@@ -115,6 +147,41 @@ func (s *memoryService) Remember(ctx context.Context, mem *domain.Memory) (strin
 	return outcome, nil
 }
 
+// defaultExpiresAt applies the server-side TTL policy when the caller does not supply expires_at.
+//
+//	if 'session-checkpoint' in tags → now + 7d
+//	if scope == 'agent' → now + 180d
+//	if scope == 'project' → now + 180d (unless 'permanent' in tags → nil)
+//	if scope == 'workspace' → nil (never expires)
+func defaultExpiresAt(scope domain.MemoryScope, tags []string) *time.Time {
+	hasTag := func(needle string) bool {
+		for _, t := range tags {
+			if t == needle {
+				return true
+			}
+		}
+		return false
+	}
+
+	if hasTag("session-checkpoint") {
+		t := time.Now().Add(7 * 24 * time.Hour)
+		return &t
+	}
+	switch scope {
+	case domain.ScopeAgent:
+		t := time.Now().Add(180 * 24 * time.Hour)
+		return &t
+	case domain.ScopeProject:
+		if hasTag("permanent") {
+			return nil
+		}
+		t := time.Now().Add(180 * 24 * time.Hour)
+		return &t
+	default: // workspace — never expires
+		return nil
+	}
+}
+
 // embedAndStore embeds text and persists the resulting vector for the given memory ID.
 // Called asynchronously from Remember; errors are logged but never surfaced to callers.
 func (s *memoryService) embedAndStore(id uuid.UUID, text string) {
@@ -134,6 +201,15 @@ func (s *memoryService) embedAndStore(id uuid.UUID, text string) {
 	}
 }
 
+// RecallResult holds the paginated recall response with metadata.
+type RecallResult struct {
+	Items        []domain.ScoredMemory
+	Total        int
+	Limit        int
+	Offset       int
+	DecayApplied bool
+}
+
 // Recall performs a hybrid search (keyword + optional vector) and returns ranked results.
 //
 // Algorithm:
@@ -142,6 +218,9 @@ func (s *memoryService) embedAndStore(id uuid.UUID, text string) {
 //  3. Merge both result sets using Reciprocal Rank Fusion (RRF).
 //  4. Apply temporal decay (half-life 30d) — agent-scope memories only.
 //  5. Boost relevance of returned memories as positive feedback (non-fatal).
+//
+// When extended filter params are present (TagsAny, CreatedBy, Since, Until, etc.),
+// the repository List method is used instead of FullTextSearch for precise SQL filtering.
 func (s *memoryService) Recall(ctx context.Context, opts domain.RecallOpts) ([]domain.ScoredMemory, error) {
 	if opts.Query == "" {
 		return nil, apierror.ValidationError(map[string]string{
@@ -185,7 +264,12 @@ func (s *memoryService) Recall(ctx context.Context, opts domain.RecallOpts) ([]d
 	// ── Step 3: RRF merge ─────────────────────────────────────────────────────
 	merged := reciprocalRankFusion(kwResults, vecResults)
 
-	// ── Step 4: Temporal decay ────────────────────────────────────────────────
+	// ── Step 4: Apply extended filters (TagsAny, CreatedBy, Since, Until, etc.) ─
+	if opts.CreatedBy != nil || len(opts.TagsAny) > 0 || opts.Since != nil || opts.Until != nil || opts.RelevanceMin != nil {
+		merged = applyExtendedFilters(merged, opts)
+	}
+
+	// ── Step 5: Temporal decay ────────────────────────────────────────────────
 	now := time.Now()
 	lambda := math.Log(2) / temporalHalfLifeDays
 
@@ -206,7 +290,7 @@ func (s *memoryService) Recall(ctx context.Context, opts domain.RecallOpts) ([]d
 		return cmp.Compare(b.Score, a.Score)
 	})
 
-	// ── Step 5: Trim to requested limit ───────────────────────────────────────
+	// ── Step 6: Trim to requested limit ───────────────────────────────────────
 	if len(merged) > opts.Limit {
 		merged = merged[:opts.Limit]
 	}
@@ -221,6 +305,72 @@ func (s *memoryService) Recall(ctx context.Context, opts domain.RecallOpts) ([]d
 	}
 
 	return merged, nil
+}
+
+// applyExtendedFilters filters a slice of ScoredMemory using the extended RecallOpts fields
+// that are not handled by FullTextSearch (TagsAny, CreatedBy, Since, Until, RelevanceMin).
+func applyExtendedFilters(items []domain.ScoredMemory, opts domain.RecallOpts) []domain.ScoredMemory {
+	out := items[:0]
+	for _, m := range items {
+		if opts.CreatedBy != nil {
+			if m.AgentID == nil || *m.AgentID != *opts.CreatedBy {
+				continue
+			}
+		}
+		if opts.Since != nil && m.CreatedAt.Before(*opts.Since) {
+			continue
+		}
+		if opts.Until != nil && m.CreatedAt.After(*opts.Until) {
+			continue
+		}
+		if opts.RelevanceMin != nil && m.Relevance < *opts.RelevanceMin {
+			continue
+		}
+		if len(opts.TagsAny) > 0 {
+			found := false
+			for _, required := range opts.TagsAny {
+				for _, tag := range m.Tags {
+					if tag == required {
+						found = true
+						break
+					}
+				}
+				if found {
+					break
+				}
+			}
+			if !found {
+				continue
+			}
+		}
+		out = append(out, m)
+	}
+	return out
+}
+
+// ListMemories returns a richly-filtered, paginated list of memories using the repository
+// List method. Unlike Recall, this path does not perform hybrid search — it delegates all
+// filtering and ordering to the database.
+func (s *memoryService) ListMemories(ctx context.Context, filter domain.MemoryListFilter) (*RecallResult, error) {
+	if filter.Limit <= 0 {
+		filter.Limit = 20
+	}
+	if filter.Limit > 100 {
+		filter.Limit = 100
+	}
+
+	result, err := s.memRepo.List(ctx, filter)
+	if err != nil {
+		return nil, fmt.Errorf("memory list: %w", err)
+	}
+
+	return &RecallResult{
+		Items:        result.Items,
+		Total:        result.Total,
+		Limit:        filter.Limit,
+		Offset:       filter.Offset,
+		DecayApplied: result.DecayApplied,
+	}, nil
 }
 
 // reciprocalRankFusion merges keyword and vector result lists using RRF scoring.
@@ -267,6 +417,69 @@ func reciprocalRankFusion(kw, vec []domain.ScoredMemory) []domain.ScoredMemory {
 // GetProjectKnowledge returns all non-expired memories for a workspace (and optional project).
 func (s *memoryService) GetProjectKnowledge(ctx context.Context, workspaceID uuid.UUID, projectID *uuid.UUID) ([]domain.Memory, error) {
 	return s.memRepo.ListByWorkspaceProject(ctx, workspaceID, projectID)
+}
+
+// SetProjectKnowledge upserts a project-scoped knowledge entry by key.
+// Category is stored as a "category:{value}" tag. Returns the upserted memory and outcome.
+func (s *memoryService) SetProjectKnowledge(ctx context.Context, input SetProjectKnowledgeInput) (*domain.Memory, string, error) {
+	if input.Key == "" {
+		return nil, "", apierror.ValidationError(map[string]string{
+			"key": "key is required",
+		})
+	}
+	if len(input.Key) > 80 {
+		return nil, "", apierror.ValidationError(map[string]string{
+			"key": "key must be 80 characters or fewer",
+		})
+	}
+	if !keySlugRegex.MatchString(input.Key) {
+		return nil, "", apierror.ValidationError(map[string]string{
+			"key": "key must match pattern ^[a-z0-9][a-z0-9-]*[a-z0-9]$ (lowercase alphanumeric with hyphens)",
+		})
+	}
+	if input.Value == "" {
+		return nil, "", apierror.ValidationError(map[string]string{
+			"value": "value is required",
+		})
+	}
+	if len(input.Value) > 4000 {
+		return nil, "", apierror.ValidationError(map[string]string{
+			"value": "value must be 4000 characters or fewer",
+		})
+	}
+
+	// Build tags: caller-supplied + optional category tag.
+	tags := make([]string, 0, len(input.Tags)+1)
+	tags = append(tags, input.Tags...)
+	if input.Category != "" {
+		tags = append(tags, "category:"+input.Category)
+	}
+
+	sourceType := domain.MemorySourceType(input.SourceType)
+	if sourceType == "" {
+		sourceType = domain.SourceAgent
+	}
+
+	projID := &input.ProjectID
+	mem := &domain.Memory{
+		WorkspaceID: input.WorkspaceID,
+		ProjectID:   projID,
+		AgentID:     input.AgentID,
+		Key:         input.Key,
+		Content:     input.Value,
+		Scope:       domain.ScopeProject,
+		Tags:        tags,
+		SourceType:  sourceType,
+		SourceURL:   input.SourceURL,
+		Relevance:   1.0,
+	}
+
+	outcome, err := s.Remember(ctx, mem)
+	if err != nil {
+		return nil, "", fmt.Errorf("set_project_knowledge: %w", err)
+	}
+
+	return mem, outcome, nil
 }
 
 // Forget deletes a memory by ID. Agents may only delete their own agent-scope memories.

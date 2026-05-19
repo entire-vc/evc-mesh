@@ -592,11 +592,28 @@ type AnalyticsService interface {
 	GetMetrics(ctx context.Context, filter AnalyticsFilter) (*AnalyticsMetrics, error)
 }
 
+// SetProjectKnowledgeInput holds parameters for writing a project knowledge entry.
+type SetProjectKnowledgeInput struct {
+	WorkspaceID uuid.UUID
+	ProjectID   uuid.UUID
+	AgentID     *uuid.UUID
+	Key         string
+	Value       string   // stored as Content
+	Category    string   // optional, stored as "category:{value}" tag
+	Tags        []string // additional tags
+	SourceType  string   // "agent" | "human"
+	SourceURL   *string
+}
+
 // MemoryService provides business logic for agent persistent memory.
 type MemoryService interface {
 	Remember(ctx context.Context, mem *domain.Memory) (string, error) // returns "created" or "updated"
 	Recall(ctx context.Context, opts domain.RecallOpts) ([]domain.ScoredMemory, error)
+	// ListMemories executes a richly-filtered, paginated list query backed by the repository.
+	ListMemories(ctx context.Context, filter domain.MemoryListFilter) (*RecallResult, error)
 	GetProjectKnowledge(ctx context.Context, workspaceID uuid.UUID, projectID *uuid.UUID) ([]domain.Memory, error)
+	// SetProjectKnowledge upserts a project-scoped knowledge entry. Returns "created" or "updated".
+	SetProjectKnowledge(ctx context.Context, input SetProjectKnowledgeInput) (*domain.Memory, string, error)
 	Forget(ctx context.Context, id uuid.UUID, actorAgentID *uuid.UUID, isAdmin bool) error
 	GetByID(ctx context.Context, id uuid.UUID) (*domain.Memory, error)
 	// ExportMemories returns YAML-encoded memories for the given workspace (optionally filtered by project).

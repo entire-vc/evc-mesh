@@ -1,0 +1,44 @@
+name: Deploy frontend to tw-mesh
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'web/**'
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+
+      - name: Install dependencies
+        working-directory: web
+        run: pnpm install --frozen-lockfile
+
+      - name: Build frontend
+        working-directory: web
+        run: pnpm build
+
+      - name: Deploy to tw-mesh
+        uses: burnett01/rsync-deployments@7.0.1
+        with:
+          switches: -avz --delete
+          path: web/dist/
+          remote_path: /opt/evc-mesh/web/dist/
+          remote_host: 216.57.106.222
+          remote_user: root
+          remote_key: ${{ secrets.DEPLOY_SSH_KEY }}

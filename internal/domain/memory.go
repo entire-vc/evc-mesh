@@ -46,6 +46,7 @@ type Memory struct {
 	Tags          pq.StringArray   `json:"tags" db:"tags"`
 	SourceType    MemorySourceType `json:"source_type" db:"source_type"`
 	SourceEventID *uuid.UUID       `json:"source_event_id,omitempty" db:"source_event_id"`
+	SourceURL     *string          `json:"source_url,omitempty" db:"source_url"`
 	Relevance     float32          `json:"relevance" db:"relevance"`
 	CreatedAt     time.Time        `json:"created_at" db:"created_at"`
 	UpdatedAt     time.Time        `json:"updated_at" db:"updated_at"`
@@ -72,6 +73,43 @@ type RecallOpts struct {
 	Scope       MemoryScope
 	Tags        []string
 	Limit       int
+
+	// Extended filter params (Phase 2 — memory API extensions).
+	TagsAny        []string   // OR filter: memory must contain at least one of these tags
+	CreatedBy      *uuid.UUID // agent_id filter
+	Since          *time.Time // created_at >=
+	Until          *time.Time // created_at <=
+	RelevanceMin   *float32   // relevance >=
+	IncludeExpired bool       // if false, filters expires_at > now() OR expires_at IS NULL
+	OrderBy        string     // "created_at:desc", "relevance:desc", "decayed_relevance:desc"
+	ApplyDecay     bool       // if true, sort by relevance * pow(0.95, days_since_created)
+	Offset         int
+}
+
+// MemoryListFilter is the structured filter passed to the repository List method.
+type MemoryListFilter struct {
+	WorkspaceID    uuid.UUID
+	ProjectID      *uuid.UUID
+	Scope          string
+	Query          string     // full-text search (optional)
+	Tags           []string   // AND filter
+	TagsAny        []string   // OR filter
+	CreatedBy      *uuid.UUID // agent_id filter
+	Since          *time.Time // created_at >=
+	Until          *time.Time // created_at <=
+	RelevanceMin   *float32   // relevance >=
+	IncludeExpired bool
+	OrderBy        string // "created_at:desc", "relevance:desc", "decayed_relevance:desc"
+	ApplyDecay     bool   // if true, score = relevance * pow(0.95, days_since)
+	Limit          int
+	Offset         int
+}
+
+// MemoryListResult is the structured response from the repository List method.
+type MemoryListResult struct {
+	Items        []ScoredMemory
+	Total        int
+	DecayApplied bool
 }
 
 // MemoryHint is embedded in an event bus message payload to signal that the event

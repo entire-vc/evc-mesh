@@ -463,6 +463,10 @@ type MemoryRepository interface {
 	FullTextSearch(ctx context.Context, query string, workspaceID uuid.UUID, projectID *uuid.UUID, scope string, tags []string, limit int) ([]domain.ScoredMemory, error)
 	FindByScope(ctx context.Context, workspaceID uuid.UUID, projectID *uuid.UUID, scope string, limit int) ([]domain.Memory, error)
 	ListByWorkspaceProject(ctx context.Context, workspaceID uuid.UUID, projectID *uuid.UUID) ([]domain.Memory, error)
+	// List executes a richly-filtered query with pagination, tag filters, ordering, and optional
+	// recency-decay scoring. It is used by the extended Recall/List endpoints introduced in
+	// the memory API extensions (Phase 2). Total is a separate COUNT query.
+	List(ctx context.Context, filter domain.MemoryListFilter) (*domain.MemoryListResult, error)
 	Delete(ctx context.Context, id uuid.UUID) error
 	BoostRelevance(ctx context.Context, ids []uuid.UUID) error
 	// VectorSearch performs application-level cosine similarity search using stored embeddings.

@@ -319,8 +319,17 @@ func (s *Server) registerCoreTools() {
 		mcpsdk.WithString("query", mcpsdk.Required(), mcpsdk.Description("Full-text search query.")),
 		mcpsdk.WithString("project_id", mcpsdk.Description("Filter to a specific project.")),
 		mcpsdk.WithString("scope", mcpsdk.Description("Filter by scope: workspace, project, agent, or all (default).")),
-		mcpsdk.WithArray("tags", mcpsdk.Description("Filter by tags."), mcpsdk.WithStringItems()),
+		mcpsdk.WithArray("tags", mcpsdk.Description("AND-filter: memory must contain ALL listed tags."), mcpsdk.WithStringItems()),
+		mcpsdk.WithArray("tags_any", mcpsdk.Description("OR-filter: memory must contain AT LEAST ONE of these tags."), mcpsdk.WithStringItems()),
+		mcpsdk.WithString("created_by", mcpsdk.Description("Filter by agent ID (UUID).")),
+		mcpsdk.WithString("since", mcpsdk.Description("Return memories created at or after this RFC3339 timestamp.")),
+		mcpsdk.WithString("until", mcpsdk.Description("Return memories created at or before this RFC3339 timestamp.")),
+		mcpsdk.WithNumber("relevance_min", mcpsdk.Description("Minimum relevance score (0-1).")),
+		mcpsdk.WithBoolean("apply_recency_decay", mcpsdk.Description("Sort by relevance * 0.95^days_since_created."), mcpsdk.DefaultBool(false)),
+		mcpsdk.WithString("order_by", mcpsdk.Description("Sort order: created_at:desc (default), created_at:asc, relevance:desc, decayed_relevance:desc.")),
+		mcpsdk.WithBoolean("include_expired", mcpsdk.Description("Include expired memories (default false)."), mcpsdk.DefaultBool(false)),
 		mcpsdk.WithNumber("limit", mcpsdk.Description("Max results (default 10, max 50).")),
+		mcpsdk.WithNumber("offset", mcpsdk.Description("Pagination offset (default 0).")),
 	), s.tracked("recall", s.handleRecall))
 
 	s.mcpServer.AddTool(mcpsdk.NewTool("remember",
@@ -330,12 +339,25 @@ func (s *Server) registerCoreTools() {
 		mcpsdk.WithString("scope", mcpsdk.Description("workspace | project | agent (default: project).")),
 		mcpsdk.WithString("project_id", mcpsdk.Description("Project ID (required for project scope).")),
 		mcpsdk.WithArray("tags", mcpsdk.Description("Tags for categorization and filtering."), mcpsdk.WithStringItems()),
+		mcpsdk.WithNumber("relevance", mcpsdk.Description("Relevance score 0-1 (default 1.0).")),
+		mcpsdk.WithString("expires_at", mcpsdk.Description("RFC3339 timestamp or Go duration (e.g. '72h') when this memory should expire.")),
+		mcpsdk.WithString("source_url", mcpsdk.Description("Optional URL/path to the source of this knowledge (task ID, PR, file path).")),
 	), s.tracked("remember", s.handleRemember))
 
 	s.mcpServer.AddTool(mcpsdk.NewTool("forget",
 		mcpsdk.WithDescription("Delete a memory entry. Agents can only delete their own agent-scope memories."),
 		mcpsdk.WithString("memory_id", mcpsdk.Required(), mcpsdk.Description("UUID of the memory to delete.")),
 	), s.tracked("forget", s.handleForget))
+
+	s.mcpServer.AddTool(mcpsdk.NewTool("set_project_knowledge",
+		mcpsdk.WithDescription("Write a structured fact to project knowledge. UPSERT by key — calling with same key updates the existing entry. Use for deploy URLs, stack conventions, gotchas. These facts are visible via get_project_knowledge."),
+		mcpsdk.WithString("project_id", mcpsdk.Required(), mcpsdk.Description("Project ID to store knowledge for.")),
+		mcpsdk.WithString("key", mcpsdk.Required(), mcpsdk.Description("Slug key for UPSERT (e.g. 'deploy-url', 'stack-convention').")),
+		mcpsdk.WithString("value", mcpsdk.Required(), mcpsdk.Description("The knowledge to store (markdown, max 4000 chars).")),
+		mcpsdk.WithString("category", mcpsdk.Description("Optional category: deploy, stack, conventions, gotchas, api, auth, etc.")),
+		mcpsdk.WithArray("tags", mcpsdk.Description("Additional tags for filtering."), mcpsdk.WithStringItems()),
+		mcpsdk.WithString("source_url", mcpsdk.Description("Optional URL/path to the source of this knowledge.")),
+	), s.tracked("set_project_knowledge", s.handleSetProjectKnowledge))
 
 	// --- Utility ---
 	s.mcpServer.AddTool(mcpsdk.NewTool("list_projects",

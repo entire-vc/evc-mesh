@@ -43,6 +43,7 @@ import { DependencyList } from "@/components/dependency-list";
 import { CustomFieldRenderer } from "@/components/custom-field-renderer";
 import { DatePickerPopover } from "@/components/date-picker-popover";
 import { DescriptionEditor } from "@/components/description-editor";
+import { MarkdownRenderer } from "@/components/markdown-renderer";
 import { cn } from "@/lib/cn";
 import {
   formatDate,
@@ -853,36 +854,58 @@ export function TaskSlideOver({
                     <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                       Description
                     </h3>
-                    {editingDescription && (
-                      <div className="flex items-center gap-2">
-                        {descSaving && (
-                          <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
-                            <Loader2 className="h-3 w-3 animate-spin" />
-                            Saving…
-                          </span>
-                        )}
-                        {descSaved && !descSaving && (
-                          <span className="flex items-center gap-1 text-[11px] text-green-600">
-                            <Check className="h-3 w-3" />
-                            Saved
-                          </span>
-                        )}
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => {
-                            // Flush pending changes, then exit edit mode
-                            if (descTimerRef.current)
-                              clearTimeout(descTimerRef.current);
-                            void flushDescription().then(() =>
-                              setEditingDescription(false),
-                            );
-                          }}
+                    <div className="flex items-center gap-2">
+                      {editingDescription ? (
+                        <>
+                          {descSaving && (
+                            <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
+                              <Loader2 className="h-3 w-3 animate-spin" />
+                              Saving…
+                            </span>
+                          )}
+                          {descSaved && !descSaving && (
+                            <span className="flex items-center gap-1 text-[11px] text-green-600">
+                              <Check className="h-3 w-3" />
+                              Saved
+                            </span>
+                          )}
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => {
+                              if (descTimerRef.current)
+                                clearTimeout(descTimerRef.current);
+                              void flushDescription().then(() =>
+                                setEditingDescription(false),
+                              );
+                            }}
+                          >
+                            Done
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => {
+                              if (descTimerRef.current)
+                                clearTimeout(descTimerRef.current);
+                              setDescDraft(currentTask.description ?? "");
+                              setEditingDescription(false);
+                            }}
+                          >
+                            Cancel
+                          </Button>
+                        </>
+                      ) : (
+                        <button
+                          type="button"
+                          className="flex items-center gap-1 rounded px-2 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                          onClick={() => setEditingDescription(true)}
                         >
-                          Done
-                        </Button>
-                      </div>
-                    )}
+                          <Pencil className="h-3 w-3" />
+                          Edit
+                        </button>
+                      )}
+                    </div>
                   </div>
                   {editingDescription ? (
                     <DescriptionEditor
@@ -892,15 +915,15 @@ export function TaskSlideOver({
                     />
                   ) : (
                     <div
-                      className="min-h-[60px] cursor-text rounded-lg border border-border p-3 text-sm hover:bg-muted/30"
-                      onClick={() => setEditingDescription(true)}
+                      className="min-h-[60px] rounded-lg border border-border p-3 text-sm"
                     >
                       {currentTask.description ? (
-                        <div className="whitespace-pre-wrap text-sm">
-                          {currentTask.description}
-                        </div>
+                        <MarkdownRenderer content={currentTask.description} />
                       ) : (
-                        <span className="text-muted-foreground">
+                        <span
+                          className="cursor-text text-muted-foreground hover:text-foreground"
+                          onClick={() => setEditingDescription(true)}
+                        >
                           Add a description...
                         </span>
                       )}
@@ -994,15 +1017,15 @@ export function TaskSlideOver({
                 </button>
               </div>
 
-              {/* Scrollable content */}
-              <div className="flex-1 overflow-y-auto p-4">
-                {rightTab === "comments" && (
-                  <CommentList taskId={currentTask.id} />
-                )}
-                {rightTab === "activity" && (
+              {/* Content — comments tab owns its own scroll + sticky form layout */}
+              {rightTab === "comments" && (
+                <CommentList taskId={currentTask.id} />
+              )}
+              {rightTab === "activity" && (
+                <div className="flex-1 overflow-y-auto p-4">
                   <ActivityLog taskId={currentTask.id} />
-                )}
-              </div>
+                </div>
+              )}
             </div>
           </div>
         )}
