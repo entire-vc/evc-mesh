@@ -8,8 +8,8 @@ Hands-on guide for deploying the evc-mesh API server on prod (systemd, bare-meta
 
 - SSH access to prod host
 - `gh` CLI authenticated (or direct `git` access to the repo)
-- PostgreSQL client (`psql`) for manual migration steps when needed
-- `systemctl` access (sudo or dedicated deploy user)
+- `systemctl` access (root or sudo)
+- Docker access (PostgreSQL runs in docker-compose — bare `psql`/`pg_dump` are not on the host)
 
 ---
 
@@ -17,23 +17,30 @@ Hands-on guide for deploying the evc-mesh API server on prod (systemd, bare-meta
 
 ```bash
 # 1. Build binary locally or pull from CI artifact
-go build -o bin/api ./cmd/api
+go build -o bin/mesh-api ./cmd/api
 
 # 2. Copy binary to prod
-scp bin/api deploy@prod-host:/opt/evc-mesh/api.new
+scp bin/mesh-api root@prod-host:/opt/evc-mesh/bin/mesh-api.new
 
-# 3. On the prod host: swap binary + restart
-ssh deploy@prod-host
+# 3. On the prod host: backup DB, swap binary, restart
+ssh root@prod-host
+
   cd /opt/evc-mesh
-  # Migrations run automatically on startup via goose.Up (WithAllowMissing).
-  # Backup first:
-  pg_dump -U mesh -d mesh -Fc -f /opt/evc-mesh/backups/pre-deploy-$(date +%Y%m%dT%H%M%S).dump
-  # Swap binary atomically
-  mv api api.bak && mv api.new api
-  sudo systemctl restart evc-mesh-api
+
+  # Backup DB (Postgres runs in docker-compose — use docker exec)
+  docker exec <postgres-container> pg_dump -U mesh -d mesh -Fc \
+    > /opt/evc-mesh/db-backups/pre-deploy-$(date +%Y%m%dT%H%M%S).dump
+
+  # Swap binary atomically (timestamped .bak matches prod convention)
+  mv bin/mesh-api bin/mesh-api.bak.$(date +%Y%m%d-%H%M%S)
+  mv bin/mesh-api.new bin/mesh-api
+
+  # Restart — goose.Up(WithAllowMissing) runs migrations on startup automatically
+  sudo systemctl restart mesh-api
+
   # Verify
-  sudo systemctl status evc-mesh-api
-  curl -s http://localhost:8080/health | jq .
+  sudo systemctl status mesh-api
+  curl -s http://localhost:8005/health | jq .
 ```
 
 ---
@@ -62,17 +69,21 @@ If CI was bypassed and an out-of-order migration lands on prod:
 ```bash
 # On prod host, before deploying the new binary:
 
-# 1. Check current goose version table
-psql -U mesh -d mesh -c "SELECT version_id, is_applied FROM goose_db_version ORDER BY id;"
+# 1. Check current goose version table (via docker exec — DB is containerized)
+docker exec <postgres-container> psql -U mesh -d mesh \
+  -c "SELECT version_id, is_applied FROM goose_db_version ORDER BY id;"
 
-# 2. Manually apply the out-of-order migration
-psql -U mesh -d mesh -f /tmp/the_migration.sql
+# 2. Copy the out-of-order migration into the container and apply it manually
+docker cp /tmp/the_migration.sql <postgres-container>:/tmp/the_migration.sql
+docker exec <postgres-container> psql -U mesh -d mesh -f /tmp/the_migration.sql
 
-# 3. Stamp goose so it knows the migration is applied
-goose -dir /opt/evc-mesh/migrations -dbstring "postgres://mesh:mesh@localhost/mesh?sslmode=disable" up-to <version>
+# 3. Stamp goose so it tracks the migration as applied.
+#    The goose CLI is not installed on the host; the binary applies migrations
+#    automatically on startup via goose.WithAllowMissing — deploy the new binary
+#    and it will stamp the version itself.
 
 # 4. Deploy the new binary normally — it will start clean
-sudo systemctl restart evc-mesh-api
+sudo systemctl restart mesh-api
 ```
 
 **Escalate to Garfield / Riker if unsure.**
@@ -83,41 +94,54 @@ sudo systemctl restart evc-mesh-api
 
 ```bash
 # Stop service
-sudo systemctl stop evc-mesh-api
+sudo systemctl stop mesh-api
 
-# Restore previous binary
-cd /opt/evc-mesh && mv api api.failed && mv api.bak api
+# Restore previous binary (most recent .bak)
+cd /opt/evc-mesh
+mv bin/mesh-api bin/mesh-api.failed
+mv bin/mesh-api.bak.$(ls bin/ | grep '\.bak\.' | sort | tail -1 | grep -oP '(?<=bak\.).*') bin/mesh-api
+# or simply: cp bin/mesh-api.bak.<timestamp> bin/mesh-api
 
-# Rollback migrations if the new version added migrations
-# (goose down rolls back exactly one migration at a time)
-goose -dir /opt/evc-mesh/migrations \
-      -dbstring "postgres://mesh:mesh@localhost/mesh?sslmode=disable" \
-      down
+# Rollback migrations if the new version added migrations.
+# goose CLI is not on the host — run via docker exec with the migrations dir mounted,
+# or use a one-off goose container. Rolls back exactly one migration at a time:
+docker run --rm \
+  --network host \
+  -v /opt/evc-mesh/migrations:/migrations \
+  ghcr.io/pressly/goose:latest \
+  goose -dir /migrations postgres \
+  "$(grep DATABASE_URL /opt/evc-mesh/.env.prod | cut -d= -f2-)" \
+  down
 
 # Restart with old binary
-sudo systemctl start evc-mesh-api
-sudo systemctl status evc-mesh-api
+sudo systemctl start mesh-api
+sudo systemctl status mesh-api
 ```
 
-> **Note**: rolling back data-destructive migrations (DROP TABLE, DELETE) requires restoring from the pre-deploy pg_dump backup.
+> **Note**: rolling back data-destructive migrations (DROP TABLE, DELETE) requires restoring from the pre-deploy pg_dump backup in `/opt/evc-mesh/db-backups/`.
 
 ---
 
 ## Systemd unit reference
 
-Unit file location: `/etc/systemd/system/evc-mesh-api.service`
+Unit file location: `/etc/systemd/system/mesh-api.service`
 
 ```ini
 [Unit]
-Description=evc-mesh API
-After=network.target postgresql.service
+Description=EVC Mesh API Server
+After=network.target docker.service
+Requires=docker.service
 
 [Service]
-User=evc
-EnvironmentFile=/opt/evc-mesh/.env
-ExecStart=/opt/evc-mesh/api
+Type=simple
+User=root
+WorkingDirectory=/opt/evc-mesh
+EnvironmentFile=/opt/evc-mesh/.env.prod
+ExecStart=/opt/evc-mesh/bin/mesh-api
 Restart=on-failure
 RestartSec=5
+StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
@@ -127,25 +151,25 @@ Key commands:
 
 | Action | Command |
 |--------|---------|
-| Status | `sudo systemctl status evc-mesh-api` |
-| Start  | `sudo systemctl start evc-mesh-api` |
-| Stop   | `sudo systemctl stop evc-mesh-api` |
-| Restart | `sudo systemctl restart evc-mesh-api` |
-| Logs (live) | `sudo journalctl -u evc-mesh-api -f` |
-| Logs (last 100) | `sudo journalctl -u evc-mesh-api -n 100` |
+| Status | `sudo systemctl status mesh-api` |
+| Start  | `sudo systemctl start mesh-api` |
+| Stop   | `sudo systemctl stop mesh-api` |
+| Restart | `sudo systemctl restart mesh-api` |
+| Logs (live) | `sudo journalctl -u mesh-api -f` |
+| Logs (last 100) | `sudo journalctl -u mesh-api -n 100` |
 
 ---
 
 ## Health check
 
 ```bash
-curl -s http://localhost:8080/health
+curl -s http://localhost:8005/health
 # Expected: {"service":"evc-mesh-api","status":"ok"}
 ```
 
 ---
 
-## Environment variables (`.env`)
+## Environment variables (`.env.prod`)
 
 | Variable | Description |
 |----------|-------------|
