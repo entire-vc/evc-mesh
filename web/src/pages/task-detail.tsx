@@ -7,7 +7,7 @@ import {
 } from "react";
 import { MarkdownEditor } from "@/components/markdown-editor";
 import { MarkdownRenderer } from "@/components/markdown-renderer";
-import { useNavigate, useParams } from "react-router";
+import { useNavigate, useParams, useSearchParams } from "react-router";
 import {
   ArrowLeft,
   Bot,
@@ -74,6 +74,8 @@ const priorities: Priority[] = ["urgent", "high", "medium", "low", "none"];
 export function TaskDetailPage() {
   const { wsSlug, projectSlug, taskId } = useParams();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const fromTriage = searchParams.get("from") === "triage";
   const currentTask = useTaskStore((state) =>
     taskId ? state.tasksById[taskId] ?? null : null,
   );
@@ -359,10 +361,26 @@ export function TaskDetailPage() {
         <Button
           variant="ghost"
           size="sm"
-          onClick={() => navigate(`/w/${wsSlug}/p/${projectSlug}`)}
+          onClick={() => {
+            if (fromTriage) {
+              navigate(`/w/${wsSlug}/triage`);
+              return;
+            }
+            const taskProject = projects.find(
+              (p) => p.id === currentTask.project_id,
+            );
+            const resolvedSlug = taskProject?.slug;
+            if (resolvedSlug) {
+              navigate(`/w/${wsSlug}/p/${resolvedSlug}`);
+            } else if (projectSlug && projectSlug !== "undefined") {
+              navigate(`/w/${wsSlug}/p/${projectSlug}`);
+            } else {
+              navigate(-1);
+            }
+          }}
         >
           <ArrowLeft className="h-4 w-4" />
-          Back to board
+          {fromTriage ? "Back to triage" : "Back to board"}
         </Button>
         <Button
           variant="outline"

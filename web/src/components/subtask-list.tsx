@@ -11,12 +11,13 @@ import type { Task } from "@/types";
 
 interface SubtaskListProps {
   taskId: string;
+  onOpenSubtask?: (subtaskId: string) => void;
 }
 
-export function SubtaskList({ taskId }: SubtaskListProps) {
+export function SubtaskList({ taskId, onOpenSubtask }: SubtaskListProps) {
   const { wsSlug, projectSlug } = useParams();
   const navigate = useNavigate();
-  const { statuses } = useProjectStore();
+  const { statuses, projects } = useProjectStore();
   const [subtasks, setSubtasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -65,9 +66,17 @@ export function SubtaskList({ taskId }: SubtaskListProps) {
           <div
             key={subtask.id}
             className="flex cursor-pointer items-center justify-between rounded-lg border border-border p-3 transition-colors hover:bg-muted/50"
-            onClick={() =>
-              navigate(`/w/${wsSlug}/p/${projectSlug}/t/${subtask.id}`)
-            }
+            onClick={() => {
+              if (onOpenSubtask) {
+                onOpenSubtask(subtask.id);
+              } else {
+                const resolvedProject = projects.find(
+                  (p) => p.id === subtask.project_id,
+                );
+                const slug = resolvedProject?.slug ?? projectSlug;
+                navigate(`/w/${wsSlug}/p/${slug}/t/${subtask.id}`);
+              }
+            }}
           >
             <div className="min-w-0 flex-1">
               <p className="truncate text-sm font-medium">{subtask.title}</p>
