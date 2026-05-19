@@ -412,6 +412,17 @@ type RecurringRepository interface {
 	FindDue(ctx context.Context) ([]domain.RecurringSchedule, error)
 	// IncrementInstance atomically sets instance_count, last_triggered_at, and next_run_at in one UPDATE.
 	IncrementInstance(ctx context.Context, id uuid.UUID, nextRunAt *time.Time) error
+	// AdvanceNextRun updates only next_run_at (without touching instance_count or last_triggered_at).
+	// Used on createInstance failure so the poisoned tick is skipped and the schedule doesn't loop every 60s.
+	AdvanceNextRun(ctx context.Context, id uuid.UUID, nextRunAt *time.Time) error
+	// RecordFailure advances next_run_at past the failing cycle, increments consecutive_failures,
+	// and stores the last error message. Prevents infinite 60s retry on a poisoned INSERT.
+	RecordFailure(ctx context.Context, id uuid.UUID, nextRunAt *time.Time, errMsg string) error
+	// Quarantine marks a schedule inactive (is_active=false, quarantined_at=NOW()).
+	// Called after consecutive_failures reaches the configured threshold.
+	Quarantine(ctx context.Context, id uuid.UUID) error
+	// ResetConsecutiveFailures clears the failure counter and last_error after a successful instance creation.
+	ResetConsecutiveFailures(ctx context.Context, id uuid.UUID) error
 	// GetInstanceHistory returns lightweight summaries for all task instances of a schedule.
 	GetInstanceHistory(ctx context.Context, scheduleID uuid.UUID, pg pagination.Params) (*pagination.Page[domain.RecurringInstanceSummary], error)
 }

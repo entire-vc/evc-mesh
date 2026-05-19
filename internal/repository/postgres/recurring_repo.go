@@ -49,6 +49,9 @@ type recurringRow struct {
 	NextRunAt           *time.Time                `db:"next_run_at"`
 	LastTriggeredAt     *time.Time                `db:"last_triggered_at"`
 	InstanceCount       int                       `db:"instance_count"`
+	ConsecutiveFailures int                       `db:"consecutive_failures"`
+	QuarantinedAt       *time.Time                `db:"quarantined_at"`
+	LastError           *string                   `db:"last_error"`
 	CreatedBy           uuid.UUID                 `db:"created_by"`
 	CreatedByType       domain.ActorType          `db:"created_by_type"`
 	CreatedAt           time.Time                 `db:"created_at"`
@@ -78,6 +81,9 @@ func (r *recurringRow) toDomain() domain.RecurringSchedule {
 		NextRunAt:           r.NextRunAt,
 		LastTriggeredAt:     r.LastTriggeredAt,
 		InstanceCount:       r.InstanceCount,
+		ConsecutiveFailures: r.ConsecutiveFailures,
+		QuarantinedAt:       r.QuarantinedAt,
+		LastError:           r.LastError,
 		CreatedBy:           r.CreatedBy,
 		CreatedByType:       r.CreatedByType,
 		CreatedAt:           r.CreatedAt,
@@ -134,6 +140,7 @@ func (r *RecurringRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.Recu
 			priority, labels, status_id,
 			is_active, starts_at, ends_at, max_instances,
 			next_run_at, last_triggered_at, instance_count,
+			consecutive_failures, quarantined_at, last_error,
 			created_by, created_by_type, created_at, updated_at, deleted_at
 		FROM recurring_schedules
 		WHERE id = $1 AND deleted_at IS NULL
@@ -238,6 +245,7 @@ func (r *RecurringRepo) ListByProject(ctx context.Context, projectID uuid.UUID, 
 			priority, labels, status_id,
 			is_active, starts_at, ends_at, max_instances,
 			next_run_at, last_triggered_at, instance_count,
+			consecutive_failures, quarantined_at, last_error,
 			created_by, created_by_type, created_at, updated_at, deleted_at
 		FROM recurring_schedules
 		WHERE project_id = $1 AND deleted_at IS NULL
@@ -269,6 +277,7 @@ func (r *RecurringRepo) FindDue(ctx context.Context) ([]domain.RecurringSchedule
 			priority, labels, status_id,
 			is_active, starts_at, ends_at, max_instances,
 			next_run_at, last_triggered_at, instance_count,
+			consecutive_failures, quarantined_at, last_error,
 			created_by, created_by_type, created_at, updated_at, deleted_at
 		FROM recurring_schedules
 		WHERE is_active = TRUE
@@ -330,6 +339,90 @@ type instanceSummaryRow struct {
 	CreatedAt      time.Time  `db:"created_at"`
 	LastComment    *string    `db:"last_comment"`
 	ArtifactCount  int        `db:"artifact_count"`
+}
+
+// AdvanceNextRun updates only next_run_at for the given schedule, leaving instance_count
+// and last_triggered_at unchanged. Called after a createInstance failure to ensure the
+// poisoned tick is not retried on every 60s scheduler loop.
+func (r *RecurringRepo) AdvanceNextRun(ctx context.Context, id uuid.UUID, nextRunAt *time.Time) error {
+	const q = `
+		UPDATE recurring_schedules
+		SET next_run_at = $2,
+			updated_at  = NOW()
+		WHERE id = $1 AND deleted_at IS NULL
+	`
+	res, err := r.db.ExecContext(ctx, q, id, nextRunAt)
+	if err != nil {
+		return fmt.Errorf("recurring AdvanceNextRun: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return apierror.NotFound("RecurringSchedule")
+	}
+	return nil
+}
+
+// RecordFailure advances next_run_at past the failing cycle, increments consecutive_failures,
+// and stores the last error. Called on createInstance error to prevent infinite 60s retry.
+func (r *RecurringRepo) RecordFailure(ctx context.Context, id uuid.UUID, nextRunAt *time.Time, errMsg string) error {
+	const q = `
+		UPDATE recurring_schedules
+		SET consecutive_failures = consecutive_failures + 1,
+			last_error           = $2,
+			next_run_at          = $3,
+			updated_at           = NOW()
+		WHERE id = $1 AND deleted_at IS NULL
+	`
+	res, err := r.db.ExecContext(ctx, q, id, errMsg, nextRunAt)
+	if err != nil {
+		return fmt.Errorf("recurring RecordFailure: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return apierror.NotFound("RecurringSchedule")
+	}
+	return nil
+}
+
+// Quarantine marks a schedule as inactive and records the quarantine timestamp.
+// Quarantined schedules are excluded from FindDue (WHERE is_active = TRUE).
+func (r *RecurringRepo) Quarantine(ctx context.Context, id uuid.UUID) error {
+	const q = `
+		UPDATE recurring_schedules
+		SET is_active      = FALSE,
+			quarantined_at = NOW(),
+			updated_at     = NOW()
+		WHERE id = $1 AND deleted_at IS NULL
+	`
+	res, err := r.db.ExecContext(ctx, q, id)
+	if err != nil {
+		return fmt.Errorf("recurring Quarantine: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return apierror.NotFound("RecurringSchedule")
+	}
+	return nil
+}
+
+// ResetConsecutiveFailures clears the failure counter and last_error after a successful instance.
+func (r *RecurringRepo) ResetConsecutiveFailures(ctx context.Context, id uuid.UUID) error {
+	const q = `
+		UPDATE recurring_schedules
+		SET consecutive_failures = 0,
+			last_error           = NULL,
+			updated_at           = NOW()
+		WHERE id = $1 AND deleted_at IS NULL
+	`
+	res, err := r.db.ExecContext(ctx, q, id)
+	if err != nil {
+		return fmt.Errorf("recurring ResetConsecutiveFailures: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return apierror.NotFound("RecurringSchedule")
+	}
+	return nil
 }
 
 // GetInstanceHistory returns paginated RecurringInstanceSummary entries for a schedule.

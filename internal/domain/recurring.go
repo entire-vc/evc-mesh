@@ -46,6 +46,11 @@ type RecurringSchedule struct {
 	LastTriggeredAt *time.Time `json:"last_triggered_at" db:"last_triggered_at"`
 	InstanceCount   int        `json:"instance_count" db:"instance_count"`
 
+	// Failure tracking for createInstance fail-safe.
+	ConsecutiveFailures int        `json:"consecutive_failures" db:"consecutive_failures"`
+	QuarantinedAt       *time.Time `json:"quarantined_at,omitempty" db:"quarantined_at"`
+	LastError           *string    `json:"last_error,omitempty" db:"last_error"`
+
 	CreatedBy     uuid.UUID  `json:"created_by" db:"created_by"`
 	CreatedByType ActorType  `json:"created_by_type" db:"created_by_type"`
 	CreatedAt     time.Time  `json:"created_at" db:"created_at"`
