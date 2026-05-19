@@ -26,12 +26,12 @@ type MockRecurringRepository struct {
 	history   map[uuid.UUID][]domain.RecurringInstanceSummary
 
 	// Observation counters.
-	advanceNextRunCalls  int
-	recordFailureCalls   int
-	quarantineCalls      int
-	resetFailureCalls    int
-	incrementCalls       int
-	updateCalls          int
+	advanceNextRunCalls int
+	recordFailureCalls  int
+	quarantineCalls     int
+	resetFailureCalls   int
+	incrementCalls      int
+	updateCalls         int
 }
 
 func NewMockRecurringRepository() *MockRecurringRepository {
@@ -422,7 +422,8 @@ func TestCreateInstance_DescriptionBackstop(t *testing.T) {
 }
 
 // AC#3 — repro: schedule with byte-truncated PrevSummary must complete without error
-//        and next_run_at must advance.
+//
+//	and next_run_at must advance.
 func TestRunOneSchedule_InvalidPrevSummaryDoesNotFail(t *testing.T) {
 	// Simulate a comment stored with a mid-rune cut (pre-Fix #1 byte truncation).
 	invalidComment := ""
