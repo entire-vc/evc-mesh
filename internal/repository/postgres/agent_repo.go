@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
+	"github.com/lib/pq"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/repository"
@@ -370,6 +371,20 @@ func (r *AgentRepo) UpdateStatus(ctx context.Context, id uuid.UUID, status domai
 		return apierror.NotFound("Agent")
 	}
 	return nil
+}
+
+// TouchLastSeenBatch bumps last_heartbeat and updated_at for the given agents
+// without modifying status. This is used by the activity-tracker middleware.
+func (r *AgentRepo) TouchLastSeenBatch(ctx context.Context, ids []uuid.UUID) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	const q = `
+		UPDATE agents
+		SET last_heartbeat = NOW(), updated_at = NOW()
+		WHERE id = ANY($1::uuid[]) AND deleted_at IS NULL`
+	_, err := r.db.ExecContext(ctx, q, pq.Array(ids))
+	return err
 }
 
 // agentWithProjectsRow is the raw DB row for ListWithProjects.

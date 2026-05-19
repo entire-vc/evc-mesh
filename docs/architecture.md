@@ -150,9 +150,10 @@ Every request passes through a middleware chain in this order:
 1. **CORS** — configurable allowed origins
 2. **Rate Limiter** — per-IP for auth endpoints, per-actor for API
 3. **DualAuth** — extracts user (from JWT) or agent (from API key) identity
-4. **WorkspaceRLS** — sets PostgreSQL session variable for row-level security
-5. **RequireProjectMember** — checks project membership (on project-scoped routes)
-6. **RequirePermission** — checks RBAC permission (e.g., `task:write`)
+4. **AgentActivityTracker** — records agent IDs in an in-memory dirty set; a background goroutine batches `last_heartbeat` DB updates every 15 s (non-blocking, transparent to callers)
+5. **WorkspaceRLS** — sets PostgreSQL session variable for row-level security
+6. **RequireProjectMember** — checks project membership (on project-scoped routes)
+7. **RequirePermission** — checks RBAC permission (e.g., `task:write`)
 
 ## Real-time Updates
 

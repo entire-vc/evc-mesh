@@ -945,6 +945,21 @@ func (m *MockAgentRepository) ListWithProjects(_ context.Context, workspaceID uu
 	return result, nil
 }
 
+func (m *MockAgentRepository) TouchLastSeenBatch(_ context.Context, ids []uuid.UUID) error {
+	if m.errToReturn != nil {
+		return m.errToReturn
+	}
+	now := time.Now()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, id := range ids {
+		if a, ok := m.items[id]; ok {
+			a.LastHeartbeat = &now
+		}
+	}
+	return nil
+}
+
 // ---------------------------------------------------------------------------
 // MockEventBusMessageRepository
 // ---------------------------------------------------------------------------
