@@ -49,7 +49,11 @@ func main() {
 	log.Println("Connected to PostgreSQL")
 
 	// 3. Run database migrations.
-	if migErr := goose.Up(db.DB, "migrations"); migErr != nil {
+	// WithAllowMissing lets the binary survive out-of-order migrations (e.g. a
+	// hotfix branch with an older timestamp that lands after a newer one was
+	// already applied on prod).  The CI gate in migration-check.yml still
+	// enforces monotonic numbering at merge time — this is the prod-side safety net.
+	if migErr := goose.Up(db.DB, "migrations", goose.WithAllowMissing()); migErr != nil {
 		_ = db.Close()
 		log.Fatalf("Failed to run migrations: %v", migErr)
 	}

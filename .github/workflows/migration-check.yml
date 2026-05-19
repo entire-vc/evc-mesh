@@ -28,6 +28,12 @@ jobs:
           --health-retries 5
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check migration version ordering
+        run: |
+          git fetch origin ${{ github.base_ref || 'main' }} --depth=1
+          bash scripts/check-migration-version.sh migrations
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
