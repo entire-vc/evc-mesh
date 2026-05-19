@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"regexp"
@@ -21,6 +22,22 @@ import (
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 	"github.com/entire-vc/evc-mesh/pkg/pagination"
 )
+
+// computeTaskURL builds a canonical short URL for the given task ID.
+// It respects X-Forwarded-Proto and X-Forwarded-Host headers set by reverse proxies (Caddy).
+func computeTaskURL(r *http.Request, taskID uuid.UUID) string {
+	scheme := "https"
+	if p := r.Header.Get("X-Forwarded-Proto"); p != "" {
+		scheme = p
+	} else if r.TLS == nil {
+		scheme = "http"
+	}
+	host := r.Host
+	if h := r.Header.Get("X-Forwarded-Host"); h != "" {
+		host = h
+	}
+	return fmt.Sprintf("%s://%s/t/%s", scheme, host, taskID.String())
+}
 
 // validSlugRe allows only safe identifiers for custom field slugs (prevents SQL injection).
 var validSlugRe = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
@@ -181,9 +198,11 @@ func (h *TaskHandler) Create(c echo.Context) error {
 	// Re-fetch from DB to get enriched fields (assignee_name, subtask_count, etc.)
 	// that are populated via SQL JOINs but not available on the in-memory object.
 	if enriched, err := h.taskService.GetByID(c.Request().Context(), task.ID); err == nil && enriched != nil {
+		enriched.URL = computeTaskURL(c.Request(), enriched.ID)
 		return c.JSON(http.StatusCreated, enriched)
 	}
 
+	task.URL = computeTaskURL(c.Request(), task.ID)
 	return c.JSON(http.StatusCreated, task)
 }
 
@@ -200,6 +219,7 @@ func (h *TaskHandler) GetByID(c echo.Context) error {
 		return handleError(c, err)
 	}
 
+	task.URL = computeTaskURL(c.Request(), task.ID)
 	return c.JSON(http.StatusOK, task)
 }
 
@@ -255,6 +275,7 @@ func (h *TaskHandler) Update(c echo.Context) error {
 		return handleError(c, err)
 	}
 
+	task.URL = computeTaskURL(c.Request(), task.ID)
 	return c.JSON(http.StatusOK, task)
 }
 
@@ -336,6 +357,10 @@ func (h *TaskHandler) List(c echo.Context) error {
 	page, err := h.taskService.List(c.Request().Context(), projectID, filter, pg)
 	if err != nil {
 		return handleError(c, err)
+	}
+
+	for i := range page.Items {
+		page.Items[i].URL = computeTaskURL(c.Request(), page.Items[i].ID)
 	}
 
 	return c.JSON(http.StatusOK, page)

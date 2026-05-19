@@ -22,6 +22,7 @@ import NotificationSettingsPage from "@/pages/notification-settings";
 import { OrgChartPage } from "@/pages/org-chart";
 import { MemoryBrowserPage } from "@/pages/memory-browser";
 import { SessionDashboardPage } from "@/pages/session-dashboard";
+import { TaskDeepLinkResolver } from "@/pages/task-deep-link";
 
 class ErrorBoundary extends Component<
   { children: ReactNode },
@@ -150,6 +151,8 @@ export function App() {
             path="w/:wsSlug/p/:projectSlug/settings"
             element={<ProjectSettingsPage />}
           />
+          <Route path="t/:taskId" element={<TaskDeepLinkResolver />} />
+          <Route path="tasks/:taskId" element={<TaskDeepLinkResolver />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

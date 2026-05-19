@@ -1,5 +1,5 @@
 import { type FormEvent, useCallback, useState } from "react";
-import { Link, Navigate, useNavigate } from "react-router";
+import { Link, Navigate, useNavigate, useSearchParams } from "react-router";
 import { useAuthStore } from "@/stores/auth";
 import { ApiRequestError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -15,6 +15,7 @@ import {
 
 export function LoginPage() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const { isAuthenticated, login } = useAuthStore();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -29,7 +30,8 @@ export function LoginPage() {
 
       try {
         await login({ email, password });
-        navigate("/");
+        const redirect = searchParams.get("redirect");
+        navigate(redirect && redirect.startsWith("/") ? redirect : "/");
       } catch (err) {
         if (err instanceof ApiRequestError) {
           setError(err.message);
@@ -40,7 +42,7 @@ export function LoginPage() {
         setLoading(false);
       }
     },
-    [email, password, login, navigate],
+    [email, password, login, navigate, searchParams],
   );
 
   if (isAuthenticated) {

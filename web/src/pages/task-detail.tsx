@@ -15,6 +15,7 @@ import {
   Copy,
   FolderKanban,
   Hourglass,
+  Link,
   MessageSquare,
   Activity,
   ListTree,
@@ -370,6 +371,18 @@ export function TaskDetailPage() {
         >
           <Copy className="mr-1 h-3.5 w-3.5" />
           Duplicate
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={async () => {
+            const url = `${window.location.origin}/t/${currentTask.id}`;
+            await navigator.clipboard.writeText(url);
+            toast.success("Link copied");
+          }}
+        >
+          <Link className="mr-1 h-3.5 w-3.5" />
+          Copy link
         </Button>
       </div>
 
