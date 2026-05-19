@@ -43,8 +43,8 @@ func (m *activityMockRepo) GetByID(_ context.Context, _ uuid.UUID) (*domain.Agen
 func (m *activityMockRepo) GetByAPIKeyPrefix(_ context.Context, _ uuid.UUID, _ string) (*domain.Agent, error) {
 	return nil, nil
 }
-func (m *activityMockRepo) Update(_ context.Context, _ *domain.Agent) error    { return nil }
-func (m *activityMockRepo) Delete(_ context.Context, _ uuid.UUID) error         { return nil }
+func (m *activityMockRepo) Update(_ context.Context, _ *domain.Agent) error { return nil }
+func (m *activityMockRepo) Delete(_ context.Context, _ uuid.UUID) error     { return nil }
 func (m *activityMockRepo) UpdateHeartbeat(_ context.Context, _ uuid.UUID, _ *repository.UpdateHeartbeatParams) error {
 	return nil
 }
@@ -71,7 +71,7 @@ func (m *activityMockRepo) GetAgentByID(_ context.Context, _ uuid.UUID) (*domain
 var _ repository.AgentRepository = (*activityMockRepo)(nil)
 
 func newTestEchoAgent(e *echo.Echo, agentID uuid.UUID) echo.Context {
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 	c.Set(ContextKeyAuthType, AuthTypeAgent)
@@ -109,7 +109,7 @@ func TestActivityTracker_NonAgentRequestIgnored(t *testing.T) {
 	mwFunc := tracker.Middleware()
 
 	e := echo.New()
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 	c.Set(ContextKeyAuthType, AuthTypeUser)
