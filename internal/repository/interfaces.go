@@ -179,6 +179,9 @@ type AgentRepository interface {
 	// ListWithProjects returns all agents in a workspace together with the project names
 	// they are members of (via project_members JOIN projects).
 	ListWithProjects(ctx context.Context, workspaceID uuid.UUID) ([]AgentWithProjects, error)
+	// TouchLastSeenBatch bumps last_heartbeat and updated_at for the given agent
+	// IDs without changing status. Used by the activity-tracker middleware.
+	TouchLastSeenBatch(ctx context.Context, ids []uuid.UUID) error
 }
 
 // AgentActivityLogFilter defines filtering options for listing agent activity log entries.

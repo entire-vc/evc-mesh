@@ -66,6 +66,42 @@ type Agent struct {
 	UpdatedAt          time.Time        `json:"updated_at" db:"updated_at"`
 }
 
+// ComputedAgentStatus is a derived presence indicator based on SSE connection
+// state and last_heartbeat recency. It is not stored in the database.
+type ComputedAgentStatus string
+
+const (
+	ComputedStatusOnline  ComputedAgentStatus = "online"
+	ComputedStatusIdle    ComputedAgentStatus = "idle"
+	ComputedStatusOffline ComputedAgentStatus = "offline"
+)
+
+const (
+	ComputedStatusOnlineThreshold = 5 * time.Minute
+	ComputedStatusIdleThreshold   = 30 * time.Minute
+)
+
+// ComputedStatus returns the agent's derived presence status. If the agent has
+// an active SSE connection it is always "online". Otherwise the recency of
+// last_heartbeat determines online/idle/offline.
+func (a *Agent) ComputedStatus(sseConnected bool) ComputedAgentStatus {
+	if sseConnected {
+		return ComputedStatusOnline
+	}
+	if a.LastHeartbeat == nil {
+		return ComputedStatusOffline
+	}
+	age := time.Since(*a.LastHeartbeat)
+	switch {
+	case age < ComputedStatusOnlineThreshold:
+		return ComputedStatusOnline
+	case age < ComputedStatusIdleThreshold:
+		return ComputedStatusIdle
+	default:
+		return ComputedStatusOffline
+	}
+}
+
 // DefaultHeartbeatStaleThreshold is the default time after which an agent's heartbeat is considered stale.
 const DefaultHeartbeatStaleThreshold = 15 * time.Minute
 

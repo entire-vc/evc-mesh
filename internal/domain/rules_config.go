@@ -136,6 +136,9 @@ type TeamDirectoryAgent struct {
 	HeartbeatStatus  string     `json:"heartbeat_status,omitempty"`
 	HeartbeatMessage string     `json:"heartbeat_message,omitempty"`
 	IsStale          bool       `json:"is_stale"`
+	// Computed presence fields (derived, not stored in DB)
+	ComputedStatus ComputedAgentStatus `json:"computed_status"`
+	LastSeenAt     *time.Time          `json:"last_seen_at,omitempty"`
 }
 
 // TeamDirectoryHuman is the human member profile for team directory API.

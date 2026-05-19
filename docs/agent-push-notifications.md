@@ -338,3 +338,27 @@ All endpoints authenticate via `X-Agent-Key` header. No admin permissions requir
 - The `timeout` parameter is in seconds, not milliseconds
 - Maximum timeout is 120 seconds
 - If Redis is unavailable, long-poll falls back to immediate return
+
+---
+
+## Activity-Driven Presence
+
+Mesh automatically tracks agent presence without requiring explicit status updates.
+
+### How it works
+
+1. **SSE connection** — when an agent opens the `/agents/me/events/stream` endpoint, it is immediately marked `computed_status: online`. The connection is tracked with a reference-count so parallel streams from the same agent are handled correctly. The agent is marked offline only when *all* streams close.
+
+2. **API activity heartbeat** — every authenticated API request from an agent is recorded in an in-memory dirty set. A background goroutine (15 s interval) batch-updates `last_heartbeat` in the database for all agents that made at least one request since the last flush. This means `last_heartbeat` tracks *activity* (any API call), not just explicit heartbeats.
+
+### `computed_status` field
+
+The `/workspaces/:ws_id/team` and `/workspaces/:ws_id/team/tree` endpoints expose a `computed_status` field on each agent:
+
+| Value | Meaning |
+|-------|---------|
+| `online` | Agent has an active SSE connection, or `last_heartbeat` was < 5 minutes ago |
+| `idle` | No SSE connection, `last_heartbeat` was 5–30 minutes ago |
+| `offline` | No SSE connection, `last_heartbeat` was > 30 minutes ago (or never) |
+
+The `last_seen_at` field is an alias of `last_heartbeat` provided for convenience.

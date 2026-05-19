@@ -371,6 +371,12 @@ func main() {
 	go hub.Run(hubCtx)
 	log.Println("WebSocket hub started")
 
+	// Activity tracker: batches last_heartbeat updates for API-calling agents.
+	activityTracker := mw.NewActivityTracker(agentRepo)
+	activityCtx, activityCancel := context.WithCancel(context.Background())
+	go activityTracker.Run(activityCtx)
+	log.Println("Agent activity tracker started")
+
 	// WebSocket upgrade endpoint (before auth middleware, auth is handled in the handler).
 	e.GET("/ws", wsHub.Handler(hub, authService, agentService))
 
@@ -394,6 +400,7 @@ func main() {
 	// --- Protected routes (JWT or Agent Key) ---
 	api := v1.Group("")
 	api.Use(mw.DualAuth(authService, agentService))
+	api.Use(activityTracker.Middleware())
 	api.Use(mw.WorkspaceRLS(db, projectRepo))
 	// Rate-limit API endpoints by authenticated actor (user/agent ID).
 	// Uses the Redis-backed sliding window limiter for multi-instance deployments.
@@ -752,6 +759,10 @@ func main() {
 	if err := e.Shutdown(shutdownCtx); err != nil {
 		log.Printf("Server forced to shutdown: %v", err)
 	}
+
+	// Flush activity tracker and cancel its background loop.
+	activityCancel()
+	activityTracker.Flush(shutdownCtx)
 
 	// Close WebSocket hub and shared Redis (also used by the rate limiter).
 	hubCancel()

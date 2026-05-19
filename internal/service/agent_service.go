@@ -221,6 +221,11 @@ func (s *agentService) Heartbeat(ctx context.Context, agentID uuid.UUID, input *
 	return nil
 }
 
+// TouchLastSeen bumps last_heartbeat for the agent without changing status.
+func (s *agentService) TouchLastSeen(ctx context.Context, agentID uuid.UUID) error {
+	return s.agentRepo.TouchLastSeenBatch(ctx, []uuid.UUID{agentID})
+}
+
 // CreateActivityLog writes an entry to the agent activity log.
 func (s *agentService) CreateActivityLog(ctx context.Context, entry *domain.AgentActivityLog) error {
 	if s.agentActLogRepo == nil {

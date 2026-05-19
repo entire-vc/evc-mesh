@@ -1258,3 +1258,35 @@ func TestAgent_DeserializeFromJSON(t *testing.T) {
 	// APIKeyHash should not be populated from JSON
 	assert.Equal(t, "", agent.APIKeyHash)
 }
+
+// ---------------------------------------------------------------------------
+// ComputedStatus tests
+// ---------------------------------------------------------------------------
+
+func TestAgent_ComputedStatus(t *testing.T) {
+	now := time.Now()
+
+	just4m := now.Add(-4 * time.Minute)
+	just6m := now.Add(-6 * time.Minute)
+	just31m := now.Add(-31 * time.Minute)
+
+	tests := []struct {
+		name         string
+		lastHB       *time.Time
+		sseConnected bool
+		want         ComputedAgentStatus
+	}{
+		{"nil heartbeat offline", nil, false, ComputedStatusOffline},
+		{"nil heartbeat but SSE connected", nil, true, ComputedStatusOnline},
+		{"recent heartbeat (<5m) online", &just4m, false, ComputedStatusOnline},
+		{"heartbeat between 5-30m idle", &just6m, false, ComputedStatusIdle},
+		{"heartbeat >30m offline", &just31m, false, ComputedStatusOffline},
+		{"old heartbeat but SSE connected", &just31m, true, ComputedStatusOnline},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			a := &Agent{LastHeartbeat: tt.lastHB}
+			assert.Equal(t, tt.want, a.ComputedStatus(tt.sseConnected))
+		})
+	}
+}

@@ -10,6 +10,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	"github.com/entire-vc/evc-mesh/internal/presence"
 	"github.com/entire-vc/evc-mesh/internal/repository"
 	"github.com/entire-vc/evc-mesh/pkg/pagination"
 )
@@ -144,6 +145,8 @@ func (s *rulesService) GetTeamDirectory(ctx context.Context, workspaceID uuid.UU
 			HeartbeatStatus:    a.HeartbeatStatus,
 			HeartbeatMessage:   a.HeartbeatMessage,
 			IsStale:            a.IsHeartbeatStale(),
+			ComputedStatus:     a.ComputedStatus(presence.IsConnected(a.ID)),
+			LastSeenAt:         a.LastHeartbeat,
 		})
 	}
 
@@ -234,6 +237,8 @@ func (s *rulesService) GetTeamDirectoryTree(ctx context.Context, workspaceID uui
 			HeartbeatStatus:    a.HeartbeatStatus,
 			HeartbeatMessage:   a.HeartbeatMessage,
 			IsStale:            a.IsHeartbeatStale(),
+			ComputedStatus:     a.ComputedStatus(presence.IsConnected(a.ID)),
+			LastSeenAt:         a.LastHeartbeat,
 		})
 	}
 

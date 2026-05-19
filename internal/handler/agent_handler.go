@@ -13,6 +13,7 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	"github.com/entire-vc/evc-mesh/internal/presence"
 	"github.com/entire-vc/evc-mesh/internal/repository"
 	"github.com/entire-vc/evc-mesh/internal/service"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
@@ -678,6 +679,12 @@ func (h *AgentHandler) EventStream(c echo.Context) error {
 	if !ok {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid agent_id in context"))
 	}
+
+	// Track SSE connection in presence registry.
+	presence.Register(agentID)
+	defer presence.Unregister(agentID)
+	// Best-effort touch so last_heartbeat reflects when the agent came online.
+	_ = h.agentService.TouchLastSeen(c.Request().Context(), agentID)
 
 	// Set SSE response headers.
 	c.Response().Header().Set("Content-Type", "text/event-stream")

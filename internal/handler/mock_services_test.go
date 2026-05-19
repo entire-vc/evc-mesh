@@ -522,3 +522,7 @@ func (m *MockAgentService) RotateAPIKey(ctx context.Context, agentID uuid.UUID) 
 func (m *MockAgentService) ListSubAgents(ctx context.Context, parentID uuid.UUID, recursive bool) ([]domain.Agent, error) {
 	return nil, nil
 }
+
+func (m *MockAgentService) TouchLastSeen(_ context.Context, _ uuid.UUID) error {
+	return nil
+}

@@ -234,6 +234,9 @@ type AgentService interface {
 	// Agent activity log
 	CreateActivityLog(ctx context.Context, entry *domain.AgentActivityLog) error
 	ListActivityLog(ctx context.Context, agentID uuid.UUID, filter repository.AgentActivityLogFilter, pg pagination.Params) (*pagination.Page[domain.AgentActivityLog], error)
+	// TouchLastSeen bumps the agent's last_heartbeat without changing status.
+	// Called when an SSE connection is opened.
+	TouchLastSeen(ctx context.Context, agentID uuid.UUID) error
 }
 
 // PublishEventInput holds parameters for publishing an event to the bus.
