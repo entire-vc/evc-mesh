@@ -30,6 +30,13 @@ import (
 	wsHub "github.com/entire-vc/evc-mesh/internal/ws"
 )
 
+// Injected at build time via -ldflags "-X main.BuildSHA=... -X main.BuildTime=...".
+// See docs/self-hosting.md for the cross-compile command that sets these.
+var (
+	BuildSHA  = "dev"
+	BuildTime = "unknown"
+)
+
 func main() {
 	// 1. Load configuration from environment.
 	cfg := config.Load()
@@ -351,6 +358,16 @@ func main() {
 	e.GET("/health", func(c echo.Context) error {
 		return c.JSON(200, map[string]string{
 			"status":  "ok",
+			"service": "evc-mesh-api",
+		})
+	})
+
+	// Build version — exposed under /api/version so it routes through the
+	// existing Caddy `handle /api/*` block without any Caddyfile changes.
+	e.GET("/api/version", func(c echo.Context) error {
+		return c.JSON(200, map[string]string{
+			"sha":     BuildSHA,
+			"built":   BuildTime,
 			"service": "evc-mesh-api",
 		})
 	})
