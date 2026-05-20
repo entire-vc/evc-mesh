@@ -136,8 +136,13 @@ export function AppLayout() {
     );
   }
 
-  // Redirect to first workspace if no ws in URL
-  if (!wsSlug && workspaces.length > 0) {
+  // Redirect to first workspace if no ws in URL.
+  // Skip for deep-link routes (/t/:id, /tasks/:id) so the resolver inside
+  // <Outlet/> can fetch the task and navigate to the canonical ws+project path.
+  const isDeepLinkRoute =
+    location.pathname.startsWith("/t/") ||
+    location.pathname.startsWith("/tasks/");
+  if (!wsSlug && workspaces.length > 0 && !isDeepLinkRoute) {
     return <Navigate to={`/w/${workspaces[0]!.slug}`} replace />;
   }
 
