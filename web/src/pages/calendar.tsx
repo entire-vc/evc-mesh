@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useParams } from "react-router";
+import { useParams, useNavigate } from "react-router";
 import { addMonths, format, subMonths, startOfMonth, endOfMonth, startOfWeek, endOfWeek, eachDayOfInterval, isSameMonth, isToday } from "date-fns";
 import {
   DndContext,
@@ -26,6 +26,7 @@ import { TaskSlideOver } from "@/components/task-slide-over";
 import { useSavedViewStore } from "@/stores/saved-view-store";
 import { toast } from "@/components/ui/toast";
 import { cn } from "@/lib/cn";
+import { useIsMobile } from "@/lib/use-is-mobile";
 import type { Task, WSMessage } from "@/types";
 
 // ---------------------------------------------------------------------------
@@ -395,6 +396,8 @@ function DragOverlayCard({ task, statusMap }: { task: Task; statusMap: Map<strin
 
 export function CalendarPage() {
   const { wsSlug } = useParams();
+  const navigate = useNavigate();
+  const isMobile = useIsMobile();
   const { currentProject, statuses, fetchStatuses } = useProjectStore();
   const { tasks, isLoading, fetchTasks } = useTaskStore();
   const { fetchFields: fetchCustomFields } = useCustomFieldStore();
@@ -514,10 +517,14 @@ export function CalendarPage() {
     setDialogOpen(true);
   };
 
-  // Task click -> slide-over
+  // Task click -> navigate on mobile, slide-over on desktop
   const handleTaskClick = useCallback((task: Task) => {
-    setSlideOverTaskId(task.id);
-  }, []);
+    if (isMobile && wsSlug && currentProject) {
+      navigate(`/w/${wsSlug}/p/${currentProject.slug}/t/${task.id}`);
+    } else {
+      setSlideOverTaskId(task.id);
+    }
+  }, [isMobile, wsSlug, currentProject, navigate]);
 
   // Sync current state to saved-view store
   const { pendingView, clearPendingView, setCurrentViewState } = useSavedViewStore();
