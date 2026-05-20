@@ -15,9 +15,9 @@ import (
 )
 
 // mentionRegex matches @-slug references in comment bodies.
-// Slug pattern mirrors agents.slug: starts/ends with alnum, middle may contain hyphens, 2-100 chars total.
+// Slug pattern mirrors agents.slug and users.username: starts/ends with alnum, middle may contain hyphens, 2-40 chars total.
 // The leading boundary allows start-of-string, whitespace, or open bracket/paren/brace.
-var mentionRegex = regexp.MustCompile(`(?:^|[\s(\[{])@([a-z0-9][a-z0-9-]{0,98}[a-z0-9])\b`)
+var mentionRegex = regexp.MustCompile(`(?:^|[\s(\[{])@([a-z0-9][a-z0-9-]{0,38}[a-z0-9])\b`)
 
 // extractMentionSlugs returns unique lowercase slugs found in body, preserving order.
 func extractMentionSlugs(body string) []string {
@@ -52,6 +52,9 @@ type commentService struct {
 	statusRepo     repository.TaskStatusRepository
 	projectRepo    repository.ProjectRepository
 	ctxCacheInv    ContextCacheInvalidator
+	userRepo       repository.UserRepository
+	mentionRepo    repository.CommentMentionRepository
+	wsPublisher    WSPublisher
 }
 
 // CommentServiceOption configures optional dependencies for CommentService.
@@ -65,6 +68,21 @@ func WithCommentAgentNotify(ans AgentNotifyService) CommentServiceOption {
 // WithCommentAgentService sets the agent service used to resolve @-mention slugs.
 func WithCommentAgentService(as AgentService) CommentServiceOption {
 	return func(s *commentService) { s.agentSvc = as }
+}
+
+// WithCommentUserRepo sets the user repository used to resolve @username mentions.
+func WithCommentUserRepo(r repository.UserRepository) CommentServiceOption {
+	return func(s *commentService) { s.userRepo = r }
+}
+
+// WithCommentMentionRepo sets the mention repository for persisting comment_mentions rows.
+func WithCommentMentionRepo(r repository.CommentMentionRepository) CommentServiceOption {
+	return func(s *commentService) { s.mentionRepo = r }
+}
+
+// WithCommentWSPublisher sets the WS publisher used to push badge-update events to users.
+func WithCommentWSPublisher(p WSPublisher) CommentServiceOption {
+	return func(s *commentService) { s.wsPublisher = p }
 }
 
 // WithCommentStatusRepo sets the status repo for building task snapshots.
@@ -264,8 +282,8 @@ func (s *commentService) Update(ctx context.Context, comment *domain.Comment) er
 		s.ctxCacheInv.Invalidate(ctx, existing.TaskID)
 	}
 
-	// Notify newly @-mentioned agents (diff against previous body).
-	if s.agentNotifySvc != nil && s.agentSvc != nil && s.projectRepo != nil {
+	// Notify newly @-mentioned agents/users (diff against previous body).
+	if s.projectRepo != nil {
 		if task, err := s.taskRepo.GetByID(ctx, existing.TaskID); err == nil && task != nil {
 			if proj, err := s.projectRepo.GetByID(ctx, task.ProjectID); err == nil && proj != nil {
 				s.notifyMentions(ctx, existing, task, oldBody, proj.WorkspaceID)
@@ -328,8 +346,9 @@ func (s *commentService) buildTaskSnap(ctx context.Context, task *domain.Task) m
 	return snap
 }
 
-// notifyMentions sends task.mentioned events to agents @-mentioned in comment.Body.
-// When oldBody is non-empty, only slugs newly added (not in oldBody) are notified.
+// notifyMentions resolves @-mentioned slugs to agents/users, persists comment_mentions rows,
+// sends task.mentioned SSE to agents, and pushes WS badge-update events to users.
+// When oldBody is non-empty, only slugs newly added (not in oldBody) are processed.
 func (s *commentService) notifyMentions(
 	ctx context.Context,
 	comment *domain.Comment,
@@ -337,9 +356,6 @@ func (s *commentService) notifyMentions(
 	oldBody string,
 	workspaceID uuid.UUID,
 ) {
-	if s.agentNotifySvc == nil || s.agentSvc == nil {
-		return
-	}
 	newSlugs := extractMentionSlugs(comment.Body)
 	if len(newSlugs) == 0 {
 		return
@@ -369,41 +385,79 @@ func (s *commentService) notifyMentions(
 		commentBody = commentBody[:500]
 	}
 
-	taskSnap := s.buildTaskSnap(ctx, task)
+	var taskSnap map[string]any
+	if s.agentNotifySvc != nil {
+		taskSnap = s.buildTaskSnap(ctx, task)
+	}
 	now := timeNow()
 
-	seen := make(map[uuid.UUID]bool)
+	seenID := make(map[uuid.UUID]bool)
+	var dbRows []domain.CommentMention
+
 	for _, slug := range newSlugs {
-		agent, err := s.agentSvc.GetBySlug(ctx, workspaceID, slug)
-		if err != nil || agent == nil {
-			continue
-		}
-		if seen[agent.ID] {
-			continue
-		}
-		seen[agent.ID] = true
-		// Skip self-mention by an agent actor.
-		if actorType == domain.ActorTypeAgent && agent.ID == actorID {
-			continue
+		// Try agent lookup first.
+		if s.agentSvc != nil {
+			agent, err := s.agentSvc.GetBySlug(ctx, workspaceID, slug)
+			if err == nil && agent != nil && !seenID[agent.ID] {
+				seenID[agent.ID] = true
+				dbRows = append(dbRows, domain.CommentMention{
+					CommentID:     comment.ID,
+					MentionedID:   agent.ID,
+					MentionedKind: "agent",
+					MentionedSlug: slug,
+					ExtractedAt:   now,
+				})
+				if s.agentNotifySvc != nil && !(actorType == domain.ActorTypeAgent && agent.ID == actorID) {
+					s.agentNotifySvc.NotifyAgent(ctx, agent.ID, AgentNotification{
+						EventType:   "task.mentioned",
+						Timestamp:   now,
+						WorkspaceID: workspaceID,
+						Task:        taskSnap,
+						AgentID:     agent.ID,
+						ActorID:     actorID,
+						ActorType:   string(actorType),
+						ActorName:   actorName,
+						Comment: map[string]any{
+							"id":        comment.ID,
+							"body":      commentBody,
+							"author_id": comment.AuthorID,
+						},
+						TaskID:    task.ID,
+						ProjectID: task.ProjectID,
+						Payload:   map[string]any{"mentioned_slug": slug},
+					})
+				}
+				continue
+			}
 		}
 
-		s.agentNotifySvc.NotifyAgent(ctx, agent.ID, AgentNotification{
-			EventType:   "task.mentioned",
-			Timestamp:   now,
-			WorkspaceID: workspaceID,
-			Task:        taskSnap,
-			AgentID:     agent.ID,
-			ActorID:     actorID,
-			ActorType:   string(actorType),
-			ActorName:   actorName,
-			Comment: map[string]any{
-				"id":        comment.ID,
-				"body":      commentBody,
-				"author_id": comment.AuthorID,
-			},
-			TaskID:    task.ID,
-			ProjectID: task.ProjectID,
-			Payload:   map[string]any{"mentioned_slug": slug},
-		})
+		// Fall back to user lookup.
+		if s.userRepo != nil {
+			user, err := s.userRepo.GetByUsername(ctx, workspaceID, slug)
+			if err == nil && user != nil && !seenID[user.ID] &&
+				!(actorType == domain.ActorTypeUser && user.ID == actorID) {
+				seenID[user.ID] = true
+				dbRows = append(dbRows, domain.CommentMention{
+					CommentID:     comment.ID,
+					MentionedID:   user.ID,
+					MentionedKind: "user",
+					MentionedSlug: slug,
+					ExtractedAt:   now,
+				})
+				if s.wsPublisher != nil {
+					channel := "ws:user:" + user.ID.String()
+					_ = s.wsPublisher.Publish(ctx, channel, map[string]any{
+						"event":        "mention.badge",
+						"workspace_id": workspaceID,
+						"task_id":      task.ID,
+						"comment_id":   comment.ID,
+					})
+				}
+			}
+		}
+	}
+
+	if s.mentionRepo != nil && len(dbRows) > 0 {
+		_ = s.mentionRepo.InsertBatch(ctx, dbRows)
 	}
 }

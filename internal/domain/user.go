@@ -12,6 +12,7 @@ type User struct {
 	Email        string    `json:"email" db:"email"`
 	PasswordHash string    `json:"-" db:"password_hash"`
 	Name         string    `json:"name" db:"display_name"`
+	Username     string    `json:"username" db:"username"`
 	AvatarURL    string    `json:"avatar_url" db:"avatar_url"`
 	IsActive     bool      `json:"is_active" db:"is_active"`
 	CreatedAt    time.Time `json:"created_at" db:"created_at"`

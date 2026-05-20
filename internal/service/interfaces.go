@@ -610,6 +610,19 @@ type SetProjectKnowledgeInput struct {
 	SourceURL   *string
 }
 
+// WSPublisher publishes JSON-encoded events to a Redis pub/sub channel
+// for delivery to connected WebSocket clients.
+type WSPublisher interface {
+	Publish(ctx context.Context, channel string, event any) error
+}
+
+// MentionService provides business logic for comment @-mentions.
+type MentionService interface {
+	List(ctx context.Context, mentionedID uuid.UUID, mentionedKind string, filter repository.MentionFilter) ([]domain.CommentMentionView, error)
+	MarkSeen(ctx context.Context, commentID, mentionedID uuid.UUID) error
+	CountUnseen(ctx context.Context, mentionedID uuid.UUID, mentionedKind string) (int64, error)
+}
+
 // MemoryService provides business logic for agent persistent memory.
 type MemoryService interface {
 	Remember(ctx context.Context, mem *domain.Memory) (string, error) // returns "created" or "updated"

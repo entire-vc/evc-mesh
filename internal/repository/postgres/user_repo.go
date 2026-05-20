@@ -69,6 +69,26 @@ func (r *UserRepo) Update(ctx context.Context, user *domain.User) error {
 	return err
 }
 
+// GetByUsername returns the user with the given username in the workspace, or (nil, nil) if not found.
+func (r *UserRepo) GetByUsername(ctx context.Context, workspaceID uuid.UUID, username string) (*domain.User, error) {
+	const q = `
+		SELECT u.id, u.email, u.password_hash, u.display_name, COALESCE(u.username, '') AS username,
+		       u.avatar_url, u.is_active, u.created_at, u.updated_at
+		FROM users u
+		JOIN workspace_members wm ON wm.user_id = u.id AND wm.workspace_id = $1
+		WHERE u.username = $2
+		LIMIT 1
+	`
+	var user domain.User
+	if err := r.db.GetContext(ctx, &user, q, workspaceID, username); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &user, nil
+}
+
 // SearchUsers returns up to limit users whose email or display_name match the query (ILIKE).
 func (r *UserRepo) SearchUsers(ctx context.Context, query string, limit int) ([]domain.User, error) {
 	const q = `

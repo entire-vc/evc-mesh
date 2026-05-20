@@ -245,6 +245,24 @@ type UserRepository interface {
 	Update(ctx context.Context, user *domain.User) error
 	// SearchUsers returns users whose email or display_name match the query (ILIKE), up to limit.
 	SearchUsers(ctx context.Context, query string, limit int) ([]domain.User, error)
+	// GetByUsername returns the user with the given username in the workspace, or (nil, nil) if not found.
+	GetByUsername(ctx context.Context, workspaceID uuid.UUID, username string) (*domain.User, error)
+}
+
+// MentionFilter holds filtering options for listing mention records.
+type MentionFilter struct {
+	Seen      *bool
+	Since     *time.Time
+	ProjectID *uuid.UUID
+	Limit     int
+}
+
+// CommentMentionRepository manages persistence for comment_mentions rows.
+type CommentMentionRepository interface {
+	InsertBatch(ctx context.Context, mentions []domain.CommentMention) error
+	List(ctx context.Context, mentionedID uuid.UUID, mentionedKind string, filter MentionFilter) ([]domain.CommentMentionView, error)
+	MarkSeen(ctx context.Context, commentID, mentionedID uuid.UUID) error
+	CountUnseen(ctx context.Context, mentionedID uuid.UUID, mentionedKind string) (int64, error)
 }
 
 // RefreshToken represents a stored refresh token record.
