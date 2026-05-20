@@ -17,9 +17,19 @@ import (
 	"github.com/entire-vc/evc-mesh/pkg/pagination"
 )
 
+// mentionTestEnv holds all dependencies for @mention tests.
+type mentionTestEnv struct {
+	svc         *commentService
+	commentRepo *MockCommentRepository
+	taskRepo    *MockTaskRepository
+	notifySvc   *MockAgentNotifyService
+	agentSvc    *MockAgentService
+	wsID        uuid.UUID
+	projID      uuid.UUID
+}
+
 // setupCommentServiceWithMentions returns a commentService wired with mock notify + agent services.
-// Returns: svc, commentRepo, taskRepo, notifySvc, agentSvc, workspaceID, projectID.
-func setupCommentServiceWithMentions() (*commentService, *MockCommentRepository, *MockTaskRepository, *MockAgentNotifyService, *MockAgentService, uuid.UUID, uuid.UUID) {
+func setupCommentServiceWithMentions() mentionTestEnv {
 	commentRepo := NewMockCommentRepository()
 	taskRepo := NewMockTaskRepository()
 	activityRepo := NewMockActivityLogRepository()
@@ -39,7 +49,7 @@ func setupCommentServiceWithMentions() (*commentService, *MockCommentRepository,
 		WithCommentProjectRepo(projectRepo),
 	).(*commentService)
 
-	return svc, commentRepo, taskRepo, notifySvc, agentSvc, wsID, projID
+	return mentionTestEnv{svc, commentRepo, taskRepo, notifySvc, agentSvc, wsID, projID}
 }
 
 // setupCommentService returns a commentService wired to fresh mocks.
@@ -365,7 +375,7 @@ func TestExtractMentionSlugs(t *testing.T) {
 		{"email address excluded", "email bar@foo.com is not a mention", nil},
 		{"hyphenated slug", "@bill-the-cat", []string{"bill-the-cat"}},
 		{"single char (too short)", "@a", nil},
-		{"uppercase normalized", "@BILL", nil},  // regex is lowercase only
+		{"uppercase normalized", "@BILL", nil}, // regex is lowercase only
 		{"no mentions", "plain text here", nil},
 		{"slug starting with hyphen rejected", "@-foo", nil},
 	}
@@ -386,20 +396,20 @@ func TestExtractMentionSlugs(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestNotifyMentions_BasicMention(t *testing.T) {
-	svc, _, taskRepo, notifySvc, agentSvc, wsID, projID := setupCommentServiceWithMentions()
+	env := setupCommentServiceWithMentions()
 
-	agent := &domain.Agent{ID: uuid.New(), WorkspaceID: wsID, Slug: "bill", Name: "Bill"}
-	agentSvc.AddAgent(wsID, agent)
+	agent := &domain.Agent{ID: uuid.New(), WorkspaceID: env.wsID, Slug: "bill", Name: "Bill"}
+	env.agentSvc.AddAgent(env.wsID, agent)
 
 	taskID := uuid.New()
-	taskRepo.items[taskID] = &domain.Task{ID: taskID, ProjectID: projID, Title: "T"}
+	env.taskRepo.items[taskID] = &domain.Task{ID: taskID, ProjectID: env.projID, Title: "T"}
 
 	comment := &domain.Comment{ID: uuid.New(), TaskID: taskID, Body: "hey @bill check this"}
-	task := taskRepo.items[taskID]
+	task := env.taskRepo.items[taskID]
 
-	svc.notifyMentions(context.Background(), comment, task, "", wsID)
+	env.svc.notifyMentions(context.Background(), comment, task, "", env.wsID)
 
-	calls := notifySvc.Calls()
+	calls := env.notifySvc.Calls()
 	require.Len(t, calls, 1)
 	assert.Equal(t, "task.mentioned", calls[0].EventType)
 	assert.Equal(t, agent.ID, calls[0].AgentID)
@@ -407,103 +417,103 @@ func TestNotifyMentions_BasicMention(t *testing.T) {
 }
 
 func TestNotifyMentions_SelfMentionSkipped(t *testing.T) {
-	svc, _, taskRepo, notifySvc, agentSvc, wsID, projID := setupCommentServiceWithMentions()
+	env := setupCommentServiceWithMentions()
 
 	agentID := uuid.New()
-	agent := &domain.Agent{ID: agentID, WorkspaceID: wsID, Slug: "self-agent"}
-	agentSvc.AddAgent(wsID, agent)
+	agent := &domain.Agent{ID: agentID, WorkspaceID: env.wsID, Slug: "self-agent"}
+	env.agentSvc.AddAgent(env.wsID, agent)
 
 	taskID := uuid.New()
-	taskRepo.items[taskID] = &domain.Task{ID: taskID, ProjectID: projID}
+	env.taskRepo.items[taskID] = &domain.Task{ID: taskID, ProjectID: env.projID}
 
 	comment := &domain.Comment{ID: uuid.New(), TaskID: taskID, Body: "@self-agent talking to myself"}
 	ctx := actorctx.WithActor(context.Background(), agentID, domain.ActorTypeAgent)
 
-	svc.notifyMentions(ctx, comment, taskRepo.items[taskID], "", wsID)
+	env.svc.notifyMentions(ctx, comment, env.taskRepo.items[taskID], "", env.wsID)
 
-	assert.Empty(t, notifySvc.Calls())
+	assert.Empty(t, env.notifySvc.Calls())
 }
 
 func TestNotifyMentions_NewOnlyOnEdit(t *testing.T) {
-	svc, _, taskRepo, notifySvc, agentSvc, wsID, projID := setupCommentServiceWithMentions()
+	env := setupCommentServiceWithMentions()
 
-	alice := &domain.Agent{ID: uuid.New(), WorkspaceID: wsID, Slug: "alice"}
-	bob := &domain.Agent{ID: uuid.New(), WorkspaceID: wsID, Slug: "bob"}
-	agentSvc.AddAgent(wsID, alice)
-	agentSvc.AddAgent(wsID, bob)
+	alice := &domain.Agent{ID: uuid.New(), WorkspaceID: env.wsID, Slug: "alice"}
+	bob := &domain.Agent{ID: uuid.New(), WorkspaceID: env.wsID, Slug: "bob"}
+	env.agentSvc.AddAgent(env.wsID, alice)
+	env.agentSvc.AddAgent(env.wsID, bob)
 
 	taskID := uuid.New()
-	taskRepo.items[taskID] = &domain.Task{ID: taskID, ProjectID: projID}
+	env.taskRepo.items[taskID] = &domain.Task{ID: taskID, ProjectID: env.projID}
 
 	// oldBody had @alice, new body adds @bob — only bob should be notified.
 	comment := &domain.Comment{ID: uuid.New(), TaskID: taskID, Body: "@alice and @bob"}
 	oldBody := "@alice something"
-	task := taskRepo.items[taskID]
+	task := env.taskRepo.items[taskID]
 
-	svc.notifyMentions(context.Background(), comment, task, oldBody, wsID)
+	env.svc.notifyMentions(context.Background(), comment, task, oldBody, env.wsID)
 
-	calls := notifySvc.Calls()
+	calls := env.notifySvc.Calls()
 	require.Len(t, calls, 1)
 	assert.Equal(t, bob.ID, calls[0].AgentID)
 }
 
 func TestNotifyMentions_DedupSameAgent(t *testing.T) {
-	svc, _, taskRepo, notifySvc, agentSvc, wsID, projID := setupCommentServiceWithMentions()
+	env := setupCommentServiceWithMentions()
 
-	agent := &domain.Agent{ID: uuid.New(), WorkspaceID: wsID, Slug: "alice"}
-	agentSvc.AddAgent(wsID, agent)
+	agent := &domain.Agent{ID: uuid.New(), WorkspaceID: env.wsID, Slug: "alice"}
+	env.agentSvc.AddAgent(env.wsID, agent)
 
 	taskID := uuid.New()
-	taskRepo.items[taskID] = &domain.Task{ID: taskID, ProjectID: projID}
+	env.taskRepo.items[taskID] = &domain.Task{ID: taskID, ProjectID: env.projID}
 
 	comment := &domain.Comment{ID: uuid.New(), TaskID: taskID, Body: "@alice first and @alice again"}
-	task := taskRepo.items[taskID]
+	task := env.taskRepo.items[taskID]
 
-	svc.notifyMentions(context.Background(), comment, task, "", wsID)
+	env.svc.notifyMentions(context.Background(), comment, task, "", env.wsID)
 
-	assert.Len(t, notifySvc.Calls(), 1)
+	assert.Len(t, env.notifySvc.Calls(), 1)
 }
 
 func TestNotifyMentions_UnknownSlugSkipped(t *testing.T) {
-	svc, _, taskRepo, notifySvc, _, wsID, projID := setupCommentServiceWithMentions()
+	env := setupCommentServiceWithMentions()
 
 	taskID := uuid.New()
-	taskRepo.items[taskID] = &domain.Task{ID: taskID, ProjectID: projID}
+	env.taskRepo.items[taskID] = &domain.Task{ID: taskID, ProjectID: env.projID}
 
 	comment := &domain.Comment{ID: uuid.New(), TaskID: taskID, Body: "@noone is here"}
-	task := taskRepo.items[taskID]
+	task := env.taskRepo.items[taskID]
 
 	require.NoError(t, func() error {
-		svc.notifyMentions(context.Background(), comment, task, "", wsID)
+		env.svc.notifyMentions(context.Background(), comment, task, "", env.wsID)
 		return nil
 	}())
 
-	assert.Empty(t, notifySvc.Calls())
+	assert.Empty(t, env.notifySvc.Calls())
 }
 
 func TestNotifyMentions_NoMentionsNoOp(t *testing.T) {
-	svc, _, taskRepo, notifySvc, _, wsID, projID := setupCommentServiceWithMentions()
+	env := setupCommentServiceWithMentions()
 
 	taskID := uuid.New()
-	taskRepo.items[taskID] = &domain.Task{ID: taskID, ProjectID: projID}
+	env.taskRepo.items[taskID] = &domain.Task{ID: taskID, ProjectID: env.projID}
 
 	comment := &domain.Comment{ID: uuid.New(), TaskID: taskID, Body: "just a plain comment"}
-	task := taskRepo.items[taskID]
+	task := env.taskRepo.items[taskID]
 
-	svc.notifyMentions(context.Background(), comment, task, "", wsID)
+	env.svc.notifyMentions(context.Background(), comment, task, "", env.wsID)
 
-	assert.Empty(t, notifySvc.Calls())
+	assert.Empty(t, env.notifySvc.Calls())
 }
 
 // TestCommentService_Create_FiresMention verifies that Create triggers mention notifications.
 func TestCommentService_Create_FiresMention(t *testing.T) {
-	svc, _, taskRepo, notifySvc, agentSvc, wsID, projID := setupCommentServiceWithMentions()
+	env := setupCommentServiceWithMentions()
 
-	agent := &domain.Agent{ID: uuid.New(), WorkspaceID: wsID, Slug: "garfield"}
-	agentSvc.AddAgent(wsID, agent)
+	agent := &domain.Agent{ID: uuid.New(), WorkspaceID: env.wsID, Slug: "garfield"}
+	env.agentSvc.AddAgent(env.wsID, agent)
 
 	taskID := uuid.New()
-	taskRepo.items[taskID] = &domain.Task{ID: taskID, ProjectID: projID, Title: "Test"}
+	env.taskRepo.items[taskID] = &domain.Task{ID: taskID, ProjectID: env.projID, Title: "Test"}
 
 	comment := &domain.Comment{
 		TaskID:     taskID,
@@ -511,9 +521,9 @@ func TestCommentService_Create_FiresMention(t *testing.T) {
 		AuthorType: domain.ActorTypeUser,
 		Body:       "please review @garfield",
 	}
-	require.NoError(t, svc.Create(context.Background(), comment))
+	require.NoError(t, env.svc.Create(context.Background(), comment))
 
-	mentionCalls := filterByEvent(notifySvc.Calls(), "task.mentioned")
+	mentionCalls := filterByEvent(env.notifySvc.Calls(), "task.mentioned")
 	require.Len(t, mentionCalls, 1)
 	assert.Equal(t, agent.ID, mentionCalls[0].AgentID)
 }
