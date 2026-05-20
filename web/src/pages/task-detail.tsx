@@ -507,16 +507,18 @@ export function TaskDetailPage() {
                   <button
                     key={tab.id}
                     type="button"
+                    aria-label={tab.label}
+                    title={tab.label}
                     className={cn(
-                      "flex items-center gap-1.5 border-b-2 px-4 py-2 text-sm font-medium transition-colors",
+                      "flex flex-1 items-center justify-center gap-1.5 border-b-2 py-3 text-sm font-medium transition-colors sm:flex-none sm:justify-start sm:px-4 sm:py-2",
                       activeTab === tab.id
                         ? "border-primary text-foreground"
                         : "border-transparent text-muted-foreground hover:border-border hover:text-foreground",
                     )}
                     onClick={() => setActiveTab(tab.id)}
                   >
-                    <Icon className="h-4 w-4" />
-                    {tab.label}
+                    <Icon className="h-4 w-4 shrink-0" />
+                    <span className="hidden sm:inline">{tab.label}</span>
                   </button>
                 );
               })}
