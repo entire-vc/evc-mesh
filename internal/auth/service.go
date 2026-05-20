@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/mail"
+	"strings"
 	"time"
 	"unicode"
 
@@ -363,6 +364,36 @@ func ValidatePassword(password string) error {
 // The access token will expire naturally (15 min TTL).
 func (s *Service) Logout(ctx context.Context, userID uuid.UUID) error {
 	return s.refreshTokenRepo.RevokeByUserID(ctx, userID)
+}
+
+// UpdateProfile updates the display_name (and optionally avatar_url) for the given user.
+// name is trimmed and must be non-empty, max 100 runes.
+func (s *Service) UpdateProfile(ctx context.Context, userID uuid.UUID, name, avatarURL string) (*domain.User, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil, apierror.ValidationError(map[string]string{"name": "name is required"})
+	}
+	if len([]rune(name)) > 100 {
+		return nil, apierror.ValidationError(map[string]string{"name": "name must be at most 100 characters"})
+	}
+
+	user, err := s.userRepo.GetByID(ctx, userID)
+	if err != nil {
+		return nil, apierror.Wrap(err)
+	}
+	if user == nil {
+		return nil, apierror.NotFound("User")
+	}
+
+	user.Name = name
+	if avatarURL != "" {
+		user.AvatarURL = avatarURL
+	}
+
+	if err := s.userRepo.Update(ctx, user); err != nil {
+		return nil, err
+	}
+	return user, nil
 }
 
 // GetUserByID retrieves a user by ID. Used by the /auth/me endpoint.

@@ -124,6 +124,10 @@ func (s *commentService) Create(ctx context.Context, comment *domain.Comment) er
 	if err := s.commentRepo.Create(ctx, comment); err != nil {
 		return err
 	}
+	// Re-fetch so the returned comment includes the computed author_name.
+	if enriched, err2 := s.commentRepo.GetByID(ctx, comment.ID); err2 == nil && enriched != nil {
+		*comment = *enriched
+	}
 	if s.ctxCacheInv != nil {
 		s.ctxCacheInv.Invalidate(ctx, comment.TaskID)
 	}
@@ -233,6 +237,10 @@ func (s *commentService) Update(ctx context.Context, comment *domain.Comment) er
 
 	if err := s.commentRepo.Update(ctx, existing); err != nil {
 		return err
+	}
+	// Re-fetch so the caller gets the fully enriched record (author_name etc.).
+	if enriched, err2 := s.commentRepo.GetByID(ctx, existing.ID); err2 == nil && enriched != nil {
+		*comment = *enriched
 	}
 	if s.ctxCacheInv != nil {
 		s.ctxCacheInv.Invalidate(ctx, existing.TaskID)

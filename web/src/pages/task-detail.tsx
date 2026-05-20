@@ -500,7 +500,7 @@ export function TaskDetailPage() {
 
           {/* Tabs */}
           <div>
-            <div className="flex border-b border-border">
+            <div className="flex overflow-x-auto border-b border-border">
               {tabs.map((tab) => {
                 const Icon = tab.icon;
                 return (
