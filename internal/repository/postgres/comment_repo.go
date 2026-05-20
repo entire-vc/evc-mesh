@@ -24,7 +24,7 @@ const commentEnrichedSelect = `SELECT c.id, c.task_id, c.parent_comment_id, c.au
 		WHEN c.author_type = 'agent' THEN
 			(SELECT name FROM agents WHERE id = c.author_id AND deleted_at IS NULL)
 		WHEN c.author_type = 'user' THEN
-			(SELECT display_name FROM users WHERE id = c.author_id)
+			(SELECT COALESCE(NULLIF(u.display_name, ''), SPLIT_PART(u.email, '@', 1)) FROM users u WHERE u.id = c.author_id)
 		ELSE NULL
 	END AS author_name`
 
