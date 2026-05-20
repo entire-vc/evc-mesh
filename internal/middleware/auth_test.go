@@ -76,7 +76,6 @@ func (r *mockUserRepo) GetByUsername(_ context.Context, _ uuid.UUID, _ string) (
 	return nil, nil
 }
 
-
 type mockRefreshTokenRepo struct {
 	mu     sync.RWMutex
 	tokens map[string]*repository.RefreshToken
