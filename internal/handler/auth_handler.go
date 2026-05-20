@@ -149,3 +149,29 @@ func (h *AuthHandler) Me(c echo.Context) error {
 
 	return c.JSON(http.StatusOK, user)
 }
+
+// updateUserProfileRequest represents the JSON body for updating the current user's profile.
+type updateUserProfileRequest struct {
+	Name      string `json:"name"`
+	AvatarURL string `json:"avatar_url"`
+}
+
+// UpdateMe handles PATCH /api/v1/auth/me (protected endpoint).
+func (h *AuthHandler) UpdateMe(c echo.Context) error {
+	userID, err := mw.GetUserID(c)
+	if err != nil {
+		return c.JSON(http.StatusUnauthorized, apierror.Unauthorized(""))
+	}
+
+	var req updateUserProfileRequest
+	if err := c.Bind(&req); err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
+	}
+
+	user, err := h.authService.UpdateProfile(c.Request().Context(), userID, req.Name, req.AvatarURL)
+	if err != nil {
+		return handleError(c, err)
+	}
+
+	return c.JSON(http.StatusOK, user)
+}
