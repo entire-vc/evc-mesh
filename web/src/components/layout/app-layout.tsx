@@ -114,7 +114,14 @@ export function AppLayout() {
   }
 
   if (!isAuthenticated) {
-    return <Navigate to="/login" replace />;
+    // Preserve the requested path so login can bounce back after sign-in
+    // (e.g. deep links like /t/:taskId, /tasks/:taskId, or any /w/... path).
+    const path = location.pathname + location.search;
+    const to =
+      path && path !== "/" && !path.startsWith("/login")
+        ? `/login?redirect=${encodeURIComponent(path)}`
+        : "/login";
+    return <Navigate to={to} replace />;
   }
 
   // Show loading while fetching workspaces
