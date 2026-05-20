@@ -624,7 +624,7 @@ function ViolationRow({ v }: { v: RuleViolation }) {
 export function WorkspaceSettingsPage() {
   const { wsSlug } = useParams<{ wsSlug: string }>();
   const { currentWorkspace, updateWorkspace } = useWorkspaceStore();
-  const { user } = useAuthStore();
+  const { user, updateProfile } = useAuthStore();
   const {
     workspaceMembers,
     myRole,
@@ -673,10 +673,19 @@ export function WorkspaceSettingsPage() {
   // Rules saving state
   const [isSavingRules, setIsSavingRules] = useState(false);
 
+  // Profile form state
+  const [profileName, setProfileName] = useState(user?.name ?? "");
+  const [isSavingProfile, setIsSavingProfile] = useState(false);
+  const [profileFeedback, setProfileFeedback] = useState<{
+    type: "success" | "error";
+    message: string;
+  } | null>(null);
+
   // Tab state
   const [activeTab, setActiveTab] = useState("general");
 
   const WS_TABS = [
+    { id: "profile", label: "Profile" },
     { id: "general", label: "General" },
     { id: "members", label: "Members" },
     { id: "team", label: "Team Directory" },
@@ -749,6 +758,32 @@ export function WorkspaceSettingsPage() {
 
   // Count owners to disable remove on last owner
   const ownerCount = workspaceMembers.filter((m) => m.role === "owner").length;
+
+  const handleSaveProfile = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const trimmed = profileName.trim();
+    if (!trimmed) {
+      setProfileFeedback({ type: "error", message: "Display name is required" });
+      return;
+    }
+    if ([...trimmed].length > 100) {
+      setProfileFeedback({ type: "error", message: "Display name must be at most 100 characters" });
+      return;
+    }
+    setIsSavingProfile(true);
+    setProfileFeedback(null);
+    try {
+      await updateProfile(trimmed);
+      setProfileFeedback({ type: "success", message: "Profile saved." });
+    } catch (err) {
+      setProfileFeedback({
+        type: "error",
+        message: err instanceof Error ? err.message : "Failed to save profile",
+      });
+    } finally {
+      setIsSavingProfile(false);
+    }
+  };
 
   const handleSaveGeneral = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -944,6 +979,56 @@ export function WorkspaceSettingsPage() {
           </button>
         ))}
       </div>
+
+      {/* Section 0: Profile */}
+      {activeTab === "profile" && (
+      <Card>
+        <CardHeader>
+          <CardTitle>Profile</CardTitle>
+          <CardDescription>Your display name shown in comments, activity, and team directory.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <form onSubmit={handleSaveProfile} className="space-y-4">
+            <div className="space-y-1.5">
+              <label htmlFor="profile-name" className="text-sm font-medium">
+                Display name <span className="text-destructive">*</span>
+              </label>
+              <Input
+                id="profile-name"
+                value={profileName}
+                onChange={(e) => setProfileName(e.target.value)}
+                placeholder="Your name"
+                maxLength={100}
+              />
+              <p className="text-xs text-muted-foreground">
+                Current email: {user?.email}
+              </p>
+            </div>
+            {profileFeedback && (
+              <p
+                className={cn(
+                  "text-sm flex items-center gap-1",
+                  profileFeedback.type === "success"
+                    ? "text-green-600"
+                    : "text-destructive",
+                )}
+              >
+                {profileFeedback.type === "success" ? (
+                  <Check className="h-3.5 w-3.5 shrink-0" />
+                ) : (
+                  <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                )}
+                {profileFeedback.message}
+              </p>
+            )}
+            <Button type="submit" size="sm" disabled={isSavingProfile}>
+              <Save className="h-3.5 w-3.5" />
+              {isSavingProfile ? "Saving..." : "Save profile"}
+            </Button>
+          </form>
+        </CardContent>
+      </Card>
+      )}
 
       {/* Section 1: General */}
       {activeTab === "general" && (

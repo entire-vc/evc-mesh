@@ -17,6 +17,7 @@ interface AuthState {
   register: (req: RegisterRequest) => Promise<void>;
   logout: () => Promise<void>;
   fetchMe: () => Promise<void>;
+  updateProfile: (name: string, avatarURL?: string) => Promise<void>;
 }
 
 export const useAuthStore = create<AuthState>((set) => ({
@@ -73,6 +74,14 @@ export const useAuthStore = create<AuthState>((set) => ({
 
   fetchMe: async () => {
     const user = await api<User>("/api/v1/auth/me");
+    set({ user });
+  },
+
+  updateProfile: async (name: string, avatarURL?: string) => {
+    const user = await api<User>("/api/v1/auth/me", {
+      method: "PATCH",
+      body: { name, avatar_url: avatarURL ?? "" },
+    });
     set({ user });
   },
 }));
