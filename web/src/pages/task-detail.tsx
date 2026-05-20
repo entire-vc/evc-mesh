@@ -508,7 +508,7 @@ export function TaskDetailPage() {
                     key={tab.id}
                     type="button"
                     className={cn(
-                      "flex items-center gap-1.5 border-b-2 px-4 py-2 text-sm font-medium transition-colors",
+                      "flex shrink-0 items-center gap-1.5 border-b-2 whitespace-nowrap px-3 sm:px-4 py-2 text-sm font-medium transition-colors",
                       activeTab === tab.id
                         ? "border-primary text-foreground"
                         : "border-transparent text-muted-foreground hover:border-border hover:text-foreground",
