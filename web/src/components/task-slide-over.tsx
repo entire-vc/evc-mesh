@@ -7,6 +7,7 @@ import {
   useState,
 } from "react";
 import {
+  ArrowLeft,
   Bot,
   Check,
   Clock,
@@ -84,8 +85,22 @@ export function TaskSlideOver({
   onClose,
   onTaskUpdated,
 }: TaskSlideOverProps) {
+  // Task navigation stack — must be declared before selectors that depend on it
+  const [taskIdStack, setTaskIdStack] = useState<string[]>([]);
+  const effectiveTaskId =
+    taskIdStack.length > 0 ? taskIdStack[taskIdStack.length - 1] : taskId;
+  const backTaskId =
+    taskIdStack.length > 0
+      ? taskIdStack.length >= 2
+        ? taskIdStack[taskIdStack.length - 2]
+        : taskId
+      : null;
+
   const currentTask = useTaskStore((state) =>
-    taskId ? state.tasksById[taskId] ?? null : null,
+    effectiveTaskId ? state.tasksById[effectiveTaskId] ?? null : null,
+  );
+  const backTask = useTaskStore((state) =>
+    backTaskId ? state.tasksById[backTaskId] ?? null : null,
   );
   const { fetchTask, updateTask, moveTask, duplicateTask } = useTaskStore();
   const { statuses, fetchStatuses, currentProject } = useProjectStore();
@@ -123,10 +138,15 @@ export function TaskSlideOver({
   const [labelDraft, setLabelDraft] = useState("");
   const labelInputRef = useRef<HTMLInputElement>(null);
 
+  // Reset navigation stack when the root task changes
+  useEffect(() => {
+    setTaskIdStack([]);
+  }, [taskId]);
+
   // ---- Data loading --------------------------------------------------------
 
   useEffect(() => {
-    if (!taskId) return;
+    if (!effectiveTaskId) return;
     let cancelled = false;
 
     async function load() {
@@ -135,7 +155,7 @@ export function TaskSlideOver({
       setEditingDescription(false);
       setEditingHours(false);
       try {
-        const task = await fetchTask(taskId!);
+        const task = await fetchTask(effectiveTaskId!);
         if (cancelled) return;
         // Fetch statuses if needed
         if (
@@ -159,7 +179,7 @@ export function TaskSlideOver({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [taskId]);
+  }, [effectiveTaskId]);
 
   // Fetch agents for assignee dropdown
   useEffect(() => {
@@ -204,6 +224,17 @@ export function TaskSlideOver({
     document.addEventListener("keydown", handleKey);
     return () => document.removeEventListener("keydown", handleKey);
   }, [onClose]);
+
+  // ---- Subtask stack navigation --------------------------------------------
+
+  const pushTask = useCallback((id: string) => {
+    setTaskIdStack((s) => [...s, id]);
+    setBottomTab("subtasks");
+  }, []);
+
+  const popTask = useCallback(() => {
+    setTaskIdStack((s) => s.slice(0, -1));
+  }, []);
 
   // ---- Handlers -------------------------------------------------------------
 
@@ -464,17 +495,31 @@ export function TaskSlideOver({
         {/* ------------------------------------------------------------------ */}
         <div className="flex shrink-0 items-center justify-between border-b border-border px-4 py-2.5">
           <div className="flex items-center gap-3 min-w-0">
-            {currentTask && (
-              <>
-                <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground">
-                  {currentTask.id.slice(0, 8).toUpperCase()}
+            {taskIdStack.length > 0 ? (
+              <button
+                type="button"
+                onClick={popTask}
+                className="flex shrink-0 items-center gap-1 rounded p-1 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                title="Back to parent task"
+              >
+                <ArrowLeft className="h-3.5 w-3.5" />
+                <span className="max-w-[180px] truncate">
+                  {backTask?.title ?? "Back"}
                 </span>
-                {currentProject && (
-                  <span className="truncate text-xs text-muted-foreground">
-                    {currentProject.name}
+              </button>
+            ) : (
+              currentTask && (
+                <>
+                  <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground">
+                    {currentTask.id.slice(0, 8).toUpperCase()}
                   </span>
-                )}
-              </>
+                  {currentProject && (
+                    <span className="truncate text-xs text-muted-foreground">
+                      {currentProject.name}
+                    </span>
+                  )}
+                </>
+              )
             )}
           </div>
           <div className="flex shrink-0 items-center gap-2">
@@ -988,7 +1033,10 @@ export function TaskSlideOver({
                   </div>
                   <div className="pt-3">
                     {bottomTab === "subtasks" && (
-                      <SubtaskList taskId={currentTask.id} />
+                      <SubtaskList
+                        taskId={currentTask.id}
+                        onOpenSubtask={pushTask}
+                      />
                     )}
                     {bottomTab === "artifacts" && (
                       <ArtifactList taskId={currentTask.id} />
