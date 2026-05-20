@@ -217,6 +217,7 @@ func main() {
 	// Real service implementations (replacing stubs from earlier sprints).
 	commentService := service.NewCommentService(commentRepo, taskRepo, activityLogRepo,
 		service.WithCommentAgentNotify(agentNotifySvc),
+		service.WithCommentAgentService(agentService),
 		service.WithCommentStatusRepo(taskStatusRepo),
 		service.WithCommentProjectRepo(projectRepo),
 		service.WithCommentContextCacheInvalidator(ctxCacheSvc),

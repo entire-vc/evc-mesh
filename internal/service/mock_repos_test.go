@@ -960,6 +960,111 @@ func (m *MockAgentRepository) TouchLastSeenBatch(_ context.Context, ids []uuid.U
 	return nil
 }
 
+func (m *MockAgentRepository) GetBySlug(_ context.Context, workspaceID uuid.UUID, slug string) (*domain.Agent, error) {
+	if m.errToReturn != nil {
+		return nil, m.errToReturn
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, a := range m.items {
+		if a.WorkspaceID == workspaceID && a.Slug == slug {
+			return a, nil
+		}
+	}
+	return nil, nil
+}
+
+// ---------------------------------------------------------------------------
+// MockAgentNotifyService — records NotifyAgent calls for assertion in tests.
+// ---------------------------------------------------------------------------
+
+type MockAgentNotifyService struct {
+	mu    sync.Mutex
+	calls []AgentNotification
+}
+
+func NewMockAgentNotifyService() *MockAgentNotifyService {
+	return &MockAgentNotifyService{}
+}
+
+func (m *MockAgentNotifyService) NotifyAgent(_ context.Context, _ uuid.UUID, event AgentNotification) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.calls = append(m.calls, event)
+}
+
+func (m *MockAgentNotifyService) Calls() []AgentNotification {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]AgentNotification, len(m.calls))
+	copy(out, m.calls)
+	return out
+}
+
+// ---------------------------------------------------------------------------
+// MockAgentService — minimal stub for comment mention tests.
+// Only GetBySlug is implemented; all other methods panic.
+// ---------------------------------------------------------------------------
+
+type MockAgentService struct {
+	mu     sync.RWMutex
+	bySlug map[string]*domain.Agent // key: workspaceID.String()+":"+slug
+}
+
+func NewMockAgentService() *MockAgentService {
+	return &MockAgentService{bySlug: make(map[string]*domain.Agent)}
+}
+
+func (m *MockAgentService) AddAgent(workspaceID uuid.UUID, a *domain.Agent) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.bySlug[workspaceID.String()+":"+a.Slug] = a
+}
+
+func (m *MockAgentService) GetBySlug(_ context.Context, workspaceID uuid.UUID, slug string) (*domain.Agent, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	a := m.bySlug[workspaceID.String()+":"+slug]
+	return a, nil
+}
+
+func (m *MockAgentService) Register(_ context.Context, _ RegisterAgentInput) (*RegisterAgentOutput, error) {
+	panic("MockAgentService.Register not implemented")
+}
+func (m *MockAgentService) GetByID(_ context.Context, _ uuid.UUID) (*domain.Agent, error) {
+	panic("MockAgentService.GetByID not implemented")
+}
+func (m *MockAgentService) Update(_ context.Context, _ *domain.Agent) error {
+	panic("MockAgentService.Update not implemented")
+}
+func (m *MockAgentService) Delete(_ context.Context, _ uuid.UUID) error {
+	panic("MockAgentService.Delete not implemented")
+}
+func (m *MockAgentService) List(_ context.Context, _ uuid.UUID, _ repository.AgentFilter, _ pagination.Params) (*pagination.Page[domain.Agent], error) {
+	panic("MockAgentService.List not implemented")
+}
+func (m *MockAgentService) Heartbeat(_ context.Context, _ uuid.UUID, _ *HeartbeatInput) error {
+	panic("MockAgentService.Heartbeat not implemented")
+}
+func (m *MockAgentService) Authenticate(_ context.Context, _, _ string) (*domain.Agent, error) {
+	panic("MockAgentService.Authenticate not implemented")
+}
+func (m *MockAgentService) RotateAPIKey(_ context.Context, _ uuid.UUID) (string, error) {
+	panic("MockAgentService.RotateAPIKey not implemented")
+}
+func (m *MockAgentService) ListSubAgents(_ context.Context, _ uuid.UUID, _ bool) ([]domain.Agent, error) {
+	panic("MockAgentService.ListSubAgents not implemented")
+}
+func (m *MockAgentService) CreateActivityLog(_ context.Context, _ *domain.AgentActivityLog) error {
+	panic("MockAgentService.CreateActivityLog not implemented")
+}
+func (m *MockAgentService) ListActivityLog(_ context.Context, _ uuid.UUID, _ repository.AgentActivityLogFilter, _ pagination.Params) (*pagination.Page[domain.AgentActivityLog], error) {
+	panic("MockAgentService.ListActivityLog not implemented")
+}
+func (m *MockAgentService) TouchLastSeen(_ context.Context, _ uuid.UUID) error {
+	panic("MockAgentService.TouchLastSeen not implemented")
+}
+
 // ---------------------------------------------------------------------------
 // MockEventBusMessageRepository
 // ---------------------------------------------------------------------------
