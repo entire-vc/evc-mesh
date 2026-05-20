@@ -75,7 +75,7 @@ type Task struct {
 	VCSLinkCount  int     `json:"vcs_link_count"`
 	// URL is the canonical short deep-link, e.g. https://mesh.entire.host/t/<id>.
 	// Populated by HTTP handlers from request scheme+host. Empty in non-HTTP contexts.
-	URL           string  `json:"url,omitempty"`
+	URL string `json:"url,omitempty"`
 }
 
 // CheckoutInfo carries checkout state for API responses on GET task endpoints.
