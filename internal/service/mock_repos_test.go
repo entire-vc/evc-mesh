@@ -655,9 +655,10 @@ func (m *MockCustomFieldDefinitionRepository) Reorder(_ context.Context, _ uuid.
 // ---------------------------------------------------------------------------
 
 type MockCommentRepository struct {
-	mu          sync.RWMutex
-	items       map[uuid.UUID]*domain.Comment
-	errToReturn error
+	mu                 sync.RWMutex
+	items              map[uuid.UUID]*domain.Comment
+	errToReturn        error
+	enrichedAuthorName *string // simulates SQL CASE WHEN author_name subquery
 }
 
 func NewMockCommentRepository() *MockCommentRepository {
@@ -683,6 +684,11 @@ func (m *MockCommentRepository) GetByID(_ context.Context, id uuid.UUID) (*domai
 	c, ok := m.items[id]
 	if !ok {
 		return nil, nil
+	}
+	if m.enrichedAuthorName != nil {
+		copy := *c
+		copy.AuthorName = m.enrichedAuthorName
+		return &copy, nil
 	}
 	return c, nil
 }

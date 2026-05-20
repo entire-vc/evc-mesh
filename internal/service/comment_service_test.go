@@ -318,3 +318,61 @@ func TestCommentService_ListByTask(t *testing.T) {
 		})
 	}
 }
+
+// ---------------------------------------------------------------------------
+// TestCommentService_CreateEnrichesAuthorName
+// ---------------------------------------------------------------------------
+
+func TestCommentService_CreateEnrichesAuthorName(t *testing.T) {
+	svc, commentRepo, taskRepo := setupCommentService()
+
+	taskID := uuid.New()
+	taskRepo.items[taskID] = &domain.Task{ID: taskID, Title: "A task"}
+
+	authorName := "Admin"
+	commentRepo.enrichedAuthorName = &authorName
+
+	comment := &domain.Comment{
+		TaskID:     taskID,
+		AuthorID:   uuid.New(),
+		AuthorType: domain.ActorTypeUser,
+		Body:       "Hello world",
+	}
+
+	err := svc.Create(context.Background(), comment)
+
+	require.NoError(t, err)
+	require.NotNil(t, comment.AuthorName, "author_name must be populated after Create")
+	assert.Equal(t, "Admin", *comment.AuthorName)
+}
+
+// ---------------------------------------------------------------------------
+// TestCommentService_UpdateEnrichesAuthorName
+// ---------------------------------------------------------------------------
+
+func TestCommentService_UpdateEnrichesAuthorName(t *testing.T) {
+	svc, commentRepo, _ := setupCommentService()
+
+	authorID := uuid.New()
+	id := uuid.New()
+	commentRepo.items[id] = &domain.Comment{
+		ID:         id,
+		TaskID:     uuid.New(),
+		AuthorID:   authorID,
+		AuthorType: domain.ActorTypeUser,
+		Body:       "Original",
+	}
+
+	authorName := "Admin"
+	commentRepo.enrichedAuthorName = &authorName
+
+	ctx := actorctx.WithActor(context.Background(), authorID, domain.ActorTypeUser)
+	comment := &domain.Comment{ID: id, Body: "Updated"}
+
+	err := svc.Update(ctx, comment)
+
+	require.NoError(t, err)
+	require.NotNil(t, comment.AuthorName, "author_name must be populated after Update")
+	assert.Equal(t, "Admin", *comment.AuthorName)
+	assert.Equal(t, "Updated", comment.Body)
+}
