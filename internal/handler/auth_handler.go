@@ -157,6 +157,7 @@ type updateUserProfileRequest struct {
 }
 
 // UpdateMe handles PATCH /api/v1/auth/me (protected endpoint).
+// Note: avatar_url="" is treated as "no change"; clearing avatar is a separate flow.
 func (h *AuthHandler) UpdateMe(c echo.Context) error {
 	userID, err := mw.GetUserID(c)
 	if err != nil {
@@ -164,7 +165,7 @@ func (h *AuthHandler) UpdateMe(c echo.Context) error {
 	}
 
 	var req updateUserProfileRequest
-	if err := c.Bind(&req); err != nil {
+	if err = c.Bind(&req); err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
 	}
 
