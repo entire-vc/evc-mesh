@@ -237,6 +237,8 @@ type AgentService interface {
 	// TouchLastSeen bumps the agent's last_heartbeat without changing status.
 	// Called when an SSE connection is opened.
 	TouchLastSeen(ctx context.Context, agentID uuid.UUID) error
+	// GetBySlug returns the agent with the given slug in a workspace, or (nil, nil) if not found.
+	GetBySlug(ctx context.Context, workspaceID uuid.UUID, slug string) (*domain.Agent, error)
 }
 
 // PublishEventInput holds parameters for publishing an event to the bus.

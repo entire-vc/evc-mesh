@@ -526,3 +526,7 @@ func (m *MockAgentService) ListSubAgents(ctx context.Context, parentID uuid.UUID
 func (m *MockAgentService) TouchLastSeen(_ context.Context, _ uuid.UUID) error {
 	return nil
 }
+
+func (m *MockAgentService) GetBySlug(_ context.Context, _ uuid.UUID, _ string) (*domain.Agent, error) {
+	return nil, nil
+}

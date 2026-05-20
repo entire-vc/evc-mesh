@@ -17,6 +17,31 @@ import (
 	"github.com/entire-vc/evc-mesh/pkg/pagination"
 )
 
+// setupCommentServiceWithMentions returns a commentService wired with mock notify + agent services.
+// Returns: svc, commentRepo, taskRepo, notifySvc, agentSvc, workspaceID, projectID.
+func setupCommentServiceWithMentions() (*commentService, *MockCommentRepository, *MockTaskRepository, *MockAgentNotifyService, *MockAgentService, uuid.UUID, uuid.UUID) {
+	commentRepo := NewMockCommentRepository()
+	taskRepo := NewMockTaskRepository()
+	activityRepo := NewMockActivityLogRepository()
+	projectRepo := NewMockProjectRepository()
+	notifySvc := NewMockAgentNotifyService()
+	agentSvc := NewMockAgentService()
+
+	wsID := uuid.New()
+	projID := uuid.New()
+	projectRepo.items[projID] = &domain.Project{ID: projID, WorkspaceID: wsID}
+
+	timeNow = func() time.Time { return frozenTime }
+
+	svc := NewCommentService(commentRepo, taskRepo, activityRepo,
+		WithCommentAgentNotify(notifySvc),
+		WithCommentAgentService(agentSvc),
+		WithCommentProjectRepo(projectRepo),
+	).(*commentService)
+
+	return svc, commentRepo, taskRepo, notifySvc, agentSvc, wsID, projID
+}
+
 // setupCommentService returns a commentService wired to fresh mocks.
 func setupCommentService() (*commentService, *MockCommentRepository, *MockTaskRepository) {
 	commentRepo := NewMockCommentRepository()
@@ -317,6 +342,191 @@ func TestCommentService_ListByTask(t *testing.T) {
 			assert.Len(t, page.Items, tt.wantLen)
 		})
 	}
+}
+
+// ---------------------------------------------------------------------------
+// TestExtractMentionSlugs
+// ---------------------------------------------------------------------------
+
+func TestExtractMentionSlugs(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  []string
+	}{
+		{"simple mention", "@bill hello", []string{"bill"}},
+		{"mention at start", "@bill", []string{"bill"}},
+		{"mention after space", "hey @bill!", []string{"bill"}},
+		{"mention in parens", "(@bill)", []string{"bill"}},
+		{"mention in brackets", "[@bill]", []string{"bill"}},
+		{"mention in braces", "{@bill}", []string{"bill"}},
+		{"multiple unique", "@alice and @bob", []string{"alice", "bob"}},
+		{"dedup same slug", "@alice @alice again", []string{"alice"}},
+		{"email address excluded", "email bar@foo.com is not a mention", nil},
+		{"hyphenated slug", "@bill-the-cat", []string{"bill-the-cat"}},
+		{"single char (too short)", "@a", nil},
+		{"uppercase normalized", "@BILL", nil},  // regex is lowercase only
+		{"no mentions", "plain text here", nil},
+		{"slug starting with hyphen rejected", "@-foo", nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := extractMentionSlugs(tt.input)
+			if len(tt.want) == 0 {
+				assert.Empty(t, got)
+			} else {
+				assert.Equal(t, tt.want, got)
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestNotifyMentions_*
+// ---------------------------------------------------------------------------
+
+func TestNotifyMentions_BasicMention(t *testing.T) {
+	svc, _, taskRepo, notifySvc, agentSvc, wsID, projID := setupCommentServiceWithMentions()
+
+	agent := &domain.Agent{ID: uuid.New(), WorkspaceID: wsID, Slug: "bill", Name: "Bill"}
+	agentSvc.AddAgent(wsID, agent)
+
+	taskID := uuid.New()
+	taskRepo.items[taskID] = &domain.Task{ID: taskID, ProjectID: projID, Title: "T"}
+
+	comment := &domain.Comment{ID: uuid.New(), TaskID: taskID, Body: "hey @bill check this"}
+	task := taskRepo.items[taskID]
+
+	svc.notifyMentions(context.Background(), comment, task, "", wsID)
+
+	calls := notifySvc.Calls()
+	require.Len(t, calls, 1)
+	assert.Equal(t, "task.mentioned", calls[0].EventType)
+	assert.Equal(t, agent.ID, calls[0].AgentID)
+	assert.Equal(t, map[string]any{"mentioned_slug": "bill"}, calls[0].Payload)
+}
+
+func TestNotifyMentions_SelfMentionSkipped(t *testing.T) {
+	svc, _, taskRepo, notifySvc, agentSvc, wsID, projID := setupCommentServiceWithMentions()
+
+	agentID := uuid.New()
+	agent := &domain.Agent{ID: agentID, WorkspaceID: wsID, Slug: "self-agent"}
+	agentSvc.AddAgent(wsID, agent)
+
+	taskID := uuid.New()
+	taskRepo.items[taskID] = &domain.Task{ID: taskID, ProjectID: projID}
+
+	comment := &domain.Comment{ID: uuid.New(), TaskID: taskID, Body: "@self-agent talking to myself"}
+	ctx := actorctx.WithActor(context.Background(), agentID, domain.ActorTypeAgent)
+
+	svc.notifyMentions(ctx, comment, taskRepo.items[taskID], "", wsID)
+
+	assert.Empty(t, notifySvc.Calls())
+}
+
+func TestNotifyMentions_NewOnlyOnEdit(t *testing.T) {
+	svc, _, taskRepo, notifySvc, agentSvc, wsID, projID := setupCommentServiceWithMentions()
+
+	alice := &domain.Agent{ID: uuid.New(), WorkspaceID: wsID, Slug: "alice"}
+	bob := &domain.Agent{ID: uuid.New(), WorkspaceID: wsID, Slug: "bob"}
+	agentSvc.AddAgent(wsID, alice)
+	agentSvc.AddAgent(wsID, bob)
+
+	taskID := uuid.New()
+	taskRepo.items[taskID] = &domain.Task{ID: taskID, ProjectID: projID}
+
+	// oldBody had @alice, new body adds @bob — only bob should be notified.
+	comment := &domain.Comment{ID: uuid.New(), TaskID: taskID, Body: "@alice and @bob"}
+	oldBody := "@alice something"
+	task := taskRepo.items[taskID]
+
+	svc.notifyMentions(context.Background(), comment, task, oldBody, wsID)
+
+	calls := notifySvc.Calls()
+	require.Len(t, calls, 1)
+	assert.Equal(t, bob.ID, calls[0].AgentID)
+}
+
+func TestNotifyMentions_DedupSameAgent(t *testing.T) {
+	svc, _, taskRepo, notifySvc, agentSvc, wsID, projID := setupCommentServiceWithMentions()
+
+	agent := &domain.Agent{ID: uuid.New(), WorkspaceID: wsID, Slug: "alice"}
+	agentSvc.AddAgent(wsID, agent)
+
+	taskID := uuid.New()
+	taskRepo.items[taskID] = &domain.Task{ID: taskID, ProjectID: projID}
+
+	comment := &domain.Comment{ID: uuid.New(), TaskID: taskID, Body: "@alice first and @alice again"}
+	task := taskRepo.items[taskID]
+
+	svc.notifyMentions(context.Background(), comment, task, "", wsID)
+
+	assert.Len(t, notifySvc.Calls(), 1)
+}
+
+func TestNotifyMentions_UnknownSlugSkipped(t *testing.T) {
+	svc, _, taskRepo, notifySvc, _, wsID, projID := setupCommentServiceWithMentions()
+
+	taskID := uuid.New()
+	taskRepo.items[taskID] = &domain.Task{ID: taskID, ProjectID: projID}
+
+	comment := &domain.Comment{ID: uuid.New(), TaskID: taskID, Body: "@noone is here"}
+	task := taskRepo.items[taskID]
+
+	require.NoError(t, func() error {
+		svc.notifyMentions(context.Background(), comment, task, "", wsID)
+		return nil
+	}())
+
+	assert.Empty(t, notifySvc.Calls())
+}
+
+func TestNotifyMentions_NoMentionsNoOp(t *testing.T) {
+	svc, _, taskRepo, notifySvc, _, wsID, projID := setupCommentServiceWithMentions()
+
+	taskID := uuid.New()
+	taskRepo.items[taskID] = &domain.Task{ID: taskID, ProjectID: projID}
+
+	comment := &domain.Comment{ID: uuid.New(), TaskID: taskID, Body: "just a plain comment"}
+	task := taskRepo.items[taskID]
+
+	svc.notifyMentions(context.Background(), comment, task, "", wsID)
+
+	assert.Empty(t, notifySvc.Calls())
+}
+
+// TestCommentService_Create_FiresMention verifies that Create triggers mention notifications.
+func TestCommentService_Create_FiresMention(t *testing.T) {
+	svc, _, taskRepo, notifySvc, agentSvc, wsID, projID := setupCommentServiceWithMentions()
+
+	agent := &domain.Agent{ID: uuid.New(), WorkspaceID: wsID, Slug: "garfield"}
+	agentSvc.AddAgent(wsID, agent)
+
+	taskID := uuid.New()
+	taskRepo.items[taskID] = &domain.Task{ID: taskID, ProjectID: projID, Title: "Test"}
+
+	comment := &domain.Comment{
+		TaskID:     taskID,
+		AuthorID:   uuid.New(),
+		AuthorType: domain.ActorTypeUser,
+		Body:       "please review @garfield",
+	}
+	require.NoError(t, svc.Create(context.Background(), comment))
+
+	mentionCalls := filterByEvent(notifySvc.Calls(), "task.mentioned")
+	require.Len(t, mentionCalls, 1)
+	assert.Equal(t, agent.ID, mentionCalls[0].AgentID)
+}
+
+// filterByEvent returns only the calls matching the given event_type.
+func filterByEvent(calls []AgentNotification, eventType string) []AgentNotification {
+	var out []AgentNotification
+	for _, c := range calls {
+		if c.EventType == eventType {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 // ---------------------------------------------------------------------------

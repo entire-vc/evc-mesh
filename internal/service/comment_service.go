@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"regexp"
 	"strings"
 
 	"github.com/google/uuid"
@@ -12,6 +13,26 @@ import (
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 	"github.com/entire-vc/evc-mesh/pkg/pagination"
 )
+
+// mentionRegex matches @-slug references in comment bodies.
+// Slug pattern mirrors agents.slug: starts/ends with alnum, middle may contain hyphens, 2-100 chars total.
+// The leading boundary allows start-of-string, whitespace, or open bracket/paren/brace.
+var mentionRegex = regexp.MustCompile(`(?:^|[\s(\[{])@([a-z0-9][a-z0-9-]{0,98}[a-z0-9])\b`)
+
+// extractMentionSlugs returns unique lowercase slugs found in body, preserving order.
+func extractMentionSlugs(body string) []string {
+	matches := mentionRegex.FindAllStringSubmatch(body, -1)
+	seen := make(map[string]bool, len(matches))
+	out := make([]string, 0, len(matches))
+	for _, m := range matches {
+		slug := strings.ToLower(m[1])
+		if !seen[slug] {
+			seen[slug] = true
+			out = append(out, slug)
+		}
+	}
+	return out
+}
 
 // truncateDesc truncates a string to maxLen characters.
 func truncateDesc(s string, maxLen int) string {
@@ -26,6 +47,7 @@ type commentService struct {
 	taskRepo       repository.TaskRepository
 	activityRepo   repository.ActivityLogRepository
 	agentNotifySvc AgentNotifyService
+	agentSvc       AgentService
 	notifySvc      NotificationService
 	statusRepo     repository.TaskStatusRepository
 	projectRepo    repository.ProjectRepository
@@ -38,6 +60,11 @@ type CommentServiceOption func(*commentService)
 // WithCommentAgentNotify sets the agent notification service on the comment service.
 func WithCommentAgentNotify(ans AgentNotifyService) CommentServiceOption {
 	return func(s *commentService) { s.agentNotifySvc = ans }
+}
+
+// WithCommentAgentService sets the agent service used to resolve @-mention slugs.
+func WithCommentAgentService(as AgentService) CommentServiceOption {
+	return func(s *commentService) { s.agentSvc = as }
 }
 
 // WithCommentStatusRepo sets the status repo for building task snapshots.
@@ -132,32 +159,17 @@ func (s *commentService) Create(ctx context.Context, comment *domain.Comment) er
 		s.ctxCacheInv.Invalidate(ctx, comment.TaskID)
 	}
 
+	// Resolve workspace ID once for all agent notifications.
+	var wsID uuid.UUID
+	if s.projectRepo != nil {
+		if proj, err := s.projectRepo.GetByID(ctx, task.ProjectID); err == nil && proj != nil {
+			wsID = proj.WorkspaceID
+		}
+	}
+
 	// Notify assigned agent about the new comment.
 	if s.agentNotifySvc != nil && task.AssigneeType == domain.AssigneeTypeAgent && task.AssigneeID != nil {
-		var wsID uuid.UUID
-		if s.projectRepo != nil {
-			if proj, err := s.projectRepo.GetByID(ctx, task.ProjectID); err == nil && proj != nil {
-				wsID = proj.WorkspaceID
-			}
-		}
-
-		taskSnap := map[string]any{
-			"id":            task.ID,
-			"project_id":    task.ProjectID,
-			"title":         task.Title,
-			"priority":      string(task.Priority),
-			"description":   truncateDesc(task.Description, 500),
-			"assignee_id":   task.AssigneeID,
-			"assignee_type": string(task.AssigneeType),
-			"labels":        task.Labels,
-		}
-		if s.statusRepo != nil {
-			if status, err := s.statusRepo.GetByID(ctx, task.StatusID); err == nil && status != nil {
-				taskSnap["status"] = map[string]any{
-					"id": status.ID, "name": status.Name, "category": string(status.Category),
-				}
-			}
-		}
+		taskSnap := s.buildTaskSnap(ctx, task)
 
 		commentBody := comment.Body
 		if len(commentBody) > 500 {
@@ -185,6 +197,11 @@ func (s *commentService) Create(ctx context.Context, comment *domain.Comment) er
 			TaskID:    task.ID,
 			ProjectID: task.ProjectID,
 		})
+	}
+
+	// Notify @-mentioned agents.
+	if wsID != uuid.Nil {
+		s.notifyMentions(ctx, comment, task, "", wsID)
 	}
 
 	// Dispatch in-app notification to subscribed workspace users for comment.created.
@@ -232,6 +249,7 @@ func (s *commentService) Update(ctx context.Context, comment *domain.Comment) er
 	}
 
 	// Only allow body updates; preserve other fields from the existing record.
+	oldBody := existing.Body
 	existing.Body = comment.Body
 	existing.UpdatedAt = timeNow()
 
@@ -245,6 +263,16 @@ func (s *commentService) Update(ctx context.Context, comment *domain.Comment) er
 	if s.ctxCacheInv != nil {
 		s.ctxCacheInv.Invalidate(ctx, existing.TaskID)
 	}
+
+	// Notify newly @-mentioned agents (diff against previous body).
+	if s.agentNotifySvc != nil && s.agentSvc != nil && s.projectRepo != nil {
+		if task, err := s.taskRepo.GetByID(ctx, existing.TaskID); err == nil && task != nil {
+			if proj, err := s.projectRepo.GetByID(ctx, task.ProjectID); err == nil && proj != nil {
+				s.notifyMentions(ctx, existing, task, oldBody, proj.WorkspaceID)
+			}
+		}
+	}
+
 	return nil
 }
 
@@ -276,4 +304,106 @@ func (s *commentService) Delete(ctx context.Context, id uuid.UUID) error {
 func (s *commentService) ListByTask(ctx context.Context, taskID uuid.UUID, filter repository.CommentFilter, pg pagination.Params) (*pagination.Page[domain.Comment], error) {
 	pg.Normalize()
 	return s.commentRepo.ListByTask(ctx, taskID, filter, pg)
+}
+
+// buildTaskSnap constructs the task snapshot map used in agent notifications.
+func (s *commentService) buildTaskSnap(ctx context.Context, task *domain.Task) map[string]any {
+	snap := map[string]any{
+		"id":            task.ID,
+		"project_id":    task.ProjectID,
+		"title":         task.Title,
+		"priority":      string(task.Priority),
+		"description":   truncateDesc(task.Description, 500),
+		"assignee_id":   task.AssigneeID,
+		"assignee_type": string(task.AssigneeType),
+		"labels":        task.Labels,
+	}
+	if s.statusRepo != nil {
+		if status, err := s.statusRepo.GetByID(ctx, task.StatusID); err == nil && status != nil {
+			snap["status"] = map[string]any{
+				"id": status.ID, "name": status.Name, "category": string(status.Category),
+			}
+		}
+	}
+	return snap
+}
+
+// notifyMentions sends task.mentioned events to agents @-mentioned in comment.Body.
+// When oldBody is non-empty, only slugs newly added (not in oldBody) are notified.
+func (s *commentService) notifyMentions(
+	ctx context.Context,
+	comment *domain.Comment,
+	task *domain.Task,
+	oldBody string,
+	workspaceID uuid.UUID,
+) {
+	if s.agentNotifySvc == nil || s.agentSvc == nil {
+		return
+	}
+	newSlugs := extractMentionSlugs(comment.Body)
+	if len(newSlugs) == 0 {
+		return
+	}
+	if oldBody != "" {
+		oldSet := make(map[string]bool)
+		for _, sl := range extractMentionSlugs(oldBody) {
+			oldSet[sl] = true
+		}
+		diff := newSlugs[:0]
+		for _, sl := range newSlugs {
+			if !oldSet[sl] {
+				diff = append(diff, sl)
+			}
+		}
+		newSlugs = diff
+		if len(newSlugs) == 0 {
+			return
+		}
+	}
+
+	actorID, actorType := actorctx.FromContext(ctx)
+	actorName := actorctx.NameFromContext(ctx)
+
+	commentBody := comment.Body
+	if len(commentBody) > 500 {
+		commentBody = commentBody[:500]
+	}
+
+	taskSnap := s.buildTaskSnap(ctx, task)
+	now := timeNow()
+
+	seen := make(map[uuid.UUID]bool)
+	for _, slug := range newSlugs {
+		agent, err := s.agentSvc.GetBySlug(ctx, workspaceID, slug)
+		if err != nil || agent == nil {
+			continue
+		}
+		if seen[agent.ID] {
+			continue
+		}
+		seen[agent.ID] = true
+		// Skip self-mention by an agent actor.
+		if actorType == domain.ActorTypeAgent && agent.ID == actorID {
+			continue
+		}
+
+		s.agentNotifySvc.NotifyAgent(ctx, agent.ID, AgentNotification{
+			EventType:   "task.mentioned",
+			Timestamp:   now,
+			WorkspaceID: workspaceID,
+			Task:        taskSnap,
+			AgentID:     agent.ID,
+			ActorID:     actorID,
+			ActorType:   string(actorType),
+			ActorName:   actorName,
+			Comment: map[string]any{
+				"id":        comment.ID,
+				"body":      commentBody,
+				"author_id": comment.AuthorID,
+			},
+			TaskID:    task.ID,
+			ProjectID: task.ProjectID,
+			Payload:   map[string]any{"mentioned_slug": slug},
+		})
+	}
 }

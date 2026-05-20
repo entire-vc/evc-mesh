@@ -168,6 +168,8 @@ type AgentRepository interface {
 	Create(ctx context.Context, agent *domain.Agent) error
 	GetByID(ctx context.Context, id uuid.UUID) (*domain.Agent, error)
 	GetByAPIKeyPrefix(ctx context.Context, workspaceID uuid.UUID, prefix string) (*domain.Agent, error)
+	// GetBySlug returns the agent with the given slug in a workspace, or (nil, nil) if not found.
+	GetBySlug(ctx context.Context, workspaceID uuid.UUID, slug string) (*domain.Agent, error)
 	Update(ctx context.Context, agent *domain.Agent) error
 	Delete(ctx context.Context, id uuid.UUID) error
 	List(ctx context.Context, workspaceID uuid.UUID, filter AgentFilter, pg pagination.Params) (*pagination.Page[domain.Agent], error)

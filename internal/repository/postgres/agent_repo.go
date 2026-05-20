@@ -393,6 +393,21 @@ type agentWithProjectsRow struct {
 	ProjectNames json.RawMessage `db:"project_names"`
 }
 
+// GetBySlug returns the agent with the given slug in a workspace.
+// Returns (nil, nil) when no matching agent is found.
+func (r *AgentRepo) GetBySlug(ctx context.Context, workspaceID uuid.UUID, slug string) (*domain.Agent, error) {
+	const q = `SELECT * FROM agents WHERE workspace_id = $1 AND slug = $2 AND deleted_at IS NULL`
+	var row agentRow
+	if err := r.db.GetContext(ctx, &row, q, workspaceID, slug); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	a := row.toDomain()
+	return &a, nil
+}
+
 // ListWithProjects returns all agents in a workspace, each annotated with the
 // list of project names they participate in through project_members.
 func (r *AgentRepo) ListWithProjects(ctx context.Context, workspaceID uuid.UUID) ([]repository.AgentWithProjects, error) {
