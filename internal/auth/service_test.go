@@ -70,7 +70,6 @@ func (r *mockUserRepo) GetByUsername(_ context.Context, _ uuid.UUID, _ string) (
 	return nil, nil
 }
 
-
 // ---
 
 type mockRefreshTokenRepo struct {

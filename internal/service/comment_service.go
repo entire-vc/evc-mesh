@@ -407,7 +407,7 @@ func (s *commentService) notifyMentions(
 					MentionedSlug: slug,
 					ExtractedAt:   now,
 				})
-				if s.agentNotifySvc != nil && !(actorType == domain.ActorTypeAgent && agent.ID == actorID) {
+				if s.agentNotifySvc != nil && (actorType != domain.ActorTypeAgent || agent.ID != actorID) {
 					s.agentNotifySvc.NotifyAgent(ctx, agent.ID, AgentNotification{
 						EventType:   "task.mentioned",
 						Timestamp:   now,
@@ -435,7 +435,7 @@ func (s *commentService) notifyMentions(
 		if s.userRepo != nil {
 			user, err := s.userRepo.GetByUsername(ctx, workspaceID, slug)
 			if err == nil && user != nil && !seenID[user.ID] &&
-				!(actorType == domain.ActorTypeUser && user.ID == actorID) {
+				(actorType != domain.ActorTypeUser || user.ID != actorID) {
 				seenID[user.ID] = true
 				dbRows = append(dbRows, domain.CommentMention{
 					CommentID:     comment.ID,
