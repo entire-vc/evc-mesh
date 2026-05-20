@@ -87,6 +87,7 @@ func main() {
 	notificationRepo := postgres.NewNotificationRepo(db)
 	autoTransRuleRepo := postgres.NewAutoTransitionRuleRepo(db)
 	memoryRepo := postgres.NewMemoryRepo(db)
+	commentMentionRepo := postgres.NewCommentMentionRepo(db)
 
 	// 5. Create auth service.
 	authService := auth.NewService(
@@ -182,6 +183,15 @@ func main() {
 	})
 	ctxCacheSvc := service.NewContextCacheService(ctxCacheRedis)
 
+	// WS badge publisher — dedicated Redis client so it can be injected into commentService
+	// before the shared ws hub Redis client is created in step 8a.
+	wsBadgeRedis := redis.NewClient(&redis.Options{
+		Addr:     cfg.Redis.Addr(),
+		Password: cfg.Redis.Password,
+		DB:       cfg.Redis.DB,
+	})
+	wsPublisher := service.NewRedisWSPublisher(wsBadgeRedis)
+
 	// RulesService (assignment/workflow config) is created before taskService for auto-assign injection.
 	rulesService := service.NewRulesServiceWithOptions(wsRuleRepo, projRuleRepo, ruleViolationLogRepo, agentRepo, workspaceMemberRepo, workspaceRepo, projectRepo,
 		service.WithRulesRuleRepo(ruleRepo),
@@ -215,9 +225,14 @@ func main() {
 	taskStatusService := service.NewTaskStatusService(taskStatusRepo, taskRepo, activityLogRepo)
 
 	// Real service implementations (replacing stubs from earlier sprints).
+	mentionService := service.NewMentionService(commentMentionRepo)
+
 	commentService := service.NewCommentService(commentRepo, taskRepo, activityLogRepo,
 		service.WithCommentAgentNotify(agentNotifySvc),
 		service.WithCommentAgentService(agentService),
+		service.WithCommentUserRepo(userRepo),
+		service.WithCommentMentionRepo(commentMentionRepo),
+		service.WithCommentWSPublisher(wsPublisher),
 		service.WithCommentStatusRepo(taskStatusRepo),
 		service.WithCommentProjectRepo(projectRepo),
 		service.WithCommentContextCacheInvalidator(ctxCacheSvc),
@@ -328,6 +343,7 @@ func main() {
 	notificationHandler := handler.NewNotificationHandler(notificationService)
 	autoTransHandler := handler.NewAutoTransitionHandler(autoTransitionSvc)
 	memoryHandler := handler.NewMemoryHandler(memoryService)
+	mentionHandler := handler.NewMentionHandler(mentionService)
 
 	// 8. Create Echo instance with global middleware.
 	e := echo.New()
@@ -673,6 +689,11 @@ func main() {
 	api.GET("/notifications/preferences", notificationHandler.GetPreferences)
 	api.PUT("/notifications/preferences", notificationHandler.UpdatePreferences)
 
+	// @mention inbox (REST).
+	api.GET("/me/mentions", mentionHandler.List)
+	api.GET("/me/mentions/unseen_count", mentionHandler.UnseenCount)
+	api.POST("/me/mentions/:comment_id/seen", mentionHandler.MarkSeen)
+
 	// Memory routes.
 	// NOTE: fixed-path routes (/memories/search, /memories/export, /memories/import,
 	// /memories/reindex) MUST be registered before /memories/:id to avoid the
@@ -793,6 +814,9 @@ func main() {
 	}
 	if err := ctxCacheRedis.Close(); err != nil {
 		log.Printf("Error closing context-cache Redis: %v", err)
+	}
+	if err := wsBadgeRedis.Close(); err != nil {
+		log.Printf("Error closing ws-badge Redis: %v", err)
 	}
 
 	// Close event bus.
