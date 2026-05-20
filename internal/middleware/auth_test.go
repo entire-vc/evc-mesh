@@ -294,6 +294,10 @@ func (m *mockAgentService) Authenticate(ctx context.Context, workspaceSlug, apiK
 
 func (m *mockAgentService) TouchLastSeen(_ context.Context, _ uuid.UUID) error { return nil }
 
+func (m *mockAgentService) GetBySlug(_ context.Context, _ uuid.UUID, _ string) (*domain.Agent, error) {
+	return nil, nil
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
