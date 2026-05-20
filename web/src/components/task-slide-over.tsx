@@ -13,6 +13,7 @@ import {
   Copy,
   ExternalLink,
   Hourglass,
+  Link,
   ListTree,
   Loader2,
   Package,
@@ -488,14 +489,26 @@ export function TaskSlideOver({
                   <Copy className="h-4 w-4" />
                 </button>
                 <a
-                  href={`/w/${currentProject?.slug ?? ""}/p/${currentProject?.slug ?? ""}/t/${currentTask.id}`}
+                  href={`/t/${currentTask.id}`}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="flex items-center gap-1 rounded p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                  title="Open full page"
+                  title="Open in new tab"
                 >
                   <ExternalLink className="h-4 w-4" />
                 </a>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const url = `${window.location.origin}/t/${currentTask.id}`;
+                    await navigator.clipboard.writeText(url);
+                    toast.success("Link copied");
+                  }}
+                  className="flex items-center gap-1 rounded p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                  title="Copy link"
+                >
+                  <Link className="h-4 w-4" />
+                </button>
               </>
             )}
             <button

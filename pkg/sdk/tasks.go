@@ -27,6 +27,8 @@ type Task struct {
 	CreatedAt      string         `json:"created_at"`
 	UpdatedAt      string         `json:"updated_at"`
 	CompletedAt    *string        `json:"completed_at,omitempty"`
+	// URL is the canonical short deep-link returned by the API.
+	URL string `json:"url,omitempty"`
 }
 
 // CreateTaskInput is the request body for creating a new task.

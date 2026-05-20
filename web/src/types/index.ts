@@ -205,6 +205,7 @@ export interface Task {
   subtask_count?: number;
   artifact_count?: number;
   vcs_link_count?: number;
+  url?: string;
   recurring_schedule_id?: string | null;
   recurring_instance_number?: number | null;
 }
