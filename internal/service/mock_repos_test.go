@@ -686,9 +686,9 @@ func (m *MockCommentRepository) GetByID(_ context.Context, id uuid.UUID) (*domai
 		return nil, nil
 	}
 	if m.enrichedAuthorName != nil {
-		copy := *c
-		copy.AuthorName = m.enrichedAuthorName
-		return &copy, nil
+		cp := *c
+		cp.AuthorName = m.enrichedAuthorName
+		return &cp, nil
 	}
 	return c, nil
 }
