@@ -33,6 +33,17 @@ jobs:
         working-directory: web
         run: pnpm build
 
+      - name: Verify SW cache version was injected
+        working-directory: web
+        run: |
+          if grep -q '__BUILD_HASH__' dist/sw.js; then
+            echo "::error::dist/sw.js still contains __BUILD_HASH__ placeholder; vite plugin did not run."
+            exit 1
+          fi
+          grep -E "^const CACHE_NAME = 'mesh-[0-9a-f]+';" dist/sw.js \
+            || (echo "::error::dist/sw.js CACHE_NAME does not match mesh-<hash> pattern"; exit 1)
+          echo "SW CACHE_NAME: $(grep CACHE_NAME dist/sw.js | head -1)"
+
       - name: Deploy to tw-mesh
         uses: burnett01/rsync-deployments@7.0.1
         with:

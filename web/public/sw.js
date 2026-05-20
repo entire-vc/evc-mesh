@@ -1,4 +1,6 @@
-const CACHE_NAME = 'mesh-v1';
+// CACHE_NAME is replaced at build time by the sw-cache-version vite plugin
+// (see vite.config.ts). In dev the placeholder is fine — no real caching needed.
+const CACHE_NAME = '__BUILD_HASH__';
 const PRECACHE_URLS = ['/', '/index.html'];
 
 self.addEventListener('install', (event) => {
