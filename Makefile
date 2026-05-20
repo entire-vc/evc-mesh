@@ -14,6 +14,17 @@ build:
 	go build -o $(API_BINARY) ./cmd/api
 	go build -o $(MCP_BINARY) ./cmd/mcp
 
+## build-prod: Cross-compile API binary for Linux/amd64 with embedded build metadata
+build-prod:
+	@mkdir -p $(BIN_DIR)
+	GOOS=linux GOARCH=amd64 go build \
+	  -ldflags "-w -s \
+	    -X main.BuildSHA=$(shell git rev-parse HEAD) \
+	    -X main.BuildTime=$(shell date -u +%Y-%m-%dT%H:%M:%SZ) \
+	    -X main.BuildVersion=$(shell git describe --tags --always 2>/dev/null || echo dev) \
+	    -X main.BuildEnv=prod" \
+	  -o $(API_BINARY) ./cmd/api
+
 ## test: Run all tests with race detection
 test:
 	go test -race -count=1 ./...
