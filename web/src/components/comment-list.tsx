@@ -17,6 +17,7 @@ import type { ActorType, Comment, CreateCommentRequest, PaginatedResponse } from
 
 interface CommentListProps {
   taskId: string;
+  inline?: boolean;
 }
 
 function ActorIcon({ type }: { type: ActorType }) {
@@ -135,7 +136,7 @@ function CommentItem({
   );
 }
 
-export function CommentList({ taskId }: CommentListProps) {
+export function CommentList({ taskId, inline = false }: CommentListProps) {
   const [comments, setComments] = useState<Comment[]>([]);
   const [loading, setLoading] = useState(true);
   const [body, setBody] = useState("");
@@ -259,9 +260,9 @@ export function CommentList({ taskId }: CommentListProps) {
     : null;
 
   return (
-    <div className="flex flex-1 flex-col overflow-hidden">
+    <div className={inline ? "flex flex-col" : "flex flex-1 flex-col overflow-hidden"}>
       {/* Scrollable comments list */}
-      <div className="flex-1 overflow-y-auto p-4">
+      <div className={inline ? "p-4" : "flex-1 overflow-y-auto p-4"}>
         {topLevel.length === 0 && (
           <p className="py-4 text-center text-sm text-muted-foreground">
             No comments yet. Be the first to comment.

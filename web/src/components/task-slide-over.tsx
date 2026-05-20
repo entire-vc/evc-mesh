@@ -7,6 +7,7 @@ import {
   useState,
 } from "react";
 import {
+  Activity,
   ArrowLeft,
   Bot,
   Check,
@@ -17,6 +18,7 @@ import {
   Link,
   ListTree,
   Loader2,
+  MessageSquare,
   Package,
   Pencil,
   SlidersHorizontal,
@@ -63,6 +65,7 @@ import type { AssigneeType, Priority } from "@/types";
 
 type BottomTabId = "subtasks" | "artifacts";
 type RightTabId = "comments" | "activity";
+type MobileTabId = "subtasks" | "artifacts" | "comments" | "activity";
 
 const priorities: Priority[] = ["urgent", "high", "medium", "low", "none"];
 
@@ -113,6 +116,7 @@ export function TaskSlideOver({
   const [loading, setLoading] = useState(false);
   const [bottomTab, setBottomTab] = useState<BottomTabId>("subtasks");
   const [rightTab, setRightTab] = useState<RightTabId>("comments");
+  const [mobileTab, setMobileTab] = useState<MobileTabId>("subtasks");
   const [hideEmpty, setHideEmpty] = useState(true);
 
   // Inline title editing
@@ -201,6 +205,13 @@ export function TaskSlideOver({
     }
   }, [currentTask]);
 
+  // Default mobile tab: subtasks when task has any, otherwise comments
+  useEffect(() => {
+    if (!currentTask) return;
+    setMobileTab((currentTask.subtask_count ?? 0) > 0 ? "subtasks" : "comments");
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentTask?.id]);
+
   // Focus title input when editing starts
   useEffect(() => {
     if (editingTitle) {
@@ -230,6 +241,7 @@ export function TaskSlideOver({
   const pushTask = useCallback((id: string) => {
     setTaskIdStack((s) => [...s, id]);
     setBottomTab("subtasks");
+    setMobileTab("subtasks");
   }, []);
 
   const popTask = useCallback(() => {
@@ -991,7 +1003,97 @@ export function TaskSlideOver({
 
                 {/* ---- Bottom tabs --------------------------------------- */}
                 <div>
-                  <div className="flex border-b border-border">
+                  {/* Mobile: unified 4-tab bar (hidden on lg+) */}
+                  <div className="flex overflow-x-auto border-b border-border lg:hidden">
+                    <button
+                      type="button"
+                      className={cn(
+                        "flex shrink-0 items-center gap-1.5 border-b-2 px-3 py-2 text-xs font-medium transition-colors",
+                        mobileTab === "subtasks"
+                          ? "border-primary text-foreground"
+                          : "border-transparent text-muted-foreground hover:border-border hover:text-foreground",
+                      )}
+                      onClick={() => setMobileTab("subtasks")}
+                    >
+                      <ListTree className="h-3.5 w-3.5" />
+                      Subtasks
+                      {currentTask.subtask_count != null &&
+                        currentTask.subtask_count > 0 && (
+                          <Badge variant="secondary" className="text-[10px]">
+                            {currentTask.subtask_count}
+                          </Badge>
+                        )}
+                    </button>
+                    <button
+                      type="button"
+                      className={cn(
+                        "flex shrink-0 items-center gap-1.5 border-b-2 px-3 py-2 text-xs font-medium transition-colors",
+                        mobileTab === "artifacts"
+                          ? "border-primary text-foreground"
+                          : "border-transparent text-muted-foreground hover:border-border hover:text-foreground",
+                      )}
+                      onClick={() => setMobileTab("artifacts")}
+                    >
+                      <Package className="h-3.5 w-3.5" />
+                      Artifacts
+                      {currentTask.artifact_count != null &&
+                        currentTask.artifact_count > 0 && (
+                          <Badge variant="secondary" className="text-[10px]">
+                            {currentTask.artifact_count}
+                          </Badge>
+                        )}
+                    </button>
+                    <button
+                      type="button"
+                      className={cn(
+                        "flex shrink-0 items-center gap-1.5 border-b-2 px-3 py-2 text-xs font-medium transition-colors",
+                        mobileTab === "comments"
+                          ? "border-primary text-foreground"
+                          : "border-transparent text-muted-foreground hover:border-border hover:text-foreground",
+                      )}
+                      onClick={() => setMobileTab("comments")}
+                    >
+                      <MessageSquare className="h-3.5 w-3.5" />
+                      Comments
+                    </button>
+                    <button
+                      type="button"
+                      className={cn(
+                        "flex shrink-0 items-center gap-1.5 border-b-2 px-3 py-2 text-xs font-medium transition-colors",
+                        mobileTab === "activity"
+                          ? "border-primary text-foreground"
+                          : "border-transparent text-muted-foreground hover:border-border hover:text-foreground",
+                      )}
+                      onClick={() => setMobileTab("activity")}
+                    >
+                      <Activity className="h-3.5 w-3.5" />
+                      Activity
+                    </button>
+                  </div>
+
+                  {/* Mobile tab content (hidden on lg+) */}
+                  <div className="pt-3 lg:hidden">
+                    {mobileTab === "subtasks" && (
+                      <SubtaskList
+                        taskId={currentTask.id}
+                        onOpenSubtask={pushTask}
+                      />
+                    )}
+                    {mobileTab === "artifacts" && (
+                      <ArtifactList taskId={currentTask.id} />
+                    )}
+                    {mobileTab === "comments" && (
+                      <CommentList taskId={currentTask.id} inline />
+                    )}
+                    {mobileTab === "activity" && (
+                      <div className="p-4">
+                        <ActivityLog taskId={currentTask.id} />
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Desktop: subtasks/artifacts tab bar (hidden on <lg) */}
+                  <div className="hidden border-b border-border lg:flex">
                     <button
                       type="button"
                       className={cn(
@@ -1031,7 +1133,9 @@ export function TaskSlideOver({
                         )}
                     </button>
                   </div>
-                  <div className="pt-3">
+
+                  {/* Desktop tab content (hidden on <lg) */}
+                  <div className="hidden pt-3 lg:block">
                     {bottomTab === "subtasks" && (
                       <SubtaskList
                         taskId={currentTask.id}
@@ -1049,7 +1153,7 @@ export function TaskSlideOver({
             {/* ============================================================= */}
             {/* RIGHT PANEL — Activity + Comments                             */}
             {/* ============================================================= */}
-            <div className="flex w-full shrink-0 flex-col overflow-hidden border-t border-border lg:w-[340px] lg:border-t-0 xl:w-[380px]">
+            <div className="hidden w-full shrink-0 flex-col overflow-hidden lg:flex lg:w-[340px] xl:w-[380px]">
               {/* Tab bar */}
               <div className="flex shrink-0 border-b border-border">
                 <button
