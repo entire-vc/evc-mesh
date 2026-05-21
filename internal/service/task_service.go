@@ -30,6 +30,7 @@ type taskService struct {
 	customFieldSvc    CustomFieldService
 	projectRepo       repository.ProjectRepository
 	projectMemberRepo repository.ProjectMemberRepository
+	agentRepo         repository.AgentRepository
 	autoTransSvc      AutoTransitionService
 	ruleSvc           RuleService
 	rulesConfigSvc    RulesService
@@ -146,6 +147,15 @@ func WithNotificationService(ns NotificationService) TaskServiceOption {
 func WithProjectMemberRepoTask(pmr repository.ProjectMemberRepository) TaskServiceOption {
 	return func(s *taskService) {
 		s.projectMemberRepo = pmr
+	}
+}
+
+// WithTaskAgentRepo sets the agent repository used to resolve holder names
+// when building CheckoutConflictError responses. When unset, the 409 response
+// still includes the UUID — only the human-readable name is omitted.
+func WithTaskAgentRepo(ar repository.AgentRepository) TaskServiceOption {
+	return func(s *taskService) {
+		s.agentRepo = ar
 	}
 }
 
@@ -436,6 +446,33 @@ func (s *taskService) MoveTask(ctx context.Context, taskID uuid.UUID, input Move
 	if s.ctxCacheInv != nil {
 		s.ctxCacheInv.Invalidate(ctx, taskID)
 	}
+
+	// Auto-release checkout when the task transitions to a terminal category
+	// (done, review, cancelled). The current holder is unlikely to call
+	// release_task on a task they just handed off, and a stale lock blocks
+	// other agents from picking it up after the move.
+	if statusChanged && task.CheckedOutBy != nil {
+		if newStatus, err := s.statusRepo.GetByID(ctx, task.StatusID); err == nil && newStatus != nil {
+			switch newStatus.Category {
+			case domain.StatusCategoryDone, domain.StatusCategoryReview, domain.StatusCategoryCancelled:
+				previousHolder := task.CheckedOutBy.String()
+				if relErr := s.taskRepo.ForceReleaseCheckout(ctx, taskID); relErr != nil {
+					log.Printf("[checkout-auto-release] WARNING: failed to release checkout on task %s: %v", taskID, relErr)
+				} else {
+					s.logActivity(ctx, task.ProjectID, taskID, "task.checkout_released_auto", map[string]interface{}{
+						"reason":          "terminal_status_transition",
+						"new_status":      newStatus.Name,
+						"new_category":    string(newStatus.Category),
+						"previous_holder": previousHolder,
+					})
+					task.CheckedOutBy = nil
+					task.CheckoutToken = nil
+					task.CheckoutExpires = nil
+				}
+			}
+		}
+	}
+
 	moveChanges := map[string]interface{}{}
 	if statusChanged {
 		// Resolve status names for human-readable activity log.
@@ -1118,7 +1155,9 @@ func (s *taskService) MoveToProject(ctx context.Context, taskID, targetProjectID
 // CheckoutTask acquires an exclusive application-level lock on the task for the
 // calling agent. The TTL is clamped to [1, 240] minutes; default is 15.
 // Only agents may checkout — users should assign tasks instead.
-func (s *taskService) CheckoutTask(ctx context.Context, taskID uuid.UUID, ttlMinutes int) (*CheckoutResult, error) {
+// sessionMetadata is recorded into the activity log entry (forensics) and is
+// never persisted on the task row, so the schema is unchanged.
+func (s *taskService) CheckoutTask(ctx context.Context, taskID uuid.UUID, ttlMinutes int, sessionMetadata map[string]interface{}) (*CheckoutResult, error) {
 	actorID, actorType := actorctx.FromContext(ctx)
 	if actorType != domain.ActorTypeAgent || actorID == uuid.Nil {
 		return nil, apierror.BadRequest("only agents can checkout tasks")
@@ -1140,14 +1179,32 @@ func (s *taskService) CheckoutTask(ctx context.Context, taskID uuid.UUID, ttlMin
 			// Fetch the task to surface the current holder's info in the error.
 			task, fetchErr := s.taskRepo.GetByID(ctx, taskID)
 			if fetchErr == nil && task != nil && task.CheckedOutBy != nil && task.CheckoutExpires != nil {
-				return nil, &CheckoutConflictError{
-					CheckedOutBy: *task.CheckedOutBy,
-					ExpiresAt:    *task.CheckoutExpires,
+				conflict := &CheckoutConflictError{
+					CheckedOutBy:     *task.CheckedOutBy,
+					CheckedOutByKind: "agent",
+					ExpiresAt:        *task.CheckoutExpires,
 				}
+				if s.agentRepo != nil {
+					if agent, agentErr := s.agentRepo.GetByID(ctx, *task.CheckedOutBy); agentErr == nil && agent != nil {
+						conflict.CheckedOutByName = agent.Name
+					}
+				}
+				return nil, conflict
 			}
 			return nil, err
 		}
 		return nil, err
+	}
+
+	if task, fetchErr := s.taskRepo.GetByID(ctx, taskID); fetchErr == nil && task != nil {
+		payload := map[string]interface{}{
+			"expires_at": expiresAt.Format(time.RFC3339),
+			"ttl_min":    ttlMinutes,
+		}
+		if len(sessionMetadata) > 0 {
+			payload["session_metadata"] = sessionMetadata
+		}
+		s.logActivity(ctx, task.ProjectID, taskID, "task.checkout_acquired", payload)
 	}
 
 	return &CheckoutResult{
@@ -1208,4 +1265,20 @@ func (s *taskService) ExtendCheckout(ctx context.Context, taskID, token uuid.UUI
 		CheckedOutBy:  *task.CheckedOutBy,
 		ExpiresAt:     newExpires,
 	}, nil
+}
+
+// ForceReleaseCheckout clears the checkout without token verification.
+// The handler layer must enforce authorization before calling this — the
+// service trusts its caller and performs the release unconditionally.
+func (s *taskService) ForceReleaseCheckout(ctx context.Context, taskID uuid.UUID) error {
+	if err := s.taskRepo.ForceReleaseCheckout(ctx, taskID); err != nil {
+		return err
+	}
+	actorID, _ := actorctx.FromContext(ctx)
+	if task, err := s.taskRepo.GetByID(ctx, taskID); err == nil && task != nil {
+		s.logActivity(ctx, task.ProjectID, taskID, "task.checkout_force_released", map[string]interface{}{
+			"actor_id": actorID.String(),
+		})
+	}
+	return nil
 }

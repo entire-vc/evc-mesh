@@ -81,13 +81,19 @@ type CheckoutResult struct {
 }
 
 // CheckoutConflictError is returned when CheckoutTask finds the task locked by
-// a different non-expired agent.
+// a different non-expired agent. CheckedOutByName and CheckedOutByKind are
+// best-effort: empty when the holder lookup fails (e.g. agent record deleted).
 type CheckoutConflictError struct {
-	CheckedOutBy uuid.UUID
-	ExpiresAt    time.Time
+	CheckedOutBy     uuid.UUID
+	CheckedOutByName string
+	CheckedOutByKind string
+	ExpiresAt        time.Time
 }
 
 func (e *CheckoutConflictError) Error() string {
+	if e.CheckedOutByName != "" {
+		return fmt.Sprintf("task is already checked out by %s (%s) until %s", e.CheckedOutByName, e.CheckedOutBy, e.ExpiresAt.Format(time.RFC3339))
+	}
 	return fmt.Sprintf("task is already checked out by %s until %s", e.CheckedOutBy, e.ExpiresAt.Format(time.RFC3339))
 }
 
@@ -107,14 +113,20 @@ type TaskService interface {
 	BulkUpdate(ctx context.Context, projectID uuid.UUID, input BulkUpdateTasksInput) BulkUpdateTasksResult
 	// CheckoutTask acquires an exclusive application-level lock on the task for the
 	// calling agent. Only agents may checkout. Returns CheckoutConflictError when the
-	// task is already locked by a different non-expired agent.
-	CheckoutTask(ctx context.Context, taskID uuid.UUID, ttlMinutes int) (*CheckoutResult, error)
+	// task is already locked by a different non-expired agent. sessionMetadata is
+	// optional forensic context (hostname, pid, branch, etc.) recorded into the
+	// activity log entry — pass nil to omit.
+	CheckoutTask(ctx context.Context, taskID uuid.UUID, ttlMinutes int, sessionMetadata map[string]interface{}) (*CheckoutResult, error)
 	// ReleaseCheckout releases the checkout identified by the given token.
 	// Returns an error when the token does not match.
 	ReleaseCheckout(ctx context.Context, taskID, token uuid.UUID) error
 	// ExtendCheckout extends the checkout TTL identified by the given token.
 	// Returns an error when the token does not match or the checkout has expired.
 	ExtendCheckout(ctx context.Context, taskID, token uuid.UUID, ttlMinutes int) (*CheckoutResult, error)
+	// ForceReleaseCheckout clears the checkout without token verification.
+	// Intended for admin recovery when the holder cannot release the lock
+	// (e.g. crash, lost token). Callers must enforce authorization themselves.
+	ForceReleaseCheckout(ctx context.Context, taskID uuid.UUID) error
 	// MoveToProject moves a task to a different project, resetting status to the
 	// target project's default and recalculating task_number atomically.
 	// Returns an error if the task is already in the target project.

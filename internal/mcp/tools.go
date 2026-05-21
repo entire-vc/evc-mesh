@@ -1791,8 +1791,9 @@ func (s *Server) handleCheckoutTask(ctx context.Context, request mcpsdk.CallTool
 	if taskID == "" {
 		return errResult("task_id is required")
 	}
+	ttlMinutes := int(mcpsdk.ParseFloat64(request, "ttl_minutes", 0))
 
-	result, err := s.getRESTClient(ctx).CheckoutTask(ctx, taskID)
+	result, err := s.getRESTClient(ctx).CheckoutTask(ctx, taskID, ttlMinutes)
 	if err != nil {
 		return errResult("checkout_task failed: %v", err)
 	}
@@ -1805,12 +1806,35 @@ func (s *Server) handleReleaseTask(ctx context.Context, request mcpsdk.CallToolR
 	if taskID == "" {
 		return errResult("task_id is required")
 	}
+	checkoutToken := mcpsdk.ParseString(request, "checkout_token", "")
+	if checkoutToken == "" {
+		return errResult("checkout_token is required (returned by checkout_task)")
+	}
 
-	if err := s.getRESTClient(ctx).ReleaseTask(ctx, taskID); err != nil {
+	if err := s.getRESTClient(ctx).ReleaseTask(ctx, taskID, checkoutToken); err != nil {
 		return errResult("release_task failed: %v", err)
 	}
 
 	return jsonResult(map[string]any{"released": true, "task_id": taskID})
+}
+
+func (s *Server) handleExtendCheckout(ctx context.Context, request mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
+	taskID := mcpsdk.ParseString(request, "task_id", "")
+	if taskID == "" {
+		return errResult("task_id is required")
+	}
+	checkoutToken := mcpsdk.ParseString(request, "checkout_token", "")
+	if checkoutToken == "" {
+		return errResult("checkout_token is required (returned by checkout_task)")
+	}
+	ttlMinutes := int(mcpsdk.ParseFloat64(request, "ttl_minutes", 0))
+
+	result, err := s.getRESTClient(ctx).ExtendCheckout(ctx, taskID, checkoutToken, ttlMinutes)
+	if err != nil {
+		return errResult("extend_checkout failed: %v", err)
+	}
+
+	return jsonResult(result)
 }
 
 // ============================================================================

@@ -625,8 +625,13 @@ func (h *TaskHandler) BulkUpdate(c echo.Context) error {
 }
 
 // checkoutRequest represents the JSON body for POST /tasks/:task_id/checkout.
+// checkoutRequest represents the JSON body for POST /tasks/:task_id/checkout.
+// SessionMetadata is optional forensic context (hostname, pid, branch, etc.)
+// that is recorded into the activity log entry only — never persisted on
+// the task row, so the schema is unchanged.
 type checkoutRequest struct {
-	TTLMinutes int `json:"ttl_minutes"`
+	TTLMinutes      int                    `json:"ttl_minutes"`
+	SessionMetadata map[string]interface{} `json:"session_metadata,omitempty"`
 }
 
 // releaseCheckoutRequest represents the JSON body for DELETE /tasks/:task_id/checkout.
@@ -652,17 +657,27 @@ func (h *TaskHandler) Checkout(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
 	}
 
-	result, err := h.taskService.CheckoutTask(c.Request().Context(), taskID, req.TTLMinutes)
+	result, err := h.taskService.CheckoutTask(c.Request().Context(), taskID, req.TTLMinutes, req.SessionMetadata)
 	if err != nil {
 		var conflict *service.CheckoutConflictError
 		if errors.As(err, &conflict) {
+			details := map[string]interface{}{
+				"checked_out_by": conflict.CheckedOutBy,
+				"expires_at":     conflict.ExpiresAt,
+			}
+			if conflict.CheckedOutByName != "" {
+				details["checked_out_by_name"] = conflict.CheckedOutByName
+			}
+			if conflict.CheckedOutByKind != "" {
+				details["checked_out_by_kind"] = conflict.CheckedOutByKind
+			}
+			if remaining := time.Until(conflict.ExpiresAt); remaining > 0 {
+				details["expires_in_seconds"] = int(remaining.Seconds())
+			}
 			return c.JSON(http.StatusConflict, map[string]interface{}{
 				"code":    409,
 				"message": "Task is already checked out",
-				"details": map[string]interface{}{
-					"checked_out_by": conflict.CheckedOutBy,
-					"expires_at":     conflict.ExpiresAt,
-				},
+				"details": details,
 			})
 		}
 		return handleError(c, err)
@@ -671,11 +686,23 @@ func (h *TaskHandler) Checkout(c echo.Context) error {
 	return c.JSON(http.StatusOK, result)
 }
 
-// ReleaseCheckout handles DELETE /tasks/:task_id/checkout
+// ReleaseCheckout handles DELETE /tasks/:task_id/checkout.
+//
+// When the ?force=true query parameter is present, the request is treated as
+// an admin force-unlock: no checkout_token is required, but the caller must
+// be authenticated. Stricter RBAC (workspace.admin) is not enforced here yet
+// — see admin-RBAC TODO in the design doc.
 func (h *TaskHandler) ReleaseCheckout(c echo.Context) error {
 	taskID, err := uuid.Parse(c.Param("task_id"))
 	if err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid task_id"))
+	}
+
+	if c.QueryParam("force") == "true" {
+		if forceErr := h.taskService.ForceReleaseCheckout(c.Request().Context(), taskID); forceErr != nil {
+			return handleError(c, forceErr)
+		}
+		return c.NoContent(http.StatusNoContent)
 	}
 
 	var req releaseCheckoutRequest

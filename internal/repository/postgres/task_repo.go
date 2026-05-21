@@ -572,6 +572,24 @@ func (r *TaskRepo) MoveToProject(ctx context.Context, taskID, targetProjectID, t
 	return nil
 }
 
+// ForceReleaseCheckout clears the checkout fields without token verification.
+// Used by the service layer for auto-release on terminal status transitions
+// (done/review/cancelled) and for admin force-unlock via the
+// `DELETE /tasks/:id/checkout?force=true` endpoint. Returns nil even when the
+// task held no checkout — the caller treats this as idempotent cleanup.
+func (r *TaskRepo) ForceReleaseCheckout(ctx context.Context, taskID uuid.UUID) error {
+	const query = `
+		UPDATE tasks
+		SET checked_out_by  = NULL,
+		    checkout_token   = NULL,
+		    checkout_expires = NULL,
+		    updated_at       = now()
+		WHERE id = $1
+		  AND deleted_at IS NULL`
+	_, err := r.db.ExecContext(ctx, query, taskID)
+	return err
+}
+
 // ExtendCheckout pushes the checkout_expires deadline forward. The token must match
 // and the existing checkout must not already be expired (to prevent hijacking an
 // expired slot via extend).
