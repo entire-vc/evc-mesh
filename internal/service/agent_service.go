@@ -337,3 +337,9 @@ func (s *agentService) RotateAPIKey(ctx context.Context, agentID uuid.UUID) (str
 
 	return rawKey, nil
 }
+
+// GetBySlug returns the agent with the given slug in a workspace.
+// Returns (nil, nil) when no matching agent exists.
+func (s *agentService) GetBySlug(ctx context.Context, workspaceID uuid.UUID, slug string) (*domain.Agent, error) {
+	return s.agentRepo.GetBySlug(ctx, workspaceID, slug)
+}

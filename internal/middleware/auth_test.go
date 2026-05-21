@@ -72,6 +72,9 @@ func (r *mockUserRepo) Update(_ context.Context, user *domain.User) error {
 func (r *mockUserRepo) SearchUsers(_ context.Context, _ string, _ int) ([]domain.User, error) {
 	return nil, nil
 }
+func (r *mockUserRepo) GetByUsername(_ context.Context, _ uuid.UUID, _ string) (*domain.User, error) {
+	return nil, nil
+}
 
 type mockRefreshTokenRepo struct {
 	mu     sync.RWMutex
@@ -293,6 +296,10 @@ func (m *mockAgentService) Authenticate(ctx context.Context, workspaceSlug, apiK
 }
 
 func (m *mockAgentService) TouchLastSeen(_ context.Context, _ uuid.UUID) error { return nil }
+
+func (m *mockAgentService) GetBySlug(_ context.Context, _ uuid.UUID, _ string) (*domain.Agent, error) {
+	return nil, nil
+}
 
 // ---------------------------------------------------------------------------
 // Helpers

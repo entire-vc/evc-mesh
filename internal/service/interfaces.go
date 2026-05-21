@@ -237,6 +237,8 @@ type AgentService interface {
 	// TouchLastSeen bumps the agent's last_heartbeat without changing status.
 	// Called when an SSE connection is opened.
 	TouchLastSeen(ctx context.Context, agentID uuid.UUID) error
+	// GetBySlug returns the agent with the given slug in a workspace, or (nil, nil) if not found.
+	GetBySlug(ctx context.Context, workspaceID uuid.UUID, slug string) (*domain.Agent, error)
 }
 
 // PublishEventInput holds parameters for publishing an event to the bus.
@@ -606,6 +608,19 @@ type SetProjectKnowledgeInput struct {
 	Tags        []string // additional tags
 	SourceType  string   // "agent" | "human"
 	SourceURL   *string
+}
+
+// WSPublisher publishes JSON-encoded events to a Redis pub/sub channel
+// for delivery to connected WebSocket clients.
+type WSPublisher interface {
+	Publish(ctx context.Context, channel string, event any) error
+}
+
+// MentionService provides business logic for comment @-mentions.
+type MentionService interface {
+	List(ctx context.Context, mentionedID uuid.UUID, mentionedKind string, filter repository.MentionFilter) ([]domain.CommentMentionView, error)
+	MarkSeen(ctx context.Context, commentID, mentionedID uuid.UUID) error
+	CountUnseen(ctx context.Context, mentionedID uuid.UUID, mentionedKind string) (int64, error)
 }
 
 // MemoryService provides business logic for agent persistent memory.

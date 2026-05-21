@@ -66,6 +66,9 @@ func (m *activityMockRepo) GetAgentActivityLog(_ context.Context, _ uuid.UUID) (
 func (m *activityMockRepo) GetAgentByID(_ context.Context, _ uuid.UUID) (*domain.Agent, error) {
 	return nil, nil
 }
+func (m *activityMockRepo) GetBySlug(_ context.Context, _ uuid.UUID, _ string) (*domain.Agent, error) {
+	return nil, nil
+}
 
 // Ensure compile-time interface compliance.
 var _ repository.AgentRepository = (*activityMockRepo)(nil)
