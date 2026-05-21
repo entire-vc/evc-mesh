@@ -149,3 +149,13 @@ export async function api<T>(
 
   return data as T;
 }
+
+export async function getMentionables(
+  workspaceId: string,
+  query: string,
+): Promise<import("@/types").Mentionable[]> {
+  return api<import("@/types").Mentionable[]>(
+    `/api/v1/workspaces/${workspaceId}/mentionables`,
+    { params: { q: query, limit: 20 } },
+  );
+}

@@ -623,6 +623,11 @@ type MentionService interface {
 	CountUnseen(ctx context.Context, mentionedID uuid.UUID, mentionedKind string) (int64, error)
 }
 
+// MentionablesService searches for @-mentionable workspace members (agents and users).
+type MentionablesService interface {
+	Search(ctx context.Context, workspaceID uuid.UUID, query string, limit int) ([]domain.Mentionable, error)
+}
+
 // MemoryService provides business logic for agent persistent memory.
 type MemoryService interface {
 	Remember(ctx context.Context, mem *domain.Memory) (string, error) // returns "created" or "updated"

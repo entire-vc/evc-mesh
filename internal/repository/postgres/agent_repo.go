@@ -449,3 +449,24 @@ func (r *AgentRepo) ListWithProjects(ctx context.Context, workspaceID uuid.UUID)
 	}
 	return result, nil
 }
+
+// SearchByPrefix returns agents in the workspace whose name or slug match the prefix (ILIKE),
+// sorted by exact-prefix match first then name, up to limit results.
+func (r *AgentRepo) SearchByPrefix(ctx context.Context, workspaceID uuid.UUID, prefix string, limit int) ([]domain.Agent, error) {
+	const q = `
+		SELECT * FROM agents
+		WHERE workspace_id = $1 AND deleted_at IS NULL
+		  AND (name ILIKE $2 OR slug ILIKE $2)
+		ORDER BY
+		  CASE WHEN slug ILIKE $3 OR name ILIKE $3 THEN 0 ELSE 1 END,
+		  name
+		LIMIT $4
+	`
+	pattern := "%" + prefix + "%"
+	prefixPattern := prefix + "%"
+	var rows []agentRow
+	if err := r.db.SelectContext(ctx, &rows, q, workspaceID, pattern, prefixPattern, limit); err != nil {
+		return nil, err
+	}
+	return agentRowsToSlice(rows), nil
+}

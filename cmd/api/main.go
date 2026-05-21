@@ -344,6 +344,8 @@ func main() {
 	autoTransHandler := handler.NewAutoTransitionHandler(autoTransitionSvc)
 	memoryHandler := handler.NewMemoryHandler(memoryService)
 	mentionHandler := handler.NewMentionHandler(mentionService)
+	mentionablesService := service.NewMentionablesService(agentRepo, userRepo)
+	mentionablesHandler := handler.NewMentionablesHandler(mentionablesService)
 
 	// 8. Create Echo instance with global middleware.
 	e := echo.New()
@@ -695,6 +697,7 @@ func main() {
 	api.GET("/me/mentions", mentionHandler.List)
 	api.GET("/me/mentions/unseen_count", mentionHandler.UnseenCount)
 	api.POST("/me/mentions/:comment_id/seen", mentionHandler.MarkSeen)
+	api.GET("/workspaces/:ws_id/mentionables", mentionablesHandler.Search)
 
 	// Memory routes.
 	// NOTE: fixed-path routes (/memories/search, /memories/export, /memories/import,
