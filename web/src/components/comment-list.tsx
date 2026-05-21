@@ -2,6 +2,7 @@ import {
   type FormEvent,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -13,6 +14,9 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { MarkdownRenderer, type MentionEntry } from "@/components/markdown-renderer";
+import { useRulesStore } from "@/stores/rules";
+import { useWorkspaceStore } from "@/stores/workspace";
 import type { ActorType, Comment, CreateCommentRequest, PaginatedResponse } from "@/types";
 
 interface CommentListProps {
@@ -47,6 +51,8 @@ interface CommentItemProps {
   onReply: (parentId: string) => void;
   onEdit: (comment: Comment) => void;
   onDelete: (commentId: string) => void;
+  mentionables?: Map<string, MentionEntry>;
+  wsSlug?: string;
 }
 
 function CommentItem({
@@ -56,6 +62,8 @@ function CommentItem({
   onReply,
   onEdit,
   onDelete,
+  mentionables,
+  wsSlug,
 }: CommentItemProps) {
   const [hovering, setHovering] = useState(false);
 
@@ -113,7 +121,12 @@ function CommentItem({
             </div>
           )}
         </div>
-        <p className="mt-1.5 whitespace-pre-wrap text-sm">{comment.body}</p>
+        <MarkdownRenderer
+          content={comment.body}
+          className="mt-1.5"
+          mentionables={mentionables}
+          wsSlug={wsSlug}
+        />
       </div>
 
       {replies.length > 0 && (
@@ -127,6 +140,8 @@ function CommentItem({
               onReply={onReply}
               onEdit={onEdit}
               onDelete={onDelete}
+              mentionables={mentionables}
+              wsSlug={wsSlug}
             />
           ))}
         </div>
@@ -144,6 +159,29 @@ export function CommentList({ taskId }: CommentListProps) {
   const [editingComment, setEditingComment] = useState<Comment | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  const { currentWorkspace } = useWorkspaceStore();
+  const { teamDirectory, fetchTeamDirectory } = useRulesStore();
+
+  // Fetch team directory for @mention resolution (once per workspace)
+  useEffect(() => {
+    if (currentWorkspace && !teamDirectory) {
+      void fetchTeamDirectory(currentWorkspace.id);
+    }
+  }, [currentWorkspace, teamDirectory, fetchTeamDirectory]);
+
+  // Build slug → kind map from team directory (15-min cache is the store itself)
+  const mentionables = useMemo<Map<string, MentionEntry>>(() => {
+    const map = new Map<string, MentionEntry>();
+    if (!teamDirectory) return map;
+    for (const agent of teamDirectory.agents) {
+      if (agent.slug) map.set(agent.slug, { kind: "agent" });
+    }
+    // Humans have no slug field; skip unless backend adds one
+    return map;
+  }, [teamDirectory]);
+
+  const wsSlug = currentWorkspace?.slug;
 
   const fetchComments = useCallback(async () => {
     try {
@@ -277,6 +315,8 @@ export function CommentList({ taskId }: CommentListProps) {
               onReply={handleReply}
               onEdit={handleEdit}
               onDelete={handleDelete}
+              mentionables={mentionables}
+              wsSlug={wsSlug}
             />
           ))}
         </div>

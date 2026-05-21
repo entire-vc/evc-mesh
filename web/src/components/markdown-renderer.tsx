@@ -1,9 +1,16 @@
-import { useMemo } from "react";
+import { useCallback, useMemo } from "react";
+import { useNavigate } from "react-router";
 import { cn } from "@/lib/cn";
+
+export interface MentionEntry {
+  kind: "agent" | "user";
+}
 
 interface MarkdownRendererProps {
   content: string;
   className?: string;
+  mentionables?: Map<string, MentionEntry>;
+  wsSlug?: string;
 }
 
 // Escape HTML to prevent XSS in rendered markdown
@@ -16,8 +23,12 @@ function escapeHtml(text: string): string {
     .replace(/'/g, "&#39;");
 }
 
-// Render inline markdown: bold, italic, code, links, images
-function renderInline(text: string): string {
+// Render inline markdown: bold, italic, code, links, images, @mentions
+function renderInline(
+  text: string,
+  mentionables?: Map<string, MentionEntry>,
+  wsSlug?: string,
+): string {
   let result = escapeHtml(text);
 
   // Images: ![alt](url)
@@ -52,17 +63,42 @@ function renderInline(text: string): string {
       `<em>${g1 ?? g2 ?? ""}</em>`,
   );
 
-  // Inline code: `code`
-  result = result.replace(
-    /`([^`]+)`/g,
-    (_match, code: string) =>
+  // Inline code: protect with placeholders so @mentions inside backticks are skipped
+  const codeMap: string[] = [];
+  result = result.replace(/`([^`]+)`/g, (_match, code: string) => {
+    const placeholder = `\x00CODE${codeMap.length}\x00`;
+    codeMap.push(
       `<code class="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]">${code}</code>`,
-  );
+    );
+    return placeholder;
+  });
+
+  // @mention: slug boundary lookahead/behind, lowercase, length 3-42
+  if (mentionables && wsSlug) {
+    result = result.replace(
+      /(?<![a-zA-Z0-9_])@([a-z0-9][a-z0-9-]{1,40}[a-z0-9]?)(?![a-z0-9-])/g,
+      (_match, slug: string) => {
+        const entry = mentionables.get(slug);
+        if (!entry) return `@${slug}`;
+        const href = `/w/${wsSlug}/org-chart`;
+        return `<a class="mention-link inline-block whitespace-nowrap rounded px-1 py-0.5 text-blue-600 bg-blue-50 hover:underline dark:text-blue-400 dark:bg-blue-900/30" href="${href}" data-mention-slug="${slug}" aria-label="Open team profile for @${slug}">@${slug}</a>`;
+      },
+    );
+  }
+
+  // Restore code placeholders
+  result = result.replace(/\x00CODE(\d+)\x00/g, (_match, idx: string) => {
+    return codeMap[parseInt(idx, 10)] ?? "";
+  });
 
   return result;
 }
 
-function renderMarkdown(raw: string): string {
+function renderMarkdown(
+  raw: string,
+  mentionables?: Map<string, MentionEntry>,
+  wsSlug?: string,
+): string {
   if (!raw.trim()) return "";
 
   const lines = raw.split("\n");
@@ -76,7 +112,7 @@ function renderMarkdown(raw: string): string {
       continue;
     }
 
-    // Fenced code block: ```
+    // Fenced code block: ``` — @mentions inside are NOT processed (uses escapeHtml directly)
     if (line.trimStart().startsWith("```")) {
       const fence = "```";
       const lang = line.trim().slice(3).trim();
@@ -101,7 +137,7 @@ function renderMarkdown(raw: string): string {
     const headingMatch = /^(#{1,6})\s+(.+)$/.exec(line);
     if (headingMatch) {
       const level = headingMatch[1]?.length ?? 1;
-      const headingText = renderInline(headingMatch[2] ?? "");
+      const headingText = renderInline(headingMatch[2] ?? "", mentionables, wsSlug);
       const sizeClasses: Record<number, string> = {
         1: "text-2xl font-bold mt-4 mb-2",
         2: "text-xl font-semibold mt-3 mb-2",
@@ -132,7 +168,7 @@ function renderMarkdown(raw: string): string {
         if (!listLine || !/^[\s]*[-*]\s+/.test(listLine)) break;
         const itemText = listLine.replace(/^[\s]*[-*]\s+/, "");
         listItems.push(
-          `<li class="ml-4 list-disc">${renderInline(itemText)}</li>`,
+          `<li class="ml-4 list-disc">${renderInline(itemText, mentionables, wsSlug)}</li>`,
         );
         i++;
       }
@@ -148,7 +184,7 @@ function renderMarkdown(raw: string): string {
         if (!listLine || !/^[\s]*\d+\.\s+/.test(listLine)) break;
         const itemText = listLine.replace(/^[\s]*\d+\.\s+/, "");
         listItems.push(
-          `<li class="ml-4 list-decimal">${renderInline(itemText)}</li>`,
+          `<li class="ml-4 list-decimal">${renderInline(itemText, mentionables, wsSlug)}</li>`,
         );
         i++;
       }
@@ -162,7 +198,7 @@ function renderMarkdown(raw: string): string {
       while (i < lines.length) {
         const quoteLine = lines[i];
         if (!quoteLine?.startsWith("> ")) break;
-        quoteLines.push(renderInline(quoteLine.slice(2)));
+        quoteLines.push(renderInline(quoteLine.slice(2), mentionables, wsSlug));
         i++;
       }
       html.push(
@@ -179,15 +215,38 @@ function renderMarkdown(raw: string): string {
     }
 
     // Paragraph
-    html.push(`<p class="leading-relaxed">${renderInline(line)}</p>`);
+    html.push(`<p class="leading-relaxed">${renderInline(line, mentionables, wsSlug)}</p>`);
     i++;
   }
 
   return html.join("");
 }
 
-export function MarkdownRenderer({ content, className }: MarkdownRendererProps) {
-  const html = useMemo(() => renderMarkdown(content), [content]);
+export function MarkdownRenderer({
+  content,
+  className,
+  mentionables,
+  wsSlug,
+}: MarkdownRendererProps) {
+  const navigate = useNavigate();
+
+  const html = useMemo(
+    () => renderMarkdown(content, mentionables, wsSlug),
+    [content, mentionables, wsSlug],
+  );
+
+  // Intercept mention-link clicks for SPA navigation (avoid full-page reload)
+  const handleClick = useCallback(
+    (e: React.MouseEvent<HTMLDivElement>) => {
+      const target = e.target as HTMLElement;
+      const link = target.closest("a.mention-link");
+      if (link instanceof HTMLAnchorElement) {
+        e.preventDefault();
+        void navigate(link.getAttribute("href") ?? "/");
+      }
+    },
+    [navigate],
+  );
 
   if (!html) {
     return null;
@@ -196,6 +255,7 @@ export function MarkdownRenderer({ content, className }: MarkdownRendererProps) 
   return (
     <div
       className={cn("text-sm text-foreground", className)}
+      onClick={mentionables ? handleClick : undefined}
       // Safe: we control the sanitization in renderMarkdown via escapeHtml
       dangerouslySetInnerHTML={{ __html: html }}
     />
