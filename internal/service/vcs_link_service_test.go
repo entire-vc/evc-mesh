@@ -244,7 +244,7 @@ func (t *fakeTaskService) BulkUpdate(context.Context, uuid.UUID, BulkUpdateTasks
 func (t *fakeTaskService) CheckoutTask(context.Context, uuid.UUID, int, map[string]interface{}) (*CheckoutResult, error) {
 	return nil, nil
 }
-func (t *fakeTaskService) ForceReleaseCheckout(context.Context, uuid.UUID) error { return nil }
+func (t *fakeTaskService) ForceReleaseCheckout(context.Context, uuid.UUID) error       { return nil }
 func (t *fakeTaskService) ReleaseCheckout(context.Context, uuid.UUID, uuid.UUID) error { return nil }
 func (t *fakeTaskService) ExtendCheckout(context.Context, uuid.UUID, uuid.UUID, int) (*CheckoutResult, error) {
 	return nil, nil
