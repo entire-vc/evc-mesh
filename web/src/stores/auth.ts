@@ -17,7 +17,8 @@ interface AuthState {
   register: (req: RegisterRequest) => Promise<void>;
   logout: () => Promise<void>;
   fetchMe: () => Promise<void>;
-  updateProfile: (name: string, avatarURL?: string) => Promise<void>;
+  updateProfile: (name: string, username?: string, avatarURL?: string) => Promise<void>;
+  checkUsername: (username: string) => Promise<boolean>;
 }
 
 export const useAuthStore = create<AuthState>((set) => ({
@@ -77,11 +78,18 @@ export const useAuthStore = create<AuthState>((set) => ({
     set({ user });
   },
 
-  updateProfile: async (name: string, avatarURL?: string) => {
+  updateProfile: async (name: string, username?: string, avatarURL?: string) => {
     const user = await api<User>("/api/v1/auth/me", {
       method: "PATCH",
-      body: { name, avatar_url: avatarURL ?? "" },
+      body: { name, username: username ?? "", avatar_url: avatarURL ?? "" },
     });
     set({ user });
+  },
+
+  checkUsername: async (username: string) => {
+    const res = await api<{ available: boolean }>(
+      `/api/v1/auth/check-username?username=${encodeURIComponent(username)}`,
+    );
+    return res.available;
   },
 }));
