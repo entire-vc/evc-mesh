@@ -413,10 +413,45 @@ type IntegrationService interface {
 	ListByWorkspace(ctx context.Context, workspaceID uuid.UUID) ([]domain.IntegrationConfig, error)
 }
 
+// CreateInviteInput holds parameters for creating a workspace invite.
+type CreateInviteInput struct {
+	WorkspaceID uuid.UUID
+	Email       string
+	Role        string
+	InvitedBy   uuid.UUID
+}
+
+// AcceptInviteInput holds parameters for accepting an invite and registering.
+type AcceptInviteInput struct {
+	Token    string
+	Name     string
+	Password string
+}
+
+// WorkspaceInviteService provides business logic for workspace invite management.
+type WorkspaceInviteService interface {
+	// CreateInvite creates a pending invite, sends the invitation email, and returns the invite.
+	CreateInvite(ctx context.Context, input CreateInviteInput) (*domain.WorkspaceInvite, error)
+	// ListInvites returns all pending (non-expired, unaccepted) invites for a workspace.
+	ListInvites(ctx context.Context, workspaceID uuid.UUID) ([]domain.WorkspaceInvite, error)
+	// ResendInvite re-sends the invitation email for an existing pending invite.
+	ResendInvite(ctx context.Context, inviteID uuid.UUID) error
+	// RevokeInvite deletes a pending invite.
+	RevokeInvite(ctx context.Context, inviteID uuid.UUID) error
+	// GetByToken returns invite info for a given token (used by the accept-invite page).
+	// Returns nil when the token does not exist or the invite is expired/accepted.
+	GetByToken(ctx context.Context, token string) (*domain.WorkspaceInvite, error)
+	// AcceptInvite accepts the invite: creates the user if needed, adds them to the workspace,
+	// marks the invite accepted, and returns a JWT for the new/existing user.
+	AcceptInvite(ctx context.Context, input AcceptInviteInput) (string, error)
+}
+
 // WorkspaceMemberService provides business logic for workspace member management.
 type WorkspaceMemberService interface {
 	ListMembers(ctx context.Context, workspaceID uuid.UUID) ([]domain.WorkspaceMemberWithUser, error)
 	AddMember(ctx context.Context, workspaceID uuid.UUID, email, role string, invitedBy uuid.UUID) (*domain.WorkspaceMemberWithUser, error)
+	// AddMemberWithCreate adds an existing user or creates a new one (when password is provided).
+	AddMemberWithCreate(ctx context.Context, workspaceID uuid.UUID, email, role, password string, invitedBy uuid.UUID) (*domain.WorkspaceMemberWithUser, error)
 	UpdateMemberRole(ctx context.Context, workspaceID, targetUserID uuid.UUID, newRole string) error
 	RemoveMember(ctx context.Context, workspaceID, targetUserID uuid.UUID) error
 	GetMyRole(ctx context.Context, workspaceID, userID uuid.UUID) (string, error)

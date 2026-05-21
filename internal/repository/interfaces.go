@@ -538,6 +538,21 @@ type MemoryRepository interface {
 	ListWithNullEmbedding(ctx context.Context, workspaceID uuid.UUID, limit int) ([]domain.Memory, error)
 }
 
+// WorkspaceInviteRepository manages persistence for pending workspace invitations.
+type WorkspaceInviteRepository interface {
+	Create(ctx context.Context, invite *domain.WorkspaceInvite) error
+	GetByID(ctx context.Context, id uuid.UUID) (*domain.WorkspaceInvite, error)
+	// GetByToken looks up a pending invite by its signed token. Returns nil if not found.
+	GetByToken(ctx context.Context, token string) (*domain.WorkspaceInvite, error)
+	// ListByWorkspace returns all non-expired, unaccepted invites for a workspace.
+	ListByWorkspace(ctx context.Context, workspaceID uuid.UUID) ([]domain.WorkspaceInvite, error)
+	// Accept marks the invite as accepted (sets accepted_at = NOW()).
+	Accept(ctx context.Context, id uuid.UUID) error
+	Delete(ctx context.Context, id uuid.UUID) error
+	// DeleteExpired removes expired unaccepted invites. Returns rows deleted.
+	DeleteExpired(ctx context.Context) (int64, error)
+}
+
 // AgentSessionRepository manages persistence for agent session tracking.
 type AgentSessionRepository interface {
 	Create(ctx context.Context, session *domain.AgentSession) error

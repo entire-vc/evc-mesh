@@ -1,5 +1,5 @@
 import { type FormEvent, useEffect, useRef, useState } from "react";
-import { Mail, Search, UserPlus } from "lucide-react";
+import { Eye, EyeOff, Mail, Search, UserPlus } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -28,40 +28,51 @@ const roleOptions: { value: WorkspaceRole; label: string }[] = [
   { value: "viewer", label: "Viewer" },
 ];
 
+type InviteMode = "email_link" | "create_now";
+
 export function InviteMemberDialog({
   open,
   onClose,
   workspaceId,
 }: InviteMemberDialogProps) {
-  const { addWorkspaceMember, searchUsers, userSearchResults, isSearching, clearSearchResults } =
-    useMemberStore();
+  const {
+    addWorkspaceMember,
+    createInvite,
+    searchUsers,
+    userSearchResults,
+    isSearching,
+    clearSearchResults,
+  } = useMemberStore();
 
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<WorkspaceRole>("member");
+  const [mode, setMode] = useState<InviteMode>("email_link");
+  const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [selectedUser, setSelectedUser] = useState<UserSearchResult | null>(null);
   const [showDropdown, setShowDropdown] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const dropdownRef = useRef<HTMLDivElement>(null);
 
-  // Reset form on open/close
   useEffect(() => {
     if (open) {
       setEmail("");
       setRole("member");
+      setMode("email_link");
+      setPassword("");
+      setShowPassword(false);
       setSelectedUser(null);
       setShowDropdown(false);
       setError(null);
+      setSuccessMsg(null);
       clearSearchResults();
     }
   }, [open, clearSearchResults]);
 
-  // Debounced search
   useEffect(() => {
-    if (debounceRef.current) {
-      clearTimeout(debounceRef.current);
-    }
+    if (debounceRef.current) clearTimeout(debounceRef.current);
     if (!email.trim() || selectedUser) {
       clearSearchResults();
       setShowDropdown(false);
@@ -72,9 +83,7 @@ export function InviteMemberDialog({
       setShowDropdown(true);
     }, 300);
     return () => {
-      if (debounceRef.current) {
-        clearTimeout(debounceRef.current);
-      }
+      if (debounceRef.current) clearTimeout(debounceRef.current);
     };
   }, [email, selectedUser, workspaceId, searchUsers, clearSearchResults]);
 
@@ -87,51 +96,57 @@ export function InviteMemberDialog({
 
   const handleEmailChange = (value: string) => {
     setEmail(value);
-    if (selectedUser) {
-      setSelectedUser(null);
-    }
+    if (selectedUser) setSelectedUser(null);
   };
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
-
     const emailValue = selectedUser?.email ?? email.trim();
     if (!emailValue) {
       setError("Email is required");
       return;
     }
+    if (mode === "create_now" && !selectedUser && !password) {
+      setError("Password is required when creating an account now");
+      return;
+    }
 
     setIsSubmitting(true);
     setError(null);
+    setSuccessMsg(null);
 
     try {
-      await addWorkspaceMember(workspaceId, emailValue, role);
-      onClose();
+      if (mode === "email_link" && !selectedUser) {
+        await createInvite(workspaceId, emailValue, role);
+        setSuccessMsg(`Invite sent to ${emailValue}`);
+        setTimeout(onClose, 1500);
+      } else if (mode === "create_now" && !selectedUser) {
+        await addWorkspaceMember(workspaceId, emailValue, role, password);
+        onClose();
+      } else {
+        // Selected existing user — always direct add (no password needed).
+        await addWorkspaceMember(workspaceId, emailValue, role);
+        onClose();
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to invite member");
+      setError(err instanceof Error ? err.message : "Failed to add member");
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  const handleOpenChange = (nextOpen: boolean) => {
-    if (!nextOpen) {
-      onClose();
-    }
-  };
-
   return (
-    <Dialog open={open} onOpenChange={handleOpenChange}>
+    <Dialog open={open} onOpenChange={(next) => { if (!next) onClose(); }}>
       <DialogContent onClose={onClose}>
         <DialogHeader>
-          <DialogTitle>Invite Member</DialogTitle>
+          <DialogTitle>Add Member</DialogTitle>
           <DialogDescription>
-            Invite a user to this workspace by email address.
+            Add a user to this workspace by email address.
           </DialogDescription>
         </DialogHeader>
 
         <form onSubmit={handleSubmit} className="mt-4 space-y-4">
-          {/* Email search */}
+          {/* Email */}
           <div className="space-y-1.5">
             <label htmlFor="imd-email" className="text-sm font-medium">
               Email address <span className="text-destructive">*</span>
@@ -154,13 +169,8 @@ export function InviteMemberDialog({
                 autoFocus
                 autoComplete="off"
               />
-
-              {/* Search results dropdown */}
               {showDropdown && userSearchResults.length > 0 && (
-                <div
-                  ref={dropdownRef}
-                  className="absolute z-50 mt-1 w-full rounded-lg border border-border bg-card shadow-lg"
-                >
+                <div className="absolute z-50 mt-1 w-full rounded-lg border border-border bg-card shadow-lg">
                   {userSearchResults.map((user) => (
                     <button
                       key={user.id}
@@ -205,17 +215,81 @@ export function InviteMemberDialog({
               <button
                 type="button"
                 className="text-xs text-muted-foreground hover:text-foreground"
-                onClick={() => {
-                  setSelectedUser(null);
-                  setEmail("");
-                }}
+                onClick={() => { setSelectedUser(null); setEmail(""); }}
               >
                 Clear
               </button>
             </div>
           )}
 
-          {/* Role selector */}
+          {/* Mode toggle — only relevant when adding an unregistered email */}
+          {!selectedUser && (
+            <fieldset className="space-y-2">
+              <legend className="text-sm font-medium">How to add</legend>
+              <label className="flex cursor-pointer items-start gap-2.5">
+                <input
+                  type="radio"
+                  name="invite-mode"
+                  value="email_link"
+                  checked={mode === "email_link"}
+                  onChange={() => { setMode("email_link"); setPassword(""); }}
+                  className="mt-0.5"
+                />
+                <span>
+                  <span className="block text-sm font-medium">Send invite link</span>
+                  <span className="block text-xs text-muted-foreground">
+                    User receives an email and sets their own password.
+                  </span>
+                </span>
+              </label>
+              <label className="flex cursor-pointer items-start gap-2.5">
+                <input
+                  type="radio"
+                  name="invite-mode"
+                  value="create_now"
+                  checked={mode === "create_now"}
+                  onChange={() => setMode("create_now")}
+                  className="mt-0.5"
+                />
+                <span>
+                  <span className="block text-sm font-medium">Create now with password</span>
+                  <span className="block text-xs text-muted-foreground">
+                    Account is created immediately — share credentials manually.
+                  </span>
+                </span>
+              </label>
+            </fieldset>
+          )}
+
+          {/* Password — only for create_now with unknown user */}
+          {mode === "create_now" && !selectedUser && (
+            <div className="space-y-1.5">
+              <label htmlFor="imd-password" className="text-sm font-medium">
+                Password <span className="text-destructive">*</span>
+              </label>
+              <div className="relative">
+                <Input
+                  id="imd-password"
+                  type={showPassword ? "text" : "password"}
+                  placeholder="Min 8 characters"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  className="pr-9"
+                  autoComplete="new-password"
+                />
+                <button
+                  type="button"
+                  className="absolute inset-y-0 right-3 flex items-center text-muted-foreground hover:text-foreground"
+                  onClick={() => setShowPassword((v) => !v)}
+                  tabIndex={-1}
+                >
+                  {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Role */}
           <div className="space-y-1.5">
             <label htmlFor="imd-role" className="text-sm font-medium">
               Role
@@ -237,23 +311,19 @@ export function InviteMemberDialog({
           </div>
 
           {error && <p className="text-sm text-destructive">{error}</p>}
+          {successMsg && <p className="text-sm text-green-600 dark:text-green-400">{successMsg}</p>}
 
           <DialogFooter>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={onClose}
-              disabled={isSubmitting}
-            >
+            <Button type="button" variant="outline" onClick={onClose} disabled={isSubmitting}>
               Cancel
             </Button>
             <Button type="submit" disabled={isSubmitting}>
               {isSubmitting ? (
-                "Inviting..."
+                mode === "email_link" && !selectedUser ? "Sending..." : "Adding..."
               ) : (
                 <>
                   <UserPlus className="h-4 w-4" />
-                  Invite Member
+                  {mode === "email_link" && !selectedUser ? "Send Invite" : "Add Member"}
                 </>
               )}
             </Button>

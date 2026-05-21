@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"golang.org/x/crypto/bcrypt"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/repository"
@@ -117,6 +118,89 @@ func (s *workspaceMemberService) AddMember(ctx context.Context, workspaceID uuid
 		},
 	}
 	return result, nil
+}
+
+// AddMemberWithCreate is like AddMember but will create the user when a password is provided
+// and the email does not yet exist in the system.
+func (s *workspaceMemberService) AddMemberWithCreate(ctx context.Context, workspaceID uuid.UUID, email, role, password string, invitedBy uuid.UUID) (*domain.WorkspaceMemberWithUser, error) {
+	if password == "" {
+		return s.AddMember(ctx, workspaceID, email, role, invitedBy)
+	}
+
+	if email == "" {
+		return nil, apierror.ValidationError(map[string]string{"email": "email is required"})
+	}
+	if !isValidRole(role) {
+		role = domain.RoleMember
+	}
+
+	user, err := s.userRepo.GetByEmail(ctx, email)
+	if err != nil {
+		return nil, fmt.Errorf("workspace_member_service.AddMemberWithCreate: %w", err)
+	}
+
+	if user == nil {
+		hash, hashErr := bcrypt.GenerateFromPassword([]byte(password), 10)
+		if hashErr != nil {
+			return nil, apierror.InternalError("failed to hash password")
+		}
+		now := time.Now()
+		user = &domain.User{
+			ID:           uuid.New(),
+			Email:        email,
+			Name:         email,
+			PasswordHash: string(hash),
+			IsActive:     true,
+			CreatedAt:    now,
+			UpdatedAt:    now,
+		}
+		if createErr := s.userRepo.Create(ctx, user); createErr != nil {
+			return nil, fmt.Errorf("workspace_member_service.AddMemberWithCreate: %w", createErr)
+		}
+	}
+
+	existing, err := s.memberRepo.GetByWorkspaceAndUser(ctx, workspaceID, user.ID)
+	if err != nil {
+		return nil, fmt.Errorf("workspace_member_service.AddMemberWithCreate: %w", err)
+	}
+	if existing != nil {
+		return nil, apierror.Conflict("user is already a member of this workspace")
+	}
+
+	now := time.Now()
+	var invitedByPtr *uuid.UUID
+	if invitedBy != uuid.Nil {
+		invitedByPtr = &invitedBy
+	}
+	member := &domain.WorkspaceMember{
+		ID:          uuid.New(),
+		WorkspaceID: workspaceID,
+		UserID:      user.ID,
+		Role:        role,
+		InvitedBy:   invitedByPtr,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+	if err := s.memberRepo.Create(ctx, member); err != nil {
+		return nil, fmt.Errorf("workspace_member_service.AddMemberWithCreate: %w", err)
+	}
+
+	s.logMemberActivity(ctx, workspaceID, member.ID, "member.added", map[string]interface{}{
+		"user_id": user.ID.String(),
+		"email":   user.Email,
+		"role":    role,
+		"created": true,
+	})
+
+	return &domain.WorkspaceMemberWithUser{
+		WorkspaceMember: *member,
+		User: domain.UserBrief{
+			ID:        user.ID,
+			Email:     user.Email,
+			Name:      user.Name,
+			AvatarURL: user.AvatarURL,
+		},
+	}, nil
 }
 
 // UpdateMemberRole changes a member's role, preventing removal of the last owner.

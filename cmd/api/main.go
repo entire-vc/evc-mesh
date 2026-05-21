@@ -260,6 +260,12 @@ func main() {
 	projectMemberService := service.NewProjectMemberService(projectMemberRepo, workspaceMemberRepo, projectRepo,
 		service.WithAgentRepo(agentRepo),
 	)
+
+	// Invite service (email-link flow).
+	inviteRepo := postgres.NewInviteRepo(db)
+	emailSvc := service.NewEmailService(cfg.Email)
+	inviteService := service.NewInviteService(inviteRepo, userRepo, workspaceMemberRepo, workspaceRepo, emailSvc, authService, cfg.Email.BaseURL)
+
 	savedViewService := service.NewSavedViewService(savedViewRepo)
 	vcsLinkService := service.NewVCSLinkService(vcsLinkRepo)
 	integrationService := service.NewIntegrationService(integrationRepo)
@@ -353,6 +359,7 @@ func main() {
 	recurringHandler := handler.NewRecurringHandler(recurringService)
 	taskTemplateHandler := handler.NewTaskTemplateHandler(taskTemplateService)
 	workspaceMemberHandler := handler.NewWorkspaceMemberHandler(workspaceMemberService)
+	inviteHandler := handler.NewInviteHandler(inviteService)
 	projectMemberHandler := handler.NewProjectMemberHandler(projectMemberService)
 	notificationHandler := handler.NewNotificationHandler(notificationService)
 	pushSubscriptionHandler := handler.NewPushSubscriptionHandler(pushService)
@@ -450,6 +457,17 @@ func main() {
 	authGroup.POST("/login", authHandler.Login)
 	authGroup.POST("/refresh", authHandler.Refresh)
 
+	// Public invite acceptance endpoints (rate-limited same as auth).
+	invitePublicGroup := v1.Group("/invites")
+	invitePublicGroup.Use(mw.RateLimit(mw.RateLimitConfig{
+		Enabled:     cfg.RateLimit.Enabled,
+		RPM:         cfg.RateLimit.AuthRPM,
+		KeyFunc:     mw.RateLimitKeyByIP,
+		RedisClient: sharedRedis,
+	}))
+	invitePublicGroup.GET("/:token", inviteHandler.GetByToken)
+	invitePublicGroup.POST("/:token/accept", inviteHandler.Accept)
+
 	// --- Protected routes (JWT or Agent Key) ---
 	api := v1.Group("")
 	api.Use(mw.DualAuth(authService, agentService))
@@ -489,6 +507,12 @@ func main() {
 	api.PATCH("/workspaces/:ws_id/members/:user_id", workspaceMemberHandler.UpdateRole, rbac(mw.PermManageMembers))
 	api.DELETE("/workspaces/:ws_id/members/:user_id", workspaceMemberHandler.Remove, rbac(mw.PermManageMembers))
 	api.GET("/workspaces/:ws_id/users/search", workspaceMemberHandler.SearchUsers)
+
+	// Workspace invite routes (email-link flow).
+	api.POST("/workspaces/:ws_id/invites", inviteHandler.Create, rbac(mw.PermManageMembers))
+	api.GET("/workspaces/:ws_id/invites", inviteHandler.List, rbac(mw.PermManageMembers))
+	api.POST("/workspaces/:ws_id/invites/:invite_id/resend", inviteHandler.Resend, rbac(mw.PermManageMembers))
+	api.DELETE("/workspaces/:ws_id/invites/:invite_id", inviteHandler.Revoke, rbac(mw.PermManageMembers))
 
 	// Project routes.
 	api.GET("/workspaces/:ws_id/projects", projectHandler.List)
