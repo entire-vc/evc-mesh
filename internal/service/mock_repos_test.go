@@ -11,6 +11,7 @@ import (
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/repository"
+	pgRepo "github.com/entire-vc/evc-mesh/internal/repository/postgres"
 	"github.com/entire-vc/evc-mesh/pkg/pagination"
 )
 
@@ -326,6 +327,11 @@ func (m *MockTaskRepository) AtomicCheckout(_ context.Context, taskID, agentID, 
 	t, ok := m.items[taskID]
 	if !ok {
 		return nil
+	}
+	if t.CheckedOutBy != nil && *t.CheckedOutBy != agentID {
+		if t.CheckoutExpires == nil || t.CheckoutExpires.After(timeNow()) {
+			return pgRepo.ErrCheckoutConflict
+		}
 	}
 	t.CheckedOutBy = &agentID
 	t.CheckoutToken = &token
