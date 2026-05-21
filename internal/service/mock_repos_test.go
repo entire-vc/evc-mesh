@@ -980,6 +980,10 @@ func (m *MockAgentRepository) GetBySlug(_ context.Context, workspaceID uuid.UUID
 	return nil, nil
 }
 
+func (m *MockAgentRepository) SearchByPrefix(_ context.Context, _ uuid.UUID, _ string, _ int) ([]domain.Agent, error) {
+	return nil, nil
+}
+
 // ---------------------------------------------------------------------------
 // MockAgentNotifyService — records NotifyAgent calls for assertion in tests.
 // ---------------------------------------------------------------------------
