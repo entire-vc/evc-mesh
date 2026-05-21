@@ -171,7 +171,7 @@ function MentionCard({
     <button
       onClick={() => onClick(mention)}
       className={cn(
-        "w-full cursor-pointer rounded-lg border p-3 text-left transition-colors",
+        "w-full cursor-pointer rounded-lg border p-3 text-left transition-colors hover:bg-white/[0.02] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-blue-500/40",
         isUnseen && "border-primary/30 bg-primary/5",
         hasQuestion &&
           "border-l-4 border-l-amber-400 bg-amber-50/50 dark:bg-amber-950/20",
