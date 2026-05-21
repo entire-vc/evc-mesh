@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"time"
@@ -33,10 +34,11 @@ const (
 
 // AgentHandler handles HTTP requests for agent management.
 type AgentHandler struct {
-	agentService  service.AgentService
-	taskService   service.TaskService       // optional, used for GetMyTasks and PollTasks
-	statusService service.TaskStatusService // optional, used for status_category filtering
-	rdb           *redis.Client             // optional, used for SSE and long-poll
+	agentService    service.AgentService
+	taskService     service.TaskService              // optional, used for GetMyTasks and PollTasks
+	statusService   service.TaskStatusService        // optional, used for status_category filtering
+	rdb             *redis.Client                    // optional, used for SSE and long-poll
+	agentEventsRepo repository.AgentEventsRepository // optional, enables Last-Event-ID SSE replay
 }
 
 // NewAgentHandler creates a new AgentHandler with the given service.
@@ -54,6 +56,12 @@ func NewAgentHandlerWithTaskService(as service.AgentService, ts service.TaskServ
 // SSE streaming and long-polling via Redis pub/sub.
 func NewAgentHandlerFull(as service.AgentService, ts service.TaskService, ss service.TaskStatusService, rdb *redis.Client) *AgentHandler {
 	return &AgentHandler{agentService: as, taskService: ts, statusService: ss, rdb: rdb}
+}
+
+// NewAgentHandlerWithEvents creates an AgentHandler with full SSE support plus
+// durable event replay via Last-Event-ID cursor (backed by agentEventsRepo).
+func NewAgentHandlerWithEvents(as service.AgentService, ts service.TaskService, ss service.TaskStatusService, rdb *redis.Client, evRepo repository.AgentEventsRepository) *AgentHandler {
+	return &AgentHandler{agentService: as, taskService: ts, statusService: ss, rdb: rdb, agentEventsRepo: evRepo}
 }
 
 // registerAgentRequest represents the JSON body for registering a new agent.
@@ -662,10 +670,19 @@ func (h *AgentHandler) GetMyTasks(c echo.Context) error {
 	})
 }
 
+// sseReplayLimit is the max number of events fetched per replay query.
+const sseReplayLimit = 500
+
 // EventStream handles GET /agents/me/events/stream
 // Server-Sent Events endpoint for agents to receive real-time notifications.
-// The connection is kept open and events are pushed as they arrive on the
-// Redis pub/sub channel "agent-notify:{agent_id}".
+//
+// When the client sends a Last-Event-ID header and agentEventsRepo is wired,
+// the handler replays all missed events before switching to live mode.
+// If the cursor is expired or unknown, returns 410 Gone so the client can
+// perform a full state recovery (get_my_tasks across all categories).
+//
+// Without Last-Event-ID (or without agentEventsRepo), behaves exactly as before:
+// subscribe and stream live events only.
 func (h *AgentHandler) EventStream(c echo.Context) error {
 	if h.rdb == nil {
 		return c.JSON(http.StatusNotImplemented, apierror.InternalError("event streaming not configured"))
@@ -680,59 +697,122 @@ func (h *AgentHandler) EventStream(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid agent_id in context"))
 	}
 
-	// Track SSE connection in presence registry.
-	presence.Register(agentID)
-	defer presence.Unregister(agentID)
-	// Best-effort touch so last_heartbeat reflects when the agent came online.
-	_ = h.agentService.TouchLastSeen(c.Request().Context(), agentID)
-
-	// Set SSE response headers.
-	c.Response().Header().Set("Content-Type", "text/event-stream")
-	c.Response().Header().Set("Cache-Control", "no-cache")
-	c.Response().Header().Set("Connection", "keep-alive")
-	c.Response().Header().Set("X-Accel-Buffering", "no") // Disable nginx buffering.
-	c.Response().WriteHeader(http.StatusOK)
-	c.Response().Flush()
+	// Parse Last-Event-ID cursor before subscribing so we can return 410 before SSE headers.
+	lastEventIDStr := c.Request().Header.Get("Last-Event-ID")
+	var lastEventID uuid.UUID
+	wantReplay := false
+	if lastEventIDStr != "" && h.agentEventsRepo != nil {
+		parsed, parseErr := uuid.Parse(lastEventIDStr)
+		if parseErr != nil {
+			return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid Last-Event-ID: must be a UUID"))
+		}
+		// Validate cursor exists and hasn't expired.
+		existing, lookupErr := h.agentEventsRepo.Lookup(c.Request().Context(), parsed)
+		if lookupErr != nil {
+			return c.JSON(http.StatusInternalServerError, apierror.InternalError("cursor lookup failed"))
+		}
+		if existing == nil {
+			// Cursor unknown or expired — client must do full recovery.
+			return c.JSON(http.StatusGone, map[string]string{
+				"error":   "cursor_expired",
+				"message": "Last-Event-ID cursor expired or unknown; perform full state recovery via get_my_tasks",
+			})
+		}
+		lastEventID = parsed
+		wantReplay = true
+	}
 
 	channel := fmt.Sprintf("%s%s", agentNotifyChannelPrefix, agentID.String())
 
-	// Subscribe to the agent's Redis pub/sub channel.
+	// Subscribe BEFORE querying the DB to avoid the race where an event is published
+	// between the DB query end and subscription start.
 	sub := h.rdb.Subscribe(c.Request().Context(), channel)
 	defer func() { _ = sub.Close() }()
-
 	subCh := sub.Channel()
+
+	// Track SSE connection in presence registry.
+	presence.Register(agentID)
+	defer presence.Unregister(agentID)
+	_ = h.agentService.TouchLastSeen(c.Request().Context(), agentID)
+
+	// Write SSE response headers now that we've validated the cursor (if any).
+	c.Response().Header().Set("Content-Type", "text/event-stream")
+	c.Response().Header().Set("Cache-Control", "no-cache")
+	c.Response().Header().Set("Connection", "keep-alive")
+	c.Response().Header().Set("X-Accel-Buffering", "no")
+	c.Response().WriteHeader(http.StatusOK)
+	c.Response().Flush()
+
+	// maxReplayed tracks the highest event_id sent during DB replay so we can
+	// deduplicate events that arrived in the Redis buffer during that window.
+	var maxReplayed uuid.UUID
+
+	if wantReplay {
+		replayed, err := h.agentEventsRepo.ListAfter(c.Request().Context(), agentID, lastEventID, sseReplayLimit)
+		if err != nil {
+			// Non-fatal: stream is open, just switch to live mode.
+			log.Printf("[sse-replay] ListAfter failed for agent %s: %v", agentID, err)
+		} else {
+			for _, ev := range replayed {
+				eventType := ev.EventType
+				if eventType == "" {
+					eventType = "message"
+				}
+				if _, writeErr := fmt.Fprintf(c.Response(), "id: %s\nevent: %s\ndata: %s\n\n",
+					ev.EventID.String(), eventType, string(ev.Payload)); writeErr != nil {
+					return nil
+				}
+				maxReplayed = ev.EventID
+			}
+			if len(replayed) > 0 {
+				c.Response().Flush()
+			}
+		}
+	}
+
 	keepalive := time.NewTicker(agentSSEKeepaliveInterval)
 	defer keepalive.Stop()
-
 	reqCtx := c.Request().Context()
 
 	for {
 		select {
 		case <-reqCtx.Done():
-			// Client disconnected.
 			return nil
 
 		case msg, ok := <-subCh:
 			if !ok {
-				// Subscription closed.
 				return nil
 			}
-			// Write SSE event.
-			// Parse to extract event_type for the SSE event field.
 			var notif map[string]any
 			eventType := "message"
+			eventIDStr := ""
 			if err := json.Unmarshal([]byte(msg.Payload), &notif); err == nil {
 				if et, ok := notif["event_type"].(string); ok && et != "" {
 					eventType = et
 				}
+				if eid, ok := notif["event_id"].(string); ok && eid != "" {
+					eventIDStr = eid
+				}
 			}
-			if _, err := fmt.Fprintf(c.Response(), "event: %s\ndata: %s\n\n", eventType, msg.Payload); err != nil {
+			// Deduplicate: skip events already sent during DB replay.
+			if wantReplay && eventIDStr != "" {
+				if incomingID, parseErr := uuid.Parse(eventIDStr); parseErr == nil {
+					// UUID v7 bytes are time-ordered so byte comparison is correct.
+					if incomingID.String() <= maxReplayed.String() {
+						continue
+					}
+				}
+			}
+			idLine := ""
+			if eventIDStr != "" {
+				idLine = fmt.Sprintf("id: %s\n", eventIDStr)
+			}
+			if _, err := fmt.Fprintf(c.Response(), "%sevent: %s\ndata: %s\n\n", idLine, eventType, msg.Payload); err != nil {
 				return nil
 			}
 			c.Response().Flush()
 
 		case <-keepalive.C:
-			// Send a keepalive comment to prevent connection timeout.
 			if _, err := fmt.Fprintf(c.Response(), ": ping\n\n"); err != nil {
 				return nil
 			}
