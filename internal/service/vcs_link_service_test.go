@@ -144,6 +144,7 @@ func (r *fakeTaskRepo) ExtendCheckout(context.Context, uuid.UUID, uuid.UUID, tim
 func (r *fakeTaskRepo) MoveToProject(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) error {
 	return nil
 }
+func (r *fakeTaskRepo) ForceReleaseCheckout(context.Context, uuid.UUID) error { return nil }
 
 // fakeStatusRepo holds task_status rows per project.
 type fakeStatusRepo struct {
@@ -240,9 +241,10 @@ func (t *fakeTaskService) GetDefaultStatus(context.Context, uuid.UUID) (*domain.
 func (t *fakeTaskService) BulkUpdate(context.Context, uuid.UUID, BulkUpdateTasksInput) BulkUpdateTasksResult {
 	return BulkUpdateTasksResult{}
 }
-func (t *fakeTaskService) CheckoutTask(context.Context, uuid.UUID, int) (*CheckoutResult, error) {
+func (t *fakeTaskService) CheckoutTask(context.Context, uuid.UUID, int, map[string]interface{}) (*CheckoutResult, error) {
 	return nil, nil
 }
+func (t *fakeTaskService) ForceReleaseCheckout(context.Context, uuid.UUID) error { return nil }
 func (t *fakeTaskService) ReleaseCheckout(context.Context, uuid.UUID, uuid.UUID) error { return nil }
 func (t *fakeTaskService) ExtendCheckout(context.Context, uuid.UUID, uuid.UUID, int) (*CheckoutResult, error) {
 	return nil, nil
