@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router";
 import { AtSign, MessageSquare } from "lucide-react";
 import { cn } from "@/lib/cn";
@@ -25,6 +25,11 @@ const TABS: { id: Tab; label: string }[] = [
   { id: "all-recent", label: "All recent" },
 ];
 
+// Grace period after Mentions tab opens before last_visit is bumped — gives the
+// user enough time to actually see the «Новое» label on the items they came for.
+const LAST_VISIT_DELAY_MS = 5_000;
+const lastVisitKey = (ws: string | undefined) => `mesh:activity:last_visit:${ws ?? "global"}`;
+
 export function ActivityPage() {
   const { wsSlug } = useParams();
   const navigate = useNavigate();
@@ -32,6 +37,7 @@ export function ActivityPage() {
   const [activeTab, setActiveTab] = useState<Tab>("mentions");
   const [mentions, setMentions] = useState<Mention[]>([]);
   const [loading, setLoading] = useState(false);
+  const [lastVisit, setLastVisit] = useState<Date | null>(null);
 
   const fetchMentions = useCallback(async () => {
     setLoading(true);
@@ -53,6 +59,17 @@ export function ActivityPage() {
   useEffect(() => {
     if (activeTab === "mentions") void fetchMentions();
   }, [activeTab, fetchMentions]);
+
+  useEffect(() => {
+    if (activeTab !== "mentions") return;
+    const key = lastVisitKey(wsSlug);
+    const stored = localStorage.getItem(key);
+    setLastVisit(stored ? new Date(stored) : null);
+    const timer = window.setTimeout(() => {
+      localStorage.setItem(key, new Date().toISOString());
+    }, LAST_VISIT_DELAY_MS);
+    return () => window.clearTimeout(timer);
+  }, [activeTab, wsSlug]);
 
   const handleMentionClick = useCallback(
     (mention: Mention) => {
@@ -101,7 +118,12 @@ export function ActivityPage() {
       </div>
 
       {activeTab === "mentions" && (
-        <MentionsTab mentions={mentions} loading={loading} onMentionClick={handleMentionClick} />
+        <MentionsTab
+          mentions={mentions}
+          loading={loading}
+          lastVisit={lastVisit}
+          onMentionClick={handleMentionClick}
+        />
       )}
 
       {(activeTab === "my-comments" || activeTab === "all-recent") && (
@@ -117,12 +139,16 @@ export function ActivityPage() {
 function MentionsTab({
   mentions,
   loading,
+  lastVisit,
   onMentionClick,
 }: {
   mentions: Mention[];
   loading: boolean;
+  lastVisit: Date | null;
   onMentionClick: (m: Mention) => void;
 }) {
+  const { fresh, shown } = useMemo(() => splitByLastVisit(mentions, lastVisit), [mentions, lastVisit]);
+
   if (loading) {
     return (
       <div className="space-y-3">
@@ -145,10 +171,56 @@ function MentionsTab({
   }
 
   return (
-    <div className="space-y-2">
-      {mentions.map((mention) => (
-        <MentionCard key={mention.comment_id} mention={mention} onClick={onMentionClick} />
-      ))}
+    <div className="space-y-4">
+      {fresh.length > 0 && (
+        <section className="space-y-2">
+          <SectionHeader label="Новое" count={fresh.length} accent />
+          {fresh.map((m) => (
+            <MentionCard key={m.comment_id} mention={m} onClick={onMentionClick} />
+          ))}
+        </section>
+      )}
+
+      {shown.length > 0 && (
+        <section className="space-y-2">
+          {fresh.length > 0 && <SectionHeader label="Показано" count={shown.length} />}
+          {shown.map((m) => (
+            <MentionCard key={m.comment_id} mention={m} onClick={onMentionClick} dimmed />
+          ))}
+        </section>
+      )}
+    </div>
+  );
+}
+
+function splitByLastVisit(
+  mentions: Mention[],
+  lastVisit: Date | null,
+): { fresh: Mention[]; shown: Mention[] } {
+  if (!lastVisit) return { fresh: [], shown: mentions };
+  const cutoff = lastVisit.getTime();
+  const fresh: Mention[] = [];
+  const shown: Mention[] = [];
+  for (const m of mentions) {
+    if (new Date(m.extracted_at).getTime() > cutoff) fresh.push(m);
+    else shown.push(m);
+  }
+  return { fresh, shown };
+}
+
+function SectionHeader({ label, count, accent }: { label: string; count: number; accent?: boolean }) {
+  return (
+    <div className="flex items-center gap-2 pb-1">
+      <span
+        className={cn(
+          "text-xs font-semibold uppercase tracking-wide",
+          accent ? "text-primary" : "text-muted-foreground",
+        )}
+      >
+        {label}
+      </span>
+      <span className="text-xs text-muted-foreground">({count})</span>
+      <div className={cn("h-px flex-1", accent ? "bg-primary/20" : "bg-border")} />
     </div>
   );
 }
@@ -156,9 +228,11 @@ function MentionsTab({
 function MentionCard({
   mention,
   onClick,
+  dimmed,
 }: {
   mention: Mention;
   onClick: (m: Mention) => void;
+  dimmed?: boolean;
 }) {
   const isUnseen = !mention.seen_at;
   const hasQuestion = mention.comment_body.includes("❓");
@@ -175,6 +249,7 @@ function MentionCard({
         isUnseen && "border-primary/30 bg-primary/5",
         hasQuestion &&
           "border-l-4 border-l-amber-400 bg-amber-50/50 dark:bg-amber-950/20",
+        dimmed && "opacity-70",
       )}
     >
       <div className="flex items-start gap-2">
