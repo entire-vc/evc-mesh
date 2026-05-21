@@ -1,14 +1,38 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router";
 import { AtSign, MessageSquare } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { api } from "@/lib/api";
 import { useProjectStore } from "@/stores/project";
 import { useWorkspaceStore } from "@/stores/workspace";
+import { useWebSocketStore } from "@/stores/websocket";
 import { MarkdownRenderer } from "@/components/markdown-renderer";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "@/components/ui/toast";
 import type { CommentView, CommentViewPage, Mention } from "@/types";
+
+// Persists which mention IDs have been rendered in the feed (shown-state).
+// Distinguishes "new" (never rendered) from "shown" (rendered, not yet clicked).
+const SHOWN_KEY = "mesh.mentions.shown";
+const SHOWN_MAX = 2000;
+
+function readShownIds(): Set<string> {
+  try {
+    const raw = localStorage.getItem(SHOWN_KEY);
+    if (!raw) return new Set();
+    return new Set(JSON.parse(raw) as string[]);
+  } catch {
+    return new Set();
+  }
+}
+
+function saveShownIds(ids: Set<string>): void {
+  try {
+    let arr = [...ids];
+    if (arr.length > SHOWN_MAX) arr = arr.slice(-SHOWN_MAX);
+    localStorage.setItem(SHOWN_KEY, JSON.stringify(arr));
+  } catch {}
+}
 
 function formatRelative(isoStr: string): string {
   const diff = Date.now() - new Date(isoStr).getTime();
@@ -31,11 +55,27 @@ const TABS: { id: Tab; label: string }[] = [
 const LAST_VISIT_DELAY_MS = 5_000;
 const lastVisitKey = (ws: string | undefined) => `mesh:activity:last_visit:${ws ?? "global"}`;
 
+// Three visual states for a mention row:
+//   new    — arrived since last page open (not yet rendered in feed)
+//   shown  — rendered in feed this or a prior session, not yet clicked
+//   opened — clicked through (seen_at set on backend)
+type MentionDisplayState = "new" | "shown" | "opened";
+
+function getMentionDisplayState(
+  mention: Mention,
+  shownIds: Set<string>,
+): MentionDisplayState {
+  if (mention.seen_at) return "opened";
+  if (shownIds.has(mention.comment_id)) return "shown";
+  return "new";
+}
+
 export function ActivityPage() {
   const { wsSlug } = useParams();
   const navigate = useNavigate();
   const { projects } = useProjectStore();
   const { currentWorkspace } = useWorkspaceStore();
+  const { lastEvent } = useWebSocketStore();
   const [activeTab, setActiveTab] = useState<Tab>("mentions");
   const [mentions, setMentions] = useState<Mention[]>([]);
   const [myComments, setMyComments] = useState<CommentView[]>([]);
@@ -45,6 +85,12 @@ export function ActivityPage() {
   const [myCommentsNextCursor, setMyCommentsNextCursor] = useState<string | null>(null);
   const [recentNextCursor, setRecentNextCursor] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
+
+  // Snapshot of shown IDs at mount (from localStorage). Updated via ref after each fetch
+  // so subsequent re-renders (e.g. after a WS-triggered refetch) know which items were
+  // already shown this session — without triggering extra re-renders.
+  const shownIdsRef = useRef<Set<string>>(readShownIds());
+  const hasDispatchedBadgeRef = useRef(false);
 
   const fetchMentions = useCallback(async () => {
     setLoading(true);
@@ -128,6 +174,34 @@ export function ActivityPage() {
     return () => window.clearTimeout(timer);
   }, [activeTab, wsSlug]);
 
+  // After rendering: persist unseen mention IDs to localStorage so the next page load
+  // shows them as "shown" (muted). Update the ref so a WS-triggered refetch within this
+  // session correctly renders prior items as "shown" rather than "new" again.
+  useEffect(() => {
+    if (mentions.length === 0) return;
+    const updated = new Set(shownIdsRef.current);
+    for (const m of mentions) {
+      if (!m.seen_at) updated.add(m.comment_id);
+    }
+    saveShownIds(updated);
+    shownIdsRef.current = updated;
+    // Clear sidebar badge once on initial page open.
+    if (!hasDispatchedBadgeRef.current) {
+      hasDispatchedBadgeRef.current = true;
+      window.dispatchEvent(
+        new CustomEvent("mesh:mentions:shown", { detail: { newCount: 0 } }),
+      );
+    }
+  }, [mentions]);
+
+  // Keep feed live: refetch when a new mention arrives via WebSocket.
+  // New mention is not yet in shownIdsRef so it renders as "new".
+  useEffect(() => {
+    if (lastEvent?.type === "mention.created" && activeTab === "mentions") {
+      void fetchMentions();
+    }
+  }, [lastEvent, activeTab, fetchMentions]);
+
   const handleMentionClick = useCallback(
     (mention: Mention) => {
       if (!mention.seen_at) {
@@ -196,6 +270,7 @@ export function ActivityPage() {
           mentions={mentions}
           loading={loading}
           lastVisit={lastVisit}
+          shownIds={shownIdsRef.current}
           onMentionClick={handleMentionClick}
         />
       )}
@@ -232,11 +307,13 @@ function MentionsTab({
   mentions,
   loading,
   lastVisit,
+  shownIds,
   onMentionClick,
 }: {
   mentions: Mention[];
   loading: boolean;
   lastVisit: Date | null;
+  shownIds: Set<string>;
   onMentionClick: (m: Mention) => void;
 }) {
   const { fresh, shown } = useMemo(() => splitByLastVisit(mentions, lastVisit), [mentions, lastVisit]);
@@ -268,7 +345,7 @@ function MentionsTab({
         <section className="space-y-2">
           <SectionHeader label="Новое" count={fresh.length} accent />
           {fresh.map((m) => (
-            <MentionCard key={m.comment_id} mention={m} onClick={onMentionClick} />
+            <MentionCard key={m.comment_id} mention={m} shownIds={shownIds} onClick={onMentionClick} />
           ))}
         </section>
       )}
@@ -277,7 +354,7 @@ function MentionsTab({
         <section className="space-y-2">
           {fresh.length > 0 && <SectionHeader label="Показано" count={shown.length} />}
           {shown.map((m) => (
-            <MentionCard key={m.comment_id} mention={m} onClick={onMentionClick} dimmed />
+            <MentionCard key={m.comment_id} mention={m} shownIds={shownIds} onClick={onMentionClick} />
           ))}
         </section>
       )}
@@ -417,14 +494,16 @@ function SectionHeader({ label, count, accent }: { label: string; count: number;
 
 function MentionCard({
   mention,
+  shownIds,
   onClick,
-  dimmed,
 }: {
   mention: Mention;
+  shownIds: Set<string>;
   onClick: (m: Mention) => void;
-  dimmed?: boolean;
 }) {
-  const isUnseen = !mention.seen_at;
+  const displayState = getMentionDisplayState(mention, shownIds);
+  const isNew = displayState === "new";
+  const isShown = displayState === "shown";
   const hasQuestion = mention.comment_body.includes("❓");
   const preview =
     mention.comment_body.length > 200
@@ -436,19 +515,21 @@ function MentionCard({
       onClick={() => onClick(mention)}
       className={cn(
         "w-full cursor-pointer rounded-lg border p-3 text-left transition-colors hover:bg-white/[0.02] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-blue-500/40",
-        isUnseen && "border-primary/30 bg-primary/5",
+        isNew && "border-primary/30 bg-primary/5",
+        isShown && "opacity-70",
         hasQuestion &&
           "border-l-4 border-l-amber-400 bg-amber-50/50 dark:bg-amber-950/20",
-        dimmed && "opacity-70",
       )}
     >
       <div className="flex items-start gap-2">
-        {isUnseen && (
+        {isNew && (
           <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-red-500" />
         )}
-        <div className={cn("min-w-0 flex-1", !isUnseen && "pl-4")}>
+        <div className={cn("min-w-0 flex-1", !isNew && "pl-4")}>
           <div className="flex flex-wrap items-center gap-2">
-            <span className="truncate text-sm font-medium">{mention.task_title}</span>
+            <span className={cn("truncate text-sm", isNew && "font-medium")}>
+              {mention.task_title}
+            </span>
             <span className="shrink-0 text-xs text-muted-foreground">
               {formatRelative(mention.extracted_at)}
             </span>
