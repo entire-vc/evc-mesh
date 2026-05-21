@@ -332,6 +332,7 @@ type MockTaskService struct {
 	ListSubtasksFunc         func(ctx context.Context, parentTaskID uuid.UUID) ([]domain.Task, error)
 	GetMyTasksFunc           func(ctx context.Context, assigneeID uuid.UUID, assigneeType domain.AssigneeType) ([]domain.Task, error)
 	GetDefaultStatusFunc     func(ctx context.Context, projectID uuid.UUID) (*domain.TaskStatus, error)
+	GetStatusByIDFunc        func(ctx context.Context, id uuid.UUID) (*domain.TaskStatus, error)
 	BulkUpdateFunc           func(ctx context.Context, projectID uuid.UUID, input service.BulkUpdateTasksInput) service.BulkUpdateTasksResult
 	CheckoutTaskFunc         func(ctx context.Context, taskID uuid.UUID, ttlMinutes int, sessionMetadata map[string]interface{}) (*service.CheckoutResult, error)
 	ReleaseCheckoutFunc      func(ctx context.Context, taskID uuid.UUID, token uuid.UUID) error
@@ -415,6 +416,13 @@ func (m *MockTaskService) GetDefaultStatus(ctx context.Context, projectID uuid.U
 		return m.GetDefaultStatusFunc(ctx, projectID)
 	}
 	return &domain.TaskStatus{ID: uuid.New(), Name: "To Do", IsDefault: true}, nil
+}
+
+func (m *MockTaskService) GetStatusByID(ctx context.Context, id uuid.UUID) (*domain.TaskStatus, error) {
+	if m.GetStatusByIDFunc != nil {
+		return m.GetStatusByIDFunc(ctx, id)
+	}
+	return nil, nil
 }
 
 func (m *MockTaskService) BulkUpdate(ctx context.Context, projectID uuid.UUID, input service.BulkUpdateTasksInput) service.BulkUpdateTasksResult {

@@ -110,6 +110,7 @@ type TaskService interface {
 	ListSubtasks(ctx context.Context, parentTaskID uuid.UUID) ([]domain.Task, error)
 	GetMyTasks(ctx context.Context, assigneeID uuid.UUID, assigneeType domain.AssigneeType) ([]domain.Task, error)
 	GetDefaultStatus(ctx context.Context, projectID uuid.UUID) (*domain.TaskStatus, error)
+	GetStatusByID(ctx context.Context, id uuid.UUID) (*domain.TaskStatus, error)
 	BulkUpdate(ctx context.Context, projectID uuid.UUID, input BulkUpdateTasksInput) BulkUpdateTasksResult
 	// CheckoutTask acquires an exclusive application-level lock on the task for the
 	// calling agent. Only agents may checkout. Returns CheckoutConflictError when the
