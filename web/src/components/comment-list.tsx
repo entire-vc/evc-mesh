@@ -49,7 +49,7 @@ interface CommentItemProps {
   isReply?: boolean;
   replies: Comment[];
   onReply: (parentId: string) => void;
-  onEdit: (comment: Comment) => void;
+  onSave: (commentId: string, newBody: string) => Promise<void>;
   onDelete: (commentId: string) => void;
   mentionables?: Map<string, MentionEntry>;
   wsSlug?: string;
@@ -60,12 +60,38 @@ function CommentItem({
   isReply,
   replies,
   onReply,
-  onEdit,
+  onSave,
   onDelete,
   mentionables,
   wsSlug,
 }: CommentItemProps) {
   const [hovering, setHovering] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editBody, setEditBody] = useState(comment.body);
+  const [saving, setSaving] = useState(false);
+  const editRef = useRef<HTMLTextAreaElement>(null);
+
+  const handleEditClick = () => {
+    setEditBody(comment.body);
+    setIsEditing(true);
+    setTimeout(() => editRef.current?.focus(), 0);
+  };
+
+  const handleSave = async () => {
+    if (!editBody.trim() || saving) return;
+    setSaving(true);
+    try {
+      await onSave(comment.id, editBody.trim());
+      setIsEditing(false);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleCancelEdit = () => {
+    setIsEditing(false);
+    setEditBody(comment.body);
+  };
 
   return (
     <div className={cn("group", isReply && "ml-8 border-l-2 border-border pl-4")}>
@@ -87,7 +113,7 @@ function CommentItem({
               </Badge>
             )}
           </div>
-          {hovering && (
+          {hovering && !isEditing && (
             <div className="flex items-center gap-1">
               {!isReply && (
                 <Button
@@ -104,7 +130,7 @@ function CommentItem({
                 variant="ghost"
                 size="icon"
                 className="h-6 w-6"
-                onClick={() => onEdit(comment)}
+                onClick={handleEditClick}
                 title="Edit"
               >
                 <Edit2 className="h-3 w-3" />
@@ -121,12 +147,42 @@ function CommentItem({
             </div>
           )}
         </div>
-        <MarkdownRenderer
-          content={comment.body}
-          className="mt-1.5"
-          mentionables={mentionables}
-          wsSlug={wsSlug}
-        />
+
+        {isEditing ? (
+          <div className="mt-1.5 space-y-2">
+            <Textarea
+              ref={editRef}
+              value={editBody}
+              onChange={(e) => setEditBody(e.target.value)}
+              rows={3}
+              className="text-sm"
+            />
+            <div className="flex items-center gap-2 justify-end">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={handleCancelEdit}
+                disabled={saving}
+              >
+                Cancel
+              </Button>
+              <Button
+                size="sm"
+                onClick={handleSave}
+                disabled={!editBody.trim() || saving}
+              >
+                Save
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <MarkdownRenderer
+            content={comment.body}
+            className="mt-1.5"
+            mentionables={mentionables}
+            wsSlug={wsSlug}
+          />
+        )}
       </div>
 
       {replies.length > 0 && (
@@ -138,7 +194,7 @@ function CommentItem({
               isReply
               replies={[]}
               onReply={onReply}
-              onEdit={onEdit}
+              onSave={onSave}
               onDelete={onDelete}
               mentionables={mentionables}
               wsSlug={wsSlug}
@@ -150,34 +206,34 @@ function CommentItem({
   );
 }
 
+function byNewestFirst(a: Comment, b: Comment): number {
+  return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+}
+
 export function CommentList({ taskId }: CommentListProps) {
   const [comments, setComments] = useState<Comment[]>([]);
   const [loading, setLoading] = useState(true);
   const [body, setBody] = useState("");
   const [isInternal, setIsInternal] = useState(false);
   const [replyTo, setReplyTo] = useState<string | null>(null);
-  const [editingComment, setEditingComment] = useState<Comment | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const { currentWorkspace } = useWorkspaceStore();
   const { teamDirectory, fetchTeamDirectory } = useRulesStore();
 
-  // Fetch team directory for @mention resolution (once per workspace)
   useEffect(() => {
     if (currentWorkspace && !teamDirectory) {
       void fetchTeamDirectory(currentWorkspace.id);
     }
   }, [currentWorkspace, teamDirectory, fetchTeamDirectory]);
 
-  // Build slug → kind map from team directory (15-min cache is the store itself)
   const mentionables = useMemo<Map<string, MentionEntry>>(() => {
     const map = new Map<string, MentionEntry>();
     if (!teamDirectory) return map;
     for (const agent of teamDirectory.agents) {
       if (agent.slug) map.set(agent.slug, { kind: "agent" });
     }
-    // Humans have no slug field; skip unless backend adds one
     return map;
   }, [teamDirectory]);
 
@@ -206,28 +262,17 @@ export function CommentList({ taskId }: CommentListProps) {
     setSubmitting(true);
 
     try {
-      if (editingComment) {
-        const updated = await api<Comment>(
-          `/api/v1/comments/${editingComment.id}`,
-          { method: "PATCH", body: { body: body.trim() } },
-        );
-        setComments((prev) =>
-          prev.map((c) => (c.id === updated.id ? updated : c)),
-        );
-        setEditingComment(null);
-      } else {
-        const req: CreateCommentRequest = {
-          body: body.trim(),
-          is_internal: isInternal || undefined,
-          parent_comment_id: replyTo ?? undefined,
-        };
-        const created = await api<Comment>(
-          `/api/v1/tasks/${taskId}/comments`,
-          { method: "POST", body: req },
-        );
-        setComments((prev) => [...prev, created]);
-        setReplyTo(null);
-      }
+      const req: CreateCommentRequest = {
+        body: body.trim(),
+        is_internal: isInternal || undefined,
+        parent_comment_id: replyTo ?? undefined,
+      };
+      const created = await api<Comment>(
+        `/api/v1/tasks/${taskId}/comments`,
+        { method: "POST", body: req },
+      );
+      setComments((prev) => [created, ...prev]);
+      setReplyTo(null);
       setBody("");
       setIsInternal(false);
     } catch {
@@ -235,6 +280,14 @@ export function CommentList({ taskId }: CommentListProps) {
     } finally {
       setSubmitting(false);
     }
+  };
+
+  const handleSave = async (commentId: string, newBody: string) => {
+    const updated = await api<Comment>(
+      `/api/v1/comments/${commentId}`,
+      { method: "PATCH", body: { body: newBody } },
+    );
+    setComments((prev) => prev.map((c) => (c.id === updated.id ? updated : c)));
   };
 
   const handleDelete = async (commentId: string) => {
@@ -246,22 +299,13 @@ export function CommentList({ taskId }: CommentListProps) {
     }
   };
 
-  const handleEdit = (comment: Comment) => {
-    setEditingComment(comment);
-    setBody(comment.body);
-    setReplyTo(null);
-    textareaRef.current?.focus();
-  };
-
   const handleReply = (parentId: string) => {
     setReplyTo(parentId);
-    setEditingComment(null);
     setBody("");
     textareaRef.current?.focus();
   };
 
-  const handleCancel = () => {
-    setEditingComment(null);
+  const handleCancelReply = () => {
     setReplyTo(null);
     setBody("");
   };
@@ -275,8 +319,10 @@ export function CommentList({ taskId }: CommentListProps) {
     );
   }
 
-  // Separate top-level comments and replies
-  const topLevel = comments.filter((c) => !c.parent_comment_id);
+  const topLevel = comments
+    .filter((c) => !c.parent_comment_id)
+    .sort(byNewestFirst);
+
   const repliesByParent = comments.reduce<Record<string, Comment[]>>(
     (acc, c) => {
       if (c.parent_comment_id) {
@@ -291,6 +337,11 @@ export function CommentList({ taskId }: CommentListProps) {
     },
     {},
   );
+
+  // Sort replies newest-first too
+  for (const key of Object.keys(repliesByParent)) {
+    repliesByParent[key].sort(byNewestFirst);
+  }
 
   const replyToComment = replyTo
     ? comments.find((c) => c.id === replyTo)
@@ -313,7 +364,7 @@ export function CommentList({ taskId }: CommentListProps) {
               comment={comment}
               replies={repliesByParent[comment.id] ?? []}
               onReply={handleReply}
-              onEdit={handleEdit}
+              onSave={handleSave}
               onDelete={handleDelete}
               mentionables={mentionables}
               wsSlug={wsSlug}
@@ -333,20 +384,7 @@ export function CommentList({ taskId }: CommentListProps) {
               <button
                 type="button"
                 className="ml-1 text-primary hover:underline"
-                onClick={handleCancel}
-              >
-                Cancel
-              </button>
-            </div>
-          )}
-          {editingComment && (
-            <div className="flex items-center gap-2 text-xs text-muted-foreground">
-              <Edit2 className="h-3 w-3" />
-              Editing comment
-              <button
-                type="button"
-                className="ml-1 text-primary hover:underline"
-                onClick={handleCancel}
+                onClick={handleCancelReply}
               >
                 Cancel
               </button>
@@ -371,7 +409,7 @@ export function CommentList({ taskId }: CommentListProps) {
               Internal note
             </label>
             <Button type="submit" size="sm" disabled={!body.trim() || submitting}>
-              {editingComment ? "Save" : "Comment"}
+              Comment
             </Button>
           </div>
         </form>
