@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router";
-import { Download, Search, Sparkles, Star, Tag, X } from "lucide-react";
+import { Download, ExternalLink, Search, Sparkles, Star, Tag, X } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { api } from "@/lib/api";
 import { useWorkspaceStore } from "@/stores/workspace";
@@ -25,6 +25,8 @@ import {
 } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { IntegrationConfig, SparkAgentManifest } from "@/types";
+
+const SPARK_BASE_URL = "https://spark.entire.vc";
 
 // Pre-populated domain expertise tags shown as clickable badge-pills.
 const DOMAIN_TAGS = [
@@ -83,7 +85,6 @@ export function SparkPage() {
   // Custom tags added via text input (in addition to domain tags).
   const [customTagInput, setCustomTagInput] = useState("");
   const [customTags, setCustomTags] = useState<string[]>([]);
-  const [detailOpen, setDetailOpen] = useState(false);
   const [installOpen, setInstallOpen] = useState(false);
   const [hasSearched, setHasSearched] = useState(false);
 
@@ -144,18 +145,14 @@ export function SparkPage() {
     setCustomTags((prev) => prev.filter((t) => t !== tag));
   }, []);
 
-  const handleCardView = useCallback(
-    (agent: SparkAgentManifest) => {
-      selectAgent(agent);
-      setDetailOpen(true);
-    },
-    [selectAgent],
-  );
+  const handleCardOpen = useCallback((agent: SparkAgentManifest) => {
+    const slug = agent.slug || agent.id;
+    window.open(`${SPARK_BASE_URL}/agents/${slug}`, "_blank", "noopener,noreferrer");
+  }, []);
 
   const handleInstallClick = useCallback(
     (agent: SparkAgentManifest) => {
       selectAgent(agent);
-      setDetailOpen(false);
       setInstallOpen(true);
     },
     [selectAgent],
@@ -354,22 +351,13 @@ export function SparkPage() {
               <SparkAgentCard
                 key={agent.id}
                 agent={agent}
-                onView={() => handleCardView(agent)}
+                onOpen={() => handleCardOpen(agent)}
+                onInstall={() => handleInstallClick(agent)}
               />
             ))}
           </div>
         )}
       </div>
-
-      {/* Detail drawer/modal */}
-      {selectedAgent && (
-        <AgentDetailDialog
-          open={detailOpen}
-          onOpenChange={setDetailOpen}
-          agent={selectedAgent}
-          onInstall={() => handleInstallClick(selectedAgent)}
-        />
-      )}
 
       {/* Install dialog */}
       {selectedAgent && currentWorkspace && (
@@ -390,17 +378,19 @@ export function SparkPage() {
 
 function SparkAgentCard({
   agent,
-  onView,
+  onOpen,
+  onInstall,
 }: {
   agent: SparkAgentManifest;
-  onView: () => void;
+  onOpen: () => void;
+  onInstall: () => void;
 }) {
   const typeConfig = agentTypeLabel(agent.agent_type);
 
   return (
     <Card
       className="flex flex-col cursor-pointer transition-shadow hover:shadow-md"
-      onClick={onView}
+      onClick={onOpen}
     >
       <CardHeader className="pb-2">
         <div className="flex items-start justify-between gap-2">
@@ -447,126 +437,33 @@ function SparkAgentCard({
           <span className="text-[10px]">v{agent.version}</span>
         </div>
 
-        <Button
-          size="sm"
-          variant="outline"
-          className="w-full"
-          onClick={(e) => {
-            e.stopPropagation();
-            onView();
-          }}
-        >
-          View
-        </Button>
+        <div className="flex gap-2">
+          <Button
+            size="sm"
+            variant="outline"
+            className="flex-1 gap-1"
+            onClick={(e) => {
+              e.stopPropagation();
+              onOpen();
+            }}
+          >
+            <ExternalLink className="h-3.5 w-3.5" />
+            Open
+          </Button>
+          <Button
+            size="sm"
+            variant="default"
+            className="flex-1"
+            onClick={(e) => {
+              e.stopPropagation();
+              onInstall();
+            }}
+          >
+            Install
+          </Button>
+        </div>
       </CardContent>
     </Card>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Agent Detail Dialog
-// ---------------------------------------------------------------------------
-
-function AgentDetailDialog({
-  open,
-  onOpenChange,
-  agent,
-  onInstall,
-}: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  agent: SparkAgentManifest;
-  onInstall: () => void;
-}) {
-  const typeConfig = agentTypeLabel(agent.agent_type);
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent
-        onClose={() => onOpenChange(false)}
-        className="max-w-lg max-h-[80vh] overflow-y-auto"
-      >
-        <DialogHeader>
-          <div className="flex items-start justify-between gap-2">
-            <DialogTitle>{agent.name}</DialogTitle>
-            <Badge className={cn("shrink-0 text-xs", typeConfig.color)}>
-              {typeConfig.label}
-            </Badge>
-          </div>
-          <DialogDescription>
-            by {agent.author} &middot; v{agent.version}
-          </DialogDescription>
-        </DialogHeader>
-
-        <div className="space-y-4 py-2">
-          {/* Description */}
-          <p className="text-sm text-muted-foreground">
-            {agent.description || "No description provided."}
-          </p>
-
-          {/* Stats */}
-          <div className="flex gap-4 text-sm">
-            <span className="flex items-center gap-1.5">
-              <Download className="h-4 w-4 text-muted-foreground" />
-              <strong>{agent.downloads.toLocaleString()}</strong> downloads
-            </span>
-            <span className="flex items-center gap-1.5">
-              <Star className="h-4 w-4 text-muted-foreground" />
-              <strong>{agent.rating.toFixed(1)}</strong> rating
-            </span>
-          </div>
-
-          {/* Tags */}
-          {agent.tags && agent.tags.length > 0 && (
-            <div className="space-y-1">
-              <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-                Tags
-              </p>
-              <div className="flex flex-wrap gap-1">
-                {agent.tags.map((tag) => (
-                  <Badge key={tag} variant="outline" className="text-xs">
-                    {tag}
-                  </Badge>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Capabilities */}
-          {agent.capabilities && Object.keys(agent.capabilities ?? {}).length > 0 && (
-            <div className="space-y-1">
-              <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-                Capabilities
-              </p>
-              <pre className="overflow-auto rounded bg-muted p-3 text-xs">
-                {JSON.stringify(agent.capabilities, null, 2)}
-              </pre>
-            </div>
-          )}
-
-          {/* Config template */}
-          {agent.config && Object.keys(agent.config ?? {}).length > 0 && (
-            <div className="space-y-1">
-              <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-                Config template
-              </p>
-              <pre className="overflow-auto rounded bg-muted p-3 text-xs">
-                {JSON.stringify(agent.config, null, 2)}
-              </pre>
-            </div>
-          )}
-        </div>
-
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
-            Close
-          </Button>
-          <Button variant="default" onClick={onInstall}>
-            Install in workspace
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
   );
 }
 
