@@ -236,7 +236,7 @@ func (s *StubTaskService) GetMyTasks(_ context.Context, _ uuid.UUID, _ domain.As
 func (s *StubTaskService) BulkUpdate(_ context.Context, _ uuid.UUID, _ BulkUpdateTasksInput) BulkUpdateTasksResult {
 	panic("StubTaskService.BulkUpdate not implemented")
 }
-func (s *StubTaskService) CheckoutTask(_ context.Context, _ uuid.UUID, _ int) (*CheckoutResult, error) {
+func (s *StubTaskService) CheckoutTask(_ context.Context, _ uuid.UUID, _ int, _ map[string]interface{}) (*CheckoutResult, error) {
 	panic("StubTaskService.CheckoutTask not implemented")
 }
 func (s *StubTaskService) ReleaseCheckout(_ context.Context, _, _ uuid.UUID) error {
@@ -244,6 +244,9 @@ func (s *StubTaskService) ReleaseCheckout(_ context.Context, _, _ uuid.UUID) err
 }
 func (s *StubTaskService) ExtendCheckout(_ context.Context, _, _ uuid.UUID, _ int) (*CheckoutResult, error) {
 	panic("StubTaskService.ExtendCheckout not implemented")
+}
+func (s *StubTaskService) ForceReleaseCheckout(_ context.Context, _ uuid.UUID) error {
+	panic("StubTaskService.ForceReleaseCheckout not implemented")
 }
 func (s *StubTaskService) MoveToProject(_ context.Context, _, _ uuid.UUID) (*domain.Task, error) {
 	panic("StubTaskService.MoveToProject not implemented")

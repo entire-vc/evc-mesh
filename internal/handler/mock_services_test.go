@@ -317,9 +317,10 @@ type MockTaskService struct {
 	GetMyTasksFunc       func(ctx context.Context, assigneeID uuid.UUID, assigneeType domain.AssigneeType) ([]domain.Task, error)
 	GetDefaultStatusFunc func(ctx context.Context, projectID uuid.UUID) (*domain.TaskStatus, error)
 	BulkUpdateFunc       func(ctx context.Context, projectID uuid.UUID, input service.BulkUpdateTasksInput) service.BulkUpdateTasksResult
-	CheckoutTaskFunc     func(ctx context.Context, taskID uuid.UUID, ttlMinutes int) (*service.CheckoutResult, error)
-	ReleaseCheckoutFunc  func(ctx context.Context, taskID uuid.UUID, token uuid.UUID) error
-	ExtendCheckoutFunc   func(ctx context.Context, taskID uuid.UUID, token uuid.UUID, ttlMinutes int) (*service.CheckoutResult, error)
+	CheckoutTaskFunc         func(ctx context.Context, taskID uuid.UUID, ttlMinutes int, sessionMetadata map[string]interface{}) (*service.CheckoutResult, error)
+	ReleaseCheckoutFunc      func(ctx context.Context, taskID uuid.UUID, token uuid.UUID) error
+	ExtendCheckoutFunc       func(ctx context.Context, taskID uuid.UUID, token uuid.UUID, ttlMinutes int) (*service.CheckoutResult, error)
+	ForceReleaseCheckoutFunc func(ctx context.Context, taskID uuid.UUID) error
 	MoveToProjectFunc    func(ctx context.Context, taskID, targetProjectID uuid.UUID) (*domain.Task, error)
 }
 
@@ -407,9 +408,9 @@ func (m *MockTaskService) BulkUpdate(ctx context.Context, projectID uuid.UUID, i
 	return service.BulkUpdateTasksResult{Updated: len(input.TaskIDs)}
 }
 
-func (m *MockTaskService) CheckoutTask(ctx context.Context, taskID uuid.UUID, ttlMinutes int) (*service.CheckoutResult, error) {
+func (m *MockTaskService) CheckoutTask(ctx context.Context, taskID uuid.UUID, ttlMinutes int, sessionMetadata map[string]interface{}) (*service.CheckoutResult, error) {
 	if m.CheckoutTaskFunc != nil {
-		return m.CheckoutTaskFunc(ctx, taskID, ttlMinutes)
+		return m.CheckoutTaskFunc(ctx, taskID, ttlMinutes, sessionMetadata)
 	}
 	return nil, nil
 }
@@ -426,6 +427,13 @@ func (m *MockTaskService) ExtendCheckout(ctx context.Context, taskID, token uuid
 		return m.ExtendCheckoutFunc(ctx, taskID, token, ttlMinutes)
 	}
 	return nil, nil
+}
+
+func (m *MockTaskService) ForceReleaseCheckout(ctx context.Context, taskID uuid.UUID) error {
+	if m.ForceReleaseCheckoutFunc != nil {
+		return m.ForceReleaseCheckoutFunc(ctx, taskID)
+	}
+	return nil
 }
 
 func (m *MockTaskService) MoveToProject(ctx context.Context, taskID, targetProjectID uuid.UUID) (*domain.Task, error) {
