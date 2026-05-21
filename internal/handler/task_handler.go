@@ -699,8 +699,8 @@ func (h *TaskHandler) ReleaseCheckout(c echo.Context) error {
 	}
 
 	if c.QueryParam("force") == "true" {
-		if err := h.taskService.ForceReleaseCheckout(c.Request().Context(), taskID); err != nil {
-			return handleError(c, err)
+		if forceErr := h.taskService.ForceReleaseCheckout(c.Request().Context(), taskID); forceErr != nil {
+			return handleError(c, forceErr)
 		}
 		return c.NoContent(http.StatusNoContent)
 	}

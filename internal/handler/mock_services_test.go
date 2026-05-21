@@ -305,23 +305,23 @@ func (m *MockActivityLogService) ListByTask(ctx context.Context, taskID uuid.UUI
 
 // MockTaskService implements service.TaskService for testing.
 type MockTaskService struct {
-	CreateFunc           func(ctx context.Context, task *domain.Task) error
-	GetByIDFunc          func(ctx context.Context, id uuid.UUID) (*domain.Task, error)
-	UpdateFunc           func(ctx context.Context, task *domain.Task) error
-	DeleteFunc           func(ctx context.Context, id uuid.UUID) error
-	ListFunc             func(ctx context.Context, projectID uuid.UUID, filter repository.TaskFilter, pg pagination.Params) (*pagination.Page[domain.Task], error)
-	MoveTaskFunc         func(ctx context.Context, taskID uuid.UUID, input service.MoveTaskInput) error
-	AssignTaskFunc       func(ctx context.Context, taskID uuid.UUID, input service.AssignTaskInput) error
-	CreateSubtaskFunc    func(ctx context.Context, parentTaskID uuid.UUID, input service.CreateSubtaskInput) (*domain.Task, error)
-	ListSubtasksFunc     func(ctx context.Context, parentTaskID uuid.UUID) ([]domain.Task, error)
-	GetMyTasksFunc       func(ctx context.Context, assigneeID uuid.UUID, assigneeType domain.AssigneeType) ([]domain.Task, error)
-	GetDefaultStatusFunc func(ctx context.Context, projectID uuid.UUID) (*domain.TaskStatus, error)
-	BulkUpdateFunc       func(ctx context.Context, projectID uuid.UUID, input service.BulkUpdateTasksInput) service.BulkUpdateTasksResult
+	CreateFunc               func(ctx context.Context, task *domain.Task) error
+	GetByIDFunc              func(ctx context.Context, id uuid.UUID) (*domain.Task, error)
+	UpdateFunc               func(ctx context.Context, task *domain.Task) error
+	DeleteFunc               func(ctx context.Context, id uuid.UUID) error
+	ListFunc                 func(ctx context.Context, projectID uuid.UUID, filter repository.TaskFilter, pg pagination.Params) (*pagination.Page[domain.Task], error)
+	MoveTaskFunc             func(ctx context.Context, taskID uuid.UUID, input service.MoveTaskInput) error
+	AssignTaskFunc           func(ctx context.Context, taskID uuid.UUID, input service.AssignTaskInput) error
+	CreateSubtaskFunc        func(ctx context.Context, parentTaskID uuid.UUID, input service.CreateSubtaskInput) (*domain.Task, error)
+	ListSubtasksFunc         func(ctx context.Context, parentTaskID uuid.UUID) ([]domain.Task, error)
+	GetMyTasksFunc           func(ctx context.Context, assigneeID uuid.UUID, assigneeType domain.AssigneeType) ([]domain.Task, error)
+	GetDefaultStatusFunc     func(ctx context.Context, projectID uuid.UUID) (*domain.TaskStatus, error)
+	BulkUpdateFunc           func(ctx context.Context, projectID uuid.UUID, input service.BulkUpdateTasksInput) service.BulkUpdateTasksResult
 	CheckoutTaskFunc         func(ctx context.Context, taskID uuid.UUID, ttlMinutes int, sessionMetadata map[string]interface{}) (*service.CheckoutResult, error)
 	ReleaseCheckoutFunc      func(ctx context.Context, taskID uuid.UUID, token uuid.UUID) error
 	ExtendCheckoutFunc       func(ctx context.Context, taskID uuid.UUID, token uuid.UUID, ttlMinutes int) (*service.CheckoutResult, error)
 	ForceReleaseCheckoutFunc func(ctx context.Context, taskID uuid.UUID) error
-	MoveToProjectFunc    func(ctx context.Context, taskID, targetProjectID uuid.UUID) (*domain.Task, error)
+	MoveToProjectFunc        func(ctx context.Context, taskID, targetProjectID uuid.UUID) (*domain.Task, error)
 }
 
 func (m *MockTaskService) Create(ctx context.Context, task *domain.Task) error {
