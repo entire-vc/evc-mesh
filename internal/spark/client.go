@@ -27,6 +27,7 @@ const (
 // normalised to the shape the Mesh frontend expects.
 type AgentManifest struct {
 	ID           string         `json:"id"`
+	Slug         string         `json:"slug"`
 	Name         string         `json:"name"`
 	Description  string         `json:"description"`
 	AgentType    string         `json:"agent_type"` // claude_code, openclaw, cline, aider, custom
@@ -71,6 +72,7 @@ type sparkAssetDetail struct {
 func (a *sparkAssetListItem) toManifest() AgentManifest {
 	return AgentManifest{
 		ID:          a.ID,
+		Slug:        a.Slug,
 		Name:        a.Title,
 		Description: a.ShortDescription,
 		AgentType:   a.Type,

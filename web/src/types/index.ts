@@ -417,6 +417,7 @@ export interface RegisterAgentResponse {
 
 export interface SparkAgentManifest {
   id: string;
+  slug: string;
   name: string;
   description: string;
   agent_type: AgentType | string;

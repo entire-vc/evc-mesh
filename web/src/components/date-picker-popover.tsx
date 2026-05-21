@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Calendar, X } from "lucide-react";
 import { cn } from "@/lib/cn";
 
@@ -62,18 +63,40 @@ export function DatePickerPopover({
   includeTime = false,
 }: DatePickerPopoverProps) {
   const [open, setOpen] = useState(false);
-  const containerRef = useRef<HTMLDivElement>(null);
+  const [popoverPos, setPopoverPos] = useState({ top: 0, left: 0 });
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // Close on outside click.
+  const calcPosition = useCallback(() => {
+    if (!triggerRef.current) return;
+    const rect = triggerRef.current.getBoundingClientRect();
+    setPopoverPos({ top: rect.bottom + 4, left: rect.left });
+  }, []);
+
+  // Recalculate position when opening or on scroll/resize.
+  useEffect(() => {
+    if (!open) return;
+    calcPosition();
+    window.addEventListener("scroll", calcPosition, true);
+    window.addEventListener("resize", calcPosition);
+    return () => {
+      window.removeEventListener("scroll", calcPosition, true);
+      window.removeEventListener("resize", calcPosition);
+    };
+  }, [open, calcPosition]);
+
+  // Close on outside click — must check both trigger and popover.
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
+      const target = event.target as Node;
       if (
-        containerRef.current &&
-        !containerRef.current.contains(event.target as Node)
+        triggerRef.current?.contains(target) ||
+        popoverRef.current?.contains(target)
       ) {
-        setOpen(false);
+        return;
       }
+      setOpen(false);
     }
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
@@ -86,23 +109,15 @@ export function DatePickerPopover({
     }
   }, [open]);
 
-  const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent) => {
-      if (e.key === "Escape") {
-        setOpen(false);
-      }
-    },
-    [],
-  );
+  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (e.key === "Escape") setOpen(false);
+  }, []);
 
   const handleDateChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
       const raw = e.target.value;
       onChange(raw || null);
-      // Only auto-close for date-only; datetime users may still pick time
-      if (raw && !includeTime) {
-        setOpen(false);
-      }
+      if (raw && !includeTime) setOpen(false);
     },
     [onChange, includeTime],
   );
@@ -116,13 +131,10 @@ export function DatePickerPopover({
   const inputType = includeTime ? "datetime-local" : "date";
 
   return (
-    <div
-      ref={containerRef}
-      className={cn("relative inline-block", className)}
-      onKeyDown={handleKeyDown}
-    >
+    <div className={cn("inline-block", className)} onKeyDown={handleKeyDown}>
       {/* Trigger */}
       <button
+        ref={triggerRef}
         type="button"
         onClick={() => setOpen((prev) => !prev)}
         className={cn(
@@ -153,50 +165,56 @@ export function DatePickerPopover({
         )}
       </button>
 
-      {/* Popover */}
-      {open && (
-        <div className="absolute left-0 top-full z-50 mt-1 min-w-[240px] rounded-lg border border-border bg-popover p-3 text-popover-foreground shadow-lg">
-          <p className="mb-2 text-xs font-medium text-muted-foreground">
-            {includeTime ? "Pick date & time" : "Pick a date"}
-          </p>
-          <input
-            ref={inputRef}
-            type={inputType}
-            value={value ?? ""}
-            onChange={handleDateChange}
-            className={cn(
-              "w-full rounded-md border border-input bg-background px-2 py-1.5 text-sm",
-              "transition-colors focus:outline-none focus:ring-2 focus:ring-ring",
-            )}
-          />
-          <div className="mt-2 flex items-center gap-2">
-            {includeTime && value && (
-              <button
-                type="button"
-                onClick={() => setOpen(false)}
-                className={cn(
-                  "flex-1 rounded-md bg-primary px-2 py-1 text-xs text-primary-foreground",
-                  "transition-colors hover:bg-primary/90",
-                )}
-              >
-                Done
-              </button>
-            )}
-            {showClearButton && value && (
-              <button
-                type="button"
-                onClick={handleClear}
-                className={cn(
-                  "flex-1 rounded-md px-2 py-1 text-xs text-muted-foreground",
-                  "transition-colors hover:bg-accent hover:text-accent-foreground",
-                )}
-              >
-                Clear
-              </button>
-            )}
-          </div>
-        </div>
-      )}
+      {/* Popover — rendered via portal so it's never clipped by overflow ancestors */}
+      {open &&
+        createPortal(
+          <div
+            ref={popoverRef}
+            style={{ top: popoverPos.top, left: popoverPos.left }}
+            className="fixed z-[9999] min-w-[240px] rounded-lg border border-border bg-popover p-3 text-popover-foreground shadow-lg"
+          >
+            <p className="mb-2 text-xs font-medium text-muted-foreground">
+              {includeTime ? "Pick date & time" : "Pick a date"}
+            </p>
+            <input
+              ref={inputRef}
+              type={inputType}
+              value={value ?? ""}
+              onChange={handleDateChange}
+              className={cn(
+                "w-full rounded-md border border-input bg-background px-2 py-1.5 text-sm",
+                "transition-colors focus:outline-none focus:ring-2 focus:ring-ring",
+              )}
+            />
+            <div className="mt-2 flex items-center gap-2">
+              {includeTime && value && (
+                <button
+                  type="button"
+                  onClick={() => setOpen(false)}
+                  className={cn(
+                    "flex-1 rounded-md bg-primary px-2 py-1 text-xs text-primary-foreground",
+                    "transition-colors hover:bg-primary/90",
+                  )}
+                >
+                  Done
+                </button>
+              )}
+              {showClearButton && value && (
+                <button
+                  type="button"
+                  onClick={handleClear}
+                  className={cn(
+                    "flex-1 rounded-md px-2 py-1 text-xs text-muted-foreground",
+                    "transition-colors hover:bg-accent hover:text-accent-foreground",
+                  )}
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+          </div>,
+          document.body,
+        )}
     </div>
   );
 }

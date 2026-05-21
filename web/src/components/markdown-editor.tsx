@@ -105,17 +105,20 @@ interface ToolbarButtonProps {
   onClick: () => void;
   children: React.ReactNode;
   active?: boolean;
+  disabled?: boolean;
 }
 
-function ToolbarButton({ title, onClick, children, active }: ToolbarButtonProps) {
+function ToolbarButton({ title, onClick, children, active, disabled }: ToolbarButtonProps) {
   return (
     <button
       type="button"
       title={title}
-      onClick={onClick}
+      onClick={disabled ? undefined : onClick}
+      disabled={disabled}
       className={cn(
         "flex h-7 w-7 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
         active && "bg-accent text-foreground",
+        disabled && "cursor-not-allowed opacity-40 hover:bg-transparent hover:text-muted-foreground",
       )}
     >
       {children}
@@ -389,8 +392,9 @@ export function MarkdownEditor({
           <Image className="h-3.5 w-3.5" />
         </ToolbarButton>
         <ToolbarButton
-          title={taskId ? "Attach file" : "Attach file (available after task is created)"}
+          title={taskId ? "Attach file" : "Прикрепить файл можно после создания задачи."}
           onClick={() => attachInputRef.current?.click()}
+          disabled={!taskId}
         >
           <Paperclip className="h-3.5 w-3.5" />
         </ToolbarButton>
