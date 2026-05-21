@@ -223,15 +223,15 @@ func (h *CommentHandler) GetRecentByWorkspace(c echo.Context) error {
 	filter := repository.CommentViewFilter{Limit: 50}
 
 	if v := c.QueryParam("limit"); v != "" {
-		n, err := strconv.Atoi(v)
-		if err != nil || n < 1 || n > 200 {
+		n, parseErr := strconv.Atoi(v)
+		if parseErr != nil || n < 1 || n > 200 {
 			return c.JSON(http.StatusBadRequest, apierror.ValidationError(map[string]string{"limit": "must be 1-200"}))
 		}
 		filter.Limit = n
 	}
 	if v := c.QueryParam("before"); v != "" {
-		t, err := time.Parse(time.RFC3339, v)
-		if err != nil {
+		t, parseErr := time.Parse(time.RFC3339, v)
+		if parseErr != nil {
 			return c.JSON(http.StatusBadRequest, apierror.ValidationError(map[string]string{"before": "must be RFC3339 timestamp"}))
 		}
 		filter.Before = &t
