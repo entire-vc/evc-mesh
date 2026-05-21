@@ -22,6 +22,7 @@ import NotificationSettingsPage from "@/pages/notification-settings";
 import { OrgChartPage } from "@/pages/org-chart";
 import { MemoryBrowserPage } from "@/pages/memory-browser";
 import { SessionDashboardPage } from "@/pages/session-dashboard";
+import { ActivityPage } from "@/pages/activity-page";
 import { TaskDeepLinkResolver } from "@/pages/task-deep-link";
 
 class ErrorBoundary extends Component<
@@ -117,6 +118,10 @@ export function App() {
           <Route
             path="w/:wsSlug/triage"
             element={<TriagePage />}
+          />
+          <Route
+            path="w/:wsSlug/activity"
+            element={<ActivityPage />}
           />
           <Route path="w/:wsSlug/p/:projectSlug" element={<BoardPage />} />
           <Route

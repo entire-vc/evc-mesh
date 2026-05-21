@@ -310,6 +310,25 @@ export interface PaginatedResponse<T> {
   has_more: boolean;
 }
 
+export interface Mention {
+  comment_id: string;
+  mentioned_id: string;
+  mentioned_kind: string;
+  mentioned_slug: string;
+  extracted_at: string;
+  seen_at: string | null;
+  task_id: string;
+  task_title: string;
+  project_id: string;
+  comment_body: string;
+  author_id: string;
+  author_name: string;
+}
+
+export interface UnseenCountResponse {
+  count: number;
+}
+
 // API request types
 
 export interface LoginRequest {
