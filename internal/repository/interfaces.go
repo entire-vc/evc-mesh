@@ -82,6 +82,10 @@ type TaskRepository interface {
 	// ExtendCheckout extends the checkout deadline. Returns ErrInvalidCheckoutToken when
 	// the provided token does not match or the checkout has already expired.
 	ExtendCheckout(ctx context.Context, taskID, token uuid.UUID, newExpires time.Time) error
+	// ForceReleaseCheckout clears the checkout fields without token verification.
+	// Used by the service layer for auto-release on terminal status transitions
+	// and for admin force-unlock. Returns nil even when no checkout was held.
+	ForceReleaseCheckout(ctx context.Context, taskID uuid.UUID) error
 	// MoveToProject atomically reassigns a task to a different project, assigning it
 	// the given target status and a new task_number within that project.
 	// Returns apierror.NotFound("Task") if the task does not exist or is soft-deleted.

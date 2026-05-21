@@ -363,6 +363,22 @@ func (m *MockTaskRepository) ExtendCheckout(_ context.Context, taskID, _ uuid.UU
 	return nil
 }
 
+func (m *MockTaskRepository) ForceReleaseCheckout(_ context.Context, taskID uuid.UUID) error {
+	if m.errToReturn != nil {
+		return m.errToReturn
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	t, ok := m.items[taskID]
+	if !ok {
+		return nil
+	}
+	t.CheckedOutBy = nil
+	t.CheckoutToken = nil
+	t.CheckoutExpires = nil
+	return nil
+}
+
 func (m *MockTaskRepository) MoveToProject(_ context.Context, taskID, targetProjectID, targetStatusID uuid.UUID) error {
 	if m.errToReturn != nil {
 		return m.errToReturn
