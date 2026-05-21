@@ -702,6 +702,10 @@ func main() {
 	api.GET("/me/mentions/unseen_count", mentionHandler.UnseenCount)
 	api.POST("/me/mentions/:comment_id/seen", mentionHandler.MarkSeen)
 
+	// Activity feed — my comments + workspace-wide recent comments.
+	api.GET("/me/comments", commentHandler.GetMyComments)
+	api.GET("/workspaces/:ws_id/comments/recent", commentHandler.GetRecentByWorkspace)
+
 	// Memory routes.
 	// NOTE: fixed-path routes (/memories/search, /memories/export, /memories/import,
 	// /memories/reindex) MUST be registered before /memories/:id to avoid the

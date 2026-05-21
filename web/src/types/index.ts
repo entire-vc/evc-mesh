@@ -224,6 +224,25 @@ export interface Comment {
   updated_at: string;
 }
 
+export interface CommentView {
+  comment_id: string;
+  task_id: string;
+  task_title: string;
+  project_id: string;
+  project_name: string;
+  comment_body: string;
+  author_id: string;
+  author_name: string;
+  author_kind: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CommentViewPage {
+  items: CommentView[];
+  next_cursor: string | null;
+}
+
 export interface TaskDependency {
   id: string;
   task_id: string;

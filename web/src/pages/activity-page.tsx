@@ -4,10 +4,11 @@ import { AtSign, MessageSquare } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { api } from "@/lib/api";
 import { useProjectStore } from "@/stores/project";
+import { useWorkspaceStore } from "@/stores/workspace";
 import { MarkdownRenderer } from "@/components/markdown-renderer";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "@/components/ui/toast";
-import type { Mention } from "@/types";
+import type { CommentView, CommentViewPage, Mention } from "@/types";
 
 function formatRelative(isoStr: string): string {
   const diff = Date.now() - new Date(isoStr).getTime();
@@ -34,8 +35,11 @@ export function ActivityPage() {
   const { wsSlug } = useParams();
   const navigate = useNavigate();
   const { projects } = useProjectStore();
+  const { currentWorkspace } = useWorkspaceStore();
   const [activeTab, setActiveTab] = useState<Tab>("mentions");
   const [mentions, setMentions] = useState<Mention[]>([]);
+  const [myComments, setMyComments] = useState<CommentView[]>([]);
+  const [recentComments, setRecentComments] = useState<CommentView[]>([]);
   const [loading, setLoading] = useState(false);
   const [lastVisit, setLastVisit] = useState<Date | null>(null);
 
@@ -56,9 +60,39 @@ export function ActivityPage() {
     }
   }, []);
 
+  const fetchMyComments = useCallback(async () => {
+    setLoading(true);
+    try {
+      const data = await api<CommentViewPage>("/api/v1/me/comments", { params: { limit: 50 } });
+      setMyComments(data?.items ?? []);
+    } catch {
+      toast.error("Failed to load comments");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const fetchRecentComments = useCallback(async () => {
+    if (!currentWorkspace) return;
+    setLoading(true);
+    try {
+      const data = await api<CommentViewPage>(
+        `/api/v1/workspaces/${currentWorkspace.id}/comments/recent`,
+        { params: { limit: 50 } },
+      );
+      setRecentComments(data?.items ?? []);
+    } catch {
+      toast.error("Failed to load recent comments");
+    } finally {
+      setLoading(false);
+    }
+  }, [currentWorkspace]);
+
   useEffect(() => {
     if (activeTab === "mentions") void fetchMentions();
-  }, [activeTab, fetchMentions]);
+    else if (activeTab === "my-comments") void fetchMyComments();
+    else if (activeTab === "all-recent") void fetchRecentComments();
+  }, [activeTab, fetchMentions, fetchMyComments, fetchRecentComments]);
 
   useEffect(() => {
     if (activeTab !== "mentions") return;
@@ -83,7 +117,6 @@ export function ActivityPage() {
                   : m,
               ),
             );
-            // invalidate sidebar badge cache so it re-fetches
             localStorage.removeItem("mesh_unseen_ts");
           })
           .catch(() => {});
@@ -91,6 +124,16 @@ export function ActivityPage() {
       const project = projects.find((p) => p.id === mention.project_id);
       if (wsSlug && project) {
         navigate(`/w/${wsSlug}/p/${project.slug}/t/${mention.task_id}`);
+      }
+    },
+    [wsSlug, navigate, projects],
+  );
+
+  const handleCommentClick = useCallback(
+    (comment: CommentView) => {
+      const project = projects.find((p) => p.id === comment.project_id);
+      if (wsSlug && project) {
+        navigate(`/w/${wsSlug}/p/${project.slug}/t/${comment.task_id}`);
       }
     },
     [wsSlug, navigate, projects],
@@ -126,11 +169,23 @@ export function ActivityPage() {
         />
       )}
 
-      {(activeTab === "my-comments" || activeTab === "all-recent") && (
-        <div className="flex flex-col items-center justify-center py-16 text-center text-muted-foreground">
-          <MessageSquare className="mb-3 h-8 w-8 opacity-30" />
-          <p className="text-sm">Backend endpoint pending — flagged in PR.</p>
-        </div>
+      {activeTab === "my-comments" && (
+        <CommentsTab
+          comments={myComments}
+          loading={loading}
+          onCommentClick={handleCommentClick}
+          emptyMessage="You haven't commented on anything yet."
+        />
+      )}
+
+      {activeTab === "all-recent" && (
+        <CommentsTab
+          comments={recentComments}
+          loading={loading}
+          onCommentClick={handleCommentClick}
+          emptyMessage="No comments in this workspace yet."
+          showAuthor
+        />
       )}
     </div>
   );
@@ -190,6 +245,89 @@ function MentionsTab({
         </section>
       )}
     </div>
+  );
+}
+
+function CommentsTab({
+  comments,
+  loading,
+  onCommentClick,
+  emptyMessage,
+  showAuthor = false,
+}: {
+  comments: CommentView[];
+  loading: boolean;
+  onCommentClick: (c: CommentView) => void;
+  emptyMessage: string;
+  showAuthor?: boolean;
+}) {
+  if (loading) {
+    return (
+      <div className="space-y-3">
+        {[0, 1, 2].map((i) => (
+          <Skeleton key={i} className="h-24 w-full rounded-lg" />
+        ))}
+      </div>
+    );
+  }
+
+  if (comments.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center py-16 text-center text-muted-foreground">
+        <MessageSquare className="mb-3 h-8 w-8 opacity-30" />
+        <p className="text-sm">{emptyMessage}</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-2">
+      {comments.map((comment) => (
+        <CommentCard
+          key={comment.comment_id}
+          comment={comment}
+          showAuthor={showAuthor}
+          onClick={onCommentClick}
+        />
+      ))}
+    </div>
+  );
+}
+
+function CommentCard({
+  comment,
+  showAuthor,
+  onClick,
+}: {
+  comment: CommentView;
+  showAuthor: boolean;
+  onClick: (c: CommentView) => void;
+}) {
+  const preview =
+    comment.comment_body.length > 200
+      ? comment.comment_body.slice(0, 200) + "…"
+      : comment.comment_body;
+
+  return (
+    <button
+      onClick={() => onClick(comment)}
+      className="w-full cursor-pointer rounded-lg border p-3 text-left transition-colors hover:bg-white/[0.02] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-blue-500/40"
+    >
+      <div className="min-w-0">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="truncate text-sm font-medium">{comment.task_title}</span>
+          <span className="shrink-0 text-xs text-muted-foreground">
+            {formatRelative(comment.created_at)}
+          </span>
+        </div>
+        <p className="mb-1 text-xs text-muted-foreground">
+          {showAuthor ? comment.author_name : comment.project_name}
+        </p>
+        <div className="line-clamp-2 text-xs text-muted-foreground">
+          <MarkdownRenderer content={preview} className="text-xs" />
+        </div>
+      </div>
+    </button>
   );
 }
 
