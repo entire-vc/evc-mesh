@@ -7,6 +7,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -46,17 +47,25 @@ func NewRedisWebhookDedupStore(rdb *redis.Client) WebhookDedupStore {
 	return &redisWebhookDedupStore{rdb: rdb}
 }
 
-// Claim uses SETNX to record the delivery key with a TTL.
+// Claim uses SET ... NX ... EX to record the delivery key with a TTL.
+// Returns true if the key was newly set (fresh delivery), false if it was
+// already present (duplicate). The `SET ... NX` modifier is the modern
+// equivalent of the deprecated SETNX command.
 func (s *redisWebhookDedupStore) Claim(ctx context.Context, deliveryID string) (bool, error) {
 	if s.rdb == nil {
 		return true, nil
 	}
 	key := "mesh:webhook:gh:delivery:" + deliveryID
-	ok, err := s.rdb.SetNX(ctx, key, "1", webhookDeliveryTTL).Result()
+	res, err := s.rdb.SetArgs(ctx, key, "1", redis.SetArgs{Mode: "NX", TTL: webhookDeliveryTTL}).Result()
 	if err != nil {
+		// redis.Nil here means NX rejected the set — duplicate, not a real error.
+		if errors.Is(err, redis.Nil) {
+			return false, nil
+		}
 		return false, err
 	}
-	return ok, nil
+	// SetArgs returns "OK" on success.
+	return res == "OK", nil
 }
 
 // VCSLinkHandler handles HTTP requests for VCS link management.
@@ -311,12 +320,12 @@ func (h *VCSLinkHandler) GitHubWebhook(c echo.Context) error {
 			return c.JSON(http.StatusOK, map[string]string{"status": "error_logged"})
 		}
 		return c.JSON(http.StatusOK, map[string]any{
-			"status":        "ok",
-			"task_id":       result.TaskID,
-			"transitioned":  result.Transitioned,
-			"reason":        result.Reason,
-			"old_status":    result.OldStatus,
-			"new_status":    result.NewStatus,
+			"status":       "ok",
+			"task_id":      result.TaskID,
+			"transitioned": result.Transitioned,
+			"reason":       result.Reason,
+			"old_status":   result.OldStatus,
+			"new_status":   result.NewStatus,
 		})
 
 	case "push":
@@ -405,4 +414,3 @@ func firstLine(s string) string {
 	}
 	return s
 }
-

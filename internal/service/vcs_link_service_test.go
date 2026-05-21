@@ -204,7 +204,7 @@ type moveCall struct {
 	StatusID uuid.UUID
 }
 
-func (t *fakeTaskService) Create(context.Context, *domain.Task) error          { return nil }
+func (t *fakeTaskService) Create(context.Context, *domain.Task) error { return nil }
 func (t *fakeTaskService) GetByID(_ context.Context, id uuid.UUID) (*domain.Task, error) {
 	return t.taskRepo.tasks[id], nil
 }

@@ -28,16 +28,16 @@ import (
 
 // stubVCSLinkService captures the GitHubWebhookEvent passed by the handler.
 type stubVCSLinkService struct {
-	mu               sync.Mutex
-	handleCalls      []service.GitHubWebhookEvent
-	handleResult     service.PRHandleResult
-	handleErr        error
-	createCalls      []domain.CreateVCSLinkInput
-	createReturn     *domain.VCSLink
-	createReturnErr  error
-	listReturn       []domain.VCSLink
-	listReturnErr    error
-	deleteReturnErr  error
+	mu              sync.Mutex
+	handleCalls     []service.GitHubWebhookEvent
+	handleResult    service.PRHandleResult
+	handleErr       error
+	createCalls     []domain.CreateVCSLinkInput
+	createReturn    *domain.VCSLink
+	createReturnErr error
+	listReturn      []domain.VCSLink
+	listReturnErr   error
+	deleteReturnErr error
 }
 
 func (s *stubVCSLinkService) Create(_ context.Context, input domain.CreateVCSLinkInput) (*domain.VCSLink, error) {
