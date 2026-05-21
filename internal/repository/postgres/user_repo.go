@@ -71,13 +71,31 @@ func (r *UserRepo) GetByEmail(ctx context.Context, email string) (*domain.User, 
 
 func (r *UserRepo) Update(ctx context.Context, user *domain.User) error {
 	const q = `
-		UPDATE users SET display_name = $2, avatar_url = $3, is_active = $4, updated_at = $5
+		UPDATE users SET display_name = $2, avatar_url = $3, is_active = $4, username = NULLIF($5, ''), updated_at = $6
 		WHERE id = $1
 	`
 	_, err := r.db.ExecContext(ctx, q,
-		user.ID, user.Name, user.AvatarURL, user.IsActive, time.Now(),
+		user.ID, user.Name, user.AvatarURL, user.IsActive, user.Username, time.Now(),
 	)
 	return err
+}
+
+// GetByUsernameGlobal returns the user with the given username across all workspaces, or (nil, nil) if not found.
+// Uses the global unique index ix_users_username (case-insensitive via lower()).
+func (r *UserRepo) GetByUsernameGlobal(ctx context.Context, username string) (*domain.User, error) {
+	const q = `
+		SELECT id, email, password_hash, display_name, COALESCE(username, '') AS username,
+		       avatar_url, is_active, created_at, updated_at
+		FROM users WHERE lower(username) = lower($1) LIMIT 1
+	`
+	var user domain.User
+	if err := r.db.GetContext(ctx, &user, q, username); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &user, nil
 }
 
 // GetByUsername returns the user with the given username in the workspace, or (nil, nil) if not found.

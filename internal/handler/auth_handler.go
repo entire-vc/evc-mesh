@@ -153,6 +153,7 @@ func (h *AuthHandler) Me(c echo.Context) error {
 // updateUserProfileRequest represents the JSON body for updating the current user's profile.
 type updateUserProfileRequest struct {
 	Name      string `json:"name"`
+	Username  string `json:"username"`
 	AvatarURL string `json:"avatar_url"`
 }
 
@@ -169,10 +170,31 @@ func (h *AuthHandler) UpdateMe(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
 	}
 
-	user, err := h.authService.UpdateProfile(c.Request().Context(), userID, req.Name, req.AvatarURL)
+	user, err := h.authService.UpdateProfile(c.Request().Context(), userID, req.Name, req.Username, req.AvatarURL)
 	if err != nil {
 		return handleError(c, err)
 	}
 
 	return c.JSON(http.StatusOK, user)
+}
+
+// CheckUsername handles GET /api/v1/auth/check-username (protected endpoint).
+// Returns {"available": true/false} for a given ?username= query parameter.
+func (h *AuthHandler) CheckUsername(c echo.Context) error {
+	userID, err := mw.GetUserID(c)
+	if err != nil {
+		return c.JSON(http.StatusUnauthorized, apierror.Unauthorized(""))
+	}
+
+	username := c.QueryParam("username")
+	if username == "" {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("username query param is required"))
+	}
+
+	available, err := h.authService.CheckUsername(c.Request().Context(), userID, username)
+	if err != nil {
+		return handleError(c, err)
+	}
+
+	return c.JSON(http.StatusOK, map[string]bool{"available": available})
 }

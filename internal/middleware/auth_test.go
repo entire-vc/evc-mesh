@@ -80,6 +80,7 @@ func (r *mockUserRepo) GetByUsername(_ context.Context, _ uuid.UUID, _ string) (
 	return nil, nil
 }
 func (r *mockUserRepo) SearchInWorkspace(_ context.Context, _ uuid.UUID, _ string, _ int) ([]domain.User, error) {
+func (r *mockUserRepo) GetByUsernameGlobal(_ context.Context, _ string) (*domain.User, error) {
 	return nil, nil
 }
 

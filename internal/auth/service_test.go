@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -74,6 +75,14 @@ func (r *mockUserRepo) GetByUsername(_ context.Context, _ uuid.UUID, _ string) (
 	return nil, nil
 }
 func (r *mockUserRepo) SearchInWorkspace(_ context.Context, _ uuid.UUID, _ string, _ int) ([]domain.User, error) {
+func (r *mockUserRepo) GetByUsernameGlobal(_ context.Context, username string) (*domain.User, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, u := range r.users {
+		if u.Username != "" && strings.EqualFold(u.Username, username) {
+			return u, nil
+		}
+	}
 	return nil, nil
 }
 
