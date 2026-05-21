@@ -121,5 +121,54 @@ func (r *VCSLinkRepo) ListByTask(ctx context.Context, taskID uuid.UUID) ([]domai
 	return result, nil
 }
 
+// Upsert inserts a new VCS link or updates status/title/metadata on conflict
+// of (task_id, provider, link_type, external_id). Used by the GitHub webhook
+// orchestrator so subsequent deliveries for the same PR (opened → synchronize
+// → closed) update the same row rather than failing the unique index.
+func (r *VCSLinkRepo) Upsert(ctx context.Context, link *domain.VCSLink) error {
+	const q = `
+		INSERT INTO vcs_links (
+			id, task_id, provider, link_type, external_id,
+			url, title, status, metadata, created_at
+		) VALUES (
+			$1, $2, $3, $4, $5,
+			$6, $7, $8, $9, $10
+		)
+		ON CONFLICT (task_id, provider, link_type, external_id) DO UPDATE
+		SET status = EXCLUDED.status,
+		    title = EXCLUDED.title,
+		    metadata = EXCLUDED.metadata,
+		    url = EXCLUDED.url
+	`
+	metadata := link.Metadata
+	if metadata == nil {
+		metadata = []byte("{}")
+	}
+	_, err := r.db.ExecContext(ctx, q,
+		link.ID, link.TaskID, string(link.Provider), string(link.LinkType), link.ExternalID,
+		link.URL, link.Title, string(link.Status), metadata, link.CreatedAt,
+	)
+	return err
+}
+
+// ListByExternalID returns links matching (provider, link_type, external_id),
+// newest first by created_at. Returns an empty slice when no row matches.
+func (r *VCSLinkRepo) ListByExternalID(ctx context.Context, provider domain.VCSProvider, linkType domain.VCSLinkType, externalID string) ([]domain.VCSLink, error) {
+	const q = `
+		SELECT * FROM vcs_links
+		WHERE provider = $1 AND link_type = $2 AND external_id = $3
+		ORDER BY created_at DESC
+	`
+	var rows []vcsLinkRow
+	if err := r.db.SelectContext(ctx, &rows, q, string(provider), string(linkType), externalID); err != nil {
+		return nil, err
+	}
+	result := make([]domain.VCSLink, len(rows))
+	for i := range rows {
+		result[i] = rows[i].toDomain()
+	}
+	return result, nil
+}
+
 // Ensure VCSLinkRepo satisfies the repository.VCSLinkRepository interface.
 var _ repository.VCSLinkRepository = (*VCSLinkRepo)(nil)
