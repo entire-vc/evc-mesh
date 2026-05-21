@@ -381,13 +381,15 @@ func main() {
 
 	// Build version — exposed under /api/version so it routes through the
 	// existing Caddy `handle /api/*` block without any Caddyfile changes.
-	e.GET("/api/version", func(c echo.Context) error {
+	versionHandler := func(c echo.Context) error {
 		return c.JSON(200, map[string]string{
 			"sha":     BuildSHA,
 			"built":   BuildTime,
 			"service": "evc-mesh-api",
 		})
-	})
+	}
+	e.GET("/api/version", versionHandler)
+	e.GET("/api/v1/version", versionHandler)
 
 	// 8a. Shared Redis client used by the WebSocket hub and the rate limiter.
 	// A single client is created here so all consumers share the same connection
