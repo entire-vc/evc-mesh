@@ -3,7 +3,6 @@ import { BrowserRouter, Navigate, Route, Routes } from "react-router";
 import { AppLayout } from "@/components/layout/app-layout";
 import { LoginPage } from "@/pages/login";
 import { RegisterPage } from "@/pages/register";
-import { DashboardPage } from "@/pages/dashboard";
 import { BoardPage } from "@/pages/board";
 import { ListViewPage } from "@/pages/list-view";
 import { TaskDetailPage } from "@/pages/task-detail";
@@ -78,7 +77,7 @@ export function App() {
         <Route element={<AppLayout />}>
           {/* Index route is handled by AppLayout redirects — no element needed */}
           <Route index element={null} />
-          <Route path="w/:wsSlug" element={<DashboardPage />} />
+          <Route path="w/:wsSlug" element={<Navigate to="activity" replace />} />
           <Route
             path="w/:wsSlug/org-chart"
             element={<OrgChartPage />}

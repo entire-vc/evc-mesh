@@ -1,7 +1,6 @@
-import { type FormEvent, useCallback, useEffect, useRef, useState } from "react";
+import { type FormEvent, useCallback, useEffect, useState } from "react";
 import { Navigate, Outlet, useLocation, useNavigate, useParams } from "react-router";
 import { cn } from "@/lib/cn";
-import { api } from "@/lib/api";
 import { useAuthStore } from "@/stores/auth";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { useProjectStore } from "@/stores/project";
@@ -38,8 +37,6 @@ export function AppLayout() {
     () => window.innerWidth < 768,
   );
   const [initialized, setInitialized] = useState(false);
-  const [defaultRedirect, setDefaultRedirect] = useState<string | null>(null);
-  const defaultRedirectCheckRef = useRef(false);
 
   const toggleSidebar = useCallback(() => {
     setSidebarCollapsed((prev) => !prev);
@@ -104,33 +101,6 @@ export function AppLayout() {
     location.pathname.startsWith("/t/") ||
     location.pathname.startsWith("/tasks/");
 
-  // Default-landing: when navigating to root with no wsSlug, redirect to /activity
-  // if there are unseen mentions, otherwise to dashboard. Uses 10s localStorage cache.
-  useEffect(() => {
-    if (wsSlug || !initialized || workspaces.length === 0 || isDeepLinkRoute) return;
-    if (defaultRedirectCheckRef.current) return;
-    defaultRedirectCheckRef.current = true;
-
-    const ws = workspaces[0]!;
-    const cachedTs = localStorage.getItem("mesh_unseen_ts");
-    const cachedCount = localStorage.getItem("mesh_unseen_count");
-    if (cachedTs && cachedCount && Date.now() - Number(cachedTs) < 10_000) {
-      const count = Number(cachedCount);
-      setDefaultRedirect(count > 0 ? `/w/${ws.slug}/activity` : `/w/${ws.slug}`);
-      return;
-    }
-
-    api<{ count: number }>("/api/v1/me/mentions/unseen_count")
-      .then(({ count }) => {
-        localStorage.setItem("mesh_unseen_ts", String(Date.now()));
-        localStorage.setItem("mesh_unseen_count", String(count));
-        setDefaultRedirect(count > 0 ? `/w/${ws.slug}/activity` : `/w/${ws.slug}`);
-      })
-      .catch(() => {
-        setDefaultRedirect(`/w/${ws.slug}`);
-      });
-  }, [wsSlug, initialized, workspaces, isDeepLinkRoute]);
-
   // Close sidebar on route change (mobile)
   useEffect(() => {
     if (window.innerWidth < 768) setSidebarCollapsed(true);
@@ -170,20 +140,9 @@ export function AppLayout() {
     );
   }
 
-  // Redirect to first workspace if no ws in URL — with activity check for default-landing.
-  // Skip for deep-link routes so the resolver can navigate to canonical ws+project path.
+  // Redirect to first workspace root → activity. Skip deep-link routes.
   if (!wsSlug && workspaces.length > 0 && !isDeepLinkRoute) {
-    if (defaultRedirect) {
-      return <Navigate to={defaultRedirect} replace />;
-    }
-    return (
-      <div className="flex h-screen items-center justify-center bg-background">
-        <div className="space-y-4 text-center">
-          <Skeleton className="mx-auto h-8 w-8 rounded-full" />
-          <Skeleton className="h-4 w-32" />
-        </div>
-      </div>
-    );
+    return <Navigate to={`/w/${workspaces[0]!.slug}/activity`} replace />;
   }
 
   // No workspaces — show create workspace screen
