@@ -172,7 +172,8 @@ func main() {
 		Password: cfg.Redis.Password,
 		DB:       cfg.Redis.DB,
 	})
-	agentNotifySvc := service.NewAgentNotifyService(agentService, agentNotifyRedis)
+	agentEventsRepo := postgres.NewAgentEventsRepo(db)
+	agentNotifySvc := service.NewAgentNotifyService(agentService, agentNotifyRedis, agentEventsRepo)
 
 	// Context cache for GET /tasks/:task_id/context (60-second TTL).
 	// A dedicated Redis client is used so it can be closed independently.
@@ -321,7 +322,7 @@ func main() {
 	commentHandler := handler.NewCommentHandler(commentService)
 	artifactHandler := handler.NewArtifactHandler(artifactService)
 	depHandler := handler.NewDependencyHandler(depService, taskService)
-	agentHandler := handler.NewAgentHandlerFull(agentService, taskService, taskStatusService, agentNotifyRedis)
+	agentHandler := handler.NewAgentHandlerWithEvents(agentService, taskService, taskStatusService, agentNotifyRedis, agentEventsRepo)
 	eventHandler := handler.NewEventHandler(eventBusService)
 	activityHandler := handler.NewActivityHandler(activityLogService)
 	customFieldHandler := handler.NewCustomFieldHandler(customFieldService)
@@ -773,6 +774,27 @@ func main() {
 		}
 	}()
 	log.Println("Memory decay scheduler started (6h interval)")
+
+	// 10b. Agent events sweeper — delete expired rows from agent_events every 5 minutes.
+	go func() {
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				if n, sweepErr := agentEventsRepo.DeleteExpired(ctx); sweepErr != nil {
+					log.Printf("[agent-events-sweeper] ERROR: %v", sweepErr)
+				} else if n > 0 {
+					log.Printf("[agent-events-sweeper] Deleted %d expired events", n)
+				}
+				cancel()
+			case <-schedulerShutdownCh:
+				return
+			}
+		}
+	}()
+	log.Println("Agent events sweeper started (5m interval)")
 
 	// 11. Start server with graceful shutdown.
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)

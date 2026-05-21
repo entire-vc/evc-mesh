@@ -13,11 +13,15 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
+
+	"github.com/entire-vc/evc-mesh/internal/domain"
+	"github.com/entire-vc/evc-mesh/internal/repository"
 )
 
 // AgentNotification is the payload sent to an agent via push mechanisms.
 // It follows the spec format with a full task snapshot and change diff.
 type AgentNotification struct {
+	EventID     uuid.UUID      `json:"event_id,omitempty"`   // UUID v7, set by dispatch() for durable SSE replay
 	EventType   string         `json:"event_type"`           // task.assigned, task.created, task.status_changed, task.commented
 	Timestamp   time.Time      `json:"timestamp"`            //nolint:all
 	WorkspaceID uuid.UUID      `json:"workspace_id"`         //nolint:all
@@ -33,6 +37,20 @@ type AgentNotification struct {
 	Payload     map[string]any `json:"payload,omitempty"`    // Deprecated — kept for backwards compat
 }
 
+// criticalSSEEventTypes receive a 7-day retention window in agent_events instead of the default 24h.
+var criticalSSEEventTypes = map[string]bool{
+	"task.assigned":  true,
+	"task.created":   true,
+	"task.mentioned": true,
+}
+
+func sseEventTTL(eventType string) time.Duration {
+	if criticalSSEEventTypes[eventType] {
+		return 7 * 24 * time.Hour
+	}
+	return 24 * time.Hour
+}
+
 // AgentNotifyService sends push notifications to agents via callback URL and Redis pub/sub.
 type AgentNotifyService interface {
 	// NotifyAgent sends a push notification to a specific agent about a task event.
@@ -43,19 +61,23 @@ type AgentNotifyService interface {
 
 // agentNotifyService implements AgentNotifyService.
 type agentNotifyService struct {
-	agentSvc AgentService
-	rdb      *redis.Client
-	client   *http.Client
+	agentSvc       AgentService
+	rdb            *redis.Client
+	agentEventsRepo repository.AgentEventsRepository // nil = persistence disabled
+	client         *http.Client
 }
 
 // Retry backoff intervals for 5xx / timeout failures.
 var callbackRetryBackoffs = []time.Duration{10 * time.Second, 60 * time.Second, 300 * time.Second}
 
 // NewAgentNotifyService returns a new AgentNotifyService.
-func NewAgentNotifyService(agentSvc AgentService, rdb *redis.Client) AgentNotifyService {
+// Pass a non-nil agentEventsRepo to enable durable SSE event persistence (Last-Event-ID replay).
+// Passing nil disables persistence — events are still delivered via Redis pub/sub.
+func NewAgentNotifyService(agentSvc AgentService, rdb *redis.Client, agentEventsRepo repository.AgentEventsRepository) AgentNotifyService {
 	return &agentNotifyService{
-		agentSvc: agentSvc,
-		rdb:      rdb,
+		agentSvc:        agentSvc,
+		rdb:             rdb,
+		agentEventsRepo: agentEventsRepo,
 		client: &http.Client{
 			Timeout: 10 * time.Second,
 		},
@@ -84,19 +106,50 @@ func (s *agentNotifyService) dispatch(agentID uuid.UUID, event AgentNotification
 		return
 	}
 
+	// Assign a UUID v7 event ID so the event can be used as a Last-Event-ID cursor.
+	// v7 UUIDs are time-ordered (monotonic), so cursor comparison via byte ordering is correct.
+	if eventID, v7Err := uuid.NewV7(); v7Err == nil {
+		event.EventID = eventID
+	} else {
+		// Fallback to random v4 if the clock is misconfigured — events still deliver but
+		// ordering guarantees for replay are weakened (effectively replay may skip events).
+		log.Printf("[agent-notify] uuid.NewV7 failed for agent %s: %v — falling back to v4", agentID, v7Err)
+		event.EventID = uuid.New()
+	}
+
 	payloadBytes, err := json.Marshal(event)
 	if err != nil {
 		log.Printf("[agent-notify] failed to marshal notification for agent %s: %v", agentID, err)
 		return
 	}
 
-	// 1. Publish to Redis pub/sub so SSE and long-poll consumers wake up.
+	// 1. Persist to agent_events for durable SSE replay (if repo is wired).
+	// Persist BEFORE Redis publish so the event is in DB before any subscriber could
+	// query it on reconnect.
+	if s.agentEventsRepo != nil {
+		now := time.Now()
+		agentEvent := &domain.AgentEvent{
+			EventID:     event.EventID,
+			AgentID:     agentID,
+			WorkspaceID: event.WorkspaceID,
+			EventType:   event.EventType,
+			Payload:     json.RawMessage(payloadBytes),
+			EmittedAt:   now,
+			ExpiresAt:   now.Add(sseEventTTL(event.EventType)),
+		}
+		if persistErr := s.agentEventsRepo.Create(bgCtx, agentEvent); persistErr != nil {
+			// Non-fatal: log and continue. Redis pub/sub still delivers live.
+			log.Printf("[agent-notify] failed to persist event %s for agent %s: %v", event.EventID, agentID, persistErr)
+		}
+	}
+
+	// 2. Publish to Redis pub/sub so SSE and long-poll consumers wake up.
 	channel := agentNotifyRedisChannel(agentID)
 	if pubErr := s.rdb.Publish(bgCtx, channel, string(payloadBytes)).Err(); pubErr != nil {
 		log.Printf("[agent-notify] failed to publish to Redis channel %s: %v", channel, pubErr)
 	}
 
-	// 2. If the agent has a callback_url, fire an HTTP POST with retry.
+	// 3. If the agent has a callback_url, fire an HTTP POST with retry.
 	if strings.TrimSpace(agent.CallbackURL) == "" {
 		return
 	}
