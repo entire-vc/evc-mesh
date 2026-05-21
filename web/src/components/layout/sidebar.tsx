@@ -1,8 +1,9 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router";
 import {
   Activity,
   BarChart2,
+  Bell,
   Bot,
   Brain,
   ChevronDown,
@@ -18,8 +19,11 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { MeshIcon } from "@/components/mesh-icon";
+import { api } from "@/lib/api";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { useProjectStore } from "@/stores/project";
+import { useAuthStore } from "@/stores/auth";
+import { useWebSocketStore } from "@/stores/websocket";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -49,12 +53,18 @@ export function Sidebar({ collapsed }: SidebarProps) {
   const navigate = useNavigate();
   const { workspaces, currentWorkspace, createWorkspace } = useWorkspaceStore();
   const { projects } = useProjectStore();
+  const { user } = useAuthStore();
+  const lastEvent = useWebSocketStore((s) => s.lastEvent);
+  const wsSubscribe = useWebSocketStore((s) => s.subscribe);
+  const wsUnsubscribe = useWebSocketStore((s) => s.unsubscribe);
   const [showCreateProject, setShowCreateProject] = useState(false);
   const [createWsOpen, setCreateWsOpen] = useState(false);
   const [wsName, setWsName] = useState("");
   const [wsSlugDraft, setWsSlugDraft] = useState("");
   const [wsCreating, setWsCreating] = useState(false);
   const [wsError, setWsError] = useState<string | null>(null);
+  const [unseenCount, setUnseenCount] = useState(0);
+  const unseenFetchedRef = useRef(false);
 
   const handleWsNameChange = useCallback((value: string) => {
     setWsName(value);
@@ -87,6 +97,35 @@ export function Sidebar({ collapsed }: SidebarProps) {
   const isTriageRoute = location.pathname.endsWith("/triage");
   const isMemoriesRoute = location.pathname.endsWith("/memories");
   const isSessionsRoute = location.pathname.endsWith("/sessions");
+  const isActivityRoute = location.pathname.includes("/activity");
+
+  // Fetch unseen mention count once on mount, then refresh on cache invalidation.
+  useEffect(() => {
+    if (unseenFetchedRef.current) return;
+    unseenFetchedRef.current = true;
+    api<{ count: number }>("/api/v1/me/mentions/unseen_count")
+      .then(({ count }) => {
+        localStorage.setItem("mesh_unseen_ts", String(Date.now()));
+        localStorage.setItem("mesh_unseen_count", String(count));
+        setUnseenCount(count);
+      })
+      .catch(() => {});
+  }, []);
+
+  // Subscribe to personal WS channel for mention.created events.
+  useEffect(() => {
+    if (!user?.id) return;
+    const channel = `ws:user:${user.id}`;
+    wsSubscribe(channel);
+    return () => wsUnsubscribe(channel);
+  }, [user?.id, wsSubscribe, wsUnsubscribe]);
+
+  // Increment badge on incoming mention.created event.
+  useEffect(() => {
+    if (lastEvent?.type === "mention.created") {
+      setUnseenCount((n) => n + 1);
+    }
+  }, [lastEvent]);
 
   if (collapsed) {
     return (
@@ -140,6 +179,21 @@ export function Sidebar({ collapsed }: SidebarProps) {
             )}
           >
             <Inbox className="h-4 w-4" />
+          </Link>
+          {/* Activity */}
+          <Link
+            to={wsSlug ? `/w/${wsSlug}/activity` : "/"}
+            className={cn(
+              "relative flex h-8 w-8 items-center justify-center rounded-lg text-sidebar-foreground hover:bg-sidebar-accent",
+              isActivityRoute && "bg-sidebar-accent text-sidebar-primary",
+            )}
+          >
+            <Bell className="h-4 w-4" />
+            {unseenCount > 0 && (
+              <span className="absolute -right-0.5 -top-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-red-500 text-[10px] font-bold text-white">
+                {unseenCount > 9 ? "9+" : unseenCount}
+              </span>
+            )}
           </Link>
           <div className="my-1 w-6 border-t border-sidebar-border" />
           {/* Team (Org Chart) */}
@@ -264,7 +318,7 @@ export function Sidebar({ collapsed }: SidebarProps) {
           to={wsSlug ? `/w/${wsSlug}` : "/"}
           className={cn(
             "flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-sidebar-foreground hover:bg-sidebar-accent",
-            !projectSlug && !isOrgChartRoute && !isSparkRoute && !isEventsRoute && !isAnalyticsRoute && !isIntegrationsRoute && !isInitiativesRoute && !isTriageRoute && !isMemoriesRoute && !isSessionsRoute && "bg-sidebar-accent font-medium",
+            !projectSlug && !isOrgChartRoute && !isSparkRoute && !isEventsRoute && !isAnalyticsRoute && !isIntegrationsRoute && !isInitiativesRoute && !isTriageRoute && !isMemoriesRoute && !isSessionsRoute && !isActivityRoute && "bg-sidebar-accent font-medium",
           )}
         >
           <LayoutDashboard className="h-4 w-4" />
@@ -332,6 +386,22 @@ export function Sidebar({ collapsed }: SidebarProps) {
         >
           <Inbox className="h-4 w-4" />
           Triage Inbox
+        </Link>
+        {/* Activity */}
+        <Link
+          to={wsSlug ? `/w/${wsSlug}/activity` : "/"}
+          className={cn(
+            "flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-sidebar-foreground hover:bg-sidebar-accent",
+            isActivityRoute && "bg-sidebar-accent font-medium",
+          )}
+        >
+          <Bell className="h-4 w-4" />
+          Activity
+          {unseenCount > 0 && (
+            <span className="ml-auto flex h-5 min-w-5 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-bold text-white">
+              {unseenCount > 99 ? "99+" : unseenCount}
+            </span>
+          )}
         </Link>
 
         <div className="my-2 border-t border-sidebar-border" />
