@@ -351,7 +351,13 @@ export function Sidebar({ collapsed }: SidebarProps) {
                     "bg-sidebar-accent font-medium text-sidebar-primary",
                 )}
               >
-                <FolderKanban className="h-4 w-4" />
+                {project.icon ? (
+                  <span className="flex h-4 w-4 shrink-0 items-center justify-center text-sm leading-none">
+                    {project.icon}
+                  </span>
+                ) : (
+                  <FolderKanban className="h-4 w-4 shrink-0" />
+                )}
                 <span className="flex-1 truncate">{project.name}</span>
               </Link>
             ))}

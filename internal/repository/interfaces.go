@@ -221,6 +221,19 @@ type EventBusMessageRepository interface {
 	DeleteExpired(ctx context.Context) (int64, error)
 }
 
+// AgentEventsRepository manages persistence for durable SSE event replay.
+type AgentEventsRepository interface {
+	// Create persists a new agent event.
+	Create(ctx context.Context, event *domain.AgentEvent) error
+	// Lookup returns the event with the given ID if it exists and has not expired.
+	// Returns (nil, nil) if not found or expired — used for cursor validation (410 path).
+	Lookup(ctx context.Context, eventID uuid.UUID) (*domain.AgentEvent, error)
+	// ListAfter returns up to limit events for agentID with event_id > lastEventID, ordered ASC.
+	ListAfter(ctx context.Context, agentID uuid.UUID, lastEventID uuid.UUID, limit int) ([]domain.AgentEvent, error)
+	// DeleteExpired removes all events past their expires_at. Returns rows deleted.
+	DeleteExpired(ctx context.Context) (int64, error)
+}
+
 // ActivityLogFilter defines filtering options for listing activity log entries.
 type ActivityLogFilter struct {
 	EntityType *string
