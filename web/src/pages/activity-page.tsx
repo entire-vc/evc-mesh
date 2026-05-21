@@ -32,6 +32,19 @@ export function ActivityPage() {
   const [activeTab, setActiveTab] = useState<Tab>("mentions");
   const [mentions, setMentions] = useState<Mention[]>([]);
   const [loading, setLoading] = useState(false);
+  const [lastVisit, setLastVisit] = useState<Date | null>(null);
+
+  useEffect(() => {
+    if (!wsSlug) return;
+    const key = `mesh:activity:last_visit:${wsSlug}`;
+    const stored = localStorage.getItem(key);
+    if (stored) setLastVisit(new Date(stored));
+    // update timestamp after 5s so user sees "Новое" before it clears
+    const timer = setTimeout(() => {
+      localStorage.setItem(key, new Date().toISOString());
+    }, 5000);
+    return () => clearTimeout(timer);
+  }, [wsSlug]);
 
   const fetchMentions = useCallback(async () => {
     setLoading(true);
@@ -101,7 +114,7 @@ export function ActivityPage() {
       </div>
 
       {activeTab === "mentions" && (
-        <MentionsTab mentions={mentions} loading={loading} onMentionClick={handleMentionClick} />
+        <MentionsTab mentions={mentions} loading={loading} onMentionClick={handleMentionClick} lastVisit={lastVisit} />
       )}
 
       {(activeTab === "my-comments" || activeTab === "all-recent") && (
@@ -118,10 +131,12 @@ function MentionsTab({
   mentions,
   loading,
   onMentionClick,
+  lastVisit,
 }: {
   mentions: Mention[];
   loading: boolean;
   onMentionClick: (m: Mention) => void;
+  lastVisit: Date | null;
 }) {
   if (loading) {
     return (
@@ -144,11 +159,50 @@ function MentionsTab({
     );
   }
 
+  if (!lastVisit) {
+    return (
+      <div className="space-y-2">
+        {mentions.map((mention) => (
+          <MentionCard key={mention.comment_id} mention={mention} onClick={onMentionClick} />
+        ))}
+      </div>
+    );
+  }
+
+  const newMentions = mentions.filter((m) => new Date(m.extracted_at) > lastVisit);
+  const oldMentions = mentions.filter((m) => new Date(m.extracted_at) <= lastVisit);
+
+  if (newMentions.length === 0) {
+    return (
+      <div className="space-y-2">
+        {mentions.map((mention) => (
+          <MentionCard key={mention.comment_id} mention={mention} onClick={onMentionClick} />
+        ))}
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-2">
-      {mentions.map((mention) => (
+      <div className="flex items-center gap-2 pb-1">
+        <span className="text-xs font-semibold uppercase tracking-wide text-primary">Новое</span>
+        <div className="h-px flex-1 bg-primary/20" />
+      </div>
+      {newMentions.map((mention) => (
         <MentionCard key={mention.comment_id} mention={mention} onClick={onMentionClick} />
       ))}
+      {oldMentions.length > 0 && (
+        <>
+          <div className="flex items-center gap-2 py-1">
+            <div className="h-px flex-1 bg-border" />
+            <span className="text-xs text-muted-foreground">Ранее</span>
+            <div className="h-px flex-1 bg-border" />
+          </div>
+          {oldMentions.map((mention) => (
+            <MentionCard key={mention.comment_id} mention={mention} onClick={onMentionClick} />
+          ))}
+        </>
+      )}
     </div>
   );
 }
