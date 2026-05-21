@@ -30,11 +30,12 @@ import (
 	wsHub "github.com/entire-vc/evc-mesh/internal/ws"
 )
 
-// Injected at build time via -ldflags "-X main.BuildSHA=... -X main.BuildTime=...".
-// See docs/self-hosting.md for the cross-compile command that sets these.
+// Injected at build time via -ldflags. See docs/deploy.md.
 var (
-	BuildSHA  = "dev"
-	BuildTime = "unknown"
+	BuildSHA     = "dev"
+	BuildTime    = "unknown"
+	BuildVersion = "dev"
+	BuildEnv     = "dev"
 )
 
 func main() {
@@ -385,17 +386,19 @@ func main() {
 		})
 	})
 
-	// Build version — exposed under /api/version so it routes through the
-	// existing Caddy `handle /api/*` block without any Caddyfile changes.
+	// Build version — public, no auth. All three paths route through Caddy's /api/* block.
 	versionHandler := func(c echo.Context) error {
 		return c.JSON(200, map[string]string{
-			"sha":     BuildSHA,
-			"built":   BuildTime,
-			"service": "evc-mesh-api",
+			"commit":      BuildSHA,
+			"build_time":  BuildTime,
+			"version":     BuildVersion,
+			"environment": BuildEnv,
+			"service":     "evc-mesh-api",
 		})
 	}
 	e.GET("/api/version", versionHandler)
 	e.GET("/api/v1/version", versionHandler)
+	e.GET("/api/v1/healthz/version", versionHandler)
 
 	// 8a. Shared Redis client used by the WebSocket hub and the rate limiter.
 	// A single client is created here so all consumers share the same connection
