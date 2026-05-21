@@ -411,14 +411,23 @@ func (s *Server) registerAdvancedTools() {
 
 	// --- Atomic Task Checkout ---
 	s.mcpServer.AddTool(mcpsdk.NewTool("checkout_task",
-		mcpsdk.WithDescription("Atomically acquire an exclusive lock on a task. Prevents other agents from checking out the same task simultaneously. The lock is TTL-based and will expire automatically. Use before starting work on a task to ensure exclusive access."),
+		mcpsdk.WithDescription("Atomically acquire an exclusive lock on a task. Prevents other agents from checking out the same task simultaneously. The lock is TTL-based and will expire automatically. Use before starting work on a task to ensure exclusive access. Returns checkout_token — save it and pass it to release_task / extend_checkout."),
 		mcpsdk.WithString("task_id", mcpsdk.Required(), mcpsdk.Description("Task ID to check out.")),
+		mcpsdk.WithNumber("ttl_minutes", mcpsdk.Description("Lock TTL in minutes. Server default 15, server max 240. Renew via extend_checkout for longer work.")),
 	), s.tracked("checkout_task", s.handleCheckoutTask))
 
 	s.mcpServer.AddTool(mcpsdk.NewTool("release_task",
-		mcpsdk.WithDescription("Release the exclusive lock on a task acquired via checkout_task. Call when done with the task or if you need to hand it off. The lock is also released automatically when it expires."),
+		mcpsdk.WithDescription("Release the exclusive lock on a task acquired via checkout_task. Call when done with the task or if you need to hand it off. The lock is also released automatically when it expires or when the task moves to done/review/cancelled."),
 		mcpsdk.WithString("task_id", mcpsdk.Required(), mcpsdk.Description("Task ID to release.")),
+		mcpsdk.WithString("checkout_token", mcpsdk.Required(), mcpsdk.Description("The checkout_token returned by checkout_task. Required — the server rejects releases that do not match the stored token.")),
 	), s.tracked("release_task", s.handleReleaseTask))
+
+	s.mcpServer.AddTool(mcpsdk.NewTool("extend_checkout",
+		mcpsdk.WithDescription("Extend the TTL of an existing task checkout. Use periodically during long work to keep the lock alive — recommended renew interval is roughly half the TTL. Requires the original checkout_token; if the lock has already expired, claim a fresh one via checkout_task instead."),
+		mcpsdk.WithString("task_id", mcpsdk.Required(), mcpsdk.Description("Task ID whose checkout to extend.")),
+		mcpsdk.WithString("checkout_token", mcpsdk.Required(), mcpsdk.Description("The checkout_token returned by checkout_task.")),
+		mcpsdk.WithNumber("ttl_minutes", mcpsdk.Description("New TTL in minutes from now. Server default 15, server max 240.")),
+	), s.tracked("extend_checkout", s.handleExtendCheckout))
 
 	// --- Comments & Artifacts ---
 	s.mcpServer.AddTool(mcpsdk.NewTool("list_comments",

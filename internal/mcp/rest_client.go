@@ -771,18 +771,40 @@ func (c *RESTClient) ForgetMemory(ctx context.Context, memoryID string) error {
 	return c.doJSON(ctx, http.MethodDelete, "/api/v1/memories/"+memoryID, nil, nil)
 }
 
-// CheckoutTask acquires an exclusive TTL-based lock on a task.
-func (c *RESTClient) CheckoutTask(ctx context.Context, taskID string) (map[string]any, error) {
+// CheckoutTask acquires an exclusive TTL-based lock on a task. When ttlMinutes
+// is zero the server applies its default (15 min); otherwise it's clamped
+// server-side to [1, 240].
+func (c *RESTClient) CheckoutTask(ctx context.Context, taskID string, ttlMinutes int) (map[string]any, error) {
+	var body map[string]any
+	if ttlMinutes > 0 {
+		body = map[string]any{"ttl_minutes": ttlMinutes}
+	}
 	var result map[string]any
-	if err := c.doJSON(ctx, http.MethodPost, "/api/v1/tasks/"+taskID+"/checkout", nil, &result); err != nil {
+	if err := c.doJSON(ctx, http.MethodPost, "/api/v1/tasks/"+taskID+"/checkout", body, &result); err != nil {
 		return nil, err
 	}
 	return result, nil
 }
 
 // ReleaseTask releases the exclusive lock on a task acquired via CheckoutTask.
-func (c *RESTClient) ReleaseTask(ctx context.Context, taskID string) error {
-	return c.doJSON(ctx, http.MethodDelete, "/api/v1/tasks/"+taskID+"/checkout", nil, nil)
+// The checkoutToken returned by CheckoutTask is required.
+func (c *RESTClient) ReleaseTask(ctx context.Context, taskID, checkoutToken string) error {
+	body := map[string]any{"checkout_token": checkoutToken}
+	return c.doJSON(ctx, http.MethodDelete, "/api/v1/tasks/"+taskID+"/checkout", body, nil)
+}
+
+// ExtendCheckout extends the TTL of an existing checkout. When ttlMinutes is
+// zero the server applies its default (15 min).
+func (c *RESTClient) ExtendCheckout(ctx context.Context, taskID, checkoutToken string, ttlMinutes int) (map[string]any, error) {
+	body := map[string]any{"checkout_token": checkoutToken}
+	if ttlMinutes > 0 {
+		body["ttl_minutes"] = ttlMinutes
+	}
+	var result map[string]any
+	if err := c.doJSON(ctx, http.MethodPatch, "/api/v1/tasks/"+taskID+"/checkout", body, &result); err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
 // ExportWorkspaceConfig exports workspace configuration as YAML text.
