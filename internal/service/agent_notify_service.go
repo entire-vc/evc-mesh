@@ -61,10 +61,10 @@ type AgentNotifyService interface {
 
 // agentNotifyService implements AgentNotifyService.
 type agentNotifyService struct {
-	agentSvc       AgentService
-	rdb            *redis.Client
+	agentSvc        AgentService
+	rdb             *redis.Client
 	agentEventsRepo repository.AgentEventsRepository // nil = persistence disabled
-	client         *http.Client
+	client          *http.Client
 }
 
 // Retry backoff intervals for 5xx / timeout failures.

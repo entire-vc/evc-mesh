@@ -35,10 +35,10 @@ const (
 // AgentHandler handles HTTP requests for agent management.
 type AgentHandler struct {
 	agentService    service.AgentService
-	taskService     service.TaskService                    // optional, used for GetMyTasks and PollTasks
-	statusService   service.TaskStatusService              // optional, used for status_category filtering
-	rdb             *redis.Client                          // optional, used for SSE and long-poll
-	agentEventsRepo repository.AgentEventsRepository       // optional, enables Last-Event-ID SSE replay
+	taskService     service.TaskService              // optional, used for GetMyTasks and PollTasks
+	statusService   service.TaskStatusService        // optional, used for status_category filtering
+	rdb             *redis.Client                    // optional, used for SSE and long-poll
+	agentEventsRepo repository.AgentEventsRepository // optional, enables Last-Event-ID SSE replay
 }
 
 // NewAgentHandler creates a new AgentHandler with the given service.

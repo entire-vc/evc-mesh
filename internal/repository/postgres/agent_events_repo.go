@@ -49,7 +49,7 @@ func (r *AgentEventsRepo) Lookup(ctx context.Context, eventID uuid.UUID) (*domai
 	return &ev, nil
 }
 
-func (r *AgentEventsRepo) ListAfter(ctx context.Context, agentID uuid.UUID, lastEventID uuid.UUID, limit int) ([]domain.AgentEvent, error) {
+func (r *AgentEventsRepo) ListAfter(ctx context.Context, agentID, lastEventID uuid.UUID, limit int) ([]domain.AgentEvent, error) {
 	const q = `
 		SELECT event_id, agent_id, workspace_id, event_type, payload, emitted_at, expires_at
 		FROM agent_events
