@@ -623,6 +623,13 @@ type MentionService interface {
 	CountUnseen(ctx context.Context, mentionedID uuid.UUID, mentionedKind string) (int64, error)
 }
 
+// MentionablesService provides autocomplete results for @-mention suggestions in comments.
+type MentionablesService interface {
+	// Search returns agents and workspace-member users whose slug or display_name
+	// starts with prefix (empty prefix returns top-limit results).
+	Search(ctx context.Context, workspaceID uuid.UUID, prefix string, limit int) ([]domain.Mentionable, error)
+}
+
 // MemoryService provides business logic for agent persistent memory.
 type MemoryService interface {
 	Remember(ctx context.Context, mem *domain.Memory) (string, error) // returns "created" or "updated"
