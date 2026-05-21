@@ -61,7 +61,7 @@ func newSSETestHandler(rdb *redis.Client, evRepo repository.AgentEventsRepositor
 
 func sseEchoCtx(t *testing.T, e *echo.Echo, agentID uuid.UUID, headers map[string]string) (echo.Context, *httptest.ResponseRecorder) {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodGet, "/agents/me/events/stream", nil)
+	req := httptest.NewRequest(http.MethodGet, "/agents/me/events/stream", http.NoBody)
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
@@ -74,7 +74,7 @@ func sseEchoCtx(t *testing.T, e *echo.Echo, agentID uuid.UUID, headers map[strin
 func sseEchoCtxTimeout(t *testing.T, e *echo.Echo, agentID uuid.UUID, headers map[string]string, d time.Duration) (echo.Context, *httptest.ResponseRecorder, context.CancelFunc) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), d)
-	req := httptest.NewRequest(http.MethodGet, "/agents/me/events/stream", nil).WithContext(ctx)
+	req := httptest.NewRequest(http.MethodGet, "/agents/me/events/stream", http.NoBody).WithContext(ctx)
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}

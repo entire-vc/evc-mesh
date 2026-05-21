@@ -28,8 +28,10 @@ func (s *notifyTestAgentSvc) GetByID(_ context.Context, _ uuid.UUID) (*domain.Ag
 func (s *notifyTestAgentSvc) Register(_ context.Context, _ RegisterAgentInput) (*RegisterAgentOutput, error) {
 	panic("not implemented")
 }
-func (s *notifyTestAgentSvc) Update(_ context.Context, _ *domain.Agent) error { panic("not implemented") }
-func (s *notifyTestAgentSvc) Delete(_ context.Context, _ uuid.UUID) error      { panic("not implemented") }
+func (s *notifyTestAgentSvc) Update(_ context.Context, _ *domain.Agent) error {
+	panic("not implemented")
+}
+func (s *notifyTestAgentSvc) Delete(_ context.Context, _ uuid.UUID) error { panic("not implemented") }
 func (s *notifyTestAgentSvc) List(_ context.Context, _ uuid.UUID, _ repository.AgentFilter, _ pagination.Params) (*pagination.Page[domain.Agent], error) {
 	panic("not implemented")
 }
@@ -81,7 +83,7 @@ func (r *trackingEventsRepo) Create(_ context.Context, ev *domain.AgentEvent) er
 func (r *trackingEventsRepo) Lookup(_ context.Context, _ uuid.UUID) (*domain.AgentEvent, error) {
 	return nil, nil
 }
-func (r *trackingEventsRepo) ListAfter(_ context.Context, _ uuid.UUID, _ uuid.UUID, _ int) ([]domain.AgentEvent, error) {
+func (r *trackingEventsRepo) ListAfter(_ context.Context, _, _ uuid.UUID, _ int) ([]domain.AgentEvent, error) {
 	return nil, nil
 }
 func (r *trackingEventsRepo) DeleteExpired(_ context.Context) (int64, error) { return 0, nil }
@@ -155,7 +157,7 @@ func TestAgentNotify_CriticalEvent_7dTTL(t *testing.T) {
 	})
 	ev := waitNotify(t, evRepo)
 	got := ev.ExpiresAt.Sub(ev.EmittedAt)
-	assert.InDelta(t, (7*24*time.Hour).Seconds(), got.Seconds(), 5)
+	assert.InDelta(t, (7 * 24 * time.Hour).Seconds(), got.Seconds(), 5)
 }
 
 func TestAgentNotify_NonCriticalEvent_24hTTL(t *testing.T) {
@@ -170,7 +172,7 @@ func TestAgentNotify_NonCriticalEvent_24hTTL(t *testing.T) {
 	})
 	ev := waitNotify(t, evRepo)
 	got := ev.ExpiresAt.Sub(ev.EmittedAt)
-	assert.InDelta(t, (24*time.Hour).Seconds(), got.Seconds(), 5)
+	assert.InDelta(t, (24 * time.Hour).Seconds(), got.Seconds(), 5)
 }
 
 func TestAgentNotify_NilRepo_NoPanic(t *testing.T) {
