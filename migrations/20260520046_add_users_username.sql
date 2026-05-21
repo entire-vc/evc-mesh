@@ -2,6 +2,7 @@
 ALTER TABLE users ADD COLUMN IF NOT EXISTS username TEXT;
 
 -- Backfill: derive username from email prefix, handle collisions with numeric suffix.
+-- +goose StatementBegin
 DO $$
 DECLARE
     rec    RECORD;
@@ -34,6 +35,7 @@ BEGIN
     END LOOP;
 END;
 $$;
+-- +goose StatementEnd
 
 -- Now make it NOT NULL and add the constraint + unique index.
 ALTER TABLE users ALTER COLUMN username SET NOT NULL;
