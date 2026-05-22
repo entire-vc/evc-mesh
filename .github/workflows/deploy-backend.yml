@@ -99,12 +99,14 @@ jobs:
           cache: true
 
       - name: Build backend binary (linux/amd64)
+        env:
+          BUILD_SHA: ${{ github.sha }}
         run: |
           BUILD_VERSION=$(git describe --tags --always 2>/dev/null || echo dev)
           BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           GOOS=linux GOARCH=amd64 go build \
             -ldflags "-w -s \
-              -X main.BuildSHA=${{ github.sha }} \
+              -X main.BuildSHA=${BUILD_SHA} \
               -X main.BuildTime=${BUILD_TIME} \
               -X main.BuildVersion=${BUILD_VERSION} \
               -X main.BuildEnv=prod" \
@@ -119,9 +121,11 @@ jobs:
         run: ssh-keyscan -H 216.57.106.222 >> ~/.ssh/known_hosts
 
       - name: Burst-deploy guard
+        env:
+          GH_FORCE_INPUT: ${{ inputs.force }}
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
         run: |
-          FORCE="${{ inputs.force }}"
-          COMMIT_MSG="${{ github.event.head_commit.message }}"
+          FORCE="${GH_FORCE_INPUT}"
           if echo "$COMMIT_MSG" | grep -qF '[force-deploy]'; then
             FORCE=true
           fi
@@ -146,11 +150,13 @@ jobs:
             date +%s > /opt/evc-mesh/.last-backend-deploy'
 
       - name: Smoke test
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
         run: |
           sleep 8
           DEPLOYED=$(curl -sf http://216.57.106.222:8005/api/v1/healthz/version | python3 -c "import sys,json; print(json.load(sys.stdin)['commit'])")
-          if [ "$DEPLOYED" != "${{ github.sha }}" ]; then
-            echo "::error::Smoke test FAILED: expected ${{ github.sha }}, got ${DEPLOYED}"
+          if [ "$DEPLOYED" != "${EXPECTED_SHA}" ]; then
+            echo "::error::Smoke test FAILED: expected ${EXPECTED_SHA}, got ${DEPLOYED}"
             exit 1
           fi
           echo "Deploy verified: ${DEPLOYED}"
