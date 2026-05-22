@@ -5,6 +5,8 @@ import { useAuthStore } from "@/stores/auth";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { useProjectStore } from "@/stores/project";
 import { useWebSocketStore } from "@/stores/websocket";
+import { useInstallPrompt } from "@/hooks/use-install-prompt";
+import { InstallPromptBanner } from "@/components/install-prompt";
 import { Sidebar } from "./sidebar";
 import { Header } from "./header";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -33,6 +35,7 @@ export function AppLayout() {
   const wsConnect = useWebSocketStore((s) => s.connect);
   const wsDisconnect = useWebSocketStore((s) => s.disconnect);
 
+  const installPrompt = useInstallPrompt();
   const [sidebarCollapsed, setSidebarCollapsed] = useState(
     () => window.innerWidth < 768,
   );
@@ -176,10 +179,20 @@ export function AppLayout() {
       </div>
 
       <div className="flex flex-1 flex-col overflow-hidden">
-        <Header onToggleSidebar={toggleSidebar} />
+        <Header
+          onToggleSidebar={toggleSidebar}
+          installable={installPrompt.showDesktopButton}
+          onInstall={installPrompt.promptInstall}
+        />
         <main className="flex-1 overflow-y-auto p-3 md:p-6">
           <Outlet />
         </main>
+        {installPrompt.showBanner && (
+          <InstallPromptBanner
+            onInstall={installPrompt.promptInstall}
+            onDismiss={installPrompt.dismiss}
+          />
+        )}
       </div>
     </div>
   );

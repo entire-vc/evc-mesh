@@ -6,6 +6,7 @@ import {
   Bot,
   Brain,
   ChevronRight,
+  Download,
   Inbox,
   LayoutDashboard,
   LayoutGrid,
@@ -349,6 +350,8 @@ function TaskSearchBox({ wsSlug }: { wsSlug: string | undefined }) {
 
 interface HeaderProps {
   onToggleSidebar: () => void;
+  installable?: boolean;
+  onInstall?: () => void;
 }
 
 function useCurrentView(): "board" | "list" | "timeline" | "calendar" | null {
@@ -446,7 +449,7 @@ function TeamViewTabs({ currentView, wsSlug }: { currentView: "tree" | "grid"; w
   );
 }
 
-export function Header({ onToggleSidebar }: HeaderProps) {
+export function Header({ onToggleSidebar, installable, onInstall }: HeaderProps) {
   const { wsSlug, projectSlug } = useParams();
   const { user, logout } = useAuthStore();
   const { currentWorkspace } = useWorkspaceStore();
@@ -533,6 +536,19 @@ export function Header({ onToggleSidebar }: HeaderProps) {
 
       {/* Notifications */}
       <NotificationBell />
+
+      {/* PWA install — desktop only, non-intrusive */}
+      {installable && onInstall && (
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={onInstall}
+          title="Install Mesh as app"
+          className="hidden md:inline-flex"
+        >
+          <Download className="h-4 w-4" />
+        </Button>
+      )}
 
       {/* Theme toggle */}
       <Button variant="ghost" size="icon" onClick={toggleTheme} className="hidden sm:inline-flex">
