@@ -38,3 +38,30 @@ self.addEventListener('fetch', (event) => {
       .catch(() => caches.match(event.request))
   );
 });
+
+self.addEventListener('push', (event) => {
+  if (!event.data) return;
+  const data = event.data.json();
+  event.waitUntil(
+    self.registration.showNotification(data.title, {
+      body: data.body,
+      tag: data.tag,
+      icon: data.icon || '/icons/icon-192.png',
+      badge: '/icons/badge-72.png',
+      data: { url: data.url },
+    })
+  );
+});
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  event.waitUntil(
+    self.clients.matchAll({ type: 'window' }).then((clients) => {
+      const url = event.notification.data?.url || '/';
+      for (const c of clients) {
+        if (c.url.includes(url)) return c.focus();
+      }
+      return self.clients.openWindow(url);
+    })
+  );
+});
