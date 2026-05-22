@@ -337,7 +337,7 @@ export function EventFeedPage() {
   function buildParams(f: FilterState): Record<string, string> {
     const p: Record<string, string> = { per_page: "100" };
     // Single event_type goes to server; multi-type handled client-side.
-    if (f.eventTypes.length === 1) p.event_type = f.eventTypes[0];
+    if (f.eventTypes.length === 1) p.event_type = f.eventTypes[0]!;
     if (f.actorType === "agent") p.actor_type = "agent";
     if (f.dateFrom) p.date_from = new Date(f.dateFrom).toISOString();
     if (f.dateTo) {
