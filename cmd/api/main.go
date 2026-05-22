@@ -354,7 +354,8 @@ func main() {
 	commentHandler := handler.NewCommentHandler(commentService)
 	artifactHandler := handler.NewArtifactHandler(artifactService)
 	depHandler := handler.NewDependencyHandler(depService, taskService)
-	agentHandler := handler.NewAgentHandlerWithEvents(agentService, taskService, taskStatusService, agentNotifyRedis, agentEventsRepo)
+	sessionRepo := postgres.NewSessionRepo(db)
+	agentHandler := handler.NewAgentHandlerWithEvents(agentService, taskService, taskStatusService, agentNotifyRedis, agentEventsRepo, sessionRepo)
 	eventHandler := handler.NewEventHandler(eventBusService)
 	activityHandler := handler.NewActivityHandler(activityLogService)
 	customFieldHandler := handler.NewCustomFieldHandler(customFieldService)
@@ -612,6 +613,7 @@ func main() {
 	api.GET("/agents/me/tasks", agentHandler.GetMyTasks)
 	api.GET("/agents/me/events/stream", agentHandler.EventStream)
 	api.GET("/agents/me/tasks/poll", agentHandler.PollTasks)
+	api.POST("/agents/me/sessions/report", agentHandler.ReportSession)
 	api.POST("/agents/heartbeat", agentHandler.Heartbeat)
 	api.GET("/agents/:agent_id", agentHandler.GetByID)
 	api.PATCH("/agents/:agent_id", agentHandler.Update, rbac(mw.PermDeleteAgent))
@@ -875,6 +877,27 @@ func main() {
 		}
 	}()
 	log.Println("Agent events sweeper started (5m interval)")
+
+	// 10c. Stale session sweeper — end agent sessions left active longer than 6h every hour.
+	go func() {
+		ticker := time.NewTicker(1 * time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				if n, sweepErr := sessionRepo.EndStale(ctx, 6*time.Hour); sweepErr != nil {
+					log.Printf("[session-sweeper] ERROR: %v", sweepErr)
+				} else if n > 0 {
+					log.Printf("[session-sweeper] Ended %d stale sessions", n)
+				}
+				cancel()
+			case <-schedulerShutdownCh:
+				return
+			}
+		}
+	}()
+	log.Println("Stale session sweeper started (1h interval)")
 
 	// 11. Start server with graceful shutdown.
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)

@@ -56,7 +56,7 @@ func newSSEMiniredis(t *testing.T) (*miniredis.Miniredis, *redis.Client) {
 }
 
 func newSSETestHandler(rdb *redis.Client, evRepo repository.AgentEventsRepository) *AgentHandler {
-	return NewAgentHandlerWithEvents(&MockAgentService{}, nil, nil, rdb, evRepo)
+	return NewAgentHandlerWithEvents(&MockAgentService{}, nil, nil, rdb, evRepo, nil)
 }
 
 func sseEchoCtx(t *testing.T, e *echo.Echo, agentID uuid.UUID, headers map[string]string) (echo.Context, *httptest.ResponseRecorder) {
