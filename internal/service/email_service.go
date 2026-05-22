@@ -56,9 +56,9 @@ func buildInviteEmail(toEmail, workspaceName, inviteURL string) string {
 	_ = toEmail
 	var b strings.Builder
 	b.WriteString(`<!DOCTYPE html><html><body style="font-family:sans-serif;color:#111;max-width:480px;margin:40px auto;padding:0 16px">`)
-	b.WriteString(fmt.Sprintf(`<h2 style="font-size:20px">You've been invited to <strong>%s</strong></h2>`, workspaceName))
+	fmt.Fprintf(&b, `<h2 style="font-size:20px">You've been invited to <strong>%s</strong></h2>`, workspaceName)
 	b.WriteString(`<p style="color:#555">Click the button below to accept the invitation and set up your account.</p>`)
-	b.WriteString(fmt.Sprintf(`<a href="%s" style="display:inline-block;margin:24px 0;padding:12px 24px;background:#18181b;color:#fff;text-decoration:none;border-radius:6px;font-weight:600">Accept Invitation</a>`, inviteURL))
+	fmt.Fprintf(&b, `<a href=%q style="display:inline-block;margin:24px 0;padding:12px 24px;background:#18181b;color:#fff;text-decoration:none;border-radius:6px;font-weight:600">Accept Invitation</a>`, inviteURL)
 	b.WriteString(`<p style="font-size:12px;color:#999">This link expires in 7 days. If you weren't expecting this, you can ignore this email.</p>`)
 	b.WriteString(`</body></html>`)
 	return b.String()

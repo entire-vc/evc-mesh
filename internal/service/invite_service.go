@@ -138,20 +138,20 @@ func (s *inviteService) GetByToken(ctx context.Context, token string) (*domain.W
 	return invite, nil
 }
 
-func (s *inviteService) AcceptInvite(ctx context.Context, input AcceptInviteInput) (string, error) {
+func (s *inviteService) AcceptInvite(ctx context.Context, input AcceptInviteInput) (accessToken, refreshToken string, err error) {
 	invite, err := s.inviteRepo.GetByToken(ctx, input.Token)
 	if err != nil {
-		return "", fmt.Errorf("invite_service.AcceptInvite: %w", err)
+		return "", "", fmt.Errorf("invite_service.AcceptInvite: %w", err)
 	}
 	if invite == nil || !invite.IsPending() {
-		return "", apierror.BadRequest("invite is invalid or has expired")
+		return "", "", apierror.BadRequest("invite is invalid or has expired")
 	}
 
 	if input.Password == "" {
-		return "", apierror.ValidationError(map[string]string{"password": "password is required"})
+		return "", "", apierror.ValidationError(map[string]string{"password": "password is required"})
 	}
-	if err := auth.ValidatePassword(input.Password); err != nil {
-		return "", err
+	if validateErr := auth.ValidatePassword(input.Password); validateErr != nil {
+		return "", "", validateErr
 	}
 
 	name := input.Name
@@ -162,13 +162,13 @@ func (s *inviteService) AcceptInvite(ctx context.Context, input AcceptInviteInpu
 	// Get or create user.
 	user, err := s.userRepo.GetByEmail(ctx, invite.Email)
 	if err != nil {
-		return "", fmt.Errorf("invite_service.AcceptInvite: %w", err)
+		return "", "", fmt.Errorf("invite_service.AcceptInvite: %w", err)
 	}
 
 	if user == nil {
 		hash, hashErr := bcrypt.GenerateFromPassword([]byte(input.Password), 10)
 		if hashErr != nil {
-			return "", apierror.InternalError("failed to hash password")
+			return "", "", apierror.InternalError("failed to hash password")
 		}
 		now := time.Now()
 		user = &domain.User{
@@ -181,14 +181,14 @@ func (s *inviteService) AcceptInvite(ctx context.Context, input AcceptInviteInpu
 			UpdatedAt:    now,
 		}
 		if createErr := s.userRepo.Create(ctx, user); createErr != nil {
-			return "", fmt.Errorf("invite_service.AcceptInvite: %w", createErr)
+			return "", "", fmt.Errorf("invite_service.AcceptInvite: %w", createErr)
 		}
 	}
 
 	// Add to workspace if not already a member.
 	existing, err := s.memberRepo.GetByWorkspaceAndUser(ctx, invite.WorkspaceID, user.ID)
 	if err != nil {
-		return "", fmt.Errorf("invite_service.AcceptInvite: %w", err)
+		return "", "", fmt.Errorf("invite_service.AcceptInvite: %w", err)
 	}
 	if existing == nil {
 		now := time.Now()
@@ -202,21 +202,21 @@ func (s *inviteService) AcceptInvite(ctx context.Context, input AcceptInviteInpu
 			UpdatedAt:   now,
 		}
 		if createErr := s.memberRepo.Create(ctx, member); createErr != nil {
-			return "", fmt.Errorf("invite_service.AcceptInvite: %w", createErr)
+			return "", "", fmt.Errorf("invite_service.AcceptInvite: %w", createErr)
 		}
 	}
 
 	// Mark invite accepted.
-	if err := s.inviteRepo.Accept(ctx, invite.ID); err != nil {
-		return "", fmt.Errorf("invite_service.AcceptInvite: %w", err)
+	if acceptErr := s.inviteRepo.Accept(ctx, invite.ID); acceptErr != nil {
+		return "", "", fmt.Errorf("invite_service.AcceptInvite: %w", acceptErr)
 	}
 
 	// Issue JWT via login.
 	_, tokens, err := s.authSvc.Login(ctx, invite.Email, input.Password)
 	if err != nil {
-		return "", fmt.Errorf("invite_service.AcceptInvite: %w", err)
+		return "", "", fmt.Errorf("invite_service.AcceptInvite: %w", err)
 	}
-	return tokens.AccessToken, nil
+	return tokens.AccessToken, tokens.RefreshToken, nil
 }
 
 func generateToken() (string, error) {
@@ -229,7 +229,7 @@ func generateToken() (string, error) {
 
 func isValidRole(role string) bool {
 	switch role {
-	case domain.RoleOwner, domain.RoleAdmin, domain.RoleMember, domain.RoleViewer:
+	case domain.RoleAdmin, domain.RoleMember, domain.RoleViewer:
 		return true
 	}
 	return false

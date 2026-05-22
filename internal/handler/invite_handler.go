@@ -150,7 +150,7 @@ func (h *InviteHandler) Accept(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
 	}
 
-	accessToken, err := h.svc.AcceptInvite(c.Request().Context(), service.AcceptInviteInput{
+	accessToken, refreshToken, err := h.svc.AcceptInvite(c.Request().Context(), service.AcceptInviteInput{
 		Token:    token,
 		Name:     req.Name,
 		Password: req.Password,
@@ -159,5 +159,8 @@ func (h *InviteHandler) Accept(c echo.Context) error {
 		return handleError(c, err)
 	}
 
-	return c.JSON(http.StatusOK, map[string]string{"access_token": accessToken})
+	return c.JSON(http.StatusOK, map[string]string{
+		"access_token":  accessToken,
+		"refresh_token": refreshToken,
+	})
 }

@@ -442,8 +442,8 @@ type WorkspaceInviteService interface {
 	// Returns nil when the token does not exist or the invite is expired/accepted.
 	GetByToken(ctx context.Context, token string) (*domain.WorkspaceInvite, error)
 	// AcceptInvite accepts the invite: creates the user if needed, adds them to the workspace,
-	// marks the invite accepted, and returns a JWT for the new/existing user.
-	AcceptInvite(ctx context.Context, input AcceptInviteInput) (string, error)
+	// marks the invite accepted, and returns both access and refresh tokens for the new/existing user.
+	AcceptInvite(ctx context.Context, input AcceptInviteInput) (accessToken, refreshToken string, err error)
 }
 
 // WorkspaceMemberService provides business logic for workspace member management.

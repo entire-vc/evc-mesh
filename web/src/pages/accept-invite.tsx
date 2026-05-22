@@ -58,11 +58,11 @@ export function AcceptInvitePage() {
     setError(null);
 
     try {
-      const resp = await api<{ access_token: string }>(
+      const resp = await api<{ access_token: string; refresh_token: string }>(
         `/api/v1/invites/${token}/accept`,
         { method: "POST", body: { name, password }, noAuth: true },
       );
-      setTokens(resp.access_token, "");
+      setTokens(resp.access_token, resp.refresh_token);
       await fetchMe();
       navigate("/", { replace: true });
     } catch (err) {
