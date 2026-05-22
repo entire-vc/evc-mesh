@@ -218,10 +218,14 @@ type AgentActivityLogRepository interface {
 
 // EventBusMessageFilter defines filtering options for listing event bus messages.
 type EventBusMessageFilter struct {
-	EventType *domain.EventType
-	AgentID   *uuid.UUID
-	TaskID    *uuid.UUID
-	Tags      []string
+	EventType     *domain.EventType
+	AgentID       *uuid.UUID
+	TaskID        *uuid.UUID
+	Tags          []string
+	CreatedAfter  *time.Time
+	CreatedBefore *time.Time
+	// AgentOnly filters to events where agent_id IS NOT NULL.
+	AgentOnly bool
 }
 
 // EventBusMessageRepository manages persistence for event bus messages.
@@ -230,6 +234,9 @@ type EventBusMessageRepository interface {
 	Upsert(ctx context.Context, msg *domain.EventBusMessage) error
 	GetByID(ctx context.Context, id uuid.UUID) (*domain.EventBusMessage, error)
 	List(ctx context.Context, projectID uuid.UUID, filter EventBusMessageFilter, pg pagination.Params) (*pagination.Page[domain.EventBusMessage], error)
+	// ListEnriched is like List but LEFT JOINs tasks, projects, and agents to populate
+	// display fields (task title, project name, actor name) for the UI.
+	ListEnriched(ctx context.Context, projectID uuid.UUID, filter EventBusMessageFilter, pg pagination.Params) (*pagination.Page[domain.EnrichedEventBusMessage], error)
 	DeleteExpired(ctx context.Context) (int64, error)
 }
 

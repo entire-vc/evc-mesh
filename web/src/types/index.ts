@@ -770,6 +770,10 @@ export interface EventBusMessage {
   ttl: string;
   created_at: string;
   expires_at: string | null;
+  // Enriched fields — populated by the list endpoint via LEFT JOINs.
+  task_title?: string | null;
+  project_name?: string | null;
+  actor_name?: string | null;
 }
 
 export interface WSMessage {

@@ -36,3 +36,12 @@ type EventBusMessage struct {
 	CreatedAt   time.Time       `json:"created_at" db:"created_at"`
 	ExpiresAt   *time.Time      `json:"expires_at" db:"expires_at"`
 }
+
+// EnrichedEventBusMessage extends EventBusMessage with joined display data
+// returned by the events list API for the UI.
+type EnrichedEventBusMessage struct {
+	EventBusMessage
+	TaskTitle   *string `json:"task_title,omitempty"`
+	ProjectName *string `json:"project_name,omitempty"`
+	ActorName   *string `json:"actor_name,omitempty"`
+}
