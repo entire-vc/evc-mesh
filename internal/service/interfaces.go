@@ -704,6 +704,11 @@ type ProjectIntegrationService interface {
 	List(ctx context.Context, projectID uuid.UUID) ([]domain.ProjectIntegration, error)
 }
 
+// MentionablesService searches for @-mentionable workspace members (agents and users).
+type MentionablesService interface {
+	Search(ctx context.Context, workspaceID uuid.UUID, query string, limit int) ([]domain.Mentionable, error)
+}
+
 // MemoryService provides business logic for agent persistent memory.
 type MemoryService interface {
 	Remember(ctx context.Context, mem *domain.Memory) (string, error) // returns "created" or "updated"
