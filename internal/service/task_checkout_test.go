@@ -293,9 +293,8 @@ func TestCheckoutConflictError_AsTarget(t *testing.T) {
 	assert.Contains(t, original.Error(), "Linus")
 }
 
-func TestCheckoutTask_NonInProgressStatusReturns400(t *testing.T) {
+func TestCheckoutTask_TerminalStatusReturns400(t *testing.T) {
 	for _, category := range []domain.StatusCategory{
-		domain.StatusCategoryReview,
 		domain.StatusCategoryDone,
 		domain.StatusCategoryCancelled,
 	} {
@@ -304,7 +303,7 @@ func TestCheckoutTask_NonInProgressStatusReturns400(t *testing.T) {
 			statusID := uuid.New()
 			taskID := uuid.New()
 			statusRepo.items[statusID] = &domain.TaskStatus{ID: statusID, ProjectID: uuid.New(), Category: category, Name: string(category)}
-			taskRepo.items[taskID] = &domain.Task{ID: taskID, ProjectID: uuid.New(), StatusID: statusID, Title: "Review task"}
+			taskRepo.items[taskID] = &domain.Task{ID: taskID, ProjectID: uuid.New(), StatusID: statusID, Title: "Terminal task"}
 
 			_, err := svc.CheckoutTask(agentContext(uuid.New()), taskID, 0, nil)
 			require.Error(t, err)
@@ -315,6 +314,22 @@ func TestCheckoutTask_NonInProgressStatusReturns400(t *testing.T) {
 			assert.Contains(t, apiErr.Message, string(category))
 		})
 	}
+}
+
+func TestCheckoutTask_ReviewStatusSucceeds(t *testing.T) {
+	svc, taskRepo, statusRepo, _ := setupCheckoutTaskService()
+	statusID := uuid.New()
+	taskID := uuid.New()
+	projectID := uuid.New()
+	statusRepo.items[statusID] = &domain.TaskStatus{ID: statusID, ProjectID: projectID, Category: domain.StatusCategoryReview, Name: "review"}
+	taskRepo.items[taskID] = &domain.Task{ID: taskID, ProjectID: projectID, StatusID: statusID, Title: "Review task"}
+	agentID := uuid.New()
+
+	result, err := svc.CheckoutTask(agentContext(agentID), taskID, 30, nil)
+	require.NoError(t, err, "checkout must succeed for tasks in review status — reviewer needs exclusive lock")
+	require.NotNil(t, result)
+	assert.Equal(t, taskID, result.TaskID)
+	assert.Equal(t, agentID, result.CheckedOutBy)
 }
 
 func TestCheckoutTask_NotFoundReturns404(t *testing.T) {

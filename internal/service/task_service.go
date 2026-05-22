@@ -1183,7 +1183,7 @@ func (s *taskService) CheckoutTask(ctx context.Context, taskID uuid.UUID, ttlMin
 	}
 	if status, sErr := s.statusRepo.GetByID(ctx, task.StatusID); sErr == nil && status != nil {
 		switch status.Category {
-		case domain.StatusCategoryDone, domain.StatusCategoryReview, domain.StatusCategoryCancelled:
+		case domain.StatusCategoryDone, domain.StatusCategoryCancelled:
 			return nil, apierror.BadRequest("cannot checkout a task in " + string(status.Category) + " status")
 		}
 	}
