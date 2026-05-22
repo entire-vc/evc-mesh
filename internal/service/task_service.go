@@ -1173,6 +1173,21 @@ func (s *taskService) CheckoutTask(ctx context.Context, taskID uuid.UUID, ttlMin
 		return nil, apierror.BadRequest("only agents can checkout tasks")
 	}
 
+	// Pre-fetch the task to validate existence and status category before locking.
+	task, err := s.taskRepo.GetByID(ctx, taskID)
+	if err != nil {
+		return nil, err
+	}
+	if task == nil {
+		return nil, apierror.NotFound("Task")
+	}
+	if status, sErr := s.statusRepo.GetByID(ctx, task.StatusID); sErr == nil && status != nil {
+		switch status.Category {
+		case domain.StatusCategoryDone, domain.StatusCategoryReview, domain.StatusCategoryCancelled:
+			return nil, apierror.BadRequest("cannot checkout a task in " + string(status.Category) + " status")
+		}
+	}
+
 	if ttlMinutes <= 0 {
 		ttlMinutes = 15
 	}
@@ -1183,39 +1198,38 @@ func (s *taskService) CheckoutTask(ctx context.Context, taskID uuid.UUID, ttlMin
 	token := uuid.New()
 	expiresAt := timeNow().Add(time.Duration(ttlMinutes) * time.Minute)
 
-	err := s.taskRepo.AtomicCheckout(ctx, taskID, actorID, token, expiresAt)
-	if err != nil {
+	if err = s.taskRepo.AtomicCheckout(ctx, taskID, actorID, token, expiresAt); err != nil {
 		if errors.Is(err, pgRepo.ErrCheckoutConflict) {
 			// Fetch the task to surface the current holder's info in the error.
-			task, fetchErr := s.taskRepo.GetByID(ctx, taskID)
-			if fetchErr == nil && task != nil && task.CheckedOutBy != nil && task.CheckoutExpires != nil {
+			latest, fetchErr := s.taskRepo.GetByID(ctx, taskID)
+			if fetchErr == nil && latest != nil && latest.CheckedOutBy != nil && latest.CheckoutExpires != nil {
 				conflict := &CheckoutConflictError{
-					CheckedOutBy:     *task.CheckedOutBy,
+					CheckedOutBy:     *latest.CheckedOutBy,
 					CheckedOutByKind: "agent",
-					ExpiresAt:        *task.CheckoutExpires,
+					ExpiresAt:        *latest.CheckoutExpires,
 				}
 				if s.agentRepo != nil {
-					if agent, agentErr := s.agentRepo.GetByID(ctx, *task.CheckedOutBy); agentErr == nil && agent != nil {
+					if agent, agentErr := s.agentRepo.GetByID(ctx, *latest.CheckedOutBy); agentErr == nil && agent != nil {
 						conflict.CheckedOutByName = agent.Name
 					}
 				}
 				return nil, conflict
 			}
-			return nil, err
+			// Concurrent lock/release race: return a clean 409 instead of leaking
+			// the raw sentinel (which handleError cannot map and would return 500).
+			return nil, apierror.Conflict("task is already checked out")
 		}
 		return nil, err
 	}
 
-	if task, fetchErr := s.taskRepo.GetByID(ctx, taskID); fetchErr == nil && task != nil {
-		payload := map[string]interface{}{
-			"expires_at": expiresAt.Format(time.RFC3339),
-			"ttl_min":    ttlMinutes,
-		}
-		if len(sessionMetadata) > 0 {
-			payload["session_metadata"] = sessionMetadata
-		}
-		s.logActivity(ctx, task.ProjectID, taskID, "task.checkout_acquired", payload)
+	payload := map[string]interface{}{
+		"expires_at": expiresAt.Format(time.RFC3339),
+		"ttl_min":    ttlMinutes,
 	}
+	if len(sessionMetadata) > 0 {
+		payload["session_metadata"] = sessionMetadata
+	}
+	s.logActivity(ctx, task.ProjectID, taskID, "task.checkout_acquired", payload)
 
 	return &CheckoutResult{
 		TaskID:        taskID,
