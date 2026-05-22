@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router";
 import {
 	Activity,
@@ -12,35 +12,68 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { formatRelative } from "@/lib/utils";
-import { agentStatusConfig, agentTypeConfig, isAgentStale } from "@/lib/agent-utils";
+import { agentTypeConfig } from "@/lib/agent-utils";
+import { api } from "@/lib/api";
 import { useWorkspaceStore } from "@/stores/workspace";
-import { useAgentStore } from "@/stores/agent";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import type { Agent } from "@/types";
+
+const POLL_INTERVAL_MS = 30_000;
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+interface AgentStatusEntry {
+	id: string;
+	name: string;
+	status: "online" | "busy" | "offline" | "error";
+	agent_type?: string;
+	heartbeat_status?: string;
+	last_heartbeat_at: string | null;
+	seconds_since_heartbeat: number | null;
+	is_stale: boolean;
+	heartbeat_message?: string;
+	current_task_id?: string | null;
+	current_task_title?: string;
+}
+
+interface AgentsStatusResponse {
+	agents: AgentStatusEntry[];
+	stale_count: number;
+	working_count: number;
+	total_count: number;
+}
+
+// ---------------------------------------------------------------------------
+// Status config
+// ---------------------------------------------------------------------------
+
+const statusConfig: Record<
+	AgentStatusEntry["status"],
+	{ label: string; dotColor: string }
+> = {
+	online: { label: "Online", dotColor: "bg-green-500" },
+	busy: { label: "Busy", dotColor: "bg-yellow-500" },
+	offline: { label: "Offline", dotColor: "bg-gray-400" },
+	error: { label: "Error", dotColor: "bg-red-500" },
+};
 
 // ---------------------------------------------------------------------------
 // AgentSessionCard
 // ---------------------------------------------------------------------------
 
 interface AgentSessionCardProps {
-	agent: Agent;
+	agent: AgentStatusEntry;
 }
 
 function AgentSessionCard({ agent }: AgentSessionCardProps) {
-	const stale = isAgentStale(agent);
-	const statusCfg = agentStatusConfig[agent.status];
-	const typeCfg = agentTypeConfig[agent.agent_type] ?? {
-		label: agent.agent_type,
+	const statusCfg = statusConfig[agent.status] ?? statusConfig.offline;
+	const typeCfg = agentTypeConfig[agent.agent_type as keyof typeof agentTypeConfig] ?? {
+		label: agent.agent_type ?? "Agent",
 		color: "bg-gray-100 text-gray-700",
 	};
-
-	// Tool count from heartbeat metadata (if the agent reports it).
-	const toolCount: number | null =
-		typeof agent.heartbeat_metadata?.tool_count === "number"
-			? (agent.heartbeat_metadata.tool_count as number)
-			: null;
 
 	return (
 		<Card className="flex flex-col gap-3 p-4">
@@ -68,23 +101,25 @@ function AgentSessionCard({ agent }: AgentSessionCardProps) {
 						className={cn(
 							"h-2.5 w-2.5 rounded-full",
 							statusCfg.dotColor,
-							stale && "opacity-50",
+							agent.is_stale && "opacity-50",
 						)}
 					/>
 					<span className="text-xs text-muted-foreground">{statusCfg.label}</span>
-					{stale && (
-						<span title="Heartbeat stale"><AlertCircle className="h-3 w-3 text-yellow-500" /></span>
+					{agent.is_stale && (
+						<span title="Heartbeat stale">
+							<AlertCircle className="h-3 w-3 text-yellow-500" />
+						</span>
 					)}
 				</div>
 			</div>
 
-			{/* Heartbeat info */}
+			{/* Presence info */}
 			<div className="space-y-1.5 text-xs text-muted-foreground">
 				<div className="flex items-center gap-1.5">
-					{agent.last_heartbeat ? (
+					{agent.last_heartbeat_at ? (
 						<>
 							<Wifi className="h-3 w-3 shrink-0" />
-							<span>Last seen {formatRelative(agent.last_heartbeat)}</span>
+							<span>Last seen {formatRelative(agent.last_heartbeat_at)}</span>
 						</>
 					) : (
 						<>
@@ -97,25 +132,27 @@ function AgentSessionCard({ agent }: AgentSessionCardProps) {
 				{agent.heartbeat_message && (
 					<div className="flex items-start gap-1.5">
 						<Info className="h-3 w-3 mt-0.5 shrink-0" />
-						<span className="line-clamp-2">{agent.heartbeat_message}</span>
-					</div>
-				)}
-
-				{toolCount !== null && (
-					<div className="flex items-center gap-1.5">
-						<Activity className="h-3 w-3 shrink-0" />
-						<span>{toolCount} tool calls in last session</span>
+						<span className="line-clamp-2">
+							{agent.heartbeat_message.slice(0, 80)}
+							{agent.heartbeat_message.length > 80 ? "…" : ""}
+						</span>
 					</div>
 				)}
 
 				{agent.current_task_id && (
-					<div className="flex items-center gap-1.5">
-						<Clock className="h-3 w-3 shrink-0" />
-						<span className="truncate">
-							Working on task{" "}
-							<code className="font-mono text-[10px]">
-								{agent.current_task_id.slice(0, 8)}…
-							</code>
+					<div className="flex items-start gap-1.5">
+						<Clock className="h-3 w-3 mt-0.5 shrink-0" />
+						<span className="min-w-0">
+							Working on{" "}
+							<Link
+								to={`/t/${agent.current_task_id}`}
+								className="text-primary underline-offset-2 hover:underline truncate"
+							>
+								{agent.current_task_title
+									? agent.current_task_title.slice(0, 60) +
+									  (agent.current_task_title.length > 60 ? "…" : "")
+									: agent.current_task_id.slice(0, 8) + "…"}
+							</Link>
 						</span>
 					</div>
 				)}
@@ -131,18 +168,43 @@ function AgentSessionCard({ agent }: AgentSessionCardProps) {
 export function SessionDashboardPage() {
 	const { wsSlug } = useParams<{ wsSlug: string }>();
 	const { currentWorkspace } = useWorkspaceStore();
-	const { agents, isLoading, fetchAgents } = useAgentStore();
+
+	const [agents, setAgents] = useState<AgentStatusEntry[]>([]);
+	const [isLoading, setIsLoading] = useState(true);
+	const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+	const fetchStatus = useCallback(async (workspaceId: string) => {
+		try {
+			const data = await api<AgentsStatusResponse>(
+				`/api/v1/workspaces/${workspaceId}/agents/status`,
+			);
+			setAgents(data.agents ?? []);
+		} catch {
+			// Keep stale data on error, don't clear
+		} finally {
+			setIsLoading(false);
+		}
+	}, []);
 
 	useEffect(() => {
-		if (currentWorkspace?.id) {
-			fetchAgents(currentWorkspace.id);
-		}
-	}, [currentWorkspace?.id, fetchAgents]);
+		const wsId = currentWorkspace?.id;
+		if (!wsId) return;
+
+		fetchStatus(wsId);
+
+		intervalRef.current = setInterval(() => fetchStatus(wsId), POLL_INTERVAL_MS);
+		return () => {
+			if (intervalRef.current !== null) {
+				clearInterval(intervalRef.current);
+				intervalRef.current = null;
+			}
+		};
+	}, [currentWorkspace?.id, fetchStatus]);
 
 	const onlineCount = agents.filter((a) => a.status === "online").length;
 	const busyCount = agents.filter((a) => a.status === "busy").length;
-	const offlineCount = agents.filter((a) =>
-		a.status === "offline" || a.status === "error",
+	const offlineCount = agents.filter(
+		(a) => a.status === "offline" || a.status === "error",
 	).length;
 
 	return (
