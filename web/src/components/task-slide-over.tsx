@@ -61,8 +61,7 @@ import type { AssigneeType, Priority } from "@/types";
 // Types
 // ---------------------------------------------------------------------------
 
-type BottomTabId = "subtasks" | "artifacts";
-type RightTabId = "comments" | "activity";
+type RightTabId = "comments" | "subtasks" | "artifacts" | "activity";
 
 const priorities: Priority[] = ["urgent", "high", "medium", "low", "none"];
 
@@ -111,7 +110,6 @@ export function TaskSlideOver({
   const { currentWorkspace } = useWorkspaceStore();
 
   const [loading, setLoading] = useState(false);
-  const [bottomTab, setBottomTab] = useState<BottomTabId>("subtasks");
   const [rightTab, setRightTab] = useState<RightTabId>("comments");
   const [hideEmpty, setHideEmpty] = useState(true);
 
@@ -229,7 +227,7 @@ export function TaskSlideOver({
 
   const pushTask = useCallback((id: string) => {
     setTaskIdStack((s) => [...s, id]);
-    setBottomTab("subtasks");
+    setRightTab("subtasks");
   }, []);
 
   const popTask = useCallback(() => {
@@ -989,73 +987,19 @@ export function TaskSlideOver({
                   )}
                 </div>
 
-                {/* ---- Bottom tabs --------------------------------------- */}
-                <div>
-                  <div className="flex border-b border-border">
-                    <button
-                      type="button"
-                      className={cn(
-                        "flex items-center gap-1.5 border-b-2 px-3 py-2 text-xs font-medium transition-colors",
-                        bottomTab === "subtasks"
-                          ? "border-primary text-foreground"
-                          : "border-transparent text-muted-foreground hover:border-border hover:text-foreground",
-                      )}
-                      onClick={() => setBottomTab("subtasks")}
-                    >
-                      <ListTree className="h-3.5 w-3.5" />
-                      Subtasks
-                      {currentTask.subtask_count != null &&
-                        currentTask.subtask_count > 0 && (
-                          <Badge variant="secondary" className="text-[10px]">
-                            {currentTask.subtask_count}
-                          </Badge>
-                        )}
-                    </button>
-                    <button
-                      type="button"
-                      className={cn(
-                        "flex items-center gap-1.5 border-b-2 px-3 py-2 text-xs font-medium transition-colors",
-                        bottomTab === "artifacts"
-                          ? "border-primary text-foreground"
-                          : "border-transparent text-muted-foreground hover:border-border hover:text-foreground",
-                      )}
-                      onClick={() => setBottomTab("artifacts")}
-                    >
-                      <Package className="h-3.5 w-3.5" />
-                      Artifacts
-                      {currentTask.artifact_count != null &&
-                        currentTask.artifact_count > 0 && (
-                          <Badge variant="secondary" className="text-[10px]">
-                            {currentTask.artifact_count}
-                          </Badge>
-                        )}
-                    </button>
-                  </div>
-                  <div className="pt-3">
-                    {bottomTab === "subtasks" && (
-                      <SubtaskList
-                        taskId={currentTask.id}
-                        onOpenSubtask={pushTask}
-                      />
-                    )}
-                    {bottomTab === "artifacts" && (
-                      <ArtifactList taskId={currentTask.id} />
-                    )}
-                  </div>
-                </div>
               </div>
             </div>
 
             {/* ============================================================= */}
-            {/* RIGHT PANEL — Activity + Comments                             */}
+            {/* RIGHT PANEL — Comments / Subtasks / Artifacts / Activity       */}
             {/* ============================================================= */}
             <div className="flex w-full shrink-0 flex-col overflow-hidden border-t border-border lg:w-[340px] lg:border-t-0 xl:w-[380px]">
-              {/* Tab bar */}
-              <div className="flex shrink-0 border-b border-border">
+              {/* Tab bar — Comments → Subtasks → Artifacts → Activity */}
+              <div className="flex shrink-0 overflow-x-auto border-b border-border">
                 <button
                   type="button"
                   className={cn(
-                    "border-b-2 px-4 py-2.5 text-xs font-medium transition-colors",
+                    "flex shrink-0 items-center gap-1.5 border-b-2 px-3 py-2.5 text-xs font-medium transition-colors",
                     rightTab === "comments"
                       ? "border-primary text-foreground"
                       : "border-transparent text-muted-foreground hover:border-border hover:text-foreground",
@@ -1067,7 +1011,45 @@ export function TaskSlideOver({
                 <button
                   type="button"
                   className={cn(
-                    "border-b-2 px-4 py-2.5 text-xs font-medium transition-colors",
+                    "flex shrink-0 items-center gap-1.5 border-b-2 px-3 py-2.5 text-xs font-medium transition-colors",
+                    rightTab === "subtasks"
+                      ? "border-primary text-foreground"
+                      : "border-transparent text-muted-foreground hover:border-border hover:text-foreground",
+                  )}
+                  onClick={() => setRightTab("subtasks")}
+                >
+                  <ListTree className="h-3.5 w-3.5" />
+                  Subtasks
+                  {currentTask.subtask_count != null &&
+                    currentTask.subtask_count > 0 && (
+                      <Badge variant="secondary" className="text-[10px]">
+                        {currentTask.subtask_count}
+                      </Badge>
+                    )}
+                </button>
+                <button
+                  type="button"
+                  className={cn(
+                    "flex shrink-0 items-center gap-1.5 border-b-2 px-3 py-2.5 text-xs font-medium transition-colors",
+                    rightTab === "artifacts"
+                      ? "border-primary text-foreground"
+                      : "border-transparent text-muted-foreground hover:border-border hover:text-foreground",
+                  )}
+                  onClick={() => setRightTab("artifacts")}
+                >
+                  <Package className="h-3.5 w-3.5" />
+                  Artifacts
+                  {currentTask.artifact_count != null &&
+                    currentTask.artifact_count > 0 && (
+                      <Badge variant="secondary" className="text-[10px]">
+                        {currentTask.artifact_count}
+                      </Badge>
+                    )}
+                </button>
+                <button
+                  type="button"
+                  className={cn(
+                    "flex shrink-0 items-center gap-1.5 border-b-2 px-3 py-2.5 text-xs font-medium transition-colors",
                     rightTab === "activity"
                       ? "border-primary text-foreground"
                       : "border-transparent text-muted-foreground hover:border-border hover:text-foreground",
@@ -1078,9 +1060,22 @@ export function TaskSlideOver({
                 </button>
               </div>
 
-              {/* Content — comments tab owns its own scroll + sticky form layout */}
+              {/* Content */}
               {rightTab === "comments" && (
                 <CommentList taskId={currentTask.id} />
+              )}
+              {rightTab === "subtasks" && (
+                <div className="flex-1 overflow-y-auto p-3">
+                  <SubtaskList
+                    taskId={currentTask.id}
+                    onOpenSubtask={pushTask}
+                  />
+                </div>
+              )}
+              {rightTab === "artifacts" && (
+                <div className="flex-1 overflow-y-auto p-3">
+                  <ArtifactList taskId={currentTask.id} />
+                </div>
               )}
               {rightTab === "activity" && (
                 <div className="flex-1 overflow-y-auto p-4">

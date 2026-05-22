@@ -332,6 +332,7 @@ type MockTaskService struct {
 	ListSubtasksFunc         func(ctx context.Context, parentTaskID uuid.UUID) ([]domain.Task, error)
 	GetMyTasksFunc           func(ctx context.Context, assigneeID uuid.UUID, assigneeType domain.AssigneeType) ([]domain.Task, error)
 	GetDefaultStatusFunc     func(ctx context.Context, projectID uuid.UUID) (*domain.TaskStatus, error)
+	GetStatusByIDFunc        func(ctx context.Context, id uuid.UUID) (*domain.TaskStatus, error)
 	BulkUpdateFunc           func(ctx context.Context, projectID uuid.UUID, input service.BulkUpdateTasksInput) service.BulkUpdateTasksResult
 	CheckoutTaskFunc         func(ctx context.Context, taskID uuid.UUID, ttlMinutes int, sessionMetadata map[string]interface{}) (*service.CheckoutResult, error)
 	ReleaseCheckoutFunc      func(ctx context.Context, taskID uuid.UUID, token uuid.UUID) error
@@ -415,6 +416,13 @@ func (m *MockTaskService) GetDefaultStatus(ctx context.Context, projectID uuid.U
 		return m.GetDefaultStatusFunc(ctx, projectID)
 	}
 	return &domain.TaskStatus{ID: uuid.New(), Name: "To Do", IsDefault: true}, nil
+}
+
+func (m *MockTaskService) GetStatusByID(ctx context.Context, id uuid.UUID) (*domain.TaskStatus, error) {
+	if m.GetStatusByIDFunc != nil {
+		return m.GetStatusByIDFunc(ctx, id)
+	}
+	return nil, nil
 }
 
 func (m *MockTaskService) BulkUpdate(ctx context.Context, projectID uuid.UUID, input service.BulkUpdateTasksInput) service.BulkUpdateTasksResult {
@@ -553,4 +561,121 @@ func (m *MockAgentService) TouchLastSeen(_ context.Context, _ uuid.UUID) error {
 
 func (m *MockAgentService) GetBySlug(_ context.Context, _ uuid.UUID, _ string) (*domain.Agent, error) {
 	return nil, nil
+}
+
+// MockRulesService implements service.RulesService for testing.
+type MockRulesService struct {
+	GetTeamDirectoryFunc            func(ctx context.Context, workspaceID uuid.UUID) (*domain.TeamDirectory, error)
+	GetTeamDirectoryTreeFunc        func(ctx context.Context, workspaceID uuid.UUID) (*domain.TeamDirectoryTree, error)
+	UpdateAgentProfileFunc          func(ctx context.Context, agentID uuid.UUID, profile domain.AgentProfileUpdate) error
+	GetWorkspaceAssignmentRulesFunc func(ctx context.Context, workspaceID uuid.UUID) (*domain.AssignmentRulesConfig, error)
+	SetWorkspaceAssignmentRulesFunc func(ctx context.Context, workspaceID uuid.UUID, config domain.AssignmentRulesConfig) error
+	GetEffectiveAssignmentRulesFunc func(ctx context.Context, projectID uuid.UUID) (*domain.EffectiveAssignmentRules, error)
+	SetProjectAssignmentRulesFunc   func(ctx context.Context, projectID uuid.UUID, config domain.AssignmentRulesConfig) error
+	GetProjectWorkflowRulesFunc     func(ctx context.Context, projectID uuid.UUID, callerAgentID *uuid.UUID) (*domain.WorkflowRulesResponse, error)
+	SetProjectWorkflowRulesFunc     func(ctx context.Context, projectID uuid.UUID, config domain.WorkflowRulesConfig) error
+	ListViolationsFunc              func(ctx context.Context, workspaceID uuid.UUID, limit int) ([]domain.RuleViolationLog, error)
+	LogViolationFunc                func(ctx context.Context, v *domain.RuleViolationLog) error
+	ImportConfigFunc                func(ctx context.Context, workspaceID uuid.UUID, yamlData []byte) (*domain.ImportResult, error)
+	ExportConfigFunc                func(ctx context.Context, workspaceID uuid.UUID) ([]byte, error)
+	ImportTeamFunc                  func(ctx context.Context, workspaceID uuid.UUID, yamlData []byte) (*domain.TeamImportResult, error)
+	GetWorkflowTemplatesFunc        func(ctx context.Context, workspaceID uuid.UUID) (map[string]domain.WorkflowRulesConfig, error)
+	SetWorkflowTemplatesFunc        func(ctx context.Context, workspaceID uuid.UUID, templates map[string]domain.WorkflowRulesConfig) error
+}
+
+func (m *MockRulesService) GetTeamDirectory(ctx context.Context, workspaceID uuid.UUID) (*domain.TeamDirectory, error) {
+	if m.GetTeamDirectoryFunc != nil {
+		return m.GetTeamDirectoryFunc(ctx, workspaceID)
+	}
+	return &domain.TeamDirectory{}, nil
+}
+func (m *MockRulesService) GetTeamDirectoryTree(ctx context.Context, workspaceID uuid.UUID) (*domain.TeamDirectoryTree, error) {
+	if m.GetTeamDirectoryTreeFunc != nil {
+		return m.GetTeamDirectoryTreeFunc(ctx, workspaceID)
+	}
+	return &domain.TeamDirectoryTree{}, nil
+}
+func (m *MockRulesService) UpdateAgentProfile(ctx context.Context, agentID uuid.UUID, profile domain.AgentProfileUpdate) error {
+	if m.UpdateAgentProfileFunc != nil {
+		return m.UpdateAgentProfileFunc(ctx, agentID, profile)
+	}
+	return nil
+}
+func (m *MockRulesService) GetWorkspaceAssignmentRules(ctx context.Context, workspaceID uuid.UUID) (*domain.AssignmentRulesConfig, error) {
+	if m.GetWorkspaceAssignmentRulesFunc != nil {
+		return m.GetWorkspaceAssignmentRulesFunc(ctx, workspaceID)
+	}
+	return nil, nil
+}
+func (m *MockRulesService) SetWorkspaceAssignmentRules(ctx context.Context, workspaceID uuid.UUID, config domain.AssignmentRulesConfig) error {
+	if m.SetWorkspaceAssignmentRulesFunc != nil {
+		return m.SetWorkspaceAssignmentRulesFunc(ctx, workspaceID, config)
+	}
+	return nil
+}
+func (m *MockRulesService) GetEffectiveAssignmentRules(ctx context.Context, projectID uuid.UUID) (*domain.EffectiveAssignmentRules, error) {
+	if m.GetEffectiveAssignmentRulesFunc != nil {
+		return m.GetEffectiveAssignmentRulesFunc(ctx, projectID)
+	}
+	return nil, nil
+}
+func (m *MockRulesService) SetProjectAssignmentRules(ctx context.Context, projectID uuid.UUID, config domain.AssignmentRulesConfig) error {
+	if m.SetProjectAssignmentRulesFunc != nil {
+		return m.SetProjectAssignmentRulesFunc(ctx, projectID, config)
+	}
+	return nil
+}
+func (m *MockRulesService) GetProjectWorkflowRules(ctx context.Context, projectID uuid.UUID, callerAgentID *uuid.UUID) (*domain.WorkflowRulesResponse, error) {
+	if m.GetProjectWorkflowRulesFunc != nil {
+		return m.GetProjectWorkflowRulesFunc(ctx, projectID, callerAgentID)
+	}
+	return nil, nil
+}
+func (m *MockRulesService) SetProjectWorkflowRules(ctx context.Context, projectID uuid.UUID, config domain.WorkflowRulesConfig) error {
+	if m.SetProjectWorkflowRulesFunc != nil {
+		return m.SetProjectWorkflowRulesFunc(ctx, projectID, config)
+	}
+	return nil
+}
+func (m *MockRulesService) ListViolations(ctx context.Context, workspaceID uuid.UUID, limit int) ([]domain.RuleViolationLog, error) {
+	if m.ListViolationsFunc != nil {
+		return m.ListViolationsFunc(ctx, workspaceID, limit)
+	}
+	return nil, nil
+}
+func (m *MockRulesService) LogViolation(ctx context.Context, v *domain.RuleViolationLog) error {
+	if m.LogViolationFunc != nil {
+		return m.LogViolationFunc(ctx, v)
+	}
+	return nil
+}
+func (m *MockRulesService) ImportConfig(ctx context.Context, workspaceID uuid.UUID, yamlData []byte) (*domain.ImportResult, error) {
+	if m.ImportConfigFunc != nil {
+		return m.ImportConfigFunc(ctx, workspaceID, yamlData)
+	}
+	return nil, nil
+}
+func (m *MockRulesService) ExportConfig(ctx context.Context, workspaceID uuid.UUID) ([]byte, error) {
+	if m.ExportConfigFunc != nil {
+		return m.ExportConfigFunc(ctx, workspaceID)
+	}
+	return nil, nil
+}
+func (m *MockRulesService) ImportTeam(ctx context.Context, workspaceID uuid.UUID, yamlData []byte) (*domain.TeamImportResult, error) {
+	if m.ImportTeamFunc != nil {
+		return m.ImportTeamFunc(ctx, workspaceID, yamlData)
+	}
+	return nil, nil
+}
+func (m *MockRulesService) GetWorkflowTemplates(ctx context.Context, workspaceID uuid.UUID) (map[string]domain.WorkflowRulesConfig, error) {
+	if m.GetWorkflowTemplatesFunc != nil {
+		return m.GetWorkflowTemplatesFunc(ctx, workspaceID)
+	}
+	return nil, nil
+}
+func (m *MockRulesService) SetWorkflowTemplates(ctx context.Context, workspaceID uuid.UUID, templates map[string]domain.WorkflowRulesConfig) error {
+	if m.SetWorkflowTemplatesFunc != nil {
+		return m.SetWorkflowTemplatesFunc(ctx, workspaceID, templates)
+	}
+	return nil
 }

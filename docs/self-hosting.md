@@ -334,7 +334,7 @@ All infrastructure containers have built-in health checks. Additionally:
 | Service | Health Check | Expected |
 |---------|-------------|----------|
 | API | `curl http://localhost:8005/health` | `{"status":"ok","service":"evc-mesh-api"}` |
-| API version | `curl http://localhost:8005/api/version` | `{"sha":"abc1234","built":"...","service":"evc-mesh-api"}` |
+| API version | `curl http://localhost:8005/api/version` | `{"commit":"abc1234","build_time":"...","version":"dev","environment":"dev","service":"evc-mesh-api"}` |
 | PostgreSQL | `cd deploy/docker/mesh && docker compose exec postgres pg_isready -U mesh` | `accepting connections` |
 | Redis | `cd deploy/docker/mesh && docker compose exec redis redis-cli ping` | `PONG` |
 | NATS | `curl http://localhost:8223/healthz` | `ok` |
@@ -434,12 +434,8 @@ pnpm dev
 
 3. Rebuild and restart:
    ```bash
-   # API — inject build metadata via ldflags (used by /api/version)
-   SHA=$(git rev-parse --short HEAD)
-   BUILT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-   GOOS=linux GOARCH=amd64 go build \
-     -ldflags "-X main.BuildSHA=${SHA} -X main.BuildTime=${BUILT}" \
-     -o mesh-api ./cmd/api
+   # API — use make build-prod for cross-compilation with all ldflags
+   make build-prod
 
    # Frontend
    cd web && pnpm install && pnpm build && pnpm start
@@ -449,5 +445,5 @@ pnpm dev
    ```bash
    curl http://localhost:8005/health
    curl http://localhost:8005/api/version
-   # → {"built":"2026-05-20T...","service":"evc-mesh-api","sha":"abc1234"}
+   # → {"commit":"abc1234","build_time":"2026-05-20T...","version":"v1.2.3","environment":"prod","service":"evc-mesh-api"}
    ```

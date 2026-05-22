@@ -426,7 +426,7 @@ func (r *AgentRepo) ListWithProjects(ctx context.Context, workspaceID uuid.UUID)
 		       ) AS project_names
 		FROM agents a
 		LEFT JOIN project_members pm ON pm.agent_id = a.id
-		LEFT JOIN projects p ON p.id = pm.project_id AND p.deleted_at IS NULL
+		LEFT JOIN projects p ON p.id = pm.project_id AND p.workspace_id = $1 AND p.deleted_at IS NULL
 		WHERE a.workspace_id = $1 AND a.deleted_at IS NULL
 		GROUP BY a.id
 		ORDER BY a.name

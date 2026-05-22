@@ -149,10 +149,16 @@ export function ActivityLog({ taskId }: ActivityLogProps) {
           { params: { page: pageNum, page_size: 20 } },
         );
         const items = data.items ?? [];
+        const sortNewest = (arr: typeof items) =>
+          [...arr].sort(
+            (a, b) =>
+              new Date(b.created_at).getTime() -
+              new Date(a.created_at).getTime(),
+          );
         if (append) {
-          setEntries((prev) => [...prev, ...items]);
+          setEntries((prev) => sortNewest([...prev, ...items]));
         } else {
-          setEntries(items);
+          setEntries(sortNewest(items));
         }
         setHasMore(data.has_more);
         setPage(data.page);

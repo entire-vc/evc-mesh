@@ -247,6 +247,11 @@ func (s *taskService) GetDefaultStatus(ctx context.Context, projectID uuid.UUID)
 	return s.statusRepo.GetDefaultForProject(ctx, projectID)
 }
 
+// GetStatusByID retrieves a task status by its ID.
+func (s *taskService) GetStatusByID(ctx context.Context, id uuid.UUID) (*domain.TaskStatus, error) {
+	return s.statusRepo.GetByID(ctx, id)
+}
+
 // GetByID retrieves a task by its ID.
 func (s *taskService) GetByID(ctx context.Context, id uuid.UUID) (*domain.Task, error) {
 	task, err := s.taskRepo.GetByID(ctx, id)
