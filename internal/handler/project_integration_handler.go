@@ -18,7 +18,7 @@ type teamRelayResponse struct {
 	ProjectID          uuid.UUID `json:"project_id"`
 	Type               string    `json:"type"`
 	Enabled            bool      `json:"enabled"`
-	ShareID            string    `json:"share_id"`
+	ShareSlug          string    `json:"share_slug"`
 	AgentKeyHint       string    `json:"agent_key_hint"` // last 4 chars, e.g. "••••abcd"
 	Subfolder          string    `json:"subfolder"`
 	IncludeProjectSlug bool      `json:"include_project_slug"`
@@ -40,7 +40,7 @@ func toTeamRelayResponse(pi *domain.ProjectIntegration) teamRelayResponse {
 		ProjectID:          pi.ProjectID,
 		Type:               pi.Type,
 		Enabled:            pi.Enabled,
-		ShareID:            settings.ShareID,
+		ShareSlug:          settings.ShareSlug,
 		AgentKeyHint:       hint,
 		Subfolder:          settings.Subfolder,
 		IncludeProjectSlug: settings.IncludeProjectSlug,
@@ -96,7 +96,7 @@ func (h *ProjectIntegrationHandler) UpsertTeamRelay(c echo.Context) error {
 
 	var body struct {
 		Enabled            bool   `json:"enabled"`
-		ShareID            string `json:"share_id"`
+		ShareSlug          string `json:"share_slug"`
 		AgentKey           string `json:"agent_key"`
 		Subfolder          string `json:"subfolder"`
 		IncludeProjectSlug bool   `json:"include_project_slug"`
@@ -114,7 +114,7 @@ func (h *ProjectIntegrationHandler) UpsertTeamRelay(c echo.Context) error {
 
 	input := service.UpsertProjectIntegrationInput{
 		Enabled:            body.Enabled,
-		ShareID:            body.ShareID,
+		ShareSlug:          body.ShareSlug,
 		AgentKey:           body.AgentKey,
 		Subfolder:          body.Subfolder,
 		IncludeProjectSlug: body.IncludeProjectSlug,

@@ -1124,7 +1124,7 @@ export function ProjectSettingsPage() {
   // --- Team Relay integration state ---
   const [trLoading, setTrLoading] = useState(false);
   const [trEnabled, setTrEnabled] = useState(false);
-  const [trShareID, setTrShareID] = useState("");
+  const [trShareSlug, setTrShareSlug] = useState("");
   const [trAgentKey, setTrAgentKey] = useState("");
   const [trAgentKeyHint, setTrAgentKeyHint] = useState("");
   const [trSubfolder, setTrSubfolder] = useState("Mesh/Mesh dev");
@@ -1231,12 +1231,12 @@ export function ProjectSettingsPage() {
   useEffect(() => {
     if (!currentProject?.id || activeTab !== "integrations") return;
     setTrLoading(true);
-    api<{ id: string; enabled: boolean; share_id: string; agent_key_hint: string; subfolder: string; include_project_slug: boolean }>(
+    api<{ id: string; enabled: boolean; share_slug: string; agent_key_hint: string; subfolder: string; include_project_slug: boolean }>(
       `/api/v1/projects/${currentProject.id}/integrations/team-relay`
     )
       .then((data) => {
         setTrEnabled(data.enabled);
-        setTrShareID(data.share_id);
+        setTrShareSlug(data.share_slug);
         setTrAgentKeyHint(data.agent_key_hint);
         setTrSubfolder(data.subfolder || "Mesh/Mesh dev");
         setTrIncludeSlug(data.include_project_slug);
@@ -1255,7 +1255,7 @@ export function ProjectSettingsPage() {
     try {
       const body: Record<string, unknown> = {
         enabled: trEnabled,
-        share_id: trShareID,
+        share_slug: trShareSlug,
         subfolder: trSubfolder,
         include_project_slug: trIncludeSlug,
       };
@@ -2704,14 +2704,14 @@ export function ProjectSettingsPage() {
 
                 <div className="space-y-4">
                   <div className="space-y-1.5">
-                    <label className="text-sm font-medium" htmlFor="tr-share-id">
-                      Share ID
+                    <label className="text-sm font-medium" htmlFor="tr-share-slug">
+                      Share Slug
                     </label>
                     <Input
-                      id="tr-share-id"
-                      value={trShareID}
-                      onChange={(e) => setTrShareID(e.target.value)}
-                      placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+                      id="tr-share-slug"
+                      value={trShareSlug}
+                      onChange={(e) => setTrShareSlug(e.target.value)}
+                      placeholder="e.g. mesh-dev-share"
                       disabled={!trEnabled}
                     />
                   </div>

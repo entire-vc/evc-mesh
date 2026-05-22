@@ -22,7 +22,7 @@ type ProjectIntegration struct {
 
 // TeamRelaySettings holds the Team Relay-specific configuration.
 type TeamRelaySettings struct {
-	ShareID            string `json:"share_id"`
+	ShareSlug          string `json:"share_slug"`
 	Subfolder          string `json:"subfolder"`
 	IncludeProjectSlug bool   `json:"include_project_slug"`
 }
@@ -31,7 +31,7 @@ type TeamRelaySettings struct {
 type UpsertProjectIntegrationInput struct {
 	ProjectID          uuid.UUID  `json:"project_id"`
 	Enabled            bool       `json:"enabled"`
-	ShareID            string     `json:"share_id"`
+	ShareSlug          string     `json:"share_slug"`
 	AgentKey           string     `json:"agent_key,omitempty"` // omit to keep existing
 	Subfolder          string     `json:"subfolder"`
 	IncludeProjectSlug bool       `json:"include_project_slug"`

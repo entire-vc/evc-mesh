@@ -75,13 +75,18 @@ func (c *client) Publish(ctx context.Context, taskID uuid.UUID, artifactName str
 		return nil
 	}
 
-	// TODO: endpoint+auth finalize after relay-side B-choice.
-	// relay reality (Daedalus) = POST /v1/web/shares/{slug}/files?path=...
-	// auth TBD (B1 custom header / B2 bearer PAT)
-	return transport(ctx, settings.ShareID, filePath, content, contentType, pi.AgentKey)
+	// Transport contract LOCKED 2026-05-22 (A1/B1, relay impl = Gandalf b375d2ee):
+	//   POST /v1/web/shares/{share_slug}/upload?path=<urlencoded filePath>&source=mesh-artifact
+	//   Auth: header X-Agent-Key: tr_agent_<48hex>  (B1 per-share key, 57 chars; relay sha256-hashes + revokes via share_agent_keys.revoked_at)
+	//   Body: raw bytes; Content-Type: <mime>; optional X-Source: mesh-artifact
+	//   200 → {ok, share_id, path, size_bytes, modified_at, public_url?}
+	//   On 401/403 (key revoked): log + flag integration, never crash (key is static — no auto-refetch).
+	// Still gated by MESH_TEAMRELAY_TRANSPORT_ENABLED above; real HTTP wired in follow-up once relay /upload ships.
+	return transport(ctx, settings.ShareSlug, filePath, content, contentType, pi.AgentKey)
 }
 
-// transport is the real outbound HTTP call — left as stub for Phase 1.
+// transport is the real outbound HTTP call — left as stub for Phase 1 (transport gated off).
+// shareSlug + agentKey are passed through for the eventual POST /v1/web/shares/{shareSlug}/upload call.
 func transport(_ context.Context, _ string, filePath string, _ []byte, _ string, _ string) error {
 	log.Printf("teamrelay: transport stub called for path %s — not yet implemented", filePath)
 	return nil

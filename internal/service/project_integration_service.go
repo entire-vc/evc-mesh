@@ -36,10 +36,10 @@ func (s *projectIntegrationService) GetTeamRelay(ctx context.Context, projectID 
 
 // UpsertTeamRelay creates or updates the Team Relay integration for the given project.
 func (s *projectIntegrationService) UpsertTeamRelay(ctx context.Context, projectID uuid.UUID, input UpsertProjectIntegrationInput) (*domain.ProjectIntegration, error) {
-	// Validation: enabled=true requires share_id.
+	// Validation: enabled=true requires share_slug.
 	if input.Enabled {
-		if input.ShareID == "" {
-			return nil, apierror.ValidationError(map[string]string{"share_id": "required when enabled"})
+		if input.ShareSlug == "" {
+			return nil, apierror.ValidationError(map[string]string{"share_slug": "required when enabled"})
 		}
 		// Validate agent_key length when supplied.
 		if input.AgentKey != "" && len(input.AgentKey) < 20 {
@@ -56,7 +56,7 @@ func (s *projectIntegrationService) UpsertTeamRelay(ctx context.Context, project
 	}
 
 	settings := domain.TeamRelaySettings{
-		ShareID:            input.ShareID,
+		ShareSlug:          input.ShareSlug,
 		Subfolder:          input.Subfolder,
 		IncludeProjectSlug: input.IncludeProjectSlug,
 	}
