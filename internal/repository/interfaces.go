@@ -198,6 +198,8 @@ type AgentRepository interface {
 	// TouchLastSeenBatch bumps last_heartbeat and updated_at for the given agent
 	// IDs without changing status. Used by the activity-tracker middleware.
 	TouchLastSeenBatch(ctx context.Context, ids []uuid.UUID) error
+	// SearchByPrefix returns agents in the workspace whose name or slug contain the prefix (ILIKE), sorted by exact-prefix match first then name, up to limit results.
+	SearchByPrefix(ctx context.Context, workspaceID uuid.UUID, prefix string, limit int) ([]domain.Agent, error)
 }
 
 // AgentActivityLogFilter defines filtering options for listing agent activity log entries.
@@ -274,6 +276,8 @@ type UserRepository interface {
 	SearchUsers(ctx context.Context, query string, limit int) ([]domain.User, error)
 	// GetByUsername returns the user with the given username in the workspace, or (nil, nil) if not found.
 	GetByUsername(ctx context.Context, workspaceID uuid.UUID, username string) (*domain.User, error)
+	// SearchInWorkspace returns users who are workspace members and whose display_name, username, or email match the query (ILIKE), up to limit results.
+	SearchInWorkspace(ctx context.Context, workspaceID uuid.UUID, query string, limit int) ([]domain.User, error)
 }
 
 // MentionFilter holds filtering options for listing mention records.

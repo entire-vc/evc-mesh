@@ -348,6 +348,14 @@ export interface UnseenCountResponse {
   count: number;
 }
 
+export interface Mentionable {
+  id: string;
+  kind: "agent" | "user";
+  slug: string;
+  display_name: string;
+  avatar_url: string | null;
+}
+
 // API request types
 
 export interface LoginRequest {
