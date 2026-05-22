@@ -292,3 +292,72 @@ func TestCheckoutConflictError_AsTarget(t *testing.T) {
 	assert.Equal(t, original.CheckedOutByName, conflict.CheckedOutByName)
 	assert.Contains(t, original.Error(), "Linus")
 }
+
+func TestCheckoutTask_NonInProgressStatusReturns400(t *testing.T) {
+	for _, category := range []domain.StatusCategory{
+		domain.StatusCategoryReview,
+		domain.StatusCategoryDone,
+		domain.StatusCategoryCancelled,
+	} {
+		t.Run(string(category), func(t *testing.T) {
+			svc, taskRepo, statusRepo, _ := setupCheckoutTaskService()
+			statusID := uuid.New()
+			taskID := uuid.New()
+			statusRepo.items[statusID] = &domain.TaskStatus{ID: statusID, ProjectID: uuid.New(), Category: category, Name: string(category)}
+			taskRepo.items[taskID] = &domain.Task{ID: taskID, ProjectID: uuid.New(), StatusID: statusID, Title: "Review task"}
+
+			_, err := svc.CheckoutTask(agentContext(uuid.New()), taskID, 0, nil)
+			require.Error(t, err)
+
+			var apiErr *apierror.Error
+			require.ErrorAs(t, err, &apiErr)
+			assert.Equal(t, http.StatusBadRequest, apiErr.Code)
+			assert.Contains(t, apiErr.Message, string(category))
+		})
+	}
+}
+
+func TestCheckoutTask_NotFoundReturns404(t *testing.T) {
+	svc, _, _, _ := setupCheckoutTaskService()
+
+	_, err := svc.CheckoutTask(agentContext(uuid.New()), uuid.New(), 0, nil)
+	require.Error(t, err)
+
+	var apiErr *apierror.Error
+	require.ErrorAs(t, err, &apiErr)
+	assert.Equal(t, http.StatusNotFound, apiErr.Code)
+}
+
+func TestCheckoutTask_InconsistentCheckoutStateReturns409(t *testing.T) {
+	// When AtomicCheckout returns ErrCheckoutConflict but the subsequent GetByID
+	// cannot build a full CheckoutConflictError (e.g. CheckoutExpires is nil due to
+	// a data inconsistency), the service must return a clean apierror.Conflict (409)
+	// instead of leaking the raw ErrCheckoutConflict sentinel (which handleError
+	// cannot map and would return 500).
+	svc, taskRepo, statusRepo, _ := setupCheckoutTaskService()
+
+	inProgressStatusID := uuid.New()
+	taskID := uuid.New()
+	holderID := uuid.New()
+	statusRepo.items[inProgressStatusID] = &domain.TaskStatus{
+		ID:       inProgressStatusID,
+		Category: domain.StatusCategoryInProgress,
+	}
+	// CheckedOutBy is set but CheckoutExpires is nil — inconsistent state that
+	// triggers ErrCheckoutConflict from AtomicCheckout yet prevents a full
+	// CheckoutConflictError from being built.
+	taskRepo.items[taskID] = &domain.Task{
+		ID:           taskID,
+		ProjectID:    uuid.New(),
+		StatusID:     inProgressStatusID,
+		Title:        "Inconsistent checkout state",
+		CheckedOutBy: &holderID,
+	}
+
+	_, err := svc.CheckoutTask(agentContext(uuid.New()), taskID, 0, nil)
+	require.Error(t, err)
+
+	var apiErr *apierror.Error
+	require.ErrorAs(t, err, &apiErr, "expected apierror.Conflict, not raw ErrCheckoutConflict (which would 500)")
+	assert.Equal(t, http.StatusConflict, apiErr.Code)
+}
