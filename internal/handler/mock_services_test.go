@@ -331,6 +331,7 @@ type MockTaskService struct {
 	CreateSubtaskFunc        func(ctx context.Context, parentTaskID uuid.UUID, input service.CreateSubtaskInput) (*domain.Task, error)
 	ListSubtasksFunc         func(ctx context.Context, parentTaskID uuid.UUID) ([]domain.Task, error)
 	GetMyTasksFunc           func(ctx context.Context, assigneeID uuid.UUID, assigneeType domain.AssigneeType) ([]domain.Task, error)
+	GetUserActiveTasksFunc   func(ctx context.Context, workspaceID, userID uuid.UUID, pg pagination.Params) (*pagination.Page[domain.Task], error)
 	GetDefaultStatusFunc     func(ctx context.Context, projectID uuid.UUID) (*domain.TaskStatus, error)
 	GetStatusByIDFunc        func(ctx context.Context, id uuid.UUID) (*domain.TaskStatus, error)
 	BulkUpdateFunc           func(ctx context.Context, projectID uuid.UUID, input service.BulkUpdateTasksInput) service.BulkUpdateTasksResult
@@ -409,6 +410,13 @@ func (m *MockTaskService) GetMyTasks(ctx context.Context, assigneeID uuid.UUID, 
 		return m.GetMyTasksFunc(ctx, assigneeID, assigneeType)
 	}
 	return nil, nil
+}
+
+func (m *MockTaskService) GetUserActiveTasks(ctx context.Context, workspaceID, userID uuid.UUID, pg pagination.Params) (*pagination.Page[domain.Task], error) {
+	if m.GetUserActiveTasksFunc != nil {
+		return m.GetUserActiveTasksFunc(ctx, workspaceID, userID, pg)
+	}
+	return pagination.NewPage([]domain.Task{}, 0, pg), nil
 }
 
 func (m *MockTaskService) GetDefaultStatus(ctx context.Context, projectID uuid.UUID) (*domain.TaskStatus, error) {

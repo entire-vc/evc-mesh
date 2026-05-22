@@ -109,6 +109,8 @@ type TaskService interface {
 	CreateSubtask(ctx context.Context, parentTaskID uuid.UUID, input CreateSubtaskInput) (*domain.Task, error)
 	ListSubtasks(ctx context.Context, parentTaskID uuid.UUID) ([]domain.Task, error)
 	GetMyTasks(ctx context.Context, assigneeID uuid.UUID, assigneeType domain.AssigneeType) ([]domain.Task, error)
+	// GetUserActiveTasks returns non-done/cancelled tasks for a human user in a workspace.
+	GetUserActiveTasks(ctx context.Context, workspaceID, userID uuid.UUID, pg pagination.Params) (*pagination.Page[domain.Task], error)
 	GetDefaultStatus(ctx context.Context, projectID uuid.UUID) (*domain.TaskStatus, error)
 	GetStatusByID(ctx context.Context, id uuid.UUID) (*domain.TaskStatus, error)
 	BulkUpdate(ctx context.Context, projectID uuid.UUID, input BulkUpdateTasksInput) BulkUpdateTasksResult

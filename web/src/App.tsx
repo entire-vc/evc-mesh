@@ -22,6 +22,7 @@ import { OrgChartPage } from "@/pages/org-chart";
 import { MemoryBrowserPage } from "@/pages/memory-browser";
 import { SessionDashboardPage } from "@/pages/session-dashboard";
 import { ActivityPage } from "@/pages/activity-page";
+import { DashboardPage } from "@/pages/dashboard";
 import { TaskDeepLinkResolver } from "@/pages/task-deep-link";
 import { AcceptInvitePage } from "@/pages/accept-invite";
 
@@ -79,7 +80,8 @@ export function App() {
         <Route element={<AppLayout />}>
           {/* Index route is handled by AppLayout redirects — no element needed */}
           <Route index element={null} />
-          <Route path="w/:wsSlug" element={<Navigate to="activity" replace />} />
+          <Route path="w/:wsSlug" element={<Navigate to="dashboard" replace />} />
+          <Route path="w/:wsSlug/dashboard" element={<DashboardPage />} />
           <Route
             path="w/:wsSlug/org-chart"
             element={<OrgChartPage />}

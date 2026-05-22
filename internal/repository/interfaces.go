@@ -69,6 +69,8 @@ type TaskRepository interface {
 	Delete(ctx context.Context, id uuid.UUID) error
 	List(ctx context.Context, projectID uuid.UUID, filter TaskFilter, pg pagination.Params) (*pagination.Page[domain.Task], error)
 	ListByAssignee(ctx context.Context, assigneeID uuid.UUID, assigneeType domain.AssigneeType) ([]domain.Task, error)
+	// ListByUserActive returns tasks assigned to a user in a workspace, excluding done/cancelled categories.
+	ListByUserActive(ctx context.Context, workspaceID, userID uuid.UUID, pg pagination.Params) (*pagination.Page[domain.Task], error)
 	ListSubtasks(ctx context.Context, parentTaskID uuid.UUID) ([]domain.Task, error)
 	CountByStatus(ctx context.Context, projectID uuid.UUID) (map[uuid.UUID]int, error)
 	CountByStatusCategory(ctx context.Context, projectID uuid.UUID) (map[domain.StatusCategory]int, error)
