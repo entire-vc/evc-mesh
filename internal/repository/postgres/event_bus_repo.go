@@ -153,44 +153,62 @@ func (r *EventBusMessageRepo) GetByID(ctx context.Context, id uuid.UUID) (*domai
 	return &m, nil
 }
 
-func (r *EventBusMessageRepo) List(ctx context.Context, projectID uuid.UUID, filter repository.EventBusMessageFilter, pg pagination.Params) (*pagination.Page[domain.EventBusMessage], error) {
-	pg.Normalize()
-
+// buildEventConditions constructs WHERE conditions and args for the shared filter fields.
+func buildEventConditions(projectID uuid.UUID, filter repository.EventBusMessageFilter) ([]string, []interface{}, int) {
 	args := []interface{}{projectID} // $1
-	conditions := []string{"project_id = $1"}
+	conditions := []string{"e.project_id = $1"}
 	argIdx := 2
 
 	if filter.EventType != nil {
-		conditions = append(conditions, fmt.Sprintf("event_type = $%d", argIdx))
+		conditions = append(conditions, fmt.Sprintf("e.event_type = $%d", argIdx))
 		args = append(args, *filter.EventType)
 		argIdx++
 	}
 	if filter.AgentID != nil {
-		conditions = append(conditions, fmt.Sprintf("agent_id = $%d", argIdx))
+		conditions = append(conditions, fmt.Sprintf("e.agent_id = $%d", argIdx))
 		args = append(args, *filter.AgentID)
 		argIdx++
 	}
 	if filter.TaskID != nil {
-		conditions = append(conditions, fmt.Sprintf("task_id = $%d", argIdx))
+		conditions = append(conditions, fmt.Sprintf("e.task_id = $%d", argIdx))
 		args = append(args, *filter.TaskID)
 		argIdx++
 	}
 	if len(filter.Tags) > 0 {
-		conditions = append(conditions, fmt.Sprintf("tags && $%d", argIdx))
+		conditions = append(conditions, fmt.Sprintf("e.tags && $%d", argIdx))
 		args = append(args, pq.Array(filter.Tags))
+		argIdx++
+	}
+	if filter.CreatedAfter != nil {
+		conditions = append(conditions, fmt.Sprintf("e.created_at >= $%d", argIdx))
+		args = append(args, *filter.CreatedAfter)
+		argIdx++
+	}
+	if filter.CreatedBefore != nil {
+		conditions = append(conditions, fmt.Sprintf("e.created_at <= $%d", argIdx))
+		args = append(args, *filter.CreatedBefore)
+		argIdx++
+	}
+	if filter.AgentOnly {
+		conditions = append(conditions, "e.agent_id IS NOT NULL")
 	}
 
+	return conditions, args, argIdx
+}
+
+func (r *EventBusMessageRepo) List(ctx context.Context, projectID uuid.UUID, filter repository.EventBusMessageFilter, pg pagination.Params) (*pagination.Page[domain.EventBusMessage], error) {
+	pg.Normalize()
+
+	conditions, args, _ := buildEventConditions(projectID, filter)
 	where := "WHERE " + joinAnd(conditions)
 
-	// Count
-	countQ := fmt.Sprintf(`SELECT COUNT(*) FROM event_bus_messages %s`, where)
+	countQ := fmt.Sprintf(`SELECT COUNT(*) FROM event_bus_messages e %s`, where)
 	var totalCount int
 	if err := r.db.GetContext(ctx, &totalCount, countQ, args...); err != nil {
 		return nil, err
 	}
 
-	// Data
-	dataQ := fmt.Sprintf(`SELECT * FROM event_bus_messages %s ORDER BY created_at DESC %s`, where, paginationClause(pg))
+	dataQ := fmt.Sprintf(`SELECT e.* FROM event_bus_messages e %s ORDER BY e.created_at DESC %s`, where, paginationClause(pg))
 	var rows []eventBusRow
 	if err := r.db.SelectContext(ctx, &rows, dataQ, args...); err != nil {
 		return nil, err
@@ -199,6 +217,67 @@ func (r *EventBusMessageRepo) List(ctx context.Context, projectID uuid.UUID, fil
 	items := make([]domain.EventBusMessage, len(rows))
 	for i := range rows {
 		items[i] = rows[i].toDomain()
+	}
+
+	return pagination.NewPage(items, totalCount, pg), nil
+}
+
+// enrichedEventRow is the DB scan target for ListEnriched.
+type enrichedEventRow struct {
+	eventBusRow
+	TaskTitle   *string `db:"task_title"`
+	ProjectName *string `db:"project_name"`
+	ActorName   *string `db:"actor_name"`
+}
+
+func (r *enrichedEventRow) toEnrichedDomain() domain.EnrichedEventBusMessage {
+	return domain.EnrichedEventBusMessage{
+		EventBusMessage: r.eventBusRow.toDomain(),
+		TaskTitle:       r.TaskTitle,
+		ProjectName:     r.ProjectName,
+		ActorName:       r.ActorName,
+	}
+}
+
+// ListEnriched returns paginated events with LEFT-JOINed task, project, and actor names.
+func (r *EventBusMessageRepo) ListEnriched(ctx context.Context, projectID uuid.UUID, filter repository.EventBusMessageFilter, pg pagination.Params) (*pagination.Page[domain.EnrichedEventBusMessage], error) {
+	pg.Normalize()
+
+	conditions, args, _ := buildEventConditions(projectID, filter)
+	where := "WHERE " + joinAnd(conditions)
+
+	const fromClause = `
+		FROM event_bus_messages e
+		LEFT JOIN tasks t ON t.id = e.task_id
+		LEFT JOIN projects p ON p.id = e.project_id
+		LEFT JOIN agents a ON a.id = e.agent_id`
+
+	countQ := fmt.Sprintf(`SELECT COUNT(*) %s %s`, fromClause, where)
+	var totalCount int
+	if err := r.db.GetContext(ctx, &totalCount, countQ, args...); err != nil {
+		return nil, err
+	}
+
+	dataQ := fmt.Sprintf(`
+		SELECT
+			e.id, e.workspace_id, e.project_id, e.task_id, e.agent_id,
+			e.event_type, e.subject, e.payload, e.tags, e.ttl,
+			e.created_at, e.expires_at, e.memory_hint,
+			t.title  AS task_title,
+			p.name   AS project_name,
+			a.name   AS actor_name
+		%s %s
+		ORDER BY e.created_at DESC %s`,
+		fromClause, where, paginationClause(pg))
+
+	var rows []enrichedEventRow
+	if err := r.db.SelectContext(ctx, &rows, dataQ, args...); err != nil {
+		return nil, err
+	}
+
+	items := make([]domain.EnrichedEventBusMessage, len(rows))
+	for i := range rows {
+		items[i] = rows[i].toEnrichedDomain()
 	}
 
 	return pagination.NewPage(items, totalCount, pg), nil

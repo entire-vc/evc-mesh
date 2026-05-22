@@ -142,6 +142,12 @@ func (s *eventBusService) List(ctx context.Context, projectID uuid.UUID, filter 
 	return s.eventRepo.List(ctx, projectID, filter, pg)
 }
 
+// ListEnriched returns events with joined task, project, and actor names for the UI.
+func (s *eventBusService) ListEnriched(ctx context.Context, projectID uuid.UUID, filter repository.EventBusMessageFilter, pg pagination.Params) (*pagination.Page[domain.EnrichedEventBusMessage], error) {
+	pg.Normalize()
+	return s.eventRepo.ListEnriched(ctx, projectID, filter, pg)
+}
+
 // GetContext retrieves context-relevant events from the event bus.
 func (s *eventBusService) GetContext(ctx context.Context, projectID uuid.UUID, opts GetContextOptions) ([]domain.EventBusMessage, error) {
 	limit := opts.Limit

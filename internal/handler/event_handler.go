@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"net/http"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
@@ -38,10 +39,13 @@ type createEventRequest struct {
 
 // listEventsQuery represents query parameters for listing events.
 type listEventsQuery struct {
-	EventType string `query:"event_type"`
-	AgentID   string `query:"agent_id"`
-	TaskID    string `query:"task_id"`
-	Tags      string `query:"tags"`
+	EventType   string `query:"event_type"`
+	AgentID     string `query:"agent_id"`
+	TaskID      string `query:"task_id"`
+	Tags        string `query:"tags"`
+	DateFrom    string `query:"date_from"`    // RFC3339
+	DateTo      string `query:"date_to"`      // RFC3339
+	ActorType   string `query:"actor_type"`   // "agent" → agent_id IS NOT NULL
 }
 
 // List handles GET /projects/:proj_id/events
@@ -86,8 +90,24 @@ func (h *EventHandler) List(c echo.Context) error {
 	if q.Tags != "" {
 		filter.Tags = []string{q.Tags}
 	}
+	if q.DateFrom != "" {
+		t, parseErr := time.Parse(time.RFC3339, q.DateFrom)
+		if parseErr == nil {
+			filter.CreatedAfter = &t
+		}
+	}
+	if q.DateTo != "" {
+		t, parseErr := time.Parse(time.RFC3339, q.DateTo)
+		if parseErr == nil {
+			filter.CreatedBefore = &t
+		}
+	}
+	if q.ActorType == "agent" {
+		filter.AgentOnly = true
+	}
 
-	page, err := h.eventService.List(c.Request().Context(), projID, filter, pg)
+	// Use enriched query for the UI — task title, project name, actor name are included.
+	page, err := h.eventService.ListEnriched(c.Request().Context(), projID, filter, pg)
 	if err != nil {
 		return handleError(c, err)
 	}

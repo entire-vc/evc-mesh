@@ -279,6 +279,7 @@ type EventBusService interface {
 	Publish(ctx context.Context, input PublishEventInput) (*domain.EventBusMessage, error)
 	GetByID(ctx context.Context, id uuid.UUID) (*domain.EventBusMessage, error)
 	List(ctx context.Context, projectID uuid.UUID, filter repository.EventBusMessageFilter, pg pagination.Params) (*pagination.Page[domain.EventBusMessage], error)
+	ListEnriched(ctx context.Context, projectID uuid.UUID, filter repository.EventBusMessageFilter, pg pagination.Params) (*pagination.Page[domain.EnrichedEventBusMessage], error)
 	GetContext(ctx context.Context, projectID uuid.UUID, opts GetContextOptions) ([]domain.EventBusMessage, error)
 	CleanupExpired(ctx context.Context) (int64, error)
 }

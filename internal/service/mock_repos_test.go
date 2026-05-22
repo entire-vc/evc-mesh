@@ -1173,6 +1173,21 @@ func (m *MockEventBusMessageRepository) List(_ context.Context, projectID uuid.U
 	return pagination.NewPage(all, len(all), pg), nil
 }
 
+func (m *MockEventBusMessageRepository) ListEnriched(_ context.Context, projectID uuid.UUID, _ repository.EventBusMessageFilter, pg pagination.Params) (*pagination.Page[domain.EnrichedEventBusMessage], error) {
+	if m.errToReturn != nil {
+		return nil, m.errToReturn
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var all []domain.EnrichedEventBusMessage
+	for _, msg := range m.items {
+		if msg.ProjectID == projectID {
+			all = append(all, domain.EnrichedEventBusMessage{EventBusMessage: *msg})
+		}
+	}
+	return pagination.NewPage(all, len(all), pg), nil
+}
+
 func (m *MockEventBusMessageRepository) DeleteExpired(_ context.Context) (int64, error) {
 	if m.errToReturn != nil {
 		return 0, m.errToReturn
