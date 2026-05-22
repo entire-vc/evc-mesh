@@ -1267,7 +1267,7 @@ export function ProjectSettingsPage() {
       );
       setTrAgentKeyHint(data.agent_key_hint);
       setTrAgentKey("");
-      toast({ title: "Saved", description: "Team Relay settings updated." });
+      toast("Team Relay settings saved.");
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Failed to save settings";
       setTrError(msg);
