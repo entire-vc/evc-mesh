@@ -494,6 +494,21 @@ func (h *AgentHandler) GetAgentsStatus(c echo.Context) error {
 		IsStale               bool       `json:"is_stale"`
 		HeartbeatMessage      string     `json:"heartbeat_message,omitempty"`
 		CurrentTaskID         *uuid.UUID `json:"current_task_id,omitempty"`
+		CurrentTaskTitle      string     `json:"current_task_title,omitempty"`
+	}
+
+	// Resolve task titles for agents currently working on a task.
+	taskTitles := map[uuid.UUID]string{}
+	if h.taskService != nil {
+		for _, a := range agents.Items {
+			if a.CurrentTaskID != nil {
+				if _, seen := taskTitles[*a.CurrentTaskID]; !seen {
+					if t, terr := h.taskService.GetByID(c.Request().Context(), *a.CurrentTaskID); terr == nil && t != nil {
+						taskTitles[*a.CurrentTaskID] = t.Title
+					}
+				}
+			}
+		}
 	}
 
 	var working, stale int
@@ -506,7 +521,7 @@ func (h *AgentHandler) GetAgentsStatus(c echo.Context) error {
 		if a.Status == domain.AgentStatusOnline || a.Status == domain.AgentStatusBusy {
 			working++
 		}
-		statuses = append(statuses, agentStatus{
+		entry := agentStatus{
 			ID:                    a.ID,
 			Name:                  a.Name,
 			Status:                string(a.Status),
@@ -516,7 +531,11 @@ func (h *AgentHandler) GetAgentsStatus(c echo.Context) error {
 			IsStale:               isStale,
 			HeartbeatMessage:      a.HeartbeatMessage,
 			CurrentTaskID:         a.CurrentTaskID,
-		})
+		}
+		if a.CurrentTaskID != nil {
+			entry.CurrentTaskTitle = taskTitles[*a.CurrentTaskID]
+		}
+		statuses = append(statuses, entry)
 	}
 
 	return c.JSON(http.StatusOK, map[string]any{
