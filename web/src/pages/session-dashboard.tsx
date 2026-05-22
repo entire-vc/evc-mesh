@@ -1,8 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router";
 import {
-	Activity,
-	AlertCircle,
 	Bot,
 	Clock,
 	DollarSign,
@@ -69,7 +67,9 @@ interface AgentSessionCardProps {
 }
 
 function AgentSessionCard({ agent }: AgentSessionCardProps) {
-	const statusCfg = statusConfig[agent.status] ?? statusConfig.offline;
+	const statusCfg = agent.is_stale
+		? statusConfig.offline
+		: statusConfig[agent.status] ?? statusConfig.offline;
 	const typeCfg = agentTypeConfig[agent.agent_type as keyof typeof agentTypeConfig] ?? {
 		label: agent.agent_type ?? "Agent",
 		color: "bg-gray-100 text-gray-700",
@@ -101,15 +101,9 @@ function AgentSessionCard({ agent }: AgentSessionCardProps) {
 						className={cn(
 							"h-2.5 w-2.5 rounded-full",
 							statusCfg.dotColor,
-							agent.is_stale && "opacity-50",
 						)}
 					/>
 					<span className="text-xs text-muted-foreground">{statusCfg.label}</span>
-					{agent.is_stale && (
-						<span title="Heartbeat stale">
-							<AlertCircle className="h-3 w-3 text-yellow-500" />
-						</span>
-					)}
 				</div>
 			</div>
 
