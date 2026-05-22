@@ -290,8 +290,16 @@ export function Sidebar({ collapsed }: SidebarProps) {
       <div className="flex h-14 items-center border-b border-sidebar-border px-3">
         <DropdownMenu>
           <DropdownMenuTrigger className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-sm font-semibold text-sidebar-foreground hover:bg-sidebar-accent">
-            <div className="flex h-6 w-6 items-center justify-center rounded bg-sidebar-primary text-primary-foreground">
-              <MeshIcon size={14} />
+            <div className="flex h-6 w-6 shrink-0 items-center justify-center overflow-hidden rounded bg-sidebar-primary text-primary-foreground">
+              {currentWorkspace?.icon_url ? (
+                <img
+                  src={currentWorkspace.icon_url}
+                  alt={currentWorkspace.name}
+                  className="h-full w-full object-cover"
+                />
+              ) : (
+                <MeshIcon size={14} />
+              )}
             </div>
             <span className="flex-1 truncate text-left">
               {currentWorkspace?.name || "Select workspace"}
@@ -305,9 +313,17 @@ export function Sidebar({ collapsed }: SidebarProps) {
               <Link key={ws.id} to={`/w/${ws.slug}`}>
                 <DropdownMenuItem
                   className={cn(
+                    "gap-2",
                     ws.slug === wsSlug && "bg-accent text-accent-foreground",
                   )}
                 >
+                  <div className="flex h-5 w-5 shrink-0 items-center justify-center overflow-hidden rounded bg-sidebar-primary text-primary-foreground text-[10px] font-bold">
+                    {ws.icon_url ? (
+                      <img src={ws.icon_url} alt={ws.name} className="h-full w-full object-cover" />
+                    ) : (
+                      ws.name.charAt(0).toUpperCase()
+                    )}
+                  </div>
                   {ws.name}
                 </DropdownMenuItem>
               </Link>

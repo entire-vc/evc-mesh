@@ -6,6 +6,7 @@ import { useWorkspaceStore } from "@/stores/workspace";
 import { useProjectStore } from "@/stores/project";
 import { useWebSocketStore } from "@/stores/websocket";
 import { useInstallPrompt } from "@/hooks/use-install-prompt";
+import { useDynamicFavicon } from "@/hooks/use-dynamic-favicon";
 import { InstallPromptBanner } from "@/components/install-prompt";
 import { Sidebar } from "./sidebar";
 import { Header } from "./header";
@@ -36,6 +37,7 @@ export function AppLayout() {
   const wsDisconnect = useWebSocketStore((s) => s.disconnect);
 
   const installPrompt = useInstallPrompt();
+  useDynamicFavicon();
   const [sidebarCollapsed, setSidebarCollapsed] = useState(
     () => window.innerWidth < 768,
   );

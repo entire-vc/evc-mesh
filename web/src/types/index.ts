@@ -98,6 +98,7 @@ export interface Workspace {
   settings: Record<string, unknown>;
   billing_plan_id: string;
   billing_customer_id: string;
+  icon_url: string | null;
   created_at: string;
   updated_at: string;
 }
