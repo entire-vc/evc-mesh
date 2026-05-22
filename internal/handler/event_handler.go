@@ -39,13 +39,13 @@ type createEventRequest struct {
 
 // listEventsQuery represents query parameters for listing events.
 type listEventsQuery struct {
-	EventType   string `query:"event_type"`
-	AgentID     string `query:"agent_id"`
-	TaskID      string `query:"task_id"`
-	Tags        string `query:"tags"`
-	DateFrom    string `query:"date_from"`    // RFC3339
-	DateTo      string `query:"date_to"`      // RFC3339
-	ActorType   string `query:"actor_type"`   // "agent" → agent_id IS NOT NULL
+	EventType string `query:"event_type"`
+	AgentID   string `query:"agent_id"`
+	TaskID    string `query:"task_id"`
+	Tags      string `query:"tags"`
+	DateFrom  string `query:"date_from"`  // RFC3339
+	DateTo    string `query:"date_to"`    // RFC3339
+	ActorType string `query:"actor_type"` // "agent" → agent_id IS NOT NULL
 }
 
 // List handles GET /projects/:proj_id/events

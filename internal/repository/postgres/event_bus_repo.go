@@ -154,9 +154,9 @@ func (r *EventBusMessageRepo) GetByID(ctx context.Context, id uuid.UUID) (*domai
 }
 
 // buildEventConditions constructs WHERE conditions and args for the shared filter fields.
-func buildEventConditions(projectID uuid.UUID, filter repository.EventBusMessageFilter) ([]string, []interface{}, int) {
-	args := []interface{}{projectID} // $1
-	conditions := []string{"e.project_id = $1"}
+func buildEventConditions(projectID uuid.UUID, filter repository.EventBusMessageFilter) (conditions []string, args []interface{}) {
+	args = []interface{}{projectID} // $1
+	conditions = []string{"e.project_id = $1"}
 	argIdx := 2
 
 	if filter.EventType != nil {
@@ -187,19 +187,18 @@ func buildEventConditions(projectID uuid.UUID, filter repository.EventBusMessage
 	if filter.CreatedBefore != nil {
 		conditions = append(conditions, fmt.Sprintf("e.created_at <= $%d", argIdx))
 		args = append(args, *filter.CreatedBefore)
-		argIdx++
 	}
 	if filter.AgentOnly {
 		conditions = append(conditions, "e.agent_id IS NOT NULL")
 	}
 
-	return conditions, args, argIdx
+	return conditions, args
 }
 
 func (r *EventBusMessageRepo) List(ctx context.Context, projectID uuid.UUID, filter repository.EventBusMessageFilter, pg pagination.Params) (*pagination.Page[domain.EventBusMessage], error) {
 	pg.Normalize()
 
-	conditions, args, _ := buildEventConditions(projectID, filter)
+	conditions, args := buildEventConditions(projectID, filter)
 	where := "WHERE " + joinAnd(conditions)
 
 	countQ := fmt.Sprintf(`SELECT COUNT(*) FROM event_bus_messages e %s`, where)
@@ -232,7 +231,7 @@ type enrichedEventRow struct {
 
 func (r *enrichedEventRow) toEnrichedDomain() domain.EnrichedEventBusMessage {
 	return domain.EnrichedEventBusMessage{
-		EventBusMessage: r.eventBusRow.toDomain(),
+		EventBusMessage: r.toDomain(),
 		TaskTitle:       r.TaskTitle,
 		ProjectName:     r.ProjectName,
 		ActorName:       r.ActorName,
@@ -243,7 +242,7 @@ func (r *enrichedEventRow) toEnrichedDomain() domain.EnrichedEventBusMessage {
 func (r *EventBusMessageRepo) ListEnriched(ctx context.Context, projectID uuid.UUID, filter repository.EventBusMessageFilter, pg pagination.Params) (*pagination.Page[domain.EnrichedEventBusMessage], error) {
 	pg.Normalize()
 
-	conditions, args, _ := buildEventConditions(projectID, filter)
+	conditions, args := buildEventConditions(projectID, filter)
 	where := "WHERE " + joinAnd(conditions)
 
 	const fromClause = `

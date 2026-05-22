@@ -218,10 +218,10 @@ type AgentActivityLogRepository interface {
 
 // EventBusMessageFilter defines filtering options for listing event bus messages.
 type EventBusMessageFilter struct {
-	EventType    *domain.EventType
-	AgentID      *uuid.UUID
-	TaskID       *uuid.UUID
-	Tags         []string
+	EventType     *domain.EventType
+	AgentID       *uuid.UUID
+	TaskID        *uuid.UUID
+	Tags          []string
 	CreatedAfter  *time.Time
 	CreatedBefore *time.Time
 	// AgentOnly filters to events where agent_id IS NOT NULL.
