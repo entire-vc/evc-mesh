@@ -31,7 +31,7 @@ func toTeamRelayResponse(pi *domain.ProjectIntegration) teamRelayResponse {
 	hint := ""
 	if len(pi.AgentKey) >= 4 {
 		hint = "••••" + pi.AgentKey[len(pi.AgentKey)-4:]
-	} else if len(pi.AgentKey) > 0 {
+	} else if pi.AgentKey != "" {
 		hint = "••••"
 	}
 
@@ -101,7 +101,7 @@ func (h *ProjectIntegrationHandler) UpsertTeamRelay(c echo.Context) error {
 		Subfolder          string `json:"subfolder"`
 		IncludeProjectSlug bool   `json:"include_project_slug"`
 	}
-	if err := c.Bind(&body); err != nil {
+	if bindErr := c.Bind(&body); bindErr != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
 	}
 

@@ -48,8 +48,8 @@ func (c *client) Publish(ctx context.Context, taskID uuid.UUID, artifactName str
 	}
 
 	var settings domain.TeamRelaySettings
-	if err := json.Unmarshal(pi.Settings, &settings); err != nil {
-		log.Printf("teamrelay: bad settings for project %s: %v", task.ProjectID, err)
+	if uErr := json.Unmarshal(pi.Settings, &settings); uErr != nil {
+		log.Printf("teamrelay: bad settings for project %s: %v", task.ProjectID, uErr)
 		return nil
 	}
 
@@ -87,7 +87,7 @@ func (c *client) Publish(ctx context.Context, taskID uuid.UUID, artifactName str
 
 // transport is the real outbound HTTP call — left as stub for Phase 1 (transport gated off).
 // shareSlug + agentKey are passed through for the eventual POST /v1/web/shares/{shareSlug}/upload call.
-func transport(_ context.Context, _ string, filePath string, _ []byte, _ string, _ string) error {
+func transport(_ context.Context, _, filePath string, _ []byte, _, _ string) error {
 	log.Printf("teamrelay: transport stub called for path %s — not yet implemented", filePath)
 	return nil
 }

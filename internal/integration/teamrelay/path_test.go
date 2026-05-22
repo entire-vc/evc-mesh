@@ -27,7 +27,7 @@ func TestBuildPath_NoProjectSlug(t *testing.T) {
 	result := BuildPath(
 		"shared",
 		"my-project",
-		false, // includeProjectSlug = false
+		false, // no project slug in path
 		"deadbeef",
 		"Deploy report",
 		"report",
