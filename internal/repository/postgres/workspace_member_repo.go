@@ -160,7 +160,7 @@ func (r *WorkspaceMemberRepo) ListWithProjects(ctx context.Context, workspaceID 
 		FROM workspace_members wm
 		JOIN users u ON u.id = wm.user_id
 		LEFT JOIN project_members pm ON pm.user_id = wm.user_id
-		LEFT JOIN projects p ON p.id = pm.project_id AND p.deleted_at IS NULL
+		LEFT JOIN projects p ON p.id = pm.project_id AND p.workspace_id = $1 AND p.deleted_at IS NULL
 		WHERE wm.workspace_id = $1
 		GROUP BY wm.id, wm.workspace_id, wm.user_id, wm.role, wm.invited_by, wm.created_at, wm.updated_at,
 		         u.id, u.email, u.display_name, u.avatar_url
