@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
@@ -145,4 +146,109 @@ func (r *CommentRepo) ListReplies(ctx context.Context, parentCommentID uuid.UUID
 		comments = []domain.Comment{}
 	}
 	return comments, nil
+}
+
+// commentViewSelect is the base SELECT for enriched comment view queries (activity feed).
+const commentViewSelect = `SELECT
+	c.id         AS comment_id,
+	c.task_id,
+	t.title      AS task_title,
+	t.project_id,
+	p.name       AS project_name,
+	c.body       AS comment_body,
+	c.author_id,
+	c.author_type AS author_kind,
+	CASE
+		WHEN c.author_type = 'agent' THEN
+			(SELECT name FROM agents WHERE id = c.author_id AND deleted_at IS NULL)
+		WHEN c.author_type = 'user' THEN
+			(SELECT COALESCE(NULLIF(u.display_name, ''), SPLIT_PART(u.email, '@', 1)) FROM users u WHERE u.id = c.author_id)
+		ELSE ''
+	END AS author_name,
+	c.created_at,
+	c.updated_at
+FROM comments c
+JOIN tasks t ON t.id = c.task_id
+JOIN projects p ON p.id = t.project_id`
+
+// ListByAuthor returns the caller's own comments across workspaces, newest first.
+func (r *CommentRepo) ListByAuthor(ctx context.Context, authorID uuid.UUID, filter repository.CommentViewFilter) ([]domain.CommentView, *time.Time, error) {
+	limit := filter.Limit
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 200 {
+		limit = 200
+	}
+
+	args := []any{authorID}
+	where := `c.author_id = $1 AND c.is_internal = false`
+
+	if filter.WorkspaceID != nil {
+		args = append(args, *filter.WorkspaceID)
+		where += fmt.Sprintf(` AND p.workspace_id = $%d`, len(args))
+	}
+	if filter.ProjectID != nil {
+		args = append(args, *filter.ProjectID)
+		where += fmt.Sprintf(` AND t.project_id = $%d`, len(args))
+	}
+	if filter.Before != nil {
+		args = append(args, *filter.Before)
+		where += fmt.Sprintf(` AND c.created_at < $%d`, len(args))
+	}
+
+	args = append(args, limit)
+	q := commentViewSelect + ` WHERE ` + where + fmt.Sprintf(` ORDER BY c.created_at DESC LIMIT $%d`, len(args))
+
+	var rows []domain.CommentView
+	if err := r.db.SelectContext(ctx, &rows, q, args...); err != nil {
+		return nil, nil, err
+	}
+	if rows == nil {
+		rows = []domain.CommentView{}
+	}
+
+	var nextCursor *time.Time
+	if len(rows) == limit {
+		t := rows[len(rows)-1].CreatedAt
+		nextCursor = &t
+	}
+	return rows, nextCursor, nil
+}
+
+// ListRecentByWorkspace returns workspace-wide recent comments, newest first.
+func (r *CommentRepo) ListRecentByWorkspace(ctx context.Context, wsID uuid.UUID, filter repository.CommentViewFilter) ([]domain.CommentView, *time.Time, error) {
+	limit := filter.Limit
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 200 {
+		limit = 200
+	}
+
+	args := []any{wsID}
+	where := `p.workspace_id = $1 AND c.is_internal = false`
+
+	if filter.Before != nil {
+		args = append(args, *filter.Before)
+		where += fmt.Sprintf(` AND c.created_at < $%d`, len(args))
+	}
+
+	args = append(args, limit)
+	q := commentViewSelect + ` WHERE ` + where + fmt.Sprintf(` ORDER BY c.created_at DESC LIMIT $%d`, len(args))
+
+	var rows []domain.CommentView
+	if err := r.db.SelectContext(ctx, &rows, q, args...); err != nil {
+		return nil, nil, err
+	}
+	if rows == nil {
+		rows = []domain.CommentView{}
+	}
+
+	var nextCursor *time.Time
+	if len(rows) == limit {
+		t := rows[len(rows)-1].CreatedAt
+		nextCursor = &t
+	}
+	return rows, nextCursor, nil
 }

@@ -205,6 +205,9 @@ func (s *StubTaskService) Create(_ context.Context, t *domain.Task) error {
 func (s *StubTaskService) GetDefaultStatus(_ context.Context, _ uuid.UUID) (*domain.TaskStatus, error) {
 	return s.defaultStatus, nil
 }
+func (s *StubTaskService) GetStatusByID(_ context.Context, _ uuid.UUID) (*domain.TaskStatus, error) {
+	panic("StubTaskService.GetStatusByID not implemented")
+}
 
 func (s *StubTaskService) GetByID(_ context.Context, _ uuid.UUID) (*domain.Task, error) {
 	panic("StubTaskService.GetByID not implemented")

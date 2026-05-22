@@ -127,6 +127,15 @@ export function Sidebar({ collapsed }: SidebarProps) {
     }
   }, [lastEvent]);
 
+  // Clear badge when ActivityPage marks all visible mentions as shown.
+  useEffect(() => {
+    const handler = (e: Event) => {
+      setUnseenCount((e as CustomEvent<{ newCount: number }>).detail.newCount);
+    };
+    window.addEventListener("mesh:mentions:shown", handler);
+    return () => window.removeEventListener("mesh:mentions:shown", handler);
+  }, []);
+
   if (collapsed) {
     return (
       <aside className="flex h-full w-12 flex-col items-center border-r border-sidebar-border bg-sidebar">

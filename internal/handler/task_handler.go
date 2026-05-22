@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -148,6 +149,16 @@ func (h *TaskHandler) Create(c echo.Context) error {
 			return c.JSON(http.StatusBadRequest, apierror.BadRequest("project has no default status; provide status_id"))
 		}
 		statusID = defaultStatus.ID
+	}
+
+	// Guard: creating tasks directly in review status is a workflow error.
+	// MESH_ALLOW_REVIEW_AT_CREATE=true bypasses this for import/migration use cases.
+	if os.Getenv("MESH_ALLOW_REVIEW_AT_CREATE") != "true" {
+		if st, lookupErr := h.taskService.GetStatusByID(c.Request().Context(), statusID); lookupErr == nil && st != nil && st.Category == domain.StatusCategoryReview {
+			return c.JSON(http.StatusBadRequest, apierror.BadRequest(
+				"Cannot create task in review status. Use 'todo' or 'in_progress'. Review is for tasks with completed work awaiting check.",
+			))
+		}
 	}
 
 	// Resolve assignee type (default to "unassigned").

@@ -16,6 +16,7 @@ import (
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/repository"
+	"github.com/entire-vc/evc-mesh/pkg/actorctx"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 	"github.com/entire-vc/evc-mesh/pkg/pagination"
 )
@@ -282,4 +283,148 @@ func TestCommentHandler_Delete_NotFound(t *testing.T) {
 	err := h.Delete(c)
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusNotFound, rec.Code)
+}
+
+// --- TestCommentHandler_GetMyComments ---
+
+func TestCommentHandler_GetMyComments_Success(t *testing.T) {
+	userID := uuid.New()
+	now := time.Now().UTC()
+	page := &domain.CommentViewPage{
+		Items: []domain.CommentView{
+			{CommentID: uuid.New(), TaskTitle: "Task A", CommentBody: "hello", CreatedAt: now},
+		},
+		NextCursor: nil,
+	}
+
+	mockSvc := &MockCommentService{
+		ListByAuthorFunc: func(_ context.Context, authorID uuid.UUID, filter repository.CommentViewFilter) (*domain.CommentViewPage, error) {
+			assert.Equal(t, userID, authorID)
+			assert.Equal(t, 50, filter.Limit)
+			return page, nil
+		},
+	}
+	h, e := setupCommentTest(mockSvc)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/me/comments?limit=50", http.NoBody)
+	ctx := actorctx.WithActor(req.Context(), userID, domain.ActorTypeUser)
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	err := h.GetMyComments(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var got domain.CommentViewPage
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
+	assert.Len(t, got.Items, 1)
+	assert.Equal(t, "Task A", got.Items[0].TaskTitle)
+}
+
+func TestCommentHandler_GetMyComments_Unauthenticated(t *testing.T) {
+	mockSvc := &MockCommentService{}
+	h, e := setupCommentTest(mockSvc)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/me/comments", http.NoBody)
+	// no actorctx injected → actor ID is uuid.Nil
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	err := h.GetMyComments(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+}
+
+func TestCommentHandler_GetMyComments_BadCursor(t *testing.T) {
+	userID := uuid.New()
+	mockSvc := &MockCommentService{}
+	h, e := setupCommentTest(mockSvc)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/me/comments?before=not-a-timestamp", http.NoBody)
+	ctx := actorctx.WithActor(req.Context(), userID, domain.ActorTypeUser)
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	err := h.GetMyComments(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+
+	var apiErr apierror.Error
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &apiErr))
+	assert.NotEmpty(t, apiErr.Validation["before"])
+}
+
+// --- TestCommentHandler_GetRecentByWorkspace ---
+
+func TestCommentHandler_GetRecentByWorkspace_Success(t *testing.T) {
+	wsID := uuid.New()
+	now := time.Now().UTC()
+	nextCursor := now.Add(-time.Minute)
+	page := &domain.CommentViewPage{
+		Items: []domain.CommentView{
+			{CommentID: uuid.New(), TaskTitle: "Task B", AuthorName: "Garfield", CreatedAt: now},
+		},
+		NextCursor: &nextCursor,
+	}
+
+	mockSvc := &MockCommentService{
+		ListRecentByWorkspaceFunc: func(_ context.Context, id uuid.UUID, filter repository.CommentViewFilter) (*domain.CommentViewPage, error) {
+			assert.Equal(t, wsID, id)
+			assert.Equal(t, 50, filter.Limit)
+			return page, nil
+		},
+	}
+	h, e := setupCommentTest(mockSvc)
+
+	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetParamNames("ws_id")
+	c.SetParamValues(wsID.String())
+
+	err := h.GetRecentByWorkspace(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var got domain.CommentViewPage
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
+	assert.Len(t, got.Items, 1)
+	assert.NotNil(t, got.NextCursor)
+}
+
+func TestCommentHandler_GetRecentByWorkspace_BadWorkspaceID(t *testing.T) {
+	mockSvc := &MockCommentService{}
+	h, e := setupCommentTest(mockSvc)
+
+	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetParamNames("ws_id")
+	c.SetParamValues("not-a-uuid")
+
+	err := h.GetRecentByWorkspace(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
+func TestCommentHandler_GetRecentByWorkspace_BadCursor(t *testing.T) {
+	wsID := uuid.New()
+	mockSvc := &MockCommentService{}
+	h, e := setupCommentTest(mockSvc)
+
+	req := httptest.NewRequest(http.MethodGet, "/?before=definitely-not-rfc3339", http.NoBody)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetParamNames("ws_id")
+	c.SetParamValues(wsID.String())
+
+	err := h.GetRecentByWorkspace(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+
+	var apiErr apierror.Error
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &apiErr))
+	assert.NotEmpty(t, apiErr.Validation["before"])
 }

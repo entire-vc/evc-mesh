@@ -110,6 +110,7 @@ type TaskService interface {
 	ListSubtasks(ctx context.Context, parentTaskID uuid.UUID) ([]domain.Task, error)
 	GetMyTasks(ctx context.Context, assigneeID uuid.UUID, assigneeType domain.AssigneeType) ([]domain.Task, error)
 	GetDefaultStatus(ctx context.Context, projectID uuid.UUID) (*domain.TaskStatus, error)
+	GetStatusByID(ctx context.Context, id uuid.UUID) (*domain.TaskStatus, error)
 	BulkUpdate(ctx context.Context, projectID uuid.UUID, input BulkUpdateTasksInput) BulkUpdateTasksResult
 	// CheckoutTask acquires an exclusive application-level lock on the task for the
 	// calling agent. Only agents may checkout. Returns CheckoutConflictError when the
@@ -178,6 +179,8 @@ type CommentService interface {
 	Update(ctx context.Context, comment *domain.Comment) error
 	Delete(ctx context.Context, id uuid.UUID) error
 	ListByTask(ctx context.Context, taskID uuid.UUID, filter repository.CommentFilter, pg pagination.Params) (*pagination.Page[domain.Comment], error)
+	ListByAuthor(ctx context.Context, authorID uuid.UUID, filter repository.CommentViewFilter) (*domain.CommentViewPage, error)
+	ListRecentByWorkspace(ctx context.Context, wsID uuid.UUID, filter repository.CommentViewFilter) (*domain.CommentViewPage, error)
 }
 
 // UploadArtifactInput holds parameters for uploading an artifact.

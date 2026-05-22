@@ -106,13 +106,15 @@ interface ToolbarButtonProps {
   children: React.ReactNode;
   active?: boolean;
   disabled?: boolean;
+  /** Custom tooltip shown on hover when disabled (native title is suppressed on disabled buttons). */
+  disabledTooltip?: string;
 }
 
-function ToolbarButton({ title, onClick, children, active, disabled }: ToolbarButtonProps) {
-  return (
+function ToolbarButton({ title, onClick, children, active, disabled, disabledTooltip }: ToolbarButtonProps) {
+  const btn = (
     <button
       type="button"
-      title={title}
+      title={disabled ? undefined : title}
       onClick={disabled ? undefined : onClick}
       disabled={disabled}
       className={cn(
@@ -124,6 +126,19 @@ function ToolbarButton({ title, onClick, children, active, disabled }: ToolbarBu
       {children}
     </button>
   );
+
+  if (disabled && disabledTooltip) {
+    return (
+      <span className="group/tb relative inline-flex">
+        {btn}
+        <span className="pointer-events-none absolute bottom-full left-1/2 z-50 mb-1.5 hidden w-max max-w-[200px] -translate-x-1/2 whitespace-normal rounded border border-border bg-popover px-2 py-1 text-xs text-popover-foreground shadow-md group-hover/tb:block">
+          {disabledTooltip}
+        </span>
+      </span>
+    );
+  }
+
+  return btn;
 }
 
 // ---------------------------------------------------------------------------
@@ -392,9 +407,10 @@ export function MarkdownEditor({
           <Image className="h-3.5 w-3.5" />
         </ToolbarButton>
         <ToolbarButton
-          title={taskId ? "Attach file" : "Прикрепить файл можно после создания задачи."}
+          title="Attach file"
           onClick={() => attachInputRef.current?.click()}
           disabled={!taskId}
+          disabledTooltip="Файл можно прикрепить после создания задачи"
         >
           <Paperclip className="h-3.5 w-3.5" />
         </ToolbarButton>

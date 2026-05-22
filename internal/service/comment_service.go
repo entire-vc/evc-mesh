@@ -324,6 +324,24 @@ func (s *commentService) ListByTask(ctx context.Context, taskID uuid.UUID, filte
 	return s.commentRepo.ListByTask(ctx, taskID, filter, pg)
 }
 
+// ListByAuthor returns the caller's own comments, newest first (activity feed).
+func (s *commentService) ListByAuthor(ctx context.Context, authorID uuid.UUID, filter repository.CommentViewFilter) (*domain.CommentViewPage, error) {
+	items, nextCursor, err := s.commentRepo.ListByAuthor(ctx, authorID, filter)
+	if err != nil {
+		return nil, err
+	}
+	return &domain.CommentViewPage{Items: items, NextCursor: nextCursor}, nil
+}
+
+// ListRecentByWorkspace returns workspace-wide recent comments, newest first (activity feed).
+func (s *commentService) ListRecentByWorkspace(ctx context.Context, wsID uuid.UUID, filter repository.CommentViewFilter) (*domain.CommentViewPage, error) {
+	items, nextCursor, err := s.commentRepo.ListRecentByWorkspace(ctx, wsID, filter)
+	if err != nil {
+		return nil, err
+	}
+	return &domain.CommentViewPage{Items: items, NextCursor: nextCursor}, nil
+}
+
 // buildTaskSnap constructs the task snapshot map used in agent notifications.
 func (s *commentService) buildTaskSnap(ctx context.Context, task *domain.Task) map[string]any {
 	snap := map[string]any{

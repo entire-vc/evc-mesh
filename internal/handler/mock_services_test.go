@@ -161,10 +161,12 @@ func (m *MockTaskStatusService) Reorder(ctx context.Context, projectID uuid.UUID
 
 // MockCommentService implements service.CommentService for testing.
 type MockCommentService struct {
-	CreateFunc     func(ctx context.Context, comment *domain.Comment) error
-	UpdateFunc     func(ctx context.Context, comment *domain.Comment) error
-	DeleteFunc     func(ctx context.Context, id uuid.UUID) error
-	ListByTaskFunc func(ctx context.Context, taskID uuid.UUID, filter repository.CommentFilter, pg pagination.Params) (*pagination.Page[domain.Comment], error)
+	CreateFunc                func(ctx context.Context, comment *domain.Comment) error
+	UpdateFunc                func(ctx context.Context, comment *domain.Comment) error
+	DeleteFunc                func(ctx context.Context, id uuid.UUID) error
+	ListByTaskFunc            func(ctx context.Context, taskID uuid.UUID, filter repository.CommentFilter, pg pagination.Params) (*pagination.Page[domain.Comment], error)
+	ListByAuthorFunc          func(ctx context.Context, authorID uuid.UUID, filter repository.CommentViewFilter) (*domain.CommentViewPage, error)
+	ListRecentByWorkspaceFunc func(ctx context.Context, wsID uuid.UUID, filter repository.CommentViewFilter) (*domain.CommentViewPage, error)
 }
 
 func (m *MockCommentService) Create(ctx context.Context, comment *domain.Comment) error {
@@ -193,6 +195,20 @@ func (m *MockCommentService) ListByTask(ctx context.Context, taskID uuid.UUID, f
 		return m.ListByTaskFunc(ctx, taskID, filter, pg)
 	}
 	return nil, nil
+}
+
+func (m *MockCommentService) ListByAuthor(ctx context.Context, authorID uuid.UUID, filter repository.CommentViewFilter) (*domain.CommentViewPage, error) {
+	if m.ListByAuthorFunc != nil {
+		return m.ListByAuthorFunc(ctx, authorID, filter)
+	}
+	return &domain.CommentViewPage{Items: []domain.CommentView{}}, nil
+}
+
+func (m *MockCommentService) ListRecentByWorkspace(ctx context.Context, wsID uuid.UUID, filter repository.CommentViewFilter) (*domain.CommentViewPage, error) {
+	if m.ListRecentByWorkspaceFunc != nil {
+		return m.ListRecentByWorkspaceFunc(ctx, wsID, filter)
+	}
+	return &domain.CommentViewPage{Items: []domain.CommentView{}}, nil
 }
 
 // MockTaskDependencyService implements service.TaskDependencyService for testing.
@@ -316,6 +332,7 @@ type MockTaskService struct {
 	ListSubtasksFunc         func(ctx context.Context, parentTaskID uuid.UUID) ([]domain.Task, error)
 	GetMyTasksFunc           func(ctx context.Context, assigneeID uuid.UUID, assigneeType domain.AssigneeType) ([]domain.Task, error)
 	GetDefaultStatusFunc     func(ctx context.Context, projectID uuid.UUID) (*domain.TaskStatus, error)
+	GetStatusByIDFunc        func(ctx context.Context, id uuid.UUID) (*domain.TaskStatus, error)
 	BulkUpdateFunc           func(ctx context.Context, projectID uuid.UUID, input service.BulkUpdateTasksInput) service.BulkUpdateTasksResult
 	CheckoutTaskFunc         func(ctx context.Context, taskID uuid.UUID, ttlMinutes int, sessionMetadata map[string]interface{}) (*service.CheckoutResult, error)
 	ReleaseCheckoutFunc      func(ctx context.Context, taskID uuid.UUID, token uuid.UUID) error
@@ -399,6 +416,13 @@ func (m *MockTaskService) GetDefaultStatus(ctx context.Context, projectID uuid.U
 		return m.GetDefaultStatusFunc(ctx, projectID)
 	}
 	return &domain.TaskStatus{ID: uuid.New(), Name: "To Do", IsDefault: true}, nil
+}
+
+func (m *MockTaskService) GetStatusByID(ctx context.Context, id uuid.UUID) (*domain.TaskStatus, error) {
+	if m.GetStatusByIDFunc != nil {
+		return m.GetStatusByIDFunc(ctx, id)
+	}
+	return nil, nil
 }
 
 func (m *MockTaskService) BulkUpdate(ctx context.Context, projectID uuid.UUID, input service.BulkUpdateTasksInput) service.BulkUpdateTasksResult {

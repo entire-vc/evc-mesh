@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Calendar, X } from "lucide-react";
 import { cn } from "@/lib/cn";
@@ -75,7 +75,8 @@ export function DatePickerPopover({
   }, []);
 
   // Recalculate position when opening or on scroll/resize.
-  useEffect(() => {
+  // useLayoutEffect fires before paint, preventing a one-frame flash at (0,0).
+  useLayoutEffect(() => {
     if (!open) return;
     calcPosition();
     window.addEventListener("scroll", calcPosition, true);
@@ -136,7 +137,13 @@ export function DatePickerPopover({
       <button
         ref={triggerRef}
         type="button"
-        onClick={() => setOpen((prev) => !prev)}
+        onClick={() => {
+          if (!open && triggerRef.current) {
+            const rect = triggerRef.current.getBoundingClientRect();
+            setPopoverPos({ top: rect.bottom + 4, left: rect.left });
+          }
+          setOpen((prev) => !prev);
+        }}
         className={cn(
           "inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-sm transition-colors",
           "hover:bg-accent hover:text-accent-foreground",
