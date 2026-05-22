@@ -42,6 +42,9 @@ export function ActivityPage() {
   const [recentComments, setRecentComments] = useState<CommentView[]>([]);
   const [loading, setLoading] = useState(false);
   const [lastVisit, setLastVisit] = useState<Date | null>(null);
+  const [myCommentsNextCursor, setMyCommentsNextCursor] = useState<string | null>(null);
+  const [recentNextCursor, setRecentNextCursor] = useState<string | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
 
   const fetchMentions = useCallback(async () => {
     setLoading(true);
@@ -60,31 +63,51 @@ export function ActivityPage() {
     }
   }, []);
 
-  const fetchMyComments = useCallback(async () => {
-    setLoading(true);
+  const fetchMyComments = useCallback(async (before?: string) => {
+    if (before) setLoadingMore(true);
+    else {
+      setLoading(true);
+      setMyCommentsNextCursor(null);
+    }
     try {
-      const data = await api<CommentViewPage>("/api/v1/me/comments", { params: { limit: 50 } });
-      setMyComments(data?.items ?? []);
+      const params: Record<string, unknown> = { limit: 50 };
+      if (before) params.before = before;
+      const data = await api<CommentViewPage>("/api/v1/me/comments", { params });
+      const items = data?.items ?? [];
+      if (before) setMyComments((prev) => [...prev, ...items]);
+      else setMyComments(items);
+      setMyCommentsNextCursor(data?.next_cursor ?? null);
     } catch {
       toast.error("Failed to load comments");
     } finally {
-      setLoading(false);
+      if (before) setLoadingMore(false);
+      else setLoading(false);
     }
   }, []);
 
-  const fetchRecentComments = useCallback(async () => {
+  const fetchRecentComments = useCallback(async (before?: string) => {
     if (!currentWorkspace) return;
-    setLoading(true);
+    if (before) setLoadingMore(true);
+    else {
+      setLoading(true);
+      setRecentNextCursor(null);
+    }
     try {
+      const params: Record<string, unknown> = { limit: 50 };
+      if (before) params.before = before;
       const data = await api<CommentViewPage>(
         `/api/v1/workspaces/${currentWorkspace.id}/comments/recent`,
-        { params: { limit: 50 } },
+        { params },
       );
-      setRecentComments(data?.items ?? []);
+      const items = data?.items ?? [];
+      if (before) setRecentComments((prev) => [...prev, ...items]);
+      else setRecentComments(items);
+      setRecentNextCursor(data?.next_cursor ?? null);
     } catch {
       toast.error("Failed to load recent comments");
     } finally {
-      setLoading(false);
+      if (before) setLoadingMore(false);
+      else setLoading(false);
     }
   }, [currentWorkspace]);
 
@@ -139,6 +162,14 @@ export function ActivityPage() {
     [wsSlug, navigate, projects],
   );
 
+  const handleLoadMoreMyComments = useCallback(() => {
+    if (myCommentsNextCursor) void fetchMyComments(myCommentsNextCursor);
+  }, [myCommentsNextCursor, fetchMyComments]);
+
+  const handleLoadMoreRecent = useCallback(() => {
+    if (recentNextCursor) void fetchRecentComments(recentNextCursor);
+  }, [recentNextCursor, fetchRecentComments]);
+
   return (
     <div className="space-y-4">
       <h1 className="text-xl font-semibold">Activity</h1>
@@ -175,6 +206,9 @@ export function ActivityPage() {
           loading={loading}
           onCommentClick={handleCommentClick}
           emptyMessage="You haven't commented on anything yet."
+          onLoadMore={handleLoadMoreMyComments}
+          hasMore={myCommentsNextCursor !== null}
+          loadingMore={loadingMore}
         />
       )}
 
@@ -185,6 +219,9 @@ export function ActivityPage() {
           onCommentClick={handleCommentClick}
           emptyMessage="No comments in this workspace yet."
           showAuthor
+          onLoadMore={handleLoadMoreRecent}
+          hasMore={recentNextCursor !== null}
+          loadingMore={loadingMore}
         />
       )}
     </div>
@@ -254,12 +291,18 @@ function CommentsTab({
   onCommentClick,
   emptyMessage,
   showAuthor = false,
+  onLoadMore,
+  hasMore = false,
+  loadingMore = false,
 }: {
   comments: CommentView[];
   loading: boolean;
   onCommentClick: (c: CommentView) => void;
   emptyMessage: string;
   showAuthor?: boolean;
+  onLoadMore?: () => void;
+  hasMore?: boolean;
+  loadingMore?: boolean;
 }) {
   if (loading) {
     return (
@@ -290,6 +333,15 @@ function CommentsTab({
           onClick={onCommentClick}
         />
       ))}
+      {hasMore && onLoadMore && (
+        <button
+          onClick={onLoadMore}
+          disabled={loadingMore}
+          className="mt-2 w-full rounded-md py-2 text-sm text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50"
+        >
+          {loadingMore ? "Loading…" : "Load more"}
+        </button>
+      )}
     </div>
   );
 }
