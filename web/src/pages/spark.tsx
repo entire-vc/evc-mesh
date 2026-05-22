@@ -146,8 +146,10 @@ export function SparkPage() {
   }, []);
 
   const handleCardOpen = useCallback((agent: SparkAgentManifest) => {
-    const slug = agent.slug || agent.id;
-    window.open(`${SPARK_BASE_URL}/agents/${slug}`, "_blank", "noopener,noreferrer");
+    const url = agent.slug
+      ? `${SPARK_BASE_URL}/agents/${agent.slug}`
+      : `${SPARK_BASE_URL}/catalog?q=${encodeURIComponent(agent.name)}`;
+    window.open(url, "_blank", "noopener,noreferrer");
   }, []);
 
   const handleInstallClick = useCallback(
