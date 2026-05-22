@@ -966,9 +966,9 @@ export function WorkspaceSettingsPage() {
   }
 
   return (
-    <div className="mx-auto max-w-2xl space-y-6">
+    <div className="space-y-6">
       {/* Tab navigation */}
-      <div className="flex gap-1 border-b border-border overflow-x-auto">
+      <div className="flex gap-1 border-b border-border">
         {WS_TABS.map((tab) => (
           <button
             key={tab.id}
@@ -986,6 +986,7 @@ export function WorkspaceSettingsPage() {
         ))}
       </div>
 
+      <div className="mx-auto max-w-2xl space-y-6">
       {/* Section 0: Profile */}
       {activeTab === "profile" && (
       <Card>
@@ -1863,6 +1864,7 @@ export function WorkspaceSettingsPage() {
       {removeError && (
         <p className="text-sm text-destructive">{removeError}</p>
       )}
+      </div>
     </div>
   );
 }
