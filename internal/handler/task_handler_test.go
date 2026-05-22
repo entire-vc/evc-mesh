@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -211,6 +212,93 @@ func TestTaskHandler_Create_WithCustomFields(t *testing.T) {
 	err := h.Create(c)
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusCreated, rec.Code)
+}
+
+func TestTaskHandler_Create_RejectsReviewStatus(t *testing.T) {
+	projectID := uuid.New()
+	reviewStatusID := uuid.New()
+
+	mockSvc := &MockTaskService{
+		GetStatusByIDFunc: func(_ context.Context, id uuid.UUID) (*domain.TaskStatus, error) {
+			assert.Equal(t, reviewStatusID, id)
+			return &domain.TaskStatus{ID: id, Name: "Review", Category: domain.StatusCategoryReview}, nil
+		},
+	}
+
+	h, e := setupTaskTest(mockSvc)
+
+	body := `{"title":"Oops","status_id":"` + reviewStatusID.String() + `"}`
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/projects/:proj_id/tasks")
+	c.SetParamNames("proj_id")
+	c.SetParamValues(projectID.String())
+
+	err := h.Create(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	assert.Contains(t, fmt.Sprint(resp["message"]), "review status")
+}
+
+func TestTaskHandler_Create_AllowsInProgressStatus(t *testing.T) {
+	projectID := uuid.New()
+	inProgressStatusID := uuid.New()
+
+	mockSvc := &MockTaskService{
+		GetStatusByIDFunc: func(_ context.Context, id uuid.UUID) (*domain.TaskStatus, error) {
+			return &domain.TaskStatus{ID: id, Name: "In Progress", Category: domain.StatusCategoryInProgress}, nil
+		},
+		CreateFunc: func(_ context.Context, _ *domain.Task) error { return nil },
+	}
+
+	h, e := setupTaskTest(mockSvc)
+
+	body := `{"title":"Active Work","status_id":"` + inProgressStatusID.String() + `"}`
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/projects/:proj_id/tasks")
+	c.SetParamNames("proj_id")
+	c.SetParamValues(projectID.String())
+
+	err := h.Create(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusCreated, rec.Code)
+}
+
+func TestTaskHandler_MoveTask_ToReviewAllowed(t *testing.T) {
+	taskID := uuid.New()
+	reviewStatusID := uuid.New()
+	moved := false
+
+	mockSvc := &MockTaskService{
+		MoveTaskFunc: func(_ context.Context, _ uuid.UUID, _ service.MoveTaskInput) error {
+			moved = true
+			return nil
+		},
+	}
+
+	h, e := setupTaskTest(mockSvc)
+
+	body := `{"status_id":"` + reviewStatusID.String() + `"}`
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/tasks/:task_id/move")
+	c.SetParamNames("task_id")
+	c.SetParamValues(taskID.String())
+
+	err := h.MoveTask(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.True(t, moved, "MoveTask should succeed even when moving to review")
 }
 
 // --- TestTaskHandler_GetByID ---
