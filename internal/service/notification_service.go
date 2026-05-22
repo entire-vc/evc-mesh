@@ -119,7 +119,7 @@ func (s *notificationService) dispatch(event domain.NotificationEvent) {
 		sentTo := make(map[uuid.UUID]bool)
 		for i := range prefs {
 			p := &prefs[i]
-			if p.Channel != "web_push" {
+			if p.Channel != "browser_push" {
 				continue
 			}
 			if p.UserID == nil || sentTo[*p.UserID] {
