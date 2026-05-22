@@ -62,7 +62,7 @@ func TestTeam_FiltersProjectsByWorkspace(t *testing.T) {
 	h := NewRulesHandler(mockSvc)
 
 	// --- Request for workspace A ---
-	reqA := httptest.NewRequest(http.MethodGet, "/", nil)
+	reqA := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
 	recA := httptest.NewRecorder()
 	cA := e.NewContext(reqA, recA)
 	cA.SetParamNames("ws_id")
@@ -80,7 +80,7 @@ func TestTeam_FiltersProjectsByWorkspace(t *testing.T) {
 		"workspace A must only show its own projects")
 
 	// --- Request for workspace B ---
-	reqB := httptest.NewRequest(http.MethodGet, "/", nil)
+	reqB := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
 	recB := httptest.NewRecorder()
 	cB := e.NewContext(reqB, recB)
 	cB.SetParamNames("ws_id")

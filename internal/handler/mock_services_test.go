@@ -565,22 +565,22 @@ func (m *MockAgentService) GetBySlug(_ context.Context, _ uuid.UUID, _ string) (
 
 // MockRulesService implements service.RulesService for testing.
 type MockRulesService struct {
-	GetTeamDirectoryFunc          func(ctx context.Context, workspaceID uuid.UUID) (*domain.TeamDirectory, error)
-	GetTeamDirectoryTreeFunc      func(ctx context.Context, workspaceID uuid.UUID) (*domain.TeamDirectoryTree, error)
-	UpdateAgentProfileFunc        func(ctx context.Context, agentID uuid.UUID, profile domain.AgentProfileUpdate) error
+	GetTeamDirectoryFunc            func(ctx context.Context, workspaceID uuid.UUID) (*domain.TeamDirectory, error)
+	GetTeamDirectoryTreeFunc        func(ctx context.Context, workspaceID uuid.UUID) (*domain.TeamDirectoryTree, error)
+	UpdateAgentProfileFunc          func(ctx context.Context, agentID uuid.UUID, profile domain.AgentProfileUpdate) error
 	GetWorkspaceAssignmentRulesFunc func(ctx context.Context, workspaceID uuid.UUID) (*domain.AssignmentRulesConfig, error)
 	SetWorkspaceAssignmentRulesFunc func(ctx context.Context, workspaceID uuid.UUID, config domain.AssignmentRulesConfig) error
 	GetEffectiveAssignmentRulesFunc func(ctx context.Context, projectID uuid.UUID) (*domain.EffectiveAssignmentRules, error)
 	SetProjectAssignmentRulesFunc   func(ctx context.Context, projectID uuid.UUID, config domain.AssignmentRulesConfig) error
-	GetProjectWorkflowRulesFunc   func(ctx context.Context, projectID uuid.UUID, callerAgentID *uuid.UUID) (*domain.WorkflowRulesResponse, error)
-	SetProjectWorkflowRulesFunc   func(ctx context.Context, projectID uuid.UUID, config domain.WorkflowRulesConfig) error
-	ListViolationsFunc            func(ctx context.Context, workspaceID uuid.UUID, limit int) ([]domain.RuleViolationLog, error)
-	LogViolationFunc              func(ctx context.Context, v *domain.RuleViolationLog) error
-	ImportConfigFunc              func(ctx context.Context, workspaceID uuid.UUID, yamlData []byte) (*domain.ImportResult, error)
-	ExportConfigFunc              func(ctx context.Context, workspaceID uuid.UUID) ([]byte, error)
-	ImportTeamFunc                func(ctx context.Context, workspaceID uuid.UUID, yamlData []byte) (*domain.TeamImportResult, error)
-	GetWorkflowTemplatesFunc      func(ctx context.Context, workspaceID uuid.UUID) (map[string]domain.WorkflowRulesConfig, error)
-	SetWorkflowTemplatesFunc      func(ctx context.Context, workspaceID uuid.UUID, templates map[string]domain.WorkflowRulesConfig) error
+	GetProjectWorkflowRulesFunc     func(ctx context.Context, projectID uuid.UUID, callerAgentID *uuid.UUID) (*domain.WorkflowRulesResponse, error)
+	SetProjectWorkflowRulesFunc     func(ctx context.Context, projectID uuid.UUID, config domain.WorkflowRulesConfig) error
+	ListViolationsFunc              func(ctx context.Context, workspaceID uuid.UUID, limit int) ([]domain.RuleViolationLog, error)
+	LogViolationFunc                func(ctx context.Context, v *domain.RuleViolationLog) error
+	ImportConfigFunc                func(ctx context.Context, workspaceID uuid.UUID, yamlData []byte) (*domain.ImportResult, error)
+	ExportConfigFunc                func(ctx context.Context, workspaceID uuid.UUID) ([]byte, error)
+	ImportTeamFunc                  func(ctx context.Context, workspaceID uuid.UUID, yamlData []byte) (*domain.TeamImportResult, error)
+	GetWorkflowTemplatesFunc        func(ctx context.Context, workspaceID uuid.UUID) (map[string]domain.WorkflowRulesConfig, error)
+	SetWorkflowTemplatesFunc        func(ctx context.Context, workspaceID uuid.UUID, templates map[string]domain.WorkflowRulesConfig) error
 }
 
 func (m *MockRulesService) GetTeamDirectory(ctx context.Context, workspaceID uuid.UUID) (*domain.TeamDirectory, error) {
