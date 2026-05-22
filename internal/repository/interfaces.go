@@ -554,3 +554,11 @@ type PushSubscriptionRepository interface {
 	ListByUser(ctx context.Context, userID uuid.UUID) ([]domain.PushSubscription, error)
 	GetByEndpoint(ctx context.Context, endpoint string) (*domain.PushSubscription, error)
 }
+
+// ProjectIntegrationRepository manages project-level integration settings.
+type ProjectIntegrationRepository interface {
+	Get(ctx context.Context, projectID uuid.UUID, intType string) (*domain.ProjectIntegration, error)
+	Upsert(ctx context.Context, pi *domain.ProjectIntegration) error
+	Delete(ctx context.Context, projectID uuid.UUID, intType string) error
+	ListByProject(ctx context.Context, projectID uuid.UUID) ([]domain.ProjectIntegration, error)
+}

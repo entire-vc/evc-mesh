@@ -55,6 +55,7 @@ import { useRecurringStore } from "@/stores/recurring";
 import { useTemplateStore } from "@/stores/template";
 import { statusCategoryConfig } from "@/lib/utils";
 import { cn } from "@/lib/cn";
+import { api } from "@/lib/api";
 import type {
   Agent,
   AssignmentRulesConfig,
@@ -1120,6 +1121,17 @@ export function ProjectSettingsPage() {
   const [isSavingWorkflow, setIsSavingWorkflow] = useState(false);
   const [isSavingAssignment, setIsSavingAssignment] = useState(false);
 
+  // --- Team Relay integration state ---
+  const [trLoading, setTrLoading] = useState(false);
+  const [trEnabled, setTrEnabled] = useState(false);
+  const [trShareID, setTrShareID] = useState("");
+  const [trAgentKey, setTrAgentKey] = useState("");
+  const [trAgentKeyHint, setTrAgentKeyHint] = useState("");
+  const [trSubfolder, setTrSubfolder] = useState("Mesh/Mesh dev");
+  const [trIncludeSlug, setTrIncludeSlug] = useState(true);
+  const [trSaving, setTrSaving] = useState(false);
+  const [trError, setTrError] = useState<string | null>(null);
+
   // --- Tab state ---
   const [activeTab, setActiveTab] = useState("general");
 
@@ -1132,6 +1144,7 @@ export function ProjectSettingsPage() {
     { id: "assignment", label: "Assignment Rules" },
     { id: "recurring", label: "Recurring" },
     { id: "templates", label: "Templates" },
+    { id: "integrations", label: "Integrations" },
   ];
 
   // --- Recurring state ---
@@ -1213,6 +1226,55 @@ export function ProjectSettingsPage() {
       fetchWorkspaceMembers(currentWorkspace.id);
     }
   }, [currentWorkspace?.id, fetchWorkspaceMembers]);
+
+  // Fetch Team Relay integration settings
+  useEffect(() => {
+    if (!currentProject?.id || activeTab !== "integrations") return;
+    setTrLoading(true);
+    api<{ id: string; enabled: boolean; share_id: string; agent_key_hint: string; subfolder: string; include_project_slug: boolean }>(
+      `/api/v1/projects/${currentProject.id}/integrations/team-relay`
+    )
+      .then((data) => {
+        setTrEnabled(data.enabled);
+        setTrShareID(data.share_id);
+        setTrAgentKeyHint(data.agent_key_hint);
+        setTrSubfolder(data.subfolder || "Mesh/Mesh dev");
+        setTrIncludeSlug(data.include_project_slug);
+        setTrAgentKey("");
+      })
+      .catch(() => {
+        // 404 = not configured yet — keep defaults
+      })
+      .finally(() => setTrLoading(false));
+  }, [currentProject?.id, activeTab]);
+
+  const handleSaveTeamRelay = async () => {
+    if (!currentProject?.id) return;
+    setTrSaving(true);
+    setTrError(null);
+    try {
+      const body: Record<string, unknown> = {
+        enabled: trEnabled,
+        share_id: trShareID,
+        subfolder: trSubfolder,
+        include_project_slug: trIncludeSlug,
+      };
+      if (trAgentKey) body.agent_key = trAgentKey;
+
+      const data = await api<{ agent_key_hint: string }>(
+        `/api/v1/projects/${currentProject.id}/integrations/team-relay`,
+        { method: "PATCH", body }
+      );
+      setTrAgentKeyHint(data.agent_key_hint);
+      setTrAgentKey("");
+      toast({ title: "Saved", description: "Team Relay settings updated." });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Failed to save settings";
+      setTrError(msg);
+    } finally {
+      setTrSaving(false);
+    }
+  };
 
   // --- General info handlers ---
   const handleSaveGeneral = async (e: FormEvent) => {
@@ -2605,6 +2667,115 @@ export function ProjectSettingsPage() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Section 10: Integrations — Team Relay */}
+      {activeTab === "integrations" && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Team Relay</CardTitle>
+            <CardDescription>
+              Publish artifact summaries to an Obsidian share folder so your
+              team can read them outside of Mesh.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-5">
+            {trLoading ? (
+              <div className="space-y-3">
+                <Skeleton className="h-5 w-32" />
+                <Skeleton className="h-9 w-full" />
+                <Skeleton className="h-9 w-full" />
+              </div>
+            ) : (
+              <>
+                {/* Enabled toggle */}
+                <div className="flex items-center gap-3">
+                  <input
+                    type="checkbox"
+                    id="tr-enabled"
+                    checked={trEnabled}
+                    onChange={(e) => setTrEnabled(e.target.checked)}
+                    className="h-4 w-4 rounded border-border"
+                  />
+                  <label htmlFor="tr-enabled" className="text-sm font-medium">
+                    Enable Team Relay publishing
+                  </label>
+                </div>
+
+                <div className="space-y-4">
+                  <div className="space-y-1.5">
+                    <label className="text-sm font-medium" htmlFor="tr-share-id">
+                      Share ID
+                    </label>
+                    <Input
+                      id="tr-share-id"
+                      value={trShareID}
+                      onChange={(e) => setTrShareID(e.target.value)}
+                      placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+                      disabled={!trEnabled}
+                    />
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="text-sm font-medium" htmlFor="tr-agent-key">
+                      Agent Key
+                    </label>
+                    <Input
+                      id="tr-agent-key"
+                      type="password"
+                      value={trAgentKey}
+                      onChange={(e) => setTrAgentKey(e.target.value)}
+                      placeholder={trAgentKeyHint || "Enter agent key (min 20 chars)"}
+                      disabled={!trEnabled}
+                    />
+                    {trAgentKeyHint && !trAgentKey && (
+                      <p className="text-xs text-muted-foreground">
+                        Current key: {trAgentKeyHint} — leave blank to keep
+                      </p>
+                    )}
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="text-sm font-medium" htmlFor="tr-subfolder">
+                      Subfolder
+                    </label>
+                    <Input
+                      id="tr-subfolder"
+                      value={trSubfolder}
+                      onChange={(e) => setTrSubfolder(e.target.value)}
+                      placeholder="Mesh/Mesh dev"
+                      disabled={!trEnabled}
+                    />
+                  </div>
+
+                  <div className="flex items-center gap-3">
+                    <input
+                      type="checkbox"
+                      id="tr-include-slug"
+                      checked={trIncludeSlug}
+                      onChange={(e) => setTrIncludeSlug(e.target.checked)}
+                      disabled={!trEnabled}
+                      className="h-4 w-4 rounded border-border"
+                    />
+                    <label htmlFor="tr-include-slug" className="text-sm">
+                      Include project slug in path
+                    </label>
+                  </div>
+                </div>
+
+                {trError && (
+                  <p className="text-sm text-destructive">{trError}</p>
+                )}
+
+                <div className="flex justify-end">
+                  <Button onClick={handleSaveTeamRelay} disabled={trSaving}>
+                    {trSaving ? "Saving…" : "Save"}
+                  </Button>
+                </div>
+              </>
+            )}
+          </CardContent>
+        </Card>
       )}
 
       {/* Section 9: Danger Zone */}

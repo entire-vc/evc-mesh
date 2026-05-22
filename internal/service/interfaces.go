@@ -638,6 +638,34 @@ type MentionService interface {
 	CountUnseen(ctx context.Context, mentionedID uuid.UUID, mentionedKind string) (int64, error)
 }
 
+// RelayPublisher is the optional interface for publishing artifacts to Team Relay.
+type RelayPublisher interface {
+	Publish(ctx context.Context, taskID uuid.UUID, artifactName string, content []byte, contentType string) error
+}
+
+// ArtifactServiceConfigurable allows optional relay publisher to be injected after construction.
+type ArtifactServiceConfigurable interface {
+	SetRelayPublisher(p RelayPublisher)
+}
+
+// UpsertProjectIntegrationInput holds data for creating/updating a project integration.
+type UpsertProjectIntegrationInput struct {
+	Enabled            bool
+	ShareID            string
+	AgentKey           string // empty = keep existing
+	Subfolder          string
+	IncludeProjectSlug bool
+	CreatedBy          *uuid.UUID
+}
+
+// ProjectIntegrationService manages project-level integrations.
+type ProjectIntegrationService interface {
+	GetTeamRelay(ctx context.Context, projectID uuid.UUID) (*domain.ProjectIntegration, error)
+	UpsertTeamRelay(ctx context.Context, projectID uuid.UUID, input UpsertProjectIntegrationInput) (*domain.ProjectIntegration, error)
+	DeleteTeamRelay(ctx context.Context, projectID uuid.UUID) error
+	List(ctx context.Context, projectID uuid.UUID) ([]domain.ProjectIntegration, error)
+}
+
 // MemoryService provides business logic for agent persistent memory.
 type MemoryService interface {
 	Remember(ctx context.Context, mem *domain.Memory) (string, error) // returns "created" or "updated"
