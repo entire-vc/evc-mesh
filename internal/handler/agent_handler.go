@@ -35,10 +35,11 @@ const (
 // AgentHandler handles HTTP requests for agent management.
 type AgentHandler struct {
 	agentService    service.AgentService
-	taskService     service.TaskService              // optional, used for GetMyTasks and PollTasks
-	statusService   service.TaskStatusService        // optional, used for status_category filtering
-	rdb             *redis.Client                    // optional, used for SSE and long-poll
-	agentEventsRepo repository.AgentEventsRepository // optional, enables Last-Event-ID SSE replay
+	taskService     service.TaskService               // optional, used for GetMyTasks and PollTasks
+	statusService   service.TaskStatusService         // optional, used for status_category filtering
+	rdb             *redis.Client                     // optional, used for SSE and long-poll
+	agentEventsRepo repository.AgentEventsRepository  // optional, enables Last-Event-ID SSE replay
+	sessionRepo     repository.AgentSessionRepository // optional, enables POST /agents/me/sessions/report
 }
 
 // NewAgentHandler creates a new AgentHandler with the given service.
@@ -59,9 +60,11 @@ func NewAgentHandlerFull(as service.AgentService, ts service.TaskService, ss ser
 }
 
 // NewAgentHandlerWithEvents creates an AgentHandler with full SSE support plus
-// durable event replay via Last-Event-ID cursor (backed by agentEventsRepo).
-func NewAgentHandlerWithEvents(as service.AgentService, ts service.TaskService, ss service.TaskStatusService, rdb *redis.Client, evRepo repository.AgentEventsRepository) *AgentHandler {
-	return &AgentHandler{agentService: as, taskService: ts, statusService: ss, rdb: rdb, agentEventsRepo: evRepo}
+// durable event replay via Last-Event-ID cursor (backed by agentEventsRepo) and
+// session cost tracking (backed by sessionRepo). sessionRepo may be nil; in that
+// case POST /agents/me/sessions/report returns 501 Not Implemented.
+func NewAgentHandlerWithEvents(as service.AgentService, ts service.TaskService, ss service.TaskStatusService, rdb *redis.Client, evRepo repository.AgentEventsRepository, sessionRepo repository.AgentSessionRepository) *AgentHandler {
+	return &AgentHandler{agentService: as, taskService: ts, statusService: ss, rdb: rdb, agentEventsRepo: evRepo, sessionRepo: sessionRepo}
 }
 
 // registerAgentRequest represents the JSON body for registering a new agent.
@@ -609,6 +612,96 @@ func (h *AgentHandler) UpdateMe(c echo.Context) error {
 	}
 
 	return c.JSON(http.StatusOK, agent)
+}
+
+// reportSessionRequest is the JSON body for POST /agents/me/sessions/report.
+// All fields are optional; semantics are additive — the reported usage is
+// accumulated onto the agent's active session (one Mesh session may span
+// several agent spawns reported separately by the dispatcher).
+type reportSessionRequest struct {
+	TokensIn      int64   `json:"tokens_in"`
+	TokensOut     int64   `json:"tokens_out"`
+	Model         string  `json:"model"`
+	EstimatedCost float64 `json:"estimated_cost"`
+}
+
+// ReportSession handles POST /agents/me/sessions/report
+// Accumulates token/cost usage onto the calling agent's active session, creating
+// a new active session if none exists. Intended to be called by the dispatcher
+// after reaping an agent spawn (with usage summed from the spawn's session log),
+// using the agent's own API key for auth.
+func (h *AgentHandler) ReportSession(c echo.Context) error {
+	if h.sessionRepo == nil {
+		return c.JSON(http.StatusNotImplemented, apierror.InternalError("session tracking not configured"))
+	}
+
+	agentIDVal := c.Get("agent_id")
+	if agentIDVal == nil {
+		return c.JSON(http.StatusUnauthorized, apierror.Unauthorized("agent API key required"))
+	}
+	agentID, ok := agentIDVal.(uuid.UUID)
+	if !ok {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid agent_id in context"))
+	}
+
+	var req reportSessionRequest
+	if err := c.Bind(&req); err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
+	}
+
+	ctx := c.Request().Context()
+
+	active, err := h.sessionRepo.GetActive(ctx, agentID)
+	if err != nil {
+		return handleError(c, err)
+	}
+
+	if active == nil {
+		// No active session — resolve the agent's workspace and create one,
+		// seeded with this report's usage.
+		agent, gerr := h.agentService.GetByID(ctx, agentID)
+		if gerr != nil {
+			return handleError(c, gerr)
+		}
+		if agent == nil {
+			return c.JSON(http.StatusNotFound, apierror.NotFound("Agent"))
+		}
+		active = &domain.AgentSession{
+			ID:            uuid.New(),
+			AgentID:       agentID,
+			WorkspaceID:   agent.WorkspaceID,
+			StartedAt:     time.Now(),
+			Status:        domain.AgentSessionStatusActive,
+			ModelUsed:     req.Model,
+			TokensIn:      req.TokensIn,
+			TokensOut:     req.TokensOut,
+			EstimatedCost: req.EstimatedCost,
+		}
+		if err := h.sessionRepo.Create(ctx, active); err != nil {
+			return handleError(c, err)
+		}
+	} else {
+		// Additive: accumulate this spawn's totals onto the existing active session.
+		active.TokensIn += req.TokensIn
+		active.TokensOut += req.TokensOut
+		active.EstimatedCost += req.EstimatedCost
+		if req.Model != "" {
+			active.ModelUsed = req.Model // latest model wins
+		}
+		if err := h.sessionRepo.Update(ctx, active); err != nil {
+			return handleError(c, err)
+		}
+	}
+
+	return c.JSON(http.StatusOK, map[string]any{
+		"session_id": active.ID,
+		"totals": map[string]any{
+			"tokens_in":      active.TokensIn,
+			"tokens_out":     active.TokensOut,
+			"estimated_cost": active.EstimatedCost,
+			"model_used":     active.ModelUsed,
+		},
+	})
 }
 
 // ListSubAgents handles GET /agents/:agent_id/sub-agents
