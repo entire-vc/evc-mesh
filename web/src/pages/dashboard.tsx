@@ -126,7 +126,7 @@ function MentionsWidget() {
             {mentions.map((m) => (
               <li key={m.comment_id}>
                 <Link
-                  to={activityTo}
+                  to={`/t/${m.task_id}`}
                   className={cn(
                     "flex items-center gap-2 rounded-md px-2 py-1.5 text-xs hover:bg-muted",
                     !m.seen_at && "font-medium",
