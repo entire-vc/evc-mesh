@@ -110,7 +110,10 @@ func newRBACEchoContext(userID, wsID uuid.UUID) (echo.Context, *httptest.Respons
 	return c, rec
 }
 
-// newRBACAgentContext creates an Echo context pre-wired as an agent.
+// newRBACAgentContext creates an Echo context pre-wired as an agent in wsID.
+// ContextKeyAgentWorkspaceID is set to wsID (simulating an agent that belongs to wsID).
+// WorkspaceRLS would override ContextKeyWorkspaceID for workspace-scoped routes;
+// ContextKeyAgentWorkspaceID preserves the original auth workspace for membership checks.
 func newRBACAgentContext(agentID, wsID uuid.UUID) (echo.Context, *httptest.ResponseRecorder) {
 	e := echo.New()
 	req := httptest.NewRequest(http.MethodPost, "/", http.NoBody)
@@ -119,6 +122,7 @@ func newRBACAgentContext(agentID, wsID uuid.UUID) (echo.Context, *httptest.Respo
 	c.Set(ContextKeyAuthType, AuthTypeAgent)
 	c.Set(ContextKeyAgentID, agentID)
 	c.Set(ContextKeyWorkspaceID, wsID)
+	c.Set(ContextKeyAgentWorkspaceID, wsID)
 	return c, rec
 }
 
@@ -456,4 +460,105 @@ func TestHasPermission_AgentLimitedPerms(t *testing.T) {
 	for _, p := range denied {
 		assert.False(t, agentPerms[p], "agent should NOT have permission: %s", p)
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Tests: RequireWorkspaceMember — guards workspace-scoped read endpoints
+// ---------------------------------------------------------------------------
+
+// TestCommentHandler_GetRecentByWorkspace_ForbiddenForNonMember verifies that
+// RequireWorkspaceMember (applied to GET /workspaces/:ws_id/comments/recent)
+// returns 403 for a user who is not a member of the workspace.
+func TestCommentHandler_GetRecentByWorkspace_ForbiddenForNonMember(t *testing.T) {
+	repo := newRBACMockMemberRepo()
+	wsID := uuid.New()
+	userID := uuid.New()
+	// Do NOT add the user to the workspace.
+
+	c, rec := newRBACEchoContext(userID, wsID)
+
+	h := RequireWorkspaceMember(repo)(okHandler)
+	err := h(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusForbidden, rec.Code)
+}
+
+func TestRequireWorkspaceMember_User_Member_Returns200(t *testing.T) {
+	repo := newRBACMockMemberRepo()
+	wsID := uuid.New()
+	userID := uuid.New()
+	repo.addMember(wsID, userID, domain.RoleMember)
+
+	c, rec := newRBACEchoContext(userID, wsID)
+
+	h := RequireWorkspaceMember(repo)(okHandler)
+	err := h(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
+func TestRequireWorkspaceMember_User_Viewer_Returns200(t *testing.T) {
+	repo := newRBACMockMemberRepo()
+	wsID := uuid.New()
+	userID := uuid.New()
+	repo.addMember(wsID, userID, domain.RoleViewer)
+
+	c, rec := newRBACEchoContext(userID, wsID)
+
+	h := RequireWorkspaceMember(repo)(okHandler)
+	err := h(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
+func TestRequireWorkspaceMember_Agent_InSameWorkspace_Returns200(t *testing.T) {
+	repo := newRBACMockMemberRepo()
+	agentID := uuid.New()
+	wsID := uuid.New()
+
+	c, rec := newRBACAgentContext(agentID, wsID)
+	// ContextKeyWorkspaceID == ContextKeyAgentWorkspaceID == wsID (same workspace).
+
+	h := RequireWorkspaceMember(repo)(okHandler)
+	err := h(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
+func TestRequireWorkspaceMember_Agent_InOtherWorkspace_Returns403(t *testing.T) {
+	repo := newRBACMockMemberRepo()
+	agentID := uuid.New()
+	agentWsID := uuid.New() // agent belongs to this workspace
+	routeWsID := uuid.New() // but the route requests a different workspace
+
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.Set(ContextKeyAuthType, AuthTypeAgent)
+	c.Set(ContextKeyAgentID, agentID)
+	c.Set(ContextKeyAgentWorkspaceID, agentWsID) // original auth workspace
+	c.Set(ContextKeyWorkspaceID, routeWsID)       // route ws_id (overridden by WorkspaceRLS)
+
+	h := RequireWorkspaceMember(repo)(okHandler)
+	err := h(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusForbidden, rec.Code)
+}
+
+func TestRequireWorkspaceMember_NoWorkspaceContext_Returns403(t *testing.T) {
+	repo := newRBACMockMemberRepo()
+
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.Set(ContextKeyAuthType, AuthTypeUser)
+	c.Set(ContextKeyUserID, uuid.New())
+	// No ContextKeyWorkspaceID set.
+
+	h := RequireWorkspaceMember(repo)(okHandler)
+	err := h(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusForbidden, rec.Code)
 }

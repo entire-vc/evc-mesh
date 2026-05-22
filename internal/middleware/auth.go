@@ -16,11 +16,12 @@ import (
 
 // Context keys used by auth middleware.
 const (
-	ContextKeyUserID      = "user_id"
-	ContextKeyWorkspaceID = "workspace_id"
-	ContextKeyAgentID     = "agent_id"
-	ContextKeyAuthType    = "auth_type"
-	ContextKeyEmail       = "email"
+	ContextKeyUserID             = "user_id"
+	ContextKeyWorkspaceID        = "workspace_id"
+	ContextKeyAgentID            = "agent_id"
+	ContextKeyAgentWorkspaceID   = "agent_workspace_id"
+	ContextKeyAuthType           = "auth_type"
+	ContextKeyEmail              = "email"
 )
 
 // Auth types set in the Echo context.
@@ -88,6 +89,7 @@ func AgentKeyAuth(agentService service.AgentService) echo.MiddlewareFunc {
 			c.Set(ContextKeyAuthType, AuthTypeAgent)
 			c.Set(ContextKeyAgentID, agent.ID)
 			c.Set(ContextKeyWorkspaceID, agent.WorkspaceID)
+			c.Set(ContextKeyAgentWorkspaceID, agent.WorkspaceID)
 
 			// Propagate actor into Go context for service layer.
 			goCtx := actorctx.WithActor(c.Request().Context(), agent.ID, domain.ActorTypeAgent)
@@ -127,6 +129,7 @@ func DualAuth(authService *auth.Service, agentService service.AgentService) echo
 						c.Set(ContextKeyAuthType, AuthTypeAgent)
 						c.Set(ContextKeyAgentID, agent.ID)
 						c.Set(ContextKeyWorkspaceID, agent.WorkspaceID)
+						c.Set(ContextKeyAgentWorkspaceID, agent.WorkspaceID)
 						// Propagate actor into Go context for service layer.
 						goCtx := actorctx.WithActor(c.Request().Context(), agent.ID, domain.ActorTypeAgent)
 						goCtx = actorctx.WithActorName(goCtx, agent.Name)
@@ -170,6 +173,7 @@ func OptionalAuth(authService *auth.Service, agentService service.AgentService) 
 						c.Set(ContextKeyAuthType, AuthTypeAgent)
 						c.Set(ContextKeyAgentID, agent.ID)
 						c.Set(ContextKeyWorkspaceID, agent.WorkspaceID)
+						c.Set(ContextKeyAgentWorkspaceID, agent.WorkspaceID)
 						// Propagate actor into Go context for service layer.
 						goCtx := actorctx.WithActor(c.Request().Context(), agent.ID, domain.ActorTypeAgent)
 						goCtx = actorctx.WithActorName(goCtx, agent.Name)

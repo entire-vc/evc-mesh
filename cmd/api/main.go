@@ -767,7 +767,7 @@ func main() {
 
 	// Activity feed — my comments + workspace-wide recent comments.
 	api.GET("/me/comments", commentHandler.GetMyComments)
-	api.GET("/workspaces/:ws_id/comments/recent", commentHandler.GetRecentByWorkspace)
+	api.GET("/workspaces/:ws_id/comments/recent", commentHandler.GetRecentByWorkspace, mw.RequireWorkspaceMember(workspaceMemberRepo))
 
 	// Memory routes.
 	// NOTE: fixed-path routes (/memories/search, /memories/export, /memories/import,

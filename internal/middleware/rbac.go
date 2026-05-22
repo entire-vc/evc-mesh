@@ -3,6 +3,7 @@ package middleware
 import (
 	"net/http"
 
+	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
@@ -139,6 +140,45 @@ func RequirePermission(perm Permission, memberRepo repository.WorkspaceMemberRep
 
 			if !hasPermission(role, perm) {
 				return c.JSON(http.StatusForbidden, apierror.Forbidden("insufficient permissions"))
+			}
+
+			return next(c)
+		}
+	}
+}
+
+// RequireWorkspaceMember returns Echo middleware that enforces workspace membership.
+//
+// For agents: verifies the agent's auth workspace (stored in ContextKeyAgentWorkspaceID
+// by DualAuth before WorkspaceRLS can override ContextKeyWorkspaceID) matches the
+// workspace resolved from the route. No DB lookup needed.
+// For users: calls memberRepo.GetRole — any role (owner/admin/member/viewer) passes.
+//
+// Returns 403 if the caller is not a member of the workspace.
+func RequireWorkspaceMember(memberRepo repository.WorkspaceMemberRepository) echo.MiddlewareFunc {
+	return func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			wsID, err := GetWorkspaceID(c)
+			if err != nil {
+				return c.JSON(http.StatusForbidden, apierror.Forbidden("workspace context required"))
+			}
+
+			if IsAgent(c) {
+				// ContextKeyAgentWorkspaceID is set by auth middleware and not overridden by WorkspaceRLS.
+				agentWsID, ok := c.Get(ContextKeyAgentWorkspaceID).(uuid.UUID)
+				if !ok || agentWsID != wsID {
+					return c.JSON(http.StatusForbidden, apierror.Forbidden("not a member of this workspace"))
+				}
+				return next(c)
+			}
+
+			userID, err := GetUserID(c)
+			if err != nil {
+				return c.JSON(http.StatusForbidden, apierror.Forbidden("user context required"))
+			}
+
+			if _, err := memberRepo.GetRole(c.Request().Context(), wsID, userID); err != nil {
+				return c.JSON(http.StatusForbidden, apierror.Forbidden("not a member of this workspace"))
 			}
 
 			return next(c)
