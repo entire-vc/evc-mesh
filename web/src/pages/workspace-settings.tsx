@@ -623,7 +623,7 @@ function ViolationRow({ v }: { v: RuleViolation }) {
 
 export function WorkspaceSettingsPage() {
   const { wsSlug } = useParams<{ wsSlug: string }>();
-  const { currentWorkspace, updateWorkspace } = useWorkspaceStore();
+  const { currentWorkspace, updateWorkspace, uploadIcon } = useWorkspaceStore();
   const { user, updateProfile } = useAuthStore();
   const {
     workspaceMembers,
@@ -666,6 +666,14 @@ export function WorkspaceSettingsPage() {
     type: "success" | "error";
     message: string;
   } | null>(null);
+
+  // Branding (icon upload) state
+  const [isUploadingIcon, setIsUploadingIcon] = useState(false);
+  const [iconFeedback, setIconFeedback] = useState<{
+    type: "success" | "error";
+    message: string;
+  } | null>(null);
+  const iconFileInputRef = useRef<HTMLInputElement>(null);
 
   // Members state
   const [inviteDialogOpen, setInviteDialogOpen] = useState(false);
@@ -810,6 +818,36 @@ export function WorkspaceSettingsPage() {
       });
     } finally {
       setIsSavingGeneral(false);
+    }
+  };
+
+  const handleIconUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!currentWorkspace) return;
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (file.type !== "image/png") {
+      setIconFeedback({ type: "error", message: "Only PNG files are accepted." });
+      return;
+    }
+    if (file.size > 500 * 1024) {
+      setIconFeedback({ type: "error", message: "Icon must be ≤ 500 KB." });
+      return;
+    }
+
+    setIsUploadingIcon(true);
+    setIconFeedback(null);
+    try {
+      await uploadIcon(currentWorkspace.id, file);
+      setIconFeedback({ type: "success", message: "Icon updated." });
+    } catch (err) {
+      setIconFeedback({
+        type: "error",
+        message: err instanceof Error ? err.message : "Upload failed.",
+      });
+    } finally {
+      setIsUploadingIcon(false);
+      if (iconFileInputRef.current) iconFileInputRef.current.value = "";
     }
   };
 
@@ -1090,6 +1128,62 @@ export function WorkspaceSettingsPage() {
               </Button>
             </div>
           </form>
+        </CardContent>
+      </Card>
+      )}
+
+      {/* Branding */}
+      {activeTab === "general" && (
+      <Card className="mt-4">
+        <CardHeader>
+          <CardTitle>Branding</CardTitle>
+          <CardDescription>Custom workspace icon shown in the sidebar and browser tab</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="flex items-center gap-4">
+            <div className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-lg border bg-muted text-2xl font-bold text-muted-foreground">
+              {currentWorkspace.icon_url ? (
+                <img
+                  src={currentWorkspace.icon_url}
+                  alt={currentWorkspace.name}
+                  className="h-full w-full object-cover"
+                />
+              ) : (
+                currentWorkspace.name.charAt(0).toUpperCase()
+              )}
+            </div>
+            <div className="space-y-2">
+              <input
+                ref={iconFileInputRef}
+                type="file"
+                accept="image/png"
+                className="hidden"
+                onChange={handleIconUpload}
+              />
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={isUploadingIcon}
+                onClick={() => iconFileInputRef.current?.click()}
+              >
+                <Upload className="mr-2 h-4 w-4" />
+                {isUploadingIcon ? "Uploading…" : "Upload PNG icon"}
+              </Button>
+              <p className="text-xs text-muted-foreground">PNG only · max 500 KB</p>
+              {iconFeedback && (
+                <p
+                  className={
+                    iconFeedback.type === "success"
+                      ? "text-sm text-green-600"
+                      : "text-sm text-destructive"
+                  }
+                >
+                  {iconFeedback.message}
+                </p>
+              )}
+            </div>
+          </div>
         </CardContent>
       </Card>
       )}

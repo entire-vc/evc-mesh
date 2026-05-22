@@ -23,6 +23,7 @@ type workspaceRow struct {
 	Settings          json.RawMessage `db:"settings"`
 	BillingPlanID     *string         `db:"billing_plan_id"`
 	BillingCustomerID *string         `db:"billing_customer_id"`
+	IconURL           *string         `db:"icon_url"`
 	CreatedAt         time.Time       `db:"created_at"`
 	UpdatedAt         time.Time       `db:"updated_at"`
 	DeletedAt         *time.Time      `db:"deleted_at"`
@@ -30,13 +31,14 @@ type workspaceRow struct {
 
 func (r *workspaceRow) toDomain() *domain.Workspace {
 	ws := &domain.Workspace{
-		ID:        r.ID,
-		Name:      r.Name,
-		Slug:      r.Slug,
-		OwnerID:   r.OwnerID,
-		Settings:  r.Settings,
-		CreatedAt: r.CreatedAt,
-		UpdatedAt: r.UpdatedAt,
+		ID:             r.ID,
+		Name:           r.Name,
+		Slug:           r.Slug,
+		OwnerID:        r.OwnerID,
+		Settings:       r.Settings,
+		CreatedAt:      r.CreatedAt,
+		UpdatedAt:      r.UpdatedAt,
+		IconStorageKey: r.IconURL,
 	}
 	if r.BillingPlanID != nil {
 		ws.BillingPlanID = *r.BillingPlanID
@@ -108,7 +110,8 @@ func (r *WorkspaceRepo) GetBySlug(ctx context.Context, slug string) (*domain.Wor
 func (r *WorkspaceRepo) Update(ctx context.Context, workspace *domain.Workspace) error {
 	const q = `
 		UPDATE workspaces
-		SET name = $2, slug = $3, settings = $4, billing_plan_id = $5, billing_customer_id = $6, updated_at = $7
+		SET name = $2, slug = $3, settings = $4, billing_plan_id = $5, billing_customer_id = $6,
+		    icon_url = $7, updated_at = $8
 		WHERE id = $1 AND deleted_at IS NULL
 	`
 	settings := workspace.Settings
@@ -124,7 +127,7 @@ func (r *WorkspaceRepo) Update(ctx context.Context, workspace *domain.Workspace)
 	}
 	res, err := r.db.ExecContext(ctx, q,
 		workspace.ID, workspace.Name, workspace.Slug, settings,
-		billingPlanID, billingCustomerID, workspace.UpdatedAt,
+		billingPlanID, billingCustomerID, workspace.IconStorageKey, workspace.UpdatedAt,
 	)
 	if err != nil {
 		return err

@@ -345,6 +345,9 @@ func main() {
 	// 7. Create all handler instances.
 	authHandler := handler.NewAuthHandler(authService)
 	workspaceHandler := handler.NewWorkspaceHandler(workspaceService)
+	if s3Client != nil {
+		workspaceHandler.WithStorage(s3Client)
+	}
 	projectHandler := handler.NewProjectHandler(projectService)
 	taskHandler := handler.NewTaskHandler(taskService)
 	statusHandler := handler.NewTaskStatusHandler(taskStatusService)
@@ -509,6 +512,8 @@ func main() {
 	api.GET("/workspaces/:ws_id", workspaceHandler.GetByID)
 	api.PATCH("/workspaces/:ws_id", workspaceHandler.Update)
 	api.DELETE("/workspaces/:ws_id", workspaceHandler.Delete, rbac(mw.PermDeleteWorkspace))
+	api.GET("/workspaces/:ws_id/icon", workspaceHandler.GetIcon)
+	api.PUT("/workspaces/:ws_id/icon", workspaceHandler.UploadIcon, rbac(mw.PermManageMembers))
 
 	// Workspace member routes.
 	// NOTE: /members/me MUST be registered before /members/:user_id to avoid "me" being parsed as UUID.

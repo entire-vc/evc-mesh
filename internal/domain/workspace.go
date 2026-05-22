@@ -18,4 +18,7 @@ type Workspace struct {
 	BillingCustomerID string          `json:"billing_customer_id" db:"billing_customer_id"`
 	CreatedAt         time.Time       `json:"created_at" db:"created_at"`
 	UpdatedAt         time.Time       `json:"updated_at" db:"updated_at"`
+	// IconStorageKey holds the S3 object key for the workspace icon.
+	// Not exposed in JSON — handlers derive icon_url from this via the redirect endpoint.
+	IconStorageKey    *string         `json:"-" db:"-"`
 }

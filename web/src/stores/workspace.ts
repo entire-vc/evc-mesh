@@ -1,6 +1,9 @@
 import { create } from "zustand";
 import { api } from "@/lib/api";
+import { getAccessToken } from "@/lib/api";
 import type { CreateWorkspaceRequest, Workspace } from "@/types";
+
+const BASE_URL = import.meta.env.VITE_API_URL || "";
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "Failed to load workspaces";
@@ -21,6 +24,7 @@ interface WorkspaceState {
     req: Partial<CreateWorkspaceRequest>,
   ) => Promise<void>;
   deleteWorkspace: (id: string) => Promise<void>;
+  uploadIcon: (id: string, file: File) => Promise<void>;
 }
 
 export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
@@ -91,6 +95,33 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       workspaces: state.workspaces.filter((w) => w.id !== id),
       currentWorkspace:
         state.currentWorkspace?.id === id ? null : state.currentWorkspace,
+    }));
+  },
+
+  uploadIcon: async (id: string, file: File) => {
+    const form = new FormData();
+    form.append("file", file, file.name);
+
+    const token = getAccessToken();
+    const headers: HeadersInit = {};
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+
+    const res = await fetch(`${BASE_URL}/api/v1/workspaces/${id}/icon`, {
+      method: "PUT",
+      headers,
+      body: form,
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error((err as { message?: string }).message ?? "Upload failed");
+    }
+
+    const updated = (await res.json()) as Workspace;
+    set((state) => ({
+      workspaces: state.workspaces.map((w) => (w.id === id ? updated : w)),
+      currentWorkspace:
+        state.currentWorkspace?.id === id ? updated : state.currentWorkspace,
     }));
   },
 }));
