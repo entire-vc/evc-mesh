@@ -2,12 +2,14 @@ package middleware
 
 import (
 	"log"
+	"net/http"
 
 	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
 	"github.com/labstack/echo/v4"
 
 	"github.com/entire-vc/evc-mesh/internal/repository"
+	"github.com/entire-vc/evc-mesh/pkg/apierror"
 )
 
 // ContextKeyWorkspaceRole stores the workspace-level role of the current actor.
@@ -151,6 +153,46 @@ func WorkspaceRLS(db *sqlx.DB, projectRepo repository.ProjectRepository) echo.Mi
 				}
 			}
 
+			return next(c)
+		}
+	}
+}
+
+// RequireWorkspaceMember returns middleware that enforces workspace membership.
+//
+// For users: reads workspace_role from Echo context (populated by WorkspaceRLS with no
+// extra DB query) — non-empty role means the user is a member.
+// For agents: verifies agents.workspace_id matches the requested workspace (one SELECT).
+//
+// Must run after DualAuth and WorkspaceRLS.
+func RequireWorkspaceMember(db *sqlx.DB) echo.MiddlewareFunc {
+	return func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			wsID, err := GetWorkspaceID(c)
+			if err != nil {
+				return c.JSON(http.StatusForbidden, apierror.Forbidden("workspace access denied"))
+			}
+
+			if IsAgent(c) {
+				agentID, err := GetAgentID(c)
+				if err != nil {
+					return c.JSON(http.StatusForbidden, apierror.Forbidden("workspace access denied"))
+				}
+				var agentWsID uuid.UUID
+				if err := db.QueryRowContext(c.Request().Context(),
+					"SELECT workspace_id FROM agents WHERE id = $1 AND deleted_at IS NULL",
+					agentID,
+				).Scan(&agentWsID); err != nil || agentWsID != wsID {
+					return c.JSON(http.StatusForbidden, apierror.Forbidden("workspace access denied"))
+				}
+				return next(c)
+			}
+
+			// Users: WorkspaceRLS sets workspace_role only when the user is a member.
+			role, ok := c.Get(ContextKeyWorkspaceRole).(string)
+			if !ok || role == "" {
+				return c.JSON(http.StatusForbidden, apierror.Forbidden("workspace access denied"))
+			}
 			return next(c)
 		}
 	}

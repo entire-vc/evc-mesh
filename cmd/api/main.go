@@ -529,6 +529,9 @@ func main() {
 	api.GET("/workspaces/:ws_id/projects", projectHandler.List)
 	api.POST("/workspaces/:ws_id/projects", projectHandler.Create, rbac(mw.PermCreateProject))
 
+	// Workspace membership guard — enforces the caller is a member of the requested workspace.
+	wsAccess := mw.RequireWorkspaceMember(db)
+
 	// Project-scoped routes — RequireProjectMember enforces membership for :proj_id routes.
 	projAccess := mw.RequireProjectMember(db)
 	api.GET("/projects/:proj_id", projectHandler.GetByID, projAccess)
@@ -767,7 +770,7 @@ func main() {
 
 	// Activity feed — my comments + workspace-wide recent comments.
 	api.GET("/me/comments", commentHandler.GetMyComments)
-	api.GET("/workspaces/:ws_id/comments/recent", commentHandler.GetRecentByWorkspace)
+	api.GET("/workspaces/:ws_id/comments/recent", commentHandler.GetRecentByWorkspace, wsAccess)
 
 	// Memory routes.
 	// NOTE: fixed-path routes (/memories/search, /memories/export, /memories/import,
