@@ -274,6 +274,13 @@ func (m *MockTaskRepository) ListByAssignee(_ context.Context, assigneeID uuid.U
 	return result, nil
 }
 
+func (m *MockTaskRepository) ListByUserActive(_ context.Context, _, _ uuid.UUID, pg pagination.Params) (*pagination.Page[domain.Task], error) {
+	if m.errToReturn != nil {
+		return nil, m.errToReturn
+	}
+	return pagination.NewPage([]domain.Task{}, 0, pg), nil
+}
+
 func (m *MockTaskRepository) ListSubtasks(_ context.Context, parentTaskID uuid.UUID) ([]domain.Task, error) {
 	if m.errToReturn != nil {
 		return nil, m.errToReturn

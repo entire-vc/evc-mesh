@@ -612,3 +612,47 @@ func (r *TaskRepo) ExtendCheckout(ctx context.Context, taskID, token uuid.UUID, 
 	}
 	return nil
 }
+
+// ListByUserActive returns active tasks (excluding done/cancelled) assigned to the given user in a workspace.
+func (r *TaskRepo) ListByUserActive(ctx context.Context, workspaceID, userID uuid.UUID, pg pagination.Params) (*pagination.Page[domain.Task], error) {
+	pg.Normalize()
+
+	const countQ = `
+		SELECT COUNT(t.id)
+		FROM tasks t
+		INNER JOIN task_statuses ts ON ts.id = t.status_id
+		INNER JOIN projects p ON p.id = t.project_id
+		WHERE p.workspace_id = $1
+		  AND t.assignee_id = $2
+		  AND t.assignee_type = 'user'
+		  AND ts.category NOT IN ('done', 'cancelled')
+		  AND t.deleted_at IS NULL
+		  AND p.deleted_at IS NULL`
+	var totalCount int
+	if err := r.db.GetContext(ctx, &totalCount, countQ, workspaceID, userID); err != nil {
+		return nil, err
+	}
+
+	const dataQ = `SELECT t.id, t.project_id, t.status_id, t.title, t.description,
+		t.assignee_id, t.assignee_type, t.priority, t.parent_task_id, t.position,
+		t.due_date, t.estimated_hours, t.custom_fields, t.labels,
+		t.task_number, t.created_by, t.created_by_type, t.created_at, t.updated_at,
+		t.completed_at, t.deleted_at,
+		t.recurring_schedule_id, t.recurring_instance_number, ` + taskComputedColsAliased + `
+		FROM tasks t
+		INNER JOIN task_statuses ts ON ts.id = t.status_id
+		INNER JOIN projects p ON p.id = t.project_id
+		WHERE p.workspace_id = $1
+		  AND t.assignee_id = $2
+		  AND t.assignee_type = 'user'
+		  AND ts.category NOT IN ('done', 'cancelled')
+		  AND t.deleted_at IS NULL
+		  AND p.deleted_at IS NULL
+		ORDER BY t.updated_at DESC
+		LIMIT $3 OFFSET $4`
+	var rows []taskRow
+	if err := r.db.SelectContext(ctx, &rows, dataQ, workspaceID, userID, pg.Limit(), pg.Offset()); err != nil {
+		return nil, err
+	}
+	return pagination.NewPage(taskRowsToSlice(rows), totalCount, pg), nil
+}

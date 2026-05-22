@@ -762,6 +762,11 @@ func (s *taskService) GetMyTasks(ctx context.Context, assigneeID uuid.UUID, assi
 	return s.taskRepo.ListByAssignee(ctx, assigneeID, assigneeType)
 }
 
+// GetUserActiveTasks returns non-done/cancelled tasks for a human user in a workspace.
+func (s *taskService) GetUserActiveTasks(ctx context.Context, workspaceID, userID uuid.UUID, pg pagination.Params) (*pagination.Page[domain.Task], error) {
+	return s.taskRepo.ListByUserActive(ctx, workspaceID, userID, pg)
+}
+
 // applyAutoAssign applies assignment rules to a task if no assignee is set.
 // It checks by_type (labels), by_priority, default_assignee, then fallback_chain in order.
 // Failures are logged but never block task creation.

@@ -88,6 +88,7 @@ export function Sidebar({ collapsed }: SidebarProps) {
     }
   }, [wsName, wsSlugDraft, createWorkspace, navigate]);
 
+  const isDashboardRoute = location.pathname.endsWith("/dashboard");
   const isOrgChartRoute = location.pathname.endsWith("/org-chart");
   const isSparkRoute = location.pathname.endsWith("/spark");
   const isEventsRoute = location.pathname.endsWith("/events");
@@ -147,8 +148,11 @@ export function Sidebar({ collapsed }: SidebarProps) {
         <nav className="flex flex-col items-center gap-2 py-3">
           {/* Dashboard */}
           <Link
-            to={wsSlug ? `/w/${wsSlug}` : "/"}
-            className="flex h-8 w-8 items-center justify-center rounded-lg text-sidebar-foreground hover:bg-sidebar-accent"
+            to={wsSlug ? `/w/${wsSlug}/dashboard` : "/"}
+            className={cn(
+              "flex h-8 w-8 items-center justify-center rounded-lg text-sidebar-foreground hover:bg-sidebar-accent",
+              isDashboardRoute && "bg-sidebar-accent text-sidebar-primary",
+            )}
           >
             <LayoutDashboard className="h-4 w-4" />
           </Link>
@@ -324,10 +328,10 @@ export function Sidebar({ collapsed }: SidebarProps) {
       <nav className="flex-1 overflow-y-auto p-3">
         {/* Dashboard */}
         <Link
-          to={wsSlug ? `/w/${wsSlug}` : "/"}
+          to={wsSlug ? `/w/${wsSlug}/dashboard` : "/"}
           className={cn(
             "flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-sidebar-foreground hover:bg-sidebar-accent",
-            !projectSlug && !isOrgChartRoute && !isSparkRoute && !isEventsRoute && !isAnalyticsRoute && !isIntegrationsRoute && !isInitiativesRoute && !isTriageRoute && !isMemoriesRoute && !isSessionsRoute && !isActivityRoute && "bg-sidebar-accent font-medium",
+            isDashboardRoute && "bg-sidebar-accent font-medium",
           )}
         >
           <LayoutDashboard className="h-4 w-4" />

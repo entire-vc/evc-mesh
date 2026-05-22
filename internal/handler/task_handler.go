@@ -20,6 +20,7 @@ import (
 	mw "github.com/entire-vc/evc-mesh/internal/middleware"
 	"github.com/entire-vc/evc-mesh/internal/repository"
 	"github.com/entire-vc/evc-mesh/internal/service"
+	"github.com/entire-vc/evc-mesh/pkg/actorctx"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 	"github.com/entire-vc/evc-mesh/pkg/pagination"
 )
@@ -801,6 +802,38 @@ func (h *TaskHandler) MoveToProject(c echo.Context) error {
 	}
 
 	return c.JSON(http.StatusOK, task)
+}
+
+// GetCurrentUserTasks handles GET /me/tasks
+// Returns paginated active (non-done, non-cancelled) tasks assigned to the authenticated user.
+// Query params: per_page (1-50, default 20), workspace_id (required UUID).
+func (h *TaskHandler) GetCurrentUserTasks(c echo.Context) error {
+	actorID, actorType := actorctx.FromContext(c.Request().Context())
+	if actorID == uuid.Nil || actorType != "user" {
+		return apierror.Unauthorized("authentication required")
+	}
+
+	wsIDStr := c.QueryParam("workspace_id")
+	workspaceID, err := uuid.Parse(wsIDStr)
+	if err != nil {
+		return apierror.ValidationError(map[string]string{"workspace_id": "required UUID"})
+	}
+
+	perPage := 20
+	if v := c.QueryParam("per_page"); v != "" {
+		n, parseErr := strconv.Atoi(v)
+		if parseErr != nil || n < 1 || n > 50 {
+			return apierror.ValidationError(map[string]string{"per_page": "must be 1-50"})
+		}
+		perPage = n
+	}
+	pg := pagination.Params{Page: 1, PageSize: perPage}
+
+	page, err := h.taskService.GetUserActiveTasks(c.Request().Context(), workspaceID, actorID, pg)
+	if err != nil {
+		return handleError(c, err)
+	}
+	return c.JSON(http.StatusOK, page)
 }
 
 // ruleViolationAPIResponse is the JSON shape for 422 rule violation responses.

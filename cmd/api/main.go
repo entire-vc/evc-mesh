@@ -762,6 +762,9 @@ func main() {
 	api.GET("/me/mentions/unseen_count", mentionHandler.UnseenCount)
 	api.POST("/me/mentions/:comment_id/seen", mentionHandler.MarkSeen)
 
+	// Current user's active tasks (excludes done/cancelled).
+	api.GET("/me/tasks", taskHandler.GetCurrentUserTasks)
+
 	// Activity feed — my comments + workspace-wide recent comments.
 	api.GET("/me/comments", commentHandler.GetMyComments)
 	api.GET("/workspaces/:ws_id/comments/recent", commentHandler.GetRecentByWorkspace)
