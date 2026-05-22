@@ -765,6 +765,14 @@ func (m *MockCommentRepository) ListReplies(_ context.Context, parentCommentID u
 	return result, nil
 }
 
+func (m *MockCommentRepository) ListByAuthor(_ context.Context, _ uuid.UUID, _ repository.CommentViewFilter) ([]domain.CommentView, *time.Time, error) {
+	return []domain.CommentView{}, nil, m.errToReturn
+}
+
+func (m *MockCommentRepository) ListRecentByWorkspace(_ context.Context, _ uuid.UUID, _ repository.CommentViewFilter) ([]domain.CommentView, *time.Time, error) {
+	return []domain.CommentView{}, nil, m.errToReturn
+}
+
 // ---------------------------------------------------------------------------
 // MockArtifactRepository
 // ---------------------------------------------------------------------------

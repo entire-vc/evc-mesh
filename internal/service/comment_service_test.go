@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"testing"
 	"time"
@@ -595,4 +596,88 @@ func TestCommentService_UpdateEnrichesAuthorName(t *testing.T) {
 	require.NotNil(t, comment.AuthorName, "author_name must be populated after Update")
 	assert.Equal(t, "Admin", *comment.AuthorName)
 	assert.Equal(t, "Updated", comment.Body)
+}
+
+// ---------------------------------------------------------------------------
+// TestCommentService_ListByAuthor
+// ---------------------------------------------------------------------------
+
+func TestCommentService_ListByAuthor(t *testing.T) {
+	t.Run("happy path returns empty page with nil cursor", func(t *testing.T) {
+		svc, commentRepo, _ := setupCommentService()
+		authorID := uuid.New()
+
+		page, err := svc.ListByAuthor(context.Background(), authorID, repository.CommentViewFilter{Limit: 50})
+
+		require.NoError(t, err)
+		require.NotNil(t, page)
+		assert.Empty(t, page.Items)
+		assert.Nil(t, page.NextCursor)
+		_ = commentRepo // repo used via svc
+	})
+
+	t.Run("with before cursor filter — no error", func(t *testing.T) {
+		svc, _, _ := setupCommentService()
+		authorID := uuid.New()
+		before := frozenTime
+
+		page, err := svc.ListByAuthor(context.Background(), authorID, repository.CommentViewFilter{
+			Limit:  10,
+			Before: &before,
+		})
+
+		require.NoError(t, err)
+		require.NotNil(t, page)
+	})
+
+	t.Run("repo error propagates", func(t *testing.T) {
+		svc, commentRepo, _ := setupCommentService()
+		commentRepo.errToReturn = fmt.Errorf("db unavailable")
+
+		_, err := svc.ListByAuthor(context.Background(), uuid.New(), repository.CommentViewFilter{Limit: 50})
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "db unavailable")
+	})
+}
+
+// ---------------------------------------------------------------------------
+// TestCommentService_ListRecentByWorkspace
+// ---------------------------------------------------------------------------
+
+func TestCommentService_ListRecentByWorkspace(t *testing.T) {
+	t.Run("happy path returns empty page with nil cursor", func(t *testing.T) {
+		svc, _, _ := setupCommentService()
+		wsID := uuid.New()
+
+		page, err := svc.ListRecentByWorkspace(context.Background(), wsID, repository.CommentViewFilter{Limit: 50})
+
+		require.NoError(t, err)
+		require.NotNil(t, page)
+		assert.Empty(t, page.Items)
+		assert.Nil(t, page.NextCursor)
+	})
+
+	t.Run("with before cursor filter — no error", func(t *testing.T) {
+		svc, _, _ := setupCommentService()
+		before := frozenTime
+
+		page, err := svc.ListRecentByWorkspace(context.Background(), uuid.New(), repository.CommentViewFilter{
+			Limit:  25,
+			Before: &before,
+		})
+
+		require.NoError(t, err)
+		require.NotNil(t, page)
+	})
+
+	t.Run("repo error propagates", func(t *testing.T) {
+		svc, commentRepo, _ := setupCommentService()
+		commentRepo.errToReturn = fmt.Errorf("connection timeout")
+
+		_, err := svc.ListRecentByWorkspace(context.Background(), uuid.New(), repository.CommentViewFilter{Limit: 50})
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "connection timeout")
+	})
 }

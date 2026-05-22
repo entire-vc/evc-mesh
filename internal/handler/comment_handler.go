@@ -3,6 +3,7 @@ package handler
 import (
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
@@ -10,6 +11,7 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/repository"
 	"github.com/entire-vc/evc-mesh/internal/service"
+	"github.com/entire-vc/evc-mesh/pkg/actorctx"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 	"github.com/entire-vc/evc-mesh/pkg/pagination"
 )
@@ -161,4 +163,85 @@ func (h *CommentHandler) Delete(c echo.Context) error {
 	}
 
 	return c.NoContent(http.StatusNoContent)
+}
+
+// GetMyComments handles GET /me/comments — returns the caller's own comments, newest first.
+func (h *CommentHandler) GetMyComments(c echo.Context) error {
+	actorID, _ := actorctx.FromContext(c.Request().Context())
+	if actorID == uuid.Nil {
+		return c.JSON(http.StatusUnauthorized, apierror.Unauthorized("authentication required"))
+	}
+
+	filter := repository.CommentViewFilter{Limit: 50}
+
+	if v := c.QueryParam("limit"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 || n > 200 {
+			return c.JSON(http.StatusBadRequest, apierror.ValidationError(map[string]string{"limit": "must be 1-200"}))
+		}
+		filter.Limit = n
+	}
+	if v := c.QueryParam("before"); v != "" {
+		t, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			return c.JSON(http.StatusBadRequest, apierror.ValidationError(map[string]string{"before": "must be RFC3339 timestamp"}))
+		}
+		filter.Before = &t
+	}
+	if v := c.QueryParam("workspace_id"); v != "" {
+		id, err := uuid.Parse(v)
+		if err != nil {
+			return c.JSON(http.StatusBadRequest, apierror.ValidationError(map[string]string{"workspace_id": "must be a UUID"}))
+		}
+		filter.WorkspaceID = &id
+	}
+	if v := c.QueryParam("project_id"); v != "" {
+		id, err := uuid.Parse(v)
+		if err != nil {
+			return c.JSON(http.StatusBadRequest, apierror.ValidationError(map[string]string{"project_id": "must be a UUID"}))
+		}
+		filter.ProjectID = &id
+	}
+
+	page, err := h.commentService.ListByAuthor(c.Request().Context(), actorID, filter)
+	if err != nil {
+		return handleError(c, err)
+	}
+
+	c.Response().Header().Set("Cache-Control", "private, max-age=30")
+	return c.JSON(http.StatusOK, page)
+}
+
+// GetRecentByWorkspace handles GET /workspaces/:ws_id/comments/recent — workspace-wide recent comments.
+func (h *CommentHandler) GetRecentByWorkspace(c echo.Context) error {
+	wsIDStr := c.Param("ws_id")
+	wsID, err := uuid.Parse(wsIDStr)
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid workspace_id"))
+	}
+
+	filter := repository.CommentViewFilter{Limit: 50}
+
+	if v := c.QueryParam("limit"); v != "" {
+		n, parseErr := strconv.Atoi(v)
+		if parseErr != nil || n < 1 || n > 200 {
+			return c.JSON(http.StatusBadRequest, apierror.ValidationError(map[string]string{"limit": "must be 1-200"}))
+		}
+		filter.Limit = n
+	}
+	if v := c.QueryParam("before"); v != "" {
+		t, parseErr := time.Parse(time.RFC3339, v)
+		if parseErr != nil {
+			return c.JSON(http.StatusBadRequest, apierror.ValidationError(map[string]string{"before": "must be RFC3339 timestamp"}))
+		}
+		filter.Before = &t
+	}
+
+	page, err := h.commentService.ListRecentByWorkspace(c.Request().Context(), wsID, filter)
+	if err != nil {
+		return handleError(c, err)
+	}
+
+	c.Response().Header().Set("Cache-Control", "private, max-age=30")
+	return c.JSON(http.StatusOK, page)
 }

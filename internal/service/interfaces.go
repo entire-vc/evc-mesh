@@ -178,6 +178,8 @@ type CommentService interface {
 	Update(ctx context.Context, comment *domain.Comment) error
 	Delete(ctx context.Context, id uuid.UUID) error
 	ListByTask(ctx context.Context, taskID uuid.UUID, filter repository.CommentFilter, pg pagination.Params) (*pagination.Page[domain.Comment], error)
+	ListByAuthor(ctx context.Context, authorID uuid.UUID, filter repository.CommentViewFilter) (*domain.CommentViewPage, error)
+	ListRecentByWorkspace(ctx context.Context, wsID uuid.UUID, filter repository.CommentViewFilter) (*domain.CommentViewPage, error)
 }
 
 // UploadArtifactInput holds parameters for uploading an artifact.
