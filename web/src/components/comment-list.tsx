@@ -221,7 +221,7 @@ export function CommentList({ taskId }: CommentListProps) {
     const textBefore = val.slice(0, cursorPos);
     const atMatch = textBefore.match(/@([^\s@]*)$/);
     if (atMatch) {
-      const query = atMatch[1];
+      const query = atMatch[1] ?? "";
       const atPos = cursorPos - query.length - 1;
       setMentionStart(atPos);
       setMentionQuery(query);
