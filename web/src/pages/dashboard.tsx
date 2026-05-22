@@ -249,7 +249,6 @@ function TriageWidget() {
 // ---------------------------------------------------------------------------
 
 function MyTasksWidget() {
-  const { wsSlug } = useParams<{ wsSlug: string }>();
   const { currentWorkspace } = useWorkspaceStore();
   const { projects } = useProjectStore();
   const [tasks, setTasks] = useState<Task[]>([]);
