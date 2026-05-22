@@ -1,0 +1,156 @@
+name: Deploy backend to tw-mesh
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'cmd/**'
+      - 'internal/**'
+      - 'go.mod'
+      - 'go.sum'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Skip burst-deploy guard (force deploy)'
+        type: boolean
+        default: false
+
+# Sequential deploys — never cancel an in-flight deploy.
+concurrency:
+  group: backend-deploy-prod
+  cancel-in-progress: false
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v7
+        with:
+          version: "v2.11.3"
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    needs: lint
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: mesh
+          POSTGRES_PASSWORD: mesh
+          POSTGRES_DB: mesh
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U mesh"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      nats:
+        image: nats:2-alpine
+        ports:
+          - 4222:4222
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Install goose
+        run: go install github.com/pressly/goose/v3/cmd/goose@latest
+      - name: Run migrations
+        env:
+          GOOSE_DRIVER: postgres
+          GOOSE_DBSTRING: "postgres://mesh:mesh@localhost:5432/mesh?sslmode=disable"
+        run: goose -dir migrations up
+      - name: Run tests
+        env:
+          DATABASE_URL: "postgres://mesh:mesh@localhost:5432/mesh?sslmode=disable"
+          REDIS_URL: "redis://localhost:6379"
+          NATS_URL: "nats://localhost:4222"
+        run: go test ./... -v -race -coverprofile=coverage.out -covermode=atomic
+
+  deploy:
+    name: Deploy
+    runs-on: ubuntu-latest
+    needs: [lint, test]
+    if: needs.lint.result == 'success' && needs.test.result == 'success'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build backend binary (linux/amd64)
+        run: |
+          BUILD_VERSION=$(git describe --tags --always 2>/dev/null || echo dev)
+          BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          GOOS=linux GOARCH=amd64 go build \
+            -ldflags "-w -s \
+              -X main.BuildSHA=${{ github.sha }} \
+              -X main.BuildTime=${BUILD_TIME} \
+              -X main.BuildVersion=${BUILD_VERSION} \
+              -X main.BuildEnv=prod" \
+            -o mesh-api ./cmd/api
+
+      - name: Setup SSH
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.DEPLOY_SSH_KEY }}
+
+      - name: Add server to known hosts
+        run: ssh-keyscan -H 216.57.106.222 >> ~/.ssh/known_hosts
+
+      - name: Burst-deploy guard
+        run: |
+          FORCE="${{ inputs.force }}"
+          COMMIT_MSG="${{ github.event.head_commit.message }}"
+          if echo "$COMMIT_MSG" | grep -qF '[force-deploy]'; then
+            FORCE=true
+          fi
+
+          LAST=$(ssh root@216.57.106.222 'cat /opt/evc-mesh/.last-backend-deploy 2>/dev/null || echo 0')
+          NOW=$(date +%s)
+          DIFF=$((NOW - LAST))
+
+          if [ "$FORCE" != "true" ] && [ "$DIFF" -lt 300 ]; then
+            echo "::error::Burst-deploy guard: last deploy was ${DIFF}s ago (< 5 min). Add [force-deploy] to commit message or use workflow_dispatch with force=true to override."
+            exit 1
+          fi
+
+      - name: Upload binary
+        run: rsync -avz --checksum mesh-api root@216.57.106.222:/opt/evc-mesh/mesh-api.new
+
+      - name: Atomic swap and restart
+        run: |
+          ssh root@216.57.106.222 'set -e
+            mv /opt/evc-mesh/mesh-api.new /opt/evc-mesh/mesh-api
+            systemctl restart mesh-api
+            date +%s > /opt/evc-mesh/.last-backend-deploy'
+
+      - name: Smoke test
+        run: |
+          sleep 8
+          DEPLOYED=$(curl -sf http://216.57.106.222:8005/api/v1/healthz/version | python3 -c "import sys,json; print(json.load(sys.stdin)['commit'])")
+          if [ "$DEPLOYED" != "${{ github.sha }}" ]; then
+            echo "::error::Smoke test FAILED: expected ${{ github.sha }}, got ${DEPLOYED}"
+            exit 1
+          fi
+          echo "Deploy verified: ${DEPLOYED}"
