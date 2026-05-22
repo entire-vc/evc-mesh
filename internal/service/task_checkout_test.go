@@ -332,6 +332,53 @@ func TestCheckoutTask_ReviewStatusSucceeds(t *testing.T) {
 	assert.Equal(t, agentID, result.CheckedOutBy)
 }
 
+func TestCheckoutTask_TriageStatusSucceeds(t *testing.T) {
+	// Regression test: task in triage status returned 500 before PR #106 because
+	// ErrCheckoutConflict was leaked raw when dispatcher moved task to triage
+	// without releasing the checkout. Triage is not a terminal status so checkout
+	// must succeed.
+	svc, taskRepo, statusRepo, _ := setupCheckoutTaskService()
+	statusID := uuid.New()
+	taskID := uuid.New()
+	projectID := uuid.New()
+	statusRepo.items[statusID] = &domain.TaskStatus{ID: statusID, ProjectID: projectID, Category: domain.StatusCategoryTriage, Name: "triage"}
+	taskRepo.items[taskID] = &domain.Task{ID: taskID, ProjectID: projectID, StatusID: statusID, Title: "Triage task"}
+	agentID := uuid.New()
+
+	result, err := svc.CheckoutTask(agentContext(agentID), taskID, 30, nil)
+	require.NoError(t, err, "checkout must succeed for tasks in triage status")
+	require.NotNil(t, result)
+	assert.Equal(t, taskID, result.TaskID)
+	assert.Equal(t, agentID, result.CheckedOutBy)
+}
+
+// TestCheckoutTask_NonTerminalStatusesAllSucceed ensures that every
+// non-terminal status category allows checkout. This prevents a regression
+// where adding a new status category inadvertently blocks agents.
+func TestCheckoutTask_NonTerminalStatusesAllSucceed(t *testing.T) {
+	for _, category := range []domain.StatusCategory{
+		domain.StatusCategoryBacklog,
+		domain.StatusCategoryTodo,
+		domain.StatusCategoryInProgress,
+		domain.StatusCategoryReview,
+		domain.StatusCategoryTriage,
+	} {
+		t.Run(string(category), func(t *testing.T) {
+			svc, taskRepo, statusRepo, _ := setupCheckoutTaskService()
+			statusID := uuid.New()
+			taskID := uuid.New()
+			projectID := uuid.New()
+			statusRepo.items[statusID] = &domain.TaskStatus{ID: statusID, ProjectID: projectID, Category: category, Name: string(category)}
+			taskRepo.items[taskID] = &domain.Task{ID: taskID, ProjectID: projectID, StatusID: statusID, Title: "Task in " + string(category)}
+
+			result, err := svc.CheckoutTask(agentContext(uuid.New()), taskID, 30, nil)
+			require.NoError(t, err, "checkout must succeed for status category %q", category)
+			require.NotNil(t, result)
+			assert.Equal(t, taskID, result.TaskID)
+		})
+	}
+}
+
 func TestCheckoutTask_NotFoundReturns404(t *testing.T) {
 	svc, _, _, _ := setupCheckoutTaskService()
 
