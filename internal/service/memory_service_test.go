@@ -556,3 +556,54 @@ func TestExtractFromEvent_NoAutoExtractSummary(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, upsertCalled, "summary events without hint should not create a memory")
 }
+
+// ---------------------------------------------------------------------------
+// applyExtendedFilters — source_type
+// ---------------------------------------------------------------------------
+
+func scored(srcType domain.MemorySourceType) domain.ScoredMemory {
+	return domain.ScoredMemory{
+		Memory: domain.Memory{ID: uuid.New(), SourceType: srcType},
+	}
+}
+
+// freshItems returns a new backing array each call. applyExtendedFilters reuses
+// the input slice's backing array (items[:0]), so tests must not share one.
+func freshItems() []domain.ScoredMemory {
+	return []domain.ScoredMemory{
+		scored(domain.SourceAgent),
+		scored(domain.SourceHuman),
+		scored(domain.SourceSystem),
+		scored(domain.SourceAgent),
+	}
+}
+
+func TestApplyExtendedFilters_SourceType(t *testing.T) {
+	t.Run("filters to a single source type", func(t *testing.T) {
+		out := applyExtendedFilters(freshItems(), domain.RecallOpts{SourceType: domain.SourceAgent})
+		require.Len(t, out, 2)
+		for _, m := range out {
+			assert.Equal(t, domain.SourceAgent, m.SourceType)
+		}
+	})
+
+	t.Run("human filter keeps only human-sourced", func(t *testing.T) {
+		out := applyExtendedFilters(freshItems(), domain.RecallOpts{SourceType: domain.SourceHuman})
+		require.Len(t, out, 1)
+		assert.Equal(t, domain.SourceHuman, out[0].SourceType)
+	})
+
+	t.Run("empty source type leaves all items", func(t *testing.T) {
+		items := freshItems()
+		out := applyExtendedFilters(items, domain.RecallOpts{})
+		assert.Len(t, out, len(items))
+	})
+}
+
+func TestMemorySourceType_IsValid(t *testing.T) {
+	assert.True(t, domain.SourceAgent.IsValid())
+	assert.True(t, domain.SourceHuman.IsValid())
+	assert.True(t, domain.SourceSystem.IsValid())
+	assert.False(t, domain.MemorySourceType("").IsValid())
+	assert.False(t, domain.MemorySourceType("bogus").IsValid())
+}
