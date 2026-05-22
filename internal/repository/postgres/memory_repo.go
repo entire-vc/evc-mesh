@@ -337,6 +337,11 @@ func (r *MemoryRepo) List(ctx context.Context, filter domain.MemoryListFilter) (
 		args = append(args, *filter.CreatedBy)
 		argIdx++
 	}
+	if filter.SourceType != "" {
+		conditions = append(conditions, fmt.Sprintf("source_type = $%d", argIdx))
+		args = append(args, string(filter.SourceType))
+		argIdx++
+	}
 	if filter.Since != nil {
 		conditions = append(conditions, fmt.Sprintf("created_at >= $%d", argIdx))
 		args = append(args, *filter.Since)

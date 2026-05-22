@@ -265,7 +265,7 @@ func (s *memoryService) Recall(ctx context.Context, opts domain.RecallOpts) ([]d
 	merged := reciprocalRankFusion(kwResults, vecResults)
 
 	// ── Step 4: Apply extended filters (TagsAny, CreatedBy, Since, Until, etc.) ─
-	if opts.CreatedBy != nil || len(opts.TagsAny) > 0 || opts.Since != nil || opts.Until != nil || opts.RelevanceMin != nil {
+	if opts.CreatedBy != nil || opts.SourceType != "" || len(opts.TagsAny) > 0 || opts.Since != nil || opts.Until != nil || opts.RelevanceMin != nil {
 		merged = applyExtendedFilters(merged, opts)
 	}
 
@@ -316,6 +316,9 @@ func applyExtendedFilters(items []domain.ScoredMemory, opts domain.RecallOpts) [
 			if m.AgentID == nil || *m.AgentID != *opts.CreatedBy {
 				continue
 			}
+		}
+		if opts.SourceType != "" && m.SourceType != opts.SourceType {
+			continue
 		}
 		if opts.Since != nil && m.CreatedAt.Before(*opts.Since) {
 			continue

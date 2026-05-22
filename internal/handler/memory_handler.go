@@ -51,6 +51,7 @@ type listMemoriesQuery struct {
 	Tags              string `query:"tags"`     // comma-separated, AND filter
 	TagsAny           string `query:"tags_any"` // comma-separated, OR filter
 	CreatedBy         string `query:"created_by"`
+	SourceType        string `query:"source_type"`         // agent|human|system
 	Since             string `query:"since"`               // RFC3339
 	Until             string `query:"until"`               // RFC3339
 	RelevanceMin      string `query:"relevance_min"`       // float
@@ -70,6 +71,7 @@ type searchMemoriesQuery struct {
 	Tags              string `query:"tags"`     // comma-separated, AND filter
 	TagsAny           string `query:"tags_any"` // comma-separated, OR filter
 	CreatedBy         string `query:"created_by"`
+	SourceType        string `query:"source_type"` // agent|human|system
 	Since             string `query:"since"`
 	Until             string `query:"until"`
 	RelevanceMin      string `query:"relevance_min"`
@@ -209,6 +211,13 @@ func (h *MemoryHandler) List(c echo.Context) error {
 			return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid created_by"))
 		}
 		filter.CreatedBy = &cid
+	}
+	if q.SourceType != "" {
+		st := domain.MemorySourceType(q.SourceType)
+		if !st.IsValid() {
+			return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid source_type: must be agent, human, or system"))
+		}
+		filter.SourceType = st
 	}
 	if q.Since != "" {
 		t, parseErr := time.Parse(time.RFC3339, q.Since)
@@ -356,6 +365,13 @@ func (h *MemoryHandler) Search(c echo.Context) error {
 			return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid created_by"))
 		}
 		opts.CreatedBy = &cid
+	}
+	if q.SourceType != "" {
+		st := domain.MemorySourceType(q.SourceType)
+		if !st.IsValid() {
+			return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid source_type: must be agent, human, or system"))
+		}
+		opts.SourceType = st
 	}
 	if q.Since != "" {
 		t, parseErr := time.Parse(time.RFC3339, q.Since)

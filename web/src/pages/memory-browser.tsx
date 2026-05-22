@@ -1,9 +1,20 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { Brain, ChevronDown, ChevronUp, Plus, Search, Trash2, X } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "react-router";
+import {
+  Brain,
+  ChevronDown,
+  ChevronUp,
+  Plus,
+  Search,
+  SlidersHorizontal,
+  Trash2,
+  X,
+} from "lucide-react";
 import { cn } from "@/lib/cn";
 import { formatRelative } from "@/lib/utils";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { useMemoryStore } from "@/stores/memory";
+import { useAgentStore } from "@/stores/agent";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -12,7 +23,12 @@ import { Select } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { MarkdownRenderer } from "@/components/markdown-renderer";
-import type { Memory } from "@/types";
+import {
+  MemoryFiltersPanel,
+  countActiveFilters,
+  emptyFilter,
+} from "@/components/memory/memory-filters";
+import type { Memory, MemoryFilter, MemoryOrderBy } from "@/types";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -300,6 +316,48 @@ function CreateMemoryForm({ onSubmit, workspaceId }: CreateMemoryFormProps) {
 }
 
 // ---------------------------------------------------------------------------
+// URL <-> filter serialization (shareable links)
+// ---------------------------------------------------------------------------
+
+function filterFromParams(sp: URLSearchParams): MemoryFilter {
+  const tagsRaw = sp.get("tags") ?? "";
+  const relRaw = sp.get("rel_min");
+  return {
+    q: sp.get("q") ?? "",
+    scope: sp.get("scope") ?? "all",
+    tags: tagsRaw ? tagsRaw.split(",").filter(Boolean) : [],
+    tagsMode: sp.get("tags_mode") === "any" ? "any" : "all",
+    sourceType: (sp.get("source") as MemoryFilter["sourceType"]) ?? "",
+    createdBy: sp.get("agent") ?? "",
+    since: sp.get("since") ?? "",
+    until: sp.get("until") ?? "",
+    relevanceMin: relRaw ? Number(relRaw) : 0,
+    includeExpired: sp.get("expired") === "1",
+    orderBy: (sp.get("sort") as MemoryOrderBy) ?? "created_at:desc",
+  };
+}
+
+function paramsFromFilter(f: MemoryFilter): URLSearchParams {
+  const sp = new URLSearchParams();
+  if (f.q) sp.set("q", f.q);
+  if (f.scope && f.scope !== "all") sp.set("scope", f.scope);
+  if (f.tags && f.tags.length > 0) {
+    sp.set("tags", f.tags.join(","));
+    if (f.tagsMode === "any") sp.set("tags_mode", "any");
+  }
+  if (f.sourceType) sp.set("source", f.sourceType);
+  if (f.sourceType === "agent" && f.createdBy) sp.set("agent", f.createdBy);
+  if (f.since) sp.set("since", f.since);
+  if (f.until) sp.set("until", f.until);
+  if (typeof f.relevanceMin === "number" && f.relevanceMin > 0) {
+    sp.set("rel_min", String(f.relevanceMin));
+  }
+  if (f.includeExpired) sp.set("expired", "1");
+  if (f.orderBy && f.orderBy !== "created_at:desc") sp.set("sort", f.orderBy);
+  return sp;
+}
+
+// ---------------------------------------------------------------------------
 // MemoryBrowserPage
 // ---------------------------------------------------------------------------
 
@@ -308,50 +366,61 @@ export function MemoryBrowserPage() {
   const {
     memories,
     searchResults,
+    total,
     loading,
-    searchQuery,
     fetchMemories,
     searchMemories,
     createMemory,
     deleteMemory,
-    setSearchQuery,
   } = useMemoryStore();
+  const { agents, fetchAgents } = useAgentStore();
 
-  const [scope, setScope] = useState("all");
+  const [searchParams, setSearchParams] = useSearchParams();
   const [showCreateForm, setShowCreateForm] = useState(false);
+  const [showFilters, setShowFilters] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const workspaceId = currentWorkspace?.id ?? "";
 
-  // Initial load
-  useEffect(() => {
-    if (!workspaceId) return;
-    fetchMemories(workspaceId, scope);
-  }, [workspaceId, scope, fetchMemories]);
+  // Filter state lives in the URL — every change is a shareable link.
+  const filter = useMemo(() => filterFromParams(searchParams), [searchParams]);
+  const activeCount = countActiveFilters(filter);
 
-  // Debounced search
-  const handleSearchChange = useCallback(
-    (e: React.ChangeEvent<HTMLInputElement>) => {
-      const q = e.target.value;
-      setSearchQuery(q);
-      if (debounceRef.current) clearTimeout(debounceRef.current);
-      debounceRef.current = setTimeout(() => {
-        if (!workspaceId) return;
-        if (q.trim()) {
-          searchMemories(q.trim(), workspaceId, scope);
-        } else {
-          fetchMemories(workspaceId, scope);
-        }
-      }, 300);
+  const updateFilter = useCallback(
+    (next: MemoryFilter) => {
+      setSearchParams(paramsFromFilter(next), { replace: true });
     },
-    [workspaceId, scope, fetchMemories, searchMemories, setSearchQuery],
+    [setSearchParams],
   );
 
-  const handleScopeChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    const newScope = e.target.value;
-    setScope(newScope);
-    // scope change triggers useEffect above
-  };
+  const resetFilters = useCallback(() => {
+    // Preserve the free-text query; clear the rest.
+    setSearchParams(paramsFromFilter({ ...emptyFilter, q: filter.q }), {
+      replace: true,
+    });
+  }, [setSearchParams, filter.q]);
+
+  // Load agents once for the "source agent" dropdown.
+  useEffect(() => {
+    if (workspaceId) fetchAgents(workspaceId);
+  }, [workspaceId, fetchAgents]);
+
+  // Debounced fetch whenever the workspace or any filter changes.
+  useEffect(() => {
+    if (!workspaceId) return;
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => {
+      const q = (filter.q ?? "").trim();
+      if (q) {
+        searchMemories(q, workspaceId, filter);
+      } else {
+        fetchMemories(workspaceId, filter);
+      }
+    }, 300);
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+    };
+  }, [workspaceId, filter, fetchMemories, searchMemories]);
 
   const handleDelete = async (id: string) => {
     await deleteMemory(id);
@@ -362,8 +431,16 @@ export function MemoryBrowserPage() {
     setShowCreateForm(false);
   };
 
-  const displayItems = searchQuery.trim() ? searchResults : memories;
+  const isSearching = (filter.q ?? "").trim().length > 0;
+  const displayItems = isSearching ? searchResults : memories;
   const hasItems = displayItems.length > 0;
+
+  // Distinct tags from the current result set — feeds the tag multi-select.
+  const availableTags = useMemo(() => {
+    const set = new Set<string>();
+    for (const m of displayItems) for (const t of m.tags ?? []) set.add(t);
+    return [...set].sort();
+  }, [displayItems]);
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
@@ -393,29 +470,66 @@ export function MemoryBrowserPage() {
             </Card>
           )}
 
-          {/* Search + filter bar */}
+          {/* Search + filter toggle bar */}
           <div className="flex gap-2">
             <div className="relative flex-1">
               <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
               <Input
                 placeholder="Search memories..."
-                value={searchQuery}
-                onChange={handleSearchChange}
+                value={filter.q ?? ""}
+                onChange={(e) => updateFilter({ ...filter, q: e.target.value })}
                 className="pl-8"
               />
             </div>
-            <Select value={scope} onChange={handleScopeChange} className="w-36">
-              <option value="all">All scopes</option>
-              <option value="workspace">Workspace</option>
-              <option value="project">Project</option>
-              <option value="agent">Agent</option>
-            </Select>
+            <Button
+              variant={showFilters ? "secondary" : "outline"}
+              size="sm"
+              onClick={() => setShowFilters((v) => !v)}
+              className="gap-1.5 shrink-0"
+            >
+              <SlidersHorizontal className="h-3.5 w-3.5" />
+              Filters
+              {activeCount > 0 && (
+                <Badge variant="default" className="ml-0.5 px-1.5 py-0">
+                  {activeCount}
+                </Badge>
+              )}
+            </Button>
           </div>
 
+          {/* Filter panel */}
+          {showFilters && (
+            <MemoryFiltersPanel
+              filter={filter}
+              onChange={updateFilter}
+              onReset={resetFilters}
+              agents={agents}
+              availableTags={availableTags}
+            />
+          )}
+
+          {/* Active-filter summary bar */}
+          {activeCount > 0 && (
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <span>
+                {activeCount} active filter{activeCount !== 1 ? "s" : ""}
+              </span>
+              <button
+                onClick={resetFilters}
+                className="inline-flex items-center gap-1 text-foreground hover:text-destructive transition-colors"
+              >
+                <X className="h-3 w-3" /> Clear
+              </button>
+            </div>
+          )}
+
           {/* Results info */}
-          {searchQuery.trim() && !loading && (
+          {!loading && (
             <p className="text-xs text-muted-foreground">
-              {searchResults.length} result{searchResults.length !== 1 ? "s" : ""} for &ldquo;{searchQuery}&rdquo;
+              {total} result{total !== 1 ? "s" : ""}
+              {isSearching && (
+                <> for &ldquo;{(filter.q ?? "").trim()}&rdquo;</>
+              )}
             </p>
           )}
 
@@ -440,11 +554,21 @@ export function MemoryBrowserPage() {
             <div className="flex flex-col items-center justify-center py-20 text-center">
               <Brain className="h-10 w-10 text-muted-foreground/40 mb-3" />
               <p className="text-sm font-medium text-muted-foreground">
-                {searchQuery.trim()
-                  ? "No memories matched your search."
+                {isSearching || activeCount > 0
+                  ? "No memories matched your filters."
                   : "No memories yet."}
               </p>
-              {!searchQuery.trim() && (
+              {(isSearching || activeCount > 0) && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="mt-3"
+                  onClick={resetFilters}
+                >
+                  Reset filters
+                </Button>
+              )}
+              {!isSearching && activeCount === 0 && (
                 <p className="mt-1 text-xs text-muted-foreground/70">
                   Use the recall/remember MCP tools or create one above.
                 </p>
