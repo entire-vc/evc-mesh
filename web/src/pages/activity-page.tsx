@@ -70,7 +70,7 @@ export function ActivityPage() {
       setMyCommentsNextCursor(null);
     }
     try {
-      const params: Record<string, unknown> = { limit: 50 };
+      const params: Record<string, string | number | undefined> = { limit: 50 };
       if (before) params.before = before;
       const data = await api<CommentViewPage>("/api/v1/me/comments", { params });
       const items = data?.items ?? [];
@@ -93,7 +93,7 @@ export function ActivityPage() {
       setRecentNextCursor(null);
     }
     try {
-      const params: Record<string, unknown> = { limit: 50 };
+      const params: Record<string, string | number | undefined> = { limit: 50 };
       if (before) params.before = before;
       const data = await api<CommentViewPage>(
         `/api/v1/workspaces/${currentWorkspace.id}/comments/recent`,
