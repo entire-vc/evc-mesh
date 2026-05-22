@@ -1582,7 +1582,7 @@ export function ProjectSettingsPage() {
   }
 
   return (
-    <div className="mx-auto max-w-2xl space-y-6">
+    <div className="space-y-6">
       {/* Tab navigation */}
       <div className="flex gap-1 border-b border-border">
         {PROJECT_TABS.map((tab) => (
@@ -1591,7 +1591,7 @@ export function ProjectSettingsPage() {
             type="button"
             onClick={() => setActiveTab(tab.id)}
             className={cn(
-              "px-3 py-2 text-sm font-medium border-b-2 -mb-px transition-colors",
+              "px-3 py-2 text-sm font-medium border-b-2 -mb-px transition-colors whitespace-nowrap",
               activeTab === tab.id
                 ? "border-primary text-foreground"
                 : "border-transparent text-muted-foreground hover:text-foreground",
@@ -1602,6 +1602,7 @@ export function ProjectSettingsPage() {
         ))}
       </div>
 
+      <div className="mx-auto max-w-2xl space-y-6">
       {/* Section 1: General Information */}
       {activeTab === "general" && (
       <Card>
@@ -2925,6 +2926,7 @@ export function ProjectSettingsPage() {
         requireText={currentProject.name}
         isLoading={isDeleting}
       />
+      </div>
     </div>
   );
 }
