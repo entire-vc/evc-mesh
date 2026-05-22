@@ -23,6 +23,7 @@ import { MemoryBrowserPage } from "@/pages/memory-browser";
 import { SessionDashboardPage } from "@/pages/session-dashboard";
 import { ActivityPage } from "@/pages/activity-page";
 import { TaskDeepLinkResolver } from "@/pages/task-deep-link";
+import { AcceptInvitePage } from "@/pages/accept-invite";
 
 class ErrorBoundary extends Component<
   { children: ReactNode },
@@ -74,6 +75,7 @@ export function App() {
       <Routes>
         <Route path="/login" element={<LoginPage />} />
         <Route path="/register" element={<RegisterPage />} />
+        <Route path="/accept-invite/:token" element={<AcceptInvitePage />} />
         <Route element={<AppLayout />}>
           {/* Index route is handled by AppLayout redirects — no element needed */}
           <Route index element={null} />

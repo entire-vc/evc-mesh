@@ -633,6 +633,10 @@ export function WorkspaceSettingsPage() {
     fetchMyRole,
     updateWorkspaceMemberRole,
     removeWorkspaceMember,
+    workspaceInvites,
+    fetchWorkspaceInvites,
+    resendInvite,
+    revokeInvite,
   } = useMemberStore();
 
   const {
@@ -735,6 +739,7 @@ export function WorkspaceSettingsPage() {
       void fetchWsAssignmentRules(currentWorkspace.id);
       void fetchViolations(currentWorkspace.id);
       void fetchWorkflowTemplates(currentWorkspace.id);
+      void fetchWorkspaceInvites(currentWorkspace.id);
     }
   }, [
     currentWorkspace?.id,
@@ -744,6 +749,7 @@ export function WorkspaceSettingsPage() {
     fetchWsAssignmentRules,
     fetchViolations,
     fetchWorkflowTemplates,
+    fetchWorkspaceInvites,
   ]);
 
   // Sync templates editor when store data arrives
@@ -1275,6 +1281,68 @@ export function WorkspaceSettingsPage() {
               })}
             </div>
           )}
+        </CardContent>
+      </Card>
+      )}
+
+      {/* Pending Invites — shown below the members card when on the members tab */}
+      {activeTab === "members" && workspaceInvites.length > 0 && (
+      <Card className="mt-4">
+        <CardHeader>
+          <div className="flex items-center gap-2">
+            <Clock className="h-4 w-4 text-muted-foreground" />
+            <div className="space-y-1.5">
+              <CardTitle>Pending Invites</CardTitle>
+              <CardDescription>
+                Invite links sent but not yet accepted
+              </CardDescription>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent>
+          <div className="divide-y divide-border">
+            {workspaceInvites.map((invite) => (
+              <div key={invite.id} className="flex items-center gap-3 py-3">
+                <div className="flex-1 min-w-0">
+                  <p className="truncate text-sm font-medium">{invite.email}</p>
+                  <p className="text-xs text-muted-foreground capitalize">
+                    {invite.role} · Expires {new Date(invite.expires_at).toLocaleDateString()}
+                  </p>
+                </div>
+                {canManageMembers && (
+                  <div className="flex items-center gap-1 shrink-0">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 text-xs"
+                      onClick={async () => {
+                        if (currentWorkspace) {
+                          try { await resendInvite(currentWorkspace.id, invite.id); }
+                          catch { /* ignore */ }
+                        }
+                      }}
+                    >
+                      Resend
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                      title="Revoke invite"
+                      onClick={async () => {
+                        if (currentWorkspace) {
+                          try { await revokeInvite(currentWorkspace.id, invite.id); }
+                          catch { /* ignore */ }
+                        }
+                      }}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
         </CardContent>
       </Card>
       )}

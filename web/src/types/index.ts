@@ -155,6 +155,18 @@ export interface UserSearchResult {
   is_member: boolean;
 }
 
+export interface WorkspaceInvite {
+  id: string;
+  workspace_id: string;
+  email: string;
+  role: WorkspaceRole;
+  token: string;
+  invited_by: string | null;
+  expires_at: string;
+  accepted_at: string | null;
+  created_at: string;
+}
+
 export interface Project {
   id: string;
   workspace_id: string;
