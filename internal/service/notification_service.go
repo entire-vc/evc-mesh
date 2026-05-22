@@ -12,6 +12,7 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/repository/postgres"
 )
 
+
 // NotificationService dispatches in-app notifications to users based on their preferences.
 // For agents, existing AgentNotifyService handles delivery.
 type NotificationService interface {
@@ -39,12 +40,25 @@ type NotificationService interface {
 }
 
 type notificationService struct {
-	repo *postgres.NotificationRepo
+	repo        *postgres.NotificationRepo
+	pushService PushService
+}
+
+// NotificationServiceOption is a functional option for configuring notificationService.
+type NotificationServiceOption func(*notificationService)
+
+// WithPushService injects an optional PushService for browser push fan-out.
+func WithPushService(ps PushService) NotificationServiceOption {
+	return func(s *notificationService) { s.pushService = ps }
 }
 
 // NewNotificationService creates a new NotificationService.
-func NewNotificationService(repo *postgres.NotificationRepo) NotificationService {
-	return &notificationService{repo: repo}
+func NewNotificationService(repo *postgres.NotificationRepo, opts ...NotificationServiceOption) NotificationService {
+	svc := &notificationService{repo: repo}
+	for _, opt := range opts {
+		opt(svc)
+	}
+	return svc
 }
 
 // Notify dispatches a notification event to all subscribed users in the workspace.
@@ -97,6 +111,47 @@ func (s *notificationService) dispatch(event domain.NotificationEvent) {
 
 		if err := s.repo.CreateNotification(bgCtx, n); err != nil {
 			log.Printf("[notification] failed to create notification for user %s: %v", p.UserID, err)
+		}
+	}
+
+	// Fan-out to browser push (per-user, respects browser_push prefs).
+	if s.pushService != nil {
+		sentTo := make(map[uuid.UUID]bool)
+		for i := range prefs {
+			p := &prefs[i]
+			if p.Channel != "web_push" {
+				continue
+			}
+			if p.UserID == nil || sentTo[*p.UserID] {
+				continue
+			}
+			if !containsInStringArray(p.Events, event.EventType) {
+				continue
+			}
+			taskURL := ""
+			if event.TaskID != nil {
+				taskURL = "/t/" + event.TaskID.String()
+			}
+			pushPayload := domain.PushPayload{
+				Title: event.Title,
+				Body:  event.Body,
+				URL:   taskURL,
+				Tag: func() string {
+					if event.TaskID != nil {
+						return event.TaskID.String()
+					}
+					return event.EventType
+				}(),
+				Icon:      "/icons/icon-192.png",
+				EventType: event.EventType,
+			}
+			sentTo[*p.UserID] = true
+			userID := *p.UserID
+			go func() {
+				if err := s.pushService.SendToUser(context.Background(), userID, event.WorkspaceID, pushPayload); err != nil {
+					log.Printf("[push] SendToUser error for %s: %v", userID, err)
+				}
+			}()
 		}
 	}
 }

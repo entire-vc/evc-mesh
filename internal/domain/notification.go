@@ -45,3 +45,25 @@ type NotificationEvent struct {
 	Body        string         `json:"body"`
 	Metadata    map[string]any `json:"metadata,omitempty"`
 }
+
+// PushSubscription represents a browser Web Push subscription for a user.
+type PushSubscription struct {
+	ID          uuid.UUID `db:"id"           json:"id"`
+	UserID      uuid.UUID `db:"user_id"      json:"user_id"`
+	Endpoint    string    `db:"endpoint"     json:"endpoint"`
+	P256DHKey   string    `db:"p256dh_key"   json:"p256dh_key"`
+	AuthKey     string    `db:"auth_key"     json:"auth_key"`
+	UserAgent   string    `db:"user_agent"   json:"user_agent"`
+	CreatedAt   time.Time `db:"created_at"   json:"created_at"`
+	LastSeenAt  time.Time `db:"last_seen_at" json:"last_seen_at"`
+}
+
+// PushPayload is the JSON body delivered to the browser via Web Push.
+type PushPayload struct {
+	Title     string `json:"title"`
+	Body      string `json:"body"`
+	URL       string `json:"url"`
+	Tag       string `json:"tag"`
+	Icon      string `json:"icon"`
+	EventType string `json:"event_type"`
+}

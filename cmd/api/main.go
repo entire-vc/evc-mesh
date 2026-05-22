@@ -202,9 +202,16 @@ func main() {
 		service.WithRulesRuleRepo(ruleRepo),
 	)
 
+	// Web Push service — graceful: no-op when VAPID keys are absent.
+	pushSubRepo := postgres.NewPushSubscriptionRepo(db)
+	pushService := service.NewPushService(pushSubRepo, notificationRepo, cfg.VAPID.PublicKey, cfg.VAPID.PrivateKey, cfg.VAPID.Subject)
+	if cfg.VAPID.PublicKey != "" {
+		log.Printf("Web Push VAPID enabled (public key length: %d)", len(cfg.VAPID.PublicKey))
+	}
+
 	// Notification service for in-app push notifications to workspace users.
 	// Created before taskService and commentService so it can be injected as a dependency.
-	notificationService := service.NewNotificationService(notificationRepo)
+	notificationService := service.NewNotificationService(notificationRepo, service.WithPushService(pushService))
 
 	taskService := service.NewTaskService(taskRepo, taskStatusRepo, taskDependencyRepo, activityLogRepo,
 		service.WithCustomFieldService(customFieldService),
@@ -347,6 +354,7 @@ func main() {
 	workspaceMemberHandler := handler.NewWorkspaceMemberHandler(workspaceMemberService)
 	projectMemberHandler := handler.NewProjectMemberHandler(projectMemberService)
 	notificationHandler := handler.NewNotificationHandler(notificationService)
+	pushSubscriptionHandler := handler.NewPushSubscriptionHandler(pushService)
 	autoTransHandler := handler.NewAutoTransitionHandler(autoTransitionSvc)
 	memoryHandler := handler.NewMemoryHandler(memoryService)
 	mentionHandler := handler.NewMentionHandler(mentionService)
@@ -696,6 +704,13 @@ func main() {
 	api.POST("/notifications/mark-read", notificationHandler.MarkRead)
 	api.GET("/notifications/preferences", notificationHandler.GetPreferences)
 	api.PUT("/notifications/preferences", notificationHandler.UpdatePreferences)
+
+	// Web Push subscription routes.
+	// NOTE: /me/push-subscriptions/vapid-key MUST be before /me/push-subscriptions to avoid routing conflict.
+	api.GET("/me/push-subscriptions/vapid-key", pushSubscriptionHandler.GetVAPIDKey)
+	api.GET("/me/push-subscriptions", pushSubscriptionHandler.List)
+	api.POST("/me/push-subscriptions", pushSubscriptionHandler.Subscribe)
+	api.DELETE("/me/push-subscriptions", pushSubscriptionHandler.Unsubscribe)
 
 	// @mention inbox (REST).
 	api.GET("/me/mentions", mentionHandler.List)

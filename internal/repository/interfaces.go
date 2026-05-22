@@ -545,3 +545,12 @@ type AgentSessionRepository interface {
 	GetActive(ctx context.Context, agentID uuid.UUID) (*domain.AgentSession, error)
 	EndStale(ctx context.Context, timeout time.Duration) (int, error)
 }
+
+// PushSubscriptionRepository manages persistence for Web Push subscriptions.
+type PushSubscriptionRepository interface {
+	Upsert(ctx context.Context, sub *domain.PushSubscription) error
+	Delete(ctx context.Context, id uuid.UUID) error
+	DeleteByEndpoint(ctx context.Context, userID uuid.UUID, endpoint string) error
+	ListByUser(ctx context.Context, userID uuid.UUID) ([]domain.PushSubscription, error)
+	GetByEndpoint(ctx context.Context, endpoint string) (*domain.PushSubscription, error)
+}

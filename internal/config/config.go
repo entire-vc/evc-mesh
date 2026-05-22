@@ -21,6 +21,7 @@ type Config struct {
 	Spark     SparkConfig
 	Webhook   WebhookConfig
 	Embedding EmbeddingConfig
+	VAPID     VAPIDConfig
 }
 
 // EmbeddingConfig holds configuration for the optional text embedding provider.
@@ -137,6 +138,14 @@ type WebhookConfig struct {
 	GitHubSecret string
 }
 
+// VAPIDConfig holds Web Push VAPID key material.
+// When PublicKey or PrivateKey is empty, browser push is silently disabled.
+type VAPIDConfig struct {
+	PublicKey  string
+	PrivateKey string
+	Subject    string // mailto: contact address sent in VAPID JWT
+}
+
 // Load reads configuration from environment variables with sensible defaults.
 func Load() *Config {
 	return &Config{
@@ -200,6 +209,11 @@ func Load() *Config {
 			APIKey:     getEnv("EMBEDDING_API_KEY", ""),
 			Dimensions: getEnvInt("EMBEDDING_DIMENSIONS", 0),
 			BatchSize:  getEnvInt("EMBEDDING_BATCH_SIZE", 32),
+		},
+		VAPID: VAPIDConfig{
+			PublicKey:  getEnv("MESH_VAPID_PUBLIC_KEY", ""),
+			PrivateKey: getEnv("MESH_VAPID_PRIVATE_KEY", ""),
+			Subject:    getEnv("MESH_VAPID_SUBJECT", "mailto:rj@entire.vc"),
 		},
 	}
 }
