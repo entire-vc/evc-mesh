@@ -29,7 +29,7 @@ import { useNavigate } from "react-router";
 import { useTaskStore } from "@/stores/task";
 import { useProjectStore } from "@/stores/project";
 import { useCustomFieldStore } from "@/stores/custom-field";
-import { useAgentStore } from "@/stores/agent";
+import { useMemberStore } from "@/stores/member";
 import { useAuthStore } from "@/stores/auth";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { useRecurringStore } from "@/stores/recurring";
@@ -114,7 +114,7 @@ export function TaskPanel({
     useProjectStore();
   const { fields: customFieldDefs, fetchFields: fetchCustomFields } =
     useCustomFieldStore();
-  const { agents, fetchAgents } = useAgentStore();
+  const { projectMembers, fetchProjectMembers } = useMemberStore();
   const { user } = useAuthStore();
   const { currentWorkspace } = useWorkspaceStore();
   const { schedules, fetchSchedules } = useRecurringStore();
@@ -187,12 +187,12 @@ export function TaskPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [effectiveTaskId]);
 
-  // Fetch agents for assignee dropdown
+  // Fetch project members for assignee dropdown
   useEffect(() => {
-    if (currentWorkspace) {
-      void fetchAgents(currentWorkspace.id);
+    if (currentProject) {
+      void fetchProjectMembers(currentProject.id);
     }
-  }, [currentWorkspace, fetchAgents]);
+  }, [currentProject, fetchProjectMembers]);
 
   // Fetch recurring schedules if task belongs to a series
   useEffect(() => {
@@ -706,16 +706,39 @@ export function TaskPanel({
                     className="h-7 text-xs"
                   >
                     <option value="unassigned">Unassigned</option>
-                    {user && (
+                    {user && !projectMembers.some((m) => m.user_id === user.id) && (
                       <option value={`user:${user.id}`}>
                         {user.name} (you)
                       </option>
                     )}
-                    {agents.map((agent) => (
-                      <option key={agent.id} value={`agent:${agent.id}`}>
-                        {agent.name} (agent)
+                    {projectMembers.map((m) => {
+                      if (m.user_id && m.user) {
+                        const isSelf = user?.id === m.user_id;
+                        return (
+                          <option key={m.id} value={`user:${m.user_id}`}>
+                            {m.user.name}{isSelf ? " (you)" : ""} — {m.role}
+                          </option>
+                        );
+                      }
+                      if (m.agent_id) {
+                        const desc = [m.agent_role, m.agent_description].filter(Boolean).join(" · ");
+                        return (
+                          <option key={m.id} value={`agent:${m.agent_id}`}>
+                            {m.agent_name} (agent){desc ? ` — ${desc}` : ""}
+                          </option>
+                        );
+                      }
+                      return null;
+                    })}
+                    {currentTask.assignee_id && !projectMembers.some((m) =>
+                      currentTask.assignee_type === "user"
+                        ? m.user_id === currentTask.assignee_id
+                        : m.agent_id === currentTask.assignee_id
+                    ) && (
+                      <option value={`${currentTask.assignee_type}:${currentTask.assignee_id}`}>
+                        {currentTask.assignee_name ?? currentTask.assignee_id} (not a project member)
                       </option>
-                    ))}
+                    )}
                   </Select>
 
                   {/* Due Date */}
