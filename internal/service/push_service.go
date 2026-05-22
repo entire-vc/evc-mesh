@@ -80,7 +80,7 @@ func (s *pushService) ListByUser(ctx context.Context, userID uuid.UUID) ([]domai
 	return s.subRepo.ListByUser(ctx, userID)
 }
 
-func (s *pushService) SendToUser(ctx context.Context, userID uuid.UUID, workspaceID uuid.UUID, payload domain.PushPayload) error {
+func (s *pushService) SendToUser(ctx context.Context, userID, workspaceID uuid.UUID, payload domain.PushPayload) error {
 	if s.vapidPublic == "" || s.vapidPrivate == "" {
 		return nil
 	}

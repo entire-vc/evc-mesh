@@ -18,8 +18,8 @@ import (
 // ---------------------------------------------------------------------------
 
 type mockPushSubRepo struct {
-	mu   sync.Mutex
-	subs map[string]*domain.PushSubscription // keyed by endpoint
+	mu    sync.Mutex
+	subs  map[string]*domain.PushSubscription // keyed by endpoint
 	calls struct {
 		upsert   int
 		delete   int

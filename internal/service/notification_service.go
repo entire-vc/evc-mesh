@@ -12,7 +12,6 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/repository/postgres"
 )
 
-
 // NotificationService dispatches in-app notifications to users based on their preferences.
 // For agents, existing AgentNotifyService handles delivery.
 type NotificationService interface {
