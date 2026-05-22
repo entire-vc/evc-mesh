@@ -324,7 +324,7 @@ export default function NotificationSettingsPage() {
               <Button
                 size="sm"
                 onClick={() => void handleEnablePush()}
-                disabled={pushLoading || pushPermission === 'denied'}
+                disabled={pushLoading}
               >
                 <Monitor className="mr-1 h-4 w-4" />
                 Enable
