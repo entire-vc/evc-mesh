@@ -248,7 +248,8 @@ func (h *WorkspaceHandler) UploadIcon(c echo.Context) error {
 
 	// Verify PNG magic bytes without consuming the stream.
 	header := make([]byte, 4)
-	if _, err := io.ReadFull(src, header); err != nil {
+	_, err = io.ReadFull(src, header)
+	if err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("could not read file"))
 	}
 	if string(header) != pngMagic {
@@ -258,7 +259,8 @@ func (h *WorkspaceHandler) UploadIcon(c echo.Context) error {
 	reader := io.MultiReader(bytes.NewReader(header), src)
 
 	storageKey := fmt.Sprintf("workspaces/%s/icon.png", wsID)
-	if err := h.storage.Upload(c.Request().Context(), storageKey, reader, file.Size, "image/png"); err != nil {
+	err = h.storage.Upload(c.Request().Context(), storageKey, reader, file.Size, "image/png")
+	if err != nil {
 		return c.JSON(http.StatusInternalServerError, apierror.InternalError("upload failed"))
 	}
 

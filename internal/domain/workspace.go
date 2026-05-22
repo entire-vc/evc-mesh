@@ -20,5 +20,5 @@ type Workspace struct {
 	UpdatedAt         time.Time       `json:"updated_at" db:"updated_at"`
 	// IconStorageKey holds the S3 object key for the workspace icon.
 	// Not exposed in JSON — handlers derive icon_url from this via the redirect endpoint.
-	IconStorageKey    *string         `json:"-" db:"-"`
+	IconStorageKey *string `json:"-" db:"-"`
 }
