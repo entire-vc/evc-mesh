@@ -155,6 +155,18 @@ export interface UserSearchResult {
   is_member: boolean;
 }
 
+export interface WorkspaceInvite {
+  id: string;
+  workspace_id: string;
+  email: string;
+  role: WorkspaceRole;
+  token: string;
+  invited_by: string | null;
+  expires_at: string;
+  accepted_at: string | null;
+  created_at: string;
+}
+
 export interface Project {
   id: string;
   workspace_id: string;
@@ -957,6 +969,29 @@ export interface Memory {
 
 export interface ScoredMemory extends Memory {
   score: number;
+}
+
+export type MemorySourceType = "agent" | "human" | "system";
+
+export type MemoryOrderBy =
+  | "created_at:desc"
+  | "relevance:desc"
+  | "decayed_relevance:desc";
+
+// MemoryFilter is the combined (AND) filter set applied to the memory list/search.
+// All fields are optional; an empty filter returns the unfiltered list.
+export interface MemoryFilter {
+  q?: string;
+  scope?: string; // "all" | "workspace" | "project" | "agent"
+  tags?: string[];
+  tagsMode?: "all" | "any"; // maps to tags= (AND) vs tags_any= (OR)
+  sourceType?: MemorySourceType | "";
+  createdBy?: string; // agent id (only meaningful when sourceType === "agent")
+  since?: string; // YYYY-MM-DD (local date)
+  until?: string; // YYYY-MM-DD (local date)
+  relevanceMin?: number; // 0.0–1.0
+  includeExpired?: boolean;
+  orderBy?: MemoryOrderBy;
 }
 
 // Analytics types

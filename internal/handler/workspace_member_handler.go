@@ -22,9 +22,11 @@ func NewWorkspaceMemberHandler(svc service.WorkspaceMemberService) *WorkspaceMem
 }
 
 // addMemberRequest represents the JSON body for adding a member.
+// When Password is provided and the email is not yet registered, a new user account is created.
 type addMemberRequest struct {
-	Email string `json:"email"`
-	Role  string `json:"role"`
+	Email    string `json:"email"`
+	Role     string `json:"role"`
+	Password string `json:"password,omitempty"`
 }
 
 // updateMemberRoleRequest represents the JSON body for updating a member's role.
@@ -102,7 +104,7 @@ func (h *WorkspaceMemberHandler) Add(c echo.Context) error {
 		}
 	}
 
-	member, err := h.svc.AddMember(c.Request().Context(), wsID, req.Email, req.Role, invitedBy)
+	member, err := h.svc.AddMemberWithCreate(c.Request().Context(), wsID, req.Email, req.Role, req.Password, invitedBy)
 	if err != nil {
 		return handleError(c, err)
 	}

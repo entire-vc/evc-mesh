@@ -31,6 +31,16 @@ const (
 	SourceSystem MemorySourceType = "system"
 )
 
+// IsValid reports whether the source type is one of the recognised values.
+func (s MemorySourceType) IsValid() bool {
+	switch s {
+	case SourceAgent, SourceHuman, SourceSystem:
+		return true
+	default:
+		return false
+	}
+}
+
 // Memory is a persistent, searchable knowledge entry stored by an agent or the system.
 // Memories survive across agent sessions and can be recalled via full-text search.
 // When an embedding provider is configured, the Embedding field holds a dense vector
@@ -75,14 +85,15 @@ type RecallOpts struct {
 	Limit       int
 
 	// Extended filter params (Phase 2 — memory API extensions).
-	TagsAny        []string   // OR filter: memory must contain at least one of these tags
-	CreatedBy      *uuid.UUID // agent_id filter
-	Since          *time.Time // created_at >=
-	Until          *time.Time // created_at <=
-	RelevanceMin   *float32   // relevance >=
-	IncludeExpired bool       // if false, filters expires_at > now() OR expires_at IS NULL
-	OrderBy        string     // "created_at:desc", "relevance:desc", "decayed_relevance:desc"
-	ApplyDecay     bool       // if true, sort by relevance * pow(0.95, days_since_created)
+	TagsAny        []string         // OR filter: memory must contain at least one of these tags
+	CreatedBy      *uuid.UUID       // agent_id filter
+	SourceType     MemorySourceType // "agent" | "human" | "system"; empty means no filter
+	Since          *time.Time       // created_at >=
+	Until          *time.Time       // created_at <=
+	RelevanceMin   *float32         // relevance >=
+	IncludeExpired bool             // if false, filters expires_at > now() OR expires_at IS NULL
+	OrderBy        string           // "created_at:desc", "relevance:desc", "decayed_relevance:desc"
+	ApplyDecay     bool             // if true, sort by relevance * pow(0.95, days_since_created)
 	Offset         int
 }
 
@@ -91,13 +102,14 @@ type MemoryListFilter struct {
 	WorkspaceID    uuid.UUID
 	ProjectID      *uuid.UUID
 	Scope          string
-	Query          string     // full-text search (optional)
-	Tags           []string   // AND filter
-	TagsAny        []string   // OR filter
-	CreatedBy      *uuid.UUID // agent_id filter
-	Since          *time.Time // created_at >=
-	Until          *time.Time // created_at <=
-	RelevanceMin   *float32   // relevance >=
+	Query          string           // full-text search (optional)
+	Tags           []string         // AND filter
+	TagsAny        []string         // OR filter
+	CreatedBy      *uuid.UUID       // agent_id filter
+	SourceType     MemorySourceType // "agent" | "human" | "system"; empty means no filter
+	Since          *time.Time       // created_at >=
+	Until          *time.Time       // created_at <=
+	RelevanceMin   *float32         // relevance >=
 	IncludeExpired bool
 	OrderBy        string // "created_at:desc", "relevance:desc", "decayed_relevance:desc"
 	ApplyDecay     bool   // if true, score = relevance * pow(0.95, days_since)

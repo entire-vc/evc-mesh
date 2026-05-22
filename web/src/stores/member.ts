@@ -4,6 +4,7 @@ import type {
   ProjectMemberWithUser,
   ProjectRole,
   UserSearchResult,
+  WorkspaceInvite,
   WorkspaceMemberWithUser,
   WorkspaceRole,
 } from "@/types";
@@ -16,6 +17,8 @@ interface MemberState {
   isLoadingWorkspaceMembers: boolean;
   isLoadingProjectMembers: boolean;
   isSearching: boolean;
+  workspaceInvites: WorkspaceInvite[];
+  isLoadingInvites: boolean;
 
   // Workspace member actions
   fetchWorkspaceMembers: (workspaceId: string) => Promise<void>;
@@ -24,6 +27,7 @@ interface MemberState {
     workspaceId: string,
     email: string,
     role: WorkspaceRole,
+    password?: string,
   ) => Promise<WorkspaceMemberWithUser>;
   updateWorkspaceMemberRole: (
     workspaceId: string,
@@ -35,6 +39,12 @@ interface MemberState {
   // User search
   searchUsers: (workspaceId: string, query: string) => Promise<void>;
   clearSearchResults: () => void;
+
+  // Invite actions
+  fetchWorkspaceInvites: (workspaceId: string) => Promise<void>;
+  createInvite: (workspaceId: string, email: string, role: WorkspaceRole) => Promise<WorkspaceInvite>;
+  resendInvite: (workspaceId: string, inviteId: string) => Promise<void>;
+  revokeInvite: (workspaceId: string, inviteId: string) => Promise<void>;
 
   // Project member actions
   fetchProjectMembers: (projectId: string) => Promise<void>;
@@ -65,6 +75,8 @@ export const useMemberStore = create<MemberState>((set) => ({
   isLoadingWorkspaceMembers: false,
   isLoadingProjectMembers: false,
   isSearching: false,
+  workspaceInvites: [],
+  isLoadingInvites: false,
 
   fetchWorkspaceMembers: async (workspaceId: string) => {
     set({ isLoadingWorkspaceMembers: true });
@@ -93,10 +105,13 @@ export const useMemberStore = create<MemberState>((set) => ({
     workspaceId: string,
     email: string,
     role: WorkspaceRole,
+    password?: string,
   ): Promise<WorkspaceMemberWithUser> => {
+    const body: Record<string, string> = { email, role };
+    if (password) body.password = password;
     const member = await api<WorkspaceMemberWithUser>(
       `/api/v1/workspaces/${workspaceId}/members`,
-      { method: "POST", body: { email, role } },
+      { method: "POST", body },
     );
     set((state) => ({
       workspaceMembers: [...state.workspaceMembers, member],
@@ -150,6 +165,46 @@ export const useMemberStore = create<MemberState>((set) => ({
 
   clearSearchResults: () => {
     set({ userSearchResults: [] });
+  },
+
+  fetchWorkspaceInvites: async (workspaceId: string) => {
+    set({ isLoadingInvites: true });
+    try {
+      const resp = await api<{ invites: WorkspaceInvite[]; count: number }>(
+        `/api/v1/workspaces/${workspaceId}/invites`,
+      );
+      set({ workspaceInvites: resp?.invites ?? [], isLoadingInvites: false });
+    } catch {
+      set({ isLoadingInvites: false });
+    }
+  },
+
+  createInvite: async (workspaceId: string, email: string, role: WorkspaceRole): Promise<WorkspaceInvite> => {
+    const invite = await api<WorkspaceInvite>(
+      `/api/v1/workspaces/${workspaceId}/invites`,
+      { method: "POST", body: { email, role } },
+    );
+    set((state) => ({
+      workspaceInvites: [invite, ...state.workspaceInvites],
+    }));
+    return invite;
+  },
+
+  resendInvite: async (workspaceId: string, inviteId: string) => {
+    await api(
+      `/api/v1/workspaces/${workspaceId}/invites/${inviteId}/resend`,
+      { method: "POST" },
+    );
+  },
+
+  revokeInvite: async (workspaceId: string, inviteId: string) => {
+    await api(
+      `/api/v1/workspaces/${workspaceId}/invites/${inviteId}`,
+      { method: "DELETE" },
+    );
+    set((state) => ({
+      workspaceInvites: state.workspaceInvites.filter((i) => i.id !== inviteId),
+    }));
   },
 
   fetchProjectMembers: async (projectId: string) => {

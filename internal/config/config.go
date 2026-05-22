@@ -22,6 +22,18 @@ type Config struct {
 	Webhook   WebhookConfig
 	Embedding EmbeddingConfig
 	VAPID     VAPIDConfig
+	Email     EmailConfig
+}
+
+// EmailConfig holds SMTP settings for outbound email (workspace invites, notifications).
+// When Host is empty, email sending is disabled and invite links are logged to stdout instead.
+type EmailConfig struct {
+	Host    string
+	Port    int
+	User    string
+	Pass    string
+	From    string
+	BaseURL string // e.g. https://mesh.entire.host — used to build invite accept links
 }
 
 // EmbeddingConfig holds configuration for the optional text embedding provider.
@@ -214,6 +226,14 @@ func Load() *Config {
 			PublicKey:  getEnv("MESH_VAPID_PUBLIC_KEY", ""),
 			PrivateKey: getEnv("MESH_VAPID_PRIVATE_KEY", ""),
 			Subject:    getEnv("MESH_VAPID_SUBJECT", "mailto:rj@entire.vc"),
+		},
+		Email: EmailConfig{
+			Host:    getEnv("SMTP_HOST", ""),
+			Port:    getEnvInt("SMTP_PORT", 587),
+			User:    getEnv("SMTP_USER", ""),
+			Pass:    getEnv("SMTP_PASSWORD", ""),
+			From:    getEnv("SMTP_FROM", "noreply@mesh.entire.host"),
+			BaseURL: getEnv("MESH_BASE_URL", "http://localhost:5173"),
 		},
 	}
 }
