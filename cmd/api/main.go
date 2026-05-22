@@ -22,6 +22,7 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/embedding"
 	"github.com/entire-vc/evc-mesh/internal/eventbus"
 	"github.com/entire-vc/evc-mesh/internal/handler"
+	"github.com/entire-vc/evc-mesh/internal/integration/teamrelay"
 	mw "github.com/entire-vc/evc-mesh/internal/middleware"
 	"github.com/entire-vc/evc-mesh/internal/repository/postgres"
 	"github.com/entire-vc/evc-mesh/internal/service"
@@ -160,6 +161,8 @@ func main() {
 	// Webhook service is created before taskService so it can be injected for agent wakeup dispatch.
 	// SlackService is co-injected so that every Dispatch call also notifies Slack when configured.
 	webhookService := service.NewWebhookService(webhookRepo, service.WithSlackService(slackService))
+
+	projectIntegrationRepo := postgres.NewProjectIntegrationRepo(db)
 
 	agentActLogRepo := postgres.NewAgentActivityLogRepo(db)
 	agentService := service.NewAgentService(agentRepo, activityLogRepo, workspaceRepo)
@@ -306,6 +309,13 @@ func main() {
 		artifactService = service.NewArtifactService(artifactRepo, s3Client, activityLogRepo)
 	}
 
+	// Wire Team Relay publisher into artifact service (best-effort; fires on upload).
+	projectIntegrationService := service.NewProjectIntegrationService(projectIntegrationRepo)
+	relayClient := teamrelay.NewClient(projectIntegrationRepo, taskRepo, projectRepo)
+	if asc, ok := artifactService.(service.ArtifactServiceConfigurable); ok {
+		asc.SetRelayPublisher(relayClient)
+	}
+
 	// 6a. Connect to NATS and Redis for the event bus (graceful: continue without if unavailable).
 	var eb *eventbus.EventBus
 	ebCfg := eventbus.EventBusConfig{
@@ -366,6 +376,7 @@ func main() {
 	autoTransHandler := handler.NewAutoTransitionHandler(autoTransitionSvc)
 	memoryHandler := handler.NewMemoryHandler(memoryService)
 	mentionHandler := handler.NewMentionHandler(mentionService)
+	projectIntegrationHandler := handler.NewProjectIntegrationHandler(projectIntegrationService)
 
 	// 8. Create Echo instance with global middleware.
 	e := echo.New()
@@ -643,6 +654,13 @@ func main() {
 	api.POST("/workspaces/:ws_id/integrations", integrationHandler.Configure, rbac(mw.PermManageWebhooks))
 	api.PATCH("/integrations/:int_id", integrationHandler.Update, rbac(mw.PermManageWebhooks))
 	api.DELETE("/integrations/:int_id", integrationHandler.Delete, rbac(mw.PermManageWebhooks))
+
+	// Project integrations (Team Relay).
+	// NOTE: /integrations/team-relay MUST be registered before /integrations to avoid routing ambiguity.
+	api.GET("/projects/:proj_id/integrations/team-relay", projectIntegrationHandler.GetTeamRelay, projAccess)
+	api.PATCH("/projects/:proj_id/integrations/team-relay", projectIntegrationHandler.UpsertTeamRelay, projAccess, rbac(mw.PermManageWebhooks))
+	api.DELETE("/projects/:proj_id/integrations/team-relay", projectIntegrationHandler.DeleteTeamRelay, projAccess, rbac(mw.PermManageWebhooks))
+	api.GET("/projects/:proj_id/integrations", projectIntegrationHandler.List, projAccess)
 
 	// Analytics routes.
 	api.GET("/workspaces/:ws_id/analytics", analyticsHandler.GetMetrics)

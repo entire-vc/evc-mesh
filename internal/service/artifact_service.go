@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"time"
 
 	"github.com/google/uuid"
@@ -25,9 +26,10 @@ type StorageClient interface {
 }
 
 type artifactService struct {
-	artifactRepo repository.ArtifactRepository
-	storage      StorageClient
-	activityRepo repository.ActivityLogRepository
+	artifactRepo   repository.ArtifactRepository
+	storage        StorageClient
+	activityRepo   repository.ActivityLogRepository
+	relayPublisher RelayPublisher
 }
 
 // NewArtifactService returns a new ArtifactService backed by the given repositories and storage.
@@ -41,6 +43,12 @@ func NewArtifactService(
 		storage:      storage,
 		activityRepo: activityRepo,
 	}
+}
+
+// SetRelayPublisher wires an optional Team Relay publisher into the artifact service.
+// The publisher is called asynchronously after each successful upload.
+func (s *artifactService) SetRelayPublisher(p RelayPublisher) {
+	s.relayPublisher = p
 }
 
 // Upload stores a file in S3 and creates an artifact record.
@@ -73,6 +81,20 @@ func (s *artifactService) Upload(ctx context.Context, input UploadArtifactInput)
 		// Best-effort cleanup: try to remove the uploaded file.
 		_ = s.storage.Delete(ctx, storageKey)
 		return nil, err
+	}
+
+	// Fire-and-forget relay publish (best-effort, never blocks the caller).
+	if s.relayPublisher != nil {
+		rp := s.relayPublisher
+		art := *artifact
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("teamrelay publish panic: %v", r)
+				}
+			}()
+			_ = rp.Publish(context.Background(), art.TaskID, art.Name, nil, art.MimeType)
+		}()
 	}
 
 	return artifact, nil
