@@ -339,8 +339,8 @@ export function CommentList({ taskId }: CommentListProps) {
   );
 
   // Sort replies newest-first too
-  for (const key of Object.keys(repliesByParent)) {
-    repliesByParent[key].sort(byNewestFirst);
+  for (const replies of Object.values(repliesByParent)) {
+    replies.sort(byNewestFirst);
   }
 
   const replyToComment = replyTo
