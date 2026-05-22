@@ -195,10 +195,15 @@ export function SessionDashboardPage() {
 		};
 	}, [currentWorkspace?.id, fetchStatus]);
 
-	const onlineCount = agents.filter((a) => a.status === "online").length;
-	const busyCount = agents.filter((a) => a.status === "busy").length;
+	const effectiveStatus = (a: AgentStatusEntry) =>
+		a.is_stale ? "offline" : a.status;
+	const onlineCount = agents.filter(
+		(a) => effectiveStatus(a) === "online",
+	).length;
+	const busyCount = agents.filter((a) => effectiveStatus(a) === "busy").length;
 	const offlineCount = agents.filter(
-		(a) => a.status === "offline" || a.status === "error",
+		(a) =>
+			effectiveStatus(a) === "offline" || effectiveStatus(a) === "error",
 	).length;
 
 	return (
