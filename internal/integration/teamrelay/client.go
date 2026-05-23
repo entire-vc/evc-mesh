@@ -1,9 +1,14 @@
 package teamrelay
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"log"
+	"net/http"
+	"net/url"
 	"os"
 	"time"
 
@@ -12,6 +17,20 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/repository"
 )
+
+// relayHTTPClient is a package-level HTTP client shared across transport calls.
+// 30 s timeout; relay is local/private so this is generous.
+var relayHTTPClient = &http.Client{Timeout: 30 * time.Second}
+
+// uploadResponse is the success body returned by POST /v1/web/shares/{slug}/upload.
+type uploadResponse struct {
+	OK         bool   `json:"ok"`
+	ShareID    string `json:"share_id"`
+	Path       string `json:"path"`
+	SizeBytes  int64  `json:"size_bytes"`
+	ModifiedAt string `json:"modified_at"`
+	PublicURL  string `json:"public_url"`
+}
 
 // Publisher is the interface consumed by the artifact upload hook.
 type Publisher interface {
@@ -75,19 +94,62 @@ func (c *client) Publish(ctx context.Context, taskID uuid.UUID, artifactName str
 		return nil
 	}
 
-	// Transport contract LOCKED 2026-05-22 (A1/B1, relay impl = Gandalf b375d2ee):
-	//   POST /v1/web/shares/{share_slug}/upload?path=<urlencoded filePath>&source=mesh-artifact
-	//   Auth: header X-Agent-Key: tr_agent_<48hex>  (B1 per-share key, 57 chars; relay sha256-hashes + revokes via share_agent_keys.revoked_at)
-	//   Body: raw bytes; Content-Type: <mime>; optional X-Source: mesh-artifact
-	//   200 → {ok, share_id, path, size_bytes, modified_at, public_url?}
-	//   On 401/403 (key revoked): log + flag integration, never crash (key is static — no auto-refetch).
-	// Still gated by MESH_TEAMRELAY_TRANSPORT_ENABLED above; real HTTP wired in follow-up once relay /upload ships.
 	return transport(ctx, settings.ShareSlug, filePath, content, contentType, pi.AgentKey)
 }
 
-// transport is the real outbound HTTP call — left as stub for Phase 1 (transport gated off).
-// shareSlug + agentKey are passed through for the eventual POST /v1/web/shares/{shareSlug}/upload call.
-func transport(_ context.Context, _, filePath string, _ []byte, _, _ string) error {
-	log.Printf("teamrelay: transport stub called for path %s — not yet implemented", filePath)
-	return nil
+// transport POSTs artifact bytes to the relay upload endpoint.
+// Contract (locked 2026-05-22, relay PR #2 commit 7b3f395):
+//
+//	POST /v1/web/shares/{shareSlug}/upload?path=<urlenc>&source=mesh-artifact
+//	X-Agent-Key: tr_agent_<48hex>
+//	Content-Type: <mime>
+//	Body: raw bytes
+//	200 → {ok, share_id, path, size_bytes, modified_at, public_url?}
+//	401/403 → key revoked; log + return nil (no retry — key is static)
+func transport(ctx context.Context, shareSlug, filePath string, content []byte, contentType, agentKey string) error {
+	baseURL := os.Getenv("MESH_TEAMRELAY_RELAY_URL")
+	if baseURL == "" {
+		log.Printf("teamrelay: MESH_TEAMRELAY_RELAY_URL not set — cannot upload %s", filePath)
+		return nil
+	}
+
+	endpoint := fmt.Sprintf("%s/v1/web/shares/%s/upload?path=%s&source=mesh-artifact",
+		baseURL,
+		url.PathEscape(shareSlug),
+		url.QueryEscape(filePath),
+	)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(content))
+	if err != nil {
+		log.Printf("teamrelay: failed to build request for %s: %v", filePath, err)
+		return err
+	}
+	req.Header.Set("Content-Type", contentType)
+	req.Header.Set("X-Agent-Key", agentKey)
+	req.Header.Set("X-Source", "mesh-artifact")
+
+	resp, err := relayHTTPClient.Do(req)
+	if err != nil {
+		log.Printf("teamrelay: HTTP error uploading %s: %v", filePath, err)
+		return err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+
+	switch resp.StatusCode {
+	case http.StatusOK:
+		var result uploadResponse
+		if jsonErr := json.Unmarshal(body, &result); jsonErr == nil && result.OK {
+			log.Printf("teamrelay: uploaded %s → relay path=%s size=%d", filePath, result.Path, result.SizeBytes)
+		} else {
+			log.Printf("teamrelay: uploaded %s (relay response: %s)", filePath, body)
+		}
+		return nil
+	case http.StatusUnauthorized, http.StatusForbidden:
+		log.Printf("teamrelay: agent key rejected by relay (status %d) for share %s — integration key may be revoked", resp.StatusCode, shareSlug)
+		return nil
+	default:
+		log.Printf("teamrelay: unexpected relay status %d uploading %s: %s", resp.StatusCode, filePath, body)
+		return fmt.Errorf("relay upload returned status %d", resp.StatusCode)
+	}
 }

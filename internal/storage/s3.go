@@ -82,6 +82,16 @@ func (s *S3Client) rewriteURL(u *url.URL) string {
 	return u.String()
 }
 
+// Download fetches an object from the bucket and returns a reader for its contents.
+// Caller must close the returned ReadCloser.
+func (s *S3Client) Download(ctx context.Context, key string) (io.ReadCloser, error) {
+	obj, err := s.client.GetObject(ctx, s.bucket, key, minio.GetObjectOptions{})
+	if err != nil {
+		return nil, err
+	}
+	return obj, nil
+}
+
 // Delete removes an object from the bucket.
 func (s *S3Client) Delete(ctx context.Context, key string) error {
 	return s.client.RemoveObject(ctx, s.bucket, key, minio.RemoveObjectOptions{})

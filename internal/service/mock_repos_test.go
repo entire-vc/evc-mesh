@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -1325,6 +1326,19 @@ func (m *MockStorageClient) Delete(_ context.Context, key string) error {
 	defer m.mu.Unlock()
 	delete(m.objects, key)
 	return nil
+}
+
+func (m *MockStorageClient) Download(_ context.Context, key string) (io.ReadCloser, error) {
+	if m.errToReturn != nil {
+		return nil, m.errToReturn
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	data, ok := m.objects[key]
+	if !ok {
+		return nil, fmt.Errorf("object not found: %s", key)
+	}
+	return io.NopCloser(bytes.NewReader(data)), nil
 }
 
 // ---------------------------------------------------------------------------
