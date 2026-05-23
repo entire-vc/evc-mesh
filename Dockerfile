@@ -9,7 +9,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /bin/mesh-ap
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /bin/mesh-mcp ./cmd/mcp
 
 # Stage 2: Build frontend
-FROM node:20-alpine AS web-builder
+FROM node:22-alpine AS web-builder
 RUN corepack enable
 WORKDIR /app
 COPY web/package.json web/pnpm-lock.yaml ./
