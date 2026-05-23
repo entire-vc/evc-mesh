@@ -1,0 +1,14 @@
+# .trivyignore — accepted / triaged Trivy findings for evc-mesh
+#
+# The trivy CI gate (.github/workflows/trivy.yml) fails the build on any
+# CRITICAL or HIGH vulnerability that HAS a fix available (ignore-unfixed: true).
+#
+# Add a CVE here ONLY after a deliberate accept-risk decision, and ALWAYS
+# document it inline: CVE → why it is not actionable/exploitable for us →
+# who accepted it → date. Revisit on each dependency bump.
+#
+# Format (one finding ID per line):
+#   # CVE-YYYY-NNNNN — <reason not exploitable / no adoptable fix>. Accepted by <name> <date>.
+#   CVE-YYYY-NNNNN
+#
+# (empty — first CI run establishes the baseline)
