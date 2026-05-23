@@ -2,6 +2,11 @@
 
 Mesh can send HTTP callbacks to external services when events occur. Webhooks use HMAC-SHA256 signatures for payload verification.
 
+> **Looking for the inbound GitHub receiver** (GitHub → Mesh, auto-moves a task
+> when its PR merges)? That is a different surface — see
+> [`integrations/github-webhook.md`](./integrations/github-webhook.md). This file
+> covers **outbound** webhooks (Mesh → your service).
+
 ## Overview
 
 Webhooks are configured per workspace and deliver events to a specified URL. Each webhook can subscribe to specific event types or receive all events.
