@@ -287,7 +287,14 @@ func (s *autoTransitionService) resolveTargetFromRule(ctx context.Context, proje
 // findTargetStatus returns the first status in a project matching any of the given
 // categories (in priority order). Returns uuid.Nil if none found.
 func (s *autoTransitionService) findTargetStatus(ctx context.Context, projectID uuid.UUID, categories ...domain.StatusCategory) (uuid.UUID, error) {
-	statuses, err := s.statusRepo.ListByProject(ctx, projectID)
+	return findStatusIDByCategory(ctx, s.statusRepo, projectID, categories...)
+}
+
+// findStatusIDByCategory returns the first status in a project matching any of the
+// given categories (in priority order). Returns uuid.Nil if none found. Shared by
+// the auto-transition and comment-triage enforcement paths.
+func findStatusIDByCategory(ctx context.Context, statusRepo repository.TaskStatusRepository, projectID uuid.UUID, categories ...domain.StatusCategory) (uuid.UUID, error) {
+	statuses, err := statusRepo.ListByProject(ctx, projectID)
 	if err != nil {
 		return uuid.Nil, err
 	}

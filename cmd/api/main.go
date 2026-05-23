@@ -254,6 +254,7 @@ func main() {
 		service.WithCommentProjectRepo(projectRepo),
 		service.WithCommentContextCacheInvalidator(ctxCacheSvc),
 		service.WithCommentNotificationService(notificationService),
+		service.WithCommentTaskService(taskService),
 	)
 	depService := service.NewTaskDependencyService(taskDependencyRepo, taskRepo, activityLogRepo)
 	activityLogService := service.NewActivityLogService(activityLogRepo)
