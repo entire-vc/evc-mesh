@@ -23,6 +23,8 @@ type StorageClient interface {
 	Upload(ctx context.Context, key string, reader io.Reader, size int64, contentType string) error
 	GetPresignedURL(ctx context.Context, key string, expiry time.Duration) (string, error)
 	Delete(ctx context.Context, key string) error
+	// Download fetches object contents. Caller must close the returned ReadCloser.
+	Download(ctx context.Context, key string) (io.ReadCloser, error)
 }
 
 type artifactService struct {
@@ -87,13 +89,29 @@ func (s *artifactService) Upload(ctx context.Context, input UploadArtifactInput)
 	if s.relayPublisher != nil {
 		rp := s.relayPublisher
 		art := *artifact
+		stor := s.storage
 		go func() {
 			defer func() {
 				if r := recover(); r != nil {
 					log.Printf("teamrelay publish panic: %v", r)
 				}
 			}()
-			_ = rp.Publish(context.Background(), art.TaskID, art.Name, nil, art.MimeType)
+			var content []byte
+			if stor != nil {
+				rc, dlErr := stor.Download(context.Background(), art.StorageKey)
+				if dlErr != nil {
+					log.Printf("teamrelay: failed to fetch artifact %s from storage: %v — skipping relay publish", art.StorageKey, dlErr)
+					return
+				}
+				defer rc.Close()
+				var readErr error
+				content, readErr = io.ReadAll(rc)
+				if readErr != nil {
+					log.Printf("teamrelay: failed to read artifact %s from storage: %v — skipping relay publish", art.StorageKey, readErr)
+					return
+				}
+			}
+			_ = rp.Publish(context.Background(), art.TaskID, art.Name, content, art.MimeType)
 		}()
 	}
 
