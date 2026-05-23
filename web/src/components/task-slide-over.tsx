@@ -11,7 +11,6 @@ import {
   Bot,
   Check,
   Clock,
-  Copy,
   ExternalLink,
   Hourglass,
   Link,
@@ -101,7 +100,7 @@ export function TaskSlideOver({
   const backTask = useTaskStore((state) =>
     backTaskId ? state.tasksById[backTaskId] ?? null : null,
   );
-  const { fetchTask, updateTask, moveTask, duplicateTask } = useTaskStore();
+  const { fetchTask, updateTask, moveTask } = useTaskStore();
   const { statuses, fetchStatuses, currentProject } = useProjectStore();
   const { fields: customFieldDefs, fetchFields: fetchCustomFields } =
     useCustomFieldStore();
@@ -349,22 +348,6 @@ export function TaskSlideOver({
     }
   };
 
-  const handleDuplicate = useCallback(async () => {
-    if (!currentTask) return;
-    try {
-      const newTask = await duplicateTask(currentTask);
-      onTaskUpdated?.();
-      toast.success("Task duplicated");
-      if (newTask?.id) {
-        await fetchTask(newTask.id);
-      }
-    } catch (err) {
-      toast.error(
-        err instanceof Error ? err.message : "Failed to duplicate task",
-      );
-    }
-  }, [currentTask, duplicateTask, fetchTask, onTaskUpdated]);
-
   const handleHoursSave = useCallback(async () => {
     setEditingHours(false);
     if (!currentTask) return;
@@ -523,14 +506,6 @@ export function TaskSlideOver({
           <div className="flex shrink-0 items-center gap-2">
             {currentTask && (
               <>
-                <button
-                  type="button"
-                  onClick={() => void handleDuplicate()}
-                  className="flex items-center gap-1 rounded p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                  title="Duplicate task"
-                >
-                  <Copy className="h-4 w-4" />
-                </button>
                 <a
                   href={`/t/${currentTask.id}`}
                   target="_blank"

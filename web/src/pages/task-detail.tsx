@@ -12,7 +12,6 @@ import {
   ArrowLeft,
   Bot,
   Clock,
-  Copy,
   FolderKanban,
   Hourglass,
   Link,
@@ -79,8 +78,7 @@ export function TaskDetailPage() {
   const currentTask = useTaskStore((state) =>
     taskId ? state.tasksById[taskId] ?? null : null,
   );
-  const { fetchTask, updateTask, moveTask, moveToProject, duplicateTask } =
-    useTaskStore();
+  const { fetchTask, updateTask, moveTask, moveToProject } = useTaskStore();
   const { projects, statuses, fetchStatuses } = useProjectStore();
   const { fields: customFieldDefs, fetchFields: fetchCustomFields } =
     useCustomFieldStore();
@@ -262,16 +260,6 @@ export function TaskDetailPage() {
     }
   };
 
-  const handleDuplicate = useCallback(async () => {
-    if (!currentTask) return;
-    const newTask = await duplicateTask(currentTask);
-    if (newTask?.id) {
-      navigate(
-        `/w/${wsSlug}/p/${projectSlug}/t/${newTask.id}`,
-      );
-    }
-  }, [currentTask, duplicateTask, navigate, wsSlug, projectSlug]);
-
   // Focus label input when adding starts
   useEffect(() => {
     if (addingLabel) {
@@ -381,14 +369,6 @@ export function TaskDetailPage() {
         >
           <ArrowLeft className="h-4 w-4" />
           {fromTriage ? "Back to triage" : "Back to board"}
-        </Button>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => void handleDuplicate()}
-        >
-          <Copy className="mr-1 h-3.5 w-3.5" />
-          Duplicate
         </Button>
         <Button
           variant="outline"
