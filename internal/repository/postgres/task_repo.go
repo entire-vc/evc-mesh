@@ -16,6 +16,7 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/repository"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
+	pkgmetrics "github.com/entire-vc/evc-mesh/pkg/metrics"
 	"github.com/entire-vc/evc-mesh/pkg/pagination"
 )
 
@@ -186,6 +187,7 @@ func (r *TaskRepo) Create(ctx context.Context, task *domain.Task) error {
 	if labels == nil {
 		labels = pq.StringArray{}
 	}
+	dbStart := time.Now()
 	_, err := r.db.ExecContext(ctx, q,
 		task.ID, task.ProjectID, task.StatusID, task.Title, task.Description,
 		task.AssigneeID, task.AssigneeType, task.Priority, task.ParentTaskID, task.Position,
@@ -193,6 +195,7 @@ func (r *TaskRepo) Create(ctx context.Context, task *domain.Task) error {
 		task.CreatedBy, task.CreatedByType, task.CreatedAt, task.UpdatedAt, task.CompletedAt,
 		task.RecurringScheduleID, task.RecurringInstanceNumber,
 	)
+	pkgmetrics.RecordDBQuery("task.create", time.Since(dbStart))
 	return err
 }
 
@@ -200,7 +203,10 @@ func (r *TaskRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.Task, err
 	q := `SELECT ` + taskBaseColsNoAlias + `, ` + taskComputedCols + `
 		FROM tasks WHERE id = $1 AND deleted_at IS NULL`
 	var row taskRow
-	if err := r.db.GetContext(ctx, &row, q, id); err != nil {
+	dbStart := time.Now()
+	err := r.db.GetContext(ctx, &row, q, id)
+	pkgmetrics.RecordDBQuery("task.get", time.Since(dbStart))
+	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
@@ -229,6 +235,7 @@ func (r *TaskRepo) Update(ctx context.Context, task *domain.Task) error {
 	if labels == nil {
 		labels = pq.StringArray{}
 	}
+	dbStart := time.Now()
 	res, err := r.db.ExecContext(ctx, q,
 		task.ID, task.StatusID, task.Title, task.Description,
 		task.AssigneeID, task.AssigneeType, task.Priority,
@@ -237,6 +244,7 @@ func (r *TaskRepo) Update(ctx context.Context, task *domain.Task) error {
 		task.UpdatedAt, task.CompletedAt,
 		task.RecurringScheduleID, task.RecurringInstanceNumber,
 	)
+	pkgmetrics.RecordDBQuery("task.update", time.Since(dbStart))
 	if err != nil {
 		return err
 	}
@@ -250,7 +258,9 @@ func (r *TaskRepo) Update(ctx context.Context, task *domain.Task) error {
 // Delete performs a soft delete by setting deleted_at.
 func (r *TaskRepo) Delete(ctx context.Context, id uuid.UUID) error {
 	const q = `UPDATE tasks SET deleted_at = NOW() WHERE id = $1 AND deleted_at IS NULL`
+	dbStart := time.Now()
 	res, err := r.db.ExecContext(ctx, q, id)
+	pkgmetrics.RecordDBQuery("task.delete", time.Since(dbStart))
 	if err != nil {
 		return err
 	}
@@ -359,16 +369,22 @@ func (r *TaskRepo) List(ctx context.Context, projectID uuid.UUID, filter reposit
 	// Count
 	countQ := fmt.Sprintf(`SELECT COUNT(*) FROM tasks %s`, where)
 	var totalCount int
+	dbStart := time.Now()
 	if err := r.db.GetContext(ctx, &totalCount, countQ, args...); err != nil {
+		pkgmetrics.RecordDBQuery("task.list_count", time.Since(dbStart))
 		return nil, err
 	}
+	pkgmetrics.RecordDBQuery("task.list_count", time.Since(dbStart))
 
 	// Data — use enriched select to populate computed fields in a single query.
 	dataQ := fmt.Sprintf(`SELECT `+taskBaseColsNoAlias+`, `+taskComputedCols+` FROM tasks %s %s %s`, where, order, paginationClause(pg))
 	var rows []taskRow
+	dbStart = time.Now()
 	if err := r.db.SelectContext(ctx, &rows, dataQ, args...); err != nil {
+		pkgmetrics.RecordDBQuery("task.list", time.Since(dbStart))
 		return nil, err
 	}
+	pkgmetrics.RecordDBQuery("task.list", time.Since(dbStart))
 
 	return pagination.NewPage(taskRowsToSlice(rows), totalCount, pg), nil
 }

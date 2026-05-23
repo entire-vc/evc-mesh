@@ -3,6 +3,7 @@ package middleware
 import (
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -147,6 +148,7 @@ func RateLimit(cfg RateLimitConfig) echo.MiddlewareFunc {
 			if delay > 0 {
 				// Cancel the reservation — we are not going to wait.
 				reservation.Cancel()
+				RecordRateLimitHit(keyTypeFromKey(key))
 				// Retry-After: seconds until the next token is available.
 				retryAfter := int(delay.Seconds()) + 1
 				return tooManyRequestsJSON(c, retryAfter)
@@ -177,6 +179,19 @@ func RateLimitKeyByActor(c echo.Context) string {
 }
 
 // --- internal helpers ---
+
+// keyTypeFromKey extracts the rate-limit key type (user, agent, ip) from a
+// rate-limit key string. Used to label Prometheus rate-limit hit counters.
+func keyTypeFromKey(key string) string {
+	switch {
+	case strings.HasPrefix(key, "user:"):
+		return "user"
+	case strings.HasPrefix(key, "agent:"):
+		return "agent"
+	default:
+		return "ip"
+	}
+}
 
 func tooManyRequestsJSON(c echo.Context, retryAfterSecs int) error {
 	if retryAfterSecs > 0 {
