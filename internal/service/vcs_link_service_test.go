@@ -145,6 +145,9 @@ func (r *fakeTaskRepo) MoveToProject(context.Context, uuid.UUID, uuid.UUID, uuid
 	return nil
 }
 func (r *fakeTaskRepo) ForceReleaseCheckout(context.Context, uuid.UUID) error { return nil }
+func (r *fakeTaskRepo) ListByUserActive(context.Context, uuid.UUID, uuid.UUID, pagination.Params) (*pagination.Page[domain.Task], error) {
+	return nil, nil
+}
 
 // fakeStatusRepo holds task_status rows per project.
 type fakeStatusRepo struct {
@@ -252,6 +255,12 @@ func (t *fakeTaskService) ExtendCheckout(context.Context, uuid.UUID, uuid.UUID, 
 func (t *fakeTaskService) MoveToProject(context.Context, uuid.UUID, uuid.UUID) (*domain.Task, error) {
 	return nil, nil
 }
+func (t *fakeTaskService) GetStatusByID(context.Context, uuid.UUID) (*domain.TaskStatus, error) {
+	return nil, nil
+}
+func (t *fakeTaskService) GetUserActiveTasks(context.Context, uuid.UUID, uuid.UUID, pagination.Params) (*pagination.Page[domain.Task], error) {
+	return nil, nil
+}
 
 // fakeCommentService captures Create calls so tests can assert on the comment
 // body and authorship.
@@ -266,6 +275,12 @@ func (c *fakeCommentService) Create(_ context.Context, comment *domain.Comment) 
 func (c *fakeCommentService) Update(context.Context, *domain.Comment) error { return nil }
 func (c *fakeCommentService) Delete(context.Context, uuid.UUID) error       { return nil }
 func (c *fakeCommentService) ListByTask(context.Context, uuid.UUID, repository.CommentFilter, pagination.Params) (*pagination.Page[domain.Comment], error) {
+	return nil, nil
+}
+func (c *fakeCommentService) ListByAuthor(context.Context, uuid.UUID, repository.CommentViewFilter) (*domain.CommentViewPage, error) {
+	return nil, nil
+}
+func (c *fakeCommentService) ListRecentByWorkspace(context.Context, uuid.UUID, repository.CommentViewFilter) (*domain.CommentViewPage, error) {
 	return nil, nil
 }
 
