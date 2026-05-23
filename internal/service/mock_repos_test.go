@@ -1412,3 +1412,92 @@ func (m *MockRulesService) GetWorkflowTemplates(_ context.Context, _ uuid.UUID) 
 func (m *MockRulesService) SetWorkflowTemplates(_ context.Context, _ uuid.UUID, _ map[string]domain.WorkflowRulesConfig) error {
 	panic("MockRulesService.SetWorkflowTemplates not implemented")
 }
+
+// ---------------------------------------------------------------------------
+// MockUserRepository
+// ---------------------------------------------------------------------------
+
+// MockUserRepository implements repository.UserRepository. Users are keyed by
+// "<workspaceID>/<username>" for GetByUsername lookups.
+type MockUserRepository struct {
+	mu          sync.RWMutex
+	byUsername  map[string]*domain.User
+	errToReturn error
+}
+
+func NewMockUserRepository() *MockUserRepository {
+	return &MockUserRepository{byUsername: make(map[string]*domain.User)}
+}
+
+// AddUser registers a user resolvable by GetByUsername in the given workspace.
+func (m *MockUserRepository) AddUser(workspaceID uuid.UUID, u *domain.User) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.byUsername[workspaceID.String()+"/"+u.Username] = u
+}
+
+func (m *MockUserRepository) GetByUsername(_ context.Context, workspaceID uuid.UUID, username string) (*domain.User, error) {
+	if m.errToReturn != nil {
+		return nil, m.errToReturn
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	u, ok := m.byUsername[workspaceID.String()+"/"+username]
+	if !ok {
+		return nil, nil
+	}
+	return u, nil
+}
+
+func (m *MockUserRepository) Create(_ context.Context, _ *domain.User) error {
+	return m.errToReturn
+}
+
+func (m *MockUserRepository) GetByID(_ context.Context, _ uuid.UUID) (*domain.User, error) {
+	return nil, m.errToReturn
+}
+
+func (m *MockUserRepository) GetByEmail(_ context.Context, _ string) (*domain.User, error) {
+	return nil, m.errToReturn
+}
+
+func (m *MockUserRepository) Update(_ context.Context, _ *domain.User) error {
+	return m.errToReturn
+}
+
+func (m *MockUserRepository) SearchUsers(_ context.Context, _ string, _ int) ([]domain.User, error) {
+	return nil, m.errToReturn
+}
+
+// ---------------------------------------------------------------------------
+// fakeTaskMover — minimal TaskService double for comment-triage tests
+// ---------------------------------------------------------------------------
+
+// moveCall records a single MoveTask invocation.
+type moveCall struct {
+	taskID uuid.UUID
+	input  MoveTaskInput
+}
+
+// fakeTaskMover satisfies the TaskService interface by embedding it (all unused
+// methods are nil and would panic if called). Only MoveTask is implemented — it
+// records calls so tests can assert the auto-triage move happened.
+type fakeTaskMover struct {
+	TaskService
+	mu    sync.Mutex
+	moves []moveCall
+	err   error
+}
+
+func (f *fakeTaskMover) MoveTask(_ context.Context, taskID uuid.UUID, input MoveTaskInput) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.moves = append(f.moves, moveCall{taskID: taskID, input: input})
+	return f.err
+}
+
+func (f *fakeTaskMover) calls() []moveCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]moveCall(nil), f.moves...)
+}

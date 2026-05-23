@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"fmt"
+	"log"
 	"regexp"
 	"strings"
 
@@ -18,6 +20,26 @@ import (
 // Slug pattern mirrors agents.slug and users.username: starts/ends with alnum, middle may contain hyphens, 2-40 chars total.
 // The leading boundary allows start-of-string, whitespace, or open bracket/paren/brace.
 var mentionRegex = regexp.MustCompile(`(?:^|[\s(\[{])@([a-z0-9][a-z0-9-]{0,38}[a-z0-9])\b`)
+
+// blockingMarkerRegex matches the "❓ **Blocking @<user>**" workflow marker
+// (CLAUDE-workflow.md §0b) anchored to the start of a line. It tolerates the optional
+// ❓ emoji and markdown bold (`**`), and is case-insensitive/multiline.
+//   - The slug subpattern is identical to mentionRegex (and the username/slug DB
+//     constraint): starts/ends with alnum, hyphens allowed in the middle, no underscore.
+//   - "ℹ️ **FYI @user**" has no "Blocking" keyword → never matches (FYI is a no-op).
+//   - A quoted line ("> ❓ **Blocking @x**") is NOT matched: after `^\s*`, the `>` is
+//     neither whitespace nor one of ❓/`*`/`Blocking`, so the anchor fails.
+var blockingMarkerRegex = regexp.MustCompile(`(?im)^\s*(?:❓\s*)?\*{0,2}\s*Blocking\s+@([a-z0-9][a-z0-9-]{0,38}[a-z0-9])\b`)
+
+// systemActorID is the author_id used for system-generated comments. uuid.Nil is safe:
+// comments.author_id is NOT NULL but carries no foreign key, and the author_name SELECT
+// resolves system comments to NULL (rendered as "System" in the UI) regardless of value.
+var systemActorID = uuid.Nil
+
+// hasBlockingMarker reports whether body contains a "❓ **Blocking @user**" marker.
+func hasBlockingMarker(body string) bool {
+	return blockingMarkerRegex.MatchString(body)
+}
 
 // extractMentionSlugs returns unique lowercase slugs found in body, preserving order.
 func extractMentionSlugs(body string) []string {
@@ -55,6 +77,7 @@ type commentService struct {
 	userRepo       repository.UserRepository
 	mentionRepo    repository.CommentMentionRepository
 	wsPublisher    WSPublisher
+	taskSvc        TaskService
 }
 
 // CommentServiceOption configures optional dependencies for CommentService.
@@ -105,6 +128,14 @@ func WithCommentContextCacheInvalidator(inv ContextCacheInvalidator) CommentServ
 // in-app notifications to workspace users when a new comment is created.
 func WithCommentNotificationService(ns NotificationService) CommentServiceOption {
 	return func(s *commentService) { s.notifySvc = ns }
+}
+
+// WithCommentTaskService injects the task service used to auto-move a task to triage
+// when a "❓ Blocking @user" marker targeting a human is detected in a comment
+// (server-side enforcement of CLAUDE-workflow.md §0b). Optional — if unset, the
+// enforcement step is skipped entirely.
+func WithCommentTaskService(ts TaskService) CommentServiceOption {
+	return func(s *commentService) { s.taskSvc = ts }
 }
 
 // NewCommentService returns a new CommentService backed by the given repositories.
@@ -220,6 +251,8 @@ func (s *commentService) Create(ctx context.Context, comment *domain.Comment) er
 	// Notify @-mentioned agents.
 	if wsID != uuid.Nil {
 		s.notifyMentions(ctx, comment, task, "", wsID)
+		// Server-side enforcement: "❓ Blocking @user" → auto-move task to triage.
+		s.enforceBlockingTriage(ctx, comment, task, wsID)
 	}
 
 	// Dispatch in-app notification to subscribed workspace users for comment.created.
@@ -287,6 +320,12 @@ func (s *commentService) Update(ctx context.Context, comment *domain.Comment) er
 		if task, err := s.taskRepo.GetByID(ctx, existing.TaskID); err == nil && task != nil {
 			if proj, err := s.projectRepo.GetByID(ctx, task.ProjectID); err == nil && proj != nil {
 				s.notifyMentions(ctx, existing, task, oldBody, proj.WorkspaceID)
+				// Re-evaluate enforcement only when the marker was newly added by this
+				// edit (absent in oldBody). The status idempotency check below is a
+				// second safeguard against double-triage.
+				if !hasBlockingMarker(oldBody) {
+					s.enforceBlockingTriage(ctx, existing, task, proj.WorkspaceID)
+				}
 			}
 		}
 	}
@@ -478,4 +517,90 @@ func (s *commentService) notifyMentions(
 	if s.mentionRepo != nil && len(dbRows) > 0 {
 		_ = s.mentionRepo.InsertBatch(ctx, dbRows)
 	}
+}
+
+// enforceBlockingTriage is the server-side defense-in-depth for CLAUDE-workflow.md §0b:
+// when a comment contains a "❓ **Blocking @user**" marker pointing at a human user, the
+// parent task is auto-moved to the project's triage column with an explanatory system
+// comment. Every step is best-effort — failures are logged but never block the comment
+// mutation that triggered them.
+//
+// Guards (in order):
+//   - required deps (taskSvc/statusRepo/userRepo) present, else no-op;
+//   - body actually carries a Blocking marker, else no-op;
+//   - human-gate: at least one @-mentioned slug resolves to a user, not just agents
+//     (agents are notified via SSE and do not need a triage move);
+//   - idempotency: the task is not already in triage/done/cancelled;
+//   - the project actually has a triage status column.
+func (s *commentService) enforceBlockingTriage(ctx context.Context, comment *domain.Comment, task *domain.Task, wsID uuid.UUID) {
+	if s.taskSvc == nil || s.statusRepo == nil || s.userRepo == nil {
+		return
+	}
+	if !hasBlockingMarker(comment.Body) {
+		return
+	}
+
+	// Human-gate: only trigger when a real user is mentioned somewhere in the body.
+	userSlug := s.firstMentionedUserSlug(ctx, wsID, comment.Body)
+	if userSlug == "" {
+		return
+	}
+
+	// Idempotency: never re-triage a task already in triage or a terminal category.
+	curStatus, err := s.statusRepo.GetByID(ctx, task.StatusID)
+	if err != nil || curStatus == nil {
+		return
+	}
+	switch curStatus.Category {
+	case domain.StatusCategoryTriage, domain.StatusCategoryDone, domain.StatusCategoryCancelled:
+		return
+	}
+
+	// Resolve the project's triage column; graceful no-op if it has none.
+	triageID, err := findStatusIDByCategory(ctx, s.statusRepo, task.ProjectID, domain.StatusCategoryTriage)
+	if err != nil || triageID == uuid.Nil {
+		return
+	}
+
+	// Move via TaskService so the move gets activity-log + SSE + auto-transition cascade.
+	if err := s.taskSvc.MoveTask(ctx, task.ID, MoveTaskInput{StatusID: &triageID}); err != nil {
+		log.Printf("[comment-triage] WARNING: move task %s to triage failed: %v", task.ID, err)
+		return
+	}
+
+	// Append an explanatory system comment. Written directly through the repo (not
+	// s.Create) to avoid re-running the marker parser; the body does not start with a
+	// Blocking marker, so it cannot re-trigger enforcement regardless.
+	now := timeNow()
+	sysComment := &domain.Comment{
+		ID:         uuid.New(),
+		TaskID:     task.ID,
+		AuthorID:   systemActorID,
+		AuthorType: domain.ActorTypeSystem,
+		Body: fmt.Sprintf(
+			"🤖 Auto: задача переведена в triage из-за «❓ Blocking @%s» в комментарии выше (per CLAUDE-workflow.md §0b)",
+			userSlug,
+		),
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	if err := s.commentRepo.Create(ctx, sysComment); err != nil {
+		log.Printf("[comment-triage] WARNING: create system comment on task %s failed: %v", task.ID, err)
+		return
+	}
+	if s.ctxCacheInv != nil {
+		s.ctxCacheInv.Invalidate(ctx, task.ID)
+	}
+}
+
+// firstMentionedUserSlug returns the first @-mentioned slug in body that resolves to a
+// human user in the workspace, or "" if no mentioned slug maps to a user. Agent-only
+// slugs return (nil, nil) from GetByUsername and are skipped.
+func (s *commentService) firstMentionedUserSlug(ctx context.Context, wsID uuid.UUID, body string) string {
+	for _, slug := range extractMentionSlugs(body) {
+		if user, err := s.userRepo.GetByUsername(ctx, wsID, slug); err == nil && user != nil {
+			return slug
+		}
+	}
+	return ""
 }
