@@ -1,0 +1,20 @@
+# .trivyignore — accepted / triaged Trivy findings for evc-mesh
+#
+# The trivy CI gate (.github/workflows/trivy.yml) runs `trivy fs` over the repo
+# and fails the build on any CRITICAL or HIGH dependency vulnerability that HAS
+# a fix available (ignore-unfixed: true).
+#
+# Add a CVE here ONLY after a deliberate accept-risk decision, and ALWAYS
+# document it inline: CVE → why it is not actionable/exploitable for us →
+# who accepted it → date. Revisit on each dependency bump.
+#
+# Format (one finding ID per line):
+#   # CVE-YYYY-NNNNN — <reason not exploitable / no adoptable fix>. Accepted by <name> <date>.
+#   CVE-YYYY-NNNNN
+
+# CVE-2026-32285 — github.com/buger/jsonparser (indirect) HIGH, DoS via malformed
+#   JSON. Fix exists (v1.1.2), but the bump touches go.mod/go.sum which the
+#   deploy-backend.yml pipeline auto-deploys to prod — that requires Bob's
+#   approval. TEMPORARY ignore until the deploy-gated bump PR lands; remove this
+#   line in that PR. Accepted by Garfield 2026-05-23.
+CVE-2026-32285
