@@ -372,9 +372,18 @@ func (s *taskService) Delete(ctx context.Context, id uuid.UUID) error {
 }
 
 // List returns a paginated list of tasks for the given project.
+func (s *taskService) GetByShortID(ctx context.Context, prefix string) (*domain.Task, error) {
+	return s.taskRepo.GetByShortID(ctx, prefix)
+}
+
 func (s *taskService) List(ctx context.Context, projectID uuid.UUID, filter repository.TaskFilter, pg pagination.Params) (*pagination.Page[domain.Task], error) {
 	pg.Normalize()
 	return s.taskRepo.List(ctx, projectID, filter, pg)
+}
+
+func (s *taskService) Search(ctx context.Context, workspaceID uuid.UUID, filter repository.TaskFilter, pg pagination.Params) (*pagination.Page[domain.Task], error) {
+	pg.Normalize()
+	return s.taskRepo.Search(ctx, workspaceID, filter, pg)
 }
 
 // MoveTask transitions a task to a new status and/or position.

@@ -210,6 +210,80 @@ func (r *TaskRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.Task, err
 	return &t, nil
 }
 
+// GetByShortID resolves a task by UUID hex prefix (6–12 chars). Returns apierror.NotFound
+// if no task matches, apierror.BadRequest if multiple tasks share the prefix.
+func (r *TaskRepo) GetByShortID(ctx context.Context, prefix string) (*domain.Task, error) {
+	q := `SELECT ` + taskBaseColsNoAlias + `, ` + taskComputedCols + `
+		FROM tasks WHERE id::text LIKE $1 AND deleted_at IS NULL LIMIT 2`
+	var rows []taskRow
+	if err := r.db.SelectContext(ctx, &rows, q, prefix+"%"); err != nil {
+		return nil, err
+	}
+	if len(rows) == 0 {
+		return nil, apierror.NotFound("Task")
+	}
+	if len(rows) > 1 {
+		return nil, apierror.BadRequest("ambiguous short ID: multiple tasks match")
+	}
+	t := rows[0].toDomain()
+	return &t, nil
+}
+
+// Search searches tasks across all projects in a workspace by text query and optional filters.
+func (r *TaskRepo) Search(ctx context.Context, workspaceID uuid.UUID, filter repository.TaskFilter, pg pagination.Params) (*pagination.Page[domain.Task], error) {
+	pg.Normalize()
+
+	args := []interface{}{workspaceID} // $1
+	conditions := []string{"p.workspace_id = $1", "t.deleted_at IS NULL", "p.deleted_at IS NULL"}
+	argIdx := 2
+
+	if filter.Search != "" {
+		pattern := "%" + filter.Search + "%"
+		conditions = append(conditions, fmt.Sprintf("(t.title ILIKE $%d OR t.description ILIKE $%d)", argIdx, argIdx))
+		args = append(args, pattern)
+		argIdx++
+	}
+	if len(filter.StatusIDs) > 0 {
+		conditions = append(conditions, fmt.Sprintf("t.status_id = ANY($%d)", argIdx))
+		args = append(args, pq.Array(filter.StatusIDs))
+		argIdx++
+	}
+	if filter.AssigneeID != nil {
+		conditions = append(conditions, fmt.Sprintf("t.assignee_id = $%d", argIdx))
+		args = append(args, *filter.AssigneeID)
+		argIdx++
+	}
+	if filter.Priority != nil {
+		conditions = append(conditions, fmt.Sprintf("t.priority = $%d", argIdx))
+		args = append(args, *filter.Priority)
+		argIdx++
+	}
+
+	where := "WHERE " + joinAnd(conditions)
+
+	countQ := fmt.Sprintf(`SELECT COUNT(t.id) FROM tasks t INNER JOIN projects p ON p.id = t.project_id %s`, where)
+	var totalCount int
+	if err := r.db.GetContext(ctx, &totalCount, countQ, args...); err != nil {
+		return nil, err
+	}
+
+	dataQ := fmt.Sprintf(`SELECT t.id, t.project_id, t.status_id, t.title, t.description,
+		t.assignee_id, t.assignee_type, t.priority, t.parent_task_id, t.position,
+		t.due_date, t.estimated_hours, t.custom_fields, t.labels,
+		t.task_number, t.created_by, t.created_by_type, t.created_at, t.updated_at,
+		t.completed_at, t.deleted_at,
+		t.recurring_schedule_id, t.recurring_instance_number, `+taskComputedColsAliased+`
+		FROM tasks t INNER JOIN projects p ON p.id = t.project_id
+		%s ORDER BY t.updated_at DESC LIMIT $%d OFFSET $%d`, where, argIdx, argIdx+1)
+	args = append(args, pg.Limit(), pg.Offset())
+	var rows []taskRow
+	if err := r.db.SelectContext(ctx, &rows, dataQ, args...); err != nil {
+		return nil, err
+	}
+
+	return pagination.NewPage(taskRowsToSlice(rows), totalCount, pg), nil
+}
+
 func (r *TaskRepo) Update(ctx context.Context, task *domain.Task) error {
 	const q = `
 		UPDATE tasks

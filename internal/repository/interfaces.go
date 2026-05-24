@@ -65,9 +65,14 @@ type TaskFilter struct {
 type TaskRepository interface {
 	Create(ctx context.Context, task *domain.Task) error
 	GetByID(ctx context.Context, id uuid.UUID) (*domain.Task, error)
+	// GetByShortID resolves the first task whose UUID starts with the given hex prefix.
+	// prefix must be 6–12 hex chars. Returns apierror.NotFound if no match, apierror.BadRequest if ambiguous.
+	GetByShortID(ctx context.Context, prefix string) (*domain.Task, error)
 	Update(ctx context.Context, task *domain.Task) error
 	Delete(ctx context.Context, id uuid.UUID) error
 	List(ctx context.Context, projectID uuid.UUID, filter TaskFilter, pg pagination.Params) (*pagination.Page[domain.Task], error)
+	// Search searches tasks across all projects in a workspace by text query.
+	Search(ctx context.Context, workspaceID uuid.UUID, filter TaskFilter, pg pagination.Params) (*pagination.Page[domain.Task], error)
 	ListByAssignee(ctx context.Context, assigneeID uuid.UUID, assigneeType domain.AssigneeType) ([]domain.Task, error)
 	// ListByUserActive returns tasks assigned to a user in a workspace, excluding done/cancelled categories.
 	ListByUserActive(ctx context.Context, workspaceID, userID uuid.UUID, pg pagination.Params) (*pagination.Page[domain.Task], error)

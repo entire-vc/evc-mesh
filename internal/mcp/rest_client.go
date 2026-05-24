@@ -206,11 +206,11 @@ func (c *RESTClient) GetProjectCustomFields(ctx context.Context, projectID strin
 func (c *RESTClient) ListTasks(ctx context.Context, projectID string, params map[string]string) (map[string]any, error) {
 	path := "/api/v1/projects/" + projectID + "/tasks"
 	if len(params) > 0 {
-		var parts []string
+		q := url.Values{}
 		for k, v := range params {
-			parts = append(parts, k+"="+v)
+			q.Set(k, v)
 		}
-		path += "?" + strings.Join(parts, "&")
+		path += "?" + q.Encode()
 	}
 	var result map[string]any
 	if err := c.doJSON(ctx, http.MethodGet, path, nil, &result); err != nil {
@@ -291,11 +291,11 @@ func (c *RESTClient) AddComment(ctx context.Context, taskID string, body map[str
 func (c *RESTClient) ListComments(ctx context.Context, taskID string, params map[string]string) (map[string]any, error) {
 	path := "/api/v1/tasks/" + taskID + "/comments"
 	if len(params) > 0 {
-		var parts []string
+		q := url.Values{}
 		for k, v := range params {
-			parts = append(parts, k+"="+v)
+			q.Set(k, v)
 		}
-		path += "?" + strings.Join(parts, "&")
+		path += "?" + q.Encode()
 	}
 	var result map[string]any
 	if err := c.doJSON(ctx, http.MethodGet, path, nil, &result); err != nil {
@@ -358,11 +358,11 @@ func (c *RESTClient) Heartbeat(ctx context.Context, body map[string]any) (map[st
 func (c *RESTClient) GetAgentTasks(ctx context.Context, params map[string]string) (map[string]any, error) {
 	path := "/api/v1/agents/me/tasks"
 	if len(params) > 0 {
-		var parts []string
+		q := url.Values{}
 		for k, v := range params {
-			parts = append(parts, k+"="+v)
+			q.Set(k, v)
 		}
-		path += "?" + strings.Join(parts, "&")
+		path += "?" + q.Encode()
 	}
 	var result map[string]any
 	if err := c.doJSON(ctx, http.MethodGet, path, nil, &result); err != nil {
@@ -394,11 +394,11 @@ func (c *RESTClient) PublishEvent(ctx context.Context, projectID string, body ma
 func (c *RESTClient) GetContext(ctx context.Context, projectID string, params map[string]string) (map[string]any, error) {
 	path := "/api/v1/projects/" + projectID + "/events"
 	if len(params) > 0 {
-		var parts []string
+		q := url.Values{}
 		for k, v := range params {
-			parts = append(parts, k+"="+v)
+			q.Set(k, v)
 		}
-		path += "?" + strings.Join(parts, "&")
+		path += "?" + q.Encode()
 	}
 	var result map[string]any
 	if err := c.doJSON(ctx, http.MethodGet, path, nil, &result); err != nil {
@@ -608,11 +608,11 @@ func (c *RESTClient) CreateRecurringSchedule(ctx context.Context, projectID stri
 func (c *RESTClient) ListRecurringSchedules(ctx context.Context, projectID string, params map[string]string) (map[string]any, error) {
 	path := "/api/v1/projects/" + projectID + "/recurring"
 	if len(params) > 0 {
-		var parts []string
+		q := url.Values{}
 		for k, v := range params {
-			parts = append(parts, k+"="+v)
+			q.Set(k, v)
 		}
-		path += "?" + strings.Join(parts, "&")
+		path += "?" + q.Encode()
 	}
 	var result map[string]any
 	if err := c.doJSON(ctx, http.MethodGet, path, nil, &result); err != nil {
@@ -625,11 +625,11 @@ func (c *RESTClient) ListRecurringSchedules(ctx context.Context, projectID strin
 func (c *RESTClient) GetRecurringHistory(ctx context.Context, scheduleID string, params map[string]string) (map[string]any, error) {
 	path := "/api/v1/recurring/" + scheduleID + "/history"
 	if len(params) > 0 {
-		var parts []string
+		q := url.Values{}
 		for k, v := range params {
-			parts = append(parts, k+"="+v)
+			q.Set(k, v)
 		}
-		path += "?" + strings.Join(parts, "&")
+		path += "?" + q.Encode()
 	}
 	var result map[string]any
 	if err := c.doJSON(ctx, http.MethodGet, path, nil, &result); err != nil {

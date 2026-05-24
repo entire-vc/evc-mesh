@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/repository"
 	pgRepo "github.com/entire-vc/evc-mesh/internal/repository/postgres"
+	"github.com/entire-vc/evc-mesh/pkg/apierror"
 	"github.com/entire-vc/evc-mesh/pkg/pagination"
 )
 
@@ -406,6 +408,42 @@ func (m *MockTaskRepository) MoveToProject(_ context.Context, taskID, targetProj
 	t.ProjectID = targetProjectID
 	t.StatusID = targetStatusID
 	return nil
+}
+
+func (m *MockTaskRepository) GetByShortID(_ context.Context, prefix string) (*domain.Task, error) {
+	if m.errToReturn != nil {
+		return nil, m.errToReturn
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var matches []*domain.Task
+	for _, t := range m.items {
+		if strings.HasPrefix(t.ID.String(), strings.ToLower(prefix)) {
+			matches = append(matches, t)
+		}
+	}
+	if len(matches) == 0 {
+		return nil, apierror.NotFound("Task")
+	}
+	if len(matches) > 1 {
+		return nil, apierror.BadRequest("ambiguous short ID")
+	}
+	return matches[0], nil
+}
+
+func (m *MockTaskRepository) Search(_ context.Context, _ uuid.UUID, filter repository.TaskFilter, pg pagination.Params) (*pagination.Page[domain.Task], error) {
+	if m.errToReturn != nil {
+		return nil, m.errToReturn
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var items []domain.Task
+	for _, t := range m.items {
+		if filter.Search == "" || strings.Contains(strings.ToLower(t.Title), strings.ToLower(filter.Search)) {
+			items = append(items, *t)
+		}
+	}
+	return pagination.NewPage(items, len(items), pg), nil
 }
 
 // ---------------------------------------------------------------------------
