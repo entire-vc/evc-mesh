@@ -8,6 +8,9 @@ on:
     paths:
       - 'migrations/**'
 
+permissions:
+  contents: read
+
 jobs:
   migrate:
     name: Validate Migrations
