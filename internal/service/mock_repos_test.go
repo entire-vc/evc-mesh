@@ -1473,6 +1473,10 @@ func (m *MockUserRepository) SearchUsers(_ context.Context, _ string, _ int) ([]
 	return nil, m.errToReturn
 }
 
+func (m *MockUserRepository) SearchInWorkspace(_ context.Context, _ uuid.UUID, _ string, _ int) ([]domain.User, error) {
+	return nil, nil
+}
+
 // ---------------------------------------------------------------------------
 // fakeTaskMover — minimal TaskService double for comment-triage tests
 // ---------------------------------------------------------------------------
