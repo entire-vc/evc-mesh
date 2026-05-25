@@ -29,12 +29,11 @@ type webFolderItem struct {
 
 // SearchDocs fetches the TR share's folder listing and filters by q (case-insensitive substring).
 // relayURL is the CP base URL (e.g. https://cp.tr.entire.vc).
-// shareID is used in relay_url construction; falls back to shareSlug when empty.
 // limit <= 0 means no limit.
-func SearchDocs(ctx context.Context, relayURL, shareSlug, shareID, agentKey, q string, limit int) ([]RelayDoc, error) {
+func SearchDocs(ctx context.Context, relayURL, shareSlug, agentKey, q string, limit int) ([]RelayDoc, error) {
 	endpoint := fmt.Sprintf("%s/v1/web/shares/%s", relayURL, url.PathEscape(shareSlug))
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, http.NoBody)
 	if err != nil {
 		return nil, fmt.Errorf("teamrelay search: build request: %w", err)
 	}
@@ -56,11 +55,6 @@ func SearchDocs(ctx context.Context, relayURL, shareSlug, shareID, agentKey, q s
 		return nil, fmt.Errorf("teamrelay search: parse response: %w", jsonErr)
 	}
 
-	qualifier := shareID
-	if qualifier == "" {
-		qualifier = shareSlug
-	}
-
 	qLower := strings.ToLower(q)
 	var docs []RelayDoc
 	for _, item := range shareResp.WebFolderItems {
@@ -73,7 +67,7 @@ func SearchDocs(ctx context.Context, relayURL, shareSlug, shareID, agentKey, q s
 			ID:       item.Path,
 			Title:    item.Name,
 			Path:     item.Path,
-			RelayURL: "relay://" + qualifier + "/" + item.Path,
+			RelayURL: "relay://" + shareSlug + "/" + item.Path,
 		})
 		if limit > 0 && len(docs) >= limit {
 			break

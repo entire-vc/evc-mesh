@@ -58,7 +58,7 @@ func (h *TrSearchHandler) Search(c echo.Context) error {
 		return c.JSON(http.StatusServiceUnavailable, apierror.ServiceUnavailable("relay URL not configured"))
 	}
 
-	docs, err := teamrelay.SearchDocs(c.Request().Context(), relayURL, settings.ShareSlug, settings.ShareID, pi.AgentKey, q, limit)
+	docs, err := teamrelay.SearchDocs(c.Request().Context(), relayURL, settings.ShareSlug, pi.AgentKey, q, limit)
 	if err != nil {
 		return c.JSON(http.StatusBadGateway, apierror.InternalError("relay search failed"))
 	}

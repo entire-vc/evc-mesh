@@ -22,7 +22,6 @@ type ProjectIntegration struct {
 
 // TeamRelaySettings holds the Team Relay-specific configuration.
 type TeamRelaySettings struct {
-	ShareID            string `json:"share_id"`
 	ShareSlug          string `json:"share_slug"`
 	Subfolder          string `json:"subfolder"`
 	IncludeProjectSlug bool   `json:"include_project_slug"`
