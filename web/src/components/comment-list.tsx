@@ -15,7 +15,8 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { MarkdownRenderer, type MentionEntry } from "@/components/markdown-renderer";
+import { type MentionEntry } from "@/components/markdown-renderer";
+import { MarkdownWithRelay } from "@/components/MarkdownWithRelay";
 import { useRulesStore } from "@/stores/rules";
 import { useWorkspaceStore } from "@/stores/workspace";
 import type { ActorType, Comment, CreateCommentRequest, Mentionable, PaginatedResponse } from "@/types";
@@ -177,7 +178,7 @@ function CommentItem({
             </div>
           </div>
         ) : (
-          <MarkdownRenderer
+          <MarkdownWithRelay
             content={comment.body}
             className="mt-1.5"
             mentionables={mentionables}
