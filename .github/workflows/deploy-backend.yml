@@ -8,6 +8,7 @@ on:
       - 'internal/**'
       - 'go.mod'
       - 'go.sum'
+      - 'migrations/**'
   workflow_dispatch:
     inputs:
       force:
@@ -147,6 +148,10 @@ jobs:
           sha256sum mesh-api | cut -d' ' -f1 > mesh-api.sha256
           rsync -avz --checksum mesh-api root@216.57.106.222:/opt/evc-mesh/bin/mesh-api.new
           rsync -avz mesh-api.sha256 root@216.57.106.222:/opt/evc-mesh/bin/mesh-api.new.sha256
+
+      - name: Sync migrations
+        run: |
+          rsync -avz --checksum migrations/ root@216.57.106.222:/opt/evc-mesh/migrations/
 
       - name: Atomic swap and restart
         run: |
