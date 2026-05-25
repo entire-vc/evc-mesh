@@ -109,7 +109,7 @@ func (r *CommentRepo) ListByTask(ctx context.Context, taskID uuid.UUID, filter r
 	pg.Normalize()
 
 	args := []interface{}{taskID} // $1
-	conditions := []string{"c.task_id = $1", "c.parent_comment_id IS NULL"}
+	conditions := []string{"c.task_id = $1"}
 	argIdx := 2
 
 	if !filter.IncludeInternal {
@@ -126,7 +126,7 @@ func (r *CommentRepo) ListByTask(ctx context.Context, taskID uuid.UUID, filter r
 		return nil, err
 	}
 
-	// Data -- top-level comments ordered by creation time
+	// Data -- all comments (top-level + replies) ordered by creation time
 	dataQ := fmt.Sprintf(commentEnrichedSelect+` FROM comments c %s ORDER BY c.created_at ASC %s`, where, paginationClause(pg))
 	var comments []domain.Comment
 	if err := r.db.SelectContext(ctx, &comments, dataQ, args...); err != nil {
