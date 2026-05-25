@@ -143,12 +143,22 @@ jobs:
           fi
 
       - name: Upload binary
-        run: rsync -avz --checksum mesh-api root@216.57.106.222:/opt/evc-mesh/bin/mesh-api.new
+        run: |
+          sha256sum mesh-api | cut -d' ' -f1 > mesh-api.sha256
+          rsync -avz --checksum mesh-api root@216.57.106.222:/opt/evc-mesh/bin/mesh-api.new
+          rsync -avz mesh-api.sha256 root@216.57.106.222:/opt/evc-mesh/bin/mesh-api.new.sha256
 
       - name: Atomic swap and restart
         run: |
           ssh root@216.57.106.222 'set -e
+            EXPECTED=$(cat /opt/evc-mesh/bin/mesh-api.new.sha256)
             mv /opt/evc-mesh/bin/mesh-api.new /opt/evc-mesh/bin/mesh-api
+            rm -f /opt/evc-mesh/bin/mesh-api.new.sha256
+            ACTUAL=$(sha256sum /opt/evc-mesh/bin/mesh-api | cut -d" " -f1)
+            if [ "$EXPECTED" != "$ACTUAL" ]; then
+              echo "Binary swap assertion FAILED: expected $EXPECTED got $ACTUAL" >&2
+              exit 1
+            fi
             systemctl restart mesh-api
             date +%s > /opt/evc-mesh/.last-backend-deploy'
 
@@ -156,8 +166,16 @@ jobs:
         env:
           EXPECTED_SHA: ${{ github.sha }}
         run: |
-          sleep 8
-          DEPLOYED=$(ssh root@216.57.106.222 'curl -sf http://127.0.0.1:8005/api/v1/healthz/version' | python3 -c "import sys,json; print(json.load(sys.stdin)['commit'])")
+          DEPLOYED=""
+          for i in $(seq 1 15); do
+            DEPLOYED=$(ssh root@216.57.106.222 'curl -sf http://127.0.0.1:8005/api/v1/healthz/version' 2>/dev/null \
+              | python3 -c "import sys,json; print(json.load(sys.stdin)['commit'])" 2>/dev/null) || true
+            if [ -n "$DEPLOYED" ]; then
+              break
+            fi
+            echo "Waiting for service (attempt $i/15)..."
+            sleep 2
+          done
           if [ "$DEPLOYED" != "${EXPECTED_SHA}" ]; then
             echo "::error::Smoke test FAILED: expected ${EXPECTED_SHA}, got ${DEPLOYED}"
             exit 1
