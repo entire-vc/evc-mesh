@@ -409,6 +409,42 @@ type VCSLinkService interface {
 	GetByID(ctx context.Context, id uuid.UUID) (*domain.VCSLink, error)
 	Delete(ctx context.Context, id uuid.UUID) error
 	ListByTask(ctx context.Context, taskID uuid.UUID) ([]domain.VCSLink, error)
+	// HandleGitHubPullRequestEvent resolves a GitHub PR webhook payload to a
+	// task, upserts the corresponding vcs_link, and on action=closed applies
+	// the auto transition policy: in_progress → review, review → done. When
+	// multiple PRs are linked to the same task, the transition only fires
+	// once all of them are merged/closed. Returns a non-error result that the
+	// caller may log; an error is only returned for DB/RPC failures, never
+	// for "no task ref" or "no transition".
+	HandleGitHubPullRequestEvent(ctx context.Context, ev GitHubWebhookEvent) (PRHandleResult, error)
+}
+
+// GitHubWebhookEvent is a minimal projection of the fields the orchestrator
+// reads from a GitHub pull_request webhook payload. Defined in the service
+// layer so the handler wire format can evolve independently.
+type GitHubWebhookEvent struct {
+	Action     string // "opened" | "closed" | "synchronize" | "reopened" | ...
+	PRNumber   int
+	PRTitle    string
+	PRBody     string
+	PRHTMLURL  string
+	PRState    string
+	PRMerged   bool
+	MergeSHA   string // pull_request.merge_commit_sha (empty for non-merge close)
+	Repository string // owner/name
+}
+
+// PRHandleResult describes what happened when processing a pull_request event.
+// Transitioned == false with Reason != "" means the orchestrator deliberately
+// did not move the task. Reason values are stable identifiers suitable for
+// logging: "no_task_ref", "not_closed", "closed_without_merge",
+// "awaiting_other_prs", "source_status_not_eligible", "transitioned".
+type PRHandleResult struct {
+	TaskID       uuid.UUID
+	OldStatus    string // status slug; empty when no task resolved
+	NewStatus    string // status slug; empty when no transition
+	Transitioned bool
+	Reason       string
 }
 
 // IntegrationService provides business logic for workspace integration configs.

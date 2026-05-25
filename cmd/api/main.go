@@ -271,7 +271,12 @@ func main() {
 	inviteService := service.NewInviteService(inviteRepo, userRepo, workspaceMemberRepo, workspaceRepo, emailSvc, authService, cfg.Email.BaseURL)
 
 	savedViewService := service.NewSavedViewService(savedViewRepo)
-	vcsLinkService := service.NewVCSLinkService(vcsLinkRepo)
+	vcsLinkService := service.NewVCSLinkService(vcsLinkRepo,
+		service.WithVCSTaskRepo(taskRepo),
+		service.WithVCSStatusRepo(taskStatusRepo),
+		service.WithVCSTaskService(taskService),
+		service.WithVCSCommentService(commentService),
+	)
 	integrationService := service.NewIntegrationService(integrationRepo)
 	analyticsService := service.NewAnalyticsService(db)
 	projectUpdateService := service.NewProjectUpdateService(projectUpdateRepo, projectRepo, taskRepo, taskStatusRepo)
@@ -363,7 +368,10 @@ func main() {
 	taskContextHandler := handler.NewTaskContextHandlerWithCache(taskService, commentService, artifactService, depService, eventBusService, ctxCacheSvc, initiativeRepo)
 	webhookHandler := handler.NewWebhookHandler(webhookService)
 	savedViewHandler := handler.NewSavedViewHandler(savedViewService)
-	vcsLinkHandler := handler.NewVCSLinkHandlerWithSecret(vcsLinkService, cfg.Webhook.GitHubSecret)
+	vcsLinkHandler := handler.NewVCSLinkHandler(vcsLinkService,
+		handler.WithGitHubWebhookSecret(cfg.Webhook.GitHubSecret),
+		handler.WithWebhookDedupStore(handler.NewRedisWebhookDedupStore(agentNotifyRedis)),
+	)
 	integrationHandler := handler.NewIntegrationHandler(integrationService)
 	analyticsHandler := handler.NewAnalyticsHandler(analyticsService)
 	projectUpdateHandler := handler.NewProjectUpdateHandler(projectUpdateService)
@@ -662,8 +670,12 @@ func main() {
 	api.POST("/tasks/:task_id/vcs-links", vcsLinkHandler.Create, rbac(mw.PermUpdateTask))
 	api.DELETE("/vcs-links/:link_id", vcsLinkHandler.Delete, rbac(mw.PermUpdateTask))
 
-	// GitHub webhook receiver (public — no auth, HMAC optional in future).
+	// GitHub webhook receiver (public — no auth, HMAC validated when configured).
+	// Two equivalent routes: the legacy /webhooks/github path that existing repos
+	// are configured against, and the canonical /api/v1/integrations/github/webhook
+	// alias documented in the integrations UI.
 	e.POST("/webhooks/github", vcsLinkHandler.GitHubWebhook)
+	e.POST("/api/v1/integrations/github/webhook", vcsLinkHandler.GitHubWebhook)
 
 	// Integration config routes.
 	api.GET("/workspaces/:ws_id/integrations", integrationHandler.List)

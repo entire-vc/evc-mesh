@@ -1,37 +1,107 @@
 package handler
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
+	"github.com/redis/go-redis/v9"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/service"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 )
 
+// webhookDeliveryTTL is how long X-GitHub-Delivery keys are kept in the
+// dedup store. GitHub retries failed deliveries for up to ~24h, so a week is
+// a comfortable margin to absorb every retry without remembering forever.
+const webhookDeliveryTTL = 7 * 24 * time.Hour
+
+// WebhookDedupStore is the minimum surface the GitHub webhook handler needs
+// from a dedup backend. Implemented by Redis in prod and by an in-memory
+// map in tests.
+type WebhookDedupStore interface {
+	// Claim records the delivery_id as seen. Returns true if this call was
+	// the first to record it (i.e. the request is fresh and should be
+	// processed), false if a previous call already recorded it (duplicate).
+	Claim(ctx context.Context, deliveryID string) (bool, error)
+}
+
+// redisWebhookDedupStore is a Redis-backed WebhookDedupStore.
+type redisWebhookDedupStore struct {
+	rdb *redis.Client
+}
+
+// NewRedisWebhookDedupStore wraps a Redis client as a WebhookDedupStore.
+func NewRedisWebhookDedupStore(rdb *redis.Client) WebhookDedupStore {
+	return &redisWebhookDedupStore{rdb: rdb}
+}
+
+// Claim uses SET ... NX ... EX to record the delivery key with a TTL.
+// Returns true if the key was newly set (fresh delivery), false if it was
+// already present (duplicate). The `SET ... NX` modifier is the modern
+// equivalent of the deprecated SETNX command.
+func (s *redisWebhookDedupStore) Claim(ctx context.Context, deliveryID string) (bool, error) {
+	if s.rdb == nil {
+		return true, nil
+	}
+	key := "mesh:webhook:gh:delivery:" + deliveryID
+	res, err := s.rdb.SetArgs(ctx, key, "1", redis.SetArgs{Mode: "NX", TTL: webhookDeliveryTTL}).Result()
+	if err != nil {
+		// redis.Nil here means NX rejected the set — duplicate, not a real error.
+		if errors.Is(err, redis.Nil) {
+			return false, nil
+		}
+		return false, err
+	}
+	// SetArgs returns "OK" on success.
+	return res == "OK", nil
+}
+
 // VCSLinkHandler handles HTTP requests for VCS link management.
 type VCSLinkHandler struct {
 	vcsService          service.VCSLinkService
-	githubWebhookSecret string // HMAC-SHA256 secret for GitHub webhook validation; empty = skip validation
+	githubWebhookSecret string // HMAC-SHA256 secret; empty disables validation.
+	dedup               WebhookDedupStore
+}
+
+// VCSLinkHandlerOption configures optional dependencies on VCSLinkHandler.
+type VCSLinkHandlerOption func(*VCSLinkHandler)
+
+// WithGitHubWebhookSecret enables HMAC validation against the given secret.
+func WithGitHubWebhookSecret(secret string) VCSLinkHandlerOption {
+	return func(h *VCSLinkHandler) { h.githubWebhookSecret = secret }
+}
+
+// WithWebhookDedupStore wires the dedup store used to drop duplicate
+// X-GitHub-Delivery values before any HMAC or JSON work happens.
+func WithWebhookDedupStore(store WebhookDedupStore) VCSLinkHandlerOption {
+	return func(h *VCSLinkHandler) { h.dedup = store }
 }
 
 // NewVCSLinkHandler creates a new VCSLinkHandler.
-func NewVCSLinkHandler(svc service.VCSLinkService) *VCSLinkHandler {
-	return &VCSLinkHandler{vcsService: svc}
+func NewVCSLinkHandler(svc service.VCSLinkService, opts ...VCSLinkHandlerOption) *VCSLinkHandler {
+	h := &VCSLinkHandler{vcsService: svc}
+	for _, opt := range opts {
+		opt(h)
+	}
+	return h
 }
 
-// NewVCSLinkHandlerWithSecret creates a VCSLinkHandler with GitHub webhook HMAC validation.
+// NewVCSLinkHandlerWithSecret is preserved for backward compatibility with the
+// existing main.go wiring. Prefer NewVCSLinkHandler(svc, WithGitHubWebhookSecret(...)).
 func NewVCSLinkHandlerWithSecret(svc service.VCSLinkService, githubWebhookSecret string) *VCSLinkHandler {
-	return &VCSLinkHandler{vcsService: svc, githubWebhookSecret: githubWebhookSecret}
+	return NewVCSLinkHandler(svc, WithGitHubWebhookSecret(githubWebhookSecret))
 }
 
 // createVCSLinkRequest is the JSON body for creating a VCS link.
@@ -150,11 +220,13 @@ type GitHubWebhookPayload struct {
 }
 
 type gitHubPRPayload struct {
-	Number  int    `json:"number"`
-	Title   string `json:"title"`
-	HTMLURL string `json:"html_url"`
-	State   string `json:"state"`
-	Merged  bool   `json:"merged"`
+	Number         int    `json:"number"`
+	Title          string `json:"title"`
+	Body           string `json:"body"`
+	HTMLURL        string `json:"html_url"`
+	State          string `json:"state"`
+	Merged         bool   `json:"merged"`
+	MergeCommitSHA string `json:"merge_commit_sha"`
 }
 
 type gitHubCommitInfo struct {
@@ -168,14 +240,37 @@ type gitHubRepoPayload struct {
 	HTMLURL  string `json:"html_url"`
 }
 
-// GitHubWebhook handles POST /webhooks/github — receives GitHub webhook events.
-// It auto-links tasks when commit messages or PR titles contain MESH-{task_id_prefix}.
-// When MESH_GITHUB_WEBHOOK_SECRET is set, the X-Hub-Signature-256 header is validated
-// using HMAC-SHA256. Requests without a valid signature are rejected with 401.
+// GitHubWebhook handles POST /webhooks/github and the canonical alias
+// POST /api/v1/integrations/github/webhook. It receives GitHub webhook
+// events, deduplicates by X-GitHub-Delivery, validates the HMAC-SHA256
+// signature when a secret is configured, and for pull_request events
+// delegates to the service orchestrator (which manages link upsert + task
+// transition policy). For push events it preserves the existing
+// commit-linking behaviour.
 func (h *VCSLinkHandler) GitHubWebhook(c echo.Context) error {
 	event := c.Request().Header.Get("X-GitHub-Event")
 	if event == "" {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("missing X-GitHub-Event header"))
+	}
+
+	deliveryID := c.Request().Header.Get("X-GitHub-Delivery")
+	if deliveryID == "" {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("missing X-GitHub-Delivery header"))
+	}
+
+	// Dedup before HMAC: GitHub retries failed deliveries (incl. 5xx) and
+	// guarantees X-GitHub-Delivery is unique per delivery attempt. Short-
+	// circuiting here means a flapping handler can't accidentally apply the
+	// same transition twice.
+	if h.dedup != nil {
+		fresh, err := h.dedup.Claim(c.Request().Context(), deliveryID)
+		if err != nil {
+			// On dedup-store failure, fall through (better to risk a duplicate
+			// than to refuse all webhooks when Redis is down). Log via Echo.
+			c.Logger().Errorf("webhook dedup claim error delivery=%s: %v", deliveryID, err)
+		} else if !fresh {
+			return c.JSON(http.StatusOK, map[string]string{"status": "duplicate"})
+		}
 	}
 
 	// Read the raw body so we can (a) verify the HMAC signature and (b) decode JSON.
@@ -208,27 +303,30 @@ func (h *VCSLinkHandler) GitHubWebhook(c echo.Context) error {
 			return c.JSON(http.StatusOK, map[string]string{"status": "ignored"})
 		}
 		pr := payload.PullRequest
-		taskID := extractMeshTaskID(pr.Title)
-		if taskID == uuid.Nil {
-			return c.JSON(http.StatusOK, map[string]string{"status": "no_task_ref"})
+		ev := service.GitHubWebhookEvent{
+			Action:     payload.Action,
+			PRNumber:   pr.Number,
+			PRTitle:    pr.Title,
+			PRBody:     pr.Body,
+			PRHTMLURL:  pr.HTMLURL,
+			PRState:    pr.State,
+			PRMerged:   pr.Merged,
+			MergeSHA:   pr.MergeCommitSHA,
+			Repository: payload.Repository.FullName,
 		}
-		status := domain.VCSLinkStatus(pr.State)
-		if pr.Merged {
-			status = domain.VCSLinkStatusMerged
+		result, herr := h.vcsService.HandleGitHubPullRequestEvent(ctx, ev)
+		if herr != nil {
+			c.Logger().Errorf("github webhook: pull_request handler: %v", herr)
+			return c.JSON(http.StatusOK, map[string]string{"status": "error_logged"})
 		}
-		input := domain.CreateVCSLinkInput{
-			TaskID:     taskID,
-			Provider:   domain.VCSProviderGitHub,
-			LinkType:   domain.VCSLinkTypePR,
-			ExternalID: itoa(pr.Number),
-			URL:        pr.HTMLURL,
-			Title:      pr.Title,
-			Status:     status,
-		}
-		if _, err := h.vcsService.Create(ctx, input); err != nil {
-			// Log but don't fail the webhook response.
-			c.Logger().Errorf("github webhook: create vcs link: %v", err)
-		}
+		return c.JSON(http.StatusOK, map[string]any{
+			"status":       "ok",
+			"task_id":      result.TaskID,
+			"transitioned": result.Transitioned,
+			"reason":       result.Reason,
+			"old_status":   result.OldStatus,
+			"new_status":   result.NewStatus,
+		})
 
 	case "push":
 		if payload.HeadCommit == nil {
@@ -282,20 +380,17 @@ func decodeJSON(data []byte, v any) error {
 // extractMeshTaskID looks for a MESH-{uuid_prefix} pattern in the text
 // and returns the task UUID if found. Returns uuid.Nil if not found.
 func extractMeshTaskID(text string) uuid.UUID {
-	// Look for MESH- followed by at least 8 hex chars (UUID prefix)
 	const prefix = "MESH-"
 	idx := strings.Index(text, prefix)
 	if idx == -1 {
 		return uuid.Nil
 	}
 	rest := text[idx+len(prefix):]
-	// Take up to 36 chars (full UUID with dashes)
 	end := len(rest)
 	if end > 36 {
 		end = 36
 	}
 	candidate := rest[:end]
-	// Strip non-UUID chars at the end.
 	for i, ch := range candidate {
 		if !isHexOrDash(ch) {
 			candidate = candidate[:i]
@@ -318,20 +413,4 @@ func firstLine(s string) string {
 		return s[:idx]
 	}
 	return s
-}
-
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	buf := make([]byte, 0, 12)
-	if n < 0 {
-		buf = append(buf, '-')
-		n = -n
-	}
-	for n > 0 {
-		buf = append([]byte{byte('0' + n%10)}, buf...)
-		n /= 10
-	}
-	return string(buf)
 }

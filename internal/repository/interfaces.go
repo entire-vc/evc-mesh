@@ -424,6 +424,16 @@ type VCSLinkRepository interface {
 	GetByID(ctx context.Context, id uuid.UUID) (*domain.VCSLink, error)
 	Delete(ctx context.Context, id uuid.UUID) error
 	ListByTask(ctx context.Context, taskID uuid.UUID) ([]domain.VCSLink, error)
+	// Upsert inserts a new link or updates status/title/metadata on conflict
+	// of (task_id, provider, link_type, external_id). Used by the GitHub
+	// webhook orchestrator so repeated deliveries (opened → synchronize →
+	// closed) update the same row rather than failing the unique index.
+	Upsert(ctx context.Context, link *domain.VCSLink) error
+	// ListByExternalID returns all links matching (provider, link_type,
+	// external_id), newest first by created_at. Fallback path when a webhook
+	// payload has no MESH-<uuid> ref but the (provider, type, external_id)
+	// tuple was previously linked to a task.
+	ListByExternalID(ctx context.Context, provider domain.VCSProvider, linkType domain.VCSLinkType, externalID string) ([]domain.VCSLink, error)
 }
 
 // RuleRepository manages persistence for governance rules.
