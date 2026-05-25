@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Bold, Code, Italic, Link } from "lucide-react";
+import { Bold, Code, Italic, Link, Paperclip } from "lucide-react";
 import { cn } from "@/lib/cn";
+import { RelayDocPicker } from "@/components/RelayDocPicker";
 
 // ---------------------------------------------------------------------------
 // Markdown renderer (no external library)
@@ -155,6 +156,8 @@ export interface DescriptionEditorProps {
   onChange: (value: string) => void;
   placeholder?: string;
   className?: string;
+  /** Project settings — used to detect TR share config (tr_share_id). */
+  projectSettings?: Record<string, unknown>;
 }
 
 // ---------------------------------------------------------------------------
@@ -166,9 +169,16 @@ export function DescriptionEditor({
   onChange,
   placeholder = "Add a description...",
   className,
+  projectSettings,
 }: DescriptionEditorProps) {
   const [mode, setMode] = useState<"edit" | "preview">("edit");
+  const [pickerOpen, setPickerOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  const trShareId =
+    typeof projectSettings?.tr_share_id === "string" && projectSettings.tr_share_id
+      ? projectSettings.tr_share_id
+      : null;
 
   // Auto-resize textarea height
   const autoResize = useCallback(() => {
@@ -191,6 +201,26 @@ export function DescriptionEditor({
       if (!textarea) return;
       const newValue = wrapSelection(textarea, before, after, placeholder);
       onChange(newValue);
+    },
+    [onChange],
+  );
+
+  const handleDocSelect = useCallback(
+    (relayUrl: string) => {
+      const textarea = textareaRef.current;
+      if (!textarea) return;
+      const start = textarea.selectionStart;
+      const v = textarea.value;
+      // Ensure relay:// goes on its own line
+      const prefix = start > 0 && v[start - 1] !== "\n" ? "\n" : "";
+      const insertion = prefix + relayUrl + "\n";
+      const newValue = v.slice(0, start) + insertion + v.slice(start);
+      const newPos = start + insertion.length;
+      onChange(newValue);
+      setTimeout(() => {
+        textarea.setSelectionRange(newPos, newPos);
+        textarea.focus();
+      }, 0);
     },
     [onChange],
   );
@@ -261,6 +291,19 @@ export function DescriptionEditor({
             >
               <Link className="h-3.5 w-3.5" />
             </button>
+            {trShareId && (
+              <>
+                <div className="mx-1 h-3.5 w-px bg-border" />
+                <button
+                  type="button"
+                  title="Attach Obsidian doc"
+                  onClick={() => setPickerOpen(true)}
+                  className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+                >
+                  <Paperclip className="h-3.5 w-3.5" />
+                </button>
+              </>
+            )}
           </div>
         )}
       </div>
@@ -289,6 +332,15 @@ export function DescriptionEditor({
           dangerouslySetInnerHTML={{
             __html: previewHtml || `<span class="text-muted-foreground text-xs">${placeholder}</span>`,
           }}
+        />
+      )}
+
+      {trShareId && (
+        <RelayDocPicker
+          shareId={trShareId}
+          open={pickerOpen}
+          onClose={() => setPickerOpen(false)}
+          onSelect={handleDocSelect}
         />
       )}
     </div>
