@@ -222,6 +222,51 @@ func TestCommentHandler_List_WithIncludeInternal(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rec.Code)
 }
 
+func TestCommentHandler_List_IncludesReplies(t *testing.T) {
+	taskID := uuid.New()
+	parentID := uuid.New()
+	replyID := uuid.New()
+	now := time.Now()
+
+	comments := []domain.Comment{
+		{ID: parentID, TaskID: taskID, Body: "top-level", AuthorType: domain.ActorTypeUser, CreatedAt: now, UpdatedAt: now},
+		{ID: replyID, TaskID: taskID, ParentCommentID: &parentID, Body: "reply", AuthorType: domain.ActorTypeUser, CreatedAt: now, UpdatedAt: now},
+	}
+
+	mockSvc := &MockCommentService{
+		ListByTaskFunc: func(_ context.Context, tid uuid.UUID, _ repository.CommentFilter, pg pagination.Params) (*pagination.Page[domain.Comment], error) {
+			return pagination.NewPage(comments, 2, pg), nil
+		},
+	}
+
+	h, e := setupCommentTest(mockSvc)
+
+	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/tasks/:task_id/comments")
+	c.SetParamNames("task_id")
+	c.SetParamValues(taskID.String())
+
+	err := h.List(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var page pagination.Page[domain.Comment]
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &page))
+	assert.Len(t, page.Items, 2)
+
+	var replyFound bool
+	for _, c := range page.Items {
+		if c.ID == replyID {
+			replyFound = true
+			assert.NotNil(t, c.ParentCommentID)
+			assert.Equal(t, parentID, *c.ParentCommentID)
+		}
+	}
+	assert.True(t, replyFound, "reply comment must appear in list response")
+}
+
 // --- TestCommentHandler_Delete ---
 
 func TestCommentHandler_Delete_Success(t *testing.T) {
