@@ -573,6 +573,7 @@ func main() {
 	api.GET("/projects/:proj_id/tasks", taskHandler.List, projAccess)
 	api.POST("/projects/:proj_id/tasks", taskHandler.Create, projAccess, rbac(mw.PermCreateTask))
 	api.POST("/projects/:proj_id/tasks/bulk-update", taskHandler.BulkUpdate, projAccess, rbac(mw.PermUpdateTask))
+	api.GET("/tasks/by-short-id/:short", taskHandler.GetByShortID)
 	api.GET("/tasks/:task_id", taskHandler.GetByID)
 	api.PATCH("/tasks/:task_id", taskHandler.Update, rbac(mw.PermUpdateTask))
 	api.DELETE("/tasks/:task_id", taskHandler.Delete, rbac(mw.PermDeleteTask))
@@ -585,6 +586,7 @@ func main() {
 	api.DELETE("/tasks/:task_id/checkout", taskHandler.ReleaseCheckout)
 	api.PATCH("/tasks/:task_id/checkout", taskHandler.ExtendCheckout)
 	api.GET("/tasks/:task_id/context", taskContextHandler.GetTaskContext)
+	api.GET("/workspaces/:ws_id/tasks", taskHandler.SearchGlobal)
 
 	// Dependency routes.
 	api.GET("/tasks/:task_id/dependencies", depHandler.List)

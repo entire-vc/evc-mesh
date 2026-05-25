@@ -323,9 +323,11 @@ func (m *MockActivityLogService) ListByTask(ctx context.Context, taskID uuid.UUI
 type MockTaskService struct {
 	CreateFunc               func(ctx context.Context, task *domain.Task) error
 	GetByIDFunc              func(ctx context.Context, id uuid.UUID) (*domain.Task, error)
+	GetByShortIDFunc         func(ctx context.Context, prefix string) (*domain.Task, error)
 	UpdateFunc               func(ctx context.Context, task *domain.Task) error
 	DeleteFunc               func(ctx context.Context, id uuid.UUID) error
 	ListFunc                 func(ctx context.Context, projectID uuid.UUID, filter repository.TaskFilter, pg pagination.Params) (*pagination.Page[domain.Task], error)
+	SearchFunc               func(ctx context.Context, workspaceID uuid.UUID, filter repository.TaskFilter, pg pagination.Params) (*pagination.Page[domain.Task], error)
 	MoveTaskFunc             func(ctx context.Context, taskID uuid.UUID, input service.MoveTaskInput) error
 	AssignTaskFunc           func(ctx context.Context, taskID uuid.UUID, input service.AssignTaskInput) error
 	CreateSubtaskFunc        func(ctx context.Context, parentTaskID uuid.UUID, input service.CreateSubtaskInput) (*domain.Task, error)
@@ -471,6 +473,20 @@ func (m *MockTaskService) ForceReleaseCheckout(ctx context.Context, taskID uuid.
 func (m *MockTaskService) MoveToProject(ctx context.Context, taskID, targetProjectID uuid.UUID) (*domain.Task, error) {
 	if m.MoveToProjectFunc != nil {
 		return m.MoveToProjectFunc(ctx, taskID, targetProjectID)
+	}
+	return nil, nil
+}
+
+func (m *MockTaskService) GetByShortID(ctx context.Context, prefix string) (*domain.Task, error) {
+	if m.GetByShortIDFunc != nil {
+		return m.GetByShortIDFunc(ctx, prefix)
+	}
+	return nil, nil
+}
+
+func (m *MockTaskService) Search(ctx context.Context, workspaceID uuid.UUID, filter repository.TaskFilter, pg pagination.Params) (*pagination.Page[domain.Task], error) {
+	if m.SearchFunc != nil {
+		return m.SearchFunc(ctx, workspaceID, filter, pg)
 	}
 	return nil, nil
 }

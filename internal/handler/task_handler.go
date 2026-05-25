@@ -218,11 +218,33 @@ func (h *TaskHandler) Create(c echo.Context) error {
 	return c.JSON(http.StatusCreated, task)
 }
 
+// isHexPrefix returns true when s looks like a valid UUID short-ID (6–12 hex chars).
+func isHexPrefix(s string) bool {
+	if len(s) < 6 || len(s) > 12 {
+		return false
+	}
+	for _, ch := range s {
+		if (ch < '0' || ch > '9') && (ch < 'a' || ch > 'f') && (ch < 'A' || ch > 'F') {
+			return false
+		}
+	}
+	return true
+}
+
 // GetByID handles GET /tasks/:task_id
+// Falls back to short-ID lookup when task_id is a 6–12 char hex prefix rather than a full UUID.
 func (h *TaskHandler) GetByID(c echo.Context) error {
 	taskIDStr := c.Param("task_id")
 	taskID, err := uuid.Parse(taskIDStr)
 	if err != nil {
+		if isHexPrefix(taskIDStr) {
+			task, err2 := h.taskService.GetByShortID(c.Request().Context(), strings.ToLower(taskIDStr))
+			if err2 != nil {
+				return handleError(c, err2)
+			}
+			task.URL = computeTaskURL(c.Request(), task.ID)
+			return c.JSON(http.StatusOK, task)
+		}
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid task_id"))
 	}
 
@@ -233,6 +255,59 @@ func (h *TaskHandler) GetByID(c echo.Context) error {
 
 	task.URL = computeTaskURL(c.Request(), task.ID)
 	return c.JSON(http.StatusOK, task)
+}
+
+// GetByShortID handles GET /tasks/by-short-id/:short
+func (h *TaskHandler) GetByShortID(c echo.Context) error {
+	short := c.Param("short")
+	if !isHexPrefix(short) {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("short must be 6–12 hex chars"))
+	}
+
+	task, err := h.taskService.GetByShortID(c.Request().Context(), strings.ToLower(short))
+	if err != nil {
+		return handleError(c, err)
+	}
+
+	task.URL = computeTaskURL(c.Request(), task.ID)
+	return c.JSON(http.StatusOK, task)
+}
+
+// SearchGlobal handles GET /workspaces/:ws_id/tasks?search=...
+func (h *TaskHandler) SearchGlobal(c echo.Context) error {
+	wsIDStr := c.Param("ws_id")
+	wsID, err := uuid.Parse(wsIDStr)
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid ws_id"))
+	}
+
+	var q listTasksQuery
+	if err = c.Bind(&q); err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid query parameters"))
+	}
+
+	if q.Search == "" {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("search parameter required"))
+	}
+
+	var pg pagination.Params
+	if err = c.Bind(&pg); err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid pagination parameters"))
+	}
+	pg.Normalize()
+
+	filter := repository.TaskFilter{Search: q.Search}
+
+	page, err := h.taskService.Search(c.Request().Context(), wsID, filter, pg)
+	if err != nil {
+		return handleError(c, err)
+	}
+
+	for i := range page.Items {
+		page.Items[i].URL = computeTaskURL(c.Request(), page.Items[i].ID)
+	}
+
+	return c.JSON(http.StatusOK, page)
 }
 
 // Update handles PATCH /tasks/:task_id

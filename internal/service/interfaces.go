@@ -101,9 +101,13 @@ func (e *CheckoutConflictError) Error() string {
 type TaskService interface {
 	Create(ctx context.Context, task *domain.Task) error
 	GetByID(ctx context.Context, id uuid.UUID) (*domain.Task, error)
+	// GetByShortID resolves a task by 6–12 char hex UUID prefix.
+	GetByShortID(ctx context.Context, prefix string) (*domain.Task, error)
 	Update(ctx context.Context, task *domain.Task) error
 	Delete(ctx context.Context, id uuid.UUID) error
 	List(ctx context.Context, projectID uuid.UUID, filter repository.TaskFilter, pg pagination.Params) (*pagination.Page[domain.Task], error)
+	// Search searches tasks across all projects in a workspace.
+	Search(ctx context.Context, workspaceID uuid.UUID, filter repository.TaskFilter, pg pagination.Params) (*pagination.Page[domain.Task], error)
 	MoveTask(ctx context.Context, taskID uuid.UUID, input MoveTaskInput) error
 	AssignTask(ctx context.Context, taskID uuid.UUID, input AssignTaskInput) error
 	CreateSubtask(ctx context.Context, parentTaskID uuid.UUID, input CreateSubtaskInput) (*domain.Task, error)

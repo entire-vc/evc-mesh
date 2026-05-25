@@ -257,6 +257,12 @@ func (s *StubTaskService) ForceReleaseCheckout(_ context.Context, _ uuid.UUID) e
 func (s *StubTaskService) MoveToProject(_ context.Context, _, _ uuid.UUID) (*domain.Task, error) {
 	panic("StubTaskService.MoveToProject not implemented")
 }
+func (s *StubTaskService) GetByShortID(_ context.Context, _ string) (*domain.Task, error) {
+	panic("StubTaskService.GetByShortID not implemented")
+}
+func (s *StubTaskService) Search(_ context.Context, _ uuid.UUID, _ repository.TaskFilter, _ pagination.Params) (*pagination.Page[domain.Task], error) {
+	panic("StubTaskService.Search not implemented")
+}
 
 var _ TaskService = (*StubTaskService)(nil)
 
