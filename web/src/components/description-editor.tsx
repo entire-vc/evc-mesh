@@ -158,6 +158,8 @@ export interface DescriptionEditorProps {
   className?: string;
   /** Project settings — used to detect TR share config (tr_share_id). */
   projectSettings?: Record<string, unknown>;
+  /** Project ID — required to show the TR doc picker. */
+  projId?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -170,15 +172,16 @@ export function DescriptionEditor({
   placeholder = "Add a description...",
   className,
   projectSettings,
+  projId,
 }: DescriptionEditorProps) {
   const [mode, setMode] = useState<"edit" | "preview">("edit");
   const [pickerOpen, setPickerOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  const trShareId =
-    typeof projectSettings?.tr_share_id === "string" && projectSettings.tr_share_id
-      ? projectSettings.tr_share_id
-      : null;
+  const hasTrIntegration =
+    projId &&
+    typeof projectSettings?.tr_share_id === "string" &&
+    !!projectSettings.tr_share_id;
 
   // Auto-resize textarea height
   const autoResize = useCallback(() => {
@@ -291,7 +294,7 @@ export function DescriptionEditor({
             >
               <Link className="h-3.5 w-3.5" />
             </button>
-            {trShareId && (
+            {hasTrIntegration && (
               <>
                 <div className="mx-1 h-3.5 w-px bg-border" />
                 <button
@@ -335,9 +338,9 @@ export function DescriptionEditor({
         />
       )}
 
-      {trShareId && (
+      {hasTrIntegration && (
         <RelayDocPicker
-          shareId={trShareId}
+          projId={projId!}
           open={pickerOpen}
           onClose={() => setPickerOpen(false)}
           onSelect={handleDocSelect}

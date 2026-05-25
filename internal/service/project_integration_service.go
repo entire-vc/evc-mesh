@@ -56,6 +56,7 @@ func (s *projectIntegrationService) UpsertTeamRelay(ctx context.Context, project
 	}
 
 	settings := domain.TeamRelaySettings{
+		ShareID:            input.ShareID,
 		ShareSlug:          input.ShareSlug,
 		Subfolder:          input.Subfolder,
 		IncludeProjectSlug: input.IncludeProjectSlug,

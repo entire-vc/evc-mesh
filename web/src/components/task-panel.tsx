@@ -1013,6 +1013,7 @@ export function TaskPanel({
                     value={descDraft}
                     onChange={setDescDraft}
                     placeholder="Add a description..."
+                    projId={currentTask.project_id}
                     projectSettings={
                       (projects.find((p) => p.id === currentTask.project_id) ??
                         currentProject)?.settings

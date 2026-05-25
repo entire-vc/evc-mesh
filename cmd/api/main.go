@@ -382,6 +382,7 @@ func main() {
 	memoryHandler := handler.NewMemoryHandler(memoryService)
 	mentionHandler := handler.NewMentionHandler(mentionService)
 	projectIntegrationHandler := handler.NewProjectIntegrationHandler(projectIntegrationService)
+	trSearchHandler := handler.NewTrSearchHandler(projectIntegrationService)
 	mentionablesService := service.NewMentionablesService(agentRepo, userRepo)
 	mentionablesHandler := handler.NewMentionablesHandler(mentionablesService)
 
@@ -676,6 +677,9 @@ func main() {
 	api.PATCH("/projects/:proj_id/integrations/team-relay", projectIntegrationHandler.UpsertTeamRelay, projAccess, rbac(mw.PermManageWebhooks))
 	api.DELETE("/projects/:proj_id/integrations/team-relay", projectIntegrationHandler.DeleteTeamRelay, projAccess, rbac(mw.PermManageWebhooks))
 	api.GET("/projects/:proj_id/integrations", projectIntegrationHandler.List, projAccess)
+
+	// TR document search (Team Relay share contents).
+	api.GET("/projects/:proj_id/tr/search", trSearchHandler.Search, projAccess)
 
 	// Analytics routes.
 	api.GET("/workspaces/:ws_id/analytics", analyticsHandler.GetMetrics)
