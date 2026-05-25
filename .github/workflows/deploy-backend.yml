@@ -15,6 +15,9 @@ on:
         type: boolean
         default: false
 
+permissions:
+  contents: read
+
 # Sequential deploys — never cancel an in-flight deploy.
 concurrency:
   group: backend-deploy-prod
