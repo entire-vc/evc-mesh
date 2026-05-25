@@ -80,7 +80,7 @@ function renderInline(
       (_match, slug: string) => {
         const entry = mentionables.get(slug);
         if (!entry) return `@${slug}`;
-        const href = `/w/${wsSlug}/org-chart`;
+        const href = `/w/${wsSlug}/team/${entry.kind}/${slug}`;
         return `<a class="mention-link inline-block whitespace-nowrap rounded px-1 py-0.5 text-blue-600 bg-blue-50 hover:underline dark:text-blue-400 dark:bg-blue-900/30" href="${href}" data-mention-slug="${slug}" aria-label="Open team profile for @${slug}">@${slug}</a>`;
       },
     );

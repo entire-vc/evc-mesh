@@ -19,6 +19,7 @@ import { CalendarPage } from "@/pages/calendar";
 import { WorkspaceSettingsPage } from "@/pages/workspace-settings";
 import NotificationSettingsPage from "@/pages/notification-settings";
 import { OrgChartPage } from "@/pages/org-chart";
+import { TeamMemberPage } from "@/pages/team-member";
 import { MemoryBrowserPage } from "@/pages/memory-browser";
 import { SessionDashboardPage } from "@/pages/session-dashboard";
 import { ActivityPage } from "@/pages/activity-page";
@@ -89,6 +90,10 @@ export function App() {
           <Route
             path="w/:wsSlug/org-chart/grid"
             element={<OrgChartPage />}
+          />
+          <Route
+            path="w/:wsSlug/team/:kind/:memberSlug"
+            element={<TeamMemberPage />}
           />
           <Route
             path="w/:wsSlug/memories"
