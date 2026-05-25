@@ -143,12 +143,12 @@ jobs:
           fi
 
       - name: Upload binary
-        run: rsync -avz --checksum mesh-api root@216.57.106.222:/opt/evc-mesh/mesh-api.new
+        run: rsync -avz --checksum mesh-api root@216.57.106.222:/opt/evc-mesh/bin/mesh-api.new
 
       - name: Atomic swap and restart
         run: |
           ssh root@216.57.106.222 'set -e
-            mv /opt/evc-mesh/mesh-api.new /opt/evc-mesh/mesh-api
+            mv /opt/evc-mesh/bin/mesh-api.new /opt/evc-mesh/bin/mesh-api
             systemctl restart mesh-api
             date +%s > /opt/evc-mesh/.last-backend-deploy'
 
@@ -157,7 +157,7 @@ jobs:
           EXPECTED_SHA: ${{ github.sha }}
         run: |
           sleep 8
-          DEPLOYED=$(curl -sf http://216.57.106.222:8005/api/v1/healthz/version | python3 -c "import sys,json; print(json.load(sys.stdin)['commit'])")
+          DEPLOYED=$(ssh root@216.57.106.222 'curl -sf http://127.0.0.1:8005/api/v1/healthz/version' | python3 -c "import sys,json; print(json.load(sys.stdin)['commit'])")
           if [ "$DEPLOYED" != "${EXPECTED_SHA}" ]; then
             echo "::error::Smoke test FAILED: expected ${EXPECTED_SHA}, got ${DEPLOYED}"
             exit 1
