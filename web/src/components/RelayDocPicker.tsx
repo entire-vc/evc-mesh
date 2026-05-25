@@ -9,21 +9,21 @@ import {
 import { useRelayDocSearch } from "@/hooks/useRelayDocSearch";
 
 interface RelayDocPickerProps {
-  shareId: string;
+  projId: string;
   open: boolean;
   onClose: () => void;
   onSelect: (relayUrl: string) => void;
 }
 
 export function RelayDocPicker({
-  shareId,
+  projId,
   open,
   onClose,
   onSelect,
 }: RelayDocPickerProps) {
   const [query, setQuery] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
-  const { results, isLoading, error } = useRelayDocSearch(query, shareId);
+  const { results, isLoading, error } = useRelayDocSearch(query, projId);
 
   useEffect(() => {
     if (open) {
