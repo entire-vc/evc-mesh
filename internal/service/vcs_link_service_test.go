@@ -111,6 +111,12 @@ func (r *fakeTaskRepo) Create(context.Context, *domain.Task) error { return nil 
 func (r *fakeTaskRepo) GetByID(_ context.Context, id uuid.UUID) (*domain.Task, error) {
 	return r.tasks[id], nil
 }
+func (r *fakeTaskRepo) GetByShortID(context.Context, string) (*domain.Task, error) {
+	return nil, nil
+}
+func (r *fakeTaskRepo) Search(context.Context, uuid.UUID, repository.TaskFilter, pagination.Params) (*pagination.Page[domain.Task], error) {
+	return nil, nil
+}
 func (r *fakeTaskRepo) Update(_ context.Context, t *domain.Task) error {
 	r.tasks[t.ID] = t
 	return nil
@@ -203,14 +209,15 @@ type fakeTaskService struct {
 	moveCalls  []moveCall
 }
 
-type moveCall struct {
-	TaskID   uuid.UUID
-	StatusID uuid.UUID
-}
-
 func (t *fakeTaskService) Create(context.Context, *domain.Task) error { return nil }
 func (t *fakeTaskService) GetByID(_ context.Context, id uuid.UUID) (*domain.Task, error) {
 	return t.taskRepo.tasks[id], nil
+}
+func (t *fakeTaskService) GetByShortID(context.Context, string) (*domain.Task, error) {
+	return nil, nil
+}
+func (t *fakeTaskService) Search(context.Context, uuid.UUID, repository.TaskFilter, pagination.Params) (*pagination.Page[domain.Task], error) {
+	return nil, nil
 }
 func (t *fakeTaskService) Update(context.Context, *domain.Task) error { return nil }
 func (t *fakeTaskService) Delete(context.Context, uuid.UUID) error    { return nil }
@@ -221,7 +228,7 @@ func (t *fakeTaskService) MoveTask(_ context.Context, taskID uuid.UUID, input Mo
 	if input.StatusID == nil {
 		return nil
 	}
-	t.moveCalls = append(t.moveCalls, moveCall{TaskID: taskID, StatusID: *input.StatusID})
+	t.moveCalls = append(t.moveCalls, moveCall{taskID: taskID, input: input})
 	tk := t.taskRepo.tasks[taskID]
 	if tk != nil {
 		tk.StatusID = *input.StatusID
@@ -397,7 +404,7 @@ func TestHandlePR_MergedFromInProgress_TransitionsToReview(t *testing.T) {
 
 	// MoveTask was called once.
 	require.Len(t, h.taskSvc.moveCalls, 1)
-	assert.Equal(t, task.ID, h.taskSvc.moveCalls[0].TaskID)
+	assert.Equal(t, task.ID, h.taskSvc.moveCalls[0].taskID)
 
 	// Comment posted.
 	require.Len(t, h.commentSvc.created, 1)
