@@ -382,6 +382,8 @@ func main() {
 	memoryHandler := handler.NewMemoryHandler(memoryService)
 	mentionHandler := handler.NewMentionHandler(mentionService)
 	projectIntegrationHandler := handler.NewProjectIntegrationHandler(projectIntegrationService)
+	mentionablesService := service.NewMentionablesService(agentRepo, userRepo)
+	mentionablesHandler := handler.NewMentionablesHandler(mentionablesService)
 
 	// 8. Create Echo instance with global middleware.
 	e := echo.New()
@@ -772,6 +774,7 @@ func main() {
 	api.GET("/me/mentions", mentionHandler.List)
 	api.GET("/me/mentions/unseen_count", mentionHandler.UnseenCount)
 	api.POST("/me/mentions/:comment_id/seen", mentionHandler.MarkSeen)
+	api.GET("/workspaces/:ws_id/mentionables", mentionablesHandler.Search)
 
 	// Current user's active tasks (excludes done/cancelled).
 	api.GET("/me/tasks", taskHandler.GetCurrentUserTasks)

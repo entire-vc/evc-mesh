@@ -1,5 +1,6 @@
 import {
   type FormEvent,
+  type KeyboardEvent,
   useCallback,
   useEffect,
   useMemo,
@@ -7,7 +8,7 @@ import {
   useState,
 } from "react";
 import { Bot, Edit2, Lock, Reply, Trash2, User } from "lucide-react";
-import { api } from "@/lib/api";
+import { api, getMentionables } from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { formatRelative } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -17,7 +18,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { MarkdownRenderer, type MentionEntry } from "@/components/markdown-renderer";
 import { useRulesStore } from "@/stores/rules";
 import { useWorkspaceStore } from "@/stores/workspace";
-import type { ActorType, Comment, CreateCommentRequest, PaginatedResponse } from "@/types";
+import type { ActorType, Comment, CreateCommentRequest, Mentionable, PaginatedResponse } from "@/types";
 
 interface CommentListProps {
   taskId: string;
@@ -219,6 +220,13 @@ export function CommentList({ taskId }: CommentListProps) {
   const [submitting, setSubmitting] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
+  // @-mention autocomplete state
+  const [mentionQuery, setMentionQuery] = useState<string | null>(null);
+  const [mentionSuggestions, setMentionSuggestions] = useState<Mentionable[]>([]);
+  const [mentionIndex, setMentionIndex] = useState(0);
+  const [mentionStart, setMentionStart] = useState(-1);
+  const mentionDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const { currentWorkspace } = useWorkspaceStore();
   const { teamDirectory, fetchTeamDirectory } = useRulesStore();
 
@@ -238,6 +246,72 @@ export function CommentList({ taskId }: CommentListProps) {
   }, [teamDirectory]);
 
   const wsSlug = currentWorkspace?.slug;
+
+  const closeMention = () => {
+    setMentionQuery(null);
+    setMentionSuggestions([]);
+    setMentionIndex(0);
+  };
+
+  const insertMention = (m: Mentionable) => {
+    const pos = textareaRef.current?.selectionStart ?? body.length;
+    const before = body.slice(0, mentionStart);
+    const after = body.slice(pos);
+    const next = `${before}@${m.slug} ${after}`;
+    setBody(next);
+    closeMention();
+    requestAnimationFrame(() => {
+      if (textareaRef.current) {
+        const cursor = mentionStart + m.slug.length + 2;
+        textareaRef.current.selectionStart = cursor;
+        textareaRef.current.selectionEnd = cursor;
+        textareaRef.current.focus();
+      }
+    });
+  };
+
+  const handleBodyChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const val = e.target.value;
+    setBody(val);
+    const cursorPos = e.target.selectionStart ?? val.length;
+    const textBefore = val.slice(0, cursorPos);
+    const atMatch = textBefore.match(/@([^\s@]*)$/);
+    if (atMatch) {
+      const query = atMatch[1] ?? "";
+      const atPos = cursorPos - query.length - 1;
+      setMentionStart(atPos);
+      setMentionQuery(query);
+      setMentionIndex(0);
+      if (mentionDebounce.current) clearTimeout(mentionDebounce.current);
+      mentionDebounce.current = setTimeout(() => {
+        if (!currentWorkspace) return;
+        getMentionables(currentWorkspace.id, query)
+          .then((items) => setMentionSuggestions(items ?? []))
+          .catch(() => setMentionSuggestions([]));
+      }, 150);
+    } else {
+      closeMention();
+    }
+  };
+
+  const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (mentionQuery === null || mentionSuggestions.length === 0) return;
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setMentionIndex((i) => Math.min(i + 1, mentionSuggestions.length - 1));
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setMentionIndex((i) => Math.max(i - 1, 0));
+    } else if (e.key === "Enter" || e.key === "Tab") {
+      const m = mentionSuggestions[mentionIndex];
+      if (m) {
+        e.preventDefault();
+        insertMention(m);
+      }
+    } else if (e.key === "Escape") {
+      closeMention();
+    }
+  };
 
   const fetchComments = useCallback(async () => {
     try {
@@ -375,7 +449,7 @@ export function CommentList({ taskId }: CommentListProps) {
 
       {/* Sticky comment form */}
       <div className="shrink-0 border-t border-border bg-background p-3">
-        <form onSubmit={handleSubmit} className="space-y-2">
+        <form onSubmit={handleSubmit} className="relative space-y-2">
           {replyToComment && (
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
               <Reply className="h-3 w-3" />
@@ -390,11 +464,39 @@ export function CommentList({ taskId }: CommentListProps) {
               </button>
             </div>
           )}
+          {mentionQuery !== null && mentionSuggestions.length > 0 && (
+            <div className="absolute bottom-full left-0 right-0 mb-1 z-50 max-h-48 overflow-y-auto rounded-md border border-border bg-background shadow-md">
+              {mentionSuggestions.map((m, i) => (
+                <button
+                  key={m.id}
+                  type="button"
+                  className={cn(
+                    "flex w-full items-center gap-2 px-3 py-2 text-sm hover:bg-muted",
+                    i === mentionIndex && "bg-muted",
+                  )}
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    insertMention(m);
+                  }}
+                >
+                  {m.kind === "agent" ? (
+                    <Bot className="h-3.5 w-3.5 shrink-0 text-violet-500" />
+                  ) : (
+                    <User className="h-3.5 w-3.5 shrink-0 text-sky-500" />
+                  )}
+                  <span className="font-mono text-xs text-muted-foreground">@{m.slug}</span>
+                  <span className="truncate">{m.display_name}</span>
+                  <span className="ml-auto text-[10px] capitalize text-muted-foreground">{m.kind}</span>
+                </button>
+              ))}
+            </div>
+          )}
           <Textarea
             ref={textareaRef}
             value={body}
-            onChange={(e) => setBody(e.target.value)}
-            placeholder="Write a comment..."
+            onChange={handleBodyChange}
+            onKeyDown={handleKeyDown}
+            placeholder="Write a comment… type @ to mention someone"
             rows={3}
           />
           <div className="flex items-center justify-between">

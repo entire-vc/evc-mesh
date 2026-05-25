@@ -105,3 +105,26 @@ func (r *UserRepo) SearchUsers(ctx context.Context, query string, limit int) ([]
 	}
 	return users, nil
 }
+
+// SearchInWorkspace returns users who are workspace members and whose display_name, username,
+// or email match the query (ILIKE), sorted by exact-prefix match first then display_name, up to limit results.
+func (r *UserRepo) SearchInWorkspace(ctx context.Context, workspaceID uuid.UUID, query string, limit int) ([]domain.User, error) {
+	const q = `
+		SELECT u.id, u.email, u.password_hash, u.display_name,
+		       COALESCE(u.username, '') AS username, u.avatar_url, u.is_active, u.created_at, u.updated_at
+		FROM users u
+		JOIN workspace_members wm ON wm.user_id = u.id AND wm.workspace_id = $1
+		WHERE u.display_name ILIKE $2 OR COALESCE(u.username, '') ILIKE $2 OR u.email ILIKE $2
+		ORDER BY
+		  CASE WHEN COALESCE(u.username, '') ILIKE $3 OR u.display_name ILIKE $3 THEN 0 ELSE 1 END,
+		  u.display_name
+		LIMIT $4
+	`
+	pattern := "%" + query + "%"
+	prefixPattern := query + "%"
+	var users []domain.User
+	if err := r.db.SelectContext(ctx, &users, q, workspaceID, pattern, prefixPattern, limit); err != nil {
+		return nil, err
+	}
+	return users, nil
+}

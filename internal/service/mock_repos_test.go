@@ -1018,6 +1018,10 @@ func (m *MockAgentRepository) GetBySlug(_ context.Context, workspaceID uuid.UUID
 	return nil, nil
 }
 
+func (m *MockAgentRepository) SearchByPrefix(_ context.Context, _ uuid.UUID, _ string, _ int) ([]domain.Agent, error) {
+	return nil, nil
+}
+
 // ---------------------------------------------------------------------------
 // MockAgentNotifyService — records NotifyAgent calls for assertion in tests.
 // ---------------------------------------------------------------------------
@@ -1467,6 +1471,10 @@ func (m *MockUserRepository) Update(_ context.Context, _ *domain.User) error {
 
 func (m *MockUserRepository) SearchUsers(_ context.Context, _ string, _ int) ([]domain.User, error) {
 	return nil, m.errToReturn
+}
+
+func (m *MockUserRepository) SearchInWorkspace(_ context.Context, _ uuid.UUID, _ string, _ int) ([]domain.User, error) {
+	return nil, nil
 }
 
 // ---------------------------------------------------------------------------
