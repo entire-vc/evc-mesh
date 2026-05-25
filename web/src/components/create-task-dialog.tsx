@@ -19,7 +19,6 @@ import { useTaskStore } from "@/stores/task";
 import { useProjectStore } from "@/stores/project";
 import { useMemberStore } from "@/stores/member";
 import { useAuthStore } from "@/stores/auth";
-import { useWorkspaceStore } from "@/stores/workspace";
 import { useTemplateStore } from "@/stores/template";
 import { getAccessToken } from "@/lib/api";
 import type { AssigneeType, Artifact, Priority, CreateTaskRequest } from "@/types";
@@ -49,7 +48,6 @@ export function CreateTaskDialog({
   const { createTask } = useTaskStore();
   const { projectMembers, fetchProjectMembers } = useMemberStore();
   const { user } = useAuthStore();
-  const { currentWorkspace } = useWorkspaceStore();
   const { templates, fetchTemplates } = useTemplateStore();
 
   const [title, setTitle] = useState("");
