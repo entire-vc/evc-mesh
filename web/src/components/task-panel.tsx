@@ -1013,6 +1013,10 @@ export function TaskPanel({
                     value={descDraft}
                     onChange={setDescDraft}
                     placeholder="Add a description..."
+                    projectSettings={
+                      (projects.find((p) => p.id === currentTask.project_id) ??
+                        currentProject)?.settings
+                    }
                   />
                 ) : (
                   <div className="min-h-[60px] rounded-lg border border-border p-3 text-sm">
