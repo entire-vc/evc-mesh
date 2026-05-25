@@ -3,11 +3,13 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	"github.com/entire-vc/evc-mesh/internal/integration/teamrelay"
 	"github.com/entire-vc/evc-mesh/internal/repository"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 )
@@ -96,4 +98,37 @@ func (s *projectIntegrationService) DeleteTeamRelay(ctx context.Context, project
 // List returns all integrations for the given project.
 func (s *projectIntegrationService) List(ctx context.Context, projectID uuid.UUID) ([]domain.ProjectIntegration, error) {
 	return s.piRepo.ListByProject(ctx, projectID)
+}
+
+// SearchTR looks up the TR integration by share_slug, proxies the relay file-list API,
+// and returns in-memory filtered results.
+func (s *projectIntegrationService) SearchTR(ctx context.Context, shareSlug, q string, limit int) ([]domain.RelayFileItem, error) {
+	pi, err := s.piRepo.GetByShareSlug(ctx, shareSlug)
+	if err != nil {
+		return nil, err
+	}
+	if pi == nil {
+		return nil, apierror.NotFound("TeamRelayShare")
+	}
+
+	all, err := teamrelay.ListShareFiles(ctx, shareSlug, pi.AgentKey)
+	if err != nil {
+		return nil, err
+	}
+	if all == nil {
+		// relay returned 404 for the slug
+		return nil, apierror.NotFound("TeamRelayShare")
+	}
+
+	filtered := make([]domain.RelayFileItem, 0, len(all))
+	qLower := strings.ToLower(q)
+	for _, item := range all {
+		if qLower == "" || strings.Contains(strings.ToLower(item.Name), qLower) || strings.Contains(strings.ToLower(item.Path), qLower) {
+			filtered = append(filtered, item)
+			if len(filtered) == limit {
+				break
+			}
+		}
+	}
+	return filtered, nil
 }

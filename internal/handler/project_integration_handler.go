@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
@@ -142,4 +143,44 @@ func (h *ProjectIntegrationHandler) DeleteTeamRelay(c echo.Context) error {
 		return handleError(c, err)
 	}
 	return c.NoContent(http.StatusNoContent)
+}
+
+// TrSearch handles GET /api/v1/tr/search?share_id=<slug>&q=<query>&limit=<n>
+func (h *ProjectIntegrationHandler) TrSearch(c echo.Context) error {
+	shareSlug := c.QueryParam("share_id")
+	if shareSlug == "" {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("share_id is required"))
+	}
+
+	q := c.QueryParam("q")
+
+	limit := 20
+	if lStr := c.QueryParam("limit"); lStr != "" {
+		if n, parseErr := strconv.Atoi(lStr); parseErr == nil && n > 0 {
+			if n > 50 {
+				n = 50
+			}
+			limit = n
+		}
+	}
+
+	docs, err := h.piService.SearchTR(c.Request().Context(), shareSlug, q, limit)
+	if err != nil {
+		return handleError(c, err)
+	}
+
+	type docItem struct {
+		Title    string `json:"title"`
+		Path     string `json:"path"`
+		RelayURL string `json:"relay_url"`
+	}
+	items := make([]docItem, 0, len(docs))
+	for _, d := range docs {
+		items = append(items, docItem{
+			Title:    d.Name,
+			Path:     d.Path,
+			RelayURL: "relay://" + shareSlug + "/" + d.Path,
+		})
+	}
+	return c.JSON(http.StatusOK, map[string]any{"docs": items})
 }

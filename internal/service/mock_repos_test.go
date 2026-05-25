@@ -1705,3 +1705,79 @@ func (f *fakeTaskMover) calls() []moveCall {
 	defer f.mu.Unlock()
 	return append([]moveCall(nil), f.moves...)
 }
+
+// ---------------------------------------------------------------------------
+// MockProjectIntegrationRepository
+// ---------------------------------------------------------------------------
+
+type MockProjectIntegrationRepository struct {
+	bySlug map[string]*domain.ProjectIntegration
+	byKey  map[uuid.UUID]map[string]*domain.ProjectIntegration
+	err    error
+}
+
+func NewMockProjectIntegrationRepository() *MockProjectIntegrationRepository {
+	return &MockProjectIntegrationRepository{
+		bySlug: make(map[string]*domain.ProjectIntegration),
+		byKey:  make(map[uuid.UUID]map[string]*domain.ProjectIntegration),
+	}
+}
+
+func (m *MockProjectIntegrationRepository) Get(_ context.Context, projectID uuid.UUID, intType string) (*domain.ProjectIntegration, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	if m.byKey[projectID] == nil {
+		return nil, nil
+	}
+	pi, ok := m.byKey[projectID][intType]
+	if !ok {
+		return nil, nil
+	}
+	return pi, nil
+}
+
+func (m *MockProjectIntegrationRepository) GetByShareSlug(_ context.Context, shareSlug string) (*domain.ProjectIntegration, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	pi, ok := m.bySlug[shareSlug]
+	if !ok {
+		return nil, nil
+	}
+	return pi, nil
+}
+
+func (m *MockProjectIntegrationRepository) Upsert(_ context.Context, pi *domain.ProjectIntegration) error {
+	if m.err != nil {
+		return m.err
+	}
+	if m.byKey[pi.ProjectID] == nil {
+		m.byKey[pi.ProjectID] = make(map[string]*domain.ProjectIntegration)
+	}
+	m.byKey[pi.ProjectID][pi.Type] = pi
+	return nil
+}
+
+func (m *MockProjectIntegrationRepository) Delete(_ context.Context, projectID uuid.UUID, intType string) error {
+	if m.err != nil {
+		return m.err
+	}
+	if m.byKey[projectID] != nil {
+		delete(m.byKey[projectID], intType)
+	}
+	return nil
+}
+
+func (m *MockProjectIntegrationRepository) ListByProject(_ context.Context, projectID uuid.UUID) ([]domain.ProjectIntegration, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	var result []domain.ProjectIntegration
+	for _, pi := range m.byKey[projectID] {
+		result = append(result, *pi)
+	}
+	return result, nil
+}
+
+var _ repository.ProjectIntegrationRepository = (*MockProjectIntegrationRepository)(nil)

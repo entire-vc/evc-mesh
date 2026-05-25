@@ -109,9 +109,58 @@ func (c *client) Publish(ctx context.Context, taskID uuid.UUID, artifactName str
 	return webURL, pi.AgentKey, tErr
 }
 
-// transport POSTs artifact bytes to the relay sync-upload endpoint and returns the
-// relay-reported web URL on success (empty string if the relay omits one).
-// Contract (ADR-0045):
+// webShareResponse is the body returned by GET /v1/web/shares/{slug}.
+type webShareResponse struct {
+	WebFolderItems []struct {
+		Name string `json:"name"`
+		Path string `json:"path"`
+	} `json:"web_folder_items"`
+}
+
+// ListShareFiles calls GET /v1/web/shares/{shareSlug} and returns the file list.
+// Returns nil slice (not error) when the share is not found (caller maps to 404).
+func ListShareFiles(ctx context.Context, shareSlug, agentKey string) ([]domain.RelayFileItem, error) {
+	baseURL := os.Getenv("MESH_TEAMRELAY_RELAY_URL")
+	if baseURL == "" {
+		return nil, fmt.Errorf("teamrelay: MESH_TEAMRELAY_RELAY_URL not set")
+	}
+
+	endpoint := fmt.Sprintf("%s/v1/web/shares/%s", baseURL, url.PathEscape(shareSlug))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, http.NoBody)
+	if err != nil {
+		return nil, fmt.Errorf("teamrelay: build list request: %w", err)
+	}
+	req.Header.Set("X-Agent-Key", agentKey)
+
+	resp, err := relayHTTPClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("teamrelay: list files HTTP: %w", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+
+	switch resp.StatusCode {
+	case http.StatusOK:
+		var parsed webShareResponse
+		if jsonErr := json.Unmarshal(body, &parsed); jsonErr != nil {
+			return nil, fmt.Errorf("teamrelay: parse share response: %w", jsonErr)
+		}
+		items := make([]domain.RelayFileItem, 0, len(parsed.WebFolderItems))
+		for _, it := range parsed.WebFolderItems {
+			items = append(items, domain.RelayFileItem{Name: it.Name, Path: it.Path})
+		}
+		return items, nil
+	case http.StatusNotFound:
+		return nil, nil // share not found — caller maps to 404
+	case http.StatusUnauthorized, http.StatusForbidden:
+		return nil, fmt.Errorf("teamrelay: agent key rejected (status %d) for share %s", resp.StatusCode, shareSlug)
+	default:
+		return nil, fmt.Errorf("teamrelay: unexpected status %d listing share %s: %s", resp.StatusCode, shareSlug, body)
+	}
+}
+
+// transport POSTs artifact bytes to the relay upload endpoint.
+// Contract (locked 2026-05-22, relay PR #2 commit 7b3f395):
 //
 //	POST /v1/web/shares/{shareIdentifier}/sync-upload?path=<urlenc>
 //	shareIdentifier: UUID (shares.id = folder GUID) or slug (web-published only)

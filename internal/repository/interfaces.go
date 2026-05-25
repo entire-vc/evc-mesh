@@ -639,6 +639,9 @@ type PushSubscriptionRepository interface {
 // ProjectIntegrationRepository manages project-level integration settings.
 type ProjectIntegrationRepository interface {
 	Get(ctx context.Context, projectID uuid.UUID, intType string) (*domain.ProjectIntegration, error)
+	// GetByShareSlug finds the first enabled team_relay integration whose settings.share_slug matches.
+	// Returns nil if not found.
+	GetByShareSlug(ctx context.Context, shareSlug string) (*domain.ProjectIntegration, error)
 	Upsert(ctx context.Context, pi *domain.ProjectIntegration) error
 	Delete(ctx context.Context, projectID uuid.UUID, intType string) error
 	ListByProject(ctx context.Context, projectID uuid.UUID) ([]domain.ProjectIntegration, error)

@@ -80,6 +80,26 @@ func (r *ProjectIntegrationRepo) Get(ctx context.Context, projectID uuid.UUID, i
 	return &pi, nil
 }
 
+// GetByShareSlug finds the first enabled team_relay integration whose settings->>'share_slug' matches.
+func (r *ProjectIntegrationRepo) GetByShareSlug(ctx context.Context, shareSlug string) (*domain.ProjectIntegration, error) {
+	const q = `SELECT id, project_id, type, enabled, settings, agent_key, created_at, updated_at, created_by
+	            FROM project_integrations
+	            WHERE type = 'team_relay' AND enabled = true AND settings->>'share_slug' = $1
+	            LIMIT 1`
+	var row projectIntegrationRow
+	if err := r.db.GetContext(ctx, &row, q, shareSlug); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	pi, err := row.toDomain()
+	if err != nil {
+		return nil, err
+	}
+	return &pi, nil
+}
+
 // Upsert inserts or updates a project integration. When agent_key is NULL, the existing value is preserved.
 func (r *ProjectIntegrationRepo) Upsert(ctx context.Context, pi *domain.ProjectIntegration) error {
 	settings := pi.Settings
