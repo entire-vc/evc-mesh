@@ -85,6 +85,7 @@ func rateLimitRedis(cfg RateLimitConfig) echo.MiddlewareFunc {
 			}
 
 			if !ok {
+				RecordRateLimitHit(keyTypeFromKey(key))
 				// Retry-After: the current window resets at the next minute boundary.
 				secondsUntilReset := 60 - (time.Now().Unix() % 60)
 				return tooManyRequestsJSON(c, int(secondsUntilReset))

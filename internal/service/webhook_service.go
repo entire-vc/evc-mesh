@@ -22,6 +22,7 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/repository"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
+	pkgmetrics "github.com/entire-vc/evc-mesh/pkg/metrics"
 )
 
 const (
@@ -255,6 +256,8 @@ func (s *webhookService) dispatchOne(wh domain.WebhookConfig, eventType string, 
 	if err := s.repo.CreateDelivery(bgCtx, delivery); err != nil {
 		log.Printf("[webhook] failed to record delivery for webhook %s: %v", wh.ID, err)
 	}
+
+	pkgmetrics.RecordWebhookDispatch(eventType, success)
 
 	if success {
 		if err := s.repo.ResetFailure(bgCtx, wh.ID); err != nil {

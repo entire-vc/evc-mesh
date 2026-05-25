@@ -3,6 +3,8 @@ package mcp
 import (
 	"sync"
 	"time"
+
+	pkgmetrics "github.com/entire-vc/evc-mesh/pkg/metrics"
 )
 
 // SessionTracker tracks MCP tool usage per agent session (in-memory).
@@ -34,6 +36,7 @@ func (t *SessionTracker) RecordToolCall(toolName string) {
 	defer t.mu.Unlock()
 	t.toolCalls++
 	t.toolBreakdown[toolName]++
+	pkgmetrics.RecordMCPToolCall(toolName, "ok")
 
 	switch toolName {
 	case "remember":
