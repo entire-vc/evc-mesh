@@ -48,7 +48,7 @@ import { DependencyList } from "@/components/dependency-list";
 import { CustomFieldRenderer } from "@/components/custom-field-renderer";
 import { DatePickerPopover } from "@/components/date-picker-popover";
 import { DescriptionEditor } from "@/components/description-editor";
-import { MarkdownRenderer } from "@/components/markdown-renderer";
+import { MarkdownWithRelay } from "@/components/MarkdownWithRelay";
 import { RecurringHistoryPanel } from "@/components/recurring-history-panel";
 import { cn } from "@/lib/cn";
 import {
@@ -1021,7 +1021,7 @@ export function TaskPanel({
                 ) : (
                   <div className="min-h-[60px] rounded-lg border border-border p-3 text-sm">
                     {currentTask.description ? (
-                      <MarkdownRenderer content={currentTask.description} />
+                      <MarkdownWithRelay content={currentTask.description} />
                     ) : (
                       <span
                         className="cursor-text text-muted-foreground hover:text-foreground"
