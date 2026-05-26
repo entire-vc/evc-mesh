@@ -748,18 +748,24 @@ func (h *TaskHandler) Checkout(c echo.Context) error {
 	if err != nil {
 		var conflict *service.CheckoutConflictError
 		if errors.As(err, &conflict) {
+			holderName := conflict.CheckedOutByName
+			if holderName == "" {
+				holderName = conflict.CheckedOutBy.String()
+			}
+			remaining := time.Until(conflict.ExpiresAt)
+			expiresInSeconds := int(remaining.Seconds())
+			if expiresInSeconds < 0 {
+				expiresInSeconds = 0
+			}
 			details := map[string]interface{}{
-				"checked_out_by": conflict.CheckedOutBy,
-				"expires_at":     conflict.ExpiresAt,
+				"checked_out_by":      conflict.CheckedOutBy,
+				"checked_out_by_name": holderName,
+				"checked_out_by_kind": "agent",
+				"expires_at":          conflict.ExpiresAt,
+				"expires_in_seconds":  expiresInSeconds,
 			}
-			if conflict.CheckedOutByName != "" {
-				details["checked_out_by_name"] = conflict.CheckedOutByName
-			}
-			if conflict.CheckedOutByKind != "" {
-				details["checked_out_by_kind"] = conflict.CheckedOutByKind
-			}
-			if remaining := time.Until(conflict.ExpiresAt); remaining > 0 {
-				details["expires_in_seconds"] = int(remaining.Seconds())
+			if conflict.AcquiredAt != nil {
+				details["acquired_at"] = conflict.AcquiredAt
 			}
 			return c.JSON(http.StatusConflict, map[string]interface{}{
 				"code":    409,

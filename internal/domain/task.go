@@ -64,9 +64,10 @@ type Task struct {
 	RecurringInstanceNumber *int       `json:"recurring_instance_number,omitempty" db:"recurring_instance_number"`
 
 	// Checkout fields — set when an agent has an exclusive application-level lock on the task.
-	CheckedOutBy    *uuid.UUID `json:"checked_out_by,omitempty" db:"checked_out_by"`
-	CheckoutToken   *uuid.UUID `json:"checkout_token,omitempty" db:"checkout_token"`
-	CheckoutExpires *time.Time `json:"checkout_expires,omitempty" db:"checkout_expires"`
+	CheckedOutBy       *uuid.UUID `json:"checked_out_by,omitempty" db:"checked_out_by"`
+	CheckoutToken      *uuid.UUID `json:"checkout_token,omitempty" db:"checkout_token"`
+	CheckoutExpires    *time.Time `json:"checkout_expires,omitempty" db:"checkout_expires"`
+	CheckoutAcquiredAt *time.Time `json:"checkout_acquired_at,omitempty" db:"checkout_acquired_at"`
 
 	// Computed fields — populated by enriched list/get queries, not stored columns.
 	SubtaskCount  int     `json:"subtask_count"`

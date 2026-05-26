@@ -995,3 +995,88 @@ func TestTaskHandler_ListSubtasks_ServiceError(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusNotFound, rec.Code)
 }
+
+// --- TestTaskHandler_Checkout 409 body ---
+
+func TestTaskHandler_Checkout_409_AllFieldsPresent(t *testing.T) {
+	taskID := uuid.New()
+	holderID := uuid.New()
+	acquiredAt := time.Now().Add(-10 * time.Minute)
+	expiresAt := time.Now().Add(50 * time.Minute)
+
+	mockSvc := &MockTaskService{
+		CheckoutTaskFunc: func(_ context.Context, _ uuid.UUID, _ int, _ map[string]interface{}) (*service.CheckoutResult, error) {
+			return nil, &service.CheckoutConflictError{
+				CheckedOutBy:     holderID,
+				CheckedOutByName: "Linus",
+				CheckedOutByKind: "agent",
+				ExpiresAt:        expiresAt,
+				AcquiredAt:       &acquiredAt,
+			}
+		},
+	}
+
+	h, e := setupTaskTest(mockSvc)
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"ttl_minutes":30}`))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/tasks/:task_id/checkout")
+	c.SetParamNames("task_id")
+	c.SetParamValues(taskID.String())
+
+	err := h.Checkout(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusConflict, rec.Code)
+
+	var body map[string]interface{}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	details, ok := body["details"].(map[string]interface{})
+	require.True(t, ok, "response must have a 'details' object")
+	assert.Equal(t, "Linus", details["checked_out_by_name"], "checked_out_by_name must always be present")
+	assert.NotNil(t, details["expires_in_seconds"], "expires_in_seconds must always be present")
+	assert.NotNil(t, details["acquired_at"], "acquired_at must be present when AcquiredAt is set")
+}
+
+func TestTaskHandler_Checkout_409_FallbackNameAndZeroExpiry(t *testing.T) {
+	taskID := uuid.New()
+	holderID := uuid.New()
+	// Lock is already expired (in the past).
+	expiresAt := time.Now().Add(-5 * time.Minute)
+
+	mockSvc := &MockTaskService{
+		CheckoutTaskFunc: func(_ context.Context, _ uuid.UUID, _ int, _ map[string]interface{}) (*service.CheckoutResult, error) {
+			return nil, &service.CheckoutConflictError{
+				CheckedOutBy:     holderID,
+				CheckedOutByName: "", // name unavailable
+				CheckedOutByKind: "agent",
+				ExpiresAt:        expiresAt,
+				AcquiredAt:       nil, // no acquired_at in older lock
+			}
+		},
+	}
+
+	h, e := setupTaskTest(mockSvc)
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"ttl_minutes":30}`))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/tasks/:task_id/checkout")
+	c.SetParamNames("task_id")
+	c.SetParamValues(taskID.String())
+
+	err := h.Checkout(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusConflict, rec.Code)
+
+	var body map[string]interface{}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	details, ok := body["details"].(map[string]interface{})
+	require.True(t, ok, "response must have a 'details' object")
+	assert.Equal(t, holderID.String(), details["checked_out_by_name"],
+		"checked_out_by_name must fall back to UUID string when name is empty")
+	expiresIn, ok := details["expires_in_seconds"].(float64)
+	require.True(t, ok, "expires_in_seconds must always be present")
+	assert.Equal(t, float64(0), expiresIn, "expires_in_seconds must be 0 for expired locks (not negative)")
+	assert.Nil(t, details["acquired_at"], "acquired_at must be absent when AcquiredAt is nil")
+}

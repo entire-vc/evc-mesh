@@ -46,7 +46,8 @@ const taskBaseColsNoAlias = `
 	due_date, estimated_hours, custom_fields, labels,
 	task_number, created_by, created_by_type, created_at, updated_at,
 	completed_at, deleted_at,
-	recurring_schedule_id, recurring_instance_number`
+	recurring_schedule_id, recurring_instance_number,
+	checked_out_by, checkout_token, checkout_expires, checkout_acquired_at`
 
 const taskComputedCols = `
 	(SELECT COUNT(*) FROM tasks st WHERE st.parent_task_id = tasks.id AND st.deleted_at IS NULL) AS subtask_count,
@@ -115,6 +116,12 @@ type taskRow struct {
 	RecurringScheduleID     *uuid.UUID `db:"recurring_schedule_id"`
 	RecurringInstanceNumber *int       `db:"recurring_instance_number"`
 
+	// Checkout fields.
+	CheckedOutBy       *uuid.UUID `db:"checked_out_by"`
+	CheckoutToken      *uuid.UUID `db:"checkout_token"`
+	CheckoutExpires    *time.Time `db:"checkout_expires"`
+	CheckoutAcquiredAt *time.Time `db:"checkout_acquired_at"`
+
 	// Computed enrichment fields populated by enriched queries.
 	SubtaskCount  int     `db:"subtask_count"`
 	AssigneeName  *string `db:"assignee_name"`
@@ -146,6 +153,10 @@ func (r *taskRow) toDomain() domain.Task {
 		CompletedAt:             r.CompletedAt,
 		RecurringScheduleID:     r.RecurringScheduleID,
 		RecurringInstanceNumber: r.RecurringInstanceNumber,
+		CheckedOutBy:            r.CheckedOutBy,
+		CheckoutToken:           r.CheckoutToken,
+		CheckoutExpires:         r.CheckoutExpires,
+		CheckoutAcquiredAt:      r.CheckoutAcquiredAt,
 		SubtaskCount:            r.SubtaskCount,
 		AssigneeName:            r.AssigneeName,
 		CreatedByName:           r.CreatedByName,
@@ -605,10 +616,14 @@ func (r *TaskRepo) ListByStatusCategory(ctx context.Context, workspaceID uuid.UU
 func (r *TaskRepo) AtomicCheckout(ctx context.Context, taskID, agentID, token uuid.UUID, expiresAt time.Time) error {
 	const query = `
 		UPDATE tasks
-		SET checked_out_by  = $1,
-		    checkout_token   = $2,
-		    checkout_expires = $3,
-		    updated_at       = now()
+		SET checked_out_by       = $1,
+		    checkout_token        = $2,
+		    checkout_expires      = $3,
+		    checkout_acquired_at  = CASE
+		        WHEN checked_out_by = $1 THEN checkout_acquired_at
+		        ELSE now()
+		    END,
+		    updated_at            = now()
 		WHERE id = $4
 		  AND deleted_at IS NULL
 		  AND (
@@ -633,10 +648,11 @@ func (r *TaskRepo) AtomicCheckout(ctx context.Context, taskID, agentID, token uu
 func (r *TaskRepo) ReleaseCheckout(ctx context.Context, taskID, token uuid.UUID) error {
 	const query = `
 		UPDATE tasks
-		SET checked_out_by  = NULL,
-		    checkout_token   = NULL,
-		    checkout_expires = NULL,
-		    updated_at       = now()
+		SET checked_out_by      = NULL,
+		    checkout_token       = NULL,
+		    checkout_expires     = NULL,
+		    checkout_acquired_at = NULL,
+		    updated_at           = now()
 		WHERE id = $1
 		  AND checkout_token = $2
 		  AND deleted_at IS NULL`
@@ -686,10 +702,11 @@ func (r *TaskRepo) MoveToProject(ctx context.Context, taskID, targetProjectID, t
 func (r *TaskRepo) ForceReleaseCheckout(ctx context.Context, taskID uuid.UUID) error {
 	const query = `
 		UPDATE tasks
-		SET checked_out_by  = NULL,
-		    checkout_token   = NULL,
-		    checkout_expires = NULL,
-		    updated_at       = now()
+		SET checked_out_by      = NULL,
+		    checkout_token       = NULL,
+		    checkout_expires     = NULL,
+		    checkout_acquired_at = NULL,
+		    updated_at           = now()
 		WHERE id = $1
 		  AND deleted_at IS NULL`
 	_, err := r.db.ExecContext(ctx, query, taskID)
@@ -703,10 +720,11 @@ func (r *TaskRepo) ForceReleaseCheckout(ctx context.Context, taskID uuid.UUID) e
 func (r *TaskRepo) ReleaseExpiredCheckouts(ctx context.Context) (int64, error) {
 	const query = `
 		UPDATE tasks
-		SET checked_out_by  = NULL,
-		    checkout_token   = NULL,
-		    checkout_expires = NULL,
-		    updated_at       = now()
+		SET checked_out_by      = NULL,
+		    checkout_token       = NULL,
+		    checkout_expires     = NULL,
+		    checkout_acquired_at = NULL,
+		    updated_at           = now()
 		WHERE checkout_expires < now()
 		  AND checkout_expires IS NOT NULL
 		  AND deleted_at IS NULL`
