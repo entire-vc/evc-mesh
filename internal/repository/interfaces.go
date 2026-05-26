@@ -93,6 +93,10 @@ type TaskRepository interface {
 	// Used by the service layer for auto-release on terminal status transitions
 	// and for admin force-unlock. Returns nil even when no checkout was held.
 	ForceReleaseCheckout(ctx context.Context, taskID uuid.UUID) error
+	// ReleaseExpiredCheckouts clears checkout fields on all tasks whose
+	// checkout_expires has passed. Returns the number of locks released.
+	// Called by the background reaper goroutine in cmd/api/main.go.
+	ReleaseExpiredCheckouts(ctx context.Context) (int64, error)
 	// MoveToProject atomically reassigns a task to a different project, assigning it
 	// the given target status and a new task_number within that project.
 	// Returns apierror.NotFound("Task") if the task does not exist or is soft-deleted.

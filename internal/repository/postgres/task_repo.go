@@ -680,6 +680,28 @@ func (r *TaskRepo) ForceReleaseCheckout(ctx context.Context, taskID uuid.UUID) e
 	return err
 }
 
+// ReleaseExpiredCheckouts clears checkout fields on all tasks whose checkout_expires
+// is in the past. This is called periodically by the background reaper goroutine so
+// that orphan locks (held by dead sessions) are reclaimed without waiting for
+// another agent to attempt a checkout on the same task.
+func (r *TaskRepo) ReleaseExpiredCheckouts(ctx context.Context) (int64, error) {
+	const query = `
+		UPDATE tasks
+		SET checked_out_by  = NULL,
+		    checkout_token   = NULL,
+		    checkout_expires = NULL,
+		    updated_at       = now()
+		WHERE checkout_expires < now()
+		  AND checkout_expires IS NOT NULL
+		  AND deleted_at IS NULL`
+	res, err := r.db.ExecContext(ctx, query)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
+}
+
 // ExtendCheckout pushes the checkout_expires deadline forward. The token must match
 // and the existing checkout must not already be expired (to prevent hijacking an
 // expired slot via extend).

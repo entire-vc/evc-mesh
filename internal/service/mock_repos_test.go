@@ -395,6 +395,25 @@ func (m *MockTaskRepository) ForceReleaseCheckout(_ context.Context, taskID uuid
 	return nil
 }
 
+func (m *MockTaskRepository) ReleaseExpiredCheckouts(_ context.Context) (int64, error) {
+	if m.errToReturn != nil {
+		return 0, m.errToReturn
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var released int64
+	now := time.Now()
+	for _, t := range m.items {
+		if t.CheckoutExpires != nil && t.CheckoutExpires.Before(now) {
+			t.CheckedOutBy = nil
+			t.CheckoutToken = nil
+			t.CheckoutExpires = nil
+			released++
+		}
+	}
+	return released, nil
+}
+
 func (m *MockTaskRepository) MoveToProject(_ context.Context, taskID, targetProjectID, targetStatusID uuid.UUID) error {
 	if m.errToReturn != nil {
 		return m.errToReturn

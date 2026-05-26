@@ -423,3 +423,53 @@ func TestCheckoutTask_InconsistentCheckoutStateReturns409(t *testing.T) {
 	require.ErrorAs(t, err, &apiErr, "expected apierror.Conflict, not raw ErrCheckoutConflict (which would 500)")
 	assert.Equal(t, http.StatusConflict, apiErr.Code)
 }
+
+// ---------------------------------------------------------------------------
+// ReleaseExpiredCheckouts (mock repo behaviour)
+// ---------------------------------------------------------------------------
+
+func TestMockTaskRepository_ReleaseExpiredCheckouts_ClearsExpiredLocks(t *testing.T) {
+	repo := NewMockTaskRepository()
+
+	agentID := uuid.New()
+	token := uuid.New()
+
+	now := time.Now()
+	pastExpiry := now.Add(-5 * time.Minute)
+	futureExpiry := now.Add(30 * time.Minute)
+
+	expiredID := uuid.New()
+	activeID := uuid.New()
+	uncheckedID := uuid.New()
+
+	repo.items[expiredID] = &domain.Task{
+		ID:              expiredID,
+		CheckedOutBy:    &agentID,
+		CheckoutToken:   &token,
+		CheckoutExpires: &pastExpiry,
+	}
+	repo.items[activeID] = &domain.Task{
+		ID:              activeID,
+		CheckedOutBy:    &agentID,
+		CheckoutToken:   &token,
+		CheckoutExpires: &futureExpiry,
+	}
+	repo.items[uncheckedID] = &domain.Task{ID: uncheckedID}
+
+	n, err := repo.ReleaseExpiredCheckouts(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), n, "only the expired lock should be released")
+
+	assert.Nil(t, repo.items[expiredID].CheckedOutBy, "expired lock should be cleared")
+	assert.NotNil(t, repo.items[activeID].CheckedOutBy, "active lock should be untouched")
+	assert.Nil(t, repo.items[uncheckedID].CheckedOutBy, "unchecked task should be untouched")
+}
+
+func TestMockTaskRepository_ReleaseExpiredCheckouts_NoLocks(t *testing.T) {
+	repo := NewMockTaskRepository()
+	repo.items[uuid.New()] = &domain.Task{ID: uuid.New()}
+
+	n, err := repo.ReleaseExpiredCheckouts(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), n)
+}

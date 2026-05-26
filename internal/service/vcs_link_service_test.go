@@ -151,6 +151,7 @@ func (r *fakeTaskRepo) MoveToProject(context.Context, uuid.UUID, uuid.UUID, uuid
 	return nil
 }
 func (r *fakeTaskRepo) ForceReleaseCheckout(context.Context, uuid.UUID) error { return nil }
+func (r *fakeTaskRepo) ReleaseExpiredCheckouts(context.Context) (int64, error) { return 0, nil }
 func (r *fakeTaskRepo) ListByUserActive(context.Context, uuid.UUID, uuid.UUID, pagination.Params) (*pagination.Page[domain.Task], error) {
 	return nil, nil
 }
