@@ -71,6 +71,7 @@ type Task struct {
 	// Computed fields — populated by enriched list/get queries, not stored columns.
 	SubtaskCount  int     `json:"subtask_count"`
 	AssigneeName  *string `json:"assignee_name,omitempty"`
+	CreatedByName *string `json:"created_by_name,omitempty"`
 	ArtifactCount int     `json:"artifact_count"`
 	VCSLinkCount  int     `json:"vcs_link_count"`
 	// URL is the canonical short deep-link, e.g. https://mesh.entire.host/t/<id>.

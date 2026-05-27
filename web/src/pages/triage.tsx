@@ -205,6 +205,20 @@ function TriageTaskRow({
             >
               {task.priority}
             </span>
+            {task.created_by_name && (
+              <>
+                <span className="text-xs text-muted-foreground">·</span>
+                <span className="text-xs text-muted-foreground">by {task.created_by_name}</span>
+              </>
+            )}
+            <span className="text-xs text-muted-foreground">·</span>
+            <a
+              href={`https://mesh.entire.host/t/${task.id}`}
+              onClick={(e) => e.stopPropagation()}
+              className="font-mono text-xs text-muted-foreground hover:text-foreground hover:underline"
+            >
+              #{task.id.slice(0, 8)}
+            </a>
           </div>
           <p className="truncate text-sm font-medium">{task.title}</p>
           {task.description && (
