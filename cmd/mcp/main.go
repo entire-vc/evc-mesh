@@ -14,6 +14,8 @@ import (
 	mcpserver "github.com/entire-vc/evc-mesh/internal/mcp"
 
 	sdkserver "github.com/mark3labs/mcp-go/server"
+
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 func main() {
@@ -239,11 +241,16 @@ func main() {
 		})
 		mux.Handle("/core/message", coreSSE.MessageHandler())
 
+		// Prometheus metrics scrape endpoint (unauthenticated; in prod the port
+		// is bound to 127.0.0.1 and Caddy gates access by source IP).
+		mux.Handle("/metrics", promhttp.Handler())
+
 		log.Printf("Starting MCP SSE server on %s (multi-agent mode)", addr)
 		log.Printf("  Full profile SSE endpoint:    %s/sse", baseURL)
 		log.Printf("  Full profile message endpoint: %s/message", baseURL)
 		log.Printf("  Core profile SSE endpoint:    %s/core/sse", baseURL)
 		log.Printf("  Core profile message endpoint: %s/core/message", baseURL)
+		log.Printf("  Prometheus metrics endpoint:  %s/metrics", baseURL)
 		log.Printf("  Auth: Authorization: Bearer agk_..., X-Agent-Key, or ?agent_key=agk_...")
 
 		httpServer := &http.Server{
