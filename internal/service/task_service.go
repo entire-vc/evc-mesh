@@ -1216,6 +1216,7 @@ func (s *taskService) CheckoutTask(ctx context.Context, taskID uuid.UUID, ttlMin
 					CheckedOutBy:     *latest.CheckedOutBy,
 					CheckedOutByKind: "agent",
 					ExpiresAt:        *latest.CheckoutExpires,
+					AcquiredAt:       latest.CheckoutAcquiredAt,
 				}
 				if s.agentRepo != nil {
 					if agent, agentErr := s.agentRepo.GetByID(ctx, *latest.CheckedOutBy); agentErr == nil && agent != nil {

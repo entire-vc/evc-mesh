@@ -343,6 +343,10 @@ func (m *MockTaskRepository) AtomicCheckout(_ context.Context, taskID, agentID, 
 			return pgRepo.ErrCheckoutConflict
 		}
 	}
+	now := timeNow()
+	if t.CheckedOutBy == nil || *t.CheckedOutBy != agentID {
+		t.CheckoutAcquiredAt = &now
+	}
 	t.CheckedOutBy = &agentID
 	t.CheckoutToken = &token
 	t.CheckoutExpires = &expiresAt
@@ -362,6 +366,7 @@ func (m *MockTaskRepository) ReleaseCheckout(_ context.Context, taskID, _ uuid.U
 	t.CheckedOutBy = nil
 	t.CheckoutToken = nil
 	t.CheckoutExpires = nil
+	t.CheckoutAcquiredAt = nil
 	return nil
 }
 
@@ -392,6 +397,7 @@ func (m *MockTaskRepository) ForceReleaseCheckout(_ context.Context, taskID uuid
 	t.CheckedOutBy = nil
 	t.CheckoutToken = nil
 	t.CheckoutExpires = nil
+	t.CheckoutAcquiredAt = nil
 	return nil
 }
 
@@ -404,12 +410,14 @@ func (m *MockTaskRepository) ReleaseExpiredCheckouts(_ context.Context) (int64, 
 	var released int64
 	now := time.Now()
 	for _, t := range m.items {
-		if t.CheckoutExpires != nil && t.CheckoutExpires.Before(now) {
-			t.CheckedOutBy = nil
-			t.CheckoutToken = nil
-			t.CheckoutExpires = nil
-			released++
+		if t.CheckoutExpires == nil || !t.CheckoutExpires.Before(now) {
+			continue
 		}
+		t.CheckedOutBy = nil
+		t.CheckoutToken = nil
+		t.CheckoutExpires = nil
+		t.CheckoutAcquiredAt = nil
+		released++
 	}
 	return released, nil
 }
