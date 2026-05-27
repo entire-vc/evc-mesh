@@ -58,7 +58,14 @@ const taskComputedCols = `
 		WHEN tasks.assignee_type = 'user' THEN
 			(SELECT display_name FROM users WHERE id = tasks.assignee_id)
 		ELSE NULL
-	END AS assignee_name`
+	END AS assignee_name,
+	CASE
+		WHEN tasks.created_by_type = 'agent' THEN
+			(SELECT name FROM agents WHERE id = tasks.created_by AND deleted_at IS NULL)
+		WHEN tasks.created_by_type = 'user' THEN
+			(SELECT COALESCE(NULLIF(display_name,''), SPLIT_PART(email,'@',1)) FROM users WHERE id = tasks.created_by)
+		ELSE NULL
+	END AS created_by_name`
 
 const taskComputedColsAliased = `
 	(SELECT COUNT(*) FROM tasks st WHERE st.parent_task_id = t.id AND st.deleted_at IS NULL) AS subtask_count,
@@ -70,7 +77,14 @@ const taskComputedColsAliased = `
 		WHEN t.assignee_type = 'user' THEN
 			(SELECT display_name FROM users WHERE id = t.assignee_id)
 		ELSE NULL
-	END AS assignee_name`
+	END AS assignee_name,
+	CASE
+		WHEN t.created_by_type = 'agent' THEN
+			(SELECT name FROM agents WHERE id = t.created_by AND deleted_at IS NULL)
+		WHEN t.created_by_type = 'user' THEN
+			(SELECT COALESCE(NULLIF(display_name,''), SPLIT_PART(email,'@',1)) FROM users WHERE id = t.created_by)
+		ELSE NULL
+	END AS created_by_name`
 
 // taskRow is the DB row representation (includes task_number and deleted_at
 // that the domain model does not have, plus 4 computed enrichment fields).
@@ -104,6 +118,7 @@ type taskRow struct {
 	// Computed enrichment fields populated by enriched queries.
 	SubtaskCount  int     `db:"subtask_count"`
 	AssigneeName  *string `db:"assignee_name"`
+	CreatedByName *string `db:"created_by_name"`
 	ArtifactCount int     `db:"artifact_count"`
 	VCSLinkCount  int     `db:"vcs_link_count"`
 }
@@ -133,6 +148,7 @@ func (r *taskRow) toDomain() domain.Task {
 		RecurringInstanceNumber: r.RecurringInstanceNumber,
 		SubtaskCount:            r.SubtaskCount,
 		AssigneeName:            r.AssigneeName,
+		CreatedByName:           r.CreatedByName,
 		ArtifactCount:           r.ArtifactCount,
 		VCSLinkCount:            r.VCSLinkCount,
 	}
