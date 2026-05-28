@@ -269,6 +269,7 @@ export function CreateTaskDialog({
             value={description}
             onChange={setDescription}
             projectId={currentProject?.id}
+            projectSettings={currentProject?.settings}
             placeholder="Add a description... (Markdown, paste images)"
             rows={3}
             onPendingImage={(pending) => {

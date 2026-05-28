@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Bold, Code, Italic, Link, Paperclip } from "lucide-react";
+import { Bold, BookOpen, Code, Italic, Link } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { RelayDocPicker } from "@/components/RelayDocPicker";
 
@@ -303,7 +303,7 @@ export function DescriptionEditor({
                   onClick={() => setPickerOpen(true)}
                   className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
                 >
-                  <Paperclip className="h-3.5 w-3.5" />
+                  <BookOpen className="h-3.5 w-3.5" />
                 </button>
               </>
             )}
