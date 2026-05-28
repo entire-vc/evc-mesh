@@ -452,7 +452,7 @@ export function CommentList({ taskId, projId }: CommentListProps) {
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
       {/* Scrollable comments list */}
-      <div className="flex-1 overflow-y-auto p-4">
+      <div className="flex-1 overflow-x-hidden overflow-y-auto p-4">
         {topLevel.length === 0 && (
           <p className="py-4 text-center text-sm text-muted-foreground">
             No comments yet. Be the first to comment.
