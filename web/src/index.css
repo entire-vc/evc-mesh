@@ -61,3 +61,12 @@ pre {
 .pb-safe {
   padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
 }
+
+/* Hide scrollbar while keeping scroll functionality */
+.scrollbar-hide {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
