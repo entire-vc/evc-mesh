@@ -1144,54 +1144,59 @@ export function TaskPanel({
               <div className="pointer-events-none absolute inset-y-0 right-0 w-10 bg-gradient-to-l from-background to-transparent" />
             </div>
 
-            {/* Mobile tab content */}
-            <div className="flex-1 overflow-y-auto">
-              {activeMobileTab === "details" && (
-                <div className="space-y-5 px-5 py-4">
-                  {propertiesGrid}
-                </div>
-              )}
-              {activeMobileTab === "description" && (
-                <div className="px-5 py-4">
-                  {descriptionPanel}
-                </div>
-              )}
-              {activeMobileTab === "comments" && (
+            {/* Mobile tab content — comments gets its own bounded flex container so
+                the reply form stays pinned at the bottom; all other tabs share a
+                single scrollable wrapper. */}
+            {activeMobileTab === "comments" ? (
+              <div className="flex flex-1 min-h-0 flex-col overflow-hidden">
                 <CommentList taskId={currentTask.id} />
-              )}
-              {activeMobileTab === "subtasks" && (
-                <div className="flex-1 overflow-y-auto p-3">
-                  <SubtaskList
-                    taskId={currentTask.id}
-                    onOpenSubtask={pushTask}
-                  />
-                </div>
-              )}
-              {activeMobileTab === "artifacts" && (
-                <div className="flex-1 overflow-y-auto p-3">
-                  <ArtifactList
-                    taskId={currentTask.id}
-                    projId={currentTask.project_id}
-                    projectSettings={
-                      (projects.find((p) => p.id === currentTask.project_id) ?? currentProject)?.settings
-                    }
-                    onRelayDocSelect={(url) => {
-                      setDescDraft((prev) => {
-                        const sep = prev && !prev.endsWith("\n") ? "\n" : "";
-                        return prev + sep + url + "\n";
-                      });
-                      setEditingDescription(true);
-                      setActiveMobileTab("description");
-                    }}
-                  />
-                </div>
-              )}
-              {activeMobileTab === "activity" && (
-                <div className="flex-1 overflow-y-auto p-4">
-                  <ActivityLog taskId={currentTask.id} />
-                </div>
-              )}
-            </div>
+              </div>
+            ) : (
+              <div className="flex-1 overflow-y-auto">
+                {activeMobileTab === "details" && (
+                  <div className="space-y-5 px-5 py-4">
+                    {propertiesGrid}
+                  </div>
+                )}
+                {activeMobileTab === "description" && (
+                  <div className="px-5 py-4">
+                    {descriptionPanel}
+                  </div>
+                )}
+                {activeMobileTab === "subtasks" && (
+                  <div className="p-3">
+                    <SubtaskList
+                      taskId={currentTask.id}
+                      onOpenSubtask={pushTask}
+                    />
+                  </div>
+                )}
+                {activeMobileTab === "artifacts" && (
+                  <div className="p-3">
+                    <ArtifactList
+                      taskId={currentTask.id}
+                      projId={currentTask.project_id}
+                      projectSettings={
+                        (projects.find((p) => p.id === currentTask.project_id) ?? currentProject)?.settings
+                      }
+                      onRelayDocSelect={(url) => {
+                        setDescDraft((prev) => {
+                          const sep = prev && !prev.endsWith("\n") ? "\n" : "";
+                          return prev + sep + url + "\n";
+                        });
+                        setEditingDescription(true);
+                        setActiveMobileTab("description");
+                      }}
+                    />
+                  </div>
+                )}
+                {activeMobileTab === "activity" && (
+                  <div className="p-4">
+                    <ActivityLog taskId={currentTask.id} />
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           {/* ============================================================= */}
