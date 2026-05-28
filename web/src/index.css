@@ -56,3 +56,8 @@ pre {
 .dark input::-webkit-calendar-picker-indicator {
   filter: invert(1);
 }
+
+/* iOS safe-area padding for elements pinned above the home indicator */
+.pb-safe {
+  padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+}
