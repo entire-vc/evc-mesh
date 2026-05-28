@@ -46,7 +46,8 @@ const taskBaseColsNoAlias = `
 	due_date, estimated_hours, custom_fields, labels,
 	task_number, created_by, created_by_type, created_at, updated_at,
 	completed_at, deleted_at,
-	recurring_schedule_id, recurring_instance_number`
+	recurring_schedule_id, recurring_instance_number,
+	checked_out_by, checkout_token, checkout_expires, checkout_acquired_at`
 
 const taskComputedCols = `
 	(SELECT COUNT(*) FROM tasks st WHERE st.parent_task_id = tasks.id AND st.deleted_at IS NULL) AS subtask_count,
@@ -58,7 +59,14 @@ const taskComputedCols = `
 		WHEN tasks.assignee_type = 'user' THEN
 			(SELECT display_name FROM users WHERE id = tasks.assignee_id)
 		ELSE NULL
-	END AS assignee_name`
+	END AS assignee_name,
+	CASE
+		WHEN tasks.created_by_type = 'agent' THEN
+			(SELECT name FROM agents WHERE id = tasks.created_by AND deleted_at IS NULL)
+		WHEN tasks.created_by_type = 'user' THEN
+			(SELECT COALESCE(NULLIF(display_name,''), SPLIT_PART(email,'@',1)) FROM users WHERE id = tasks.created_by)
+		ELSE NULL
+	END AS created_by_name`
 
 const taskComputedColsAliased = `
 	(SELECT COUNT(*) FROM tasks st WHERE st.parent_task_id = t.id AND st.deleted_at IS NULL) AS subtask_count,
@@ -70,7 +78,14 @@ const taskComputedColsAliased = `
 		WHEN t.assignee_type = 'user' THEN
 			(SELECT display_name FROM users WHERE id = t.assignee_id)
 		ELSE NULL
-	END AS assignee_name`
+	END AS assignee_name,
+	CASE
+		WHEN t.created_by_type = 'agent' THEN
+			(SELECT name FROM agents WHERE id = t.created_by AND deleted_at IS NULL)
+		WHEN t.created_by_type = 'user' THEN
+			(SELECT COALESCE(NULLIF(display_name,''), SPLIT_PART(email,'@',1)) FROM users WHERE id = t.created_by)
+		ELSE NULL
+	END AS created_by_name`
 
 // taskRow is the DB row representation (includes task_number and deleted_at
 // that the domain model does not have, plus 4 computed enrichment fields).
@@ -101,9 +116,16 @@ type taskRow struct {
 	RecurringScheduleID     *uuid.UUID `db:"recurring_schedule_id"`
 	RecurringInstanceNumber *int       `db:"recurring_instance_number"`
 
+	// Checkout fields.
+	CheckedOutBy       *uuid.UUID `db:"checked_out_by"`
+	CheckoutToken      *uuid.UUID `db:"checkout_token"`
+	CheckoutExpires    *time.Time `db:"checkout_expires"`
+	CheckoutAcquiredAt *time.Time `db:"checkout_acquired_at"`
+
 	// Computed enrichment fields populated by enriched queries.
 	SubtaskCount  int     `db:"subtask_count"`
 	AssigneeName  *string `db:"assignee_name"`
+	CreatedByName *string `db:"created_by_name"`
 	ArtifactCount int     `db:"artifact_count"`
 	VCSLinkCount  int     `db:"vcs_link_count"`
 }
@@ -131,8 +153,13 @@ func (r *taskRow) toDomain() domain.Task {
 		CompletedAt:             r.CompletedAt,
 		RecurringScheduleID:     r.RecurringScheduleID,
 		RecurringInstanceNumber: r.RecurringInstanceNumber,
+		CheckedOutBy:            r.CheckedOutBy,
+		CheckoutToken:           r.CheckoutToken,
+		CheckoutExpires:         r.CheckoutExpires,
+		CheckoutAcquiredAt:      r.CheckoutAcquiredAt,
 		SubtaskCount:            r.SubtaskCount,
 		AssigneeName:            r.AssigneeName,
+		CreatedByName:           r.CreatedByName,
 		ArtifactCount:           r.ArtifactCount,
 		VCSLinkCount:            r.VCSLinkCount,
 	}
@@ -355,6 +382,13 @@ func (r *TaskRepo) List(ctx context.Context, projectID uuid.UUID, filter reposit
 	if len(filter.StatusIDs) > 0 {
 		conditions = append(conditions, fmt.Sprintf("status_id = ANY($%d)", argIdx))
 		args = append(args, pq.Array(filter.StatusIDs))
+		argIdx++
+	}
+	if filter.StatusCategory != nil {
+		// Subquery avoids a JOIN while staying composable with other conditions.
+		conditions = append(conditions, fmt.Sprintf(
+			"status_id IN (SELECT id FROM task_statuses WHERE project_id = $1 AND category = $%d)", argIdx))
+		args = append(args, *filter.StatusCategory)
 		argIdx++
 	}
 	if filter.AssigneeID != nil {
@@ -589,10 +623,14 @@ func (r *TaskRepo) ListByStatusCategory(ctx context.Context, workspaceID uuid.UU
 func (r *TaskRepo) AtomicCheckout(ctx context.Context, taskID, agentID, token uuid.UUID, expiresAt time.Time) error {
 	const query = `
 		UPDATE tasks
-		SET checked_out_by  = $1,
-		    checkout_token   = $2,
-		    checkout_expires = $3,
-		    updated_at       = now()
+		SET checked_out_by       = $1,
+		    checkout_token        = $2,
+		    checkout_expires      = $3,
+		    checkout_acquired_at  = CASE
+		        WHEN checked_out_by = $1 THEN checkout_acquired_at
+		        ELSE now()
+		    END,
+		    updated_at            = now()
 		WHERE id = $4
 		  AND deleted_at IS NULL
 		  AND (
@@ -617,10 +655,11 @@ func (r *TaskRepo) AtomicCheckout(ctx context.Context, taskID, agentID, token uu
 func (r *TaskRepo) ReleaseCheckout(ctx context.Context, taskID, token uuid.UUID) error {
 	const query = `
 		UPDATE tasks
-		SET checked_out_by  = NULL,
-		    checkout_token   = NULL,
-		    checkout_expires = NULL,
-		    updated_at       = now()
+		SET checked_out_by      = NULL,
+		    checkout_token       = NULL,
+		    checkout_expires     = NULL,
+		    checkout_acquired_at = NULL,
+		    updated_at           = now()
 		WHERE id = $1
 		  AND checkout_token = $2
 		  AND deleted_at IS NULL`
@@ -670,14 +709,38 @@ func (r *TaskRepo) MoveToProject(ctx context.Context, taskID, targetProjectID, t
 func (r *TaskRepo) ForceReleaseCheckout(ctx context.Context, taskID uuid.UUID) error {
 	const query = `
 		UPDATE tasks
-		SET checked_out_by  = NULL,
-		    checkout_token   = NULL,
-		    checkout_expires = NULL,
-		    updated_at       = now()
+		SET checked_out_by      = NULL,
+		    checkout_token       = NULL,
+		    checkout_expires     = NULL,
+		    checkout_acquired_at = NULL,
+		    updated_at           = now()
 		WHERE id = $1
 		  AND deleted_at IS NULL`
 	_, err := r.db.ExecContext(ctx, query, taskID)
 	return err
+}
+
+// ReleaseExpiredCheckouts clears checkout fields on all tasks whose checkout_expires
+// is in the past. This is called periodically by the background reaper goroutine so
+// that orphan locks (held by dead sessions) are reclaimed without waiting for
+// another agent to attempt a checkout on the same task.
+func (r *TaskRepo) ReleaseExpiredCheckouts(ctx context.Context) (int64, error) {
+	const query = `
+		UPDATE tasks
+		SET checked_out_by      = NULL,
+		    checkout_token       = NULL,
+		    checkout_expires     = NULL,
+		    checkout_acquired_at = NULL,
+		    updated_at           = now()
+		WHERE checkout_expires < now()
+		  AND checkout_expires IS NOT NULL
+		  AND deleted_at IS NULL`
+	res, err := r.db.ExecContext(ctx, query)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
 }
 
 // ExtendCheckout pushes the checkout_expires deadline forward. The token must match

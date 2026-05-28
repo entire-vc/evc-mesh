@@ -464,6 +464,28 @@ func main() {
 	go activityTracker.Run(activityCtx)
 	log.Println("Agent activity tracker started")
 
+	// Checkout reaper: periodically releases orphan task-locks whose TTL has expired.
+	// Complements the lazy expiry in AtomicCheckout — handles tasks that no agent
+	// retries after the original holder's session dies.
+	reaperCtx, reaperCancel := context.WithCancel(context.Background())
+	go func() {
+		ticker := time.NewTicker(60 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				if n, err := taskRepo.ReleaseExpiredCheckouts(reaperCtx); err != nil {
+					log.Printf("[checkout-reaper] ERROR releasing expired locks: %v", err)
+				} else if n > 0 {
+					log.Printf("[checkout-reaper] released %d expired checkout(s)", n)
+				}
+			case <-reaperCtx.Done():
+				return
+			}
+		}
+	}()
+	log.Println("Checkout reaper started (interval: 60s)")
+
 	// WebSocket upgrade endpoint (before auth middleware, auth is handled in the handler).
 	e.GET("/ws", wsHub.Handler(hub, authService, agentService))
 
@@ -948,6 +970,9 @@ func main() {
 	if err := e.Shutdown(shutdownCtx); err != nil {
 		log.Printf("Server forced to shutdown: %v", err)
 	}
+
+	// Stop checkout reaper.
+	reaperCancel()
 
 	// Flush activity tracker and cancel its background loop.
 	activityCancel()

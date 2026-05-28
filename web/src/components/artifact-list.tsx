@@ -1,5 +1,6 @@
 import { type DragEvent, useCallback, useEffect, useRef, useState } from "react";
 import {
+  BookOpen,
   Database,
   Download,
   File,
@@ -16,6 +17,7 @@ import { formatBytes, formatRelative } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { RelayDocPicker } from "@/components/RelayDocPicker";
 import { uploadArtifact } from "@/components/markdown-editor";
 import type { Artifact, ArtifactType, PaginatedResponse } from "@/types";
 
@@ -23,6 +25,9 @@ interface ArtifactListProps {
   taskId: string;
   /** Increment this counter from parent to trigger a re-fetch */
   refreshKey?: number;
+  projId?: string;
+  projectSettings?: Record<string, unknown>;
+  onRelayDocSelect?: (relayUrl: string) => void;
 }
 
 const artifactTypeIcons: Record<ArtifactType, typeof File> = {
@@ -45,14 +50,20 @@ const artifactTypeBadgeVariant: Record<ArtifactType, "default" | "secondary" | "
   data: "outline",
 };
 
-export function ArtifactList({ taskId, refreshKey }: ArtifactListProps) {
+export function ArtifactList({ taskId, refreshKey, projId, projectSettings, onRelayDocSelect }: ArtifactListProps) {
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
   const [loading, setLoading] = useState(true);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [dragOver, setDragOver] = useState(false);
+  const [pickerOpen, setPickerOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const hasTrIntegration =
+    projId &&
+    typeof projectSettings?.tr_share_id === "string" &&
+    !!projectSettings.tr_share_id;
 
   const fetchArtifacts = useCallback(async () => {
     try {
@@ -195,6 +206,16 @@ export function ArtifactList({ taskId, refreshKey }: ArtifactListProps) {
           browse files
         </button>
       )}
+      {hasTrIntegration && onRelayDocSelect && !uploading && (
+        <button
+          type="button"
+          className="mt-1 flex items-center gap-1 text-sm font-medium text-primary hover:underline"
+          onClick={() => setPickerOpen(true)}
+        >
+          <BookOpen className="h-3.5 w-3.5" />
+          attach Obsidian doc
+        </button>
+      )}
       <input
         ref={fileInputRef}
         type="file"
@@ -213,6 +234,14 @@ export function ArtifactList({ taskId, refreshKey }: ArtifactListProps) {
           <p className="text-sm">No artifacts uploaded yet.</p>
         </div>
         {uploadZone}
+        {hasTrIntegration && onRelayDocSelect && (
+          <RelayDocPicker
+            projId={projId!}
+            open={pickerOpen}
+            onClose={() => setPickerOpen(false)}
+            onSelect={(url) => { onRelayDocSelect(url); setPickerOpen(false); }}
+          />
+        )}
       </div>
     );
   }
@@ -271,6 +300,14 @@ export function ArtifactList({ taskId, refreshKey }: ArtifactListProps) {
         );
       })}
       {uploadZone}
+      {hasTrIntegration && onRelayDocSelect && (
+        <RelayDocPicker
+          projId={projId!}
+          open={pickerOpen}
+          onClose={() => setPickerOpen(false)}
+          onSelect={(url) => { onRelayDocSelect(url); setPickerOpen(false); }}
+        />
+      )}
     </div>
   );
 }

@@ -205,6 +205,7 @@ export interface Task {
   assignee_id: string | null;
   assignee_type: AssigneeType;
   assignee_name?: string | null;
+  created_by_name?: string | null;
   priority: Priority;
   parent_task_id: string | null;
   position: number;

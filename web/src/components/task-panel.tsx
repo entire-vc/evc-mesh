@@ -1144,7 +1144,20 @@ export function TaskPanel({
             )}
             {activeTab === "artifacts" && (
               <div className="flex-1 overflow-y-auto p-3">
-                <ArtifactList taskId={currentTask.id} />
+                <ArtifactList
+                  taskId={currentTask.id}
+                  projId={currentTask.project_id}
+                  projectSettings={
+                    (projects.find((p) => p.id === currentTask.project_id) ?? currentProject)?.settings
+                  }
+                  onRelayDocSelect={(url) => {
+                    setDescDraft((prev) => {
+                      const sep = prev && !prev.endsWith("\n") ? "\n" : "";
+                      return prev + sep + url + "\n";
+                    });
+                    setEditingDescription(true);
+                  }}
+                />
               </div>
             )}
             {activeTab === "activity" && (

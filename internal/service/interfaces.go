@@ -83,11 +83,14 @@ type CheckoutResult struct {
 // CheckoutConflictError is returned when CheckoutTask finds the task locked by
 // a different non-expired agent. CheckedOutByName and CheckedOutByKind are
 // best-effort: empty when the holder lookup fails (e.g. agent record deleted).
+// AcquiredAt is nil when the task has no checkout_acquired_at record (locks
+// created before the migration will lack this field).
 type CheckoutConflictError struct {
 	CheckedOutBy     uuid.UUID
 	CheckedOutByName string
 	CheckedOutByKind string
 	ExpiresAt        time.Time
+	AcquiredAt       *time.Time
 }
 
 func (e *CheckoutConflictError) Error() string {

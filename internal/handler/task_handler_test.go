@@ -729,6 +729,101 @@ func TestTaskHandler_List_WithFilters(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rec.Code)
 }
 
+// TestTaskHandler_List_StatusCategoryFilter verifies that status_category is
+// forwarded to the service layer as TaskFilter.StatusCategory.
+func TestTaskHandler_List_StatusCategoryFilter(t *testing.T) {
+	projectID := uuid.New()
+	mockSvc := &MockTaskService{
+		ListFunc: func(_ context.Context, _ uuid.UUID, filter repository.TaskFilter, _ pagination.Params) (*pagination.Page[domain.Task], error) {
+			require.NotNil(t, filter.StatusCategory)
+			assert.Equal(t, domain.StatusCategoryReview, *filter.StatusCategory)
+			assert.Empty(t, filter.StatusIDs)
+			return pagination.NewPage([]domain.Task{}, 0, pagination.Params{Page: 1, PageSize: 50}), nil
+		},
+	}
+	h, e := setupTaskTest(mockSvc)
+
+	req := httptest.NewRequest(http.MethodGet, "/?status_category=review", http.NoBody)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/projects/:proj_id/tasks")
+	c.SetParamNames("proj_id")
+	c.SetParamValues(projectID.String())
+
+	require.NoError(t, h.List(c))
+	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
+// TestTaskHandler_List_StatusIDFilter verifies that status_id= is forwarded as StatusIDs.
+func TestTaskHandler_List_StatusIDFilter(t *testing.T) {
+	projectID := uuid.New()
+	statusID := uuid.New()
+	mockSvc := &MockTaskService{
+		ListFunc: func(_ context.Context, _ uuid.UUID, filter repository.TaskFilter, _ pagination.Params) (*pagination.Page[domain.Task], error) {
+			require.Len(t, filter.StatusIDs, 1)
+			assert.Equal(t, statusID, filter.StatusIDs[0])
+			assert.Nil(t, filter.StatusCategory)
+			return pagination.NewPage([]domain.Task{}, 0, pagination.Params{Page: 1, PageSize: 50}), nil
+		},
+	}
+	h, e := setupTaskTest(mockSvc)
+
+	req := httptest.NewRequest(http.MethodGet, "/?status_id="+statusID.String(), http.NoBody)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/projects/:proj_id/tasks")
+	c.SetParamNames("proj_id")
+	c.SetParamValues(projectID.String())
+
+	require.NoError(t, h.List(c))
+	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
+// TestTaskHandler_List_OffsetPagination verifies that offset=50 advances to page 2.
+func TestTaskHandler_List_OffsetPagination(t *testing.T) {
+	projectID := uuid.New()
+	mockSvc := &MockTaskService{
+		ListFunc: func(_ context.Context, _ uuid.UUID, _ repository.TaskFilter, pg pagination.Params) (*pagination.Page[domain.Task], error) {
+			assert.Equal(t, 2, pg.Page)
+			assert.Equal(t, 50, pg.PageSize)
+			return pagination.NewPage([]domain.Task{}, 0, pg), nil
+		},
+	}
+	h, e := setupTaskTest(mockSvc)
+
+	req := httptest.NewRequest(http.MethodGet, "/?offset=50", http.NoBody)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/projects/:proj_id/tasks")
+	c.SetParamNames("proj_id")
+	c.SetParamValues(projectID.String())
+
+	require.NoError(t, h.List(c))
+	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
+// TestTaskHandler_List_LimitPagination verifies that limit= sets page_size.
+func TestTaskHandler_List_LimitPagination(t *testing.T) {
+	projectID := uuid.New()
+	mockSvc := &MockTaskService{
+		ListFunc: func(_ context.Context, _ uuid.UUID, _ repository.TaskFilter, pg pagination.Params) (*pagination.Page[domain.Task], error) {
+			assert.Equal(t, 200, pg.PageSize)
+			return pagination.NewPage([]domain.Task{}, 0, pg), nil
+		},
+	}
+	h, e := setupTaskTest(mockSvc)
+
+	req := httptest.NewRequest(http.MethodGet, "/?limit=200", http.NoBody)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/projects/:proj_id/tasks")
+	c.SetParamNames("proj_id")
+	c.SetParamValues(projectID.String())
+
+	require.NoError(t, h.List(c))
+	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
 func TestTaskHandler_List_InvalidProjectID(t *testing.T) {
 	mockSvc := &MockTaskService{}
 	h, e := setupTaskTest(mockSvc)
@@ -994,4 +1089,89 @@ func TestTaskHandler_ListSubtasks_ServiceError(t *testing.T) {
 	err := h.ListSubtasks(c)
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusNotFound, rec.Code)
+}
+
+// --- TestTaskHandler_Checkout 409 body ---
+
+func TestTaskHandler_Checkout_409_AllFieldsPresent(t *testing.T) {
+	taskID := uuid.New()
+	holderID := uuid.New()
+	acquiredAt := time.Now().Add(-10 * time.Minute)
+	expiresAt := time.Now().Add(50 * time.Minute)
+
+	mockSvc := &MockTaskService{
+		CheckoutTaskFunc: func(_ context.Context, _ uuid.UUID, _ int, _ map[string]interface{}) (*service.CheckoutResult, error) {
+			return nil, &service.CheckoutConflictError{
+				CheckedOutBy:     holderID,
+				CheckedOutByName: "Linus",
+				CheckedOutByKind: "agent",
+				ExpiresAt:        expiresAt,
+				AcquiredAt:       &acquiredAt,
+			}
+		},
+	}
+
+	h, e := setupTaskTest(mockSvc)
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"ttl_minutes":30}`))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/tasks/:task_id/checkout")
+	c.SetParamNames("task_id")
+	c.SetParamValues(taskID.String())
+
+	err := h.Checkout(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusConflict, rec.Code)
+
+	var body map[string]interface{}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	details, ok := body["details"].(map[string]interface{})
+	require.True(t, ok, "response must have a 'details' object")
+	assert.Equal(t, "Linus", details["checked_out_by_name"], "checked_out_by_name must always be present")
+	assert.NotNil(t, details["expires_in_seconds"], "expires_in_seconds must always be present")
+	assert.NotNil(t, details["acquired_at"], "acquired_at must be present when AcquiredAt is set")
+}
+
+func TestTaskHandler_Checkout_409_FallbackNameAndZeroExpiry(t *testing.T) {
+	taskID := uuid.New()
+	holderID := uuid.New()
+	// Lock is already expired (in the past).
+	expiresAt := time.Now().Add(-5 * time.Minute)
+
+	mockSvc := &MockTaskService{
+		CheckoutTaskFunc: func(_ context.Context, _ uuid.UUID, _ int, _ map[string]interface{}) (*service.CheckoutResult, error) {
+			return nil, &service.CheckoutConflictError{
+				CheckedOutBy:     holderID,
+				CheckedOutByName: "", // name unavailable
+				CheckedOutByKind: "agent",
+				ExpiresAt:        expiresAt,
+				AcquiredAt:       nil, // no acquired_at in older lock
+			}
+		},
+	}
+
+	h, e := setupTaskTest(mockSvc)
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"ttl_minutes":30}`))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/tasks/:task_id/checkout")
+	c.SetParamNames("task_id")
+	c.SetParamValues(taskID.String())
+
+	err := h.Checkout(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusConflict, rec.Code)
+
+	var body map[string]interface{}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	details, ok := body["details"].(map[string]interface{})
+	require.True(t, ok, "response must have a 'details' object")
+	assert.Equal(t, holderID.String(), details["checked_out_by_name"],
+		"checked_out_by_name must fall back to UUID string when name is empty")
+	expiresIn, ok := details["expires_in_seconds"].(float64)
+	require.True(t, ok, "expires_in_seconds must always be present")
+	assert.Equal(t, float64(0), expiresIn, "expires_in_seconds must be 0 for expired locks (not negative)")
+	assert.Nil(t, details["acquired_at"], "acquired_at must be absent when AcquiredAt is nil")
 }
