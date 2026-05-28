@@ -14,6 +14,7 @@ import (
 	mcpserver "github.com/entire-vc/evc-mesh/internal/mcp"
 
 	sdkserver "github.com/mark3labs/mcp-go/server"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 func main() {
@@ -198,6 +199,9 @@ func main() {
 
 		// Build HTTP mux with auth wrappers.
 		mux := http.NewServeMux()
+
+		// Prometheus metrics — no auth required (Caddy gates this path to tw-mon IP).
+		mux.Handle("/metrics", promhttp.Handler())
 
 		// Full profile: /sse and /message (backward compatible).
 		mux.HandleFunc("/sse", func(w http.ResponseWriter, r *http.Request) {
