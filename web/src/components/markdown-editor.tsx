@@ -8,6 +8,7 @@ import {
 } from "react";
 import {
   Bold,
+  BookOpen,
   Code,
   Eye,
   EyeOff,
@@ -20,6 +21,7 @@ import {
 import { cn } from "@/lib/cn";
 import { Button } from "@/components/ui/button";
 import { MarkdownRenderer } from "@/components/markdown-renderer";
+import { RelayDocPicker } from "@/components/RelayDocPicker";
 import { getAccessToken } from "@/lib/api";
 import type { Artifact, ArtifactType } from "@/types";
 
@@ -35,6 +37,7 @@ interface MarkdownEditorProps {
   /** Present when editing an existing task — enables immediate image upload */
   taskId?: string;
   projectId?: string;
+  projectSettings?: Record<string, unknown>;
   placeholder?: string;
   rows?: number;
   disabled?: boolean;
@@ -148,6 +151,8 @@ export function MarkdownEditor({
   value,
   onChange,
   taskId,
+  projectId,
+  projectSettings,
   placeholder = "Write a description... (Markdown supported)",
   rows = 6,
   disabled = false,
@@ -159,6 +164,12 @@ export function MarkdownEditor({
   const [showPreview, setShowPreview] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [dragOver, setDragOver] = useState(false);
+  const [pickerOpen, setPickerOpen] = useState(false);
+
+  const hasTrIntegration =
+    projectId &&
+    typeof projectSettings?.tr_share_id === "string" &&
+    !!projectSettings.tr_share_id;
 
   // Keep a ref to the latest value so async upload callbacks don't use stale closures
   const valueRef = useRef(value);
@@ -197,6 +208,24 @@ export function MarkdownEditor({
       });
     },
     [value, onChange],
+  );
+
+  const handleDocSelect = useCallback(
+    (relayUrl: string) => {
+      const ta = textareaRef.current;
+      if (!ta) return;
+      const start = ta.selectionStart;
+      const v = valueRef.current;
+      const prefix = start > 0 && v[start - 1] !== "\n" ? "\n" : "";
+      const insertion = prefix + relayUrl + "\n";
+      const newValue = v.slice(0, start) + insertion + v.slice(start);
+      onChange(newValue);
+      setTimeout(() => {
+        ta.setSelectionRange(start + insertion.length, start + insertion.length);
+        ta.focus();
+      }, 0);
+    },
+    [onChange],
   );
 
   const handleBold = () => insertText("**", "**", "bold text");
@@ -414,6 +443,14 @@ export function MarkdownEditor({
         >
           <Paperclip className="h-3.5 w-3.5" />
         </ToolbarButton>
+        {hasTrIntegration && (
+          <>
+            <div className="mx-1 h-3.5 w-px bg-border" />
+            <ToolbarButton title="Attach Obsidian doc" onClick={() => setPickerOpen(true)}>
+              <BookOpen className="h-3.5 w-3.5" />
+            </ToolbarButton>
+          </>
+        )}
 
         {/* hidden file inputs */}
         <input
@@ -510,6 +547,15 @@ export function MarkdownEditor({
           Markdown supported &middot; Paste, drop, or attach files
           {!taskId && " (uploads after task is saved)"}
         </div>
+      )}
+
+      {hasTrIntegration && (
+        <RelayDocPicker
+          projId={projectId!}
+          open={pickerOpen}
+          onClose={() => setPickerOpen(false)}
+          onSelect={handleDocSelect}
+        />
       )}
     </div>
   );
