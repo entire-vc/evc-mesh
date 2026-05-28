@@ -65,9 +65,25 @@ import type { AssigneeType, Priority } from "@/types";
 // Types
 // ---------------------------------------------------------------------------
 
+type MobileTabId =
+  | "details"
+  | "description"
+  | "comments"
+  | "subtasks"
+  | "artifacts"
+  | "activity";
 type RightTabId = "comments" | "subtasks" | "artifacts" | "activity";
 
 const priorities: Priority[] = ["urgent", "high", "medium", "low", "none"];
+
+const MOBILE_TABS: { id: MobileTabId; label: string }[] = [
+  { id: "details", label: "Details" },
+  { id: "description", label: "Description" },
+  { id: "comments", label: "Comments" },
+  { id: "subtasks", label: "Subtasks" },
+  { id: "artifacts", label: "Artifacts" },
+  { id: "activity", label: "Activity" },
+];
 
 // ---------------------------------------------------------------------------
 // Props
@@ -76,6 +92,8 @@ const priorities: Priority[] = ["urgent", "high", "medium", "low", "none"];
 export interface TaskPanelProps {
   taskId: string | null;
   onClose?: () => void;
+  onBack?: () => void;
+  backLabel?: string;
   onTaskUpdated?: () => void;
   className?: string;
 }
@@ -87,6 +105,8 @@ export interface TaskPanelProps {
 export function TaskPanel({
   taskId,
   onClose,
+  onBack,
+  backLabel = "Back",
   onTaskUpdated,
   className,
 }: TaskPanelProps) {
@@ -120,7 +140,8 @@ export function TaskPanel({
   const { schedules, fetchSchedules } = useRecurringStore();
 
   const [loading, setLoading] = useState(false);
-  const [activeTab, setActiveTab] = useState<RightTabId>("comments");
+  const [activeMobileTab, setActiveMobileTab] = useState<MobileTabId>("details");
+  const [activeDesktopTab, setActiveDesktopTab] = useState<RightTabId>("comments");
   const [hideEmpty, setHideEmpty] = useState(true);
   const [recurringHistoryOpen, setRecurringHistoryOpen] = useState(false);
 
@@ -243,7 +264,8 @@ export function TaskPanel({
 
   const pushTask = useCallback((id: string) => {
     setTaskIdStack((s) => [...s, id]);
-    setActiveTab("subtasks");
+    setActiveMobileTab("subtasks");
+    setActiveDesktopTab("subtasks");
   }, []);
 
   const popTask = useCallback(() => {
@@ -482,6 +504,482 @@ export function TaskPanel({
   const showVcsLinks = !hideEmpty || (currentTask?.vcs_link_count ?? 0) > 0;
   const showDependencies = !hideEmpty;
 
+  // ---- Shared sub-components -----------------------------------------------
+
+  const propertiesGrid = currentTask && (
+    <div className="rounded-lg border border-border bg-muted/20 p-3">
+      <div className="mb-2 flex items-center justify-between">
+        <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          Properties
+        </span>
+        <button
+          type="button"
+          className="text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+          onClick={() => setHideEmpty((v) => !v)}
+        >
+          {hideEmpty ? "Show empty" : "Hide empty"}
+        </button>
+      </div>
+
+      <div className="grid grid-cols-1 items-start gap-y-2.5 sm:grid-cols-[auto_1fr] sm:gap-x-4">
+        {/* Project */}
+        <label className="flex items-center gap-1 pt-1 text-xs text-muted-foreground">
+          <FolderKanban className="h-3 w-3" />
+          Project
+        </label>
+        <Select
+          value={currentTask.project_id}
+          onChange={(e) => void handleProjectChange(e.target.value)}
+          className="h-7 text-xs"
+        >
+          {projects.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.name}
+            </option>
+          ))}
+        </Select>
+
+        {/* Status */}
+        <label className="flex items-center gap-1 pt-1 text-xs text-muted-foreground">
+          {currentStatus && (
+            <span
+              className="inline-block h-2 w-2 shrink-0 rounded-full"
+              style={{ backgroundColor: currentStatus.color }}
+            />
+          )}
+          Status
+        </label>
+        <Select
+          value={currentTask.status_id}
+          onChange={(e) => void handleStatusChange(e.target.value)}
+          className="h-7 text-xs"
+        >
+          {[...statuses]
+            .sort((a, b) => a.position - b.position)
+            .map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.name}
+              </option>
+            ))}
+        </Select>
+
+        {/* Priority */}
+        <label className="pt-1 text-xs text-muted-foreground">
+          Priority
+        </label>
+        <Select
+          value={currentTask.priority}
+          onChange={(e) =>
+            void handlePriorityChange(e.target.value as Priority)
+          }
+          className="h-7 text-xs"
+        >
+          {priorities.map((p) => (
+            <option key={p} value={p}>
+              {priorityConfig[p].label}
+            </option>
+          ))}
+        </Select>
+
+        {/* Assignee */}
+        <label className="flex items-center gap-1 pt-1 text-xs text-muted-foreground">
+          {currentTask.assignee_id &&
+          currentTask.assignee_type === "agent" ? (
+            <Bot className="h-3 w-3" />
+          ) : (
+            <User className="h-3 w-3" />
+          )}
+          Assignee
+        </label>
+        <Select
+          value={
+            currentTask.assignee_id
+              ? `${currentTask.assignee_type}:${currentTask.assignee_id}`
+              : "unassigned"
+          }
+          onChange={(e) => void handleAssigneeChange(e.target.value)}
+          className="h-7 text-xs"
+        >
+          <option value="unassigned">Unassigned</option>
+          {user && !projectMembers.some((m) => m.user_id === user.id) && (
+            <option value={`user:${user.id}`}>
+              {user.name} (you)
+            </option>
+          )}
+          {projectMembers.map((m) => {
+            if (m.user_id && m.user) {
+              const isSelf = user?.id === m.user_id;
+              return (
+                <option key={m.id} value={`user:${m.user_id}`}>
+                  {m.user.name}{isSelf ? " (you)" : ""} — {m.role}
+                </option>
+              );
+            }
+            if (m.agent_id) {
+              const desc = [m.agent_role, m.agent_description].filter(Boolean).join(" · ");
+              return (
+                <option key={m.id} value={`agent:${m.agent_id}`}>
+                  {m.agent_name} (agent){desc ? ` — ${desc}` : ""}
+                </option>
+              );
+            }
+            return null;
+          })}
+          {currentTask.assignee_id && !projectMembers.some((m) =>
+            currentTask.assignee_type === "user"
+              ? m.user_id === currentTask.assignee_id
+              : m.agent_id === currentTask.assignee_id
+          ) && (
+            <option value={`${currentTask.assignee_type}:${currentTask.assignee_id}`}>
+              {currentTask.assignee_name ?? currentTask.assignee_id} (not a project member)
+            </option>
+          )}
+        </Select>
+
+        {/* Due Date */}
+        {showDueDate && (
+          <>
+            <label className="flex items-center gap-1 pt-1 text-xs text-muted-foreground">
+              Due Date
+            </label>
+            <DatePickerPopover
+              value={
+                currentTask.due_date
+                  ? toDateTimeLocal(currentTask.due_date)
+                  : null
+              }
+              onChange={(val) =>
+                void handleDueDateChange(val ?? "")
+              }
+              includeTime
+              placeholder="Set due date"
+            />
+          </>
+        )}
+
+        {/* Labels */}
+        {showLabels && (
+          <>
+            <label className="flex items-center gap-1 pt-1 text-xs text-muted-foreground">
+              <Tag className="h-3 w-3" />
+              Labels
+            </label>
+            <div className="flex flex-wrap items-center gap-1">
+              {(currentTask.labels ?? []).map((label) => (
+                <Badge
+                  key={label}
+                  variant="secondary"
+                  className="cursor-pointer gap-1 text-[10px] hover:bg-destructive/20"
+                  onClick={() => void handleRemoveLabel(label)}
+                  title="Click to remove"
+                >
+                  {label}
+                  <X className="h-2 w-2" />
+                </Badge>
+              ))}
+              {addingLabel ? (
+                <Input
+                  ref={labelInputRef}
+                  value={labelDraft}
+                  onChange={(e) => setLabelDraft(e.target.value)}
+                  onBlur={() => void handleAddLabel()}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") void handleAddLabel();
+                    if (e.key === "Escape") {
+                      setAddingLabel(false);
+                      setLabelDraft("");
+                    }
+                  }}
+                  className="h-5 w-20 px-1 text-[10px]"
+                  placeholder="Label..."
+                />
+              ) : (
+                <button
+                  type="button"
+                  className="rounded border border-dashed border-border px-1.5 py-0.5 text-[10px] text-muted-foreground hover:border-primary hover:text-foreground"
+                  onClick={() => setAddingLabel(true)}
+                >
+                  + Add
+                </button>
+              )}
+            </div>
+          </>
+        )}
+
+        {/* Estimated hours */}
+        {showHours && (
+          <>
+            <label className="flex items-center gap-1 pt-1 text-xs text-muted-foreground">
+              <Hourglass className="h-3 w-3" />
+              Estimate
+            </label>
+            {editingHours ? (
+              <Input
+                type="number"
+                value={hoursDraft}
+                onChange={(e) => setHoursDraft(e.target.value)}
+                onBlur={() => void handleHoursSave()}
+                onKeyDown={handleHoursKeyDown}
+                min={0}
+                step={0.5}
+                placeholder="e.g. 4"
+                className="h-7 w-24 text-xs"
+              />
+            ) : (
+              <button
+                type="button"
+                className="flex items-center gap-1 text-left text-xs hover:text-primary"
+                onClick={() => setEditingHours(true)}
+              >
+                {currentTask.estimated_hours != null ? (
+                  <span className="font-medium">
+                    {currentTask.estimated_hours}h
+                  </span>
+                ) : (
+                  <span className="text-muted-foreground">
+                    Set estimate
+                  </span>
+                )}
+                <Pencil className="h-2.5 w-2.5 text-muted-foreground" />
+              </button>
+            )}
+          </>
+        )}
+
+        {/* Custom fields */}
+        {customFieldDefs.length > 0 && (
+          <>
+            <div className="col-span-2 my-1">
+              <Separator />
+            </div>
+            <label className="col-span-2 flex items-center gap-1 text-xs font-medium text-muted-foreground">
+              <SlidersHorizontal className="h-3 w-3" />
+              Custom Fields
+            </label>
+            {[...customFieldDefs]
+              .sort((a, b) => a.position - b.position)
+              .filter(
+                (field) =>
+                  !hideEmpty ||
+                  !isEmpty(
+                    currentTask.custom_fields?.[field.slug],
+                  ),
+              )
+              .map((field) => (
+                <Fragment key={field.id}>
+                  <label className="pt-1 text-xs text-muted-foreground">
+                    {field.name}
+                    {field.is_required && (
+                      <span className="ml-0.5 text-destructive">
+                        *
+                      </span>
+                    )}
+                  </label>
+                  <CustomFieldRenderer
+                    field={field}
+                    value={
+                      currentTask.custom_fields?.[field.slug]
+                    }
+                    onChange={(val) =>
+                      void handleCustomFieldChange(field.slug, val)
+                    }
+                  />
+                </Fragment>
+              ))}
+          </>
+        )}
+
+        {/* Timestamps */}
+        <label className="flex items-center gap-1 pt-1 text-xs text-muted-foreground">
+          <Clock className="h-3 w-3" />
+          Created
+        </label>
+        <span className="pt-1 text-xs">
+          {formatDate(currentTask.created_at)}
+        </span>
+
+        <label className="pt-1 text-xs text-muted-foreground">
+          Updated
+        </label>
+        <span className="pt-1 text-xs text-muted-foreground">
+          {formatRelative(currentTask.updated_at)}
+        </span>
+
+        {/* Recurring */}
+        {currentTask.recurring_schedule_id && (() => {
+          const schedule = schedules.find(
+            (s) => s.id === currentTask.recurring_schedule_id,
+          );
+          return (
+            <>
+              <div className="col-span-2 my-1">
+                <Separator />
+              </div>
+              <label className="flex items-center gap-1 pt-1 text-xs text-muted-foreground">
+                <RefreshCw className="h-3 w-3" />
+                Recurring
+              </label>
+              <div className="space-y-1">
+                <p className="text-xs">
+                  Run{" "}
+                  {currentTask.recurring_instance_number != null
+                    ? `#${currentTask.recurring_instance_number}`
+                    : ""}{" "}
+                  {schedule
+                    ? `of "${schedule.title_template}"`
+                    : "of recurring schedule"}
+                </p>
+                <button
+                  type="button"
+                  className="rounded px-1.5 py-0.5 text-xs text-primary transition-colors hover:bg-primary/10"
+                  onClick={() => setRecurringHistoryOpen(true)}
+                >
+                  View history
+                </button>
+              </div>
+            </>
+          );
+        })()}
+
+        {/* VCS Links */}
+        {showVcsLinks && (
+          <>
+            <div className="col-span-2 my-1">
+              <Separator />
+            </div>
+            <div className="col-span-2">
+              <VCSLinks taskId={currentTask.id} />
+            </div>
+          </>
+        )}
+
+        {/* Dependencies */}
+        {showDependencies && (
+          <>
+            <div className="col-span-2 my-1">
+              <Separator />
+            </div>
+            <div className="col-span-2">
+              <DependencyList taskId={currentTask.id} />
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+
+  const descriptionPanel = currentTask && (
+    <div>
+      <div className="mb-1.5 flex items-center justify-between">
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          Description
+        </h3>
+        <div className="flex items-center gap-2">
+          {editingDescription ? (
+            <>
+              {descSaving && (
+                <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                  Saving…
+                </span>
+              )}
+              {descSaved && !descSaving && (
+                <span className="flex items-center gap-1 text-[11px] text-green-600">
+                  <Check className="h-3 w-3" />
+                  Saved
+                </span>
+              )}
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => {
+                  if (descTimerRef.current)
+                    clearTimeout(descTimerRef.current);
+                  void flushDescription().then(() =>
+                    setEditingDescription(false),
+                  );
+                }}
+              >
+                Done
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => {
+                  if (descTimerRef.current)
+                    clearTimeout(descTimerRef.current);
+                  setDescDraft(currentTask.description ?? "");
+                  setEditingDescription(false);
+                }}
+              >
+                Cancel
+              </Button>
+            </>
+          ) : (
+            <button
+              type="button"
+              className="flex items-center gap-1 rounded px-2 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              onClick={() => setEditingDescription(true)}
+            >
+              <Pencil className="h-3 w-3" />
+              Edit
+            </button>
+          )}
+        </div>
+      </div>
+      {editingDescription ? (
+        <DescriptionEditor
+          value={descDraft}
+          onChange={setDescDraft}
+          placeholder="Add a description..."
+          projId={currentTask.project_id}
+          projectSettings={
+            (projects.find((p) => p.id === currentTask.project_id) ??
+              currentProject)?.settings
+          }
+        />
+      ) : (
+        <div className="min-h-[60px] rounded-lg border border-border p-3 text-sm">
+          {currentTask.description ? (
+            <MarkdownWithRelay content={currentTask.description} />
+          ) : (
+            <span
+              className="cursor-text text-muted-foreground hover:text-foreground"
+              onClick={() => setEditingDescription(true)}
+            >
+              Add a description...
+            </span>
+          )}
+        </div>
+      )}
+    </div>
+  );
+
+  const titleBlock = currentTask && (
+    <div className="group">
+      {editingTitle ? (
+        <Input
+          ref={titleInputRef}
+          value={titleDraft}
+          onChange={(e) => setTitleDraft(e.target.value)}
+          onBlur={() => void handleTitleSave()}
+          onKeyDown={handleTitleKeyDown}
+          className="h-auto border-none bg-transparent p-0 text-xl font-bold tracking-tight shadow-none focus-visible:ring-1"
+        />
+      ) : (
+        <div
+          className="flex cursor-pointer items-start gap-2"
+          onClick={() => setEditingTitle(true)}
+        >
+          <h2 className="flex-1 text-lg font-bold leading-tight tracking-tight sm:text-xl">
+            {currentTask.title}
+          </h2>
+          <Pencil className="mt-1 h-3.5 w-3.5 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
+        </div>
+      )}
+    </div>
+  );
+
   // ---- Render ---------------------------------------------------------------
 
   return (
@@ -490,7 +988,7 @@ export function TaskPanel({
       {/* Header                                                              */}
       {/* ------------------------------------------------------------------ */}
       <div className="flex shrink-0 items-center justify-between border-b border-border px-4 py-2.5">
-        <div className="flex items-center gap-3 min-w-0">
+        <div className="flex items-center gap-2 min-w-0">
           {taskIdStack.length > 0 ? (
             <button
               type="button"
@@ -504,18 +1002,32 @@ export function TaskPanel({
               </span>
             </button>
           ) : (
-            currentTask && (
-              <>
-                <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground">
-                  {currentTask.id.slice(0, 8).toUpperCase()}
-                </span>
-                {currentProject && (
-                  <span className="truncate text-xs text-muted-foreground">
-                    {currentProject.name}
+            <>
+              {/* Back arrow — shown when onBack is provided and not in sub-task stack */}
+              {onBack && (
+                <button
+                  type="button"
+                  onClick={onBack}
+                  className="flex shrink-0 items-center gap-1 rounded p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                  aria-label={backLabel}
+                  title={backLabel}
+                >
+                  <ArrowLeft className="h-4 w-4" />
+                </button>
+              )}
+              {currentTask && (
+                <>
+                  <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground">
+                    {currentTask.id.slice(0, 8).toUpperCase()}
                   </span>
-                )}
-              </>
-            )
+                  {currentProject && (
+                    <span className="truncate text-xs text-muted-foreground">
+                      {currentProject.name}
+                    </span>
+                  )}
+                </>
+              )}
+            </>
           )}
         </div>
         <div className="flex shrink-0 items-center gap-2">
@@ -581,592 +1093,227 @@ export function TaskPanel({
       {/* Content                                                             */}
       {/* ------------------------------------------------------------------ */}
       {!loading && currentTask && (
-        <div className="flex min-h-0 flex-1 flex-col overflow-hidden lg:flex-row">
+        <>
           {/* ============================================================= */}
-          {/* LEFT PANEL                                                      */}
+          {/* MOBILE LAYOUT (<1024px): title + 6-tab bar                     */}
           {/* ============================================================= */}
-          <div className="flex min-w-0 flex-1 flex-col overflow-y-auto lg:border-r lg:border-border">
-            <div className="flex-1 space-y-5 px-5 py-4">
-              {/* ---- Title --------------------------------------------- */}
-              <div className="group">
-                {editingTitle ? (
-                  <Input
-                    ref={titleInputRef}
-                    value={titleDraft}
-                    onChange={(e) => setTitleDraft(e.target.value)}
-                    onBlur={() => void handleTitleSave()}
-                    onKeyDown={handleTitleKeyDown}
-                    className="h-auto border-none bg-transparent p-0 text-xl font-bold tracking-tight shadow-none focus-visible:ring-1"
-                  />
-                ) : (
-                  <div
-                    className="flex cursor-pointer items-start gap-2"
-                    onClick={() => setEditingTitle(true)}
-                  >
-                    <h2 className="flex-1 text-lg font-bold leading-tight tracking-tight sm:text-xl">
-                      {currentTask.title}
-                    </h2>
-                    <Pencil className="mt-1 h-3.5 w-3.5 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
-                  </div>
-                )}
-              </div>
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden lg:hidden">
+            {/* Title */}
+            <div className="shrink-0 px-5 pt-4 pb-2">
+              {titleBlock}
+            </div>
 
-              {/* ---- Properties grid ------------------------------------ */}
-              <div className="rounded-lg border border-border bg-muted/20 p-3">
-                <div className="mb-2 flex items-center justify-between">
-                  <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                    Properties
-                  </span>
+            {/* 6-tab bar with horizontal scroll + fade mask */}
+            <div className="relative shrink-0">
+              <div
+                className="flex overflow-x-auto border-b border-border [scrollbar-width:none] [scroll-snap-type:x_mandatory] [-webkit-overflow-scrolling:touch]"
+              >
+                {MOBILE_TABS.map((tab) => (
                   <button
+                    key={tab.id}
                     type="button"
-                    className="text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
-                    onClick={() => setHideEmpty((v) => !v)}
-                  >
-                    {hideEmpty ? "Show empty" : "Hide empty"}
-                  </button>
-                </div>
-
-                <div className="grid grid-cols-1 items-start gap-y-2.5 sm:grid-cols-[auto_1fr] sm:gap-x-4">
-                  {/* Project */}
-                  <label className="flex items-center gap-1 pt-1 text-xs text-muted-foreground">
-                    <FolderKanban className="h-3 w-3" />
-                    Project
-                  </label>
-                  <Select
-                    value={currentTask.project_id}
-                    onChange={(e) => void handleProjectChange(e.target.value)}
-                    className="h-7 text-xs"
-                  >
-                    {projects.map((p) => (
-                      <option key={p.id} value={p.id}>
-                        {p.name}
-                      </option>
-                    ))}
-                  </Select>
-
-                  {/* Status */}
-                  <label className="flex items-center gap-1 pt-1 text-xs text-muted-foreground">
-                    {currentStatus && (
-                      <span
-                        className="inline-block h-2 w-2 shrink-0 rounded-full"
-                        style={{ backgroundColor: currentStatus.color }}
-                      />
+                    className={cn(
+                      "flex shrink-0 items-center gap-1.5 border-b-2 px-3 py-2.5 text-xs font-medium transition-colors [scroll-snap-align:start]",
+                      activeMobileTab === tab.id
+                        ? "border-primary text-foreground"
+                        : "border-transparent text-muted-foreground hover:border-border hover:text-foreground",
                     )}
-                    Status
-                  </label>
-                  <Select
-                    value={currentTask.status_id}
-                    onChange={(e) => void handleStatusChange(e.target.value)}
-                    className="h-7 text-xs"
+                    onClick={() => setActiveMobileTab(tab.id)}
                   >
-                    {[...statuses]
-                      .sort((a, b) => a.position - b.position)
-                      .map((s) => (
-                        <option key={s.id} value={s.id}>
-                          {s.name}
-                        </option>
-                      ))}
-                  </Select>
-
-                  {/* Priority */}
-                  <label className="pt-1 text-xs text-muted-foreground">
-                    Priority
-                  </label>
-                  <Select
-                    value={currentTask.priority}
-                    onChange={(e) =>
-                      void handlePriorityChange(e.target.value as Priority)
-                    }
-                    className="h-7 text-xs"
-                  >
-                    {priorities.map((p) => (
-                      <option key={p} value={p}>
-                        {priorityConfig[p].label}
-                      </option>
-                    ))}
-                  </Select>
-
-                  {/* Assignee */}
-                  <label className="flex items-center gap-1 pt-1 text-xs text-muted-foreground">
-                    {currentTask.assignee_id &&
-                    currentTask.assignee_type === "agent" ? (
-                      <Bot className="h-3 w-3" />
-                    ) : (
-                      <User className="h-3 w-3" />
-                    )}
-                    Assignee
-                  </label>
-                  <Select
-                    value={
-                      currentTask.assignee_id
-                        ? `${currentTask.assignee_type}:${currentTask.assignee_id}`
-                        : "unassigned"
-                    }
-                    onChange={(e) => void handleAssigneeChange(e.target.value)}
-                    className="h-7 text-xs"
-                  >
-                    <option value="unassigned">Unassigned</option>
-                    {user && !projectMembers.some((m) => m.user_id === user.id) && (
-                      <option value={`user:${user.id}`}>
-                        {user.name} (you)
-                      </option>
-                    )}
-                    {projectMembers.map((m) => {
-                      if (m.user_id && m.user) {
-                        const isSelf = user?.id === m.user_id;
-                        return (
-                          <option key={m.id} value={`user:${m.user_id}`}>
-                            {m.user.name}{isSelf ? " (you)" : ""} — {m.role}
-                          </option>
-                        );
-                      }
-                      if (m.agent_id) {
-                        const desc = [m.agent_role, m.agent_description].filter(Boolean).join(" · ");
-                        return (
-                          <option key={m.id} value={`agent:${m.agent_id}`}>
-                            {m.agent_name} (agent){desc ? ` — ${desc}` : ""}
-                          </option>
-                        );
-                      }
-                      return null;
-                    })}
-                    {currentTask.assignee_id && !projectMembers.some((m) =>
-                      currentTask.assignee_type === "user"
-                        ? m.user_id === currentTask.assignee_id
-                        : m.agent_id === currentTask.assignee_id
-                    ) && (
-                      <option value={`${currentTask.assignee_type}:${currentTask.assignee_id}`}>
-                        {currentTask.assignee_name ?? currentTask.assignee_id} (not a project member)
-                      </option>
-                    )}
-                  </Select>
-
-                  {/* Due Date */}
-                  {showDueDate && (
-                    <>
-                      <label className="flex items-center gap-1 pt-1 text-xs text-muted-foreground">
-                        Due Date
-                      </label>
-                      <DatePickerPopover
-                        value={
-                          currentTask.due_date
-                            ? toDateTimeLocal(currentTask.due_date)
-                            : null
-                        }
-                        onChange={(val) =>
-                          void handleDueDateChange(val ?? "")
-                        }
-                        includeTime
-                        placeholder="Set due date"
-                      />
-                    </>
-                  )}
-
-                  {/* Labels */}
-                  {showLabels && (
-                    <>
-                      <label className="flex items-center gap-1 pt-1 text-xs text-muted-foreground">
-                        <Tag className="h-3 w-3" />
-                        Labels
-                      </label>
-                      <div className="flex flex-wrap items-center gap-1">
-                        {(currentTask.labels ?? []).map((label) => (
-                          <Badge
-                            key={label}
-                            variant="secondary"
-                            className="cursor-pointer gap-1 text-[10px] hover:bg-destructive/20"
-                            onClick={() => void handleRemoveLabel(label)}
-                            title="Click to remove"
-                          >
-                            {label}
-                            <X className="h-2 w-2" />
-                          </Badge>
-                        ))}
-                        {addingLabel ? (
-                          <Input
-                            ref={labelInputRef}
-                            value={labelDraft}
-                            onChange={(e) => setLabelDraft(e.target.value)}
-                            onBlur={() => void handleAddLabel()}
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter") void handleAddLabel();
-                              if (e.key === "Escape") {
-                                setAddingLabel(false);
-                                setLabelDraft("");
-                              }
-                            }}
-                            className="h-5 w-20 px-1 text-[10px]"
-                            placeholder="Label..."
-                          />
-                        ) : (
-                          <button
-                            type="button"
-                            className="rounded border border-dashed border-border px-1.5 py-0.5 text-[10px] text-muted-foreground hover:border-primary hover:text-foreground"
-                            onClick={() => setAddingLabel(true)}
-                          >
-                            + Add
-                          </button>
-                        )}
-                      </div>
-                    </>
-                  )}
-
-                  {/* Estimated hours */}
-                  {showHours && (
-                    <>
-                      <label className="flex items-center gap-1 pt-1 text-xs text-muted-foreground">
-                        <Hourglass className="h-3 w-3" />
-                        Estimate
-                      </label>
-                      {editingHours ? (
-                        <Input
-                          type="number"
-                          value={hoursDraft}
-                          onChange={(e) => setHoursDraft(e.target.value)}
-                          onBlur={() => void handleHoursSave()}
-                          onKeyDown={handleHoursKeyDown}
-                          min={0}
-                          step={0.5}
-                          placeholder="e.g. 4"
-                          className="h-7 w-24 text-xs"
-                        />
-                      ) : (
-                        <button
-                          type="button"
-                          className="flex items-center gap-1 text-left text-xs hover:text-primary"
-                          onClick={() => setEditingHours(true)}
-                        >
-                          {currentTask.estimated_hours != null ? (
-                            <span className="font-medium">
-                              {currentTask.estimated_hours}h
-                            </span>
-                          ) : (
-                            <span className="text-muted-foreground">
-                              Set estimate
-                            </span>
-                          )}
-                          <Pencil className="h-2.5 w-2.5 text-muted-foreground" />
-                        </button>
+                    {tab.id === "subtasks" && <ListTree className="h-3.5 w-3.5" />}
+                    {tab.id === "artifacts" && <Package className="h-3.5 w-3.5" />}
+                    {tab.label}
+                    {tab.id === "subtasks" &&
+                      currentTask.subtask_count != null &&
+                      currentTask.subtask_count > 0 && (
+                        <Badge variant="secondary" className="text-[10px]">
+                          {currentTask.subtask_count}
+                        </Badge>
                       )}
-                    </>
-                  )}
-
-                  {/* Custom fields */}
-                  {customFieldDefs.length > 0 && (
-                    <>
-                      <div className="col-span-2 my-1">
-                        <Separator />
-                      </div>
-                      <label className="col-span-2 flex items-center gap-1 text-xs font-medium text-muted-foreground">
-                        <SlidersHorizontal className="h-3 w-3" />
-                        Custom Fields
-                      </label>
-                      {[...customFieldDefs]
-                        .sort((a, b) => a.position - b.position)
-                        .filter(
-                          (field) =>
-                            !hideEmpty ||
-                            !isEmpty(
-                              currentTask.custom_fields?.[field.slug],
-                            ),
-                        )
-                        .map((field) => (
-                          <Fragment key={field.id}>
-                            <label className="pt-1 text-xs text-muted-foreground">
-                              {field.name}
-                              {field.is_required && (
-                                <span className="ml-0.5 text-destructive">
-                                  *
-                                </span>
-                              )}
-                            </label>
-                            <CustomFieldRenderer
-                              field={field}
-                              value={
-                                currentTask.custom_fields?.[field.slug]
-                              }
-                              onChange={(val) =>
-                                void handleCustomFieldChange(field.slug, val)
-                              }
-                            />
-                          </Fragment>
-                        ))}
-                    </>
-                  )}
-
-                  {/* Timestamps */}
-                  <label className="flex items-center gap-1 pt-1 text-xs text-muted-foreground">
-                    <Clock className="h-3 w-3" />
-                    Created
-                  </label>
-                  <span className="pt-1 text-xs">
-                    {formatDate(currentTask.created_at)}
-                  </span>
-
-                  <label className="pt-1 text-xs text-muted-foreground">
-                    Updated
-                  </label>
-                  <span className="pt-1 text-xs text-muted-foreground">
-                    {formatRelative(currentTask.updated_at)}
-                  </span>
-
-                  {/* Recurring */}
-                  {currentTask.recurring_schedule_id && (() => {
-                    const schedule = schedules.find(
-                      (s) => s.id === currentTask.recurring_schedule_id,
-                    );
-                    return (
-                      <>
-                        <div className="col-span-2 my-1">
-                          <Separator />
-                        </div>
-                        <label className="flex items-center gap-1 pt-1 text-xs text-muted-foreground">
-                          <RefreshCw className="h-3 w-3" />
-                          Recurring
-                        </label>
-                        <div className="space-y-1">
-                          <p className="text-xs">
-                            Run{" "}
-                            {currentTask.recurring_instance_number != null
-                              ? `#${currentTask.recurring_instance_number}`
-                              : ""}{" "}
-                            {schedule
-                              ? `of "${schedule.title_template}"`
-                              : "of recurring schedule"}
-                          </p>
-                          <button
-                            type="button"
-                            className="rounded px-1.5 py-0.5 text-xs text-primary transition-colors hover:bg-primary/10"
-                            onClick={() => setRecurringHistoryOpen(true)}
-                          >
-                            View history
-                          </button>
-                        </div>
-                      </>
-                    );
-                  })()}
-
-                  {/* VCS Links */}
-                  {showVcsLinks && (
-                    <>
-                      <div className="col-span-2 my-1">
-                        <Separator />
-                      </div>
-                      <div className="col-span-2">
-                        <VCSLinks taskId={currentTask.id} />
-                      </div>
-                    </>
-                  )}
-
-                  {/* Dependencies */}
-                  {showDependencies && (
-                    <>
-                      <div className="col-span-2 my-1">
-                        <Separator />
-                      </div>
-                      <div className="col-span-2">
-                        <DependencyList taskId={currentTask.id} />
-                      </div>
-                    </>
-                  )}
-                </div>
+                    {tab.id === "artifacts" &&
+                      currentTask.artifact_count != null &&
+                      currentTask.artifact_count > 0 && (
+                        <Badge variant="secondary" className="text-[10px]">
+                          {currentTask.artifact_count}
+                        </Badge>
+                      )}
+                  </button>
+                ))}
               </div>
+              {/* Right-edge fade mask */}
+              <div className="pointer-events-none absolute inset-y-0 right-0 w-10 bg-gradient-to-l from-background to-transparent" />
+            </div>
 
-              {/* ---- Description --------------------------------------- */}
-              <div>
-                <div className="mb-1.5 flex items-center justify-between">
-                  <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                    Description
-                  </h3>
-                  <div className="flex items-center gap-2">
-                    {editingDescription ? (
-                      <>
-                        {descSaving && (
-                          <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
-                            <Loader2 className="h-3 w-3 animate-spin" />
-                            Saving…
-                          </span>
-                        )}
-                        {descSaved && !descSaving && (
-                          <span className="flex items-center gap-1 text-[11px] text-green-600">
-                            <Check className="h-3 w-3" />
-                            Saved
-                          </span>
-                        )}
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => {
-                            if (descTimerRef.current)
-                              clearTimeout(descTimerRef.current);
-                            void flushDescription().then(() =>
-                              setEditingDescription(false),
-                            );
-                          }}
-                        >
-                          Done
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => {
-                            if (descTimerRef.current)
-                              clearTimeout(descTimerRef.current);
-                            setDescDraft(currentTask.description ?? "");
-                            setEditingDescription(false);
-                          }}
-                        >
-                          Cancel
-                        </Button>
-                      </>
-                    ) : (
-                      <button
-                        type="button"
-                        className="flex items-center gap-1 rounded px-2 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                        onClick={() => setEditingDescription(true)}
-                      >
-                        <Pencil className="h-3 w-3" />
-                        Edit
-                      </button>
-                    )}
-                  </div>
+            {/* Mobile tab content */}
+            <div className="flex-1 overflow-y-auto">
+              {activeMobileTab === "details" && (
+                <div className="space-y-5 px-5 py-4">
+                  {propertiesGrid}
                 </div>
-                {editingDescription ? (
-                  <DescriptionEditor
-                    value={descDraft}
-                    onChange={setDescDraft}
-                    placeholder="Add a description..."
+              )}
+              {activeMobileTab === "description" && (
+                <div className="px-5 py-4">
+                  {descriptionPanel}
+                </div>
+              )}
+              {activeMobileTab === "comments" && (
+                <CommentList taskId={currentTask.id} />
+              )}
+              {activeMobileTab === "subtasks" && (
+                <div className="flex-1 overflow-y-auto p-3">
+                  <SubtaskList
+                    taskId={currentTask.id}
+                    onOpenSubtask={pushTask}
+                  />
+                </div>
+              )}
+              {activeMobileTab === "artifacts" && (
+                <div className="flex-1 overflow-y-auto p-3">
+                  <ArtifactList
+                    taskId={currentTask.id}
                     projId={currentTask.project_id}
                     projectSettings={
-                      (projects.find((p) => p.id === currentTask.project_id) ??
-                        currentProject)?.settings
+                      (projects.find((p) => p.id === currentTask.project_id) ?? currentProject)?.settings
                     }
+                    onRelayDocSelect={(url) => {
+                      setDescDraft((prev) => {
+                        const sep = prev && !prev.endsWith("\n") ? "\n" : "";
+                        return prev + sep + url + "\n";
+                      });
+                      setEditingDescription(true);
+                      setActiveMobileTab("description");
+                    }}
                   />
-                ) : (
-                  <div className="min-h-[60px] rounded-lg border border-border p-3 text-sm">
-                    {currentTask.description ? (
-                      <MarkdownWithRelay content={currentTask.description} />
-                    ) : (
-                      <span
-                        className="cursor-text text-muted-foreground hover:text-foreground"
-                        onClick={() => setEditingDescription(true)}
-                      >
-                        Add a description...
-                      </span>
+                </div>
+              )}
+              {activeMobileTab === "activity" && (
+                <div className="flex-1 overflow-y-auto p-4">
+                  <ActivityLog taskId={currentTask.id} />
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* ============================================================= */}
+          {/* DESKTOP LAYOUT (>=1024px): two-column                          */}
+          {/* ============================================================= */}
+          <div className="hidden min-h-0 flex-1 overflow-hidden lg:flex lg:flex-row">
+            {/* LEFT PANEL */}
+            <div className="flex min-w-0 flex-1 flex-col overflow-y-auto lg:border-r lg:border-border">
+              <div className="flex-1 space-y-5 px-5 py-4">
+                {titleBlock}
+                {propertiesGrid}
+                {descriptionPanel}
+              </div>
+            </div>
+
+            {/* RIGHT PANEL — Comments / Subtasks / Artifacts / Activity */}
+            <div className="flex w-full shrink-0 flex-col overflow-hidden border-t border-border lg:w-[340px] lg:border-t-0 xl:w-[380px]">
+              {/* Tab bar */}
+              <div className="flex shrink-0 overflow-x-auto border-b border-border">
+                <button
+                  type="button"
+                  className={cn(
+                    "flex shrink-0 items-center gap-1.5 border-b-2 px-3 py-2.5 text-xs font-medium transition-colors",
+                    activeDesktopTab === "comments"
+                      ? "border-primary text-foreground"
+                      : "border-transparent text-muted-foreground hover:border-border hover:text-foreground",
+                  )}
+                  onClick={() => setActiveDesktopTab("comments")}
+                >
+                  Comments
+                </button>
+                <button
+                  type="button"
+                  className={cn(
+                    "flex shrink-0 items-center gap-1.5 border-b-2 px-3 py-2.5 text-xs font-medium transition-colors",
+                    activeDesktopTab === "subtasks"
+                      ? "border-primary text-foreground"
+                      : "border-transparent text-muted-foreground hover:border-border hover:text-foreground",
+                  )}
+                  onClick={() => setActiveDesktopTab("subtasks")}
+                >
+                  <ListTree className="h-3.5 w-3.5" />
+                  Subtasks
+                  {currentTask.subtask_count != null &&
+                    currentTask.subtask_count > 0 && (
+                      <Badge variant="secondary" className="text-[10px]">
+                        {currentTask.subtask_count}
+                      </Badge>
                     )}
-                  </div>
-                )}
+                </button>
+                <button
+                  type="button"
+                  className={cn(
+                    "flex shrink-0 items-center gap-1.5 border-b-2 px-3 py-2.5 text-xs font-medium transition-colors",
+                    activeDesktopTab === "artifacts"
+                      ? "border-primary text-foreground"
+                      : "border-transparent text-muted-foreground hover:border-border hover:text-foreground",
+                  )}
+                  onClick={() => setActiveDesktopTab("artifacts")}
+                >
+                  <Package className="h-3.5 w-3.5" />
+                  Artifacts
+                  {currentTask.artifact_count != null &&
+                    currentTask.artifact_count > 0 && (
+                      <Badge variant="secondary" className="text-[10px]">
+                        {currentTask.artifact_count}
+                      </Badge>
+                    )}
+                </button>
+                <button
+                  type="button"
+                  className={cn(
+                    "flex shrink-0 items-center gap-1.5 border-b-2 px-3 py-2.5 text-xs font-medium transition-colors",
+                    activeDesktopTab === "activity"
+                      ? "border-primary text-foreground"
+                      : "border-transparent text-muted-foreground hover:border-border hover:text-foreground",
+                  )}
+                  onClick={() => setActiveDesktopTab("activity")}
+                >
+                  Activity
+                </button>
               </div>
+
+              {/* Tab content */}
+              {activeDesktopTab === "comments" && (
+                <CommentList taskId={currentTask.id} />
+              )}
+              {activeDesktopTab === "subtasks" && (
+                <div className="flex-1 overflow-y-auto p-3">
+                  <SubtaskList
+                    taskId={currentTask.id}
+                    onOpenSubtask={pushTask}
+                  />
+                </div>
+              )}
+              {activeDesktopTab === "artifacts" && (
+                <div className="flex-1 overflow-y-auto p-3">
+                  <ArtifactList
+                    taskId={currentTask.id}
+                    projId={currentTask.project_id}
+                    projectSettings={
+                      (projects.find((p) => p.id === currentTask.project_id) ?? currentProject)?.settings
+                    }
+                    onRelayDocSelect={(url) => {
+                      setDescDraft((prev) => {
+                        const sep = prev && !prev.endsWith("\n") ? "\n" : "";
+                        return prev + sep + url + "\n";
+                      });
+                      setEditingDescription(true);
+                    }}
+                  />
+                </div>
+              )}
+              {activeDesktopTab === "activity" && (
+                <div className="flex-1 overflow-y-auto p-4">
+                  <ActivityLog taskId={currentTask.id} />
+                </div>
+              )}
             </div>
           </div>
+        </>
 
-          {/* ============================================================= */}
-          {/* RIGHT PANEL — Comments / Subtasks / Artifacts / Activity       */}
-          {/* ============================================================= */}
-          <div className="flex w-full flex-col overflow-hidden border-t border-border max-lg:h-[50vh] lg:w-[340px] lg:shrink-0 lg:border-t-0 xl:w-[380px]">
-            {/* Tab bar */}
-            <div className="flex shrink-0 overflow-x-auto border-b border-border">
-              <button
-                type="button"
-                className={cn(
-                  "flex shrink-0 items-center gap-1.5 border-b-2 px-3 py-2.5 text-xs font-medium transition-colors",
-                  activeTab === "comments"
-                    ? "border-primary text-foreground"
-                    : "border-transparent text-muted-foreground hover:border-border hover:text-foreground",
-                )}
-                onClick={() => setActiveTab("comments")}
-              >
-                Comments
-              </button>
-              <button
-                type="button"
-                className={cn(
-                  "flex shrink-0 items-center gap-1.5 border-b-2 px-3 py-2.5 text-xs font-medium transition-colors",
-                  activeTab === "subtasks"
-                    ? "border-primary text-foreground"
-                    : "border-transparent text-muted-foreground hover:border-border hover:text-foreground",
-                )}
-                onClick={() => setActiveTab("subtasks")}
-              >
-                <ListTree className="h-3.5 w-3.5" />
-                Subtasks
-                {currentTask.subtask_count != null &&
-                  currentTask.subtask_count > 0 && (
-                    <Badge variant="secondary" className="text-[10px]">
-                      {currentTask.subtask_count}
-                    </Badge>
-                  )}
-              </button>
-              <button
-                type="button"
-                className={cn(
-                  "flex shrink-0 items-center gap-1.5 border-b-2 px-3 py-2.5 text-xs font-medium transition-colors",
-                  activeTab === "artifacts"
-                    ? "border-primary text-foreground"
-                    : "border-transparent text-muted-foreground hover:border-border hover:text-foreground",
-                )}
-                onClick={() => setActiveTab("artifacts")}
-              >
-                <Package className="h-3.5 w-3.5" />
-                Artifacts
-                {currentTask.artifact_count != null &&
-                  currentTask.artifact_count > 0 && (
-                    <Badge variant="secondary" className="text-[10px]">
-                      {currentTask.artifact_count}
-                    </Badge>
-                  )}
-              </button>
-              <button
-                type="button"
-                className={cn(
-                  "flex shrink-0 items-center gap-1.5 border-b-2 px-3 py-2.5 text-xs font-medium transition-colors",
-                  activeTab === "activity"
-                    ? "border-primary text-foreground"
-                    : "border-transparent text-muted-foreground hover:border-border hover:text-foreground",
-                )}
-                onClick={() => setActiveTab("activity")}
-              >
-                Activity
-              </button>
-            </div>
-
-            {/* Tab content */}
-            {activeTab === "comments" && (
-              <CommentList taskId={currentTask.id} />
-            )}
-            {activeTab === "subtasks" && (
-              <div className="flex-1 overflow-y-auto p-3">
-                <SubtaskList
-                  taskId={currentTask.id}
-                  onOpenSubtask={pushTask}
-                />
-              </div>
-            )}
-            {activeTab === "artifacts" && (
-              <div className="flex-1 overflow-y-auto p-3">
-                <ArtifactList
-                  taskId={currentTask.id}
-                  projId={currentTask.project_id}
-                  projectSettings={
-                    (projects.find((p) => p.id === currentTask.project_id) ?? currentProject)?.settings
-                  }
-                  onRelayDocSelect={(url) => {
-                    setDescDraft((prev) => {
-                      const sep = prev && !prev.endsWith("\n") ? "\n" : "";
-                      return prev + sep + url + "\n";
-                    });
-                    setEditingDescription(true);
-                  }}
-                />
-              </div>
-            )}
-            {activeTab === "activity" && (
-              <div className="flex-1 overflow-y-auto p-4">
-                <ActivityLog taskId={currentTask.id} />
-              </div>
-            )}
-          </div>
-        </div>
       )}
 
       {/* No task loaded */}
