@@ -17,9 +17,8 @@ import { MarkdownEditor, type PendingImage } from "@/components/markdown-editor"
 import { Bot, Tag, User, X } from "lucide-react";
 import { useTaskStore } from "@/stores/task";
 import { useProjectStore } from "@/stores/project";
-import { useAgentStore } from "@/stores/agent";
+import { useMemberStore } from "@/stores/member";
 import { useAuthStore } from "@/stores/auth";
-import { useWorkspaceStore } from "@/stores/workspace";
 import { useTemplateStore } from "@/stores/template";
 import { getAccessToken } from "@/lib/api";
 import type { AssigneeType, Artifact, Priority, CreateTaskRequest } from "@/types";
@@ -47,9 +46,8 @@ export function CreateTaskDialog({
 }: CreateTaskDialogProps) {
   const { currentProject, statuses } = useProjectStore();
   const { createTask } = useTaskStore();
-  const { agents, fetchAgents } = useAgentStore();
+  const { projectMembers, fetchProjectMembers } = useMemberStore();
   const { user } = useAuthStore();
-  const { currentWorkspace } = useWorkspaceStore();
   const { templates, fetchTemplates } = useTemplateStore();
 
   const [title, setTitle] = useState("");
@@ -83,18 +81,16 @@ export function CreateTaskDialog({
     pendingImagesRef.current = [];
   };
 
-  // Fetch agents, templates and reset form when dialog opens
+  // Fetch project members, templates and reset form when dialog opens
   useEffect(() => {
     if (open) {
       resetForm();
-      if (currentWorkspace) {
-        void fetchAgents(currentWorkspace.id);
-      }
       if (currentProject) {
+        void fetchProjectMembers(currentProject.id);
         void fetchTemplates(currentProject.id);
       }
     }
-  }, [open, currentWorkspace, currentProject, fetchAgents, fetchTemplates]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [open, currentProject, fetchProjectMembers, fetchTemplates]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Focus label input when adding starts
   useEffect(() => {
@@ -336,14 +332,28 @@ export function CreateTaskDialog({
               className="h-7 text-xs"
             >
               <option value="unassigned">Unassigned</option>
-              {user && (
+              {user && !projectMembers.some((m) => m.user_id === user.id) && (
                 <option value={`user:${user.id}`}>{user.name} (you)</option>
               )}
-              {agents.map((agent) => (
-                <option key={agent.id} value={`agent:${agent.id}`}>
-                  {agent.name} (agent)
-                </option>
-              ))}
+              {projectMembers.map((m) => {
+                if (m.user) {
+                  const isSelf = user && m.user.id === user.id;
+                  return (
+                    <option key={m.id} value={`user:${m.user.id}`}>
+                      {m.user.name}{isSelf ? " (you)" : ""} — {m.role}
+                    </option>
+                  );
+                }
+                if (m.agent_id) {
+                  const desc = [m.agent_role, m.agent_description].filter(Boolean).join(" · ");
+                  return (
+                    <option key={m.id} value={`agent:${m.agent_id}`}>
+                      {m.agent_name} (agent){desc ? ` — ${desc}` : ""}
+                    </option>
+                  );
+                }
+                return null;
+              })}
             </Select>
 
             {/* Due Date */}

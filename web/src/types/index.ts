@@ -146,6 +146,8 @@ export interface ProjectMemberWithUser extends ProjectMember {
     avatar_url: string;
   };
   agent_name?: string;
+  agent_role?: string;
+  agent_description?: string;
 }
 
 export interface UserSearchResult {

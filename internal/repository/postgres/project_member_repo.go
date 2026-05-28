@@ -60,18 +60,20 @@ func (r *ProjectMemberRepo) GetByProjectAndAgent(ctx context.Context, projectID,
 
 // projectMemberRow is a flat DB scan struct for the JOIN query.
 type projectMemberRow struct {
-	ID         uuid.UUID  `db:"id"`
-	ProjectID  uuid.UUID  `db:"project_id"`
-	UserID     *uuid.UUID `db:"user_id"`
-	AgentID    *uuid.UUID `db:"agent_id"`
-	Role       string     `db:"role"`
-	CreatedAt  time.Time  `db:"created_at"`
-	UpdatedAt  time.Time  `db:"updated_at"`
-	UserIDJoin *uuid.UUID `db:"u_id"`
-	UserEmail  *string    `db:"u_email"`
-	UserName   *string    `db:"u_display_name"`
-	UserAvatar *string    `db:"u_avatar_url"`
-	AgentName  *string    `db:"a_name"`
+	ID               uuid.UUID  `db:"id"`
+	ProjectID        uuid.UUID  `db:"project_id"`
+	UserID           *uuid.UUID `db:"user_id"`
+	AgentID          *uuid.UUID `db:"agent_id"`
+	Role             string     `db:"role"`
+	CreatedAt        time.Time  `db:"created_at"`
+	UpdatedAt        time.Time  `db:"updated_at"`
+	UserIDJoin       *uuid.UUID `db:"u_id"`
+	UserEmail        *string    `db:"u_email"`
+	UserName         *string    `db:"u_display_name"`
+	UserAvatar       *string    `db:"u_avatar_url"`
+	AgentName        *string    `db:"a_name"`
+	AgentRole        *string    `db:"a_role"`
+	AgentDescription *string    `db:"a_profile_description"`
 }
 
 // List returns all project members with their user/agent details.
@@ -80,7 +82,7 @@ func (r *ProjectMemberRepo) List(ctx context.Context, projectID uuid.UUID) ([]do
 		SELECT
 			pm.id, pm.project_id, pm.user_id, pm.agent_id, pm.role, pm.created_at, pm.updated_at,
 			u.id AS u_id, u.email AS u_email, u.display_name AS u_display_name, u.avatar_url AS u_avatar_url,
-			a.name AS a_name
+			a.name AS a_name, a.role AS a_role, a.profile_description AS a_profile_description
 		FROM project_members pm
 		LEFT JOIN users u ON u.id = pm.user_id
 		LEFT JOIN agents a ON a.id = pm.agent_id
@@ -115,6 +117,12 @@ func (r *ProjectMemberRepo) List(ctx context.Context, projectID uuid.UUID) ([]do
 		}
 		if row.AgentName != nil {
 			m.AgentName = *row.AgentName
+		}
+		if row.AgentRole != nil {
+			m.AgentRole = *row.AgentRole
+		}
+		if row.AgentDescription != nil {
+			m.AgentDescription = *row.AgentDescription
 		}
 		result[i] = m
 	}
