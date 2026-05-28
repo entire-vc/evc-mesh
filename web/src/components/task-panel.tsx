@@ -987,7 +987,7 @@ export function TaskPanel({
       {/* ------------------------------------------------------------------ */}
       {/* Header                                                              */}
       {/* ------------------------------------------------------------------ */}
-      <div className="flex shrink-0 items-center justify-between border-b border-border px-4 py-2.5">
+      <div className="sticky top-0 z-10 flex shrink-0 items-center justify-between border-b border-border bg-background px-4 py-2.5 lg:static lg:top-auto">
         <div className="flex items-center gap-2 min-w-0">
           {taskIdStack.length > 0 ? (
             <button
@@ -1097,14 +1097,14 @@ export function TaskPanel({
           {/* ============================================================= */}
           {/* MOBILE LAYOUT (<1024px): title + 6-tab bar                     */}
           {/* ============================================================= */}
-          <div className="flex min-h-0 flex-1 flex-col overflow-hidden lg:hidden">
+          <div className="flex min-h-0 flex-1 flex-col [overflow:clip] lg:hidden">
             {/* Title */}
             <div className="shrink-0 px-5 pt-4 pb-2">
               {titleBlock}
             </div>
 
             {/* 6-tab bar with horizontal scroll + fade mask */}
-            <div className="relative shrink-0">
+            <div className="sticky top-[44px] z-10 shrink-0 bg-background">
               <div
                 className="flex overflow-x-auto border-b border-border [scrollbar-width:none] [scroll-snap-type:x_mandatory] [-webkit-overflow-scrolling:touch]"
               >
