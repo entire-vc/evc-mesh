@@ -448,8 +448,8 @@ export function CommentList({ taskId }: CommentListProps) {
         </div>
       </div>
 
-      {/* Sticky comment form */}
-      <div className="shrink-0 border-t border-border bg-background p-3">
+      {/* Pinned reply form — sticky keeps it above the iOS keyboard */}
+      <div className="sticky bottom-0 shrink-0 border-t border-border bg-background px-3 pt-3 pb-safe">
         <form onSubmit={handleSubmit} className="relative space-y-2">
           {replyToComment && (
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
