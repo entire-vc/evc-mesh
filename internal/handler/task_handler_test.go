@@ -729,6 +729,101 @@ func TestTaskHandler_List_WithFilters(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rec.Code)
 }
 
+// TestTaskHandler_List_StatusCategoryFilter verifies that status_category is
+// forwarded to the service layer as TaskFilter.StatusCategory.
+func TestTaskHandler_List_StatusCategoryFilter(t *testing.T) {
+	projectID := uuid.New()
+	mockSvc := &MockTaskService{
+		ListFunc: func(_ context.Context, _ uuid.UUID, filter repository.TaskFilter, _ pagination.Params) (*pagination.Page[domain.Task], error) {
+			require.NotNil(t, filter.StatusCategory)
+			assert.Equal(t, domain.StatusCategoryReview, *filter.StatusCategory)
+			assert.Empty(t, filter.StatusIDs)
+			return pagination.NewPage([]domain.Task{}, 0, pagination.Params{Page: 1, PageSize: 50}), nil
+		},
+	}
+	h, e := setupTaskTest(mockSvc)
+
+	req := httptest.NewRequest(http.MethodGet, "/?status_category=review", http.NoBody)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/projects/:proj_id/tasks")
+	c.SetParamNames("proj_id")
+	c.SetParamValues(projectID.String())
+
+	require.NoError(t, h.List(c))
+	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
+// TestTaskHandler_List_StatusIDFilter verifies that status_id= is forwarded as StatusIDs.
+func TestTaskHandler_List_StatusIDFilter(t *testing.T) {
+	projectID := uuid.New()
+	statusID := uuid.New()
+	mockSvc := &MockTaskService{
+		ListFunc: func(_ context.Context, _ uuid.UUID, filter repository.TaskFilter, _ pagination.Params) (*pagination.Page[domain.Task], error) {
+			require.Len(t, filter.StatusIDs, 1)
+			assert.Equal(t, statusID, filter.StatusIDs[0])
+			assert.Nil(t, filter.StatusCategory)
+			return pagination.NewPage([]domain.Task{}, 0, pagination.Params{Page: 1, PageSize: 50}), nil
+		},
+	}
+	h, e := setupTaskTest(mockSvc)
+
+	req := httptest.NewRequest(http.MethodGet, "/?status_id="+statusID.String(), http.NoBody)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/projects/:proj_id/tasks")
+	c.SetParamNames("proj_id")
+	c.SetParamValues(projectID.String())
+
+	require.NoError(t, h.List(c))
+	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
+// TestTaskHandler_List_OffsetPagination verifies that offset=50 advances to page 2.
+func TestTaskHandler_List_OffsetPagination(t *testing.T) {
+	projectID := uuid.New()
+	mockSvc := &MockTaskService{
+		ListFunc: func(_ context.Context, _ uuid.UUID, _ repository.TaskFilter, pg pagination.Params) (*pagination.Page[domain.Task], error) {
+			assert.Equal(t, 2, pg.Page)
+			assert.Equal(t, 50, pg.PageSize)
+			return pagination.NewPage([]domain.Task{}, 0, pg), nil
+		},
+	}
+	h, e := setupTaskTest(mockSvc)
+
+	req := httptest.NewRequest(http.MethodGet, "/?offset=50", http.NoBody)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/projects/:proj_id/tasks")
+	c.SetParamNames("proj_id")
+	c.SetParamValues(projectID.String())
+
+	require.NoError(t, h.List(c))
+	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
+// TestTaskHandler_List_LimitPagination verifies that limit= sets page_size.
+func TestTaskHandler_List_LimitPagination(t *testing.T) {
+	projectID := uuid.New()
+	mockSvc := &MockTaskService{
+		ListFunc: func(_ context.Context, _ uuid.UUID, _ repository.TaskFilter, pg pagination.Params) (*pagination.Page[domain.Task], error) {
+			assert.Equal(t, 200, pg.PageSize)
+			return pagination.NewPage([]domain.Task{}, 0, pg), nil
+		},
+	}
+	h, e := setupTaskTest(mockSvc)
+
+	req := httptest.NewRequest(http.MethodGet, "/?limit=200", http.NoBody)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/projects/:proj_id/tasks")
+	c.SetParamNames("proj_id")
+	c.SetParamValues(projectID.String())
+
+	require.NoError(t, h.List(c))
+	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
 func TestTaskHandler_List_InvalidProjectID(t *testing.T) {
 	mockSvc := &MockTaskService{}
 	h, e := setupTaskTest(mockSvc)

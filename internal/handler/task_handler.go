@@ -383,11 +383,13 @@ func (h *TaskHandler) Delete(c echo.Context) error {
 
 // listTasksQuery represents query parameters for listing tasks.
 type listTasksQuery struct {
-	Status       string `query:"status"`
-	AssigneeType string `query:"assignee_type"`
-	Priority     string `query:"priority"`
-	Labels       string `query:"labels"`
-	Search       string `query:"search"`
+	Status         string `query:"status"`          // comma-separated status UUIDs
+	StatusID       string `query:"status_id"`       // single status UUID alias
+	StatusCategory string `query:"status_category"` // backlog|todo|in_progress|review|done|cancelled
+	AssigneeType   string `query:"assignee_type"`
+	Priority       string `query:"priority"`
+	Labels         string `query:"labels"`
+	Search         string `query:"search"`
 }
 
 // List handles GET /projects/:proj_id/tasks
@@ -407,6 +409,25 @@ func (h *TaskHandler) List(c echo.Context) error {
 	if err = c.Bind(&pg); err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid pagination parameters"))
 	}
+	// Support limit= as an alias for page_size= (page_size wins if both are set).
+	if rawLimit := c.QueryParam("limit"); rawLimit != "" && pg.PageSize < 1 {
+		if n, atoiErr := strconv.Atoi(rawLimit); atoiErr == nil && n > 0 {
+			pg.PageSize = n
+		}
+	}
+	// Support offset= as an alias for page-based pagination.
+	if rawOffset := c.QueryParam("offset"); rawOffset != "" && pg.Page <= 1 {
+		if n, atoiErr := strconv.Atoi(rawOffset); atoiErr == nil && n > 0 {
+			ps := pg.PageSize
+			if ps < 1 {
+				ps = pagination.DefaultPageSize
+			}
+			if ps > pagination.MaxPageSize {
+				ps = pagination.MaxPageSize
+			}
+			pg.Page = n/ps + 1
+		}
+	}
 	pg.Normalize()
 
 	filter := repository.TaskFilter{
@@ -424,14 +445,16 @@ func (h *TaskHandler) List(c echo.Context) error {
 	if q.Labels != "" {
 		filter.Labels = []string{q.Labels}
 	}
-	if q.Status != "" {
-		// Support comma-separated status UUIDs for multi-status filtering.
-		for _, raw := range strings.Split(q.Status, ",") {
-			raw = strings.TrimSpace(raw)
-			if statusID, parseErr := uuid.Parse(raw); parseErr == nil {
-				filter.StatusIDs = append(filter.StatusIDs, statusID)
-			}
+	// status= and status_id= both accept comma-separated UUIDs.
+	for _, raw := range strings.Split(q.Status+","+q.StatusID, ",") {
+		raw = strings.TrimSpace(raw)
+		if statusID, parseErr := uuid.Parse(raw); parseErr == nil {
+			filter.StatusIDs = append(filter.StatusIDs, statusID)
 		}
+	}
+	if q.StatusCategory != "" {
+		cat := domain.StatusCategory(q.StatusCategory)
+		filter.StatusCategory = &cat
 	}
 
 	// Parse custom field filters from query params with "custom." prefix.
