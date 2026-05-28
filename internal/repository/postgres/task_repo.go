@@ -384,6 +384,13 @@ func (r *TaskRepo) List(ctx context.Context, projectID uuid.UUID, filter reposit
 		args = append(args, pq.Array(filter.StatusIDs))
 		argIdx++
 	}
+	if filter.StatusCategory != nil {
+		// Subquery avoids a JOIN while staying composable with other conditions.
+		conditions = append(conditions, fmt.Sprintf(
+			"status_id IN (SELECT id FROM task_statuses WHERE project_id = $1 AND category = $%d)", argIdx))
+		args = append(args, *filter.StatusCategory)
+		argIdx++
+	}
 	if filter.AssigneeID != nil {
 		conditions = append(conditions, fmt.Sprintf("assignee_id = $%d", argIdx))
 		args = append(args, *filter.AssigneeID)

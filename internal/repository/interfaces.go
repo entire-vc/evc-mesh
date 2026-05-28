@@ -50,15 +50,16 @@ type CustomFieldFilter struct {
 
 // TaskFilter defines filtering options for listing tasks.
 type TaskFilter struct {
-	StatusIDs    []uuid.UUID
-	AssigneeID   *uuid.UUID
-	AssigneeType *domain.AssigneeType
-	Priority     *domain.Priority
-	ParentTaskID *uuid.UUID
-	Labels       []string
-	Search       string
-	HasDueDate   *bool
-	CustomFields map[string]CustomFieldFilter // key = field slug
+	StatusIDs      []uuid.UUID
+	StatusCategory *domain.StatusCategory // filter by status category via join on task_statuses
+	AssigneeID     *uuid.UUID
+	AssigneeType   *domain.AssigneeType
+	Priority       *domain.Priority
+	ParentTaskID   *uuid.UUID
+	Labels         []string
+	Search         string
+	HasDueDate     *bool
+	CustomFields   map[string]CustomFieldFilter // key = field slug
 }
 
 // TaskRepository manages persistence for tasks.
