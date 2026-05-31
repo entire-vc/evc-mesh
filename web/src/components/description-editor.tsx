@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Bold, BookOpen, Code, Italic, Link } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { RelayDocPicker } from "@/components/RelayDocPicker";
+import { useProjectTrIntegration } from "@/hooks/useProjectTrIntegration";
 
 // ---------------------------------------------------------------------------
 // Markdown renderer (no external library)
@@ -156,7 +157,7 @@ export interface DescriptionEditorProps {
   onChange: (value: string) => void;
   placeholder?: string;
   className?: string;
-  /** Project settings — used to detect TR share config (tr_share_id). */
+  /** @deprecated No longer read. Will be removed after callers are cleaned up. */
   projectSettings?: Record<string, unknown>;
   /** Project ID — required to show the TR doc picker. */
   projId?: string;
@@ -171,17 +172,13 @@ export function DescriptionEditor({
   onChange,
   placeholder = "Add a description...",
   className,
-  projectSettings,
   projId,
 }: DescriptionEditorProps) {
   const [mode, setMode] = useState<"edit" | "preview">("edit");
   const [pickerOpen, setPickerOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  const hasTrIntegration =
-    projId &&
-    typeof projectSettings?.tr_share_id === "string" &&
-    !!projectSettings.tr_share_id;
+  const { enabled: hasTrIntegration } = useProjectTrIntegration(projId);
 
   // Auto-resize textarea height
   const autoResize = useCallback(() => {
