@@ -307,7 +307,7 @@ func (r *TaskRepo) Search(ctx context.Context, workspaceID uuid.UUID, filter rep
 		t.completed_at, t.deleted_at,
 		t.recurring_schedule_id, t.recurring_instance_number, `+taskComputedColsAliased+`
 		FROM tasks t INNER JOIN projects p ON p.id = t.project_id
-		%s ORDER BY t.updated_at DESC LIMIT $%d OFFSET $%d`, where, argIdx, argIdx+1)
+		%s ORDER BY t.updated_at DESC, t.id ASC LIMIT $%d OFFSET $%d`, where, argIdx, argIdx+1)
 	args = append(args, pg.Limit(), pg.Offset())
 	var rows []taskRow
 	if err := r.db.SelectContext(ctx, &rows, dataQ, args...); err != nil {
@@ -465,6 +465,13 @@ func (r *TaskRepo) List(ctx context.Context, projectID uuid.UUID, filter reposit
 	}
 
 	where := "WHERE " + joinAnd(conditions)
+	// Default to updated_at DESC so any task mutation (create/update/move) floats
+	// the task to the top of the first page — the "write-through" effect.
+	// Callers may override via explicit sort_by/sort_dir query params.
+	if pg.SortBy == "" {
+		pg.SortBy = "updated_at"
+		pg.SortDir = "desc"
+	}
 	order := orderClause(pg, allowedSortColumns{
 		"title":      "title",
 		"priority":   "priority",
@@ -472,7 +479,7 @@ func (r *TaskRepo) List(ctx context.Context, projectID uuid.UUID, filter reposit
 		"created_at": "created_at",
 		"updated_at": "updated_at",
 		"due_date":   "due_date",
-	}, "created_at")
+	}, "updated_at") + ", tasks.id ASC"
 
 	// Count
 	countQ := fmt.Sprintf(`SELECT COUNT(*) FROM tasks %s`, where)
@@ -801,7 +808,7 @@ func (r *TaskRepo) ListByUserActive(ctx context.Context, workspaceID, userID uui
 		  AND ts.category NOT IN ('done', 'cancelled')
 		  AND t.deleted_at IS NULL
 		  AND p.deleted_at IS NULL
-		ORDER BY t.updated_at DESC
+		ORDER BY t.updated_at DESC, t.id ASC
 		LIMIT $3 OFFSET $4`
 	var rows []taskRow
 	if err := r.db.SelectContext(ctx, &rows, dataQ, workspaceID, userID, pg.Limit(), pg.Offset()); err != nil {
