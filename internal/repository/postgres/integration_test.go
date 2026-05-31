@@ -366,3 +366,48 @@ func TestTaskRepo_List_DefaultSortUpdatedAtDesc(t *testing.T) {
 	require.Equal(t, 3, page.TotalCount)
 	assert.Equal(t, taskIDs[0], page.Items[0].ID, "explicit created_at asc: oldest must be first")
 }
+
+// TestTaskRepo_List_IdTiebreaker verifies that when tasks share an identical updated_at
+// timestamp (e.g. after a bulk migration), the secondary sort key id ASC produces a
+// stable, deterministic page order.  This test would be flaky without the tiebreaker.
+func TestTaskRepo_List_IdTiebreaker(t *testing.T) {
+	db := testDB(t)
+	_, proj, status := createTestProject(t, db)
+	repo := NewTaskRepo(db)
+	ctx := context.Background()
+
+	sameTime := time.Now().UTC().Truncate(time.Microsecond)
+
+	// Use deterministic UUIDs with a known ascending order.
+	id1 := uuid.MustParse("00000000-0000-0000-0000-000000000001")
+	id2 := uuid.MustParse("00000000-0000-0000-0000-000000000002")
+	id3 := uuid.MustParse("00000000-0000-0000-0000-000000000003")
+
+	for i, id := range []uuid.UUID{id1, id2, id3} {
+		task := &domain.Task{
+			ID:            id,
+			ProjectID:     proj.ID,
+			StatusID:      status.ID,
+			Title:         "Tie " + id.String()[:8],
+			AssigneeType:  domain.AssigneeTypeUnassigned,
+			Priority:      domain.PriorityMedium,
+			Position:      float64(i),
+			CustomFields:  json.RawMessage(`{}`),
+			Labels:        pq.StringArray{},
+			CreatedBy:     uuid.New(),
+			CreatedByType: domain.ActorTypeUser,
+			CreatedAt:     sameTime,
+			UpdatedAt:     sameTime,
+		}
+		require.NoError(t, repo.Create(ctx, task))
+	}
+
+	// All tasks have the same updated_at; id ASC tiebreaker must produce id1, id2, id3.
+	page, err := repo.List(ctx, proj.ID, repository.TaskFilter{}, pagination.Params{Page: 1, PageSize: 10})
+	require.NoError(t, err)
+	require.Equal(t, 3, page.TotalCount)
+	require.Len(t, page.Items, 3)
+	assert.Equal(t, id1, page.Items[0].ID, "id tiebreaker: smallest UUID must be first")
+	assert.Equal(t, id2, page.Items[1].ID, "id tiebreaker: middle UUID must be second")
+	assert.Equal(t, id3, page.Items[2].ID, "id tiebreaker: largest UUID must be last")
+}
