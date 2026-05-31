@@ -40,6 +40,11 @@ const NOTIFICATION_EVENTS: EventConfig[] = [
     label: "New comment",
     description: "When a comment is added to a task",
   },
+  {
+    key: "task.blocking_triage",
+    label: "Blocking triage",
+    description: "When a task you're mentioned in is auto-moved to triage as a blocker",
+  },
 ];
 
 // ---------------------------------------------------------------------------
@@ -53,7 +58,7 @@ export default function NotificationSettingsPage() {
     useNotificationStore();
 
   const [selectedEvents, setSelectedEvents] = useState<Set<string>>(
-    new Set(["task.assigned", "task.status_changed", "comment.created"]),
+    new Set(["task.assigned", "task.status_changed", "comment.created", "task.blocking_triage"]),
   );
   const [isEnabled, setIsEnabled] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
@@ -64,7 +69,7 @@ export default function NotificationSettingsPage() {
   const [pushSubscribed, setPushSubscribed] = useState(false);
   const [pushLoading, setPushLoading] = useState(false);
   const [pushEvents, setPushEvents] = useState<Set<string>>(
-    new Set(['task.assigned', 'task.status_changed', 'comment.created', 'task.mentioned']),
+    new Set(['task.assigned', 'task.status_changed', 'comment.created', 'task.mentioned', 'task.blocking_triage']),
   );
   const [pushEventsSaving, setPushEventsSaving] = useState(false);
   const [pushEventsSaved, setPushEventsSaved] = useState(false);
@@ -343,6 +348,7 @@ export default function NotificationSettingsPage() {
                   { key: 'task.status_changed', label: 'Status changed', desc: 'When a task status changes' },
                   { key: 'comment.created', label: 'New comment', desc: 'When a comment is added' },
                   { key: 'task.mentioned', label: 'Mention', desc: 'When someone @mentions you' },
+                  { key: 'task.blocking_triage', label: 'Blocking triage', desc: 'When a task you blocked is auto-moved to triage' },
                 ].map((evt) => (
                   <div
                     key={evt.key}
