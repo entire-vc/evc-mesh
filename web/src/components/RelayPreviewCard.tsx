@@ -5,7 +5,7 @@ import { ExternalLink, FileText, Loader2 } from "lucide-react";
 const LOAD_TIMEOUT_MS = 6000;
 
 // Resolve relay:// URL to a public HTTP(S) URL for the iframe src.
-// Format: relay://<host>/<path> → https://<host>/<path>
+// relay://<slug>/<path> → {VITE_RELAY_PUBLISH_BASE_URL}/<slug>/<path>
 // Override VITE_RELAY_PUBLISH_BASE_URL if Publishing TR serves from a different base.
 function resolveRelayToIframeSrc(relayUrl: string): string {
   const base = (import.meta.env.VITE_RELAY_PUBLISH_BASE_URL as string | undefined)?.replace(
@@ -13,9 +13,10 @@ function resolveRelayToIframeSrc(relayUrl: string): string {
     "",
   );
   if (base) {
-    // Strip relay scheme + host, keep path
-    const withoutSchemeAndHost = relayUrl.replace(/^relay:\/\/[^/]+/, "");
-    return base + withoutSchemeAndHost;
+    // Keep the relay host as the leading path segment — it's the share slug,
+    // and the publish host serves shares at /<slug>/<artifact-path>.
+    const pathWithSlug = relayUrl.replace(/^relay:\/\//, "/");
+    return base + pathWithSlug;
   }
   return relayUrl.replace(/^relay:\/\//, "https://");
 }
