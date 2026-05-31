@@ -1,3 +1,4 @@
+-- +goose NO TRANSACTION
 -- +goose Up
 -- Covering index for the default task-list sort (updated_at DESC, id ASC).
 -- Prevents non-deterministic page boundaries when many tasks share the same
