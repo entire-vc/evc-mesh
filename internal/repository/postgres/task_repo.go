@@ -465,6 +465,13 @@ func (r *TaskRepo) List(ctx context.Context, projectID uuid.UUID, filter reposit
 	}
 
 	where := "WHERE " + joinAnd(conditions)
+	// Default to updated_at DESC so any task mutation (create/update/move) floats
+	// the task to the top of the first page — the "write-through" effect.
+	// Callers may override via explicit sort_by/sort_dir query params.
+	if pg.SortBy == "" {
+		pg.SortBy = "updated_at"
+		pg.SortDir = "desc"
+	}
 	order := orderClause(pg, allowedSortColumns{
 		"title":      "title",
 		"priority":   "priority",
@@ -472,7 +479,7 @@ func (r *TaskRepo) List(ctx context.Context, projectID uuid.UUID, filter reposit
 		"created_at": "created_at",
 		"updated_at": "updated_at",
 		"due_date":   "due_date",
-	}, "created_at")
+	}, "updated_at")
 
 	// Count
 	countQ := fmt.Sprintf(`SELECT COUNT(*) FROM tasks %s`, where)

@@ -314,3 +314,55 @@ func TestTaskRepo_ListSubtasks(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, subtasks, 3)
 }
+
+// TestTaskRepo_List_DefaultSortUpdatedAtDesc verifies that tasks created later (higher
+// updated_at) appear first when no explicit sort params are provided.  This is the
+// write-through invariant: any task mutation bumps updated_at so the task floats to the
+// top of the first page and becomes immediately visible on the board.
+func TestTaskRepo_List_DefaultSortUpdatedAtDesc(t *testing.T) {
+	db := testDB(t)
+	_, proj, status := createTestProject(t, db)
+	repo := NewTaskRepo(db)
+	ctx := context.Background()
+
+	base := time.Now().UTC().Truncate(time.Microsecond)
+
+	// Create tasks with staggered updated_at so the ordering is deterministic.
+	taskIDs := make([]uuid.UUID, 3)
+	for i := 0; i < 3; i++ {
+		id := uuid.New()
+		taskIDs[i] = id
+		task := &domain.Task{
+			ID:            id,
+			ProjectID:     proj.ID,
+			StatusID:      status.ID,
+			Title:         "Task " + id.String()[:4],
+			AssigneeType:  domain.AssigneeTypeUnassigned,
+			Priority:      domain.PriorityMedium,
+			Position:      float64(i),
+			CustomFields:  json.RawMessage(`{}`),
+			Labels:        pq.StringArray{},
+			CreatedBy:     uuid.New(),
+			CreatedByType: domain.ActorTypeUser,
+			CreatedAt:     base.Add(time.Duration(i) * time.Second),
+			UpdatedAt:     base.Add(time.Duration(i) * time.Second),
+		}
+		require.NoError(t, repo.Create(ctx, task))
+	}
+
+	// No sort params — should default to updated_at DESC, so taskIDs[2] comes first.
+	page, err := repo.List(ctx, proj.ID, repository.TaskFilter{}, pagination.Params{Page: 1, PageSize: 10})
+	require.NoError(t, err)
+	require.Equal(t, 3, page.TotalCount)
+	require.Len(t, page.Items, 3)
+	assert.Equal(t, taskIDs[2], page.Items[0].ID, "newest task (highest updated_at) must be first")
+	assert.Equal(t, taskIDs[0], page.Items[2].ID, "oldest task (lowest updated_at) must be last")
+
+	// Explicit sort_by=created_at asc still works and overrides the default.
+	page, err = repo.List(ctx, proj.ID, repository.TaskFilter{}, pagination.Params{
+		Page: 1, PageSize: 10, SortBy: "created_at", SortDir: "asc",
+	})
+	require.NoError(t, err)
+	require.Equal(t, 3, page.TotalCount)
+	assert.Equal(t, taskIDs[0], page.Items[0].ID, "explicit created_at asc: oldest must be first")
+}
