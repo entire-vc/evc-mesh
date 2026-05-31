@@ -240,6 +240,8 @@ function sortTasks(tasks: Task[], sortBy: SortBy): Task[] {
         const db = b.due_date ? new Date(b.due_date).getTime() : Infinity;
         return da - db;
       }
+      case "updated":
+        return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime();
       case "created":
         return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
       case "title":
@@ -295,7 +297,7 @@ export function BoardPage() {
 
   // ---- Toolbar state ----
   const [groupBy, setGroupBy] = useState<GroupBy>("status");
-  const [sortBy, setSortBy] = useState<SortBy>("manual");
+  const [sortBy, setSortBy] = useState<SortBy>("updated");
   const [showClosed, setShowClosed] = useState(false);
   const [showSubtasks, setShowSubtasks] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
