@@ -34,7 +34,7 @@ import type { CustomFieldDefinition } from "@/types";
 // ---------------------------------------------------------------------------
 
 export type GroupBy = "status" | "priority" | "assignee";
-export type SortBy = "manual" | "priority" | "due_date" | "created" | "title";
+export type SortBy = "manual" | "updated" | "priority" | "due_date" | "created" | "title";
 
 export interface BoardToolbarProps {
   // GroupBy
@@ -93,6 +93,7 @@ const GROUP_BY_LABELS: Record<GroupBy, string> = {
 
 const SORT_BY_LABELS: Record<SortBy, string> = {
   manual: "Manual",
+  updated: "Last Updated",
   priority: "Priority",
   due_date: "Due Date",
   created: "Created",
@@ -206,7 +207,7 @@ export function BoardToolbar({
             <DropdownMenuContent align="start" className="w-44">
               <DropdownMenuLabel className="text-xs">Sort within column</DropdownMenuLabel>
               <DropdownMenuSeparator />
-              {(["manual", "priority", "due_date", "created", "title"] as SortBy[]).map((s) => (
+              {(["manual", "updated", "priority", "due_date", "created", "title"] as SortBy[]).map((s) => (
                 <DropdownMenuItem
                   key={s}
                   onClick={() => onSortByChange(s)}
@@ -295,7 +296,7 @@ export function BoardToolbar({
             <DropdownMenuContent align="start" className="w-44">
               <DropdownMenuLabel className="text-xs">Sort within column</DropdownMenuLabel>
               <DropdownMenuSeparator />
-              {(["manual", "priority", "due_date", "created", "title"] as SortBy[]).map((s) => (
+              {(["manual", "updated", "priority", "due_date", "created", "title"] as SortBy[]).map((s) => (
                 <DropdownMenuItem
                   key={s}
                   onClick={() => onSortByChange(s)}
