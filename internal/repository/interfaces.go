@@ -573,6 +573,13 @@ type MemoryRepository interface {
 	ListWithNullEmbedding(ctx context.Context, workspaceID uuid.UUID, limit int) ([]domain.Memory, error)
 }
 
+// MemoryEdgeRepository manages directed, typed edges in the memory Knowledge Graph.
+type MemoryEdgeRepository interface {
+	// ReinforceTraversal records that edge edgeID was traversed: updates last_traversed_at to NOW()
+	// and increments weight by 0.1 capped at 5.0. Returns an error when the edge is not found.
+	ReinforceTraversal(ctx context.Context, edgeID uuid.UUID) error
+}
+
 // WorkspaceInviteRepository manages persistence for pending workspace invitations.
 type WorkspaceInviteRepository interface {
 	Create(ctx context.Context, invite *domain.WorkspaceInvite) error

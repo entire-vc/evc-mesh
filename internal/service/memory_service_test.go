@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"testing"
 
@@ -113,12 +114,27 @@ func (m *mockMemoryRepo) List(_ context.Context, _ domain.MemoryListFilter) (*do
 // Verify mockMemoryRepo satisfies the interface at compile time.
 var _ repository.MemoryRepository = (*mockMemoryRepo)(nil)
 
+// mockMemoryEdgeRepo
+type mockMemoryEdgeRepo struct {
+	reinforceFn func(ctx context.Context, edgeID uuid.UUID) error
+}
+
+func (m *mockMemoryEdgeRepo) ReinforceTraversal(ctx context.Context, edgeID uuid.UUID) error {
+	if m.reinforceFn != nil {
+		return m.reinforceFn(ctx, edgeID)
+	}
+	return nil
+}
+
+// Verify mockMemoryEdgeRepo satisfies the interface at compile time.
+var _ repository.MemoryEdgeRepository = (*mockMemoryEdgeRepo)(nil)
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
 func newMemoryService(repo *mockMemoryRepo) MemoryService {
-	return NewMemoryService(repo, nil) // nil embedder → NoopEmbedder (keyword-only)
+	return NewMemoryService(repo, &mockMemoryEdgeRepo{}, nil)
 }
 
 func baseMemory(wsID uuid.UUID) *domain.Memory {
@@ -790,4 +806,31 @@ func TestApplyExtendedFilters_MinImportanceZeroPassesAll(t *testing.T) {
 	}
 	out := applyExtendedFilters(items, domain.RecallOpts{MinImportance: &zero})
 	assert.Len(t, out, 3, "min_importance=0 should pass everything including low-score entries")
+}
+
+func TestReinforceTraversal(t *testing.T) {
+	t.Run("calls edge repo with correct id", func(t *testing.T) {
+		targetID := uuid.New()
+		var capturedID uuid.UUID
+		edgeRepo := &mockMemoryEdgeRepo{
+			reinforceFn: func(_ context.Context, id uuid.UUID) error {
+				capturedID = id
+				return nil
+			},
+		}
+		svc := NewMemoryService(&mockMemoryRepo{}, edgeRepo, nil)
+		err := svc.ReinforceTraversal(context.Background(), targetID)
+		require.NoError(t, err)
+		assert.Equal(t, targetID, capturedID)
+	})
+
+	t.Run("propagates repo error", func(t *testing.T) {
+		sentinel := fmt.Errorf("db down")
+		edgeRepo := &mockMemoryEdgeRepo{
+			reinforceFn: func(_ context.Context, _ uuid.UUID) error { return sentinel },
+		}
+		svc := NewMemoryService(&mockMemoryRepo{}, edgeRepo, nil)
+		err := svc.ReinforceTraversal(context.Background(), uuid.New())
+		require.ErrorIs(t, err, sentinel)
+	})
 }

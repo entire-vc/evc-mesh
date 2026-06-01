@@ -143,17 +143,18 @@ const candidateMultiplier = 3
 
 type memoryService struct {
 	memRepo  repository.MemoryRepository
+	edgeRepo repository.MemoryEdgeRepository
 	embedder embedding.Embedder
 }
 
 // NewMemoryService returns a new MemoryService.
 // embedder may be embedding.NewNoopEmbedder() when vector search is not configured;
 // all vector operations are skipped gracefully in that case.
-func NewMemoryService(memRepo repository.MemoryRepository, embedder embedding.Embedder) MemoryService {
+func NewMemoryService(memRepo repository.MemoryRepository, edgeRepo repository.MemoryEdgeRepository, embedder embedding.Embedder) MemoryService {
 	if embedder == nil {
 		embedder = embedding.NewNoopEmbedder()
 	}
-	return &memoryService{memRepo: memRepo, embedder: embedder}
+	return &memoryService{memRepo: memRepo, edgeRepo: edgeRepo, embedder: embedder}
 }
 
 // Remember upserts a memory entry. It returns "created" if the key did not exist before,
@@ -969,4 +970,10 @@ func (s *memoryService) FindRelated(ctx context.Context, memoryID uuid.UUID, lim
 	}
 
 	return filtered, nil
+}
+
+// ReinforceTraversal records that edgeID was traversed: sets last_traversed_at=NOW() and
+// increments weight by 0.1, capped at 5.0. Called by s4 recall_with_graph on each hop.
+func (s *memoryService) ReinforceTraversal(ctx context.Context, edgeID uuid.UUID) error {
+	return s.edgeRepo.ReinforceTraversal(ctx, edgeID)
 }

@@ -774,4 +774,7 @@ type MemoryService interface {
 	// The source memory itself is excluded from results.
 	FindRelated(ctx context.Context, memoryID uuid.UUID, limit int) ([]domain.ScoredMemory, error)
 	ExtractFromEvent(ctx context.Context, event *domain.EventBusMessage, hint *domain.MemoryHint) error
+	// ReinforceTraversal records that edgeID was traversed: sets last_traversed_at=NOW() and
+	// increments weight by 0.1, capped at 5.0. Called by recall_with_graph on every hop.
+	ReinforceTraversal(ctx context.Context, edgeID uuid.UUID) error
 }

@@ -93,6 +93,7 @@ func main() {
 	notificationRepo := postgres.NewNotificationRepo(db)
 	autoTransRuleRepo := postgres.NewAutoTransitionRuleRepo(db)
 	memoryRepo := postgres.NewMemoryRepo(db)
+	edgeRepo := postgres.NewMemoryEdgesRepo(db)
 	commentMentionRepo := postgres.NewCommentMentionRepo(db)
 
 	// 5. Create auth service.
@@ -152,7 +153,7 @@ func main() {
 	log.Printf("Embedding provider: %s", cfg.Embedding.Provider)
 
 	// Memory service is wired into eventBusService so Publish() can extract memories.
-	memoryService := service.NewMemoryService(memoryRepo, embedder)
+	memoryService := service.NewMemoryService(memoryRepo, edgeRepo, embedder)
 
 	// Slack service sends notifications via Slack Incoming Webhooks when a workspace has
 	// an active Slack integration configured. It is injected into webhookService below.
