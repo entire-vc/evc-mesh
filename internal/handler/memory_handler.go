@@ -55,9 +55,11 @@ type listMemoriesQuery struct {
 	Since             string `query:"since"`               // RFC3339
 	Until             string `query:"until"`               // RFC3339
 	RelevanceMin      string `query:"relevance_min"`       // float
+	MinImportance     string `query:"min_importance"`      // float; default 0.4 applied at service layer
 	ApplyRecencyDecay string `query:"apply_recency_decay"` // bool
 	OrderBy           string `query:"order_by"`
-	IncludeExpired    string `query:"include_expired"` // bool
+	IncludeExpired    string `query:"include_expired"`  // bool
+	IncludeArchived   string `query:"include_archived"` // bool; default false — archived entries hidden
 	Limit             string `query:"limit"`
 	Offset            string `query:"offset"`
 }
@@ -75,6 +77,7 @@ type searchMemoriesQuery struct {
 	Since             string `query:"since"`
 	Until             string `query:"until"`
 	RelevanceMin      string `query:"relevance_min"`
+	MinImportance     string `query:"min_importance"` // float; default 0.4 applied at service layer
 	ApplyRecencyDecay string `query:"apply_recency_decay"`
 	OrderBy           string `query:"order_by"`
 	IncludeExpired    string `query:"include_expired"`
@@ -241,6 +244,14 @@ func (h *MemoryHandler) List(c echo.Context) error {
 		rf := float32(f)
 		filter.RelevanceMin = &rf
 	}
+	if q.MinImportance != "" {
+		f, parseErr := strconv.ParseFloat(q.MinImportance, 32)
+		if parseErr != nil {
+			return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid min_importance"))
+		}
+		mf := float32(f)
+		filter.MinImportance = &mf
+	}
 	if q.Tags != "" {
 		for _, t := range strings.Split(q.Tags, ",") {
 			if t = strings.TrimSpace(t); t != "" {
@@ -256,6 +267,7 @@ func (h *MemoryHandler) List(c echo.Context) error {
 		}
 	}
 	filter.IncludeExpired = q.IncludeExpired == "true" || q.IncludeExpired == "1"
+	filter.IncludeArchived = q.IncludeArchived == "true" || q.IncludeArchived == "1"
 	filter.ApplyDecay = q.ApplyRecencyDecay == "true" || q.ApplyRecencyDecay == "1"
 	if filter.ApplyDecay && filter.OrderBy == "" {
 		filter.OrderBy = "decayed_relevance:desc"
@@ -394,6 +406,14 @@ func (h *MemoryHandler) Search(c echo.Context) error {
 		}
 		rf := float32(f)
 		opts.RelevanceMin = &rf
+	}
+	if q.MinImportance != "" {
+		f, parseErr := strconv.ParseFloat(q.MinImportance, 32)
+		if parseErr != nil {
+			return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid min_importance"))
+		}
+		mf := float32(f)
+		opts.MinImportance = &mf
 	}
 
 	results, err := h.memoryService.Recall(c.Request().Context(), opts)

@@ -19,6 +19,7 @@ export const emptyFilter: MemoryFilter = {
   until: "",
   relevanceMin: 0,
   includeExpired: false,
+  includeArchived: false,
   orderBy: "created_at:desc",
 };
 
@@ -34,6 +35,7 @@ export function countActiveFilters(f: MemoryFilter): number {
   if (f.until) n++;
   if (typeof f.relevanceMin === "number" && f.relevanceMin > 0) n++;
   if (f.includeExpired) n++;
+  if (f.includeArchived) n++;
   if (f.orderBy && f.orderBy !== "created_at:desc") n++;
   return n;
 }
@@ -330,17 +332,28 @@ export function MemoryFiltersPanel({
         </div>
       </div>
 
-      {/* Include expired + Reset */}
+      {/* Include expired / archived + Reset */}
       <div className="flex items-center justify-between border-t border-border pt-3">
-        <label className="flex cursor-pointer items-center gap-2 text-xs text-muted-foreground">
-          <input
-            type="checkbox"
-            checked={filter.includeExpired ?? false}
-            onChange={(e) => set({ includeExpired: e.target.checked })}
-            className="h-3.5 w-3.5 cursor-pointer accent-primary"
-          />
-          Include expired memories
-        </label>
+        <div className="flex flex-wrap items-center gap-4">
+          <label className="flex cursor-pointer items-center gap-2 text-xs text-muted-foreground">
+            <input
+              type="checkbox"
+              checked={filter.includeExpired ?? false}
+              onChange={(e) => set({ includeExpired: e.target.checked })}
+              className="h-3.5 w-3.5 cursor-pointer accent-primary"
+            />
+            Include expired memories
+          </label>
+          <label className="flex cursor-pointer items-center gap-2 text-xs text-muted-foreground">
+            <input
+              type="checkbox"
+              checked={filter.includeArchived ?? false}
+              onChange={(e) => set({ includeArchived: e.target.checked })}
+              className="h-3.5 w-3.5 cursor-pointer accent-primary"
+            />
+            Show archived memories
+          </label>
+        </div>
         <Button type="button" size="sm" variant="ghost" onClick={onReset}>
           Reset filters
         </Button>

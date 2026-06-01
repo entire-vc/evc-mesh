@@ -26,6 +26,104 @@ import (
 // starting and ending with an alphanumeric character, at least two characters long.
 var keySlugRegex = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*[a-z0-9]$`)
 
+// defaultMinImportance is the threshold applied to recall queries when the caller
+// does not supply an explicit min_importance. Entries below this score are noise.
+const defaultMinImportance float32 = 0.4
+
+// entityKeywords are canonical domain terms that boost importance_score when found
+// in memory content, signalling higher decision-relevance.
+var entityKeywords = []string{"icp", "architecture", "license", "security", "money"}
+
+// computeImportanceScore derives an importance_score for a memory based on its tags
+// and content. The score is in [0, 1]. Scoring rules (additive, capped at 1.0):
+//
+//	Base by kind: tag:
+//	  kind:incident          → 0.85
+//	  kind:decision          → 0.80
+//	  kind:learning          → 0.70
+//	  kind:fact              → 0.60
+//	  kind:session-checkpoint → 0.30
+//	  (no kind: tag)         → 0.50
+//
+//	+0.10 boost if content mentions a canonical entity keyword (icp, architecture, etc.)
+//	+0.10 boost if any tag matches relevance:0.8+ (explicit agent override)
+func computeImportanceScore(tags []string, content string) float32 {
+	base := float32(0.5)
+	isSessionCheckpoint := false
+	for _, tag := range tags {
+		switch tag {
+		case "kind:incident":
+			if base < 0.85 {
+				base = 0.85
+			}
+		case "kind:decision":
+			if base < 0.80 {
+				base = 0.80
+			}
+		case "kind:learning":
+			if base < 0.70 {
+				base = 0.70
+			}
+		case "kind:fact":
+			if base < 0.60 {
+				base = 0.60
+			}
+		case "kind:session-checkpoint":
+			isSessionCheckpoint = true
+		}
+	}
+	// session-checkpoint is a downgrade: overrides positive kind: tags.
+	// An entry tagged session-checkpoint is low-value regardless of other kind: tags.
+	if isSessionCheckpoint {
+		base = 0.30
+	}
+
+	score := base
+	lower := strings.ToLower(content)
+	for _, kw := range entityKeywords {
+		if strings.Contains(lower, kw) {
+			score += 0.10
+			break
+		}
+	}
+
+	for _, tag := range tags {
+		if strings.HasPrefix(tag, "relevance:") {
+			val := strings.TrimPrefix(tag, "relevance:")
+			var f float64
+			if _, err := fmt.Sscanf(val, "%f", &f); err == nil && f >= 0.8 {
+				score += 0.10
+				break
+			}
+		}
+	}
+
+	if score > 1.0 {
+		score = 1.0
+	}
+	return score
+}
+
+// tagOverlapRatio returns the fraction of newTags found in existingTags.
+// Used for reinforcement scoring: when ≥80% of tags match, the memory is
+// considered a re-assertion of the same knowledge and gets a score boost.
+func tagOverlapRatio(existingTags, newTags []string) float64 {
+	if len(newTags) == 0 {
+		return 0
+	}
+	existSet := make(map[string]struct{}, len(existingTags))
+	for _, t := range existingTags {
+		existSet[t] = struct{}{}
+	}
+	matches := 0
+	for _, t := range newTags {
+		if _, ok := existSet[t]; ok {
+			matches++
+		}
+	}
+	return float64(matches) / float64(len(newTags))
+}
+
 // rrfK is the Reciprocal Rank Fusion constant. 60 is the standard value.
 const rrfK = 60
 
@@ -131,6 +229,18 @@ func (s *memoryService) Remember(ctx context.Context, mem *domain.Memory) (strin
 		outcome = "updated"
 		// Preserve the original ID so the upsert constraint matches.
 		mem.ID = existing.ID
+	}
+
+	// Compute importance_score when not explicitly set by the caller.
+	if mem.ImportanceScore == 0 {
+		mem.ImportanceScore = computeImportanceScore(mem.Tags, mem.Content)
+	}
+	// Reinforcement: if re-asserting a known memory (≥80% tag overlap), boost the score.
+	if existing != nil && tagOverlapRatio(existing.Tags, mem.Tags) >= 0.8 {
+		mem.ImportanceScore += 0.1
+		if mem.ImportanceScore > 1.0 {
+			mem.ImportanceScore = 1.0
+		}
 	}
 
 	if err := s.memRepo.Upsert(ctx, mem); err != nil {
@@ -265,7 +375,12 @@ func (s *memoryService) Recall(ctx context.Context, opts domain.RecallOpts) ([]d
 	merged := reciprocalRankFusion(kwResults, vecResults)
 
 	// ── Step 4: Apply extended filters (TagsAny, CreatedBy, Since, Until, etc.) ─
-	if opts.CreatedBy != nil || opts.SourceType != "" || len(opts.TagsAny) > 0 || opts.Since != nil || opts.Until != nil || opts.RelevanceMin != nil {
+	// Apply the default importance_score threshold when the caller hasn't overridden it.
+	if opts.MinImportance == nil {
+		def := defaultMinImportance
+		opts.MinImportance = &def
+	}
+	if opts.CreatedBy != nil || opts.SourceType != "" || len(opts.TagsAny) > 0 || opts.Since != nil || opts.Until != nil || opts.RelevanceMin != nil || opts.MinImportance != nil {
 		merged = applyExtendedFilters(merged, opts)
 	}
 
@@ -327,6 +442,9 @@ func applyExtendedFilters(items []domain.ScoredMemory, opts domain.RecallOpts) [
 			continue
 		}
 		if opts.RelevanceMin != nil && m.Relevance < *opts.RelevanceMin {
+			continue
+		}
+		if opts.MinImportance != nil && m.ImportanceScore < *opts.MinImportance {
 			continue
 		}
 		if len(opts.TagsAny) > 0 {

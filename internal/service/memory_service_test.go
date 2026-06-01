@@ -245,8 +245,8 @@ func TestRemember_InvalidKey(t *testing.T) {
 func TestRecall_BasicSearch(t *testing.T) {
 	wsID := uuid.New()
 	results := []domain.ScoredMemory{
-		{Memory: domain.Memory{ID: uuid.New(), Key: "decision-one", Content: "we decided X"}, Score: 0.9},
-		{Memory: domain.Memory{ID: uuid.New(), Key: "decision-two", Content: "we decided Y"}, Score: 0.7},
+		{Memory: domain.Memory{ID: uuid.New(), Key: "decision-one", Content: "we decided X", ImportanceScore: 0.8}, Score: 0.9},
+		{Memory: domain.Memory{ID: uuid.New(), Key: "decision-two", Content: "we decided Y", ImportanceScore: 0.8}, Score: 0.7},
 	}
 
 	boostCalled := false
@@ -606,4 +606,188 @@ func TestMemorySourceType_IsValid(t *testing.T) {
 	assert.True(t, domain.SourceSystem.IsValid())
 	assert.False(t, domain.MemorySourceType("").IsValid())
 	assert.False(t, domain.MemorySourceType("bogus").IsValid())
+}
+
+// ---------------------------------------------------------------------------
+// TestComputeImportanceScore — scoring rule engine
+// ---------------------------------------------------------------------------
+
+func TestComputeImportanceScore_BaseByKind(t *testing.T) {
+	cases := []struct {
+		tag  string
+		want float32
+	}{
+		{"kind:incident", 0.85},
+		{"kind:decision", 0.80},
+		{"kind:learning", 0.70},
+		{"kind:fact", 0.60},
+		{"kind:session-checkpoint", 0.30},
+	}
+	for _, tc := range cases {
+		got := computeImportanceScore([]string{tc.tag}, "some content")
+		assert.InDelta(t, tc.want, got, 0.001, "tag=%s", tc.tag)
+	}
+}
+
+func TestComputeImportanceScore_DefaultNoKindTag(t *testing.T) {
+	got := computeImportanceScore([]string{"team:backend"}, "plain content")
+	assert.InDelta(t, 0.5, got, 0.001)
+}
+
+func TestComputeImportanceScore_EntityKeywordBoost(t *testing.T) {
+	// "architecture" in content → +0.1 boost on top of 0.5 default
+	got := computeImportanceScore([]string{}, "this affects the architecture of the system")
+	assert.InDelta(t, 0.6, got, 0.001)
+}
+
+func TestComputeImportanceScore_RelevanceTagOverride(t *testing.T) {
+	// relevance:0.9 tag → +0.1 boost
+	got := computeImportanceScore([]string{"relevance:0.9"}, "some content")
+	assert.InDelta(t, 0.6, got, 0.001)
+}
+
+func TestComputeImportanceScore_RelevanceTagBelowThreshold(t *testing.T) {
+	// relevance:0.7 → not >= 0.8, no boost
+	got := computeImportanceScore([]string{"relevance:0.7"}, "some content")
+	assert.InDelta(t, 0.5, got, 0.001)
+}
+
+func TestComputeImportanceScore_CappedAt1(t *testing.T) {
+	// incident (0.85) + entity keyword (money) + relevance:0.9 = 1.05 → capped to 1.0
+	got := computeImportanceScore([]string{"kind:incident", "relevance:0.9"}, "involves a money transfer and security risk")
+	assert.InDelta(t, 1.0, got, 0.001)
+}
+
+func TestComputeImportanceScore_HighestKindWins(t *testing.T) {
+	// incident (0.85) takes precedence over decision (0.80)
+	s1 := computeImportanceScore([]string{"kind:decision", "kind:incident"}, "content")
+	assert.InDelta(t, 0.85, s1, 0.001)
+}
+
+func TestComputeImportanceScore_SessionCheckpointNotUpgraded(t *testing.T) {
+	// session-checkpoint is a downgrade that always overrides positive kind: tags.
+	// The result must be 0.30 regardless of tag ordering.
+	tags1 := []string{"kind:session-checkpoint", "kind:decision"}
+	tags2 := []string{"kind:decision", "kind:session-checkpoint"}
+	s1 := computeImportanceScore(tags1, "content")
+	s2 := computeImportanceScore(tags2, "content")
+	assert.Equal(t, s1, s2, "score must be order-independent")
+	assert.InDelta(t, float32(0.30), s1, 0.001, "session-checkpoint overrides decision")
+}
+
+// ---------------------------------------------------------------------------
+// TestTagOverlapRatio
+// ---------------------------------------------------------------------------
+
+func TestTagOverlapRatio(t *testing.T) {
+	t.Run("full overlap", func(t *testing.T) {
+		assert.InDelta(t, 1.0, tagOverlapRatio([]string{"a", "b"}, []string{"a", "b"}), 0.001)
+	})
+	t.Run("no overlap", func(t *testing.T) {
+		assert.InDelta(t, 0.0, tagOverlapRatio([]string{"a", "b"}, []string{"c", "d"}), 0.001)
+	})
+	t.Run("80pct overlap", func(t *testing.T) {
+		// 4 of 5 new tags match existing
+		exist := []string{"kind:decision", "team:mesh", "project:evc", "sprint:12"}
+		incoming := []string{"kind:decision", "team:mesh", "project:evc", "sprint:12", "new-tag"}
+		assert.InDelta(t, 0.8, tagOverlapRatio(exist, incoming), 0.001)
+	})
+	t.Run("empty new tags returns 0", func(t *testing.T) {
+		assert.InDelta(t, 0.0, tagOverlapRatio([]string{"a"}, nil), 0.001)
+	})
+}
+
+// ---------------------------------------------------------------------------
+// TestRemember_SetsImportanceScore — scoring wired into Remember
+// ---------------------------------------------------------------------------
+
+func TestRemember_SetsImportanceScore(t *testing.T) {
+	wsID := uuid.New()
+	var upserted *domain.Memory
+	repo := &mockMemoryRepo{
+		upsertFn: func(_ context.Context, m *domain.Memory) error {
+			upserted = m
+			return nil
+		},
+	}
+	svc := newMemoryService(repo)
+
+	mem := &domain.Memory{
+		WorkspaceID: wsID,
+		Key:         "my-decision",
+		Content:     "we chose postgres",
+		Scope:       domain.ScopeProject,
+		Tags:        []string{"kind:decision"},
+	}
+	_, err := svc.Remember(context.Background(), mem)
+	require.NoError(t, err)
+	assert.InDelta(t, 0.8, upserted.ImportanceScore, 0.001, "kind:decision should score 0.8")
+}
+
+func TestRemember_ReinforcementBoost(t *testing.T) {
+	wsID := uuid.New()
+	existingID := uuid.New()
+	existing := &domain.Memory{
+		ID:              existingID,
+		WorkspaceID:     wsID,
+		Key:             "arch-decision",
+		Content:         "original content",
+		Scope:           domain.ScopeProject,
+		Tags:            []string{"kind:decision", "team:backend"},
+		ImportanceScore: 0.8,
+	}
+
+	var upserted *domain.Memory
+	repo := &mockMemoryRepo{
+		getByKeyFn: func(_ context.Context, _ uuid.UUID, _ *uuid.UUID, _ *uuid.UUID, _ string, _ domain.MemoryScope) (*domain.Memory, error) {
+			return existing, nil
+		},
+		upsertFn: func(_ context.Context, m *domain.Memory) error {
+			upserted = m
+			return nil
+		},
+	}
+	svc := newMemoryService(repo)
+
+	// Same tags → full overlap → reinforcement +0.1 (capped at 1.0)
+	mem := &domain.Memory{
+		WorkspaceID: wsID,
+		Key:         "arch-decision",
+		Content:     "updated content",
+		Scope:       domain.ScopeProject,
+		Tags:        []string{"kind:decision", "team:backend"},
+	}
+	_, err := svc.Remember(context.Background(), mem)
+	require.NoError(t, err)
+	// base 0.8 (decision) + 0.1 reinforcement = 0.9
+	assert.InDelta(t, 0.9, upserted.ImportanceScore, 0.001)
+}
+
+// ---------------------------------------------------------------------------
+// TestApplyExtendedFilters_MinImportance
+// ---------------------------------------------------------------------------
+
+func TestApplyExtendedFilters_MinImportance(t *testing.T) {
+	minVal := float32(0.5)
+	items := []domain.ScoredMemory{
+		{Memory: domain.Memory{ImportanceScore: 0.3}},
+		{Memory: domain.Memory{ImportanceScore: 0.6}},
+		{Memory: domain.Memory{ImportanceScore: 0.9}},
+	}
+	out := applyExtendedFilters(items, domain.RecallOpts{MinImportance: &minVal})
+	require.Len(t, out, 2)
+	for _, m := range out {
+		assert.GreaterOrEqual(t, m.ImportanceScore, minVal)
+	}
+}
+
+func TestApplyExtendedFilters_MinImportanceZeroPassesAll(t *testing.T) {
+	zero := float32(0.0)
+	items := []domain.ScoredMemory{
+		{Memory: domain.Memory{ImportanceScore: 0.0}},
+		{Memory: domain.Memory{ImportanceScore: 0.3}},
+		{Memory: domain.Memory{ImportanceScore: 0.9}},
+	}
+	out := applyExtendedFilters(items, domain.RecallOpts{MinImportance: &zero})
+	assert.Len(t, out, 3, "min_importance=0 should pass everything including low-score entries")
 }

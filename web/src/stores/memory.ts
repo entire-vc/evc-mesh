@@ -50,6 +50,7 @@ function buildParams(
   }
 
   if (filter.includeExpired) params.include_expired = "true";
+  if (filter.includeArchived) params.include_archived = "true";
 
   if (filter.orderBy) {
     params.order_by = filter.orderBy;

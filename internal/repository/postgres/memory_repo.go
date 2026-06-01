@@ -30,45 +30,52 @@ func NewMemoryRepo(db *sqlx.DB) *MemoryRepo {
 // memoryRow is the DB row representation for the memories table.
 // search_vector is a GENERATED STORED column — it is never written explicitly.
 type memoryRow struct {
-	ID            uuid.UUID               `db:"id"`
-	WorkspaceID   uuid.UUID               `db:"workspace_id"`
-	ProjectID     *uuid.UUID              `db:"project_id"`
-	AgentID       *uuid.UUID              `db:"agent_id"`
-	Key           string                  `db:"key"`
-	Content       string                  `db:"content"`
-	Scope         domain.MemoryScope      `db:"scope"`
-	Tags          pq.StringArray          `db:"tags"`
-	SourceType    domain.MemorySourceType `db:"source_type"`
-	SourceEventID *uuid.UUID              `db:"source_event_id"`
-	SourceURL     *string                 `db:"source_url"`
-	Relevance     float32                 `db:"relevance"`
-	CreatedAt     time.Time               `db:"created_at"`
-	UpdatedAt     time.Time               `db:"updated_at"`
-	ExpiresAt     *time.Time              `db:"expires_at"`
+	ID              uuid.UUID               `db:"id"`
+	WorkspaceID     uuid.UUID               `db:"workspace_id"`
+	ProjectID       *uuid.UUID              `db:"project_id"`
+	AgentID         *uuid.UUID              `db:"agent_id"`
+	Key             string                  `db:"key"`
+	Content         string                  `db:"content"`
+	Scope           domain.MemoryScope      `db:"scope"`
+	Tags            pq.StringArray          `db:"tags"`
+	SourceType      domain.MemorySourceType `db:"source_type"`
+	SourceEventID   *uuid.UUID              `db:"source_event_id"`
+	SourceURL       *string                 `db:"source_url"`
+	Relevance       float32                 `db:"relevance"`
+	ImportanceScore float32                 `db:"importance_score"`
+	CreatedAt       time.Time               `db:"created_at"`
+	UpdatedAt       time.Time               `db:"updated_at"`
+	ExpiresAt       *time.Time              `db:"expires_at"`
+	LastAccessedAt  *time.Time              `db:"last_accessed_at"`
+	Archived        bool                    `db:"archived"`
 }
 
 func (r *memoryRow) toDomain() domain.Memory {
 	return domain.Memory{
-		ID:            r.ID,
-		WorkspaceID:   r.WorkspaceID,
-		ProjectID:     r.ProjectID,
-		AgentID:       r.AgentID,
-		Key:           r.Key,
-		Content:       r.Content,
-		Scope:         r.Scope,
-		Tags:          r.Tags,
-		SourceType:    r.SourceType,
-		SourceEventID: r.SourceEventID,
-		SourceURL:     r.SourceURL,
-		Relevance:     r.Relevance,
-		CreatedAt:     r.CreatedAt,
-		UpdatedAt:     r.UpdatedAt,
-		ExpiresAt:     r.ExpiresAt,
+		ID:              r.ID,
+		WorkspaceID:     r.WorkspaceID,
+		ProjectID:       r.ProjectID,
+		AgentID:         r.AgentID,
+		Key:             r.Key,
+		Content:         r.Content,
+		Scope:           r.Scope,
+		Tags:            r.Tags,
+		SourceType:      r.SourceType,
+		SourceEventID:   r.SourceEventID,
+		SourceURL:       r.SourceURL,
+		Relevance:       r.Relevance,
+		ImportanceScore: r.ImportanceScore,
+		CreatedAt:       r.CreatedAt,
+		UpdatedAt:       r.UpdatedAt,
+		ExpiresAt:       r.ExpiresAt,
+		LastAccessedAt:  r.LastAccessedAt,
+		Archived:        r.Archived,
 	}
 }
 
 const memoryColumns = `id, workspace_id, project_id, agent_id, key, content, scope, tags,
-	source_type, source_event_id, source_url, relevance, created_at, updated_at, expires_at`
+	source_type, source_event_id, source_url, relevance, importance_score, created_at, updated_at, expires_at,
+	last_accessed_at, archived`
 
 // Upsert inserts a new memory or updates content, tags, relevance, and expires_at on conflict.
 // The unique constraint is on (workspace_id, project_id, agent_id, key, scope).
@@ -94,27 +101,32 @@ func (r *MemoryRepo) Upsert(ctx context.Context, m *domain.Memory) error {
 	const q = `
 		INSERT INTO memories (
 			id, workspace_id, project_id, agent_id, key, content, scope,
-			tags, source_type, source_event_id, source_url, relevance, created_at, updated_at, expires_at
+			tags, source_type, source_event_id, source_url, relevance, importance_score,
+			created_at, updated_at, expires_at
 		) VALUES (
 			$1, $2, $3, $4, $5, $6, $7,
-			$8, $9, $10, $11, $12, $13, $14, $15
+			$8, $9, $10, $11, $12, $13,
+			$14, $15, $16
 		)
 		ON CONFLICT (id) DO UPDATE
-			SET content       = EXCLUDED.content,
-			    tags          = EXCLUDED.tags,
-			    relevance     = EXCLUDED.relevance,
-			    source_url    = EXCLUDED.source_url,
-			    updated_at    = EXCLUDED.updated_at,
-			    expires_at    = EXCLUDED.expires_at
+			SET content          = EXCLUDED.content,
+			    tags             = EXCLUDED.tags,
+			    relevance        = EXCLUDED.relevance,
+			    importance_score = EXCLUDED.importance_score,
+			    source_url       = EXCLUDED.source_url,
+			    updated_at       = EXCLUDED.updated_at,
+			    expires_at       = EXCLUDED.expires_at
 	`
 	_, err := r.db.ExecContext(ctx, q,
 		m.ID, m.WorkspaceID, m.ProjectID, m.AgentID, m.Key, m.Content, m.Scope,
-		tags, m.SourceType, m.SourceEventID, m.SourceURL, m.Relevance, m.CreatedAt, m.UpdatedAt, m.ExpiresAt,
+		tags, m.SourceType, m.SourceEventID, m.SourceURL, m.Relevance, m.ImportanceScore,
+		m.CreatedAt, m.UpdatedAt, m.ExpiresAt,
 	)
 	return err
 }
 
 // GetByID returns a memory by its primary key, or nil if not found.
+// It touches last_accessed_at (1h idempotency window) as a side-effect.
 func (r *MemoryRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.Memory, error) {
 	var row memoryRow
 	err := r.db.GetContext(ctx, &row,
@@ -128,6 +140,15 @@ func (r *MemoryRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.Memory,
 		return nil, err
 	}
 	m := row.toDomain()
+
+	// Touch last_accessed_at — only if not recently updated (1-hour window to avoid write amplification).
+	_, _ = r.db.ExecContext(ctx,
+		`UPDATE memories SET last_accessed_at = NOW()
+		 WHERE id = $1
+		   AND (last_accessed_at IS NULL OR last_accessed_at < NOW() - INTERVAL '1 hour')`,
+		id,
+	)
+
 	return &m, nil
 }
 
@@ -172,6 +193,7 @@ func (r *MemoryRepo) FullTextSearch(ctx context.Context, query string, workspace
 		"workspace_id = $1",
 		"search_vector @@ plainto_tsquery('simple', $2)",
 		"(expires_at IS NULL OR expires_at > NOW())",
+		"archived = false",
 	}
 	argIdx := 3
 
@@ -212,12 +234,25 @@ func (r *MemoryRepo) FullTextSearch(ctx context.Context, query string, workspace
 	}
 
 	result := make([]domain.ScoredMemory, len(rows))
+	ids := make([]uuid.UUID, len(rows))
 	for i, row := range rows {
 		result[i] = domain.ScoredMemory{
 			Memory: row.toDomain(),
 			Score:  row.Score,
 		}
+		ids[i] = row.ID
 	}
+
+	// Batch-touch last_accessed_at for all returned hits (1-hour idempotency window).
+	if len(ids) > 0 {
+		_, _ = r.db.ExecContext(ctx,
+			`UPDATE memories SET last_accessed_at = NOW()
+			 WHERE id = ANY($1)
+			   AND (last_accessed_at IS NULL OR last_accessed_at < NOW() - INTERVAL '1 hour')`,
+			pq.Array(ids),
+		)
+	}
+
 	return result, nil
 }
 
@@ -231,6 +266,7 @@ func (r *MemoryRepo) FindByScope(ctx context.Context, workspaceID uuid.UUID, pro
 	conditions := []string{
 		"workspace_id = $1",
 		"(expires_at IS NULL OR expires_at > NOW())",
+		"archived = false",
 	}
 	argIdx := 2
 
@@ -277,6 +313,7 @@ func (r *MemoryRepo) ListByWorkspaceProject(ctx context.Context, workspaceID uui
 	conditions := []string{
 		"workspace_id = $1",
 		"(expires_at IS NULL OR expires_at > NOW())",
+		"archived = false",
 	}
 
 	if projectID != nil {
@@ -322,6 +359,10 @@ func (r *MemoryRepo) List(ctx context.Context, filter domain.MemoryListFilter) (
 		conditions = append(conditions, "(expires_at IS NULL OR expires_at > NOW())")
 	}
 
+	if !filter.IncludeArchived {
+		conditions = append(conditions, "archived = false")
+	}
+
 	if filter.Scope != "" {
 		conditions = append(conditions, fmt.Sprintf("scope = $%d", argIdx))
 		args = append(args, filter.Scope)
@@ -355,6 +396,11 @@ func (r *MemoryRepo) List(ctx context.Context, filter domain.MemoryListFilter) (
 	if filter.RelevanceMin != nil {
 		conditions = append(conditions, fmt.Sprintf("relevance >= $%d", argIdx))
 		args = append(args, *filter.RelevanceMin)
+		argIdx++
+	}
+	if filter.MinImportance != nil {
+		conditions = append(conditions, fmt.Sprintf("importance_score >= $%d", argIdx))
+		args = append(args, *filter.MinImportance)
 		argIdx++
 	}
 	if len(filter.Tags) > 0 {
@@ -479,7 +525,8 @@ type embeddingRow struct {
 }
 
 const memoryColumnsWithEmbedding = `id, workspace_id, project_id, agent_id, key, content, scope, tags,
-	source_type, source_event_id, source_url, relevance, created_at, updated_at, expires_at,
+	source_type, source_event_id, source_url, relevance, importance_score, created_at, updated_at, expires_at,
+	last_accessed_at, archived,
 	embedding, embedding_model, embedding_dim`
 
 // VectorSearch performs application-level cosine similarity search.
@@ -496,6 +543,7 @@ func (r *MemoryRepo) VectorSearch(ctx context.Context, queryVec []float32, works
 		"workspace_id = $1",
 		"embedding IS NOT NULL",
 		"(expires_at IS NULL OR expires_at > NOW())",
+		"archived = false",
 	}
 	argIdx := 2
 
