@@ -291,6 +291,8 @@ type UserRepository interface {
 	GetByID(ctx context.Context, id uuid.UUID) (*domain.User, error)
 	GetByEmail(ctx context.Context, email string) (*domain.User, error)
 	Update(ctx context.Context, user *domain.User) error
+	// UsernameExists reports whether any user already holds the given username (case-insensitive, global).
+	UsernameExists(ctx context.Context, username string) (bool, error)
 	// SearchUsers returns users whose email or display_name match the query (ILIKE), up to limit.
 	SearchUsers(ctx context.Context, query string, limit int) ([]domain.User, error)
 	// GetByUsername returns the user with the given username in the workspace, or (nil, nil) if not found.

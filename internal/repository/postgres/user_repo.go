@@ -24,14 +24,25 @@ func NewUserRepo(db *sqlx.DB) *UserRepo {
 
 func (r *UserRepo) Create(ctx context.Context, user *domain.User) error {
 	const q = `
-		INSERT INTO users (id, email, password_hash, display_name, avatar_url, is_active, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		INSERT INTO users (id, email, password_hash, display_name, username, avatar_url, is_active, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 	`
 	_, err := r.db.ExecContext(ctx, q,
-		user.ID, user.Email, user.PasswordHash, user.Name,
+		user.ID, user.Email, user.PasswordHash, user.Name, user.Username,
 		user.AvatarURL, user.IsActive, user.CreatedAt, user.UpdatedAt,
 	)
 	return err
+}
+
+// UsernameExists reports whether any user already holds the given username
+// (case-insensitive, matching the global ix_users_username unique index).
+func (r *UserRepo) UsernameExists(ctx context.Context, username string) (bool, error) {
+	const q = `SELECT EXISTS(SELECT 1 FROM users WHERE lower(username) = lower($1))`
+	var exists bool
+	if err := r.db.GetContext(ctx, &exists, q, username); err != nil {
+		return false, err
+	}
+	return exists, nil
 }
 
 func (r *UserRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.User, error) {
