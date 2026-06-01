@@ -31,8 +31,6 @@ jobs:
 
       - name: Build frontend
         working-directory: web
-        env:
-          VITE_RELAY_PUBLISH_BASE_URL: https://docs.entire.vc
         run: pnpm build
 
       - name: Verify SW cache version was injected
