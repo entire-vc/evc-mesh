@@ -594,6 +594,9 @@ type AgentSessionRepository interface {
 	Update(ctx context.Context, session *domain.AgentSession) error
 	GetActive(ctx context.Context, agentID uuid.UUID) (*domain.AgentSession, error)
 	EndStale(ctx context.Context, timeout time.Duration) (int, error)
+	// GetPreviousStartedAt returns the started_at of the most recent non-active session
+	// for the agent. Returns nil when no prior session exists.
+	GetPreviousStartedAt(ctx context.Context, agentID uuid.UUID) (*time.Time, error)
 }
 
 // PushSubscriptionRepository manages persistence for Web Push subscriptions.

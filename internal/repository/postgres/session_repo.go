@@ -198,6 +198,25 @@ func (r *SessionRepo) GetActive(ctx context.Context, agentID uuid.UUID) (*domain
 	return &sess, nil
 }
 
+// GetPreviousStartedAt returns the started_at of the most recent non-active session for
+// the agent. Returns nil (no error) when no such session exists.
+func (r *SessionRepo) GetPreviousStartedAt(ctx context.Context, agentID uuid.UUID) (*time.Time, error) {
+	var t time.Time
+	err := r.db.GetContext(ctx, &t,
+		`SELECT started_at FROM agent_sessions
+		 WHERE agent_id = $1 AND status != 'active'
+		 ORDER BY started_at DESC LIMIT 1`,
+		agentID,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &t, nil
+}
+
 // EndStale marks all active sessions that have been running longer than timeout as ended.
 // Returns the number of sessions that were terminated.
 func (r *SessionRepo) EndStale(ctx context.Context, timeout time.Duration) (int, error) {
