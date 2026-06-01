@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/url"
 	"strings"
@@ -52,8 +53,19 @@ func (s *S3Client) Upload(ctx context.Context, key string, reader io.Reader, siz
 }
 
 // GetPresignedURL generates a time-limited download URL for the given key.
-func (s *S3Client) GetPresignedURL(ctx context.Context, key string, expiry time.Duration) (string, error) {
+// contentType overrides the response Content-Type; charset=utf-8 is appended
+// automatically for text/* and application/json when not already present.
+// filename sets Content-Disposition: attachment; empty string omits the header.
+func (s *S3Client) GetPresignedURL(ctx context.Context, key string, expiry time.Duration, contentType, filename string) (string, error) {
 	reqParams := make(url.Values)
+
+	if contentType != "" {
+		reqParams.Set("response-content-type", addCharset(contentType))
+	}
+	if filename != "" {
+		reqParams.Set("response-content-disposition", contentDisposition(filename))
+	}
+
 	u, err := s.client.PresignedGetObject(ctx, s.bucket, key, expiry, reqParams)
 	if err != nil {
 		return "", err
@@ -65,6 +77,47 @@ func (s *S3Client) GetPresignedURL(ctx context.Context, key string, expiry time.
 	}
 
 	return u.String(), nil
+}
+
+// addCharset appends "; charset=utf-8" to text/* and application/json types
+// when they don't already carry a charset parameter.
+func addCharset(ct string) string {
+	lower := strings.ToLower(ct)
+	if strings.Contains(lower, "charset") {
+		return ct
+	}
+	if strings.HasPrefix(lower, "text/") || lower == "application/json" {
+		return ct + "; charset=utf-8"
+	}
+	return ct
+}
+
+// contentDisposition builds a Content-Disposition: attachment value.
+// Pure-ASCII filenames use the simple filename="" form.
+// Non-ASCII filenames use RFC 5987 filename*=UTF-8''<pct-encoded> alongside
+// an ASCII fallback for older clients.
+func contentDisposition(filename string) string {
+	ascii := true
+	for _, r := range filename {
+		if r > 127 {
+			ascii = false
+			break
+		}
+	}
+	if ascii {
+		return fmt.Sprintf(`attachment; filename="%s"`, filename)
+	}
+	// RFC 5987 percent-encoding: url.QueryEscape encodes all non-unreserved
+	// chars; replace "+" (space) with "%20" to comply with the pct-encoded form.
+	encoded := strings.ReplaceAll(url.QueryEscape(filename), "+", "%20")
+	// ASCII fallback: strip non-ASCII runes.
+	var sb strings.Builder
+	for _, r := range filename {
+		if r <= 127 {
+			sb.WriteRune(r)
+		}
+	}
+	return fmt.Sprintf(`attachment; filename="%s"; filename*=UTF-8''%s`, sb.String(), encoded)
 }
 
 // rewriteURL replaces the scheme+host portion of a presigned URL with the public URL.

@@ -21,7 +21,11 @@ const presignedURLExpiry = 1 * time.Hour
 // StorageClient is the interface for S3-compatible object storage.
 type StorageClient interface {
 	Upload(ctx context.Context, key string, reader io.Reader, size int64, contentType string) error
-	GetPresignedURL(ctx context.Context, key string, expiry time.Duration) (string, error)
+	// GetPresignedURL generates a time-limited download URL.
+	// contentType sets the response Content-Type override (charset=utf-8 is added
+	// automatically for text/* types); empty string leaves the stored value unchanged.
+	// filename sets Content-Disposition: attachment; empty string omits the header.
+	GetPresignedURL(ctx context.Context, key string, expiry time.Duration, contentType, filename string) (string, error)
 	Delete(ctx context.Context, key string) error
 	// Download fetches object contents. Caller must close the returned ReadCloser.
 	Download(ctx context.Context, key string) (io.ReadCloser, error)
@@ -144,7 +148,7 @@ func (s *artifactService) GetDownloadURL(ctx context.Context, id uuid.UUID) (str
 		return "", apierror.ServiceUnavailable("storage backend not configured")
 	}
 
-	url, err := s.storage.GetPresignedURL(ctx, artifact.StorageKey, presignedURLExpiry)
+	url, err := s.storage.GetPresignedURL(ctx, artifact.StorageKey, presignedURLExpiry, artifact.MimeType, artifact.Name)
 	if err != nil {
 		return "", apierror.InternalError("failed to generate download URL")
 	}
