@@ -703,6 +703,36 @@ func (r *MemoryRepo) ListWithNullEmbedding(ctx context.Context, workspaceID uuid
 	return memories, nil
 }
 
+// FindByShortID resolves the first memory whose UUID hex string starts with the given prefix
+// within the given workspace. Returns nil, nil if not found.
+func (r *MemoryRepo) FindByShortID(ctx context.Context, workspaceID uuid.UUID, prefix string) (*domain.Memory, error) {
+	var row memoryRow
+	err := r.db.GetContext(ctx, &row,
+		fmt.Sprintf(`SELECT %s FROM memories WHERE workspace_id = $1 AND id::text LIKE $2 LIMIT 1`, memoryColumns),
+		workspaceID, prefix+"%",
+	)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("memory find by short id: %w", err)
+	}
+	m := row.toDomain()
+	return &m, nil
+}
+
+// SetArchived sets or clears the archived flag on a memory.
+func (r *MemoryRepo) SetArchived(ctx context.Context, id uuid.UUID, archived bool) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE memories SET archived = $1, updated_at = NOW() WHERE id = $2`,
+		archived, id,
+	)
+	if err != nil {
+		return fmt.Errorf("memory set archived: %w", err)
+	}
+	return nil
+}
+
 // cosineSimilarity returns the cosine similarity between two float32 vectors.
 // Returns 0 when either vector is zero-length or the lengths differ.
 func cosineSimilarity(a, b []float32) float64 {

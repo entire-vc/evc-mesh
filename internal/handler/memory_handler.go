@@ -683,6 +683,72 @@ func (h *MemoryHandler) FindRelated(c echo.Context) error {
 	})
 }
 
+// RecallWithGraph handles GET /api/v1/memories/recall-with-graph
+// Performs hybrid recall augmented with 1-hop knowledge-graph traversal.
+// Query params: q (required), workspace_id, project_id, scope, tags, limit, hops
+func (h *MemoryHandler) RecallWithGraph(c echo.Context) error {
+	q := c.QueryParam("q")
+	if q == "" {
+		return c.JSON(http.StatusBadRequest, apierror.ValidationError(map[string]string{
+			"q": "search query is required",
+		}))
+	}
+
+	wsID, err := requireWorkspaceID(c, c.QueryParam("workspace_id"))
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, err)
+	}
+
+	var projID uuid.UUID
+	if pidStr := c.QueryParam("project_id"); pidStr != "" {
+		pid, parseErr := uuid.Parse(pidStr)
+		if parseErr != nil {
+			return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid project_id"))
+		}
+		projID = pid
+	}
+
+	limit := 20
+	if limitStr := c.QueryParam("limit"); limitStr != "" {
+		if l, parseErr := strconv.Atoi(limitStr); parseErr == nil && l > 0 {
+			limit = l
+		}
+	}
+
+	hops := 1
+	if hopsStr := c.QueryParam("hops"); hopsStr != "" {
+		if h2, parseErr := strconv.Atoi(hopsStr); parseErr == nil && h2 > 0 {
+			hops = h2
+		}
+	}
+
+	var tags []string
+	if tagsStr := c.QueryParam("tags"); tagsStr != "" {
+		for _, t := range strings.Split(tagsStr, ",") {
+			if t = strings.TrimSpace(t); t != "" {
+				tags = append(tags, t)
+			}
+		}
+	}
+
+	opts := domain.RecallWithGraphOpts{
+		Query:       q,
+		WorkspaceID: wsID,
+		ProjectID:   projID,
+		Scope:       domain.MemoryScope(c.QueryParam("scope")),
+		Tags:        tags,
+		Limit:       limit,
+		Hops:        hops,
+	}
+
+	result, err := h.memoryService.RecallWithGraph(c.Request().Context(), opts)
+	if err != nil {
+		return handleError(c, err)
+	}
+
+	return c.JSON(http.StatusOK, result)
+}
+
 // requireWorkspaceID extracts workspace_id either from the provided raw string
 // or from the Echo context (set by DualAuth middleware).
 // Returns a non-nil error when neither source yields a valid UUID.

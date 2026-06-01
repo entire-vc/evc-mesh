@@ -571,6 +571,12 @@ type MemoryRepository interface {
 	// ListWithNullEmbedding returns up to limit memories whose embedding column is NULL.
 	// Used by the batch embedding job.
 	ListWithNullEmbedding(ctx context.Context, workspaceID uuid.UUID, limit int) ([]domain.Memory, error)
+	// FindByShortID resolves the first memory whose UUID starts with the given hex prefix
+	// within the given workspace. prefix must be 6–12 hex chars.
+	// Returns nil, nil if not found.
+	FindByShortID(ctx context.Context, workspaceID uuid.UUID, prefix string) (*domain.Memory, error)
+	// SetArchived sets the archived flag on the given memory.
+	SetArchived(ctx context.Context, id uuid.UUID, archived bool) error
 }
 
 // WorkspaceInviteRepository manages persistence for pending workspace invitations.
@@ -611,4 +617,22 @@ type ProjectIntegrationRepository interface {
 	Upsert(ctx context.Context, pi *domain.ProjectIntegration) error
 	Delete(ctx context.Context, projectID uuid.UUID, intType string) error
 	ListByProject(ctx context.Context, projectID uuid.UUID) ([]domain.ProjectIntegration, error)
+}
+
+// MemoryEdgeRepository manages persistence for memory knowledge-graph edges.
+type MemoryEdgeRepository interface {
+	// UpsertEdge inserts or updates an edge between two memories.
+	// On conflict of (memory_from_id, memory_to_id, relationship_type) it updates weight.
+	UpsertEdge(ctx context.Context, edge *domain.MemoryEdge) error
+	// GetEdgesByMemoryID returns all edges where memory_from_id OR memory_to_id equals memoryID.
+	// Results are ordered by weight DESC. Only edges where both endpoint memories are not archived.
+	GetEdgesByMemoryID(ctx context.Context, memoryID, workspaceID uuid.UUID) ([]domain.MemoryEdge, error)
+	// DecayWeights reduces weight by 10% (floor 0.1) for edges not traversed in 30+ days.
+	// Returns the number of rows updated.
+	DecayWeights(ctx context.Context) (int64, error)
+	// PruneDeadEdges removes edges whose weight has fallen below 0.05.
+	// Returns the number of rows deleted.
+	PruneDeadEdges(ctx context.Context) (int64, error)
+	// ReinforceEdge increments weight by 0.1 (capped at 5.0) and sets last_traversed_at = NOW().
+	ReinforceEdge(ctx context.Context, edgeID uuid.UUID) error
 }

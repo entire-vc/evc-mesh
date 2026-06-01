@@ -752,6 +752,10 @@ type MentionablesService interface {
 	Search(ctx context.Context, workspaceID uuid.UUID, query string, limit int) ([]domain.Mentionable, error)
 }
 
+// RecallWithGraphResult holds the result of a graph-augmented recall.
+// Re-exported here for use by handlers; the canonical type is domain.RecallWithGraphResult.
+type RecallWithGraphResult = domain.RecallWithGraphResult
+
 // MemoryService provides business logic for agent persistent memory.
 type MemoryService interface {
 	Remember(ctx context.Context, mem *domain.Memory) (string, error) // returns "created" or "updated"
@@ -774,4 +778,10 @@ type MemoryService interface {
 	// The source memory itself is excluded from results.
 	FindRelated(ctx context.Context, memoryID uuid.UUID, limit int) ([]domain.ScoredMemory, error)
 	ExtractFromEvent(ctx context.Context, event *domain.EventBusMessage, hint *domain.MemoryHint) error
+	// Supersede creates a supersedes edge (from=newID, to=oldID) and archives the old memory.
+	Supersede(ctx context.Context, oldID, newID uuid.UUID) error
+	// RecallWithGraph performs a hybrid recall and augments results with 1-hop graph traversal.
+	RecallWithGraph(ctx context.Context, opts domain.RecallWithGraphOpts) (*domain.RecallWithGraphResult, error)
+	// ReinforceEdge increments the edge weight by 0.1 (capped at 5.0) and updates last_traversed_at.
+	ReinforceEdge(ctx context.Context, edgeID uuid.UUID) error
 }

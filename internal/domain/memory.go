@@ -130,6 +130,55 @@ type MemoryListResult struct {
 	DecayApplied bool
 }
 
+// MemoryEdgeRelationshipType describes how two memory entries are connected.
+type MemoryEdgeRelationshipType string
+
+const (
+	// EdgeRelatesTo indicates the two memories are topically related (e.g. tag overlap ≥60%).
+	EdgeRelatesTo MemoryEdgeRelationshipType = "relates_to"
+	// EdgeDerivedFrom indicates one memory references another by short-ID (incident lineage).
+	EdgeDerivedFrom MemoryEdgeRelationshipType = "derived_from"
+	// EdgeSupersedes indicates the from-memory replaces (supersedes) the to-memory.
+	EdgeSupersedes MemoryEdgeRelationshipType = "supersedes"
+)
+
+// MemoryEdge represents a directed relationship between two memory entries in the knowledge graph.
+type MemoryEdge struct {
+	ID               uuid.UUID                  `json:"id" db:"id"`
+	MemoryFromID     uuid.UUID                  `json:"memory_from_id" db:"memory_from_id"`
+	MemoryToID       uuid.UUID                  `json:"memory_to_id" db:"memory_to_id"`
+	RelationshipType MemoryEdgeRelationshipType `json:"relationship_type" db:"relationship_type"`
+	Weight           float64                    `json:"weight" db:"weight"`
+	WorkspaceID      uuid.UUID                  `json:"workspace_id" db:"workspace_id"`
+	CreatedAt        time.Time                  `json:"created_at" db:"created_at"`
+	LastTraversedAt  *time.Time                 `json:"last_traversed_at,omitempty" db:"last_traversed_at"`
+}
+
+// RecallWithGraphOpts specifies parameters for a graph-augmented recall operation.
+type RecallWithGraphOpts struct {
+	Query       string
+	WorkspaceID uuid.UUID
+	ProjectID   uuid.UUID
+	Scope       MemoryScope
+	Tags        []string
+	Limit       int
+	Hops        int // currently capped at 1 regardless of value
+}
+
+// GraphScoredMemory wraps a Memory with graph-aware scoring metadata.
+type GraphScoredMemory struct {
+	Memory
+	Score          float64    `json:"score"`
+	Via            string     `json:"via"` // "rrf" or "graph"
+	ViaEdgeID      *uuid.UUID `json:"via_edge_id,omitempty"`
+	OriginMemoryID *uuid.UUID `json:"origin_memory_id,omitempty"`
+}
+
+// RecallWithGraphResult holds the result of a graph-augmented recall query.
+type RecallWithGraphResult struct {
+	Items []GraphScoredMemory `json:"items"`
+}
+
 // MemoryHint is embedded in an event bus message payload to signal that the event
 // should be persisted as a memory entry. Agents include this when publishing events
 // that contain knowledge worth storing for future recall.

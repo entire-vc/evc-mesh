@@ -22,6 +22,10 @@ import (
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 )
 
+// shortIDRegex matches 6–12 hex characters surrounded by word boundaries.
+// Used by Hook 3 to detect short-ID references in memory content.
+var shortIDRegex = regexp.MustCompile(`\b[0-9a-f]{6,12}\b`)
+
 // keySlugRegex matches valid memory keys: lowercase alphanumeric with hyphens,
 // starting and ending with an alphanumeric character, at least two characters long.
 var keySlugRegex = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*[a-z0-9]$`)
@@ -143,17 +147,19 @@ const candidateMultiplier = 3
 
 type memoryService struct {
 	memRepo  repository.MemoryRepository
+	edgeRepo repository.MemoryEdgeRepository
 	embedder embedding.Embedder
 }
 
 // NewMemoryService returns a new MemoryService.
+// edgeRepo is required for knowledge-graph edge operations (F1-s2/s3).
 // embedder may be embedding.NewNoopEmbedder() when vector search is not configured;
 // all vector operations are skipped gracefully in that case.
-func NewMemoryService(memRepo repository.MemoryRepository, embedder embedding.Embedder) MemoryService {
+func NewMemoryService(memRepo repository.MemoryRepository, edgeRepo repository.MemoryEdgeRepository, embedder embedding.Embedder) MemoryService {
 	if embedder == nil {
 		embedder = embedding.NewNoopEmbedder()
 	}
-	return &memoryService{memRepo: memRepo, embedder: embedder}
+	return &memoryService{memRepo: memRepo, edgeRepo: edgeRepo, embedder: embedder}
 }
 
 // Remember upserts a memory entry. It returns "created" if the key did not exist before,
@@ -247,6 +253,11 @@ func (s *memoryService) Remember(ctx context.Context, mem *domain.Memory) (strin
 		return "", fmt.Errorf("memory remember: upsert: %w", err)
 	}
 
+	// Edge hooks — synchronous, non-fatal (errors are logged, never surfaced).
+	if s.edgeRepo != nil {
+		s.runEdgeHooks(ctx, mem)
+	}
+
 	// Async embedding — fire and forget, non-fatal.
 	if !embedding.IsNoop(s.embedder) {
 		memID := mem.ID
@@ -255,6 +266,232 @@ func (s *memoryService) Remember(ctx context.Context, mem *domain.Memory) (strin
 	}
 
 	return outcome, nil
+}
+
+// runEdgeHooks runs Hook 1 (relates_to by tag overlap) and Hook 3 (derived_from by short-ID)
+// after a successful upsert. Errors are logged but never returned; this is best-effort.
+func (s *memoryService) runEdgeHooks(ctx context.Context, mem *domain.Memory) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("memory edge hooks: panic recovered: %v", r)
+		}
+	}()
+
+	// Hook 1: relates_to — find memories in the same scope with ≥60% tag overlap.
+	if len(mem.Tags) > 0 {
+		var projID *uuid.UUID
+		if mem.ProjectID != nil {
+			projID = mem.ProjectID
+		}
+		candidates, err := s.memRepo.FindByScope(ctx, mem.WorkspaceID, projID, string(mem.Scope), 50)
+		if err != nil {
+			log.Printf("memory edge hook1: find by scope: %v", err)
+		} else {
+			for _, candidate := range candidates {
+				if candidate.ID == mem.ID {
+					continue
+				}
+				if tagOverlapRatio(candidate.Tags, mem.Tags) >= 0.60 {
+					edge := &domain.MemoryEdge{
+						MemoryFromID:     mem.ID,
+						MemoryToID:       candidate.ID,
+						RelationshipType: domain.EdgeRelatesTo,
+						Weight:           0.5,
+						WorkspaceID:      mem.WorkspaceID,
+					}
+					if upsertErr := s.edgeRepo.UpsertEdge(ctx, edge); upsertErr != nil {
+						log.Printf("memory edge hook1: upsert relates_to: %v", upsertErr)
+					}
+				}
+			}
+		}
+	}
+
+	// Hook 3: derived_from — if kind:incident in tags, find 6-12 char hex refs in content.
+	hasIncident := false
+	for _, tag := range mem.Tags {
+		if tag == "kind:incident" {
+			hasIncident = true
+			break
+		}
+	}
+	if hasIncident {
+		matches := shortIDRegex.FindAllString(mem.Content, -1)
+		for _, match := range matches {
+			referenced, err := s.memRepo.FindByShortID(ctx, mem.WorkspaceID, match)
+			if err != nil {
+				log.Printf("memory edge hook3: find by short id %s: %v", match, err)
+				continue
+			}
+			if referenced == nil || referenced.ID == mem.ID {
+				continue
+			}
+			edge := &domain.MemoryEdge{
+				MemoryFromID:     mem.ID,
+				MemoryToID:       referenced.ID,
+				RelationshipType: domain.EdgeDerivedFrom,
+				Weight:           1.0,
+				WorkspaceID:      mem.WorkspaceID,
+			}
+			if upsertErr := s.edgeRepo.UpsertEdge(ctx, edge); upsertErr != nil {
+				log.Printf("memory edge hook3: upsert derived_from: %v", upsertErr)
+			}
+		}
+	}
+}
+
+// Supersede creates a supersedes edge (from=newID, to=oldID) and archives the old memory.
+func (s *memoryService) Supersede(ctx context.Context, oldID, newID uuid.UUID) error {
+	oldMem, err := s.memRepo.GetByID(ctx, oldID)
+	if err != nil {
+		return fmt.Errorf("memory supersede: get old: %w", err)
+	}
+	if oldMem == nil {
+		return apierror.NotFound("Memory")
+	}
+
+	if _, err := s.memRepo.GetByID(ctx, newID); err != nil {
+		return fmt.Errorf("memory supersede: get new: %w", err)
+	}
+
+	if s.edgeRepo != nil {
+		edge := &domain.MemoryEdge{
+			MemoryFromID:     newID,
+			MemoryToID:       oldID,
+			RelationshipType: domain.EdgeSupersedes,
+			Weight:           1.0,
+			WorkspaceID:      oldMem.WorkspaceID,
+		}
+		if upsertErr := s.edgeRepo.UpsertEdge(ctx, edge); upsertErr != nil {
+			return fmt.Errorf("memory supersede: upsert edge: %w", upsertErr)
+		}
+	}
+
+	if archiveErr := s.memRepo.SetArchived(ctx, oldID, true); archiveErr != nil {
+		return fmt.Errorf("memory supersede: archive old: %w", archiveErr)
+	}
+
+	return nil
+}
+
+// ReinforceEdge increments the edge weight by 0.1 (capped at 5.0) and updates last_traversed_at.
+func (s *memoryService) ReinforceEdge(ctx context.Context, edgeID uuid.UUID) error {
+	if s.edgeRepo == nil {
+		return nil
+	}
+	return s.edgeRepo.ReinforceEdge(ctx, edgeID)
+}
+
+// RecallWithGraph performs a hybrid recall and augments the top-k RRF results with
+// 1-hop knowledge-graph traversal. For each direct hit, connected memories are included
+// if their graph_score (= rrf_score * min(edge.Weight, 1.0)) exceeds 0.4 importance threshold.
+func (s *memoryService) RecallWithGraph(ctx context.Context, opts domain.RecallWithGraphOpts) (*domain.RecallWithGraphResult, error) {
+	// Run base recall.
+	recallOpts := domain.RecallOpts{
+		Query:       opts.Query,
+		WorkspaceID: opts.WorkspaceID,
+		ProjectID:   opts.ProjectID,
+		Scope:       opts.Scope,
+		Tags:        opts.Tags,
+		Limit:       opts.Limit,
+	}
+	hits, err := s.Recall(ctx, recallOpts)
+	if err != nil {
+		return nil, fmt.Errorf("recall with graph: recall: %w", err)
+	}
+
+	// Track all results by ID to dedup.
+	type scored struct {
+		gsm   domain.GraphScoredMemory
+		score float64
+	}
+	byID := make(map[uuid.UUID]*scored, len(hits)*2)
+
+	for _, h := range hits {
+		gsm := domain.GraphScoredMemory{
+			Memory: h.Memory,
+			Score:  h.Score,
+			Via:    "rrf",
+		}
+		byID[h.ID] = &scored{gsm: gsm, score: h.Score}
+	}
+
+	// Graph traversal: 1 hop only (regardless of opts.Hops).
+	if s.edgeRepo != nil {
+		for _, h := range hits {
+			edges, edgeErr := s.edgeRepo.GetEdgesByMemoryID(ctx, h.ID, opts.WorkspaceID)
+			if edgeErr != nil {
+				log.Printf("recall with graph: get edges for %s: %v", h.ID, edgeErr)
+				continue
+			}
+			for _, edge := range edges {
+				// Determine the connected node.
+				connectedID := edge.MemoryToID
+				if edge.MemoryFromID != h.ID {
+					connectedID = edge.MemoryFromID
+				}
+				if connectedID == h.ID {
+					continue
+				}
+
+				// Reinforce traversed edge (non-fatal).
+				_ = s.edgeRepo.ReinforceEdge(ctx, edge.ID)
+
+				// Compute graph_score.
+				multiplier := edge.Weight
+				if multiplier > 1.0 {
+					multiplier = 1.0
+				}
+				graphScore := h.Score * multiplier
+
+				// Fetch connected memory if not already in result set.
+				if _, alreadyDirect := byID[connectedID]; alreadyDirect {
+					// Already there as direct hit — keep the max score.
+					existing := byID[connectedID]
+					if graphScore > existing.score {
+						existing.score = graphScore
+						existing.gsm.Score = graphScore
+					}
+					continue
+				}
+
+				connMem, fetchErr := s.memRepo.GetByID(ctx, connectedID)
+				if fetchErr != nil || connMem == nil {
+					continue
+				}
+				// Skip archived memories and low-importance entries.
+				if connMem.Archived {
+					continue
+				}
+				if connMem.ImportanceScore < 0.4 {
+					continue
+				}
+
+				edgeID := edge.ID
+				originID := h.ID
+				gsm := domain.GraphScoredMemory{
+					Memory:         *connMem,
+					Score:          graphScore,
+					Via:            "graph",
+					ViaEdgeID:      &edgeID,
+					OriginMemoryID: &originID,
+				}
+				byID[connectedID] = &scored{gsm: gsm, score: graphScore}
+			}
+		}
+	}
+
+	// Collect and sort.
+	result := make([]domain.GraphScoredMemory, 0, len(byID))
+	for _, s := range byID {
+		s.gsm.Score = s.score
+		result = append(result, s.gsm)
+	}
+	slices.SortFunc(result, func(a, b domain.GraphScoredMemory) int {
+		return cmp.Compare(b.Score, a.Score)
+	})
+
+	return &domain.RecallWithGraphResult{Items: result}, nil
 }
 
 // defaultExpiresAt applies the server-side TTL policy when the caller does not supply expires_at.

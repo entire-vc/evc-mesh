@@ -110,15 +110,81 @@ func (m *mockMemoryRepo) List(_ context.Context, _ domain.MemoryListFilter) (*do
 	return &domain.MemoryListResult{}, nil
 }
 
+// ---------------------------------------------------------------------------
+// Missing mockMemoryRepo stubs (FindByShortID, SetArchived)
+// ---------------------------------------------------------------------------
+
+func (m *mockMemoryRepo) FindByShortID(ctx context.Context, wsID uuid.UUID, prefix string) (*domain.Memory, error) {
+	return nil, nil
+}
+
+func (m *mockMemoryRepo) SetArchived(ctx context.Context, id uuid.UUID, archived bool) error {
+	return nil
+}
+
 // Verify mockMemoryRepo satisfies the interface at compile time.
 var _ repository.MemoryRepository = (*mockMemoryRepo)(nil)
+
+// ---------------------------------------------------------------------------
+// mockMemoryEdgeRepo
+// ---------------------------------------------------------------------------
+
+type mockMemoryEdgeRepo struct {
+	upsertEdgeFn          func(edge *domain.MemoryEdge) error
+	getEdgesByMemoryIDFn  func(memID uuid.UUID) ([]domain.MemoryEdge, error)
+	decayWeightsFn        func() (int64, error)
+	pruneDeadEdgesFn      func() (int64, error)
+	reinforceEdgeFn       func(edgeID uuid.UUID) error
+}
+
+func (m *mockMemoryEdgeRepo) UpsertEdge(_ context.Context, edge *domain.MemoryEdge) error {
+	if m.upsertEdgeFn != nil {
+		return m.upsertEdgeFn(edge)
+	}
+	return nil
+}
+
+func (m *mockMemoryEdgeRepo) GetEdgesByMemoryID(_ context.Context, memID, _ uuid.UUID) ([]domain.MemoryEdge, error) {
+	if m.getEdgesByMemoryIDFn != nil {
+		return m.getEdgesByMemoryIDFn(memID)
+	}
+	return nil, nil
+}
+
+func (m *mockMemoryEdgeRepo) DecayWeights(_ context.Context) (int64, error) {
+	if m.decayWeightsFn != nil {
+		return m.decayWeightsFn()
+	}
+	return 0, nil
+}
+
+func (m *mockMemoryEdgeRepo) PruneDeadEdges(_ context.Context) (int64, error) {
+	if m.pruneDeadEdgesFn != nil {
+		return m.pruneDeadEdgesFn()
+	}
+	return 0, nil
+}
+
+func (m *mockMemoryEdgeRepo) ReinforceEdge(_ context.Context, edgeID uuid.UUID) error {
+	if m.reinforceEdgeFn != nil {
+		return m.reinforceEdgeFn(edgeID)
+	}
+	return nil
+}
+
+// Verify mockMemoryEdgeRepo satisfies the interface at compile time.
+var _ repository.MemoryEdgeRepository = (*mockMemoryEdgeRepo)(nil)
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
 func newMemoryService(repo *mockMemoryRepo) MemoryService {
-	return NewMemoryService(repo, nil) // nil embedder → NoopEmbedder (keyword-only)
+	return NewMemoryService(repo, nil, nil) // nil edgeRepo + nil embedder → NoopEmbedder (keyword-only)
+}
+
+func newMemoryServiceWithEdges(repo repository.MemoryRepository, edgeRepo *mockMemoryEdgeRepo) MemoryService {
+	return NewMemoryService(repo, edgeRepo, nil)
 }
 
 func baseMemory(wsID uuid.UUID) *domain.Memory {
@@ -791,3 +857,294 @@ func TestApplyExtendedFilters_MinImportanceZeroPassesAll(t *testing.T) {
 	out := applyExtendedFilters(items, domain.RecallOpts{MinImportance: &zero})
 	assert.Len(t, out, 3, "min_importance=0 should pass everything including low-score entries")
 }
+
+// ---------------------------------------------------------------------------
+// TestRemember_Hook1_RelatesTo — tag overlap ≥60% creates relates_to edge
+// ---------------------------------------------------------------------------
+
+func TestRemember_Hook1_RelatesTo(t *testing.T) {
+	wsID := uuid.New()
+	existingID := uuid.New()
+
+	// Existing memory in same scope with overlapping tags.
+	existing := domain.Memory{
+		ID:          existingID,
+		WorkspaceID: wsID,
+		Key:         "existing-memory",
+		Content:     "some existing content",
+		Scope:       domain.ScopeProject,
+		Tags:        []string{"kind:decision", "team:mesh", "project:evc"},
+	}
+
+	var capturedEdge *domain.MemoryEdge
+
+	memRepo := &mockMemoryRepo{
+		findByScopeFn: func(_ context.Context, _ uuid.UUID, _ *uuid.UUID, _ string, _ int) ([]domain.Memory, error) {
+			return []domain.Memory{existing}, nil
+		},
+	}
+	edgeRepo := &mockMemoryEdgeRepo{
+		upsertEdgeFn: func(edge *domain.MemoryEdge) error {
+			capturedEdge = edge
+			return nil
+		},
+	}
+
+	svc := newMemoryServiceWithEdges(memRepo, edgeRepo)
+
+	newMemID := uuid.New()
+	mem := &domain.Memory{
+		ID:          newMemID,
+		WorkspaceID: wsID,
+		Key:         "new-memory",
+		Content:     "new content",
+		Scope:       domain.ScopeProject,
+		// 3 of 3 tags match existing → 100% overlap ≥ 60%
+		Tags: []string{"kind:decision", "team:mesh", "project:evc"},
+	}
+
+	_, err := svc.Remember(context.Background(), mem)
+	require.NoError(t, err)
+
+	require.NotNil(t, capturedEdge, "relates_to edge should have been created")
+	assert.Equal(t, domain.EdgeRelatesTo, capturedEdge.RelationshipType)
+	assert.Equal(t, newMemID, capturedEdge.MemoryFromID)
+	assert.Equal(t, existingID, capturedEdge.MemoryToID)
+	assert.InDelta(t, 0.5, capturedEdge.Weight, 0.001)
+}
+
+// ---------------------------------------------------------------------------
+// TestRemember_Hook1_NoEdgeBelowThreshold — <60% overlap → no edge
+// ---------------------------------------------------------------------------
+
+func TestRemember_Hook1_NoEdgeBelowThreshold(t *testing.T) {
+	wsID := uuid.New()
+	existingID := uuid.New()
+
+	// Existing memory with very different tags — only 1 of 4 will match.
+	existing := domain.Memory{
+		ID:          existingID,
+		WorkspaceID: wsID,
+		Key:         "unrelated",
+		Content:     "content",
+		Scope:       domain.ScopeProject,
+		Tags:        []string{"kind:decision", "other-tag-1", "other-tag-2", "other-tag-3"},
+	}
+
+	edgeCalled := false
+	memRepo := &mockMemoryRepo{
+		findByScopeFn: func(_ context.Context, _ uuid.UUID, _ *uuid.UUID, _ string, _ int) ([]domain.Memory, error) {
+			return []domain.Memory{existing}, nil
+		},
+	}
+	edgeRepo := &mockMemoryEdgeRepo{
+		upsertEdgeFn: func(edge *domain.MemoryEdge) error {
+			edgeCalled = true
+			return nil
+		},
+	}
+
+	svc := newMemoryServiceWithEdges(memRepo, edgeRepo)
+
+	mem := &domain.Memory{
+		ID:          uuid.New(),
+		WorkspaceID: wsID,
+		Key:         "different-memory",
+		Content:     "completely different",
+		Scope:       domain.ScopeProject,
+		// Only 1 of 5 new tags is in existing → 20% overlap, below 60%
+		Tags: []string{"kind:decision", "new-tag-a", "new-tag-b", "new-tag-c", "new-tag-d"},
+	}
+
+	_, err := svc.Remember(context.Background(), mem)
+	require.NoError(t, err)
+	assert.False(t, edgeCalled, "no edge should be created when overlap < 60%")
+}
+
+// ---------------------------------------------------------------------------
+// TestRemember_Hook3_DerivedFrom — kind:incident + short-id in content
+// ---------------------------------------------------------------------------
+
+func TestRemember_Hook3_DerivedFrom(t *testing.T) {
+	wsID := uuid.New()
+	referencedID := uuid.New()
+	// Use the first 8 hex chars of referencedID as the short-id in content.
+	shortID := referencedID.String()[:8] // always lowercase hex
+
+	referencedMem := &domain.Memory{
+		ID:          referencedID,
+		WorkspaceID: wsID,
+		Key:         "original-incident",
+		Content:     "original content",
+		Scope:       domain.ScopeWorkspace,
+	}
+
+	var capturedEdge *domain.MemoryEdge
+
+	memRepo := &mockMemoryRepo{
+		findByScopeFn: func(_ context.Context, _ uuid.UUID, _ *uuid.UUID, _ string, _ int) ([]domain.Memory, error) {
+			return nil, nil // Hook 1 finds nothing
+		},
+	}
+	// Override FindByShortID with a real implementation for this test.
+	memRepoWithShortID := &mockMemoryRepoWithShortID{
+		mockMemoryRepo: memRepo,
+		findByShortIDFn: func(_ context.Context, _ uuid.UUID, prefix string) (*domain.Memory, error) {
+			if prefix == shortID {
+				return referencedMem, nil
+			}
+			return nil, nil
+		},
+	}
+
+	edgeRepo := &mockMemoryEdgeRepo{
+		upsertEdgeFn: func(edge *domain.MemoryEdge) error {
+			capturedEdge = edge
+			return nil
+		},
+	}
+
+	svc := newMemoryServiceWithEdges(memRepoWithShortID, edgeRepo)
+
+	newMemID := uuid.New()
+	mem := &domain.Memory{
+		ID:          newMemID,
+		WorkspaceID: wsID,
+		Key:         "follow-up-incident",
+		Content:     "this follows from " + shortID + " which was the root cause",
+		Scope:       domain.ScopeWorkspace,
+		Tags:        []string{"kind:incident"},
+	}
+
+	_, err := svc.Remember(context.Background(), mem)
+	require.NoError(t, err)
+
+	require.NotNil(t, capturedEdge, "derived_from edge should have been created")
+	assert.Equal(t, domain.EdgeDerivedFrom, capturedEdge.RelationshipType)
+	assert.Equal(t, newMemID, capturedEdge.MemoryFromID)
+	assert.Equal(t, referencedID, capturedEdge.MemoryToID)
+	assert.InDelta(t, 1.0, capturedEdge.Weight, 0.001)
+}
+
+// ---------------------------------------------------------------------------
+// TestSupersede_CreatesEdgeAndArchives — svc.Supersede creates edge + archives old
+// ---------------------------------------------------------------------------
+
+func TestSupersede_CreatesEdgeAndArchives(t *testing.T) {
+	wsID := uuid.New()
+	oldID := uuid.New()
+	newID := uuid.New()
+
+	oldMem := &domain.Memory{
+		ID:          oldID,
+		WorkspaceID: wsID,
+		Key:         "old-decision",
+		Content:     "outdated decision",
+		Scope:       domain.ScopeWorkspace,
+	}
+	newMem := &domain.Memory{
+		ID:          newID,
+		WorkspaceID: wsID,
+		Key:         "new-decision",
+		Content:     "updated decision",
+		Scope:       domain.ScopeWorkspace,
+	}
+
+	var capturedEdge *domain.MemoryEdge
+	archivedID := uuid.Nil
+
+	memRepo := &mockMemoryRepo{
+		getByIDFn: func(_ context.Context, id uuid.UUID) (*domain.Memory, error) {
+			if id == oldID {
+				return oldMem, nil
+			}
+			if id == newID {
+				return newMem, nil
+			}
+			return nil, nil
+		},
+	}
+	// Override SetArchived.
+	memRepoWithArchive := &mockMemoryRepoWithArchive{
+		mockMemoryRepo: memRepo,
+		setArchivedFn: func(_ context.Context, id uuid.UUID, archived bool) error {
+			archivedID = id
+			return nil
+		},
+	}
+	edgeRepo := &mockMemoryEdgeRepo{
+		upsertEdgeFn: func(edge *domain.MemoryEdge) error {
+			capturedEdge = edge
+			return nil
+		},
+	}
+
+	svc := newMemoryServiceWithEdges(memRepoWithArchive, edgeRepo)
+
+	err := svc.Supersede(context.Background(), oldID, newID)
+	require.NoError(t, err)
+
+	require.NotNil(t, capturedEdge, "supersedes edge should have been created")
+	assert.Equal(t, domain.EdgeSupersedes, capturedEdge.RelationshipType)
+	assert.Equal(t, newID, capturedEdge.MemoryFromID)
+	assert.Equal(t, oldID, capturedEdge.MemoryToID)
+
+	assert.Equal(t, oldID, archivedID, "old memory should be archived")
+}
+
+// ---------------------------------------------------------------------------
+// TestSupersede_NotFoundOld — old memory not found → 404
+// ---------------------------------------------------------------------------
+
+func TestSupersede_NotFoundOld(t *testing.T) {
+	wsID := uuid.New()
+	_ = wsID
+
+	memRepo := &mockMemoryRepo{
+		getByIDFn: func(_ context.Context, id uuid.UUID) (*domain.Memory, error) {
+			return nil, nil // not found
+		},
+	}
+	edgeRepo := &mockMemoryEdgeRepo{}
+	svc := newMemoryServiceWithEdges(memRepo, edgeRepo)
+
+	err := svc.Supersede(context.Background(), uuid.New(), uuid.New())
+	require.Error(t, err)
+	var apiErr *apierror.Error
+	require.ErrorAs(t, err, &apiErr)
+	assert.Equal(t, http.StatusNotFound, apiErr.Code)
+}
+
+// ---------------------------------------------------------------------------
+// Helper mock variants that override FindByShortID / SetArchived
+// ---------------------------------------------------------------------------
+
+// mockMemoryRepoWithShortID wraps mockMemoryRepo and overrides FindByShortID.
+type mockMemoryRepoWithShortID struct {
+	*mockMemoryRepo
+	findByShortIDFn func(ctx context.Context, wsID uuid.UUID, prefix string) (*domain.Memory, error)
+}
+
+func (m *mockMemoryRepoWithShortID) FindByShortID(ctx context.Context, wsID uuid.UUID, prefix string) (*domain.Memory, error) {
+	if m.findByShortIDFn != nil {
+		return m.findByShortIDFn(ctx, wsID, prefix)
+	}
+	return nil, nil
+}
+
+var _ repository.MemoryRepository = (*mockMemoryRepoWithShortID)(nil)
+
+// mockMemoryRepoWithArchive wraps mockMemoryRepo and overrides SetArchived.
+type mockMemoryRepoWithArchive struct {
+	*mockMemoryRepo
+	setArchivedFn func(ctx context.Context, id uuid.UUID, archived bool) error
+}
+
+func (m *mockMemoryRepoWithArchive) SetArchived(ctx context.Context, id uuid.UUID, archived bool) error {
+	if m.setArchivedFn != nil {
+		return m.setArchivedFn(ctx, id, archived)
+	}
+	return nil
+}
+
+var _ repository.MemoryRepository = (*mockMemoryRepoWithArchive)(nil)
