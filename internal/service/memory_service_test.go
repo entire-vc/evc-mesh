@@ -144,7 +144,7 @@ func (m *mockMemoryEdgeRepo) UpsertEdge(_ context.Context, edge *domain.MemoryEd
 	return nil
 }
 
-func (m *mockMemoryEdgeRepo) DecayWeights(_ context.Context) (int64, error) { return 0, nil }
+func (m *mockMemoryEdgeRepo) DecayWeights(_ context.Context) (int64, error)   { return 0, nil }
 func (m *mockMemoryEdgeRepo) PruneDeadEdges(_ context.Context) (int64, error) { return 0, nil }
 
 // Verify mockMemoryEdgeRepo satisfies the interface at compile time.

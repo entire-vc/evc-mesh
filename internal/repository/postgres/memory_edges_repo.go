@@ -4,9 +4,10 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
+
+	"github.com/entire-vc/evc-mesh/internal/domain"
 )
 
 // MemoryEdgesRepo handles persistence and maintenance for the memory_edges KG table.
