@@ -683,6 +683,83 @@ func (h *MemoryHandler) FindRelated(c echo.Context) error {
 	})
 }
 
+// recallGraphQuery represents query params for GET /memories/recall_graph.
+type recallGraphQuery struct {
+	Q               string `query:"query"`
+	WorkspaceID     string `query:"workspace_id"`
+	ProjectID       string `query:"project_id"`
+	Hops            string `query:"hops"`             // default 2, max 5
+	WeightThreshold string `query:"weight_threshold"` // default 0.3
+	TaskID          string `query:"task_id"`          // optional; used as cache key discriminator
+}
+
+// RecallGraph handles GET /api/v1/memories/recall_graph
+// Multi-hop knowledge-graph traversal: seeds from hybrid recall, then BFS-expands
+// along memory_edges. Returns ranked results with composite scores and provenance.
+func (h *MemoryHandler) RecallGraph(c echo.Context) error {
+	var q recallGraphQuery
+	if err := c.Bind(&q); err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid query parameters"))
+	}
+
+	if q.Q == "" {
+		return c.JSON(http.StatusBadRequest, apierror.ValidationError(map[string]string{
+			"query": "query is required",
+		}))
+	}
+
+	wsID, err := requireWorkspaceID(c, q.WorkspaceID)
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, err)
+	}
+
+	opts := domain.RecallGraphOpts{
+		Query:           q.Q,
+		WorkspaceID:     wsID,
+		Hops:            2,
+		WeightThreshold: 0.3,
+	}
+
+	if q.ProjectID != "" {
+		pid, parseErr := uuid.Parse(q.ProjectID)
+		if parseErr != nil {
+			return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid project_id"))
+		}
+		opts.ProjectID = &pid
+	}
+	if q.Hops != "" {
+		if h2, parseErr := strconv.Atoi(q.Hops); parseErr == nil && h2 > 0 {
+			opts.Hops = h2
+		}
+	}
+	if q.WeightThreshold != "" {
+		if wt, parseErr := strconv.ParseFloat(q.WeightThreshold, 64); parseErr == nil && wt > 0 {
+			opts.WeightThreshold = wt
+		}
+	}
+	if q.TaskID != "" {
+		tid, parseErr := uuid.Parse(q.TaskID)
+		if parseErr != nil {
+			return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid task_id"))
+		}
+		opts.TaskID = &tid
+	}
+
+	results, err := h.memoryService.RecallGraph(c.Request().Context(), opts)
+	if err != nil {
+		return handleError(c, err)
+	}
+
+	if results == nil {
+		results = []domain.RecallGraphResult{}
+	}
+
+	return c.JSON(http.StatusOK, map[string]interface{}{
+		"items": results,
+		"total": len(results),
+	})
+}
+
 // requireWorkspaceID extracts workspace_id either from the provided raw string
 // or from the Echo context (set by DualAuth middleware).
 // Returns a non-nil error when neither source yields a valid UUID.

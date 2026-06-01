@@ -827,11 +827,12 @@ func main() {
 
 	// Memory routes.
 	// NOTE: fixed-path routes (/memories/search, /memories/export, /memories/import,
-	// /memories/reindex) MUST be registered before /memories/:id to avoid the
-	// literal path segments being parsed as UUID parameters.
+	// /memories/reindex, /memories/recall_graph) MUST be registered before /memories/:id
+	// to avoid the literal path segments being parsed as UUID parameters.
 	api.POST("/memories", memoryHandler.Remember)
 	api.GET("/memories", memoryHandler.List)
 	api.GET("/memories/search", memoryHandler.Search)
+	api.GET("/memories/recall_graph", memoryHandler.RecallGraph)
 	api.GET("/memories/export", memoryHandler.ExportMemories)
 	api.POST("/memories/import", memoryHandler.ImportMemories)
 	api.POST("/memories/reindex", memoryHandler.Reindex)
