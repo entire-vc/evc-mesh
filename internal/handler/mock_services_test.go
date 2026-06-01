@@ -759,6 +759,9 @@ func (m *MockMemoryService) ExtractFromEvent(ctx context.Context, event *domain.
 func (m *MockMemoryService) Supersede(ctx context.Context, oldID, newID uuid.UUID) error {
 	return nil
 }
+func (m *MockMemoryService) RecallGraph(ctx context.Context, opts domain.RecallGraphOpts) ([]domain.RecallGraphResult, error) {
+	return nil, nil
+}
 
 // MockAgentSessionRepository implements repository.AgentSessionRepository for testing.
 type MockAgentSessionRepository struct {
