@@ -665,16 +665,14 @@ func TestComputeImportanceScore_HighestKindWins(t *testing.T) {
 }
 
 func TestComputeImportanceScore_SessionCheckpointNotUpgraded(t *testing.T) {
-	// session-checkpoint uses an upper-bound clamp (> 0.30 → set to 0.30).
-	// Since the scoring loop is order-sensitive, the final winner depends on tag order.
-	// When decision (→0.80) runs AFTER session-checkpoint (→0.30), decision wins (0.80 > 0.30 triggers).
-	// When decision (→0.80) runs BEFORE session-checkpoint, session-checkpoint clamps back to 0.30.
+	// session-checkpoint is a downgrade that always overrides positive kind: tags.
+	// The result must be 0.30 regardless of tag ordering.
 	tags1 := []string{"kind:session-checkpoint", "kind:decision"}
 	tags2 := []string{"kind:decision", "kind:session-checkpoint"}
-	s1 := computeImportanceScore(tags1, "content") // session-checkpoint first → decision upgrades to 0.80
-	s2 := computeImportanceScore(tags2, "content") // decision first → session-checkpoint clamps to 0.30
-	assert.InDelta(t, 0.80, s1, 0.001, "session-checkpoint first, decision wins the upgrade")
-	assert.InDelta(t, 0.30, s2, 0.001, "decision first, session-checkpoint clamps")
+	s1 := computeImportanceScore(tags1, "content")
+	s2 := computeImportanceScore(tags2, "content")
+	assert.Equal(t, s1, s2, "score must be order-independent")
+	assert.InDelta(t, float32(0.30), s1, 0.001, "session-checkpoint overrides decision")
 }
 
 // ---------------------------------------------------------------------------
