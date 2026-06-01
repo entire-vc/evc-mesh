@@ -166,6 +166,11 @@ function MemoryCard({ memory, onDelete }: MemoryCardProps) {
                 stale
               </Badge>
             )}
+            {memory.archived && (
+              <Badge variant="secondary" className="text-xs text-muted-foreground">
+                archived
+              </Badge>
+            )}
           </div>
         </div>
 
@@ -333,6 +338,7 @@ function filterFromParams(sp: URLSearchParams): MemoryFilter {
     until: sp.get("until") ?? "",
     relevanceMin: relRaw ? Number(relRaw) : 0,
     includeExpired: sp.get("expired") === "1",
+    includeArchived: sp.get("archived") === "1",
     orderBy: (sp.get("sort") as MemoryOrderBy) ?? "created_at:desc",
   };
 }
@@ -353,6 +359,7 @@ function paramsFromFilter(f: MemoryFilter): URLSearchParams {
     sp.set("rel_min", String(f.relevanceMin));
   }
   if (f.includeExpired) sp.set("expired", "1");
+  if (f.includeArchived) sp.set("archived", "1");
   if (f.orderBy && f.orderBy !== "created_at:desc") sp.set("sort", f.orderBy);
   return sp;
 }

@@ -981,6 +981,8 @@ export interface Memory {
   created_at: string;
   updated_at: string;
   expires_at?: string | null;
+  last_accessed_at?: string | null;
+  archived: boolean;
 }
 
 export interface ScoredMemory extends Memory {
@@ -1007,6 +1009,7 @@ export interface MemoryFilter {
   until?: string; // YYYY-MM-DD (local date)
   relevanceMin?: number; // 0.0–1.0
   includeExpired?: boolean;
+  includeArchived?: boolean;
   orderBy?: MemoryOrderBy;
 }
 
