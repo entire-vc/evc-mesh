@@ -721,3 +721,37 @@ func cosineSimilarity(a, b []float32) float64 {
 	}
 	return dot / (math.Sqrt(normA) * math.Sqrt(normB))
 }
+
+// FindByShortID returns the first non-archived memory in workspaceID whose UUID text
+// representation starts with prefix (6–12 lowercase hex chars, no dashes).
+// UUIDs in Postgres are formatted as "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" — the first
+// 8 characters are pure hex digits, so a 6–8 char prefix matches the leading hex segment.
+// Returns nil without error when no match exists.
+func (r *MemoryRepo) FindByShortID(ctx context.Context, workspaceID uuid.UUID, prefix string) (*domain.Memory, error) {
+	if len(prefix) < 6 || len(prefix) > 12 {
+		return nil, nil
+	}
+	var row memoryRow
+	err := r.db.GetContext(ctx, &row,
+		fmt.Sprintf(`SELECT %s FROM memories WHERE workspace_id = $1 AND id::text LIKE $2 || '%%' AND archived = false LIMIT 1`, memoryColumns),
+		workspaceID, prefix,
+	)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	m := row.toDomain()
+	return &m, nil
+}
+
+// SetArchived sets the archived flag on a memory by ID.
+// Used by the supersede hook to mark the superseded memory as archived.
+func (r *MemoryRepo) SetArchived(ctx context.Context, id uuid.UUID, archived bool) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE memories SET archived = $2, updated_at = NOW() WHERE id = $1`,
+		id, archived,
+	)
+	return err
+}

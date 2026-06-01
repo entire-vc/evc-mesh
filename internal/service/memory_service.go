@@ -34,6 +34,10 @@ const defaultMinImportance float32 = 0.4
 // in memory content, signalling higher decision-relevance.
 var entityKeywords = []string{"icp", "architecture", "license", "security", "money"}
 
+// shortIDRegex matches lowercase hex strings of 6–12 characters (word-bounded) that may
+// reference another memory by its short UUID prefix in an incident memory body.
+var shortIDRegex = regexp.MustCompile(`\b([0-9a-f]{6,12})\b`)
+
 // computeImportanceScore derives an importance_score for a memory based on its tags
 // and content. The score is in [0, 1]. Scoring rules (additive, capped at 1.0):
 //
@@ -124,6 +128,22 @@ func tagOverlapRatio(existingTags, newTags []string) float64 {
 	return float64(matches) / float64(len(newTags))
 }
 
+// extractShortIDs scans content for short UUID references (6–12 lowercase hex chars, word-bounded).
+// Returns deduplicated matches in order of first appearance.
+func extractShortIDs(content string) []string {
+	matches := shortIDRegex.FindAllStringSubmatch(content, -1)
+	seen := make(map[string]struct{}, len(matches))
+	result := make([]string, 0, len(matches))
+	for _, m := range matches {
+		id := m[1]
+		if _, ok := seen[id]; !ok {
+			seen[id] = struct{}{}
+			result = append(result, id)
+		}
+	}
+	return result
+}
+
 // rrfK is the Reciprocal Rank Fusion constant. 60 is the standard value.
 const rrfK = 60
 
@@ -143,17 +163,18 @@ const candidateMultiplier = 3
 
 type memoryService struct {
 	memRepo  repository.MemoryRepository
+	edgeRepo repository.MemoryEdgeRepository
 	embedder embedding.Embedder
 }
 
 // NewMemoryService returns a new MemoryService.
 // embedder may be embedding.NewNoopEmbedder() when vector search is not configured;
 // all vector operations are skipped gracefully in that case.
-func NewMemoryService(memRepo repository.MemoryRepository, embedder embedding.Embedder) MemoryService {
+func NewMemoryService(memRepo repository.MemoryRepository, edgeRepo repository.MemoryEdgeRepository, embedder embedding.Embedder) MemoryService {
 	if embedder == nil {
 		embedder = embedding.NewNoopEmbedder()
 	}
-	return &memoryService{memRepo: memRepo, embedder: embedder}
+	return &memoryService{memRepo: memRepo, edgeRepo: edgeRepo, embedder: embedder}
 }
 
 // Remember upserts a memory entry. It returns "created" if the key did not exist before,
@@ -252,6 +273,54 @@ func (s *memoryService) Remember(ctx context.Context, mem *domain.Memory) (strin
 		memID := mem.ID
 		content := mem.Key + " " + mem.Content + " " + strings.Join(mem.Tags, " ")
 		go s.embedAndStore(memID, content)
+	}
+
+	// ── Hook 1: relates_to edge on tag overlap ≥60% ───────────────────────────
+	if s.edgeRepo != nil && len(mem.Tags) > 0 {
+		if candidates, scanErr := s.memRepo.FindByScope(ctx, mem.WorkspaceID, mem.ProjectID, string(mem.Scope), 200); scanErr == nil {
+			for _, candidate := range candidates {
+				if candidate.ID == mem.ID {
+					continue
+				}
+				if tagOverlapRatio([]string(candidate.Tags), mem.Tags) >= 0.6 {
+					edge := &domain.MemoryEdge{
+						MemoryFromID:     mem.ID,
+						MemoryToID:       candidate.ID,
+						RelationshipType: domain.EdgeRelatesTo,
+						Weight:           0.5,
+						WorkspaceID:      mem.WorkspaceID,
+					}
+					_ = s.edgeRepo.UpsertEdge(ctx, edge)
+				}
+			}
+		}
+	}
+
+	// ── Hook 3: derived_from edge when kind:incident memory references another memory ──
+	if s.edgeRepo != nil {
+		hasIncidentTag := false
+		for _, t := range mem.Tags {
+			if t == "kind:incident" || t == "incident" {
+				hasIncidentTag = true
+				break
+			}
+		}
+		if hasIncidentTag {
+			for _, ref := range extractShortIDs(mem.Content) {
+				target, findErr := s.memRepo.FindByShortID(ctx, mem.WorkspaceID, ref)
+				if findErr != nil || target == nil || target.ID == mem.ID {
+					continue
+				}
+				edge := &domain.MemoryEdge{
+					MemoryFromID:     mem.ID,
+					MemoryToID:       target.ID,
+					RelationshipType: domain.EdgeDerivedFrom,
+					Weight:           1.0,
+					WorkspaceID:      mem.WorkspaceID,
+				}
+				_ = s.edgeRepo.UpsertEdge(ctx, edge)
+			}
+		}
 	}
 
 	return outcome, nil
@@ -969,4 +1038,40 @@ func (s *memoryService) FindRelated(ctx context.Context, memoryID uuid.UUID, lim
 	}
 
 	return filtered, nil
+}
+
+// Supersede creates a 'supersedes' edge from newID → oldID and marks oldID as archived.
+// Hook 2 of the F1-s2 automatic edge-creation spec.
+func (s *memoryService) Supersede(ctx context.Context, oldID, newID uuid.UUID) error {
+	old, err := s.memRepo.GetByID(ctx, oldID)
+	if err != nil {
+		return fmt.Errorf("memory supersede: get old: %w", err)
+	}
+	if old == nil {
+		return apierror.NotFound("Memory")
+	}
+	newMem, err := s.memRepo.GetByID(ctx, newID)
+	if err != nil {
+		return fmt.Errorf("memory supersede: get new: %w", err)
+	}
+	if newMem == nil {
+		return apierror.NotFound("Memory")
+	}
+
+	edge := &domain.MemoryEdge{
+		MemoryFromID:     newID,
+		MemoryToID:       oldID,
+		RelationshipType: domain.EdgeSupersedes,
+		Weight:           1.0,
+		WorkspaceID:      old.WorkspaceID,
+	}
+	if err := s.edgeRepo.UpsertEdge(ctx, edge); err != nil {
+		return fmt.Errorf("memory supersede: create edge: %w", err)
+	}
+
+	if err := s.memRepo.SetArchived(ctx, oldID, true); err != nil {
+		return fmt.Errorf("memory supersede: archive old: %w", err)
+	}
+
+	return nil
 }
