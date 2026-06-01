@@ -11,6 +11,8 @@
 -- The existing unique constraint on (memory_from_id, memory_to_id, relationship_type)
 -- already provides an index on the triple; these additions are optimised for traversal.
 
+-- +goose Up
+
 -- Composite index: outbound edges ordered by weight descending (BFS forward expansion).
 CREATE INDEX IF NOT EXISTS idx_edges_from_weight
     ON memory_edges (memory_from_id, weight DESC)
@@ -24,3 +26,8 @@ CREATE INDEX IF NOT EXISTS idx_edges_to_weight
 -- Index on relationship_type for type-filtered traversal queries.
 CREATE INDEX IF NOT EXISTS idx_edges_relationship_type
     ON memory_edges (relationship_type);
+
+-- +goose Down
+DROP INDEX IF EXISTS idx_edges_relationship_type;
+DROP INDEX IF EXISTS idx_edges_to_weight;
+DROP INDEX IF EXISTS idx_edges_from_weight;
