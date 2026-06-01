@@ -28,7 +28,7 @@ func setupCanonicalUpdatesTest(
 	url string,
 ) (echo.Context, *httptest.ResponseRecorder, *CanonicalUpdatesHandler) {
 	e := echo.New()
-	req := httptest.NewRequest(http.MethodGet, url, nil)
+	req := httptest.NewRequest(http.MethodGet, url, http.NoBody)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 	c.Set("agent_id", agentID)
