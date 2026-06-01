@@ -37,16 +37,16 @@ var entityKeywords = []string{"icp", "architecture", "license", "security", "mon
 // computeImportanceScore derives an importance_score for a memory based on its tags
 // and content. The score is in [0, 1]. Scoring rules (additive, capped at 1.0):
 //
-//   Base by kind: tag:
-//     kind:incident          → 0.85
-//     kind:decision          → 0.80
-//     kind:learning          → 0.70
-//     kind:fact              → 0.60
-//     kind:session-checkpoint → 0.30
-//     (no kind: tag)         → 0.50
+//	Base by kind: tag:
+//	  kind:incident          → 0.85
+//	  kind:decision          → 0.80
+//	  kind:learning          → 0.70
+//	  kind:fact              → 0.60
+//	  kind:session-checkpoint → 0.30
+//	  (no kind: tag)         → 0.50
 //
-//   +0.10 boost if content mentions a canonical entity keyword (icp, architecture, etc.)
-//   +0.10 boost if any tag matches relevance:0.8+ (explicit agent override)
+//	+0.10 boost if content mentions a canonical entity keyword (icp, architecture, etc.)
+//	+0.10 boost if any tag matches relevance:0.8+ (explicit agent override)
 func computeImportanceScore(tags []string, content string) float32 {
 	base := float32(0.5)
 	isSessionCheckpoint := false

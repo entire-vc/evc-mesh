@@ -30,17 +30,17 @@ func NewMemoryRepo(db *sqlx.DB) *MemoryRepo {
 // memoryRow is the DB row representation for the memories table.
 // search_vector is a GENERATED STORED column — it is never written explicitly.
 type memoryRow struct {
-	ID             uuid.UUID               `db:"id"`
-	WorkspaceID    uuid.UUID               `db:"workspace_id"`
-	ProjectID      *uuid.UUID              `db:"project_id"`
-	AgentID        *uuid.UUID              `db:"agent_id"`
-	Key            string                  `db:"key"`
-	Content        string                  `db:"content"`
-	Scope          domain.MemoryScope      `db:"scope"`
-	Tags           pq.StringArray          `db:"tags"`
-	SourceType     domain.MemorySourceType `db:"source_type"`
-	SourceEventID  *uuid.UUID              `db:"source_event_id"`
-	SourceURL      *string                 `db:"source_url"`
+	ID              uuid.UUID               `db:"id"`
+	WorkspaceID     uuid.UUID               `db:"workspace_id"`
+	ProjectID       *uuid.UUID              `db:"project_id"`
+	AgentID         *uuid.UUID              `db:"agent_id"`
+	Key             string                  `db:"key"`
+	Content         string                  `db:"content"`
+	Scope           domain.MemoryScope      `db:"scope"`
+	Tags            pq.StringArray          `db:"tags"`
+	SourceType      domain.MemorySourceType `db:"source_type"`
+	SourceEventID   *uuid.UUID              `db:"source_event_id"`
+	SourceURL       *string                 `db:"source_url"`
 	Relevance       float32                 `db:"relevance"`
 	ImportanceScore float32                 `db:"importance_score"`
 	CreatedAt       time.Time               `db:"created_at"`
@@ -52,17 +52,17 @@ type memoryRow struct {
 
 func (r *memoryRow) toDomain() domain.Memory {
 	return domain.Memory{
-		ID:             r.ID,
-		WorkspaceID:    r.WorkspaceID,
-		ProjectID:      r.ProjectID,
-		AgentID:        r.AgentID,
-		Key:            r.Key,
-		Content:        r.Content,
-		Scope:          r.Scope,
-		Tags:           r.Tags,
-		SourceType:     r.SourceType,
-		SourceEventID:  r.SourceEventID,
-		SourceURL:      r.SourceURL,
+		ID:              r.ID,
+		WorkspaceID:     r.WorkspaceID,
+		ProjectID:       r.ProjectID,
+		AgentID:         r.AgentID,
+		Key:             r.Key,
+		Content:         r.Content,
+		Scope:           r.Scope,
+		Tags:            r.Tags,
+		SourceType:      r.SourceType,
+		SourceEventID:   r.SourceEventID,
+		SourceURL:       r.SourceURL,
 		Relevance:       r.Relevance,
 		ImportanceScore: r.ImportanceScore,
 		CreatedAt:       r.CreatedAt,

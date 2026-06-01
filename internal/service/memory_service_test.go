@@ -689,8 +689,8 @@ func TestTagOverlapRatio(t *testing.T) {
 	t.Run("80pct overlap", func(t *testing.T) {
 		// 4 of 5 new tags match existing
 		exist := []string{"kind:decision", "team:mesh", "project:evc", "sprint:12"}
-		new := []string{"kind:decision", "team:mesh", "project:evc", "sprint:12", "new-tag"}
-		assert.InDelta(t, 0.8, tagOverlapRatio(exist, new), 0.001)
+		incoming := []string{"kind:decision", "team:mesh", "project:evc", "sprint:12", "new-tag"}
+		assert.InDelta(t, 0.8, tagOverlapRatio(exist, incoming), 0.001)
 	})
 	t.Run("empty new tags returns 0", func(t *testing.T) {
 		assert.InDelta(t, 0.0, tagOverlapRatio([]string{"a"}, nil), 0.001)

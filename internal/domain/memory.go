@@ -46,24 +46,24 @@ func (s MemorySourceType) IsValid() bool {
 // When an embedding provider is configured, the Embedding field holds a dense vector
 // representation used for semantic (hybrid) recall. It is nil when vector search is disabled.
 type Memory struct {
-	ID            uuid.UUID        `json:"id" db:"id"`
-	WorkspaceID   uuid.UUID        `json:"workspace_id" db:"workspace_id"`
-	ProjectID     *uuid.UUID       `json:"project_id,omitempty" db:"project_id"`
-	AgentID       *uuid.UUID       `json:"agent_id,omitempty" db:"agent_id"`
-	Key           string           `json:"key" db:"key"`
-	Content       string           `json:"content" db:"content"`
-	Scope         MemoryScope      `json:"scope" db:"scope"`
-	Tags          pq.StringArray   `json:"tags" db:"tags"`
-	SourceType    MemorySourceType `json:"source_type" db:"source_type"`
-	SourceEventID *uuid.UUID       `json:"source_event_id,omitempty" db:"source_event_id"`
-	SourceURL     *string          `json:"source_url,omitempty" db:"source_url"`
+	ID              uuid.UUID        `json:"id" db:"id"`
+	WorkspaceID     uuid.UUID        `json:"workspace_id" db:"workspace_id"`
+	ProjectID       *uuid.UUID       `json:"project_id,omitempty" db:"project_id"`
+	AgentID         *uuid.UUID       `json:"agent_id,omitempty" db:"agent_id"`
+	Key             string           `json:"key" db:"key"`
+	Content         string           `json:"content" db:"content"`
+	Scope           MemoryScope      `json:"scope" db:"scope"`
+	Tags            pq.StringArray   `json:"tags" db:"tags"`
+	SourceType      MemorySourceType `json:"source_type" db:"source_type"`
+	SourceEventID   *uuid.UUID       `json:"source_event_id,omitempty" db:"source_event_id"`
+	SourceURL       *string          `json:"source_url,omitempty" db:"source_url"`
 	Relevance       float32          `json:"relevance" db:"relevance"`
 	ImportanceScore float32          `json:"importance_score" db:"importance_score"`
 	CreatedAt       time.Time        `json:"created_at" db:"created_at"`
-	UpdatedAt      time.Time        `json:"updated_at" db:"updated_at"`
-	ExpiresAt      *time.Time       `json:"expires_at,omitempty" db:"expires_at"`
-	LastAccessedAt *time.Time       `json:"last_accessed_at,omitempty" db:"last_accessed_at"`
-	Archived       bool             `json:"archived" db:"archived"`
+	UpdatedAt       time.Time        `json:"updated_at" db:"updated_at"`
+	ExpiresAt       *time.Time       `json:"expires_at,omitempty" db:"expires_at"`
+	LastAccessedAt  *time.Time       `json:"last_accessed_at,omitempty" db:"last_accessed_at"`
+	Archived        bool             `json:"archived" db:"archived"`
 
 	// Embedding fields — populated only when an embedding provider is configured.
 	// Embedding is the raw float32 vector; it is not serialised to JSON for API responses.
@@ -93,9 +93,9 @@ type RecallOpts struct {
 	SourceType     MemorySourceType // "agent" | "human" | "system"; empty means no filter
 	Since          *time.Time       // created_at >=
 	Until          *time.Time       // created_at <=
-	RelevanceMin    *float32         // relevance >=
-	MinImportance   *float32         // importance_score >= (default 0.4 applied at service layer)
-	IncludeExpired  bool             // if false, filters expires_at > now() OR expires_at IS NULL
+	RelevanceMin   *float32         // relevance >=
+	MinImportance  *float32         // importance_score >= (default 0.4 applied at service layer)
+	IncludeExpired bool             // if false, filters expires_at > now() OR expires_at IS NULL
 	OrderBy        string           // "created_at:desc", "relevance:desc", "decayed_relevance:desc"
 	ApplyDecay     bool             // if true, sort by relevance * pow(0.95, days_since_created)
 	Offset         int
@@ -103,22 +103,22 @@ type RecallOpts struct {
 
 // MemoryListFilter is the structured filter passed to the repository List method.
 type MemoryListFilter struct {
-	WorkspaceID    uuid.UUID
-	ProjectID      *uuid.UUID
-	Scope          string
-	Query          string           // full-text search (optional)
-	Tags           []string         // AND filter
-	TagsAny        []string         // OR filter
-	CreatedBy      *uuid.UUID       // agent_id filter
-	SourceType     MemorySourceType // "agent" | "human" | "system"; empty means no filter
-	Since          *time.Time       // created_at >=
-	Until          *time.Time       // created_at <=
+	WorkspaceID     uuid.UUID
+	ProjectID       *uuid.UUID
+	Scope           string
+	Query           string           // full-text search (optional)
+	Tags            []string         // AND filter
+	TagsAny         []string         // OR filter
+	CreatedBy       *uuid.UUID       // agent_id filter
+	SourceType      MemorySourceType // "agent" | "human" | "system"; empty means no filter
+	Since           *time.Time       // created_at >=
+	Until           *time.Time       // created_at <=
 	RelevanceMin    *float32         // relevance >=
 	MinImportance   *float32         // importance_score >= (default 0.4 applied at service layer)
 	IncludeExpired  bool
-	IncludeArchived bool             // if false (default), only archived=false rows are returned
-	OrderBy         string           // "created_at:desc", "relevance:desc", "decayed_relevance:desc"
-	ApplyDecay      bool             // if true, score = relevance * pow(0.95, days_since)
+	IncludeArchived bool   // if false (default), only archived=false rows are returned
+	OrderBy         string // "created_at:desc", "relevance:desc", "decayed_relevance:desc"
+	ApplyDecay      bool   // if true, score = relevance * pow(0.95, days_since)
 	Limit           int
 	Offset          int
 }
