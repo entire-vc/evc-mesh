@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -503,6 +504,7 @@ type MockAgentService struct {
 	ListActivityLogFunc   func(ctx context.Context, agentID uuid.UUID, filter repository.AgentActivityLogFilter, pg pagination.Params) (*pagination.Page[domain.AgentActivityLog], error)
 	AuthenticateFunc      func(ctx context.Context, workspaceSlug, apiKey string) (*domain.Agent, error)
 	RotateAPIKeyFunc      func(ctx context.Context, agentID uuid.UUID) (string, error)
+	GetBySlugFunc         func(ctx context.Context, workspaceID uuid.UUID, slug string) (*domain.Agent, error)
 }
 
 func (m *MockAgentService) Register(ctx context.Context, input service.RegisterAgentInput) (*service.RegisterAgentOutput, error) {
@@ -583,7 +585,10 @@ func (m *MockAgentService) TouchLastSeen(_ context.Context, _ uuid.UUID) error {
 	return nil
 }
 
-func (m *MockAgentService) GetBySlug(_ context.Context, _ uuid.UUID, _ string) (*domain.Agent, error) {
+func (m *MockAgentService) GetBySlug(ctx context.Context, workspaceID uuid.UUID, slug string) (*domain.Agent, error) {
+	if m.GetBySlugFunc != nil {
+		return m.GetBySlugFunc(ctx, workspaceID, slug)
+	}
 	return nil, nil
 }
 
@@ -702,4 +707,76 @@ func (m *MockRulesService) SetWorkflowTemplates(ctx context.Context, workspaceID
 		return m.SetWorkflowTemplatesFunc(ctx, workspaceID, templates)
 	}
 	return nil
+}
+
+// MockMemoryService implements service.MemoryService for testing.
+// Only the methods needed by CanonicalUpdatesHandler are fully wired;
+// all others are no-ops.
+type MockMemoryService struct {
+	ListMemoriesFunc func(ctx context.Context, filter domain.MemoryListFilter) (*service.RecallResult, error)
+}
+
+func (m *MockMemoryService) ListMemories(ctx context.Context, filter domain.MemoryListFilter) (*service.RecallResult, error) {
+	if m.ListMemoriesFunc != nil {
+		return m.ListMemoriesFunc(ctx, filter)
+	}
+	return &service.RecallResult{Items: []domain.ScoredMemory{}}, nil
+}
+
+func (m *MockMemoryService) Remember(ctx context.Context, mem *domain.Memory) (string, error) {
+	return "created", nil
+}
+func (m *MockMemoryService) Recall(ctx context.Context, opts domain.RecallOpts) ([]domain.ScoredMemory, error) {
+	return nil, nil
+}
+func (m *MockMemoryService) GetProjectKnowledge(ctx context.Context, workspaceID uuid.UUID, projectID *uuid.UUID) ([]domain.Memory, error) {
+	return nil, nil
+}
+func (m *MockMemoryService) SetProjectKnowledge(ctx context.Context, input service.SetProjectKnowledgeInput) (*domain.Memory, string, error) {
+	return nil, "", nil
+}
+func (m *MockMemoryService) Forget(ctx context.Context, id uuid.UUID, actorAgentID *uuid.UUID, isAdmin bool) error {
+	return nil
+}
+func (m *MockMemoryService) GetByID(ctx context.Context, id uuid.UUID) (*domain.Memory, error) {
+	return nil, nil
+}
+func (m *MockMemoryService) ExportMemories(ctx context.Context, workspaceID uuid.UUID, projectID *uuid.UUID) ([]byte, error) {
+	return nil, nil
+}
+func (m *MockMemoryService) ImportMemories(ctx context.Context, workspaceID uuid.UUID, data []byte) (int, error) {
+	return 0, nil
+}
+func (m *MockMemoryService) BatchEmbed(ctx context.Context, workspaceID uuid.UUID) (int, error) {
+	return 0, nil
+}
+func (m *MockMemoryService) FindRelated(ctx context.Context, memoryID uuid.UUID, limit int) ([]domain.ScoredMemory, error) {
+	return nil, nil
+}
+func (m *MockMemoryService) ExtractFromEvent(ctx context.Context, event *domain.EventBusMessage, hint *domain.MemoryHint) error {
+	return nil
+}
+
+// MockAgentSessionRepository implements repository.AgentSessionRepository for testing.
+type MockAgentSessionRepository struct {
+	GetPreviousStartedAtFunc func(ctx context.Context, agentID uuid.UUID) (*time.Time, error)
+}
+
+func (m *MockAgentSessionRepository) Create(ctx context.Context, session *domain.AgentSession) error {
+	return nil
+}
+func (m *MockAgentSessionRepository) Update(ctx context.Context, session *domain.AgentSession) error {
+	return nil
+}
+func (m *MockAgentSessionRepository) GetActive(ctx context.Context, agentID uuid.UUID) (*domain.AgentSession, error) {
+	return nil, nil
+}
+func (m *MockAgentSessionRepository) EndStale(ctx context.Context, timeout time.Duration) (int, error) {
+	return 0, nil
+}
+func (m *MockAgentSessionRepository) GetPreviousStartedAt(ctx context.Context, agentID uuid.UUID) (*time.Time, error) {
+	if m.GetPreviousStartedAtFunc != nil {
+		return m.GetPreviousStartedAtFunc(ctx, agentID)
+	}
+	return nil, nil
 }

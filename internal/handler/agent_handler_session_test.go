@@ -70,6 +70,10 @@ func (m *mockSessionRepo) EndStale(ctx context.Context, timeout time.Duration) (
 	return 0, nil
 }
 
+func (m *mockSessionRepo) GetPreviousStartedAt(ctx context.Context, agentID uuid.UUID) (*time.Time, error) {
+	return nil, nil
+}
+
 // setupSessionTest builds an AgentHandler wired with a session repo and an agent
 // service that resolves agents to a fixed workspace.
 func setupSessionTest(repo *mockSessionRepo, workspaceID uuid.UUID) (*AgentHandler, *echo.Echo) {

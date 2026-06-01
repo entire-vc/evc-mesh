@@ -391,6 +391,7 @@ func main() {
 	mentionHandler := handler.NewMentionHandler(mentionService)
 	projectIntegrationHandler := handler.NewProjectIntegrationHandler(projectIntegrationService)
 	trSearchHandler := handler.NewTrSearchHandler(projectIntegrationService)
+	canonicalUpdatesHandler := handler.NewCanonicalUpdatesHandler(memoryService, sessionRepo, agentService)
 	mentionablesService := service.NewMentionablesService(agentRepo, userRepo)
 	mentionablesHandler := handler.NewMentionablesHandler(mentionablesService)
 
@@ -838,6 +839,9 @@ func main() {
 	api.DELETE("/memories/:id", memoryHandler.Delete)
 	api.GET("/projects/:proj_id/knowledge", memoryHandler.GetProjectKnowledge, projAccess)
 	api.POST("/projects/:proj_id/knowledge", memoryHandler.SetProjectKnowledge, projAccess)
+
+	// C1 canonical updates feed — returns privacy:public canonical-decision memories since a cursor.
+	api.GET("/canonical_updates", canonicalUpdatesHandler.GetCanonicalUpdates)
 
 	// Spark catalog routes (optional; only registered when MESH_SPARK_ENABLED=true).
 	if cfg.Spark.Enabled {
