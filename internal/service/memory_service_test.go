@@ -728,12 +728,12 @@ func TestRemember_ReinforcementBoost(t *testing.T) {
 	wsID := uuid.New()
 	existingID := uuid.New()
 	existing := &domain.Memory{
-		ID:          existingID,
-		WorkspaceID: wsID,
-		Key:         "arch-decision",
-		Content:     "original content",
-		Scope:       domain.ScopeProject,
-		Tags:        []string{"kind:decision", "team:backend"},
+		ID:              existingID,
+		WorkspaceID:     wsID,
+		Key:             "arch-decision",
+		Content:         "original content",
+		Scope:           domain.ScopeProject,
+		Tags:            []string{"kind:decision", "team:backend"},
 		ImportanceScore: 0.8,
 	}
 
