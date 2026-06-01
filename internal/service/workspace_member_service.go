@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -144,11 +146,16 @@ func (s *workspaceMemberService) AddMemberWithCreate(ctx context.Context, worksp
 		if hashErr != nil {
 			return nil, apierror.InternalError("failed to hash password")
 		}
+		username, unameErr := s.generateUniqueUsername(ctx, email)
+		if unameErr != nil {
+			return nil, fmt.Errorf("workspace_member_service.AddMemberWithCreate: %w", unameErr)
+		}
 		now := time.Now()
 		user = &domain.User{
 			ID:           uuid.New(),
 			Email:        email,
 			Name:         email,
+			Username:     username,
 			PasswordHash: string(hash),
 			IsActive:     true,
 			CreatedAt:    now,
@@ -201,6 +208,60 @@ func (s *workspaceMemberService) AddMemberWithCreate(ctx context.Context, worksp
 			AvatarURL: user.AvatarURL,
 		},
 	}, nil
+}
+
+// usernameBaseFromEmail derives a slug from the email local-part, matching the
+// backfill logic in migration 20260520046: lowercase, non-slug chars to '-',
+// collapse repeats, trim hyphens, clamp to 38 (leaving room for a numeric
+// suffix within the 40-char limit), and pad to the 2-char minimum. The result
+// satisfies chk_users_username (^[a-z0-9][a-z0-9-]{0,38}[a-z0-9]$).
+func usernameBaseFromEmail(email string) string {
+	local := email
+	if i := strings.IndexByte(email, '@'); i >= 0 {
+		local = email[:i]
+	}
+	local = strings.ToLower(local)
+
+	var b strings.Builder
+	for _, r := range local {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '-':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('-')
+		}
+	}
+	s := b.String()
+	for strings.Contains(s, "--") {
+		s = strings.ReplaceAll(s, "--", "-")
+	}
+	s = strings.Trim(s, "-")
+	if len(s) > 38 {
+		s = strings.Trim(s[:38], "-")
+	}
+	for len(s) < 2 {
+		s += "0"
+	}
+	return s
+}
+
+// generateUniqueUsername returns a username derived from the email that is not
+// already taken (case-insensitive, global). On collision it appends an
+// incrementing numeric suffix, mirroring the migration backfill.
+func (s *workspaceMemberService) generateUniqueUsername(ctx context.Context, email string) (string, error) {
+	base := usernameBaseFromEmail(email)
+	candidate := base
+	for i := 1; i <= 10000; i++ {
+		exists, err := s.userRepo.UsernameExists(ctx, candidate)
+		if err != nil {
+			return "", err
+		}
+		if !exists {
+			return candidate, nil
+		}
+		candidate = base + strconv.Itoa(i)
+	}
+	return "", apierror.InternalError("could not allocate a unique username")
 }
 
 // UpdateMemberRole changes a member's role, preventing removal of the last owner.

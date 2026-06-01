@@ -1522,6 +1522,10 @@ func (m *MockUserRepository) Create(_ context.Context, _ *domain.User) error {
 	return m.errToReturn
 }
 
+func (m *MockUserRepository) UsernameExists(_ context.Context, _ string) (bool, error) {
+	return false, m.errToReturn
+}
+
 func (m *MockUserRepository) GetByID(_ context.Context, _ uuid.UUID) (*domain.User, error) {
 	return nil, m.errToReturn
 }

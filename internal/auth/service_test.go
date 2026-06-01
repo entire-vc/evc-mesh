@@ -35,6 +35,10 @@ func (r *mockUserRepo) Create(_ context.Context, user *domain.User) error {
 	return nil
 }
 
+func (r *mockUserRepo) UsernameExists(_ context.Context, _ string) (bool, error) {
+	return false, nil
+}
+
 func (r *mockUserRepo) GetByID(_ context.Context, id uuid.UUID) (*domain.User, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
