@@ -93,6 +93,7 @@ func main() {
 	notificationRepo := postgres.NewNotificationRepo(db)
 	autoTransRuleRepo := postgres.NewAutoTransitionRuleRepo(db)
 	memoryRepo := postgres.NewMemoryRepo(db)
+	memoryEdgesRepo := postgres.NewMemoryEdgesRepo(db)
 	commentMentionRepo := postgres.NewCommentMentionRepo(db)
 
 	// 5. Create auth service.
@@ -875,7 +876,7 @@ func main() {
 	log.Println("Recurring task scheduler started (60s interval)")
 
 	// 10a. Memory decay + cleanup scheduler (every 6 hours).
-	// DecayRelevance and CleanExpired are idempotent so running frequently is safe.
+	// DecayRelevance, CleanExpired, DecayWeights, and PruneDeadEdges are all idempotent.
 	go func() {
 		ticker := time.NewTicker(6 * time.Hour)
 		defer ticker.Stop()
@@ -892,6 +893,16 @@ func main() {
 					log.Printf("[memory-cleanup] ERROR: %v", cleanErr)
 				} else if n > 0 {
 					log.Printf("[memory-cleanup] Cleaned %d expired memories", n)
+				}
+				if n, edgeDecayErr := memoryEdgesRepo.DecayWeights(ctx); edgeDecayErr != nil {
+					log.Printf("[edge-decay] ERROR: %v", edgeDecayErr)
+				} else if n > 0 {
+					log.Printf("[edge-decay] Decayed %d stale edges", n)
+				}
+				if n, pruneErr := memoryEdgesRepo.PruneDeadEdges(ctx); pruneErr != nil {
+					log.Printf("[edge-prune] ERROR: %v", pruneErr)
+				} else if n > 0 {
+					log.Printf("[edge-prune] Pruned %d dead edges", n)
 				}
 				cancel()
 			case <-schedulerShutdownCh:
