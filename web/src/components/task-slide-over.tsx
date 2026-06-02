@@ -1014,7 +1014,7 @@ export function TaskSlideOver({
             {/* ============================================================= */}
             {/* RIGHT PANEL — Comments / Subtasks / Artifacts / Activity       */}
             {/* ============================================================= */}
-            <div className="flex w-full shrink-0 flex-col overflow-hidden border-t border-border lg:w-[340px] lg:border-t-0 xl:w-[380px]">
+            <div className="flex w-full shrink-0 flex-col overflow-hidden border-t border-border lg:w-2/5 lg:border-t-0">
               {/* Tab bar — Comments → Subtasks → Artifacts → Activity */}
               <div className="flex shrink-0 overflow-x-auto border-b border-border">
                 <button
