@@ -29,6 +29,8 @@ import { useProjectStore } from "@/stores/project";
 import { useCustomFieldStore } from "@/stores/custom-field";
 import { useMemberStore } from "@/stores/member";
 import { useAuthStore } from "@/stores/auth";
+import { useWorkspaceStore } from "@/stores/workspace";
+import { useRulesStore } from "@/stores/rules";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -106,6 +108,8 @@ export function TaskSlideOver({
     useCustomFieldStore();
   const { projectMembers, fetchProjectMembers } = useMemberStore();
   const { user } = useAuthStore();
+  const { currentWorkspace } = useWorkspaceStore();
+  const { teamDirectory, fetchTeamDirectory } = useRulesStore();
 
   const [loading, setLoading] = useState(false);
   const [rightTab, setRightTab] = useState<RightTabId>("comments");
@@ -183,6 +187,13 @@ export function TaskSlideOver({
       void fetchProjectMembers(currentProject.id);
     }
   }, [currentProject, fetchProjectMembers]);
+
+  // Fetch team directory for assignee name resolution (lazy — only if not cached)
+  useEffect(() => {
+    if (currentWorkspace && !teamDirectory) {
+      void fetchTeamDirectory(currentWorkspace.id);
+    }
+  }, [currentWorkspace, teamDirectory, fetchTeamDirectory]);
 
   // Sync local drafts when task changes
   useEffect(() => {
@@ -720,12 +731,14 @@ export function TaskSlideOver({
                         return null;
                       })}
                       {currentTask?.assignee_id && !projectMembers.some((m) =>
-                        currentTask.assignee_type === "user"
-                          ? m.user_id === currentTask.assignee_id
-                          : m.agent_id === currentTask.assignee_id
+                        m.user_id === currentTask.assignee_id || m.agent_id === currentTask.assignee_id
                       ) && (
                         <option value={`${currentTask.assignee_type}:${currentTask.assignee_id}`}>
-                          {currentTask.assignee_name ?? currentTask.assignee_id} (not a project member)
+                          {currentTask.assignee_name ??
+                            teamDirectory?.agents.find((a) => a.id === currentTask.assignee_id)?.name ??
+                            teamDirectory?.humans.find((h) => h.id === currentTask.assignee_id)?.name ??
+                            "Unknown"}
+                          {currentWorkspace?.owner_id !== currentTask.assignee_id && " (not a project member)"}
                         </option>
                       )}
                     </Select>
