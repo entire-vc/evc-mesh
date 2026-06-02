@@ -1487,22 +1487,27 @@ func (m *MockRulesService) SetWorkflowTemplates(_ context.Context, _ uuid.UUID, 
 // ---------------------------------------------------------------------------
 
 // MockUserRepository implements repository.UserRepository. Users are keyed by
-// "<workspaceID>/<username>" for GetByUsername lookups.
+// "<workspaceID>/<username>" for GetByUsername lookups and by ID for GetByID.
 type MockUserRepository struct {
 	mu          sync.RWMutex
 	byUsername  map[string]*domain.User
+	byID        map[uuid.UUID]*domain.User
 	errToReturn error
 }
 
 func NewMockUserRepository() *MockUserRepository {
-	return &MockUserRepository{byUsername: make(map[string]*domain.User)}
+	return &MockUserRepository{
+		byUsername: make(map[string]*domain.User),
+		byID:       make(map[uuid.UUID]*domain.User),
+	}
 }
 
-// AddUser registers a user resolvable by GetByUsername in the given workspace.
+// AddUser registers a user resolvable by GetByUsername in the given workspace and by ID.
 func (m *MockUserRepository) AddUser(workspaceID uuid.UUID, u *domain.User) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.byUsername[workspaceID.String()+"/"+u.Username] = u
+	m.byID[u.ID] = u
 }
 
 func (m *MockUserRepository) GetByUsername(_ context.Context, workspaceID uuid.UUID, username string) (*domain.User, error) {
@@ -1526,8 +1531,17 @@ func (m *MockUserRepository) UsernameExists(_ context.Context, _ string) (bool, 
 	return false, m.errToReturn
 }
 
-func (m *MockUserRepository) GetByID(_ context.Context, _ uuid.UUID) (*domain.User, error) {
-	return nil, m.errToReturn
+func (m *MockUserRepository) GetByID(_ context.Context, id uuid.UUID) (*domain.User, error) {
+	if m.errToReturn != nil {
+		return nil, m.errToReturn
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	u, ok := m.byID[id]
+	if !ok {
+		return nil, nil
+	}
+	return u, nil
 }
 
 func (m *MockUserRepository) GetByEmail(_ context.Context, _ string) (*domain.User, error) {
@@ -1544,6 +1558,85 @@ func (m *MockUserRepository) SearchUsers(_ context.Context, _ string, _ int) ([]
 
 func (m *MockUserRepository) SearchInWorkspace(_ context.Context, _ uuid.UUID, _ string, _ int) ([]domain.User, error) {
 	return nil, nil
+}
+
+// ---------------------------------------------------------------------------
+// MockProjectMemberRepository
+// ---------------------------------------------------------------------------
+
+type MockProjectMemberRepository struct {
+	mu      sync.RWMutex
+	members []*domain.ProjectMember
+}
+
+func NewMockProjectMemberRepository() *MockProjectMemberRepository {
+	return &MockProjectMemberRepository{}
+}
+
+func (m *MockProjectMemberRepository) Create(_ context.Context, pm *domain.ProjectMember) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.members = append(m.members, pm)
+	return nil
+}
+
+func (m *MockProjectMemberRepository) ExistsMember(_ context.Context, projectID uuid.UUID, userID, agentID *uuid.UUID) (bool, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, pm := range m.members {
+		if pm.ProjectID != projectID {
+			continue
+		}
+		if userID != nil && pm.UserID != nil && *pm.UserID == *userID {
+			return true, nil
+		}
+		if agentID != nil && pm.AgentID != nil && *pm.AgentID == *agentID {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (m *MockProjectMemberRepository) GetByProjectAndUser(_ context.Context, projectID, userID uuid.UUID) (*domain.ProjectMember, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, pm := range m.members {
+		if pm.ProjectID == projectID && pm.UserID != nil && *pm.UserID == userID {
+			return pm, nil
+		}
+	}
+	return nil, nil
+}
+
+func (m *MockProjectMemberRepository) GetByProjectAndAgent(_ context.Context, projectID, agentID uuid.UUID) (*domain.ProjectMember, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, pm := range m.members {
+		if pm.ProjectID == projectID && pm.AgentID != nil && *pm.AgentID == agentID {
+			return pm, nil
+		}
+	}
+	return nil, nil
+}
+
+func (m *MockProjectMemberRepository) List(_ context.Context, _ uuid.UUID) ([]domain.ProjectMemberWithUser, error) {
+	return nil, nil
+}
+
+func (m *MockProjectMemberRepository) UpdateRole(_ context.Context, _, _ uuid.UUID, _ string) error {
+	return nil
+}
+
+func (m *MockProjectMemberRepository) Delete(_ context.Context, _, _ uuid.UUID) error {
+	return nil
+}
+
+func (m *MockProjectMemberRepository) DeleteAgent(_ context.Context, _, _ uuid.UUID) error {
+	return nil
+}
+
+func (m *MockProjectMemberRepository) DeleteByWorkspaceAndUser(_ context.Context, _, _ uuid.UUID) error {
+	return nil
 }
 
 // ---------------------------------------------------------------------------

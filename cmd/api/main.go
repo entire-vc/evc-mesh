@@ -230,6 +230,7 @@ func main() {
 		service.WithNotificationService(notificationService),
 		service.WithProjectMemberRepoTask(projectMemberRepo),
 		service.WithTaskAgentRepo(agentRepo),
+		service.WithUserRepoTask(userRepo),
 	)
 
 	// Wire auto-transition service. It calls taskService.MoveTask, so taskService must already
