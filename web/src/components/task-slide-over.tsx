@@ -66,6 +66,8 @@ type RightTabId = "comments" | "subtasks" | "artifacts" | "activity";
 
 const priorities: Priority[] = ["urgent", "high", "medium", "low", "none"];
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 // ---------------------------------------------------------------------------
 // Props
 // ---------------------------------------------------------------------------
@@ -711,6 +713,14 @@ export function TaskSlideOver({
                           {user.name} (you)
                         </option>
                       )}
+                      {(() => {
+                        const ownerId = currentWorkspace?.owner_id;
+                        if (!ownerId || user?.id === ownerId) return null;
+                        if (projectMembers.some((m) => m.user_id === ownerId)) return null;
+                        const ownerName = teamDirectory?.humans.find((h) => h.id === ownerId)?.name;
+                        if (!ownerName) return null;
+                        return <option key={`owner-${ownerId}`} value={`user:${ownerId}`}>{ownerName}</option>;
+                      })()}
                       {projectMembers.map((m) => {
                         if (m.user) {
                           const isSelf = user && m.user.id === user.id;
@@ -732,15 +742,21 @@ export function TaskSlideOver({
                       })}
                       {currentTask?.assignee_id && !projectMembers.some((m) =>
                         m.user_id === currentTask.assignee_id || m.agent_id === currentTask.assignee_id
-                      ) && (
-                        <option value={`${currentTask.assignee_type}:${currentTask.assignee_id}`}>
-                          {currentTask.assignee_name ??
-                            teamDirectory?.agents.find((a) => a.id === currentTask.assignee_id)?.name ??
-                            teamDirectory?.humans.find((h) => h.id === currentTask.assignee_id)?.name ??
-                            "Unknown"}
-                          {currentWorkspace?.owner_id !== currentTask.assignee_id && " (not a project member)"}
-                        </option>
-                      )}
+                      ) && (() => {
+                        if (currentWorkspace?.owner_id === currentTask.assignee_id) return null;
+                        const resolved =
+                          teamDirectory?.agents.find((a) => a.id === currentTask.assignee_id)?.name ??
+                          teamDirectory?.humans.find((h) => h.id === currentTask.assignee_id)?.name ??
+                          (currentTask.assignee_name && !UUID_RE.test(currentTask.assignee_name)
+                            ? currentTask.assignee_name
+                            : null);
+                        if (!resolved) return null;
+                        return (
+                          <option value={`${currentTask.assignee_type}:${currentTask.assignee_id}`}>
+                            {resolved} (not a project member)
+                          </option>
+                        );
+                      })()}
                     </Select>
 
                     {/* Due Date */}
