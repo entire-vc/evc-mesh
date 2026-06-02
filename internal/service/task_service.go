@@ -31,6 +31,7 @@ type taskService struct {
 	projectRepo       repository.ProjectRepository
 	projectMemberRepo repository.ProjectMemberRepository
 	agentRepo         repository.AgentRepository
+	userRepo          repository.UserRepository
 	autoTransSvc      AutoTransitionService
 	ruleSvc           RuleService
 	rulesConfigSvc    RulesService
@@ -159,6 +160,14 @@ func WithTaskAgentRepo(ar repository.AgentRepository) TaskServiceOption {
 	}
 }
 
+// WithUserRepoTask sets the user repository used for assignee_type normalization.
+// When set, assigning a human UUID auto-corrects assignee_type to 'user'.
+func WithUserRepoTask(ur repository.UserRepository) TaskServiceOption {
+	return func(s *taskService) {
+		s.userRepo = ur
+	}
+}
+
 // SetAutoTransitionService implements TaskServiceAutoTransitionConfigurable,
 // allowing the auto-transition service to be wired after construction.
 func (s *taskService) SetAutoTransitionService(svc AutoTransitionService) {
@@ -187,6 +196,10 @@ func (s *taskService) Create(ctx context.Context, task *domain.Task) error {
 	if task.AssigneeType == domain.AssigneeTypeUnassigned || task.AssigneeType == "" {
 		s.applyAutoAssign(ctx, task)
 	}
+	// Normalize: look up assignee in agent/user directory to correct assignee_type.
+	if task.AssigneeID != nil {
+		task.AssigneeType = s.resolveAssigneeType(ctx, task.AssigneeID, task.AssigneeType)
+	}
 
 	if task.ID == uuid.Nil {
 		task.ID = uuid.New()
@@ -201,9 +214,12 @@ func (s *taskService) Create(ctx context.Context, task *domain.Task) error {
 	if actorType == domain.ActorTypeAgent && actorID != uuid.Nil {
 		s.ensureAgentProjectMember(ctx, task.ProjectID, actorID)
 	}
-	// Auto-enroll assigned agent into project members.
-	if task.AssigneeType == domain.AssigneeTypeAgent && task.AssigneeID != nil {
+	// Auto-enroll assignee into project members.
+	switch {
+	case task.AssigneeType == domain.AssigneeTypeAgent && task.AssigneeID != nil:
 		s.ensureAgentProjectMember(ctx, task.ProjectID, *task.AssigneeID)
+	case task.AssigneeType == domain.AssigneeTypeUser && task.AssigneeID != nil:
+		s.ensureUserProjectMember(ctx, task.ProjectID, *task.AssigneeID)
 	}
 
 	if err := s.taskRepo.Create(ctx, task); err != nil {
@@ -284,6 +300,10 @@ func (s *taskService) Update(ctx context.Context, task *domain.Task) error {
 		}
 	}
 
+	// Normalize assignee_type before write.
+	if task.AssigneeID != nil {
+		task.AssigneeType = s.resolveAssigneeType(ctx, task.AssigneeID, task.AssigneeType)
+	}
 	task.UpdatedAt = timeNow()
 	if err := s.taskRepo.Update(ctx, task); err != nil {
 		return err
@@ -520,7 +540,7 @@ func (s *taskService) MoveTask(ctx context.Context, taskID uuid.UUID, input Move
 	// Apply explicit assignee if provided in the move request.
 	if input.AssigneeID != nil {
 		task.AssigneeID = input.AssigneeID
-		task.AssigneeType = input.AssigneeType
+		task.AssigneeType = s.resolveAssigneeType(ctx, input.AssigneeID, input.AssigneeType)
 		task.UpdatedAt = timeNow()
 		if err := s.taskRepo.Update(ctx, task); err != nil {
 			log.Printf("[move-assign] WARNING: failed to assign task %s: %v", taskID, err)
@@ -602,13 +622,19 @@ func (s *taskService) AssignTask(ctx context.Context, taskID uuid.UUID, input As
 	oldAssigneeID := task.AssigneeID
 	oldAssigneeType := task.AssigneeType
 
+	// Normalize: look up assignee in agent/user directory to correct assignee_type.
+	resolvedType := s.resolveAssigneeType(ctx, input.AssigneeID, input.AssigneeType)
+
 	task.AssigneeID = input.AssigneeID
-	task.AssigneeType = input.AssigneeType
+	task.AssigneeType = resolvedType
 	task.UpdatedAt = timeNow()
 
-	// Auto-enroll assigned agent into project members.
-	if input.AssigneeType == domain.AssigneeTypeAgent && input.AssigneeID != nil {
+	// Auto-enroll assignee into project members.
+	switch {
+	case resolvedType == domain.AssigneeTypeAgent && input.AssigneeID != nil:
 		s.ensureAgentProjectMember(ctx, task.ProjectID, *input.AssigneeID)
+	case resolvedType == domain.AssigneeTypeUser && input.AssigneeID != nil:
+		s.ensureUserProjectMember(ctx, task.ProjectID, *input.AssigneeID)
 	}
 
 	if err := s.taskRepo.Update(ctx, task); err != nil {
@@ -1113,6 +1139,56 @@ func (s *taskService) ensureAgentProjectMember(ctx context.Context, projectID, a
 	if err := s.projectMemberRepo.Create(ctx, member); err != nil {
 		log.Printf("[task-svc] auto-enroll agent %s in project %s failed: %v", agentID, projectID, err)
 	}
+}
+
+// ensureUserProjectMember auto-enrolls a human user into a project's member list
+// if they are not already a member. Analogous to ensureAgentProjectMember.
+// Workspace owners are enrolled just like regular users — the middleware already
+// bypasses the project membership check for owners, but explicit enrollment
+// makes them visible in the project member list and avoids FK-check issues.
+func (s *taskService) ensureUserProjectMember(ctx context.Context, projectID, userID uuid.UUID) {
+	if s.projectMemberRepo == nil || userID == uuid.Nil {
+		return
+	}
+	exists, err := s.projectMemberRepo.ExistsMember(ctx, projectID, &userID, nil)
+	if err != nil || exists {
+		return
+	}
+	member := &domain.ProjectMember{
+		ID:        uuid.New(),
+		ProjectID: projectID,
+		UserID:    &userID,
+		Role:      domain.ProjectRoleMember,
+		CreatedAt: timeNow(),
+		UpdatedAt: timeNow(),
+	}
+	if err := s.projectMemberRepo.Create(ctx, member); err != nil {
+		log.Printf("[task-svc] auto-enroll user %s in project %s failed: %v", userID, projectID, err)
+	}
+}
+
+// resolveAssigneeType determines the correct AssigneeType for the given UUID by
+// querying the agent and user directories. Never errors — falls back to the
+// provided fallback (preserving caller's intent) and logs a warning when the
+// UUID cannot be found in either directory.
+func (s *taskService) resolveAssigneeType(ctx context.Context, assigneeID *uuid.UUID, fallback domain.AssigneeType) domain.AssigneeType {
+	if assigneeID == nil || *assigneeID == uuid.Nil {
+		return domain.AssigneeTypeUnassigned
+	}
+	if s.agentRepo != nil {
+		if a, err := s.agentRepo.GetByID(ctx, *assigneeID); err == nil && a != nil {
+			return domain.AssigneeTypeAgent
+		}
+	}
+	if s.userRepo != nil {
+		if u, err := s.userRepo.GetByID(ctx, *assigneeID); err == nil && u != nil {
+			return domain.AssigneeTypeUser
+		}
+	}
+	if s.agentRepo != nil || s.userRepo != nil {
+		log.Printf("[task-svc] WARNING: assignee %s not found in agents or users — using fallback %q", *assigneeID, fallback)
+	}
+	return fallback
 }
 
 // MoveToProject moves a task to a different project. It finds the default status
