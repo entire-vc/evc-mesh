@@ -53,6 +53,21 @@ interface TaskSearchResult {
 }
 
 // ---------------------------------------------------------------------------
+// Search helpers
+// ---------------------------------------------------------------------------
+
+function extractUUIDFromURL(raw: string): string | null {
+  const m = raw.match(
+    /\/t(?:asks)?\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i,
+  );
+  return m?.[1] ?? null;
+}
+
+function normalizeSearchQuery(raw: string): string {
+  return raw.trim();
+}
+
+// ---------------------------------------------------------------------------
 // useTaskSearch — debounced cross-project search
 // ---------------------------------------------------------------------------
 
@@ -276,7 +291,14 @@ function TaskSearchBox({ wsSlug }: { wsSlug: string | undefined }) {
         className="pl-8 pr-8"
         value={query}
         onChange={(e) => {
-          handleQueryChange(e.target.value);
+          const uuid = extractUUIDFromURL(e.target.value);
+          if (uuid) {
+            navigate(`/t/${uuid}`);
+            clear();
+            setOpen(false);
+            return;
+          }
+          handleQueryChange(normalizeSearchQuery(e.target.value));
           setOpen(true);
         }}
         onFocus={() => setOpen(true)}
