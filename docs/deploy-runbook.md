@@ -15,14 +15,20 @@ Hands-on guide for deploying the evc-mesh API server on prod (systemd, bare-meta
 
 ## Normal deploy (no out-of-order migrations)
 
+**Mandatory order (per [CLAUDE-workflow.md §1b Deploy Discipline](../CLAUDE-workflow.md)):**
+`migrate (goose up)` → `binary swap` → `restart`. Never swap the binary before migrations pass.
+
+CI enforces this automatically via the `migrate` job in `deploy-backend.yml`. For manual hotfix deploys that bypass CI, follow the steps below exactly — do not skip the migration step.
+
 ```bash
 # 1. Build binary locally or pull from CI artifact
 go build -o bin/mesh-api ./cmd/api
 
-# 2. Copy binary to prod
+# 2. Copy binary AND migration files to prod
 scp bin/mesh-api root@prod-host:/opt/evc-mesh/bin/mesh-api.new
+rsync -avz --checksum migrations/ root@prod-host:/opt/evc-mesh/migrations/
 
-# 3. On the prod host: backup DB, swap binary, restart
+# 3. On the prod host: backup DB, run migrations FIRST, then swap binary
 ssh root@prod-host
 
   cd /opt/evc-mesh
@@ -31,11 +37,22 @@ ssh root@prod-host
   docker exec <postgres-container> pg_dump -U mesh -d mesh -Fc \
     > /opt/evc-mesh/db-backups/pre-deploy-$(date +%Y%m%dT%H%M%S).dump
 
-  # Swap binary atomically (timestamped .bak matches prod convention)
+  # STEP 1 — Run migrations BEFORE touching the binary (fail-closed).
+  # goose CLI is not installed on the host; use the official docker image.
+  # If this exits non-zero, STOP — do NOT proceed to the binary swap.
+  DB_URL=$(grep ^DATABASE_URL /opt/evc-mesh/.env.prod | cut -d= -f2-)
+  docker run --rm --network host \
+    -v /opt/evc-mesh/migrations:/migrations \
+    ghcr.io/pressly/goose:latest \
+    goose -dir /migrations postgres "$DB_URL" up
+
+  # STEP 2 — Swap binary atomically (only after migrations succeed)
   mv bin/mesh-api bin/mesh-api.bak.$(date +%Y%m%d-%H%M%S)
   mv bin/mesh-api.new bin/mesh-api
 
-  # Restart — goose.Up(WithAllowMissing) runs migrations on startup automatically
+  # STEP 3 — Restart
+  # goose.Up(WithAllowMissing) in main.go is a belt-and-suspenders safety net
+  # for out-of-order hotfix migrations; it is a no-op if all migrations already applied.
   sudo systemctl restart mesh-api
 
   # Verify
