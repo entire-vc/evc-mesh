@@ -63,6 +63,10 @@ function extractUUIDFromURL(raw: string): string | null {
   return m?.[1] ?? null;
 }
 
+function normalizeSearchQuery(raw: string): string {
+  return raw.trim();
+}
+
 // ---------------------------------------------------------------------------
 // useTaskSearch — debounced cross-project search
 // ---------------------------------------------------------------------------
@@ -294,7 +298,7 @@ function TaskSearchBox({ wsSlug }: { wsSlug: string | undefined }) {
             setOpen(false);
             return;
           }
-          handleQueryChange(e.target.value);
+          handleQueryChange(normalizeSearchQuery(e.target.value));
           setOpen(true);
         }}
         onFocus={() => setOpen(true)}
