@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -22,6 +23,26 @@ import (
 
 // safeSlugRe validates that a custom field slug is a safe SQL identifier.
 var safeSlugRe = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
+
+var (
+	hexPrefixRe = regexp.MustCompile(`^[0-9a-fA-F]{6,}$`)
+	uuidRe      = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+)
+
+// searchMode returns the detection mode for a search query: "uuid" for a full
+// UUID, "prefix" for a hex-prefix short ID (≥6 hex chars, with optional leading
+// #), or "text" for a plain text query. cleanInput has the leading # stripped
+// and is lowercased for hex modes so it matches Postgres UUID::text output.
+func searchMode(raw string) (mode, cleanInput string) {
+	s := strings.TrimPrefix(strings.TrimSpace(raw), "#")
+	if uuidRe.MatchString(s) {
+		return "uuid", strings.ToLower(s)
+	}
+	if hexPrefixRe.MatchString(s) {
+		return "prefix", strings.ToLower(s)
+	}
+	return "text", raw
+}
 
 // ErrCheckoutConflict is returned when AtomicCheckout finds the task is already
 // checked out by a different agent and the lock has not yet expired.
@@ -271,10 +292,25 @@ func (r *TaskRepo) Search(ctx context.Context, workspaceID uuid.UUID, filter rep
 	argIdx := 2
 
 	if filter.Search != "" {
-		pattern := "%" + filter.Search + "%"
-		conditions = append(conditions, fmt.Sprintf("(t.title ILIKE $%d OR t.description ILIKE $%d)", argIdx, argIdx))
-		args = append(args, pattern)
-		argIdx++
+		mode, clean := searchMode(filter.Search)
+		switch mode {
+		case "uuid":
+			parsed, err := uuid.Parse(clean)
+			if err == nil {
+				conditions = append(conditions, fmt.Sprintf("t.id = $%d", argIdx))
+				args = append(args, parsed)
+				argIdx++
+			}
+		case "prefix":
+			conditions = append(conditions, fmt.Sprintf("t.id::text LIKE $%d", argIdx))
+			args = append(args, clean+"%")
+			argIdx++
+		default:
+			pattern := "%" + filter.Search + "%"
+			conditions = append(conditions, fmt.Sprintf("(t.title ILIKE $%d OR t.description ILIKE $%d)", argIdx, argIdx))
+			args = append(args, pattern)
+			argIdx++
+		}
 	}
 	if len(filter.StatusIDs) > 0 {
 		conditions = append(conditions, fmt.Sprintf("t.status_id = ANY($%d)", argIdx))
@@ -417,10 +453,25 @@ func (r *TaskRepo) List(ctx context.Context, projectID uuid.UUID, filter reposit
 		argIdx++
 	}
 	if filter.Search != "" {
-		pattern := "%" + filter.Search + "%"
-		conditions = append(conditions, fmt.Sprintf("(title ILIKE $%d OR description ILIKE $%d)", argIdx, argIdx))
-		args = append(args, pattern)
-		argIdx++
+		mode, clean := searchMode(filter.Search)
+		switch mode {
+		case "uuid":
+			parsed, err := uuid.Parse(clean)
+			if err == nil {
+				conditions = append(conditions, fmt.Sprintf("id = $%d", argIdx))
+				args = append(args, parsed)
+				argIdx++
+			}
+		case "prefix":
+			conditions = append(conditions, fmt.Sprintf("id::text LIKE $%d", argIdx))
+			args = append(args, clean+"%")
+			argIdx++
+		default:
+			pattern := "%" + filter.Search + "%"
+			conditions = append(conditions, fmt.Sprintf("(title ILIKE $%d OR description ILIKE $%d)", argIdx, argIdx))
+			args = append(args, pattern)
+			argIdx++
+		}
 	}
 	if filter.HasDueDate != nil {
 		if *filter.HasDueDate {
