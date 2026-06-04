@@ -3,6 +3,7 @@ import {
   BookOpen,
   Database,
   Download,
+  ExternalLink,
   File,
   FileCode,
   FileText,
@@ -251,6 +252,13 @@ export function ArtifactList({ taskId, refreshKey, projId, projectSettings, onRe
       {artifacts.map((artifact) => {
         const Icon = artifactTypeIcons[artifact.artifact_type] ?? File;
         const badgeVariant = artifactTypeBadgeVariant[artifact.artifact_type] ?? "secondary";
+        // TR-mirrored artifacts carry a browser-renderable public URL in metadata.
+        // Presence of this key implies the project's TR integration was enabled at
+        // upload time, so it doubles as the visibility gate for the "open" button.
+        const trPublicUrl =
+          typeof artifact.metadata?.tr_public_url === "string"
+            ? artifact.metadata.tr_public_url
+            : undefined;
 
         return (
           <div
@@ -275,6 +283,17 @@ export function ArtifactList({ taskId, refreshKey, projId, projectSettings, onRe
             </div>
 
             <div className="ml-3 flex shrink-0 items-center gap-1">
+              {trPublicUrl && (
+                <a
+                  href={trPublicUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  title="Open in new tab"
+                  className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                >
+                  <ExternalLink className="h-4 w-4" />
+                </a>
+              )}
               <Button
                 variant="ghost"
                 size="icon"

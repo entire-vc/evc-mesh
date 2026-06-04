@@ -166,6 +166,8 @@ type ArtifactRepository interface {
 	GetByID(ctx context.Context, id uuid.UUID) (*domain.Artifact, error)
 	Delete(ctx context.Context, id uuid.UUID) error
 	ListByTask(ctx context.Context, taskID uuid.UUID, pg pagination.Params) (*pagination.Page[domain.Artifact], error)
+	// UpdateMetadata overwrites the JSONB metadata column for a single artifact.
+	UpdateMetadata(ctx context.Context, id uuid.UUID, metadata json.RawMessage) error
 }
 
 // AgentFilter defines filtering options for listing agents.

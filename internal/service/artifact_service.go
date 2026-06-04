@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -90,6 +91,7 @@ func (s *artifactService) Upload(ctx context.Context, input UploadArtifactInput)
 		rp := s.relayPublisher
 		art := *artifact
 		stor := s.storage
+		repo := s.artifactRepo
 		go func() {
 			defer func() {
 				if r := recover(); r != nil {
@@ -111,7 +113,14 @@ func (s *artifactService) Upload(ctx context.Context, input UploadArtifactInput)
 					return
 				}
 			}
-			_ = rp.Publish(context.Background(), art.TaskID, art.Name, content, art.MimeType)
+			publicURL, _ := rp.Publish(context.Background(), art.TaskID, art.Name, content, art.MimeType)
+			// Persist the relay public URL so the UI can offer an "open in browser" link.
+			if publicURL != "" {
+				meta := mergeMetadata(art.Metadata, "tr_public_url", publicURL)
+				if upErr := repo.UpdateMetadata(context.Background(), art.ID, meta); upErr != nil {
+					log.Printf("teamrelay: failed to persist tr_public_url for artifact %s: %v", art.ID, upErr)
+				}
+			}
 		}()
 	}
 
@@ -177,4 +186,19 @@ func (s *artifactService) Delete(ctx context.Context, id uuid.UUID) error {
 func (s *artifactService) ListByTask(ctx context.Context, taskID uuid.UUID, pg pagination.Params) (*pagination.Page[domain.Artifact], error) {
 	pg.Normalize()
 	return s.artifactRepo.ListByTask(ctx, taskID, pg)
+}
+
+// mergeMetadata sets key=value in an existing JSONB metadata blob, preserving any
+// other keys. A nil/empty/invalid blob is treated as an empty object.
+func mergeMetadata(existing json.RawMessage, key, value string) json.RawMessage {
+	m := map[string]any{}
+	if len(existing) > 0 {
+		_ = json.Unmarshal(existing, &m) // on error, fall back to empty object
+	}
+	m[key] = value
+	out, err := json.Marshal(m)
+	if err != nil {
+		return existing
+	}
+	return out
 }

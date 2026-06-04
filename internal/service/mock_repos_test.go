@@ -3,6 +3,7 @@ package service
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"strings"
@@ -890,6 +891,32 @@ func (m *MockArtifactRepository) Delete(_ context.Context, id uuid.UUID) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	delete(m.items, id)
+	return nil
+}
+
+func (m *MockArtifactRepository) UpdateMetadata(_ context.Context, id uuid.UUID, metadata json.RawMessage) error {
+	if m.errToReturn != nil {
+		return m.errToReturn
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	a, ok := m.items[id]
+	if !ok {
+		return apierror.NotFound("Artifact")
+	}
+	a.Metadata = metadata
+	return nil
+}
+
+// MetadataOf returns the stored artifact's metadata under the mock's mutex, so
+// tests can read it safely while the service's background relay goroutine
+// writes via UpdateMetadata (avoids a data race under -race).
+func (m *MockArtifactRepository) MetadataOf(id uuid.UUID) json.RawMessage {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if a, ok := m.items[id]; ok && a != nil {
+		return a.Metadata
+	}
 	return nil
 }
 

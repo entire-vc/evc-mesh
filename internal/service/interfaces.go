@@ -720,8 +720,11 @@ type MentionService interface {
 }
 
 // RelayPublisher is the optional interface for publishing artifacts to Team Relay.
+// Publish returns the artifact's public (browser-renderable) URL when the relay
+// reports one, or an empty string when no URL is available (transport disabled,
+// integration off, or relay omitted public_url). Errors are best-effort context.
 type RelayPublisher interface {
-	Publish(ctx context.Context, taskID uuid.UUID, artifactName string, content []byte, contentType string) error
+	Publish(ctx context.Context, taskID uuid.UUID, artifactName string, content []byte, contentType string) (string, error)
 }
 
 // ArtifactServiceConfigurable allows optional relay publisher to be injected after construction.
