@@ -141,12 +141,12 @@ func TestArtifactService_Upload_RelayPublishWritesPublicURL(t *testing.T) {
 
 		// Relay publish + metadata write happen on a background goroutine.
 		assert.Eventually(t, func() bool {
-			stored := artifactRepo.items[artifact.ID]
-			if stored == nil || len(stored.Metadata) == 0 {
+			md := artifactRepo.MetadataOf(artifact.ID)
+			if len(md) == 0 {
 				return false
 			}
 			var m map[string]any
-			if jErr := json.Unmarshal(stored.Metadata, &m); jErr != nil {
+			if jErr := json.Unmarshal(md, &m); jErr != nil {
 				return false
 			}
 			return m["tr_public_url"] == "https://relay.example.com/mesh/foo.md"
@@ -173,11 +173,10 @@ func TestArtifactService_Upload_RelayPublishWritesPublicURL(t *testing.T) {
 
 		// Wait for the goroutine to run, then assert no tr_public_url was written.
 		assert.Eventually(t, pub.wasCalled, 2*time.Second, 10*time.Millisecond)
-		stored := artifactRepo.items[artifact.ID]
-		require.NotNil(t, stored)
-		if len(stored.Metadata) > 0 {
+		md := artifactRepo.MetadataOf(artifact.ID)
+		if len(md) > 0 {
 			var m map[string]any
-			require.NoError(t, json.Unmarshal(stored.Metadata, &m))
+			require.NoError(t, json.Unmarshal(md, &m))
 			_, has := m["tr_public_url"]
 			assert.False(t, has, "tr_public_url should not be set when relay returns empty URL")
 		}
