@@ -539,6 +539,10 @@ func (s *commentService) enforceBlockingTriage(ctx context.Context, comment *dom
 	if !hasBlockingMarker(comment.Body) {
 		return
 	}
+	// auto-mode tasks self-manage; triage escalation is suppressed.
+	if task.DelegationLevel == domain.DelegationLevelAuto {
+		return
+	}
 
 	// Human-gate: only trigger when a real user is mentioned somewhere in the body.
 	userSlug := s.firstMentionedUserSlug(ctx, wsID, comment.Body)

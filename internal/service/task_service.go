@@ -1270,6 +1270,13 @@ func (s *taskService) CheckoutTask(ctx context.Context, taskID uuid.UUID, ttlMin
 		switch status.Category {
 		case domain.StatusCategoryDone, domain.StatusCategoryCancelled:
 			return nil, apierror.BadRequest("cannot checkout a task in " + string(status.Category) + " status")
+		case domain.StatusCategoryTodo:
+			if task.DelegationLevel == domain.DelegationLevelSupervised {
+				return nil, apierror.ForbiddenWithDetails(
+					"supervised_mode_requires_manual_start",
+					"task must be moved to in_progress by a human before agent checkout",
+				)
+			}
 		}
 	}
 
@@ -1318,10 +1325,11 @@ func (s *taskService) CheckoutTask(ctx context.Context, taskID uuid.UUID, ttlMin
 	s.logActivity(ctx, task.ProjectID, taskID, "task.checkout_acquired", payload)
 
 	return &CheckoutResult{
-		TaskID:        taskID,
-		CheckoutToken: token,
-		CheckedOutBy:  actorID,
-		ExpiresAt:     expiresAt,
+		TaskID:          taskID,
+		CheckoutToken:   token,
+		CheckedOutBy:    actorID,
+		ExpiresAt:       expiresAt,
+		DelegationLevel: task.DelegationLevel,
 	}, nil
 }
 
@@ -1370,10 +1378,11 @@ func (s *taskService) ExtendCheckout(ctx context.Context, taskID, token uuid.UUI
 	}
 
 	return &CheckoutResult{
-		TaskID:        taskID,
-		CheckoutToken: token,
-		CheckedOutBy:  *task.CheckedOutBy,
-		ExpiresAt:     newExpires,
+		TaskID:          taskID,
+		CheckoutToken:   token,
+		CheckedOutBy:    *task.CheckedOutBy,
+		ExpiresAt:       newExpires,
+		DelegationLevel: task.DelegationLevel,
 	}, nil
 }
 
