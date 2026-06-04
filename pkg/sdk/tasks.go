@@ -8,53 +8,56 @@ import (
 
 // Task represents a Mesh task returned by the API.
 type Task struct {
-	ID             string         `json:"id"`
-	ProjectID      string         `json:"project_id"`
-	StatusID       string         `json:"status_id"`
-	Title          string         `json:"title"`
-	Description    string         `json:"description,omitempty"`
-	Priority       string         `json:"priority"`
-	AssigneeID     *string        `json:"assignee_id,omitempty"`
-	AssigneeType   string         `json:"assignee_type,omitempty"`
-	ParentTaskID   *string        `json:"parent_task_id,omitempty"`
-	Position       float64        `json:"position"`
-	DueDate        *string        `json:"due_date,omitempty"`
-	EstimatedHours *float64       `json:"estimated_hours,omitempty"`
-	Labels         []string       `json:"labels,omitempty"`
-	CustomFields   map[string]any `json:"custom_fields,omitempty"`
-	CreatedBy      string         `json:"created_by"`
-	CreatedByType  string         `json:"created_by_type"`
-	CreatedAt      string         `json:"created_at"`
-	UpdatedAt      string         `json:"updated_at"`
-	CompletedAt    *string        `json:"completed_at,omitempty"`
+	ID              string         `json:"id"`
+	ProjectID       string         `json:"project_id"`
+	StatusID        string         `json:"status_id"`
+	Title           string         `json:"title"`
+	Description     string         `json:"description,omitempty"`
+	Priority        string         `json:"priority"`
+	AssigneeID      *string        `json:"assignee_id,omitempty"`
+	AssigneeType    string         `json:"assignee_type,omitempty"`
+	ParentTaskID    *string        `json:"parent_task_id,omitempty"`
+	Position        float64        `json:"position"`
+	DueDate         *string        `json:"due_date,omitempty"`
+	EstimatedHours  *float64       `json:"estimated_hours,omitempty"`
+	Labels          []string       `json:"labels,omitempty"`
+	CustomFields    map[string]any `json:"custom_fields,omitempty"`
+	CreatedBy       string         `json:"created_by"`
+	CreatedByType   string         `json:"created_by_type"`
+	CreatedAt       string         `json:"created_at"`
+	UpdatedAt       string         `json:"updated_at"`
+	CompletedAt     *string        `json:"completed_at,omitempty"`
+	DelegationLevel string         `json:"delegation_level"`
 	// URL is the canonical short deep-link returned by the API.
 	URL string `json:"url,omitempty"`
 }
 
 // CreateTaskInput is the request body for creating a new task.
 type CreateTaskInput struct {
-	Title          string         `json:"title"`
-	Description    string         `json:"description,omitempty"`
-	Priority       string         `json:"priority,omitempty"` // urgent|high|medium|low|none
-	StatusID       string         `json:"status_id,omitempty"`
-	Labels         []string       `json:"labels,omitempty"`
-	DueDate        *string        `json:"due_date,omitempty"`
-	EstimatedHours *float64       `json:"estimated_hours,omitempty"`
-	CustomFields   map[string]any `json:"custom_fields,omitempty"`
+	Title           string         `json:"title"`
+	Description     string         `json:"description,omitempty"`
+	Priority        string         `json:"priority,omitempty"` // urgent|high|medium|low|none
+	StatusID        string         `json:"status_id,omitempty"`
+	Labels          []string       `json:"labels,omitempty"`
+	DueDate         *string        `json:"due_date,omitempty"`
+	EstimatedHours  *float64       `json:"estimated_hours,omitempty"`
+	CustomFields    map[string]any `json:"custom_fields,omitempty"`
+	DelegationLevel string         `json:"delegation_level,omitempty"` // auto|review|supervised
 }
 
 // UpdateTaskInput is the partial update body for a task.
 // Only non-nil pointer fields are applied.
 type UpdateTaskInput struct {
-	Title          *string        `json:"title,omitempty"`
-	Description    *string        `json:"description,omitempty"`
-	Priority       *string        `json:"priority,omitempty"`
-	AssigneeID     *string        `json:"assignee_id,omitempty"`
-	AssigneeType   *string        `json:"assignee_type,omitempty"`
-	DueDate        *string        `json:"due_date,omitempty"`
-	EstimatedHours *float64       `json:"estimated_hours,omitempty"`
-	Labels         *[]string      `json:"labels,omitempty"`
-	CustomFields   map[string]any `json:"custom_fields,omitempty"`
+	Title           *string        `json:"title,omitempty"`
+	Description     *string        `json:"description,omitempty"`
+	Priority        *string        `json:"priority,omitempty"`
+	AssigneeID      *string        `json:"assignee_id,omitempty"`
+	AssigneeType    *string        `json:"assignee_type,omitempty"`
+	DueDate         *string        `json:"due_date,omitempty"`
+	EstimatedHours  *float64       `json:"estimated_hours,omitempty"`
+	Labels          *[]string      `json:"labels,omitempty"`
+	CustomFields    map[string]any `json:"custom_fields,omitempty"`
+	DelegationLevel *string        `json:"delegation_level,omitempty"` // auto|review|supervised
 }
 
 // ListOption configures task list queries.

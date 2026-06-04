@@ -28,6 +28,15 @@ const (
 	PriorityNone   Priority = "none"
 )
 
+// DelegationLevel controls the autonomy level of an agent working on a task.
+type DelegationLevel string
+
+const (
+	DelegationLevelAuto       DelegationLevel = "auto"
+	DelegationLevelReview     DelegationLevel = "review"
+	DelegationLevelSupervised DelegationLevel = "supervised"
+)
+
 // ActorType represents who performed an action (creating tasks, comments, etc.).
 type ActorType string
 
@@ -62,6 +71,8 @@ type Task struct {
 	// Recurring series fields — populated when the task is an instance of a recurring schedule.
 	RecurringScheduleID     *uuid.UUID `json:"recurring_schedule_id,omitempty" db:"recurring_schedule_id"`
 	RecurringInstanceNumber *int       `json:"recurring_instance_number,omitempty" db:"recurring_instance_number"`
+
+	DelegationLevel DelegationLevel `json:"delegation_level" db:"delegation_level"`
 
 	// Checkout fields — set when an agent has an exclusive application-level lock on the task.
 	CheckedOutBy       *uuid.UUID `json:"checked_out_by,omitempty" db:"checked_out_by"`
