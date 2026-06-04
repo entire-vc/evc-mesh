@@ -20,6 +20,8 @@ import { useProjectStore } from "@/stores/project";
 import { useMemberStore } from "@/stores/member";
 import { useAuthStore } from "@/stores/auth";
 import { useTemplateStore } from "@/stores/template";
+import { useWorkspaceStore } from "@/stores/workspace";
+import { useRulesStore } from "@/stores/rules";
 import { getAccessToken } from "@/lib/api";
 import type { AssigneeType, Artifact, Priority, CreateTaskRequest } from "@/types";
 
@@ -49,6 +51,8 @@ export function CreateTaskDialog({
   const { projectMembers, fetchProjectMembers } = useMemberStore();
   const { user } = useAuthStore();
   const { templates, fetchTemplates } = useTemplateStore();
+  const { currentWorkspace } = useWorkspaceStore();
+  const { teamDirectory, fetchTeamDirectory } = useRulesStore();
 
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -91,6 +95,13 @@ export function CreateTaskDialog({
       }
     }
   }, [open, currentProject, fetchProjectMembers, fetchTemplates]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Lazy-fetch team directory so workspace owner appears in picker
+  useEffect(() => {
+    if (open && currentWorkspace && !teamDirectory) {
+      void fetchTeamDirectory(currentWorkspace.id);
+    }
+  }, [open, currentWorkspace, teamDirectory, fetchTeamDirectory]);
 
   // Focus label input when adding starts
   useEffect(() => {
@@ -335,6 +346,14 @@ export function CreateTaskDialog({
               {user && !projectMembers.some((m) => m.user_id === user.id) && (
                 <option value={`user:${user.id}`}>{user.name} (you)</option>
               )}
+              {(() => {
+                const ownerId = currentWorkspace?.owner_id;
+                if (!ownerId || user?.id === ownerId) return null;
+                if (projectMembers.some((m) => m.user_id === ownerId)) return null;
+                const ownerName = teamDirectory?.humans.find((h) => h.id === ownerId)?.name;
+                if (!ownerName) return null;
+                return <option key={`owner-${ownerId}`} value={`user:${ownerId}`}>{ownerName}</option>;
+              })()}
               {projectMembers.map((m) => {
                 if (m.user) {
                   const isSelf = user && m.user.id === user.id;
