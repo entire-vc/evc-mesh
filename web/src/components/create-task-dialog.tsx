@@ -24,7 +24,7 @@ import { useWorkspaceStore } from "@/stores/workspace";
 import { useRulesStore } from "@/stores/rules";
 import { getAccessToken } from "@/lib/api";
 import type { AssigneeType, Artifact, Priority, DelegationLevel, CreateTaskRequest } from "@/types";
-import { delegationLevelConfig } from "@/lib/utils";
+import { DelegationLevelSelect } from "@/components/delegation-level-select";
 
 interface CreateTaskDialogProps {
   open: boolean;
@@ -40,8 +40,6 @@ const priorities: { value: Priority; label: string }[] = [
   { value: "high", label: "High" },
   { value: "urgent", label: "Urgent" },
 ];
-
-const delegationLevels: DelegationLevel[] = ["review", "auto", "supervised"];
 
 export function CreateTaskDialog({
   open,
@@ -336,22 +334,10 @@ export function CreateTaskDialog({
 
             {/* Delegation mode */}
             <label className="text-xs text-muted-foreground">Delegation</label>
-            <div className="space-y-0.5">
-              <Select
-                value={delegationLevel}
-                onChange={(e) => setDelegationLevel(e.target.value as DelegationLevel)}
-                className="h-7 text-xs"
-              >
-                {delegationLevels.map((lvl) => (
-                  <option key={lvl} value={lvl}>
-                    {delegationLevelConfig[lvl].label}
-                  </option>
-                ))}
-              </Select>
-              <p className="text-[10px] text-muted-foreground leading-tight">
-                {delegationLevelConfig[delegationLevel].description}
-              </p>
-            </div>
+            <DelegationLevelSelect
+              value={delegationLevel}
+              onChange={setDelegationLevel}
+            />
 
             {/* Assignee */}
             <label className="flex items-center gap-1 text-xs text-muted-foreground">
