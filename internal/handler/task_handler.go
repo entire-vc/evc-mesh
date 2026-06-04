@@ -56,17 +56,18 @@ func NewTaskHandler(ts service.TaskService) *TaskHandler {
 
 // createTaskRequest represents the JSON body for creating a task.
 type createTaskRequest struct {
-	Title          string              `json:"title"`
-	Description    string              `json:"description"`
-	Priority       domain.Priority     `json:"priority"`
-	StatusID       string              `json:"status_id"`
-	ParentTaskID   *uuid.UUID          `json:"parent_task_id"`
-	AssigneeID     *uuid.UUID          `json:"assignee_id"`
-	AssigneeType   domain.AssigneeType `json:"assignee_type"`
-	DueDate        *time.Time          `json:"due_date"`
-	EstimatedHours *float64            `json:"estimated_hours"`
-	Labels         []string            `json:"labels"`
-	CustomFields   json.RawMessage     `json:"custom_fields"`
+	Title           string                  `json:"title"`
+	Description     string                  `json:"description"`
+	Priority        domain.Priority         `json:"priority"`
+	StatusID        string                  `json:"status_id"`
+	ParentTaskID    *uuid.UUID              `json:"parent_task_id"`
+	AssigneeID      *uuid.UUID              `json:"assignee_id"`
+	AssigneeType    domain.AssigneeType     `json:"assignee_type"`
+	DueDate         *time.Time              `json:"due_date"`
+	EstimatedHours  *float64                `json:"estimated_hours"`
+	Labels          []string                `json:"labels"`
+	CustomFields    json.RawMessage         `json:"custom_fields"`
+	DelegationLevel domain.DelegationLevel  `json:"delegation_level"`
 }
 
 // flexTime is a *time.Time that also accepts date-only strings ("2026-03-20")
@@ -99,15 +100,16 @@ func (f *flexTime) UnmarshalJSON(b []byte) error {
 
 // updateTaskRequest represents the JSON body for partially updating a task.
 type updateTaskRequest struct {
-	Title          *string              `json:"title"`
-	Description    *string              `json:"description"`
-	Priority       *domain.Priority     `json:"priority"`
-	AssigneeID     *uuid.UUID           `json:"assignee_id"`
-	AssigneeType   *domain.AssigneeType `json:"assignee_type"`
-	DueDate        flexTime             `json:"due_date"`
-	EstimatedHours *float64             `json:"estimated_hours"`
-	Labels         *[]string            `json:"labels"`
-	CustomFields   json.RawMessage      `json:"custom_fields"`
+	Title           *string                  `json:"title"`
+	Description     *string                  `json:"description"`
+	Priority        *domain.Priority         `json:"priority"`
+	AssigneeID      *uuid.UUID               `json:"assignee_id"`
+	AssigneeType    *domain.AssigneeType     `json:"assignee_type"`
+	DueDate         flexTime                 `json:"due_date"`
+	EstimatedHours  *float64                 `json:"estimated_hours"`
+	Labels          *[]string                `json:"labels"`
+	CustomFields    json.RawMessage          `json:"custom_fields"`
+	DelegationLevel *domain.DelegationLevel  `json:"delegation_level"`
 }
 
 // moveTaskRequest represents the JSON body for moving a task.
@@ -185,22 +187,28 @@ func (h *TaskHandler) Create(c echo.Context) error {
 		createdByType = domain.ActorTypeUser
 	}
 
+	delegationLevel := req.DelegationLevel
+	if delegationLevel == "" {
+		delegationLevel = domain.DelegationLevelReview
+	}
+
 	task := &domain.Task{
-		ID:             uuid.New(),
-		ProjectID:      projectID,
-		StatusID:       statusID,
-		Title:          req.Title,
-		Description:    req.Description,
-		Priority:       priority,
-		ParentTaskID:   req.ParentTaskID,
-		AssigneeID:     req.AssigneeID,
-		AssigneeType:   assigneeType,
-		DueDate:        req.DueDate,
-		EstimatedHours: req.EstimatedHours,
-		Labels:         pq.StringArray(req.Labels),
-		CustomFields:   req.CustomFields,
-		CreatedBy:      createdBy,
-		CreatedByType:  createdByType,
+		ID:              uuid.New(),
+		ProjectID:       projectID,
+		StatusID:        statusID,
+		Title:           req.Title,
+		Description:     req.Description,
+		Priority:        priority,
+		ParentTaskID:    req.ParentTaskID,
+		AssigneeID:      req.AssigneeID,
+		AssigneeType:    assigneeType,
+		DueDate:         req.DueDate,
+		EstimatedHours:  req.EstimatedHours,
+		Labels:          pq.StringArray(req.Labels),
+		CustomFields:    req.CustomFields,
+		CreatedBy:       createdBy,
+		CreatedByType:   createdByType,
+		DelegationLevel: delegationLevel,
 	}
 
 	if err := h.taskService.Create(c.Request().Context(), task); err != nil {
@@ -356,6 +364,9 @@ func (h *TaskHandler) Update(c echo.Context) error {
 	}
 	if req.CustomFields != nil {
 		task.CustomFields = req.CustomFields
+	}
+	if req.DelegationLevel != nil {
+		task.DelegationLevel = *req.DelegationLevel
 	}
 
 	if err := h.taskService.Update(c.Request().Context(), task); err != nil {

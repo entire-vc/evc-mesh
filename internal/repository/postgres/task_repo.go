@@ -68,7 +68,8 @@ const taskBaseColsNoAlias = `
 	task_number, created_by, created_by_type, created_at, updated_at,
 	completed_at, deleted_at,
 	recurring_schedule_id, recurring_instance_number,
-	checked_out_by, checkout_token, checkout_expires, checkout_acquired_at`
+	checked_out_by, checkout_token, checkout_expires, checkout_acquired_at,
+	delegation_level`
 
 const taskComputedCols = `
 	(SELECT COUNT(*) FROM tasks st WHERE st.parent_task_id = tasks.id AND st.deleted_at IS NULL) AS subtask_count,
@@ -137,6 +138,8 @@ type taskRow struct {
 	RecurringScheduleID     *uuid.UUID `db:"recurring_schedule_id"`
 	RecurringInstanceNumber *int       `db:"recurring_instance_number"`
 
+	DelegationLevel domain.DelegationLevel `db:"delegation_level"`
+
 	// Checkout fields.
 	CheckedOutBy       *uuid.UUID `db:"checked_out_by"`
 	CheckoutToken      *uuid.UUID `db:"checkout_token"`
@@ -174,6 +177,7 @@ func (r *taskRow) toDomain() domain.Task {
 		CompletedAt:             r.CompletedAt,
 		RecurringScheduleID:     r.RecurringScheduleID,
 		RecurringInstanceNumber: r.RecurringInstanceNumber,
+		DelegationLevel:         r.DelegationLevel,
 		CheckedOutBy:            r.CheckedOutBy,
 		CheckoutToken:           r.CheckoutToken,
 		CheckoutExpires:         r.CheckoutExpires,
@@ -217,14 +221,16 @@ func (r *TaskRepo) Create(ctx context.Context, task *domain.Task) error {
 			assignee_id, assignee_type, priority, parent_task_id, position,
 			due_date, estimated_hours, custom_fields, labels,
 			task_number, created_by, created_by_type, created_at, updated_at, completed_at,
-			recurring_schedule_id, recurring_instance_number
+			recurring_schedule_id, recurring_instance_number,
+			delegation_level
 		) VALUES (
 			$1, $2::uuid, $3, $4, $5,
 			$6, $7, $8, $9, $10,
 			$11, $12, $13, $14,
 			(SELECT COALESCE(MAX(task_number), 0) + 1 FROM tasks WHERE project_id = $2::uuid),
 			$15, $16, $17, $18, $19,
-			$20, $21
+			$20, $21,
+			$22
 		)
 	`
 	customFields := task.CustomFields
@@ -235,6 +241,10 @@ func (r *TaskRepo) Create(ctx context.Context, task *domain.Task) error {
 	if labels == nil {
 		labels = pq.StringArray{}
 	}
+	delegationLevel := task.DelegationLevel
+	if delegationLevel == "" {
+		delegationLevel = domain.DelegationLevelReview
+	}
 	dbStart := time.Now()
 	_, err := r.db.ExecContext(ctx, q,
 		task.ID, task.ProjectID, task.StatusID, task.Title, task.Description,
@@ -242,6 +252,7 @@ func (r *TaskRepo) Create(ctx context.Context, task *domain.Task) error {
 		task.DueDate, task.EstimatedHours, customFields, labels,
 		task.CreatedBy, task.CreatedByType, task.CreatedAt, task.UpdatedAt, task.CompletedAt,
 		task.RecurringScheduleID, task.RecurringInstanceNumber,
+		delegationLevel,
 	)
 	pkgmetrics.RecordDBQuery("task.create", time.Since(dbStart))
 	return err
@@ -361,7 +372,8 @@ func (r *TaskRepo) Update(ctx context.Context, task *domain.Task) error {
 		    parent_task_id = $8, position = $9, due_date = $10,
 		    estimated_hours = $11, custom_fields = $12, labels = $13,
 		    updated_at = $14, completed_at = $15,
-		    recurring_schedule_id = $16, recurring_instance_number = $17
+		    recurring_schedule_id = $16, recurring_instance_number = $17,
+		    delegation_level = $18
 		WHERE id = $1 AND deleted_at IS NULL
 	`
 	customFields := task.CustomFields
@@ -380,6 +392,7 @@ func (r *TaskRepo) Update(ctx context.Context, task *domain.Task) error {
 		task.EstimatedHours, customFields, labels,
 		task.UpdatedAt, task.CompletedAt,
 		task.RecurringScheduleID, task.RecurringInstanceNumber,
+		task.DelegationLevel,
 	)
 	pkgmetrics.RecordDBQuery("task.update", time.Since(dbStart))
 	if err != nil {
