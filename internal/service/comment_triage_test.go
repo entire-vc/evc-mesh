@@ -299,6 +299,28 @@ func TestEnforceBlockingTriage_QuotedMarker_NoOp(t *testing.T) {
 	assert.Empty(t, env.systemComments())
 }
 
+func TestEnforceBlockingTriage_AutoMode_SkipsTriage(t *testing.T) {
+	// auto delegation_level: agents self-manage, so blocking markers must NOT trigger
+	// triage escalation even when a human is mentioned.
+	env := setupTriageEnv(t, true)
+	taskID := uuid.New()
+	env.taskRepo.items[taskID] = &domain.Task{
+		ID: taskID, ProjectID: env.projID, StatusID: env.inProgressID,
+		Title: "Auto task", DelegationLevel: domain.DelegationLevelAuto,
+	}
+
+	comment := &domain.Comment{
+		TaskID:     taskID,
+		AuthorID:   uuid.New(),
+		AuthorType: domain.ActorTypeAgent,
+		Body:       "❓ **Blocking @pavel**: need decision",
+	}
+	require.NoError(t, env.svc.Create(context.Background(), comment))
+
+	assert.Empty(t, env.taskMover.calls(), "auto-mode must not trigger triage move")
+	assert.Empty(t, env.systemComments(), "auto-mode must not create system comment")
+}
+
 // Without a TaskService wired, the enforcement path is skipped entirely (no panic).
 func TestEnforceBlockingTriage_NoTaskService_SkipsSafely(t *testing.T) {
 	commentRepo := NewMockCommentRepository()

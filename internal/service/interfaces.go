@@ -74,10 +74,11 @@ type BulkUpdateTasksResult struct {
 
 // CheckoutResult is returned when a checkout is successfully acquired or extended.
 type CheckoutResult struct {
-	TaskID        uuid.UUID `json:"task_id"`
-	CheckoutToken uuid.UUID `json:"checkout_token"`
-	CheckedOutBy  uuid.UUID `json:"checked_out_by"`
-	ExpiresAt     time.Time `json:"expires_at"`
+	TaskID          uuid.UUID              `json:"task_id"`
+	CheckoutToken   uuid.UUID              `json:"checkout_token"`
+	CheckedOutBy    uuid.UUID              `json:"checked_out_by"`
+	ExpiresAt       time.Time              `json:"expires_at"`
+	DelegationLevel domain.DelegationLevel `json:"delegation_level"`
 }
 
 // CheckoutConflictError is returned when CheckoutTask finds the task locked by

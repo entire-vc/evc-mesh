@@ -473,3 +473,90 @@ func TestMockTaskRepository_ReleaseExpiredCheckouts_NoLocks(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int64(0), n)
 }
+
+// ---------------------------------------------------------------------------
+// delegation_level enforcement
+// ---------------------------------------------------------------------------
+
+func TestCheckoutTask_ResultIncludesDelegationLevel(t *testing.T) {
+	for _, level := range []domain.DelegationLevel{
+		domain.DelegationLevelAuto,
+		domain.DelegationLevelReview,
+		domain.DelegationLevelSupervised,
+	} {
+		t.Run(string(level), func(t *testing.T) {
+			svc, taskRepo, statusRepo, _ := setupCheckoutTaskService()
+			statusID := uuid.New()
+			taskID := uuid.New()
+			projectID := uuid.New()
+			// supervised in in_progress so the checkout is not blocked
+			statusRepo.items[statusID] = &domain.TaskStatus{ID: statusID, ProjectID: projectID, Category: domain.StatusCategoryInProgress, Name: "In Progress"}
+			taskRepo.items[taskID] = &domain.Task{
+				ID: taskID, ProjectID: projectID, StatusID: statusID,
+				Title: "Task", DelegationLevel: level,
+			}
+
+			result, err := svc.CheckoutTask(agentContext(uuid.New()), taskID, 30, nil)
+			require.NoError(t, err)
+			require.NotNil(t, result)
+			assert.Equal(t, level, result.DelegationLevel)
+		})
+	}
+}
+
+func TestCheckoutTask_SupervisedTodoBlocks403(t *testing.T) {
+	svc, taskRepo, statusRepo, _ := setupCheckoutTaskService()
+	statusID := uuid.New()
+	taskID := uuid.New()
+	projectID := uuid.New()
+	statusRepo.items[statusID] = &domain.TaskStatus{ID: statusID, ProjectID: projectID, Category: domain.StatusCategoryTodo, Name: "Todo"}
+	taskRepo.items[taskID] = &domain.Task{
+		ID: taskID, ProjectID: projectID, StatusID: statusID,
+		Title: "Supervised task", DelegationLevel: domain.DelegationLevelSupervised,
+	}
+
+	_, err := svc.CheckoutTask(agentContext(uuid.New()), taskID, 0, nil)
+	require.Error(t, err)
+
+	var apiErr *apierror.Error
+	require.ErrorAs(t, err, &apiErr)
+	assert.Equal(t, http.StatusForbidden, apiErr.Code)
+	assert.Equal(t, "supervised_mode_requires_manual_start", apiErr.Message)
+	assert.NotEmpty(t, apiErr.Details)
+}
+
+func TestCheckoutTask_SupervisedInProgressSucceeds(t *testing.T) {
+	// Human manually moved the task to in_progress — supervised checkout must proceed.
+	svc, taskRepo, statusRepo, _ := setupCheckoutTaskService()
+	statusID := uuid.New()
+	taskID := uuid.New()
+	projectID := uuid.New()
+	statusRepo.items[statusID] = &domain.TaskStatus{ID: statusID, ProjectID: projectID, Category: domain.StatusCategoryInProgress, Name: "In Progress"}
+	taskRepo.items[taskID] = &domain.Task{
+		ID: taskID, ProjectID: projectID, StatusID: statusID,
+		Title: "Supervised task", DelegationLevel: domain.DelegationLevelSupervised,
+	}
+
+	result, err := svc.CheckoutTask(agentContext(uuid.New()), taskID, 30, nil)
+	require.NoError(t, err, "supervised checkout must succeed once task is in in_progress")
+	require.NotNil(t, result)
+	assert.Equal(t, domain.DelegationLevelSupervised, result.DelegationLevel)
+}
+
+func TestCheckoutTask_ReviewModeTodoUnchanged(t *testing.T) {
+	// review mode (the safe default) must be unaffected by the supervised guard.
+	svc, taskRepo, statusRepo, _ := setupCheckoutTaskService()
+	statusID := uuid.New()
+	taskID := uuid.New()
+	projectID := uuid.New()
+	statusRepo.items[statusID] = &domain.TaskStatus{ID: statusID, ProjectID: projectID, Category: domain.StatusCategoryTodo, Name: "Todo"}
+	taskRepo.items[taskID] = &domain.Task{
+		ID: taskID, ProjectID: projectID, StatusID: statusID,
+		Title: "Review task", DelegationLevel: domain.DelegationLevelReview,
+	}
+
+	result, err := svc.CheckoutTask(agentContext(uuid.New()), taskID, 30, nil)
+	require.NoError(t, err, "review mode must allow checkout from todo status")
+	require.NotNil(t, result)
+	assert.Equal(t, domain.DelegationLevelReview, result.DelegationLevel)
+}

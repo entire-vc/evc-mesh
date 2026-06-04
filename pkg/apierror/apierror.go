@@ -63,6 +63,11 @@ func Forbidden(message string) *Error {
 	return &Error{Code: http.StatusForbidden, Message: message}
 }
 
+// ForbiddenWithDetails creates a 403 error with details.
+func ForbiddenWithDetails(message, details string) *Error {
+	return &Error{Code: http.StatusForbidden, Message: message, Details: details}
+}
+
 // NotFound creates a 404 error.
 func NotFound(resource string) *Error {
 	return &Error{
