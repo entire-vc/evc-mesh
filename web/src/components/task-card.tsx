@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { formatRelative } from "@/lib/utils";
 import { AssigneeAvatar } from "@/components/assignee-avatar";
 import { PriorityFlag } from "@/components/priority-flag";
+import { DelegationLevelBadge } from "@/components/delegation-level-select";
 import type { Task, StatusCategory } from "@/types";
 
 const priorityBorderColors: Record<string, string> = {
@@ -128,6 +129,10 @@ export const TaskCard = forwardRef<HTMLDivElement, TaskCardProps>(
 
           {task.priority !== "none" && (
             <PriorityFlag priority={task.priority} size="sm" />
+          )}
+
+          {task.delegation_level && task.delegation_level !== "review" && (
+            <DelegationLevelBadge value={task.delegation_level} />
           )}
 
           {hasArtifacts && (

@@ -60,7 +60,8 @@ import {
   toDateTimeLocal,
 } from "@/lib/utils";
 import { toast } from "@/components/ui/toast";
-import type { AssigneeType, Priority } from "@/types";
+import type { AssigneeType, Priority, DelegationLevel } from "@/types";
+import { DelegationLevelSelect } from "@/components/delegation-level-select";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -76,7 +77,6 @@ type MobileTabId =
 type RightTabId = "comments" | "subtasks" | "artifacts" | "activity";
 
 const priorities: Priority[] = ["urgent", "high", "medium", "low", "none"];
-
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const MOBILE_TABS: { id: MobileTabId; label: string }[] = [
@@ -362,6 +362,18 @@ export function TaskPanel({
     }
   };
 
+  const handleDelegationLevelChange = async (level: DelegationLevel) => {
+    if (!currentTask || level === (currentTask.delegation_level ?? "review")) return;
+    try {
+      await updateTask(currentTask.id, { delegation_level: level });
+      onTaskUpdated?.();
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "Failed to change delegation mode",
+      );
+    }
+  };
+
   const handleAssigneeChange = async (value: string) => {
     if (!currentTask) return;
     try {
@@ -591,6 +603,15 @@ export function TaskPanel({
             </option>
           ))}
         </Select>
+
+        {/* Delegation mode */}
+        <label className="pt-1 text-xs text-muted-foreground">
+          Delegation
+        </label>
+        <DelegationLevelSelect
+          value={currentTask.delegation_level}
+          onChange={(level) => void handleDelegationLevelChange(level)}
+        />
 
         {/* Assignee */}
         <label className="flex items-center gap-1 pt-1 text-xs text-muted-foreground">

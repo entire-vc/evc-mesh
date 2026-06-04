@@ -1,5 +1,5 @@
 import { format, formatDistanceToNow, parseISO } from "date-fns";
-import type { Priority, StatusCategory, Task, CreateTaskRequest } from "@/types";
+import type { Priority, DelegationLevel, StatusCategory, Task, CreateTaskRequest } from "@/types";
 
 export function formatDate(dateString: string): string {
   return format(parseISO(dateString), "MMM d, yyyy");
@@ -66,6 +66,27 @@ export const priorityConfig: Record<
   medium: { label: "Medium", color: "text-yellow-500" },
   low: { label: "Low", color: "text-blue-500" },
   none: { label: "None", color: "text-muted-foreground" },
+};
+
+export const delegationLevelConfig: Record<
+  DelegationLevel,
+  { label: string; description: string; color: string }
+> = {
+  review: {
+    label: "Review required",
+    description: "Agent prepares artifact, waits for approval before executing.",
+    color: "text-purple-500",
+  },
+  auto: {
+    label: "Auto-execute",
+    description: "Agent completes task autonomously, notifies only.",
+    color: "text-green-500",
+  },
+  supervised: {
+    label: "Supervised",
+    description: "Agent proposes a plan; human triggers execution.",
+    color: "text-blue-500",
+  },
 };
 
 export const statusCategoryConfig: Record<
