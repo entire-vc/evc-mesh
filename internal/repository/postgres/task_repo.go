@@ -384,6 +384,10 @@ func (r *TaskRepo) Update(ctx context.Context, task *domain.Task) error {
 	if labels == nil {
 		labels = pq.StringArray{}
 	}
+	delegationLevel := task.DelegationLevel
+	if delegationLevel == "" {
+		delegationLevel = domain.DelegationLevelReview
+	}
 	dbStart := time.Now()
 	res, err := r.db.ExecContext(ctx, q,
 		task.ID, task.StatusID, task.Title, task.Description,
@@ -392,7 +396,7 @@ func (r *TaskRepo) Update(ctx context.Context, task *domain.Task) error {
 		task.EstimatedHours, customFields, labels,
 		task.UpdatedAt, task.CompletedAt,
 		task.RecurringScheduleID, task.RecurringInstanceNumber,
-		task.DelegationLevel,
+		delegationLevel,
 	)
 	pkgmetrics.RecordDBQuery("task.update", time.Since(dbStart))
 	if err != nil {
