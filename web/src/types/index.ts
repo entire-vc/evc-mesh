@@ -2,6 +2,7 @@
 
 export type AssigneeType = "user" | "agent" | "unassigned";
 export type Priority = "urgent" | "high" | "medium" | "low" | "none";
+export type DelegationLevel = "review" | "auto" | "supervised";
 export type ActorType = "user" | "agent" | "system";
 export type StatusCategory =
   | "backlog"
@@ -207,6 +208,7 @@ export interface Task {
   assignee_name?: string | null;
   created_by_name?: string | null;
   priority: Priority;
+  delegation_level?: DelegationLevel;
   parent_task_id: string | null;
   position: number;
   due_date: string | null;
@@ -403,6 +405,7 @@ export interface CreateTaskRequest {
   title: string;
   description?: string;
   priority?: Priority;
+  delegation_level?: DelegationLevel;
   assignee_id?: string;
   assignee_type?: AssigneeType;
   labels?: string[];
@@ -416,6 +419,7 @@ export interface UpdateTaskRequest {
   title?: string;
   description?: string;
   priority?: Priority;
+  delegation_level?: DelegationLevel;
   assignee_id?: string | null;
   assignee_type?: AssigneeType;
   labels?: string[];

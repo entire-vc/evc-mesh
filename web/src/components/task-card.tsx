@@ -3,7 +3,7 @@ import { AlignLeft, ExternalLink, GitBranch, Paperclip, Pencil, RefreshCw } from
 import { parseISO } from "date-fns";
 import { cn } from "@/lib/cn";
 import { Badge } from "@/components/ui/badge";
-import { formatRelative } from "@/lib/utils";
+import { formatRelative, delegationLevelConfig } from "@/lib/utils";
 import { AssigneeAvatar } from "@/components/assignee-avatar";
 import { PriorityFlag } from "@/components/priority-flag";
 import type { Task, StatusCategory } from "@/types";
@@ -128,6 +128,15 @@ export const TaskCard = forwardRef<HTMLDivElement, TaskCardProps>(
 
           {task.priority !== "none" && (
             <PriorityFlag priority={task.priority} size="sm" />
+          )}
+
+          {task.delegation_level && task.delegation_level !== "review" && (
+            <span
+              className={cn("text-[10px] font-medium", delegationLevelConfig[task.delegation_level].color)}
+              title={delegationLevelConfig[task.delegation_level].description}
+            >
+              {delegationLevelConfig[task.delegation_level].label}
+            </span>
           )}
 
           {hasArtifacts && (

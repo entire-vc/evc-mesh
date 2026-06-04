@@ -53,10 +53,11 @@ import {
   formatRelative,
   fromDateTimeLocal,
   priorityConfig,
+  delegationLevelConfig,
   toDateTimeLocal,
 } from "@/lib/utils";
 import { toast } from "@/components/ui/toast";
-import type { AssigneeType, Priority } from "@/types";
+import type { AssigneeType, Priority, DelegationLevel } from "@/types";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -65,6 +66,7 @@ import type { AssigneeType, Priority } from "@/types";
 type RightTabId = "comments" | "subtasks" | "artifacts" | "activity";
 
 const priorities: Priority[] = ["urgent", "high", "medium", "low", "none"];
+const delegationLevels: DelegationLevel[] = ["review", "auto", "supervised"];
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -320,6 +322,16 @@ export function TaskSlideOver({
       onTaskUpdated?.();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to change priority");
+    }
+  };
+
+  const handleDelegationLevelChange = async (level: DelegationLevel) => {
+    if (!currentTask || level === (currentTask.delegation_level ?? "review")) return;
+    try {
+      await updateTask(currentTask.id, { delegation_level: level });
+      onTaskUpdated?.();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to change delegation mode");
     }
   };
 
@@ -687,6 +699,29 @@ export function TaskSlideOver({
                         </option>
                       ))}
                     </Select>
+
+                    {/* Delegation mode */}
+                    <label className="pt-1 text-xs text-muted-foreground">
+                      Delegation
+                    </label>
+                    <div className="space-y-0.5">
+                      <Select
+                        value={currentTask.delegation_level ?? "review"}
+                        onChange={(e) =>
+                          void handleDelegationLevelChange(e.target.value as DelegationLevel)
+                        }
+                        className="h-7 text-xs"
+                      >
+                        {delegationLevels.map((lvl) => (
+                          <option key={lvl} value={lvl}>
+                            {delegationLevelConfig[lvl].label}
+                          </option>
+                        ))}
+                      </Select>
+                      <p className="text-[10px] text-muted-foreground leading-tight">
+                        {delegationLevelConfig[currentTask.delegation_level ?? "review"].description}
+                      </p>
+                    </div>
 
                     {/* Assignee */}
                     <label className="flex items-center gap-1 pt-1 text-xs text-muted-foreground">
