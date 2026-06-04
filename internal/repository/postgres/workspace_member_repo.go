@@ -83,7 +83,7 @@ func (r *WorkspaceMemberRepo) List(ctx context.Context, workspaceID uuid.UUID) (
 	const q = `
 		SELECT
 			wm.id, wm.workspace_id, wm.user_id, wm.role, wm.invited_by, wm.created_at, wm.updated_at,
-			u.id AS u_id, u.email AS u_email, u.display_name AS u_display_name, u.avatar_url AS u_avatar_url
+			u.id AS u_id, u.email AS u_email, u.display_name AS u_display_name, COALESCE(u.avatar_url, '') AS u_avatar_url
 		FROM workspace_members wm
 		JOIN users u ON u.id = wm.user_id
 		WHERE wm.workspace_id = $1
@@ -152,7 +152,7 @@ func (r *WorkspaceMemberRepo) ListWithProjects(ctx context.Context, workspaceID 
 	const q = `
 		SELECT
 			wm.id, wm.workspace_id, wm.user_id, wm.role, wm.invited_by, wm.created_at, wm.updated_at,
-			u.id AS u_id, u.email AS u_email, u.display_name AS u_display_name, u.avatar_url AS u_avatar_url,
+			u.id AS u_id, u.email AS u_email, u.display_name AS u_display_name, COALESCE(u.avatar_url, '') AS u_avatar_url,
 			COALESCE(
 			    json_agg(DISTINCT p.name) FILTER (WHERE p.id IS NOT NULL),
 			    '[]'::json

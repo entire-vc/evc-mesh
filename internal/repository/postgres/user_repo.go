@@ -46,7 +46,7 @@ func (r *UserRepo) UsernameExists(ctx context.Context, username string) (bool, e
 }
 
 func (r *UserRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.User, error) {
-	const q = `SELECT id, email, password_hash, display_name, avatar_url, is_active, created_at, updated_at FROM users WHERE id = $1`
+	const q = `SELECT id, email, password_hash, display_name, COALESCE(avatar_url, '') AS avatar_url, is_active, created_at, updated_at FROM users WHERE id = $1`
 	var user domain.User
 	if err := r.db.GetContext(ctx, &user, q, id); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -58,7 +58,7 @@ func (r *UserRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.User, err
 }
 
 func (r *UserRepo) GetByEmail(ctx context.Context, email string) (*domain.User, error) {
-	const q = `SELECT id, email, password_hash, display_name, avatar_url, is_active, created_at, updated_at FROM users WHERE email = $1`
+	const q = `SELECT id, email, password_hash, display_name, COALESCE(avatar_url, '') AS avatar_url, is_active, created_at, updated_at FROM users WHERE email = $1`
 	var user domain.User
 	if err := r.db.GetContext(ctx, &user, q, email); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -84,7 +84,7 @@ func (r *UserRepo) Update(ctx context.Context, user *domain.User) error {
 func (r *UserRepo) GetByUsername(ctx context.Context, workspaceID uuid.UUID, username string) (*domain.User, error) {
 	const q = `
 		SELECT u.id, u.email, u.password_hash, u.display_name, COALESCE(u.username, '') AS username,
-		       u.avatar_url, u.is_active, u.created_at, u.updated_at
+		       COALESCE(u.avatar_url, '') AS avatar_url, u.is_active, u.created_at, u.updated_at
 		FROM users u
 		JOIN workspace_members wm ON wm.user_id = u.id AND wm.workspace_id = $1
 		WHERE u.username = $2
@@ -103,7 +103,7 @@ func (r *UserRepo) GetByUsername(ctx context.Context, workspaceID uuid.UUID, use
 // SearchUsers returns up to limit users whose email or display_name match the query (ILIKE).
 func (r *UserRepo) SearchUsers(ctx context.Context, query string, limit int) ([]domain.User, error) {
 	const q = `
-		SELECT id, email, password_hash, display_name, avatar_url, is_active, created_at, updated_at
+		SELECT id, email, password_hash, display_name, COALESCE(avatar_url, '') AS avatar_url, is_active, created_at, updated_at
 		FROM users
 		WHERE email ILIKE $1 OR display_name ILIKE $1
 		ORDER BY display_name
@@ -122,7 +122,7 @@ func (r *UserRepo) SearchUsers(ctx context.Context, query string, limit int) ([]
 func (r *UserRepo) SearchInWorkspace(ctx context.Context, workspaceID uuid.UUID, query string, limit int) ([]domain.User, error) {
 	const q = `
 		SELECT u.id, u.email, u.password_hash, u.display_name,
-		       COALESCE(u.username, '') AS username, u.avatar_url, u.is_active, u.created_at, u.updated_at
+		       COALESCE(u.username, '') AS username, COALESCE(u.avatar_url, '') AS avatar_url, u.is_active, u.created_at, u.updated_at
 		FROM users u
 		JOIN workspace_members wm ON wm.user_id = u.id AND wm.workspace_id = $1
 		WHERE u.display_name ILIKE $2 OR COALESCE(u.username, '') ILIKE $2 OR u.email ILIKE $2
