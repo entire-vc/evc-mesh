@@ -411,3 +411,85 @@ func TestTaskRepo_List_IdTiebreaker(t *testing.T) {
 	assert.Equal(t, id2, page.Items[1].ID, "id tiebreaker: middle UUID must be second")
 	assert.Equal(t, id3, page.Items[2].ID, "id tiebreaker: largest UUID must be last")
 }
+
+// ---------------------------------------------------------------------------
+// NULL avatar_url regression
+// ---------------------------------------------------------------------------
+
+// TestNullAvatarURL inserts a user row with avatar_url = NULL directly (bypassing
+// the Create path which always writes a value) and asserts that GetByID, GetByEmail,
+// SearchUsers, and WorkspaceMemberRepo.List all return "" instead of failing with
+// "converting NULL to string is unsupported".
+func TestNullAvatarURL(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+
+	wsID := uuid.New()
+	_, err := db.ExecContext(ctx,
+		`INSERT INTO workspaces (id, name, slug, owner_id, settings, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+		wsID, "Avatar NULL Test WS", "navtwS-"+uuid.New().String()[:6], uuid.New(),
+		json.RawMessage(`{}`), time.Now().UTC(), time.Now().UTC(),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(ctx, "DELETE FROM workspace_members WHERE workspace_id = $1", wsID)
+		_, _ = db.ExecContext(ctx, "DELETE FROM workspaces WHERE id = $1", wsID)
+	})
+
+	userID := uuid.New()
+	email := "nullavatar-" + uuid.New().String()[:8] + "@test.example"
+	username := "navU" + uuid.New().String()[:8]
+	_, err = db.ExecContext(ctx,
+		`INSERT INTO users (id, email, password_hash, display_name, username, avatar_url, is_active, created_at, updated_at)
+		 VALUES ($1, $2, 'testhash', 'Null Avatar User', $3, NULL, true, $4, $5)`,
+		userID, email, username, time.Now().UTC(), time.Now().UTC(),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(ctx, "DELETE FROM users WHERE id = $1", userID)
+	})
+
+	_, err = db.ExecContext(ctx,
+		`INSERT INTO workspace_members (id, workspace_id, user_id, role, invited_by, created_at, updated_at)
+		 VALUES ($1,$2,$3,'member',NULL,$4,$5)`,
+		uuid.New(), wsID, userID, time.Now().UTC(), time.Now().UTC(),
+	)
+	require.NoError(t, err)
+
+	userRepo := NewUserRepo(db)
+	memberRepo := NewWorkspaceMemberRepo(db)
+
+	t.Run("GetByEmail", func(t *testing.T) {
+		u, err := userRepo.GetByEmail(ctx, email)
+		require.NoError(t, err)
+		require.NotNil(t, u)
+		assert.Equal(t, "", u.AvatarURL)
+	})
+
+	t.Run("GetByID", func(t *testing.T) {
+		u, err := userRepo.GetByID(ctx, userID)
+		require.NoError(t, err)
+		require.NotNil(t, u)
+		assert.Equal(t, "", u.AvatarURL)
+	})
+
+	t.Run("SearchUsers", func(t *testing.T) {
+		users, err := userRepo.SearchUsers(ctx, "nullavatar", 10)
+		require.NoError(t, err)
+		found := false
+		for _, u := range users {
+			if u.ID == userID {
+				found = true
+				assert.Equal(t, "", u.AvatarURL)
+			}
+		}
+		assert.True(t, found, "expected to find null-avatar user in search results")
+	})
+
+	t.Run("WorkspaceMember_List", func(t *testing.T) {
+		members, err := memberRepo.List(ctx, wsID)
+		require.NoError(t, err)
+		require.Len(t, members, 1)
+		assert.Equal(t, "", members[0].User.AvatarURL)
+	})
+}
