@@ -95,6 +95,23 @@ func (r *ArtifactRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.Artif
 	return &a, nil
 }
 
+// UpdateMetadata overwrites the metadata JSONB column for the given artifact.
+func (r *ArtifactRepo) UpdateMetadata(ctx context.Context, id uuid.UUID, metadata json.RawMessage) error {
+	if metadata == nil {
+		metadata = json.RawMessage(`{}`)
+	}
+	const q = `UPDATE artifacts SET metadata = $2 WHERE id = $1`
+	res, err := r.db.ExecContext(ctx, q, id, metadata)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return apierror.NotFound("Artifact")
+	}
+	return nil
+}
+
 func (r *ArtifactRepo) Delete(ctx context.Context, id uuid.UUID) error {
 	const q = `DELETE FROM artifacts WHERE id = $1`
 	res, err := r.db.ExecContext(ctx, q, id)

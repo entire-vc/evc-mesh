@@ -3,6 +3,7 @@ package service
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"strings"
@@ -890,6 +891,20 @@ func (m *MockArtifactRepository) Delete(_ context.Context, id uuid.UUID) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	delete(m.items, id)
+	return nil
+}
+
+func (m *MockArtifactRepository) UpdateMetadata(_ context.Context, id uuid.UUID, metadata json.RawMessage) error {
+	if m.errToReturn != nil {
+		return m.errToReturn
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	a, ok := m.items[id]
+	if !ok {
+		return apierror.NotFound("Artifact")
+	}
+	a.Metadata = metadata
 	return nil
 }
 

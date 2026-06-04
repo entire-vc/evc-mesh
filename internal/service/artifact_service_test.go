@@ -2,8 +2,10 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -91,6 +93,95 @@ func TestArtifactService_Upload(t *testing.T) {
 			}
 		})
 	}
+}
+
+// ---------------------------------------------------------------------------
+// TestArtifactService_Upload_RelayPublishWritesPublicURL
+// ---------------------------------------------------------------------------
+
+// stubRelayPublisher returns a fixed public URL and records that it was called.
+type stubRelayPublisher struct {
+	mu        sync.Mutex
+	publicURL string
+	called    bool
+}
+
+func (s *stubRelayPublisher) Publish(_ context.Context, _ uuid.UUID, _ string, _ []byte, _ string) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.called = true
+	return s.publicURL, nil
+}
+
+func (s *stubRelayPublisher) wasCalled() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.called
+}
+
+func TestArtifactService_Upload_RelayPublishWritesPublicURL(t *testing.T) {
+	t.Run("public url is merged into metadata", func(t *testing.T) {
+		svc, artifactRepo, _ := setupArtifactService()
+		pub := &stubRelayPublisher{publicURL: "https://relay.example.com/mesh/foo.md"}
+		svc.SetRelayPublisher(pub)
+		ctx := context.Background()
+
+		artifact, err := svc.Upload(ctx, UploadArtifactInput{
+			TaskID:         uuid.New(),
+			Name:           "doc.md",
+			ArtifactType:   domain.ArtifactTypeReport,
+			MimeType:       "text/markdown",
+			UploadedBy:     uuid.New(),
+			UploadedByType: domain.UploaderTypeUser,
+			Reader:         strings.NewReader("# hello"),
+			Size:           7,
+		})
+		require.NoError(t, err)
+		require.NotNil(t, artifact)
+
+		// Relay publish + metadata write happen on a background goroutine.
+		assert.Eventually(t, func() bool {
+			stored := artifactRepo.items[artifact.ID]
+			if stored == nil || len(stored.Metadata) == 0 {
+				return false
+			}
+			var m map[string]any
+			if jErr := json.Unmarshal(stored.Metadata, &m); jErr != nil {
+				return false
+			}
+			return m["tr_public_url"] == "https://relay.example.com/mesh/foo.md"
+		}, 2*time.Second, 10*time.Millisecond, "tr_public_url should be persisted to metadata")
+	})
+
+	t.Run("empty public url leaves metadata without the key", func(t *testing.T) {
+		svc, artifactRepo, _ := setupArtifactService()
+		pub := &stubRelayPublisher{publicURL: ""} // relay reported no URL
+		svc.SetRelayPublisher(pub)
+		ctx := context.Background()
+
+		artifact, err := svc.Upload(ctx, UploadArtifactInput{
+			TaskID:         uuid.New(),
+			Name:           "doc.md",
+			ArtifactType:   domain.ArtifactTypeReport,
+			MimeType:       "text/markdown",
+			UploadedBy:     uuid.New(),
+			UploadedByType: domain.UploaderTypeUser,
+			Reader:         strings.NewReader("# hello"),
+			Size:           7,
+		})
+		require.NoError(t, err)
+
+		// Wait for the goroutine to run, then assert no tr_public_url was written.
+		assert.Eventually(t, pub.wasCalled, 2*time.Second, 10*time.Millisecond)
+		stored := artifactRepo.items[artifact.ID]
+		require.NotNil(t, stored)
+		if len(stored.Metadata) > 0 {
+			var m map[string]any
+			require.NoError(t, json.Unmarshal(stored.Metadata, &m))
+			_, has := m["tr_public_url"]
+			assert.False(t, has, "tr_public_url should not be set when relay returns empty URL")
+		}
+	})
 }
 
 // ---------------------------------------------------------------------------
