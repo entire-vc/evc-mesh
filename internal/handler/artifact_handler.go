@@ -2,7 +2,9 @@ package handler
 
 import (
 	"encoding/json"
+	"mime"
 	"net/http"
+	"path/filepath"
 
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
@@ -103,7 +105,7 @@ func (h *ArtifactHandler) Upload(c echo.Context) error {
 		TaskID:         taskID,
 		Name:           name,
 		ArtifactType:   domain.ArtifactType(artifactType),
-		MimeType:       fileHeader.Header.Get("Content-Type"),
+		MimeType:       inferMimeType(fileHeader.Header.Get("Content-Type"), fileHeader.Filename),
 		UploadedBy:     uploadedBy,
 		UploadedByType: uploadedByType,
 		Reader:         file,
@@ -163,4 +165,18 @@ func (h *ArtifactHandler) Delete(c echo.Context) error {
 	}
 
 	return c.NoContent(http.StatusNoContent)
+}
+
+// inferMimeType returns headerMime unless it is empty or generic octet-stream,
+// in which case it infers from the filename extension.
+func inferMimeType(headerMime, filename string) string {
+	if headerMime != "" && headerMime != "application/octet-stream" {
+		return headerMime
+	}
+	if ext := filepath.Ext(filename); ext != "" {
+		if inferred := mime.TypeByExtension(ext); inferred != "" {
+			return inferred
+		}
+	}
+	return headerMime
 }

@@ -44,7 +44,22 @@ func BuildPath(subfolder, projectSlug string, includeProjectSlug bool, taskShort
 	dateStr := date.UTC().Format("2006-01-02")
 	taskSlug := slugify(taskTitle)
 	taskDir := fmt.Sprintf("%s__%s", taskShortID, taskSlug)
-	fileName := fmt.Sprintf("%s_%s.%s", dateStr, slugify(artifactName), ext(contentType))
+
+	// Preserve the original file extension so "report.md" → "report.md", not "report-md.bin".
+	// Slugify only the base name; fall back to mime-derived extension when absent.
+	origExt := path.Ext(artifactName)
+	baseName := artifactName
+	if origExt != "" {
+		baseName = artifactName[:len(artifactName)-len(origExt)]
+	}
+	fileExt := origExt
+	if fileExt != "" {
+		fileExt = fileExt[1:] // strip leading dot
+	} else {
+		fileExt = ext(contentType)
+	}
+
+	fileName := fmt.Sprintf("%s_%s.%s", dateStr, slugify(baseName), fileExt)
 
 	parts := []string{subfolder}
 	if includeProjectSlug && projectSlug != "" {

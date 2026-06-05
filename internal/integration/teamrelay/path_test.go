@@ -20,7 +20,8 @@ func TestBuildPath_Standard(t *testing.T) {
 		"text/plain",
 		fixedDate,
 	)
-	assert.Equal(t, "artifacts/my-project/abc12345__fix-the-auth-bug/2026-05-22_output-log.txt", result)
+	// .log extension is preserved; only the base "output" is slugified.
+	assert.Equal(t, "artifacts/my-project/abc12345__fix-the-auth-bug/2026-05-22_output.log", result)
 }
 
 func TestBuildPath_NoProjectSlug(t *testing.T) {
@@ -151,6 +152,38 @@ func TestSlugify(t *testing.T) {
 			assert.Equal(t, tc.expected, slugify(tc.input))
 		})
 	}
+}
+
+// TestBuildPath_MarkdownFilename reproduces the production bug:
+// uploading "tr-smoke-2026-06-05.md" with application/octet-stream should yield .md, not .bin.
+func TestBuildPath_MarkdownFilename(t *testing.T) {
+	result := BuildPath(
+		"mesh",
+		"dev",
+		false,
+		"b4822eb8",
+		"TR smoke",
+		"tr-smoke-2026-06-05.md",
+		"application/octet-stream",
+		fixedDate,
+	)
+	assert.Equal(t, "mesh/b4822eb8__tr-smoke/2026-05-22_tr-smoke-2026-06-05.md", result)
+}
+
+// TestBuildPath_ExtensionPreservedOverMime checks that an explicit .json extension
+// wins over a conflicting content-type (e.g. text/plain passed by the caller).
+func TestBuildPath_ExtensionPreservedOverMime(t *testing.T) {
+	result := BuildPath(
+		"drops",
+		"proj",
+		false,
+		"deadbeef",
+		"Config dump",
+		"config.json",
+		"text/plain",
+		fixedDate,
+	)
+	assert.Equal(t, "drops/deadbeef__config-dump/2026-05-22_config.json", result)
 }
 
 func TestExt(t *testing.T) {
