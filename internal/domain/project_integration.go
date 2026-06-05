@@ -22,6 +22,10 @@ type ProjectIntegration struct {
 
 // TeamRelaySettings holds the Team Relay-specific configuration.
 type TeamRelaySettings struct {
+	// ShareID is the relay share UUID (shares.id = folder GUID). Preferred over ShareSlug
+	// because it works for private sync folders that have web_published=false.
+	// When non-empty, transport() sends this UUID to the relay upload endpoint.
+	ShareID            string `json:"share_id,omitempty"`
 	ShareSlug          string `json:"share_slug"`
 	Subfolder          string `json:"subfolder"`
 	IncludeProjectSlug bool   `json:"include_project_slug"`
@@ -31,6 +35,7 @@ type TeamRelaySettings struct {
 type UpsertProjectIntegrationInput struct {
 	ProjectID          uuid.UUID  `json:"project_id"`
 	Enabled            bool       `json:"enabled"`
+	ShareID            string     `json:"share_id,omitempty"`
 	ShareSlug          string     `json:"share_slug"`
 	AgentKey           string     `json:"agent_key,omitempty"` // omit to keep existing
 	Subfolder          string     `json:"subfolder"`

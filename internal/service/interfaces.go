@@ -741,6 +741,7 @@ type ArtifactServiceConfigurable interface {
 // UpsertProjectIntegrationInput holds data for creating/updating a project integration.
 type UpsertProjectIntegrationInput struct {
 	Enabled            bool
+	ShareID            string // relay share UUID (preferred; works for private sync folders)
 	ShareSlug          string
 	AgentKey           string // empty = keep existing
 	Subfolder          string
