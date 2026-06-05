@@ -248,6 +248,9 @@ func (s *StubTaskService) CheckoutTask(_ context.Context, _ uuid.UUID, _ int, _ 
 func (s *StubTaskService) ReleaseCheckout(_ context.Context, _, _ uuid.UUID) error {
 	panic("StubTaskService.ReleaseCheckout not implemented")
 }
+func (s *StubTaskService) SelfReleaseCheckout(_ context.Context, _ uuid.UUID) error {
+	panic("StubTaskService.SelfReleaseCheckout not implemented")
+}
 func (s *StubTaskService) ExtendCheckout(_ context.Context, _, _ uuid.UUID, _ int) (*CheckoutResult, error) {
 	panic("StubTaskService.ExtendCheckout not implemented")
 }

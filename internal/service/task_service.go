@@ -1345,6 +1345,28 @@ func (s *taskService) ReleaseCheckout(ctx context.Context, taskID, token uuid.UU
 	return nil
 }
 
+// SelfReleaseCheckout releases the checkout held by the calling agent without
+// requiring the checkout_token. The caller's identity (from actorctx) must
+// match the current lock holder; otherwise 403 is returned. No-op when the
+// task is not locked.
+func (s *taskService) SelfReleaseCheckout(ctx context.Context, taskID uuid.UUID) error {
+	callerID, _ := actorctx.FromContext(ctx)
+	if callerID == uuid.Nil {
+		return apierror.Forbidden("authenticated identity required to self-release")
+	}
+	task, err := s.taskRepo.GetByID(ctx, taskID)
+	if err != nil {
+		return err
+	}
+	if task == nil || task.CheckedOutBy == nil {
+		return nil // not locked — idempotent no-op
+	}
+	if *task.CheckedOutBy != callerID {
+		return apierror.Forbidden("cannot release a lock held by another agent")
+	}
+	return s.ForceReleaseCheckout(ctx, taskID)
+}
+
 // ExtendCheckout extends the TTL of an existing checkout identified by token.
 // The TTL is clamped to [1, 240] minutes; default is 15.
 func (s *taskService) ExtendCheckout(ctx context.Context, taskID, token uuid.UUID, ttlMinutes int) (*CheckoutResult, error) {

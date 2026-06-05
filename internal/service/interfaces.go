@@ -131,6 +131,11 @@ type TaskService interface {
 	// ReleaseCheckout releases the checkout identified by the given token.
 	// Returns an error when the token does not match.
 	ReleaseCheckout(ctx context.Context, taskID, token uuid.UUID) error
+	// SelfReleaseCheckout releases the checkout held by the calling agent without
+	// requiring the checkout_token. The caller's identity (from actorctx) must
+	// match the current lock holder; otherwise 403 is returned. No-op when the
+	// task is not locked.
+	SelfReleaseCheckout(ctx context.Context, taskID uuid.UUID) error
 	// ExtendCheckout extends the checkout TTL identified by the given token.
 	// Returns an error when the token does not match or the checkout has expired.
 	ExtendCheckout(ctx context.Context, taskID, token uuid.UUID, ttlMinutes int) (*CheckoutResult, error)
