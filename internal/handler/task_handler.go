@@ -850,8 +850,8 @@ func (h *TaskHandler) ReleaseCheckout(c echo.Context) error {
 	if req.CheckoutToken == "" {
 		// No token provided — fall back to identity-based self-release.
 		// The caller must be the lock holder; see SelfReleaseCheckout.
-		if err := h.taskService.SelfReleaseCheckout(c.Request().Context(), taskID); err != nil {
-			return handleError(c, err)
+		if releaseErr := h.taskService.SelfReleaseCheckout(c.Request().Context(), taskID); releaseErr != nil {
+			return handleError(c, releaseErr)
 		}
 		return c.NoContent(http.StatusNoContent)
 	}
