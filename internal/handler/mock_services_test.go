@@ -340,6 +340,7 @@ type MockTaskService struct {
 	BulkUpdateFunc           func(ctx context.Context, projectID uuid.UUID, input service.BulkUpdateTasksInput) service.BulkUpdateTasksResult
 	CheckoutTaskFunc         func(ctx context.Context, taskID uuid.UUID, ttlMinutes int, sessionMetadata map[string]interface{}) (*service.CheckoutResult, error)
 	ReleaseCheckoutFunc      func(ctx context.Context, taskID uuid.UUID, token uuid.UUID) error
+	SelfReleaseCheckoutFunc  func(ctx context.Context, taskID uuid.UUID) error
 	ExtendCheckoutFunc       func(ctx context.Context, taskID uuid.UUID, token uuid.UUID, ttlMinutes int) (*service.CheckoutResult, error)
 	ForceReleaseCheckoutFunc func(ctx context.Context, taskID uuid.UUID) error
 	MoveToProjectFunc        func(ctx context.Context, taskID, targetProjectID uuid.UUID) (*domain.Task, error)
@@ -453,6 +454,13 @@ func (m *MockTaskService) CheckoutTask(ctx context.Context, taskID uuid.UUID, tt
 func (m *MockTaskService) ReleaseCheckout(ctx context.Context, taskID, token uuid.UUID) error {
 	if m.ReleaseCheckoutFunc != nil {
 		return m.ReleaseCheckoutFunc(ctx, taskID, token)
+	}
+	return nil
+}
+
+func (m *MockTaskService) SelfReleaseCheckout(ctx context.Context, taskID uuid.UUID) error {
+	if m.SelfReleaseCheckoutFunc != nil {
+		return m.SelfReleaseCheckoutFunc(ctx, taskID)
 	}
 	return nil
 }

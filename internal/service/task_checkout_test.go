@@ -560,3 +560,69 @@ func TestCheckoutTask_ReviewModeTodoUnchanged(t *testing.T) {
 	require.NotNil(t, result)
 	assert.Equal(t, domain.DelegationLevelReview, result.DelegationLevel)
 }
+
+// ============================================================================
+// SelfReleaseCheckout tests
+// ============================================================================
+
+func TestSelfReleaseCheckout_SuccessAsHolder(t *testing.T) {
+	svc, taskRepo, _, _ := setupCheckoutTaskService()
+	agentID := uuid.New()
+	taskID := uuid.New()
+	taskRepo.items[taskID] = &domain.Task{
+		ID:           taskID,
+		ProjectID:    uuid.New(),
+		Title:        "A task",
+		CheckedOutBy: &agentID,
+	}
+
+	err := svc.SelfReleaseCheckout(agentContext(agentID), taskID)
+	require.NoError(t, err)
+	// After release, CheckedOutBy should be nil.
+	assert.Nil(t, taskRepo.items[taskID].CheckedOutBy)
+}
+
+func TestSelfReleaseCheckout_NotLocked_IsNoOp(t *testing.T) {
+	svc, taskRepo, _, _ := setupCheckoutTaskService()
+	agentID := uuid.New()
+	taskID := uuid.New()
+	taskRepo.items[taskID] = &domain.Task{
+		ID: taskID, ProjectID: uuid.New(), Title: "A task", CheckedOutBy: nil,
+	}
+
+	err := svc.SelfReleaseCheckout(agentContext(agentID), taskID)
+	require.NoError(t, err)
+}
+
+func TestSelfReleaseCheckout_ForeignHolder_Returns403(t *testing.T) {
+	svc, taskRepo, _, _ := setupCheckoutTaskService()
+	holder := uuid.New()
+	caller := uuid.New()
+	taskID := uuid.New()
+	taskRepo.items[taskID] = &domain.Task{
+		ID:           taskID,
+		ProjectID:    uuid.New(),
+		Title:        "A task",
+		CheckedOutBy: &holder,
+	}
+
+	err := svc.SelfReleaseCheckout(agentContext(caller), taskID)
+	require.Error(t, err)
+	var apiErr *apierror.Error
+	require.ErrorAs(t, err, &apiErr)
+	assert.Equal(t, http.StatusForbidden, apiErr.Code)
+}
+
+func TestSelfReleaseCheckout_UnauthenticatedCaller_Returns403(t *testing.T) {
+	svc, taskRepo, _, _ := setupCheckoutTaskService()
+	taskID := uuid.New()
+	taskRepo.items[taskID] = &domain.Task{
+		ID: taskID, ProjectID: uuid.New(), Title: "A task",
+	}
+
+	err := svc.SelfReleaseCheckout(context.Background(), taskID)
+	require.Error(t, err)
+	var apiErr *apierror.Error
+	require.ErrorAs(t, err, &apiErr)
+	assert.Equal(t, http.StatusForbidden, apiErr.Code)
+}

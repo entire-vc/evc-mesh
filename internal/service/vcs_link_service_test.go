@@ -256,6 +256,7 @@ func (t *fakeTaskService) CheckoutTask(context.Context, uuid.UUID, int, map[stri
 	return nil, nil
 }
 func (t *fakeTaskService) ForceReleaseCheckout(context.Context, uuid.UUID) error       { return nil }
+func (t *fakeTaskService) SelfReleaseCheckout(context.Context, uuid.UUID) error        { return nil }
 func (t *fakeTaskService) ReleaseCheckout(context.Context, uuid.UUID, uuid.UUID) error { return nil }
 func (t *fakeTaskService) ExtendCheckout(context.Context, uuid.UUID, uuid.UUID, int) (*CheckoutResult, error) {
 	return nil, nil
