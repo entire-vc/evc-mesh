@@ -39,7 +39,12 @@ func (s *projectIntegrationService) UpsertTeamRelay(ctx context.Context, project
 	// Validation: enabled=true requires share_id or share_slug.
 	if input.Enabled {
 		if input.ShareID == "" && input.ShareSlug == "" {
-			return nil, apierror.ValidationError(map[string]string{"share_id": "share_id or share_slug required when enabled"})
+			return nil, apierror.ValidationError(map[string]string{"share_slug": "share_id or share_slug required when enabled"})
+		}
+		if input.ShareID != "" {
+			if _, err := uuid.Parse(input.ShareID); err != nil {
+				return nil, apierror.ValidationError(map[string]string{"share_id": "must be a valid UUID"})
+			}
 		}
 		// Validate agent_key length when supplied.
 		if input.AgentKey != "" && len(input.AgentKey) < 20 {
