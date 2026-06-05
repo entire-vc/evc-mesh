@@ -97,20 +97,29 @@ func (c *client) Publish(ctx context.Context, taskID uuid.UUID, artifactName str
 		return "", nil
 	}
 
-	return transport(ctx, settings.ShareSlug, filePath, content, contentType, pi.AgentKey)
+	// Prefer ShareID (UUID) over ShareSlug — UUID-based path skips the web_published gate
+	// on the relay, enabling uploads to private sync folders. Fall back to slug for
+	// backward-compat with integrations configured before ShareID was introduced.
+	shareIdentifier := settings.ShareID
+	if shareIdentifier == "" {
+		shareIdentifier = settings.ShareSlug
+	}
+
+	return transport(ctx, shareIdentifier, filePath, content, contentType, pi.AgentKey)
 }
 
 // transport POSTs artifact bytes to the relay upload endpoint and returns the
 // relay-reported public URL on success (empty string if the relay omits one).
-// Contract (locked 2026-05-22, relay PR #2 commit 7b3f395):
+// Contract (updated 2026-06-05, relay web.py uuid-upload patch):
 //
-//	POST /v1/web/shares/{shareSlug}/upload?path=<urlenc>&source=mesh-artifact
+//	POST /v1/web/shares/{shareIdentifier}/upload?path=<urlenc>&source=mesh-artifact
+//	shareIdentifier: UUID (shares.id = folder GUID) or slug (web-published only)
 //	X-Agent-Key: tr_agent_<48hex>
 //	Content-Type: <mime>
 //	Body: raw bytes
 //	200 → {ok, share_id, path, size_bytes, modified_at, public_url?}
 //	401/403 → key revoked; log + return nil (no retry — key is static)
-func transport(ctx context.Context, shareSlug, filePath string, content []byte, contentType, agentKey string) (string, error) {
+func transport(ctx context.Context, shareIdentifier, filePath string, content []byte, contentType, agentKey string) (string, error) {
 	baseURL := os.Getenv("MESH_TEAMRELAY_RELAY_URL")
 	if baseURL == "" {
 		log.Printf("teamrelay: MESH_TEAMRELAY_RELAY_URL not set — cannot upload %s", filePath)
@@ -119,7 +128,7 @@ func transport(ctx context.Context, shareSlug, filePath string, content []byte, 
 
 	endpoint := fmt.Sprintf("%s/v1/web/shares/%s/upload?path=%s&source=mesh-artifact",
 		baseURL,
-		url.PathEscape(shareSlug),
+		url.PathEscape(shareIdentifier),
 		url.QueryEscape(filePath),
 	)
 
@@ -150,7 +159,7 @@ func transport(ctx context.Context, shareSlug, filePath string, content []byte, 
 		log.Printf("teamrelay: uploaded %s (relay response: %s)", filePath, body)
 		return "", nil
 	case http.StatusUnauthorized, http.StatusForbidden:
-		log.Printf("teamrelay: agent key rejected by relay (status %d) for share %s — integration key may be revoked", resp.StatusCode, shareSlug)
+		log.Printf("teamrelay: agent key rejected by relay (status %d) for share %s — integration key may be revoked", resp.StatusCode, shareIdentifier)
 		return "", nil
 	default:
 		log.Printf("teamrelay: unexpected relay status %d uploading %s: %s", resp.StatusCode, filePath, body)
