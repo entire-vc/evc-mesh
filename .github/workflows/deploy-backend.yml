@@ -121,8 +121,8 @@ jobs:
       # Ref: CLAUDE-workflow.md §1b Deploy Discipline
       - name: Build and upload goose to prod
         run: |
-          GOOS=linux GOARCH=amd64 go build -o goose-bin github.com/pressly/goose/v3/cmd/goose
-          rsync -avz goose-bin root@216.57.106.222:/opt/evc-mesh/bin/goose
+          GOBIN=$(pwd) GOOS=linux GOARCH=amd64 go install github.com/pressly/goose/v3/cmd/goose@latest
+          rsync -avz goose root@216.57.106.222:/opt/evc-mesh/bin/goose
           ssh root@216.57.106.222 'chmod +x /opt/evc-mesh/bin/goose'
 
       - name: Run migrations on prod (fail-closed)
