@@ -4,7 +4,10 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
+
+	"github.com/entire-vc/evc-mesh/internal/domain"
 )
 
 // MemoryEdgesRepo handles persistence and maintenance for the memory_edges KG table.
@@ -15,6 +18,32 @@ type MemoryEdgesRepo struct {
 // NewMemoryEdgesRepo creates a MemoryEdgesRepo backed by db.
 func NewMemoryEdgesRepo(db *sqlx.DB) *MemoryEdgesRepo {
 	return &MemoryEdgesRepo{db: db}
+}
+
+// UpsertEdge inserts a new KG edge or, on (from, to, type) conflict, updates weight to the
+// maximum of the stored and incoming values and refreshes last_traversed_at.
+func (r *MemoryEdgesRepo) UpsertEdge(ctx context.Context, edge *domain.MemoryEdge) error {
+	if edge.ID == uuid.Nil {
+		edge.ID = uuid.New()
+	}
+	if edge.Weight == 0 {
+		edge.Weight = 1.0
+	}
+	const q = `
+		INSERT INTO memory_edges (id, memory_from_id, memory_to_id, relationship_type, weight, workspace_id)
+		VALUES ($1, $2, $3, $4, $5, $6)
+		ON CONFLICT (memory_from_id, memory_to_id, relationship_type) DO UPDATE
+			SET weight           = GREATEST(memory_edges.weight, EXCLUDED.weight),
+			    last_traversed_at = NOW()
+	`
+	_, err := r.db.ExecContext(ctx, q,
+		edge.ID, edge.MemoryFromID, edge.MemoryToID,
+		string(edge.RelationshipType), edge.Weight, edge.WorkspaceID,
+	)
+	if err != nil {
+		return fmt.Errorf("memory edges upsert: %w", err)
+	}
+	return nil
 }
 
 // DecayWeights applies geometric decay (×0.95) to every edge that has not been traversed

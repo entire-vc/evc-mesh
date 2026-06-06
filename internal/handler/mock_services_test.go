@@ -764,6 +764,9 @@ func (m *MockMemoryService) FindRelated(ctx context.Context, memoryID uuid.UUID,
 func (m *MockMemoryService) ExtractFromEvent(ctx context.Context, event *domain.EventBusMessage, hint *domain.MemoryHint) error {
 	return nil
 }
+func (m *MockMemoryService) Supersede(ctx context.Context, oldID, newID uuid.UUID) error {
+	return nil
+}
 
 // MockAgentSessionRepository implements repository.AgentSessionRepository for testing.
 type MockAgentSessionRepository struct {

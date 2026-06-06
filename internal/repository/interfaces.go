@@ -573,6 +573,21 @@ type MemoryRepository interface {
 	// ListWithNullEmbedding returns up to limit memories whose embedding column is NULL.
 	// Used by the batch embedding job.
 	ListWithNullEmbedding(ctx context.Context, workspaceID uuid.UUID, limit int) ([]domain.Memory, error)
+	// FindByShortID returns the first memory in workspaceID whose UUID starts with prefix (6–12 lowercase hex chars).
+	// Returns nil without error when no match is found.
+	FindByShortID(ctx context.Context, workspaceID uuid.UUID, prefix string) (*domain.Memory, error)
+	// SetArchived marks a memory as archived (true) or unarchived (false) by ID.
+	SetArchived(ctx context.Context, id uuid.UUID, archived bool) error
+}
+
+// MemoryEdgeRepository manages directed, typed edges in the memory Knowledge Graph.
+type MemoryEdgeRepository interface {
+	// UpsertEdge inserts a new edge or updates weight/last_traversed_at on conflict (from, to, type).
+	UpsertEdge(ctx context.Context, edge *domain.MemoryEdge) error
+	// DecayWeights applies geometric decay (×0.95) to edges not traversed in >30 days.
+	DecayWeights(ctx context.Context) (int64, error)
+	// PruneDeadEdges deletes edges with weight < 0.1.
+	PruneDeadEdges(ctx context.Context) (int64, error)
 }
 
 // WorkspaceInviteRepository manages persistence for pending workspace invitations.

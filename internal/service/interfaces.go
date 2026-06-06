@@ -784,4 +784,7 @@ type MemoryService interface {
 	// The source memory itself is excluded from results.
 	FindRelated(ctx context.Context, memoryID uuid.UUID, limit int) ([]domain.ScoredMemory, error)
 	ExtractFromEvent(ctx context.Context, event *domain.EventBusMessage, hint *domain.MemoryHint) error
+	// Supersede creates a 'supersedes' edge from newID → oldID and marks oldID as archived.
+	// Both memories must exist in the same workspace. Returns NotFound if either is missing.
+	Supersede(ctx context.Context, oldID, newID uuid.UUID) error
 }

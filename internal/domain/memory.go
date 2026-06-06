@@ -146,3 +146,27 @@ type MemoryHint struct {
 	// Empty means the memory never expires.
 	ExpiresIn string `json:"expires_in,omitempty"`
 }
+
+// MemoryEdgeRelationshipType defines the semantic relationship for a directed KG edge.
+type MemoryEdgeRelationshipType string
+
+const (
+	EdgeRelatesTo   MemoryEdgeRelationshipType = "relates_to"
+	EdgeSupersedes  MemoryEdgeRelationshipType = "supersedes"
+	EdgeDependsOn   MemoryEdgeRelationshipType = "depends_on"
+	EdgeContradicts MemoryEdgeRelationshipType = "contradicts"
+	EdgeDerivedFrom MemoryEdgeRelationshipType = "derived_from"
+)
+
+// MemoryEdge is a directed, typed, weighted link in the memory Knowledge Graph.
+// From-to direction: memory_from_id → memory_to_id, with RelationshipType semantics.
+type MemoryEdge struct {
+	ID               uuid.UUID                  `json:"id" db:"id"`
+	MemoryFromID     uuid.UUID                  `json:"memory_from_id" db:"memory_from_id"`
+	MemoryToID       uuid.UUID                  `json:"memory_to_id" db:"memory_to_id"`
+	RelationshipType MemoryEdgeRelationshipType `json:"relationship_type" db:"relationship_type"`
+	Weight           float32                    `json:"weight" db:"weight"`
+	WorkspaceID      uuid.UUID                  `json:"workspace_id" db:"workspace_id"`
+	CreatedAt        time.Time                  `json:"created_at" db:"created_at"`
+	LastTraversedAt  *time.Time                 `json:"last_traversed_at,omitempty" db:"last_traversed_at"`
+}
