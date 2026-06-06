@@ -127,9 +127,17 @@ jobs:
 
       - name: Run migrations on prod (fail-closed)
         run: |
-          ssh root@216.57.106.222 'set -euo pipefail
-            DB_URL=$(grep ^DATABASE_URL /opt/evc-mesh/.env.prod | cut -d= -f2-)
-            /opt/evc-mesh/bin/goose -dir /opt/evc-mesh/migrations postgres "$DB_URL" up'
+          ssh root@216.57.106.222 bash << 'REMOTE'
+          set -uo pipefail
+          DB_URL=$(grep -m1 "^DATABASE_URL=" /opt/evc-mesh/.env.prod | cut -d= -f2- || true)
+          if [ -z "${DB_URL:-}" ]; then
+            echo "ERROR: DATABASE_URL not found in /opt/evc-mesh/.env.prod" >&2
+            ls -la /opt/evc-mesh/ >&2
+            exit 1
+          fi
+          echo "=== Running goose migrations ==="
+          /opt/evc-mesh/bin/goose -dir /opt/evc-mesh/migrations postgres "$DB_URL" up
+          REMOTE
 
   deploy:
     name: Deploy
