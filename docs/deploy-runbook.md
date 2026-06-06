@@ -62,6 +62,47 @@ ssh root@prod-host
 
 ---
 
+## evc-mesh-mcp deploy (manual — no CI)
+
+evc-mesh-mcp has no CD pipeline. **Mandatory order (per
+[CLAUDE-workflow.md §1b Deploy Discipline](../CLAUDE-workflow.md)):**
+`migrate (goose up)` → `binary swap` → `restart`. Never swap the binary before migrations pass.
+
+> evc-mesh-mcp does not run its own migrations — it reads the same DB as the evc-mesh API.
+> The goose step below ensures the shared schema is up-to-date before the new binary serves traffic.
+
+```bash
+# 1. Build for the prod target (cross-compile from Mac/Linux dev machine)
+GOOS=linux GOARCH=amd64 go build -o evc-mesh-mcp ./cmd/mesh-mcp
+
+# 2. Copy binary to prod
+scp evc-mesh-mcp root@prod-host:/opt/evc-mesh-mcp/evc-mesh-mcp.new
+
+# 3. On the prod host: run migrations FIRST, then swap binary
+ssh root@prod-host
+
+  # STEP 1 — Run evc-mesh DB migrations (fail-closed).
+  # goose CLI is not installed on the host — use the official docker image.
+  # If this exits non-zero, STOP — do NOT swap the binary.
+  DB_URL=$(grep ^DATABASE_URL /opt/evc-mesh/.env.prod | cut -d= -f2-)
+  docker run --rm --network host \
+    -v /opt/evc-mesh/migrations:/migrations \
+    ghcr.io/pressly/goose:latest \
+    goose -dir /migrations postgres "$DB_URL" up
+
+  # STEP 2 — Swap binary (only after migrations succeed)
+  mv /opt/evc-mesh-mcp/evc-mesh-mcp /opt/evc-mesh-mcp/evc-mesh-mcp.bak.$(date +%Y%m%d-%H%M%S)
+  mv /opt/evc-mesh-mcp/evc-mesh-mcp.new /opt/evc-mesh-mcp/evc-mesh-mcp
+
+  # STEP 3 — Restart
+  sudo systemctl restart evc-mesh-mcp
+
+  # STEP 4 — Smoke test
+  curl -sf http://localhost:8081/health || echo "SMOKE FAILED"
+```
+
+---
+
 ## Migration numbering policy
 
 Migrations use a `YYYYMMDDNNN` prefix where `NNN` is a per-day sequence starting at `001`.
