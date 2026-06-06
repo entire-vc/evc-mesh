@@ -174,7 +174,7 @@ func TestRecallGraph_GetNeighbors_P95_Under500ms(t *testing.T) {
 		}
 
 		start := time.Now()
-		_, err := repo.GetNeighbors(ctx, frontier, 0.3)
+		_, err := repo.GetNeighbors(ctx, frontier, 0.3, 200)
 		elapsed := time.Since(start)
 		require.NoError(t, err)
 		durations = append(durations, elapsed)
@@ -333,7 +333,7 @@ func BenchmarkGetNeighbors_5kGraph_2Hop(b *testing.B) {
 		for j := range frontier {
 			frontier[j] = memIDs[rng.Intn(len(memIDs))]
 		}
-		if _, err := repo.GetNeighbors(ctx, frontier, 0.3); err != nil {
+		if _, err := repo.GetNeighbors(ctx, frontier, 0.3, 200); err != nil {
 			b.Fatalf("GetNeighbors: %v", err)
 		}
 	}
