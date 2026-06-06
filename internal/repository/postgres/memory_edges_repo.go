@@ -124,12 +124,15 @@ func (row *memoryEdgeRow) toDomain() domain.MemoryEdge {
 	}
 }
 
-// GetNeighbors returns all edges bidirectionally connected to any memory in ids with
-// weight >= weightThreshold. The result is used by RecallGraph for BFS hop expansion.
+// GetNeighbors returns edges bidirectionally connected to any memory in ids with
+// weight >= weightThreshold, ordered by weight DESC, capped at limit rows.
 // When ids is empty, a nil slice is returned without querying the database.
-func (r *MemoryEdgesRepo) GetNeighbors(ctx context.Context, ids []uuid.UUID, weightThreshold float64) ([]domain.MemoryEdge, error) {
+func (r *MemoryEdgesRepo) GetNeighbors(ctx context.Context, ids []uuid.UUID, weightThreshold float64, limit int) ([]domain.MemoryEdge, error) {
 	if len(ids) == 0 {
 		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 200
 	}
 
 	const q = `
@@ -138,10 +141,11 @@ func (r *MemoryEdgesRepo) GetNeighbors(ctx context.Context, ids []uuid.UUID, wei
 		WHERE  (memory_from_id = ANY($1) OR memory_to_id = ANY($1))
 		  AND  weight >= $2
 		ORDER  BY weight DESC
+		LIMIT  $3
 	`
 
 	var rows []memoryEdgeRow
-	if err := r.db.SelectContext(ctx, &rows, q, uuidArrayParam(ids), weightThreshold); err != nil {
+	if err := r.db.SelectContext(ctx, &rows, q, uuidArrayParam(ids), weightThreshold, limit); err != nil {
 		return nil, fmt.Errorf("memory edges get neighbors: %w", err)
 	}
 

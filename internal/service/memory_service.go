@@ -1214,7 +1214,7 @@ func (s *memoryService) RecallGraph(ctx context.Context, opts domain.RecallGraph
 	}
 
 	for hop := 1; hop <= opts.Hops && len(frontier) > 0; hop++ {
-		edges, edgeErr := s.edgeRepo.GetNeighbors(ctx, frontier, opts.WeightThreshold)
+		edges, edgeErr := s.edgeRepo.GetNeighbors(ctx, frontier, opts.WeightThreshold, 200)
 		if edgeErr != nil {
 			return nil, fmt.Errorf("recall graph: get neighbors hop %d: %w", hop, edgeErr)
 		}
