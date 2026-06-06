@@ -38,13 +38,10 @@ ssh root@prod-host
     > /opt/evc-mesh/db-backups/pre-deploy-$(date +%Y%m%dT%H%M%S).dump
 
   # STEP 1 — Run migrations BEFORE touching the binary (fail-closed).
-  # goose CLI is not installed on the host; use the official docker image.
+  # goose CLI is installed at /opt/evc-mesh/bin/goose by the CI migrate job.
   # If this exits non-zero, STOP — do NOT proceed to the binary swap.
   DB_URL=$(grep ^DATABASE_URL /opt/evc-mesh/.env.prod | cut -d= -f2-)
-  docker run --rm --network host \
-    -v /opt/evc-mesh/migrations:/migrations \
-    ghcr.io/pressly/goose:latest \
-    goose -dir /migrations postgres "$DB_URL" up
+  /opt/evc-mesh/bin/goose -dir /opt/evc-mesh/migrations postgres "$DB_URL" up
 
   # STEP 2 — Swap binary atomically (only after migrations succeed)
   mv bin/mesh-api bin/mesh-api.bak.$(date +%Y%m%d-%H%M%S)
@@ -82,13 +79,10 @@ scp evc-mesh-mcp root@prod-host:/opt/evc-mesh-mcp/evc-mesh-mcp.new
 ssh root@prod-host
 
   # STEP 1 — Run evc-mesh DB migrations (fail-closed).
-  # goose CLI is not installed on the host — use the official docker image.
+  # goose CLI is installed at /opt/evc-mesh/bin/goose by the CI migrate job.
   # If this exits non-zero, STOP — do NOT swap the binary.
   DB_URL=$(grep ^DATABASE_URL /opt/evc-mesh/.env.prod | cut -d= -f2-)
-  docker run --rm --network host \
-    -v /opt/evc-mesh/migrations:/migrations \
-    ghcr.io/pressly/goose:latest \
-    goose -dir /migrations postgres "$DB_URL" up
+  /opt/evc-mesh/bin/goose -dir /opt/evc-mesh/migrations postgres "$DB_URL" up
 
   # STEP 2 — Swap binary (only after migrations succeed)
   mv /opt/evc-mesh-mcp/evc-mesh-mcp /opt/evc-mesh-mcp/evc-mesh-mcp.bak.$(date +%Y%m%d-%H%M%S)
@@ -161,13 +155,8 @@ mv bin/mesh-api.bak.$(ls bin/ | grep '\.bak\.' | sort | tail -1 | grep -oP '(?<=
 # or simply: cp bin/mesh-api.bak.<timestamp> bin/mesh-api
 
 # Rollback migrations if the new version added migrations.
-# goose CLI is not on the host — run via docker exec with the migrations dir mounted,
-# or use a one-off goose container. Rolls back exactly one migration at a time:
-docker run --rm \
-  --network host \
-  -v /opt/evc-mesh/migrations:/migrations \
-  ghcr.io/pressly/goose:latest \
-  goose -dir /migrations postgres \
+# goose CLI is installed at /opt/evc-mesh/bin/goose by CI. Rolls back one migration at a time:
+/opt/evc-mesh/bin/goose -dir /opt/evc-mesh/migrations postgres \
   "$(grep DATABASE_URL /opt/evc-mesh/.env.prod | cut -d= -f2-)" \
   down
 
