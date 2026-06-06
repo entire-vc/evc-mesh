@@ -787,4 +787,11 @@ type MemoryService interface {
 	// Supersede creates a 'supersedes' edge from newID → oldID and marks oldID as archived.
 	// Both memories must exist in the same workspace. Returns NotFound if either is missing.
 	Supersede(ctx context.Context, oldID, newID uuid.UUID) error
+	// RecallGraph performs a multi-hop knowledge-graph traversal starting from hybrid recall seeds.
+	// Seeds are the top-k memories from hybrid recall; BFS then expands along memory_edges with
+	// weight >= opts.WeightThreshold for up to opts.Hops levels. Results are ranked by composite
+	// score (seed_score × product of edge weights along the chain). Graph-expanded memories with
+	// importance_score < 0.4 are dropped. Results are cached in-process for 5 minutes keyed by
+	// (TaskID, queryHash).
+	RecallGraph(ctx context.Context, opts domain.RecallGraphOpts) ([]domain.RecallGraphResult, error)
 }

@@ -158,6 +158,37 @@ const (
 	EdgeDerivedFrom MemoryEdgeRelationshipType = "derived_from"
 )
 
+// RecallGraphProvenance describes how a memory was reached during a RecallGraph traversal.
+// "via:recall" means the memory was a direct seed from hybrid recall;
+// "via:graph" means it was discovered by BFS expansion along KG edges.
+type RecallGraphProvenance string
+
+const (
+	ProvenanceRecall RecallGraphProvenance = "via:recall"
+	ProvenanceGraph  RecallGraphProvenance = "via:graph"
+)
+
+// RecallGraphResult is a single entry in the response of a multi-hop graph traversal.
+// CompositeScore = seed_score × Π(edge_weight along the chain from seed to this node).
+type RecallGraphResult struct {
+	ID              uuid.UUID             `json:"id"`
+	Content         string                `json:"content"`
+	ImportanceScore float32               `json:"importance_score"`
+	CompositeScore  float64               `json:"composite_score"`
+	Provenance      RecallGraphProvenance `json:"provenance"`
+	HopDistance     int                   `json:"hop_distance"`
+}
+
+// RecallGraphOpts holds parameters for a multi-hop graph recall traversal.
+type RecallGraphOpts struct {
+	Query           string
+	WorkspaceID     uuid.UUID
+	ProjectID       *uuid.UUID
+	Hops            int
+	WeightThreshold float64
+	TaskID          *uuid.UUID
+}
+
 // MemoryEdge is a directed, typed, weighted link in the memory Knowledge Graph.
 // From-to direction: memory_from_id → memory_to_id, with RelationshipType semantics.
 type MemoryEdge struct {

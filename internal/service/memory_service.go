@@ -3,6 +3,8 @@ package service
 import (
 	"cmp"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -10,6 +12,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
@@ -1074,4 +1077,231 @@ func (s *memoryService) Supersede(ctx context.Context, oldID, newID uuid.UUID) e
 	}
 
 	return nil
+}
+
+// ── RecallGraph ───────────────────────────────────────────────────────────────
+
+// recallGraphCacheTTL is the in-process TTL for RecallGraph results.
+const recallGraphCacheTTL = 5 * time.Minute
+
+// recallGraphCacheEntry holds a cached RecallGraph result with its expiry time.
+type recallGraphCacheEntry struct {
+	results   []domain.RecallGraphResult
+	expiresAt time.Time
+}
+
+// recallGraphCache is a package-level in-process cache for RecallGraph results.
+// Key: "<taskID>:<queryHash>" — see recallGraphCacheKey.
+var recallGraphCache sync.Map //nolint:gochecknoglobals // intentional package-level cache
+
+// recallGraphCacheKey builds the cache key from the optional taskID and the SHA-256
+// of the serialised RecallGraphOpts fields that affect query results.
+func recallGraphCacheKey(opts domain.RecallGraphOpts) string {
+	taskPart := "notask"
+	if opts.TaskID != nil {
+		taskPart = opts.TaskID.String()
+	}
+	h := sha256.New()
+	_, _ = fmt.Fprintf(h, "%s|%s|%s|%d|%f",
+		opts.Query,
+		opts.WorkspaceID.String(),
+		func() string {
+			if opts.ProjectID != nil {
+				return opts.ProjectID.String()
+			}
+			return ""
+		}(),
+		opts.Hops,
+		opts.WeightThreshold,
+	)
+	return taskPart + ":" + hex.EncodeToString(h.Sum(nil))
+}
+
+// graphMinImportance is the minimum importance_score required for graph-expanded (non-seed) memories.
+const graphMinImportance float32 = 0.4
+
+// recallGraphSeedLimit is the number of seeds fetched from hybrid recall.
+const recallGraphSeedLimit = 10
+
+// RecallGraph performs a multi-hop knowledge-graph traversal.
+//
+// Algorithm:
+//  1. Seed: hybrid recall (keyword + optional vector) → top recallGraphSeedLimit memories.
+//  2. BFS: expand along memory_edges bidirectionally for up to opts.Hops levels,
+//     only following edges with weight >= opts.WeightThreshold.
+//  3. Deduplicate by memory ID (seeds take priority).
+//  4. Rank by composite score: seed_score × Π(edge_weight along the chain from seed).
+//  5. Drop graph-expanded memories (provenance="via:graph") with importance_score < 0.4.
+//  6. Cache results for recallGraphCacheTTL keyed by (taskID, queryHash).
+func (s *memoryService) RecallGraph(ctx context.Context, opts domain.RecallGraphOpts) ([]domain.RecallGraphResult, error) {
+	if opts.Query == "" {
+		return nil, apierror.ValidationError(map[string]string{
+			"query": "query is required",
+		})
+	}
+	if opts.Hops <= 0 {
+		opts.Hops = 2
+	}
+	if opts.Hops > 5 {
+		opts.Hops = 5 // safety cap
+	}
+	if opts.WeightThreshold <= 0 {
+		opts.WeightThreshold = 0.1
+	}
+
+	cacheKey := recallGraphCacheKey(opts)
+	now := time.Now()
+
+	// Check cache.
+	if raw, ok := recallGraphCache.Load(cacheKey); ok {
+		entry := raw.(recallGraphCacheEntry)
+		if now.Before(entry.expiresAt) {
+			return entry.results, nil
+		}
+		recallGraphCache.Delete(cacheKey)
+	}
+
+	// ── Step 1: Seed via hybrid recall ─────────────────────────────────────────
+	var projID *uuid.UUID
+	if opts.ProjectID != nil && *opts.ProjectID != uuid.Nil {
+		projID = opts.ProjectID
+	}
+
+	seedOpts := domain.RecallOpts{
+		Query:       opts.Query,
+		WorkspaceID: opts.WorkspaceID,
+		Limit:       recallGraphSeedLimit,
+	}
+	if projID != nil {
+		seedOpts.ProjectID = *projID
+	}
+
+	seedResults, err := s.Recall(ctx, seedOpts)
+	if err != nil {
+		return nil, fmt.Errorf("recall graph: seed recall: %w", err)
+	}
+
+	if len(seedResults) == 0 {
+		return nil, nil
+	}
+
+	// Build result map keyed by memory ID. Seeds are "via:recall" at hop 0.
+	type nodeInfo struct {
+		result         domain.RecallGraphResult
+		compositeScore float64
+	}
+	nodes := make(map[uuid.UUID]*nodeInfo, len(seedResults)*4)
+
+	for _, sm := range seedResults {
+		nodes[sm.ID] = &nodeInfo{
+			result: domain.RecallGraphResult{
+				ID:              sm.ID,
+				Content:         sm.Content,
+				ImportanceScore: sm.ImportanceScore,
+				CompositeScore:  sm.Score,
+				Provenance:      domain.ProvenanceRecall,
+				HopDistance:     0,
+			},
+			compositeScore: sm.Score,
+		}
+	}
+
+	// ── Step 2: BFS expansion ──────────────────────────────────────────────────
+	// frontier holds the IDs processed in the current BFS level.
+	frontier := make([]uuid.UUID, 0, len(seedResults))
+	for id := range nodes {
+		frontier = append(frontier, id)
+	}
+
+	for hop := 1; hop <= opts.Hops && len(frontier) > 0; hop++ {
+		edges, edgeErr := s.edgeRepo.GetNeighbors(ctx, frontier, opts.WeightThreshold)
+		if edgeErr != nil {
+			return nil, fmt.Errorf("recall graph: get neighbors hop %d: %w", hop, edgeErr)
+		}
+
+		nextFrontier := make([]uuid.UUID, 0)
+
+		for _, edge := range edges {
+			// Determine which end is the known node and which is the new neighbor.
+			var knownID, neighborID uuid.UUID
+			for _, fid := range frontier {
+				if fid == edge.MemoryFromID {
+					knownID = fid
+					neighborID = edge.MemoryToID
+					break
+				}
+				if fid == edge.MemoryToID {
+					knownID = fid
+					neighborID = edge.MemoryFromID
+					break
+				}
+			}
+			if knownID == uuid.Nil {
+				continue
+			}
+
+			known, ok := nodes[knownID]
+			if !ok {
+				continue
+			}
+
+			// Composite score = parent composite × this edge weight.
+			newScore := known.compositeScore * float64(edge.Weight)
+
+			if existing, seen := nodes[neighborID]; seen {
+				// Already reached: update composite score if this path is better.
+				if newScore > existing.compositeScore {
+					existing.compositeScore = newScore
+					existing.result.CompositeScore = newScore
+					existing.result.HopDistance = hop
+				}
+				continue
+			}
+
+			// New node: fetch the memory to get content and importance_score.
+			mem, fetchErr := s.memRepo.GetByID(ctx, neighborID)
+			if fetchErr != nil || mem == nil {
+				continue // skip unreachable or deleted memories
+			}
+
+			// Drop low-importance graph-expanded memories.
+			if mem.ImportanceScore < graphMinImportance {
+				continue
+			}
+
+			nodes[neighborID] = &nodeInfo{
+				result: domain.RecallGraphResult{
+					ID:              mem.ID,
+					Content:         mem.Content,
+					ImportanceScore: mem.ImportanceScore,
+					CompositeScore:  newScore,
+					Provenance:      domain.ProvenanceGraph,
+					HopDistance:     hop,
+				},
+				compositeScore: newScore,
+			}
+			nextFrontier = append(nextFrontier, neighborID)
+		}
+
+		frontier = nextFrontier
+	}
+
+	// ── Step 3: Collect and sort ───────────────────────────────────────────────
+	results := make([]domain.RecallGraphResult, 0, len(nodes))
+	for _, n := range nodes {
+		n.result.CompositeScore = n.compositeScore
+		results = append(results, n.result)
+	}
+
+	slices.SortFunc(results, func(a, b domain.RecallGraphResult) int {
+		return cmp.Compare(b.CompositeScore, a.CompositeScore)
+	})
+
+	// ── Step 4: Cache and return ───────────────────────────────────────────────
+	recallGraphCache.Store(cacheKey, recallGraphCacheEntry{
+		results:   results,
+		expiresAt: now.Add(recallGraphCacheTTL),
+	})
+
+	return results, nil
 }
