@@ -129,10 +129,11 @@ jobs:
         run: |
           ssh root@216.57.106.222 bash << 'REMOTE'
           set -uo pipefail
-          DB_URL=$(grep -m1 "^DATABASE_URL=" /opt/evc-mesh/.env.prod | cut -d= -f2- || true)
+          # Handle both DATABASE_URL=... and export DATABASE_URL=... formats
+          DB_URL=$(grep -m1 'DATABASE_URL=' /opt/evc-mesh/.env.prod | sed 's/.*DATABASE_URL=//' || true)
           if [ -z "${DB_URL:-}" ]; then
             echo "ERROR: DATABASE_URL not found in /opt/evc-mesh/.env.prod" >&2
-            ls -la /opt/evc-mesh/ >&2
+            grep -c "" /opt/evc-mesh/.env.prod >&2 || echo "file missing" >&2
             exit 1
           fi
           echo "=== Running goose migrations ==="
