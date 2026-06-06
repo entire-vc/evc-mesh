@@ -89,11 +89,45 @@ jobs:
           NATS_URL: "nats://localhost:4222"
         run: go test ./... -v -race -coverprofile=coverage.out -covermode=atomic
 
-  deploy:
-    name: Deploy
+  migrate:
+    name: Migrate (prod DB gate)
     runs-on: ubuntu-latest
     needs: [lint, test]
     if: needs.lint.result == 'success' && needs.test.result == 'success'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup SSH
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.DEPLOY_SSH_KEY }}
+
+      - name: Add server to known hosts
+        run: ssh-keyscan -H 216.57.106.222 >> ~/.ssh/known_hosts
+
+      - name: Sync migration files to prod
+        run: |
+          rsync -avz --checksum migrations/ root@216.57.106.222:/opt/evc-mesh/migrations/
+
+      # Runs goose up on prod via the official goose docker image — goose CLI is not installed
+      # on the host (matches the rollback pattern in docs/deploy-runbook.md §Rollback).
+      # DATABASE_URL is read from /opt/evc-mesh/.env.prod; never leaves the host.
+      # Hard fail: non-zero exit prevents the deploy job from starting (fail-closed).
+      # Ref: CLAUDE-workflow.md §1b Deploy Discipline
+      - name: Run migrations on prod (fail-closed)
+        run: |
+          ssh root@216.57.106.222 'set -euo pipefail
+            DB_URL=$(grep ^DATABASE_URL /opt/evc-mesh/.env.prod | cut -d= -f2-)
+            docker run --rm --network host \
+              -v /opt/evc-mesh/migrations:/migrations \
+              ghcr.io/pressly/goose:latest \
+              goose -dir /migrations postgres "$DB_URL" up'
+
+  deploy:
+    name: Deploy
+    runs-on: ubuntu-latest
+    needs: [lint, test, migrate]
+    if: needs.lint.result == 'success' && needs.test.result == 'success' && needs.migrate.result == 'success'
     steps:
       - uses: actions/checkout@v4
 
@@ -148,10 +182,6 @@ jobs:
           sha256sum mesh-api | cut -d' ' -f1 > mesh-api.sha256
           rsync -avz --checksum mesh-api root@216.57.106.222:/opt/evc-mesh/bin/mesh-api.new
           rsync -avz mesh-api.sha256 root@216.57.106.222:/opt/evc-mesh/bin/mesh-api.new.sha256
-
-      - name: Sync migrations
-        run: |
-          rsync -avz --checksum migrations/ root@216.57.106.222:/opt/evc-mesh/migrations/
 
       - name: Atomic swap and restart
         run: |
