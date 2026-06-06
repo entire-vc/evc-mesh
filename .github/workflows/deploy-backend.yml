@@ -97,6 +97,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
       - name: Setup SSH
         uses: webfactory/ssh-agent@v0.9.0
         with:
@@ -109,19 +114,22 @@ jobs:
         run: |
           rsync -avz --checksum migrations/ root@216.57.106.222:/opt/evc-mesh/migrations/
 
-      # Runs goose up on prod via the official goose docker image — goose CLI is not installed
-      # on the host (matches the rollback pattern in docs/deploy-runbook.md §Rollback).
-      # DATABASE_URL is read from /opt/evc-mesh/.env.prod; never leaves the host.
+      # Build goose for linux/amd64 on the CI runner and upload to prod so migrations
+      # run directly on the host without requiring docker or a pre-installed goose CLI.
+      # DATABASE_URL is read from /opt/evc-mesh/.env.prod and never leaves the prod host.
       # Hard fail: non-zero exit prevents the deploy job from starting (fail-closed).
       # Ref: CLAUDE-workflow.md §1b Deploy Discipline
+      - name: Build and upload goose to prod
+        run: |
+          GOOS=linux GOARCH=amd64 go build -o goose-bin github.com/pressly/goose/v3/cmd/goose
+          rsync -avz goose-bin root@216.57.106.222:/opt/evc-mesh/bin/goose
+          ssh root@216.57.106.222 'chmod +x /opt/evc-mesh/bin/goose'
+
       - name: Run migrations on prod (fail-closed)
         run: |
           ssh root@216.57.106.222 'set -euo pipefail
             DB_URL=$(grep ^DATABASE_URL /opt/evc-mesh/.env.prod | cut -d= -f2-)
-            docker run --rm --network host \
-              -v /opt/evc-mesh/migrations:/migrations \
-              ghcr.io/pressly/goose:latest \
-              goose -dir /migrations postgres "$DB_URL" up'
+            /opt/evc-mesh/bin/goose -dir /opt/evc-mesh/migrations postgres "$DB_URL" up'
 
   deploy:
     name: Deploy
