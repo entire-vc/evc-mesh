@@ -584,10 +584,17 @@ type MemoryRepository interface {
 type MemoryEdgeRepository interface {
 	// UpsertEdge inserts a new edge or updates weight/last_traversed_at on conflict (from, to, type).
 	UpsertEdge(ctx context.Context, edge *domain.MemoryEdge) error
+	// ReinforceEdge increments weight by 0.1 (capped at 5.0) and sets last_traversed_at=NOW()
+	// for the edge identified by (fromID, toID, relType). No-op if the edge does not exist.
+	ReinforceEdge(ctx context.Context, fromID, toID uuid.UUID, relType domain.MemoryEdgeRelationshipType) error
 	// DecayWeights applies geometric decay (×0.95) to edges not traversed in >30 days.
 	DecayWeights(ctx context.Context) (int64, error)
 	// PruneDeadEdges deletes edges with weight < 0.1.
 	PruneDeadEdges(ctx context.Context) (int64, error)
+	// GetNeighbors returns all edges connected to any of the given memory IDs
+	// (bidirectional: memory_from_id ∈ ids OR memory_to_id ∈ ids) with weight >= weightThreshold.
+	// Used by RecallGraph BFS expansion across the KG.
+	GetNeighbors(ctx context.Context, ids []uuid.UUID, weightThreshold float64) ([]domain.MemoryEdge, error)
 }
 
 // WorkspaceInviteRepository manages persistence for pending workspace invitations.

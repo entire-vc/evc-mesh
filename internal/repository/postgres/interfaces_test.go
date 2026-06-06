@@ -22,4 +22,5 @@ func TestImplementsInterfaces(t *testing.T) {
 	var _ repository.AgentRepository = (*AgentRepo)(nil)
 	var _ repository.EventBusMessageRepository = (*EventBusMessageRepo)(nil)
 	var _ repository.ActivityLogRepository = (*ActivityLogRepo)(nil)
+	var _ repository.MemoryEdgeRepository  = (*MemoryEdgesRepo)(nil)
 }
