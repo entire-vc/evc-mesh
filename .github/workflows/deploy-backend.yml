@@ -116,7 +116,7 @@ jobs:
 
       # Build goose for linux/amd64 on the CI runner and upload to prod so migrations
       # run directly on the host without requiring docker or a pre-installed goose CLI.
-      # DATABASE_URL is read from /opt/evc-mesh/.env.prod and never leaves the prod host.
+      # DSN is constructed from DB_* component vars in /opt/evc-mesh/.env.prod (no DATABASE_URL alias).
       # Hard fail: non-zero exit prevents the deploy job from starting (fail-closed).
       # Ref: CLAUDE-workflow.md §1b Deploy Discipline
       - name: Build and upload goose to prod
@@ -129,13 +129,16 @@ jobs:
         run: |
           ssh root@216.57.106.222 bash << 'REMOTE'
           set -uo pipefail
-          # Handle both DATABASE_URL=... and export DATABASE_URL=... formats
-          DB_URL=$(grep -m1 'DATABASE_URL=' /opt/evc-mesh/.env.prod | sed 's/.*DATABASE_URL=//' || true)
-          if [ -z "${DB_URL:-}" ]; then
-            echo "ERROR: DATABASE_URL not found in /opt/evc-mesh/.env.prod" >&2
+          # Source component DB_* vars from .env.prod (prod uses DB_HOST/PORT/USER/PASSWORD/NAME, not DATABASE_URL)
+          set -a
+          source /opt/evc-mesh/.env.prod
+          set +a
+          if [ -z "${DB_USER:-}" ] || [ -z "${DB_HOST:-}" ] || [ -z "${DB_NAME:-}" ] || [ -z "${DB_PASSWORD:-}" ]; then
+            echo "ERROR: DB_USER/DB_HOST/DB_NAME/DB_PASSWORD not found in /opt/evc-mesh/.env.prod" >&2
             grep -c "" /opt/evc-mesh/.env.prod >&2 || echo "file missing" >&2
             exit 1
           fi
+          DB_URL="postgres://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT:-5432}/${DB_NAME}?sslmode=${DB_SSL_MODE:-disable}"
           echo "=== Running goose migrations ==="
           /opt/evc-mesh/bin/goose -dir /opt/evc-mesh/migrations postgres "$DB_URL" up
           REMOTE
