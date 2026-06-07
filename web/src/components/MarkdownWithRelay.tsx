@@ -75,7 +75,7 @@ export function MarkdownWithRelay({
     <div className={className}>
       {segments.map((seg, idx) =>
         seg.type === "relay" ? (
-          <RelayPreviewCard key={idx} relayUrl={seg.value} label={seg.label} projId={projId} />
+          <RelayPreviewCard key={seg.value} relayUrl={seg.value} label={seg.label} projId={projId} />
         ) : seg.value.trim() ? (
           <MarkdownRenderer
             key={idx}
