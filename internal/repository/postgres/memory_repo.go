@@ -335,8 +335,19 @@ func (r *MemoryRepo) ListByWorkspaceProject(ctx context.Context, workspaceID uui
 		return nil, err
 	}
 	memories := make([]domain.Memory, len(rows))
+	ids := make([]uuid.UUID, len(rows))
 	for i, row := range rows {
 		memories[i] = row.toDomain()
+		ids[i] = row.ID
+	}
+	// Batch-touch last_accessed_at (1-hour idempotency window, same pattern as FullTextSearch).
+	if len(ids) > 0 {
+		_, _ = r.db.ExecContext(ctx,
+			`UPDATE memories SET last_accessed_at = NOW()
+			 WHERE id = ANY($1)
+			   AND (last_accessed_at IS NULL OR last_accessed_at < NOW() - INTERVAL '1 hour')`,
+			pq.Array(ids),
+		)
 	}
 	return memories, nil
 }
@@ -483,8 +494,19 @@ func (r *MemoryRepo) List(ctx context.Context, filter domain.MemoryListFilter) (
 	}
 
 	items := make([]domain.ScoredMemory, len(rows))
+	ids := make([]uuid.UUID, len(rows))
 	for i, row := range rows {
 		items[i] = domain.ScoredMemory{Memory: row.toDomain()}
+		ids[i] = row.ID
+	}
+	// Batch-touch last_accessed_at (1-hour idempotency window, same pattern as FullTextSearch).
+	if len(ids) > 0 {
+		_, _ = r.db.ExecContext(ctx,
+			`UPDATE memories SET last_accessed_at = NOW()
+			 WHERE id = ANY($1)
+			   AND (last_accessed_at IS NULL OR last_accessed_at < NOW() - INTERVAL '1 hour')`,
+			pq.Array(ids),
+		)
 	}
 
 	return &domain.MemoryListResult{
