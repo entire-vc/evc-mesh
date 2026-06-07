@@ -105,7 +105,8 @@ export function TaskSlideOver({
     backTaskId ? state.tasksById[backTaskId] ?? null : null,
   );
   const { fetchTask, updateTask, moveTask, duplicateTask } = useTaskStore();
-  const { statuses, fetchStatuses, currentProject } = useProjectStore();
+  const { statuses, fetchStatuses, currentProject, projects } =
+    useProjectStore();
   const { fields: customFieldDefs, fetchFields: fetchCustomFields } =
     useCustomFieldStore();
   const { projectMembers, fetchProjectMembers } = useMemberStore();
@@ -1037,6 +1038,11 @@ export function TaskSlideOver({
                       value={descDraft}
                       onChange={setDescDraft}
                       placeholder="Add a description..."
+                      projId={currentTask.project_id}
+                      projectSettings={
+                        (projects.find((p) => p.id === currentTask.project_id) ??
+                          currentProject)?.settings
+                      }
                     />
                   ) : (
                     <div
@@ -1143,7 +1149,14 @@ export function TaskSlideOver({
               )}
               {rightTab === "artifacts" && (
                 <div className="flex-1 overflow-y-auto p-3">
-                  <ArtifactList taskId={currentTask.id} />
+                  <ArtifactList
+                    taskId={currentTask.id}
+                    projId={currentTask.project_id}
+                    projectSettings={
+                      (projects.find((p) => p.id === currentTask.project_id) ??
+                        currentProject)?.settings
+                    }
+                  />
                 </div>
               )}
               {rightTab === "activity" && (
