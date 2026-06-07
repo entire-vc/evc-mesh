@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { formatBytes, formatRelative } from "@/lib/utils";
+import { useProjectTrIntegration } from "@/hooks/useProjectTrIntegration";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -51,7 +52,7 @@ const artifactTypeBadgeVariant: Record<ArtifactType, "default" | "secondary" | "
   data: "outline",
 };
 
-export function ArtifactList({ taskId, refreshKey, projId, projectSettings, onRelayDocSelect }: ArtifactListProps) {
+export function ArtifactList({ taskId, refreshKey, projId, onRelayDocSelect }: ArtifactListProps) {
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
   const [loading, setLoading] = useState(true);
   const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -61,10 +62,7 @@ export function ArtifactList({ taskId, refreshKey, projId, projectSettings, onRe
   const [pickerOpen, setPickerOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const hasTrIntegration =
-    projId &&
-    typeof projectSettings?.tr_share_id === "string" &&
-    !!projectSettings.tr_share_id;
+  const { enabled: hasTrIntegration } = useProjectTrIntegration(projId);
 
   const fetchArtifacts = useCallback(async () => {
     try {
