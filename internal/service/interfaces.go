@@ -79,6 +79,7 @@ type CheckoutResult struct {
 	CheckedOutBy    uuid.UUID              `json:"checked_out_by"`
 	ExpiresAt       time.Time              `json:"expires_at"`
 	DelegationLevel domain.DelegationLevel `json:"delegation_level"`
+	ProjectID       uuid.UUID              `json:"project_id"`
 }
 
 // CheckoutConflictError is returned when CheckoutTask finds the task locked by

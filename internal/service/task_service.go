@@ -1330,6 +1330,7 @@ func (s *taskService) CheckoutTask(ctx context.Context, taskID uuid.UUID, ttlMin
 		CheckedOutBy:    actorID,
 		ExpiresAt:       expiresAt,
 		DelegationLevel: task.DelegationLevel,
+		ProjectID:       task.ProjectID,
 	}, nil
 }
 
@@ -1405,6 +1406,7 @@ func (s *taskService) ExtendCheckout(ctx context.Context, taskID, token uuid.UUI
 		CheckedOutBy:    *task.CheckedOutBy,
 		ExpiresAt:       newExpires,
 		DelegationLevel: task.DelegationLevel,
+		ProjectID:       task.ProjectID,
 	}, nil
 }
 
