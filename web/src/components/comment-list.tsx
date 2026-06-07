@@ -7,7 +7,9 @@ import {
   useRef,
   useState,
 } from "react";
-import { Bot, Edit2, Lock, Reply, Trash2, User } from "lucide-react";
+import { BookOpen, Bot, Edit2, Lock, Reply, Trash2, User } from "lucide-react";
+import { RelayDocPicker } from "@/components/RelayDocPicker";
+import { useProjectTrIntegration } from "@/hooks/useProjectTrIntegration";
 import { api, getMentionables } from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { formatRelative } from "@/lib/utils";
@@ -23,6 +25,7 @@ import type { ActorType, Comment, CreateCommentRequest, Mentionable, PaginatedRe
 
 interface CommentListProps {
   taskId: string;
+  projId: string;
 }
 
 function ActorIcon({ type }: { type: ActorType }) {
@@ -212,14 +215,17 @@ function byNewestFirst(a: Comment, b: Comment): number {
   return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
 }
 
-export function CommentList({ taskId }: CommentListProps) {
+export function CommentList({ taskId, projId }: CommentListProps) {
   const [comments, setComments] = useState<Comment[]>([]);
   const [loading, setLoading] = useState(true);
   const [body, setBody] = useState("");
   const [isInternal, setIsInternal] = useState(false);
   const [replyTo, setReplyTo] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [pickerOpen, setPickerOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  const { enabled: hasTrIntegration } = useProjectTrIntegration(projId);
 
   // @-mention autocomplete state
   const [mentionQuery, setMentionQuery] = useState<string | null>(null);
@@ -385,6 +391,23 @@ export function CommentList({ taskId }: CommentListProps) {
     setBody("");
   };
 
+  const handleDocSelect = useCallback(
+    (relayUrl: string) => {
+      const textarea = textareaRef.current;
+      if (!textarea) return;
+      const start = textarea.selectionStart;
+      const prefix = start > 0 && body[start - 1] !== "\n" ? "\n" : "";
+      const insertion = prefix + relayUrl + "\n";
+      const next = body.slice(0, start) + insertion + body.slice(start);
+      setBody(next);
+      requestAnimationFrame(() => {
+        textarea.setSelectionRange(start + insertion.length, start + insertion.length);
+        textarea.focus();
+      });
+    },
+    [body],
+  );
+
   if (loading) {
     return (
       <div className="flex-1 p-4 space-y-3">
@@ -511,11 +534,31 @@ export function CommentList({ taskId }: CommentListProps) {
               <Lock className="h-3.5 w-3.5" />
               Internal note
             </label>
-            <Button type="submit" size="sm" disabled={!body.trim() || submitting}>
-              Comment
-            </Button>
+            <div className="flex items-center gap-2">
+              {hasTrIntegration && (
+                <button
+                  type="button"
+                  title="Attach Obsidian doc"
+                  onClick={() => setPickerOpen(true)}
+                  className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+                >
+                  <BookOpen className="h-3.5 w-3.5" />
+                </button>
+              )}
+              <Button type="submit" size="sm" disabled={!body.trim() || submitting}>
+                Comment
+              </Button>
+            </div>
           </div>
         </form>
+        {hasTrIntegration && (
+          <RelayDocPicker
+            projId={projId}
+            open={pickerOpen}
+            onClose={() => setPickerOpen(false)}
+            onSelect={handleDocSelect}
+          />
+        )}
       </div>
     </div>
   );

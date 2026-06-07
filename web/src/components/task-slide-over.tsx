@@ -1131,7 +1131,7 @@ export function TaskSlideOver({
 
               {/* Content */}
               {rightTab === "comments" && (
-                <CommentList taskId={currentTask.id} />
+                <CommentList taskId={currentTask.id} projId={currentTask.project_id} />
               )}
               {rightTab === "subtasks" && (
                 <div className="flex-1 overflow-y-auto p-3">

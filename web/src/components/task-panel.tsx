@@ -1197,7 +1197,7 @@ export function TaskPanel({
                 single scrollable wrapper. */}
             {activeMobileTab === "comments" ? (
               <div className="flex flex-1 min-h-0 flex-col overflow-hidden">
-                <CommentList taskId={currentTask.id} />
+                <CommentList taskId={currentTask.id} projId={currentTask.project_id} />
               </div>
             ) : (
               <div className="flex-1 overflow-y-auto">
@@ -1330,7 +1330,7 @@ export function TaskPanel({
 
               {/* Tab content */}
               {activeDesktopTab === "comments" && (
-                <CommentList taskId={currentTask.id} />
+                <CommentList taskId={currentTask.id} projId={currentTask.project_id} />
               )}
               {activeDesktopTab === "subtasks" && (
                 <div className="flex-1 overflow-y-auto p-3">
