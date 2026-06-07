@@ -56,6 +56,7 @@ interface CommentItemProps {
   onReply: (parentId: string) => void;
   onSave: (commentId: string, newBody: string) => Promise<void>;
   onDelete: (commentId: string) => void;
+  projId?: string;
   mentionables?: Map<string, MentionEntry>;
   wsSlug?: string;
 }
@@ -67,6 +68,7 @@ function CommentItem({
   onReply,
   onSave,
   onDelete,
+  projId,
   mentionables,
   wsSlug,
 }: CommentItemProps) {
@@ -184,6 +186,7 @@ function CommentItem({
           <MarkdownWithRelay
             content={comment.body}
             className="mt-1.5"
+            projId={projId}
             mentionables={mentionables}
             wsSlug={wsSlug}
           />
@@ -201,6 +204,7 @@ function CommentItem({
               onReply={onReply}
               onSave={onSave}
               onDelete={onDelete}
+              projId={projId}
               mentionables={mentionables}
               wsSlug={wsSlug}
             />
@@ -464,6 +468,7 @@ export function CommentList({ taskId, projId }: CommentListProps) {
               onReply={handleReply}
               onSave={handleSave}
               onDelete={handleDelete}
+              projId={projId}
               mentionables={mentionables}
               wsSlug={wsSlug}
             />

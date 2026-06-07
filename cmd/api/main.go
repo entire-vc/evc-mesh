@@ -393,6 +393,7 @@ func main() {
 	mentionHandler := handler.NewMentionHandler(mentionService)
 	projectIntegrationHandler := handler.NewProjectIntegrationHandler(projectIntegrationService)
 	trSearchHandler := handler.NewTrSearchHandler(projectIntegrationService)
+	trPreviewURLHandler := handler.NewTrPreviewURLHandler(projectIntegrationService)
 	canonicalUpdatesHandler := handler.NewCanonicalUpdatesHandler(memoryService, sessionRepo, agentService)
 	mentionablesService := service.NewMentionablesService(agentRepo, userRepo)
 	mentionablesHandler := handler.NewMentionablesHandler(mentionablesService)
@@ -715,8 +716,9 @@ func main() {
 	api.DELETE("/projects/:proj_id/integrations/team-relay", projectIntegrationHandler.DeleteTeamRelay, projAccess, rbac(mw.PermManageWebhooks))
 	api.GET("/projects/:proj_id/integrations", projectIntegrationHandler.List, projAccess)
 
-	// TR document search (Team Relay share contents).
+	// TR document search and authenticated preview-url resolution (Team Relay share contents).
 	api.GET("/projects/:proj_id/tr/search", trSearchHandler.Search, projAccess)
+	api.GET("/projects/:proj_id/tr/preview-url", trPreviewURLHandler.Get, projAccess)
 
 	// Analytics routes.
 	api.GET("/workspaces/:ws_id/analytics", analyticsHandler.GetMetrics)

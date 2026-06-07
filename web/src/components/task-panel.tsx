@@ -989,7 +989,7 @@ export function TaskPanel({
       ) : (
         <div className="min-h-[60px] rounded-lg border border-border p-3 text-sm">
           {currentTask.description ? (
-            <MarkdownWithRelay content={currentTask.description} />
+            <MarkdownWithRelay content={currentTask.description} projId={currentTask.project_id} />
           ) : (
             <span
               className="cursor-text text-muted-foreground hover:text-foreground"
