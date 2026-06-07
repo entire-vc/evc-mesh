@@ -19,6 +19,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { RelayDocPicker } from "@/components/RelayDocPicker";
+import { useProjectTrIntegration } from "@/hooks/useProjectTrIntegration";
 import { uploadArtifact } from "@/components/markdown-editor";
 import type { Artifact, ArtifactType, PaginatedResponse } from "@/types";
 
@@ -27,6 +28,7 @@ interface ArtifactListProps {
   /** Increment this counter from parent to trigger a re-fetch */
   refreshKey?: number;
   projId?: string;
+  /** @deprecated picker now gates on useProjectTrIntegration(projId); kept for caller compat */
   projectSettings?: Record<string, unknown>;
   onRelayDocSelect?: (relayUrl: string) => void;
 }
@@ -51,7 +53,7 @@ const artifactTypeBadgeVariant: Record<ArtifactType, "default" | "secondary" | "
   data: "outline",
 };
 
-export function ArtifactList({ taskId, refreshKey, projId, projectSettings, onRelayDocSelect }: ArtifactListProps) {
+export function ArtifactList({ taskId, refreshKey, projId, onRelayDocSelect }: ArtifactListProps) {
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
   const [loading, setLoading] = useState(true);
   const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -61,10 +63,9 @@ export function ArtifactList({ taskId, refreshKey, projId, projectSettings, onRe
   const [pickerOpen, setPickerOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const hasTrIntegration =
-    projId &&
-    typeof projectSettings?.tr_share_id === "string" &&
-    !!projectSettings.tr_share_id;
+  // Gate the picker on the live integration hook (same source as description-editor),
+  // not the deprecated projectSettings.tr_share_id which is usually unset.
+  const { enabled: hasTrIntegration } = useProjectTrIntegration(projId);
 
   const fetchArtifacts = useCallback(async () => {
     try {

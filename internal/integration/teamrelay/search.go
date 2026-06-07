@@ -37,7 +37,11 @@ func SearchDocs(ctx context.Context, relayURL, shareSlug, agentKey, q string, li
 	if err != nil {
 		return nil, fmt.Errorf("teamrelay search: build request: %w", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+agentKey)
+	// TR share agent keys authenticate via X-Agent-Key (or ?agent_key=). The
+	// Authorization: Bearer path is the member-JWT path; for a share key it is
+	// treated as unauthenticated and the relay silently strips web_folder_items
+	// from the response, so the picker sees zero docs.
+	req.Header.Set("X-Agent-Key", agentKey)
 
 	resp, err := relayHTTPClient.Do(req)
 	if err != nil {
