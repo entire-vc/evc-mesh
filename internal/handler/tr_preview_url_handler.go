@@ -2,7 +2,7 @@ package handler
 
 import (
 	"encoding/json"
-	"fmt"
+	"errors"
 	"net/http"
 	"net/url"
 	"os"
@@ -42,6 +42,10 @@ func (h *TrPreviewURLHandler) Get(c echo.Context) error {
 
 	pi, err := h.piService.GetTeamRelay(c.Request().Context(), projectID)
 	if err != nil {
+		var apiErr *apierror.Error
+		if errors.As(err, &apiErr) {
+			return c.JSON(http.StatusOK, map[string]any{"available": false})
+		}
 		return handleError(c, err)
 	}
 	if !pi.Enabled || pi.AgentKey == "" {
@@ -77,8 +81,14 @@ func (h *TrPreviewURLHandler) Get(c echo.Context) error {
 	}
 	webBase = strings.TrimRight(webBase, "/")
 
-	iframeSrc := fmt.Sprintf("%s/%s/%s?agent_key=%s",
-		webBase, slug, path, url.QueryEscape(pi.AgentKey))
+	baseU, _ := url.Parse(webBase + "/" + slug + "/" + path)
+	if strings.Contains(baseU.Path, "..") {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid relay_url path"))
+	}
+	q := url.Values{}
+	q.Set("agent_key", pi.AgentKey)
+	baseU.RawQuery = q.Encode()
+	iframeSrc := baseU.String()
 
 	return c.JSON(http.StatusOK, map[string]any{
 		"available":  true,
