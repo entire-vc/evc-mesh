@@ -37,7 +37,7 @@ func SearchDocs(ctx context.Context, relayURL, shareSlug, agentKey, q string, li
 	if err != nil {
 		return nil, fmt.Errorf("teamrelay search: build request: %w", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+agentKey)
+	req.Header.Set("X-Agent-Key", agentKey)
 
 	resp, err := relayHTTPClient.Do(req)
 	if err != nil {
