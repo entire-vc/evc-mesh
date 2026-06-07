@@ -46,6 +46,7 @@ interface MarkdownWithRelayProps {
   className?: string;
   mentionables?: Map<string, MentionEntry>;
   wsSlug?: string;
+  projId?: string;
 }
 
 // Drop-in replacement for MarkdownRenderer that renders relay:// URLs as preview cards.
@@ -54,6 +55,7 @@ export function MarkdownWithRelay({
   className,
   mentionables,
   wsSlug,
+  projId,
 }: MarkdownWithRelayProps) {
   const segments = splitRelaySegments(content);
 
@@ -73,7 +75,7 @@ export function MarkdownWithRelay({
     <div className={className}>
       {segments.map((seg, idx) =>
         seg.type === "relay" ? (
-          <RelayPreviewCard key={idx} relayUrl={seg.value} label={seg.label} />
+          <RelayPreviewCard key={idx} relayUrl={seg.value} label={seg.label} projId={projId} />
         ) : seg.value.trim() ? (
           <MarkdownRenderer
             key={idx}

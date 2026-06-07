@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { AlertCircle, ExternalLink, FileText } from "lucide-react";
+import { api } from "@/lib/api";
 
 const LOAD_TIMEOUT_MS = 6000;
 
@@ -22,32 +23,53 @@ function relayToHttps(relayUrl: string): string {
 interface RelayPreviewCardProps {
   relayUrl: string;
   label?: string;
+  projId?: string;
 }
 
 type IframeState = "loading" | "loaded" | "failed";
 
-export function RelayPreviewCard({ relayUrl, label }: RelayPreviewCardProps) {
+export function RelayPreviewCard({ relayUrl, label, projId }: RelayPreviewCardProps) {
   const docName = label || extractDocName(relayUrl);
   const httpsUrl = relayToHttps(relayUrl);
-  const [iframeState, setIframeState] = useState<IframeState>("loading");
-  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // null = waiting for API resolution (only when projId is provided)
+  const [iframeSrc, setIframeSrc] = useState<string | null>(projId ? null : httpsUrl);
+  const [iframeState, setIframeState] = useState<IframeState>("loading");
+
+  // Resolve authenticated iframe src via the project's TR integration
   useEffect(() => {
-    timeoutRef.current = setTimeout(() => {
+    if (!projId) return;
+    let cancelled = false;
+    api<{ available: boolean; iframe_src?: string }>(
+      `/api/v1/projects/${projId}/tr/preview-url?relay_url=${encodeURIComponent(relayUrl)}`
+    )
+      .then((data) => {
+        if (!cancelled) {
+          setIframeSrc(data.available && data.iframe_src ? data.iframe_src : httpsUrl);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setIframeSrc(httpsUrl);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [projId, relayUrl]);
+
+  // Start the 6s fallback timeout only once we have a resolved src to load
+  useEffect(() => {
+    if (iframeSrc === null) return;
+    const id = setTimeout(() => {
       setIframeState((s) => (s === "loading" ? "failed" : s));
     }, LOAD_TIMEOUT_MS);
-    return () => {
-      if (timeoutRef.current) clearTimeout(timeoutRef.current);
-    };
-  }, []);
+    return () => clearTimeout(id);
+  }, [iframeSrc]);
 
   function handleLoad() {
-    if (timeoutRef.current) clearTimeout(timeoutRef.current);
     setIframeState("loaded");
   }
 
   function handleError() {
-    if (timeoutRef.current) clearTimeout(timeoutRef.current);
     setIframeState("failed");
   }
 
@@ -67,9 +89,13 @@ export function RelayPreviewCard({ relayUrl, label }: RelayPreviewCardProps) {
         </a>
       </div>
 
-      {iframeState !== "failed" ? (
+      {iframeSrc === null ? (
+        <div className="flex h-64 items-center justify-center border-t border-border text-xs text-muted-foreground">
+          Loading…
+        </div>
+      ) : iframeState !== "failed" ? (
         <iframe
-          src={httpsUrl}
+          src={iframeSrc}
           title={docName}
           sandbox="allow-scripts allow-same-origin"
           className="h-64 w-full border-t border-border"
