@@ -30,9 +30,11 @@ type syncUploadResponse struct {
 }
 
 // Publisher is the interface consumed by the artifact upload hook.
-// Publish returns the relay-reported public URL (or "" if none) plus a best-effort error.
+// Publish returns the relay-reported public URL (or "" if none), the agent key used
+// for the upload (so callers can persist it for authenticated open URLs), and a
+// best-effort error.
 type Publisher interface {
-	Publish(ctx context.Context, taskID uuid.UUID, artifactName string, content []byte, contentType string) (string, error)
+	Publish(ctx context.Context, taskID uuid.UUID, artifactName string, content []byte, contentType string) (publicURL, agentKey string, err error)
 }
 
 type client struct {
@@ -53,28 +55,29 @@ func transportEnabled() bool {
 // Publish pushes an artifact to the Team Relay share for the project the task belongs to.
 // It is best-effort: all errors are logged but never returned to the caller.
 // On a successful upload it returns the relay-reported public URL (or "" if the relay
-// omits one), which the caller persists into the artifact metadata.
-func (c *client) Publish(ctx context.Context, taskID uuid.UUID, artifactName string, content []byte, contentType string) (string, error) {
+// omits one) and the agent key used — the caller persists both into artifact metadata so
+// the UI can construct an authenticated open URL without a server round-trip.
+func (c *client) Publish(ctx context.Context, taskID uuid.UUID, artifactName string, content []byte, contentType string) (publicURL, agentKey string, err error) {
 	// Resolve task → project.
-	task, err := c.taskRepo.GetByID(ctx, taskID)
-	if err != nil || task == nil {
-		return "", nil // best-effort; task gone or DB error
+	task, tErr := c.taskRepo.GetByID(ctx, taskID)
+	if tErr != nil || task == nil {
+		return "", "", nil // best-effort; task gone or DB error
 	}
 
-	pi, err := c.piRepo.Get(ctx, task.ProjectID, "team_relay")
-	if err != nil || pi == nil || !pi.Enabled {
-		return "", nil // integration absent or disabled — silent no-op
+	pi, pErr := c.piRepo.Get(ctx, task.ProjectID, "team_relay")
+	if pErr != nil || pi == nil || !pi.Enabled {
+		return "", "", nil // integration absent or disabled — silent no-op
 	}
 
 	var settings domain.TeamRelaySettings
 	if uErr := json.Unmarshal(pi.Settings, &settings); uErr != nil {
 		log.Printf("teamrelay: bad settings for project %s: %v", task.ProjectID, uErr)
-		return "", nil
+		return "", "", nil
 	}
 
-	proj, err := c.projRepo.GetByID(ctx, task.ProjectID)
-	if err != nil || proj == nil {
-		return "", nil
+	proj, prErr := c.projRepo.GetByID(ctx, task.ProjectID)
+	if prErr != nil || proj == nil {
+		return "", "", nil
 	}
 
 	taskShortID := taskID.String()[:8]
@@ -91,7 +94,7 @@ func (c *client) Publish(ctx context.Context, taskID uuid.UUID, artifactName str
 
 	if !transportEnabled() {
 		log.Printf("teamrelay: would publish to relay: %s (transport disabled)", filePath)
-		return "", nil
+		return "", "", nil
 	}
 
 	// Prefer ShareID (UUID) over ShareSlug — UUID-based path skips the web_published gate
@@ -102,7 +105,8 @@ func (c *client) Publish(ctx context.Context, taskID uuid.UUID, artifactName str
 		shareIdentifier = settings.ShareSlug
 	}
 
-	return transport(ctx, shareIdentifier, filePath, content, contentType, pi.AgentKey)
+	webURL, tErr := transport(ctx, shareIdentifier, filePath, content, contentType, pi.AgentKey)
+	return webURL, pi.AgentKey, tErr
 }
 
 // transport POSTs artifact bytes to the relay sync-upload endpoint and returns the
