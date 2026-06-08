@@ -134,22 +134,39 @@ export function ArtifactList({ taskId, refreshKey, projId, onRelayDocSelect }: A
     [handleUploadFiles],
   );
 
-  const handleDownload = async (artifactId: string) => {
-    setDownloadingId(artifactId);
+  // Open = view the artifact in a new tab (authenticated presigned URL; renders inline)
+  const handleOpen = async (artifactId: string) => {
     try {
       const data = await api<{ url: string }>(
         `/api/v1/artifacts/${artifactId}/download`,
       );
       window.open(data.url, "_blank");
     } catch {
-      // The download endpoint returns a redirect (307), so if the api
-      // client follows redirects we might get the file directly.
-      // As a fallback, open the endpoint URL directly in a new tab.
       const baseUrl = import.meta.env.VITE_API_URL || "";
-      window.open(
-        `${baseUrl}/api/v1/artifacts/${artifactId}/download`,
-        "_blank",
+      window.open(`${baseUrl}/api/v1/artifacts/${artifactId}/download`, "_blank");
+    }
+  };
+
+  // Download = force a real file download (fetch blob + anchor download)
+  const handleDownload = async (artifactId: string, name: string) => {
+    setDownloadingId(artifactId);
+    try {
+      const data = await api<{ url: string }>(
+        `/api/v1/artifacts/${artifactId}/download`,
       );
+      const resp = await fetch(data.url);
+      const blob = await resp.blob();
+      const objUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = objUrl;
+      a.download = name;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(objUrl);
+    } catch {
+      const baseUrl = import.meta.env.VITE_API_URL || "";
+      window.open(`${baseUrl}/api/v1/artifacts/${artifactId}/download`, "_blank");
     } finally {
       setDownloadingId(null);
     }
@@ -250,13 +267,6 @@ export function ArtifactList({ taskId, refreshKey, projId, onRelayDocSelect }: A
       {artifacts.map((artifact) => {
         const Icon = artifactTypeIcons[artifact.artifact_type] ?? File;
         const badgeVariant = artifactTypeBadgeVariant[artifact.artifact_type] ?? "secondary";
-        // TR-mirrored artifacts carry a browser-renderable public URL in metadata.
-        // Presence of this key implies the project's TR integration was enabled at
-        // upload time, so it doubles as the visibility gate for the "open" button.
-        const trPublicUrl =
-          typeof artifact.metadata?.tr_public_url === "string"
-            ? artifact.metadata.tr_public_url
-            : undefined;
 
         return (
           <div
@@ -281,22 +291,20 @@ export function ArtifactList({ taskId, refreshKey, projId, onRelayDocSelect }: A
             </div>
 
             <div className="ml-3 flex shrink-0 items-center gap-1">
-              {trPublicUrl && (
-                <a
-                  href={trPublicUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  title="Open in new tab"
-                  className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-                >
-                  <ExternalLink className="h-4 w-4" />
-                </a>
-              )}
               <Button
                 variant="ghost"
                 size="icon"
                 className="h-8 w-8"
-                onClick={() => void handleDownload(artifact.id)}
+                onClick={() => void handleOpen(artifact.id)}
+                title="Open in new tab"
+              >
+                <ExternalLink className="h-4 w-4" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8"
+                onClick={() => void handleDownload(artifact.id, artifact.name)}
                 disabled={downloadingId === artifact.id}
                 title="Download"
               >
