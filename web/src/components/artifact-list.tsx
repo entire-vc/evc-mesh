@@ -141,8 +141,13 @@ export function ArtifactList({ taskId, refreshKey, projId, onRelayDocSelect }: A
   const handleOpen = async (artifactId: string, trPublicUrl?: string) => {
     if (trPublicUrl && projId) {
       try {
+        // preview-url requires a relay:// URL (it 400s on anything else);
+        // tr_public_url is the https docs URL, so convert
+        // https://<docs-base>/<slug>/<path> -> relay://<slug>/<path>.
+        const relayUrl =
+          "relay://" + new URL(trPublicUrl).pathname.replace(/^\/+/, "");
         const prev = await api<{ available: boolean; iframe_src?: string }>(
-          `/api/v1/projects/${projId}/tr/preview-url?relay_url=${encodeURIComponent(trPublicUrl)}`,
+          `/api/v1/projects/${projId}/tr/preview-url?relay_url=${encodeURIComponent(relayUrl)}`,
         );
         if (prev.available && prev.iframe_src) {
           window.open(prev.iframe_src, "_blank");
