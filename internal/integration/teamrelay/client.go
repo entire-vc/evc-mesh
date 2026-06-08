@@ -22,14 +22,11 @@ import (
 // 30 s timeout; relay is local/private so this is generous.
 var relayHTTPClient = &http.Client{Timeout: 30 * time.Second}
 
-// uploadResponse is the success body returned by POST /v1/web/shares/{slug}/upload.
-type uploadResponse struct {
-	OK         bool   `json:"ok"`
-	ShareID    string `json:"share_id"`
-	Path       string `json:"path"`
-	SizeBytes  int64  `json:"size_bytes"`
-	ModifiedAt string `json:"modified_at"`
-	PublicURL  string `json:"public_url"`
+// syncUploadResponse is the success body returned by POST /v1/web/shares/{id}/sync-upload.
+type syncUploadResponse struct {
+	SyncURL string `json:"sync_url"`
+	WebURL  string `json:"web_url"`
+	Path    string `json:"path"`
 }
 
 // Publisher is the interface consumed by the artifact upload hook.
@@ -108,16 +105,16 @@ func (c *client) Publish(ctx context.Context, taskID uuid.UUID, artifactName str
 	return transport(ctx, shareIdentifier, filePath, content, contentType, pi.AgentKey)
 }
 
-// transport POSTs artifact bytes to the relay upload endpoint and returns the
-// relay-reported public URL on success (empty string if the relay omits one).
-// Contract (updated 2026-06-05, relay web.py uuid-upload patch):
+// transport POSTs artifact bytes to the relay sync-upload endpoint and returns the
+// relay-reported web URL on success (empty string if the relay omits one).
+// Contract (ADR-0045):
 //
-//	POST /v1/web/shares/{shareIdentifier}/upload?path=<urlenc>&source=mesh-artifact
+//	POST /v1/web/shares/{shareIdentifier}/sync-upload?path=<urlenc>
 //	shareIdentifier: UUID (shares.id = folder GUID) or slug (web-published only)
 //	X-Agent-Key: tr_agent_<48hex>
 //	Content-Type: <mime>
 //	Body: raw bytes
-//	200 → {ok, share_id, path, size_bytes, modified_at, public_url?}
+//	200 → {sync_url, web_url, path}  — relay writes source=sync-artifact + bumps web_content_updated_at
 //	401/403 → key revoked; log + return nil (no retry — key is static)
 func transport(ctx context.Context, shareIdentifier, filePath string, content []byte, contentType, agentKey string) (string, error) {
 	baseURL := os.Getenv("MESH_TEAMRELAY_RELAY_URL")
@@ -126,7 +123,7 @@ func transport(ctx context.Context, shareIdentifier, filePath string, content []
 		return "", nil
 	}
 
-	endpoint := fmt.Sprintf("%s/v1/web/shares/%s/upload?path=%s&source=mesh-artifact",
+	endpoint := fmt.Sprintf("%s/v1/web/shares/%s/sync-upload?path=%s",
 		baseURL,
 		url.PathEscape(shareIdentifier),
 		url.QueryEscape(filePath),
@@ -139,7 +136,6 @@ func transport(ctx context.Context, shareIdentifier, filePath string, content []
 	}
 	req.Header.Set("Content-Type", contentType)
 	req.Header.Set("X-Agent-Key", agentKey)
-	req.Header.Set("X-Source", "mesh-artifact")
 
 	resp, err := relayHTTPClient.Do(req)
 	if err != nil {
@@ -151,18 +147,18 @@ func transport(ctx context.Context, shareIdentifier, filePath string, content []
 
 	switch resp.StatusCode {
 	case http.StatusOK:
-		var result uploadResponse
-		if jsonErr := json.Unmarshal(body, &result); jsonErr == nil && result.OK {
-			log.Printf("teamrelay: uploaded %s → relay path=%s size=%d", filePath, result.Path, result.SizeBytes)
-			return result.PublicURL, nil
+		var result syncUploadResponse
+		if jsonErr := json.Unmarshal(body, &result); jsonErr == nil {
+			log.Printf("teamrelay: sync-uploaded %s → relay path=%s", filePath, result.Path)
+			return result.WebURL, nil
 		}
-		log.Printf("teamrelay: uploaded %s (relay response: %s)", filePath, body)
+		log.Printf("teamrelay: sync-uploaded %s (relay response: %s)", filePath, body)
 		return "", nil
 	case http.StatusUnauthorized, http.StatusForbidden:
 		log.Printf("teamrelay: agent key rejected by relay (status %d) for share %s — integration key may be revoked", resp.StatusCode, shareIdentifier)
 		return "", nil
 	default:
 		log.Printf("teamrelay: unexpected relay status %d uploading %s: %s", resp.StatusCode, filePath, body)
-		return "", fmt.Errorf("relay upload returned status %d", resp.StatusCode)
+		return "", fmt.Errorf("relay sync-upload returned status %d", resp.StatusCode)
 	}
 }
