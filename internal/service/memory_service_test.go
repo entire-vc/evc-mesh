@@ -13,6 +13,7 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/repository"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
+	"github.com/entire-vc/evc-mesh/pkg/pagination"
 )
 
 // ---------------------------------------------------------------------------
@@ -1071,4 +1072,218 @@ func TestSupersede_NotFoundOld(t *testing.T) {
 	var apiErr *apierror.Error
 	require.ErrorAs(t, err, &apiErr)
 	assert.Equal(t, http.StatusNotFound, apiErr.Code)
+}
+
+// ---------------------------------------------------------------------------
+// mockProjectRepo — minimal stub satisfying repository.ProjectRepository
+// ---------------------------------------------------------------------------
+
+type mockProjectRepo struct {
+	getBySlugFn func(ctx context.Context, wsID uuid.UUID, slug string) (*domain.Project, error)
+}
+
+func (m *mockProjectRepo) Create(_ context.Context, _ *domain.Project) error { return nil }
+func (m *mockProjectRepo) GetByID(_ context.Context, _ uuid.UUID) (*domain.Project, error) {
+	return nil, nil
+}
+func (m *mockProjectRepo) GetBySlug(ctx context.Context, wsID uuid.UUID, slug string) (*domain.Project, error) {
+	if m.getBySlugFn != nil {
+		return m.getBySlugFn(ctx, wsID, slug)
+	}
+	return nil, nil
+}
+func (m *mockProjectRepo) Update(_ context.Context, _ *domain.Project) error { return nil }
+func (m *mockProjectRepo) Delete(_ context.Context, _ uuid.UUID) error       { return nil }
+func (m *mockProjectRepo) List(_ context.Context, _ uuid.UUID, _ repository.ProjectFilter, _ pagination.Params) (*pagination.Page[domain.Project], error) {
+	return nil, nil
+}
+
+var _ repository.ProjectRepository = (*mockProjectRepo)(nil)
+
+// ---------------------------------------------------------------------------
+// TestResolveProjectSlug
+// ---------------------------------------------------------------------------
+
+func TestResolveProjectSlug(t *testing.T) {
+	t.Run("canonical slug resolves", func(t *testing.T) {
+		slug, ok := resolveProjectSlug([]string{"kind:decision", "project:mesh-dev"})
+		require.True(t, ok)
+		assert.Equal(t, "mesh-dev", slug)
+	})
+	t.Run("alias mesh resolves to mesh-dev", func(t *testing.T) {
+		slug, ok := resolveProjectSlug([]string{"project:mesh", "kind:fact"})
+		require.True(t, ok)
+		assert.Equal(t, "mesh-dev", slug)
+	})
+	t.Run("alias evc-mesh resolves to mesh-dev", func(t *testing.T) {
+		slug, ok := resolveProjectSlug([]string{"project:evc-mesh"})
+		require.True(t, ok)
+		assert.Equal(t, "mesh-dev", slug)
+	})
+	t.Run("two aliases for same project count as one", func(t *testing.T) {
+		// project:mesh and project:evc-mesh both map to mesh-dev → unique → resolves
+		slug, ok := resolveProjectSlug([]string{"project:mesh", "project:evc-mesh"})
+		require.True(t, ok)
+		assert.Equal(t, "mesh-dev", slug)
+	})
+	t.Run("two distinct projects → no resolve", func(t *testing.T) {
+		_, ok := resolveProjectSlug([]string{"project:mesh-dev", "project:spark"})
+		assert.False(t, ok)
+	})
+	t.Run("unknown slug → no resolve", func(t *testing.T) {
+		_, ok := resolveProjectSlug([]string{"project:nonexistent"})
+		assert.False(t, ok)
+	})
+	t.Run("no project tag → no resolve", func(t *testing.T) {
+		_, ok := resolveProjectSlug([]string{"kind:decision", "owner:riker"})
+		assert.False(t, ok)
+	})
+	t.Run("evc-spark alias resolves to spark", func(t *testing.T) {
+		slug, ok := resolveProjectSlug([]string{"project:evc-spark"})
+		require.True(t, ok)
+		assert.Equal(t, "spark", slug)
+	})
+	t.Run("tgbot alias resolves to tg-bot", func(t *testing.T) {
+		slug, ok := resolveProjectSlug([]string{"project:tgbot"})
+		require.True(t, ok)
+		assert.Equal(t, "tg-bot", slug)
+	})
+}
+
+// ---------------------------------------------------------------------------
+// TestRemember_SlugResolution
+// ---------------------------------------------------------------------------
+
+func TestRemember_SlugResolution(t *testing.T) {
+	wsID := uuid.New()
+	projID := uuid.New()
+
+	t.Run("sets project_id from project:mesh tag", func(t *testing.T) {
+		var upserted *domain.Memory
+		memRepo := &mockMemoryRepo{
+			upsertFn: func(_ context.Context, m *domain.Memory) error {
+				upserted = m
+				return nil
+			},
+		}
+		projRepo := &mockProjectRepo{
+			getBySlugFn: func(_ context.Context, wsID uuid.UUID, slug string) (*domain.Project, error) {
+				if slug == "mesh-dev" {
+					return &domain.Project{ID: projID}, nil
+				}
+				return nil, nil
+			},
+		}
+		svc := NewMemoryService(memRepo, &mockMemoryEdgeRepo{}, nil, MemoryWithProjectRepo(projRepo))
+
+		mem := &domain.Memory{
+			WorkspaceID: wsID,
+			Key:         "checkpoint-mesh",
+			Content:     "session end",
+			Scope:       domain.ScopeWorkspace,
+			Tags:        []string{"kind:session-checkpoint", "project:mesh", "owner:garfield"},
+		}
+		_, err := svc.Remember(context.Background(), mem)
+		require.NoError(t, err)
+		require.NotNil(t, upserted.ProjectID, "project_id must be set when project:mesh tag resolves")
+		assert.Equal(t, projID, *upserted.ProjectID)
+	})
+
+	t.Run("leaves project_id nil when already set", func(t *testing.T) {
+		existingProjID := uuid.New()
+		var upserted *domain.Memory
+		memRepo := &mockMemoryRepo{
+			upsertFn: func(_ context.Context, m *domain.Memory) error {
+				upserted = m
+				return nil
+			},
+		}
+		projRepo := &mockProjectRepo{} // should never be called
+		svc := NewMemoryService(memRepo, &mockMemoryEdgeRepo{}, nil, MemoryWithProjectRepo(projRepo))
+
+		mem := &domain.Memory{
+			WorkspaceID: wsID,
+			ProjectID:   &existingProjID,
+			Key:         "explicit-proj",
+			Content:     "content",
+			Scope:       domain.ScopeProject,
+			Tags:        []string{"project:mesh"},
+		}
+		_, err := svc.Remember(context.Background(), mem)
+		require.NoError(t, err)
+		require.NotNil(t, upserted.ProjectID)
+		assert.Equal(t, existingProjID, *upserted.ProjectID, "explicit project_id must not be overwritten")
+	})
+
+	t.Run("leaves project_id nil when no project repo wired", func(t *testing.T) {
+		var upserted *domain.Memory
+		memRepo := &mockMemoryRepo{
+			upsertFn: func(_ context.Context, m *domain.Memory) error {
+				upserted = m
+				return nil
+			},
+		}
+		svc := NewMemoryService(memRepo, &mockMemoryEdgeRepo{}, nil) // no MemoryWithProjectRepo
+
+		mem := &domain.Memory{
+			WorkspaceID: wsID,
+			Key:         "no-proj-repo",
+			Content:     "content",
+			Scope:       domain.ScopeWorkspace,
+			Tags:        []string{"project:mesh"},
+		}
+		_, err := svc.Remember(context.Background(), mem)
+		require.NoError(t, err)
+		assert.Nil(t, upserted.ProjectID)
+	})
+
+	t.Run("leaves project_id nil when multiple distinct project tags", func(t *testing.T) {
+		var upserted *domain.Memory
+		memRepo := &mockMemoryRepo{
+			upsertFn: func(_ context.Context, m *domain.Memory) error {
+				upserted = m
+				return nil
+			},
+		}
+		projRepo := &mockProjectRepo{} // should not be called for cross-project entries
+		svc := NewMemoryService(memRepo, &mockMemoryEdgeRepo{}, nil, MemoryWithProjectRepo(projRepo))
+
+		mem := &domain.Memory{
+			WorkspaceID: wsID,
+			Key:         "cross-project",
+			Content:     "content",
+			Scope:       domain.ScopeWorkspace,
+			Tags:        []string{"project:mesh-dev", "project:spark"},
+		}
+		_, err := svc.Remember(context.Background(), mem)
+		require.NoError(t, err)
+		assert.Nil(t, upserted.ProjectID)
+	})
+
+	t.Run("leaves project_id nil when slug lookup returns nothing", func(t *testing.T) {
+		var upserted *domain.Memory
+		memRepo := &mockMemoryRepo{
+			upsertFn: func(_ context.Context, m *domain.Memory) error {
+				upserted = m
+				return nil
+			},
+		}
+		projRepo := &mockProjectRepo{
+			getBySlugFn: func(_ context.Context, _ uuid.UUID, _ string) (*domain.Project, error) {
+				return nil, nil // project deleted or workspace mismatch
+			},
+		}
+		svc := NewMemoryService(memRepo, &mockMemoryEdgeRepo{}, nil, MemoryWithProjectRepo(projRepo))
+
+		mem := &domain.Memory{
+			WorkspaceID: wsID,
+			Key:         "missing-project",
+			Content:     "content",
+			Scope:       domain.ScopeWorkspace,
+			Tags:        []string{"project:mesh-dev"},
+		}
+		_, err := svc.Remember(context.Background(), mem)
+		require.NoError(t, err)
+		assert.Nil(t, upserted.ProjectID)
+	})
 }

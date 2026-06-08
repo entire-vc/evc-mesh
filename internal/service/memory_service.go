@@ -41,6 +41,35 @@ var entityKeywords = []string{"icp", "architecture", "license", "security", "mon
 // reference another memory by its short UUID prefix in an incident memory body.
 var shortIDRegex = regexp.MustCompile(`\b([0-9a-f]{6,12})\b`)
 
+// projectSlugAliases maps every accepted project tag value (including legacy aliases) to
+// the canonical project slug used in the DB. When a memory is written with a
+// project:<slug> tag but no explicit project_id, Remember() resolves the canonical slug
+// and looks up the project in the DB. Only one distinct canonical slug may be present;
+// cross-project writes (multiple distinct slugs) stay workspace-scoped (project_id = NULL).
+//
+// Source: backfill from Lab task #41cde334 — reusing the same alias map.
+var projectSlugAliases = map[string]string{
+	"argus":             "argus",
+	"evc-argus":         "argus",
+	"billing":           "billing",
+	"evc-billing":       "billing",
+	"content-marketing": "content-marketing",
+	"contenthub":        "contenthub",
+	"lab":               "lab",
+	"local-sync":        "local-sync",
+	"marketing":         "marketing",
+	"mesh-dev":          "mesh-dev",
+	"mesh":              "mesh-dev",
+	"evc-mesh":          "mesh-dev",
+	"spark":             "spark",
+	"evc-spark":         "spark",
+	"tg-bot":            "tg-bot",
+	"tgbot":             "tg-bot",
+	"evc-tgbot":         "tg-bot",
+	"team-relay":        "team-relay",
+	"evc-team-relay":    "team-relay",
+}
+
 // computeImportanceScore derives an importance_score for a memory based on its tags
 // and content. The score is in [0, 1]. Scoring rules (additive, capped at 1.0):
 //
@@ -165,19 +194,61 @@ const temporalHalfLifeDays = 30.0
 const candidateMultiplier = 3
 
 type memoryService struct {
-	memRepo  repository.MemoryRepository
-	edgeRepo repository.MemoryEdgeRepository
-	embedder embedding.Embedder
+	memRepo     repository.MemoryRepository
+	edgeRepo    repository.MemoryEdgeRepository
+	embedder    embedding.Embedder
+	projectRepo repository.ProjectRepository // optional; nil → slug resolution skipped
+}
+
+// MemoryServiceOption configures a MemoryService.
+type MemoryServiceOption func(*memoryService)
+
+// MemoryWithProjectRepo enables automatic project-tag resolution. When a memory is written
+// with a project:<slug> tag but no explicit project_id, Remember() looks up the project
+// by canonical slug and sets project_id. Pass nil to disable (default when omitted).
+func MemoryWithProjectRepo(pr repository.ProjectRepository) MemoryServiceOption {
+	return func(s *memoryService) {
+		s.projectRepo = pr
+	}
 }
 
 // NewMemoryService returns a new MemoryService.
 // embedder may be embedding.NewNoopEmbedder() when vector search is not configured;
 // all vector operations are skipped gracefully in that case.
-func NewMemoryService(memRepo repository.MemoryRepository, edgeRepo repository.MemoryEdgeRepository, embedder embedding.Embedder) MemoryService {
+// Optional MemoryServiceOption values (e.g. MemoryWithProjectRepo) extend behaviour.
+func NewMemoryService(memRepo repository.MemoryRepository, edgeRepo repository.MemoryEdgeRepository, embedder embedding.Embedder, opts ...MemoryServiceOption) MemoryService {
 	if embedder == nil {
 		embedder = embedding.NewNoopEmbedder()
 	}
-	return &memoryService{memRepo: memRepo, edgeRepo: edgeRepo, embedder: embedder}
+	s := &memoryService{memRepo: memRepo, edgeRepo: edgeRepo, embedder: embedder}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
+}
+
+// resolveProjectSlug scans tags for project:<slug> entries, applies the canonical alias
+// map, and returns the unique canonical slug when exactly one distinct project is named.
+// Returns ("", false) when zero or multiple distinct canonical slugs are found — those
+// writes stay workspace-scoped (project_id = NULL).
+func resolveProjectSlug(tags []string) (string, bool) {
+	seen := make(map[string]struct{}, 2)
+	for _, tag := range tags {
+		val, ok := strings.CutPrefix(tag, "project:")
+		if !ok {
+			continue
+		}
+		if canonical, exists := projectSlugAliases[val]; exists {
+			seen[canonical] = struct{}{}
+		}
+	}
+	if len(seen) != 1 {
+		return "", false
+	}
+	for slug := range seen {
+		return slug, true
+	}
+	return "", false
 }
 
 // Remember upserts a memory entry. It returns "created" if the key did not exist before,
@@ -240,6 +311,16 @@ func (s *memoryService) Remember(ctx context.Context, mem *domain.Memory) (strin
 	// Apply default expires_at policy when not explicitly provided.
 	if mem.ExpiresAt == nil {
 		mem.ExpiresAt = defaultExpiresAt(mem.Scope, mem.Tags)
+	}
+
+	// ── Slug resolution: if no project_id given but tags contain exactly one
+	// resolvable project:<slug>, look up the project and populate project_id. ──
+	if mem.ProjectID == nil && s.projectRepo != nil {
+		if slug, ok := resolveProjectSlug(mem.Tags); ok {
+			if proj, lookupErr := s.projectRepo.GetBySlug(ctx, mem.WorkspaceID, slug); lookupErr == nil && proj != nil {
+				mem.ProjectID = &proj.ID
+			}
+		}
 	}
 
 	// Determine whether this is a create or update by checking for an existing entry.

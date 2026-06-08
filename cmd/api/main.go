@@ -153,7 +153,8 @@ func main() {
 	log.Printf("Embedding provider: %s", cfg.Embedding.Provider)
 
 	// Memory service is wired into eventBusService so Publish() can extract memories.
-	memoryService := service.NewMemoryService(memoryRepo, memoryEdgesRepo, embedder)
+	// MemoryWithProjectRepo enables automatic project:<slug> tag → project_id resolution on write.
+	memoryService := service.NewMemoryService(memoryRepo, memoryEdgesRepo, embedder, service.MemoryWithProjectRepo(projectRepo))
 
 	// Slack service sends notifications via Slack Incoming Webhooks when a workspace has
 	// an active Slack integration configured. It is injected into webhookService below.
