@@ -107,7 +107,7 @@ type stubRelayPublisher struct {
 	called    bool
 }
 
-func (s *stubRelayPublisher) Publish(_ context.Context, _ uuid.UUID, _ string, _ []byte, _ string) (string, string, error) {
+func (s *stubRelayPublisher) Publish(_ context.Context, _ uuid.UUID, _ string, _ []byte, _ string) (publicURL, agentKey string, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.called = true
