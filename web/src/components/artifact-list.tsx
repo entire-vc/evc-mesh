@@ -134,13 +134,23 @@ export function ArtifactList({ taskId, refreshKey, projId, onRelayDocSelect }: A
     [handleUploadFiles],
   );
 
-  // Open = prefer the rendered docs.entire.vc view (tr_public_url, authed by the
-  // user's docs session). Fall back to the authenticated S3 presigned URL for
-  // non-TR artifacts (raw bytes; renders html, shows source for md).
+  // Open = prefer the authenticated docs.entire.vc render via the project's TR
+  // preview-url endpoint (same path the in-task preview uses — it appends the
+  // agent_key server-side, so it works without a separate docs login). Fall back
+  // to the authenticated S3 presigned URL for non-TR artifacts.
   const handleOpen = async (artifactId: string, trPublicUrl?: string) => {
-    if (trPublicUrl) {
-      window.open(trPublicUrl, "_blank");
-      return;
+    if (trPublicUrl && projId) {
+      try {
+        const prev = await api<{ available: boolean; iframe_src?: string }>(
+          `/api/v1/projects/${projId}/tr/preview-url?relay_url=${encodeURIComponent(trPublicUrl)}`,
+        );
+        if (prev.available && prev.iframe_src) {
+          window.open(prev.iframe_src, "_blank");
+          return;
+        }
+      } catch {
+        // fall through to S3 presigned
+      }
     }
     try {
       const data = await api<{ url: string }>(
