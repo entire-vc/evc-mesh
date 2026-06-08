@@ -1,8 +1,14 @@
 import { useEffect, useState } from "react";
-import { AlertCircle, ExternalLink, FileText } from "lucide-react";
+import { AlertCircle, ExternalLink, FileText, FolderOpen } from "lucide-react";
 import { api } from "@/lib/api";
 
 const LOAD_TIMEOUT_MS = 6000;
+
+function isFolderUrl(relayUrl: string): boolean {
+  const withoutScheme = relayUrl.replace(/^relay:\/\//, "");
+  const last = withoutScheme.split("/").pop() ?? "";
+  return last !== "" && !/\.[a-z0-9]+$/i.test(last);
+}
 
 function extractDocName(relayUrl: string): string {
   try {
@@ -29,8 +35,11 @@ interface RelayPreviewCardProps {
 type IframeState = "loading" | "loaded" | "failed";
 
 export function RelayPreviewCard({ relayUrl, label, projId }: RelayPreviewCardProps) {
+  const isFolder = isFolderUrl(relayUrl);
   const docName = label || extractDocName(relayUrl);
   const httpsUrl = relayToHttps(relayUrl);
+  const Icon = isFolder ? FolderOpen : FileText;
+  const openTitle = isFolder ? "Open folder in Team Relay" : "Open in Team Relay";
 
   // null = waiting for API resolution (only when projId is provided)
   const [iframeSrc, setIframeSrc] = useState<string | null>(projId ? null : httpsUrl);
@@ -76,46 +85,49 @@ export function RelayPreviewCard({ relayUrl, label, projId }: RelayPreviewCardPr
   return (
     <div className="my-3 overflow-hidden rounded-lg border border-border bg-card shadow-sm">
       <div className="flex items-center gap-2 px-3 py-2">
-        <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+        <Icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
         <span className="flex-1 truncate text-xs font-medium text-foreground">{docName}</span>
         <a
           href={httpsUrl}
           target="_blank"
           rel="noopener noreferrer"
+          title={openTitle}
           className="flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
         >
-          Open
+          {isFolder ? "Open folder" : "Open"}
           <ExternalLink className="h-3 w-3" />
         </a>
       </div>
 
-      {iframeSrc === null ? (
-        <div className="flex h-64 items-center justify-center border-t border-border text-xs text-muted-foreground">
-          Loading…
-        </div>
-      ) : iframeState !== "failed" ? (
-        <iframe
-          src={iframeSrc}
-          title={docName}
-          sandbox="allow-scripts allow-same-origin"
-          className="h-64 w-full border-t border-border"
-          onLoad={handleLoad}
-          onError={handleError}
-        />
-      ) : (
-        <div className="flex items-center gap-2 border-t border-border px-3 py-2 text-xs text-muted-foreground">
-          <AlertCircle className="h-3.5 w-3.5 shrink-0" />
-          <span>Preview not available.</span>
-          <a
-            href={httpsUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="ml-auto flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[11px] transition-colors hover:text-foreground"
-          >
-            Open in Team Relay
-            <ExternalLink className="h-3 w-3" />
-          </a>
-        </div>
+      {!isFolder && (
+        iframeSrc === null ? (
+          <div className="flex h-64 items-center justify-center border-t border-border text-xs text-muted-foreground">
+            Loading…
+          </div>
+        ) : iframeState !== "failed" ? (
+          <iframe
+            src={iframeSrc}
+            title={docName}
+            sandbox="allow-scripts allow-same-origin"
+            className="h-64 w-full border-t border-border"
+            onLoad={handleLoad}
+            onError={handleError}
+          />
+        ) : (
+          <div className="flex items-center gap-2 border-t border-border px-3 py-2 text-xs text-muted-foreground">
+            <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+            <span>Preview not available.</span>
+            <a
+              href={httpsUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="ml-auto flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[11px] transition-colors hover:text-foreground"
+            >
+              Open in Team Relay
+              <ExternalLink className="h-3 w-3" />
+            </a>
+          </div>
+        )
       )}
     </div>
   );
