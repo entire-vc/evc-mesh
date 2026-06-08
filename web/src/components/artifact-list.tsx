@@ -134,8 +134,14 @@ export function ArtifactList({ taskId, refreshKey, projId, onRelayDocSelect }: A
     [handleUploadFiles],
   );
 
-  // Open = view the artifact in a new tab (authenticated presigned URL; renders inline)
-  const handleOpen = async (artifactId: string) => {
+  // Open = prefer the rendered docs.entire.vc view (tr_public_url, authed by the
+  // user's docs session). Fall back to the authenticated S3 presigned URL for
+  // non-TR artifacts (raw bytes; renders html, shows source for md).
+  const handleOpen = async (artifactId: string, trPublicUrl?: string) => {
+    if (trPublicUrl) {
+      window.open(trPublicUrl, "_blank");
+      return;
+    }
     try {
       const data = await api<{ url: string }>(
         `/api/v1/artifacts/${artifactId}/download`,
@@ -295,7 +301,14 @@ export function ArtifactList({ taskId, refreshKey, projId, onRelayDocSelect }: A
                 variant="ghost"
                 size="icon"
                 className="h-8 w-8"
-                onClick={() => void handleOpen(artifact.id)}
+                onClick={() =>
+                  void handleOpen(
+                    artifact.id,
+                    typeof artifact.metadata?.tr_public_url === "string"
+                      ? artifact.metadata.tr_public_url
+                      : undefined,
+                  )
+                }
                 title="Open in new tab"
               >
                 <ExternalLink className="h-4 w-4" />
