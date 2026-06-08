@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strings"
 	"time"
+	"unicode"
 
 	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
@@ -233,6 +235,17 @@ func (r *MemoryRepo) FullTextSearch(ctx context.Context, query string, workspace
 		return nil, err
 	}
 
+	// Phase 2: OR-token fallback when the strict AND query returns too few results.
+	// This handles phrasing-sensitive misses such as "by fixing migrate-gate DSN"
+	// (filler words break plainto_tsquery AND logic with the 'simple' dictionary).
+	// Errors in the fallback are non-fatal; we continue with whatever AND found.
+	const minFTSHits = 3
+	if len(rows) < minFTSHits {
+		if orRows, err2 := r.ftsORFallback(ctx, query, workspaceID, projectID, scope, tags, limit, rows); err2 == nil {
+			rows = orRows
+		}
+	}
+
 	result := make([]domain.ScoredMemory, len(rows))
 	ids := make([]uuid.UUID, len(rows))
 	for i, row := range rows {
@@ -254,6 +267,117 @@ func (r *MemoryRepo) FullTextSearch(ctx context.Context, query string, workspace
 	}
 
 	return result, nil
+}
+
+// tokenizeForORQuery converts a natural-language string into a PostgreSQL OR-tsquery fragment
+// suitable for passing to to_tsquery('simple', fragment). Tokens are split on any non-alphanumeric
+// character so that "migrate-gate" → "migrate | gate", preventing tsquery parse errors.
+// Tokens shorter than 3 runes and duplicates are dropped.
+func tokenizeForORQuery(input string) string {
+	fields := strings.FieldsFunc(strings.ToLower(input), func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	})
+	seen := make(map[string]bool)
+	tokens := make([]string, 0, len(fields))
+	for _, f := range fields {
+		if len([]rune(f)) < 3 || seen[f] {
+			continue
+		}
+		seen[f] = true
+		tokens = append(tokens, f)
+	}
+	return strings.Join(tokens, " | ")
+}
+
+// ftsORFallback runs a token-level OR full-text search and merges results with existing AND results.
+// OR-only results receive a score discount (0.8×) so exact AND matches rank above partial OR matches.
+func (r *MemoryRepo) ftsORFallback(
+	ctx context.Context,
+	query string,
+	workspaceID uuid.UUID,
+	projectID *uuid.UUID,
+	scope string,
+	tags []string,
+	limit int,
+	andRows []scoredMemoryRow,
+) ([]scoredMemoryRow, error) {
+	orFragment := tokenizeForORQuery(query)
+	if orFragment == "" {
+		return andRows, nil
+	}
+
+	args := []interface{}{workspaceID, orFragment} // $1=workspace_id, $2=OR tsquery fragment
+	conditions := []string{
+		"workspace_id = $1",
+		"search_vector @@ to_tsquery('simple', $2)",
+		"(expires_at IS NULL OR expires_at > NOW())",
+		"archived = false",
+	}
+	argIdx := 3
+
+	if scope != "" {
+		conditions = append(conditions, fmt.Sprintf("scope = $%d", argIdx))
+		args = append(args, scope)
+		argIdx++
+	}
+	if projectID != nil {
+		conditions = append(conditions, fmt.Sprintf("project_id = $%d", argIdx))
+		args = append(args, *projectID)
+		argIdx++
+	}
+	if len(tags) > 0 {
+		conditions = append(conditions, fmt.Sprintf("tags && $%d", argIdx))
+		args = append(args, pq.Array(tags))
+		argIdx++
+	}
+	args = append(args, limit)
+	limitIdx := argIdx
+
+	q := fmt.Sprintf(`
+		SELECT %s,
+		       ts_rank_cd(search_vector, to_tsquery('simple', $2)) AS score
+		FROM memories
+		WHERE %s
+		ORDER BY score DESC, relevance DESC
+		LIMIT $%d`,
+		memoryColumns,
+		joinAnd(conditions),
+		limitIdx,
+	)
+
+	var orRows []scoredMemoryRow
+	if err := r.db.SelectContext(ctx, &orRows, q, args...); err != nil {
+		return andRows, fmt.Errorf("fts or fallback: %w", err)
+	}
+	if len(orRows) == 0 {
+		return andRows, nil
+	}
+
+	// Merge: AND results keep their score; OR-only results receive a discount.
+	idSeen := make(map[uuid.UUID]bool, len(andRows))
+	for _, row := range andRows {
+		idSeen[row.ID] = true
+	}
+	merged := make([]scoredMemoryRow, len(andRows), len(andRows)+len(orRows))
+	copy(merged, andRows)
+
+	const orScoreMultiplier = 0.8
+	for _, row := range orRows {
+		if idSeen[row.ID] {
+			continue
+		}
+		row.Score *= orScoreMultiplier
+		merged = append(merged, row)
+		idSeen[row.ID] = true
+	}
+
+	sort.Slice(merged, func(i, j int) bool {
+		return merged[i].Score > merged[j].Score
+	})
+	if len(merged) > limit {
+		merged = merged[:limit]
+	}
+	return merged, nil
 }
 
 // FindByScope returns memories for a workspace/project filtered by scope, ordered by relevance descending.
