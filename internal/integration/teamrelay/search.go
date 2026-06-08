@@ -25,6 +25,7 @@ type shareListResponse struct {
 type webFolderItem struct {
 	Name string `json:"name"`
 	Path string `json:"path"`
+	Type string `json:"type"` // "folder" | "doc" | "canvas"
 }
 
 // SearchDocs fetches the TR share's folder listing and filters by q (case-insensitive substring).
@@ -58,6 +59,9 @@ func SearchDocs(ctx context.Context, relayURL, shareSlug, agentKey, q string, li
 	qLower := strings.ToLower(q)
 	var docs []RelayDoc
 	for _, item := range shareResp.WebFolderItems {
+		if item.Type == "folder" {
+			continue
+		}
 		if qLower != "" &&
 			!strings.Contains(strings.ToLower(item.Name), qLower) &&
 			!strings.Contains(strings.ToLower(item.Path), qLower) {
