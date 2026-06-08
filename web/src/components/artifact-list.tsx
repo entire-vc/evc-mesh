@@ -134,28 +134,40 @@ export function ArtifactList({ taskId, refreshKey, projId, onRelayDocSelect }: A
     [handleUploadFiles],
   );
 
-  // Open = prefer the authenticated docs.entire.vc render via the project's TR
-  // preview-url endpoint (same path the in-task preview uses — it appends the
-  // agent_key server-side, so it works without a separate docs login). Fall back
-  // to the authenticated S3 presigned URL for non-TR artifacts.
-  const handleOpen = async (artifactId: string, trPublicUrl?: string) => {
-    if (trPublicUrl && projId) {
-      try {
-        // preview-url requires a relay:// URL (it 400s on anything else);
-        // tr_public_url is the https docs URL, so convert
-        // https://<docs-base>/<slug>/<path> -> relay://<slug>/<path>.
-        const relayUrl =
-          "relay://" + new URL(trPublicUrl).pathname.replace(/^\/+/, "");
-        const prev = await api<{ available: boolean; iframe_src?: string }>(
-          `/api/v1/projects/${projId}/tr/preview-url?relay_url=${encodeURIComponent(relayUrl)}`,
-        );
-        if (prev.available && prev.iframe_src) {
-          window.open(prev.iframe_src, "_blank");
-          return;
-        }
-      } catch {
-        // fall through to S3 presigned
+  // Open = for TR private-share artifacts, build the authenticated docs URL
+  // directly from tr_public_url + ?agent_key= (both stored in metadata at upload
+  // time). For older artifacts without tr_agent_key in metadata, fall back to the
+  // preview-url endpoint which resolves the key server-side. For non-TR artifacts,
+  // use the S3 presigned URL.
+  const handleOpen = async (artifactId: string, trPublicUrl?: string, trAgentKey?: string) => {
+    if (trPublicUrl) {
+      if (trAgentKey) {
+        // Fast path: agent key is in metadata — build the authenticated URL directly.
+        const u = new URL(trPublicUrl);
+        u.searchParams.set("agent_key", trAgentKey);
+        window.open(u.toString(), "_blank");
+        return;
       }
+      // Fallback for older artifacts (no tr_agent_key) or public shares: try the
+      // preview-url endpoint which appends the key server-side.
+      if (projId) {
+        try {
+          const relayUrl =
+            "relay://" + new URL(trPublicUrl).pathname.replace(/^\/+/, "");
+          const prev = await api<{ available: boolean; iframe_src?: string }>(
+            `/api/v1/projects/${projId}/tr/preview-url?relay_url=${encodeURIComponent(relayUrl)}`,
+          );
+          if (prev.available && prev.iframe_src) {
+            window.open(prev.iframe_src, "_blank");
+            return;
+          }
+        } catch {
+          // fall through
+        }
+      }
+      // Public share or preview-url unavailable — open bare URL.
+      window.open(trPublicUrl, "_blank");
+      return;
     }
     try {
       const data = await api<{ url: string }>(
@@ -321,6 +333,9 @@ export function ArtifactList({ taskId, refreshKey, projId, onRelayDocSelect }: A
                     artifact.id,
                     typeof artifact.metadata?.tr_public_url === "string"
                       ? artifact.metadata.tr_public_url
+                      : undefined,
+                    typeof artifact.metadata?.tr_agent_key === "string"
+                      ? artifact.metadata.tr_agent_key
                       : undefined,
                   )
                 }

@@ -99,18 +99,19 @@ func TestArtifactService_Upload(t *testing.T) {
 // TestArtifactService_Upload_RelayPublishWritesPublicURL
 // ---------------------------------------------------------------------------
 
-// stubRelayPublisher returns a fixed public URL and records that it was called.
+// stubRelayPublisher returns a fixed public URL / agent key and records that it was called.
 type stubRelayPublisher struct {
 	mu        sync.Mutex
 	publicURL string
+	agentKey  string
 	called    bool
 }
 
-func (s *stubRelayPublisher) Publish(_ context.Context, _ uuid.UUID, _ string, _ []byte, _ string) (string, error) {
+func (s *stubRelayPublisher) Publish(_ context.Context, _ uuid.UUID, _ string, _ []byte, _ string) (publicURL, agentKey string, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.called = true
-	return s.publicURL, nil
+	return s.publicURL, s.agentKey, nil
 }
 
 func (s *stubRelayPublisher) wasCalled() bool {
@@ -151,6 +152,73 @@ func TestArtifactService_Upload_RelayPublishWritesPublicURL(t *testing.T) {
 			}
 			return m["tr_public_url"] == "https://relay.example.com/mesh/foo.md"
 		}, 2*time.Second, 10*time.Millisecond, "tr_public_url should be persisted to metadata")
+	})
+
+	t.Run("agent key is merged into metadata alongside public url", func(t *testing.T) {
+		svc, artifactRepo, _ := setupArtifactService()
+		pub := &stubRelayPublisher{
+			publicURL: "https://relay.example.com/mesh/foo.md",
+			agentKey:  "tr_agent_abc123",
+		}
+		svc.SetRelayPublisher(pub)
+		ctx := context.Background()
+
+		artifact, err := svc.Upload(ctx, UploadArtifactInput{
+			TaskID:         uuid.New(),
+			Name:           "doc.md",
+			ArtifactType:   domain.ArtifactTypeReport,
+			MimeType:       "text/markdown",
+			UploadedBy:     uuid.New(),
+			UploadedByType: domain.UploaderTypeUser,
+			Reader:         strings.NewReader("# hello"),
+			Size:           7,
+		})
+		require.NoError(t, err)
+		require.NotNil(t, artifact)
+
+		assert.Eventually(t, func() bool {
+			md := artifactRepo.MetadataOf(artifact.ID)
+			if len(md) == 0 {
+				return false
+			}
+			var m map[string]any
+			if jErr := json.Unmarshal(md, &m); jErr != nil {
+				return false
+			}
+			return m["tr_agent_key"] == "tr_agent_abc123"
+		}, 2*time.Second, 10*time.Millisecond, "tr_agent_key should be persisted to metadata")
+	})
+
+	t.Run("no agent key leaves tr_agent_key absent from metadata", func(t *testing.T) {
+		svc, artifactRepo, _ := setupArtifactService()
+		pub := &stubRelayPublisher{
+			publicURL: "https://relay.example.com/public/foo.md",
+			agentKey:  "", // public share — no key
+		}
+		svc.SetRelayPublisher(pub)
+		ctx := context.Background()
+
+		artifact, err := svc.Upload(ctx, UploadArtifactInput{
+			TaskID:         uuid.New(),
+			Name:           "doc.md",
+			ArtifactType:   domain.ArtifactTypeReport,
+			MimeType:       "text/markdown",
+			UploadedBy:     uuid.New(),
+			UploadedByType: domain.UploaderTypeUser,
+			Reader:         strings.NewReader("# hello"),
+			Size:           7,
+		})
+		require.NoError(t, err)
+
+		assert.Eventually(t, pub.wasCalled, 2*time.Second, 10*time.Millisecond)
+		md := artifactRepo.MetadataOf(artifact.ID)
+		if len(md) > 0 {
+			var m map[string]any
+			require.NoError(t, json.Unmarshal(md, &m))
+			_, hasKey := m["tr_agent_key"]
+			assert.False(t, hasKey, "tr_agent_key should not be set for public shares")
+			assert.Equal(t, "https://relay.example.com/public/foo.md", m["tr_public_url"])
+		}
 	})
 
 	t.Run("empty public url leaves metadata without the key", func(t *testing.T) {
