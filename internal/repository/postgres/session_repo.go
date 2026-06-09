@@ -261,13 +261,11 @@ func (r *SessionRepo) GetTaskCostSummary(ctx context.Context, taskID uuid.UUID) 
 
 	flag := "unknown"
 	switch {
-	case count == 0:
-		flag = "unknown"
 	case rework > 0:
 		flag = "rework"
 	case count == 1:
 		flag = "golden"
-	default:
+	case count > 1:
 		flag = "multi-turn"
 	}
 
