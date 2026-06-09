@@ -243,7 +243,7 @@ func (r *TaskRepo) Create(ctx context.Context, task *domain.Task) error {
 	}
 	delegationLevel := task.DelegationLevel
 	if delegationLevel == "" {
-		delegationLevel = domain.DelegationLevelReview
+		delegationLevel = domain.DelegationLevelAuto
 	}
 	dbStart := time.Now()
 	_, err := r.db.ExecContext(ctx, q,
@@ -386,7 +386,7 @@ func (r *TaskRepo) Update(ctx context.Context, task *domain.Task) error {
 	}
 	delegationLevel := task.DelegationLevel
 	if delegationLevel == "" {
-		delegationLevel = domain.DelegationLevelReview
+		delegationLevel = domain.DelegationLevelAuto
 	}
 	dbStart := time.Now()
 	res, err := r.db.ExecContext(ctx, q,

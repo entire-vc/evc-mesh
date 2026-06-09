@@ -189,7 +189,7 @@ func (h *TaskHandler) Create(c echo.Context) error {
 
 	delegationLevel := req.DelegationLevel
 	if delegationLevel == "" {
-		delegationLevel = domain.DelegationLevelReview
+		delegationLevel = domain.DelegationLevelAuto
 	}
 	switch delegationLevel {
 	case domain.DelegationLevelAuto, domain.DelegationLevelReview, domain.DelegationLevelSupervised:
