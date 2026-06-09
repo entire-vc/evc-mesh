@@ -30,6 +30,7 @@ type sessionRow struct {
 	ID               uuid.UUID                 `db:"id"`
 	WorkspaceID      uuid.UUID                 `db:"workspace_id"`
 	AgentID          uuid.UUID                 `db:"agent_id"`
+	TaskID           *uuid.UUID                `db:"task_id"`
 	StartedAt        time.Time                 `db:"started_at"`
 	EndedAt          *time.Time                `db:"ended_at"`
 	Status           domain.AgentSessionStatus `db:"status"`
@@ -67,6 +68,7 @@ func (r *sessionRow) toDomain() domain.AgentSession {
 		ID:               r.ID,
 		WorkspaceID:      r.WorkspaceID,
 		AgentID:          r.AgentID,
+		TaskID:           r.TaskID,
 		StartedAt:        r.StartedAt,
 		EndedAt:          r.EndedAt,
 		Status:           r.Status,
@@ -84,7 +86,7 @@ func (r *sessionRow) toDomain() domain.AgentSession {
 	}
 }
 
-const sessionColumns = `id, workspace_id, agent_id, started_at, ended_at, status,
+const sessionColumns = `id, workspace_id, agent_id, task_id, started_at, ended_at, status,
 	tool_calls, tool_breakdown, tasks_touched, events_published, memories_created,
 	model_used, tokens_in, tokens_out, estimated_cost, compliance_score, compliance_detail`
 
@@ -116,17 +118,17 @@ func (r *SessionRepo) Create(ctx context.Context, s *domain.AgentSession) error 
 
 	const q = `
 		INSERT INTO agent_sessions (
-			id, workspace_id, agent_id, started_at, ended_at, status,
+			id, workspace_id, agent_id, task_id, started_at, ended_at, status,
 			tool_calls, tool_breakdown, tasks_touched, events_published, memories_created,
 			model_used, tokens_in, tokens_out, estimated_cost, compliance_score, compliance_detail
 		) VALUES (
-			$1, $2, $3, $4, $5, $6,
-			$7, $8, $9, $10, $11,
-			$12, $13, $14, $15, $16, $17
+			$1, $2, $3, $4, $5, $6, $7,
+			$8, $9, $10, $11, $12,
+			$13, $14, $15, $16, $17, $18
 		)
 	`
 	_, err := r.db.ExecContext(ctx, q,
-		s.ID, s.WorkspaceID, s.AgentID, s.StartedAt, s.EndedAt, s.Status,
+		s.ID, s.WorkspaceID, s.AgentID, s.TaskID, s.StartedAt, s.EndedAt, s.Status,
 		s.ToolCalls, toolBreakdown, pq.Array(taskStrs), s.EventsPublished, s.MemoriesCreated,
 		s.ModelUsed, s.TokensIn, s.TokensOut, s.EstimatedCost, s.ComplianceScore, complianceDetail,
 	)
@@ -163,8 +165,9 @@ func (r *SessionRepo) Update(ctx context.Context, s *domain.AgentSession) error 
 		    tokens_out        = $10,
 		    estimated_cost    = $11,
 		    compliance_score  = $12,
-		    compliance_detail = $13
-		WHERE id = $14
+		    compliance_detail = $13,
+		    task_id           = COALESCE(task_id, $14)
+		WHERE id = $15
 	`
 	_, err := r.db.ExecContext(ctx, q,
 		s.EndedAt, s.Status,
@@ -172,6 +175,7 @@ func (r *SessionRepo) Update(ctx context.Context, s *domain.AgentSession) error 
 		pq.Array(taskStrs), s.EventsPublished, s.MemoriesCreated,
 		s.ModelUsed, s.TokensIn, s.TokensOut, s.EstimatedCost,
 		s.ComplianceScore, complianceDetail,
+		s.TaskID,
 		s.ID,
 	)
 	return err
@@ -215,6 +219,66 @@ func (r *SessionRepo) GetPreviousStartedAt(ctx context.Context, agentID uuid.UUI
 		return nil, err
 	}
 	return &t, nil
+}
+
+// GetTaskCostSummary aggregates session cost/token metrics for a task and computes
+// rework count from activity_log backward-move transitions.
+func (r *SessionRepo) GetTaskCostSummary(ctx context.Context, taskID uuid.UUID) (*domain.TaskCostSummary, error) {
+	var total float64
+	var tokIn, tokOut int64
+	var count int
+
+	err := r.db.QueryRowContext(ctx, `
+		SELECT COALESCE(SUM(estimated_cost), 0),
+		       COALESCE(SUM(tokens_in), 0),
+		       COALESCE(SUM(tokens_out), 0),
+		       COUNT(*)
+		FROM agent_sessions
+		WHERE task_id = $1
+	`, taskID).Scan(&total, &tokIn, &tokOut, &count)
+	if err != nil {
+		return nil, err
+	}
+
+	var rework int
+	err = r.db.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM activity_log al
+		JOIN tasks t ON t.id = al.entity_id
+		JOIN task_statuses new_ts ON new_ts.project_id = t.project_id
+		    AND new_ts.name = al.changes->'status'->>'new'
+		JOIN task_statuses old_ts ON old_ts.project_id = t.project_id
+		    AND old_ts.name = al.changes->'status'->>'old'
+		WHERE al.entity_id = $1
+		    AND al.action = 'task.moved'
+		    AND al.changes ? 'status'
+		    AND new_ts.category IN ('in_progress', 'triage', 'todo')
+		    AND old_ts.category IN ('review', 'done')
+	`, taskID).Scan(&rework)
+	if err != nil {
+		return nil, err
+	}
+
+	flag := "unknown"
+	switch {
+	case count == 0:
+		flag = "unknown"
+	case rework > 0:
+		flag = "rework"
+	case count == 1:
+		flag = "golden"
+	default:
+		flag = "multi-turn"
+	}
+
+	return &domain.TaskCostSummary{
+		TotalCost:    total,
+		TokensIn:     tokIn,
+		TokensOut:    tokOut,
+		SessionCount: count,
+		ReworkCount:  rework,
+		QualityFlag:  flag,
+	}, nil
 }
 
 // EndStale marks all active sessions that have been running longer than timeout as ended.

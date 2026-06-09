@@ -159,3 +159,18 @@ export async function getMentionables(
     { params: { q: query, limit: 20 } },
   );
 }
+
+export interface TaskCostSummary {
+  total_cost: number;
+  tokens_in: number;
+  tokens_out: number;
+  session_count: number;
+  rework_count: number;
+  quality_flag: "golden" | "rework" | "multi-turn" | "unknown";
+}
+
+export async function getTaskCostSummary(
+  taskId: string,
+): Promise<TaskCostSummary> {
+  return api<TaskCostSummary>(`/api/v1/tasks/${taskId}/cost-summary`);
+}

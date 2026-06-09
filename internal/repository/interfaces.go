@@ -621,6 +621,9 @@ type AgentSessionRepository interface {
 	// GetPreviousStartedAt returns the started_at of the most recent non-active session
 	// for the agent. Returns nil when no prior session exists.
 	GetPreviousStartedAt(ctx context.Context, agentID uuid.UUID) (*time.Time, error)
+	// GetTaskCostSummary aggregates session metrics for a task and computes rework count
+	// from the activity_log. Returns a zero-value summary when no sessions exist.
+	GetTaskCostSummary(ctx context.Context, taskID uuid.UUID) (*domain.TaskCostSummary, error)
 }
 
 // PushSubscriptionRepository manages persistence for Web Push subscriptions.
