@@ -62,6 +62,7 @@ type Task struct {
 	EstimatedHours *float64        `json:"estimated_hours" db:"estimated_hours"`
 	CustomFields   json.RawMessage `json:"custom_fields" db:"custom_fields"`
 	Labels         pq.StringArray  `json:"labels" db:"labels"`
+	ThreadID       *string         `json:"thread_id,omitempty" db:"thread_id"`
 	CreatedBy      uuid.UUID       `json:"created_by" db:"created_by"`
 	CreatedByType  ActorType       `json:"created_by_type" db:"created_by_type"`
 	CreatedAt      time.Time       `json:"created_at" db:"created_at"`

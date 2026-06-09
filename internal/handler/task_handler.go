@@ -68,6 +68,7 @@ type createTaskRequest struct {
 	Labels          []string               `json:"labels"`
 	CustomFields    json.RawMessage        `json:"custom_fields"`
 	DelegationLevel domain.DelegationLevel `json:"delegation_level"`
+	ThreadID        *string                `json:"thread_id"`
 }
 
 // flexTime is a *time.Time that also accepts date-only strings ("2026-03-20")
@@ -110,6 +111,7 @@ type updateTaskRequest struct {
 	Labels          *[]string               `json:"labels"`
 	CustomFields    json.RawMessage         `json:"custom_fields"`
 	DelegationLevel *domain.DelegationLevel `json:"delegation_level"`
+	ThreadID        *string                 `json:"thread_id"`
 }
 
 // moveTaskRequest represents the JSON body for moving a task.
@@ -214,6 +216,7 @@ func (h *TaskHandler) Create(c echo.Context) error {
 		CreatedBy:       createdBy,
 		CreatedByType:   createdByType,
 		DelegationLevel: delegationLevel,
+		ThreadID:        req.ThreadID,
 	}
 
 	if err := h.taskService.Create(c.Request().Context(), task); err != nil {
@@ -377,6 +380,9 @@ func (h *TaskHandler) Update(c echo.Context) error {
 			return c.JSON(http.StatusBadRequest, apierror.BadRequest("delegation_level must be auto, review, or supervised"))
 		}
 		task.DelegationLevel = *req.DelegationLevel
+	}
+	if req.ThreadID != nil {
+		task.ThreadID = req.ThreadID
 	}
 
 	if err := h.taskService.Update(c.Request().Context(), task); err != nil {
