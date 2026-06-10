@@ -140,6 +140,43 @@ func computeImportanceScore(tags []string, content string) float32 {
 	return score
 }
 
+// genericTagPrefixes are namespace prefixes whose tags are excluded from edge-creation
+// overlap checks. They appear on virtually every memory (project:X, owner:Y, kind:Z)
+// so including them inflates Jaccard similarity and connects unrelated memories.
+var genericTagPrefixes = []string{"kind:", "owner:", "project:", "phase:"}
+
+// genericTagExact are single-word tags too common to carry semantic signal for edges.
+var genericTagExact = map[string]struct{}{
+	"fleet": {}, "infra": {}, "bug": {}, "feature": {}, "throwaway": {},
+	"smoke": {}, "probe": {}, "test": {}, "wip": {},
+	"p0": {}, "p1": {}, "p2": {},
+}
+
+// isGenericTag returns true for tags that should be excluded from edge-overlap checks.
+func isGenericTag(t string) bool {
+	if _, ok := genericTagExact[t]; ok {
+		return true
+	}
+	for _, pfx := range genericTagPrefixes {
+		if strings.HasPrefix(t, pfx) {
+			return true
+		}
+	}
+	return false
+}
+
+// filterSemanticTags returns only the tags that carry semantic signal for KG edges,
+// dropping generic namespace and utility tags.
+func filterSemanticTags(tags []string) []string {
+	out := make([]string, 0, len(tags))
+	for _, t := range tags {
+		if !isGenericTag(t) {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
 // tagOverlapRatio returns the fraction of newTags found in existingTags.
 // Used for reinforcement scoring: when ≥80% of tags match, the memory is
 // considered a re-assertion of the same knowledge and gets a score boost.
@@ -359,22 +396,32 @@ func (s *memoryService) Remember(ctx context.Context, mem *domain.Memory) (strin
 		go s.embedAndStore(memID, content)
 	}
 
-	// ── Hook 1: relates_to edge on tag overlap ≥60% ───────────────────────────
+	// ── Hook 1: relates_to edge on semantic tag overlap ≥60% ─────────────────
+	// Only non-generic tags are compared: kind:*, owner:*, project:*, phase:*
+	// prefixes and common utility words are excluded to prevent all memories in
+	// the same project from becoming a fully-connected clique.
 	if s.edgeRepo != nil && len(mem.Tags) > 0 {
-		if candidates, scanErr := s.memRepo.FindByScope(ctx, mem.WorkspaceID, mem.ProjectID, string(mem.Scope), 200); scanErr == nil {
-			for _, candidate := range candidates {
-				if candidate.ID == mem.ID {
-					continue
-				}
-				if tagOverlapRatio([]string(candidate.Tags), mem.Tags) >= 0.6 {
-					edge := &domain.MemoryEdge{
-						MemoryFromID:     mem.ID,
-						MemoryToID:       candidate.ID,
-						RelationshipType: domain.EdgeRelatesTo,
-						Weight:           0.5,
-						WorkspaceID:      mem.WorkspaceID,
+		semanticTags := filterSemanticTags(mem.Tags)
+		if len(semanticTags) > 0 {
+			if candidates, scanErr := s.memRepo.FindByScope(ctx, mem.WorkspaceID, mem.ProjectID, string(mem.Scope), 200); scanErr == nil {
+				for _, candidate := range candidates {
+					if candidate.ID == mem.ID {
+						continue
 					}
-					_ = s.edgeRepo.UpsertEdge(ctx, edge)
+					candidateSemantic := filterSemanticTags([]string(candidate.Tags))
+					if len(candidateSemantic) == 0 {
+						continue
+					}
+					if tagOverlapRatio(candidateSemantic, semanticTags) >= 0.6 {
+						edge := &domain.MemoryEdge{
+							MemoryFromID:     mem.ID,
+							MemoryToID:       candidate.ID,
+							RelationshipType: domain.EdgeRelatesTo,
+							Weight:           0.5,
+							WorkspaceID:      mem.WorkspaceID,
+						}
+						_ = s.edgeRepo.UpsertEdge(ctx, edge)
+					}
 				}
 			}
 		}

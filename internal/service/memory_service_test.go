@@ -746,6 +746,36 @@ func TestTagOverlapRatio(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// TestIsGenericTag / TestFilterSemanticTags
+// ---------------------------------------------------------------------------
+
+func TestIsGenericTag(t *testing.T) {
+	generic := []string{
+		"kind:incident", "kind:decision", "owner:bill", "project:spark",
+		"phase:execute", "fleet", "infra", "bug", "feature", "wip", "p0", "p2",
+	}
+	for _, tag := range generic {
+		assert.True(t, isGenericTag(tag), "expected %q to be generic", tag)
+	}
+	semantic := []string{
+		"auth-migration", "postgres-upgrade", "relay-upload", "sparse-index",
+		"billing", "memory-kg", "cost-limit",
+	}
+	for _, tag := range semantic {
+		assert.False(t, isGenericTag(tag), "expected %q to be semantic", tag)
+	}
+}
+
+func TestFilterSemanticTags(t *testing.T) {
+	in := []string{"kind:incident", "owner:linus", "project:mesh-dev", "auth-migration", "postgres-upgrade"}
+	got := filterSemanticTags(in)
+	assert.Equal(t, []string{"auth-migration", "postgres-upgrade"}, got)
+
+	assert.Empty(t, filterSemanticTags([]string{"kind:fact", "owner:riker", "phase:execute"}))
+	assert.Empty(t, filterSemanticTags(nil))
+}
+
+// ---------------------------------------------------------------------------
 // TestRemember_SetsImportanceScore — scoring wired into Remember
 // ---------------------------------------------------------------------------
 
