@@ -59,6 +59,41 @@ func TestTransport_MissingRelayURL(t *testing.T) {
 	assert.Empty(t, url)
 }
 
+func TestTransport_EmptyPathResponse_ReturnsError(t *testing.T) {
+	// Simulates TR returning {ok: false} or any response that doesn't populate the
+	// syncUploadResponse fields — path will be "" which signals upload failure.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"ok": false, "error": "share not found"}`))
+	}))
+	defer srv.Close()
+
+	t.Setenv("MESH_TEAMRELAY_RELAY_URL", srv.URL)
+	t.Setenv("MESH_TEAMRELAY_TRANSPORT_ENABLED", "true")
+
+	publicURL, err := transport(context.Background(), "share-id", "file.md", []byte("data"), "text/plain", "tr_agent_test")
+	assert.Error(t, err, "expected error when relay returns ok=false body at HTTP 200")
+	assert.Empty(t, publicURL)
+	assert.Contains(t, err.Error(), "empty path")
+}
+
+func TestTransport_UnparsableResponse_ReturnsError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`not valid json {{{`))
+	}))
+	defer srv.Close()
+
+	t.Setenv("MESH_TEAMRELAY_RELAY_URL", srv.URL)
+	t.Setenv("MESH_TEAMRELAY_TRANSPORT_ENABLED", "true")
+
+	publicURL, err := transport(context.Background(), "share-id", "file.md", []byte("data"), "text/plain", "tr_agent_test")
+	assert.Error(t, err)
+	assert.Empty(t, publicURL)
+}
+
 func TestTransport_AuthFailure(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Forbidden", http.StatusForbidden)
