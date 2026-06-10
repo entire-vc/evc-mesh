@@ -147,6 +147,18 @@ func (s *artifactService) GetByID(ctx context.Context, id uuid.UUID) (*domain.Ar
 	return artifact, nil
 }
 
+// GetByIDInWorkspace retrieves an artifact only when it belongs to workspaceID.
+func (s *artifactService) GetByIDInWorkspace(ctx context.Context, id, workspaceID uuid.UUID) (*domain.Artifact, error) {
+	artifact, err := s.artifactRepo.GetByIDInWorkspace(ctx, id, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	if artifact == nil {
+		return nil, apierror.NotFound("Artifact")
+	}
+	return artifact, nil
+}
+
 // GetDownloadURL generates a presigned URL for downloading the artifact.
 func (s *artifactService) GetDownloadURL(ctx context.Context, id uuid.UUID) (string, error) {
 	artifact, err := s.artifactRepo.GetByID(ctx, id)

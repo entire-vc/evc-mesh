@@ -164,6 +164,9 @@ type CommentRepository interface {
 type ArtifactRepository interface {
 	Create(ctx context.Context, artifact *domain.Artifact) error
 	GetByID(ctx context.Context, id uuid.UUID) (*domain.Artifact, error)
+	// GetByIDInWorkspace is like GetByID but returns nil when the artifact's task
+	// does not belong to workspaceID — used as a defense-in-depth ownership check.
+	GetByIDInWorkspace(ctx context.Context, id, workspaceID uuid.UUID) (*domain.Artifact, error)
 	Delete(ctx context.Context, id uuid.UUID) error
 	ListByTask(ctx context.Context, taskID uuid.UUID, pg pagination.Params) (*pagination.Page[domain.Artifact], error)
 	// UpdateMetadata overwrites the JSONB metadata column for a single artifact.

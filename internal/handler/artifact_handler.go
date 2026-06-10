@@ -10,6 +10,7 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	mw "github.com/entire-vc/evc-mesh/internal/middleware"
 	"github.com/entire-vc/evc-mesh/internal/service"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 	"github.com/entire-vc/evc-mesh/pkg/pagination"
@@ -128,7 +129,14 @@ func (h *ArtifactHandler) GetByID(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid artifact_id"))
 	}
 
-	artifact, err := h.artifactService.GetByID(c.Request().Context(), artifactID)
+	// Defense-in-depth: restrict to the caller's workspace even though wsAccess
+	// middleware already enforces this at the route level.
+	wsID, err := mw.GetWorkspaceID(c)
+	if err != nil {
+		return c.JSON(http.StatusForbidden, apierror.Forbidden("workspace access denied"))
+	}
+
+	artifact, err := h.artifactService.GetByIDInWorkspace(c.Request().Context(), artifactID, wsID)
 	if err != nil {
 		return handleError(c, err)
 	}
@@ -136,12 +144,20 @@ func (h *ArtifactHandler) GetByID(c echo.Context) error {
 	return c.JSON(http.StatusOK, artifact)
 }
 
-// Download handles GET /artifacts/:artifact_id/download
+// Download handles GET /artifacts/:artifact_id/download and the task-scoped alias.
 func (h *ArtifactHandler) Download(c echo.Context) error {
 	artifactIDStr := c.Param("artifact_id")
 	artifactID, err := uuid.Parse(artifactIDStr)
 	if err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid artifact_id"))
+	}
+
+	// Defense-in-depth: when workspace is resolvable from context (i.e. wsAccess
+	// middleware ran on this route), verify the artifact belongs to that workspace.
+	if wsID, wsErr := mw.GetWorkspaceID(c); wsErr == nil {
+		if _, werr := h.artifactService.GetByIDInWorkspace(c.Request().Context(), artifactID, wsID); werr != nil {
+			return handleError(c, werr)
+		}
 	}
 
 	url, err := h.artifactService.GetDownloadURL(c.Request().Context(), artifactID)
@@ -158,6 +174,16 @@ func (h *ArtifactHandler) Delete(c echo.Context) error {
 	artifactID, err := uuid.Parse(artifactIDStr)
 	if err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid artifact_id"))
+	}
+
+	// Defense-in-depth: verify the artifact belongs to the caller's workspace
+	// before allowing the delete, even though wsAccess already checked this.
+	wsID, err := mw.GetWorkspaceID(c)
+	if err != nil {
+		return c.JSON(http.StatusForbidden, apierror.Forbidden("workspace access denied"))
+	}
+	if _, err := h.artifactService.GetByIDInWorkspace(c.Request().Context(), artifactID, wsID); err != nil {
+		return handleError(c, err)
 	}
 
 	if err := h.artifactService.Delete(c.Request().Context(), artifactID); err != nil {

@@ -852,13 +852,27 @@ func (m *MockCommentRepository) ListRecentByWorkspace(_ context.Context, _ uuid.
 // ---------------------------------------------------------------------------
 
 type MockArtifactRepository struct {
-	mu          sync.RWMutex
-	items       map[uuid.UUID]*domain.Artifact
+	mu    sync.RWMutex
+	items map[uuid.UUID]*domain.Artifact
+	// workspaceOf maps artifact ID → workspace ID for GetByIDInWorkspace checks.
+	// If an entry is absent the mock skips workspace filtering (permissive default).
+	workspaceOf map[uuid.UUID]uuid.UUID
 	errToReturn error
 }
 
 func NewMockArtifactRepository() *MockArtifactRepository {
-	return &MockArtifactRepository{items: make(map[uuid.UUID]*domain.Artifact)}
+	return &MockArtifactRepository{
+		items:       make(map[uuid.UUID]*domain.Artifact),
+		workspaceOf: make(map[uuid.UUID]uuid.UUID),
+	}
+}
+
+// SetWorkspace records that artifactID belongs to workspaceID.
+// Tests that exercise GetByIDInWorkspace isolation should call this after Create.
+func (m *MockArtifactRepository) SetWorkspace(artifactID, workspaceID uuid.UUID) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.workspaceOf[artifactID] = workspaceID
 }
 
 func (m *MockArtifactRepository) Create(_ context.Context, a *domain.Artifact) error {
@@ -879,6 +893,23 @@ func (m *MockArtifactRepository) GetByID(_ context.Context, id uuid.UUID) (*doma
 	defer m.mu.RUnlock()
 	a, ok := m.items[id]
 	if !ok {
+		return nil, nil
+	}
+	return a, nil
+}
+
+func (m *MockArtifactRepository) GetByIDInWorkspace(_ context.Context, id, workspaceID uuid.UUID) (*domain.Artifact, error) {
+	if m.errToReturn != nil {
+		return nil, m.errToReturn
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	a, ok := m.items[id]
+	if !ok {
+		return nil, nil
+	}
+	// If workspace mapping is recorded, enforce it.
+	if wsID, hasMapping := m.workspaceOf[id]; hasMapping && wsID != workspaceID {
 		return nil, nil
 	}
 	return a, nil

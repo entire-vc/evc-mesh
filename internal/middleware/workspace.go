@@ -79,6 +79,27 @@ func WorkspaceRLS(db *sqlx.DB, projectRepo repository.ProjectRepository) echo.Mi
 				}
 			}
 
+			// 2b2. Try artifact_id route parameter -> look up workspace via artifacts → tasks → projects.
+			if !resolved {
+				if artifactIDStr := c.Param("artifact_id"); artifactIDStr != "" {
+					if artifactID, err := uuid.Parse(artifactIDStr); err == nil {
+						var resolvedWsID uuid.UUID
+						err := db.QueryRowContext(c.Request().Context(),
+							`SELECT p.workspace_id
+							   FROM artifacts a
+							   JOIN tasks t ON a.task_id = t.id AND t.deleted_at IS NULL
+							   JOIN projects p ON t.project_id = p.id
+							  WHERE a.id = $1`,
+							artifactID,
+						).Scan(&resolvedWsID)
+						if err == nil {
+							wsID = resolvedWsID
+							resolved = true
+						}
+					}
+				}
+			}
+
 			// 2c. Try agent_id route parameter -> look up agent's workspace_id.
 			if !resolved {
 				if agentIDStr := c.Param("agent_id"); agentIDStr != "" {

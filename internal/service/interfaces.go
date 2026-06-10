@@ -215,6 +215,9 @@ type UploadArtifactInput struct {
 type ArtifactService interface {
 	Upload(ctx context.Context, input UploadArtifactInput) (*domain.Artifact, error)
 	GetByID(ctx context.Context, id uuid.UUID) (*domain.Artifact, error)
+	// GetByIDInWorkspace is the workspace-scoped variant: returns 404 when the
+	// artifact belongs to a different workspace (defense-in-depth after wsAccess).
+	GetByIDInWorkspace(ctx context.Context, id, workspaceID uuid.UUID) (*domain.Artifact, error)
 	GetDownloadURL(ctx context.Context, id uuid.UUID) (string, error)
 	Delete(ctx context.Context, id uuid.UUID) error
 	ListByTask(ctx context.Context, taskID uuid.UUID, pg pagination.Params) (*pagination.Page[domain.Artifact], error)
