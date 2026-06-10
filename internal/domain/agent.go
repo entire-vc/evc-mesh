@@ -62,8 +62,15 @@ type Agent struct {
 	WorkingHours       string           `json:"working_hours" db:"working_hours"`
 	ProfileDescription string           `json:"profile_description" db:"profile_description"`
 	CallbackURL        string           `json:"callback_url" db:"callback_url"`
+	ExpiresAt          *time.Time       `json:"expires_at,omitempty" db:"expires_at"`
+	LastRotatedAt      *time.Time       `json:"last_rotated_at,omitempty" db:"last_rotated_at"`
 	CreatedAt          time.Time        `json:"created_at" db:"created_at"`
 	UpdatedAt          time.Time        `json:"updated_at" db:"updated_at"`
+}
+
+// IsKeyExpired returns true when the agent's API key has a set expiry that has passed.
+func (a *Agent) IsKeyExpired() bool {
+	return a.ExpiresAt != nil && time.Now().After(*a.ExpiresAt)
 }
 
 // ComputedAgentStatus is a derived presence indicator based on SSE connection
