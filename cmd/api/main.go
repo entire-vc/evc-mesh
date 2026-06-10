@@ -154,7 +154,11 @@ func main() {
 
 	// Memory service is wired into eventBusService so Publish() can extract memories.
 	// MemoryWithProjectRepo enables automatic project:<slug> tag → project_id resolution on write.
-	memoryService := service.NewMemoryService(memoryRepo, memoryEdgesRepo, embedder, service.MemoryWithProjectRepo(projectRepo))
+	memoryService := service.NewMemoryService(memoryRepo, memoryEdgesRepo, embedder,
+		service.MemoryWithProjectRepo(projectRepo),
+		service.MemoryWithTaskRepo(taskRepo),
+		service.MemoryWithDepRepo(taskDependencyRepo),
+	)
 
 	// Slack service sends notifications via Slack Incoming Webhooks when a workspace has
 	// an active Slack integration configured. It is injected into webhookService below.

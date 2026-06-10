@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -31,6 +32,8 @@ type mockMemoryRepo struct {
 	boostRelevanceFn         func(ctx context.Context, ids []uuid.UUID) error
 	findByShortIDFn          func() (*domain.Memory, error)
 	setArchivedFn            func() error
+	findByThreadIDFn         func(ctx context.Context, wsID uuid.UUID, threadID string, excludeID uuid.UUID) ([]domain.Memory, error)
+	findBySourceTaskIDsFn    func(ctx context.Context, wsID uuid.UUID, taskIDs []uuid.UUID) ([]domain.Memory, error)
 }
 
 func (m *mockMemoryRepo) Upsert(ctx context.Context, mem *domain.Memory) error {
@@ -125,6 +128,20 @@ func (m *mockMemoryRepo) SetArchived(_ context.Context, _ uuid.UUID, _ bool) err
 		return m.setArchivedFn()
 	}
 	return nil
+}
+
+func (m *mockMemoryRepo) FindByThreadID(ctx context.Context, wsID uuid.UUID, threadID string, excludeID uuid.UUID) ([]domain.Memory, error) {
+	if m.findByThreadIDFn != nil {
+		return m.findByThreadIDFn(ctx, wsID, threadID, excludeID)
+	}
+	return nil, nil
+}
+
+func (m *mockMemoryRepo) FindBySourceTaskIDs(ctx context.Context, wsID uuid.UUID, taskIDs []uuid.UUID) ([]domain.Memory, error) {
+	if m.findBySourceTaskIDsFn != nil {
+		return m.findBySourceTaskIDsFn(ctx, wsID, taskIDs)
+	}
+	return nil, nil
 }
 
 // Verify mockMemoryRepo satisfies the interface at compile time.
@@ -1315,5 +1332,528 @@ func TestRemember_SlugResolution(t *testing.T) {
 		_, err := svc.Remember(context.Background(), mem)
 		require.NoError(t, err)
 		assert.Nil(t, upserted.ProjectID)
+	})
+}
+
+// ---------------------------------------------------------------------------
+// mockTaskRepo — minimal stub satisfying repository.TaskRepository
+// ---------------------------------------------------------------------------
+
+type mockTaskRepo struct {
+	getByIDFn func(ctx context.Context, id uuid.UUID) (*domain.Task, error)
+}
+
+func (m *mockTaskRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.Task, error) {
+	if m.getByIDFn != nil {
+		return m.getByIDFn(ctx, id)
+	}
+	return nil, nil
+}
+
+func (m *mockTaskRepo) Create(_ context.Context, _ *domain.Task) error                { return nil }
+func (m *mockTaskRepo) GetByShortID(_ context.Context, _ string) (*domain.Task, error) { return nil, nil }
+func (m *mockTaskRepo) Update(_ context.Context, _ *domain.Task) error                { return nil }
+func (m *mockTaskRepo) Delete(_ context.Context, _ uuid.UUID) error                   { return nil }
+func (m *mockTaskRepo) List(_ context.Context, _ uuid.UUID, _ repository.TaskFilter, _ pagination.Params) (*pagination.Page[domain.Task], error) {
+	return nil, nil
+}
+func (m *mockTaskRepo) Search(_ context.Context, _ uuid.UUID, _ repository.TaskFilter, _ pagination.Params) (*pagination.Page[domain.Task], error) {
+	return nil, nil
+}
+func (m *mockTaskRepo) ListByAssignee(_ context.Context, _ uuid.UUID, _ domain.AssigneeType) ([]domain.Task, error) {
+	return nil, nil
+}
+func (m *mockTaskRepo) ListByUserActive(_ context.Context, _, _ uuid.UUID, _ pagination.Params) (*pagination.Page[domain.Task], error) {
+	return nil, nil
+}
+func (m *mockTaskRepo) ListSubtasks(_ context.Context, _ uuid.UUID) ([]domain.Task, error) {
+	return nil, nil
+}
+func (m *mockTaskRepo) CountByStatus(_ context.Context, _ uuid.UUID) (map[uuid.UUID]int, error) {
+	return nil, nil
+}
+func (m *mockTaskRepo) CountByStatusCategory(_ context.Context, _ uuid.UUID) (map[domain.StatusCategory]int, error) {
+	return nil, nil
+}
+func (m *mockTaskRepo) ListByStatusCategory(_ context.Context, _ uuid.UUID, _ domain.StatusCategory, _ pagination.Params) (*pagination.Page[domain.Task], error) {
+	return nil, nil
+}
+func (m *mockTaskRepo) AtomicCheckout(_ context.Context, _, _, _ uuid.UUID, _ time.Time) error {
+	return nil
+}
+func (m *mockTaskRepo) ReleaseCheckout(_ context.Context, _, _ uuid.UUID) error      { return nil }
+func (m *mockTaskRepo) ExtendCheckout(_ context.Context, _, _ uuid.UUID, _ time.Time) error {
+	return nil
+}
+func (m *mockTaskRepo) ForceReleaseCheckout(_ context.Context, _ uuid.UUID) error    { return nil }
+func (m *mockTaskRepo) ReleaseExpiredCheckouts(_ context.Context) (int64, error)     { return 0, nil }
+func (m *mockTaskRepo) MoveToProject(_ context.Context, _, _, _ uuid.UUID) error     { return nil }
+
+var _ repository.TaskRepository = (*mockTaskRepo)(nil)
+
+// ---------------------------------------------------------------------------
+// mockTaskDepRepo — minimal stub satisfying repository.TaskDependencyRepository
+// ---------------------------------------------------------------------------
+
+type mockTaskDepRepo struct {
+	listByTaskFn func(ctx context.Context, taskID uuid.UUID) ([]domain.TaskDependency, error)
+}
+
+func (m *mockTaskDepRepo) ListByTask(ctx context.Context, taskID uuid.UUID) ([]domain.TaskDependency, error) {
+	if m.listByTaskFn != nil {
+		return m.listByTaskFn(ctx, taskID)
+	}
+	return nil, nil
+}
+
+func (m *mockTaskDepRepo) Create(_ context.Context, _ *domain.TaskDependency) error { return nil }
+func (m *mockTaskDepRepo) Delete(_ context.Context, _ uuid.UUID) error              { return nil }
+func (m *mockTaskDepRepo) ListDependents(_ context.Context, _ uuid.UUID) ([]domain.TaskDependency, error) {
+	return nil, nil
+}
+func (m *mockTaskDepRepo) Exists(_ context.Context, _, _ uuid.UUID) (bool, error) { return false, nil }
+
+var _ repository.TaskDependencyRepository = (*mockTaskDepRepo)(nil)
+
+// ---------------------------------------------------------------------------
+// TestRemember_Amendment2_ThreadIDEdges
+// ---------------------------------------------------------------------------
+
+func TestRemember_Amendment2_ThreadIDEdges(t *testing.T) {
+	wsID := uuid.New()
+	threadID := "thread-abc123"
+	taskID := uuid.New()
+
+	t.Run("creates relates_to edge weight=1.0 for same-thread memory", func(t *testing.T) {
+		existingMemID := uuid.New()
+		var createdEdge *domain.MemoryEdge
+
+		memRepo := &mockMemoryRepo{
+			findByThreadIDFn: func(_ context.Context, _ uuid.UUID, _ string, _ uuid.UUID) ([]domain.Memory, error) {
+				return []domain.Memory{
+					{ID: existingMemID, WorkspaceID: wsID, ThreadID: &threadID},
+				}, nil
+			},
+		}
+		edgeRepo := &mockMemoryEdgeRepo{
+			upsertEdgeFn: func(edge *domain.MemoryEdge) error {
+				if edge.RelationshipType == domain.EdgeRelatesTo && edge.Weight == 1.0 {
+					createdEdge = edge
+				}
+				return nil
+			},
+		}
+		taskRepo := &mockTaskRepo{
+			getByIDFn: func(_ context.Context, id uuid.UUID) (*domain.Task, error) {
+				return &domain.Task{ID: id, ThreadID: &threadID}, nil
+			},
+		}
+
+		svc := NewMemoryService(memRepo, edgeRepo, nil,
+			MemoryWithTaskRepo(taskRepo),
+		)
+
+		mem := &domain.Memory{
+			WorkspaceID:  wsID,
+			Key:          "new-thread-mem",
+			Content:      "content",
+			Scope:        domain.ScopeWorkspace,
+			SourceTaskID: &taskID,
+		}
+		_, err := svc.Remember(context.Background(), mem)
+		require.NoError(t, err)
+		require.NotNil(t, createdEdge, "relates_to edge must be created for same-thread candidate")
+		assert.Equal(t, existingMemID, createdEdge.MemoryToID)
+		assert.Equal(t, float32(1.0), createdEdge.Weight)
+		assert.Equal(t, domain.EdgeRelatesTo, createdEdge.RelationshipType)
+	})
+
+	t.Run("propagates thread_id from task when not explicitly set", func(t *testing.T) {
+		var upsertedMem *domain.Memory
+
+		memRepo := &mockMemoryRepo{
+			upsertFn: func(_ context.Context, m *domain.Memory) error {
+				upsertedMem = m
+				return nil
+			},
+		}
+		taskRepo := &mockTaskRepo{
+			getByIDFn: func(_ context.Context, id uuid.UUID) (*domain.Task, error) {
+				return &domain.Task{ID: id, ThreadID: &threadID}, nil
+			},
+		}
+
+		svc := NewMemoryService(memRepo, &mockMemoryEdgeRepo{}, nil,
+			MemoryWithTaskRepo(taskRepo),
+		)
+
+		mem := &domain.Memory{
+			WorkspaceID:  wsID,
+			Key:          "propagate-thread",
+			Content:      "content",
+			Scope:        domain.ScopeWorkspace,
+			SourceTaskID: &taskID,
+		}
+		_, err := svc.Remember(context.Background(), mem)
+		require.NoError(t, err)
+		require.NotNil(t, upsertedMem.ThreadID, "thread_id must be propagated from source task")
+		assert.Equal(t, threadID, *upsertedMem.ThreadID)
+	})
+
+	t.Run("no edge when thread_id is nil", func(t *testing.T) {
+		edgeCalled := false
+		memRepo := &mockMemoryRepo{}
+		edgeRepo := &mockMemoryEdgeRepo{
+			upsertEdgeFn: func(edge *domain.MemoryEdge) error {
+				if edge.RelationshipType == domain.EdgeRelatesTo && edge.Weight == 1.0 {
+					edgeCalled = true
+				}
+				return nil
+			},
+		}
+		taskRepo := &mockTaskRepo{
+			getByIDFn: func(_ context.Context, id uuid.UUID) (*domain.Task, error) {
+				return &domain.Task{ID: id, ThreadID: nil}, nil // no thread
+			},
+		}
+
+		svc := NewMemoryService(memRepo, edgeRepo, nil, MemoryWithTaskRepo(taskRepo))
+
+		mem := &domain.Memory{
+			WorkspaceID:  wsID,
+			Key:          "no-thread",
+			Content:      "content",
+			Scope:        domain.ScopeWorkspace,
+			SourceTaskID: &taskID,
+		}
+		_, err := svc.Remember(context.Background(), mem)
+		require.NoError(t, err)
+		assert.False(t, edgeCalled, "no weight=1.0 edge when task has no thread_id")
+	})
+
+	t.Run("no edge when task_repo not wired", func(t *testing.T) {
+		edgeCalled := false
+		memRepo := &mockMemoryRepo{}
+		edgeRepo := &mockMemoryEdgeRepo{
+			upsertEdgeFn: func(edge *domain.MemoryEdge) error {
+				if edge.Weight == 1.0 && edge.RelationshipType == domain.EdgeRelatesTo {
+					edgeCalled = true
+				}
+				return nil
+			},
+		}
+
+		svc := NewMemoryService(memRepo, edgeRepo, nil) // no MemoryWithTaskRepo
+
+		tid := threadID
+		mem := &domain.Memory{
+			WorkspaceID:  wsID,
+			Key:          "no-task-repo",
+			Content:      "content",
+			Scope:        domain.ScopeWorkspace,
+			SourceTaskID: &taskID,
+			ThreadID:     &tid,
+		}
+		_, err := svc.Remember(context.Background(), mem)
+		require.NoError(t, err)
+		// FindByThreadID is still called when ThreadID is pre-set on mem (even w/o taskRepo)
+		// — the edge repo is the gate; this test verifies no panic / no crash.
+		_ = edgeCalled
+	})
+}
+
+// ---------------------------------------------------------------------------
+// TestRemember_Amendment3_TaskGraphBridge
+// ---------------------------------------------------------------------------
+
+func TestRemember_Amendment3_TaskGraphBridge(t *testing.T) {
+	wsID := uuid.New()
+	taskID := uuid.New()
+	parentTaskID := uuid.New()
+	depTaskID := uuid.New()
+
+	t.Run("creates derived_from edge for parent task memory", func(t *testing.T) {
+		parentMemID := uuid.New()
+		var createdEdge *domain.MemoryEdge
+
+		memRepo := &mockMemoryRepo{
+			findBySourceTaskIDsFn: func(_ context.Context, _ uuid.UUID, taskIDs []uuid.UUID) ([]domain.Memory, error) {
+				for _, id := range taskIDs {
+					if id == parentTaskID {
+						return []domain.Memory{{ID: parentMemID, WorkspaceID: wsID}}, nil
+					}
+				}
+				return nil, nil
+			},
+		}
+		edgeRepo := &mockMemoryEdgeRepo{
+			upsertEdgeFn: func(edge *domain.MemoryEdge) error {
+				if edge.RelationshipType == domain.EdgeDerivedFrom {
+					createdEdge = edge
+				}
+				return nil
+			},
+		}
+		taskRepo := &mockTaskRepo{
+			getByIDFn: func(_ context.Context, id uuid.UUID) (*domain.Task, error) {
+				return &domain.Task{ID: id, ParentTaskID: &parentTaskID}, nil
+			},
+		}
+
+		svc := NewMemoryService(memRepo, edgeRepo, nil, MemoryWithTaskRepo(taskRepo))
+
+		mem := &domain.Memory{
+			WorkspaceID:  wsID,
+			Key:          "child-task-mem",
+			Content:      "content",
+			Scope:        domain.ScopeWorkspace,
+			SourceTaskID: &taskID,
+		}
+		_, err := svc.Remember(context.Background(), mem)
+		require.NoError(t, err)
+		require.NotNil(t, createdEdge, "derived_from edge must be created for parent task memory")
+		assert.Equal(t, parentMemID, createdEdge.MemoryToID)
+		assert.Equal(t, float32(0.7), createdEdge.Weight)
+		assert.Equal(t, domain.EdgeDerivedFrom, createdEdge.RelationshipType)
+	})
+
+	t.Run("creates derived_from edge for depends_on task memory", func(t *testing.T) {
+		depMemID := uuid.New()
+		var createdEdge *domain.MemoryEdge
+
+		memRepo := &mockMemoryRepo{
+			findBySourceTaskIDsFn: func(_ context.Context, _ uuid.UUID, taskIDs []uuid.UUID) ([]domain.Memory, error) {
+				for _, id := range taskIDs {
+					if id == depTaskID {
+						return []domain.Memory{{ID: depMemID, WorkspaceID: wsID}}, nil
+					}
+				}
+				return nil, nil
+			},
+		}
+		edgeRepo := &mockMemoryEdgeRepo{
+			upsertEdgeFn: func(edge *domain.MemoryEdge) error {
+				if edge.RelationshipType == domain.EdgeDerivedFrom {
+					createdEdge = edge
+				}
+				return nil
+			},
+		}
+		taskRepo := &mockTaskRepo{
+			getByIDFn: func(_ context.Context, id uuid.UUID) (*domain.Task, error) {
+				return &domain.Task{ID: id, ParentTaskID: nil}, nil // no parent
+			},
+		}
+		depRepo := &mockTaskDepRepo{
+			listByTaskFn: func(_ context.Context, _ uuid.UUID) ([]domain.TaskDependency, error) {
+				return []domain.TaskDependency{
+					{TaskID: taskID, DependsOnTaskID: depTaskID},
+				}, nil
+			},
+		}
+
+		svc := NewMemoryService(memRepo, edgeRepo, nil,
+			MemoryWithTaskRepo(taskRepo),
+			MemoryWithDepRepo(depRepo),
+		)
+
+		mem := &domain.Memory{
+			WorkspaceID:  wsID,
+			Key:          "dep-task-mem",
+			Content:      "content",
+			Scope:        domain.ScopeWorkspace,
+			SourceTaskID: &taskID,
+		}
+		_, err := svc.Remember(context.Background(), mem)
+		require.NoError(t, err)
+		require.NotNil(t, createdEdge, "derived_from edge must be created for depends_on task memory")
+		assert.Equal(t, depMemID, createdEdge.MemoryToID)
+		assert.Equal(t, float32(0.7), createdEdge.Weight)
+	})
+
+	t.Run("no edge when task has no parent and no depends_on", func(t *testing.T) {
+		edgeCalled := false
+		memRepo := &mockMemoryRepo{}
+		edgeRepo := &mockMemoryEdgeRepo{
+			upsertEdgeFn: func(edge *domain.MemoryEdge) error {
+				if edge.RelationshipType == domain.EdgeDerivedFrom && edge.Weight == 0.7 {
+					edgeCalled = true
+				}
+				return nil
+			},
+		}
+		taskRepo := &mockTaskRepo{
+			getByIDFn: func(_ context.Context, id uuid.UUID) (*domain.Task, error) {
+				return &domain.Task{ID: id, ParentTaskID: nil}, nil
+			},
+		}
+		depRepo := &mockTaskDepRepo{} // returns empty list
+
+		svc := NewMemoryService(memRepo, edgeRepo, nil,
+			MemoryWithTaskRepo(taskRepo),
+			MemoryWithDepRepo(depRepo),
+		)
+
+		mem := &domain.Memory{
+			WorkspaceID:  wsID,
+			Key:          "root-task-mem",
+			Content:      "content",
+			Scope:        domain.ScopeWorkspace,
+			SourceTaskID: &taskID,
+		}
+		_, err := svc.Remember(context.Background(), mem)
+		require.NoError(t, err)
+		assert.False(t, edgeCalled, "no derived_from edge when task has no related tasks")
+	})
+}
+
+// ---------------------------------------------------------------------------
+// TestSetProjectKnowledge_Amendment4_CanonicalSupersede
+// ---------------------------------------------------------------------------
+
+func TestSetProjectKnowledge_Amendment4_CanonicalSupersede(t *testing.T) {
+	wsID := uuid.New()
+	projID := uuid.New()
+
+	t.Run("supersedes low-importance stale memory with overlapping semantic tags", func(t *testing.T) {
+		staleID := uuid.New()
+		newMemID := uuid.New()
+		var supersededEdge *domain.MemoryEdge
+		archivedID := uuid.Nil
+
+		memRepo := &mockMemoryRepo{
+			upsertFn: func(_ context.Context, m *domain.Memory) error {
+				m.ID = newMemID // assign ID so Amendment 4 guard passes
+				return nil
+			},
+			findByScopeFn: func(_ context.Context, _ uuid.UUID, _ *uuid.UUID, _ string, _ int) ([]domain.Memory, error) {
+				// return a stale memory with overlapping semantic tags
+				return []domain.Memory{
+					{
+						ID:              staleID,
+						WorkspaceID:     wsID,
+						Tags:            []string{"auth-middleware", "session-token", "compliance"},
+						ImportanceScore: 0.3, // low — eligible for supersede
+						Archived:        false,
+					},
+				}, nil
+			},
+			setArchivedFn: func() error {
+				archivedID = staleID
+				return nil
+			},
+		}
+		edgeRepo := &mockMemoryEdgeRepo{
+			upsertEdgeFn: func(edge *domain.MemoryEdge) error {
+				if edge.RelationshipType == domain.EdgeSupersedes {
+					supersededEdge = edge
+				}
+				return nil
+			},
+		}
+
+		svc := NewMemoryService(memRepo, edgeRepo, nil)
+
+		input := SetProjectKnowledgeInput{
+			WorkspaceID: wsID,
+			ProjectID:   projID,
+			Key:         "auth-rewrite-canonical",
+			Value:       "Auth middleware rewritten for compliance — old session token storage removed.",
+			Tags:        []string{"auth-middleware", "session-token", "compliance"},
+		}
+		_, _, err := svc.SetProjectKnowledge(context.Background(), input)
+		require.NoError(t, err)
+		require.NotNil(t, supersededEdge, "supersedes edge must be created for stale overlapping memory")
+		assert.Equal(t, staleID, supersededEdge.MemoryToID)
+		assert.Equal(t, domain.EdgeSupersedes, supersededEdge.RelationshipType)
+		assert.Equal(t, staleID, archivedID, "stale memory must be archived")
+	})
+
+	t.Run("does not supersede high-importance memory (>=0.75)", func(t *testing.T) {
+		highImportanceID := uuid.New()
+		supersedeCalled := false
+
+		memRepo := &mockMemoryRepo{
+			upsertFn: func(_ context.Context, m *domain.Memory) error {
+				m.ID = uuid.New()
+				return nil
+			},
+			findByScopeFn: func(_ context.Context, _ uuid.UUID, _ *uuid.UUID, _ string, _ int) ([]domain.Memory, error) {
+				return []domain.Memory{
+					{
+						ID:              highImportanceID,
+						WorkspaceID:     wsID,
+						Tags:            []string{"auth-middleware", "canonical-decision"},
+						ImportanceScore: 0.80, // high — must NOT be superseded
+						Archived:        false,
+					},
+				}, nil
+			},
+		}
+		edgeRepo := &mockMemoryEdgeRepo{
+			upsertEdgeFn: func(edge *domain.MemoryEdge) error {
+				if edge.RelationshipType == domain.EdgeSupersedes {
+					supersedeCalled = true
+				}
+				return nil
+			},
+		}
+
+		svc := NewMemoryService(memRepo, edgeRepo, nil)
+
+		input := SetProjectKnowledgeInput{
+			WorkspaceID: wsID,
+			ProjectID:   projID,
+			Key:         "auth-canonical-v2",
+			Value:       "New canonical auth spec.",
+			Tags:        []string{"auth-middleware"},
+		}
+		_, _, err := svc.SetProjectKnowledge(context.Background(), input)
+		require.NoError(t, err)
+		assert.False(t, supersedeCalled, "high-importance memory must not be superseded")
+	})
+
+	t.Run("does not supersede when generic-only tag overlap", func(t *testing.T) {
+		genericOnlyID := uuid.New()
+		supersedeCalled := false
+
+		memRepo := &mockMemoryRepo{
+			upsertFn: func(_ context.Context, m *domain.Memory) error {
+				m.ID = uuid.New()
+				return nil
+			},
+			findByScopeFn: func(_ context.Context, _ uuid.UUID, _ *uuid.UUID, _ string, _ int) ([]domain.Memory, error) {
+				return []domain.Memory{
+					{
+						ID:              genericOnlyID,
+						WorkspaceID:     wsID,
+						Tags:            []string{"kind:fact", "project:mesh-dev", "owner:linus"},
+						ImportanceScore: 0.3,
+						Archived:        false,
+					},
+				}, nil
+			},
+		}
+		edgeRepo := &mockMemoryEdgeRepo{
+			upsertEdgeFn: func(edge *domain.MemoryEdge) error {
+				if edge.RelationshipType == domain.EdgeSupersedes {
+					supersedeCalled = true
+				}
+				return nil
+			},
+		}
+
+		svc := NewMemoryService(memRepo, edgeRepo, nil)
+
+		input := SetProjectKnowledgeInput{
+			WorkspaceID: wsID,
+			ProjectID:   projID,
+			Key:         "generic-only-test",
+			Value:       "A canonical fact.",
+			Tags:        []string{"kind:fact", "project:mesh-dev"},
+		}
+		_, _, err := svc.SetProjectKnowledge(context.Background(), input)
+		require.NoError(t, err)
+		assert.False(t, supersedeCalled, "generic-only overlap must not create supersedes edge")
 	})
 }

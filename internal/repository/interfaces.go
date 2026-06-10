@@ -578,6 +578,14 @@ type MemoryRepository interface {
 	FindByShortID(ctx context.Context, workspaceID uuid.UUID, prefix string) (*domain.Memory, error)
 	// SetArchived marks a memory as archived (true) or unarchived (false) by ID.
 	SetArchived(ctx context.Context, id uuid.UUID, archived bool) error
+	// FindByThreadID returns non-archived memories in workspaceID whose thread_id
+	// matches, excluding the memory identified by excludeID (the calling memory).
+	// Used by Amendment 2 to create same-thread relates_to edges.
+	FindByThreadID(ctx context.Context, workspaceID uuid.UUID, threadID string, excludeID uuid.UUID) ([]domain.Memory, error)
+	// FindBySourceTaskIDs returns non-archived memories in workspaceID whose
+	// source_task_id is one of the given task UUIDs.
+	// Used by Amendment 3 to create task-graph derived_from edges.
+	FindBySourceTaskIDs(ctx context.Context, workspaceID uuid.UUID, sourceTaskIDs []uuid.UUID) ([]domain.Memory, error)
 }
 
 // MemoryEdgeRepository manages directed, typed edges in the memory Knowledge Graph.

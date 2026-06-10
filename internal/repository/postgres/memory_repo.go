@@ -50,6 +50,8 @@ type memoryRow struct {
 	ExpiresAt       *time.Time              `db:"expires_at"`
 	LastAccessedAt  *time.Time              `db:"last_accessed_at"`
 	Archived        bool                    `db:"archived"`
+	ThreadID        *string                 `db:"thread_id"`
+	SourceTaskID    *uuid.UUID              `db:"source_task_id"`
 }
 
 func (r *memoryRow) toDomain() domain.Memory {
@@ -72,12 +74,14 @@ func (r *memoryRow) toDomain() domain.Memory {
 		ExpiresAt:       r.ExpiresAt,
 		LastAccessedAt:  r.LastAccessedAt,
 		Archived:        r.Archived,
+		ThreadID:        r.ThreadID,
+		SourceTaskID:    r.SourceTaskID,
 	}
 }
 
 const memoryColumns = `id, workspace_id, project_id, agent_id, key, content, scope, tags,
 	source_type, source_event_id, source_url, relevance, importance_score, created_at, updated_at, expires_at,
-	last_accessed_at, archived`
+	last_accessed_at, archived, thread_id, source_task_id`
 
 // Upsert inserts a new memory or updates content, tags, relevance, and expires_at on conflict.
 // The unique constraint is on (workspace_id, project_id, agent_id, key, scope).
@@ -104,11 +108,11 @@ func (r *MemoryRepo) Upsert(ctx context.Context, m *domain.Memory) error {
 		INSERT INTO memories (
 			id, workspace_id, project_id, agent_id, key, content, scope,
 			tags, source_type, source_event_id, source_url, relevance, importance_score,
-			created_at, updated_at, expires_at
+			created_at, updated_at, expires_at, thread_id, source_task_id
 		) VALUES (
 			$1, $2, $3, $4, $5, $6, $7,
 			$8, $9, $10, $11, $12, $13,
-			$14, $15, $16
+			$14, $15, $16, $17, $18
 		)
 		ON CONFLICT (id) DO UPDATE
 			SET content          = EXCLUDED.content,
@@ -117,12 +121,14 @@ func (r *MemoryRepo) Upsert(ctx context.Context, m *domain.Memory) error {
 			    importance_score = EXCLUDED.importance_score,
 			    source_url       = EXCLUDED.source_url,
 			    updated_at       = EXCLUDED.updated_at,
-			    expires_at       = EXCLUDED.expires_at
+			    expires_at       = EXCLUDED.expires_at,
+			    thread_id        = EXCLUDED.thread_id,
+			    source_task_id   = EXCLUDED.source_task_id
 	`
 	_, err := r.db.ExecContext(ctx, q,
 		m.ID, m.WorkspaceID, m.ProjectID, m.AgentID, m.Key, m.Content, m.Scope,
 		tags, m.SourceType, m.SourceEventID, m.SourceURL, m.Relevance, m.ImportanceScore,
-		m.CreatedAt, m.UpdatedAt, m.ExpiresAt,
+		m.CreatedAt, m.UpdatedAt, m.ExpiresAt, m.ThreadID, m.SourceTaskID,
 	)
 	return err
 }
@@ -900,4 +906,58 @@ func (r *MemoryRepo) SetArchived(ctx context.Context, id uuid.UUID, archived boo
 		id, archived,
 	)
 	return err
+}
+
+// FindByThreadID returns non-archived memories in workspaceID whose thread_id matches,
+// excluding the memory identified by excludeID. Used by Amendment 2 to find candidates
+// for same-thread relates_to edges.
+func (r *MemoryRepo) FindByThreadID(ctx context.Context, workspaceID uuid.UUID, threadID string, excludeID uuid.UUID) ([]domain.Memory, error) {
+	var rows []memoryRow
+	err := r.db.SelectContext(ctx, &rows,
+		fmt.Sprintf(`SELECT %s FROM memories
+			WHERE workspace_id = $1
+			  AND thread_id    = $2
+			  AND id          != $3
+			  AND archived     = false
+			  AND (expires_at IS NULL OR expires_at > NOW())
+			ORDER BY created_at DESC
+			LIMIT 100`, memoryColumns),
+		workspaceID, threadID, excludeID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	memories := make([]domain.Memory, len(rows))
+	for i, row := range rows {
+		memories[i] = row.toDomain()
+	}
+	return memories, nil
+}
+
+// FindBySourceTaskIDs returns non-archived memories in workspaceID whose source_task_id
+// is one of the given task UUIDs. Used by Amendment 3 (task-graph bridge) to find
+// memories from related tasks (parent / depends_on) for derived_from edges.
+func (r *MemoryRepo) FindBySourceTaskIDs(ctx context.Context, workspaceID uuid.UUID, sourceTaskIDs []uuid.UUID) ([]domain.Memory, error) {
+	if len(sourceTaskIDs) == 0 {
+		return nil, nil
+	}
+	var rows []memoryRow
+	err := r.db.SelectContext(ctx, &rows,
+		fmt.Sprintf(`SELECT %s FROM memories
+			WHERE workspace_id  = $1
+			  AND source_task_id = ANY($2::uuid[])
+			  AND archived       = false
+			  AND (expires_at IS NULL OR expires_at > NOW())
+			ORDER BY created_at DESC
+			LIMIT 200`, memoryColumns),
+		workspaceID, pq.Array(sourceTaskIDs),
+	)
+	if err != nil {
+		return nil, err
+	}
+	memories := make([]domain.Memory, len(rows))
+	for i, row := range rows {
+		memories[i] = row.toDomain()
+	}
+	return memories, nil
 }
