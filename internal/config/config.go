@@ -204,7 +204,7 @@ func Load() *Config {
 		},
 		RateLimit: RateLimitConfig{
 			Enabled: getEnvBool("MESH_RATE_LIMIT_ENABLED", true),
-			AuthRPM: getEnvInt("MESH_RATE_LIMIT_AUTH_RPM", 20),
+			AuthRPM: getEnvInt("MESH_RATE_LIMIT_AUTH_RPM", 5),
 			APIRPM:  getEnvInt("MESH_RATE_LIMIT_API_RPM", 600),
 		},
 		Spark: SparkConfig{
