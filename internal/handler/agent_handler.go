@@ -623,6 +623,7 @@ type reportSessionRequest struct {
 	TokensOut     int64   `json:"tokens_out"`
 	Model         string  `json:"model"`
 	EstimatedCost float64 `json:"estimated_cost"`
+	TaskID        *string `json:"task_id"`
 }
 
 // ReportSession handles POST /agents/me/sessions/report
@@ -656,6 +657,14 @@ func (h *AgentHandler) ReportSession(c echo.Context) error {
 		return handleError(c, err)
 	}
 
+	// Parse optional task_id from request.
+	var reqTaskID *uuid.UUID
+	if req.TaskID != nil && *req.TaskID != "" {
+		if parsed, perr := uuid.Parse(*req.TaskID); perr == nil {
+			reqTaskID = &parsed
+		}
+	}
+
 	if active == nil {
 		// No active session — resolve the agent's workspace and create one,
 		// seeded with this report's usage.
@@ -670,6 +679,7 @@ func (h *AgentHandler) ReportSession(c echo.Context) error {
 			ID:            uuid.New(),
 			AgentID:       agentID,
 			WorkspaceID:   agent.WorkspaceID,
+			TaskID:        reqTaskID,
 			StartedAt:     time.Now(),
 			Status:        domain.AgentSessionStatusActive,
 			ModelUsed:     req.Model,
@@ -687,6 +697,10 @@ func (h *AgentHandler) ReportSession(c echo.Context) error {
 		active.EstimatedCost += req.EstimatedCost
 		if req.Model != "" {
 			active.ModelUsed = req.Model // latest model wins
+		}
+		// Only set task_id on the first report that carries one; never overwrite.
+		if active.TaskID == nil && reqTaskID != nil {
+			active.TaskID = reqTaskID
 		}
 		if err := h.sessionRepo.Update(ctx, active); err != nil {
 			return handleError(c, err)

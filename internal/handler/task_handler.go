@@ -47,11 +47,17 @@ var validSlugRe = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
 // TaskHandler handles HTTP requests for task management.
 type TaskHandler struct {
 	taskService service.TaskService
+	sessionRepo repository.AgentSessionRepository
 }
 
 // NewTaskHandler creates a new TaskHandler with the given service.
 func NewTaskHandler(ts service.TaskService) *TaskHandler {
 	return &TaskHandler{taskService: ts}
+}
+
+// NewTaskHandlerWithSessions creates a TaskHandler that can serve the cost-summary endpoint.
+func NewTaskHandlerWithSessions(ts service.TaskService, sr repository.AgentSessionRepository) *TaskHandler {
+	return &TaskHandler{taskService: ts, sessionRepo: sr}
 }
 
 // createTaskRequest represents the JSON body for creating a task.
@@ -970,6 +976,38 @@ func (h *TaskHandler) GetCurrentUserTasks(c echo.Context) error {
 		return handleError(c, err)
 	}
 	return c.JSON(http.StatusOK, page)
+}
+
+// GetCostSummary handles GET /tasks/:task_id/cost-summary
+// Returns aggregated cost, token, session, and quality metrics for the given task.
+// Requires workspace membership (same auth level as GET /tasks/:task_id).
+func (h *TaskHandler) GetCostSummary(c echo.Context) error {
+	if h.sessionRepo == nil {
+		return c.JSON(http.StatusNotImplemented, apierror.InternalError("session tracking not configured"))
+	}
+
+	taskIDStr := c.Param("task_id")
+	taskID, err := uuid.Parse(taskIDStr)
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid task_id"))
+	}
+
+	ctx := c.Request().Context()
+
+	task, err := h.taskService.GetByID(ctx, taskID)
+	if err != nil {
+		return handleError(c, err)
+	}
+	if task == nil {
+		return c.JSON(http.StatusNotFound, apierror.NotFound("Task"))
+	}
+
+	summary, err := h.sessionRepo.GetTaskCostSummary(ctx, taskID)
+	if err != nil {
+		return handleError(c, err)
+	}
+
+	return c.JSON(http.StatusOK, summary)
 }
 
 // ruleViolationAPIResponse is the JSON shape for 422 rule violation responses.

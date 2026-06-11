@@ -358,12 +358,12 @@ func main() {
 		workspaceHandler.WithStorage(s3Client)
 	}
 	projectHandler := handler.NewProjectHandler(projectService)
-	taskHandler := handler.NewTaskHandler(taskService)
+	sessionRepo := postgres.NewSessionRepo(db)
+	taskHandler := handler.NewTaskHandlerWithSessions(taskService, sessionRepo)
 	statusHandler := handler.NewTaskStatusHandler(taskStatusService)
 	commentHandler := handler.NewCommentHandler(commentService)
 	artifactHandler := handler.NewArtifactHandler(artifactService)
 	depHandler := handler.NewDependencyHandler(depService, taskService)
-	sessionRepo := postgres.NewSessionRepo(db)
 	agentHandler := handler.NewAgentHandlerWithEvents(agentService, taskService, taskStatusService, agentNotifyRedis, agentEventsRepo, sessionRepo)
 	eventHandler := handler.NewEventHandler(eventBusService)
 	activityHandler := handler.NewActivityHandler(activityLogService)
@@ -622,6 +622,7 @@ func main() {
 	api.DELETE("/tasks/:task_id/checkout", taskHandler.ReleaseCheckout)
 	api.PATCH("/tasks/:task_id/checkout", taskHandler.ExtendCheckout)
 	api.GET("/tasks/:task_id/context", taskContextHandler.GetTaskContext)
+	api.GET("/tasks/:task_id/cost-summary", taskHandler.GetCostSummary)
 	api.GET("/workspaces/:ws_id/tasks", taskHandler.SearchGlobal)
 
 	// Dependency routes.

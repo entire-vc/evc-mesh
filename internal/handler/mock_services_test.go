@@ -794,3 +794,6 @@ func (m *MockAgentSessionRepository) GetPreviousStartedAt(ctx context.Context, a
 	}
 	return nil, nil
 }
+func (m *MockAgentSessionRepository) GetTaskCostSummary(ctx context.Context, taskID uuid.UUID) (*domain.TaskCostSummary, error) {
+	return nil, nil
+}

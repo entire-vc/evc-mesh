@@ -71,6 +71,7 @@ type AgentSession struct {
 	ID               uuid.UUID          `json:"id" db:"id"`
 	WorkspaceID      uuid.UUID          `json:"workspace_id" db:"workspace_id"`
 	AgentID          uuid.UUID          `json:"agent_id" db:"agent_id"`
+	TaskID           *uuid.UUID         `json:"task_id,omitempty" db:"task_id"`
 	StartedAt        time.Time          `json:"started_at" db:"started_at"`
 	EndedAt          *time.Time         `json:"ended_at,omitempty" db:"ended_at"`
 	Status           AgentSessionStatus `json:"status" db:"status"`
@@ -85,4 +86,15 @@ type AgentSession struct {
 	EstimatedCost    float64            `json:"estimated_cost" db:"estimated_cost"`
 	ComplianceScore  float32            `json:"compliance_score" db:"compliance_score"`
 	ComplianceDetail json.RawMessage    `json:"compliance_detail" db:"compliance_detail"`
+}
+
+// TaskCostSummary aggregates cost and quality metrics for a single task
+// across all agent sessions that worked on it.
+type TaskCostSummary struct {
+	TotalCost    float64 `json:"total_cost"`
+	TokensIn     int64   `json:"tokens_in"`
+	TokensOut    int64   `json:"tokens_out"`
+	SessionCount int     `json:"session_count"`
+	ReworkCount  int     `json:"rework_count"`
+	QualityFlag  string  `json:"quality_flag"` // "golden" | "rework" | "multi-turn" | "unknown"
 }
