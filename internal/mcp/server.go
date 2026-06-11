@@ -270,11 +270,11 @@ func (s *Server) registerCoreTools() {
 	), s.tracked("update_task", s.handleUpdateTask))
 
 	s.mcpServer.AddTool(mcpsdk.NewTool("move_task",
-		mcpsdk.WithDescription("Change task status (e.g. todo → in_progress → done). Use status SLUGS (not UUIDs). On move to 'review', task auto-reassigns to creator unless assignee_id is provided."),
+		mcpsdk.WithDescription("Change task status (e.g. todo → in_progress → done). Use status SLUGS (not UUIDs). On move to 'review', the assignee from assignee_id is used; if omitted and the project has OnTransition.SetReviewer configured, that reviewer is assigned; otherwise the current assignee is preserved."),
 		mcpsdk.WithString("task_id", mcpsdk.Required(), mcpsdk.Description("Task ID.")),
 		mcpsdk.WithString("status_slug", mcpsdk.Required(), mcpsdk.Description("Target status slug (e.g. 'in_progress', 'done').")),
 		mcpsdk.WithString("comment", mcpsdk.Description("Optional comment to add when moving.")),
-		mcpsdk.WithString("assignee_id", mcpsdk.Description("Reassign to this agent/user on move. Overrides auto-reassign to creator on review.")),
+		mcpsdk.WithString("assignee_id", mcpsdk.Description("Reassign to this agent/user on move. Takes priority over OnTransition.SetReviewer config.")),
 		mcpsdk.WithString("assignee_type", mcpsdk.Description("Assignee type if assignee_id is set: user or agent."), mcpsdk.DefaultString("agent")),
 	), s.tracked("move_task", s.handleMoveTask))
 

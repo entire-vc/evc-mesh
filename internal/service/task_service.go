@@ -550,37 +550,14 @@ func (s *taskService) MoveTask(ctx context.Context, taskID uuid.UUID, input Move
 		})
 	}
 
-	// Auto-reassign to creator when moved to "review" category.
-	// Skipped if an explicit assignee was provided in the move request.
+	// Reviewer assignment when moved to "review" category.
+	// Consults OnTransition.SetReviewer from the project workflow config; if none is configured
+	// the current assignee (the builder) is preserved — no creator bounce.
+	// Skipped entirely when an explicit assignee_id is provided in the move request.
 	if statusChanged && input.AssigneeID == nil {
 		if newStatus, err := s.statusRepo.GetByID(ctx, *input.StatusID); err == nil && newStatus != nil {
-			if newStatus.Category == domain.StatusCategoryReview && task.CreatedBy != uuid.Nil {
-				// Only reassign if currently assigned to someone else (the agent who did the work).
-				if task.AssigneeID != nil && *task.AssigneeID != task.CreatedBy {
-					task.AssigneeID = &task.CreatedBy
-					// Convert ActorType → AssigneeType (agent→agent, user/system→user).
-					switch task.CreatedByType {
-					case domain.ActorTypeAgent:
-						task.AssigneeType = domain.AssigneeTypeAgent
-					default:
-						task.AssigneeType = domain.AssigneeTypeUser
-					}
-					task.UpdatedAt = timeNow()
-					if err := s.taskRepo.Update(ctx, task); err != nil {
-						log.Printf("[auto-reassign] WARNING: failed to reassign task %s to creator %s: %v", taskID, task.CreatedBy, err)
-					} else {
-						log.Printf("[auto-reassign] task %s reassigned to creator %s on review", taskID, task.CreatedBy)
-						s.logActivity(ctx, task.ProjectID, taskID, "task.assigned", map[string]interface{}{
-							"assignee_id": map[string]interface{}{"old": nil, "new": task.CreatedBy.String()},
-							"reason":      "auto-reassign on review",
-						})
-						// Notify the creator about the reassignment.
-						s.notifyAssignedAgent(ctx, task, "task.assigned", map[string]any{
-							"assignee_id": map[string]any{"old": nil, "new": task.CreatedBy.String()},
-							"reason":      "auto-reassign on review",
-						})
-					}
-				}
+			if newStatus.Category == domain.StatusCategoryReview {
+				s.applyReviewAssignee(ctx, task, oldStatusID)
 			}
 		}
 	}
@@ -1424,4 +1401,89 @@ func (s *taskService) ForceReleaseCheckout(ctx context.Context, taskID uuid.UUID
 		})
 	}
 	return nil
+}
+
+// applyReviewAssignee assigns a configured reviewer when a task transitions to review category.
+// Consults WorkflowRulesConfig.Transitions[fromStatus].OnTransition.SetReviewer; if not set,
+// the current assignee is preserved (no bounce to creator).
+func (s *taskService) applyReviewAssignee(ctx context.Context, task *domain.Task, oldStatusID uuid.UUID) {
+	if s.rulesConfigSvc == nil {
+		return
+	}
+
+	var oldStatusName string
+	if oldStatus, err := s.statusRepo.GetByID(ctx, oldStatusID); err == nil && oldStatus != nil {
+		oldStatusName = oldStatus.Name
+	}
+	if oldStatusName == "" {
+		return
+	}
+
+	wfResp, err := s.rulesConfigSvc.GetProjectWorkflowRules(ctx, task.ProjectID, nil)
+	if err != nil || wfResp == nil {
+		return
+	}
+
+	tr, ok := wfResp.Transitions[oldStatusName]
+	if !ok || tr.OnTransition == nil || tr.OnTransition.SetReviewer == "" {
+		return
+	}
+
+	reviewerID, assigneeType, err := s.resolveSetReviewer(ctx, task.ProjectID, tr.OnTransition.SetReviewer)
+	if err != nil || reviewerID == nil {
+		log.Printf("[review-assign] WARNING: cannot resolve set_reviewer=%q for task %s: %v", tr.OnTransition.SetReviewer, task.ID, err)
+		return
+	}
+
+	if task.AssigneeID != nil && *task.AssigneeID == *reviewerID {
+		return
+	}
+
+	task.AssigneeID = reviewerID
+	task.AssigneeType = assigneeType
+	task.UpdatedAt = timeNow()
+	if err := s.taskRepo.Update(ctx, task); err != nil {
+		log.Printf("[review-assign] WARNING: failed to assign set_reviewer for task %s: %v", task.ID, err)
+		return
+	}
+	log.Printf("[review-assign] task %s assigned to set_reviewer=%q on review", task.ID, tr.OnTransition.SetReviewer)
+	s.logActivity(ctx, task.ProjectID, task.ID, "task.assigned", map[string]interface{}{
+		"assignee_id": map[string]interface{}{"old": nil, "new": reviewerID.String()},
+		"reason":      "set_reviewer on review transition",
+	})
+	s.notifyAssignedAgent(ctx, task, "task.assigned", map[string]any{
+		"assignee_id": map[string]any{"old": nil, "new": reviewerID.String()},
+		"reason":      "set_reviewer on review transition",
+	})
+}
+
+// resolveSetReviewer resolves a SetReviewer config value to an agent UUID.
+// "lead" maps to the project's default_assignee from assignment rules;
+// any other value is treated as an agent slug.
+func (s *taskService) resolveSetReviewer(ctx context.Context, projectID uuid.UUID, reviewer string) (*uuid.UUID, domain.AssigneeType, error) {
+	slug := reviewer
+	if reviewer == "lead" {
+		rules, err := s.rulesConfigSvc.GetEffectiveAssignmentRules(ctx, projectID)
+		if err != nil {
+			return nil, "", fmt.Errorf("get assignment rules: %w", err)
+		}
+		if rules == nil || rules.DefaultAssignee == nil || rules.DefaultAssignee.Value == "" {
+			return nil, "", fmt.Errorf("no default_assignee configured for project")
+		}
+		slug = rules.DefaultAssignee.Value
+	}
+
+	if s.agentRepo == nil || s.projectRepo == nil {
+		return nil, "", fmt.Errorf("agent or project repo not wired")
+	}
+	proj, err := s.projectRepo.GetByID(ctx, projectID)
+	if err != nil || proj == nil {
+		return nil, "", fmt.Errorf("project %s not found: %w", projectID, err)
+	}
+	agent, err := s.agentRepo.GetBySlug(ctx, proj.WorkspaceID, slug)
+	if err != nil || agent == nil {
+		return nil, "", fmt.Errorf("agent slug=%q not found in workspace: %w", slug, err)
+	}
+	id := agent.ID
+	return &id, domain.AssigneeTypeAgent, nil
 }
