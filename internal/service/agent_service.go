@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
@@ -23,6 +24,8 @@ const (
 	apiKeyRandomBytes = 24
 	// apiKeyPrefixLen is the length of the stored prefix (used for fast lookup).
 	apiKeyPrefixLen = 8
+	// agentKeyDefaultTTL is the lifetime granted to a newly registered or rotated key.
+	agentKeyDefaultTTL = 365 * 24 * time.Hour
 )
 
 type agentService struct {
@@ -115,6 +118,7 @@ func (s *agentService) Register(ctx context.Context, input RegisterAgentInput) (
 
 	prefix := extractPrefix(rawKey, ws.Slug)
 	now := timeNow()
+	expires := now.Add(agentKeyDefaultTTL)
 
 	agent := &domain.Agent{
 		ID:            uuid.New(),
@@ -126,6 +130,7 @@ func (s *agentService) Register(ctx context.Context, input RegisterAgentInput) (
 		APIKeyHash:    string(hash),
 		APIKeyPrefix:  prefix,
 		Status:        domain.AgentStatusOffline,
+		ExpiresAt:     &expires,
 		CreatedAt:     now,
 		UpdatedAt:     now,
 	}
@@ -268,6 +273,10 @@ func (s *agentService) Authenticate(ctx context.Context, workspaceSlug, apiKey s
 		return nil, apierror.Unauthorized("invalid API key")
 	}
 
+	if agent.IsKeyExpired() {
+		return nil, apierror.Unauthorized("API key expired")
+	}
+
 	return agent, nil
 }
 
@@ -327,9 +336,14 @@ func (s *agentService) RotateAPIKey(ctx context.Context, agentID uuid.UUID) (str
 		return "", apierror.InternalError("failed to hash API key")
 	}
 
+	now := timeNow()
+	expires := now.Add(agentKeyDefaultTTL)
+
 	agent.APIKeyHash = string(hash)
 	agent.APIKeyPrefix = extractPrefix(rawKey, ws.Slug)
-	agent.UpdatedAt = timeNow()
+	agent.LastRotatedAt = &now
+	agent.ExpiresAt = &expires
+	agent.UpdatedAt = now
 
 	if err := s.agentRepo.Update(ctx, agent); err != nil {
 		return "", err

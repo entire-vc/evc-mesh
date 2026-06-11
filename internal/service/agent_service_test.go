@@ -364,3 +364,92 @@ func TestAgentService_RotateAPIKey(t *testing.T) {
 		})
 	}
 }
+
+// ---------------------------------------------------------------------------
+// TestAgentService_KeyExpiry
+// ---------------------------------------------------------------------------
+
+// TestAgentService_Register_SetsDefaultTTL verifies that newly registered agents
+// receive an expires_at one year from registration time.
+func TestAgentService_Register_SetsDefaultTTL(t *testing.T) {
+	svc, _, ws := setupAgentService()
+
+	out, err := svc.Register(context.Background(), RegisterAgentInput{
+		WorkspaceID: ws.ID,
+		Name:        "TTL Agent",
+		AgentType:   domain.AgentTypeClaudeCode,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, out.Agent.ExpiresAt)
+	expected := frozenTime.Add(agentKeyDefaultTTL)
+	assert.Equal(t, expected, *out.Agent.ExpiresAt)
+}
+
+// TestAgentService_Authenticate_ExpiredKey verifies that an expired API key is rejected
+// with 401 even when the bcrypt hash matches.
+func TestAgentService_Authenticate_ExpiredKey(t *testing.T) {
+	svc, agentRepo, ws := setupAgentService()
+
+	out, err := svc.Register(context.Background(), RegisterAgentInput{
+		WorkspaceID: ws.ID,
+		Name:        "Expired Agent",
+		AgentType:   domain.AgentTypeClaudeCode,
+	})
+	require.NoError(t, err)
+
+	// Back-date the expiry so the key is already expired.
+	past := frozenTime.Add(-24 * time.Hour)
+	agentRepo.items[out.Agent.ID].ExpiresAt = &past
+
+	_, err = svc.Authenticate(context.Background(), ws.Slug, out.APIKey)
+	require.Error(t, err)
+	var apiErr *apierror.Error
+	require.ErrorAs(t, err, &apiErr)
+	assert.Equal(t, http.StatusUnauthorized, apiErr.Code)
+}
+
+// TestAgentService_Authenticate_NilExpiresAt verifies that a key with no expiry (legacy
+// agents where expires_at IS NULL) continues to authenticate successfully.
+func TestAgentService_Authenticate_NilExpiresAt(t *testing.T) {
+	svc, agentRepo, ws := setupAgentService()
+
+	out, err := svc.Register(context.Background(), RegisterAgentInput{
+		WorkspaceID: ws.ID,
+		Name:        "Legacy Agent",
+		AgentType:   domain.AgentTypeClaudeCode,
+	})
+	require.NoError(t, err)
+
+	// Clear expiry to simulate a pre-migration agent row (expires_at IS NULL).
+	agentRepo.items[out.Agent.ID].ExpiresAt = nil
+
+	agent, err := svc.Authenticate(context.Background(), ws.Slug, out.APIKey)
+	require.NoError(t, err)
+	require.NotNil(t, agent)
+}
+
+// TestAgentService_RotateAPIKey_UpdatesExpiry verifies that rotating a key resets
+// last_rotated_at and extends expires_at by the default TTL.
+func TestAgentService_RotateAPIKey_UpdatesExpiry(t *testing.T) {
+	svc, agentRepo, ws := setupAgentService()
+
+	out, err := svc.Register(context.Background(), RegisterAgentInput{
+		WorkspaceID: ws.ID,
+		Name:        "Rotate Expiry Agent",
+		AgentType:   domain.AgentTypeClaudeCode,
+	})
+	require.NoError(t, err)
+
+	// Back-date the expiry so it's almost expired.
+	nearExpiry := frozenTime.Add(24 * time.Hour)
+	agentRepo.items[out.Agent.ID].ExpiresAt = &nearExpiry
+
+	_, err = svc.RotateAPIKey(context.Background(), out.Agent.ID)
+	require.NoError(t, err)
+
+	updated := agentRepo.items[out.Agent.ID]
+	require.NotNil(t, updated.ExpiresAt)
+	assert.Equal(t, frozenTime.Add(agentKeyDefaultTTL), *updated.ExpiresAt, "expiry must be reset to 1y from now")
+	require.NotNil(t, updated.LastRotatedAt)
+	assert.Equal(t, frozenTime, *updated.LastRotatedAt)
+}
