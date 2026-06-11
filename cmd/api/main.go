@@ -502,18 +502,31 @@ func main() {
 	v1 := e.Group("/api/v1")
 
 	// --- Public routes (no auth required) ---
-	authGroup := v1.Group("/auth")
-	// Rate-limit auth endpoints by IP to prevent brute-force attacks.
-	// Uses the Redis-backed sliding window limiter for multi-instance deployments.
-	authGroup.Use(mw.RateLimit(mw.RateLimitConfig{
+
+	// login/register: tight per-IP brute-force protection (5 RPM default).
+	// These are credential endpoints — the fleet never calls them in bulk.
+	loginGroup := v1.Group("/auth")
+	loginGroup.Use(mw.RateLimit(mw.RateLimitConfig{
 		Enabled:     cfg.RateLimit.Enabled,
 		RPM:         cfg.RateLimit.AuthRPM,
 		KeyFunc:     mw.RateLimitKeyByIP,
 		RedisClient: sharedRedis,
 	}))
-	authGroup.POST("/register", authHandler.Register)
-	authGroup.POST("/login", authHandler.Login)
-	authGroup.POST("/refresh", authHandler.Refresh)
+	loginGroup.POST("/register", authHandler.Register)
+	loginGroup.POST("/login", authHandler.Login)
+
+	// /auth/refresh: separate, fleet-safe per-IP limit (60 RPM default).
+	// Refresh requires a valid refresh token — credential brute-force is not
+	// a concern. A fleet of agents on a shared egress IP must all be able to
+	// refresh their JWT tokens concurrently without hitting a shared 5-RPM cap.
+	refreshGroup := v1.Group("/auth")
+	refreshGroup.Use(mw.RateLimit(mw.RateLimitConfig{
+		Enabled:     cfg.RateLimit.Enabled,
+		RPM:         cfg.RateLimit.RefreshRPM,
+		KeyFunc:     mw.RateLimitKeyByIP,
+		RedisClient: sharedRedis,
+	}))
+	refreshGroup.POST("/refresh", authHandler.Refresh)
 
 	// Public invite acceptance endpoints (rate-limited same as auth).
 	invitePublicGroup := v1.Group("/invites")
