@@ -1350,10 +1350,12 @@ func (m *mockTaskRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.Task,
 	return nil, nil
 }
 
-func (m *mockTaskRepo) Create(_ context.Context, _ *domain.Task) error                { return nil }
-func (m *mockTaskRepo) GetByShortID(_ context.Context, _ string) (*domain.Task, error) { return nil, nil }
-func (m *mockTaskRepo) Update(_ context.Context, _ *domain.Task) error                { return nil }
-func (m *mockTaskRepo) Delete(_ context.Context, _ uuid.UUID) error                   { return nil }
+func (m *mockTaskRepo) Create(_ context.Context, _ *domain.Task) error { return nil }
+func (m *mockTaskRepo) GetByShortID(_ context.Context, _ string) (*domain.Task, error) {
+	return nil, nil
+}
+func (m *mockTaskRepo) Update(_ context.Context, _ *domain.Task) error { return nil }
+func (m *mockTaskRepo) Delete(_ context.Context, _ uuid.UUID) error    { return nil }
 func (m *mockTaskRepo) List(_ context.Context, _ uuid.UUID, _ repository.TaskFilter, _ pagination.Params) (*pagination.Page[domain.Task], error) {
 	return nil, nil
 }
@@ -1381,13 +1383,13 @@ func (m *mockTaskRepo) ListByStatusCategory(_ context.Context, _ uuid.UUID, _ do
 func (m *mockTaskRepo) AtomicCheckout(_ context.Context, _, _, _ uuid.UUID, _ time.Time) error {
 	return nil
 }
-func (m *mockTaskRepo) ReleaseCheckout(_ context.Context, _, _ uuid.UUID) error      { return nil }
+func (m *mockTaskRepo) ReleaseCheckout(_ context.Context, _, _ uuid.UUID) error { return nil }
 func (m *mockTaskRepo) ExtendCheckout(_ context.Context, _, _ uuid.UUID, _ time.Time) error {
 	return nil
 }
-func (m *mockTaskRepo) ForceReleaseCheckout(_ context.Context, _ uuid.UUID) error    { return nil }
-func (m *mockTaskRepo) ReleaseExpiredCheckouts(_ context.Context) (int64, error)     { return 0, nil }
-func (m *mockTaskRepo) MoveToProject(_ context.Context, _, _, _ uuid.UUID) error     { return nil }
+func (m *mockTaskRepo) ForceReleaseCheckout(_ context.Context, _ uuid.UUID) error { return nil }
+func (m *mockTaskRepo) ReleaseExpiredCheckouts(_ context.Context) (int64, error)  { return 0, nil }
+func (m *mockTaskRepo) MoveToProject(_ context.Context, _, _, _ uuid.UUID) error  { return nil }
 
 var _ repository.TaskRepository = (*mockTaskRepo)(nil)
 
