@@ -94,7 +94,7 @@ func addCharset(ct string) string {
 
 // contentDisposition builds a Content-Disposition: attachment value.
 // Pure-ASCII filenames use the simple filename="" form.
-// Non-ASCII filenames use RFC 5987 filename*=UTF-8''<pct-encoded> alongside
+// Non-ASCII filenames use RFC 5987 filename*=UTF-8”<pct-encoded> alongside
 // an ASCII fallback for older clients.
 func contentDisposition(filename string) string {
 	ascii := true
@@ -105,7 +105,7 @@ func contentDisposition(filename string) string {
 		}
 	}
 	if ascii {
-		return fmt.Sprintf(`attachment; filename="%s"`, filename)
+		return fmt.Sprintf("attachment; filename=%q", filename)
 	}
 	// RFC 5987 percent-encoding: url.QueryEscape encodes all non-unreserved
 	// chars; replace "+" (space) with "%20" to comply with the pct-encoded form.
@@ -117,7 +117,7 @@ func contentDisposition(filename string) string {
 			sb.WriteRune(r)
 		}
 	}
-	return fmt.Sprintf(`attachment; filename="%s"; filename*=UTF-8''%s`, sb.String(), encoded)
+	return fmt.Sprintf("attachment; filename=%q; filename*=UTF-8''%s", sb.String(), encoded)
 }
 
 // rewriteURL replaces the scheme+host portion of a presigned URL with the public URL.
