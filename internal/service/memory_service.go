@@ -234,7 +234,9 @@ type memoryService struct {
 	memRepo     repository.MemoryRepository
 	edgeRepo    repository.MemoryEdgeRepository
 	embedder    embedding.Embedder
-	projectRepo repository.ProjectRepository // optional; nil → slug resolution skipped
+	projectRepo repository.ProjectRepository        // optional; nil → slug resolution skipped
+	taskRepo    repository.TaskRepository           // optional; nil → Amendments 2 & 3 skipped
+	depRepo     repository.TaskDependencyRepository // optional; nil → depends_on bridge skipped
 }
 
 // MemoryServiceOption configures a MemoryService.
@@ -246,6 +248,22 @@ type MemoryServiceOption func(*memoryService)
 func MemoryWithProjectRepo(pr repository.ProjectRepository) MemoryServiceOption {
 	return func(s *memoryService) {
 		s.projectRepo = pr
+	}
+}
+
+// MemoryWithTaskRepo enables Amendment 2 (thread_id edges) and Amendment 3 (task-graph
+// bridge) by allowing the memory service to look up source task metadata.
+func MemoryWithTaskRepo(tr repository.TaskRepository) MemoryServiceOption {
+	return func(s *memoryService) {
+		s.taskRepo = tr
+	}
+}
+
+// MemoryWithDepRepo enables the depends_on part of Amendment 3. When set, the memory
+// service also creates derived_from edges for tasks in the depends_on set of the source task.
+func MemoryWithDepRepo(dr repository.TaskDependencyRepository) MemoryServiceOption {
+	return func(s *memoryService) {
+		s.depRepo = dr
 	}
 }
 
@@ -385,6 +403,19 @@ func (s *memoryService) Remember(ctx context.Context, mem *domain.Memory) (strin
 		}
 	}
 
+	// Cache the source-task lookup — used for both thread_id propagation and
+	// Amendment 2/3 edge hooks below. One query, two consumers.
+	var sourceTask *domain.Task
+	if mem.SourceTaskID != nil && s.taskRepo != nil {
+		if task, taskErr := s.taskRepo.GetByID(ctx, *mem.SourceTaskID); taskErr == nil && task != nil {
+			sourceTask = task
+		}
+	}
+	// Propagate thread_id from the source task when the caller has not set it explicitly.
+	if sourceTask != nil && mem.ThreadID == nil {
+		mem.ThreadID = sourceTask.ThreadID
+	}
+
 	if err := s.memRepo.Upsert(ctx, mem); err != nil {
 		return "", fmt.Errorf("memory remember: upsert: %w", err)
 	}
@@ -450,6 +481,60 @@ func (s *memoryService) Remember(ctx context.Context, mem *domain.Memory) (strin
 					WorkspaceID:      mem.WorkspaceID,
 				}
 				_ = s.edgeRepo.UpsertEdge(ctx, edge)
+			}
+		}
+	}
+
+	// ── Amendment 2: same-thread relates_to edges (weight=1.0) ───────────────────
+	// Memories created during the same fiddler thread share a thread_id propagated
+	// from the source task. They are strongly related (same work session) so get
+	// a higher weight than the tag-overlap Hook 1.
+	if s.edgeRepo != nil && mem.ThreadID != nil && *mem.ThreadID != "" {
+		if threadMems, tErr := s.memRepo.FindByThreadID(ctx, mem.WorkspaceID, *mem.ThreadID, mem.ID); tErr == nil {
+			for _, candidate := range threadMems {
+				edge := &domain.MemoryEdge{
+					MemoryFromID:     mem.ID,
+					MemoryToID:       candidate.ID,
+					RelationshipType: domain.EdgeRelatesTo,
+					Weight:           1.0,
+					WorkspaceID:      mem.WorkspaceID,
+				}
+				_ = s.edgeRepo.UpsertEdge(ctx, edge)
+			}
+		}
+	}
+
+	// ── Amendment 3: task-graph bridge derived_from edges (weight=0.7) ───────────
+	// The Mesh task graph (parent_task / depends_on) is a ready-made skeleton:
+	// if memory A was produced while working on task X and task X depends on (or is
+	// a subtask of) task Y, then memories from task Y are "ancestors" of memory A.
+	if s.edgeRepo != nil && sourceTask != nil {
+		var relatedTaskIDs []uuid.UUID
+		if sourceTask.ParentTaskID != nil {
+			relatedTaskIDs = append(relatedTaskIDs, *sourceTask.ParentTaskID)
+		}
+		if s.depRepo != nil {
+			if deps, depErr := s.depRepo.ListByTask(ctx, *mem.SourceTaskID); depErr == nil {
+				for _, dep := range deps {
+					relatedTaskIDs = append(relatedTaskIDs, dep.DependsOnTaskID)
+				}
+			}
+		}
+		if len(relatedTaskIDs) > 0 {
+			if relatedMems, findErr := s.memRepo.FindBySourceTaskIDs(ctx, mem.WorkspaceID, relatedTaskIDs); findErr == nil {
+				for _, candidate := range relatedMems {
+					if candidate.ID == mem.ID {
+						continue
+					}
+					edge := &domain.MemoryEdge{
+						MemoryFromID:     mem.ID,
+						MemoryToID:       candidate.ID,
+						RelationshipType: domain.EdgeDerivedFrom,
+						Weight:           0.7,
+						WorkspaceID:      mem.WorkspaceID,
+					}
+					_ = s.edgeRepo.UpsertEdge(ctx, edge)
+				}
 			}
 		}
 	}
@@ -798,6 +883,44 @@ func (s *memoryService) SetProjectKnowledge(ctx context.Context, input SetProjec
 	outcome, err := s.Remember(ctx, mem)
 	if err != nil {
 		return nil, "", fmt.Errorf("set_project_knowledge: %w", err)
+	}
+
+	// ── Amendment 4: canonical-supersede ─────────────────────────────────────────
+	// Every set_project_knowledge call writes a canonical (project-scoped) fact.
+	// If memories exist in the same project that share ≥60% semantic tag overlap
+	// with the new canonical entry, they are likely stale predecessors. Create a
+	// supersedes edge from the canonical entry → stale memory and archive the stale
+	// one so it drops off the recall top. Only memories with importance_score < 0.75
+	// are superseded: canonical/decision entries (≥0.75) are never auto-archived.
+	if s.edgeRepo != nil && mem.ID != uuid.Nil {
+		semanticTags := filterSemanticTags(mem.Tags)
+		if len(semanticTags) > 0 {
+			if candidates, scanErr := s.memRepo.FindByScope(ctx, mem.WorkspaceID, mem.ProjectID, string(mem.Scope), 200); scanErr == nil {
+				for _, candidate := range candidates {
+					if candidate.ID == mem.ID || candidate.Archived {
+						continue
+					}
+					if candidate.ImportanceScore >= 0.75 {
+						continue
+					}
+					candidateSemantic := filterSemanticTags([]string(candidate.Tags))
+					if len(candidateSemantic) == 0 {
+						continue
+					}
+					if tagOverlapRatio(candidateSemantic, semanticTags) >= 0.6 {
+						edge := &domain.MemoryEdge{
+							MemoryFromID:     mem.ID,
+							MemoryToID:       candidate.ID,
+							RelationshipType: domain.EdgeSupersedes,
+							Weight:           1.0,
+							WorkspaceID:      mem.WorkspaceID,
+						}
+						_ = s.edgeRepo.UpsertEdge(ctx, edge)
+						_ = s.memRepo.SetArchived(ctx, candidate.ID, true)
+					}
+				}
+			}
+		}
 	}
 
 	return mem, outcome, nil

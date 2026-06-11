@@ -26,15 +26,17 @@ func NewMemoryHandler(ms service.MemoryService) *MemoryHandler {
 
 // rememberRequest is the JSON body for creating or updating a memory entry.
 type rememberRequest struct {
-	WorkspaceID uuid.UUID          `json:"workspace_id"`
-	ProjectID   *uuid.UUID         `json:"project_id,omitempty"`
-	Key         string             `json:"key"`
-	Content     string             `json:"content"`
-	Scope       domain.MemoryScope `json:"scope"`
-	Tags        []string           `json:"tags,omitempty"`
-	Relevance   *float32           `json:"relevance,omitempty"`
-	ExpiresAt   *string            `json:"expires_at,omitempty"` // RFC3339 string or Go duration
-	SourceURL   *string            `json:"source_url,omitempty"`
+	WorkspaceID  uuid.UUID          `json:"workspace_id"`
+	ProjectID    *uuid.UUID         `json:"project_id,omitempty"`
+	Key          string             `json:"key"`
+	Content      string             `json:"content"`
+	Scope        domain.MemoryScope `json:"scope"`
+	Tags         []string           `json:"tags,omitempty"`
+	Relevance    *float32           `json:"relevance,omitempty"`
+	ExpiresAt    *string            `json:"expires_at,omitempty"` // RFC3339 string or Go duration
+	SourceURL    *string            `json:"source_url,omitempty"`
+	SourceTaskID *uuid.UUID         `json:"source_task_id,omitempty"` // Mesh task that produced this memory (Amendment 2/3)
+	ThreadID     *string            `json:"thread_id,omitempty"`      // explicit thread override; auto-derived from source task when omitted
 }
 
 // rememberResponse wraps the upserted memory with the operation outcome.
@@ -139,14 +141,16 @@ func (h *MemoryHandler) Remember(c echo.Context) error {
 	}
 
 	mem := &domain.Memory{
-		WorkspaceID: req.WorkspaceID,
-		ProjectID:   req.ProjectID,
-		AgentID:     agentID,
-		Key:         req.Key,
-		Content:     req.Content,
-		Scope:       req.Scope,
-		SourceType:  sourceType,
-		SourceURL:   req.SourceURL,
+		WorkspaceID:  req.WorkspaceID,
+		ProjectID:    req.ProjectID,
+		AgentID:      agentID,
+		Key:          req.Key,
+		Content:      req.Content,
+		Scope:        req.Scope,
+		SourceType:   sourceType,
+		SourceURL:    req.SourceURL,
+		SourceTaskID: req.SourceTaskID,
+		ThreadID:     req.ThreadID,
 	}
 	if len(req.Tags) > 0 {
 		mem.Tags = req.Tags
