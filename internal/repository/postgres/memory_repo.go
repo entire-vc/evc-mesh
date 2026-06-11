@@ -681,6 +681,13 @@ const memoryColumnsWithEmbedding = `id, workspace_id, project_id, agent_id, key,
 	last_accessed_at, archived,
 	embedding, embedding_model, embedding_dim`
 
+// vectorCandidatePoolCap bounds how many embedded memories are pulled for the
+// in-Go cosine ranking in VectorSearch. It is intentionally large enough to
+// cover the entire current corpus so the candidate set is effectively complete
+// and relevance-neutral. It exists only as a latency/memory backstop for very
+// large workspaces; when a corpus approaches this size, switch to pgvector/ANN.
+const vectorCandidatePoolCap = 20000
+
 // VectorSearch performs application-level cosine similarity search.
 // Embeddings are stored as JSON-encoded float32 arrays in the embedding TEXT column.
 // This approach works without the pgvector extension — similarity is computed in Go.
@@ -715,14 +722,21 @@ func (r *MemoryRepo) VectorSearch(ctx context.Context, queryVec []float32, works
 		argIdx++
 	}
 
-	// Fetch candidates. We pull more than limit to have room for similarity ranking.
-	candidateLimit := limit * 5
-	args = append(args, candidateLimit)
+	// Fetch candidates for cosine ranking. The candidate set MUST be
+	// relevance-neutral: ordering by `relevance DESC` here biases the vector
+	// pool toward frequently-recalled docs (BoostRelevance pins them at 1.0),
+	// excluding semantically-relevant but less-recalled memories from vector
+	// recall entirely — the exact opposite of what vector search is for. We
+	// therefore pull a recency-ordered cap large enough to cover the whole
+	// corpus today; cosine then runs over all of it in Go. If the corpus ever
+	// outgrows the cap, the oldest memories degrade out gracefully (and that is
+	// the trigger to adopt pgvector/ANN — see task #2285c9be).
+	args = append(args, vectorCandidatePoolCap)
 
 	q := fmt.Sprintf(`
 		SELECT %s FROM memories
 		WHERE %s
-		ORDER BY relevance DESC
+		ORDER BY updated_at DESC
 		LIMIT $%d`,
 		memoryColumnsWithEmbedding,
 		joinAnd(conditions),
