@@ -74,8 +74,14 @@ type CORSConfig struct {
 type RateLimitConfig struct {
 	// Enabled controls whether rate limiting is active.
 	Enabled bool
-	// AuthRPM is the maximum requests per minute for auth endpoints (per IP).
+	// AuthRPM is the maximum requests per minute for login/register (per IP).
+	// Kept tight (default 5) as brute-force protection for credential endpoints.
 	AuthRPM int
+	// RefreshRPM is the maximum requests per minute for /auth/refresh (per IP).
+	// Higher than AuthRPM: a valid refresh token is required, so credential
+	// brute-force is not a concern. Must accommodate a fleet of agents on a
+	// shared egress IP all refreshing around the same time.
+	RefreshRPM int
 	// APIRPM is the maximum requests per minute for API endpoints (per actor).
 	APIRPM int
 }
@@ -203,9 +209,10 @@ func Load() *Config {
 			AllowOrigins: getEnvStringSlice("MESH_CORS_ORIGINS", []string{"*"}),
 		},
 		RateLimit: RateLimitConfig{
-			Enabled: getEnvBool("MESH_RATE_LIMIT_ENABLED", true),
-			AuthRPM: getEnvInt("MESH_RATE_LIMIT_AUTH_RPM", 5),
-			APIRPM:  getEnvInt("MESH_RATE_LIMIT_API_RPM", 600),
+			Enabled:    getEnvBool("MESH_RATE_LIMIT_ENABLED", true),
+			AuthRPM:    getEnvInt("MESH_RATE_LIMIT_AUTH_RPM", 5),
+			RefreshRPM: getEnvInt("MESH_RATE_LIMIT_REFRESH_RPM", 60),
+			APIRPM:     getEnvInt("MESH_RATE_LIMIT_API_RPM", 600),
 		},
 		Spark: SparkConfig{
 			URL:     getEnv("MESH_SPARK_URL", "https://spark.entire.vc"),

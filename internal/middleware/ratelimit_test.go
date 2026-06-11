@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -325,24 +326,22 @@ func TestRateLimiter_ExactBoundary(t *testing.T) {
 	assert.Equal(t, 1, blocked, "exactly 1 request should be blocked")
 }
 
-// TestRateLimit_Production_5RPM verifies the production RateLimit middleware
-// (not the test stub) enforces the 5 RPM threshold used for auth routes.
-// The token bucket burst equals RPM, so the first 5 requests from a fresh IP
-// are allowed and the 6th is rejected with HTTP 429 + Retry-After header.
-func TestRateLimit_Production_5RPM(t *testing.T) {
+// TestRateLimit_LoginBruteForce_Blocked verifies the production RateLimit middleware
+// enforces 5 RPM for login/register — burst is exhausted and the 6th request
+// from the same IP is rejected with HTTP 429 + Retry-After header.
+func TestRateLimit_LoginBruteForce_Blocked(t *testing.T) {
 	e := echo.New()
 	const authRPM = 5
 
 	mw := RateLimit(RateLimitConfig{
 		Enabled:     true,
 		RPM:         authRPM,
-		RedisClient: nil, // in-memory backend
-		KeyFunc:     func(c echo.Context) string { return "127.0.0.1" },
+		RedisClient: nil,
+		KeyFunc:     func(c echo.Context) string { return "203.0.113.1" },
 	})
 	handler := func(c echo.Context) error { return c.NoContent(http.StatusOK) }
 	wrapped := mw(handler)
 
-	// First authRPM requests must pass.
 	for i := 0; i < authRPM; i++ {
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", http.NoBody)
 		rec := httptest.NewRecorder()
@@ -351,11 +350,76 @@ func TestRateLimit_Production_5RPM(t *testing.T) {
 		assert.Equal(t, http.StatusOK, rec.Code, "request %d should be allowed", i+1)
 	}
 
-	// The (authRPM+1)th request must be rejected.
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", http.NoBody)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 	require.NoError(t, wrapped(c))
-	assert.Equal(t, http.StatusTooManyRequests, rec.Code, "burst exhausted: request must be blocked")
+	assert.Equal(t, http.StatusTooManyRequests, rec.Code, "burst exhausted: login must be blocked")
 	assert.NotEmpty(t, rec.Header().Get("Retry-After"), "Retry-After header must be set on 429")
+}
+
+// TestRateLimit_RefreshFleetFlood_NotThrottled verifies that a shared-egress fleet
+// of agents can all refresh their JWT tokens concurrently without hitting the 5 RPM
+// login limiter. The refresh endpoint uses a separate, higher limit (60 RPM).
+//
+// Regression test for the incident where per-IP 5 RPM on ALL auth endpoints caused
+// the Mac Mini fleet (14+ agents, 1 shared IP) to get 429 on /auth/refresh, then
+// 401 on subsequent polls because their JWTs had expired.
+func TestRateLimit_RefreshFleetFlood_NotThrottled(t *testing.T) {
+	e := echo.New()
+	const refreshRPM = 60
+	const fleetSize = 20 // more than the real fleet to give margin
+
+	mw := RateLimit(RateLimitConfig{
+		Enabled:     true,
+		RPM:         refreshRPM,
+		RedisClient: nil,
+		KeyFunc:     func(c echo.Context) string { return "10.0.0.1" }, // shared fleet egress
+	})
+	handler := func(c echo.Context) error { return c.NoContent(http.StatusOK) }
+	wrapped := mw(handler)
+
+	for i := 0; i < fleetSize; i++ {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/refresh", http.NoBody)
+		rec := httptest.NewRecorder()
+		c := e.NewContext(req, rec)
+		require.NoError(t, wrapped(c))
+		assert.Equal(t, http.StatusOK, rec.Code,
+			"fleet agent %d refresh should not be throttled (refreshRPM=%d)", i+1, refreshRPM)
+	}
+}
+
+// TestRateLimit_AgentPollStorm_NotThrottled verifies that a high-frequency agent
+// polling /agents/me/tasks is limited per-actor (agent key), not per-IP.
+// Multiple agents from the same IP must each have their own independent bucket.
+func TestRateLimit_AgentPollStorm_NotThrottled(t *testing.T) {
+	e := echo.New()
+	const apiRPM = 600
+	const agentsOnSameIP = 14
+	const pollsPerAgent = 3 // well within 600 RPM per agent
+
+	// Each agent has a unique key (simulating per-actor key extraction).
+	var currentAgent int
+	mw := RateLimit(RateLimitConfig{
+		Enabled:     true,
+		RPM:         apiRPM,
+		RedisClient: nil,
+		KeyFunc: func(c echo.Context) string {
+			return fmt.Sprintf("agent:uuid-%d", currentAgent)
+		},
+	})
+	handler := func(c echo.Context) error { return c.NoContent(http.StatusOK) }
+	wrapped := mw(handler)
+
+	for agent := 0; agent < agentsOnSameIP; agent++ {
+		currentAgent = agent
+		for poll := 0; poll < pollsPerAgent; poll++ {
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/agents/me/tasks", http.NoBody)
+			rec := httptest.NewRecorder()
+			c := e.NewContext(req, rec)
+			require.NoError(t, wrapped(c))
+			assert.Equal(t, http.StatusOK, rec.Code,
+				"agent %d poll %d should pass (independent per-actor bucket)", agent+1, poll+1)
+		}
+	}
 }
