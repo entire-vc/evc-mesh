@@ -324,3 +324,38 @@ func TestRateLimiter_ExactBoundary(t *testing.T) {
 	assert.Equal(t, limit, allowed, "exactly %d requests should be allowed", limit)
 	assert.Equal(t, 1, blocked, "exactly 1 request should be blocked")
 }
+
+// TestRateLimit_Production_5RPM verifies the production RateLimit middleware
+// (not the test stub) enforces the 5 RPM threshold used for auth routes.
+// The token bucket burst equals RPM, so the first 5 requests from a fresh IP
+// are allowed and the 6th is rejected with HTTP 429 + Retry-After header.
+func TestRateLimit_Production_5RPM(t *testing.T) {
+	e := echo.New()
+	const authRPM = 5
+
+	mw := RateLimit(RateLimitConfig{
+		Enabled:     true,
+		RPM:         authRPM,
+		RedisClient: nil, // in-memory backend
+		KeyFunc:     func(c echo.Context) string { return "127.0.0.1" },
+	})
+	handler := func(c echo.Context) error { return c.NoContent(http.StatusOK) }
+	wrapped := mw(handler)
+
+	// First authRPM requests must pass.
+	for i := 0; i < authRPM; i++ {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", http.NoBody)
+		rec := httptest.NewRecorder()
+		c := e.NewContext(req, rec)
+		require.NoError(t, wrapped(c))
+		assert.Equal(t, http.StatusOK, rec.Code, "request %d should be allowed", i+1)
+	}
+
+	// The (authRPM+1)th request must be rejected.
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", http.NoBody)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	require.NoError(t, wrapped(c))
+	assert.Equal(t, http.StatusTooManyRequests, rec.Code, "burst exhausted: request must be blocked")
+	assert.NotEmpty(t, rec.Header().Get("Retry-After"), "Retry-After header must be set on 429")
+}
