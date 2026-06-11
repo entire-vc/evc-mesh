@@ -62,9 +62,10 @@ func TestStripSensitiveMetadata_EmptyMetadata(t *testing.T) {
 
 func TestArtifactHandler_GetByID_StripsTrAgentKey(t *testing.T) {
 	artifactID := uuid.New()
+	workspaceID := uuid.New()
 
 	mockSvc := &MockArtifactService{
-		GetByIDFunc: func(_ context.Context, id uuid.UUID) (*domain.Artifact, error) {
+		GetByIDInWorkspaceFunc: func(_ context.Context, id, wsID uuid.UUID) (*domain.Artifact, error) {
 			return &domain.Artifact{
 				ID:       id,
 				Name:     "report.md",
@@ -81,6 +82,7 @@ func TestArtifactHandler_GetByID_StripsTrAgentKey(t *testing.T) {
 	c.SetPath("/artifacts/:artifact_id")
 	c.SetParamNames("artifact_id")
 	c.SetParamValues(artifactID.String())
+	c.Set("workspace_id", workspaceID)
 
 	require.NoError(t, h.GetByID(c))
 	assert.Equal(t, http.StatusOK, rec.Code)
