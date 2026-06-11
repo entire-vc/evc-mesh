@@ -96,7 +96,10 @@ func setupRecallGraphBenchData(t *testing.T, db *sqlx.DB, memCount, edgeCount in
 	if edgeCount > 0 {
 		rng := rand.New(rand.NewSource(42))
 
-		type edgeSpec struct{ fromIdx, toIdx int; weight float32 }
+		type edgeSpec struct {
+			fromIdx, toIdx int
+			weight         float32
+		}
 		specs := make([]edgeSpec, 0, edgeCount)
 		seen := make(map[[2]int]bool, edgeCount)
 
@@ -282,7 +285,10 @@ func BenchmarkGetNeighbors_5kGraph_2Hop(b *testing.B) {
 		}
 
 		// Insert edges in batches of 1000.
-		type eSpec struct{ fi, ti int; w float32 }
+		type eSpec struct {
+			fi, ti int
+			w      float32
+		}
 		specs := make([]eSpec, 0, edgeCount)
 		seen := make(map[[2]int]bool, edgeCount)
 		for len(specs) < edgeCount {

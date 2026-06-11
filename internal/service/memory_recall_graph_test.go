@@ -15,6 +15,14 @@ import (
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 )
 
+// clearRecallGraphCache drains the package-level cache so tests start clean.
+func clearRecallGraphCache() {
+	recallGraphCache.Range(func(k, v interface{}) bool {
+		recallGraphCache.Delete(k)
+		return true
+	})
+}
+
 // ---------------------------------------------------------------------------
 // testEdgeRepo — local mock with configurable GetNeighbors
 // ---------------------------------------------------------------------------
@@ -22,16 +30,16 @@ import (
 // testEdgeRepo is a test-local MemoryEdgeRepository mock that allows each
 // test to inject custom GetNeighbors behaviour via getNeighborsFn.
 type testEdgeRepo struct {
-	getNeighborsFn func(ctx context.Context, ids []uuid.UUID, weightThreshold float64) ([]domain.MemoryEdge, error)
+	getNeighborsFn func(ctx context.Context, ids []uuid.UUID, weightThreshold float64, limit int) ([]domain.MemoryEdge, error)
 }
 
 func (r *testEdgeRepo) UpsertEdge(_ context.Context, _ *domain.MemoryEdge) error { return nil }
 func (r *testEdgeRepo) ReinforceEdge(_ context.Context, _, _ uuid.UUID, _ domain.MemoryEdgeRelationshipType) error {
 	return nil
 }
-func (r *testEdgeRepo) GetNeighbors(ctx context.Context, ids []uuid.UUID, weightThreshold float64) ([]domain.MemoryEdge, error) {
+func (r *testEdgeRepo) GetNeighbors(ctx context.Context, ids []uuid.UUID, weightThreshold float64, limit int) ([]domain.MemoryEdge, error) {
 	if r.getNeighborsFn != nil {
-		return r.getNeighborsFn(ctx, ids, weightThreshold)
+		return r.getNeighborsFn(ctx, ids, weightThreshold, limit)
 	}
 	return nil, nil
 }
@@ -182,7 +190,7 @@ func TestRecallGraph_Provenance(t *testing.T) {
 		},
 	}
 	er := &testEdgeRepo{
-		getNeighborsFn: func(_ context.Context, _ []uuid.UUID, _ float64) ([]domain.MemoryEdge, error) {
+		getNeighborsFn: func(_ context.Context, _ []uuid.UUID, _ float64, _ int) ([]domain.MemoryEdge, error) {
 			return []domain.MemoryEdge{graphEdge(seedID, neighborID, 0.8)}, nil
 		},
 	}
@@ -227,7 +235,7 @@ func TestRecallGraph_CompositeScore_1Hop(t *testing.T) {
 		},
 	}
 	er := &testEdgeRepo{
-		getNeighborsFn: func(_ context.Context, _ []uuid.UUID, _ float64) ([]domain.MemoryEdge, error) {
+		getNeighborsFn: func(_ context.Context, _ []uuid.UUID, _ float64, _ int) ([]domain.MemoryEdge, error) {
 			return []domain.MemoryEdge{graphEdge(seedID, neighborID, edgeWeight)}, nil
 		},
 	}
@@ -270,7 +278,7 @@ func TestRecallGraph_LowImportanceSuppressed(t *testing.T) {
 		},
 	}
 	er := &testEdgeRepo{
-		getNeighborsFn: func(_ context.Context, _ []uuid.UUID, _ float64) ([]domain.MemoryEdge, error) {
+		getNeighborsFn: func(_ context.Context, _ []uuid.UUID, _ float64, _ int) ([]domain.MemoryEdge, error) {
 			return []domain.MemoryEdge{graphEdge(seedID, neighborID, 0.9)}, nil
 		},
 	}
@@ -339,7 +347,7 @@ func TestRecallGraph_DeduplicateBestPath(t *testing.T) {
 	// seed1 → sharedNeighbor via weight 0.1 (low path)
 	// seed2 → sharedNeighbor via weight 0.9 (better path)
 	er := &testEdgeRepo{
-		getNeighborsFn: func(_ context.Context, ids []uuid.UUID, _ float64) ([]domain.MemoryEdge, error) {
+		getNeighborsFn: func(_ context.Context, ids []uuid.UUID, _ float64, _ int) ([]domain.MemoryEdge, error) {
 			edges := []domain.MemoryEdge{}
 			for _, id := range ids {
 				if id == seed1 {
@@ -432,7 +440,7 @@ func TestRecallGraph_HopDistance(t *testing.T) {
 		},
 	}
 	er := &testEdgeRepo{
-		getNeighborsFn: func(_ context.Context, ids []uuid.UUID, _ float64) ([]domain.MemoryEdge, error) {
+		getNeighborsFn: func(_ context.Context, ids []uuid.UUID, _ float64, _ int) ([]domain.MemoryEdge, error) {
 			for _, id := range ids {
 				if id == seedID {
 					return []domain.MemoryEdge{graphEdge(seedID, hop1ID, 0.7)}, nil
@@ -470,7 +478,7 @@ func TestRecallGraph_HopsDefault(t *testing.T) {
 
 	getNeighborsCalls := 0
 	er := &testEdgeRepo{
-		getNeighborsFn: func(_ context.Context, _ []uuid.UUID, _ float64) ([]domain.MemoryEdge, error) {
+		getNeighborsFn: func(_ context.Context, _ []uuid.UUID, _ float64, _ int) ([]domain.MemoryEdge, error) {
 			getNeighborsCalls++
 			// Return empty so nextFrontier drains immediately after hop 1.
 			return nil, nil
@@ -543,7 +551,7 @@ func TestRecallGraph_GetNeighborsError(t *testing.T) {
 		},
 	}
 	er := &testEdgeRepo{
-		getNeighborsFn: func(_ context.Context, _ []uuid.UUID, _ float64) ([]domain.MemoryEdge, error) {
+		getNeighborsFn: func(_ context.Context, _ []uuid.UUID, _ float64, _ int) ([]domain.MemoryEdge, error) {
 			return nil, sentinel
 		},
 	}
@@ -571,7 +579,7 @@ func TestRecallGraph_WeightThreshold_Passed(t *testing.T) {
 
 	var gotThreshold float64
 	er := &testEdgeRepo{
-		getNeighborsFn: func(_ context.Context, _ []uuid.UUID, weightThreshold float64) ([]domain.MemoryEdge, error) {
+		getNeighborsFn: func(_ context.Context, _ []uuid.UUID, weightThreshold float64, _ int) ([]domain.MemoryEdge, error) {
 			gotThreshold = weightThreshold
 			return nil, nil
 		},
