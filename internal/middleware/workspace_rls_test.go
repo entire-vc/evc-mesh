@@ -47,10 +47,10 @@ func (d *rlsDriver) Open(_ string) (driver.Conn, error) {
 func (c *rlsConn) Prepare(_ string) (driver.Stmt, error) {
 	return &rlsStmt{failQuery: c.failQuery}, nil
 }
-func (c *rlsConn) Close() error                        { return nil }
-func (c *rlsConn) Begin() (driver.Tx, error)           { return nil, errors.New("tx not supported") }
-func (s *rlsStmt) Close() error                        { return nil }
-func (s *rlsStmt) NumInput() int                       { return -1 }
+func (c *rlsConn) Close() error              { return nil }
+func (c *rlsConn) Begin() (driver.Tx, error) { return nil, errors.New("tx not supported") }
+func (s *rlsStmt) Close() error              { return nil }
+func (s *rlsStmt) NumInput() int             { return -1 }
 func (s *rlsStmt) Exec(_ []driver.Value) (driver.Result, error) {
 	return nil, errors.New("exec not supported")
 }
