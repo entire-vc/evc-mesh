@@ -1439,17 +1439,24 @@ func (m *MockStorageClient) Download(_ context.Context, key string) (io.ReadClos
 
 // ---------------------------------------------------------------------------
 // MockRulesService — minimal stub that implements RulesService for task tests.
-// Only GetEffectiveAssignmentRules is exercised by applyAutoAssign; all other
-// methods panic to make test gaps immediately obvious.
+// GetEffectiveAssignmentRules is exercised by applyAutoAssign.
+// GetProjectWorkflowRules is exercised by applyReviewAssignee (returns nil by default = no rules).
+// All other methods panic to make test gaps immediately obvious.
 // ---------------------------------------------------------------------------
 
 type MockRulesService struct {
 	effectiveRules *domain.EffectiveAssignmentRules
+	workflowRules  *domain.WorkflowRulesResponse
 	errToReturn    error
 }
 
 func NewMockRulesService(rules *domain.EffectiveAssignmentRules) *MockRulesService {
 	return &MockRulesService{effectiveRules: rules}
+}
+
+func (m *MockRulesService) WithWorkflowRules(r *domain.WorkflowRulesResponse) *MockRulesService {
+	m.workflowRules = r
+	return m
 }
 
 func (m *MockRulesService) GetEffectiveAssignmentRules(_ context.Context, _ uuid.UUID) (*domain.EffectiveAssignmentRules, error) {
@@ -1482,7 +1489,7 @@ func (m *MockRulesService) SetProjectAssignmentRules(_ context.Context, _ uuid.U
 	panic("MockRulesService.SetProjectAssignmentRules not implemented")
 }
 func (m *MockRulesService) GetProjectWorkflowRules(_ context.Context, _ uuid.UUID, _ *uuid.UUID) (*domain.WorkflowRulesResponse, error) {
-	panic("MockRulesService.GetProjectWorkflowRules not implemented")
+	return m.workflowRules, nil
 }
 func (m *MockRulesService) SetProjectWorkflowRules(_ context.Context, _ uuid.UUID, _ domain.WorkflowRulesConfig) error {
 	panic("MockRulesService.SetProjectWorkflowRules not implemented")

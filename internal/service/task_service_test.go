@@ -326,6 +326,176 @@ func TestTaskService_MoveTask(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// TestTaskService_MoveTask_ReviewAssignee — review-reassign R1 acceptance tests
+// ---------------------------------------------------------------------------
+
+// setupTaskServiceWithWorkflow wires a task service with a MockRulesService carrying
+// workflow rules, an AgentRepository, and a ProjectRepository for reviewer resolution.
+func setupTaskServiceWithWorkflow(workflowResp *domain.WorkflowRulesResponse, effectiveRules *domain.EffectiveAssignmentRules) (
+	*taskService, *MockTaskRepository, *MockTaskStatusRepository, *MockAgentRepository, *MockProjectRepository,
+) {
+	taskRepo := NewMockTaskRepository()
+	statusRepo := NewMockTaskStatusRepository()
+	depRepo := NewMockTaskDependencyRepository()
+	activityRepo := NewMockActivityLogRepository()
+	agentRepo := NewMockAgentRepository()
+	projRepo := NewMockProjectRepository()
+
+	mockRules := NewMockRulesService(effectiveRules).WithWorkflowRules(workflowResp)
+
+	svc := NewTaskService(taskRepo, statusRepo, depRepo, activityRepo,
+		WithRulesConfigService(mockRules),
+		WithTaskAgentRepo(agentRepo),
+		WithProjectRepo(projRepo),
+	).(*taskService)
+	timeNow = func() time.Time { return frozenTime }
+	return svc, taskRepo, statusRepo, agentRepo, projRepo
+}
+
+func TestTaskService_MoveTask_ReviewAssignee(t *testing.T) {
+	workspaceID := uuid.New()
+	projectID := uuid.New()
+	builderID := uuid.New()
+	creatorID := uuid.New()
+	leadID := uuid.New()
+
+	makeTask := func(taskID, statusID uuid.UUID) {
+		// helper defined inline via closure — see subtests for usage
+		_ = taskID
+		_ = statusID
+	}
+	_ = makeTask
+
+	inProgressStatus := func(statusID uuid.UUID) *domain.TaskStatus {
+		return &domain.TaskStatus{ID: statusID, ProjectID: projectID, Category: domain.StatusCategoryInProgress, Name: "in_progress"}
+	}
+	reviewStatus := func(statusID uuid.UUID) *domain.TaskStatus {
+		return &domain.TaskStatus{ID: statusID, ProjectID: projectID, Category: domain.StatusCategoryReview, Name: "review"}
+	}
+
+	t.Run("no SetReviewer config - builder stays assigned (no creator bounce)", func(t *testing.T) {
+		// Workflow config with no OnTransition.SetReviewer on the in_progress→review transition.
+		wfResp := &domain.WorkflowRulesResponse{
+			WorkflowRulesConfig: domain.WorkflowRulesConfig{
+				Transitions: map[string]domain.TransitionRule{
+					"in_progress": {Allowed: []string{"review"}},
+				},
+			},
+		}
+		svc, taskRepo, statusRepo, _, projRepo := setupTaskServiceWithWorkflow(wfResp, nil)
+
+		oldStatusID := uuid.New()
+		newStatusID := uuid.New()
+		taskID := uuid.New()
+
+		statusRepo.items[oldStatusID] = inProgressStatus(oldStatusID)
+		statusRepo.items[newStatusID] = reviewStatus(newStatusID)
+		projRepo.items[projectID] = &domain.Project{ID: projectID, WorkspaceID: workspaceID}
+		taskRepo.items[taskID] = &domain.Task{
+			ID:            taskID,
+			ProjectID:     projectID,
+			StatusID:      oldStatusID,
+			AssigneeID:    &builderID,
+			AssigneeType:  domain.AssigneeTypeAgent,
+			CreatedBy:     creatorID,
+			CreatedByType: domain.ActorTypeAgent,
+		}
+
+		err := svc.MoveTask(context.Background(), taskID, MoveTaskInput{StatusID: &newStatusID})
+		require.NoError(t, err)
+
+		task := taskRepo.items[taskID]
+		require.NotNil(t, task.AssigneeID)
+		assert.Equal(t, builderID, *task.AssigneeID, "builder should stay assigned — no creator bounce")
+	})
+
+	t.Run("SetReviewer=lead - assignee becomes default_assignee (lead)", func(t *testing.T) {
+		wfResp := &domain.WorkflowRulesResponse{
+			WorkflowRulesConfig: domain.WorkflowRulesConfig{
+				Transitions: map[string]domain.TransitionRule{
+					"in_progress": {
+						Allowed:      []string{"review"},
+						OnTransition: &domain.TransitionAction{SetReviewer: "lead"},
+					},
+				},
+			},
+		}
+		effectiveRules := &domain.EffectiveAssignmentRules{
+			DefaultAssignee: &domain.EffectiveAssignmentRule{Value: "garfield", Source: "project"},
+		}
+		svc, taskRepo, statusRepo, agentRepo, projRepo := setupTaskServiceWithWorkflow(wfResp, effectiveRules)
+
+		oldStatusID := uuid.New()
+		newStatusID := uuid.New()
+		taskID := uuid.New()
+
+		statusRepo.items[oldStatusID] = inProgressStatus(oldStatusID)
+		statusRepo.items[newStatusID] = reviewStatus(newStatusID)
+		projRepo.items[projectID] = &domain.Project{ID: projectID, WorkspaceID: workspaceID}
+		agentRepo.items[leadID] = &domain.Agent{ID: leadID, WorkspaceID: workspaceID, Slug: "garfield"}
+		taskRepo.items[taskID] = &domain.Task{
+			ID:            taskID,
+			ProjectID:     projectID,
+			StatusID:      oldStatusID,
+			AssigneeID:    &builderID,
+			AssigneeType:  domain.AssigneeTypeAgent,
+			CreatedBy:     creatorID,
+			CreatedByType: domain.ActorTypeAgent,
+		}
+
+		err := svc.MoveTask(context.Background(), taskID, MoveTaskInput{StatusID: &newStatusID})
+		require.NoError(t, err)
+
+		task := taskRepo.items[taskID]
+		require.NotNil(t, task.AssigneeID)
+		assert.Equal(t, leadID, *task.AssigneeID, "should be assigned to lead (garfield)")
+		assert.Equal(t, domain.AssigneeTypeAgent, task.AssigneeType)
+	})
+
+	t.Run("explicit assignee_id overrides config (regression)", func(t *testing.T) {
+		explicitReviewerID := uuid.New()
+		wfResp := &domain.WorkflowRulesResponse{
+			WorkflowRulesConfig: domain.WorkflowRulesConfig{
+				Transitions: map[string]domain.TransitionRule{
+					"in_progress": {
+						Allowed:      []string{"review"},
+						OnTransition: &domain.TransitionAction{SetReviewer: "lead"},
+					},
+				},
+			},
+		}
+		svc, taskRepo, statusRepo, _, projRepo := setupTaskServiceWithWorkflow(wfResp, nil)
+
+		oldStatusID := uuid.New()
+		newStatusID := uuid.New()
+		taskID := uuid.New()
+
+		statusRepo.items[oldStatusID] = inProgressStatus(oldStatusID)
+		statusRepo.items[newStatusID] = reviewStatus(newStatusID)
+		projRepo.items[projectID] = &domain.Project{ID: projectID, WorkspaceID: workspaceID}
+		taskRepo.items[taskID] = &domain.Task{
+			ID:            taskID,
+			ProjectID:     projectID,
+			StatusID:      oldStatusID,
+			AssigneeID:    &builderID,
+			AssigneeType:  domain.AssigneeTypeAgent,
+			CreatedBy:     creatorID,
+			CreatedByType: domain.ActorTypeAgent,
+		}
+
+		err := svc.MoveTask(context.Background(), taskID, MoveTaskInput{
+			StatusID:   &newStatusID,
+			AssigneeID: &explicitReviewerID,
+		})
+		require.NoError(t, err)
+
+		task := taskRepo.items[taskID]
+		require.NotNil(t, task.AssigneeID)
+		assert.Equal(t, explicitReviewerID, *task.AssigneeID, "explicit assignee_id must win over set_reviewer config")
+	})
+}
+
+// ---------------------------------------------------------------------------
 // TestTaskService_AssignTask
 // ---------------------------------------------------------------------------
 
