@@ -75,7 +75,7 @@ func TestArtifactHandler_GetByID_StripsTrAgentKey(t *testing.T) {
 
 	h, e := setupArtifactTest(mockSvc)
 
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 	c.SetPath("/artifacts/:artifact_id")
@@ -121,7 +121,7 @@ func TestArtifactHandler_List_StripsTrAgentKey(t *testing.T) {
 
 	h, e := setupArtifactTest(mockSvc)
 
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 	c.SetPath("/tasks/:task_id/artifacts")
