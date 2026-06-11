@@ -7,4 +7,8 @@
 -- Stored as TEXT (not UUID) so callers can use any stable identifier: a task
 -- UUID, a parent task UUID, an arbitrary slug, etc.
 
+-- +goose Up
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS thread_id TEXT DEFAULT NULL;
+
+-- +goose Down
+ALTER TABLE tasks DROP COLUMN IF EXISTS thread_id;
