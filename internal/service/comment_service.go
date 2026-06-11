@@ -595,6 +595,26 @@ func (s *commentService) enforceBlockingTriage(ctx context.Context, comment *dom
 	if s.ctxCacheInv != nil {
 		s.ctxCacheInv.Invalidate(ctx, task.ID)
 	}
+
+	// Emit blocking_triage notification so the mentioned user is actually alerted.
+	if s.notifySvc != nil {
+		taskIDCopy := task.ID
+		projIDCopy := task.ProjectID
+		s.notifySvc.Notify(ctx, domain.NotificationEvent{
+			WorkspaceID: wsID,
+			TaskID:      &taskIDCopy,
+			ProjectID:   &projIDCopy,
+			EventType:   "task.blocking_triage",
+			Title:       "Task moved to triage: " + task.Title,
+			Body:        fmt.Sprintf("@%s marked this task as blocking — auto-moved to triage.", userSlug),
+			Metadata: map[string]any{
+				"task_id":    task.ID,
+				"task_title": task.Title,
+				"project_id": task.ProjectID,
+				"user_slug":  userSlug,
+			},
+		})
+	}
 }
 
 // firstMentionedUserSlug returns the first @-mentioned slug in body that resolves to a

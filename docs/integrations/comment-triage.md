@@ -99,9 +99,35 @@ All steps are **best-effort**: any failure (move error, system-comment write err
 is logged under `[comment-triage]` and never blocks the comment mutation that
 triggered it.
 
-## Not included (deferred)
+## Notification path
 
-Dedicated push/Telegram alerting on auto-triage is **out of scope** for this
-enforcement layer (tracked as a separate follow-up). The auto-move itself is a
-structural signal surfaced in the Triage Inbox, and `comment.created` already
-dispatches in-app and (where subscribed) Web Push notifications.
+A successful auto-triage move emits a `task.blocking_triage` event via
+`NotificationService.Notify` immediately after the system comment is written.
+This dispatches:
+
+1. **In-app notification** — stored in the `notifications` table, surfaced in the
+   notification feed for the mentioned user.
+2. **Browser Web Push** — sent to all subscribed push endpoints for the mentioned
+   user, respecting their `browser_push` preferences.
+
+The event payload contains `task_id`, `task_title`, `project_id`, and `user_slug`
+(the username that triggered the block).
+
+### Channel decision
+
+| Option | Channels | Status |
+|--------|----------|--------|
+| **A** (selected) | In-app + Web Push | **Live** |
+| B | Telegram | Deferred |
+| C | No notification | Rejected |
+
+Option A was selected by Riker 2026-05-31 as the default after the 8-day review window
+elapsed with no response from the assignee. Telegram (Option B) is deferred — not
+rejected; add it here when the Telegram channel is wired to `NotificationService`.
+
+### Push preference default
+
+`task.blocking_triage` defaults to **opt-in ON**: the event is included in the
+default `events` array for both `web_push` and `browser_push` preference rows.
+Migration `20260601057` backfills all existing preference rows so current users
+receive alerts without needing to opt in manually.
