@@ -150,7 +150,7 @@ func (m *mockMemoryEdgeRepo) ReinforceEdge(_ context.Context, _, _ uuid.UUID, _ 
 func (m *mockMemoryEdgeRepo) GetNeighbors(_ context.Context, _ []uuid.UUID, _ float64, _ int) ([]domain.MemoryEdge, error) {
 	return nil, nil
 }
-func (m *mockMemoryEdgeRepo) DecayWeights(_ context.Context) (int64, error) { return 0, nil }
+func (m *mockMemoryEdgeRepo) DecayWeights(_ context.Context) (int64, error)   { return 0, nil }
 func (m *mockMemoryEdgeRepo) PruneDeadEdges(_ context.Context) (int64, error) { return 0, nil }
 
 // Verify mockMemoryEdgeRepo satisfies the interface at compile time.
