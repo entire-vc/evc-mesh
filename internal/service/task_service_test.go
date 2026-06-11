@@ -392,12 +392,12 @@ func TestTaskService_MoveTask_ReviewAssignee(t *testing.T) {
 		statusRepo.items[newStatusID] = reviewStatus(newStatusID)
 		projRepo.items[projectID] = &domain.Project{ID: projectID, WorkspaceID: workspaceID}
 		taskRepo.items[taskID] = &domain.Task{
-			ID:           taskID,
-			ProjectID:    projectID,
-			StatusID:     oldStatusID,
-			AssigneeID:   &builderID,
-			AssigneeType: domain.AssigneeTypeAgent,
-			CreatedBy:    creatorID,
+			ID:            taskID,
+			ProjectID:     projectID,
+			StatusID:      oldStatusID,
+			AssigneeID:    &builderID,
+			AssigneeType:  domain.AssigneeTypeAgent,
+			CreatedBy:     creatorID,
 			CreatedByType: domain.ActorTypeAgent,
 		}
 
@@ -414,7 +414,7 @@ func TestTaskService_MoveTask_ReviewAssignee(t *testing.T) {
 			WorkflowRulesConfig: domain.WorkflowRulesConfig{
 				Transitions: map[string]domain.TransitionRule{
 					"in_progress": {
-						Allowed: []string{"review"},
+						Allowed:      []string{"review"},
 						OnTransition: &domain.TransitionAction{SetReviewer: "lead"},
 					},
 				},
@@ -434,12 +434,12 @@ func TestTaskService_MoveTask_ReviewAssignee(t *testing.T) {
 		projRepo.items[projectID] = &domain.Project{ID: projectID, WorkspaceID: workspaceID}
 		agentRepo.items[leadID] = &domain.Agent{ID: leadID, WorkspaceID: workspaceID, Slug: "garfield"}
 		taskRepo.items[taskID] = &domain.Task{
-			ID:           taskID,
-			ProjectID:    projectID,
-			StatusID:     oldStatusID,
-			AssigneeID:   &builderID,
-			AssigneeType: domain.AssigneeTypeAgent,
-			CreatedBy:    creatorID,
+			ID:            taskID,
+			ProjectID:     projectID,
+			StatusID:      oldStatusID,
+			AssigneeID:    &builderID,
+			AssigneeType:  domain.AssigneeTypeAgent,
+			CreatedBy:     creatorID,
 			CreatedByType: domain.ActorTypeAgent,
 		}
 
@@ -458,7 +458,7 @@ func TestTaskService_MoveTask_ReviewAssignee(t *testing.T) {
 			WorkflowRulesConfig: domain.WorkflowRulesConfig{
 				Transitions: map[string]domain.TransitionRule{
 					"in_progress": {
-						Allowed: []string{"review"},
+						Allowed:      []string{"review"},
 						OnTransition: &domain.TransitionAction{SetReviewer: "lead"},
 					},
 				},
@@ -474,12 +474,12 @@ func TestTaskService_MoveTask_ReviewAssignee(t *testing.T) {
 		statusRepo.items[newStatusID] = reviewStatus(newStatusID)
 		projRepo.items[projectID] = &domain.Project{ID: projectID, WorkspaceID: workspaceID}
 		taskRepo.items[taskID] = &domain.Task{
-			ID:           taskID,
-			ProjectID:    projectID,
-			StatusID:     oldStatusID,
-			AssigneeID:   &builderID,
-			AssigneeType: domain.AssigneeTypeAgent,
-			CreatedBy:    creatorID,
+			ID:            taskID,
+			ProjectID:     projectID,
+			StatusID:      oldStatusID,
+			AssigneeID:    &builderID,
+			AssigneeType:  domain.AssigneeTypeAgent,
+			CreatedBy:     creatorID,
 			CreatedByType: domain.ActorTypeAgent,
 		}
 
