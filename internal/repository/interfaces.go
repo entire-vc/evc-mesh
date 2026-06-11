@@ -140,6 +140,14 @@ type CommentFilter struct {
 	IncludeInternal bool
 }
 
+// CommentViewFilter defines filtering options for enriched comment view queries (activity feed).
+type CommentViewFilter struct {
+	Limit       int
+	Before      *time.Time // cursor: return items created before this timestamp
+	WorkspaceID *uuid.UUID // optional workspace scope (used by ListByAuthor)
+	ProjectID   *uuid.UUID // optional project scope (used by ListByAuthor)
+}
+
 // CommentRepository manages persistence for comments.
 type CommentRepository interface {
 	Create(ctx context.Context, comment *domain.Comment) error
@@ -148,6 +156,8 @@ type CommentRepository interface {
 	Delete(ctx context.Context, id uuid.UUID) error
 	ListByTask(ctx context.Context, taskID uuid.UUID, filter CommentFilter, pg pagination.Params) (*pagination.Page[domain.Comment], error)
 	ListReplies(ctx context.Context, parentCommentID uuid.UUID) ([]domain.Comment, error)
+	ListByAuthor(ctx context.Context, authorID uuid.UUID, filter CommentViewFilter) ([]domain.CommentView, *time.Time, error)
+	ListRecentByWorkspace(ctx context.Context, wsID uuid.UUID, filter CommentViewFilter) ([]domain.CommentView, *time.Time, error)
 }
 
 // ArtifactRepository manages persistence for artifacts.

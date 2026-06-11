@@ -1594,6 +1594,10 @@ func (m *MockUserRepository) SearchInWorkspace(_ context.Context, _ uuid.UUID, _
 	return nil, nil
 }
 
+func (m *MockUserRepository) GetByUsernameGlobal(_ context.Context, _ string) (*domain.User, error) {
+	return nil, nil
+}
+
 // ---------------------------------------------------------------------------
 // MockProjectMemberRepository
 // ---------------------------------------------------------------------------
