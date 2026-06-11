@@ -774,12 +774,12 @@ func (m *MockMemoryService) RecallGraph(ctx context.Context, opts domain.RecallG
 // MockAgentSessionRepository implements repository.AgentSessionRepository for testing.
 // MockArtifactService implements service.ArtifactService for testing.
 type MockArtifactService struct {
-	UploadFunc                func(ctx context.Context, input service.UploadArtifactInput) (*domain.Artifact, error)
-	GetByIDFunc               func(ctx context.Context, id uuid.UUID) (*domain.Artifact, error)
-	GetByIDInWorkspaceFunc    func(ctx context.Context, id, workspaceID uuid.UUID) (*domain.Artifact, error)
-	GetDownloadURLFunc        func(ctx context.Context, id uuid.UUID) (string, error)
-	DeleteFunc                func(ctx context.Context, id uuid.UUID) error
-	ListByTaskFunc            func(ctx context.Context, taskID uuid.UUID, pg pagination.Params) (*pagination.Page[domain.Artifact], error)
+	UploadFunc             func(ctx context.Context, input service.UploadArtifactInput) (*domain.Artifact, error)
+	GetByIDFunc            func(ctx context.Context, id uuid.UUID) (*domain.Artifact, error)
+	GetByIDInWorkspaceFunc func(ctx context.Context, id, workspaceID uuid.UUID) (*domain.Artifact, error)
+	GetDownloadURLFunc     func(ctx context.Context, id uuid.UUID) (string, error)
+	DeleteFunc             func(ctx context.Context, id uuid.UUID) error
+	ListByTaskFunc         func(ctx context.Context, taskID uuid.UUID, pg pagination.Params) (*pagination.Page[domain.Artifact], error)
 }
 
 func (m *MockArtifactService) Upload(ctx context.Context, input service.UploadArtifactInput) (*domain.Artifact, error) {
