@@ -591,10 +591,11 @@ type MemoryEdgeRepository interface {
 	DecayWeights(ctx context.Context) (int64, error)
 	// PruneDeadEdges deletes edges with weight < 0.1.
 	PruneDeadEdges(ctx context.Context) (int64, error)
-	// GetNeighbors returns all edges connected to any of the given memory IDs
-	// (bidirectional: memory_from_id ∈ ids OR memory_to_id ∈ ids) with weight >= weightThreshold.
+	// GetNeighbors returns edges connected to any of the given memory IDs
+	// (bidirectional: memory_from_id ∈ ids OR memory_to_id ∈ ids) with weight >= weightThreshold,
+	// ordered by weight DESC and capped at limit rows (defaults to 200 when <= 0).
 	// Used by RecallGraph BFS expansion across the KG.
-	GetNeighbors(ctx context.Context, ids []uuid.UUID, weightThreshold float64) ([]domain.MemoryEdge, error)
+	GetNeighbors(ctx context.Context, ids []uuid.UUID, weightThreshold float64, limit int) ([]domain.MemoryEdge, error)
 }
 
 // WorkspaceInviteRepository manages persistence for pending workspace invitations.
