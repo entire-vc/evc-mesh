@@ -131,8 +131,8 @@ func WorkspaceRLS(db *sqlx.DB, projectRepo repository.ProjectRepository) echo.Mi
 					"SELECT set_config('app.current_workspace_id', $1, true)",
 					wsID.String(),
 				).Scan(&setCfgResult); err != nil {
-					log.Printf("WARNING: failed to set app.current_workspace_id: %v", err)
-					// Non-fatal: continue without RLS context rather than blocking the request.
+					log.Printf("ERROR: failed to set app.current_workspace_id for workspace %s: %v", wsID, err)
+					return c.JSON(http.StatusInternalServerError, apierror.InternalError("workspace context unavailable"))
 				}
 				// Also store in Echo context so RBAC middleware (and handlers) can read it.
 				c.Set(ContextKeyWorkspaceID, wsID)
