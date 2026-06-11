@@ -718,6 +718,8 @@ func main() {
 	api.PATCH("/projects/:proj_id/integrations/team-relay", projectIntegrationHandler.UpsertTeamRelay, projAccess, rbac(mw.PermManageWebhooks))
 	api.DELETE("/projects/:proj_id/integrations/team-relay", projectIntegrationHandler.DeleteTeamRelay, projAccess, rbac(mw.PermManageWebhooks))
 	api.GET("/projects/:proj_id/integrations", projectIntegrationHandler.List, projAccess)
+	// TR file search — share_id (slug) passed as query param, not project path param.
+	api.GET("/tr/search", projectIntegrationHandler.TrSearch)
 
 	// TR document search and authenticated preview-url resolution (Team Relay share contents).
 	api.GET("/projects/:proj_id/tr/search", trSearchHandler.Search, projAccess)

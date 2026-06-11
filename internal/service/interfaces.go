@@ -756,6 +756,10 @@ type ProjectIntegrationService interface {
 	UpsertTeamRelay(ctx context.Context, projectID uuid.UUID, input UpsertProjectIntegrationInput) (*domain.ProjectIntegration, error)
 	DeleteTeamRelay(ctx context.Context, projectID uuid.UUID) error
 	List(ctx context.Context, projectID uuid.UUID) ([]domain.ProjectIntegration, error)
+	// SearchTR looks up the TR integration by share_slug, calls the relay file-list API,
+	// filters in-memory by q (case-insensitive contains on name+path), and returns up to limit results.
+	// Returns apierror.NotFound when the share_slug is not configured in any project.
+	SearchTR(ctx context.Context, shareSlug, q string, limit int) ([]domain.RelayFileItem, error)
 }
 
 // MentionablesService searches for @-mentionable workspace members (agents and users).

@@ -31,6 +31,12 @@ type TeamRelaySettings struct {
 	IncludeProjectSlug bool   `json:"include_project_slug"`
 }
 
+// RelayFileItem represents a file entry returned by the Team Relay share file-list API.
+type RelayFileItem struct {
+	Name string `json:"name"`
+	Path string `json:"path"`
+}
+
 // UpsertProjectIntegrationInput holds data for creating/updating a project integration.
 type UpsertProjectIntegrationInput struct {
 	ProjectID          uuid.UUID  `json:"project_id"`
