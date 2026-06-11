@@ -67,7 +67,7 @@ type Memory struct {
 
 	// ThreadID is propagated from the source task's thread_id at write time.
 	// Enables same-thread edge creation without a JOIN to the tasks table.
-	ThreadID     *string    `json:"thread_id,omitempty" db:"thread_id"`
+	ThreadID *string `json:"thread_id,omitempty" db:"thread_id"`
 	// SourceTaskID is the Mesh task UUID that produced this memory.
 	// Used by the task-graph bridge (Amendment 3) to create derived_from edges.
 	SourceTaskID *uuid.UUID `json:"source_task_id,omitempty" db:"source_task_id"`
