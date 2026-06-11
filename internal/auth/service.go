@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/mail"
+	"regexp"
 	"strings"
 	"time"
 	"unicode"
@@ -34,6 +35,8 @@ const (
 // timeNow is a package-level variable so tests can override the clock.
 var timeNow = time.Now
 
+var usernameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,38}[a-z0-9]$`)
+
 // Errors returned by the auth service.
 var (
 	ErrPasswordTooShort       = apierror.BadRequest("password must be at least 8 characters")
@@ -48,6 +51,8 @@ var (
 	ErrTokenReused            = apierror.Unauthorized("refresh token reuse detected; all sessions revoked")
 	ErrInvalidAccessToken     = apierror.Unauthorized("invalid or expired access token")
 	ErrUserInactive           = apierror.Unauthorized("user account is inactive")
+	ErrUsernameConflict       = apierror.Conflict("username is already taken")
+	ErrInvalidUsername        = apierror.BadRequest("username must be 2-40 characters: lowercase letters, digits, hyphens; no leading/trailing hyphens")
 )
 
 // Claims represents the JWT claims for an access token.
@@ -366,15 +371,28 @@ func (s *Service) Logout(ctx context.Context, userID uuid.UUID) error {
 	return s.refreshTokenRepo.RevokeByUserID(ctx, userID)
 }
 
-// UpdateProfile updates the display_name (and optionally avatar_url) for the given user.
-// name is trimmed and must be non-empty, max 100 runes.
-func (s *Service) UpdateProfile(ctx context.Context, userID uuid.UUID, name, avatarURL string) (*domain.User, error) {
+// UpdateProfile updates the display_name, username (optional), and avatar_url for the given user.
+// name is trimmed and must be non-empty, max 100 runes. username is validated and checked for global uniqueness.
+func (s *Service) UpdateProfile(ctx context.Context, userID uuid.UUID, name, username, avatarURL string) (*domain.User, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return nil, apierror.ValidationError(map[string]string{"name": "name is required"})
 	}
 	if len([]rune(name)) > 100 {
 		return nil, apierror.ValidationError(map[string]string{"name": "name must be at most 100 characters"})
+	}
+
+	if username != "" {
+		if !usernameRe.MatchString(username) {
+			return nil, ErrInvalidUsername
+		}
+		existing, err := s.userRepo.GetByUsernameGlobal(ctx, username)
+		if err != nil {
+			return nil, apierror.Wrap(err)
+		}
+		if existing != nil && existing.ID != userID {
+			return nil, ErrUsernameConflict
+		}
 	}
 
 	user, err := s.userRepo.GetByID(ctx, userID)
@@ -386,6 +404,9 @@ func (s *Service) UpdateProfile(ctx context.Context, userID uuid.UUID, name, ava
 	}
 
 	user.Name = name
+	if username != "" {
+		user.Username = username
+	}
 	if avatarURL != "" {
 		user.AvatarURL = avatarURL
 	}
@@ -394,6 +415,22 @@ func (s *Service) UpdateProfile(ctx context.Context, userID uuid.UUID, name, ava
 		return nil, err
 	}
 	return user, nil
+}
+
+// CheckUsername reports whether a username is available for the given user.
+// Returns false (not available) for invalid format; no error is returned in that case.
+func (s *Service) CheckUsername(ctx context.Context, userID uuid.UUID, username string) (bool, error) {
+	if !usernameRe.MatchString(username) {
+		return false, nil
+	}
+	existing, err := s.userRepo.GetByUsernameGlobal(ctx, username)
+	if err != nil {
+		return false, apierror.Wrap(err)
+	}
+	if existing == nil || existing.ID == userID {
+		return true, nil
+	}
+	return false, nil
 }
 
 // GetUserByID retrieves a user by ID. Used by the /auth/me endpoint.

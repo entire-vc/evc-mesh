@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "react-router";
 import {
   AlertTriangle,
@@ -624,7 +624,7 @@ function ViolationRow({ v }: { v: RuleViolation }) {
 export function WorkspaceSettingsPage() {
   const { wsSlug } = useParams<{ wsSlug: string }>();
   const { currentWorkspace, updateWorkspace, uploadIcon } = useWorkspaceStore();
-  const { user, updateProfile } = useAuthStore();
+  const { user, updateProfile, checkUsername } = useAuthStore();
   const {
     workspaceMembers,
     myRole,
@@ -692,6 +692,10 @@ export function WorkspaceSettingsPage() {
     type: "success" | "error";
     message: string;
   } | null>(null);
+
+  const [profileUsername, setProfileUsername] = useState(user?.username ?? "");
+  const [usernameStatus, setUsernameStatus] = useState<"idle" | "checking" | "available" | "taken" | "invalid">("idle");
+  const usernameTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Tab state
   const [activeTab, setActiveTab] = useState("general");
@@ -767,6 +771,36 @@ export function WorkspaceSettingsPage() {
     }
   }, [workflowTemplates, templatesEditorValue]);
 
+  useEffect(() => {
+    setProfileUsername(user?.username ?? "");
+  }, [user?.username]);
+
+  const handleUsernameChange = useCallback(
+    (value: string) => {
+      setProfileUsername(value);
+      if (usernameTimerRef.current) clearTimeout(usernameTimerRef.current);
+      if (value === "") {
+        setUsernameStatus("idle");
+        return;
+      }
+      const validRe = /^[a-z0-9][a-z0-9-]{0,38}[a-z0-9]$|^[a-z0-9]$/;
+      if (!validRe.test(value)) {
+        setUsernameStatus("invalid");
+        return;
+      }
+      setUsernameStatus("checking");
+      usernameTimerRef.current = setTimeout(async () => {
+        try {
+          const available = await checkUsername(value);
+          setUsernameStatus(available ? "available" : "taken");
+        } catch {
+          setUsernameStatus("idle");
+        }
+      }, 400);
+    },
+    [checkUsername],
+  );
+
   const canManageMembers = myRole === "owner" || myRole === "admin";
   const canManageRules = myRole === "owner" || myRole === "admin";
 
@@ -787,7 +821,7 @@ export function WorkspaceSettingsPage() {
     setIsSavingProfile(true);
     setProfileFeedback(null);
     try {
-      await updateProfile(trimmed);
+      await updateProfile(trimmed, profileUsername.trim() || undefined);
       setProfileFeedback({ type: "success", message: "Profile saved." });
     } catch (err) {
       setProfileFeedback({
@@ -1048,6 +1082,37 @@ export function WorkspaceSettingsPage() {
               <p className="text-xs text-muted-foreground">
                 Current email: {user?.email}
               </p>
+            </div>
+            <div className="space-y-1.5">
+              <label htmlFor="profile-username" className="text-sm font-medium">
+                Username
+              </label>
+              <Input
+                id="profile-username"
+                value={profileUsername}
+                onChange={(e) => handleUsernameChange(e.target.value.toLowerCase())}
+                placeholder="e.g. john-doe"
+                maxLength={40}
+                className={
+                  usernameStatus === "taken" || usernameStatus === "invalid"
+                    ? "border-destructive"
+                    : usernameStatus === "available"
+                      ? "border-green-500"
+                      : ""
+                }
+              />
+              {usernameStatus === "checking" && (
+                <p className="text-xs text-muted-foreground">Checking availability…</p>
+              )}
+              {usernameStatus === "available" && (
+                <p className="text-xs text-green-600">Username is available</p>
+              )}
+              {usernameStatus === "taken" && (
+                <p className="text-xs text-destructive">Username is already taken</p>
+              )}
+              {usernameStatus === "invalid" && (
+                <p className="text-xs text-destructive">2–40 characters: lowercase letters, digits, hyphens; no leading/trailing hyphens</p>
+              )}
             </div>
             {profileFeedback && (
               <p

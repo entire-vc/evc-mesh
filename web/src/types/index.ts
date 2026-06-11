@@ -85,6 +85,7 @@ export interface User {
   id: string;
   email: string;
   name: string;
+  username?: string;
   avatar_url: string;
   is_active: boolean;
   created_at: string;
@@ -155,6 +156,7 @@ export interface UserSearchResult {
   id: string;
   email: string;
   name: string;
+  username?: string;
   avatar_url: string;
   is_member: boolean;
 }

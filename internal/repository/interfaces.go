@@ -301,6 +301,9 @@ type UserRepository interface {
 	GetByUsername(ctx context.Context, workspaceID uuid.UUID, username string) (*domain.User, error)
 	// SearchInWorkspace returns users who are workspace members and whose display_name, username, or email match the query (ILIKE), up to limit results.
 	SearchInWorkspace(ctx context.Context, workspaceID uuid.UUID, query string, limit int) ([]domain.User, error)
+	// GetByUsernameGlobal returns the user with the given username across all workspaces, or (nil, nil) if not found.
+	// Used for global uniqueness checks (ix_users_username is a global unique index, not workspace-scoped).
+	GetByUsernameGlobal(ctx context.Context, username string) (*domain.User, error)
 }
 
 // MentionFilter holds filtering options for listing mention records.

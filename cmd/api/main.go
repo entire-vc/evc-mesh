@@ -539,6 +539,7 @@ func main() {
 	// Auth - protected.
 	api.GET("/auth/me", authHandler.Me)
 	api.PATCH("/auth/me", authHandler.UpdateMe)
+	api.GET("/auth/check-username", authHandler.CheckUsername)
 	api.POST("/auth/logout", authHandler.Logout)
 
 	// rbac is a shorthand helper to create per-route RBAC middleware.
