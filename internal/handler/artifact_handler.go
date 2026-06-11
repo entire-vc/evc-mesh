@@ -44,6 +44,9 @@ func (h *ArtifactHandler) List(c echo.Context) error {
 		return handleError(c, err)
 	}
 
+	for i := range page.Items {
+		stripSensitiveMetadata(&page.Items[i])
+	}
 	return c.JSON(http.StatusOK, page)
 }
 
@@ -133,6 +136,7 @@ func (h *ArtifactHandler) GetByID(c echo.Context) error {
 		return handleError(c, err)
 	}
 
+	stripSensitiveMetadata(artifact)
 	return c.JSON(http.StatusOK, artifact)
 }
 
@@ -165,6 +169,24 @@ func (h *ArtifactHandler) Delete(c echo.Context) error {
 	}
 
 	return c.NoContent(http.StatusNoContent)
+}
+
+// stripSensitiveMetadata removes internal service keys from artifact.Metadata
+// before the artifact is serialised in an API response. Callers never need
+// tr_agent_key — it is a share-level TeamRelay credential that only the
+// service layer should use.
+func stripSensitiveMetadata(art *domain.Artifact) {
+	if len(art.Metadata) == 0 {
+		return
+	}
+	var m map[string]any
+	if err := json.Unmarshal(art.Metadata, &m); err != nil {
+		return
+	}
+	delete(m, "tr_agent_key")
+	if b, err := json.Marshal(m); err == nil {
+		art.Metadata = b
+	}
 }
 
 // inferMimeType returns headerMime unless it is empty or generic octet-stream,
