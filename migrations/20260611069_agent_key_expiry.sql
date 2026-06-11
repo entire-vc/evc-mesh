@@ -2,6 +2,7 @@
 -- Adds expires_at (nullable, for time-bounded keys) and last_rotated_at
 -- (audit trail for key rotation). Existing rows default to NULL (no expiry).
 
+-- +goose Up
 ALTER TABLE agents
     ADD COLUMN expires_at      TIMESTAMPTZ,
     ADD COLUMN last_rotated_at TIMESTAMPTZ;
@@ -10,3 +11,9 @@ ALTER TABLE agents
 CREATE INDEX idx_agents_expires_at
     ON agents (expires_at)
     WHERE expires_at IS NOT NULL AND deleted_at IS NULL;
+
+-- +goose Down
+DROP INDEX IF EXISTS idx_agents_expires_at;
+ALTER TABLE agents
+    DROP COLUMN IF EXISTS expires_at,
+    DROP COLUMN IF EXISTS last_rotated_at;
