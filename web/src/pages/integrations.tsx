@@ -3,7 +3,7 @@ import { useParams } from "react-router";
 import {
   CheckCircle2,
   Circle,
-  Github,
+  GitBranch,
   MessageSquare,
   Server,
   Sparkles,
@@ -35,7 +35,7 @@ const PROVIDERS: ProviderMeta[] = [
     name: "GitHub",
     description:
       "Link pull requests and commits to tasks. Receive webhook events to auto-update task status.",
-    icon: Github,
+    icon: GitBranch,
   },
   {
     id: "slack",
