@@ -118,6 +118,9 @@ jobs:
       # run directly on the host without requiring docker or a pre-installed goose CLI.
       # DSN is constructed from DB_* component vars in /opt/evc-mesh/.env.prod (no DATABASE_URL alias).
       # Hard fail: non-zero exit prevents the deploy job from starting (fail-closed).
+      # -allow-missing: apply out-of-order pending migrations without erroring (safe — goose tracks
+      # each version independently). Prevents whole-fleet deploy jams when two PRs land migrations
+      # in the same release window with a version gap already applied on prod.
       # Ref: CLAUDE-workflow.md §1b Deploy Discipline
       - name: Build and upload goose to prod
         run: |
@@ -140,7 +143,13 @@ jobs:
           fi
           DB_URL="postgres://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT:-5432}/${DB_NAME}?sslmode=${DB_SSL_MODE:-disable}"
           echo "=== Running goose migrations ==="
-          /opt/evc-mesh/bin/goose -dir /opt/evc-mesh/migrations postgres "$DB_URL" up
+          GOOSE_OUT=$(/opt/evc-mesh/bin/goose -dir /opt/evc-mesh/migrations postgres "$DB_URL" up -allow-missing 2>&1)
+          GOOSE_RC=$?
+          echo "$GOOSE_OUT"
+          if echo "$GOOSE_OUT" | grep -qi "missing"; then
+            echo "WARN: out-of-order migration(s) applied — check migration version sequence"
+          fi
+          exit $GOOSE_RC
           REMOTE
 
   deploy:
