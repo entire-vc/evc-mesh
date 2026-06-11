@@ -1405,7 +1405,7 @@ func (m *MockStorageClient) Upload(_ context.Context, key string, reader io.Read
 	return nil
 }
 
-func (m *MockStorageClient) GetPresignedURL(_ context.Context, key string, expiry time.Duration) (string, error) {
+func (m *MockStorageClient) GetPresignedURL(_ context.Context, key string, expiry time.Duration, _, _ string) (string, error) {
 	if m.errToReturn != nil {
 		return "", m.errToReturn
 	}

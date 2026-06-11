@@ -296,7 +296,7 @@ func (h *WorkspaceHandler) GetIcon(c echo.Context) error {
 		return c.JSON(http.StatusServiceUnavailable, apierror.BadRequest("icon storage is not configured"))
 	}
 
-	url, err := h.storage.GetPresignedURL(c.Request().Context(), *workspace.IconStorageKey, iconExpiry)
+	url, err := h.storage.GetPresignedURL(c.Request().Context(), *workspace.IconStorageKey, iconExpiry, "", "")
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, apierror.InternalError("could not generate icon URL"))
 	}
