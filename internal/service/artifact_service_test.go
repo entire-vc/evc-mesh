@@ -304,6 +304,77 @@ func TestArtifactService_GetByID(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// TestArtifactService_GetByIDInWorkspace — IDOR isolation check
+// ---------------------------------------------------------------------------
+
+func TestArtifactService_GetByIDInWorkspace(t *testing.T) {
+	wsA := uuid.New()
+	wsB := uuid.New()
+
+	tests := []struct {
+		name        string
+		setup       func(repo *MockArtifactRepository) uuid.UUID
+		queryWs     uuid.UUID
+		wantErr     bool
+		wantErrCode int
+	}{
+		{
+			name: "correct workspace returns artifact",
+			setup: func(repo *MockArtifactRepository) uuid.UUID {
+				id := uuid.New()
+				repo.items[id] = &domain.Artifact{ID: id, Name: "report.md"}
+				repo.SetWorkspace(id, wsA)
+				return id
+			},
+			queryWs: wsA,
+			wantErr: false,
+		},
+		{
+			name: "wrong workspace returns 404 (IDOR blocked)",
+			setup: func(repo *MockArtifactRepository) uuid.UUID {
+				id := uuid.New()
+				repo.items[id] = &domain.Artifact{ID: id, Name: "secret.txt"}
+				repo.SetWorkspace(id, wsA)
+				return id
+			},
+			queryWs:     wsB,
+			wantErr:     true,
+			wantErrCode: http.StatusNotFound,
+		},
+		{
+			name: "artifact not found at all",
+			setup: func(_ *MockArtifactRepository) uuid.UUID {
+				return uuid.New()
+			},
+			queryWs:     wsA,
+			wantErr:     true,
+			wantErrCode: http.StatusNotFound,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc, repo, _ := setupArtifactService()
+			ctx := context.Background()
+			id := tt.setup(repo)
+
+			artifact, err := svc.GetByIDInWorkspace(ctx, id, tt.queryWs)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				var apiErr *apierror.Error
+				require.ErrorAs(t, err, &apiErr)
+				assert.Equal(t, tt.wantErrCode, apiErr.Code)
+				assert.Nil(t, artifact)
+			} else {
+				require.NoError(t, err)
+				assert.NotNil(t, artifact)
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
 // TestArtifactService_GetDownloadURL
 // ---------------------------------------------------------------------------
 

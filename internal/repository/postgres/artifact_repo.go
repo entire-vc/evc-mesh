@@ -95,6 +95,28 @@ func (r *ArtifactRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.Artif
 	return &a, nil
 }
 
+// GetByIDInWorkspace returns the artifact only when it belongs to workspaceID.
+// Returns nil (no error) when the artifact exists but is in a different workspace,
+// so callers can treat it as a 404 without leaking cross-workspace IDs.
+func (r *ArtifactRepo) GetByIDInWorkspace(ctx context.Context, id, workspaceID uuid.UUID) (*domain.Artifact, error) {
+	const q = `
+		SELECT a.*
+		  FROM artifacts a
+		  JOIN tasks t ON a.task_id = t.id AND t.deleted_at IS NULL
+		  JOIN projects p ON t.project_id = p.id
+		 WHERE a.id = $1
+		   AND p.workspace_id = $2`
+	var row artifactRow
+	if err := r.db.GetContext(ctx, &row, q, id, workspaceID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	a := row.toDomain()
+	return &a, nil
+}
+
 // UpdateMetadata overwrites the metadata JSONB column for the given artifact.
 func (r *ArtifactRepo) UpdateMetadata(ctx context.Context, id uuid.UUID, metadata json.RawMessage) error {
 	if metadata == nil {

@@ -658,10 +658,10 @@ func main() {
 	// Artifact routes.
 	api.GET("/tasks/:task_id/artifacts", artifactHandler.List, wsAccess)
 	api.POST("/tasks/:task_id/artifacts", artifactHandler.Upload, wsAccess, rbac(mw.PermUploadArtifact))
-	api.GET("/artifacts/:artifact_id", artifactHandler.GetByID)
-	api.GET("/artifacts/:artifact_id/download", artifactHandler.Download)
+	api.GET("/artifacts/:artifact_id", artifactHandler.GetByID, wsAccess)
+	api.GET("/artifacts/:artifact_id/download", artifactHandler.Download, wsAccess)
 	api.GET("/tasks/:task_id/artifacts/:artifact_id/download", artifactHandler.Download, wsAccess)
-	api.DELETE("/artifacts/:artifact_id", artifactHandler.Delete, rbac(mw.PermUploadArtifact))
+	api.DELETE("/artifacts/:artifact_id", artifactHandler.Delete, wsAccess, rbac(mw.PermUploadArtifact))
 
 	// Agent routes.
 	// NOTE: /agents/me/* routes MUST be registered before /agents/:agent_id to avoid
