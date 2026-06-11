@@ -152,12 +152,16 @@ func transport(ctx context.Context, shareIdentifier, filePath string, content []
 	switch resp.StatusCode {
 	case http.StatusOK:
 		var result syncUploadResponse
-		if jsonErr := json.Unmarshal(body, &result); jsonErr == nil {
-			log.Printf("teamrelay: sync-uploaded %s → relay path=%s", filePath, result.Path)
-			return result.WebURL, nil
+		if jsonErr := json.Unmarshal(body, &result); jsonErr != nil {
+			log.Printf("teamrelay: sync-upload parse error for %s: %v (body: %s)", filePath, jsonErr, body)
+			return "", fmt.Errorf("teamrelay: failed to parse sync-upload response: %w", jsonErr)
 		}
-		log.Printf("teamrelay: sync-uploaded %s (relay response: %s)", filePath, body)
-		return "", nil
+		if result.Path == "" {
+			log.Printf("teamrelay: sync-upload returned empty path for %s — relay may have rejected the upload (body: %s)", filePath, body)
+			return "", fmt.Errorf("teamrelay: sync-upload returned unexpected response (empty path): %s", body)
+		}
+		log.Printf("teamrelay: sync-uploaded %s → relay path=%s", filePath, result.Path)
+		return result.WebURL, nil
 	case http.StatusUnauthorized, http.StatusForbidden:
 		log.Printf("teamrelay: agent key rejected by relay (status %d) for share %s — integration key may be revoked", resp.StatusCode, shareIdentifier)
 		return "", nil
