@@ -10,6 +10,10 @@ import (
 
 var nonAlphaNum = regexp.MustCompile(`[^a-z0-9]+`)
 
+// dateLeadRe matches a YYYY-MM-DD prefix at the start of an already-dated filename
+// so we can skip prepending the date a second time.
+var dateLeadRe = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}`)
+
 // slugify converts a string to a URL-friendly slug.
 func slugify(s string) string {
 	s = strings.ToLower(s)
@@ -39,11 +43,12 @@ func ext(contentType string) string {
 
 // BuildPath constructs the relay file path in the format:
 //
-//	subfolder/[projectSlug/]taskShortID__taskTitleSlug/YYYY-MM-DD_artifactNameSlug.ext
-func BuildPath(subfolder, projectSlug string, includeProjectSlug bool, taskShortID, taskTitle, artifactName, contentType string, date time.Time) string {
+//	subfolder/[projectSlug/]taskShortID/[YYYY-MM-DD_]artifactNameSlug.ext
+//
+// The date prefix is omitted when artifactName already starts with YYYY-MM-DD.
+func BuildPath(subfolder, projectSlug string, includeProjectSlug bool, taskShortID, artifactName, contentType string, date time.Time) string {
 	dateStr := date.UTC().Format("2006-01-02")
-	taskSlug := slugify(taskTitle)
-	taskDir := fmt.Sprintf("%s__%s", taskShortID, taskSlug)
+	taskDir := taskShortID
 
 	// Preserve the original file extension so "report.md" → "report.md", not "report-md.bin".
 	// Slugify only the base name; fall back to mime-derived extension when absent.
@@ -59,7 +64,13 @@ func BuildPath(subfolder, projectSlug string, includeProjectSlug bool, taskShort
 		fileExt = ext(contentType)
 	}
 
-	fileName := fmt.Sprintf("%s_%s.%s", dateStr, slugify(baseName), fileExt)
+	sluggedBase := slugify(baseName)
+	var fileName string
+	if dateLeadRe.MatchString(sluggedBase) {
+		fileName = fmt.Sprintf("%s.%s", sluggedBase, fileExt)
+	} else {
+		fileName = fmt.Sprintf("%s_%s.%s", dateStr, sluggedBase, fileExt)
+	}
 
 	parts := []string{subfolder}
 	if includeProjectSlug && projectSlug != "" {
