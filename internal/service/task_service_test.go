@@ -1290,6 +1290,193 @@ func TestTaskService_List(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// TestTaskService_MoveTask_TransitionGate — R-D-C acceptance tests
+// 5 required cases from the task spec.
+// ---------------------------------------------------------------------------
+
+// setupTransitionGateService builds a taskService wired with the given workflow response
+// and a project repo so applyTransitionGate can fetch the workflow config.
+func setupTransitionGateService(wfResp *domain.WorkflowRulesResponse) (
+	*taskService, *MockTaskRepository, *MockTaskStatusRepository,
+) {
+	taskRepo := NewMockTaskRepository()
+	statusRepo := NewMockTaskStatusRepository()
+	depRepo := NewMockTaskDependencyRepository()
+	activityRepo := NewMockActivityLogRepository()
+	projRepo := NewMockProjectRepository()
+
+	mockRules := NewMockRulesService(nil).WithWorkflowRules(wfResp)
+
+	projectID := uuid.New()
+	workspaceID := uuid.New()
+	projRepo.items[projectID] = &domain.Project{ID: projectID, WorkspaceID: workspaceID}
+
+	// Pre-register a task so tests can set ProjectID via the shared projectID.
+	// Tests override this in their own setup.
+	_ = projectID
+
+	svc := NewTaskService(taskRepo, statusRepo, depRepo, activityRepo,
+		WithRulesConfigService(mockRules),
+		WithProjectRepo(projRepo),
+	).(*taskService)
+	timeNow = func() time.Time { return frozenTime }
+	return svc, taskRepo, statusRepo
+}
+
+func TestTaskService_MoveTask_TransitionGate(t *testing.T) {
+	projectID := uuid.New()
+	workspaceID := uuid.New()
+
+	// makeTask creates a task in a given from-status and registers the target status.
+	// fromStatusName and toStatusName are set as status.Name for config lookup.
+	makeSetup := func(
+		taskRepo *MockTaskRepository,
+		statusRepo *MockTaskStatusRepository,
+		projRepo *MockProjectRepository,
+		fromCat domain.StatusCategory,
+		fromName string,
+		toCat domain.StatusCategory,
+		toName string,
+	) (taskID, toStatusID uuid.UUID) {
+		fromStatusID := uuid.New()
+		toStatusID = uuid.New()
+		taskID = uuid.New()
+
+		statusRepo.items[fromStatusID] = &domain.TaskStatus{ID: fromStatusID, ProjectID: projectID, Category: fromCat, Name: fromName}
+		statusRepo.items[toStatusID] = &domain.TaskStatus{ID: toStatusID, ProjectID: projectID, Category: toCat, Name: toName}
+		taskRepo.items[taskID] = &domain.Task{
+			ID: taskID, ProjectID: projectID,
+			StatusID: fromStatusID, Title: "test task",
+		}
+		projRepo.items[projectID] = &domain.Project{ID: projectID, WorkspaceID: workspaceID}
+		return taskID, toStatusID
+	}
+
+	// Case 1: project without Transitions config → MoveTask OK (allow-all, no behavior change).
+	t.Run("case1: empty config → allow-all (no behavior change)", func(t *testing.T) {
+		wfResp := &domain.WorkflowRulesResponse{
+			WorkflowRulesConfig: domain.WorkflowRulesConfig{
+				EnforcementMode: domain.RuleConfigEnforcementStrict,
+				// Transitions intentionally empty
+			},
+		}
+		svc, taskRepo, statusRepo := setupTransitionGateService(wfResp)
+		projRepo := svc.projectRepo.(*MockProjectRepository)
+		taskID, toStatusID := makeSetup(taskRepo, statusRepo, projRepo,
+			domain.StatusCategoryInProgress, "in_progress",
+			domain.StatusCategoryDone, "done",
+		)
+		ctx := actorctx.WithActor(context.Background(), uuid.New(), domain.ActorTypeAgent)
+		err := svc.MoveTask(ctx, taskID, MoveTaskInput{StatusID: &toStatusID})
+		require.NoError(t, err, "empty Transitions config must allow all moves")
+	})
+
+	// Case 2: advisory + allowed transition → OK, no violation in activity log.
+	t.Run("case2: advisory + allowed transition → OK", func(t *testing.T) {
+		wfResp := &domain.WorkflowRulesResponse{
+			WorkflowRulesConfig: domain.WorkflowRulesConfig{
+				EnforcementMode: domain.RuleConfigEnforcementAdvisory,
+				Transitions: map[string]domain.TransitionRule{
+					"in_progress": {Allowed: []string{"review", "done"}},
+				},
+			},
+		}
+		svc, taskRepo, statusRepo := setupTransitionGateService(wfResp)
+		projRepo := svc.projectRepo.(*MockProjectRepository)
+		taskID, toStatusID := makeSetup(taskRepo, statusRepo, projRepo,
+			domain.StatusCategoryInProgress, "in_progress",
+			domain.StatusCategoryDone, "done",
+		)
+		ctx := actorctx.WithActor(context.Background(), uuid.New(), domain.ActorTypeAgent)
+		err := svc.MoveTask(ctx, taskID, MoveTaskInput{StatusID: &toStatusID})
+		require.NoError(t, err)
+	})
+
+	// Case 3: advisory + forbidden transition → move allowed + violation in activity log.
+	t.Run("case3: advisory + forbidden transition → OK + violation logged", func(t *testing.T) {
+		wfResp := &domain.WorkflowRulesResponse{
+			WorkflowRulesConfig: domain.WorkflowRulesConfig{
+				EnforcementMode: domain.RuleConfigEnforcementAdvisory,
+				Transitions: map[string]domain.TransitionRule{
+					"in_progress": {Allowed: []string{"review"}}, // "done" is NOT allowed
+				},
+			},
+		}
+		svc, taskRepo, statusRepo := setupTransitionGateService(wfResp)
+		projRepo := svc.projectRepo.(*MockProjectRepository)
+		taskID, toStatusID := makeSetup(taskRepo, statusRepo, projRepo,
+			domain.StatusCategoryInProgress, "in_progress",
+			domain.StatusCategoryDone, "done",
+		)
+		activityRepo := svc.activityRepo.(*MockActivityLogRepository)
+
+		ctx := actorctx.WithActor(context.Background(), uuid.New(), domain.ActorTypeAgent)
+		err := svc.MoveTask(ctx, taskID, MoveTaskInput{StatusID: &toStatusID})
+		require.NoError(t, err, "advisory violation must allow the move")
+
+		// Verify violation was logged in activity.
+		activityRepo.mu.Lock()
+		defer activityRepo.mu.Unlock()
+		var found bool
+		for _, entry := range activityRepo.items {
+			if entry.Action == "task.transition_violation" {
+				found = true
+				break
+			}
+		}
+		assert.True(t, found, "advisory violation must be recorded in activity log")
+	})
+
+	// Case 4: strict + forbidden transition → 403 blocked.
+	t.Run("case4: strict + forbidden transition → 403 blocked", func(t *testing.T) {
+		wfResp := &domain.WorkflowRulesResponse{
+			WorkflowRulesConfig: domain.WorkflowRulesConfig{
+				EnforcementMode: domain.RuleConfigEnforcementStrict,
+				Transitions: map[string]domain.TransitionRule{
+					"in_progress": {Allowed: []string{"review"}}, // "done" is NOT allowed
+				},
+			},
+		}
+		svc, taskRepo, statusRepo := setupTransitionGateService(wfResp)
+		projRepo := svc.projectRepo.(*MockProjectRepository)
+		taskID, toStatusID := makeSetup(taskRepo, statusRepo, projRepo,
+			domain.StatusCategoryInProgress, "in_progress",
+			domain.StatusCategoryDone, "done",
+		)
+		ctx := actorctx.WithActor(context.Background(), uuid.New(), domain.ActorTypeAgent)
+		err := svc.MoveTask(ctx, taskID, MoveTaskInput{StatusID: &toStatusID})
+		require.Error(t, err)
+		var apiErr *apierror.Error
+		require.ErrorAs(t, err, &apiErr)
+		assert.Equal(t, http.StatusForbidden, apiErr.Code)
+		assert.Equal(t, "workflow_transition_blocked", apiErr.Message)
+	})
+
+	// Case 5: system actor in strict mode → exempt (move succeeds).
+	t.Run("case5: system actor in strict mode → exempt", func(t *testing.T) {
+		wfResp := &domain.WorkflowRulesResponse{
+			WorkflowRulesConfig: domain.WorkflowRulesConfig{
+				EnforcementMode: domain.RuleConfigEnforcementStrict,
+				Transitions: map[string]domain.TransitionRule{
+					"in_progress": {Allowed: []string{"review"}}, // "done" not in allowed
+				},
+				// EnforceSystemActors defaults to false → system is exempt
+			},
+		}
+		svc, taskRepo, statusRepo := setupTransitionGateService(wfResp)
+		projRepo := svc.projectRepo.(*MockProjectRepository)
+		taskID, toStatusID := makeSetup(taskRepo, statusRepo, projRepo,
+			domain.StatusCategoryInProgress, "in_progress",
+			domain.StatusCategoryDone, "done",
+		)
+		// Simulate auto_transition context: system actor
+		ctx := actorctx.WithActor(context.Background(), uuid.New(), domain.ActorTypeSystem)
+		err := svc.MoveTask(ctx, taskID, MoveTaskInput{StatusID: &toStatusID})
+		require.NoError(t, err, "system actor must be exempt from strict enforcement by default")
+	})
+}
+
+// ---------------------------------------------------------------------------
 // TestTaskService_Update_DelegationLevel*
 // ---------------------------------------------------------------------------
 
