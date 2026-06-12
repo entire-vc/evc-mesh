@@ -15,13 +15,12 @@ func TestBuildPath_Standard(t *testing.T) {
 		"my-project",
 		true,
 		"abc12345",
-		"Fix the auth bug",
 		"output.log",
 		"text/plain",
 		fixedDate,
 	)
-	// .log extension is preserved; only the base "output" is slugified.
-	assert.Equal(t, "artifacts/my-project/abc12345__fix-the-auth-bug/2026-05-22_output.log", result)
+	// .log extension is preserved; dir is just the short ID.
+	assert.Equal(t, "artifacts/my-project/abc12345/2026-05-22_output.log", result)
 }
 
 func TestBuildPath_NoProjectSlug(t *testing.T) {
@@ -30,27 +29,24 @@ func TestBuildPath_NoProjectSlug(t *testing.T) {
 		"my-project",
 		false, // no project slug in path
 		"deadbeef",
-		"Deploy report",
 		"report",
 		"application/json",
 		fixedDate,
 	)
-	assert.Equal(t, "shared/deadbeef__deploy-report/2026-05-22_report.json", result)
+	assert.Equal(t, "shared/deadbeef/2026-05-22_report.json", result)
 }
 
-func TestBuildPath_SpecialCharsInTitle(t *testing.T) {
+func TestBuildPath_SpecialCharsInArtifactName(t *testing.T) {
 	result := BuildPath(
 		"drops",
 		"proj",
 		true,
 		"f00dcafe",
-		"Task #42: Update API (v2.0) -- urgent!",
 		"artifact",
 		"text/plain",
 		fixedDate,
 	)
-	// Special characters → replaced with dashes and trimmed.
-	assert.Equal(t, "drops/proj/f00dcafe__task-42-update-api-v2-0-urgent/2026-05-22_artifact.txt", result)
+	assert.Equal(t, "drops/proj/f00dcafe/2026-05-22_artifact.txt", result)
 }
 
 func TestBuildPath_MarkdownContentType(t *testing.T) {
@@ -59,12 +55,11 @@ func TestBuildPath_MarkdownContentType(t *testing.T) {
 		"proj",
 		false,
 		"00000001",
-		"Release notes",
 		"release",
 		"text/markdown",
 		fixedDate,
 	)
-	assert.Equal(t, "notes/00000001__release-notes/2026-05-22_release.md", result)
+	assert.Equal(t, "notes/00000001/2026-05-22_release.md", result)
 }
 
 func TestBuildPath_HTMLContentType(t *testing.T) {
@@ -73,12 +68,11 @@ func TestBuildPath_HTMLContentType(t *testing.T) {
 		"proj",
 		false,
 		"cafebabe",
-		"Status report",
 		"summary",
 		"text/html",
 		fixedDate,
 	)
-	assert.Equal(t, "reports/cafebabe__status-report/2026-05-22_summary.html", result)
+	assert.Equal(t, "reports/cafebabe/2026-05-22_summary.html", result)
 }
 
 func TestBuildPath_UnknownContentType(t *testing.T) {
@@ -87,37 +81,25 @@ func TestBuildPath_UnknownContentType(t *testing.T) {
 		"proj",
 		false,
 		"12345678",
-		"Binary blob",
 		"data",
 		"application/octet-stream",
 		fixedDate,
 	)
-	assert.Equal(t, "misc/12345678__binary-blob/2026-05-22_data.bin", result)
+	assert.Equal(t, "misc/12345678/2026-05-22_data.bin", result)
 }
 
-func TestBuildPath_LongTitle(t *testing.T) {
-	longTitle := "This is an extremely long task title that goes well beyond sixty characters and should be truncated accordingly by the slugify function"
+func TestBuildPath_DirIsShortIDOnly(t *testing.T) {
 	result := BuildPath(
 		"folder",
 		"proj",
 		false,
 		"shortid1",
-		longTitle,
 		"file",
 		"text/plain",
 		fixedDate,
 	)
-	// Slug is capped at 60 chars.
-	taskDir := result[len("folder/shortid1__"):]
-	slashIdx := len(taskDir)
-	for i, c := range taskDir {
-		if c == '/' {
-			slashIdx = i
-			break
-		}
-	}
-	slug := taskDir[:slashIdx]
-	assert.LessOrEqual(t, len(slug), 60, "slug should be at most 60 characters")
+	// Directory is just the short ID — no title slug appended.
+	assert.Equal(t, "folder/shortid1/2026-05-22_file.txt", result)
 }
 
 func TestBuildPath_EmptySubfolder(t *testing.T) {
@@ -126,13 +108,12 @@ func TestBuildPath_EmptySubfolder(t *testing.T) {
 		"proj",
 		true,
 		"aabbccdd",
-		"Simple task",
 		"output",
 		"text/plain",
 		fixedDate,
 	)
 	// path.Join strips leading slash when subfolder is empty.
-	assert.Equal(t, "proj/aabbccdd__simple-task/2026-05-22_output.txt", result)
+	assert.Equal(t, "proj/aabbccdd/2026-05-22_output.txt", result)
 }
 
 func TestSlugify(t *testing.T) {
@@ -162,12 +143,11 @@ func TestBuildPath_MarkdownFilename(t *testing.T) {
 		"dev",
 		false,
 		"b4822eb8",
-		"TR smoke",
 		"tr-smoke-2026-06-05.md",
 		"application/octet-stream",
 		fixedDate,
 	)
-	assert.Equal(t, "mesh/b4822eb8__tr-smoke/2026-05-22_tr-smoke-2026-06-05.md", result)
+	assert.Equal(t, "mesh/b4822eb8/2026-05-22_tr-smoke-2026-06-05.md", result)
 }
 
 // TestBuildPath_ExtensionPreservedOverMime checks that an explicit .json extension
@@ -178,12 +158,28 @@ func TestBuildPath_ExtensionPreservedOverMime(t *testing.T) {
 		"proj",
 		false,
 		"deadbeef",
-		"Config dump",
 		"config.json",
 		"text/plain",
 		fixedDate,
 	)
-	assert.Equal(t, "drops/deadbeef__config-dump/2026-05-22_config.json", result)
+	assert.Equal(t, "drops/deadbeef/2026-05-22_config.json", result)
+}
+
+// TestBuildPath_ArtifactNameWithDatePrefix verifies that a date-prefixed artifact
+// name does not get a second date prepended.
+func TestBuildPath_ArtifactNameWithDatePrefix(t *testing.T) {
+	date := time.Date(2026, 6, 11, 12, 0, 0, 0, time.UTC)
+	result := BuildPath(
+		"artifacts",
+		"mesh-dev",
+		true,
+		"7367f205",
+		"2026-06-11-roundtrip-test-riker.md",
+		"text/markdown",
+		date,
+	)
+	// Date must not be duplicated.
+	assert.Equal(t, "artifacts/mesh-dev/7367f205/2026-06-11-roundtrip-test-riker.md", result)
 }
 
 func TestExt(t *testing.T) {

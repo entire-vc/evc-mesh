@@ -86,7 +86,6 @@ func (c *client) Publish(ctx context.Context, taskID uuid.UUID, artifactName str
 		proj.Slug,
 		settings.IncludeProjectSlug,
 		taskShortID,
-		task.Title,
 		artifactName,
 		contentType,
 		time.Now(),
