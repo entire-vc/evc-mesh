@@ -102,6 +102,10 @@ type TaskRepository interface {
 	// the given target status and a new task_number within that project.
 	// Returns apierror.NotFound("Task") if the task does not exist or is soft-deleted.
 	MoveToProject(ctx context.Context, taskID, targetProjectID, targetStatusID uuid.UUID) error
+	// ListOpenByRecurringScheduleID returns non-terminal (not done/cancelled/deleted)
+	// tasks belonging to the given recurring schedule, excluding exceptTaskID.
+	// Used by SupersedeRecurringInstances to close previous open instances.
+	ListOpenByRecurringScheduleID(ctx context.Context, scheduleID, exceptTaskID uuid.UUID) ([]domain.Task, error)
 }
 
 // TaskStatusRepository manages persistence for task statuses.
@@ -158,6 +162,8 @@ type CommentRepository interface {
 	ListReplies(ctx context.Context, parentCommentID uuid.UUID) ([]domain.Comment, error)
 	ListByAuthor(ctx context.Context, authorID uuid.UUID, filter CommentViewFilter) ([]domain.CommentView, *time.Time, error)
 	ListRecentByWorkspace(ctx context.Context, wsID uuid.UUID, filter CommentViewFilter) ([]domain.CommentView, *time.Time, error)
+	// HasAnyComment returns true when the task has at least one comment.
+	HasAnyComment(ctx context.Context, taskID uuid.UUID) (bool, error)
 }
 
 // ArtifactRepository manages persistence for artifacts.

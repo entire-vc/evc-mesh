@@ -252,3 +252,10 @@ func (r *CommentRepo) ListRecentByWorkspace(ctx context.Context, wsID uuid.UUID,
 	}
 	return rows, nextCursor, nil
 }
+
+// HasAnyComment returns true when the task has at least one comment.
+func (r *CommentRepo) HasAnyComment(ctx context.Context, taskID uuid.UUID) (bool, error) {
+	var exists bool
+	err := r.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM comments WHERE task_id = $1)`, taskID).Scan(&exists)
+	return exists, err
+}

@@ -23,7 +23,7 @@ import (
 
 func setupCommentTest(mockSvc *MockCommentService) (*CommentHandler, *echo.Echo) {
 	e := echo.New()
-	h := NewCommentHandler(mockSvc)
+	h := NewCommentHandler(mockSvc, nil) // nil = full-UUID only; existing tests use full UUIDs
 	return h, e
 }
 

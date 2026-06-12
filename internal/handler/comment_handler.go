@@ -19,11 +19,12 @@ import (
 // CommentHandler handles HTTP requests for comment management.
 type CommentHandler struct {
 	commentService service.CommentService
+	taskSvc        taskIDResolver
 }
 
 // NewCommentHandler creates a new CommentHandler with the given service.
-func NewCommentHandler(cs service.CommentService) *CommentHandler {
-	return &CommentHandler{commentService: cs}
+func NewCommentHandler(cs service.CommentService, ts taskIDResolver) *CommentHandler {
+	return &CommentHandler{commentService: cs, taskSvc: ts}
 }
 
 // createCommentRequest represents the JSON body for creating a comment.
@@ -40,10 +41,9 @@ type updateCommentRequest struct {
 
 // List handles GET /tasks/:task_id/comments
 func (h *CommentHandler) List(c echo.Context) error {
-	taskIDStr := c.Param("task_id")
-	taskID, err := uuid.Parse(taskIDStr)
+	taskID, err := resolveTaskID(c.Request().Context(), c.Param("task_id"), h.taskSvc)
 	if err != nil {
-		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid task_id"))
+		return handleError(c, err)
 	}
 
 	var pg pagination.Params
@@ -71,10 +71,9 @@ func (h *CommentHandler) List(c echo.Context) error {
 
 // Create handles POST /tasks/:task_id/comments
 func (h *CommentHandler) Create(c echo.Context) error {
-	taskIDStr := c.Param("task_id")
-	taskID, err := uuid.Parse(taskIDStr)
+	taskID, err := resolveTaskID(c.Request().Context(), c.Param("task_id"), h.taskSvc)
 	if err != nil {
-		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid task_id"))
+		return handleError(c, err)
 	}
 
 	var req createCommentRequest

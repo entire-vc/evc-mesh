@@ -474,6 +474,21 @@ func (m *MockTaskRepository) Search(_ context.Context, _ uuid.UUID, filter repos
 	return pagination.NewPage(items, len(items), pg), nil
 }
 
+func (m *MockTaskRepository) ListOpenByRecurringScheduleID(_ context.Context, scheduleID, exceptTaskID uuid.UUID) ([]domain.Task, error) {
+	if m.errToReturn != nil {
+		return nil, m.errToReturn
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var result []domain.Task
+	for _, t := range m.items {
+		if t.RecurringScheduleID != nil && *t.RecurringScheduleID == scheduleID && t.ID != exceptTaskID {
+			result = append(result, *t)
+		}
+	}
+	return result, nil
+}
+
 // ---------------------------------------------------------------------------
 // MockTaskStatusRepository
 // ---------------------------------------------------------------------------
@@ -845,6 +860,20 @@ func (m *MockCommentRepository) ListByAuthor(_ context.Context, _ uuid.UUID, _ r
 
 func (m *MockCommentRepository) ListRecentByWorkspace(_ context.Context, _ uuid.UUID, _ repository.CommentViewFilter) ([]domain.CommentView, *time.Time, error) {
 	return []domain.CommentView{}, nil, m.errToReturn
+}
+
+func (m *MockCommentRepository) HasAnyComment(_ context.Context, taskID uuid.UUID) (bool, error) {
+	if m.errToReturn != nil {
+		return false, m.errToReturn
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, c := range m.items {
+		if c.TaskID == taskID {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // ---------------------------------------------------------------------------

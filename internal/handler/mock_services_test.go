@@ -500,6 +500,10 @@ func (m *MockTaskService) Search(ctx context.Context, workspaceID uuid.UUID, fil
 	return nil, nil
 }
 
+func (m *MockTaskService) SupersedeRecurringInstances(_ context.Context, _, _ uuid.UUID) error {
+	return nil
+}
+
 // MockAgentService implements service.AgentService for testing.
 type MockAgentService struct {
 	RegisterFunc          func(ctx context.Context, input service.RegisterAgentInput) (*service.RegisterAgentOutput, error)

@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -253,6 +254,29 @@ func isHexPrefix(s string) bool {
 	return true
 }
 
+// taskIDResolver is the minimal interface needed to resolve a short-ID prefix to a UUID.
+// Implemented by service.TaskService.
+type taskIDResolver interface {
+	GetByShortID(ctx context.Context, prefix string) (*domain.Task, error)
+}
+
+// resolveTaskID parses a task ID string as a full UUID or a 6–12 hex short-ID prefix.
+// If svc is non-nil and the string is a valid hex prefix, it looks up the full UUID via GetByShortID.
+// Returns apierror.BadRequest("invalid task_id") when the string is neither.
+func resolveTaskID(ctx context.Context, s string, svc taskIDResolver) (uuid.UUID, error) {
+	if id, err := uuid.Parse(s); err == nil {
+		return id, nil
+	}
+	if svc != nil && isHexPrefix(s) {
+		task, err := svc.GetByShortID(ctx, strings.ToLower(s))
+		if err != nil {
+			return uuid.Nil, err
+		}
+		return task.ID, nil
+	}
+	return uuid.Nil, apierror.BadRequest("invalid task_id")
+}
+
 // GetByID handles GET /tasks/:task_id
 // Falls back to short-ID lookup when task_id is a 6–12 char hex prefix rather than a full UUID.
 func (h *TaskHandler) GetByID(c echo.Context) error {
@@ -334,10 +358,9 @@ func (h *TaskHandler) SearchGlobal(c echo.Context) error {
 
 // Update handles PATCH /tasks/:task_id
 func (h *TaskHandler) Update(c echo.Context) error {
-	taskIDStr := c.Param("task_id")
-	taskID, err := uuid.Parse(taskIDStr)
+	taskID, err := resolveTaskID(c.Request().Context(), c.Param("task_id"), h.taskService)
 	if err != nil {
-		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid task_id"))
+		return handleError(c, err)
 	}
 
 	var req updateTaskRequest
@@ -401,10 +424,9 @@ func (h *TaskHandler) Update(c echo.Context) error {
 
 // Delete handles DELETE /tasks/:task_id
 func (h *TaskHandler) Delete(c echo.Context) error {
-	taskIDStr := c.Param("task_id")
-	taskID, err := uuid.Parse(taskIDStr)
+	taskID, err := resolveTaskID(c.Request().Context(), c.Param("task_id"), h.taskService)
 	if err != nil {
-		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid task_id"))
+		return handleError(c, err)
 	}
 
 	if err := h.taskService.Delete(c.Request().Context(), taskID); err != nil {
@@ -562,10 +584,9 @@ func parseCustomFieldFilters(c echo.Context) map[string]repository.CustomFieldFi
 
 // MoveTask handles POST /tasks/:task_id/move
 func (h *TaskHandler) MoveTask(c echo.Context) error {
-	taskIDStr := c.Param("task_id")
-	taskID, err := uuid.Parse(taskIDStr)
+	taskID, err := resolveTaskID(c.Request().Context(), c.Param("task_id"), h.taskService)
 	if err != nil {
-		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid task_id"))
+		return handleError(c, err)
 	}
 
 	var req moveTaskRequest
@@ -593,10 +614,9 @@ func (h *TaskHandler) MoveTask(c echo.Context) error {
 
 // ListSubtasks handles GET /tasks/:task_id/subtasks
 func (h *TaskHandler) ListSubtasks(c echo.Context) error {
-	taskIDStr := c.Param("task_id")
-	taskID, err := uuid.Parse(taskIDStr)
+	taskID, err := resolveTaskID(c.Request().Context(), c.Param("task_id"), h.taskService)
 	if err != nil {
-		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid task_id"))
+		return handleError(c, err)
 	}
 
 	subtasks, err := h.taskService.ListSubtasks(c.Request().Context(), taskID)
@@ -615,10 +635,9 @@ type assignTaskRequest struct {
 
 // AssignTask handles POST /tasks/:task_id/assign
 func (h *TaskHandler) AssignTask(c echo.Context) error {
-	taskIDStr := c.Param("task_id")
-	taskID, err := uuid.Parse(taskIDStr)
+	taskID, err := resolveTaskID(c.Request().Context(), c.Param("task_id"), h.taskService)
 	if err != nil {
-		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid task_id"))
+		return handleError(c, err)
 	}
 
 	var req assignTaskRequest
@@ -662,10 +681,9 @@ type createSubtaskRequest struct {
 
 // CreateSubtask handles POST /tasks/:task_id/subtasks
 func (h *TaskHandler) CreateSubtask(c echo.Context) error {
-	parentTaskIDStr := c.Param("task_id")
-	parentTaskID, err := uuid.Parse(parentTaskIDStr)
+	parentTaskID, err := resolveTaskID(c.Request().Context(), c.Param("task_id"), h.taskService)
 	if err != nil {
-		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid task_id"))
+		return handleError(c, err)
 	}
 
 	var req createSubtaskRequest
@@ -790,9 +808,9 @@ type extendCheckoutRequest struct {
 
 // Checkout handles POST /tasks/:task_id/checkout
 func (h *TaskHandler) Checkout(c echo.Context) error {
-	taskID, err := uuid.Parse(c.Param("task_id"))
+	taskID, err := resolveTaskID(c.Request().Context(), c.Param("task_id"), h.taskService)
 	if err != nil {
-		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid task_id"))
+		return handleError(c, err)
 	}
 
 	var req checkoutRequest
@@ -842,9 +860,9 @@ func (h *TaskHandler) Checkout(c echo.Context) error {
 // be authenticated. Stricter RBAC (workspace.admin) is not enforced here yet
 // — see admin-RBAC TODO in the design doc.
 func (h *TaskHandler) ReleaseCheckout(c echo.Context) error {
-	taskID, err := uuid.Parse(c.Param("task_id"))
+	taskID, err := resolveTaskID(c.Request().Context(), c.Param("task_id"), h.taskService)
 	if err != nil {
-		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid task_id"))
+		return handleError(c, err)
 	}
 
 	if c.QueryParam("force") == "true" {
@@ -882,9 +900,9 @@ func (h *TaskHandler) ReleaseCheckout(c echo.Context) error {
 
 // ExtendCheckout handles PATCH /tasks/:task_id/checkout
 func (h *TaskHandler) ExtendCheckout(c echo.Context) error {
-	taskID, err := uuid.Parse(c.Param("task_id"))
+	taskID, err := resolveTaskID(c.Request().Context(), c.Param("task_id"), h.taskService)
 	if err != nil {
-		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid task_id"))
+		return handleError(c, err)
 	}
 
 	var req extendCheckoutRequest
@@ -916,10 +934,9 @@ type moveToProjectRequest struct {
 
 // MoveToProject handles POST /tasks/:task_id/move-to-project
 func (h *TaskHandler) MoveToProject(c echo.Context) error {
-	taskIDStr := c.Param("task_id")
-	taskID, err := uuid.Parse(taskIDStr)
+	taskID, err := resolveTaskID(c.Request().Context(), c.Param("task_id"), h.taskService)
 	if err != nil {
-		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid task_id"))
+		return handleError(c, err)
 	}
 
 	var req moveToProjectRequest
@@ -986,10 +1003,9 @@ func (h *TaskHandler) GetCostSummary(c echo.Context) error {
 		return c.JSON(http.StatusNotImplemented, apierror.InternalError("session tracking not configured"))
 	}
 
-	taskIDStr := c.Param("task_id")
-	taskID, err := uuid.Parse(taskIDStr)
+	taskID, err := resolveTaskID(c.Request().Context(), c.Param("task_id"), h.taskService)
 	if err != nil {
-		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid task_id"))
+		return handleError(c, err)
 	}
 
 	ctx := c.Request().Context()
@@ -1019,6 +1035,14 @@ type ruleViolationAPIResponse struct {
 
 // handleError inspects the error type and returns appropriate JSON response.
 func handleError(c echo.Context, err error) error {
+	var evidenceErr *service.ReviewEvidenceError
+	if errors.As(err, &evidenceErr) {
+		return c.JSON(http.StatusUnprocessableEntity, map[string]any{
+			"code":    "review_evidence_required",
+			"message": "Task cannot be moved to review without evidence. Add at least one of: a PR/VCS link (use add_dependency or the vcs field), an artifact upload, or a comment with command output/proof (see §1c). To flag a human blocker, add a ❓ Blocking @pavel comment first, then retry move→review.",
+		})
+	}
+
 	var ruleErr *service.RuleViolationError
 	if errors.As(err, &ruleErr) {
 		return c.JSON(http.StatusUnprocessableEntity, ruleViolationAPIResponse{

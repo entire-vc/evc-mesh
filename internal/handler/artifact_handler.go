@@ -19,19 +19,19 @@ import (
 // ArtifactHandler handles HTTP requests for artifact management.
 type ArtifactHandler struct {
 	artifactService service.ArtifactService
+	taskSvc         taskIDResolver
 }
 
 // NewArtifactHandler creates a new ArtifactHandler with the given service.
-func NewArtifactHandler(as service.ArtifactService) *ArtifactHandler {
-	return &ArtifactHandler{artifactService: as}
+func NewArtifactHandler(as service.ArtifactService, ts taskIDResolver) *ArtifactHandler {
+	return &ArtifactHandler{artifactService: as, taskSvc: ts}
 }
 
 // List handles GET /tasks/:task_id/artifacts
 func (h *ArtifactHandler) List(c echo.Context) error {
-	taskIDStr := c.Param("task_id")
-	taskID, err := uuid.Parse(taskIDStr)
+	taskID, err := resolveTaskID(c.Request().Context(), c.Param("task_id"), h.taskSvc)
 	if err != nil {
-		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid task_id"))
+		return handleError(c, err)
 	}
 
 	var pg pagination.Params
@@ -53,10 +53,9 @@ func (h *ArtifactHandler) List(c echo.Context) error {
 
 // Upload handles POST /tasks/:task_id/artifacts (multipart form)
 func (h *ArtifactHandler) Upload(c echo.Context) error {
-	taskIDStr := c.Param("task_id")
-	taskID, err := uuid.Parse(taskIDStr)
+	taskID, err := resolveTaskID(c.Request().Context(), c.Param("task_id"), h.taskSvc)
 	if err != nil {
-		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid task_id"))
+		return handleError(c, err)
 	}
 
 	// Read multipart form fields.

@@ -567,7 +567,8 @@ func (s *recurringService) runOneSchedule(ctx context.Context, schedule *domain.
 	}
 
 	// Create the task instance.
-	if _, err := s.createInstance(ctx, schedule, runAt); err != nil {
+	newTask, err := s.createInstance(ctx, schedule, runAt)
+	if err != nil {
 		// Capture the failure count before RecordFailure so the quarantine threshold
 		// check uses the pre-DB-write value (RecordFailure increments the DB column;
 		// in tests the mock may mutate the struct in-place through the pointer).
@@ -600,6 +601,12 @@ func (s *recurringService) runOneSchedule(ctx context.Context, schedule *domain.
 		if rfErr := s.recurringRepo.ResetConsecutiveFailures(ctx, schedule.ID); rfErr != nil {
 			log.Printf("[recurring] WARNING: ResetConsecutiveFailures for schedule %s: %v", schedule.ID, rfErr)
 		}
+	}
+
+	// Supersede any previous open instances of this schedule so they don't pile up
+	// in review/in-progress waiting for an agent that will never pick them up again.
+	if superErr := s.taskSvc.SupersedeRecurringInstances(ctx, schedule.ID, newTask.ID); superErr != nil {
+		log.Printf("[recurring] WARNING: SupersedeRecurringInstances for schedule %s: %v", schedule.ID, superErr)
 	}
 
 	// Atomically update instance_count, last_triggered_at, next_run_at.
@@ -665,14 +672,24 @@ func (s *recurringService) createInstance(ctx context.Context, schedule *domain.
 		statusID = defaultStatus.ID
 	}
 
+	assigneeID := schedule.AssigneeID
+	assigneeType := schedule.AssigneeType
+	// Recurring instances must not be assigned to human users — they belong to
+	// agents. Strip the user assignee so the instance is left unassigned and
+	// gets picked up by the normal agent dispatch flow.
+	if assigneeType == domain.AssigneeTypeUser {
+		assigneeID = nil
+		assigneeType = domain.AssigneeTypeUnassigned
+	}
+
 	task := &domain.Task{
 		ID:                      uuid.New(),
 		ProjectID:               schedule.ProjectID,
 		StatusID:                statusID,
 		Title:                   title,
 		Description:             description,
-		AssigneeID:              schedule.AssigneeID,
-		AssigneeType:            schedule.AssigneeType,
+		AssigneeID:              assigneeID,
+		AssigneeType:            assigneeType,
 		Priority:                schedule.Priority,
 		Labels:                  schedule.Labels,
 		CreatedBy:               schedule.CreatedBy,

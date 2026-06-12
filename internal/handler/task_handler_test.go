@@ -1175,3 +1175,113 @@ func TestTaskHandler_Checkout_409_FallbackNameAndZeroExpiry(t *testing.T) {
 	assert.Equal(t, float64(0), expiresIn, "expires_in_seconds must be 0 for expired locks (not negative)")
 	assert.Nil(t, details["acquired_at"], "acquired_at must be absent when AcquiredAt is nil")
 }
+
+func TestTaskHandler_MoveTask_ShortID(t *testing.T) {
+	taskID := uuid.New()
+	shortID := taskID.String()[:8] // first 8 hex chars
+	statusID := uuid.New()
+	moved := false
+
+	mockSvc := &MockTaskService{
+		GetByShortIDFunc: func(ctx context.Context, prefix string) (*domain.Task, error) {
+			assert.Equal(t, shortID, prefix)
+			return &domain.Task{ID: taskID}, nil
+		},
+		MoveTaskFunc: func(_ context.Context, id uuid.UUID, _ service.MoveTaskInput) error {
+			assert.Equal(t, taskID, id)
+			moved = true
+			return nil
+		},
+	}
+
+	h, e := setupTaskTest(mockSvc)
+	body := `{"status_id":"` + statusID.String() + `"}`
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetParamNames("task_id")
+	c.SetParamValues(shortID)
+
+	require.NoError(t, h.MoveTask(c))
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.True(t, moved)
+}
+
+func TestTaskHandler_AssignTask_ShortID(t *testing.T) {
+	taskID := uuid.New()
+	shortID := taskID.String()[:8]
+	agentID := uuid.New()
+	assigned := false
+
+	mockSvc := &MockTaskService{
+		GetByShortIDFunc: func(ctx context.Context, prefix string) (*domain.Task, error) {
+			assert.Equal(t, shortID, prefix)
+			return &domain.Task{ID: taskID}, nil
+		},
+		AssignTaskFunc: func(_ context.Context, id uuid.UUID, _ service.AssignTaskInput) error {
+			assert.Equal(t, taskID, id)
+			assigned = true
+			return nil
+		},
+		GetByIDFunc: func(_ context.Context, id uuid.UUID) (*domain.Task, error) {
+			return &domain.Task{ID: taskID}, nil
+		},
+	}
+
+	h, e := setupTaskTest(mockSvc)
+	body := `{"assignee_id":"` + agentID.String() + `","assignee_type":"agent"}`
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetParamNames("task_id")
+	c.SetParamValues(shortID)
+
+	require.NoError(t, h.AssignTask(c))
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.True(t, assigned)
+}
+
+func TestTaskHandler_MoveTask_FullUUID_StillWorks(t *testing.T) {
+	taskID := uuid.New()
+	statusID := uuid.New()
+	moved := false
+
+	mockSvc := &MockTaskService{
+		MoveTaskFunc: func(_ context.Context, id uuid.UUID, _ service.MoveTaskInput) error {
+			assert.Equal(t, taskID, id)
+			moved = true
+			return nil
+		},
+	}
+
+	h, e := setupTaskTest(mockSvc)
+	body := `{"status_id":"` + statusID.String() + `"}`
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetParamNames("task_id")
+	c.SetParamValues(taskID.String())
+
+	require.NoError(t, h.MoveTask(c))
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.True(t, moved)
+}
+
+func TestTaskHandler_MoveTask_InvalidID_Returns400(t *testing.T) {
+	mockSvc := &MockTaskService{}
+	h, e := setupTaskTest(mockSvc)
+
+	body := `{"status_id":"` + uuid.New().String() + `"}`
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetParamNames("task_id")
+	c.SetParamValues("not-a-uuid-or-hex")
+
+	require.NoError(t, h.MoveTask(c))
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+}

@@ -267,6 +267,10 @@ func (s *StubTaskService) Search(_ context.Context, _ uuid.UUID, _ repository.Ta
 	panic("StubTaskService.Search not implemented")
 }
 
+func (s *StubTaskService) SupersedeRecurringInstances(_ context.Context, _, _ uuid.UUID) error {
+	return nil
+}
+
 var _ TaskService = (*StubTaskService)(nil)
 
 // ---------------------------------------------------------------------------
@@ -663,5 +667,150 @@ func TestRunOneSchedule_CatchUpExactlyOneInstance(t *testing.T) {
 	taskSvc.mu.Unlock()
 	if n != 1 {
 		t.Fatalf("expected 1 task created (not 72), got %d", n)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Fix 2 — createInstance strips user assignee
+// ---------------------------------------------------------------------------
+
+func newMinimalSchedule() *domain.RecurringSchedule {
+	nr := time.Now().Add(-time.Minute)
+	return &domain.RecurringSchedule{
+		ID:            uuid.New(),
+		ProjectID:     uuid.New(),
+		WorkspaceID:   uuid.New(),
+		TitleTemplate: "Task {{.Number}}",
+		Frequency:     domain.RecurringFrequencyCustom,
+		CronExpr:      "0 9 * * *",
+		Timezone:      "UTC",
+		AssigneeType:  domain.AssigneeTypeUnassigned,
+		Priority:      domain.PriorityMedium,
+		Labels:        pq.StringArray{},
+		IsActive:      true,
+		StartsAt:      time.Now().Add(-time.Hour),
+		NextRunAt:     &nr,
+		InstanceCount: 0,
+		CreatedBy:     uuid.New(),
+		CreatedByType: domain.ActorTypeUser,
+		CreatedAt:     time.Now(),
+		UpdatedAt:     time.Now(),
+	}
+}
+
+func TestCreateInstance_StripsUserAssignee(t *testing.T) {
+	userID := uuid.New()
+	schedule := newMinimalSchedule()
+	schedule.AssigneeID = &userID
+	schedule.AssigneeType = domain.AssigneeTypeUser
+
+	repo := NewMockRecurringRepository()
+	_ = repo.Create(context.Background(), schedule)
+
+	taskSvc := NewStubTaskService()
+	svc := NewRecurringService(repo, taskSvc).(*recurringService)
+
+	_, err := svc.createInstance(context.Background(), schedule, time.Now())
+	if err != nil {
+		t.Fatalf("createInstance failed: %v", err)
+	}
+
+	taskSvc.mu.Lock()
+	defer taskSvc.mu.Unlock()
+	if len(taskSvc.created) != 1 {
+		t.Fatalf("expected 1 task, got %d", len(taskSvc.created))
+	}
+	task := taskSvc.created[0]
+	if task.AssigneeType != domain.AssigneeTypeUnassigned {
+		t.Errorf("AssigneeType = %q, want %q", task.AssigneeType, domain.AssigneeTypeUnassigned)
+	}
+	if task.AssigneeID != nil {
+		t.Errorf("AssigneeID = %v, want nil", task.AssigneeID)
+	}
+}
+
+func TestCreateInstance_PreservesAgentAssignee(t *testing.T) {
+	agentID := uuid.New()
+	schedule := newMinimalSchedule()
+	schedule.AssigneeID = &agentID
+	schedule.AssigneeType = domain.AssigneeTypeAgent
+
+	repo := NewMockRecurringRepository()
+	_ = repo.Create(context.Background(), schedule)
+
+	taskSvc := NewStubTaskService()
+	svc := NewRecurringService(repo, taskSvc).(*recurringService)
+
+	_, err := svc.createInstance(context.Background(), schedule, time.Now())
+	if err != nil {
+		t.Fatalf("createInstance failed: %v", err)
+	}
+
+	taskSvc.mu.Lock()
+	defer taskSvc.mu.Unlock()
+	task := taskSvc.created[0]
+	if task.AssigneeType != domain.AssigneeTypeAgent {
+		t.Errorf("AssigneeType = %q, want agent", task.AssigneeType)
+	}
+	if task.AssigneeID == nil || *task.AssigneeID != agentID {
+		t.Errorf("AssigneeID = %v, want %v", task.AssigneeID, agentID)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Fix 1 — runOneSchedule calls SupersedeRecurringInstances
+// ---------------------------------------------------------------------------
+
+// spyTaskService wraps StubTaskService and records SupersedeRecurringInstances calls.
+type spyTaskService struct {
+	*StubTaskService
+	mu             sync.Mutex
+	supersedeCalls []struct{ scheduleID, newTaskID uuid.UUID }
+}
+
+func newSpyTaskService() *spyTaskService {
+	return &spyTaskService{StubTaskService: NewStubTaskService()}
+}
+
+func (s *spyTaskService) SupersedeRecurringInstances(_ context.Context, scheduleID, newTaskID uuid.UUID) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.supersedeCalls = append(s.supersedeCalls, struct{ scheduleID, newTaskID uuid.UUID }{scheduleID, newTaskID})
+	return nil
+}
+
+func TestRunOneSchedule_CallsSupersede(t *testing.T) {
+	schedule := newMinimalSchedule()
+
+	repo := NewMockRecurringRepository()
+	_ = repo.Create(context.Background(), schedule)
+
+	spy := newSpyTaskService()
+	svc := NewRecurringService(repo, spy).(*recurringService)
+
+	created, err := svc.runOneSchedule(context.Background(), schedule)
+	if err != nil {
+		t.Fatalf("runOneSchedule failed: %v", err)
+	}
+	if !created {
+		t.Fatal("expected instance created")
+	}
+
+	spy.mu.Lock()
+	calls := spy.supersedeCalls
+	spy.mu.Unlock()
+
+	if len(calls) != 1 {
+		t.Fatalf("SupersedeRecurringInstances called %d times, want 1", len(calls))
+	}
+	if calls[0].scheduleID != schedule.ID {
+		t.Errorf("supersede scheduleID = %v, want %v", calls[0].scheduleID, schedule.ID)
+	}
+	// The newTaskID must match the task that was just created.
+	spy.StubTaskService.mu.Lock()
+	createdTask := spy.created[0]
+	spy.StubTaskService.mu.Unlock()
+	if calls[0].newTaskID != createdTask.ID {
+		t.Errorf("supersede newTaskID = %v, want %v", calls[0].newTaskID, createdTask.ID)
 	}
 }

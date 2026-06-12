@@ -148,6 +148,10 @@ type TaskService interface {
 	// target project's default and recalculating task_number atomically.
 	// Returns an error if the task is already in the target project.
 	MoveToProject(ctx context.Context, taskID, targetProjectID uuid.UUID) (*domain.Task, error)
+	// SupersedeRecurringInstances closes all non-terminal instances of the given
+	// recurring schedule (except newTaskID) by moving them to the project's done status.
+	// Individual failures are logged and skipped to avoid blocking the new instance.
+	SupersedeRecurringInstances(ctx context.Context, scheduleID, newTaskID uuid.UUID) error
 }
 
 // TaskServiceAutoTransitionConfigurable extends TaskService with the ability

@@ -236,6 +236,7 @@ func main() {
 		service.WithProjectMemberRepoTask(projectMemberRepo),
 		service.WithTaskAgentRepo(agentRepo),
 		service.WithUserRepoTask(userRepo),
+		service.WithCommentRepoTask(commentRepo), // enables review-evidence gate
 	)
 
 	// Wire auto-transition service. It calls taskService.MoveTask, so taskService must already
@@ -365,8 +366,8 @@ func main() {
 	sessionRepo := postgres.NewSessionRepo(db)
 	taskHandler := handler.NewTaskHandlerWithSessions(taskService, sessionRepo)
 	statusHandler := handler.NewTaskStatusHandler(taskStatusService)
-	commentHandler := handler.NewCommentHandler(commentService)
-	artifactHandler := handler.NewArtifactHandler(artifactService)
+	commentHandler := handler.NewCommentHandler(commentService, taskService)
+	artifactHandler := handler.NewArtifactHandler(artifactService, taskService)
 	depHandler := handler.NewDependencyHandler(depService, taskService)
 	agentHandler := handler.NewAgentHandlerWithEvents(agentService, taskService, taskStatusService, agentNotifyRedis, agentEventsRepo, sessionRepo)
 	eventHandler := handler.NewEventHandler(eventBusService)
