@@ -808,7 +808,7 @@ func TestRunOneSchedule_CallsSupersede(t *testing.T) {
 	}
 	// The newTaskID must match the task that was just created.
 	spy.StubTaskService.mu.Lock()
-	createdTask := spy.StubTaskService.created[0]
+	createdTask := spy.created[0]
 	spy.StubTaskService.mu.Unlock()
 	if calls[0].newTaskID != createdTask.ID {
 		t.Errorf("supersede newTaskID = %v, want %v", calls[0].newTaskID, createdTask.ID)
