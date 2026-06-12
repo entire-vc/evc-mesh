@@ -116,6 +116,13 @@ func (s *autoTransitionService) CheckSubtaskCompletion(ctx context.Context, pare
 		return nil
 	}
 
+	// Supervised parent: skip auto-transition; a human must manually sign off.
+	// Parent stays in in_progress; no error is returned so the subtask's move succeeds.
+	if parent.DelegationLevel == domain.DelegationLevelSupervised {
+		log.Printf("[auto-transition] Parent task %s is supervised — skipping auto-move to review/done, requires human signoff", parentTaskID)
+		return nil
+	}
+
 	// 3. Get all subtasks.
 	subtasks, err := s.taskRepo.ListSubtasks(ctx, parentTaskID)
 	if err != nil {

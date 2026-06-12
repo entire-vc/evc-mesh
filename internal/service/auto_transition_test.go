@@ -652,3 +652,31 @@ func TestAutoTransition_WithExistingMocks_SubtaskStatusCheck(t *testing.T) {
 	result2 := allSubtasksDone(subtasks2, statusByID)
 	assert.False(t, result2, "not all subtasks done — no auto-transition should fire")
 }
+
+// TestAutoTransition_SupervisedParent_SkipsAutoMove verifies that when all subtasks
+// of a supervised parent complete, the parent is NOT auto-moved to review/done.
+func TestAutoTransition_SupervisedParent_SkipsAutoMove(t *testing.T) {
+	ctx := context.Background()
+	svc, taskRepo, statusRepo, _ := buildAutoTransitionFixture()
+
+	projectID := uuid.New()
+	inProgressStatus := seedStatus(statusRepo, projectID, domain.StatusCategoryInProgress, "in_progress")
+	doneStatus := seedStatus(statusRepo, projectID, domain.StatusCategoryDone, "done")
+	reviewStatus := seedStatus(statusRepo, projectID, domain.StatusCategoryReview, "review")
+	_ = reviewStatus
+
+	// Supervised parent in in_progress
+	parent := seedTask(taskRepo, projectID, inProgressStatus.ID, nil, "supervised parent")
+	parent.DelegationLevel = domain.DelegationLevelSupervised
+	taskRepo.items[parent.ID] = parent
+
+	// One subtask — done
+	_ = seedTask(taskRepo, projectID, doneStatus.ID, &parent.ID, "subtask 1")
+
+	err := svc.CheckSubtaskCompletion(ctx, parent.ID)
+	require.NoError(t, err)
+
+	// Parent must still be in in_progress (not moved to review)
+	updated := taskRepo.items[parent.ID]
+	assert.Equal(t, inProgressStatus.ID, updated.StatusID, "supervised parent must stay in in_progress")
+}

@@ -434,6 +434,21 @@ func (s *taskService) MoveTask(ctx context.Context, taskID uuid.UUID, input Move
 			return apierror.BadRequest("status does not belong to the same project as the task")
 		}
 
+		// Supervised signoff gate: only human actors (user) may move supervised tasks
+		// to terminal categories. Agents and system actors are blocked unconditionally.
+		if task.DelegationLevel == domain.DelegationLevelSupervised {
+			_, actorType := actorctx.FromContext(ctx)
+			if actorType != domain.ActorTypeUser {
+				switch status.Category {
+				case domain.StatusCategoryReview, domain.StatusCategoryDone, domain.StatusCategoryCancelled:
+					return apierror.ForbiddenWithDetails(
+						"supervised_requires_human_signoff",
+						"supervised tasks must be signed off by a human: only users may move to review/done/cancelled",
+					)
+				}
+			}
+		}
+
 		// Evaluate governance rules before applying the move.
 		if s.ruleSvc != nil {
 			if violations, evalErr := s.evaluateRulesForMove(ctx, task, status, input); evalErr != nil {
