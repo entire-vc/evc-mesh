@@ -14,7 +14,7 @@ import (
 // applyTransitionGate checks WorkflowRulesConfig.Transitions for the status move.
 // Returns enforcement mode and a violation message; empty violation = allowed.
 // If rulesConfigSvc is nil or config is empty, returns advisory + no violation (allow-all).
-func (s *taskService) applyTransitionGate(ctx context.Context, task *domain.Task, oldStatusID uuid.UUID, newStatus *domain.TaskStatus) (string, string) {
+func (s *taskService) applyTransitionGate(ctx context.Context, task *domain.Task, oldStatusID uuid.UUID, newStatus *domain.TaskStatus) (enfMode, violation string) {
 	if s.rulesConfigSvc == nil {
 		return domain.RuleConfigEnforcementAdvisory, ""
 	}
