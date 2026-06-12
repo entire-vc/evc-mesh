@@ -14,6 +14,7 @@ import (
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/repository"
+	"github.com/entire-vc/evc-mesh/pkg/actorctx"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 	"github.com/entire-vc/evc-mesh/pkg/pagination"
 )
@@ -323,6 +324,123 @@ func TestTaskService_MoveTask(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestTaskService_MoveTask_SupervisedGate verifies the supervised delegation gate:
+// agent/system actors cannot move supervised tasks to review/done/cancelled.
+func TestTaskService_MoveTask_SupervisedGate(t *testing.T) {
+	projectID := uuid.New()
+
+	makeSupervised := func(taskRepo *MockTaskRepository, statusRepo *MockTaskStatusRepository, cat domain.StatusCategory) (uuid.UUID, uuid.UUID) {
+		taskID := uuid.New()
+		statusID := uuid.New()
+		taskRepo.items[taskID] = &domain.Task{
+			ID: taskID, ProjectID: projectID,
+			StatusID: uuid.New(), Title: "supervised task",
+			DelegationLevel: domain.DelegationLevelSupervised,
+		}
+		statusRepo.items[statusID] = &domain.TaskStatus{ID: statusID, ProjectID: projectID, Category: cat}
+		return taskID, statusID
+	}
+
+	t.Run("agent move→review blocked 403", func(t *testing.T) {
+		svc, taskRepo, statusRepo := setupTaskService()
+		taskID, statusID := makeSupervised(taskRepo, statusRepo, domain.StatusCategoryReview)
+		ctx := actorctx.WithActor(context.Background(), uuid.New(), domain.ActorTypeAgent)
+		err := svc.MoveTask(ctx, taskID, MoveTaskInput{StatusID: &statusID})
+		require.Error(t, err)
+		var apiErr *apierror.Error
+		require.ErrorAs(t, err, &apiErr)
+		assert.Equal(t, http.StatusForbidden, apiErr.Code)
+		assert.Equal(t, "supervised_requires_human_signoff", apiErr.Message)
+	})
+
+	t.Run("agent move→done blocked 403", func(t *testing.T) {
+		svc, taskRepo, statusRepo := setupTaskService()
+		taskID, statusID := makeSupervised(taskRepo, statusRepo, domain.StatusCategoryDone)
+		ctx := actorctx.WithActor(context.Background(), uuid.New(), domain.ActorTypeAgent)
+		err := svc.MoveTask(ctx, taskID, MoveTaskInput{StatusID: &statusID})
+		require.Error(t, err)
+		var apiErr *apierror.Error
+		require.ErrorAs(t, err, &apiErr)
+		assert.Equal(t, http.StatusForbidden, apiErr.Code)
+	})
+
+	t.Run("agent move→cancelled blocked 403", func(t *testing.T) {
+		svc, taskRepo, statusRepo := setupTaskService()
+		taskID, statusID := makeSupervised(taskRepo, statusRepo, domain.StatusCategoryCancelled)
+		ctx := actorctx.WithActor(context.Background(), uuid.New(), domain.ActorTypeAgent)
+		err := svc.MoveTask(ctx, taskID, MoveTaskInput{StatusID: &statusID})
+		require.Error(t, err)
+		var apiErr *apierror.Error
+		require.ErrorAs(t, err, &apiErr)
+		assert.Equal(t, http.StatusForbidden, apiErr.Code)
+	})
+
+	t.Run("user move→review allowed", func(t *testing.T) {
+		svc, taskRepo, statusRepo := setupTaskService()
+		taskID, statusID := makeSupervised(taskRepo, statusRepo, domain.StatusCategoryReview)
+		ctx := actorctx.WithActor(context.Background(), uuid.New(), domain.ActorTypeUser)
+		err := svc.MoveTask(ctx, taskID, MoveTaskInput{StatusID: &statusID})
+		require.NoError(t, err)
+	})
+
+	t.Run("user move→done allowed", func(t *testing.T) {
+		svc, taskRepo, statusRepo := setupTaskService()
+		taskID, statusID := makeSupervised(taskRepo, statusRepo, domain.StatusCategoryDone)
+		ctx := actorctx.WithActor(context.Background(), uuid.New(), domain.ActorTypeUser)
+		err := svc.MoveTask(ctx, taskID, MoveTaskInput{StatusID: &statusID})
+		require.NoError(t, err)
+	})
+
+	t.Run("agent move→in_progress allowed (non-terminal)", func(t *testing.T) {
+		svc, taskRepo, statusRepo := setupTaskService()
+		taskID, statusID := makeSupervised(taskRepo, statusRepo, domain.StatusCategoryInProgress)
+		ctx := actorctx.WithActor(context.Background(), uuid.New(), domain.ActorTypeAgent)
+		err := svc.MoveTask(ctx, taskID, MoveTaskInput{StatusID: &statusID})
+		require.NoError(t, err)
+	})
+
+	t.Run("delegation=auto, agent move→done allowed (regression)", func(t *testing.T) {
+		svc, taskRepo, statusRepo := setupTaskService()
+		taskID := uuid.New()
+		statusID := uuid.New()
+		taskRepo.items[taskID] = &domain.Task{
+			ID: taskID, ProjectID: projectID,
+			StatusID: uuid.New(), Title: "auto task",
+			DelegationLevel: domain.DelegationLevelAuto,
+		}
+		statusRepo.items[statusID] = &domain.TaskStatus{ID: statusID, ProjectID: projectID, Category: domain.StatusCategoryDone}
+		ctx := actorctx.WithActor(context.Background(), uuid.New(), domain.ActorTypeAgent)
+		err := svc.MoveTask(ctx, taskID, MoveTaskInput{StatusID: &statusID})
+		require.NoError(t, err)
+	})
+
+	t.Run("delegation=review, agent move→done allowed (regression)", func(t *testing.T) {
+		svc, taskRepo, statusRepo := setupTaskService()
+		taskID := uuid.New()
+		statusID := uuid.New()
+		taskRepo.items[taskID] = &domain.Task{
+			ID: taskID, ProjectID: projectID,
+			StatusID: uuid.New(), Title: "review-level task",
+			DelegationLevel: domain.DelegationLevelReview,
+		}
+		statusRepo.items[statusID] = &domain.TaskStatus{ID: statusID, ProjectID: projectID, Category: domain.StatusCategoryDone}
+		ctx := actorctx.WithActor(context.Background(), uuid.New(), domain.ActorTypeAgent)
+		err := svc.MoveTask(ctx, taskID, MoveTaskInput{StatusID: &statusID})
+		require.NoError(t, err)
+	})
+
+	t.Run("no actor in context (auto_transition case), supervised→review blocked", func(t *testing.T) {
+		svc, taskRepo, statusRepo := setupTaskService()
+		taskID, statusID := makeSupervised(taskRepo, statusRepo, domain.StatusCategoryReview)
+		// Empty context = actorType "" ≠ "user" → gate fires
+		err := svc.MoveTask(context.Background(), taskID, MoveTaskInput{StatusID: &statusID})
+		require.Error(t, err)
+		var apiErr *apierror.Error
+		require.ErrorAs(t, err, &apiErr)
+		assert.Equal(t, http.StatusForbidden, apiErr.Code)
+	})
 }
 
 // ---------------------------------------------------------------------------
