@@ -570,9 +570,10 @@ func computeAgentPermissions(agent *domain.Agent, cfg domain.WorkflowRulesConfig
 	}
 
 	// Check each status transition for this agent.
+	// AllowedActors restricts by actor type ("agent", "user", "system", "*").
+	// Empty AllowedActors = allow-all, consistent with the enforcement gate.
 	for status, transition := range cfg.Transitions {
-		allowed := isActorAllowed(agent, transition.Allowed)
-		perms.CanTransition[status] = allowed
+		perms.CanTransition[status] = isAgentAllowedByActors(transition.AllowedActors)
 	}
 
 	// Check policies.
@@ -589,6 +590,21 @@ func computeAgentPermissions(agent *domain.Agent, cfg domain.WorkflowRulesConfig
 	}
 
 	return perms
+}
+
+// isAgentAllowedByActors reports whether an agent-type actor is permitted by AllowedActors.
+// Empty slice means allow-all (no restriction), consistent with the enforcement gate.
+// Supported patterns: "*" (any actor type), "agent", "user", "system".
+func isAgentAllowedByActors(allowedActors []string) bool {
+	if len(allowedActors) == 0 {
+		return true
+	}
+	for _, p := range allowedActors {
+		if p == "*" || p == string(domain.ActorTypeAgent) {
+			return true
+		}
+	}
+	return false
 }
 
 // isActorAllowed checks if an agent matches any of the allowed actor patterns.
