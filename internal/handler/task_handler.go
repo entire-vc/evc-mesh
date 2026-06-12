@@ -1043,6 +1043,14 @@ func handleError(c echo.Context, err error) error {
 		})
 	}
 
+	var doneEvidenceErr *service.DoneEvidenceError
+	if errors.As(err, &doneEvidenceErr) {
+		return c.JSON(http.StatusUnprocessableEntity, map[string]any{
+			"code":    "done_evidence_required",
+			"message": doneEvidenceErr.Error(),
+		})
+	}
+
 	var ruleErr *service.RuleViolationError
 	if errors.As(err, &ruleErr) {
 		return c.JSON(http.StatusUnprocessableEntity, ruleViolationAPIResponse{

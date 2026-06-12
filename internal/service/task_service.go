@@ -33,6 +33,7 @@ type taskService struct {
 	agentRepo         repository.AgentRepository
 	userRepo          repository.UserRepository
 	commentRepo       repository.CommentRepository
+	vcsLinkRepo       repository.VCSLinkRepository
 	autoTransSvc      AutoTransitionService
 	ruleSvc           RuleService
 	rulesConfigSvc    RulesService
@@ -174,6 +175,13 @@ func WithUserRepoTask(ur repository.UserRepository) TaskServiceOption {
 // VCS link, or comment. Skipped (fails open) if not wired.
 func WithCommentRepoTask(cr repository.CommentRepository) TaskServiceOption {
 	return func(s *taskService) { s.commentRepo = cr }
+}
+
+// WithVCSLinkRepoTask enables the done-evidence gate in MoveTask.
+// When set, moving a task to done is blocked if a linked PR is not yet merged.
+// Skipped (fails open) if not wired.
+func WithVCSLinkRepoTask(vr repository.VCSLinkRepository) TaskServiceOption {
+	return func(s *taskService) { s.vcsLinkRepo = vr }
 }
 
 // SetAutoTransitionService implements TaskServiceAutoTransitionConfigurable,
@@ -481,6 +489,32 @@ func (s *taskService) MoveTask(ctx context.Context, taskID uuid.UUID, input Move
 			if task.ArtifactCount == 0 && task.VCSLinkCount == 0 {
 				if hasComment, gateErr := s.commentRepo.HasAnyComment(ctx, taskID); gateErr == nil && !hasComment {
 					return &ReviewEvidenceError{}
+				}
+			}
+		}
+
+		// Done-evidence gate: block moves to done when a linked PR is not yet merged,
+		// or when the task has no evidence at all (no VCS links, no artifact, no comment).
+		// System actors (auto_transition) are exempt; gate fails open if vcsLinkRepo is not wired.
+		if status.Category == domain.StatusCategoryDone && s.vcsLinkRepo != nil {
+			_, actorType := actorctx.FromContext(ctx)
+			if actorType != domain.ActorTypeSystem {
+				if task.VCSLinkCount > 0 {
+					links, linksErr := s.vcsLinkRepo.ListByTask(ctx, taskID)
+					if linksErr == nil {
+						for _, l := range links {
+							if l.LinkType == domain.VCSLinkTypePR && l.Status != domain.VCSLinkStatusMerged && l.Status != domain.VCSLinkStatusClosed {
+								return &DoneEvidenceError{PRURL: l.URL, PRTitle: l.Title}
+							}
+						}
+					}
+				} else if s.commentRepo != nil {
+					// No VCS links: require artifact or at least one comment.
+					if task.ArtifactCount == 0 {
+						if hasComment, gateErr := s.commentRepo.HasAnyComment(ctx, taskID); gateErr == nil && !hasComment {
+							return &DoneEvidenceError{}
+						}
+					}
 				}
 			}
 		}
@@ -1112,6 +1146,25 @@ type ReviewEvidenceError struct{}
 
 func (e *ReviewEvidenceError) Error() string {
 	return "review requires evidence: add a PR/VCS link, artifact upload, or comment with proof before moving to review"
+}
+
+// DoneEvidenceError is returned when a task is moved to done but evidence is
+// missing or a linked PR has not been merged (or explicitly closed) yet.
+type DoneEvidenceError struct {
+	// PRURL and PRTitle are set when a specific unmerged PR triggered the block.
+	PRURL   string
+	PRTitle string
+}
+
+func (e *DoneEvidenceError) Error() string {
+	if e.PRURL != "" {
+		ref := e.PRTitle
+		if ref == "" {
+			ref = e.PRURL
+		}
+		return fmt.Sprintf("PR «%s» is not merged; merge it first or add a justification comment explaining why the PR is not needed", ref)
+	}
+	return "done requires evidence: add a PR/VCS link, artifact upload, or comment with proof before closing"
 }
 
 // evaluateRulesForMove evaluates governance rules before a MoveTask operation.
