@@ -18,7 +18,7 @@ import (
 
 func setupArtifactTest(mockSvc *MockArtifactService) (*ArtifactHandler, *echo.Echo) {
 	e := echo.New()
-	h := NewArtifactHandler(mockSvc)
+	h := NewArtifactHandler(mockSvc, nil)
 	return h, e
 }
 
