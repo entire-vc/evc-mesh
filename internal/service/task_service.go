@@ -336,6 +336,13 @@ func (s *taskService) Update(ctx context.Context, task *domain.Task) error {
 	if existing.EstimatedHours != task.EstimatedHours {
 		changes["estimated_hours"] = map[string]interface{}{"old": existing.EstimatedHours, "new": task.EstimatedHours}
 	}
+	delegationLevelChanged := existing.DelegationLevel != task.DelegationLevel
+	if delegationLevelChanged {
+		changes["delegation_level"] = map[string]interface{}{
+			"old": string(existing.DelegationLevel),
+			"new": string(task.DelegationLevel),
+		}
+	}
 	s.logActivity(ctx, task.ProjectID, task.ID, "task.updated", changes)
 
 	// Dispatch webhook for task.assigned when the assignee changes (agent wakeup pipeline).
@@ -354,6 +361,16 @@ func (s *taskService) Update(ctx context.Context, task *domain.Task) error {
 	if assigneeChanged {
 		s.notifyAssignedAgent(ctx, task, "task.assigned", map[string]any{
 			"assignee_id": map[string]any{"old": existing.AssigneeID, "new": task.AssigneeID},
+		})
+	}
+
+	// Notify assignee agent when delegation_level changes (e.g. task becomes supervised).
+	if delegationLevelChanged {
+		s.notifyAssignedAgent(ctx, task, "task.delegation_changed", map[string]any{
+			"delegation_level": map[string]any{
+				"old": string(existing.DelegationLevel),
+				"new": string(task.DelegationLevel),
+			},
 		})
 	}
 

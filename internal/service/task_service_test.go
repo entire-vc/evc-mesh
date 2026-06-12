@@ -1288,3 +1288,126 @@ func TestTaskService_List(t *testing.T) {
 		})
 	}
 }
+
+// ---------------------------------------------------------------------------
+// TestTaskService_Update_DelegationLevel*
+// ---------------------------------------------------------------------------
+
+// setupTaskServiceForDelegation returns a taskService wired with notify + project repo for Update delegation tests.
+func setupTaskServiceForDelegation() (*taskService, *MockTaskRepository, *MockActivityLogRepository, *MockAgentNotifyService, *MockProjectRepository) {
+	taskRepo := NewMockTaskRepository()
+	statusRepo := NewMockTaskStatusRepository()
+	depRepo := NewMockTaskDependencyRepository()
+	activityRepo := NewMockActivityLogRepository()
+	notifySvc := NewMockAgentNotifyService()
+	projRepo := NewMockProjectRepository()
+
+	svc := NewTaskService(taskRepo, statusRepo, depRepo, activityRepo,
+		WithAgentNotifyService(notifySvc),
+		WithProjectRepo(projRepo),
+	).(*taskService)
+	timeNow = func() time.Time { return frozenTime }
+	return svc, taskRepo, activityRepo, notifySvc, projRepo
+}
+
+func TestTaskService_Update_DelegationLevelLogged(t *testing.T) {
+	svc, taskRepo, activityRepo, _, projRepo := setupTaskServiceForDelegation()
+	ctx := context.Background()
+
+	projID := uuid.New()
+	wsID := uuid.New()
+	projRepo.items[projID] = &domain.Project{ID: projID, WorkspaceID: wsID}
+
+	taskID := uuid.New()
+	taskRepo.items[taskID] = &domain.Task{
+		ID: taskID, ProjectID: projID, Title: "T",
+		DelegationLevel: domain.DelegationLevelAuto,
+	}
+
+	err := svc.Update(ctx, &domain.Task{
+		ID: taskID, ProjectID: projID, Title: "T",
+		DelegationLevel: domain.DelegationLevelSupervised,
+	})
+	require.NoError(t, err)
+
+	activityRepo.mu.RLock()
+	var found *domain.ActivityLog
+	for _, entry := range activityRepo.items {
+		if entry.Action == "task.updated" {
+			found = entry
+			break
+		}
+	}
+	activityRepo.mu.RUnlock()
+
+	require.NotNil(t, found, "expected task.updated activity log entry")
+	assert.Contains(t, string(found.Changes), `"delegation_level"`)
+	assert.Contains(t, string(found.Changes), `"auto"`)
+	assert.Contains(t, string(found.Changes), `"supervised"`)
+}
+
+func TestTaskService_Update_DelegationLevelNotifiesAgent(t *testing.T) {
+	svc, taskRepo, _, notifySvc, projRepo := setupTaskServiceForDelegation()
+	ctx := context.Background()
+
+	projID := uuid.New()
+	wsID := uuid.New()
+	projRepo.items[projID] = &domain.Project{ID: projID, WorkspaceID: wsID}
+
+	agentID := uuid.New()
+	taskID := uuid.New()
+	taskRepo.items[taskID] = &domain.Task{
+		ID: taskID, ProjectID: projID, Title: "T",
+		DelegationLevel: domain.DelegationLevelAuto,
+		AssigneeID:      &agentID,
+		AssigneeType:    domain.AssigneeTypeAgent,
+	}
+
+	err := svc.Update(ctx, &domain.Task{
+		ID: taskID, ProjectID: projID, Title: "T",
+		DelegationLevel: domain.DelegationLevelSupervised,
+		AssigneeID:      &agentID,
+		AssigneeType:    domain.AssigneeTypeAgent,
+	})
+	require.NoError(t, err)
+
+	var found bool
+	for _, call := range notifySvc.Calls() {
+		if call.EventType == "task.delegation_changed" {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "expected task.delegation_changed notification to agent")
+}
+
+func TestTaskService_Update_DelegationLevelNoNotifyIfUnchanged(t *testing.T) {
+	svc, taskRepo, _, notifySvc, projRepo := setupTaskServiceForDelegation()
+	ctx := context.Background()
+
+	projID := uuid.New()
+	wsID := uuid.New()
+	projRepo.items[projID] = &domain.Project{ID: projID, WorkspaceID: wsID}
+
+	agentID := uuid.New()
+	taskID := uuid.New()
+	taskRepo.items[taskID] = &domain.Task{
+		ID: taskID, ProjectID: projID, Title: "T",
+		DelegationLevel: domain.DelegationLevelAuto,
+		AssigneeID:      &agentID,
+		AssigneeType:    domain.AssigneeTypeAgent,
+	}
+
+	err := svc.Update(ctx, &domain.Task{
+		ID: taskID, ProjectID: projID, Title: "T",
+		DelegationLevel: domain.DelegationLevelAuto,
+		AssigneeID:      &agentID,
+		AssigneeType:    domain.AssigneeTypeAgent,
+	})
+	require.NoError(t, err)
+
+	for _, call := range notifySvc.Calls() {
+		assert.NotEqual(t, "task.delegation_changed", call.EventType,
+			"must not notify task.delegation_changed when delegation_level is unchanged")
+	}
+}
