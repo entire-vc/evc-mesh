@@ -155,6 +155,9 @@ func (r *fakeTaskRepo) ReleaseExpiredCheckouts(context.Context) (int64, error) {
 func (r *fakeTaskRepo) ListByUserActive(context.Context, uuid.UUID, uuid.UUID, pagination.Params) (*pagination.Page[domain.Task], error) {
 	return nil, nil
 }
+func (r *fakeTaskRepo) ListOpenByRecurringScheduleID(context.Context, uuid.UUID, uuid.UUID) ([]domain.Task, error) {
+	return nil, nil
+}
 
 // fakeStatusRepo holds task_status rows per project.
 type fakeStatusRepo struct {
@@ -269,6 +272,9 @@ func (t *fakeTaskService) GetStatusByID(context.Context, uuid.UUID) (*domain.Tas
 }
 func (t *fakeTaskService) GetUserActiveTasks(context.Context, uuid.UUID, uuid.UUID, pagination.Params) (*pagination.Page[domain.Task], error) {
 	return nil, nil
+}
+func (t *fakeTaskService) SupersedeRecurringInstances(context.Context, uuid.UUID, uuid.UUID) error {
+	return nil
 }
 
 // fakeCommentService captures Create calls so tests can assert on the comment

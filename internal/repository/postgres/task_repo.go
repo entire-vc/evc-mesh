@@ -886,3 +886,28 @@ func (r *TaskRepo) ListByUserActive(ctx context.Context, workspaceID, userID uui
 	}
 	return pagination.NewPage(taskRowsToSlice(rows), totalCount, pg), nil
 }
+
+// ListOpenByRecurringScheduleID returns non-terminal tasks (not done/cancelled/deleted)
+// belonging to the given recurring schedule, excluding exceptTaskID (the new instance).
+func (r *TaskRepo) ListOpenByRecurringScheduleID(ctx context.Context, scheduleID, exceptTaskID uuid.UUID) ([]domain.Task, error) {
+	const q = `SELECT t.id, t.project_id, t.status_id, t.title, t.description,
+		t.assignee_id, t.assignee_type, t.priority, t.parent_task_id, t.position,
+		t.due_date, t.estimated_hours, t.custom_fields, t.labels,
+		t.task_number, t.created_by, t.created_by_type, t.created_at, t.updated_at,
+		t.completed_at, t.deleted_at,
+		t.recurring_schedule_id, t.recurring_instance_number,
+		t.checked_out_by, t.checkout_token, t.checkout_expires, t.checkout_acquired_at,
+		t.delegation_level, t.thread_id, ` + taskComputedColsAliased + `
+		FROM tasks t
+		INNER JOIN task_statuses ts ON ts.id = t.status_id
+		WHERE t.recurring_schedule_id = $1
+		  AND t.id != $2
+		  AND t.deleted_at IS NULL
+		  AND ts.category NOT IN ('done', 'cancelled')
+		ORDER BY t.created_at ASC`
+	var rows []taskRow
+	if err := r.db.SelectContext(ctx, &rows, q, scheduleID, exceptTaskID); err != nil {
+		return nil, err
+	}
+	return taskRowsToSlice(rows), nil
+}
