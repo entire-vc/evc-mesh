@@ -453,6 +453,11 @@ func (s *recurringService) TriggerNow(ctx context.Context, id uuid.UUID) (*domai
 		log.Printf("[recurring] WARNING: TriggerNow IncrementInstance failed for schedule %s: %v", schedule.ID, err)
 	}
 
+	// Supersede any open instances from the same schedule (same as runOneSchedule).
+	if err := s.taskSvc.SupersedeRecurringInstances(ctx, schedule.ID, task.ID); err != nil {
+		log.Printf("[recurring] WARNING: TriggerNow SupersedeRecurringInstances for schedule %s: %v", schedule.ID, err)
+	}
+
 	return task, nil
 }
 
