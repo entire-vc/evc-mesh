@@ -1411,3 +1411,143 @@ func TestTaskService_Update_DelegationLevelNoNotifyIfUnchanged(t *testing.T) {
 			"must not notify task.delegation_changed when delegation_level is unchanged")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// TestTaskService_MoveTask_ReviewGate — evidence gate tests
+// ---------------------------------------------------------------------------
+
+// setupTaskServiceWithCommentRepo wires a task service with a comment repo for the review-evidence gate.
+func setupTaskServiceWithCommentRepo() (*taskService, *MockTaskRepository, *MockTaskStatusRepository, *MockCommentRepository) {
+	taskRepo := NewMockTaskRepository()
+	statusRepo := NewMockTaskStatusRepository()
+	depRepo := NewMockTaskDependencyRepository()
+	activityRepo := NewMockActivityLogRepository()
+	commentRepo := NewMockCommentRepository()
+
+	svc := NewTaskService(taskRepo, statusRepo, depRepo, activityRepo,
+		WithCommentRepoTask(commentRepo),
+	).(*taskService)
+	timeNow = func() time.Time { return frozenTime }
+	return svc, taskRepo, statusRepo, commentRepo
+}
+
+func TestTaskService_MoveTask_ReviewGate_BlockedWhenNoEvidence(t *testing.T) {
+	projectID := uuid.New()
+	taskID := uuid.New()
+	statusID := uuid.New()
+
+	svc, taskRepo, statusRepo, _ := setupTaskServiceWithCommentRepo()
+
+	// Task has no artifact, no VCS link.
+	taskRepo.items[taskID] = &domain.Task{
+		ID:            taskID,
+		ProjectID:     projectID,
+		StatusID:      uuid.New(),
+		Title:         "Evidence-less task",
+		ArtifactCount: 0,
+		VCSLinkCount:  0,
+	}
+	statusRepo.items[statusID] = &domain.TaskStatus{
+		ID:        statusID,
+		ProjectID: projectID,
+		Category:  domain.StatusCategoryReview,
+	}
+
+	// No comments added — gate should block.
+	err := svc.MoveTask(context.Background(), taskID, MoveTaskInput{StatusID: &statusID})
+
+	require.Error(t, err)
+	var evidenceErr *ReviewEvidenceError
+	require.ErrorAs(t, err, &evidenceErr)
+}
+
+func TestTaskService_MoveTask_ReviewGate_PassesWithArtifact(t *testing.T) {
+	projectID := uuid.New()
+	taskID := uuid.New()
+	statusID := uuid.New()
+
+	svc, taskRepo, statusRepo, _ := setupTaskServiceWithCommentRepo()
+
+	// Task has one artifact — gate should pass.
+	taskRepo.items[taskID] = &domain.Task{
+		ID:            taskID,
+		ProjectID:     projectID,
+		StatusID:      uuid.New(),
+		Title:         "Task with artifact",
+		ArtifactCount: 1,
+		VCSLinkCount:  0,
+	}
+	statusRepo.items[statusID] = &domain.TaskStatus{
+		ID:        statusID,
+		ProjectID: projectID,
+		Category:  domain.StatusCategoryReview,
+	}
+
+	err := svc.MoveTask(context.Background(), taskID, MoveTaskInput{StatusID: &statusID})
+
+	require.NoError(t, err)
+}
+
+func TestTaskService_MoveTask_ReviewGate_PassesWithVCSLink(t *testing.T) {
+	projectID := uuid.New()
+	taskID := uuid.New()
+	statusID := uuid.New()
+
+	svc, taskRepo, statusRepo, _ := setupTaskServiceWithCommentRepo()
+
+	// Task has a VCS link — gate should pass.
+	taskRepo.items[taskID] = &domain.Task{
+		ID:            taskID,
+		ProjectID:     projectID,
+		StatusID:      uuid.New(),
+		Title:         "Task with VCS link",
+		ArtifactCount: 0,
+		VCSLinkCount:  1,
+	}
+	statusRepo.items[statusID] = &domain.TaskStatus{
+		ID:        statusID,
+		ProjectID: projectID,
+		Category:  domain.StatusCategoryReview,
+	}
+
+	err := svc.MoveTask(context.Background(), taskID, MoveTaskInput{StatusID: &statusID})
+
+	require.NoError(t, err)
+}
+
+func TestTaskService_MoveTask_ReviewGate_PassesWithComment(t *testing.T) {
+	projectID := uuid.New()
+	taskID := uuid.New()
+	statusID := uuid.New()
+
+	svc, taskRepo, statusRepo, commentRepo := setupTaskServiceWithCommentRepo()
+
+	// Task has no artifact or VCS link, but has a comment — gate should pass.
+	taskRepo.items[taskID] = &domain.Task{
+		ID:            taskID,
+		ProjectID:     projectID,
+		StatusID:      uuid.New(),
+		Title:         "Task with comment only",
+		ArtifactCount: 0,
+		VCSLinkCount:  0,
+	}
+	statusRepo.items[statusID] = &domain.TaskStatus{
+		ID:        statusID,
+		ProjectID: projectID,
+		Category:  domain.StatusCategoryReview,
+	}
+
+	// Add a comment for this task.
+	commentID := uuid.New()
+	commentRepo.items[commentID] = &domain.Comment{
+		ID:         commentID,
+		TaskID:     taskID,
+		AuthorID:   uuid.New(),
+		AuthorType: domain.ActorTypeAgent,
+		Body:       "CI passed: go test ./... ✓",
+	}
+
+	err := svc.MoveTask(context.Background(), taskID, MoveTaskInput{StatusID: &statusID})
+
+	require.NoError(t, err)
+}

@@ -32,6 +32,7 @@ type taskService struct {
 	projectMemberRepo repository.ProjectMemberRepository
 	agentRepo         repository.AgentRepository
 	userRepo          repository.UserRepository
+	commentRepo       repository.CommentRepository
 	autoTransSvc      AutoTransitionService
 	ruleSvc           RuleService
 	rulesConfigSvc    RulesService
@@ -166,6 +167,13 @@ func WithUserRepoTask(ur repository.UserRepository) TaskServiceOption {
 	return func(s *taskService) {
 		s.userRepo = ur
 	}
+}
+
+// WithCommentRepoTask enables the review-evidence gate in MoveTask.
+// When set, moving a task to review status requires at least one of: artifact,
+// VCS link, or comment. Skipped (fails open) if not wired.
+func WithCommentRepoTask(cr repository.CommentRepository) TaskServiceOption {
+	return func(s *taskService) { s.commentRepo = cr }
 }
 
 // SetAutoTransitionService implements TaskServiceAutoTransitionConfigurable,
@@ -462,6 +470,17 @@ func (s *taskService) MoveTask(ctx context.Context, taskID uuid.UUID, input Move
 						"supervised_requires_human_signoff",
 						"supervised tasks must be signed off by a human: only users may move to review/done/cancelled",
 					)
+				}
+			}
+		}
+
+		// Review-evidence gate: block evidence-less moves to review.
+		// Requires at least one of: artifact, VCS link, or comment.
+		// Gate is skipped when commentRepo is not wired (e.g. tests without it).
+		if status.Category == domain.StatusCategoryReview && s.commentRepo != nil {
+			if task.ArtifactCount == 0 && task.VCSLinkCount == 0 {
+				if hasComment, gateErr := s.commentRepo.HasAnyComment(ctx, taskID); gateErr == nil && !hasComment {
+					return &ReviewEvidenceError{}
 				}
 			}
 		}
@@ -1085,6 +1104,14 @@ type RuleViolationError struct {
 
 func (e *RuleViolationError) Error() string {
 	return fmt.Sprintf("action blocked by %d governance rule(s)", len(e.Violations))
+}
+
+// ReviewEvidenceError is returned when a task is moved to review without any
+// evidence: no artifact, no VCS link, and no comment.
+type ReviewEvidenceError struct{}
+
+func (e *ReviewEvidenceError) Error() string {
+	return "review requires evidence: add a PR/VCS link, artifact upload, or comment with proof before moving to review"
 }
 
 // evaluateRulesForMove evaluates governance rules before a MoveTask operation.

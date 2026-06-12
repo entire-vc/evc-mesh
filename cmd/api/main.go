@@ -236,6 +236,7 @@ func main() {
 		service.WithProjectMemberRepoTask(projectMemberRepo),
 		service.WithTaskAgentRepo(agentRepo),
 		service.WithUserRepoTask(userRepo),
+		service.WithCommentRepoTask(commentRepo), // enables review-evidence gate
 	)
 
 	// Wire auto-transition service. It calls taskService.MoveTask, so taskService must already

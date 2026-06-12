@@ -847,6 +847,20 @@ func (m *MockCommentRepository) ListRecentByWorkspace(_ context.Context, _ uuid.
 	return []domain.CommentView{}, nil, m.errToReturn
 }
 
+func (m *MockCommentRepository) HasAnyComment(_ context.Context, taskID uuid.UUID) (bool, error) {
+	if m.errToReturn != nil {
+		return false, m.errToReturn
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, c := range m.items {
+		if c.TaskID == taskID {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // ---------------------------------------------------------------------------
 // MockArtifactRepository
 // ---------------------------------------------------------------------------

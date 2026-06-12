@@ -1035,6 +1035,14 @@ type ruleViolationAPIResponse struct {
 
 // handleError inspects the error type and returns appropriate JSON response.
 func handleError(c echo.Context, err error) error {
+	var evidenceErr *service.ReviewEvidenceError
+	if errors.As(err, &evidenceErr) {
+		return c.JSON(http.StatusUnprocessableEntity, map[string]any{
+			"code":    "review_evidence_required",
+			"message": "Task cannot be moved to review without evidence. Add at least one of: a PR/VCS link (use add_dependency or the vcs field), an artifact upload, or a comment with command output/proof (see §1c). To flag a human blocker, add a ❓ Blocking @pavel comment first, then retry move→review.",
+		})
+	}
+
 	var ruleErr *service.RuleViolationError
 	if errors.As(err, &ruleErr) {
 		return c.JSON(http.StatusUnprocessableEntity, ruleViolationAPIResponse{

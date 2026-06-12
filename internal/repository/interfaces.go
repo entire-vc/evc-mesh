@@ -158,6 +158,8 @@ type CommentRepository interface {
 	ListReplies(ctx context.Context, parentCommentID uuid.UUID) ([]domain.Comment, error)
 	ListByAuthor(ctx context.Context, authorID uuid.UUID, filter CommentViewFilter) ([]domain.CommentView, *time.Time, error)
 	ListRecentByWorkspace(ctx context.Context, wsID uuid.UUID, filter CommentViewFilter) ([]domain.CommentView, *time.Time, error)
+	// HasAnyComment returns true when the task has at least one comment.
+	HasAnyComment(ctx context.Context, taskID uuid.UUID) (bool, error)
 }
 
 // ArtifactRepository manages persistence for artifacts.
