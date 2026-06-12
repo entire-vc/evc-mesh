@@ -1738,3 +1738,281 @@ func TestTaskService_MoveTask_ReviewGate_PassesWithComment(t *testing.T) {
 
 	require.NoError(t, err)
 }
+
+// ---------------------------------------------------------------------------
+// Done-evidence gate tests
+// ---------------------------------------------------------------------------
+
+// setupTaskServiceWithDoneGate wires a task service with both the VCS link repo
+// (done-evidence gate) and comment repo (no-VCS fallback path).
+func setupTaskServiceWithDoneGate() (*taskService, *MockTaskRepository, *MockTaskStatusRepository, *MockVCSLinkRepository, *MockCommentRepository) {
+	taskRepo := NewMockTaskRepository()
+	statusRepo := NewMockTaskStatusRepository()
+	depRepo := NewMockTaskDependencyRepository()
+	activityRepo := NewMockActivityLogRepository()
+	vcsRepo := NewMockVCSLinkRepository()
+	commentRepo := NewMockCommentRepository()
+
+	svc := NewTaskService(taskRepo, statusRepo, depRepo, activityRepo,
+		WithVCSLinkRepoTask(vcsRepo),
+		WithCommentRepoTask(commentRepo),
+	).(*taskService)
+	timeNow = func() time.Time { return frozenTime }
+	return svc, taskRepo, statusRepo, vcsRepo, commentRepo
+}
+
+func TestTaskService_MoveTask_DoneGate_BlockedWhenPROpen(t *testing.T) {
+	projectID := uuid.New()
+	taskID := uuid.New()
+	statusID := uuid.New()
+
+	svc, taskRepo, statusRepo, vcsRepo, _ := setupTaskServiceWithDoneGate()
+
+	taskRepo.items[taskID] = &domain.Task{
+		ID:           taskID,
+		ProjectID:    projectID,
+		StatusID:     uuid.New(),
+		Title:        "Task with open PR",
+		VCSLinkCount: 1,
+	}
+	statusRepo.items[statusID] = &domain.TaskStatus{
+		ID:        statusID,
+		ProjectID: projectID,
+		Category:  domain.StatusCategoryDone,
+	}
+	vcsRepo.items = append(vcsRepo.items, domain.VCSLink{
+		ID:       uuid.New(),
+		TaskID:   taskID,
+		LinkType: domain.VCSLinkTypePR,
+		Status:   domain.VCSLinkStatusOpen,
+		URL:      "https://github.com/entire-vc/evc-mesh/pull/99",
+		Title:    "feat: my feature",
+	})
+
+	err := svc.MoveTask(context.Background(), taskID, MoveTaskInput{StatusID: &statusID})
+
+	require.Error(t, err)
+	var doneErr *DoneEvidenceError
+	require.ErrorAs(t, err, &doneErr)
+	assert.Contains(t, doneErr.Error(), "feat: my feature")
+}
+
+func TestTaskService_MoveTask_DoneGate_PassesWhenPRMerged(t *testing.T) {
+	projectID := uuid.New()
+	taskID := uuid.New()
+	statusID := uuid.New()
+
+	svc, taskRepo, statusRepo, vcsRepo, _ := setupTaskServiceWithDoneGate()
+
+	taskRepo.items[taskID] = &domain.Task{
+		ID:           taskID,
+		ProjectID:    projectID,
+		StatusID:     uuid.New(),
+		Title:        "Task with merged PR",
+		VCSLinkCount: 1,
+	}
+	statusRepo.items[statusID] = &domain.TaskStatus{
+		ID:        statusID,
+		ProjectID: projectID,
+		Category:  domain.StatusCategoryDone,
+	}
+	vcsRepo.items = append(vcsRepo.items, domain.VCSLink{
+		ID:       uuid.New(),
+		TaskID:   taskID,
+		LinkType: domain.VCSLinkTypePR,
+		Status:   domain.VCSLinkStatusMerged,
+		URL:      "https://github.com/entire-vc/evc-mesh/pull/247",
+	})
+
+	err := svc.MoveTask(context.Background(), taskID, MoveTaskInput{StatusID: &statusID})
+
+	require.NoError(t, err)
+}
+
+func TestTaskService_MoveTask_DoneGate_PassesWhenPRClosed(t *testing.T) {
+	projectID := uuid.New()
+	taskID := uuid.New()
+	statusID := uuid.New()
+
+	svc, taskRepo, statusRepo, vcsRepo, _ := setupTaskServiceWithDoneGate()
+
+	// Closed (without merge) PR is considered resolved — gate passes.
+	taskRepo.items[taskID] = &domain.Task{
+		ID:           taskID,
+		ProjectID:    projectID,
+		StatusID:     uuid.New(),
+		Title:        "Task with closed PR",
+		VCSLinkCount: 1,
+	}
+	statusRepo.items[statusID] = &domain.TaskStatus{
+		ID:        statusID,
+		ProjectID: projectID,
+		Category:  domain.StatusCategoryDone,
+	}
+	vcsRepo.items = append(vcsRepo.items, domain.VCSLink{
+		ID:       uuid.New(),
+		TaskID:   taskID,
+		LinkType: domain.VCSLinkTypePR,
+		Status:   domain.VCSLinkStatusClosed,
+		URL:      "https://github.com/entire-vc/evc-mesh/pull/55",
+	})
+
+	err := svc.MoveTask(context.Background(), taskID, MoveTaskInput{StatusID: &statusID})
+
+	require.NoError(t, err)
+}
+
+func TestTaskService_MoveTask_DoneGate_CommitLinkDoesNotBlock(t *testing.T) {
+	projectID := uuid.New()
+	taskID := uuid.New()
+	statusID := uuid.New()
+
+	svc, taskRepo, statusRepo, vcsRepo, _ := setupTaskServiceWithDoneGate()
+
+	// Commit-type link with "open" status — gate should NOT block (only PR links matter).
+	taskRepo.items[taskID] = &domain.Task{
+		ID:           taskID,
+		ProjectID:    projectID,
+		StatusID:     uuid.New(),
+		Title:        "Task with commit link",
+		VCSLinkCount: 1,
+	}
+	statusRepo.items[statusID] = &domain.TaskStatus{
+		ID:        statusID,
+		ProjectID: projectID,
+		Category:  domain.StatusCategoryDone,
+	}
+	vcsRepo.items = append(vcsRepo.items, domain.VCSLink{
+		ID:       uuid.New(),
+		TaskID:   taskID,
+		LinkType: domain.VCSLinkTypeCommit,
+		Status:   domain.VCSLinkStatusOpen,
+		URL:      "https://github.com/entire-vc/evc-mesh/commit/abc123",
+	})
+
+	err := svc.MoveTask(context.Background(), taskID, MoveTaskInput{StatusID: &statusID})
+
+	require.NoError(t, err)
+}
+
+func TestTaskService_MoveTask_DoneGate_SystemActorExempt(t *testing.T) {
+	projectID := uuid.New()
+	taskID := uuid.New()
+	statusID := uuid.New()
+
+	svc, taskRepo, statusRepo, vcsRepo, _ := setupTaskServiceWithDoneGate()
+
+	taskRepo.items[taskID] = &domain.Task{
+		ID:           taskID,
+		ProjectID:    projectID,
+		StatusID:     uuid.New(),
+		Title:        "Auto-transition task",
+		VCSLinkCount: 1,
+	}
+	statusRepo.items[statusID] = &domain.TaskStatus{
+		ID:        statusID,
+		ProjectID: projectID,
+		Category:  domain.StatusCategoryDone,
+	}
+	vcsRepo.items = append(vcsRepo.items, domain.VCSLink{
+		ID:       uuid.New(),
+		TaskID:   taskID,
+		LinkType: domain.VCSLinkTypePR,
+		Status:   domain.VCSLinkStatusOpen,
+		URL:      "https://github.com/entire-vc/evc-mesh/pull/42",
+	})
+
+	// System actor (auto_transition) must bypass the gate.
+	ctx := actorctx.WithActor(context.Background(), uuid.Nil, domain.ActorTypeSystem)
+	err := svc.MoveTask(ctx, taskID, MoveTaskInput{StatusID: &statusID})
+
+	require.NoError(t, err)
+}
+
+func TestTaskService_MoveTask_DoneGate_NoVCSLinks_BlockedWhenNoEvidence(t *testing.T) {
+	projectID := uuid.New()
+	taskID := uuid.New()
+	statusID := uuid.New()
+
+	svc, taskRepo, statusRepo, _, _ := setupTaskServiceWithDoneGate()
+
+	taskRepo.items[taskID] = &domain.Task{
+		ID:            taskID,
+		ProjectID:     projectID,
+		StatusID:      uuid.New(),
+		Title:         "No-evidence task",
+		ArtifactCount: 0,
+		VCSLinkCount:  0,
+	}
+	statusRepo.items[statusID] = &domain.TaskStatus{
+		ID:        statusID,
+		ProjectID: projectID,
+		Category:  domain.StatusCategoryDone,
+	}
+
+	err := svc.MoveTask(context.Background(), taskID, MoveTaskInput{StatusID: &statusID})
+
+	require.Error(t, err)
+	var doneErr *DoneEvidenceError
+	require.ErrorAs(t, err, &doneErr)
+}
+
+func TestTaskService_MoveTask_DoneGate_NoVCSLinks_PassesWithArtifact(t *testing.T) {
+	projectID := uuid.New()
+	taskID := uuid.New()
+	statusID := uuid.New()
+
+	svc, taskRepo, statusRepo, _, _ := setupTaskServiceWithDoneGate()
+
+	taskRepo.items[taskID] = &domain.Task{
+		ID:            taskID,
+		ProjectID:     projectID,
+		StatusID:      uuid.New(),
+		Title:         "Task with artifact",
+		ArtifactCount: 1,
+		VCSLinkCount:  0,
+	}
+	statusRepo.items[statusID] = &domain.TaskStatus{
+		ID:        statusID,
+		ProjectID: projectID,
+		Category:  domain.StatusCategoryDone,
+	}
+
+	err := svc.MoveTask(context.Background(), taskID, MoveTaskInput{StatusID: &statusID})
+
+	require.NoError(t, err)
+}
+
+func TestTaskService_MoveTask_DoneGate_NoVCSLinks_PassesWithComment(t *testing.T) {
+	projectID := uuid.New()
+	taskID := uuid.New()
+	statusID := uuid.New()
+
+	svc, taskRepo, statusRepo, _, commentRepo := setupTaskServiceWithDoneGate()
+
+	taskRepo.items[taskID] = &domain.Task{
+		ID:            taskID,
+		ProjectID:     projectID,
+		StatusID:      uuid.New(),
+		Title:         "Task with comment",
+		ArtifactCount: 0,
+		VCSLinkCount:  0,
+	}
+	statusRepo.items[statusID] = &domain.TaskStatus{
+		ID:        statusID,
+		ProjectID: projectID,
+		Category:  domain.StatusCategoryDone,
+	}
+	commentID := uuid.New()
+	commentRepo.items[commentID] = &domain.Comment{
+		ID:         commentID,
+		TaskID:     taskID,
+		AuthorID:   uuid.New(),
+		AuthorType: domain.ActorTypeAgent,
+		Body:       "All tests passed; deploying to prod.",
+	}
+
+	err := svc.MoveTask(context.Background(), taskID, MoveTaskInput{StatusID: &statusID})
+
+	require.NoError(t, err)
+}

@@ -1845,3 +1845,94 @@ func (m *MockProjectIntegrationRepository) ListByProject(_ context.Context, proj
 }
 
 var _ repository.ProjectIntegrationRepository = (*MockProjectIntegrationRepository)(nil)
+
+// ---------------------------------------------------------------------------
+// MockVCSLinkRepository
+// ---------------------------------------------------------------------------
+
+type MockVCSLinkRepository struct {
+	mu          sync.RWMutex
+	items       []domain.VCSLink
+	errToReturn error
+}
+
+func NewMockVCSLinkRepository() *MockVCSLinkRepository {
+	return &MockVCSLinkRepository{}
+}
+
+func (m *MockVCSLinkRepository) Create(_ context.Context, link *domain.VCSLink) error {
+	if m.errToReturn != nil {
+		return m.errToReturn
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.items = append(m.items, *link)
+	return nil
+}
+
+func (m *MockVCSLinkRepository) GetByID(_ context.Context, id uuid.UUID) (*domain.VCSLink, error) {
+	if m.errToReturn != nil {
+		return nil, m.errToReturn
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, l := range m.items {
+		if l.ID == id {
+			cp := l
+			return &cp, nil
+		}
+	}
+	return nil, nil
+}
+
+func (m *MockVCSLinkRepository) Delete(_ context.Context, _ uuid.UUID) error {
+	return m.errToReturn
+}
+
+func (m *MockVCSLinkRepository) ListByTask(_ context.Context, taskID uuid.UUID) ([]domain.VCSLink, error) {
+	if m.errToReturn != nil {
+		return nil, m.errToReturn
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var out []domain.VCSLink
+	for _, l := range m.items {
+		if l.TaskID == taskID {
+			out = append(out, l)
+		}
+	}
+	return out, nil
+}
+
+func (m *MockVCSLinkRepository) Upsert(_ context.Context, link *domain.VCSLink) error {
+	if m.errToReturn != nil {
+		return m.errToReturn
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i, l := range m.items {
+		if l.TaskID == link.TaskID && l.Provider == link.Provider && l.LinkType == link.LinkType && l.ExternalID == link.ExternalID {
+			m.items[i] = *link
+			return nil
+		}
+	}
+	m.items = append(m.items, *link)
+	return nil
+}
+
+func (m *MockVCSLinkRepository) ListByExternalID(_ context.Context, provider domain.VCSProvider, linkType domain.VCSLinkType, externalID string) ([]domain.VCSLink, error) {
+	if m.errToReturn != nil {
+		return nil, m.errToReturn
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var out []domain.VCSLink
+	for _, l := range m.items {
+		if l.Provider == provider && l.LinkType == linkType && l.ExternalID == externalID {
+			out = append(out, l)
+		}
+	}
+	return out, nil
+}
+
+var _ repository.VCSLinkRepository = (*MockVCSLinkRepository)(nil)
