@@ -69,18 +69,20 @@ type AssignmentRulesConfig struct {
 
 // WorkflowRulesConfig is the typed structure for project workflow rules (rule_type = "workflow").
 type WorkflowRulesConfig struct {
-	Statuses        []string                  `json:"statuses,omitempty"`
-	Transitions     map[string]TransitionRule `json:"transitions,omitempty"`
-	EnforcementMode string                    `json:"enforcement_mode,omitempty"`
-	Policies        map[string]PolicyRule     `json:"policies,omitempty"`
+	Statuses             []string                  `json:"statuses,omitempty"`
+	Transitions          map[string]TransitionRule `json:"transitions,omitempty"`
+	EnforcementMode      string                    `json:"enforcement_mode,omitempty"`
+	Policies             map[string]PolicyRule     `json:"policies,omitempty"`
+	EnforceSystemActors  bool                      `json:"enforce_system_actors,omitempty"` // if true, system actors are not exempt
 }
 
 // TransitionRule defines allowed transitions from a given status.
 type TransitionRule struct {
-	Allowed      []string          `json:"allowed"`
-	Description  string            `json:"description,omitempty"`
-	OnTransition *TransitionAction `json:"on_transition,omitempty"`
-	Requires     *TransitionReq    `json:"requires,omitempty"`
+	Allowed       []string          `json:"allowed"`                         // allowed target status names (empty = any)
+	AllowedActors []string          `json:"allowed_actors,omitempty"`        // actor patterns (empty = any)
+	Description   string            `json:"description,omitempty"`
+	OnTransition  *TransitionAction `json:"on_transition,omitempty"`
+	Requires      *TransitionReq    `json:"requires,omitempty"`
 }
 
 // TransitionAction defines automatic actions when a transition occurs.

@@ -474,6 +474,20 @@ func (s *taskService) MoveTask(ctx context.Context, taskID uuid.UUID, input Move
 			}
 		}
 
+		// Workflow-rules transition gate: advisory or strict enforcement from ProjectRuleConfig.
+		if enfMode, vMsg := s.applyTransitionGate(ctx, task, oldStatusID, status); vMsg != "" {
+			if enfMode == domain.RuleConfigEnforcementStrict {
+				return apierror.ForbiddenWithDetails("workflow_transition_blocked", vMsg)
+			}
+			// Advisory: permit the move but record the violation in the activity log.
+			s.logActivity(ctx, task.ProjectID, taskID, "task.transition_violation", map[string]interface{}{
+				"violation":        vMsg,
+				"from_status_id":   oldStatusID.String(),
+				"to_status_id":     status.ID.String(),
+				"enforcement_mode": "advisory",
+			})
+		}
+
 		// Review-evidence gate: block evidence-less moves to review.
 		// Requires at least one of: artifact, VCS link, or comment.
 		// Gate is skipped when commentRepo is not wired (e.g. tests without it).
