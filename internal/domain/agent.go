@@ -16,6 +16,7 @@ const (
 	AgentTypeCline      AgentType = "cline"
 	AgentTypeAider      AgentType = "aider"
 	AgentTypeCustom     AgentType = "custom"
+	AgentTypeHermes     AgentType = "hermes"
 )
 
 // AgentStatus represents the current operational state of an agent.
