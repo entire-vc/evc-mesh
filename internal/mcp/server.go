@@ -482,7 +482,7 @@ func (s *Server) registerAdvancedTools() {
 	s.mcpServer.AddTool(mcpsdk.NewTool("register_sub_agent",
 		mcpsdk.WithDescription("Register a sub-agent under the calling agent."),
 		mcpsdk.WithString("name", mcpsdk.Required(), mcpsdk.Description("Sub-agent name.")),
-		mcpsdk.WithString("agent_type", mcpsdk.Required(), mcpsdk.Description("Agent type: claude_code, openclaw, cline, aider, custom.")),
+		mcpsdk.WithString("agent_type", mcpsdk.Required(), mcpsdk.Description("Agent type: claude_code, openclaw, cline, aider, custom, hermes.")),
 		mcpsdk.WithObject("capabilities", mcpsdk.Description("Agent capabilities as key-value pairs.")),
 	), s.tracked("register_sub_agent", s.handleRegisterSubAgent))
 

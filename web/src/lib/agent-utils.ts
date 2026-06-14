@@ -9,6 +9,7 @@ export const agentTypeConfig: Record<
   cline: { label: "Cline", color: "bg-green-100 text-green-700" },
   aider: { label: "Aider", color: "bg-orange-100 text-orange-700" },
   custom: { label: "Custom", color: "bg-gray-100 text-gray-700" },
+  hermes: { label: "Hermes", color: "bg-teal-100 text-teal-700" },
 };
 
 export const agentStatusConfig: Record<

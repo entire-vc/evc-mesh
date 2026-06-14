@@ -30,7 +30,7 @@ type AgentManifest struct {
 	Slug         string         `json:"slug"`
 	Name         string         `json:"name"`
 	Description  string         `json:"description"`
-	AgentType    string         `json:"agent_type"` // claude_code, openclaw, cline, aider, custom
+	AgentType    string         `json:"agent_type"` // claude_code, openclaw, cline, aider, custom, hermes
 	Version      string         `json:"version"`
 	Author       string         `json:"author"`
 	Capabilities map[string]any `json:"capabilities"`

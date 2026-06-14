@@ -17,7 +17,8 @@ export type AgentType =
   | "openclaw"
   | "cline"
   | "aider"
-  | "custom";
+  | "custom"
+  | "hermes";
 export type AgentStatus = "online" | "offline" | "busy" | "error";
 export type DependencyType = "blocks" | "relates_to" | "is_child_of";
 export type ArtifactType =
