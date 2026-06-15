@@ -489,6 +489,19 @@ func (m *MockTaskRepository) ListOpenByRecurringScheduleID(_ context.Context, sc
 	return result, nil
 }
 
+func (m *MockTaskRepository) SetHumanGate(_ context.Context, taskID uuid.UUID, value bool) error {
+	if m.errToReturn != nil {
+		return m.errToReturn
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if t, ok := m.items[taskID]; ok {
+		t.HumanGate = value
+		m.items[taskID] = t
+	}
+	return nil
+}
+
 // ---------------------------------------------------------------------------
 // MockTaskStatusRepository
 // ---------------------------------------------------------------------------
@@ -1750,11 +1763,17 @@ type moveCall struct {
 // fakeTaskMover satisfies the TaskService interface by embedding it (all unused
 // methods are nil and would panic if called). Only MoveTask is implemented — it
 // records calls so tests can assert the auto-triage move happened.
+type humanGateCall struct {
+	taskID uuid.UUID
+	value  bool
+}
+
 type fakeTaskMover struct {
 	TaskService
-	mu    sync.Mutex
-	moves []moveCall
-	err   error
+	mu           sync.Mutex
+	moves        []moveCall
+	gateSetCalls []humanGateCall
+	err          error
 }
 
 func (f *fakeTaskMover) MoveTask(_ context.Context, taskID uuid.UUID, input MoveTaskInput) error {
@@ -1764,10 +1783,23 @@ func (f *fakeTaskMover) MoveTask(_ context.Context, taskID uuid.UUID, input Move
 	return f.err
 }
 
+func (f *fakeTaskMover) SetHumanGate(_ context.Context, taskID uuid.UUID, value bool) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.gateSetCalls = append(f.gateSetCalls, humanGateCall{taskID: taskID, value: value})
+	return nil
+}
+
 func (f *fakeTaskMover) calls() []moveCall {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]moveCall(nil), f.moves...)
+}
+
+func (f *fakeTaskMover) humanGateCalls() []humanGateCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]humanGateCall(nil), f.gateSetCalls...)
 }
 
 // ---------------------------------------------------------------------------

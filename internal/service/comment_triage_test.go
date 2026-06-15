@@ -321,6 +321,33 @@ func TestEnforceBlockingTriage_AutoMode_SkipsTriage(t *testing.T) {
 	assert.Empty(t, env.systemComments(), "auto-mode must not create system comment")
 }
 
+// Auto-mode tasks skip triage escalation but must still have human_gate set
+// so the MoveTask freeze gate protects them (audit P0 #3).
+func TestEnforceBlockingTriage_AutoMode_SetsHumanGateFlag(t *testing.T) {
+	env := setupTriageEnv(t, true)
+	taskID := uuid.New()
+	env.taskRepo.items[taskID] = &domain.Task{
+		ID: taskID, ProjectID: env.projID, StatusID: env.inProgressID,
+		Title: "Auto task", DelegationLevel: domain.DelegationLevelAuto,
+	}
+
+	comment := &domain.Comment{
+		TaskID:     taskID,
+		AuthorID:   uuid.New(),
+		AuthorType: domain.ActorTypeAgent,
+		Body:       "❓ **Blocking @pavel**: need sign-off",
+	}
+	require.NoError(t, env.svc.Create(context.Background(), comment))
+
+	// The triage move must NOT happen for auto tasks.
+	assert.Empty(t, env.taskMover.calls(), "auto-mode must not trigger triage move")
+	// But SetHumanGate must be called so the MoveTask freeze gate protects the task.
+	gateCalls := env.taskMover.humanGateCalls()
+	require.Len(t, gateCalls, 1, "SetHumanGate must be called exactly once")
+	assert.Equal(t, taskID, gateCalls[0].taskID)
+	assert.True(t, gateCalls[0].value, "SetHumanGate must arm the flag (value=true)")
+}
+
 // Without a TaskService wired, the enforcement path is skipped entirely (no panic).
 func TestEnforceBlockingTriage_NoTaskService_SkipsSafely(t *testing.T) {
 	commentRepo := NewMockCommentRepository()

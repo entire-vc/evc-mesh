@@ -159,6 +159,8 @@ func (r *fakeTaskRepo) ListOpenByRecurringScheduleID(context.Context, uuid.UUID,
 	return nil, nil
 }
 
+func (r *fakeTaskRepo) SetHumanGate(context.Context, uuid.UUID, bool) error { return nil }
+
 // fakeStatusRepo holds task_status rows per project.
 type fakeStatusRepo struct {
 	byID        map[uuid.UUID]*domain.TaskStatus
@@ -276,6 +278,8 @@ func (t *fakeTaskService) GetUserActiveTasks(context.Context, uuid.UUID, uuid.UU
 func (t *fakeTaskService) SupersedeRecurringInstances(context.Context, uuid.UUID, uuid.UUID) error {
 	return nil
 }
+
+func (t *fakeTaskService) SetHumanGate(context.Context, uuid.UUID, bool) error { return nil }
 
 // fakeCommentService captures Create calls so tests can assert on the comment
 // body and authorship.

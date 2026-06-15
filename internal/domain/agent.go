@@ -71,7 +71,13 @@ type Agent struct {
 
 // IsKeyExpired returns true when the agent's API key has a set expiry that has passed.
 func (a *Agent) IsKeyExpired() bool {
-	return a.ExpiresAt != nil && time.Now().After(*a.ExpiresAt)
+	return a.IsKeyExpiredAt(time.Now())
+}
+
+// IsKeyExpiredAt is like IsKeyExpired but uses the provided clock value instead of time.Now.
+// Intended for test injection — callers that control time should prefer this method.
+func (a *Agent) IsKeyExpiredAt(now time.Time) bool {
+	return a.ExpiresAt != nil && now.After(*a.ExpiresAt)
 }
 
 // ComputedAgentStatus is a derived presence indicator based on SSE connection

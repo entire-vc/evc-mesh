@@ -119,6 +119,7 @@ type updateTaskRequest struct {
 	CustomFields    json.RawMessage         `json:"custom_fields"`
 	DelegationLevel *domain.DelegationLevel `json:"delegation_level"`
 	ThreadID        *string                 `json:"thread_id"`
+	HumanGate       *bool                   `json:"human_gate"`
 }
 
 // moveTaskRequest represents the JSON body for moving a task.
@@ -412,6 +413,9 @@ func (h *TaskHandler) Update(c echo.Context) error {
 	}
 	if req.ThreadID != nil {
 		task.ThreadID = req.ThreadID
+	}
+	if req.HumanGate != nil {
+		task.HumanGate = *req.HumanGate
 	}
 
 	if err := h.taskService.Update(c.Request().Context(), task); err != nil {
@@ -1043,11 +1047,11 @@ func handleError(c echo.Context, err error) error {
 		})
 	}
 
-	var doneEvidenceErr *service.DoneEvidenceError
-	if errors.As(err, &doneEvidenceErr) {
+	var humanGateErr *service.HumanGateFrozenError
+	if errors.As(err, &humanGateErr) {
 		return c.JSON(http.StatusUnprocessableEntity, map[string]any{
-			"code":    "done_evidence_required",
-			"message": doneEvidenceErr.Error(),
+			"code":    "human_gate_frozen",
+			"message": "Task is awaiting human sign-off (human_gate=true). Only a user may move it to backlog/done/cancelled. To clear the gate, a human must either move the task manually or call PATCH /tasks/:id with human_gate=false.",
 		})
 	}
 

@@ -1394,6 +1394,8 @@ func (m *mockTaskRepo) ListOpenByRecurringScheduleID(_ context.Context, _, _ uui
 	return nil, nil
 }
 
+func (m *mockTaskRepo) SetHumanGate(_ context.Context, _ uuid.UUID, _ bool) error { return nil }
+
 var _ repository.TaskRepository = (*mockTaskRepo)(nil)
 
 // ---------------------------------------------------------------------------

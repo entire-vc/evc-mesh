@@ -19,7 +19,6 @@ import (
 	"github.com/entire-vc/evc-mesh/pkg/pagination"
 )
 
-// frozenTime is a fixed point in time used in tests.
 var frozenTime = time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
 
 // setupTaskService returns a taskService wired to fresh mocks.

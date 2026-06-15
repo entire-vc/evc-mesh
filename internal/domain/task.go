@@ -74,6 +74,9 @@ type Task struct {
 	RecurringInstanceNumber *int       `json:"recurring_instance_number,omitempty" db:"recurring_instance_number"`
 
 	DelegationLevel DelegationLevel `json:"delegation_level" db:"delegation_level"`
+	// HumanGate is a sticky flag set when a human (Pavel) sign-off is required.
+	// Once set, only a human actor may move the task to backlog/done/cancelled.
+	HumanGate bool `json:"human_gate" db:"human_gate"`
 
 	// Checkout fields — set when an agent has an exclusive application-level lock on the task.
 	CheckedOutBy       *uuid.UUID `json:"checked_out_by,omitempty" db:"checked_out_by"`
