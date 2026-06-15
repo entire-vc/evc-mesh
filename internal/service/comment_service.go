@@ -216,8 +216,19 @@ func (s *commentService) Create(ctx context.Context, comment *domain.Comment) er
 		}
 	}
 
-	// Notify assigned agent about the new comment.
-	if s.agentNotifySvc != nil && task.AssigneeType == domain.AssigneeTypeAgent && task.AssigneeID != nil {
+	// Notify assigned agent about the new comment, but suppress for terminal tasks
+	// (done/cancelled). A task.commented event on a closed task causes the
+	// dispatcher to spawn a new agent session whose prompt instructs
+	// checkout + move_to_in_progress, silently reopening work that is already
+	// shipped (false reactivation churn, incident 2026-06-15 #56a6d5b2).
+	// @-mentions in terminal tasks still reach mentioned agents via notifyMentions.
+	terminalTask := false
+	if s.statusRepo != nil {
+		if st, err2 := s.statusRepo.GetByID(ctx, task.StatusID); err2 == nil && st != nil {
+			terminalTask = st.Category == domain.StatusCategoryDone || st.Category == domain.StatusCategoryCancelled
+		}
+	}
+	if s.agentNotifySvc != nil && task.AssigneeType == domain.AssigneeTypeAgent && task.AssigneeID != nil && !terminalTask {
 		taskSnap := s.buildTaskSnap(ctx, task)
 
 		commentBody := comment.Body
