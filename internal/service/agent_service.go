@@ -273,7 +273,7 @@ func (s *agentService) Authenticate(ctx context.Context, workspaceSlug, apiKey s
 		return nil, apierror.Unauthorized("invalid API key")
 	}
 
-	if agent.IsKeyExpired() {
+	if agent.IsKeyExpiredAt(timeNow()) {
 		return nil, apierror.Unauthorized("API key expired")
 	}
 
