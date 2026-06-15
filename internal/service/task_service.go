@@ -482,6 +482,19 @@ func (s *taskService) MoveTask(ctx context.Context, taskID uuid.UUID, input Move
 			}
 		}
 
+		// Human-gate freeze: when a task is awaiting human sign-off, only a user
+		// may move it to backlog/done/cancelled. Prevents SupersedeRecurringInstances,
+		// auto_transition, and other system actors from silently closing gated tasks.
+		if task.HumanGate {
+			_, actorType := actorctx.FromContext(ctx)
+			if actorType != domain.ActorTypeUser {
+				switch status.Category {
+				case domain.StatusCategoryBacklog, domain.StatusCategoryDone, domain.StatusCategoryCancelled:
+					return &HumanGateFrozenError{}
+				}
+			}
+		}
+
 		// Workflow-rules transition gate: advisory or strict enforcement from ProjectRuleConfig.
 		if enfMode, vMsg := s.applyTransitionGate(ctx, task, oldStatusID, status); vMsg != "" {
 			if enfMode == domain.RuleConfigEnforcementStrict {
@@ -1162,6 +1175,14 @@ func (e *ReviewEvidenceError) Error() string {
 	return "review requires evidence: add a PR/VCS link, artifact upload, or comment with proof before moving to review"
 }
 
+// HumanGateFrozenError is returned when an agent or system actor attempts to move a
+// human-gated task to backlog/done/cancelled without a human sign-off (audit 2026-06-15 P0 #3).
+type HumanGateFrozenError struct{}
+
+func (e *HumanGateFrozenError) Error() string {
+	return "task is human-gated: awaiting human sign-off; only a user may move it to backlog/done/cancelled"
+}
+
 // DoneEvidenceError is returned when a task is moved to done but evidence is
 // missing or a linked PR has not been merged (or explicitly closed) yet.
 type DoneEvidenceError struct {
@@ -1646,4 +1667,9 @@ func (s *taskService) SupersedeRecurringInstances(ctx context.Context, scheduleI
 		}
 	}
 	return nil
+}
+
+// SetHumanGate arms (value=true) or clears (value=false) the sticky human-gate flag.
+func (s *taskService) SetHumanGate(ctx context.Context, taskID uuid.UUID, value bool) error {
+	return s.taskRepo.SetHumanGate(ctx, taskID, value)
 }

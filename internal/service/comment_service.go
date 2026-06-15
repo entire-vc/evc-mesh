@@ -539,14 +539,22 @@ func (s *commentService) enforceBlockingTriage(ctx context.Context, comment *dom
 	if !hasBlockingMarker(comment.Body) {
 		return
 	}
-	// auto-mode tasks self-manage; triage escalation is suppressed.
-	if task.DelegationLevel == domain.DelegationLevelAuto {
+
+	// Human-gate: only act when a real user (not just an agent) is @-mentioned.
+	// Resolve this BEFORE the auto-mode early return so we can set the sticky flag.
+	userSlug := s.firstMentionedUserSlug(ctx, wsID, comment.Body)
+	if userSlug == "" {
 		return
 	}
 
-	// Human-gate: only trigger when a real user is mentioned somewhere in the body.
-	userSlug := s.firstMentionedUserSlug(ctx, wsID, comment.Body)
-	if userSlug == "" {
+	// Arm the sticky human_gate flag regardless of delegation level so the MoveTask
+	// gate protects the task even after a delegation_level change (audit P0 #3).
+	if setErr := s.taskSvc.SetHumanGate(ctx, task.ID, true); setErr != nil {
+		log.Printf("[comment-triage] WARNING: SetHumanGate on task %s failed: %v", task.ID, setErr)
+	}
+
+	// auto-mode tasks self-manage; triage escalation is suppressed (flag already set above).
+	if task.DelegationLevel == domain.DelegationLevelAuto {
 		return
 	}
 

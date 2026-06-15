@@ -106,6 +106,9 @@ type TaskRepository interface {
 	// tasks belonging to the given recurring schedule, excluding exceptTaskID.
 	// Used by SupersedeRecurringInstances to close previous open instances.
 	ListOpenByRecurringScheduleID(ctx context.Context, scheduleID, exceptTaskID uuid.UUID) ([]domain.Task, error)
+	// SetHumanGate atomically sets the human_gate sticky flag without touching other fields.
+	// Pass true to arm the gate, false to clear it (human sign-off received).
+	SetHumanGate(ctx context.Context, taskID uuid.UUID, value bool) error
 }
 
 // TaskStatusRepository manages persistence for task statuses.

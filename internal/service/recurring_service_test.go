@@ -271,6 +271,8 @@ func (s *StubTaskService) SupersedeRecurringInstances(_ context.Context, _, _ uu
 	return nil
 }
 
+func (s *StubTaskService) SetHumanGate(_ context.Context, _ uuid.UUID, _ bool) error { return nil }
+
 var _ TaskService = (*StubTaskService)(nil)
 
 // ---------------------------------------------------------------------------

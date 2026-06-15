@@ -152,6 +152,9 @@ type TaskService interface {
 	// recurring schedule (except newTaskID) by moving them to the project's done status.
 	// Individual failures are logged and skipped to avoid blocking the new instance.
 	SupersedeRecurringInstances(ctx context.Context, scheduleID, newTaskID uuid.UUID) error
+	// SetHumanGate arms (value=true) or clears (value=false) the sticky human-gate flag.
+	// When armed, only a human actor may move the task to backlog/done/cancelled.
+	SetHumanGate(ctx context.Context, taskID uuid.UUID, value bool) error
 }
 
 // TaskServiceAutoTransitionConfigurable extends TaskService with the ability
