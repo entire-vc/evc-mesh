@@ -236,6 +236,40 @@ func TestAutoTransition_BlockingDepResolved_UnblocksDependent(t *testing.T) {
 	assert.Equal(t, todoStatus.ID, updated.StatusID, "task B should move to todo when its blocker is resolved")
 }
 
+// Canonical dep-clear rule (P3 #9): a CANCELLED blocker is terminal and must
+// clear the dependency, unblocking the dependent backlog→todo — matching
+// intake-sweep all_deps_cleared. Before the fix, a cancelled blocker left the
+// dependent stuck in backlog server-side (only `done` cleared).
+func TestAutoTransition_CancelledBlocker_UnblocksDependent(t *testing.T) {
+	ctx := context.Background()
+	svc, taskRepo, statusRepo, depRepo := buildAutoTransitionFixture()
+
+	projectID := uuid.New()
+	cancelledStatus := seedStatus(statusRepo, projectID, domain.StatusCategoryCancelled, "Cancelled")
+	backlogStatus := seedStatus(statusRepo, projectID, domain.StatusCategoryBacklog, "Backlog")
+	todoStatus := seedStatus(statusRepo, projectID, domain.StatusCategoryTodo, "To Do")
+
+	// Task A (blocker) was cancelled (abandoned/obsoleted).
+	taskA := seedTask(taskRepo, projectID, cancelledStatus.ID, nil, "Task A (cancelled blocker)")
+	// Task B depends on Task A and is in backlog.
+	taskB := seedTask(taskRepo, projectID, backlogStatus.ID, nil, "Task B (blocked)")
+
+	dep := &domain.TaskDependency{
+		ID:              uuid.New(),
+		TaskID:          taskB.ID,
+		DependsOnTaskID: taskA.ID,
+		DependencyType:  domain.DependencyTypeBlocks,
+	}
+	depRepo.items[dep.ID] = dep
+
+	err := svc.CheckDependencyResolution(ctx, taskA.ID)
+	require.NoError(t, err)
+
+	updated := taskRepo.items[taskB.ID]
+	require.NotNil(t, updated)
+	assert.Equal(t, todoStatus.ID, updated.StatusID, "task B should move to todo when its blocker is cancelled (terminal clears dep)")
+}
+
 func TestAutoTransition_PartialDepResolved_NoUnblock(t *testing.T) {
 	ctx := context.Background()
 	svc, taskRepo, statusRepo, depRepo := buildAutoTransitionFixture()
@@ -533,26 +567,14 @@ func TestAllSubtasksDone_Logic(t *testing.T) {
 	})
 }
 
-// hasUnresolvedBlockingDeps mirrors the hasUnresolvedBlockers logic for testing.
-func hasUnresolvedBlockingDeps(deps []domain.TaskDependency, statusCategoryByTaskID map[uuid.UUID]domain.StatusCategory) bool {
-	for _, dep := range deps {
-		if dep.DependencyType != domain.DependencyTypeBlocks {
-			continue
-		}
-		cat, ok := statusCategoryByTaskID[dep.DependsOnTaskID]
-		if !ok || cat != domain.StatusCategoryDone {
-			return true
-		}
-	}
-	return false
-}
-
 func TestHasUnresolvedBlockingDeps_Logic(t *testing.T) {
 	blockerDoneID := uuid.New()
+	blockerCancelledID := uuid.New()
 	blockerInProgressID := uuid.New()
 
 	categoryMap := map[uuid.UUID]domain.StatusCategory{
 		blockerDoneID:       domain.StatusCategoryDone,
+		blockerCancelledID:  domain.StatusCategoryCancelled,
 		blockerInProgressID: domain.StatusCategoryInProgress,
 	}
 
@@ -560,7 +582,24 @@ func TestHasUnresolvedBlockingDeps_Logic(t *testing.T) {
 		deps := []domain.TaskDependency{
 			{ID: uuid.New(), DependsOnTaskID: blockerDoneID, DependencyType: domain.DependencyTypeBlocks},
 		}
-		assert.False(t, hasUnresolvedBlockingDeps(deps, categoryMap))
+		assert.False(t, hasUnresolvedBlockers(deps, categoryMap))
+	})
+
+	// Canonical dep-clear rule (P3 #9): a cancelled blocker is terminal → clears
+	// the dependency, matching intake-sweep all_deps_cleared (done OR cancelled).
+	t.Run("cancelled blocker returns false (terminal clears dep)", func(t *testing.T) {
+		deps := []domain.TaskDependency{
+			{ID: uuid.New(), DependsOnTaskID: blockerCancelledID, DependencyType: domain.DependencyTypeBlocks},
+		}
+		assert.False(t, hasUnresolvedBlockers(deps, categoryMap))
+	})
+
+	t.Run("mixed done + cancelled blockers returns false", func(t *testing.T) {
+		deps := []domain.TaskDependency{
+			{ID: uuid.New(), DependsOnTaskID: blockerDoneID, DependencyType: domain.DependencyTypeBlocks},
+			{ID: uuid.New(), DependsOnTaskID: blockerCancelledID, DependencyType: domain.DependencyTypeBlocks},
+		}
+		assert.False(t, hasUnresolvedBlockers(deps, categoryMap))
 	})
 
 	t.Run("one blocker still in_progress returns true", func(t *testing.T) {
@@ -568,18 +607,18 @@ func TestHasUnresolvedBlockingDeps_Logic(t *testing.T) {
 			{ID: uuid.New(), DependsOnTaskID: blockerDoneID, DependencyType: domain.DependencyTypeBlocks},
 			{ID: uuid.New(), DependsOnTaskID: blockerInProgressID, DependencyType: domain.DependencyTypeBlocks},
 		}
-		assert.True(t, hasUnresolvedBlockingDeps(deps, categoryMap))
+		assert.True(t, hasUnresolvedBlockers(deps, categoryMap))
 	})
 
 	t.Run("relates_to dep does not block", func(t *testing.T) {
 		deps := []domain.TaskDependency{
 			{ID: uuid.New(), DependsOnTaskID: blockerInProgressID, DependencyType: domain.DependencyTypeRelatesTo},
 		}
-		assert.False(t, hasUnresolvedBlockingDeps(deps, categoryMap))
+		assert.False(t, hasUnresolvedBlockers(deps, categoryMap))
 	})
 
 	t.Run("no deps returns false", func(t *testing.T) {
-		assert.False(t, hasUnresolvedBlockingDeps([]domain.TaskDependency{}, categoryMap))
+		assert.False(t, hasUnresolvedBlockers([]domain.TaskDependency{}, categoryMap))
 	})
 }
 
