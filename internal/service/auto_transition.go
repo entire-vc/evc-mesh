@@ -351,6 +351,7 @@ func allSubtasksTerminal(subtasks []domain.Task, categoryByStatusID map[uuid.UUI
 //   - EvaluateOnTaskMove fires CheckDependencyResolution on done OR cancelled.
 //   - allSubtasksTerminal counts a subtask terminal on done OR cancelled.
 //   - mesh-intake-sweep all_deps_cleared promotes on done OR cancelled.
+//
 // Previously this function alone accepted only `done`, so a cancelled blocker
 // left the dependent stuck in backlog server-side while intake-sweep promoted it
 // — an engine-dependent split. Now both engines agree.
