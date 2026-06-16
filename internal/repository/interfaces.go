@@ -641,6 +641,10 @@ type AgentSessionRepository interface {
 	Create(ctx context.Context, session *domain.AgentSession) error
 	Update(ctx context.Context, session *domain.AgentSession) error
 	GetActive(ctx context.Context, agentID uuid.UUID) (*domain.AgentSession, error)
+	// GetActiveForTask returns the agent's active session for a specific task, or nil.
+	// Scopes spend per-task so a busy agent completing multiple tasks within one
+	// EndStale window doesn't pile every task's cost onto the first task's session.
+	GetActiveForTask(ctx context.Context, agentID, taskID uuid.UUID) (*domain.AgentSession, error)
 	EndStale(ctx context.Context, timeout time.Duration) (int, error)
 	// GetPreviousStartedAt returns the started_at of the most recent non-active session
 	// for the agent. Returns nil when no prior session exists.

@@ -19,19 +19,28 @@ import (
 )
 
 // mockSessionRepo is an in-memory AgentSessionRepository for handler tests.
-// It keeps at most one active session per agent so additive-update semantics
-// can be exercised end-to-end. All methods are guarded by a mutex so the
-// concurrency test stays race-free under `go test -race`.
+// It keeps at most one active session per agent (byAgent) and one per
+// agent+task pair (byAgentTask) so both GetActive and GetActiveForTask can be
+// exercised. All methods are guarded by a mutex so the concurrency test stays
+// race-free under `go test -race`.
 type mockSessionRepo struct {
-	mu       sync.Mutex
-	byAgent  map[uuid.UUID]*domain.AgentSession
-	createN  int
-	updateN  int
-	endStale func(ctx context.Context, timeout time.Duration) (int, error)
+	mu          sync.Mutex
+	byAgent     map[uuid.UUID]*domain.AgentSession
+	byAgentTask map[string]*domain.AgentSession // key: agentID+":"+taskID
+	createN     int
+	updateN     int
+	endStale    func(ctx context.Context, timeout time.Duration) (int, error)
 }
 
 func newMockSessionRepo() *mockSessionRepo {
-	return &mockSessionRepo{byAgent: make(map[uuid.UUID]*domain.AgentSession)}
+	return &mockSessionRepo{
+		byAgent:     make(map[uuid.UUID]*domain.AgentSession),
+		byAgentTask: make(map[string]*domain.AgentSession),
+	}
+}
+
+func agentTaskKey(agentID, taskID uuid.UUID) string {
+	return agentID.String() + ":" + taskID.String()
 }
 
 func (m *mockSessionRepo) Create(ctx context.Context, s *domain.AgentSession) error {
@@ -39,6 +48,9 @@ func (m *mockSessionRepo) Create(ctx context.Context, s *domain.AgentSession) er
 	defer m.mu.Unlock()
 	cp := *s
 	m.byAgent[s.AgentID] = &cp
+	if s.TaskID != nil {
+		m.byAgentTask[agentTaskKey(s.AgentID, *s.TaskID)] = &cp
+	}
 	m.createN++
 	return nil
 }
@@ -48,6 +60,9 @@ func (m *mockSessionRepo) Update(ctx context.Context, s *domain.AgentSession) er
 	defer m.mu.Unlock()
 	cp := *s
 	m.byAgent[s.AgentID] = &cp
+	if s.TaskID != nil {
+		m.byAgentTask[agentTaskKey(s.AgentID, *s.TaskID)] = &cp
+	}
 	m.updateN++
 	return nil
 }
@@ -56,6 +71,17 @@ func (m *mockSessionRepo) GetActive(ctx context.Context, agentID uuid.UUID) (*do
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	s, ok := m.byAgent[agentID]
+	if !ok {
+		return nil, nil
+	}
+	cp := *s
+	return &cp, nil
+}
+
+func (m *mockSessionRepo) GetActiveForTask(ctx context.Context, agentID, taskID uuid.UUID) (*domain.AgentSession, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	s, ok := m.byAgentTask[agentTaskKey(agentID, taskID)]
 	if !ok {
 		return nil, nil
 	}
@@ -232,6 +258,40 @@ func TestReportSession_NilRepoNotImplemented(t *testing.T) {
 	agentID := uuid.New()
 	rec := postReport(t, h, e, &agentID, `{"tokens_in":100}`)
 	assert.Equal(t, http.StatusNotImplemented, rec.Code)
+}
+
+// Two different task_ids from the same agent within one EndStale window must
+// each get their own session row — costs must not pile onto the first task.
+func TestReportSession_TwoTasksSeparateSessions(t *testing.T) {
+	repo := newMockSessionRepo()
+	agentID := uuid.New()
+	taskA := uuid.New()
+	taskB := uuid.New()
+	h, e := setupSessionTest(repo, uuid.New())
+
+	// Report for taskA: creates a new session.
+	postReport(t, h, e, &agentID, `{"task_id":"`+taskA.String()+`","tokens_in":100,"tokens_out":50,"estimated_cost":0.01}`)
+
+	// Report for taskB: must NOT accumulate onto taskA's session.
+	postReport(t, h, e, &agentID, `{"task_id":"`+taskB.String()+`","tokens_in":200,"tokens_out":80,"estimated_cost":0.02}`)
+
+	// A second report for taskA accumulates on its own session (not taskB's).
+	postReport(t, h, e, &agentID, `{"task_id":"`+taskA.String()+`","tokens_in":10}`)
+
+	sessA, err := repo.GetActiveForTask(context.Background(), agentID, taskA)
+	require.NoError(t, err)
+	require.NotNil(t, sessA, "taskA session must exist")
+	assert.Equal(t, taskA, *sessA.TaskID)
+	assert.Equal(t, int64(110), sessA.TokensIn, "taskA should have 100+10, not taskB's 200")
+
+	sessB, err := repo.GetActiveForTask(context.Background(), agentID, taskB)
+	require.NoError(t, err)
+	require.NotNil(t, sessB, "taskB session must exist")
+	assert.Equal(t, taskB, *sessB.TaskID)
+	assert.Equal(t, int64(200), sessB.TokensIn, "taskB should only have its own 200")
+
+	// Two distinct sessions created.
+	assert.Equal(t, 2, repo.createN)
 }
 
 // Concurrent reports from the same agent must not race (run with -race).

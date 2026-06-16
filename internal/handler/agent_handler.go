@@ -652,17 +652,25 @@ func (h *AgentHandler) ReportSession(c echo.Context) error {
 
 	ctx := c.Request().Context()
 
-	active, err := h.sessionRepo.GetActive(ctx, agentID)
-	if err != nil {
-		return handleError(c, err)
-	}
-
-	// Parse optional task_id from request.
+	// Parse optional task_id FIRST so we can scope the session lookup per-task.
 	var reqTaskID *uuid.UUID
 	if req.TaskID != nil && *req.TaskID != "" {
 		if parsed, perr := uuid.Parse(*req.TaskID); perr == nil {
 			reqTaskID = &parsed
 		}
+	}
+
+	// Look up an existing active session scoped to this task (when provided), or
+	// fall back to the agent-wide active session for backward-compat with untagged reports.
+	var active *domain.AgentSession
+	var err error
+	if reqTaskID != nil {
+		active, err = h.sessionRepo.GetActiveForTask(ctx, agentID, *reqTaskID)
+	} else {
+		active, err = h.sessionRepo.GetActive(ctx, agentID)
+	}
+	if err != nil {
+		return handleError(c, err)
 	}
 
 	if active == nil {
