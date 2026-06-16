@@ -67,12 +67,18 @@ function normalizeSearchQuery(raw: string): string {
   return raw.trim();
 }
 
+function isShortId(q: string): boolean {
+  const s = q.startsWith("#") ? q.slice(1) : q;
+  return /^[0-9a-f]{6,32}$/i.test(s);
+}
+
 // ---------------------------------------------------------------------------
 // useTaskSearch — debounced cross-project search
 // ---------------------------------------------------------------------------
 
 function useTaskSearch() {
   const { currentProject, projects, statuses } = useProjectStore();
+  const { currentWorkspace } = useWorkspaceStore();
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<TaskSearchResult[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -105,6 +111,35 @@ function useTaskSearch() {
       abortRef.current = new AbortController();
 
       setIsLoading(true);
+
+      // Short-id fast path: bypass project scope, search workspace-wide so a
+      // task from any project is found regardless of which project is open.
+      if (isShortId(q) && currentWorkspace?.id) {
+        try {
+          const page = await api<PaginatedResponse<Task>>(
+            `/api/v1/workspaces/${currentWorkspace.id}/tasks`,
+            { params: { search: q, page_size: "10" } },
+          );
+          const colorMap = statusColorMap();
+          const enriched: TaskSearchResult[] = (page.items ?? [])
+            .slice(0, 8)
+            .map((task) => {
+              const proj = projects.find((p) => p.id === task.project_id);
+              return {
+                task,
+                projectName: proj?.name ?? "—",
+                projectSlug: proj?.slug ?? "",
+                statusColor: colorMap.get(task.status_id) ?? "#6b7280",
+              };
+            });
+          setResults(enriched);
+        } catch {
+          setResults([]);
+        } finally {
+          setIsLoading(false);
+        }
+        return;
+      }
 
       try {
         // Determine which projects to search.
@@ -157,7 +192,7 @@ function useTaskSearch() {
         setIsLoading(false);
       }
     },
-    [currentProject, projects, statusColorMap],
+    [currentProject, currentWorkspace, projects, statusColorMap],
   );
 
   const handleQueryChange = useCallback(
