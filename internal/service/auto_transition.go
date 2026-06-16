@@ -340,14 +340,27 @@ func allSubtasksTerminal(subtasks []domain.Task, categoryByStatusID map[uuid.UUI
 }
 
 // hasUnresolvedBlockers returns true if any "blocks" dependency points to a task
-// that is NOT in the "done" category.
+// that has NOT reached a terminal category.
+//
+// Canonical dep-clear rule (P3 #9, 2026-06-16): a blocking dependency is CLEARED
+// when its blocker reaches a TERMINAL status — `done` OR `cancelled`. A cancelled
+// blocker is abandoned/obsoleted work that will never complete, so keeping the
+// dependent blocked on it forever is wrong; the dependent is free to proceed.
+// This brings hasUnresolvedBlockers in line with the rest of the system, which
+// already treated both terminal categories as clearing:
+//   - EvaluateOnTaskMove fires CheckDependencyResolution on done OR cancelled.
+//   - allSubtasksTerminal counts a subtask terminal on done OR cancelled.
+//   - mesh-intake-sweep all_deps_cleared promotes on done OR cancelled.
+// Previously this function alone accepted only `done`, so a cancelled blocker
+// left the dependent stuck in backlog server-side while intake-sweep promoted it
+// — an engine-dependent split. Now both engines agree.
 func hasUnresolvedBlockers(deps []domain.TaskDependency, categoryByTaskID map[uuid.UUID]domain.StatusCategory) bool {
 	for _, dep := range deps {
 		if dep.DependencyType != domain.DependencyTypeBlocks {
 			continue
 		}
 		cat, ok := categoryByTaskID[dep.DependsOnTaskID]
-		if !ok || cat != domain.StatusCategoryDone {
+		if !ok || (cat != domain.StatusCategoryDone && cat != domain.StatusCategoryCancelled) {
 			return true
 		}
 	}
