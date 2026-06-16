@@ -202,6 +202,27 @@ func (r *SessionRepo) GetActive(ctx context.Context, agentID uuid.UUID) (*domain
 	return &sess, nil
 }
 
+// GetActiveForTask returns the agent's active session for a specific task, or nil.
+func (r *SessionRepo) GetActiveForTask(ctx context.Context, agentID, taskID uuid.UUID) (*domain.AgentSession, error) {
+	var row sessionRow
+	err := r.db.GetContext(ctx, &row,
+		`SELECT `+sessionColumns+`
+		 FROM agent_sessions
+		 WHERE agent_id = $1 AND task_id = $2 AND status = 'active'
+		 ORDER BY started_at DESC
+		 LIMIT 1`,
+		agentID, taskID,
+	)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	sess := row.toDomain()
+	return &sess, nil
+}
+
 // GetPreviousStartedAt returns the started_at of the most recent non-active session for
 // the agent. Returns nil (no error) when no such session exists.
 func (r *SessionRepo) GetPreviousStartedAt(ctx context.Context, agentID uuid.UUID) (*time.Time, error) {

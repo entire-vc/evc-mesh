@@ -843,6 +843,9 @@ func (m *MockAgentSessionRepository) Update(ctx context.Context, session *domain
 func (m *MockAgentSessionRepository) GetActive(ctx context.Context, agentID uuid.UUID) (*domain.AgentSession, error) {
 	return nil, nil
 }
+func (m *MockAgentSessionRepository) GetActiveForTask(ctx context.Context, agentID, taskID uuid.UUID) (*domain.AgentSession, error) {
+	return nil, nil
+}
 func (m *MockAgentSessionRepository) EndStale(ctx context.Context, timeout time.Duration) (int, error) {
 	return 0, nil
 }
