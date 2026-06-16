@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"testing"
 	"time"
@@ -27,13 +28,14 @@ type mockMemoryRepo struct {
 	getByKeyFn               func(ctx context.Context, wsID uuid.UUID, projID *uuid.UUID, agentID *uuid.UUID, key string, scope domain.MemoryScope) (*domain.Memory, error)
 	fullTextSearchFn         func(ctx context.Context, query string, wsID uuid.UUID, projID *uuid.UUID, scope string, tags []string, limit int) ([]domain.ScoredMemory, error)
 	findByScopeFn            func(ctx context.Context, wsID uuid.UUID, projID *uuid.UUID, scope string, limit int) ([]domain.Memory, error)
-	listByWorkspaceProjectFn func(ctx context.Context, wsID uuid.UUID, projID *uuid.UUID) ([]domain.Memory, error)
-	deleteFn                 func(ctx context.Context, id uuid.UUID) error
-	boostRelevanceFn         func(ctx context.Context, ids []uuid.UUID) error
-	findByShortIDFn          func() (*domain.Memory, error)
-	setArchivedFn            func() error
-	findByThreadIDFn         func(ctx context.Context, wsID uuid.UUID, threadID string, excludeID uuid.UUID) ([]domain.Memory, error)
-	findBySourceTaskIDsFn    func(ctx context.Context, wsID uuid.UUID, taskIDs []uuid.UUID) ([]domain.Memory, error)
+	listByWorkspaceProjectFn              func(ctx context.Context, wsID uuid.UUID, projID *uuid.UUID, filter domain.MemoryListFilter) ([]domain.Memory, int64, error)
+	deleteFn                              func(ctx context.Context, id uuid.UUID) error
+	boostRelevanceFn                      func(ctx context.Context, ids []uuid.UUID) error
+	findByShortIDFn                       func() (*domain.Memory, error)
+	setArchivedFn                         func() error
+	findByThreadIDFn                      func(ctx context.Context, wsID uuid.UUID, threadID string, excludeID uuid.UUID) ([]domain.Memory, error)
+	findBySourceTaskIDsFn                 func(ctx context.Context, wsID uuid.UUID, taskIDs []uuid.UUID) ([]domain.Memory, error)
+	archiveStaleWorkspaceCheckpointsFn    func(ctx context.Context, olderThan time.Duration, maxImportance float64) (int64, error)
 }
 
 func (m *mockMemoryRepo) Upsert(ctx context.Context, mem *domain.Memory) error {
@@ -71,11 +73,11 @@ func (m *mockMemoryRepo) FindByScope(ctx context.Context, wsID uuid.UUID, projID
 	return nil, nil
 }
 
-func (m *mockMemoryRepo) ListByWorkspaceProject(ctx context.Context, wsID uuid.UUID, projID *uuid.UUID) ([]domain.Memory, error) {
+func (m *mockMemoryRepo) ListByWorkspaceProject(ctx context.Context, wsID uuid.UUID, projID *uuid.UUID, filter domain.MemoryListFilter) ([]domain.Memory, int64, error) {
 	if m.listByWorkspaceProjectFn != nil {
-		return m.listByWorkspaceProjectFn(ctx, wsID, projID)
+		return m.listByWorkspaceProjectFn(ctx, wsID, projID, filter)
 	}
-	return nil, nil
+	return nil, 0, nil
 }
 
 func (m *mockMemoryRepo) Delete(ctx context.Context, id uuid.UUID) error {
@@ -142,6 +144,13 @@ func (m *mockMemoryRepo) FindBySourceTaskIDs(ctx context.Context, wsID uuid.UUID
 		return m.findBySourceTaskIDsFn(ctx, wsID, taskIDs)
 	}
 	return nil, nil
+}
+
+func (m *mockMemoryRepo) ArchiveStaleWorkspaceCheckpoints(ctx context.Context, olderThan time.Duration, maxImportance float64) (int64, error) {
+	if m.archiveStaleWorkspaceCheckpointsFn != nil {
+		return m.archiveStaleWorkspaceCheckpointsFn(ctx, olderThan, maxImportance)
+	}
+	return 0, nil
 }
 
 // Verify mockMemoryRepo satisfies the interface at compile time.
@@ -374,20 +383,124 @@ func TestGetProjectKnowledge(t *testing.T) {
 	}
 
 	repo := &mockMemoryRepo{
-		listByWorkspaceProjectFn: func(_ context.Context, gotWsID uuid.UUID, gotProjID *uuid.UUID) ([]domain.Memory, error) {
+		listByWorkspaceProjectFn: func(_ context.Context, gotWsID uuid.UUID, gotProjID *uuid.UUID, _ domain.MemoryListFilter) ([]domain.Memory, int64, error) {
 			assert.Equal(t, wsID, gotWsID)
 			require.NotNil(t, gotProjID)
 			assert.Equal(t, projID, *gotProjID)
-			return stored, nil
+			return stored, int64(len(stored)), nil
 		},
 	}
 
 	svc := newMemoryService(repo)
 
-	memories, err := svc.GetProjectKnowledge(context.Background(), wsID, &projID)
+	memories, _, err := svc.GetProjectKnowledge(context.Background(), wsID, &projID, domain.MemoryListFilter{})
 
 	require.NoError(t, err)
 	assert.Len(t, memories, 2)
+}
+
+// ---------------------------------------------------------------------------
+// TestGetProjectKnowledge_WorkspacePagination — filter is forwarded to repo
+// ---------------------------------------------------------------------------
+
+func TestGetProjectKnowledge_WorkspacePagination(t *testing.T) {
+	wsID := uuid.New()
+	ws := make([]domain.Memory, 150)
+	for i := range ws {
+		ws[i] = domain.Memory{ID: uuid.New(), WorkspaceID: wsID, Key: fmt.Sprintf("key-%d", i), Scope: domain.ScopeWorkspace}
+	}
+
+	var capturedFilter domain.MemoryListFilter
+	repo := &mockMemoryRepo{
+		listByWorkspaceProjectFn: func(_ context.Context, _ uuid.UUID, projID *uuid.UUID, filter domain.MemoryListFilter) ([]domain.Memory, int64, error) {
+			if projID == nil {
+				capturedFilter = filter
+				// Simulate pagination: return first filter.Limit entries.
+				end := filter.Limit
+				if end > len(ws) {
+					end = len(ws)
+				}
+				return ws[:end], int64(len(ws)), nil
+			}
+			return nil, 0, nil
+		},
+	}
+
+	svc := newMemoryService(repo)
+
+	f := domain.MemoryListFilter{Limit: 50, Offset: 0}
+	memories, total, err := svc.GetProjectKnowledge(context.Background(), wsID, nil, f)
+
+	require.NoError(t, err)
+	assert.Equal(t, 50, len(memories))
+	assert.Equal(t, int64(150), total)
+	assert.Equal(t, 50, capturedFilter.Limit)
+}
+
+// ---------------------------------------------------------------------------
+// TestDefaultExpiresAt_KindSessionCheckpointTag — TTL fix: "kind:session-checkpoint"
+// ---------------------------------------------------------------------------
+
+func TestDefaultExpiresAt_KindSessionCheckpointTag(t *testing.T) {
+	// "kind:session-checkpoint" should trigger the 7d TTL just like "session-checkpoint".
+	wsID := uuid.New()
+	var capturedMem *domain.Memory
+	repo := &mockMemoryRepo{
+		upsertFn: func(_ context.Context, m *domain.Memory) error {
+			capturedMem = m
+			return nil
+		},
+		getByKeyFn: func(_ context.Context, _ uuid.UUID, _ *uuid.UUID, _ *uuid.UUID, _ string, _ domain.MemoryScope) (*domain.Memory, error) {
+			return nil, nil // new entry
+		},
+	}
+
+	svc := newMemoryService(repo)
+	mem := &domain.Memory{
+		WorkspaceID: wsID,
+		Key:         "test-checkpoint",
+		Content:     "session data",
+		Scope:       domain.ScopeWorkspace,
+		Tags:        []string{"kind:session-checkpoint", "owner:linus"},
+	}
+	_, err := svc.Remember(context.Background(), mem)
+	require.NoError(t, err)
+	require.NotNil(t, capturedMem)
+	require.NotNil(t, capturedMem.ExpiresAt, "kind:session-checkpoint must get expires_at TTL")
+	// TTL should be approximately 7 days.
+	delta := time.Until(*capturedMem.ExpiresAt)
+	assert.True(t, delta > 6*24*time.Hour && delta <= 7*24*time.Hour+time.Minute,
+		"expected ~7d TTL, got %v", delta)
+}
+
+// ---------------------------------------------------------------------------
+// TestGetProjectKnowledge_ProjectMemoriesNotLimited — project tier always unlimited
+// ---------------------------------------------------------------------------
+
+func TestGetProjectKnowledge_ProjectMemoriesNotLimited(t *testing.T) {
+	wsID := uuid.New()
+	projID := uuid.New()
+	stored := make([]domain.Memory, 200)
+	for i := range stored {
+		stored[i] = domain.Memory{ID: uuid.New(), WorkspaceID: wsID, Scope: domain.ScopeProject}
+	}
+
+	repo := &mockMemoryRepo{
+		listByWorkspaceProjectFn: func(_ context.Context, _ uuid.UUID, pID *uuid.UUID, filter domain.MemoryListFilter) ([]domain.Memory, int64, error) {
+			if pID != nil {
+				// Project tier: filter.Limit should be 0 (no limit).
+				assert.Equal(t, 0, filter.Limit, "project tier must not be limited")
+				return stored, int64(len(stored)), nil
+			}
+			return nil, 0, nil
+		},
+	}
+
+	svc := newMemoryService(repo)
+	memories, total, err := svc.GetProjectKnowledge(context.Background(), wsID, &projID, domain.MemoryListFilter{})
+	require.NoError(t, err)
+	assert.Equal(t, 200, len(memories))
+	assert.Equal(t, int64(200), total)
 }
 
 // ---------------------------------------------------------------------------

@@ -564,7 +564,10 @@ type MemoryRepository interface {
 	GetByKey(ctx context.Context, workspaceID uuid.UUID, projectID, agentID *uuid.UUID, key string, scope domain.MemoryScope) (*domain.Memory, error)
 	FullTextSearch(ctx context.Context, query string, workspaceID uuid.UUID, projectID *uuid.UUID, scope string, tags []string, limit int) ([]domain.ScoredMemory, error)
 	FindByScope(ctx context.Context, workspaceID uuid.UUID, projectID *uuid.UUID, scope string, limit int) ([]domain.Memory, error)
-	ListByWorkspaceProject(ctx context.Context, workspaceID uuid.UUID, projectID *uuid.UUID) ([]domain.Memory, error)
+	// ListByWorkspaceProject returns non-expired memories for a workspace/project pair.
+	// filter.Limit/Offset/MinImportance/TagsAny are applied to the workspace-tier when projectID is nil.
+	// Limit=0 means no limit (used for export and project-scoped calls). Returns total count pre-limit.
+	ListByWorkspaceProject(ctx context.Context, workspaceID uuid.UUID, projectID *uuid.UUID, filter domain.MemoryListFilter) ([]domain.Memory, int64, error)
 	// List executes a richly-filtered query with pagination, tag filters, ordering, and optional
 	// recency-decay scoring. It is used by the extended Recall/List endpoints introduced in
 	// the memory API extensions (Phase 2). Total is a separate COUNT query.
@@ -601,6 +604,11 @@ type MemoryRepository interface {
 	// source_task_id is one of the given task UUIDs.
 	// Used by Amendment 3 to create task-graph derived_from edges.
 	FindBySourceTaskIDs(ctx context.Context, workspaceID uuid.UUID, sourceTaskIDs []uuid.UUID) ([]domain.Memory, error)
+	// ArchiveStaleWorkspaceCheckpoints sets archived=true for workspace-scoped session-checkpoint
+	// memories older than olderThan with importance_score < maxImportance.
+	// Never archives entries tagged canonical/pavel-decision/kind:decision/kind:incident.
+	// Called from the 6h memory cleanup scheduler.
+	ArchiveStaleWorkspaceCheckpoints(ctx context.Context, olderThan time.Duration, maxImportance float64) (int64, error)
 }
 
 // MemoryEdgeRepository manages directed, typed edges in the memory Knowledge Graph.

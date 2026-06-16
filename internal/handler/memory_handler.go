@@ -102,6 +102,8 @@ type projectKnowledgeResponse struct {
 	WorkspaceMemories []domain.Memory `json:"workspace_memories"`
 	ProjectMemories   []domain.Memory `json:"project_memories"`
 	TotalCount        int             `json:"total_count"`
+	WorkspaceTotal    int64           `json:"workspace_total"`
+	HasMore           bool            `json:"has_more"`
 }
 
 // Remember handles POST /api/v1/memories
@@ -536,7 +538,13 @@ func (h *MemoryHandler) Delete(c echo.Context) error {
 }
 
 // GetProjectKnowledge handles GET /api/v1/projects/:proj_id/knowledge
-// Returns all workspace-level and project-level memories for a project.
+// Returns workspace-level (paginated) and project-level memories for a project.
+//
+// Query params:
+//   - limit int (default 100, max 500) — applied to workspace-tier only
+//   - offset int (default 0)
+//   - min_importance float64 (default 0) — workspace-tier filter
+//   - tags_any string comma-separated — workspace-tier OR tag filter
 func (h *MemoryHandler) GetProjectKnowledge(c echo.Context) error {
 	projIDStr := c.Param("proj_id")
 	projID, err := uuid.Parse(projIDStr)
@@ -544,27 +552,62 @@ func (h *MemoryHandler) GetProjectKnowledge(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid proj_id"))
 	}
 
-	// Resolve workspace_id from context.
 	wsID, wsErr := requireWorkspaceID(c, "")
 	if wsErr != nil {
 		return c.JSON(http.StatusBadRequest, wsErr)
 	}
 
-	// Fetch project-scoped memories.
-	projectMemories, err := h.memoryService.GetProjectKnowledge(c.Request().Context(), wsID, &projID)
+	// Parse pagination query params for the workspace tier.
+	limit := 100
+	if raw := c.QueryParam("limit"); raw != "" {
+		if v, parseErr := strconv.Atoi(raw); parseErr == nil && v > 0 && v <= 500 {
+			limit = v
+		}
+	}
+	offset := 0
+	if raw := c.QueryParam("offset"); raw != "" {
+		if v, parseErr := strconv.Atoi(raw); parseErr == nil && v >= 0 {
+			offset = v
+		}
+	}
+	var minImportance *float32
+	if raw := c.QueryParam("min_importance"); raw != "" {
+		if v, parseErr := strconv.ParseFloat(raw, 32); parseErr == nil {
+			f := float32(v)
+			minImportance = &f
+		}
+	}
+	var tagsAny []string
+	if raw := c.QueryParam("tags_any"); raw != "" {
+		for _, t := range strings.Split(raw, ",") {
+			if t = strings.TrimSpace(t); t != "" {
+				tagsAny = append(tagsAny, t)
+			}
+		}
+	}
+
+	wsFilter := domain.MemoryListFilter{
+		Limit:         limit,
+		Offset:        offset,
+		MinImportance: minImportance,
+		TagsAny:       tagsAny,
+	}
+
+	// Project-scoped memories have no pagination (they are small).
+	projectMemories, _, err := h.memoryService.GetProjectKnowledge(c.Request().Context(), wsID, &projID, domain.MemoryListFilter{})
 	if err != nil {
 		return handleError(c, err)
 	}
 
-	// Fetch workspace-scoped memories (no project filter).
-	workspaceMemories, err := h.memoryService.GetProjectKnowledge(c.Request().Context(), wsID, nil)
+	// Workspace-tier memories — paginated.
+	allWS, wsTotal, err := h.memoryService.GetProjectKnowledge(c.Request().Context(), wsID, nil, wsFilter)
 	if err != nil {
 		return handleError(c, err)
 	}
 
-	// Filter workspace-only memories (scope=workspace) to avoid duplication.
+	// Retain only workspace-scoped entries to avoid duplicating project memories.
 	var wsOnly []domain.Memory
-	for _, m := range workspaceMemories {
+	for _, m := range allWS {
 		if m.Scope == domain.ScopeWorkspace {
 			wsOnly = append(wsOnly, m)
 		}
@@ -574,6 +617,8 @@ func (h *MemoryHandler) GetProjectKnowledge(c echo.Context) error {
 		WorkspaceMemories: wsOnly,
 		ProjectMemories:   projectMemories,
 		TotalCount:        len(wsOnly) + len(projectMemories),
+		WorkspaceTotal:    wsTotal,
+		HasMore:           wsTotal > int64(offset+limit),
 	})
 }
 

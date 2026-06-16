@@ -435,34 +435,66 @@ func (r *MemoryRepo) FindByScope(ctx context.Context, workspaceID uuid.UUID, pro
 	return memories, nil
 }
 
-// ListByWorkspaceProject returns all non-expired memories for a workspace (and optional project).
-// When projectID is nil, all workspace-scoped memories are returned regardless of project.
-// Used by the get_project_knowledge MCP tool.
-func (r *MemoryRepo) ListByWorkspaceProject(ctx context.Context, workspaceID uuid.UUID, projectID *uuid.UUID) ([]domain.Memory, error) {
+// ListByWorkspaceProject returns non-expired memories for a workspace/project pair with
+// optional pagination. When projectID is non-nil, all matching project memories are returned
+// without limit (they are small). When projectID is nil (workspace-tier), filter.Limit,
+// filter.Offset, filter.MinImportance, and filter.TagsAny are applied. Limit=0 means no limit.
+// Returns the total matching count before pagination is applied.
+func (r *MemoryRepo) ListByWorkspaceProject(ctx context.Context, workspaceID uuid.UUID, projectID *uuid.UUID, filter domain.MemoryListFilter) ([]domain.Memory, int64, error) {
 	args := []interface{}{workspaceID}
 	conditions := []string{
 		"workspace_id = $1",
 		"(expires_at IS NULL OR expires_at > NOW())",
 		"archived = false",
 	}
+	argIdx := 2
 
 	if projectID != nil {
-		conditions = append(conditions, "project_id = $2")
+		conditions = append(conditions, fmt.Sprintf("project_id = $%d", argIdx))
 		args = append(args, *projectID)
+		argIdx++
 	}
 
-	q := fmt.Sprintf(`
-		SELECT %s
-		FROM memories
-		WHERE %s
-		ORDER BY relevance DESC, updated_at DESC`,
-		memoryColumns,
-		joinAnd(conditions),
+	// Workspace-tier only: apply optional importance + tag filters.
+	if projectID == nil {
+		if filter.MinImportance != nil {
+			conditions = append(conditions, fmt.Sprintf("importance_score >= $%d", argIdx))
+			args = append(args, *filter.MinImportance)
+			argIdx++
+		}
+		if len(filter.TagsAny) > 0 {
+			conditions = append(conditions, fmt.Sprintf("tags && $%d", argIdx))
+			args = append(args, pq.Array(filter.TagsAny))
+			argIdx++
+		}
+	}
+
+	where := joinAnd(conditions)
+
+	// COUNT query for total before pagination.
+	var total int64
+	if err := r.db.GetContext(ctx, &total, "SELECT COUNT(*) FROM memories WHERE "+where, args...); err != nil {
+		return nil, 0, err
+	}
+
+	// Data query — paginate when Limit > 0.
+	limit := filter.Limit
+	if limit > 500 {
+		limit = 500
+	}
+	dataArgs := args
+	q := fmt.Sprintf(
+		"SELECT %s FROM memories WHERE %s ORDER BY importance_score DESC, relevance DESC, updated_at DESC",
+		memoryColumns, where,
 	)
+	if limit > 0 {
+		q += fmt.Sprintf(" LIMIT $%d OFFSET $%d", argIdx, argIdx+1)
+		dataArgs = append(dataArgs, limit, filter.Offset)
+	}
 
 	var rows []memoryRow
-	if err := r.db.SelectContext(ctx, &rows, q, args...); err != nil {
-		return nil, err
+	if err := r.db.SelectContext(ctx, &rows, q, dataArgs...); err != nil {
+		return nil, 0, err
 	}
 	memories := make([]domain.Memory, len(rows))
 	ids := make([]uuid.UUID, len(rows))
@@ -470,7 +502,7 @@ func (r *MemoryRepo) ListByWorkspaceProject(ctx context.Context, workspaceID uui
 		memories[i] = row.toDomain()
 		ids[i] = row.ID
 	}
-	// Batch-touch last_accessed_at (1-hour idempotency window, same pattern as FullTextSearch).
+	// Batch-touch last_accessed_at (1-hour idempotency window).
 	if len(ids) > 0 {
 		_, _ = r.db.ExecContext(ctx,
 			`UPDATE memories SET last_accessed_at = NOW()
@@ -479,7 +511,7 @@ func (r *MemoryRepo) ListByWorkspaceProject(ctx context.Context, workspaceID uui
 			pq.Array(ids),
 		)
 	}
-	return memories, nil
+	return memories, total, nil
 }
 
 // List executes a richly-filtered query with pagination, tag filters, ordering, and optional
@@ -839,6 +871,35 @@ func (r *MemoryRepo) CleanExpired(ctx context.Context) (int64, error) {
 	)
 	if err != nil {
 		return 0, fmt.Errorf("memory clean expired: %w", err)
+	}
+	return result.RowsAffected()
+}
+
+// ArchiveStaleWorkspaceCheckpoints sets archived=true for workspace-scoped session-checkpoint
+// memories older than olderThan with importance_score < maxImportance.
+// Entries tagged canonical/pavel-decision/kind:decision/kind:incident are never touched.
+func (r *MemoryRepo) ArchiveStaleWorkspaceCheckpoints(ctx context.Context, olderThan time.Duration, maxImportance float64) (int64, error) {
+	cutoff := time.Now().Add(-olderThan)
+	result, err := r.db.ExecContext(ctx, `
+		UPDATE memories SET archived = true
+		WHERE scope = 'workspace'
+		  AND (
+		    tags @> ARRAY['kind:session-checkpoint']::text[]
+		    OR tags @> ARRAY['session-checkpoint']::text[]
+		  )
+		  AND importance_score < $1
+		  AND created_at < $2
+		  AND archived = false
+		  AND NOT (
+		    tags @> ARRAY['canonical']::text[]
+		    OR tags @> ARRAY['pavel-decision']::text[]
+		    OR tags @> ARRAY['kind:canonical-decision']::text[]
+		    OR tags @> ARRAY['kind:decision']::text[]
+		    OR tags @> ARRAY['kind:incident']::text[]
+		  )
+	`, maxImportance, cutoff)
+	if err != nil {
+		return 0, fmt.Errorf("archive stale workspace checkpoints: %w", err)
 	}
 	return result.RowsAffected()
 }

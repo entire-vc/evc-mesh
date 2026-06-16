@@ -558,7 +558,7 @@ func defaultExpiresAt(scope domain.MemoryScope, tags []string) *time.Time {
 		return false
 	}
 
-	if hasTag("session-checkpoint") {
+	if hasTag("session-checkpoint") || hasTag("kind:session-checkpoint") {
 		t := time.Now().Add(7 * 24 * time.Hour)
 		return &t
 	}
@@ -820,9 +820,11 @@ func reciprocalRankFusion(kw, vec []domain.ScoredMemory) []domain.ScoredMemory {
 	return result
 }
 
-// GetProjectKnowledge returns all non-expired memories for a workspace (and optional project).
-func (s *memoryService) GetProjectKnowledge(ctx context.Context, workspaceID uuid.UUID, projectID *uuid.UUID) ([]domain.Memory, error) {
-	return s.memRepo.ListByWorkspaceProject(ctx, workspaceID, projectID)
+// GetProjectKnowledge returns memories for a workspace/project pair with optional pagination.
+// When projectID is nil (workspace-tier), filter.Limit/Offset/MinImportance/TagsAny are applied.
+// Returns the slice and total count before pagination.
+func (s *memoryService) GetProjectKnowledge(ctx context.Context, workspaceID uuid.UUID, projectID *uuid.UUID, filter domain.MemoryListFilter) ([]domain.Memory, int64, error) {
+	return s.memRepo.ListByWorkspaceProject(ctx, workspaceID, projectID, filter)
 }
 
 // SetProjectKnowledge upserts a project-scoped knowledge entry by key.
@@ -1127,7 +1129,8 @@ type memoryExportDoc struct {
 // ExportMemories serialises all non-expired memories for the workspace (optionally
 // filtered to a single project) as a YAML document.
 func (s *memoryService) ExportMemories(ctx context.Context, workspaceID uuid.UUID, projectID *uuid.UUID) ([]byte, error) {
-	memories, err := s.memRepo.ListByWorkspaceProject(ctx, workspaceID, projectID)
+	// Limit=0 → no pagination: export always fetches all matching records.
+	memories, _, err := s.memRepo.ListByWorkspaceProject(ctx, workspaceID, projectID, domain.MemoryListFilter{})
 	if err != nil {
 		return nil, fmt.Errorf("memory export: list: %w", err)
 	}

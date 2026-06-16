@@ -926,6 +926,11 @@ func main() {
 				} else if n > 0 {
 					log.Printf("[memory-cleanup] Cleaned %d expired memories", n)
 				}
+				if n, archErr := memoryRepo.ArchiveStaleWorkspaceCheckpoints(ctx, 30*24*time.Hour, 0.40); archErr != nil {
+					log.Printf("[memory-archive] ERROR: %v", archErr)
+				} else if n > 0 {
+					log.Printf("[memory-archive] Archived %d stale workspace checkpoints", n)
+				}
 				if n, edgeDecayErr := memoryEdgesRepo.DecayWeights(ctx); edgeDecayErr != nil {
 					log.Printf("[edge-decay] ERROR: %v", edgeDecayErr)
 				} else if n > 0 {
