@@ -529,6 +529,81 @@ func TestCommentService_Create_FiresMention(t *testing.T) {
 	assert.Equal(t, agent.ID, mentionCalls[0].AgentID)
 }
 
+// ---------------------------------------------------------------------------
+// TestCommentService_Create_NoNotifyOnTerminalTask (incident #56a6d5b2)
+// ---------------------------------------------------------------------------
+
+// TestCommentService_Create_NoNotifyOnTerminalTask verifies that task.commented
+// is NOT sent to the assigned agent when the task is in a terminal status
+// (done or cancelled). Without this guard the dispatcher spawns a new session
+// whose prompt instructs checkout + move_to_in_progress, reactivating closed work.
+func TestCommentService_Create_NoNotifyOnTerminalTask(t *testing.T) {
+	cases := []struct {
+		name     string
+		category domain.StatusCategory
+		wantSent bool
+	}{
+		{"done task suppresses notify", domain.StatusCategoryDone, false},
+		{"cancelled task suppresses notify", domain.StatusCategoryCancelled, false},
+		{"in_progress task sends notify", domain.StatusCategoryInProgress, true},
+		{"todo task sends notify", domain.StatusCategoryTodo, true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			commentRepo := NewMockCommentRepository()
+			taskRepo := NewMockTaskRepository()
+			activityRepo := NewMockActivityLogRepository()
+			statusRepo := NewMockTaskStatusRepository()
+			projectRepo := NewMockProjectRepository()
+			notifySvc := NewMockAgentNotifyService()
+
+			wsID := uuid.New()
+			projID := uuid.New()
+			projectRepo.items[projID] = &domain.Project{ID: projID, WorkspaceID: wsID}
+
+			statusID := uuid.New()
+			statusRepo.items[statusID] = &domain.TaskStatus{
+				ID: statusID, ProjectID: projID, Category: tc.category, Name: tc.name,
+			}
+
+			agentID := uuid.New()
+			taskID := uuid.New()
+			taskRepo.items[taskID] = &domain.Task{
+				ID:           taskID,
+				ProjectID:    projID,
+				Title:        "Done task",
+				StatusID:     statusID,
+				AssigneeID:   &agentID,
+				AssigneeType: domain.AssigneeTypeAgent,
+			}
+
+			timeNow = func() time.Time { return frozenTime }
+
+			svc := NewCommentService(commentRepo, taskRepo, activityRepo,
+				WithCommentAgentNotify(notifySvc),
+				WithCommentStatusRepo(statusRepo),
+				WithCommentProjectRepo(projectRepo),
+			).(*commentService)
+
+			comment := &domain.Comment{
+				TaskID:     taskID,
+				AuthorID:   uuid.New(),
+				AuthorType: domain.ActorTypeUser,
+				Body:       "nice work team",
+			}
+			require.NoError(t, svc.Create(context.Background(), comment))
+
+			commentedCalls := filterByEvent(notifySvc.Calls(), "task.commented")
+			if tc.wantSent {
+				assert.Len(t, commentedCalls, 1, "task.commented should be sent for non-terminal task")
+			} else {
+				assert.Empty(t, commentedCalls, "task.commented must not be sent for terminal task (reactivation guard)")
+			}
+		})
+	}
+}
+
 // filterByEvent returns only the calls matching the given event_type.
 func filterByEvent(calls []AgentNotification, eventType string) []AgentNotification {
 	var out []AgentNotification
