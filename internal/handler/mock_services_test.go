@@ -743,8 +743,8 @@ func (m *MockMemoryService) Remember(ctx context.Context, mem *domain.Memory) (s
 func (m *MockMemoryService) Recall(ctx context.Context, opts domain.RecallOpts) ([]domain.ScoredMemory, error) {
 	return nil, nil
 }
-func (m *MockMemoryService) GetProjectKnowledge(ctx context.Context, workspaceID uuid.UUID, projectID *uuid.UUID) ([]domain.Memory, error) {
-	return nil, nil
+func (m *MockMemoryService) GetProjectKnowledge(ctx context.Context, workspaceID uuid.UUID, projectID *uuid.UUID, filter domain.MemoryListFilter) ([]domain.Memory, int64, error) {
+	return nil, 0, nil
 }
 func (m *MockMemoryService) SetProjectKnowledge(ctx context.Context, input service.SetProjectKnowledgeInput) (*domain.Memory, string, error) {
 	return nil, "", nil

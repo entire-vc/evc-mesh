@@ -783,7 +783,10 @@ type MemoryService interface {
 	Recall(ctx context.Context, opts domain.RecallOpts) ([]domain.ScoredMemory, error)
 	// ListMemories executes a richly-filtered, paginated list query backed by the repository.
 	ListMemories(ctx context.Context, filter domain.MemoryListFilter) (*RecallResult, error)
-	GetProjectKnowledge(ctx context.Context, workspaceID uuid.UUID, projectID *uuid.UUID) ([]domain.Memory, error)
+	// GetProjectKnowledge returns memories for a project (project-scoped) or workspace tier.
+	// filter.Limit/Offset/MinImportance/TagsAny apply to the workspace-tier (projectID=nil).
+	// Returns memories and the total count before pagination.
+	GetProjectKnowledge(ctx context.Context, workspaceID uuid.UUID, projectID *uuid.UUID, filter domain.MemoryListFilter) ([]domain.Memory, int64, error)
 	// SetProjectKnowledge upserts a project-scoped knowledge entry. Returns "created" or "updated".
 	SetProjectKnowledge(ctx context.Context, input SetProjectKnowledgeInput) (*domain.Memory, string, error)
 	Forget(ctx context.Context, id uuid.UUID, actorAgentID *uuid.UUID, isAdmin bool) error
