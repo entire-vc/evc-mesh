@@ -1200,6 +1200,43 @@ func TestTaskService_applyAutoAssign(t *testing.T) {
 	}
 }
 
+// TestTaskService_Create_ExplicitAssigneeIDNotClobbered is a regression test for the
+// $59 incident where create_task(assignee_id=X, assignee_type="") silently assigned
+// to the auto-assign default instead of X. The service guard must skip applyAutoAssign
+// when AssigneeID is already non-nil, even if AssigneeType is "unassigned".
+func TestTaskService_Create_ExplicitAssigneeIDNotClobbered(t *testing.T) {
+	explicitAssignee := uuid.New()
+	autoAssignDefault := uuid.New()
+
+	rules := &domain.EffectiveAssignmentRules{
+		DefaultAssignee: &domain.EffectiveAssignmentRule{Value: autoAssignDefault.String(), Source: "workspace"},
+	}
+	svc, taskRepo := setupTaskServiceWithRules(rules)
+	ctx := context.Background()
+
+	task := &domain.Task{
+		ProjectID: uuid.New(),
+		StatusID:  uuid.New(),
+		Title:     "Explicit assignee should not be clobbered",
+		Priority:  domain.PriorityMedium,
+		// Simulate the bug: assignee_id provided but assignee_type left as "unassigned"
+		// (the old handler default when type was omitted from the request).
+		AssigneeID:   &explicitAssignee,
+		AssigneeType: domain.AssigneeTypeUnassigned,
+	}
+
+	require.NoError(t, svc.Create(ctx, task))
+
+	stored, err := taskRepo.GetByID(ctx, task.ID)
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+
+	assert.Equal(t, explicitAssignee, *stored.AssigneeID,
+		"explicit assignee_id must be preserved; auto-assign must not clobber it")
+	assert.NotEqual(t, autoAssignDefault, *stored.AssigneeID,
+		"auto-assign default must not override an explicit assignee_id")
+}
+
 func TestTaskService_applyAutoAssign_RulesServiceError(t *testing.T) {
 	taskRepo := NewMockTaskRepository()
 	statusRepo := NewMockTaskStatusRepository()
