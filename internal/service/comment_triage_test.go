@@ -443,7 +443,7 @@ func TestReleaseHumanGate_AgentComment_NoOp(t *testing.T) {
 
 func TestReleaseHumanGate_TaskNotGated_NoOp(t *testing.T) {
 	env := setupTriageEnv(t, true)
-	taskID := env.seedTask(env.inProgressID) // human_gate=false
+	taskID := env.seedTask(env.inProgressID) // gate not set — default task
 	env.seedBlockingComment(taskID)
 
 	pavelID := uuid.New()
