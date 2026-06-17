@@ -23,19 +23,19 @@ import (
 // ---------------------------------------------------------------------------
 
 type mockMemoryRepo struct {
-	upsertFn                 func(ctx context.Context, mem *domain.Memory) error
-	getByIDFn                func(ctx context.Context, id uuid.UUID) (*domain.Memory, error)
-	getByKeyFn               func(ctx context.Context, wsID uuid.UUID, projID *uuid.UUID, agentID *uuid.UUID, key string, scope domain.MemoryScope) (*domain.Memory, error)
-	fullTextSearchFn         func(ctx context.Context, query string, wsID uuid.UUID, projID *uuid.UUID, scope string, tags []string, limit int) ([]domain.ScoredMemory, error)
-	findByScopeFn            func(ctx context.Context, wsID uuid.UUID, projID *uuid.UUID, scope string, limit int) ([]domain.Memory, error)
-	listByWorkspaceProjectFn              func(ctx context.Context, wsID uuid.UUID, projID *uuid.UUID, filter domain.MemoryListFilter) ([]domain.Memory, int64, error)
-	deleteFn                              func(ctx context.Context, id uuid.UUID) error
-	boostRelevanceFn                      func(ctx context.Context, ids []uuid.UUID) error
-	findByShortIDFn                       func() (*domain.Memory, error)
-	setArchivedFn                         func() error
-	findByThreadIDFn                      func(ctx context.Context, wsID uuid.UUID, threadID string, excludeID uuid.UUID) ([]domain.Memory, error)
-	findBySourceTaskIDsFn                 func(ctx context.Context, wsID uuid.UUID, taskIDs []uuid.UUID) ([]domain.Memory, error)
-	archiveStaleWorkspaceCheckpointsFn    func(ctx context.Context, olderThan time.Duration, maxImportance float64) (int64, error)
+	upsertFn                           func(ctx context.Context, mem *domain.Memory) error
+	getByIDFn                          func(ctx context.Context, id uuid.UUID) (*domain.Memory, error)
+	getByKeyFn                         func(ctx context.Context, wsID uuid.UUID, projID *uuid.UUID, agentID *uuid.UUID, key string, scope domain.MemoryScope) (*domain.Memory, error)
+	fullTextSearchFn                   func(ctx context.Context, query string, wsID uuid.UUID, projID *uuid.UUID, scope string, tags []string, limit int) ([]domain.ScoredMemory, error)
+	findByScopeFn                      func(ctx context.Context, wsID uuid.UUID, projID *uuid.UUID, scope string, limit int) ([]domain.Memory, error)
+	listByWorkspaceProjectFn           func(ctx context.Context, wsID uuid.UUID, projID *uuid.UUID, filter domain.MemoryListFilter) ([]domain.Memory, int64, error)
+	deleteFn                           func(ctx context.Context, id uuid.UUID) error
+	boostRelevanceFn                   func(ctx context.Context, ids []uuid.UUID) error
+	findByShortIDFn                    func() (*domain.Memory, error)
+	setArchivedFn                      func() error
+	findByThreadIDFn                   func(ctx context.Context, wsID uuid.UUID, threadID string, excludeID uuid.UUID) ([]domain.Memory, error)
+	findBySourceTaskIDsFn              func(ctx context.Context, wsID uuid.UUID, taskIDs []uuid.UUID) ([]domain.Memory, error)
+	archiveStaleWorkspaceCheckpointsFn func(ctx context.Context, olderThan time.Duration, maxImportance float64) (int64, error)
 }
 
 func (m *mockMemoryRepo) Upsert(ctx context.Context, mem *domain.Memory) error {
