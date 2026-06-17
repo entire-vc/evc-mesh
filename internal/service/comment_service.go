@@ -262,8 +262,10 @@ func (s *commentService) Create(ctx context.Context, comment *domain.Comment) er
 	// Notify @-mentioned agents.
 	if wsID != uuid.Nil {
 		s.notifyMentions(ctx, comment, task, "", wsID)
-		// Server-side enforcement: "❓ Blocking @user" → auto-move task to triage.
+		// Server-side enforcement: "❓ Blocking @user" → auto-move task to triage + arm gate.
 		s.enforceBlockingTriage(ctx, comment, task, wsID)
+		// Symmetric release: user comment after a prior blocking marker → clear human_gate.
+		s.releaseHumanGate(ctx, comment, task, wsID)
 	}
 
 	// Dispatch in-app notification to subscribed workspace users for comment.created.
@@ -632,6 +634,110 @@ func (s *commentService) enforceBlockingTriage(ctx context.Context, comment *dom
 				"project_id": task.ProjectID,
 				"user_slug":  userSlug,
 			},
+		})
+	}
+}
+
+// releaseHumanGate is the symmetric counterpart to enforceBlockingTriage. When a human
+// user (Pavel) posts a comment on a task whose human_gate flag is true, and at least one
+// prior comment on that task carries a "❓ Blocking @user" marker, the gate is cleared:
+//
+//  1. human_gate is set to false in the DB;
+//  2. a system comment records the release for the audit trail;
+//  3. the assignee agent is notified via AgentNotifyService so fiddler/dispatcher
+//     sessions wake and can re-feed the task.
+//
+// Every step is best-effort — failures are logged but never block the comment mutation.
+//
+// Guards (in order):
+//   - taskSvc must be wired;
+//   - task.HumanGate must be true;
+//   - comment.AuthorType must be ActorTypeUser (agents/system cannot release the gate);
+//   - at least one prior comment on the task (excluding this one) must carry a blocking
+//     marker (ensures the gate had a backing signal, not just a manual PATCH).
+func (s *commentService) releaseHumanGate(ctx context.Context, comment *domain.Comment, task *domain.Task, wsID uuid.UUID) {
+	if s.taskSvc == nil {
+		return
+	}
+	if !task.HumanGate {
+		return
+	}
+	if comment.AuthorType != domain.ActorTypeUser {
+		return
+	}
+
+	// Scan the most recent comments for a prior blocking marker.
+	// PageSize 100 covers realistic task depths; SortDir "desc" returns newest first.
+	pg := pagination.Params{Page: 1, PageSize: 100, SortDir: "desc"}
+	pg.Normalize()
+	page, err := s.commentRepo.ListByTask(ctx, task.ID, repository.CommentFilter{IncludeInternal: true}, pg)
+	if err != nil {
+		log.Printf("[human-gate] WARNING: ListByTask on task %s failed: %v", task.ID, err)
+		return
+	}
+
+	foundBlocking := false
+	if page != nil {
+		for _, c := range page.Items {
+			if c.ID == comment.ID {
+				continue // skip the comment we just persisted
+			}
+			if hasBlockingMarker(c.Body) {
+				foundBlocking = true
+				break
+			}
+		}
+	}
+	if !foundBlocking {
+		return
+	}
+
+	// Release the sticky flag.
+	if err := s.taskSvc.SetHumanGate(ctx, task.ID, false); err != nil {
+		log.Printf("[human-gate] WARNING: SetHumanGate(false) on task %s failed: %v", task.ID, err)
+		return
+	}
+
+	// Append a system comment to document the release in the task's audit trail.
+	now := timeNow()
+	sysComment := &domain.Comment{
+		ID:         uuid.New(),
+		TaskID:     task.ID,
+		AuthorID:   systemActorID,
+		AuthorType: domain.ActorTypeSystem,
+		Body:       "🔓 Auto: human_gate снят — Pavel прокомментировал после блокирующего запроса.",
+		CreatedAt:  now,
+		UpdatedAt:  now,
+	}
+	if err := s.commentRepo.Create(ctx, sysComment); err != nil {
+		log.Printf("[human-gate] WARNING: create system comment on task %s failed: %v", task.ID, err)
+	}
+	if s.ctxCacheInv != nil {
+		s.ctxCacheInv.Invalidate(ctx, task.ID)
+	}
+
+	// Notify the assignee agent so it re-enters the feed on next fiddler cycle.
+	if s.agentNotifySvc != nil && task.AssigneeType == domain.AssigneeTypeAgent && task.AssigneeID != nil {
+		taskSnap := s.buildTaskSnap(ctx, task)
+		actorID, _ := actorctx.FromContext(ctx)
+		commentBody := comment.Body
+		if len(commentBody) > 500 {
+			commentBody = commentBody[:500]
+		}
+		s.agentNotifySvc.NotifyAgent(ctx, *task.AssigneeID, AgentNotification{
+			EventType:   "task.human_gate_released",
+			Timestamp:   now,
+			WorkspaceID: wsID,
+			Task:        taskSnap,
+			AgentID:     *task.AssigneeID,
+			ActorID:     actorID,
+			ActorType:   string(domain.ActorTypeUser),
+			Comment: map[string]any{
+				"id":   comment.ID,
+				"body": commentBody,
+			},
+			TaskID:    task.ID,
+			ProjectID: task.ProjectID,
 		})
 	}
 }
