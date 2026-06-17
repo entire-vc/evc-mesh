@@ -348,6 +348,118 @@ func TestEnforceBlockingTriage_AutoMode_SetsHumanGateFlag(t *testing.T) {
 	assert.True(t, gateCalls[0].value, "SetHumanGate must arm the flag (value=true)")
 }
 
+// ---------------------------------------------------------------------------
+// releaseHumanGate (via Create)
+// ---------------------------------------------------------------------------
+
+// seedGatedTask inserts a task with human_gate=true and returns its ID.
+func (env triageTestEnv) seedGatedTask(statusID uuid.UUID) uuid.UUID {
+	taskID := uuid.New()
+	env.taskRepo.items[taskID] = &domain.Task{
+		ID: taskID, ProjectID: env.projID, StatusID: statusID, Title: "Gated", HumanGate: true,
+	}
+	return taskID
+}
+
+// seedBlockingComment pre-inserts a "❓ Blocking @pavel" comment on taskID so that
+// releaseHumanGate finds a prior blocking signal when a user comment arrives.
+func (env triageTestEnv) seedBlockingComment(taskID uuid.UUID) {
+	cid := uuid.New()
+	env.commentRepo.items[cid] = &domain.Comment{
+		ID:         cid,
+		TaskID:     taskID,
+		AuthorID:   uuid.New(),
+		AuthorType: domain.ActorTypeAgent,
+		Body:       "❓ **Blocking @pavel**: need your approval",
+	}
+}
+
+func TestReleaseHumanGate_UserCommentAfterBlock_ReleasesFlag(t *testing.T) {
+	env := setupTriageEnv(t, true)
+	taskID := env.seedGatedTask(env.inProgressID)
+	env.seedBlockingComment(taskID)
+
+	pavelID := uuid.New()
+	ctx := actorctx.WithActor(context.Background(), pavelID, domain.ActorTypeUser)
+	comment := &domain.Comment{
+		TaskID:     taskID,
+		AuthorID:   pavelID,
+		AuthorType: domain.ActorTypeUser,
+		Body:       "Ок, делайте деплой.",
+	}
+	require.NoError(t, env.svc.Create(ctx, comment))
+
+	// SetHumanGate(false) must have been called.
+	gateCalls := env.taskMover.humanGateCalls()
+	require.Len(t, gateCalls, 1)
+	assert.Equal(t, taskID, gateCalls[0].taskID)
+	assert.False(t, gateCalls[0].value, "gate must be cleared (value=false)")
+
+	// A system comment must record the release.
+	sys := env.systemComments()
+	require.Len(t, sys, 1)
+	assert.Contains(t, sys[0].Body, "human_gate снят")
+
+	// No triage move must have been triggered (user comment has no blocking marker).
+	assert.Empty(t, env.taskMover.calls())
+}
+
+func TestReleaseHumanGate_NoPriorBlockingComment_NoOp(t *testing.T) {
+	// task.human_gate=true but no backing blocking comment (manual PATCH scenario)
+	env := setupTriageEnv(t, true)
+	taskID := env.seedGatedTask(env.inProgressID)
+	// no seedBlockingComment
+
+	pavelID := uuid.New()
+	ctx := actorctx.WithActor(context.Background(), pavelID, domain.ActorTypeUser)
+	comment := &domain.Comment{
+		TaskID:     taskID,
+		AuthorID:   pavelID,
+		AuthorType: domain.ActorTypeUser,
+		Body:       "Checking in on this.",
+	}
+	require.NoError(t, env.svc.Create(ctx, comment))
+
+	assert.Empty(t, env.taskMover.humanGateCalls(), "must not release when no prior blocking comment")
+	assert.Empty(t, env.systemComments())
+}
+
+func TestReleaseHumanGate_AgentComment_NoOp(t *testing.T) {
+	env := setupTriageEnv(t, true)
+	taskID := env.seedGatedTask(env.inProgressID)
+	env.seedBlockingComment(taskID)
+
+	comment := &domain.Comment{
+		TaskID:     taskID,
+		AuthorID:   uuid.New(),
+		AuthorType: domain.ActorTypeAgent,
+		Body:       "Still waiting on Pavel.",
+	}
+	require.NoError(t, env.svc.Create(context.Background(), comment))
+
+	assert.Empty(t, env.taskMover.humanGateCalls(), "agent comment must not release the gate")
+	assert.Empty(t, env.systemComments())
+}
+
+func TestReleaseHumanGate_TaskNotGated_NoOp(t *testing.T) {
+	env := setupTriageEnv(t, true)
+	taskID := env.seedTask(env.inProgressID) // gate not set — default task
+	env.seedBlockingComment(taskID)
+
+	pavelID := uuid.New()
+	ctx := actorctx.WithActor(context.Background(), pavelID, domain.ActorTypeUser)
+	comment := &domain.Comment{
+		TaskID:     taskID,
+		AuthorID:   pavelID,
+		AuthorType: domain.ActorTypeUser,
+		Body:       "Looks good to me.",
+	}
+	require.NoError(t, env.svc.Create(ctx, comment))
+
+	assert.Empty(t, env.taskMover.humanGateCalls(), "gate already false — no call needed")
+	assert.Empty(t, env.systemComments())
+}
+
 // Without a TaskService wired, the enforcement path is skipped entirely (no panic).
 func TestEnforceBlockingTriage_NoTaskService_SkipsSafely(t *testing.T) {
 	commentRepo := NewMockCommentRepository()
