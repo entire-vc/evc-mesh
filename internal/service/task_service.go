@@ -208,8 +208,10 @@ func (s *taskService) Create(ctx context.Context, task *domain.Task) error {
 		}
 	}
 
-	// Apply auto-assign rules if the task has no assignee.
-	if task.AssigneeType == domain.AssigneeTypeUnassigned || task.AssigneeType == "" {
+	// Apply auto-assign rules only when no explicit assignee was given.
+	// Guarding on AssigneeID ensures a caller who passes assignee_id without
+	// assignee_type is never silently rerouted to the auto-assign default.
+	if (task.AssigneeType == domain.AssigneeTypeUnassigned || task.AssigneeType == "") && task.AssigneeID == nil {
 		s.applyAutoAssign(ctx, task)
 	}
 	// Normalize: look up assignee in agent/user directory to correct assignee_type.

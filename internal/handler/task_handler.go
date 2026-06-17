@@ -174,10 +174,16 @@ func (h *TaskHandler) Create(c echo.Context) error {
 		}
 	}
 
-	// Resolve assignee type (default to "unassigned").
+	// Resolve assignee type. When assignee_id is supplied without a type,
+	// infer "agent" so the explicit assignee_id is not silently clobbered
+	// by applyAutoAssign (which fires on "unassigned").
 	assigneeType := req.AssigneeType
 	if assigneeType == "" {
-		assigneeType = domain.AssigneeTypeUnassigned
+		if req.AssigneeID != nil {
+			assigneeType = domain.AssigneeTypeAgent
+		} else {
+			assigneeType = domain.AssigneeTypeUnassigned
+		}
 	}
 
 	// Resolve priority (default to "medium").
