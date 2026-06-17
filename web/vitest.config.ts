@@ -6,6 +6,14 @@ export default defineConfig({
     environment: "jsdom",
     globals: true,
     setupFiles: ["./src/test-setup.ts"],
+    coverage: {
+      provider: "v8",
+      reporter: ["text", "json-summary"],
+      include: ["src/**/*.{ts,tsx}"],
+      exclude: ["src/**/*.test.*", "src/test-setup.ts", "src/vite-env.d.ts"],
+      // Starting threshold: 60% lines. Raise as test suite grows.
+      thresholds: { lines: 60 },
+    },
   },
   resolve: {
     alias: {
