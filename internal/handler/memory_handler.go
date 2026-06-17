@@ -541,10 +541,10 @@ func (h *MemoryHandler) Delete(c echo.Context) error {
 // Returns workspace-level (paginated) and project-level memories for a project.
 //
 // Query params:
-//   - limit int (default 100, max 500) — applied to workspace-tier only
+//   - limit int (default 100, max 500) — applied to both tiers
 //   - offset int (default 0)
-//   - min_importance float64 (default 0) — workspace-tier filter
-//   - tags_any string comma-separated — workspace-tier OR tag filter
+//   - min_importance float64 (default 0) — workspace-tier filter only
+//   - tags_any string comma-separated — workspace-tier OR tag filter only
 func (h *MemoryHandler) GetProjectKnowledge(c echo.Context) error {
 	projIDStr := c.Param("proj_id")
 	projID, err := uuid.Parse(projIDStr)
@@ -593,13 +593,14 @@ func (h *MemoryHandler) GetProjectKnowledge(c echo.Context) error {
 		TagsAny:       tagsAny,
 	}
 
-	// Project-scoped memories have no pagination (they are small).
-	projectMemories, _, err := h.memoryService.GetProjectKnowledge(c.Request().Context(), wsID, &projID, domain.MemoryListFilter{})
+	// Project-scoped memories — same limit as workspace tier, no importance filter (they are curated).
+	projFilter := domain.MemoryListFilter{Limit: limit, Offset: offset}
+	projectMemories, projTotal, err := h.memoryService.GetProjectKnowledge(c.Request().Context(), wsID, &projID, projFilter)
 	if err != nil {
 		return handleError(c, err)
 	}
 
-	// Workspace-tier memories — paginated.
+	// Workspace-tier memories — paginated with full filter.
 	allWS, wsTotal, err := h.memoryService.GetProjectKnowledge(c.Request().Context(), wsID, nil, wsFilter)
 	if err != nil {
 		return handleError(c, err)
@@ -618,7 +619,7 @@ func (h *MemoryHandler) GetProjectKnowledge(c echo.Context) error {
 		ProjectMemories:   projectMemories,
 		TotalCount:        len(wsOnly) + len(projectMemories),
 		WorkspaceTotal:    wsTotal,
-		HasMore:           wsTotal > int64(offset+limit),
+		HasMore:           wsTotal > int64(offset+limit) || projTotal > int64(offset+limit),
 	})
 }
 
