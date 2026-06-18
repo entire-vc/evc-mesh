@@ -1285,3 +1285,79 @@ func TestTaskHandler_MoveTask_InvalidID_Returns400(t *testing.T) {
 	require.NoError(t, h.MoveTask(c))
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
 }
+
+// --- delegation_level default regression tests (fix #0a46e636 / #a9dc1a42) ---
+// The default must be "auto" so agents close tasks as done, not pile them
+// into review (which 72h auto-moves to triage → lands on Pavel).
+
+func TestTaskHandler_Create_DelegationLevel_DefaultsToAuto(t *testing.T) {
+	projectID := uuid.New()
+	var capturedDelegation domain.DelegationLevel
+	mockSvc := &MockTaskService{
+		CreateFunc: func(ctx context.Context, task *domain.Task) error {
+			capturedDelegation = task.DelegationLevel
+			return nil
+		},
+	}
+	h, e := setupTaskTest(mockSvc)
+
+	body := `{"title":"No delegation field"}`
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetParamNames("proj_id")
+	c.SetParamValues(projectID.String())
+
+	require.NoError(t, h.Create(c))
+	assert.Equal(t, http.StatusCreated, rec.Code)
+	assert.Equal(t, domain.DelegationLevelAuto, capturedDelegation, "default must be auto, not review")
+}
+
+func TestTaskHandler_Create_DelegationLevel_ExplicitReviewKept(t *testing.T) {
+	projectID := uuid.New()
+	var capturedDelegation domain.DelegationLevel
+	mockSvc := &MockTaskService{
+		CreateFunc: func(ctx context.Context, task *domain.Task) error {
+			capturedDelegation = task.DelegationLevel
+			return nil
+		},
+	}
+	h, e := setupTaskTest(mockSvc)
+
+	body := `{"title":"Captain task","delegation_level":"review"}`
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetParamNames("proj_id")
+	c.SetParamValues(projectID.String())
+
+	require.NoError(t, h.Create(c))
+	assert.Equal(t, http.StatusCreated, rec.Code)
+	assert.Equal(t, domain.DelegationLevelReview, capturedDelegation, "explicit review must be preserved")
+}
+
+func TestTaskHandler_Create_DelegationLevel_ExplicitSupervisedKept(t *testing.T) {
+	projectID := uuid.New()
+	var capturedDelegation domain.DelegationLevel
+	mockSvc := &MockTaskService{
+		CreateFunc: func(ctx context.Context, task *domain.Task) error {
+			capturedDelegation = task.DelegationLevel
+			return nil
+		},
+	}
+	h, e := setupTaskTest(mockSvc)
+
+	body := `{"title":"Money task","delegation_level":"supervised"}`
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetParamNames("proj_id")
+	c.SetParamValues(projectID.String())
+
+	require.NoError(t, h.Create(c))
+	assert.Equal(t, http.StatusCreated, rec.Code)
+	assert.Equal(t, domain.DelegationLevelSupervised, capturedDelegation, "explicit supervised must be preserved")
+}
