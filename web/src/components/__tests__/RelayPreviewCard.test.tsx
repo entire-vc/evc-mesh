@@ -11,6 +11,13 @@ vi.mock("react-router", () => ({
 // Mock import.meta.env
 vi.stubEnv("VITE_RELAY_PUBLISH_BASE_URL", "");
 
+// Mock api() so projId-path tests can control API responses without a real server.
+// Existing tests render without projId so api() is never invoked — mock doesn't affect them.
+vi.mock("@/lib/api", () => ({
+  api: vi.fn(),
+}));
+import { api } from "@/lib/api";
+
 describe("RelayPreviewCard", () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
@@ -69,6 +76,84 @@ describe("RelayPreviewCard", () => {
     const fallback = fallbackLinks.find((l) =>
       l.textContent?.includes("Open in Team Relay"),
     );
+    expect(fallback).toBeDefined();
+  });
+});
+
+describe("RelayPreviewCard — authenticated projId path (D5-b embed-token)", () => {
+  const RELAY_URL = "relay://relay.entire.host/shares/5ba2a6c4/docs/Spec.md";
+  const HTTPS_URL = "https://relay.entire.host/shares/5ba2a6c4/docs/Spec.md";
+  const EMBED_URL = "https://relay.entire.host/shares/5ba2a6c4/docs/Spec.md?embed_token=tok123abc";
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.mocked(api).mockReset();
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it("shows Loading… initially while API call is in flight", () => {
+    // API never resolves — simulates slow network
+    vi.mocked(api).mockReturnValue(new Promise(() => {}));
+    render(<RelayPreviewCard relayUrl={RELAY_URL} projId="proj-uuid" />);
+    expect(screen.getByText("Loading…")).toBeInTheDocument();
+    expect(document.querySelector("iframe")).toBeNull();
+  });
+
+  it("renders iframe with embed_token URL when API returns available+iframe_src", async () => {
+    vi.mocked(api).mockResolvedValue({ available: true, iframe_src: EMBED_URL });
+    render(<RelayPreviewCard relayUrl={RELAY_URL} projId="proj-uuid" />);
+    // Flush promise resolution + React state updates
+    await act(async () => {});
+    const iframe = document.querySelector("iframe");
+    expect(iframe).not.toBeNull();
+    expect(iframe?.getAttribute("src")).toBe(EMBED_URL);
+    // Link-card fallback must NOT be visible yet
+    expect(screen.queryByText("Open in Team Relay")).toBeNull();
+  });
+
+  it("falls back to plain https:// when API returns available=false", async () => {
+    vi.mocked(api).mockResolvedValue({ available: false });
+    render(<RelayPreviewCard relayUrl={RELAY_URL} projId="proj-uuid" />);
+    await act(async () => {});
+    const iframe = document.querySelector("iframe");
+    expect(iframe).not.toBeNull();
+    expect(iframe?.getAttribute("src")).toBe(HTTPS_URL);
+  });
+
+  it("falls back to plain https:// when API returns no iframe_src", async () => {
+    vi.mocked(api).mockResolvedValue({ available: true });
+    render(<RelayPreviewCard relayUrl={RELAY_URL} projId="proj-uuid" />);
+    await act(async () => {});
+    const iframe = document.querySelector("iframe");
+    expect(iframe).not.toBeNull();
+    expect(iframe?.getAttribute("src")).toBe(HTTPS_URL);
+  });
+
+  it("falls back to plain https:// when API call rejects (network error)", async () => {
+    vi.mocked(api).mockRejectedValue(new Error("network error"));
+    render(<RelayPreviewCard relayUrl={RELAY_URL} projId="proj-uuid" />);
+    await act(async () => {});
+    const iframe = document.querySelector("iframe");
+    expect(iframe).not.toBeNull();
+    expect(iframe?.getAttribute("src")).toBe(HTTPS_URL);
+  });
+
+  it("shows link-card fallback when embed iframe fails to load within 6s", async () => {
+    vi.mocked(api).mockResolvedValue({ available: true, iframe_src: EMBED_URL });
+    render(<RelayPreviewCard relayUrl={RELAY_URL} projId="proj-uuid" />);
+    await act(async () => {});
+    // Iframe should be rendering
+    expect(document.querySelector("iframe")).not.toBeNull();
+
+    // Advance time past the 6s load timeout
+    await act(async () => {
+      vi.advanceTimersByTime(7000);
+    });
+
+    // Iframe gone, link-card fallback visible
+    expect(document.querySelector("iframe")).toBeNull();
+    const links = screen.getAllByRole("link");
+    const fallback = links.find((l) => l.textContent?.includes("Open in Team Relay"));
     expect(fallback).toBeDefined();
   });
 });
