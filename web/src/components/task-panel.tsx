@@ -928,20 +928,22 @@ export function TaskPanel({
         )}
 
         {/* Timestamps */}
-        <label className="flex items-center gap-1 pt-1 text-xs text-muted-foreground">
-          <Clock className="h-3 w-3" />
-          Created
-        </label>
-        <span className="pt-1 text-xs">
-          {formatDate(currentTask.created_at)}
-        </span>
+        <div className="col-span-2 flex items-center justify-between gap-2 pt-1">
+          <label className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
+            <Clock className="h-3 w-3" />
+            Created
+          </label>
+          <span className="text-right text-xs">
+            {formatDate(currentTask.created_at)}
+          </span>
+        </div>
 
-        <label className="pt-1 text-xs text-muted-foreground">
-          Updated
-        </label>
-        <span className="pt-1 text-xs text-muted-foreground">
-          {formatRelative(currentTask.updated_at)}
-        </span>
+        <div className="col-span-2 flex items-center justify-between gap-2">
+          <label className="shrink-0 text-xs text-muted-foreground">Updated</label>
+          <span className="text-right text-xs text-muted-foreground">
+            {formatRelative(currentTask.updated_at)}
+          </span>
+        </div>
 
         {/* Recurring */}
         {currentTask.recurring_schedule_id && (() => {
