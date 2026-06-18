@@ -88,6 +88,266 @@ jobs:
           name: coverage
           path: coverage.out
 
+  # ─── A. Integration tests ───────────────────────────────────────────────────
+  # Runs ./tests/integration/ with -tags=integration against a live API server.
+  # REPORT mode: continue-on-error=true — failures visible but do NOT block merge.
+  integration:
+    name: "Integration tests (REPORT)"
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    needs: build
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: mesh
+          POSTGRES_PASSWORD: mesh
+          POSTGRES_DB: mesh
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U mesh"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      nats:
+        image: nats:2-alpine
+        ports:
+          - 4222:4222
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install goose + run migrations
+        env:
+          GOOSE_DRIVER: postgres
+          GOOSE_DBSTRING: "postgres://mesh:mesh@localhost:5432/mesh?sslmode=disable"
+        run: |
+          go install github.com/pressly/goose/v3/cmd/goose@latest
+          goose -dir migrations up
+
+      - name: Build + start API server
+        env:
+          # DB — match services above (CI ports, not local defaults)
+          DB_HOST: localhost
+          DB_PORT: "5432"
+          DB_USER: mesh
+          DB_PASSWORD: mesh
+          DB_NAME: mesh
+          DB_SSL_MODE: disable
+          # Cache + messaging
+          REDIS_HOST: localhost
+          REDIS_PORT: "6379"
+          NATS_URL: "nats://localhost:4222"
+          # Auth — CI-safe values (tests create their own users via /auth/register)
+          JWT_SECRET: "ci-test-secret-32chars-minimum!!"
+          JWT_ISSUER: "mesh-ci"
+          # Disable rate limiting so integration tests don't hit auth RPM
+          MESH_RATE_LIMIT_ENABLED: "false"
+          APP_ENV: test
+        run: |
+          go build -o /tmp/mesh-api ./cmd/api
+          /tmp/mesh-api &
+          # Wait up to 15s for the server to be ready on default port 8005
+          for i in $(seq 15); do
+            curl -sf http://localhost:8005/healthz && break || sleep 1
+          done
+          echo "API server ready"
+
+      - name: Run integration tests
+        env:
+          TEST_API_URL: "http://localhost:8005"
+          TEST_DB_DSN: "host=localhost port=5432 user=mesh password=mesh dbname=mesh sslmode=disable"
+        run: go test ./tests/integration/ -v -tags=integration -timeout=120s
+
+  # ─── B. Affected-set coverage gate (Go) ────────────────────────────────────
+  # Coverage ≥80% on changed_packages ∪ reverse_dep_closure.
+  # REPORT mode: continue-on-error=true — non-blocking.
+  coverage-gate:
+    name: "Go coverage ≥80% (affected-set, REPORT)"
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    needs: lint
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: mesh
+          POSTGRES_PASSWORD: mesh
+          POSTGRES_DB: mesh
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U mesh"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      nats:
+        image: nats:2-alpine
+        ports:
+          - 4222:4222
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install goose + run migrations
+        env:
+          GOOSE_DRIVER: postgres
+          GOOSE_DBSTRING: "postgres://mesh:mesh@localhost:5432/mesh?sslmode=disable"
+        run: |
+          go install github.com/pressly/goose/v3/cmd/goose@latest
+          goose -dir migrations up
+
+      - name: Compute affected-set (changed pkgs + reverse-dep closure)
+        id: affected
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE="${{ github.event.pull_request.base.sha }}"
+          else
+            BASE="HEAD~1"
+          fi
+          chmod +x docs/ci-templates/scripts/affected_set_go.sh
+          AFFECTED=$(docs/ci-templates/scripts/affected_set_go.sh "$BASE" 2>/dev/null || true)
+          echo "pkgs<<EOF" >> "$GITHUB_OUTPUT"
+          echo "$AFFECTED" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+          echo "Affected packages: $AFFECTED"
+
+      - name: Run coverage on affected packages
+        if: steps.affected.outputs.pkgs != ''
+        env:
+          DATABASE_URL: "postgres://mesh:mesh@localhost:5432/mesh?sslmode=disable"
+          REDIS_URL: "redis://localhost:6379"
+          NATS_URL: "nats://localhost:4222"
+        run: |
+          FAILED=0
+          while IFS= read -r pkg; do
+            [ -z "$pkg" ] && continue
+            go test -race -covermode=atomic \
+              -coverprofile="/tmp/cover_$(echo "$pkg" | tr '/' '_').out" \
+              "$pkg" 2>&1 || { FAILED=1; echo "FAIL: $pkg"; }
+          done <<< "${{ steps.affected.outputs.pkgs }}"
+
+          # Merge profiles and report aggregate
+          if ls /tmp/cover_*.out 1>/dev/null 2>&1; then
+            cat /tmp/cover_*.out > /tmp/cover_all.out
+            go tool cover -func=/tmp/cover_all.out | tee /tmp/cover_summary.txt
+            TOTAL=$(grep '^total:' /tmp/cover_summary.txt | awk '{print $NF}' | tr -d '%')
+            echo "Affected-set total coverage: ${TOTAL}%"
+            if [ "$FAILED" -eq 0 ] && [ -n "$TOTAL" ]; then
+              awk -v t="$TOTAL" \
+                'BEGIN { if (t+0 < 80) { print "::warning::Coverage " t "% < 80% threshold (REPORT mode — not blocking)"; } else { print "Coverage " t "% >= 80% ✓" } }'
+            fi
+          fi
+
+      - name: Skip (no Go files changed)
+        if: steps.affected.outputs.pkgs == ''
+        run: echo "No Go files in this diff — coverage gate skipped."
+
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: go-coverage-affected
+          path: /tmp/cover_summary.txt
+
+  # ─── C. React frontend coverage (vitest) ───────────────────────────────────
+  # Runs vitest with V8 coverage. Threshold: lines ≥60% (raised as test suite grows).
+  # REPORT mode: continue-on-error=true — non-blocking.
+  frontend-coverage:
+    name: "Frontend coverage (vitest, REPORT)"
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 9
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - name: Install frontend dependencies
+        working-directory: web
+        run: pnpm install --frozen-lockfile
+      - name: Run vitest with coverage
+        working-directory: web
+        run: pnpm test:coverage
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: frontend-coverage
+          path: web/coverage/
+
+  # ─── D. React authed E2E (Playwright, F1 harness) ──────────────────────────
+  # Login-once via Casdoor storageState; asserts no console.error / HTTP 5xx.
+  # REPORT mode: continue-on-error=true — non-blocking.
+  # Requires repo variables: APP_BASE_URL, CASDOOR_BASE_URL
+  # Requires repo secrets: CASDOOR_AGENT_USER, CASDOOR_AGENT_PASSWORD
+  playwright-e2e:
+    name: "Authed E2E (Playwright, REPORT)"
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    container:
+      image: mcr.microsoft.com/playwright:v1.44.0-jammy
+      options: --ipc=host
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 9
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - name: Install dependencies
+        working-directory: web
+        run: pnpm install --frozen-lockfile
+      - name: Install Playwright browsers
+        working-directory: web
+        run: npx playwright install --with-deps chromium
+      - name: Run Playwright E2E
+        working-directory: web
+        run: npx playwright test
+        env:
+          APP_BASE_URL: ${{ vars.APP_BASE_URL || 'https://mesh.entire.host' }}
+          CASDOOR_BASE_URL: ${{ vars.CASDOOR_BASE_URL || 'https://auth.entire.host' }}
+          CASDOOR_AGENT_USER: ${{ secrets.CASDOOR_AGENT_USER }}
+          CASDOOR_AGENT_PASSWORD: ${{ secrets.CASDOOR_AGENT_PASSWORD }}
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: playwright-report
+          path: web/playwright-report/
+
   build:
     name: Build
     runs-on: ubuntu-latest

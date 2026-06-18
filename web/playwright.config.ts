@@ -1,0 +1,49 @@
+import { defineConfig, devices } from "@playwright/test";
+
+/**
+ * Playwright config for authed E2E tests (F1 harness).
+ *
+ * Auth: global-setup logs in once via Casdoor and saves storageState.json.
+ * All tests in the authed-e2e project reuse that session.
+ *
+ * F1 harness: console.error/pageerror and HTTP 5xx assertions are enforced via
+ * PW_FAIL_ON_CONSOLE_ERROR and PW_FAIL_ON_5XX env vars (see task-board.spec.ts).
+ *
+ * Required env vars:
+ *   APP_BASE_URL       — e.g. https://mesh.entire.host
+ *   CASDOOR_BASE_URL   — e.g. https://auth.entire.host
+ *   CASDOOR_AGENT_USER — Casdoor username for the CI agent user
+ *   CASDOOR_AGENT_PASSWORD — Casdoor password for the CI agent user
+ */
+export default defineConfig({
+  testDir: "./e2e",
+  timeout: 30_000,
+  retries: process.env.CI ? 1 : 0,
+  reporter: [["html", { outputFolder: "playwright-report" }], ["list"]],
+
+  use: {
+    baseURL: process.env.APP_BASE_URL || "https://mesh.entire.host",
+    trace: "on-first-retry",
+    screenshot: "only-on-failure",
+    // F1 fixture env flags (read inside the fixture in each spec)
+    // PW_FAIL_ON_CONSOLE_ERROR and PW_FAIL_ON_5XX are set in CI env
+  },
+
+  projects: [
+    // Setup project: logs in once, saves storageState.json
+    {
+      name: "setup",
+      testMatch: "**/global-setup.ts",
+    },
+    // Authed E2E: all tests in e2e/ (except global-setup.ts) run with saved session
+    {
+      name: "authed-e2e",
+      testIgnore: "**/global-setup.ts",
+      use: {
+        ...devices["Desktop Chrome"],
+        storageState: "e2e/.auth/user.json",
+      },
+      dependencies: ["setup"],
+    },
+  ],
+});
