@@ -29,7 +29,7 @@ func (s *taskService) applyTransitionGate(ctx context.Context, task *domain.Task
 	}
 
 	_, actorType := actorctx.FromContext(ctx)
-	return checkTransitionGate(oldStatus.Name, newStatus.Name, actorType, wfResp.WorkflowRulesConfig)
+	return checkTransitionGate(oldStatus.Slug, newStatus.Slug, actorType, wfResp.WorkflowRulesConfig)
 }
 
 // checkTransitionGate is the pure-function core of the transition gate.
