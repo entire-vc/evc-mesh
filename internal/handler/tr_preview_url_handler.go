@@ -129,7 +129,7 @@ func (h *TrPreviewURLHandler) fetchEmbedToken(ctx context.Context, webBase, slug
 	q.Set("slug", slug)
 	q.Set("path", docPath)
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, tokenURL+"?"+q.Encode(), nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, tokenURL+"?"+q.Encode(), http.NoBody)
 	if err != nil {
 		return "", err
 	}
