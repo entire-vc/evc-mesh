@@ -1378,8 +1378,8 @@ func TestTaskService_MoveTask_TransitionGate(t *testing.T) {
 		toStatusID = uuid.New()
 		taskID = uuid.New()
 
-		statusRepo.items[fromStatusID] = &domain.TaskStatus{ID: fromStatusID, ProjectID: projectID, Category: fromCat, Name: fromName}
-		statusRepo.items[toStatusID] = &domain.TaskStatus{ID: toStatusID, ProjectID: projectID, Category: toCat, Name: toName}
+		statusRepo.items[fromStatusID] = &domain.TaskStatus{ID: fromStatusID, ProjectID: projectID, Category: fromCat, Name: fromName, Slug: fromName}
+		statusRepo.items[toStatusID] = &domain.TaskStatus{ID: toStatusID, ProjectID: projectID, Category: toCat, Name: toName, Slug: toName}
 		taskRepo.items[taskID] = &domain.Task{
 			ID: taskID, ProjectID: projectID,
 			StatusID: fromStatusID, Title: "test task",
@@ -1509,6 +1509,49 @@ func TestTaskService_MoveTask_TransitionGate(t *testing.T) {
 		ctx := actorctx.WithActor(context.Background(), uuid.New(), domain.ActorTypeSystem)
 		err := svc.MoveTask(ctx, taskID, MoveTaskInput{StatusID: &toStatusID})
 		require.NoError(t, err, "system actor must be exempt from strict enforcement by default")
+	})
+
+	// Case 6: regression — capitalized display Name vs lowercase Slug.
+	// Config keys are slugs (e.g. "todo"); TaskStatus.Name is the display name ("Todo").
+	// Before the fix, cfg.Transitions["Todo"] always missed → gate never fired.
+	// After the fix, cfg.Transitions["todo"] (via .Slug) must hit and enforce correctly.
+	t.Run("case6: capitalized Name with lowercase Slug → slug lookup enforces correctly", func(t *testing.T) {
+		wfResp := &domain.WorkflowRulesResponse{
+			WorkflowRulesConfig: domain.WorkflowRulesConfig{
+				EnforcementMode: domain.RuleConfigEnforcementStrict,
+				Transitions: map[string]domain.TransitionRule{
+					"todo": {Allowed: []string{"in_progress", "backlog", "triage"}},
+				},
+			},
+		}
+		svc, taskRepo, statusRepo := setupTransitionGateService(wfResp)
+		projRepo := svc.projectRepo.(*MockProjectRepository)
+
+		fromStatusID := uuid.New()
+		toStatusID := uuid.New()
+		taskID6 := uuid.New()
+		// Name = display name (capitalised), Slug = config key (lowercase).
+		statusRepo.items[fromStatusID] = &domain.TaskStatus{
+			ID: fromStatusID, ProjectID: projectID, Category: domain.StatusCategoryTodo,
+			Name: "Todo", Slug: "todo",
+		}
+		statusRepo.items[toStatusID] = &domain.TaskStatus{
+			ID: toStatusID, ProjectID: projectID, Category: domain.StatusCategoryDone,
+			Name: "Done", Slug: "done", // "done" not in allowed → should be blocked
+		}
+		taskRepo.items[taskID6] = &domain.Task{
+			ID: taskID6, ProjectID: projectID,
+			StatusID: fromStatusID, Title: "slug regression task",
+		}
+		projRepo.items[projectID] = &domain.Project{ID: projectID, WorkspaceID: workspaceID}
+
+		ctx := actorctx.WithActor(context.Background(), uuid.New(), domain.ActorTypeAgent)
+		err := svc.MoveTask(ctx, taskID6, MoveTaskInput{StatusID: &toStatusID})
+		require.Error(t, err, "todo→done must be blocked in strict mode via slug lookup")
+		var apiErr *apierror.Error
+		require.ErrorAs(t, err, &apiErr)
+		assert.Equal(t, http.StatusForbidden, apiErr.Code)
+		assert.Equal(t, "workflow_transition_blocked", apiErr.Message)
 	})
 }
 
