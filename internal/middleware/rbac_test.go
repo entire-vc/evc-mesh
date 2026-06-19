@@ -439,7 +439,7 @@ func TestHasPermission_OwnerHasAll(t *testing.T) {
 		PermDeleteWorkspace, PermManageMembers, PermCreateProject, PermDeleteProject,
 		PermRegisterAgent, PermDeleteAgent, PermCreateTask, PermUpdateTask,
 		PermDeleteTask, PermAddComment, PermUploadArtifact, PermPublishEvent,
-		PermManageCF, PermExportAuditLog, PermManageWebhooks,
+		PermManageCF, PermExportAuditLog, PermManageWebhooks, PermManageRules,
 	}
 	for _, p := range allPerms {
 		assert.True(t, hasPermission(domain.RoleOwner, p), "owner should have permission: %s", p)
@@ -447,7 +447,7 @@ func TestHasPermission_OwnerHasAll(t *testing.T) {
 }
 
 func TestHasPermission_AgentLimitedPerms(t *testing.T) {
-	allowed := []Permission{PermCreateTask, PermUpdateTask, PermDeleteTask, PermAddComment, PermUploadArtifact, PermPublishEvent}
+	allowed := []Permission{PermCreateTask, PermUpdateTask, PermDeleteTask, PermAddComment, PermUploadArtifact, PermPublishEvent, PermManageRules}
 	denied := []Permission{PermDeleteWorkspace, PermManageMembers, PermCreateProject, PermDeleteProject, PermRegisterAgent, PermDeleteAgent, PermManageCF, PermExportAuditLog, PermManageWebhooks}
 
 	for _, p := range allowed {
