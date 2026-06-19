@@ -92,7 +92,9 @@ var permissionMatrix = map[string]map[Permission]bool{
 }
 
 // agentPerms defines which permissions agents (authenticated via X-Agent-Key) hold.
-// Agents can perform task/comment/artifact/event operations only.
+// Agents can perform task/comment/artifact/event operations and manage workspace rules.
+// PermManageRules is included so that designated lead agents (e.g. Garfield) can apply
+// gate rules (capacity_limit, transition_gate) without requiring a human JWT.
 var agentPerms = map[Permission]bool{
 	PermCreateTask:     true,
 	PermUpdateTask:     true,
@@ -100,6 +102,7 @@ var agentPerms = map[Permission]bool{
 	PermAddComment:     true,
 	PermUploadArtifact: true,
 	PermPublishEvent:   true,
+	PermManageRules:    true,
 }
 
 // RequirePermission returns Echo middleware that enforces a specific permission.
