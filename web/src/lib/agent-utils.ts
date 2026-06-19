@@ -1,4 +1,5 @@
 import type { Agent, AgentStatus, AgentType } from "@/types";
+import { formatRelative } from "@/lib/utils";
 
 export const agentTypeConfig: Record<
   AgentType,
@@ -33,4 +34,29 @@ export function isAgentStale(agent: { last_heartbeat?: string | null }): boolean
 /** Returns the DB status as-is. Staleness is shown as a visual warning, not a status override. */
 export function getEffectiveStatus(agent: Agent): AgentStatus {
   return agent.status;
+}
+
+const EPHEMERAL_THRESHOLD_MS = 24 * 60 * 60 * 1000; // 24h
+
+/**
+ * Returns a human-readable presence label for an agent card.
+ * Offline agents with a recent heartbeat (< 24h) show "last run X ago" instead
+ * of "Offline" — ephemeral agents are between spawns, not broken.
+ * Offline + no heartbeat ever → "Never seen".
+ * Offline + last heartbeat > 24h ago → "Offline" (genuinely inactive).
+ */
+export function getAgentPresenceLabel(
+  agent: { status: AgentStatus; last_heartbeat: string | null },
+): string {
+  if (agent.status !== "offline") {
+    return agentStatusConfig[agent.status]?.label ?? agent.status;
+  }
+  if (!agent.last_heartbeat) {
+    return "Never seen";
+  }
+  const ageMs = Date.now() - new Date(agent.last_heartbeat).getTime();
+  if (ageMs > EPHEMERAL_THRESHOLD_MS) {
+    return "Offline";
+  }
+  return `last run ${formatRelative(agent.last_heartbeat)}`;
 }
