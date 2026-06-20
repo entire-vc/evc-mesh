@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Bot, Plus } from "lucide-react";
 import { cn } from "@/lib/cn";
-import { agentStatusConfig, agentTypeConfig, getEffectiveStatus, isAgentStale } from "@/lib/agent-utils";
+import { agentStatusConfig, agentTypeConfig, getAgentPresenceLabel, getEffectiveStatus, isAgentStale } from "@/lib/agent-utils";
 import { formatRelative } from "@/lib/utils";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { useAgentStore } from "@/stores/agent";
@@ -138,6 +138,7 @@ function AgentCard({
   const effectiveStatus = getEffectiveStatus(agent);
   const statusConfig = agentStatusConfig[effectiveStatus];
   const stale = isAgentStale(agent);
+  const presenceLabel = getAgentPresenceLabel(agent);
 
   return (
     <Card
@@ -156,7 +157,7 @@ function AgentCard({
         </div>
       </CardHeader>
       <CardContent className="space-y-3">
-        {/* Status */}
+        {/* Status / Presence */}
         <div className="flex items-center gap-2">
           <span
             className={cn(
@@ -165,7 +166,7 @@ function AgentCard({
             )}
           />
           <span className="text-sm text-muted-foreground">
-            {statusConfig.label}
+            {presenceLabel}
             {stale && agent.status === "online" && " (stale)"}
           </span>
         </div>
@@ -177,12 +178,14 @@ function AgentCard({
           </div>
         )}
 
-        {/* Last Heartbeat */}
-        <div className={cn("text-xs text-muted-foreground", stale && "text-yellow-600")}>
-          {agent.last_heartbeat
-            ? `Last seen ${formatRelative(agent.last_heartbeat)}`
-            : "No heartbeat yet"}
-        </div>
+        {/* Last Heartbeat — only for non-offline agents; offline already shows last-run above */}
+        {agent.status !== "offline" && (
+          <div className={cn("text-xs text-muted-foreground", stale && "text-yellow-600")}>
+            {agent.last_heartbeat
+              ? `Last seen ${formatRelative(agent.last_heartbeat)}`
+              : "No heartbeat yet"}
+          </div>
+        )}
 
         {/* Capabilities */}
         {(() => {
