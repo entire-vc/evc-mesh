@@ -59,6 +59,21 @@ const statusConfig: Record<
 };
 
 // ---------------------------------------------------------------------------
+// Presence label for ephemeral (offline) agents
+// ---------------------------------------------------------------------------
+
+const EPHEMERAL_THRESHOLD_MS = 24 * 60 * 60 * 1000;
+
+function getEphemeralPresenceLabel(agent: AgentStatusEntry): string {
+	const isEffectivelyOffline = agent.is_stale || agent.status === "offline" || agent.status === "error";
+	if (!isEffectivelyOffline) return statusConfig[agent.status]?.label ?? agent.status;
+	if (!agent.last_heartbeat_at) return "Never seen";
+	const ageMs = Date.now() - new Date(agent.last_heartbeat_at).getTime();
+	if (ageMs > EPHEMERAL_THRESHOLD_MS) return "Offline";
+	return `last run ${formatRelative(agent.last_heartbeat_at)}`;
+}
+
+// ---------------------------------------------------------------------------
 // AgentSessionCard
 // ---------------------------------------------------------------------------
 
@@ -74,6 +89,8 @@ function AgentSessionCard({ agent }: AgentSessionCardProps) {
 		label: agent.agent_type ?? "Agent",
 		color: "bg-gray-100 text-gray-700",
 	};
+	const presenceLabel = getEphemeralPresenceLabel(agent);
+	const isEffectivelyOffline = agent.is_stale || agent.status === "offline" || agent.status === "error";
 
 	return (
 		<Card className="flex flex-col gap-3 p-4">
@@ -103,12 +120,13 @@ function AgentSessionCard({ agent }: AgentSessionCardProps) {
 							statusCfg.dotColor,
 						)}
 					/>
-					<span className="text-xs text-muted-foreground">{statusCfg.label}</span>
+					<span className="text-xs text-muted-foreground">{presenceLabel}</span>
 				</div>
 			</div>
 
-			{/* Presence info */}
+			{/* Presence info — only for active agents; offline already shows last-run in status */}
 			<div className="space-y-1.5 text-xs text-muted-foreground">
+				{!isEffectivelyOffline && (
 				<div className="flex items-center gap-1.5">
 					{agent.last_heartbeat_at ? (
 						<>
@@ -122,6 +140,7 @@ function AgentSessionCard({ agent }: AgentSessionCardProps) {
 						</>
 					)}
 				</div>
+				)}
 
 				{agent.heartbeat_message && (
 					<div className="flex items-start gap-1.5">
