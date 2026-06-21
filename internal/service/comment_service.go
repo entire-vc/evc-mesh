@@ -553,6 +553,13 @@ func (s *commentService) enforceBlockingTriage(ctx context.Context, comment *dom
 		return
 	}
 
+	// Completion reports from the task's own assignee must not trigger triage —
+	// the blocking marker may appear as handoff/escalation context rather than a
+	// genuine work blocker (e.g. "Done. ❓ Blocking @pavel: please close manually").
+	if isAssigneeCompletionReport(comment, task) {
+		return
+	}
+
 	// Human-gate: only act when a real user (not just an agent) is @-mentioned.
 	// Resolve this BEFORE the auto-mode early return so we can set the sticky flag.
 	userSlug := s.firstMentionedUserSlug(ctx, wsID, comment.Body)
@@ -698,14 +705,34 @@ func (s *commentService) releaseHumanGate(ctx context.Context, comment *domain.C
 		return
 	}
 
+	// enforceTriageRelease: if the task is currently in triage, auto-return it to
+	// in_progress so the assignee can resume work without a manual status edit.
+	movedFromTriage := false
+	if s.statusRepo != nil {
+		if curStatus, err := s.statusRepo.GetByID(ctx, task.StatusID); err == nil && curStatus != nil &&
+			curStatus.Category == domain.StatusCategoryTriage {
+			if inProgressID, err := findStatusIDByCategory(ctx, s.statusRepo, task.ProjectID, domain.StatusCategoryInProgress); err == nil && inProgressID != uuid.Nil {
+				if moveErr := s.taskSvc.MoveTask(ctx, task.ID, MoveTaskInput{StatusID: &inProgressID}); moveErr != nil {
+					log.Printf("[human-gate] WARNING: move task %s from triage to in_progress failed: %v", task.ID, moveErr)
+				} else {
+					movedFromTriage = true
+				}
+			}
+		}
+	}
+
 	// Append a system comment to document the release in the task's audit trail.
 	now := timeNow()
+	releaseBody := "🔓 Auto: human_gate снят — Pavel прокомментировал после блокирующего запроса."
+	if movedFromTriage {
+		releaseBody = "🔓 Auto: human_gate снят, задача переведена из triage → in_progress — Pavel прокомментировал после блокирующего запроса."
+	}
 	sysComment := &domain.Comment{
 		ID:         uuid.New(),
 		TaskID:     task.ID,
 		AuthorID:   systemActorID,
 		AuthorType: domain.ActorTypeSystem,
-		Body:       "🔓 Auto: human_gate снят — Pavel прокомментировал после блокирующего запроса.",
+		Body:       releaseBody,
 		CreatedAt:  now,
 		UpdatedAt:  now,
 	}
@@ -752,4 +779,34 @@ func (s *commentService) firstMentionedUserSlug(ctx context.Context, wsID uuid.U
 		}
 	}
 	return ""
+}
+
+// completionKeywords are lower-cased substrings whose presence in a comment body
+// indicates a progress/completion report rather than a live work blocker.
+var completionKeywords = []string{
+	// Russian
+	"выполнен", "завершен", "закрыт", "готово", "сделан", "работа завершена",
+	"все фикс", "все подзадач", "вся работа",
+	// English
+	"done", "completed", "finished", "all done", "work done", "task done",
+}
+
+// isAssigneeCompletionReport returns true when the comment is authored by the
+// task's own assignee AND its body contains at least one completion keyword.
+// Used to suppress enforceBlockingTriage on progress/handoff reports that
+// incidentally carry a "❓ Blocking @user" marker in citation/context.
+func isAssigneeCompletionReport(comment *domain.Comment, task *domain.Task) bool {
+	if task.AssigneeID == nil {
+		return false
+	}
+	if comment.AuthorID != *task.AssigneeID || comment.AuthorType != domain.ActorType(task.AssigneeType) {
+		return false
+	}
+	lower := strings.ToLower(comment.Body)
+	for _, kw := range completionKeywords {
+		if strings.Contains(lower, kw) {
+			return true
+		}
+	}
+	return false
 }

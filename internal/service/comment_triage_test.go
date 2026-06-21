@@ -460,6 +460,189 @@ func TestReleaseHumanGate_TaskNotGated_NoOp(t *testing.T) {
 	assert.Empty(t, env.systemComments())
 }
 
+// ---------------------------------------------------------------------------
+// Bug fix: completion reports from the assignee must NOT trigger triage
+// ---------------------------------------------------------------------------
+
+// TestEnforceBlockingTriage_AssigneeCompletionReport_NoTriage verifies that when
+// the task's own assignee writes a completion summary that incidentally contains a
+// "❓ Blocking @pavel" marker (e.g. "Done. ❓ Blocking @pavel: please close"), the
+// task is NOT moved to triage and the human_gate flag is NOT armed.
+// Regression: task #0a46e636 was re-triaged when Garfield wrote the final summary.
+func TestEnforceBlockingTriage_AssigneeCompletionReport_NoTriage(t *testing.T) {
+	env := setupTriageEnv(t, true)
+	assigneeID := uuid.New()
+	taskID := uuid.New()
+	env.taskRepo.items[taskID] = &domain.Task{
+		ID:           taskID,
+		ProjectID:    env.projID,
+		StatusID:     env.inProgressID,
+		Title:        "T",
+		AssigneeID:   &assigneeID,
+		AssigneeType: domain.AssigneeTypeAgent,
+	}
+
+	// Completion report that contains a blocking marker as handoff context.
+	comment := &domain.Comment{
+		TaskID:     taskID,
+		AuthorID:   assigneeID,
+		AuthorType: domain.ActorTypeAgent,
+		Body: `## Все 4 фикса выполнены — работа завершена
+
+Фикс 1: ✅ Фикс 2: ✅ Фикс 3: ✅ Фикс 4: ✅
+
+❓ **Blocking @pavel**: задача на supervised — закрой вручную.`,
+	}
+	require.NoError(t, env.svc.Create(context.Background(), comment))
+
+	assert.Empty(t, env.taskMover.calls(), "completion report from assignee must not trigger triage move")
+	assert.Empty(t, env.taskMover.humanGateCalls(), "completion report from assignee must not arm human_gate")
+	assert.Empty(t, env.systemComments(), "no system comment expected")
+}
+
+// TestEnforceBlockingTriage_ThirdPartyBlockingMarker_TriagesNormally confirms that a
+// blocking marker from a NON-assignee agent still triggers triage as before.
+func TestEnforceBlockingTriage_ThirdPartyBlockingMarker_TriagesNormally(t *testing.T) {
+	env := setupTriageEnv(t, true)
+	assigneeID := uuid.New()
+	taskID := uuid.New()
+	env.taskRepo.items[taskID] = &domain.Task{
+		ID:           taskID,
+		ProjectID:    env.projID,
+		StatusID:     env.inProgressID,
+		Title:        "T",
+		AssigneeID:   &assigneeID,
+		AssigneeType: domain.AssigneeTypeAgent,
+	}
+
+	// A DIFFERENT agent (not the assignee) reports a blocker.
+	otherAgentID := uuid.New()
+	comment := &domain.Comment{
+		TaskID:     taskID,
+		AuthorID:   otherAgentID, // not the assignee
+		AuthorType: domain.ActorTypeAgent,
+		Body:       "❓ **Blocking @pavel**: unblocking decision needed from the lead",
+	}
+	require.NoError(t, env.svc.Create(context.Background(), comment))
+
+	moves := env.taskMover.calls()
+	require.Len(t, moves, 1, "third-party blocking marker must still trigger triage")
+	assert.Equal(t, env.triageID, *moves[0].input.StatusID)
+}
+
+// TestEnforceBlockingTriage_AssigneeBlockerNoCompletion_Triages confirms that an
+// assignee's comment that contains a blocking marker WITHOUT completion keywords
+// still triggers triage (the assignee IS genuinely blocked).
+func TestEnforceBlockingTriage_AssigneeBlockerNoCompletion_Triages(t *testing.T) {
+	env := setupTriageEnv(t, true)
+	assigneeID := uuid.New()
+	taskID := uuid.New()
+	env.taskRepo.items[taskID] = &domain.Task{
+		ID:           taskID,
+		ProjectID:    env.projID,
+		StatusID:     env.inProgressID,
+		Title:        "T",
+		AssigneeID:   &assigneeID,
+		AssigneeType: domain.AssigneeTypeAgent,
+	}
+
+	// Assignee is genuinely blocked — no completion keywords.
+	comment := &domain.Comment{
+		TaskID:     taskID,
+		AuthorID:   assigneeID,
+		AuthorType: domain.ActorTypeAgent,
+		Body:       "❓ **Blocking @pavel**: need credentials for staging DB before I can continue.",
+	}
+	require.NoError(t, env.svc.Create(context.Background(), comment))
+
+	moves := env.taskMover.calls()
+	require.Len(t, moves, 1, "assignee with no completion keywords must still trigger triage")
+	assert.Equal(t, env.triageID, *moves[0].input.StatusID)
+}
+
+// ---------------------------------------------------------------------------
+// Bug fix: Pavel's response must move the task from triage → in_progress
+// ---------------------------------------------------------------------------
+
+// TestReleaseHumanGate_TriageTask_MovesToInProgress verifies that when Pavel
+// comments on a human-gated task currently in triage, the server:
+//  1. Clears human_gate;
+//  2. Moves the task from triage → in_progress (enforceTriageRelease);
+//  3. Writes a system comment mentioning both the gate release and the status change.
+func TestReleaseHumanGate_TriageTask_MovesToInProgress(t *testing.T) {
+	env := setupTriageEnv(t, true)
+
+	// Task starts in triage with human_gate=true.
+	taskID := uuid.New()
+	env.taskRepo.items[taskID] = &domain.Task{
+		ID: taskID, ProjectID: env.projID, StatusID: env.triageID, Title: "Gated in triage",
+		HumanGate: true,
+	}
+	env.seedBlockingComment(taskID)
+
+	pavelID := uuid.New()
+	ctx := actorctx.WithActor(context.Background(), pavelID, domain.ActorTypeUser)
+	comment := &domain.Comment{
+		TaskID:     taskID,
+		AuthorID:   pavelID,
+		AuthorType: domain.ActorTypeUser,
+		Body:       "Ок, делайте деплой.",
+	}
+	require.NoError(t, env.svc.Create(ctx, comment))
+
+	// 1. human_gate must be cleared.
+	gateCalls := env.taskMover.humanGateCalls()
+	require.Len(t, gateCalls, 1)
+	assert.False(t, gateCalls[0].value, "human_gate must be cleared (value=false)")
+
+	// 2. Task must be moved from triage to in_progress.
+	moves := env.taskMover.calls()
+	require.Len(t, moves, 1, "task must be moved from triage to in_progress")
+	require.NotNil(t, moves[0].input.StatusID)
+	assert.Equal(t, env.inProgressID, *moves[0].input.StatusID, "destination must be in_progress")
+
+	// 3. System comment must mention both gate release and status change.
+	sys := env.systemComments()
+	require.Len(t, sys, 1)
+	assert.Contains(t, sys[0].Body, "human_gate снят")
+	assert.Contains(t, sys[0].Body, "in_progress")
+}
+
+// TestReleaseHumanGate_InProgressTask_NoStatusMove verifies that when a human-gated
+// task is already in in_progress (not in triage), Pavel's response clears the gate
+// flag but does NOT trigger any MoveTask call.
+func TestReleaseHumanGate_InProgressTask_NoStatusMove(t *testing.T) {
+	env := setupTriageEnv(t, true)
+
+	// Task is in in_progress (not triage) with human_gate=true.
+	taskID := env.seedGatedTask(env.inProgressID)
+	env.seedBlockingComment(taskID)
+
+	pavelID := uuid.New()
+	ctx := actorctx.WithActor(context.Background(), pavelID, domain.ActorTypeUser)
+	comment := &domain.Comment{
+		TaskID:     taskID,
+		AuthorID:   pavelID,
+		AuthorType: domain.ActorTypeUser,
+		Body:       "Go ahead.",
+	}
+	require.NoError(t, env.svc.Create(ctx, comment))
+
+	// Gate must be cleared.
+	gateCalls := env.taskMover.humanGateCalls()
+	require.Len(t, gateCalls, 1)
+	assert.False(t, gateCalls[0].value)
+
+	// No MoveTask call since task is already in in_progress.
+	assert.Empty(t, env.taskMover.calls(), "no move expected when task not in triage")
+
+	// System comment must mention gate release but NOT in_progress.
+	sys := env.systemComments()
+	require.Len(t, sys, 1)
+	assert.Contains(t, sys[0].Body, "human_gate снят")
+	assert.NotContains(t, sys[0].Body, "in_progress")
+}
+
 // Without a TaskService wired, the enforcement path is skipped entirely (no panic).
 func TestEnforceBlockingTriage_NoTaskService_SkipsSafely(t *testing.T) {
 	commentRepo := NewMockCommentRepository()
