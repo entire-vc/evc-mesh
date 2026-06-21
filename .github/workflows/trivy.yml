@@ -1,12 +1,10 @@
 name: trivy
 
 on:
-  push:
-    branches: [main, develop]
-    paths-ignore: ['**.md', 'docs/**', 'dev-docs/**']
   pull_request:
-    branches: [main, develop]
+    branches: [main]
     paths-ignore: ['**.md', 'docs/**', 'dev-docs/**']
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
