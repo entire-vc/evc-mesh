@@ -174,11 +174,10 @@ jobs:
 
   # ─── B. Affected-set coverage gate (Go) ────────────────────────────────────
   # Coverage ≥80% on changed_packages ∪ reverse_dep_closure.
-  # REPORT mode: continue-on-error=true — non-blocking.
+  # ENFORCE mode: failures block merge (enforced 2026-06-22, burn-in complete).
   coverage-gate:
-    name: "Go coverage ≥80% (affected-set, REPORT)"
+    name: "Go coverage ≥80% (affected-set)"
     runs-on: ubuntu-latest
-    continue-on-error: true
     needs: lint
     services:
       postgres:
@@ -263,7 +262,7 @@ jobs:
             echo "Affected-set total coverage: ${TOTAL}%"
             if [ "$FAILED" -eq 0 ] && [ -n "$TOTAL" ]; then
               awk -v t="$TOTAL" \
-                'BEGIN { if (t+0 < 80) { print "::warning::Coverage " t "% < 80% threshold (REPORT mode — not blocking)"; } else { print "Coverage " t "% >= 80% ✓" } }'
+                'BEGIN { if (t+0 < 80) { print "::error::Coverage " t "% < 80% threshold"; exit 1 } else { print "Coverage " t "% >= 80% ✓" } }'
             fi
           fi
 
@@ -308,13 +307,12 @@ jobs:
 
   # ─── D. React authed E2E (Playwright, F1 harness) ──────────────────────────
   # Login-once via Casdoor storageState; asserts no console.error / HTTP 5xx.
-  # REPORT mode: continue-on-error=true — non-blocking.
+  # ENFORCE mode: failures block merge (enforced 2026-06-22, burn-in complete).
   # Requires repo variables: APP_BASE_URL, CASDOOR_BASE_URL
   # Requires repo secrets: CASDOOR_AGENT_USER, CASDOOR_AGENT_PASSWORD
   playwright-e2e:
-    name: "Authed E2E (Playwright, REPORT)"
+    name: "Authed E2E"
     runs-on: ubuntu-latest
-    continue-on-error: true
     container:
       image: mcr.microsoft.com/playwright:v1.44.0-jammy
       options: --ipc=host
