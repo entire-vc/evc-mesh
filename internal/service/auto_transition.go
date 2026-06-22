@@ -160,7 +160,11 @@ func (s *autoTransitionService) CheckSubtaskCompletion(ctx context.Context, pare
 	}
 
 	// Fallback: prefer "review", fall back to "done".
+	// But if a disabled rule exists, respect the explicit disable — don't auto-transition at all.
 	if targetStatusID == uuid.Nil {
+		if s.ruleExistsForTrigger(ctx, parent.ProjectID, domain.TriggerAllSubtasksDone) {
+			return nil // rule exists but is disabled; honour the user's explicit opt-out
+		}
 		targetStatusID, err = s.findTargetStatus(ctx, parent.ProjectID, domain.StatusCategoryReview, domain.StatusCategoryDone)
 		if err != nil {
 			return err
@@ -292,6 +296,25 @@ func (s *autoTransitionService) resolveTargetFromRule(ctx context.Context, proje
 		}
 	}
 	return uuid.Nil, nil
+}
+
+// ruleExistsForTrigger returns true if any rule (enabled or disabled) exists for
+// the given trigger in the project. Used to distinguish "disabled rule" (do nothing)
+// from "no rule at all" (fall back to category lookup).
+func (s *autoTransitionService) ruleExistsForTrigger(ctx context.Context, projectID uuid.UUID, trigger domain.AutoTransitionTrigger) bool {
+	if s.ruleRepo == nil {
+		return false
+	}
+	rules, err := s.ruleRepo.List(ctx, projectID)
+	if err != nil {
+		return false
+	}
+	for _, r := range rules {
+		if r.Trigger == trigger {
+			return true
+		}
+	}
+	return false
 }
 
 // findTargetStatus returns the first status in a project matching any of the given
