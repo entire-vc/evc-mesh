@@ -119,9 +119,7 @@ func TestTaskLifecycle(t *testing.T) {
 	// --- Step 6: Move task to done status ---
 	if doneStatusID != "" {
 		t.Run("MoveTaskToDone", func(t *testing.T) {
-			resp := env.Post(t, fmt.Sprintf("/api/v1/tasks/%s/move", taskID), map[string]interface{}{
-				"status_id": doneStatusID,
-			})
+			resp := env.MoveTaskToDone(t, taskID, doneStatusID)
 			require.Equal(t, http.StatusOK, resp.StatusCode)
 			resp.Body.Close()
 

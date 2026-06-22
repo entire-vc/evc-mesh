@@ -65,11 +65,16 @@ func (h *DependencyHandler) Create(c echo.Context) error {
 		}))
 	}
 
+	depType := req.DependencyType
+	if depType == "" {
+		depType = domain.DependencyTypeBlocks
+	}
+
 	dep := &domain.TaskDependency{
 		ID:              uuid.New(),
 		TaskID:          taskID,
 		DependsOnTaskID: req.DependsOnTaskID,
-		DependencyType:  req.DependencyType,
+		DependencyType:  depType,
 	}
 
 	if err := h.depService.Create(c.Request().Context(), dep); err != nil {

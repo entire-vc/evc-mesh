@@ -106,9 +106,7 @@ func TestAuditExport_CSV(t *testing.T) {
 
 	// Status change on first task.
 	if doneStatusID != "" && len(taskIDs) > 0 {
-		resp := env.Post(t, fmt.Sprintf("/api/v1/tasks/%s/move", taskIDs[0]), map[string]interface{}{
-			"status_id": doneStatusID,
-		})
+		resp := env.MoveTaskToDone(t, taskIDs[0], doneStatusID)
 		resp.Body.Close()
 	}
 

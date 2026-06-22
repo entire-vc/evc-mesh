@@ -25,6 +25,7 @@ func NewCustomFieldHandler(fs service.CustomFieldService) *CustomFieldHandler {
 // createCustomFieldRequest represents the JSON body for creating a custom field definition.
 type createCustomFieldRequest struct {
 	Name              string           `json:"name"`
+	Slug              string           `json:"slug"`
 	FieldType         domain.FieldType `json:"field_type"`
 	Description       string           `json:"description"`
 	Options           json.RawMessage  `json:"options"`
@@ -90,10 +91,17 @@ func (h *CustomFieldHandler) Create(c echo.Context) error {
 		}))
 	}
 
+	if req.Slug == "" {
+		return c.JSON(http.StatusBadRequest, apierror.ValidationError(map[string]string{
+			"slug": "slug is required",
+		}))
+	}
+
 	field := &domain.CustomFieldDefinition{
 		ID:                uuid.New(),
 		ProjectID:         projID,
 		Name:              req.Name,
+		Slug:              req.Slug,
 		FieldType:         req.FieldType,
 		Description:       req.Description,
 		Options:           req.Options,

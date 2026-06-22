@@ -269,6 +269,28 @@ func uniqueEmail(prefix string) string {
 	return fmt.Sprintf("%s-%d@test.mesh.local", prefix, time.Now().UnixNano())
 }
 
+// AddComment posts a comment on a task. Used to satisfy the done-evidence gate
+// before moving a task to the done category.
+func (e *TestEnv) AddComment(t *testing.T, taskID, body string) {
+	t.Helper()
+	resp := e.Post(t, fmt.Sprintf("/api/v1/tasks/%s/comments", taskID), map[string]string{"body": body})
+	resp.Body.Close()
+}
+
+// MoveTask moves a task to the given statusID. For done-category statuses,
+// call AddComment first to satisfy the done-evidence gate.
+func (e *TestEnv) MoveTask(t *testing.T, taskID, statusID string) *http.Response {
+	t.Helper()
+	return e.Post(t, fmt.Sprintf("/api/v1/tasks/%s/move", taskID), map[string]string{"status_id": statusID})
+}
+
+// MoveTaskToDone adds a comment (evidence) then moves the task to the done status.
+func (e *TestEnv) MoveTaskToDone(t *testing.T, taskID, doneStatusID string) *http.Response {
+	t.Helper()
+	e.AddComment(t, taskID, "Integration test evidence — task completed.")
+	return e.MoveTask(t, taskID, doneStatusID)
+}
+
 // envOr returns the environment variable value or a fallback default.
 func envOr(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {

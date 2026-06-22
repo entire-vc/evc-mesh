@@ -124,9 +124,9 @@ func TestAutoTransition_SubtasksDone(t *testing.T) {
 		subtaskID := subtaskID
 		idx := i + 1
 		t.Run(fmt.Sprintf("CompleteSubtask%d_ParentUnchanged", idx), func(t *testing.T) {
-			resp := env.Post(t, fmt.Sprintf("/api/v1/tasks/%s/move", subtaskID), map[string]interface{}{
-				"status_id": doneStatusID,
-			})
+			// Add evidence comment so the done-evidence gate is satisfied.
+			env.AddComment(t, subtaskID, "Subtask completed — integration test evidence.")
+			resp := env.MoveTask(t, subtaskID, doneStatusID)
 			require.Equal(t, http.StatusOK, resp.StatusCode)
 			resp.Body.Close()
 
@@ -147,9 +147,7 @@ func TestAutoTransition_SubtasksDone(t *testing.T) {
 		}
 		lastSubtaskID := subtaskIDs[2]
 
-		resp := env.Post(t, fmt.Sprintf("/api/v1/tasks/%s/move", lastSubtaskID), map[string]interface{}{
-			"status_id": doneStatusID,
-		})
+		resp := env.MoveTaskToDone(t, lastSubtaskID, doneStatusID)
 		require.Equal(t, http.StatusOK, resp.StatusCode)
 		resp.Body.Close()
 
@@ -277,9 +275,7 @@ func TestAutoTransition_DependencyResolved(t *testing.T) {
 		if taskAID == "" {
 			t.Skip("task A not created")
 		}
-		resp := env.Post(t, fmt.Sprintf("/api/v1/tasks/%s/move", taskAID), map[string]interface{}{
-			"status_id": doneStatusID,
-		})
+		resp := env.MoveTaskToDone(t, taskAID, doneStatusID)
 		require.Equal(t, http.StatusOK, resp.StatusCode)
 		resp.Body.Close()
 	})
@@ -656,9 +652,7 @@ func TestAutoTransition_DisabledRule(t *testing.T) {
 			t.Skip("subtasks not created")
 		}
 		for _, subtaskID := range subtaskIDs {
-			resp := env.Post(t, fmt.Sprintf("/api/v1/tasks/%s/move", subtaskID), map[string]interface{}{
-				"status_id": doneStatusID,
-			})
+			resp := env.MoveTaskToDone(t, subtaskID, doneStatusID)
 			require.Equal(t, http.StatusOK, resp.StatusCode)
 			resp.Body.Close()
 		}
