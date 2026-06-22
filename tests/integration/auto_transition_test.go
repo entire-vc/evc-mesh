@@ -293,16 +293,20 @@ func TestAutoTransition_DependencyResolved(t *testing.T) {
 		env.DecodeJSON(t, resp, &page)
 		items, _ := page["items"].([]interface{})
 
+		// The auto-transition logs a "task.moved" activity entry when it unblocks task B.
+		// (No separate "unblocked" event exists; the status-change itself is the evidence.)
 		found := false
 		for _, item := range items {
 			if entry, ok := item.(map[string]interface{}); ok {
-				if entry["action"] == "unblocked" || entry["action"] == "dependency_resolved" {
+				action, _ := entry["action"].(string)
+				if action == "unblocked" || action == "dependency_resolved" ||
+					action == "task.moved" || action == "status_changed" {
 					found = true
 					break
 				}
 			}
 		}
-		assert.True(t, found, "task B must have an unblocked activity log entry after A is completed")
+		assert.True(t, found, "task B must have an activity log entry (task.moved or unblocked) after A is completed")
 	})
 
 	// --- Step 6: Task B must be auto-moved to "todo" by the seeded blocking_dep_resolved rule ---

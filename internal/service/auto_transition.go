@@ -9,6 +9,7 @@ import (
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/repository"
+	"github.com/entire-vc/evc-mesh/pkg/actorctx"
 )
 
 // AutoTransitionService checks and applies automatic status transitions.
@@ -170,7 +171,8 @@ func (s *autoTransitionService) CheckSubtaskCompletion(ctx context.Context, pare
 	}
 
 	log.Printf("[auto-transition] Moving parent task %s to review/done because all subtasks are complete", parentTaskID)
-	return s.taskSvc.MoveTask(ctx, parentTaskID, MoveTaskInput{StatusID: &targetStatusID})
+	sysCtx := actorctx.WithActor(ctx, uuid.Nil, domain.ActorTypeSystem)
+	return s.taskSvc.MoveTask(sysCtx, parentTaskID, MoveTaskInput{StatusID: &targetStatusID})
 }
 
 // CheckDependencyResolution checks if tasks that depend on resolvedTaskID can now be
@@ -269,7 +271,8 @@ func (s *autoTransitionService) tryUnblockTask(ctx context.Context, taskID uuid.
 	}
 
 	log.Printf("[auto-transition] Unblocking task %s (all blocking deps resolved) → moving to todo", taskID)
-	return s.taskSvc.MoveTask(ctx, taskID, MoveTaskInput{StatusID: &targetStatusID})
+	sysCtx := actorctx.WithActor(ctx, uuid.Nil, domain.ActorTypeSystem)
+	return s.taskSvc.MoveTask(sysCtx, taskID, MoveTaskInput{StatusID: &targetStatusID})
 }
 
 // resolveTargetFromRule looks up a configured, enabled rule for the given trigger and
