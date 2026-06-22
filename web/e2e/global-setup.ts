@@ -1,6 +1,10 @@
 import { chromium, type FullConfig } from "@playwright/test";
 import * as fs from "fs";
 import * as path from "path";
+import { fileURLToPath } from "url";
+
+// ESM equivalent of __dirname (package.json has "type":"module")
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 /**
  * Global setup: logs in via Casdoor once and saves storageState.json.
