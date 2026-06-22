@@ -117,6 +117,26 @@ func WorkspaceRLS(db *sqlx.DB, projectRepo repository.ProjectRepository) echo.Mi
 				}
 			}
 
+			// 2e. Try field_id route parameter -> look up workspace via custom_field_definitions → projects.
+			if !resolved {
+				if fieldIDStr := c.Param("field_id"); fieldIDStr != "" {
+					if fieldID, err := uuid.Parse(fieldIDStr); err == nil {
+						var resolvedWsID uuid.UUID
+						err := db.QueryRowContext(c.Request().Context(),
+							`SELECT p.workspace_id
+							   FROM custom_field_definitions cf
+							   JOIN projects p ON cf.project_id = p.id
+							  WHERE cf.id = $1`,
+							fieldID,
+						).Scan(&resolvedWsID)
+						if err == nil {
+							wsID = resolvedWsID
+							resolved = true
+						}
+					}
+				}
+			}
+
 			// 2d. Try init_id route parameter -> look up initiative's workspace_id.
 			if !resolved {
 				if initIDStr := c.Param("init_id"); initIDStr != "" {

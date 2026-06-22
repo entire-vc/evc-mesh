@@ -514,10 +514,14 @@ func (s *taskService) MoveTask(ctx context.Context, taskID uuid.UUID, input Move
 		// Review-evidence gate: block evidence-less moves to review.
 		// Requires at least one of: artifact, VCS link, or comment.
 		// Gate is skipped when commentRepo is not wired (e.g. tests without it).
+		// System actors (auto_transition) are exempt, consistent with the done-evidence gate.
 		if status.Category == domain.StatusCategoryReview && s.commentRepo != nil {
-			if task.ArtifactCount == 0 && task.VCSLinkCount == 0 {
-				if hasComment, gateErr := s.commentRepo.HasAnyComment(ctx, taskID); gateErr == nil && !hasComment {
-					return &ReviewEvidenceError{}
+			_, actorType := actorctx.FromContext(ctx)
+			if actorType != domain.ActorTypeSystem {
+				if task.ArtifactCount == 0 && task.VCSLinkCount == 0 {
+					if hasComment, gateErr := s.commentRepo.HasAnyComment(ctx, taskID); gateErr == nil && !hasComment {
+						return &ReviewEvidenceError{}
+					}
 				}
 			}
 		}

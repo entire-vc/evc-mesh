@@ -288,14 +288,18 @@ func TestAutoTransition_DependencyResolved(t *testing.T) {
 		resp := env.Get(t, fmt.Sprintf("/api/v1/tasks/%s/activity", taskBID))
 		require.Equal(t, http.StatusOK, resp.StatusCode)
 
-		var activity []map[string]interface{}
-		env.DecodeJSON(t, resp, &activity)
+		// Activity endpoint returns a paginated object {items: [...]}.
+		var page map[string]interface{}
+		env.DecodeJSON(t, resp, &page)
+		items, _ := page["items"].([]interface{})
 
 		found := false
-		for _, entry := range activity {
-			if entry["action"] == "unblocked" || entry["action"] == "dependency_resolved" {
-				found = true
-				break
+		for _, item := range items {
+			if entry, ok := item.(map[string]interface{}); ok {
+				if entry["action"] == "unblocked" || entry["action"] == "dependency_resolved" {
+					found = true
+					break
+				}
 			}
 		}
 		assert.True(t, found, "task B must have an unblocked activity log entry after A is completed")
