@@ -58,6 +58,8 @@ import {
 import { toast } from "@/components/ui/toast";
 import type { AssigneeType, Priority, DelegationLevel } from "@/types";
 import { DelegationLevelSelect } from "@/components/delegation-level-select";
+import { CostQualityBlock } from "@/components/cost-quality-block";
+import { getTaskCostSummary, type TaskCostSummary } from "@/lib/api";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -117,6 +119,7 @@ export function TaskSlideOver({
   const [loading, setLoading] = useState(false);
   const [rightTab, setRightTab] = useState<RightTabId>("comments");
   const [hideEmpty, setHideEmpty] = useState(true);
+  const [costSummary, setCostSummary] = useState<TaskCostSummary | null>(null);
 
   // Inline title editing
   const [editingTitle, setEditingTitle] = useState(false);
@@ -225,6 +228,25 @@ export function TaskSlideOver({
       setTimeout(() => labelInputRef.current?.focus(), 0);
     }
   }, [addingLabel]);
+
+  // Lazy-fetch cost/quality summary when task opens (silent fail — block is hidden on error)
+  useEffect(() => {
+    if (!effectiveTaskId) {
+      setCostSummary(null);
+      return;
+    }
+    let cancelled = false;
+    getTaskCostSummary(effectiveTaskId)
+      .then((data) => {
+        if (!cancelled) setCostSummary(data);
+      })
+      .catch(() => {
+        if (!cancelled) setCostSummary(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [effectiveTaskId]);
 
   // Close on Escape key
   useEffect(() => {
@@ -970,6 +992,18 @@ export function TaskSlideOver({
                         </div>
                         <div className="col-span-2">
                           <DependencyList taskId={currentTask.id} />
+                        </div>
+                      </>
+                    )}
+
+                    {/* Cost & Quality */}
+                    {costSummary && costSummary.session_count > 0 && (
+                      <>
+                        <div className="col-span-2 my-1">
+                          <Separator />
+                        </div>
+                        <div className="col-span-2">
+                          <CostQualityBlock summary={costSummary} />
                         </div>
                       </>
                     )}
