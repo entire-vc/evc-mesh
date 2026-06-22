@@ -17,6 +17,9 @@ import { defineConfig, devices } from "@playwright/test";
  */
 export default defineConfig({
   testDir: "./e2e",
+  // global-setup runs once before all workers: logs in via Casdoor, writes storageState.json.
+  // Using globalSetup (not a setup project) so the file exists before authed-e2e workers start.
+  globalSetup: "./e2e/global-setup.ts",
   timeout: 30_000,
   retries: process.env.CI ? 1 : 0,
   reporter: [["html", { outputFolder: "playwright-report" }], ["list"]],
@@ -30,12 +33,7 @@ export default defineConfig({
   },
 
   projects: [
-    // Setup project: logs in once, saves storageState.json
-    {
-      name: "setup",
-      testMatch: "**/global-setup.ts",
-    },
-    // Authed E2E: all tests in e2e/ (except global-setup.ts) run with saved session
+    // Authed E2E: all tests in e2e/ (global-setup.ts runs as globalSetup above, not as a test)
     {
       name: "authed-e2e",
       testIgnore: "**/global-setup.ts",
@@ -43,7 +41,6 @@ export default defineConfig({
         ...devices["Desktop Chrome"],
         storageState: "e2e/.auth/user.json",
       },
-      dependencies: ["setup"],
     },
   ],
 });

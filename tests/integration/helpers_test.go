@@ -12,6 +12,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -259,6 +260,11 @@ func (e *TestEnv) doRequest(t *testing.T, method, path string, body interface{})
 	}
 
 	return resp
+}
+
+// uniqueEmail generates a collision-free email for test isolation.
+func uniqueEmail(prefix string) string {
+	return fmt.Sprintf("%s-%d@test.mesh.local", prefix, time.Now().UnixNano())
 }
 
 // envOr returns the environment variable value or a fallback default.
