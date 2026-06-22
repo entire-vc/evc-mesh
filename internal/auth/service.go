@@ -463,7 +463,7 @@ func (s *Service) deriveUniqueUsername(ctx context.Context, email string) (strin
 	prefix := strings.ToLower(strings.SplitN(email, "@", 2)[0])
 	base := strings.Trim(multiDashRe.ReplaceAllString(nonSlugRe.ReplaceAllString(prefix, "-"), "-"), "-")
 	if len(base) < 2 {
-		base = base + "0"
+		base += "0"
 	}
 	if len(base) < 2 {
 		base = "u0"
