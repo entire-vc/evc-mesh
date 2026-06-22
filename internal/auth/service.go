@@ -35,7 +35,11 @@ const (
 // timeNow is a package-level variable so tests can override the clock.
 var timeNow = time.Now
 
-var usernameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,38}[a-z0-9]$`)
+var (
+	usernameRe  = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,38}[a-z0-9]$`)
+	nonSlugRe   = regexp.MustCompile(`[^a-z0-9-]`)
+	multiDashRe = regexp.MustCompile(`-{2,}`)
+)
 
 // Errors returned by the auth service.
 var (
@@ -124,12 +128,18 @@ func (s *Service) Register(ctx context.Context, email, password, name string) (*
 		return nil, nil, apierror.InternalError("failed to hash password")
 	}
 
+	username, err := s.deriveUniqueUsername(ctx, email)
+	if err != nil {
+		return nil, nil, apierror.Wrap(err)
+	}
+
 	now := timeNow()
 	user := &domain.User{
 		ID:           uuid.New(),
 		Email:        email,
 		PasswordHash: string(hash),
 		Name:         name,
+		Username:     username,
 		IsActive:     true,
 		CreatedAt:    now,
 		UpdatedAt:    now,
@@ -443,6 +453,40 @@ func (s *Service) GetUserByID(ctx context.Context, id uuid.UUID) (*domain.User, 
 		return nil, apierror.NotFound("User")
 	}
 	return user, nil
+}
+
+// deriveUniqueUsername generates a unique username from an email address.
+// Mirrors the backfill logic in migration 20260520046_add_users_username:
+// strip domain, lowercase, replace non-slug chars with "-", deduplicate dashes,
+// trim edges, clamp to 38 chars, append numeric suffix to resolve conflicts.
+func (s *Service) deriveUniqueUsername(ctx context.Context, email string) (string, error) {
+	prefix := strings.ToLower(strings.SplitN(email, "@", 2)[0])
+	base := strings.Trim(multiDashRe.ReplaceAllString(nonSlugRe.ReplaceAllString(prefix, "-"), "-"), "-")
+	if len(base) < 2 {
+		base = base + "0"
+	}
+	if len(base) < 2 {
+		base = "u0"
+	}
+	if len(base) > 38 {
+		base = base[:38]
+	}
+	candidate := base
+	for i := 1; ; i++ {
+		exists, err := s.userRepo.UsernameExists(ctx, candidate)
+		if err != nil {
+			return "", err
+		}
+		if !exists {
+			return candidate, nil
+		}
+		suffix := fmt.Sprintf("%d", i)
+		trimmed := base
+		if len(trimmed)+len(suffix) > 40 {
+			trimmed = trimmed[:40-len(suffix)]
+		}
+		candidate = trimmed + suffix
+	}
 }
 
 // validateEmail checks that an email address is syntactically valid.
