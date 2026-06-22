@@ -1,3 +1,5 @@
+//go:build integration
+
 // Package integration provides end-to-end integration tests for the evc-mesh API.
 //
 // These tests require running Docker Compose services (postgres, redis, nats, minio)
