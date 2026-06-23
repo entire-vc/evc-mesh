@@ -673,3 +673,262 @@ func TestEnforceBlockingTriage_NoTaskService_SkipsSafely(t *testing.T) {
 	comment := &domain.Comment{TaskID: taskID, AuthorID: uuid.New(), AuthorType: domain.ActorTypeAgent, Body: "❓ **Blocking @pavel**: x"}
 	require.NoError(t, svc.Create(context.Background(), comment))
 }
+
+// ---------------------------------------------------------------------------
+// enforceTriageExit — general triage EXIT rule
+// ---------------------------------------------------------------------------
+
+// seedTriageTask inserts a task in triage without human_gate and returns its ID.
+func (env triageTestEnv) seedTriageTask() uuid.UUID {
+	return env.seedTask(env.triageID)
+}
+
+// seedRealBlockingComment pre-inserts a genuine "❓ Blocking @user" comment from an
+// agent (non-auto, no negators) so that enforceTriageExit finds a real block.
+func (env triageTestEnv) seedRealBlockingComment(taskID uuid.UUID) {
+	cid := uuid.New()
+	env.commentRepo.items[cid] = &domain.Comment{
+		ID:         cid,
+		TaskID:     taskID,
+		AuthorID:   uuid.New(),
+		AuthorType: domain.ActorTypeAgent,
+		Body:       "❓ **Blocking @pavel**: need your decision on option B",
+	}
+}
+
+// TestEnforceTriageExit_HumanCommentAfterRealBlock_MovesToInProgress verifies the core
+// happy-path: a task in triage (no human_gate) with a prior real block exits to in_progress
+// when a human user comments.
+func TestEnforceTriageExit_HumanCommentAfterRealBlock_MovesToInProgress(t *testing.T) {
+	env := setupTriageEnv(t, true)
+	taskID := env.seedTriageTask()
+	env.seedRealBlockingComment(taskID)
+
+	pavelID := uuid.New()
+	ctx := actorctx.WithActor(context.Background(), pavelID, domain.ActorTypeUser)
+	comment := &domain.Comment{
+		TaskID:     taskID,
+		AuthorID:   pavelID,
+		AuthorType: domain.ActorTypeUser,
+		Body:       "Выбирайте option B, не ждите.",
+	}
+	require.NoError(t, env.svc.Create(ctx, comment))
+
+	moves := env.taskMover.calls()
+	require.Len(t, moves, 1, "task must be moved from triage to in_progress")
+	require.NotNil(t, moves[0].input.StatusID)
+	assert.Equal(t, env.inProgressID, *moves[0].input.StatusID, "destination must be in_progress")
+
+	sys := env.systemComments()
+	require.Len(t, sys, 1)
+	assert.Contains(t, sys[0].Body, "triage → in_progress")
+}
+
+// TestEnforceTriageExit_AgentComment_NoOp ensures an agent comment does not trigger the EXIT rule.
+func TestEnforceTriageExit_AgentComment_NoOp(t *testing.T) {
+	env := setupTriageEnv(t, true)
+	taskID := env.seedTriageTask()
+	env.seedRealBlockingComment(taskID)
+
+	comment := &domain.Comment{
+		TaskID:     taskID,
+		AuthorID:   uuid.New(),
+		AuthorType: domain.ActorTypeAgent,
+		Body:       "Still waiting on Pavel to answer.",
+	}
+	require.NoError(t, env.svc.Create(context.Background(), comment))
+
+	assert.Empty(t, env.taskMover.calls(), "agent comment must not trigger triage exit")
+	assert.Empty(t, env.systemComments())
+}
+
+// TestEnforceTriageExit_HumanGateSet_NoOp confirms that when human_gate=true the EXIT
+// rule is skipped (releaseHumanGate owns that path and avoids a double MoveTask).
+func TestEnforceTriageExit_HumanGateSet_NoOp(t *testing.T) {
+	env := setupTriageEnv(t, true)
+	// Task in triage with human_gate=true: releaseHumanGate handles the move.
+	taskID := env.seedGatedTask(env.triageID)
+	env.seedRealBlockingComment(taskID)
+	env.seedBlockingComment(taskID) // ensure releaseHumanGate also has its blocker
+
+	pavelID := uuid.New()
+	ctx := actorctx.WithActor(context.Background(), pavelID, domain.ActorTypeUser)
+	comment := &domain.Comment{
+		TaskID:     taskID,
+		AuthorID:   pavelID,
+		AuthorType: domain.ActorTypeUser,
+		Body:       "Ок, деплойте.",
+	}
+	require.NoError(t, env.svc.Create(ctx, comment))
+
+	// releaseHumanGate fires and produces exactly ONE move; enforceTriageExit must not add a second.
+	moves := env.taskMover.calls()
+	require.Len(t, moves, 1, "only one MoveTask call expected (from releaseHumanGate, not double)")
+}
+
+// TestEnforceTriageExit_NoPriorRealBlock_NoOp: no prior blocking comment → no exit.
+func TestEnforceTriageExit_NoPriorRealBlock_NoOp(t *testing.T) {
+	env := setupTriageEnv(t, true)
+	taskID := env.seedTriageTask()
+	// No seedRealBlockingComment.
+
+	pavelID := uuid.New()
+	ctx := actorctx.WithActor(context.Background(), pavelID, domain.ActorTypeUser)
+	comment := &domain.Comment{
+		TaskID:     taskID,
+		AuthorID:   pavelID,
+		AuthorType: domain.ActorTypeUser,
+		Body:       "Checking in on this.",
+	}
+	require.NoError(t, env.svc.Create(ctx, comment))
+
+	assert.Empty(t, env.taskMover.calls(), "no real block found — must not exit triage")
+	assert.Empty(t, env.systemComments())
+}
+
+// TestEnforceTriageExit_AutoMarkerBlock_NoOp: a prior auto-generated comment that
+// happens to contain a blocking marker must NOT count as a real block.
+func TestEnforceTriageExit_AutoMarkerBlock_NoOp(t *testing.T) {
+	env := setupTriageEnv(t, true)
+	taskID := env.seedTriageTask()
+	// Seed an auto-generated comment that looks like a blocker but is from the server.
+	cid := uuid.New()
+	env.commentRepo.items[cid] = &domain.Comment{
+		ID:         cid,
+		TaskID:     taskID,
+		AuthorID:   uuid.New(),
+		AuthorType: domain.ActorTypeAgent,
+		Body:       "🤖 auto: задача переведена в triage — ❓ Blocking @pavel зафиксирован",
+	}
+
+	pavelID := uuid.New()
+	ctx := actorctx.WithActor(context.Background(), pavelID, domain.ActorTypeUser)
+	comment := &domain.Comment{
+		TaskID:     taskID,
+		AuthorID:   pavelID,
+		AuthorType: domain.ActorTypeUser,
+		Body:       "Ок",
+	}
+	require.NoError(t, env.svc.Create(ctx, comment))
+
+	assert.Empty(t, env.taskMover.calls(), "auto-marker block must not satisfy the real-block check")
+	assert.Empty(t, env.systemComments())
+}
+
+// TestEnforceTriageExit_NegatedBlock_NoOp: a prior blocking comment with a negator
+// keyword must not count as a live gate.
+func TestEnforceTriageExit_NegatedBlock_NoOp(t *testing.T) {
+	env := setupTriageEnv(t, true)
+	taskID := env.seedTriageTask()
+	// Seed a blocking comment that also contains a negator — the block was cancelled.
+	cid := uuid.New()
+	env.commentRepo.items[cid] = &domain.Comment{
+		ID:         cid,
+		TaskID:     taskID,
+		AuthorID:   uuid.New(),
+		AuthorType: domain.ActorTypeAgent,
+		Body:       "❓ **Blocking @pavel**: нет, уже resolved — продолжаем сами",
+	}
+
+	pavelID := uuid.New()
+	ctx := actorctx.WithActor(context.Background(), pavelID, domain.ActorTypeUser)
+	comment := &domain.Comment{
+		TaskID:     taskID,
+		AuthorID:   pavelID,
+		AuthorType: domain.ActorTypeUser,
+		Body:       "Ок, видел.",
+	}
+	require.NoError(t, env.svc.Create(ctx, comment))
+
+	assert.Empty(t, env.taskMover.calls(), "negated block must not satisfy the real-block check")
+	assert.Empty(t, env.systemComments())
+}
+
+// TestEnforceTriageExit_SupervisedTask_NoOp: supervised tasks must not auto-exit triage.
+func TestEnforceTriageExit_SupervisedTask_NoOp(t *testing.T) {
+	env := setupTriageEnv(t, true)
+	taskID := uuid.New()
+	env.taskRepo.items[taskID] = &domain.Task{
+		ID: taskID, ProjectID: env.projID, StatusID: env.triageID,
+		Title: "Supervised", DelegationLevel: domain.DelegationLevelSupervised,
+	}
+	env.seedRealBlockingComment(taskID)
+
+	pavelID := uuid.New()
+	ctx := actorctx.WithActor(context.Background(), pavelID, domain.ActorTypeUser)
+	comment := &domain.Comment{
+		TaskID:     taskID,
+		AuthorID:   pavelID,
+		AuthorType: domain.ActorTypeUser,
+		Body:       "Начинайте.",
+	}
+	require.NoError(t, env.svc.Create(ctx, comment))
+
+	assert.Empty(t, env.taskMover.calls(), "supervised task must not auto-exit triage")
+	assert.Empty(t, env.systemComments())
+}
+
+// TestEnforceTriageExit_TaskAssignedToUser_NoOp: if the task is assigned to a human
+// user, auto-exit must be skipped (user owns the triage slot).
+func TestEnforceTriageExit_TaskAssignedToUser_NoOp(t *testing.T) {
+	env := setupTriageEnv(t, true)
+	pavelUID := uuid.New()
+	taskID := uuid.New()
+	env.taskRepo.items[taskID] = &domain.Task{
+		ID: taskID, ProjectID: env.projID, StatusID: env.triageID,
+		Title: "Pavel's own task", AssigneeID: &pavelUID, AssigneeType: domain.AssigneeTypeUser,
+	}
+	env.seedRealBlockingComment(taskID)
+
+	ctx := actorctx.WithActor(context.Background(), pavelUID, domain.ActorTypeUser)
+	comment := &domain.Comment{
+		TaskID:     taskID,
+		AuthorID:   pavelUID,
+		AuthorType: domain.ActorTypeUser,
+		Body:       "I'll look at this tomorrow.",
+	}
+	require.NoError(t, env.svc.Create(ctx, comment))
+
+	assert.Empty(t, env.taskMover.calls(), "user-assigned task must not auto-exit triage")
+	assert.Empty(t, env.systemComments())
+}
+
+// TestEnforceTriageExit_TaskNotInTriage_NoOp: if the task is NOT in triage, the exit rule
+// must be a no-op.
+func TestEnforceTriageExit_TaskNotInTriage_NoOp(t *testing.T) {
+	env := setupTriageEnv(t, true)
+	taskID := env.seedTask(env.inProgressID) // in_progress, not triage
+	env.seedRealBlockingComment(taskID)
+
+	pavelID := uuid.New()
+	ctx := actorctx.WithActor(context.Background(), pavelID, domain.ActorTypeUser)
+	comment := &domain.Comment{
+		TaskID:     taskID,
+		AuthorID:   pavelID,
+		AuthorType: domain.ActorTypeUser,
+		Body:       "Looks good.",
+	}
+	require.NoError(t, env.svc.Create(ctx, comment))
+
+	assert.Empty(t, env.taskMover.calls(), "task not in triage — exit rule must be no-op")
+	assert.Empty(t, env.systemComments())
+}
+
+// TestIsAutoGeneratedComment tests the auto-marker detector.
+func TestIsAutoGeneratedComment(t *testing.T) {
+	cases := []struct {
+		body string
+		want bool
+	}{
+		{"🤖 auto: задача переведена", true},
+		{"[fiddler] session checkpoint", true},
+		{"переведена в triage по запросу", true},
+		{"moving to triage — reason: stale", true},
+		{"❓ **Blocking @pavel**: need decision", false},
+		{"just a regular agent comment", false},
+		{"", false},
+	}
+	for _, c := range cases {
+		assert.Equal(t, c.want, isAutoGeneratedComment(c.body), "body: %q", c.body)
+	}
+}
