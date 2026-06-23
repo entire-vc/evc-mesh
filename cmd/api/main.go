@@ -478,6 +478,9 @@ func main() {
 	// Checkout reaper: periodically releases orphan task-locks whose TTL has expired.
 	// Complements the lazy expiry in AtomicCheckout — handles tasks that no agent
 	// retries after the original holder's session dies.
+	// leaseReaper additionally moves expired in_progress tasks back to todo so that
+	// the capacity slot (max_in_progress) is freed for other agents.
+	leaseReaper := service.NewCheckoutLeaseReaper(taskRepo, taskStatusRepo, commentRepo, taskService, agentNotifySvc)
 	reaperCtx, reaperCancel := context.WithCancel(context.Background())
 	go func() {
 		ticker := time.NewTicker(60 * time.Second)
@@ -485,10 +488,17 @@ func main() {
 		for {
 			select {
 			case <-ticker.C:
+				// Phase 1: move expired in_progress tasks back to todo (frees capacity).
+				if n, err := leaseReaper.SweepExpiredLeases(reaperCtx); err != nil {
+					log.Printf("[lease-reaper] ERROR sweeping expired leases: %v", err)
+				} else if n > 0 {
+					log.Printf("[lease-reaper] moved %d expired lease(s) back to todo", n)
+				}
+				// Phase 2: clear stale checkout fields on any remaining tasks.
 				if n, err := taskRepo.ReleaseExpiredCheckouts(reaperCtx); err != nil {
 					log.Printf("[checkout-reaper] ERROR releasing expired locks: %v", err)
 				} else if n > 0 {
-					log.Printf("[checkout-reaper] released %d expired checkout(s)", n)
+					log.Printf("[checkout-reaper] released %d expired checkout lock(s)", n)
 				}
 			case <-reaperCtx.Done():
 				return

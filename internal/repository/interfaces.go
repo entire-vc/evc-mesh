@@ -98,6 +98,10 @@ type TaskRepository interface {
 	// checkout_expires has passed. Returns the number of locks released.
 	// Called by the background reaper goroutine in cmd/api/main.go.
 	ReleaseExpiredCheckouts(ctx context.Context) (int64, error)
+	// FindExpiredInProgressCheckouts returns tasks whose checkout_expires is in the
+	// past and whose status category is in_progress. These tasks have an expired
+	// lease and are candidates for auto-return to todo by the lease reaper.
+	FindExpiredInProgressCheckouts(ctx context.Context) ([]domain.Task, error)
 	// MoveToProject atomically reassigns a task to a different project, assigning it
 	// the given target status and a new task_number within that project.
 	// Returns apierror.NotFound("Task") if the task does not exist or is soft-deleted.

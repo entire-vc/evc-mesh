@@ -840,6 +840,26 @@ func (r *TaskRepo) ReleaseExpiredCheckouts(ctx context.Context) (int64, error) {
 	return n, nil
 }
 
+// FindExpiredInProgressCheckouts returns tasks whose checkout_expires is in the past
+// and whose status category is in_progress. Uses FOR UPDATE SKIP LOCKED to avoid
+// double-processing when multiple reaper goroutines race (unlikely, but safe).
+func (r *TaskRepo) FindExpiredInProgressCheckouts(ctx context.Context) ([]domain.Task, error) {
+	const q = `
+		SELECT ` + taskBaseColsNoAlias + `
+		FROM tasks
+		WHERE checkout_expires < now()
+		  AND checkout_expires IS NOT NULL
+		  AND deleted_at IS NULL
+		  AND status_id IN (
+		      SELECT id FROM task_statuses WHERE category = 'in_progress'
+		  )`
+	var rows []taskRow
+	if err := r.db.SelectContext(ctx, &rows, q); err != nil {
+		return nil, err
+	}
+	return taskRowsToSlice(rows), nil
+}
+
 // ExtendCheckout pushes the checkout_expires deadline forward. The token must match
 // and the existing checkout must not already be expired (to prevent hijacking an
 // expired slot via extend).
