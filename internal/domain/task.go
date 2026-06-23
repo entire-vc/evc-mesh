@@ -8,6 +8,16 @@ import (
 	"github.com/lib/pq"
 )
 
+// AssignmentSource records who or what set the current task assignee.
+// Used to enforce pin-assignee invariant (human pin cannot be overridden by rules or system).
+type AssignmentSource string
+
+const (
+	AssignmentSourceHuman  AssignmentSource = "human"
+	AssignmentSourceRule   AssignmentSource = "rule"
+	AssignmentSourceSystem AssignmentSource = "system"
+)
+
 // AssigneeType determines whether a task is assigned to a user, agent, or nobody.
 type AssigneeType string
 
@@ -48,26 +58,29 @@ const (
 
 // Task is the central entity -- a unit of work that can be assigned to users or agents.
 type Task struct {
-	ID             uuid.UUID       `json:"id" db:"id"`
-	ProjectID      uuid.UUID       `json:"project_id" db:"project_id"`
-	StatusID       uuid.UUID       `json:"status_id" db:"status_id"`
-	Title          string          `json:"title" db:"title"`
-	Description    string          `json:"description" db:"description"`
-	AssigneeID     *uuid.UUID      `json:"assignee_id" db:"assignee_id"`
-	AssigneeType   AssigneeType    `json:"assignee_type" db:"assignee_type"`
-	Priority       Priority        `json:"priority" db:"priority"`
-	ParentTaskID   *uuid.UUID      `json:"parent_task_id" db:"parent_task_id"`
-	Position       float64         `json:"position" db:"position"`
-	DueDate        *time.Time      `json:"due_date" db:"due_date"`
-	EstimatedHours *float64        `json:"estimated_hours" db:"estimated_hours"`
-	CustomFields   json.RawMessage `json:"custom_fields" db:"custom_fields"`
-	Labels         pq.StringArray  `json:"labels" db:"labels"`
-	ThreadID       *string         `json:"thread_id,omitempty" db:"thread_id"`
-	CreatedBy      uuid.UUID       `json:"created_by" db:"created_by"`
-	CreatedByType  ActorType       `json:"created_by_type" db:"created_by_type"`
-	CreatedAt      time.Time       `json:"created_at" db:"created_at"`
-	UpdatedAt      time.Time       `json:"updated_at" db:"updated_at"`
-	CompletedAt    *time.Time      `json:"completed_at" db:"completed_at"`
+	ID           uuid.UUID    `json:"id" db:"id"`
+	ProjectID    uuid.UUID    `json:"project_id" db:"project_id"`
+	StatusID     uuid.UUID    `json:"status_id" db:"status_id"`
+	Title        string       `json:"title" db:"title"`
+	Description  string       `json:"description" db:"description"`
+	AssigneeID   *uuid.UUID   `json:"assignee_id" db:"assignee_id"`
+	AssigneeType AssigneeType `json:"assignee_type" db:"assignee_type"`
+	// AssignedBy records whether the current assignee was set by a human, a rule engine, or the system.
+	// When set to AssignmentSourceHuman, only another human-source call may override the assignment.
+	AssignedBy     AssignmentSource `json:"assigned_by" db:"assigned_by"`
+	Priority       Priority         `json:"priority" db:"priority"`
+	ParentTaskID   *uuid.UUID       `json:"parent_task_id" db:"parent_task_id"`
+	Position       float64          `json:"position" db:"position"`
+	DueDate        *time.Time       `json:"due_date" db:"due_date"`
+	EstimatedHours *float64         `json:"estimated_hours" db:"estimated_hours"`
+	CustomFields   json.RawMessage  `json:"custom_fields" db:"custom_fields"`
+	Labels         pq.StringArray   `json:"labels" db:"labels"`
+	ThreadID       *string          `json:"thread_id,omitempty" db:"thread_id"`
+	CreatedBy      uuid.UUID        `json:"created_by" db:"created_by"`
+	CreatedByType  ActorType        `json:"created_by_type" db:"created_by_type"`
+	CreatedAt      time.Time        `json:"created_at" db:"created_at"`
+	UpdatedAt      time.Time        `json:"updated_at" db:"updated_at"`
+	CompletedAt    *time.Time       `json:"completed_at" db:"completed_at"`
 
 	// Recurring series fields — populated when the task is an instance of a recurring schedule.
 	RecurringScheduleID     *uuid.UUID `json:"recurring_schedule_id,omitempty" db:"recurring_schedule_id"`

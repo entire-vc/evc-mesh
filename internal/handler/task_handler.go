@@ -641,6 +641,9 @@ func (h *TaskHandler) ListSubtasks(c echo.Context) error {
 type assignTaskRequest struct {
 	AssigneeID   *uuid.UUID          `json:"assignee_id"`
 	AssigneeType domain.AssigneeType `json:"assignee_type"`
+	// Source defaults to "system" when omitted. Pass "human" to set a human pin.
+	// Rule/system sources are rejected if the task is already pinned by a human.
+	Source domain.AssignmentSource `json:"source"`
 }
 
 // AssignTask handles POST /tasks/:task_id/assign
@@ -667,9 +670,17 @@ func (h *TaskHandler) AssignTask(c echo.Context) error {
 	input := service.AssignTaskInput{
 		AssigneeID:   req.AssigneeID,
 		AssigneeType: assigneeType,
+		Source:       req.Source,
 	}
 
 	if err = h.taskService.AssignTask(c.Request().Context(), taskID, input); err != nil {
+		var pinnedErr *service.AssignmentPinnedError
+		if errors.As(err, &pinnedErr) {
+			return c.JSON(http.StatusUnprocessableEntity, map[string]any{
+				"code":    "assignment_pinned",
+				"message": "Task assignee is pinned by a human and cannot be overridden by rule or system sources. Pass source=human to override.",
+			})
+		}
 		return handleError(c, err)
 	}
 
