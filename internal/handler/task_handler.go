@@ -1036,6 +1036,28 @@ func (h *TaskHandler) GetCostSummary(c echo.Context) error {
 	return c.JSON(http.StatusOK, summary)
 }
 
+// ShipTask handles PATCH /tasks/:task_id/ship.
+// Body: {"shipped": true|false}
+// Sets or clears the is_shipped terminal flag. Once shipped, MoveTask to non-done returns 422.
+func (h *TaskHandler) ShipTask(c echo.Context) error {
+	taskID, err := resolveTaskID(c.Request().Context(), c.Param("task_id"), h.taskService)
+	if err != nil {
+		return handleError(c, err)
+	}
+
+	var req struct {
+		Shipped bool `json:"shipped"`
+	}
+	if err := c.Bind(&req); err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
+	}
+
+	if err := h.taskService.ShipTask(c.Request().Context(), taskID, req.Shipped); err != nil {
+		return handleError(c, err)
+	}
+	return c.NoContent(http.StatusNoContent)
+}
+
 // ruleViolationAPIResponse is the JSON shape for 422 rule violation responses.
 type ruleViolationAPIResponse struct {
 	Error      string                 `json:"error"`
@@ -1066,6 +1088,14 @@ func handleError(c echo.Context, err error) error {
 		return c.JSON(http.StatusUnprocessableEntity, map[string]any{
 			"code":    "human_gate_frozen",
 			"message": "Task is awaiting human sign-off (human_gate=true). Only a user may move it to backlog/done/cancelled. To clear the gate, a human must either move the task manually or call PATCH /tasks/:id with human_gate=false.",
+		})
+	}
+
+	var shippedErr *service.TaskShippedError
+	if errors.As(err, &shippedErr) {
+		return c.JSON(http.StatusUnprocessableEntity, map[string]any{
+			"code":    "task_shipped",
+			"message": "Task is marked as shipped and cannot be moved to a non-done status. To reopen it, call PATCH /tasks/:id/ship with {\"shipped\": false} first.",
 		})
 	}
 

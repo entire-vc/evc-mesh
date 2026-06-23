@@ -272,6 +272,7 @@ func (s *StubTaskService) SupersedeRecurringInstances(_ context.Context, _, _ uu
 }
 
 func (s *StubTaskService) SetHumanGate(_ context.Context, _ uuid.UUID, _ bool) error { return nil }
+func (s *StubTaskService) ShipTask(_ context.Context, _ uuid.UUID, _ bool) error     { return nil }
 
 var _ TaskService = (*StubTaskService)(nil)
 

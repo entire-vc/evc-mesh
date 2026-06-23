@@ -155,6 +155,10 @@ type TaskService interface {
 	// SetHumanGate arms (value=true) or clears (value=false) the sticky human-gate flag.
 	// When armed, only a human actor may move the task to backlog/done/cancelled.
 	SetHumanGate(ctx context.Context, taskID uuid.UUID, value bool) error
+	// ShipTask marks the task as terminally shipped (is_shipped=true). Once set,
+	// MoveTask to any non-done category returns TaskShippedError (422).
+	// Pass shipped=false to clear the flag (unship).
+	ShipTask(ctx context.Context, taskID uuid.UUID, shipped bool) error
 }
 
 // TaskServiceAutoTransitionConfigurable extends TaskService with the ability

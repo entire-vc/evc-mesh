@@ -113,6 +113,9 @@ type TaskRepository interface {
 	// SetHumanGate atomically sets the human_gate sticky flag without touching other fields.
 	// Pass true to arm the gate, false to clear it (human sign-off received).
 	SetHumanGate(ctx context.Context, taskID uuid.UUID, value bool) error
+	// SetShipped atomically sets the is_shipped flag. Pass true to mark the task as
+	// terminally shipped; false to clear the flag (unship).
+	SetShipped(ctx context.Context, taskID uuid.UUID, value bool) error
 }
 
 // TaskStatusRepository manages persistence for task statuses.

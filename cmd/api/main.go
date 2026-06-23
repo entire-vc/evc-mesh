@@ -651,6 +651,7 @@ func main() {
 	api.POST("/tasks/:task_id/checkout", taskHandler.Checkout, wsAccess)
 	api.DELETE("/tasks/:task_id/checkout", taskHandler.ReleaseCheckout, wsAccess)
 	api.PATCH("/tasks/:task_id/checkout", taskHandler.ExtendCheckout, wsAccess)
+	api.PATCH("/tasks/:task_id/ship", taskHandler.ShipTask, wsAccess, rbac(mw.PermUpdateTask))
 	api.GET("/tasks/:task_id/context", taskContextHandler.GetTaskContext, wsAccess)
 	api.GET("/tasks/:task_id/cost-summary", taskHandler.GetCostSummary, wsAccess)
 	api.GET("/workspaces/:ws_id/tasks", taskHandler.SearchGlobal, wsAccess)

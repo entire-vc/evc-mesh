@@ -77,6 +77,9 @@ type Task struct {
 	// HumanGate is a sticky flag set when a human (Pavel) sign-off is required.
 	// Once set, only a human actor may move the task to backlog/done/cancelled.
 	HumanGate bool `json:"human_gate" db:"human_gate"`
+	// IsShipped marks the task as terminally shipped. Once set, MoveTask to any
+	// non-done category returns 422. Cleared only by an explicit PATCH /tasks/:id/unship.
+	IsShipped bool `json:"is_shipped" db:"is_shipped"`
 
 	// Checkout fields — set when an agent has an exclusive application-level lock on the task.
 	CheckedOutBy       *uuid.UUID `json:"checked_out_by,omitempty" db:"checked_out_by"`
