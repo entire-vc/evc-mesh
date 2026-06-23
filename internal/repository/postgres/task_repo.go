@@ -212,10 +212,20 @@ func NewTaskRepo(db *sqlx.DB) *TaskRepo {
 	return &TaskRepo{db: db}
 }
 
+// isTaskNumberConflict reports whether err is a PostgreSQL unique-constraint
+// violation on uq_tasks_project_number (project_id, task_number). This happens
+// when two concurrent paths compute MAX(task_number)+1 simultaneously.
+func isTaskNumberConflict(err error) bool {
+	var pqErr *pq.Error
+	return errors.As(err, &pqErr) && pqErr.Code == "23505" && pqErr.Constraint == "uq_tasks_project_number"
+}
+
 func (r *TaskRepo) Create(ctx context.Context, task *domain.Task) error {
 	// Use pg_advisory_xact_lock to serialize task_number generation per project.
-	// Without this, concurrent INSERTs can read the same MAX(task_number) and
-	// produce duplicates (the unique constraint catches it, but we'd error out).
+	// The lock CTE is referenced via CROSS JOIN in the task_number subquery so
+	// the PostgreSQL optimizer cannot eliminate it as dead code (unreferenced CTEs
+	// with only side effects may be dropped by the planner in PG 12+).
+	// A retry loop provides defense in depth for races with paths that bypass the lock.
 	const q = `
 		WITH lock AS (
 			SELECT pg_advisory_xact_lock(hashtext($2::text))
@@ -231,7 +241,7 @@ func (r *TaskRepo) Create(ctx context.Context, task *domain.Task) error {
 			$1, $2::uuid, $3, $4, $5,
 			$6, $7, $8, $9, $10,
 			$11, $12, $13, $14,
-			(SELECT COALESCE(MAX(task_number), 0) + 1 FROM tasks WHERE project_id = $2::uuid),
+			(SELECT COALESCE(MAX(t.task_number), 0) + 1 FROM tasks t, lock WHERE t.project_id = $2::uuid),
 			$15, $16, $17, $18, $19,
 			$20, $21,
 			$22, $23, $24
@@ -249,17 +259,35 @@ func (r *TaskRepo) Create(ctx context.Context, task *domain.Task) error {
 	if delegationLevel == "" {
 		delegationLevel = domain.DelegationLevelAuto
 	}
-	dbStart := time.Now()
-	_, err := r.db.ExecContext(ctx, q,
-		task.ID, task.ProjectID, task.StatusID, task.Title, task.Description,
-		task.AssigneeID, task.AssigneeType, task.Priority, task.ParentTaskID, task.Position,
-		task.DueDate, task.EstimatedHours, customFields, labels,
-		task.CreatedBy, task.CreatedByType, task.CreatedAt, task.UpdatedAt, task.CompletedAt,
-		task.RecurringScheduleID, task.RecurringInstanceNumber,
-		delegationLevel, task.ThreadID, task.HumanGate,
-	)
-	pkgmetrics.RecordDBQuery("task.create", time.Since(dbStart))
-	return err
+
+	const maxRetries = 3
+	for attempt := range maxRetries {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(time.Duration(attempt*50) * time.Millisecond):
+			}
+		}
+		dbStart := time.Now()
+		_, err := r.db.ExecContext(ctx, q,
+			task.ID, task.ProjectID, task.StatusID, task.Title, task.Description,
+			task.AssigneeID, task.AssigneeType, task.Priority, task.ParentTaskID, task.Position,
+			task.DueDate, task.EstimatedHours, customFields, labels,
+			task.CreatedBy, task.CreatedByType, task.CreatedAt, task.UpdatedAt, task.CompletedAt,
+			task.RecurringScheduleID, task.RecurringInstanceNumber,
+			delegationLevel, task.ThreadID, task.HumanGate,
+		)
+		pkgmetrics.RecordDBQuery("task.create", time.Since(dbStart))
+		if err == nil {
+			return nil
+		}
+		if isTaskNumberConflict(err) {
+			continue
+		}
+		return err
+	}
+	return fmt.Errorf("task_repo.Create: task_number conflict persisted after %d retries for project %s", maxRetries, task.ProjectID)
 }
 
 func (r *TaskRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.Task, error) {
@@ -783,7 +811,7 @@ func (r *TaskRepo) MoveToProject(ctx context.Context, taskID, targetProjectID, t
 		UPDATE tasks
 		SET project_id  = $2::uuid,
 		    status_id   = $3,
-		    task_number = (SELECT COALESCE(MAX(task_number), 0) + 1 FROM tasks WHERE project_id = $2::uuid AND deleted_at IS NULL),
+		    task_number = (SELECT COALESCE(MAX(t.task_number), 0) + 1 FROM tasks t, lock WHERE t.project_id = $2::uuid AND t.deleted_at IS NULL),
 		    updated_at  = NOW()
 		WHERE id = $1 AND deleted_at IS NULL
 	`

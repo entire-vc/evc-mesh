@@ -5,7 +5,9 @@ package postgres
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -492,4 +494,59 @@ func TestNullAvatarURL(t *testing.T) {
 		require.Len(t, members, 1)
 		assert.Equal(t, "", members[0].User.AvatarURL)
 	})
+}
+
+// TestTaskRepo_ConcurrentCreate_NoTaskNumberConflict verifies that concurrent
+// task creation in the same project never produces a duplicate task_number.
+// This is the regression test for the recurring-scheduler dup-key race where
+// the pg_advisory_xact_lock CTE was unreferenced and could be dropped by the
+// PostgreSQL optimizer, letting two goroutines read the same MAX(task_number).
+func TestTaskRepo_ConcurrentCreate_NoTaskNumberConflict(t *testing.T) {
+	db := testDB(t)
+	_, proj, status := createTestProject(t, db)
+	repo := NewTaskRepo(db)
+	ctx := context.Background()
+
+	const workers = 8
+	errs := make(chan error, workers)
+	var wg sync.WaitGroup
+
+	for i := range workers {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			task := &domain.Task{
+				ID:            uuid.New(),
+				ProjectID:     proj.ID,
+				StatusID:      status.ID,
+				Title:         fmt.Sprintf("concurrent task %d", i),
+				AssigneeType:  domain.AssigneeTypeUnassigned,
+				Priority:      domain.PriorityMedium,
+				CreatedBy:     uuid.New(),
+				CreatedByType: domain.ActorTypeSystem,
+				CreatedAt:     time.Now().UTC(),
+				UpdatedAt:     time.Now().UTC(),
+			}
+			if err := repo.Create(ctx, task); err != nil {
+				errs <- fmt.Errorf("worker %d: %w", i, err)
+			}
+		}(i)
+	}
+
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		t.Errorf("concurrent Create failed: %v", err)
+	}
+
+	// Verify all tasks have distinct task_numbers.
+	var nums []int
+	err := db.SelectContext(ctx, &nums,
+		`SELECT task_number FROM tasks WHERE project_id = $1 ORDER BY task_number`, proj.ID)
+	require.NoError(t, err)
+	require.Len(t, nums, workers)
+	for i, n := range nums {
+		assert.Equal(t, i+1, n, "task_numbers must be consecutive and unique")
+	}
 }
