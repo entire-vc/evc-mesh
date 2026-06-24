@@ -13,7 +13,10 @@ import (
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 	"github.com/pressly/goose/v3"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+
+	"github.com/entire-vc/evc-mesh/pkg/metrics"
 
 	"github.com/redis/go-redis/v9"
 
@@ -62,6 +65,9 @@ func main() {
 	log.Println("Database migrations applied")
 
 	defer func() { _ = db.Close() }()
+
+	// Register task distribution gauge collector (emits mesh_tasks on each scrape).
+	prometheus.MustRegister(metrics.NewTaskDistributionCollector(db.DB))
 
 	// 4. Create all repository instances.
 	workspaceRepo := postgres.NewWorkspaceRepo(db)

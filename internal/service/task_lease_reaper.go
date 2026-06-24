@@ -9,6 +9,7 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/repository"
 	"github.com/entire-vc/evc-mesh/pkg/actorctx"
+	pkgmetrics "github.com/entire-vc/evc-mesh/pkg/metrics"
 )
 
 // leaseTaskMover is the narrow slice of TaskService needed by the reaper.
@@ -88,6 +89,7 @@ func (r *checkoutLeaseReaper) SweepExpiredLeases(ctx context.Context) (int, erro
 
 		r.postSystemComment(sysCtx, task)
 		r.notifyAssignee(ctx, task)
+		pkgmetrics.RecordLeaseRelease(task.ProjectID.String())
 		moved++
 	}
 	return moved, nil

@@ -16,6 +16,7 @@ import (
 	pgRepo "github.com/entire-vc/evc-mesh/internal/repository/postgres"
 	"github.com/entire-vc/evc-mesh/pkg/actorctx"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
+	pkgmetrics "github.com/entire-vc/evc-mesh/pkg/metrics"
 	"github.com/entire-vc/evc-mesh/pkg/pagination"
 )
 
@@ -455,6 +456,7 @@ func (s *taskService) MoveTask(ctx context.Context, taskID uuid.UUID, input Move
 
 	oldStatusID := task.StatusID
 	oldPosition := task.Position
+	oldStatusChangedAt := task.StatusChangedAt
 
 	statusChanged := false
 	if input.StatusID != nil && *input.StatusID != oldStatusID {
@@ -600,6 +602,10 @@ func (s *taskService) MoveTask(ctx context.Context, taskID uuid.UUID, input Move
 		} else {
 			task.CompletedAt = nil
 		}
+
+		// Advance status_changed_at so the next transition can measure dwell time.
+		scAt := timeNow()
+		task.StatusChangedAt = &scAt
 	}
 
 	positionChanged := input.Position != nil && *input.Position != oldPosition
@@ -658,6 +664,14 @@ func (s *taskService) MoveTask(ctx context.Context, taskID uuid.UUID, input Move
 			newName = newStatus.Name
 		}
 		moveChanges["status"] = map[string]interface{}{"old": oldName, "new": newName}
+
+		// Emit task-flow Prometheus metrics.
+		var dur *time.Duration
+		if oldStatusChangedAt != nil {
+			d := timeNow().Sub(*oldStatusChangedAt)
+			dur = &d
+		}
+		pkgmetrics.RecordTaskTransition(task.ProjectID.String(), oldName, newName, dur)
 	}
 	if positionChanged {
 		moveChanges["position"] = map[string]interface{}{"old": oldPosition, "new": *input.Position}
@@ -1792,5 +1806,13 @@ func (s *taskService) SetHumanGate(ctx context.Context, taskID uuid.UUID, value 
 // MoveTask to any non-done category is rejected with TaskShippedError.
 // Pass shipped=false to clear the flag (unship).
 func (s *taskService) ShipTask(ctx context.Context, taskID uuid.UUID, shipped bool) error {
-	return s.taskRepo.SetShipped(ctx, taskID, shipped)
+	if err := s.taskRepo.SetShipped(ctx, taskID, shipped); err != nil {
+		return err
+	}
+	if shipped {
+		if task, err := s.taskRepo.GetByID(ctx, taskID); err == nil && task != nil {
+			pkgmetrics.RecordTaskShipped(task.ProjectID.String())
+		}
+	}
+	return nil
 }

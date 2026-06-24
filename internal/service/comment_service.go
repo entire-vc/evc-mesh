@@ -9,10 +9,13 @@ import (
 
 	"github.com/google/uuid"
 
+	"time"
+
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/repository"
 	"github.com/entire-vc/evc-mesh/pkg/actorctx"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
+	pkgmetrics "github.com/entire-vc/evc-mesh/pkg/metrics"
 	"github.com/entire-vc/evc-mesh/pkg/pagination"
 )
 
@@ -893,6 +896,9 @@ func (s *commentService) enforceTriageExit(ctx context.Context, comment *domain.
 	if moveErr := s.taskSvc.MoveTask(ctx, task.ID, MoveTaskInput{StatusID: &inProgressID}); moveErr != nil {
 		log.Printf("[triage-exit] WARNING: move task %s from triage to in_progress failed: %v", task.ID, moveErr)
 		return
+	}
+	if task.StatusChangedAt != nil {
+		pkgmetrics.RecordTriageDwell(task.ProjectID.String(), time.Since(*task.StatusChangedAt))
 	}
 
 	now := timeNow()
