@@ -248,7 +248,7 @@ func (r *TaskRepo) Create(ctx context.Context, task *domain.Task) error {
 			(SELECT COALESCE(MAX(t.task_number), 0) + 1 FROM tasks t, lock WHERE t.project_id = $2::uuid),
 			$15, $16, $17, $18, $19,
 			$20, $21,
-			$22, $23, $24, $25
+			$22, $23, $24, $25, $26
 		)
 	`
 	customFields := task.CustomFields

@@ -220,7 +220,7 @@ func (r *RuleRepo) CountTasksByAssigneeAndCategory(ctx context.Context, workspac
 		WHERE p.workspace_id = $1
 		  AND t.assignee_id = $2
 		  AND t.assignee_type = $3
-		  AND ts.category = ANY(ARRAY[%s]::text[])
+		  AND ts.category::text = ANY(ARRAY[%s])
 	`, strings.Join(placeholders, ", "))
 
 	var count int
