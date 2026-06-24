@@ -93,6 +93,9 @@ type Task struct {
 	// IsShipped marks the task as terminally shipped. Once set, MoveTask to any
 	// non-done category returns 422. Cleared only by an explicit PATCH /tasks/:id/unship.
 	IsShipped bool `json:"is_shipped" db:"is_shipped"`
+	// StatusChangedAt records when the task last changed status. Used to measure
+	// time-in-status for Prometheus histograms. Not exposed in the JSON API.
+	StatusChangedAt *time.Time `json:"-" db:"status_changed_at"`
 
 	// DodChecks holds the per-gate check state reported by external callers via PATCH /dod-check.
 	// Keys are gate names matching the project's dod_gates config.

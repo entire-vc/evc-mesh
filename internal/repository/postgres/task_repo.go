@@ -69,7 +69,8 @@ const taskBaseColsNoAlias = `
 	completed_at, deleted_at,
 	recurring_schedule_id, recurring_instance_number,
 	checked_out_by, checkout_token, checkout_expires, checkout_acquired_at,
-	delegation_level, thread_id, human_gate, is_shipped, assigned_by, dod_checks`
+	delegation_level, thread_id, human_gate, is_shipped, assigned_by, dod_checks,
+	status_changed_at`
 
 const taskComputedCols = `
 	(SELECT COUNT(*) FROM tasks st WHERE st.parent_task_id = tasks.id AND st.deleted_at IS NULL) AS subtask_count,
@@ -144,6 +145,7 @@ type taskRow struct {
 	IsShipped       bool                    `db:"is_shipped"`
 	AssignedBy      domain.AssignmentSource `db:"assigned_by"`
 	DodChecks       domain.DodChecks        `db:"dod_checks"`
+	StatusChangedAt *time.Time              `db:"status_changed_at"`
 
 	// Checkout fields.
 	CheckedOutBy       *uuid.UUID `db:"checked_out_by"`
@@ -188,6 +190,7 @@ func (r *taskRow) toDomain() domain.Task {
 		IsShipped:               r.IsShipped,
 		AssignedBy:              r.AssignedBy,
 		DodChecks:               r.DodChecks,
+		StatusChangedAt:         r.StatusChangedAt,
 		CheckedOutBy:            r.CheckedOutBy,
 		CheckoutToken:           r.CheckoutToken,
 		CheckoutExpires:         r.CheckoutExpires,
@@ -242,7 +245,7 @@ func (r *TaskRepo) Create(ctx context.Context, task *domain.Task) error {
 			due_date, estimated_hours, custom_fields, labels,
 			task_number, created_by, created_by_type, created_at, updated_at, completed_at,
 			recurring_schedule_id, recurring_instance_number,
-			delegation_level, thread_id, human_gate, is_shipped, assigned_by
+			delegation_level, thread_id, human_gate, is_shipped, assigned_by, status_changed_at
 		) VALUES (
 			$1, $2::uuid, $3, $4, $5,
 			$6, $7, $8, $9, $10,
@@ -250,7 +253,7 @@ func (r *TaskRepo) Create(ctx context.Context, task *domain.Task) error {
 			(SELECT COALESCE(MAX(t.task_number), 0) + 1 FROM tasks t, lock WHERE t.project_id = $2::uuid),
 			$15, $16, $17, $18, $19,
 			$20, $21,
-			$22, $23, $24, $25, $26
+			$22, $23, $24, $25, $26, NOW()
 		)
 	`
 	customFields := task.CustomFields
@@ -412,7 +415,8 @@ func (r *TaskRepo) Update(ctx context.Context, task *domain.Task) error {
 		    updated_at = $14, completed_at = $15,
 		    recurring_schedule_id = $16, recurring_instance_number = $17,
 		    delegation_level = $18, thread_id = $19,
-		    human_gate = $20, is_shipped = $21, assigned_by = $22
+		    human_gate = $20, is_shipped = $21, assigned_by = $22,
+		    status_changed_at = $23
 		WHERE id = $1 AND deleted_at IS NULL
 	`
 	customFields := task.CustomFields
@@ -436,7 +440,7 @@ func (r *TaskRepo) Update(ctx context.Context, task *domain.Task) error {
 		task.UpdatedAt, task.CompletedAt,
 		task.RecurringScheduleID, task.RecurringInstanceNumber,
 		delegationLevel, task.ThreadID,
-		task.HumanGate, task.IsShipped, task.AssignedBy,
+		task.HumanGate, task.IsShipped, task.AssignedBy, task.StatusChangedAt,
 	)
 	pkgmetrics.RecordDBQuery("task.update", time.Since(dbStart))
 	if err != nil {
