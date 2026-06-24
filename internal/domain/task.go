@@ -94,6 +94,10 @@ type Task struct {
 	// non-done category returns 422. Cleared only by an explicit PATCH /tasks/:id/unship.
 	IsShipped bool `json:"is_shipped" db:"is_shipped"`
 
+	// DodChecks holds the per-gate check state reported by external callers via PATCH /dod-check.
+	// Keys are gate names matching the project's dod_gates config.
+	DodChecks DodChecks `json:"dod_checks" db:"dod_checks"`
+
 	// Checkout fields — set when an agent has an exclusive application-level lock on the task.
 	CheckedOutBy       *uuid.UUID `json:"checked_out_by,omitempty" db:"checked_out_by"`
 	CheckoutToken      *uuid.UUID `json:"checkout_token,omitempty" db:"checkout_token"`
@@ -128,6 +132,48 @@ const (
 	DependencyTypeRelatesTo DependencyType = "relates_to"
 	DependencyTypeIsChildOf DependencyType = "is_child_of"
 )
+
+// DodCheckStatus is the state of a single Definition-of-Done gate check.
+type DodCheckStatus string
+
+const (
+	DodCheckPending DodCheckStatus = "pending"
+	DodCheckPass    DodCheckStatus = "pass"
+	DodCheckFail    DodCheckStatus = "fail"
+)
+
+// DodCheck holds the current state of a single named DoD gate as reported by an external caller.
+type DodCheck struct {
+	Status    DodCheckStatus `json:"status"`
+	UpdatedAt time.Time      `json:"updated_at"`
+	Reporter  string         `json:"reporter,omitempty"`
+}
+
+// DodChecks is a map from gate name to its current check state.
+// Serialised as a JSONB column on the task; empty map = no checks reported.
+type DodChecks map[string]DodCheck
+
+// Scan implements sql.Scanner so sqlx can read a JSONB column directly into DodChecks.
+func (d *DodChecks) Scan(src interface{}) error {
+	if src == nil {
+		*d = DodChecks{}
+		return nil
+	}
+	var raw []byte
+	switch v := src.(type) {
+	case []byte:
+		raw = v
+	case string:
+		raw = []byte(v)
+	default:
+		*d = DodChecks{}
+		return nil
+	}
+	if err := json.Unmarshal(raw, d); err != nil {
+		*d = DodChecks{}
+	}
+	return nil
+}
 
 // TaskDependency represents a dependency relationship between two tasks.
 type TaskDependency struct {

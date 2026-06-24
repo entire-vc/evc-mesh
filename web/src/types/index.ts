@@ -200,6 +200,22 @@ export interface TaskStatus {
   auto_transition: Record<string, unknown>;
 }
 
+// DodCheckStatus is the state of a single Definition-of-Done gate check.
+export type DodCheckStatus = "pending" | "pass" | "fail";
+
+// DodCheck holds the state of a single named DoD gate as reported by an external caller.
+export interface DodCheck {
+  status: DodCheckStatus;
+  updated_at: string;
+  reporter?: string;
+}
+
+// DodGateConfig defines a named gate entry in a project's dod_gates settings.
+export interface DodGateConfig {
+  name: string;
+  required: boolean;
+}
+
 export interface Task {
   id: string;
   project_id: string;
@@ -229,6 +245,7 @@ export interface Task {
   url?: string;
   recurring_schedule_id?: string | null;
   recurring_instance_number?: number | null;
+  dod_checks?: Record<string, DodCheck>;
 }
 
 export interface Comment {

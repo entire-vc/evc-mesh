@@ -116,6 +116,9 @@ type TaskRepository interface {
 	// SetShipped atomically sets the is_shipped flag. Pass true to mark the task as
 	// terminally shipped; false to clear the flag (unship).
 	SetShipped(ctx context.Context, taskID uuid.UUID, value bool) error
+	// SetDodCheck upserts a single named gate entry in the task's dod_checks JSONB column.
+	// status must be "pending", "pass", or "fail". reporter identifies the caller.
+	SetDodCheck(ctx context.Context, taskID uuid.UUID, gateName, status, reporter string) error
 }
 
 // TaskStatusRepository manages persistence for task statuses.

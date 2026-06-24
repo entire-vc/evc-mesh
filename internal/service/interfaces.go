@@ -165,6 +165,11 @@ type TaskService interface {
 	// MoveTask to any non-done category returns TaskShippedError (422).
 	// Pass shipped=false to clear the flag (unship).
 	ShipTask(ctx context.Context, taskID uuid.UUID, shipped bool) error
+	// SetDodCheck upserts a named gate entry in the task's dod_checks map.
+	// status must be "pending", "pass", or "fail".
+	// reporter is a free-form string identifying the caller (e.g. "verify-driver").
+	// Returns an error if the gate name is not configured on the project's dod_gates.
+	SetDodCheck(ctx context.Context, taskID uuid.UUID, gateName, status, reporter string) error
 }
 
 // TaskServiceAutoTransitionConfigurable extends TaskService with the ability

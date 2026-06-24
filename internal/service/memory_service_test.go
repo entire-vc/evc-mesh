@@ -1512,6 +1512,9 @@ func (m *mockTaskRepo) ListOpenByRecurringScheduleID(_ context.Context, _, _ uui
 
 func (m *mockTaskRepo) SetHumanGate(_ context.Context, _ uuid.UUID, _ bool) error { return nil }
 func (m *mockTaskRepo) SetShipped(_ context.Context, _ uuid.UUID, _ bool) error   { return nil }
+func (m *mockTaskRepo) SetDodCheck(_ context.Context, _ uuid.UUID, _, _, _ string) error {
+	return nil
+}
 
 var _ repository.TaskRepository = (*mockTaskRepo)(nil)
 

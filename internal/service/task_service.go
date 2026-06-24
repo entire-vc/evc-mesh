@@ -560,6 +560,19 @@ func (s *taskService) MoveTask(ctx context.Context, taskID uuid.UUID, input Move
 			}
 		}
 
+		// DoD-gate check: block move to done when the project has required gates that have not passed.
+		// System actors are exempt to allow auto-close of e.g. cancelled recurring instances.
+		if status.Category == domain.StatusCategoryDone && s.projectRepo != nil {
+			_, actorType := actorctx.FromContext(ctx)
+			if actorType != domain.ActorTypeSystem {
+				if proj, projErr := s.projectRepo.GetByID(ctx, task.ProjectID); projErr == nil && proj != nil {
+					if blocking := dodBlockingGates(proj.GetSettings(), task.DodChecks); len(blocking) > 0 {
+						return &DodGateBlockedError{BlockingGates: blocking}
+					}
+				}
+			}
+		}
+
 		// Evaluate governance rules before applying the move.
 		if s.ruleSvc != nil {
 			if violations, evalErr := s.evaluateRulesForMove(ctx, task, status, input); evalErr != nil {
@@ -1240,6 +1253,67 @@ func (e *DoneEvidenceError) Error() string {
 		return fmt.Sprintf("PR «%s» is not merged; merge it first or add a justification comment explaining why the PR is not needed", ref)
 	}
 	return "done requires evidence: add a PR/VCS link, artifact upload, or comment with proof before closing"
+}
+
+// dodBlockingGates returns the names of required DoD gates that have not yet passed.
+// An empty slice means the task is clear to move to done.
+func dodBlockingGates(settings domain.ProjectSettings, checks domain.DodChecks) []string {
+	var blocking []string
+	for _, g := range settings.DodGates {
+		if !g.Required {
+			continue
+		}
+		check, ok := checks[g.Name]
+		if !ok || check.Status != domain.DodCheckPass {
+			blocking = append(blocking, g.Name)
+		}
+	}
+	return blocking
+}
+
+// DodGateBlockedError is returned when a task is moved to done but one or more
+// required Definition-of-Done gates have not passed.
+type DodGateBlockedError struct {
+	// BlockingGates lists the names of required gates that are not yet "pass".
+	BlockingGates []string
+}
+
+func (e *DodGateBlockedError) Error() string {
+	return fmt.Sprintf("move to done blocked: required DoD gate(s) not passed: %s", strings.Join(e.BlockingGates, ", "))
+}
+
+// SetDodCheck upserts a named gate entry in the task's dod_checks map.
+// Returns an error if the gate name is not in the project's dod_gates config.
+func (s *taskService) SetDodCheck(ctx context.Context, taskID uuid.UUID, gateName, status, reporter string) error {
+	task, err := s.taskRepo.GetByID(ctx, taskID)
+	if err != nil {
+		return err
+	}
+	if task == nil {
+		return apierror.NotFound("Task")
+	}
+
+	// Validate gate name against project config when projectRepo is wired.
+	if s.projectRepo != nil {
+		proj, projErr := s.projectRepo.GetByID(ctx, task.ProjectID)
+		if projErr == nil && proj != nil {
+			settings := proj.GetSettings()
+			if len(settings.DodGates) > 0 {
+				found := false
+				for _, g := range settings.DodGates {
+					if g.Name == gateName {
+						found = true
+						break
+					}
+				}
+				if !found {
+					return apierror.BadRequest(fmt.Sprintf("gate %q is not configured for this project", gateName))
+				}
+			}
+		}
+	}
+
+	return s.taskRepo.SetDodCheck(ctx, taskID, gateName, status, reporter)
 }
 
 // evaluateRulesForMove evaluates governance rules before a MoveTask operation.

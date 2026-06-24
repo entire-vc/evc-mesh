@@ -531,6 +531,22 @@ func (m *MockTaskRepository) SetShipped(_ context.Context, taskID uuid.UUID, val
 	return nil
 }
 
+func (m *MockTaskRepository) SetDodCheck(_ context.Context, taskID uuid.UUID, gateName, status, _ string) error {
+	if m.errToReturn != nil {
+		return m.errToReturn
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if t, ok := m.items[taskID]; ok {
+		if t.DodChecks == nil {
+			t.DodChecks = domain.DodChecks{}
+		}
+		t.DodChecks[gateName] = domain.DodCheck{Status: domain.DodCheckStatus(status)}
+		m.items[taskID] = t
+	}
+	return nil
+}
+
 // ---------------------------------------------------------------------------
 // MockTaskStatusRepository
 // ---------------------------------------------------------------------------
@@ -1825,6 +1841,9 @@ func (f *fakeTaskMover) SetHumanGate(_ context.Context, taskID uuid.UUID, value 
 }
 
 func (f *fakeTaskMover) ShipTask(_ context.Context, _ uuid.UUID, _ bool) error { return nil }
+func (f *fakeTaskMover) SetDodCheck(_ context.Context, _ uuid.UUID, _, _, _ string) error {
+	return nil
+}
 
 func (f *fakeTaskMover) calls() []moveCall {
 	f.mu.Lock()
