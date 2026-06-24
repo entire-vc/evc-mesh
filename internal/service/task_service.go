@@ -583,8 +583,10 @@ func (s *taskService) MoveTask(ctx context.Context, taskID uuid.UUID, input Move
 			if actorType != domain.ActorTypeSystem {
 				if proj, projErr := s.projectRepo.GetByID(ctx, task.ProjectID); projErr == nil && proj != nil {
 					if blocking := dodBlockingGates(proj.GetSettings(), task.DodChecks); len(blocking) > 0 {
+						pkgmetrics.RecordDoDGate(proj.Slug, "dod_required_gates", "fail")
 						return &DodGateBlockedError{BlockingGates: blocking}
 					}
+					pkgmetrics.RecordDoDGate(proj.Slug, "dod_required_gates", "pass")
 				}
 			}
 		}

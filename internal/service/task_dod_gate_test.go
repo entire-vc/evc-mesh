@@ -18,12 +18,14 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	promtestutil "github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/repository"
 	"github.com/entire-vc/evc-mesh/pkg/actorctx"
+	pkgmetrics "github.com/entire-vc/evc-mesh/pkg/metrics"
 	"github.com/entire-vc/evc-mesh/pkg/pagination"
 )
 
@@ -40,6 +42,7 @@ func buildDodEnv(t *testing.T, settings domain.ProjectSettings) (svc *taskServic
 	require.NoError(t, err)
 	proj := &domain.Project{
 		ID:       projID,
+		Slug:     "test-project",
 		Settings: json.RawMessage(settingsJSON),
 	}
 	projRepo := &mockProjectRepository{project: proj}
@@ -276,4 +279,60 @@ func TestDodBlockingGates_OptionalNotBlocking(t *testing.T) {
 		"required": {Status: domain.DodCheckPass},
 	}
 	assert.Empty(t, dodBlockingGates(settings, checks))
+}
+
+// ---------------------------------------------------------------------------
+// 9. RecordDoDGate metric — fail branch increments on block
+// ---------------------------------------------------------------------------
+
+func TestMoveTask_DodGate_MetricFail_Increments(t *testing.T) {
+	settings := domain.ProjectSettings{
+		DodGates: []domain.DodGateConfig{
+			{Name: "pr-merged", Required: true},
+		},
+	}
+	ts, taskID, cats := buildDodEnv(t, settings)
+	ctx := actorctx.WithActor(context.Background(), uuid.New(), domain.ActorTypeAgent)
+
+	// Capture counter before the call.
+	failCounter := pkgmetrics.DoDGateTotal.WithLabelValues("test-project", "dod_required_gates", "fail")
+	before := promtestutil.ToFloat64(failCounter)
+
+	doneID := cats[domain.StatusCategoryDone]
+	err := ts.MoveTask(ctx, taskID, MoveTaskInput{StatusID: &doneID})
+	require.Error(t, err) // blocked by unmet gate
+
+	assert.Equal(t, before+1, promtestutil.ToFloat64(failCounter), "fail counter must increment by 1")
+}
+
+// ---------------------------------------------------------------------------
+// 10. RecordDoDGate metric — pass branch increments when gates satisfied
+// ---------------------------------------------------------------------------
+
+func TestMoveTask_DodGate_MetricPass_Increments(t *testing.T) {
+	settings := domain.ProjectSettings{
+		DodGates: []domain.DodGateConfig{
+			{Name: "pr-merged", Required: true},
+		},
+	}
+	ts, taskID, cats := buildDodEnv(t, settings)
+
+	// Mark gate as passed.
+	taskRepo := ts.taskRepo.(*MockTaskRepository)
+	taskRepo.mu.Lock()
+	t2 := taskRepo.items[taskID]
+	t2.DodChecks = domain.DodChecks{"pr-merged": {Status: domain.DodCheckPass}}
+	taskRepo.items[taskID] = t2
+	taskRepo.mu.Unlock()
+
+	ctx := actorctx.WithActor(context.Background(), uuid.New(), domain.ActorTypeAgent)
+
+	passCounter := pkgmetrics.DoDGateTotal.WithLabelValues("test-project", "dod_required_gates", "pass")
+	before := promtestutil.ToFloat64(passCounter)
+
+	doneID := cats[domain.StatusCategoryDone]
+	err := ts.MoveTask(ctx, taskID, MoveTaskInput{StatusID: &doneID})
+	require.NoError(t, err)
+
+	assert.Equal(t, before+1, promtestutil.ToFloat64(passCounter), "pass counter must increment by 1")
 }
