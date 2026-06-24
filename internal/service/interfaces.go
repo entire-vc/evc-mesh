@@ -47,6 +47,12 @@ type MoveTaskInput struct {
 type AssignTaskInput struct {
 	AssigneeID   *uuid.UUID          `json:"assignee_id"`
 	AssigneeType domain.AssigneeType `json:"assignee_type"`
+	// Source indicates who or what is making the assignment.
+	// When Source == AssignmentSourceHuman the pin is set (or updated by another human).
+	// When Source == AssignmentSourceRule or AssignmentSourceSystem and the task is
+	// already pinned by a human, AssignTask returns AssignmentPinnedError (422).
+	// Defaults to AssignmentSourceSystem when omitted.
+	Source domain.AssignmentSource `json:"source"`
 }
 
 // CreateSubtaskInput holds parameters for creating a subtask.

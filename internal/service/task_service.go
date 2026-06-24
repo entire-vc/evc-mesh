@@ -725,11 +725,21 @@ func (s *taskService) AssignTask(ctx context.Context, taskID uuid.UUID, input As
 	oldAssigneeID := task.AssigneeID
 	oldAssigneeType := task.AssigneeType
 
+	// Pin-assignee invariant: human assignments cannot be overridden by rule or system sources.
+	source := input.Source
+	if source == "" {
+		source = domain.AssignmentSourceSystem
+	}
+	if task.AssignedBy == domain.AssignmentSourceHuman && source != domain.AssignmentSourceHuman {
+		return &AssignmentPinnedError{}
+	}
+
 	// Normalize: look up assignee in agent/user directory to correct assignee_type.
 	resolvedType := s.resolveAssigneeType(ctx, input.AssigneeID, input.AssigneeType)
 
 	task.AssigneeID = input.AssigneeID
 	task.AssigneeType = resolvedType
+	task.AssignedBy = source
 	task.UpdatedAt = timeNow()
 
 	// Auto-enroll assignee into project members.
@@ -1195,6 +1205,14 @@ type TaskShippedError struct{}
 
 func (e *TaskShippedError) Error() string {
 	return "task is marked as shipped and cannot be moved to a non-done status; clear the shipped flag first (PATCH /tasks/:id/ship with shipped=false)"
+}
+
+// AssignmentPinnedError is returned when a rule or system source tries to reassign
+// a task that is pinned by a human assignment. Only another human-source call can override.
+type AssignmentPinnedError struct{}
+
+func (e *AssignmentPinnedError) Error() string {
+	return "task assignee is pinned by a human; only a human-source assignment (source=human) can override it"
 }
 
 // HumanGateFrozenError is returned when an agent or system actor attempts to move a
