@@ -1502,7 +1502,10 @@ func (m *mockTaskRepo) ExtendCheckout(_ context.Context, _, _ uuid.UUID, _ time.
 }
 func (m *mockTaskRepo) ForceReleaseCheckout(_ context.Context, _ uuid.UUID) error { return nil }
 func (m *mockTaskRepo) ReleaseExpiredCheckouts(_ context.Context) (int64, error)  { return 0, nil }
-func (m *mockTaskRepo) MoveToProject(_ context.Context, _, _, _ uuid.UUID) error  { return nil }
+func (m *mockTaskRepo) FindExpiredInProgressCheckouts(_ context.Context) ([]domain.Task, error) {
+	return nil, nil
+}
+func (m *mockTaskRepo) MoveToProject(_ context.Context, _, _, _ uuid.UUID) error { return nil }
 func (m *mockTaskRepo) ListOpenByRecurringScheduleID(_ context.Context, _, _ uuid.UUID) ([]domain.Task, error) {
 	return nil, nil
 }

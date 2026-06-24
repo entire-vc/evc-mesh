@@ -423,6 +423,22 @@ func (m *MockTaskRepository) ReleaseExpiredCheckouts(_ context.Context) (int64, 
 	return released, nil
 }
 
+func (m *MockTaskRepository) FindExpiredInProgressCheckouts(_ context.Context) ([]domain.Task, error) {
+	if m.errToReturn != nil {
+		return nil, m.errToReturn
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	now := time.Now()
+	var out []domain.Task
+	for _, t := range m.items {
+		if t.CheckoutExpires != nil && t.CheckoutExpires.Before(now) {
+			out = append(out, *t)
+		}
+	}
+	return out, nil
+}
+
 func (m *MockTaskRepository) MoveToProject(_ context.Context, taskID, targetProjectID, targetStatusID uuid.UUID) error {
 	if m.errToReturn != nil {
 		return m.errToReturn
@@ -507,9 +523,10 @@ func (m *MockTaskRepository) SetHumanGate(_ context.Context, taskID uuid.UUID, v
 // ---------------------------------------------------------------------------
 
 type MockTaskStatusRepository struct {
-	mu          sync.RWMutex
-	items       map[uuid.UUID]*domain.TaskStatus
-	errToReturn error
+	mu                 sync.RWMutex
+	items              map[uuid.UUID]*domain.TaskStatus
+	errToReturn        error
+	listByProjectCalls int
 }
 
 func NewMockTaskStatusRepository() *MockTaskStatusRepository {
@@ -563,6 +580,10 @@ func (m *MockTaskStatusRepository) ListByProject(_ context.Context, projectID uu
 	if m.errToReturn != nil {
 		return nil, m.errToReturn
 	}
+	m.mu.Lock()
+	m.listByProjectCalls++
+	m.mu.Unlock()
+
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	var result []domain.TaskStatus
