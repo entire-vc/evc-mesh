@@ -10,6 +10,8 @@ import {
   ArrowLeft,
   Bot,
   Check,
+  CheckCircle2,
+  Circle,
   Clock,
   ExternalLink,
   FolderKanban,
@@ -24,6 +26,7 @@ import {
   Tag,
   User,
   X,
+  XCircle,
 } from "lucide-react";
 import { useNavigate } from "react-router";
 import { useTaskStore } from "@/stores/task";
@@ -60,7 +63,7 @@ import {
   toDateTimeLocal,
 } from "@/lib/utils";
 import { toast } from "@/components/ui/toast";
-import type { AssigneeType, Priority, DelegationLevel } from "@/types";
+import type { AssigneeType, DodCheck, DodGateConfig, Priority, DelegationLevel } from "@/types";
 import { DelegationLevelSelect } from "@/components/delegation-level-select";
 import {
   getTaskCostSummary,
@@ -951,6 +954,51 @@ export function TaskPanel({
             </div>
           </>
         )}
+
+        {/* Definition-of-Done gates */}
+        {(() => {
+          const proj = (projects.find((p) => p.id === currentTask.project_id) ?? currentProject);
+          const dodGates: DodGateConfig[] = (proj?.settings as { dod_gates?: DodGateConfig[] })?.dod_gates ?? [];
+          if (dodGates.length === 0) return null;
+          const checks = currentTask.dod_checks ?? {};
+          return (
+            <>
+              <div className="col-span-2 my-1">
+                <Separator />
+              </div>
+              <div className="col-span-2">
+                <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  Definition of Done
+                </p>
+                <div className="flex flex-col gap-1">
+                  {dodGates.map((gate) => {
+                    const check: DodCheck | undefined = checks[gate.name];
+                    const status = check?.status ?? "pending";
+                    return (
+                      <div key={gate.name} className="flex items-center gap-2 text-xs">
+                        {status === "pass" ? (
+                          <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-green-500" />
+                        ) : status === "fail" ? (
+                          <XCircle className="h-3.5 w-3.5 shrink-0 text-red-500" />
+                        ) : (
+                          <Circle className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                        )}
+                        <span className={status === "pass" ? "text-muted-foreground line-through" : "text-foreground"}>
+                          {gate.name}
+                        </span>
+                        {gate.required && status !== "pass" && (
+                          <Badge variant="outline" className="text-[9px] px-1 py-0 text-orange-600 border-orange-300">
+                            required
+                          </Badge>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </>
+          );
+        })()}
       </div>
     </div>
   );

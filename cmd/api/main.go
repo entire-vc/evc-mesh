@@ -654,6 +654,7 @@ func main() {
 	api.PATCH("/tasks/:task_id/ship", taskHandler.ShipTask, wsAccess, rbac(mw.PermUpdateTask))
 	api.GET("/tasks/:task_id/context", taskContextHandler.GetTaskContext, wsAccess)
 	api.GET("/tasks/:task_id/cost-summary", taskHandler.GetCostSummary, wsAccess)
+	api.PATCH("/tasks/:task_id/dod-check", taskHandler.SetDodCheck, wsAccess, rbac(mw.PermUpdateTask))
 	api.GET("/workspaces/:ws_id/tasks", taskHandler.SearchGlobal, wsAccess)
 
 	// Dependency routes.

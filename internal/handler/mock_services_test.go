@@ -506,6 +506,9 @@ func (m *MockTaskService) SupersedeRecurringInstances(_ context.Context, _, _ uu
 
 func (m *MockTaskService) SetHumanGate(_ context.Context, _ uuid.UUID, _ bool) error { return nil }
 func (m *MockTaskService) ShipTask(_ context.Context, _ uuid.UUID, _ bool) error     { return nil }
+func (m *MockTaskService) SetDodCheck(_ context.Context, _ uuid.UUID, _, _, _ string) error {
+	return nil
+}
 
 // MockAgentService implements service.AgentService for testing.
 type MockAgentService struct {

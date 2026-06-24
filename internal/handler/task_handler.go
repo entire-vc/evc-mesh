@@ -1069,6 +1069,38 @@ func (h *TaskHandler) ShipTask(c echo.Context) error {
 	return c.NoContent(http.StatusNoContent)
 }
 
+// SetDodCheck handles PATCH /tasks/:task_id/dod-check.
+// Accepts a JSON body {"gate": "name", "status": "pending|pass|fail", "reporter": "..."}
+// and updates the named gate entry in the task's dod_checks map.
+func (h *TaskHandler) SetDodCheck(c echo.Context) error {
+	taskID, err := resolveTaskID(c.Request().Context(), c.Param("task_id"), h.taskService)
+	if err != nil {
+		return handleError(c, err)
+	}
+
+	var req struct {
+		Gate     string `json:"gate"`
+		Status   string `json:"status"`
+		Reporter string `json:"reporter"`
+	}
+	if err := c.Bind(&req); err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
+	}
+	if req.Gate == "" {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("gate is required"))
+	}
+	switch req.Status {
+	case "pending", "pass", "fail":
+	default:
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("status must be pending, pass, or fail"))
+	}
+
+	if err := h.taskService.SetDodCheck(c.Request().Context(), taskID, req.Gate, req.Status, req.Reporter); err != nil {
+		return handleError(c, err)
+	}
+	return c.JSON(http.StatusOK, map[string]any{"ok": true})
+}
+
 // ruleViolationAPIResponse is the JSON shape for 422 rule violation responses.
 type ruleViolationAPIResponse struct {
 	Error      string                 `json:"error"`
@@ -1091,6 +1123,15 @@ func handleError(c echo.Context, err error) error {
 		return c.JSON(http.StatusUnprocessableEntity, map[string]any{
 			"code":    "done_evidence_required",
 			"message": doneEvidenceErr.Error(),
+		})
+	}
+
+	var dodGateErr *service.DodGateBlockedError
+	if errors.As(err, &dodGateErr) {
+		return c.JSON(http.StatusUnprocessableEntity, map[string]any{
+			"code":           "dod_gate_blocked",
+			"message":        dodGateErr.Error(),
+			"blocking_gates": dodGateErr.BlockingGates,
 		})
 	}
 

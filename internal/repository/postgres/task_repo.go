@@ -69,7 +69,7 @@ const taskBaseColsNoAlias = `
 	completed_at, deleted_at,
 	recurring_schedule_id, recurring_instance_number,
 	checked_out_by, checkout_token, checkout_expires, checkout_acquired_at,
-	delegation_level, thread_id, human_gate, is_shipped, assigned_by`
+	delegation_level, thread_id, human_gate, is_shipped, assigned_by, dod_checks`
 
 const taskComputedCols = `
 	(SELECT COUNT(*) FROM tasks st WHERE st.parent_task_id = tasks.id AND st.deleted_at IS NULL) AS subtask_count,
@@ -143,6 +143,7 @@ type taskRow struct {
 	HumanGate       bool                    `db:"human_gate"`
 	IsShipped       bool                    `db:"is_shipped"`
 	AssignedBy      domain.AssignmentSource `db:"assigned_by"`
+	DodChecks       domain.DodChecks        `db:"dod_checks"`
 
 	// Checkout fields.
 	CheckedOutBy       *uuid.UUID `db:"checked_out_by"`
@@ -186,6 +187,7 @@ func (r *taskRow) toDomain() domain.Task {
 		HumanGate:               r.HumanGate,
 		IsShipped:               r.IsShipped,
 		AssignedBy:              r.AssignedBy,
+		DodChecks:               r.DodChecks,
 		CheckedOutBy:            r.CheckedOutBy,
 		CheckoutToken:           r.CheckoutToken,
 		CheckoutExpires:         r.CheckoutExpires,
@@ -469,6 +471,36 @@ func (r *TaskRepo) SetShipped(ctx context.Context, taskID uuid.UUID, value bool)
 	dbStart := time.Now()
 	res, err := r.db.ExecContext(ctx, q, taskID, value)
 	pkgmetrics.RecordDBQuery("task.set_shipped", time.Since(dbStart))
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return apierror.NotFound("Task")
+	}
+	return nil
+}
+
+// SetDodCheck atomically upserts a single named gate entry in the dod_checks JSONB column.
+// The status must be one of: pending, pass, fail.
+func (r *TaskRepo) SetDodCheck(ctx context.Context, taskID uuid.UUID, gateName, status, reporter string) error {
+	const q = `
+		UPDATE tasks
+		SET dod_checks = jsonb_set(
+			COALESCE(dod_checks, '{}'),
+			ARRAY[$2::text],
+			jsonb_build_object(
+				'status',     $3::text,
+				'updated_at', NOW()::text,
+				'reporter',   $4::text
+			),
+			true
+		),
+		updated_at = NOW()
+		WHERE id = $1 AND deleted_at IS NULL`
+	dbStart := time.Now()
+	res, err := r.db.ExecContext(ctx, q, taskID, gateName, status, reporter)
+	pkgmetrics.RecordDBQuery("task.set_dod_check", time.Since(dbStart))
 	if err != nil {
 		return err
 	}

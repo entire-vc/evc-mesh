@@ -54,6 +54,29 @@ type ProjectMemberWithUser struct {
 	AgentDescription string     `json:"agent_description,omitempty"`
 }
 
+// DodGateConfig defines a single named Definition-of-Done gate for a project.
+// Gates are stored in Project.Settings under the "dod_gates" key.
+type DodGateConfig struct {
+	Name     string `json:"name"`
+	Required bool   `json:"required"`
+}
+
+// ProjectSettings is the typed view of the Project.Settings JSONB blob.
+type ProjectSettings struct {
+	DodGates []DodGateConfig `json:"dod_gates,omitempty"`
+}
+
+// GetSettings parses the Project.Settings JSONB into a typed ProjectSettings struct.
+// Returns an empty struct (not an error) if settings are absent or malformed.
+func (p *Project) GetSettings() ProjectSettings {
+	if len(p.Settings) == 0 {
+		return ProjectSettings{}
+	}
+	var s ProjectSettings
+	_ = json.Unmarshal(p.Settings, &s)
+	return s
+}
+
 // Project belongs to a Workspace and contains tasks, statuses, and custom fields.
 type Project struct {
 	ID                  uuid.UUID           `json:"id" db:"id"`
