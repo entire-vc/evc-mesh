@@ -518,6 +518,19 @@ func (m *MockTaskRepository) SetHumanGate(_ context.Context, taskID uuid.UUID, v
 	return nil
 }
 
+func (m *MockTaskRepository) SetShipped(_ context.Context, taskID uuid.UUID, value bool) error {
+	if m.errToReturn != nil {
+		return m.errToReturn
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if t, ok := m.items[taskID]; ok {
+		t.IsShipped = value
+		m.items[taskID] = t
+	}
+	return nil
+}
+
 // ---------------------------------------------------------------------------
 // MockTaskStatusRepository
 // ---------------------------------------------------------------------------
@@ -1810,6 +1823,8 @@ func (f *fakeTaskMover) SetHumanGate(_ context.Context, taskID uuid.UUID, value 
 	f.gateSetCalls = append(f.gateSetCalls, humanGateCall{taskID: taskID, value: value})
 	return nil
 }
+
+func (f *fakeTaskMover) ShipTask(_ context.Context, _ uuid.UUID, _ bool) error { return nil }
 
 func (f *fakeTaskMover) calls() []moveCall {
 	f.mu.Lock()

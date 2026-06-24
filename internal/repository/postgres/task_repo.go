@@ -69,7 +69,7 @@ const taskBaseColsNoAlias = `
 	completed_at, deleted_at,
 	recurring_schedule_id, recurring_instance_number,
 	checked_out_by, checkout_token, checkout_expires, checkout_acquired_at,
-	delegation_level, thread_id, human_gate`
+	delegation_level, thread_id, human_gate, is_shipped`
 
 const taskComputedCols = `
 	(SELECT COUNT(*) FROM tasks st WHERE st.parent_task_id = tasks.id AND st.deleted_at IS NULL) AS subtask_count,
@@ -141,6 +141,7 @@ type taskRow struct {
 	DelegationLevel domain.DelegationLevel `db:"delegation_level"`
 	ThreadID        *string                `db:"thread_id"`
 	HumanGate       bool                   `db:"human_gate"`
+	IsShipped       bool                   `db:"is_shipped"`
 
 	// Checkout fields.
 	CheckedOutBy       *uuid.UUID `db:"checked_out_by"`
@@ -182,6 +183,7 @@ func (r *taskRow) toDomain() domain.Task {
 		DelegationLevel:         r.DelegationLevel,
 		ThreadID:                r.ThreadID,
 		HumanGate:               r.HumanGate,
+		IsShipped:               r.IsShipped,
 		CheckedOutBy:            r.CheckedOutBy,
 		CheckoutToken:           r.CheckoutToken,
 		CheckoutExpires:         r.CheckoutExpires,
@@ -236,7 +238,7 @@ func (r *TaskRepo) Create(ctx context.Context, task *domain.Task) error {
 			due_date, estimated_hours, custom_fields, labels,
 			task_number, created_by, created_by_type, created_at, updated_at, completed_at,
 			recurring_schedule_id, recurring_instance_number,
-			delegation_level, thread_id, human_gate
+			delegation_level, thread_id, human_gate, is_shipped
 		) VALUES (
 			$1, $2::uuid, $3, $4, $5,
 			$6, $7, $8, $9, $10,
@@ -244,7 +246,7 @@ func (r *TaskRepo) Create(ctx context.Context, task *domain.Task) error {
 			(SELECT COALESCE(MAX(t.task_number), 0) + 1 FROM tasks t, lock WHERE t.project_id = $2::uuid),
 			$15, $16, $17, $18, $19,
 			$20, $21,
-			$22, $23, $24
+			$22, $23, $24, $25
 		)
 	`
 	customFields := task.CustomFields
@@ -276,7 +278,7 @@ func (r *TaskRepo) Create(ctx context.Context, task *domain.Task) error {
 			task.DueDate, task.EstimatedHours, customFields, labels,
 			task.CreatedBy, task.CreatedByType, task.CreatedAt, task.UpdatedAt, task.CompletedAt,
 			task.RecurringScheduleID, task.RecurringInstanceNumber,
-			delegationLevel, task.ThreadID, task.HumanGate,
+			delegationLevel, task.ThreadID, task.HumanGate, task.IsShipped,
 		)
 		pkgmetrics.RecordDBQuery("task.create", time.Since(dbStart))
 		if err == nil {
@@ -406,7 +408,7 @@ func (r *TaskRepo) Update(ctx context.Context, task *domain.Task) error {
 		    updated_at = $14, completed_at = $15,
 		    recurring_schedule_id = $16, recurring_instance_number = $17,
 		    delegation_level = $18, thread_id = $19,
-		    human_gate = $20
+		    human_gate = $20, is_shipped = $21
 		WHERE id = $1 AND deleted_at IS NULL
 	`
 	customFields := task.CustomFields
@@ -430,7 +432,7 @@ func (r *TaskRepo) Update(ctx context.Context, task *domain.Task) error {
 		task.UpdatedAt, task.CompletedAt,
 		task.RecurringScheduleID, task.RecurringInstanceNumber,
 		delegationLevel, task.ThreadID,
-		task.HumanGate,
+		task.HumanGate, task.IsShipped,
 	)
 	pkgmetrics.RecordDBQuery("task.update", time.Since(dbStart))
 	if err != nil {
@@ -449,6 +451,22 @@ func (r *TaskRepo) SetHumanGate(ctx context.Context, taskID uuid.UUID, value boo
 	dbStart := time.Now()
 	res, err := r.db.ExecContext(ctx, q, taskID, value)
 	pkgmetrics.RecordDBQuery("task.set_human_gate", time.Since(dbStart))
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return apierror.NotFound("Task")
+	}
+	return nil
+}
+
+// SetShipped atomically sets the is_shipped column without touching other task fields.
+func (r *TaskRepo) SetShipped(ctx context.Context, taskID uuid.UUID, value bool) error {
+	const q = `UPDATE tasks SET is_shipped = $2, updated_at = NOW() WHERE id = $1 AND deleted_at IS NULL`
+	dbStart := time.Now()
+	res, err := r.db.ExecContext(ctx, q, taskID, value)
+	pkgmetrics.RecordDBQuery("task.set_shipped", time.Since(dbStart))
 	if err != nil {
 		return err
 	}

@@ -497,6 +497,14 @@ func (s *taskService) MoveTask(ctx context.Context, taskID uuid.UUID, input Move
 			}
 		}
 
+		// Shipped flag: a terminally shipped task may not be moved to any non-done category.
+		// Clearing the flag (ShipTask with shipped=false) is the only escape hatch.
+		if task.IsShipped {
+			if status.Category != domain.StatusCategoryDone {
+				return &TaskShippedError{}
+			}
+		}
+
 		// Workflow-rules transition gate: advisory or strict enforcement from ProjectRuleConfig.
 		if enfMode, vMsg := s.applyTransitionGate(ctx, task, oldStatusID, status); vMsg != "" {
 			if enfMode == domain.RuleConfigEnforcementStrict {
@@ -1181,6 +1189,14 @@ func (e *ReviewEvidenceError) Error() string {
 	return "review requires evidence: add a PR/VCS link, artifact upload, or comment with proof before moving to review"
 }
 
+// TaskShippedError is returned when a caller attempts to move a shipped task to a
+// non-done category. Clear the flag via ShipTask(ctx, id, false) before reopening.
+type TaskShippedError struct{}
+
+func (e *TaskShippedError) Error() string {
+	return "task is marked as shipped and cannot be moved to a non-done status; clear the shipped flag first (PATCH /tasks/:id/ship with shipped=false)"
+}
+
 // HumanGateFrozenError is returned when an agent or system actor attempts to move a
 // human-gated task to backlog/done/cancelled without a human sign-off (audit 2026-06-15 P0 #3).
 type HumanGateFrozenError struct{}
@@ -1678,4 +1694,11 @@ func (s *taskService) SupersedeRecurringInstances(ctx context.Context, scheduleI
 // SetHumanGate arms (value=true) or clears (value=false) the sticky human-gate flag.
 func (s *taskService) SetHumanGate(ctx context.Context, taskID uuid.UUID, value bool) error {
 	return s.taskRepo.SetHumanGate(ctx, taskID, value)
+}
+
+// ShipTask marks the task as terminally shipped when shipped=true. Once shipped,
+// MoveTask to any non-done category is rejected with TaskShippedError.
+// Pass shipped=false to clear the flag (unship).
+func (s *taskService) ShipTask(ctx context.Context, taskID uuid.UUID, shipped bool) error {
+	return s.taskRepo.SetShipped(ctx, taskID, shipped)
 }

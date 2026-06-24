@@ -163,6 +163,7 @@ func (r *fakeTaskRepo) ListOpenByRecurringScheduleID(context.Context, uuid.UUID,
 }
 
 func (r *fakeTaskRepo) SetHumanGate(context.Context, uuid.UUID, bool) error { return nil }
+func (r *fakeTaskRepo) SetShipped(context.Context, uuid.UUID, bool) error   { return nil }
 
 // fakeStatusRepo holds task_status rows per project.
 type fakeStatusRepo struct {
@@ -283,6 +284,7 @@ func (t *fakeTaskService) SupersedeRecurringInstances(context.Context, uuid.UUID
 }
 
 func (t *fakeTaskService) SetHumanGate(context.Context, uuid.UUID, bool) error { return nil }
+func (t *fakeTaskService) ShipTask(context.Context, uuid.UUID, bool) error     { return nil }
 
 // fakeCommentService captures Create calls so tests can assert on the comment
 // body and authorship.
