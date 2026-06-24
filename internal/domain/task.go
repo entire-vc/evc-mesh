@@ -144,9 +144,9 @@ const (
 
 // DodCheck holds the current state of a single named DoD gate as reported by an external caller.
 type DodCheck struct {
-	Status     DodCheckStatus `json:"status"`
-	UpdatedAt  time.Time      `json:"updated_at"`
-	Reporter   string         `json:"reporter,omitempty"`
+	Status    DodCheckStatus `json:"status"`
+	UpdatedAt time.Time      `json:"updated_at"`
+	Reporter  string         `json:"reporter,omitempty"`
 }
 
 // DodChecks is a map from gate name to its current check state.

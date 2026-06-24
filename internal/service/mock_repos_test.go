@@ -519,7 +519,6 @@ func (m *MockTaskRepository) SetHumanGate(_ context.Context, taskID uuid.UUID, v
 }
 
 func (m *MockTaskRepository) SetShipped(_ context.Context, taskID uuid.UUID, value bool) error {
-func (m *MockTaskRepository) SetDodCheck(_ context.Context, taskID uuid.UUID, gateName, status, _ string) error {
 	if m.errToReturn != nil {
 		return m.errToReturn
 	}
@@ -527,6 +526,18 @@ func (m *MockTaskRepository) SetDodCheck(_ context.Context, taskID uuid.UUID, ga
 	defer m.mu.Unlock()
 	if t, ok := m.items[taskID]; ok {
 		t.IsShipped = value
+		m.items[taskID] = t
+	}
+	return nil
+}
+
+func (m *MockTaskRepository) SetDodCheck(_ context.Context, taskID uuid.UUID, gateName, status, _ string) error {
+	if m.errToReturn != nil {
+		return m.errToReturn
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if t, ok := m.items[taskID]; ok {
 		if t.DodChecks == nil {
 			t.DodChecks = domain.DodChecks{}
 		}

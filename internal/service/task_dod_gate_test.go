@@ -83,7 +83,7 @@ func (m *mockProjectRepository) GetBySlug(_ context.Context, _ uuid.UUID, _ stri
 }
 func (m *mockProjectRepository) Create(_ context.Context, _ *domain.Project) error { return nil }
 func (m *mockProjectRepository) Update(_ context.Context, _ *domain.Project) error { return nil }
-func (m *mockProjectRepository) Delete(_ context.Context, _ uuid.UUID) error        { return nil }
+func (m *mockProjectRepository) Delete(_ context.Context, _ uuid.UUID) error       { return nil }
 func (m *mockProjectRepository) List(_ context.Context, _ uuid.UUID, _ repository.ProjectFilter, _ pagination.Params) (*pagination.Page[domain.Project], error) {
 	return nil, nil
 }
