@@ -763,6 +763,30 @@ func TestCreateInstance_PreservesAgentAssignee(t *testing.T) {
 	}
 }
 
+func TestCreateInstance_SetsAssignedBySystem(t *testing.T) {
+	schedule := newMinimalSchedule()
+
+	repo := NewMockRecurringRepository()
+	_ = repo.Create(context.Background(), schedule)
+
+	taskSvc := NewStubTaskService()
+	svc := NewRecurringService(repo, taskSvc).(*recurringService)
+
+	_, err := svc.createInstance(context.Background(), schedule, time.Now())
+	if err != nil {
+		t.Fatalf("createInstance failed: %v", err)
+	}
+
+	taskSvc.mu.Lock()
+	defer taskSvc.mu.Unlock()
+	if len(taskSvc.created) != 1 {
+		t.Fatalf("expected 1 task created, got %d", len(taskSvc.created))
+	}
+	if got := taskSvc.created[0].AssignedBy; got != domain.AssignmentSourceSystem {
+		t.Errorf("AssignedBy = %q, want %q", got, domain.AssignmentSourceSystem)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Fix 1 — runOneSchedule calls SupersedeRecurringInstances
 // ---------------------------------------------------------------------------
