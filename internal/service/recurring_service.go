@@ -695,6 +695,7 @@ func (s *recurringService) createInstance(ctx context.Context, schedule *domain.
 		Description:             description,
 		AssigneeID:              assigneeID,
 		AssigneeType:            assigneeType,
+		AssignedBy:              domain.AssignmentSourceSystem,
 		Priority:                schedule.Priority,
 		Labels:                  schedule.Labels,
 		CreatedBy:               schedule.CreatedBy,
