@@ -371,7 +371,8 @@ func main() {
 	}
 	projectHandler := handler.NewProjectHandler(projectService)
 	sessionRepo := postgres.NewSessionRepo(db)
-	taskHandler := handler.NewTaskHandlerWithSessions(taskService, sessionRepo)
+	taskHandler := handler.NewTaskHandlerWithSessions(taskService, sessionRepo).
+		WithCommentService(commentService)
 	statusHandler := handler.NewTaskStatusHandler(taskStatusService)
 	commentHandler := handler.NewCommentHandler(commentService, taskService)
 	artifactHandler := handler.NewArtifactHandler(artifactService, taskService)

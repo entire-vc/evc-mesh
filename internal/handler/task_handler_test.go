@@ -19,6 +19,7 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/repository"
 	"github.com/entire-vc/evc-mesh/internal/service"
+	"github.com/entire-vc/evc-mesh/pkg/actorctx"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 	"github.com/entire-vc/evc-mesh/pkg/pagination"
 )
@@ -573,6 +574,136 @@ func TestTaskHandler_Update_PartialLabels(t *testing.T) {
 }
 
 // --- TestTaskHandler_Delete ---
+
+// --- TestTaskHandler_Update_HumanGate ---
+
+func TestUpdate_HumanGate_AgentForbidden(t *testing.T) {
+	taskID := uuid.New()
+	existingTask := &domain.Task{ID: taskID, HumanGate: true}
+
+	mockSvc := &MockTaskService{
+		GetByIDFunc: func(_ context.Context, _ uuid.UUID) (*domain.Task, error) {
+			return existingTask, nil
+		},
+	}
+	mockComment := &MockCommentService{}
+
+	e := echo.New()
+	h := NewTaskHandler(mockSvc).WithCommentService(mockComment)
+
+	falseVal := false
+	body, _ := json.Marshal(map[string]interface{}{"human_gate": falseVal})
+	req := httptest.NewRequest(http.MethodPatch, "/", strings.NewReader(string(body)))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	// Inject agent actor context
+	agentID := uuid.New()
+	ctx := actorctx.WithActor(req.Context(), agentID, domain.ActorTypeAgent)
+	req = req.WithContext(ctx)
+
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/tasks/:task_id")
+	c.SetParamNames("task_id")
+	c.SetParamValues(taskID.String())
+
+	err := h.Update(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusForbidden, rec.Code)
+
+	var apiErr apierror.Error
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &apiErr))
+	assert.Contains(t, apiErr.Message, "human_gate")
+}
+
+func TestUpdate_HumanGate_UserAllowed(t *testing.T) {
+	taskID := uuid.New()
+	existingTask := &domain.Task{ID: taskID, HumanGate: true}
+
+	updateCalled := false
+	mockSvc := &MockTaskService{
+		GetByIDFunc: func(_ context.Context, _ uuid.UUID) (*domain.Task, error) {
+			return existingTask, nil
+		},
+		UpdateFunc: func(_ context.Context, task *domain.Task) error {
+			updateCalled = true
+			assert.False(t, task.HumanGate)
+			return nil
+		},
+	}
+	commentCaptured := false
+	mockComment := &MockCommentService{
+		CreateFunc: func(_ context.Context, c *domain.Comment) error {
+			commentCaptured = true
+			assert.Equal(t, taskID, c.TaskID)
+			assert.True(t, c.IsInternal)
+			assert.Contains(t, c.Body, "human_gate")
+			return nil
+		},
+	}
+
+	e := echo.New()
+	h := NewTaskHandler(mockSvc).WithCommentService(mockComment)
+
+	falseVal := false
+	body, _ := json.Marshal(map[string]interface{}{"human_gate": falseVal})
+	req := httptest.NewRequest(http.MethodPatch, "/", strings.NewReader(string(body)))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	userID := uuid.New()
+	ctx := actorctx.WithActor(req.Context(), userID, domain.ActorTypeUser)
+	req = req.WithContext(ctx)
+
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/tasks/:task_id")
+	c.SetParamNames("task_id")
+	c.SetParamValues(taskID.String())
+
+	err := h.Update(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.True(t, updateCalled)
+	assert.True(t, commentCaptured)
+}
+
+func TestUpdate_HumanGate_AgentSetTrue(t *testing.T) {
+	taskID := uuid.New()
+	existingTask := &domain.Task{ID: taskID, HumanGate: false}
+
+	updateCalled := false
+	mockSvc := &MockTaskService{
+		GetByIDFunc: func(_ context.Context, _ uuid.UUID) (*domain.Task, error) {
+			return existingTask, nil
+		},
+		UpdateFunc: func(_ context.Context, task *domain.Task) error {
+			updateCalled = true
+			assert.True(t, task.HumanGate)
+			return nil
+		},
+	}
+	mockComment := &MockCommentService{}
+
+	e := echo.New()
+	h := NewTaskHandler(mockSvc).WithCommentService(mockComment)
+
+	trueVal := true
+	body, _ := json.Marshal(map[string]interface{}{"human_gate": trueVal})
+	req := httptest.NewRequest(http.MethodPatch, "/", strings.NewReader(string(body)))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	agentID := uuid.New()
+	ctx := actorctx.WithActor(req.Context(), agentID, domain.ActorTypeAgent)
+	req = req.WithContext(ctx)
+
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/tasks/:task_id")
+	c.SetParamNames("task_id")
+	c.SetParamValues(taskID.String())
+
+	err := h.Update(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.True(t, updateCalled)
+}
 
 func TestTaskHandler_Delete_Success(t *testing.T) {
 	taskID := uuid.New()

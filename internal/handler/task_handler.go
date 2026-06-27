@@ -47,8 +47,9 @@ var validSlugRe = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
 
 // TaskHandler handles HTTP requests for task management.
 type TaskHandler struct {
-	taskService service.TaskService
-	sessionRepo repository.AgentSessionRepository
+	taskService    service.TaskService
+	sessionRepo    repository.AgentSessionRepository
+	commentService service.CommentService
 }
 
 // NewTaskHandler creates a new TaskHandler with the given service.
@@ -59,6 +60,12 @@ func NewTaskHandler(ts service.TaskService) *TaskHandler {
 // NewTaskHandlerWithSessions creates a TaskHandler that can serve the cost-summary endpoint.
 func NewTaskHandlerWithSessions(ts service.TaskService, sr repository.AgentSessionRepository) *TaskHandler {
 	return &TaskHandler{taskService: ts, sessionRepo: sr}
+}
+
+// WithCommentService attaches a comment service used to write audit comments on gate changes.
+func (h *TaskHandler) WithCommentService(cs service.CommentService) *TaskHandler {
+	h.commentService = cs
+	return h
 }
 
 // createTaskRequest represents the JSON body for creating a task.
@@ -420,12 +427,32 @@ func (h *TaskHandler) Update(c echo.Context) error {
 	if req.ThreadID != nil {
 		task.ThreadID = req.ThreadID
 	}
+	prevHumanGate := task.HumanGate
 	if req.HumanGate != nil {
+		// Only a human user may clear the gate (true → false).
+		// Agents clearing the gate bypass the sign-off mechanism.
+		if task.HumanGate && !*req.HumanGate {
+			_, actorType := actorctx.FromContext(c.Request().Context())
+			if actorType != domain.ActorTypeUser {
+				return c.JSON(http.StatusForbidden, apierror.Forbidden("clearing human_gate requires user authentication"))
+			}
+		}
 		task.HumanGate = *req.HumanGate
 	}
 
 	if err := h.taskService.Update(c.Request().Context(), task); err != nil {
 		return handleError(c, err)
+	}
+
+	if prevHumanGate && req.HumanGate != nil && !*req.HumanGate && h.commentService != nil {
+		actorID, _ := actorctx.FromContext(c.Request().Context())
+		_ = h.commentService.Create(c.Request().Context(), &domain.Comment{
+			TaskID:     task.ID,
+			AuthorID:   actorID,
+			AuthorType: domain.ActorTypeUser,
+			Body:       fmt.Sprintf("🔓 human_gate снят вручную (actor: %s)", actorID),
+			IsInternal: true,
+		})
 	}
 
 	task.URL = computeTaskURL(c.Request(), task.ID)
