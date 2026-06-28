@@ -148,7 +148,7 @@ func TestEvalRequireComment_ActorCommentTooOld(t *testing.T) {
 // this must pass.
 func TestEvalRequireComment_ManyOldCommentsPlusOneRecentByActor(t *testing.T) {
 	taskID := uuid.New()
-	actorID := uuid.New()  // coordinator / mover
+	actorID := uuid.New()   // coordinator / mover
 	builderID := uuid.New() // original assignee who did the work
 
 	commentRepo := NewMockCommentRepository()
