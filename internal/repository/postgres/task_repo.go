@@ -292,7 +292,7 @@ func (r *TaskRepo) Create(ctx context.Context, task *domain.Task) error {
 			}
 			defer func() {
 				if err != nil {
-					tx.Rollback()
+					_ = tx.Rollback()
 				}
 			}()
 			// Statement 1: acquire the advisory lock; blocks until any concurrent holder
@@ -905,7 +905,7 @@ func (r *TaskRepo) MoveToProject(ctx context.Context, taskID, targetProjectID, t
 	}
 	defer func() {
 		if err != nil {
-			tx.Rollback()
+			_ = tx.Rollback()
 		}
 	}()
 	if _, err = tx.ExecContext(ctx, qLock, targetProjectID); err != nil {
