@@ -139,8 +139,8 @@ type taskRow struct {
 	RecurringScheduleID     *uuid.UUID `db:"recurring_schedule_id"`
 	RecurringInstanceNumber *int       `db:"recurring_instance_number"`
 
-	DelegationLevel domain.DelegationLevel  `db:"delegation_level"`
-	ThreadID        *string                 `db:"thread_id"`
+	DelegationLevel  domain.DelegationLevel  `db:"delegation_level"`
+	ThreadID         *string                 `db:"thread_id"`
 	HumanGate        bool                    `db:"human_gate"`
 	IsShipped        bool                    `db:"is_shipped"`
 	AssignedBy       domain.AssignmentSource `db:"assigned_by"`

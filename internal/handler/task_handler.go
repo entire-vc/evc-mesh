@@ -115,16 +115,16 @@ func (f *flexTime) UnmarshalJSON(b []byte) error {
 
 // updateTaskRequest represents the JSON body for partially updating a task.
 type updateTaskRequest struct {
-	Title           *string                 `json:"title"`
-	Description     *string                 `json:"description"`
-	Priority        *domain.Priority        `json:"priority"`
-	AssigneeID      *uuid.UUID              `json:"assignee_id"`
-	AssigneeType    *domain.AssigneeType    `json:"assignee_type"`
-	DueDate         flexTime                `json:"due_date"`
-	EstimatedHours  *float64                `json:"estimated_hours"`
-	Labels          *[]string               `json:"labels"`
-	CustomFields    json.RawMessage         `json:"custom_fields"`
-	DelegationLevel *domain.DelegationLevel `json:"delegation_level"`
+	Title            *string                 `json:"title"`
+	Description      *string                 `json:"description"`
+	Priority         *domain.Priority        `json:"priority"`
+	AssigneeID       *uuid.UUID              `json:"assignee_id"`
+	AssigneeType     *domain.AssigneeType    `json:"assignee_type"`
+	DueDate          flexTime                `json:"due_date"`
+	EstimatedHours   *float64                `json:"estimated_hours"`
+	Labels           *[]string               `json:"labels"`
+	CustomFields     json.RawMessage         `json:"custom_fields"`
+	DelegationLevel  *domain.DelegationLevel `json:"delegation_level"`
 	ThreadID         *string                 `json:"thread_id"`
 	HumanGate        *bool                   `json:"human_gate"`
 	CompletionSignal *bool                   `json:"completion_signal"`
