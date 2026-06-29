@@ -10,7 +10,6 @@ import (
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/repository"
-	"github.com/entire-vc/evc-mesh/pkg/pagination"
 )
 
 // RuleEvaluator is a function that evaluates a single rule against an action.
@@ -96,29 +95,23 @@ func evalRequireComment(ctx context.Context, rule domain.Rule, input EvaluateInp
 		return nil, nil
 	}
 
-	// Look for a recent comment by this actor on the task (within 24 hours).
 	minLen := cfg.MinCommentLength
 	if minLen <= 0 {
 		minLen = 1
 	}
 
-	pg := pagination.Params{Page: 1, PageSize: 10}
-	comments, err := deps.commentRepo.ListByTask(ctx, *input.TaskID, repository.CommentFilter{}, pg)
-	if err != nil {
-		return nil, fmt.Errorf("list comments for rule check: %w", err)
-	}
-
+	// Check whether the actor who is performing the move has left a qualifying comment
+	// (≥minLen chars, non-internal, within the last 24 h).  Using a targeted EXISTS
+	// query avoids a page-1-only scan that silently misses recent comments on tasks
+	// that already have a long comment history (ORDER BY created_at ASC + PageSize:10
+	// meant the coordinator's fresh comment was beyond the first page → false 422).
 	cutoff := time.Now().Add(-24 * time.Hour)
-	for _, c := range comments.Items {
-		if c.AuthorID != input.ActorID {
-			continue
-		}
-		if c.CreatedAt.Before(cutoff) {
-			continue
-		}
-		if len(c.Body) >= minLen {
-			return nil, nil // found a valid comment
-		}
+	found, err := deps.commentRepo.HasRecentCommentBy(ctx, *input.TaskID, input.ActorID, cutoff, minLen)
+	if err != nil {
+		return nil, fmt.Errorf("check recent comment for rule: %w", err)
+	}
+	if found {
+		return nil, nil // actor has a qualifying recent comment
 	}
 
 	targetCat := string(input.TargetStatus.Category)

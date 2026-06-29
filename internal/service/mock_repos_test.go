@@ -939,6 +939,26 @@ func (m *MockCommentRepository) HasAnyComment(_ context.Context, taskID uuid.UUI
 	return false, nil
 }
 
+func (m *MockCommentRepository) HasRecentCommentBy(_ context.Context, taskID, authorID uuid.UUID, since time.Time, minLength int) (bool, error) {
+	if m.errToReturn != nil {
+		return false, m.errToReturn
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, c := range m.items {
+		if c.TaskID != taskID || c.AuthorID != authorID {
+			continue
+		}
+		if c.CreatedAt.Before(since) {
+			continue
+		}
+		if len(c.Body) >= minLength {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // ---------------------------------------------------------------------------
 // MockArtifactRepository
 // ---------------------------------------------------------------------------

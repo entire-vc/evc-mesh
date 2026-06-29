@@ -177,6 +177,9 @@ type CommentRepository interface {
 	ListRecentByWorkspace(ctx context.Context, wsID uuid.UUID, filter CommentViewFilter) ([]domain.CommentView, *time.Time, error)
 	// HasAnyComment returns true when the task has at least one comment.
 	HasAnyComment(ctx context.Context, taskID uuid.UUID) (bool, error)
+	// HasRecentCommentBy returns true when the task has a non-internal comment by authorID
+	// created on or after `since` whose body is at least minLength characters long.
+	HasRecentCommentBy(ctx context.Context, taskID, authorID uuid.UUID, since time.Time, minLength int) (bool, error)
 }
 
 // ArtifactRepository manages persistence for artifacts.

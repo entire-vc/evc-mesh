@@ -259,3 +259,19 @@ func (r *CommentRepo) HasAnyComment(ctx context.Context, taskID uuid.UUID) (bool
 	err := r.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM comments WHERE task_id = $1)`, taskID).Scan(&exists)
 	return exists, err
 }
+
+// HasRecentCommentBy returns true when the task has a non-internal comment by authorID
+// created on or after `since` whose body is at least minLength characters long.
+func (r *CommentRepo) HasRecentCommentBy(ctx context.Context, taskID, authorID uuid.UUID, since time.Time, minLength int) (bool, error) {
+	var exists bool
+	err := r.db.QueryRowContext(ctx, `
+		SELECT EXISTS(
+			SELECT 1 FROM comments
+			WHERE task_id   = $1
+			  AND author_id = $2
+			  AND created_at >= $3
+			  AND char_length(body) >= $4
+			  AND is_internal = false
+		)`, taskID, authorID, since, minLength).Scan(&exists)
+	return exists, err
+}
