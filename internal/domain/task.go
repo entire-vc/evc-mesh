@@ -93,6 +93,10 @@ type Task struct {
 	// IsShipped marks the task as terminally shipped. Once set, MoveTask to any
 	// non-done category returns 422. Cleared only by an explicit PATCH /tasks/:id/unship.
 	IsShipped bool `json:"is_shipped" db:"is_shipped"`
+	// CompletionSignal is set by an agent to indicate "agent-side work is done"
+	// without changing the task status. For supervised/review tasks this surfaces
+	// to Pavel (via review-verify-driver) as "ready to close"; Pavel still moves to done.
+	CompletionSignal bool `json:"completion_signal" db:"completion_signal"`
 	// StatusChangedAt records when the task last changed status. Used to measure
 	// time-in-status for Prometheus histograms. Not exposed in the JSON API.
 	StatusChangedAt *time.Time `json:"-" db:"status_changed_at"`
