@@ -705,6 +705,85 @@ func TestUpdate_HumanGate_AgentSetTrue(t *testing.T) {
 	assert.True(t, updateCalled)
 }
 
+func TestUpdate_CompletionSignal_AgentSetsTrue(t *testing.T) {
+	taskID := uuid.New()
+	existingTask := &domain.Task{ID: taskID, CompletionSignal: false}
+
+	var captured domain.Task
+	mockSvc := &MockTaskService{
+		GetByIDFunc: func(_ context.Context, _ uuid.UUID) (*domain.Task, error) {
+			return existingTask, nil
+		},
+		UpdateFunc: func(_ context.Context, task *domain.Task) error {
+			captured = *task
+			return nil
+		},
+	}
+
+	e := echo.New()
+	h := NewTaskHandler(mockSvc)
+
+	trueVal := true
+	body, _ := json.Marshal(map[string]interface{}{"completion_signal": trueVal})
+	req := httptest.NewRequest(http.MethodPatch, "/", strings.NewReader(string(body)))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	agentID := uuid.New()
+	ctx := actorctx.WithActor(req.Context(), agentID, domain.ActorTypeAgent)
+	req = req.WithContext(ctx)
+
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/tasks/:task_id")
+	c.SetParamNames("task_id")
+	c.SetParamValues(taskID.String())
+
+	err := h.Update(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.True(t, captured.CompletionSignal, "completion_signal should be set to true")
+}
+
+func TestUpdate_CompletionSignal_DoesNotChangeStatus(t *testing.T) {
+	taskID := uuid.New()
+	statusID := uuid.New()
+	existingTask := &domain.Task{ID: taskID, StatusID: statusID, CompletionSignal: false}
+
+	var captured domain.Task
+	mockSvc := &MockTaskService{
+		GetByIDFunc: func(_ context.Context, _ uuid.UUID) (*domain.Task, error) {
+			return existingTask, nil
+		},
+		UpdateFunc: func(_ context.Context, task *domain.Task) error {
+			captured = *task
+			return nil
+		},
+	}
+
+	e := echo.New()
+	h := NewTaskHandler(mockSvc)
+
+	trueVal := true
+	body, _ := json.Marshal(map[string]interface{}{"completion_signal": trueVal})
+	req := httptest.NewRequest(http.MethodPatch, "/", strings.NewReader(string(body)))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	agentID := uuid.New()
+	ctx := actorctx.WithActor(req.Context(), agentID, domain.ActorTypeAgent)
+	req = req.WithContext(ctx)
+
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/tasks/:task_id")
+	c.SetParamNames("task_id")
+	c.SetParamValues(taskID.String())
+
+	err := h.Update(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, rec.Code)
+	// Status ID must be unchanged — completion_signal is signal-only, no status move.
+	assert.Equal(t, statusID, captured.StatusID)
+	assert.True(t, captured.CompletionSignal)
+}
+
 func TestTaskHandler_Delete_Success(t *testing.T) {
 	taskID := uuid.New()
 	mockSvc := &MockTaskService{

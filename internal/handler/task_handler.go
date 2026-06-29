@@ -125,8 +125,9 @@ type updateTaskRequest struct {
 	Labels          *[]string               `json:"labels"`
 	CustomFields    json.RawMessage         `json:"custom_fields"`
 	DelegationLevel *domain.DelegationLevel `json:"delegation_level"`
-	ThreadID        *string                 `json:"thread_id"`
-	HumanGate       *bool                   `json:"human_gate"`
+	ThreadID         *string                 `json:"thread_id"`
+	HumanGate        *bool                   `json:"human_gate"`
+	CompletionSignal *bool                   `json:"completion_signal"`
 }
 
 // moveTaskRequest represents the JSON body for moving a task.
@@ -438,6 +439,9 @@ func (h *TaskHandler) Update(c echo.Context) error {
 			}
 		}
 		task.HumanGate = *req.HumanGate
+	}
+	if req.CompletionSignal != nil {
+		task.CompletionSignal = *req.CompletionSignal
 	}
 
 	if err := h.taskService.Update(c.Request().Context(), task); err != nil {
