@@ -230,15 +230,21 @@ func isTaskNumberConflict(err error) bool {
 }
 
 func (r *TaskRepo) Create(ctx context.Context, task *domain.Task) error {
-	// Use pg_advisory_xact_lock to serialize task_number generation per project.
-	// The lock CTE is referenced via CROSS JOIN in the task_number subquery so
-	// the PostgreSQL optimizer cannot eliminate it as dead code (unreferenced CTEs
-	// with only side effects may be dropped by the planner in PG 12+).
-	// A retry loop provides defense in depth for races with paths that bypass the lock.
-	const q = `
-		WITH lock AS (
-			SELECT pg_advisory_xact_lock(hashtext($2::text))
-		)
+	// Serialize task_number allocation per project using pg_advisory_xact_lock.
+	//
+	// IMPORTANT: the lock MUST be acquired in a separate statement (Statement 1) before
+	// the INSERT (Statement 2). PostgreSQL READ COMMITTED takes the snapshot for each
+	// statement at statement start — not when the lock is acquired. If the lock and the
+	// MAX(task_number) read were in the same statement (single CTE approach), a goroutine
+	// that started its statement before a concurrent INSERT committed would see a stale
+	// snapshot and compute a duplicate task_number despite holding the lock.
+	//
+	// By splitting into two statements inside an explicit transaction:
+	//   Stmt 1: SELECT pg_advisory_xact_lock(...)  → blocks until prior holder commits
+	//   Stmt 2: INSERT ... (SELECT MAX(task_number)+1 ...)  → fresh snapshot, sees all prior commits
+	// the MAX read is guaranteed to see the most recent committed task_number.
+	const qLock = `SELECT pg_advisory_xact_lock(hashtext($1::text))`
+	const qInsert = `
 		INSERT INTO tasks (
 			id, project_id, status_id, title, description,
 			assignee_id, assignee_type, priority, parent_task_id, position,
@@ -250,7 +256,7 @@ func (r *TaskRepo) Create(ctx context.Context, task *domain.Task) error {
 			$1, $2::uuid, $3, $4, $5,
 			$6, $7, $8, $9, $10,
 			$11, $12, $13, $14,
-			(SELECT COALESCE(MAX(t.task_number), 0) + 1 FROM tasks t, lock WHERE t.project_id = $2::uuid),
+			(SELECT COALESCE(MAX(task_number), 0) + 1 FROM tasks WHERE project_id = $2::uuid),
 			$15, $16, $17, $18, $19,
 			$20, $21,
 			$22, $23, $24, $25, $26, NOW()
@@ -279,14 +285,36 @@ func (r *TaskRepo) Create(ctx context.Context, task *domain.Task) error {
 			}
 		}
 		dbStart := time.Now()
-		_, err := r.db.ExecContext(ctx, q,
-			task.ID, task.ProjectID, task.StatusID, task.Title, task.Description,
-			task.AssigneeID, task.AssigneeType, task.Priority, task.ParentTaskID, task.Position,
-			task.DueDate, task.EstimatedHours, customFields, labels,
-			task.CreatedBy, task.CreatedByType, task.CreatedAt, task.UpdatedAt, task.CompletedAt,
-			task.RecurringScheduleID, task.RecurringInstanceNumber,
-			delegationLevel, task.ThreadID, task.HumanGate, task.IsShipped, task.AssignedBy,
-		)
+		err := func() error {
+			tx, err := r.db.BeginTx(ctx, nil)
+			if err != nil {
+				return err
+			}
+			defer func() {
+				if err != nil {
+					_ = tx.Rollback()
+				}
+			}()
+			// Statement 1: acquire the advisory lock; blocks until any concurrent holder
+			// for this project_id commits, ensuring the next statement's snapshot is fresh.
+			if _, err = tx.ExecContext(ctx, qLock, task.ProjectID); err != nil {
+				return err
+			}
+			// Statement 2: INSERT with fresh READ COMMITTED snapshot (taken now, after
+			// the lock was granted and all prior concurrent inserts have committed).
+			_, err = tx.ExecContext(ctx, qInsert,
+				task.ID, task.ProjectID, task.StatusID, task.Title, task.Description,
+				task.AssigneeID, task.AssigneeType, task.Priority, task.ParentTaskID, task.Position,
+				task.DueDate, task.EstimatedHours, customFields, labels,
+				task.CreatedBy, task.CreatedByType, task.CreatedAt, task.UpdatedAt, task.CompletedAt,
+				task.RecurringScheduleID, task.RecurringInstanceNumber,
+				delegationLevel, task.ThreadID, task.HumanGate, task.IsShipped, task.AssignedBy,
+			)
+			if err != nil {
+				return err
+			}
+			return tx.Commit()
+		}()
 		pkgmetrics.RecordDBQuery("task.create", time.Since(dbStart))
 		if err == nil {
 			return nil
@@ -857,29 +885,43 @@ func (r *TaskRepo) ReleaseCheckout(ctx context.Context, taskID, token uuid.UUID)
 
 // MoveToProject atomically moves a task to a different project by updating
 // project_id, status_id, task_number (recalculated within the target project),
-// and updated_at in a single UPDATE statement.
+// and updated_at in two statements inside an explicit transaction.
 // Returns apierror.NotFound("Task") when the task does not exist or is soft-deleted.
 func (r *TaskRepo) MoveToProject(ctx context.Context, taskID, targetProjectID, targetStatusID uuid.UUID) error {
-	const q = `
-		WITH lock AS (
-			SELECT pg_advisory_xact_lock(hashtext($2::text))
-		)
+	// Same two-statement pattern as Create: acquire advisory lock in Stmt 1 so
+	// Stmt 2's snapshot is fresh and sees all prior committed task_numbers.
+	const qLock = `SELECT pg_advisory_xact_lock(hashtext($1::text))`
+	const qUpdate = `
 		UPDATE tasks
 		SET project_id  = $2::uuid,
 		    status_id   = $3,
-		    task_number = (SELECT COALESCE(MAX(t.task_number), 0) + 1 FROM tasks t, lock WHERE t.project_id = $2::uuid AND t.deleted_at IS NULL),
+		    task_number = (SELECT COALESCE(MAX(task_number), 0) + 1 FROM tasks WHERE project_id = $2::uuid AND deleted_at IS NULL),
 		    updated_at  = NOW()
 		WHERE id = $1 AND deleted_at IS NULL
 	`
-	res, err := r.db.ExecContext(ctx, q, taskID, targetProjectID, targetStatusID)
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+	if _, err = tx.ExecContext(ctx, qLock, targetProjectID); err != nil {
+		return err
+	}
+	var res sql.Result
+	res, err = tx.ExecContext(ctx, qUpdate, taskID, targetProjectID, targetStatusID)
 	if err != nil {
 		return err
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {
-		return apierror.NotFound("Task")
+		err = apierror.NotFound("Task")
+		return err
 	}
-	return nil
+	return tx.Commit()
 }
 
 // ForceReleaseCheckout clears the checkout fields without token verification.
