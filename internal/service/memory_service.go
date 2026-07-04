@@ -678,14 +678,6 @@ func (s *memoryService) Recall(ctx context.Context, opts domain.RecallOpts) ([]d
 
 	poolSize := opts.Limit * candidateMultiplier
 
-	// Clamp the optional recency weight to [0,1]. 0 (default) preserves legacy FTS-only ordering.
-	recencyWeight := opts.RecencyWeight
-	if recencyWeight < 0 {
-		recencyWeight = 0
-	} else if recencyWeight > 1 {
-		recencyWeight = 1
-	}
-
 	// ── Steps 1+2: BM25 sparse arm + vector arm in parallel ──────────────────
 	// Both arms fetch candidateMultiplier × limit results. The BM25 arm uses the
 	// 'english' dictionary (stemming + stopwords) for higher linguistic precision;
