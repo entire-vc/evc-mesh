@@ -649,6 +649,12 @@ type MemoryRepository interface {
 	// ListCreatedSince returns memories that have a stored embedding and were created at or after
 	// since, ordered by created_at DESC, capped at limit. Used by the reconciler linker phase.
 	ListCreatedSince(ctx context.Context, since time.Time, limit int) ([]domain.Memory, error)
+	// FullTextSearchRanked performs BM25-style full-text search using the 'english' dictionary
+	// and ts_rank_cd computed over (content || key). Unlike FullTextSearch (simple dictionary,
+	// pre-built search_vector), this arm uses linguistic stemming and stopword removal for
+	// higher recall precision. ExcludeSuperseded (status != 'superseded') is always enforced.
+	// Used as the sparse BM25 arm in the RRF fusion of service.Recall.
+	FullTextSearchRanked(ctx context.Context, wsID uuid.UUID, projID *uuid.UUID, query string, limit int) ([]domain.ScoredMemory, error)
 }
 
 // MemoryEdgeRepository manages directed, typed edges in the memory Knowledge Graph.

@@ -1241,6 +1241,83 @@ func cosineSimilarity(a, b []float32) float64 {
 	return dot / (math.Sqrt(normA) * math.Sqrt(normB))
 }
 
+// FullTextSearchRanked runs a BM25-style full-text search using the PostgreSQL 'english'
+// dictionary and ts_rank_cd. Unlike FullTextSearch (which uses the pre-built search_vector
+// with the 'simple' dictionary), this function re-computes the tsvector on-the-fly from
+// content and key for better linguistic accuracy (stemming, stopword removal).
+//
+// ExcludeSuperseded is always applied: status='superseded' entries never appear in results.
+// Both archived and expired memories are excluded. The result is ordered by ts_rank_cd DESC
+// and capped at limit. Batch-touches last_accessed_at for all returned rows.
+//
+// Used as the sparse (BM25) arm of the RRF fusion in service.Recall.
+func (r *MemoryRepo) FullTextSearchRanked(ctx context.Context, wsID uuid.UUID, projID *uuid.UUID, query string, limit int) ([]domain.ScoredMemory, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+
+	args := []interface{}{wsID, query} // $1=workspace_id, $2=query
+	conditions := []string{
+		"workspace_id = $1",
+		"(expires_at IS NULL OR expires_at > NOW())",
+		"archived = false",
+		"status != 'superseded'",
+		"to_tsvector('english', content || ' ' || COALESCE(key, '')) @@ plainto_tsquery('english', $2)",
+	}
+	argIdx := 3
+
+	if projID != nil {
+		conditions = append(conditions, fmt.Sprintf("project_id = $%d", argIdx))
+		args = append(args, *projID)
+		argIdx++
+	}
+
+	args = append(args, limit)
+	limitIdx := argIdx
+
+	q := fmt.Sprintf(`
+		SELECT %s,
+		       ts_rank_cd(
+		           to_tsvector('english', content || ' ' || COALESCE(key, '')),
+		           plainto_tsquery('english', $2)
+		       ) AS score
+		FROM memories
+		WHERE %s
+		ORDER BY score DESC
+		LIMIT $%d`,
+		memoryColumns,
+		joinAnd(conditions),
+		limitIdx,
+	)
+
+	var rows []scoredMemoryRow
+	if err := r.db.SelectContext(ctx, &rows, q, args...); err != nil {
+		return nil, fmt.Errorf("fts ranked: %w", err)
+	}
+
+	result := make([]domain.ScoredMemory, len(rows))
+	ids := make([]uuid.UUID, len(rows))
+	for i, row := range rows {
+		result[i] = domain.ScoredMemory{
+			Memory: row.toDomain(),
+			Score:  row.Score,
+		}
+		ids[i] = row.ID
+	}
+
+	// Batch-touch last_accessed_at (1-hour idempotency window).
+	if len(ids) > 0 {
+		_, _ = r.db.ExecContext(ctx,
+			`UPDATE memories SET last_accessed_at = NOW()
+			 WHERE id = ANY($1)
+			   AND (last_accessed_at IS NULL OR last_accessed_at < NOW() - INTERVAL '1 hour')`,
+			pq.Array(ids),
+		)
+	}
+
+	return result, nil
+}
+
 // FindByShortID returns the first non-archived memory in workspaceID whose UUID text
 // representation starts with prefix (6–12 lowercase hex chars, no dashes).
 // UUIDs in Postgres are formatted as "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" — the first
