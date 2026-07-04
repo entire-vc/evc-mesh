@@ -158,6 +158,9 @@ func (m *mockMemoryRepo) FindBySimhashProximity(_ context.Context, _ uuid.UUID, 
 }
 
 func (m *mockMemoryRepo) FindPinned(_ context.Context, _ uuid.UUID, _ *uuid.UUID) ([]domain.Memory, error) {
+	return nil, nil
+}
+
 func (m *mockMemoryRepo) ExpireByValidUntil(ctx context.Context) (int64, error) {
 	return 0, nil
 }
