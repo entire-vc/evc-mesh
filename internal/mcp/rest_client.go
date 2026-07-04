@@ -686,6 +686,10 @@ type RecallMemoriesParams struct {
 	RecencyWeight     float64
 	OrderBy           string
 	IncludeExpired    bool
+	// ExcludeSuperseded controls whether status=superseded memories are hidden.
+	// When false, explicitly passes exclude_superseded=false to the server to
+	// override the server-side default of true.
+	ExcludeSuperseded *bool
 	Limit             int
 	Offset            int
 }
@@ -734,6 +738,9 @@ func (c *RESTClient) RecallMemories(ctx context.Context, p RecallMemoriesParams)
 	}
 	if p.IncludeExpired {
 		params.Set("include_expired", "true")
+	}
+	if p.ExcludeSuperseded != nil && !*p.ExcludeSuperseded {
+		params.Set("exclude_superseded", "false")
 	}
 	if p.Limit > 0 {
 		params.Set("limit", fmt.Sprintf("%d", p.Limit))

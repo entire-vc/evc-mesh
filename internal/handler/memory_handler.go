@@ -85,6 +85,7 @@ type searchMemoriesQuery struct {
 	RecencyWeight     string `query:"recency_weight"` // float [0,1]; 0 (default) = legacy FTS-only ordering
 	OrderBy           string `query:"order_by"`
 	IncludeExpired    string `query:"include_expired"`
+	ExcludeSuperseded string `query:"exclude_superseded"` // bool; default true at service layer
 	Limit             string `query:"limit"`
 	Offset            string `query:"offset"`
 }
@@ -366,18 +367,26 @@ func (h *MemoryHandler) Search(c echo.Context) error {
 		}
 	}
 
+	// ExcludeSuperseded defaults to true at the service layer; the caller can opt out
+	// by passing exclude_superseded=false explicitly.
+	excludeSuperseded := true
+	if q.ExcludeSuperseded == "false" || q.ExcludeSuperseded == "0" {
+		excludeSuperseded = false
+	}
+
 	opts := domain.RecallOpts{
-		Query:          q.Q,
-		WorkspaceID:    wsID,
-		ProjectID:      projID,
-		Scope:          domain.MemoryScope(q.Scope),
-		Tags:           tags,
-		TagsAny:        tagsAny,
-		IncludeExpired: q.IncludeExpired == "true" || q.IncludeExpired == "1",
-		OrderBy:        q.OrderBy,
-		ApplyDecay:     q.ApplyRecencyDecay == "true" || q.ApplyRecencyDecay == "1",
-		Limit:          limit,
-		Offset:         offset,
+		Query:             q.Q,
+		WorkspaceID:       wsID,
+		ProjectID:         projID,
+		Scope:             domain.MemoryScope(q.Scope),
+		Tags:              tags,
+		TagsAny:           tagsAny,
+		IncludeExpired:    q.IncludeExpired == "true" || q.IncludeExpired == "1",
+		ExcludeSuperseded: excludeSuperseded,
+		OrderBy:           q.OrderBy,
+		ApplyDecay:        q.ApplyRecencyDecay == "true" || q.ApplyRecencyDecay == "1",
+		Limit:             limit,
+		Offset:            offset,
 	}
 
 	if q.CreatedBy != "" {

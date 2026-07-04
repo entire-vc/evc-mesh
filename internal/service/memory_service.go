@@ -9,8 +9,10 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"os"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -234,21 +236,22 @@ const (
 	rrfTextWeight   = 0.3
 )
 
-// temporalHalfLifeDays is the half-life for the temporal decay applied to agent-scope memories.
-// Project- and workspace-scoped memories are exempt (they represent persistent knowledge).
-const temporalHalfLifeDays = 30.0
+// defaultHalfLifeDays is the default half-life for the universal exponential decay.
+// Override at runtime via MEMORY_RECALL_HALF_LIFE_DAYS env var or the per-call HalfLifeDays opt.
+const defaultHalfLifeDays = 30.0
 
 // candidateMultiplier controls how many extra candidates are fetched for re-ranking.
 // FullTextSearch and VectorSearch each fetch limit * candidateMultiplier results.
 const candidateMultiplier = 3
 
 type memoryService struct {
-	memRepo     repository.MemoryRepository
-	edgeRepo    repository.MemoryEdgeRepository
-	embedder    embedding.Embedder
-	projectRepo repository.ProjectRepository        // optional; nil → slug resolution skipped
-	taskRepo    repository.TaskRepository           // optional; nil → Amendments 2 & 3 skipped
-	depRepo     repository.TaskDependencyRepository // optional; nil → depends_on bridge skipped
+	memRepo      repository.MemoryRepository
+	edgeRepo     repository.MemoryEdgeRepository
+	embedder     embedding.Embedder
+	projectRepo  repository.ProjectRepository        // optional; nil → slug resolution skipped
+	taskRepo     repository.TaskRepository           // optional; nil → Amendments 2 & 3 skipped
+	depRepo      repository.TaskDependencyRepository // optional; nil → depends_on bridge skipped
+	halfLifeDays float64                             // half-life for exp decay; default defaultHalfLifeDays
 }
 
 // MemoryServiceOption configures a MemoryService.
@@ -287,7 +290,13 @@ func NewMemoryService(memRepo repository.MemoryRepository, edgeRepo repository.M
 	if embedder == nil {
 		embedder = embedding.NewNoopEmbedder()
 	}
-	s := &memoryService{memRepo: memRepo, edgeRepo: edgeRepo, embedder: embedder}
+	halfLife := defaultHalfLifeDays
+	if v := os.Getenv("MEMORY_RECALL_HALF_LIFE_DAYS"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 {
+			halfLife = f
+		}
+	}
+	s := &memoryService{memRepo: memRepo, edgeRepo: edgeRepo, embedder: embedder, halfLifeDays: halfLife}
 	for _, opt := range opts {
 		opt(s)
 	}
@@ -413,6 +422,14 @@ func (s *memoryService) Remember(ctx context.Context, mem *domain.Memory) (Remem
 		if mem.ImportanceScore > 1.0 {
 			mem.ImportanceScore = 1.0
 		}
+	}
+
+	// Set health lifecycle defaults for new memories written via Remember().
+	if mem.Status == "" {
+		mem.Status = domain.MemoryStatusActive
+	}
+	if mem.FreshnessScore == 0 && mem.Status == domain.MemoryStatusActive {
+		mem.FreshnessScore = 1.0
 	}
 
 	// ── Simhash: compute 64-bit fingerprint and detect near-duplicates ──────────
@@ -638,7 +655,8 @@ type RecallResult struct {
 //  1. Always: full-text keyword search via tsvector (ts_rank_cd).
 //  2. If embedder configured: embed query → vector similarity search.
 //  3. Merge both result sets using Reciprocal Rank Fusion (RRF).
-//  4. Apply temporal decay (half-life 30d) — agent-scope memories only.
+//  4. Apply freshness multiplier (always) and temporal exp decay (when ApplyDecay or decayed_relevance).
+//     Decay formula: score *= freshness_score × exp(-Δt·ln2/half_life). All scopes affected.
 //  5. Boost relevance of returned memories as positive feedback (non-fatal).
 //
 // When extended filter params are present (TagsAny, CreatedBy, Since, Until, etc.),
@@ -700,27 +718,62 @@ func (s *memoryService) Recall(ctx context.Context, opts domain.RecallOpts) ([]d
 		def := defaultMinImportance
 		opts.MinImportance = &def
 	}
-	if opts.CreatedBy != nil || opts.SourceType != "" || len(opts.TagsAny) > 0 || opts.Since != nil || opts.Until != nil || opts.RelevanceMin != nil || opts.MinImportance != nil {
-		merged = applyExtendedFilters(merged, opts)
+	// Default: exclude superseded memories unless the caller explicitly opts in.
+	// ExcludeSuperseded=false means "let me see superseded" — zero value = false so
+	// the caller must pass true to get the default behaviour; we flip the default here.
+	if !opts.ExcludeSuperseded {
+		// Only skip the default when the caller explicitly passed a StatusFilter that
+		// includes superseded, signalling they want to see those memories.
+		wantSuperseded := false
+		for _, s := range opts.StatusFilter {
+			if s == domain.MemoryStatusSuperseded {
+				wantSuperseded = true
+				break
+			}
+		}
+		if !wantSuperseded {
+			opts.ExcludeSuperseded = true
+		}
 	}
+	// Always apply extended filters (handles importance, status, tags, etc.).
+	merged = applyExtendedFilters(merged, opts)
 
-	// ── Step 5: Temporal decay ────────────────────────────────────────────────
+	// ── Step 5: Freshness and universal temporal decay ────────────────────────
+	// Decay is applied uniformly to ALL memory scopes when requested
+	// (ApplyDecay=true or decayed_relevance ordering).
+	// FreshnessScore is always multiplied in to penalise stale/superseded memories
+	// regardless of the time-decay flag.
 	now := time.Now()
-	lambda := math.Log(2) / temporalHalfLifeDays
+	halfLife := s.halfLifeDays
+	if opts.HalfLifeDays > 0 {
+		halfLife = opts.HalfLifeDays
+	}
+	lambda := math.Log(2) / halfLife
+	applyTimeDecay := opts.ApplyDecay || opts.OrderBy == "decayed_relevance"
 
 	for i := range merged {
 		m := &merged[i]
-		// Project- and workspace-scoped memories represent persistent knowledge
-		// (analogous to MEMORY.md in OpenClaw) and are exempt from temporal decay.
-		if m.Scope == domain.ScopeProject || m.Scope == domain.ScopeWorkspace {
-			continue
+
+		// Temporal recency factor: exp(-Δt·ln2/half_life).
+		var recencyFactor float64
+		if applyTimeDecay {
+			ageDays := now.Sub(m.CreatedAt).Hours() / 24
+			recencyFactor = math.Exp(-lambda * ageDays)
+		} else {
+			recencyFactor = 1.0
 		}
-		ageDays := now.Sub(m.UpdatedAt).Hours() / 24
-		decay := math.Exp(-lambda * ageDays)
-		m.Score *= decay
+		m.RecencyScore = recencyFactor
+
+		// FreshnessScore health-based multiplier: always applied.
+		// Pre-P1-A memories default to 0; treat them as active (1.0).
+		freshnessScore := float64(m.FreshnessScore)
+		if freshnessScore == 0 {
+			freshnessScore = 1.0
+		}
+		m.Score *= freshnessScore * recencyFactor
 	}
 
-	// Re-sort after decay adjustment.
+	// Re-sort after freshness/decay adjustment.
 	slices.SortFunc(merged, func(a, b domain.ScoredMemory) int {
 		return cmp.Compare(b.Score, a.Score)
 	})
@@ -765,10 +818,26 @@ func (s *memoryService) Recall(ctx context.Context, opts domain.RecallOpts) ([]d
 }
 
 // applyExtendedFilters filters a slice of ScoredMemory using the extended RecallOpts fields
-// that are not handled by FullTextSearch (TagsAny, CreatedBy, Since, Until, RelevanceMin).
+// that are not handled by FullTextSearch (TagsAny, CreatedBy, Since, Until, RelevanceMin,
+// ExcludeSuperseded, StatusFilter).
 func applyExtendedFilters(items []domain.ScoredMemory, opts domain.RecallOpts) []domain.ScoredMemory {
 	out := items[:0]
 	for _, m := range items {
+		if opts.ExcludeSuperseded && m.Status == domain.MemoryStatusSuperseded {
+			continue
+		}
+		if len(opts.StatusFilter) > 0 {
+			match := false
+			for _, s := range opts.StatusFilter {
+				if m.Status == s {
+					match = true
+					break
+				}
+			}
+			if !match {
+				continue
+			}
+		}
 		if opts.CreatedBy != nil {
 			if m.AgentID == nil || *m.AgentID != *opts.CreatedBy {
 				continue

@@ -706,6 +706,20 @@ func (r *MemoryRepo) List(ctx context.Context, filter domain.MemoryListFilter) (
 		argIdx++
 	}
 
+	if filter.ExcludeSuperseded {
+		conditions = append(conditions, "status != 'superseded'")
+	}
+
+	if len(filter.StatusFilter) > 0 {
+		placeholders := make([]string, len(filter.StatusFilter))
+		for i, s := range filter.StatusFilter {
+			args = append(args, string(s))
+			placeholders[i] = fmt.Sprintf("$%d", argIdx)
+			argIdx++
+		}
+		conditions = append(conditions, fmt.Sprintf("status IN (%s)", strings.Join(placeholders, ", ")))
+	}
+
 	// Full-text search predicate (optional).
 	var tsRankExpr string
 	if filter.Query != "" {
