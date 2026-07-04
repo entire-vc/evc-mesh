@@ -52,6 +52,7 @@ type memoryRow struct {
 	Archived        bool                    `db:"archived"`
 	ThreadID        *string                 `db:"thread_id"`
 	SourceTaskID    *uuid.UUID              `db:"source_task_id"`
+	ContentSimhash  *int64                  `db:"content_simhash"`
 }
 
 func (r *memoryRow) toDomain() domain.Memory {
@@ -76,12 +77,13 @@ func (r *memoryRow) toDomain() domain.Memory {
 		Archived:        r.Archived,
 		ThreadID:        r.ThreadID,
 		SourceTaskID:    r.SourceTaskID,
+		ContentSimhash:  r.ContentSimhash,
 	}
 }
 
 const memoryColumns = `id, workspace_id, project_id, agent_id, key, content, scope, tags,
 	source_type, source_event_id, source_url, relevance, importance_score, created_at, updated_at, expires_at,
-	last_accessed_at, archived, thread_id, source_task_id`
+	last_accessed_at, archived, thread_id, source_task_id, content_simhash`
 
 // Upsert inserts a new memory or updates content, tags, relevance, and expires_at on conflict.
 // The unique constraint is on (workspace_id, project_id, agent_id, key, scope).
@@ -108,11 +110,11 @@ func (r *MemoryRepo) Upsert(ctx context.Context, m *domain.Memory) error {
 		INSERT INTO memories (
 			id, workspace_id, project_id, agent_id, key, content, scope,
 			tags, source_type, source_event_id, source_url, relevance, importance_score,
-			created_at, updated_at, expires_at, thread_id, source_task_id
+			created_at, updated_at, expires_at, thread_id, source_task_id, content_simhash
 		) VALUES (
 			$1, $2, $3, $4, $5, $6, $7,
 			$8, $9, $10, $11, $12, $13,
-			$14, $15, $16, $17, $18
+			$14, $15, $16, $17, $18, $19
 		)
 		ON CONFLICT (id) DO UPDATE
 			SET content          = EXCLUDED.content,
@@ -123,12 +125,13 @@ func (r *MemoryRepo) Upsert(ctx context.Context, m *domain.Memory) error {
 			    updated_at       = EXCLUDED.updated_at,
 			    expires_at       = EXCLUDED.expires_at,
 			    thread_id        = EXCLUDED.thread_id,
-			    source_task_id   = EXCLUDED.source_task_id
+			    source_task_id   = EXCLUDED.source_task_id,
+			    content_simhash  = EXCLUDED.content_simhash
 	`
 	_, err := r.db.ExecContext(ctx, q,
 		m.ID, m.WorkspaceID, m.ProjectID, m.AgentID, m.Key, m.Content, m.Scope,
 		tags, m.SourceType, m.SourceEventID, m.SourceURL, m.Relevance, m.ImportanceScore,
-		m.CreatedAt, m.UpdatedAt, m.ExpiresAt, m.ThreadID, m.SourceTaskID,
+		m.CreatedAt, m.UpdatedAt, m.ExpiresAt, m.ThreadID, m.SourceTaskID, m.ContentSimhash,
 	)
 	return err
 }
@@ -988,6 +991,66 @@ func (r *MemoryRepo) ArchiveStaleWorkspaceCheckpoints(ctx context.Context, older
 		return 0, fmt.Errorf("archive stale workspace checkpoints: %w", err)
 	}
 	return result.RowsAffected()
+}
+
+// FindBySimhashProximity returns non-archived, non-expired memories in workspaceID whose
+// content_simhash XOR-distance from simhash is at most maxHamming bits.
+// excludeID is excluded (avoids self-match during upsert of an existing key).
+// Requires PostgreSQL 14+ for bit_count().
+func (r *MemoryRepo) FindBySimhashProximity(ctx context.Context, workspaceID uuid.UUID, simhash int64, maxHamming int, excludeID uuid.UUID, limit int) ([]domain.Memory, error) {
+	if limit <= 0 {
+		limit = 5
+	}
+	var rows []memoryRow
+	err := r.db.SelectContext(ctx, &rows,
+		fmt.Sprintf(`SELECT %s FROM memories
+			WHERE workspace_id     = $1
+			  AND content_simhash  IS NOT NULL
+			  AND id               != $2
+			  AND archived         = false
+			  AND (expires_at IS NULL OR expires_at > NOW())
+			  AND bit_count((content_simhash # $3)::bit(64)) <= $4
+			ORDER BY importance_score DESC, updated_at DESC
+			LIMIT $5`, memoryColumns),
+		workspaceID, excludeID, simhash, maxHamming, limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("find by simhash proximity: %w", err)
+	}
+	memories := make([]domain.Memory, len(rows))
+	for i, row := range rows {
+		memories[i] = row.toDomain()
+	}
+	return memories, nil
+}
+
+// FindPinned returns all non-archived, non-expired memories tagged kind:pinned in workspaceID.
+// If projectID is non-nil, returns pinned memories from both workspace and project scope.
+func (r *MemoryRepo) FindPinned(ctx context.Context, workspaceID uuid.UUID, projectID *uuid.UUID) ([]domain.Memory, error) {
+	q := fmt.Sprintf(`SELECT %s FROM memories
+		WHERE workspace_id = $1
+		  AND tags @> ARRAY['kind:pinned']::text[]
+		  AND archived = false
+		  AND (expires_at IS NULL OR expires_at > NOW())`, memoryColumns)
+	args := []interface{}{workspaceID}
+
+	if projectID != nil {
+		q += ` AND (scope = 'workspace' OR (scope = 'project' AND project_id = $2))`
+		args = append(args, *projectID)
+	} else {
+		q += ` AND scope = 'workspace'`
+	}
+	q += ` ORDER BY importance_score DESC, updated_at DESC`
+
+	var rows []memoryRow
+	if err := r.db.SelectContext(ctx, &rows, q, args...); err != nil {
+		return nil, fmt.Errorf("find pinned memories: %w", err)
+	}
+	memories := make([]domain.Memory, len(rows))
+	for i, row := range rows {
+		memories[i] = row.toDomain()
+	}
+	return memories, nil
 }
 
 // ListWithNullEmbedding returns up to limit memories whose embedding column is NULL.

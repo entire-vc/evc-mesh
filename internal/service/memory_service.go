@@ -33,6 +33,10 @@ var keySlugRegex = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*[a-z0-9]$`)
 // does not supply an explicit min_importance. Entries below this score are noise.
 const defaultMinImportance float32 = 0.4
 
+// maxNearDupHamming is the Hamming distance threshold for near-duplicate detection.
+// Two memories whose content_simhash values differ by ≤ 10 bits are considered near-dups.
+const maxNearDupHamming = 10
+
 // entityKeywords are canonical domain terms that boost importance_score when found
 // in memory content, signalling higher decision-relevance.
 var entityKeywords = []string{"icp", "architecture", "license", "security", "money"}
@@ -103,6 +107,14 @@ func computeImportanceScore(tags []string, content string) float32 {
 		case "kind:fact":
 			if base < 0.60 {
 				base = 0.60
+			}
+		case "kind:pinned":
+			if base < 1.0 {
+				base = 1.0
+			}
+		case "kind:preference":
+			if base < 0.80 {
+				base = 0.80
 			}
 		case "kind:session-checkpoint":
 			isSessionCheckpoint = true
@@ -309,31 +321,31 @@ func resolveProjectSlug(tags []string) (string, bool) {
 // Remember upserts a memory entry. It returns "created" if the key did not exist before,
 // or "updated" if an existing entry was overwritten.
 // After a successful upsert, it asynchronously embeds the content when an embedder is configured.
-func (s *memoryService) Remember(ctx context.Context, mem *domain.Memory) (string, error) {
+func (s *memoryService) Remember(ctx context.Context, mem *domain.Memory) (RememberResult, error) {
 	if mem.Key == "" {
-		return "", apierror.ValidationError(map[string]string{
+		return RememberResult{}, apierror.ValidationError(map[string]string{
 			"key": "key is required",
 		})
 	}
 	if !keySlugRegex.MatchString(mem.Key) {
-		return "", apierror.ValidationError(map[string]string{
+		return RememberResult{}, apierror.ValidationError(map[string]string{
 			"key": "key must match pattern ^[a-z0-9][a-z0-9-]*[a-z0-9]$ (lowercase alphanumeric with hyphens)",
 		})
 	}
 	if mem.Content == "" {
-		return "", apierror.ValidationError(map[string]string{
+		return RememberResult{}, apierror.ValidationError(map[string]string{
 			"content": "content is required",
 		})
 	}
 	if mem.WorkspaceID == uuid.Nil {
-		return "", apierror.ValidationError(map[string]string{
+		return RememberResult{}, apierror.ValidationError(map[string]string{
 			"workspace_id": "workspace_id is required",
 		})
 	}
 
 	// Validate relevance ∈ [0, 1].
 	if mem.Relevance < 0 || mem.Relevance > 1 {
-		return "", apierror.ValidationError(map[string]string{
+		return RememberResult{}, apierror.ValidationError(map[string]string{
 			"relevance": "relevance must be between 0 and 1",
 		})
 	}
@@ -344,13 +356,13 @@ func (s *memoryService) Remember(ctx context.Context, mem *domain.Memory) (strin
 
 	// Validate tags.
 	if len(mem.Tags) > 20 {
-		return "", apierror.ValidationError(map[string]string{
+		return RememberResult{}, apierror.ValidationError(map[string]string{
 			"tags": "maximum 20 tags allowed",
 		})
 	}
 	for _, tag := range mem.Tags {
 		if len(tag) > 64 {
-			return "", apierror.ValidationError(map[string]string{
+			return RememberResult{}, apierror.ValidationError(map[string]string{
 				"tags": "each tag must be 64 characters or fewer",
 			})
 		}
@@ -358,7 +370,7 @@ func (s *memoryService) Remember(ctx context.Context, mem *domain.Memory) (strin
 
 	// Validate expires_at: if provided it must be in the future.
 	if mem.ExpiresAt != nil && !mem.ExpiresAt.After(time.Now()) {
-		return "", apierror.ValidationError(map[string]string{
+		return RememberResult{}, apierror.ValidationError(map[string]string{
 			"expires_at": "expires_at must be in the future",
 		})
 	}
@@ -381,7 +393,7 @@ func (s *memoryService) Remember(ctx context.Context, mem *domain.Memory) (strin
 	// Determine whether this is a create or update by checking for an existing entry.
 	existing, err := s.memRepo.GetByKey(ctx, mem.WorkspaceID, mem.ProjectID, mem.AgentID, mem.Key, mem.Scope)
 	if err != nil {
-		return "", fmt.Errorf("memory remember: lookup existing: %w", err)
+		return RememberResult{}, fmt.Errorf("memory remember: lookup existing: %w", err)
 	}
 
 	outcome := "created"
@@ -403,6 +415,21 @@ func (s *memoryService) Remember(ctx context.Context, mem *domain.Memory) (strin
 		}
 	}
 
+	// ── Simhash: compute 64-bit fingerprint and detect near-duplicates ──────────
+	// A near-dup is a different memory (different key) whose content_simhash is
+	// within maxNearDupHamming bits. Detected synchronously at write time so
+	// callers are notified immediately without waiting for the 6h reconciler.
+	hash := ComputeSimhash(mem.Content)
+	mem.ContentSimhash = &hash
+
+	var nearDupKey string
+	if hash != 0 {
+		excludeID := mem.ID // may be uuid.Nil for new creates; FindBySimhashProximity handles that
+		if dups, dupErr := s.memRepo.FindBySimhashProximity(ctx, mem.WorkspaceID, hash, maxNearDupHamming, excludeID, 1); dupErr == nil && len(dups) > 0 {
+			nearDupKey = dups[0].Key
+		}
+	}
+
 	// Cache the source-task lookup — used for both thread_id propagation and
 	// Amendment 2/3 edge hooks below. One query, two consumers.
 	var sourceTask *domain.Task
@@ -417,7 +444,7 @@ func (s *memoryService) Remember(ctx context.Context, mem *domain.Memory) (strin
 	}
 
 	if err := s.memRepo.Upsert(ctx, mem); err != nil {
-		return "", fmt.Errorf("memory remember: upsert: %w", err)
+		return RememberResult{}, fmt.Errorf("memory remember: upsert: %w", err)
 	}
 
 	// Async embedding — fire and forget, non-fatal.
@@ -539,7 +566,7 @@ func (s *memoryService) Remember(ctx context.Context, mem *domain.Memory) (strin
 		}
 	}
 
-	return outcome, nil
+	return RememberResult{Outcome: outcome, NearDupKey: nearDupKey}, nil
 }
 
 // defaultExpiresAt applies the server-side TTL policy when the caller does not supply expires_at.
@@ -710,6 +737,28 @@ func (s *memoryService) Recall(ctx context.Context, opts domain.RecallOpts) ([]d
 			ids[i] = r.ID
 		}
 		_ = s.memRepo.BoostRelevance(ctx, ids)
+	}
+
+	// ── Step 7: Inject pinned memories (kind:pinned always surfaced) ─────────
+	// Pinned memories bypass retrieval entirely — they are always prepended to
+	// the result, regardless of relevance score or min_importance threshold.
+	var pinnedProjID *uuid.UUID
+	if opts.ProjectID != uuid.Nil {
+		pinnedProjID = &opts.ProjectID
+	}
+	if pinned, pinnedErr := s.memRepo.FindPinned(ctx, opts.WorkspaceID, pinnedProjID); pinnedErr == nil && len(pinned) > 0 {
+		seenIDs := make(map[uuid.UUID]struct{}, len(merged))
+		for _, m := range merged {
+			seenIDs[m.ID] = struct{}{}
+		}
+		var pinnedScored []domain.ScoredMemory
+		for _, p := range pinned {
+			if _, seen := seenIDs[p.ID]; seen {
+				continue // already in results via retrieval
+			}
+			pinnedScored = append(pinnedScored, domain.ScoredMemory{Memory: p, Score: 2.0}) // score > any retrieval score
+		}
+		merged = append(pinnedScored, merged...)
 	}
 
 	return merged, nil
@@ -890,10 +939,11 @@ func (s *memoryService) SetProjectKnowledge(ctx context.Context, input SetProjec
 		Relevance:   1.0,
 	}
 
-	outcome, err := s.Remember(ctx, mem)
+	remResult, err := s.Remember(ctx, mem)
 	if err != nil {
 		return nil, "", fmt.Errorf("set_project_knowledge: %w", err)
 	}
+	outcome := remResult.Outcome
 
 	// ── Amendment 4: canonical-supersede ─────────────────────────────────────────
 	// Every set_project_knowledge call writes a canonical (project-scoped) fact.

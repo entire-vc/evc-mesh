@@ -741,8 +741,8 @@ func (m *MockMemoryService) ListMemories(ctx context.Context, filter domain.Memo
 	return &service.RecallResult{Items: []domain.ScoredMemory{}}, nil
 }
 
-func (m *MockMemoryService) Remember(ctx context.Context, mem *domain.Memory) (string, error) {
-	return "created", nil
+func (m *MockMemoryService) Remember(ctx context.Context, mem *domain.Memory) (service.RememberResult, error) {
+	return service.RememberResult{Outcome: "created"}, nil
 }
 func (m *MockMemoryService) Recall(ctx context.Context, opts domain.RecallOpts) ([]domain.ScoredMemory, error) {
 	return nil, nil

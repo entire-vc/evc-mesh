@@ -7,6 +7,16 @@ import (
 	"github.com/lib/pq"
 )
 
+// Memory kind tag constants — well-known values for the kind: tag prefix.
+// These map to importance_score ranges and special recall behaviours.
+const (
+	// KindPinned marks a memory as always-injected into recall results regardless of
+	// relevance score or min_importance threshold. Suitable for must-not-vanish facts.
+	KindPinned = "kind:pinned"
+	// KindPreference marks a user/agent preference memory. Maps to importance_score 0.80.
+	KindPreference = "kind:preference"
+)
+
 // MemoryScope defines where a memory entry is visible.
 type MemoryScope string
 
@@ -71,6 +81,10 @@ type Memory struct {
 	// SourceTaskID is the Mesh task UUID that produced this memory.
 	// Used by the task-graph bridge (Amendment 3) to create derived_from edges.
 	SourceTaskID *uuid.UUID `json:"source_task_id,omitempty" db:"source_task_id"`
+
+	// ContentSimhash is a 64-bit simhash of the memory content (3-gram shingles, FNV-64a).
+	// Used for write-time near-duplicate detection. Nil when not yet computed.
+	ContentSimhash *int64 `json:"content_simhash,omitempty" db:"content_simhash"`
 
 	// Embedding fields — populated only when an embedding provider is configured.
 	// Embedding is the raw float32 vector; it is not serialised to JSON for API responses.
