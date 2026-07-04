@@ -54,7 +54,7 @@ jobs:
       - name: Cross-compile mesh-mcp (linux/amd64)
         run: |
           cd evc-mesh-mcp
-          GOOS=linux GOARCH=amd64 go build -o ../mesh-mcp-bin ./cmd/mesh-mcp
+          GOOS=linux GOARCH=amd64 go build -o ../mesh-mcp-bin .
           chmod +x ../mesh-mcp-bin
           echo "mesh-mcp built: $(file ../mesh-mcp-bin)"
 
