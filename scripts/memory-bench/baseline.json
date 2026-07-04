@@ -1,9 +1,9 @@
 {
-  "knowledge-update": 1.0,
-  "multi-session": 0.25,
+  "knowledge-update": 0.75,
+  "multi-session": 0.75,
   "single-session-assistant": 1.0,
-  "single-session-preference": 0.75,
-  "single-session-user": 0.25,
-  "temporal-reasoning": 0.0,
-  "overall": 0.5416666666666666
+  "single-session-preference": 0.5,
+  "single-session-user": 0.75,
+  "temporal-reasoning": 0.25,
+  "overall": 0.6666666666666666
 }

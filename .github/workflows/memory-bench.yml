@@ -10,8 +10,22 @@ on:
   push:
     branches: [main]
     paths:
-      - 'internal/memory/**'
-      - 'internal/recall/**'
+      - 'internal/service/memory_service.go'
+      - 'internal/repository/postgres/memory_repo.go'
+      - 'internal/repository/postgres/memory_edges_repo.go'
+      - 'internal/mcp/tools.go'
+      - 'internal/mcp/server.go'
+      - 'internal/reconciler/**'
+      - 'scripts/memory-bench/**'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'internal/service/memory_service.go'
+      - 'internal/repository/postgres/memory_repo.go'
+      - 'internal/repository/postgres/memory_edges_repo.go'
+      - 'internal/mcp/tools.go'
+      - 'internal/mcp/server.go'
+      - 'internal/reconciler/**'
       - 'scripts/memory-bench/**'
 
 jobs:
