@@ -281,6 +281,101 @@ func TestRemember_UpdateExisting(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// TestRemember_SetsSimhash
+// ---------------------------------------------------------------------------
+
+func TestRemember_SetsSimhash(t *testing.T) {
+	wsID := uuid.New()
+	var capturedMem *domain.Memory
+	repo := &mockMemoryRepo{
+		getByKeyFn: func(_ context.Context, _ uuid.UUID, _ *uuid.UUID, _ *uuid.UUID, _ string, _ domain.MemoryScope) (*domain.Memory, error) {
+			return nil, nil
+		},
+		upsertFn: func(_ context.Context, mem *domain.Memory) error {
+			capturedMem = mem
+			return nil
+		},
+	}
+
+	svc := newMemoryService(repo)
+	mem := baseMemory(wsID)
+	mem.Content = "this is a longer content that will get a valid simhash fingerprint"
+
+	_, err := svc.Remember(context.Background(), mem)
+	require.NoError(t, err)
+	require.NotNil(t, capturedMem)
+	assert.NotNil(t, capturedMem.ContentSimhash, "ContentSimhash must be set after Remember()")
+	assert.NotEqual(t, int64(0), *capturedMem.ContentSimhash, "ContentSimhash should be non-zero for substantial text")
+}
+
+// ---------------------------------------------------------------------------
+// TestRemember_SetsStatusActive
+// ---------------------------------------------------------------------------
+
+func TestRemember_SetsStatusActive(t *testing.T) {
+	wsID := uuid.New()
+	var capturedMem *domain.Memory
+	repo := &mockMemoryRepo{
+		getByKeyFn: func(_ context.Context, _ uuid.UUID, _ *uuid.UUID, _ *uuid.UUID, _ string, _ domain.MemoryScope) (*domain.Memory, error) {
+			return nil, nil
+		},
+		upsertFn: func(_ context.Context, mem *domain.Memory) error {
+			capturedMem = mem
+			return nil
+		},
+	}
+
+	svc := newMemoryService(repo)
+	mem := baseMemory(wsID)
+
+	_, err := svc.Remember(context.Background(), mem)
+	require.NoError(t, err)
+	require.NotNil(t, capturedMem)
+	assert.Equal(t, domain.MemoryStatusActive, capturedMem.Status)
+	assert.Equal(t, float32(1.0), capturedMem.FreshnessScore)
+}
+
+// ---------------------------------------------------------------------------
+// TestApplyExtendedFilters_ExcludeSuperseded
+// ---------------------------------------------------------------------------
+
+func TestApplyExtendedFilters_ExcludeSuperseded(t *testing.T) {
+	items := []domain.ScoredMemory{
+		{Memory: domain.Memory{ID: uuid.New(), Status: domain.MemoryStatusActive}, Score: 1.0},
+		{Memory: domain.Memory{ID: uuid.New(), Status: domain.MemoryStatusSuperseded}, Score: 0.9},
+		{Memory: domain.Memory{ID: uuid.New(), Status: domain.MemoryStatusStale}, Score: 0.8},
+	}
+
+	opts := domain.RecallOpts{ExcludeSuperseded: true}
+	result := applyExtendedFilters(items, opts)
+
+	assert.Len(t, result, 2, "superseded memory should be excluded")
+	for _, m := range result {
+		assert.NotEqual(t, domain.MemoryStatusSuperseded, m.Status)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestApplyExtendedFilters_StatusFilter
+// ---------------------------------------------------------------------------
+
+func TestApplyExtendedFilters_StatusFilter(t *testing.T) {
+	items := []domain.ScoredMemory{
+		{Memory: domain.Memory{ID: uuid.New(), Status: domain.MemoryStatusActive}, Score: 1.0},
+		{Memory: domain.Memory{ID: uuid.New(), Status: domain.MemoryStatusSuperseded}, Score: 0.9},
+		{Memory: domain.Memory{ID: uuid.New(), Status: domain.MemoryStatusStale}, Score: 0.8},
+	}
+
+	opts := domain.RecallOpts{StatusFilter: []domain.MemoryStatus{domain.MemoryStatusActive, domain.MemoryStatusStale}}
+	result := applyExtendedFilters(items, opts)
+
+	assert.Len(t, result, 2)
+	for _, m := range result {
+		assert.NotEqual(t, domain.MemoryStatusSuperseded, m.Status)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // TestRemember_InvalidKey
 // ---------------------------------------------------------------------------
 

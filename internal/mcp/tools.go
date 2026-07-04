@@ -1637,6 +1637,13 @@ func (s *Server) handleRecall(ctx context.Context, request mcpsdk.CallToolReques
 	recencyWeight := mcpsdk.ParseFloat64(request, "recency_weight", 0)
 	orderBy := mcpsdk.ParseString(request, "order_by", "")
 	includeExpired := mcpsdk.ParseBoolean(request, "include_expired", false)
+	// exclude_superseded defaults to true (server-side default); pass false to include superseded memories.
+	excludeSupersededParam := mcpsdk.ParseBoolean(request, "exclude_superseded", true)
+	var excludeSuperseded *bool
+	if !excludeSupersededParam {
+		f := false
+		excludeSuperseded = &f
+	}
 
 	result, err := s.getRESTClient(ctx).RecallMemories(ctx, RecallMemoriesParams{
 		Query:             query,
@@ -1653,6 +1660,7 @@ func (s *Server) handleRecall(ctx context.Context, request mcpsdk.CallToolReques
 		RecencyWeight:     recencyWeight,
 		OrderBy:           orderBy,
 		IncludeExpired:    includeExpired,
+		ExcludeSuperseded: excludeSuperseded,
 		Limit:             limit,
 		Offset:            offset,
 	})

@@ -150,6 +150,9 @@ type Memory struct {
 type ScoredMemory struct {
 	Memory
 	Score float64 `json:"score"`
+	// RecencyScore is the exponential decay factor applied to this item during recall.
+	// Value in [0, 1]: 1.0 = brand-new or decay not applied; approaches 0 for very old items.
+	RecencyScore float64 `json:"recency_score,omitempty"`
 }
 
 // RecallOpts specifies parameters for a memory recall (full-text search) operation.
@@ -176,7 +179,11 @@ type RecallOpts struct {
 	// ranking. 0.0 (default) = exactly the legacy behavior (rank by FTS score only);
 	// 1.0 = rank purely by recency. Values are clamped to [0,1]. See MemoryRepository.FullTextSearch.
 	RecencyWeight float64
-	Offset        int
+	// HalfLifeDays overrides the service-level default half-life for exponential decay.
+	// 0 means use the service default (env MEMORY_RECALL_HALF_LIFE_DAYS, fallback 30d).
+	// Valid range: 1–365. Applied when ApplyDecay=true or OrderBy="decayed_relevance".
+	HalfLifeDays float64
+	Offset       int
 
 	// Health lifecycle filters (P1-A).
 	// StatusFilter restricts results to memories with one of the given statuses.
@@ -205,9 +212,10 @@ type MemoryListFilter struct {
 	RelevanceMin    *float32         // relevance >=
 	MinImportance   *float32         // importance_score >= (default 0.4 applied at service layer)
 	IncludeExpired  bool
-	IncludeArchived bool   // if false (default), only archived=false rows are returned
-	OrderBy         string // "created_at:desc", "relevance:desc", "decayed_relevance:desc"
-	ApplyDecay      bool   // if true, score = relevance * pow(0.95, days_since)
+	IncludeArchived bool    // if false (default), only archived=false rows are returned
+	OrderBy         string  // "created_at:desc", "relevance:desc", "decayed_relevance:desc"
+	ApplyDecay      bool    // if true, score = relevance * pow(0.95, days_since)
+	HalfLifeDays    float64 // half-life for decayed_relevance ordering; 0 means 30d default
 	Limit           int
 	Offset          int
 

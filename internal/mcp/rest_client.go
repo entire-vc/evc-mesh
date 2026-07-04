@@ -684,8 +684,16 @@ type RecallMemoriesParams struct {
 	RelevanceMin      float64
 	ApplyRecencyDecay bool
 	RecencyWeight     float64
-	OrderBy           string
-	IncludeExpired    bool
+	// HalfLifeDays overrides the server-level half-life for exponential decay.
+	// 0 means use the server default (env MEMORY_RECALL_HALF_LIFE_DAYS, fallback 30d).
+	// Valid range: 1–365.
+	HalfLifeDays   int
+	OrderBy        string
+	IncludeExpired bool
+	// ExcludeSuperseded controls whether status=superseded memories are hidden.
+	// When false, explicitly passes exclude_superseded=false to the server to
+	// override the server-side default of true.
+	ExcludeSuperseded *bool
 	Limit             int
 	Offset            int
 }
@@ -729,11 +737,17 @@ func (c *RESTClient) RecallMemories(ctx context.Context, p RecallMemoriesParams)
 	if p.RecencyWeight > 0 {
 		params.Set("recency_weight", fmt.Sprintf("%g", p.RecencyWeight))
 	}
+	if p.HalfLifeDays > 0 {
+		params.Set("half_life_days", fmt.Sprintf("%d", p.HalfLifeDays))
+	}
 	if p.OrderBy != "" {
 		params.Set("order_by", p.OrderBy)
 	}
 	if p.IncludeExpired {
 		params.Set("include_expired", "true")
+	}
+	if p.ExcludeSuperseded != nil && !*p.ExcludeSuperseded {
+		params.Set("exclude_superseded", "false")
 	}
 	if p.Limit > 0 {
 		params.Set("limit", fmt.Sprintf("%d", p.Limit))
