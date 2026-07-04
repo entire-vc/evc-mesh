@@ -153,6 +153,14 @@ func (m *mockMemoryRepo) ArchiveStaleWorkspaceCheckpoints(ctx context.Context, o
 	return 0, nil
 }
 
+func (m *mockMemoryRepo) FindBySimhashProximity(_ context.Context, _ uuid.UUID, _ int64, _ int, _ uuid.UUID, _ int) ([]domain.Memory, error) {
+	return nil, nil
+}
+
+func (m *mockMemoryRepo) FindPinned(_ context.Context, _ uuid.UUID, _ *uuid.UUID) ([]domain.Memory, error) {
+	return nil, nil
+}
+
 // Verify mockMemoryRepo satisfies the interface at compile time.
 var _ repository.MemoryRepository = (*mockMemoryRepo)(nil)
 
@@ -224,10 +232,10 @@ func TestRemember_CreateNew(t *testing.T) {
 	svc := newMemoryService(repo)
 	mem := baseMemory(wsID)
 
-	outcome, err := svc.Remember(context.Background(), mem)
+	result, err := svc.Remember(context.Background(), mem)
 
 	require.NoError(t, err)
-	assert.Equal(t, "created", outcome)
+	assert.Equal(t, "created", result.Outcome)
 }
 
 // ---------------------------------------------------------------------------
@@ -264,10 +272,10 @@ func TestRemember_UpdateExisting(t *testing.T) {
 		Scope:       domain.ScopeProject,
 	}
 
-	outcome, err := svc.Remember(context.Background(), mem)
+	result, err := svc.Remember(context.Background(), mem)
 
 	require.NoError(t, err)
-	assert.Equal(t, "updated", outcome)
+	assert.Equal(t, "updated", result.Outcome)
 	// The service must copy the existing ID onto mem so the DB upsert targets the correct row.
 	assert.Equal(t, existingID, mem.ID)
 }

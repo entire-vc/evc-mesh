@@ -41,8 +41,9 @@ type rememberRequest struct {
 
 // rememberResponse wraps the upserted memory with the operation outcome.
 type rememberResponse struct {
-	Memory  *domain.Memory `json:"memory"`
-	Outcome string         `json:"outcome"` // "created" or "updated"
+	Memory     *domain.Memory `json:"memory"`
+	Outcome    string         `json:"outcome"`               // "created" or "updated"
+	NearDupKey string         `json:"near_dup_key,omitempty"` // non-empty when a near-duplicate was detected
 }
 
 // listMemoriesQuery represents query params for listing memories.
@@ -176,14 +177,15 @@ func (h *MemoryHandler) Remember(c echo.Context) error {
 		}
 	}
 
-	outcome, err := h.memoryService.Remember(c.Request().Context(), mem)
+	result, err := h.memoryService.Remember(c.Request().Context(), mem)
 	if err != nil {
 		return handleError(c, err)
 	}
 
 	return c.JSON(http.StatusOK, rememberResponse{
-		Memory:  mem,
-		Outcome: outcome,
+		Memory:     mem,
+		Outcome:    result.Outcome,
+		NearDupKey: result.NearDupKey,
 	})
 }
 

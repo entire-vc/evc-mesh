@@ -792,9 +792,19 @@ type MentionablesService interface {
 	Search(ctx context.Context, workspaceID uuid.UUID, query string, limit int) ([]domain.Mentionable, error)
 }
 
+// RememberResult is returned by MemoryService.Remember.
+type RememberResult struct {
+	// Outcome is "created" or "updated".
+	Outcome string
+	// NearDupKey is set when a near-duplicate memory (Hamming distance ≤ 10 bits) was
+	// detected at write time. It holds the key of the closest existing near-duplicate.
+	// Empty when no near-duplicate was found.
+	NearDupKey string
+}
+
 // MemoryService provides business logic for agent persistent memory.
 type MemoryService interface {
-	Remember(ctx context.Context, mem *domain.Memory) (string, error) // returns "created" or "updated"
+	Remember(ctx context.Context, mem *domain.Memory) (RememberResult, error)
 	Recall(ctx context.Context, opts domain.RecallOpts) ([]domain.ScoredMemory, error)
 	// ListMemories executes a richly-filtered, paginated list query backed by the repository.
 	ListMemories(ctx context.Context, filter domain.MemoryListFilter) (*RecallResult, error)
