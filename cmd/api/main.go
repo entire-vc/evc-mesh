@@ -27,6 +27,7 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/handler"
 	"github.com/entire-vc/evc-mesh/internal/integration/teamrelay"
 	mw "github.com/entire-vc/evc-mesh/internal/middleware"
+	"github.com/entire-vc/evc-mesh/internal/reconciler"
 	"github.com/entire-vc/evc-mesh/internal/repository/postgres"
 	"github.com/entire-vc/evc-mesh/internal/service"
 	"github.com/entire-vc/evc-mesh/internal/spark"
@@ -157,6 +158,26 @@ func main() {
 	// Embedding provider for vector search (optional; degrades to keyword-only when "none").
 	embedder := embedding.NewEmbedder(cfg.Embedding)
 	log.Printf("Embedding provider: %s", cfg.Embedding.Provider)
+
+	// Memory reconciler (P1-C): drives the freshness lifecycle (expire/stale/supersede).
+	// RECONCILER_EPOCH gates the cold-start stale avalanche — only memories created after
+	// the epoch are eligible for stale marking. Defaults to the binary build time.
+	reconcilerEpoch := BuildTime // use binary build time as default
+	var reconcilerEpochTime time.Time
+	if envEpoch := os.Getenv("RECONCILER_EPOCH"); envEpoch != "" {
+		if t, parseErr := time.Parse(time.RFC3339, envEpoch); parseErr == nil {
+			reconcilerEpochTime = t
+		} else {
+			log.Printf("RECONCILER_EPOCH parse error (ignored, using build time): %v", parseErr)
+		}
+	} else if reconcilerEpoch != "unknown" {
+		if t, parseErr := time.Parse(time.RFC3339, reconcilerEpoch); parseErr == nil {
+			reconcilerEpochTime = t
+		}
+	}
+	memReconciler := reconciler.New(memoryRepo, memoryEdgesRepo, embedder, reconciler.Config{
+		Epoch: reconcilerEpochTime,
+	})
 
 	// Memory service is wired into eventBusService so Publish() can extract memories.
 	// MemoryWithProjectRepo enables automatic project:<slug> tag → project_id resolution on write.
@@ -961,6 +982,14 @@ func main() {
 					log.Printf("[edge-prune] Pruned %d dead edges", n)
 				}
 				cancel()
+
+				// Memory reconciler (P1-C): monitor (expire/stale) + linker (supersede).
+				// Given a longer timeout since the linker may issue embedding API calls.
+				recCtx, recCancel := context.WithTimeout(context.Background(), 5*time.Minute)
+				if err := memReconciler.Run(recCtx); err != nil {
+					log.Printf("[memory-reconciler] ERROR: %v", err)
+				}
+				recCancel()
 			case <-schedulerShutdownCh:
 				return
 			}

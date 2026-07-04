@@ -158,6 +158,19 @@ func (m *mockMemoryRepo) FindBySimhashProximity(_ context.Context, _ uuid.UUID, 
 }
 
 func (m *mockMemoryRepo) FindPinned(_ context.Context, _ uuid.UUID, _ *uuid.UUID) ([]domain.Memory, error) {
+func (m *mockMemoryRepo) ExpireByValidUntil(ctx context.Context) (int64, error) {
+	return 0, nil
+}
+
+func (m *mockMemoryRepo) MarkStaleByAge(ctx context.Context, epoch time.Time, staleAfter time.Duration) (int64, error) {
+	return 0, nil
+}
+
+func (m *mockMemoryRepo) SetMemoryStatus(ctx context.Context, id uuid.UUID, status domain.MemoryStatus, supersededBy *uuid.UUID) error {
+	return nil
+}
+
+func (m *mockMemoryRepo) ListCreatedSince(ctx context.Context, since time.Time, limit int) ([]domain.Memory, error) {
 	return nil, nil
 }
 

@@ -1088,6 +1088,97 @@ func (r *MemoryRepo) FindPinned(ctx context.Context, workspaceID uuid.UUID, proj
 	if err := r.db.SelectContext(ctx, &rows, q, args...); err != nil {
 		return nil, fmt.Errorf("find pinned memories: %w", err)
 	}
+	memories := make([]domain.Memory, 0, len(rows))
+	for _, row := range rows {
+		memories = append(memories, row.toDomain())
+	}
+	return memories, nil
+}
+
+// ExpireByValidUntil archives memories whose valid_until has passed. It sets
+// status='archived' and freshness_score=0.0 for at most 500 rows per call.
+// Memories already archived or superseded are skipped, making the call idempotent.
+func (r *MemoryRepo) ExpireByValidUntil(ctx context.Context) (int64, error) {
+	// LIMIT is not directly supported in an UPDATE, so scope the update via a
+	// ctid subquery. This preserves the 500-row batch cap while remaining idempotent.
+	result, err := r.db.ExecContext(ctx, `
+		UPDATE memories
+		SET status = 'archived', freshness_score = 0.0, updated_at = NOW()
+		WHERE ctid IN (
+			SELECT ctid FROM memories
+			WHERE valid_until IS NOT NULL
+			  AND valid_until <= NOW()
+			  AND status NOT IN ('archived', 'superseded')
+			LIMIT 500
+		)
+	`)
+	if err != nil {
+		return 0, fmt.Errorf("expire by valid_until: %w", err)
+	}
+	return result.RowsAffected()
+}
+
+// MarkStaleByAge marks active memories as stale when they have not been updated in
+// staleAfter and were created after epoch. The epoch gate prevents a mass-stale
+// avalanche on first deploy (nothing created before the epoch is eligible).
+// High-importance memories (importance_score >= 0.8) are protected. Batch cap 500.
+func (r *MemoryRepo) MarkStaleByAge(ctx context.Context, epoch time.Time, staleAfter time.Duration) (int64, error) {
+	cutoff := time.Now().Add(-staleAfter)
+	result, err := r.db.ExecContext(ctx, `
+		UPDATE memories
+		SET status = 'stale', freshness_score = 0.25, updated_at = NOW()
+		WHERE ctid IN (
+			SELECT ctid FROM memories
+			WHERE status = 'active'
+			  AND updated_at < $1
+			  AND created_at > $2
+			  AND importance_score < 0.8
+			LIMIT 500
+		)
+	`, cutoff, epoch)
+	if err != nil {
+		return 0, fmt.Errorf("mark stale by age: %w", err)
+	}
+	return result.RowsAffected()
+}
+
+// SetMemoryStatus updates the status, freshness_score, and superseded_by of a single
+// memory. freshness_score is derived from status.StatusFreshnessScore().
+func (r *MemoryRepo) SetMemoryStatus(ctx context.Context, id uuid.UUID, status domain.MemoryStatus, supersededBy *uuid.UUID) error {
+	freshness := status.StatusFreshnessScore()
+	_, err := r.db.ExecContext(ctx, `
+		UPDATE memories
+		SET status          = $1,
+		    freshness_score = $2,
+		    superseded_by   = $3,
+		    updated_at      = NOW()
+		WHERE id = $4
+	`, status, freshness, supersededBy, id)
+	if err != nil {
+		return fmt.Errorf("set memory status: %w", err)
+	}
+	return nil
+}
+
+// ListCreatedSince returns memories that have a stored embedding and were created at
+// or after since, ordered by created_at DESC and capped at limit. Used by the
+// reconciler linker phase to find recently written memories for dedup analysis.
+func (r *MemoryRepo) ListCreatedSince(ctx context.Context, since time.Time, limit int) ([]domain.Memory, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	q := fmt.Sprintf(`
+		SELECT %s FROM memories
+		WHERE created_at >= $1
+		  AND embedding IS NOT NULL
+		ORDER BY created_at DESC
+		LIMIT $2`,
+		memoryColumns,
+	)
+	var rows []memoryRow
+	if err := r.db.SelectContext(ctx, &rows, q, since, limit); err != nil {
+		return nil, fmt.Errorf("memory list created since: %w", err)
+	}
 	memories := make([]domain.Memory, len(rows))
 	for i, row := range rows {
 		memories[i] = row.toDomain()

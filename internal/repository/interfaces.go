@@ -634,6 +634,21 @@ type MemoryRepository interface {
 	// FindPinned returns all non-archived memories tagged kind:pinned in the workspace.
 	// If projectID is non-nil, both workspace-scoped and project-scoped pinned memories are returned.
 	FindPinned(ctx context.Context, workspaceID uuid.UUID, projectID *uuid.UUID) ([]domain.Memory, error)
+	// ExpireByValidUntil archives (status='archived', freshness_score=0.0) memories whose
+	// valid_until is in the past and whose status is not already archived or superseded.
+	// Batch cap: 500 rows per call (idempotent: safe to run multiple times).
+	ExpireByValidUntil(ctx context.Context) (int64, error)
+	// MarkStaleByAge marks active memories as stale (status='stale', freshness_score=0.25)
+	// when they haven't been updated in staleAfter and were created after epoch.
+	// The epoch gate prevents a mass-stale avalanche on first deploy.
+	// Batch cap: 500 rows per call (idempotent).
+	MarkStaleByAge(ctx context.Context, epoch time.Time, staleAfter time.Duration) (int64, error)
+	// SetMemoryStatus updates the status, superseded_by, and freshness_score of a single memory.
+	// freshness_score is derived from status.StatusFreshnessScore().
+	SetMemoryStatus(ctx context.Context, id uuid.UUID, status domain.MemoryStatus, supersededBy *uuid.UUID) error
+	// ListCreatedSince returns memories that have a stored embedding and were created at or after
+	// since, ordered by created_at DESC, capped at limit. Used by the reconciler linker phase.
+	ListCreatedSince(ctx context.Context, since time.Time, limit int) ([]domain.Memory, error)
 }
 
 // MemoryEdgeRepository manages directed, typed edges in the memory Knowledge Graph.
