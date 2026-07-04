@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       tolerance:
-        description: 'Per-category regression tolerance (default: 0.05)'
+        description: 'Per-category regression tolerance (default: 0.25 — 1-question variance on 4q/category CI subset)'
         required: false
-        default: '0.05'
+        default: '0.25'
   push:
     branches: [main]
     paths:

@@ -335,8 +335,8 @@ def main() -> int:
     parser.add_argument(
         "--tolerance",
         type=float,
-        default=0.05,
-        help="Allowed per-category regression below baseline (default: 0.05)",
+        default=0.25,
+        help="Allowed per-category regression below baseline (default: 0.25 — 1-question variance on 4q/category CI subset)",
     )
     args = parser.parse_args()
 
