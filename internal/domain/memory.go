@@ -17,6 +17,43 @@ const (
 	KindPreference = "kind:preference"
 )
 
+// MemoryStatus represents the lifecycle health state of a memory entry.
+// The status drives freshness scoring and recall filtering.
+type MemoryStatus string
+
+const (
+	// MemoryStatusActive is the default state — the memory is fresh and reliable.
+	MemoryStatusActive MemoryStatus = "active"
+	// MemoryStatusStale indicates the memory may be outdated; still recalled but with reduced freshness_score.
+	MemoryStatusStale MemoryStatus = "stale"
+	// MemoryStatusSuperseded means a newer memory has replaced this one.
+	// The superseded_by field points to the replacement.
+	MemoryStatusSuperseded MemoryStatus = "superseded"
+	// MemoryStatusArchived is a soft-delete state; excluded from recall by default.
+	MemoryStatusArchived MemoryStatus = "archived"
+	// MemoryStatusConflicted means two memories contradict each other; requires human review.
+	MemoryStatusConflicted MemoryStatus = "conflicted"
+	// MemoryStatusReviewNeeded flags the memory for human or agent review before acting on it.
+	MemoryStatusReviewNeeded MemoryStatus = "review_needed"
+)
+
+// StatusFreshnessScore returns the canonical freshness_score floor for a given status.
+// The actual freshness_score may be higher (set explicitly) but never lower than this floor.
+func (s MemoryStatus) StatusFreshnessScore() float32 {
+	switch s {
+	case MemoryStatusActive:
+		return 1.0
+	case MemoryStatusStale:
+		return 0.25
+	case MemoryStatusSuperseded:
+		return 0.1
+	case MemoryStatusArchived:
+		return 0.0
+	default:
+		return 0.5
+	}
+}
+
 // MemoryScope defines where a memory entry is visible.
 type MemoryScope string
 
@@ -82,8 +119,24 @@ type Memory struct {
 	// Used by the task-graph bridge (Amendment 3) to create derived_from edges.
 	SourceTaskID *uuid.UUID `json:"source_task_id,omitempty" db:"source_task_id"`
 
+	// Health lifecycle fields (migration 080, P1-A).
+
+	// Status represents the current health/freshness lifecycle state.
+	// Defaults to MemoryStatusActive on creation.
+	Status MemoryStatus `json:"status" db:"status"`
+	// FreshnessScore is a [0.0, 1.0] float representing how fresh/reliable the memory is.
+	// Starts at 1.0 for active memories; degrades as staleness is detected.
+	FreshnessScore float32 `json:"freshness_score" db:"freshness_score"`
+	// SupersededBy points to the Memory that replaced this one when Status=superseded.
+	SupersededBy *uuid.UUID `json:"superseded_by,omitempty" db:"superseded_by"`
+	// ValidFrom marks the start of the time window during which the memory is valid.
+	// Nil means "valid from creation".
+	ValidFrom *time.Time `json:"valid_from,omitempty" db:"valid_from"`
+	// ValidUntil marks the end of the time window during which the memory is valid.
+	// Distinct from ExpiresAt: expiry is about retention, validity is about truth.
+	ValidUntil *time.Time `json:"valid_until,omitempty" db:"valid_until"`
 	// ContentSimhash is a 64-bit simhash of the memory content (3-gram shingles, FNV-64a).
-	// Used for write-time near-duplicate detection. Nil when not yet computed.
+	// Used for write-time and periodic near-duplicate detection. Nil when not yet computed.
 	ContentSimhash *int64 `json:"content_simhash,omitempty" db:"content_simhash"`
 
 	// Embedding fields — populated only when an embedding provider is configured.
@@ -124,6 +177,17 @@ type RecallOpts struct {
 	// 1.0 = rank purely by recency. Values are clamped to [0,1]. See MemoryRepository.FullTextSearch.
 	RecencyWeight float64
 	Offset        int
+
+	// Health lifecycle filters (P1-A).
+	// StatusFilter restricts results to memories with one of the given statuses.
+	// If empty, no status filter is applied (all statuses may be returned).
+	StatusFilter []MemoryStatus
+	// ExcludeSuperseded excludes memories with status=superseded from results.
+	// Applied after StatusFilter. Defaults to true in the service layer.
+	ExcludeSuperseded bool
+	// IncludeStale includes stale memories in results (default true).
+	// When false, only active/review_needed/conflicted memories are returned.
+	IncludeStale bool
 }
 
 // MemoryListFilter is the structured filter passed to the repository List method.
@@ -146,6 +210,10 @@ type MemoryListFilter struct {
 	ApplyDecay      bool   // if true, score = relevance * pow(0.95, days_since)
 	Limit           int
 	Offset          int
+
+	// Health lifecycle filters (P1-A).
+	StatusFilter      []MemoryStatus // restrict to given statuses (empty = no filter)
+	ExcludeSuperseded bool           // skip status=superseded memories
 }
 
 // MemoryListResult is the structured response from the repository List method.

@@ -52,7 +52,13 @@ type memoryRow struct {
 	Archived        bool                    `db:"archived"`
 	ThreadID        *string                 `db:"thread_id"`
 	SourceTaskID    *uuid.UUID              `db:"source_task_id"`
-	ContentSimhash  *int64                  `db:"content_simhash"`
+	// Health lifecycle fields (migration 080).
+	Status         domain.MemoryStatus `db:"status"`
+	FreshnessScore float32             `db:"freshness_score"`
+	SupersededBy   *uuid.UUID          `db:"superseded_by"`
+	ValidFrom      *time.Time          `db:"valid_from"`
+	ValidUntil     *time.Time          `db:"valid_until"`
+	ContentSimhash *int64              `db:"content_simhash"`
 }
 
 func (r *memoryRow) toDomain() domain.Memory {
@@ -77,13 +83,19 @@ func (r *memoryRow) toDomain() domain.Memory {
 		Archived:        r.Archived,
 		ThreadID:        r.ThreadID,
 		SourceTaskID:    r.SourceTaskID,
+		Status:          r.Status,
+		FreshnessScore:  r.FreshnessScore,
+		SupersededBy:    r.SupersededBy,
+		ValidFrom:       r.ValidFrom,
+		ValidUntil:      r.ValidUntil,
 		ContentSimhash:  r.ContentSimhash,
 	}
 }
 
 const memoryColumns = `id, workspace_id, project_id, agent_id, key, content, scope, tags,
 	source_type, source_event_id, source_url, relevance, importance_score, created_at, updated_at, expires_at,
-	last_accessed_at, archived, thread_id, source_task_id, content_simhash`
+	last_accessed_at, archived, thread_id, source_task_id,
+	status, freshness_score, superseded_by, valid_from, valid_until, content_simhash`
 
 // Upsert inserts a new memory or updates content, tags, relevance, and expires_at on conflict.
 // The unique constraint is on (workspace_id, project_id, agent_id, key, scope).
@@ -102,6 +114,14 @@ func (r *MemoryRepo) Upsert(ctx context.Context, m *domain.Memory) error {
 		tags = pq.StringArray{}
 	}
 
+	// Default health fields so the NOT NULL constraint on status is always satisfied.
+	if m.Status == "" {
+		m.Status = domain.MemoryStatusActive
+	}
+	if m.FreshnessScore == 0 && m.Status == domain.MemoryStatusActive {
+		m.FreshnessScore = 1.0
+	}
+
 	// Use ON CONFLICT (id) because the composite unique constraint
 	// uq_memory_key_scope doesn't match when project_id or agent_id is NULL
 	// (PostgreSQL treats NULLs as distinct in UNIQUE constraints).
@@ -110,11 +130,13 @@ func (r *MemoryRepo) Upsert(ctx context.Context, m *domain.Memory) error {
 		INSERT INTO memories (
 			id, workspace_id, project_id, agent_id, key, content, scope,
 			tags, source_type, source_event_id, source_url, relevance, importance_score,
-			created_at, updated_at, expires_at, thread_id, source_task_id, content_simhash
+			created_at, updated_at, expires_at, thread_id, source_task_id,
+			status, freshness_score, superseded_by, valid_from, valid_until, content_simhash
 		) VALUES (
 			$1, $2, $3, $4, $5, $6, $7,
 			$8, $9, $10, $11, $12, $13,
-			$14, $15, $16, $17, $18, $19
+			$14, $15, $16, $17, $18,
+			$19, $20, $21, $22, $23, $24
 		)
 		ON CONFLICT (id) DO UPDATE
 			SET content          = EXCLUDED.content,
@@ -126,12 +148,18 @@ func (r *MemoryRepo) Upsert(ctx context.Context, m *domain.Memory) error {
 			    expires_at       = EXCLUDED.expires_at,
 			    thread_id        = EXCLUDED.thread_id,
 			    source_task_id   = EXCLUDED.source_task_id,
+			    status           = EXCLUDED.status,
+			    freshness_score  = EXCLUDED.freshness_score,
+			    superseded_by    = EXCLUDED.superseded_by,
+			    valid_from       = EXCLUDED.valid_from,
+			    valid_until      = EXCLUDED.valid_until,
 			    content_simhash  = EXCLUDED.content_simhash
 	`
 	_, err := r.db.ExecContext(ctx, q,
 		m.ID, m.WorkspaceID, m.ProjectID, m.AgentID, m.Key, m.Content, m.Scope,
 		tags, m.SourceType, m.SourceEventID, m.SourceURL, m.Relevance, m.ImportanceScore,
-		m.CreatedAt, m.UpdatedAt, m.ExpiresAt, m.ThreadID, m.SourceTaskID, m.ContentSimhash,
+		m.CreatedAt, m.UpdatedAt, m.ExpiresAt, m.ThreadID, m.SourceTaskID,
+		m.Status, m.FreshnessScore, m.SupersededBy, m.ValidFrom, m.ValidUntil, m.ContentSimhash,
 	)
 	return err
 }
