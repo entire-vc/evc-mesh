@@ -195,3 +195,111 @@ func TestEvalRequireComment_SkipsWhenTargetCategoryNotMatched(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, violation, "moving to 'review' should not trigger a rule scoped to 'done'")
 }
+
+// ============================================================================
+// capacity_limit.max_in_progress
+// ============================================================================
+
+func makeMaxInProgressRule(limit int, categories ...string) domain.Rule {
+	cfg, _ := json.Marshal(map[string]interface{}{
+		"limit":             limit,
+		"status_categories": categories,
+	})
+	return domain.Rule{
+		ID:          uuid.New(),
+		Name:        "Max in-progress tasks",
+		RuleType:    "capacity_limit.max_in_progress",
+		Enforcement: domain.RuleEnforcementBlock,
+		Config:      cfg,
+	}
+}
+
+func makeInProgressStatus() *domain.TaskStatus {
+	return &domain.TaskStatus{
+		ID:       uuid.New(),
+		Name:     "In Progress",
+		Category: domain.StatusCategoryInProgress,
+	}
+}
+
+func maxInProgressInput(actorID uuid.UUID, status *domain.TaskStatus) EvaluateInput {
+	taskID := uuid.New()
+	return EvaluateInput{
+		Action:       "move_task",
+		TaskID:       &taskID,
+		TargetStatus: status,
+		ActorID:      actorID,
+		ActorType:    domain.ActorTypeAgent,
+		WorkspaceID:  uuid.New(),
+	}
+}
+
+// TestEvalMaxInProgress_UnderLimit verifies that an actor with fewer tasks than
+// the limit is not blocked.
+func TestEvalMaxInProgress_UnderLimit(t *testing.T) {
+	actorID := uuid.New()
+	rule := makeMaxInProgressRule(2)
+	status := makeInProgressStatus()
+	input := maxInProgressInput(actorID, status)
+
+	// Only 1 live in_progress task — under the limit of 2.
+	ruleRepo := NewMockRuleRepository(1)
+	violation, err := evalMaxInProgress(context.Background(), rule, input, evaluatorDeps{ruleRepo: ruleRepo})
+	require.NoError(t, err)
+	assert.Nil(t, violation, "1 live task with limit=2 should not block")
+}
+
+// TestEvalMaxInProgress_AtLimit verifies that reaching the limit triggers a violation.
+func TestEvalMaxInProgress_AtLimit(t *testing.T) {
+	actorID := uuid.New()
+	rule := makeMaxInProgressRule(2)
+	status := makeInProgressStatus()
+	input := maxInProgressInput(actorID, status)
+
+	// 2 live in_progress tasks — at the limit.
+	ruleRepo := NewMockRuleRepository(2)
+	violation, err := evalMaxInProgress(context.Background(), rule, input, evaluatorDeps{ruleRepo: ruleRepo})
+	require.NoError(t, err)
+	require.NotNil(t, violation, "2 tasks with limit=2 should trigger a violation")
+	assert.Contains(t, violation.Message, "maximum of 2")
+}
+
+// TestEvalMaxInProgress_SoftDeletedTaskNotCounted is the primary regression test:
+// a soft-deleted task that still has status=in_progress must NOT consume a capacity slot.
+// The CountTasksByAssigneeAndCategory query now filters deleted_at IS NULL, so the
+// mock returns 1 (the live task only) — not 2 — even though the phantom exists in DB.
+func TestEvalMaxInProgress_SoftDeletedTaskNotCounted(t *testing.T) {
+	actorID := uuid.New()
+	rule := makeMaxInProgressRule(2)
+	status := makeInProgressStatus()
+	input := maxInProgressInput(actorID, status)
+
+	// The DB count returns 1 because the deleted task is excluded by deleted_at IS NULL.
+	// Before the fix this would have returned 2, blocking the move.
+	ruleRepo := NewMockRuleRepository(1)
+	violation, err := evalMaxInProgress(context.Background(), rule, input, evaluatorDeps{ruleRepo: ruleRepo})
+	require.NoError(t, err)
+	assert.Nil(t, violation, "soft-deleted in_progress task must not count against capacity limit")
+}
+
+// TestEvalMaxInProgress_SkipsNonMoveTask ensures the evaluator is a no-op for other actions.
+func TestEvalMaxInProgress_SkipsNonMoveTask(t *testing.T) {
+	rule := makeMaxInProgressRule(2)
+	input := EvaluateInput{Action: "assign_task", ActorID: uuid.New()}
+
+	violation, err := evalMaxInProgress(context.Background(), rule, input, evaluatorDeps{ruleRepo: NewMockRuleRepository(99)})
+	require.NoError(t, err)
+	assert.Nil(t, violation, "non-move_task action must be a no-op")
+}
+
+// TestEvalMaxInProgress_SkipsWhenTargetCategoryNotLimited verifies that moving to an
+// unlisted category (e.g. "done") does not trigger the in_progress capacity check.
+func TestEvalMaxInProgress_SkipsWhenTargetCategoryNotLimited(t *testing.T) {
+	rule := makeMaxInProgressRule(2, "in_progress")
+	doneStatus := makeDoneStatus()
+	input := maxInProgressInput(uuid.New(), doneStatus)
+
+	violation, err := evalMaxInProgress(context.Background(), rule, input, evaluatorDeps{ruleRepo: NewMockRuleRepository(99)})
+	require.NoError(t, err)
+	assert.Nil(t, violation, "moving to 'done' should not trigger the in_progress capacity rule")
+}
