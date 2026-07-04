@@ -2043,3 +2043,57 @@ func (m *MockVCSLinkRepository) ListByExternalID(_ context.Context, provider dom
 }
 
 var _ repository.VCSLinkRepository = (*MockVCSLinkRepository)(nil)
+
+// ---------------------------------------------------------------------------
+// MockRuleRepository — minimal stub for evaluator unit tests.
+// Only CountTasksByAssigneeAndCategory is implemented; all other methods panic.
+// ---------------------------------------------------------------------------
+
+type MockRuleRepository struct {
+	mu    sync.RWMutex
+	count int
+	err   error
+}
+
+func NewMockRuleRepository(count int) *MockRuleRepository {
+	return &MockRuleRepository{count: count}
+}
+
+func (m *MockRuleRepository) SetCount(n int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.count = n
+}
+
+func (m *MockRuleRepository) CountTasksByAssigneeAndCategory(_ context.Context, _, _ uuid.UUID, _ string, _ []string) (int, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.count, m.err
+}
+
+func (m *MockRuleRepository) Create(_ context.Context, _ *domain.Rule) error {
+	panic("MockRuleRepository.Create not implemented")
+}
+func (m *MockRuleRepository) GetByID(_ context.Context, _ uuid.UUID) (*domain.Rule, error) {
+	panic("MockRuleRepository.GetByID not implemented")
+}
+func (m *MockRuleRepository) Update(_ context.Context, _ *domain.Rule) error {
+	panic("MockRuleRepository.Update not implemented")
+}
+func (m *MockRuleRepository) Delete(_ context.Context, _ uuid.UUID) error {
+	panic("MockRuleRepository.Delete not implemented")
+}
+func (m *MockRuleRepository) ListByWorkspace(_ context.Context, _ uuid.UUID, _ bool) ([]domain.Rule, error) {
+	panic("MockRuleRepository.ListByWorkspace not implemented")
+}
+func (m *MockRuleRepository) ListByProject(_ context.Context, _ uuid.UUID, _ bool) ([]domain.Rule, error) {
+	panic("MockRuleRepository.ListByProject not implemented")
+}
+func (m *MockRuleRepository) ListByAgent(_ context.Context, _ uuid.UUID, _ bool) ([]domain.Rule, error) {
+	panic("MockRuleRepository.ListByAgent not implemented")
+}
+func (m *MockRuleRepository) GetEffective(_ context.Context, _ uuid.UUID, _, _ *uuid.UUID) ([]domain.Rule, error) {
+	panic("MockRuleRepository.GetEffective not implemented")
+}
+
+var _ repository.RuleRepository = (*MockRuleRepository)(nil)
