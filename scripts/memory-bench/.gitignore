@@ -1,0 +1,5 @@
+results/*.jsonl
+__pycache__/
+*.pyc
+.env.ci
+store_ids.jsonl

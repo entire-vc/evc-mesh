@@ -1,0 +1,93 @@
+name: Memory Benchmark (LongMemEval-S)
+
+on:
+  workflow_dispatch:
+    inputs:
+      tolerance:
+        description: 'Per-category regression tolerance (default: 0.05)'
+        required: false
+        default: '0.05'
+  push:
+    branches: [main]
+    paths:
+      - 'internal/service/memory_service.go'
+      - 'internal/repository/postgres/memory_repo.go'
+      - 'internal/repository/postgres/memory_edges_repo.go'
+      - 'internal/mcp/tools.go'
+      - 'internal/mcp/server.go'
+      - 'internal/reconciler/**'
+      - 'scripts/memory-bench/**'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'internal/service/memory_service.go'
+      - 'internal/repository/postgres/memory_repo.go'
+      - 'internal/repository/postgres/memory_edges_repo.go'
+      - 'internal/mcp/tools.go'
+      - 'internal/mcp/server.go'
+      - 'internal/reconciler/**'
+      - 'scripts/memory-bench/**'
+
+jobs:
+  memory-bench:
+    name: LongMemEval-S regression gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout evc-mesh
+        uses: actions/checkout@v4
+
+      - name: Checkout evc-mesh-mcp
+        uses: actions/checkout@v4
+        with:
+          repository: entire-vc/evc-mesh-mcp
+          token: ${{ secrets.GITHUB_TOKEN }}
+          path: evc-mesh-mcp
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: evc-mesh-mcp/go.mod
+          cache-dependency-path: evc-mesh-mcp/go.sum
+
+      - name: Cross-compile mesh-mcp (linux/amd64)
+        run: |
+          cd evc-mesh-mcp
+          GOOS=linux GOARCH=amd64 go build -o ../mesh-mcp-bin ./cmd/mesh-mcp
+          chmod +x ../mesh-mcp-bin
+          echo "mesh-mcp built: $(file ../mesh-mcp-bin)"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Python dependencies
+        run: pip install openai mcp httpx
+
+      - name: Run LongMemEval-S regression gate
+        env:
+          MESH_API_URL: ${{ secrets.MESH_API_URL }}
+          MESH_AGENT_KEY: ${{ secrets.MESH_BENCH_KEY }}
+          LME_JUDGE_API_KEY: ${{ secrets.LME_JUDGE_API_KEY }}
+          LME_JUDGE_BASE_URL: ${{ vars.LME_JUDGE_BASE_URL || 'https://openrouter.ai/api/v1' }}
+          LME_JUDGE_MODEL: ${{ vars.LME_JUDGE_MODEL || 'openai/gpt-4o-mini' }}
+          LME_CHAT_API_KEY: ${{ secrets.LME_JUDGE_API_KEY }}
+          LME_CHAT_BASE_URL: ${{ vars.LME_JUDGE_BASE_URL || 'https://openrouter.ai/api/v1' }}
+          LME_CHAT_MODEL: ${{ vars.LME_JUDGE_MODEL || 'openai/gpt-4o-mini' }}
+          MESH_MCP_BIN: ${{ github.workspace }}/mesh-mcp-bin
+          RECALL_GRAPH_ENABLED: 'true'
+          LME_TOP_K: '10'
+        run: |
+          cd scripts/memory-bench
+          python run_ci.py --tolerance ${{ inputs.tolerance || '0.05' }}
+
+      - name: Upload benchmark results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: memory-bench-results
+          path: |
+            scripts/memory-bench/results/
+          retention-days: 30
