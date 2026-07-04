@@ -1633,8 +1633,9 @@ func (s *Server) handleRecall(ctx context.Context, request mcpsdk.CallToolReques
 	since := mcpsdk.ParseString(request, "since", "")
 	until := mcpsdk.ParseString(request, "until", "")
 	relevanceMin := mcpsdk.ParseFloat64(request, "relevance_min", 0)
-	applyDecay := mcpsdk.ParseBoolean(request, "apply_recency_decay", false)
+	applyDecay := mcpsdk.ParseBoolean(request, "apply_recency_decay", true)
 	recencyWeight := mcpsdk.ParseFloat64(request, "recency_weight", 0)
+	halfLifeDays := mcpsdk.ParseInt(request, "half_life_days", 0)
 	orderBy := mcpsdk.ParseString(request, "order_by", "")
 	includeExpired := mcpsdk.ParseBoolean(request, "include_expired", false)
 	// exclude_superseded defaults to true (server-side default); pass false to include superseded memories.
@@ -1658,6 +1659,7 @@ func (s *Server) handleRecall(ctx context.Context, request mcpsdk.CallToolReques
 		RelevanceMin:      relevanceMin,
 		ApplyRecencyDecay: applyDecay,
 		RecencyWeight:     recencyWeight,
+		HalfLifeDays:      halfLifeDays,
 		OrderBy:           orderBy,
 		IncludeExpired:    includeExpired,
 		ExcludeSuperseded: excludeSuperseded,

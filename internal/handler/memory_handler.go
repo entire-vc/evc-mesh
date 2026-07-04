@@ -84,6 +84,7 @@ type searchMemoriesQuery struct {
 	ApplyRecencyDecay string `query:"apply_recency_decay"`
 	RecencyWeight     string `query:"recency_weight"` // float [0,1]; 0 (default) = legacy FTS-only ordering
 	OrderBy           string `query:"order_by"`
+	HalfLifeDays      string `query:"half_life_days"` // float; overrides server default (30d)
 	IncludeExpired    string `query:"include_expired"`
 	ExcludeSuperseded string `query:"exclude_superseded"` // bool; default true at service layer
 	Limit             string `query:"limit"`
@@ -435,6 +436,13 @@ func (h *MemoryHandler) Search(c echo.Context) error {
 			return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid recency_weight: must be a number in [0,1]"))
 		}
 		opts.RecencyWeight = f
+	}
+	if q.HalfLifeDays != "" {
+		f, parseErr := strconv.ParseFloat(q.HalfLifeDays, 64)
+		if parseErr != nil || f < 1 || f > 365 {
+			return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid half_life_days: must be a number in [1,365]"))
+		}
+		opts.HalfLifeDays = f
 	}
 
 	results, err := h.memoryService.Recall(c.Request().Context(), opts)

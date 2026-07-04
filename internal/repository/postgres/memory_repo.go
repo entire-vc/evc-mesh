@@ -748,8 +748,18 @@ func (r *MemoryRepo) List(ctx context.Context, filter domain.MemoryListFilter) (
 	case "created_at:asc":
 		orderExpr = "created_at ASC"
 	case "decayed_relevance:desc":
-		// Recency-weighted relevance: exponential decay with base 0.95 per day.
-		orderExpr = "relevance * pow(0.95, EXTRACT(EPOCH FROM (NOW() - created_at)) / 86400) DESC"
+		// Recency-weighted relevance incorporating freshness_score and configurable half-life.
+		// Formula: relevance * freshness_score * exp(-Δt * ln2 / half_life_days)
+		halfLife := filter.HalfLifeDays
+		if halfLife <= 0 {
+			halfLife = 30.0
+		}
+		args = append(args, halfLife)
+		orderExpr = fmt.Sprintf(
+			"relevance * freshness_score * EXP(-EXTRACT(EPOCH FROM (NOW() - created_at)) / 86400.0 * 0.693147 / $%d) DESC",
+			argIdx,
+		)
+		argIdx++
 		decayApplied = true
 	default:
 		// default: created_at:desc
