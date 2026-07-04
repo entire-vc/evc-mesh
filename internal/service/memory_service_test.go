@@ -2142,3 +2142,190 @@ func TestSetProjectKnowledge_Amendment4_CanonicalSupersede(t *testing.T) {
 		assert.False(t, supersedeCalled, "generic-only overlap must not create supersedes edge")
 	})
 }
+
+// ---------------------------------------------------------------------------
+// P1-D: Recency-aware recall — decay formula + freshness_score + RecencyScore
+// ---------------------------------------------------------------------------
+
+// TestRecall_DecayScoreFormula verifies that a 1-day-old memory scores higher
+// than a 60-day-old memory when ApplyDecay=true with a 30-day half-life.
+func TestRecall_DecayScoreFormula(t *testing.T) {
+	now := time.Now()
+	fresh := domain.ScoredMemory{
+		Memory: domain.Memory{
+			ID:              uuid.New(),
+			Key:             "fresh-mem",
+			CreatedAt:       now.Add(-24 * time.Hour),
+			FreshnessScore:  1.0,
+			ImportanceScore: 0.8,
+		},
+		Score: 1.0,
+	}
+	old := domain.ScoredMemory{
+		Memory: domain.Memory{
+			ID:              uuid.New(),
+			Key:             "old-mem",
+			CreatedAt:       now.Add(-60 * 24 * time.Hour),
+			FreshnessScore:  1.0,
+			ImportanceScore: 0.8,
+		},
+		Score: 1.0,
+	}
+
+	repo := &mockMemoryRepo{
+		fullTextSearchFn: func(_ context.Context, _ string, _ uuid.UUID, _ *uuid.UUID, _ string, _ []string, _ int, _ float64) ([]domain.ScoredMemory, error) {
+			return []domain.ScoredMemory{fresh, old}, nil
+		},
+	}
+
+	svc := newMemoryService(repo)
+	results, err := svc.Recall(context.Background(), domain.RecallOpts{
+		Query:        "test",
+		WorkspaceID:  uuid.New(),
+		Limit:        10,
+		ApplyDecay:   true,
+		HalfLifeDays: 30,
+	})
+
+	require.NoError(t, err)
+	require.Len(t, results, 2)
+
+	// find by key
+	var freshResult, oldResult domain.ScoredMemory
+	for _, r := range results {
+		if r.Key == "fresh-mem" {
+			freshResult = r
+		} else {
+			oldResult = r
+		}
+	}
+
+	assert.Greater(t, freshResult.Score, oldResult.Score,
+		"1d-old memory must outscore 60d-old memory with 30d half-life")
+	// at 30d half-life: 60d old → factor ≈ 0.25; 1d old → factor ≈ 0.977
+	assert.InDelta(t, 0.977, freshResult.RecencyScore, 0.02,
+		"RecencyScore for 1d-old memory should be ~0.977 with 30d half-life")
+	assert.InDelta(t, 0.25, oldResult.RecencyScore, 0.02,
+		"RecencyScore for 60d-old memory should be ~0.25 with 30d half-life")
+}
+
+// TestRecall_FreshnessScoreMultiplied verifies that FreshnessScore is always
+// multiplied into the recall score even when ApplyDecay is false.
+func TestRecall_FreshnessScoreMultiplied(t *testing.T) {
+	now := time.Now()
+	active := domain.ScoredMemory{
+		Memory: domain.Memory{
+			ID:              uuid.New(),
+			Key:             "active-mem",
+			CreatedAt:       now,
+			FreshnessScore:  1.0,
+			ImportanceScore: 0.8,
+		},
+		Score: 1.0,
+	}
+	stale := domain.ScoredMemory{
+		Memory: domain.Memory{
+			ID:              uuid.New(),
+			Key:             "stale-mem",
+			CreatedAt:       now,
+			FreshnessScore:  0.25,
+			ImportanceScore: 0.8,
+		},
+		Score: 1.0,
+	}
+
+	repo := &mockMemoryRepo{
+		fullTextSearchFn: func(_ context.Context, _ string, _ uuid.UUID, _ *uuid.UUID, _ string, _ []string, _ int, _ float64) ([]domain.ScoredMemory, error) {
+			return []domain.ScoredMemory{active, stale}, nil
+		},
+	}
+
+	svc := newMemoryService(repo)
+	results, err := svc.Recall(context.Background(), domain.RecallOpts{
+		Query:       "test",
+		WorkspaceID: uuid.New(),
+		Limit:       10,
+		ApplyDecay:  false, // no time decay — only freshness_score
+	})
+
+	require.NoError(t, err)
+	require.Len(t, results, 2)
+
+	var activeResult, staleResult domain.ScoredMemory
+	for _, r := range results {
+		if r.Key == "active-mem" {
+			activeResult = r
+		} else {
+			staleResult = r
+		}
+	}
+
+	assert.Greater(t, activeResult.Score, staleResult.Score,
+		"active memory (freshness=1.0) must outscore stale memory (freshness=0.25)")
+	// RRF ranks differ by 1 position so the ratio is ≈ 4 * (rank0_rrf/rank1_rrf) ≈ 4.06.
+	// Assert the ratio is in [3.5, 4.5] — captures the 4× freshness multiplier.
+	ratio := activeResult.Score / staleResult.Score
+	assert.True(t, ratio > 3.5 && ratio < 4.5,
+		"score ratio must be ~4 (freshness 1.0 vs 0.25), got %.3f", ratio)
+	// RecencyScore must be 1.0 when decay is not applied.
+	assert.InDelta(t, 1.0, activeResult.RecencyScore, 0.001,
+		"RecencyScore must be 1.0 when ApplyDecay=false")
+	assert.InDelta(t, 1.0, staleResult.RecencyScore, 0.001,
+		"RecencyScore must be 1.0 when ApplyDecay=false")
+}
+
+// TestRecall_HalfLifeOverride verifies that a shorter HalfLifeDays results in
+// a larger penalty for the same memory age compared to a longer half-life.
+func TestRecall_HalfLifeOverride(t *testing.T) {
+	now := time.Now()
+	mem := domain.ScoredMemory{
+		Memory: domain.Memory{
+			ID:              uuid.New(),
+			Key:             "test-mem",
+			CreatedAt:       now.Add(-30 * 24 * time.Hour), // 30 days old
+			FreshnessScore:  1.0,
+			ImportanceScore: 0.8,
+		},
+		Score: 1.0,
+	}
+
+	makeRepo := func() *mockMemoryRepo {
+		return &mockMemoryRepo{
+			fullTextSearchFn: func(_ context.Context, _ string, _ uuid.UUID, _ *uuid.UUID, _ string, _ []string, _ int, _ float64) ([]domain.ScoredMemory, error) {
+				return []domain.ScoredMemory{mem}, nil
+			},
+		}
+	}
+
+	// Short half-life (10d): at age 30d, score ≈ exp(-ln2/10*30) = exp(-2.08) ≈ 0.125
+	repoA := makeRepo()
+	svcA := newMemoryService(repoA)
+	resA, err := svcA.Recall(context.Background(), domain.RecallOpts{
+		Query:        "test",
+		WorkspaceID:  uuid.New(),
+		Limit:        10,
+		ApplyDecay:   true,
+		HalfLifeDays: 10,
+	})
+	require.NoError(t, err)
+	require.Len(t, resA, 1)
+
+	// Long half-life (90d): at age 30d, score ≈ exp(-ln2/90*30) = exp(-0.231) ≈ 0.794
+	repoB := makeRepo()
+	svcB := newMemoryService(repoB)
+	resB, err := svcB.Recall(context.Background(), domain.RecallOpts{
+		Query:        "test",
+		WorkspaceID:  uuid.New(),
+		Limit:        10,
+		ApplyDecay:   true,
+		HalfLifeDays: 90,
+	})
+	require.NoError(t, err)
+	require.Len(t, resB, 1)
+
+	assert.Less(t, resA[0].Score, resB[0].Score,
+		"shorter half-life must give lower score for same age")
+	// 30d-old, half-life 10d: exp(-ln2/10*30) = 2^-3 ≈ 0.125
+	assert.InDelta(t, 0.125, resA[0].RecencyScore, 0.02,
+		"30d-old memory with 10d half-life should have RecencyScore ≈ 0.125")
+}
