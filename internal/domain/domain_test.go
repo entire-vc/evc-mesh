@@ -1290,3 +1290,38 @@ func TestAgent_ComputedStatus(t *testing.T) {
 		})
 	}
 }
+
+// ---------------------------------------------------------------------------
+// MemoryStatus tests (P1-A)
+// ---------------------------------------------------------------------------
+
+func TestMemoryStatus_StatusFreshnessScore(t *testing.T) {
+	tests := []struct {
+		status MemoryStatus
+		want   float32
+	}{
+		{MemoryStatusActive, 1.0},
+		{MemoryStatusStale, 0.25},
+		{MemoryStatusSuperseded, 0.1},
+		{MemoryStatusArchived, 0.0},
+		{MemoryStatusConflicted, 0.5},
+		{MemoryStatusReviewNeeded, 0.5},
+		{"unknown", 0.5},
+	}
+	for _, tt := range tests {
+		t.Run(string(tt.status), func(t *testing.T) {
+			got := tt.status.StatusFreshnessScore()
+			assert.InDelta(t, float64(tt.want), float64(got), 1e-6,
+				"StatusFreshnessScore(%q) = %v, want %v", tt.status, got, tt.want)
+		})
+	}
+}
+
+func TestMemoryStatus_Constants(t *testing.T) {
+	assert.Equal(t, MemoryStatus("active"), MemoryStatusActive)
+	assert.Equal(t, MemoryStatus("stale"), MemoryStatusStale)
+	assert.Equal(t, MemoryStatus("superseded"), MemoryStatusSuperseded)
+	assert.Equal(t, MemoryStatus("archived"), MemoryStatusArchived)
+	assert.Equal(t, MemoryStatus("conflicted"), MemoryStatusConflicted)
+	assert.Equal(t, MemoryStatus("review_needed"), MemoryStatusReviewNeeded)
+}
