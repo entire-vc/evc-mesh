@@ -42,7 +42,7 @@ type rememberRequest struct {
 // rememberResponse wraps the upserted memory with the operation outcome.
 type rememberResponse struct {
 	Memory     *domain.Memory `json:"memory"`
-	Outcome    string         `json:"outcome"`               // "created" or "updated"
+	Outcome    string         `json:"outcome"`                // "created" or "updated"
 	NearDupKey string         `json:"near_dup_key,omitempty"` // non-empty when a near-duplicate was detected
 }
 
