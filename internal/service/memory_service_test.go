@@ -26,7 +26,7 @@ type mockMemoryRepo struct {
 	upsertFn                           func(ctx context.Context, mem *domain.Memory) error
 	getByIDFn                          func(ctx context.Context, id uuid.UUID) (*domain.Memory, error)
 	getByKeyFn                         func(ctx context.Context, wsID uuid.UUID, projID *uuid.UUID, agentID *uuid.UUID, key string, scope domain.MemoryScope) (*domain.Memory, error)
-	fullTextSearchFn                   func(ctx context.Context, query string, wsID uuid.UUID, projID *uuid.UUID, scope string, tags []string, limit int) ([]domain.ScoredMemory, error)
+	fullTextSearchFn                   func(ctx context.Context, query string, wsID uuid.UUID, projID *uuid.UUID, scope string, tags []string, limit int, recencyWeight float64) ([]domain.ScoredMemory, error)
 	findByScopeFn                      func(ctx context.Context, wsID uuid.UUID, projID *uuid.UUID, scope string, limit int) ([]domain.Memory, error)
 	listByWorkspaceProjectFn           func(ctx context.Context, wsID uuid.UUID, projID *uuid.UUID, filter domain.MemoryListFilter) ([]domain.Memory, int64, error)
 	deleteFn                           func(ctx context.Context, id uuid.UUID) error
@@ -59,9 +59,9 @@ func (m *mockMemoryRepo) GetByKey(ctx context.Context, wsID uuid.UUID, projID, a
 	return nil, nil
 }
 
-func (m *mockMemoryRepo) FullTextSearch(ctx context.Context, query string, wsID uuid.UUID, projID *uuid.UUID, scope string, tags []string, limit int) ([]domain.ScoredMemory, error) {
+func (m *mockMemoryRepo) FullTextSearch(ctx context.Context, query string, wsID uuid.UUID, projID *uuid.UUID, scope string, tags []string, limit int, recencyWeight float64) ([]domain.ScoredMemory, error) {
 	if m.fullTextSearchFn != nil {
-		return m.fullTextSearchFn(ctx, query, wsID, projID, scope, tags, limit)
+		return m.fullTextSearchFn(ctx, query, wsID, projID, scope, tags, limit, recencyWeight)
 	}
 	return nil, nil
 }
@@ -325,7 +325,7 @@ func TestRecall_BasicSearch(t *testing.T) {
 
 	boostCalled := false
 	repo := &mockMemoryRepo{
-		fullTextSearchFn: func(_ context.Context, _ string, _ uuid.UUID, _ *uuid.UUID, _ string, _ []string, _ int) ([]domain.ScoredMemory, error) {
+		fullTextSearchFn: func(_ context.Context, _ string, _ uuid.UUID, _ *uuid.UUID, _ string, _ []string, _ int, _ float64) ([]domain.ScoredMemory, error) {
 			return results, nil
 		},
 		boostRelevanceFn: func(_ context.Context, ids []uuid.UUID) error {
@@ -347,6 +347,45 @@ func TestRecall_BasicSearch(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, scored, 2)
 	assert.True(t, boostCalled, "BoostRelevance should be called after a successful search")
+}
+
+// ---------------------------------------------------------------------------
+// TestRecall_RecencyWeightPassthrough — the recency_weight param is clamped to [0,1]
+// and threaded into FullTextSearch. Default (unset) must pass 0 = legacy behavior.
+// ---------------------------------------------------------------------------
+
+func TestRecall_RecencyWeightPassthrough(t *testing.T) {
+	cases := []struct {
+		name  string
+		input float64
+		want  float64
+	}{
+		{"default zero", 0, 0},
+		{"mid", 0.5, 0.5},
+		{"one", 1, 1},
+		{"above one clamps", 1.7, 1},
+		{"negative clamps", -0.3, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var gotWeight float64
+			repo := &mockMemoryRepo{
+				fullTextSearchFn: func(_ context.Context, _ string, _ uuid.UUID, _ *uuid.UUID, _ string, _ []string, _ int, recencyWeight float64) ([]domain.ScoredMemory, error) {
+					gotWeight = recencyWeight
+					return nil, nil
+				},
+			}
+			svc := newMemoryService(repo)
+			_, err := svc.Recall(context.Background(), domain.RecallOpts{
+				Query:         "q",
+				WorkspaceID:   uuid.New(),
+				Limit:         10,
+				RecencyWeight: tc.input,
+			})
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, gotWeight, "clamped recency weight passed to repo")
+		})
+	}
 }
 
 // ---------------------------------------------------------------------------

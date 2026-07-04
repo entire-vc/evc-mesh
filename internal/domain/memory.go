@@ -105,7 +105,11 @@ type RecallOpts struct {
 	IncludeExpired bool             // if false, filters expires_at > now() OR expires_at IS NULL
 	OrderBy        string           // "created_at:desc", "relevance:desc", "decayed_relevance:desc"
 	ApplyDecay     bool             // if true, sort by relevance * pow(0.95, days_since_created)
-	Offset         int
+	// RecencyWeight blends an exponential recency-decay factor into the full-text
+	// ranking. 0.0 (default) = exactly the legacy behavior (rank by FTS score only);
+	// 1.0 = rank purely by recency. Values are clamped to [0,1]. See MemoryRepository.FullTextSearch.
+	RecencyWeight float64
+	Offset        int
 }
 
 // MemoryListFilter is the structured filter passed to the repository List method.

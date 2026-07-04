@@ -191,7 +191,12 @@ type scoredMemoryRow struct {
 
 // FullTextSearch returns memories ranked by relevance to query using PostgreSQL ts_rank_cd.
 // Results are further filtered by scope, tags (overlap), and expiry.
-func (r *MemoryRepo) FullTextSearch(ctx context.Context, query string, workspaceID uuid.UUID, projectID *uuid.UUID, scope string, tags []string, limit int) ([]domain.ScoredMemory, error) {
+//
+// recencyWeight blends an exponential recency-decay factor into the ranking (see
+// applyRecencyBlend). recencyWeight <= 0 is the legacy path: results keep the exact
+// FTS-only ordering (ORDER BY score DESC, relevance DESC) and their raw ts_rank scores,
+// byte-for-byte identical to the pre-recency behavior.
+func (r *MemoryRepo) FullTextSearch(ctx context.Context, query string, workspaceID uuid.UUID, projectID *uuid.UUID, scope string, tags []string, limit int, recencyWeight float64) ([]domain.ScoredMemory, error) {
 	if limit <= 0 {
 		limit = 20
 	}
@@ -251,6 +256,10 @@ func (r *MemoryRepo) FullTextSearch(ctx context.Context, query string, workspace
 			rows = orRows
 		}
 	}
+
+	// Recency-aware re-ranking (WI-1b). Applied AFTER the AND+OR merge so it covers
+	// both paths consistently. A no-op when recencyWeight <= 0 (legacy ordering preserved).
+	applyRecencyBlend(rows, recencyWeight, time.Now())
 
 	result := make([]domain.ScoredMemory, len(rows))
 	ids := make([]uuid.UUID, len(rows))
@@ -384,6 +393,83 @@ func (r *MemoryRepo) ftsORFallback(
 		merged = merged[:limit]
 	}
 	return merged, nil
+}
+
+// recencyHalfLifeDays is the half-life (in days) for the recency-decay factor blended
+// into full-text ranking by applyRecencyBlend. Tunable — metronix uses 30d.
+const recencyHalfLifeDays = 30.0
+
+// applyRecencyBlend reorders rows in place by a blend of their (min-max normalized)
+// full-text score and an exponential recency-decay factor:
+//
+//	recency  = exp(-Δt · ln2 / halfLife)      // Δt = now − updated_at, halfLife = 30d
+//	blended  = (1−w)·normFTS + w·recency      // w = recencyWeight, clamped to [0,1]
+//
+// The FTS scores are normalized to 0..1 across the result set so the two terms are
+// comparable. Rows keep their original Score value — only their order changes — so the
+// downstream RRF stage (which ranks by position) picks up the recency signal while the
+// reported score semantics stay as raw ts_rank.
+//
+// When recencyWeight <= 0 this is a strict no-op: neither order nor scores change, giving
+// byte-for-byte identical output to the legacy FTS-only path. `now` is injected for testability.
+func applyRecencyBlend(rows []scoredMemoryRow, recencyWeight float64, now time.Time) {
+	if recencyWeight <= 0 || len(rows) < 2 {
+		return
+	}
+	if recencyWeight > 1 {
+		recencyWeight = 1
+	}
+
+	// Min-max range of the raw FTS scores across the result set.
+	minScore, maxScore := rows[0].Score, rows[0].Score
+	for i := 1; i < len(rows); i++ {
+		if rows[i].Score < minScore {
+			minScore = rows[i].Score
+		}
+		if rows[i].Score > maxScore {
+			maxScore = rows[i].Score
+		}
+	}
+	span := maxScore - minScore
+	lambda := math.Ln2 / recencyHalfLifeDays
+
+	type ranked struct {
+		row     scoredMemoryRow
+		blended float64
+		fts     float64
+	}
+	scored := make([]ranked, len(rows))
+	for i := range rows {
+		normFTS := 1.0 // when all scores are equal, FTS term is neutral and recency decides
+		if span > 0 {
+			normFTS = (rows[i].Score - minScore) / span
+		}
+		ageDays := now.Sub(rows[i].UpdatedAt).Hours() / 24
+		if ageDays < 0 {
+			ageDays = 0 // clock skew / future timestamps → treat as brand new
+		}
+		recency := math.Exp(-lambda * ageDays)
+		scored[i] = ranked{
+			row:     rows[i],
+			blended: (1-recencyWeight)*normFTS + recencyWeight*recency,
+			fts:     rows[i].Score,
+		}
+	}
+
+	sort.SliceStable(scored, func(i, j int) bool {
+		if scored[i].blended != scored[j].blended {
+			return scored[i].blended > scored[j].blended
+		}
+		// Deterministic tie-breaks: higher raw FTS first, then more recently updated.
+		if scored[i].fts != scored[j].fts {
+			return scored[i].fts > scored[j].fts
+		}
+		return scored[i].row.UpdatedAt.After(scored[j].row.UpdatedAt)
+	})
+
+	for i := range scored {
+		rows[i] = scored[i].row
+	}
 }
 
 // FindByScope returns memories for a workspace/project filtered by scope, ordered by relevance descending.

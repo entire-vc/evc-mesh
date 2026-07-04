@@ -683,6 +683,7 @@ type RecallMemoriesParams struct {
 	Until             string
 	RelevanceMin      float64
 	ApplyRecencyDecay bool
+	RecencyWeight     float64
 	OrderBy           string
 	IncludeExpired    bool
 	Limit             int
@@ -724,6 +725,9 @@ func (c *RESTClient) RecallMemories(ctx context.Context, p RecallMemoriesParams)
 	}
 	if p.ApplyRecencyDecay {
 		params.Set("apply_recency_decay", "true")
+	}
+	if p.RecencyWeight > 0 {
+		params.Set("recency_weight", fmt.Sprintf("%g", p.RecencyWeight))
 	}
 	if p.OrderBy != "" {
 		params.Set("order_by", p.OrderBy)
