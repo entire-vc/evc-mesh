@@ -1634,6 +1634,7 @@ func (s *Server) handleRecall(ctx context.Context, request mcpsdk.CallToolReques
 	until := mcpsdk.ParseString(request, "until", "")
 	relevanceMin := mcpsdk.ParseFloat64(request, "relevance_min", 0)
 	applyDecay := mcpsdk.ParseBoolean(request, "apply_recency_decay", false)
+	recencyWeight := mcpsdk.ParseFloat64(request, "recency_weight", 0)
 	orderBy := mcpsdk.ParseString(request, "order_by", "")
 	includeExpired := mcpsdk.ParseBoolean(request, "include_expired", false)
 
@@ -1649,6 +1650,7 @@ func (s *Server) handleRecall(ctx context.Context, request mcpsdk.CallToolReques
 		Until:             until,
 		RelevanceMin:      relevanceMin,
 		ApplyRecencyDecay: applyDecay,
+		RecencyWeight:     recencyWeight,
 		OrderBy:           orderBy,
 		IncludeExpired:    includeExpired,
 		Limit:             limit,

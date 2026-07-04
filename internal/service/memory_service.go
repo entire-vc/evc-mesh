@@ -633,8 +633,16 @@ func (s *memoryService) Recall(ctx context.Context, opts domain.RecallOpts) ([]d
 
 	poolSize := opts.Limit * candidateMultiplier
 
+	// Clamp the optional recency weight to [0,1]. 0 (default) preserves legacy FTS-only ordering.
+	recencyWeight := opts.RecencyWeight
+	if recencyWeight < 0 {
+		recencyWeight = 0
+	} else if recencyWeight > 1 {
+		recencyWeight = 1
+	}
+
 	// ── Step 1: Keyword search (always available) ──────────────────────────────
-	kwResults, err := s.memRepo.FullTextSearch(ctx, opts.Query, opts.WorkspaceID, projID, string(opts.Scope), opts.Tags, poolSize)
+	kwResults, err := s.memRepo.FullTextSearch(ctx, opts.Query, opts.WorkspaceID, projID, string(opts.Scope), opts.Tags, poolSize, recencyWeight)
 	if err != nil {
 		return nil, fmt.Errorf("memory recall: full text search: %w", err)
 	}
@@ -1277,7 +1285,8 @@ func (s *memoryService) FindRelated(ctx context.Context, memoryID uuid.UUID, lim
 	}
 
 	// Fetch slightly more than limit to account for excluding the source memory.
-	results, err := s.memRepo.FullTextSearch(ctx, query, mem.WorkspaceID, projID, "", nil, limit+1)
+	// recencyWeight=0: this related-memory path keeps legacy FTS-only ordering.
+	results, err := s.memRepo.FullTextSearch(ctx, query, mem.WorkspaceID, projID, "", nil, limit+1, 0)
 	if err != nil {
 		return nil, fmt.Errorf("memory find related: search: %w", err)
 	}

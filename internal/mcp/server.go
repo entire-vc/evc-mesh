@@ -326,6 +326,7 @@ func (s *Server) registerCoreTools() {
 		mcpsdk.WithString("until", mcpsdk.Description("Return memories created at or before this RFC3339 timestamp.")),
 		mcpsdk.WithNumber("relevance_min", mcpsdk.Description("Minimum relevance score (0-1).")),
 		mcpsdk.WithBoolean("apply_recency_decay", mcpsdk.Description("Sort by relevance * 0.95^days_since_created."), mcpsdk.DefaultBool(false)),
+		mcpsdk.WithNumber("recency_weight", mcpsdk.Description("Blend recency into ranking, 0-1. 0 (default) = rank by full-text score only; higher values favor more recently updated memories (exp decay, ~30d half-life). Use for temporal questions ('latest', 'most recent')."), mcpsdk.DefaultNumber(0)),
 		mcpsdk.WithString("order_by", mcpsdk.Description("Sort order: created_at:desc (default), created_at:asc, relevance:desc, decayed_relevance:desc.")),
 		mcpsdk.WithBoolean("include_expired", mcpsdk.Description("Include expired memories (default false)."), mcpsdk.DefaultBool(false)),
 		mcpsdk.WithNumber("limit", mcpsdk.Description("Max results (default 10, max 50).")),

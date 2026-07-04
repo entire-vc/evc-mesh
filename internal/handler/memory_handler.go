@@ -81,6 +81,7 @@ type searchMemoriesQuery struct {
 	RelevanceMin      string `query:"relevance_min"`
 	MinImportance     string `query:"min_importance"` // float; default 0.4 applied at service layer
 	ApplyRecencyDecay string `query:"apply_recency_decay"`
+	RecencyWeight     string `query:"recency_weight"` // float [0,1]; 0 (default) = legacy FTS-only ordering
 	OrderBy           string `query:"order_by"`
 	IncludeExpired    string `query:"include_expired"`
 	Limit             string `query:"limit"`
@@ -420,6 +421,13 @@ func (h *MemoryHandler) Search(c echo.Context) error {
 		}
 		mf := float32(f)
 		opts.MinImportance = &mf
+	}
+	if q.RecencyWeight != "" {
+		f, parseErr := strconv.ParseFloat(q.RecencyWeight, 64)
+		if parseErr != nil || f < 0 || f > 1 {
+			return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid recency_weight: must be a number in [0,1]"))
+		}
+		opts.RecencyWeight = f
 	}
 
 	results, err := h.memoryService.Recall(c.Request().Context(), opts)

@@ -575,7 +575,11 @@ type MemoryRepository interface {
 	Upsert(ctx context.Context, mem *domain.Memory) error
 	GetByID(ctx context.Context, id uuid.UUID) (*domain.Memory, error)
 	GetByKey(ctx context.Context, workspaceID uuid.UUID, projectID, agentID *uuid.UUID, key string, scope domain.MemoryScope) (*domain.Memory, error)
-	FullTextSearch(ctx context.Context, query string, workspaceID uuid.UUID, projectID *uuid.UUID, scope string, tags []string, limit int) ([]domain.ScoredMemory, error)
+	// FullTextSearch ranks memories by tsvector relevance (ts_rank_cd). When recencyWeight > 0
+	// an exponential recency-decay factor (half-life ~30d) is blended into the ranking and
+	// results are reordered by the blended score; recencyWeight == 0 preserves the legacy
+	// FTS-only ordering byte-for-byte. Values outside [0,1] are clamped.
+	FullTextSearch(ctx context.Context, query string, workspaceID uuid.UUID, projectID *uuid.UUID, scope string, tags []string, limit int, recencyWeight float64) ([]domain.ScoredMemory, error)
 	FindByScope(ctx context.Context, workspaceID uuid.UUID, projectID *uuid.UUID, scope string, limit int) ([]domain.Memory, error)
 	// ListByWorkspaceProject returns non-expired memories for a workspace/project pair.
 	// filter.Limit/Offset/MinImportance/TagsAny are applied to the workspace-tier when projectID is nil.
