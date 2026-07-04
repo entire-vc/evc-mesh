@@ -367,12 +367,8 @@ func (h *MemoryHandler) Search(c echo.Context) error {
 		}
 	}
 
-	// ExcludeSuperseded defaults to true at the service layer; the caller can opt out
-	// by passing exclude_superseded=false explicitly.
-	excludeSuperseded := true
-	if q.ExcludeSuperseded == "false" || q.ExcludeSuperseded == "0" {
-		excludeSuperseded = false
-	}
+	// ExcludeSuperseded defaults to true; pass exclude_superseded=false to include superseded.
+	excludeSuperseded := q.ExcludeSuperseded != "false" && q.ExcludeSuperseded != "0"
 
 	opts := domain.RecallOpts{
 		Query:             q.Q,

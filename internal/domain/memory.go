@@ -212,8 +212,8 @@ type MemoryListFilter struct {
 	RelevanceMin    *float32         // relevance >=
 	MinImportance   *float32         // importance_score >= (default 0.4 applied at service layer)
 	IncludeExpired  bool
-	IncludeArchived bool   // if false (default), only archived=false rows are returned
-	OrderBy         string // "created_at:desc", "relevance:desc", "decayed_relevance:desc"
+	IncludeArchived bool    // if false (default), only archived=false rows are returned
+	OrderBy         string  // "created_at:desc", "relevance:desc", "decayed_relevance:desc"
 	ApplyDecay      bool    // if true, score = relevance * pow(0.95, days_since)
 	HalfLifeDays    float64 // half-life for decayed_relevance ordering; 0 means 30d default
 	Limit           int
