@@ -686,27 +686,58 @@ func (s *memoryService) Recall(ctx context.Context, opts domain.RecallOpts) ([]d
 		recencyWeight = 1
 	}
 
-	// ── Step 1: Keyword search (always available) ──────────────────────────────
-	kwResults, err := s.memRepo.FullTextSearch(ctx, opts.Query, opts.WorkspaceID, projID, string(opts.Scope), opts.Tags, poolSize, recencyWeight)
-	if err != nil {
-		return nil, fmt.Errorf("memory recall: full text search: %w", err)
+	// ── Steps 1+2: BM25 sparse arm + vector arm in parallel ──────────────────
+	// Both arms fetch candidateMultiplier × limit results. The BM25 arm uses the
+	// 'english' dictionary (stemming + stopwords) for higher linguistic precision;
+	// the vector arm ranks by cosine similarity. Both contribute to the RRF merge.
+	//
+	// bm25FTSTimeout prevents a slow FTS query from stalling Recall; on timeout the
+	// BM25 arm is dropped and Recall degrades gracefully to vector-only. k=60 is the
+	// standard RRF constant used in reciprocalRankFusion.
+	const bm25FTSTimeout = 3 * time.Second
+
+	var (
+		kwResults  []domain.ScoredMemory
+		vecResults []domain.ScoredMemory
+		kwErr      error
+	)
+
+	ftsCtx, ftsCancel := context.WithTimeout(ctx, bm25FTSTimeout)
+	defer ftsCancel()
+
+	var wg sync.WaitGroup
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		kwResults, kwErr = s.memRepo.FullTextSearchRanked(ftsCtx, opts.WorkspaceID, projID, opts.Query, poolSize)
+	}()
+
+	if !embedding.IsNoop(s.embedder) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			queryVec, embedErr := s.embedder.Embed(ctx, opts.Query)
+			if embedErr != nil {
+				log.Printf("memory recall: embedding failed, using bm25-only: %v", embedErr)
+				return
+			}
+			if len(queryVec) == 0 {
+				return
+			}
+			var vecErr error
+			vecResults, vecErr = s.memRepo.VectorSearch(ctx, queryVec, opts.WorkspaceID, projID, string(opts.Scope), opts.Tags, poolSize)
+			if vecErr != nil {
+				log.Printf("memory recall: vector search failed: %v", vecErr)
+			}
+		}()
 	}
 
-	// ── Step 2: Vector search (only when embedder is configured) ───────────────
-	var vecResults []domain.ScoredMemory
-	if !embedding.IsNoop(s.embedder) {
-		queryVec, embedErr := s.embedder.Embed(ctx, opts.Query)
-		if embedErr != nil {
-			// Graceful degradation: log and fall back to keyword-only.
-			log.Printf("memory recall: embedding failed, using keyword-only: %v", embedErr)
-		} else if len(queryVec) > 0 {
-			vecResults, err = s.memRepo.VectorSearch(ctx, queryVec, opts.WorkspaceID, projID, string(opts.Scope), opts.Tags, poolSize)
-			if err != nil {
-				// Graceful degradation: log and continue with keyword results only.
-				log.Printf("memory recall: vector search failed, using keyword-only: %v", err)
-				vecResults = nil
-			}
-		}
+	wg.Wait()
+
+	if kwErr != nil {
+		log.Printf("memory recall: bm25 fts failed (using vector-only): %v", kwErr)
+		kwResults = nil
 	}
 
 	// ── Step 3: RRF merge ─────────────────────────────────────────────────────
