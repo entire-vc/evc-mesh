@@ -40,7 +40,6 @@ import { useSavedViewStore } from "@/stores/saved-view-store";
 import { CreateRecurringDialog } from "@/components/create-recurring-dialog";
 import { AssigneeAvatar } from "@/components/assignee-avatar";
 import { applyViewFilters, type CFFilters } from "@/components/view-filters";
-import { useIsMobile } from "@/lib/use-is-mobile";
 import type { Task, TaskStatus, WSMessage, Priority, StatusCategory } from "@/types";
 
 // ---------------------------------------------------------------------------
@@ -279,7 +278,6 @@ function calculatePosition(tasks: Task[], targetIndex: number): number {
 export function BoardPage() {
   const { wsSlug, projectSlug } = useParams();
   const navigate = useNavigate();
-  const isMobile = useIsMobile();
   const { currentProject, statuses, fetchStatuses } = useProjectStore();
   const { tasks, tasksByStatus, isLoading, fetchTasks, moveTask } = useTaskStore();
   const { fields: customFieldDefs, fetchFields: fetchCustomFields } =
@@ -642,12 +640,14 @@ export function BoardPage() {
   const [recurringOpen, setRecurringOpen] = useState(false);
 
   const handleTaskClick = useCallback((task: Task) => {
-    if (isMobile && wsSlug && currentProject) {
+    // Full-screen task page on every viewport. Was gated to isMobile in #70,
+    // leaving desktop on the slide-over (Pavel 2026-07-07 — fullscreen only).
+    if (wsSlug && currentProject) {
       navigate(`/w/${wsSlug}/p/${currentProject.slug}/t/${task.id}`);
     } else {
       setSlideOverTaskId(task.id);
     }
-  }, [isMobile, wsSlug, currentProject, navigate]);
+  }, [wsSlug, currentProject, navigate]);
 
   // ----- Render -----
 
