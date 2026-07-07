@@ -3,7 +3,6 @@ import { useNavigate } from "react-router";
 import { Inbox, ArrowRight, Pencil } from "lucide-react";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { useProjectStore } from "@/stores/project";
-import { useIsMobile } from "@/lib/use-is-mobile";
 import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -254,7 +253,6 @@ function TriageTaskRow({
 
 export function TriagePage() {
   const navigate = useNavigate();
-  const isMobile = useIsMobile();
   const { currentWorkspace } = useWorkspaceStore();
   const { projects, fetchProjects } = useProjectStore();
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -303,7 +301,7 @@ export function TriagePage() {
   }, []);
 
   const handleEditClick = useCallback((task: Task) => {
-    if (isMobile && currentWorkspace) {
+    if (currentWorkspace) {
       const project = projects.find((p) => p.id === task.project_id);
       if (project) {
         navigate(`/w/${currentWorkspace.slug}/p/${project.slug}/t/${task.id}`);
@@ -311,7 +309,7 @@ export function TriagePage() {
       }
     }
     setEditTaskId(task.id);
-  }, [isMobile, currentWorkspace, projects, navigate]);
+  }, [currentWorkspace, projects, navigate]);
 
   // Remove the task from the triage list once it has been successfully moved.
   const handleMoved = useCallback((taskId: string) => {
