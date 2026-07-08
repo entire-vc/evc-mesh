@@ -454,6 +454,20 @@ func (s *taskService) MoveTask(ctx context.Context, taskID uuid.UUID, input Move
 		return apierror.NotFound("Task")
 	}
 
+	// CAS precondition: fail fast if the caller's snapshot is stale.
+	if input.ExpectedStatusID != nil && *input.ExpectedStatusID != task.StatusID {
+		return &CASConflictError{
+			CurrentStatusID:  task.StatusID,
+			CurrentUpdatedAt: task.UpdatedAt,
+		}
+	}
+	if input.ExpectedUpdatedAt != nil && !input.ExpectedUpdatedAt.Equal(task.UpdatedAt) {
+		return &CASConflictError{
+			CurrentStatusID:  task.StatusID,
+			CurrentUpdatedAt: task.UpdatedAt,
+		}
+	}
+
 	oldStatusID := task.StatusID
 	oldPosition := task.Position
 	oldStatusChangedAt := task.StatusChangedAt
@@ -664,6 +678,9 @@ func (s *taskService) MoveTask(ctx context.Context, taskID uuid.UUID, input Move
 			newName = newStatus.Name
 		}
 		moveChanges["status"] = map[string]interface{}{"old": oldName, "new": newName}
+		if input.Source != "" {
+			moveChanges["source"] = input.Source
+		}
 
 		// Emit task-flow Prometheus metrics.
 		var dur *time.Duration
@@ -1207,6 +1224,19 @@ func (s *taskService) dispatchUserNotification(ctx context.Context, task *domain
 			"project_id": task.ProjectID,
 		},
 	})
+}
+
+// CASConflictError is returned by MoveTask when an expected_status_id or
+// expected_updated_at precondition does not match the current task state.
+// Callers should re-read the task using the returned fields and retry.
+type CASConflictError struct {
+	CurrentStatusID  uuid.UUID `json:"current_status_id"`
+	CurrentUpdatedAt time.Time `json:"current_updated_at"`
+}
+
+func (e *CASConflictError) Error() string {
+	return fmt.Sprintf("cas_conflict: task status is %s (updated_at=%s)",
+		e.CurrentStatusID, e.CurrentUpdatedAt.Format(time.RFC3339))
 }
 
 // RuleViolationError is returned when a governance rule blocks an action.

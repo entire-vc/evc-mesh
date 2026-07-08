@@ -2095,3 +2095,84 @@ func TestTaskService_MoveTask_DoneGate_NoVCSLinks_PassesWithComment(t *testing.T
 
 	require.NoError(t, err)
 }
+
+// ---------------------------------------------------------------------------
+// CAS precondition tests
+// ---------------------------------------------------------------------------
+
+func TestTaskService_MoveTask_CAS_RejectsStaleExpectedStatus(t *testing.T) {
+	projectID := uuid.New()
+	svc, taskRepo, statusRepo := setupTaskService()
+
+	todoID := uuid.New()
+	inProgressID := uuid.New()
+	doneID := uuid.New()
+	taskID := uuid.New()
+
+	taskRepo.items[taskID] = &domain.Task{
+		ID:        taskID,
+		ProjectID: projectID,
+		StatusID:  todoID,
+		Title:     "CAS test task",
+	}
+	statusRepo.items[inProgressID] = &domain.TaskStatus{ID: inProgressID, ProjectID: projectID, Category: domain.StatusCategoryInProgress}
+	statusRepo.items[doneID] = &domain.TaskStatus{ID: doneID, ProjectID: projectID, Category: domain.StatusCategoryDone}
+
+	// Move 1: expected=todo (correct) → in_progress: should succeed.
+	err := svc.MoveTask(context.Background(), taskID, MoveTaskInput{
+		StatusID:         &inProgressID,
+		ExpectedStatusID: &todoID,
+	})
+	require.NoError(t, err)
+
+	// Move 2: expected=todo (stale) → done: should return CASConflictError.
+	err = svc.MoveTask(context.Background(), taskID, MoveTaskInput{
+		StatusID:         &doneID,
+		ExpectedStatusID: &todoID,
+	})
+	require.Error(t, err)
+	var casErr *CASConflictError
+	require.ErrorAs(t, err, &casErr)
+	assert.Equal(t, inProgressID, casErr.CurrentStatusID)
+}
+
+func TestTaskService_MoveTask_CAS_NilExpected_PassesThrough(t *testing.T) {
+	projectID := uuid.New()
+	svc, taskRepo, statusRepo := setupTaskService()
+
+	statusID := uuid.New()
+	taskID := uuid.New()
+	taskRepo.items[taskID] = &domain.Task{ID: taskID, ProjectID: projectID, StatusID: uuid.New(), Title: "Compat task"}
+	statusRepo.items[statusID] = &domain.TaskStatus{ID: statusID, ProjectID: projectID, Category: domain.StatusCategoryInProgress}
+
+	// No CAS precondition — backward-compatible, move passes as before.
+	err := svc.MoveTask(context.Background(), taskID, MoveTaskInput{StatusID: &statusID})
+	require.NoError(t, err)
+}
+
+func TestTaskService_MoveTask_CAS_ExpectedUpdatedAt_Conflict(t *testing.T) {
+	projectID := uuid.New()
+	svc, taskRepo, statusRepo := setupTaskService()
+
+	statusID := uuid.New()
+	taskID := uuid.New()
+	taskUpdatedAt := frozenTime.Add(-time.Hour)
+	taskRepo.items[taskID] = &domain.Task{
+		ID:        taskID,
+		ProjectID: projectID,
+		StatusID:  uuid.New(),
+		Title:     "Updated-at CAS test",
+		UpdatedAt: taskUpdatedAt,
+	}
+	statusRepo.items[statusID] = &domain.TaskStatus{ID: statusID, ProjectID: projectID, Category: domain.StatusCategoryInProgress}
+
+	// Caller passes stale updated_at — should fail with CASConflictError.
+	stale := frozenTime.Add(-2 * time.Hour)
+	err := svc.MoveTask(context.Background(), taskID, MoveTaskInput{
+		StatusID:          &statusID,
+		ExpectedUpdatedAt: &stale,
+	})
+	require.Error(t, err)
+	var casErr *CASConflictError
+	require.ErrorAs(t, err, &casErr)
+}
