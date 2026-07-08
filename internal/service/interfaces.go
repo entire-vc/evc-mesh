@@ -41,6 +41,15 @@ type MoveTaskInput struct {
 	Position     *float64            `json:"position"`
 	AssigneeID   *uuid.UUID          `json:"assignee_id,omitempty"`   // explicit reassign (skips auto-reassign)
 	AssigneeType domain.AssigneeType `json:"assignee_type,omitempty"` // required if AssigneeID is set
+
+	// CAS preconditions — optional, ignored if nil. Either or both can be set.
+	// If the current task state does not match, MoveTask returns CASConflictError.
+	ExpectedStatusID  *uuid.UUID `json:"expected_status_id,omitempty"`
+	ExpectedUpdatedAt *time.Time `json:"expected_updated_at,omitempty"`
+
+	// Source identifies the call origin for audit log: "mcp", "api", "ui".
+	// Not bound from the JSON body directly; set by the handler layer.
+	Source string `json:"-"`
 }
 
 // AssignTaskInput holds parameters for assigning a task.

@@ -352,11 +352,20 @@ func (s *Server) handleMoveTask(ctx context.Context, request mcpsdk.CallToolRequ
 
 	moveBody := map[string]any{
 		"status_id": stID,
+		"source":    "mcp",
 	}
 	// Optional explicit assignee — overrides auto-reassign on review.
 	if assigneeID := mcpsdk.ParseString(request, "assignee_id", ""); assigneeID != "" {
 		moveBody["assignee_id"] = assigneeID
 		moveBody["assignee_type"] = mcpsdk.ParseString(request, "assignee_type", "agent")
+	}
+	// Optional CAS precondition: expected_status slug → UUID.
+	if expSlug := mcpsdk.ParseString(request, "expected_status", ""); expSlug != "" {
+		expID, _, expErr := s.resolveStatusSlug(ctx, projectID, expSlug)
+		if expErr != nil {
+			return errResult("invalid expected_status: %v", expErr)
+		}
+		moveBody["expected_status_id"] = expID
 	}
 
 	if err = s.getRESTClient(ctx).MoveTask(ctx, taskID, moveBody); err != nil {

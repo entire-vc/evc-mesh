@@ -276,6 +276,7 @@ func (s *Server) registerCoreTools() {
 		mcpsdk.WithString("comment", mcpsdk.Description("Optional comment to add when moving.")),
 		mcpsdk.WithString("assignee_id", mcpsdk.Description("Reassign to this agent/user on move. Takes priority over OnTransition.SetReviewer config.")),
 		mcpsdk.WithString("assignee_type", mcpsdk.Description("Assignee type if assignee_id is set: user or agent."), mcpsdk.DefaultString("agent")),
+		mcpsdk.WithString("expected_status", mcpsdk.Description("Optional CAS precondition: current status slug the task must be in for the move to succeed. If the task is not in this status, returns 409 with the real current status.")),
 	), s.tracked("move_task", s.handleMoveTask))
 
 	s.mcpServer.AddTool(mcpsdk.NewTool("assign_task",

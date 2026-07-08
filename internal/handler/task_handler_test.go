@@ -1571,3 +1571,68 @@ func TestTaskHandler_Create_DelegationLevel_ExplicitSupervisedKept(t *testing.T)
 	assert.Equal(t, http.StatusCreated, rec.Code)
 	assert.Equal(t, domain.DelegationLevelSupervised, capturedDelegation, "explicit supervised must be preserved")
 }
+
+func TestTaskHandler_MoveTask_CASConflict_Returns409(t *testing.T) {
+	taskID := uuid.New()
+	statusID := uuid.New()
+	currentStatusID := uuid.New()
+	currentUpdatedAt := time.Date(2026, 7, 8, 12, 0, 0, 0, time.UTC)
+
+	mockSvc := &MockTaskService{
+		MoveTaskFunc: func(ctx context.Context, tid uuid.UUID, input service.MoveTaskInput) error {
+			return &service.CASConflictError{
+				CurrentStatusID:  currentStatusID,
+				CurrentUpdatedAt: currentUpdatedAt,
+			}
+		},
+	}
+
+	h, e := setupTaskTest(mockSvc)
+
+	body := `{"status_id":"` + statusID.String() + `","expected_status_id":"` + uuid.New().String() + `"}`
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/tasks/:task_id/move")
+	c.SetParamNames("task_id")
+	c.SetParamValues(taskID.String())
+
+	err := h.MoveTask(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusConflict, rec.Code)
+
+	var body409 map[string]interface{}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body409))
+	assert.Equal(t, "cas_conflict", body409["code"])
+	assert.NotEmpty(t, body409["current_status_id"])
+	assert.NotEmpty(t, body409["current_updated_at"])
+}
+
+func TestTaskHandler_MoveTask_DefaultSource_IsAPI(t *testing.T) {
+	taskID := uuid.New()
+	statusID := uuid.New()
+	var capturedSource string
+
+	mockSvc := &MockTaskService{
+		MoveTaskFunc: func(ctx context.Context, tid uuid.UUID, input service.MoveTaskInput) error {
+			capturedSource = input.Source
+			return nil
+		},
+	}
+
+	h, e := setupTaskTest(mockSvc)
+
+	body := `{"status_id":"` + statusID.String() + `"}`
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/tasks/:task_id/move")
+	c.SetParamNames("task_id")
+	c.SetParamValues(taskID.String())
+
+	require.NoError(t, h.MoveTask(c))
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, "api", capturedSource)
+}

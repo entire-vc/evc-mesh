@@ -132,10 +132,13 @@ type updateTaskRequest struct {
 
 // moveTaskRequest represents the JSON body for moving a task.
 type moveTaskRequest struct {
-	StatusID     *uuid.UUID          `json:"status_id"`
-	Position     *float64            `json:"position"`
-	AssigneeID   *uuid.UUID          `json:"assignee_id,omitempty"`
-	AssigneeType domain.AssigneeType `json:"assignee_type,omitempty"`
+	StatusID          *uuid.UUID          `json:"status_id"`
+	Position          *float64            `json:"position"`
+	AssigneeID        *uuid.UUID          `json:"assignee_id,omitempty"`
+	AssigneeType      domain.AssigneeType `json:"assignee_type,omitempty"`
+	ExpectedStatusID  *uuid.UUID          `json:"expected_status_id,omitempty"`
+	ExpectedUpdatedAt *time.Time          `json:"expected_updated_at,omitempty"`
+	Source            string              `json:"source,omitempty"` // "mcp" | "api" | "ui"
 }
 
 // Create handles POST /projects/:proj_id/tasks
@@ -640,10 +643,16 @@ func (h *TaskHandler) MoveTask(c echo.Context) error {
 	}
 
 	input := service.MoveTaskInput{
-		StatusID:     req.StatusID,
-		Position:     req.Position,
-		AssigneeID:   req.AssigneeID,
-		AssigneeType: req.AssigneeType,
+		StatusID:          req.StatusID,
+		Position:          req.Position,
+		AssigneeID:        req.AssigneeID,
+		AssigneeType:      req.AssigneeType,
+		ExpectedStatusID:  req.ExpectedStatusID,
+		ExpectedUpdatedAt: req.ExpectedUpdatedAt,
+		Source:            req.Source,
+	}
+	if input.Source == "" {
+		input.Source = "api"
 	}
 
 	if err := h.taskService.MoveTask(c.Request().Context(), taskID, input); err != nil {
@@ -1188,6 +1197,16 @@ func handleError(c echo.Context, err error) error {
 			Error:      "rule_violation",
 			Message:    "Action blocked by governance rules",
 			Violations: ruleErr.Violations,
+		})
+	}
+
+	var casErr *service.CASConflictError
+	if errors.As(err, &casErr) {
+		return c.JSON(http.StatusConflict, map[string]interface{}{
+			"code":               "cas_conflict",
+			"message":            "Task was modified concurrently — re-read the task and retry",
+			"current_status_id":  casErr.CurrentStatusID,
+			"current_updated_at": casErr.CurrentUpdatedAt,
 		})
 	}
 
