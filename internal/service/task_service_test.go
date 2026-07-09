@@ -2176,3 +2176,149 @@ func TestTaskService_MoveTask_CAS_ExpectedUpdatedAt_Conflict(t *testing.T) {
 	var casErr *CASConflictError
 	require.ErrorAs(t, err, &casErr)
 }
+
+// ---------------------------------------------------------------------------
+// MoveToProject cascade tests
+// ---------------------------------------------------------------------------
+
+type moveToProjectFixture struct {
+	svc         *taskService
+	taskRepo    *MockTaskRepository
+	statusRepo  *MockTaskStatusRepository
+	projectA    uuid.UUID
+	projectB    uuid.UUID
+	todoA       uuid.UUID
+	inProgressA uuid.UUID
+	doneA       uuid.UUID
+	todoB       uuid.UUID
+	inProgressB uuid.UUID
+	doneB       uuid.UUID
+}
+
+func setupMoveToProjectFixture() *moveToProjectFixture {
+	taskRepo := NewMockTaskRepository()
+	statusRepo := NewMockTaskStatusRepository()
+	depRepo := NewMockTaskDependencyRepository()
+	activityRepo := NewMockActivityLogRepository()
+	svc := NewTaskService(taskRepo, statusRepo, depRepo, activityRepo).(*taskService)
+
+	f := &moveToProjectFixture{
+		svc:         svc,
+		taskRepo:    taskRepo,
+		statusRepo:  statusRepo,
+		projectA:    uuid.New(),
+		projectB:    uuid.New(),
+		todoA:       uuid.New(),
+		inProgressA: uuid.New(),
+		doneA:       uuid.New(),
+		todoB:       uuid.New(),
+		inProgressB: uuid.New(),
+		doneB:       uuid.New(),
+	}
+
+	// Source project statuses.
+	statusRepo.items[f.todoA] = &domain.TaskStatus{ID: f.todoA, ProjectID: f.projectA, Category: domain.StatusCategoryTodo, Position: 1}
+	statusRepo.items[f.inProgressA] = &domain.TaskStatus{ID: f.inProgressA, ProjectID: f.projectA, Category: domain.StatusCategoryInProgress, Position: 2}
+	statusRepo.items[f.doneA] = &domain.TaskStatus{ID: f.doneA, ProjectID: f.projectA, Category: domain.StatusCategoryDone, Position: 3}
+
+	// Target project statuses.
+	statusRepo.items[f.todoB] = &domain.TaskStatus{ID: f.todoB, ProjectID: f.projectB, Category: domain.StatusCategoryTodo, Position: 1}
+	statusRepo.items[f.inProgressB] = &domain.TaskStatus{ID: f.inProgressB, ProjectID: f.projectB, Category: domain.StatusCategoryInProgress, Position: 2}
+	statusRepo.items[f.doneB] = &domain.TaskStatus{ID: f.doneB, ProjectID: f.projectB, Category: domain.StatusCategoryDone, Position: 3}
+
+	return f
+}
+
+func TestMoveToProject_CascadesDirectSubtasks(t *testing.T) {
+	f := setupMoveToProjectFixture()
+
+	parentID := uuid.New()
+	child1ID := uuid.New()
+	child2ID := uuid.New()
+
+	f.taskRepo.items[parentID] = &domain.Task{ID: parentID, ProjectID: f.projectA, StatusID: f.todoA, Title: "Parent"}
+	f.taskRepo.items[child1ID] = &domain.Task{ID: child1ID, ProjectID: f.projectA, StatusID: f.todoA, Title: "Child 1", ParentTaskID: &parentID}
+	f.taskRepo.items[child2ID] = &domain.Task{ID: child2ID, ProjectID: f.projectA, StatusID: f.todoA, Title: "Child 2", ParentTaskID: &parentID}
+
+	_, err := f.svc.MoveToProject(context.Background(), parentID, f.projectB)
+	require.NoError(t, err)
+
+	assert.Equal(t, f.projectB, f.taskRepo.items[parentID].ProjectID, "parent must move to projectB")
+	assert.Equal(t, f.projectB, f.taskRepo.items[child1ID].ProjectID, "child1 must move to projectB")
+	assert.Equal(t, f.projectB, f.taskRepo.items[child2ID].ProjectID, "child2 must move to projectB")
+
+	// Subtask statuses must be valid target-project status IDs.
+	assert.Equal(t, f.todoB, f.taskRepo.items[child1ID].StatusID)
+	assert.Equal(t, f.todoB, f.taskRepo.items[child2ID].StatusID)
+}
+
+func TestMoveToProject_CascadesNested(t *testing.T) {
+	f := setupMoveToProjectFixture()
+
+	parentID := uuid.New()
+	childID := uuid.New()
+	grandchildID := uuid.New()
+
+	f.taskRepo.items[parentID] = &domain.Task{ID: parentID, ProjectID: f.projectA, StatusID: f.todoA, Title: "Parent"}
+	f.taskRepo.items[childID] = &domain.Task{ID: childID, ProjectID: f.projectA, StatusID: f.todoA, Title: "Child", ParentTaskID: &parentID}
+	f.taskRepo.items[grandchildID] = &domain.Task{ID: grandchildID, ProjectID: f.projectA, StatusID: f.todoA, Title: "Grandchild", ParentTaskID: &childID}
+
+	_, err := f.svc.MoveToProject(context.Background(), parentID, f.projectB)
+	require.NoError(t, err)
+
+	assert.Equal(t, f.projectB, f.taskRepo.items[parentID].ProjectID)
+	assert.Equal(t, f.projectB, f.taskRepo.items[childID].ProjectID)
+	assert.Equal(t, f.projectB, f.taskRepo.items[grandchildID].ProjectID)
+
+	assert.Equal(t, f.todoB, f.taskRepo.items[grandchildID].StatusID, "grandchild status must be remapped to target project")
+}
+
+func TestMoveToProject_StatusCategoryMapping(t *testing.T) {
+	f := setupMoveToProjectFixture()
+
+	parentID := uuid.New()
+	childID := uuid.New()
+
+	f.taskRepo.items[parentID] = &domain.Task{ID: parentID, ProjectID: f.projectA, StatusID: f.inProgressA, Title: "Parent"}
+	f.taskRepo.items[childID] = &domain.Task{ID: childID, ProjectID: f.projectA, StatusID: f.inProgressA, Title: "Child in_progress", ParentTaskID: &parentID}
+
+	_, err := f.svc.MoveToProject(context.Background(), parentID, f.projectB)
+	require.NoError(t, err)
+
+	// Child was in_progress → must map to in_progress in target, not the default todo.
+	assert.Equal(t, f.inProgressB, f.taskRepo.items[childID].StatusID, "in_progress subtask must map to in_progress in target project")
+}
+
+func TestMoveToProject_StatusCategoryFallback(t *testing.T) {
+	// Target project has no "review" status — subtask must fall back to defaultStatus (todoB).
+	f := setupMoveToProjectFixture()
+
+	// Add a "review" status to source only.
+	reviewA := uuid.New()
+	f.statusRepo.items[reviewA] = &domain.TaskStatus{ID: reviewA, ProjectID: f.projectA, Category: domain.StatusCategoryReview, Position: 4}
+
+	parentID := uuid.New()
+	childID := uuid.New()
+
+	f.taskRepo.items[parentID] = &domain.Task{ID: parentID, ProjectID: f.projectA, StatusID: f.todoA, Title: "Parent"}
+	f.taskRepo.items[childID] = &domain.Task{ID: childID, ProjectID: f.projectA, StatusID: reviewA, Title: "Child in review", ParentTaskID: &parentID}
+
+	_, err := f.svc.MoveToProject(context.Background(), parentID, f.projectB)
+	require.NoError(t, err)
+
+	// No review in target → falls back to default (lowest position = todoB).
+	assert.Equal(t, f.todoB, f.taskRepo.items[childID].StatusID, "subtask with unmapped category must fall back to default status")
+}
+
+func TestMoveToProject_NoSubtasks(t *testing.T) {
+	f := setupMoveToProjectFixture()
+
+	parentID := uuid.New()
+	f.taskRepo.items[parentID] = &domain.Task{ID: parentID, ProjectID: f.projectA, StatusID: f.todoA, Title: "Lone task"}
+
+	updated, err := f.svc.MoveToProject(context.Background(), parentID, f.projectB)
+	require.NoError(t, err)
+
+	assert.Equal(t, f.projectB, updated.ProjectID, "task must be moved to projectB")
+	assert.Equal(t, f.todoB, f.taskRepo.items[parentID].StatusID, "status must be remapped to target project default")
+}

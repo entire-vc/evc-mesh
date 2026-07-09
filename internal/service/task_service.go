@@ -1491,6 +1491,8 @@ func (s *taskService) MoveToProject(ctx context.Context, taskID, targetProjectID
 			"project_id": "task is already in the target project",
 		})
 	}
+	// Capture sourceProjectID before the repo call mutates the task in-memory.
+	sourceProjectID := task.ProjectID
 
 	// Find the default status for the target project.
 	statuses, err := s.statusRepo.ListByProject(ctx, targetProjectID)
@@ -1515,8 +1517,32 @@ func (s *taskService) MoveToProject(ctx context.Context, taskID, targetProjectID
 		s.ctxCacheInv.Invalidate(ctx, taskID)
 	}
 	s.logActivity(ctx, targetProjectID, taskID, "task.moved_to_project", map[string]interface{}{
-		"from_project_id": map[string]interface{}{"old": task.ProjectID.String(), "new": targetProjectID.String()},
+		"from_project_id": map[string]interface{}{"old": sourceProjectID.String(), "new": targetProjectID.String()},
 	})
+
+	// Build category→status map for the target project (used by subtask cascade).
+	targetCatMap := make(map[domain.StatusCategory]uuid.UUID)
+	for _, st := range statuses {
+		if _, exists := targetCatMap[st.Category]; !exists {
+			targetCatMap[st.Category] = st.ID
+		}
+	}
+
+	// Fetch source project statuses to map each subtask's statusID → category.
+	sourceStatuses, err := s.statusRepo.ListByProject(ctx, sourceProjectID)
+	if err != nil {
+		return nil, err
+	}
+	sourceCatMap := make(map[uuid.UUID]domain.StatusCategory)
+	for _, st := range sourceStatuses {
+		sourceCatMap[st.ID] = st.Category
+	}
+
+	// Cascade move to all direct and nested subtasks.
+	cascadeErr := s.moveSubtasksToProject(ctx, taskID, sourceProjectID, targetProjectID, sourceCatMap, targetCatMap, defaultStatus.ID)
+	if cascadeErr != nil {
+		return nil, cascadeErr
+	}
 
 	// Re-fetch the updated task so the caller has the new project_id/status_id/task_number.
 	updated, err := s.taskRepo.GetByID(ctx, taskID)
@@ -1527,6 +1553,45 @@ func (s *taskService) MoveToProject(ctx context.Context, taskID, targetProjectID
 		return nil, apierror.NotFound("Task")
 	}
 	return updated, nil
+}
+
+// moveSubtasksToProject recursively moves all subtasks of parentID to targetProjectID,
+// remapping each subtask's status by semantic category. Falls back to fallbackStatusID
+// when the target project has no status with the matching category.
+func (s *taskService) moveSubtasksToProject(
+	ctx context.Context,
+	parentID, sourceProjectID, targetProjectID uuid.UUID,
+	sourceCatMap map[uuid.UUID]domain.StatusCategory,
+	targetCatMap map[domain.StatusCategory]uuid.UUID,
+	fallbackStatusID uuid.UUID,
+) error {
+	subtasks, err := s.taskRepo.ListSubtasks(ctx, parentID)
+	if err != nil {
+		return err
+	}
+	for _, sub := range subtasks {
+		targetStatusID := fallbackStatusID
+		if cat, ok := sourceCatMap[sub.StatusID]; ok {
+			if tgtID, ok := targetCatMap[cat]; ok {
+				targetStatusID = tgtID
+			}
+		}
+		if err := s.taskRepo.MoveToProject(ctx, sub.ID, targetProjectID, targetStatusID); err != nil {
+			return err
+		}
+		if s.ctxCacheInv != nil {
+			s.ctxCacheInv.Invalidate(ctx, sub.ID)
+		}
+		s.logActivity(ctx, targetProjectID, sub.ID, "task.moved_to_project", map[string]interface{}{
+			"from_project_id":      map[string]interface{}{"old": sourceProjectID.String(), "new": targetProjectID.String()},
+			"cascaded_from_parent": parentID.String(),
+		})
+		// Recurse for deeper nesting.
+		if err := s.moveSubtasksToProject(ctx, sub.ID, sourceProjectID, targetProjectID, sourceCatMap, targetCatMap, fallbackStatusID); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // CheckoutTask acquires an exclusive application-level lock on the task for the
