@@ -25,6 +25,22 @@ export function clearTokens() {
   localStorage.removeItem("refresh_token");
 }
 
+// Best-effort clear of any non-httpOnly session cookies left by a previous
+// Mesh/Casdoor instance. Cannot touch httpOnly cookies — those expire naturally.
+export function clearSessionCookies() {
+  const cookiesToClear = [
+    "access_token",
+    "refresh_token",
+    "mesh_session",
+    "casdoor_session",
+    "session",
+  ];
+  for (const name of cookiesToClear) {
+    document.cookie = `${name}=; max-age=0; path=/; SameSite=Lax`;
+    document.cookie = `${name}=; max-age=0; path=/; domain=${location.hostname}; SameSite=Lax`;
+  }
+}
+
 export function getAccessToken(): string | null {
   return accessToken;
 }
@@ -102,10 +118,15 @@ export async function api<T>(
     headers["Authorization"] = `Bearer ${accessToken}`;
   }
 
+  // noAuth requests (login, register) must not send session cookies — stale
+  // cookies from a previous instance can cause the server to reject the request
+  // with a non-JSON error body (e.g. 431 Too Large), which then surfaces as
+  // "An unexpected error occurred" instead of a clean login form.
   let res = await fetch(url, {
     method,
     headers,
     body: body ? JSON.stringify(body) : undefined,
+    credentials: noAuth ? "omit" : "same-origin",
   });
 
   // Auto-refresh on 401
@@ -123,6 +144,7 @@ export async function api<T>(
         method,
         headers,
         body: body ? JSON.stringify(body) : undefined,
+        credentials: "same-origin",
       });
     } catch {
       clearTokens();
@@ -135,7 +157,21 @@ export async function api<T>(
     return undefined as T;
   }
 
-  const data = await res.json();
+  // Guard against non-JSON error bodies (e.g. Caddy/Go 431, plain-text 500).
+  // Without this, res.json() throws a SyntaxError which is not an
+  // ApiRequestError and surfaces as "An unexpected error occurred".
+  let data: unknown;
+  try {
+    data = await res.json();
+  } catch {
+    throw new ApiRequestError(
+      res.status === 431
+        ? "Your browser is sending a large saved session that was rejected. Please clear this site's cookies and try again."
+        : `Server error (${res.status})`,
+      "SERVER_ERROR",
+      res.status,
+    );
+  }
 
   if (!res.ok) {
     const err = data as ApiError;

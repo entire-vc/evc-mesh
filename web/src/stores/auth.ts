@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { api, clearTokens, loadTokens, setTokens } from "@/lib/api";
+import { api, clearTokens, clearSessionCookies, loadTokens, setTokens } from "@/lib/api";
 import type {
   AuthResponse,
   LoginRequest,
@@ -70,6 +70,10 @@ export const useAuthStore = create<AuthState>((set) => ({
       // We always clear local state regardless.
     }
     clearTokens();
+    // Best-effort: clear any non-httpOnly session cookies that may have been
+    // set by a previous Mesh/Casdoor instance. Prevents stale cookies from
+    // blocking subsequent logins with an "unexpected error".
+    clearSessionCookies();
     set({ user: null, isAuthenticated: false });
   },
 
