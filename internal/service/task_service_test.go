@@ -2182,17 +2182,17 @@ func TestTaskService_MoveTask_CAS_ExpectedUpdatedAt_Conflict(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 type moveToProjectFixture struct {
-	svc        *taskService
-	taskRepo   *MockTaskRepository
-	statusRepo *MockTaskStatusRepository
-	projectA   uuid.UUID
-	projectB   uuid.UUID
-	todoA      uuid.UUID
+	svc         *taskService
+	taskRepo    *MockTaskRepository
+	statusRepo  *MockTaskStatusRepository
+	projectA    uuid.UUID
+	projectB    uuid.UUID
+	todoA       uuid.UUID
 	inProgressA uuid.UUID
-	doneA      uuid.UUID
-	todoB      uuid.UUID
+	doneA       uuid.UUID
+	todoB       uuid.UUID
 	inProgressB uuid.UUID
-	doneB      uuid.UUID
+	doneB       uuid.UUID
 }
 
 func setupMoveToProjectFixture() *moveToProjectFixture {

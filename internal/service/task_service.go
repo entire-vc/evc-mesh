@@ -1539,8 +1539,9 @@ func (s *taskService) MoveToProject(ctx context.Context, taskID, targetProjectID
 	}
 
 	// Cascade move to all direct and nested subtasks.
-	if err := s.moveSubtasksToProject(ctx, taskID, sourceProjectID, targetProjectID, sourceCatMap, targetCatMap, defaultStatus.ID); err != nil {
-		return nil, err
+	cascadeErr := s.moveSubtasksToProject(ctx, taskID, sourceProjectID, targetProjectID, sourceCatMap, targetCatMap, defaultStatus.ID)
+	if cascadeErr != nil {
+		return nil, cascadeErr
 	}
 
 	// Re-fetch the updated task so the caller has the new project_id/status_id/task_number.
