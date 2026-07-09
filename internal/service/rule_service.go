@@ -363,6 +363,13 @@ func resolveInheritance(candidates []domain.Rule, _ RuleContext) []domain.Rule {
 
 // ruleAppliesTo returns true if the rule applies to the actor in the given input.
 func ruleAppliesTo(rule domain.Rule, input EvaluateInput) bool {
+	// Hard-exempt: human users bypass block-enforcement governance rules.
+	// Governance rules constrain agents; humans retain full operational authority.
+	// warn/log enforcement for users is still permitted (advisory only, not blocking).
+	if input.ActorType == domain.ActorTypeUser && rule.Enforcement == domain.RuleEnforcementBlock {
+		return false
+	}
+
 	// Filter by actor type if specified.
 	if len(rule.AppliesToActorTypes) > 0 {
 		if !containsString(rule.AppliesToActorTypes, string(input.ActorType)) {
