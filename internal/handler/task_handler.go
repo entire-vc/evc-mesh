@@ -1193,9 +1193,17 @@ func handleError(c echo.Context, err error) error {
 
 	var ruleErr *service.RuleViolationError
 	if errors.As(err, &ruleErr) {
+		msg := "Action blocked by governance rules"
+		if len(ruleErr.Violations) > 0 {
+			v := ruleErr.Violations[0]
+			msg = fmt.Sprintf("Blocked by rule «%s»: %s", v.RuleName, v.Message)
+			if len(ruleErr.Violations) > 1 {
+				msg += fmt.Sprintf(" (and %d more rule(s))", len(ruleErr.Violations)-1)
+			}
+		}
 		return c.JSON(http.StatusUnprocessableEntity, ruleViolationAPIResponse{
 			Error:      "rule_violation",
-			Message:    "Action blocked by governance rules",
+			Message:    msg,
 			Violations: ruleErr.Violations,
 		})
 	}
