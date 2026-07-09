@@ -1539,7 +1539,7 @@ func (s *taskService) MoveToProject(ctx context.Context, taskID, targetProjectID
 	}
 
 	// Cascade move to all direct and nested subtasks.
-	if err = s.moveSubtasksToProject(ctx, taskID, sourceProjectID, targetProjectID, sourceCatMap, targetCatMap, defaultStatus.ID); err != nil {
+	if err := s.moveSubtasksToProject(ctx, taskID, sourceProjectID, targetProjectID, sourceCatMap, targetCatMap, defaultStatus.ID); err != nil {
 		return nil, err
 	}
 
