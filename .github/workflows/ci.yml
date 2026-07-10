@@ -4,9 +4,12 @@ on:
   push:
     branches: [main]
     paths-ignore: ['**.md', 'docs/**', 'dev-docs/**']
+  # NOTE: no paths-ignore here. Lint/Test/Build/Authed E2E/Go coverage are
+  # required status checks with enforce_admins=true — a path-skipped workflow
+  # reports nothing, so the checks stay pending and the PR can never merge.
+  # Doc-only PRs pay a full CI run; that is cheaper than a wedged branch.
   pull_request:
     branches: [main]
-    paths-ignore: ['**.md', 'docs/**', 'dev-docs/**']
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
