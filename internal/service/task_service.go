@@ -817,6 +817,36 @@ func (s *taskService) AssignTask(ctx context.Context, taskID uuid.UUID, input As
 	return nil
 }
 
+// resolveSubtaskStatusID picks the status a new subtask is born into: the caller's
+// explicit choice when given, otherwise the project's default status. It mirrors the
+// resolution Create() performs for top-level tasks, including the guard against
+// birthing work directly in a review status.
+func (s *taskService) resolveSubtaskStatusID(ctx context.Context, projectID uuid.UUID, requested *uuid.UUID) (uuid.UUID, error) {
+	if requested == nil {
+		defaultStatus, err := s.statusRepo.GetDefaultForProject(ctx, projectID)
+		if err != nil {
+			return uuid.Nil, err
+		}
+		if defaultStatus == nil {
+			return uuid.Nil, apierror.BadRequest("project has no default status; provide status_id")
+		}
+		return defaultStatus.ID, nil
+	}
+
+	status, err := s.statusRepo.GetByID(ctx, *requested)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	if status == nil || status.ProjectID != projectID {
+		return uuid.Nil, apierror.BadRequest("status_id does not belong to the parent task's project")
+	}
+	if status.Category == domain.StatusCategoryReview {
+		return uuid.Nil, apierror.BadRequest(
+			"Cannot create task in review status. Use 'todo' or 'in_progress'. Review is for tasks with completed work awaiting check.")
+	}
+	return status.ID, nil
+}
+
 // CreateSubtask creates a child task under the given parent.
 func (s *taskService) CreateSubtask(ctx context.Context, parentTaskID uuid.UUID, input CreateSubtaskInput) (*domain.Task, error) {
 	parent, err := s.taskRepo.GetByID(ctx, parentTaskID)
@@ -827,11 +857,19 @@ func (s *taskService) CreateSubtask(ctx context.Context, parentTaskID uuid.UUID,
 		return nil, apierror.NotFound("Task")
 	}
 
+	// Resolve the child's status. The parent's status must never leak into the
+	// child: a subtask born under an in_progress/done parent is invisible to the
+	// todo-only agent feed and silently never gets worked.
+	statusID, err := s.resolveSubtaskStatusID(ctx, parent.ProjectID, input.StatusID)
+	if err != nil {
+		return nil, err
+	}
+
 	now := timeNow()
 	child := &domain.Task{
 		ID:           uuid.New(),
 		ProjectID:    parent.ProjectID,
-		StatusID:     parent.StatusID,
+		StatusID:     statusID,
 		Title:        input.Title,
 		Priority:     input.Priority,
 		Description:  input.Description,

@@ -416,6 +416,23 @@ func (s *Server) handleCreateSubtask(ctx context.Context, request mcpsdk.CallToo
 		body["description"] = desc
 	}
 
+	// Resolve status slug against the parent's project. Omitted → project default.
+	if slug := mcpsdk.ParseString(request, "status_slug", ""); slug != "" {
+		parent, err := s.getRESTClient(ctx).GetTask(ctx, parentTaskID)
+		if err != nil {
+			return errResult("failed to load parent task: %v", err)
+		}
+		projectID, _ := parent["project_id"].(string)
+		if projectID == "" {
+			return errResult("parent task has no project_id")
+		}
+		stID, _, err := s.resolveStatusSlug(ctx, projectID, slug)
+		if err != nil {
+			return errResult("invalid status_slug: %v", err)
+		}
+		body["status_id"] = stID
+	}
+
 	result, err := s.getRESTClient(ctx).CreateSubtask(ctx, parentTaskID, body)
 	if err != nil {
 		return errResult("failed to create subtask: %v", err)

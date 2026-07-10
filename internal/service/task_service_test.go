@@ -718,61 +718,145 @@ func TestTaskService_AssignTask(t *testing.T) {
 // TestTaskService_CreateSubtask
 // ---------------------------------------------------------------------------
 
+// subtaskFixture wires a project with a default `todo` status, an `in_progress`
+// status, a `review` status, and a parent task sitting in in_progress — the exact
+// shape that used to birth subtasks into a status no agent feed ever polls.
+type subtaskFixture struct {
+	projectID  uuid.UUID
+	parentID   uuid.UUID
+	todoID     uuid.UUID
+	inProgress uuid.UUID
+	reviewID   uuid.UUID
+}
+
+func newSubtaskFixture(repo *MockTaskRepository, statusRepo *MockTaskStatusRepository) subtaskFixture {
+	f := subtaskFixture{
+		projectID:  uuid.New(),
+		parentID:   uuid.New(),
+		todoID:     uuid.New(),
+		inProgress: uuid.New(),
+		reviewID:   uuid.New(),
+	}
+	statusRepo.items[f.todoID] = &domain.TaskStatus{
+		ID: f.todoID, ProjectID: f.projectID, Slug: "todo",
+		Category: domain.StatusCategoryTodo, IsDefault: true,
+	}
+	statusRepo.items[f.inProgress] = &domain.TaskStatus{
+		ID: f.inProgress, ProjectID: f.projectID, Slug: "in_progress",
+		Category: domain.StatusCategoryInProgress,
+	}
+	statusRepo.items[f.reviewID] = &domain.TaskStatus{
+		ID: f.reviewID, ProjectID: f.projectID, Slug: "review",
+		Category: domain.StatusCategoryReview,
+	}
+	repo.items[f.parentID] = &domain.Task{
+		ID:        f.parentID,
+		ProjectID: f.projectID,
+		StatusID:  f.inProgress,
+		Title:     "Parent task",
+	}
+	return f
+}
+
 func TestTaskService_CreateSubtask(t *testing.T) {
 	tests := []struct {
 		name      string
-		setup     func(repo *MockTaskRepository) uuid.UUID
-		input     CreateSubtaskInput
+		setup     func(f subtaskFixture, statusRepo *MockTaskStatusRepository) (uuid.UUID, CreateSubtaskInput)
 		wantErr   bool
 		errCode   int
-		checkFunc func(t *testing.T, child *domain.Task, parentID uuid.UUID, repo *MockTaskRepository)
+		checkFunc func(t *testing.T, f subtaskFixture, child *domain.Task, repo *MockTaskRepository)
 	}{
 		{
-			name: "success",
-			setup: func(repo *MockTaskRepository) uuid.UUID {
-				id := uuid.New()
-				repo.items[id] = &domain.Task{
-					ID:        id,
-					ProjectID: uuid.New(),
-					StatusID:  uuid.New(),
-					Title:     "Parent task",
+			name: "born in project default status, never the parent's status",
+			setup: func(f subtaskFixture, _ *MockTaskStatusRepository) (uuid.UUID, CreateSubtaskInput) {
+				return f.parentID, CreateSubtaskInput{
+					Title:       "Child task",
+					Description: "Sub-task description",
+					Priority:    domain.PriorityMedium,
 				}
-				return id
 			},
-			input: CreateSubtaskInput{
-				Title:       "Child task",
-				Description: "Sub-task description",
-				Priority:    domain.PriorityMedium,
-			},
-			wantErr: false,
-			checkFunc: func(t *testing.T, child *domain.Task, parentID uuid.UUID, repo *MockTaskRepository) {
+			checkFunc: func(t *testing.T, f subtaskFixture, child *domain.Task, repo *MockTaskRepository) {
 				assert.NotEqual(t, uuid.Nil, child.ID)
 				assert.Equal(t, "Child task", child.Title)
 				assert.Equal(t, "Sub-task description", child.Description)
 				assert.Equal(t, domain.PriorityMedium, child.Priority)
 				require.NotNil(t, child.ParentTaskID)
-				assert.Equal(t, parentID, *child.ParentTaskID)
+				assert.Equal(t, f.parentID, *child.ParentTaskID)
 				assert.Equal(t, domain.AssigneeTypeUnassigned, child.AssigneeType)
 				assert.Equal(t, frozenTime, child.CreatedAt)
 
-				// Verify the child inherits project and status from parent.
-				parent := repo.items[parentID]
-				assert.Equal(t, parent.ProjectID, child.ProjectID)
-				assert.Equal(t, parent.StatusID, child.StatusID)
+				// Project is inherited from the parent; status is NOT.
+				assert.Equal(t, f.projectID, child.ProjectID)
+				assert.Equal(t, f.todoID, child.StatusID, "subtask must be born in the project default status")
+				assert.NotEqual(t, f.inProgress, child.StatusID, "parent status must not leak into the child")
 
-				// Verify persisted.
+				// Verify persisted with the same status.
 				stored := repo.items[child.ID]
-				assert.NotNil(t, stored)
+				require.NotNil(t, stored)
+				assert.Equal(t, f.todoID, stored.StatusID)
 			},
 		},
 		{
-			name: "parent not found",
-			setup: func(_ *MockTaskRepository) uuid.UUID {
-				return uuid.New()
+			name: "explicit status_id is honoured",
+			setup: func(f subtaskFixture, _ *MockTaskStatusRepository) (uuid.UUID, CreateSubtaskInput) {
+				return f.parentID, CreateSubtaskInput{
+					Title:    "Child task",
+					Priority: domain.PriorityMedium,
+					StatusID: &f.inProgress,
+				}
 			},
-			input: CreateSubtaskInput{
-				Title:    "Orphan child",
-				Priority: domain.PriorityLow,
+			checkFunc: func(t *testing.T, f subtaskFixture, child *domain.Task, _ *MockTaskRepository) {
+				assert.Equal(t, f.inProgress, child.StatusID)
+			},
+		},
+		{
+			name: "explicit review status is rejected",
+			setup: func(f subtaskFixture, _ *MockTaskStatusRepository) (uuid.UUID, CreateSubtaskInput) {
+				return f.parentID, CreateSubtaskInput{
+					Title:    "Child task",
+					Priority: domain.PriorityMedium,
+					StatusID: &f.reviewID,
+				}
+			},
+			wantErr: true,
+			errCode: http.StatusBadRequest,
+		},
+		{
+			name: "status_id from another project is rejected",
+			setup: func(f subtaskFixture, statusRepo *MockTaskStatusRepository) (uuid.UUID, CreateSubtaskInput) {
+				foreign := uuid.New()
+				statusRepo.items[foreign] = &domain.TaskStatus{
+					ID: foreign, ProjectID: uuid.New(), Slug: "todo",
+					Category: domain.StatusCategoryTodo,
+				}
+				return f.parentID, CreateSubtaskInput{
+					Title:    "Child task",
+					Priority: domain.PriorityMedium,
+					StatusID: &foreign,
+				}
+			},
+			wantErr: true,
+			errCode: http.StatusBadRequest,
+		},
+		{
+			name: "project without a default status is rejected",
+			setup: func(f subtaskFixture, statusRepo *MockTaskStatusRepository) (uuid.UUID, CreateSubtaskInput) {
+				delete(statusRepo.items, f.todoID)
+				return f.parentID, CreateSubtaskInput{
+					Title:    "Child task",
+					Priority: domain.PriorityMedium,
+				}
+			},
+			wantErr: true,
+			errCode: http.StatusBadRequest,
+		},
+		{
+			name: "parent not found",
+			setup: func(_ subtaskFixture, _ *MockTaskStatusRepository) (uuid.UUID, CreateSubtaskInput) {
+				return uuid.New(), CreateSubtaskInput{
+					Title:    "Orphan child",
+					Priority: domain.PriorityLow,
+				}
 			},
 			wantErr: true,
 			errCode: http.StatusNotFound,
@@ -781,11 +865,12 @@ func TestTaskService_CreateSubtask(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			svc, taskRepo, _ := setupTaskService()
+			svc, taskRepo, statusRepo := setupTaskService()
 			ctx := context.Background()
-			parentID := tt.setup(taskRepo)
+			f := newSubtaskFixture(taskRepo, statusRepo)
+			parentID, input := tt.setup(f, statusRepo)
 
-			child, err := svc.CreateSubtask(ctx, parentID, tt.input)
+			child, err := svc.CreateSubtask(ctx, parentID, input)
 
 			if tt.wantErr {
 				require.Error(t, err)
@@ -797,7 +882,7 @@ func TestTaskService_CreateSubtask(t *testing.T) {
 				require.NoError(t, err)
 				require.NotNil(t, child)
 				if tt.checkFunc != nil {
-					tt.checkFunc(t, child, parentID, taskRepo)
+					tt.checkFunc(t, f, child, taskRepo)
 				}
 			}
 		})

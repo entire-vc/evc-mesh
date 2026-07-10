@@ -738,6 +738,7 @@ type createSubtaskRequest struct {
 	Title       string          `json:"title"`
 	Description string          `json:"description"`
 	Priority    domain.Priority `json:"priority"`
+	StatusID    string          `json:"status_id"`
 }
 
 // CreateSubtask handles POST /tasks/:task_id/subtasks
@@ -767,6 +768,15 @@ func (h *TaskHandler) CreateSubtask(c echo.Context) error {
 		Title:       req.Title,
 		Description: req.Description,
 		Priority:    priority,
+	}
+
+	// Omitted status_id means "project default" — resolved by the service.
+	if req.StatusID != "" {
+		statusID, parseErr := uuid.Parse(req.StatusID)
+		if parseErr != nil {
+			return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid status_id"))
+		}
+		input.StatusID = &statusID
 	}
 
 	subtask, err := h.taskService.CreateSubtask(c.Request().Context(), parentTaskID, input)

@@ -69,6 +69,9 @@ type CreateSubtaskInput struct {
 	Title       string          `json:"title"`
 	Description string          `json:"description"`
 	Priority    domain.Priority `json:"priority"`
+	// StatusID pins the subtask's initial status. When nil the project's
+	// default status is used — never the parent's status.
+	StatusID *uuid.UUID `json:"status_id,omitempty"`
 }
 
 // BulkUpdateTasksInput holds parameters for a bulk task update operation.

@@ -399,11 +399,12 @@ func (s *Server) registerAdvancedTools() {
 
 	// --- Task operations ---
 	s.mcpServer.AddTool(mcpsdk.NewTool("create_subtask",
-		mcpsdk.WithDescription("Create a subtask under a parent task."),
+		mcpsdk.WithDescription("Create a subtask under a parent task. Set status_slug for initial status (defaults to the project's default status, NOT the parent's status)."),
 		mcpsdk.WithString("parent_task_id", mcpsdk.Required(), mcpsdk.Description("Parent task ID.")),
 		mcpsdk.WithString("title", mcpsdk.Required(), mcpsdk.Description("Subtask title.")),
 		mcpsdk.WithString("description", mcpsdk.Description("Subtask description.")),
 		mcpsdk.WithString("priority", mcpsdk.Description("Priority: urgent, high, medium, low, none."), mcpsdk.DefaultString("medium")),
+		mcpsdk.WithString("status_slug", mcpsdk.Description("Status slug (e.g. 'todo'). Uses project default if omitted.")),
 	), s.tracked("create_subtask", s.handleCreateSubtask))
 
 	s.mcpServer.AddTool(mcpsdk.NewTool("add_dependency",
