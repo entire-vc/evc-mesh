@@ -237,6 +237,7 @@ func main() {
 	// RulesService (assignment/workflow config) is created before taskService for auto-assign injection.
 	rulesService := service.NewRulesServiceWithOptions(wsRuleRepo, projRuleRepo, ruleViolationLogRepo, agentRepo, workspaceMemberRepo, workspaceRepo, projectRepo,
 		service.WithRulesRuleRepo(ruleRepo),
+		service.WithRulesStatusRepo(taskStatusRepo),
 	)
 
 	// Web Push service — graceful: no-op when VAPID keys are absent.

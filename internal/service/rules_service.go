@@ -24,7 +24,8 @@ type rulesService struct {
 	memberRepo    repository.WorkspaceMemberRepository
 	workspaceRepo repository.WorkspaceRepository
 	projectRepo   repository.ProjectRepository
-	ruleRepo      repository.RuleRepository // optional; used for task count queries in team directory
+	ruleRepo      repository.RuleRepository       // optional; used for task count queries in team directory
+	statusRepo    repository.TaskStatusRepository // optional; used to expand my_permissions.can_transition for empty configs
 }
 
 // NewRulesService creates a new rulesService.
@@ -52,6 +53,13 @@ func NewRulesService(
 // count queries in GetTeamDirectory.
 func WithRulesRuleRepo(rr repository.RuleRepository) func(*rulesService) {
 	return func(s *rulesService) { s.ruleRepo = rr }
+}
+
+// WithRulesStatusRepo sets the TaskStatusRepository on the rulesService, enabling
+// my_permissions.can_transition to be expanded to the project's real statuses when
+// no workflow rules config exists.
+func WithRulesStatusRepo(sr repository.TaskStatusRepository) func(*rulesService) {
+	return func(s *rulesService) { s.statusRepo = sr }
 }
 
 // applyRulesOptions applies functional options to a rulesService.
@@ -508,7 +516,11 @@ func (s *rulesService) GetProjectWorkflowRules(ctx context.Context, projectID uu
 	if callerAgentID != nil {
 		agent, err := s.agentRepo.GetByID(ctx, *callerAgentID)
 		if err == nil && agent != nil {
-			resp.MyPermissions = computeAgentPermissions(agent, resp.WorkflowRulesConfig)
+			var projectStatuses []domain.TaskStatus
+			if s.statusRepo != nil {
+				projectStatuses, _ = s.statusRepo.ListByProject(ctx, projectID)
+			}
+			resp.MyPermissions = computeAgentPermissions(agent, resp.WorkflowRulesConfig, projectStatuses)
 		}
 	}
 
@@ -559,24 +571,43 @@ func (s *rulesService) LogViolation(ctx context.Context, v *domain.RuleViolation
 
 // computeAgentPermissions calculates what a given agent is allowed to do
 // based on workflow rules policies.
-func computeAgentPermissions(agent *domain.Agent, cfg domain.WorkflowRulesConfig) *domain.MyPermissions {
+//
+// An empty cfg.Transitions means no workflow rules row exists for the project —
+// checkTransitionGate treats that as allow-all (backward-compatible). This must
+// report the same thing: an empty CanTransition map reads as "blocked from every
+// status" to a caller, which is the opposite of what actually gets enforced.
+// projectStatuses lets the empty-config path populate can_transition with every
+// real status in the project rather than leaving it empty.
+func computeAgentPermissions(agent *domain.Agent, cfg domain.WorkflowRulesConfig, projectStatuses []domain.TaskStatus) *domain.MyPermissions {
 	perms := &domain.MyPermissions{
-		MyRole:         agent.Role,
-		MyName:         agent.Name,
-		CanTransition:  make(map[string]bool),
-		CanCreateTasks: false,
-		CanDeleteTasks: false,
-		CanReassign:    false,
+		MyRole:        agent.Role,
+		MyName:        agent.Name,
+		CanTransition: make(map[string]bool),
 	}
 
-	// Check each status transition for this agent.
-	// AllowedActors restricts by actor type ("agent", "user", "system", "*").
-	// Empty AllowedActors = allow-all, consistent with the enforcement gate.
-	for status, transition := range cfg.Transitions {
-		perms.CanTransition[status] = isAgentAllowedByActors(transition.AllowedActors)
+	if len(cfg.Transitions) == 0 {
+		// No transitions configured for this project — checkTransitionGate
+		// treats this as allow-all (backward-compatible), so my_permissions must
+		// say the same instead of an empty map that reads as "blocked everywhere".
+		for _, st := range projectStatuses {
+			perms.CanTransition[st.Slug] = true
+		}
+	} else {
+		// Check each status transition for this agent.
+		// AllowedActors restricts by actor type ("agent", "user", "system", "*").
+		// Empty AllowedActors = allow-all, consistent with the enforcement gate.
+		for status, transition := range cfg.Transitions {
+			perms.CanTransition[status] = isAgentAllowedByActors(transition.AllowedActors)
+		}
 	}
 
-	// Check policies.
+	// Policies with no matching entry have no enforcement anywhere in the
+	// codebase (create_tasks/delete_tasks/reassign are advisory-only) — default
+	// to true (no restriction) rather than false, which misleadingly reads as an
+	// active permission wall.
+	perms.CanCreateTasks = true
+	perms.CanDeleteTasks = true
+	perms.CanReassign = true
 	if cfg.Policies != nil {
 		if policy, ok := cfg.Policies["create_tasks"]; ok {
 			perms.CanCreateTasks = isActorAllowed(agent, policy.Allowed)
