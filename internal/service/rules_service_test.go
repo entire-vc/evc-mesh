@@ -139,7 +139,7 @@ func TestComputeAgentPermissions_EmptyConfigAllowsAll(t *testing.T) {
 
 	assert.Len(t, perms.CanTransition, len(statuses))
 	for _, st := range statuses {
-		assert.True(t, perms.CanTransition[st.Slug], "status %q should be transitionable when no workflow config exists", st.Slug)
+		assert.True(t, perms.CanTransition[st.Slug], "status %q should allow transitions when no workflow config exists", st.Slug)
 	}
 	assert.True(t, perms.CanCreateTasks)
 	assert.True(t, perms.CanDeleteTasks)
