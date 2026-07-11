@@ -1,4 +1,4 @@
-name: Deploy frontend to tw-mesh
+name: Deploy frontend to mesh VM (via hel01)
 
 on:
   push:
@@ -48,12 +48,30 @@ jobs:
             || (echo "::error::dist/sw.js CACHE_NAME does not match mesh-<hash> pattern"; exit 1)
           echo "SW CACHE_NAME: $(grep CACHE_NAME dist/sw.js | head -1)"
 
-      - name: Deploy to tw-mesh
-        uses: burnett01/rsync-deployments@8.0.5
+      - name: Setup SSH
+        uses: webfactory/ssh-agent@v0.10.0
         with:
-          switches: -avz --delete
-          path: web/dist/
-          remote_path: /opt/evc-mesh/web/dist/
-          remote_host: 216.57.106.222
-          remote_user: root
-          remote_key: ${{ secrets.DEPLOY_SSH_KEY }}
+          ssh-private-key: ${{ secrets.DEPLOY_SSH_KEY }}
+
+      # CI reaches the private mesh VM only via the hel01 forwarding-only jump user.
+      # See docs/DEPLOY_HEL01.md.
+      - name: Configure hel01 jump
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          ssh-keyscan -H 66.151.34.194 >> ~/.ssh/known_hosts 2>/dev/null || true
+          {
+            echo "Host mesh-vm"
+            echo "  HostName 10.10.10.10"
+            echo "  User root"
+            echo "  ProxyJump hel01-jump"
+            echo "  StrictHostKeyChecking accept-new"
+            echo "Host hel01-jump"
+            echo "  HostName 66.151.34.194"
+            echo "  User ghdeploy"
+            echo "  StrictHostKeyChecking accept-new"
+          } >> ~/.ssh/config
+          chmod 600 ~/.ssh/config
+
+      - name: Deploy to mesh VM
+        run: |
+          rsync -avz --delete web/dist/ mesh-vm:/opt/evc-mesh/web/dist/

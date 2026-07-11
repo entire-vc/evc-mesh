@@ -1,4 +1,4 @@
-name: Deploy backend to tw-mesh
+name: Deploy backend to mesh VM (via hel01)
 
 on:
   push:
@@ -107,12 +107,30 @@ jobs:
         with:
           ssh-private-key: ${{ secrets.DEPLOY_SSH_KEY }}
 
-      - name: Add server to known hosts
-        run: ssh-keyscan -H 216.57.106.222 >> ~/.ssh/known_hosts
+      # CI runners reach the mesh VM (private 10.10.10.10) only through the hel01
+      # forwarding-only jump user `ghdeploy` (single public IP). The deploy key is
+      # authorized on BOTH ghdeploy@hel01 and root@mesh-vm; ssh-agent offers it to
+      # both hops. See docs/DEPLOY_HEL01.md.
+      - name: Configure hel01 jump
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          ssh-keyscan -H 66.151.34.194 >> ~/.ssh/known_hosts 2>/dev/null || true
+          {
+            echo "Host mesh-vm"
+            echo "  HostName 10.10.10.10"
+            echo "  User root"
+            echo "  ProxyJump hel01-jump"
+            echo "  StrictHostKeyChecking accept-new"
+            echo "Host hel01-jump"
+            echo "  HostName 66.151.34.194"
+            echo "  User ghdeploy"
+            echo "  StrictHostKeyChecking accept-new"
+          } >> ~/.ssh/config
+          chmod 600 ~/.ssh/config
 
       - name: Sync migration files to prod
         run: |
-          rsync -avz --checksum migrations/ root@216.57.106.222:/opt/evc-mesh/migrations/
+          rsync -avz --checksum migrations/ mesh-vm:/opt/evc-mesh/migrations/
 
       # Build goose for linux/amd64 on the CI runner and upload to prod so migrations
       # run directly on the host without requiring docker or a pre-installed goose CLI.
@@ -125,12 +143,12 @@ jobs:
       - name: Build and upload goose to prod
         run: |
           GOBIN=$(pwd) GOOS=linux GOARCH=amd64 go install github.com/pressly/goose/v3/cmd/goose@latest
-          rsync -avz goose root@216.57.106.222:/opt/evc-mesh/bin/goose
-          ssh root@216.57.106.222 'chmod +x /opt/evc-mesh/bin/goose'
+          rsync -avz goose mesh-vm:/opt/evc-mesh/bin/goose
+          ssh mesh-vm 'chmod +x /opt/evc-mesh/bin/goose'
 
       - name: Run migrations on prod (fail-closed)
         run: |
-          ssh root@216.57.106.222 bash << 'REMOTE'
+          ssh mesh-vm bash << 'REMOTE'
           set -uo pipefail
           # Source component DB_* vars from .env.prod (prod uses DB_HOST/PORT/USER/PASSWORD/NAME, not DATABASE_URL)
           set -a
@@ -184,8 +202,22 @@ jobs:
         with:
           ssh-private-key: ${{ secrets.DEPLOY_SSH_KEY }}
 
-      - name: Add server to known hosts
-        run: ssh-keyscan -H 216.57.106.222 >> ~/.ssh/known_hosts
+      - name: Configure hel01 jump
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          ssh-keyscan -H 66.151.34.194 >> ~/.ssh/known_hosts 2>/dev/null || true
+          {
+            echo "Host mesh-vm"
+            echo "  HostName 10.10.10.10"
+            echo "  User root"
+            echo "  ProxyJump hel01-jump"
+            echo "  StrictHostKeyChecking accept-new"
+            echo "Host hel01-jump"
+            echo "  HostName 66.151.34.194"
+            echo "  User ghdeploy"
+            echo "  StrictHostKeyChecking accept-new"
+          } >> ~/.ssh/config
+          chmod 600 ~/.ssh/config
 
       - name: Burst-deploy guard
         env:
@@ -197,7 +229,7 @@ jobs:
             FORCE=true
           fi
 
-          LAST=$(ssh root@216.57.106.222 'cat /opt/evc-mesh/.last-backend-deploy 2>/dev/null || echo 0')
+          LAST=$(ssh mesh-vm 'cat /opt/evc-mesh/.last-backend-deploy 2>/dev/null || echo 0')
           NOW=$(date +%s)
           DIFF=$((NOW - LAST))
 
@@ -209,12 +241,12 @@ jobs:
       - name: Upload binary
         run: |
           sha256sum mesh-api | cut -d' ' -f1 > mesh-api.sha256
-          rsync -avz --checksum mesh-api root@216.57.106.222:/opt/evc-mesh/bin/mesh-api.new
-          rsync -avz mesh-api.sha256 root@216.57.106.222:/opt/evc-mesh/bin/mesh-api.new.sha256
+          rsync -avz --checksum mesh-api mesh-vm:/opt/evc-mesh/bin/mesh-api.new
+          rsync -avz mesh-api.sha256 mesh-vm:/opt/evc-mesh/bin/mesh-api.new.sha256
 
       - name: Atomic swap and restart
         run: |
-          ssh root@216.57.106.222 'set -e
+          ssh mesh-vm 'set -e
             EXPECTED=$(cat /opt/evc-mesh/bin/mesh-api.new.sha256)
             mv /opt/evc-mesh/bin/mesh-api.new /opt/evc-mesh/bin/mesh-api
             rm -f /opt/evc-mesh/bin/mesh-api.new.sha256
@@ -232,7 +264,7 @@ jobs:
         run: |
           DEPLOYED=""
           for i in $(seq 1 15); do
-            DEPLOYED=$(ssh root@216.57.106.222 'curl -sf http://127.0.0.1:8005/api/v1/healthz/version' 2>/dev/null \
+            DEPLOYED=$(ssh mesh-vm 'curl -sf http://127.0.0.1:8005/api/v1/healthz/version' 2>/dev/null \
               | python3 -c "import sys,json; print(json.load(sys.stdin)['commit'])" 2>/dev/null) || true
             if [ -n "$DEPLOYED" ]; then
               break
