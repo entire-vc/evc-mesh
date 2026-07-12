@@ -89,6 +89,26 @@ func extractMentionSlugs(body string) []string {
 	return out
 }
 
+// blockingMarkerSlugs returns unique lowercase slugs captured by blockingMarkerRegex —
+// i.e. only the @-mention that directly follows the "Blocking" keyword on each marker
+// line, NOT every @-mention anywhere in the comment body. A body can legitimately carry
+// unrelated @-mentions (cc'ing someone, referencing an agent) before or after the marker;
+// resolving against those via extractMentionSlugs would mis-attribute the triage target
+// to whichever mention happens to resolve first, rather than to who "Blocking" actually names.
+func blockingMarkerSlugs(body string) []string {
+	matches := blockingMarkerRegex.FindAllStringSubmatch(body, -1)
+	seen := make(map[string]bool, len(matches))
+	out := make([]string, 0, len(matches))
+	for _, m := range matches {
+		slug := strings.ToLower(m[1])
+		if !seen[slug] {
+			seen[slug] = true
+			out = append(out, slug)
+		}
+	}
+	return out
+}
+
 // truncateDesc truncates a string to maxLen characters.
 func truncateDesc(s string, maxLen int) string {
 	if len(s) > maxLen {
@@ -576,8 +596,9 @@ func (s *commentService) notifyMentions(
 // Guards (in order):
 //   - required deps (taskSvc/statusRepo/userRepo) present, else no-op;
 //   - body actually carries a Blocking marker, else no-op;
-//   - human-gate: at least one @-mentioned slug resolves to a user, not just agents
-//     (agents are notified via SSE and do not need a triage move);
+//   - human-gate: the slug the marker itself names resolves to a user, not just an agent
+//     (agents are notified via SSE and do not need a triage move; a typo'd, unregistered,
+//     or agent-only slug logs a warning and is a no-op rather than triaging on a bad mention);
 //   - idempotency: the task is not already in triage/done/cancelled;
 //   - the project actually has a triage status column.
 func (s *commentService) enforceBlockingTriage(ctx context.Context, comment *domain.Comment, task *domain.Task, wsID uuid.UUID) {
@@ -595,10 +616,15 @@ func (s *commentService) enforceBlockingTriage(ctx context.Context, comment *dom
 		return
 	}
 
-	// Human-gate: only act when a real user (not just an agent) is @-mentioned.
+	// Human-gate: only act when the slug the "Blocking" marker actually names (not just
+	// any @-mention elsewhere in the body) resolves to a real user, not just an agent.
 	// Resolve this BEFORE the auto-mode early return so we can set the sticky flag.
-	userSlug := s.firstMentionedUserSlug(ctx, wsID, comment.Body)
+	blockingSlugs := blockingMarkerSlugs(comment.Body)
+	userSlug := s.firstResolvedUserSlug(ctx, wsID, blockingSlugs)
 	if userSlug == "" {
+		if len(blockingSlugs) > 0 {
+			log.Printf("[comment-triage] WARNING: Blocking marker on task %s names unresolved slug(s) %v (typo, agent, or unregistered user) — human_gate not armed", task.ID, blockingSlugs)
+		}
 		return
 	}
 
@@ -945,11 +971,11 @@ func (s *commentService) enforceTriageExit(ctx context.Context, comment *domain.
 	}
 }
 
-// firstMentionedUserSlug returns the first @-mentioned slug in body that resolves to a
-// human user in the workspace, or "" if no mentioned slug maps to a user. Agent-only
-// slugs return (nil, nil) from GetByUsername and are skipped.
-func (s *commentService) firstMentionedUserSlug(ctx context.Context, wsID uuid.UUID, body string) string {
-	for _, slug := range extractMentionSlugs(body) {
+// firstResolvedUserSlug returns the first slug in candidates that resolves to a human
+// user in the workspace, or "" if none do. Agent, typo'd, or unregistered slugs return
+// (nil, nil) from GetByUsername and are skipped.
+func (s *commentService) firstResolvedUserSlug(ctx context.Context, wsID uuid.UUID, candidates []string) string {
+	for _, slug := range candidates {
 		if user, err := s.userRepo.GetByUsername(ctx, wsID, slug); err == nil && user != nil {
 			return slug
 		}
