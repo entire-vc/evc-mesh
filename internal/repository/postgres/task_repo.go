@@ -70,7 +70,7 @@ const taskBaseColsNoAlias = `
 	recurring_schedule_id, recurring_instance_number,
 	checked_out_by, checkout_token, checkout_expires, checkout_acquired_at,
 	delegation_level, thread_id, human_gate, is_shipped, assigned_by, dod_checks,
-	completion_signal, status_changed_at`
+	completion_signal, status_changed_at, pre_review_assignee_id, pre_review_assignee_type`
 
 const taskComputedCols = `
 	(SELECT COUNT(*) FROM tasks st WHERE st.parent_task_id = tasks.id AND st.deleted_at IS NULL) AS subtask_count,
@@ -148,6 +148,10 @@ type taskRow struct {
 	CompletionSignal bool                    `db:"completion_signal"`
 	StatusChangedAt  *time.Time              `db:"status_changed_at"`
 
+	// Pre-review assignee stash — see domain.Task doc comment.
+	PreReviewAssigneeID   *uuid.UUID           `db:"pre_review_assignee_id"`
+	PreReviewAssigneeType *domain.AssigneeType `db:"pre_review_assignee_type"`
+
 	// Checkout fields.
 	CheckedOutBy       *uuid.UUID `db:"checked_out_by"`
 	CheckoutToken      *uuid.UUID `db:"checkout_token"`
@@ -193,6 +197,8 @@ func (r *taskRow) toDomain() domain.Task {
 		DodChecks:               r.DodChecks,
 		CompletionSignal:        r.CompletionSignal,
 		StatusChangedAt:         r.StatusChangedAt,
+		PreReviewAssigneeID:     r.PreReviewAssigneeID,
+		PreReviewAssigneeType:   r.PreReviewAssigneeType,
 		CheckedOutBy:            r.CheckedOutBy,
 		CheckoutToken:           r.CheckoutToken,
 		CheckoutExpires:         r.CheckoutExpires,
@@ -446,7 +452,8 @@ func (r *TaskRepo) Update(ctx context.Context, task *domain.Task) error {
 		    recurring_schedule_id = $16, recurring_instance_number = $17,
 		    delegation_level = $18, thread_id = $19,
 		    human_gate = $20, is_shipped = $21, assigned_by = $22,
-		    completion_signal = $23, status_changed_at = $24
+		    completion_signal = $23, status_changed_at = $24,
+		    pre_review_assignee_id = $25, pre_review_assignee_type = $26
 		WHERE id = $1 AND deleted_at IS NULL
 	`
 	customFields := task.CustomFields
@@ -471,6 +478,7 @@ func (r *TaskRepo) Update(ctx context.Context, task *domain.Task) error {
 		task.RecurringScheduleID, task.RecurringInstanceNumber,
 		delegationLevel, task.ThreadID,
 		task.HumanGate, task.IsShipped, task.AssignedBy, task.CompletionSignal, task.StatusChangedAt,
+		task.PreReviewAssigneeID, task.PreReviewAssigneeType,
 	)
 	pkgmetrics.RecordDBQuery("task.update", time.Since(dbStart))
 	if err != nil {
