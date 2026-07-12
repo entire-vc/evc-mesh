@@ -720,14 +720,18 @@ func (s *taskService) MoveTask(ctx context.Context, taskID uuid.UUID, input Move
 		})
 	}
 
-	// Reviewer assignment when moved to "review" category.
+	// Reviewer assignment when moved to "review" category, and the mirror-image restore
+	// when bounced back out of review to todo/in_progress.
 	// Consults OnTransition.SetReviewer from the project workflow config; if none is configured
 	// the current assignee (the builder) is preserved — no creator bounce.
-	// Skipped entirely when an explicit assignee_id is provided in the move request.
+	// Both are skipped entirely when an explicit assignee_id is provided in the move request.
 	if statusChanged && input.AssigneeID == nil {
 		if newStatus, err := s.statusRepo.GetByID(ctx, *input.StatusID); err == nil && newStatus != nil {
-			if newStatus.Category == domain.StatusCategoryReview {
+			switch newStatus.Category {
+			case domain.StatusCategoryReview:
 				s.applyReviewAssignee(ctx, task, oldStatusID)
+			case domain.StatusCategoryTodo, domain.StatusCategoryInProgress:
+				s.restorePreReviewAssignee(ctx, task, oldStatusID)
 			}
 		}
 	}
@@ -1847,6 +1851,13 @@ func (s *taskService) applyReviewAssignee(ctx context.Context, task *domain.Task
 		return
 	}
 
+	// Stash the current assignee so a later bounce out of review (MoveTask's
+	// restorePreReviewAssignee) can return the task to whoever was doing the work,
+	// instead of stranding it on the reviewer.
+	prevAssigneeType := task.AssigneeType
+	task.PreReviewAssigneeID = task.AssigneeID
+	task.PreReviewAssigneeType = &prevAssigneeType
+
 	task.AssigneeID = reviewerID
 	task.AssigneeType = assigneeType
 	task.UpdatedAt = timeNow()
@@ -1862,6 +1873,49 @@ func (s *taskService) applyReviewAssignee(ctx context.Context, task *domain.Task
 	s.notifyAssignedAgent(ctx, task, "task.assigned", map[string]any{
 		"assignee_id": map[string]any{"old": nil, "new": reviewerID.String()},
 		"reason":      "set_reviewer on review transition",
+	})
+}
+
+// restorePreReviewAssignee returns the task to whoever held it before applyReviewAssignee
+// bounced it to the configured reviewer, when the task transitions back out of a
+// review-category status without an explicit assignee_id in the move request. Without
+// this, a plain reviewer bounce (move_task review -> todo with no assignee_id) silently
+// strands the task on the reviewer instead of returning it to the executor.
+func (s *taskService) restorePreReviewAssignee(ctx context.Context, task *domain.Task, oldStatusID uuid.UUID) {
+	oldStatus, err := s.statusRepo.GetByID(ctx, oldStatusID)
+	if err != nil || oldStatus == nil || oldStatus.Category != domain.StatusCategoryReview {
+		return
+	}
+	if task.PreReviewAssigneeType == nil {
+		// Nothing stashed — task didn't enter review via a SetReviewer bounce, or was
+		// already restored on a prior transition.
+		return
+	}
+
+	prevAssigneeID := task.PreReviewAssigneeID
+	prevAssigneeType := *task.PreReviewAssigneeType
+
+	task.AssigneeID = prevAssigneeID
+	task.AssigneeType = prevAssigneeType
+	task.PreReviewAssigneeID = nil
+	task.PreReviewAssigneeType = nil
+	task.UpdatedAt = timeNow()
+	if err := s.taskRepo.Update(ctx, task); err != nil {
+		log.Printf("[review-assign] WARNING: failed to restore pre-review assignee for task %s: %v", task.ID, err)
+		return
+	}
+	var restoredID interface{}
+	if prevAssigneeID != nil {
+		restoredID = prevAssigneeID.String()
+	}
+	log.Printf("[review-assign] task %s assignee restored to pre-review holder on bounce out of review", task.ID)
+	s.logActivity(ctx, task.ProjectID, task.ID, "task.assigned", map[string]interface{}{
+		"assignee_id": map[string]interface{}{"old": nil, "new": restoredID},
+		"reason":      "restored pre-review assignee on bounce out of review",
+	})
+	s.notifyAssignedAgent(ctx, task, "task.assigned", map[string]any{
+		"assignee_id": map[string]any{"old": nil, "new": restoredID},
+		"reason":      "restored pre-review assignee on bounce out of review",
 	})
 }
 

@@ -610,6 +610,111 @@ func TestTaskService_MoveTask_ReviewAssignee(t *testing.T) {
 		require.NotNil(t, task.AssigneeID)
 		assert.Equal(t, explicitReviewerID, *task.AssigneeID, "explicit assignee_id must win over set_reviewer config")
 	})
+
+	t.Run("bounce out of review restores pre-review assignee", func(t *testing.T) {
+		wfResp := &domain.WorkflowRulesResponse{
+			WorkflowRulesConfig: domain.WorkflowRulesConfig{
+				Transitions: map[string]domain.TransitionRule{
+					"in_progress": {
+						Allowed:      []string{"review"},
+						OnTransition: &domain.TransitionAction{SetReviewer: "lead"},
+					},
+				},
+			},
+		}
+		effectiveRules := &domain.EffectiveAssignmentRules{
+			DefaultAssignee: &domain.EffectiveAssignmentRule{Value: "garfield", Source: "project"},
+		}
+		svc, taskRepo, statusRepo, agentRepo, projRepo := setupTaskServiceWithWorkflow(wfResp, effectiveRules)
+
+		inProgressStatusID := uuid.New()
+		reviewStatusID := uuid.New()
+		backToTodoStatusID := uuid.New()
+		taskID := uuid.New()
+
+		statusRepo.items[inProgressStatusID] = inProgressStatus(inProgressStatusID)
+		statusRepo.items[reviewStatusID] = reviewStatus(reviewStatusID)
+		statusRepo.items[backToTodoStatusID] = &domain.TaskStatus{ID: backToTodoStatusID, ProjectID: projectID, Category: domain.StatusCategoryTodo, Name: "todo"}
+		projRepo.items[projectID] = &domain.Project{ID: projectID, WorkspaceID: workspaceID}
+		agentRepo.items[leadID] = &domain.Agent{ID: leadID, WorkspaceID: workspaceID, Slug: "garfield"}
+		taskRepo.items[taskID] = &domain.Task{
+			ID:            taskID,
+			ProjectID:     projectID,
+			StatusID:      inProgressStatusID,
+			AssigneeID:    &builderID,
+			AssigneeType:  domain.AssigneeTypeAgent,
+			CreatedBy:     creatorID,
+			CreatedByType: domain.ActorTypeAgent,
+		}
+
+		// Move to review: SetReviewer=lead reassigns to the lead and stashes the builder.
+		err := svc.MoveTask(context.Background(), taskID, MoveTaskInput{StatusID: &reviewStatusID})
+		require.NoError(t, err)
+		task := taskRepo.items[taskID]
+		require.NotNil(t, task.AssigneeID)
+		assert.Equal(t, leadID, *task.AssigneeID, "review transition should reassign to lead")
+		require.NotNil(t, task.PreReviewAssigneeID)
+		assert.Equal(t, builderID, *task.PreReviewAssigneeID, "builder should be stashed as pre-review assignee")
+
+		// Bounce back to todo without an explicit assignee_id — the normal verifier-bounce shape.
+		err = svc.MoveTask(context.Background(), taskID, MoveTaskInput{StatusID: &backToTodoStatusID})
+		require.NoError(t, err)
+		task = taskRepo.items[taskID]
+		require.NotNil(t, task.AssigneeID)
+		assert.Equal(t, builderID, *task.AssigneeID, "bounce out of review should restore the builder, not strand on the lead")
+		assert.Nil(t, task.PreReviewAssigneeID, "stash should be cleared after restore")
+		assert.Nil(t, task.PreReviewAssigneeType, "stash should be cleared after restore")
+	})
+
+	t.Run("bounce out of review with explicit assignee_id keeps the explicit assignee", func(t *testing.T) {
+		explicitAssigneeID := uuid.New()
+		wfResp := &domain.WorkflowRulesResponse{
+			WorkflowRulesConfig: domain.WorkflowRulesConfig{
+				Transitions: map[string]domain.TransitionRule{
+					"in_progress": {
+						Allowed:      []string{"review"},
+						OnTransition: &domain.TransitionAction{SetReviewer: "lead"},
+					},
+				},
+			},
+		}
+		effectiveRules := &domain.EffectiveAssignmentRules{
+			DefaultAssignee: &domain.EffectiveAssignmentRule{Value: "garfield", Source: "project"},
+		}
+		svc, taskRepo, statusRepo, agentRepo, projRepo := setupTaskServiceWithWorkflow(wfResp, effectiveRules)
+
+		inProgressStatusID := uuid.New()
+		reviewStatusID := uuid.New()
+		backToTodoStatusID := uuid.New()
+		taskID := uuid.New()
+
+		statusRepo.items[inProgressStatusID] = inProgressStatus(inProgressStatusID)
+		statusRepo.items[reviewStatusID] = reviewStatus(reviewStatusID)
+		statusRepo.items[backToTodoStatusID] = &domain.TaskStatus{ID: backToTodoStatusID, ProjectID: projectID, Category: domain.StatusCategoryTodo, Name: "todo"}
+		projRepo.items[projectID] = &domain.Project{ID: projectID, WorkspaceID: workspaceID}
+		agentRepo.items[leadID] = &domain.Agent{ID: leadID, WorkspaceID: workspaceID, Slug: "garfield"}
+		taskRepo.items[taskID] = &domain.Task{
+			ID:            taskID,
+			ProjectID:     projectID,
+			StatusID:      inProgressStatusID,
+			AssigneeID:    &builderID,
+			AssigneeType:  domain.AssigneeTypeAgent,
+			CreatedBy:     creatorID,
+			CreatedByType: domain.ActorTypeAgent,
+		}
+
+		err := svc.MoveTask(context.Background(), taskID, MoveTaskInput{StatusID: &reviewStatusID})
+		require.NoError(t, err)
+
+		err = svc.MoveTask(context.Background(), taskID, MoveTaskInput{
+			StatusID:   &backToTodoStatusID,
+			AssigneeID: &explicitAssigneeID,
+		})
+		require.NoError(t, err)
+		task := taskRepo.items[taskID]
+		require.NotNil(t, task.AssigneeID)
+		assert.Equal(t, explicitAssigneeID, *task.AssigneeID, "explicit assignee_id on bounce must win over restore")
+	})
 }
 
 // ---------------------------------------------------------------------------

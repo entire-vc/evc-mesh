@@ -227,6 +227,55 @@ func TestTaskRepo_CreateAndGetByID(t *testing.T) {
 	assert.Equal(t, pq.StringArray{"test", "integration"}, got.Labels)
 }
 
+func TestTaskRepo_Update_PreReviewAssigneeRoundTrip(t *testing.T) {
+	db := testDB(t)
+	_, proj, status := createTestProject(t, db)
+	repo := NewTaskRepo(db)
+	ctx := context.Background()
+
+	builderID := uuid.New()
+	task := &domain.Task{
+		ID:            uuid.New(),
+		ProjectID:     proj.ID,
+		StatusID:      status.ID,
+		Title:         "Pre-review assignee stash",
+		AssigneeType:  domain.AssigneeTypeUnassigned,
+		Priority:      domain.PriorityMedium,
+		CreatedBy:     uuid.New(),
+		CreatedByType: domain.ActorTypeUser,
+		CreatedAt:     time.Now().UTC().Truncate(time.Microsecond),
+		UpdatedAt:     time.Now().UTC().Truncate(time.Microsecond),
+	}
+	require.NoError(t, repo.Create(ctx, task))
+
+	// Stash a pre-review assignee, mirroring applyReviewAssignee.
+	builderType := domain.AssigneeTypeAgent
+	task.PreReviewAssigneeID = &builderID
+	task.PreReviewAssigneeType = &builderType
+	task.UpdatedAt = time.Now().UTC().Truncate(time.Microsecond)
+	require.NoError(t, repo.Update(ctx, task))
+
+	got, err := repo.GetByID(ctx, task.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.NotNil(t, got.PreReviewAssigneeID)
+	assert.Equal(t, builderID, *got.PreReviewAssigneeID)
+	require.NotNil(t, got.PreReviewAssigneeType)
+	assert.Equal(t, domain.AssigneeTypeAgent, *got.PreReviewAssigneeType)
+
+	// Clearing the stash (restorePreReviewAssignee's cleanup) must persist as NULL, not stick.
+	task.PreReviewAssigneeID = nil
+	task.PreReviewAssigneeType = nil
+	task.UpdatedAt = time.Now().UTC().Truncate(time.Microsecond)
+	require.NoError(t, repo.Update(ctx, task))
+
+	got, err = repo.GetByID(ctx, task.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Nil(t, got.PreReviewAssigneeID)
+	assert.Nil(t, got.PreReviewAssigneeType)
+}
+
 func TestTaskRepo_ListWithFilters(t *testing.T) {
 	db := testDB(t)
 	_, proj, status := createTestProject(t, db)
