@@ -6,6 +6,7 @@ import (
 	"log"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -956,8 +957,8 @@ func (s *commentService) firstMentionedUserSlug(ctx context.Context, wsID uuid.U
 	return ""
 }
 
-// completionKeywords are lower-cased substrings whose presence in a comment body
-// indicates a progress/completion report rather than a live work blocker.
+// completionKeywords are lower-cased substrings whose presence near a blocking
+// marker indicates a progress/completion report rather than a live work blocker.
 var completionKeywords = []string{
 	// Russian
 	"выполнен", "завершен", "закрыт", "готово", "сделан", "работа завершена",
@@ -966,10 +967,41 @@ var completionKeywords = []string{
 	"done", "completed", "finished", "all done", "work done", "task done",
 }
 
+// completionKeywordWindowBytes bounds how far back from a blocking-marker match
+// isAssigneeCompletionReport scans for a completion keyword. A handoff report
+// ("Done. ❓ Blocking @pavel: please close manually") states the keyword right
+// before the marker; this window is generous for that shape while excluding an
+// unrelated completion word used earlier in a long analytical comment.
+const completionKeywordWindowBytes = 500
+
+// completionKeywordSearchWindow returns the slice of body immediately preceding
+// the first blocking-marker match, bounded to completionKeywordWindowBytes, so
+// isAssigneeCompletionReport only sees text that is actually adjacent to the
+// marker. Regression: task #69fbb698 — a comment analyzing an unrelated
+// "Helsinki-миграция ... завершена" thousands of bytes before a genuinely live
+// "❓ Blocking @pavel" question was wrongly classified as a completion report,
+// which suppressed enforceBlockingTriage before it ever reached SetHumanGate.
+func completionKeywordSearchWindow(body string) string {
+	loc := blockingMarkerRegex.FindStringIndex(body)
+	if loc == nil {
+		return body
+	}
+	start := loc[0] - completionKeywordWindowBytes
+	if start < 0 {
+		start = 0
+	}
+	for start > 0 && !utf8.RuneStart(body[start]) {
+		start++
+	}
+	return body[start:loc[0]]
+}
+
 // isAssigneeCompletionReport returns true when the comment is authored by the
-// task's own assignee AND its body contains at least one completion keyword.
-// Used to suppress enforceBlockingTriage on progress/handoff reports that
-// incidentally carry a "❓ Blocking @user" marker in citation/context.
+// task's own assignee AND the text immediately preceding its blocking marker
+// contains at least one completion keyword. Used to suppress enforceBlockingTriage
+// on progress/handoff reports that append a "❓ Blocking @user" marker as
+// citation/context, without false-positiving on unrelated completion words used
+// elsewhere in a longer comment.
 func isAssigneeCompletionReport(comment *domain.Comment, task *domain.Task) bool {
 	if task.AssigneeID == nil {
 		return false
@@ -977,7 +1009,7 @@ func isAssigneeCompletionReport(comment *domain.Comment, task *domain.Task) bool
 	if comment.AuthorID != *task.AssigneeID || comment.AuthorType != domain.ActorType(task.AssigneeType) {
 		return false
 	}
-	lower := strings.ToLower(comment.Body)
+	lower := strings.ToLower(completionKeywordSearchWindow(comment.Body))
 	for _, kw := range completionKeywords {
 		if strings.Contains(lower, kw) {
 			return true

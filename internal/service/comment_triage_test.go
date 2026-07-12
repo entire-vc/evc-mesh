@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -558,6 +559,49 @@ func TestEnforceBlockingTriage_AssigneeBlockerNoCompletion_Triages(t *testing.T)
 	moves := env.taskMover.calls()
 	require.Len(t, moves, 1, "assignee with no completion keywords must still trigger triage")
 	assert.Equal(t, env.triageID, *moves[0].input.StatusID)
+}
+
+// TestEnforceBlockingTriage_UnrelatedCompletionWordFarFromMarker_ArmsGate is the
+// regression for task #69fbb698: the server-side human_gate flag never got armed
+// on task #e8b2c765 because the completion-report heuristic scanned the ENTIRE
+// comment body for keywords like "завершен", and this assignee's long analytical
+// comment happened to mention an unrelated "Helsinki-миграция ... завершена"
+// (infra migration complete) thousands of characters before its genuinely live
+// "❓ Blocking @pavel" question. That false match suppressed enforceBlockingTriage
+// before it ever reached SetHumanGate, leaving the cheap human_gate.is_human_gated
+// path fleet-wide blind to this task. Fix: only scan a bounded window immediately
+// preceding the marker (completionKeywordSearchWindow).
+func TestEnforceBlockingTriage_UnrelatedCompletionWordFarFromMarker_ArmsGate(t *testing.T) {
+	env := setupTriageEnv(t, true)
+	assigneeID := uuid.New()
+	taskID := uuid.New()
+	env.taskRepo.items[taskID] = &domain.Task{
+		ID:              taskID,
+		ProjectID:       env.projID,
+		StatusID:        env.inProgressID,
+		Title:           "T",
+		AssigneeID:      &assigneeID,
+		AssigneeType:    domain.AssigneeTypeAgent,
+		DelegationLevel: domain.DelegationLevelAuto,
+	}
+
+	filler := strings.Repeat("padding текста без блокирующих слов. ", 40)
+	comment := &domain.Comment{
+		TaskID:     taskID,
+		AuthorID:   assigneeID,
+		AuthorType: domain.ActorTypeAgent,
+		Body: "Helsinki-миграция инфраструктурно завершена — все продукты за hel01 на " +
+			"приватном мосту. " + filler +
+			"\n\n❓ **Blocking @pavel**: какой из двух живых инстансов останавливать?",
+	}
+	require.NoError(t, env.svc.Create(context.Background(), comment))
+
+	// auto-mode: no triage move, but the sticky gate must still be armed.
+	assert.Empty(t, env.taskMover.calls(), "auto-mode must not trigger triage move")
+	gateCalls := env.taskMover.humanGateCalls()
+	require.Len(t, gateCalls, 1, "an unrelated completion word far from the marker must not suppress SetHumanGate")
+	assert.Equal(t, taskID, gateCalls[0].taskID)
+	assert.True(t, gateCalls[0].value, "SetHumanGate must arm the flag (value=true)")
 }
 
 // ---------------------------------------------------------------------------
