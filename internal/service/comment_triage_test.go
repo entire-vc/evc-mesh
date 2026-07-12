@@ -186,6 +186,54 @@ func TestEnforceBlockingTriage_AgentMentionOnly_NoTriage(t *testing.T) {
 	assert.Empty(t, env.systemComments())
 }
 
+// TestEnforceBlockingTriage_TypoSlug_NoOp documents behavior when the "Blocking" marker
+// names a slug that does not resolve to any user — typo, unregistered account, or an
+// agent slug all land here. This is a safe no-op: no triage move, no human_gate, no
+// system comment. (It now also emits a [comment-triage] WARNING log for observability —
+// task #2b600b3f — but the no-op behavior itself is unchanged and intentional.)
+func TestEnforceBlockingTriage_TypoSlug_NoOp(t *testing.T) {
+	env := setupTriageEnv(t, true)
+	taskID := env.seedTask(env.inProgressID)
+
+	// "pavvel" is a typo of the registered "pavel" user — never resolves.
+	comment := &domain.Comment{
+		TaskID:     taskID,
+		AuthorID:   uuid.New(),
+		AuthorType: domain.ActorTypeAgent,
+		Body:       "❓ **Blocking @pavvel**: need decision X",
+	}
+	require.NoError(t, env.svc.Create(context.Background(), comment))
+
+	assert.Empty(t, env.taskMover.calls(), "typo'd slug must not trigger triage move")
+	assert.Empty(t, env.taskMover.humanGateCalls(), "typo'd slug must not arm human_gate")
+	assert.Empty(t, env.systemComments())
+}
+
+// TestEnforceBlockingTriage_UnrelatedEarlierMention_DoesNotMisattribute is the regression
+// test for #2b600b3f: before the fix, the human-gate check scanned ALL @-mentions
+// anywhere in the comment body (in order) and used the first one that resolved to a
+// user — NOT specifically the slug the "Blocking" marker names. A comment that cc's a
+// real, registered user earlier in the text while the actual Blocking target is an
+// unregistered/typo'd slug would incorrectly fire triage attributed to the cc'd user.
+func TestEnforceBlockingTriage_UnrelatedEarlierMention_DoesNotMisattribute(t *testing.T) {
+	env := setupTriageEnv(t, true)
+	taskID := env.seedTask(env.inProgressID)
+
+	// @pavel is a registered human mentioned BEFORE the marker, purely as a cc — the
+	// actual Blocking target "unregistered-slug" never resolves.
+	comment := &domain.Comment{
+		TaskID:     taskID,
+		AuthorID:   uuid.New(),
+		AuthorType: domain.ActorTypeAgent,
+		Body:       "cc @pavel for visibility\n\n❓ **Blocking @unregistered-slug**: need input",
+	}
+	require.NoError(t, env.svc.Create(context.Background(), comment))
+
+	assert.Empty(t, env.taskMover.calls(), "must not triage on an unrelated earlier mention")
+	assert.Empty(t, env.taskMover.humanGateCalls())
+	assert.Empty(t, env.systemComments())
+}
+
 func TestEnforceBlockingTriage_MultiMentionWithHuman_MovesToTriage(t *testing.T) {
 	env := setupTriageEnv(t, true)
 	taskID := env.seedTask(env.inProgressID)
