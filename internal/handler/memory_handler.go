@@ -566,7 +566,14 @@ func (h *MemoryHandler) Delete(c echo.Context) error {
 		return handleError(c, apierror.NotFound("Memory"))
 	}
 
-	// Determine actor and admin status from context.
+	// Determine actor and admin status.
+	//
+	// Admin comes from the caller's workspace_members role on the memory's OWNING
+	// workspace. The role is resolved here rather than in auth middleware because
+	// it is per-workspace, and a user JWT carries no workspace — the workspace is
+	// only known once the target memory is loaded, above.
+	//
+	// Agents are never admins: an agent may only delete memories it created.
 	var agentID *uuid.UUID
 	isAdmin := false
 
@@ -575,16 +582,19 @@ func (h *MemoryHandler) Delete(c echo.Context) error {
 			agentID = &aid
 		}
 	}
-	if roleVal := c.Get("role"); roleVal != nil {
-		if role, ok := roleVal.(string); ok {
-			isAdmin = role == "owner" || role == "admin"
-		}
-	}
-	// User callers (non-agents) are treated as admins for memory deletion.
+
 	if agentID == nil {
-		if userIDVal := c.Get("user_id"); userIDVal != nil {
-			isAdmin = true
+		userID, err := mw.GetUserID(c)
+		if err != nil {
+			return handleError(c, apierror.NotFound("Memory"))
 		}
+		// workspaceAllowed above already proved membership; read the role itself to
+		// decide admin. Fail closed — an unresolvable role is not an admin.
+		role, err := h.members.GetRole(c.Request().Context(), target.WorkspaceID, userID)
+		if err != nil {
+			return handleError(c, apierror.NotFound("Memory"))
+		}
+		isAdmin = role == domain.RoleOwner || role == domain.RoleAdmin
 	}
 
 	if err := h.memoryService.Forget(c.Request().Context(), id, agentID, isAdmin); err != nil {
