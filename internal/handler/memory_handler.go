@@ -10,6 +10,8 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	mw "github.com/entire-vc/evc-mesh/internal/middleware"
+	"github.com/entire-vc/evc-mesh/internal/repository"
 	"github.com/entire-vc/evc-mesh/internal/service"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 )
@@ -17,11 +19,15 @@ import (
 // MemoryHandler handles HTTP requests for agent persistent memory management.
 type MemoryHandler struct {
 	memoryService service.MemoryService
+	members       repository.WorkspaceMemberRepository
 }
 
 // NewMemoryHandler creates a new MemoryHandler with the given service.
-func NewMemoryHandler(ms service.MemoryService) *MemoryHandler {
-	return &MemoryHandler{memoryService: ms}
+// members is used to authorize a caller against a requested workspace; the
+// memories table carries no RLS policy, so this handler is the only tenant
+// boundary in front of it.
+func NewMemoryHandler(ms service.MemoryService, members repository.WorkspaceMemberRepository) *MemoryHandler {
+	return &MemoryHandler{memoryService: ms, members: members}
 }
 
 // rememberRequest is the JSON body for creating or updating a memory entry.
@@ -118,14 +124,18 @@ func (h *MemoryHandler) Remember(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
 	}
 
-	if req.WorkspaceID == uuid.Nil {
-		// Fall back to workspace_id from auth context.
-		if wsIDVal := c.Get("workspace_id"); wsIDVal != nil {
-			if wsID, ok := wsIDVal.(uuid.UUID); ok {
-				req.WorkspaceID = wsID
-			}
-		}
+	// Authorize the caller against the requested workspace. A client-supplied
+	// workspace_id in the body is subject to the same check as the query param —
+	// otherwise any agent key could write memories into another tenant.
+	rawWS := ""
+	if req.WorkspaceID != uuid.Nil {
+		rawWS = req.WorkspaceID.String()
 	}
+	wsID, wsErr := h.requireWorkspaceID(c, rawWS)
+	if wsErr != nil {
+		return handleError(c, wsErr)
+	}
+	req.WorkspaceID = wsID
 
 	// Determine actor from context.
 	var agentID *uuid.UUID
@@ -201,9 +211,9 @@ func (h *MemoryHandler) List(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid query parameters"))
 	}
 
-	wsID, err := requireWorkspaceID(c, q.WorkspaceID)
+	wsID, err := h.requireWorkspaceID(c, q.WorkspaceID)
 	if err != nil {
-		return c.JSON(http.StatusBadRequest, err)
+		return handleError(c, err)
 	}
 
 	filter := domain.MemoryListFilter{
@@ -324,9 +334,9 @@ func (h *MemoryHandler) Search(c echo.Context) error {
 		}))
 	}
 
-	wsID, err := requireWorkspaceID(c, q.WorkspaceID)
+	wsID, err := h.requireWorkspaceID(c, q.WorkspaceID)
 	if err != nil {
-		return c.JSON(http.StatusBadRequest, err)
+		return handleError(c, err)
 	}
 
 	var projID uuid.UUID
@@ -473,9 +483,9 @@ func (h *MemoryHandler) SetProjectKnowledge(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid proj_id"))
 	}
 
-	wsID, wsErr := requireWorkspaceID(c, "")
+	wsID, wsErr := h.requireWorkspaceID(c, "")
 	if wsErr != nil {
-		return c.JSON(http.StatusBadRequest, wsErr)
+		return handleError(c, wsErr)
 	}
 
 	var req setProjectKnowledgeRequest
@@ -527,6 +537,13 @@ func (h *MemoryHandler) GetByID(c echo.Context) error {
 		return handleError(c, err)
 	}
 
+	// The memory is addressed by primary key alone, so nothing above has scoped
+	// it to a workspace. Deny unless the caller belongs to the owning workspace —
+	// as 404, so this cannot be used to probe which memory IDs exist.
+	if mem == nil || !h.workspaceAllowed(c, mem.WorkspaceID) {
+		return handleError(c, apierror.NotFound("Memory"))
+	}
+
 	return c.JSON(http.StatusOK, mem)
 }
 
@@ -536,6 +553,17 @@ func (h *MemoryHandler) Delete(c echo.Context) error {
 	id, err := uuid.Parse(idStr)
 	if err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid memory id"))
+	}
+
+	// Resolve the owning workspace before any delete decision: the memory is
+	// addressed by primary key alone, so without this a caller could delete
+	// another tenant's memory. Reported as 404 to avoid an existence oracle.
+	target, err := h.memoryService.GetByID(c.Request().Context(), id)
+	if err != nil {
+		return handleError(c, err)
+	}
+	if target == nil || !h.workspaceAllowed(c, target.WorkspaceID) {
+		return handleError(c, apierror.NotFound("Memory"))
 	}
 
 	// Determine actor and admin status from context.
@@ -581,9 +609,9 @@ func (h *MemoryHandler) GetProjectKnowledge(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid proj_id"))
 	}
 
-	wsID, wsErr := requireWorkspaceID(c, "")
+	wsID, wsErr := h.requireWorkspaceID(c, "")
 	if wsErr != nil {
-		return c.JSON(http.StatusBadRequest, wsErr)
+		return handleError(c, wsErr)
 	}
 
 	// Parse pagination query params for the workspace tier.
@@ -656,9 +684,9 @@ func (h *MemoryHandler) GetProjectKnowledge(c echo.Context) error {
 // Returns a YAML file containing all memories for the given workspace (optionally filtered by project).
 func (h *MemoryHandler) ExportMemories(c echo.Context) error {
 	wsIDStr := c.QueryParam("workspace_id")
-	wsID, err := requireWorkspaceID(c, wsIDStr)
+	wsID, err := h.requireWorkspaceID(c, wsIDStr)
 	if err != nil {
-		return c.JSON(http.StatusBadRequest, err)
+		return handleError(c, err)
 	}
 
 	var projID *uuid.UUID
@@ -683,9 +711,9 @@ func (h *MemoryHandler) ExportMemories(c echo.Context) error {
 // Accepts a YAML body matching the export format and upserts each memory.
 func (h *MemoryHandler) ImportMemories(c echo.Context) error {
 	wsIDStr := c.QueryParam("workspace_id")
-	wsID, err := requireWorkspaceID(c, wsIDStr)
+	wsID, err := h.requireWorkspaceID(c, wsIDStr)
 	if err != nil {
-		return c.JSON(http.StatusBadRequest, err)
+		return handleError(c, err)
 	}
 
 	body := c.Request().Body
@@ -723,9 +751,9 @@ func (h *MemoryHandler) ImportMemories(c echo.Context) error {
 // Triggers batch embedding for all memories without an embedding vector.
 func (h *MemoryHandler) Reindex(c echo.Context) error {
 	wsIDStr := c.QueryParam("workspace_id")
-	wsID, err := requireWorkspaceID(c, wsIDStr)
+	wsID, err := h.requireWorkspaceID(c, wsIDStr)
 	if err != nil {
-		return c.JSON(http.StatusBadRequest, err)
+		return handleError(c, err)
 	}
 
 	count, err := h.memoryService.BatchEmbed(c.Request().Context(), wsID)
@@ -787,9 +815,9 @@ func (h *MemoryHandler) RecallGraph(c echo.Context) error {
 		}))
 	}
 
-	wsID, err := requireWorkspaceID(c, q.WorkspaceID)
+	wsID, err := h.requireWorkspaceID(c, q.WorkspaceID)
 	if err != nil {
-		return c.JSON(http.StatusBadRequest, err)
+		return handleError(c, err)
 	}
 
 	opts := domain.RecallGraphOpts{
@@ -839,21 +867,63 @@ func (h *MemoryHandler) RecallGraph(c echo.Context) error {
 	})
 }
 
-// requireWorkspaceID extracts workspace_id either from the provided raw string
-// or from the Echo context (set by DualAuth middleware).
-// Returns a non-nil error when neither source yields a valid UUID.
-func requireWorkspaceID(c echo.Context, raw string) (uuid.UUID, error) {
+// workspaceAllowed reports whether the authenticated caller may act on wsID.
+//
+// Agents are pinned to the workspace that issued their API key. Users carry no
+// workspace on their token, so they are authorized against workspace_members.
+//
+// This is the ONLY tenant boundary in front of memories: unlike tasks/comments/
+// projects, the memories table has no RLS policy, so nothing downstream will
+// catch a workspace the caller was never entitled to.
+func (h *MemoryHandler) workspaceAllowed(c echo.Context, wsID uuid.UUID) bool {
+	if wsID == uuid.Nil {
+		return false
+	}
+
+	if mw.IsAgent(c) {
+		own, err := mw.GetWorkspaceID(c)
+		return err == nil && own == wsID
+	}
+
+	userID, err := mw.GetUserID(c)
+	if err != nil {
+		return false
+	}
+	// GetRole errors (incl. sql.ErrNoRows) when no membership row exists.
+	if _, err := h.members.GetRole(c.Request().Context(), wsID, userID); err != nil {
+		return false
+	}
+	return true
+}
+
+// requireWorkspaceID resolves the workspace the caller is authorized to act on.
+//
+// A client-supplied workspace_id is NEVER trusted on its own — it is honoured
+// only after the caller proves access to it. Previously raw won unconditionally,
+// which let any valid agent key read and write any other workspace's memories
+// via ?workspace_id= / a workspace_id body field (cross-tenant break).
+func (h *MemoryHandler) requireWorkspaceID(c echo.Context, raw string) (uuid.UUID, error) {
+	requested := uuid.Nil
 	if raw != "" {
 		id, err := uuid.Parse(raw)
 		if err != nil {
 			return uuid.Nil, apierror.BadRequest("invalid workspace_id")
 		}
-		return id, nil
+		requested = id
 	}
-	if wsIDVal := c.Get("workspace_id"); wsIDVal != nil {
-		if wsID, ok := wsIDVal.(uuid.UUID); ok {
-			return wsID, nil
+
+	// Absent an explicit workspace, fall back to the one on the auth context
+	// (agent keys set this; user tokens do not).
+	if requested == uuid.Nil {
+		if own, err := mw.GetWorkspaceID(c); err == nil {
+			requested = own
+		} else {
+			return uuid.Nil, apierror.BadRequest("workspace_id is required")
 		}
 	}
-	return uuid.Nil, apierror.BadRequest("workspace_id is required")
+
+	if !h.workspaceAllowed(c, requested) {
+		return uuid.Nil, apierror.Forbidden("workspace access denied")
+	}
+	return requested, nil
 }

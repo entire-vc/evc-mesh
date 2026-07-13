@@ -425,7 +425,7 @@ func main() {
 	notificationHandler := handler.NewNotificationHandler(notificationService)
 	pushSubscriptionHandler := handler.NewPushSubscriptionHandler(pushService)
 	autoTransHandler := handler.NewAutoTransitionHandler(autoTransitionSvc)
-	memoryHandler := handler.NewMemoryHandler(memoryService)
+	memoryHandler := handler.NewMemoryHandler(memoryService, workspaceMemberRepo)
 	mentionHandler := handler.NewMentionHandler(mentionService)
 	projectIntegrationHandler := handler.NewProjectIntegrationHandler(projectIntegrationService)
 	trSearchHandler := handler.NewTrSearchHandler(projectIntegrationService)
