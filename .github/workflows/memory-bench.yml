@@ -363,6 +363,18 @@ jobs:
             tail -30 bench.log
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+
+          # Same rule as the recall gate, for the same reason. rc=2 is an INFRA
+          # failure (judge/chat API out of credit) — nothing was measured, so
+          # there is nothing to report red about. Failing here paints every push
+          # to main red for a cause no author can fix, and a check that is red
+          # forever is one people learn to scroll past — which is how the real
+          # rc=1 would get ignored too. Advisory means advisory: an unmeasurable
+          # run is a loud no-op, a measured regression still shouts.
+          if [ "$rc" = "2" ]; then
+            echo "::warning title=LongMemEval-S inconclusive::The advisory eval could not run (infra/credit). Nothing was measured."
+            exit 0
+          fi
           exit $rc
 
       - name: Upload benchmark results
