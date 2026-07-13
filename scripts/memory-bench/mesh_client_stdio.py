@@ -102,7 +102,14 @@ def _to_record(item: dict[str, Any]) -> dict[str, Any]:
     score = item.get("score")
     if score is None:
         score = item.get("relevance", item.get("decayed_relevance"))
-    return {"record": {"content": content}, "score": _coerce_score(score)}
+    return {
+        "record": {"content": content},
+        "score": _coerce_score(score),
+        # Carried so the retrieval-only gate can map a hit back to its haystack
+        # session: stores are keyed `bench-<qid>-s<idx>` / tagged `session-<idx>`.
+        "key": item.get("key") or "",
+        "tags": item.get("tags") or [],
+    }
 
 
 class MeshMemoryClient:
@@ -157,14 +164,6 @@ class MeshMemoryClient:
                         if mid:
                             self._ids.append(mid)
 
-                await asyncio.gather(*[
-                    _one(idx, turns, date)
-                    for idx, (turns, date) in enumerate(
-                        zip(sessions, dates, strict=False)
-                    )
-                ])
-                results = await self._search(session, query, top_k)
-
                 async def _del(mid):
                     async with sem:
                         try:
@@ -172,8 +171,22 @@ class MeshMemoryClient:
                         except Exception:
                             pass
 
-                await asyncio.gather(*[_del(m) for m in self._ids])
-                return results
+                # The cleanup MUST run even if ingest or recall raises midway.
+                # Without this, an interrupted run abandons its haystack in the
+                # shared workspace — and because the bench stores at
+                # scope=workspace, those LongMemEval fixture conversations then
+                # surface in real agents' recall() results as if they were fleet
+                # memories. (Observed: 32 orphaned sessions in prod.)
+                try:
+                    await asyncio.gather(*[
+                        _one(idx, turns, date)
+                        for idx, (turns, date) in enumerate(
+                            zip(sessions, dates, strict=False)
+                        )
+                    ])
+                    return await self._search(session, query, top_k)
+                finally:
+                    await asyncio.gather(*[_del(m) for m in self._ids])
 
     async def _store(self, session, content, idx, date):
         result = await session.call_tool(

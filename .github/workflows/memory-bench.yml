@@ -1,5 +1,19 @@
 name: Memory Benchmark (LongMemEval-S)
 
+# Two arms, split by cost and determinism:
+#
+#   recall-gate  — free, no LLM, deterministic. Scores recall@k against the
+#                  dataset's gold answer_session_ids. Runs on EVERY PR (see the
+#                  no-paths-filter note below) and is the arm intended to become
+#                  a required check.
+#
+#   memory-bench — full LongMemEval (recall → chat model → LLM judge). Depends on
+#                  a paid API and a nondeterministic judge, so it is ADVISORY and
+#                  runs on a schedule/dispatch, never as a PR merge gate. It used
+#                  to run on PRs, where it failed on every single one since it
+#                  landed (2026-07-04) with `chat_complete failed: 402` — a red
+#                  check nobody can act on is worse than no check.
+
 on:
   workflow_dispatch:
     inputs:
@@ -7,6 +21,19 @@ on:
         description: 'Per-category regression tolerance (default: 0.25 — 1-question variance on 4q/category CI subset)'
         required: false
         default: '0.25'
+      full_eval:
+        description: 'Also run the paid end-to-end LongMemEval (chat + LLM judge)'
+        type: boolean
+        required: false
+        default: false
+
+  # NOTE: deliberately NO `paths:` filter on pull_request. A required check born
+  # in a path-filtered workflow never reports on PRs that miss the filter, and a
+  # never-reported required context blocks that PR forever (cf. evc-mesh#320).
+  # The gate runs on every PR and no-ops internally when no memory path changed.
+  pull_request:
+    branches: [main]
+
   push:
     branches: [main]
     paths:
@@ -17,22 +44,157 @@ on:
       - 'internal/mcp/server.go'
       - 'internal/reconciler/**'
       - 'scripts/memory-bench/**'
-  pull_request:
-    branches: [main]
-    paths:
-      - 'internal/service/memory_service.go'
-      - 'internal/repository/postgres/memory_repo.go'
-      - 'internal/repository/postgres/memory_edges_repo.go'
-      - 'internal/mcp/tools.go'
-      - 'internal/mcp/server.go'
-      - 'internal/reconciler/**'
-      - 'scripts/memory-bench/**'
+
+  schedule:
+    # Nightly 04:00 UTC — the paid end-to-end eval lives here, not on PRs.
+    - cron: '0 4 * * *'
+
+env:
+  MEMORY_PATHS: |
+    internal/service/memory_service.go
+    internal/repository/postgres/memory_repo.go
+    internal/repository/postgres/memory_edges_repo.go
+    internal/mcp/tools.go
+    internal/mcp/server.go
+    internal/reconciler/
+    scripts/memory-bench/
 
 jobs:
-  memory-bench:
-    name: LongMemEval-S regression gate
+  # ---------------------------------------------------------------------------
+  # The gateable arm: free, deterministic, no third-party API.
+  # ---------------------------------------------------------------------------
+  recall-gate:
+    name: Memory recall gate
     runs-on: ubuntu-latest
     timeout-minutes: 30
+
+    steps:
+      - name: Checkout evc-mesh
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Does this change touch memory?
+        id: scope
+        run: |
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Diff the PR's own base..head — never the merge ref (a guard that reads
+          # the merge ref deadlocks every open PR).
+          changed=$(git diff --name-only \
+            "${{ github.event.pull_request.base.sha }}" \
+            "${{ github.event.pull_request.head.sha }}")
+          echo "Changed files:"; echo "$changed"
+          relevant=false
+          while IFS= read -r p; do
+            [ -z "$p" ] && continue
+            if echo "$changed" | grep -qE "^${p}"; then relevant=true; fi
+          done <<< "$(printf '%s' "${MEMORY_PATHS}" | tr -d '\r')"
+          echo "relevant=$relevant" >> "$GITHUB_OUTPUT"
+          echo "memory-relevant: $relevant"
+
+      - name: No memory paths touched — nothing to gate
+        if: steps.scope.outputs.relevant != 'true'
+        run: |
+          echo "This PR changes no memory-path file; the recall gate is a no-op." \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Checkout evc-mesh-mcp
+        if: steps.scope.outputs.relevant == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: entire-vc/evc-mesh-mcp
+          token: ${{ secrets.GITHUB_TOKEN }}
+          path: evc-mesh-mcp
+
+      - name: Set up Go
+        if: steps.scope.outputs.relevant == 'true'
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: evc-mesh-mcp/go.mod
+          cache-dependency-path: evc-mesh-mcp/go.sum
+
+      - name: Cross-compile mesh-mcp (linux/amd64)
+        if: steps.scope.outputs.relevant == 'true'
+        run: |
+          cd evc-mesh-mcp
+          GOOS=linux GOARCH=amd64 go build -o ../mesh-mcp-bin .
+          chmod +x ../mesh-mcp-bin
+
+      - name: Set up Python
+        if: steps.scope.outputs.relevant == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Python dependencies
+        if: steps.scope.outputs.relevant == 'true'
+        # No `openai` — the recall gate must not acquire a paid dependency.
+        run: pip install mcp httpx
+
+      - name: Run recall gate (no LLM)
+        if: steps.scope.outputs.relevant == 'true'
+        env:
+          MESH_API_URL: ${{ secrets.MESH_API_URL }}
+          MESH_AGENT_KEY: ${{ secrets.MESH_BENCH_KEY }}
+          MESH_MCP_BIN: ${{ github.workspace }}/mesh-mcp-bin
+          RECALL_GRAPH_ENABLED: 'true'
+          LME_TOP_K: '10'
+        run: |
+          cd scripts/memory-bench
+          set +e
+          python run_ci.py --retrieval-only --tolerance "${{ inputs.tolerance || '0.25' }}" | tee gate.log
+          rc=${PIPESTATUS[0]}
+          set -e
+          {
+            echo "## Memory recall gate"
+            echo
+            case "$rc" in
+              0) if grep -q 'No baseline_retrieval.json found' gate.log; then
+                   # A pass with no baseline has compared against nothing. Say so
+                   # out loud — a vacuous green is exactly the blindness this
+                   # workflow exists to remove.
+                   echo "⚠️ **NOT ENFORCING — no baseline yet.** The gate ran but compared against nothing."
+                   echo "Generate \`baseline_retrieval.json\` against a healthy embedder before making this"
+                   echo "check required (see \`scripts/memory-bench/README.md\`)."
+                 else
+                   echo "✅ **PASS** — recall within tolerance of baseline."
+                 fi ;;
+              1) echo "❌ **REGRESSION** — recall dropped below baseline. This PR makes memory worse." ;;
+              2) echo "⚠️ **INCONCLUSIVE** — the gate could not run (Mesh unreachable / harness broken)."
+                 echo "This is NOT a quality regression: nothing was measured." ;;
+              *) echo "❌ Gate exited $rc." ;;
+            esac
+            echo
+            echo '```'
+            tail -30 gate.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit $rc
+
+      - name: Upload recall-gate results
+        if: always() && steps.scope.outputs.relevant == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: recall-gate-results
+          path: |
+            scripts/memory-bench/gate.log
+            scripts/memory-bench/results/
+          retention-days: 30
+
+  # ---------------------------------------------------------------------------
+  # The advisory arm: paid, LLM-judged, end-to-end. Never a PR merge gate.
+  # ---------------------------------------------------------------------------
+  memory-bench:
+    name: LongMemEval-S end-to-end (advisory)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    if: >-
+      github.event_name == 'schedule' ||
+      github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' && inputs.full_eval)
 
     steps:
       - name: Checkout evc-mesh
@@ -66,7 +228,7 @@ jobs:
       - name: Install Python dependencies
         run: pip install openai mcp httpx
 
-      - name: Run LongMemEval-S regression gate
+      - name: Run LongMemEval-S end-to-end
         env:
           MESH_API_URL: ${{ secrets.MESH_API_URL }}
           MESH_AGENT_KEY: ${{ secrets.MESH_BENCH_KEY }}
@@ -81,7 +243,25 @@ jobs:
           LME_TOP_K: '10'
         run: |
           cd scripts/memory-bench
-          python run_ci.py --tolerance ${{ inputs.tolerance || '0.05' }}
+          set +e
+          python run_ci.py --tolerance "${{ inputs.tolerance || '0.25' }}" | tee bench.log
+          rc=${PIPESTATUS[0]}
+          set -e
+          {
+            echo "## LongMemEval-S (advisory)"
+            echo
+            case "$rc" in
+              0) echo "✅ PASS" ;;
+              1) echo "❌ REGRESSION — end-to-end memory quality dropped." ;;
+              2) echo "⚠️ INCONCLUSIVE — the eval could not run (judge/chat API down or out of credit)."
+                 echo "Nothing was measured; this is an infra failure, not a regression." ;;
+            esac
+            echo
+            echo '```'
+            tail -30 bench.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit $rc
 
       - name: Upload benchmark results
         if: always()
@@ -89,5 +269,6 @@ jobs:
         with:
           name: memory-bench-results
           path: |
+            scripts/memory-bench/bench.log
             scripts/memory-bench/results/
           retention-days: 30
