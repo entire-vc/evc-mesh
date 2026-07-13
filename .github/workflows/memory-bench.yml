@@ -162,7 +162,7 @@ jobs:
           # treat it as inconclusive too. A gate that enforces nothing must never
           # look green-and-healthy.
           reason="$(grep -m1 '^GATE_REASON:' gate.log | sed 's/^GATE_REASON: *//' || true)"
-          if [ "$rc" = "0" ] && grep -q 'No baseline_retrieval.json found' gate.log; then
+          if [ "$rc" = "0" ] && grep -qi 'no baseline_retrieval.json' gate.log; then
             rc=2
             reason="no-baseline — the gate compared against nothing"
           fi
