@@ -152,7 +152,16 @@ jobs:
             echo "## Memory recall gate"
             echo
             case "$rc" in
-              0) echo "✅ **PASS** — recall within tolerance of baseline." ;;
+              0) if grep -q 'No baseline_retrieval.json found' gate.log; then
+                   # A pass with no baseline has compared against nothing. Say so
+                   # out loud — a vacuous green is exactly the blindness this
+                   # workflow exists to remove.
+                   echo "⚠️ **NOT ENFORCING — no baseline yet.** The gate ran but compared against nothing."
+                   echo "Generate \`baseline_retrieval.json\` against a healthy embedder before making this"
+                   echo "check required (see \`scripts/memory-bench/README.md\`)."
+                 else
+                   echo "✅ **PASS** — recall within tolerance of baseline."
+                 fi ;;
               1) echo "❌ **REGRESSION** — recall dropped below baseline. This PR makes memory worse." ;;
               2) echo "⚠️ **INCONCLUSIVE** — the gate could not run (Mesh unreachable / harness broken)."
                  echo "This is NOT a quality regression: nothing was measured." ;;
