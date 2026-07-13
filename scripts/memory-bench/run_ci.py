@@ -176,8 +176,18 @@ def _load_env() -> None:
 def _require_env(key: str) -> str:
     val = os.environ.get(key, "")
     if not val:
+        # EXIT_INCONCLUSIVE, never EXIT_REGRESSION. A missing credential means the
+        # eval could not RUN — it says nothing about memory quality. Exiting 1 here
+        # would collide with EXIT_REGRESSION and make the (required) gate report
+        # "this PR makes memory worse" at an author who merely has no access to the
+        # secrets: a PR from a fork gets none, and that merge could never be cleared.
+        # Same rule as everywhere else in this harness: cannot measure => exit 2.
         print(f"ERROR: {key} is not set", file=sys.stderr)
-        sys.exit(1)
+        print(
+            f"GATE_REASON: infra-unreachable — {key} is not set "
+            "(no access to Mesh credentials; nothing was measured)"
+        )
+        sys.exit(EXIT_INCONCLUSIVE)
     return val
 
 

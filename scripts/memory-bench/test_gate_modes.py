@@ -18,13 +18,16 @@ author can fix — the check gets bypassed and the safety net is gone for good.
 from __future__ import annotations
 
 import json
+import os
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import run_ci  # noqa: E402
 from run_ci import (  # noqa: E402
     EXIT_REGRESSION,
     MODE_BM25_ONLY,
@@ -122,6 +125,24 @@ class TestLoadBaseline(unittest.TestCase):
         self.assertEqual(mode, MODE_UNKNOWN)
         self.assertEqual(scores["overall"], 0.83)
         self.assertFalse(modes_comparable(mode, MODE_HYBRID))
+
+
+class TestMissingCredentialsAreInconclusive(unittest.TestCase):
+    """A missing credential must never be reportable as a memory regression.
+
+    `_require_env` used to `sys.exit(1)`, which is EXIT_REGRESSION. Since the
+    recall gate is a REQUIRED check, that made a PR with no access to the Mesh
+    secrets (any PR from a fork) fail with "this PR makes memory worse" — a red
+    check its author could never clear. Cannot-measure is exit 2, always.
+    """
+
+    def test_missing_env_exits_inconclusive_not_regression(self):
+        for key in ("MESH_API_URL", "MESH_AGENT_KEY"):
+            with self.subTest(key=key), mock.patch.dict(os.environ, {key: ""}):
+                with self.assertRaises(SystemExit) as cm:
+                    run_ci._require_env(key)
+                self.assertEqual(cm.exception.code, run_ci.EXIT_INCONCLUSIVE)
+                self.assertNotEqual(cm.exception.code, run_ci.EXIT_REGRESSION)
 
 
 if __name__ == "__main__":
