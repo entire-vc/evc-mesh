@@ -70,7 +70,7 @@ jobs:
 
     steps:
       - name: Checkout evc-mesh
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -103,7 +103,7 @@ jobs:
 
       - name: Checkout evc-mesh-mcp
         if: steps.scope.outputs.relevant == 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: entire-vc/evc-mesh-mcp
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -111,7 +111,7 @@ jobs:
 
       - name: Set up Go
         if: steps.scope.outputs.relevant == 'true'
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version-file: evc-mesh-mcp/go.mod
           cache-dependency-path: evc-mesh-mcp/go.sum
@@ -125,7 +125,7 @@ jobs:
 
       - name: Set up Python
         if: steps.scope.outputs.relevant == 'true'
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.12'
 
@@ -176,7 +176,7 @@ jobs:
 
       - name: Upload recall-gate results
         if: always() && steps.scope.outputs.relevant == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: recall-gate-results
           path: |
@@ -198,17 +198,17 @@ jobs:
 
     steps:
       - name: Checkout evc-mesh
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Checkout evc-mesh-mcp
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: entire-vc/evc-mesh-mcp
           token: ${{ secrets.GITHUB_TOKEN }}
           path: evc-mesh-mcp
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version-file: evc-mesh-mcp/go.mod
           cache-dependency-path: evc-mesh-mcp/go.sum
@@ -221,7 +221,7 @@ jobs:
           echo "mesh-mcp built: $(file ../mesh-mcp-bin)"
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.12'
 
@@ -265,7 +265,7 @@ jobs:
 
       - name: Upload benchmark results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: memory-bench-results
           path: |
