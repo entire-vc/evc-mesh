@@ -490,3 +490,89 @@ func TestSearch_UnauthenticatedCallerRejected(t *testing.T) {
 		t.Error("SECURITY: unauthenticated caller reached the memory service")
 	}
 }
+
+// TestFindRelated_AgentCannotReadForeignMemory: /memories/:id/related takes no
+// workspace param, and the service searches the SEED's workspace — not the
+// caller's. So a foreign seed ID turns this route into a full cross-tenant read
+// of another workspace's memories. Verified live against prod (2026-07-13) with
+// an agent key from an unrelated workspace before the gate was added: HTTP 200
+// with real foreign content, while the same key got 403 on /search.
+// The handler must refuse before FindRelated is ever reached. 404, not 403, so
+// it cannot be used to probe which memory IDs exist.
+func TestFindRelated_AgentCannotReadForeignMemory(t *testing.T) {
+	ownWS := uuid.New()
+	foreignWS := uuid.New()
+	memID := uuid.New()
+
+	serviceReached := false
+	ms := &MockMemoryService{
+		GetByIDFunc: func(_ context.Context, id uuid.UUID) (*domain.Memory, error) {
+			return &domain.Memory{ID: id, WorkspaceID: foreignWS, Key: "seed"}, nil
+		},
+		FindRelatedFunc: func(_ context.Context, _ uuid.UUID, _ int) ([]domain.ScoredMemory, error) {
+			serviceReached = true
+			return []domain.ScoredMemory{{
+				Memory: domain.Memory{ID: uuid.New(), WorkspaceID: foreignWS, Content: "tenant B data"},
+			}}, nil
+		},
+	}
+	h := NewMemoryHandler(ms, &mockWorkspaceMemberRepo{})
+
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/memories/"+memID.String()+"/related", http.NoBody)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetParamNames("id")
+	c.SetParamValues(memID.String())
+	asAgent(c, uuid.New(), ownWS)
+
+	if err := h.FindRelated(c); err != nil {
+		t.Fatalf("FindRelated returned error: %v", err)
+	}
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("cross-tenant find-related: got status %d, want 404", rec.Code)
+	}
+	if serviceReached {
+		t.Error("SECURITY: FindRelated was executed against a foreign seed — the gate must refuse before the service is reached")
+	}
+	if strings.Contains(rec.Body.String(), "tenant B data") {
+		t.Error("SECURITY: foreign workspace memory content leaked in the response body")
+	}
+}
+
+// TestFindRelated_AgentOwnMemoryStillWorks pins the legitimate path: the gate
+// must not break /related for a seed the caller actually owns.
+func TestFindRelated_AgentOwnMemoryStillWorks(t *testing.T) {
+	ownWS := uuid.New()
+	memID := uuid.New()
+
+	ms := &MockMemoryService{
+		GetByIDFunc: func(_ context.Context, id uuid.UUID) (*domain.Memory, error) {
+			return &domain.Memory{ID: id, WorkspaceID: ownWS, Key: "seed"}, nil
+		},
+		FindRelatedFunc: func(_ context.Context, _ uuid.UUID, _ int) ([]domain.ScoredMemory, error) {
+			return []domain.ScoredMemory{{
+				Memory: domain.Memory{ID: uuid.New(), WorkspaceID: ownWS, Content: "own tenant data"},
+			}}, nil
+		},
+	}
+	h := NewMemoryHandler(ms, &mockWorkspaceMemberRepo{})
+
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/memories/"+memID.String()+"/related", http.NoBody)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetParamNames("id")
+	c.SetParamValues(memID.String())
+	asAgent(c, uuid.New(), ownWS)
+
+	if err := h.FindRelated(c); err != nil {
+		t.Fatalf("FindRelated returned error: %v", err)
+	}
+	if rec.Code != http.StatusOK {
+		t.Errorf("own-workspace find-related: got status %d, want 200", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "own tenant data") {
+		t.Error("own-workspace find-related must still return results")
+	}
+}

@@ -671,8 +671,9 @@ type MemoryEdgeRepository interface {
 	// GetNeighbors returns edges connected to any of the given memory IDs
 	// (bidirectional: memory_from_id ∈ ids OR memory_to_id ∈ ids) with weight >= weightThreshold,
 	// ordered by weight DESC and capped at limit rows (defaults to 200 when <= 0).
+	// Confined to workspaceID so BFS expansion cannot hop out of the caller's tenant.
 	// Used by RecallGraph BFS expansion across the KG.
-	GetNeighbors(ctx context.Context, ids []uuid.UUID, weightThreshold float64, limit int) ([]domain.MemoryEdge, error)
+	GetNeighbors(ctx context.Context, ids []uuid.UUID, workspaceID uuid.UUID, weightThreshold float64, limit int) ([]domain.MemoryEdge, error)
 }
 
 // WorkspaceInviteRepository manages persistence for pending workspace invitations.

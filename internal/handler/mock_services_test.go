@@ -736,6 +736,7 @@ type MockMemoryService struct {
 	GetByIDFunc      func(ctx context.Context, id uuid.UUID) (*domain.Memory, error)
 	RememberFunc     func(ctx context.Context, mem *domain.Memory) (service.RememberResult, error)
 	ForgetFunc       func(ctx context.Context, id uuid.UUID, actorAgentID *uuid.UUID, isAdmin bool) error
+	FindRelatedFunc  func(ctx context.Context, memoryID uuid.UUID, limit int) ([]domain.ScoredMemory, error)
 }
 
 func (m *MockMemoryService) ListMemories(ctx context.Context, filter domain.MemoryListFilter) (*service.RecallResult, error) {
@@ -785,6 +786,9 @@ func (m *MockMemoryService) BatchEmbed(ctx context.Context, workspaceID uuid.UUI
 	return 0, nil
 }
 func (m *MockMemoryService) FindRelated(ctx context.Context, memoryID uuid.UUID, limit int) ([]domain.ScoredMemory, error) {
+	if m.FindRelatedFunc != nil {
+		return m.FindRelatedFunc(ctx, memoryID, limit)
+	}
 	return nil, nil
 }
 func (m *MockMemoryService) ExtractFromEvent(ctx context.Context, event *domain.EventBusMessage, hint *domain.MemoryHint) error {

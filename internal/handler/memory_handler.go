@@ -780,6 +780,18 @@ func (h *MemoryHandler) FindRelated(c echo.Context) error {
 		}
 	}
 
+	// The seed memory is addressed by primary key alone, and FindRelated searches
+	// the SEED's workspace — not the caller's. Without this gate any valid key
+	// reads any workspace's memories through a foreign seed ID. Reported as 404
+	// to avoid an existence oracle, matching GetByID/Delete.
+	seed, err := h.memoryService.GetByID(c.Request().Context(), id)
+	if err != nil {
+		return handleError(c, err)
+	}
+	if seed == nil || !h.workspaceAllowed(c, seed.WorkspaceID) {
+		return handleError(c, apierror.NotFound("Memory"))
+	}
+
 	results, err := h.memoryService.FindRelated(c.Request().Context(), id, limit)
 	if err != nil {
 		return handleError(c, err)
