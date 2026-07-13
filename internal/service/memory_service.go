@@ -1655,7 +1655,7 @@ func (s *memoryService) RecallGraph(ctx context.Context, opts domain.RecallGraph
 	}
 
 	for hop := 1; hop <= opts.Hops && len(frontier) > 0; hop++ {
-		edges, edgeErr := s.edgeRepo.GetNeighbors(ctx, frontier, opts.WeightThreshold, 200)
+		edges, edgeErr := s.edgeRepo.GetNeighbors(ctx, frontier, opts.WorkspaceID, opts.WeightThreshold, 200)
 		if edgeErr != nil {
 			return nil, fmt.Errorf("recall graph: get neighbors hop %d: %w", hop, edgeErr)
 		}
@@ -1703,6 +1703,14 @@ func (s *memoryService) RecallGraph(ctx context.Context, opts domain.RecallGraph
 			mem, fetchErr := s.memRepo.GetByID(ctx, neighborID)
 			if fetchErr != nil || mem == nil {
 				continue // skip unreachable or deleted memories
+			}
+
+			// GetByID is a primary-key lookup with no workspace predicate, so an
+			// edge pointing out of the tenant would surface a foreign memory here.
+			// GetNeighbors already confines edges to opts.WorkspaceID; this is the
+			// second lock on the same door — the node itself must also belong to it.
+			if mem.WorkspaceID != opts.WorkspaceID {
+				continue
 			}
 
 			// Drop low-importance graph-expanded memories.

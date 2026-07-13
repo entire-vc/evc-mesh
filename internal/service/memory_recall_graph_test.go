@@ -31,13 +31,17 @@ func clearRecallGraphCache() {
 // test to inject custom GetNeighbors behaviour via getNeighborsFn.
 type testEdgeRepo struct {
 	getNeighborsFn func(ctx context.Context, ids []uuid.UUID, weightThreshold float64, limit int) ([]domain.MemoryEdge, error)
+	// gotWorkspaceIDs records the workspace passed to each GetNeighbors call, so a
+	// test can assert BFS confines its edge lookups to the caller's tenant.
+	gotWorkspaceIDs []uuid.UUID
 }
 
 func (r *testEdgeRepo) UpsertEdge(_ context.Context, _ *domain.MemoryEdge) error { return nil }
 func (r *testEdgeRepo) ReinforceEdge(_ context.Context, _, _ uuid.UUID, _ domain.MemoryEdgeRelationshipType) error {
 	return nil
 }
-func (r *testEdgeRepo) GetNeighbors(ctx context.Context, ids []uuid.UUID, weightThreshold float64, limit int) ([]domain.MemoryEdge, error) {
+func (r *testEdgeRepo) GetNeighbors(ctx context.Context, ids []uuid.UUID, workspaceID uuid.UUID, weightThreshold float64, limit int) ([]domain.MemoryEdge, error) {
+	r.gotWorkspaceIDs = append(r.gotWorkspaceIDs, workspaceID)
 	if r.getNeighborsFn != nil {
 		return r.getNeighborsFn(ctx, ids, weightThreshold, limit)
 	}
@@ -73,9 +77,15 @@ func graphSeed(id uuid.UUID, importance float32) domain.ScoredMemory {
 }
 
 // graphNeighbor builds a Memory for GetByID returns.
-func graphNeighbor(id uuid.UUID, importance float32) *domain.Memory {
+//
+// wsID is required: memories.workspace_id is NOT NULL, so a memory with no
+// workspace is a row that cannot exist. BFS now drops any neighbor outside the
+// caller's workspace, and a zero-workspace fixture would be silently dropped —
+// making these tests pass for the wrong reason.
+func graphNeighbor(wsID, id uuid.UUID, importance float32) *domain.Memory {
 	return &domain.Memory{
 		ID:              id,
+		WorkspaceID:     wsID,
 		Content:         "neighbor-" + id.String()[:8],
 		ImportanceScore: importance,
 		Scope:           domain.ScopeWorkspace,
@@ -175,6 +185,7 @@ func TestRecallGraph_SeedsOnly_NoEdges(t *testing.T) {
 
 func TestRecallGraph_Provenance(t *testing.T) {
 	clearRecallGraphCache()
+	opts := freshOpts("provenance")
 	seedID := uuid.New()
 	neighborID := uuid.New()
 
@@ -184,7 +195,7 @@ func TestRecallGraph_Provenance(t *testing.T) {
 		},
 		getByIDFn: func(_ context.Context, id uuid.UUID) (*domain.Memory, error) {
 			if id == neighborID {
-				return graphNeighbor(neighborID, 0.5), nil
+				return graphNeighbor(opts.WorkspaceID, neighborID, 0.5), nil
 			}
 			return nil, nil
 		},
@@ -196,7 +207,7 @@ func TestRecallGraph_Provenance(t *testing.T) {
 	}
 	svc := newGraphService(mem, er)
 
-	results, err := svc.RecallGraph(context.Background(), freshOpts("provenance"))
+	results, err := svc.RecallGraph(context.Background(), opts)
 	require.NoError(t, err)
 	require.Len(t, results, 2)
 
@@ -218,6 +229,7 @@ func TestRecallGraph_Provenance(t *testing.T) {
 // verify the ratio rather than an absolute value.
 func TestRecallGraph_CompositeScore_1Hop(t *testing.T) {
 	clearRecallGraphCache()
+	opts := freshOpts("composite score 1hop")
 	seedID := uuid.New()
 	neighborID := uuid.New()
 
@@ -229,7 +241,7 @@ func TestRecallGraph_CompositeScore_1Hop(t *testing.T) {
 		},
 		getByIDFn: func(_ context.Context, id uuid.UUID) (*domain.Memory, error) {
 			if id == neighborID {
-				return graphNeighbor(neighborID, 0.5), nil
+				return graphNeighbor(opts.WorkspaceID, neighborID, 0.5), nil
 			}
 			return nil, nil
 		},
@@ -241,7 +253,7 @@ func TestRecallGraph_CompositeScore_1Hop(t *testing.T) {
 	}
 	svc := newGraphService(mem, er)
 
-	results, err := svc.RecallGraph(context.Background(), freshOpts("composite score 1hop"))
+	results, err := svc.RecallGraph(context.Background(), opts)
 	require.NoError(t, err)
 	require.Len(t, results, 2)
 
@@ -262,6 +274,7 @@ func TestRecallGraph_CompositeScore_1Hop(t *testing.T) {
 
 func TestRecallGraph_LowImportanceSuppressed(t *testing.T) {
 	clearRecallGraphCache()
+	opts := freshOpts("low importance suppressed")
 	seedID := uuid.New()
 	neighborID := uuid.New()
 
@@ -272,7 +285,7 @@ func TestRecallGraph_LowImportanceSuppressed(t *testing.T) {
 		getByIDFn: func(_ context.Context, id uuid.UUID) (*domain.Memory, error) {
 			if id == neighborID {
 				// importance 0.3 < graphMinImportance (0.4) → must be dropped
-				return graphNeighbor(neighborID, 0.3), nil
+				return graphNeighbor(opts.WorkspaceID, neighborID, 0.3), nil
 			}
 			return nil, nil
 		},
@@ -284,7 +297,7 @@ func TestRecallGraph_LowImportanceSuppressed(t *testing.T) {
 	}
 	svc := newGraphService(mem, er)
 
-	results, err := svc.RecallGraph(context.Background(), freshOpts("low importance suppressed"))
+	results, err := svc.RecallGraph(context.Background(), opts)
 	require.NoError(t, err)
 	require.Len(t, results, 1, "low-importance graph node must be dropped")
 	assert.Equal(t, seedID, results[0].ID)
@@ -325,6 +338,7 @@ func TestRecallGraph_LowImportanceAllowed_ForSeeds(t *testing.T) {
 
 func TestRecallGraph_DeduplicateBestPath(t *testing.T) {
 	clearRecallGraphCache()
+	opts := freshOpts("dedup best path")
 	seed1 := uuid.New()
 	seed2 := uuid.New()
 	sharedNeighbor := uuid.New()
@@ -338,7 +352,7 @@ func TestRecallGraph_DeduplicateBestPath(t *testing.T) {
 		},
 		getByIDFn: func(_ context.Context, id uuid.UUID) (*domain.Memory, error) {
 			if id == sharedNeighbor {
-				return graphNeighbor(sharedNeighbor, 0.7), nil
+				return graphNeighbor(opts.WorkspaceID, sharedNeighbor, 0.7), nil
 			}
 			return nil, nil
 		},
@@ -362,7 +376,7 @@ func TestRecallGraph_DeduplicateBestPath(t *testing.T) {
 	}
 	svc := newGraphService(mem, er)
 
-	results, err := svc.RecallGraph(context.Background(), freshOpts("dedup best path"))
+	results, err := svc.RecallGraph(context.Background(), opts)
 	require.NoError(t, err)
 
 	var neighborResults []domain.RecallGraphResult
@@ -425,6 +439,7 @@ func TestRecallGraph_SortedByCompositeScore(t *testing.T) {
 
 func TestRecallGraph_HopDistance(t *testing.T) {
 	clearRecallGraphCache()
+	opts := freshOpts("hop distance check")
 	seedID := uuid.New()
 	hop1ID := uuid.New()
 
@@ -434,7 +449,7 @@ func TestRecallGraph_HopDistance(t *testing.T) {
 		},
 		getByIDFn: func(_ context.Context, id uuid.UUID) (*domain.Memory, error) {
 			if id == hop1ID {
-				return graphNeighbor(hop1ID, 0.5), nil
+				return graphNeighbor(opts.WorkspaceID, hop1ID, 0.5), nil
 			}
 			return nil, nil
 		},
@@ -451,7 +466,7 @@ func TestRecallGraph_HopDistance(t *testing.T) {
 	}
 	svc := newGraphService(mem, er)
 
-	results, err := svc.RecallGraph(context.Background(), freshOpts("hop distance check"))
+	results, err := svc.RecallGraph(context.Background(), opts)
 	require.NoError(t, err)
 
 	distMap := map[uuid.UUID]int{}
@@ -596,4 +611,81 @@ func TestRecallGraph_WeightThreshold_Passed(t *testing.T) {
 	require.NoError(t, err)
 	assert.InDelta(t, wantThreshold, gotThreshold, 1e-9,
 		"GetNeighbors must receive the exact WeightThreshold from RecallGraphOpts")
+}
+
+// ---------------------------------------------------------------------------
+// Tenant confinement of BFS expansion
+// ---------------------------------------------------------------------------
+
+// TestRecallGraph_EdgeLookupIsWorkspaceScoped pins that BFS asks the edge repo
+// only for edges inside the caller's workspace. GetNeighbors' SQL previously had
+// no workspace predicate, so same-workspace expansion held by convention (every
+// UpsertEdge call site happened to derive endpoints from same-workspace searches)
+// rather than by the query.
+func TestRecallGraph_EdgeLookupIsWorkspaceScoped(t *testing.T) {
+	clearRecallGraphCache()
+	opts := freshOpts("edge lookup is workspace scoped")
+	seedID := uuid.New()
+
+	mem := &mockMemoryRepo{
+		fullTextSearchRankedFn: func(_ context.Context, _ uuid.UUID, _ *uuid.UUID, _ string, _ int) ([]domain.ScoredMemory, error) {
+			return []domain.ScoredMemory{graphSeed(seedID, 0.6)}, nil
+		},
+	}
+	er := &testEdgeRepo{}
+	svc := newGraphService(mem, er)
+
+	_, err := svc.RecallGraph(context.Background(), opts)
+	require.NoError(t, err)
+
+	require.NotEmpty(t, er.gotWorkspaceIDs, "BFS must query the edge repo")
+	for _, got := range er.gotWorkspaceIDs {
+		assert.Equal(t, opts.WorkspaceID, got,
+			"edge lookup must be confined to the caller's workspace")
+	}
+}
+
+// TestRecallGraph_ForeignNeighborDropped is the second lock on the same door:
+// even if an edge pointing out of the tenant exists (no DB constraint forbids
+// one), the memory it resolves to must not enter the result set. memRepo.GetByID
+// is a primary-key lookup with no workspace predicate, so without the check in
+// BFS this foreign memory's content would be returned to the caller.
+func TestRecallGraph_ForeignNeighborDropped(t *testing.T) {
+	clearRecallGraphCache()
+	opts := freshOpts("foreign neighbor dropped")
+	seedID := uuid.New()
+	foreignNeighborID := uuid.New()
+	foreignWS := uuid.New()
+
+	mem := &mockMemoryRepo{
+		fullTextSearchRankedFn: func(_ context.Context, _ uuid.UUID, _ *uuid.UUID, _ string, _ int) ([]domain.ScoredMemory, error) {
+			return []domain.ScoredMemory{graphSeed(seedID, 0.6)}, nil
+		},
+		getByIDFn: func(_ context.Context, id uuid.UUID) (*domain.Memory, error) {
+			if id == foreignNeighborID {
+				// A memory in ANOTHER tenant, reached via a cross-workspace edge.
+				m := graphNeighbor(foreignWS, foreignNeighborID, 0.9)
+				m.Content = "tenant B data"
+				return m, nil
+			}
+			return nil, nil
+		},
+	}
+	er := &testEdgeRepo{
+		getNeighborsFn: func(_ context.Context, _ []uuid.UUID, _ float64, _ int) ([]domain.MemoryEdge, error) {
+			return []domain.MemoryEdge{graphEdge(seedID, foreignNeighborID, 0.9)}, nil
+		},
+	}
+	svc := newGraphService(mem, er)
+
+	results, err := svc.RecallGraph(context.Background(), opts)
+	require.NoError(t, err)
+
+	for _, r := range results {
+		assert.NotEqual(t, foreignNeighborID, r.ID,
+			"SECURITY: a memory from another workspace was reached via graph expansion")
+		assert.NotContains(t, r.Content, "tenant B data",
+			"SECURITY: foreign workspace content leaked through BFS hop-expansion")
+	}
+	assert.Len(t, results, 1, "only the seed should survive")
 }
