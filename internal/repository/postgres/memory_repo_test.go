@@ -3,6 +3,8 @@ package postgres
 import (
 	"math"
 	"testing"
+
+	"github.com/google/uuid"
 )
 
 // TestDecayedRelevanceFormula verifies the Go-side implementation of the SQL
@@ -125,4 +127,85 @@ func TestTokenizeForORQuery(t *testing.T) {
 			}
 		})
 	}
+}
+
+// scoredRow is a test helper building a scoredMemoryRow with just the fields
+// mergeORScoredRows cares about (identity + score).
+func scoredRow(id uuid.UUID, score float64) scoredMemoryRow {
+	return scoredMemoryRow{
+		memoryRow: memoryRow{ID: id},
+		Score:     score,
+	}
+}
+
+// TestMergeORScoredRows covers the AND+OR merge shared by the 'simple' (ftsORFallback)
+// and 'english' (ftsRankedORFallback) relaxation arms. Pure — no DB connection required.
+func TestMergeORScoredRows(t *testing.T) {
+	idA := uuid.MustParse("00000000-0000-0000-0000-0000000000a1")
+	idB := uuid.MustParse("00000000-0000-0000-0000-0000000000b2")
+	idC := uuid.MustParse("00000000-0000-0000-0000-0000000000c3")
+
+	t.Run("or_only_rows_are_discounted", func(t *testing.T) {
+		// AND hit scores 0.5; OR-only hit has a *higher* raw score (0.6) but after the
+		// 0.8x discount (0.48) it must still rank below the exact AND match.
+		got := mergeORScoredRows(
+			[]scoredMemoryRow{scoredRow(idA, 0.5)},
+			[]scoredMemoryRow{scoredRow(idB, 0.6)},
+			10,
+		)
+		if len(got) != 2 {
+			t.Fatalf("len = %d, want 2", len(got))
+		}
+		if got[0].ID != idA {
+			t.Errorf("AND hit should rank first, got %v", got[0].ID)
+		}
+		if math.Abs(got[1].Score-0.48) > 1e-9 {
+			t.Errorf("OR-only score = %v, want 0.48 (0.6 * %v)", got[1].Score, orScoreMultiplier)
+		}
+	})
+
+	t.Run("dedupe_keeps_undiscounted_and_score", func(t *testing.T) {
+		// A row found by BOTH arms must appear once, keeping its raw AND score.
+		got := mergeORScoredRows(
+			[]scoredMemoryRow{scoredRow(idA, 0.5)},
+			[]scoredMemoryRow{scoredRow(idA, 0.5), scoredRow(idB, 0.1)},
+			10,
+		)
+		if len(got) != 2 {
+			t.Fatalf("len = %d, want 2 (idA must not appear twice)", len(got))
+		}
+		if got[0].ID != idA || math.Abs(got[0].Score-0.5) > 1e-9 {
+			t.Errorf("idA = %v score %v, want raw 0.5 (no discount)", got[0].ID, got[0].Score)
+		}
+	})
+
+	t.Run("respects_limit", func(t *testing.T) {
+		got := mergeORScoredRows(
+			[]scoredMemoryRow{scoredRow(idA, 0.5)},
+			[]scoredMemoryRow{scoredRow(idB, 0.4), scoredRow(idC, 0.3)},
+			2,
+		)
+		if len(got) != 2 {
+			t.Fatalf("len = %d, want 2 (capped at limit)", len(got))
+		}
+		if got[0].ID != idA || got[1].ID != idB {
+			t.Errorf("order = [%v %v], want [idA idB] (lowest-scoring idC dropped)", got[0].ID, got[1].ID)
+		}
+	})
+
+	t.Run("no_and_hits_returns_or_rows", func(t *testing.T) {
+		// The dense-arm-down / strict-AND-zero case: relaxation is the only thing
+		// standing between the caller and an empty recall.
+		got := mergeORScoredRows(
+			nil,
+			[]scoredMemoryRow{scoredRow(idB, 0.4), scoredRow(idC, 0.9)},
+			10,
+		)
+		if len(got) != 2 {
+			t.Fatalf("len = %d, want 2", len(got))
+		}
+		if got[0].ID != idC {
+			t.Errorf("expected highest OR score first, got %v", got[0].ID)
+		}
+	})
 }
