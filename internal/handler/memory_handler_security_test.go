@@ -82,7 +82,7 @@ func TestSearch_AgentCannotReadForeignWorkspace(t *testing.T) {
 	h := NewMemoryHandler(ms, &mockWorkspaceMemberRepo{})
 
 	e := echo.New()
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/memories/search?q=session&workspace_id="+foreignWS.String(), nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/memories/search?q=session&workspace_id="+foreignWS.String(), http.NoBody)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 	asAgent(c, uuid.New(), ownWS)
@@ -114,7 +114,7 @@ func TestSearch_AgentOwnWorkspaceStillWorks(t *testing.T) {
 	h := NewMemoryHandler(ms, &mockWorkspaceMemberRepo{})
 
 	e := echo.New()
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/memories/search?q=session&workspace_id="+ownWS.String(), nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/memories/search?q=session&workspace_id="+ownWS.String(), http.NoBody)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 	asAgent(c, uuid.New(), ownWS)
@@ -145,7 +145,7 @@ func TestSearch_AgentNoParamDefaultsToOwnWorkspace(t *testing.T) {
 	h := NewMemoryHandler(ms, &mockWorkspaceMemberRepo{})
 
 	e := echo.New()
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/memories/search?q=session", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/memories/search?q=session", http.NoBody)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 	asAgent(c, uuid.New(), ownWS)
@@ -176,7 +176,7 @@ func TestList_AgentCannotReadForeignWorkspace(t *testing.T) {
 	h := NewMemoryHandler(ms, &mockWorkspaceMemberRepo{})
 
 	e := echo.New()
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/memories?workspace_id="+foreignWS.String(), nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/memories?workspace_id="+foreignWS.String(), http.NoBody)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 	asAgent(c, uuid.New(), ownWS)
@@ -274,7 +274,7 @@ func TestGetByID_AgentCannotReadForeignMemory(t *testing.T) {
 	h := NewMemoryHandler(ms, &mockWorkspaceMemberRepo{})
 
 	e := echo.New()
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/memories/"+memID.String(), nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/memories/"+memID.String(), http.NoBody)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 	c.SetParamNames("id")
@@ -312,7 +312,7 @@ func TestDelete_AgentCannotDeleteForeignMemory(t *testing.T) {
 	h := NewMemoryHandler(ms, &mockWorkspaceMemberRepo{})
 
 	e := echo.New()
-	req := httptest.NewRequest(http.MethodDelete, "/api/v1/memories/"+memID.String(), nil)
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/memories/"+memID.String(), http.NoBody)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 	c.SetParamNames("id")
@@ -352,7 +352,7 @@ func TestDelete_UserCannotDeleteForeignMemory(t *testing.T) {
 	h := NewMemoryHandler(ms, &mockWorkspaceMemberRepo{members: map[string]string{}})
 
 	e := echo.New()
-	req := httptest.NewRequest(http.MethodDelete, "/api/v1/memories/"+memID.String(), nil)
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/memories/"+memID.String(), http.NoBody)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 	c.SetParamNames("id")
@@ -394,7 +394,7 @@ func TestSearch_UserMustBeWorkspaceMember(t *testing.T) {
 		h := NewMemoryHandler(ms, members)
 
 		e := echo.New()
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/memories/search?q=x&workspace_id="+memberWS.String(), nil)
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/memories/search?q=x&workspace_id="+memberWS.String(), http.NoBody)
 		rec := httptest.NewRecorder()
 		c := e.NewContext(req, rec)
 		asUser(c, userID)
@@ -421,7 +421,7 @@ func TestSearch_UserMustBeWorkspaceMember(t *testing.T) {
 		h := NewMemoryHandler(ms, members)
 
 		e := echo.New()
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/memories/search?q=x&workspace_id="+foreignWS.String(), nil)
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/memories/search?q=x&workspace_id="+foreignWS.String(), http.NoBody)
 		rec := httptest.NewRecorder()
 		c := e.NewContext(req, rec)
 		asUser(c, userID)
@@ -447,7 +447,7 @@ func TestExportMemories_AgentCannotDumpForeignWorkspace(t *testing.T) {
 	h := NewMemoryHandler(&MockMemoryService{}, &mockWorkspaceMemberRepo{})
 
 	e := echo.New()
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/memories/export?workspace_id="+foreignWS.String(), nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/memories/export?workspace_id="+foreignWS.String(), http.NoBody)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 	asAgent(c, uuid.New(), ownWS)
@@ -475,7 +475,7 @@ func TestSearch_UnauthenticatedCallerRejected(t *testing.T) {
 	h := NewMemoryHandler(ms, &mockWorkspaceMemberRepo{})
 
 	e := echo.New()
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/memories/search?q=x&workspace_id="+someWS.String(), nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/memories/search?q=x&workspace_id="+someWS.String(), http.NoBody)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 	// no auth context set
