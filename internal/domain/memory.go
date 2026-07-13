@@ -155,6 +155,34 @@ type ScoredMemory struct {
 	RecencyScore float64 `json:"recency_score,omitempty"`
 }
 
+// SearchMode reports which retrieval arms actually served a Recall.
+//
+// Recall is a hybrid search: a sparse BM25 arm plus a dense/vector arm, merged
+// with RRF. The dense arm needs a live embedder, and Recall FAILS OPEN when the
+// embedder errors — it silently returns BM25-only results rather than an error.
+// That degradation used to be invisible to callers (one log line, no metric, no
+// response field), so a dead embedder could serve materially worse recall for
+// days without anyone noticing, and a benchmark could not tell "this code is
+// worse" apart from "the embedder is down".
+//
+// SearchMode makes the fail-open visible: it is the mode a given recall was
+// actually SERVED in, not the mode it was configured for.
+type SearchMode string
+
+const (
+	// SearchModeHybrid means the dense/vector arm ran successfully and
+	// contributed to the RRF merge.
+	SearchModeHybrid SearchMode = "hybrid"
+	// SearchModeBM25Only means the dense/vector arm did NOT contribute: the
+	// embedder is unconfigured (noop), errored, or the vector search failed.
+	// Results came from the sparse BM25 arm alone.
+	SearchModeBM25Only SearchMode = "bm25-only"
+)
+
+// Degraded reports whether the recall was served without its dense arm.
+// Anything that is not a full hybrid search is a degraded search.
+func (m SearchMode) Degraded() bool { return m != SearchModeHybrid }
+
 // RecallOpts specifies parameters for a memory recall (full-text search) operation.
 type RecallOpts struct {
 	Query       string

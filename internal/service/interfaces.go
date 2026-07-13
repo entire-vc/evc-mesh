@@ -817,7 +817,12 @@ type RememberResult struct {
 // MemoryService provides business logic for agent persistent memory.
 type MemoryService interface {
 	Remember(ctx context.Context, mem *domain.Memory) (RememberResult, error)
-	Recall(ctx context.Context, opts domain.RecallOpts) ([]domain.ScoredMemory, error)
+	// Recall runs a hybrid (BM25 + vector) search. It FAILS OPEN when the embedder
+	// is down: results are still returned, served by the BM25 arm alone. The
+	// returned domain.SearchMode says which mode the call was actually served in
+	// ("hybrid" | "bm25-only") so that degradation is visible to callers instead
+	// of hiding in a log line.
+	Recall(ctx context.Context, opts domain.RecallOpts) ([]domain.ScoredMemory, domain.SearchMode, error)
 	// ListMemories executes a richly-filtered, paginated list query backed by the repository.
 	ListMemories(ctx context.Context, filter domain.MemoryListFilter) (*RecallResult, error)
 	// GetProjectKnowledge returns memories for a project (project-scoped) or workspace tier.

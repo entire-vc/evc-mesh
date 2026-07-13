@@ -18,11 +18,25 @@ Two gates, deliberately separated by cost and determinism:
 Exit codes (the load-bearing distinction):
   0  all categories within tolerance of baseline
   1  REGRESSION — the eval ran, and memory quality dropped below tolerance
-  2  INCONCLUSIVE — the eval could NOT run (Mesh unreachable, judge/chat API
-     down or out of credit, …). An eval that did not run has NOT measured a
-     regression. Scoring an un-asked question as "wrong" turns any infra outage
-     into a fake quality collapse, so errored questions are excluded from the
-     scores and reported separately.
+  2  INCONCLUSIVE — the eval could NOT run, or could not run COMPARABLY:
+       * Mesh unreachable / judge/chat API down or out of credit, …
+       * no baseline to compare against (a pass against nothing is a vacuous
+         green — a gate that enforces nothing must never look healthy)
+       * the run's search_mode differs from the baseline's (see below)
+     An eval that did not run has NOT measured a regression. Scoring an un-asked
+     question as "wrong" turns any infra outage into a fake quality collapse, so
+     errored questions are excluded from the scores and reported separately.
+
+Mode-scoped baseline (why exit 2 also covers a cross-mode comparison):
+  Mesh recall is hybrid — a BM25 arm plus a dense/vector arm — and it FAILS OPEN
+  when the embedder dies: it quietly serves BM25-only results with a 200. Recall
+  now reports the mode it was actually served in (`search_mode`: "hybrid" |
+  "bm25-only"). Hit@k in bm25-only mode is systematically lower than in hybrid
+  mode, so comparing across modes measures the EMBEDDER'S HEALTH, not the PR.
+  A required check that goes red because prod's embedder ran out of credit blocks
+  every PR in the repo and blames each author for a fault they did not cause — a
+  permanent merge-wedge (cf. evc-mesh#320). So: mismatched modes → exit 2, NEVER
+  exit 1. Re-snap the baseline when the embedder's health state changes.
 
 Usage (Mac Mini baseline generation):
   python run_ci.py --update-baseline                  # LLM baseline
@@ -69,6 +83,21 @@ RETRIEVAL_BASELINE_FILE = SCRIPT_DIR / "baseline_retrieval.json"
 EXIT_OK = 0
 EXIT_REGRESSION = 1
 EXIT_INCONCLUSIVE = 2
+
+# Retrieval modes Mesh can serve a recall in. UNKNOWN = the server did not say
+# (older Mesh, or the recall never happened) — treated as not-comparable, never
+# as healthy.
+MODE_HYBRID = "hybrid"
+MODE_BM25_ONLY = "bm25-only"
+MODE_UNKNOWN = "unknown"
+
+# Machine-readable reason kinds, grepped out of the log by the CI workflow so it
+# can raise ONE out-of-band alert per reason instead of one per PR.
+REASON_NO_BASELINE = "no-baseline"
+REASON_MODE_MISMATCH = "mode-mismatch"
+REASON_MODE_UNKNOWN = "mode-unknown"
+REASON_HARNESS_ERRORS = "harness-errors"
+REASON_PREFIX = "GATE_REASON:"
 
 ANSWER_SYSTEM = (
     "You are a helpful chat assistant. You have access to memories retrieved "
@@ -272,6 +301,10 @@ def run_single(
         traceback.print_exc()
         return errored("ingest_and_search", exc)
 
+    # Which arms actually served this question's recall. Carried on every result
+    # so the run-level mode can be resolved before any score is compared.
+    search_mode = getattr(client, "search_mode", None) or MODE_UNKNOWN
+
     if retrieval_only:
         gold = gold_session_indices(entry)
         if not gold:
@@ -280,7 +313,12 @@ def run_single(
                 ValueError("no answer_session_ids resolved against haystack"),
             )
         hit = bool(gold & retrieved_session_indices(results))
-        return {"question_id": qid, "question_type": qtype, "correct": hit}
+        return {
+            "question_id": qid,
+            "question_type": qtype,
+            "correct": hit,
+            "search_mode": search_mode,
+        }
 
     memory_context = build_memory_context(results)
     user_message = ANSWER_PROMPT.format(
@@ -306,7 +344,63 @@ def run_single(
     except Exception as exc:
         return errored("judge_answer", exc)
 
-    return {"question_id": qid, "question_type": qtype, "correct": correct}
+    return {
+        "question_id": qid,
+        "question_type": qtype,
+        "correct": correct,
+        "search_mode": search_mode,
+    }
+
+
+def resolve_run_search_mode(results: list[dict]) -> str:
+    """Collapse the per-question search modes into one mode for the whole run.
+
+    Degradation dominates, and unknown dominates degradation:
+
+      * any question served UNKNOWN  → the run is UNKNOWN (we cannot claim to
+        know what we measured);
+      * any question served bm25-only → the run is bm25-only (the run as a whole
+        is not comparable to a hybrid baseline: even one degraded recall moves
+        the aggregate score);
+      * only then → hybrid.
+
+    A run in which nothing recalled at all (no modes observed) is UNKNOWN.
+    """
+    modes = {r["search_mode"] for r in results if r.get("search_mode")}
+    if not modes:
+        return MODE_UNKNOWN
+    if MODE_UNKNOWN in modes or not modes <= {MODE_HYBRID, MODE_BM25_ONLY}:
+        return MODE_UNKNOWN
+    if MODE_BM25_ONLY in modes:
+        return MODE_BM25_ONLY
+    return MODE_HYBRID
+
+
+def load_baseline(path: Path) -> tuple[dict[str, float], str]:
+    """Read a baseline file, returning (scores, search_mode).
+
+    Two shapes are accepted:
+
+      new  {"search_mode": "...", "captured_at": "...", "top_k": 10,
+            "scores": {"<category>": 0.75, ...}}
+      old  {"<category>": 0.75, ...}            — flat, pre-search_mode
+
+    The old shape carries no mode, so it resolves to UNKNOWN, which makes every
+    comparison against it INCONCLUSIVE rather than a coin-flip between a fake
+    regression and a fake pass. Re-snap with --update-baseline to fix.
+    """
+    raw = json.loads(path.read_text())
+    if isinstance(raw.get("scores"), dict):
+        mode = raw.get("search_mode") or MODE_UNKNOWN
+        return {k: float(v) for k, v in raw["scores"].items()}, str(mode)
+    return {k: float(v) for k, v in raw.items()}, MODE_UNKNOWN
+
+
+def modes_comparable(baseline_mode: str, run_mode: str) -> bool:
+    """Scores may only be compared within one, known retrieval mode."""
+    if baseline_mode == MODE_UNKNOWN or run_mode == MODE_UNKNOWN:
+        return False
+    return baseline_mode == run_mode
 
 
 def compute_scores(results: list[dict]) -> dict[str, float]:
@@ -428,15 +522,18 @@ def cmd_run(args: argparse.Namespace) -> int:
     error_rate = len(errors) / len(results) if results else 1.0
 
     scores = compute_scores(results)
+    run_mode = resolve_run_search_mode(results)
 
     baseline: dict[str, float] | None = None
+    baseline_mode = MODE_UNKNOWN
     if baseline_file.exists():
-        baseline = json.loads(baseline_file.read_text())
+        baseline, baseline_mode = load_baseline(baseline_file)
 
     title = "Recall Gate Results" if retrieval_only else "LongMemEval-S Results"
     print()
     print("=" * 70)
     print(f"{title}  ({ran}/{len(results)} questions ran)")
+    print(f"Search mode served: {run_mode}    Baseline mode: {baseline_mode}")
     print("=" * 70)
     print_table(scores, baseline, tolerance)
     print("=" * 70)
@@ -454,16 +551,84 @@ def cmd_run(args: argparse.Namespace) -> int:
             "This is an infrastructure failure, NOT a memory-quality regression. "
             "No verdict was produced; fix the harness dependency above and re-run."
         )
+        print(
+            f"{REASON_PREFIX} {REASON_HARNESS_ERRORS} — "
+            f"{len(errors)}/{len(results)} questions could not run"
+        )
         return EXIT_INCONCLUSIVE
 
     if args.update_baseline:
-        baseline_file.write_text(json.dumps(scores, indent=2) + "\n")
-        print(f"\nBaseline updated: {baseline_file}")
+        if retrieval_only:
+            # The recall baseline is MODE-SCOPED: it records the retrieval mode it
+            # was captured in, because hit@k in bm25-only mode is not comparable to
+            # hit@k in hybrid mode. A baseline without a mode can only ever produce
+            # INCONCLUSIVE.
+            payload = {
+                "search_mode": run_mode,
+                "captured_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "top_k": top_k,
+                "scores": scores,
+            }
+            baseline_file.write_text(json.dumps(payload, indent=2) + "\n")
+            print(f"\nBaseline updated: {baseline_file}  (search_mode={run_mode})")
+            if run_mode != MODE_HYBRID:
+                print(
+                    f"⚠ Captured in mode '{run_mode}', not '{MODE_HYBRID}'. "
+                    "If the embedder is merely down, this baseline pins a DEGRADED "
+                    "quality level — re-snap it once the embedder is healthy."
+                )
+        else:
+            baseline_file.write_text(json.dumps(scores, indent=2) + "\n")
+            print(f"\nBaseline updated: {baseline_file}")
         return EXIT_OK
 
     if baseline is None:
-        print(f"\nNo {baseline_file.name} found — run with --update-baseline first.")
-        return EXIT_OK
+        # A pass against no baseline compares against NOTHING. Calling that green
+        # would make an unenforcing gate look healthy — exactly the blindness this
+        # gate exists to remove. It is inconclusive, and it says so out loud.
+        print(
+            f"\n⚠ EVAL INCONCLUSIVE — no {baseline_file.name} found: this run was "
+            "compared against nothing and enforced nothing. Snap a baseline with "
+            "--update-baseline (against a healthy embedder) before relying on this gate."
+        )
+        print(f"{REASON_PREFIX} {REASON_NO_BASELINE} — {baseline_file.name} does not exist")
+        return EXIT_INCONCLUSIVE if retrieval_only else EXIT_OK
+
+    # ── Mode gate: compare like with like, or do not compare at all ───────────
+    # This check sits BEFORE any score comparison and can only ever produce
+    # EXIT_INCONCLUSIVE. A cross-mode score drop is a statement about the
+    # embedder's health, not about this PR's code, and must never return
+    # EXIT_REGRESSION: a required check that goes red on an infra outage the
+    # author cannot fix blocks every PR in the repo and gets bypassed.
+    if retrieval_only and not modes_comparable(baseline_mode, run_mode):
+        if MODE_UNKNOWN in (baseline_mode, run_mode):
+            reason = REASON_MODE_UNKNOWN
+            detail = (
+                f"retrieval mode is unknown (baseline='{baseline_mode}', run='{run_mode}'). "
+                "Either the baseline predates mode-scoping or the server does not report "
+                "`search_mode` — nothing here is safely comparable."
+            )
+        else:
+            reason = REASON_MODE_MISMATCH
+            detail = (
+                f"baseline captured in mode '{baseline_mode}' but this run served "
+                f"'{run_mode}'"
+                + (
+                    " (prod embedder degraded)"
+                    if run_mode == MODE_BM25_ONLY
+                    else " (embedder recovered)"
+                )
+                + ". Scores across modes are not comparable — this is NOT a code "
+                "regression. Re-snap the baseline once the embedder is healthy: "
+                "`python run_ci.py --retrieval-only --update-baseline`."
+            )
+        print(f"\n⚠ INCONCLUSIVE: {detail}")
+        print(
+            "The recall safety net is BLIND for this run: no comparison was made, "
+            "so a real regression could pass through unseen."
+        )
+        print(f"{REASON_PREFIX} {reason} — baseline='{baseline_mode}' run='{run_mode}'")
+        return EXIT_INCONCLUSIVE
 
     if errors:
         print(

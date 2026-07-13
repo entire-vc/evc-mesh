@@ -37,6 +37,7 @@ type mockMemoryRepo struct {
 	findByThreadIDFn                   func(ctx context.Context, wsID uuid.UUID, threadID string, excludeID uuid.UUID) ([]domain.Memory, error)
 	findBySourceTaskIDsFn              func(ctx context.Context, wsID uuid.UUID, taskIDs []uuid.UUID) ([]domain.Memory, error)
 	archiveStaleWorkspaceCheckpointsFn func(ctx context.Context, olderThan time.Duration, maxImportance float64) (int64, error)
+	vectorSearchFn                     func(ctx context.Context, vec []float32, wsID uuid.UUID, projID *uuid.UUID, scope string, tags []string, limit int) ([]domain.ScoredMemory, error)
 }
 
 func (m *mockMemoryRepo) Upsert(ctx context.Context, mem *domain.Memory) error {
@@ -95,7 +96,10 @@ func (m *mockMemoryRepo) BoostRelevance(ctx context.Context, ids []uuid.UUID) er
 	return nil
 }
 
-func (m *mockMemoryRepo) VectorSearch(_ context.Context, _ []float32, _ uuid.UUID, _ *uuid.UUID, _ string, _ []string, _ int) ([]domain.ScoredMemory, error) {
+func (m *mockMemoryRepo) VectorSearch(ctx context.Context, vec []float32, wsID uuid.UUID, projID *uuid.UUID, scope string, tags []string, limit int) ([]domain.ScoredMemory, error) {
+	if m.vectorSearchFn != nil {
+		return m.vectorSearchFn(ctx, vec, wsID, projID, scope, tags, limit)
+	}
 	return nil, nil
 }
 
@@ -469,7 +473,7 @@ func TestRecall_BasicSearch(t *testing.T) {
 		Limit:       10,
 	}
 
-	scored, err := svc.Recall(context.Background(), opts)
+	scored, _, err := svc.Recall(context.Background(), opts)
 
 	require.NoError(t, err)
 	assert.Len(t, scored, 2)
@@ -496,7 +500,7 @@ func TestRecall_RecencyWeightPassthrough(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			repo := &mockMemoryRepo{}
 			svc := newMemoryService(repo)
-			_, err := svc.Recall(context.Background(), domain.RecallOpts{
+			_, _, err := svc.Recall(context.Background(), domain.RecallOpts{
 				Query:         "q",
 				WorkspaceID:   uuid.New(),
 				Limit:         10,
@@ -520,7 +524,7 @@ func TestRecall_EmptyQuery(t *testing.T) {
 		WorkspaceID: uuid.New(),
 	}
 
-	_, err := svc.Recall(context.Background(), opts)
+	_, _, err := svc.Recall(context.Background(), opts)
 
 	require.Error(t, err)
 	var apiErr *apierror.Error
@@ -2179,7 +2183,7 @@ func TestRecall_DecayScoreFormula(t *testing.T) {
 	}
 
 	svc := newMemoryService(repo)
-	results, err := svc.Recall(context.Background(), domain.RecallOpts{
+	results, _, err := svc.Recall(context.Background(), domain.RecallOpts{
 		Query:        "test",
 		WorkspaceID:  uuid.New(),
 		Limit:        10,
@@ -2241,7 +2245,7 @@ func TestRecall_FreshnessScoreMultiplied(t *testing.T) {
 	}
 
 	svc := newMemoryService(repo)
-	results, err := svc.Recall(context.Background(), domain.RecallOpts{
+	results, _, err := svc.Recall(context.Background(), domain.RecallOpts{
 		Query:       "test",
 		WorkspaceID: uuid.New(),
 		Limit:       10,
@@ -2300,7 +2304,7 @@ func TestRecall_HalfLifeOverride(t *testing.T) {
 	// Short half-life (10d): at age 30d, score ≈ exp(-ln2/10*30) = exp(-2.08) ≈ 0.125
 	repoA := makeRepo()
 	svcA := newMemoryService(repoA)
-	resA, err := svcA.Recall(context.Background(), domain.RecallOpts{
+	resA, _, err := svcA.Recall(context.Background(), domain.RecallOpts{
 		Query:        "test",
 		WorkspaceID:  uuid.New(),
 		Limit:        10,
@@ -2313,7 +2317,7 @@ func TestRecall_HalfLifeOverride(t *testing.T) {
 	// Long half-life (90d): at age 30d, score ≈ exp(-ln2/90*30) = exp(-0.231) ≈ 0.794
 	repoB := makeRepo()
 	svcB := newMemoryService(repoB)
-	resB, err := svcB.Recall(context.Background(), domain.RecallOpts{
+	resB, _, err := svcB.Recall(context.Background(), domain.RecallOpts{
 		Query:        "test",
 		WorkspaceID:  uuid.New(),
 		Limit:        10,
@@ -2358,7 +2362,7 @@ func TestRecall_BM25Arm_NonZeroScore(t *testing.T) {
 	}
 	svc := NewMemoryService(repo, nil, nil)
 
-	results, err := svc.Recall(context.Background(), domain.RecallOpts{
+	results, _, err := svc.Recall(context.Background(), domain.RecallOpts{
 		Query:       "bm25",
 		WorkspaceID: wsID,
 		Limit:       10,
@@ -2469,7 +2473,7 @@ func TestRecall_BM25Fallback_VectorOnly(t *testing.T) {
 
 	// With both arms returning nothing useful (BM25 errors, no vector embedder),
 	// Recall must return an empty slice without error.
-	results, err := svc.Recall(context.Background(), domain.RecallOpts{
+	results, _, err := svc.Recall(context.Background(), domain.RecallOpts{
 		Query:       "test fallback",
 		WorkspaceID: wsID,
 		Limit:       10,

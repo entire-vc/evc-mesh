@@ -25,6 +25,7 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/embedding"
 	"github.com/entire-vc/evc-mesh/internal/repository"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
+	pkgmetrics "github.com/entire-vc/evc-mesh/pkg/metrics"
 )
 
 // keySlugRegex matches valid memory keys: lowercase alphanumeric with hyphens,
@@ -649,7 +650,16 @@ type RecallResult struct {
 	DecayApplied bool
 }
 
-// Recall performs a hybrid search (keyword + optional vector) and returns ranked results.
+// Recall performs a hybrid search (keyword + optional vector) and returns ranked
+// results together with the domain.SearchMode they were actually SERVED in.
+//
+// The second return value is load-bearing: step 2 below FAILS OPEN. If the
+// embedder is down (or unconfigured), the dense arm silently contributes
+// nothing and the caller still gets a 200 with BM25-only results. Returning the
+// mode is what lets callers — the REST envelope, the Prometheus counters, and
+// the CI recall gate — tell "memory got worse" apart from "the embedder died".
+// Without it, a cross-mode score drop is indistinguishable from a code
+// regression, which is how an infra outage turns into a repo-wide merge wedge.
 //
 // Algorithm:
 //  1. Always: full-text keyword search via tsvector (ts_rank_cd).
@@ -661,9 +671,9 @@ type RecallResult struct {
 //
 // When extended filter params are present (TagsAny, CreatedBy, Since, Until, etc.),
 // the repository List method is used instead of FullTextSearch for precise SQL filtering.
-func (s *memoryService) Recall(ctx context.Context, opts domain.RecallOpts) ([]domain.ScoredMemory, error) {
+func (s *memoryService) Recall(ctx context.Context, opts domain.RecallOpts) ([]domain.ScoredMemory, domain.SearchMode, error) {
 	if opts.Query == "" {
-		return nil, apierror.ValidationError(map[string]string{
+		return nil, "", apierror.ValidationError(map[string]string{
 			"q": "search query is required",
 		})
 	}
@@ -692,6 +702,11 @@ func (s *memoryService) Recall(ctx context.Context, opts domain.RecallOpts) ([]d
 		kwResults  []domain.ScoredMemory
 		vecResults []domain.ScoredMemory
 		kwErr      error
+		// denseArmRan is set by the vector goroutine only when the dense arm
+		// completed end-to-end (embed OK, non-empty vector, VectorSearch OK).
+		// Written before wg.Wait() returns and read after — the WaitGroup is the
+		// happens-before edge, so no extra synchronisation is needed.
+		denseArmRan bool
 	)
 
 	ftsCtx, ftsCancel := context.WithTimeout(ctx, bm25FTSTimeout)
@@ -711,7 +726,11 @@ func (s *memoryService) Recall(ctx context.Context, opts domain.RecallOpts) ([]d
 			defer wg.Done()
 			queryVec, embedErr := s.embedder.Embed(ctx, opts.Query)
 			if embedErr != nil {
+				// FAIL OPEN: recall still succeeds, but on BM25 alone. This is the
+				// silent degradation — count it so it is alertable, and report it
+				// via SearchMode so callers can see it.
 				log.Printf("memory recall: embedding failed, using bm25-only: %v", embedErr)
+				pkgmetrics.RecordMemoryEmbedFailure("recall")
 				return
 			}
 			if len(queryVec) == 0 {
@@ -721,11 +740,22 @@ func (s *memoryService) Recall(ctx context.Context, opts domain.RecallOpts) ([]d
 			vecResults, vecErr = s.memRepo.VectorSearch(ctx, queryVec, opts.WorkspaceID, projID, string(opts.Scope), opts.Tags, poolSize)
 			if vecErr != nil {
 				log.Printf("memory recall: vector search failed: %v", vecErr)
+				return
 			}
+			denseArmRan = true
 		}()
 	}
 
 	wg.Wait()
+
+	// The mode a recall was SERVED in — not the one it was configured for.
+	// A noop embedder, an embedder error, an empty vector and a failed
+	// VectorSearch all land in the same place: BM25 alone.
+	searchMode := domain.SearchModeBM25Only
+	if denseArmRan {
+		searchMode = domain.SearchModeHybrid
+	}
+	pkgmetrics.RecordMemoryRecall(string(searchMode))
 
 	if kwErr != nil {
 		log.Printf("memory recall: bm25 fts failed (using vector-only): %v", kwErr)
@@ -837,7 +867,7 @@ func (s *memoryService) Recall(ctx context.Context, opts domain.RecallOpts) ([]d
 		merged = append(pinnedScored, merged...)
 	}
 
-	return merged, nil
+	return merged, searchMode, nil
 }
 
 // applyExtendedFilters filters a slice of ScoredMemory using the extended RecallOpts fields
@@ -1581,7 +1611,13 @@ func (s *memoryService) RecallGraph(ctx context.Context, opts domain.RecallGraph
 		seedOpts.ProjectID = *projID
 	}
 
-	seedResults, err := s.Recall(ctx, seedOpts)
+	// NOTE: the seed recall's SearchMode is deliberately dropped here. RecallGraph
+	// memoises its results in recallGraphCache, so a mode surfaced from this path
+	// could be served from a cache entry filled while the embedder was healthy —
+	// i.e. it would report "hybrid" for a call that never touched an embedder.
+	// A stale mode is worse than no mode for anything that gates on it, so the
+	// recall_graph envelope stays mode-free; use /memories/search for the signal.
+	seedResults, _, err := s.Recall(ctx, seedOpts)
 	if err != nil {
 		return nil, fmt.Errorf("recall graph: seed recall: %w", err)
 	}

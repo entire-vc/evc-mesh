@@ -445,16 +445,22 @@ func (h *MemoryHandler) Search(c echo.Context) error {
 		opts.HalfLifeDays = f
 	}
 
-	results, err := h.memoryService.Recall(c.Request().Context(), opts)
+	results, searchMode, err := h.memoryService.Recall(c.Request().Context(), opts)
 	if err != nil {
 		return handleError(c, err)
 	}
 
+	// search_mode / degraded are ADDITIVE — items/total/limit/offset keep their
+	// exact shape, and every existing client (SDK, MCP passthrough) ignores the
+	// new keys. They exist so a caller can tell a degraded recall from a healthy
+	// one: the embedder failing is a silent 200 otherwise.
 	return c.JSON(http.StatusOK, map[string]interface{}{
-		"items":  results,
-		"total":  len(results),
-		"limit":  limit,
-		"offset": offset,
+		"items":       results,
+		"total":       len(results),
+		"limit":       limit,
+		"offset":      offset,
+		"search_mode": string(searchMode),
+		"degraded":    searchMode.Degraded(),
 	})
 }
 

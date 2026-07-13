@@ -38,6 +38,14 @@ STORE_CONCURRENCY = 1
 RECALL_CANDIDATE_LIMIT = 50
 RECALL_ORDER_BY = "relevance:desc"
 
+# Mesh reports which retrieval arms actually served a recall:
+#   "hybrid"    — BM25 + dense/vector arm (embedder healthy)
+#   "bm25-only" — the embedder failed (or is unconfigured) and Recall FAILED OPEN
+# A server too old to report it yields UNKNOWN. Scores from different modes are
+# NOT comparable, so the gate must know which mode it measured — otherwise a dead
+# embedder reads as a code regression and wedges every PR in the repo.
+SEARCH_MODE_UNKNOWN = "unknown"
+
 BENCH_IDS_LOG = os.environ.get(
     "BENCH_IDS_LOG", os.path.expanduser("~/bench/store_ids.jsonl")
 )
@@ -127,6 +135,10 @@ class MeshMemoryClient:
     ) -> None:
         self.qid = question_id
         self.bench_tag = f"bench-{question_id}"
+        # Populated by _search from the recall envelope. Stays UNKNOWN if the
+        # server does not report it (older Mesh) — never silently assumed healthy.
+        self.search_mode: str = SEARCH_MODE_UNKNOWN
+        self.degraded: bool | None = None
 
     def ingest_and_search(
         self,
@@ -223,6 +235,14 @@ class MeshMemoryClient:
         payload = _parse_tool_payload(result)
         if isinstance(payload, dict) and payload.get("error"):
             raise RuntimeError(f"recall failed: {payload['error']}")
+
+        # Which arms actually served this recall. The MCP layer copies the REST
+        # envelope verbatim, so these keys arrive untouched — when present.
+        mode = payload.get("search_mode") if isinstance(payload, dict) else None
+        self.search_mode = mode if isinstance(mode, str) and mode else SEARCH_MODE_UNKNOWN
+        deg = payload.get("degraded") if isinstance(payload, dict) else None
+        self.degraded = bool(deg) if isinstance(deg, bool) else None
+
         items = payload.get("items") or payload.get("results") or []
         if not isinstance(items, list):
             items = []
