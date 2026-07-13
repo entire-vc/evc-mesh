@@ -576,3 +576,118 @@ func TestFindRelated_AgentOwnMemoryStillWorks(t *testing.T) {
 		t.Error("own-workspace find-related must still return results")
 	}
 }
+
+// deleteAsUserWithRole runs DELETE /memories/:id as a user holding `role` in the
+// memory's own workspace, and reports the isAdmin flag the handler passed to
+// Forget. isAdmin is the whole authorization decision: the service grants an
+// admin deletion of ANY memory in the workspace, while a non-admin user (who owns
+// no agent_id) is refused outright.
+func deleteAsUserWithRole(t *testing.T, role string) bool {
+	t.Helper()
+
+	ws := uuid.New()
+	userID := uuid.New()
+	memID := uuid.New()
+
+	gotIsAdmin := false
+	ms := &MockMemoryService{
+		GetByIDFunc: func(_ context.Context, id uuid.UUID) (*domain.Memory, error) {
+			// Created by somebody else — deleting it is an admin-only act.
+			other := uuid.New()
+			return &domain.Memory{ID: id, WorkspaceID: ws, AgentID: &other}, nil
+		},
+		ForgetFunc: func(_ context.Context, _ uuid.UUID, _ *uuid.UUID, isAdmin bool) error {
+			gotIsAdmin = isAdmin
+			return nil
+		},
+	}
+	members := &mockWorkspaceMemberRepo{
+		members: map[string]string{fmt.Sprintf("%s/%s", ws, userID): role},
+	}
+	h := NewMemoryHandler(ms, members)
+
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/memories/"+memID.String(), http.NoBody)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetParamNames("id")
+	c.SetParamValues(memID.String())
+	asUser(c, userID)
+
+	if err := h.Delete(c); err != nil {
+		t.Fatalf("Delete returned error: %v", err)
+	}
+	return gotIsAdmin
+}
+
+// TestDelete_UserAdminStatusFollowsWorkspaceRole is the regression test for the
+// privilege bug: isAdmin used to be read from c.Get("role") — which nothing in the
+// codebase ever sets, so it was dead code — and then hardcoded to true for every
+// authenticated user. Any member or viewer could therefore delete any memory in a
+// workspace they belonged to. Admin must follow the real workspace_members role.
+func TestDelete_UserAdminStatusFollowsWorkspaceRole(t *testing.T) {
+	tests := []struct {
+		role        string
+		wantIsAdmin bool
+	}{
+		{domain.RoleOwner, true},
+		{domain.RoleAdmin, true},
+		{domain.RoleMember, false},
+		{domain.RoleViewer, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.role, func(t *testing.T) {
+			gotIsAdmin := deleteAsUserWithRole(t, tt.role)
+			if gotIsAdmin != tt.wantIsAdmin {
+				if tt.wantIsAdmin {
+					t.Errorf("role %q: isAdmin=false, want true — %s must still be able to delete", tt.role, tt.role)
+				} else {
+					t.Errorf("SECURITY: role %q was granted isAdmin — a %s can delete another actor's memory", tt.role, tt.role)
+				}
+			}
+		})
+	}
+}
+
+// TestDelete_AgentIsNeverAdmin pins the agent half of the same decision: agents
+// carry no workspace_members row, and the dead c.Get("role") branch meant they were
+// never admins in practice. Removing it must not silently promote them — an agent
+// stays limited to memories it created (enforced in MemoryService.Forget).
+func TestDelete_AgentIsNeverAdmin(t *testing.T) {
+	ws := uuid.New()
+	agentID := uuid.New()
+	memID := uuid.New()
+
+	gotIsAdmin := true
+	var gotActor *uuid.UUID
+	ms := &MockMemoryService{
+		GetByIDFunc: func(_ context.Context, id uuid.UUID) (*domain.Memory, error) {
+			return &domain.Memory{ID: id, WorkspaceID: ws}, nil
+		},
+		ForgetFunc: func(_ context.Context, _ uuid.UUID, actor *uuid.UUID, isAdmin bool) error {
+			gotIsAdmin = isAdmin
+			gotActor = actor
+			return nil
+		},
+	}
+	h := NewMemoryHandler(ms, &mockWorkspaceMemberRepo{})
+
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/memories/"+memID.String(), http.NoBody)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetParamNames("id")
+	c.SetParamValues(memID.String())
+	asAgent(c, agentID, ws)
+
+	if err := h.Delete(c); err != nil {
+		t.Fatalf("Delete returned error: %v", err)
+	}
+	if gotIsAdmin {
+		t.Error("SECURITY: an agent was granted isAdmin on memory delete")
+	}
+	if gotActor == nil || *gotActor != agentID {
+		t.Errorf("agent actor id not forwarded to Forget: got %v, want %v", gotActor, agentID)
+	}
+}
