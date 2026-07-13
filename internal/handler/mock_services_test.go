@@ -732,6 +732,10 @@ func (m *MockRulesService) SetWorkflowTemplates(ctx context.Context, workspaceID
 // all others are no-ops.
 type MockMemoryService struct {
 	ListMemoriesFunc func(ctx context.Context, filter domain.MemoryListFilter) (*service.RecallResult, error)
+	RecallFunc       func(ctx context.Context, opts domain.RecallOpts) ([]domain.ScoredMemory, domain.SearchMode, error)
+	GetByIDFunc      func(ctx context.Context, id uuid.UUID) (*domain.Memory, error)
+	RememberFunc     func(ctx context.Context, mem *domain.Memory) (service.RememberResult, error)
+	ForgetFunc       func(ctx context.Context, id uuid.UUID, actorAgentID *uuid.UUID, isAdmin bool) error
 }
 
 func (m *MockMemoryService) ListMemories(ctx context.Context, filter domain.MemoryListFilter) (*service.RecallResult, error) {
@@ -742,9 +746,15 @@ func (m *MockMemoryService) ListMemories(ctx context.Context, filter domain.Memo
 }
 
 func (m *MockMemoryService) Remember(ctx context.Context, mem *domain.Memory) (service.RememberResult, error) {
+	if m.RememberFunc != nil {
+		return m.RememberFunc(ctx, mem)
+	}
 	return service.RememberResult{Outcome: "created"}, nil
 }
 func (m *MockMemoryService) Recall(ctx context.Context, opts domain.RecallOpts) ([]domain.ScoredMemory, domain.SearchMode, error) {
+	if m.RecallFunc != nil {
+		return m.RecallFunc(ctx, opts)
+	}
 	return nil, domain.SearchModeHybrid, nil
 }
 func (m *MockMemoryService) GetProjectKnowledge(ctx context.Context, workspaceID uuid.UUID, projectID *uuid.UUID, filter domain.MemoryListFilter) ([]domain.Memory, int64, error) {
@@ -754,9 +764,15 @@ func (m *MockMemoryService) SetProjectKnowledge(ctx context.Context, input servi
 	return nil, "", nil
 }
 func (m *MockMemoryService) Forget(ctx context.Context, id uuid.UUID, actorAgentID *uuid.UUID, isAdmin bool) error {
+	if m.ForgetFunc != nil {
+		return m.ForgetFunc(ctx, id, actorAgentID, isAdmin)
+	}
 	return nil
 }
 func (m *MockMemoryService) GetByID(ctx context.Context, id uuid.UUID) (*domain.Memory, error) {
+	if m.GetByIDFunc != nil {
+		return m.GetByIDFunc(ctx, id)
+	}
 	return nil, nil
 }
 func (m *MockMemoryService) ExportMemories(ctx context.Context, workspaceID uuid.UUID, projectID *uuid.UUID) ([]byte, error) {
