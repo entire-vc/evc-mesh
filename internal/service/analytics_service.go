@@ -41,10 +41,16 @@ func (s *analyticsService) GetMetrics(ctx context.Context, filter AnalyticsFilte
 		return nil, fmt.Errorf("analytics timeline: %w", err)
 	}
 
+	costMetrics, err := s.queryCostMetrics(ctx, filter)
+	if err != nil {
+		return nil, fmt.Errorf("analytics cost metrics: %w", err)
+	}
+
 	return &AnalyticsMetrics{
 		TaskMetrics:  *taskMetrics,
 		AgentMetrics: *agentMetrics,
 		EventMetrics: *eventMetrics,
+		CostMetrics:  *costMetrics,
 		Timeline:     timeline,
 	}, nil
 }
@@ -331,4 +337,191 @@ func (s *analyticsService) queryTimeline(ctx context.Context, filter AnalyticsFi
 		}
 	}
 	return result, nil
+}
+
+// costTotalsRow holds the workspace-wide cost/token totals for the period.
+type costTotalsRow struct {
+	Cost         float64 `db:"cost"`
+	TokensIn     int64   `db:"tokens_in"`
+	TokensOut    int64   `db:"tokens_out"`
+	SessionCount int     `db:"session_count"`
+}
+
+// agentCostQueryRow holds one row from the per-agent cost aggregation.
+type agentCostQueryRow struct {
+	AgentID   uuid.UUID `db:"agent_id"`
+	AgentName string    `db:"agent_name"`
+	Cost      float64   `db:"cost"`
+	TokensIn  int64     `db:"tokens_in"`
+	TokensOut int64     `db:"tokens_out"`
+}
+
+// projectCostQueryRow holds one row from the per-project cost aggregation.
+type projectCostQueryRow struct {
+	ProjectID   uuid.UUID `db:"project_id"`
+	ProjectName string    `db:"project_name"`
+	Cost        float64   `db:"cost"`
+	TokensIn    int64     `db:"tokens_in"`
+	TokensOut   int64     `db:"tokens_out"`
+}
+
+// dayCostQueryRow holds one row from the daily cost aggregation.
+type dayCostQueryRow struct {
+	Date      time.Time `db:"day"`
+	Cost      float64   `db:"cost"`
+	TokensIn  int64     `db:"tokens_in"`
+	TokensOut int64     `db:"tokens_out"`
+}
+
+// taskCostQueryRow holds one row from the top-N task cost aggregation.
+type taskCostQueryRow struct {
+	TaskID       uuid.UUID `db:"task_id"`
+	TaskTitle    string    `db:"task_title"`
+	Cost         float64   `db:"cost"`
+	TokensIn     int64     `db:"tokens_in"`
+	TokensOut    int64     `db:"tokens_out"`
+	SessionCount int       `db:"session_count"`
+}
+
+// queryCostMetrics aggregates agent_sessions cost/token data (populated by the fiddler
+// session_report MCP tool) for the workspace/period, grouped by agent, project, and day,
+// plus a top-N most expensive tasks leaderboard.
+func (s *analyticsService) queryCostMetrics(ctx context.Context, filter AnalyticsFilter) (*CostMetrics, error) {
+	// agent_sessions carries its own workspace_id but only an optional task_id — project
+	// grouping requires a join through tasks, so sessions never joined to a task have no
+	// project affiliation and are naturally excluded from the by-project/top-tasks views.
+	args := []interface{}{filter.WorkspaceID, filter.From, filter.To}
+	leftJoinProjectFilter := ""
+	innerJoinProjectFilter := ""
+	if filter.ProjectID != nil {
+		args = append(args, *filter.ProjectID)
+		leftJoinProjectFilter = "AND t.project_id = $4"
+		innerJoinProjectFilter = "AND t.project_id = $4"
+	}
+
+	totalsQ := fmt.Sprintf(`
+		SELECT COALESCE(SUM(ags.estimated_cost), 0) AS cost,
+		       COALESCE(SUM(ags.tokens_in), 0) AS tokens_in,
+		       COALESCE(SUM(ags.tokens_out), 0) AS tokens_out,
+		       COUNT(*) AS session_count
+		FROM agent_sessions ags
+		LEFT JOIN tasks t ON t.id = ags.task_id
+		WHERE ags.workspace_id = $1
+		  AND ags.started_at >= $2 AND ags.started_at <= $3
+		  %s
+	`, leftJoinProjectFilter)
+	var totals costTotalsRow
+	if err := s.db.GetContext(ctx, &totals, totalsQ, args...); err != nil {
+		return nil, err
+	}
+
+	agentQ := fmt.Sprintf(`
+		SELECT ags.agent_id, a.name AS agent_name,
+		       COALESCE(SUM(ags.estimated_cost), 0) AS cost,
+		       COALESCE(SUM(ags.tokens_in), 0) AS tokens_in,
+		       COALESCE(SUM(ags.tokens_out), 0) AS tokens_out
+		FROM agent_sessions ags
+		JOIN agents a ON a.id = ags.agent_id
+		LEFT JOIN tasks t ON t.id = ags.task_id
+		WHERE ags.workspace_id = $1
+		  AND ags.started_at >= $2 AND ags.started_at <= $3
+		  %s
+		GROUP BY ags.agent_id, a.name
+		ORDER BY cost DESC
+		LIMIT 20
+	`, leftJoinProjectFilter)
+	var agentRows []agentCostQueryRow
+	if err := s.db.SelectContext(ctx, &agentRows, agentQ, args...); err != nil {
+		return nil, err
+	}
+	byAgent := make([]AgentCostRow, len(agentRows))
+	for i, r := range agentRows {
+		byAgent[i] = AgentCostRow(r)
+	}
+
+	projectQ := fmt.Sprintf(`
+		SELECT t.project_id, p.name AS project_name,
+		       COALESCE(SUM(ags.estimated_cost), 0) AS cost,
+		       COALESCE(SUM(ags.tokens_in), 0) AS tokens_in,
+		       COALESCE(SUM(ags.tokens_out), 0) AS tokens_out
+		FROM agent_sessions ags
+		JOIN tasks t ON t.id = ags.task_id
+		JOIN projects p ON p.id = t.project_id
+		WHERE ags.workspace_id = $1
+		  AND ags.started_at >= $2 AND ags.started_at <= $3
+		  %s
+		GROUP BY t.project_id, p.name
+		ORDER BY cost DESC
+		LIMIT 20
+	`, innerJoinProjectFilter)
+	var projectRows []projectCostQueryRow
+	if err := s.db.SelectContext(ctx, &projectRows, projectQ, args...); err != nil {
+		return nil, err
+	}
+	byProject := make([]ProjectCostRow, len(projectRows))
+	for i, r := range projectRows {
+		byProject[i] = ProjectCostRow(r)
+	}
+
+	dayQ := fmt.Sprintf(`
+		SELECT date_trunc('day', ags.started_at)::date AS day,
+		       COALESCE(SUM(ags.estimated_cost), 0) AS cost,
+		       COALESCE(SUM(ags.tokens_in), 0) AS tokens_in,
+		       COALESCE(SUM(ags.tokens_out), 0) AS tokens_out
+		FROM agent_sessions ags
+		LEFT JOIN tasks t ON t.id = ags.task_id
+		WHERE ags.workspace_id = $1
+		  AND ags.started_at >= $2 AND ags.started_at <= $3
+		  %s
+		GROUP BY day
+		ORDER BY day ASC
+	`, leftJoinProjectFilter)
+	var dayRows []dayCostQueryRow
+	if err := s.db.SelectContext(ctx, &dayRows, dayQ, args...); err != nil {
+		return nil, err
+	}
+	byDay := make([]DayCostMetric, len(dayRows))
+	for i, r := range dayRows {
+		byDay[i] = DayCostMetric{
+			Date:      r.Date.Format("2006-01-02"),
+			Cost:      r.Cost,
+			TokensIn:  r.TokensIn,
+			TokensOut: r.TokensOut,
+		}
+	}
+
+	topTasksQ := fmt.Sprintf(`
+		SELECT ags.task_id, t.title AS task_title,
+		       COALESCE(SUM(ags.estimated_cost), 0) AS cost,
+		       COALESCE(SUM(ags.tokens_in), 0) AS tokens_in,
+		       COALESCE(SUM(ags.tokens_out), 0) AS tokens_out,
+		       COUNT(*) AS session_count
+		FROM agent_sessions ags
+		JOIN tasks t ON t.id = ags.task_id
+		WHERE ags.workspace_id = $1
+		  AND ags.started_at >= $2 AND ags.started_at <= $3
+		  %s
+		GROUP BY ags.task_id, t.title
+		ORDER BY cost DESC
+		LIMIT 10
+	`, innerJoinProjectFilter)
+	var taskRows []taskCostQueryRow
+	if err := s.db.SelectContext(ctx, &taskRows, topTasksQ, args...); err != nil {
+		return nil, err
+	}
+	topTasks := make([]TaskCostRow, len(taskRows))
+	for i, r := range taskRows {
+		topTasks[i] = TaskCostRow(r)
+	}
+
+	return &CostMetrics{
+		TotalCost:      totals.Cost,
+		TotalTokensIn:  totals.TokensIn,
+		TotalTokensOut: totals.TokensOut,
+		SessionCount:   totals.SessionCount,
+		ByAgent:        byAgent,
+		ByProject:      byProject,
+		ByDay:          byDay,
+		TopTasks:       topTasks,
+	}, nil
 }
