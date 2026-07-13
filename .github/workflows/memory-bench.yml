@@ -67,6 +67,12 @@ jobs:
     name: Memory recall gate
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    permissions:
+      contents: read
+      # The gate raises an out-of-band alert when it is BLIND (INCONCLUSIVE), so
+      # that a safety net that stopped enforcing anything always pages somebody
+      # instead of quietly passing.
+      issues: write
 
     steps:
       - name: Checkout evc-mesh
@@ -135,6 +141,7 @@ jobs:
         run: pip install mcp httpx
 
       - name: Run recall gate (no LLM)
+        id: gate
         if: steps.scope.outputs.relevant == 'true'
         env:
           MESH_API_URL: ${{ secrets.MESH_API_URL }}
@@ -148,23 +155,47 @@ jobs:
           python run_ci.py --retrieval-only --tolerance "${{ inputs.tolerance || '0.25' }}" | tee gate.log
           rc=${PIPESTATUS[0]}
           set -e
+
+          # run_ci emits a machine-readable `GATE_REASON: <kind> — <detail>` line on
+          # every INCONCLUSIVE path. Belt-and-braces: an older run_ci returns 0 with
+          # no baseline, which is a VACUOUS GREEN (it compared against nothing) —
+          # treat it as inconclusive too. A gate that enforces nothing must never
+          # look green-and-healthy.
+          reason="$(grep -m1 '^GATE_REASON:' gate.log | sed 's/^GATE_REASON: *//' || true)"
+          if [ "$rc" = "0" ] && grep -qi 'no baseline_retrieval.json' gate.log; then
+            rc=2
+            reason="no-baseline — the gate compared against nothing"
+          fi
+          [ -z "$reason" ] && reason="unspecified"
+
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          echo "reason=$reason" >> "$GITHUB_OUTPUT"
+          echo "reason_kind=${reason%% *}" >> "$GITHUB_OUTPUT"
+
           {
             echo "## Memory recall gate"
             echo
             case "$rc" in
-              0) if grep -q 'No baseline_retrieval.json found' gate.log; then
-                   # A pass with no baseline has compared against nothing. Say so
-                   # out loud — a vacuous green is exactly the blindness this
-                   # workflow exists to remove.
-                   echo "⚠️ **NOT ENFORCING — no baseline yet.** The gate ran but compared against nothing."
-                   echo "Generate \`baseline_retrieval.json\` against a healthy embedder before making this"
-                   echo "check required (see \`scripts/memory-bench/README.md\`)."
-                 else
-                   echo "✅ **PASS** — recall within tolerance of baseline."
-                 fi ;;
-              1) echo "❌ **REGRESSION** — recall dropped below baseline. This PR makes memory worse." ;;
-              2) echo "⚠️ **INCONCLUSIVE** — the gate could not run (Mesh unreachable / harness broken)."
-                 echo "This is NOT a quality regression: nothing was measured." ;;
+              0) echo "✅ **PASS** — recall measured, comparable, and within tolerance of the baseline." ;;
+              1) echo "❌ **REGRESSION** — recall dropped below the baseline **in the same retrieval mode**."
+                 echo "This PR makes memory measurably worse. This is the only condition that blocks the merge." ;;
+              2) echo "### ⚠️ INCONCLUSIVE — the recall safety net is **BLIND** for this PR"
+                 echo
+                 echo "> **Nothing was measured, so nothing was enforced.** A real memory regression"
+                 echo "> could pass through this PR unseen. This check is **not failing you** —"
+                 echo "> the cause is infrastructure you cannot fix from a PR, and a red check"
+                 echo "> nobody can clear just gets bypassed until the whole gate is worthless."
+                 echo
+                 echo "**Reason:** \`$reason\`"
+                 echo
+                 echo "Most common cause: the baseline was captured in one retrieval mode (\`hybrid\`)"
+                 echo "but this run was served in another (\`bm25-only\`, i.e. the embedder is down and"
+                 echo "\`recall\` failed open). Hit@k is not comparable across modes, so a lower score"
+                 echo "here says nothing about this PR's code."
+                 echo
+                 echo "**Fix (repo maintainer, not the PR author):** restore the embedder, then re-snap"
+                 echo "the baseline — \`python run_ci.py --retrieval-only --update-baseline\`."
+                 echo "A tracking issue has been opened/updated so this blindness is not silent." ;;
               *) echo "❌ Gate exited $rc." ;;
             esac
             echo
@@ -172,7 +203,78 @@ jobs:
             tail -30 gate.log
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-          exit $rc
+
+          # rc=1 (REGRESSION) is the ONLY blocking condition — measured, comparable,
+          # worse. rc=2 (INCONCLUSIVE) must not fail the check: see the alert step.
+          if [ "$rc" = "1" ]; then exit 1; fi
+          if [ "$rc" != "0" ] && [ "$rc" != "2" ]; then exit "$rc"; fi
+          exit 0
+
+      # ---------------------------------------------------------------------
+      # Blindness must never be silent. INCONCLUSIVE does not block the merge,
+      # so the ONLY thing standing between "the safety net stopped working" and
+      # "nobody ever noticed" is this alert.
+      #
+      # ONE tracking issue, not one per PR: we comment on the existing open issue
+      # instead of opening a new one, and only when the reason KIND changed (cf.
+      # the 292-task alert storm — a poisoned dedup key turns an alert into spam,
+      # and spam is ignored, which is the same as having no alert at all).
+      # ---------------------------------------------------------------------
+      - name: Alert — recall gate is blind (INCONCLUSIVE)
+        if: steps.scope.outputs.relevant == 'true' && steps.gate.outputs.rc == '2'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TITLE: 'Memory recall gate is INCONCLUSIVE (safety net blind)'
+          REASON: ${{ steps.gate.outputs.reason }}
+          REASON_KIND: ${{ steps.gate.outputs.reason_kind }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          marker="<!-- recall-gate-blind kind=${REASON_KIND} -->"
+          body=$(printf '%s\n\n%s\n\n%s\n\n%s\n' \
+            "$marker" \
+            "The memory recall gate could not produce a verdict: it measured nothing, so it enforced nothing. Until this clears, **memory regressions can merge unnoticed**." \
+            "**Reason:** \`${REASON}\`" \
+            "Run: ${RUN_URL}")
+
+          num=$(gh issue list --state open --search "\"${TITLE}\" in:title" \
+                  --json number,title \
+                  --jq "[.[] | select(.title == \"${TITLE}\")] | .[0].number // empty")
+
+          if [ -z "$num" ]; then
+            gh issue create --title "$TITLE" --body "$body" --label memory,ci 2>/dev/null \
+              || gh issue create --title "$TITLE" --body "$body"
+            echo "Opened tracking issue."
+            exit 0
+          fi
+
+          # Storm guard: if the most recent comment (or the issue body, when there
+          # are none) already reports THIS reason kind, the alert is already live —
+          # adding a copy per PR would bury it.
+          last=$(gh issue view "$num" --json comments,body \
+                   --jq '(.comments | last | .body) // .body // ""')
+          if printf '%s' "$last" | grep -qF "$marker"; then
+            echo "Issue #$num already reports '${REASON_KIND}' — not commenting again."
+            exit 0
+          fi
+          gh issue comment "$num" --body "$body"
+          echo "Commented on tracking issue #$num."
+
+      # A gate that recovered should stop shouting: close the tracking issue once
+      # a real, comparable verdict is produced again.
+      - name: Resolve blindness alert (gate is measuring again)
+        if: steps.scope.outputs.relevant == 'true' && steps.gate.outputs.rc == '0' && github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TITLE: 'Memory recall gate is INCONCLUSIVE (safety net blind)'
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          num=$(gh issue list --state open --search "\"${TITLE}\" in:title" \
+                  --json number,title \
+                  --jq "[.[] | select(.title == \"${TITLE}\")] | .[0].number // empty")
+          [ -z "$num" ] && { echo "No open blindness issue."; exit 0; }
+          gh issue close "$num" --comment "Recall gate produced a comparable verdict again (baseline and run in the same retrieval mode). Safety net restored: ${RUN_URL}"
 
       - name: Upload recall-gate results
         if: always() && steps.scope.outputs.relevant == 'true'

@@ -76,6 +76,32 @@ var (
 		},
 		[]string{"key_type"},
 	)
+
+	// MemoryEmbedFailuresTotal counts embedder failures per memory operation
+	// ("recall" = query embedding for the dense arm, "store" = memory embedding).
+	//
+	// The recall path FAILS OPEN on an embedder error: it degrades to BM25-only
+	// and still returns 200. Until this counter existed the only trace of a dead
+	// embedder was a log line, so an out-of-credit provider served degraded
+	// recall for 32h and paged nobody. Alert on rate(...{op="recall"}[15m]) > 0.
+	MemoryEmbedFailuresTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "mesh_memory_embed_failures_total",
+			Help: "Total embedding failures by memory operation (recall|store)",
+		},
+		[]string{"op"},
+	)
+
+	// MemoryRecallTotal counts recall calls by the mode they were actually
+	// SERVED in. search_mode="bm25-only" means the dense arm did not run.
+	// The ratio bm25-only/total is the degradation signal.
+	MemoryRecallTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "mesh_memory_recall_total",
+			Help: "Total memory recall calls by the search mode actually served (hybrid|bm25-only)",
+		},
+		[]string{"search_mode"},
+	)
 )
 
 // RecordMCPToolCall records a single MCP tool call with its outcome status.
@@ -96,4 +122,17 @@ func RecordWebhookDispatch(eventType string, success bool) {
 // RecordRateLimitHit records a rate-limit rejection for the given key type (ip, user, agent).
 func RecordRateLimitHit(keyType string) {
 	RateLimitHitsTotal.WithLabelValues(keyType).Inc()
+}
+
+// RecordMemoryEmbedFailure records an embedder failure for the given memory
+// operation ("recall" or "store"). On the recall path this is the fail-open
+// event: the call still succeeds, but degraded to BM25-only.
+func RecordMemoryEmbedFailure(op string) {
+	MemoryEmbedFailuresTotal.WithLabelValues(op).Inc()
+}
+
+// RecordMemoryRecall records a completed recall labelled with the search mode it
+// was actually served in ("hybrid" or "bm25-only").
+func RecordMemoryRecall(searchMode string) {
+	MemoryRecallTotal.WithLabelValues(searchMode).Inc()
 }
