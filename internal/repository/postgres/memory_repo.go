@@ -281,7 +281,6 @@ func (r *MemoryRepo) FullTextSearch(ctx context.Context, query string, workspace
 	// This handles phrasing-sensitive misses such as "by fixing migrate-gate DSN"
 	// (filler words break plainto_tsquery AND logic with the 'simple' dictionary).
 	// Errors in the fallback are non-fatal; we continue with whatever AND found.
-	const minFTSHits = 3
 	if len(rows) < minFTSHits {
 		if orRows, err2 := r.ftsORFallback(ctx, query, workspaceID, projectID, scope, tags, limit, rows); err2 == nil {
 			rows = orRows
@@ -314,6 +313,13 @@ func (r *MemoryRepo) FullTextSearch(ctx context.Context, query string, workspace
 
 	return result, nil
 }
+
+// minFTSHits is the strict-AND hit count below which the OR-token fallback kicks in.
+// Both the 'simple' (FullTextSearch) and 'english' (FullTextSearchRanked) arms use it.
+const minFTSHits = 3
+
+// orScoreMultiplier discounts OR-only hits so exact AND matches always outrank them.
+const orScoreMultiplier = 0.8
 
 // tokenizeForORQuery converts a natural-language string into a PostgreSQL OR-tsquery fragment
 // suitable for passing to to_tsquery('simple', fragment). Tokens are split on any non-alphanumeric
@@ -399,7 +405,14 @@ func (r *MemoryRepo) ftsORFallback(
 		return andRows, nil
 	}
 
-	// Merge: AND results keep their score; OR-only results receive a discount.
+	return mergeORScoredRows(andRows, orRows, limit), nil
+}
+
+// mergeORScoredRows merges strict-AND hits with OR-token hits: AND results keep their raw
+// score, OR-only results are discounted by orScoreMultiplier so exact AND matches always
+// rank above partial ones. Rows already present in andRows are skipped (an ID can never
+// appear twice), the merged set is re-sorted by score and capped at limit.
+func mergeORScoredRows(andRows, orRows []scoredMemoryRow, limit int) []scoredMemoryRow {
 	idSeen := make(map[uuid.UUID]bool, len(andRows))
 	for _, row := range andRows {
 		idSeen[row.ID] = true
@@ -407,7 +420,6 @@ func (r *MemoryRepo) ftsORFallback(
 	merged := make([]scoredMemoryRow, len(andRows), len(andRows)+len(orRows))
 	copy(merged, andRows)
 
-	const orScoreMultiplier = 0.8
 	for _, row := range orRows {
 		if idSeen[row.ID] {
 			continue
@@ -420,10 +432,10 @@ func (r *MemoryRepo) ftsORFallback(
 	sort.Slice(merged, func(i, j int) bool {
 		return merged[i].Score > merged[j].Score
 	})
-	if len(merged) > limit {
+	if limit > 0 && len(merged) > limit {
 		merged = merged[:limit]
 	}
-	return merged, nil
+	return merged
 }
 
 // recencyHalfLifeDays is the half-life (in days) for the recency-decay factor blended
@@ -1295,6 +1307,19 @@ func (r *MemoryRepo) FullTextSearchRanked(ctx context.Context, wsID uuid.UUID, p
 		return nil, fmt.Errorf("fts ranked: %w", err)
 	}
 
+	// OR-token fallback when the strict AND query returns too few results — mirrors the
+	// FullTextSearch ('simple') path. This arm is not just a nicety: it is the *sole* arm
+	// left standing whenever the dense/embedding arm is down (service.Recall fails open to
+	// "bm25-only" on an embedding error, e.g. HTTP 402 from the provider). plainto_tsquery
+	// ANDs every term, so a 7-word natural-language wake-up query then matches nothing and
+	// recall returns zero rows. Relaxing to token-level OR degrades gracefully instead.
+	// Errors in the fallback are non-fatal; we continue with whatever AND found.
+	if len(rows) < minFTSHits {
+		if orRows, err2 := r.ftsRankedORFallback(ctx, wsID, projID, query, limit, rows); err2 == nil {
+			rows = orRows
+		}
+	}
+
 	result := make([]domain.ScoredMemory, len(rows))
 	ids := make([]uuid.UUID, len(rows))
 	for i, row := range rows {
@@ -1305,7 +1330,7 @@ func (r *MemoryRepo) FullTextSearchRanked(ctx context.Context, wsID uuid.UUID, p
 		ids[i] = row.ID
 	}
 
-	// Batch-touch last_accessed_at (1-hour idempotency window).
+	// Batch-touch last_accessed_at (1-hour idempotency window) over the FINAL merged set.
 	if len(ids) > 0 {
 		_, _ = r.db.ExecContext(ctx,
 			`UPDATE memories SET last_accessed_at = NOW()
@@ -1316,6 +1341,72 @@ func (r *MemoryRepo) FullTextSearchRanked(ctx context.Context, wsID uuid.UUID, p
 	}
 
 	return result, nil
+}
+
+// ftsRankedORFallback is the FullTextSearchRanked sibling of ftsORFallback: it runs a
+// token-level OR search and merges the hits into andRows, discounting OR-only rows.
+//
+// It cannot reuse ftsORFallback because that one targets the pre-built search_vector with
+// the 'simple' dictionary, whereas this arm re-computes the tsvector on the fly with the
+// 'english' dictionary. The WHERE clause below mirrors FullTextSearchRanked's predicates
+// exactly (workspace, expiry, archived, status != 'superseded', optional project) — dropping
+// any of them would leak superseded/archived/other-project rows in via the fallback.
+func (r *MemoryRepo) ftsRankedORFallback(
+	ctx context.Context,
+	wsID uuid.UUID,
+	projID *uuid.UUID,
+	query string,
+	limit int,
+	andRows []scoredMemoryRow,
+) ([]scoredMemoryRow, error) {
+	orFragment := tokenizeForORQuery(query)
+	if orFragment == "" {
+		return andRows, nil
+	}
+
+	args := []interface{}{wsID, orFragment} // $1=workspace_id, $2=OR tsquery fragment
+	conditions := []string{
+		"workspace_id = $1",
+		"(expires_at IS NULL OR expires_at > NOW())",
+		"archived = false",
+		"status != 'superseded'",
+		"to_tsvector('english', content || ' ' || COALESCE(key, '')) @@ to_tsquery('english', $2)",
+	}
+	argIdx := 3
+
+	if projID != nil {
+		conditions = append(conditions, fmt.Sprintf("project_id = $%d", argIdx))
+		args = append(args, *projID)
+		argIdx++
+	}
+
+	args = append(args, limit)
+	limitIdx := argIdx
+
+	q := fmt.Sprintf(`
+		SELECT %s,
+		       ts_rank_cd(
+		           to_tsvector('english', content || ' ' || COALESCE(key, '')),
+		           to_tsquery('english', $2)
+		       ) AS score
+		FROM memories
+		WHERE %s
+		ORDER BY score DESC
+		LIMIT $%d`,
+		memoryColumns,
+		joinAnd(conditions),
+		limitIdx,
+	)
+
+	var orRows []scoredMemoryRow
+	if err := r.db.SelectContext(ctx, &orRows, q, args...); err != nil {
+		return andRows, fmt.Errorf("fts ranked or fallback: %w", err)
+	}
+	if len(orRows) == 0 {
+		return andRows, nil
+	}
+
+	return mergeORScoredRows(andRows, orRows, limit), nil
 }
 
 // FindByShortID returns the first non-archived memory in workspaceID whose UUID text
