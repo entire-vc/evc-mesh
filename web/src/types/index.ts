@@ -1065,4 +1065,38 @@ export interface AnalyticsMetrics {
     created: number;
     completed: number;
   }>;
+  cost_metrics: {
+    total_cost: number;
+    total_tokens_in: number;
+    total_tokens_out: number;
+    session_count: number;
+    by_agent: Array<{
+      agent_id: string;
+      agent_name: string;
+      cost: number;
+      tokens_in: number;
+      tokens_out: number;
+    }>;
+    by_project: Array<{
+      project_id: string;
+      project_name: string;
+      cost: number;
+      tokens_in: number;
+      tokens_out: number;
+    }>;
+    by_day: Array<{
+      date: string;
+      cost: number;
+      tokens_in: number;
+      tokens_out: number;
+    }>;
+    top_tasks: Array<{
+      task_id: string;
+      task_title: string;
+      cost: number;
+      tokens_in: number;
+      tokens_out: number;
+      session_count: number;
+    }>;
+  };
 }

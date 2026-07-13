@@ -16,8 +16,12 @@ import { useWorkspaceStore } from "@/stores/workspace";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import type { AnalyticsMetrics } from "@/types";
 
 const POLL_INTERVAL_MS = 30_000;
+const COST_RANGE_DAYS = 30;
+const TOP_TASKS_LIMIT = 5;
+const TOP_AGENTS_LIMIT = 5;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -175,6 +179,170 @@ function AgentSessionCard({ agent }: AgentSessionCardProps) {
 }
 
 // ---------------------------------------------------------------------------
+// Cost Tracking section
+// ---------------------------------------------------------------------------
+
+type CostMetrics = AnalyticsMetrics["cost_metrics"];
+
+function formatCost(cost: number): string {
+	if (cost < 0.01 && cost > 0) return "<$0.01";
+	return `$${cost.toFixed(2)}`;
+}
+
+function formatTokens(n: number): string {
+	if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+	if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
+	return String(n);
+}
+
+interface CostTrackingSectionProps {
+	cost: CostMetrics | null;
+	isLoading: boolean;
+	wsSlug?: string;
+}
+
+export function CostTrackingSection({ cost, isLoading, wsSlug }: CostTrackingSectionProps) {
+	const hasData = !isLoading && !!cost && cost.session_count > 0;
+
+	return (
+		<Card>
+			<CardHeader className="flex flex-row items-center justify-between gap-2">
+				<CardTitle className="flex items-center gap-2 text-base">
+					<DollarSign className="h-4 w-4" />
+					Cost Tracking
+				</CardTitle>
+				<span className="text-xs text-muted-foreground">
+					Last {COST_RANGE_DAYS} days
+				</span>
+			</CardHeader>
+			<CardContent className="space-y-4">
+				{isLoading ? (
+					<div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+						{[1, 2, 3, 4].map((i) => (
+							<Skeleton key={i} className="h-16 w-full rounded-lg" />
+						))}
+					</div>
+				) : !hasData ? (
+					<div className="space-y-3 text-sm text-muted-foreground">
+						<p>
+							No cost data reported yet for this period. Cost data is available
+							when agents use the{" "}
+							<code className="rounded bg-muted px-1 py-0.5 text-xs font-mono">
+								session_report
+							</code>{" "}
+							MCP tool at the end of each session.
+						</p>
+						<div className="rounded-lg border border-dashed p-3 text-xs">
+							<p className="font-medium text-foreground mb-1">Example MCP call:</p>
+							<pre className="overflow-x-auto text-muted-foreground">
+{`session_report({
+  "tasks_completed": 3,
+  "tokens_used": 12400,
+  "model": "claude-sonnet-4-5",
+  "cost_usd": 0.042
+})`}
+							</pre>
+						</div>
+					</div>
+				) : (
+					<>
+						{/* KPI row */}
+						<div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+							<div className="rounded-lg border bg-card px-3 py-2.5">
+								<p className="text-[11px] text-muted-foreground">Total spend</p>
+								<p className="text-lg font-semibold tabular-nums">
+									{formatCost(cost.total_cost)}
+								</p>
+							</div>
+							<div className="rounded-lg border bg-card px-3 py-2.5">
+								<p className="text-[11px] text-muted-foreground">Tokens in / out</p>
+								<p className="text-lg font-semibold tabular-nums">
+									{formatTokens(cost.total_tokens_in)} / {formatTokens(cost.total_tokens_out)}
+								</p>
+							</div>
+							<div className="rounded-lg border bg-card px-3 py-2.5">
+								<p className="text-[11px] text-muted-foreground">Sessions</p>
+								<p className="text-lg font-semibold tabular-nums">
+									{cost.session_count.toLocaleString()}
+								</p>
+							</div>
+							<div className="rounded-lg border bg-card px-3 py-2.5">
+								<p className="text-[11px] text-muted-foreground">Avg / session</p>
+								<p className="text-lg font-semibold tabular-nums">
+									{formatCost(cost.session_count > 0 ? cost.total_cost / cost.session_count : 0)}
+								</p>
+							</div>
+						</div>
+
+						<div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+							{/* Spend by agent */}
+							<div>
+								<p className="mb-2 text-xs font-medium text-muted-foreground">
+									Spend by agent
+								</p>
+								{cost.by_agent.length === 0 ? (
+									<p className="text-xs text-muted-foreground">No agent data.</p>
+								) : (
+									<div className="space-y-1.5">
+										{cost.by_agent.slice(0, TOP_AGENTS_LIMIT).map((row) => (
+											<div
+												key={row.agent_id}
+												className="flex items-center justify-between gap-2 text-sm"
+											>
+												<span className="truncate text-foreground">{row.agent_name}</span>
+												<span className="shrink-0 tabular-nums text-muted-foreground">
+													{formatCost(row.cost)}
+												</span>
+											</div>
+										))}
+									</div>
+								)}
+							</div>
+
+							{/* Top expensive tasks */}
+							<div>
+								<p className="mb-2 text-xs font-medium text-muted-foreground">
+									Most expensive tasks
+								</p>
+								{cost.top_tasks.length === 0 ? (
+									<p className="text-xs text-muted-foreground">No task-linked sessions.</p>
+								) : (
+									<div className="space-y-1.5">
+										{cost.top_tasks.slice(0, TOP_TASKS_LIMIT).map((row) => (
+											<div
+												key={row.task_id}
+												className="flex items-center justify-between gap-2 text-sm"
+											>
+												<Link
+													to={`/t/${row.task_id}`}
+													className="truncate text-primary underline-offset-2 hover:underline"
+												>
+													{row.task_title || row.task_id.slice(0, 8) + "…"}
+												</Link>
+												<span className="shrink-0 tabular-nums text-muted-foreground">
+													{formatCost(row.cost)}
+												</span>
+											</div>
+										))}
+									</div>
+								)}
+							</div>
+						</div>
+
+						<Link
+							to={wsSlug ? `/w/${wsSlug}/analytics` : "/"}
+							className="inline-block text-xs text-primary underline-offset-4 hover:underline"
+						>
+							View full analytics →
+						</Link>
+					</>
+				)}
+			</CardContent>
+		</Card>
+	);
+}
+
+// ---------------------------------------------------------------------------
 // SessionDashboardPage
 // ---------------------------------------------------------------------------
 
@@ -184,6 +352,8 @@ export function SessionDashboardPage() {
 
 	const [agents, setAgents] = useState<AgentStatusEntry[]>([]);
 	const [isLoading, setIsLoading] = useState(true);
+	const [costMetrics, setCostMetrics] = useState<CostMetrics | null>(null);
+	const [isCostLoading, setIsCostLoading] = useState(true);
 	const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
 	const fetchStatus = useCallback(async (workspaceId: string) => {
@@ -199,20 +369,44 @@ export function SessionDashboardPage() {
 		}
 	}, []);
 
+	const fetchCostMetrics = useCallback(async (workspaceId: string) => {
+		try {
+			const to = new Date();
+			const from = new Date();
+			from.setDate(from.getDate() - COST_RANGE_DAYS);
+			const qs = new URLSearchParams({
+				from: from.toISOString().slice(0, 10),
+				to: to.toISOString().slice(0, 10),
+			}).toString();
+			const data = await api<AnalyticsMetrics>(
+				`/api/v1/workspaces/${workspaceId}/analytics?${qs}`,
+			);
+			setCostMetrics(data.cost_metrics ?? null);
+		} catch {
+			// Keep stale data on error, don't clear
+		} finally {
+			setIsCostLoading(false);
+		}
+	}, []);
+
 	useEffect(() => {
 		const wsId = currentWorkspace?.id;
 		if (!wsId) return;
 
 		fetchStatus(wsId);
+		fetchCostMetrics(wsId);
 
-		intervalRef.current = setInterval(() => fetchStatus(wsId), POLL_INTERVAL_MS);
+		intervalRef.current = setInterval(() => {
+			fetchStatus(wsId);
+			fetchCostMetrics(wsId);
+		}, POLL_INTERVAL_MS);
 		return () => {
 			if (intervalRef.current !== null) {
 				clearInterval(intervalRef.current);
 				intervalRef.current = null;
 			}
 		};
-	}, [currentWorkspace?.id, fetchStatus]);
+	}, [currentWorkspace?.id, fetchStatus, fetchCostMetrics]);
 
 	const effectiveStatus = (a: AgentStatusEntry) =>
 		a.is_stale ? "offline" : a.status;
@@ -273,42 +467,7 @@ export function SessionDashboardPage() {
 			)}
 
 			{/* Cost Tracking section */}
-			<Card>
-				<CardHeader>
-					<CardTitle className="flex items-center gap-2 text-base">
-						<DollarSign className="h-4 w-4" />
-						Cost Tracking
-					</CardTitle>
-				</CardHeader>
-				<CardContent className="space-y-3 text-sm text-muted-foreground">
-					<p>
-						Cost data is available when agents use the{" "}
-						<code className="rounded bg-muted px-1 py-0.5 text-xs font-mono">
-							session_report
-						</code>{" "}
-						MCP tool at the end of each session.
-					</p>
-					<p>
-						To enable cost reporting, configure your agent to call{" "}
-						<code className="rounded bg-muted px-1 py-0.5 text-xs font-mono">
-							session_report
-						</code>{" "}
-						with token usage and model information before exiting. Cost data will
-						then appear here in a future update.
-					</p>
-					<div className="rounded-lg border border-dashed p-3 text-xs">
-						<p className="font-medium text-foreground mb-1">Example MCP call:</p>
-						<pre className="overflow-x-auto text-muted-foreground">
-{`session_report({
-  "tasks_completed": 3,
-  "tokens_used": 12400,
-  "model": "claude-sonnet-4-5",
-  "cost_usd": 0.042
-})`}
-						</pre>
-					</div>
-				</CardContent>
-			</Card>
+			<CostTrackingSection cost={costMetrics} isLoading={isCostLoading} wsSlug={wsSlug} />
 		</div>
 	);
 }

@@ -685,6 +685,7 @@ type AnalyticsMetrics struct {
 	TaskMetrics  TaskMetrics  `json:"task_metrics"`
 	AgentMetrics AgentMetrics `json:"agent_metrics"`
 	EventMetrics EventMetrics `json:"event_metrics"`
+	CostMetrics  CostMetrics  `json:"cost_metrics"`
 	Timeline     []DayMetric  `json:"timeline"`
 }
 
@@ -722,6 +723,55 @@ type DayMetric struct {
 	Date      string `json:"date"`
 	Created   int    `json:"created"`
 	Completed int    `json:"completed"`
+}
+
+// CostMetrics holds aggregated agent-session cost/token data for a workspace/period,
+// sourced from agent_sessions (populated by the fiddler session_report MCP tool).
+type CostMetrics struct {
+	TotalCost      float64          `json:"total_cost"`
+	TotalTokensIn  int64            `json:"total_tokens_in"`
+	TotalTokensOut int64            `json:"total_tokens_out"`
+	SessionCount   int              `json:"session_count"`
+	ByAgent        []AgentCostRow   `json:"by_agent"`
+	ByProject      []ProjectCostRow `json:"by_project"`
+	ByDay          []DayCostMetric  `json:"by_day"`
+	TopTasks       []TaskCostRow    `json:"top_tasks"`
+}
+
+// AgentCostRow holds per-agent spend/token stats for the period.
+type AgentCostRow struct {
+	AgentID   uuid.UUID `json:"agent_id"`
+	AgentName string    `json:"agent_name"`
+	Cost      float64   `json:"cost"`
+	TokensIn  int64     `json:"tokens_in"`
+	TokensOut int64     `json:"tokens_out"`
+}
+
+// ProjectCostRow holds per-project spend/token stats for the period.
+type ProjectCostRow struct {
+	ProjectID   uuid.UUID `json:"project_id"`
+	ProjectName string    `json:"project_name"`
+	Cost        float64   `json:"cost"`
+	TokensIn    int64     `json:"tokens_in"`
+	TokensOut   int64     `json:"tokens_out"`
+}
+
+// DayCostMetric holds the daily spend/token totals.
+type DayCostMetric struct {
+	Date      string  `json:"date"`
+	Cost      float64 `json:"cost"`
+	TokensIn  int64   `json:"tokens_in"`
+	TokensOut int64   `json:"tokens_out"`
+}
+
+// TaskCostRow holds spend/token stats for a single task (used for the top-N leaderboard).
+type TaskCostRow struct {
+	TaskID       uuid.UUID `json:"task_id"`
+	TaskTitle    string    `json:"task_title"`
+	Cost         float64   `json:"cost"`
+	TokensIn     int64     `json:"tokens_in"`
+	TokensOut    int64     `json:"tokens_out"`
+	SessionCount int       `json:"session_count"`
 }
 
 // AnalyticsFilter defines the filtering parameters for analytics queries.
