@@ -605,9 +605,13 @@ type MemoryRepository interface {
 	// CleanExpired deletes memories that have a non-null expires_at in the past.
 	// Returns the number of rows deleted.
 	CleanExpired(ctx context.Context) (int64, error)
-	// ListWithNullEmbedding returns up to limit memories whose embedding column is NULL.
-	// Used by the batch embedding job.
-	ListWithNullEmbedding(ctx context.Context, workspaceID uuid.UUID, limit int) ([]domain.Memory, error)
+	// ListNeedingEmbedding returns up to limit memories that need to be (re)embedded with
+	// the currently configured model: either they have no vector yet, or their vector was
+	// produced by a DIFFERENT model. The second case is what makes switching embedding
+	// provider/model a supported operation — vectors from another model live in another
+	// vector space, score 0 in cosineSimilarity (dimension guard), and would otherwise stay
+	// invisible to semantic recall forever because nothing re-embeds them.
+	ListNeedingEmbedding(ctx context.Context, workspaceID uuid.UUID, model string, limit int) ([]domain.Memory, error)
 	// FindByShortID returns the first memory in workspaceID whose UUID starts with prefix (6–12 lowercase hex chars).
 	// Returns nil without error when no match is found.
 	FindByShortID(ctx context.Context, workspaceID uuid.UUID, prefix string) (*domain.Memory, error)

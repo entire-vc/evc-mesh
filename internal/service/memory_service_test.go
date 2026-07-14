@@ -23,6 +23,13 @@ import (
 // ---------------------------------------------------------------------------
 
 type mockMemoryRepo struct {
+	// set by ListNeedingEmbedding: the model BatchEmbed asked for (the SQL filter keys on it)
+	embedModelAsked string
+	// rows the fake repo hands back as "needs (re)embedding"
+	needEmbedding []domain.Memory
+	// captured by UpdateEmbedding
+	embeddedWithModel string
+	embeddedDim       int
 	upsertFn                           func(ctx context.Context, mem *domain.Memory) error
 	getByIDFn                          func(ctx context.Context, id uuid.UUID) (*domain.Memory, error)
 	getByKeyFn                         func(ctx context.Context, wsID uuid.UUID, projID *uuid.UUID, agentID *uuid.UUID, key string, scope domain.MemoryScope) (*domain.Memory, error)
@@ -103,7 +110,9 @@ func (m *mockMemoryRepo) VectorSearch(ctx context.Context, vec []float32, wsID u
 	return nil, nil
 }
 
-func (m *mockMemoryRepo) UpdateEmbedding(_ context.Context, _ uuid.UUID, _ []float32, _ string, _ int) error {
+func (m *mockMemoryRepo) UpdateEmbedding(_ context.Context, _ uuid.UUID, _ []float32, model string, dim int) error {
+	m.embeddedWithModel = model
+	m.embeddedDim = dim
 	return nil
 }
 
@@ -115,8 +124,11 @@ func (m *mockMemoryRepo) CleanExpired(_ context.Context) (int64, error) {
 	return 0, nil
 }
 
-func (m *mockMemoryRepo) ListWithNullEmbedding(_ context.Context, _ uuid.UUID, _ int) ([]domain.Memory, error) {
-	return nil, nil
+func (m *mockMemoryRepo) ListNeedingEmbedding(_ context.Context, _ uuid.UUID, model string, _ int) ([]domain.Memory, error) {
+	m.embedModelAsked = model
+	out := m.needEmbedding
+	m.needEmbedding = nil // one batch, then drained — mirrors the real paging loop
+	return out, nil
 }
 
 func (m *mockMemoryRepo) List(_ context.Context, _ domain.MemoryListFilter) (*domain.MemoryListResult, error) {
@@ -2482,3 +2494,52 @@ func TestRecall_BM25Fallback_VectorOnly(t *testing.T) {
 	_ = vecMem // used for documentation; actual vec path requires non-noop embedder
 	assert.Empty(t, results, "with BM25 error and noop embedder, results should be empty")
 }
+
+
+// A memory embedded by a DIFFERENT model must be re-embedded when the configured embedder
+// changes — otherwise switching embedding provider/model silently strands the whole corpus:
+// vectors from the old model live in another space, score 0 in cosineSimilarity (dimension
+// guard), and nothing would ever rewrite them. This is the regression guard for that.
+func TestBatchEmbed_ReembedsMemoriesFromAnotherModel(t *testing.T) {
+	repo := &mockMemoryRepo{
+		needEmbedding: []domain.Memory{
+			{ID: uuid.New(), Key: "k", Content: "content", EmbeddingModel: "text-embedding-3-small", EmbeddingDim: 1536},
+		},
+	}
+	svc := NewMemoryService(repo, nil, &switchModelEmbedder{model: "bge-m3", dim: 1024})
+
+	n, err := svc.BatchEmbed(context.Background(), uuid.New())
+	if err != nil {
+		t.Fatalf("BatchEmbed: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("expected the stale-model memory to be re-embedded, got n=%d", n)
+	}
+	// The repo filter keys on the model BatchEmbed asks for — it must be the CURRENT one,
+	// not the one already stored, or the stale rows would never be selected.
+	if repo.embedModelAsked != "bge-m3" {
+		t.Fatalf("BatchEmbed must ask the repo for the currently configured model, asked %q", repo.embedModelAsked)
+	}
+	if repo.embeddedWithModel != "" && repo.embeddedWithModel != "bge-m3" {
+		t.Fatalf("re-embedded vector stored under the wrong model: %q", repo.embeddedWithModel)
+	}
+}
+
+// switchModelEmbedder is a deterministic non-noop embedder for the model-switch test above.
+type switchModelEmbedder struct {
+	model string
+	dim   int
+}
+
+func (s *switchModelEmbedder) Embed(_ context.Context, _ string) ([]float32, error) {
+	return make([]float32, s.dim), nil
+}
+func (s *switchModelEmbedder) EmbedBatch(_ context.Context, texts []string) ([][]float32, error) {
+	out := make([][]float32, len(texts))
+	for i := range texts {
+		out[i] = make([]float32, s.dim)
+	}
+	return out, nil
+}
+func (s *switchModelEmbedder) Model() string   { return s.model }
+func (s *switchModelEmbedder) Dimensions() int { return s.dim }

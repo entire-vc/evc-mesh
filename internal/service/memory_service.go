@@ -1396,16 +1396,22 @@ func (s *memoryService) ImportMemories(ctx context.Context, workspaceID uuid.UUI
 	return count, nil
 }
 
-// BatchEmbed finds all memories without an embedding vector and embeds them
-// using the configured embedder. It is a no-op when the embedder is the noop variant.
-// Returns the count of memories successfully embedded.
+// BatchEmbed finds all memories that need (re)embedding with the configured embedder —
+// those with no vector, AND those whose vector was produced by a different model — and
+// embeds them. It is a no-op when the embedder is the noop variant. Returns the count of
+// memories successfully embedded.
+//
+// Including the different-model case is what makes switching embedding provider/model a
+// supported operation: a vector from another model sits in another vector space, scores 0
+// in cosineSimilarity (dimension guard), and would otherwise remain invisible to semantic
+// recall forever. Call this repeatedly (it works in batches) after changing the provider.
 func (s *memoryService) BatchEmbed(ctx context.Context, workspaceID uuid.UUID) (int, error) {
 	if embedding.IsNoop(s.embedder) {
 		return 0, nil
 	}
 
 	const batchSize = 100
-	memories, err := s.memRepo.ListWithNullEmbedding(ctx, workspaceID, batchSize)
+	memories, err := s.memRepo.ListNeedingEmbedding(ctx, workspaceID, s.embedder.Model(), batchSize)
 	if err != nil {
 		return 0, fmt.Errorf("memory batch embed: list: %w", err)
 	}
