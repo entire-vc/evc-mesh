@@ -280,21 +280,27 @@ def run_single(
     top_k: int,
     retrieval_only: bool = False,
 ) -> dict:
-    from mesh_client_stdio import MeshMemoryClient
+    from mesh_client_stdio import MeshMemoryClient, flatten_exc
 
     qid = entry["question_id"]
     qtype = entry["question_type"]
 
-    def errored(stage: str, exc: Exception) -> dict:
+    def errored(stage: str, exc: BaseException) -> dict:
         # NOTE: no "correct" key. An errored question was never asked, so it is
         # excluded from the scores rather than counted as a wrong answer — that
         # conflation is what turned an API 402 into a fake 7-category
         # "REGRESSION" on every PR.
-        logger.error("%s failed for %s: %s", stage, qid, exc)
+        #
+        # Report the exception's LEAVES, not the TaskGroup wrapper. When the gate
+        # goes blind, this string is the whole explanation anyone gets; "unhandled
+        # errors in a TaskGroup (1 sub-exception)" names the plumbing and hides
+        # the fault, so the reason we stopped enforcing stays unknown.
+        detail = flatten_exc(exc)
+        logger.error("%s failed for %s: %s", stage, qid, detail)
         return {
             "question_id": qid,
             "question_type": qtype,
-            "error": f"{stage}: {exc}",
+            "error": f"{stage}: {detail}",
             "error_stage": stage,
         }
 

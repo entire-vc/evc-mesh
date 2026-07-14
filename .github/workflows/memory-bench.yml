@@ -50,13 +50,25 @@ on:
     - cron: '0 4 * * *'
 
 env:
+  # Every file whose behaviour the gate is supposed to protect. A memory file
+  # MISSING from this list is the worst failure mode available to a required
+  # check: the job reports green having measured nothing, and the "required"
+  # badge certifies a run that never happened.
+  #
+  # That was not hypothetical — #347 rewrote the authorization on memory DELETE,
+  # touching only `internal/handler/memory_handler.go`, and the gate no-op'd to
+  # green because the handler was not listed here. When adding a memory code
+  # path, add it here in the same PR.
   MEMORY_PATHS: |
+    internal/handler/memory_handler.go
+    internal/domain/memory.go
     internal/service/memory_service.go
     internal/repository/postgres/memory_repo.go
     internal/repository/postgres/memory_edges_repo.go
     internal/mcp/tools.go
     internal/mcp/server.go
     internal/reconciler/
+    pkg/sdk/memories.go
     scripts/memory-bench/
 
 jobs:
@@ -79,6 +91,25 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      # Runs on EVERY PR, before (and independently of) the scope check — these
+      # are the tests that guard the gate against going blind, so they must not
+      # be skipped by the very no-op they exist to detect. Stdlib only: no
+      # secrets, no network, ~1s.
+      #
+      # A red here means "this PR would make the recall gate stop enforcing" —
+      # e.g. it adds a memory source file that MEMORY_PATHS does not cover. That
+      # IS a legitimate merge block, and unlike an infra failure the author can
+      # clear it: list the file.
+      - name: Set up Python (gate self-checks)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Gate self-checks (blind-spot + mode logic)
+        run: |
+          python scripts/memory-bench/test_gate_blindness.py
+          python scripts/memory-bench/test_gate_modes.py
 
       - name: Does this change touch memory?
         id: scope
@@ -129,14 +160,9 @@ jobs:
           GOOS=linux GOARCH=amd64 go build -o ../mesh-mcp-bin .
           chmod +x ../mesh-mcp-bin
 
-      - name: Set up Python
-        if: steps.scope.outputs.relevant == 'true'
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
       - name: Install Python dependencies
         if: steps.scope.outputs.relevant == 'true'
+        # Python itself is already set up above for the gate self-checks.
         # No `openai` — the recall gate must not acquire a paid dependency.
         run: pip install mcp httpx
 
@@ -152,7 +178,10 @@ jobs:
         run: |
           cd scripts/memory-bench
           set +e
-          python run_ci.py --retrieval-only --tolerance "${{ inputs.tolerance || '0.25' }}" | tee gate.log
+          # 2>&1: the harness prints its tracebacks to stderr, so without this the
+          # uploaded gate.log — the only artifact anyone reads after the fact —
+          # contains the "could not measure" verdict but not the reason for it.
+          python run_ci.py --retrieval-only --tolerance "${{ inputs.tolerance || '0.25' }}" 2>&1 | tee gate.log
           rc=${PIPESTATUS[0]}
           set -e
 
@@ -346,7 +375,7 @@ jobs:
         run: |
           cd scripts/memory-bench
           set +e
-          python run_ci.py --tolerance "${{ inputs.tolerance || '0.25' }}" | tee bench.log
+          python run_ci.py --tolerance "${{ inputs.tolerance || '0.25' }}" 2>&1 | tee bench.log
           rc=${PIPESTATUS[0]}
           set -e
           {

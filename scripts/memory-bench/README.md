@@ -118,6 +118,36 @@ somebody instead of quietly degrading recall for days:
 
 Alert on `rate(mesh_memory_embed_failures_total{op="recall"}[15m]) > 0`.
 
+## The three ways this gate goes blind
+
+The gate is required, which makes its *silence* more dangerous than its red. Each
+of these has actually happened; each is now pinned by `test_gate_blindness.py`,
+which CI runs on **every** PR (independently of the scope check below — a test
+that guards against a wrongful no-op must not be skipped by that same no-op).
+
+1. **A memory file missing from `MEMORY_PATHS`.** The gate no-ops and reports
+   green having measured nothing, and "required" then certifies a run that never
+   happened. #347 rewrote the authorization on memory `DELETE`, touching only
+   `internal/handler/memory_handler.go`, and the gate never ran. **Adding a
+   memory source file? Add it to `MEMORY_PATHS` in the same PR** — the test fails
+   until you do.
+
+2. **A transient Mesh restart mid-run.** `mesh-mcp` authenticates at startup and
+   *exits* if that call fails, so the client sees only `Connection closed`, never
+   the cause. A push to `main` triggers this bench **and** the backend deploy
+   concurrently, so mesh-api restarts underneath the run: every question in that
+   window errors, the error budget blows, and the gate reports INCONCLUSIVE — it
+   switches itself off precisely on the commits that changed memory. A PR run can
+   hit the same window whenever an unrelated merge deploys. Questions now retry
+   against a fresh `mesh-mcp` (`CONNECT_RETRIES`), with a circuit breaker so a
+   genuinely dead API fails fast instead of paying the backoff 24 times.
+
+3. **An unreadable reason.** anyio reports failures as `ExceptionGroup: unhandled
+   errors in a TaskGroup (1 sub-exception)` — a string that names the plumbing and
+   hides the fault. `flatten_exc` inlines the leaves, and the CI step pipes stderr
+   into `gate.log` (`2>&1`), so the uploaded artifact contains the *reason* the
+   gate went blind and not just the fact that it did.
+
 ## Making the recall gate a required check
 
 Do it in this order. Skipping step 1 wedges every PR.
