@@ -2626,8 +2626,8 @@ func (e *concurrencyTrackingEmbedder) Embed(_ context.Context, _ string) ([]floa
 	cur := e.inFlight.Add(1)
 	defer e.inFlight.Add(-1)
 	for {
-		max := e.maxInFlight.Load()
-		if cur <= max || e.maxInFlight.CompareAndSwap(max, cur) {
+		peak := e.maxInFlight.Load()
+		if cur <= peak || e.maxInFlight.CompareAndSwap(peak, cur) {
 			break
 		}
 	}

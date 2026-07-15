@@ -23,7 +23,7 @@ type ollamaEmbedder struct {
 // endpoint defaults to "http://localhost:11434" when empty.
 // model defaults to "nomic-embed-text" when empty.
 // httpTimeoutSecs defaults to 30 when zero or negative (today's hardcoded behavior).
-func NewOllamaEmbedder(endpoint, model string, dimensions int, httpTimeoutSecs int) Embedder {
+func NewOllamaEmbedder(endpoint, model string, dimensions, httpTimeoutSecs int) Embedder {
 	if endpoint == "" {
 		endpoint = "http://localhost:11434"
 	}
