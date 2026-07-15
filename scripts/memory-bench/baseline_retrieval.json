@@ -1,14 +1,14 @@
 {
-  "search_mode": "bm25-only",
-  "captured_at": "2026-07-13T10:03:00Z",
+  "search_mode": "hybrid",
+  "captured_at": "2026-07-15T13:04:54Z",
   "top_k": 10,
   "scores": {
     "knowledge-update": 1.0,
     "multi-session": 1.0,
     "single-session-assistant": 1.0,
     "single-session-preference": 0.75,
-    "single-session-user": 1.0,
-    "temporal-reasoning": 0.5,
-    "overall": 0.875
+    "single-session-user": 0.5,
+    "temporal-reasoning": 1.0,
+    "overall": 0.8636363636363636
   }
 }
