@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Self-checks for the three ways the recall gate could stop enforcing anything.
+"""Self-checks for the ways the recall gate could stop enforcing anything.
 
     python scripts/memory-bench/test_gate_blindness.py
 
@@ -18,10 +18,19 @@ pins one way that has actually occurred:
   3. LEGIBLE CAUSE — an anyio TaskGroup reports failures as "unhandled errors in
      a TaskGroup (1 sub-exception)". If that is the string the gate prints when
      it goes blind, nobody can tell why it went blind.
+  4. SILENT TOOL ERROR — a `call_tool` result with `isError=True` (or any non-JSON
+     body a healthy mesh-mcp tool never produces) was parsed as `{"text": ...}`,
+     a shape neither `_store` nor `_search` recognise as an error. A real recall
+     failure then reads as "zero items, mode unknown" with no exception and no log
+     line. (evc-mesh#352: one such call collapsed a 24-question run's mode to
+     "unknown", turning a real -0.5 regression into mere INCONCLUSIVE gate
+     blindness — worse than #1-3, because it hides a REGRESSION, not just an
+     infra hiccup.)
 """
 
 from __future__ import annotations
 
+import asyncio
 import re
 import sys
 import unittest
@@ -367,6 +376,80 @@ class TestCleanupSurvivesTheConnectionDying(unittest.TestCase):
             any("ORPHANED FIXTURES" in m for m in logs.output),
             "fixtures left in a shared store must never be abandoned quietly",
         )
+
+
+class _ToolBlock:
+    def __init__(self, text):
+        self.text = text
+
+
+class _ToolResult:
+    """Minimal stand-in for `mcp.types.CallToolResult` (content + isError)."""
+
+    def __init__(self, *, text=None, is_error=False):
+        self.content = [_ToolBlock(text)] if text is not None else []
+        self.isError = is_error
+
+
+class TestSilentToolErrorIsSurfaced(unittest.TestCase):
+    """evc-mesh#352: an `isError` (or non-JSON) tool result must become an
+    `{"error": ...}` payload — the only shape `_store`/`_search` treat as a
+    failure — never the old `{"text": ...}` that both silently ignore."""
+
+    def test_isError_with_text_becomes_an_error_payload(self):
+        result = _ToolResult(text="recall failed: workspace not found", is_error=True)
+        payload = mc._parse_tool_payload(result)
+        self.assertEqual(
+            {"error": "recall failed: workspace not found"}, payload
+        )
+
+    def test_isError_with_no_text_still_reports_an_error(self):
+        result = _ToolResult(is_error=True)
+        payload = mc._parse_tool_payload(result)
+        self.assertIn("error", payload)
+
+    def test_non_json_body_without_isError_is_still_an_error(self):
+        # No healthy mesh-mcp tool ever answers success with a non-JSON body —
+        # a body that fails to parse is corruption/truncation, not "empty".
+        result = _ToolResult(text="<html>502 Bad Gateway</html>", is_error=False)
+        payload = mc._parse_tool_payload(result)
+        self.assertIn("error", payload)
+        self.assertNotIn("text", payload, "the old silent-swallow shape must be gone")
+
+    def test_valid_json_dict_on_success_passes_through_unchanged(self):
+        result = _ToolResult(
+            text='{"items": [], "search_mode": "bm25-only", "degraded": true}'
+        )
+        payload = mc._parse_tool_payload(result)
+        self.assertEqual(
+            {"items": [], "search_mode": "bm25-only", "degraded": True}, payload
+        )
+
+    def test_valid_json_list_on_success_is_wrapped_as_items(self):
+        result = _ToolResult(text='[{"id": "m1"}]')
+        payload = mc._parse_tool_payload(result)
+        self.assertEqual({"items": [{"id": "m1"}]}, payload)
+
+    def test_a_plain_dict_result_passes_through_as_is(self):
+        # _FakeSession (and the real MCP low-level client, in some paths) can
+        # hand back an already-decoded dict; must not be re-parsed or rejected.
+        self.assertEqual({"items": []}, mc._parse_tool_payload({"items": []}))
+
+    def test_none_result_is_empty_not_an_error(self):
+        self.assertEqual({}, mc._parse_tool_payload(None))
+
+    def test_search_raises_on_the_error_payload_it_would_now_receive(self):
+        """Integration guard: _search already gates on `.get("error")` — confirm
+        the NEW error shape actually trips that gate (the old `{"text": ...}`
+        shape did not, which is the whole bug)."""
+        client = mc.MeshMemoryClient(question_id="q1")
+
+        class _ErrorSession:
+            async def call_tool(self, name, args):
+                return _ToolResult(text="recall failed: 500", is_error=True)
+
+        with self.assertRaises(RuntimeError):
+            asyncio.run(client._search(_ErrorSession(), "query", 10))
 
 
 if __name__ == "__main__":

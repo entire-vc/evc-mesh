@@ -133,25 +133,47 @@ def _mesh_env() -> dict[str, str]:
 
 
 def _parse_tool_payload(result: Any) -> dict[str, Any]:
+    """Turn a `call_tool` result into the dict callers check with `.get("error")`.
+
+    Every mesh-mcp tool answers success with `jsonResult(v)` — a single JSON
+    text block — and failure with `mcpsdk.NewToolResultError(msg)`, which sets
+    `isError=True` and puts a PLAIN, NON-JSON string in that same slot. This
+    function used to try `json.loads` on that string regardless, fail, and swallow
+    the failure into `{"text": text}` — a shape `_store`/`_search` don't recognise
+    as an error (they only check the `"error"` key), so a genuine server-side tool
+    error (auth expiry, validation, a panic recovery message) was silently treated
+    as an empty-but-valid response: zero items, unknown search_mode, no exception,
+    nothing logged. That is precisely how evc-mesh#352 happened — one recall call
+    came back `isError=True`, was read as "nothing retrieved", and the mode-unknown
+    it produced collapsed the ENTIRE 24-question run to INCONCLUSIVE, masking a
+    real -0.5 regression in single-session-assistant as mere gate blindness.
+    A non-JSON body that ISN'T flagged isError is just as untrustworthy — no
+    mesh-mcp tool ever produces one on success — so it is folded into the same
+    `{"error": ...}` shape rather than given a free pass.
+    """
     if result is None:
         return {}
     if isinstance(result, dict):
         return result
     content = getattr(result, "content", None)
-    if not content:
+    text = None
+    for block in content or []:
+        block_text = getattr(block, "text", None)
+        if block_text:
+            text = block_text
+            break
+    if getattr(result, "isError", False):
+        return {"error": text or "tool call failed (isError, no text content)"}
+    if not text:
         return {}
-    for block in content:
-        text = getattr(block, "text", None)
-        if not text:
-            continue
-        try:
-            parsed = json.loads(text)
-            if isinstance(parsed, list):
-                return {"items": parsed}
-            if isinstance(parsed, dict):
-                return parsed
-        except json.JSONDecodeError:
-            return {"text": text}
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        return {"error": f"non-JSON tool response: {text[:200]!r}"}
+    if isinstance(parsed, list):
+        return {"items": parsed}
+    if isinstance(parsed, dict):
+        return parsed
     return {}
 
 
