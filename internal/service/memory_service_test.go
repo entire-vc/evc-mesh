@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -23,6 +25,10 @@ import (
 // ---------------------------------------------------------------------------
 
 type mockMemoryRepo struct {
+	// guards embeddedWithModel/embeddedDim, written by UpdateEmbedding — the concurrency
+	// tests below call it from many goroutines at once, unlike the rest of this mock's
+	// single-threaded callers.
+	mu sync.Mutex
 	// set by ListNeedingEmbedding: the model BatchEmbed asked for (the SQL filter keys on it)
 	embedModelAsked string
 	// rows the fake repo hands back as "needs (re)embedding"
@@ -111,6 +117,8 @@ func (m *mockMemoryRepo) VectorSearch(ctx context.Context, vec []float32, wsID u
 }
 
 func (m *mockMemoryRepo) UpdateEmbedding(_ context.Context, _ uuid.UUID, _ []float32, model string, dim int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.embeddedWithModel = model
 	m.embeddedDim = dim
 	return nil
@@ -2542,3 +2550,103 @@ func (s *switchModelEmbedder) EmbedBatch(_ context.Context, texts []string) ([][
 }
 func (s *switchModelEmbedder) Model() string   { return s.model }
 func (s *switchModelEmbedder) Dimensions() int { return s.dim }
+
+// TestEmbedConcurrencyBound verifies that MemoryWithEmbedConcurrency caps how many
+// embedAndStore calls run at once. Without a bound, a burst of memory writes fires one
+// goroutine per write straight at the embedder — against a slow, CPU-bound backend (e.g.
+// a self-hosted TEI server) that stampede exhausts the embedder's own concurrency limit,
+// survivors queue, and the embed HTTP client's timeout trips before any response arrives.
+func TestEmbedConcurrencyBound(t *testing.T) {
+	repo := &mockMemoryRepo{}
+	tracker := &concurrencyTrackingEmbedder{dim: 4, sleep: 20 * time.Millisecond}
+	const limit = 2
+	svc := NewMemoryService(repo, &mockMemoryEdgeRepo{}, tracker, MemoryWithEmbedConcurrency(limit))
+	ms, ok := svc.(*memoryService)
+	require.True(t, ok, "NewMemoryService must return *memoryService")
+
+	const calls = 10
+	var wg sync.WaitGroup
+	wg.Add(calls)
+	for i := 0; i < calls; i++ {
+		go func() {
+			defer wg.Done()
+			ms.embedAndStore(uuid.New(), "some memory content")
+		}()
+	}
+	wg.Wait()
+
+	if got := tracker.calls.Load(); got != calls {
+		t.Fatalf("expected all %d embed calls to complete, got %d", calls, got)
+	}
+	if got := tracker.maxInFlight.Load(); got > int64(limit) {
+		t.Fatalf("observed max in-flight embeds = %d, want <= %d (concurrency limit)", got, limit)
+	}
+}
+
+// TestEmbedConcurrencyUnboundedByDefault verifies that omitting MemoryWithEmbedConcurrency
+// preserves today's behavior exactly: embeds run with no artificial serialization imposed
+// by the new semaphore.
+func TestEmbedConcurrencyUnboundedByDefault(t *testing.T) {
+	repo := &mockMemoryRepo{}
+	tracker := &concurrencyTrackingEmbedder{dim: 4, sleep: 30 * time.Millisecond}
+	svc := NewMemoryService(repo, &mockMemoryEdgeRepo{}, tracker) // no MemoryWithEmbedConcurrency
+	ms, ok := svc.(*memoryService)
+	require.True(t, ok, "NewMemoryService must return *memoryService")
+
+	const calls = 8
+	var wg sync.WaitGroup
+	wg.Add(calls)
+	for i := 0; i < calls; i++ {
+		go func() {
+			defer wg.Done()
+			ms.embedAndStore(uuid.New(), "some memory content")
+		}()
+	}
+	wg.Wait()
+
+	// Unbounded means every goroutine can be in flight at once; require strictly more
+	// than the bounded test's limit above to prove no cap was introduced.
+	if got := tracker.maxInFlight.Load(); got <= 2 {
+		t.Fatalf("expected unbounded concurrency (observed max in-flight = %d), the semaphore must not gate when concurrency is unconfigured", got)
+	}
+}
+
+// concurrencyTrackingEmbedder is a fake Embedder for concurrency tests. Embed sleeps to
+// simulate a slow, CPU-bound embedding backend and atomically tracks the current and peak
+// number of in-flight calls, plus a total completed-calls counter.
+type concurrencyTrackingEmbedder struct {
+	dim         int
+	sleep       time.Duration
+	inFlight    atomic.Int64
+	maxInFlight atomic.Int64
+	calls       atomic.Int64
+}
+
+func (e *concurrencyTrackingEmbedder) Embed(_ context.Context, _ string) ([]float32, error) {
+	cur := e.inFlight.Add(1)
+	defer e.inFlight.Add(-1)
+	for {
+		max := e.maxInFlight.Load()
+		if cur <= max || e.maxInFlight.CompareAndSwap(max, cur) {
+			break
+		}
+	}
+	time.Sleep(e.sleep)
+	e.calls.Add(1)
+	return make([]float32, e.dim), nil
+}
+
+func (e *concurrencyTrackingEmbedder) EmbedBatch(ctx context.Context, texts []string) ([][]float32, error) {
+	out := make([][]float32, len(texts))
+	for i, text := range texts {
+		vec, err := e.Embed(ctx, text)
+		if err != nil {
+			return nil, err
+		}
+		out[i] = vec
+	}
+	return out, nil
+}
+
+func (e *concurrencyTrackingEmbedder) Model() string   { return "concurrency-tracker" }
+func (e *concurrencyTrackingEmbedder) Dimensions() int { return e.dim }

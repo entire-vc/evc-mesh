@@ -10,9 +10,9 @@ import "github.com/entire-vc/evc-mesh/internal/config"
 func NewEmbedder(cfg config.EmbeddingConfig) Embedder {
 	switch cfg.Provider {
 	case "ollama":
-		return NewOllamaEmbedder(cfg.Endpoint, cfg.Model, cfg.Dimensions)
+		return NewOllamaEmbedder(cfg.Endpoint, cfg.Model, cfg.Dimensions, cfg.HTTPTimeoutSecs)
 	case "openai":
-		return NewOpenAIEmbedder(cfg.Endpoint, cfg.APIKey, cfg.Model, cfg.Dimensions)
+		return NewOpenAIEmbedder(cfg.Endpoint, cfg.APIKey, cfg.Model, cfg.Dimensions, cfg.HTTPTimeoutSecs)
 	default:
 		return NewNoopEmbedder()
 	}

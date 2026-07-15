@@ -253,6 +253,7 @@ type memoryService struct {
 	taskRepo     repository.TaskRepository           // optional; nil → Amendments 2 & 3 skipped
 	depRepo      repository.TaskDependencyRepository // optional; nil → depends_on bridge skipped
 	halfLifeDays float64                             // half-life for exp decay; default defaultHalfLifeDays
+	embedSem     chan struct{}                       // optional bound on concurrent embed goroutines; nil = unbounded (default)
 }
 
 // MemoryServiceOption configures a MemoryService.
@@ -280,6 +281,21 @@ func MemoryWithTaskRepo(tr repository.TaskRepository) MemoryServiceOption {
 func MemoryWithDepRepo(dr repository.TaskDependencyRepository) MemoryServiceOption {
 	return func(s *memoryService) {
 		s.depRepo = dr
+	}
+}
+
+// MemoryWithEmbedConcurrency bounds how many embedAndStore goroutines may call the
+// embedder concurrently. A burst of writes against a slow, CPU-bound embedder (e.g. a
+// self-hosted TEI server) can otherwise stampede it: every write fires its own goroutine
+// with no limit, the embedder's own concurrency semaphore starts rejecting requests,
+// survivors queue, and the embed HTTP client's timeout trips before a response arrives.
+// n <= 0 leaves embedding unbounded (today's exact behavior, and the default when this
+// option is omitted).
+func MemoryWithEmbedConcurrency(n int) MemoryServiceOption {
+	return func(s *memoryService) {
+		if n > 0 {
+			s.embedSem = make(chan struct{}, n)
+		}
 	}
 }
 
@@ -624,7 +640,14 @@ func defaultExpiresAt(scope domain.MemoryScope, tags []string) *time.Time {
 
 // embedAndStore embeds text and persists the resulting vector for the given memory ID.
 // Called asynchronously from Remember; errors are logged but never surfaced to callers.
+// When embedSem is configured (MemoryWithEmbedConcurrency), it caps how many embed calls
+// run concurrently; otherwise embedding remains unbounded.
 func (s *memoryService) embedAndStore(id uuid.UUID, text string) {
+	if s.embedSem != nil {
+		s.embedSem <- struct{}{}
+		defer func() { <-s.embedSem }()
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 

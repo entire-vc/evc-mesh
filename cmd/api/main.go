@@ -185,6 +185,7 @@ func main() {
 		service.MemoryWithProjectRepo(projectRepo),
 		service.MemoryWithTaskRepo(taskRepo),
 		service.MemoryWithDepRepo(taskDependencyRepo),
+		service.MemoryWithEmbedConcurrency(cfg.Embedding.Concurrency),
 	)
 
 	// Slack service sends notifications via Slack Incoming Webhooks when a workspace has

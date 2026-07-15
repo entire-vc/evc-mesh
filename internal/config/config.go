@@ -53,6 +53,11 @@ type EmbeddingConfig struct {
 	Dimensions int
 	// BatchSize controls how many texts are embedded in a single batch call (default: 32).
 	BatchSize int
+	// Concurrency bounds how many embed calls may run concurrently (default: 0, meaning
+	// unbounded — every write spawns its own embed goroutine, today's exact behavior).
+	Concurrency int
+	// HTTPTimeoutSecs is the timeout, in seconds, for the embedder's HTTP client (default: 30).
+	HTTPTimeoutSecs int
 }
 
 // SparkConfig holds configuration for the Spark agent catalog integration.
@@ -222,12 +227,14 @@ func Load() *Config {
 			GitHubSecret: getEnv("MESH_GITHUB_WEBHOOK_SECRET", ""),
 		},
 		Embedding: EmbeddingConfig{
-			Provider:   getEnv("EMBEDDING_PROVIDER", "none"),
-			Model:      getEnv("EMBEDDING_MODEL", ""),
-			Endpoint:   getEnv("EMBEDDING_ENDPOINT", ""),
-			APIKey:     getEnv("EMBEDDING_API_KEY", ""),
-			Dimensions: getEnvInt("EMBEDDING_DIMENSIONS", 0),
-			BatchSize:  getEnvInt("EMBEDDING_BATCH_SIZE", 32),
+			Provider:        getEnv("EMBEDDING_PROVIDER", "none"),
+			Model:           getEnv("EMBEDDING_MODEL", ""),
+			Endpoint:        getEnv("EMBEDDING_ENDPOINT", ""),
+			APIKey:          getEnv("EMBEDDING_API_KEY", ""),
+			Dimensions:      getEnvInt("EMBEDDING_DIMENSIONS", 0),
+			BatchSize:       getEnvInt("EMBEDDING_BATCH_SIZE", 32),
+			Concurrency:     getEnvInt("EMBEDDING_CONCURRENCY", 0),
+			HTTPTimeoutSecs: getEnvInt("EMBEDDING_HTTP_TIMEOUT_SECS", 30),
 		},
 		VAPID: VAPIDConfig{
 			PublicKey:  getEnv("MESH_VAPID_PUBLIC_KEY", ""),
