@@ -1208,24 +1208,28 @@ func (r *MemoryRepo) ListCreatedSince(ctx context.Context, since time.Time, limi
 	return memories, nil
 }
 
-// ListWithNullEmbedding returns up to limit memories whose embedding column is NULL.
-// Used by the batch embedding job to find un-embedded memories.
-func (r *MemoryRepo) ListWithNullEmbedding(ctx context.Context, workspaceID uuid.UUID, limit int) ([]domain.Memory, error) {
+// ListNeedingEmbedding returns up to limit memories that need to be (re)embedded with the
+// currently configured model — either they have no vector, or their vector came from a
+// DIFFERENT model. Vectors from another model live in a different vector space: they score
+// 0 in cosineSimilarity (dimension guard) and are therefore invisible to semantic recall.
+// Including them here is what lets an operator switch embedding provider/model and have the
+// corpus re-embed itself on the next batch run, instead of silently stranding it.
+func (r *MemoryRepo) ListNeedingEmbedding(ctx context.Context, workspaceID uuid.UUID, model string, limit int) ([]domain.Memory, error) {
 	if limit <= 0 {
 		limit = 100
 	}
 	q := fmt.Sprintf(`
 		SELECT %s FROM memories
 		WHERE workspace_id = $1
-		  AND embedding IS NULL
+		  AND (embedding IS NULL OR embedding_model IS DISTINCT FROM $2)
 		  AND (expires_at IS NULL OR expires_at > now())
 		ORDER BY updated_at DESC
-		LIMIT $2`,
+		LIMIT $3`,
 		memoryColumns,
 	)
 	var rows []memoryRow
-	if err := r.db.SelectContext(ctx, &rows, q, workspaceID, limit); err != nil {
-		return nil, fmt.Errorf("memory list null embedding: %w", err)
+	if err := r.db.SelectContext(ctx, &rows, q, workspaceID, model, limit); err != nil {
+		return nil, fmt.Errorf("memory list needing embedding: %w", err)
 	}
 	memories := make([]domain.Memory, len(rows))
 	for i, row := range rows {
