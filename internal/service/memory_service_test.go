@@ -28,8 +28,8 @@ type mockMemoryRepo struct {
 	// rows the fake repo hands back as "needs (re)embedding"
 	needEmbedding []domain.Memory
 	// captured by UpdateEmbedding
-	embeddedWithModel string
-	embeddedDim       int
+	embeddedWithModel                  string
+	embeddedDim                        int
 	upsertFn                           func(ctx context.Context, mem *domain.Memory) error
 	getByIDFn                          func(ctx context.Context, id uuid.UUID) (*domain.Memory, error)
 	getByKeyFn                         func(ctx context.Context, wsID uuid.UUID, projID *uuid.UUID, agentID *uuid.UUID, key string, scope domain.MemoryScope) (*domain.Memory, error)
@@ -2494,7 +2494,6 @@ func TestRecall_BM25Fallback_VectorOnly(t *testing.T) {
 	_ = vecMem // used for documentation; actual vec path requires non-noop embedder
 	assert.Empty(t, results, "with BM25 error and noop embedder, results should be empty")
 }
-
 
 // A memory embedded by a DIFFERENT model must be re-embedded when the configured embedder
 // changes — otherwise switching embedding provider/model silently strands the whole corpus:
