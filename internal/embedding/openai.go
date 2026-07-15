@@ -23,19 +23,23 @@ type openAIEmbedder struct {
 // NewOpenAIEmbedder returns an Embedder backed by the OpenAI embeddings API.
 // endpoint defaults to "https://api.openai.com" when empty.
 // model defaults to "text-embedding-3-small" when empty.
-func NewOpenAIEmbedder(endpoint, apiKey, model string, dimensions int) Embedder {
+// httpTimeoutSecs defaults to 30 when zero or negative (today's hardcoded behavior).
+func NewOpenAIEmbedder(endpoint, apiKey, model string, dimensions, httpTimeoutSecs int) Embedder {
 	if endpoint == "" {
 		endpoint = "https://api.openai.com"
 	}
 	if model == "" {
 		model = "text-embedding-3-small"
 	}
+	if httpTimeoutSecs <= 0 {
+		httpTimeoutSecs = 30
+	}
 	return &openAIEmbedder{
 		endpoint:   strings.TrimRight(endpoint, "/"),
 		apiKey:     apiKey,
 		model:      model,
 		dimensions: dimensions,
-		client:     &http.Client{Timeout: 30 * time.Second},
+		client:     &http.Client{Timeout: time.Duration(httpTimeoutSecs) * time.Second},
 	}
 }
 

@@ -22,18 +22,22 @@ type ollamaEmbedder struct {
 // NewOllamaEmbedder returns an Embedder backed by a local Ollama instance.
 // endpoint defaults to "http://localhost:11434" when empty.
 // model defaults to "nomic-embed-text" when empty.
-func NewOllamaEmbedder(endpoint, model string, dimensions int) Embedder {
+// httpTimeoutSecs defaults to 30 when zero or negative (today's hardcoded behavior).
+func NewOllamaEmbedder(endpoint, model string, dimensions, httpTimeoutSecs int) Embedder {
 	if endpoint == "" {
 		endpoint = "http://localhost:11434"
 	}
 	if model == "" {
 		model = "nomic-embed-text"
 	}
+	if httpTimeoutSecs <= 0 {
+		httpTimeoutSecs = 30
+	}
 	return &ollamaEmbedder{
 		endpoint:   strings.TrimRight(endpoint, "/"),
 		model:      model,
 		dimensions: dimensions,
-		client:     &http.Client{Timeout: 30 * time.Second},
+		client:     &http.Client{Timeout: time.Duration(httpTimeoutSecs) * time.Second},
 	}
 }
 
