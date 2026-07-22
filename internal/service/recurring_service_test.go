@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -379,8 +380,57 @@ func TestGetPreviousInstanceSummary_RuneSafeTruncation(t *testing.T) {
 	if !utf8.ValidString(got) {
 		t.Fatalf("truncated LastComment is not valid UTF-8: %q", got)
 	}
-	if utf8.RuneCountInString(got) != prevSummaryMaxRunes {
-		t.Fatalf("expected %d runes, got %d", prevSummaryMaxRunes, utf8.RuneCountInString(got))
+	// No whitespace anywhere in the 600-'Ж' input, so softenTruncationBoundary
+	// has nothing to back off to — the cut stays at exactly prevSummaryMaxRunes
+	// runes, plus the visible truncation marker.
+	if !strings.HasSuffix(got, prevSummaryTruncatedSuffix) {
+		t.Fatalf("expected truncated result to end with %q, got %q", prevSummaryTruncatedSuffix, got)
+	}
+	wantRunes := prevSummaryMaxRunes + utf8.RuneCountInString(prevSummaryTruncatedSuffix)
+	if utf8.RuneCountInString(got) != wantRunes {
+		t.Fatalf("expected %d runes, got %d", wantRunes, utf8.RuneCountInString(got))
+	}
+}
+
+// AC#1 extra — softenTruncationBoundary must not cut a real word in half when a
+// whitespace boundary exists within the lookback window (task c9fa3b4b: prior
+// behavior cut "...дефектом ПОДАЧИ ... вместо ложного f" mid-word).
+func TestGetPreviousInstanceSummary_TruncationBacksOffToWordBoundary(t *testing.T) {
+	repo := NewMockRecurringRepository()
+	taskSvc := NewStubTaskService()
+	svc := NewRecurringService(repo, taskSvc).(*recurringService)
+
+	scheduleID := uuid.New()
+	// 495 filler runes + a word that straddles the 500-rune cut (the naive cut
+	// lands inside "overflowingword", at "...x over"). The word boundary is
+	// well within the 10%-of-500=50-rune lookback, so it should back off
+	// cleanly to just the filler, not leave a dangling word fragment.
+	longComment := strings.Repeat("x", 495) + " overflowingword more text past the limit"
+	repo.history[scheduleID] = []domain.RecurringInstanceSummary{
+		{
+			TaskID:         uuid.New(),
+			InstanceNumber: 1,
+			Title:          "T",
+			StatusCategory: "done",
+			LastComment:    &longComment,
+			CreatedAt:      time.Now(),
+		},
+	}
+
+	summary := svc.getPreviousInstanceSummary(context.Background(), scheduleID)
+	if summary == nil || summary.LastComment == nil {
+		t.Fatal("expected summary with LastComment")
+	}
+	got := *summary.LastComment
+	if !utf8.ValidString(got) {
+		t.Fatalf("truncated LastComment is not valid UTF-8: %q", got)
+	}
+	want := strings.Repeat("x", 495) + prevSummaryTruncatedSuffix
+	if got != want {
+		t.Fatalf("expected clean word-boundary cut %q, got %q", want, got)
+	}
+	if strings.Contains(got, "overflowingwor") {
+		t.Fatalf("truncation landed mid-word: %q", got)
 	}
 }
 
@@ -446,6 +496,139 @@ func TestCreateInstance_DescriptionBackstop(t *testing.T) {
 	desc := created[0].Description
 	if !utf8.ValidString(desc) {
 		t.Fatalf("description passed to taskSvc.Create is not valid UTF-8: %q", desc)
+	}
+}
+
+// Task c9fa3b4b — the injected previous-instance report must be clearly framed
+// as historical context, never as an unlabeled continuation of the current
+// instance's instructions. Repro: instance 30's description ended with a bare
+// "…Recall@episodic оказался дефектом ПОДАЧИ … вместо ложного f" — the raw
+// last_comment of instance 29 with no marker showing where it came from.
+func TestCreateInstance_PrevSummaryIsFramedAsContext(t *testing.T) {
+	repo := NewMockRecurringRepository()
+	taskSvc := NewStubTaskService()
+	svc := NewRecurringService(repo, taskSvc).(*recurringService)
+
+	scheduleID := uuid.New()
+	schedule := &domain.RecurringSchedule{
+		ID:                  scheduleID,
+		ProjectID:           uuid.New(),
+		WorkspaceID:         uuid.New(),
+		TitleTemplate:       "Task {{.Number}}",
+		DescriptionTemplate: "Do the daily sweep.\n{{.PrevSummary}}",
+		Frequency:           domain.RecurringFrequencyCustom,
+		CronExpr:            "0 9 * * *",
+		Timezone:            "UTC",
+		AssigneeType:        domain.AssigneeTypeAgent,
+		Priority:            domain.PriorityMedium,
+		Labels:              pq.StringArray{},
+		IsActive:            true,
+		StartsAt:            time.Now().Add(-time.Hour),
+		InstanceCount:       1,
+		CreatedBy:           uuid.New(),
+		CreatedByType:       domain.ActorTypeUser,
+		CreatedAt:           time.Now(),
+		UpdatedAt:           time.Now(),
+	}
+
+	lastComment := "Done. Rolled out fix X, verified Y."
+	repo.history[scheduleID] = []domain.RecurringInstanceSummary{
+		{
+			TaskID:         uuid.New(),
+			InstanceNumber: 1,
+			Title:          "Task 1",
+			StatusCategory: "done",
+			LastComment:    &lastComment,
+			CreatedAt:      time.Now().Add(-time.Hour),
+		},
+	}
+
+	_, err := svc.createInstance(context.Background(), schedule, time.Now())
+	if err != nil {
+		t.Fatalf("createInstance returned error: %v", err)
+	}
+
+	taskSvc.mu.Lock()
+	created := taskSvc.created
+	taskSvc.mu.Unlock()
+	if len(created) == 0 {
+		t.Fatal("expected taskSvc.Create to be called")
+	}
+	desc := created[0].Description
+
+	if !strings.Contains(desc, prevSummaryHeader) {
+		t.Fatalf("expected description to contain the framing header %q, got %q", prevSummaryHeader, desc)
+	}
+	headerIdx := strings.Index(desc, prevSummaryHeader)
+	commentIdx := strings.Index(desc, lastComment)
+	if commentIdx == -1 {
+		t.Fatalf("expected description to still contain the previous comment text, got %q", desc)
+	}
+	if headerIdx == -1 || headerIdx > commentIdx {
+		t.Fatalf("expected framing header to precede the previous comment, got %q", desc)
+	}
+	instructionsIdx := strings.Index(desc, "Do the daily sweep.")
+	if instructionsIdx == -1 || instructionsIdx > headerIdx {
+		t.Fatalf("expected this run's own instructions to precede the framed prior-report block, got %q", desc)
+	}
+}
+
+// A schedule whose template does not reference {{.PrevSummary}} must render a
+// description byte-for-byte equal to a plain-text template — no leakage from
+// the previous instance, no framing header inserted where none was asked for.
+func TestCreateInstance_NoPrevSummaryPlaceholder_DescriptionMatchesTemplate(t *testing.T) {
+	repo := NewMockRecurringRepository()
+	taskSvc := NewStubTaskService()
+	svc := NewRecurringService(repo, taskSvc).(*recurringService)
+
+	scheduleID := uuid.New()
+	const tmpl = "Fixed description, no template variables at all."
+	schedule := &domain.RecurringSchedule{
+		ID:                  scheduleID,
+		ProjectID:           uuid.New(),
+		WorkspaceID:         uuid.New(),
+		TitleTemplate:       "Task {{.Number}}",
+		DescriptionTemplate: tmpl,
+		Frequency:           domain.RecurringFrequencyCustom,
+		CronExpr:            "0 9 * * *",
+		Timezone:            "UTC",
+		AssigneeType:        domain.AssigneeTypeAgent,
+		Priority:            domain.PriorityMedium,
+		Labels:              pq.StringArray{},
+		IsActive:            true,
+		StartsAt:            time.Now().Add(-time.Hour),
+		InstanceCount:       1,
+		CreatedBy:           uuid.New(),
+		CreatedByType:       domain.ActorTypeUser,
+		CreatedAt:           time.Now(),
+		UpdatedAt:           time.Now(),
+	}
+
+	lastComment := "Done. Some unrelated report from the previous instance."
+	repo.history[scheduleID] = []domain.RecurringInstanceSummary{
+		{
+			TaskID:         uuid.New(),
+			InstanceNumber: 1,
+			Title:          "Task 1",
+			StatusCategory: "done",
+			LastComment:    &lastComment,
+			CreatedAt:      time.Now().Add(-time.Hour),
+		},
+	}
+
+	_, err := svc.createInstance(context.Background(), schedule, time.Now())
+	if err != nil {
+		t.Fatalf("createInstance returned error: %v", err)
+	}
+
+	taskSvc.mu.Lock()
+	created := taskSvc.created
+	taskSvc.mu.Unlock()
+	if len(created) == 0 {
+		t.Fatal("expected taskSvc.Create to be called")
+	}
+	if got := created[0].Description; got != tmpl {
+		t.Fatalf("expected description to be byte-for-byte equal to the template %q, got %q", tmpl, got)
 	}
 }
 
