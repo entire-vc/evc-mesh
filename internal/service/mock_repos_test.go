@@ -199,10 +199,30 @@ type MockTaskRepository struct {
 	mu          sync.RWMutex
 	items       map[uuid.UUID]*domain.Task
 	errToReturn error
+	// statusCategoryOf, if set, resolves a status ID to its category — used by
+	// FindDueMonitorBacklogTasks to emulate the real query's join against
+	// task_statuses without this mock needing a direct dependency on
+	// MockTaskStatusRepository. Tests wire it via WithStatusCategoryLookup.
+	statusCategoryOf func(statusID uuid.UUID) domain.StatusCategory
 }
 
 func NewMockTaskRepository() *MockTaskRepository {
 	return &MockTaskRepository{items: make(map[uuid.UUID]*domain.Task)}
+}
+
+// WithStatusCategoryLookup wires a status-category resolver (typically backed by a
+// MockTaskStatusRepository seeded in the same test) so status-category-filtered
+// mock queries (e.g. FindDueMonitorBacklogTasks) behave like the real SQL join.
+func (m *MockTaskRepository) WithStatusCategoryLookup(statusRepo *MockTaskStatusRepository) *MockTaskRepository {
+	m.statusCategoryOf = func(statusID uuid.UUID) domain.StatusCategory {
+		statusRepo.mu.RLock()
+		defer statusRepo.mu.RUnlock()
+		if s, ok := statusRepo.items[statusID]; ok {
+			return s.Category
+		}
+		return ""
+	}
+	return m
 }
 
 func (m *MockTaskRepository) Create(_ context.Context, t *domain.Task) error {
@@ -435,6 +455,29 @@ func (m *MockTaskRepository) FindExpiredInProgressCheckouts(_ context.Context) (
 		if t.CheckoutExpires != nil && t.CheckoutExpires.Before(now) {
 			out = append(out, *t)
 		}
+	}
+	return out, nil
+}
+
+func (m *MockTaskRepository) FindDueMonitorBacklogTasks(_ context.Context) ([]domain.Task, error) {
+	if m.errToReturn != nil {
+		return nil, m.errToReturn
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	now := time.Now()
+	var out []domain.Task
+	for _, t := range m.items {
+		if t.DueDate == nil || t.DueDate.After(now) {
+			continue
+		}
+		if !containsInStringArray(t.Labels, monitorLabelKindMonitor) {
+			continue
+		}
+		if m.statusCategoryOf == nil || m.statusCategoryOf(t.StatusID) != domain.StatusCategoryBacklog {
+			continue
+		}
+		out = append(out, *t)
 	}
 	return out, nil
 }

@@ -1687,6 +1687,9 @@ func (m *mockTaskRepo) ReleaseExpiredCheckouts(_ context.Context) (int64, error)
 func (m *mockTaskRepo) FindExpiredInProgressCheckouts(_ context.Context) ([]domain.Task, error) {
 	return nil, nil
 }
+func (m *mockTaskRepo) FindDueMonitorBacklogTasks(_ context.Context) ([]domain.Task, error) {
+	return nil, nil
+}
 func (m *mockTaskRepo) MoveToProject(_ context.Context, _, _, _ uuid.UUID) error { return nil }
 func (m *mockTaskRepo) ListOpenByRecurringScheduleID(_ context.Context, _, _ uuid.UUID) ([]domain.Task, error) {
 	return nil, nil

@@ -1020,6 +1020,32 @@ func main() {
 	}()
 	log.Println("Agent events sweeper started (5m interval)")
 
+	// 10b-bis. Monitor promotion sweeper — auto-unparks backlog+kind:monitor tasks
+	// whose due_date has passed, moving them back to todo (CLAUDE-workflow-reference.md
+	// §0m passive-wait pattern; complements the event-driven dependency-unblock
+	// auto-transition, which only fires on task completion, with a time-based trigger).
+	monitorPromotionSvc := service.NewMonitorPromotionService(taskRepo, taskStatusRepo, commentRepo, taskService)
+	go func() {
+		ticker := time.NewTicker(60 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+				n, err := monitorPromotionSvc.SweepDueMonitorTasks(ctx)
+				cancel()
+				if err != nil {
+					log.Printf("[monitor-promotion] ERROR sweeping due monitor tasks: %v", err)
+				} else if n > 0 {
+					log.Printf("[monitor-promotion] promoted %d backlog+kind:monitor task(s) to todo", n)
+				}
+			case <-schedulerShutdownCh:
+				return
+			}
+		}
+	}()
+	log.Println("Monitor promotion sweeper started (60s interval)")
+
 	// 10c. Stale session sweeper — end agent sessions left active longer than 6h every hour.
 	go func() {
 		ticker := time.NewTicker(1 * time.Hour)

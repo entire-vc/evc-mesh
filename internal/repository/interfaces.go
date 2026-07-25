@@ -102,6 +102,10 @@ type TaskRepository interface {
 	// past and whose status category is in_progress. These tasks have an expired
 	// lease and are candidates for auto-return to todo by the lease reaper.
 	FindExpiredInProgressCheckouts(ctx context.Context) ([]domain.Task, error)
+	// FindDueMonitorBacklogTasks returns tasks in "backlog" category, labelled
+	// "kind:monitor", whose due_date has passed. These are candidates for
+	// auto-promotion back to "todo" by the monitor promotion sweeper.
+	FindDueMonitorBacklogTasks(ctx context.Context) ([]domain.Task, error)
 	// MoveToProject atomically reassigns a task to a different project, assigning it
 	// the given target status and a new task_number within that project.
 	// Returns apierror.NotFound("Task") if the task does not exist or is soft-deleted.

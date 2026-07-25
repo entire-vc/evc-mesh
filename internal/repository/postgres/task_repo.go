@@ -996,6 +996,27 @@ func (r *TaskRepo) FindExpiredInProgressCheckouts(ctx context.Context) ([]domain
 	return taskRowsToSlice(rows), nil
 }
 
+// FindDueMonitorBacklogTasks returns tasks in "backlog" category, labelled
+// "kind:monitor", whose due_date has passed. Used by the monitor promotion
+// sweeper to auto-unpark passive-wait tasks once their gate time is reached.
+func (r *TaskRepo) FindDueMonitorBacklogTasks(ctx context.Context) ([]domain.Task, error) {
+	const q = `
+		SELECT ` + taskBaseColsNoAlias + `
+		FROM tasks
+		WHERE deleted_at IS NULL
+		  AND due_date IS NOT NULL
+		  AND due_date <= now()
+		  AND 'kind:monitor' = ANY(labels)
+		  AND status_id IN (
+		      SELECT id FROM task_statuses WHERE category = 'backlog'
+		  )`
+	var rows []taskRow
+	if err := r.db.SelectContext(ctx, &rows, q); err != nil {
+		return nil, err
+	}
+	return taskRowsToSlice(rows), nil
+}
+
 // ExtendCheckout pushes the checkout_expires deadline forward. The token must match
 // and the existing checkout must not already be expired (to prevent hijacking an
 // expired slot via extend).
