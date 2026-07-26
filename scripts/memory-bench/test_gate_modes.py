@@ -655,6 +655,150 @@ class TestSampleIsPrinted(unittest.TestCase):
         self.assertIn("UNMEASURED", out)
 
 
+class TestBaselineRecordsItsOwnDenominator(unittest.TestCase):
+    """The sample gate is one-sided without this.
+
+    `category_comparable` catches a RUN whose sample shrank. Nothing catches a
+    BASELINE captured on a smaller sample than the runs it judges — and that is
+    the live case: `temporal-reasoning: 1.0` in the shipped baseline rests on 2
+    of 4 questions (evc-mesh#362). Restore the missing two and a fully-measured
+    4-question run gets compared against a 2-question figure; one miss reads as
+    -0.25 and two as a REGRESSION, for a change in sample, not in quality.
+    """
+
+    def test_payload_records_sample_sizes(self):
+        payload = build_baseline_payload(
+            [{"temporal-reasoning": 1.0, "overall": 0.9}],
+            MODE_HYBRID,
+            top_k=10,
+            sizes={"temporal-reasoning": (2, 4), "overall": (22, 24)},
+        )
+        self.assertEqual(payload["sample_sizes"]["temporal-reasoning"], [2, 4])
+
+    def test_sample_sizes_round_trip_through_load_baseline(self):
+        payload = build_baseline_payload(
+            [{"temporal-reasoning": 1.0}],
+            MODE_HYBRID,
+            top_k=10,
+            sizes={"temporal-reasoning": (2, 4)},
+        )
+        tmp = Path(tempfile.mkdtemp()) / "baseline.json"
+        tmp.write_text(json.dumps(payload))
+        self.assertEqual(load_baseline(tmp).sample_sizes["temporal-reasoning"], (2, 4))
+
+    def test_a_baseline_without_the_field_reads_as_unknown_not_as_matching(self):
+        # Every baseline shipped before this field exists. It must not be
+        # credited with a denominator it never recorded.
+        tmp = Path(tempfile.mkdtemp()) / "baseline.json"
+        tmp.write_text(json.dumps({"search_mode": MODE_HYBRID, "scores": {"a": 1.0}}))
+        self.assertEqual(load_baseline(tmp).sample_sizes, {})
+
+    def test_restored_questions_do_not_manufacture_a_regression(self):
+        # THE coupling this exists for: the fix to #362 restores temporal-reasoning
+        # to 4 questions. Against a baseline captured on 2, both restored questions
+        # missing is 0.5 vs 1.0 — a REGRESSION verdict on a required check, caused
+        # by the sample changing, blocking the very PR that fixes the sample.
+        baseline = Baseline(
+            scores={"temporal-reasoning": 1.0, "overall": 0.9},
+            search_mode=MODE_HYBRID,
+            n_runs=1,
+            spread={},
+            sample_sizes={"temporal-reasoning": (2, 4), "overall": (22, 24)},
+        )
+        verdict = decide_verdict(
+            classify(
+                {"temporal-reasoning": 0.5, "overall": 0.9},
+                baseline,
+                0.25,
+                {"temporal-reasoning": (4, 4), "overall": (24, 24)},
+            )
+        )
+        self.assertNotEqual(verdict.exit_code, EXIT_REGRESSION)
+        self.assertIn("temporal-reasoning", verdict.unmeasured)
+
+    def test_matching_denominators_are_compared_normally(self):
+        # The gate must not have become unpassable: same sample both sides still
+        # yields a real verdict, in both directions.
+        baseline = Baseline(
+            scores={"temporal-reasoning": 1.0, "overall": 0.9},
+            search_mode=MODE_HYBRID,
+            n_runs=1,
+            spread={},
+            sample_sizes={"temporal-reasoning": (4, 4), "overall": (24, 24)},
+        )
+        sizes = {"temporal-reasoning": (4, 4), "overall": (24, 24)}
+        self.assertEqual(
+            decide_verdict(
+                classify({"temporal-reasoning": 1.0, "overall": 0.9}, baseline, 0.25, sizes)
+            ).exit_code,
+            EXIT_OK,
+        )
+        self.assertEqual(
+            decide_verdict(
+                classify({"temporal-reasoning": 0.0, "overall": 0.9}, baseline, 0.25, sizes)
+            ).exit_code,
+            EXIT_REGRESSION,
+        )
+
+
+class TestRepeatCannotLaunderMissingCoverage(unittest.TestCase):
+    """`--repeat N` multiplies precision, never coverage.
+
+    The sample gate's denominator has to be DISTINCT QUESTIONS. Counting answer
+    rows instead lets repetition dissolve a systematic loss: the two `gpt4_*`
+    ids fail deterministically on every pass (evc-mesh#362), so at `--repeat 3`
+    temporal-reasoning's honest 2-of-4 counts as "6 ran", 1/6 clears the 0.25
+    tolerance, and the baseline is captured on half the category with the gate
+    reporting nothing wrong — the exact defect the gate exists to catch, laundered
+    through the flag added to make baselines more trustworthy.
+    """
+
+    @staticmethod
+    def _rows(passes: int):
+        rows = []
+        for _ in range(passes):
+            for qid in ("aaa1", "bbb2"):
+                rows.append(
+                    {"question_id": qid, "question_type": "temporal-reasoning", "correct": True}
+                )
+            for qid in ("gpt4_dead1", "gpt4_dead2"):
+                rows.append(
+                    {
+                        "question_id": qid,
+                        "question_type": "temporal-reasoning",
+                        "error": "ingest_and_search: BrokenResourceError",
+                    }
+                )
+        return rows
+
+    def test_three_passes_still_report_two_of_four(self):
+        sizes = category_sample_sizes(self._rows(3))
+        self.assertEqual(sizes["temporal-reasoning"], (2, 4))
+
+    def test_repetition_does_not_make_a_half_category_comparable(self):
+        sizes = category_sample_sizes(self._rows(3))
+        ran, _attempted = sizes["temporal-reasoning"]
+        self.assertFalse(
+            category_comparable(ran, 0.25),
+            "3 passes over the same 2 surviving questions is still a 2-question sample",
+        )
+
+    def test_single_pass_behaviour_is_unchanged(self):
+        sizes = category_sample_sizes(self._rows(1))
+        self.assertEqual(sizes["temporal-reasoning"], (2, 4))
+
+    def test_rows_without_ids_still_count_individually(self):
+        # Hand-built rows in older tests carry no question_id; they must not all
+        # collapse into a single "question".
+        rows = [
+            {"question_type": "multi-session", "correct": True},
+            {"question_type": "multi-session", "correct": False},
+            {"question_type": "multi-session", "correct": True},
+            {"question_type": "multi-session", "correct": True},
+        ]
+        self.assertEqual(category_sample_sizes(rows)["multi-session"], (4, 4))
+
+
 class TestTwoBlindnessesStayApart(unittest.TestCase):
     """The sample gate (#361) and the spread gate must not collapse into one.
 

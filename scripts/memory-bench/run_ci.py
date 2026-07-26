@@ -429,6 +429,10 @@ class Baseline(NamedTuple):
     search_mode: str
     n_runs: int
     spread: dict[str, float]
+    # {category: (questions that scored, questions attempted)} at capture time.
+    # Empty for any baseline written before the field existed — which must read
+    # as "unknown denominator", never as "the same denominator as this run".
+    sample_sizes: dict[str, tuple[int, int]] = {}
 
 
 def load_baseline(path: Path) -> Baseline:
@@ -455,17 +459,25 @@ def load_baseline(path: Path) -> Baseline:
             search_mode=str(raw.get("search_mode") or MODE_UNKNOWN),
             n_runs=int(raw.get("n_runs") or 1),
             spread={k: float(v) for k, v in (raw.get("spread") or {}).items()},
+            sample_sizes={
+                k: (int(v[0]), int(v[1]))
+                for k, v in (raw.get("sample_sizes") or {}).items()
+            },
         )
     return Baseline(
         scores={k: float(v) for k, v in raw.items()},
         search_mode=MODE_UNKNOWN,
         n_runs=1,
         spread={},
+        sample_sizes={},
     )
 
 
 def build_baseline_payload(
-    per_pass_scores: list[dict[str, float]], run_mode: str, top_k: int
+    per_pass_scores: list[dict[str, float]],
+    run_mode: str,
+    top_k: int,
+    sizes: dict[str, tuple[int, int]] | None = None,
 ) -> dict[str, Any]:
     """Aggregate N passes' scores into one mode-scoped baseline payload.
 
@@ -477,7 +489,17 @@ def build_baseline_payload(
 
     The baseline is the MEAN over the passes, and the observed max−min per
     category is recorded next to it as `spread`.
+
+    `sample_sizes` records the DENOMINATOR each baseline figure was measured on.
+    Without it a baseline/run sample mismatch is undetectable in the only
+    direction that matters here: the sample gate catches a RUN whose sample
+    shrank, but nothing catches a BASELINE captured on a smaller one. That is
+    not hypothetical — `baseline_retrieval.json`'s `temporal-reasoning: 1.0`
+    rests on 2 of that category's 4 questions (evc-mesh#362), and every run
+    since has been scored against it as though it were 4. A baseline that does
+    not state its own denominator cannot be checked for comparability at all.
     """
+    sizes = sizes or {}
     categories = sorted({c for s in per_pass_scores for c in s})
     scores: dict[str, float] = {}
     spread: dict[str, float] = {}
@@ -485,7 +507,7 @@ def build_baseline_payload(
         vals = [s[cat] for s in per_pass_scores if cat in s]
         scores[cat] = sum(vals) / len(vals)
         spread[cat] = max(vals) - min(vals)
-    return {
+    payload: dict[str, Any] = {
         "search_mode": run_mode,
         "captured_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "top_k": top_k,
@@ -493,6 +515,11 @@ def build_baseline_payload(
         "scores": scores,
         "spread": spread,
     }
+    if sizes:
+        payload["sample_sizes"] = {
+            cat: list(sizes[cat]) for cat in categories if cat in sizes
+        }
+    return payload
 
 
 def modes_comparable(baseline_mode: str, run_mode: str) -> bool:
@@ -585,6 +612,17 @@ def classify(
         # sample bookkeeping (hand-built score dicts in tests, older artifacts);
         # treat it as sample-OK rather than inventing a wipe.
         sample_ok = category_comparable(ran, tolerance) if attempted else score is not None
+
+        # The mismatch the run-side gate structurally cannot see: this run may
+        # have measured the category fully while the BASELINE was captured on
+        # fewer questions. Comparing 4 against a figure derived from 2 is the
+        # same not-comparable, and it reads as a regression the moment either
+        # restored question misses. Only checked when the baseline says what its
+        # denominator was; a silent one is handled by the n_runs warning instead.
+        base_ran = baseline.sample_sizes.get(cat, (0, 0))[0]
+        if sample_ok and base_ran and ran and base_ran != ran:
+            sample_ok = False
+
         spread_ok = threshold > 0.0
 
         if not sample_ok:
@@ -638,17 +676,33 @@ def category_sample_sizes(results: list[dict]) -> dict[str, tuple[int, int]]:
     global budget while both dropped questions land in the same 4-question
     category, which is then scored on 2 answers and compared against a baseline
     captured on 4 — silently.
+
+    Counted in DISTINCT QUESTIONS, not answer rows, because `--repeat N` puts N
+    rows in `results` for every question. Counting rows would let repetition
+    launder a systematically missing question into an adequate sample: with the
+    two `gpt4_*` ids that fail deterministically on every pass, `--repeat 3`
+    turns temporal-reasoning's honest 2-of-4 into "6 ran", 1/6 < 0.25, gate
+    satisfied — while the same two questions are still missing from all three
+    passes. Repeating a run buys precision on the questions that run; it buys
+    exactly nothing on coverage of the ones that never do.
     """
-    sizes: dict[str, list[int]] = {}
+    ran_ids: dict[str, set[str]] = {}
+    attempted_ids: dict[str, set[str]] = {}
     for r in results:
         qtype = r.get("question_type")
         if qtype is None:
             continue
-        row = sizes.setdefault(qtype, [0, 0])
-        row[1] += 1
+        qid = r.get("question_id")
+        # No id to dedupe on (hand-built rows in tests): fall back to counting
+        # the row, so a caller that never repeats gets the old behaviour.
+        key = qid if qid is not None else object()
+        attempted_ids.setdefault(qtype, set()).add(key)
         if "correct" in r:
-            row[0] += 1
-    return {qtype: (ran, attempted) for qtype, (ran, attempted) in sizes.items()}
+            ran_ids.setdefault(qtype, set()).add(key)
+    return {
+        qtype: (len(ran_ids.get(qtype, ())), len(ids))
+        for qtype, ids in attempted_ids.items()
+    }
 
 
 def category_comparable(ran: int, tolerance: float) -> bool:
@@ -887,7 +941,12 @@ def cmd_run(args: argparse.Namespace) -> int:
     # "overall" is a real row in `scores`, so it needs a denominator too — but it
     # is pooled across every category, so its quantum is 1/22, not 1/2. It stays
     # comparable exactly when the global error budget above says it does.
-    sizes["overall"] = (ran, len(results))
+    # Distinct questions, for the same reason as category_sample_sizes: under
+    # `--repeat N` the row count is N× the coverage.
+    sizes["overall"] = (
+        len({r["question_id"] for r in results if "correct" in r}),
+        len({r["question_id"] for r in results}),
+    )
     run_mode = resolve_run_search_mode(results)
 
     baseline: Baseline | None = None
@@ -932,7 +991,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         # hit@k in hybrid mode; a baseline without a mode can only ever produce
         # INCONCLUSIVE. The advisory arm used to write a flat mode-less dict here,
         # which made its own mode gate permanently unsatisfiable.
-        payload = build_baseline_payload(per_pass_scores, run_mode, top_k)
+        payload = build_baseline_payload(per_pass_scores, run_mode, top_k, sizes)
         baseline_file.write_text(json.dumps(payload, indent=2) + "\n")
         print(
             f"\nBaseline updated: {baseline_file}  "
@@ -956,6 +1015,23 @@ def cmd_run(args: argparse.Namespace) -> int:
             print(
                 f"  Widest observed spread across the {payload['n_runs']} passes: "
                 f"{widest[0]} {widest[1]:.3f}"
+            )
+        # A baseline snapped while questions were failing pins a figure derived
+        # from fewer questions than the runs it will judge. Say it at capture
+        # time, when it is still cheap to fix; by the time a nightly compares
+        # against it the number looks as authoritative as any other.
+        short = {
+            cat: (r, a) for cat, (r, a) in sizes.items()
+            if cat != "overall" and a and r < a
+        }
+        if short:
+            detail = ", ".join(f"{c} ({r}/{a})" for c, (r, a) in sorted(short.items()))
+            print(
+                f"⚠ Captured on an INCOMPLETE sample in: {detail}. Those figures rest "
+                "on fewer questions than a healthy run will measure, so every future "
+                "run is compared against a different denominator. Recorded in "
+                "`sample_sizes` so the gate can refuse the comparison — fix the "
+                "harness errors above and re-snap."
             )
         return EXIT_OK
 

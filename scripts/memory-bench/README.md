@@ -180,9 +180,29 @@ baseline − max(--tolerance, spread)
   "top_k": 10,
   "n_runs": 3,
   "scores": { "multi-session": 0.167, "overall": 0.470 },
-  "spread": { "multi-session": 0.500, "overall": 0.091 }
+  "spread": { "multi-session": 0.500, "overall": 0.091 },
+  "sample_sizes": { "multi-session": [4, 4], "overall": [22, 24] }
 }
 ```
+
+### A baseline has to state its own denominator
+
+`sample_sizes` records how many questions each figure was measured on. Without
+it the sample gate is one-sided: it catches a **run** whose sample shrank, and
+is structurally blind to a **baseline** captured on a smaller one.
+
+That is not a hypothetical. `baseline_retrieval.json`'s `temporal-reasoning: 1.0`
+rests on **2** of that category's 4 questions — the other two build an invalid
+memory key and have failed in every run since 07-21 (evc-mesh#362). Fix that bug
+and a fully-measured 4-question run is compared against a 2-question figure: one
+miss reads as −0.25, two as `✗ REGRESSION`, on a **required** check — a red for a
+change in sample, not in quality, blocking the very PR that restores the sample.
+
+So when both sides state their denominator and the two differ, the category is
+set aside as `⚠ UNMEASURED` rather than compared. Baselines written before this
+field existed record nothing, and an absent denominator reads as *unknown* — never
+as *matching*. `--update-baseline` also warns at capture time when it is snapping
+a figure on an incomplete sample, while that is still cheap to fix.
 
 Where that threshold falls to zero or below, **no score can fall under it**, so
 the category cannot produce a verdict. It is reported as `ⓘ no verdict` with the
