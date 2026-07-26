@@ -256,6 +256,29 @@ degraded baseline genuinely beats none; say in the commit message which figures
 rest on an incomplete sample, since `sample_sizes` will then record a denominator
 that permanently sets those categories aside as not-comparable.
 
+#### Check the artifact before committing it
+
+The refusal above covers the *run*. Two defects survive a clean run and live in
+the *file*, which is what the gate reads for weeks, so check the artifact after
+downloading it and before committing:
+
+```bash
+python3 scripts/memory-bench/check_captured_baseline.py path/to/baseline_retrieval.json
+```
+
+* **No `sample_sizes`.** The denominator guard reads that field; a file missing
+  it — or written under the superseded name `samples` — loads as `{}` and the
+  guard is inert *by design*, with nothing printed. That is how
+  `temporal-reasoning: 1.0` sat on 2 of 4 questions for six days.
+* **A category blinded by its own spread.** Thresholds are
+  `baseline - max(tolerance, spread)`. Where that reaches ≤0 the category is
+  ruled ineligible and prints `ⓘ no verdict` for the life of the baseline. A
+  capture that does this exits `0`.
+
+Both rules are imported from `run_ci.py` rather than restated, so the checker
+cannot drift from the gate. `test_check_captured_baseline.py` runs it against
+the committed file on every PR.
+
 ### Observability
 
 The same fail-open is now instrumented in Mesh, so a dead embedder pages
