@@ -3,6 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "packageManager": "pnpm@10.20.0",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
@@ -24,11 +25,6 @@
     "sonner": "^2.0.7",
     "tailwind-merge": "^3.6.0",
     "zustand": "^5.0.14"
-  },
-  "pnpm": {
-    "overrides": {
-      "undici": ">=7.28.0 <8"
-    }
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.3",
