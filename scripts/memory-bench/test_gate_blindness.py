@@ -26,11 +26,30 @@ pins one way that has actually occurred:
      "unknown", turning a real -0.5 regression into mere INCONCLUSIVE gate
      blindness — worse than #1-3, because it hides a REGRESSION, not just an
      infra hiccup.)
+  5. UNSTORABLE QUESTION — the memory `key` is built from the question id, and
+     Mesh validates keys against `^[a-z0-9][a-z0-9-]*[a-z0-9]$`. The two
+     `gpt4_*` ids in the dataset carry an `_`, so their first `remember` was
+     rejected 400 and the question never ran. Both are `temporal-reasoning`, so
+     that category was scored 2/4 in every run for 6 days and post-#361 the gate
+     correctly refused to score it at all. Nothing was red; a seventh of the
+     safety net simply did not exist. The guard is over the WHOLE dataset, so the
+     next dataset refresh cannot quietly reintroduce it.
+  6. MISREPORTED CAUSE — that 400 was raised inside anyio's task groups, and the
+     transport teardown's own `BrokenResourceError` replaced it on the way out.
+     Six days of logs named the plumbing; none named the key. A cause that is
+     knowable and then discarded is how a one-line fix stays unfound.
+  7. FORGIVEN FOR EVER — the retry budget a question spent is recorded here, so a
+     failure that looks transient but exhausted every attempt can be told apart
+     from a blip that recovered. `--max-error-rate` forgives 10% of a run on the
+     premise that those questions get measured next run; a deterministic failure
+     breaks that premise and is forgiven permanently. (The classification and the
+     budget itself live in run_ci.py — see test_gate_modes.py.)
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 import sys
 import unittest
@@ -203,6 +222,45 @@ class TestRetryRidesOutARestart(_Harness):
         with mock.patch.object(mc.asyncio, "run", side_effect=[closed, ["hit"]]):
             self._call(mc.MeshMemoryClient(question_id="blip"))
         self.assertEqual(0, mc.MeshMemoryClient._exhausted_questions)
+
+
+class TestTheRetryBudgetSpentIsRecorded(_Harness):
+    """The gate classifies a transient-LOOKING failure by whether retrying ever
+    helped, so the client has to say how much of its allowance it actually spent.
+    Without this, four consecutive "Connection closed" deaths are indistinguishable
+    from one blip that recovered — and the permanent case is the one that hides.
+    """
+
+    def test_a_question_that_burned_every_attempt_says_so(self):
+        client = mc.MeshMemoryClient(question_id="down")
+        closed = ExceptionGroup("tg", [RuntimeError("Connection closed")])
+        with mock.patch.object(mc.asyncio, "run", side_effect=closed):
+            with self.assertRaises(BaseException):
+                self._call(client)
+        self.assertEqual(mc.CONNECT_RETRIES, client.attempts_allowed)
+        self.assertEqual(client.attempts_allowed, client.attempts_made)
+
+    def test_a_question_that_recovered_did_not_burn_them_all(self):
+        client = mc.MeshMemoryClient(question_id="blip")
+        closed = ExceptionGroup("tg", [RuntimeError("Connection closed")])
+        with mock.patch.object(mc.asyncio, "run", side_effect=[closed, ["hit"]]):
+            self._call(client)
+        self.assertLess(client.attempts_made, client.attempts_allowed)
+
+    def test_an_open_breaker_leaves_an_allowance_of_one(self):
+        """`attempts_made == attempts_allowed` must not read as "retrying did not
+        help" when the breaker had already withdrawn the retries. One attempt out
+        of one proves nothing, and the gate's classifier keys on exactly this."""
+        closed = ExceptionGroup("tg", [RuntimeError("Connection closed")])
+        with mock.patch.object(mc.asyncio, "run", side_effect=closed):
+            for _ in range(mc.BREAKER_TRIP_AFTER):
+                with self.assertRaises(BaseException):
+                    self._call(mc.MeshMemoryClient(question_id="down"))
+            after = mc.MeshMemoryClient(question_id="after")
+            with self.assertRaises(BaseException):
+                self._call(after)
+        self.assertEqual(1, after.attempts_allowed)
+        self.assertEqual(1, after.attempts_made)
 
 
 class _FakeSession:
@@ -450,6 +508,233 @@ class TestSilentToolErrorIsSurfaced(unittest.TestCase):
 
         with self.assertRaises(RuntimeError):
             asyncio.run(client._search(_ErrorSession(), "query", 10))
+
+
+DATASET = Path(__file__).resolve().parent / "data" / "lme_s_24.json"
+
+
+class TestEveryQuestionCanBeStored(unittest.TestCase):
+    """Every question in the dataset must produce keys Mesh will accept.
+
+    Asserted over the whole dataset rather than over the two ids that were
+    actually broken: the bug was not "these two ids are unusual", it was "nothing
+    checked". A refresh that pulls in `gpt4_*`-style ids again fails here instead
+    of silently deleting a category from the gate's coverage.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.entries = json.loads(DATASET.read_text(encoding="utf-8"))
+        assert isinstance(cls.entries, list) and cls.entries, "dataset is empty"
+
+    def test_the_dataset_still_contains_the_ids_that_broke_it(self):
+        """Pin the fixture the other tests depend on. If a refresh drops both
+        `gpt4_*` ids, the checks below still pass while testing nothing."""
+        ids = {e["question_id"] for e in self.entries}
+        self.assertTrue(
+            {"gpt4_4929293a", "gpt4_7f6b06db"} & ids,
+            "no underscore-bearing id left in the dataset — this suite no longer "
+            "exercises the sanitizer on a real failing case",
+        )
+
+    def test_every_generated_key_is_valid_and_unique(self):
+        seen: dict[str, str] = {}
+        for entry in self.entries:
+            qid = entry["question_id"]
+            client = mc.MeshMemoryClient(question_id=qid)
+            n = len(entry.get("haystack_dates") or [])
+            self.assertGreater(n, 0, f"{qid}: no haystack sessions to key")
+            for idx in range(n):
+                key = f"{client.key_prefix}-s{idx}"
+                self.assertRegex(
+                    key,
+                    mc.MESH_KEY_RE,
+                    f"{qid}: key Mesh would reject with 400",
+                )
+                # `remember` UPSERTs on the key, so a duplicate does not error —
+                # it overwrites another question's haystack and both questions are
+                # then scored against half their evidence.
+                self.assertNotIn(
+                    key, seen, f"key collision between {seen.get(key)} and {qid}"
+                )
+                seen[key] = qid
+        self.assertEqual(
+            len(self.entries), len({e["question_id"] for e in self.entries})
+        )
+
+    def test_the_tag_keeps_the_raw_id(self):
+        """Only the key is sanitized. The tag is the recall filter and the cleanup
+        handle; sanitizing it would orphan rows an earlier run left behind."""
+        client = mc.MeshMemoryClient(question_id="gpt4_4929293a")
+        self.assertEqual("bench-gpt4_4929293a", client.bench_tag)
+        self.assertEqual("bench-gpt4-4929293a-4581bcc5", client.key_prefix)
+
+    def test_an_already_safe_id_is_passed_through_untouched(self):
+        """22 of 24 ids need nothing done to them, and their keys must not churn:
+        an unnecessary rename orphans rows a previous run is still cleaning up."""
+        self.assertEqual("184da446", mc.sanitize_key_component("184da446"))
+
+    def test_ids_that_differ_only_in_a_separator_do_not_collide(self):
+        """The sanitizer is lossy, and `remember` UPSERTs — so lossiness is not a
+        cosmetic concern here, it silently merges two questions' fixtures."""
+        self.assertNotEqual(
+            mc.sanitize_key_component("gpt4_4929293a"),
+            mc.sanitize_key_component("gpt4-4929293a"),
+        )
+
+    def test_an_id_shaped_like_a_fold_does_not_collide_with_a_real_fold(self):
+        """The two branches must not share an output space.
+
+        A folded id (`<slug>-<8 hex>`) is already key-safe, so feeding it back in
+        would take the PASSTHROUGH branch and land on the exact key the fold
+        produces for the raw id it came from. `remember` UPSERTs, so the second
+        question would overwrite the first's haystack with no error and both
+        would then be scored against half their evidence.
+        """
+        folded = mc.sanitize_key_component("gpt4_4929293a")
+        self.assertRegex(folded, r"-[0-9a-f]{8}$")
+        self.assertNotEqual(folded, mc.sanitize_key_component(folded))
+
+    def test_the_fold_refusal_does_not_churn_the_ids_that_did_not_need_it(self):
+        """The refusal must be narrow: no real id ends in `-<8 hex>`, so all 22
+        stable keys stay byte-identical and nothing gets renamed for nothing."""
+        for raw in ("184da446", "abc-1234", "a-0123456"):
+            with self.subTest(raw=raw):
+                self.assertEqual(raw, mc.sanitize_key_component(raw))
+
+    def test_a_degenerate_id_still_yields_a_valid_key(self):
+        for raw in ("___", "-", "", "A_B", "a--b", "_lead", "trail_", "x-deadbeef"):
+            with self.subTest(raw=raw):
+                self.assertRegex(
+                    f"bench-{mc.sanitize_key_component(raw)}-s0", mc.MESH_KEY_RE
+                )
+
+
+class TestToolErrorSurvivesTheTransportTeardown(unittest.TestCase):
+    """The reported cause must be the tool's rejection, not its unwind artifact.
+
+    Drives the real `_run` through a transport whose teardown raises, which is
+    what anyio does when the task groups are cancelled out from under it. A test
+    that mocked `asyncio.run` would pass with the fix fully reverted.
+    """
+
+    VALIDATION = (
+        "Bad Request: Validation failed (key: key must match pattern "
+        "^[a-z0-9][a-z0-9-]*[a-z0-9]$)"
+    )
+
+    class _BrokenResourceError(Exception):
+        """Stands in for `anyio.BrokenResourceError`."""
+
+    def setUp(self):
+        mc.MeshMemoryClient._exhausted_questions = 0
+        self.addCleanup(setattr, mc.MeshMemoryClient, "_exhausted_questions", 0)
+        patcher = mock.patch.object(mc.time, "sleep")
+        self.sleep = patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _install(self, *, teardown_raises: bool):
+        import contextlib
+        import types
+
+        broken = self._BrokenResourceError
+
+        @contextlib.asynccontextmanager
+        async def _stdio_client(_params):
+            try:
+                yield (None, None)
+            finally:
+                if teardown_raises:
+                    # Cancelling the transport out from under an in-flight call
+                    # raises here, DURING the unwind of the original exception —
+                    # and this one replaces it.
+                    raise broken("the pipe is gone")
+
+        rejecting = self
+
+        class _Session:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_exc):
+                return False
+
+            async def initialize(self):
+                return None
+
+            async def call_tool(self, name, args):
+                if name == "remember":
+                    return _ToolResult(text=rejecting.VALIDATION, is_error=True)
+                return {}
+
+        mcp_mod = types.ModuleType("mcp")
+        mcp_mod.ClientSession = lambda _r, _w: _Session()
+        mcp_mod.StdioServerParameters = lambda **kw: kw
+        stdio_mod = types.ModuleType("mcp.client.stdio")
+        stdio_mod.stdio_client = _stdio_client
+        client_pkg = types.ModuleType("mcp.client")
+        client_pkg.stdio = stdio_mod
+        patcher = mock.patch.dict(
+            sys.modules,
+            {"mcp": mcp_mod, "mcp.client": client_pkg, "mcp.client.stdio": stdio_mod},
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _call(self, client):
+        return client.ingest_and_search(
+            sessions=[[{"role": "user", "content": "x"}]],
+            dates=["2023/05/10 (Wed) 01:57"],
+            format_session_text=lambda turns, date: "session text",
+            query="q",
+            top_k=10,
+        )
+
+    def test_the_validation_message_is_what_gets_reported(self):
+        self._install(teardown_raises=True)
+        client = mc.MeshMemoryClient(question_id="gpt4_4929293a")
+        with self.assertRaises(BaseException) as caught:
+            self._call(client)
+        reported = mc.flatten_exc(caught.exception)
+        self.assertIn("key must match pattern", reported)
+        self.assertNotEqual(
+            "BrokenResourceError: the pipe is gone",
+            reported,
+            "the teardown artifact replaced the cause again",
+        )
+
+    def test_the_teardown_artifact_is_kept_as_context_not_dropped(self):
+        """Preferring the tool error must not hide the transport failure outright —
+        a run where BOTH happened is diagnosed from both halves."""
+        self._install(teardown_raises=True)
+        with self.assertRaises(BaseException) as caught:
+            self._call(mc.MeshMemoryClient(question_id="gpt4_4929293a"))
+        self.assertIn("BrokenResourceError", mc.flatten_exc(caught.exception))
+
+    def test_a_permanent_rejection_is_not_retried(self):
+        """A 400 will be a 400 four times over. Paying ~50s of backoff per
+        question turns a clear failure into a timed-out job."""
+        self._install(teardown_raises=True)
+        with self.assertRaises(BaseException):
+            self._call(mc.MeshMemoryClient(question_id="gpt4_4929293a"))
+        self.sleep.assert_not_called()
+
+    def test_a_clean_propagation_is_reported_once(self):
+        """No teardown artifact: the RuntimeError already carries the message, so
+        it must be passed through rather than re-wrapped around itself."""
+        self._install(teardown_raises=False)
+        with self.assertRaises(RuntimeError) as caught:
+            self._call(mc.MeshMemoryClient(question_id="gpt4_4929293a"))
+        self.assertEqual(
+            1,
+            mc.flatten_exc(caught.exception).count("key must match pattern"),
+        )
+
+    def test_a_transport_failure_with_no_tool_error_is_untouched(self):
+        """The promotion must not manufacture a cause it does not have."""
+        client = mc.MeshMemoryClient(question_id="q1")
+        boom = RuntimeError("Connection closed")
+        self.assertIs(boom, client._surfaced(boom))
 
 
 if __name__ == "__main__":

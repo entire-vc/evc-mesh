@@ -506,6 +506,8 @@ class TestAnArmThatCanOnlyPassIsNotGreen(_ArmHarness):
         )
         self._stub_answers({"knowledge-update": 4, "multi-session": 0}, MODE_HYBRID)
         self.assertEqual(self._run("--tolerance", "0.25"), EXIT_OK)
+
+
 class TestCategorySampleSizes(unittest.TestCase):
     def test_errored_questions_shrink_ran_but_not_attempted(self):
         results = [
@@ -633,6 +635,132 @@ class TestSampleGateVerdicts(unittest.TestCase):
         self.assertEqual(self._verdict(scores, sizes, self.BASELINE), run_ci.EXIT_OK)
 
 
+class TestUnmeasuredCopyNamesItsCause(_ArmHarness):
+    """The two causes of `unmeasured` are not interchangeable.
+
+    "we lost questions to a harness error" is the PR author's infra problem; "the
+    baseline was captured on a different denominator" is the maintainer's re-snap.
+    Reported identically, whoever reads the log goes hunting the wrong fault — and
+    because the workflow dedups its alert on the reason KIND, a live alert for one
+    cause would suppress the arrival of the other.
+
+    The `samples` half of this (evc-mesh#364) was superseded by `sample_sizes`
+    (#363), which now carries the denominator; what survives here is the COPY and
+    the reason kind, driven through the real `main()` so it is the shipped banner
+    being asserted rather than a re-typed copy of it.
+    """
+
+    def _gate(self, sample_sizes: dict, correct: dict[str, int]):
+        self._write_baseline(
+            self.RETRIEVAL_BASELINE_FILE,
+            {
+                "search_mode": MODE_HYBRID,
+                "n_runs": 3,
+                "scores": {"knowledge-update": 1.0, "multi-session": 1.0, "overall": 1.0},
+                "spread": {"knowledge-update": 0.0, "multi-session": 0.0, "overall": 0.0},
+                "sample_sizes": sample_sizes,
+            },
+        )
+        self._stub_answers(correct, MODE_HYBRID)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = self._run("--retrieval-only")
+        return rc, buf.getvalue()
+
+    # Baseline says knowledge-update was measured on 2 questions; this run measures
+    # all 4 and gets them all right. Nothing about quality changed — only the
+    # denominator — so this must NOT read as a harness failure.
+    MISMATCHED = {
+        "knowledge-update": [2, 4],
+        "multi-session": [4, 4],
+        "overall": [4, 4],
+    }
+
+    def test_a_sample_mismatch_says_so_and_gets_its_own_reason_kind(self):
+        rc, out = self._gate(
+            self.MISMATCHED, {"knowledge-update": 4, "multi-session": 4}
+        )
+        self.assertEqual(run_ci.EXIT_INCONCLUSIVE, rc)
+        self.assertIn("4 questions this run vs 2 in the baseline", out)
+        self.assertIn("the maintainer's to clear", out)
+        # Its OWN kind: folded into category-unmeasured, the workflow's dedup would
+        # let a live "we lost questions" alert swallow this one, which has a
+        # different owner and a different fix.
+        self.assertIn(
+            f"{run_ci.REASON_PREFIX} {run_ci.REASON_BASELINE_SAMPLE_MISMATCH}", out
+        )
+
+    def test_the_banner_says_what_was_still_enforced(self):
+        # THE overstatement this pins: `category-unmeasured` is partial by
+        # construction — a regression in every surviving category still blocks.
+        # A banner that says "nothing was measured" when all but one category was
+        # earns a discount, and then it understates at the moment it matters.
+        _, out = self._gate(
+            self.MISMATCHED, {"knowledge-update": 4, "multi-session": 4}
+        )
+        self.assertIn("WERE compared and enforced normally", out)
+        self.assertIn("multi-session", out)
+        self.assertNotIn("enforced nothing at all", out)
+
+    def test_a_lost_question_reports_the_fraction_and_the_other_cause(self):
+        # No sample_sizes in the baseline at all, and the run genuinely loses a
+        # question: the OTHER cause, which must still name the harness.
+        self._write_baseline(
+            self.RETRIEVAL_BASELINE_FILE,
+            {
+                "search_mode": MODE_HYBRID,
+                "n_runs": 3,
+                "scores": {"knowledge-update": 1.0, "multi-session": 1.0, "overall": 1.0},
+                "spread": {"knowledge-update": 0.0, "multi-session": 0.0, "overall": 0.0},
+            },
+        )
+
+        def fake_run_single(entry, **kwargs):
+            # One knowledge-update question dies; the rest answer correctly.
+            if entry["question_id"] == "q0" and entry["question_type"] == "knowledge-update":
+                return {
+                    "question_id": entry["question_id"],
+                    "question_type": entry["question_type"],
+                    "error": "boom",
+                    "search_mode": MODE_HYBRID,
+                }
+            return {
+                "question_id": entry["question_id"],
+                "question_type": entry["question_type"],
+                "correct": True,
+                "search_mode": MODE_HYBRID,
+            }
+
+        patcher = mock.patch.object(run_ci, "run_single", side_effect=fake_run_single)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = self._run("--retrieval-only", "--max-error-rate", "0.5")
+        out = buf.getvalue()
+        self.assertEqual(run_ci.EXIT_INCONCLUSIVE, rc)
+        self.assertIn("3/4 questions", out)
+        self.assertIn("lost to a harness error", out)
+        self.assertNotIn("in the baseline", out)
+
+    def test_a_matching_denominator_is_still_judged_normally(self):
+        # The guard must not have become unpassable: same denominator, clean run.
+        rc, out = self._gate(
+            {"knowledge-update": [4, 4], "multi-session": [4, 4], "overall": [4, 4]},
+            {"knowledge-update": 4, "multi-session": 4},
+        )
+        self.assertEqual(run_ci.EXIT_OK, rc)
+        self.assertIn("All categories within tolerance", out)
+
+    def test_a_baseline_without_sample_sizes_reads_as_no_constraint(self):
+        # Every baseline in existence predates the field. Reading its silence as a
+        # mismatch would take the required gate blind on every category at once —
+        # a reader tightened past anything its writer has ever emitted.
+        rc, out = self._gate({}, {"knowledge-update": 4, "multi-session": 4})
+        self.assertEqual(run_ci.EXIT_OK, rc)
+        self.assertNotIn("in the baseline", out)
+
+
 class TestSampleIsPrinted(unittest.TestCase):
     def test_table_shows_the_denominator_and_flags_unmeasured(self):
         # The score alone is unreadable: "1.000" looks identical whether it came
@@ -653,6 +781,275 @@ class TestSampleIsPrinted(unittest.TestCase):
         out = buf.getvalue()
         self.assertIn("2/4", out)
         self.assertIn("UNMEASURED", out)
+
+
+class TestPersistentErrorClassification(unittest.TestCase):
+    """A deterministic failure must not be filed under a budget built for blips.
+
+    Two questions errored with `BrokenResourceError` in 13 of 13 job executions
+    over 6 days. 2/24 = 8.3% sat under `--max-error-rate 0.10`, so every run
+    reported a clean verdict over 22 questions and the error line — present in
+    100% of runs — read as furniture. Both were `temporal-reasoning`, a
+    4-question category, so one seventh of the safety net silently did not exist.
+    """
+
+    # The exact shape the harness reported for six days: a transient-LOOKING
+    # message on a question that was in fact unrunnable.
+    HISTORIC = "ingest_and_search: BrokenResourceError"
+
+    def test_a_non_transient_message_is_persistent_on_the_first_run(self):
+        detail = (
+            "RuntimeError: remember failed: Bad Request: Validation failed "
+            "(key: key must match pattern ^[a-z0-9][a-z0-9-]*[a-z0-9]$)"
+        )
+        self.assertEqual(run_ci.ERROR_PERSISTENT, run_ci.classify_error(detail, 1, 4))
+
+    def test_one_blip_that_recovered_is_transient(self):
+        self.assertEqual(
+            run_ci.ERROR_TRANSIENT,
+            run_ci.classify_error("RuntimeError: Connection closed", 1, 4),
+        )
+
+    def test_a_transient_message_that_burned_every_retry_is_persistent(self):
+        """The arm that catches a permanent failure wearing a transient message.
+        Four fresh mesh-mcp processes over ~50s of backoff dying identically is
+        not a restart, whatever the string says — and this is decided from ONE
+        run, where comparing errored ids against the previous run cannot be."""
+        self.assertEqual(
+            run_ci.ERROR_PERSISTENT,
+            run_ci.classify_error("RuntimeError: Connection closed", 4, 4),
+        )
+
+    def test_exhausting_a_withdrawn_allowance_proves_nothing(self):
+        """Once the breaker is open every question gets a single attempt. Reading
+        1-of-1 as "retrying did not help" would mark a whole run's worth of
+        genuine outage questions permanent and alert on the wrong thing."""
+        self.assertEqual(
+            run_ci.ERROR_TRANSIENT,
+            run_ci.classify_error("RuntimeError: Connection closed", 1, 1),
+        )
+
+    def test_the_predicate_is_the_clients_own(self):
+        """One definition of "transient", not two. If the gate kept its own copy,
+        the retry policy and the error budget would drift, and a question the
+        client refuses to retry could still be forgiven as a blip."""
+        import mesh_client_stdio
+
+        with mock.patch.object(
+            mesh_client_stdio, "is_transient_text", return_value=False
+        ) as pred:
+            self.assertEqual(
+                run_ci.ERROR_PERSISTENT, run_ci.classify_error("Connection closed", 1, 4)
+            )
+        pred.assert_called()
+
+    def test_the_historic_failure_is_caught_by_the_exhaustion_arm(self):
+        self.assertEqual(
+            run_ci.ERROR_PERSISTENT, run_ci.classify_error(self.HISTORIC, 4, 4)
+        )
+
+    def test_a_single_lost_question_is_already_inconclusive_today(self):
+        """Pins the premise behind classify_error's stated limit.
+
+        The exhaustion arm can mislabel a >50s outage as persistent. That is only
+        harmless while losing one question ALREADY makes its category
+        incomparable — then the mislabel changes the reason kind, not the
+        verdict. Both halves of that are properties of the dataset and the
+        tolerance, so both are asserted here: if a refresh gives categories more
+        questions, this fails and the docstring's claim has to be revisited
+        rather than quietly becoming false.
+        """
+        entries = json.loads(run_ci.DATA_FILE.read_text())
+        sizes = {}
+        for e in entries:
+            sizes[e["question_type"]] = sizes.get(e["question_type"], 0) + 1
+        self.assertEqual({4}, set(sizes.values()), sizes)
+        self.assertTrue(run_ci.category_comparable(4, 0.25))
+        self.assertFalse(run_ci.category_comparable(3, 0.25))
+
+    def test_an_unclassified_old_result_is_not_counted(self):
+        """Results written by an older run_ci carry no `error_kind`. Inferring
+        one from absence would manufacture alerts out of stale artifacts."""
+        self.assertEqual([], run_ci.persistent_errors([{"error": "boom"}]))
+
+
+class TestPersistentErrorsAreNotForgiven(unittest.TestCase):
+    def test_a_persistent_error_turns_a_green_run_inconclusive(self):
+        self.assertEqual(
+            run_ci.EXIT_INCONCLUSIVE, run_ci.persistent_verdict(run_ci.EXIT_OK, 1, 0)
+        )
+
+    def test_it_never_downgrades_a_regression(self):
+        """The one thing this must not do. These two questions failed on every
+        run for six days: if a persistent error could demote a REGRESSION, the
+        required gate would have stopped blocking bad memory PRs entirely — a
+        bigger hole than the one being closed."""
+        self.assertEqual(
+            EXIT_REGRESSION, run_ci.persistent_verdict(EXIT_REGRESSION, 2, 0)
+        )
+
+    def test_within_the_allowance_the_verdict_is_untouched(self):
+        self.assertEqual(run_ci.EXIT_OK, run_ci.persistent_verdict(run_ci.EXIT_OK, 1, 1))
+
+    def test_transient_errors_still_ride_on_the_percentage_budget(self):
+        """The existing behaviour must survive: a mesh-api restart mid-run is
+        exactly what the rate budget is for, and turning those runs INCONCLUSIVE
+        would switch the safety net off on the commits that changed memory."""
+        errors = [
+            {"question_id": f"q{i}", "error": "boom", "error_kind": run_ci.ERROR_TRANSIENT}
+            for i in range(2)
+        ]
+        self.assertEqual([], run_ci.persistent_errors(errors))
+        self.assertEqual(
+            run_ci.EXIT_OK,
+            run_ci.persistent_verdict(run_ci.EXIT_OK, len(run_ci.persistent_errors(errors)), 0),
+        )
+
+    def test_the_report_names_them_and_says_they_will_recur(self):
+        errors = [
+            {
+                "question_id": "gpt4_4929293a",
+                "error": "ingest_and_search: BrokenResourceError",
+                "error_stage": "ingest_and_search",
+                "error_kind": run_ci.ERROR_PERSISTENT,
+            },
+            {
+                "question_id": "184da446",
+                "error": "ingest_and_search: Connection closed",
+                "error_stage": "ingest_and_search",
+                "error_kind": run_ci.ERROR_TRANSIENT,
+            },
+        ]
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            run_ci.print_error_report(errors, 24)
+        out = buf.getvalue()
+        self.assertIn("PERSISTENT", out)
+        self.assertIn("gpt4_4929293a", out)
+        # The transient one must NOT be named in the persistent block — an alert
+        # that over-reports gets discounted, and then under-reports when it counts.
+        persistent_block = out.split("PERSISTENT", 1)[1]
+        self.assertNotIn("184da446", persistent_block)
+
+
+class TestTheErrorReportCarriesTheKind(unittest.TestCase):
+    """`run_single` is where the classification has to be attached, because it is
+    the only place that still knows how much retry budget the question spent.
+    Everything downstream reads `error_kind` off the result dict — if it is never
+    written, every check above passes and the gate silently forgives for ever."""
+
+    def _errored(self, exc, attempts_made, attempts_allowed):
+        import mesh_client_stdio
+
+        class _Client:
+            def __init__(self, question_id, **_kw):
+                self.qid = question_id
+                self.attempts_made = attempts_made
+                self.attempts_allowed = attempts_allowed
+
+            def ingest_and_search(self, **_kw):
+                raise exc
+
+        entry = {
+            "question_id": "gpt4_4929293a",
+            "question_type": "temporal-reasoning",
+            "haystack_sessions": [],
+            "haystack_dates": [],
+            "question": "q",
+        }
+        with mock.patch.object(mesh_client_stdio, "MeshMemoryClient", _Client), \
+             contextlib.redirect_stderr(io.StringIO()):
+            return run_ci.run_single(
+                entry,
+                chat_client=None,
+                chat_model="",
+                judge_client=None,
+                judge_model="",
+                top_k=10,
+                retrieval_only=True,
+            )
+
+    def test_a_validation_rejection_is_recorded_as_persistent(self):
+        exc = RuntimeError(
+            "remember failed: Bad Request: Validation failed "
+            "(key: key must match pattern ^[a-z0-9][a-z0-9-]*[a-z0-9]$)"
+        )
+        r = self._errored(exc, 1, 4)
+        self.assertEqual(run_ci.ERROR_PERSISTENT, r["error_kind"])
+
+    def test_a_blip_that_had_retries_left_is_recorded_as_transient(self):
+        r = self._errored(RuntimeError("Connection closed"), 1, 4)
+        self.assertEqual(run_ci.ERROR_TRANSIENT, r["error_kind"])
+
+
+class TestTheGateActuallyUsesTheClassification(unittest.TestCase):
+    """Drives the REAL `main()` — parser, cmd_run, verdict and all.
+
+    The pure functions above can all be correct while the caller feeds them the
+    wrong thing, and a gate wired to blind input is indistinguishable from no
+    gate. So this one runs the actual entrypoint over a mocked `run_single` and
+    reads the exit code and the machine-readable reason the workflow greps.
+    """
+
+    def _drive(self, error_kind, argv_extra=()):
+        dataset = json.loads(run_ci.DATA_FILE.read_text())
+        failing = dataset[0]["question_id"]
+
+        def fake_run_single(entry, **_kw):
+            if entry["question_id"] == failing:
+                return {
+                    "question_id": entry["question_id"],
+                    "question_type": entry["question_type"],
+                    "error": "ingest_and_search: BrokenResourceError",
+                    "error_stage": "ingest_and_search",
+                    "error_kind": error_kind,
+                }
+            return {
+                "question_id": entry["question_id"],
+                "question_type": entry["question_type"],
+                # Every surviving question answers correctly, so nothing here can
+                # be mistaken for a quality signal: the only thing under test is
+                # what the harness does with the one question that never ran.
+                "correct": True,
+                "search_mode": run_ci.MODE_HYBRID,
+            }
+
+        argv = ["run_ci.py", "--retrieval-only", *argv_extra]
+        env = {"MESH_API_URL": "http://localhost:0", "MESH_AGENT_KEY": "agk_test_x"}
+        buf = io.StringIO()
+        with mock.patch.object(run_ci, "run_single", side_effect=fake_run_single), \
+             mock.patch.object(run_ci, "_load_env", lambda: None), \
+             mock.patch.dict(os.environ, env, clear=False), \
+             mock.patch.object(sys, "argv", argv), \
+             contextlib.redirect_stdout(buf):
+            rc = run_ci.main()
+        return rc, buf.getvalue(), failing
+
+    def test_one_persistent_error_makes_the_run_inconclusive(self):
+        rc, out, failing = self._drive(run_ci.ERROR_PERSISTENT)
+        self.assertEqual(run_ci.EXIT_INCONCLUSIVE, rc)
+        self.assertIn(
+            f"{run_ci.REASON_PREFIX} {run_ci.REASON_PERSISTENT_ERRORS}", out
+        )
+        self.assertIn(failing, out)
+
+    def test_the_same_error_classified_transient_is_still_forgiven(self):
+        """The control. Same run, same lost question, same shrunken category —
+        only the classification differs. Without it the test would pass on a
+        build that simply calls every error persistent."""
+        rc, out, _ = self._drive(run_ci.ERROR_TRANSIENT)
+        self.assertNotIn(run_ci.REASON_PERSISTENT_ERRORS, out)
+        self.assertNotEqual(EXIT_REGRESSION, rc)
+
+    def test_the_allowance_is_reachable_from_the_command_line(self):
+        """A flag nobody can set is not a lever. Raising the allowance past the
+        single failure has to return the run to the old behaviour."""
+        rc, out, _ = self._drive(
+            run_ci.ERROR_PERSISTENT, argv_extra=("--max-persistent-errors", "1")
+        )
+        self.assertNotIn(
+            f"{run_ci.REASON_PREFIX} {run_ci.REASON_PERSISTENT_ERRORS}", out
+        )
 
 
 class TestBaselineRecordsItsOwnDenominator(unittest.TestCase):

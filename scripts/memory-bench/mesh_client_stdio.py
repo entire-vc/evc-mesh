@@ -13,11 +13,16 @@ Per-question isolation: every store is tagged `bench-<question_id>` (plus a
 shared `lme-bench` umbrella tag for cleanup) and every recall is filtered to
 the per-question tag via `tags_any`, so question N's memories never leak into
 question M.
+
+The TAG carries the question id verbatim; the memory `key` carries a sanitized
+form of it (see `sanitize_key_component`). Only the key is validated by the
+server, and the tag is what recall and cleanup filter on.
 """
 
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -79,12 +84,24 @@ _TRANSIENT_RE = re.compile(
 BREAKER_TRIP_AFTER = 2
 
 
+def is_transient_text(text: str) -> bool:
+    """The transient predicate over an already-rendered error string.
+
+    Public because the gate has to classify the messages it recorded in its
+    results, long after the exception object is gone. One predicate, two
+    callers: a second copy in `run_ci` would drift, and the retry policy and the
+    error budget disagreeing about what "transient" means is exactly how a
+    permanent failure gets filed under a budget built for blips.
+    """
+    return bool(_TRANSIENT_RE.search(text or ""))
+
+
 def _is_transient(exc: BaseException) -> bool:
     """True if `exc` (or anything nested in its ExceptionGroup) looks like the
     API being briefly unreachable rather than the harness being broken."""
     if isinstance(exc, BaseExceptionGroup):
         return any(_is_transient(sub) for sub in exc.exceptions)
-    return bool(_TRANSIENT_RE.search(f"{type(exc).__name__}: {exc}"))
+    return is_transient_text(f"{type(exc).__name__}: {exc}")
 
 
 def flatten_exc(exc: BaseException) -> str:
@@ -111,6 +128,73 @@ SEARCH_MODE_UNKNOWN = "unknown"
 BENCH_IDS_LOG = os.environ.get(
     "BENCH_IDS_LOG", os.path.expanduser("~/bench/store_ids.jsonl")
 )
+
+# Mesh validates a memory `key` against this pattern server-side and answers a
+# non-conforming one with `400 Validation failed`. Nothing validates a TAG.
+MESH_KEY_RE = re.compile(r"^[a-z0-9][a-z0-9-]*[a-z0-9]$")
+_KEY_UNSAFE_RE = re.compile(r"[^a-z0-9-]+")
+_KEY_HYPHEN_RUN_RE = re.compile(r"-{2,}")
+# The shape `sanitize_key_component` gives a FOLDED id: `<slug>-<8 hex>`. An id
+# that already looks like one must not take the passthrough branch, or the two
+# branches would share an output space — see the docstring.
+_KEY_DIGEST_SIZE = 4
+_KEY_LOOKS_FOLDED_RE = re.compile(r"-[0-9a-f]{%d}$" % (_KEY_DIGEST_SIZE * 2))
+
+
+def sanitize_key_component(raw: str) -> str:
+    """Fold a question id into something Mesh will accept inside a memory `key`.
+
+    The bench used the question id raw in both the tag and the key. 22 of the 24
+    LongMemEval-S ids are bare hex and slipped through; the two `gpt4_*` ones
+    carry an `_`, so their very first `remember` was rejected 400 and the
+    question died before storing a single haystack session. Both are
+    `temporal-reasoning`, so that 4-question category was never once measured
+    above 2/4 in the 6 days the gate had been running — it did not fail loudly,
+    it went quietly unmeasured, which is the failure mode this whole gate exists
+    to remove.
+
+    Sanitizing is LOSSY, and that matters here more than it usually would:
+    `remember` UPSERTs on the key, so two questions that folded onto one key
+    would not error — the second would silently overwrite the first's fixture and
+    both would then be scored against half a haystack. So ids that are already
+    key-safe are passed through UNCHANGED (keeping today's keys byte-identical,
+    and the mapping trivially injective for them), and any id that had to be
+    folded earns a digest of its RAW form, which restores injectivity for the
+    rest. Digest is blake2s, used as a short non-cryptographic discriminator.
+
+    Two branches, so they must not share an output space. They would:
+
+        sanitize_key_component("gpt4_4929293a")          -> "gpt4-4929293a-4581bcc5"
+        sanitize_key_component("gpt4-4929293a-4581bcc5") -> "gpt4-4929293a-4581bcc5"
+
+    — the second is already key-safe and would pass straight through onto the
+    first's key. Contrived for today's dataset, but a dataset refresh does not owe
+    us its naming scheme, and the failure is the silent one. So the passthrough
+    also REFUSES anything already shaped like a fold, which makes the two spaces
+    disjoint: folded ids always end `-<8 hex>`, passed-through ids never do.
+
+    What that buys, stated precisely rather than absolutely: two passed-through
+    ids differ because their raw ids differ, and two folded ids sharing a slug
+    differ by the digest of their raw form. The residual is a 32-bit digest
+    collision between two ids with the same slug — NOT excluded by construction,
+    which is why `test_gate_blindness.py` asserts distinctness over the real
+    dataset instead of trusting this note.
+    """
+    slug = _KEY_UNSAFE_RE.sub("-", raw.lower())
+    slug = _KEY_HYPHEN_RUN_RE.sub("-", slug).strip("-")
+    # `slug` truthy as well as equal: an empty id folds to an empty slug, which
+    # equals itself and would take the passthrough, yielding `bench--s0`. That
+    # happens to satisfy the pattern, which is exactly why it needs saying — it
+    # would pass the validator and the test, and still be a key built out of
+    # nothing.
+    if slug and slug == raw and not _KEY_LOOKS_FOLDED_RE.search(slug):
+        return slug
+    digest = hashlib.blake2s(
+        raw.encode("utf-8"), digest_size=_KEY_DIGEST_SIZE
+    ).hexdigest()
+    # `or "q"`: an id of nothing but separators folds to the empty string, and a
+    # key starting with the digest's hyphen is invalid all over again.
+    return f"{slug or 'q'}-{digest}"
 
 
 def _log_store_id(memory_id: str, qid: str, key: str) -> None:
@@ -198,7 +282,9 @@ def _to_record(item: dict[str, Any]) -> dict[str, Any]:
         "record": {"content": content},
         "score": _coerce_score(score),
         # Carried so the retrieval-only gate can map a hit back to its haystack
-        # session: stores are keyed `bench-<qid>-s<idx>` / tagged `session-<idx>`.
+        # session: stores are keyed `bench-<sanitized-qid>-s<idx>` and tagged
+        # `session-<idx>`. Only the `-s<idx>` suffix is parsed, so sanitizing the
+        # id part does not affect the mapping.
         "key": item.get("key") or "",
         "tags": item.get("tags") or [],
     }
@@ -221,7 +307,16 @@ class MeshMemoryClient:
         **_ignore: Any,
     ) -> None:
         self.qid = question_id
+        # The tag keeps the id VERBATIM: it is the recall filter and the cleanup
+        # handle, nothing validates it, and a sanitized tag would no longer match
+        # rows an earlier run left behind.
         self.bench_tag = f"bench-{question_id}"
+        # The key is the one field the server validates — see
+        # sanitize_key_component for why it cannot just reuse the tag.
+        self.key_prefix = f"bench-{sanitize_key_component(question_id)}"
+        # Last tool-level rejection seen on THIS attempt, kept where the unwind
+        # cannot overwrite it. See _tool_failure.
+        self.tool_error: str | None = None
         # Stored-but-not-yet-deleted memory ids. Lives on the CLIENT, not on a
         # single connection, so a retry can finish the cleanup that a died-mid-run
         # attempt could not. `_dirty` means "an attempt abandoned rows" — including
@@ -232,6 +327,13 @@ class MeshMemoryClient:
         # server does not report it (older Mesh) — never silently assumed healthy.
         self.search_mode: str = SEARCH_MODE_UNKNOWN
         self.degraded: bool | None = None
+        # How much of the retry allowance this question actually spent. The gate
+        # reads these to tell "the API blipped once" apart from "four fresh
+        # mesh-mcp processes over ~50s all died the same way" — the second is a
+        # permanent failure wearing a transient message, and the message alone
+        # cannot distinguish them.
+        self.attempts_made = 0
+        self.attempts_allowed = 0
 
     def ingest_and_search(
         self,
@@ -247,14 +349,19 @@ class MeshMemoryClient:
             if type(self)._exhausted_questions >= BREAKER_TRIP_AFTER
             else CONNECT_RETRIES
         )
+        self.attempts_allowed = attempts
         for attempt in range(1, attempts + 1):
+            self.attempts_made = attempt
+            # Cleared per attempt: a rejection recorded by a previous attempt must
+            # never be promoted over THIS attempt's own, different failure.
+            self.tool_error = None
             try:
                 out = asyncio.run(
                     self._run(sessions, dates, format_session_text, query, top_k)
                 )
             except BaseException as exc:  # noqa: BLE001 — re-raised below
-                last = exc
-                if attempt == attempts or not _is_transient(exc):
+                last = self._surfaced(exc)
+                if attempt == attempts or not _is_transient(last):
                     break
                 delay = CONNECT_BACKOFF_SECS[
                     min(attempt - 1, len(CONNECT_BACKOFF_SECS) - 1)
@@ -262,7 +369,7 @@ class MeshMemoryClient:
                 logger.warning(
                     "%s: transient Mesh failure (%s) — attempt %d/%d, retrying in %.0fs",
                     self.qid,
-                    flatten_exc(exc),
+                    flatten_exc(last),
                     attempt,
                     attempts,
                     delay,
@@ -286,6 +393,39 @@ class MeshMemoryClient:
                 len(self._pending), self.qid, self.bench_tag, self.bench_tag,
             )
         raise last
+
+    def _tool_failure(self, tool: str, detail: Any) -> RuntimeError:
+        """Record a tool-level rejection on the CLIENT, then return it to raise.
+
+        A `remember`/`recall` rejection is raised from inside the anyio task groups
+        that `stdio_client` and `ClientSession` own. Unwinding out of them cancels
+        the transport, and the teardown's own `BrokenResourceError` REPLACES the
+        exception that started the unwind — so `ingest_and_search` re-raised a
+        transport fault for what was a `400 Validation failed` on a bad key, and
+        the gate's error report named the plumbing instead of the cause. Six days
+        of runs said `BrokenResourceError`; not one of them said `key must match`.
+
+        The cause is only knowable here, before the unwind begins. Keep it on the
+        client, which outlives the connection, and let `_surfaced` prefer it.
+        """
+        self.tool_error = f"{tool} failed: {detail}"
+        return RuntimeError(self.tool_error)
+
+    def _surfaced(self, exc: BaseException) -> BaseException:
+        """The exception worth reporting: a recorded tool error beats its unwind.
+
+        Only promotes when the tool error is not already legible in `exc`, so a
+        failure that DID propagate cleanly is reported exactly once, and a
+        transport failure with no tool error behind it is passed through untouched.
+        """
+        if not self.tool_error or self.tool_error in flatten_exc(exc):
+            return exc
+        promoted = RuntimeError(
+            f"{self.tool_error} "
+            f"(the transport teardown then reported {flatten_exc(exc)})"
+        )
+        promoted.__cause__ = exc
+        return promoted
 
     async def _run(self, sessions, dates, format_session_text, query, top_k):
         from mcp import ClientSession, StdioServerParameters
@@ -396,7 +536,7 @@ class MeshMemoryClient:
         result = await session.call_tool(
             "remember",
             {
-                "key": f"{self.bench_tag}-s{idx}",
+                "key": f"{self.key_prefix}-s{idx}",
                 "content": content,
                 "scope": STORE_SCOPE,
                 "tags": [self.bench_tag, SHARED_TAG, f"session-{idx}"],
@@ -404,7 +544,7 @@ class MeshMemoryClient:
         )
         payload = _parse_tool_payload(result)
         if isinstance(payload, dict) and payload.get("error"):
-            raise RuntimeError(f"remember failed: {payload['error']}")
+            raise self._tool_failure("remember", payload["error"])
         mem = payload.get("memory") if isinstance(payload, dict) else None
         if isinstance(mem, dict):
             _log_store_id(mem.get("id", ""), self.qid, mem.get("key", ""))
@@ -426,7 +566,7 @@ class MeshMemoryClient:
         result = await session.call_tool("recall", args)
         payload = _parse_tool_payload(result)
         if isinstance(payload, dict) and payload.get("error"):
-            raise RuntimeError(f"recall failed: {payload['error']}")
+            raise self._tool_failure("recall", payload["error"])
 
         # Which arms actually served this recall. The MCP layer copies the REST
         # envelope verbatim, so these keys arrive untouched — when present.

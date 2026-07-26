@@ -121,7 +121,31 @@ REASON_MODE_UNKNOWN = "mode-unknown"
 REASON_HARNESS_ERRORS = "harness-errors"
 REASON_NO_ELIGIBLE_CATEGORY = "no-eligible-category"
 REASON_CATEGORY_UNMEASURED = "category-unmeasured"
+# Distinct KIND on purpose. The alert dedups on reason kind, so folding this into
+# `category-unmeasured` would let a live "we lost questions to harness errors"
+# alert suppress the arrival of "your baseline's denominator no longer matches" —
+# a different cause with a different owner and a different fix (re-snap, not
+# stop-losing-questions).
+REASON_BASELINE_SAMPLE_MISMATCH = "baseline-sample-mismatch"
+# Also its own kind, and it OUTRANKS the two above when several apply: it is the
+# cause under them. A question lost every run is what shrinks a category below
+# `category_comparable`, and re-snapping a baseline while it is lost just records
+# the broken denominator as the new truth. Alerting on the symptom while the
+# cause renews itself every run is how this survived 6 days.
+REASON_PERSISTENT_ERRORS = "persistent-errors"
 REASON_PREFIX = "GATE_REASON:"
+
+# How an errored question is classified. `--max-error-rate` was calibrated for
+# TRANSIENT infrastructure failures — a mesh-api restart mid-run, a 502 — where
+# forgiving up to 10% of a run is right, because the next run measures those
+# questions again. It is the wrong instrument for a failure that recurs
+# identically for ever: a budget that forgives 10% per run forgives the SAME 8%
+# permanently, the questions under it are never measured again, and the report
+# line that says so appears in 100% of runs, which is how it comes to read as
+# furniture. (2 of 24 sat there for 6 days; both were `temporal-reasoning`, so
+# one seventh of the safety net quietly did not exist.)
+ERROR_TRANSIENT = "transient"
+ERROR_PERSISTENT = "persistent"
 
 ANSWER_SYSTEM = (
     "You are a helpful chat assistant. You have access to memories retrieved "
@@ -326,6 +350,16 @@ def run_single(
             "question_type": qtype,
             "error": f"{stage}: {detail}",
             "error_stage": stage,
+            # Classified HERE, where the retry budget this question actually
+            # spent is still known. `client` is bound below and this closure is
+            # never called before that; getattr keeps a stage that fails before
+            # the client exists from turning into an AttributeError instead of
+            # an error report.
+            "error_kind": classify_error(
+                detail,
+                getattr(client, "attempts_made", 0),
+                getattr(client, "attempts_allowed", 0),
+            ),
         }
 
     client = MeshMemoryClient(question_id=qid)
@@ -574,6 +608,41 @@ class CategoryVerdict(NamedTuple):
     regressed: bool
 
 
+def _denominator_mismatch(cat: str, ran: int, baseline: Baseline) -> bool:
+    """Did the BASELINE record a different denominator than this run measured?
+
+    Comparing a 4-question score against a figure derived from 2 is the same
+    not-comparable as the run-side sample gate, one operand over — and it reads
+    as a regression the moment either restored question misses (evc-mesh#362).
+
+    Only checked when the baseline says what its denominator was: every baseline
+    captured before `sample_sizes` existed is silent, and reading that silence as
+    a mismatch would take the required gate blind on every category at once — a
+    reader tightened past anything its writer has ever emitted. A silent baseline
+    is handled by the `n_runs` warning instead.
+    """
+    base_ran = baseline.sample_sizes.get(cat, (0, 0))[0]
+    return bool(base_ran) and bool(ran) and base_ran != ran
+
+
+def baseline_denominator_mismatch(
+    verdict: CategoryVerdict, baseline: Baseline, tolerance: float
+) -> bool:
+    """Was THIS category set aside because of the baseline, not because of the run?
+
+    Reporting-side counterpart of the rule `classify` ruled with, sharing its
+    predicate rather than restating it: the banner names a cause and an owner
+    (maintainer re-snap vs harness fix), and a banner that derives the cause from
+    its own copy of the rule is exactly how it comes to name the wrong one.
+    """
+    sample_ok = (
+        category_comparable(verdict.ran, tolerance)
+        if verdict.attempted
+        else verdict.score is not None
+    )
+    return sample_ok and _denominator_mismatch(verdict.category, verdict.ran, baseline)
+
+
 def classify(
     scores: dict[str, float],
     baseline: Baseline,
@@ -615,12 +684,8 @@ def classify(
 
         # The mismatch the run-side gate structurally cannot see: this run may
         # have measured the category fully while the BASELINE was captured on
-        # fewer questions. Comparing 4 against a figure derived from 2 is the
-        # same not-comparable, and it reads as a regression the moment either
-        # restored question misses. Only checked when the baseline says what its
-        # denominator was; a silent one is handled by the n_runs warning instead.
-        base_ran = baseline.sample_sizes.get(cat, (0, 0))[0]
-        if sample_ok and base_ran and ran and base_ran != ran:
+        # fewer questions. See baseline_denominator_mismatch().
+        if sample_ok and _denominator_mismatch(cat, ran, baseline):
             sample_ok = False
 
         spread_ok = threshold > 0.0
@@ -769,7 +834,6 @@ def decide_verdict(verdicts: list[CategoryVerdict]) -> Verdict:
     spread_blind = sorted(
         v.category for v in verdicts if v.ineligible_reason == INELIGIBLE_SPREAD
     )
-
     if regressions:
         return Verdict(EXIT_REGRESSION, regressions, unmeasured, spread_blind, None)
     if unmeasured:
@@ -789,6 +853,84 @@ def report_errors(results: list[dict]) -> list[dict]:
     return [r for r in results if r.get("error")]
 
 
+def classify_error(detail: str, attempts_made: int, attempts_allowed: int) -> str:
+    """TRANSIENT or PERSISTENT, decided from ONE run — no cross-run state.
+
+    Two independent ways to earn PERSISTENT, and both are load-bearing:
+
+    * the message does not match the transient predicate at all. The client does
+      not retry these by construction, so the same input fails the same way next
+      run — "deterministic" here is not a guess, it is the retry policy's own
+      premise, read back;
+    * the message DOES look transient, but the question spent every attempt it
+      was allowed and each one failed. Four fresh mesh-mcp processes over ~50s
+      of backoff all dying is not a blip whatever the string says. This is the
+      arm that catches a permanent failure wearing a transient message — the one
+      a "same ids as last run" comparison needs a previous run to see, and that
+      this sees on the first.
+
+    Exhausting the allowance only counts when there WAS an allowance: once the
+    circuit breaker trips, `attempts_allowed` drops to 1 and using it up proves
+    nothing about whether a retry would have helped.
+
+    KNOWN LIMIT, stated rather than glossed: an outage lasting longer than the
+    client's ~50s retry window (a slow rolling deploy, not a systemd bounce) can
+    put a genuinely transient question through the exhaustion arm and label it
+    persistent. It is bounded on both sides and cannot manufacture a verdict:
+      * `--max-error-rate` is checked FIRST, so anything above 10% of the run
+        exits `harness-errors` before reaching here;
+      * the breaker withdraws retries after BREAKER_TRIP_AFTER questions, so at
+        most that many can reach this arm during one outage;
+      * with today's 4-question categories, a run that lost even ONE question is
+        already INCONCLUSIVE — `category_comparable(3, 0.25)` is False. What such
+        a run gets from this classifier is a different REASON KIND, not a
+        different verdict. (Pinned by
+        `test_a_single_lost_question_is_already_inconclusive_today`; if a future
+        dataset gives categories more questions, that test fails and this
+        paragraph stops being true.)
+    """
+    # Imported here, not at module scope: SCRIPT_DIR only joins sys.path inside
+    # main(), and every other mesh_client_stdio import in this file is local for
+    # the same reason.
+    from mesh_client_stdio import is_transient_text
+
+    if not is_transient_text(detail):
+        return ERROR_PERSISTENT
+    if attempts_allowed > 1 and attempts_made >= attempts_allowed:
+        return ERROR_PERSISTENT
+    return ERROR_TRANSIENT
+
+
+def persistent_errors(errors: list[dict]) -> list[dict]:
+    """The errored questions that will fail identically on the next run.
+
+    An error with no `error_kind` (a result file written by an older run_ci) is
+    NOT counted: this gate exists to name a specific, provable property, and
+    inferring it from absence would manufacture alerts out of old artifacts.
+    """
+    return [r for r in errors if r.get("error_kind") == ERROR_PERSISTENT]
+
+
+def persistent_verdict(rc: int, stuck: int, allowed: int) -> int:
+    """Fold "questions are permanently unmeasured" into an existing verdict.
+
+    A persistent error must never DOWNGRADE a regression. The whole repo ranks
+    `REGRESSION > INCONCLUSIVE > OK` for one reason: a run that measured a real
+    drop has to keep saying so. If a harness defect could demote that to
+    INCONCLUSIVE, then — since these two questions failed on every run for six
+    days — this gate would have stopped blocking bad memory PRs entirely, which
+    is a worse hole than the one it is closing.
+
+    Upward, though, it is decisive: a green verdict that quietly excluded the
+    same questions for ever is the exact false green this card was filed about.
+    """
+    if stuck <= allowed:
+        return rc
+    if rc == EXIT_REGRESSION:
+        return rc
+    return EXIT_INCONCLUSIVE
+
+
 def print_error_report(errors: list[dict], total: int) -> None:
     by_stage: dict[str, list[dict]] = {}
     for r in errors:
@@ -801,6 +943,25 @@ def print_error_report(errors: list[dict], total: int) -> None:
         more = f" (+{len(rows) - 5} more)" if len(rows) > 5 else ""
         print(f"  [{stage}] {len(rows)}x — {qids}{more}")
         print(f"    {sample}")
+
+    # Its own block, not a flag on a line inside the list above. The old report
+    # printed the same two ids in every single run, and nothing on the line
+    # distinguished them from a one-off 502 — which is precisely why six days of
+    # readers scrolled past them.
+    stuck = persistent_errors(errors)
+    if stuck:
+        print(
+            f"\n  ⚠ {len(stuck)} of those are PERSISTENT — not infrastructure "
+            "noise. They will fail identically on the next run:"
+        )
+        for r in stuck:
+            print(f"      {r['question_id']} — {r['error']}")
+        print(
+            "    They are excluded from the scores like any other error, which "
+            "means those questions are NOT BEING MEASURED AT ALL, run after run. "
+            "The error budget is calibrated for transient failures and will "
+            "never clear this: fix the harness or the dataset."
+        )
 
 
 def print_table(
@@ -1095,9 +1256,16 @@ def cmd_run(args: argparse.Namespace) -> int:
         return EXIT_INCONCLUSIVE
 
     if errors:
+        stuck_note = persistent_errors(errors)
+        budget = (
+            f" ({len(errors) - len(stuck_note)} within the allowed error budget, "
+            f"{len(stuck_note)} PERSISTENT — see below)"
+            if stuck_note
+            else " (within the allowed error budget)"
+        )
         print(
             f"\nNote: {len(errors)} question(s) errored and were EXCLUDED from the "
-            "scores above (within the allowed error budget)."
+            f"scores above{budget}."
         )
 
     if baseline.n_runs < 2:
@@ -1108,28 +1276,80 @@ def cmd_run(args: argparse.Namespace) -> int:
             "Re-snap with `--update-baseline --repeat 3`."
         )
 
-    # The exit code comes from decide_verdict and nowhere else, so the reporting
-    # below cannot drift out of step with the precedence the tests pin.
+    # The exit code comes from decide_verdict and persistent_verdict and nowhere
+    # else, so the reporting below cannot drift out of step with the precedence
+    # the tests pin.
     verdict = decide_verdict(verdicts)
+    # Folded in AFTER decide_verdict, deliberately: a question that fails
+    # identically every run falls outside the error budget's premise, but it must
+    # only ever raise OK to INCONCLUSIVE — never lower a REGRESSION. See
+    # persistent_verdict().
+    stuck = persistent_errors(errors)
+    persistent_blind = len(stuck) > args.max_persistent_errors
+    rc = persistent_verdict(verdict.exit_code, len(stuck), args.max_persistent_errors)
 
-    # ── Sample gate (#361): a category lost questions this run ────────────────
+    # ── Sample gate (#361, #362): a category could not be compared ─────────────
     # Set aside BEFORE the comparison, so a dropped question can neither
-    # manufacture a regression nor be laundered into a pass.
+    # manufacture a regression nor be laundered into a pass. TWO causes land in
+    # this one bucket and they are not interchangeable: questions lost to a
+    # harness error are the PR author's to fix, while a baseline captured on a
+    # different denominator is the maintainer's to re-snap. Recomputed here for
+    # REPORTING only, through the same predicate classify() ruled with — a
+    # reporting copy of the rule is how the banner and the verdict drift apart.
+    mismatched = sorted(
+        v.category
+        for v in verdicts
+        if v.ineligible_reason == INELIGIBLE_SAMPLE
+        and baseline_denominator_mismatch(v, baseline, tolerance)
+    )
     sample_detail = ", ".join(
-        f"{v.category} ({v.ran}/{v.attempted} questions)"
+        (
+            f"{v.category} ({v.ran} questions this run vs "
+            f"{baseline.sample_sizes.get(v.category, (0, 0))[0]} in the baseline)"
+        )
+        if v.category in mismatched
+        else f"{v.category} ({v.ran}/{v.attempted} questions)"
         for v in verdicts
         if v.ineligible_reason == INELIGIBLE_SAMPLE
     )
     if verdict.unmeasured:
+        # What SURVIVED matters as much as what did not. `category-unmeasured` is
+        # partial by construction — decide_verdict ranks REGRESSION above
+        # INCONCLUSIVE, so every comparable category is still enforced and still
+        # blocks. Saying "nothing was measured" when 6 of 7 categories were is how
+        # a banner earns the discount it then gets applied at the moment it is
+        # telling the truth.
+        enforced = sorted(v.category for v in verdicts if v.eligible)
         print(
-            f"\n⚠ {len(verdict.unmeasured)} category(ies) ran on too small a sample to "
-            f"compare against the baseline at tolerance {tolerance}: {sample_detail}."
+            f"\n⚠ {len(verdict.unmeasured)} of {len(verdicts)} category(ies) could not "
+            f"be compared against the baseline: {sample_detail}."
         )
-        print(
-            "Those categories were NOT enforced: a regression in them would pass "
-            "through this run unseen. The cause is a harness error above, not this "
-            "PR's code — the fix is to stop losing questions, not to lower the bar."
-        )
+        if enforced:
+            print(
+                f"The other {len(enforced)} WERE compared and enforced normally "
+                f"({', '.join(enforced)}) — a regression in any of them still fails "
+                "this check. The blind spot is limited to the categories named above."
+            )
+        else:
+            print(
+                "NO category could be compared: this run enforced nothing at all, so "
+                "a memory regression anywhere would pass through it unseen."
+            )
+        if mismatched:
+            print(
+                "Cause for "
+                f"{', '.join(mismatched)}: the baseline was captured on a different "
+                "number of questions than this run measured. That is a sample "
+                "change, NOT a quality change, and it is the maintainer's to clear: "
+                "re-snap with `python run_ci.py --retrieval-only --update-baseline` "
+                "against a healthy embedder."
+            )
+        if [c for c in verdict.unmeasured if c not in mismatched]:
+            print(
+                "Cause for the rest: questions were lost to a harness error above, "
+                "not to this PR's code — the fix is to stop losing questions, not to "
+                "lower the bar."
+            )
 
     # ── Spread gate: the BASELINE cannot support a verdict here ───────────────
     if verdict.spread_blind:
@@ -1151,9 +1371,43 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     if verdict.regressions:
         print(f"\n✗ REGRESSION detected in: {', '.join(verdict.regressions)}")
+        if persistent_blind:
+            # Said out loud rather than swallowed: the verdict is correct and
+            # still blocks, but the reader deserves to know it was reached with
+            # questions missing that will be missing again tomorrow.
+            print(
+                f"({len(stuck)} question(s) also failed PERSISTENTLY and were "
+                "excluded — the regression verdict stands, and those questions "
+                "remain unmeasured.)"
+            )
+    elif persistent_blind:
+        # Outranks the unmeasured branch below when both apply: it is the CAUSE
+        # under it. A question lost every run is what shrinks a category below
+        # `category_comparable`, so reporting the symptom would send the reader
+        # after a harness flake that renews itself every run.
+        qids = ", ".join(r["question_id"] for r in stuck)
+        print(
+            f"\n⚠ EVAL INCONCLUSIVE — {len(stuck)}/{len(results)} question(s) fail "
+            f"PERSISTENTLY: {qids}. These are not transient infrastructure errors; "
+            "they will fail identically on the next run, so those questions are "
+            "permanently unmeasured. The error budget deliberately does NOT absorb "
+            "them: a per-run percentage cannot express 'the same 8% for ever'."
+        )
+        print(
+            f"{REASON_PREFIX} {REASON_PERSISTENT_ERRORS} — "
+            f"{len(stuck)}/{len(results)} question(s) fail every run ({qids})"
+        )
     elif verdict.reason == REASON_CATEGORY_UNMEASURED:
         print("\n⚠ EVAL INCONCLUSIVE — the recall safety net did not cover every category.")
-        print(f"{REASON_PREFIX} {REASON_CATEGORY_UNMEASURED} — {sample_detail}")
+        # Kind selected by CAUSE, not by which branch printed it: the workflow
+        # dedups its alert on the kind, and the two causes need two different
+        # alerts (see REASON_BASELINE_SAMPLE_MISMATCH). A run with both reports the
+        # mismatch, because that one is actionable by the person reading the alert.
+        kind = (
+            REASON_BASELINE_SAMPLE_MISMATCH if mismatched
+            else REASON_CATEGORY_UNMEASURED
+        )
+        print(f"{REASON_PREFIX} {kind} — {sample_detail}")
     elif verdict.reason == REASON_NO_ELIGIBLE_CATEGORY:
         # Nothing was verdict-eligible, so nothing was enforced. Reporting that as
         # a pass is the vacuous green again, one level down: the comparison ran,
@@ -1174,7 +1428,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             f"({len(eligible)}/{len(verdicts)} verdict-eligible)."
         )
 
-    return verdict.exit_code
+    return rc
 
 
 def main() -> int:
@@ -1214,7 +1468,20 @@ def main() -> int:
         help=(
             "Fraction of questions allowed to error before the run is declared "
             "INCONCLUSIVE (exit 2) instead of scored (default: 0.10). Errored "
-            "questions are always excluded from the scores, never counted wrong."
+            "questions are always excluded from the scores, never counted wrong. "
+            "Governs TRANSIENT errors only — see --max-persistent-errors."
+        ),
+    )
+    parser.add_argument(
+        "--max-persistent-errors",
+        type=int,
+        default=0,
+        help=(
+            "How many questions may fail PERSISTENTLY (a non-transient error, or "
+            "a transient-looking one that exhausted every retry) before the run "
+            "is declared INCONCLUSIVE (exit 2). Default 0: a question that fails "
+            "identically every run is permanently unmeasured, and no per-run "
+            "percentage can express that. Never downgrades a REGRESSION."
         ),
     )
     args = parser.parse_args()

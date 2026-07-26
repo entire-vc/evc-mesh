@@ -301,6 +301,38 @@ that guards against a wrongful no-op must not be skipped by that same no-op).
    widen the tolerance.** Widening it to cover n=2 would silence the alarm by
    making the gate unable to detect anything.
 
+5. **A deterministic failure parked under a budget built for transient ones.**
+   `--max-error-rate` forgives 10% of a run because the questions it forgives get
+   measured again next run. That premise fails the moment a question errors for a
+   reason that cannot change: `gpt4_4929293a` and `gpt4_7f6b06db` failed in **13
+   of 13 job executions across 6 days**, 2/24 = 8.3% sat under the 10% budget
+   every time, both arms reported a clean verdict over 22 questions, and the error
+   line — printed in 100% of runs — read as furniture. A per-run percentage cannot
+   express "the same 8%, for ever".
+
+   Each errored question is now classified `transient` or `persistent`, from a
+   single run and with no cross-run state:
+
+   - the message does not match the client's own transient predicate (the client
+     does not retry these by construction, so next run fails identically), **or**
+   - the message *does* look transient but the question spent its whole retry
+     allowance and every attempt died — a permanent failure wearing a transient
+     message, which is what `BrokenResourceError` was here. (Exhausting the
+     allowance only counts when there was one: with the circuit breaker open it is
+     1 attempt of 1, which proves nothing.)
+
+   One predicate serves both the retry policy and the budget — a second copy would
+   drift, and the two halves disagreeing about "transient" is how this hid.
+   `--max-persistent-errors` (default **0**) turns any persistent error into
+   INCONCLUSIVE with reason kind `persistent-errors`, which the workflow alerts on
+   separately because the fix is a different person's (fix the harness or the
+   dataset; no re-snap and no waiting clears it).
+
+   It **never downgrades a REGRESSION.** These questions failed on every run for
+   six days; if a persistent error could demote a measured drop to INCONCLUSIVE,
+   the gate would have stopped blocking bad memory PRs altogether — a bigger hole
+   than the one it closes. Ranking stays `REGRESSION > INCONCLUSIVE > OK`.
+
 ## Making the recall gate a required check
 
 Do it in this order. Skipping step 1 wedges every PR.
@@ -363,3 +395,22 @@ not, the loss is downstream of memory.
 The bench writes its haystack to the shared workspace under `bench-<qid>` /
 `lme-bench` tags and deletes it in a `finally` block. If you ever see `lme-bench`
 memories surviving a run, cleanup was skipped — they pollute real agents' recall.
+
+Tags carry the question id verbatim; memory **keys** carry a sanitized form
+(`sanitize_key_component`), because Mesh validates `key` against
+`^[a-z0-9][a-z0-9-]*[a-z0-9]$` and rejects a non-conforming one with 400. Two of
+the 24 LongMemEval ids (`gpt4_4929293a`, `gpt4_7f6b06db`) carry an `_`; before
+this was folded, both questions died on their first `remember` and the
+`temporal-reasoning` category was permanently scored on 2 of its 4 questions. An
+id that is already key-safe is passed through unchanged; one that had to be
+folded gets a digest of its raw form appended. This matters because `remember`
+UPSERTs on the key: a collision does not error, it silently overwrites another
+question's haystack, and both are then scored against half their evidence.
+
+The two branches are kept in **disjoint output spaces** — folded ids always end
+`-<8 hex>`, and an id already shaped that way is refused the passthrough — so two
+passed-through ids differ because their raw ids differ, and two folded ids sharing
+a slug differ by the digest of their raw form. The residual, stated rather than
+glossed: a 32-bit digest collision between two ids with the same slug is *not*
+excluded by construction, which is why the test asserts distinctness across the
+real dataset rather than trusting the argument.

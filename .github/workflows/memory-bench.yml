@@ -226,22 +226,70 @@ jobs:
               0) echo "✅ **PASS** — recall measured, comparable, and within tolerance of the baseline." ;;
               1) echo "❌ **REGRESSION** — recall dropped below the baseline **in the same retrieval mode**."
                  echo "This PR makes memory measurably worse. This is the only condition that blocks the merge." ;;
-              2) echo "### ⚠️ INCONCLUSIVE — the recall safety net is **BLIND** for this PR"
-                 echo
-                 echo "> **Nothing was measured, so nothing was enforced.** A real memory regression"
-                 echo "> could pass through this PR unseen. This check is **not failing you** —"
-                 echo "> the cause is infrastructure you cannot fix from a PR, and a red check"
-                 echo "> nobody can clear just gets bypassed until the whole gate is worthless."
+              # The banner is scoped to the REASON KIND. `mode-mismatch` and
+              # `mode-unknown` really do measure nothing; `category-unmeasured` and
+              # `baseline-sample-mismatch` are per-category and leave every
+              # comparable category enforced (decide_verdict ranks REGRESSION above
+              # INCONCLUSIVE). One banner for both overstates the partial case, and
+              # a banner that overstates gets discounted — after which it also
+              # understates, at the exact moment it is telling the truth.
+              2) case "${reason%% *}" in
+                   category-unmeasured|baseline-sample-mismatch|persistent-errors)
+                     echo "### ⚠️ PARTIAL — some categories were not compared on this PR"
+                     echo
+                     echo "> **This is not total blindness.** Every *comparable* category was measured"
+                     echo "> and enforced, and a regression in one of those still fails this check."
+                     echo "> The gap is narrower: the categories named below were set aside as"
+                     echo "> not-comparable, so a regression **in those** could pass through unseen." ;;
+                   *)
+                     echo "### ⚠️ INCONCLUSIVE — the recall safety net is **BLIND** for this PR"
+                     echo
+                     echo "> **Nothing was measured, so nothing was enforced.** A real memory regression"
+                     echo "> could pass through this PR unseen." ;;
+                 esac
+                 echo "> This check is **not failing you** — the cause is infrastructure you cannot"
+                 echo "> fix from a PR, and a red check nobody can clear just gets bypassed until"
+                 echo "> the whole gate is worthless."
                  echo
                  echo "**Reason:** \`$reason\`"
                  echo
-                 echo "Most common cause: the baseline was captured in one retrieval mode (\`hybrid\`)"
-                 echo "but this run was served in another (\`bm25-only\`, i.e. the embedder is down and"
-                 echo "\`recall\` failed open). Hit@k is not comparable across modes, so a lower score"
-                 echo "here says nothing about this PR's code."
-                 echo
-                 echo "**Fix (repo maintainer, not the PR author):** restore the embedder, then re-snap"
-                 echo "the baseline — \`python run_ci.py --retrieval-only --update-baseline\`."
+                 case "${reason%% *}" in
+                   persistent-errors)
+                     echo "One or more questions failed with an error that is **not transient**:"
+                     echo "either the message is not an infrastructure blip, or the question spent"
+                     echo "its entire retry allowance and every attempt died the same way. Such a"
+                     echo "question will fail identically on the next run, so it is not merely"
+                     echo "excluded from this score — it is excluded from every score, for ever."
+                     echo
+                     echo "The percentage budget (\`--max-error-rate\`) cannot express that: it"
+                     echo "forgives up to 10% *per run*, which forgives the same 8% permanently."
+                     echo
+                     echo "**Fix (repo maintainer, not the PR author):** the error report in the log"
+                     echo "names the question ids and the failing stage. Fix the harness or the"
+                     echo "dataset — this one does not clear itself and no re-snap will hide it." ;;
+                   baseline-sample-mismatch)
+                     echo "A category was measured on a different number of questions than the baseline"
+                     echo "was captured on. \`1.000\` over 2 questions and \`0.500\` over 4 are two"
+                     echo "different measurements, not a 50% drop — so they are not compared."
+                     echo
+                     echo "**Fix (repo maintainer, not the PR author):** re-snap the baseline so its"
+                     echo "denominator matches — \`python run_ci.py --retrieval-only --update-baseline\`." ;;
+                   category-unmeasured)
+                     echo "Those categories lost questions to a harness error (see the log below), which"
+                     echo "widens the per-question quantum past the tolerance — at n=3 one unlucky"
+                     echo "answer moves the score by 1/3 > 0.25 and would clear the bar on its own."
+                     echo
+                     echo "**Fix:** stop losing the questions, rather than lowering the bar. The error"
+                     echo "report in the log names the failing stage per question." ;;
+                   *)
+                     echo "Most common cause: the baseline was captured in one retrieval mode (\`hybrid\`)"
+                     echo "but this run was served in another (\`bm25-only\`, i.e. the embedder is down and"
+                     echo "\`recall\` failed open). Hit@k is not comparable across modes, so a lower score"
+                     echo "here says nothing about this PR's code."
+                     echo
+                     echo "**Fix (repo maintainer, not the PR author):** restore the embedder, then re-snap"
+                     echo "the baseline — \`python run_ci.py --retrieval-only --update-baseline\`." ;;
+                 esac
                  echo "A tracking issue has been opened/updated so this blindness is not silent." ;;
               *) echo "❌ Gate exited $rc." ;;
             esac
@@ -278,9 +326,19 @@ jobs:
         run: |
           set -euo pipefail
           marker="<!-- recall-gate-blind kind=${REASON_KIND} -->"
+          # Scoped to the reason kind, for the same reason as the step summary: the
+          # per-category kinds leave every comparable category enforced, and an
+          # alert that claims total blindness for a partial gap trains its readers
+          # to discount it.
+          case "$REASON_KIND" in
+            category-unmeasured|baseline-sample-mismatch)
+              lede="The memory recall gate could not compare **some** categories. Every comparable category was still measured and enforced — a regression in one of those still blocks a merge. What is unguarded is limited to the categories in the reason below, and **a regression in those can merge unnoticed** until this clears." ;;
+            *)
+              lede="The memory recall gate could not produce a verdict: it measured nothing, so it enforced nothing. Until this clears, **memory regressions can merge unnoticed**." ;;
+          esac
           body=$(printf '%s\n\n%s\n\n%s\n\n%s\n' \
             "$marker" \
-            "The memory recall gate could not produce a verdict: it measured nothing, so it enforced nothing. Until this clears, **memory regressions can merge unnoticed**." \
+            "$lede" \
             "**Reason:** \`${REASON}\`" \
             "Run: ${RUN_URL}")
 
