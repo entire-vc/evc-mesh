@@ -98,6 +98,12 @@ REASON_MODE_MISMATCH = "mode-mismatch"
 REASON_MODE_UNKNOWN = "mode-unknown"
 REASON_HARNESS_ERRORS = "harness-errors"
 REASON_CATEGORY_UNMEASURED = "category-unmeasured"
+# Distinct KIND on purpose. The alert dedups on reason kind, so folding this into
+# `category-unmeasured` would let a live "we lost questions to harness errors"
+# alert suppress the arrival of "your baseline's denominator no longer matches" —
+# a different cause with a different owner and a different fix (re-snap, not
+# stop-losing-questions).
+REASON_BASELINE_SAMPLE_MISMATCH = "baseline-sample-mismatch"
 REASON_PREFIX = "GATE_REASON:"
 
 ANSWER_SYSTEM = (
@@ -413,6 +419,67 @@ def load_baseline(path: Path) -> tuple[dict[str, float], str]:
     return {k: float(v) for k, v in raw.items()}, MODE_UNKNOWN
 
 
+def load_baseline_samples(path: Path) -> dict[str, int]:
+    """Per-category DENOMINATORS recorded with the baseline, or `{}` if it has none.
+
+    A score without its sample size is not a comparable operand. `temporal-reasoning:
+    1.0` in `baseline_retrieval.json` was captured on 2 questions, because the other
+    2 could not be stored at all; a later run that measures all 4 and scores 0.5
+    would be reported as a -0.5 quality regression when nothing about quality
+    changed. #361 added the guard for a RUN whose sample shrank — this is the same
+    rule applied to the operand nothing was checking: the baseline's own.
+
+    Absence is deliberately NOT read as "not comparable". No baseline in existence
+    carries this field yet, so treating its absence as a mismatch would take the
+    required gate blind on every category at once — a reader tightened past
+    anything its writer has ever emitted is a permanent no-op wearing a guard's
+    uniform. It starts enforcing from the first re-snapped baseline onward.
+    """
+    try:
+        raw = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return {}
+    samples = raw.get("samples") if isinstance(raw, dict) else None
+    if not isinstance(samples, dict):
+        return {}
+    out: dict[str, int] = {}
+    for cat, n in samples.items():
+        # bool is an int subclass; `True` is not a denominator.
+        if isinstance(n, bool) or not isinstance(n, (int, float)):
+            continue
+        out[str(cat)] = int(n)
+    return out
+
+
+def retrieval_baseline_payload(
+    scores: dict[str, float],
+    sizes: dict[str, tuple[int, int]],
+    run_mode: str,
+    top_k: int,
+    captured_at: str,
+) -> dict[str, Any]:
+    """The mode-scoped baseline file, as a value.
+
+    A pure function so the writer and `load_baseline_samples` can be tested
+    against each other for real. Built inline before, which meant the only way to
+    check that what is written is what the reader enforces was to re-type the
+    dict in the test — and a test that re-implements the writer agrees with it by
+    construction, including when both are wrong.
+    """
+    return {
+        "search_mode": run_mode,
+        "captured_at": captured_at,
+        "top_k": top_k,
+        # The DENOMINATOR every score above was computed on. A baseline that
+        # records only its scores cannot be told apart from one captured while
+        # some questions could not run at all — which is exactly how
+        # `temporal-reasoning: 1.0` came to mean "2 of 4" and then sat there for
+        # six days looking like a healthy row.
+        "samples": {cat: sizes.get(cat, (0, 0))[0] for cat in sorted(scores)},
+        "scores": scores,
+    }
+
+
 def modes_comparable(baseline_mode: str, run_mode: str) -> bool:
     """Scores may only be compared within one, known retrieval mode."""
     if baseline_mode == MODE_UNKNOWN or run_mode == MODE_UNKNOWN:
@@ -487,11 +554,52 @@ def category_comparable(ran: int, tolerance: float) -> bool:
     return (1.0 / ran) <= tolerance + 1e-9
 
 
+def baseline_sample_mismatches(
+    scores: dict[str, float],
+    sizes: dict[str, tuple[int, int]],
+    baseline_samples: dict[str, int] | None,
+) -> list[str]:
+    """Categories this run measured on a different denominator than the baseline.
+
+    `1.000` over 2 questions and `0.500` over 4 are not a 50% drop in recall
+    quality; they are two different measurements. Same rule as the mode gate and
+    the sample gate — compare like with like, or do not compare.
+    """
+    if not baseline_samples:
+        return []
+    return sorted(
+        cat
+        for cat, base_n in baseline_samples.items()
+        if cat in scores and sizes.get(cat, (0, 0))[0] != base_n
+    )
+
+
+def unmeasured_detail(
+    cat: str,
+    sizes: dict[str, tuple[int, int]],
+    baseline_samples: dict[str, int] | None,
+) -> str:
+    """One category's reason for not being compared, in its own terms.
+
+    Two different causes land in the same `unmeasured` list and they are not
+    interchangeable: "we lost questions to a harness error" is the PR author's
+    infrastructure problem, "the baseline was captured on a different denominator"
+    is the maintainer's re-snap. Reporting both as `n/m questions` sends whoever
+    reads the log looking for the wrong fault.
+    """
+    ran, attempted = sizes.get(cat, (0, 0))
+    base_n = (baseline_samples or {}).get(cat)
+    if base_n is not None and ran != base_n:
+        return f"{cat} ({ran} questions this run vs {base_n} in the baseline)"
+    return f"{cat} ({ran}/{attempted} questions)"
+
+
 def decide_verdict(
     scores: dict[str, float],
     sizes: dict[str, tuple[int, int]],
     baseline: dict[str, float],
     tolerance: float,
+    baseline_samples: dict[str, int] | None = None,
 ) -> tuple[int, list[str], list[str]]:
     """The whole quality verdict, as a pure function: (exit code, regressions,
     unmeasured).
@@ -518,6 +626,15 @@ def decide_verdict(
         if cat not in scores
         and not category_comparable(sizes.get(cat, (0, 0))[0], tolerance)
     )
+    # A category can be perfectly well measured THIS run and still not be
+    # comparable, because the operand on the other side of the `<` was measured on
+    # a different number of questions. Caught here rather than left to produce a
+    # confident verdict out of two incomparable numbers.
+    unmeasured += [
+        cat
+        for cat in baseline_sample_mismatches(scores, sizes, baseline_samples)
+        if cat not in unmeasured
+    ]
 
     regressions = sorted(
         cat for cat, score in scores.items()
@@ -553,6 +670,7 @@ def print_table(
     baseline: dict[str, float] | None,
     tolerance: float,
     sizes: dict[str, tuple[int, int]] | None = None,
+    baseline_samples: dict[str, int] | None = None,
 ) -> None:
     # `Sample` is not decoration. A bare "1.000" reads as "4 of 4 questions
     # passed" when it can equally mean "the 2 questions that survived passed";
@@ -571,8 +689,13 @@ def print_table(
         if baseline:
             base = baseline.get(cat, 0.0)
             delta = score - base
+            base_n = (baseline_samples or {}).get(cat)
             if attempted and not category_comparable(ran, tolerance):
                 status = "⚠ UNMEASURED"
+            elif base_n is not None and ran != base_n:
+                # The row's own delta is meaningless: the two operands were
+                # measured on different denominators. Never print it as a ✓ or an ✗.
+                status = f"⚠ vs n={base_n}"
             elif score >= base - tolerance:
                 status = "✓"
             else:
@@ -656,8 +779,10 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     baseline: dict[str, float] | None = None
     baseline_mode = MODE_UNKNOWN
+    baseline_samples: dict[str, int] = {}
     if baseline_file.exists():
         baseline, baseline_mode = load_baseline(baseline_file)
+        baseline_samples = load_baseline_samples(baseline_file)
 
     title = "Recall Gate Results" if retrieval_only else "LongMemEval-S Results"
     print()
@@ -665,7 +790,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     print(f"{title}  ({ran}/{len(results)} questions ran)")
     print(f"Search mode served: {run_mode}    Baseline mode: {baseline_mode}")
     print("=" * 70)
-    print_table(scores, baseline, tolerance, sizes)
+    print_table(scores, baseline, tolerance, sizes, baseline_samples)
     print("=" * 70)
 
     if errors:
@@ -693,12 +818,13 @@ def cmd_run(args: argparse.Namespace) -> int:
             # was captured in, because hit@k in bm25-only mode is not comparable to
             # hit@k in hybrid mode. A baseline without a mode can only ever produce
             # INCONCLUSIVE.
-            payload = {
-                "search_mode": run_mode,
-                "captured_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                "top_k": top_k,
-                "scores": scores,
-            }
+            payload = retrieval_baseline_payload(
+                scores,
+                sizes,
+                run_mode,
+                top_k,
+                time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            )
             baseline_file.write_text(json.dumps(payload, indent=2) + "\n")
             print(f"\nBaseline updated: {baseline_file}  (search_mode={run_mode})")
             if run_mode != MODE_HYBRID:
@@ -771,31 +897,77 @@ def cmd_run(args: argparse.Namespace) -> int:
     # comparison, so a dropped question can neither manufacture a regression nor
     # be laundered into a pass. See category_comparable() for why 1/n vs the
     # tolerance is the right line, and decide_verdict() for the precedence.
-    rc, regressions, unmeasured = decide_verdict(scores, sizes, baseline, tolerance)
+    rc, regressions, unmeasured = decide_verdict(
+        scores, sizes, baseline, tolerance, baseline_samples
+    )
+    mismatched = [
+        cat
+        for cat in baseline_sample_mismatches(scores, sizes, baseline_samples)
+        if cat in unmeasured
+    ]
 
     # `rc` is returned verbatim below: the exit code comes from decide_verdict and
     # nowhere else, so the reporting here cannot drift out of step with the
     # precedence the tests pin.
     if unmeasured:
         detail = ", ".join(
-            f"{cat} ({sizes.get(cat, (0, 0))[0]}/{sizes.get(cat, (0, 0))[1]} questions)"
-            for cat in unmeasured
+            unmeasured_detail(cat, sizes, baseline_samples) for cat in unmeasured
         )
+        # What SURVIVED matters as much as what did not. `category-unmeasured` is
+        # partial by construction — decide_verdict ranks REGRESSION above
+        # INCONCLUSIVE, so every comparable category is still enforced and still
+        # blocks. Saying "nothing was measured" when 6 of 7 categories were is how
+        # a banner earns the discount it then gets applied at the moment it is
+        # telling the truth.
+        enforced = sorted(c for c in scores if c not in unmeasured)
+        total = len(set(scores) | set(unmeasured))
         print(
-            f"\n⚠ {len(unmeasured)} category(ies) ran on too small a sample to compare "
-            f"against the baseline at tolerance {tolerance}: {detail}."
+            f"\n⚠ {len(unmeasured)} of {total} category(ies) could not be compared "
+            f"against the baseline: {detail}."
         )
-        print(
-            "Those categories were NOT enforced: a regression in them would pass "
-            "through this run unseen. The cause is a harness error above, not this "
-            "PR's code — the fix is to stop losing questions, not to lower the bar."
-        )
+        if enforced:
+            print(
+                f"The other {len(enforced)} WERE compared and enforced normally "
+                f"({', '.join(enforced)}) — a regression in any of them still fails "
+                "this check. The blind spot is limited to the categories named above."
+            )
+        else:
+            print(
+                "NO category could be compared: this run enforced nothing at all, so "
+                "a memory regression anywhere would pass through it unseen."
+            )
+        if mismatched:
+            print(
+                "Cause for "
+                f"{', '.join(mismatched)}: the baseline was captured on a different "
+                "number of questions than this run measured. That is a sample "
+                "change, NOT a quality change, and it is the maintainer's to clear: "
+                "re-snap with `python run_ci.py --retrieval-only --update-baseline` "
+                "against a healthy embedder."
+            )
+        if [c for c in unmeasured if c not in mismatched]:
+            print(
+                "Cause for the rest: questions were lost to a harness error above, "
+                "not to this PR's code — the fix is to stop losing questions, not to "
+                "lower the bar."
+            )
 
     if regressions:
         print(f"\n✗ REGRESSION detected in: {', '.join(regressions)}")
     elif unmeasured:
-        print("\n⚠ EVAL INCONCLUSIVE — the recall safety net did not cover every category.")
-        print(f"{REASON_PREFIX} {REASON_CATEGORY_UNMEASURED} — {detail}")
+        print(
+            "\n⚠ EVAL INCONCLUSIVE — the recall safety net did not cover every "
+            "category."
+        )
+        # Kind selected by CAUSE, not by which branch printed it: the workflow
+        # dedups its alert on the kind, and the two causes need two different
+        # alerts (see REASON_BASELINE_SAMPLE_MISMATCH). A run with both reports the
+        # mismatch, because that one is actionable by the person reading the alert.
+        kind = (
+            REASON_BASELINE_SAMPLE_MISMATCH if mismatched
+            else REASON_CATEGORY_UNMEASURED
+        )
+        print(f"{REASON_PREFIX} {kind} — {detail}")
     else:
         print("\n✓ All categories within tolerance.")
 

@@ -219,3 +219,14 @@ python run_ci.py                             # paid: also needs LME_JUDGE_API_KE
 The bench writes its haystack to the shared workspace under `bench-<qid>` /
 `lme-bench` tags and deletes it in a `finally` block. If you ever see `lme-bench`
 memories surviving a run, cleanup was skipped — they pollute real agents' recall.
+
+Tags carry the question id verbatim; memory **keys** carry a sanitized form
+(`sanitize_key_component`), because Mesh validates `key` against
+`^[a-z0-9][a-z0-9-]*[a-z0-9]$` and rejects a non-conforming one with 400. Two of
+the 24 LongMemEval ids (`gpt4_4929293a`, `gpt4_7f6b06db`) carry an `_`; before
+this was folded, both questions died on their first `remember` and the
+`temporal-reasoning` category was permanently scored on 2 of its 4 questions. An
+id that is already key-safe is passed through unchanged; one that had to be
+folded gets a digest of its raw form appended, so no two questions can ever share
+a key — `remember` UPSERTs on the key, and a collision would silently overwrite
+another question's haystack rather than erroring.

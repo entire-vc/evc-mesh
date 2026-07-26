@@ -261,6 +261,165 @@ class TestSampleGateVerdicts(unittest.TestCase):
         self.assertEqual(self._verdict(scores, sizes, self.BASELINE), run_ci.EXIT_OK)
 
 
+class TestBaselineSampleMismatch(unittest.TestCase):
+    """A baseline captured on a different denominator is not an operand.
+
+    This is the guard for the defect that produced today's `baseline_retrieval.json`:
+    `temporal-reasoning: 1.0` was captured on 2 of its 4 questions, because the
+    other 2 could not be stored at all. #361 guards the RUN side (a sample that
+    shrank); nothing guarded the baseline side, so restoring the two questions
+    would have scored 4 against a 2-question 1.000 and called the difference a
+    quality regression on a required check.
+    """
+
+    def _write(self, payload) -> Path:
+        tmp = Path(tempfile.mkdtemp()) / "baseline_retrieval.json"
+        tmp.write_text(json.dumps(payload))
+        return tmp
+
+    def test_samples_round_trip_from_the_new_schema(self):
+        path = self._write(
+            {
+                "search_mode": MODE_HYBRID,
+                "top_k": 10,
+                "samples": {"temporal-reasoning": 4, "overall": 24},
+                "scores": {"temporal-reasoning": 1.0, "overall": 0.9},
+            }
+        )
+        self.assertEqual(
+            {"temporal-reasoning": 4, "overall": 24},
+            run_ci.load_baseline_samples(path),
+        )
+
+    def test_a_baseline_without_samples_reads_as_no_constraint(self):
+        """Absence must NOT read as a mismatch. Every baseline in existence
+        predates the field, so reading absence as not-comparable would take the
+        required gate blind on every category at once — a reader tightened past
+        anything its writer has emitted."""
+        path = self._write(
+            {"search_mode": MODE_HYBRID, "scores": {"temporal-reasoning": 1.0}}
+        )
+        self.assertEqual({}, run_ci.load_baseline_samples(path))
+        rc, regressions, unmeasured = decide_verdict(
+            {"temporal-reasoning": 0.5},
+            {"temporal-reasoning": (4, 4)},
+            {"temporal-reasoning": 1.0},
+            0.25,
+            run_ci.load_baseline_samples(path),
+        )
+        # Unchanged behaviour: still a regression, judged on tolerance alone.
+        self.assertEqual(run_ci.EXIT_REGRESSION, rc)
+        self.assertEqual(["temporal-reasoning"], regressions)
+        self.assertEqual([], unmeasured)
+
+    def test_a_bigger_run_than_the_baseline_is_not_a_regression(self):
+        """The exact case this task exists to make safe: the bug is fixed, all 4
+        questions run, 2 of them miss — against a baseline of 1.000 on 2."""
+        rc, regressions, unmeasured = decide_verdict(
+            {"temporal-reasoning": 0.5, "multi-session": 1.0},
+            {"temporal-reasoning": (4, 4), "multi-session": (4, 4)},
+            {"temporal-reasoning": 1.0, "multi-session": 1.0},
+            0.25,
+            {"temporal-reasoning": 2, "multi-session": 4},
+        )
+        self.assertEqual([], regressions, "a sample change was called a regression")
+        self.assertEqual(["temporal-reasoning"], unmeasured)
+        self.assertEqual(run_ci.EXIT_INCONCLUSIVE, rc)
+
+    def test_a_matching_denominator_is_still_judged_normally(self):
+        """The guard must not have made the gate unable to fail: same denominator,
+        real drop, still a regression."""
+        rc, regressions, _ = decide_verdict(
+            {"temporal-reasoning": 0.25},
+            {"temporal-reasoning": (4, 4)},
+            {"temporal-reasoning": 1.0},
+            0.25,
+            {"temporal-reasoning": 4},
+        )
+        self.assertEqual(run_ci.EXIT_REGRESSION, rc)
+        self.assertEqual(["temporal-reasoning"], regressions)
+
+    def test_a_regression_elsewhere_still_outranks_the_mismatch(self):
+        """Precedence is unchanged: REGRESSION > INCONCLUSIVE. One incomparable
+        category must not suppress a real finding in another."""
+        rc, regressions, unmeasured = decide_verdict(
+            {"temporal-reasoning": 1.0, "multi-session": 0.25},
+            {"temporal-reasoning": (4, 4), "multi-session": (4, 4)},
+            {"temporal-reasoning": 1.0, "multi-session": 1.0},
+            0.25,
+            {"temporal-reasoning": 2, "multi-session": 4},
+        )
+        self.assertEqual(run_ci.EXIT_REGRESSION, rc)
+        self.assertEqual(["multi-session"], regressions)
+        self.assertEqual(["temporal-reasoning"], unmeasured)
+
+    def test_a_malformed_samples_block_is_ignored_not_fatal(self):
+        for payload in (
+            {"samples": "four", "scores": {}},
+            {"samples": {"a": "four"}, "scores": {}},
+            {"samples": {"a": True}, "scores": {}},
+        ):
+            with self.subTest(payload=payload):
+                self.assertEqual({}, run_ci.load_baseline_samples(self._write(payload)))
+
+    def test_the_writer_records_what_the_reader_enforces(self):
+        """Writer/reader agreement, through the REAL writer — not a copy of it
+        retyped in the test, which would agree with the writer by construction
+        including when both are wrong. A guard whose writer cannot emit the shape
+        its reader demands is a permanent no-op.
+        """
+        scores = {"temporal-reasoning": 1.0, "overall": 0.95}
+        sizes = {"temporal-reasoning": (4, 4), "overall": (24, 24)}
+        path = self._write(
+            run_ci.retrieval_baseline_payload(
+                scores, sizes, MODE_HYBRID, 10, "2026-07-26T00:00:00Z"
+            )
+        )
+        samples = run_ci.load_baseline_samples(path)
+        self.assertEqual({"temporal-reasoning": 4, "overall": 24}, samples)
+        self.assertEqual([], run_ci.baseline_sample_mismatches(scores, sizes, samples))
+        # And the mode/scores halves of the schema still round-trip.
+        loaded, mode = load_baseline(path)
+        self.assertEqual(MODE_HYBRID, mode)
+        self.assertEqual(scores, loaded)
+
+
+class TestUnmeasuredCopyNamesItsCause(unittest.TestCase):
+    """The two causes of `unmeasured` are not interchangeable.
+
+    "we lost questions to a harness error" is the author's infra problem; "the
+    baseline was captured on a different denominator" is the maintainer's
+    re-snap. Reported identically, whoever reads the log goes hunting the wrong
+    fault.
+    """
+
+    def test_a_sample_mismatch_says_so(self):
+        detail = run_ci.unmeasured_detail(
+            "temporal-reasoning", {"temporal-reasoning": (4, 4)}, {"temporal-reasoning": 2}
+        )
+        self.assertIn("4 questions this run vs 2 in the baseline", detail)
+
+    def test_a_lost_question_still_reports_the_fraction(self):
+        detail = run_ci.unmeasured_detail(
+            "temporal-reasoning", {"temporal-reasoning": (2, 4)}, {}
+        )
+        self.assertIn("2/4", detail)
+
+    def test_the_table_never_scores_an_incomparable_row(self):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            run_ci.print_table(
+                {"temporal-reasoning": 0.5},
+                {"temporal-reasoning": 1.0},
+                0.25,
+                {"temporal-reasoning": (4, 4)},
+                {"temporal-reasoning": 2},
+            )
+        out = buf.getvalue()
+        self.assertIn("n=2", out)
+        self.assertNotIn("REGRESS", out)
+
+
 class TestSampleIsPrinted(unittest.TestCase):
     def test_table_shows_the_denominator_and_flags_unmeasured(self):
         # The score alone is unreadable: "1.000" looks identical whether it came
