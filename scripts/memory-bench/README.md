@@ -248,16 +248,23 @@ python run_ci.py --retrieval-only            # free
 python run_ci.py                             # paid: also needs LME_JUDGE_API_KEY
 ```
 
-The bench writes its haystack to the shared workspace under
-`bench-<qid>-<run nonce>` / `lme-bench` tags and deletes it in a `finally` block.
-If you ever see `lme-bench` memories surviving a run, cleanup was skipped — they
-pollute real agents' recall.
+The bench writes its haystack under `bench-<qid>-<run nonce>` / `lme-bench` tags
+and deletes it in a `finally` block. If you ever see `lme-bench` memories
+surviving a run, cleanup was skipped.
+
+Those writes land in a **dedicated bench workspace**, not the fleet's — the
+harness used to run under the prod agent key, where its fixtures surfaced in real
+agents' `recall()` mid-run and made every count over the `memories` table
+oscillate (evc-mesh#7ec3b0de, 2026-07-13). That fixed the blast radius on *other*
+tenants. It did not make bench runs independent of **each other**: tenancy follows
+the credential, so one `MESH_BENCH_KEY` still means every bench process — every
+branch, either arm, CI or laptop — shares one workspace. Hence the run nonce.
 
 ### The run nonce
 
 Fixture names used to be a pure function of the question id, so every bench
-process — on every branch, in either arm — wrote the **same keys and the same
-tags into the same workspace** (one `MESH_BENCH_KEY` ⇒ one tenant). `remember`
+process wrote the **same keys and the same tags** into that one shared bench
+workspace. `remember`
 UPSERTs on the key, so concurrent runs also shared row ids, and cleanup deletes
 by id (`_sweep`) and by tag (`_sweep(deep=True)`). Run A finishing question X
 therefore deleted the haystack run B was about to search, and B scored a miss on
