@@ -120,6 +120,7 @@ REASON_MODE_MISMATCH = "mode-mismatch"
 REASON_MODE_UNKNOWN = "mode-unknown"
 REASON_HARNESS_ERRORS = "harness-errors"
 REASON_NO_ELIGIBLE_CATEGORY = "no-eligible-category"
+REASON_CATEGORY_UNMEASURED = "category-unmeasured"
 REASON_PREFIX = "GATE_REASON:"
 
 ANSWER_SYSTEM = (
@@ -512,34 +513,100 @@ def effective_tolerance(category: str, tolerance: float, baseline: Baseline) -> 
     return max(tolerance, baseline.spread.get(category, 0.0))
 
 
+# Why a category could not be ruled on. The two causes are NOT interchangeable
+# and must not be collapsed into one "blind" bucket:
+#
+#   SAMPLE — this run lost questions to a harness error, so the surviving
+#            denominator no longer supports the tolerance (#361). It is an
+#            ANOMALY: it should be loud, and it should be rare. Any occurrence
+#            makes the run inconclusive.
+#   SPREAD — the baseline's own run-to-run spread is as wide as its score, so
+#            no result could ever fall below the threshold. It is a STANDING
+#            PROPERTY of the baseline, not an event. Making it inconclusive per
+#            occurrence would pin the arm at INCONCLUSIVE for ever — the silent
+#            no-op this whole card exists to avoid — so it only forces a verdict
+#            when it holds for EVERY category and the run therefore enforced
+#            nothing at all.
+INELIGIBLE_SAMPLE = "sample"
+INELIGIBLE_SPREAD = "spread"
+
+
 class CategoryVerdict(NamedTuple):
     category: str
-    score: float
+    # None when the category produced no score at all: every one of its
+    # questions errored, so it is absent from `scores` and has to be recovered
+    # from the baseline side. Printing 0.000 there would report a wipe as a
+    # perfect failure.
+    score: float | None
     baseline: float
     tolerance: float
+    ran: int
+    attempted: int
     eligible: bool
+    ineligible_reason: str | None
     regressed: bool
 
 
 def classify(
-    scores: dict[str, float], baseline: Baseline, tolerance: float
+    scores: dict[str, float],
+    baseline: Baseline,
+    tolerance: float,
+    sizes: dict[str, tuple[int, int]] | None = None,
 ) -> list[CategoryVerdict]:
-    """Per-category verdicts, including which categories cannot have one.
+    """Per-category verdicts, including which categories cannot have one, and why.
 
-    A category regresses iff `score < baseline - effective_tolerance`. When that
-    threshold is at or below zero, no score can ever fall under it, so the
-    category is not verdict-eligible: it is reported as such rather than with a
-    ✓ it did not earn. Silently passing a check that cannot fail is how a gate
-    manufactures coverage it does not have.
+    Two independent conditions have to hold before a category can be ruled on,
+    and they fail for different reasons at different levels:
+
+      1. the surviving SAMPLE still fits the tolerance — `category_comparable`,
+         i.e. this run measured enough of the category to compare it at all;
+      2. the THRESHOLD `baseline - effective_tolerance` is above zero — i.e. a
+         score exists that could fall below it.
+
+    A category failing either is reported as unruled, tagged with which one.
+    Silently passing a check that cannot fail is how a gate manufactures
+    coverage it does not have; silently merging the two causes is how a
+    permanent structural gap gets read as tonight's flake.
     """
+    sizes = sizes or {}
     verdicts = []
-    for cat, score in sorted(scores.items()):
+    # Categories the baseline knows about that produced no score at all never
+    # appear in `scores`, so iterating `scores` alone cannot see them — a total
+    # wipe would vanish rather than register. Recover them from the baseline.
+    categories = sorted(set(scores) | set(baseline.scores))
+    for cat in categories:
+        score = scores.get(cat)
         base = baseline.scores.get(cat, 0.0)
         tol = effective_tolerance(cat, tolerance, baseline)
         threshold = base - tol
-        eligible = threshold > 0.0
+        ran, attempted = sizes.get(cat, (0, 0))
+
+        # A category present in `scores` but with no recorded size predates the
+        # sample bookkeeping (hand-built score dicts in tests, older artifacts);
+        # treat it as sample-OK rather than inventing a wipe.
+        sample_ok = category_comparable(ran, tolerance) if attempted else score is not None
+        spread_ok = threshold > 0.0
+
+        if not sample_ok:
+            reason = INELIGIBLE_SAMPLE
+        elif not spread_ok:
+            reason = INELIGIBLE_SPREAD
+        else:
+            reason = None
+        eligible = reason is None
+
         verdicts.append(
-            CategoryVerdict(cat, score, base, tol, eligible, eligible and score < threshold)
+            CategoryVerdict(
+                category=cat,
+                score=score,
+                baseline=base,
+                tolerance=tol,
+                ran=ran,
+                attempted=attempted,
+                eligible=eligible,
+                ineligible_reason=reason,
+                regressed=eligible and score is not None and score < threshold,
+            )
         )
     return verdicts
 
@@ -563,6 +630,107 @@ def compute_scores(results: list[dict]) -> dict[str, float]:
     return scores
 
 
+def category_sample_sizes(results: list[dict]) -> dict[str, tuple[int, int]]:
+    """Per category: (questions that produced a score, questions attempted).
+
+    The error budget is checked over the WHOLE run, but every verdict below is
+    per category. Without this the two never meet: a run can stay inside a 10%
+    global budget while both dropped questions land in the same 4-question
+    category, which is then scored on 2 answers and compared against a baseline
+    captured on 4 — silently.
+    """
+    sizes: dict[str, list[int]] = {}
+    for r in results:
+        qtype = r.get("question_type")
+        if qtype is None:
+            continue
+        row = sizes.setdefault(qtype, [0, 0])
+        row[1] += 1
+        if "correct" in r:
+            row[0] += 1
+    return {qtype: (ran, attempted) for qtype, (ran, attempted) in sizes.items()}
+
+
+def category_comparable(ran: int, tolerance: float) -> bool:
+    """Is a category's surviving sample still comparable to its baseline?
+
+    The tolerance is calibrated as "one question's worth of variance on the
+    4-questions-per-category CI subset" (= 0.25). That calibration is a
+    statement about the DENOMINATOR: at n=4 a single flipped answer moves the
+    score by exactly the tolerance, so a swing that large is absorbed rather
+    than called a regression. Lose one question to a harness error and the
+    quantum becomes 1/3 > 0.25 — now a single unlucky answer clears the
+    tolerance on its own.
+
+    That cuts both ways, and both ways are this gate's stated failure modes:
+      * false RED — a harness BrokenResourceError, not the PR's code, produces
+        EXIT_REGRESSION and blocks a merge the author cannot unblock;
+      * false GREEN — a genuine 25% drop hides inside the widened noise while
+        the table prints an unqualified score and "all categories within
+        tolerance".
+
+    So a category whose one-question quantum no longer fits inside the
+    tolerance is not compared at all. Same rule as the mode gate, one level
+    down: compare like with like, or do not compare.
+    """
+    if ran <= 0:
+        return False
+    return (1.0 / ran) <= tolerance + 1e-9
+
+
+class Verdict(NamedTuple):
+    exit_code: int
+    regressions: list[str]
+    unmeasured: list[str]      # ineligible because the RUN lost questions
+    spread_blind: list[str]    # ineligible because the BASELINE is too noisy
+    reason: str | None         # REASON_* kind when exit_code is INCONCLUSIVE
+
+
+def decide_verdict(verdicts: list[CategoryVerdict]) -> Verdict:
+    """The whole quality verdict, as a pure function over the classified rows.
+
+    Kept pure and separate from cmd_run on purpose. A test that re-implements
+    this decision instead of calling it passes just as happily with the logic
+    reverted, which makes it a decoration rather than a guard — the exact trap
+    the cleanup test in test_gate_blindness.py fell into first time round.
+
+    Precedence: REGRESSION > sample-unmeasured > all-spread-blind > OK.
+
+    * REGRESSION first. A measured, comparable category that got worse is a
+      positive finding; partial blindness elsewhere does not erase it. The
+      reverse order would let one flaky question suppress every merge block in
+      the repo.
+    * Then ANY sample-unmeasured category, because losing questions is an
+      anomaly this run must not paper over.
+    * Then spread-blindness, but only when it is TOTAL. Per-category it is a
+      permanent property of the baseline (see INELIGIBLE_SPREAD): firing on one
+      occurrence would wedge the arm at INCONCLUSIVE for ever, which is the
+      silent no-op, not a fix for it. When it holds everywhere, though, the run
+      enforced literally nothing and must not exit green.
+    """
+    regressions = sorted(v.category for v in verdicts if v.regressed)
+    unmeasured = sorted(
+        v.category for v in verdicts if v.ineligible_reason == INELIGIBLE_SAMPLE
+    )
+    spread_blind = sorted(
+        v.category for v in verdicts if v.ineligible_reason == INELIGIBLE_SPREAD
+    )
+
+    if regressions:
+        return Verdict(EXIT_REGRESSION, regressions, unmeasured, spread_blind, None)
+    if unmeasured:
+        return Verdict(
+            EXIT_INCONCLUSIVE, regressions, unmeasured, spread_blind,
+            REASON_CATEGORY_UNMEASURED,
+        )
+    if verdicts and not any(v.eligible for v in verdicts):
+        return Verdict(
+            EXIT_INCONCLUSIVE, regressions, unmeasured, spread_blind,
+            REASON_NO_ELIGIBLE_CATEGORY,
+        )
+    return Verdict(EXIT_OK, regressions, unmeasured, spread_blind, None)
+
+
 def report_errors(results: list[dict]) -> list[dict]:
     return [r for r in results if r.get("error")]
 
@@ -582,36 +750,56 @@ def print_error_report(errors: list[dict], total: int) -> None:
 
 
 def print_table(
-    scores: dict[str, float], baseline: Baseline | None, tolerance: float
+    scores: dict[str, float],
+    baseline: Baseline | None,
+    tolerance: float,
+    sizes: dict[str, tuple[int, int]] | None = None,
 ) -> list[CategoryVerdict]:
-    """Print the score table and return the per-category verdicts."""
+    """Print the score table and return the per-category verdicts.
+
+    `Sample` is not decoration. A bare "1.000" reads as "4 of 4 questions
+    passed" when it can equally mean "the 2 questions that survived passed";
+    the number that decides whether the row means anything was the one thing the
+    table never printed.
+    """
+    sizes = sizes or {}
     if baseline is None:
-        header = f"{'Category':<35} {'Score':>7}"
+        header = f"{'Category':<35} {'Score':>7} {'Sample':>8}"
         print(header)
         print("-" * (len(header) + 4))
         for cat, score in sorted(scores.items()):
-            print(f"{cat:<35} {score:>7.3f}")
+            ran, attempted = sizes.get(cat, (0, 0))
+            sample = f"{ran}/{attempted}" if attempted else "-"
+            print(f"{cat:<35} {score:>7.3f} {sample:>8}")
         return []
 
-    verdicts = classify(scores, baseline, tolerance)
+    verdicts = classify(scores, baseline, tolerance, sizes)
     header = (
-        f"{'Category':<35} {'Score':>7} {'Baseline':>9} {'Delta':>8} "
+        f"{'Category':<35} {'Score':>7} {'Sample':>8} {'Baseline':>9} {'Delta':>8} "
         f"{'Thresh':>7} {'Status':>13}"
     )
     print(header)
     print("-" * (len(header) + 4))
     for v in verdicts:
-        if not v.eligible:
+        # The two unruled statuses stay visually distinct: ⚠ is tonight's
+        # anomaly and should provoke someone, ⓘ is a standing limit of the
+        # baseline and should not.
+        if v.ineligible_reason == INELIGIBLE_SAMPLE:
+            status = "⚠ UNMEASURED"
+        elif v.ineligible_reason == INELIGIBLE_SPREAD:
             status = "ⓘ no verdict"
         elif v.regressed:
             status = "✗ REGRESS"
         else:
             status = "✓"
+        sample = f"{v.ran}/{v.attempted}" if v.attempted else "-"
+        score_s = f"{v.score:.3f}" if v.score is not None else "—"
+        delta_s = f"{v.score - v.baseline:+.3f}" if v.score is not None else "—"
         # `Thresh` is the score this category must stay at or above: the baseline
         # less whichever is larger, --tolerance or the baseline's own spread.
         print(
-            f"{v.category:<35} {v.score:>7.3f} {v.baseline:>9.3f} "
-            f"{v.score - v.baseline:>+8.3f} {v.baseline - v.tolerance:>7.3f} {status:>13}"
+            f"{v.category:<35} {score_s:>7} {sample:>8} {v.baseline:>9.3f} "
+            f"{delta_s:>8} {v.baseline - v.tolerance:>7.3f} {status:>13}"
         )
     return verdicts
 
@@ -695,6 +883,11 @@ def cmd_run(args: argparse.Namespace) -> int:
     error_rate = len(errors) / len(results) if results else 1.0
 
     scores = compute_scores(results)
+    sizes = category_sample_sizes(results)
+    # "overall" is a real row in `scores`, so it needs a denominator too — but it
+    # is pooled across every category, so its quantum is 1/22, not 1/2. It stays
+    # comparable exactly when the global error budget above says it does.
+    sizes["overall"] = (ran, len(results))
     run_mode = resolve_run_search_mode(results)
 
     baseline: Baseline | None = None
@@ -711,7 +904,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     if baseline is not None:
         print(f"Baseline captured from {baseline.n_runs} pass(es)")
     print("=" * 70)
-    verdicts = print_table(scores, baseline, tolerance)
+    verdicts = print_table(scores, baseline, tolerance, sizes)
     print("=" * 70)
 
     if errors:
@@ -839,13 +1032,37 @@ def cmd_run(args: argparse.Namespace) -> int:
             "Re-snap with `--update-baseline --repeat 3`."
         )
 
-    ineligible = [v for v in verdicts if not v.eligible]
-    if ineligible:
+    # The exit code comes from decide_verdict and nowhere else, so the reporting
+    # below cannot drift out of step with the precedence the tests pin.
+    verdict = decide_verdict(verdicts)
+
+    # ── Sample gate (#361): a category lost questions this run ────────────────
+    # Set aside BEFORE the comparison, so a dropped question can neither
+    # manufacture a regression nor be laundered into a pass.
+    sample_detail = ", ".join(
+        f"{v.category} ({v.ran}/{v.attempted} questions)"
+        for v in verdicts
+        if v.ineligible_reason == INELIGIBLE_SAMPLE
+    )
+    if verdict.unmeasured:
+        print(
+            f"\n⚠ {len(verdict.unmeasured)} category(ies) ran on too small a sample to "
+            f"compare against the baseline at tolerance {tolerance}: {sample_detail}."
+        )
+        print(
+            "Those categories were NOT enforced: a regression in them would pass "
+            "through this run unseen. The cause is a harness error above, not this "
+            "PR's code — the fix is to stop losing questions, not to lower the bar."
+        )
+
+    # ── Spread gate: the BASELINE cannot support a verdict here ───────────────
+    if verdict.spread_blind:
+        blind = [v for v in verdicts if v.ineligible_reason == INELIGIBLE_SPREAD]
         print(
             "\nⓘ No verdict possible in: "
             + ", ".join(
                 f"{v.category} (baseline {v.baseline:.3f} ≤ threshold width {v.tolerance:.2f})"
-                for v in ineligible
+                for v in blind
             )
         )
         print(
@@ -856,13 +1073,12 @@ def cmd_run(args: argparse.Namespace) -> int:
             "answers do not flip between identical runs."
         )
 
-    regressions = [v.category for v in verdicts if v.regressed]
-    if regressions:
-        print(f"\n✗ REGRESSION detected in: {', '.join(regressions)}")
-        return EXIT_REGRESSION
-
-    eligible = [v for v in verdicts if v.eligible]
-    if not eligible:
+    if verdict.regressions:
+        print(f"\n✗ REGRESSION detected in: {', '.join(verdict.regressions)}")
+    elif verdict.reason == REASON_CATEGORY_UNMEASURED:
+        print("\n⚠ EVAL INCONCLUSIVE — the recall safety net did not cover every category.")
+        print(f"{REASON_PREFIX} {REASON_CATEGORY_UNMEASURED} — {sample_detail}")
+    elif verdict.reason == REASON_NO_ELIGIBLE_CATEGORY:
         # Nothing was verdict-eligible, so nothing was enforced. Reporting that as
         # a pass is the vacuous green again, one level down: the comparison ran,
         # but every category was too noisy to rule on.
@@ -875,10 +1091,14 @@ def cmd_run(args: argparse.Namespace) -> int:
             f"{REASON_PREFIX} {REASON_NO_ELIGIBLE_CATEGORY} — "
             f"0/{len(verdicts)} categories could produce a verdict"
         )
-        return EXIT_INCONCLUSIVE
+    else:
+        eligible = [v for v in verdicts if v.eligible]
+        print(
+            f"\n✓ All categories within tolerance "
+            f"({len(eligible)}/{len(verdicts)} verdict-eligible)."
+        )
 
-    print(f"\n✓ All categories within tolerance ({len(eligible)}/{len(verdicts)} verdict-eligible).")
-    return EXIT_OK
+    return verdict.exit_code
 
 
 def main() -> int:

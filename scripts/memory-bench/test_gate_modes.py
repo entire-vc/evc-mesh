@@ -17,6 +17,8 @@ author can fix — the check gets bypassed and the safety net is gone for good.
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import os
 import sys
@@ -35,9 +37,14 @@ from run_ci import (  # noqa: E402
     MODE_BM25_ONLY,
     MODE_HYBRID,
     MODE_UNKNOWN,
+    INELIGIBLE_SAMPLE,
+    INELIGIBLE_SPREAD,
     Baseline,
     build_baseline_payload,
+    category_comparable,
+    category_sample_sizes,
     classify,
+    decide_verdict,
     effective_tolerance,
     load_baseline,
     modes_comparable,
@@ -499,6 +506,287 @@ class TestAnArmThatCanOnlyPassIsNotGreen(_ArmHarness):
         )
         self._stub_answers({"knowledge-update": 4, "multi-session": 0}, MODE_HYBRID)
         self.assertEqual(self._run("--tolerance", "0.25"), EXIT_OK)
+class TestCategorySampleSizes(unittest.TestCase):
+    def test_errored_questions_shrink_ran_but_not_attempted(self):
+        results = [
+            {"question_type": "temporal-reasoning", "correct": True},
+            {"question_type": "temporal-reasoning", "correct": False},
+            {"question_type": "temporal-reasoning", "error": "ingest: boom"},
+            {"question_type": "temporal-reasoning", "error": "ingest: boom"},
+            {"question_type": "multi-session", "correct": True},
+        ]
+        sizes = category_sample_sizes(results)
+        self.assertEqual(sizes["temporal-reasoning"], (2, 4))
+        self.assertEqual(sizes["multi-session"], (1, 1))
+
+
+class TestCategoryComparable(unittest.TestCase):
+    """The tolerance is a claim about the denominator, so the denominator has
+    to be checked before the tolerance is applied."""
+
+    def test_full_sample_is_comparable(self):
+        # 4 questions, tolerance 0.25: one flipped answer moves the score by
+        # exactly the tolerance — which is what the tolerance was chosen to absorb.
+        self.assertTrue(category_comparable(4, 0.25))
+
+    def test_one_lost_question_breaks_the_calibration(self):
+        # 1/3 = 0.333 > 0.25: a single unlucky answer now clears the tolerance
+        # on its own, so the row can no longer distinguish noise from a drop.
+        self.assertFalse(category_comparable(3, 0.25))
+        self.assertFalse(category_comparable(2, 0.25))
+
+    def test_zero_questions_is_never_comparable(self):
+        # The nastiest case: a wiped-out category vanishes from `scores`
+        # entirely, so the old regression loop never looked at it and the run
+        # still printed "all categories within tolerance".
+        self.assertFalse(category_comparable(0, 0.25))
+        self.assertFalse(category_comparable(0, 1.0))
+
+    def test_pooled_overall_survives_a_dropped_question(self):
+        # `overall` pools all 24, so losing 2 leaves a 1/22 quantum — still far
+        # inside the tolerance. The sample gate must not flag it.
+        self.assertTrue(category_comparable(22, 0.25))
+
+
+class TestSampleGateVerdicts(unittest.TestCase):
+    """End-to-end verdict precedence, driven through the real scoring path."""
+
+    # A single-pass baseline: no recorded spread, so every threshold falls back
+    # to --tolerance and these cases isolate the SAMPLE gate from the spread gate.
+    BASELINE = Baseline(
+        scores={
+            "temporal-reasoning": 1.0,
+            "multi-session": 1.0,
+            "overall": 1.0,
+        },
+        search_mode=MODE_HYBRID,
+        n_runs=1,
+        spread={},
+    )
+
+    @classmethod
+    def _decide(cls, scores, sizes, baseline, tolerance=0.25):
+        """Calls the REAL decision — never a copy of it.
+
+        `classify` + `decide_verdict` are the same functions cmd_run returns
+        from, so reverting the logic in run_ci.py fails these tests. A test that
+        re-implemented the rule here would pass against the reverted code and
+        guard nothing.
+        """
+        return decide_verdict(classify(scores, baseline, tolerance, sizes))
+
+    @classmethod
+    def _verdict(cls, scores, sizes, baseline, tolerance=0.25):
+        return cls._decide(scores, sizes, baseline, tolerance).exit_code
+
+    def test_todays_real_run_is_inconclusive_not_green(self):
+        # Replay of scheduled run 30191444472 (2026-07-26): 2 BrokenResourceError
+        # drops, BOTH in temporal-reasoning. 2/24 sits inside the 10% global error
+        # budget, so the run was scored — and temporal-reasoning printed 1.000 ✓
+        # measured on half its questions, under "All categories within tolerance".
+        scores = {"temporal-reasoning": 1.0, "multi-session": 1.0, "overall": 0.909}
+        sizes = {"temporal-reasoning": (2, 4), "multi-session": (4, 4), "overall": (22, 24)}
+        self.assertEqual(
+            self._verdict(scores, sizes, self.BASELINE), run_ci.EXIT_INCONCLUSIVE
+        )
+
+    def test_a_dropped_question_never_manufactures_a_regression(self):
+        # The false-RED half. temporal-reasoning survives on 2 questions and both
+        # miss → 0.000 vs a baseline of 1.000. Under the old code that is exit 1:
+        # a required check blocking the merge because the harness dropped a
+        # connection. It must be INCONCLUSIVE — nothing about the PR was measured.
+        scores = {"temporal-reasoning": 0.0, "multi-session": 1.0, "overall": 0.909}
+        sizes = {"temporal-reasoning": (2, 4), "multi-session": (4, 4), "overall": (22, 24)}
+        rc = self._verdict(scores, sizes, self.BASELINE)
+        self.assertEqual(rc, run_ci.EXIT_INCONCLUSIVE)
+        self.assertNotEqual(rc, run_ci.EXIT_REGRESSION)
+
+    def test_a_wiped_category_is_not_a_pass(self):
+        # A category that lost every question drops out of `scores` altogether,
+        # so iterating `scores` to find regressions can never see it. Its absence
+        # has to be caught from the baseline side.
+        scores = {"multi-session": 1.0, "overall": 1.0}  # no temporal-reasoning key
+        sizes = {"temporal-reasoning": (0, 4), "multi-session": (4, 4), "overall": (20, 24)}
+        verdict = self._decide(scores, sizes, self.BASELINE)
+        self.assertEqual(verdict.exit_code, run_ci.EXIT_INCONCLUSIVE)
+        self.assertIn("temporal-reasoning", verdict.unmeasured)
+        # ...and it must land in the SAMPLE bucket, not be mistaken for the
+        # baseline being too noisy — the two carry different reason kinds and
+        # route to different alert copy.
+        self.assertEqual(verdict.reason, run_ci.REASON_CATEGORY_UNMEASURED)
+        self.assertNotIn("temporal-reasoning", verdict.spread_blind)
+
+    def test_a_real_regression_still_blocks_despite_blindness_elsewhere(self):
+        # Precedence guard. If INCONCLUSIVE outranked REGRESSION, one flaky
+        # question anywhere in the run would suppress every merge block — a
+        # cheaper way to disable the gate than editing it.
+        scores = {"temporal-reasoning": 1.0, "multi-session": 0.0, "overall": 0.5}
+        sizes = {"temporal-reasoning": (2, 4), "multi-session": (4, 4), "overall": (22, 24)}
+        self.assertEqual(
+            self._verdict(scores, sizes, self.BASELINE), run_ci.EXIT_REGRESSION
+        )
+
+    def test_clean_full_sample_still_passes(self):
+        # The gate must not have become unpassable: a clean run is still green.
+        scores = {"temporal-reasoning": 1.0, "multi-session": 1.0, "overall": 1.0}
+        sizes = {"temporal-reasoning": (4, 4), "multi-session": (4, 4), "overall": (24, 24)}
+        self.assertEqual(self._verdict(scores, sizes, self.BASELINE), run_ci.EXIT_OK)
+
+
+class TestSampleIsPrinted(unittest.TestCase):
+    def test_table_shows_the_denominator_and_flags_unmeasured(self):
+        # The score alone is unreadable: "1.000" looks identical whether it came
+        # from 4 questions or from the 2 that survived.
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            run_ci.print_table(
+                {"temporal-reasoning": 1.0},
+                Baseline(
+                    scores={"temporal-reasoning": 1.0},
+                    search_mode=MODE_HYBRID,
+                    n_runs=1,
+                    spread={},
+                ),
+                0.25,
+                {"temporal-reasoning": (2, 4)},
+            )
+        out = buf.getvalue()
+        self.assertIn("2/4", out)
+        self.assertIn("UNMEASURED", out)
+
+
+class TestTwoBlindnessesStayApart(unittest.TestCase):
+    """The sample gate (#361) and the spread gate must not collapse into one.
+
+    Both answer "this category got no verdict", and merging their branches is
+    the obvious simplification — but their escalation policies are opposites and
+    picking either one for both is a live defect:
+
+      * treat spread-blindness like a sample loss (any occurrence ⇒ exit 2) and
+        the advisory arm is INCONCLUSIVE every night for as long as the baseline
+        stands, which is the silent no-op this card exists to remove;
+      * treat a sample loss like spread-blindness (only total ⇒ exit 2) and
+        #361's headline case walks straight back in — temporal-reasoning scored
+        on 2 of 4 questions and reported green.
+
+    So the reason kinds, and the escalation each triggers, are pinned here.
+    """
+
+    # multi-session's spread (0.9) swamps its baseline (0.8) ⇒ threshold < 0 ⇒
+    # no score can fall under it. knowledge-update is a normal, rulable category.
+    BASELINE = Baseline(
+        scores={"knowledge-update": 0.8, "multi-session": 0.8, "overall": 0.8},
+        search_mode=MODE_HYBRID,
+        n_runs=3,
+        spread={"knowledge-update": 0.1, "multi-session": 0.9, "overall": 0.1},
+    )
+    FULL = {"knowledge-update": (4, 4), "multi-session": (4, 4), "overall": (24, 24)}
+
+    def _decide(self, scores, sizes, baseline=None, tolerance=0.25):
+        baseline = baseline or self.BASELINE
+        return decide_verdict(classify(scores, baseline, tolerance, sizes))
+
+    def test_reasons_are_tagged_distinctly(self):
+        scores = {"knowledge-update": 0.8, "multi-session": 0.8, "overall": 0.8}
+        sizes = dict(self.FULL, **{"knowledge-update": (2, 4)})
+        by_cat = {
+            v.category: v.ineligible_reason
+            for v in classify(scores, self.BASELINE, 0.25, sizes)
+        }
+        self.assertEqual(by_cat["knowledge-update"], INELIGIBLE_SAMPLE)
+        self.assertEqual(by_cat["multi-session"], INELIGIBLE_SPREAD)
+        self.assertIsNone(by_cat["overall"])
+
+    def test_one_spread_blind_category_does_not_make_the_run_inconclusive(self):
+        # THE regression this guards: if spread-blindness escalated per category,
+        # this run — which genuinely enforced knowledge-update and overall — would
+        # report that it enforced nothing, every single night.
+        scores = {"knowledge-update": 0.8, "multi-session": 0.0, "overall": 0.8}
+        verdict = self._decide(scores, self.FULL)
+        self.assertEqual(verdict.exit_code, EXIT_OK)
+        self.assertEqual(verdict.spread_blind, ["multi-session"])
+        self.assertEqual(verdict.unmeasured, [])
+
+    def test_all_spread_blind_is_inconclusive_not_green(self):
+        baseline = Baseline(
+            scores={"knowledge-update": 0.8, "overall": 0.8},
+            search_mode=MODE_HYBRID,
+            n_runs=3,
+            spread={"knowledge-update": 0.9, "overall": 0.9},
+        )
+        verdict = self._decide(
+            {"knowledge-update": 0.0, "overall": 0.0},
+            {"knowledge-update": (4, 4), "overall": (24, 24)},
+            baseline,
+        )
+        self.assertEqual(verdict.exit_code, EXIT_INCONCLUSIVE)
+        self.assertEqual(verdict.reason, run_ci.REASON_NO_ELIGIBLE_CATEGORY)
+
+    def test_one_sample_loss_is_inconclusive_even_with_others_eligible(self):
+        # The mirror of the test above: for the SAMPLE gate, one is enough.
+        scores = {"knowledge-update": 0.8, "multi-session": 0.8, "overall": 0.8}
+        sizes = dict(self.FULL, **{"knowledge-update": (2, 4)})
+        verdict = self._decide(scores, sizes)
+        self.assertEqual(verdict.exit_code, EXIT_INCONCLUSIVE)
+        self.assertEqual(verdict.reason, run_ci.REASON_CATEGORY_UNMEASURED)
+
+    def test_sample_loss_outranks_spread_blindness_in_the_reported_reason(self):
+        # Both present. The alert must name the anomaly someone can act on, not
+        # the standing property of the baseline.
+        scores = {"knowledge-update": 0.8, "multi-session": 0.8, "overall": 0.8}
+        sizes = dict(self.FULL, **{"knowledge-update": (2, 4)})
+        verdict = self._decide(scores, sizes)
+        self.assertEqual(verdict.reason, run_ci.REASON_CATEGORY_UNMEASURED)
+        self.assertEqual(verdict.spread_blind, ["multi-session"])
+
+    def test_a_category_failing_both_is_reported_as_the_sample_loss(self):
+        # multi-session is spread-blind AND lost half its questions. The sample
+        # loss is tonight's event and the actionable one, so it wins the tag.
+        scores = {"knowledge-update": 0.8, "multi-session": 0.8, "overall": 0.8}
+        sizes = dict(self.FULL, **{"multi-session": (2, 4)})
+        by_cat = {
+            v.category: v.ineligible_reason
+            for v in classify(scores, self.BASELINE, 0.25, sizes)
+        }
+        self.assertEqual(by_cat["multi-session"], INELIGIBLE_SAMPLE)
+
+    def test_regression_outranks_both_blindnesses(self):
+        # knowledge-update really regressed (0.0 vs threshold 0.55) while
+        # multi-session is spread-blind and overall lost questions. A merge block
+        # that a flaky question elsewhere can suppress is not a merge block.
+        scores = {"knowledge-update": 0.0, "multi-session": 0.8, "overall": 0.8}
+        sizes = dict(self.FULL, **{"overall": (2, 24)})
+        verdict = self._decide(scores, sizes)
+        self.assertEqual(verdict.exit_code, EXIT_REGRESSION)
+        self.assertEqual(verdict.regressions, ["knowledge-update"])
+
+    def test_table_distinguishes_the_two_statuses(self):
+        # A reader has to be able to tell "act on this" from "this is how the
+        # baseline is". Same glyph for both would make the loud one ignorable.
+        buf = io.StringIO()
+        scores = {"knowledge-update": 0.8, "multi-session": 0.8, "overall": 0.8}
+        sizes = dict(self.FULL, **{"knowledge-update": (2, 4)})
+        with contextlib.redirect_stdout(buf):
+            run_ci.print_table(scores, self.BASELINE, 0.25, sizes)
+        out = buf.getvalue()
+        self.assertIn("UNMEASURED", out)
+        self.assertIn("no verdict", out)
+
+    def test_a_wiped_category_prints_no_score_rather_than_zero(self):
+        # It scored nothing; printing 0.000 would report a wipe as a total miss.
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            run_ci.print_table(
+                {"knowledge-update": 0.8, "overall": 0.8},
+                self.BASELINE,
+                0.25,
+                {"knowledge-update": (4, 4), "multi-session": (0, 4), "overall": (20, 24)},
+            )
+        row = next(
+            ln for ln in buf.getvalue().splitlines() if ln.startswith("multi-session")
+        )
+        self.assertIn("—", row)
+        self.assertNotIn("0.000", row)
 
 
 if __name__ == "__main__":

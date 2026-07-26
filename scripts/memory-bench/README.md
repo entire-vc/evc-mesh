@@ -40,9 +40,21 @@ comparable, worse number — a fault the PR author caused and can fix.
 * the harness could not run (Mesh unreachable, too many errored questions);
 * **no baseline exists** — a pass against nothing is a *vacuous green*;
 * the run's `search_mode` differs from the baseline's (see below);
+* a **category** lost enough questions that its surviving sample is no longer
+  comparable to the baseline's (`category-unmeasured`, see blindness #4);
 * **no category was verdict-eligible** — the baseline's own run-to-run spread is
   wider than its scores everywhere, so nothing could have failed (see
   *[The baseline is a distribution](#the-baseline-is-a-distribution-not-a-sample)*).
+
+Those last two are both "this category got no verdict", and the gate keeps them
+apart on purpose. `category-unmeasured` is an **anomaly** — *this run* lost
+questions to a harness error, so a single occurrence is enough to make the run
+inconclusive. Spread-blindness is a **standing property of the baseline**: it is
+true every run until the baseline is re-snapped, so firing on it per category
+would pin the arm at INCONCLUSIVE for ever, which is the silent no-op rather
+than a fix for one. It therefore forces exit 2 only when it holds for *every*
+category and the run enforced literally nothing. The table shows the difference:
+`⚠ UNMEASURED` should provoke someone, `ⓘ no verdict` should not.
 
 **Every one of these rules applies to BOTH arms.** The mode gate and the
 missing-baseline check were once written `if retrieval_only and …`, so they
@@ -209,7 +221,7 @@ somebody instead of quietly degrading recall for days:
 
 Alert on `rate(mesh_memory_embed_failures_total{op="recall"}[15m]) > 0`.
 
-## The three ways this gate goes blind
+## The four ways this gate goes blind
 
 The gate is required, which makes its *silence* more dangerous than its red. Each
 of these has actually happened; each is now pinned by `test_gate_blindness.py`,
@@ -238,6 +250,36 @@ that guards against a wrongful no-op must not be skipped by that same no-op).
    hides the fault. `flatten_exc` inlines the leaves, and the CI step pipes stderr
    into `gate.log` (`2>&1`), so the uploaded artifact contains the *reason* the
    gate went blind and not just the fact that it did.
+
+4. **A category scored on a shrunken sample.** The error budget is global
+   (`--max-error-rate`, 10% of 24 questions ≈ 2), but every verdict is *per
+   category*, and each category has only 4 questions. Nothing used to connect the
+   two, so both dropped questions could land in the same category — which was then
+   scored on 2 answers, compared against a baseline captured on 4, and printed as
+   a bare `1.000 ✓` under "All categories within tolerance". That is not
+   hypothetical: scheduled run `30191444472` (2026-07-26) lost `gpt4_4929293a` and
+   `gpt4_7f6b06db`, **both `temporal-reasoning`**, and reported that category green
+   on half its questions.
+
+   The tolerance (0.25) is a claim about the *denominator* — "one question's worth
+   of variance at n=4". At n=3 the quantum is 1/3 > 0.25, so a single unlucky
+   answer clears the tolerance by itself. Both directions bite: a harness
+   `BrokenResourceError` can manufacture `EXIT_REGRESSION` and block a merge no
+   author can unblock, and a real 25% drop can hide inside the widened noise.
+
+   So `decide_verdict` sets aside any category whose surviving sample no longer
+   fits the tolerance, marks it `⚠ UNMEASURED`, and returns `EXIT_INCONCLUSIVE`
+   (reason kind `category-unmeasured`) — never green, never a merge block. A
+   category that lost *every* question disappears from the score dict entirely, so
+   it is detected from the baseline side rather than by iterating the scores.
+   Measured regressions still outrank this: otherwise one flaky question anywhere
+   in the run would suppress every merge block in the repo. The table now prints
+   the `Sample` column, because `1.000` from 4 questions and `1.000` from the 2
+   that survived used to render identically.
+
+   **The fix for a `category-unmeasured` run is to stop losing questions, not to
+   widen the tolerance.** Widening it to cover n=2 would silence the alarm by
+   making the gate unable to detect anything.
 
 ## Making the recall gate a required check
 

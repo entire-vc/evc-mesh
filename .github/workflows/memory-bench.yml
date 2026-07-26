@@ -477,12 +477,28 @@ jobs:
             case "$rc" in
               0) echo "✅ PASS — measured, comparable, within tolerance of the baseline." ;;
               1) echo "❌ REGRESSION — end-to-end memory quality dropped past the baseline's own spread." ;;
-              2) echo "### ⚠️ INCONCLUSIVE — this arm measured nothing"
-                 echo
-                 echo "> Advisory does not mean unwatched. Nothing was compared, so nothing was"
-                 echo "> checked — and because this arm never blocks a merge, a silent"
-                 echo "> INCONCLUSIVE is indistinguishable from a healthy pass. A tracking issue"
-                 echo "> has been opened/updated so it is not silent."
+              2) # The scope of the blindness depends on WHICH reason fired, and
+                 # saying "measured nothing" when six of seven categories were
+                 # enforced normally is not a harmless exaggeration: a banner that
+                 # overstates gets discounted, and then it understates on the day
+                 # the arm really is fully dark.
+                 case "${reason%% *}" in
+                   category-unmeasured)
+                     echo "### ⚠️ INCONCLUSIVE — **one or more categories** went unmeasured"
+                     echo
+                     echo "> **Partial blindness, not total.** Every other category was compared and"
+                     echo "> enforced normally; a regression in one of those would still have been"
+                     echo "> reported. What is missing is the categories named below, which lost"
+                     echo "> questions to harness errors and were set aside rather than scored on a"
+                     echo "> sample too small to compare." ;;
+                   *)
+                     echo "### ⚠️ INCONCLUSIVE — this arm measured nothing"
+                     echo
+                     echo "> Advisory does not mean unwatched. Nothing was compared, so nothing was"
+                     echo "> checked — and because this arm never blocks a merge, a silent"
+                     echo "> INCONCLUSIVE is indistinguishable from a healthy pass. A tracking issue"
+                     echo "> has been opened/updated so it is not silent." ;;
+                 esac
                  echo
                  echo "**Reason:** \`$reason\`"
                  echo
@@ -491,6 +507,9 @@ jobs:
                  echo "  in different retrieval modes, or \`baseline.json\` predates mode-scoping."
                  echo "  Re-snap it: run this workflow with **update_baseline**."
                  echo "* \`no-baseline\` — there is nothing to compare against at all."
+                 echo "* \`category-unmeasured\` — **partial**: specific categories lost questions to"
+                 echo "  harness errors, so their surviving sample no longer supports the tolerance."
+                 echo "  The other categories were still enforced. Fix the harness error, not the bar."
                  echo "* \`no-eligible-category\` — the baseline's recorded run-to-run spread is"
                  echo "  wider than its own scores everywhere, so no category could fail." ;;
               *) echo "❌ Eval exited $rc." ;;
