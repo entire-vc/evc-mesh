@@ -39,6 +39,24 @@ MESH_MCP_ARGS = ["--transport", "stdio"]
 
 STORE_SCOPE = "workspace"
 SHARED_TAG = "lme-bench"
+# Server-side TTL on every fixture, as a Go duration the API evaluates against
+# its OWN clock (RFC3339 would bind the runner's).
+#
+# Cleanup is best-effort by construction — `_sweep` needs a live connection, and
+# the case it exists for is the connection dying — so some runs will always
+# abandon rows. `defaultExpiresAt` gives scope=workspace memories NO expiry, so
+# before this an abandoned haystack sat in the bench workspace forever. It used
+# to be reclaimed by accident: fixture keys were identical across runs, so the
+# next run's UPSERT adopted the orphans. Making fixtures run-unique removes that
+# accident, so the reclamation has to become deliberate.
+#
+# 12h is chosen against the LONGEST thing a fixture must outlive, not the
+# typical one: a per-question haystack lives ~2 minutes, but the advisory arm's
+# `--repeat` baseline re-snap ran 63+ minutes on 2026-07-26. A TTL that could
+# elapse mid-run would delete a live haystack and manufacture a miss — which is
+# the exact bug this module's run nonce exists to prevent, re-introduced from the
+# other end. Keep the margin at least an order of magnitude; the test pins it.
+FIXTURE_TTL = os.environ.get("BENCH_FIXTURE_TTL", "12h").strip()
 INIT_TIMEOUT = 60.0
 # Sequential stores: the mesh-mcp stdio server closes under high concurrency.
 STORE_CONCURRENCY = 1
@@ -583,15 +601,18 @@ class MeshMemoryClient:
         # whose ids we never received would be abandoned for good.
 
     async def _store(self, session, content, idx, date):
-        result = await session.call_tool(
-            "remember",
-            {
-                "key": f"{self.key_prefix}-s{idx}",
-                "content": content,
-                "scope": STORE_SCOPE,
-                "tags": [self.bench_tag, SHARED_TAG, f"session-{idx}"],
-            },
-        )
+        args = {
+            "key": f"{self.key_prefix}-s{idx}",
+            "content": content,
+            "scope": STORE_SCOPE,
+            "tags": [self.bench_tag, SHARED_TAG, f"session-{idx}"],
+        }
+        # Empty means "no TTL" — the pre-2026-07-26 behaviour, kept reachable so
+        # a run that must outlive the ceiling can opt out explicitly rather than
+        # discover the expiry as a phantom recall miss.
+        if FIXTURE_TTL:
+            args["expires_at"] = FIXTURE_TTL
+        result = await session.call_tool("remember", args)
         payload = _parse_tool_payload(result)
         if isinstance(payload, dict) and payload.get("error"):
             raise self._tool_failure("remember", payload["error"])

@@ -289,18 +289,35 @@ would fix the id path and leave the tag path reaching across runs.
   how you re-attach to a previous run's rows to purge them by tag. The nonce is
   logged once, at INFO, into `gate.log`.
 
-**Known cost.** Under the old naming a re-run *upserted* the previous run's rows,
-so an abandoned haystack was eventually reclaimed by the next run. Disjoint names
-mean an abandoned run's rows now stay abandoned, and concurrent runs hold N sets
-of fixtures live at once instead of one. Purge orphans out of band, keyed on the
-umbrella `lme-bench` tag **and on age** — never from a peer bench run, which is
-exactly the cross-run deletion this nonce exists to stop:
+### Fixtures expire on their own
+
+Cleanup is best-effort by construction — `_sweep` needs a live connection, and the
+case it exists for is the connection dying — so some runs will always abandon
+rows. `scope=workspace` memories get **no** default TTL server-side, so before
+the run nonce those orphans were reclaimed only *by accident*: fixture keys were
+identical across runs, so the next run's UPSERT adopted them. Making fixtures
+run-unique removes that accident, so every store now sets `expires_at`
+(`FIXTURE_TTL`, default `12h`, override with `BENCH_FIXTURE_TTL`).
+
+The margin is the point, and it is pinned by a test. A fixture must outlive the
+**longest** run, not the typical one: a per-question haystack lives ~2 minutes,
+but the advisory arm's `--repeat` baseline re-snap ran **63+ minutes** on
+2026-07-26. A TTL that could elapse mid-run would delete a live haystack and
+manufacture a miss — the same defect as the cross-run sweep, arriving from the
+other end. Setting `BENCH_FIXTURE_TTL=` (empty) opts out entirely, so a run that
+must outlive the ceiling can say so rather than meet the expiry as a phantom
+recall miss.
+
+Do **not** add a startup sweep that deletes other runs' leftovers — a peer run
+cannot tell an orphan from a live fixture, which is the cross-run deletion this
+nonce exists to stop. Audit with:
 
 ```
 GET /api/v1/memories?scope=workspace&tags_any=lme-bench&min_importance=0
 ```
 
-If that returns rows while no bench is running, cleanup was skipped.
+If that returns rows while no bench is running and none are within a TTL of their
+creation, cleanup was skipped *and* expiry did not cover it.
 
 Tags carry the question id verbatim; memory **keys** carry a sanitized form
 (`sanitize_key_component`), because Mesh validates `key` against

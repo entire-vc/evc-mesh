@@ -908,6 +908,63 @@ class TestConcurrentRunsDoNotDeleteEachOther(unittest.TestCase):
         self.assertEqual(2 * self.N, len(store.recall([mc.SHARED_TAG])))
 
 
+class TestFixturesExpireOnTheirOwn(unittest.TestCase):
+    """Cleanup is best-effort — `_sweep` needs a live connection and the case it
+    exists for is the connection dying — so the store needs a floor under it.
+
+    Before the run nonce this was covered by accident: fixture keys were the same
+    across runs, so the next run's UPSERT adopted whatever the last one abandoned.
+    Making fixtures run-unique removed that accident, so the reclamation has to be
+    deliberate or orphans accumulate forever (scope=workspace has no default TTL).
+    """
+
+    def test_every_store_carries_a_ttl(self):
+        store = _UpsertStore()
+        session = _SharedSession(store)
+        client = mc.MeshMemoryClient(question_id="q1", nonce="n1")
+        seen = {}
+
+        async def spy(name, args):
+            seen.update(args)
+            return await session.call_tool(name, args)
+
+        stub = mock.Mock()
+        stub.call_tool = spy
+        asyncio.run(client._store(stub, "text", 0, "2026-01-01"))
+        self.assertEqual(mc.FIXTURE_TTL, seen.get("expires_at"))
+
+    def test_the_ttl_cannot_elapse_inside_a_run(self):
+        """The margin is the whole point, so it is pinned rather than left to
+        judgement. A fixture that expires mid-run deletes a live haystack and
+        manufactures a miss — the same defect as the cross-run sweep, arriving
+        from the other end. The longest bench job observed is the advisory arm's
+        `--repeat` re-snap at 63+ minutes; keep an order of magnitude over it.
+        """
+        m = re.fullmatch(r"(\d+(?:\.\d+)?)h", mc.FIXTURE_TTL)
+        self.assertIsNotNone(m, f"TTL {mc.FIXTURE_TTL!r} is not expressed in hours")
+        self.assertGreaterEqual(
+            float(m.group(1)), 10,
+            "TTL is within an order of magnitude of the longest observed run",
+        )
+
+    def test_opting_out_sends_no_expiry_rather_than_an_empty_one(self):
+        """An empty TTL must omit the field. Sending `expires_at: ""` would be a
+        400 on every store — i.e. the whole run silently unmeasured."""
+        session = _SharedSession(_UpsertStore())
+        seen = {}
+
+        async def spy(name, args):
+            seen.update(args)
+            return await session.call_tool(name, args)
+
+        stub = mock.Mock()
+        stub.call_tool = spy
+        client = mc.MeshMemoryClient(question_id="q1", nonce="n1")
+        with mock.patch.object(mc, "FIXTURE_TTL", ""):
+            asyncio.run(client._store(stub, "text", 0, "2026-01-01"))
+        self.assertNotIn("expires_at", seen)
+
+
 class TestTheRunNonce(unittest.TestCase):
     def setUp(self):
         self.addCleanup(setattr, mc, "_RUN_NONCE", None)
