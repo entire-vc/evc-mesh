@@ -219,17 +219,42 @@ that variance is the baseline's job.
 ### Capture the baseline where it will be judged
 
 Run the workflow with the **`update_baseline`** input (and `repeat`, default 3)
-rather than snapping on a laptop:
+rather than snapping on a laptop. **`baseline_arm`** picks which file:
 
 ```bash
+# advisory arm → baseline.json, artifact `memory-bench-baseline`   (paid)
 gh workflow run memory-bench.yml -f update_baseline=true -f repeat=3
-# then download the `memory-bench-baseline` artifact and commit baseline.json
+
+# required arm → baseline_retrieval.json, artifact `recall-gate-baseline`  (free)
+gh workflow run memory-bench.yml -f update_baseline=true -f baseline_arm=retrieval -f repeat=3
 ```
 
-Same runner, same `MESH_BENCH_KEY`, same chat/judge models as the nightly that
-will be compared against it. A baseline captured against a different key or a
+Same runner, same `MESH_BENCH_KEY`, same embedder and chat/judge models as the run
+that will be compared against it. A baseline captured against a different key or a
 different model is not comparable to the run it judges — the same class of
 not-comparable this workflow already exits `2` over.
+
+`baseline_arm=retrieval` re-snaps in the recall job and does **not** start the paid
+end-to-end job; `both` re-snaps each in its own arm.
+
+#### The required arm refuses a capture it cannot stand behind
+
+`baseline_retrieval.json` is the threshold of a **required** check, so
+`--retrieval-only --update-baseline` does not write it at all unless the run was
+complete (`24/24`) and served in `hybrid`. It exits `2` with
+`GATE_REASON: capture-refused` and leaves any existing baseline untouched.
+
+The warn-and-write behaviour that the advisory arm keeps is what produced the
+`temporal-reasoning: 1.0` on 2 of 4 questions above: 2 failures out of 24 is 8.3%,
+just under the 10% `--max-error-rate`, so the run was never declared inconclusive
+and the warning went into a log nobody read again for six days. On the advisory
+side that trade is still right — its baseline blocks no merge and each pass costs
+money, so refusing there buys no baseline at all instead of a flawed one.
+
+`--allow-partial-capture` overrides the refusal. It is for the case where a
+degraded baseline genuinely beats none; say in the commit message which figures
+rest on an incomplete sample, since `sample_sizes` will then record a denominator
+that permanently sets those categories aside as not-comparable.
 
 ### Observability
 
