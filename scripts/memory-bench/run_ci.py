@@ -698,6 +698,22 @@ def classify_error(detail: str, attempts_made: int, attempts_allowed: int) -> st
     Exhausting the allowance only counts when there WAS an allowance: once the
     circuit breaker trips, `attempts_allowed` drops to 1 and using it up proves
     nothing about whether a retry would have helped.
+
+    KNOWN LIMIT, stated rather than glossed: an outage lasting longer than the
+    client's ~50s retry window (a slow rolling deploy, not a systemd bounce) can
+    put a genuinely transient question through the exhaustion arm and label it
+    persistent. It is bounded on both sides and cannot manufacture a verdict:
+      * `--max-error-rate` is checked FIRST, so anything above 10% of the run
+        exits `harness-errors` before reaching here;
+      * the breaker withdraws retries after BREAKER_TRIP_AFTER questions, so at
+        most that many can reach this arm during one outage;
+      * with today's 4-question categories, a run that lost even ONE question is
+        already INCONCLUSIVE — `category_comparable(3, 0.25)` is False. What such
+        a run gets from this classifier is a different REASON KIND, not a
+        different verdict. (Pinned by
+        `test_a_single_lost_question_is_already_inconclusive_today`; if a future
+        dataset gives categories more questions, that test fails and this
+        paragraph stops being true.)
     """
     # Imported here, not at module scope: SCRIPT_DIR only joins sys.path inside
     # main(), and every other mesh_client_stdio import in this file is local for

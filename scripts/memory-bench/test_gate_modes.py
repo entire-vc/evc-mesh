@@ -502,6 +502,25 @@ class TestPersistentErrorClassification(unittest.TestCase):
             run_ci.ERROR_PERSISTENT, run_ci.classify_error(self.HISTORIC, 4, 4)
         )
 
+    def test_a_single_lost_question_is_already_inconclusive_today(self):
+        """Pins the premise behind classify_error's stated limit.
+
+        The exhaustion arm can mislabel a >50s outage as persistent. That is only
+        harmless while losing one question ALREADY makes its category
+        incomparable — then the mislabel changes the reason kind, not the
+        verdict. Both halves of that are properties of the dataset and the
+        tolerance, so both are asserted here: if a refresh gives categories more
+        questions, this fails and the docstring's claim has to be revisited
+        rather than quietly becoming false.
+        """
+        entries = json.loads(run_ci.DATA_FILE.read_text())
+        sizes = {}
+        for e in entries:
+            sizes[e["question_type"]] = sizes.get(e["question_type"], 0) + 1
+        self.assertEqual({4}, set(sizes.values()), sizes)
+        self.assertTrue(run_ci.category_comparable(4, 0.25))
+        self.assertFalse(run_ci.category_comparable(3, 0.25))
+
     def test_an_unclassified_old_result_is_not_counted(self):
         """Results written by an older run_ci carry no `error_kind`. Inferring
         one from absence would manufacture alerts out of stale artifacts."""
