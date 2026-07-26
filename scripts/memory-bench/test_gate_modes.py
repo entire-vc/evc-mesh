@@ -17,6 +17,8 @@ author can fix — the check gets bypassed and the safety net is gone for good.
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import os
 import sys
@@ -33,6 +35,9 @@ from run_ci import (  # noqa: E402
     MODE_BM25_ONLY,
     MODE_HYBRID,
     MODE_UNKNOWN,
+    category_comparable,
+    category_sample_sizes,
+    decide_verdict,
     load_baseline,
     modes_comparable,
     resolve_run_search_mode,
@@ -143,6 +148,134 @@ class TestMissingCredentialsAreInconclusive(unittest.TestCase):
                     run_ci._require_env(key)
                 self.assertEqual(cm.exception.code, run_ci.EXIT_INCONCLUSIVE)
                 self.assertNotEqual(cm.exception.code, run_ci.EXIT_REGRESSION)
+
+
+class TestCategorySampleSizes(unittest.TestCase):
+    def test_errored_questions_shrink_ran_but_not_attempted(self):
+        results = [
+            {"question_type": "temporal-reasoning", "correct": True},
+            {"question_type": "temporal-reasoning", "correct": False},
+            {"question_type": "temporal-reasoning", "error": "ingest: boom"},
+            {"question_type": "temporal-reasoning", "error": "ingest: boom"},
+            {"question_type": "multi-session", "correct": True},
+        ]
+        sizes = category_sample_sizes(results)
+        self.assertEqual(sizes["temporal-reasoning"], (2, 4))
+        self.assertEqual(sizes["multi-session"], (1, 1))
+
+
+class TestCategoryComparable(unittest.TestCase):
+    """The tolerance is a claim about the denominator, so the denominator has
+    to be checked before the tolerance is applied."""
+
+    def test_full_sample_is_comparable(self):
+        # 4 questions, tolerance 0.25: one flipped answer moves the score by
+        # exactly the tolerance — which is what the tolerance was chosen to absorb.
+        self.assertTrue(category_comparable(4, 0.25))
+
+    def test_one_lost_question_breaks_the_calibration(self):
+        # 1/3 = 0.333 > 0.25: a single unlucky answer now clears the tolerance
+        # on its own, so the row can no longer distinguish noise from a drop.
+        self.assertFalse(category_comparable(3, 0.25))
+        self.assertFalse(category_comparable(2, 0.25))
+
+    def test_zero_questions_is_never_comparable(self):
+        # The nastiest case: a wiped-out category vanishes from `scores`
+        # entirely, so the old regression loop never looked at it and the run
+        # still printed "all categories within tolerance".
+        self.assertFalse(category_comparable(0, 0.25))
+        self.assertFalse(category_comparable(0, 1.0))
+
+    def test_pooled_overall_survives_a_dropped_question(self):
+        # `overall` pools all 24, so losing 2 leaves a 1/22 quantum — still far
+        # inside the tolerance. The sample gate must not flag it.
+        self.assertTrue(category_comparable(22, 0.25))
+
+
+class TestSampleGateVerdicts(unittest.TestCase):
+    """End-to-end verdict precedence, driven through the real scoring path."""
+
+    BASELINE = {
+        "temporal-reasoning": 1.0,
+        "multi-session": 1.0,
+        "overall": 1.0,
+    }
+
+    @staticmethod
+    def _verdict(scores, sizes, baseline, tolerance=0.25):
+        """Calls the REAL decision — never a copy of it.
+
+        `decide_verdict` is the same function cmd_run returns from, so reverting
+        the logic in run_ci.py fails these tests. A test that re-implemented the
+        rule here would pass against the reverted code and guard nothing.
+        """
+        rc, _regressions, _unmeasured = decide_verdict(scores, sizes, baseline, tolerance)
+        return rc
+
+    def test_todays_real_run_is_inconclusive_not_green(self):
+        # Replay of scheduled run 30191444472 (2026-07-26): 2 BrokenResourceError
+        # drops, BOTH in temporal-reasoning. 2/24 sits inside the 10% global error
+        # budget, so the run was scored — and temporal-reasoning printed 1.000 ✓
+        # measured on half its questions, under "All categories within tolerance".
+        scores = {"temporal-reasoning": 1.0, "multi-session": 1.0, "overall": 0.909}
+        sizes = {"temporal-reasoning": (2, 4), "multi-session": (4, 4), "overall": (22, 24)}
+        self.assertEqual(
+            self._verdict(scores, sizes, self.BASELINE), run_ci.EXIT_INCONCLUSIVE
+        )
+
+    def test_a_dropped_question_never_manufactures_a_regression(self):
+        # The false-RED half. temporal-reasoning survives on 2 questions and both
+        # miss → 0.000 vs a baseline of 1.000. Under the old code that is exit 1:
+        # a required check blocking the merge because the harness dropped a
+        # connection. It must be INCONCLUSIVE — nothing about the PR was measured.
+        scores = {"temporal-reasoning": 0.0, "multi-session": 1.0, "overall": 0.909}
+        sizes = {"temporal-reasoning": (2, 4), "multi-session": (4, 4), "overall": (22, 24)}
+        rc = self._verdict(scores, sizes, self.BASELINE)
+        self.assertEqual(rc, run_ci.EXIT_INCONCLUSIVE)
+        self.assertNotEqual(rc, run_ci.EXIT_REGRESSION)
+
+    def test_a_wiped_category_is_not_a_pass(self):
+        # A category that lost every question drops out of `scores` altogether,
+        # so iterating `scores` to find regressions can never see it. Its absence
+        # has to be caught from the baseline side.
+        scores = {"multi-session": 1.0, "overall": 1.0}  # no temporal-reasoning key
+        sizes = {"temporal-reasoning": (0, 4), "multi-session": (4, 4), "overall": (20, 24)}
+        rc, _regressions, unmeasured = decide_verdict(scores, sizes, self.BASELINE, 0.25)
+        self.assertEqual(rc, run_ci.EXIT_INCONCLUSIVE)
+        self.assertIn("temporal-reasoning", unmeasured)
+
+    def test_a_real_regression_still_blocks_despite_blindness_elsewhere(self):
+        # Precedence guard. If INCONCLUSIVE outranked REGRESSION, one flaky
+        # question anywhere in the run would suppress every merge block — a
+        # cheaper way to disable the gate than editing it.
+        scores = {"temporal-reasoning": 1.0, "multi-session": 0.0, "overall": 0.5}
+        sizes = {"temporal-reasoning": (2, 4), "multi-session": (4, 4), "overall": (22, 24)}
+        self.assertEqual(
+            self._verdict(scores, sizes, self.BASELINE), run_ci.EXIT_REGRESSION
+        )
+
+    def test_clean_full_sample_still_passes(self):
+        # The gate must not have become unpassable: a clean run is still green.
+        scores = {"temporal-reasoning": 1.0, "multi-session": 1.0, "overall": 1.0}
+        sizes = {"temporal-reasoning": (4, 4), "multi-session": (4, 4), "overall": (24, 24)}
+        self.assertEqual(self._verdict(scores, sizes, self.BASELINE), run_ci.EXIT_OK)
+
+
+class TestSampleIsPrinted(unittest.TestCase):
+    def test_table_shows_the_denominator_and_flags_unmeasured(self):
+        # The score alone is unreadable: "1.000" looks identical whether it came
+        # from 4 questions or from the 2 that survived.
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            run_ci.print_table(
+                {"temporal-reasoning": 1.0},
+                {"temporal-reasoning": 1.0},
+                0.25,
+                {"temporal-reasoning": (2, 4)},
+            )
+        out = buf.getvalue()
+        self.assertIn("2/4", out)
+        self.assertIn("UNMEASURED", out)
 
 
 if __name__ == "__main__":

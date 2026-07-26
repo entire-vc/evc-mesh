@@ -97,6 +97,7 @@ REASON_NO_BASELINE = "no-baseline"
 REASON_MODE_MISMATCH = "mode-mismatch"
 REASON_MODE_UNKNOWN = "mode-unknown"
 REASON_HARNESS_ERRORS = "harness-errors"
+REASON_CATEGORY_UNMEASURED = "category-unmeasured"
 REASON_PREFIX = "GATE_REASON:"
 
 ANSWER_SYSTEM = (
@@ -438,6 +439,97 @@ def compute_scores(results: list[dict]) -> dict[str, float]:
     return scores
 
 
+def category_sample_sizes(results: list[dict]) -> dict[str, tuple[int, int]]:
+    """Per category: (questions that produced a score, questions attempted).
+
+    The error budget is checked over the WHOLE run, but every verdict below is
+    per category. Without this the two never meet: a run can stay inside a 10%
+    global budget while both dropped questions land in the same 4-question
+    category, which is then scored on 2 answers and compared against a baseline
+    captured on 4 — silently.
+    """
+    sizes: dict[str, list[int]] = {}
+    for r in results:
+        qtype = r.get("question_type")
+        if qtype is None:
+            continue
+        row = sizes.setdefault(qtype, [0, 0])
+        row[1] += 1
+        if "correct" in r:
+            row[0] += 1
+    return {qtype: (ran, attempted) for qtype, (ran, attempted) in sizes.items()}
+
+
+def category_comparable(ran: int, tolerance: float) -> bool:
+    """Is a category's surviving sample still comparable to its baseline?
+
+    The tolerance is calibrated as "one question's worth of variance on the
+    4-questions-per-category CI subset" (= 0.25). That calibration is a
+    statement about the DENOMINATOR: at n=4 a single flipped answer moves the
+    score by exactly the tolerance, so a swing that large is absorbed rather
+    than called a regression. Lose one question to a harness error and the
+    quantum becomes 1/3 > 0.25 — now a single unlucky answer clears the
+    tolerance on its own.
+
+    That cuts both ways, and both ways are this gate's stated failure modes:
+      * false RED — a harness BrokenResourceError, not the PR's code, produces
+        EXIT_REGRESSION and blocks a merge the author cannot unblock;
+      * false GREEN — a genuine 25% drop hides inside the widened noise while
+        the table prints an unqualified score and "all categories within
+        tolerance".
+
+    So a category whose one-question quantum no longer fits inside the
+    tolerance is not compared at all. Same rule as the mode gate, one level
+    down: compare like with like, or do not compare.
+    """
+    if ran <= 0:
+        return False
+    return (1.0 / ran) <= tolerance + 1e-9
+
+
+def decide_verdict(
+    scores: dict[str, float],
+    sizes: dict[str, tuple[int, int]],
+    baseline: dict[str, float],
+    tolerance: float,
+) -> tuple[int, list[str], list[str]]:
+    """The whole quality verdict, as a pure function: (exit code, regressions,
+    unmeasured).
+
+    Kept pure and separate from cmd_run on purpose. A test that re-implements
+    this decision instead of calling it passes just as happily with the logic
+    reverted, which makes it a decoration rather than a guard — the exact trap
+    the cleanup test in test_gate_blindness.py fell into first time round.
+
+    Precedence: REGRESSION > INCONCLUSIVE > OK. A measured, comparable category
+    that got worse is a positive finding; partial blindness in another category
+    does not erase it. The reverse order would let one flaky question suppress
+    every merge block in the repo.
+    """
+    unmeasured = sorted(
+        cat for cat in scores
+        if not category_comparable(sizes.get(cat, (0, 0))[0], tolerance)
+    )
+    # Categories the baseline knows about that produced no score at all never
+    # appear in `scores`, so iterating `scores` alone cannot see them — their
+    # absence has to be caught from the baseline side.
+    unmeasured += sorted(
+        cat for cat in baseline
+        if cat not in scores
+        and not category_comparable(sizes.get(cat, (0, 0))[0], tolerance)
+    )
+
+    regressions = sorted(
+        cat for cat, score in scores.items()
+        if cat not in unmeasured and score < baseline.get(cat, 0.0) - tolerance
+    )
+    if regressions:
+        return EXIT_REGRESSION, regressions, unmeasured
+    if unmeasured:
+        return EXIT_INCONCLUSIVE, regressions, unmeasured
+    return EXIT_OK, regressions, unmeasured
+
+
 def report_errors(results: list[dict]) -> list[dict]:
     return [r for r in results if r.get("error")]
 
@@ -456,19 +548,36 @@ def print_error_report(errors: list[dict], total: int) -> None:
         print(f"    {sample}")
 
 
-def print_table(scores: dict[str, float], baseline: dict[str, float] | None, tolerance: float) -> None:
-    header = f"{'Category':<35} {'Score':>7}"
+def print_table(
+    scores: dict[str, float],
+    baseline: dict[str, float] | None,
+    tolerance: float,
+    sizes: dict[str, tuple[int, int]] | None = None,
+) -> None:
+    # `Sample` is not decoration. A bare "1.000" reads as "4 of 4 questions
+    # passed" when it can equally mean "the 2 questions that survived passed";
+    # the number that decides whether the row means anything was the one thing
+    # the table never printed.
+    sizes = sizes or {}
+    header = f"{'Category':<35} {'Score':>7} {'Sample':>8}"
     if baseline:
-        header += f" {'Baseline':>9} {'Delta':>8} {'Status':>8}"
+        header += f" {'Baseline':>9} {'Delta':>8} {'Status':>10}"
     print(header)
     print("-" * (len(header) + 4))
     for cat, score in sorted(scores.items()):
-        line = f"{cat:<35} {score:>7.3f}"
+        ran, attempted = sizes.get(cat, (0, 0))
+        sample = f"{ran}/{attempted}" if attempted else "-"
+        line = f"{cat:<35} {score:>7.3f} {sample:>8}"
         if baseline:
             base = baseline.get(cat, 0.0)
             delta = score - base
-            status = "✓" if score >= base - tolerance else "✗ REGRESS"
-            line += f" {base:>9.3f} {delta:>+8.3f} {status:>8}"
+            if attempted and not category_comparable(ran, tolerance):
+                status = "⚠ UNMEASURED"
+            elif score >= base - tolerance:
+                status = "✓"
+            else:
+                status = "✗ REGRESS"
+            line += f" {base:>9.3f} {delta:>+8.3f} {status:>10}"
         print(line)
 
 
@@ -538,6 +647,11 @@ def cmd_run(args: argparse.Namespace) -> int:
     error_rate = len(errors) / len(results) if results else 1.0
 
     scores = compute_scores(results)
+    sizes = category_sample_sizes(results)
+    # "overall" is a real row in `scores`, so it needs a denominator too — but it
+    # is pooled across every category, so its quantum is 1/22, not 1/2. It stays
+    # comparable exactly when the global error budget above says it does.
+    sizes["overall"] = (ran, len(results))
     run_mode = resolve_run_search_mode(results)
 
     baseline: dict[str, float] | None = None
@@ -551,7 +665,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     print(f"{title}  ({ran}/{len(results)} questions ran)")
     print(f"Search mode served: {run_mode}    Baseline mode: {baseline_mode}")
     print("=" * 70)
-    print_table(scores, baseline, tolerance)
+    print_table(scores, baseline, tolerance, sizes)
     print("=" * 70)
 
     if errors:
@@ -652,16 +766,40 @@ def cmd_run(args: argparse.Namespace) -> int:
             "scores above (within the allowed error budget)."
         )
 
-    regressions = [
-        cat for cat, score in scores.items()
-        if score < baseline.get(cat, 0.0) - tolerance
-    ]
+    # ── Sample gate: a category is only judged on a sample it can be judged on ─
+    # Categories that lost questions to harness errors are set aside BEFORE the
+    # comparison, so a dropped question can neither manufacture a regression nor
+    # be laundered into a pass. See category_comparable() for why 1/n vs the
+    # tolerance is the right line, and decide_verdict() for the precedence.
+    rc, regressions, unmeasured = decide_verdict(scores, sizes, baseline, tolerance)
+
+    # `rc` is returned verbatim below: the exit code comes from decide_verdict and
+    # nowhere else, so the reporting here cannot drift out of step with the
+    # precedence the tests pin.
+    if unmeasured:
+        detail = ", ".join(
+            f"{cat} ({sizes.get(cat, (0, 0))[0]}/{sizes.get(cat, (0, 0))[1]} questions)"
+            for cat in unmeasured
+        )
+        print(
+            f"\n⚠ {len(unmeasured)} category(ies) ran on too small a sample to compare "
+            f"against the baseline at tolerance {tolerance}: {detail}."
+        )
+        print(
+            "Those categories were NOT enforced: a regression in them would pass "
+            "through this run unseen. The cause is a harness error above, not this "
+            "PR's code — the fix is to stop losing questions, not to lower the bar."
+        )
+
     if regressions:
         print(f"\n✗ REGRESSION detected in: {', '.join(regressions)}")
-        return EXIT_REGRESSION
+    elif unmeasured:
+        print("\n⚠ EVAL INCONCLUSIVE — the recall safety net did not cover every category.")
+        print(f"{REASON_PREFIX} {REASON_CATEGORY_UNMEASURED} — {detail}")
+    else:
+        print("\n✓ All categories within tolerance.")
 
-    print("\n✓ All categories within tolerance.")
-    return EXIT_OK
+    return rc
 
 
 def main() -> int:
