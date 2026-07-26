@@ -385,12 +385,25 @@ Both arms ran the same night on the same haystack (run `30191444472`, 2026-07-26
 
 For `multi-session`, memory put a gold session in the top-10 for **4/4**
 questions and `openai/gpt-4o-mini` answered **0/4**. The answer+judge stage
-discards about half of everything retrieval delivers, and the same memory stack
-scored **70.0%** on the full 500-question set with answers on `deepseek-chat` and
-judge `gpt-4o`. So a low number on this arm is, by default, a statement about the
-**cheap chat model**, not about Mesh memory — which is the other half of why it
-is advisory. Read the recall gate first: if retrieval is green and this arm is
-not, the loss is downstream of memory.
+discards about half of everything retrieval delivers. So a low number on this arm
+is, by default, a statement about the **cheap chat model**, not about Mesh memory
+— which is the other half of why it is advisory. Read the recall gate first: if
+retrieval is green and this arm is not, the loss is downstream of memory.
+
+The claim above rests **only** on the same-night, same-haystack table: one run,
+one corpus, retrieval and answering measured off the same fixtures, so the chat
+model is the only thing that differs between the two columns. That is what makes
+it an isolation rather than a comparison.
+
+An earlier revision of this file also cited a **70.0%** full-500 score as
+corroboration. It has been removed rather than sourced. The number is real and
+reproducible — `350/500` in
+`~/bench/metronix-memory/benchmarks/longmemeval/results/full500.jsonl.eval-openai_gpt-4o`
+on the Mac Mini — but it was measured against **Metronix MCP memory**
+(`github.com/mtrnix/metronix-memory`), a different product, with a different chat
+and judge model. It changes the memory system *and* the models at once, so it
+cannot isolate either, and citing it here read as if this stack had scored it.
+Do not reintroduce it without both variables held fixed.
 
 The bench writes its haystack to the shared workspace under `bench-<qid>` /
 `lme-bench` tags and deletes it in a `finally` block. If you ever see `lme-bench`
