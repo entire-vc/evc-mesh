@@ -133,6 +133,10 @@ REASON_BASELINE_SAMPLE_MISMATCH = "baseline-sample-mismatch"
 # the broken denominator as the new truth. Alerting on the symptom while the
 # cause renews itself every run is how this survived 6 days.
 REASON_PERSISTENT_ERRORS = "persistent-errors"
+# A capture that could not be trusted is refused BEFORE the write, so the previous
+# baseline survives. Its own kind: "we declined to record a floor" is not an
+# inconclusive verdict, and it has a different reader (whoever dispatched it).
+REASON_CAPTURE_REFUSED = "capture-refused"
 REASON_PREFIX = "GATE_REASON:"
 
 # How an errored question is classified. `--max-error-rate` was calibrated for
@@ -554,6 +558,57 @@ def build_baseline_payload(
             cat: list(sizes[cat]) for cat in categories if cat in sizes
         }
     return payload
+
+
+def capture_blockers(
+    sizes: dict[str, tuple[int, int]],
+    run_mode: str,
+    retrieval_only: bool,
+) -> list[str]:
+    """Reasons this run must NOT be written as a baseline. Empty list = sound.
+
+    Only the RETRIEVAL arm is gated this hard, and the asymmetry is deliberate.
+
+    Its baseline feeds a REQUIRED check, so every figure in it becomes a merge
+    threshold. A figure measured on a smaller sample than the runs it will judge
+    does not merely lose precision — it silently converts a *sample* change into
+    a REGRESSION verdict against code that did nothing wrong. That is not a
+    hypothetical: `baseline_retrieval.json` pinned `temporal-reasoning: 1.0` on
+    2 of that category's 4 questions (evc-mesh#362) and went unnoticed for six
+    days, because 2 failures out of 24 is 8.3% — just under the 10%
+    `--max-error-rate` that would otherwise have stopped the run. A warning
+    printed into a capture log nobody reads twice is not a guard.
+
+    The advisory arm keeps #363's warn-and-write behaviour. Its baseline blocks
+    no merge, it is judged by a nondeterministic model, and each pass costs real
+    money — refusing a capture there would trade a flawed baseline for no
+    baseline at all, which is strictly worse for an arm whose whole job is to
+    produce a trend.
+    """
+    if not retrieval_only:
+        return []
+    blockers: list[str] = []
+    if run_mode != MODE_HYBRID:
+        blockers.append(
+            f"served in retrieval mode '{run_mode}', not '{MODE_HYBRID}' — this "
+            "would pin a required check at a DEGRADED quality level, and every "
+            "healthy run afterwards would be compared across modes"
+        )
+    # "overall" is checked alongside the categories, not instead of them: a run
+    # can be complete overall while one category lost questions, and it is the
+    # per-category rows that carry the tolerance.
+    short = sorted(
+        (cat, ran, attempted)
+        for cat, (ran, attempted) in sizes.items()
+        if attempted and ran < attempted
+    )
+    for cat, ran, attempted in short:
+        blockers.append(
+            f"{cat} measured {ran}/{attempted} questions — the missing ones are a "
+            "harness failure, and pinning the baseline here bakes that failure "
+            "into the denominator every future run is judged against"
+        )
+    return blockers
 
 
 def modes_comparable(baseline_mode: str, run_mode: str) -> bool:
@@ -1147,6 +1202,33 @@ def cmd_run(args: argparse.Namespace) -> int:
         return EXIT_INCONCLUSIVE
 
     if args.update_baseline:
+        # Refuse BEFORE writing. A capture guard that reports after the file is on
+        # disk is advice, not a guard — the artifact still gets uploaded and the
+        # figure still gets committed.
+        blockers = capture_blockers(sizes, run_mode, retrieval_only)
+        if blockers and not args.allow_partial_capture:
+            print(
+                f"\n✗ CAPTURE REFUSED — {baseline_file.name} was NOT written. This run "
+                "is not a sound basis for a required check's baseline:"
+            )
+            for b in blockers:
+                print(f"  • {b}")
+            print(
+                "\nFix the cause and re-capture. If you genuinely need to pin a "
+                "required check on this run, pass --allow-partial-capture and say in "
+                "the commit message which figures rest on an incomplete sample."
+            )
+            print(
+                f"{REASON_PREFIX} {REASON_CAPTURE_REFUSED} — "
+                f"{len(blockers)} blocker(s); {baseline_file.name} not written"
+            )
+            return EXIT_INCONCLUSIVE
+        if blockers:
+            print(
+                "\n⚠ --allow-partial-capture: writing a baseline over "
+                f"{len(blockers)} blocker(s) listed above."
+            )
+
         # BOTH arms write the MODE-SCOPED shape. It records the retrieval mode it
         # was captured in, because hit@k in bm25-only mode is not comparable to
         # hit@k in hybrid mode; a baseline without a mode can only ever produce
@@ -1451,6 +1533,16 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--allow-partial-capture",
+        action="store_true",
+        help=(
+            "Write the retrieval baseline even when the run was incomplete or served "
+            "in a degraded retrieval mode. Off by default: that baseline is the "
+            "threshold of a REQUIRED check, and one captured on a smaller sample "
+            "turns a later sample change into a REGRESSION verdict (evc-mesh#362)."
+        ),
+    )
+    parser.add_argument(
         "--tolerance",
         type=float,
         default=0.25,
@@ -1493,6 +1585,11 @@ def main() -> int:
         parser.error("--repeat is only meaningful with --update-baseline")
     if args.repeat < 1:
         parser.error("--repeat must be >= 1")
+    if args.allow_partial_capture and not args.update_baseline:
+        # It only ever gates a write. Accepting it on a gate run would read as
+        # "loosen the verdict", which it does not do — a flag whose name suggests
+        # a power it lacks is worse than no flag.
+        parser.error("--allow-partial-capture is only meaningful with --update-baseline")
 
     # Ensure script dir is on path for mesh_client_stdio import
     sys.path.insert(0, str(SCRIPT_DIR))

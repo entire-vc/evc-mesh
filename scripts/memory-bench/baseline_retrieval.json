@@ -1,14 +1,54 @@
 {
   "search_mode": "hybrid",
-  "captured_at": "2026-07-15T13:04:54Z",
+  "captured_at": "2026-07-26T15:15:02Z",
   "top_k": 10,
+  "n_runs": 3,
   "scores": {
     "knowledge-update": 1.0,
     "multi-session": 1.0,
+    "overall": 0.9027777777777777,
     "single-session-assistant": 1.0,
-    "single-session-preference": 0.75,
+    "single-session-preference": 0.9166666666666666,
     "single-session-user": 0.5,
-    "temporal-reasoning": 1.0,
-    "overall": 0.8636363636363636
+    "temporal-reasoning": 1.0
+  },
+  "spread": {
+    "knowledge-update": 0.0,
+    "multi-session": 0.0,
+    "overall": 0.04166666666666663,
+    "single-session-assistant": 0.0,
+    "single-session-preference": 0.25,
+    "single-session-user": 0.0,
+    "temporal-reasoning": 0.0
+  },
+  "sample_sizes": {
+    "knowledge-update": [
+      4,
+      4
+    ],
+    "multi-session": [
+      4,
+      4
+    ],
+    "overall": [
+      24,
+      24
+    ],
+    "single-session-assistant": [
+      4,
+      4
+    ],
+    "single-session-preference": [
+      4,
+      4
+    ],
+    "single-session-user": [
+      4,
+      4
+    ],
+    "temporal-reasoning": [
+      4,
+      4
+    ]
   }
 }

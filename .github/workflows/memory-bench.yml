@@ -28,14 +28,29 @@ on:
         default: false
       update_baseline:
         description: >-
-          Re-snap the END-TO-END baseline (baseline.json) instead of judging against
-          it. Uploads the new file as the `memory-bench-baseline` artifact to commit
-          by hand — capture it HERE, not on a laptop: a baseline snapped against a
-          different agent key or chat model is not comparable to the nightly that
-          will be judged against it.
+          Re-snap a baseline instead of judging against it (see `baseline_arm` for
+          which one). Uploads the new file as an artifact to commit by hand —
+          capture it HERE, not on a laptop: a baseline snapped against a different
+          agent key, chat model or embedder is not comparable to the run that will
+          be judged against it, and that is the same class of not-comparable this
+          workflow already exits 2 over.
         type: boolean
         required: false
         default: false
+      baseline_arm:
+        description: >-
+          Which baseline `update_baseline` re-snaps. `end-to-end` writes
+          baseline.json in the paid advisory arm. `retrieval` writes
+          baseline_retrieval.json in the free recall arm — the one behind the
+          REQUIRED check, so its capture is refused outright unless the run was
+          complete and served in `hybrid` mode. `both` re-snaps each in its own arm.
+        type: choice
+        options:
+          - end-to-end
+          - retrieval
+          - both
+        required: false
+        default: end-to-end
       repeat:
         description: >-
           Passes to average when re-snapping (default 3). One pass is a coin toss:
@@ -96,7 +111,9 @@ jobs:
   recall-gate:
     name: Memory recall gate
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # A recall pass is ~17 min, so a `--repeat 3` capture needs the same headroom
+    # the advisory arm already takes. Unchanged (30) for every PR and nightly.
+    timeout-minutes: ${{ (inputs.update_baseline && 120) || 30 }}
     permissions:
       contents: read
       # The gate raises an out-of-band alert when it is BLIND (INCONCLUSIVE), so
@@ -128,6 +145,16 @@ jobs:
         run: |
           python scripts/memory-bench/test_gate_blindness.py
           python scripts/memory-bench/test_gate_modes.py
+
+      # One source of truth for "this dispatch is a capture, not a verdict". Two
+      # steps have to agree on it — the capture runs, the gate must not — and two
+      # copies of the same expression is how they drift into either both running
+      # or neither.
+      - name: Capture or judge?
+        id: mode
+        run: |
+          echo "capture=${{ (inputs.update_baseline && (inputs.baseline_arm == 'retrieval' || inputs.baseline_arm == 'both')) && 'true' || 'false' }}" \
+            >> "$GITHUB_OUTPUT"
 
       - name: Does this change touch memory?
         id: scope
@@ -184,9 +211,81 @@ jobs:
         # No `openai` — the recall gate must not acquire a paid dependency.
         run: pip install mcp httpx
 
+      # ---------------------------------------------------------------------
+      # Baseline capture for the REQUIRED arm. #363 added this path for the
+      # advisory arm and deliberately left the required arm's baseline alone;
+      # this is the same path extended to cover it, rather than a second capture
+      # route with its own drift.
+      #
+      # It runs HERE for the same reason the advisory capture does — same runner,
+      # same MESH_BENCH_KEY, same embedder as the PR runs it will judge — and it
+      # matters MORE here: this is the baseline behind a required check, so a
+      # laptop capture against a different key would make every PR's verdict a
+      # comparison across two environments.
+      #
+      # `run_ci.py` refuses to write this file at all if the run was incomplete or
+      # served in a degraded mode, so a capture that reaches the artifact is a
+      # 24/24 hybrid run by construction, not by the operator remembering to read
+      # the log.
+      # ---------------------------------------------------------------------
+      - name: Re-snap the recall baseline
+        id: resnap
+        if: steps.scope.outputs.relevant == 'true' && steps.mode.outputs.capture == 'true'
+        env:
+          MESH_API_URL: ${{ secrets.MESH_API_URL }}
+          MESH_AGENT_KEY: ${{ secrets.MESH_BENCH_KEY }}
+          MESH_MCP_BIN: ${{ github.workspace }}/mesh-mcp-bin
+          RECALL_GRAPH_ENABLED: 'true'
+          LME_TOP_K: '10'
+        run: |
+          cd scripts/memory-bench
+          set +e
+          python run_ci.py --retrieval-only --update-baseline \
+            --repeat "${{ inputs.repeat || '3' }}" 2>&1 | tee resnap.log
+          rc=${PIPESTATUS[0]}
+          set -e
+
+          {
+            echo "## Recall baseline re-snap (required arm)"
+            echo
+            if [ "$rc" = "0" ]; then
+              echo "Captured over \`${{ inputs.repeat || '3' }}\` pass(es) on a complete,"
+              echo "\`hybrid\`-served run. Download the \`recall-gate-baseline\` artifact and"
+              echo "commit \`scripts/memory-bench/baseline_retrieval.json\`."
+              echo
+              echo '```json'
+              cat baseline_retrieval.json
+              echo '```'
+            else
+              reason="$(grep -m1 '^GATE_REASON:' resnap.log | sed 's/^GATE_REASON: *//' || true)"
+              echo "⚠️ Capture exited $rc — \`baseline_retrieval.json\` was **NOT** written."
+              echo
+              echo "**Reason:** \`${reason:-unspecified}\`"
+              echo
+              echo "\`capture-refused\` means the run was not a sound basis for a required"
+              echo "check's threshold — incomplete sample or degraded retrieval mode. Fix the"
+              echo "cause and re-dispatch; do not hand-edit the baseline."
+            fi
+            echo
+            echo '```'
+            tail -40 resnap.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit $rc
+
+      - name: Upload the re-snapped recall baseline
+        if: always() && steps.mode.outputs.capture == 'true' && steps.scope.outputs.relevant == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: recall-gate-baseline
+          path: |
+            scripts/memory-bench/baseline_retrieval.json
+            scripts/memory-bench/resnap.log
+          retention-days: 30
+
       - name: Run recall gate (no LLM)
         id: gate
-        if: steps.scope.outputs.relevant == 'true'
+        if: steps.scope.outputs.relevant == 'true' && steps.mode.outputs.capture != 'true'
         env:
           MESH_API_URL: ${{ secrets.MESH_API_URL }}
           MESH_AGENT_KEY: ${{ secrets.MESH_BENCH_KEY }}
@@ -404,12 +503,26 @@ jobs:
       # Advisory does not mean unwatched. An arm that cannot compare must page
       # somebody, or tightening its comparison rules just makes it silent.
       issues: write
+    # `baseline_arm: retrieval` is a capture for the OTHER arm — it must not drag
+    # the paid job in with it. Without this, re-snapping the free recall baseline
+    # would silently also spend an end-to-end capture.
     if: >-
       github.event_name == 'schedule' ||
       github.event_name == 'push' ||
-      (github.event_name == 'workflow_dispatch' && (inputs.full_eval || inputs.update_baseline))
+      (github.event_name == 'workflow_dispatch' &&
+        (inputs.full_eval ||
+         (inputs.update_baseline && inputs.baseline_arm != 'retrieval')))
 
     steps:
+      # Same one-source-of-truth reason as the recall arm: three steps below key
+      # off "is this dispatch an end-to-end capture", and `update_baseline` alone
+      # is no longer that question — it now also means the other arm.
+      - name: Capture or judge?
+        id: mode
+        run: |
+          echo "capture=${{ (inputs.update_baseline && inputs.baseline_arm != 'retrieval') && 'true' || 'false' }}" \
+            >> "$GITHUB_OUTPUT"
+
       - name: Checkout evc-mesh
         uses: actions/checkout@v4
 
@@ -450,7 +563,7 @@ jobs:
       # ---------------------------------------------------------------------
       - name: Re-snap the end-to-end baseline
         id: resnap
-        if: inputs.update_baseline
+        if: steps.mode.outputs.capture == 'true'
         env:
           MESH_API_URL: ${{ secrets.MESH_API_URL }}
           MESH_AGENT_KEY: ${{ secrets.MESH_BENCH_KEY }}
@@ -490,7 +603,7 @@ jobs:
           exit $rc
 
       - name: Upload the re-snapped baseline
-        if: always() && inputs.update_baseline
+        if: always() && steps.mode.outputs.capture == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: memory-bench-baseline
@@ -500,7 +613,7 @@ jobs:
           retention-days: 30
 
       - name: Run LongMemEval-S end-to-end
-        if: ${{ !inputs.update_baseline }}
+        if: steps.mode.outputs.capture != 'true'
         id: bench
         env:
           MESH_API_URL: ${{ secrets.MESH_API_URL }}
@@ -651,7 +764,7 @@ jobs:
           gh issue close "$num" --comment "The advisory arm produced a comparable verdict again: ${RUN_URL}"
 
       - name: Upload benchmark results
-        if: always() && !inputs.update_baseline
+        if: always() && steps.mode.outputs.capture != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: memory-bench-results

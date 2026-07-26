@@ -41,6 +41,7 @@ from run_ci import (  # noqa: E402
     INELIGIBLE_SPREAD,
     Baseline,
     build_baseline_payload,
+    capture_blockers,
     category_comparable,
     category_sample_sizes,
     classify,
@@ -1328,6 +1329,173 @@ class TestTwoBlindnessesStayApart(unittest.TestCase):
         )
         self.assertIn("—", row)
         self.assertNotIn("0.000", row)
+
+
+class TestCaptureBlockers(unittest.TestCase):
+    """A required check's baseline may not be pinned on a partial or degraded run.
+
+    #363 made an incomplete capture WARN. A warning printed into a capture log
+    is advice: the file is already on disk, the artifact still uploads, and the
+    number still gets committed. That is exactly how `baseline_retrieval.json`
+    came to pin `temporal-reasoning: 1.0` on 2 of 4 questions and stay that way
+    for six days (evc-mesh#362) — nobody re-read the log.
+
+    The refusal is asymmetric on purpose. See `capture_blockers`' docstring: the
+    advisory baseline blocks no merge and costs money per pass, so refusing there
+    trades a flawed baseline for none at all.
+    """
+
+    FULL = {"temporal-reasoning": (4, 4), "multi-session": (4, 4), "overall": (24, 24)}
+
+    def test_a_complete_hybrid_run_is_capturable(self):
+        self.assertEqual(capture_blockers(self.FULL, MODE_HYBRID, retrieval_only=True), [])
+
+    def test_the_live_defect_is_refused(self):
+        # The exact shape that produced the shipped baseline: 2 of 4 in
+        # temporal-reasoning, 22 of 24 overall, everything else clean.
+        sizes = dict(self.FULL, **{"temporal-reasoning": (2, 4), "overall": (22, 24)})
+        blockers = capture_blockers(sizes, MODE_HYBRID, retrieval_only=True)
+        self.assertTrue(blockers)
+        self.assertTrue(
+            any("temporal-reasoning measured 2/4" in b for b in blockers),
+            f"the blocker must name the category and its denominator: {blockers}",
+        )
+
+    def test_a_degraded_mode_is_refused_even_on_a_complete_run(self):
+        # Every question ran, so the sample is perfect — and the figures are still
+        # unusable: they pin a required check at the quality level of a dead
+        # embedder, and every healthy run afterwards is compared across modes.
+        blockers = capture_blockers(self.FULL, MODE_BM25_ONLY, retrieval_only=True)
+        self.assertTrue(any(MODE_BM25_ONLY in b for b in blockers))
+
+    def test_an_unknown_mode_is_refused(self):
+        # Not "probably hybrid". A baseline whose own mode is UNKNOWN makes every
+        # future comparison against it INCONCLUSIVE — it would arm the gate with a
+        # file that can never produce a verdict.
+        self.assertTrue(capture_blockers(self.FULL, MODE_UNKNOWN, retrieval_only=True))
+
+    def test_overall_is_checked_alongside_the_categories_not_instead(self):
+        # A run can be short overall while every category it did reach is complete
+        # (a whole category wiped out drops `overall` without shortening any
+        # surviving row). Checking only the categories would let that through.
+        sizes = {"multi-session": (4, 4), "overall": (20, 24)}
+        self.assertTrue(any("overall measured 20/24" in b
+                            for b in capture_blockers(sizes, MODE_HYBRID, retrieval_only=True)))
+
+    def test_the_advisory_arm_is_deliberately_not_gated(self):
+        sizes = dict(self.FULL, **{"temporal-reasoning": (2, 4)})
+        self.assertEqual(capture_blockers(sizes, MODE_BM25_ONLY, retrieval_only=False), [])
+
+    def test_a_category_nobody_attempted_is_not_a_blocker(self):
+        # attempted == 0 means the category is absent from this dataset, not that
+        # it was lost. Reporting it would make every capture unrefusable-by-noise.
+        sizes = dict(self.FULL, **{"single-session-user": (0, 0)})
+        self.assertEqual(capture_blockers(sizes, MODE_HYBRID, retrieval_only=True), [])
+
+
+class TestCaptureRefusalReachesTheFile(_ArmHarness):
+    """The guard must run BEFORE the write, through the real `main()`.
+
+    A pure-function test of `capture_blockers` stays green with the call site
+    deleted, or placed after `write_text`. What is being pinned here is that
+    `baseline_retrieval.json` does not exist on disk afterwards.
+    """
+
+    def _stub_with_errors(self, errored: set[tuple[str, int]], search_mode: str):
+        """Like `_stub_answers`, but the (category, index) pairs in `errored` fail.
+
+        An errored row carries no `correct` key — that is what makes
+        `category_sample_sizes` count it as attempted-but-not-ran, which is the
+        signal the capture guard reads.
+        """
+        seen: dict[str, int] = {}
+
+        def fake_run_single(entry, **kwargs):
+            cat = entry["question_type"]
+            n = seen.get(cat, 0) % self.QUESTIONS_PER_CATEGORY
+            seen[cat] = seen.get(cat, 0) + 1
+            row = {
+                "question_id": entry["question_id"],
+                "question_type": cat,
+                "search_mode": search_mode,
+            }
+            if (cat, n) in errored:
+                row["error"] = "remember failed: Bad Request: Validation failed (key)"
+            else:
+                row["correct"] = True
+            return row
+
+        patcher = mock.patch.object(run_ci, "run_single", side_effect=fake_run_single)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_an_incomplete_capture_writes_no_file_and_says_why(self):
+        self._stub_with_errors({("multi-session", 0)}, MODE_HYBRID)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            # --max-error-rate 0.2 reproduces the real hole: 2 of 24 is 8.3%, UNDER
+            # the 10% budget, so the run is never declared inconclusive and sails
+            # straight into the capture. Without this the test would pass on the
+            # harness-errors guard and prove nothing about the capture guard.
+            rc = self._run("--retrieval-only", "--update-baseline", "--max-error-rate", "0.2")
+        out = buf.getvalue()
+        self.assertEqual(rc, EXIT_INCONCLUSIVE)
+        self.assertFalse(
+            self.RETRIEVAL_BASELINE_FILE.exists(),
+            "the baseline must not be on disk after a refused capture",
+        )
+        self.assertIn("capture-refused", out)
+        self.assertNotIn("harness-errors", out)
+
+    def test_a_refused_capture_does_not_overwrite_the_baseline_it_would_replace(self):
+        # The failure that costs the most: an operator re-snaps, the run is short,
+        # and the previous good baseline is gone. Refusing has to leave it intact.
+        prior = {"search_mode": MODE_HYBRID, "n_runs": 3, "scores": {"overall": 0.9},
+                 "spread": {}, "sample_sizes": {"overall": [24, 24]}}
+        self._write_baseline(self.RETRIEVAL_BASELINE_FILE, prior)
+        self._stub_with_errors({("multi-session", 0)}, MODE_HYBRID)
+        with contextlib.redirect_stdout(io.StringIO()):
+            self._run("--retrieval-only", "--update-baseline", "--max-error-rate", "0.2")
+        self.assertEqual(json.loads(self.RETRIEVAL_BASELINE_FILE.read_text()), prior)
+
+    def test_a_complete_hybrid_capture_writes_the_file_with_its_denominators(self):
+        self._stub_with_errors(set(), MODE_HYBRID)
+        with contextlib.redirect_stdout(io.StringIO()):
+            rc = self._run("--retrieval-only", "--update-baseline")
+        self.assertEqual(rc, EXIT_OK)
+        payload = json.loads(self.RETRIEVAL_BASELINE_FILE.read_text())
+        self.assertEqual(payload["search_mode"], MODE_HYBRID)
+        # AC3 of the re-snap: the file must carry the denominators, or the
+        # baseline-side sample guard stays inert for another six days.
+        self.assertIn("sample_sizes", payload)
+        for cat in self.CATEGORIES:
+            self.assertEqual(payload["sample_sizes"][cat], [4, 4])
+
+    def test_the_escape_hatch_writes_but_only_when_asked(self):
+        self._stub_with_errors({("multi-session", 0)}, MODE_HYBRID)
+        with contextlib.redirect_stdout(io.StringIO()):
+            rc = self._run("--retrieval-only", "--update-baseline",
+                           "--allow-partial-capture", "--max-error-rate", "0.2")
+        self.assertEqual(rc, EXIT_OK)
+        payload = json.loads(self.RETRIEVAL_BASELINE_FILE.read_text())
+        # And it still records the truth about what it was measured on, so the
+        # denominator guard can refuse the comparison later.
+        self.assertEqual(payload["sample_sizes"]["multi-session"], [3, 4])
+
+    def test_the_escape_hatch_is_rejected_on_a_verdict_run(self):
+        with self.assertRaises(SystemExit):
+            with contextlib.redirect_stdout(io.StringIO()), \
+                    contextlib.redirect_stderr(io.StringIO()):
+                self._run("--retrieval-only", "--allow-partial-capture")
+
+    def test_the_advisory_capture_still_writes_on_a_short_sample(self):
+        # #363's behaviour, pinned so this change cannot silently extend to the
+        # arm it deliberately left alone.
+        self._stub_with_errors({("multi-session", 0)}, MODE_HYBRID)
+        with contextlib.redirect_stdout(io.StringIO()):
+            rc = self._run("--update-baseline", "--max-error-rate", "0.2")
+        self.assertEqual(rc, EXIT_OK)
+        self.assertTrue(self.BASELINE_FILE.exists())
 
 
 if __name__ == "__main__":
