@@ -38,6 +38,12 @@ pins one way that has actually occurred:
      transport teardown's own `BrokenResourceError` replaced it on the way out.
      Six days of logs named the plumbing; none named the key. A cause that is
      knowable and then discarded is how a one-line fix stays unfound.
+  7. FORGIVEN FOR EVER — the retry budget a question spent is recorded here, so a
+     failure that looks transient but exhausted every attempt can be told apart
+     from a blip that recovered. `--max-error-rate` forgives 10% of a run on the
+     premise that those questions get measured next run; a deterministic failure
+     breaks that premise and is forgiven permanently. (The classification and the
+     budget itself live in run_ci.py — see test_gate_modes.py.)
 """
 
 from __future__ import annotations
@@ -216,6 +222,45 @@ class TestRetryRidesOutARestart(_Harness):
         with mock.patch.object(mc.asyncio, "run", side_effect=[closed, ["hit"]]):
             self._call(mc.MeshMemoryClient(question_id="blip"))
         self.assertEqual(0, mc.MeshMemoryClient._exhausted_questions)
+
+
+class TestTheRetryBudgetSpentIsRecorded(_Harness):
+    """The gate classifies a transient-LOOKING failure by whether retrying ever
+    helped, so the client has to say how much of its allowance it actually spent.
+    Without this, four consecutive "Connection closed" deaths are indistinguishable
+    from one blip that recovered — and the permanent case is the one that hides.
+    """
+
+    def test_a_question_that_burned_every_attempt_says_so(self):
+        client = mc.MeshMemoryClient(question_id="down")
+        closed = ExceptionGroup("tg", [RuntimeError("Connection closed")])
+        with mock.patch.object(mc.asyncio, "run", side_effect=closed):
+            with self.assertRaises(BaseException):
+                self._call(client)
+        self.assertEqual(mc.CONNECT_RETRIES, client.attempts_allowed)
+        self.assertEqual(client.attempts_allowed, client.attempts_made)
+
+    def test_a_question_that_recovered_did_not_burn_them_all(self):
+        client = mc.MeshMemoryClient(question_id="blip")
+        closed = ExceptionGroup("tg", [RuntimeError("Connection closed")])
+        with mock.patch.object(mc.asyncio, "run", side_effect=[closed, ["hit"]]):
+            self._call(client)
+        self.assertLess(client.attempts_made, client.attempts_allowed)
+
+    def test_an_open_breaker_leaves_an_allowance_of_one(self):
+        """`attempts_made == attempts_allowed` must not read as "retrying did not
+        help" when the breaker had already withdrawn the retries. One attempt out
+        of one proves nothing, and the gate's classifier keys on exactly this."""
+        closed = ExceptionGroup("tg", [RuntimeError("Connection closed")])
+        with mock.patch.object(mc.asyncio, "run", side_effect=closed):
+            for _ in range(mc.BREAKER_TRIP_AFTER):
+                with self.assertRaises(BaseException):
+                    self._call(mc.MeshMemoryClient(question_id="down"))
+            after = mc.MeshMemoryClient(question_id="after")
+            with self.assertRaises(BaseException):
+                self._call(after)
+        self.assertEqual(1, after.attempts_allowed)
+        self.assertEqual(1, after.attempts_made)
 
 
 class _FakeSession:

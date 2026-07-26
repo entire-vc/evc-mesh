@@ -180,6 +180,38 @@ that guards against a wrongful no-op must not be skipped by that same no-op).
    widen the tolerance.** Widening it to cover n=2 would silence the alarm by
    making the gate unable to detect anything.
 
+5. **A deterministic failure parked under a budget built for transient ones.**
+   `--max-error-rate` forgives 10% of a run because the questions it forgives get
+   measured again next run. That premise fails the moment a question errors for a
+   reason that cannot change: `gpt4_4929293a` and `gpt4_7f6b06db` failed in **13
+   of 13 job executions across 6 days**, 2/24 = 8.3% sat under the 10% budget
+   every time, both arms reported a clean verdict over 22 questions, and the error
+   line — printed in 100% of runs — read as furniture. A per-run percentage cannot
+   express "the same 8%, for ever".
+
+   Each errored question is now classified `transient` or `persistent`, from a
+   single run and with no cross-run state:
+
+   - the message does not match the client's own transient predicate (the client
+     does not retry these by construction, so next run fails identically), **or**
+   - the message *does* look transient but the question spent its whole retry
+     allowance and every attempt died — a permanent failure wearing a transient
+     message, which is what `BrokenResourceError` was here. (Exhausting the
+     allowance only counts when there was one: with the circuit breaker open it is
+     1 attempt of 1, which proves nothing.)
+
+   One predicate serves both the retry policy and the budget — a second copy would
+   drift, and the two halves disagreeing about "transient" is how this hid.
+   `--max-persistent-errors` (default **0**) turns any persistent error into
+   INCONCLUSIVE with reason kind `persistent-errors`, which the workflow alerts on
+   separately because the fix is a different person's (fix the harness or the
+   dataset; no re-snap and no waiting clears it).
+
+   It **never downgrades a REGRESSION.** These questions failed on every run for
+   six days; if a persistent error could demote a measured drop to INCONCLUSIVE,
+   the gate would have stopped blocking bad memory PRs altogether — a bigger hole
+   than the one it closes. Ranking stays `REGRESSION > INCONCLUSIVE > OK`.
+
 ## Making the recall gate a required check
 
 Do it in this order. Skipping step 1 wedges every PR.

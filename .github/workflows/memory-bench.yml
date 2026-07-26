@@ -216,7 +216,7 @@ jobs:
               # a banner that overstates gets discounted — after which it also
               # understates, at the exact moment it is telling the truth.
               2) case "${reason%% *}" in
-                   category-unmeasured|baseline-sample-mismatch)
+                   category-unmeasured|baseline-sample-mismatch|persistent-errors)
                      echo "### ⚠️ PARTIAL — some categories were not compared on this PR"
                      echo
                      echo "> **This is not total blindness.** Every *comparable* category was measured"
@@ -236,6 +236,19 @@ jobs:
                  echo "**Reason:** \`$reason\`"
                  echo
                  case "${reason%% *}" in
+                   persistent-errors)
+                     echo "One or more questions failed with an error that is **not transient**:"
+                     echo "either the message is not an infrastructure blip, or the question spent"
+                     echo "its entire retry allowance and every attempt died the same way. Such a"
+                     echo "question will fail identically on the next run, so it is not merely"
+                     echo "excluded from this score — it is excluded from every score, for ever."
+                     echo
+                     echo "The percentage budget (\`--max-error-rate\`) cannot express that: it"
+                     echo "forgives up to 10% *per run*, which forgives the same 8% permanently."
+                     echo
+                     echo "**Fix (repo maintainer, not the PR author):** the error report in the log"
+                     echo "names the question ids and the failing stage. Fix the harness or the"
+                     echo "dataset — this one does not clear itself and no re-snap will hide it." ;;
                    baseline-sample-mismatch)
                      echo "A category was measured on a different number of questions than the baseline"
                      echo "was captured on. \`1.000\` over 2 questions and \`0.500\` over 4 are two"

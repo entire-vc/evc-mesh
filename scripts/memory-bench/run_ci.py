@@ -104,7 +104,25 @@ REASON_CATEGORY_UNMEASURED = "category-unmeasured"
 # a different cause with a different owner and a different fix (re-snap, not
 # stop-losing-questions).
 REASON_BASELINE_SAMPLE_MISMATCH = "baseline-sample-mismatch"
+# Also its own kind, and it OUTRANKS the two above when several apply: it is the
+# cause under them. A question lost every run is what shrinks a category below
+# `category_comparable`, and re-snapping a baseline while it is lost just records
+# the broken denominator as the new truth. Alerting on the symptom while the
+# cause renews itself every run is how this survived 6 days.
+REASON_PERSISTENT_ERRORS = "persistent-errors"
 REASON_PREFIX = "GATE_REASON:"
+
+# How an errored question is classified. `--max-error-rate` was calibrated for
+# TRANSIENT infrastructure failures — a mesh-api restart mid-run, a 502 — where
+# forgiving up to 10% of a run is right, because the next run measures those
+# questions again. It is the wrong instrument for a failure that recurs
+# identically for ever: a budget that forgives 10% per run forgives the SAME 8%
+# permanently, the questions under it are never measured again, and the report
+# line that says so appears in 100% of runs, which is how it comes to read as
+# furniture. (2 of 24 sat there for 6 days; both were `temporal-reasoning`, so
+# one seventh of the safety net quietly did not exist.)
+ERROR_TRANSIENT = "transient"
+ERROR_PERSISTENT = "persistent"
 
 ANSWER_SYSTEM = (
     "You are a helpful chat assistant. You have access to memories retrieved "
@@ -309,6 +327,16 @@ def run_single(
             "question_type": qtype,
             "error": f"{stage}: {detail}",
             "error_stage": stage,
+            # Classified HERE, where the retry budget this question actually
+            # spent is still known. `client` is bound below and this closure is
+            # never called before that; getattr keeps a stage that fails before
+            # the client exists from turning into an AttributeError instead of
+            # an error report.
+            "error_kind": classify_error(
+                detail,
+                getattr(client, "attempts_made", 0),
+                getattr(client, "attempts_allowed", 0),
+            ),
         }
 
     client = MeshMemoryClient(question_id=qid)
@@ -651,6 +679,84 @@ def report_errors(results: list[dict]) -> list[dict]:
     return [r for r in results if r.get("error")]
 
 
+def classify_error(detail: str, attempts_made: int, attempts_allowed: int) -> str:
+    """TRANSIENT or PERSISTENT, decided from ONE run — no cross-run state.
+
+    Two independent ways to earn PERSISTENT, and both are load-bearing:
+
+    * the message does not match the transient predicate at all. The client does
+      not retry these by construction, so the same input fails the same way next
+      run — "deterministic" here is not a guess, it is the retry policy's own
+      premise, read back;
+    * the message DOES look transient, but the question spent every attempt it
+      was allowed and each one failed. Four fresh mesh-mcp processes over ~50s
+      of backoff all dying is not a blip whatever the string says. This is the
+      arm that catches a permanent failure wearing a transient message — the one
+      a "same ids as last run" comparison needs a previous run to see, and that
+      this sees on the first.
+
+    Exhausting the allowance only counts when there WAS an allowance: once the
+    circuit breaker trips, `attempts_allowed` drops to 1 and using it up proves
+    nothing about whether a retry would have helped.
+
+    KNOWN LIMIT, stated rather than glossed: an outage lasting longer than the
+    client's ~50s retry window (a slow rolling deploy, not a systemd bounce) can
+    put a genuinely transient question through the exhaustion arm and label it
+    persistent. It is bounded on both sides and cannot manufacture a verdict:
+      * `--max-error-rate` is checked FIRST, so anything above 10% of the run
+        exits `harness-errors` before reaching here;
+      * the breaker withdraws retries after BREAKER_TRIP_AFTER questions, so at
+        most that many can reach this arm during one outage;
+      * with today's 4-question categories, a run that lost even ONE question is
+        already INCONCLUSIVE — `category_comparable(3, 0.25)` is False. What such
+        a run gets from this classifier is a different REASON KIND, not a
+        different verdict. (Pinned by
+        `test_a_single_lost_question_is_already_inconclusive_today`; if a future
+        dataset gives categories more questions, that test fails and this
+        paragraph stops being true.)
+    """
+    # Imported here, not at module scope: SCRIPT_DIR only joins sys.path inside
+    # main(), and every other mesh_client_stdio import in this file is local for
+    # the same reason.
+    from mesh_client_stdio import is_transient_text
+
+    if not is_transient_text(detail):
+        return ERROR_PERSISTENT
+    if attempts_allowed > 1 and attempts_made >= attempts_allowed:
+        return ERROR_PERSISTENT
+    return ERROR_TRANSIENT
+
+
+def persistent_errors(errors: list[dict]) -> list[dict]:
+    """The errored questions that will fail identically on the next run.
+
+    An error with no `error_kind` (a result file written by an older run_ci) is
+    NOT counted: this gate exists to name a specific, provable property, and
+    inferring it from absence would manufacture alerts out of old artifacts.
+    """
+    return [r for r in errors if r.get("error_kind") == ERROR_PERSISTENT]
+
+
+def persistent_verdict(rc: int, stuck: int, allowed: int) -> int:
+    """Fold "questions are permanently unmeasured" into an existing verdict.
+
+    A persistent error must never DOWNGRADE a regression. The whole repo ranks
+    `REGRESSION > INCONCLUSIVE > OK` for one reason: a run that measured a real
+    drop has to keep saying so. If a harness defect could demote that to
+    INCONCLUSIVE, then — since these two questions failed on every run for six
+    days — this gate would have stopped blocking bad memory PRs entirely, which
+    is a worse hole than the one it is closing.
+
+    Upward, though, it is decisive: a green verdict that quietly excluded the
+    same questions for ever is the exact false green this card was filed about.
+    """
+    if stuck <= allowed:
+        return rc
+    if rc == EXIT_REGRESSION:
+        return rc
+    return EXIT_INCONCLUSIVE
+
+
 def print_error_report(errors: list[dict], total: int) -> None:
     by_stage: dict[str, list[dict]] = {}
     for r in errors:
@@ -663,6 +769,25 @@ def print_error_report(errors: list[dict], total: int) -> None:
         more = f" (+{len(rows) - 5} more)" if len(rows) > 5 else ""
         print(f"  [{stage}] {len(rows)}x — {qids}{more}")
         print(f"    {sample}")
+
+    # Its own block, not a flag on a line inside the list above. The old report
+    # printed the same two ids in every single run, and nothing on the line
+    # distinguished them from a one-off 502 — which is precisely why six days of
+    # readers scrolled past them.
+    stuck = persistent_errors(errors)
+    if stuck:
+        print(
+            f"\n  ⚠ {len(stuck)} of those are PERSISTENT — not infrastructure "
+            "noise. They will fail identically on the next run:"
+        )
+        for r in stuck:
+            print(f"      {r['question_id']} — {r['error']}")
+        print(
+            "    They are excluded from the scores like any other error, which "
+            "means those questions are NOT BEING MEASURED AT ALL, run after run. "
+            "The error budget is calibrated for transient failures and will "
+            "never clear this: fix the harness or the dataset."
+        )
 
 
 def print_table(
@@ -887,9 +1012,16 @@ def cmd_run(args: argparse.Namespace) -> int:
         return EXIT_INCONCLUSIVE
 
     if errors:
+        stuck_note = persistent_errors(errors)
+        budget = (
+            f" ({len(errors) - len(stuck_note)} within the allowed error budget, "
+            f"{len(stuck_note)} PERSISTENT — see below)"
+            if stuck_note
+            else " (within the allowed error budget)"
+        )
         print(
             f"\nNote: {len(errors)} question(s) errored and were EXCLUDED from the "
-            "scores above (within the allowed error budget)."
+            f"scores above{budget}."
         )
 
     # ── Sample gate: a category is only judged on a sample it can be judged on ─
@@ -905,10 +1037,17 @@ def cmd_run(args: argparse.Namespace) -> int:
         for cat in baseline_sample_mismatches(scores, sizes, baseline_samples)
         if cat in unmeasured
     ]
+    # Folded in AFTER decide_verdict, deliberately: a question that fails
+    # identically every run falls outside the error budget's premise, but it must
+    # only ever raise OK to INCONCLUSIVE — never lower a REGRESSION. See
+    # persistent_verdict().
+    stuck = persistent_errors(errors)
+    persistent_blind = len(stuck) > args.max_persistent_errors
+    rc = persistent_verdict(rc, len(stuck), args.max_persistent_errors)
 
     # `rc` is returned verbatim below: the exit code comes from decide_verdict and
-    # nowhere else, so the reporting here cannot drift out of step with the
-    # precedence the tests pin.
+    # persistent_verdict and nowhere else, so the reporting here cannot drift out
+    # of step with the precedence the tests pin.
     if unmeasured:
         detail = ", ".join(
             unmeasured_detail(cat, sizes, baseline_samples) for cat in unmeasured
@@ -954,6 +1093,28 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     if regressions:
         print(f"\n✗ REGRESSION detected in: {', '.join(regressions)}")
+        if persistent_blind:
+            # Said out loud rather than swallowed: the verdict is correct and
+            # still blocks, but the reader deserves to know it was reached with
+            # questions missing that will be missing again tomorrow.
+            print(
+                f"({len(stuck)} question(s) also failed PERSISTENTLY and were "
+                "excluded — the regression verdict stands, and those questions "
+                "remain unmeasured.)"
+            )
+    elif persistent_blind:
+        qids = ", ".join(r["question_id"] for r in stuck)
+        print(
+            f"\n⚠ EVAL INCONCLUSIVE — {len(stuck)}/{len(results)} question(s) fail "
+            f"PERSISTENTLY: {qids}. These are not transient infrastructure errors; "
+            "they will fail identically on the next run, so those questions are "
+            "permanently unmeasured. The error budget deliberately does NOT absorb "
+            "them: a per-run percentage cannot express 'the same 8% for ever'."
+        )
+        print(
+            f"{REASON_PREFIX} {REASON_PERSISTENT_ERRORS} — "
+            f"{len(stuck)}/{len(results)} question(s) fail every run ({qids})"
+        )
     elif unmeasured:
         print(
             "\n⚠ EVAL INCONCLUSIVE — the recall safety net did not cover every "
@@ -1000,7 +1161,20 @@ def main() -> int:
         help=(
             "Fraction of questions allowed to error before the run is declared "
             "INCONCLUSIVE (exit 2) instead of scored (default: 0.10). Errored "
-            "questions are always excluded from the scores, never counted wrong."
+            "questions are always excluded from the scores, never counted wrong. "
+            "Governs TRANSIENT errors only — see --max-persistent-errors."
+        ),
+    )
+    parser.add_argument(
+        "--max-persistent-errors",
+        type=int,
+        default=0,
+        help=(
+            "How many questions may fail PERSISTENTLY (a non-transient error, or "
+            "a transient-looking one that exhausted every retry) before the run "
+            "is declared INCONCLUSIVE (exit 2). Default 0: a question that fails "
+            "identically every run is permanently unmeasured, and no per-run "
+            "percentage can express that. Never downgrades a REGRESSION."
         ),
     )
     args = parser.parse_args()
