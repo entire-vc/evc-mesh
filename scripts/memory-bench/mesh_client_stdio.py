@@ -84,12 +84,24 @@ _TRANSIENT_RE = re.compile(
 BREAKER_TRIP_AFTER = 2
 
 
+def is_transient_text(text: str) -> bool:
+    """The transient predicate over an already-rendered error string.
+
+    Public because the gate has to classify the messages it recorded in its
+    results, long after the exception object is gone. One predicate, two
+    callers: a second copy in `run_ci` would drift, and the retry policy and the
+    error budget disagreeing about what "transient" means is exactly how a
+    permanent failure gets filed under a budget built for blips.
+    """
+    return bool(_TRANSIENT_RE.search(text or ""))
+
+
 def _is_transient(exc: BaseException) -> bool:
     """True if `exc` (or anything nested in its ExceptionGroup) looks like the
     API being briefly unreachable rather than the harness being broken."""
     if isinstance(exc, BaseExceptionGroup):
         return any(_is_transient(sub) for sub in exc.exceptions)
-    return bool(_TRANSIENT_RE.search(f"{type(exc).__name__}: {exc}"))
+    return is_transient_text(f"{type(exc).__name__}: {exc}")
 
 
 def flatten_exc(exc: BaseException) -> str:
@@ -290,6 +302,13 @@ class MeshMemoryClient:
         # server does not report it (older Mesh) — never silently assumed healthy.
         self.search_mode: str = SEARCH_MODE_UNKNOWN
         self.degraded: bool | None = None
+        # How much of the retry allowance this question actually spent. The gate
+        # reads these to tell "the API blipped once" apart from "four fresh
+        # mesh-mcp processes over ~50s all died the same way" — the second is a
+        # permanent failure wearing a transient message, and the message alone
+        # cannot distinguish them.
+        self.attempts_made = 0
+        self.attempts_allowed = 0
 
     def ingest_and_search(
         self,
@@ -305,7 +324,9 @@ class MeshMemoryClient:
             if type(self)._exhausted_questions >= BREAKER_TRIP_AFTER
             else CONNECT_RETRIES
         )
+        self.attempts_allowed = attempts
         for attempt in range(1, attempts + 1):
+            self.attempts_made = attempt
             # Cleared per attempt: a rejection recorded by a previous attempt must
             # never be promoted over THIS attempt's own, different failure.
             self.tool_error = None
