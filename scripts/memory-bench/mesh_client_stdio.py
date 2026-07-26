@@ -134,6 +134,11 @@ BENCH_IDS_LOG = os.environ.get(
 MESH_KEY_RE = re.compile(r"^[a-z0-9][a-z0-9-]*[a-z0-9]$")
 _KEY_UNSAFE_RE = re.compile(r"[^a-z0-9-]+")
 _KEY_HYPHEN_RUN_RE = re.compile(r"-{2,}")
+# The shape `sanitize_key_component` gives a FOLDED id: `<slug>-<8 hex>`. An id
+# that already looks like one must not take the passthrough branch, or the two
+# branches would share an output space — see the docstring.
+_KEY_DIGEST_SIZE = 4
+_KEY_LOOKS_FOLDED_RE = re.compile(r"-[0-9a-f]{%d}$" % (_KEY_DIGEST_SIZE * 2))
 
 
 def sanitize_key_component(raw: str) -> str:
@@ -156,6 +161,24 @@ def sanitize_key_component(raw: str) -> str:
     and the mapping trivially injective for them), and any id that had to be
     folded earns a digest of its RAW form, which restores injectivity for the
     rest. Digest is blake2s, used as a short non-cryptographic discriminator.
+
+    Two branches, so they must not share an output space. They would:
+
+        sanitize_key_component("gpt4_4929293a")          -> "gpt4-4929293a-4581bcc5"
+        sanitize_key_component("gpt4-4929293a-4581bcc5") -> "gpt4-4929293a-4581bcc5"
+
+    — the second is already key-safe and would pass straight through onto the
+    first's key. Contrived for today's dataset, but a dataset refresh does not owe
+    us its naming scheme, and the failure is the silent one. So the passthrough
+    also REFUSES anything already shaped like a fold, which makes the two spaces
+    disjoint: folded ids always end `-<8 hex>`, passed-through ids never do.
+
+    What that buys, stated precisely rather than absolutely: two passed-through
+    ids differ because their raw ids differ, and two folded ids sharing a slug
+    differ by the digest of their raw form. The residual is a 32-bit digest
+    collision between two ids with the same slug — NOT excluded by construction,
+    which is why `test_gate_blindness.py` asserts distinctness over the real
+    dataset instead of trusting this note.
     """
     slug = _KEY_UNSAFE_RE.sub("-", raw.lower())
     slug = _KEY_HYPHEN_RUN_RE.sub("-", slug).strip("-")
@@ -164,9 +187,11 @@ def sanitize_key_component(raw: str) -> str:
     # happens to satisfy the pattern, which is exactly why it needs saying — it
     # would pass the validator and the test, and still be a key built out of
     # nothing.
-    if slug and slug == raw:
+    if slug and slug == raw and not _KEY_LOOKS_FOLDED_RE.search(slug):
         return slug
-    digest = hashlib.blake2s(raw.encode("utf-8"), digest_size=4).hexdigest()
+    digest = hashlib.blake2s(
+        raw.encode("utf-8"), digest_size=_KEY_DIGEST_SIZE
+    ).hexdigest()
     # `or "q"`: an id of nothing but separators folds to the empty string, and a
     # key starting with the digest's hyphen is invalid all over again.
     return f"{slug or 'q'}-{digest}"

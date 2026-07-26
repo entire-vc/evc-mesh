@@ -41,7 +41,33 @@ comparable, worse number — a fault the PR author caused and can fix.
 * **no baseline exists** — a pass against nothing is a *vacuous green*;
 * the run's `search_mode` differs from the baseline's (see below);
 * a **category** lost enough questions that its surviving sample is no longer
-  comparable to the baseline's (`category-unmeasured`, see blindness #4).
+  comparable to the baseline's (`category-unmeasured`, see blindness #4);
+* **no category was verdict-eligible** — the baseline's own run-to-run spread is
+  wider than its scores everywhere, so nothing could have failed (see
+  *[The baseline is a distribution](#the-baseline-is-a-distribution-not-a-sample)*).
+
+Those last two are both "this category got no verdict", and the gate keeps them
+apart on purpose. `category-unmeasured` is an **anomaly** — *this run* lost
+questions to a harness error, so a single occurrence is enough to make the run
+inconclusive. Spread-blindness is a **standing property of the baseline**: it is
+true every run until the baseline is re-snapped, so firing on it per category
+would pin the arm at INCONCLUSIVE for ever, which is the silent no-op rather
+than a fix for one. It therefore forces exit 2 only when it holds for *every*
+category and the run enforced literally nothing. The table shows the difference:
+`⚠ UNMEASURED` should provoke someone, `ⓘ no verdict` should not.
+
+**Every one of these rules applies to BOTH arms.** The mode gate and the
+missing-baseline check were once written `if retrieval_only and …`, so they
+guarded the required arm and skipped the advisory one — which then compared a
+`hybrid` run against the legacy mode-less `baseline.json` and published
+`✗ REGRESSION` for the difference on roughly half of all nightlies, while the
+recall gate on the *same commit* reported retrieval healthy at `0.909 vs 0.864
+PASS`. An invalid comparison does not become valid by being advisory; *advisory*
+says who the verdict blocks, not whether the verdict may be false. The
+counterpart is that the advisory arm now **alerts on its own blindness** too
+(one tracking issue, deduped on reason kind) — otherwise tightening its
+comparison rules would only have traded a visible wrong red for a silent no-op
+on an arm nobody is required to look at.
 
 Why exit 2 does not fail the check: the causes are all infrastructure the PR
 author cannot touch. A required check that goes red on a prod outage blocks
@@ -109,6 +135,101 @@ A cross-mode score drop can **never** return exit 1.
 ```bash
 python run_ci.py --retrieval-only --update-baseline   # records the current search_mode
 ```
+
+Both arms write this shape. They did not always: `--update-baseline` built the
+mode-scoped payload only inside `if retrieval_only:`, and the advisory arm's
+`else` wrote a bare flat `{category: score}` dict. So re-snapping `baseline.json`
+produced *another* mode-less file, and once the mode gate applied to that arm it
+could never have been satisfied — the arm would have sat at INCONCLUSIVE for
+ever, quietly, because it is not a required check. If you are ever tempted to
+"just tighten the comparison" on an arm, check that its **writer** can produce a
+baseline the tightened reader will accept.
+
+## The baseline is a distribution, not a sample
+
+The end-to-end arm answers **4 questions per category** with a chat model and
+grades them with an LLM judge. One flipped answer therefore moves a category by
+**0.25 — exactly the default tolerance.** This is not theoretical: across four
+consecutive nightlies of *identical code*,
+
+| category | 07-21 | 07-22 | 07-25 | 07-26 | spread |
+|---|---|---|---|---|---|
+| single-session-assistant | 1.000 | 1.000 | 0.250 | 1.000 | **0.750** |
+| multi-session | 0.500 | 0.000 | 0.000 | 0.000 | 0.500 |
+| overall | 0.591 | 0.500 | 0.364 | 0.409 | 0.227 |
+
+A baseline snapped from **one** run records a coin toss. The one this replaced
+(`fb957ed`, 2026-07-05, never re-snapped) happened to land on the **maximum ever
+observed in 6 of 7 categories**, so the arm was measuring every night against a
+lucky maximum — which is what actually made it red, independently of the mode
+bug. Fixing the mode gate alone would have made 07-25 and 07-26 *comparable* and
+still red.
+
+So `--update-baseline` takes `--repeat N`: it runs the dataset N times, records
+the **mean** as the baseline and the observed **max−min** per category as
+`spread`, and the verdict threshold becomes
+
+```
+baseline − max(--tolerance, spread)
+```
+
+```json
+{
+  "search_mode": "hybrid",
+  "captured_at": "2026-07-26T13:00:00Z",
+  "top_k": 10,
+  "n_runs": 3,
+  "scores": { "multi-session": 0.167, "overall": 0.470 },
+  "spread": { "multi-session": 0.500, "overall": 0.091 },
+  "sample_sizes": { "multi-session": [4, 4], "overall": [22, 24] }
+}
+```
+
+### A baseline has to state its own denominator
+
+`sample_sizes` records how many questions each figure was measured on. Without
+it the sample gate is one-sided: it catches a **run** whose sample shrank, and
+is structurally blind to a **baseline** captured on a smaller one.
+
+That is not a hypothetical. `baseline_retrieval.json`'s `temporal-reasoning: 1.0`
+rests on **2** of that category's 4 questions — the other two build an invalid
+memory key and have failed in every run since 07-21 (evc-mesh#362). Fix that bug
+and a fully-measured 4-question run is compared against a 2-question figure: one
+miss reads as −0.25, two as `✗ REGRESSION`, on a **required** check — a red for a
+change in sample, not in quality, blocking the very PR that restores the sample.
+
+So when both sides state their denominator and the two differ, the category is
+set aside as `⚠ UNMEASURED` rather than compared. Baselines written before this
+field existed record nothing, and an absent denominator reads as *unknown* — never
+as *matching*. `--update-baseline` also warns at capture time when it is snapping
+a figure on an incomplete sample, while that is still cheap to fix.
+
+Where that threshold falls to zero or below, **no score can fall under it**, so
+the category cannot produce a verdict. It is reported as `ⓘ no verdict` with the
+numbers that make it so — never as a `✓`. A category that cannot fail must not be
+counted among those that passed; that is manufactured coverage, the same disease
+as a required check that skips. If *no* category is verdict-eligible the run
+exits `2` (`GATE_REASON: no-eligible-category`): the comparison happened, but it
+enforced nothing.
+
+`--repeat` is rejected on a verdict run. Averaging passes to decide whether to go
+red would hide the very variance the verdict needs to account for — quantifying
+that variance is the baseline's job.
+
+### Capture the baseline where it will be judged
+
+Run the workflow with the **`update_baseline`** input (and `repeat`, default 3)
+rather than snapping on a laptop:
+
+```bash
+gh workflow run memory-bench.yml -f update_baseline=true -f repeat=3
+# then download the `memory-bench-baseline` artifact and commit baseline.json
+```
+
+Same runner, same `MESH_BENCH_KEY`, same chat/judge models as the nightly that
+will be compared against it. A baseline captured against a different key or a
+different model is not comparable to the run it judges — the same class of
+not-comparable this workflow already exits `2` over.
 
 ### Observability
 
@@ -248,6 +369,29 @@ python run_ci.py --retrieval-only            # free
 python run_ci.py                             # paid: also needs LME_JUDGE_API_KEY
 ```
 
+## What the end-to-end arm actually measures
+
+Both arms ran the same night on the same haystack (run `30191444472`, 2026-07-26):
+
+| category | retrieval hit@10 | end-to-end | lost at answer+judge |
+|---|---|---|---|
+| knowledge-update | 1.000 | 0.250 | −0.750 |
+| multi-session | **1.000** | **0.000** | **−1.000** |
+| single-session-assistant | 1.000 | 1.000 | 0.000 |
+| single-session-preference | 1.000 | 0.250 | −0.750 |
+| single-session-user | 0.500 | 0.500 | 0.000 |
+| temporal-reasoning | 1.000 | 0.500 | −0.500 |
+| **overall** | **0.909** | **0.409** | **−0.500** |
+
+For `multi-session`, memory put a gold session in the top-10 for **4/4**
+questions and `openai/gpt-4o-mini` answered **0/4**. The answer+judge stage
+discards about half of everything retrieval delivers, and the same memory stack
+scored **70.0%** on the full 500-question set with answers on `deepseek-chat` and
+judge `gpt-4o`. So a low number on this arm is, by default, a statement about the
+**cheap chat model**, not about Mesh memory — which is the other half of why it
+is advisory. Read the recall gate first: if retrieval is green and this arm is
+not, the loss is downstream of memory.
+
 The bench writes its haystack to the shared workspace under `bench-<qid>` /
 `lme-bench` tags and deletes it in a `finally` block. If you ever see `lme-bench`
 memories surviving a run, cleanup was skipped — they pollute real agents' recall.
@@ -259,6 +403,14 @@ the 24 LongMemEval ids (`gpt4_4929293a`, `gpt4_7f6b06db`) carry an `_`; before
 this was folded, both questions died on their first `remember` and the
 `temporal-reasoning` category was permanently scored on 2 of its 4 questions. An
 id that is already key-safe is passed through unchanged; one that had to be
-folded gets a digest of its raw form appended, so no two questions can ever share
-a key — `remember` UPSERTs on the key, and a collision would silently overwrite
-another question's haystack rather than erroring.
+folded gets a digest of its raw form appended. This matters because `remember`
+UPSERTs on the key: a collision does not error, it silently overwrites another
+question's haystack, and both are then scored against half their evidence.
+
+The two branches are kept in **disjoint output spaces** — folded ids always end
+`-<8 hex>`, and an id already shaped that way is refused the passthrough — so two
+passed-through ids differ because their raw ids differ, and two folded ids sharing
+a slug differ by the digest of their raw form. The residual, stated rather than
+glossed: a 32-bit digest collision between two ids with the same slug is *not*
+excluded by construction, which is why the test asserts distinctness across the
+real dataset rather than trusting the argument.

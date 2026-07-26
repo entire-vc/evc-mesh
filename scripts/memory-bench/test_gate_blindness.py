@@ -582,8 +582,28 @@ class TestEveryQuestionCanBeStored(unittest.TestCase):
             mc.sanitize_key_component("gpt4-4929293a"),
         )
 
+    def test_an_id_shaped_like_a_fold_does_not_collide_with_a_real_fold(self):
+        """The two branches must not share an output space.
+
+        A folded id (`<slug>-<8 hex>`) is already key-safe, so feeding it back in
+        would take the PASSTHROUGH branch and land on the exact key the fold
+        produces for the raw id it came from. `remember` UPSERTs, so the second
+        question would overwrite the first's haystack with no error and both
+        would then be scored against half their evidence.
+        """
+        folded = mc.sanitize_key_component("gpt4_4929293a")
+        self.assertRegex(folded, r"-[0-9a-f]{8}$")
+        self.assertNotEqual(folded, mc.sanitize_key_component(folded))
+
+    def test_the_fold_refusal_does_not_churn_the_ids_that_did_not_need_it(self):
+        """The refusal must be narrow: no real id ends in `-<8 hex>`, so all 22
+        stable keys stay byte-identical and nothing gets renamed for nothing."""
+        for raw in ("184da446", "abc-1234", "a-0123456"):
+            with self.subTest(raw=raw):
+                self.assertEqual(raw, mc.sanitize_key_component(raw))
+
     def test_a_degenerate_id_still_yields_a_valid_key(self):
-        for raw in ("___", "-", "", "A_B", "a--b", "_lead", "trail_"):
+        for raw in ("___", "-", "", "A_B", "a--b", "_lead", "trail_", "x-deadbeef"):
             with self.subTest(raw=raw):
                 self.assertRegex(
                     f"bench-{mc.sanitize_key_component(raw)}-s0", mc.MESH_KEY_RE
