@@ -26,6 +26,24 @@ on:
         type: boolean
         required: false
         default: false
+      update_baseline:
+        description: >-
+          Re-snap the END-TO-END baseline (baseline.json) instead of judging against
+          it. Uploads the new file as the `memory-bench-baseline` artifact to commit
+          by hand — capture it HERE, not on a laptop: a baseline snapped against a
+          different agent key or chat model is not comparable to the nightly that
+          will be judged against it.
+        type: boolean
+        required: false
+        default: false
+      repeat:
+        description: >-
+          Passes to average when re-snapping (default 3). One pass is a coin toss:
+          4 questions per category means one flipped answer moves it 0.25, and
+          single-session-assistant was observed at 1.000/0.250/1.000 on three
+          consecutive nightlies of identical code.
+        required: false
+        default: '3'
 
   # NOTE: deliberately NO `paths:` filter on pull_request. A required check born
   # in a path-filtered workflow never reports on PRs that miss the filter, and a
@@ -321,11 +339,17 @@ jobs:
   memory-bench:
     name: LongMemEval-S end-to-end (advisory)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # One pass is ~19 min, so a --repeat 3 baseline capture needs room.
+    timeout-minutes: ${{ (inputs.update_baseline && 120) || 30 }}
+    permissions:
+      contents: read
+      # Advisory does not mean unwatched. An arm that cannot compare must page
+      # somebody, or tightening its comparison rules just makes it silent.
+      issues: write
     if: >-
       github.event_name == 'schedule' ||
       github.event_name == 'push' ||
-      (github.event_name == 'workflow_dispatch' && inputs.full_eval)
+      (github.event_name == 'workflow_dispatch' && (inputs.full_eval || inputs.update_baseline))
 
     steps:
       - name: Checkout evc-mesh
@@ -359,7 +383,16 @@ jobs:
       - name: Install Python dependencies
         run: pip install openai mcp httpx
 
-      - name: Run LongMemEval-S end-to-end
+      # ---------------------------------------------------------------------
+      # Baseline capture. Runs HERE rather than on a maintainer's laptop so the
+      # baseline is produced by the same runner, the same MESH_BENCH_KEY and the
+      # same chat/judge models as the nightly that will be compared against it —
+      # a baseline captured in a different environment is the same class of
+      # not-comparable this workflow already exits 2 over.
+      # ---------------------------------------------------------------------
+      - name: Re-snap the end-to-end baseline
+        id: resnap
+        if: inputs.update_baseline
         env:
           MESH_API_URL: ${{ secrets.MESH_API_URL }}
           MESH_AGENT_KEY: ${{ secrets.MESH_BENCH_KEY }}
@@ -375,17 +408,92 @@ jobs:
         run: |
           cd scripts/memory-bench
           set +e
+          python run_ci.py --update-baseline --repeat "${{ inputs.repeat || '3' }}" 2>&1 | tee resnap.log
+          rc=${PIPESTATUS[0]}
+          set -e
+          {
+            echo "## LongMemEval-S baseline re-snap"
+            echo
+            if [ "$rc" = "0" ]; then
+              echo "Captured over \`${{ inputs.repeat || '3' }}\` pass(es). Download the"
+              echo "\`memory-bench-baseline\` artifact and commit \`scripts/memory-bench/baseline.json\`."
+              echo
+              echo '```json'
+              cat baseline.json
+              echo '```'
+            else
+              echo "⚠️ Capture exited $rc — the baseline was NOT written. See the log."
+            fi
+            echo
+            echo '```'
+            tail -30 resnap.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit $rc
+
+      - name: Upload the re-snapped baseline
+        if: always() && inputs.update_baseline
+        uses: actions/upload-artifact@v4
+        with:
+          name: memory-bench-baseline
+          path: |
+            scripts/memory-bench/baseline.json
+            scripts/memory-bench/resnap.log
+          retention-days: 30
+
+      - name: Run LongMemEval-S end-to-end
+        if: ${{ !inputs.update_baseline }}
+        id: bench
+        env:
+          MESH_API_URL: ${{ secrets.MESH_API_URL }}
+          MESH_AGENT_KEY: ${{ secrets.MESH_BENCH_KEY }}
+          LME_JUDGE_API_KEY: ${{ secrets.LME_JUDGE_API_KEY }}
+          LME_JUDGE_BASE_URL: ${{ vars.LME_JUDGE_BASE_URL || 'https://openrouter.ai/api/v1' }}
+          LME_JUDGE_MODEL: ${{ vars.LME_JUDGE_MODEL || 'openai/gpt-4o-mini' }}
+          LME_CHAT_API_KEY: ${{ secrets.LME_JUDGE_API_KEY }}
+          LME_CHAT_BASE_URL: ${{ vars.LME_JUDGE_BASE_URL || 'https://openrouter.ai/api/v1' }}
+          LME_CHAT_MODEL: ${{ vars.LME_JUDGE_MODEL || 'openai/gpt-4o-mini' }}
+          MESH_MCP_BIN: ${{ github.workspace }}/mesh-mcp-bin
+          RECALL_GRAPH_ENABLED: 'true'
+          LME_TOP_K: '10'
+        run: |
+          cd scripts/memory-bench
+          set +e
+          # 2>&1 for the same reason as the recall gate: the harness prints its
+          # tracebacks to stderr, and bench.log is the only artifact anyone reads.
           python run_ci.py --tolerance "${{ inputs.tolerance || '0.25' }}" 2>&1 | tee bench.log
           rc=${PIPESTATUS[0]}
           set -e
+
+          reason="$(grep -m1 '^GATE_REASON:' bench.log | sed 's/^GATE_REASON: *//' || true)"
+          [ -z "$reason" ] && reason="unspecified"
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          echo "reason=$reason" >> "$GITHUB_OUTPUT"
+          echo "reason_kind=${reason%% *}" >> "$GITHUB_OUTPUT"
+
           {
             echo "## LongMemEval-S (advisory)"
             echo
             case "$rc" in
-              0) echo "✅ PASS" ;;
-              1) echo "❌ REGRESSION — end-to-end memory quality dropped." ;;
-              2) echo "⚠️ INCONCLUSIVE — the eval could not run (judge/chat API down or out of credit)."
-                 echo "Nothing was measured; this is an infra failure, not a regression." ;;
+              0) echo "✅ PASS — measured, comparable, within tolerance of the baseline." ;;
+              1) echo "❌ REGRESSION — end-to-end memory quality dropped past the baseline's own spread." ;;
+              2) echo "### ⚠️ INCONCLUSIVE — this arm measured nothing"
+                 echo
+                 echo "> Advisory does not mean unwatched. Nothing was compared, so nothing was"
+                 echo "> checked — and because this arm never blocks a merge, a silent"
+                 echo "> INCONCLUSIVE is indistinguishable from a healthy pass. A tracking issue"
+                 echo "> has been opened/updated so it is not silent."
+                 echo
+                 echo "**Reason:** \`$reason\`"
+                 echo
+                 echo "* \`harness-errors\` — the chat/judge API is down or out of credit."
+                 echo "* \`mode-unknown\` / \`mode-mismatch\` — the baseline and this run were served"
+                 echo "  in different retrieval modes, or \`baseline.json\` predates mode-scoping."
+                 echo "  Re-snap it: run this workflow with **update_baseline**."
+                 echo "* \`no-baseline\` — there is nothing to compare against at all."
+                 echo "* \`no-eligible-category\` — the baseline's recorded run-to-run spread is"
+                 echo "  wider than its own scores everywhere, so no category could fail." ;;
+              *) echo "❌ Eval exited $rc." ;;
             esac
             echo
             echo '```'
@@ -401,13 +509,72 @@ jobs:
           # rc=1 would get ignored too. Advisory means advisory: an unmeasurable
           # run is a loud no-op, a measured regression still shouts.
           if [ "$rc" = "2" ]; then
-            echo "::warning title=LongMemEval-S inconclusive::The advisory eval could not run (infra/credit). Nothing was measured."
+            echo "::warning title=LongMemEval-S inconclusive::The advisory eval measured nothing ($reason)."
             exit 0
           fi
           exit $rc
 
+      # ---------------------------------------------------------------------
+      # The counterpart to tightening this arm's comparison rules. Before, an
+      # invalid comparison was published as `✗ REGRESSION` — wrong, but at least
+      # visible. Now it exits 2, which does not fail the job, so without this step
+      # the fix would trade a noisy red for a silent no-op on an arm nobody is
+      # required to look at. Same one-issue / dedup-on-reason-kind shape as the
+      # recall gate: an alert that fires per run is spam, and spam is ignored.
+      # ---------------------------------------------------------------------
+      - name: Alert — advisory arm measured nothing (INCONCLUSIVE)
+        if: steps.bench.outputs.rc == '2'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TITLE: 'LongMemEval-S advisory arm is INCONCLUSIVE (measuring nothing)'
+          REASON: ${{ steps.bench.outputs.reason }}
+          REASON_KIND: ${{ steps.bench.outputs.reason_kind }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          marker="<!-- advisory-arm-blind kind=${REASON_KIND} -->"
+          body=$(printf '%s\n\n%s\n\n%s\n\n%s\n' \
+            "$marker" \
+            "The end-to-end LongMemEval arm produced no verdict: it compared nothing, so it checked nothing. It does not block merges, so this would otherwise be indistinguishable from a nightly pass." \
+            "**Reason:** \`${REASON}\`" \
+            "Run: ${RUN_URL}")
+
+          num=$(gh issue list --state open --search "\"${TITLE}\" in:title" \
+                  --json number,title \
+                  --jq "[.[] | select(.title == \"${TITLE}\")] | .[0].number // empty")
+
+          if [ -z "$num" ]; then
+            gh issue create --title "$TITLE" --body "$body" --label memory,ci 2>/dev/null \
+              || gh issue create --title "$TITLE" --body "$body"
+            echo "Opened tracking issue."
+            exit 0
+          fi
+
+          last=$(gh issue view "$num" --json comments,body \
+                   --jq '(.comments | last | .body) // .body // ""')
+          if printf '%s' "$last" | grep -qF "$marker"; then
+            echo "Issue #$num already reports '${REASON_KIND}' — not commenting again."
+            exit 0
+          fi
+          gh issue comment "$num" --body "$body"
+          echo "Commented on tracking issue #$num."
+
+      - name: Resolve advisory blindness alert (arm is measuring again)
+        if: steps.bench.outputs.rc == '0'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TITLE: 'LongMemEval-S advisory arm is INCONCLUSIVE (measuring nothing)'
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          num=$(gh issue list --state open --search "\"${TITLE}\" in:title" \
+                  --json number,title \
+                  --jq "[.[] | select(.title == \"${TITLE}\")] | .[0].number // empty")
+          [ -z "$num" ] && { echo "No open advisory-blindness issue."; exit 0; }
+          gh issue close "$num" --comment "The advisory arm produced a comparable verdict again: ${RUN_URL}"
+
       - name: Upload benchmark results
-        if: always()
+        if: always() && !inputs.update_baseline
         uses: actions/upload-artifact@v4
         with:
           name: memory-bench-results

@@ -27,6 +27,27 @@ Exit codes (the load-bearing distinction):
      question as "wrong" turns any infra outage into a fake quality collapse, so
      errored questions are excluded from the scores and reported separately.
 
+Every rule here applies to BOTH arms. The mode gate and the missing-baseline
+check used to be conditioned on `retrieval_only`, so they guarded the required
+arm and skipped the advisory one — which then compared a `hybrid` run against a
+legacy mode-less baseline and printed `✗ REGRESSION` for it on most nights. An
+invalid comparison is invalid regardless of which arm makes it; "advisory" is a
+statement about who the verdict blocks, not a licence to publish a verdict that
+cannot be true.
+
+A baseline is a claim about a DISTRIBUTION, not a sample:
+  This eval answers 4 questions per category with a chat model and grades them
+  with an LLM judge, so one flipped question moves a category by 0.25 with no
+  code change at all — and `single-session-assistant` was observed at 1.000,
+  0.250 and 1.000 on three consecutive nightlies of identical code. A baseline
+  snapped from ONE run therefore records a coin toss, and the one it replaced
+  happened to land on the MAXIMUM ever observed in 6 of 7 categories.
+  So: `--update-baseline --repeat N` captures the MEAN of N passes and records
+  the observed per-category `spread` beside it; the verdict threshold is
+  `baseline - max(tolerance, spread)`. Where that threshold falls to zero the
+  category is reported as "no verdict possible" with its reason, never as a ✓ —
+  a category that cannot fail must not be counted as one that passed.
+
 Mode-scoped baseline (why exit 2 also covers a cross-mode comparison):
   Mesh recall is hybrid — a BM25 arm plus a dense/vector arm — and it FAILS OPEN
   when the embedder dies: it quietly serves BM25-only results with a 200. Recall
@@ -38,9 +59,10 @@ Mode-scoped baseline (why exit 2 also covers a cross-mode comparison):
   permanent merge-wedge (cf. evc-mesh#320). So: mismatched modes → exit 2, NEVER
   exit 1. Re-snap the baseline when the embedder's health state changes.
 
-Usage (Mac Mini baseline generation):
-  python run_ci.py --update-baseline                  # LLM baseline
-  python run_ci.py --retrieval-only --update-baseline # recall baseline
+Usage (baseline generation — capture it in the SAME environment that will be
+compared against it: same runner, same agent key, same chat/judge models):
+  python run_ci.py --update-baseline --repeat 3        # LLM baseline (paid × 3)
+  python run_ci.py --retrieval-only --update-baseline  # recall baseline (free)
 
 Usage (CI regression gate):
   python run_ci.py --retrieval-only [--tolerance 0.25]
@@ -70,7 +92,7 @@ import sys
 import time
 import traceback
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +119,7 @@ REASON_NO_BASELINE = "no-baseline"
 REASON_MODE_MISMATCH = "mode-mismatch"
 REASON_MODE_UNKNOWN = "mode-unknown"
 REASON_HARNESS_ERRORS = "harness-errors"
+REASON_NO_ELIGIBLE_CATEGORY = "no-eligible-category"
 REASON_PREFIX = "GATE_REASON:"
 
 ANSWER_SYSTEM = (
@@ -392,24 +415,83 @@ def resolve_run_search_mode(results: list[dict]) -> str:
     return MODE_HYBRID
 
 
-def load_baseline(path: Path) -> tuple[dict[str, float], str]:
-    """Read a baseline file, returning (scores, search_mode).
+class Baseline(NamedTuple):
+    """A parsed baseline file.
+
+    `n_runs` and `spread` are what make a baseline honest about its own
+    precision. A baseline captured from one pass records `n_runs=1` and an empty
+    spread, and the gate then has no idea how much of any delta is judge noise —
+    so it says so out loud instead of ruling on it.
+    """
+
+    scores: dict[str, float]
+    search_mode: str
+    n_runs: int
+    spread: dict[str, float]
+
+
+def load_baseline(path: Path) -> Baseline:
+    """Read a baseline file.
 
     Two shapes are accepted:
 
       new  {"search_mode": "...", "captured_at": "...", "top_k": 10,
-            "scores": {"<category>": 0.75, ...}}
+            "n_runs": 3, "scores": {...}, "spread": {...}}
       old  {"<category>": 0.75, ...}            — flat, pre-search_mode
 
     The old shape carries no mode, so it resolves to UNKNOWN, which makes every
     comparison against it INCONCLUSIVE rather than a coin-flip between a fake
     regression and a fake pass. Re-snap with --update-baseline to fix.
+
+    `n_runs` defaults to 1 and `spread` to empty: a new-shape baseline written
+    before those fields existed is a single sample and must be read as one, not
+    silently credited with a precision it never had.
     """
     raw = json.loads(path.read_text())
     if isinstance(raw.get("scores"), dict):
-        mode = raw.get("search_mode") or MODE_UNKNOWN
-        return {k: float(v) for k, v in raw["scores"].items()}, str(mode)
-    return {k: float(v) for k, v in raw.items()}, MODE_UNKNOWN
+        return Baseline(
+            scores={k: float(v) for k, v in raw["scores"].items()},
+            search_mode=str(raw.get("search_mode") or MODE_UNKNOWN),
+            n_runs=int(raw.get("n_runs") or 1),
+            spread={k: float(v) for k, v in (raw.get("spread") or {}).items()},
+        )
+    return Baseline(
+        scores={k: float(v) for k, v in raw.items()},
+        search_mode=MODE_UNKNOWN,
+        n_runs=1,
+        spread={},
+    )
+
+
+def build_baseline_payload(
+    per_pass_scores: list[dict[str, float]], run_mode: str, top_k: int
+) -> dict[str, Any]:
+    """Aggregate N passes' scores into one mode-scoped baseline payload.
+
+    BOTH arms write this shape. The advisory arm used to write a bare flat
+    `{category: score}` dict, which `load_baseline` can only read back as
+    MODE_UNKNOWN — so `--update-baseline` on that arm could never produce a
+    comparable baseline no matter how many times it was run, and the mode gate
+    it feeds would have had nothing to compare for ever.
+
+    The baseline is the MEAN over the passes, and the observed max−min per
+    category is recorded next to it as `spread`.
+    """
+    categories = sorted({c for s in per_pass_scores for c in s})
+    scores: dict[str, float] = {}
+    spread: dict[str, float] = {}
+    for cat in categories:
+        vals = [s[cat] for s in per_pass_scores if cat in s]
+        scores[cat] = sum(vals) / len(vals)
+        spread[cat] = max(vals) - min(vals)
+    return {
+        "search_mode": run_mode,
+        "captured_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "top_k": top_k,
+        "n_runs": len(per_pass_scores),
+        "scores": scores,
+        "spread": spread,
+    }
 
 
 def modes_comparable(baseline_mode: str, run_mode: str) -> bool:
@@ -417,6 +499,49 @@ def modes_comparable(baseline_mode: str, run_mode: str) -> bool:
     if baseline_mode == MODE_UNKNOWN or run_mode == MODE_UNKNOWN:
         return False
     return baseline_mode == run_mode
+
+
+def effective_tolerance(category: str, tolerance: float, baseline: Baseline) -> float:
+    """How far below baseline a score must fall before it means anything.
+
+    At least `--tolerance`, and at least the run-to-run spread the baseline
+    actually observed in this category. A category whose score swings 0.75
+    between two identical runs cannot support a 0.25 verdict — calling that
+    swing a regression reports the judge's nondeterminism as a code defect.
+    """
+    return max(tolerance, baseline.spread.get(category, 0.0))
+
+
+class CategoryVerdict(NamedTuple):
+    category: str
+    score: float
+    baseline: float
+    tolerance: float
+    eligible: bool
+    regressed: bool
+
+
+def classify(
+    scores: dict[str, float], baseline: Baseline, tolerance: float
+) -> list[CategoryVerdict]:
+    """Per-category verdicts, including which categories cannot have one.
+
+    A category regresses iff `score < baseline - effective_tolerance`. When that
+    threshold is at or below zero, no score can ever fall under it, so the
+    category is not verdict-eligible: it is reported as such rather than with a
+    ✓ it did not earn. Silently passing a check that cannot fail is how a gate
+    manufactures coverage it does not have.
+    """
+    verdicts = []
+    for cat, score in sorted(scores.items()):
+        base = baseline.scores.get(cat, 0.0)
+        tol = effective_tolerance(cat, tolerance, baseline)
+        threshold = base - tol
+        eligible = threshold > 0.0
+        verdicts.append(
+            CategoryVerdict(cat, score, base, tol, eligible, eligible and score < threshold)
+        )
+    return verdicts
 
 
 def compute_scores(results: list[dict]) -> dict[str, float]:
@@ -456,20 +581,39 @@ def print_error_report(errors: list[dict], total: int) -> None:
         print(f"    {sample}")
 
 
-def print_table(scores: dict[str, float], baseline: dict[str, float] | None, tolerance: float) -> None:
-    header = f"{'Category':<35} {'Score':>7}"
-    if baseline:
-        header += f" {'Baseline':>9} {'Delta':>8} {'Status':>8}"
+def print_table(
+    scores: dict[str, float], baseline: Baseline | None, tolerance: float
+) -> list[CategoryVerdict]:
+    """Print the score table and return the per-category verdicts."""
+    if baseline is None:
+        header = f"{'Category':<35} {'Score':>7}"
+        print(header)
+        print("-" * (len(header) + 4))
+        for cat, score in sorted(scores.items()):
+            print(f"{cat:<35} {score:>7.3f}")
+        return []
+
+    verdicts = classify(scores, baseline, tolerance)
+    header = (
+        f"{'Category':<35} {'Score':>7} {'Baseline':>9} {'Delta':>8} "
+        f"{'Thresh':>7} {'Status':>13}"
+    )
     print(header)
     print("-" * (len(header) + 4))
-    for cat, score in sorted(scores.items()):
-        line = f"{cat:<35} {score:>7.3f}"
-        if baseline:
-            base = baseline.get(cat, 0.0)
-            delta = score - base
-            status = "✓" if score >= base - tolerance else "✗ REGRESS"
-            line += f" {base:>9.3f} {delta:>+8.3f} {status:>8}"
-        print(line)
+    for v in verdicts:
+        if not v.eligible:
+            status = "ⓘ no verdict"
+        elif v.regressed:
+            status = "✗ REGRESS"
+        else:
+            status = "✓"
+        # `Thresh` is the score this category must stay at or above: the baseline
+        # less whichever is larger, --tolerance or the baseline's own spread.
+        print(
+            f"{v.category:<35} {v.score:>7.3f} {v.baseline:>9.3f} "
+            f"{v.score - v.baseline:>+8.3f} {v.baseline - v.tolerance:>7.3f} {status:>13}"
+        )
+    return verdicts
 
 
 def cmd_run(args: argparse.Namespace) -> int:
@@ -513,25 +657,38 @@ def cmd_run(args: argparse.Namespace) -> int:
         print(f"Chat: {chat_model}")
     print()
 
+    # `--repeat N` (baseline capture only) runs the dataset N times so the
+    # baseline can be a mean with a measured spread rather than one sample.
+    repeat = max(1, args.repeat)
     results: list[dict] = []
-    for i, entry in enumerate(dataset, start=1):
-        qid = entry["question_id"]
-        qtype = entry["question_type"]
-        print(f"[{i:02d}/{len(dataset)}] {qid} ({qtype})", end=" ", flush=True)
-        t0 = time.monotonic()
-        r = run_single(
-            entry,
-            chat_client=chat_client,
-            chat_model=chat_model,
-            judge_client=judge_client,
-            judge_model=judge_model,
-            top_k=top_k,
-            retrieval_only=retrieval_only,
-        )
-        elapsed = time.monotonic() - t0
-        status = "!" if r.get("error") else ("✓" if r.get("correct") else "✗")
-        print(f"{status} ({elapsed:.1f}s)")
-        results.append(r)
+    per_pass_scores: list[dict[str, float]] = []
+    for p in range(1, repeat + 1):
+        if repeat > 1:
+            print(f"── pass {p}/{repeat} " + "─" * 46)
+        pass_results: list[dict] = []
+        for i, entry in enumerate(dataset, start=1):
+            qid = entry["question_id"]
+            qtype = entry["question_type"]
+            print(f"[{i:02d}/{len(dataset)}] {qid} ({qtype})", end=" ", flush=True)
+            t0 = time.monotonic()
+            r = run_single(
+                entry,
+                chat_client=chat_client,
+                chat_model=chat_model,
+                judge_client=judge_client,
+                judge_model=judge_model,
+                top_k=top_k,
+                retrieval_only=retrieval_only,
+            )
+            elapsed = time.monotonic() - t0
+            status = "!" if r.get("error") else ("✓" if r.get("correct") else "✗")
+            print(f"{status} ({elapsed:.1f}s)")
+            pass_results.append(r)
+        results.extend(pass_results)
+        per_pass_scores.append(compute_scores(pass_results))
+        if repeat > 1:
+            overall = per_pass_scores[-1].get("overall")
+            print(f"   pass {p}/{repeat} overall: " + (f"{overall:.3f}" if overall is not None else "n/a"))
 
     errors = report_errors(results)
     ran = len(results) - len(errors)
@@ -540,18 +697,21 @@ def cmd_run(args: argparse.Namespace) -> int:
     scores = compute_scores(results)
     run_mode = resolve_run_search_mode(results)
 
-    baseline: dict[str, float] | None = None
+    baseline: Baseline | None = None
     baseline_mode = MODE_UNKNOWN
     if baseline_file.exists():
-        baseline, baseline_mode = load_baseline(baseline_file)
+        baseline = load_baseline(baseline_file)
+        baseline_mode = baseline.search_mode
 
     title = "Recall Gate Results" if retrieval_only else "LongMemEval-S Results"
     print()
     print("=" * 70)
     print(f"{title}  ({ran}/{len(results)} questions ran)")
     print(f"Search mode served: {run_mode}    Baseline mode: {baseline_mode}")
+    if baseline is not None:
+        print(f"Baseline captured from {baseline.n_runs} pass(es)")
     print("=" * 70)
-    print_table(scores, baseline, tolerance)
+    verdicts = print_table(scores, baseline, tolerance)
     print("=" * 70)
 
     if errors:
@@ -574,41 +734,54 @@ def cmd_run(args: argparse.Namespace) -> int:
         return EXIT_INCONCLUSIVE
 
     if args.update_baseline:
-        if retrieval_only:
-            # The recall baseline is MODE-SCOPED: it records the retrieval mode it
-            # was captured in, because hit@k in bm25-only mode is not comparable to
-            # hit@k in hybrid mode. A baseline without a mode can only ever produce
-            # INCONCLUSIVE.
-            payload = {
-                "search_mode": run_mode,
-                "captured_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                "top_k": top_k,
-                "scores": scores,
-            }
-            baseline_file.write_text(json.dumps(payload, indent=2) + "\n")
-            print(f"\nBaseline updated: {baseline_file}  (search_mode={run_mode})")
-            if run_mode != MODE_HYBRID:
-                print(
-                    f"⚠ Captured in mode '{run_mode}', not '{MODE_HYBRID}'. "
-                    "If the embedder is merely down, this baseline pins a DEGRADED "
-                    "quality level — re-snap it once the embedder is healthy."
-                )
+        # BOTH arms write the MODE-SCOPED shape. It records the retrieval mode it
+        # was captured in, because hit@k in bm25-only mode is not comparable to
+        # hit@k in hybrid mode; a baseline without a mode can only ever produce
+        # INCONCLUSIVE. The advisory arm used to write a flat mode-less dict here,
+        # which made its own mode gate permanently unsatisfiable.
+        payload = build_baseline_payload(per_pass_scores, run_mode, top_k)
+        baseline_file.write_text(json.dumps(payload, indent=2) + "\n")
+        print(
+            f"\nBaseline updated: {baseline_file}  "
+            f"(search_mode={run_mode}, n_runs={payload['n_runs']})"
+        )
+        if run_mode != MODE_HYBRID:
+            print(
+                f"⚠ Captured in mode '{run_mode}', not '{MODE_HYBRID}'. "
+                "If the embedder is merely down, this baseline pins a DEGRADED "
+                "quality level — re-snap it once the embedder is healthy."
+            )
+        if payload["n_runs"] < 2:
+            print(
+                "⚠ Captured from a SINGLE pass, so it carries no measured spread and "
+                "every threshold will fall back to --tolerance. On a judged eval with "
+                "4 questions per category, one flipped answer is 0.25 — re-snap with "
+                "`--repeat 3` to record a distribution instead of a coin toss."
+            )
         else:
-            baseline_file.write_text(json.dumps(scores, indent=2) + "\n")
-            print(f"\nBaseline updated: {baseline_file}")
+            widest = max(payload["spread"].items(), key=lambda kv: kv[1])
+            print(
+                f"  Widest observed spread across the {payload['n_runs']} passes: "
+                f"{widest[0]} {widest[1]:.3f}"
+            )
         return EXIT_OK
 
     if baseline is None:
         # A pass against no baseline compares against NOTHING. Calling that green
         # would make an unenforcing gate look healthy — exactly the blindness this
         # gate exists to remove. It is inconclusive, and it says so out loud.
+        #
+        # This applies to BOTH arms. It used to return EXIT_OK for the advisory
+        # arm, so if baseline.json ever went missing that arm reported a plain
+        # green pass against nothing at all — a vacuous green is not less of a lie
+        # for being advisory.
         print(
             f"\n⚠ EVAL INCONCLUSIVE — no {baseline_file.name} found: this run was "
             "compared against nothing and enforced nothing. Snap a baseline with "
             "--update-baseline (against a healthy embedder) before relying on this gate."
         )
         print(f"{REASON_PREFIX} {REASON_NO_BASELINE} — {baseline_file.name} does not exist")
-        return EXIT_INCONCLUSIVE if retrieval_only else EXIT_OK
+        return EXIT_INCONCLUSIVE
 
     # ── Mode gate: compare like with like, or do not compare at all ───────────
     # This check sits BEFORE any score comparison and can only ever produce
@@ -616,7 +789,13 @@ def cmd_run(args: argparse.Namespace) -> int:
     # embedder's health, not about this PR's code, and must never return
     # EXIT_REGRESSION: a required check that goes red on an infra outage the
     # author cannot fix blocks every PR in the repo and gets bypassed.
-    if retrieval_only and not modes_comparable(baseline_mode, run_mode):
+    #
+    # Applies to BOTH arms. It used to be `retrieval_only and ...`, which left the
+    # advisory arm comparing a `hybrid` run against the legacy mode-less
+    # baseline.json — an UNKNOWN baseline it had no basis to compare to — and
+    # printing `✗ REGRESSION` for the difference on most nights. "Cannot compare"
+    # is a property of the two operands, not of which arm holds them.
+    if not modes_comparable(baseline_mode, run_mode):
         if MODE_UNKNOWN in (baseline_mode, run_mode):
             reason = REASON_MODE_UNKNOWN
             detail = (
@@ -652,15 +831,53 @@ def cmd_run(args: argparse.Namespace) -> int:
             "scores above (within the allowed error budget)."
         )
 
-    regressions = [
-        cat for cat, score in scores.items()
-        if score < baseline.get(cat, 0.0) - tolerance
-    ]
+    if baseline.n_runs < 2:
+        print(
+            f"\n⚠ {baseline_file.name} was captured from a SINGLE pass (n_runs="
+            f"{baseline.n_runs}): it records no spread, so every threshold above fell "
+            "back to --tolerance and any verdict below is one sample against another. "
+            "Re-snap with `--update-baseline --repeat 3`."
+        )
+
+    ineligible = [v for v in verdicts if not v.eligible]
+    if ineligible:
+        print(
+            "\nⓘ No verdict possible in: "
+            + ", ".join(
+                f"{v.category} (baseline {v.baseline:.3f} ≤ threshold width {v.tolerance:.2f})"
+                for v in ineligible
+            )
+        )
+        print(
+            "  These categories cannot produce a regression at this sample size — the "
+            "run-to-run spread is as wide as the baseline itself, so no score could "
+            "fall below the threshold. They are NOT counted as passing: to get a real "
+            "verdict here the category needs more questions, or a chat model whose "
+            "answers do not flip between identical runs."
+        )
+
+    regressions = [v.category for v in verdicts if v.regressed]
     if regressions:
         print(f"\n✗ REGRESSION detected in: {', '.join(regressions)}")
         return EXIT_REGRESSION
 
-    print("\n✓ All categories within tolerance.")
+    eligible = [v for v in verdicts if v.eligible]
+    if not eligible:
+        # Nothing was verdict-eligible, so nothing was enforced. Reporting that as
+        # a pass is the vacuous green again, one level down: the comparison ran,
+        # but every category was too noisy to rule on.
+        print(
+            "\n⚠ EVAL INCONCLUSIVE — no category was verdict-eligible: the baseline's "
+            "own spread is wider than its scores everywhere, so this run enforced "
+            "nothing. Nothing here is evidence that memory is healthy."
+        )
+        print(
+            f"{REASON_PREFIX} {REASON_NO_ELIGIBLE_CATEGORY} — "
+            f"0/{len(verdicts)} categories could produce a verdict"
+        )
+        return EXIT_INCONCLUSIVE
+
+    print(f"\n✓ All categories within tolerance ({len(eligible)}/{len(verdicts)} verdict-eligible).")
     return EXIT_OK
 
 
@@ -670,7 +887,18 @@ def main() -> int:
     parser.add_argument(
         "--update-baseline",
         action="store_true",
-        help="Run benchmark and write results to baseline.json (Mac Mini only)",
+        help="Run benchmark and write results to the arm's baseline file (mode-scoped)",
+    )
+    parser.add_argument(
+        "--repeat",
+        type=int,
+        default=1,
+        help=(
+            "Baseline capture only: run the dataset N times and record the MEAN plus "
+            "the observed per-category spread (default: 1). A judged eval with 4 "
+            "questions per category moves 0.25 per flipped answer, so a 1-pass "
+            "baseline is a coin toss; use 3 for the paid end-to-end arm."
+        ),
     )
     parser.add_argument(
         "--tolerance",
@@ -694,6 +922,14 @@ def main() -> int:
         ),
     )
     args = parser.parse_args()
+
+    if args.repeat > 1 and not args.update_baseline:
+        # A gate run must reach ONE verdict from ONE measurement. Averaging passes
+        # to decide whether to go red would hide exactly the variance the verdict
+        # needs to account for — that is the baseline's job, not the verdict's.
+        parser.error("--repeat is only meaningful with --update-baseline")
+    if args.repeat < 1:
+        parser.error("--repeat must be >= 1")
 
     # Ensure script dir is on path for mesh_client_stdio import
     sys.path.insert(0, str(SCRIPT_DIR))
