@@ -277,8 +277,10 @@ def gold_session_indices(entry: dict) -> set[int]:
 def retrieved_session_indices(results: list[dict]) -> set[int]:
     """Recover the haystack index of each retrieved memory.
 
-    Stores are keyed `bench-<qid>-s<idx>` and tagged `session-<idx>` by
-    mesh_client_stdio; either is enough to identify the session.
+    Stores are keyed `bench-<qid>-<run nonce>-s<idx>` and tagged `session-<idx>`
+    by mesh_client_stdio; either is enough to identify the session. The key is
+    read from its TRAILING `-s<idx>`, so whatever the nonce contains cannot move
+    the index.
     """
     found: set[int] = set()
     for item in results:

@@ -564,10 +564,16 @@ class TestEveryQuestionCanBeStored(unittest.TestCase):
 
     def test_the_tag_keeps_the_raw_id(self):
         """Only the key is sanitized. The tag is the recall filter and the cleanup
-        handle; sanitizing it would orphan rows an earlier run left behind."""
-        client = mc.MeshMemoryClient(question_id="gpt4_4929293a")
-        self.assertEqual("bench-gpt4_4929293a", client.bench_tag)
-        self.assertEqual("bench-gpt4-4929293a-4581bcc5", client.key_prefix)
+        handle, and nothing validates it, so the `_` must survive there verbatim.
+
+        Asserted as a prefix, not an equality: the tag also carries the run nonce
+        that keeps concurrent runs from deleting each other's fixtures. Pinning
+        the whole string would make this test fail for the nonce — which is
+        present on purpose — instead of for the sanitizing it exists to forbid.
+        """
+        client = mc.MeshMemoryClient(question_id="gpt4_4929293a", nonce="n1")
+        self.assertEqual("bench-gpt4_4929293a-n1", client.bench_tag)
+        self.assertEqual("bench-gpt4-4929293a-4581bcc5-n1", client.key_prefix)
 
     def test_an_already_safe_id_is_passed_through_untouched(self):
         """22 of 24 ids need nothing done to them, and their keys must not churn:
@@ -715,6 +721,265 @@ class TestToolErrorSurvivesTheTransportTeardown(unittest.TestCase):
         client = mc.MeshMemoryClient(question_id="q1")
         boom = RuntimeError("Connection closed")
         self.assertIs(boom, client._surfaced(boom))
+
+
+# ---------------------------------------------------------------------------
+# Concurrent runs must not delete each other's fixtures.
+# ---------------------------------------------------------------------------
+
+
+class _UpsertStore:
+    """Server-side rows as Mesh actually keeps them: identified by memory `key`.
+
+    `remember` UPSERTs on the key, so two processes storing the same key are
+    handed back the SAME row id — which is exactly how one run's `forget(id)`
+    reached into another run's live haystack. `_FakeSession` above deliberately
+    mints a fresh id per store (it is testing orphan recovery, where reusing an
+    id would hide the leak); that fake therefore *cannot* reproduce this bug, so
+    this one models the upsert instead.
+    """
+
+    def __init__(self):
+        self.rows: dict[str, dict] = {}   # memory_id -> {key, tags}
+        self.by_key: dict[str, str] = {}  # key -> memory_id
+        self.seq = 0
+
+    def remember(self, key: str, tags: list[str]) -> str:
+        mid = self.by_key.get(key)
+        if mid is None:
+            self.seq += 1
+            mid = f"mem-{self.seq}"
+            self.by_key[key] = mid
+        self.rows[mid] = {"key": key, "tags": list(tags)}
+        return mid
+
+    def forget(self, mid: str) -> None:
+        row = self.rows.pop(mid, None)
+        if row is not None:
+            self.by_key.pop(row["key"], None)
+
+    def recall(self, tags_any: list[str]) -> list[dict]:
+        want = set(tags_any)
+        return [
+            {"id": mid, "key": row["key"], "tags": row["tags"], "score": 1.0}
+            for mid, row in sorted(self.rows.items())
+            if want & set(row["tags"])
+        ]
+
+
+class _SharedSession:
+    """An MCP session onto one `_UpsertStore` — i.e. onto the one workspace that
+    a single MESH_BENCH_KEY resolves to, whoever is connecting."""
+
+    def __init__(self, store: _UpsertStore):
+        self.store = store
+
+    async def call_tool(self, name, args):
+        if name == "remember":
+            return {
+                "memory": {
+                    "id": self.store.remember(args["key"], args["tags"]),
+                    "key": args["key"],
+                }
+            }
+        if name == "forget":
+            self.store.forget(args["memory_id"])
+            return {}
+        if name == "recall":
+            return {
+                "items": self.store.recall(args.get("tags_any") or []),
+                "search_mode": "hybrid",
+            }
+        raise AssertionError(f"unexpected tool {name}")
+
+
+class TestConcurrentRunsDoNotDeleteEachOther(unittest.TestCase):
+    """Replay of 2026-07-26: run A's cleanup deleting run B's live haystack.
+
+    Every fixture name used to be a pure function of the question id, so two
+    bench processes wrote the same keys and the same tags into the same
+    workspace. A miss manufactured that way is indistinguishable from a real
+    recall failure — and on the required arm it publishes REGRESSION for a PR
+    that changed nothing. Worse, it corrupts a *baseline*: the re-snap of
+    `baseline_retrieval.json` (run 30204433963) started at 13:37:57Z, inside the
+    window of two other live bench jobs.
+
+    Drives the real `_store` / `_sweep` / `_search`. Two clients built with the
+    process-level nonce cache cleared in between, so the nonce comes from the
+    real derivation path and not from a parameter the test chose.
+    """
+
+    QID = "gpt4_4929293a"
+    N = 3
+
+    def setUp(self):
+        self.addCleanup(setattr, mc, "_RUN_NONCE", None)
+
+    def _as_separate_process(self) -> mc.MeshMemoryClient:
+        mc._RUN_NONCE = None          # a different process derives a fresh nonce
+        return mc.MeshMemoryClient(question_id=self.QID)
+
+    @staticmethod
+    def _ingest(client, session):
+        async def go():
+            sem = asyncio.Semaphore(1)
+            async with sem:
+                for idx in range(TestConcurrentRunsDoNotDeleteEachOther.N):
+                    mid = await client._store(session, "haystack text", idx, "2026-01-01")
+                    if mid:
+                        client._pending.append(mid)
+        asyncio.run(go())
+
+    @staticmethod
+    def _sweep(client, session, *, deep: bool):
+        asyncio.run(client._sweep(session, asyncio.Semaphore(1), deep=deep))
+
+    @staticmethod
+    def _search(client, session):
+        return asyncio.run(client._search(session, "query", 10))
+
+    def test_two_runs_of_one_question_do_not_share_fixture_names(self):
+        a, b = self._as_separate_process(), self._as_separate_process()
+        self.assertNotEqual(
+            a.bench_tag, b.bench_tag,
+            "the TAG is what the deep sweep deletes by — sharing it means one "
+            "run's sweep collects every other run's live rows for this question",
+        )
+        self.assertNotEqual(
+            a.key_prefix, b.key_prefix,
+            "the KEY is what `remember` upserts on — sharing it means both runs "
+            "are handed the same row id, so a `forget` by id crosses runs",
+        )
+        # Still the same question, still purgeable by the umbrella tag.
+        self.assertIn(self.QID, a.bench_tag)
+        self.assertIn(self.QID, b.bench_tag)
+
+    def test_a_finishing_run_does_not_delete_a_live_runs_haystack(self):
+        """The shallow sweep — by memory id, in the `finally` of every question."""
+        store = _UpsertStore()
+        session = _SharedSession(store)
+        a, b = self._as_separate_process(), self._as_separate_process()
+
+        self._ingest(a, session)
+        self._ingest(b, session)
+        self.assertEqual(2 * self.N, len(store.rows), "the upsert collapsed two runs into one set of rows")
+
+        self._sweep(a, session, deep=False)     # A finishes this question
+
+        hits = self._search(b, session)
+        self.assertEqual(
+            self.N, len(hits),
+            "B's haystack was deleted by A's cleanup — B now scores a miss on "
+            "evidence that was in the store a second ago",
+        )
+        self.assertEqual([], a._pending, "A must still have cleaned up after itself")
+
+    def test_a_tag_sweep_does_not_reach_into_another_run(self):
+        """The deep sweep — by `tags_any`, run when a previous attempt died.
+
+        This is the worse half: it deletes rows it never stored, so it reaches
+        even the sessions whose ids the other run never handed out.
+        """
+        store = _UpsertStore()
+        session = _SharedSession(store)
+        a, b = self._as_separate_process(), self._as_separate_process()
+
+        self._ingest(a, session)
+        self._ingest(b, session)
+
+        a._dirty = True
+        self._sweep(a, session, deep=True)
+
+        self.assertEqual(
+            self.N, len(self._search(b, session)),
+            "A's tag sweep collected B's live fixtures",
+        )
+        self.assertEqual(
+            [], store.recall([a.bench_tag]), "A's own rows survived its deep sweep"
+        )
+
+    def test_the_umbrella_tag_still_reaches_every_run(self):
+        """Nonce-ing the per-question tag must not cost the cross-run cleanup
+        handle: `lme-bench` is what an out-of-band orphan purge greps for."""
+        store = _UpsertStore()
+        session = _SharedSession(store)
+        for _ in range(2):
+            self._ingest(self._as_separate_process(), session)
+        self.assertEqual(2 * self.N, len(store.recall([mc.SHARED_TAG])))
+
+
+class TestTheRunNonce(unittest.TestCase):
+    def setUp(self):
+        self.addCleanup(setattr, mc, "_RUN_NONCE", None)
+        mc._RUN_NONCE = None
+
+    def _derive(self, **env):
+        """`None` means "this variable is absent", which patch.dict cannot express."""
+        with mock.patch.dict(
+            mc.os.environ, {k: v for k, v in env.items() if v is not None}, clear=False
+        ):
+            for k, v in env.items():
+                if v is None:
+                    mc.os.environ.pop(k, None)
+            return mc._derive_run_nonce()
+
+    def test_it_is_cached_for_the_life_of_the_process(self):
+        """All 24 questions of one run must share a nonce, or a run's footprint
+        stops being greppable and purgeable as a unit."""
+        self.assertEqual(mc.run_nonce(), mc.run_nonce())
+
+    def test_two_jobs_of_the_same_workflow_run_still_differ(self):
+        """The decisive case, and the reason GITHUB_RUN_ID alone is not enough:
+        the two arms of ONE workflow run execute in parallel against one
+        MESH_BENCH_KEY. On 2026-07-26 run 30202732563 had `Memory recall gate`
+        (12:46:40Z→13:12:27Z) live alongside `LongMemEval-S end-to-end`
+        (12:46:42Z→13:50Z+) — 26 minutes of overlap inside a single run id.
+
+        The same fact is why a workflow-level `concurrency:` group cannot fix
+        this: both jobs belong to the same group.
+        """
+        env = {"GITHUB_RUN_ID": "30202732563", "BENCH_RUN_NONCE": ""}
+        self.assertNotEqual(self._derive(**env), self._derive(**env))
+
+    def test_it_does_not_degrade_to_a_constant_when_ci_vars_are_absent(self):
+        """Uniqueness must not depend on the environment setting anything: a
+        nonce that silently collapses when a var is missing fails OPEN into
+        precisely the bug it was added to prevent."""
+        env = {"GITHUB_RUN_ID": None, "GITHUB_JOB": None, "BENCH_RUN_NONCE": None}
+        self.assertNotEqual(self._derive(**env), self._derive(**env))
+
+    def test_a_hostile_nonce_still_yields_a_key_mesh_accepts(self):
+        """`BENCH_RUN_NONCE` is an operator-supplied escape hatch, so it is
+        untrusted input on the one field the server validates. A rejected key is
+        not a loud failure here — it is how a question goes quietly unmeasured.
+
+        Built WITHOUT the `nonce=` parameter on purpose: passing it would route
+        through `__init__`'s own sanitize call and the test would still pass with
+        the derivation trusting the environment verbatim.
+        """
+        for raw in ("Run_2026/07/26", "  ", "___", "-x-", "ПРОГОН", "a" * 80):
+            with self.subTest(raw=raw):
+                with mock.patch.dict(mc.os.environ, {"BENCH_RUN_NONCE": raw}):
+                    mc._RUN_NONCE = None
+                    client = mc.MeshMemoryClient(question_id="gpt4_4929293a")
+                self.assertRegex(f"{client.key_prefix}-s0", mc.MESH_KEY_RE)
+                self.assertRegex(f"bench-{client.run_nonce}", mc.MESH_KEY_RE)
+
+    def test_an_explicit_nonce_is_honoured_so_fixtures_can_be_re_reached(self):
+        """Pinning the nonce is how an operator re-attaches to a previous run's
+        rows to purge them by tag. Deliberately not collision-proof."""
+        self.assertEqual(self._derive(BENCH_RUN_NONCE="purge-1"), "purge-1")
+
+    def test_the_nonce_cannot_move_the_session_index(self):
+        """`run_ci.retrieved_session_indices` reads the key's TRAILING `-s<idx>`.
+        A nonce that could shift that mapping would silently mis-attribute hits
+        to the wrong haystack session — a scoring error, not a crash."""
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import run_ci  # noqa: PLC0415
+
+        client = mc.MeshMemoryClient(question_id="gpt4_4929293a", nonce="s9-s4")
+        key = f"{client.key_prefix}-s7"
+        self.assertEqual({7}, run_ci.retrieved_session_indices([{"key": key, "tags": []}]))
 
 
 if __name__ == "__main__":

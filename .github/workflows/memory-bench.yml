@@ -14,6 +14,14 @@ name: Memory Benchmark (LongMemEval-S)
 #                  landed (2026-07-04) with `chat_complete failed: 402` — a red
 #                  check nobody can act on is worse than no check.
 
+# Deliberately NO `concurrency:` group. Two bench jobs must not corrupt each
+# other's fixtures, but a group cannot deliver that: the two arms below belong to
+# the SAME run and therefore the same group, and they ran in parallel against one
+# MESH_BENCH_KEY for 26 minutes on 2026-07-26 (run 30202732563). Isolation is done
+# where it can actually hold — every fixture name carries a per-PROCESS nonce; see
+# `run_nonce` in scripts/memory-bench/mesh_client_stdio.py. Serialising here would
+# additionally queue every PR behind every other for the gate's ~22-minute run,
+# and would still leave a local run free to collide with a CI one.
 on:
   workflow_dispatch:
     inputs:

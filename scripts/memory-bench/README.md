@@ -248,9 +248,52 @@ python run_ci.py --retrieval-only            # free
 python run_ci.py                             # paid: also needs LME_JUDGE_API_KEY
 ```
 
-The bench writes its haystack to the shared workspace under `bench-<qid>` /
-`lme-bench` tags and deletes it in a `finally` block. If you ever see `lme-bench`
-memories surviving a run, cleanup was skipped — they pollute real agents' recall.
+The bench writes its haystack to the shared workspace under
+`bench-<qid>-<run nonce>` / `lme-bench` tags and deletes it in a `finally` block.
+If you ever see `lme-bench` memories surviving a run, cleanup was skipped — they
+pollute real agents' recall.
+
+### The run nonce
+
+Fixture names used to be a pure function of the question id, so every bench
+process — on every branch, in either arm — wrote the **same keys and the same
+tags into the same workspace** (one `MESH_BENCH_KEY` ⇒ one tenant). `remember`
+UPSERTs on the key, so concurrent runs also shared row ids, and cleanup deletes
+by id (`_sweep`) and by tag (`_sweep(deep=True)`). Run A finishing question X
+therefore deleted the haystack run B was about to search, and B scored a miss on
+evidence that had been there a second earlier — indistinguishable from a real
+recall failure, on a **required** check.
+
+Every fixture name now carries a nonce unique to the bench **process**
+(`run_nonce()`). Both names carry it, and both must: the key is what the upsert
+collides on, the tag is what the deep sweep deletes by. Nonce-ing only the key
+would fix the id path and leave the tag path reaching across runs.
+
+- **Per process, not per workflow run.** The two arms of a single run execute in
+  parallel against one key — on 2026-07-26 they overlapped for 26 minutes inside
+  run `30202732563`. A nonce derived from `GITHUB_RUN_ID` alone is identical
+  across them, and for the same reason a workflow-level `concurrency:` group
+  cannot fix this: both jobs are in the same group.
+- **Uniqueness comes from a `uuid4`, not from the environment.** The GitHub run
+  and job ids are folded in as *provenance* (they tell you which arm of which run
+  left a row behind); a nonce that degraded to a constant when a variable was
+  unset would fail open into the original bug.
+- **`BENCH_RUN_NONCE` pins it**, deliberately without collision-proofing: that is
+  how you re-attach to a previous run's rows to purge them by tag. The nonce is
+  logged once, at INFO, into `gate.log`.
+
+**Known cost.** Under the old naming a re-run *upserted* the previous run's rows,
+so an abandoned haystack was eventually reclaimed by the next run. Disjoint names
+mean an abandoned run's rows now stay abandoned, and concurrent runs hold N sets
+of fixtures live at once instead of one. Purge orphans out of band, keyed on the
+umbrella `lme-bench` tag **and on age** — never from a peer bench run, which is
+exactly the cross-run deletion this nonce exists to stop:
+
+```
+GET /api/v1/memories?scope=workspace&tags_any=lme-bench&min_importance=0
+```
+
+If that returns rows while no bench is running, cleanup was skipped.
 
 Tags carry the question id verbatim; memory **keys** carry a sanitized form
 (`sanitize_key_component`), because Mesh validates `key` against

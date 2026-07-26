@@ -9,10 +9,10 @@ Binary path: resolved from MESH_MCP_BIN env var first, then ~/bin/mesh-mcp.
 This allows CI to cross-compile and inject the binary path without modifying
 the script.
 
-Per-question isolation: every store is tagged `bench-<question_id>` (plus a
-shared `lme-bench` umbrella tag for cleanup) and every recall is filtered to
-the per-question tag via `tags_any`, so question N's memories never leak into
-question M.
+Per-question isolation: every store is tagged `bench-<question_id>-<run nonce>`
+(plus a shared `lme-bench` umbrella tag for cleanup) and every recall is
+filtered to that tag via `tags_any`, so question N's memories never leak into
+question M — and run A's never leak into run B's (see `run_nonce`).
 
 The TAG carries the question id verbatim; the memory `key` carries a sanitized
 form of it (see `sanitize_key_component`). Only the key is validated by the
@@ -28,6 +28,7 @@ import logging
 import os
 import re
 import time
+import uuid
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -172,6 +173,72 @@ def sanitize_key_component(raw: str) -> str:
     return f"{slug or 'q'}-{digest}"
 
 
+# Every fixture name used to be a pure function of the question id, so every
+# bench process — on every branch, in either arm — wrote the SAME keys and the
+# SAME tags into the SAME workspace (one MESH_BENCH_KEY ⇒ one tenant; tenancy
+# follows the credential, not a scope parameter). `remember` UPSERTs on the key,
+# so concurrent runs also shared row IDs, and cleanup is by id and by tag. Run A
+# finishing question X therefore deleted the haystack run B was about to search,
+# and B scored a miss on evidence that had been there a second earlier — a miss
+# indistinguishable from a real recall failure, on a REQUIRED check.
+#
+# Observed live on 2026-07-26: five bench jobs inside one hour, three of them
+# overlapping, with the required arm's baseline re-snap started inside that
+# window. A baseline is the floor a required check compares against for weeks.
+#
+# A workflow-level `concurrency:` group CANNOT close this. The two arms of a
+# SINGLE workflow run execute in parallel and share the group, and they collided
+# for 26 minutes that day (run 30202732563: `Memory recall gate` 12:46:40Z →
+# 13:12:27Z alongside `LongMemEval-S end-to-end (advisory)` 12:46:42Z → 13:50Z+).
+# Uniqueness therefore has to be per PROCESS, and it has to come from the process
+# itself rather than from an identifier CI is trusted to set: a nonce derived
+# only from GITHUB_RUN_ID is identical across those two jobs, and a nonce that
+# silently degrades to a constant when an env var is missing fails OPEN into
+# exactly the bug it was added to fix.
+_RUN_NONCE: str | None = None
+BENCH_RUN_NONCE_ENV = "BENCH_RUN_NONCE"
+
+
+def _derive_run_nonce() -> str:
+    explicit = (os.environ.get(BENCH_RUN_NONCE_ENV) or "").strip()
+    if explicit:
+        # Escape hatch, deliberately NOT collision-proof: pinning the nonce is how
+        # you re-attach to a previous run's fixtures to purge them by tag.
+        return sanitize_key_component(explicit)
+    # The GitHub ids are provenance only — they say which run and which arm left
+    # a row behind, which is the first question anyone asks of an orphan. They
+    # are NOT what makes the name unique; the uuid4 is, and it is generated here
+    # so uniqueness holds locally, in CI, and in an environment that sets neither
+    # variable.
+    label = "-".join(
+        part
+        for key in ("GITHUB_RUN_ID", "GITHUB_JOB")
+        if (part := (os.environ.get(key) or "").strip())
+    ) or "local"
+    return sanitize_key_component(f"{label}-{uuid.uuid4().hex[:12]}")
+
+
+def run_nonce() -> str:
+    """The token that makes THIS process's fixtures disjoint from every other's.
+
+    Computed once and cached: all 24 questions of one bench run share a nonce, so
+    a run's whole footprint is greppable and purgeable as a unit. Not computed at
+    import, so a test can reset `_RUN_NONCE` and a caller can set the env var
+    after import.
+    """
+    global _RUN_NONCE
+    if _RUN_NONCE is None:
+        _RUN_NONCE = _derive_run_nonce()
+        # Printed once, into gate.log — the only artifact anyone reads after the
+        # fact. Without it an orphaned row's tag names a run nobody can identify.
+        logger.info(
+            "bench run nonce: %s (fixtures are tagged bench-<qid>-%s, "
+            "purge this run with tags_any=[bench-<qid>-%s])",
+            _RUN_NONCE, _RUN_NONCE, _RUN_NONCE,
+        )
+    return _RUN_NONCE
+
+
 def _log_store_id(memory_id: str, qid: str, key: str) -> None:
     if not memory_id:
         return
@@ -257,9 +324,10 @@ def _to_record(item: dict[str, Any]) -> dict[str, Any]:
         "record": {"content": content},
         "score": _coerce_score(score),
         # Carried so the retrieval-only gate can map a hit back to its haystack
-        # session: stores are keyed `bench-<sanitized-qid>-s<idx>` and tagged
-        # `session-<idx>`. Only the `-s<idx>` suffix is parsed, so sanitizing the
-        # id part does not affect the mapping.
+        # session: stores are keyed `bench-<sanitized-qid>-<nonce>-s<idx>` and
+        # tagged `session-<idx>`. Only the trailing `-s<idx>` is parsed, so
+        # neither sanitizing the id nor inserting the run nonce ahead of it
+        # affects the mapping.
         "key": item.get("key") or "",
         "tags": item.get("tags") or [],
     }
@@ -279,16 +347,23 @@ class MeshMemoryClient:
         api_key: str | None = None,
         workspace_id: str | None = None,
         agent_id: str | None = None,
+        nonce: str | None = None,
         **_ignore: Any,
     ) -> None:
         self.qid = question_id
+        # Both names carry the run nonce, and BOTH have to: the key is what
+        # `remember` upserts on (so without it two runs share a row id and each
+        # one's `forget` reaches into the other), and the tag is what the deep
+        # sweep deletes by (so without it one run's tag sweep collects every
+        # other run's live rows for that question). Nonce-ing only the key would
+        # fix the id path and leave the tag path deleting across runs.
+        self.run_nonce = run_nonce() if nonce is None else sanitize_key_component(nonce)
         # The tag keeps the id VERBATIM: it is the recall filter and the cleanup
-        # handle, nothing validates it, and a sanitized tag would no longer match
-        # rows an earlier run left behind.
-        self.bench_tag = f"bench-{question_id}"
+        # handle, and nothing validates it.
+        self.bench_tag = f"bench-{question_id}-{self.run_nonce}"
         # The key is the one field the server validates — see
         # sanitize_key_component for why it cannot just reuse the tag.
-        self.key_prefix = f"bench-{sanitize_key_component(question_id)}"
+        self.key_prefix = f"bench-{sanitize_key_component(question_id)}-{self.run_nonce}"
         # Last tool-level rejection seen on THIS attempt, kept where the unwind
         # cannot overwrite it. See _tool_failure.
         self.tool_error: str | None = None
