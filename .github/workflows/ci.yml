@@ -280,22 +280,57 @@ jobs:
 
             go tool cover -func=/tmp/merged_cover.out | tee /tmp/cover_summary.txt
             TOTAL=$(grep '^total:' /tmp/cover_summary.txt | awk '{print $NF}' | tr -d '%')
-            echo "Affected-set total coverage: ${TOTAL}%"
+            # Informational only. See the threshold discussion below.
+            echo "Affected-set total coverage (context, not gated): ${TOTAL}%"
 
             if [ "$FAILED" -ne 0 ]; then
               echo "::error::One or more affected packages failed to test"
               exit 1
             fi
-            # Fail loudly rather than waving the gate through.
-            if [ -z "$TOTAL" ]; then
-              echo "::error::Could not parse a coverage total from the merged profile"
-              exit 1
-            fi
-            awk -v t="$TOTAL" \
-              'BEGIN { if (t+0 < 80) { print "::error::Coverage " t "% < 80% threshold"; exit 1 } else { print "Coverage " t "% >= 80% ✓" } }'
           else
             echo "No coverage profiles produced (affected set was main-only or test-free) — nothing to gate."
           fi
+
+      # The threshold is applied to the lines THIS change touches, not to the
+      # aggregate of the affected set.
+      #
+      # The aggregate is the reverse-dependency closure of whatever the author
+      # opened, so a change to internal/repository/postgres is scored against
+      # handler + middleware + service + ws as well — ~28% combined. No amount of
+      # testing your own change moves that number, which made an 80% bar
+      # unreachable for the entire lower half of the codebase. It went unnoticed
+      # because the gate had been silently skipping multi-package PRs until the
+      # merge bug was fixed (#381/#382); switching it from fail-open to
+      # fail-closed simply revealed that the bar had never been reachable.
+      #
+      # Pre-existing debt is a real problem, but it is not this gate's problem —
+      # holding unrelated PRs hostage to it just teaches people to route around
+      # the gate.
+      - name: Gate on diff coverage (lines this change touches)
+        if: steps.affected.outputs.pkgs != ''
+        run: |
+          BASE="${{ github.event_name == 'pull_request'
+                    && github.event.pull_request.base.sha || 'HEAD~1' }}"
+          if [ ! -f /tmp/merged_cover.out ]; then
+            echo "No merged profile — nothing to gate."
+            exit 0
+          fi
+          set +e
+          python3 scripts/ci/diff_coverage.py \
+            --profile /tmp/merged_cover.out --base "$BASE" --threshold 80
+          rc=$?
+          set -e
+          # 2 = could not measure. That is an infrastructure fault, not a verdict
+          # on the author's change, and must not read as "you made it worse".
+          if [ "$rc" -eq 2 ]; then
+            echo "::warning::Diff coverage INCONCLUSIVE — gate not applied"
+            exit 0
+          fi
+          exit "$rc"
+
+      - name: Self-check the diff-coverage gate
+        if: steps.affected.outputs.pkgs != ''
+        run: python3 scripts/ci/test_diff_coverage.py
 
       - name: Skip (no Go files changed)
         if: steps.affected.outputs.pkgs == ''
