@@ -631,6 +631,8 @@ class MeshMemoryClient:
         # lock: if a server ever ignored `until`, a silent GC over live fixtures
         # is the one failure mode here that destroys someone else's measurement.
         stale: list[str] = []
+        seen = 0
+        pages_walked = 0
         try:
             for page in range(ORPHAN_GC_MAX_PAGES):
                 async with sem:
@@ -647,7 +649,13 @@ class MeshMemoryClient:
                             "min_importance": 0,
                         },
                     )
-                items = _parse_tool_payload(found).get("items") or []
+                payload = _parse_tool_payload(found)
+                # `items` is the REST envelope; `results` is accepted for the
+                # same reason `_search` accepts it — one shape change here would
+                # otherwise turn the collector into a silent no-op.
+                items = payload.get("items") or payload.get("results") or []
+                pages_walked += 1
+                seen += len(items)
                 stale += [
                     mid
                     for item in items
@@ -663,20 +671,47 @@ class MeshMemoryClient:
             logger.warning("orphan sweep failed: %s", flatten_exc(exc))
             return
 
+        # ALWAYS report, including the empty case.
+        #
+        # The previous two versions logged only when they had something to
+        # delete, which made "the collector ran and found nothing" byte-identical
+        # in the log to "the collector never ran" — and that is exactly the
+        # ambiguity that made the second version undiagnosable. Two attempts at
+        # this collector both passed their unit tests and both left the same 11
+        # pre-fix orphans in production; the logs could not say which half was
+        # broken because silence meant both things at once.
+        #
+        # `seen` is the count BEFORE the age check, so a zero here says "the
+        # query returned nothing" while a non-zero with `deleted=0` says "rows
+        # came back but none were old enough, or every delete failed" — three
+        # different faults that used to look the same.
+        logger.warning(
+            "orphan sweep: pages=%d candidates_seen=%d stale=%d "
+            "(cutoff %s, %.1fh)",
+            pages_walked, seen, len(stale), until, ORPHAN_GC_MIN_AGE_HOURS,
+        )
         if not stale:
             return
         deleted = 0
+        failed = 0
         for mid in stale:
             async with sem:
                 try:
                     await session.call_tool("forget", {"memory_id": mid})
                     deleted += 1
-                except Exception:
-                    pass
+                except Exception as exc:
+                    # Was swallowed silently. A `forget` that is rejected —
+                    # authorization, a row already gone, a server error — is the
+                    # difference between "collected" and "still leaking", and it
+                    # has to reach the log or the next person debugs blind.
+                    failed += 1
+                    if failed == 1:
+                        logger.warning("orphan sweep: forget failed on %s: %s",
+                                       mid, flatten_exc(exc))
         logger.warning(
             "orphan sweep: deleted %d/%d bench fixtures older than %.1fh "
-            "(abandoned by an earlier run)",
-            deleted, len(stale), ORPHAN_GC_MIN_AGE_HOURS,
+            "(%d delete failures; abandoned by an earlier run)",
+            deleted, len(stale), ORPHAN_GC_MIN_AGE_HOURS, failed,
         )
 
     async def _sweep(self, session, sem, *, deep: bool) -> None:
