@@ -273,10 +273,12 @@ jobs:
             # threshold check was guarded on a parsed total, an unparseable
             # total silently SKIPPED the gate. That made this job vacuous for
             # every PR touching more than one package.
-            echo "mode: atomic" > /tmp/cover_all.out
-            grep -h -v '^mode:' /tmp/cover_*.out >> /tmp/cover_all.out || true
+            # Merge target lives outside the cover_*.out glob, otherwise grep
+            # reads its own output and warns on every run.
+            echo "mode: atomic" > /tmp/merged_cover.out
+            grep -h -v '^mode:' /tmp/cover_*.out >> /tmp/merged_cover.out
 
-            go tool cover -func=/tmp/cover_all.out | tee /tmp/cover_summary.txt
+            go tool cover -func=/tmp/merged_cover.out | tee /tmp/cover_summary.txt
             TOTAL=$(grep '^total:' /tmp/cover_summary.txt | awk '{print $NF}' | tr -d '%')
             echo "Affected-set total coverage: ${TOTAL}%"
 
