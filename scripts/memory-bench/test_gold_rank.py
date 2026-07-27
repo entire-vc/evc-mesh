@@ -123,12 +123,18 @@ class TestTheClientKeepsTheListBeforeTruncating(unittest.TestCase):
         async def call_tool(self, _name, _args):
             return {"items": self.items, "search_mode": "hybrid"}
 
-    def _search(self, *, n_mine: int, top_k: int, tag: str = "bench-q"):
+    def _search(self, *, n_mine: int, top_k: int, tag: str | None = None):
         import asyncio
 
         client = mesh_client_stdio.MeshMemoryClient(question_id="q")
+        # Take the tag FROM the client rather than restating its shape here. The
+        # tag is now run-scoped (`bench-<nonce>-q`, #eb1c5617) and a literal copy
+        # of yesterday's format silently matches nothing — which in this test
+        # reads as "rows_returned is broken" rather than "the fixture is stale".
+        tag = tag or client.bench_tag
         items = [
-            {"key": f"bench-q-s{i}", "tags": [f"session-{i}", tag], "content": "c"}
+            {"key": f"{client.key_prefix}-s{i}",
+             "tags": [f"session-{i}", tag], "content": "c"}
             for i in range(n_mine)
         ]
         # Rows belonging to another question's fixtures, which the tag filter

@@ -9,10 +9,16 @@ Binary path: resolved from MESH_MCP_BIN env var first, then ~/bin/mesh-mcp.
 This allows CI to cross-compile and inject the binary path without modifying
 the script.
 
-Per-question isolation: every store is tagged `bench-<question_id>` (plus a
-shared `lme-bench` umbrella tag for cleanup) and every recall is filtered to
-the per-question tag via `tags_any`, so question N's memories never leak into
+Per-question isolation: every store is tagged `bench-<run_nonce>-<question_id>`
+(plus a shared `lme-bench` umbrella tag for cleanup) and every recall is
+filtered to that tag via `tags_any`, so question N's memories never leak into
 question M.
+
+Per-RUN isolation: the same tag carries a per-run nonce, so two gate runs
+against one workspace cannot overwrite (`remember` UPSERTs on key) or delete
+(cleanup deletes by tag) each other's fixtures. See `_resolve_run_nonce`, and
+`_gc_orphans` for the collector that replaces the cross-run cleanup the nonce
+gives up.
 
 The TAG carries the question id verbatim; the memory `key` carries a sanitized
 form of it (see `sanitize_key_component`). Only the key is validated by the
@@ -44,6 +50,79 @@ STORE_CONCURRENCY = 1
 
 RECALL_CANDIDATE_LIMIT = 50
 RECALL_ORDER_BY = "relevance:desc"
+
+# ---------------------------------------------------------------------------
+# Per-RUN isolation.
+#
+# Fixture names used to be a pure function of the question id, while `remember`
+# UPSERTs on key and cleanup deletes by tag. Two gate runs against the same
+# workspace therefore wrote the same rows and deleted each other's haystacks
+# mid-measurement — and a question whose haystack was swept out scores a clean
+# miss, indistinguishable from a real recall failure. Concurrency is the normal
+# case, not the exotic one: two open PRs, or a push to main overlapping an open
+# PR, or the nightly landing on top of either. The recall gate is a REQUIRED
+# check, so that silent corruption sits directly on the merge path (#eb1c5617).
+#
+# The nonce goes at the FRONT of the key: `sanitize_key_component` keeps its two
+# branches disjoint by reserving a trailing `-<8 hex>` shape for folded ids, and
+# a nonce appended at the end would collide with exactly that.
+#
+# Overridable so every process of one run can share a nonce, and so CI can set
+# it to the run id — which makes an orphaned row traceable to the run that
+# abandoned it instead of being anonymous garbage.
+_NONCE_RE = re.compile(r"^[a-z0-9][a-z0-9-]*[a-z0-9]$")
+
+
+def _resolve_run_nonce() -> str:
+    """This run's fixture namespace: `BENCH_RUN_NONCE`, else a fresh random one.
+
+    A malformed override falls back to a generated nonce rather than to the old
+    shared namespace: the failure mode of a bad value must be "isolated under a
+    different name", never "silently sharing fixtures again", which is the very
+    bug this exists to close.
+    """
+    raw = (os.environ.get("BENCH_RUN_NONCE") or "").strip().lower()
+    if raw:
+        if _NONCE_RE.match(raw) and len(raw) <= 32:
+            return raw
+        logger.warning(
+            "ignoring invalid BENCH_RUN_NONCE=%r (must match %s, <=32 chars) — "
+            "generating one instead",
+            raw, _NONCE_RE.pattern,
+        )
+    return hashlib.blake2s(os.urandom(16), digest_size=4).hexdigest()
+
+
+RUN_NONCE = _resolve_run_nonce()
+
+
+def _parse_ts(raw: Any) -> float | None:
+    """RFC3339 timestamp -> epoch seconds, or None when it cannot be read.
+
+    None is a REFUSAL, not a zero: the orphan collector treats an unreadable
+    timestamp as "not provably old" and leaves the row alone. Falling back to 0
+    would make every unparseable row look infinitely old and delete it — turning
+    a server that changed its date format into a fixture wipe.
+    """
+    if not isinstance(raw, str) or not raw:
+        return None
+    from datetime import datetime, timezone
+    try:
+        txt = raw.replace("Z", "+00:00")
+        dt = datetime.fromisoformat(txt)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.timestamp()
+
+# Age floor for the orphan collector. A run is ~20 min; anything still present
+# after this is from a process that died without cleaning up.
+ORPHAN_GC_MIN_AGE_HOURS = float(os.environ.get("BENCH_ORPHAN_GC_MIN_AGE_HOURS", "2") or 2)
+
+# Set once the orphan sweep has run in this process — it is a whole-workspace
+# pass, not per-question work.
+_orphan_gc_done = False
 
 # mesh-mcp authenticates against the Mesh API at startup and EXITS if that call
 # fails. The client only ever sees the downstream symptom — the stdio pipe dying
@@ -304,16 +383,26 @@ class MeshMemoryClient:
         api_key: str | None = None,
         workspace_id: str | None = None,
         agent_id: str | None = None,
+        run_nonce: str | None = None,
         **_ignore: Any,
     ) -> None:
         self.qid = question_id
+        # This run's fixture namespace. Injectable so tests can hold two clients
+        # with different nonces side by side — which is the whole property under
+        # test — without mutating process state.
+        self.run_nonce = run_nonce or RUN_NONCE
         # The tag keeps the id VERBATIM: it is the recall filter and the cleanup
-        # handle, nothing validates it, and a sanitized tag would no longer match
-        # rows an earlier run left behind.
-        self.bench_tag = f"bench-{question_id}"
+        # handle, and nothing validates it. It is now ALSO scoped by the run
+        # nonce, so a concurrent run's sweep cannot match this run's rows.
+        #
+        # That deliberately gives up the old property that a later run's tag
+        # matched an earlier run's leftovers and swept them up for free. Orphans
+        # are now collected by `_gc_orphans` on age instead — see there for why
+        # that is the only safe rule once namespaces are per-run.
+        self.bench_tag = f"bench-{self.run_nonce}-{question_id}"
         # The key is the one field the server validates — see
         # sanitize_key_component for why it cannot just reuse the tag.
-        self.key_prefix = f"bench-{sanitize_key_component(question_id)}"
+        self.key_prefix = f"bench-{self.run_nonce}-{sanitize_key_component(question_id)}"
         # Last tool-level rejection seen on THIS attempt, kept where the unwind
         # cannot overwrite it. See _tool_failure.
         self.tool_error: str | None = None
@@ -460,6 +549,12 @@ class MeshMemoryClient:
                         if mid:
                             self._pending.append(mid)
 
+                # Reclaim fixtures abandoned by earlier, dead runs. Once per
+                # process, before this run stores anything of its own — a stale
+                # haystack left in the workspace inflates the corpus the gate
+                # measures against.
+                await self._gc_orphans(session, sem)
+
                 # A previous attempt died holding rows. Now that we have a live
                 # connection again, clear them before ingesting on top.
                 if self._dirty:
@@ -482,6 +577,74 @@ class MeshMemoryClient:
                     raise
                 finally:
                     await self._sweep(session, sem, deep=False)
+
+    async def _gc_orphans(self, session, sem) -> None:
+        """Delete bench fixtures left behind by runs that died before cleanup.
+
+        Runs once per process, over the shared `lme-bench` umbrella tag.
+
+        The selection rule is AGE, never ownership. "Delete everything that is
+        not carrying my nonce" is the obvious rule and it is exactly wrong: a
+        concurrently running peer's fixtures are also not mine, so that rule
+        reintroduces the cross-run deletion this whole change exists to remove —
+        with a wider blast radius, since it would no longer be limited to the
+        questions the two runs happen to share. Age cannot make that mistake: a
+        row older than a run's whole duration cannot belong to a live peer.
+
+        This is the counterweight to per-run namespacing. Before it, a later run
+        reusing the same tag swept up an earlier run's leftovers for free; now
+        nothing else ever names those rows. Without a collector the fix would
+        trade a rare collision for an unbounded leak of workspace-scoped rows —
+        which is worse, because the bench stores at scope=workspace and those
+        rows surface in real agents' recall results, AND a growing haystack
+        distorts the very hit@10 the gate measures.
+        """
+        global _orphan_gc_done
+        if _orphan_gc_done:
+            return
+        _orphan_gc_done = True  # set before the await: one attempt, not one per retry
+
+        cutoff = time.time() - ORPHAN_GC_MIN_AGE_HOURS * 3600
+        try:
+            async with sem:
+                found = await session.call_tool(
+                    "recall",
+                    {
+                        "query": SHARED_TAG,
+                        "tags_any": [SHARED_TAG],
+                        "scope": STORE_SCOPE,
+                        "limit": RECALL_CANDIDATE_LIMIT,
+                        "min_importance": 0,
+                    },
+                )
+            stale = [
+                mid
+                for item in _parse_tool_payload(found).get("items") or []
+                if (mid := item.get("id"))
+                and (ts := _parse_ts(item.get("created_at"))) is not None
+                and ts < cutoff
+            ]
+        except Exception as exc:
+            # Never fatal: the collector is hygiene, and failing it must not cost
+            # the run a measurement.
+            logger.warning("orphan sweep failed: %s", flatten_exc(exc))
+            return
+
+        if not stale:
+            return
+        deleted = 0
+        for mid in stale:
+            async with sem:
+                try:
+                    await session.call_tool("forget", {"memory_id": mid})
+                    deleted += 1
+                except Exception:
+                    pass
+        logger.warning(
+            "orphan sweep: deleted %d/%d bench fixtures older than %.1fh "
+            "(abandoned by an earlier run)",
+            deleted, len(stale), ORPHAN_GC_MIN_AGE_HOURS,
+        )
 
     async def _sweep(self, session, sem, *, deep: bool) -> None:
         """Delete this question's fixtures. Survives across attempts.
