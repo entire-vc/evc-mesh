@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -259,6 +260,74 @@ type MemoryListResult struct {
 	DecayApplied bool
 }
 
+// MemorySearchFilter carries the eligibility predicates that BOTH retrieval arms of
+// Recall must enforce as SQL, before either arm truncates to the candidate pool.
+//
+// These are not ranking hints — they define which rows are *allowed* to be returned
+// at all. A post-filter cannot substitute for them: by the time it runs, each arm has
+// already cut the corpus down to `limit × candidateMultiplier` rows chosen without
+// regard to scope or tags, so an eligible row that ranked below that cut is gone and
+// no amount of downstream filtering brings it back. Pushing them into both arms makes
+// the candidate pool the *eligible* set rather than "the first N of the workspace".
+//
+// Scope in particular is an isolation contract, not an optimisation: it was previously
+// passed to the vector arm only, which left it unenforced on every BM25-arm row and
+// entirely unenforced in bm25-only mode (the fail-open path taken whenever the embedder
+// is down). See task #2c087b2a.
+type MemorySearchFilter struct {
+	// Scope restricts rows to a single memory scope ("workspace", "project", "agent").
+	// Empty means no scope restriction.
+	Scope string
+	// Tags is an AND filter: a row must carry ALL of these tags (SQL `tags @> …`).
+	Tags []string
+	// TagsAny is an OR filter: a row must carry AT LEAST ONE of these (SQL `tags && …`).
+	TagsAny []string
+}
+
+// SearchFilter extracts the arm-level eligibility predicates from a RecallOpts.
+func (o RecallOpts) SearchFilter() MemorySearchFilter {
+	return MemorySearchFilter{
+		Scope:   string(o.Scope),
+		Tags:    o.Tags,
+		TagsAny: o.TagsAny,
+	}
+}
+
+// IsZero reports whether the filter constrains nothing.
+func (f MemorySearchFilter) IsZero() bool {
+	return f.Scope == "" && len(f.Tags) == 0 && len(f.TagsAny) == 0
+}
+
+// Allows reports whether a memory satisfies the filter. It is the in-memory twin of the
+// SQL predicates the repository builds from the same struct, used as defence-in-depth on
+// rows that reach the client through a path that did not pre-filter (pinned injection,
+// graph expansion). The two must agree; if you change one, change the other.
+func (f MemorySearchFilter) Allows(m Memory) bool {
+	if f.Scope != "" && string(m.Scope) != f.Scope {
+		return false
+	}
+	if len(f.Tags) > 0 {
+		for _, required := range f.Tags {
+			if !slices.Contains(m.Tags, required) {
+				return false
+			}
+		}
+	}
+	if len(f.TagsAny) > 0 {
+		found := false
+		for _, want := range f.TagsAny {
+			if slices.Contains(m.Tags, want) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
+}
+
 // MemoryHint is embedded in an event bus message payload to signal that the event
 // should be persisted as a memory entry. Agents include this when publishing events
 // that contain knowledge worth storing for future recall.
@@ -316,6 +385,19 @@ type RecallGraphOpts struct {
 	Hops            int
 	WeightThreshold float64
 	TaskID          *uuid.UUID
+
+	// Scope/Tags/TagsAny restrict BOTH the seed recall and the BFS-expanded neighbours.
+	// Graph expansion walks memory_edges, which carry no notion of scope, so without an
+	// explicit check here an out-of-scope memory adjacent to an in-scope seed would be
+	// returned — a filter bypass through the side door. See task #2c087b2a.
+	Scope   string
+	Tags    []string
+	TagsAny []string
+}
+
+// SearchFilter extracts the eligibility predicates applied to both seeds and neighbours.
+func (o RecallGraphOpts) SearchFilter() MemorySearchFilter {
+	return MemorySearchFilter{Scope: o.Scope, Tags: o.Tags, TagsAny: o.TagsAny}
 }
 
 // MemoryEdge is a directed, typed, weighted link in the memory Knowledge Graph.

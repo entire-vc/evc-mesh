@@ -61,7 +61,7 @@ func hitRepo() *mockMemoryRepo {
 		Score: 1.0,
 	}
 	return &mockMemoryRepo{
-		fullTextSearchRankedFn: func(_ context.Context, _ uuid.UUID, _ *uuid.UUID, _ string, _ int) ([]domain.ScoredMemory, error) {
+		fullTextSearchRankedFn: func(_ context.Context, _ uuid.UUID, _ *uuid.UUID, _ string, _ domain.MemorySearchFilter, _ int) ([]domain.ScoredMemory, error) {
 			return []domain.ScoredMemory{hit}, nil
 		},
 	}
@@ -104,7 +104,7 @@ func TestRecall_SearchMode_BM25OnlyWhenEmbedderFails(t *testing.T) {
 // not contribute, so the honest mode is bm25-only.
 func TestRecall_SearchMode_BM25OnlyWhenVectorSearchFails(t *testing.T) {
 	repo := hitRepo()
-	repo.vectorSearchFn = func(_ context.Context, _ []float32, _ uuid.UUID, _ *uuid.UUID, _ string, _ []string, _ int) ([]domain.ScoredMemory, error) {
+	repo.vectorSearchFn = func(_ context.Context, _ []float32, _ uuid.UUID, _ *uuid.UUID, _ domain.MemorySearchFilter, _ int) ([]domain.ScoredMemory, error) {
 		return nil, errors.New("pgvector: connection reset")
 	}
 	svc := NewMemoryService(repo, &mockMemoryEdgeRepo{}, &stubEmbedder{vec: []float32{0.1, 0.2}})

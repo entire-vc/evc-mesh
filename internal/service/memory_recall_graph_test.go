@@ -137,7 +137,7 @@ func TestRecallGraph_EmptyQuery(t *testing.T) {
 func TestRecallGraph_NoSeeds_ReturnsNil(t *testing.T) {
 	clearRecallGraphCache()
 	mem := &mockMemoryRepo{
-		fullTextSearchRankedFn: func(_ context.Context, _ uuid.UUID, _ *uuid.UUID, _ string, _ int) ([]domain.ScoredMemory, error) {
+		fullTextSearchRankedFn: func(_ context.Context, _ uuid.UUID, _ *uuid.UUID, _ string, _ domain.MemorySearchFilter, _ int) ([]domain.ScoredMemory, error) {
 			return nil, nil
 		},
 	}
@@ -159,7 +159,7 @@ func TestRecallGraph_SeedsOnly_NoEdges(t *testing.T) {
 		graphSeed(id2, 0.5),
 	}
 	mem := &mockMemoryRepo{
-		fullTextSearchRankedFn: func(_ context.Context, _ uuid.UUID, _ *uuid.UUID, _ string, _ int) ([]domain.ScoredMemory, error) {
+		fullTextSearchRankedFn: func(_ context.Context, _ uuid.UUID, _ *uuid.UUID, _ string, _ domain.MemorySearchFilter, _ int) ([]domain.ScoredMemory, error) {
 			return seeds, nil
 		},
 	}
@@ -190,7 +190,7 @@ func TestRecallGraph_Provenance(t *testing.T) {
 	neighborID := uuid.New()
 
 	mem := &mockMemoryRepo{
-		fullTextSearchRankedFn: func(_ context.Context, _ uuid.UUID, _ *uuid.UUID, _ string, _ int) ([]domain.ScoredMemory, error) {
+		fullTextSearchRankedFn: func(_ context.Context, _ uuid.UUID, _ *uuid.UUID, _ string, _ domain.MemorySearchFilter, _ int) ([]domain.ScoredMemory, error) {
 			return []domain.ScoredMemory{graphSeed(seedID, 0.6)}, nil
 		},
 		getByIDFn: func(_ context.Context, id uuid.UUID) (*domain.Memory, error) {
@@ -236,7 +236,7 @@ func TestRecallGraph_CompositeScore_1Hop(t *testing.T) {
 	const edgeWeight = float32(0.5)
 
 	mem := &mockMemoryRepo{
-		fullTextSearchRankedFn: func(_ context.Context, _ uuid.UUID, _ *uuid.UUID, _ string, _ int) ([]domain.ScoredMemory, error) {
+		fullTextSearchRankedFn: func(_ context.Context, _ uuid.UUID, _ *uuid.UUID, _ string, _ domain.MemorySearchFilter, _ int) ([]domain.ScoredMemory, error) {
 			return []domain.ScoredMemory{graphSeed(seedID, 0.6)}, nil
 		},
 		getByIDFn: func(_ context.Context, id uuid.UUID) (*domain.Memory, error) {
@@ -279,7 +279,7 @@ func TestRecallGraph_LowImportanceSuppressed(t *testing.T) {
 	neighborID := uuid.New()
 
 	mem := &mockMemoryRepo{
-		fullTextSearchRankedFn: func(_ context.Context, _ uuid.UUID, _ *uuid.UUID, _ string, _ int) ([]domain.ScoredMemory, error) {
+		fullTextSearchRankedFn: func(_ context.Context, _ uuid.UUID, _ *uuid.UUID, _ string, _ domain.MemorySearchFilter, _ int) ([]domain.ScoredMemory, error) {
 			return []domain.ScoredMemory{graphSeed(seedID, 0.6)}, nil
 		},
 		getByIDFn: func(_ context.Context, id uuid.UUID) (*domain.Memory, error) {
@@ -317,7 +317,7 @@ func TestRecallGraph_LowImportanceAllowed_ForSeeds(t *testing.T) {
 	seedID := uuid.New()
 
 	mem := &mockMemoryRepo{
-		fullTextSearchRankedFn: func(_ context.Context, _ uuid.UUID, _ *uuid.UUID, _ string, _ int) ([]domain.ScoredMemory, error) {
+		fullTextSearchRankedFn: func(_ context.Context, _ uuid.UUID, _ *uuid.UUID, _ string, _ domain.MemorySearchFilter, _ int) ([]domain.ScoredMemory, error) {
 			// importance 0.4 — at the boundary: survives Recall's defaultMinImportance filter.
 			return []domain.ScoredMemory{graphSeed(seedID, 0.4)}, nil
 		},
@@ -344,7 +344,7 @@ func TestRecallGraph_DeduplicateBestPath(t *testing.T) {
 	sharedNeighbor := uuid.New()
 
 	mem := &mockMemoryRepo{
-		fullTextSearchRankedFn: func(_ context.Context, _ uuid.UUID, _ *uuid.UUID, _ string, _ int) ([]domain.ScoredMemory, error) {
+		fullTextSearchRankedFn: func(_ context.Context, _ uuid.UUID, _ *uuid.UUID, _ string, _ domain.MemorySearchFilter, _ int) ([]domain.ScoredMemory, error) {
 			return []domain.ScoredMemory{
 				graphSeed(seed1, 0.6),
 				graphSeed(seed2, 0.5),
@@ -412,7 +412,7 @@ func TestRecallGraph_SortedByCompositeScore(t *testing.T) {
 	// Three seeds with varying raw scores; RRF re-ranks them but ordering by
 	// RRF score descending should be stable.
 	mem := &mockMemoryRepo{
-		fullTextSearchRankedFn: func(_ context.Context, _ uuid.UUID, _ *uuid.UUID, _ string, _ int) ([]domain.ScoredMemory, error) {
+		fullTextSearchRankedFn: func(_ context.Context, _ uuid.UUID, _ *uuid.UUID, _ string, _ domain.MemorySearchFilter, _ int) ([]domain.ScoredMemory, error) {
 			return []domain.ScoredMemory{
 				graphSeed(id1, 0.5),
 				graphSeed(id2, 0.5),
@@ -444,7 +444,7 @@ func TestRecallGraph_HopDistance(t *testing.T) {
 	hop1ID := uuid.New()
 
 	mem := &mockMemoryRepo{
-		fullTextSearchRankedFn: func(_ context.Context, _ uuid.UUID, _ *uuid.UUID, _ string, _ int) ([]domain.ScoredMemory, error) {
+		fullTextSearchRankedFn: func(_ context.Context, _ uuid.UUID, _ *uuid.UUID, _ string, _ domain.MemorySearchFilter, _ int) ([]domain.ScoredMemory, error) {
 			return []domain.ScoredMemory{graphSeed(seedID, 0.6)}, nil
 		},
 		getByIDFn: func(_ context.Context, id uuid.UUID) (*domain.Memory, error) {
@@ -486,7 +486,7 @@ func TestRecallGraph_HopsDefault(t *testing.T) {
 	seedID := uuid.New()
 
 	mem := &mockMemoryRepo{
-		fullTextSearchRankedFn: func(_ context.Context, _ uuid.UUID, _ *uuid.UUID, _ string, _ int) ([]domain.ScoredMemory, error) {
+		fullTextSearchRankedFn: func(_ context.Context, _ uuid.UUID, _ *uuid.UUID, _ string, _ domain.MemorySearchFilter, _ int) ([]domain.ScoredMemory, error) {
 			return []domain.ScoredMemory{graphSeed(seedID, 0.7)}, nil
 		},
 	}
@@ -527,7 +527,7 @@ func TestRecallGraph_CacheHit(t *testing.T) {
 	searchCalls := 0
 
 	mem := &mockMemoryRepo{
-		fullTextSearchRankedFn: func(_ context.Context, _ uuid.UUID, _ *uuid.UUID, _ string, _ int) ([]domain.ScoredMemory, error) {
+		fullTextSearchRankedFn: func(_ context.Context, _ uuid.UUID, _ *uuid.UUID, _ string, _ domain.MemorySearchFilter, _ int) ([]domain.ScoredMemory, error) {
 			searchCalls++
 			return []domain.ScoredMemory{graphSeed(uuid.New(), 0.6)}, nil
 		},
@@ -561,7 +561,7 @@ func TestRecallGraph_GetNeighborsError(t *testing.T) {
 	sentinel := errors.New("db: connection lost")
 
 	mem := &mockMemoryRepo{
-		fullTextSearchRankedFn: func(_ context.Context, _ uuid.UUID, _ *uuid.UUID, _ string, _ int) ([]domain.ScoredMemory, error) {
+		fullTextSearchRankedFn: func(_ context.Context, _ uuid.UUID, _ *uuid.UUID, _ string, _ domain.MemorySearchFilter, _ int) ([]domain.ScoredMemory, error) {
 			return []domain.ScoredMemory{graphSeed(seedID, 0.6)}, nil
 		},
 	}
@@ -587,7 +587,7 @@ func TestRecallGraph_WeightThreshold_Passed(t *testing.T) {
 	const wantThreshold = 0.65
 
 	mem := &mockMemoryRepo{
-		fullTextSearchRankedFn: func(_ context.Context, _ uuid.UUID, _ *uuid.UUID, _ string, _ int) ([]domain.ScoredMemory, error) {
+		fullTextSearchRankedFn: func(_ context.Context, _ uuid.UUID, _ *uuid.UUID, _ string, _ domain.MemorySearchFilter, _ int) ([]domain.ScoredMemory, error) {
 			return []domain.ScoredMemory{graphSeed(seedID, 0.7)}, nil
 		},
 	}
@@ -628,7 +628,7 @@ func TestRecallGraph_EdgeLookupIsWorkspaceScoped(t *testing.T) {
 	seedID := uuid.New()
 
 	mem := &mockMemoryRepo{
-		fullTextSearchRankedFn: func(_ context.Context, _ uuid.UUID, _ *uuid.UUID, _ string, _ int) ([]domain.ScoredMemory, error) {
+		fullTextSearchRankedFn: func(_ context.Context, _ uuid.UUID, _ *uuid.UUID, _ string, _ domain.MemorySearchFilter, _ int) ([]domain.ScoredMemory, error) {
 			return []domain.ScoredMemory{graphSeed(seedID, 0.6)}, nil
 		},
 	}
@@ -658,7 +658,7 @@ func TestRecallGraph_ForeignNeighborDropped(t *testing.T) {
 	foreignWS := uuid.New()
 
 	mem := &mockMemoryRepo{
-		fullTextSearchRankedFn: func(_ context.Context, _ uuid.UUID, _ *uuid.UUID, _ string, _ int) ([]domain.ScoredMemory, error) {
+		fullTextSearchRankedFn: func(_ context.Context, _ uuid.UUID, _ *uuid.UUID, _ string, _ domain.MemorySearchFilter, _ int) ([]domain.ScoredMemory, error) {
 			return []domain.ScoredMemory{graphSeed(seedID, 0.6)}, nil
 		},
 		getByIDFn: func(_ context.Context, id uuid.UUID) (*domain.Memory, error) {

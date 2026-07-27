@@ -721,6 +721,13 @@ func (s *memoryService) Recall(ctx context.Context, opts domain.RecallOpts) ([]d
 	// standard RRF constant used in reciprocalRankFusion.
 	const bm25FTSTimeout = 3 * time.Second
 
+	// Eligibility predicates (scope, tags, tags_any) go INTO both arms, not after them.
+	// Each arm truncates to poolSize; a row this filter would keep but which ranked below
+	// an arm's cut is unrecoverable downstream, so post-filtering both narrows the result
+	// AND leaves the pool sized by ineligible rows. Pre-filtering makes poolSize a budget
+	// over the eligible set instead. See task #2c087b2a.
+	searchFilter := opts.SearchFilter()
+
 	var (
 		kwResults  []domain.ScoredMemory
 		vecResults []domain.ScoredMemory
@@ -740,7 +747,7 @@ func (s *memoryService) Recall(ctx context.Context, opts domain.RecallOpts) ([]d
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		kwResults, kwErr = s.memRepo.FullTextSearchRanked(ftsCtx, opts.WorkspaceID, projID, opts.Query, poolSize)
+		kwResults, kwErr = s.memRepo.FullTextSearchRanked(ftsCtx, opts.WorkspaceID, projID, opts.Query, searchFilter, poolSize)
 	}()
 
 	if !embedding.IsNoop(s.embedder) {
@@ -760,7 +767,7 @@ func (s *memoryService) Recall(ctx context.Context, opts domain.RecallOpts) ([]d
 				return
 			}
 			var vecErr error
-			vecResults, vecErr = s.memRepo.VectorSearch(ctx, queryVec, opts.WorkspaceID, projID, string(opts.Scope), opts.Tags, poolSize)
+			vecResults, vecErr = s.memRepo.VectorSearch(ctx, queryVec, opts.WorkspaceID, projID, searchFilter, poolSize)
 			if vecErr != nil {
 				log.Printf("memory recall: vector search failed: %v", vecErr)
 				return
@@ -871,6 +878,12 @@ func (s *memoryService) Recall(ctx context.Context, opts domain.RecallOpts) ([]d
 	// ── Step 7: Inject pinned memories (kind:pinned always surfaced) ─────────
 	// Pinned memories bypass retrieval entirely — they are always prepended to
 	// the result, regardless of relevance score or min_importance threshold.
+	//
+	// What they do NOT bypass is eligibility: a pinned memory still has to satisfy
+	// scope/tags. "Pinned" means "do not let ranking bury this", not "show this to a
+	// caller who asked for a different scope" — otherwise a caller asking for
+	// scope='agent' gets workspace rows back and the isolation contract is broken by
+	// the one path that is exempt from every other check.
 	var pinnedProjID *uuid.UUID
 	if opts.ProjectID != uuid.Nil {
 		pinnedProjID = &opts.ProjectID
@@ -885,6 +898,9 @@ func (s *memoryService) Recall(ctx context.Context, opts domain.RecallOpts) ([]d
 			if _, seen := seenIDs[p.ID]; seen {
 				continue // already in results via retrieval
 			}
+			if !searchFilter.Allows(p) {
+				continue // pinned still has to be eligible for THIS query
+			}
 			pinnedScored = append(pinnedScored, domain.ScoredMemory{Memory: p, Score: 2.0}) // score > any retrieval score
 		}
 		merged = append(pinnedScored, merged...)
@@ -894,11 +910,23 @@ func (s *memoryService) Recall(ctx context.Context, opts domain.RecallOpts) ([]d
 }
 
 // applyExtendedFilters filters a slice of ScoredMemory using the extended RecallOpts fields
-// that are not handled by FullTextSearch (TagsAny, CreatedBy, Since, Until, RelevanceMin,
-// ExcludeSuperseded, StatusFilter).
+// (CreatedBy, Since, Until, RelevanceMin, ExcludeSuperseded, StatusFilter, MinImportance).
+//
+// Scope/Tags/TagsAny are ALSO re-checked here, via the same MemorySearchFilter both arms
+// use as SQL. That is deliberate redundancy, not the enforcement point: the arms are the
+// enforcement point, because only they can keep an eligible row from being cut. This pass
+// is the second lock — it catches any row reaching the client through a path that did not
+// pre-filter, and it makes scope isolation hold even if an arm is later changed to ignore
+// the filter. Before #2c087b2a there was no scope branch here at all and the BM25 arm was
+// never given scope, so scope was unenforced on every BM25 row and unenforced entirely in
+// bm25-only mode — the fail-open path taken whenever the embedder is down.
 func applyExtendedFilters(items []domain.ScoredMemory, opts domain.RecallOpts) []domain.ScoredMemory {
+	searchFilter := opts.SearchFilter()
 	out := items[:0]
 	for _, m := range items {
+		if !searchFilter.Allows(m.Memory) {
+			continue
+		}
 		if opts.ExcludeSuperseded && m.Status == domain.MemoryStatusSuperseded {
 			continue
 		}
@@ -934,23 +962,7 @@ func applyExtendedFilters(items []domain.ScoredMemory, opts domain.RecallOpts) [
 		if opts.MinImportance != nil && m.ImportanceScore < *opts.MinImportance {
 			continue
 		}
-		if len(opts.TagsAny) > 0 {
-			found := false
-			for _, required := range opts.TagsAny {
-				for _, tag := range m.Tags {
-					if tag == required {
-						found = true
-						break
-					}
-				}
-				if found {
-					break
-				}
-			}
-			if !found {
-				continue
-			}
-		}
+		// NB: Scope/Tags/TagsAny are handled by searchFilter.Allows at the top of the loop.
 		out = append(out, m)
 	}
 	return out
@@ -1565,8 +1577,12 @@ func recallGraphCacheKey(opts domain.RecallGraphOpts) string {
 	if opts.TaskID != nil {
 		taskPart = opts.TaskID.String()
 	}
+	// Scope/Tags/TagsAny are part of the key: they change WHICH rows are eligible, so two
+	// calls differing only in scope have genuinely different results. Omitting them would
+	// let a scope-less call populate the entry that a scope='agent' call then reads —
+	// serving exactly the leak the filter exists to prevent, from cache.
 	h := sha256.New()
-	_, _ = fmt.Fprintf(h, "%s|%s|%s|%d|%f",
+	_, _ = fmt.Fprintf(h, "%s|%s|%s|%d|%f|%s|%v|%v",
 		opts.Query,
 		opts.WorkspaceID.String(),
 		func() string {
@@ -1577,6 +1593,9 @@ func recallGraphCacheKey(opts domain.RecallGraphOpts) string {
 		}(),
 		opts.Hops,
 		opts.WeightThreshold,
+		opts.Scope,
+		opts.Tags,
+		opts.TagsAny,
 	)
 	return taskPart + ":" + hex.EncodeToString(h.Sum(nil))
 }
@@ -1631,10 +1650,15 @@ func (s *memoryService) RecallGraph(ctx context.Context, opts domain.RecallGraph
 		projID = opts.ProjectID
 	}
 
+	graphFilter := opts.SearchFilter()
+
 	seedOpts := domain.RecallOpts{
 		Query:       opts.Query,
 		WorkspaceID: opts.WorkspaceID,
 		Limit:       recallGraphSeedLimit,
+		Scope:       domain.MemoryScope(opts.Scope),
+		Tags:        opts.Tags,
+		TagsAny:     opts.TagsAny,
 	}
 	if projID != nil {
 		seedOpts.ProjectID = *projID
@@ -1744,6 +1768,14 @@ func (s *memoryService) RecallGraph(ctx context.Context, opts domain.RecallGraph
 
 			// Drop low-importance graph-expanded memories.
 			if mem.ImportanceScore < graphMinImportance {
+				continue
+			}
+
+			// Edges are scope-blind, so an in-scope seed can be adjacent to an
+			// out-of-scope memory. Expanded neighbours must satisfy the same
+			// eligibility filter the seed recall applied, or graph expansion becomes
+			// a way around it.
+			if !graphFilter.Allows(*mem) {
 				continue
 			}
 
