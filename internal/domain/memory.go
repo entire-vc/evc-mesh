@@ -400,6 +400,25 @@ func (o RecallGraphOpts) SearchFilter() MemorySearchFilter {
 	return MemorySearchFilter{Scope: o.Scope, Tags: o.Tags, TagsAny: o.TagsAny}
 }
 
+// MemoryChunk is one embedded slice of a longer memory (ADR-0002). The prod
+// embedder silently truncates input past ~512 tokens, so any memory longer
+// than that needs more than one vector to be fully searchable — see #e8063a65.
+//
+// ChunkStart/ChunkEnd are BYTE offsets (half-open [start, end)) into the
+// parent Memory's Content. Embedding is base64(little-endian float32 bytes),
+// not a JSON array — see the migration comment for why.
+type MemoryChunk struct {
+	ID             uuid.UUID `json:"id" db:"id"`
+	MemoryID       uuid.UUID `json:"memory_id" db:"memory_id"`
+	ChunkIdx       int       `json:"chunk_idx" db:"chunk_idx"`
+	ChunkStart     int       `json:"chunk_start" db:"chunk_start"`
+	ChunkEnd       int       `json:"chunk_end" db:"chunk_end"`
+	Embedding      string    `json:"embedding" db:"embedding"`
+	EmbeddingModel string    `json:"embedding_model" db:"embedding_model"`
+	EmbeddingDim   int       `json:"embedding_dim" db:"embedding_dim"`
+	CreatedAt      time.Time `json:"created_at" db:"created_at"`
+}
+
 // MemoryEdge is a directed, typed, weighted link in the memory Knowledge Graph.
 // From-to direction: memory_from_id → memory_to_id, with RelationshipType semantics.
 type MemoryEdge struct {

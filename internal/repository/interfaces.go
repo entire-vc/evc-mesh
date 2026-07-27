@@ -673,6 +673,27 @@ type MemoryRepository interface {
 	FullTextSearchRanked(ctx context.Context, wsID uuid.UUID, projID *uuid.UUID, query string, filter domain.MemorySearchFilter, limit int) ([]domain.ScoredMemory, error)
 }
 
+// MemoryChunkRepository stores and retrieves per-chunk embeddings for long
+// memories (ADR-0002) — see domain.MemoryChunk.
+type MemoryChunkRepository interface {
+	// ReplaceChunks atomically replaces every chunk for memoryID with chunks
+	// (delete existing rows + insert the new batch in one transaction). This
+	// is what makes re-embedding a memory idempotent: the chunker is
+	// deterministic, so re-running it and replacing wholesale is always safe,
+	// no content hashing needed. An empty chunks slice just clears the memory's
+	// rows (e.g. if it shrank below the chunking threshold).
+	ReplaceChunks(ctx context.Context, memoryID uuid.UUID, chunks []domain.MemoryChunk) error
+	// ListByMemoryIDs returns every chunk row for the given memory IDs, in no
+	// particular order. Never joins to memories.content — callers needing the
+	// full memory (e.g. to hydrate top-N results) fetch that separately.
+	ListByMemoryIDs(ctx context.Context, memoryIDs []uuid.UUID) ([]domain.MemoryChunk, error)
+	// MemoryIDsWithChunks reports which of the given memory IDs have at least
+	// one chunk row. Lets the read path fall back to memories.embedding for a
+	// memory not yet migrated to chunked storage (mid-backfill, or a memory
+	// short enough it was never chunked).
+	MemoryIDsWithChunks(ctx context.Context, memoryIDs []uuid.UUID) (map[uuid.UUID]bool, error)
+}
+
 // MemoryEdgeRepository manages directed, typed edges in the memory Knowledge Graph.
 type MemoryEdgeRepository interface {
 	// UpsertEdge inserts a new edge or updates weight/last_traversed_at on conflict (from, to, type).
