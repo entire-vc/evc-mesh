@@ -564,10 +564,20 @@ class TestEveryQuestionCanBeStored(unittest.TestCase):
 
     def test_the_tag_keeps_the_raw_id(self):
         """Only the key is sanitized. The tag is the recall filter and the cleanup
-        handle; sanitizing it would orphan rows an earlier run left behind."""
-        client = mc.MeshMemoryClient(question_id="gpt4_4929293a")
-        self.assertEqual("bench-gpt4_4929293a", client.bench_tag)
-        self.assertEqual("bench-gpt4-4929293a-4581bcc5", client.key_prefix)
+        handle, so the id has to survive in it verbatim — an `_` folded to a `-`
+        here would stop matching the rows this run itself just stored.
+
+        Both names now carry a run nonce (#eb1c5617), so this asserts the
+        PROPERTY — raw id in the tag, sanitized id in the key — rather than a
+        literal, which would only re-encode today's format.
+        """
+        client = mc.MeshMemoryClient(question_id="gpt4_4929293a", run_nonce="n0nce")
+        self.assertEqual("bench-n0nce-gpt4_4929293a", client.bench_tag)
+        self.assertEqual("bench-n0nce-gpt4-4929293a-4581bcc5", client.key_prefix)
+        # The raw id survives unsanitized in the tag...
+        self.assertIn("gpt4_4929293a", client.bench_tag)
+        # ...and does NOT in the key, which the server validates.
+        self.assertNotIn("_", client.key_prefix)
 
     def test_an_already_safe_id_is_passed_through_untouched(self):
         """22 of 24 ids need nothing done to them, and their keys must not churn:

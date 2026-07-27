@@ -146,6 +146,7 @@ jobs:
           python scripts/memory-bench/test_gate_blindness.py
           python scripts/memory-bench/test_gate_modes.py
           python scripts/memory-bench/test_gold_rank.py
+          python scripts/memory-bench/test_fixture_isolation.py
 
       # One source of truth for "this dispatch is a capture, not a verdict". Two
       # steps have to agree on it — the capture runs, the gate must not — and two
@@ -238,6 +239,28 @@ jobs:
           MESH_MCP_BIN: ${{ github.workspace }}/mesh-mcp-bin
           RECALL_GRAPH_ENABLED: 'true'
           LME_TOP_K: '10'
+          # Namespaces this job's fixtures. Fixture names used to be a pure
+          # function of the question id, while `remember` UPSERTs on key and
+          # cleanup deletes by tag — so any two benches sharing this workspace
+          # wrote the same rows and swept each other's haystacks mid-run. That is
+          # invisible by construction: a question whose haystack was deleted under
+          # it retrieves nothing and scores a clean miss (#eb1c5617).
+          #
+          # Scoped by JOB, not just by run: on `push` to main, on the nightly
+          # schedule, and on any dispatch that asks for the paid arm, recall-gate
+          # and the advisory arm run CONCURRENTLY with no `needs:` between them —
+          # same questions, same workspace. A run-only nonce would leave those two
+          # colliding with each other. (PR runs skip the advisory arm, so they are
+          # single-job and were never affected by that particular overlap.)
+          #
+          # The two cases where it does overlap are the load-bearing ones: the
+          # push run is what validates main after a merge, and the nightly is
+          # where a baseline is captured — a threshold snapped while the other job
+          # deletes fixtures underneath it becomes a permanently wrong floor.
+          #
+          # Derived from the run id rather than random so an orphaned row names
+          # the run that abandoned it.
+          BENCH_RUN_NONCE: ${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}
         run: |
           cd scripts/memory-bench
           set +e
@@ -293,6 +316,28 @@ jobs:
           MESH_MCP_BIN: ${{ github.workspace }}/mesh-mcp-bin
           RECALL_GRAPH_ENABLED: 'true'
           LME_TOP_K: '10'
+          # Namespaces this job's fixtures. Fixture names used to be a pure
+          # function of the question id, while `remember` UPSERTs on key and
+          # cleanup deletes by tag — so any two benches sharing this workspace
+          # wrote the same rows and swept each other's haystacks mid-run. That is
+          # invisible by construction: a question whose haystack was deleted under
+          # it retrieves nothing and scores a clean miss (#eb1c5617).
+          #
+          # Scoped by JOB, not just by run: on `push` to main, on the nightly
+          # schedule, and on any dispatch that asks for the paid arm, recall-gate
+          # and the advisory arm run CONCURRENTLY with no `needs:` between them —
+          # same questions, same workspace. A run-only nonce would leave those two
+          # colliding with each other. (PR runs skip the advisory arm, so they are
+          # single-job and were never affected by that particular overlap.)
+          #
+          # The two cases where it does overlap are the load-bearing ones: the
+          # push run is what validates main after a merge, and the nightly is
+          # where a baseline is captured — a threshold snapped while the other job
+          # deletes fixtures underneath it becomes a permanently wrong floor.
+          #
+          # Derived from the run id rather than random so an orphaned row names
+          # the run that abandoned it.
+          BENCH_RUN_NONCE: ${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}
         run: |
           cd scripts/memory-bench
           set +e
@@ -577,6 +622,28 @@ jobs:
           MESH_MCP_BIN: ${{ github.workspace }}/mesh-mcp-bin
           RECALL_GRAPH_ENABLED: 'true'
           LME_TOP_K: '10'
+          # Namespaces this job's fixtures. Fixture names used to be a pure
+          # function of the question id, while `remember` UPSERTs on key and
+          # cleanup deletes by tag — so any two benches sharing this workspace
+          # wrote the same rows and swept each other's haystacks mid-run. That is
+          # invisible by construction: a question whose haystack was deleted under
+          # it retrieves nothing and scores a clean miss (#eb1c5617).
+          #
+          # Scoped by JOB, not just by run: on `push` to main, on the nightly
+          # schedule, and on any dispatch that asks for the paid arm, recall-gate
+          # and the advisory arm run CONCURRENTLY with no `needs:` between them —
+          # same questions, same workspace. A run-only nonce would leave those two
+          # colliding with each other. (PR runs skip the advisory arm, so they are
+          # single-job and were never affected by that particular overlap.)
+          #
+          # The two cases where it does overlap are the load-bearing ones: the
+          # push run is what validates main after a merge, and the nightly is
+          # where a baseline is captured — a threshold snapped while the other job
+          # deletes fixtures underneath it becomes a permanently wrong floor.
+          #
+          # Derived from the run id rather than random so an orphaned row names
+          # the run that abandoned it.
+          BENCH_RUN_NONCE: ${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}
         run: |
           cd scripts/memory-bench
           set +e
@@ -628,6 +695,28 @@ jobs:
           MESH_MCP_BIN: ${{ github.workspace }}/mesh-mcp-bin
           RECALL_GRAPH_ENABLED: 'true'
           LME_TOP_K: '10'
+          # Namespaces this job's fixtures. Fixture names used to be a pure
+          # function of the question id, while `remember` UPSERTs on key and
+          # cleanup deletes by tag — so any two benches sharing this workspace
+          # wrote the same rows and swept each other's haystacks mid-run. That is
+          # invisible by construction: a question whose haystack was deleted under
+          # it retrieves nothing and scores a clean miss (#eb1c5617).
+          #
+          # Scoped by JOB, not just by run: on `push` to main, on the nightly
+          # schedule, and on any dispatch that asks for the paid arm, recall-gate
+          # and the advisory arm run CONCURRENTLY with no `needs:` between them —
+          # same questions, same workspace. A run-only nonce would leave those two
+          # colliding with each other. (PR runs skip the advisory arm, so they are
+          # single-job and were never affected by that particular overlap.)
+          #
+          # The two cases where it does overlap are the load-bearing ones: the
+          # push run is what validates main after a merge, and the nightly is
+          # where a baseline is captured — a threshold snapped while the other job
+          # deletes fixtures underneath it becomes a permanently wrong floor.
+          #
+          # Derived from the run id rather than random so an orphaned row names
+          # the run that abandoned it.
+          BENCH_RUN_NONCE: ${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}
         run: |
           cd scripts/memory-bench
           set +e
