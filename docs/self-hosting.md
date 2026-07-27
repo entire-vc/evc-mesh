@@ -14,8 +14,9 @@
 # 1. Clone the repository
 git clone https://github.com/entire-vc/evc-mesh && cd evc-mesh
 
-# 2. Edit deploy/docker/mesh/.env -- at minimum, change JWT_SECRET!
-#    nano deploy/docker/mesh/.env
+# 2. Create your env file -- at minimum, change JWT_SECRET!
+cp .env.example .env
+#    nano .env
 #    JWT_SECRET=your-strong-secret-at-least-32-chars
 
 # 3. Start infrastructure (PostgreSQL, Redis, NATS, MinIO)
@@ -29,6 +30,11 @@ go run ./cmd/api
 # 5. In a separate terminal, start the frontend
 cd web && pnpm install && pnpm dev
 ```
+
+A fresh install has **no users and no default password** — open
+http://localhost:3000/register and create the first account, or see
+[Seeding the first admin](#seeding-the-first-admin) to have the server create it
+for you.
 
 The services will be available at:
 
@@ -109,6 +115,27 @@ The services will be available at:
 | `MESH_ADMIN_NAME` | `Admin` | Display name for the seeded admin |
 
 See [Seeding the first admin](#seeding-the-first-admin) below.
+
+### CORS
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MESH_CORS_ORIGINS` | `*` | Comma-separated list of allowed origins (e.g. `https://mesh.example.com,https://app.example.com`). Use `*` for development only. |
+
+### Rate Limiting
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MESH_RATE_LIMIT_ENABLED` | `true` | Enable or disable rate limiting globally |
+| `MESH_RATE_LIMIT_AUTH_RPM` | `20` | Maximum requests per minute for auth endpoints (per IP) |
+| `MESH_RATE_LIMIT_API_RPM` | `600` | Maximum requests per minute for API endpoints (per authenticated actor) |
+
+### Spark Catalog
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MESH_SPARK_URL` | `https://spark.entire.vc` | Spark agent catalog API base URL |
+| `MESH_SPARK_ENABLED` | `false` | Enable Spark catalog routes (`/api/v1/spark/...`) |
 
 ---
 
@@ -207,26 +234,6 @@ docker compose exec postgres psql -U mesh -d mesh \
 artifacts — owned by those users. Back up first (see
 [Backup & Restore](#backup--restore)).
 
-### CORS
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `MESH_CORS_ORIGINS` | `*` | Comma-separated list of allowed origins (e.g. `https://mesh.example.com,https://app.example.com`). Use `*` for development only. |
-
-### Rate Limiting
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `MESH_RATE_LIMIT_ENABLED` | `true` | Enable or disable rate limiting globally |
-| `MESH_RATE_LIMIT_AUTH_RPM` | `20` | Maximum requests per minute for auth endpoints (per IP) |
-| `MESH_RATE_LIMIT_API_RPM` | `600` | Maximum requests per minute for API endpoints (per authenticated actor) |
-
-### Spark Catalog
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `MESH_SPARK_URL` | `https://spark.entire.vc` | Spark agent catalog API base URL |
-| `MESH_SPARK_ENABLED` | `false` | Enable Spark catalog routes (`/api/v1/spark/...`) |
 
 ---
 
