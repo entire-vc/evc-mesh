@@ -2433,7 +2433,7 @@ func TestRRF_DualArmScoresHigher(t *testing.T) {
 		{Memory: onlyVec, Score: 0.7},
 	}
 
-	merged := reciprocalRankFusion(ftsResults, vecResults)
+	merged := reciprocalRankFusion(ftsResults, vecResults, defaultRRFTextWeight, defaultRRFVectorWeight)
 
 	// Collect scores by ID.
 	scoreFor := func(id uuid.UUID) float64 {
@@ -2469,7 +2469,7 @@ func TestRRF_ResultCountAtMostLimit(t *testing.T) {
 	fts := makeMemories(5)
 	vec := makeMemories(5)
 
-	merged := reciprocalRankFusion(fts, vec)
+	merged := reciprocalRankFusion(fts, vec, defaultRRFTextWeight, defaultRRFVectorWeight)
 
 	// 10 unique IDs across 5+5 = at most 10.
 	assert.LessOrEqual(t, len(merged), 10, "result count must not exceed union size")
@@ -2478,7 +2478,7 @@ func TestRRF_ResultCountAtMostLimit(t *testing.T) {
 	shared := fts[0]
 	fts2 := append(makeMemories(3), shared)
 	vec2 := append(makeMemories(3), shared)
-	merged2 := reciprocalRankFusion(fts2, vec2)
+	merged2 := reciprocalRankFusion(fts2, vec2, defaultRRFTextWeight, defaultRRFVectorWeight)
 	seenIDs := make(map[uuid.UUID]bool)
 	for _, m := range merged2 {
 		assert.False(t, seenIDs[m.ID], "each ID must appear at most once in merged results")
