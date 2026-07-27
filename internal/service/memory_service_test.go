@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -40,6 +41,7 @@ type mockMemoryRepo struct {
 	// captured by MarkEmbeddingModel (the chunked-embed watermark)
 	markedEmbeddingModelID             uuid.UUID
 	markedEmbeddingModelValue          string
+	markEmbeddingModelErr              error
 	upsertFn                           func(ctx context.Context, mem *domain.Memory) error
 	getByIDFn                          func(ctx context.Context, id uuid.UUID) (*domain.Memory, error)
 	getByKeyFn                         func(ctx context.Context, wsID uuid.UUID, projID *uuid.UUID, agentID *uuid.UUID, key string, scope domain.MemoryScope) (*domain.Memory, error)
@@ -132,6 +134,9 @@ func (m *mockMemoryRepo) UpdateEmbedding(_ context.Context, _ uuid.UUID, _ []flo
 func (m *mockMemoryRepo) MarkEmbeddingModel(_ context.Context, id uuid.UUID, model string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.markEmbeddingModelErr != nil {
+		return m.markEmbeddingModelErr
+	}
 	m.markedEmbeddingModelID = id
 	m.markedEmbeddingModelValue = model
 	return nil
@@ -2666,6 +2671,91 @@ func (e *nthCallFailsEmbedder) EmbedBatch(ctx context.Context, texts []string) (
 }
 func (e *nthCallFailsEmbedder) Model() string   { return "nth-call-fails" }
 func (e *nthCallFailsEmbedder) Dimensions() int { return e.dim }
+
+// emptyVecEmbedder always succeeds but returns a zero-length vector — the shape a
+// noop or degraded embedder can return without erroring. Used to test embedChunked's
+// "skip this chunk, don't fabricate a row" and "nothing embedded, leave existing
+// chunks alone" branches.
+type emptyVecEmbedder struct{}
+
+func (emptyVecEmbedder) Embed(_ context.Context, _ string) ([]float32, error) { return nil, nil }
+func (emptyVecEmbedder) EmbedBatch(_ context.Context, texts []string) ([][]float32, error) {
+	return make([][]float32, len(texts)), nil
+}
+func (emptyVecEmbedder) Model() string   { return "empty-vec" }
+func (emptyVecEmbedder) Dimensions() int { return 0 }
+
+func TestEmbedAndStore_Chunked_AllEmptyVectorsLeavesExistingChunksAlone(t *testing.T) {
+	memRepo := &mockMemoryRepo{}
+	chunkRepo := newMockMemoryChunkRepo()
+	svc := NewMemoryService(memRepo, &mockMemoryEdgeRepo{}, emptyVecEmbedder{}, MemoryWithChunkRepo(chunkRepo))
+	ms := svc.(*memoryService)
+
+	id := uuid.New()
+	require.NoError(t, ms.embedChunked(context.Background(), id, longTranscript(30)))
+
+	assert.Zero(t, chunkRepo.replaceCalls, "every chunk embedding empty must skip ReplaceChunks entirely")
+	assert.Zero(t, memRepo.markedEmbeddingModelID, "must not watermark a memory nothing was actually embedded for")
+}
+
+func TestEmbedChunked_ReplaceChunksError_IsReturned(t *testing.T) {
+	memRepo := &mockMemoryRepo{}
+	chunkRepo := newMockMemoryChunkRepo()
+	chunkRepo.replaceErr = errors.New("simulated db failure")
+	svc := NewMemoryService(memRepo, &mockMemoryEdgeRepo{}, &switchModelEmbedder{model: "e5-small", dim: 384},
+		MemoryWithChunkRepo(chunkRepo))
+	ms := svc.(*memoryService)
+
+	err := ms.embedChunked(context.Background(), uuid.New(), "some content")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "simulated db failure")
+	assert.Zero(t, memRepo.markedEmbeddingModelID, "a failed ReplaceChunks must not be followed by a watermark write")
+}
+
+func TestEmbedChunked_MarkEmbeddingModelError_IsWrappedAndReturned(t *testing.T) {
+	memRepo := &mockMemoryRepo{markEmbeddingModelErr: errors.New("simulated db failure")}
+	chunkRepo := newMockMemoryChunkRepo()
+	svc := NewMemoryService(memRepo, &mockMemoryEdgeRepo{}, &switchModelEmbedder{model: "e5-small", dim: 384},
+		MemoryWithChunkRepo(chunkRepo))
+	ms := svc.(*memoryService)
+
+	id := uuid.New()
+	err := ms.embedChunked(context.Background(), id, "some content")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "mark embedding model")
+	assert.Contains(t, err.Error(), "simulated db failure")
+	// ReplaceChunks itself must still have succeeded — only the watermark write failed.
+	got, listErr := chunkRepo.ListByMemoryIDs(context.Background(), []uuid.UUID{id})
+	require.NoError(t, listErr)
+	assert.NotEmpty(t, got)
+}
+
+func TestBatchEmbed_Chunked_EmbedChunkedErrorLogsAndContinuesRatherThanAborting(t *testing.T) {
+	ok := uuid.New()
+	failing := uuid.New()
+	memRepo := &mockMemoryRepo{
+		needEmbedding: []domain.Memory{
+			{ID: failing, Key: "k", Content: "content"},
+			{ID: ok, Key: "k", Content: "content"},
+		},
+	}
+	chunkRepo := newMockMemoryChunkRepo()
+	// Fails on the very first Embed call (the "failing" memory's only chunk), succeeds after.
+	failer := &nthCallFailsEmbedder{dim: 4, failAt: 1}
+	svc := NewMemoryService(memRepo, &mockMemoryEdgeRepo{}, failer, MemoryWithChunkRepo(chunkRepo))
+
+	n, err := svc.BatchEmbed(context.Background(), uuid.New())
+	require.NoError(t, err, "one memory's embed failure must not fail the whole batch")
+	assert.Equal(t, 1, n, "only the memory that embedded successfully is counted")
+
+	gotFailing, listErr := chunkRepo.ListByMemoryIDs(context.Background(), []uuid.UUID{failing})
+	require.NoError(t, listErr)
+	assert.Empty(t, gotFailing, "the failing memory must have no chunks written")
+
+	gotOK, listErr := chunkRepo.ListByMemoryIDs(context.Background(), []uuid.UUID{ok})
+	require.NoError(t, listErr)
+	assert.NotEmpty(t, gotOK)
+}
 
 func longTranscript(turns int) string {
 	var b strings.Builder
