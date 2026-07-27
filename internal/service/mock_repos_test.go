@@ -1743,8 +1743,14 @@ func (m *MockUserRepository) GetByUsername(_ context.Context, workspaceID uuid.U
 	return u, nil
 }
 
-func (m *MockUserRepository) Create(_ context.Context, _ *domain.User) error {
-	return m.errToReturn
+func (m *MockUserRepository) Create(_ context.Context, u *domain.User) error {
+	if m.errToReturn != nil {
+		return m.errToReturn
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.byID[u.ID] = u
+	return nil
 }
 
 func (m *MockUserRepository) UsernameExists(_ context.Context, _ string) (bool, error) {
@@ -1764,8 +1770,18 @@ func (m *MockUserRepository) GetByID(_ context.Context, id uuid.UUID) (*domain.U
 	return u, nil
 }
 
-func (m *MockUserRepository) GetByEmail(_ context.Context, _ string) (*domain.User, error) {
-	return nil, m.errToReturn
+func (m *MockUserRepository) GetByEmail(_ context.Context, email string) (*domain.User, error) {
+	if m.errToReturn != nil {
+		return nil, m.errToReturn
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, u := range m.byID {
+		if u.Email == email {
+			return u, nil
+		}
+	}
+	return nil, nil
 }
 
 func (m *MockUserRepository) Update(_ context.Context, _ *domain.User) error {
@@ -1782,6 +1798,12 @@ func (m *MockUserRepository) SearchInWorkspace(_ context.Context, _ uuid.UUID, _
 
 func (m *MockUserRepository) GetByUsernameGlobal(_ context.Context, _ string) (*domain.User, error) {
 	return nil, nil
+}
+
+func (m *MockUserRepository) Count(_ context.Context) (int, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return len(m.byID), nil
 }
 
 // ---------------------------------------------------------------------------

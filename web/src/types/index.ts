@@ -357,6 +357,10 @@ export interface RefreshResponse {
   tokens: TokenPair;
 }
 
+export interface AuthConfig {
+  registration_enabled: boolean;
+}
+
 export interface PaginatedResponse<T> {
   items: T[];
   total: number;

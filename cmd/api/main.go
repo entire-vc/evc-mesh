@@ -111,6 +111,7 @@ func main() {
 		workspaceRepo,
 		workspaceMemberRepo,
 		cfg.Auth.JWTSecret,
+		auth.WithAllowRegistration(cfg.Auth.AllowRegistration),
 	)
 
 	// Create the first admin on a fresh install — and always say what happened.
@@ -549,6 +550,11 @@ func main() {
 	}))
 	loginGroup.POST("/register", authHandler.Register)
 	loginGroup.POST("/login", authHandler.Login)
+
+	// GET /auth/config: unauthenticated, no side effects — the login/register
+	// pages poll this once to decide whether to show the "Create an account"
+	// link. No rate limit needed (read-only, no brute-force surface).
+	v1.GET("/auth/config", authHandler.Config)
 
 	// /auth/refresh: separate, fleet-safe per-IP limit (60 RPM default).
 	// Refresh requires a valid refresh token — credential brute-force is not

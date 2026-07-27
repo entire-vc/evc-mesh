@@ -1,6 +1,7 @@
 import { type FormEvent, useCallback, useState } from "react";
 import { Link, Navigate, useNavigate } from "react-router";
 import { useAuthStore } from "@/stores/auth";
+import { useAuthConfig } from "@/hooks/use-auth-config";
 import { ApiRequestError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -16,6 +17,7 @@ import {
 export function RegisterPage() {
   const navigate = useNavigate();
   const { isAuthenticated, register } = useAuthStore();
+  const { registrationEnabled, loading: configLoading } = useAuthConfig();
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -46,6 +48,30 @@ export function RegisterPage() {
 
   if (isAuthenticated) {
     return <Navigate to="/" replace />;
+  }
+
+  if (!configLoading && !registrationEnabled) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-background px-4">
+        <Card className="w-full max-w-md">
+          <CardHeader className="text-center">
+            <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-primary text-lg font-bold text-primary-foreground">
+              M
+            </div>
+            <CardTitle className="text-2xl">Registration is closed</CardTitle>
+            <CardDescription>
+              This instance is not accepting new signups. Ask an admin for an
+              invite, or sign in if you already have an account.
+            </CardDescription>
+          </CardHeader>
+          <CardFooter className="justify-center">
+            <Link to="/login" className="text-primary hover:underline">
+              Back to sign in
+            </Link>
+          </CardFooter>
+        </Card>
+      </div>
+    );
   }
 
   return (

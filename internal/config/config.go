@@ -152,6 +152,11 @@ type AuthConfig struct {
 	CasdoorEndpoint string
 	CasdoorClientID string
 	AgentKeyPrefix  string
+	// AllowRegistration gates POST /auth/register once the instance already has
+	// at least one user. Defaults to true so existing installs keep working
+	// unchanged. The first user on a fresh install can always register
+	// regardless of this setting (see auth.Service.RegistrationOpen).
+	AllowRegistration bool
 }
 
 // WebhookConfig holds inbound webhook validation settings.
@@ -205,10 +210,11 @@ func Load() *Config {
 			PublicURL:       getEnv("S3_PUBLIC_URL", ""),
 		},
 		Auth: AuthConfig{
-			JWTSecret:       getEnv("JWT_SECRET", "change-me-in-production"),
-			CasdoorEndpoint: getEnv("CASDOOR_ENDPOINT", ""),
-			CasdoorClientID: getEnv("CASDOOR_CLIENT_ID", ""),
-			AgentKeyPrefix:  getEnv("AGENT_KEY_PREFIX", "agk"),
+			JWTSecret:         getEnv("JWT_SECRET", "change-me-in-production"),
+			CasdoorEndpoint:   getEnv("CASDOOR_ENDPOINT", ""),
+			CasdoorClientID:   getEnv("CASDOOR_CLIENT_ID", ""),
+			AgentKeyPrefix:    getEnv("AGENT_KEY_PREFIX", "agk"),
+			AllowRegistration: getEnvBool("MESH_ALLOW_REGISTRATION", true),
 		},
 		CORS: CORSConfig{
 			AllowOrigins: getEnvStringSlice("MESH_CORS_ORIGINS", []string{"*"}),

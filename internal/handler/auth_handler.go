@@ -72,6 +72,18 @@ func (h *AuthHandler) Register(c echo.Context) error {
 	})
 }
 
+// Config handles GET /api/v1/auth/config (public, unauthenticated).
+// Returns instance-level auth settings the frontend needs before login —
+// currently just whether self-registration is open.
+func (h *AuthHandler) Config(c echo.Context) error {
+	open, err := h.authService.RegistrationOpen(c.Request().Context())
+	if err != nil {
+		return handleError(c, err)
+	}
+
+	return c.JSON(http.StatusOK, map[string]bool{"registration_enabled": open})
+}
+
 // Login handles POST /api/v1/auth/login
 func (h *AuthHandler) Login(c echo.Context) error {
 	var req loginRequest

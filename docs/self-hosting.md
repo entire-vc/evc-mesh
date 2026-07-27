@@ -104,6 +104,7 @@ The services will be available at:
 | `CASDOOR_ENDPOINT` | *(empty)* | Casdoor SSO endpoint (optional) |
 | `CASDOOR_CLIENT_ID` | *(empty)* | Casdoor client ID (optional) |
 | `AGENT_KEY_PREFIX` | `agk` | Prefix for agent API keys |
+| `MESH_ALLOW_REGISTRATION` | `true` | Whether `POST /auth/register` accepts new signups. See [Closing registration](#closing-registration) below. |
 
 ### First admin
 
@@ -149,8 +150,9 @@ There are two ways to create that first account.
 ### Option 1 — register in the web UI (simplest)
 
 Open `/register` and sign up. The first account you register is yours and gets
-its own workspace. Registration is a public endpoint, so nothing needs to be
-configured first.
+its own workspace. Registration is a public endpoint by default, so nothing
+needs to be configured first — see [Closing registration](#closing-registration)
+once you have that first account and want to lock the door behind you.
 
 Passwords must be 8+ characters with an uppercase letter, a lowercase letter,
 and a digit — a weaker one is rejected with `400`, not `401`.
@@ -234,6 +236,63 @@ docker compose exec postgres psql -U mesh -d mesh \
 artifacts — owned by those users. Back up first (see
 [Backup & Restore](#backup--restore)).
 
+### Closing registration
+
+By default `POST /auth/register` is a **public, unauthenticated endpoint** —
+anyone who can reach the instance can create an account. Each new account gets
+its own isolated workspace, so a stranger cannot see anyone else's data, but on
+an internet-facing self-host instance this still means: unlimited accounts
+consuming your database/S3/JetStream, and behavior most operators running a
+small team (3-10 people) do not expect from a "closed" tool.
+
+Set `MESH_ALLOW_REGISTRATION=false` and restart the API to close it:
+
+```bash
+MESH_ALLOW_REGISTRATION=false docker compose -f docker-compose.prod.yml up -d
+```
+
+With the flag off:
+
+- `POST /auth/register` returns `403` with
+  `"registration is closed on this instance — ask an admin for an invite"`.
+- The web UI's login page stops showing the "Register" link (via
+  `GET /auth/config`), and `/register` shows a "Registration is closed" notice
+  instead of the signup form.
+- **The very first user can always register**, regardless of the flag — the
+  server checks `COUNT(*) FROM users` and only enforces the flag once at least
+  one account exists. This is deliberate: it is the same bootstrap invariant
+  [Seeding the first admin](#seeding-the-first-admin) relies on, and without it
+  a closed instance could never be stood up in the first place. So the safe
+  sequence for a brand-new install you intend to keep closed is: deploy with
+  the default (`MESH_ALLOW_REGISTRATION` unset/`true`) → register the first
+  admin account → **then** set `MESH_ALLOW_REGISTRATION=false` and restart.
+
+**Closed registration does not close the instance to new people** — it closes
+the walk-up path. An existing member with `PermManageMembers` can still invite
+anyone from a workspace's Members page (or `POST /workspaces/:ws_id/invites`),
+which is a **separate code path** from `/auth/register` and is unaffected by
+this flag either way:
+
+```bash
+curl -X POST https://mesh.yourdomain.com/api/v1/workspaces/<ws_id>/invites \
+  -H "Authorization: Bearer <your-jwt>" \
+  -H "Content-Type: application/json" \
+  -d '{"email":"newperson@example.com","role":"member"}'
+```
+
+The invited person gets a link to `/accept-invite/<token>`, sets their own
+password there, and is added straight to that workspace — no open `/register`
+needed. `GET /api/v1/invites/:token` and `POST /api/v1/invites/:token/accept`
+stay public precisely so this path works on a fully closed instance. If SMTP
+is not configured (`SMTP_HOST` unset), the invite is not emailed; the link is
+logged instead (`[email] SMTP not configured — invite link for ...`) so you
+can pass it along manually.
+
+**Default stays `true` for now.** Flipping the default to `false` would be a
+breaking change for every instance that already relies on the current
+"register at `/register`" flow described above, so this release only adds the
+flag — a future release may switch the default, called out in its own
+CHANGELOG entry.
 
 ---
 
@@ -311,7 +370,13 @@ GRAFANA_PASSWORD=your-grafana-admin-password
 
 5. **CORS** -- Configure allowed origins (currently allows `*`). Update the API server configuration for your domain.
 
-6. **TLS** -- Set up a reverse proxy (nginx or Caddy) with TLS termination:
+6. **Registration** -- If this instance is reachable from the public internet,
+   set `MESH_ALLOW_REGISTRATION=false` **after** creating your first admin
+   account, so strangers cannot self-register. See
+   [Closing registration](#closing-registration). Add people afterward via
+   workspace invites, not the open `/register` endpoint.
+
+7. **TLS** -- Set up a reverse proxy (nginx or Caddy) with TLS termination:
 
    **Caddy example (`Caddyfile`):**
    ```

@@ -333,6 +333,11 @@ type UserRepository interface {
 	// GetByUsernameGlobal returns the user with the given username across all workspaces, or (nil, nil) if not found.
 	// Used for global uniqueness checks (ix_users_username is a global unique index, not workspace-scoped).
 	GetByUsernameGlobal(ctx context.Context, username string) (*domain.User, error)
+	// Count returns the total number of users on the instance. Used to detect a
+	// fresh install (zero users) so the first registration can bypass a closed
+	// registration policy — otherwise a closed self-host instance could never
+	// be bootstrapped.
+	Count(ctx context.Context) (int, error)
 }
 
 // MentionFilter holds filtering options for listing mention records.

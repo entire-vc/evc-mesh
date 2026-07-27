@@ -85,6 +85,11 @@ func (r *mockUserRepo) SearchInWorkspace(_ context.Context, _ uuid.UUID, _ strin
 func (r *mockUserRepo) GetByUsernameGlobal(_ context.Context, _ string) (*domain.User, error) {
 	return nil, nil
 }
+func (r *mockUserRepo) Count(_ context.Context) (int, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return len(r.users), nil
+}
 
 type mockRefreshTokenRepo struct {
 	mu     sync.RWMutex

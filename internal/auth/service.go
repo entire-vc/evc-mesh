@@ -57,6 +57,7 @@ var (
 	ErrUserInactive           = apierror.Unauthorized("user account is inactive")
 	ErrUsernameConflict       = apierror.Conflict("username is already taken")
 	ErrInvalidUsername        = apierror.BadRequest("username must be 2-40 characters: lowercase letters, digits, hyphens; no leading/trailing hyphens")
+	ErrRegistrationClosed     = apierror.Forbidden("registration is closed on this instance — ask an admin for an invite")
 )
 
 // Claims represents the JWT claims for an access token.
@@ -83,6 +84,19 @@ type Service struct {
 	jwtSecret           []byte
 	accessTokenTTL      time.Duration
 	refreshTokenTTL     time.Duration
+	allowRegistration   bool
+}
+
+// Option configures optional Service behavior.
+type Option func(*Service)
+
+// WithAllowRegistration controls whether Register accepts new signups once the
+// instance already has at least one user. Defaults to true. The very first
+// user on a fresh install (zero rows in users) can always register regardless
+// of this setting — otherwise a closed self-host instance could never be
+// bootstrapped. See docs/self-hosting.md#closing-registration.
+func WithAllowRegistration(allow bool) Option {
+	return func(s *Service) { s.allowRegistration = allow }
 }
 
 // NewService creates a new auth Service with the given dependencies.
@@ -92,8 +106,9 @@ func NewService(
 	workspaceRepo repository.WorkspaceRepository,
 	workspaceMemberRepo repository.WorkspaceMemberRepository,
 	jwtSecret string,
+	opts ...Option,
 ) *Service {
-	return &Service{
+	s := &Service{
 		userRepo:            userRepo,
 		refreshTokenRepo:    refreshTokenRepo,
 		workspaceRepo:       workspaceRepo,
@@ -101,11 +116,39 @@ func NewService(
 		jwtSecret:           []byte(jwtSecret),
 		accessTokenTTL:      15 * time.Minute,
 		refreshTokenTTL:     7 * 24 * time.Hour,
+		allowRegistration:   true,
 	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
+}
+
+// RegistrationOpen reports whether a new user may self-register right now. It
+// mirrors the exact policy Register enforces — the configured flag, with the
+// zero-users bootstrap exception — so callers (e.g. the frontend's
+// GET /auth/config) never drift out of sync with what Register actually does.
+func (s *Service) RegistrationOpen(ctx context.Context) (bool, error) {
+	if s.allowRegistration {
+		return true, nil
+	}
+	count, err := s.userRepo.Count(ctx)
+	if err != nil {
+		return false, apierror.Wrap(err)
+	}
+	return count == 0, nil
 }
 
 // Register creates a new user account, a default workspace, and returns a token pair.
 func (s *Service) Register(ctx context.Context, email, password, name string) (*domain.User, *TokenPair, error) {
+	open, openErr := s.RegistrationOpen(ctx)
+	if openErr != nil {
+		return nil, nil, openErr
+	}
+	if !open {
+		return nil, nil, ErrRegistrationClosed
+	}
+
 	if err := validateEmail(email); err != nil {
 		return nil, nil, err
 	}
