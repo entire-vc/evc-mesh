@@ -40,7 +40,7 @@ type mockMemoryRepo struct {
 	getByIDFn                          func(ctx context.Context, id uuid.UUID) (*domain.Memory, error)
 	getByKeyFn                         func(ctx context.Context, wsID uuid.UUID, projID *uuid.UUID, agentID *uuid.UUID, key string, scope domain.MemoryScope) (*domain.Memory, error)
 	fullTextSearchFn                   func(ctx context.Context, query string, wsID uuid.UUID, projID *uuid.UUID, scope string, tags []string, limit int, recencyWeight float64) ([]domain.ScoredMemory, error)
-	fullTextSearchRankedFn             func(ctx context.Context, wsID uuid.UUID, projID *uuid.UUID, query string, limit int) ([]domain.ScoredMemory, error)
+	fullTextSearchRankedFn             func(ctx context.Context, wsID uuid.UUID, projID *uuid.UUID, query string, filter domain.MemorySearchFilter, limit int) ([]domain.ScoredMemory, error)
 	findByScopeFn                      func(ctx context.Context, wsID uuid.UUID, projID *uuid.UUID, scope string, limit int) ([]domain.Memory, error)
 	listByWorkspaceProjectFn           func(ctx context.Context, wsID uuid.UUID, projID *uuid.UUID, filter domain.MemoryListFilter) ([]domain.Memory, int64, error)
 	deleteFn                           func(ctx context.Context, id uuid.UUID) error
@@ -50,7 +50,8 @@ type mockMemoryRepo struct {
 	findByThreadIDFn                   func(ctx context.Context, wsID uuid.UUID, threadID string, excludeID uuid.UUID) ([]domain.Memory, error)
 	findBySourceTaskIDsFn              func(ctx context.Context, wsID uuid.UUID, taskIDs []uuid.UUID) ([]domain.Memory, error)
 	archiveStaleWorkspaceCheckpointsFn func(ctx context.Context, olderThan time.Duration, maxImportance float64) (int64, error)
-	vectorSearchFn                     func(ctx context.Context, vec []float32, wsID uuid.UUID, projID *uuid.UUID, scope string, tags []string, limit int) ([]domain.ScoredMemory, error)
+	vectorSearchFn                     func(ctx context.Context, vec []float32, wsID uuid.UUID, projID *uuid.UUID, filter domain.MemorySearchFilter, limit int) ([]domain.ScoredMemory, error)
+	findPinnedFn                       func(ctx context.Context, wsID uuid.UUID, projID *uuid.UUID) ([]domain.Memory, error)
 }
 
 func (m *mockMemoryRepo) Upsert(ctx context.Context, mem *domain.Memory) error {
@@ -109,9 +110,9 @@ func (m *mockMemoryRepo) BoostRelevance(ctx context.Context, ids []uuid.UUID) er
 	return nil
 }
 
-func (m *mockMemoryRepo) VectorSearch(ctx context.Context, vec []float32, wsID uuid.UUID, projID *uuid.UUID, scope string, tags []string, limit int) ([]domain.ScoredMemory, error) {
+func (m *mockMemoryRepo) VectorSearch(ctx context.Context, vec []float32, wsID uuid.UUID, projID *uuid.UUID, filter domain.MemorySearchFilter, limit int) ([]domain.ScoredMemory, error) {
 	if m.vectorSearchFn != nil {
-		return m.vectorSearchFn(ctx, vec, wsID, projID, scope, tags, limit)
+		return m.vectorSearchFn(ctx, vec, wsID, projID, filter, limit)
 	}
 	return nil, nil
 }
@@ -182,7 +183,10 @@ func (m *mockMemoryRepo) FindBySimhashProximity(_ context.Context, _ uuid.UUID, 
 	return nil, nil
 }
 
-func (m *mockMemoryRepo) FindPinned(_ context.Context, _ uuid.UUID, _ *uuid.UUID) ([]domain.Memory, error) {
+func (m *mockMemoryRepo) FindPinned(ctx context.Context, wsID uuid.UUID, projID *uuid.UUID) ([]domain.Memory, error) {
+	if m.findPinnedFn != nil {
+		return m.findPinnedFn(ctx, wsID, projID)
+	}
 	return nil, nil
 }
 
@@ -202,9 +206,9 @@ func (m *mockMemoryRepo) ListCreatedSince(ctx context.Context, since time.Time, 
 	return nil, nil
 }
 
-func (m *mockMemoryRepo) FullTextSearchRanked(ctx context.Context, wsID uuid.UUID, projID *uuid.UUID, query string, limit int) ([]domain.ScoredMemory, error) {
+func (m *mockMemoryRepo) FullTextSearchRanked(ctx context.Context, wsID uuid.UUID, projID *uuid.UUID, query string, filter domain.MemorySearchFilter, limit int) ([]domain.ScoredMemory, error) {
 	if m.fullTextSearchRankedFn != nil {
-		return m.fullTextSearchRankedFn(ctx, wsID, projID, query, limit)
+		return m.fullTextSearchRankedFn(ctx, wsID, projID, query, filter, limit)
 	}
 	return nil, nil
 }
@@ -218,6 +222,9 @@ var _ repository.MemoryRepository = (*mockMemoryRepo)(nil)
 
 type mockMemoryEdgeRepo struct {
 	upsertEdgeFn func(edge *domain.MemoryEdge) error
+	// neighbors maps a frontier memory ID to the edges radiating from it. Used by
+	// RecallGraph BFS tests; nil means "no edges", matching the default behaviour.
+	neighbors map[uuid.UUID][]domain.MemoryEdge
 }
 
 func (m *mockMemoryEdgeRepo) UpsertEdge(_ context.Context, edge *domain.MemoryEdge) error {
@@ -230,8 +237,19 @@ func (m *mockMemoryEdgeRepo) UpsertEdge(_ context.Context, edge *domain.MemoryEd
 func (m *mockMemoryEdgeRepo) ReinforceEdge(_ context.Context, _, _ uuid.UUID, _ domain.MemoryEdgeRelationshipType) error {
 	return nil
 }
-func (m *mockMemoryEdgeRepo) GetNeighbors(_ context.Context, _ []uuid.UUID, _ uuid.UUID, _ float64, _ int) ([]domain.MemoryEdge, error) {
-	return nil, nil
+func (m *mockMemoryEdgeRepo) GetNeighbors(_ context.Context, ids []uuid.UUID, _ uuid.UUID, threshold float64, _ int) ([]domain.MemoryEdge, error) {
+	if m.neighbors == nil {
+		return nil, nil
+	}
+	var out []domain.MemoryEdge
+	for _, id := range ids {
+		for _, e := range m.neighbors[id] {
+			if float64(e.Weight) >= threshold {
+				out = append(out, e)
+			}
+		}
+	}
+	return out, nil
 }
 func (m *mockMemoryEdgeRepo) DecayWeights(_ context.Context) (int64, error)   { return 0, nil }
 func (m *mockMemoryEdgeRepo) PruneDeadEdges(_ context.Context) (int64, error) { return 0, nil }
@@ -476,7 +494,7 @@ func TestRecall_BasicSearch(t *testing.T) {
 
 	boostCalled := false
 	repo := &mockMemoryRepo{
-		fullTextSearchRankedFn: func(_ context.Context, _ uuid.UUID, _ *uuid.UUID, _ string, _ int) ([]domain.ScoredMemory, error) {
+		fullTextSearchRankedFn: func(_ context.Context, _ uuid.UUID, _ *uuid.UUID, _ string, _ domain.MemorySearchFilter, _ int) ([]domain.ScoredMemory, error) {
 			return results, nil
 		},
 		boostRelevanceFn: func(_ context.Context, ids []uuid.UUID) error {
@@ -2200,7 +2218,7 @@ func TestRecall_DecayScoreFormula(t *testing.T) {
 	}
 
 	repo := &mockMemoryRepo{
-		fullTextSearchRankedFn: func(_ context.Context, _ uuid.UUID, _ *uuid.UUID, _ string, _ int) ([]domain.ScoredMemory, error) {
+		fullTextSearchRankedFn: func(_ context.Context, _ uuid.UUID, _ *uuid.UUID, _ string, _ domain.MemorySearchFilter, _ int) ([]domain.ScoredMemory, error) {
 			return []domain.ScoredMemory{fresh, old}, nil
 		},
 	}
@@ -2262,7 +2280,7 @@ func TestRecall_FreshnessScoreMultiplied(t *testing.T) {
 	}
 
 	repo := &mockMemoryRepo{
-		fullTextSearchRankedFn: func(_ context.Context, _ uuid.UUID, _ *uuid.UUID, _ string, _ int) ([]domain.ScoredMemory, error) {
+		fullTextSearchRankedFn: func(_ context.Context, _ uuid.UUID, _ *uuid.UUID, _ string, _ domain.MemorySearchFilter, _ int) ([]domain.ScoredMemory, error) {
 			return []domain.ScoredMemory{active, stale}, nil
 		},
 	}
@@ -2318,7 +2336,7 @@ func TestRecall_HalfLifeOverride(t *testing.T) {
 
 	makeRepo := func() *mockMemoryRepo {
 		return &mockMemoryRepo{
-			fullTextSearchRankedFn: func(_ context.Context, _ uuid.UUID, _ *uuid.UUID, _ string, _ int) ([]domain.ScoredMemory, error) {
+			fullTextSearchRankedFn: func(_ context.Context, _ uuid.UUID, _ *uuid.UUID, _ string, _ domain.MemorySearchFilter, _ int) ([]domain.ScoredMemory, error) {
 				return []domain.ScoredMemory{mem}, nil
 			},
 		}
@@ -2378,7 +2396,7 @@ func TestRecall_BM25Arm_NonZeroScore(t *testing.T) {
 	}
 
 	repo := &mockMemoryRepo{
-		fullTextSearchRankedFn: func(_ context.Context, _ uuid.UUID, _ *uuid.UUID, query string, _ int) ([]domain.ScoredMemory, error) {
+		fullTextSearchRankedFn: func(_ context.Context, _ uuid.UUID, _ *uuid.UUID, query string, _ domain.MemorySearchFilter, _ int) ([]domain.ScoredMemory, error) {
 			// Return a non-zero ts_rank_cd score for the query term.
 			return []domain.ScoredMemory{{Memory: hit, Score: 0.75}}, nil
 		},
@@ -2484,7 +2502,7 @@ func TestRecall_BM25Fallback_VectorOnly(t *testing.T) {
 	}
 
 	repo := &mockMemoryRepo{
-		fullTextSearchRankedFn: func(_ context.Context, _ uuid.UUID, _ *uuid.UUID, _ string, _ int) ([]domain.ScoredMemory, error) {
+		fullTextSearchRankedFn: func(_ context.Context, _ uuid.UUID, _ *uuid.UUID, _ string, _ domain.MemorySearchFilter, _ int) ([]domain.ScoredMemory, error) {
 			return nil, fmt.Errorf("simulated bm25 timeout")
 		},
 		// VectorSearch stub not provided — NoopEmbedder means it is never called.

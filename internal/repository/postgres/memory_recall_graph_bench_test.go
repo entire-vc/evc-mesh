@@ -165,7 +165,7 @@ func TestRecallGraph_GetNeighbors_P95_Under500ms(t *testing.T) {
 		p95Deadline = 500 * time.Millisecond
 	)
 
-	_, memIDs := setupRecallGraphBenchData(t, db, memCount, edgeCount)
+	benchWsID, memIDs := setupRecallGraphBenchData(t, db, memCount, edgeCount)
 
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 
@@ -177,7 +177,7 @@ func TestRecallGraph_GetNeighbors_P95_Under500ms(t *testing.T) {
 		}
 
 		start := time.Now()
-		_, err := repo.GetNeighbors(ctx, frontier, 0.3, 200)
+		_, err := repo.GetNeighbors(ctx, frontier, benchWsID, 0.3, 200)
 		elapsed := time.Since(start)
 		require.NoError(t, err)
 		durations = append(durations, elapsed)
@@ -226,6 +226,7 @@ func BenchmarkGetNeighbors_5kGraph_2Hop(b *testing.B) {
 	var (
 		memIDs []uuid.UUID
 		repo   *MemoryEdgesRepo
+		wsID   uuid.UUID
 	)
 
 	// Seed data inside a sub-benchmark so cleanup is tracked; b.N runs happen
@@ -234,7 +235,7 @@ func BenchmarkGetNeighbors_5kGraph_2Hop(b *testing.B) {
 		// One-time setup — run only during the very first (and only) sub-benchmark
 		// invocation. b.N is forced to 1 for this sub-benchmark.
 		ctx := context.Background()
-		wsID := uuid.New()
+		wsID = uuid.New()
 		_, err := db.ExecContext(ctx,
 			`INSERT INTO workspaces (id, name, slug, owner_id, settings, created_at, updated_at)
 			 VALUES ($1, $2, $3, $4, '{}', NOW(), NOW())`,
@@ -339,7 +340,7 @@ func BenchmarkGetNeighbors_5kGraph_2Hop(b *testing.B) {
 		for j := range frontier {
 			frontier[j] = memIDs[rng.Intn(len(memIDs))]
 		}
-		if _, err := repo.GetNeighbors(ctx, frontier, 0.3, 200); err != nil {
+		if _, err := repo.GetNeighbors(ctx, frontier, wsID, 0.3, 200); err != nil {
 			b.Fatalf("GetNeighbors: %v", err)
 		}
 	}

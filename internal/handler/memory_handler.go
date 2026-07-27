@@ -273,20 +273,9 @@ func (h *MemoryHandler) List(c echo.Context) error {
 		mf := float32(f)
 		filter.MinImportance = &mf
 	}
-	if q.Tags != "" {
-		for _, t := range strings.Split(q.Tags, ",") {
-			if t = strings.TrimSpace(t); t != "" {
-				filter.Tags = append(filter.Tags, t)
-			}
-		}
-	}
-	if q.TagsAny != "" {
-		for _, t := range strings.Split(q.TagsAny, ",") {
-			if t = strings.TrimSpace(t); t != "" {
-				filter.TagsAny = append(filter.TagsAny, t)
-			}
-		}
-	}
+	// Read every occurrence, not just the bound first one — see queryTagList.
+	filter.Tags = queryTagList(c, "tags")
+	filter.TagsAny = queryTagList(c, "tags_any")
 	filter.IncludeExpired = q.IncludeExpired == "true" || q.IncludeExpired == "1"
 	filter.IncludeArchived = q.IncludeArchived == "true" || q.IncludeArchived == "1"
 	filter.ApplyDecay = q.ApplyRecencyDecay == "true" || q.ApplyRecencyDecay == "1"
@@ -348,22 +337,9 @@ func (h *MemoryHandler) Search(c echo.Context) error {
 		projID = pid
 	}
 
-	var tags []string
-	if q.Tags != "" {
-		for _, t := range strings.Split(q.Tags, ",") {
-			if t = strings.TrimSpace(t); t != "" {
-				tags = append(tags, t)
-			}
-		}
-	}
-	var tagsAny []string
-	if q.TagsAny != "" {
-		for _, t := range strings.Split(q.TagsAny, ",") {
-			if t = strings.TrimSpace(t); t != "" {
-				tagsAny = append(tagsAny, t)
-			}
-		}
-	}
+	// Read every occurrence, not just the bound first one — see queryTagList.
+	tags := queryTagList(c, "tags")
+	tagsAny := queryTagList(c, "tags_any")
 
 	limit := 20
 	if q.Limit != "" {
@@ -812,6 +788,38 @@ func (h *MemoryHandler) FindRelated(c echo.Context) error {
 	})
 }
 
+// splitCSV parses a comma-separated query param into a slice, trimming whitespace and
+// dropping empty entries. Returns nil for an empty string so callers get "no filter"
+// rather than a one-element slice containing "".
+func splitCSV(s string) []string {
+	if s == "" {
+		return nil
+	}
+	var out []string
+	for _, part := range strings.Split(s, ",") {
+		if part = strings.TrimSpace(part); part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
+}
+
+// queryTagList collects a repeatable, optionally comma-separated tag param.
+//
+// Both encodings are in live use and only one of them used to work: echo binds a
+// `query:"tags_any"` string field from the FIRST occurrence only, so a client sending
+// ?tags_any=a&tags_any=b (which is what the MCP REST client emits — it calls
+// params.Add per tag) silently lost every value after the first. A two-tag OR filter
+// quietly became a one-tag filter, which is a wrong answer rather than an error.
+// Reading every occurrence and splitting each on commas accepts both spellings.
+func queryTagList(c echo.Context, name string) []string {
+	var out []string
+	for _, raw := range c.QueryParams()[name] {
+		out = append(out, splitCSV(raw)...)
+	}
+	return out
+}
+
 // recallGraphQuery represents query params for GET /memories/recall_graph.
 type recallGraphQuery struct {
 	Q               string `query:"query"`
@@ -820,6 +828,9 @@ type recallGraphQuery struct {
 	Hops            string `query:"hops"`             // default 2, max 5
 	WeightThreshold string `query:"weight_threshold"` // default 0.3
 	TaskID          string `query:"task_id"`          // optional; used as cache key discriminator
+	Scope           string `query:"scope"`            // optional; restricts seeds AND expanded neighbours
+	Tags            string `query:"tags"`             // comma-separated, AND filter
+	TagsAny         string `query:"tags_any"`         // comma-separated, OR filter
 }
 
 // RecallGraph handles GET /api/v1/memories/recall_graph
@@ -847,6 +858,9 @@ func (h *MemoryHandler) RecallGraph(c echo.Context) error {
 		WorkspaceID:     wsID,
 		Hops:            2,
 		WeightThreshold: 0.3,
+		Scope:           q.Scope,
+		Tags:            splitCSV(q.Tags),
+		TagsAny:         splitCSV(q.TagsAny),
 	}
 
 	if q.ProjectID != "" {

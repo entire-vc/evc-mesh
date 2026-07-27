@@ -597,9 +597,11 @@ type MemoryRepository interface {
 	BoostRelevance(ctx context.Context, ids []uuid.UUID) error
 	// VectorSearch performs application-level cosine similarity search using stored embeddings.
 	// It returns up to limit memories ranked by cosine similarity to queryVec.
-	// Results are filtered by the same workspace/project/scope/tags criteria as FullTextSearch.
+	// Results are filtered by workspace/project plus the shared scope/tags eligibility
+	// filter — the SAME filter FullTextSearchRanked applies, so both arms of Recall draw
+	// their candidate pool from the identical eligible set.
 	// When no embeddings are stored, an empty slice is returned without error.
-	VectorSearch(ctx context.Context, queryVec []float32, workspaceID uuid.UUID, projectID *uuid.UUID, scope string, tags []string, limit int) ([]domain.ScoredMemory, error)
+	VectorSearch(ctx context.Context, queryVec []float32, workspaceID uuid.UUID, projectID *uuid.UUID, filter domain.MemorySearchFilter, limit int) ([]domain.ScoredMemory, error)
 	// UpdateEmbedding stores the embedding vector (encoded as JSON) for a single memory.
 	UpdateEmbedding(ctx context.Context, id uuid.UUID, vec []float32, model string, dim int) error
 	// DecayRelevance reduces relevance by 0.05 for agent-scope memories not updated in 30+ days,
@@ -660,9 +662,10 @@ type MemoryRepository interface {
 	// FullTextSearchRanked performs BM25-style full-text search using the 'english' dictionary
 	// and ts_rank_cd computed over (content || key). Unlike FullTextSearch (simple dictionary,
 	// pre-built search_vector), this arm uses linguistic stemming and stopword removal for
-	// higher recall precision. ExcludeSuperseded (status != 'superseded') is always enforced.
+	// higher recall precision. ExcludeSuperseded (status != 'superseded') is always enforced,
+	// as is the shared scope/tags eligibility filter — the SAME filter VectorSearch applies.
 	// Used as the sparse BM25 arm in the RRF fusion of service.Recall.
-	FullTextSearchRanked(ctx context.Context, wsID uuid.UUID, projID *uuid.UUID, query string, limit int) ([]domain.ScoredMemory, error)
+	FullTextSearchRanked(ctx context.Context, wsID uuid.UUID, projID *uuid.UUID, query string, filter domain.MemorySearchFilter, limit int) ([]domain.ScoredMemory, error)
 }
 
 // MemoryEdgeRepository manages directed, typed edges in the memory Knowledge Graph.

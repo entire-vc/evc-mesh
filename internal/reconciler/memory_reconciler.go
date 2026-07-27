@@ -140,7 +140,10 @@ func (r *MemoryReconciler) runLinker(ctx context.Context) error {
 // processMemory runs the decision engine for a single memory against its top-20
 // similar neighbours in the same workspace.
 func (r *MemoryReconciler) processMemory(ctx context.Context, mem domain.Memory, queryVec []float32) error {
-	candidates, err := r.memRepo.VectorSearch(ctx, queryVec, mem.WorkspaceID, nil, "", nil, linkerCandidates)
+	// Zero filter on purpose: the linker looks for near-duplicates and relations across
+	// the whole workspace, so it must see every scope — unlike Recall, which is answering
+	// a caller who asked for a specific one.
+	candidates, err := r.memRepo.VectorSearch(ctx, queryVec, mem.WorkspaceID, nil, domain.MemorySearchFilter{}, linkerCandidates)
 	if err != nil {
 		return fmt.Errorf("vector search: %w", err)
 	}

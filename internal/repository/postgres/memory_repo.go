@@ -873,11 +873,49 @@ const memoryColumnsWithEmbedding = `id, workspace_id, project_id, agent_id, key,
 // large workspaces; when a corpus approaches this size, switch to pgvector/ANN.
 const vectorCandidatePoolCap = 20000
 
+// appendMemorySearchFilter appends the scope/tags eligibility predicates shared by BOTH
+// retrieval arms of Recall (FullTextSearchRanked and VectorSearch) to a WHERE-clause
+// builder. Having one builder is the point: the two arms previously disagreed about which
+// rows were even eligible — the BM25 arm applied neither scope nor tags, so scope was
+// unenforced on every row it contributed and, in bm25-only mode, unenforced entirely.
+//
+// Tag semantics match repository List exactly: Tags is AND (`tags @>`), TagsAny is OR
+// (`tags &&`). The vector arm previously used `&&` for Tags, silently widening an AND
+// filter into an OR one.
+//
+// Returns the extended conditions, args, and the next free placeholder index.
+func appendMemorySearchFilter(
+	conditions []string,
+	args []interface{},
+	argIdx int,
+	f domain.MemorySearchFilter,
+) (outConditions []string, outArgs []interface{}, nextArgIdx int) {
+	if f.Scope != "" {
+		conditions = append(conditions, fmt.Sprintf("scope = $%d", argIdx))
+		args = append(args, f.Scope)
+		argIdx++
+	}
+	if len(f.Tags) > 0 {
+		// AND: memory must contain ALL listed tags.
+		conditions = append(conditions, fmt.Sprintf("tags @> $%d", argIdx))
+		args = append(args, pq.Array(f.Tags))
+		argIdx++
+	}
+	if len(f.TagsAny) > 0 {
+		// OR: memory must contain AT LEAST ONE of the listed tags.
+		conditions = append(conditions, fmt.Sprintf("tags && $%d", argIdx))
+		args = append(args, pq.Array(f.TagsAny))
+		argIdx++
+	}
+	return conditions, args, argIdx
+}
+
 // VectorSearch performs application-level cosine similarity search.
 // Embeddings are stored as JSON-encoded float32 arrays in the embedding TEXT column.
 // This approach works without the pgvector extension — similarity is computed in Go.
-// Results are filtered by workspace/project/scope/tags and sorted by cosine similarity.
-func (r *MemoryRepo) VectorSearch(ctx context.Context, queryVec []float32, workspaceID uuid.UUID, projectID *uuid.UUID, scope string, tags []string, limit int) ([]domain.ScoredMemory, error) {
+// Results are filtered by workspace/project and by the shared scope/tags eligibility
+// filter, then sorted by cosine similarity.
+func (r *MemoryRepo) VectorSearch(ctx context.Context, queryVec []float32, workspaceID uuid.UUID, projectID *uuid.UUID, filter domain.MemorySearchFilter, limit int) ([]domain.ScoredMemory, error) {
 	if limit <= 0 {
 		limit = 20
 	}
@@ -891,21 +929,12 @@ func (r *MemoryRepo) VectorSearch(ctx context.Context, queryVec []float32, works
 	}
 	argIdx := 2
 
-	if scope != "" {
-		conditions = append(conditions, fmt.Sprintf("scope = $%d", argIdx))
-		args = append(args, scope)
-		argIdx++
-	}
 	if projectID != nil {
 		conditions = append(conditions, fmt.Sprintf("project_id = $%d", argIdx))
 		args = append(args, *projectID)
 		argIdx++
 	}
-	if len(tags) > 0 {
-		conditions = append(conditions, fmt.Sprintf("tags && $%d", argIdx))
-		args = append(args, pq.Array(tags))
-		argIdx++
-	}
+	conditions, args, argIdx = appendMemorySearchFilter(conditions, args, argIdx, filter)
 
 	// Fetch candidates for cosine ranking. The candidate set MUST be
 	// relevance-neutral: ordering by `relevance DESC` here biases the vector
@@ -1267,7 +1296,11 @@ func cosineSimilarity(a, b []float32) float64 {
 // and capped at limit. Batch-touches last_accessed_at for all returned rows.
 //
 // Used as the sparse (BM25) arm of the RRF fusion in service.Recall.
-func (r *MemoryRepo) FullTextSearchRanked(ctx context.Context, wsID uuid.UUID, projID *uuid.UUID, query string, limit int) ([]domain.ScoredMemory, error) {
+//
+// The scope/tags eligibility filter is applied here as SQL, not downstream: this arm
+// truncates to `limit` rows by ts_rank_cd, so filtering after the fact would silently
+// discard eligible rows that ranked below the cut and could never get them back.
+func (r *MemoryRepo) FullTextSearchRanked(ctx context.Context, wsID uuid.UUID, projID *uuid.UUID, query string, filter domain.MemorySearchFilter, limit int) ([]domain.ScoredMemory, error) {
 	if limit <= 0 {
 		limit = 20
 	}
@@ -1287,6 +1320,7 @@ func (r *MemoryRepo) FullTextSearchRanked(ctx context.Context, wsID uuid.UUID, p
 		args = append(args, *projID)
 		argIdx++
 	}
+	conditions, args, argIdx = appendMemorySearchFilter(conditions, args, argIdx, filter)
 
 	args = append(args, limit)
 	limitIdx := argIdx
@@ -1319,7 +1353,7 @@ func (r *MemoryRepo) FullTextSearchRanked(ctx context.Context, wsID uuid.UUID, p
 	// recall returns zero rows. Relaxing to token-level OR degrades gracefully instead.
 	// Errors in the fallback are non-fatal; we continue with whatever AND found.
 	if len(rows) < minFTSHits {
-		if orRows, err2 := r.ftsRankedORFallback(ctx, wsID, projID, query, limit, rows); err2 == nil {
+		if orRows, err2 := r.ftsRankedORFallback(ctx, wsID, projID, query, filter, limit, rows); err2 == nil {
 			rows = orRows
 		}
 	}
@@ -1353,13 +1387,17 @@ func (r *MemoryRepo) FullTextSearchRanked(ctx context.Context, wsID uuid.UUID, p
 // It cannot reuse ftsORFallback because that one targets the pre-built search_vector with
 // the 'simple' dictionary, whereas this arm re-computes the tsvector on the fly with the
 // 'english' dictionary. The WHERE clause below mirrors FullTextSearchRanked's predicates
-// exactly (workspace, expiry, archived, status != 'superseded', optional project) — dropping
-// any of them would leak superseded/archived/other-project rows in via the fallback.
+// exactly (workspace, expiry, archived, status != 'superseded', optional project, and the
+// scope/tags eligibility filter) — dropping any of them would leak superseded/archived/
+// other-project/out-of-scope rows in via the fallback. That risk is not theoretical here:
+// this fallback is the widening path, so it is precisely where an unfiltered query would
+// pull the most ineligible rows in.
 func (r *MemoryRepo) ftsRankedORFallback(
 	ctx context.Context,
 	wsID uuid.UUID,
 	projID *uuid.UUID,
 	query string,
+	filter domain.MemorySearchFilter,
 	limit int,
 	andRows []scoredMemoryRow,
 ) ([]scoredMemoryRow, error) {
@@ -1383,6 +1421,7 @@ func (r *MemoryRepo) ftsRankedORFallback(
 		args = append(args, *projID)
 		argIdx++
 	}
+	conditions, args, argIdx = appendMemorySearchFilter(conditions, args, argIdx, filter)
 
 	args = append(args, limit)
 	limitIdx := argIdx

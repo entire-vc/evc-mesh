@@ -128,11 +128,11 @@ func TestMemoryEdgesRepo_GetNeighbors_Empty(t *testing.T) {
 	repo := NewMemoryEdgesRepo(db)
 	ctx := context.Background()
 
-	result, err := repo.GetNeighbors(ctx, nil, 0.1, 200)
+	result, err := repo.GetNeighbors(ctx, nil, uuid.New(), 0.1, 200)
 	require.NoError(t, err)
 	assert.Nil(t, result, "nil ids → nil result without DB call")
 
-	result2, err := repo.GetNeighbors(ctx, []uuid.UUID{}, 0.1, 200)
+	result2, err := repo.GetNeighbors(ctx, []uuid.UUID{}, uuid.New(), 0.1, 200)
 	require.NoError(t, err)
 	assert.Nil(t, result2, "empty slice → nil result without DB call")
 }
@@ -163,7 +163,7 @@ func TestMemoryEdgesRepo_GetNeighbors_Bidirectional(t *testing.T) {
 		require.NoError(t, repo.UpsertEdge(ctx, e))
 	}
 
-	neighbors, err := repo.GetNeighbors(ctx, []uuid.UUID{aID}, 0.3, 200)
+	neighbors, err := repo.GetNeighbors(ctx, []uuid.UUID{aID}, wsID, 0.3, 200)
 	require.NoError(t, err)
 	assert.Len(t, neighbors, 2, "A→B and C→A should be returned; A→D (0.2) is below threshold")
 
@@ -199,7 +199,7 @@ func TestMemoryEdgesRepo_GetNeighbors_MultipleSeeds(t *testing.T) {
 		require.NoError(t, repo.UpsertEdge(ctx, e))
 	}
 
-	neighbors, err := repo.GetNeighbors(ctx, []uuid.UUID{xID, yID}, 0.5, 200)
+	neighbors, err := repo.GetNeighbors(ctx, []uuid.UUID{xID, yID}, wsID, 0.5, 200)
 	require.NoError(t, err)
 	assert.Len(t, neighbors, 2, "X→Y and Y→Z should both be returned")
 
