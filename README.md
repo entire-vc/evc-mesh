@@ -93,9 +93,12 @@ This starts PostgreSQL, Redis, NATS, and MinIO.
 ### 2. Configure environment
 
 ```bash
-# Edit deploy/docker/mesh/.env — at minimum, change JWT_SECRET
-# or manage the stack via: make docker-up
+cp .env.example .env
+# Edit .env — at minimum, change JWT_SECRET
 ```
+
+Defaults in `.env.example` already match the ports the compose file above
+publishes, so local development works without further edits.
 
 ### 3. Start the API server
 
@@ -117,7 +120,31 @@ cd web && pnpm install && pnpm dev
 go run ./cmd/mcp --transport sse --port 8081
 ```
 
-Open http://localhost:3000, register an account, and create your first workspace.
+### 6. Create the first account
+
+A fresh install ships with **no users and no default password**. Open
+http://localhost:3000/register and create an account — the first one you
+register is yours, and it gets its own workspace.
+
+Trying to log in before registering returns `401 invalid email or password`.
+That is expected: the account does not exist yet.
+
+If you would rather have the server create the admin for you — useful for
+scripted, headless, or container-only installs — start the API once with:
+
+```bash
+MESH_SEED_ADMIN=true \
+MESH_ADMIN_EMAIL=you@example.com \
+MESH_ADMIN_PASSWORD='<strong-password>' \
+go run ./cmd/api
+```
+
+The seed runs **only when the database has zero users**, and the API logs what
+it did on every boot (`[bootstrap] ...`) — including why it skipped. Omit
+`MESH_ADMIN_PASSWORD` and a strong password is generated and printed once.
+
+See [Seeding the first admin](docs/self-hosting.md#seeding-the-first-admin) for
+the full reference.
 
 For detailed setup, see [Quick Start Guide](docs/quickstart.md) and [Self-Hosting Guide](docs/self-hosting.md).
 

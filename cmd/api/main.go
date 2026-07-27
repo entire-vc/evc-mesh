@@ -2,14 +2,17 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"fmt"
 	"log"
+	"math/big"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
+	"github.com/jmoiron/sqlx"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 	"github.com/pressly/goose/v3"
@@ -42,6 +45,132 @@ var (
 	BuildVersion = "dev"
 	BuildEnv     = "dev"
 )
+
+// bootstrapAdmin creates the first admin user on a fresh install.
+//
+// Its second job matters as much as the first: it is never silent. An empty
+// database plus a login screen with no account is the most common self-hosting
+// dead end — the operator has no way to tell whether a seed ran, was skipped,
+// or was never asked for. Every branch below says what happened and what to do
+// next. See docs/quickstart.md "First login".
+func bootstrapAdmin(db *sqlx.DB, authService *auth.Service) {
+	var count int
+	if err := db.QueryRow("SELECT COUNT(*) FROM users").Scan(&count); err != nil {
+		log.Printf("[bootstrap] could not count users (%v) — skipping first-admin seed", err)
+		return
+	}
+
+	seedRequested := os.Getenv("MESH_SEED_ADMIN") == "true"
+
+	// Established instance: users already exist, so there is nothing to bootstrap.
+	if count > 0 {
+		if seedRequested {
+			log.Printf("[bootstrap] MESH_SEED_ADMIN=true, but the database already has %d user(s) — seed skipped by design.", count)
+			log.Printf("[bootstrap] Log in with an existing account. The seed only ever runs on a database with zero users.")
+		}
+		return
+	}
+
+	// Fresh database, but nobody asked for a seed — this is the dead end.
+	if !seedRequested {
+		log.Printf("[bootstrap] The database has no users yet, so nobody can log in.")
+		log.Printf("[bootstrap] Create the first admin in one of two ways:")
+		log.Printf("[bootstrap]   1. Open the web UI and register at /register (the first account is yours).")
+		log.Printf("[bootstrap]   2. Restart the API with: MESH_SEED_ADMIN=true MESH_ADMIN_EMAIL=you@example.com MESH_ADMIN_PASSWORD='<strong-password>'")
+		return
+	}
+
+	seedEmail := os.Getenv("MESH_ADMIN_EMAIL")
+	seedName := os.Getenv("MESH_ADMIN_NAME")
+	seedPass := os.Getenv("MESH_ADMIN_PASSWORD")
+	if seedEmail == "" {
+		seedEmail = "admin@localhost"
+	}
+	if seedName == "" {
+		seedName = "Admin"
+	}
+
+	// No password supplied: generate a strong one rather than falling back to a
+	// well-known constant. A published default password on an internet-facing
+	// install is a straight-up account takeover, and "we'll change it later"
+	// never happens. It is printed exactly once, here.
+	generated := false
+	if seedPass == "" {
+		var err error
+		if seedPass, err = generateAdminPassword(); err != nil {
+			log.Printf("[bootstrap] could not generate an admin password (%v) — seed aborted.", err)
+			log.Printf("[bootstrap] Set MESH_ADMIN_PASSWORD='<strong-password>' and restart.")
+			return
+		}
+		generated = true
+	}
+
+	if _, _, err := authService.Register(context.Background(), seedEmail, seedPass, seedName); err != nil {
+		log.Printf("[bootstrap] first-admin seed FAILED for %s: %v", seedEmail, err)
+		log.Printf("[bootstrap] Nobody can log in yet. Fix the cause above and restart, or register at /register in the web UI.")
+		return
+	}
+
+	if generated {
+		log.Printf("[bootstrap] ────────────────────────────────────────────────────────")
+		log.Printf("[bootstrap] First admin created: %s", seedEmail)
+		log.Printf("[bootstrap] Generated password:  %s", seedPass)
+		log.Printf("[bootstrap] This password is shown ONCE and is not stored anywhere.")
+		log.Printf("[bootstrap] Copy it now, log in, and change it. To pick your own")
+		log.Printf("[bootstrap] instead, set MESH_ADMIN_PASSWORD before the first boot.")
+		log.Printf("[bootstrap] ────────────────────────────────────────────────────────")
+		return
+	}
+
+	log.Printf("[bootstrap] First admin created: %s (password taken from MESH_ADMIN_PASSWORD — change it after first login).", seedEmail)
+}
+
+// generateAdminPassword returns a random password that satisfies the same
+// complexity rules the auth service enforces on registration (upper, lower,
+// digit), so a generated credential can never be rejected by its own validator.
+func generateAdminPassword() (string, error) {
+	const (
+		upper  = "ABCDEFGHJKLMNPQRSTUVWXYZ"
+		lower  = "abcdefghijkmnopqrstuvwxyz"
+		digits = "23456789"
+	)
+	alphabet := upper + lower + digits
+
+	// One guaranteed character per required class, then fill to length.
+	out := make([]byte, 0, 24)
+	for _, class := range []string{upper, lower, digits} {
+		c, err := randomChar(class)
+		if err != nil {
+			return "", err
+		}
+		out = append(out, c)
+	}
+	for len(out) < 24 {
+		c, err := randomChar(alphabet)
+		if err != nil {
+			return "", err
+		}
+		out = append(out, c)
+	}
+
+	// Shuffle so the first three positions are not a predictable class pattern.
+	for i := len(out) - 1; i > 0; i-- {
+		j, err := rand.Int(rand.Reader, big.NewInt(int64(i+1)))
+		if err != nil {
+			return "", err
+		}
+		out[i], out[j.Int64()] = out[j.Int64()], out[i]
+	}
+	return string(out), nil
+}
+
+func randomChar(set string) (byte, error) {
+	n, err := rand.Int(rand.Reader, big.NewInt(int64(len(set))))
+	if err != nil {
+		return 0, err
+	}
+	return set[n.Int64()], nil
+}
 
 func main() {
 	// 1. Load configuration from environment.
@@ -112,29 +241,7 @@ func main() {
 		cfg.Auth.JWTSecret,
 	)
 
-	// Seed default admin user if MESH_SEED_ADMIN=true and no users exist.
-	if os.Getenv("MESH_SEED_ADMIN") == "true" {
-		var count int
-		if seedErr := db.QueryRow("SELECT COUNT(*) FROM users").Scan(&count); seedErr == nil && count == 0 {
-			seedEmail := os.Getenv("MESH_ADMIN_EMAIL")
-			seedPass := os.Getenv("MESH_ADMIN_PASSWORD")
-			seedName := os.Getenv("MESH_ADMIN_NAME")
-			if seedEmail == "" {
-				seedEmail = "admin@localhost"
-			}
-			if seedPass == "" {
-				seedPass = "Admin123"
-			}
-			if seedName == "" {
-				seedName = "Admin"
-			}
-			if _, _, regErr := authService.Register(context.Background(), seedEmail, seedPass, seedName); regErr != nil {
-				log.Printf("Admin seed skipped: %v", regErr)
-			} else {
-				log.Printf("Default admin created: %s (change password on first login)", seedEmail)
-			}
-		}
-	}
+	bootstrapAdmin(db, authService)
 
 	// 6. Create all service instances.
 	workspaceService := service.NewWorkspaceService(workspaceRepo, activityLogRepo, workspaceMemberRepo)

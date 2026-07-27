@@ -57,13 +57,24 @@ The frontend starts at http://localhost:3000.
 
 ---
 
-## Step 4: Register and Create Your Workspace
+## Step 4: Create Your First Account
+
+A fresh install has **no users and no default password** — the first account is the
+one you create. There is nothing to log in with until you do.
 
 1. Open http://localhost:3000
-2. Log in with the default admin account: `admin@localhost` / `Admin123` (or register a new one)
-3. Create a **workspace** (e.g. "My Team")
-4. Create a **project** (e.g. "Backend API")
-5. Add some **tasks** via the kanban board
+2. Click **Create an account** (or go straight to http://localhost:3000/register)
+3. Register with your email and a password of 8+ characters containing an
+   uppercase letter, a lowercase letter, and a digit
+4. You are logged in, and a workspace has been created for you
+5. Create a **project** (e.g. "Backend API")
+6. Add some **tasks** via the kanban board
+
+> **Trying to log in before registering returns `401 invalid email or password`.**
+> That is expected on a fresh database: the account does not exist yet. Register
+> first. If you would rather have the server create the admin for you (useful for
+> scripted or headless installs), see
+> [Seeding the first admin](self-hosting.md#seeding-the-first-admin).
 
 ---
 
