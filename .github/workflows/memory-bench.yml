@@ -98,6 +98,7 @@ env:
     internal/service/memory_service.go
     internal/repository/postgres/memory_repo.go
     internal/repository/postgres/memory_edges_repo.go
+    internal/repository/postgres/memory_chunk_rank.go
     internal/mcp/tools.go
     internal/mcp/server.go
     internal/reconciler/
