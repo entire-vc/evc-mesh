@@ -45,6 +45,16 @@ func (r *UserRepo) UsernameExists(ctx context.Context, username string) (bool, e
 	return exists, nil
 }
 
+// Count returns the total number of users on the instance.
+func (r *UserRepo) Count(ctx context.Context) (int, error) {
+	const q = `SELECT COUNT(*) FROM users`
+	var n int
+	if err := r.db.GetContext(ctx, &n, q); err != nil {
+		return 0, err
+	}
+	return n, nil
+}
+
 func (r *UserRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.User, error) {
 	const q = `SELECT id, email, password_hash, display_name, COALESCE(avatar_url, '') AS avatar_url, is_active, created_at, updated_at FROM users WHERE id = $1`
 	var user domain.User

@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -86,6 +87,12 @@ func (r *mockUserRepo) GetByUsernameGlobal(_ context.Context, username string) (
 		}
 	}
 	return nil, nil
+}
+
+func (r *mockUserRepo) Count(_ context.Context) (int, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return len(r.users), nil
 }
 
 // ---
@@ -380,6 +387,108 @@ func TestRegister_InvalidEmail(t *testing.T) {
 	_, _, err := svc.Register(context.Background(), "not-an-email", "StrongP4ss", "User")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid email")
+}
+
+// ---------------------------------------------------------------------------
+// Tests: Registration gating (MESH_ALLOW_REGISTRATION / WithAllowRegistration)
+// ---------------------------------------------------------------------------
+
+func newClosedTestService() (*Service, *mockUserRepo) {
+	userRepo := newMockUserRepo()
+	refreshRepo := newMockRefreshTokenRepo()
+	wsRepo := newMockWorkspaceRepo()
+	wsMemberRepo := newMockWorkspaceMemberRepo()
+
+	svc := NewService(userRepo, refreshRepo, wsRepo, wsMemberRepo, testJWTSecret, WithAllowRegistration(false))
+	return svc, userRepo
+}
+
+func TestRegister_DefaultAllowsRegistration(t *testing.T) {
+	// NewService with no options at all — the zero-value Option slice — must
+	// still default to open, matching the documented "default true" policy.
+	svc, _, _, _, _ := newTestService()
+
+	_, _, err := svc.Register(context.Background(), "first@example.com", "StrongP4ss", "First User")
+	require.NoError(t, err)
+
+	_, _, err = svc.Register(context.Background(), "second@example.com", "StrongP4ss", "Second User")
+	require.NoError(t, err, "registration must stay open for every user when the flag is not overridden")
+}
+
+func TestRegister_ClosedBlocksSecondUser(t *testing.T) {
+	svc, _ := newClosedTestService()
+
+	// First user: database starts with zero users, so this must always succeed
+	// even though registration is closed — this is the bootstrap invariant.
+	_, _, err := svc.Register(context.Background(), "admin@example.com", "StrongP4ss", "Admin")
+	require.NoError(t, err, "the first user on a fresh install must always be able to register")
+
+	// Second user: the instance now has one user, so the closed flag must bite.
+	_, _, err = svc.Register(context.Background(), "intruder@example.com", "StrongP4ss", "Intruder")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrRegistrationClosed)
+	assert.Contains(t, err.Error(), "registration is closed")
+}
+
+func TestRegister_ClosedStillRejectsWhenFirstAttemptFailed(t *testing.T) {
+	// Guards against a bootstrap invariant implemented as "no successful
+	// registration yet" instead of "the users table is actually empty" — a
+	// failed first attempt (e.g. weak password) must not leave the instance
+	// open forever.
+	svc, _ := newClosedTestService()
+
+	_, _, err := svc.Register(context.Background(), "weak@example.com", "weak", "Weak")
+	require.Error(t, err, "weak password must still be rejected before the registration gate would matter")
+
+	// No user was ever created, so the bootstrap exception must still apply.
+	_, _, err = svc.Register(context.Background(), "admin@example.com", "StrongP4ss", "Admin")
+	require.NoError(t, err, "zero users means the bootstrap exception still applies after a failed attempt")
+
+	// Now a real user exists — the gate must close.
+	_, _, err = svc.Register(context.Background(), "second@example.com", "StrongP4ss", "Second")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrRegistrationClosed)
+}
+
+func TestRegistrationOpen_MirrorsRegisterDecision(t *testing.T) {
+	svc, _ := newClosedTestService()
+	ctx := context.Background()
+
+	// Zero users: RegistrationOpen must agree with Register's own bootstrap
+	// exception — this is what the frontend /auth/config endpoint relies on.
+	open, err := svc.RegistrationOpen(ctx)
+	require.NoError(t, err)
+	assert.True(t, open, "RegistrationOpen must report open while the instance has zero users")
+
+	_, _, err = svc.Register(ctx, "admin@example.com", "StrongP4ss", "Admin")
+	require.NoError(t, err)
+
+	open, err = svc.RegistrationOpen(ctx)
+	require.NoError(t, err)
+	assert.False(t, open, "RegistrationOpen must report closed once a user exists and the flag is off")
+}
+
+// countErrorUserRepo wraps mockUserRepo but fails Count — used to prove that
+// RegistrationOpen short-circuits on the (common) allow=true path without
+// ever touching the user count.
+type countErrorUserRepo struct {
+	*mockUserRepo
+}
+
+func (r *countErrorUserRepo) Count(_ context.Context) (int, error) {
+	return 0, errors.New("Count must not be called while allowRegistration=true")
+}
+
+func TestRegistrationOpen_DefaultTrueNeverCountsUsers(t *testing.T) {
+	userRepo := &countErrorUserRepo{newMockUserRepo()}
+	refreshRepo := newMockRefreshTokenRepo()
+	wsRepo := newMockWorkspaceRepo()
+	wsMemberRepo := newMockWorkspaceMemberRepo()
+	svc := NewService(userRepo, refreshRepo, wsRepo, wsMemberRepo, testJWTSecret)
+
+	open, err := svc.RegistrationOpen(context.Background())
+	require.NoError(t, err, "RegistrationOpen must not call Count (and hit its error) when the flag defaults to open")
+	assert.True(t, open)
 }
 
 // ---------------------------------------------------------------------------

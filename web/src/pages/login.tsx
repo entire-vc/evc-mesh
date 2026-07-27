@@ -1,6 +1,7 @@
 import { type FormEvent, useCallback, useState } from "react";
 import { Link, Navigate, useNavigate, useSearchParams } from "react-router";
 import { useAuthStore } from "@/stores/auth";
+import { useAuthConfig } from "@/hooks/use-auth-config";
 import { ApiRequestError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -17,6 +18,7 @@ export function LoginPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const { isAuthenticated, login } = useAuthStore();
+  const { registrationEnabled } = useAuthConfig();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -101,12 +103,14 @@ export function LoginPage() {
             <Button type="submit" className="w-full" disabled={loading}>
               {loading ? "Signing in..." : "Sign in"}
             </Button>
-            <p className="text-center text-sm text-muted-foreground">
-              Don&apos;t have an account?{" "}
-              <Link to="/register" className="text-primary hover:underline">
-                Register
-              </Link>
-            </p>
+            {registrationEnabled && (
+              <p className="text-center text-sm text-muted-foreground">
+                Don&apos;t have an account?{" "}
+                <Link to="/register" className="text-primary hover:underline">
+                  Register
+                </Link>
+              </p>
+            )}
           </CardFooter>
         </form>
       </Card>
