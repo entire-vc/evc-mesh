@@ -918,21 +918,7 @@ func (s *memoryService) Recall(ctx context.Context, opts domain.RecallOpts) ([]d
 		return cmp.Compare(b.Score, a.Score)
 	})
 
-	// ── Step 6: Trim to requested limit ───────────────────────────────────────
-	if len(merged) > opts.Limit {
-		merged = merged[:opts.Limit]
-	}
-
-	// ── Boost relevance as positive feedback (non-fatal) ─────────────────────
-	if len(merged) > 0 {
-		ids := make([]uuid.UUID, len(merged))
-		for i, r := range merged {
-			ids[i] = r.ID
-		}
-		_ = s.memRepo.BoostRelevance(ctx, ids)
-	}
-
-	// ── Step 7: Inject pinned memories (kind:pinned always surfaced) ─────────
+	// ── Step 6: Inject pinned memories (kind:pinned always surfaced) ─────────
 	// Pinned memories bypass retrieval entirely — they are always prepended to
 	// the result, regardless of relevance score or min_importance threshold.
 	//
@@ -941,6 +927,13 @@ func (s *memoryService) Recall(ctx context.Context, opts domain.RecallOpts) ([]d
 	// caller who asked for a different scope" — otherwise a caller asking for
 	// scope='agent' gets workspace rows back and the isolation contract is broken by
 	// the one path that is exempt from every other check.
+	//
+	// Nor do they bypass `limit`. Injection happens BEFORE the trim below, so a
+	// pinned row DISPLACES the weakest retrieval hit rather than being handed to
+	// the caller on top of a full page. Prepending after the trim (as this did
+	// until #4c65d3e2) returned limit+len(pinned) rows: `limit` stopped being a
+	// bound the caller could rely on, and the overflow was invisible because the
+	// response still echoed the requested limit.
 	var pinnedProjID *uuid.UUID
 	if opts.ProjectID != uuid.Nil {
 		pinnedProjID = &opts.ProjectID
@@ -961,6 +954,24 @@ func (s *memoryService) Recall(ctx context.Context, opts domain.RecallOpts) ([]d
 			pinnedScored = append(pinnedScored, domain.ScoredMemory{Memory: p, Score: 2.0}) // score > any retrieval score
 		}
 		merged = append(pinnedScored, merged...)
+	}
+
+	// ── Step 7: Trim to requested limit — LAST, after every injection ────────
+	// Everything that can add rows must run above this line. `limit` is a
+	// contract with the caller, not a hint applied midway through the pipeline.
+	if len(merged) > opts.Limit {
+		merged = merged[:opts.Limit]
+	}
+
+	// ── Boost relevance as positive feedback (non-fatal) ─────────────────────
+	// Boost only what the caller actually receives — rows trimmed above were
+	// never seen and must not be treated as a hit.
+	if len(merged) > 0 {
+		ids := make([]uuid.UUID, len(merged))
+		for i, r := range merged {
+			ids[i] = r.ID
+		}
+		_ = s.memRepo.BoostRelevance(ctx, ids)
 	}
 
 	return merged, searchMode, nil
