@@ -731,12 +731,13 @@ func (m *MockRulesService) SetWorkflowTemplates(ctx context.Context, workspaceID
 // Only the methods needed by CanonicalUpdatesHandler are fully wired;
 // all others are no-ops.
 type MockMemoryService struct {
-	ListMemoriesFunc func(ctx context.Context, filter domain.MemoryListFilter) (*service.RecallResult, error)
-	RecallFunc       func(ctx context.Context, opts domain.RecallOpts) ([]domain.ScoredMemory, domain.SearchMode, error)
-	GetByIDFunc      func(ctx context.Context, id uuid.UUID) (*domain.Memory, error)
-	RememberFunc     func(ctx context.Context, mem *domain.Memory) (service.RememberResult, error)
-	ForgetFunc       func(ctx context.Context, id uuid.UUID, actorAgentID *uuid.UUID, isAdmin bool) error
-	FindRelatedFunc  func(ctx context.Context, memoryID uuid.UUID, limit int) ([]domain.ScoredMemory, error)
+	ListMemoriesFunc   func(ctx context.Context, filter domain.MemoryListFilter) (*service.RecallResult, error)
+	RecallFunc         func(ctx context.Context, opts domain.RecallOpts) ([]domain.ScoredMemory, domain.SearchMode, error)
+	GetByIDFunc        func(ctx context.Context, id uuid.UUID) (*domain.Memory, error)
+	RememberFunc       func(ctx context.Context, mem *domain.Memory) (service.RememberResult, error)
+	ForgetFunc         func(ctx context.Context, id uuid.UUID, actorAgentID *uuid.UUID, isAdmin bool) error
+	FindRelatedFunc    func(ctx context.Context, memoryID uuid.UUID, limit int) ([]domain.ScoredMemory, error)
+	BackfillChunksFunc func(ctx context.Context, workspaceID uuid.UUID, limit int) (int, error)
 }
 
 func (m *MockMemoryService) ListMemories(ctx context.Context, filter domain.MemoryListFilter) (*service.RecallResult, error) {
@@ -783,6 +784,12 @@ func (m *MockMemoryService) ImportMemories(ctx context.Context, workspaceID uuid
 	return 0, nil
 }
 func (m *MockMemoryService) BatchEmbed(ctx context.Context, workspaceID uuid.UUID) (int, error) {
+	return 0, nil
+}
+func (m *MockMemoryService) BackfillChunks(ctx context.Context, workspaceID uuid.UUID, limit int) (int, error) {
+	if m.BackfillChunksFunc != nil {
+		return m.BackfillChunksFunc(ctx, workspaceID, limit)
+	}
 	return 0, nil
 }
 func (m *MockMemoryService) FindRelated(ctx context.Context, memoryID uuid.UUID, limit int) ([]domain.ScoredMemory, error) {

@@ -750,6 +750,37 @@ func (h *MemoryHandler) Reindex(c echo.Context) error {
 	return c.JSON(http.StatusOK, map[string]int{"reindexed": count})
 }
 
+// BackfillChunks handles POST /api/v1/memories/backfill-chunks
+// Processes up to `limit` (default 100) memories in the workspace that have no memory_chunks
+// rows yet through the chunked embed path (ADR-0002, #b052cdda). Idempotent and resumable:
+// call repeatedly until the response's "chunked" count is 0 — a memory chunked by an earlier
+// call is excluded from the next call's selection automatically.
+//
+// Deliberately a separate endpoint from Reindex/BatchEmbed: that one selects on
+// embedding_model mismatch (for provider/model switches), which would never select a memory
+// already carrying the CURRENT model's watermark from before chunking existed.
+func (h *MemoryHandler) BackfillChunks(c echo.Context) error {
+	wsIDStr := c.QueryParam("workspace_id")
+	wsID, err := h.requireWorkspaceID(c, wsIDStr)
+	if err != nil {
+		return handleError(c, err)
+	}
+
+	limit := 0 // BackfillChunks defaults this to 100 when <= 0
+	if l := c.QueryParam("limit"); l != "" {
+		if n, convErr := strconv.Atoi(l); convErr == nil {
+			limit = n
+		}
+	}
+
+	count, err := h.memoryService.BackfillChunks(c.Request().Context(), wsID, limit)
+	if err != nil {
+		return handleError(c, err)
+	}
+
+	return c.JSON(http.StatusOK, map[string]int{"chunked": count})
+}
+
 // FindRelated handles GET /api/v1/memories/:id/related
 // Returns memories related to the given memory ID via full-text search.
 func (h *MemoryHandler) FindRelated(c echo.Context) error {

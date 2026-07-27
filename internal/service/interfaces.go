@@ -890,6 +890,16 @@ type MemoryService interface {
 	// BatchEmbed finds all memories without an embedding and embeds them using the configured embedder.
 	// Returns the count of memories that were successfully embedded.
 	BatchEmbed(ctx context.Context, workspaceID uuid.UUID) (int, error)
+	// BackfillChunks finds up to limit memories in workspaceID with no memory_chunks rows yet
+	// and embeds them through the chunked path (ADR-0002). Unlike BatchEmbed, selection is NOT
+	// based on embedding_model — a memory already carrying the current model's watermark from
+	// before chunking existed would be invisible to that filter, which is exactly why this is a
+	// separate method rather than a BatchEmbed variant. Idempotent and resumable by construction:
+	// call repeatedly (limit<=0 defaults to 100) until it returns 0 — a memory that got chunks
+	// this call is excluded from the next call's selection automatically, no cursor needed.
+	// Returns 0, nil (not an error) when chunked embedding is not configured, matching BatchEmbed's
+	// no-op-on-noop-embedder convention.
+	BackfillChunks(ctx context.Context, workspaceID uuid.UUID, limit int) (int, error)
 	// FindRelated returns memories related to the given memory ID via full-text search on its key+tags.
 	// The source memory itself is excluded from results.
 	FindRelated(ctx context.Context, memoryID uuid.UUID, limit int) ([]domain.ScoredMemory, error)

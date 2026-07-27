@@ -629,6 +629,14 @@ type MemoryRepository interface {
 	// vector space, score 0 in cosineSimilarity (dimension guard), and would otherwise stay
 	// invisible to semantic recall forever because nothing re-embeds them.
 	ListNeedingEmbedding(ctx context.Context, workspaceID uuid.UUID, model string, limit int) ([]domain.Memory, error)
+	// ListNotYetChunked returns up to limit memories in workspaceID that have no memory_chunks
+	// rows (ADR-0002 backfill, #b052cdda). Deliberately independent of embedding_model: a memory
+	// embedded through the pre-chunking single-vector path already carries the current model's
+	// name in embedding_model, so ListNeedingEmbedding's filter would never select it — this
+	// query selects on chunk existence instead, which is also what makes repeated calls
+	// naturally resumable (a memory chunked by an earlier call is excluded by construction, no
+	// separate cursor to track).
+	ListNotYetChunked(ctx context.Context, workspaceID uuid.UUID, limit int) ([]domain.Memory, error)
 	// FindByShortID returns the first memory in workspaceID whose UUID starts with prefix (6–12 lowercase hex chars).
 	// Returns nil without error when no match is found.
 	FindByShortID(ctx context.Context, workspaceID uuid.UUID, prefix string) (*domain.Memory, error)

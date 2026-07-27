@@ -35,6 +35,8 @@ type mockMemoryRepo struct {
 	embedModelAsked string
 	// rows the fake repo hands back as "needs (re)embedding"
 	needEmbedding []domain.Memory
+	// rows the fake repo hands back as "not yet chunked" (ListNotYetChunked)
+	notYetChunked []domain.Memory
 	// captured by UpdateEmbedding
 	embeddedWithModel string
 	embeddedDim       int
@@ -42,6 +44,7 @@ type mockMemoryRepo struct {
 	markedEmbeddingModelID             uuid.UUID
 	markedEmbeddingModelValue          string
 	markEmbeddingModelErr              error
+	listNotYetChunkedErr               error
 	upsertFn                           func(ctx context.Context, mem *domain.Memory) error
 	getByIDFn                          func(ctx context.Context, id uuid.UUID) (*domain.Memory, error)
 	getByKeyFn                         func(ctx context.Context, wsID uuid.UUID, projID *uuid.UUID, agentID *uuid.UUID, key string, scope domain.MemoryScope) (*domain.Memory, error)
@@ -154,6 +157,15 @@ func (m *mockMemoryRepo) ListNeedingEmbedding(_ context.Context, _ uuid.UUID, mo
 	m.embedModelAsked = model
 	out := m.needEmbedding
 	m.needEmbedding = nil // one batch, then drained — mirrors the real paging loop
+	return out, nil
+}
+
+func (m *mockMemoryRepo) ListNotYetChunked(_ context.Context, _ uuid.UUID, _ int) ([]domain.Memory, error) {
+	if m.listNotYetChunkedErr != nil {
+		return nil, m.listNotYetChunkedErr
+	}
+	out := m.notYetChunked
+	m.notYetChunked = nil // one batch, then drained — mirrors the real resumable-by-exclusion loop
 	return out, nil
 }
 
@@ -2757,6 +2769,36 @@ func TestBatchEmbed_Chunked_EmbedChunkedErrorLogsAndContinuesRatherThanAborting(
 	assert.NotEmpty(t, gotOK)
 }
 
+func TestBackfillChunks_ListNotYetChunkedError_IsWrappedAndReturned(t *testing.T) {
+	memRepo := &mockMemoryRepo{listNotYetChunkedErr: errors.New("simulated db failure")}
+	chunkRepo := newMockMemoryChunkRepo()
+	svc := NewMemoryService(memRepo, &mockMemoryEdgeRepo{}, &switchModelEmbedder{model: "e5-small", dim: 384},
+		MemoryWithChunkRepo(chunkRepo))
+
+	n, err := svc.BackfillChunks(context.Background(), uuid.New(), 0)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "backfill chunks: list")
+	assert.Zero(t, n)
+}
+
+func TestBackfillChunks_EmbedChunkedError_SkipsThatMemoryButContinues(t *testing.T) {
+	ok := uuid.New()
+	failing := uuid.New()
+	memRepo := &mockMemoryRepo{
+		notYetChunked: []domain.Memory{
+			{ID: failing, Key: "k", Content: "content"},
+			{ID: ok, Key: "k", Content: "content"},
+		},
+	}
+	chunkRepo := newMockMemoryChunkRepo()
+	failer := &nthCallFailsEmbedder{dim: 4, failAt: 1}
+	svc := NewMemoryService(memRepo, &mockMemoryEdgeRepo{}, failer, MemoryWithChunkRepo(chunkRepo))
+
+	n, err := svc.BackfillChunks(context.Background(), uuid.New(), 0)
+	require.NoError(t, err, "one memory's embed failure must not fail the whole backfill pass")
+	assert.Equal(t, 1, n)
+}
+
 func longTranscript(turns int) string {
 	var b strings.Builder
 	for i := 0; i < turns; i++ {
@@ -2853,6 +2895,54 @@ func TestBatchEmbed_Chunked_RoutesThroughChunkRepoAndWatermarks(t *testing.T) {
 	require.NoError(t, err)
 	assert.Greater(t, len(got), 1)
 	assert.Equal(t, id, memRepo.markedEmbeddingModelID, "BatchEmbed's chunked path must watermark memories.embedding_model so this memory is not re-selected next run")
+}
+
+// BackfillChunks selects independently of embedding_model — a memory already carrying the
+// current model's watermark from the pre-chunking single-vector path (the normal state of
+// every existing row before this feature ships) must still be picked up by ListNotYetChunked.
+// This is the exact scenario BatchEmbed's own filter would silently skip.
+func TestBackfillChunks_SelectsOnMissingChunksNotEmbeddingModel(t *testing.T) {
+	id := uuid.New()
+	memRepo := &mockMemoryRepo{
+		notYetChunked: []domain.Memory{
+			{ID: id, Key: "k", Content: longTranscript(30), EmbeddingModel: "e5-small"}, // already watermarked
+		},
+	}
+	chunkRepo := newMockMemoryChunkRepo()
+	svc := NewMemoryService(memRepo, &mockMemoryEdgeRepo{}, &switchModelEmbedder{model: "e5-small", dim: 384},
+		MemoryWithChunkRepo(chunkRepo))
+
+	n, err := svc.BackfillChunks(context.Background(), uuid.New(), 0)
+	require.NoError(t, err)
+	assert.Equal(t, 1, n)
+
+	got, err := chunkRepo.ListByMemoryIDs(context.Background(), []uuid.UUID{id})
+	require.NoError(t, err)
+	assert.Greater(t, len(got), 1, "long content must still produce multiple chunks even though embedding_model already matched")
+}
+
+func TestBackfillChunks_NoopWithoutChunkRepo(t *testing.T) {
+	memRepo := &mockMemoryRepo{
+		notYetChunked: []domain.Memory{{ID: uuid.New(), Key: "k", Content: "x"}},
+	}
+	svc := NewMemoryService(memRepo, &mockMemoryEdgeRepo{}, &switchModelEmbedder{model: "e5-small", dim: 384})
+	// no MemoryWithChunkRepo
+
+	n, err := svc.BackfillChunks(context.Background(), uuid.New(), 0)
+	require.NoError(t, err, "must be a no-op, not an error, matching BatchEmbed's noop-embedder convention")
+	assert.Equal(t, 0, n)
+}
+
+func TestBackfillChunks_NoopWithNoopEmbedder(t *testing.T) {
+	memRepo := &mockMemoryRepo{
+		notYetChunked: []domain.Memory{{ID: uuid.New(), Key: "k", Content: "x"}},
+	}
+	chunkRepo := newMockMemoryChunkRepo()
+	svc := NewMemoryService(memRepo, &mockMemoryEdgeRepo{}, nil, MemoryWithChunkRepo(chunkRepo)) // nil → noop embedder
+
+	n, err := svc.BackfillChunks(context.Background(), uuid.New(), 0)
+	require.NoError(t, err)
+	assert.Equal(t, 0, n)
 }
 
 // TestEmbedConcurrencyBound verifies that MemoryWithEmbedConcurrency caps how many
