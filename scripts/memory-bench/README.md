@@ -289,6 +289,49 @@ somebody instead of quietly degrading recall for days:
 
 Alert on `rate(mesh_memory_embed_failures_total{op="recall"}[15m]) > 0`.
 
+### Per-question results: `results/recall_gate.json`
+
+`results/` existed from the gate's first commit and nothing ever wrote to it —
+the only artifact was `gate.log`, whose per-question line carried a tick or a
+cross. So `hit@10 = 0` was the same artifact whether the gold session ranked
+12th or was never retrieved at all, and those have different causes and
+different fixes. Answering "which one?" cost a live probe against prod
+(#c6b1ecee) instead of a five-minute read.
+
+Both arms now write every question's result, plus the run envelope
+(`search_mode`, `top_k`, `repeat`, `scores`, `sample_sizes`), to
+`results/recall_gate.json` (`results/longmemeval.json` for the advisory arm).
+Both are already inside the `upload-artifact` paths. Three fields beyond the
+verdict:
+
+| field | meaning |
+|---|---|
+| `gold_rank` | 1-based position of the first gold session in the **full** tag-filtered ranked list, not the `top_k` window. `null` = no gold row reached the client at any `k`. |
+| `rows_returned` | How many of this question's fixtures survived to the client. |
+| `haystack_size` | How many were stored. `rows_returned` alone is not interpretable: 32 means nothing until you know it is 32 of 45. |
+
+`gold_rank` is 1-based so that `0` is impossible and `is None` is the only
+"absent" — a sentinel of `0` collides with 0-based counting, and a sentinel of
+`k` is indistinguishable from a row ranked last inside the window.
+
+Two things worth knowing before you read these numbers:
+
+* **`hit` and `gold_rank` cannot disagree.** The scored window is a prefix of
+  the retained list, so a hit is exactly a gold row at a rank `<= top_k`.
+  `test_gold_rank.py` pins that across every position. Without it the artifact
+  could ship a rank that contradicts the score printed next to it.
+* **`null` means "did not reach the client", not "not indexed".** `scope` and
+  `tags_any` are post-filters over a workspace-wide candidate pool
+  (#2c087b2a), so a fixture can be indexed perfectly and still never arrive.
+  Read `gold_rank` together with `rows_returned` vs `haystack_size`: when
+  `rows_returned < haystack_size` the pool truncated, and that — not the index
+  — is the first thing to suspect.
+
+Nothing here feeds scoring, thresholds or the exit code. The artifact is
+written *before* the verdict branches, so it still exists on an INCONCLUSIVE or
+a refused capture, and a failure to write is logged but never changes the
+verdict: an observability artifact must not be able to fail a required check.
+
 ## The four ways this gate goes blind
 
 The gate is required, which makes its *silence* more dangerous than its red. Each

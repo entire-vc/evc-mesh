@@ -1,4 +1,5 @@
 results/*.jsonl
+results/*.json
 __pycache__/
 *.pyc
 .env.ci

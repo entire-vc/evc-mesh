@@ -327,6 +327,17 @@ class MeshMemoryClient:
         # server does not report it (older Mesh) — never silently assumed healthy.
         self.search_mode: str = SEARCH_MODE_UNKNOWN
         self.degraded: bool | None = None
+        # The FULL tag-filtered ranked list as it reached the client, before the
+        # top_k slice. `ingest_and_search` returns only the scored window, so
+        # without this the rank of a gold session that lands outside top_k is
+        # unrecoverable from any artifact — which is exactly what forced a live
+        # prod probe to answer "rank 12 or not retrieved at all?" (#c6b1ecee).
+        # `rows_returned` is the count of the same list: it is how many of this
+        # question's fixtures survived the workspace-wide candidate pool, and it
+        # is the number that exposed the post-filter truncation (32/45, 27/50).
+        # None means "no search completed", which is NOT the same as 0 rows.
+        self.ranked_records: list[dict[str, Any]] = []
+        self.rows_returned: int | None = None
         # How much of the retry allowance this question actually spent. The gate
         # reads these to tell "the API blipped once" apart from "four fresh
         # mesh-mcp processes over ~50s all died the same way" — the second is a
@@ -579,4 +590,11 @@ class MeshMemoryClient:
         if not isinstance(items, list):
             items = []
         mine = [it for it in items if self.bench_tag in (it.get("tags") or [])]
-        return [_to_record(it) for it in mine[:top_k]]
+        # Retained BEFORE the slice, and reassigned on every attempt so a retry
+        # never reports a dead attempt's list. The window the caller scores is a
+        # prefix of this, so `hit` and `gold_rank` cannot disagree by
+        # construction: a hit is exactly a gold row at a rank <= top_k.
+        ranked = [_to_record(it) for it in mine]
+        self.ranked_records = ranked
+        self.rows_returned = len(ranked)
+        return ranked[:top_k]

@@ -53,6 +53,58 @@ from run_ci import (  # noqa: E402
 )
 
 
+# Module-scoped belt for the results artifact. Several classes in this file drive
+# the real `main()`, and only some of them own a tmp dir — `TestTheGate...` runs
+# against the REAL dataset with no file patches at all. A per-harness patch list
+# isolates exactly the harnesses that remembered to add the newest sink, which is
+# how a test fixture ends up in a shipped artifact: the recall job runs these
+# self-checks BEFORE the gate and then uploads scripts/memory-bench/results/, and
+# it only ever runs `--retrieval-only`, so nothing overwrites a longmemeval.json
+# left behind by a stub. Redirecting for the whole module makes that structurally
+# impossible rather than a rule each future harness has to remember.
+_RESULTS_TMP: tempfile.TemporaryDirectory | None = None
+_RESULTS_PATCHERS: list = []
+
+
+def setUpModule() -> None:
+    global _RESULTS_TMP
+    _RESULTS_TMP = tempfile.TemporaryDirectory(prefix="gate-results-")
+    root = Path(_RESULTS_TMP.name)
+    for attr, value in (
+        ("RESULTS_DIR", root),
+        ("RETRIEVAL_RESULTS_FILE", root / "recall_gate.json"),
+        ("E2E_RESULTS_FILE", root / "longmemeval.json"),
+    ):
+        patcher = mock.patch.object(run_ci, attr, value)
+        patcher.start()
+        _RESULTS_PATCHERS.append(patcher)
+
+
+def tearDownModule() -> None:
+    for patcher in reversed(_RESULTS_PATCHERS):
+        patcher.stop()
+    _RESULTS_PATCHERS.clear()
+    if _RESULTS_TMP is not None:
+        _RESULTS_TMP.cleanup()
+
+
+class TestTheSelfChecksCannotWriteIntoTheUploadedArtifact(unittest.TestCase):
+    """Guards the belt above, not any one harness.
+
+    If this fails, some test in this file is writing stub fixtures into the
+    directory CI uploads as `recall-gate-results`.
+    """
+
+    def test_every_results_path_points_outside_the_repo(self):
+        repo_results = (Path(run_ci.__file__).resolve().parent / "results").resolve()
+        for attr in ("RESULTS_DIR", "RETRIEVAL_RESULTS_FILE", "E2E_RESULTS_FILE"):
+            target = Path(getattr(run_ci, attr)).resolve()
+            self.assertFalse(
+                target == repo_results or repo_results in target.parents,
+                f"{attr} still points into the uploaded results/ dir: {target}",
+            )
+
+
 class TestResolveRunSearchMode(unittest.TestCase):
     def test_all_hybrid(self):
         results = [{"search_mode": MODE_HYBRID}, {"search_mode": MODE_HYBRID}]
@@ -283,9 +335,21 @@ class _ArmHarness(unittest.TestCase):
         data_file.write_text(json.dumps(dataset))
         self.dataset = dataset
 
+        # Every file main() WRITES has to be redirected into tmp, not just the
+        # baselines it reads. The results artifact is a new output sink, and a
+        # sink missing from this list writes test fixtures into the real
+        # scripts/memory-bench/results/ — which CI then uploads as
+        # `recall-gate-results`. The recall job runs these self-checks BEFORE
+        # the gate and only ever runs `--retrieval-only`, so nothing overwrites
+        # longmemeval.json: the artifact would ship `q0 knowledge-update
+        # overall 1.000` from _stub_answers, indistinguishable from a real
+        # advisory run to anyone who downloads it.
         for p, attr in (
             (self.tmp / "baseline.json", "BASELINE_FILE"),
             (self.tmp / "baseline_retrieval.json", "RETRIEVAL_BASELINE_FILE"),
+            (self.tmp / "results", "RESULTS_DIR"),
+            (self.tmp / "results" / "recall_gate.json", "RETRIEVAL_RESULTS_FILE"),
+            (self.tmp / "results" / "longmemeval.json", "E2E_RESULTS_FILE"),
         ):
             patcher = mock.patch.object(run_ci, attr, p)
             patcher.start()
@@ -1496,6 +1560,93 @@ class TestCaptureRefusalReachesTheFile(_ArmHarness):
             rc = self._run("--update-baseline", "--max-error-rate", "0.2")
         self.assertEqual(rc, EXIT_OK)
         self.assertTrue(self.BASELINE_FILE.exists())
+
+
+class TestResultsArtifact(_ArmHarness):
+    """The artifact's behaviour through the REAL `main()`.
+
+    test_gold_rank.py pins the fields and `write_results_artifact` directly; what
+    can only be checked here is the CALL SITE — that the write survives the
+    early-return verdict paths, and that a failed write cannot move the exit code
+    of a required check. A correct writer invoked after the branch that returns is
+    still an artifact you do not get on the runs you most want it for.
+    """
+
+    def _questions(self) -> list[dict]:
+        return json.loads(self.RETRIEVAL_RESULTS_FILE.read_text())["questions"]
+
+    def test_the_artifact_is_written_on_a_passing_run(self):
+        self._write_baseline(
+            self.RETRIEVAL_BASELINE_FILE,
+            {
+                "search_mode": MODE_HYBRID,
+                "n_runs": 3,
+                "scores": {"knowledge-update": 1.0, "multi-session": 1.0, "overall": 1.0},
+                "spread": {},
+                "sample_sizes": {"knowledge-update": [4, 4], "multi-session": [4, 4]},
+            },
+        )
+        self._stub_answers({"knowledge-update": 4, "multi-session": 4}, MODE_HYBRID)
+        with contextlib.redirect_stdout(io.StringIO()):
+            rc = self._run("--retrieval-only")
+        self.assertEqual(rc, EXIT_OK)
+        self.assertTrue(self.RETRIEVAL_RESULTS_FILE.exists())
+
+    def test_the_artifact_survives_an_early_return(self):
+        """INCONCLUSIVE returns before the verdict block. An artifact that only
+        appears on the happy path is missing exactly when it is wanted most."""
+        self._stub_answers({"knowledge-update": 1, "multi-session": 0}, MODE_HYBRID)
+        with contextlib.redirect_stdout(io.StringIO()):
+            rc = self._run("--retrieval-only")
+        self.assertEqual(rc, EXIT_INCONCLUSIVE, "no baseline -> cannot compare")
+        self.assertTrue(
+            self.RETRIEVAL_RESULTS_FILE.exists(),
+            "the per-question results are the only thing left to read on a blind run",
+        )
+
+    def test_existing_keys_are_written_through_verbatim(self):
+        # Comparing against historical artifacts must not break: additive only.
+        self._stub_answers({"knowledge-update": 4, "multi-session": 0}, MODE_HYBRID)
+        with contextlib.redirect_stdout(io.StringIO()):
+            self._run("--retrieval-only")
+        q = self._questions()[0]
+        for key in ("question_id", "question_type", "correct", "search_mode"):
+            self.assertIn(key, q, f"{key} was dropped — historical readers break")
+        self.assertEqual(len(self._questions()), 8)
+
+    def test_a_failure_to_write_the_artifact_cannot_change_the_verdict(self):
+        """Observability must never be able to fail a required check."""
+        self._write_baseline(
+            self.RETRIEVAL_BASELINE_FILE,
+            {
+                "search_mode": MODE_HYBRID,
+                "n_runs": 3,
+                "scores": {"knowledge-update": 1.0, "multi-session": 1.0, "overall": 1.0},
+                "spread": {},
+                "sample_sizes": {"knowledge-update": [4, 4], "multi-session": [4, 4]},
+            },
+        )
+        self._stub_answers({"knowledge-update": 4, "multi-session": 4}, MODE_HYBRID)
+        with mock.patch.object(
+            run_ci.Path, "write_text", side_effect=OSError("read-only fs")
+        ), contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(
+            io.StringIO()
+        ):
+            rc = self._run("--retrieval-only")
+        self.assertEqual(rc, EXIT_OK, "a write failure must be reported, not fatal")
+
+    def test_the_run_does_not_write_into_the_real_results_directory(self):
+        """Isolation guard for the sink itself: with RESULTS_DIR patched, a run
+        must leave the repo's own results/ untouched. Without this the self-check
+        step drops stub fixtures into the directory CI uploads."""
+        real = Path(run_ci.__file__).resolve().parent / "results"
+        before = sorted(p.name for p in real.glob("*.json")) if real.exists() else []
+        self._stub_answers({"knowledge-update": 4, "multi-session": 0}, MODE_HYBRID)
+        with contextlib.redirect_stdout(io.StringIO()):
+            self._run("--retrieval-only")
+        after = sorted(p.name for p in real.glob("*.json")) if real.exists() else []
+        self.assertEqual(before, after, "tests must not write into the uploaded dir")
+        self.assertTrue(self.RETRIEVAL_RESULTS_FILE.exists())
 
 
 if __name__ == "__main__":
