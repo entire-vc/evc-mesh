@@ -135,3 +135,41 @@ func TestMemoryChunkRepoDB_MemoryIDsWithChunks_EmptyInput(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, got)
 }
+
+func TestMemoryChunkRepoDB_ReplaceChunks_UnknownMemoryIDFailsInsert(t *testing.T) {
+	repo, _, _ := setupMemoryChunkDBTest(t)
+
+	err := repo.ReplaceChunks(context.Background(), uuid.New(), []domain.MemoryChunk{
+		{ChunkIdx: 0, ChunkStart: 0, ChunkEnd: 10, Embedding: "x", EmbeddingModel: "m", EmbeddingDim: 4},
+	})
+	require.Error(t, err, "inserting a chunk for a memory_id with no matching memories row must fail the FK constraint")
+}
+
+func TestMemoryChunkRepoDB_ReplaceChunks_CanceledContext(t *testing.T) {
+	repo, _, memID := setupMemoryChunkDBTest(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := repo.ReplaceChunks(ctx, memID, []domain.MemoryChunk{
+		{ChunkIdx: 0, ChunkStart: 0, ChunkEnd: 10, Embedding: "x", EmbeddingModel: "m", EmbeddingDim: 4},
+	})
+	require.Error(t, err)
+}
+
+func TestMemoryChunkRepoDB_ListByMemoryIDs_CanceledContext(t *testing.T) {
+	repo, _, memID := setupMemoryChunkDBTest(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := repo.ListByMemoryIDs(ctx, []uuid.UUID{memID})
+	require.Error(t, err)
+}
+
+func TestMemoryChunkRepoDB_MemoryIDsWithChunks_CanceledContext(t *testing.T) {
+	repo, _, memID := setupMemoryChunkDBTest(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := repo.MemoryIDsWithChunks(ctx, []uuid.UUID{memID})
+	require.Error(t, err)
+}
