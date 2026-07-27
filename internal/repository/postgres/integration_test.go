@@ -478,7 +478,7 @@ func TestNullAvatarURL(t *testing.T) {
 	wsID := uuid.New()
 	_, err := db.ExecContext(ctx,
 		`INSERT INTO workspaces (id, name, slug, owner_id, settings, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-		wsID, "Avatar NULL Test WS", "navtwS-"+uuid.New().String()[:6], uuid.New(),
+		wsID, "Avatar NULL Test WS", "navtws-"+uuid.New().String()[:6], uuid.New(),
 		json.RawMessage(`{}`), time.Now().UTC(), time.Now().UTC(),
 	)
 	require.NoError(t, err)
@@ -489,7 +489,7 @@ func TestNullAvatarURL(t *testing.T) {
 
 	userID := uuid.New()
 	email := "nullavatar-" + uuid.New().String()[:8] + "@test.example"
-	username := "navU" + uuid.New().String()[:8]
+	username := "navu" + uuid.New().String()[:8]
 	_, err = db.ExecContext(ctx,
 		`INSERT INTO users (id, email, password_hash, display_name, username, avatar_url, is_active, created_at, updated_at)
 		 VALUES ($1, $2, 'testhash', 'Null Avatar User', $3, NULL, true, $4, $5)`,
