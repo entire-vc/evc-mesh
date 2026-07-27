@@ -118,12 +118,12 @@ func main() {
 	bootstrap.Admin(context.Background(), bootstrap.Deps{
 		CountUsers: func(ctx context.Context) (int, error) {
 			var n int
-			err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM users").Scan(&n)
-			return n, err
+			countErr := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM users").Scan(&n)
+			return n, countErr
 		},
 		Register: func(ctx context.Context, email, password, name string) error {
-			_, _, err := authService.Register(ctx, email, password, name)
-			return err
+			_, _, regErr := authService.Register(ctx, email, password, name)
+			return regErr
 		},
 		Getenv: os.Getenv,
 		Logf:   log.Printf,
