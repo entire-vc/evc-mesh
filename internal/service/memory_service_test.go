@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -34,8 +35,11 @@ type mockMemoryRepo struct {
 	// rows the fake repo hands back as "needs (re)embedding"
 	needEmbedding []domain.Memory
 	// captured by UpdateEmbedding
-	embeddedWithModel                  string
-	embeddedDim                        int
+	embeddedWithModel string
+	embeddedDim       int
+	// captured by MarkEmbeddingModel (the chunked-embed watermark)
+	markedEmbeddingModelID             uuid.UUID
+	markedEmbeddingModelValue          string
 	upsertFn                           func(ctx context.Context, mem *domain.Memory) error
 	getByIDFn                          func(ctx context.Context, id uuid.UUID) (*domain.Memory, error)
 	getByKeyFn                         func(ctx context.Context, wsID uuid.UUID, projID *uuid.UUID, agentID *uuid.UUID, key string, scope domain.MemoryScope) (*domain.Memory, error)
@@ -122,6 +126,14 @@ func (m *mockMemoryRepo) UpdateEmbedding(_ context.Context, _ uuid.UUID, _ []flo
 	defer m.mu.Unlock()
 	m.embeddedWithModel = model
 	m.embeddedDim = dim
+	return nil
+}
+
+func (m *mockMemoryRepo) MarkEmbeddingModel(_ context.Context, id uuid.UUID, model string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.markedEmbeddingModelID = id
+	m.markedEmbeddingModelValue = model
 	return nil
 }
 
@@ -2571,6 +2583,187 @@ func (s *switchModelEmbedder) EmbedBatch(_ context.Context, texts []string) ([][
 }
 func (s *switchModelEmbedder) Model() string   { return s.model }
 func (s *switchModelEmbedder) Dimensions() int { return s.dim }
+
+// ---------------------------------------------------------------------------
+// Chunked embed path (ADR-0002, #b052cdda subtask 5)
+// ---------------------------------------------------------------------------
+
+// mockMemoryChunkRepo is an in-memory repository.MemoryChunkRepository. ReplaceChunks
+// overwrites wholesale, matching the real delete+reinsert transaction's observable behavior.
+type mockMemoryChunkRepo struct {
+	mu         sync.Mutex
+	chunks     map[uuid.UUID][]domain.MemoryChunk
+	replaceErr error
+	// replaceCalls counts ReplaceChunks invocations — used to prove a failed embed call
+	// never reaches ReplaceChunks at all (partial writes must never happen).
+	replaceCalls int
+}
+
+func newMockMemoryChunkRepo() *mockMemoryChunkRepo {
+	return &mockMemoryChunkRepo{chunks: make(map[uuid.UUID][]domain.MemoryChunk)}
+}
+
+func (m *mockMemoryChunkRepo) ReplaceChunks(_ context.Context, memoryID uuid.UUID, chunks []domain.MemoryChunk) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.replaceCalls++
+	if m.replaceErr != nil {
+		return m.replaceErr
+	}
+	cp := append([]domain.MemoryChunk(nil), chunks...)
+	m.chunks[memoryID] = cp
+	return nil
+}
+
+func (m *mockMemoryChunkRepo) ListByMemoryIDs(_ context.Context, memoryIDs []uuid.UUID) ([]domain.MemoryChunk, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []domain.MemoryChunk
+	for _, id := range memoryIDs {
+		out = append(out, m.chunks[id]...)
+	}
+	return out, nil
+}
+
+func (m *mockMemoryChunkRepo) MemoryIDsWithChunks(_ context.Context, memoryIDs []uuid.UUID) (map[uuid.UUID]bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	result := make(map[uuid.UUID]bool)
+	for _, id := range memoryIDs {
+		if len(m.chunks[id]) > 0 {
+			result[id] = true
+		}
+	}
+	return result, nil
+}
+
+// nthCallFailsEmbedder returns a deterministic vector, except its failAt'th call (1-indexed)
+// returns an error — used to prove a mid-batch embed failure aborts the whole memory's
+// chunk replace rather than writing a partial set.
+type nthCallFailsEmbedder struct {
+	dim    int
+	failAt int
+	calls  atomic.Int64
+}
+
+func (e *nthCallFailsEmbedder) Embed(_ context.Context, _ string) ([]float32, error) {
+	n := e.calls.Add(1)
+	if int(n) == e.failAt {
+		return nil, fmt.Errorf("simulated embed failure on call %d", n)
+	}
+	return make([]float32, e.dim), nil
+}
+func (e *nthCallFailsEmbedder) EmbedBatch(ctx context.Context, texts []string) ([][]float32, error) {
+	out := make([][]float32, len(texts))
+	for i, text := range texts {
+		vec, err := e.Embed(ctx, text)
+		if err != nil {
+			return nil, err
+		}
+		out[i] = vec
+	}
+	return out, nil
+}
+func (e *nthCallFailsEmbedder) Model() string   { return "nth-call-fails" }
+func (e *nthCallFailsEmbedder) Dimensions() int { return e.dim }
+
+func longTranscript(turns int) string {
+	var b strings.Builder
+	for i := 0; i < turns; i++ {
+		fmt.Fprintf(&b, "User: this is turn %d of a transcript long enough to force multiple chunks in the test fixture.\n", i)
+		fmt.Fprintf(&b, "Assistant: acknowledged turn %d, replying with enough padding text to matter for chunk sizing.\n", i)
+	}
+	return b.String()
+}
+
+func TestEmbedAndStore_Chunked_WritesMultipleChunksAndWatermarksModel(t *testing.T) {
+	memRepo := &mockMemoryRepo{}
+	chunkRepo := newMockMemoryChunkRepo()
+	svc := NewMemoryService(memRepo, &mockMemoryEdgeRepo{}, &switchModelEmbedder{model: "e5-small", dim: 384},
+		MemoryWithChunkRepo(chunkRepo))
+	ms := svc.(*memoryService)
+
+	id := uuid.New()
+	text := longTranscript(30) // well over defaultChunkSize
+	ms.embedAndStore(id, text)
+
+	got, err := chunkRepo.ListByMemoryIDs(context.Background(), []uuid.UUID{id})
+	require.NoError(t, err)
+	require.Greater(t, len(got), 1, "a long transcript must produce more than one chunk")
+
+	for i, c := range got {
+		assert.Equal(t, "e5-small", c.EmbeddingModel, "chunk %d", i)
+		assert.Equal(t, 384, c.EmbeddingDim, "chunk %d — must come from len(vec), not config", i)
+		assert.NotEmpty(t, c.Embedding, "chunk %d embedding must be encoded", i)
+	}
+
+	// The legacy single-vector column must NOT be touched by the chunked path.
+	assert.Empty(t, memRepo.embeddedWithModel, "chunked path must not write memories.embedding")
+	// But the watermark that keeps BatchEmbed from re-processing this memory forever must be set.
+	assert.Equal(t, id, memRepo.markedEmbeddingModelID)
+	assert.Equal(t, "e5-small", memRepo.markedEmbeddingModelValue)
+}
+
+func TestEmbedAndStore_Chunked_ReembedReplacesRatherThanAccumulates(t *testing.T) {
+	memRepo := &mockMemoryRepo{}
+	chunkRepo := newMockMemoryChunkRepo()
+	svc := NewMemoryService(memRepo, &mockMemoryEdgeRepo{}, &switchModelEmbedder{model: "e5-small", dim: 384},
+		MemoryWithChunkRepo(chunkRepo))
+	ms := svc.(*memoryService)
+
+	id := uuid.New()
+	ms.embedAndStore(id, longTranscript(30))
+	first, err := chunkRepo.ListByMemoryIDs(context.Background(), []uuid.UUID{id})
+	require.NoError(t, err)
+	firstCount := len(first)
+	require.Greater(t, firstCount, 0)
+
+	// Re-embed with much shorter content — a real re-embed after the memory's
+	// content changed. Old chunks must be gone, not left alongside the new ones.
+	ms.embedAndStore(id, "a short memory now")
+	second, err := chunkRepo.ListByMemoryIDs(context.Background(), []uuid.UUID{id})
+	require.NoError(t, err)
+	assert.Len(t, second, 1, "shorter re-embedded content must fully replace the old chunk set, not accumulate")
+}
+
+func TestEmbedAndStore_Chunked_PartialEmbedFailureNeverWritesPartialChunks(t *testing.T) {
+	memRepo := &mockMemoryRepo{}
+	chunkRepo := newMockMemoryChunkRepo()
+	// Long enough to chunk into several pieces; fail on the 2nd embed call.
+	failer := &nthCallFailsEmbedder{dim: 4, failAt: 2}
+	svc := NewMemoryService(memRepo, &mockMemoryEdgeRepo{}, failer, MemoryWithChunkRepo(chunkRepo))
+	ms := svc.(*memoryService)
+
+	id := uuid.New()
+	ms.embedAndStore(id, longTranscript(30))
+
+	assert.Equal(t, 0, chunkRepo.replaceCalls, "a failed embed call must abort before ReplaceChunks is ever called — no partial chunk set")
+	got, err := chunkRepo.ListByMemoryIDs(context.Background(), []uuid.UUID{id})
+	require.NoError(t, err)
+	assert.Empty(t, got)
+	assert.Zero(t, memRepo.markedEmbeddingModelID, "must not watermark a memory that failed to fully embed")
+}
+
+func TestBatchEmbed_Chunked_RoutesThroughChunkRepoAndWatermarks(t *testing.T) {
+	id := uuid.New()
+	memRepo := &mockMemoryRepo{
+		needEmbedding: []domain.Memory{
+			{ID: id, Key: "k", Content: longTranscript(30)},
+		},
+	}
+	chunkRepo := newMockMemoryChunkRepo()
+	svc := NewMemoryService(memRepo, &mockMemoryEdgeRepo{}, &switchModelEmbedder{model: "e5-small", dim: 384},
+		MemoryWithChunkRepo(chunkRepo))
+
+	n, err := svc.BatchEmbed(context.Background(), uuid.New())
+	require.NoError(t, err)
+	assert.Equal(t, 1, n, "BatchEmbed counts one memory embedded, regardless of its chunk count")
+
+	got, err := chunkRepo.ListByMemoryIDs(context.Background(), []uuid.UUID{id})
+	require.NoError(t, err)
+	assert.Greater(t, len(got), 1)
+	assert.Equal(t, id, memRepo.markedEmbeddingModelID, "BatchEmbed's chunked path must watermark memories.embedding_model so this memory is not re-selected next run")
+}
 
 // TestEmbedConcurrencyBound verifies that MemoryWithEmbedConcurrency caps how many
 // embedAndStore calls run at once. Without a bound, a burst of memory writes fires one
