@@ -90,9 +90,13 @@ services:
       S3_USE_SSL: "false"
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
       MESH_CORS_ORIGINS: ${CORS_ORIGINS:-*}
+      # First-admin seed. Runs only when the database has zero users, and only
+      # at API startup. Leave MESH_ADMIN_PASSWORD unset to have a strong one
+      # generated and printed once in the API log — never ship a default
+      # password on an internet-facing install.
       MESH_SEED_ADMIN: ${MESH_SEED_ADMIN:-true}
       MESH_ADMIN_EMAIL: ${MESH_ADMIN_EMAIL:-admin@localhost}
-      MESH_ADMIN_PASSWORD: ${MESH_ADMIN_PASSWORD:-Admin123}
+      MESH_ADMIN_PASSWORD: ${MESH_ADMIN_PASSWORD:-}
       MESH_ADMIN_NAME: ${MESH_ADMIN_NAME:-Admin}
       MESH_RATE_LIMIT_ENABLED: "true"
       MESH_RATE_LIMIT_AUTH_RPM: "5"

@@ -21,6 +21,7 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"github.com/entire-vc/evc-mesh/internal/auth"
+	"github.com/entire-vc/evc-mesh/internal/bootstrap"
 	"github.com/entire-vc/evc-mesh/internal/config"
 	"github.com/entire-vc/evc-mesh/internal/embedding"
 	"github.com/entire-vc/evc-mesh/internal/eventbus"
@@ -112,29 +113,21 @@ func main() {
 		cfg.Auth.JWTSecret,
 	)
 
-	// Seed default admin user if MESH_SEED_ADMIN=true and no users exist.
-	if os.Getenv("MESH_SEED_ADMIN") == "true" {
-		var count int
-		if seedErr := db.QueryRow("SELECT COUNT(*) FROM users").Scan(&count); seedErr == nil && count == 0 {
-			seedEmail := os.Getenv("MESH_ADMIN_EMAIL")
-			seedPass := os.Getenv("MESH_ADMIN_PASSWORD")
-			seedName := os.Getenv("MESH_ADMIN_NAME")
-			if seedEmail == "" {
-				seedEmail = "admin@localhost"
-			}
-			if seedPass == "" {
-				seedPass = "Admin123"
-			}
-			if seedName == "" {
-				seedName = "Admin"
-			}
-			if _, _, regErr := authService.Register(context.Background(), seedEmail, seedPass, seedName); regErr != nil {
-				log.Printf("Admin seed skipped: %v", regErr)
-			} else {
-				log.Printf("Default admin created: %s (change password on first login)", seedEmail)
-			}
-		}
-	}
+	// Create the first admin on a fresh install — and always say what happened.
+	// Logic and tests live in internal/bootstrap.
+	bootstrap.Admin(context.Background(), bootstrap.Deps{
+		CountUsers: func(ctx context.Context) (int, error) {
+			var n int
+			countErr := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM users").Scan(&n)
+			return n, countErr
+		},
+		Register: func(ctx context.Context, email, password, name string) error {
+			_, _, regErr := authService.Register(ctx, email, password, name)
+			return regErr
+		},
+		Getenv: os.Getenv,
+		Logf:   log.Printf,
+	})
 
 	// 6. Create all service instances.
 	workspaceService := service.NewWorkspaceService(workspaceRepo, activityLogRepo, workspaceMemberRepo)

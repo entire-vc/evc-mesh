@@ -252,21 +252,47 @@ jobs:
           FAILED=0
           while IFS= read -r pkg; do
             [ -z "$pkg" ] && continue
+            # Skip main packages. A composition root is wiring that unit tests
+            # never execute — it is covered by the Test / Integration / Authed
+            # E2E jobs instead. Measuring it here makes the gate unpassable for
+            # any change to cmd/*: cmd/api alone is ~276 statements at 0%, which
+            # drowns out any package it is merged with.
+            if [ "$(go list -f '{{.Name}}' "$pkg" 2>/dev/null)" = "main" ]; then
+              echo "skip (main package, not unit-testable): $pkg"
+              continue
+            fi
             go test -race -covermode=atomic \
               -coverprofile="/tmp/cover_$(echo "$pkg" | tr '/' '_').out" \
               "$pkg" 2>&1 || { FAILED=1; echo "FAIL: $pkg"; }
           done <<< "${{ steps.affected.outputs.pkgs }}"
 
-          # Merge profiles and report aggregate
+          # Merge profiles and report aggregate.
           if ls /tmp/cover_*.out 1>/dev/null 2>&1; then
-            cat /tmp/cover_*.out > /tmp/cover_all.out
+            # Keep exactly one "mode:" line. A plain `cat` of N profiles emits N
+            # of them, which makes `go tool cover` bail out — and because the
+            # threshold check was guarded on a parsed total, an unparseable
+            # total silently SKIPPED the gate. That made this job vacuous for
+            # every PR touching more than one package.
+            echo "mode: atomic" > /tmp/cover_all.out
+            grep -h -v '^mode:' /tmp/cover_*.out >> /tmp/cover_all.out || true
+
             go tool cover -func=/tmp/cover_all.out | tee /tmp/cover_summary.txt
             TOTAL=$(grep '^total:' /tmp/cover_summary.txt | awk '{print $NF}' | tr -d '%')
             echo "Affected-set total coverage: ${TOTAL}%"
-            if [ "$FAILED" -eq 0 ] && [ -n "$TOTAL" ]; then
-              awk -v t="$TOTAL" \
-                'BEGIN { if (t+0 < 80) { print "::error::Coverage " t "% < 80% threshold"; exit 1 } else { print "Coverage " t "% >= 80% ✓" } }'
+
+            if [ "$FAILED" -ne 0 ]; then
+              echo "::error::One or more affected packages failed to test"
+              exit 1
             fi
+            # Fail loudly rather than waving the gate through.
+            if [ -z "$TOTAL" ]; then
+              echo "::error::Could not parse a coverage total from the merged profile"
+              exit 1
+            fi
+            awk -v t="$TOTAL" \
+              'BEGIN { if (t+0 < 80) { print "::error::Coverage " t "% < 80% threshold"; exit 1 } else { print "Coverage " t "% >= 80% ✓" } }'
+          else
+            echo "No coverage profiles produced (affected set was main-only or test-free) — nothing to gate."
           fi
 
       - name: Skip (no Go files changed)

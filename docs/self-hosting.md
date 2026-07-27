@@ -99,6 +99,114 @@ The services will be available at:
 | `CASDOOR_CLIENT_ID` | *(empty)* | Casdoor client ID (optional) |
 | `AGENT_KEY_PREFIX` | `agk` | Prefix for agent API keys |
 
+### First admin
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MESH_SEED_ADMIN` | `false` | Create the first admin at boot. Runs **only** when the database has zero users. |
+| `MESH_ADMIN_EMAIL` | `admin@localhost` | Email for the seeded admin |
+| `MESH_ADMIN_PASSWORD` | *(generated)* | Password for the seeded admin. If unset, a strong one is generated and printed **once** at boot. |
+| `MESH_ADMIN_NAME` | `Admin` | Display name for the seeded admin |
+
+See [Seeding the first admin](#seeding-the-first-admin) below.
+
+---
+
+## Seeding the first admin
+
+A fresh install has **no users and no default password**. Until an account
+exists, every login attempt correctly returns `401 invalid email or password`.
+
+There are two ways to create that first account.
+
+### Option 1 — register in the web UI (simplest)
+
+Open `/register` and sign up. The first account you register is yours and gets
+its own workspace. Registration is a public endpoint, so nothing needs to be
+configured first.
+
+Passwords must be 8+ characters with an uppercase letter, a lowercase letter,
+and a digit — a weaker one is rejected with `400`, not `401`.
+
+### Option 2 — seed at boot (scripted or headless installs)
+
+Start the API once with `MESH_SEED_ADMIN=true`:
+
+```bash
+MESH_SEED_ADMIN=true \
+MESH_ADMIN_EMAIL=you@example.com \
+MESH_ADMIN_PASSWORD='<strong-password>' \
+docker compose -f docker-compose.prod.yml up -d
+```
+
+Omit `MESH_ADMIN_PASSWORD` and the server generates a strong one and prints it
+once:
+
+```
+[bootstrap] ────────────────────────────────────────────────────────
+[bootstrap] First admin created: admin@localhost
+[bootstrap] Generated password:  XaSfco7rmK4jSkhSGZETGM6a
+[bootstrap] This password is shown ONCE and is not stored anywhere.
+```
+
+Copy it before the log scrolls away, then change it after logging in.
+
+### Two rules worth knowing
+
+**The seed only runs on a database with zero users.** This is deliberate — it
+means an accidental `MESH_SEED_ADMIN=true` on a running instance can never
+overwrite or re-create accounts. If you registered a user first and *then* set
+the flag, the seed will not run.
+
+**The seed only runs at API startup.** Setting the environment variable on an
+already-running container does nothing; restart the API for it to take effect.
+
+### Reading the boot log
+
+The API states what it did on every boot, so you never have to guess:
+
+| Log line | Meaning | What to do |
+|---|---|---|
+| `First admin created: <email>` | Seed succeeded | Log in with that account |
+| `MESH_SEED_ADMIN=true, but the database already has N user(s)` | Skipped by design | Log in with an existing account |
+| `The database has no users yet, so nobody can log in.` | No account, no seed requested | Register at `/register`, or restart with `MESH_SEED_ADMIN=true` |
+| `first-admin seed FAILED: ...` | Seed errored | Fix the reported cause and restart |
+
+### Lost the admin password?
+
+A self-hosted install has no password-reset email. Passwords are stored as
+bcrypt hashes, so the fix is to write a new hash directly into the `users` row.
+
+Generate a bcrypt hash (any bcrypt tool works; Python's `bcrypt` package is the
+shortest path):
+
+```bash
+python3 -c "import bcrypt; print(bcrypt.hashpw(b'<new-password>', bcrypt.gensalt()).decode())"
+```
+
+Then set it for the account, and log in with the new password:
+
+```bash
+docker compose exec postgres psql -U mesh -d mesh \
+  -c "UPDATE users SET password_hash = '<hash-from-above>' WHERE email = 'you@example.com';"
+```
+
+The new password must satisfy the same rules as registration (8+ characters,
+upper, lower, digit) or you will not be able to change it later from the UI.
+
+If no account is recoverable at all and the install holds nothing you need, you
+can wipe the users and let the seed run again on the next boot:
+
+```bash
+docker compose exec postgres psql -U mesh -d mesh \
+  -c 'TRUNCATE users, workspaces, workspace_members CASCADE;'
+# then restart the API with MESH_SEED_ADMIN=true
+```
+
+⚠️ This deletes **all** workspace content — tasks, projects, comments,
+artifacts — owned by those users. Back up first (see
+[Backup & Restore](#backup--restore)).
+
 ### CORS
 
 | Variable | Default | Description |
