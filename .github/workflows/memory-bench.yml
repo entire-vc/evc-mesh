@@ -145,6 +145,7 @@ jobs:
         run: |
           python scripts/memory-bench/test_gate_blindness.py
           python scripts/memory-bench/test_gate_modes.py
+          python scripts/memory-bench/test_gold_rank.py
 
       # One source of truth for "this dispatch is a capture, not a verdict". Two
       # steps have to agree on it — the capture runs, the gate must not — and two

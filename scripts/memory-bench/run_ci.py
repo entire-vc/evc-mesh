@@ -100,6 +100,14 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 DATA_FILE = SCRIPT_DIR / "data" / "lme_s_24.json"
 BASELINE_FILE = SCRIPT_DIR / "baseline.json"
 RETRIEVAL_BASELINE_FILE = SCRIPT_DIR / "baseline_retrieval.json"
+# Per-question results. `results/` has existed since the gate was created but
+# nothing ever wrote to it: the only artifact was gate.log, whose per-question
+# line carries a tick or a cross and nothing else. That is why answering "where
+# did gold rank?" needed a live prod probe rather than a download.
+RESULTS_DIR = SCRIPT_DIR / "results"
+RETRIEVAL_RESULTS_FILE = RESULTS_DIR / "recall_gate.json"
+E2E_RESULTS_FILE = RESULTS_DIR / "longmemeval.json"
+RESULTS_SCHEMA_VERSION = 1
 
 # Exit codes — 1 (regression) and 2 (could-not-run) must never be conflated.
 EXIT_OK = 0
@@ -322,6 +330,62 @@ def retrieved_session_indices(results: list[dict]) -> set[int]:
     return found
 
 
+def gold_rank(ranked: list[dict], gold: set[int]) -> int | None:
+    """1-based rank of the first gold session in the FULL ranked recall.
+
+    `ranked` is the complete tag-filtered candidate list as it reached the
+    client — NOT the top_k window that `hit` is scored on — so a gold session
+    that lands just outside the cut still gets a number. That distinction is
+    the whole point of the field: `hit@10 = 0` reads identically whether gold
+    ranked 12th or was never retrieved, and those have different causes and
+    different fixes.
+
+    Returns None when no gold row appears anywhere in `ranked`. None is
+    deliberately neither 0 nor top_k: 1-based ranks keep 0 impossible, so a
+    consumer can test `gold_rank is None` without it colliding with a real
+    position, and a sentinel equal to k would be indistinguishable from
+    "ranked last inside the window".
+
+    CAVEAT worth knowing before reading None as "not indexed": `ranked` is
+    what SURVIVED to the client. `scope`/`tags_any` are post-filters over a
+    workspace-wide candidate pool (#2c087b2a), so a fixture can be indexed
+    perfectly and still never arrive. Read `gold_rank` together with
+    `rows_returned` vs `haystack_size` — when rows_returned < haystack_size
+    the pool truncated, and None means "did not reach the client", not
+    "absent from the index".
+
+    Reuses `retrieved_session_indices` rather than reimplementing the
+    key/tag -> session-index mapping, so this cannot drift from what the gate
+    scores as a hit.
+    """
+    if not gold:
+        return None
+    for pos, item in enumerate(ranked, start=1):
+        if gold & retrieved_session_indices([item]):
+            return pos
+    return None
+
+
+def retrieval_observability(entry: dict, client: Any) -> dict:
+    """The retrieval fields both arms carry alongside their verdict.
+
+    Purely additive — nothing here feeds scoring, thresholds or the pass/fail
+    decision. It exists so that "recall missed" can be read out of an artifact
+    instead of reconstructed by probing prod.
+
+    `haystack_size` is included because `rows_returned` alone is not
+    interpretable: 32 is meaningless until you know it is 32 of 45, and the
+    ratio is what shows the candidate pool truncating.
+    """
+    return {
+        "gold_rank": gold_rank(
+            getattr(client, "ranked_records", []), gold_session_indices(entry)
+        ),
+        "rows_returned": getattr(client, "rows_returned", None),
+        "haystack_size": len(entry.get("haystack_sessions") or []),
+    }
+
+
 def run_single(
     entry: dict,
     *,
@@ -396,6 +460,7 @@ def run_single(
             "question_type": qtype,
             "correct": hit,
             "search_mode": search_mode,
+            **retrieval_observability(entry, client),
         }
 
     memory_context = build_memory_context(results)
@@ -427,7 +492,69 @@ def run_single(
         "question_type": qtype,
         "correct": correct,
         "search_mode": search_mode,
+        # Also on the advisory arm: it runs the same recall, so it has the same
+        # blind spot, and a wrong answer whose evidence ranked 12th is a
+        # different bug from one whose evidence was never retrieved.
+        **retrieval_observability(entry, client),
     }
+
+
+def format_rank_suffix(result: dict) -> str:
+    """`  rank=12/32 of 45` for the per-question log line, or "" when unmeasured.
+
+    Empty for errored questions: they never ran a recall, so any rank shown
+    would be a fabrication rather than a measurement.
+    """
+    if result.get("error") or "rows_returned" not in result:
+        return ""
+    rows = result.get("rows_returned")
+    if rows is None:
+        return ""
+    rank = result.get("gold_rank")
+    haystack = result.get("haystack_size")
+    rank_s = "none" if rank is None else str(rank)
+    tail = f" of {haystack}" if haystack else ""
+    return f"  rank={rank_s}/{rows}{tail}"
+
+
+def write_results_artifact(
+    path: Path,
+    results: list[dict],
+    *,
+    retrieval_only: bool,
+    run_mode: str,
+    top_k: int,
+    repeat: int,
+    scores: dict[str, float],
+    sizes: dict[str, tuple[int, int]],
+) -> Path | None:
+    """Write the per-question results the run just produced.
+
+    Additive by construction: every key a question dict already carried is
+    written through verbatim, so a consumer reading `question_id` / `correct`
+    / `search_mode` / `error*` keeps working. Nothing here is read back by the
+    gate — scoring, thresholds and the exit code are decided before this is
+    called, and a failure to write is reported but never changes the verdict.
+    An observability artifact must not be able to fail a required check.
+    """
+    payload = {
+        "schema_version": RESULTS_SCHEMA_VERSION,
+        "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "retrieval_only": retrieval_only,
+        "search_mode": run_mode,
+        "top_k": top_k,
+        "repeat": repeat,
+        "scores": scores,
+        "sample_sizes": {k: list(v) for k, v in sizes.items()},
+        "questions": results,
+    }
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload, indent=2, default=str) + "\n")
+    except OSError as exc:
+        logger.error("could not write results artifact %s: %s", path, exc)
+        return None
+    return path
 
 
 def resolve_run_search_mode(results: list[dict]) -> str:
@@ -1140,7 +1267,11 @@ def cmd_run(args: argparse.Namespace) -> int:
             )
             elapsed = time.monotonic() - t0
             status = "!" if r.get("error") else ("✓" if r.get("correct") else "✗")
-            print(f"{status} ({elapsed:.1f}s)")
+            # gate.log is what anyone actually opens after a red run, so the rank
+            # goes in the line itself, not only in the JSON. `rank=none` on a miss
+            # is the reading that matters: it separates "ranked 12th" (fix the
+            # ranking) from "never arrived" (fix indexing or the candidate pool).
+            print(f"{status} ({elapsed:.1f}s){format_rank_suffix(r)}")
             pass_results.append(r)
         results.extend(pass_results)
         per_pass_scores.append(compute_scores(pass_results))
@@ -1164,6 +1295,22 @@ def cmd_run(args: argparse.Namespace) -> int:
         len({r["question_id"] for r in results}),
     )
     run_mode = resolve_run_search_mode(results)
+
+    # Written BEFORE the verdict branches below, every one of which can return
+    # early (INCONCLUSIVE, capture refused, regression). An artifact only
+    # produced on the happy path is missing exactly when it is wanted most.
+    results_file = write_results_artifact(
+        RETRIEVAL_RESULTS_FILE if retrieval_only else E2E_RESULTS_FILE,
+        results,
+        retrieval_only=retrieval_only,
+        run_mode=run_mode,
+        top_k=top_k,
+        repeat=repeat,
+        scores=scores,
+        sizes=sizes,
+    )
+    if results_file is not None:
+        print(f"\nPer-question results: {results_file}")
 
     baseline: Baseline | None = None
     baseline_mode = MODE_UNKNOWN
