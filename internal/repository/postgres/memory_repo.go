@@ -889,7 +889,7 @@ func appendMemorySearchFilter(
 	args []interface{},
 	argIdx int,
 	f domain.MemorySearchFilter,
-) ([]string, []interface{}, int) {
+) (outConditions []string, outArgs []interface{}, nextArgIdx int) {
 	if f.Scope != "" {
 		conditions = append(conditions, fmt.Sprintf("scope = $%d", argIdx))
 		args = append(args, f.Scope)
