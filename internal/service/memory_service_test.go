@@ -44,6 +44,7 @@ type mockMemoryRepo struct {
 	markedEmbeddingModelID             uuid.UUID
 	markedEmbeddingModelValue          string
 	markEmbeddingModelErr              error
+	listNotYetChunkedErr               error
 	upsertFn                           func(ctx context.Context, mem *domain.Memory) error
 	getByIDFn                          func(ctx context.Context, id uuid.UUID) (*domain.Memory, error)
 	getByKeyFn                         func(ctx context.Context, wsID uuid.UUID, projID *uuid.UUID, agentID *uuid.UUID, key string, scope domain.MemoryScope) (*domain.Memory, error)
@@ -160,6 +161,9 @@ func (m *mockMemoryRepo) ListNeedingEmbedding(_ context.Context, _ uuid.UUID, mo
 }
 
 func (m *mockMemoryRepo) ListNotYetChunked(_ context.Context, _ uuid.UUID, _ int) ([]domain.Memory, error) {
+	if m.listNotYetChunkedErr != nil {
+		return nil, m.listNotYetChunkedErr
+	}
 	out := m.notYetChunked
 	m.notYetChunked = nil // one batch, then drained — mirrors the real resumable-by-exclusion loop
 	return out, nil
@@ -2763,6 +2767,36 @@ func TestBatchEmbed_Chunked_EmbedChunkedErrorLogsAndContinuesRatherThanAborting(
 	gotOK, listErr := chunkRepo.ListByMemoryIDs(context.Background(), []uuid.UUID{ok})
 	require.NoError(t, listErr)
 	assert.NotEmpty(t, gotOK)
+}
+
+func TestBackfillChunks_ListNotYetChunkedError_IsWrappedAndReturned(t *testing.T) {
+	memRepo := &mockMemoryRepo{listNotYetChunkedErr: errors.New("simulated db failure")}
+	chunkRepo := newMockMemoryChunkRepo()
+	svc := NewMemoryService(memRepo, &mockMemoryEdgeRepo{}, &switchModelEmbedder{model: "e5-small", dim: 384},
+		MemoryWithChunkRepo(chunkRepo))
+
+	n, err := svc.BackfillChunks(context.Background(), uuid.New(), 0)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "backfill chunks: list")
+	assert.Zero(t, n)
+}
+
+func TestBackfillChunks_EmbedChunkedError_SkipsThatMemoryButContinues(t *testing.T) {
+	ok := uuid.New()
+	failing := uuid.New()
+	memRepo := &mockMemoryRepo{
+		notYetChunked: []domain.Memory{
+			{ID: failing, Key: "k", Content: "content"},
+			{ID: ok, Key: "k", Content: "content"},
+		},
+	}
+	chunkRepo := newMockMemoryChunkRepo()
+	failer := &nthCallFailsEmbedder{dim: 4, failAt: 1}
+	svc := NewMemoryService(memRepo, &mockMemoryEdgeRepo{}, failer, MemoryWithChunkRepo(chunkRepo))
+
+	n, err := svc.BackfillChunks(context.Background(), uuid.New(), 0)
+	require.NoError(t, err, "one memory's embed failure must not fail the whole backfill pass")
+	assert.Equal(t, 1, n)
 }
 
 func longTranscript(turns int) string {
