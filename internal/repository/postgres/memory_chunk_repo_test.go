@@ -145,3 +145,51 @@ func TestMemoryChunkRepo_ListByMemoryIDs_EmptyInput(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, got)
 }
+
+// TestMemoryRepo_ListNotYetChunked_IndependentOfEmbeddingModel proves the backfill
+// selection query (subtask 7) picks a memory purely on missing chunk rows — even one
+// already carrying the CURRENT model's embedding_model watermark from the pre-chunking
+// single-vector path, which is the real state of every existing row before this feature
+// ships. ListNeedingEmbedding's own filter would never select such a row.
+func TestMemoryRepo_ListNotYetChunked_IndependentOfEmbeddingModel(t *testing.T) {
+	chunkRepo, memRepo, chunkedID := setupMemoryChunkTest(t)
+	ctx := context.Background()
+	db := testDB(t)
+
+	// chunkedID already has chunks (from setupMemoryChunkTest's caller pattern) —
+	// give it one so it's excluded.
+	require.NoError(t, chunkRepo.ReplaceChunks(ctx, chunkedID, []domain.MemoryChunk{
+		{ChunkIdx: 0, ChunkStart: 0, ChunkEnd: 10, Embedding: "x", EmbeddingModel: "m", EmbeddingDim: 4},
+	}))
+	chunkedMem, err := memRepo.GetByID(ctx, chunkedID)
+	require.NoError(t, err)
+	wsID := chunkedMem.WorkspaceID
+
+	// A second memory in the SAME workspace, with no chunks, but already watermarked
+	// with the "current" model — the exact scenario that defeats ListNeedingEmbedding.
+	unchunked := &domain.Memory{
+		ID:             uuid.New(),
+		WorkspaceID:    wsID,
+		Key:            "not-yet-chunked-" + uuid.New().String()[:8],
+		Content:        "already has embedding_model set from the legacy single-vector path",
+		Scope:          domain.ScopeWorkspace,
+		SourceType:     domain.SourceAgent,
+		EmbeddingModel: "multilingual-e5-small",
+	}
+	require.NoError(t, memRepo.Upsert(ctx, unchunked))
+	// Upsert doesn't necessarily write embedding_model on insert depending on its column
+	// list — set it explicitly via the same path production code uses, so this test
+	// reflects the real pre-chunking row shape regardless of Upsert's exact column set.
+	_, err = db.ExecContext(ctx, `UPDATE memories SET embedding_model = $1 WHERE id = $2`, "multilingual-e5-small", unchunked.ID)
+	require.NoError(t, err)
+
+	got, err := memRepo.ListNotYetChunked(ctx, wsID, 100)
+	require.NoError(t, err)
+
+	var gotIDs []uuid.UUID
+	for _, m := range got {
+		gotIDs = append(gotIDs, m.ID)
+	}
+	assert.Contains(t, gotIDs, unchunked.ID, "an unchunked memory must be selected even though embedding_model already matches the current model")
+	assert.NotContains(t, gotIDs, chunkedID, "a memory that already has chunk rows must not be reselected")
+}

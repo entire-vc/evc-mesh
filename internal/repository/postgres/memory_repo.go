@@ -1277,6 +1277,32 @@ func (r *MemoryRepo) ListNeedingEmbedding(ctx context.Context, workspaceID uuid.
 	return memories, nil
 }
 
+// ListNotYetChunked returns up to limit memories in workspaceID with no memory_chunks rows —
+// see the interface doc for why this is a separate query from ListNeedingEmbedding.
+func (r *MemoryRepo) ListNotYetChunked(ctx context.Context, workspaceID uuid.UUID, limit int) ([]domain.Memory, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	q := fmt.Sprintf(`
+		SELECT %s FROM memories m
+		WHERE m.workspace_id = $1
+		  AND (m.expires_at IS NULL OR m.expires_at > now())
+		  AND NOT EXISTS (SELECT 1 FROM memory_chunks c WHERE c.memory_id = m.id)
+		ORDER BY m.updated_at DESC
+		LIMIT $2`,
+		memoryColumns,
+	)
+	var rows []memoryRow
+	if err := r.db.SelectContext(ctx, &rows, q, workspaceID, limit); err != nil {
+		return nil, fmt.Errorf("memory list not yet chunked: %w", err)
+	}
+	memories := make([]domain.Memory, len(rows))
+	for i, row := range rows {
+		memories[i] = row.toDomain()
+	}
+	return memories, nil
+}
+
 // cosineSimilarity returns the cosine similarity between two float32 vectors.
 // Returns 0 when either vector is zero-length or the lengths differ.
 func cosineSimilarity(a, b []float32) float64 {

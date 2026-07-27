@@ -1639,6 +1639,37 @@ func (s *memoryService) BatchEmbed(ctx context.Context, workspaceID uuid.UUID) (
 	return count, nil
 }
 
+// BackfillChunks finds memories in workspaceID with no memory_chunks rows yet and embeds
+// them through the chunked path — see the interface doc for why this needs its own
+// selection query rather than reusing BatchEmbed's model-switch filter. A no-op (0, nil)
+// when chunked embedding isn't configured or the embedder is a noop, matching BatchEmbed's
+// convention: this is a normal "nothing to do yet" state, not an error.
+func (s *memoryService) BackfillChunks(ctx context.Context, workspaceID uuid.UUID, limit int) (int, error) {
+	if s.chunkRepo == nil || embedding.IsNoop(s.embedder) {
+		return 0, nil
+	}
+	if limit <= 0 {
+		limit = 100
+	}
+
+	memories, err := s.memRepo.ListNotYetChunked(ctx, workspaceID, limit)
+	if err != nil {
+		return 0, fmt.Errorf("backfill chunks: list: %w", err)
+	}
+
+	count := 0
+	for _, m := range memories {
+		text := m.Key + " " + m.Content + " " + strings.Join(m.Tags, " ")
+		if embedErr := s.embedChunked(ctx, m.ID, text); embedErr != nil {
+			log.Printf("memory backfill chunks: id=%s: %v", m.ID, embedErr)
+			continue
+		}
+		count++
+	}
+
+	return count, nil
+}
+
 // FindRelated returns memories related to the given memory by performing a full-text
 // search using the memory's key and tags as the query. The source memory itself is excluded.
 func (s *memoryService) FindRelated(ctx context.Context, memoryID uuid.UUID, limit int) ([]domain.ScoredMemory, error) {

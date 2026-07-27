@@ -785,6 +785,9 @@ func (m *MockMemoryService) ImportMemories(ctx context.Context, workspaceID uuid
 func (m *MockMemoryService) BatchEmbed(ctx context.Context, workspaceID uuid.UUID) (int, error) {
 	return 0, nil
 }
+func (m *MockMemoryService) BackfillChunks(ctx context.Context, workspaceID uuid.UUID, limit int) (int, error) {
+	return 0, nil
+}
 func (m *MockMemoryService) FindRelated(ctx context.Context, memoryID uuid.UUID, limit int) ([]domain.ScoredMemory, error) {
 	if m.FindRelatedFunc != nil {
 		return m.FindRelatedFunc(ctx, memoryID, limit)
