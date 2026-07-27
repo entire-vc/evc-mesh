@@ -231,10 +231,34 @@ func extractShortIDs(content string) []string {
 // rrfK is the Reciprocal Rank Fusion constant. 60 is the standard value.
 const rrfK = 60
 
-// rrfVectorWeight and rrfTextWeight control the relative contribution of vector vs keyword results.
+// defaultRRFVectorWeight and defaultRRFTextWeight control the relative contribution of the
+// dense (vector) and sparse (BM25) arms in the RRF merge: score += weight/(rrfK+rank).
+//
+// ⚠️ These values are NOT validated. They were set while the dense arm was dead — the
+// embedder was returning HTTP 402 and recall was in practice serving bm25-only — so the
+// tilt was dead code for weeks. It first took effect on 2026-07-15 and immediately cost
+// the benchmark two questions: every bm25-only run scores single-session-user 1.000,
+// every hybrid run 0.500, split by MODE rather than by date, on an unchanged dataset.
+//
+// What the arithmetic implies, given score = weight/(rrfK+rank):
+//
+//	a dense-arm hit at rank r outranks the BM25 arm's rank-1 hit whenever
+//	    0.7/(60+r) > 0.3/61   ⟺   r ≤ 82
+//
+// With poolSize = limit × candidateMultiplier, up to 82 dense-only rows can sit above
+// BM25's best hit — i.e. on any query where BM25 is the arm that discriminates, BM25 is
+// decorative. This was observed live, twice independently: gold scored exactly 0.3/63
+// (BM25 rank 3, no dense term at all) and was displaced by a dense-only row from the
+// deep tail (rank 77 in one run, 84 in another).
+//
+// Overridable at runtime via MEMORY_RECALL_RRF_VECTOR_WEIGHT / MEMORY_RECALL_RRF_TEXT_WEIGHT
+// so the weights can be swept against the recall gate WITHOUT a rebuild — the sweep is
+// tracked in task #acb84eaa, and re-weighting is deliberately NOT done here: changing
+// these numbers without a measurement would repeat the mistake that produced them.
+// Defaults therefore stay at the current production values until that sweep runs.
 const (
-	rrfVectorWeight = 0.7
-	rrfTextWeight   = 0.3
+	defaultRRFVectorWeight = 0.7
+	defaultRRFTextWeight   = 0.3
 )
 
 // defaultHalfLifeDays is the default half-life for the universal exponential decay.
@@ -254,6 +278,12 @@ type memoryService struct {
 	depRepo      repository.TaskDependencyRepository // optional; nil → depends_on bridge skipped
 	halfLifeDays float64                             // half-life for exp decay; default defaultHalfLifeDays
 	embedSem     chan struct{}                       // optional bound on concurrent embed goroutines; nil = unbounded (default)
+
+	// RRF arm weights, resolved once at construction. Held per-service rather than as
+	// package globals so a weight sweep cannot race across concurrently-built services
+	// and so tests can set them without mutating process state.
+	rrfVectorWeight float64
+	rrfTextWeight   float64
 }
 
 // MemoryServiceOption configures a MemoryService.
@@ -313,11 +343,38 @@ func NewMemoryService(memRepo repository.MemoryRepository, edgeRepo repository.M
 			halfLife = f
 		}
 	}
-	s := &memoryService{memRepo: memRepo, edgeRepo: edgeRepo, embedder: embedder, halfLifeDays: halfLife}
+	s := &memoryService{
+		memRepo:         memRepo,
+		edgeRepo:        edgeRepo,
+		embedder:        embedder,
+		halfLifeDays:    halfLife,
+		rrfVectorWeight: envFloatOrDefault("MEMORY_RECALL_RRF_VECTOR_WEIGHT", defaultRRFVectorWeight),
+		rrfTextWeight:   envFloatOrDefault("MEMORY_RECALL_RRF_TEXT_WEIGHT", defaultRRFTextWeight),
+	}
 	for _, opt := range opts {
 		opt(s)
 	}
 	return s
+}
+
+// envFloatOrDefault reads a non-negative float from the environment, falling back to def
+// when the variable is unset, unparseable, or negative.
+//
+// Zero IS accepted: `0` is the meaningful "disable this arm entirely" setting, which the
+// weight sweep needs in order to measure each arm alone. That is why the guard is `< 0`
+// and not `<= 0` — the half-life reader above deliberately rejects zero because a zero
+// half-life is nonsense, whereas a zero weight is a legitimate configuration.
+func envFloatOrDefault(name string, def float64) float64 {
+	v := os.Getenv(name)
+	if v == "" {
+		return def
+	}
+	f, err := strconv.ParseFloat(v, 64)
+	if err != nil || f < 0 {
+		log.Printf("memory recall: ignoring invalid %s=%q, using %v", name, v, def)
+		return def
+	}
+	return f
 }
 
 // resolveProjectSlug scans tags for project:<slug> entries, applies the canonical alias
@@ -793,7 +850,7 @@ func (s *memoryService) Recall(ctx context.Context, opts domain.RecallOpts) ([]d
 	}
 
 	// ── Step 3: RRF merge ─────────────────────────────────────────────────────
-	merged := reciprocalRankFusion(kwResults, vecResults)
+	merged := reciprocalRankFusion(kwResults, vecResults, s.rrfTextWeight, s.rrfVectorWeight)
 
 	// ── Step 4: Apply extended filters (TagsAny, CreatedBy, Since, Until, etc.) ─
 	// Apply the default importance_score threshold when the caller hasn't overridden it.
@@ -996,7 +1053,7 @@ func (s *memoryService) ListMemories(ctx context.Context, filter domain.MemoryLi
 // reciprocalRankFusion merges keyword and vector result lists using RRF scoring.
 // The formula is: score(d) = kwW/(k+rank_kw) + vecW/(k+rank_vec)
 // where k=60 is the standard RRF constant.
-func reciprocalRankFusion(kw, vec []domain.ScoredMemory) []domain.ScoredMemory {
+func reciprocalRankFusion(kw, vec []domain.ScoredMemory, textWeight, vectorWeight float64) []domain.ScoredMemory {
 	type entry struct {
 		mem   domain.Memory
 		score float64
@@ -1009,7 +1066,7 @@ func reciprocalRankFusion(kw, vec []domain.ScoredMemory) []domain.ScoredMemory {
 			mc := m.Memory
 			scores[id] = &entry{mem: mc}
 		}
-		scores[id].score += rrfTextWeight * (1.0 / (float64(rrfK) + float64(rank+1)))
+		scores[id].score += textWeight * (1.0 / (float64(rrfK) + float64(rank+1)))
 	}
 
 	for rank, m := range vec {
@@ -1018,7 +1075,7 @@ func reciprocalRankFusion(kw, vec []domain.ScoredMemory) []domain.ScoredMemory {
 			mc := m.Memory
 			scores[id] = &entry{mem: mc}
 		}
-		scores[id].score += rrfVectorWeight * (1.0 / (float64(rrfK) + float64(rank+1)))
+		scores[id].score += vectorWeight * (1.0 / (float64(rrfK) + float64(rank+1)))
 	}
 
 	result := make([]domain.ScoredMemory, 0, len(scores))
