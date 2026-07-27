@@ -491,6 +491,37 @@ func TestRegistrationOpen_DefaultTrueNeverCountsUsers(t *testing.T) {
 	assert.True(t, open)
 }
 
+// With the flag closed, RegistrationOpen has no shortcut and must actually
+// call Count — a failure there must be surfaced, not swallowed into a
+// default true/false.
+func TestRegistrationOpen_ClosedPropagatesCountError(t *testing.T) {
+	userRepo := &countErrorUserRepo{newMockUserRepo()}
+	refreshRepo := newMockRefreshTokenRepo()
+	wsRepo := newMockWorkspaceRepo()
+	wsMemberRepo := newMockWorkspaceMemberRepo()
+	svc := NewService(userRepo, refreshRepo, wsRepo, wsMemberRepo, testJWTSecret, WithAllowRegistration(false))
+
+	_, err := svc.RegistrationOpen(context.Background())
+	require.Error(t, err, "a Count failure must be surfaced, not swallowed")
+	assert.Contains(t, err.Error(), "Count must not be called")
+}
+
+// Register calls RegistrationOpen internally; a Count failure there must
+// propagate out of Register too, rather than being misreported as either a
+// successful registration or ErrRegistrationClosed.
+func TestRegister_PropagatesRegistrationOpenError(t *testing.T) {
+	userRepo := &countErrorUserRepo{newMockUserRepo()}
+	refreshRepo := newMockRefreshTokenRepo()
+	wsRepo := newMockWorkspaceRepo()
+	wsMemberRepo := newMockWorkspaceMemberRepo()
+	svc := NewService(userRepo, refreshRepo, wsRepo, wsMemberRepo, testJWTSecret, WithAllowRegistration(false))
+
+	_, _, err := svc.Register(context.Background(), "someone@example.com", "StrongP4ss", "Someone")
+	require.Error(t, err)
+	assert.NotErrorIs(t, err, ErrRegistrationClosed, "a Count failure must not be misreported as a closed-registration rejection")
+	assert.Contains(t, err.Error(), "Count must not be called")
+}
+
 // ---------------------------------------------------------------------------
 // Tests: Login
 // ---------------------------------------------------------------------------

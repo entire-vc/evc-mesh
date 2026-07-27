@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -28,8 +29,9 @@ import (
 // 403 on POST /auth/register.
 
 type authTestUserRepo struct {
-	mu    sync.RWMutex
-	users map[uuid.UUID]*domain.User
+	mu       sync.RWMutex
+	users    map[uuid.UUID]*domain.User
+	countErr error
 }
 
 func newAuthTestUserRepo() *authTestUserRepo {
@@ -80,6 +82,9 @@ func (r *authTestUserRepo) GetByUsernameGlobal(_ context.Context, _ string) (*do
 func (r *authTestUserRepo) Count(_ context.Context) (int, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+	if r.countErr != nil {
+		return 0, r.countErr
+	}
 	return len(r.users), nil
 }
 
@@ -146,6 +151,23 @@ func TestAuthHandler_Config_RegistrationClosedButBootstrapOpen(t *testing.T) {
 	var body map[string]bool
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
 	assert.True(t, body["registration_enabled"], "zero users must report open even with the flag off")
+}
+
+func TestAuthHandler_Config_PropagatesRegistrationOpenError(t *testing.T) {
+	// Closed registration + an existing user forces RegistrationOpen to call
+	// Count; a Count failure must surface as an error response, not a silent
+	// true/false default.
+	userRepo := newAuthTestUserRepo()
+	userRepo.Create(context.Background(), &domain.User{ID: uuid.New(), Email: "existing@example.com"})
+	userRepo.countErr = errors.New("count query failed")
+	h, e := newAuthHandlerTest(userRepo, auth.WithAllowRegistration(false))
+
+	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	require.NoError(t, h.Config(c), "handleError writes the response itself, it does not bubble up")
+	assert.Equal(t, http.StatusInternalServerError, rec.Code, "a Count failure must surface as a 500, not a silent open/closed default")
 }
 
 func TestAuthHandler_Register_ClosedReturns403(t *testing.T) {
