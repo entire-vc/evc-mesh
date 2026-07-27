@@ -53,6 +53,11 @@ type EmbeddingConfig struct {
 	Dimensions int
 	// BatchSize controls how many texts are embedded in a single batch call (default: 32).
 	BatchSize int
+	// MaxInputTokens is the server's input window, used to detect silent truncation.
+	// Embedding servers truncate oversized input by default and report it nowhere in
+	// the response, so a response whose prompt_tokens lands exactly on this value is
+	// the only client-visible sign that content was dropped. 0 disables the check.
+	MaxInputTokens int
 	// Concurrency bounds how many embed calls may run concurrently (default: 0, meaning
 	// unbounded — every write spawns its own embed goroutine, today's exact behavior).
 	Concurrency int
@@ -253,6 +258,7 @@ func Load() *Config {
 			BatchSize:       getEnvInt("EMBEDDING_BATCH_SIZE", 32),
 			Concurrency:     getEnvInt("EMBEDDING_CONCURRENCY", 0),
 			HTTPTimeoutSecs: getEnvInt("EMBEDDING_HTTP_TIMEOUT_SECS", 30),
+			MaxInputTokens:  getEnvInt("EMBEDDING_MAX_INPUT_TOKENS", 0),
 		},
 		VAPID: VAPIDConfig{
 			PublicKey:  getEnv("MESH_VAPID_PUBLIC_KEY", ""),

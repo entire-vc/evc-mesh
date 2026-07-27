@@ -102,6 +102,29 @@ var (
 		},
 		[]string{"search_mode"},
 	)
+
+	// MemoryEmbedTruncatedTotal counts embeddings that represent only a PREFIX of
+	// the text they were computed from.
+	//
+	// Embedding servers truncate oversized input by default and report it nowhere:
+	// TEI ships auto_truncate=true, answers 200, and returns a well-formed vector
+	// for the first N tokens of a document of any length. Nothing downstream can
+	// distinguish that vector from a complete one, so the memory is simply absent
+	// from semantic recall for any fact past the cut — while every health check
+	// stays green and the row looks perfectly embedded in the database.
+	//
+	// Measured 2026-07-27 (#e8063a65): 96% of bench fixtures exceeded a 512-token
+	// window, and the gold session for one question carried its answer at 75% of
+	// the document — outside the window, so the dense arm ranked it 35/45 instead
+	// of 1/45. Alert on any sustained non-zero rate: it means dense recall is
+	// quietly operating on document openings rather than documents.
+	MemoryEmbedTruncatedTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "mesh_memory_embed_truncated_total",
+			Help: "Embeddings computed from a truncated prefix because the input exceeded the server's window",
+		},
+		[]string{"model"},
+	)
 )
 
 // RecordMCPToolCall records a single MCP tool call with its outcome status.
