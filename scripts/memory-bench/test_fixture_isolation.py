@@ -60,6 +60,7 @@ class FakeWorkspace:
     def __init__(self):
         self.rows: dict[str, dict] = {}
         self.forgotten: list[str] = []
+        self.recall_args: list[dict] = []
 
     def store(self, mid, tags, created_at=None):
         self.rows[mid] = {"id": mid, "tags": list(tags),
@@ -67,10 +68,19 @@ class FakeWorkspace:
 
     async def call_tool(self, name, args):
         if name == "recall":
+            self.recall_args.append(args)
             wanted = set(args.get("tags_any") or [])
-            return {"items": [r for r in self.rows.values()
-                              if wanted & set(r["tags"])],
-                    "search_mode": "hybrid"}
+            hits = [r for r in self.rows.values() if wanted & set(r["tags"])]
+            # Honour `until` server-side, exactly as Mesh does. A fake that
+            # ignored it would let a client-side-only collector pass this suite
+            # while being a no-op against the real server.
+            if args.get("until"):
+                hits = [r for r in hits if r["created_at"] <= args["until"]]
+            if args.get("order_by") == "created_at:asc":
+                hits.sort(key=lambda r: r["created_at"])
+            off = int(args.get("offset") or 0)
+            lim = int(args.get("limit") or 50)
+            return {"items": hits[off:off + lim], "search_mode": "hybrid"}
         if name == "forget":
             mid = args["memory_id"]
             self.forgotten.append(mid)
@@ -182,6 +192,36 @@ class TestTheOrphanCollectorSelectsOnAge(unittest.TestCase):
         self.assertIn("abandoned2", ws.rows,
                       "the collector is a once-per-process workspace pass, "
                       "not per-question work")
+
+    def test_it_asks_the_server_for_old_rows_instead_of_filtering_a_page(self):
+        """The regression that shipped: the collector fetched ONE
+        relevance-ranked page and dropped young rows client-side. In a live
+        workspace that page is saturated by in-flight runs' fixtures (24
+        questions x ~45 sessions), so orphans never entered the window — measured
+        after the isolation fix landed, 10 pre-fix orphans ~10h old survived four
+        consecutive collector runs.
+
+        Same shape as #2c087b2a: a filter applied after the candidate cut cannot
+        recover what the cut dropped."""
+        ws = FakeWorkspace()
+        me = MeshMemoryClient(question_id="q", run_nonce="aaaaaaaa")
+
+        # One genuine orphan, buried under a full page of live fixtures — the
+        # real steady state.
+        ws.store("orphan", ["bench-old-q", SHARED_TAG], created_at=_hours_ago(9))
+        for i in range(60):
+            ws.store(f"live-{i}", [f"bench-bbbbbbbb-q{i}", SHARED_TAG],
+                     created_at=_hours_ago(0.1))
+
+        asyncio.run(me._gc_orphans(ws, _sem()))
+
+        self.assertTrue(ws.recall_args, "collector issued no recall at all")
+        self.assertIn("until", ws.recall_args[0],
+                      "collector must ask the server for rows older than the "
+                      "cutoff; filtering a page client-side is a no-op in a live "
+                      "workspace")
+        self.assertNotIn("orphan", ws.rows, "the buried orphan was not collected")
+        self.assertEqual(len(ws.rows), 60, "live fixtures must survive untouched")
 
     def test_a_failing_collector_never_costs_the_run_a_measurement(self):
         class Broken:

@@ -120,6 +120,11 @@ def _parse_ts(raw: Any) -> float | None:
 # after this is from a process that died without cleaning up.
 ORPHAN_GC_MIN_AGE_HOURS = float(os.environ.get("BENCH_ORPHAN_GC_MIN_AGE_HOURS", "2") or 2)
 
+# Pages of RECALL_CANDIDATE_LIMIT the collector will walk before giving up.
+# Bounded so a pathological backlog cannot turn a hygiene pass into the longest
+# step of the run; whatever is left is collected on the next run.
+ORPHAN_GC_MAX_PAGES = 10
+
 # Set once the orphan sweep has run in this process — it is a whole-workspace
 # pass, not per-question work.
 _orphan_gc_done = False
@@ -605,25 +610,53 @@ class MeshMemoryClient:
         _orphan_gc_done = True  # set before the await: one attempt, not one per retry
 
         cutoff = time.time() - ORPHAN_GC_MIN_AGE_HOURS * 3600
+        until = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(cutoff))
+
+        # `until` is a server-side PREDICATE, not a client-side filter, and that
+        # distinction is the whole difference between working and no-op here.
+        #
+        # The first version of this fetched one relevance-ranked page and dropped
+        # the young rows client-side. In a live workspace that page is saturated
+        # by the fixtures of runs currently in flight — 24 questions x ~45
+        # sessions each — so the orphans it exists to collect never appeared in
+        # the window at all. Measured after the isolation fix landed: 10 pre-fix
+        # orphans, ~10h old, survived four consecutive runs of the collector.
+        #
+        # Same shape of bug as #2c087b2a: filtering after the candidate cut cannot
+        # recover what the cut already dropped. Ask for old rows; do not ask for
+        # rows and then look for the old ones.
+        #
+        # Ordering oldest-first with pagination makes the sweep exhaustive rather
+        # than best-effort. The client-side age check below stays as a second
+        # lock: if a server ever ignored `until`, a silent GC over live fixtures
+        # is the one failure mode here that destroys someone else's measurement.
+        stale: list[str] = []
         try:
-            async with sem:
-                found = await session.call_tool(
-                    "recall",
-                    {
-                        "query": SHARED_TAG,
-                        "tags_any": [SHARED_TAG],
-                        "scope": STORE_SCOPE,
-                        "limit": RECALL_CANDIDATE_LIMIT,
-                        "min_importance": 0,
-                    },
-                )
-            stale = [
-                mid
-                for item in _parse_tool_payload(found).get("items") or []
-                if (mid := item.get("id"))
-                and (ts := _parse_ts(item.get("created_at"))) is not None
-                and ts < cutoff
-            ]
+            for page in range(ORPHAN_GC_MAX_PAGES):
+                async with sem:
+                    found = await session.call_tool(
+                        "recall",
+                        {
+                            "query": SHARED_TAG,
+                            "tags_any": [SHARED_TAG],
+                            "scope": STORE_SCOPE,
+                            "until": until,
+                            "order_by": "created_at:asc",
+                            "limit": RECALL_CANDIDATE_LIMIT,
+                            "offset": page * RECALL_CANDIDATE_LIMIT,
+                            "min_importance": 0,
+                        },
+                    )
+                items = _parse_tool_payload(found).get("items") or []
+                stale += [
+                    mid
+                    for item in items
+                    if (mid := item.get("id"))
+                    and (ts := _parse_ts(item.get("created_at"))) is not None
+                    and ts < cutoff
+                ]
+                if len(items) < RECALL_CANDIDATE_LIMIT:
+                    break
         except Exception as exc:
             # Never fatal: the collector is hygiene, and failing it must not cost
             # the run a measurement.
