@@ -276,6 +276,7 @@ type memoryService struct {
 	projectRepo  repository.ProjectRepository        // optional; nil → slug resolution skipped
 	taskRepo     repository.TaskRepository           // optional; nil → Amendments 2 & 3 skipped
 	depRepo      repository.TaskDependencyRepository // optional; nil → depends_on bridge skipped
+	chunkRepo    repository.MemoryChunkRepository    // optional; nil → legacy single-vector embed path (memories.embedding)
 	halfLifeDays float64                             // half-life for exp decay; default defaultHalfLifeDays
 	embedSem     chan struct{}                       // optional bound on concurrent embed goroutines; nil = unbounded (default)
 
@@ -311,6 +312,18 @@ func MemoryWithTaskRepo(tr repository.TaskRepository) MemoryServiceOption {
 func MemoryWithDepRepo(dr repository.TaskDependencyRepository) MemoryServiceOption {
 	return func(s *memoryService) {
 		s.depRepo = dr
+	}
+}
+
+// MemoryWithChunkRepo switches the embed write path (embedAndStore, BatchEmbed) from
+// the legacy single-vector memories.embedding column to per-chunk storage in
+// memory_chunks (ADR-0002). Without this option, a memory longer than the embedder's
+// input window (~2000 chars / 512 tokens for the prod TEI endpoint) only ever gets
+// embedded from its first ~15% — see #e8063a65. Omit only in tests exercising the
+// legacy path directly; production wiring always sets this.
+func MemoryWithChunkRepo(cr repository.MemoryChunkRepository) MemoryServiceOption {
+	return func(s *memoryService) {
+		s.chunkRepo = cr
 	}
 }
 
@@ -695,10 +708,16 @@ func defaultExpiresAt(scope domain.MemoryScope, tags []string) *time.Time {
 	}
 }
 
-// embedAndStore embeds text and persists the resulting vector for the given memory ID.
+// embedAndStore embeds text and persists the resulting vector(s) for the given memory ID.
 // Called asynchronously from Remember; errors are logged but never surfaced to callers.
 // When embedSem is configured (MemoryWithEmbedConcurrency), it caps how many embed calls
 // run concurrently; otherwise embedding remains unbounded.
+//
+// When chunkRepo is configured (MemoryWithChunkRepo), text is split into chunks (see
+// #e8063a65: the prod embedder silently truncates past ~2000 chars, so a memory longer
+// than that needs more than one vector to be fully searchable) and each chunk's vector is
+// stored in memory_chunks — memories.embedding is left untouched for that memory. Without
+// chunkRepo, the legacy single-vector path applies unchanged.
 func (s *memoryService) embedAndStore(id uuid.UUID, text string) {
 	if s.embedSem != nil {
 		s.embedSem <- struct{}{}
@@ -707,6 +726,13 @@ func (s *memoryService) embedAndStore(id uuid.UUID, text string) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+
+	if s.chunkRepo != nil {
+		if err := s.embedChunked(ctx, id, text); err != nil {
+			log.Printf("memory embed (chunked): id=%s error=%v", id, err)
+		}
+		return
+	}
 
 	vec, err := s.embedder.Embed(ctx, text)
 	if err != nil {
@@ -719,6 +745,69 @@ func (s *memoryService) embedAndStore(id uuid.UUID, text string) {
 	if err := s.memRepo.UpdateEmbedding(ctx, id, vec, s.embedder.Model(), s.embedder.Dimensions()); err != nil {
 		log.Printf("memory embed store: id=%s error=%v", id, err)
 	}
+}
+
+// embedChunked splits text into chunks, embeds each one individually, and atomically
+// replaces the memory's chunk rows (ReplaceChunks — delete+reinsert in one transaction,
+// which is what makes re-embedding idempotent: chunkText is deterministic, so re-running
+// this on the same text always produces the same rows).
+//
+// embedding_dim is taken from len(vec) — the actual returned vector — never from
+// s.embedder.Dimensions() (the configured value). Trusting the config is exactly the bug
+// that left embedding_dim=0 on every row before EMBEDDING_DIMENSIONS was set (see #b052cdda
+// subtask 4): a misconfigured or zero-value config would propagate through every chunk
+// instead of surfacing as a mismatch.
+//
+// A chunk whose embed call fails aborts the whole memory's replace (returns early without
+// calling ReplaceChunks) rather than writing a partial set — a memory with 3 of 4 chunks
+// embedded would look chunked but silently drop content, the same class of failure this
+// entire fix exists to close.
+func (s *memoryService) embedChunked(ctx context.Context, id uuid.UUID, text string) error {
+	pieces := chunkText(text, defaultChunkSize, defaultChunkOverlap)
+	runes := []rune(text)
+	chunks := make([]domain.MemoryChunk, 0, len(pieces))
+	for i, p := range pieces {
+		vec, err := s.embedder.Embed(ctx, p.Text)
+		if err != nil {
+			return fmt.Errorf("embed chunk %d/%d: %w", i, len(pieces), err)
+		}
+		if len(vec) == 0 {
+			continue
+		}
+		chunks = append(chunks, domain.MemoryChunk{
+			ChunkIdx:       i,
+			ChunkStart:     runeOffsetToByteOffset(runes, p.Start),
+			ChunkEnd:       runeOffsetToByteOffset(runes, p.End),
+			Embedding:      domain.EncodeEmbedding(vec),
+			EmbeddingModel: s.embedder.Model(),
+			EmbeddingDim:   len(vec),
+		})
+	}
+	if len(chunks) == 0 {
+		// Every chunk's embed call returned an empty vector (e.g. the embedder
+		// is a noop or degraded) — leave any existing rows alone rather than
+		// wiping a memory's searchable chunks because of a transient failure.
+		return nil
+	}
+	if err := s.chunkRepo.ReplaceChunks(ctx, id, chunks); err != nil {
+		return err
+	}
+	// Watermark memories.embedding_model so ListNeedingEmbedding (which still
+	// filters on this table) stops matching this memory for the current
+	// model — memory_chunks holds the real vectors now, memories.embedding
+	// itself is deliberately left untouched. See MarkEmbeddingModel's doc.
+	if err := s.memRepo.MarkEmbeddingModel(ctx, id, s.embedder.Model()); err != nil {
+		return fmt.Errorf("mark embedding model: %w", err)
+	}
+	return nil
+}
+
+// runeOffsetToByteOffset converts a rune index into runes (as produced by chunkText,
+// which operates on runes to never split a multi-byte character) into the equivalent
+// byte offset into the original string — the unit memory_chunks.chunk_start/chunk_end
+// are stored in (ADR-0002), matching how Postgres substring() and most tooling index text.
+func runeOffsetToByteOffset(runes []rune, runeOffset int) int {
+	return len(string(runes[:runeOffset]))
 }
 
 // RecallResult holds the paginated recall response with metadata.
@@ -1522,6 +1611,16 @@ func (s *memoryService) BatchEmbed(ctx context.Context, workspaceID uuid.UUID) (
 	count := 0
 	for _, m := range memories {
 		text := m.Key + " " + m.Content + " " + strings.Join(m.Tags, " ")
+
+		if s.chunkRepo != nil {
+			if embedErr := s.embedChunked(ctx, m.ID, text); embedErr != nil {
+				log.Printf("memory batch embed (chunked): id=%s: %v", m.ID, embedErr)
+				continue
+			}
+			count++
+			continue
+		}
+
 		vec, embedErr := s.embedder.Embed(ctx, text)
 		if embedErr != nil {
 			log.Printf("memory batch embed: embed id=%s: %v", m.ID, embedErr)

@@ -1025,6 +1025,16 @@ func (r *MemoryRepo) UpdateEmbedding(ctx context.Context, id uuid.UUID, vec []fl
 	return err
 }
 
+// MarkEmbeddingModel sets embedding_model without touching embedding/embedding_dim — see
+// the interface doc for why the chunked embed path needs this watermark.
+func (r *MemoryRepo) MarkEmbeddingModel(ctx context.Context, id uuid.UUID, model string) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE memories SET embedding_model = $1, updated_at = NOW() WHERE id = $2`,
+		model, id,
+	)
+	return err
+}
+
 // DecayRelevance reduces relevance by 0.05 for agent-scope memories that have not been
 // updated in more than 30 days. Workspace and project scope memories are exempt.
 // The floor is 0.1 — relevance never decays below that value.

@@ -102,6 +102,7 @@ func main() {
 	autoTransRuleRepo := postgres.NewAutoTransitionRuleRepo(db)
 	memoryRepo := postgres.NewMemoryRepo(db)
 	memoryEdgesRepo := postgres.NewMemoryEdgesRepo(db)
+	memoryChunkRepo := postgres.NewMemoryChunkRepo(db)
 	commentMentionRepo := postgres.NewCommentMentionRepo(db)
 
 	// 5. Create auth service.
@@ -175,11 +176,15 @@ func main() {
 
 	// Memory service is wired into eventBusService so Publish() can extract memories.
 	// MemoryWithProjectRepo enables automatic project:<slug> tag → project_id resolution on write.
+	// MemoryWithChunkRepo switches the embed write path to per-chunk storage (ADR-0002,
+	// #b052cdda) — without it a memory longer than the embedder's input window only ever
+	// gets embedded from its first ~15% (#e8063a65).
 	memoryService := service.NewMemoryService(memoryRepo, memoryEdgesRepo, embedder,
 		service.MemoryWithProjectRepo(projectRepo),
 		service.MemoryWithTaskRepo(taskRepo),
 		service.MemoryWithDepRepo(taskDependencyRepo),
 		service.MemoryWithEmbedConcurrency(cfg.Embedding.Concurrency),
+		service.MemoryWithChunkRepo(memoryChunkRepo),
 	)
 
 	// Slack service sends notifications via Slack Incoming Webhooks when a workspace has

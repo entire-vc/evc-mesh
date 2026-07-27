@@ -609,6 +609,12 @@ type MemoryRepository interface {
 	VectorSearch(ctx context.Context, queryVec []float32, workspaceID uuid.UUID, projectID *uuid.UUID, filter domain.MemorySearchFilter, limit int) ([]domain.ScoredMemory, error)
 	// UpdateEmbedding stores the embedding vector (encoded as JSON) for a single memory.
 	UpdateEmbedding(ctx context.Context, id uuid.UUID, vec []float32, model string, dim int) error
+	// MarkEmbeddingModel sets embedding_model without touching embedding/embedding_dim.
+	// Used by the chunked embed path (ADR-0002): the vector now lives in memory_chunks, not
+	// memories.embedding, but ListNeedingEmbedding's filter (embedding_model IS DISTINCT FROM
+	// $model) still runs against this table — without this watermark a chunked memory's
+	// embedding column stays NULL forever and BatchEmbed would re-chunk it every single run.
+	MarkEmbeddingModel(ctx context.Context, id uuid.UUID, model string) error
 	// DecayRelevance reduces relevance by 0.05 for agent-scope memories not updated in 30+ days,
 	// capped at a floor of 0.1. Workspace and project scope memories are exempt.
 	// Returns the number of rows updated.
