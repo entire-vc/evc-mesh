@@ -1,3 +1,16 @@
+// Editing this file does not redeploy prod, and that is deliberate.
+//
+// `deploy-backend.yml` used to trigger on `internal/**` with no exclusion, so a
+// merge touching only this file redeployed the backend — PR #407 did exactly
+// that (deploy run 30339003119; /api/version moved 5d2cda8 -> ba7deae). The
+// binary was identical either side of it, because the Go toolchain never
+// compiles `_test.go` into a non-test build. The deploy changed nothing and
+// destroyed an in-flight `memory-bench --update-baseline` capture, which spans
+// two shas and must therefore refuse to score.
+//
+// #408 appended `'!**/*_test.go'` last in that trigger's `paths:`. PR-time
+// Lint/Test/Build coverage is untouched — `ci.yml` runs on every PR and every
+// push to main independently of this filter.
 package service
 
 import (
