@@ -347,6 +347,11 @@ class _ArmHarness(unittest.TestCase):
         for p, attr in (
             (self.tmp / "baseline.json", "BASELINE_FILE"),
             (self.tmp / "baseline_retrieval.json", "RETRIEVAL_BASELINE_FILE"),
+            # New sink (ADR-0003). Listed here for the reason the comment above
+            # gives, not because a test in THIS file writes it today: the next
+            # `--arm branch` case added here would otherwise drop a stub
+            # baseline into the repo, where it becomes a merge threshold.
+            (self.tmp / "baseline_retrieval_branch.json", "BRANCH_RETRIEVAL_BASELINE_FILE"),
             (self.tmp / "results", "RESULTS_DIR"),
             (self.tmp / "results" / "recall_gate.json", "RETRIEVAL_RESULTS_FILE"),
             (self.tmp / "results" / "longmemeval.json", "E2E_RESULTS_FILE"),

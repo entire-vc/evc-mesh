@@ -49,9 +49,11 @@ pins one way that has actually occurred:
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import re
 import sys
+import tokenize
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -111,6 +113,270 @@ class TestMemoryPathCoverage(unittest.TestCase):
     def test_the_handler_that_slipped_through_is_gated(self):
         # Regression pin for #347 specifically: memory DELETE authorization.
         self.assertIn("internal/handler/memory_handler.go", _memory_paths())
+
+
+REQUIRED_CONTEXT = "Memory recall gate"
+
+
+def _job_blocks() -> dict[str, str]:
+    """`{job_id: raw yaml of that job}` — enough to assert on without a yaml dep.
+
+    Deliberately text-level: what GitHub matches is text, and a structural parse
+    would happily normalise away the very thing under test (a job `name:` that
+    differs from the required context by one character still parses fine).
+    """
+    text = WORKFLOW.read_text(encoding="utf-8")
+    body = text.split("\njobs:\n", 1)[1]
+    starts = [(m.start(), m.group(1)) for m in re.finditer(r"^  ([a-zA-Z0-9_-]+):$", body, re.M)]
+    assert starts, "no jobs found in memory-bench.yml"
+    out = {}
+    for i, (pos, job_id) in enumerate(starts):
+        end = starts[i + 1][0] if i + 1 < len(starts) else len(body)
+        out[job_id] = body[pos:end]
+    return out
+
+
+class TestTheRequiredContextIsStillProduced(unittest.TestCase):
+    """Way 7's sibling: the gate can also go blind by never reporting at all.
+
+    `main`'s branch protection requires the literal context string
+    "Memory recall gate" with `enforce_admins: true`, and GitHub matches a
+    required context against the check-run NAME, not the job id. So the name is a
+    public interface with a hard failure mode on both sides:
+
+      * rename the job and leave protection alone -> the required context is
+        produced by nobody, every PR carrying the change is permanently BLOCKED,
+        and no override exists (observed live on #394 at 14 green checks);
+      * move protection to the new name first -> every OTHER open PR is instantly
+        BLOCKED, because they still produce the old one.
+
+    Neither is recoverable from inside a PR, which is why this is pinned here
+    rather than left to review. Changing the name is a legitimate decision — it
+    just has to be a deliberate one, taken together with a protection edit, and
+    this test is what makes it deliberate.
+    """
+
+    def test_some_job_produces_the_required_context_verbatim(self):
+        names = re.findall(r"^    name: (.+)$", "".join(_job_blocks().values()), re.M)
+        self.assertIn(
+            REQUIRED_CONTEXT, [n.strip() for n in names],
+            f"No job is named exactly {REQUIRED_CONTEXT!r}, so the required status "
+            f"check on main will never report and every PR touching this file is "
+            f"BLOCKED with no override (enforce_admins is true). Job names found: "
+            f"{names}. If the rename is intended, patch branch protection in the "
+            f"same rollout — see README 'Making the recall gate a required check'.",
+        )
+
+    def test_the_job_producing_it_runs_on_pull_request(self):
+        """A required context that is skipped on PRs is the same wedge, arrived at
+        by `if:` instead of by `name:`. The prod arm carries
+        `if: github.event_name != 'pull_request'` precisely because it is NOT the
+        required one; that guard must never end up on the job that is."""
+        owner = [
+            (job_id, block) for job_id, block in _job_blocks().items()
+            if re.search(rf"^    name: {re.escape(REQUIRED_CONTEXT)}\s*$", block, re.M)
+        ]
+        self.assertEqual(1, len(owner), f"expected exactly one job named {REQUIRED_CONTEXT!r}")
+        job_id, block = owner[0]
+        header = block.split("    steps:", 1)[0]
+        self.assertNotIn(
+            "github.event_name != 'pull_request'", header,
+            f"job {job_id!r} produces the required context but excludes itself from "
+            f"pull_request runs — it would never report, which blocks every PR.",
+        )
+
+    def test_the_prod_arms_are_serialised_against_each_other(self):
+        """Way 7: one live MESH_API_URL, no `concurrency:` anywhere, so runs
+        contended inside the server until one hit its timeout and was reported
+        `cancelled` — a required check with no verdict that reads like a flake.
+        `cancel-in-progress: false` is the load-bearing half: the default `true`
+        pre-empts a peer mid-run, losing the same verdict with less evidence."""
+        for job_id, block in _job_blocks().items():
+            header = block.split("    steps:", 1)[0]
+            if "secrets.MESH_API_URL" not in block:
+                continue
+            self.assertRegex(
+                header, r"concurrency:\s*\n\s*group: memory-bench-prod",
+                f"job {job_id!r} targets the shared production API but is not in the "
+                f"memory-bench-prod concurrency group — concurrent runs will slow "
+                f"each other down inside the server until one times out.",
+            )
+            self.assertIn(
+                "cancel-in-progress: false", header,
+                f"job {job_id!r} must serialise, not pre-empt: cancel-in-progress "
+                f"defaults to true, which aborts a peer mid-run.",
+            )
+
+    def test_the_required_arm_is_not_queued_behind_the_canary(self):
+        """It builds its own postgres + embedder, so it contends for nothing. A
+        required check waiting on an advisory one hands its latency to a job
+        nobody is blocked on."""
+        block = next(
+            b for b in _job_blocks().values()
+            if re.search(rf"^    name: {re.escape(REQUIRED_CONTEXT)}\s*$", b, re.M)
+        )
+        self.assertNotIn("memory-bench-prod", block.split("    steps:", 1)[0])
+
+
+class TestEverySelfCheckIsActuallyInvoked(unittest.TestCase):
+    """A self-check that CI never runs is a guard in name only.
+
+    Found on #2a079432 by counting invocations rather than reading the tree:
+    `test_gate_dense_arm.py` and `test_check_captured_baseline.py` were both
+    present, both passing, and both credited by the README as the pin for their
+    failure mode — and **neither appeared in any workflow step**. They arrived
+    with the PRs that wrote them and nobody wired them, so "pinned by X" was true
+    about the file and false about CI.
+
+    Same shape as everything else in this file — a confident green about
+    something never evaluated — one level up, in the harness guarding the
+    harness.
+
+    Two construction notes, both of which this test got wrong on the first
+    attempt and which are the reason it is worth reading:
+
+    * **Discovery is derived from the directory, never from a list kept here.**
+      A hand-maintained list needs the same edit that was missed, so pinning
+      against a copy of it would reproduce the bug inside the test meant to
+      catch it.
+    * **An invocation is matched, not a mention.** The first version asked
+      `name in job_block`, and the step carries a COMMENT naming the two files
+      above. Deleting the actual `python …` line then left the name behind in
+      the prose and the test stayed green — a source-grep surviving an orphaned
+      call. Only lines that would really execute count.
+    """
+
+    BENCH_DIR = REPO_ROOT / "scripts/memory-bench"
+    # An invocation, i.e. a line CI would run. A comment cannot match: `#` is not
+    # `python`, and the path has to be the command's argument.
+    INVOCATION = re.compile(r"^\s*python[0-9.]*\s+scripts/memory-bench/(\S+\.py)", re.M)
+
+    def _self_check_scripts(self) -> set[str]:
+        """Files that ARE a self-check: a `test_*.py`, or a script offering
+        `--selftest`. Both forms are in use (`dense_arm_control.py --selftest`,
+        `prod_window.py --selftest`); counting only `test_*.py` would miss them."""
+        found = set()
+        for f in sorted(self.BENCH_DIR.glob("*.py")):
+            if f.name.startswith("test_"):
+                found.add(f.name)
+                continue
+            if '"--selftest"' in f.read_text(encoding="utf-8"):
+                found.add(f.name)
+        return found
+
+    def _required_job_block(self) -> str:
+        return next(
+            b for b in _job_blocks().values()
+            if re.search(rf"^    name: {re.escape(REQUIRED_CONTEXT)}\s*$", b, re.M)
+        )
+
+    def test_the_required_job_invokes_every_self_check(self):
+        invoked = set(self.INVOCATION.findall(self._required_job_block()))
+        missing = sorted(self._self_check_scripts() - invoked)
+        self.assertEqual(
+            [], missing,
+            f"these self-checks exist but the REQUIRED job never runs them, so they "
+            f"guard nothing on a PR: {missing}. Add them to the 'Gate self-checks' "
+            f"step in the job named {REQUIRED_CONTEXT!r}.",
+        )
+
+    def test_the_discovery_actually_finds_the_known_checks(self):
+        """Positive control on the finder. Were the glob to match nothing,
+        `missing` above would be empty and the test would pass having checked
+        nothing — the very failure it exists to prevent, one level down."""
+        found = self._self_check_scripts()
+        self.assertGreaterEqual(len(found), 7, f"discovery returned too little: {found}")
+        for expected in ("test_gate_dense_arm.py", "dense_arm_control.py", "prod_window.py"):
+            self.assertIn(expected, found, f"{expected} was not discovered as a self-check")
+
+    def test_the_required_arm_can_capture_its_own_baseline(self):
+        """Without a capture path the required check is `no-baseline` for ever —
+        required, and blocking nothing but the dense-arm control.
+
+        The README used to say "dispatch the workflow on main; the branch job
+        writes it with --arm branch". The job does run on dispatch (it carries no
+        `if:`), but nothing in it ever passed `--update-baseline`, so the
+        documented procedure was inert — discoverable only by someone following
+        it after the merge and finding no artifact.
+
+        Asserted on the invocation, not on the word: `--arm branch` appearing in
+        the judging call would satisfy a substring check while capturing nothing.
+        """
+        block = self._required_job_block()
+        capture = re.search(
+            r"^\s*python run_ci\.py[^\n]*--update-baseline[^\n]*$", block, re.M
+        ) or re.search(
+            r"^\s*python run_ci\.py .*\\\n\s*.*--update-baseline", block, re.M
+        )
+        self.assertIsNotNone(
+            capture,
+            "the required arm has no `--update-baseline` invocation, so "
+            "baseline_retrieval_branch.json cannot be produced by CI and the gate "
+            "stays permanently INCONCLUSIVE on no-baseline.",
+        )
+        self.assertIn(
+            "--arm branch", capture.group(0),
+            "the capture must name `--arm branch`, or it writes the PROD baseline "
+            "file from the branch arm's numbers — an arm-mismatch baked into the "
+            "floor rather than caught as one.",
+        )
+        self.assertIn(
+            "baseline_retrieval_branch.json", block,
+            "the captured baseline is never uploaded, so the run produces a file "
+            "that dies with the runner.",
+        )
+
+    def test_a_mention_in_prose_does_not_count_as_an_invocation(self):
+        """Positive control on the matcher, in the direction that actually broke.
+        The step's own comment names two of these scripts; if the pattern counted
+        that, removing the real line would go unnoticed."""
+        commented_out = "      # python scripts/memory-bench/test_gate_dense_arm.py\n"
+        prose = "      # see test_gate_dense_arm.py for the dense-arm pin\n"
+        self.assertEqual([], self.INVOCATION.findall(prose))
+        self.assertEqual([], self.INVOCATION.findall(commented_out))
+        self.assertEqual(
+            ["test_gate_dense_arm.py"],
+            self.INVOCATION.findall("          python scripts/memory-bench/test_gate_dense_arm.py\n"),
+        )
+
+
+class TestNoDeadCodeqlSuppression(unittest.TestCase):
+    """`# codeql[rule-id]` is a CodeQL-CLI feature the Actions integration
+    ignores, so writing one silences nothing while reading exactly like a
+    handled alert. Measured, not assumed: alert #18 was raised at
+    cbf93f7b:187 — the very line carrying the comment — by the analysis of the
+    commit that added it. The supported mechanism is an API/UI dismissal.
+
+    This pins the honest state. Without it the next session reaches for the
+    comment again (this one did, on top of two prior sink-relocations), and a
+    suppression that does not suppress is worse than no suppression at all."""
+
+    def test_no_source_file_relies_on_an_inline_suppression(self):
+        # BOTH placements are flagged. The two recorded attempts differ only in
+        # where the comment sat — 371dfe7 put it on the preceding line, cbf93f7b
+        # moved it to trailing — and neither suppressed anything, so pinning only
+        # the trailing form would let the first one back in unnoticed.
+        #
+        # tokenize + an ANCHORED match, not a line regex: prose ABOUT the syntax
+        # (this docstring, and the block in ci_bootstrap.py explaining why there
+        # is no suppression) has to survive. A real directive begins the comment;
+        # prose reaches the token mid-sentence, so `re.match` separates them and
+        # STRING tokens never reach this loop at all.
+        offenders = []
+        for f in sorted((REPO_ROOT / "scripts/memory-bench").rglob("*.py")):
+            with io.StringIO(f.read_text(encoding="utf-8")) as buf:
+                for tok in tokenize.generate_tokens(buf.readline):
+                    if tok.type is tokenize.COMMENT and re.match(
+                        r"#\s*(codeql|lgtm)\[", tok.string
+                    ):
+                        offenders.append(f"{f.relative_to(REPO_ROOT)}:{tok.start[0]}")
+        self.assertEqual(
+            [], offenders,
+            "inline CodeQL/LGTM suppression comments are ignored by GitHub code "
+            "scanning — the alert stays open while the comment claims otherwise. "
+            "Dismiss via the code-scanning API with a justification instead: "
+            f"{offenders}",
+        )
 
 
 class TestFlattenExc(unittest.TestCase):
