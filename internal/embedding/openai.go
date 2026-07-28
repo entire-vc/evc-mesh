@@ -46,13 +46,25 @@ func NewOpenAIEmbedder(endpoint, apiKey, model string, dimensions, httpTimeoutSe
 func (o *openAIEmbedder) Model() string   { return o.model }
 func (o *openAIEmbedder) Dimensions() int { return o.dimensions }
 
+// maxClientBatchSize bounds how many texts go into one /v1/embeddings request.
+// Matches the prod TEI server's max_client_batch_size (32); a larger array is
+// rejected outright, so batches are split rather than sent whole.
+const maxClientBatchSize = 32
+
+// Input is []string, not string: the API accepts both, and the array form is what
+// makes EmbedBatch a single round trip. Chunked memories embed 2-24 pieces each, and
+// sending those one at a time is what exhausted the request budget mid-document under
+// concurrent load (#67f4e0d9).
 type openAIEmbedRequest struct {
-	Model string `json:"model"`
-	Input string `json:"input"`
+	Model string   `json:"model"`
+	Input []string `json:"input"`
 }
 
+// Index is required, not decorative: the API does not guarantee data[] arrives in
+// request order, so vectors are placed by index rather than by position.
 type openAIEmbedData struct {
 	Embedding []float32 `json:"embedding"`
+	Index     int       `json:"index"`
 }
 
 type openAIEmbedResponse struct {
@@ -60,7 +72,46 @@ type openAIEmbedResponse struct {
 }
 
 func (o *openAIEmbedder) Embed(ctx context.Context, text string) ([]float32, error) {
-	body, err := json.Marshal(openAIEmbedRequest{Model: o.model, Input: text})
+	vecs, err := o.embedOnce(ctx, []string{text})
+	if err != nil {
+		return nil, err
+	}
+	if len(vecs) == 0 {
+		return nil, fmt.Errorf("openai embed: empty data in response")
+	}
+	return vecs[0], nil
+}
+
+// EmbedBatch embeds every text, using ONE HTTP request per maxClientBatchSize texts
+// rather than one per text. For a chunked memory this collapses up to 24 sequential
+// round trips into a single call — which is both the latency fix and a ~20x reduction
+// in load on the shared embedder instance (#67f4e0d9).
+func (o *openAIEmbedder) EmbedBatch(ctx context.Context, texts []string) ([][]float32, error) {
+	if len(texts) == 0 {
+		return nil, nil
+	}
+	out := make([][]float32, 0, len(texts))
+	for start := 0; start < len(texts); start += maxClientBatchSize {
+		end := start + maxClientBatchSize
+		if end > len(texts) {
+			end = len(texts)
+		}
+		vecs, err := o.embedOnce(ctx, texts[start:end])
+		if err != nil {
+			return nil, fmt.Errorf("openai embed batch[%d:%d]: %w", start, end, err)
+		}
+		if len(vecs) != end-start {
+			return nil, fmt.Errorf("openai embed batch[%d:%d]: got %d vectors for %d inputs", start, end, len(vecs), end-start)
+		}
+		out = append(out, vecs...)
+	}
+	return out, nil
+}
+
+// embedOnce performs a single /v1/embeddings call for the given inputs and returns the
+// vectors in INPUT order (reordering by the response's index field).
+func (o *openAIEmbedder) embedOnce(ctx context.Context, inputs []string) ([][]float32, error) {
+	body, err := json.Marshal(openAIEmbedRequest{Model: o.model, Input: inputs})
 	if err != nil {
 		return nil, fmt.Errorf("openai embed: marshal request: %w", err)
 	}
@@ -91,17 +142,13 @@ func (o *openAIEmbedder) Embed(ctx context.Context, text string) ([]float32, err
 	if len(result.Data) == 0 {
 		return nil, fmt.Errorf("openai embed: empty data in response")
 	}
-	return result.Data[0].Embedding, nil
-}
 
-func (o *openAIEmbedder) EmbedBatch(ctx context.Context, texts []string) ([][]float32, error) {
-	out := make([][]float32, len(texts))
-	for i, t := range texts {
-		vec, err := o.Embed(ctx, t)
-		if err != nil {
-			return nil, fmt.Errorf("openai embed batch[%d]: %w", i, err)
+	out := make([][]float32, len(inputs))
+	for _, d := range result.Data {
+		if d.Index < 0 || d.Index >= len(inputs) {
+			return nil, fmt.Errorf("openai embed: response index %d out of range for %d inputs", d.Index, len(inputs))
 		}
-		out[i] = vec
+		out[d.Index] = d.Embedding
 	}
 	return out, nil
 }
