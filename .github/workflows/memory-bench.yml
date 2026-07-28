@@ -1166,12 +1166,30 @@ jobs:
             exit 0
           fi
 
-          # Storm guard: if the most recent comment (or the issue body, when there
-          # are none) already reports THIS reason kind, the alert is already live —
-          # adding a copy per PR would bury it.
-          last=$(gh issue view "$num" --json comments,body \
-                   --jq '(.comments | last | .body) // .body // ""')
-          if printf '%s' "$last" | grep -qF "$marker"; then
+          # Storm guard: if THIS reason kind is already reported anywhere on the
+          # issue, the alert is already live — adding a copy per PR would bury it.
+          #
+          # Scan every comment plus the body, not just the newest comment. This
+          # read `(.comments | last | .body) // .body` and so made ACKNOWLEDGING an
+          # alert the act that re-armed it: any comment that is not itself an alert
+          # — a human replying, asking, posting status — displaced the marker from
+          # the last position and the next run posted the identical alert again.
+          # The guard was weakest exactly when somebody was paying attention. Seen
+          # on #397, 2026-07-28: alert 04:43:06Z, human 04:46:22Z, byte-identical
+          # alert 04:58:24Z, both kind=version-mismatch; run 30328826762 logged
+          # `Commented on tracking issue #397.` The dedup KEY was never poisoned —
+          # correct marker, correct kind, wrong search window.
+          #
+          # Widening to the whole issue is bounded rather than unbounded, and needs
+          # no tunable N: "Resolve blindness alert" CLOSES this issue the moment a
+          # comparable verdict returns, and the lookup above is `--state open`. One
+          # open issue is one blindness episode, so each kind is reported once per
+          # episode and a genuinely NEW kind still comments — the marker is
+          # kind-scoped. Executed, not eyeballed, by
+          # TestAcknowledgingAnAlertDoesNotReArmIt in test_gate_blindness.py.
+          seen=$(gh issue view "$num" --json comments,body \
+                   --jq '([.body] + ((.comments // []) | map(.body))) | map(. // "") | join("\n")')
+          if printf '%s' "$seen" | grep -qF "$marker"; then
             echo "Issue #$num already reports '${REASON_KIND}' — not commenting again."
             exit 0
           fi
@@ -1515,9 +1533,12 @@ jobs:
             exit 0
           fi
 
-          last=$(gh issue view "$num" --json comments,body \
-                   --jq '(.comments | last | .body) // .body // ""')
-          if printf '%s' "$last" | grep -qF "$marker"; then
+          # Same storm guard, same reason, same window as the recall arm above —
+          # see the comment there. Fixing one and leaving the other is how a
+          # family fix stops at the caller it started from; both are pinned.
+          seen=$(gh issue view "$num" --json comments,body \
+                   --jq '([.body] + ((.comments // []) | map(.body))) | map(. // "") | join("\n")')
+          if printf '%s' "$seen" | grep -qF "$marker"; then
             echo "Issue #$num already reports '${REASON_KIND}' — not commenting again."
             exit 0
           fi
