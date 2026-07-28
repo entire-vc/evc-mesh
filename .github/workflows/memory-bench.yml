@@ -1768,8 +1768,15 @@ jobs:
       # failure this whole job exists to undo, reintroduced one level up.
       - name: Expected supersede — nothing to page
         if: steps.classify.outputs.verdict != 'defect'
+        # Through `env:`, not `${{ }}` inside the script — the same convention the
+        # alert steps above already follow. These values are assembled from job
+        # names and API timestamps, but a `run:` block that interpolates an output
+        # is a shell-injection shape regardless of who fills it today.
+        env:
+          VERDICT: ${{ steps.classify.outputs.verdict }}
+          REASON: ${{ steps.classify.outputs.reason }}
         run: |
-          echo "::notice::Prod arm cancellation classified as '${{ steps.classify.outputs.verdict }}': ${{ steps.classify.outputs.reason }}"
+          echo "::notice::Prod arm cancellation classified as '${VERDICT}': ${REASON}"
 
       - name: Alert — the prod canary was killed, not superseded
         if: steps.classify.outputs.verdict == 'defect'
@@ -1813,6 +1820,8 @@ jobs:
       # filing cabinet; this makes the run itself carry the failure.
       - name: Fail the run
         if: steps.classify.outputs.verdict == 'defect'
+        env:
+          REASON: ${{ steps.classify.outputs.reason }}
         run: |
-          echo "::error::${{ steps.classify.outputs.reason }}"
+          echo "::error::${REASON}"
           exit 1
