@@ -230,6 +230,7 @@ jobs:
           python scripts/memory-bench/test_fixture_isolation.py
           python scripts/memory-bench/test_serving_version.py
           python scripts/memory-bench/test_classify_cancelled_arm.py
+          python scripts/memory-bench/test_resume_after_deploy.py
           python scripts/memory-bench/dense_arm_control.py --selftest
           python scripts/memory-bench/prod_window.py --selftest
 
@@ -758,6 +759,7 @@ jobs:
           python scripts/memory-bench/test_fixture_isolation.py
           python scripts/memory-bench/test_serving_version.py
           python scripts/memory-bench/test_classify_cancelled_arm.py
+          python scripts/memory-bench/test_resume_after_deploy.py
           python scripts/memory-bench/dense_arm_control.py --selftest
           python scripts/memory-bench/prod_window.py --selftest
 
