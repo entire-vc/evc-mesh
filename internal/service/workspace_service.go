@@ -144,3 +144,9 @@ func (s *workspaceService) Delete(ctx context.Context, id uuid.UUID) error {
 func (s *workspaceService) ListByOwner(ctx context.Context, ownerID uuid.UUID) ([]domain.Workspace, error) {
 	return s.workspaceRepo.ListByOwner(ctx, ownerID)
 }
+
+// ListForUser returns all workspaces visible to the given user: the ones they
+// are a member of plus the ones they own.
+func (s *workspaceService) ListForUser(ctx context.Context, userID uuid.UUID) ([]domain.Workspace, error) {
+	return s.workspaceRepo.ListForUser(ctx, userID)
+}

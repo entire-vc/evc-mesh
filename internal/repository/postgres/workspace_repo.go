@@ -153,15 +153,49 @@ func (r *WorkspaceRepo) Delete(ctx context.Context, id uuid.UUID) error {
 	return nil
 }
 
+// ListByOwner returns the workspaces owned by the given user. It ignores
+// membership — use ListForUser for the user-facing workspace list.
 func (r *WorkspaceRepo) ListByOwner(ctx context.Context, ownerID uuid.UUID) ([]domain.Workspace, error) {
 	const q = `SELECT * FROM workspaces WHERE owner_id = $1 AND deleted_at IS NULL ORDER BY created_at ASC`
 	var rows []workspaceRow
 	if err := r.db.SelectContext(ctx, &rows, q, ownerID); err != nil {
 		return nil, err
 	}
+	return toDomainWorkspaces(rows), nil
+}
+
+// ListForUser returns every workspace the user can see: the ones they are a
+// member of, plus the ones they own.
+//
+// Ownership is checked explicitly instead of relying on the workspace_members
+// row alone. The owner is normally auto-inserted as a member on workspace
+// creation, but that insert is best-effort (see workspaceService.Create and
+// auth.Service.Register) and legacy rows may be missing it — such an owner must
+// still see their own workspace. EXISTS (rather than a JOIN) keeps the result
+// de-duplicated when the user is both owner and member.
+func (r *WorkspaceRepo) ListForUser(ctx context.Context, userID uuid.UUID) ([]domain.Workspace, error) {
+	const q = `
+		SELECT w.* FROM workspaces w
+		WHERE w.deleted_at IS NULL
+		  AND (
+		      w.owner_id = $1
+		      OR EXISTS (
+		          SELECT 1 FROM workspace_members m
+		          WHERE m.workspace_id = w.id AND m.user_id = $1
+		      )
+		  )
+		ORDER BY w.created_at ASC, w.id ASC`
+	var rows []workspaceRow
+	if err := r.db.SelectContext(ctx, &rows, q, userID); err != nil {
+		return nil, err
+	}
+	return toDomainWorkspaces(rows), nil
+}
+
+func toDomainWorkspaces(rows []workspaceRow) []domain.Workspace {
 	result := make([]domain.Workspace, len(rows))
 	for i := range rows {
 		result[i] = *rows[i].toDomain()
 	}
-	return result, nil
+	return result
 }

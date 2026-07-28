@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -26,11 +27,32 @@ import (
 type MockWorkspaceRepository struct {
 	mu          sync.RWMutex
 	items       map[uuid.UUID]*domain.Workspace
+	memberships map[uuid.UUID]map[uuid.UUID]bool // workspaceID -> set of userIDs
 	errToReturn error
 }
 
 func NewMockWorkspaceRepository() *MockWorkspaceRepository {
-	return &MockWorkspaceRepository{items: make(map[uuid.UUID]*domain.Workspace)}
+	return &MockWorkspaceRepository{
+		items:       make(map[uuid.UUID]*domain.Workspace),
+		memberships: make(map[uuid.UUID]map[uuid.UUID]bool),
+	}
+}
+
+// AddMember records a workspace_members row for ListForUser.
+func (m *MockWorkspaceRepository) AddMember(workspaceID, userID uuid.UUID) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.memberships[workspaceID] == nil {
+		m.memberships[workspaceID] = make(map[uuid.UUID]bool)
+	}
+	m.memberships[workspaceID][userID] = true
+}
+
+// RemoveMember drops a workspace_members row.
+func (m *MockWorkspaceRepository) RemoveMember(workspaceID, userID uuid.UUID) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.memberships[workspaceID], userID)
 }
 
 func (m *MockWorkspaceRepository) Create(_ context.Context, ws *domain.Workspace) error {
@@ -102,6 +124,29 @@ func (m *MockWorkspaceRepository) ListByOwner(_ context.Context, ownerID uuid.UU
 			result = append(result, *ws)
 		}
 	}
+	return result, nil
+}
+
+// ListForUser mirrors the SQL predicate: owner OR member, de-duplicated,
+// ordered by created_at then id.
+func (m *MockWorkspaceRepository) ListForUser(_ context.Context, userID uuid.UUID) ([]domain.Workspace, error) {
+	if m.errToReturn != nil {
+		return nil, m.errToReturn
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var result []domain.Workspace
+	for id, ws := range m.items {
+		if ws.OwnerID == userID || m.memberships[id][userID] {
+			result = append(result, *ws)
+		}
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if !result[i].CreatedAt.Equal(result[j].CreatedAt) {
+			return result[i].CreatedAt.Before(result[j].CreatedAt)
+		}
+		return result[i].ID.String() < result[j].ID.String()
+	})
 	return result, nil
 }
 
