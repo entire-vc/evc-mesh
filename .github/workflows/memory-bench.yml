@@ -740,7 +740,17 @@ jobs:
   memory-bench:
     name: LongMemEval-S end-to-end (advisory)
     runs-on: ubuntu-latest
-    # One pass is ~19 min, so a --repeat 3 baseline capture needs room.
+    # DELIBERATELY NOT version-pinned, unlike recall-gate above. This arm measures
+    # the same live prod and can straddle a deploy in exactly the same way, so the
+    # gap is real — it is scoped out rather than overlooked. It is advisory (never
+    # a merge gate) and LLM-judged, so its numbers are already read as indicative;
+    # the pin was spent on the arm behind the required check. Stated here so the
+    # next reader does not infer from the concurrency block above that this job is
+    # covered. If this arm's baseline ever starts gating anything, it needs the
+    # pin first.
+    #
+    # One pass is ~19 min, so a --repeat 3 baseline capture needs room. Unchanged
+    # at 30 because no version wait runs here.
     timeout-minutes: ${{ (inputs.update_baseline && 120) || 30 }}
     permissions:
       contents: read
