@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
 
+	"github.com/entire-vc/evc-mesh/internal/auth"
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/repository"
 	"github.com/entire-vc/evc-mesh/pkg/actorctx"
@@ -48,6 +49,7 @@ func (s *workspaceMemberService) ListMembers(ctx context.Context, workspaceID uu
 // AddMember looks up a user by email, validates there's no existing membership,
 // creates the membership record, and returns the full member-with-user view.
 func (s *workspaceMemberService) AddMember(ctx context.Context, workspaceID uuid.UUID, email, role string, invitedBy uuid.UUID) (*domain.WorkspaceMemberWithUser, error) {
+	email = auth.NormalizeEmail(email)
 	if email == "" {
 		return nil, apierror.ValidationError(map[string]string{
 			"email": "email is required",
@@ -129,6 +131,7 @@ func (s *workspaceMemberService) AddMemberWithCreate(ctx context.Context, worksp
 		return s.AddMember(ctx, workspaceID, email, role, invitedBy)
 	}
 
+	email = auth.NormalizeEmail(email)
 	if email == "" {
 		return nil, apierror.ValidationError(map[string]string{"email": "email is required"})
 	}

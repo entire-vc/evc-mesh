@@ -149,6 +149,11 @@ func (s *Service) Register(ctx context.Context, email, password, name string) (*
 		return nil, nil, ErrRegistrationClosed
 	}
 
+	// Canonicalize before validating, storing, or checking uniqueness so that
+	// "  Carol@Example.COM " and "carol@example.com" are one and the same
+	// account. See NormalizeEmail.
+	email = NormalizeEmail(email)
+
 	if err := validateEmail(email); err != nil {
 		return nil, nil, err
 	}
@@ -232,7 +237,7 @@ func (s *Service) Register(ctx context.Context, email, password, name string) (*
 
 // Login authenticates a user by email and password and returns a token pair.
 func (s *Service) Login(ctx context.Context, email, password string) (*domain.User, *TokenPair, error) {
-	user, err := s.userRepo.GetByEmail(ctx, email)
+	user, err := s.userRepo.GetByEmail(ctx, NormalizeEmail(email))
 	if err != nil {
 		return nil, nil, apierror.Wrap(err)
 	}
@@ -530,6 +535,26 @@ func (s *Service) deriveUniqueUsername(ctx context.Context, email string) (strin
 		}
 		candidate = trimmed + suffix
 	}
+}
+
+// DeriveUsername returns a unique username derived from an email address using
+// exactly the same rules as self-registration (see deriveUniqueUsername). Other
+// packages that create users outside Register — invite acceptance, for example —
+// must call this rather than reimplementing the derivation, otherwise the two
+// implementations drift and one of them starts emitting usernames that violate
+// chk_users_username.
+func (s *Service) DeriveUsername(ctx context.Context, email string) (string, error) {
+	return s.deriveUniqueUsername(ctx, NormalizeEmail(email))
+}
+
+// NormalizeEmail canonicalizes an email address for storage and comparison:
+// surrounding whitespace is trimmed and the address is lowercased. Every entry
+// point that accepts an email from user input must funnel it through here so
+// that "Carol@Example.COM", " carol@example.com " and "carol@example.com" all
+// resolve to a single account. The database backs this with a unique index on
+// lower(email) (migration 20260728083).
+func NormalizeEmail(email string) string {
+	return strings.ToLower(strings.TrimSpace(email))
 }
 
 // validateEmail checks that an email address is syntactically valid.
