@@ -128,7 +128,8 @@ See [Seeding the first admin](#seeding-the-first-admin) below.
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `MESH_RATE_LIMIT_ENABLED` | `true` | Enable or disable rate limiting globally |
-| `MESH_RATE_LIMIT_AUTH_RPM` | `20` | Maximum requests per minute for auth endpoints (per IP) |
+| `MESH_RATE_LIMIT_AUTH_RPM` | `5` | Maximum requests per minute for auth endpoints (per IP). Deliberately tight — raise it if a whole office shares one NAT'd egress IP. |
+| `MESH_RATE_LIMIT_REFRESH_RPM` | `60` | Maximum requests per minute for token refresh (per IP) |
 | `MESH_RATE_LIMIT_API_RPM` | `600` | Maximum requests per minute for API endpoints (per authenticated actor) |
 
 ### Spark Catalog
@@ -137,6 +138,26 @@ See [Seeding the first admin](#seeding-the-first-admin) below.
 |----------|---------|-------------|
 | `MESH_SPARK_URL` | `https://spark.entire.vc` | Spark agent catalog API base URL |
 | `MESH_SPARK_ENABLED` | `false` | Enable Spark catalog routes (`/api/v1/spark/...`) |
+
+### Outbound email
+
+Workspace invites are emailed to the invitee. With `SMTP_HOST` unset the API
+logs the invite link instead of sending it — the invite still works, you just
+have to hand the link over yourself.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `SMTP_HOST` | *(empty)* | SMTP server host. Empty disables sending. |
+| `SMTP_PORT` | `587` | SMTP server port |
+| `SMTP_USER` | *(empty)* | SMTP username |
+| `SMTP_PASSWORD` | *(empty)* | SMTP password |
+| `SMTP_FROM` | `noreply@mesh.entire.host` | From address on outbound mail |
+| `MESH_BASE_URL` | `http://localhost:5173` | Public base URL of the web UI. Used to build invite links — set this or invitees get a `localhost` link. |
+
+> **Email addresses are canonicalized.** Registration, login and invites trim
+> surrounding whitespace and lowercase the address, and the database enforces
+> uniqueness on `lower(email)`. `Carol@Example.COM` and `carol@example.com` are
+> the same account.
 
 ---
 
@@ -338,9 +359,17 @@ JWT_SECRET=your-32-char-minimum-secret
 MINIO_ACCESS_KEY=your-minio-access-key
 MINIO_SECRET_KEY=your-minio-secret-key
 # Optional:
-CORS_ORIGINS=https://mesh.yourdomain.com
+MESH_CORS_ORIGINS=https://mesh.yourdomain.com   # CORS_ORIGINS is also accepted
+MESH_ALLOW_REGISTRATION=false                   # close self-registration
 GRAFANA_PASSWORD=your-grafana-admin-password
 ```
+
+Every variable in the reference above is passed through to the `api` service by
+`docker-compose.prod.yml` with the documented default, so setting it in
+`.env` (or the environment) is enough — there is nothing else to edit.
+`DB_PASSWORD` and the S3 credentials are the exceptions: under compose they are
+supplied by `POSTGRES_PASSWORD` and `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY`, so
+that one value configures both the server and the client.
 
 ### Security Checklist
 
@@ -349,18 +378,25 @@ GRAFANA_PASSWORD=your-grafana-admin-password
    openssl rand -base64 32
    ```
 
-2. **Database password** -- Change `DB_PASSWORD` from the default:
+2. **Database password** -- Change it from the default. Under
+   `docker-compose.prod.yml` one variable configures both the server and the
+   API client:
    ```bash
-   # Also update deploy/docker/mesh/.env
-   DB_PASSWORD=your-strong-db-password
+   # deploy/docker/mesh/.env
+   POSTGRES_PASSWORD=your-strong-db-password
    ```
+   Running the API against an external Postgres instead? Set `DB_PASSWORD`
+   (plus `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_NAME`, `DB_SSL_MODE`) directly.
 
-3. **MinIO credentials** -- Change from defaults:
+3. **MinIO credentials** -- Change from defaults. Same pattern: under compose
+   these configure both MinIO and the API's S3 client:
    ```bash
-   S3_ACCESS_KEY_ID=your-access-key
-   S3_SECRET_ACCESS_KEY=your-secret-key
-   # Also update deploy/docker/mesh/.env
+   # deploy/docker/mesh/.env
+   MINIO_ACCESS_KEY=your-access-key
+   MINIO_SECRET_KEY=your-secret-key
    ```
+   Against an external S3/R2 bucket, set `S3_ENDPOINT`, `S3_ACCESS_KEY_ID`,
+   `S3_SECRET_ACCESS_KEY`, `S3_BUCKET`, `S3_REGION` and `S3_USE_SSL` instead.
 
 4. **Redis password** -- Set a password:
    ```bash
@@ -368,7 +404,11 @@ GRAFANA_PASSWORD=your-grafana-admin-password
    # The production compose file already passes this to redis-server
    ```
 
-5. **CORS** -- Configure allowed origins (currently allows `*`). Update the API server configuration for your domain.
+5. **CORS** -- Configure allowed origins (the default allows `*`):
+   ```bash
+   # deploy/docker/mesh/.env
+   MESH_CORS_ORIGINS=https://mesh.yourdomain.com
+   ```
 
 6. **Registration** -- If this instance is reachable from the public internet,
    set `MESH_ALLOW_REGISTRATION=false` **after** creating your first admin

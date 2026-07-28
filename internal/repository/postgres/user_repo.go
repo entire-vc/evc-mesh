@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -67,10 +68,15 @@ func (r *UserRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.User, err
 	return &user, nil
 }
 
+// GetByEmail returns the user with the given email address, or (nil, nil) if
+// there is none. The match is case-insensitive and whitespace-insensitive,
+// backed by the unique index ix_users_email_lower on lower(email) — callers
+// should still pass an address through auth.NormalizeEmail, but a stray
+// mixed-case address must never silently resolve to "no such user".
 func (r *UserRepo) GetByEmail(ctx context.Context, email string) (*domain.User, error) {
-	const q = `SELECT id, email, password_hash, display_name, COALESCE(avatar_url, '') AS avatar_url, is_active, created_at, updated_at FROM users WHERE email = $1`
+	const q = `SELECT id, email, password_hash, display_name, COALESCE(avatar_url, '') AS avatar_url, is_active, created_at, updated_at FROM users WHERE lower(email) = lower($1)`
 	var user domain.User
-	if err := r.db.GetContext(ctx, &user, q, email); err != nil {
+	if err := r.db.GetContext(ctx, &user, q, strings.TrimSpace(email)); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}

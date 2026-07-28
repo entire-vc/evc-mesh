@@ -4,10 +4,13 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/entire-vc/evc-mesh/internal/auth"
@@ -48,6 +51,9 @@ func NewInviteService(
 }
 
 func (s *inviteService) CreateInvite(ctx context.Context, input CreateInviteInput) (*domain.WorkspaceInvite, error) {
+	// Store the invite against the canonical address so that accepting it
+	// resolves to the same account a normal login would.
+	input.Email = auth.NormalizeEmail(input.Email)
 	if input.Email == "" {
 		return nil, apierror.ValidationError(map[string]string{"email": "email is required"})
 	}
@@ -154,13 +160,18 @@ func (s *inviteService) AcceptInvite(ctx context.Context, input AcceptInviteInpu
 		return "", "", validateErr
 	}
 
+	// Invites created before email normalization landed may still carry a
+	// mixed-case or padded address; canonicalize on read so lookup, creation
+	// and the closing login all agree on one identity.
+	email := auth.NormalizeEmail(invite.Email)
+
 	name := input.Name
 	if name == "" {
-		name = invite.Email
+		name = email
 	}
 
 	// Get or create user.
-	user, err := s.userRepo.GetByEmail(ctx, invite.Email)
+	user, err := s.userRepo.GetByEmail(ctx, email)
 	if err != nil {
 		return "", "", fmt.Errorf("invite_service.AcceptInvite: %w", err)
 	}
@@ -170,18 +181,34 @@ func (s *inviteService) AcceptInvite(ctx context.Context, input AcceptInviteInpu
 		if hashErr != nil {
 			return "", "", apierror.InternalError("failed to hash password")
 		}
+		// users.username is NOT NULL with a slug CHECK constraint, so a new
+		// account needs a username derived the same way self-registration
+		// derives it. Delegating to auth.Service keeps exactly one
+		// implementation of that rule.
+		username, unameErr := s.authSvc.DeriveUsername(ctx, email)
+		if unameErr != nil {
+			log.Printf("invite_service.AcceptInvite: derive username for %s: %v", email, unameErr)
+			return "", "", apierror.InternalError("could not allocate a username for this account")
+		}
 		now := time.Now()
 		user = &domain.User{
 			ID:           uuid.New(),
-			Email:        invite.Email,
+			Email:        email,
 			Name:         name,
+			Username:     username,
 			PasswordHash: string(hash),
 			IsActive:     true,
 			CreatedAt:    now,
 			UpdatedAt:    now,
 		}
 		if createErr := s.userRepo.Create(ctx, user); createErr != nil {
-			return "", "", fmt.Errorf("invite_service.AcceptInvite: %w", createErr)
+			// Never surface the raw driver/constraint text to the client.
+			var pqErr *pq.Error
+			if errors.As(createErr, &pqErr) && pqErr.Code == "23505" {
+				return "", "", apierror.Conflict("an account with this email or username already exists")
+			}
+			log.Printf("invite_service.AcceptInvite: create user %s: %v", email, createErr)
+			return "", "", apierror.InternalError("could not create an account for this invite")
 		}
 	}
 
@@ -212,7 +239,7 @@ func (s *inviteService) AcceptInvite(ctx context.Context, input AcceptInviteInpu
 	}
 
 	// Issue JWT via login.
-	_, tokens, err := s.authSvc.Login(ctx, invite.Email, input.Password)
+	_, tokens, err := s.authSvc.Login(ctx, email, input.Password)
 	if err != nil {
 		return "", "", fmt.Errorf("invite_service.AcceptInvite: %w", err)
 	}
