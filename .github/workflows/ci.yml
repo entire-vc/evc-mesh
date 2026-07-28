@@ -122,12 +122,28 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
-      nats:
-        image: nats:2-alpine
-        ports:
-          - 4222:4222
+      # NOTE: nats is deliberately NOT a service container. The event bus needs
+      # JetStream, and JetStream is off unless nats-server is started with
+      # --jetstream. A `services:` entry runs the image's default CMD and GitHub
+      # Actions offers no way to override it, so a service-declared nats ran
+      # without JetStream: PublishEvent failed and no event was ever delivered
+      # to a subscriber. Nothing caught it because until the WebSocket tenancy
+      # tests, no integration test asserted that an event ARRIVES — only that
+      # endpoints answer. Started as a plain container below instead, with the
+      # same flags as deploy/docker/mesh/docker-compose.yml.
     steps:
       - uses: actions/checkout@v6
+      - name: Start NATS with JetStream enabled
+        run: |
+          docker run -d --name nats -p 4222:4222 nats:2-alpine \
+            --jetstream --store_dir /data --http_port 8222
+          for _ in $(seq 30); do
+            if docker exec nats wget --spider -q http://127.0.0.1:8222/healthz 2>/dev/null; then
+              echo "NATS ready with JetStream"; exit 0
+            fi
+            sleep 1
+          done
+          echo "NATS did not become healthy"; docker logs nats; exit 1
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
