@@ -9,6 +9,29 @@ on:
       - 'go.mod'
       - 'go.sum'
       - 'migrations/**'
+      # A test-only merge used to deploy prod. `_test.go` files are never
+      # compiled into a non-test build, so such a push changes the serving
+      # binary by exactly nothing — but it still landed a deploy, and a deploy
+      # landing mid-measurement destroys a `memory-bench` run (the version pin
+      # from #e8570874 catches it, but only by REFUSING: rc=2
+      # `version-changed-mid-run`, no score, and for a `--update-baseline
+      # --repeat 3` capture that is ~65 min thrown away). PR #407 was the live
+      # case: one file, `internal/service/memory_service_test.go`, matched
+      # `internal/**` here and deployed, while `memory-bench.yml`'s own
+      # push filter (an explicit file allowlist) did not match it at all —
+      # so neither author could see it from their diff.
+      #
+      # Must stay LAST: GitHub applies the patterns in order and the final
+      # match wins, so this negation only excludes if nothing re-includes it
+      # below. Verified binary-neutral on `7a5aebf`: no `go:embed` anywhere
+      # under cmd/, internal/ or pkg/, and no `testdata/` directories, so
+      # nothing test-shaped reaches the artifact by another route.
+      #
+      # Lint/Test coverage is NOT lost: `ci.yml` runs on every push to main
+      # (paths-ignore is `**.md`/`docs/**`/`dev-docs/**` only) and on every PR,
+      # where Lint/Test/Build are required checks. This filter only decides
+      # whether prod gets REDEPLOYED.
+      - '!**/*_test.go'
   workflow_dispatch:
     inputs:
       force:
