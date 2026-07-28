@@ -649,7 +649,35 @@ jobs:
     #       GitHub reports a timeout as `cancelled`, not `failure`. Only elapsed
     #       time separates them. Also handled by `prod-arm-cancelled`.
     #
-    # (a), (c) and (d) all surface as the same word — `cancelled` — which is the
+    #   (e) A newer run's canary evicts a PENDING ADVISORY arm.
+    #       POSSIBLE. (a)-(d) all take the canary as the victim, which is the bias
+    #       of having found this through the canary — but the advisory was the
+    #       victim in 3 of the 6 pre-fix runs, so an enumeration that only ever
+    #       kills the canary is describing half the group. `needs:` does not close
+    #       this one: it stops the advisory from being co-pending with its OWN
+    #       canary, not from pending behind a DIFFERENT run's canary and then being
+    #       evicted by a third arrival. Concretely: the nightly's canary finishes,
+    #       its advisory queues while a push run's canary holds the running slot,
+    #       and a second push evicts the pending advisory.
+    #       ACCEPTED, and it is the same trade as (a) read from the other side —
+    #       when commits are arriving faster than the advisory can measure, the
+    #       newer commit is the one worth measuring, and this arm is explicitly
+    #       advisory, never a merge gate. Note what it costs elsewhere though:
+    #       `prod-arm-cancelled` sees a newer run in existence and correctly
+    #       classifies it (a)-style as `superseded`, i.e. **silently**. So a
+    #       nightly advisory can be lost without a page. That is a deliberate
+    #       consequence of not paging on legitimate supersedes, not an oversight:
+    #       the alternative is paging on every busy evening. If the advisory's
+    #       nightly coverage is ever found to be missing more often than it lands,
+    #       the fix is a workflow-level group (one run = one slot), not an alert.
+    #
+    #   NOT possible: a newer run's ADVISORY evicting an older PENDING canary.
+    #       The newer run's own canary reaches the group first and is the arrival
+    #       that does the eviction — its advisory cannot get there while an older
+    #       canary is still pending. Enumerated to record that it was checked
+    #       rather than skipped.
+    #
+    # (a), (c), (d) and (e) all surface as the same word — `cancelled` — which is the
     # conclusion every reader has been trained to skim past as an infra hiccup.
     # That is how (b) hid for its entire existence. The safety net's death must
     # not look like weather: `prod-arm-cancelled` classifies it and goes red for
@@ -1318,9 +1346,18 @@ jobs:
     # A GitHub concurrency group holds ONE running + ONE pending member; a third
     # arrival cancels the pending one. Both jobs of a single run are created in
     # the same second, so with no `needs:` between them the second to queue killed
-    # the first — and the first was always the canary. Measured on every push that
-    # ever had the job: 3 of 3, canary `cancelled`, two of them at **0s**, zero
-    # verdicts produced in the arm's entire existence (#3ce651a0). The
+    # the first. WHICH of the two loses is a RACE, not an order: over the six runs
+    # observed before the fix, exactly one sibling died every time (6/6) but the
+    # victim split 3-3 — on `push` alone the canary lost 3 (30330437164,
+    # 30334077279, 30334590080) and the advisory lost 2 (30335245738,
+    # 30337511797), plus 1 advisory on `schedule`. An earlier version of this
+    # comment said "the first was always the canary"; that was generalised from
+    # three runs sharing one event type and is retracted. It matters for the fix,
+    # not the defect: anything that merely re-orders the two arms leaves the coin
+    # in play, whereas `needs:` removes it. What holds without the ordering claim
+    # is the blast radius — the canary was cancelled on 3 of 3 pushes, twice at
+    # **0s**, and produced zero verdicts in its entire existence (#3ce651a0), so
+    # the version-attribution guard shipped into it by #402 had never executed. The
     # version-attribution guard shipped in #402 lives inside that arm and had
     # therefore never executed on a real trigger.
     #
