@@ -231,10 +231,57 @@ func RequireWorkspaceMember(db *sqlx.DB) echo.MiddlewareFunc {
 
 			// Users: WorkspaceRLS sets workspace_role only when the user is a member.
 			role, ok := c.Get(ContextKeyWorkspaceRole).(string)
-			if !ok || role == "" {
+			if ok && role != "" {
+				return next(c)
+			}
+
+			// Fallback: the workspace owner whose workspace_members row is missing.
+			//
+			// The owner membership row is inserted best-effort after the workspace
+			// itself is created (workspaceService.Create, auth.Service.Register), so a
+			// partial failure leaves a workspace whose owner is not one of its members.
+			// Such rows exist in the wild — without this branch, turning the guard on
+			// would lock those owners out of their own workspace, turning a read-leak
+			// fix into a data-loss-shaped outage. One extra query, only on the path
+			// that was about to 403 anyway.
+			userID, idErr := GetUserID(c)
+			if idErr != nil || db == nil {
+				return c.JSON(http.StatusForbidden, apierror.Forbidden("workspace access denied"))
+			}
+			var ownerID uuid.UUID
+			if err := db.QueryRowContext(c.Request().Context(),
+				"SELECT owner_id FROM workspaces WHERE id = $1 AND deleted_at IS NULL",
+				wsID,
+			).Scan(&ownerID); err != nil || ownerID != userID {
 				return c.JSON(http.StatusForbidden, apierror.Forbidden("workspace access denied"))
 			}
 			return next(c)
+		}
+	}
+}
+
+// RequireWorkspaceMemberScoped enforces workspace membership on every route that
+// carries a :ws_id path parameter, and does nothing on routes that carry none.
+//
+// It exists because the per-route form could be — and was — forgotten. Only 2 of
+// the 46 :ws_id routes actually had the guard attached, which left any logged-in
+// stranger able to read another tenant's member emails, team directory, analytics
+// and full YAML config export, and — via PATCH /workspaces/:ws_id, which had
+// neither this guard nor an RBAC check — to rename another tenant's workspace or
+// change its slug, breaking every /w/<slug>/... link that team had.
+//
+// Registered once on the authenticated API group, it covers every current and
+// future :ws_id route by construction, so a new route cannot silently ship
+// unguarded. Must run after DualAuth and WorkspaceRLS.
+func RequireWorkspaceMemberScoped(db *sqlx.DB) echo.MiddlewareFunc {
+	guard := RequireWorkspaceMember(db)
+	return func(next echo.HandlerFunc) echo.HandlerFunc {
+		guarded := guard(next)
+		return func(c echo.Context) error {
+			if c.Param("ws_id") == "" {
+				return next(c)
+			}
+			return guarded(c)
 		}
 	}
 }

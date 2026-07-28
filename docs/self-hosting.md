@@ -376,7 +376,25 @@ GRAFANA_PASSWORD=your-grafana-admin-password
    [Closing registration](#closing-registration). Add people afterward via
    workspace invites, not the open `/register` endpoint.
 
-7. **TLS** -- Set up a reverse proxy (nginx or Caddy) with TLS termination:
+7. **Workspace isolation** -- Every `/api/v1/workspaces/:ws_id/...` endpoint
+   requires the caller to be a member of that workspace (agents: to belong to
+   it), enforced for the whole authenticated API group rather than per route.
+   A logged-in user from another workspace gets `403` on all of them.
+
+   Two consequences worth knowing:
+
+   - Looking people up by name or email
+     (`GET /workspaces/:ws_id/users/search`) searches the whole instance, not
+     just the workspace — that is what makes "add an existing user" work. It is
+     therefore restricted to roles that can manage members (owner/admin). On a
+     shared instance hosting unrelated tenants, treat workspace admin as
+     "can see that an account exists"; invite by email if that is not
+     acceptable.
+   - Renaming a workspace or changing its slug
+     (`PATCH /workspaces/:ws_id`) is owner/admin only, because the slug appears
+     in every `/w/<slug>/...` URL your team has saved.
+
+8. **TLS** -- Set up a reverse proxy (nginx or Caddy) with TLS termination:
 
    **Caddy example (`Caddyfile`):**
    ```
