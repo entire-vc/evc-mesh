@@ -346,6 +346,40 @@ func TestVectorSearchDB_CorruptChunkIsSkippedNotFatal(t *testing.T) {
 	assert.Equal(t, good.ID, results[0].ID)
 }
 
+// The legacy branch has to survive the two malformed shapes actually present in
+// this column's history: rows written before the encoding was settled, and rows
+// whose embedding was blanked rather than nulled. Neither may fail a recall.
+//
+// It also pins the case where candidates exist but nothing decodes: the result
+// is an empty recall, not an error and not a nil-dereference on the way to
+// hydration.
+func TestVectorSearchDB_UndecodableLegacyVectorsAreSkipped(t *testing.T) {
+	repo, _, wsID := setupVectorSearchDBTest(t)
+	ctx := context.Background()
+
+	malformed := newMemory(t, repo, wsID, "legacy-malformed")
+	_, err := repo.db.ExecContext(ctx,
+		`UPDATE memories SET embedding = 'not-json-at-all' WHERE id = $1`, malformed.ID)
+	require.NoError(t, err)
+
+	blank := newMemory(t, repo, wsID, "legacy-blank")
+	_, err = repo.db.ExecContext(ctx, `UPDATE memories SET embedding = '' WHERE id = $1`, blank.ID)
+	require.NoError(t, err)
+
+	results, err := repo.VectorSearch(ctx, queryVec, wsID, nil, domain.MemorySearchFilter{}, 10)
+	require.NoError(t, err, "undecodable legacy vectors must not fail the recall")
+	assert.Empty(t, results, "candidates that decode to nothing yield an empty result, not an error")
+
+	// A healthy memory alongside them still ranks — the bad rows are skipped
+	// individually, they do not poison the batch.
+	good := newMemory(t, repo, wsID, "legacy-good")
+	require.NoError(t, repo.UpdateEmbedding(ctx, good.ID, vecExact, "test-model", 3))
+
+	results = search(t, repo, wsID, 10)
+	require.Len(t, results, 1)
+	assert.Equal(t, good.ID, results[0].ID)
+}
+
 // An empty candidate set is not an error, and must not reach the chunk query.
 func TestVectorSearchDB_EmptyWorkspaceReturnsNoResults(t *testing.T) {
 	repo, _, wsID := setupVectorSearchDBTest(t)
