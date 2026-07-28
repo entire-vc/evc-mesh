@@ -197,14 +197,22 @@ jobs:
       # legitimate merge block, and unlike an infra failure the author can clear
       # it. These moved here from the prod job because THIS is now the job that
       # runs on every PR.
+      # `test_the_required_job_invokes_every_self_check` pins this list against
+      # the directory: a self-check that exists but is not named here guards
+      # nothing, which is how test_gate_dense_arm.py and
+      # test_check_captured_baseline.py sat unwired while the README credited
+      # them as the pin for their failure mode.
       - name: Gate self-checks (blind-spot, mode, arm, control)
         run: |
           python scripts/memory-bench/test_gate_blindness.py
           python scripts/memory-bench/test_gate_modes.py
           python scripts/memory-bench/test_gate_arm.py
+          python scripts/memory-bench/test_gate_dense_arm.py
+          python scripts/memory-bench/test_check_captured_baseline.py
           python scripts/memory-bench/test_gold_rank.py
           python scripts/memory-bench/test_fixture_isolation.py
           python scripts/memory-bench/dense_arm_control.py --selftest
+          python scripts/memory-bench/prod_window.py --selftest
 
       - name: Does this change touch memory?
         id: scope
@@ -574,9 +582,12 @@ jobs:
           python scripts/memory-bench/test_gate_blindness.py
           python scripts/memory-bench/test_gate_modes.py
           python scripts/memory-bench/test_gate_arm.py
+          python scripts/memory-bench/test_gate_dense_arm.py
+          python scripts/memory-bench/test_check_captured_baseline.py
           python scripts/memory-bench/test_gold_rank.py
           python scripts/memory-bench/test_fixture_isolation.py
           python scripts/memory-bench/dense_arm_control.py --selftest
+          python scripts/memory-bench/prod_window.py --selftest
 
       # One source of truth for "this dispatch is a capture, not a verdict". Two
       # steps have to agree on it — the capture runs, the gate must not — and two

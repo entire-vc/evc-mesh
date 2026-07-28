@@ -534,6 +534,36 @@ because four of us measured at once".
    one. For a post-deploy canary that is the right trade — the newer commit is
    the one worth measuring — and it is only safe because this arm is not
    required.
+
+   **What `concurrency:` cannot serialise is a person.** It orders the runs the
+   workflow starts; it does nothing about someone deciding to `workflow_dispatch`
+   a proof run on top of a colleague's required check. `prod_window.py` is the
+   probe for that decision, and it has already failed twice in the two ways worth
+   naming:
+
+   - **It fail-opened.** The first version was a shell one-liner wrapping a
+     Python fragment that had a syntax error. It printed nothing, the caller's
+     `[ -n "$busy" ]` was false, and empty output read as an empty window — so it
+     dispatched into three live runs, which is the incident it was written to
+     prevent. "Zero runs in flight" and "I could not count the runs in flight"
+     are different facts that empty output renders identically. Hence
+     **0 = clear, 1 = busy, 2 = PROBE FAILED**, everything unresolvable counted
+     busy, and a negative control (a filter value that cannot match must return
+     nothing) so that a zero means the filter ran.
+   - **It was blind to which arm it was looking at.** The branch arm inherited
+     the name `Memory recall gate` because a required context is matched as a
+     literal string (see below). So that one name means the *prod* arm on a ref
+     carrying the old one-arm workflow and the *branch* arm — ephemeral
+     `cmd/api`, own `postgres:16`, contending for nothing — on a ref carrying the
+     new one. A name-blind probe therefore calls a run busy that cannot touch
+     prod, and while any PR of this file is iterating the window is never clear:
+     safe, and useless in the direction it is consulted. The discriminator needs
+     no second call — a run whose job list contains `Memory recall canary (prod)`
+     is on the two-arm workflow, so its `Memory recall gate` is the branch arm.
+
+   The rename that made the required check report is the same edit that made the
+   name stop identifying the arm. Worth stating plainly, because the fix for way
+   6 is what created this.
 8. **`search_mode: hybrid` reported over a dense arm that returned nothing.**
    The mode is set when the dense arm *ran* end-to-end — embedder alive, query
    vectorised, `VectorSearch` returned no error. It says nothing about that arm
@@ -582,6 +612,36 @@ because four of us measured at once".
    are the ones proving `dense_rows` can be **non-zero** and that back-compat
    still lets a real regression exit 1 — a gate hard-wired to INCONCLUSIVE would
    pass every "empty arm is caught" test on its own.
+
+### …and the way the pins themselves go blind
+
+Every entry above ends "pinned by `test_…`". That sentence is about a file, and a
+file is not a guard — an *invocation* is. On 2026-07-28, counting invocations
+instead of reading the tree turned up two self-checks that no workflow step ever
+ran:
+
+| self-check | pins | referenced by CI |
+|---|---|---|
+| `test_gate_dense_arm.py` | way 8 (`dense_rows`) | **0 times** |
+| `test_check_captured_baseline.py` | `--update-baseline` refusals | **0 times** |
+
+Both were green locally and both were credited by name in this README. They
+arrived with the PRs that wrote them and nobody added the line to
+`memory-bench.yml`, so for their whole life the protection they describe did not
+exist. That is way 1 — a guard that no-ops to green — applied to the guards.
+
+`test_the_required_job_invokes_every_self_check` now derives the expected set
+from the directory (any `test_*.py`, plus any script offering `--selftest`) and
+requires each to appear as a real `python scripts/memory-bench/… ` line inside
+the **required** job. Two details are load-bearing, both found by mutating it:
+
+- **Derived, never listed.** A hand-kept list in the test needs the same edit
+  that gets forgotten in the workflow, so it would reproduce the bug inside the
+  test written to catch it.
+- **Invocation, not mention.** The first version asked `name in job_block` and
+  passed with the invocation *deleted*, because the step's own comment names two
+  of the scripts. A source-grep survives an orphaned call; only a line that would
+  actually execute counts.
 
 ## Making the recall gate a required check
 

@@ -166,14 +166,15 @@ def main() -> int:
         )
 
     # `py/clear-text-storage-sensitive-data` lands on the write below, and the
-    # honest answer is "dismissed, with reasons", not "fixed". Three attempts
-    # are on record and the first two both LOOKED like fixes:
+    # honest answer is "dismissed, with reasons", not "fixed". Four attempts are
+    # on record and the first three all LOOKED like fixes:
     #
-    #   #16  key printed to stdout            -> moved it to `--env-file`
+    #   #16  key printed to stdout            -> moved it to `--env-file`; FIXED
     #   #17  ...so the taint reached the file -> same rule, new sink, new number
-    #   #18  trailing `# codeql[...]` comment -> STILL OPEN at this exact line
+    #   #18  trailing `# codeql[...]` comment -> raised AT the commented line
+    #   #18  dismissed via the API            -> and #17 was still open
     #
-    # Two separate lessons, both measured on this PR rather than assumed:
+    # Three separate lessons, all measured on this PR rather than assumed:
     #
     # 1. The rule tracks the SECRET, not the destination. Relocating the sink
     #    renames the alert instead of closing it. Nothing clears it honestly
@@ -183,9 +184,17 @@ def main() -> int:
     #    `# codeql[rule-id]` is a CodeQL-CLI feature; the Actions integration
     #    ignores it. Proof: alert #18 was raised at cbf93f7b:187 — the very line
     #    that carried the comment — by the analysis of the commit that added it.
-    #    The supported mechanism is an API/UI dismissal with a justification,
-    #    which is what this alert now carries. A comment here suppresses nothing
-    #    and only reads as if the alert were handled, so there isn't one.
+    #    The supported mechanism is an API/UI dismissal with a justification.
+    #    A comment here suppresses nothing and only reads as if the alert were
+    #    handled, so there isn't one.
+    # 3. The dismissal has to name the alert that is actually OPEN. #18 was an
+    #    artifact of the comment from (2): deleting the comment made it `fixed`
+    #    on its own, so dismissing #18 changed nothing while #17 — the alert on
+    #    this write — stayed open and kept the aggregate `CodeQL` check red.
+    #    Alert-level `state` reads `null` for a PR-only alert; the field that
+    #    answers "is this still live" is the per-instance state from
+    #    `/code-scanning/alerts/<n>/instances`, matched on the alert NUMBER.
+    #    #17 now carries the dismissal.
     #
     # Why a dismissal is defensible HERE specifically, which is the part that
     # does not generalise: `--api-url` is `http://127.0.0.1:8005`, a server this

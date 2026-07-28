@@ -218,6 +218,91 @@ class TestTheRequiredContextIsStillProduced(unittest.TestCase):
         self.assertNotIn("memory-bench-prod", block.split("    steps:", 1)[0])
 
 
+class TestEverySelfCheckIsActuallyInvoked(unittest.TestCase):
+    """A self-check that CI never runs is a guard in name only.
+
+    Found on #2a079432 by counting invocations rather than reading the tree:
+    `test_gate_dense_arm.py` and `test_check_captured_baseline.py` were both
+    present, both passing, and both credited by the README as the pin for their
+    failure mode — and **neither appeared in any workflow step**. They arrived
+    with the PRs that wrote them and nobody wired them, so "pinned by X" was true
+    about the file and false about CI.
+
+    Same shape as everything else in this file — a confident green about
+    something never evaluated — one level up, in the harness guarding the
+    harness.
+
+    Two construction notes, both of which this test got wrong on the first
+    attempt and which are the reason it is worth reading:
+
+    * **Discovery is derived from the directory, never from a list kept here.**
+      A hand-maintained list needs the same edit that was missed, so pinning
+      against a copy of it would reproduce the bug inside the test meant to
+      catch it.
+    * **An invocation is matched, not a mention.** The first version asked
+      `name in job_block`, and the step carries a COMMENT naming the two files
+      above. Deleting the actual `python …` line then left the name behind in
+      the prose and the test stayed green — a source-grep surviving an orphaned
+      call. Only lines that would really execute count.
+    """
+
+    BENCH_DIR = REPO_ROOT / "scripts/memory-bench"
+    # An invocation, i.e. a line CI would run. A comment cannot match: `#` is not
+    # `python`, and the path has to be the command's argument.
+    INVOCATION = re.compile(r"^\s*python[0-9.]*\s+scripts/memory-bench/(\S+\.py)", re.M)
+
+    def _self_check_scripts(self) -> set[str]:
+        """Files that ARE a self-check: a `test_*.py`, or a script offering
+        `--selftest`. Both forms are in use (`dense_arm_control.py --selftest`,
+        `prod_window.py --selftest`); counting only `test_*.py` would miss them."""
+        found = set()
+        for f in sorted(self.BENCH_DIR.glob("*.py")):
+            if f.name.startswith("test_"):
+                found.add(f.name)
+                continue
+            if '"--selftest"' in f.read_text(encoding="utf-8"):
+                found.add(f.name)
+        return found
+
+    def _required_job_block(self) -> str:
+        return next(
+            b for b in _job_blocks().values()
+            if re.search(rf"^    name: {re.escape(REQUIRED_CONTEXT)}\s*$", b, re.M)
+        )
+
+    def test_the_required_job_invokes_every_self_check(self):
+        invoked = set(self.INVOCATION.findall(self._required_job_block()))
+        missing = sorted(self._self_check_scripts() - invoked)
+        self.assertEqual(
+            [], missing,
+            f"these self-checks exist but the REQUIRED job never runs them, so they "
+            f"guard nothing on a PR: {missing}. Add them to the 'Gate self-checks' "
+            f"step in the job named {REQUIRED_CONTEXT!r}.",
+        )
+
+    def test_the_discovery_actually_finds_the_known_checks(self):
+        """Positive control on the finder. Were the glob to match nothing,
+        `missing` above would be empty and the test would pass having checked
+        nothing — the very failure it exists to prevent, one level down."""
+        found = self._self_check_scripts()
+        self.assertGreaterEqual(len(found), 7, f"discovery returned too little: {found}")
+        for expected in ("test_gate_dense_arm.py", "dense_arm_control.py", "prod_window.py"):
+            self.assertIn(expected, found, f"{expected} was not discovered as a self-check")
+
+    def test_a_mention_in_prose_does_not_count_as_an_invocation(self):
+        """Positive control on the matcher, in the direction that actually broke.
+        The step's own comment names two of these scripts; if the pattern counted
+        that, removing the real line would go unnoticed."""
+        commented_out = "      # python scripts/memory-bench/test_gate_dense_arm.py\n"
+        prose = "      # see test_gate_dense_arm.py for the dense-arm pin\n"
+        self.assertEqual([], self.INVOCATION.findall(prose))
+        self.assertEqual([], self.INVOCATION.findall(commented_out))
+        self.assertEqual(
+            ["test_gate_dense_arm.py"],
+            self.INVOCATION.findall("          python scripts/memory-bench/test_gate_dense_arm.py\n"),
+        )
+
+
 class TestNoDeadCodeqlSuppression(unittest.TestCase):
     """`# codeql[rule-id]` is a CodeQL-CLI feature the Actions integration
     ignores, so writing one silences nothing while reading exactly like a
