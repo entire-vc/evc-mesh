@@ -180,3 +180,52 @@ func memoryIDs(mems []domain.Memory) []uuid.UUID {
 	}
 	return ids
 }
+
+// TestMemoryRepoDB_ListNeedingEmbedding_StopgapRemovedDoesNotSelectWholeChunkedCorpus is the
+// acceptance criterion for #dd0fda98 stated directly: simulate the future state where the
+// stopgap write is gone (chunks written, memories.embedding left NULL — embedChunked's
+// ORIGINAL shape) across a whole corpus, and assert reindex's selector does not sweep all of
+// it back up every run.
+//
+// Deliberately a corpus, not a single row: with the NOT EXISTS branch reverted the predicate
+// selects EVERY one of these rows, so the assertion moves from 0 to corpusSize. A one-row
+// NotContains would also fail on that mutation, but it cannot distinguish "the guard is gone"
+// from "this particular row leaked" — and the cost being guarded against is proportional to
+// corpus size (every chunk of every memory re-embedded, every run, forever).
+func TestMemoryRepoDB_ListNeedingEmbedding_StopgapRemovedDoesNotSelectWholeChunkedCorpus(t *testing.T) {
+	repo, wsID := setupMemoryRepoChunkingDBTest(t)
+	chunkRepo := NewMemoryChunkRepo(repo.db)
+	ctx := context.Background()
+
+	const corpusSize = 5
+	chunked := make(map[uuid.UUID]bool, corpusSize)
+	for i := 0; i < corpusSize; i++ {
+		mem := newUnembeddedMemory(t, ctx, repo, wsID)
+		// Chunks only — no UpdateEmbedding. This is exactly what embedChunked did before the
+		// stopgap, and what it would do again if someone removes the now-redundant-for-ranking
+		// memories.embedding write after the chunk read-path (#396) landed.
+		require.NoError(t, chunkRepo.ReplaceChunks(ctx, mem.ID, []domain.MemoryChunk{
+			{ChunkIdx: 0, ChunkStart: 0, ChunkEnd: 7, Embedding: "x", EmbeddingModel: "current-model", EmbeddingDim: 4},
+		}))
+		chunked[mem.ID] = true
+	}
+
+	// A row genuinely needing work must still be found, so the assertion below cannot pass
+	// trivially by the query returning nothing at all.
+	needsWork := newUnembeddedMemory(t, ctx, repo, wsID)
+
+	got, err := repo.ListNeedingEmbedding(ctx, wsID, "current-model", 100)
+	require.NoError(t, err)
+
+	var reselected int
+	for _, id := range memoryIDs(got) {
+		if chunked[id] {
+			reselected++
+		}
+	}
+	assert.Zero(t, reselected,
+		"stopgap-removed corpus: %d/%d chunked memories were re-selected; with the chunk-freshness branch gone this is the whole corpus, and reindex re-embeds every chunk of every memory on every run without ever converging",
+		reselected, corpusSize)
+	assert.Contains(t, memoryIDs(got), needsWork.ID,
+		"a memory with neither embedding nor chunks must still be selected — otherwise the guard is over-broad and nothing ever gets embedded")
+}
