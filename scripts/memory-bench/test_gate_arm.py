@@ -34,6 +34,7 @@ import contextlib
 import io
 import json
 import os
+import re
 import sys
 import tempfile
 import unittest
@@ -283,6 +284,251 @@ class TestTheArmIsRecordedOnCapture(_Harness):
         if not real.exists():
             self.skipTest("branch baseline not captured yet")
         self.assertEqual(json.loads(real.read_text()).get("arm"), ARM_BRANCH)
+
+
+# ---------------------------------------------------------------------------
+# Which JOBS a `baseline_arm` dispatch starts.
+#
+# The defect this pins, found 2026-07-28 while capturing the branch baseline for
+# the first time: the paid end-to-end job excluded itself with
+# `inputs.baseline_arm != 'retrieval'`. That was correct while the options were
+# {end-to-end, retrieval, both}. #394 added `retrieval-branch`, and a negation
+# cannot know about an option added after it — so re-snapping the REQUIRED
+# arm's baseline silently also started a paid LLM-judge capture, which is the
+# precise spend the comment above that guard says it exists to prevent.
+#
+# `grep -rn baseline_arm scripts/memory-bench/*.py` returned nothing before this
+# class existed: the routing was the one part of the arm split that no
+# self-check looked at, which is why a stale negation survived the split.
+#
+# These assert the INVARIANT (which arms start which job), not the current
+# spelling — an equivalent rewrite of the expressions keeps them green, and any
+# fifth arm added without revisiting the routing turns them red.
+# ---------------------------------------------------------------------------
+
+WORKFLOW = (
+    Path(run_ci.__file__).resolve().parents[2]
+    / ".github" / "workflows" / "memory-bench.yml"
+)
+
+_ARMS = ("end-to-end", "retrieval", "retrieval-branch", "both")
+
+
+def _extract_if(text: str, job: str) -> str:
+    """Pull a job's `if:` expression out of the workflow, block scalar or inline.
+
+    Text-scraped on purpose: these self-checks are stdlib-only (no PyYAML on the
+    runner), and the job runs them before it does anything else.
+    """
+    lines = text.splitlines()
+    start = next(
+        (i for i, ln in enumerate(lines) if ln == f"  {job}:"),
+        None,
+    )
+    if start is None:
+        raise AssertionError(f"job {job!r} not found in {WORKFLOW}")
+    for i in range(start + 1, len(lines)):
+        ln = lines[i]
+        if ln and not ln.startswith("    "):
+            break  # left the job block without finding an `if:`
+        # JOB-level only: exactly four spaces. Steps carry their own `if:` at
+        # deeper indent, and picking one of those up would silently pin the
+        # wrong expression — the first draft of this helper did exactly that
+        # and reported `recall-gate-branch` as conditional on a step output.
+        if not re.match(r"^    if:", ln):
+            continue
+        rest = ln.strip()[len("if:"):].strip()
+        if rest not in (">-", ">", "|-", "|"):
+            return rest  # inline form
+        body = []
+        for cont in lines[i + 1:]:
+            if cont.strip() and not cont.startswith("      "):
+                break
+            body.append(cont.strip())
+        return " ".join(x for x in body if x)
+    raise AssertionError(f"job {job!r} has no `if:` — it runs unconditionally")
+
+
+def _extract_capture_expr(text: str, marker: str) -> str:
+    """The `capture=${{ ... }}` expression from the step following `marker`."""
+    idx = text.index(marker)
+    frag = text[idx:]
+    open_at = frag.index('echo "capture=${{') + len('echo "capture=${{')
+    close_at = frag.index("}}", open_at)
+    return frag[open_at:close_at].strip()
+
+
+def _eval_raw(expr: str, ctx: dict):
+    """Evaluate the restricted GitHub-expression subset used in this workflow.
+
+    Returns the RAW value, not a bool. The `capture=` steps are written as the
+    GitHub idiom for a ternary — `<cond> && 'true' || 'false'` — which yields
+    the *string* `'true'` or `'false'`. Coercing that with `bool()` makes both
+    outcomes truthy, so a capture pin built on a bool-returning evaluator
+    passes with the condition fully inverted. (Caught here by the first draft of
+    this class, which did exactly that and reported the paid arm as capturing
+    for every value of `baseline_arm`.)
+
+    Only `&& || ! ( ) == !=`, string literals, `github.event_name` and
+    `inputs.*` appear here. GitHub's truthiness for an absent input is the empty
+    string, which is falsy in Python too — so unset inputs need no special case.
+    """
+    py = expr.replace("!=", " __NE__ ")
+    py = py.replace("&&", " and ").replace("||", " or ").replace("!", " not ")
+    py = py.replace("__NE__", "!=")
+    py = py.replace("github.event_name", "__event")
+    py = re.sub(r"\binputs\.([A-Za-z_][A-Za-z0-9_]*)", r"__inputs.get('\1', '')", py)
+    ns = {
+        "__event": ctx["event"],
+        "__inputs": ctx.get("inputs", {}),
+        "__builtins__": {},
+    }
+    return eval(py, ns)  # noqa: S307 — fixed grammar, no external input
+
+
+def _evaluate(expr: str, ctx: dict) -> bool:
+    """A job `if:` — GitHub coerces this one to a boolean itself."""
+    return bool(_eval_raw(expr, ctx))
+
+
+def _captures(expr: str, ctx: dict) -> bool:
+    """A `capture=` step output. Compared against the literal string GitHub
+    writes into `$GITHUB_OUTPUT`, so an inverted ternary (`&& 'false' ||
+    'true'`) is a failure here rather than an invisible pass."""
+    value = _eval_raw(expr, ctx)
+    assert value in ("true", "false"), f"capture expression yielded {value!r}"
+    return value == "true"
+
+
+def _dispatch(arm: str, update_baseline: bool = True, full_eval: bool = False) -> dict:
+    return {
+        "event": "workflow_dispatch",
+        "inputs": {
+            "baseline_arm": arm,
+            "update_baseline": update_baseline,
+            "full_eval": full_eval,
+        },
+    }
+
+
+class WorkflowRouting(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.text = WORKFLOW.read_text()
+
+    def _runs(self, job: str, ctx: dict) -> bool:
+        return _evaluate(_extract_if(self.text, job), ctx)
+
+    # -- the evaluator must be able to say False ---------------------------
+    def test_the_evaluator_is_not_stuck_true(self):
+        """Negative control for this class's own instrument. Every assertion
+        below is `assertFalse` on a real expression or `assertTrue` on one; an
+        evaluator that returned a constant would satisfy half of them silently,
+        and a routing pin that cannot go red is decoration."""
+        self.assertTrue(_evaluate("github.event_name == 'push'", {"event": "push"}))
+        self.assertFalse(_evaluate("github.event_name == 'push'", {"event": "schedule"}))
+        self.assertFalse(_evaluate(
+            "inputs.update_baseline && inputs.baseline_arm == 'both'",
+            _dispatch("retrieval")))
+        # `!=` must survive the `!` → `not` rewrite.
+        self.assertTrue(_evaluate("inputs.baseline_arm != 'retrieval'", _dispatch("both")))
+        self.assertFalse(_evaluate("inputs.baseline_arm != 'retrieval'", _dispatch("retrieval")))
+
+    def test_the_capture_reader_survives_an_inverted_ternary(self):
+        """The mutation that beat the first draft of this class. Both branches
+        of `<cond> && 'true' || 'false'` are non-empty strings, so `bool()` says
+        True either way — a capture pin built that way is green with the
+        condition reversed. `_captures` compares the emitted string instead."""
+        ok = "inputs.baseline_arm == 'end-to-end' && 'true' || 'false'"
+        self.assertTrue(_captures(ok, _dispatch("end-to-end")))
+        self.assertFalse(_captures(ok, _dispatch("retrieval-branch")))
+        inverted = "inputs.baseline_arm == 'end-to-end' && 'false' || 'true'"
+        self.assertFalse(_captures(inverted, _dispatch("end-to-end")))
+        self.assertTrue(_captures(inverted, _dispatch("retrieval-branch")))
+        # The bool() route cannot tell those two apart — that is the whole point.
+        self.assertTrue(bool(_eval_raw(ok, _dispatch("retrieval-branch"))))
+
+    def test_the_required_arm_runs_unconditionally(self):
+        """`recall-gate-branch` carries the required context. A required check
+        that skips on some event never reports there, and a never-reported
+        required context blocks that PR for ever (evc-mesh#320)."""
+        with self.assertRaises(AssertionError):
+            _extract_if(self.text, "recall-gate-branch")
+
+    # -- the paid job ------------------------------------------------------
+    def test_only_the_paid_arms_start_the_paid_job(self):
+        """THE regression. `retrieval-branch` must not spend an end-to-end
+        capture; that is money, and nobody asked for it."""
+        for arm in ("end-to-end", "both"):
+            with self.subTest(arm=arm):
+                self.assertTrue(self._runs("memory-bench", _dispatch(arm)))
+        for arm in ("retrieval", "retrieval-branch"):
+            with self.subTest(arm=arm):
+                self.assertFalse(self._runs("memory-bench", _dispatch(arm)))
+
+    def test_the_paid_job_does_not_capture_for_a_retrieval_arm(self):
+        """Starting the job and capturing in it are two expressions. Pinning
+        only the `if:` leaves the second free to drift into writing an
+        end-to-end baseline from a retrieval dispatch."""
+        expr = _extract_capture_expr(self.text, "  memory-bench:")
+        for arm in ("end-to-end", "both"):
+            self.assertTrue(_captures(expr, _dispatch(arm)), arm)
+        for arm in ("retrieval", "retrieval-branch"):
+            self.assertFalse(_captures(expr, _dispatch(arm)), arm)
+
+    # -- the prod canary ---------------------------------------------------
+    def test_a_branch_capture_does_not_start_the_prod_canary(self):
+        """Not about money — about the shared `memory-bench-prod` group. The
+        branch arm builds its own server, so the canary contributes nothing to
+        a branch capture while still taking a slot from whoever is legitimately
+        measuring prod. Both stowaway jobs also sat in that one group, which is
+        two jobs of ONE run in one group — the shape that kills one at 0s."""
+        self.assertFalse(self._runs("recall-gate", _dispatch("retrieval-branch")))
+        for arm in ("retrieval", "both", "end-to-end"):
+            with self.subTest(arm=arm):
+                self.assertTrue(self._runs("recall-gate", _dispatch(arm)))
+
+    def test_the_prod_canary_still_runs_on_the_unattended_triggers(self):
+        """The exclusion is scoped to a dispatch. Narrowing it far enough to
+        silence push/schedule would retire the canary by accident."""
+        for event in ("push", "schedule"):
+            with self.subTest(event=event):
+                self.assertTrue(self._runs("recall-gate", {"event": event, "inputs": {}}))
+        self.assertFalse(self._runs("recall-gate", {"event": "pull_request", "inputs": {}}))
+
+    def test_a_plain_dispatch_still_reaches_both_prod_arms(self):
+        """`update_baseline` unset — the ordinary "run the bench now" dispatch."""
+        ctx = _dispatch("end-to-end", update_baseline=False, full_eval=True)
+        self.assertTrue(self._runs("recall-gate", ctx))
+        self.assertTrue(self._runs("memory-bench", ctx))
+
+    # -- the branch arm's own capture flag ---------------------------------
+    def test_only_a_branch_dispatch_captures_the_branch_baseline(self):
+        expr = _extract_capture_expr(self.text, "  recall-gate-branch:")
+        self.assertTrue(_captures(expr, _dispatch("retrieval-branch")))
+        for arm in ("end-to-end", "retrieval", "both"):
+            self.assertFalse(_captures(expr, _dispatch(arm)), arm)
+        self.assertFalse(_captures(expr, {"event": "pull_request", "inputs": {}}))
+
+    def test_every_declared_arm_is_routed_somewhere(self):
+        """A fifth option added to the `choice` list without revisiting the
+        routing lands here rather than in a surprise bill. Each arm must start
+        the job that writes the file it names."""
+        declared = re.search(
+            r"baseline_arm:.*?options:\n((?:\s+- \S+\n)+)", self.text, re.S)
+        self.assertIsNotNone(declared, "could not read the baseline_arm options")
+        options = re.findall(r"- (\S+)", declared.group(1))
+        self.assertEqual(sorted(options), sorted(_ARMS),
+                         "a baseline_arm option was added or removed without "
+                         "updating the routing pins in this file")
+        for arm in options:
+            ctx = _dispatch(arm)
+            started = {
+                "memory-bench": self._runs("memory-bench", ctx),
+                "recall-gate": self._runs("recall-gate", ctx),
+                "recall-gate-branch": True,  # unconditional, asserted above
+            }
+            self.assertTrue(any(started.values()), f"{arm} starts no job at all")
 
 
 if __name__ == "__main__":

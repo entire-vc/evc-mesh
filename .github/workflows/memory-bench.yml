@@ -596,7 +596,16 @@ jobs:
   # ---------------------------------------------------------------------------
   recall-gate:
     name: Memory recall canary (prod)
-    if: github.event_name != 'pull_request'
+    # A `retrieval-branch` capture re-snaps the REQUIRED arm's baseline. That
+    # arm builds and measures its own server, so this prod-judging canary
+    # contributes nothing to it — it only joins `memory-bench-prod` and takes a
+    # slot from whoever is legitimately measuring prod. Excluded by arm name
+    # rather than by "is this a capture": an `end-to-end` or `retrieval`
+    # capture still wants the canary's opinion.
+    if: >-
+      github.event_name != 'pull_request' &&
+      !(github.event_name == 'workflow_dispatch' &&
+        inputs.update_baseline && inputs.baseline_arm == 'retrieval-branch')
     runs-on: ubuntu-latest
     # There is exactly ONE `secrets.MESH_API_URL`, and every job below this line
     # ingests a haystack into it and searches it. Concurrent runs therefore do
@@ -1285,15 +1294,24 @@ jobs:
       # Advisory does not mean unwatched. An arm that cannot compare must page
       # somebody, or tightening its comparison rules just makes it silent.
       issues: write
-    # `baseline_arm: retrieval` is a capture for the OTHER arm — it must not drag
-    # the paid job in with it. Without this, re-snapping the free recall baseline
+    # A retrieval capture is a capture for the OTHER arm — it must not drag the
+    # paid job in with it. Without this, re-snapping a free recall baseline
     # would silently also spend an end-to-end capture.
+    #
+    # Named as the arms this job SERVES, not as the ones it excludes. The
+    # previous form was `baseline_arm != 'retrieval'`, correct while the options
+    # were {end-to-end, retrieval, both}; #394 added `retrieval-branch`, and a
+    # negation cannot know about an option added after it — so the fourth arm
+    # inherited "paid capture" by default and re-armed the exact spend this
+    # guard exists to prevent. An allow-list fails toward not spending money.
+    # Pinned by `test_gate_arm.py::test_only_the_paid_arms_start_the_paid_job`.
     if: >-
       github.event_name == 'schedule' ||
       github.event_name == 'push' ||
       (github.event_name == 'workflow_dispatch' &&
         (inputs.full_eval ||
-         (inputs.update_baseline && inputs.baseline_arm != 'retrieval')))
+         (inputs.update_baseline &&
+          (inputs.baseline_arm == 'end-to-end' || inputs.baseline_arm == 'both'))))
 
     steps:
       # Same one-source-of-truth reason as the recall arm: three steps below key
@@ -1302,7 +1320,7 @@ jobs:
       - name: Capture or judge?
         id: mode
         run: |
-          echo "capture=${{ (inputs.update_baseline && inputs.baseline_arm != 'retrieval') && 'true' || 'false' }}" \
+          echo "capture=${{ (inputs.update_baseline && (inputs.baseline_arm == 'end-to-end' || inputs.baseline_arm == 'both')) && 'true' || 'false' }}" \
             >> "$GITHUB_OUTPUT"
 
       - name: Checkout evc-mesh
