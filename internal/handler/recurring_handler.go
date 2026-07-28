@@ -177,7 +177,7 @@ func (h *RecurringHandler) List(c echo.Context) error {
 
 // GetByID handles GET /recurring/:id
 func (h *RecurringHandler) GetByID(c echo.Context) error {
-	idStr := c.Param("id")
+	idStr := c.Param("recurring_id")
 	id, err := uuid.Parse(idStr)
 	if err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid recurring schedule id"))
@@ -193,7 +193,7 @@ func (h *RecurringHandler) GetByID(c echo.Context) error {
 
 // Update handles PATCH /recurring/:id
 func (h *RecurringHandler) Update(c echo.Context) error {
-	idStr := c.Param("id")
+	idStr := c.Param("recurring_id")
 	id, err := uuid.Parse(idStr)
 	if err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid recurring schedule id"))
@@ -230,7 +230,7 @@ func (h *RecurringHandler) Update(c echo.Context) error {
 
 // Delete handles DELETE /recurring/:id
 func (h *RecurringHandler) Delete(c echo.Context) error {
-	idStr := c.Param("id")
+	idStr := c.Param("recurring_id")
 	id, err := uuid.Parse(idStr)
 	if err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid recurring schedule id"))
@@ -251,7 +251,7 @@ type triggerNowResponse struct {
 
 // Trigger handles POST /recurring/:id/trigger
 func (h *RecurringHandler) Trigger(c echo.Context) error {
-	idStr := c.Param("id")
+	idStr := c.Param("recurring_id")
 	id, err := uuid.Parse(idStr)
 	if err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid recurring schedule id"))
@@ -275,7 +275,7 @@ func (h *RecurringHandler) Trigger(c echo.Context) error {
 
 // History handles GET /recurring/:id/history
 func (h *RecurringHandler) History(c echo.Context) error {
-	idStr := c.Param("id")
+	idStr := c.Param("recurring_id")
 	id, err := uuid.Parse(idStr)
 	if err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid recurring schedule id"))
