@@ -38,8 +38,11 @@ type mockMemoryRepo struct {
 	// rows the fake repo hands back as "not yet chunked" (ListNotYetChunked)
 	notYetChunked []domain.Memory
 	// captured by UpdateEmbedding
-	embeddedWithModel string
-	embeddedDim       int
+	embeddedWithModel  string
+	embeddedDim        int
+	embeddedID         uuid.UUID
+	embeddedVec        []float32
+	updateEmbeddingErr error
 	// captured by MarkEmbeddingModel (the chunked-embed watermark)
 	markedEmbeddingModelID             uuid.UUID
 	markedEmbeddingModelValue          string
@@ -126,11 +129,16 @@ func (m *mockMemoryRepo) VectorSearch(ctx context.Context, vec []float32, wsID u
 	return nil, nil
 }
 
-func (m *mockMemoryRepo) UpdateEmbedding(_ context.Context, _ uuid.UUID, _ []float32, model string, dim int) error {
+func (m *mockMemoryRepo) UpdateEmbedding(_ context.Context, id uuid.UUID, vec []float32, model string, dim int) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.updateEmbeddingErr != nil {
+		return m.updateEmbeddingErr
+	}
 	m.embeddedWithModel = model
 	m.embeddedDim = dim
+	m.embeddedID = id
+	m.embeddedVec = vec
 	return nil
 }
 
@@ -2707,7 +2715,7 @@ func TestEmbedAndStore_Chunked_AllEmptyVectorsLeavesExistingChunksAlone(t *testi
 	require.NoError(t, ms.embedChunked(context.Background(), id, longTranscript(30)))
 
 	assert.Zero(t, chunkRepo.replaceCalls, "every chunk embedding empty must skip ReplaceChunks entirely")
-	assert.Zero(t, memRepo.markedEmbeddingModelID, "must not watermark a memory nothing was actually embedded for")
+	assert.Zero(t, memRepo.embeddedID, "must not touch memories.embedding for a memory nothing was actually embedded for")
 }
 
 func TestEmbedChunked_ReplaceChunksError_IsReturned(t *testing.T) {
@@ -2721,11 +2729,14 @@ func TestEmbedChunked_ReplaceChunksError_IsReturned(t *testing.T) {
 	err := ms.embedChunked(context.Background(), uuid.New(), "some content")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "simulated db failure")
-	assert.Zero(t, memRepo.markedEmbeddingModelID, "a failed ReplaceChunks must not be followed by a watermark write")
+	assert.Zero(t, memRepo.embeddedID, "a failed ReplaceChunks must not be followed by an embedding write")
 }
 
-func TestEmbedChunked_MarkEmbeddingModelError_IsWrappedAndReturned(t *testing.T) {
-	memRepo := &mockMemoryRepo{markEmbeddingModelErr: errors.New("simulated db failure")}
+// embedChunked writes memories.embedding as a stopgap (VectorSearch's read path hasn't been
+// rewired onto memory_chunks yet — see the STOPGAP comment on embedChunked). This exercises
+// the failure of that write.
+func TestEmbedChunked_UpdateEmbeddingError_IsWrappedAndReturned(t *testing.T) {
+	memRepo := &mockMemoryRepo{updateEmbeddingErr: errors.New("simulated db failure")}
 	chunkRepo := newMockMemoryChunkRepo()
 	svc := NewMemoryService(memRepo, &mockMemoryEdgeRepo{}, &switchModelEmbedder{model: "e5-small", dim: 384},
 		MemoryWithChunkRepo(chunkRepo))
@@ -2734,9 +2745,9 @@ func TestEmbedChunked_MarkEmbeddingModelError_IsWrappedAndReturned(t *testing.T)
 	id := uuid.New()
 	err := ms.embedChunked(context.Background(), id, "some content")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "mark embedding model")
+	assert.Contains(t, err.Error(), "update embedding")
 	assert.Contains(t, err.Error(), "simulated db failure")
-	// ReplaceChunks itself must still have succeeded — only the watermark write failed.
+	// ReplaceChunks itself must still have succeeded — only the stopgap embedding write failed.
 	got, listErr := chunkRepo.ListByMemoryIDs(context.Background(), []uuid.UUID{id})
 	require.NoError(t, listErr)
 	assert.NotEmpty(t, got)
@@ -2829,11 +2840,13 @@ func TestEmbedAndStore_Chunked_WritesMultipleChunksAndWatermarksModel(t *testing
 		assert.NotEmpty(t, c.Embedding, "chunk %d embedding must be encoded", i)
 	}
 
-	// The legacy single-vector column must NOT be touched by the chunked path.
-	assert.Empty(t, memRepo.embeddedWithModel, "chunked path must not write memories.embedding")
-	// But the watermark that keeps BatchEmbed from re-processing this memory forever must be set.
-	assert.Equal(t, id, memRepo.markedEmbeddingModelID)
-	assert.Equal(t, "e5-small", memRepo.markedEmbeddingModelValue)
+	// STOPGAP (until VectorSearch reads memory_chunks directly, see embedChunked's doc):
+	// memories.embedding must still be populated — with the first chunk's vector — so the
+	// memory stays visible to the legacy dense-search path and BatchEmbed doesn't re-select it.
+	assert.Equal(t, id, memRepo.embeddedID)
+	assert.Equal(t, "e5-small", memRepo.embeddedWithModel)
+	assert.Equal(t, 384, memRepo.embeddedDim)
+	assert.Len(t, memRepo.embeddedVec, 384)
 }
 
 func TestEmbedAndStore_Chunked_ReembedReplacesRatherThanAccumulates(t *testing.T) {
@@ -2873,7 +2886,7 @@ func TestEmbedAndStore_Chunked_PartialEmbedFailureNeverWritesPartialChunks(t *te
 	got, err := chunkRepo.ListByMemoryIDs(context.Background(), []uuid.UUID{id})
 	require.NoError(t, err)
 	assert.Empty(t, got)
-	assert.Zero(t, memRepo.markedEmbeddingModelID, "must not watermark a memory that failed to fully embed")
+	assert.Zero(t, memRepo.embeddedID, "must not touch memories.embedding for a memory that failed to fully embed")
 }
 
 func TestBatchEmbed_Chunked_RoutesThroughChunkRepoAndWatermarks(t *testing.T) {
@@ -2894,7 +2907,7 @@ func TestBatchEmbed_Chunked_RoutesThroughChunkRepoAndWatermarks(t *testing.T) {
 	got, err := chunkRepo.ListByMemoryIDs(context.Background(), []uuid.UUID{id})
 	require.NoError(t, err)
 	assert.Greater(t, len(got), 1)
-	assert.Equal(t, id, memRepo.markedEmbeddingModelID, "BatchEmbed's chunked path must watermark memories.embedding_model so this memory is not re-selected next run")
+	assert.Equal(t, id, memRepo.embeddedID, "BatchEmbed's chunked path must write memories.embedding (stopgap) so this memory is not re-selected next run and stays visible to dense search")
 }
 
 // BackfillChunks selects independently of embedding_model — a memory already carrying the

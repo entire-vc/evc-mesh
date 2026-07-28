@@ -1025,8 +1025,9 @@ func (r *MemoryRepo) UpdateEmbedding(ctx context.Context, id uuid.UUID, vec []fl
 	return err
 }
 
-// MarkEmbeddingModel sets embedding_model without touching embedding/embedding_dim — see
-// the interface doc for why the chunked embed path needs this watermark.
+// MarkEmbeddingModel sets embedding_model without touching embedding/embedding_dim — see the
+// interface doc: not called by the chunked embed path (embedChunked uses UpdateEmbedding),
+// kept as a general repo primitive.
 func (r *MemoryRepo) MarkEmbeddingModel(ctx context.Context, id uuid.UUID, model string) error {
 	_, err := r.db.ExecContext(ctx,
 		`UPDATE memories SET embedding_model = $1, updated_at = NOW() WHERE id = $2`,
