@@ -60,6 +60,39 @@ class ParseDeployPaths(unittest.TestCase):
         self.assertIn("migrations/**", paths)
         self.assertNotIn("scripts/memory-bench/**", paths)
 
+    def test_the_real_files_exclusions_survive_into_a_git_pathspec(self):
+        """The coupling that broke once: `!` is GitHub's exclude, `:!` is git's.
+
+        A bare `!pattern` in a `git diff -- …` pathspec is not an exclusion, it is
+        an ordinary pattern matching nothing — so every exclusion in the real
+        workflow evaporated and its files kept counting as deployable. That fails
+        in the direction that never clears: evc-mesh#408 stopped `*_test.go`
+        merges deploying, so prod legitimately stays behind after one, and a pin
+        that still thinks the file deploys waits for a deploy nobody will ever
+        make. Pinned against the REAL file so the next exclusion added there
+        cannot desynchronise this quietly.
+        """
+        paths = csv.parse_deploy_paths(REAL_DEPLOY_WORKFLOW.read_text())
+        spec = csv.to_git_pathspec(paths)
+        self.assertEqual(len(paths), len(spec), "translation must not drop patterns")
+        for raw, translated in zip(paths, spec):
+            if raw.startswith("!"):
+                self.assertEqual(":!" + raw[1:], translated)
+            else:
+                self.assertEqual(raw, translated)
+        self.assertFalse(
+            [s for s in spec if s.startswith("!")],
+            "a bare `!` reached the pathspec — git reads it as a literal, not an exclusion",
+        )
+
+    def test_a_list_of_only_exclusions_reads_as_cannot_tell(self):
+        """`[:!x]` would diff EVERYTHING-except and read as 'the whole tree deploys'."""
+        self.assertIsNone(
+            csv.parse_deploy_paths(
+                "on:\n  push:\n    paths:\n      - '!**/*_test.go'\n"
+            )
+        )
+
     def test_unparseable_yields_none_not_empty(self):
         """None (cannot tell) and [] (nothing deploys) must never collapse."""
         self.assertIsNone(csv.parse_deploy_paths("name: x\non:\n  workflow_dispatch:\n"))
@@ -138,6 +171,25 @@ class Classify(unittest.TestCase):
         head = self.repo.commit("internal/service/memory_service.go", "v2\n")
         ok, why = csv.classify(self.base, head, self.PATHS)
         self.assertFalse(ok)
+        self.assertIn("deployable", why)
+
+    def test_a_test_only_change_is_not_a_deployable_diff(self):
+        """`_test.go` never enters a non-test build, so prod is entitled to lag.
+
+        The negative control is the same file without the `_test` suffix: if the
+        exclusion were over-broad it would swallow that too, and the guard would
+        wave through a run measuring the previous binary — the failure this whole
+        tool exists to prevent. Both directions, or neither proves anything.
+        """
+        paths = [*self.PATHS, "!**/*_test.go"]
+        excluded = self.repo.commit("internal/service/memory_service_test.go", "t\n")
+        ok, why = csv.classify(self.base, excluded, paths)
+        self.assertTrue(ok, why)
+        self.assertIn("equivalent", why)
+
+        included = self.repo.commit("internal/service/memory_service.go", "v2\n")
+        ok, why = csv.classify(self.base, included, paths)
+        self.assertFalse(ok, why)
         self.assertIn("deployable", why)
 
     def test_prod_ahead_of_the_commit_under_test_is_refused(self):

@@ -747,6 +747,7 @@ def build_baseline_payload(
     top_k: int,
     sizes: dict[str, tuple[int, int]] | None = None,
     arm: str = ARM_PROD,
+    served_commit: str = "",
 ) -> dict[str, Any]:
     """Aggregate N passes' scores into one mode-scoped baseline payload.
 
@@ -788,6 +789,16 @@ def build_baseline_payload(
         "scores": scores,
         "spread": spread,
     }
+    if served_commit:
+        # WHICH BINARY produced these numbers. `arm` says which system, `search_mode`
+        # says which retrieval path — neither says which build, and this file becomes
+        # the standing floor for a required check. Capture 30336693957 is the case:
+        # prod swapped 5d2cda8 -> ba7deae 42 min into a 65-min capture and the written
+        # baseline recorded nothing about it, so the only way to learn what it measured
+        # was for a human to go and diff two commits by hand afterwards. A baseline
+        # that does not state its own denominator cannot be checked for comparability;
+        # neither can one that does not state its own binary.
+        payload["commit"] = served_commit
     if sizes:
         payload["sample_sizes"] = {
             cat: list(sizes[cat]) for cat in categories if cat in sizes
@@ -1517,7 +1528,9 @@ def cmd_run(args: argparse.Namespace) -> int:
         # hit@k in hybrid mode; a baseline without a mode can only ever produce
         # INCONCLUSIVE. The advisory arm used to write a flat mode-less dict here,
         # which made its own mode gate permanently unsatisfiable.
-        payload = build_baseline_payload(per_pass_scores, run_mode, top_k, sizes, arm)
+        payload = build_baseline_payload(
+            per_pass_scores, run_mode, top_k, sizes, arm, args.served_commit
+        )
         baseline_file.write_text(json.dumps(payload, indent=2) + "\n")
         print(
             f"\nBaseline updated: {baseline_file}  "
@@ -1884,6 +1897,17 @@ def main() -> int:
         "--update-baseline",
         action="store_true",
         help="Run benchmark and write results to the arm's baseline file (mode-scoped)",
+    )
+    parser.add_argument(
+        "--served-commit",
+        default="",
+        help=(
+            "The commit the version pin confirmed prod was serving. Recorded in the "
+            "baseline as `commit` so the file states which binary it measured. Empty "
+            "is honest (branch arm, or the endpoint could not be read) and simply "
+            "omits the field — an absent `commit` must read as 'unstated', never as "
+            "'the same binary as this run'."
+        ),
     )
     parser.add_argument(
         "--repeat",

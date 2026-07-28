@@ -203,7 +203,43 @@ def parse_deploy_paths(text: str) -> list[str] | None:
             continue
         if paths is not None and not stripped.startswith("- "):
             break
+    if paths is not None and not any(not p.startswith("!") for p in paths):
+        # A list of nothing but exclusions matches no push at all, so "what does
+        # this deploy?" has no answer to read off it. Collapse to the stated
+        # cannot-tell fallback rather than hand git a pathspec of pure negations,
+        # which would diff EVERYTHING-except and read as "the whole tree deploys".
+        return None
     return paths or None
+
+
+def to_git_pathspec(paths: list[str]) -> list[str]:
+    """Translate GitHub `on.push.paths` entries into git pathspecs.
+
+    GitHub writes an exclusion with a leading `!`; git wants its `:!` magic
+    prefix. A bare `!pattern` handed to `git diff -- …` is not an exclusion at
+    all — it is an ordinary pattern that matches nothing, so the exclusion
+    evaporates silently and every file it was meant to exclude keeps counting as
+    deployable.
+
+    That is the direction that refuses FOREVER, not the one that waves things
+    through. evc-mesh#408 stopped `*_test.go` merges from deploying, so after a
+    test-only merge prod stays behind ON PURPOSE. A pin that still believes that
+    file deploys reports "a deploy is due and has not landed" about a deploy that
+    will never land, polls to timeout, and refuses with no event able to clear
+    it — the same shape as the `!=` waiter this tool exists to replace.
+
+    The two languages are not identical: GitHub is last-match-wins, git's `:!`
+    excludes unconditionally. They agree whenever negations come last, which is
+    what `deploy-backend.yml` requires of itself in a comment. Where they could
+    disagree — a positive pattern re-including after a negation — this errs
+    toward treating the file as NOT deployable, i.e. toward measuring rather than
+    stalling. `test_serving_version.py` pins the agreement against the real
+    workflow so a future edit to either side cannot desynchronise them quietly.
+    """
+    spec: list[str] = []
+    for p in paths:
+        spec.append(":!" + p[1:] if p.startswith("!") else p)
+    return spec
 
 
 def deploy_paths() -> list[str] | None:
@@ -253,7 +289,7 @@ def classify(served: str, expected: str, paths: list[str] | None) -> tuple[bool,
             "code that is not on the line under test"
         )
 
-    diff = _git("diff", "--name-only", served, expected, "--", *paths)
+    diff = _git("diff", "--name-only", served, expected, "--", *to_git_pathspec(paths))
     if diff.returncode != 0:
         return False, f"could not diff {served[:7]}..{expected[:7]} ({diff.stderr.strip()})"
     changed = [ln for ln in diff.stdout.splitlines() if ln.strip()]
