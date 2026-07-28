@@ -184,6 +184,38 @@ const (
 // Anything that is not a full hybrid search is a degraded search.
 func (m SearchMode) Degraded() bool { return m != SearchModeHybrid }
 
+// RecallStats reports what each retrieval arm actually CONTRIBUTED to a recall,
+// alongside the mode it was served in.
+//
+// Mode alone is not enough, and the gap is not theoretical. SearchModeHybrid is
+// set when the dense arm completed end-to-end — embed OK, non-empty query
+// vector, VectorSearch returned without error — which is a statement about the
+// EMBEDDER being alive, not about the vector arm having found anything. A
+// VectorSearch that matches zero rows across the entire corpus (every
+// memories.embedding IS NULL, say, because a write-path change stopped
+// populating it) returns (nil, nil): the dense arm "ran", the mode says
+// "hybrid", `degraded` says false, and the recall is served by BM25 alone with
+// nothing anywhere saying so.
+//
+// That exact state shipped: after the chunked-embed write path landed, every
+// newly written memory had a NULL embedding, and the CI recall gate scored its
+// best-ever run — `hybrid`, `degraded: false` — measuring a corpus its dense arm
+// could not see. DenseRows is the number that distinguishes the two: a hybrid
+// recall with DenseRows == 0 is a dead arm wearing a healthy label.
+type RecallStats struct {
+	// Mode is the mode the recall was actually SERVED in.
+	Mode SearchMode
+	// DenseRows is how many candidates the vector arm returned, counted BEFORE
+	// the RRF merge and before any post-filtering — it measures the arm, not
+	// what survived downstream. Always 0 when Mode is not SearchModeHybrid,
+	// since the arm did not run at all.
+	DenseRows int
+	// SparseRows is the same count for the BM25 arm. It is 0 both when the FTS
+	// query genuinely matched nothing and when it errored (Recall drops those
+	// results and degrades to vector-only).
+	SparseRows int
+}
+
 // RecallOpts specifies parameters for a memory recall (full-text search) operation.
 type RecallOpts struct {
 	Query       string

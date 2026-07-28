@@ -733,6 +733,7 @@ func (m *MockRulesService) SetWorkflowTemplates(ctx context.Context, workspaceID
 type MockMemoryService struct {
 	ListMemoriesFunc   func(ctx context.Context, filter domain.MemoryListFilter) (*service.RecallResult, error)
 	RecallFunc         func(ctx context.Context, opts domain.RecallOpts) ([]domain.ScoredMemory, domain.SearchMode, error)
+	RecallStatsFunc    func(ctx context.Context, opts domain.RecallOpts) ([]domain.ScoredMemory, domain.RecallStats, error)
 	GetByIDFunc        func(ctx context.Context, id uuid.UUID) (*domain.Memory, error)
 	RememberFunc       func(ctx context.Context, mem *domain.Memory) (service.RememberResult, error)
 	ForgetFunc         func(ctx context.Context, id uuid.UUID, actorAgentID *uuid.UUID, isAdmin bool) error
@@ -758,6 +759,23 @@ func (m *MockMemoryService) Recall(ctx context.Context, opts domain.RecallOpts) 
 		return m.RecallFunc(ctx, opts)
 	}
 	return nil, domain.SearchModeHybrid, nil
+}
+
+// RecallWithStats mirrors the production wiring in reverse: the real service
+// derives Recall FROM RecallWithStats, so the mock derives the stats from
+// RecallFunc and lets a test override only the counts it cares about via
+// RecallStatsFunc. Without the fallback every existing test that sets RecallFunc
+// would stop reaching the handler, which now calls this method.
+func (m *MockMemoryService) RecallWithStats(ctx context.Context, opts domain.RecallOpts) ([]domain.ScoredMemory, domain.RecallStats, error) {
+	if m.RecallStatsFunc != nil {
+		return m.RecallStatsFunc(ctx, opts)
+	}
+	items, mode, err := m.Recall(ctx, opts)
+	stats := domain.RecallStats{Mode: mode, DenseRows: len(items), SparseRows: len(items)}
+	if mode != domain.SearchModeHybrid {
+		stats.DenseRows = 0
+	}
+	return items, stats, err
 }
 func (m *MockMemoryService) GetProjectKnowledge(ctx context.Context, workspaceID uuid.UUID, projectID *uuid.UUID, filter domain.MemoryListFilter) ([]domain.Memory, int64, error) {
 	return nil, 0, nil
