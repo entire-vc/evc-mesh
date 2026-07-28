@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"math"
@@ -19,6 +20,7 @@ import (
 	"unicode"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 	"gopkg.in/yaml.v3"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
@@ -724,18 +726,36 @@ func (s *memoryService) embedAndStore(id uuid.UUID, text string) {
 		defer func() { <-s.embedSem }()
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
 	if s.chunkRepo != nil {
+		// Budget scales with the number of embedder ROUND TRIPS this memory needs, not
+		// with the memory itself. A flat 30s per memory was a hidden "no longer than
+		// ~12 chunks under load" limit: chunking multiplied the calls by N while the
+		// budget stayed constant, so long documents died mid-document (538 deadline
+		// failures at chunk 12-15 of 18-24 in one loaded window, #67f4e0d9) — silently,
+		// since the goroutine only logs. Batching makes it one round trip for almost
+		// every memory; this scaling is the insurance for when it isn't.
+		pieces := chunkText(text, defaultChunkSize, defaultChunkOverlap)
+		ctx, cancel := context.WithTimeout(context.Background(), embedBudget(len(pieces)))
+		defer cancel()
 		if err := s.embedChunked(ctx, id, text); err != nil {
-			log.Printf("memory embed (chunked): id=%s error=%v", id, err)
+			if isForeignKeyViolation(err) {
+				// The memory was deleted while this goroutine was still embedding it
+				// (bench fixtures are created and swept within seconds). Not an
+				// embedding failure — counting it as one masks the real ones.
+				return
+			}
+			pkgmetrics.MemoryEmbedFailuresTotal.WithLabelValues("store").Inc()
+			log.Printf("memory embed (chunked): id=%s chunks=%d error=%v", id, len(pieces), err)
 		}
 		return
 	}
 
+	ctx, cancel := context.WithTimeout(context.Background(), embedBudget(1))
+	defer cancel()
+
 	vec, err := s.embedder.Embed(ctx, text)
 	if err != nil {
+		pkgmetrics.MemoryEmbedFailuresTotal.WithLabelValues("store").Inc()
 		log.Printf("memory embed: id=%s error=%v", id, err)
 		return
 	}
@@ -764,14 +784,31 @@ func (s *memoryService) embedAndStore(id uuid.UUID, text string) {
 // entire fix exists to close.
 func (s *memoryService) embedChunked(ctx context.Context, id uuid.UUID, text string) error {
 	pieces := chunkText(text, defaultChunkSize, defaultChunkOverlap)
+	if len(pieces) == 0 {
+		return nil
+	}
+	texts := make([]string, len(pieces))
+	for i, p := range pieces {
+		texts[i] = p.Text
+	}
+
+	// ONE batched call (per 32 chunks) instead of one call per chunk. Sequential
+	// per-chunk calls put ~20x the load on a shared embedder instance and made the
+	// failure probability grow with document length — i.e. chunking failed hardest on
+	// exactly the long documents it exists to serve (#67f4e0d9).
+	vecs, err := embedWithRetry(ctx, s.embedder, texts)
+	if err != nil {
+		return fmt.Errorf("embed %d chunks: %w", len(pieces), err)
+	}
+	if len(vecs) != len(pieces) {
+		return fmt.Errorf("embed %d chunks: embedder returned %d vectors", len(pieces), len(vecs))
+	}
+
 	runes := []rune(text)
 	chunks := make([]domain.MemoryChunk, 0, len(pieces))
 	var firstVec []float32
 	for i, p := range pieces {
-		vec, err := s.embedder.Embed(ctx, p.Text)
-		if err != nil {
-			return fmt.Errorf("embed chunk %d/%d: %w", i, len(pieces), err)
-		}
+		vec := vecs[i]
 		if len(vec) == 0 {
 			continue
 		}
@@ -2051,4 +2088,78 @@ func (s *memoryService) RecallGraph(ctx context.Context, opts domain.RecallGraph
 	})
 
 	return results, nil
+}
+
+// embedBudgetPerCall is the wall-clock budget for a single embedder round trip. It was
+// previously the budget for an entire memory, which silently became a cap on document
+// length once chunking multiplied the calls per memory (#67f4e0d9).
+const embedBudgetPerCall = 30 * time.Second
+
+// embedBudgetCap bounds the scaled budget so a pathologically long document cannot pin
+// a goroutine (and its embedSem slot) indefinitely.
+const embedBudgetCap = 5 * time.Minute
+
+// embedMaxAttempts is the number of tries for one embed call. Under concurrent load the
+// shared TEI instance returns context-deadline/5xx transiently, which is retryable — the
+// pre-fix code had no retry at all, so a single blip lost the memory permanently (the
+// goroutine logs and exits; nothing re-embeds it until a manual reindex).
+const embedMaxAttempts = 3
+
+// embedBudget returns the total budget for embedding a memory split into n chunks. Chunks
+// are sent in batches of up to maxClientBatchSize per round trip, so the budget scales
+// with the number of ROUND TRIPS, plus retry headroom — not with the chunk count directly.
+func embedBudget(chunks int) time.Duration {
+	if chunks < 1 {
+		chunks = 1
+	}
+	roundTrips := (chunks + embedBatchSize - 1) / embedBatchSize
+	budget := time.Duration(roundTrips) * embedBudgetPerCall * embedMaxAttempts
+	if budget > embedBudgetCap {
+		return embedBudgetCap
+	}
+	return budget
+}
+
+// embedBatchSize mirrors the embedder's client batch limit. Kept in sync with
+// embedding.maxClientBatchSize; a mismatch only affects budget arithmetic, never correctness.
+const embedBatchSize = 32
+
+// embedWithRetry calls EmbedBatch with bounded exponential backoff. It gives up
+// immediately when the caller's context is done — retrying against an expired deadline
+// burns the remaining budget for nothing.
+func embedWithRetry(ctx context.Context, embedder embedding.Embedder, texts []string) ([][]float32, error) {
+	var lastErr error
+	for attempt := 0; attempt < embedMaxAttempts; attempt++ {
+		if attempt > 0 {
+			backoff := time.Duration(1<<(attempt-1)) * time.Second
+			select {
+			case <-ctx.Done():
+				return nil, fmt.Errorf("embed retry aborted: %w", ctx.Err())
+			case <-time.After(backoff):
+			}
+		}
+		vecs, err := embedder.EmbedBatch(ctx, texts)
+		if err == nil {
+			return vecs, nil
+		}
+		lastErr = err
+		if ctx.Err() != nil {
+			// Budget exhausted — further attempts cannot succeed.
+			return nil, fmt.Errorf("embed after %d attempt(s): %w", attempt+1, err)
+		}
+	}
+	return nil, fmt.Errorf("embed after %d attempts: %w", embedMaxAttempts, lastErr)
+}
+
+// isForeignKeyViolation reports whether err is a Postgres FK violation (SQLSTATE 23503).
+// For the chunked embed path this means the memory row was deleted while its embedding
+// goroutine was still running — a normal race with sweeps/deletes, not an embedder fault.
+// Counting it as an embedding failure masks the real ones (34 of these appeared alongside
+// the 538 genuine timeouts in the #67f4e0d9 window).
+func isForeignKeyViolation(err error) bool {
+	var pqErr *pq.Error
+	if errors.As(err, &pqErr) {
+		return pqErr.Code == "23503"
+	}
+	return false
 }

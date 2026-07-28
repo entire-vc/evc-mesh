@@ -13,12 +13,16 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
+	dto "github.com/prometheus/client_model/go"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/repository"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
+	pkgmetrics "github.com/entire-vc/evc-mesh/pkg/metrics"
 	"github.com/entire-vc/evc-mesh/pkg/pagination"
 )
 
@@ -2662,35 +2666,49 @@ func (m *mockMemoryChunkRepo) MemoryIDsWithChunks(_ context.Context, memoryIDs [
 	return result, nil
 }
 
-// nthCallFailsEmbedder returns a deterministic vector, except its failAt'th call (1-indexed)
-// returns an error — used to prove a mid-batch embed failure aborts the whole memory's
-// chunk replace rather than writing a partial set.
-type nthCallFailsEmbedder struct {
-	dim    int
-	failAt int
-	calls  atomic.Int64
+// failsFirstMemoryEmbedder fails every attempt for the first memory it is asked about
+// (all embedMaxAttempts retries), then succeeds for everything after. Models a memory
+// that genuinely cannot be embedded while its neighbours can — which is what
+// "one memory's failure must not abort the batch" needs. A fail-once mock cannot express
+// this any more: embedWithRetry recovers transient failures by design (#67f4e0d9).
+type failsFirstMemoryEmbedder struct {
+	dim   int
+	calls atomic.Int64
 }
 
-func (e *nthCallFailsEmbedder) Embed(_ context.Context, _ string) ([]float32, error) {
-	n := e.calls.Add(1)
-	if int(n) == e.failAt {
-		return nil, fmt.Errorf("simulated embed failure on call %d", n)
+func (e *failsFirstMemoryEmbedder) Embed(ctx context.Context, text string) ([]float32, error) {
+	vecs, err := e.EmbedBatch(ctx, []string{text})
+	if err != nil {
+		return nil, err
 	}
-	return make([]float32, e.dim), nil
+	return vecs[0], nil
 }
-func (e *nthCallFailsEmbedder) EmbedBatch(ctx context.Context, texts []string) ([][]float32, error) {
+
+func (e *failsFirstMemoryEmbedder) EmbedBatch(_ context.Context, texts []string) ([][]float32, error) {
+	if e.calls.Add(1) <= int64(embedMaxAttempts) {
+		return nil, fmt.Errorf("simulated permanent failure for the first memory")
+	}
 	out := make([][]float32, len(texts))
-	for i, text := range texts {
-		vec, err := e.Embed(ctx, text)
-		if err != nil {
-			return nil, err
-		}
-		out[i] = vec
+	for i := range texts {
+		out[i] = make([]float32, e.dim)
 	}
 	return out, nil
 }
-func (e *nthCallFailsEmbedder) Model() string   { return "nth-call-fails" }
-func (e *nthCallFailsEmbedder) Dimensions() int { return e.dim }
+func (e *failsFirstMemoryEmbedder) Model() string   { return "fails-first-memory" }
+func (e *failsFirstMemoryEmbedder) Dimensions() int { return e.dim }
+
+// alwaysFailsEmbedder fails every call — a dead embedder, not a blip. Distinct from
+// failsFirstMemoryEmbedder, which lets later memories through.
+type alwaysFailsEmbedder struct{ dim int }
+
+func (alwaysFailsEmbedder) Embed(_ context.Context, _ string) ([]float32, error) {
+	return nil, fmt.Errorf("simulated permanent embed failure")
+}
+func (alwaysFailsEmbedder) EmbedBatch(_ context.Context, _ []string) ([][]float32, error) {
+	return nil, fmt.Errorf("simulated permanent embed failure")
+}
+func (alwaysFailsEmbedder) Model() string     { return "always-fails" }
+func (e alwaysFailsEmbedder) Dimensions() int { return e.dim }
 
 // emptyVecEmbedder always succeeds but returns a zero-length vector — the shape a
 // noop or degraded embedder can return without erroring. Used to test embedChunked's
@@ -2763,8 +2781,9 @@ func TestBatchEmbed_Chunked_EmbedChunkedErrorLogsAndContinuesRatherThanAborting(
 		},
 	}
 	chunkRepo := newMockMemoryChunkRepo()
-	// Fails on the very first Embed call (the "failing" memory's only chunk), succeeds after.
-	failer := &nthCallFailsEmbedder{dim: 4, failAt: 1}
+	// Fails every attempt for the first memory, succeeds after — see the mock's doc for
+	// why "fails once" no longer expresses a memory that cannot be embedded.
+	failer := &failsFirstMemoryEmbedder{dim: 4}
 	svc := NewMemoryService(memRepo, &mockMemoryEdgeRepo{}, failer, MemoryWithChunkRepo(chunkRepo))
 
 	n, err := svc.BatchEmbed(context.Background(), uuid.New())
@@ -2802,7 +2821,7 @@ func TestBackfillChunks_EmbedChunkedError_SkipsThatMemoryButContinues(t *testing
 		},
 	}
 	chunkRepo := newMockMemoryChunkRepo()
-	failer := &nthCallFailsEmbedder{dim: 4, failAt: 1}
+	failer := &failsFirstMemoryEmbedder{dim: 4}
 	svc := NewMemoryService(memRepo, &mockMemoryEdgeRepo{}, failer, MemoryWithChunkRepo(chunkRepo))
 
 	n, err := svc.BackfillChunks(context.Background(), uuid.New(), 0)
@@ -2874,8 +2893,12 @@ func TestEmbedAndStore_Chunked_ReembedReplacesRatherThanAccumulates(t *testing.T
 func TestEmbedAndStore_Chunked_PartialEmbedFailureNeverWritesPartialChunks(t *testing.T) {
 	memRepo := &mockMemoryRepo{}
 	chunkRepo := newMockMemoryChunkRepo()
-	// Long enough to chunk into several pieces; fail on the 2nd embed call.
-	failer := &nthCallFailsEmbedder{dim: 4, failAt: 2}
+	// Long enough to chunk into several pieces; fail EVERY attempt. Permanent, not
+	// transient: embedWithRetry legitimately recovers a transient failure (#67f4e0d9),
+	// so a fail-once mock would exercise the retry path, not the abort path this test
+	// is about. The property under test is unchanged — a memory that cannot be fully
+	// embedded must leave no partial chunk set behind.
+	failer := &alwaysFailsEmbedder{dim: 4}
 	svc := NewMemoryService(memRepo, &mockMemoryEdgeRepo{}, failer, MemoryWithChunkRepo(chunkRepo))
 	ms := svc.(*memoryService)
 
@@ -3057,3 +3080,184 @@ func (e *concurrencyTrackingEmbedder) EmbedBatch(ctx context.Context, texts []st
 
 func (e *concurrencyTrackingEmbedder) Model() string   { return "concurrency-tracker" }
 func (e *concurrencyTrackingEmbedder) Dimensions() int { return e.dim }
+
+// countingBatchEmbedder records how many EmbedBatch round trips it served and how many
+// texts each one carried — the quantity that actually caused #67f4e0d9.
+type countingBatchEmbedder struct {
+	dim         int
+	batchCalls  atomic.Int64
+	singleCalls atomic.Int64
+	maxBatch    atomic.Int64
+}
+
+func (e *countingBatchEmbedder) Embed(_ context.Context, _ string) ([]float32, error) {
+	e.singleCalls.Add(1)
+	return make([]float32, e.dim), nil
+}
+
+func (e *countingBatchEmbedder) EmbedBatch(_ context.Context, texts []string) ([][]float32, error) {
+	e.batchCalls.Add(1)
+	if n := int64(len(texts)); n > e.maxBatch.Load() {
+		e.maxBatch.Store(n)
+	}
+	out := make([][]float32, len(texts))
+	for i := range texts {
+		out[i] = make([]float32, e.dim)
+	}
+	return out, nil
+}
+func (e *countingBatchEmbedder) Model() string   { return "counting-batch" }
+func (e *countingBatchEmbedder) Dimensions() int { return e.dim }
+
+// TestEmbedAndStore_Chunked_UsesOneBatchedCallNotOnePerChunk is the load half of
+// #67f4e0d9. Before the fix a memory of N chunks issued N sequential embedder calls
+// inside one flat 30s budget, so under concurrent load the budget ran out mid-document
+// (538 deadline failures at chunk 12-15 of 18-24) and the memory was lost entirely —
+// silently, because the goroutine only logs.
+//
+// Asserting the call COUNT rather than a wall-clock timeout keeps this test fast and
+// deterministic while pinning the mechanism that made the timeout reachable at all.
+func TestEmbedAndStore_Chunked_UsesOneBatchedCallNotOnePerChunk(t *testing.T) {
+	memRepo := &mockMemoryRepo{}
+	chunkRepo := newMockMemoryChunkRepo()
+	emb := &countingBatchEmbedder{dim: 4}
+	svc := NewMemoryService(memRepo, &mockMemoryEdgeRepo{}, emb, MemoryWithChunkRepo(chunkRepo))
+	ms := svc.(*memoryService)
+
+	ms.embedAndStore(uuid.New(), longTranscript(30))
+
+	stored, err := chunkRepo.ListByMemoryIDs(context.Background(), []uuid.UUID{})
+	require.NoError(t, err)
+	_ = stored
+
+	require.Greater(t, int(emb.maxBatch.Load()), 1, "test is meaningless unless the content actually chunked into several pieces")
+	assert.Equal(t, int64(1), emb.batchCalls.Load(), "a multi-chunk memory must cost ONE batched round trip, not one per chunk")
+	assert.Zero(t, emb.singleCalls.Load(), "the chunked path must not fall back to per-chunk Embed calls")
+}
+
+// transientThenOKEmbedder fails its first EmbedBatch and succeeds afterwards — the shape
+// of a shared embedder briefly saturated by concurrent load.
+type transientThenOKEmbedder struct {
+	dim   int
+	calls atomic.Int64
+}
+
+func (e *transientThenOKEmbedder) Embed(ctx context.Context, text string) ([]float32, error) {
+	vecs, err := e.EmbedBatch(ctx, []string{text})
+	if err != nil {
+		return nil, err
+	}
+	return vecs[0], nil
+}
+
+func (e *transientThenOKEmbedder) EmbedBatch(_ context.Context, texts []string) ([][]float32, error) {
+	if e.calls.Add(1) == 1 {
+		return nil, fmt.Errorf("simulated transient saturation")
+	}
+	out := make([][]float32, len(texts))
+	for i := range texts {
+		out[i] = make([]float32, e.dim)
+	}
+	return out, nil
+}
+func (e *transientThenOKEmbedder) Model() string   { return "transient-then-ok" }
+func (e *transientThenOKEmbedder) Dimensions() int { return e.dim }
+
+// TestEmbedAndStore_Chunked_TransientEmbedFailureIsRetried is the retry half of
+// #67f4e0d9: before the fix there was no retry at all, so one blip against the shared
+// embedder lost the memory permanently — the goroutine logged and exited, and nothing
+// re-embeds it until someone runs reindex by hand. RED on the pre-fix code.
+func TestEmbedAndStore_Chunked_TransientEmbedFailureIsRetried(t *testing.T) {
+	memRepo := &mockMemoryRepo{}
+	chunkRepo := newMockMemoryChunkRepo()
+	emb := &transientThenOKEmbedder{dim: 4}
+	svc := NewMemoryService(memRepo, &mockMemoryEdgeRepo{}, emb, MemoryWithChunkRepo(chunkRepo))
+	ms := svc.(*memoryService)
+
+	id := uuid.New()
+	ms.embedAndStore(id, longTranscript(30))
+
+	got, err := chunkRepo.ListByMemoryIDs(context.Background(), []uuid.UUID{id})
+	require.NoError(t, err)
+	assert.NotEmpty(t, got, "a memory whose first embed attempt hit a transient failure must still end up embedded, not silently lost")
+	assert.Equal(t, id, memRepo.embeddedID, "the stopgap embedding write must still happen after a retried success")
+}
+
+func TestEmbedBudget_ScalesWithRoundTripsAndIsCapped(t *testing.T) {
+	// One round trip (<=32 chunks) gets the per-call budget times the retry allowance.
+	assert.Equal(t, embedBudgetPerCall*embedMaxAttempts, embedBudget(1))
+	assert.Equal(t, embedBudgetPerCall*embedMaxAttempts, embedBudget(embedBatchSize))
+
+	// A second round trip must buy more budget — the pre-fix bug was precisely that it
+	// did not, making the flat budget a hidden cap on document length.
+	assert.Greater(t, embedBudget(embedBatchSize+1), embedBudget(embedBatchSize))
+
+	// Never unbounded: a pathological document must not pin a goroutine forever.
+	assert.Equal(t, embedBudgetCap, embedBudget(100000))
+
+	// Defensive: a zero/negative chunk count still yields a usable budget.
+	assert.Equal(t, embedBudget(1), embedBudget(0))
+}
+
+// fkViolationChunkRepo fails ReplaceChunks with a Postgres FK violation — the shape of
+// "the memory row was deleted while this goroutine was still embedding it".
+type fkViolationChunkRepo struct {
+	*mockMemoryChunkRepo
+}
+
+func (r *fkViolationChunkRepo) ReplaceChunks(_ context.Context, _ uuid.UUID, _ []domain.MemoryChunk) error {
+	return &pq.Error{Code: "23503", Constraint: "memory_chunks_memory_id_fkey"}
+}
+
+// TestEmbedAndStore_Chunked_ForeignKeyViolationIsNotAnEmbedFailure pins the distinction
+// that kept the real errors hidden: 34 FK races appeared alongside 538 genuine deadline
+// failures in the #67f4e0d9 window, and counting the races as embedding failures is what
+// makes the counter useless for alerting.
+func TestEmbedAndStore_Chunked_ForeignKeyViolationIsNotAnEmbedFailure(t *testing.T) {
+	before := testutilCounterValue(t, "store")
+
+	memRepo := &mockMemoryRepo{}
+	chunkRepo := &fkViolationChunkRepo{mockMemoryChunkRepo: newMockMemoryChunkRepo()}
+	svc := NewMemoryService(memRepo, &mockMemoryEdgeRepo{}, &switchModelEmbedder{model: "e5-small", dim: 4},
+		MemoryWithChunkRepo(chunkRepo))
+	ms := svc.(*memoryService)
+
+	ms.embedAndStore(uuid.New(), longTranscript(30))
+
+	assert.Equal(t, before, testutilCounterValue(t, "store"),
+		"a memory deleted mid-embed is a race with the deleter, not an embedding failure — counting it masks the real ones")
+}
+
+// TestEmbedAndStore_Legacy_EmbedFailureIncrementsCounter covers the non-chunked path's
+// failure accounting. Before this change mesh_memory_embed_failures_total was declared
+// and never incremented anywhere, so a dead embedder read as "no failures".
+func TestEmbedAndStore_Legacy_EmbedFailureIncrementsCounter(t *testing.T) {
+	before := testutilCounterValue(t, "store")
+
+	memRepo := &mockMemoryRepo{}
+	svc := NewMemoryService(memRepo, &mockMemoryEdgeRepo{}, alwaysFailsEmbedder{dim: 4})
+	ms := svc.(*memoryService)
+
+	ms.embedAndStore(uuid.New(), "short text, single vector path")
+
+	assert.Greater(t, testutilCounterValue(t, "store"), before,
+		"an embedder failure must be visible as a metric, not only as a log line")
+}
+
+func TestIsForeignKeyViolation(t *testing.T) {
+	assert.True(t, isForeignKeyViolation(&pq.Error{Code: "23503"}))
+	assert.True(t, isForeignKeyViolation(fmt.Errorf("wrapped: %w", &pq.Error{Code: "23503"})))
+	assert.False(t, isForeignKeyViolation(&pq.Error{Code: "23505"}), "unique violation is not an FK race")
+	assert.False(t, isForeignKeyViolation(fmt.Errorf("plain error")))
+	assert.False(t, isForeignKeyViolation(nil))
+}
+
+// testutilCounterValue reads the current value of mesh_memory_embed_failures_total{op=...}.
+func testutilCounterValue(t *testing.T, op string) float64 {
+	t.Helper()
+	m := &dto.Metric{}
+	c, err := pkgmetrics.MemoryEmbedFailuresTotal.GetMetricWithLabelValues(op)
+	require.NoError(t, err)
+	require.NoError(t, c.Write(m))
+	return m.GetCounter().GetValue()
+}
