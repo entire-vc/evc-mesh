@@ -120,8 +120,22 @@ jobs:
   # while carrying the regression that took every new memory out of the dense
   # arm; the check could not have seen it, by construction.
   # ---------------------------------------------------------------------------
+  # The NAME is load-bearing and deliberately unchanged from the job this
+  # replaces. `main`'s branch protection requires the literal context string
+  # "Memory recall gate" with `enforce_admins: true`; GitHub matches a required
+  # context against the check-run NAME, not the job id. So:
+  #   - naming this job anything else leaves the required context unproduced on
+  #     every PR that carries this file — mergeStateStatus BLOCKED forever, with
+  #     no override available to anyone (evc-mesh#320, and this PR itself sat
+  #     BLOCKED at 14 green checks until the name went back);
+  #   - and moving the requirement to a new string is not a free swap either: it
+  #     instantly BLOCKS every other open PR, because they still produce the old
+  #     name.
+  # Inheriting the name is the only edit that needs zero admin action and leaves
+  # no window in which memory is gated by nothing. The job id below may change
+  # freely; this line may not.
   recall-gate-branch:
-    name: Memory recall gate (branch)
+    name: Memory recall gate
     runs-on: ubuntu-latest
     # ~10 min of bench against a local build, plus build + model download on a
     # cold cache. Generous rather than tight: a timeout here reads as a gate
@@ -503,6 +517,28 @@ jobs:
     name: Memory recall canary (prod)
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
+    # There is exactly ONE `secrets.MESH_API_URL`, and every job below this line
+    # ingests a haystack into it and searches it. Concurrent runs therefore do
+    # not merely queue — they slow each other down inside the shared server, and
+    # a run that would take 17 min alone takes 30+ with company. On 2026-07-28
+    # four runs overlapped and the slowest hit `timeout-minutes: 30` at 14/15
+    # checks green, which surfaces as `cancelled`, NOT `failure` — so the arm
+    # produced no verdict at all while looking like an infra hiccup.
+    #
+    # `cancel-in-progress: false` is the point of the block, not boilerplate.
+    # The template default `true` would abort a peer MID-RUN to make room, which
+    # is the same lost verdict by a different route and without even a timeout in
+    # the log to diagnose it from. Serialise; never pre-empt.
+    #
+    # Accepted cost, stated so it is not rediscovered as a bug: a group holds one
+    # running + one pending job, so a third arrival supersedes the pending one.
+    # For a post-deploy canary that is correct — the newer commit is the one
+    # worth measuring — and it is safe only because this arm is NOT required. The
+    # required arm (above) needs no group at all: its postgres and embedder live
+    # inside its own job, so it has nothing to contend for.
+    concurrency:
+      group: memory-bench-prod
+      cancel-in-progress: false
     # A recall pass is ~17 min, so a `--repeat 3` capture needs the same headroom
     # the advisory arm already takes. Unchanged (30) for every PR and nightly.
     timeout-minutes: ${{ (inputs.update_baseline && 120) || 30 }}
@@ -936,6 +972,13 @@ jobs:
   memory-bench:
     name: LongMemEval-S end-to-end (advisory)
     runs-on: ubuntu-latest
+    # Same single prod server as the canary, so the same group: two arms racing
+    # each other through one API is exactly the contention the block exists to
+    # remove, and putting them in separate groups would serialise each arm
+    # against itself while leaving them free to strangle each other.
+    concurrency:
+      group: memory-bench-prod
+      cancel-in-progress: false
     # One pass is ~19 min, so a --repeat 3 baseline capture needs room.
     timeout-minutes: ${{ (inputs.update_baseline && 120) || 30 }}
     permissions:

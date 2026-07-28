@@ -165,7 +165,24 @@ def main() -> int:
             f"{list(agent)}. Nothing can re-derive it — the stored form is a hash."
         )
 
+    # CodeQL alert #17 (`py/clear-text-storage-sensitive-data`) lands on the
+    # write below, and the honest answer is "suppressed, with reasons", not
+    # "fixed" — the previous attempt at fixing it (moving the key off stdout,
+    # alert #16) only walked the same taint from one sink to another. The rule
+    # tracks the SECRET, so relocating the destination renames the alert instead
+    # of closing it; the only thing that would actually clear it is not emitting
+    # the key at all, which is not available — the raw value exists for exactly
+    # one response and later steps need it.
+    #
+    # Why suppression is defensible HERE specifically, which is the part that
+    # does not generalise: `--api-url` is `http://127.0.0.1:8005`, a server this
+    # job built and booted itself over an ephemeral `postgres:16` service
+    # container. The key authenticates a bench agent in a throwaway workspace on
+    # a database that ceases to exist when the job ends. It grants nothing
+    # anywhere else, and `$GITHUB_ENV` is runner-local. Were this pointed at
+    # prod, the alert would be correct and this comment would be an excuse.
     with Path(args.env_file).open("a", encoding="utf-8") as fh:
+        # codeql[py/clear-text-storage-sensitive-data]
         fh.write(f"MESH_AGENT_KEY={key}\n")
         fh.write(f"MESH_WORKSPACE_ID={ws_id}\n")
 

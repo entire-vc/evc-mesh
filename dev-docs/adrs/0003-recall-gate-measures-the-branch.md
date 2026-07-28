@@ -116,7 +116,7 @@ one.
 **Option 3.** Two arms with different jobs, different targets and different
 baselines:
 
-| | `Memory recall gate (branch)` | `Memory recall canary (prod)` |
+| | `Memory recall gate` (job id `recall-gate-branch`) | `Memory recall canary (prod)` |
 |---|---|---|
 | target | `cmd/api` built from the PR head, on localhost | `secrets.MESH_API_URL` (deployed) |
 | database | ephemeral `postgres:16`, freshly migrated | prod |
@@ -206,11 +206,31 @@ canary's job, which is why the canary is kept:
 
 ## Consequences
 
-* Two required-check names change hands: `Memory recall gate` (prod-targeted)
-  stops running on PRs, and `Memory recall gate (branch)` takes over as the
-  required context. **Branch protection must be updated in the same rollout**,
-  or the old context never reports and blocks every PR forever (evc-mesh#320,
-  already documented in the README).
+* **The required-check name does not change; the arm behind it does.** The new
+  job keeps `name: Memory recall gate` and the prod job is renamed to
+  `Memory recall canary (prod)`, so branch protection needs no edit at all.
+  This was not the original plan, and the correction is the useful part: the
+  first draft named the new job `Memory recall gate (branch)` and deferred a
+  protection update to "the same rollout". There is no such rollout. A required
+  context is matched against the check-run **name** as a literal string, so from
+  the moment this PR exists it produces no `Memory recall gate` and is itself
+  permanently `BLOCKED` — observed live at 14 green checks, with
+  `enforce_admins: true` denying the override to the owner as well. Flipping
+  protection first is no better: it BLOCKS every other open PR, which still
+  produce the old name. Renaming a required job is a two-sided outage with an
+  admin edit on both sides; inheriting the name is one line and has neither.
+* **Both prod-facing jobs now carry `concurrency: {group: memory-bench-prod,
+  cancel-in-progress: false}`.** There is one `secrets.MESH_API_URL` and the
+  workflow had no `concurrency:` anywhere, so runs contended *inside* the server
+  rather than queueing: four overlapping runs pushed a ~17 min pass to 30m16s
+  into `timeout-minutes: 30`, which surfaces as `cancelled` — no verdict, and it
+  reads as an infra flake rather than a defect. `cancel-in-progress: false` is
+  deliberate: the default `true` pre-empts a peer mid-run, losing the same
+  verdict with less evidence in the log. The branch arm is deliberately **not**
+  in the group — its postgres and embedder are its own, so it contends for
+  nothing, and a required check must never queue behind an advisory one. That
+  the contention disappears for the arm that matters is a second dividend of
+  moving off prod, independent of the wrong-target defect.
 * The branch arm depends on a HuggingFace model download. It is cached
   (`actions/cache`, keyed on the pinned model name) and, on a miss with the
   network down, fails at startup with a readable error rather than serving bad

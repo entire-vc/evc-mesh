@@ -332,7 +332,7 @@ written *before* the verdict branches, so it still exists on an INCONCLUSIVE or
 a refused capture, and a failure to write is logged but never changes the
 verdict: an observability artifact must not be able to fail a required check.
 
-## The six ways this gate goes blind
+## The seven ways this gate goes blind
 
 The gate is required, which makes its *silence* more dangerous than its red. Each
 of these has actually happened; each is now pinned by a self-check
@@ -344,7 +344,14 @@ Ways 1–5 end in a no-op or an INCONCLUSIVE: the gate either did not run or cou
 not measure. **Way 6 is different in kind** — the gate ran, measured cleanly,
 compared against a valid baseline, and reported an accurate number *about the
 wrong program*. A green that certifies the wrong object is worse than an
-INCONCLUSIVE, because INCONCLUSIVE at least says so.
+INCONCLUSIVE, because INCONCLUSIVE at least says so. **Way 7 is different again**
+— the gate never reached a verdict, because it was competing with itself for the
+one resource it measures, and ran out of clock.
+
+Ways 6 and 7 share a root, which is why they arrived together: **the single live
+production server was treated as though this gate owned it.** From that one
+assumption follow both "we measured the wrong binary" and "we measured nothing,
+because four of us measured at once".
 
 1. **A memory file missing from `MEMORY_PATHS`.** The gate no-ops and reports
    green having measured nothing, and "required" then certifies a run that never
@@ -440,18 +447,19 @@ INCONCLUSIVE, because INCONCLUSIVE at least says so.
    presenting itself as an answer to "does this PR make recall worse?" Those
    coincide only when the PR is already deployed, which for a PR is never.
 
-   **What it cost.** PRs #388, #389 and #391 — the chunking epic's schema, write
-   path and backfill — each got a green `Memory recall gate` measured against the
-   pre-chunking binary. After merge and deploy it emerged that the write path had
-   moved vectors into `memory_chunks` while no read path consumed them, so
-   `memories.embedding` was NULL for every new memory and those memories left the
-   dense arm entirely. The check that exists to catch exactly that could not have
-   seen it.
+   **What it cost — incident #b052cdda.** PRs #388, #389 and #391 — the chunking
+   epic's schema, write path and backfill — each got a green `Memory recall gate`
+   measured against the pre-chunking binary. After merge and deploy it emerged
+   that the write path had moved vectors into `memory_chunks` while no read path
+   consumed them, so `memories.embedding` was NULL for every new memory and those
+   memories left the dense arm entirely. The check that exists to catch exactly
+   that could not have seen it — three times in a row, each time reporting green.
 
    The gate is now two arms with two targets (see the ADR for the table).
-   `Memory recall gate (branch)` builds and boots `cmd/api` from the PR head
+   `Memory recall gate` builds and boots `cmd/api` from the PR head
    against an ephemeral postgres and a local `BAAI/bge-small-en-v1.5`, and is the
-   **required** context. `Memory recall canary (prod)` keeps the old target and
+   **required** context — it keeps the old job's *name* on purpose, see below.
+   `Memory recall canary (prod)` keeps the old target and
    answers the question it could always answer — "is what we deployed still
    good?" — on `push: main`, nightly and dispatch. Their scores are **not
    comparable** (different embedder, different corpus), so they have separate
@@ -481,13 +489,82 @@ INCONCLUSIVE, because INCONCLUSIVE at least says so.
    here the demonstration happens on every run, against the same code the green
    came from.
 
+7. **Starving itself out of a verdict on the one server it shares** (2026-07-28,
+   fixed by the `concurrency:` block on the prod arms). Ways 1–6 are all about a
+   run that finished. This one never does.
+
+   `memory-bench.yml` had no `concurrency:` at all — not on the workflow, not on
+   any job — while every prod-facing job ingests a haystack into the single
+   `secrets.MESH_API_URL` and searches it. Runs did not queue; they overlapped
+   *inside the server* and slowed each other down. A pass that takes ~17 min
+   alone took 30m16s with three others in the window, hit `timeout-minutes: 30`,
+   and was killed at **14 of 15 checks green with nothing red**.
+
+   **The failure signature is the part worth memorising: `conclusion: cancelled`,
+   not `failure`.** A required check that is cancelled has produced no verdict,
+   but it does not read like a defect — it reads like an infra hiccup, so the
+   instinct is to re-run it, which puts a fifth run into the same contended
+   window. Duration is not a diagnosis: the same 30 minutes means "this branch is
+   slow" and "four of us are in the API at once", and only the second is true
+   here.
+
+   **Who was in the window matters more than the fix.** Three of the four
+   competing runs were *this task's own* proof runs — the experiments
+   demonstrating that the gate is blind — and the check they strangled was
+   @linus's PR #393, the fix for the live regression (#b052cdda) that the
+   blindness had let through. Evidence-gathering about a safety net is not
+   exempt from the net's costs; it is one of the loads it has to survive.
+
+   Two properties of the fix, both load-bearing:
+
+   - **`cancel-in-progress: false`.** The template default is `true`, which would
+     abort a peer mid-run to make room. That is the same lost verdict by a
+     different route, and strictly harder to diagnose: a timeout at least leaves
+     `30m16s` in the log, whereas a pre-emption leaves a run that simply stops.
+     Serialise; never pre-empt.
+   - **The required arm is deliberately *not* in the group.** It builds its own
+     `cmd/api` over its own `postgres:16` service container, so it contends for
+     nothing and must never be made to wait on the canary — a required check that
+     queues behind an advisory one has handed its latency to a job nobody is
+     blocked on. This is the second dividend of ADR-0003: moving the gate off the
+     shared prod removed the contention as well as the wrong-target defect.
+
+   Accepted, so it is not later rediscovered as a bug: a concurrency group holds
+   one running plus one pending job, so a third arrival supersedes the pending
+   one. For a post-deploy canary that is the right trade — the newer commit is
+   the one worth measuring — and it is only safe because this arm is not
+   required.
+
 ## Making the recall gate a required check
 
-The required context is **`Memory recall gate (branch)`** — the arm that measures
-the PR. `Memory recall canary (prod)` must never be required: it does not run on
-`pull_request` at all (ADR-0003), so requiring it would block every PR forever.
+The required context is **`Memory recall gate`** — the branch arm, the one that
+measures the PR. `Memory recall canary (prod)` must never be required: it does not
+run on `pull_request` at all (ADR-0003), so requiring it would block every PR
+forever.
 
-Do it in this order. Skipping step 1 wedges every PR.
+### Why the branch job inherited the old job's name
+
+It is already required, and **a required context is matched against the check-run
+name as a literal string.** That makes the name a public interface, and renaming
+it is not a refactor — it is a two-sided outage:
+
+- Name the branch job something new (`… (branch)`) and leave protection alone →
+  the required `Memory recall gate` is produced by nobody on any PR carrying this
+  file. `mergeStateStatus: BLOCKED`, permanently, and `enforce_admins: true`
+  closes the override to the repo owner too. This PR sat in exactly that state at
+  14 green checks, and no amount of re-running fixed it (cf. evc-mesh#320).
+- Move protection to the new string *first* → every **other** open PR is instantly
+  BLOCKED, because they still produce the old name.
+
+Both orders need an admin edit and leave a window in which memory is gated by
+nothing. Inheriting the name is one line in the PR, costs no admin action, and
+has no window. Job **ids** may change freely (`recall-gate-branch` is untouched);
+`name:` may not.
+
+The steps below are what remains — capture the baseline — and are what turns a
+required check from *present* into *enforcing*. Skipping step 1 leaves the gate
+required but running on `no-baseline` → INCONCLUSIVE, which never blocks: real,
+but weaker than the name promises.
 
 1. **Baseline it, in the arm that will be judged.** Each arm has its own file and
    they are not interchangeable:
@@ -504,18 +581,23 @@ Do it in this order. Skipping step 1 wedges every PR.
    `"search_mode": "hybrid"` **and** the right `"arm"` before going further; a
    file dropped into the other arm's path is refused (`arm-mismatch`), which is
    an INCONCLUSIVE nobody can clear from a PR.
-2. **Confirm it can actually pass** — at least one green
-   `Memory recall gate (branch)` run on a real PR.
-3. **Then** move the context on branch protection. Do both halves in one call:
-   the old `Memory recall gate` context no longer reports on PRs, so leaving it
-   required blocks every PR forever (cf. evc-mesh#320).
+2. **Confirm it can actually pass** — at least one green `Memory recall gate` run
+   on a real PR, with a baseline present. A green on `no-baseline` proves the
+   plumbing, not the enforcement.
+3. **Nothing to do on branch protection.** `Memory recall gate` is already the
+   required context and the branch job already produces it; the arms swapped
+   underneath a name that never moved. Should the contexts ever need editing,
+   note that the API **replaces** rather than appends, so every context has to be
+   passed in one call:
    ```
    gh api -X PATCH repos/entire-vc/evc-mesh/branches/main/protection/required_status_checks \
-     -f 'contexts[]=Memory recall gate (branch)'      # replaces, does not append
+     -f 'contexts[]=Lint' -f 'contexts[]=Test' ... -f 'contexts[]=Memory recall gate'
    ```
-   The context name must match the **check-run name on a PR** exactly, and the
-   workflow must have **no `paths:` filter** on `pull_request` — the gate runs on
-   every PR and no-ops internally when no memory path changed.
+   Two standing invariants: the context must match the **check-run name on a PR**
+   verbatim, and the workflow must have **no `paths:` filter** on `pull_request` —
+   the gate runs on every PR and no-ops internally when no memory path changed
+   (a required context born inside a path filter never reports, which is the same
+   permanent BLOCKED by another route).
 
 ## Local run
 

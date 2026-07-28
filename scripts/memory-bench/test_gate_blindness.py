@@ -113,6 +113,109 @@ class TestMemoryPathCoverage(unittest.TestCase):
         self.assertIn("internal/handler/memory_handler.go", _memory_paths())
 
 
+REQUIRED_CONTEXT = "Memory recall gate"
+
+
+def _job_blocks() -> dict[str, str]:
+    """`{job_id: raw yaml of that job}` — enough to assert on without a yaml dep.
+
+    Deliberately text-level: what GitHub matches is text, and a structural parse
+    would happily normalise away the very thing under test (a job `name:` that
+    differs from the required context by one character still parses fine).
+    """
+    text = WORKFLOW.read_text(encoding="utf-8")
+    body = text.split("\njobs:\n", 1)[1]
+    starts = [(m.start(), m.group(1)) for m in re.finditer(r"^  ([a-zA-Z0-9_-]+):$", body, re.M)]
+    assert starts, "no jobs found in memory-bench.yml"
+    out = {}
+    for i, (pos, job_id) in enumerate(starts):
+        end = starts[i + 1][0] if i + 1 < len(starts) else len(body)
+        out[job_id] = body[pos:end]
+    return out
+
+
+class TestTheRequiredContextIsStillProduced(unittest.TestCase):
+    """Way 7's sibling: the gate can also go blind by never reporting at all.
+
+    `main`'s branch protection requires the literal context string
+    "Memory recall gate" with `enforce_admins: true`, and GitHub matches a
+    required context against the check-run NAME, not the job id. So the name is a
+    public interface with a hard failure mode on both sides:
+
+      * rename the job and leave protection alone -> the required context is
+        produced by nobody, every PR carrying the change is permanently BLOCKED,
+        and no override exists (observed live on #394 at 14 green checks);
+      * move protection to the new name first -> every OTHER open PR is instantly
+        BLOCKED, because they still produce the old one.
+
+    Neither is recoverable from inside a PR, which is why this is pinned here
+    rather than left to review. Changing the name is a legitimate decision — it
+    just has to be a deliberate one, taken together with a protection edit, and
+    this test is what makes it deliberate.
+    """
+
+    def test_some_job_produces_the_required_context_verbatim(self):
+        names = re.findall(r"^    name: (.+)$", "".join(_job_blocks().values()), re.M)
+        self.assertIn(
+            REQUIRED_CONTEXT, [n.strip() for n in names],
+            f"No job is named exactly {REQUIRED_CONTEXT!r}, so the required status "
+            f"check on main will never report and every PR touching this file is "
+            f"BLOCKED with no override (enforce_admins is true). Job names found: "
+            f"{names}. If the rename is intended, patch branch protection in the "
+            f"same rollout — see README 'Making the recall gate a required check'.",
+        )
+
+    def test_the_job_producing_it_runs_on_pull_request(self):
+        """A required context that is skipped on PRs is the same wedge, arrived at
+        by `if:` instead of by `name:`. The prod arm carries
+        `if: github.event_name != 'pull_request'` precisely because it is NOT the
+        required one; that guard must never end up on the job that is."""
+        owner = [
+            (job_id, block) for job_id, block in _job_blocks().items()
+            if re.search(rf"^    name: {re.escape(REQUIRED_CONTEXT)}\s*$", block, re.M)
+        ]
+        self.assertEqual(1, len(owner), f"expected exactly one job named {REQUIRED_CONTEXT!r}")
+        job_id, block = owner[0]
+        header = block.split("    steps:", 1)[0]
+        self.assertNotIn(
+            "github.event_name != 'pull_request'", header,
+            f"job {job_id!r} produces the required context but excludes itself from "
+            f"pull_request runs — it would never report, which blocks every PR.",
+        )
+
+    def test_the_prod_arms_are_serialised_against_each_other(self):
+        """Way 7: one live MESH_API_URL, no `concurrency:` anywhere, so runs
+        contended inside the server until one hit its timeout and was reported
+        `cancelled` — a required check with no verdict that reads like a flake.
+        `cancel-in-progress: false` is the load-bearing half: the default `true`
+        pre-empts a peer mid-run, losing the same verdict with less evidence."""
+        for job_id, block in _job_blocks().items():
+            header = block.split("    steps:", 1)[0]
+            if "secrets.MESH_API_URL" not in block:
+                continue
+            self.assertRegex(
+                header, r"concurrency:\s*\n\s*group: memory-bench-prod",
+                f"job {job_id!r} targets the shared production API but is not in the "
+                f"memory-bench-prod concurrency group — concurrent runs will slow "
+                f"each other down inside the server until one times out.",
+            )
+            self.assertIn(
+                "cancel-in-progress: false", header,
+                f"job {job_id!r} must serialise, not pre-empt: cancel-in-progress "
+                f"defaults to true, which aborts a peer mid-run.",
+            )
+
+    def test_the_required_arm_is_not_queued_behind_the_canary(self):
+        """It builds its own postgres + embedder, so it contends for nothing. A
+        required check waiting on an advisory one hands its latency to a job
+        nobody is blocked on."""
+        block = next(
+            b for b in _job_blocks().values()
+            if re.search(rf"^    name: {re.escape(REQUIRED_CONTEXT)}\s*$", b, re.M)
+        )
+        self.assertNotIn("memory-bench-prod", block.split("    steps:", 1)[0])
+
+
 class TestFlattenExc(unittest.TestCase):
     def test_taskgroup_wrapper_is_unwrapped_to_the_real_cause(self):
         inner = RuntimeError("Connection closed")
