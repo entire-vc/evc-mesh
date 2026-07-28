@@ -590,6 +590,15 @@ func main() {
 	api.Use(mw.DualAuth(authService, agentService))
 	api.Use(activityTracker.Middleware())
 	api.Use(mw.WorkspaceRLS(db, projectRepo))
+	// Cross-tenant guard. Applies to every route in this group that carries a
+	// :ws_id parameter, and is inert on the rest. Group-level on purpose: the
+	// per-route form was attached to 2 of 46 :ws_id routes, and the 44 that were
+	// missed leaked member emails, the team directory, analytics and the full
+	// workspace config export to any logged-in stranger — and let one rename
+	// another tenant's workspace. Placed here, a newly added :ws_id route is
+	// guarded by construction rather than by the author remembering.
+	// Must run after WorkspaceRLS, which resolves and stores the workspace role.
+	api.Use(mw.RequireWorkspaceMemberScoped(db))
 	// Rate-limit API endpoints by authenticated actor (user/agent ID).
 	// Uses the Redis-backed sliding window limiter for multi-instance deployments.
 	api.Use(mw.RateLimit(mw.RateLimitConfig{
@@ -614,7 +623,10 @@ func main() {
 	api.GET("/workspaces", workspaceHandler.List)
 	api.POST("/workspaces", workspaceHandler.Create)
 	api.GET("/workspaces/:ws_id", workspaceHandler.GetByID)
-	api.PATCH("/workspaces/:ws_id", workspaceHandler.Update)
+	// Update carries the workspace slug, and changing a slug rewrites every
+	// /w/<slug>/... URL the team has bookmarked or pasted into a doc. Same bar as
+	// DELETE and icon upload: owner/admin, not any member who happens to be in.
+	api.PATCH("/workspaces/:ws_id", workspaceHandler.Update, rbac(mw.PermManageMembers))
 	api.DELETE("/workspaces/:ws_id", workspaceHandler.Delete, rbac(mw.PermDeleteWorkspace))
 	api.GET("/workspaces/:ws_id/icon", workspaceHandler.GetIcon)
 	api.PUT("/workspaces/:ws_id/icon", workspaceHandler.UploadIcon, rbac(mw.PermManageMembers))
@@ -626,7 +638,14 @@ func main() {
 	api.POST("/workspaces/:ws_id/members", workspaceMemberHandler.Add, rbac(mw.PermManageMembers))
 	api.PATCH("/workspaces/:ws_id/members/:user_id", workspaceMemberHandler.UpdateRole, rbac(mw.PermManageMembers))
 	api.DELETE("/workspaces/:ws_id/members/:user_id", workspaceMemberHandler.Remove, rbac(mw.PermManageMembers))
-	api.GET("/workspaces/:ws_id/users/search", workspaceMemberHandler.SearchUsers)
+	// SearchUsers deliberately searches the whole instance, not the workspace —
+	// that is the point, you look people up in order to add ones who are not
+	// members yet. So it cannot be narrowed to workspace scope without removing
+	// add-member-by-search. What it can be is restricted to the people allowed to
+	// add members at all: before this, any authenticated user could page the
+	// entire instance's user directory, emails included, out of someone else's
+	// workspace. Invite-by-email (POST .../invites) stays the tenant-safe path.
+	api.GET("/workspaces/:ws_id/users/search", workspaceMemberHandler.SearchUsers, rbac(mw.PermManageMembers))
 
 	// Workspace invite routes (email-link flow).
 	api.POST("/workspaces/:ws_id/invites", inviteHandler.Create, rbac(mw.PermManageMembers))
