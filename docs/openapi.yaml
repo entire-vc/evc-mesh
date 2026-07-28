@@ -2666,6 +2666,15 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/EventBusMessage"
+        "403":
+          description: >-
+            Forbidden — the caller is not a member of the workspace this event
+            belongs to. Also returned when no event with this id exists, so the
+            answer does not confirm whether it does.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
 
   # ------------------------------------------------------------------
   # Activity Log
