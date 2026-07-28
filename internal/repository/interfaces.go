@@ -628,11 +628,17 @@ type MemoryRepository interface {
 	// Returns the number of rows deleted.
 	CleanExpired(ctx context.Context) (int64, error)
 	// ListNeedingEmbedding returns up to limit memories that need to be (re)embedded with
-	// the currently configured model: either they have no vector yet, or their vector was
-	// produced by a DIFFERENT model. The second case is what makes switching embedding
-	// provider/model a supported operation — vectors from another model live in another
-	// vector space, score 0 in cosineSimilarity (dimension guard), and would otherwise stay
-	// invisible to semantic recall forever because nothing re-embeds them.
+	// the currently configured model. A memory is excluded (does NOT need embedding) when
+	// EITHER of these holds for the given model: (a) memories.embedding is populated and
+	// memories.embedding_model matches, or (b) it already has a memory_chunks row whose
+	// embedding_model matches — chunk freshness is checked independently of the
+	// memories.embedding column so this stays correct even if a future write path stops
+	// populating memories.embedding (ADR-0002 read-path, subtask 6/8) without needing a
+	// matching change here. A memory with NEITHER is selected — no vector yet, or its
+	// vector/chunks came from a DIFFERENT model (switching embedding provider/model is a
+	// supported operation: vectors from another model live in another vector space, score 0
+	// in cosineSimilarity via the dimension guard, and would otherwise stay invisible to
+	// semantic recall forever because nothing re-embeds them).
 	ListNeedingEmbedding(ctx context.Context, workspaceID uuid.UUID, model string, limit int) ([]domain.Memory, error)
 	// ListNotYetChunked returns up to limit memories in workspaceID that have no memory_chunks
 	// rows (ADR-0002 backfill, #b052cdda). Deliberately independent of embedding_model: a memory

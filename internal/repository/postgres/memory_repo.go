@@ -1385,21 +1385,32 @@ func (r *MemoryRepo) ListCreatedSince(ctx context.Context, since time.Time, limi
 }
 
 // ListNeedingEmbedding returns up to limit memories that need to be (re)embedded with the
-// currently configured model — either they have no vector, or their vector came from a
-// DIFFERENT model. Vectors from another model live in a different vector space: they score
-// 0 in cosineSimilarity (dimension guard) and are therefore invisible to semantic recall.
-// Including them here is what lets an operator switch embedding provider/model and have the
-// corpus re-embed itself on the next batch run, instead of silently stranding it.
+// currently configured model. Excluded (does NOT need embedding) when EITHER holds for the
+// given model: memories.embedding is populated with a matching embedding_model, OR the
+// memory already has a memory_chunks row with a matching embedding_model. The chunk check is
+// independent of the embedding column on purpose (#84b0694d/#7cf0f3be, live regression):
+// an earlier revision relied on embedding_model alone as a watermark while leaving
+// memories.embedding NULL, and the embedding-column disjunct below matched it forever —
+// reindex re-embedded the same rows every run without ever converging. Checking chunk
+// freshness directly means this predicate stays correct regardless of whether the write path
+// also populates memories.embedding (today it does, as a stopgap — see embedChunked's doc).
+// Vectors/chunks from another model live in a different vector space, score 0 in
+// cosineSimilarity (dimension guard), and are therefore invisible to semantic recall — this
+// is what lets an operator switch embedding provider/model and have the corpus re-embed
+// itself on the next batch run, instead of silently stranding it.
 func (r *MemoryRepo) ListNeedingEmbedding(ctx context.Context, workspaceID uuid.UUID, model string, limit int) ([]domain.Memory, error) {
 	if limit <= 0 {
 		limit = 100
 	}
 	q := fmt.Sprintf(`
-		SELECT %s FROM memories
-		WHERE workspace_id = $1
-		  AND (embedding IS NULL OR embedding_model IS DISTINCT FROM $2)
-		  AND (expires_at IS NULL OR expires_at > now())
-		ORDER BY updated_at DESC
+		SELECT %s FROM memories m
+		WHERE m.workspace_id = $1
+		  AND (m.expires_at IS NULL OR m.expires_at > now())
+		  AND (m.embedding IS NULL OR m.embedding_model IS DISTINCT FROM $2)
+		  AND NOT EXISTS (
+		    SELECT 1 FROM memory_chunks c WHERE c.memory_id = m.id AND c.embedding_model = $2
+		  )
+		ORDER BY m.updated_at DESC
 		LIMIT $3`,
 		memoryColumns,
 	)

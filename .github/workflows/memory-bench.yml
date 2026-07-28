@@ -41,25 +41,30 @@ on:
         description: >-
           Which baseline `update_baseline` re-snaps. `end-to-end` writes
           baseline.json in the paid advisory arm. `retrieval` writes
-          baseline_retrieval.json in the free recall arm — the one behind the
+          baseline_retrieval.json in the prod canary. `retrieval-branch` writes
+          baseline_retrieval_branch.json in the branch arm — the one behind the
           REQUIRED check, so its capture is refused outright unless the run was
-          complete and served in `hybrid` mode. `both` re-snaps each in its own arm.
+          complete and served in `hybrid` mode. `both` re-snaps end-to-end and
+          retrieval, each in its own arm. The three retrieval files are NOT
+          interchangeable: each records its own `arm` and one used in the wrong
+          arm is refused as `arm-mismatch`.
         type: choice
         options:
           - end-to-end
           - retrieval
+          - retrieval-branch
           - both
         required: false
         default: end-to-end
       expect_commit:
         description: >-
-          Override the commit the gate requires prod to be serving before it will
-          score. Empty (the default) means "derive it": `github.sha` on a main-ref
-          run, and no pin at all on a PR — a PR's `github.sha` is a merge commit
-          that is never deployed, so pinning to it would wedge every PR at
-          INCONCLUSIVE for ever. Supply a value to pin a run on a branch, which is
-          also how the refusal itself is proved: dispatch with a commit prod is
-          not serving and the run must exit 2 naming `version-mismatch`.
+          Override the commit the PROD CANARY requires prod to be serving before
+          it will score. Empty (the default) means "derive it": `github.sha` on a
+          main-ref run, and no pin at all otherwise. Supply a value to pin a run
+          on a branch, which is also how the refusal itself is proved — dispatch
+          with a commit prod is not serving and the canary must exit 2 naming
+          `version-mismatch`. Has no effect on the required branch arm, which
+          builds and measures its own server and has no deployed version to race.
         required: false
         default: ''
       repeat:
@@ -93,45 +98,6 @@ on:
     # Nightly 04:00 UTC — the paid end-to-end eval lives here, not on PRs.
     - cron: '0 4 * * *'
 
-# Both arms of this workflow measure ONE shared live endpoint
-# (`secrets.MESH_API_URL`). The harness treated that endpoint as exclusive while
-# GitHub was free to start any number of runs against it, so the runs starved each
-# other: at 03:41 on 2026-07-28 five were in flight, the shared embedder saturated,
-# and `embedChunked` began failing with `context deadline exceeded` — 1821 of them
-# in 110 minutes. The per-minute correlation is exact, and it is concurrency and
-# not workload:
-#
-#   02:47-02:52   273 failures   (1 run)
-#   03:14-03:22   379 failures   (2 runs)
-#   03:23-03:37     4 failures   (1 run, alone)      <-- a lone run costs ~nothing
-#   03:38-03:41   110 failures   (4 runs, climbing)
-#
-# A partially-chunked document then reads downstream as a dense-arm miss that is
-# indistinguishable from a genuine ranking failure, so the contention does not
-# merely slow the gate down — it manufactures the exact signal the gate exists to
-# detect. Same group name shape as `backend-deploy-prod` in deploy-backend.yml,
-# for the same reason: the group names the RESOURCE, not the branch.
-#
-# `cancel-in-progress: false` is deliberate and is the whole point. The template
-# default (`true`) would abort a peer mid-run against the shared prod — the same
-# starvation by another route, and harder to diagnose because no timeout appears
-# in the log. It also orphans that run's bench fixtures in the shared workspace:
-# cleanup is the end of `run_ci.py`, not a step with `if: always()`, so a SIGTERM
-# mid-run leaves `bench-<run_id>-%` rows behind in prod.
-#
-# Known and accepted consequence: GitHub allows at most one RUNNING plus one
-# PENDING run per group, and a third arrival cancels the pending one. So a queued
-# required check can be cancelled — but a pending run has written nothing and
-# leaves nothing behind, so the cost is a re-run click, against the alternative of
-# a corrupted measurement plus orphaned fixtures. Queue depth is the signal to
-# watch: if it grows, the lever is fewer triggers, not a shorter timeout.
-#
-# `timeout-minutes` is unaffected by queueing — GitHub applies it once a job
-# starts, so serialised runs wait for free.
-concurrency:
-  group: memory-bench-prod
-  cancel-in-progress: false
-
 env:
   # Every file whose behaviour the gate is supposed to protect. A memory file
   # MISSING from this list is the worst failure mode available to a required
@@ -158,21 +124,513 @@ env:
 
 jobs:
   # ---------------------------------------------------------------------------
-  # The gateable arm: free, deterministic, no third-party API.
+  # THE REQUIRED ARM (ADR-0003): builds `cmd/api` from the PR head and measures
+  # THAT. Everything below it in this file measures the deployed server, which
+  # is a different question and never the PR's.
+  #
+  # The defect this replaces: `Memory recall gate` was required on every PR and
+  # took its target from `secrets.MESH_API_URL` — production. Nothing in this
+  # file built the branch (the two `go build` steps compile `mesh-mcp`, the
+  # CLIENT, from another repo). So the required check reported a confident green
+  # about a binary the PR did not contain. #388/#389/#391 each passed that way
+  # while carrying the regression that took every new memory out of the dense
+  # arm; the check could not have seen it, by construction.
   # ---------------------------------------------------------------------------
-  recall-gate:
+  # The NAME is load-bearing and deliberately unchanged from the job this
+  # replaces. `main`'s branch protection requires the literal context string
+  # "Memory recall gate" with `enforce_admins: true`; GitHub matches a required
+  # context against the check-run NAME, not the job id. So:
+  #   - naming this job anything else leaves the required context unproduced on
+  #     every PR that carries this file — mergeStateStatus BLOCKED forever, with
+  #     no override available to anyone (evc-mesh#320, and this PR itself sat
+  #     BLOCKED at 14 green checks until the name went back);
+  #   - and moving the requirement to a new string is not a free swap either: it
+  #     instantly BLOCKS every other open PR, because they still produce the old
+  #     name.
+  # Inheriting the name is the only edit that needs zero admin action and leaves
+  # no window in which memory is gated by nothing. The job id below may change
+  # freely; this line may not.
+  recall-gate-branch:
     name: Memory recall gate
     runs-on: ubuntu-latest
-    # A recall pass is ~17 min, so a `--repeat 3` capture needs the same headroom
-    # the advisory arm already takes.
+    # ~10 min of bench against a local build, plus build + model download on a
+    # cold cache. Generous rather than tight: a timeout here reads as a gate
+    # failure, and this is the arm that blocks merges. A capture runs the whole
+    # bench `repeat` times, so it gets the same headroom the prod arm gets.
+    timeout-minutes: ${{ (inputs.update_baseline && 120) || 45 }}
+    permissions:
+      contents: read
+      issues: write
+
+    services:
+      # Stock postgres:16 is enough — `migrations/20260315044_memories_vector_columns.sql`
+      # stores embeddings as TEXT and does the cosine in application code
+      # specifically so pgvector is not a database-level requirement.
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: mesh
+          POSTGRES_PASSWORD: mesh
+          POSTGRES_DB: mesh
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U mesh"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      nats:
+        image: nats:2-alpine
+        ports:
+          - 4222:4222
+
+    steps:
+      - name: Checkout evc-mesh
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python (gate self-checks)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # Runs on EVERY PR, before the scope check — these guard the gate against
+      # going blind, so they must not be skipped by the very no-op they exist to
+      # detect. Stdlib only: no secrets, no network, ~1s.
+      #
+      # A red here means "this PR would make the recall gate stop enforcing" —
+      # e.g. it adds a memory source file MEMORY_PATHS does not cover, or it
+      # edits the dense-arm control until BM25 can answer it. That IS a
+      # legitimate merge block, and unlike an infra failure the author can clear
+      # it. These moved here from the prod job because THIS is now the job that
+      # runs on every PR.
+      # `test_the_required_job_invokes_every_self_check` pins this list against
+      # the directory: a self-check that exists but is not named here guards
+      # nothing, which is how test_gate_dense_arm.py and
+      # test_check_captured_baseline.py sat unwired while the README credited
+      # them as the pin for their failure mode.
+      - name: Gate self-checks (blind-spot, mode, arm, control)
+        run: |
+          python scripts/memory-bench/test_gate_blindness.py
+          python scripts/memory-bench/test_gate_modes.py
+          python scripts/memory-bench/test_gate_arm.py
+          python scripts/memory-bench/test_gate_dense_arm.py
+          python scripts/memory-bench/test_check_captured_baseline.py
+          python scripts/memory-bench/test_gold_rank.py
+          python scripts/memory-bench/test_fixture_isolation.py
+          python scripts/memory-bench/test_serving_version.py
+          python scripts/memory-bench/dense_arm_control.py --selftest
+          python scripts/memory-bench/prod_window.py --selftest
+
+      # One source of truth for "this dispatch is a capture, not a verdict" —
+      # the re-snap must run and the judging gate must not, and two copies of the
+      # expression drift into both running or neither.
+      #
+      # `pull_request` is excluded explicitly. `inputs.*` is empty on that event
+      # so the expression is already false, but this arm — unlike the prod one —
+      # DOES run on PRs, so the exclusion has to be visible here rather than
+      # inferred from a property of a different trigger.
+      - name: Capture or judge?
+        id: mode
+        run: |
+          echo "capture=${{ (github.event_name != 'pull_request' && inputs.update_baseline && inputs.baseline_arm == 'retrieval-branch') && 'true' || 'false' }}" \
+            >> "$GITHUB_OUTPUT"
+
+      - name: Does this change touch memory?
+        id: scope
+        run: |
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Diff the PR's own base..head — never the merge ref (a guard that reads
+          # the merge ref deadlocks every open PR).
+          changed=$(git diff --name-only \
+            "${{ github.event.pull_request.base.sha }}" \
+            "${{ github.event.pull_request.head.sha }}")
+          echo "Changed files:"; echo "$changed"
+          relevant=false
+          while IFS= read -r p; do
+            [ -z "$p" ] && continue
+            if echo "$changed" | grep -qE "^${p}"; then relevant=true; fi
+          done <<< "$(printf '%s' "${MEMORY_PATHS}" | tr -d '\r')"
+          echo "relevant=$relevant" >> "$GITHUB_OUTPUT"
+          echo "memory-relevant: $relevant"
+
+      - name: No memory paths touched — nothing to gate
+        if: steps.scope.outputs.relevant != 'true'
+        run: |
+          echo "This PR changes no memory-path file; the recall gate is a no-op." \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Set up Go
+        if: steps.scope.outputs.relevant == 'true'
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # Keyed on the pinned model name, so a model bump busts the cache rather
+      # than silently serving the old weights against the new baseline.
+      - name: Cache the CI embedder model
+        if: steps.scope.outputs.relevant == 'true'
+        uses: actions/cache@v4
+        with:
+          path: scripts/memory-bench/.fastembed_cache
+          key: fastembed-bge-small-en-v1.5-v1
+
+      - name: Install Python dependencies
+        if: steps.scope.outputs.relevant == 'true'
+        # No `openai` — this arm must not acquire a paid dependency. fastembed is
+        # the local ONNX runtime for the embedder; see ci_embedder.py for why a
+        # hash stub would make this whole job blind.
+        run: pip install mcp httpx fastembed
+
+      - name: Start the local embedder
+        if: steps.scope.outputs.relevant == 'true'
+        run: |
+          cd scripts/memory-bench
+          nohup python ci_embedder.py --port 8099 --cache-dir .fastembed_cache \
+            > embedder.log 2>&1 &
+          echo $! > embedder.pid
+          # ci_embedder loads the model BEFORE binding the port, so /healthz
+          # answering is proof the weights are resident — not merely that a
+          # process started.
+          for i in $(seq 180); do
+            if curl -sf http://127.0.0.1:8099/healthz > /dev/null; then
+              echo "embedder ready after ${i}s"; curl -s http://127.0.0.1:8099/healthz; exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::embedder never became ready"; cat embedder.log; exit 1
+
+      - name: Run migrations
+        if: steps.scope.outputs.relevant == 'true'
+        env:
+          GOOSE_DRIVER: postgres
+          GOOSE_DBSTRING: "postgres://mesh:mesh@localhost:5432/mesh?sslmode=disable"
+        run: |
+          go install github.com/pressly/goose/v3/cmd/goose@latest
+          goose -dir migrations up
+
+      - name: Build + start the API from THIS branch
+        if: steps.scope.outputs.relevant == 'true'
+        env:
+          DB_HOST: localhost
+          DB_PORT: "5432"
+          DB_USER: mesh
+          DB_PASSWORD: mesh
+          DB_NAME: mesh
+          DB_SSL_MODE: disable
+          REDIS_HOST: localhost
+          REDIS_PORT: "6379"
+          NATS_URL: "nats://localhost:4222"
+          JWT_SECRET: "ci-recall-gate-secret-32chars-min!"
+          JWT_ISSUER: "mesh-ci"
+          # ~1900 `remember` calls per pass would otherwise hit APIRPM (600) and
+          # the resulting 429s would score as recall misses.
+          MESH_RATE_LIMIT_ENABLED: "false"
+          MESH_ALLOW_REGISTRATION: "true"
+          # The OpenAI wire shape, served locally by ci_embedder.py. 384 dims to
+          # match prod (migrations/20260727082_memory_chunks.sql).
+          EMBEDDING_PROVIDER: openai
+          EMBEDDING_ENDPOINT: "http://127.0.0.1:8099"
+          EMBEDDING_MODEL: "BAAI/bge-small-en-v1.5"
+          EMBEDDING_DIMENSIONS: "384"
+          EMBEDDING_API_KEY: "not-used-by-the-local-embedder"
+          APP_ENV: test
+        run: |
+          go build -o /tmp/mesh-api ./cmd/api
+          nohup /tmp/mesh-api > api.log 2>&1 &
+          echo $! > api.pid
+          echo "MESH_API_URL=http://127.0.0.1:8005" >> "$GITHUB_ENV"
+
+      # Mints its own workspace + agent key against the ephemeral database.
+      # `secrets.MESH_BENCH_KEY` is deliberately NOT used here: it is prod's, and
+      # using it would point this arm back at the thing it exists to stop
+      # measuring. It also blocks until /health really answers, instead of the
+      # `curl || sleep` loop that prints "ready" unconditionally.
+      - name: Bootstrap a bench workspace + agent key
+        if: steps.scope.outputs.relevant == 'true'
+        run: |
+          # No stdout redirect: the script appends to $GITHUB_ENV itself, so the
+          # minted key is never a printed value that a later refactor could
+          # accidentally route into the job log.
+          python scripts/memory-bench/ci_bootstrap.py \
+            --api-url http://127.0.0.1:8005 \
+            || { echo "::error::bootstrap failed"; tail -50 api.log; exit 1; }
+
+      - name: Checkout evc-mesh-mcp
+        if: steps.scope.outputs.relevant == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: entire-vc/evc-mesh-mcp
+          token: ${{ secrets.GITHUB_TOKEN }}
+          path: evc-mesh-mcp
+
+      - name: Cross-compile mesh-mcp (linux/amd64)
+        if: steps.scope.outputs.relevant == 'true'
+        run: |
+          cd evc-mesh-mcp
+          GOOS=linux GOARCH=amd64 go build -o ../mesh-mcp-bin .
+          chmod +x ../mesh-mcp-bin
+
+      # ---------------------------------------------------------------------
+      # The dense-arm control, run BEFORE the scored bench so a severed vector
+      # arm is named as such rather than showing up as an unexplained score.
+      #
+      # The scored dataset cannot do this job: every question in it is answerable
+      # from the words it uses, so BM25 carries them alone. Run 30316983402
+      # scored `overall 0.9583` — its best ever — with the dense arm returning
+      # zero rows for the entire haystack. This question is keyword-dark by
+      # construction; see dense_arm_control.py for the measurement.
+      # ---------------------------------------------------------------------
+      - name: Dense-arm control — the vector arm must be contributing
+        id: control_alive
+        if: steps.scope.outputs.relevant == 'true'
+        env:
+          MESH_MCP_BIN: ${{ github.workspace }}/mesh-mcp-bin
+          RECALL_GRAPH_ENABLED: 'true'
+          BENCH_RUN_NONCE: ${{ github.run_id }}-${{ github.run_attempt }}-b-ctl
+        run: |
+          cd scripts/memory-bench
+          set +e
+          python dense_arm_control.py --expect alive 2>&1 | tee control_alive.log
+          rc=${PIPESTATUS[0]}
+          set -e
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          # Same contract as the scored gate: 1 blocks, 2 never does.
+          if [ "$rc" = "1" ]; then exit 1; fi
+          exit 0
+
+      # `!cancelled()` and not the default: a failed dense-arm control must not
+      # skip the two steps that explain it. Skipping them is how a red arrives
+      # with its own evidence missing — the score that would say how bad, and the
+      # power check that says whether the control can be trusted at all. Both are
+      # exactly the artefacts a reviewer needs on a red, and the default `if`
+      # withholds them precisely then. The job still fails: these steps report
+      # their own conclusions, they do not launder the control's.
+      # The capture path for THIS arm's baseline. Without it the required check
+      # is permanently `no-baseline` ⇒ INCONCLUSIVE — required, and blocking
+      # nothing but the dense-arm control. The README used to say "dispatch the
+      # workflow on main; the branch job writes it": the job does run on
+      # dispatch, but nothing in it ever passed `--update-baseline`, so the
+      # documented procedure was inert and would only have been discovered by
+      # someone following it after the merge.
+      #
+      # `--repeat` matters more here than anywhere: 4 questions per category
+      # means one flipped answer moves a category by 0.25, which is the whole
+      # tolerance. A one-pass floor is a coin toss frozen into the gate.
+      - name: Re-snap the branch recall baseline
+        id: resnap
+        if: steps.scope.outputs.relevant == 'true' && steps.mode.outputs.capture == 'true'
+        env:
+          MESH_MCP_BIN: ${{ github.workspace }}/mesh-mcp-bin
+          RECALL_GRAPH_ENABLED: 'true'
+          LME_TOP_K: '10'
+          BENCH_RUN_NONCE: ${{ github.run_id }}-${{ github.run_attempt }}-c
+        run: |
+          cd scripts/memory-bench
+          python run_ci.py --retrieval-only --arm branch --update-baseline \
+            --repeat "${{ inputs.repeat || '3' }}" 2>&1 | tee resnap.log
+          echo "### Branch recall baseline re-snapped" >> "$GITHUB_STEP_SUMMARY"
+          echo '`baseline_retrieval_branch.json` is uploaded as an artifact — commit it by hand.' \
+            >> "$GITHUB_STEP_SUMMARY"
+
+      # Captured HERE and committed by hand, never generated on a laptop: a
+      # baseline snapped against a different embedder or a different DB is not
+      # comparable to the runs that will be judged against it, and that is the
+      # same not-comparable this workflow already exits 2 over (`arm-mismatch`).
+      - name: Upload the re-snapped branch baseline
+        if: ${{ !cancelled() && steps.resnap.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: baseline-retrieval-branch
+          path: |
+            scripts/memory-bench/baseline_retrieval_branch.json
+            scripts/memory-bench/resnap.log
+          if-no-files-found: error
+
+      - name: Run the recall gate against the branch build
+        id: gate
+        if: ${{ !cancelled() && steps.scope.outputs.relevant == 'true' && steps.mode.outputs.capture != 'true' }}
+        env:
+          MESH_MCP_BIN: ${{ github.workspace }}/mesh-mcp-bin
+          RECALL_GRAPH_ENABLED: 'true'
+          LME_TOP_K: '10'
+          BENCH_RUN_NONCE: ${{ github.run_id }}-${{ github.run_attempt }}-b
+        run: |
+          cd scripts/memory-bench
+          set +e
+          python run_ci.py --retrieval-only --arm branch \
+            --tolerance "${{ inputs.tolerance || '0.25' }}" 2>&1 | tee gate.log
+          rc=${PIPESTATUS[0]}
+          set -e
+
+          reason="$(grep -m1 '^GATE_REASON:' gate.log | sed 's/^GATE_REASON: *//' || true)"
+          if [ "$rc" = "0" ] && grep -qi 'no baseline_retrieval' gate.log; then
+            rc=2
+            reason="no-baseline — the gate compared against nothing"
+          fi
+          [ -z "$reason" ] && reason="unspecified"
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          echo "reason=$reason" >> "$GITHUB_OUTPUT"
+          echo "reason_kind=${reason%% *}" >> "$GITHUB_OUTPUT"
+
+          {
+            echo "## Memory recall gate (branch build)"
+            echo
+            echo "Target: \`cmd/api\` built from \`${{ github.sha }}\`, ephemeral postgres,"
+            echo "local \`BAAI/bge-small-en-v1.5\`. Not comparable with the prod canary's numbers."
+            echo
+            case "$rc" in
+              0) echo "✅ **PASS** — recall measured on THIS branch, within tolerance of the branch baseline." ;;
+              1) echo "❌ **REGRESSION** — recall dropped below the branch baseline in the same retrieval mode."
+                 echo "This PR makes memory measurably worse. This is the only condition that blocks the merge." ;;
+              2) echo "### ⚠️ INCONCLUSIVE — nothing was measured, so nothing was enforced"
+                 echo
+                 echo "**Reason:** \`$reason\`"
+                 echo
+                 echo "\`arm-mismatch\` means the baseline on disk was captured against a"
+                 echo "different target than this run — re-snap with \`--arm branch\`, do not"
+                 echo "hand-edit. A red nobody can clear gets bypassed, so this does not fail"
+                 echo "the check; the alert below is what stops it being silent." ;;
+              *) echo "❌ Gate exited $rc." ;;
+            esac
+            echo
+            echo '```'
+            tail -30 gate.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$rc" = "1" ]; then exit 1; fi
+          if [ "$rc" != "0" ] && [ "$rc" != "2" ]; then exit "$rc"; fi
+          exit 0
+
+      # ---------------------------------------------------------------------
+      # POSITIVE CONTROL ON THE CONTROL — the step that has been missing every
+      # previous time this harness went blind.
+      #
+      # "Gold was retrieved" proves the dense arm works only if the same
+      # assertion FAILS when the dense arm is gone. So: kill the embedder, leave
+      # the binary and the corpus exactly as they are, and require the control to
+      # miss. If it still finds gold, BM25 could reach it all along and every
+      # green the control ever produced was uninformative.
+      #
+      # Runs LAST because it destroys the dense arm for the rest of the job.
+      # ---------------------------------------------------------------------
+      - name: Power check — with the dense arm off, the control must MISS
+        id: control_dead
+        if: ${{ !cancelled() && steps.scope.outputs.relevant == 'true' }}
+        env:
+          MESH_MCP_BIN: ${{ github.workspace }}/mesh-mcp-bin
+          RECALL_GRAPH_ENABLED: 'true'
+          BENCH_RUN_NONCE: ${{ github.run_id }}-${{ github.run_attempt }}-b-pwr
+        run: |
+          kill "$(cat scripts/memory-bench/embedder.pid)" 2>/dev/null || true
+          # Recall fails OPEN on an embed error (memory_service.go: log, count,
+          # return) — so this yields bm25-only rather than a 500, which is
+          # exactly the degraded shape being simulated.
+          for i in $(seq 20); do
+            curl -sf http://127.0.0.1:8099/healthz > /dev/null || break
+            sleep 1
+          done
+          cd scripts/memory-bench
+          set +e
+          python dense_arm_control.py --expect dead 2>&1 | tee control_dead.log
+          rc=${PIPESTATUS[0]}
+          set -e
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Dense-arm control — power check"
+            echo
+            case "$rc" in
+              0) echo "✅ The control goes red when the dense arm is removed, so its green means something." ;;
+              1) echo "❌ **The control has no power** — gold was still found with the dense arm off."
+                 echo "Every green it has produced was uninformative. See \`control_dead.log\`." ;;
+              *) echo "⚠️ Power check inconclusive (\`$rc\`) — the dense arm could not be confirmed off." ;;
+            esac
+            echo
+            echo '```'
+            tail -20 control_dead.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$rc" = "1" ]; then exit 1; fi
+          exit 0
+
+      - name: Server logs (always — a boot failure is invisible otherwise)
+        if: always() && steps.scope.outputs.relevant == 'true'
+        run: |
+          echo "::group::mesh-api"; tail -200 api.log 2>/dev/null || true; echo "::endgroup::"
+          echo "::group::embedder"; tail -50 scripts/memory-bench/embedder.log 2>/dev/null || true; echo "::endgroup::"
+
+      - name: Upload branch-arm results
+        if: always() && steps.scope.outputs.relevant == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: recall-gate-branch-results
+          path: |
+            scripts/memory-bench/gate.log
+            scripts/memory-bench/control_alive.log
+            scripts/memory-bench/control_dead.log
+            scripts/memory-bench/embedder.log
+            scripts/memory-bench/results/
+            api.log
+          retention-days: 30
+
+  # ---------------------------------------------------------------------------
+  # The prod CANARY (ADR-0003). Same harness, different question: "is what we
+  # deployed still good?" It is no longer a PR gate — it never could answer the
+  # PR's question, and presenting its green as if it did is the defect that
+  # opened #2a079432. Runs on push to main (post-deploy), nightly, and dispatch.
+  # ---------------------------------------------------------------------------
+  recall-gate:
+    name: Memory recall canary (prod)
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    # There is exactly ONE `secrets.MESH_API_URL`, and every job below this line
+    # ingests a haystack into it and searches it. Concurrent runs therefore do
+    # not merely queue — they slow each other down inside the shared server, and
+    # a run that would take 17 min alone takes 30+ with company. On 2026-07-28
+    # four runs overlapped and the slowest hit `timeout-minutes: 30` at 14/15
+    # checks green, which surfaces as `cancelled`, NOT `failure` — so the arm
+    # produced no verdict at all while looking like an infra hiccup.
     #
+    # `cancel-in-progress: false` is the point of the block, not boilerplate.
+    # The template default `true` would abort a peer MID-RUN to make room, which
+    # is the same lost verdict by a different route and without even a timeout in
+    # the log to diagnose it from. Serialise; never pre-empt.
+    #
+    # Accepted cost, stated so it is not rediscovered as a bug: a group holds one
+    # running + one pending job, so a third arrival supersedes the pending one.
+    # For a post-deploy canary that is correct — the newer commit is the one
+    # worth measuring — and it is safe only because this arm is NOT required. The
+    # required arm (above) needs no group at all: its postgres and embedder live
+    # inside its own job, so it has nothing to contend for.
+    concurrency:
+      group: memory-bench-prod
+      cancel-in-progress: false
+    # A recall pass is ~17 min, so a `--repeat 3` capture needs the same headroom
+    # the advisory arm already takes. Unchanged (30) for every PR and nightly.
     # 30 -> 50 because the version pin below now spends IN-JOB time: up to
     # BENCH_VERSION_WAIT_SECONDS (15 min) waiting for a deploy to land, on top of
     # a 17-25 min measurement. Leaving the budget at 30 would have made the guard
-    # die on precisely the runs it exists for — a race it waits out would end as a
+    # die on precisely the runs it exists for — and it would have died as a
     # `cancelled` at the ceiling, which reads as a flake rather than as the deploy
-    # collision it is. The wait is a CEILING, not a cost: a matching first poll
-    # returns in about a second, so a quiet run is no slower than before.
+    # collision it is. (Measured 2026-07-28: run 30330437164 was cancelled at
+    # 32m51s while ALONE in the endpoint, so 30 is now too tight even without the
+    # wait.) The wait is a CEILING, not a cost: a matching first poll returns in
+    # about a second, so a quiet run is no slower than before.
     timeout-minutes: ${{ (inputs.update_baseline && 120) || 50 }}
     permissions:
       contents: read
@@ -205,9 +663,14 @@ jobs:
         run: |
           python scripts/memory-bench/test_gate_blindness.py
           python scripts/memory-bench/test_gate_modes.py
+          python scripts/memory-bench/test_gate_arm.py
+          python scripts/memory-bench/test_gate_dense_arm.py
+          python scripts/memory-bench/test_check_captured_baseline.py
           python scripts/memory-bench/test_gold_rank.py
           python scripts/memory-bench/test_fixture_isolation.py
           python scripts/memory-bench/test_serving_version.py
+          python scripts/memory-bench/dense_arm_control.py --selftest
+          python scripts/memory-bench/prod_window.py --selftest
 
       # One source of truth for "this dispatch is a capture, not a verdict". Two
       # steps have to agree on it — the capture runs, the gate must not — and two
@@ -247,16 +710,19 @@ jobs:
             | tee -a "$GITHUB_STEP_SUMMARY"
 
       # ---------------------------------------------------------------------
-      # Which binary are we about to measure?
+      # Which binary is this canary about to measure?
       #
-      # This workflow triggers on `push: branches:[main]`. So does
-      # deploy-backend.yml. Nothing sequences them, so every push-triggered run
-      # used to spend its first ~6 minutes measuring the PREVIOUS binary and then
-      # have the binary swap underneath it. Every run on the night of 2026-07-28
-      # crossed a deploy, including one dispatched at 03:23:43 *specifically* to be
-      # a clean post-deploy run: prod went f161732 -> de52f76 at 03:43:10Z, inside
-      # it. The harness reported a score for that run, because it had no way to say
-      # it could not attribute one.
+      # This job triggers on `push: branches:[main]`. So does deploy-backend.yml.
+      # Nothing sequences them, so a push-triggered canary used to spend its first
+      # ~6 minutes measuring the PREVIOUS binary and then have the binary swap
+      # underneath it. Every run on the night of 2026-07-28 crossed a deploy,
+      # including one dispatched at 03:23:43Z *specifically* to be a clean
+      # post-deploy run: prod went f161732 -> de52f76 at 03:43:10Z, inside it. The
+      # harness reported a score anyway, because it had no way to say it could not
+      # attribute one.
+      #
+      # Only this arm needs it. The required branch arm above builds and starts
+      # its own server, so there is no deployed version for it to race.
       #
       # Runs BEFORE the Go build so a run that cannot be attributed costs the wait
       # and nothing else.
@@ -280,10 +746,7 @@ jobs:
           set -euo pipefail
           # Pin only where `github.sha` names a commit prod is expected to serve.
           # push to main / schedule / dispatch on main: github.sha IS main's tip,
-          # which deploy-backend.yml ships. A pull_request's github.sha is the
-          # merge commit — never deployed, so a pin there would wedge every PR at
-          # INCONCLUSIVE for ever. Those runs RECORD the serving commit instead and
-          # are judged only on whether it changed underneath them.
+          # which deploy-backend.yml ships. This job never runs on pull_request.
           expect="${EXPECT_COMMIT_INPUT:-}"
           if [ -z "$expect" ] && [ "${{ github.ref }}" = "refs/heads/main" ]; then
             expect="${{ github.sha }}"
@@ -312,18 +775,17 @@ jobs:
 
           if [ "$rc" != "0" ]; then
             {
-              echo "## Memory recall gate — NOT RUN"
+              echo "## Memory recall canary — NOT RUN"
               echo
               echo "### ⚠️ INCONCLUSIVE — could not confirm which binary would be measured"
               echo
-              echo "> The gate refused to score rather than measure whichever build happened"
+              echo "> The canary refused to score rather than measure whichever build happened"
               echo "> to be up. **Nothing was measured, so nothing was enforced.**"
               echo
               echo "**Reason:** \`${reason:-unspecified}\`"
               echo
-              echo "This is infrastructure, not your PR: a backend deploy was in flight, or"
-              echo "prod is serving code that is not on the line under test. Re-run once the"
-              echo "deploy has landed."
+              echo "This is infrastructure: a backend deploy was in flight, or prod is serving"
+              echo "code that is not on the line under test. Re-run once the deploy has landed."
               echo
               echo '```'
               tail -30 version.log
@@ -331,8 +793,8 @@ jobs:
             } >> "$GITHUB_STEP_SUMMARY"
           fi
           # Never exit non-zero here. `cannot measure => inconclusive`, and
-          # INCONCLUSIVE must not fail a required check (cf. #342) — the steps
-          # below are skipped and the alert step pages instead.
+          # INCONCLUSIVE must not fail a check (cf. #342) — the steps below are
+          # skipped and the alert step pages instead.
           exit 0
 
       - name: Checkout evc-mesh-mcp
@@ -410,7 +872,7 @@ jobs:
           #
           # Derived from the run id rather than random so an orphaned row names
           # the run that abandoned it.
-          BENCH_RUN_NONCE: ${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}
+          BENCH_RUN_NONCE: ${{ github.run_id }}-${{ github.run_attempt }}-p-snap
         run: |
           cd scripts/memory-bench
           set +e
@@ -487,7 +949,7 @@ jobs:
           #
           # Derived from the run id rather than random so an orphaned row names
           # the run that abandoned it.
-          BENCH_RUN_NONCE: ${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}
+          BENCH_RUN_NONCE: ${{ github.run_id }}-${{ github.run_attempt }}-p
           # The commit the version pin confirmed prod was serving before the
           # measurement began. Empty when no pin applied and the endpoint could
           # not be read, in which case the stability check below is skipped.
@@ -520,9 +982,8 @@ jobs:
           #
           # This OVERRIDES rc=1 as well as rc=0, on purpose. A score straddling two
           # binaries is a measurement of neither, so a REGRESSION verdict from one
-          # is no more attributable than a PASS — and blocking a merge on a red
-          # nobody can reproduce is how a gate loses its authority. INCONCLUSIVE
-          # pages instead.
+          # is no more attributable than a PASS — and a red nobody can reproduce is
+          # how a gate loses its authority. INCONCLUSIVE pages instead.
           if [ -n "${SERVED_AT_START:-}" ]; then
             set +e
             python3 check_serving_version.py \
@@ -536,7 +997,6 @@ jobs:
               [ -z "$reason" ] && reason="version-changed-mid-run — prod was redeployed during the measurement"
             fi
           fi
-
           [ -z "$reason" ] && reason="unspecified"
 
           echo "rc=$rc" >> "$GITHUB_OUTPUT"
@@ -578,15 +1038,6 @@ jobs:
                  echo "**Reason:** \`$reason\`"
                  echo
                  case "${reason%% *}" in
-                   version-changed-mid-run)
-                     echo "A backend deploy landed **during** the measurement, so the score spans"
-                     echo "two binaries and describes neither. The pin at the start of this job"
-                     echo "confirmed which build the run began against; this is the other half —"
-                     echo "the build changed underneath it anyway."
-                     echo
-                     echo "**Fix:** re-run once the deploy has settled. Nothing to change in the PR."
-                     echo "If this recurs, the deploy and the gate are being triggered by the same"
-                     echo "pushes and the wait budget is too short for the deploy queue." ;;
                    persistent-errors)
                      echo "One or more questions failed with an error that is **not transient**:"
                      echo "either the message is not an infrastructure blip, or the question spent"
@@ -661,18 +1112,17 @@ jobs:
       # safety net was blind when nothing was wrong. Left alone, the acceptance
       # criterion that asks for this proof would charge a false page every time
       # anyone satisfied it, and the readers of that issue would learn to discount
-      # it — which is the same alert-fatigue failure the dedup key above exists to
-      # avoid.
+      # it — the same alert-fatigue failure the dedup key below exists to avoid.
       #
-      # The suppression is deliberately narrow AND fails toward alerting. Only a
+      # The suppression is narrow AND fails toward alerting. Only a
       # `workflow_dispatch` that explicitly NAMED a commit is treated as a drill:
-      # `expect_commit` is unsettable on push/schedule/pull_request, so those runs
-      # match the first disjunct and alert unconditionally, whatever an absent
-      # input coerces to. (Writing it as a bare `inputs.expect_commit == ''` would
-      # have put the whole alert at the mercy of that coercion — a guard that
-      # silences the alarm on every automatic run is strictly worse than the false
-      # page it was added to prevent.) A drill is also never silent: the operator
-      # dispatched it, `rc=2` and the reason are in the step summary and the log.
+      # `expect_commit` is unsettable on push/schedule, so those runs match the
+      # first disjunct and alert unconditionally, whatever an absent input coerces
+      # to. (A bare `inputs.expect_commit == ''` would put the whole alert at the
+      # mercy of that coercion — a guard that silences the alarm on every
+      # automatic run is strictly worse than the false page it removes.) A drill
+      # is never silent either: the operator dispatched it, and `rc=2` plus the
+      # reason are in the step summary and the log.
       - name: Alert — recall gate is blind (INCONCLUSIVE)
         if: >-
           steps.scope.outputs.relevant == 'true'
@@ -693,7 +1143,7 @@ jobs:
           # to discount it.
           case "$REASON_KIND" in
             version-mismatch|version-changed-mid-run|version-unreadable)
-              lede="The memory recall gate could not confirm WHICH BUILD it was measuring, so it refused to produce a score rather than attribute one to the wrong binary. Nothing was measured and nothing was enforced. This clears itself once the deploy in flight has landed; if it does not, the gate and the backend deploy are racing on the same pushes." ;;
+              lede="The memory recall canary could not confirm WHICH BUILD it was measuring, so it refused to produce a score rather than attribute one to the wrong binary. Nothing was measured and nothing was enforced. This clears itself once the deploy in flight has landed; if it does not, the canary and the backend deploy are racing on the same pushes." ;;
             category-unmeasured|baseline-sample-mismatch)
               lede="The memory recall gate could not compare **some** categories. Every comparable category was still measured and enforced — a regression in one of those still blocks a merge. What is unguarded is limited to the categories in the reason below, and **a regression in those can merge unnoticed** until this clears." ;;
             *)
@@ -761,17 +1211,23 @@ jobs:
   memory-bench:
     name: LongMemEval-S end-to-end (advisory)
     runs-on: ubuntu-latest
-    # DELIBERATELY NOT version-pinned, unlike recall-gate above. This arm measures
+    # Same single prod server as the canary, so the same group: two arms racing
+    # each other through one API is exactly the contention the block exists to
+    # remove, and putting them in separate groups would serialise each arm
+    # against itself while leaving them free to strangle each other.
+    concurrency:
+      group: memory-bench-prod
+      cancel-in-progress: false
+    # DELIBERATELY NOT version-pinned, unlike the canary above. This arm measures
     # the same live prod and can straddle a deploy in exactly the same way, so the
     # gap is real — it is scoped out rather than overlooked. It is advisory (never
-    # a merge gate) and LLM-judged, so its numbers are already read as indicative;
-    # the pin was spent on the arm behind the required check. Stated here so the
-    # next reader does not infer from the concurrency block above that this job is
-    # covered. If this arm's baseline ever starts gating anything, it needs the
-    # pin first.
+    # a merge gate) and judge-based, so its numbers are already read as
+    # indicative; the pin was spent on the arm whose job is attribution. Stated
+    # here so the next reader does not infer from the shared concurrency group
+    # that this job is covered. If this arm's baseline ever starts gating
+    # anything, it needs the pin first.
     #
-    # One pass is ~19 min, so a --repeat 3 baseline capture needs room. Unchanged
-    # at 30 because no version wait runs here.
+    # One pass is ~19 min, so a --repeat 3 baseline capture needs room.
     timeout-minutes: ${{ (inputs.update_baseline && 120) || 30 }}
     permissions:
       contents: read
@@ -872,7 +1328,7 @@ jobs:
           #
           # Derived from the run id rather than random so an orphaned row names
           # the run that abandoned it.
-          BENCH_RUN_NONCE: ${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}
+          BENCH_RUN_NONCE: ${{ github.run_id }}-${{ github.run_attempt }}-e-snap
         run: |
           cd scripts/memory-bench
           set +e
@@ -945,7 +1401,7 @@ jobs:
           #
           # Derived from the run id rather than random so an orphaned row names
           # the run that abandoned it.
-          BENCH_RUN_NONCE: ${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}
+          BENCH_RUN_NONCE: ${{ github.run_id }}-${{ github.run_attempt }}-e
         run: |
           cd scripts/memory-bench
           set +e
