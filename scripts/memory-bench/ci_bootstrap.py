@@ -165,26 +165,37 @@ def main() -> int:
             f"{list(agent)}. Nothing can re-derive it — the stored form is a hash."
         )
 
-    # CodeQL alert #17 (`py/clear-text-storage-sensitive-data`) lands on the
-    # write below, and the honest answer is "suppressed, with reasons", not
-    # "fixed" — the previous attempt at fixing it (moving the key off stdout,
-    # alert #16) only walked the same taint from one sink to another. The rule
-    # tracks the SECRET, so relocating the destination renames the alert instead
-    # of closing it; the only thing that would actually clear it is not emitting
-    # the key at all, which is not available — the raw value exists for exactly
-    # one response and later steps need it.
+    # `py/clear-text-storage-sensitive-data` lands on the write below, and the
+    # honest answer is "dismissed, with reasons", not "fixed". Three attempts
+    # are on record and the first two both LOOKED like fixes:
     #
-    # Why suppression is defensible HERE specifically, which is the part that
+    #   #16  key printed to stdout            -> moved it to `--env-file`
+    #   #17  ...so the taint reached the file -> same rule, new sink, new number
+    #   #18  trailing `# codeql[...]` comment -> STILL OPEN at this exact line
+    #
+    # Two separate lessons, both measured on this PR rather than assumed:
+    #
+    # 1. The rule tracks the SECRET, not the destination. Relocating the sink
+    #    renames the alert instead of closing it. Nothing clears it honestly
+    #    except not emitting the key at all — unavailable here, the raw value
+    #    exists for exactly one response and later steps need it.
+    # 2. Inline suppression comments are NOT honoured by GitHub code scanning.
+    #    `# codeql[rule-id]` is a CodeQL-CLI feature; the Actions integration
+    #    ignores it. Proof: alert #18 was raised at cbf93f7b:187 — the very line
+    #    that carried the comment — by the analysis of the commit that added it.
+    #    The supported mechanism is an API/UI dismissal with a justification,
+    #    which is what this alert now carries. A comment here suppresses nothing
+    #    and only reads as if the alert were handled, so there isn't one.
+    #
+    # Why a dismissal is defensible HERE specifically, which is the part that
     # does not generalise: `--api-url` is `http://127.0.0.1:8005`, a server this
     # job built and booted itself over an ephemeral `postgres:16` service
     # container. The key authenticates a bench agent in a throwaway workspace on
     # a database that ceases to exist when the job ends. It grants nothing
     # anywhere else, and `$GITHUB_ENV` is runner-local. Were this pointed at
     # prod, the alert would be correct and this comment would be an excuse.
-    # NB the suppression must TRAIL the flagged line, not precede it — a comment
-    # on the line above is not attached to the alert and does nothing at all.
     with Path(args.env_file).open("a", encoding="utf-8") as fh:
-        fh.write(f"MESH_AGENT_KEY={key}\n")  # codeql[py/clear-text-storage-sensitive-data]
+        fh.write(f"MESH_AGENT_KEY={key}\n")
         fh.write(f"MESH_WORKSPACE_ID={ws_id}\n")
 
     # Everything that reaches a log is non-secret by construction: two ids and a

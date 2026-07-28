@@ -49,9 +49,11 @@ pins one way that has actually occurred:
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import re
 import sys
+import tokenize
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -214,6 +216,45 @@ class TestTheRequiredContextIsStillProduced(unittest.TestCase):
             if re.search(rf"^    name: {re.escape(REQUIRED_CONTEXT)}\s*$", b, re.M)
         )
         self.assertNotIn("memory-bench-prod", block.split("    steps:", 1)[0])
+
+
+class TestNoDeadCodeqlSuppression(unittest.TestCase):
+    """`# codeql[rule-id]` is a CodeQL-CLI feature the Actions integration
+    ignores, so writing one silences nothing while reading exactly like a
+    handled alert. Measured, not assumed: alert #18 was raised at
+    cbf93f7b:187 — the very line carrying the comment — by the analysis of the
+    commit that added it. The supported mechanism is an API/UI dismissal.
+
+    This pins the honest state. Without it the next session reaches for the
+    comment again (this one did, on top of two prior sink-relocations), and a
+    suppression that does not suppress is worse than no suppression at all."""
+
+    def test_no_source_file_relies_on_an_inline_suppression(self):
+        # BOTH placements are flagged. The two recorded attempts differ only in
+        # where the comment sat — 371dfe7 put it on the preceding line, cbf93f7b
+        # moved it to trailing — and neither suppressed anything, so pinning only
+        # the trailing form would let the first one back in unnoticed.
+        #
+        # tokenize + an ANCHORED match, not a line regex: prose ABOUT the syntax
+        # (this docstring, and the block in ci_bootstrap.py explaining why there
+        # is no suppression) has to survive. A real directive begins the comment;
+        # prose reaches the token mid-sentence, so `re.match` separates them and
+        # STRING tokens never reach this loop at all.
+        offenders = []
+        for f in sorted((REPO_ROOT / "scripts/memory-bench").rglob("*.py")):
+            with io.StringIO(f.read_text(encoding="utf-8")) as buf:
+                for tok in tokenize.generate_tokens(buf.readline):
+                    if tok.type is tokenize.COMMENT and re.match(
+                        r"#\s*(codeql|lgtm)\[", tok.string
+                    ):
+                        offenders.append(f"{f.relative_to(REPO_ROOT)}:{tok.start[0]}")
+        self.assertEqual(
+            [], offenders,
+            "inline CodeQL/LGTM suppression comments are ignored by GitHub code "
+            "scanning — the alert stays open while the comment claims otherwise. "
+            "Dismiss via the code-scanning API with a justification instead: "
+            f"{offenders}",
+        )
 
 
 class TestFlattenExc(unittest.TestCase):
