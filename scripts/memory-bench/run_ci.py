@@ -100,6 +100,21 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 DATA_FILE = SCRIPT_DIR / "data" / "lme_s_24.json"
 BASELINE_FILE = SCRIPT_DIR / "baseline.json"
 RETRIEVAL_BASELINE_FILE = SCRIPT_DIR / "baseline_retrieval.json"
+# The recall gate runs in two ARMS against two different systems (ADR-0003):
+#
+#   prod    — the deployed server. Answers "is what we shipped still good?"
+#   branch  — `cmd/api` built from the PR head, on an ephemeral database with a
+#             local CPU embedder. Answers "does THIS CHANGE make recall worse?"
+#             This is the arm behind the required check.
+#
+# Their scores are NOT comparable — different embedder, different corpus, empty
+# vs accumulated database — so they get separate baseline files and the arm is
+# recorded INSIDE each file. A baseline copied into the wrong arm is the one
+# failure here that would otherwise produce a confident, entirely fictional
+# verdict, which is the same shape of fault this whole ADR exists to close.
+BRANCH_RETRIEVAL_BASELINE_FILE = SCRIPT_DIR / "baseline_retrieval_branch.json"
+ARM_PROD = "prod"
+ARM_BRANCH = "branch"
 # Per-question results. `results/` has existed since the gate was created but
 # nothing ever wrote to it: the only artifact was gate.log, whose per-question
 # line carries a tick or a cross and nothing else. That is why answering "where
@@ -141,6 +156,11 @@ REASON_BASELINE_SAMPLE_MISMATCH = "baseline-sample-mismatch"
 # the broken denominator as the new truth. Alerting on the symptom while the
 # cause renews itself every run is how this survived 6 days.
 REASON_PERSISTENT_ERRORS = "persistent-errors"
+# The baseline file on disk was captured in a DIFFERENT arm than this run. Its
+# own kind because the fix is neither "re-snap" nor "stop losing questions": it
+# is "you are holding the wrong file", and a run that continues past it produces
+# a numerically valid comparison between two unrelated systems.
+REASON_ARM_MISMATCH = "arm-mismatch"
 # A capture that could not be trusted is refused BEFORE the write, so the previous
 # baseline survives. Its own kind: "we declined to record a floor" is not an
 # inconclusive verdict, and it has a different reader (whoever dispatched it).
@@ -598,6 +618,11 @@ class Baseline(NamedTuple):
     # Empty for any baseline written before the field existed — which must read
     # as "unknown denominator", never as "the same denominator as this run".
     sample_sizes: dict[str, tuple[int, int]] = {}
+    # Which arm captured this file (ADR-0003). Empty for any baseline written
+    # before the field existed, which must read as "unstated", never as "the
+    # same arm as this run" — the whole point is that an unlabelled file cannot
+    # vouch for where it came from.
+    arm: str = ""
 
 
 def load_baseline(path: Path) -> Baseline:
@@ -628,6 +653,7 @@ def load_baseline(path: Path) -> Baseline:
                 k: (int(v[0]), int(v[1]))
                 for k, v in (raw.get("sample_sizes") or {}).items()
             },
+            arm=str(raw.get("arm") or ""),
         )
     return Baseline(
         scores={k: float(v) for k, v in raw.items()},
@@ -635,6 +661,7 @@ def load_baseline(path: Path) -> Baseline:
         n_runs=1,
         spread={},
         sample_sizes={},
+        arm="",
     )
 
 
@@ -643,6 +670,7 @@ def build_baseline_payload(
     run_mode: str,
     top_k: int,
     sizes: dict[str, tuple[int, int]] | None = None,
+    arm: str = ARM_PROD,
 ) -> dict[str, Any]:
     """Aggregate N passes' scores into one mode-scoped baseline payload.
 
@@ -674,6 +702,10 @@ def build_baseline_payload(
         spread[cat] = max(vals) - min(vals)
     payload: dict[str, Any] = {
         "search_mode": run_mode,
+        # Which system produced these numbers (ADR-0003). `search_mode` already
+        # scopes the baseline to a retrieval mode; this scopes it to a target,
+        # which is the axis #b052cdda got wrong.
+        "arm": arm,
         "captured_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "top_k": top_k,
         "n_runs": len(per_pass_scores),
@@ -1205,7 +1237,16 @@ def cmd_run(args: argparse.Namespace) -> int:
     _load_env()
 
     retrieval_only = args.retrieval_only
-    baseline_file = RETRIEVAL_BASELINE_FILE if retrieval_only else BASELINE_FILE
+    arm = getattr(args, "arm", ARM_PROD)
+    if not retrieval_only:
+        # The paid end-to-end arm only ever runs against the deployed server —
+        # it needs a chat model and a judge, neither of which a PR runner has.
+        baseline_file = BASELINE_FILE
+        arm = ARM_PROD
+    elif arm == ARM_BRANCH:
+        baseline_file = BRANCH_RETRIEVAL_BASELINE_FILE
+    else:
+        baseline_file = RETRIEVAL_BASELINE_FILE
 
     # Validate required env
     mesh_url = _require_env("MESH_API_URL")
@@ -1381,7 +1422,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         # hit@k in hybrid mode; a baseline without a mode can only ever produce
         # INCONCLUSIVE. The advisory arm used to write a flat mode-less dict here,
         # which made its own mode gate permanently unsatisfiable.
-        payload = build_baseline_payload(per_pass_scores, run_mode, top_k, sizes)
+        payload = build_baseline_payload(per_pass_scores, run_mode, top_k, sizes, arm)
         baseline_file.write_text(json.dumps(payload, indent=2) + "\n")
         print(
             f"\nBaseline updated: {baseline_file}  "
@@ -1440,6 +1481,44 @@ def cmd_run(args: argparse.Namespace) -> int:
             "--update-baseline (against a healthy embedder) before relying on this gate."
         )
         print(f"{REASON_PREFIX} {REASON_NO_BASELINE} — {baseline_file.name} does not exist")
+        return EXIT_INCONCLUSIVE
+
+    # ── Arm gate: is this baseline even about the same system? ────────────────
+    # Sits before the mode gate because it is the coarser question: mode asks
+    # "was retrieval served the same way", arm asks "was it the same server at
+    # all". Only ever INCONCLUSIVE — the author of a PR cannot fix a baseline
+    # file that was captured in the wrong arm, and a red they cannot clear is
+    # the failure mode the whole two-arm design is trying to avoid.
+    #
+    # An UNSTATED arm ("") is accepted rather than blocked, because every
+    # baseline captured before ADR-0003 has no `arm` field and blocking on that
+    # would wedge the prod arm the moment this lands. Unstated is only accepted
+    # in the prod arm: the branch arm's baseline is created by this change, so
+    # there is no pre-existing unlabelled file it could legitimately be.
+    if baseline.arm and baseline.arm != arm:
+        print(
+            f"\n⚠ EVAL INCONCLUSIVE — {baseline_file.name} was captured in arm "
+            f"'{baseline.arm}', but this run is arm '{arm}'. These measure "
+            "different systems (different embedder, different corpus), so a "
+            "comparison between them would be arithmetically valid and "
+            "factually meaningless. Nothing was enforced."
+        )
+        print(
+            f"{REASON_PREFIX} {REASON_ARM_MISMATCH} — baseline arm "
+            f"'{baseline.arm}' != run arm '{arm}'"
+        )
+        return EXIT_INCONCLUSIVE
+    if not baseline.arm and arm == ARM_BRANCH:
+        print(
+            f"\n⚠ EVAL INCONCLUSIVE — {baseline_file.name} states no arm, and the "
+            "branch arm has no pre-ADR-0003 baseline it could legitimately be. "
+            "This is almost certainly the prod baseline copied into the branch "
+            "arm's path. Re-snap with `--arm branch --update-baseline`."
+        )
+        print(
+            f"{REASON_PREFIX} {REASON_ARM_MISMATCH} — baseline states no arm, "
+            f"run arm '{arm}' requires one"
+        )
         return EXIT_INCONCLUSIVE
 
     # ── Mode gate: compare like with like, or do not compare at all ───────────
@@ -1699,6 +1778,18 @@ def main() -> int:
         "--retrieval-only",
         action="store_true",
         help="Score recall@k against answer_session_ids. No LLM, no paid API — the gateable arm.",
+    )
+    parser.add_argument(
+        "--arm",
+        choices=[ARM_PROD, ARM_BRANCH],
+        default=ARM_PROD,
+        help=(
+            "Which system this run measures (ADR-0003). 'prod' = the deployed "
+            "server (baseline_retrieval.json); 'branch' = cmd/api built from the "
+            "PR head on an ephemeral DB (baseline_retrieval_branch.json). The "
+            "arm selects the baseline file AND is written into it, so a file "
+            "used in the wrong arm is refused rather than silently compared."
+        ),
     )
     parser.add_argument(
         "--max-error-rate",

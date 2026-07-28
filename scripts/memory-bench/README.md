@@ -332,12 +332,19 @@ written *before* the verdict branches, so it still exists on an INCONCLUSIVE or
 a refused capture, and a failure to write is logged but never changes the
 verdict: an observability artifact must not be able to fail a required check.
 
-## The four ways this gate goes blind
+## The six ways this gate goes blind
 
 The gate is required, which makes its *silence* more dangerous than its red. Each
-of these has actually happened; each is now pinned by `test_gate_blindness.py`,
-which CI runs on **every** PR (independently of the scope check below — a test
-that guards against a wrongful no-op must not be skipped by that same no-op).
+of these has actually happened; each is now pinned by a self-check
+(`test_gate_blindness.py`, `test_gate_arm.py`, `dense_arm_control.py --selftest`)
+that CI runs on **every** PR — independently of the scope check below, because a
+test that guards against a wrongful no-op must not be skipped by that same no-op.
+
+Ways 1–5 end in a no-op or an INCONCLUSIVE: the gate either did not run or could
+not measure. **Way 6 is different in kind** — the gate ran, measured cleanly,
+compared against a valid baseline, and reported an accurate number *about the
+wrong program*. A green that certifies the wrong object is worse than an
+INCONCLUSIVE, because INCONCLUSIVE at least says so.
 
 1. **A memory file missing from `MEMORY_PATHS`.** The gate no-ops and reports
    green having measured nothing, and "required" then certifies a run that never
@@ -424,31 +431,91 @@ that guards against a wrongful no-op must not be skipped by that same no-op).
    the gate would have stopped blocking bad memory PRs altogether — a bigger hole
    than the one it closes. Ranking stays `REGRESSION > INCONCLUSIVE > OK`.
 
+6. **Measuring production instead of the branch under review** (#2a079432, fixed
+   by [ADR-0003](../../dev-docs/adrs/0003-recall-gate-measures-the-branch.md)).
+   The required check took its target from `secrets.MESH_API_URL` — the deployed
+   server — and nothing in the workflow ever built `cmd/api` from the branch (the
+   two `go build` steps compile `mesh-mcp`, the *client*, from another repo). So
+   it answered "how good is recall on the server that is already running?" while
+   presenting itself as an answer to "does this PR make recall worse?" Those
+   coincide only when the PR is already deployed, which for a PR is never.
+
+   **What it cost.** PRs #388, #389 and #391 — the chunking epic's schema, write
+   path and backfill — each got a green `Memory recall gate` measured against the
+   pre-chunking binary. After merge and deploy it emerged that the write path had
+   moved vectors into `memory_chunks` while no read path consumed them, so
+   `memories.embedding` was NULL for every new memory and those memories left the
+   dense arm entirely. The check that exists to catch exactly that could not have
+   seen it.
+
+   The gate is now two arms with two targets (see the ADR for the table).
+   `Memory recall gate (branch)` builds and boots `cmd/api` from the PR head
+   against an ephemeral postgres and a local `BAAI/bge-small-en-v1.5`, and is the
+   **required** context. `Memory recall canary (prod)` keeps the old target and
+   answers the question it could always answer — "is what we deployed still
+   good?" — on `push: main`, nightly and dispatch. Their scores are **not
+   comparable** (different embedder, different corpus), so they have separate
+   baselines, each recording its own `arm`, and a baseline used in the wrong arm
+   is refused (`arm-mismatch`) rather than silently compared.
+
+   **A second, independent blindness surfaced from the same run** (30316983402)
+   and is fixed alongside: the scored dataset cannot detect the loss of the dense
+   arm *at all*. Every LongMemEval question asks about a fact stated in roughly
+   the words the question uses, so BM25 answers them alone. That run reported
+   `single-session-user 1.000`, `overall 0.9583` — its best numbers ever — while
+   `VectorSearch` returned **zero rows for the whole haystack**, and still
+   announced `search_mode: hybrid, degraded: false` (the mode reports that the
+   embedder answered, not that the dense arm returned anything).
+
+   `dense_arm_control.py` is the missing question: one query whose gold session
+   shares **no content word** with it, so BM25 cannot reach it, surrounded by
+   distractors that carry the query's vocabulary on purpose. Measured against the
+   CI embedder, gold is cosine rank 1 with a +0.083 margin and keyword rank
+   nowhere.
+
+   Crucially the branch job runs it **twice**: once normally (gold must be
+   found), then again with the embedder killed and the corpus untouched, where
+   gold must be **missed**. That second run is the positive control on the
+   control — the step missing every previous time this harness went blind. An
+   assertion whose ability to go red was never demonstrated is not evidence, and
+   here the demonstration happens on every run, against the same code the green
+   came from.
+
 ## Making the recall gate a required check
+
+The required context is **`Memory recall gate (branch)`** — the arm that measures
+the PR. `Memory recall canary (prod)` must never be required: it does not run on
+`pull_request` at all (ADR-0003), so requiring it would block every PR forever.
 
 Do it in this order. Skipping step 1 wedges every PR.
 
-1. **Baseline it, against the DEPLOYED server.** `baseline_retrieval.json` must
-   exist, must be generated while the embedder is healthy (`search_mode:
-   "hybrid"`), and must be snapped against a Mesh that actually reports
-   `search_mode` — a baseline captured during a dense-arm outage bakes in the
+1. **Baseline it, in the arm that will be judged.** Each arm has its own file and
+   they are not interchangeable:
+
+   | arm | file | how to capture |
+   |---|---|---|
+   | branch (required) | `baseline_retrieval_branch.json` | dispatch the workflow on `main`; the branch job writes it with `--arm branch` |
+   | prod (canary) | `baseline_retrieval.json` | `python run_ci.py --retrieval-only --update-baseline` |
+
+   The file must be generated while the embedder is healthy (`search_mode:
+   "hybrid"`) — a baseline captured during a dense-arm outage bakes in the
    degraded BM25-only scores, and one snapped against an older server records
-   `"unknown"` and can then only ever produce INCONCLUSIVE:
-   ```
-   python run_ci.py --retrieval-only --update-baseline
-   ```
-   Verify the file says `"search_mode": "hybrid"` before going further.
-2. **Confirm it can actually pass** — at least one green `Memory recall gate` run
-   on a real PR.
-3. **Then** add the context to branch protection:
+   `"unknown"` and can then only ever produce INCONCLUSIVE. Verify it says
+   `"search_mode": "hybrid"` **and** the right `"arm"` before going further; a
+   file dropped into the other arm's path is refused (`arm-mismatch`), which is
+   an INCONCLUSIVE nobody can clear from a PR.
+2. **Confirm it can actually pass** — at least one green
+   `Memory recall gate (branch)` run on a real PR.
+3. **Then** move the context on branch protection. Do both halves in one call:
+   the old `Memory recall gate` context no longer reports on PRs, so leaving it
+   required blocks every PR forever (cf. evc-mesh#320).
    ```
    gh api -X PATCH repos/entire-vc/evc-mesh/branches/main/protection/required_status_checks \
-     -f 'contexts[]=Memory recall gate'
+     -f 'contexts[]=Memory recall gate (branch)'      # replaces, does not append
    ```
    The context name must match the **check-run name on a PR** exactly, and the
-   workflow must have **no `paths:` filter** on `pull_request` — a required
-   context that never reports blocks the PR forever (cf. evc-mesh#320). The gate
-   runs on every PR and no-ops internally when no memory path changed.
+   workflow must have **no `paths:` filter** on `pull_request` — the gate runs on
+   every PR and no-ops internally when no memory path changed.
 
 ## Local run
 
