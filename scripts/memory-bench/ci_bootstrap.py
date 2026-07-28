@@ -10,10 +10,18 @@ So the arm mints its own: register the first user (which the API allows only
 while `COUNT(users) == 0`, and which auto-creates that user's workspace), then
 create one agent in it and keep the raw `api_key` the create call returns once.
 
-Prints `MESH_AGENT_KEY=<key>` and `MESH_WORKSPACE_ID=<id>` on stdout in
-`$GITHUB_ENV` format, so the workflow can do:
+Writes `MESH_AGENT_KEY=<key>` and `MESH_WORKSPACE_ID=<id>` into the file named by
+`--env-file` (default `$GITHUB_ENV`):
 
-    python ci_bootstrap.py --api-url http://127.0.0.1:8005 >> "$GITHUB_ENV"
+    python ci_bootstrap.py --api-url http://127.0.0.1:8005
+
+The key never reaches stdout. The earlier shape printed it and let the workflow
+redirect stdout into `$GITHUB_ENV`, so it stayed out of the job log only because
+of the redirect — run the script by hand and it dumped a live key onto the
+terminal, and CodeQL read the print as a clear-text credential log
+(`py/clear-text-logging-sensitive-data`, high, alert 16 on PR #394). Naming the
+destination makes "this value goes to a file, never to a log" a property of the
+script instead of a property of its caller's shell.
 
 Exits non-zero with a readable reason on every failure path. A bootstrap that
 half-succeeds and lets the bench run keyless produces 24 auth errors, which the
@@ -24,10 +32,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 # Deterministic and disposable: the database is created and destroyed inside a
 # single job, so these are not credentials in any meaningful sense. They are
@@ -86,7 +96,22 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--api-url", default="http://127.0.0.1:8005")
     ap.add_argument("--wait-secs", type=int, default=60)
+    ap.add_argument(
+        "--env-file",
+        default=os.environ.get("GITHUB_ENV"),
+        help="File to append MESH_AGENT_KEY / MESH_WORKSPACE_ID to. Defaults to "
+             "$GITHUB_ENV. The key is written only here, never to stdout.",
+    )
     args = ap.parse_args()
+
+    # Resolved before the API is touched. The agent key is readable exactly once,
+    # at creation; minting it and only then discovering there is nowhere to put
+    # it would burn a value nothing can re-derive.
+    if not args.env_file:
+        ap.error(
+            "--env-file is required when $GITHUB_ENV is unset. The bench key is "
+            "written to a file and never printed, so there is no fallback sink."
+        )
 
     api = args.api_url.rstrip("/")
     wait_for_api(api, args.wait_secs)
@@ -140,10 +165,19 @@ def main() -> int:
             f"{list(agent)}. Nothing can re-derive it — the stored form is a hash."
         )
 
-    print(f"MESH_AGENT_KEY={key}")
-    print(f"MESH_WORKSPACE_ID={ws_id}")
-    print(f"# bootstrapped agent {agent['agent']['id']} in workspace {ws_id}",
-          file=sys.stderr)
+    with Path(args.env_file).open("a", encoding="utf-8") as fh:
+        fh.write(f"MESH_AGENT_KEY={key}\n")
+        fh.write(f"MESH_WORKSPACE_ID={ws_id}\n")
+
+    # Everything that reaches a log is non-secret by construction: two ids and a
+    # length. The length earns its place — a truncated or empty key surfaces ten
+    # minutes later as 24 auth errors, and this line is what separates that from
+    # "the bench never got a key at all".
+    print(
+        f"# bootstrapped agent {agent['agent']['id']} in workspace {ws_id}; "
+        f"wrote a {len(key)}-char key to {args.env_file}",
+        file=sys.stderr,
+    )
     return 0
 
 

@@ -309,8 +309,11 @@ jobs:
       - name: Bootstrap a bench workspace + agent key
         if: steps.scope.outputs.relevant == 'true'
         run: |
+          # No stdout redirect: the script appends to $GITHUB_ENV itself, so the
+          # minted key is never a printed value that a later refactor could
+          # accidentally route into the job log.
           python scripts/memory-bench/ci_bootstrap.py \
-            --api-url http://127.0.0.1:8005 >> "$GITHUB_ENV" \
+            --api-url http://127.0.0.1:8005 \
             || { echo "::error::bootstrap failed"; tail -50 api.log; exit 1; }
 
       - name: Checkout evc-mesh-mcp
