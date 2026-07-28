@@ -853,24 +853,18 @@ func (r *MemoryRepo) BoostRelevance(ctx context.Context, ids []uuid.UUID) error 
 	return err
 }
 
-// embeddingRow extends memoryRow with the raw embedding TEXT column.
-type embeddingRow struct {
-	memoryRow
-	EmbeddingJSON  *string `db:"embedding"`
-	EmbeddingModel *string `db:"embedding_model"`
-	EmbeddingDim   *int    `db:"embedding_dim"`
-}
-
-const memoryColumnsWithEmbedding = `id, workspace_id, project_id, agent_id, key, content, scope, tags,
-	source_type, source_event_id, source_url, relevance, importance_score, created_at, updated_at, expires_at,
-	last_accessed_at, archived,
-	embedding, embedding_model, embedding_dim`
-
 // vectorCandidatePoolCap bounds how many embedded memories are pulled for the
 // in-Go cosine ranking in VectorSearch. It is intentionally large enough to
 // cover the entire current corpus so the candidate set is effectively complete
 // and relevance-neutral. It exists only as a latency/memory backstop for very
 // large workspaces; when a corpus approaches this size, switch to pgvector/ANN.
+//
+// The cap counts MEMORIES, not chunks — it is applied by the candidate query,
+// which never joins memory_chunks. Capping a chunk-level query at the same
+// number would silently shrink the reachable corpus by the average chunks-per-
+// memory factor (~1.75x measured, see ADR-0002): the same 20000 would cover
+// roughly 11400 memories instead of 20000, and the loss would show up as
+// missing recall results, not as an error.
 const vectorCandidatePoolCap = 20000
 
 // appendMemorySearchFilter appends the scope/tags eligibility predicates shared by BOTH
@@ -910,20 +904,82 @@ func appendMemorySearchFilter(
 	return conditions, args, argIdx
 }
 
-// VectorSearch performs application-level cosine similarity search.
-// Embeddings are stored as JSON-encoded float32 arrays in the embedding TEXT column.
-// This approach works without the pgvector extension — similarity is computed in Go.
-// Results are filtered by workspace/project and by the shared scope/tags eligibility
-// filter, then sorted by cosine similarity.
+// VectorSearch performs application-level cosine similarity search without the
+// pgvector extension — similarity is computed in Go (pgvector is not merely
+// uninstalled on this deployment, it is absent from pg_available_extensions, so
+// a vector column is an infra change rather than a schema change; see ADR-0002).
+//
+// It runs in three phases, which is what keeps it affordable now that one memory
+// owns many vectors:
+//
+//  1. Pick eligible candidate memories — filtered by workspace/project and the
+//     shared scope/tags eligibility filter, capped at vectorCandidatePoolCap.
+//     IDs only: no content, no vectors.
+//  2. Score every chunk of those memories, then reduce to at most one row per
+//     memory by max-over-chunks (bestChunkPerMemory).
+//  3. Hydrate only the surviving top-N memories.
+//
+// Phase 3 is the reason the phases exist. The previous single-query version
+// selected `content` for the entire candidate pool in order to return `limit`
+// (typically 20) rows — on an unscoped recall that is megabytes of text hauled
+// out of Postgres and discarded. Chunking would have made that worse, since it
+// multiplies vectors per memory ~1.75x. Fetching content only for rows that
+// survived ranking makes the chunked path cheaper than the unchunked one it
+// replaces, rather than more expensive.
+//
+// Scoring is max-over-chunks, deliberately not sum or mean: a memory's relevance
+// is that of its best-matching passage. Aggregating instead would rank a long
+// memory with many mediocre chunks above a short one that answers the query
+// exactly — which is the opposite of the reason chunking was introduced.
 func (r *MemoryRepo) VectorSearch(ctx context.Context, queryVec []float32, workspaceID uuid.UUID, projectID *uuid.UUID, filter domain.MemorySearchFilter, limit int) ([]domain.ScoredMemory, error) {
 	if limit <= 0 {
 		limit = 20
 	}
 
+	candidateIDs, err := r.vectorCandidateIDs(ctx, workspaceID, projectID, filter)
+	if err != nil {
+		return nil, err
+	}
+	if len(candidateIDs) == 0 {
+		return nil, nil
+	}
+
+	scores, err := r.scoreCandidateVectors(ctx, candidateIDs, queryVec)
+	if err != nil {
+		return nil, err
+	}
+	if len(scores) == 0 {
+		return nil, nil
+	}
+
+	// Reduce per-chunk scores to one row per memory, THEN truncate. Truncating
+	// the chunk list first would let a single long memory's chunks fill the page
+	// and starve every other memory out of the result.
+	return r.hydrateScoredMemories(ctx, bestChunkPerMemory(scores, limit))
+}
+
+// vectorCandidateIDs returns the IDs of memories eligible for vector ranking,
+// newest first, capped at vectorCandidatePoolCap.
+//
+// The candidate set MUST be relevance-neutral: ordering by `relevance DESC`
+// biases the vector pool toward frequently-recalled docs (BoostRelevance pins
+// them at 1.0), excluding semantically-relevant but less-recalled memories from
+// vector recall entirely — the exact opposite of what vector search is for. We
+// therefore pull a recency-ordered cap large enough to cover the whole corpus
+// today. If the corpus ever outgrows the cap, the oldest memories degrade out
+// gracefully (and that is the trigger to adopt pgvector/ANN — see #2285c9be).
+func (r *MemoryRepo) vectorCandidateIDs(ctx context.Context, workspaceID uuid.UUID, projectID *uuid.UUID, filter domain.MemorySearchFilter) ([]uuid.UUID, error) {
 	args := []interface{}{workspaceID} // $1
 	conditions := []string{
 		"workspace_id = $1",
-		"embedding IS NOT NULL",
+		// A memory is reachable through EITHER storage shape. Requiring
+		// `embedding IS NOT NULL` alone — as this query did before chunking —
+		// silently hides every chunked memory from the dense arm, because the
+		// chunked write path deliberately leaves memories.embedding untouched
+		// and stores the real vectors in memory_chunks. That failure is
+		// invisible: recall still returns results, just fewer and worse ones,
+		// having quietly degraded to BM25-only for the affected rows.
+		"(embedding IS NOT NULL OR EXISTS (SELECT 1 FROM memory_chunks c WHERE c.memory_id = memories.id))",
 		"(expires_at IS NULL OR expires_at > NOW())",
 		"archived = false",
 	}
@@ -936,73 +992,153 @@ func (r *MemoryRepo) VectorSearch(ctx context.Context, queryVec []float32, works
 	}
 	conditions, args, argIdx = appendMemorySearchFilter(conditions, args, argIdx, filter)
 
-	// Fetch candidates for cosine ranking. The candidate set MUST be
-	// relevance-neutral: ordering by `relevance DESC` here biases the vector
-	// pool toward frequently-recalled docs (BoostRelevance pins them at 1.0),
-	// excluding semantically-relevant but less-recalled memories from vector
-	// recall entirely — the exact opposite of what vector search is for. We
-	// therefore pull a recency-ordered cap large enough to cover the whole
-	// corpus today; cosine then runs over all of it in Go. If the corpus ever
-	// outgrows the cap, the oldest memories degrade out gracefully (and that is
-	// the trigger to adopt pgvector/ANN — see task #2285c9be).
 	args = append(args, vectorCandidatePoolCap)
 
 	q := fmt.Sprintf(`
-		SELECT %s FROM memories
+		SELECT id FROM memories
 		WHERE %s
 		ORDER BY updated_at DESC
 		LIMIT $%d`,
-		memoryColumnsWithEmbedding,
 		joinAnd(conditions),
 		argIdx,
 	)
 
-	var rows []embeddingRow
-	if err := r.db.SelectContext(ctx, &rows, q, args...); err != nil {
+	var ids []uuid.UUID
+	if err := r.db.SelectContext(ctx, &ids, q, args...); err != nil {
 		return nil, fmt.Errorf("vector search: select candidates: %w", err)
 	}
-	if len(rows) == 0 {
-		return nil, nil
+	return ids, nil
+}
+
+// scoreCandidateVectors computes the cosine similarity of queryVec against every
+// stored vector belonging to the given memories, returning one chunkScore per
+// vector (not per memory — the reduction to one row per memory happens in
+// bestChunkPerMemory).
+//
+// Two storage shapes are read, and the split between them is what makes the
+// chunk backfill resumable: a memory that has chunk rows is scored from those
+// and its legacy memories.embedding is ignored entirely, while a memory with no
+// chunks yet still ranks off its legacy vector. So a half-finished backfill
+// degrades per-memory rather than blanking the dense arm, and the legacy branch
+// costs nothing once the backfill completes — it simply matches no rows, which
+// is also what makes it safe to delete later (expand/migrate/contract).
+//
+// A memory is never scored from both shapes. The legacy vector is an embedding
+// of the same content truncated at the embedder's window, so counting it
+// alongside the chunks would let the truncated vector outrank the memory's own
+// best chunk.
+func (r *MemoryRepo) scoreCandidateVectors(ctx context.Context, candidateIDs []uuid.UUID, queryVec []float32) ([]chunkScore, error) {
+	const chunkQ = `
+		SELECT memory_id, chunk_idx, embedding
+		FROM memory_chunks
+		WHERE memory_id = ANY($1)`
+
+	var chunkRows []struct {
+		MemoryID  uuid.UUID `db:"memory_id"`
+		ChunkIdx  int       `db:"chunk_idx"`
+		Embedding string    `db:"embedding"`
+	}
+	if err := r.db.SelectContext(ctx, &chunkRows, chunkQ, pq.Array(candidateIDs)); err != nil {
+		return nil, fmt.Errorf("vector search: select chunk vectors: %w", err)
 	}
 
-	// Decode embeddings and compute cosine similarity in application code.
-	type candidate struct {
-		mem   domain.Memory
-		score float64
-	}
-	candidates := make([]candidate, 0, len(rows))
-
-	for _, row := range rows {
-		if row.EmbeddingJSON == nil || *row.EmbeddingJSON == "" {
+	scores := make([]chunkScore, 0, len(chunkRows)+len(candidateIDs))
+	for _, row := range chunkRows {
+		vec, err := domain.DecodeEmbedding(row.Embedding)
+		if err != nil {
+			// Skip corrupted embeddings silently, as the pre-chunking path did:
+			// one unreadable chunk must not fail a whole recall.
 			continue
 		}
-		var vec []float32
-		if err := json.Unmarshal([]byte(*row.EmbeddingJSON), &vec); err != nil {
-			// Skip corrupted embeddings silently.
-			continue
-		}
-		sim := cosineSimilarity(queryVec, vec)
-		candidates = append(candidates, candidate{
-			mem:   row.toDomain(),
-			score: sim,
+		scores = append(scores, chunkScore{
+			memoryID: row.MemoryID,
+			chunkIdx: row.ChunkIdx,
+			score:    cosineSimilarity(queryVec, vec),
 		})
 	}
 
-	// Sort by descending similarity.
-	sort.Slice(candidates, func(i, j int) bool {
-		return candidates[i].score > candidates[j].score
-	})
+	// Legacy single-vector fallback for memories not yet chunked. NOT EXISTS is
+	// what enforces "never both shapes for one memory".
+	const legacyQ = `
+		SELECT id, embedding
+		FROM memories
+		WHERE id = ANY($1)
+		  AND embedding IS NOT NULL
+		  AND NOT EXISTS (SELECT 1 FROM memory_chunks c WHERE c.memory_id = memories.id)`
 
-	if len(candidates) > limit {
-		candidates = candidates[:limit]
+	var legacyRows []struct {
+		ID        uuid.UUID `db:"id"`
+		Embedding string    `db:"embedding"`
+	}
+	if err := r.db.SelectContext(ctx, &legacyRows, legacyQ, pq.Array(candidateIDs)); err != nil {
+		return nil, fmt.Errorf("vector search: select legacy vectors: %w", err)
 	}
 
-	result := make([]domain.ScoredMemory, len(candidates))
-	for i, c := range candidates {
-		result[i] = domain.ScoredMemory{
-			Memory: c.mem,
-			Score:  c.score,
+	for _, row := range legacyRows {
+		if row.Embedding == "" {
+			continue
 		}
+		// Legacy vectors are JSON float arrays, not the base64 encoding used by
+		// memory_chunks (ADR-0002 changed the encoding for new writes only).
+		var vec []float32
+		if err := json.Unmarshal([]byte(row.Embedding), &vec); err != nil {
+			continue
+		}
+		scores = append(scores, chunkScore{
+			memoryID: row.ID,
+			chunkIdx: 0,
+			score:    cosineSimilarity(queryVec, vec),
+		})
+	}
+
+	return scores, nil
+}
+
+// hydrateScoredMemories loads the full memory rows for an already-ranked list and
+// returns them in that ranking order.
+//
+// Order is restored from `ranked`, not taken from the query: `WHERE id = ANY(...)`
+// returns rows in whatever order Postgres finds convenient, so relying on it
+// would scramble the ranking this function exists to preserve.
+//
+// The full memoryColumns set is selected here, including the health-lifecycle
+// columns (status, freshness_score, ...) that the old embedding-carrying column
+// list omitted. That omission was not cosmetic: downstream, applyExtendedFilters
+// drops superseded memories by checking Memory.Status, and the vector arm was
+// handing it rows whose Status was the zero value — so ExcludeSuperseded held
+// for BM25 hits (which filter in SQL) and silently did not for vector-only hits.
+// Freshness decay had the same hole, since FreshnessScore arrived as 0 and the
+// scorer reads 0 as "pre-lifecycle, treat as 1.0", i.e. no penalty.
+func (r *MemoryRepo) hydrateScoredMemories(ctx context.Context, ranked []chunkScore) ([]domain.ScoredMemory, error) {
+	if len(ranked) == 0 {
+		return nil, nil
+	}
+
+	ids := make([]uuid.UUID, len(ranked))
+	for i, cs := range ranked {
+		ids[i] = cs.memoryID
+	}
+
+	var rows []memoryRow
+	q := fmt.Sprintf(`SELECT %s FROM memories WHERE id = ANY($1)`, memoryColumns)
+	if err := r.db.SelectContext(ctx, &rows, q, pq.Array(ids)); err != nil {
+		return nil, fmt.Errorf("vector search: hydrate ranked memories: %w", err)
+	}
+
+	byID := make(map[uuid.UUID]domain.Memory, len(rows))
+	for i := range rows {
+		byID[rows[i].ID] = rows[i].toDomain()
+	}
+
+	result := make([]domain.ScoredMemory, 0, len(ranked))
+	for _, cs := range ranked {
+		mem, ok := byID[cs.memoryID]
+		if !ok {
+			// Deleted between the ranking and hydration queries — drop it rather
+			// than emitting a zero-valued Memory.
+			continue
+		}
+		result = append(result, domain.ScoredMemory{Memory: mem, Score: cs.score})
 	}
 	return result, nil
 }
@@ -1025,8 +1161,9 @@ func (r *MemoryRepo) UpdateEmbedding(ctx context.Context, id uuid.UUID, vec []fl
 	return err
 }
 
-// MarkEmbeddingModel sets embedding_model without touching embedding/embedding_dim — see
-// the interface doc for why the chunked embed path needs this watermark.
+// MarkEmbeddingModel sets embedding_model without touching embedding/embedding_dim — see the
+// interface doc: not called by the chunked embed path (embedChunked uses UpdateEmbedding),
+// kept as a general repo primitive.
 func (r *MemoryRepo) MarkEmbeddingModel(ctx context.Context, id uuid.UUID, model string) error {
 	_, err := r.db.ExecContext(ctx,
 		`UPDATE memories SET embedding_model = $1, updated_at = NOW() WHERE id = $2`,

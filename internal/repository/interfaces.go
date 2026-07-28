@@ -610,10 +610,15 @@ type MemoryRepository interface {
 	// UpdateEmbedding stores the embedding vector (encoded as JSON) for a single memory.
 	UpdateEmbedding(ctx context.Context, id uuid.UUID, vec []float32, model string, dim int) error
 	// MarkEmbeddingModel sets embedding_model without touching embedding/embedding_dim.
-	// Used by the chunked embed path (ADR-0002): the vector now lives in memory_chunks, not
-	// memories.embedding, but ListNeedingEmbedding's filter (embedding_model IS DISTINCT FROM
-	// $model) still runs against this table — without this watermark a chunked memory's
-	// embedding column stays NULL forever and BatchEmbed would re-chunk it every single run.
+	// NOT called by the chunked embed path — embedChunked uses UpdateEmbedding (see its doc).
+	// An earlier revision used this alone as a watermark, on the belief that
+	// ListNeedingEmbedding filtered on embedding_model only. It does not: the real predicate
+	// is `embedding IS NULL OR embedding_model IS DISTINCT FROM $model` (note the OR), so
+	// setting embedding_model while leaving embedding NULL clears one disjunct and leaves the
+	// other true forever — the row is re-selected on every reindex run, and meanwhile it is
+	// invisible to VectorSearch, which requires embedding IS NOT NULL. That was a live
+	// regression (#84b0694d / #7cf0f3be). Kept as a general repo primitive; a future caller
+	// must not repeat the embedding_model-only watermark against that predicate.
 	MarkEmbeddingModel(ctx context.Context, id uuid.UUID, model string) error
 	// DecayRelevance reduces relevance by 0.05 for agent-scope memories not updated in 30+ days,
 	// capped at a floor of 0.1. Workspace and project scope memories are exempt.

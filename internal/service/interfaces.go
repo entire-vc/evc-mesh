@@ -873,6 +873,12 @@ type MemoryService interface {
 	// ("hybrid" | "bm25-only") so that degradation is visible to callers instead
 	// of hiding in a log line.
 	Recall(ctx context.Context, opts domain.RecallOpts) ([]domain.ScoredMemory, domain.SearchMode, error)
+	// RecallWithStats is Recall plus the per-arm row counts (domain.RecallStats).
+	// Additive on purpose: SearchMode says the dense arm RAN, not that it
+	// returned anything, so "hybrid" is compatible with a vector arm that matched
+	// zero rows corpus-wide. Callers that need to tell those apart — the REST
+	// envelope, and through it the CI recall gate — use this one.
+	RecallWithStats(ctx context.Context, opts domain.RecallOpts) ([]domain.ScoredMemory, domain.RecallStats, error)
 	// ListMemories executes a richly-filtered, paginated list query backed by the repository.
 	ListMemories(ctx context.Context, filter domain.MemoryListFilter) (*RecallResult, error)
 	// GetProjectKnowledge returns memories for a project (project-scoped) or workspace tier.

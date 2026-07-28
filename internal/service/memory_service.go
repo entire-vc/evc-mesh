@@ -766,6 +766,7 @@ func (s *memoryService) embedChunked(ctx context.Context, id uuid.UUID, text str
 	pieces := chunkText(text, defaultChunkSize, defaultChunkOverlap)
 	runes := []rune(text)
 	chunks := make([]domain.MemoryChunk, 0, len(pieces))
+	var firstVec []float32
 	for i, p := range pieces {
 		vec, err := s.embedder.Embed(ctx, p.Text)
 		if err != nil {
@@ -773,6 +774,9 @@ func (s *memoryService) embedChunked(ctx context.Context, id uuid.UUID, text str
 		}
 		if len(vec) == 0 {
 			continue
+		}
+		if firstVec == nil {
+			firstVec = vec
 		}
 		chunks = append(chunks, domain.MemoryChunk{
 			ChunkIdx:       i,
@@ -792,12 +796,19 @@ func (s *memoryService) embedChunked(ctx context.Context, id uuid.UUID, text str
 	if err := s.chunkRepo.ReplaceChunks(ctx, id, chunks); err != nil {
 		return err
 	}
-	// Watermark memories.embedding_model so ListNeedingEmbedding (which still
-	// filters on this table) stops matching this memory for the current
-	// model — memory_chunks holds the real vectors now, memories.embedding
-	// itself is deliberately left untouched. See MarkEmbeddingModel's doc.
-	if err := s.memRepo.MarkEmbeddingModel(ctx, id, s.embedder.Model()); err != nil {
-		return fmt.Errorf("mark embedding model: %w", err)
+	// STOPGAP (#b052cdda, live regression caught in #84b0694d verify): VectorSearch's
+	// read path has not been rewired onto memory_chunks yet (that's subtask 6/8,
+	// still open) — it still requires memories.embedding IS NOT NULL. Writing only
+	// the chunks, as the original design intended once read-path lands, made every
+	// memory embedded through this path invisible to dense search: brand-new memories
+	// never had memories.embedding populated at all (~200/hour after deploy). Until
+	// VectorSearch reads memory_chunks directly, keep memories.embedding populated too
+	// — the first chunk's vector, not the whole document, so this stays proportionate
+	// to what a single embed call already produced (no extra embedder round trip).
+	// UpdateEmbedding also sets embedding_model/embedding_dim, so it subsumes the old
+	// MarkEmbeddingModel-only watermark this replaced.
+	if err := s.memRepo.UpdateEmbedding(ctx, id, firstVec, s.embedder.Model(), len(firstVec)); err != nil {
+		return fmt.Errorf("update embedding (chunked stopgap): %w", err)
 	}
 	return nil
 }
@@ -819,8 +830,18 @@ type RecallResult struct {
 	DecayApplied bool
 }
 
-// Recall performs a hybrid search (keyword + optional vector) and returns ranked
-// results together with the domain.SearchMode they were actually SERVED in.
+// Recall is the thin, stats-dropping wrapper over RecallWithStats. It exists so
+// the mode-only signature — which every caller but the REST handler uses, and
+// which ~25 tests are written against — stays exactly as it was; the arm counts
+// are additive, and a caller that does not need them should not have to say so.
+func (s *memoryService) Recall(ctx context.Context, opts domain.RecallOpts) ([]domain.ScoredMemory, domain.SearchMode, error) {
+	items, stats, err := s.RecallWithStats(ctx, opts)
+	return items, stats.Mode, err
+}
+
+// RecallWithStats performs a hybrid search (keyword + optional vector) and returns
+// ranked results together with the domain.RecallStats describing how they were
+// actually SERVED — the mode, plus how many rows each arm returned.
 //
 // The second return value is load-bearing: step 2 below FAILS OPEN. If the
 // embedder is down (or unconfigured), the dense arm silently contributes
@@ -829,6 +850,11 @@ type RecallResult struct {
 // the CI recall gate — tell "memory got worse" apart from "the embedder died".
 // Without it, a cross-mode score drop is indistinguishable from a code
 // regression, which is how an infra outage turns into a repo-wide merge wedge.
+//
+// Mode has its own blind spot, which is why the row counts travel with it: it
+// reports that the dense arm RAN, not that it FOUND anything. See
+// domain.RecallStats — a corpus with no embeddings at all serves "hybrid",
+// "degraded: false", and zero vector candidates.
 //
 // Algorithm:
 //  1. Always: full-text keyword search via tsvector (ts_rank_cd).
@@ -840,9 +866,9 @@ type RecallResult struct {
 //
 // When extended filter params are present (TagsAny, CreatedBy, Since, Until, etc.),
 // the repository List method is used instead of FullTextSearch for precise SQL filtering.
-func (s *memoryService) Recall(ctx context.Context, opts domain.RecallOpts) ([]domain.ScoredMemory, domain.SearchMode, error) {
+func (s *memoryService) RecallWithStats(ctx context.Context, opts domain.RecallOpts) ([]domain.ScoredMemory, domain.RecallStats, error) {
 	if opts.Query == "" {
-		return nil, "", apierror.ValidationError(map[string]string{
+		return nil, domain.RecallStats{}, apierror.ValidationError(map[string]string{
 			"q": "search query is required",
 		})
 	}
@@ -936,6 +962,19 @@ func (s *memoryService) Recall(ctx context.Context, opts domain.RecallOpts) ([]d
 	if kwErr != nil {
 		log.Printf("memory recall: bm25 fts failed (using vector-only): %v", kwErr)
 		kwResults = nil
+	}
+
+	// Counted HERE — after both arms have finished and after the FTS-error reset
+	// above, but before the RRF merge and every post-filter below. These report
+	// what each ARM produced, not what survived downstream: a dense arm that
+	// returned 300 candidates of which none passed the tag filter is a healthy
+	// arm and a narrow query, while a dense arm that returned 0 is not an arm at
+	// all. Collapsing those two into one number is the blindness this exists to
+	// remove, so the count must not move below the merge.
+	stats := domain.RecallStats{
+		Mode:       searchMode,
+		DenseRows:  len(vecResults),
+		SparseRows: len(kwResults),
 	}
 
 	// ── Step 3: RRF merge ─────────────────────────────────────────────────────
@@ -1063,7 +1102,7 @@ func (s *memoryService) Recall(ctx context.Context, opts domain.RecallOpts) ([]d
 		_ = s.memRepo.BoostRelevance(ctx, ids)
 	}
 
-	return merged, searchMode, nil
+	return merged, stats, nil
 }
 
 // applyExtendedFilters filters a slice of ScoredMemory using the extended RecallOpts fields

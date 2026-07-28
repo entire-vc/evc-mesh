@@ -332,7 +332,7 @@ written *before* the verdict branches, so it still exists on an INCONCLUSIVE or
 a refused capture, and a failure to write is logged but never changes the
 verdict: an observability artifact must not be able to fail a required check.
 
-## The seven ways this gate goes blind
+## The eight ways this gate goes blind
 
 The gate is required, which makes its *silence* more dangerous than its red. Each
 of these has actually happened; each is now pinned by a self-check
@@ -534,6 +534,54 @@ because four of us measured at once".
    one. For a post-deploy canary that is the right trade — the newer commit is
    the one worth measuring — and it is only safe because this arm is not
    required.
+8. **`search_mode: hybrid` reported over a dense arm that returned nothing.**
+   The mode is set when the dense arm *ran* end-to-end — embedder alive, query
+   vectorised, `VectorSearch` returned no error. It says nothing about that arm
+   having matched a single row, and a `VectorSearch` that matches zero rows
+   returns `(nil, nil)`: no error, so mode stays `hybrid` and `degraded` stays
+   `false`.
+
+   Run `30316983402` is the whole failure in one line. Every bench fixture had
+   been created after the chunked-embed deploy (`625ee28`), so every
+   `memories.embedding` was `NULL`, and `VectorSearch` filters
+   `embedding IS NOT NULL` — **zero rows across the entire haystack**. The gate
+   reported `single-session-user 1.000`, `overall 0.9583`, `search_mode: hybrid`,
+   `degraded: false`: the best result ever recorded, measured on a corpus whose
+   dense arm was not there. Nothing in the envelope contradicted it, because
+   nothing in the envelope counted rows.
+
+   The search envelope now carries `dense_rows` (and `sparse_rows`) beside
+   `search_mode`, and `resolve_dense_arm_status` reads them:
+
+   - **every** hybrid question reporting `dense_rows == 0` ⇒ `EXIT_INCONCLUSIVE`,
+     reason kind `dense-arm-empty`. Never `REGRESSION` — an unembedded corpus is
+     not something a PR author can fix, and a required check that reds on it is a
+     check that gets bypassed.
+   - **all of them, not any one.** The vector arm draws from a relevance-neutral
+     candidate pool, so it returns rows for any query while *anything* in the
+     workspace is embedded. One zero among non-zeros is a query oddity, not a
+     lost arm.
+   - **`bm25-only` zeroes are not evidence.** A deployment with no embedder has
+     no dense arm to lose; that case is the mode gate's, and one cause must not
+     raise two alerts with two different owners.
+   - **A server that does not report the field changes nothing** (status
+     `unknown`, verdict untouched, and the gate says out loud that it could not
+     check). This is load-bearing, not politeness: if a missing field read as
+     zero, this gate would wedge the prod arm at INCONCLUSIVE from the moment it
+     merged until the server was deployed — broken during exactly the window it
+     exists to fix.
+
+   `--update-baseline` refuses an `EXIT_INCONCLUSIVE`-worthy capture here too. A
+   floor snapped with no dense arm is a BM25-only floor recorded as the hybrid
+   standard: every later healthy run clears it, so the gate goes permanently
+   green *and* permanently blind — this failure installed as its own baseline.
+
+   Pinned by `test_gate_dense_arm.py` (harness side) and
+   `memory_recall_stats_test.go` / `memory_handler_dense_rows_test.go` (server
+   side). Note which direction the positive controls run: the tests that matter
+   are the ones proving `dense_rows` can be **non-zero** and that back-compat
+   still lets a real regression exit 1 — a gate hard-wired to INCONCLUSIVE would
+   pass every "empty arm is caught" test on its own.
 
 ## Making the recall gate a required check
 
