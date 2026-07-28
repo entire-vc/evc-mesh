@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -177,3 +178,149 @@ func TestWorkspaceRLS_TaskShortIDResolves(t *testing.T) {
 	assert.Equal(t, wsID, c.Get(ContextKeyWorkspaceID))
 	assert.Equal(t, WorkspaceSourceParam, c.Get(ContextKeyWorkspaceSource))
 }
+
+// TestWorkspaceRLS_ShortParamResolves covers /tasks/by-short-id/:short, the one
+// route whose parameter is not a uuid at all. It had no guard of any kind before.
+func TestWorkspaceRLS_ShortParamResolves(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	wsID := uuid.New()
+	mock.ExpectQuery("FROM tasks").
+		WithArgs("beef01%").
+		WillReturnRows(sqlmock.NewRows([]string{"workspace_id"}).AddRow(wsID))
+	mock.ExpectQuery("set_config").
+		WithArgs(wsID.String()).
+		WillReturnRows(sqlmock.NewRows([]string{"set_config"}).AddRow(wsID.String()))
+
+	e := echo.New()
+	c := e.NewContext(httptest.NewRequest(http.MethodGet, "/", http.NoBody), httptest.NewRecorder())
+	c.SetPath("/api/v1/tasks/by-short-id/:short")
+	c.SetParamNames("short")
+	c.SetParamValues("beef01")
+	c.Set(ContextKeyAuthType, AuthTypeAgent)
+
+	require.NoError(t, WorkspaceRLS(sqlx.NewDb(db, "postgres"), nil)(nopHandler)(c))
+	assert.Equal(t, wsID, c.Get(ContextKeyWorkspaceID))
+	assert.Equal(t, WorkspaceSourceParam, c.Get(ContextKeyWorkspaceSource))
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestWorkspaceRLS_ShortParamAmbiguousResolvesNothing: an ambiguous short id must
+// leave the context empty so the guard refuses, rather than resolving to whichever
+// tenant the database happened to return first.
+func TestWorkspaceRLS_ShortParamAmbiguousResolvesNothing(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectQuery("FROM tasks").
+		WillReturnRows(sqlmock.NewRows([]string{"workspace_id"}).AddRow(uuid.New()).AddRow(uuid.New()))
+
+	e := echo.New()
+	c := e.NewContext(httptest.NewRequest(http.MethodGet, "/", http.NoBody), httptest.NewRecorder())
+	c.SetPath("/api/v1/tasks/by-short-id/:short")
+	c.SetParamNames("short")
+	c.SetParamValues("beef01")
+	c.Set(ContextKeyAuthType, AuthTypeUser)
+
+	require.NoError(t, WorkspaceRLS(sqlx.NewDb(db, "postgres"), nil)(nopHandler)(c))
+	assert.Nil(t, c.Get(ContextKeyWorkspaceID))
+}
+
+// TestWorkspaceRLS_TaskIDFullUUIDResolves pins the pre-existing uuid branch of the
+// task resolver, which the short-id fallback now sits beside. It is the path every
+// /tasks/:task_id request takes.
+func TestWorkspaceRLS_TaskIDFullUUIDResolves(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	wsID := uuid.New()
+	taskID := uuid.New()
+	mock.ExpectQuery("FROM tasks t JOIN projects p").
+		WithArgs(taskID).
+		WillReturnRows(sqlmock.NewRows([]string{"workspace_id"}).AddRow(wsID))
+	mock.ExpectQuery("set_config").
+		WithArgs(wsID.String()).
+		WillReturnRows(sqlmock.NewRows([]string{"set_config"}).AddRow(wsID.String()))
+
+	e := echo.New()
+	c := e.NewContext(httptest.NewRequest(http.MethodGet, "/", http.NoBody), httptest.NewRecorder())
+	c.SetPath("/api/v1/tasks/:task_id")
+	c.SetParamNames("task_id")
+	c.SetParamValues(taskID.String())
+	c.Set(ContextKeyAuthType, AuthTypeAgent)
+
+	require.NoError(t, WorkspaceRLS(sqlx.NewDb(db, "postgres"), nil)(nopHandler)(c))
+	assert.Equal(t, wsID, c.Get(ContextKeyWorkspaceID))
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestWorkspaceRLS_MalformedFlatObjectIDResolvesNothing: a parameter that is not a
+// uuid must not reach the database, and must not fall through to the caller's own
+// workspace either.
+func TestWorkspaceRLS_MalformedFlatObjectIDResolvesNothing(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	e := echo.New()
+	c := e.NewContext(httptest.NewRequest(http.MethodGet, "/", http.NoBody), httptest.NewRecorder())
+	c.SetPath("/api/v1/events/:event_id")
+	c.SetParamNames("event_id")
+	c.SetParamValues("not-a-uuid")
+	c.Set(ContextKeyAuthType, AuthTypeUser)
+
+	require.NoError(t, WorkspaceRLS(sqlx.NewDb(db, "postgres"), nil)(nopHandler)(c))
+	assert.Nil(t, c.Get(ContextKeyWorkspaceID))
+	assert.NoError(t, mock.ExpectationsWereMet(), "a malformed id reached the database")
+}
+
+// TestResolveWorkspaceByTaskPrefix_QueryFailureResolvesNothing: a database error
+// must read as "no workspace", never as "any workspace".
+func TestResolveWorkspaceByTaskPrefix_QueryFailureResolvesNothing(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectQuery("FROM tasks").WillReturnError(errQueryFailed)
+
+	_, ok := resolveWorkspaceByTaskPrefix(context.Background(), sqlx.NewDb(db, "postgres"), "abc123")
+	assert.False(t, ok)
+}
+
+// TestResolveWorkspaceByTaskPrefix_NoMatchResolvesNothing: an unknown prefix.
+func TestResolveWorkspaceByTaskPrefix_NoMatchResolvesNothing(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectQuery("FROM tasks").WillReturnRows(sqlmock.NewRows([]string{"workspace_id"}))
+
+	_, ok := resolveWorkspaceByTaskPrefix(context.Background(), sqlx.NewDb(db, "postgres"), "abc123")
+	assert.False(t, ok)
+}
+
+// TestResolveWorkspaceByTaskPrefix_UnscannableRowResolvesNothing: a row that does
+// not scan into a uuid — the same rule, on the other failure path.
+func TestResolveWorkspaceByTaskPrefix_UnscannableRowResolvesNothing(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectQuery("FROM tasks").
+		WillReturnRows(sqlmock.NewRows([]string{"workspace_id"}).AddRow("not-a-uuid"))
+
+	_, ok := resolveWorkspaceByTaskPrefix(context.Background(), sqlx.NewDb(db, "postgres"), "abc123")
+	assert.False(t, ok)
+}
+
+// TestResolveWorkspaceByTaskPrefix_NilDBResolvesNothing guards the zero value.
+func TestResolveWorkspaceByTaskPrefix_NilDBResolvesNothing(t *testing.T) {
+	_, ok := resolveWorkspaceByTaskPrefix(context.Background(), nil, "abc123")
+	assert.False(t, ok)
+}
+
+var errQueryFailed = errors.New("simulated database failure")
