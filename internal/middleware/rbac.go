@@ -149,6 +149,17 @@ func RequirePermission(perm Permission, memberRepo repository.WorkspaceMemberRep
 	}
 }
 
+// RoleHasPermission reports whether a workspace role holds a permission, using
+// the same matrix as RequirePermission.
+//
+// It is exported for the one caller that cannot use the middleware: Spark's
+// install route takes its target workspace from the request body rather than the
+// path, so no middleware can see which workspace to check. Copying the matrix
+// into that handler would let the two drift; borrowing it cannot.
+func RoleHasPermission(role string, perm Permission) bool {
+	return hasPermission(role, perm)
+}
+
 // hasPermission returns true if the given role holds the given permission.
 func hasPermission(role string, perm Permission) bool {
 	perms, ok := permissionMatrix[role]

@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"context"
 	"log"
 	"net/http"
 
@@ -14,6 +15,58 @@ import (
 
 // ContextKeyWorkspaceRole stores the workspace-level role of the current actor.
 const ContextKeyWorkspaceRole = "workspace_role"
+
+// ContextKeyWorkspaceSource records how WorkspaceRLS arrived at the workspace it
+// put in ContextKeyWorkspaceID. The distinction is what makes the group-level
+// guard safe: a workspace named by the request (a path parameter) is a claim by
+// the caller and has to be checked, while a workspace taken from the caller's own
+// credentials is already theirs and checking it would only be tautological.
+const ContextKeyWorkspaceSource = "workspace_id_source"
+
+// Values stored under ContextKeyWorkspaceSource.
+const (
+	// WorkspaceSourceParam — resolved from a route parameter (see WorkspaceScopedParams).
+	WorkspaceSourceParam = "param"
+	// WorkspaceSourceAuth — taken from the caller's credentials (agent key auth).
+	WorkspaceSourceAuth = "auth"
+)
+
+// WorkspaceScopedParams is the set of route parameters WorkspaceRLS can resolve a
+// tenant from. It is the contract between the resolver below and
+// RequireWorkspaceMemberScoped: a route carrying any of them names another
+// tenant's data, so the guard must run on it.
+//
+// TestWorkspaceScopedParams_CoversEveryResolver reads this file and fails if a
+// resolver is added to WorkspaceRLS without its parameter being listed here —
+// otherwise a new resolver would silently widen the reach of the API without
+// widening the guard, which is the exact shape of the bug this file exists to fix.
+var WorkspaceScopedParams = []string{
+	"ws_id",
+	"proj_id",
+	"project_id",
+	"task_id",
+	"artifact_id",
+	"agent_id",
+	"field_id",
+	"init_id",
+}
+
+// workspaceScopeExemptRoutes lists routes that carry one of WorkspaceScopedParams
+// in their path but whose parameter is not an identifier in this database, so no
+// workspace can be resolved from it and requiring one would simply break them.
+//
+// Keys are Echo route paths (c.Path()), so an entry cannot silently match more
+// than the one route it names.
+//
+// Spark's :agent_id is a catalog id in the external Spark marketplace, not an
+// agents.id here. GET returns a public catalog manifest. POST .../install does
+// touch a local workspace, but it takes it from the request body, so the guard
+// could not see it either way — SparkHandler.Install checks membership and the
+// register-agent permission itself.
+var workspaceScopeExemptRoutes = map[string]bool{
+	"/api/v1/spark/agents/:agent_id":         true,
+	"/api/v1/spark/agents/:agent_id/install": true,
+}
 
 // WorkspaceRLS returns middleware that sets the PostgreSQL session variable
 // app.current_workspace_id based on the request context. This enables
@@ -35,6 +88,9 @@ func WorkspaceRLS(db *sqlx.DB, projectRepo repository.ProjectRepository) echo.Mi
 		return func(c echo.Context) error {
 			var wsID uuid.UUID
 			var resolved bool
+			// Steps 1 through 2e all read a route parameter, so anything they
+			// resolve is a workspace the request named; step 3 overrides this.
+			source := WorkspaceSourceParam
 
 			// 1. Try ws_id route parameter.
 			if wsIDStr := c.Param("ws_id"); wsIDStr != "" {
@@ -159,6 +215,7 @@ func WorkspaceRLS(db *sqlx.DB, projectRepo repository.ProjectRepository) echo.Mi
 				if ctxWsID, err := GetWorkspaceID(c); err == nil {
 					wsID = ctxWsID
 					resolved = true
+					source = WorkspaceSourceAuth
 				}
 			}
 
@@ -177,6 +234,7 @@ func WorkspaceRLS(db *sqlx.DB, projectRepo repository.ProjectRepository) echo.Mi
 				}
 				// Also store in Echo context so RBAC middleware (and handlers) can read it.
 				c.Set(ContextKeyWorkspaceID, wsID)
+				c.Set(ContextKeyWorkspaceSource, source)
 
 				// Resolve workspace role for the current actor so downstream middleware
 				// (e.g., RequireProjectMember) can check it without a second DB query.
@@ -219,11 +277,7 @@ func RequireWorkspaceMember(db *sqlx.DB) echo.MiddlewareFunc {
 				if err != nil {
 					return c.JSON(http.StatusForbidden, apierror.Forbidden("workspace access denied"))
 				}
-				var agentWsID uuid.UUID
-				if err := db.QueryRowContext(c.Request().Context(),
-					"SELECT workspace_id FROM agents WHERE id = $1 AND deleted_at IS NULL",
-					agentID,
-				).Scan(&agentWsID); err != nil || agentWsID != wsID {
+				if !AgentIsInWorkspace(c.Request().Context(), db, wsID, agentID) {
 					return c.JSON(http.StatusForbidden, apierror.Forbidden("workspace access denied"))
 				}
 				return next(c)
@@ -245,14 +299,7 @@ func RequireWorkspaceMember(db *sqlx.DB) echo.MiddlewareFunc {
 			// fix into a data-loss-shaped outage. One extra query, only on the path
 			// that was about to 403 anyway.
 			userID, idErr := GetUserID(c)
-			if idErr != nil || db == nil {
-				return c.JSON(http.StatusForbidden, apierror.Forbidden("workspace access denied"))
-			}
-			var ownerID uuid.UUID
-			if err := db.QueryRowContext(c.Request().Context(),
-				"SELECT owner_id FROM workspaces WHERE id = $1 AND deleted_at IS NULL",
-				wsID,
-			).Scan(&ownerID); err != nil || ownerID != userID {
+			if idErr != nil || !UserOwnsWorkspace(c.Request().Context(), db, wsID, userID) {
 				return c.JSON(http.StatusForbidden, apierror.Forbidden("workspace access denied"))
 			}
 			return next(c)
@@ -260,8 +307,65 @@ func RequireWorkspaceMember(db *sqlx.DB) echo.MiddlewareFunc {
 	}
 }
 
-// RequireWorkspaceMemberScoped enforces workspace membership on every route that
-// carries a :ws_id path parameter, and does nothing on routes that carry none.
+// UserOwnsWorkspace reports whether userID is the recorded owner of wsID.
+//
+// It exists as the owner-fallback half of the membership rule (see
+// RequireWorkspaceMember) in a form that callers outside the Echo middleware
+// chain — the WebSocket endpoint — can use, so the rule is written once.
+func UserOwnsWorkspace(ctx context.Context, db *sqlx.DB, wsID, userID uuid.UUID) bool {
+	if db == nil {
+		return false
+	}
+	var ownerID uuid.UUID
+	if err := db.QueryRowContext(ctx,
+		"SELECT owner_id FROM workspaces WHERE id = $1 AND deleted_at IS NULL",
+		wsID,
+	).Scan(&ownerID); err != nil {
+		return false
+	}
+	return ownerID == userID
+}
+
+// UserIsWorkspaceMember reports whether userID may act inside wsID: a
+// workspace_members row, or the owner fallback for the workspaces whose owner row
+// was never written (see RequireWorkspaceMember for why those exist).
+//
+// RequireWorkspaceMember does not call this directly because WorkspaceRLS has
+// already done the workspace_members lookup for it and stores the result in the
+// Echo context; this is the same rule for callers that have no Echo context —
+// today, the WebSocket handshake.
+func UserIsWorkspaceMember(ctx context.Context, db *sqlx.DB, wsID, userID uuid.UUID) bool {
+	if db == nil {
+		return false
+	}
+	var role string
+	if err := db.QueryRowContext(ctx,
+		"SELECT role FROM workspace_members WHERE workspace_id = $1 AND user_id = $2",
+		wsID, userID,
+	).Scan(&role); err == nil && role != "" {
+		return true
+	}
+	return UserOwnsWorkspace(ctx, db, wsID, userID)
+}
+
+// AgentIsInWorkspace reports whether the agent belongs to wsID.
+func AgentIsInWorkspace(ctx context.Context, db *sqlx.DB, wsID, agentID uuid.UUID) bool {
+	if db == nil {
+		return false
+	}
+	var agentWsID uuid.UUID
+	if err := db.QueryRowContext(ctx,
+		"SELECT workspace_id FROM agents WHERE id = $1 AND deleted_at IS NULL",
+		agentID,
+	).Scan(&agentWsID); err != nil {
+		return false
+	}
+	return agentWsID == wsID
+}
+
+// RequireWorkspaceMemberScoped enforces workspace membership on every route whose
+// path names another tenant's data — that is, every route carrying one of
+// WorkspaceScopedParams — and does nothing on routes that carry none.
 //
 // It exists because the per-route form could be — and was — forgotten. Only 2 of
 // the 46 :ws_id routes actually had the guard attached, which left any logged-in
@@ -270,18 +374,57 @@ func RequireWorkspaceMember(db *sqlx.DB) echo.MiddlewareFunc {
 // neither this guard nor an RBAC check — to rename another tenant's workspace or
 // change its slug, breaking every /w/<slug>/... link that team had.
 //
+// The first version of this guard keyed on the literal :ws_id parameter, which
+// left the same hole one indirection further out: WorkspaceRLS resolves the tenant
+// from :proj_id, :task_id, :artifact_id, :agent_id, :field_id and :init_id too, and
+// those routes went unchecked. A stranger could read any agent by id and — via
+// POST /agents/:agent_id/activity, which had no RBAC bar either — write a forged
+// entry into another tenant's agent activity log. So the guard now keys on the
+// workspace WorkspaceRLS actually resolved, not on the spelling of one parameter.
+//
+// Three cases, in order:
+//
+//  1. No workspace-scoping parameter in the path (/auth/me, /notifications,
+//     /memories/:id): nothing to check, pass through.
+//  2. A parameter is present and WorkspaceRLS resolved a workspace *from it*:
+//     require membership of that workspace.
+//  3. A parameter is present and no workspace came out of it: refuse. The
+//     workspace in context, if any, is the caller's own (agent key auth), which
+//     says nothing about the object they asked for — treating that as permission
+//     is how case 2 gets bypassed. This is already how the per-route guard behaved
+//     on /tasks/:task_id, so a soft-deleted or unknown id answers 403 rather than
+//     404 — the same answer either way, which is also the answer that does not
+//     confirm the id exists.
+//
 // Registered once on the authenticated API group, it covers every current and
-// future :ws_id route by construction, so a new route cannot silently ship
-// unguarded. Must run after DualAuth and WorkspaceRLS.
+// future workspace-scoped route by construction, so a new route cannot silently
+// ship unguarded. Must run after DualAuth and WorkspaceRLS.
 func RequireWorkspaceMemberScoped(db *sqlx.DB) echo.MiddlewareFunc {
 	guard := RequireWorkspaceMember(db)
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		guarded := guard(next)
 		return func(c echo.Context) error {
-			if c.Param("ws_id") == "" {
+			if !routeIsWorkspaceScoped(c) {
 				return next(c)
+			}
+			if workspaceScopeExemptRoutes[c.Path()] {
+				return next(c)
+			}
+			if src, _ := c.Get(ContextKeyWorkspaceSource).(string); src != WorkspaceSourceParam {
+				return c.JSON(http.StatusForbidden, apierror.Forbidden("workspace access denied"))
 			}
 			return guarded(c)
 		}
 	}
+}
+
+// routeIsWorkspaceScoped reports whether the request names a tenant-owned object
+// through one of the parameters WorkspaceRLS resolves a workspace from.
+func routeIsWorkspaceScoped(c echo.Context) bool {
+	for _, name := range WorkspaceScopedParams {
+		if c.Param(name) != "" {
+			return true
+		}
+	}
+	return false
 }

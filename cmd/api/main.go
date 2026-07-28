@@ -536,8 +536,13 @@ func main() {
 	}()
 	log.Println("Checkout reaper started (interval: 60s)")
 
-	// WebSocket upgrade endpoint (before auth middleware, auth is handled in the handler).
-	e.GET("/ws", wsHub.Handler(hub, authService, agentService))
+	// WebSocket upgrade endpoint. It sits on the root instance, ahead of the
+	// /api/v1 group, so none of the group middleware below (WorkspaceRLS,
+	// RequireWorkspaceMemberScoped) can ever run on it: both authentication and
+	// the cross-tenant check are the handler's own responsibility. The authorizer
+	// is what lets it apply the same membership rule as the REST API instead of a
+	// second, divergent copy.
+	e.GET("/ws", wsHub.Handler(hub, authService, agentService, wsHub.NewDBAuthorizer(db)))
 
 	// 9. Register all routes.
 	v1 := e.Group("/api/v1")
@@ -941,7 +946,7 @@ func main() {
 	// Spark catalog routes (optional; only registered when MESH_SPARK_ENABLED=true).
 	if cfg.Spark.Enabled {
 		sparkClient := spark.NewClient(cfg.Spark.URL)
-		sparkHandler := handler.NewSparkHandler(sparkClient, agentService)
+		sparkHandler := handler.NewSparkHandler(sparkClient, agentService, workspaceMemberRepo)
 		api.GET("/spark/agents", sparkHandler.Search)
 		api.GET("/spark/agents/popular", sparkHandler.Popular)
 		api.GET("/spark/agents/:agent_id", sparkHandler.GetByID)

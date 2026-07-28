@@ -132,9 +132,12 @@ func TestAgentFlow(t *testing.T) {
 		require.Equal(t, http.StatusNoContent, resp.StatusCode)
 		resp.Body.Close()
 
-		// Verify agent is not returned.
+		// Verify agent is not returned. The cross-tenant guard resolves the
+		// workspace from :agent_id and skips soft-deleted rows, so a deleted
+		// agent is refused (403) before the handler can answer 404 — the same
+		// way /tasks/:task_id has always behaved for a deleted task.
 		resp = env.Get(t, fmt.Sprintf("/api/v1/agents/%s", agentID))
-		assert.Contains(t, []int{http.StatusNotFound, http.StatusInternalServerError}, resp.StatusCode,
+		assert.Contains(t, []int{http.StatusNotFound, http.StatusForbidden, http.StatusInternalServerError}, resp.StatusCode,
 			"deleted agent should not be accessible")
 		resp.Body.Close()
 	})

@@ -9,6 +9,8 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	mw "github.com/entire-vc/evc-mesh/internal/middleware"
+	"github.com/entire-vc/evc-mesh/internal/repository"
 	"github.com/entire-vc/evc-mesh/internal/service"
 	"github.com/entire-vc/evc-mesh/internal/spark"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
@@ -18,13 +20,20 @@ import (
 type SparkHandler struct {
 	sparkClient  *spark.Client
 	agentService service.AgentService
+	memberRepo   repository.WorkspaceMemberRepository
 }
 
 // NewSparkHandler creates a new SparkHandler.
-func NewSparkHandler(client *spark.Client, agentService service.AgentService) *SparkHandler {
+//
+// memberRepo is what Install checks its caller against. The Spark routes are the
+// only ones in the authenticated group exempt from RequireWorkspaceMemberScoped —
+// their :agent_id is a Spark catalog id, not a local agents.id, so no workspace
+// can be resolved from the path — which leaves Install to do the check itself.
+func NewSparkHandler(client *spark.Client, agentService service.AgentService, memberRepo repository.WorkspaceMemberRepository) *SparkHandler {
 	return &SparkHandler{
 		sparkClient:  client,
 		agentService: agentService,
+		memberRepo:   memberRepo,
 	}
 }
 
@@ -143,6 +152,14 @@ func (h *SparkHandler) Install(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid workspace_id"))
 	}
 
+	// The target workspace arrives in the body, so no middleware saw it: without
+	// this check any authenticated stranger could register an agent into someone
+	// else's workspace and be handed its API key in the response. Same bar as
+	// POST /workspaces/:ws_id/agents, which this route otherwise duplicates.
+	if denied := h.requireRegisterAgent(c, wsID); denied != nil {
+		return denied
+	}
+
 	// Fetch agent manifest from Spark catalog.
 	manifest, err := h.sparkClient.GetByID(c.Request().Context(), sparkAgentID)
 	if err != nil {
@@ -190,6 +207,31 @@ func (h *SparkHandler) Install(c echo.Context) error {
 			"author":  manifest.Author,
 		},
 	})
+}
+
+// requireRegisterAgent enforces, for a workspace named in a request body, the
+// same rule mw.RequirePermission(PermRegisterAgent) enforces for one named in the
+// path: agents may not do it at all, and a user must hold the permission in that
+// specific workspace. Returns nil when the caller is allowed.
+func (h *SparkHandler) requireRegisterAgent(c echo.Context, wsID uuid.UUID) error {
+	if mw.IsAgent(c) {
+		return c.JSON(http.StatusForbidden, apierror.Forbidden("agents cannot perform this action"))
+	}
+	if h.memberRepo == nil {
+		return c.JSON(http.StatusForbidden, apierror.Forbidden("workspace access denied"))
+	}
+	userID, err := mw.GetUserID(c)
+	if err != nil {
+		return c.JSON(http.StatusForbidden, apierror.Forbidden("user context required"))
+	}
+	role, err := h.memberRepo.GetRole(c.Request().Context(), wsID, userID)
+	if err != nil {
+		return c.JSON(http.StatusForbidden, apierror.Forbidden("not a workspace member"))
+	}
+	if !mw.RoleHasPermission(role, mw.PermRegisterAgent) {
+		return c.JSON(http.StatusForbidden, apierror.Forbidden("insufficient permissions"))
+	}
+	return nil
 }
 
 // resolveAgentType maps Spark agent_type string to local domain.AgentType.

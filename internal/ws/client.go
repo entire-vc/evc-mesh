@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -39,30 +40,119 @@ type OutgoingMessage struct {
 	Timestamp string          `json:"timestamp"`
 }
 
+// Channel name prefixes. The personal prefix is a longer form of the workspace
+// one, so it must always be tested first.
+const (
+	personalChannelPrefix  = "ws:user:"
+	workspaceChannelPrefix = "ws:"
+	projectChannelPrefix   = "project:"
+)
+
+// Principal is the authenticated identity behind a connection together with the
+// single workspace that identity was authorised for during the handshake.
+// Everything the connection is later allowed to subscribe to derives from it.
+type Principal struct {
+	// UserID is uuid.Nil on agent connections.
+	UserID uuid.UUID
+	// AgentID is uuid.Nil on user connections.
+	AgentID uuid.UUID
+	// WorkspaceID and WorkspaceSlug are the workspace the handshake verified the
+	// principal belongs to; both are zero when the connection named none.
+	WorkspaceID   uuid.UUID
+	WorkspaceSlug string
+}
+
 // Client represents a single WebSocket connection.
 type Client struct {
 	ID            string
 	Conn          *websocket.Conn
 	Hub           *Hub
 	WorkspaceSlug string
+	WorkspaceID   uuid.UUID
 	UserID        uuid.UUID
 	AgentID       uuid.UUID
 	Subscriptions map[string]bool // channel names: "project:{id}", "ws:{slug}"
 	Send          chan []byte
+	authz         Authorizer
 	mu            sync.RWMutex
 }
 
-// NewClient creates a new WebSocket client.
-func NewClient(conn *websocket.Conn, hub *Hub, userID uuid.UUID, workspaceSlug string) *Client {
+// NewClient creates a new WebSocket client for an already-authenticated principal.
+// The authorizer is consulted on every later subscribe request; a nil one denies
+// them rather than allowing them, so a miswired caller loses live updates instead
+// of leaking another tenant's.
+func NewClient(conn *websocket.Conn, hub *Hub, p Principal, authz Authorizer) *Client {
 	clientID := uuid.New().String()
 	return &Client{
 		ID:            clientID,
 		Conn:          conn,
 		Hub:           hub,
-		UserID:        userID,
-		WorkspaceSlug: workspaceSlug,
+		UserID:        p.UserID,
+		AgentID:       p.AgentID,
+		WorkspaceID:   p.WorkspaceID,
+		WorkspaceSlug: p.WorkspaceSlug,
 		Subscriptions: make(map[string]bool),
 		Send:          make(chan []byte, sendBufferSize),
+		authz:         authz,
+	}
+}
+
+// CanSubscribe reports whether this connection may receive a channel's traffic.
+// The handshake establishes who the principal is and which workspace they belong
+// to; this decides what that entitles them to hear.
+//
+//   - "ws:user:<uuid>" — personal mention feed: only the user it names.
+//   - "ws:<slug>" — workspace event feed: only the workspace the handshake
+//     authorised. Slugs are ws-<8 hex> and appear in every /w/<slug>/... URL, so
+//     accepting whichever one the client asked for was the whole hole.
+//   - "project:<uuid>" — project event feed: only projects inside that workspace.
+//
+// Anything else is refused. The hub fans out on exact channel names, so a name
+// that matches none of these can only be a guess at someone else's.
+func (c *Client) CanSubscribe(ctx context.Context, channel string) bool {
+	switch {
+	case strings.HasPrefix(channel, personalChannelPrefix):
+		if c.UserID == uuid.Nil {
+			return false
+		}
+		id, err := uuid.Parse(strings.TrimPrefix(channel, personalChannelPrefix))
+		return err == nil && id == c.UserID
+
+	case strings.HasPrefix(channel, workspaceChannelPrefix):
+		return c.WorkspaceSlug != "" && channel == workspaceChannelPrefix+c.WorkspaceSlug
+
+	case strings.HasPrefix(channel, projectChannelPrefix):
+		if c.WorkspaceID == uuid.Nil || c.authz == nil {
+			return false
+		}
+		projectID, err := uuid.Parse(strings.TrimPrefix(channel, projectChannelPrefix))
+		if err != nil {
+			return false
+		}
+		wsID, err := c.authz.ProjectWorkspaceID(ctx, projectID)
+		return err == nil && wsID == c.WorkspaceID
+
+	default:
+		return false
+	}
+}
+
+// sendDenial tells the client its subscribe request was refused. The reason is
+// deliberately constant: "no such project" and "not your project" have to look
+// alike, or the socket becomes an enumeration tool for ids it cannot read.
+func (c *Client) sendDenial(channel string) {
+	msg, err := json.Marshal(OutgoingMessage{
+		Type:      "subscribe.denied",
+		Channel:   channel,
+		Data:      json.RawMessage(`{"error":"forbidden"}`),
+		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		return
+	}
+	select {
+	case c.Send <- msg:
+	default:
 	}
 }
 
@@ -94,6 +184,16 @@ func (c *Client) ReadPump(ctx context.Context) {
 
 		switch msg.Action {
 		case "subscribe":
+			// Authorise every channel, not just the one named at handshake time.
+			// The handshake used to be the only check, and this branch let any
+			// connected client add "ws:<victim-slug>" or "project:<victim-uuid>"
+			// afterwards and receive that tenant's events — the same leak through
+			// a second door.
+			if !c.CanSubscribe(ctx, msg.Channel) {
+				log.Printf("[ws-client] %s denied subscribe to %s", c.ID, msg.Channel)
+				c.sendDenial(msg.Channel)
+				continue
+			}
 			c.mu.Lock()
 			c.Subscriptions[msg.Channel] = true
 			c.mu.Unlock()
