@@ -653,10 +653,31 @@ jobs:
       # alert on the gate step alone would make the newest way of going blind the
       # one way that goes blind SILENTLY, which is the whole failure mode this
       # alert exists to prevent.
+      #
+      # A DRILL IS NOT AN INCIDENT. `expect_commit` exists so the refusal can be
+      # proved on demand by pinning to a commit prod is not serving — and the
+      # first time that proof was run (30328820759) it posted a real
+      # `version-mismatch` alert onto the live tracking issue #397, claiming the
+      # safety net was blind when nothing was wrong. Left alone, the acceptance
+      # criterion that asks for this proof would charge a false page every time
+      # anyone satisfied it, and the readers of that issue would learn to discount
+      # it — which is the same alert-fatigue failure the dedup key above exists to
+      # avoid.
+      #
+      # The suppression is deliberately narrow AND fails toward alerting. Only a
+      # `workflow_dispatch` that explicitly NAMED a commit is treated as a drill:
+      # `expect_commit` is unsettable on push/schedule/pull_request, so those runs
+      # match the first disjunct and alert unconditionally, whatever an absent
+      # input coerces to. (Writing it as a bare `inputs.expect_commit == ''` would
+      # have put the whole alert at the mercy of that coercion — a guard that
+      # silences the alarm on every automatic run is strictly worse than the false
+      # page it was added to prevent.) A drill is also never silent: the operator
+      # dispatched it, `rc=2` and the reason are in the step summary and the log.
       - name: Alert — recall gate is blind (INCONCLUSIVE)
         if: >-
           steps.scope.outputs.relevant == 'true'
           && (steps.gate.outputs.rc == '2' || steps.version.outputs.rc == '2')
+          && (github.event_name != 'workflow_dispatch' || inputs.expect_commit == '')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TITLE: 'Memory recall gate is INCONCLUSIVE (safety net blind)'
