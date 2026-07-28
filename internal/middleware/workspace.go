@@ -302,6 +302,14 @@ func WorkspaceRLS(db *sqlx.DB, projectRepo repository.ProjectRepository) echo.Mi
 			// 2f. Try the "flat" object routes: a parameter naming one row whose
 			// workspace the query in workspaceObjectResolvers reads. See that
 			// table for what went unguarded before it existed.
+			//
+			// The first of these parameters present in the path wins, and the loop
+			// stops there whether or not the lookup found anything — no current
+			// route carries two of them, and if one ever did, falling through to
+			// the second would let a request name two tenants and be checked
+			// against the more convenient one. Not resolving is the safe outcome:
+			// RequireWorkspaceMemberScoped refuses a scoped route that produced no
+			// workspace.
 			if !resolved {
 				for _, r := range workspaceObjectResolvers {
 					raw := c.Param(r.param)

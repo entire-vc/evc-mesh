@@ -243,7 +243,7 @@ func (h *RecurringHandler) Delete(c echo.Context) error {
 	return c.NoContent(http.StatusNoContent)
 }
 
-// triggerNowResponse is the JSON response for POST /recurring/:id/trigger
+// triggerNowResponse is the JSON response for POST /recurring/:recurring_id/trigger
 type triggerNowResponse struct {
 	Task           *domain.Task `json:"task"`
 	InstanceNumber int          `json:"instance_number"`
