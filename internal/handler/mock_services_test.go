@@ -20,6 +20,7 @@ type MockWorkspaceService struct {
 	UpdateFunc      func(ctx context.Context, workspace *domain.Workspace) error
 	DeleteFunc      func(ctx context.Context, id uuid.UUID) error
 	ListByOwnerFunc func(ctx context.Context, ownerID uuid.UUID) ([]domain.Workspace, error)
+	ListForUserFunc func(ctx context.Context, userID uuid.UUID) ([]domain.Workspace, error)
 }
 
 func (m *MockWorkspaceService) Create(ctx context.Context, workspace *domain.Workspace) error {
@@ -60,6 +61,13 @@ func (m *MockWorkspaceService) Delete(ctx context.Context, id uuid.UUID) error {
 func (m *MockWorkspaceService) ListByOwner(ctx context.Context, ownerID uuid.UUID) ([]domain.Workspace, error) {
 	if m.ListByOwnerFunc != nil {
 		return m.ListByOwnerFunc(ctx, ownerID)
+	}
+	return nil, nil
+}
+
+func (m *MockWorkspaceService) ListForUser(ctx context.Context, userID uuid.UUID) ([]domain.Workspace, error) {
+	if m.ListForUserFunc != nil {
+		return m.ListForUserFunc(ctx, userID)
 	}
 	return nil, nil
 }

@@ -189,9 +189,15 @@ func TestWorkspaceHandler_List_Success(t *testing.T) {
 	}
 
 	mockSvc := &MockWorkspaceService{
-		ListByOwnerFunc: func(ctx context.Context, ownerID uuid.UUID) ([]domain.Workspace, error) {
-			assert.Equal(t, userID, ownerID)
+		ListForUserFunc: func(_ context.Context, uid uuid.UUID) ([]domain.Workspace, error) {
+			assert.Equal(t, userID, uid)
 			return workspaces, nil
+		},
+		// Guard against a regression back to ownership-only listing, which
+		// hides workspaces the user is only a member of.
+		ListByOwnerFunc: func(_ context.Context, _ uuid.UUID) ([]domain.Workspace, error) {
+			t.Errorf("List must use ListForUser, not ListByOwner")
+			return nil, nil
 		},
 	}
 

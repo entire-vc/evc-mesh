@@ -125,6 +125,170 @@ func TestWorkspaceRepo_ListByOwner(t *testing.T) {
 	assert.Len(t, list, 3)
 }
 
+// createTestUser inserts a user row (workspace_members.user_id has an FK to
+// users) and registers its cleanup.
+func createTestUser(t *testing.T, db *sqlx.DB, prefix string) uuid.UUID {
+	t.Helper()
+	ctx := context.Background()
+
+	id := uuid.New()
+	suffix := uuid.New().String()[:8]
+	_, err := db.ExecContext(ctx,
+		`INSERT INTO users (id, email, password_hash, display_name, username, is_active, created_at, updated_at)
+		 VALUES ($1, $2, 'testhash', $3, $4, true, $5, $5)`,
+		id, prefix+"-"+suffix+"@test.example", prefix+" user", prefix+suffix, time.Now().UTC(),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(ctx, "DELETE FROM users WHERE id = $1", id)
+	})
+	return id
+}
+
+// createTestWorkspace inserts a workspace owned by ownerID and registers cleanup.
+func createTestWorkspace(t *testing.T, db *sqlx.DB, name string, ownerID uuid.UUID, createdAt time.Time) uuid.UUID {
+	t.Helper()
+	ctx := context.Background()
+
+	id := uuid.New()
+	_, err := db.ExecContext(ctx,
+		`INSERT INTO workspaces (id, name, slug, owner_id, settings, created_at, updated_at)
+		 VALUES ($1, $2, $3, $4, '{}', $5, $5)`,
+		id, name, "lfu-"+uuid.New().String()[:8], ownerID, createdAt,
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(ctx, "DELETE FROM workspace_members WHERE workspace_id = $1", id)
+		_, _ = db.ExecContext(ctx, "DELETE FROM workspaces WHERE id = $1", id)
+	})
+	return id
+}
+
+func addWorkspaceMember(t *testing.T, db *sqlx.DB, workspaceID, userID uuid.UUID, role string) {
+	t.Helper()
+	_, err := db.ExecContext(context.Background(),
+		`INSERT INTO workspace_members (id, workspace_id, user_id, role, created_at, updated_at)
+		 VALUES ($1, $2, $3, $4::workspace_role, $5, $5)`,
+		uuid.New(), workspaceID, userID, role, time.Now().UTC(),
+	)
+	require.NoError(t, err)
+}
+
+// containsWorkspace reports whether the list contains the given workspace ID.
+func containsWorkspace(list []domain.Workspace, id uuid.UUID) bool {
+	for i := range list {
+		if list[i].ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+// countWorkspace returns how many times the given workspace ID appears.
+func countWorkspace(list []domain.Workspace, id uuid.UUID) int {
+	n := 0
+	for i := range list {
+		if list[i].ID == id {
+			n++
+		}
+	}
+	return n
+}
+
+// TestWorkspaceRepo_ListForUser covers workspace discovery by membership, which
+// is what GET /api/v1/workspaces relies on. Ownership alone used to be the
+// predicate, which made a workspace invisible to everyone but its owner.
+func TestWorkspaceRepo_ListForUser(t *testing.T) {
+	db := testDB(t)
+	repo := NewWorkspaceRepo(db)
+	ctx := context.Background()
+
+	ownerID := createTestUser(t, db, "lfu-owner")
+	memberID := createTestUser(t, db, "lfu-member")
+	outsiderID := createTestUser(t, db, "lfu-outsider")
+
+	now := time.Now().UTC().Truncate(time.Microsecond)
+
+	// Normal workspace: owner + member both have workspace_members rows.
+	wsID := createTestWorkspace(t, db, "ListForUser WS", ownerID, now)
+	addWorkspaceMember(t, db, wsID, ownerID, "owner")
+	addWorkspaceMember(t, db, wsID, memberID, "member")
+
+	// Legacy workspace: owner has NO workspace_members row (the auto-insert in
+	// workspaceService.Create / auth.Service.Register is best-effort).
+	legacyID := createTestWorkspace(t, db, "Legacy WS", ownerID, now.Add(time.Second))
+
+	// Soft-deleted workspace the member belongs to: must never be listed.
+	deletedID := createTestWorkspace(t, db, "Deleted WS", ownerID, now.Add(2*time.Second))
+	addWorkspaceMember(t, db, deletedID, memberID, "member")
+	_, err := db.ExecContext(ctx, "UPDATE workspaces SET deleted_at = NOW() WHERE id = $1", deletedID)
+	require.NoError(t, err)
+
+	t.Run("owner sees their own workspace", func(t *testing.T) {
+		list, err := repo.ListForUser(ctx, ownerID)
+		require.NoError(t, err)
+		assert.True(t, containsWorkspace(list, wsID), "owner must see the workspace they own")
+	})
+
+	t.Run("member who is not the owner sees the workspace", func(t *testing.T) {
+		list, err := repo.ListForUser(ctx, memberID)
+		require.NoError(t, err)
+		assert.True(t, containsWorkspace(list, wsID), "member must see the workspace")
+	})
+
+	t.Run("non-member does not see the workspace", func(t *testing.T) {
+		list, err := repo.ListForUser(ctx, outsiderID)
+		require.NoError(t, err)
+		assert.False(t, containsWorkspace(list, wsID))
+		assert.False(t, containsWorkspace(list, legacyID))
+		assert.Empty(t, list, "a user with no workspaces gets an empty list")
+	})
+
+	t.Run("owner with a missing workspace_members row still sees the workspace", func(t *testing.T) {
+		var memberCount int
+		require.NoError(t, db.GetContext(ctx, &memberCount,
+			"SELECT COUNT(*) FROM workspace_members WHERE workspace_id = $1", legacyID))
+		require.Equal(t, 0, memberCount, "precondition: legacy workspace has no member rows")
+
+		list, err := repo.ListForUser(ctx, ownerID)
+		require.NoError(t, err)
+		assert.True(t, containsWorkspace(list, legacyID), "legacy owner must still see their workspace")
+	})
+
+	t.Run("owner who is also a member is not duplicated", func(t *testing.T) {
+		list, err := repo.ListForUser(ctx, ownerID)
+		require.NoError(t, err)
+		assert.Equal(t, 1, countWorkspace(list, wsID), "workspace must appear exactly once")
+	})
+
+	t.Run("soft-deleted workspaces are excluded", func(t *testing.T) {
+		list, err := repo.ListForUser(ctx, memberID)
+		require.NoError(t, err)
+		assert.False(t, containsWorkspace(list, deletedID))
+	})
+
+	t.Run("results are ordered by created_at ascending", func(t *testing.T) {
+		list, err := repo.ListForUser(ctx, ownerID)
+		require.NoError(t, err)
+		require.Len(t, list, 2)
+		assert.Equal(t, wsID, list[0].ID)
+		assert.Equal(t, legacyID, list[1].ID)
+	})
+
+	t.Run("removing the membership removes the workspace from the list", func(t *testing.T) {
+		_, err := db.ExecContext(ctx,
+			"DELETE FROM workspace_members WHERE workspace_id = $1 AND user_id = $2", wsID, memberID)
+		require.NoError(t, err)
+
+		list, err := repo.ListForUser(ctx, memberID)
+		require.NoError(t, err)
+		assert.False(t, containsWorkspace(list, wsID), "an ex-member must not see the workspace")
+
+		// Restore for independence from subtest ordering.
+		addWorkspaceMember(t, db, wsID, memberID, "member")
+	})
+}
+
 // ---------------------------------------------------------------------------
 // TaskRepository
 // ---------------------------------------------------------------------------

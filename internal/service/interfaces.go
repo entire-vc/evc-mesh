@@ -23,6 +23,9 @@ type WorkspaceService interface {
 	Update(ctx context.Context, workspace *domain.Workspace) error
 	Delete(ctx context.Context, id uuid.UUID) error
 	ListByOwner(ctx context.Context, ownerID uuid.UUID) ([]domain.Workspace, error)
+	// ListForUser returns workspaces visible to the user: those they are a
+	// member of plus those they own.
+	ListForUser(ctx context.Context, userID uuid.UUID) ([]domain.Workspace, error)
 }
 
 // ProjectService provides business logic for project management.

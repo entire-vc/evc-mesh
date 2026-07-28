@@ -106,7 +106,7 @@ func (h *WorkspaceHandler) List(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid user_id in context"))
 	}
 
-	workspaces, err := h.workspaceService.ListByOwner(c.Request().Context(), userID)
+	workspaces, err := h.workspaceService.ListForUser(c.Request().Context(), userID)
 	if err != nil {
 		return handleError(c, err)
 	}

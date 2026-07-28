@@ -19,6 +19,9 @@ type WorkspaceRepository interface {
 	Update(ctx context.Context, workspace *domain.Workspace) error
 	Delete(ctx context.Context, id uuid.UUID) error
 	ListByOwner(ctx context.Context, ownerID uuid.UUID) ([]domain.Workspace, error)
+	// ListForUser returns workspaces the user is a member of, plus the ones
+	// they own (legacy owners may have no workspace_members row).
+	ListForUser(ctx context.Context, userID uuid.UUID) ([]domain.Workspace, error)
 }
 
 // ProjectFilter defines filtering options for listing projects.

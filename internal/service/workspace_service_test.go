@@ -329,3 +329,124 @@ func TestWorkspaceService_Delete(t *testing.T) {
 		})
 	}
 }
+
+// ---------------------------------------------------------------------------
+// TestWorkspaceService_ListForUser
+// ---------------------------------------------------------------------------
+
+// newWS is a small helper for building workspaces in list tests.
+func newWS(name string, ownerID uuid.UUID, createdAt time.Time) *domain.Workspace {
+	return &domain.Workspace{
+		ID:        uuid.New(),
+		Name:      name,
+		Slug:      slugify(name),
+		OwnerID:   ownerID,
+		CreatedAt: createdAt,
+		UpdatedAt: createdAt,
+	}
+}
+
+func TestWorkspaceService_ListForUser(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("member who is not the owner sees the workspace", func(t *testing.T) {
+		svc, repo := setupWorkspaceService()
+		owner, member := uuid.New(), uuid.New()
+
+		ws := newWS("Owned By Someone Else", owner, frozenTime)
+		require.NoError(t, repo.Create(ctx, ws))
+		repo.AddMember(ws.ID, owner)
+		repo.AddMember(ws.ID, member)
+
+		got, err := svc.ListForUser(ctx, member)
+		require.NoError(t, err)
+		require.Len(t, got, 1)
+		assert.Equal(t, ws.ID, got[0].ID)
+	})
+
+	t.Run("non-member sees nothing", func(t *testing.T) {
+		svc, repo := setupWorkspaceService()
+		owner, outsider := uuid.New(), uuid.New()
+
+		ws := newWS("Private", owner, frozenTime)
+		require.NoError(t, repo.Create(ctx, ws))
+		repo.AddMember(ws.ID, owner)
+
+		got, err := svc.ListForUser(ctx, outsider)
+		require.NoError(t, err)
+		assert.Empty(t, got)
+	})
+
+	t.Run("owner with no membership row still sees the workspace", func(t *testing.T) {
+		svc, repo := setupWorkspaceService()
+		owner := uuid.New()
+
+		// Legacy row: workspace created before the auto-membership insert,
+		// or the best-effort insert failed.
+		ws := newWS("Legacy", owner, frozenTime)
+		require.NoError(t, repo.Create(ctx, ws))
+
+		got, err := svc.ListForUser(ctx, owner)
+		require.NoError(t, err)
+		require.Len(t, got, 1)
+		assert.Equal(t, ws.ID, got[0].ID)
+	})
+
+	t.Run("owner who is also a member appears exactly once", func(t *testing.T) {
+		svc, repo := setupWorkspaceService()
+		owner := uuid.New()
+
+		ws := newWS("Both", owner, frozenTime)
+		require.NoError(t, repo.Create(ctx, ws))
+		repo.AddMember(ws.ID, owner)
+
+		got, err := svc.ListForUser(ctx, owner)
+		require.NoError(t, err)
+		assert.Len(t, got, 1)
+	})
+
+	t.Run("removing the membership removes the workspace from the list", func(t *testing.T) {
+		svc, repo := setupWorkspaceService()
+		owner, member := uuid.New(), uuid.New()
+
+		ws := newWS("Revocable", owner, frozenTime)
+		require.NoError(t, repo.Create(ctx, ws))
+		repo.AddMember(ws.ID, member)
+
+		got, err := svc.ListForUser(ctx, member)
+		require.NoError(t, err)
+		require.Len(t, got, 1)
+
+		repo.RemoveMember(ws.ID, member)
+
+		got, err = svc.ListForUser(ctx, member)
+		require.NoError(t, err)
+		assert.Empty(t, got)
+	})
+
+	t.Run("owned and member workspaces are combined and ordered by created_at", func(t *testing.T) {
+		svc, repo := setupWorkspaceService()
+		user, other := uuid.New(), uuid.New()
+
+		older := newWS("Older Owned", user, frozenTime.Add(-time.Hour))
+		newer := newWS("Newer Member", other, frozenTime)
+		require.NoError(t, repo.Create(ctx, older))
+		require.NoError(t, repo.Create(ctx, newer))
+		repo.AddMember(newer.ID, user)
+
+		got, err := svc.ListForUser(ctx, user)
+		require.NoError(t, err)
+		require.Len(t, got, 2)
+		assert.Equal(t, older.ID, got[0].ID, "oldest first")
+		assert.Equal(t, newer.ID, got[1].ID)
+	})
+
+	t.Run("repository error is propagated", func(t *testing.T) {
+		svc, repo := setupWorkspaceService()
+		repo.errToReturn = apierror.InternalError("db down")
+
+		got, err := svc.ListForUser(ctx, uuid.New())
+		require.Error(t, err)
+		assert.Nil(t, got)
+	})
+}

@@ -220,6 +220,13 @@ func (r *mockWorkspaceRepo) ListByOwner(_ context.Context, ownerID uuid.UUID) ([
 	return result, nil
 }
 
+// ListForUser: this mock stores no memberships, so visibility collapses to
+// ownership. Membership listing is covered in internal/service and the
+// postgres integration tests.
+func (r *mockWorkspaceRepo) ListForUser(ctx context.Context, userID uuid.UUID) ([]domain.Workspace, error) {
+	return r.ListByOwner(ctx, userID)
+}
+
 // ---
 
 type mockWorkspaceMemberRepo struct {
