@@ -679,8 +679,18 @@ but weaker than the name promises.
 
    | arm | file | how to capture |
    |---|---|---|
-   | branch (required) | `baseline_retrieval_branch.json` | dispatch the workflow on `main`; the branch job writes it with `--arm branch` |
-   | prod (canary) | `baseline_retrieval.json` | `python run_ci.py --retrieval-only --update-baseline` |
+   | branch (required) | `baseline_retrieval_branch.json` | dispatch on `main` with `update_baseline: true`, `baseline_arm: retrieval-branch`; download the `baseline-retrieval-branch` artifact and commit it |
+   | prod (canary) | `baseline_retrieval.json` | dispatch on `main` with `update_baseline: true`, `baseline_arm: retrieval` |
+
+   > This table said something else until 2026-07-28 — "dispatch the workflow on
+   > `main`; the branch job writes it with `--arm branch`" — and it was **inert**.
+   > The branch job does run on dispatch (it carries no `if:`), but nothing in it
+   > ever passed `--update-baseline`, and there was no upload step, so following
+   > the instruction produced a normal judging run and no artifact. It would have
+   > been discovered by whoever tried to enable the gate after the merge. Both the
+   > capture step and `test_the_required_arm_can_capture_its_own_baseline` now
+   > exist; the test asserts the *invocation*, since `--arm branch` on the judging
+   > call satisfies a substring check while capturing nothing.
 
    The file must be generated while the embedder is healthy (`search_mode:
    "hybrid"`) — a baseline captured during a dense-arm outage bakes in the

@@ -41,13 +41,18 @@ on:
         description: >-
           Which baseline `update_baseline` re-snaps. `end-to-end` writes
           baseline.json in the paid advisory arm. `retrieval` writes
-          baseline_retrieval.json in the free recall arm — the one behind the
+          baseline_retrieval.json in the prod canary. `retrieval-branch` writes
+          baseline_retrieval_branch.json in the branch arm — the one behind the
           REQUIRED check, so its capture is refused outright unless the run was
-          complete and served in `hybrid` mode. `both` re-snaps each in its own arm.
+          complete and served in `hybrid` mode. `both` re-snaps end-to-end and
+          retrieval, each in its own arm. The three retrieval files are NOT
+          interchangeable: each records its own `arm` and one used in the wrong
+          arm is refused as `arm-mismatch`.
         type: choice
         options:
           - end-to-end
           - retrieval
+          - retrieval-branch
           - both
         required: false
         default: end-to-end
@@ -139,8 +144,9 @@ jobs:
     runs-on: ubuntu-latest
     # ~10 min of bench against a local build, plus build + model download on a
     # cold cache. Generous rather than tight: a timeout here reads as a gate
-    # failure, and this is the arm that blocks merges.
-    timeout-minutes: 45
+    # failure, and this is the arm that blocks merges. A capture runs the whole
+    # bench `repeat` times, so it gets the same headroom the prod arm gets.
+    timeout-minutes: ${{ (inputs.update_baseline && 120) || 45 }}
     permissions:
       contents: read
       issues: write
@@ -213,6 +219,20 @@ jobs:
           python scripts/memory-bench/test_fixture_isolation.py
           python scripts/memory-bench/dense_arm_control.py --selftest
           python scripts/memory-bench/prod_window.py --selftest
+
+      # One source of truth for "this dispatch is a capture, not a verdict" —
+      # the re-snap must run and the judging gate must not, and two copies of the
+      # expression drift into both running or neither.
+      #
+      # `pull_request` is excluded explicitly. `inputs.*` is empty on that event
+      # so the expression is already false, but this arm — unlike the prod one —
+      # DOES run on PRs, so the exclusion has to be visible here rather than
+      # inferred from a property of a different trigger.
+      - name: Capture or judge?
+        id: mode
+        run: |
+          echo "capture=${{ (github.event_name != 'pull_request' && inputs.update_baseline && inputs.baseline_arm == 'retrieval-branch') && 'true' || 'false' }}" \
+            >> "$GITHUB_OUTPUT"
 
       - name: Does this change touch memory?
         id: scope
@@ -388,9 +408,50 @@ jobs:
       # exactly the artefacts a reviewer needs on a red, and the default `if`
       # withholds them precisely then. The job still fails: these steps report
       # their own conclusions, they do not launder the control's.
+      # The capture path for THIS arm's baseline. Without it the required check
+      # is permanently `no-baseline` ⇒ INCONCLUSIVE — required, and blocking
+      # nothing but the dense-arm control. The README used to say "dispatch the
+      # workflow on main; the branch job writes it": the job does run on
+      # dispatch, but nothing in it ever passed `--update-baseline`, so the
+      # documented procedure was inert and would only have been discovered by
+      # someone following it after the merge.
+      #
+      # `--repeat` matters more here than anywhere: 4 questions per category
+      # means one flipped answer moves a category by 0.25, which is the whole
+      # tolerance. A one-pass floor is a coin toss frozen into the gate.
+      - name: Re-snap the branch recall baseline
+        id: resnap
+        if: steps.scope.outputs.relevant == 'true' && steps.mode.outputs.capture == 'true'
+        env:
+          MESH_MCP_BIN: ${{ github.workspace }}/mesh-mcp-bin
+          RECALL_GRAPH_ENABLED: 'true'
+          LME_TOP_K: '10'
+          BENCH_RUN_NONCE: ${{ github.run_id }}-${{ github.run_attempt }}-c
+        run: |
+          cd scripts/memory-bench
+          python run_ci.py --retrieval-only --arm branch --update-baseline \
+            --repeat "${{ inputs.repeat || '3' }}" 2>&1 | tee resnap.log
+          echo "### Branch recall baseline re-snapped" >> "$GITHUB_STEP_SUMMARY"
+          echo '`baseline_retrieval_branch.json` is uploaded as an artifact — commit it by hand.' \
+            >> "$GITHUB_STEP_SUMMARY"
+
+      # Captured HERE and committed by hand, never generated on a laptop: a
+      # baseline snapped against a different embedder or a different DB is not
+      # comparable to the runs that will be judged against it, and that is the
+      # same not-comparable this workflow already exits 2 over (`arm-mismatch`).
+      - name: Upload the re-snapped branch baseline
+        if: ${{ !cancelled() && steps.resnap.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: baseline-retrieval-branch
+          path: |
+            scripts/memory-bench/baseline_retrieval_branch.json
+            scripts/memory-bench/resnap.log
+          if-no-files-found: error
+
       - name: Run the recall gate against the branch build
         id: gate
-        if: ${{ !cancelled() && steps.scope.outputs.relevant == 'true' }}
+        if: ${{ !cancelled() && steps.scope.outputs.relevant == 'true' && steps.mode.outputs.capture != 'true' }}
         env:
           MESH_MCP_BIN: ${{ github.workspace }}/mesh-mcp-bin
           RECALL_GRAPH_ENABLED: 'true'

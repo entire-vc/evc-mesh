@@ -289,6 +289,43 @@ class TestEverySelfCheckIsActuallyInvoked(unittest.TestCase):
         for expected in ("test_gate_dense_arm.py", "dense_arm_control.py", "prod_window.py"):
             self.assertIn(expected, found, f"{expected} was not discovered as a self-check")
 
+    def test_the_required_arm_can_capture_its_own_baseline(self):
+        """Without a capture path the required check is `no-baseline` for ever —
+        required, and blocking nothing but the dense-arm control.
+
+        The README used to say "dispatch the workflow on main; the branch job
+        writes it with --arm branch". The job does run on dispatch (it carries no
+        `if:`), but nothing in it ever passed `--update-baseline`, so the
+        documented procedure was inert — discoverable only by someone following
+        it after the merge and finding no artifact.
+
+        Asserted on the invocation, not on the word: `--arm branch` appearing in
+        the judging call would satisfy a substring check while capturing nothing.
+        """
+        block = self._required_job_block()
+        capture = re.search(
+            r"^\s*python run_ci\.py[^\n]*--update-baseline[^\n]*$", block, re.M
+        ) or re.search(
+            r"^\s*python run_ci\.py .*\\\n\s*.*--update-baseline", block, re.M
+        )
+        self.assertIsNotNone(
+            capture,
+            "the required arm has no `--update-baseline` invocation, so "
+            "baseline_retrieval_branch.json cannot be produced by CI and the gate "
+            "stays permanently INCONCLUSIVE on no-baseline.",
+        )
+        self.assertIn(
+            "--arm branch", capture.group(0),
+            "the capture must name `--arm branch`, or it writes the PROD baseline "
+            "file from the branch arm's numbers — an arm-mismatch baked into the "
+            "floor rather than caught as one.",
+        )
+        self.assertIn(
+            "baseline_retrieval_branch.json", block,
+            "the captured baseline is never uploaded, so the run produces a file "
+            "that dies with the runner.",
+        )
+
     def test_a_mention_in_prose_does_not_count_as_an_invocation(self):
         """Positive control on the matcher, in the direction that actually broke.
         The step's own comment names two of these scripts; if the pattern counted
