@@ -271,6 +271,11 @@ jobs:
           # fits. Paired with `timeout-minutes: 50` above — raise both together or
           # the guard dies as a timeout on the runs it exists for.
           BENCH_VERSION_WAIT_SECONDS: '900'
+          # Operator-supplied, so it goes through the environment rather than
+          # `${{ }}` interpolation into the script body — an input spliced into a
+          # shell line is the standard Actions script-injection shape, and this one
+          # runs with the bench credentials in scope.
+          EXPECT_COMMIT_INPUT: ${{ inputs.expect_commit }}
         run: |
           set -euo pipefail
           # Pin only where `github.sha` names a commit prod is expected to serve.
@@ -279,7 +284,7 @@ jobs:
           # merge commit — never deployed, so a pin there would wedge every PR at
           # INCONCLUSIVE for ever. Those runs RECORD the serving commit instead and
           # are judged only on whether it changed underneath them.
-          expect="${{ inputs.expect_commit }}"
+          expect="${EXPECT_COMMIT_INPUT:-}"
           if [ -z "$expect" ] && [ "${{ github.ref }}" = "refs/heads/main" ]; then
             expect="${{ github.sha }}"
           fi
@@ -483,6 +488,10 @@ jobs:
           # Derived from the run id rather than random so an orphaned row names
           # the run that abandoned it.
           BENCH_RUN_NONCE: ${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}
+          # The commit the version pin confirmed prod was serving before the
+          # measurement began. Empty when no pin applied and the endpoint could
+          # not be read, in which case the stability check below is skipped.
+          SERVED_AT_START: ${{ steps.version.outputs.served }}
         run: |
           cd scripts/memory-bench
           set +e
@@ -514,10 +523,10 @@ jobs:
           # is no more attributable than a PASS — and blocking a merge on a red
           # nobody can reproduce is how a gate loses its authority. INCONCLUSIVE
           # pages instead.
-          if [ -n "${{ steps.version.outputs.served }}" ]; then
+          if [ -n "${SERVED_AT_START:-}" ]; then
             set +e
-            python3 ../../scripts/memory-bench/check_serving_version.py \
-              --was "${{ steps.version.outputs.served }}" 2>&1 | tee -a gate.log
+            python3 check_serving_version.py \
+              --was "${SERVED_AT_START}" 2>&1 | tee -a gate.log
             vrc=${PIPESTATUS[0]}
             set -e
             if [ "$vrc" != "0" ]; then
