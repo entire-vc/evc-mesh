@@ -255,6 +255,24 @@ class TestUnstatedArmBackCompat(_Harness):
         self.assertEqual(rc, EXIT_INCONCLUSIVE, out)
         self.assertIn(REASON_ARM_MISMATCH, out)
 
+    def test_the_REAL_committed_prod_baseline_is_refused_in_the_branch_arm(self):
+        """The fixtures above state `arm: prod`, so they exercise the cross-arm
+        half of the guard. The file actually sitting in this repo states NO arm
+        at all — so the real "someone copies baseline_retrieval.json into the
+        branch path" accident travels the *unstated* half instead, and a pin
+        built only from `ARM_PROD` fixtures would not cover the real file.
+
+        Reads the committed file rather than a fixture: if a future capture
+        starts labelling the prod baseline `arm: prod`, this keeps passing via
+        the other half, and if the guard is ever narrowed to one half it fails
+        here whichever half survives."""
+        real = Path(run_ci.__file__).resolve().parent / "baseline_retrieval.json"
+        self.BRANCH_RETRIEVAL_BASELINE_FILE.write_text(real.read_text())
+        self._stub_answers({"knowledge-update": 4, "multi-session": 4})
+        rc, out = self._run("--retrieval-only", "--arm", ARM_BRANCH)
+        self.assertEqual(rc, EXIT_INCONCLUSIVE, out)
+        self.assertIn(REASON_ARM_MISMATCH, out)
+
 
 class TestTheArmIsRecordedOnCapture(_Harness):
     def test_capture_writes_the_arm_into_the_file(self):
