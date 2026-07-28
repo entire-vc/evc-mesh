@@ -156,8 +156,8 @@ func (h *SparkHandler) Install(c echo.Context) error {
 	// this check any authenticated stranger could register an agent into someone
 	// else's workspace and be handed its API key in the response. Same bar as
 	// POST /workspaces/:ws_id/agents, which this route otherwise duplicates.
-	if denied := h.requireRegisterAgent(c, wsID); denied != nil {
-		return denied
+	if denied, refusal := h.requireRegisterAgent(c, wsID); denied {
+		return refusal
 	}
 
 	// Fetch agent manifest from Spark catalog.
@@ -212,26 +212,32 @@ func (h *SparkHandler) Install(c echo.Context) error {
 // requireRegisterAgent enforces, for a workspace named in a request body, the
 // same rule mw.RequirePermission(PermRegisterAgent) enforces for one named in the
 // path: agents may not do it at all, and a user must hold the permission in that
-// specific workspace. Returns nil when the caller is allowed.
-func (h *SparkHandler) requireRegisterAgent(c echo.Context, wsID uuid.UUID) error {
+// specific workspace.
+//
+// It reports whether the request was refused, and the caller must return
+// immediately when it was. The refusal cannot be signalled through the error
+// return alone: c.JSON returns nil once it has written the response, so an
+// `if err := check(); err != nil` guard would write the 403 and then carry on and
+// install the agent anyway.
+func (h *SparkHandler) requireRegisterAgent(c echo.Context, wsID uuid.UUID) (bool, error) {
 	if mw.IsAgent(c) {
-		return c.JSON(http.StatusForbidden, apierror.Forbidden("agents cannot perform this action"))
+		return true, c.JSON(http.StatusForbidden, apierror.Forbidden("agents cannot perform this action"))
 	}
 	if h.memberRepo == nil {
-		return c.JSON(http.StatusForbidden, apierror.Forbidden("workspace access denied"))
+		return true, c.JSON(http.StatusForbidden, apierror.Forbidden("workspace access denied"))
 	}
 	userID, err := mw.GetUserID(c)
 	if err != nil {
-		return c.JSON(http.StatusForbidden, apierror.Forbidden("user context required"))
+		return true, c.JSON(http.StatusForbidden, apierror.Forbidden("user context required"))
 	}
 	role, err := h.memberRepo.GetRole(c.Request().Context(), wsID, userID)
 	if err != nil {
-		return c.JSON(http.StatusForbidden, apierror.Forbidden("not a workspace member"))
+		return true, c.JSON(http.StatusForbidden, apierror.Forbidden("not a workspace member"))
 	}
 	if !mw.RoleHasPermission(role, mw.PermRegisterAgent) {
-		return c.JSON(http.StatusForbidden, apierror.Forbidden("insufficient permissions"))
+		return true, c.JSON(http.StatusForbidden, apierror.Forbidden("insufficient permissions"))
 	}
-	return nil
+	return false, nil
 }
 
 // resolveAgentType maps Spark agent_type string to local domain.AgentType.
