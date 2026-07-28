@@ -80,6 +80,35 @@ func TestRegister_RejectsCaseVariantOfExistingEmail(t *testing.T) {
 	}
 }
 
+// TestDeriveUsername_MatchesRegistration exercises the exported wrapper other
+// packages use (invite acceptance). It must agree with what Register stores
+// for the same address, including on the messy spellings.
+func TestDeriveUsername_MatchesRegistration(t *testing.T) {
+	for _, tc := range []struct {
+		email string
+		want  string
+	}{
+		{"frank@example.com", "frank"},
+		{"Frank@Example.COM", "frank"},
+		{"  frank@example.com  ", "frank"},
+		{"first.last@example.com", "first-last"},
+		{"x@example.com", "x0"},
+	} {
+		t.Run(tc.email, func(t *testing.T) {
+			svc, _, _, _, _ := newTestService()
+
+			got, err := svc.DeriveUsername(context.Background(), tc.email)
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got)
+
+			user, _, regErr := svc.Register(context.Background(), tc.email, "StrongP4ss", "Someone")
+			require.NoError(t, regErr)
+			assert.Equal(t, got, user.Username,
+				"DeriveUsername must return what Register would have assigned")
+		})
+	}
+}
+
 func TestRegister_WhitespacePaddedEmailCanLogIn(t *testing.T) {
 	svc, _, _, _, _ := newTestService()
 

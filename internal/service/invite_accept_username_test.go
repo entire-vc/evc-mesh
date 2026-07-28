@@ -2,16 +2,20 @@ package service
 
 import (
 	"context"
+	"errors"
+	"net/http"
 	"regexp"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/entire-vc/evc-mesh/internal/auth"
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	"github.com/entire-vc/evc-mesh/pkg/apierror"
 )
 
 // usernameConstraintRe is the CHECK constraint from migration
@@ -125,6 +129,132 @@ func TestAcceptInvite_NormalizesInviteEmail(t *testing.T) {
 	require.NotNil(t, created, "the account must be stored under the canonical address")
 	assert.Equal(t, "frank@example.com", created.Email)
 	assert.Equal(t, "frank", created.Username)
+}
+
+func TestAcceptInvite_FallsBackToEmailWhenNameIsBlank(t *testing.T) {
+	invites, userRepo, _ := newInviteTestFixture(t, "Frank@Example.com")
+
+	_, _, err := invites.AcceptInvite(context.Background(), AcceptInviteInput{
+		Token:    "invite-token-for-test",
+		Password: "StrongP4ss",
+		// Name deliberately omitted.
+	})
+	require.NoError(t, err)
+
+	created, err := userRepo.GetByEmail(context.Background(), "frank@example.com")
+	require.NoError(t, err)
+	require.NotNil(t, created)
+	assert.Equal(t, "frank@example.com", created.Name,
+		"with no name supplied, the canonical email stands in — not the raw invite spelling")
+}
+
+// failingUserRepo lets a test fail one specific write without breaking the
+// reads AcceptInvite performs first.
+type failingUserRepo struct {
+	*MockUserRepository
+	createErr         error
+	usernameExistsErr error
+}
+
+func (r *failingUserRepo) Create(ctx context.Context, u *domain.User) error {
+	if r.createErr != nil {
+		return r.createErr
+	}
+	return r.MockUserRepository.Create(ctx, u)
+}
+
+func (r *failingUserRepo) UsernameExists(ctx context.Context, name string) (bool, error) {
+	if r.usernameExistsErr != nil {
+		return false, r.usernameExistsErr
+	}
+	return r.MockUserRepository.UsernameExists(ctx, name)
+}
+
+// newFailingInviteFixture is newInviteTestFixture with an injectable failure on
+// the user write path.
+func newFailingInviteFixture(t *testing.T, repo *failingUserRepo) WorkspaceInviteService {
+	t.Helper()
+
+	authSvc := auth.NewService(repo, minimalRefreshTokenRepo{}, nil, nil, testAuthJWTSecret)
+	inviteRepo := &minimalInviteRepo{}
+	require.NoError(t, inviteRepo.Create(context.Background(), &domain.WorkspaceInvite{
+		ID:          uuid.New(),
+		WorkspaceID: uuid.New(),
+		Email:       "frank@example.com",
+		Role:        domain.RoleMember,
+		Token:       "invite-token-for-test",
+		ExpiresAt:   time.Now().Add(24 * time.Hour),
+		CreatedAt:   time.Now(),
+	}))
+
+	return NewInviteService(inviteRepo, repo, &minimalWorkspaceMemberRepo{}, nil, nil, authSvc, "https://mesh.example.com")
+}
+
+func TestAcceptInvite_UsernameDerivationFailureIsAnAPIError(t *testing.T) {
+	invites := newFailingInviteFixture(t, &failingUserRepo{
+		MockUserRepository: NewMockUserRepository(),
+		usernameExistsErr:  errors.New("connection reset by peer"),
+	})
+
+	_, _, err := invites.AcceptInvite(context.Background(), AcceptInviteInput{
+		Token:    "invite-token-for-test",
+		Name:     "Frank",
+		Password: "StrongP4ss",
+	})
+	require.Error(t, err)
+
+	var apiErr *apierror.Error
+	require.ErrorAs(t, err, &apiErr)
+	assert.Equal(t, http.StatusInternalServerError, apiErr.StatusCode())
+	assert.NotContains(t, apiErr.Error(), "connection reset by peer",
+		"the driver error must stay in the log, not go out to the client")
+}
+
+// TestAcceptInvite_DuplicateIsConflictNotRawConstraint is the regression guard
+// for the reported symptom: a failing INSERT used to come back as a 400
+// carrying the Postgres constraint text.
+func TestAcceptInvite_DuplicateIsConflictNotRawConstraint(t *testing.T) {
+	invites := newFailingInviteFixture(t, &failingUserRepo{
+		MockUserRepository: NewMockUserRepository(),
+		createErr: &pq.Error{
+			Code:       "23505",
+			Message:    `duplicate key value violates unique constraint "ix_users_email_lower"`,
+			Constraint: "ix_users_email_lower",
+		},
+	})
+
+	_, _, err := invites.AcceptInvite(context.Background(), AcceptInviteInput{
+		Token:    "invite-token-for-test",
+		Name:     "Frank",
+		Password: "StrongP4ss",
+	})
+	require.Error(t, err)
+
+	var apiErr *apierror.Error
+	require.ErrorAs(t, err, &apiErr)
+	assert.Equal(t, http.StatusConflict, apiErr.StatusCode())
+	assert.NotContains(t, apiErr.Error(), "violates unique constraint")
+	assert.NotContains(t, apiErr.Error(), "ix_users_email_lower")
+}
+
+func TestAcceptInvite_CreateFailureIsGenericInternalError(t *testing.T) {
+	invites := newFailingInviteFixture(t, &failingUserRepo{
+		MockUserRepository: NewMockUserRepository(),
+		createErr:          errors.New(`pq: new row for relation "users" violates check constraint "chk_users_username"`),
+	})
+
+	_, _, err := invites.AcceptInvite(context.Background(), AcceptInviteInput{
+		Token:    "invite-token-for-test",
+		Name:     "Frank",
+		Password: "StrongP4ss",
+	})
+	require.Error(t, err)
+
+	var apiErr *apierror.Error
+	require.ErrorAs(t, err, &apiErr)
+	assert.Equal(t, http.StatusInternalServerError, apiErr.StatusCode())
+	assert.NotContains(t, apiErr.Error(), "chk_users_username",
+		"constraint names must never reach the client")
 }
 
 // noopEmailService swallows the invite email; CreateInvite ignores its error
