@@ -836,13 +836,18 @@ func main() {
 	api.GET("/workspaces/:ws_id/triage", triageHandler.List)
 
 	// Recurring task schedule routes.
+	//
+	// The parameter is spelled :recurring_id rather than :id so WorkspaceRLS can
+	// resolve the schedule's workspace from it and the membership guard applies.
+	// The URLs are unchanged. :id is also what /memories/:id is spelled with, and
+	// one central resolver cannot serve two different tables.
 	api.POST("/projects/:proj_id/recurring", recurringHandler.Create, projAccess, rbac(mw.PermCreateTask))
 	api.GET("/projects/:proj_id/recurring", recurringHandler.List, projAccess)
-	api.GET("/recurring/:id", recurringHandler.GetByID)
-	api.PATCH("/recurring/:id", recurringHandler.Update, rbac(mw.PermUpdateTask))
-	api.DELETE("/recurring/:id", recurringHandler.Delete, rbac(mw.PermDeleteTask))
-	api.POST("/recurring/:id/trigger", recurringHandler.Trigger, rbac(mw.PermCreateTask))
-	api.GET("/recurring/:id/history", recurringHandler.History)
+	api.GET("/recurring/:recurring_id", recurringHandler.GetByID)
+	api.PATCH("/recurring/:recurring_id", recurringHandler.Update, rbac(mw.PermUpdateTask))
+	api.DELETE("/recurring/:recurring_id", recurringHandler.Delete, rbac(mw.PermDeleteTask))
+	api.POST("/recurring/:recurring_id/trigger", recurringHandler.Trigger, rbac(mw.PermCreateTask))
+	api.GET("/recurring/:recurring_id/history", recurringHandler.History)
 
 	// Task template routes.
 	api.POST("/projects/:proj_id/templates", taskTemplateHandler.Create, projAccess, rbac(mw.PermCreateTask))
