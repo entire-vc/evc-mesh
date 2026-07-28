@@ -1198,8 +1198,41 @@ jobs:
 
       # A gate that recovered should stop shouting: close the tracking issue once
       # a real, comparable verdict is produced again.
+      # EVENT SCOPING IS IDENTICAL TO THE ALERT ABOVE. Read the two `if:`s
+      # together; `test_gate_blindness.py` extracts both from this file and fails
+      # if they diverge, because the previous divergence was invisible in review.
+      #
+      # NEITHER is push-scoped. This step used to carry
+      # `github.event_name == 'push'` while the alert carried no such clause, so
+      # the alert could be RAISED by a schedule but only RESOLVED by a push: a
+      # blind episode found on a Sunday stayed open until someone happened to
+      # push to main. Episodes were bounded by push cadence rather than by
+      # recovery.
+      #
+      # That is load-bearing now rather than merely untidy. The dedup key below
+      # suppresses a same-kind alert for as long as the issue is OPEN, so a
+      # stale-open issue does not just sit there — it MUTES its own re-alerts.
+      # The widened dedup is correct, but it is only correct while the issue
+      # closes on recovery.
+      #
+      # Why unscoped is the right direction and not "scope the alert too": this
+      # job is the prod canary and carries `if: github.event_name != 'pull_request'`
+      # at the job level, so it never measures a branch. Every run that reaches
+      # here measured PROD. The trigger therefore says nothing about what was
+      # measured — a schedule that comes back green is exactly as much a recovery
+      # as a push that does.
+      #
+      # The drill exclusion IS mirrored, deliberately. `expect_commit` marks an
+      # operator drill, and a drill is not an incident (see the alert's comment);
+      # by the same token a drill is not a RECOVERY. Without this clause a
+      # dispatch pinned to a commit prod happens to be serving could close a real
+      # episode it was never permitted to open — the same false signal, in the
+      # direction that loses the alarm instead of faking one.
       - name: Resolve blindness alert (gate is measuring again)
-        if: steps.scope.outputs.relevant == 'true' && steps.gate.outputs.rc == '0' && github.event_name == 'push'
+        if: >-
+          steps.scope.outputs.relevant == 'true'
+          && steps.gate.outputs.rc == '0'
+          && (github.event_name != 'workflow_dispatch' || inputs.expect_commit == '')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TITLE: 'Memory recall gate is INCONCLUSIVE (safety net blind)'

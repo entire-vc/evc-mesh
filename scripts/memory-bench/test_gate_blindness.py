@@ -1324,6 +1324,151 @@ class TestAcknowledgingAnAlertDoesNotReArmIt(unittest.TestCase):
                     f"#397's own sequence. The harness is not driving the guard.\n{out}",
                 )
                 self.assertTrue([c for c in calls if c.startswith("comment:")], label)
+def _step_if(step_name: str) -> str:
+    """The `if:` expression of the named step, AS SHIPPED, flattened to one line.
+
+    Text-level and extracted, for the same reason `_job_blocks` is: the point of
+    this helper is to read what the file actually says. Handles both the
+    single-line form (`if: a && b`) and the folded form (`if: >-` followed by an
+    indented block), because a step that changes between the two must not thereby
+    escape the check.
+    """
+    text = WORKFLOW.read_text(encoding="utf-8")
+    start = text.find(f"- name: {step_name}\n")
+    assert start != -1, (
+        f"step {step_name!r} not found in memory-bench.yml — if it was renamed, "
+        "this test must be pointed at the new name, not deleted"
+    )
+    body = text[start:]
+    m = re.search(r"^\s*if:[ \t]*(.*)$", body, re.M)
+    assert m, f"step {step_name!r} has no `if:`"
+    first = m.group(1).strip()
+    if first not in (">-", ">", "|-", "|"):
+        return " ".join(first.split())
+    # Folded block: take the indented lines that follow.
+    rest = body[m.end():].splitlines()
+    indent = None
+    parts = []
+    for ln in rest[1:] if rest and not rest[0].strip() else rest:
+        if not ln.strip():
+            break
+        cur = len(ln) - len(ln.lstrip())
+        if indent is None:
+            indent = cur
+        elif cur < indent:
+            break
+        parts.append(ln.strip())
+    return " ".join(" ".join(parts).split())
+
+
+def _event_clauses(expr: str) -> set[str]:
+    """The parts of an `if:` that scope it to an EVENT, normalised.
+
+    Splits on top-level `&&` (parenthesised disjuncts stay whole) and keeps the
+    conjuncts that mention `github.event_name` or `inputs.expect_commit`. The rc
+    predicates are deliberately excluded: alert and resolve are SUPPOSED to
+    differ there ('2' vs '0'). What must match is which runs they act on.
+    """
+    conjuncts, depth, cur = [], 0, ""
+    i = 0
+    while i < len(expr):
+        c = expr[i]
+        if c == "(":
+            depth += 1
+        elif c == ")":
+            depth -= 1
+        if depth == 0 and expr.startswith("&&", i):
+            conjuncts.append(cur)
+            cur = ""
+            i += 2
+            continue
+        cur += c
+        i += 1
+    conjuncts.append(cur)
+    return {
+        " ".join(c.split())
+        for c in conjuncts
+        if "github.event_name" in c or "inputs.expect_commit" in c
+    }
+
+
+class TestBlindnessAlertAndResolveAgreeOnEvents(unittest.TestCase):
+    """An alert that can be RAISED on more events than it can be RESOLVED on
+    bounds an episode by trigger cadence instead of by recovery.
+
+    The recall arm shipped exactly that: the alert had no event clause, the
+    resolve carried `github.event_name == 'push'`. A blind episode detected by
+    the Sunday schedule stayed open until somebody pushed to main.
+
+    It is load-bearing rather than untidy because the dedup key suppresses a
+    same-kind alert while the issue is OPEN — so a stale-open issue MUTES its own
+    re-alerts. The widened dedup is right only while the issue closes on
+    recovery.
+
+    These tests EXTRACT both conditions from the shipped workflow rather than
+    restating them. A restated rule keeps passing after the real one is deleted,
+    which is the failure mode this class exists to prevent.
+    """
+
+    ALERT = "Alert — recall gate is blind (INCONCLUSIVE)"
+    RESOLVE = "Resolve blindness alert (gate is measuring again)"
+    ADV_ALERT = "Alert — advisory arm measured nothing (INCONCLUSIVE)"
+    ADV_RESOLVE = "Resolve advisory blindness alert (arm is measuring again)"
+
+    def test_recall_arm_alert_and_resolve_act_on_the_same_events(self):
+        alert = _event_clauses(_step_if(self.ALERT))
+        resolve = _event_clauses(_step_if(self.RESOLVE))
+        self.assertEqual(
+            alert, resolve,
+            "The recall arm's blindness alert and its resolve disagree about which "
+            "events they act on. Whatever can raise the alert must be able to clear "
+            "it, or the tracking issue outlives the blindness and — via the dedup "
+            "key — silences its own re-alerts.\n"
+            f"  alert   : {sorted(alert)}\n  resolve : {sorted(resolve)}",
+        )
+
+    def test_neither_half_of_the_recall_arm_is_push_scoped(self):
+        """The specific regression: this job is the prod canary and never runs on
+        pull_request, so every run measured PROD. Scoping either half to `push`
+        discards a schedule's verdict about the very thing it just measured."""
+        for step in (self.ALERT, self.RESOLVE):
+            with self.subTest(step=step):
+                self.assertNotIn(
+                    "github.event_name == 'push'", _step_if(step),
+                    f"{step!r} is push-scoped again. A schedule measures prod just as "
+                    "a push does; bounding the episode by push cadence is the defect "
+                    "this test pins.",
+                )
+
+    def test_a_drill_can_neither_raise_nor_clear_the_alert(self):
+        """`expect_commit` marks an operator drill. A drill is not an incident —
+        and by the same token not a recovery, or a dispatch pinned to a commit
+        prod happens to be serving could close an episode it could not open."""
+        for step in (self.ALERT, self.RESOLVE):
+            with self.subTest(step=step):
+                self.assertIn(
+                    "github.event_name != 'workflow_dispatch' || inputs.expect_commit == ''",
+                    _step_if(step),
+                    f"{step!r} lost the drill guard. Losing it on the alert charges a "
+                    "false page for every drill; losing it on the resolve lets a drill "
+                    "silently close a real episode.",
+                )
+
+    def test_advisory_arm_alert_and_resolve_also_agree(self):
+        """AC4: the second copy of this guard must not drift from the first.
+
+        The advisory arm is intentionally scoped differently from the recall arm —
+        it has no version pin and therefore no drill mode, so it carries no event
+        clauses at all. What it may NOT do is disagree with itself, which is the
+        property under test here and the one that actually bit.
+        """
+        alert = _event_clauses(_step_if(self.ADV_ALERT))
+        resolve = _event_clauses(_step_if(self.ADV_RESOLVE))
+        self.assertEqual(
+            alert, resolve,
+            "The advisory arm's alert and resolve disagree about which events they "
+            f"act on.\n  alert   : {sorted(alert)}\n  resolve : {sorted(resolve)}",
+        )
 
 
 if __name__ == "__main__":
