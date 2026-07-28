@@ -150,5 +150,15 @@ func (o *openAIEmbedder) embedOnce(ctx context.Context, inputs []string) ([][]fl
 		}
 		out[d.Index] = d.Embedding
 	}
+	// Every input must come back with a vector. A response that omits one leaves a nil
+	// entry here, and a nil vector is indistinguishable downstream from "the embedder
+	// returned nothing for this chunk" — embedChunked skips such chunks, so the memory
+	// would be stored with a silently incomplete chunk set while every call reported
+	// success. Fail loudly instead.
+	for i, v := range out {
+		if v == nil {
+			return nil, fmt.Errorf("openai embed: no vector returned for input %d of %d", i, len(inputs))
+		}
+	}
 	return out, nil
 }

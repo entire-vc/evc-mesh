@@ -13,12 +13,16 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
+	dto "github.com/prometheus/client_model/go"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/repository"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
+	pkgmetrics "github.com/entire-vc/evc-mesh/pkg/metrics"
 	"github.com/entire-vc/evc-mesh/pkg/pagination"
 )
 
@@ -3193,4 +3197,67 @@ func TestEmbedBudget_ScalesWithRoundTripsAndIsCapped(t *testing.T) {
 
 	// Defensive: a zero/negative chunk count still yields a usable budget.
 	assert.Equal(t, embedBudget(1), embedBudget(0))
+}
+
+// fkViolationChunkRepo fails ReplaceChunks with a Postgres FK violation — the shape of
+// "the memory row was deleted while this goroutine was still embedding it".
+type fkViolationChunkRepo struct {
+	*mockMemoryChunkRepo
+}
+
+func (r *fkViolationChunkRepo) ReplaceChunks(_ context.Context, _ uuid.UUID, _ []domain.MemoryChunk) error {
+	return &pq.Error{Code: "23503", Constraint: "memory_chunks_memory_id_fkey"}
+}
+
+// TestEmbedAndStore_Chunked_ForeignKeyViolationIsNotAnEmbedFailure pins the distinction
+// that kept the real errors hidden: 34 FK races appeared alongside 538 genuine deadline
+// failures in the #67f4e0d9 window, and counting the races as embedding failures is what
+// makes the counter useless for alerting.
+func TestEmbedAndStore_Chunked_ForeignKeyViolationIsNotAnEmbedFailure(t *testing.T) {
+	before := testutilCounterValue(t, "store")
+
+	memRepo := &mockMemoryRepo{}
+	chunkRepo := &fkViolationChunkRepo{mockMemoryChunkRepo: newMockMemoryChunkRepo()}
+	svc := NewMemoryService(memRepo, &mockMemoryEdgeRepo{}, &switchModelEmbedder{model: "e5-small", dim: 4},
+		MemoryWithChunkRepo(chunkRepo))
+	ms := svc.(*memoryService)
+
+	ms.embedAndStore(uuid.New(), longTranscript(30))
+
+	assert.Equal(t, before, testutilCounterValue(t, "store"),
+		"a memory deleted mid-embed is a race with the deleter, not an embedding failure — counting it masks the real ones")
+}
+
+// TestEmbedAndStore_Legacy_EmbedFailureIncrementsCounter covers the non-chunked path's
+// failure accounting. Before this change mesh_memory_embed_failures_total was declared
+// and never incremented anywhere, so a dead embedder read as "no failures".
+func TestEmbedAndStore_Legacy_EmbedFailureIncrementsCounter(t *testing.T) {
+	before := testutilCounterValue(t, "store")
+
+	memRepo := &mockMemoryRepo{}
+	svc := NewMemoryService(memRepo, &mockMemoryEdgeRepo{}, alwaysFailsEmbedder{dim: 4})
+	ms := svc.(*memoryService)
+
+	ms.embedAndStore(uuid.New(), "short text, single vector path")
+
+	assert.Greater(t, testutilCounterValue(t, "store"), before,
+		"an embedder failure must be visible as a metric, not only as a log line")
+}
+
+func TestIsForeignKeyViolation(t *testing.T) {
+	assert.True(t, isForeignKeyViolation(&pq.Error{Code: "23503"}))
+	assert.True(t, isForeignKeyViolation(fmt.Errorf("wrapped: %w", &pq.Error{Code: "23503"})))
+	assert.False(t, isForeignKeyViolation(&pq.Error{Code: "23505"}), "unique violation is not an FK race")
+	assert.False(t, isForeignKeyViolation(fmt.Errorf("plain error")))
+	assert.False(t, isForeignKeyViolation(nil))
+}
+
+// testutilCounterValue reads the current value of mesh_memory_embed_failures_total{op=...}.
+func testutilCounterValue(t *testing.T, op string) float64 {
+	t.Helper()
+	m := &dto.Metric{}
+	c, err := pkgmetrics.MemoryEmbedFailuresTotal.GetMetricWithLabelValues(op)
+	require.NoError(t, err)
+	require.NoError(t, c.Write(m))
+	return m.GetCounter().GetValue()
 }

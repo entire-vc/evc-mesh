@@ -125,3 +125,89 @@ func TestOpenAIEmbedder_EmbedBatch_SplitsOversizedBatches(t *testing.T) {
 	assert.Equal(t, []int{maxClientBatchSize, 3}, sizes, "no request may exceed the server's client batch limit")
 	assert.Len(t, vecs, maxClientBatchSize+3)
 }
+
+// newJSONServer returns a test server replying with the given status and raw body.
+func newJSONServer(t *testing.T, status int, body string) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte(body))
+	}))
+}
+
+func TestOpenAIEmbedder_ErrorPaths(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("non-200 status", func(t *testing.T) {
+		srv := newJSONServer(t, http.StatusTooManyRequests, `{}`)
+		defer srv.Close()
+		_, err := NewOpenAIEmbedder(srv.URL, "", "m", 4, 5).Embed(ctx, "x")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "unexpected status 429")
+	})
+
+	t.Run("undecodable body", func(t *testing.T) {
+		srv := newJSONServer(t, http.StatusOK, `not json`)
+		defer srv.Close()
+		_, err := NewOpenAIEmbedder(srv.URL, "", "m", 4, 5).Embed(ctx, "x")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "decode response")
+	})
+
+	t.Run("empty data", func(t *testing.T) {
+		srv := newJSONServer(t, http.StatusOK, `{"data":[]}`)
+		defer srv.Close()
+		_, err := NewOpenAIEmbedder(srv.URL, "", "m", 4, 5).Embed(ctx, "x")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "empty data")
+	})
+
+	// An out-of-range index must be an error, never a silent drop: writing it would
+	// panic, and ignoring it would leave a nil vector for a chunk that reported success.
+	t.Run("index out of range", func(t *testing.T) {
+		srv := newJSONServer(t, http.StatusOK, `{"data":[{"index":7,"embedding":[1,0,0,0]}]}`)
+		defer srv.Close()
+		_, err := NewOpenAIEmbedder(srv.URL, "", "m", 4, 5).Embed(ctx, "x")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "out of range")
+	})
+
+	// A response that omits an input's vector must fail loudly. Before this check it
+	// left a nil entry, which embedChunked treats as "empty vector, skip this chunk" —
+	// storing the memory with a silently incomplete chunk set while reporting success.
+	t.Run("missing vector for an input", func(t *testing.T) {
+		srv := newJSONServer(t, http.StatusOK, `{"data":[{"index":0,"embedding":[1,0,0,0]}]}`)
+		defer srv.Close()
+		_, err := NewOpenAIEmbedder(srv.URL, "", "m", 4, 5).EmbedBatch(ctx, []string{"a", "b"})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "no vector returned for input 1")
+	})
+
+	t.Run("transport error", func(t *testing.T) {
+		srv := newJSONServer(t, http.StatusOK, `{}`)
+		srv.Close() // closed on purpose — connection refused
+		_, err := NewOpenAIEmbedder(srv.URL, "", "m", 4, 1).Embed(ctx, "x")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "http")
+	})
+
+	t.Run("empty input is a no-op", func(t *testing.T) {
+		srv := newJSONServer(t, http.StatusOK, `{"data":[]}`)
+		defer srv.Close()
+		vecs, err := NewOpenAIEmbedder(srv.URL, "", "m", 4, 5).EmbedBatch(ctx, nil)
+		require.NoError(t, err)
+		assert.Empty(t, vecs)
+	})
+
+	t.Run("api key is sent when configured", func(t *testing.T) {
+		var gotAuth string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			gotAuth = r.Header.Get("Authorization")
+			_, _ = w.Write([]byte(`{"data":[{"index":0,"embedding":[1,0,0,0]}]}`))
+		}))
+		defer srv.Close()
+		_, err := NewOpenAIEmbedder(srv.URL, "secret", "m", 4, 5).Embed(ctx, "x")
+		require.NoError(t, err)
+		assert.Equal(t, "Bearer secret", gotAuth)
+	})
+}
