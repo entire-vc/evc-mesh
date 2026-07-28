@@ -1,3 +1,16 @@
+// Editing this file does not redeploy prod, and that is deliberate.
+//
+// `deploy-backend.yml` used to trigger on `internal/**` with no exclusion, so a
+// merge touching only this file redeployed the backend — PR #407 did exactly
+// that (deploy run 30339003119; /api/version moved 5d2cda8 -> ba7deae). The
+// binary was identical either side of it, because the Go toolchain never
+// compiles `_test.go` into a non-test build. The deploy changed nothing and
+// destroyed an in-flight `memory-bench --update-baseline` capture, which spans
+// two shas and must therefore refuse to score.
+//
+// #408 appended `'!**/*_test.go'` last in that trigger's `paths:`. PR-time
+// Lint/Test/Build coverage is untouched — `ci.yml` runs on every PR and every
+// push to main independently of this filter.
 package service
 
 import (
@@ -3226,6 +3239,32 @@ func TestEmbedAndStore_Chunked_ForeignKeyViolationIsNotAnEmbedFailure(t *testing
 
 	assert.Equal(t, before, testutilCounterValue(t, "store"),
 		"a memory deleted mid-embed is a race with the deleter, not an embedding failure — counting it masks the real ones")
+}
+
+// TestEmbedAndStore_Chunked_EmbedFailureIncrementsCounter is the positive half of the
+// chunked path's failure accounting, and it was the missing one (#a8cc2bf9): deleting the
+// Inc() on the chunked branch left the whole suite green, because the only test touching
+// that counter here asserts it does NOT move (the FK race). A negative assertion without
+// its positive twin pins nothing — the counter can silently return to "declared and always
+// zero", which is the state that let 538 real failures go unseen, and every one of those
+// was on THIS path.
+//
+// The embedder must fail permanently: embedWithRetry survives a fail-once embedder by
+// design, so a transient mock would exercise the retry and never reach the counter.
+func TestEmbedAndStore_Chunked_EmbedFailureIncrementsCounter(t *testing.T) {
+	before := testutilCounterValue(t, "store")
+
+	memRepo := &mockMemoryRepo{}
+	chunkRepo := newMockMemoryChunkRepo()
+	svc := NewMemoryService(memRepo, &mockMemoryEdgeRepo{}, alwaysFailsEmbedder{dim: 4},
+		MemoryWithChunkRepo(chunkRepo))
+	ms := svc.(*memoryService)
+
+	ms.embedAndStore(uuid.New(), longTranscript(30))
+
+	assert.Greater(t, testutilCounterValue(t, "store"), before,
+		"a chunked-path embed failure must increment mesh_memory_embed_failures_total — this is the path all 538 failures in #67f4e0d9 took, and its visibility is half the point of the fix")
+	assert.Zero(t, chunkRepo.replaceCalls, "a failed embed must not write chunks")
 }
 
 // TestEmbedAndStore_Legacy_EmbedFailureIncrementsCounter covers the non-chunked path's

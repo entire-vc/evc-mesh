@@ -229,6 +229,7 @@ jobs:
           python scripts/memory-bench/test_gold_rank.py
           python scripts/memory-bench/test_fixture_isolation.py
           python scripts/memory-bench/test_serving_version.py
+          python scripts/memory-bench/test_classify_cancelled_arm.py
           python scripts/memory-bench/dense_arm_control.py --selftest
           python scripts/memory-bench/prod_window.py --selftest
 
@@ -620,12 +621,77 @@ jobs:
     # is the same lost verdict by a different route and without even a timeout in
     # the log to diagnose it from. Serialise; never pre-empt.
     #
-    # Accepted cost, stated so it is not rediscovered as a bug: a group holds one
-    # running + one pending job, so a third arrival supersedes the pending one.
-    # For a post-deploy canary that is correct — the newer commit is the one
-    # worth measuring — and it is safe only because this arm is NOT required. The
-    # required arm (above) needs no group at all: its postgres and embedder live
-    # inside its own job, so it has nothing to contend for.
+    # The required arm (above) needs no group at all: its postgres and embedder
+    # live inside its own job, so it has nothing to contend for.
+    #
+    # ------------------------------------------------------------------------
+    # WHICH EVICTIONS REMAIN POSSIBLE, and why each is acceptable (#3ce651a0).
+    # A group holds one running + one pending member; a third arrival cancels the
+    # pending one. That is not avoidable in GitHub Actions — the group is not a
+    # queue — so the only honest control is over WHO can be the third arrival.
+    # The previous version of this comment claimed only one ordering existed and
+    # was wrong about which; enumerate them all or the omitted one is the one
+    # that bites.
+    #
+    #   (a) A newer RUN's canary evicts an older run's PENDING canary.
+    #       POSSIBLE, and intended. The canary asks "is what is deployed still
+    #       good"; when two commits are deploying, the newer is the one worth
+    #       measuring, and the older canary would in any case have been refused
+    #       by the version pin for being unable to find its own sha in prod.
+    #
+    #   (b) The advisory arm evicts the canary of its OWN run.
+    #       IMPOSSIBLE now. `needs: recall-gate` keeps the advisory out of the
+    #       group until the canary has left it. This was the whole defect.
+    #
+    #   (c) An older run's advisory evicts a newer run's PENDING canary.
+    #       POSSIBLE, and now rare by construction rather than by luck: the
+    #       advisory is off `push`, so it only enters the group on the nightly
+    #       and on an explicit `full_eval` dispatch, and it needs a canary
+    #       already pending at the moment it arrives — i.e. two pushes landing
+    #       inside one nightly canary. Accepted rather than eliminated: removing
+    #       it means taking the advisory out of this group, which restores the
+    #       two arms strangling each other through one API. It is bounded by
+    #       being loud — see the `prod-arm-cancelled` job at the end of this file.
+    #
+    #   (d) This job is cancelled by `timeout-minutes`.
+    #       POSSIBLE, and indistinguishable from (a)-(c) by conclusion alone:
+    #       GitHub reports a timeout as `cancelled`, not `failure`. Only elapsed
+    #       time separates them. Also handled by `prod-arm-cancelled`.
+    #
+    #   (e) A newer run's canary evicts a PENDING ADVISORY arm.
+    #       POSSIBLE. (a)-(d) all take the canary as the victim, which is the bias
+    #       of having found this through the canary — but the advisory was the
+    #       victim in 3 of the 6 pre-fix runs, so an enumeration that only ever
+    #       kills the canary is describing half the group. `needs:` does not close
+    #       this one: it stops the advisory from being co-pending with its OWN
+    #       canary, not from pending behind a DIFFERENT run's canary and then being
+    #       evicted by a third arrival. Concretely: the nightly's canary finishes,
+    #       its advisory queues while a push run's canary holds the running slot,
+    #       and a second push evicts the pending advisory.
+    #       ACCEPTED, and it is the same trade as (a) read from the other side —
+    #       when commits are arriving faster than the advisory can measure, the
+    #       newer commit is the one worth measuring, and this arm is explicitly
+    #       advisory, never a merge gate. Note what it costs elsewhere though:
+    #       `prod-arm-cancelled` sees a newer run in existence and correctly
+    #       classifies it (a)-style as `superseded`, i.e. **silently**. So a
+    #       nightly advisory can be lost without a page. That is a deliberate
+    #       consequence of not paging on legitimate supersedes, not an oversight:
+    #       the alternative is paging on every busy evening. If the advisory's
+    #       nightly coverage is ever found to be missing more often than it lands,
+    #       the fix is a workflow-level group (one run = one slot), not an alert.
+    #
+    #   NOT possible: a newer run's ADVISORY evicting an older PENDING canary.
+    #       The newer run's own canary reaches the group first and is the arrival
+    #       that does the eviction — its advisory cannot get there while an older
+    #       canary is still pending. Enumerated to record that it was checked
+    #       rather than skipped.
+    #
+    # (a), (c), (d) and (e) all surface as the same word — `cancelled` — which is the
+    # conclusion every reader has been trained to skim past as an infra hiccup.
+    # That is how (b) hid for its entire existence. The safety net's death must
+    # not look like weather: `prod-arm-cancelled` classifies it and goes red for
+    # everything that is not (a).
+    # ------------------------------------------------------------------------
     concurrency:
       group: memory-bench-prod
       cancel-in-progress: false
@@ -678,6 +744,7 @@ jobs:
           python scripts/memory-bench/test_gold_rank.py
           python scripts/memory-bench/test_fixture_isolation.py
           python scripts/memory-bench/test_serving_version.py
+          python scripts/memory-bench/test_classify_cancelled_arm.py
           python scripts/memory-bench/dense_arm_control.py --selftest
           python scripts/memory-bench/prod_window.py --selftest
 
@@ -867,17 +934,19 @@ jobs:
           # invisible by construction: a question whose haystack was deleted under
           # it retrieves nothing and scores a clean miss (#eb1c5617).
           #
-          # Scoped by JOB, not just by run: on `push` to main, on the nightly
-          # schedule, and on any dispatch that asks for the paid arm, recall-gate
-          # and the advisory arm run CONCURRENTLY with no `needs:` between them —
-          # same questions, same workspace. A run-only nonce would leave those two
-          # colliding with each other. (PR runs skip the advisory arm, so they are
-          # single-job and were never affected by that particular overlap.)
+          # Scoped by JOB, not just by run. It was bought when recall-gate and
+          # the advisory arm ran CONCURRENTLY with no `needs:` between them —
+          # same questions, same workspace, so a run-only nonce left those two
+          # sweeping each other's fixtures. #3ce651a0 has since serialised the
+          # arms (`needs: recall-gate` on the advisory) and taken the advisory
+          # off `push`, so that overlap can no longer occur on any trigger.
           #
-          # The two cases where it does overlap are the load-bearing ones: the
-          # push run is what validates main after a merge, and the nightly is
-          # where a baseline is captured — a threshold snapped while the other job
-          # deletes fixtures underneath it becomes a permanently wrong floor.
+          # The job scope STAYS, and not out of caution: it is what makes an
+          # orphaned row name the job that abandoned it, it costs nothing, and it
+          # is the thing that would keep a future re-parallelising of the arms
+          # from silently re-opening the race. A guard removed because the
+          # condition it guards is currently impossible is a guard removed at
+          # exactly the moment nobody would notice its absence.
           #
           # Derived from the run id rather than random so an orphaned row names
           # the run that abandoned it.
@@ -944,17 +1013,19 @@ jobs:
           # invisible by construction: a question whose haystack was deleted under
           # it retrieves nothing and scores a clean miss (#eb1c5617).
           #
-          # Scoped by JOB, not just by run: on `push` to main, on the nightly
-          # schedule, and on any dispatch that asks for the paid arm, recall-gate
-          # and the advisory arm run CONCURRENTLY with no `needs:` between them —
-          # same questions, same workspace. A run-only nonce would leave those two
-          # colliding with each other. (PR runs skip the advisory arm, so they are
-          # single-job and were never affected by that particular overlap.)
+          # Scoped by JOB, not just by run. It was bought when recall-gate and
+          # the advisory arm ran CONCURRENTLY with no `needs:` between them —
+          # same questions, same workspace, so a run-only nonce left those two
+          # sweeping each other's fixtures. #3ce651a0 has since serialised the
+          # arms (`needs: recall-gate` on the advisory) and taken the advisory
+          # off `push`, so that overlap can no longer occur on any trigger.
           #
-          # The two cases where it does overlap are the load-bearing ones: the
-          # push run is what validates main after a merge, and the nightly is
-          # where a baseline is captured — a threshold snapped while the other job
-          # deletes fixtures underneath it becomes a permanently wrong floor.
+          # The job scope STAYS, and not out of caution: it is what makes an
+          # orphaned row name the job that abandoned it, it costs nothing, and it
+          # is the thing that would keep a future re-parallelising of the arms
+          # from silently re-opening the race. A guard removed because the
+          # condition it guards is currently impossible is a guard removed at
+          # exactly the moment nobody would notice its absence.
           #
           # Derived from the run id rather than random so an orphaned row names
           # the run that abandoned it.
@@ -1278,6 +1349,40 @@ jobs:
     concurrency:
       group: memory-bench-prod
       cancel-in-progress: false
+    # ORDERING, not merely membership — and this line is why the canary exists at
+    # all rather than only on paper.
+    #
+    # A GitHub concurrency group holds ONE running + ONE pending member; a third
+    # arrival cancels the pending one. Both jobs of a single run are created in
+    # the same second, so with no `needs:` between them the second to queue killed
+    # the first. WHICH of the two loses is a RACE, not an order: over the six runs
+    # observed before the fix, exactly one sibling died every time (6/6) but the
+    # victim split 3-3 — on `push` alone the canary lost 3 (30330437164,
+    # 30334077279, 30334590080) and the advisory lost 2 (30335245738,
+    # 30337511797), plus 1 advisory on `schedule`. An earlier version of this
+    # comment said "the first was always the canary"; that was generalised from
+    # three runs sharing one event type and is retracted. It matters for the fix,
+    # not the defect: anything that merely re-orders the two arms leaves the coin
+    # in play, whereas `needs:` removes it. What holds without the ordering claim
+    # is the blast radius — the canary was cancelled on 3 of 3 pushes, twice at
+    # **0s**, and produced zero verdicts in its entire existence (#3ce651a0), so
+    # the version-attribution guard shipped into it by #402 had never executed. The
+    # version-attribution guard shipped in #402 lives inside that arm and had
+    # therefore never executed on a real trigger.
+    #
+    # The accepted cost documented on the canary above ("a third arrival
+    # supersedes the pending one — the newer commit is the one worth measuring")
+    # was correct reasoning about a third RUN. The arrival here was the second JOB
+    # of the SAME run carrying the SAME sha, so the justifying premise never held
+    # and the cost that was accepted was not the cost being paid. A comment that
+    # anticipates the wrong arrival reads as a defence and silences the question.
+    #
+    # `needs:` removes the collision at its source rather than reshuffling it:
+    # this job cannot enter the group until the canary has LEFT it, so the two can
+    # never be co-pending. It also gives the pair the property the group was
+    # bought for — prod is measured by at most one job at a time — without either
+    # arm being able to pre-empt the other.
+    needs: recall-gate
     # DELIBERATELY NOT version-pinned, unlike the canary above. This arm measures
     # the same live prod and can straddle a deploy in exactly the same way, so the
     # gap is real — it is scoped out rather than overlooked. It is advisory (never
@@ -1305,13 +1410,38 @@ jobs:
     # inherited "paid capture" by default and re-armed the exact spend this
     # guard exists to prevent. An allow-list fails toward not spending money.
     # Pinned by `test_gate_arm.py::test_only_the_paid_arms_start_the_paid_job`.
+    #
+    # `push` REMOVED (#3ce651a0). Two independent reasons, either sufficient:
+    #
+    #   1. This arm is deliberately NOT version-pinned (see above), so a number it
+    #      produces on a push cannot be attributed to the commit that triggered
+    #      it — the deploy of that very commit is still in flight underneath it.
+    #      A per-commit trigger on an arm that cannot answer a per-commit question
+    #      buys an unattributable paid number. The commit-level question belongs
+    #      to the canary; this arm's question is "how is prod doing", and its home
+    #      is the nightly, exactly as the `schedule:` trigger already says.
+    #   2. It is 100% of the observed canary kills. With `needs:` above, a push
+    #      run now puts exactly ONE member in `memory-bench-prod` instead of two,
+    #      which is the only shape in which the group's documented one-running +
+    #      one-pending behaviour matches the cost that was accepted for it.
+    #
+    # Cost, stated rather than hidden: main no longer gets a per-push end-to-end
+    # judge score. It gets the nightly, plus `workflow_dispatch` with
+    # `full_eval: true` on demand — which is also how the both-arms path is now
+    # exercised on purpose instead of only by accident.
+    #
+    # `!cancelled()` rather than `success()`: the canary's verdict is not this
+    # arm's business — a red canary (rc=1) is a prod regression the advisory
+    # should still be measured against, and a default `needs:` skip would have
+    # quietly made a canary failure disable the nightly too. It is NOT `always()`:
+    # this arm is paid, and a human who cancels the run means it.
     if: >-
-      github.event_name == 'schedule' ||
-      github.event_name == 'push' ||
-      (github.event_name == 'workflow_dispatch' &&
-        (inputs.full_eval ||
-         (inputs.update_baseline &&
-          (inputs.baseline_arm == 'end-to-end' || inputs.baseline_arm == 'both'))))
+      !cancelled() &&
+      (github.event_name == 'schedule' ||
+       (github.event_name == 'workflow_dispatch' &&
+         (inputs.full_eval ||
+          (inputs.update_baseline &&
+           (inputs.baseline_arm == 'end-to-end' || inputs.baseline_arm == 'both')))))
 
     steps:
       # Same one-source-of-truth reason as the recall arm: three steps below key
@@ -1383,17 +1513,19 @@ jobs:
           # invisible by construction: a question whose haystack was deleted under
           # it retrieves nothing and scores a clean miss (#eb1c5617).
           #
-          # Scoped by JOB, not just by run: on `push` to main, on the nightly
-          # schedule, and on any dispatch that asks for the paid arm, recall-gate
-          # and the advisory arm run CONCURRENTLY with no `needs:` between them —
-          # same questions, same workspace. A run-only nonce would leave those two
-          # colliding with each other. (PR runs skip the advisory arm, so they are
-          # single-job and were never affected by that particular overlap.)
+          # Scoped by JOB, not just by run. It was bought when recall-gate and
+          # the advisory arm ran CONCURRENTLY with no `needs:` between them —
+          # same questions, same workspace, so a run-only nonce left those two
+          # sweeping each other's fixtures. #3ce651a0 has since serialised the
+          # arms (`needs: recall-gate` on the advisory) and taken the advisory
+          # off `push`, so that overlap can no longer occur on any trigger.
           #
-          # The two cases where it does overlap are the load-bearing ones: the
-          # push run is what validates main after a merge, and the nightly is
-          # where a baseline is captured — a threshold snapped while the other job
-          # deletes fixtures underneath it becomes a permanently wrong floor.
+          # The job scope STAYS, and not out of caution: it is what makes an
+          # orphaned row name the job that abandoned it, it costs nothing, and it
+          # is the thing that would keep a future re-parallelising of the arms
+          # from silently re-opening the race. A guard removed because the
+          # condition it guards is currently impossible is a guard removed at
+          # exactly the moment nobody would notice its absence.
           #
           # Derived from the run id rather than random so an orphaned row names
           # the run that abandoned it.
@@ -1456,17 +1588,19 @@ jobs:
           # invisible by construction: a question whose haystack was deleted under
           # it retrieves nothing and scores a clean miss (#eb1c5617).
           #
-          # Scoped by JOB, not just by run: on `push` to main, on the nightly
-          # schedule, and on any dispatch that asks for the paid arm, recall-gate
-          # and the advisory arm run CONCURRENTLY with no `needs:` between them —
-          # same questions, same workspace. A run-only nonce would leave those two
-          # colliding with each other. (PR runs skip the advisory arm, so they are
-          # single-job and were never affected by that particular overlap.)
+          # Scoped by JOB, not just by run. It was bought when recall-gate and
+          # the advisory arm ran CONCURRENTLY with no `needs:` between them —
+          # same questions, same workspace, so a run-only nonce left those two
+          # sweeping each other's fixtures. #3ce651a0 has since serialised the
+          # arms (`needs: recall-gate` on the advisory) and taken the advisory
+          # off `push`, so that overlap can no longer occur on any trigger.
           #
-          # The two cases where it does overlap are the load-bearing ones: the
-          # push run is what validates main after a merge, and the nightly is
-          # where a baseline is captured — a threshold snapped while the other job
-          # deletes fixtures underneath it becomes a permanently wrong floor.
+          # The job scope STAYS, and not out of caution: it is what makes an
+          # orphaned row name the job that abandoned it, it costs nothing, and it
+          # is the thing that would keep a future re-parallelising of the arms
+          # from silently re-opening the race. A guard removed because the
+          # condition it guards is currently impossible is a guard removed at
+          # exactly the moment nobody would notice its absence.
           #
           # Derived from the run id rather than random so an orphaned row names
           # the run that abandoned it.
@@ -1619,3 +1753,184 @@ jobs:
             scripts/memory-bench/bench.log
             scripts/memory-bench/results/
           retention-days: 30
+
+  # ---------------------------------------------------------------------------
+  # THE WATCHDOG. A safety net whose death is indistinguishable from weather is
+  # not a safety net.
+  #
+  # `Memory recall canary (prod)` produced ZERO verdicts between the day it was
+  # created and the day this job was written, and nobody noticed — because every
+  # one of those deaths surfaced as `cancelled`, and `cancelled` is the
+  # conclusion every reader has been trained to skim past as a runner hiccup.
+  # The defect was not that the arm could be evicted; it is that being evicted,
+  # timing out, and being legitimately superseded are the SAME WORD in the UI.
+  #
+  # So this job does the one thing the conclusion cannot: it separates them, and
+  # it goes red for every cause except the one that is actually expected.
+  #
+  # Deliberately NOT a member of `memory-bench-prod`. It touches no prod
+  # endpoint, and a watchdog that the thing it watches can evict is decoration.
+  # ---------------------------------------------------------------------------
+  prod-arm-cancelled:
+    name: Prod arm cancelled (must not be silent)
+    needs: [recall-gate, memory-bench]
+    # `always()` is load-bearing and not boilerplate: a job whose dependency was
+    # CANCELLED is skipped by default, which would make this watchdog absent from
+    # precisely the runs it exists for. `!cancelled()` would do the same thing.
+    if: >-
+      always() &&
+      (needs.recall-gate.result == 'cancelled' ||
+       needs.memory-bench.result == 'cancelled')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+
+    steps:
+      # ---------------------------------------------------------------------
+      # The discriminator is NOT elapsed time. That was the first instinct and
+      # it is wrong: GitHub sets `started_at` on a job when it is QUEUED, not
+      # when a runner picks it up, so a canary that sat pending for 9m22s and
+      # was then superseded reports the same "9 minutes" as one that ran for 9
+      # minutes. Measured on the real incident: run 30334077279's canary was
+      # pending 9m22s before an eviction — duration alone would have called that
+      # a timeout.
+      #
+      # What separates them is whether the job ever EXECUTED anything. A job
+      # cancelled while pending never reaches a runner and reports no completed
+      # steps; a job killed by `timeout-minutes` has a trail of them. Combine
+      # that with "did a newer run of this workflow already EXIST when this arm
+      # died" and every ordering enumerated on the canary job above is
+      # distinguishable:
+      #
+      #   0 steps + a newer run   -> (a) superseded. Expected. Not an alert.
+      #   0 steps + no newer run  -> (b)/(c) evicted by a SIBLING or by an older
+      #                              run's advisory. This is the bug. Red.
+      #   >=1 step                -> (d) timeout, or a mid-run cancel. Red.
+      #
+      # `created_at <= completed_at` on the newer-run filter is not tidiness. A
+      # bare "is there a newer run" is evaluated whenever this job happens to get
+      # a runner, so a push arriving in that gap would relabel a genuine
+      # sibling-eviction as an expected supersede — the alarm would go quiet
+      # exactly on a busy repo. Only a run that already existed at the instant of
+      # death can have caused it. It also makes the verdict a pure function of
+      # recorded history, which is what lets the control below be re-run.
+      #
+      # POSITIVE CONTROL, taken before this job was trusted, and it caught a real
+      # error in the first draft — see `test_classify_cancelled_arm.py`, which
+      # replays the recorded API payloads of those three runs on every PR. An
+      # UNBOUNDED newer-run query returns 4/3/2 when re-read hours later and
+      # scores all three as "superseded": the first draft of this watchdog would
+      # have stayed silent through the entire incident it was written for. That
+      # wrong rule is pinned as a negative control so it cannot return as
+      # tidy-up. Bounded at the death instant it reproduces the ground truth the
+      # incident established by hand:
+      #   30330437164  canary   0 steps, 0 newer  -> defect      (sibling)
+      #   30334077279  canary   0 steps, 1 newer  -> superseded  (run …90080)
+      #   30334590080  canary   0 steps, 0 newer  -> defect      (sibling)
+      #   30334590080  advisory 0 steps, 1 newer  -> superseded  (the 06:30 nightly)
+      # 2 defects + 2 expected. A probe that only ever produces a NEW number is
+      # unfalsifiable; reproducing the OLD one is the free calibration.
+      # ---------------------------------------------------------------------
+      - name: Checkout evc-mesh
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # The classifier is a SCRIPT, not thirty lines of shell wedged into YAML,
+      # for one reason: the logic here decides whether an alarm fires, and logic
+      # that only exists inside a workflow can only be tested by triggering the
+      # incident. `test_classify_cancelled_arm.py` replays the three recorded
+      # deaths through it on every PR, which is how the first draft's missing
+      # time-bound was caught before it shipped instead of after.
+      - name: Classify the cancellation
+        id: classify
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -uo pipefail
+
+          api="repos/${GITHUB_REPOSITORY}"
+
+          # Two payloads, straight from the API, unfiltered — the shaping is the
+          # classifier's job so that what runs here and what the tests exercise
+          # are the same code path.
+          gh api "${api}/actions/runs/${GITHUB_RUN_ID}/attempts/${GITHUB_RUN_ATTEMPT}/jobs?per_page=100" \
+            > jobs.json || echo '__unreadable__' > jobs.json
+          gh api "${api}/actions/workflows/memory-bench.yml/runs?branch=${GITHUB_REF_NAME}&per_page=100" \
+            > runs.json || echo '__unreadable__' > runs.json
+
+          python scripts/memory-bench/classify_cancelled_arm.py \
+            --jobs-json jobs.json \
+            --runs-json runs.json \
+            --run-id "${GITHUB_RUN_ID}" \
+            --github-output "$GITHUB_OUTPUT" \
+            --step-summary "$GITHUB_STEP_SUMMARY"
+
+      # A legitimate supersede is the ONE cause that must not page. Alerting on
+      # it would put this job in the red on ordinary busy days, and a check that
+      # is red routinely is a check people learn to scroll past — which is the
+      # failure this whole job exists to undo, reintroduced one level up.
+      - name: Expected supersede — nothing to page
+        if: steps.classify.outputs.verdict != 'defect'
+        # Through `env:`, not `${{ }}` inside the script — the same convention the
+        # alert steps above already follow. These values are assembled from job
+        # names and API timestamps, but a `run:` block that interpolates an output
+        # is a shell-injection shape regardless of who fills it today.
+        env:
+          VERDICT: ${{ steps.classify.outputs.verdict }}
+          REASON: ${{ steps.classify.outputs.reason }}
+        run: |
+          echo "::notice::Prod arm cancellation classified as '${VERDICT}': ${REASON}"
+
+      - name: Alert — the prod canary was killed, not superseded
+        if: steps.classify.outputs.verdict == 'defect'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TITLE: 'Memory recall canary (prod) is being cancelled, not run'
+          REASON: ${{ steps.classify.outputs.reason }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          marker="<!-- prod-arm-cancelled -->"
+          body=$(printf '%s\n\n%s\n\n%s\n\n%s\n' \
+            "$marker" \
+            "A prod arm of the memory benchmark ended \`cancelled\` for a reason that is **not** a newer run superseding it. While this holds, the post-deploy recall canary produces no verdict at all — and it does so silently, because \`cancelled\` reads as an infra hiccup." \
+            "**Reason:** ${REASON}" \
+            "Run: ${RUN_URL}")
+
+          num=$(gh issue list --state open --search "\"${TITLE}\" in:title" \
+                  --json number,title \
+                  --jq "[.[] | select(.title == \"${TITLE}\")] | .[0].number // empty")
+
+          if [ -z "$num" ]; then
+            gh issue create --title "$TITLE" --body "$body" --label memory,ci 2>/dev/null \
+              || gh issue create --title "$TITLE" --body "$body"
+            echo "Opened tracking issue."
+          else
+            # Same storm guard as the blindness alert: one live report, not one
+            # per run. A poisoned dedup key turns an alert into spam, and spam is
+            # ignored, which is the same as having no alert at all.
+            last=$(gh issue view "$num" --json comments,body \
+                     --jq '(.comments | last | .body) // .body // ""')
+            if printf '%s' "$last" | grep -qF "$marker"; then
+              echo "Issue #$num already reports this — not commenting again."
+            else
+              gh issue comment "$num" --body "$body"
+              echo "Commented on tracking issue #$num."
+            fi
+          fi
+
+      # The red is the point. An alert on an issue nobody has open in a tab is a
+      # filing cabinet; this makes the run itself carry the failure.
+      - name: Fail the run
+        if: steps.classify.outputs.verdict == 'defect'
+        env:
+          REASON: ${{ steps.classify.outputs.reason }}
+        run: |
+          echo "::error::${REASON}"
+          exit 1

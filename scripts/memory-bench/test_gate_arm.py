@@ -387,9 +387,19 @@ def _eval_raw(expr: str, ctx: dict):
     this class, which did exactly that and reported the paid arm as capturing
     for every value of `baseline_arm`.)
 
-    Only `&& || ! ( ) == !=`, string literals, `github.event_name` and
-    `inputs.*` appear here. GitHub's truthiness for an absent input is the empty
-    string, which is falsy in Python too — so unset inputs need no special case.
+    Only `&& || ! ( ) == !=`, string literals, `github.event_name`,
+    `inputs.*` and the status function `cancelled()` appear here. GitHub's
+    truthiness for an absent input is the empty string, which is falsy in
+    Python too — so unset inputs need no special case.
+
+    `cancelled()` is bound from the context and defaults to False, i.e. "this
+    run was not cancelled". That is deliberately the *routing* reading: these
+    tests ask which arms a dispatch starts, and cancellation is not an arm. An
+    unbound name would be the safer default in general — and was: before this
+    binding existed the merge of #3ce651a0's `!cancelled() &&` prefix made
+    every routing test raise `NameError` rather than quietly report the arms as
+    correct. Keep that property when extending this: an expression element this
+    evaluator does not model must raise, never evaluate to something plausible.
     """
     py = expr.replace("!=", " __NE__ ")
     py = py.replace("&&", " and ").replace("||", " or ").replace("!", " not ")
@@ -399,6 +409,7 @@ def _eval_raw(expr: str, ctx: dict):
     ns = {
         "__event": ctx["event"],
         "__inputs": ctx.get("inputs", {}),
+        "cancelled": lambda: bool(ctx.get("cancelled", False)),
         "__builtins__": {},
     }
     return eval(py, ns)  # noqa: S307 — fixed grammar, no external input
