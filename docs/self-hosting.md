@@ -416,10 +416,25 @@ that one value configures both the server and the client.
    [Closing registration](#closing-registration). Add people afterward via
    workspace invites, not the open `/register` endpoint.
 
-7. **Workspace isolation** -- Every `/api/v1/workspaces/:ws_id/...` endpoint
+7. **Workspace isolation** -- Every endpoint that names workspace-owned data
    requires the caller to be a member of that workspace (agents: to belong to
    it), enforced for the whole authenticated API group rather than per route.
    A logged-in user from another workspace gets `403` on all of them.
+
+   This covers any route whose path carries `:ws_id`, `:proj_id`, `:task_id`,
+   `:artifact_id`, `:agent_id`, `:field_id` or `:init_id` — the tenant is
+   resolved from whichever of those the route has, and membership is required
+   for the workspace that comes out. A route whose parameter resolves to nothing
+   (an unknown or deleted id) answers `403` rather than `404`: the guard runs
+   before the handler, and it does not confirm which ids exist.
+
+   The live event stream (`/ws`) applies the same rule. It is upgraded before any
+   API middleware runs, so it checks membership itself: the `workspace=` query
+   parameter is verified during the handshake, and every later
+   `{"action":"subscribe"}` is authorised too — a connection may subscribe only
+   to its own workspace channel, to projects inside that workspace, and to its
+   own user's mention feed. Agent connections take their workspace from the agent
+   key, never from the query string.
 
    Two consequences worth knowing:
 

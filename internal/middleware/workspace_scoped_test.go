@@ -25,6 +25,10 @@ func scopedCtx(e *echo.Echo, wsParam string, wsID uuid.UUID, authType string) (e
 		c.SetParamNames("ws_id")
 		c.SetParamValues(wsParam)
 		c.Set(ContextKeyWorkspaceID, wsID)
+		// WorkspaceRLS records that this workspace came out of the path rather
+		// than out of the caller's own credentials; the guard only trusts the
+		// latter to mean "already mine".
+		c.Set(ContextKeyWorkspaceSource, WorkspaceSourceParam)
 	}
 	c.Set(ContextKeyAuthType, authType)
 	return c, rec
