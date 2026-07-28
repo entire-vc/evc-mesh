@@ -1831,7 +1831,14 @@ jobs:
       (needs.recall-gate.result == 'cancelled' ||
        needs.memory-bench.result == 'cancelled')
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    # 8, not 5, because the classifier now waits for the run list to settle
+    # before believing "nothing newer was there" (up to a 150s internal
+    # deadline, on top of checkout + setup-python). A watchdog that hits its own
+    # ceiling dies `cancelled` and says nothing — the exact conclusion-that-reads
+    # -as-weather this job exists to abolish, one level up. The settler's own
+    # deadline is the real bound; this is headroom so the ceiling is never what
+    # stops it.
+    timeout-minutes: 8
     permissions:
       contents: read
       issues: write
@@ -1873,8 +1880,18 @@ jobs:
       # a runner, so a push arriving in that gap would relabel a genuine
       # sibling-eviction as an expected supersede — the alarm would go quiet
       # exactly on a busy repo. Only a run that already existed at the instant of
-      # death can have caused it. It also makes the verdict a pure function of
-      # recorded history, which is what lets the control below be re-run.
+      # death can have caused it.
+      #
+      # An earlier version of this comment went on to claim the bound "makes the
+      # verdict a pure function of recorded history". It does not, and the gap
+      # produced a false alert on this watchdog's first live firing (#13fb482b).
+      # The verdict is a pure function of THE PAYLOAD IT IS HANDED. Handed a live
+      # read taken seconds after the death, it is a function of GitHub API
+      # propagation: the evictor existed, satisfied every clause of the test, and
+      # was simply not in the response yet. Hence the settling step below, and
+      # hence a reason text that says "was VISIBLE in the run list" rather than
+      # "existed". The replay controls stay controls precisely because the
+      # freshness metadata is reported but never fed into the verdict.
       #
       # POSITIVE CONTROL, taken before this job was trusted, and it caught a real
       # error in the first draft — see `test_classify_cancelled_arm.py`, which
@@ -1920,19 +1937,39 @@ jobs:
           # are the same code path.
           gh api "${api}/actions/runs/${GITHUB_RUN_ID}/attempts/${GITHUB_RUN_ATTEMPT}/jobs?per_page=100" \
             > jobs.json || echo '__unreadable__' > jobs.json
-          # NOT `?branch=`. `memory-bench-prod` is a REPO-scoped concurrency
-          # group: a run on any ref can evict a pending arm here. Filtering the
-          # run list to this run's own branch made the commonest real evictor —
-          # someone's `workflow_dispatch` on a feature branch — structurally
-          # invisible, and the classifier then reported the one mechanism that
-          # was left in its enumeration. Scope the QUERY to the group, and let
-          # the classifier split same-ref from foreign-ref.
-          gh api "${api}/actions/workflows/memory-bench.yml/runs?per_page=100" \
-            > runs.json || echo '__unreadable__' > runs.json
 
+          # The run list is NOT fetched here any more, and not because the shell
+          # was ugly. It is fetched inside the classifier so that WHEN it is read
+          # is testable.
+          #
+          # Two properties the old one-shot `gh api > runs.json` did not have:
+          #
+          #   * NOT `?branch=`. `memory-bench-prod` is a REPO-scoped concurrency
+          #     group, so a run on any ref can evict a pending arm here.
+          #     Filtering to this run's own branch made the commonest real
+          #     evictor — someone's `workflow_dispatch` on a feature branch —
+          #     structurally invisible, and the classifier reported the one
+          #     mechanism left in its enumeration.
+          #   * SETTLED, not instantaneous. This job starts seconds after the
+          #     death it is asked about, and `/actions/runs` lags: run
+          #     30341157927 was created at 08:08:16Z, killed the canary at
+          #     08:08:18Z, and was still absent from the list at ~08:08:30Z when
+          #     the watchdog read it. The verdict flipped on replay. The run most
+          #     likely to be the superseder is the newest one, which is exactly
+          #     the row a lagging list endpoint is missing, so this is aimed at
+          #     the evidence the verdict turns on rather than being a rare tail.
+          #
+          # The settler waits out a grace measured FROM THE DEATH and then polls
+          # until consecutive reads agree. It can only ever make more runs
+          # visible, and the classifier's `created_at <= death` bound means an
+          # added run genuinely predated the death — so settling cannot invent a
+          # superseder, only stop us from missing one. `payload_settled` is
+          # reported either way, and an unsettled payload makes the reason text
+          # say so instead of asserting "no newer run existed".
           python scripts/memory-bench/classify_cancelled_arm.py \
             --jobs-json jobs.json \
-            --runs-json runs.json \
+            --settle-repo "${GITHUB_REPOSITORY}" \
+            --settle-workflow memory-bench.yml \
             --run-id "${GITHUB_RUN_ID}" \
             --run-ref "${GITHUB_REF_NAME}" \
             --github-output "$GITHUB_OUTPUT" \
