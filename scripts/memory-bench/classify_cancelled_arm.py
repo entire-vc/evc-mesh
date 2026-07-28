@@ -33,11 +33,25 @@ And for an eviction, whether anything legitimate could have done it:
 
   * A group holds one running + one pending member; a third arrival cancels the
     pending one. For a post-deploy canary that is CORRECT — the newer commit is
-    the one worth measuring. So an eviction with a newer run already in
-    existence is expected.
+    the one worth measuring. So an eviction with a newer run ON THE SAME REF
+    already in existence is expected.
+  * `memory-bench-prod` is a REPO-scoped group, so the evictor need not share
+    the victim's ref. A newer run on a DIFFERENT ref evicts just as effectively
+    while carrying no newer commit for this ref — the premise above never holds,
+    so nothing was measured in exchange for the loss. That is its own verdict
+    (`contended`), not a supersede.
   * An eviction with NO newer run in existence had no legitimate cause. What
     remains is a sibling job of the same run (the defect this module was written
     for) or an older run's advisory arm re-entering the group.
+
+The ref split is here because the un-split version got it exactly backwards on
+the first post-fix push. Run 30341031059 (`main`, the merge of the sibling fix)
+had its canary evicted by a `workflow_dispatch` on a feature branch two seconds
+earlier. The run list was fetched with `?branch=main`, so the evictor was
+invisible, the count came back 0, and the reason printed "evicted by a sibling
+job of its own run" — on a run whose sibling was `skipped` in the same payload.
+The alert fired for a mechanism its own evidence refuted. Widening the query
+alone would have been worse: it turns that page into a silent `superseded`.
 
 The newer-run test is bounded at the moment of death (`created_at <=
 completed_at`). Without that bound the answer depends on when this code happens
@@ -68,7 +82,16 @@ PROD_ARMS = (
 
 VERDICT_DEFECT = "defect"
 VERDICT_SUPERSEDED = "superseded"
+VERDICT_CONTENDED = "contended"
 VERDICT_NONE = "none"
+
+# What the watchdog SERVES is "a prod arm died for a reason that is not the one
+# documented cost". So the pageable set is named positively, by what belongs in
+# it, and the quiet set is the closed enumeration. The predecessor gated the
+# alert on `verdict != 'defect'`; adding `contended` to that would have made the
+# new verdict silent by default — a negation guard cannot know about an option
+# added after it, and the option added after it is always the interesting one.
+QUIET_VERDICTS = (VERDICT_NONE, VERDICT_SUPERSEDED)
 
 
 def executed_steps(job: dict) -> int:
@@ -93,32 +116,63 @@ def cancelled_prod_arms(jobs_payload: dict) -> list[dict]:
     ]
 
 
-def superseders_alive_at(runs_payload: dict, run_id: int, at: str | None) -> int:
-    """Non-PR runs of this workflow that were newer AND already existed at `at`.
+def own_ref(runs_payload: dict, run_id: int) -> str | None:
+    """The watched run's own `head_branch`, read from the run list."""
+    for run in runs_payload.get("workflow_runs") or []:
+        if int(run.get("id", 0)) == run_id:
+            return run.get("head_branch")
+    return None
+
+
+def superseders_alive_at(
+    runs_payload: dict, run_id: int, at: str | None, ref: str | None
+) -> tuple[int, int]:
+    """Newer non-PR runs that already existed at `at`, split by ref.
+
+    Returns `(same_ref, foreign_ref)`.
 
     Run ids are monotonic, so "newer" is a bigger id. `pull_request` runs are
     excluded because their prod arms are skipped by `if:` — they never enter the
     concurrency group, so they can never supersede anything. RFC3339 in UTC sorts
     lexicographically, so the timestamp comparison is a string comparison.
+
+    The split is the point. `memory-bench-prod` is a REPO-scoped concurrency
+    group, so a run on any ref can evict a pending arm — but only a newer run on
+    the SAME ref carries the premise that makes ordering (a) acceptable ("the
+    newer commit is the one worth measuring"). A `workflow_dispatch` on someone's
+    feature branch is not a newer commit on `main`; it is contention. Counting
+    both as one number is what let a cross-ref eviction be reported as an
+    intra-run sibling kill.
+
+    `ref=None` (the run is absent from the list) collapses both counts into
+    `foreign_ref`: unattributable contention is still contention, and this must
+    fail toward alerting.
     """
     if not at:
         # No death timestamp means no window to ask about. Refuse rather than
         # widen the question to "ever", which is how the first draft of this
         # scored all three historical defects as harmless.
-        return 0
-    return sum(
-        1
-        for run in (runs_payload.get("workflow_runs") or [])
-        if run.get("event") != "pull_request"
-        and int(run.get("id", 0)) > run_id
-        and (run.get("created_at") or "") <= at
-    )
+        return (0, 0)
+    same = foreign = 0
+    for run in runs_payload.get("workflow_runs") or []:
+        if run.get("event") == "pull_request":
+            continue
+        if int(run.get("id", 0)) <= run_id:
+            continue
+        if (run.get("created_at") or "") > at:
+            continue
+        if ref is not None and run.get("head_branch") == ref:
+            same += 1
+        else:
+            foreign += 1
+    return (same, foreign)
 
 
 def classify(
     jobs_payload: dict,
     runs_payload: dict | None,
     run_id: int,
+    run_ref: str | None = None,
 ) -> tuple[str, str, list[dict]]:
     """Return (verdict, human reason, per-arm rows).
 
@@ -141,6 +195,7 @@ def classify(
     rows: list[dict] = []
     reasons: list[str] = []
     verdict = VERDICT_SUPERSEDED
+    ref = run_ref or own_ref(runs_payload, run_id)
 
     note = (
         " (the run list was unreadable, so a superseding run could not be"
@@ -153,14 +208,16 @@ def classify(
         name = job.get("name", "?")
         steps = executed_steps(job)
         completed = job.get("completed_at")
-        alive = superseders_alive_at(runs_payload, run_id, completed)
+        same, foreign = superseders_alive_at(runs_payload, run_id, completed, ref)
         rows.append(
             {
                 "name": name,
                 "steps": steps,
                 "started_at": job.get("started_at"),
                 "completed_at": completed,
-                "superseders_alive": alive,
+                "superseders_alive": same + foreign,
+                "superseders_same_ref": same,
+                "superseders_foreign_ref": foreign,
             }
         )
 
@@ -170,7 +227,27 @@ def classify(
                 f"`{name}` was cancelled after executing {steps} step(s) — it was "
                 "RUNNING, so this is a timeout or a mid-run cancel, not a supersede."
             )
-        elif alive == 0:
+        elif same > 0:
+            # Ordering (a) with its premise intact: a newer commit on this same
+            # ref. The only cause that must not page.
+            continue
+        elif foreign > 0:
+            # Ordering (f). The group is repo-scoped, so a run on another ref
+            # evicts a pending arm just as effectively — but it carries no newer
+            # commit for this ref, so "the newer commit is the one worth
+            # measuring" does not hold and the loss is not paid for.
+            if verdict != VERDICT_DEFECT:
+                verdict = VERDICT_CONTENDED
+            reasons.append(
+                f"`{name}` was cancelled before executing a single step. {foreign} "
+                f"newer run(s) on a DIFFERENT ref existed at {completed}{note}, and "
+                f"none on `{ref}` itself — so it was evicted from the repo-scoped "
+                "`memory-bench-prod` group by work on another branch. That is "
+                "ordering (f): a real eviction with no newer commit on this ref to "
+                "justify it, so this ref's canary produced no verdict and nothing "
+                "was measured in exchange."
+            )
+        else:
             verdict = VERDICT_DEFECT
             reasons.append(
                 f"`{name}` was cancelled before executing a single step, and no "
@@ -183,7 +260,8 @@ def classify(
     if verdict == VERDICT_SUPERSEDED:
         reasons.append(
             "every cancelled prod arm was still pending and a newer run of this "
-            "workflow already existed when it died — ordering (a), expected"
+            "workflow on the same ref already existed when it died — ordering (a), "
+            "expected"
         )
 
     return verdict, " ".join(reasons), rows
@@ -205,6 +283,12 @@ def main() -> int:
     ap.add_argument("--jobs-json", required=True, help="GET /actions/runs/{id}/attempts/{n}/jobs")
     ap.add_argument("--runs-json", required=True, help="GET /actions/workflows/{f}/runs")
     ap.add_argument("--run-id", required=True, type=int)
+    ap.add_argument(
+        "--run-ref",
+        default=None,
+        help="head ref of the watched run (github.ref_name); inferred from the run "
+        "list when omitted",
+    )
     ap.add_argument("--github-output", default=None, help="append verdict/reason here")
     ap.add_argument("--step-summary", default=None, help="append a markdown table here")
     args = ap.parse_args()
@@ -220,31 +304,43 @@ def main() -> int:
             [],
         )
     else:
-        verdict, reason, rows = classify(jobs_payload, _load(args.runs_json), args.run_id)
+        verdict, reason, rows = classify(
+            jobs_payload, _load(args.runs_json), args.run_id, args.run_ref
+        )
+
+    must_page = verdict not in QUIET_VERDICTS
 
     print(f"verdict: {verdict}")
+    print(f"must_page: {str(must_page).lower()}")
     print(f"reason: {reason}")
     for row in rows:
         print(
             f"  {row['name']}: steps={row['steps']} "
             f"started={row['started_at']} completed={row['completed_at']} "
-            f"superseders_alive={row['superseders_alive']}"
+            f"superseders_alive={row['superseders_alive']} "
+            f"(same_ref={row.get('superseders_same_ref')} "
+            f"foreign_ref={row.get('superseders_foreign_ref')})"
         )
 
     if args.github_output:
         with open(args.github_output, "a", encoding="utf-8") as fh:
             fh.write(f"verdict={verdict}\n")
+            fh.write(f"must_page={str(must_page).lower()}\n")
             fh.write(f"reason={reason}\n")
 
     if args.step_summary:
         with open(args.step_summary, "a", encoding="utf-8") as fh:
             fh.write("### Prod arm cancelled\n\n")
-            fh.write("| arm | steps executed | started | completed | superseders alive at death |\n")
-            fh.write("|---|---|---|---|---|\n")
+            fh.write(
+                "| arm | steps executed | started | completed | superseders "
+                "(same ref) | superseders (other ref) |\n"
+            )
+            fh.write("|---|---|---|---|---|---|\n")
             for row in rows:
                 fh.write(
                     f"| `{row['name']}` | {row['steps']} | {row['started_at']} | "
-                    f"{row['completed_at']} | {row['superseders_alive']} |\n"
+                    f"{row['completed_at']} | {row.get('superseders_same_ref')} | "
+                    f"{row.get('superseders_foreign_ref')} |\n"
                 )
             fh.write(f"\n**Verdict:** `{verdict}` — {reason}\n")
 

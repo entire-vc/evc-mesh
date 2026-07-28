@@ -624,11 +624,13 @@ jobs:
     # was wrong about which; enumerate them all or the omitted one is the one
     # that bites.
     #
-    #   (a) A newer RUN's canary evicts an older run's PENDING canary.
+    #   (a) A newer run ON THE SAME REF evicts an older run's PENDING canary.
     #       POSSIBLE, and intended. The canary asks "is what is deployed still
     #       good"; when two commits are deploying, the newer is the one worth
     #       measuring, and the older canary would in any case have been refused
     #       by the version pin for being unable to find its own sha in prod.
+    #       The ref qualifier is load-bearing and was missing here until ordering
+    #       (f) below fired on the very first post-fix push — see there.
     #
     #   (b) The advisory arm evicts the canary of its OWN run.
     #       IMPOSSIBLE now. `needs: recall-gate` keeps the advisory out of the
@@ -671,17 +673,37 @@ jobs:
     #       nightly coverage is ever found to be missing more often than it lands,
     #       the fix is a workflow-level group (one run = one slot), not an alert.
     #
+    #   (f) A run on a DIFFERENT REF evicts this ref's PENDING canary.
+    #       POSSIBLE, and it is the ordering that actually killed the first
+    #       post-fix push. `memory-bench-prod` is a REPOSITORY-scoped group — the
+    #       group name is not namespaced by ref — so every `workflow_dispatch` on
+    #       a feature branch competes for the same single slot as `main`'s
+    #       post-deploy canary. Measured: run 30341031059 (`main`, the merge that
+    #       introduced this very comment) had its canary evicted at 08:08:18Z by a
+    #       dispatch on `riker/pin-honours-negation-and-capture` created 08:08:16Z
+    #       — two seconds earlier.
+    #       NOT accepted, and it is exactly the mistake (b) was: the cost accepted
+    #       in (a) is paid for by "the newer commit is the one worth measuring",
+    #       and a branch dispatch carries no newer commit for this ref at all. The
+    #       verdict is destroyed and nothing is measured in its place. Hence its
+    #       own classifier verdict `contended`, which pages — it is NOT folded
+    #       into (a). Eliminating it would mean keying the group by ref, which
+    #       re-permits two runs against one prod; that trade is deliberately not
+    #       taken, so this stays loud rather than silent.
+    #
     #   NOT possible: a newer run's ADVISORY evicting an older PENDING canary.
     #       The newer run's own canary reaches the group first and is the arrival
     #       that does the eviction — its advisory cannot get there while an older
     #       canary is still pending. Enumerated to record that it was checked
     #       rather than skipped.
     #
-    # (a), (c), (d) and (e) all surface as the same word — `cancelled` — which is the
-    # conclusion every reader has been trained to skim past as an infra hiccup.
-    # That is how (b) hid for its entire existence. The safety net's death must
-    # not look like weather: `prod-arm-cancelled` classifies it and goes red for
-    # everything that is not (a).
+    # (a), (c), (d), (e) and (f) all surface as the same word — `cancelled` — which
+    # is the conclusion every reader has been trained to skim past as an infra
+    # hiccup. That is how (b) hid for its entire existence. The safety net's death
+    # must not look like weather: `prod-arm-cancelled` classifies it and goes red
+    # for everything that is not (a) — where "(a)" now means a same-ref supersede
+    # specifically, since counting (f) as (a) is what made the first post-fix page
+    # name a mechanism its own job list refuted.
     # ------------------------------------------------------------------------
     concurrency:
       group: memory-bench-prod
@@ -1831,10 +1853,20 @@ jobs:
       # died" and every ordering enumerated on the canary job above is
       # distinguishable:
       #
-      #   0 steps + a newer run   -> (a) superseded. Expected. Not an alert.
-      #   0 steps + no newer run  -> (b)/(c) evicted by a SIBLING or by an older
-      #                              run's advisory. This is the bug. Red.
-      #   >=1 step                -> (d) timeout, or a mid-run cancel. Red.
+      #   0 steps + newer run, SAME ref  -> (a) superseded. Expected. Not an alert.
+      #   0 steps + newer run, OTHER ref -> (f) contended. A branch dispatch took
+      #                                     the slot; no newer commit on this ref,
+      #                                     so nothing was measured in exchange. Red.
+      #   0 steps + no newer run         -> (b)/(c) evicted by a SIBLING or by an
+      #                                     older run's advisory. Red.
+      #   >=1 step                       -> (d) timeout, or a mid-run cancel. Red.
+      #
+      # The ref split exists because without it the two middle rows collapse, and
+      # WHICH way they collapse depends on how the run list was fetched. Fetched
+      # with `?branch=`, an (f) is invisible and reads as the bottom row — the
+      # first post-fix push paged for "a sibling job of its own run" while its
+      # sibling was `skipped` in the same payload. Fetched repo-wide without the
+      # split, an (f) reads as the top row and goes silent, which is worse.
       #
       # `created_at <= completed_at` on the newer-run filter is not tidiness. A
       # bare "is there a newer run" is evaluated whenever this job happens to get
@@ -1888,13 +1920,21 @@ jobs:
           # are the same code path.
           gh api "${api}/actions/runs/${GITHUB_RUN_ID}/attempts/${GITHUB_RUN_ATTEMPT}/jobs?per_page=100" \
             > jobs.json || echo '__unreadable__' > jobs.json
-          gh api "${api}/actions/workflows/memory-bench.yml/runs?branch=${GITHUB_REF_NAME}&per_page=100" \
+          # NOT `?branch=`. `memory-bench-prod` is a REPO-scoped concurrency
+          # group: a run on any ref can evict a pending arm here. Filtering the
+          # run list to this run's own branch made the commonest real evictor —
+          # someone's `workflow_dispatch` on a feature branch — structurally
+          # invisible, and the classifier then reported the one mechanism that
+          # was left in its enumeration. Scope the QUERY to the group, and let
+          # the classifier split same-ref from foreign-ref.
+          gh api "${api}/actions/workflows/memory-bench.yml/runs?per_page=100" \
             > runs.json || echo '__unreadable__' > runs.json
 
           python scripts/memory-bench/classify_cancelled_arm.py \
             --jobs-json jobs.json \
             --runs-json runs.json \
             --run-id "${GITHUB_RUN_ID}" \
+            --run-ref "${GITHUB_REF_NAME}" \
             --github-output "$GITHUB_OUTPUT" \
             --step-summary "$GITHUB_STEP_SUMMARY"
 
@@ -1903,7 +1943,11 @@ jobs:
       # is red routinely is a check people learn to scroll past — which is the
       # failure this whole job exists to undo, reintroduced one level up.
       - name: Expected supersede — nothing to page
-        if: steps.classify.outputs.verdict != 'defect'
+        # Gated on `must_page`, NOT on `verdict != 'defect'`. The classifier now
+        # has a third pageable verdict (`contended`), and a negation guard would
+        # have adopted it into the quiet branch silently — the guard must name
+        # what it serves, not what it excludes.
+        if: steps.classify.outputs.must_page != 'true'
         # Through `env:`, not `${{ }}` inside the script — the same convention the
         # alert steps above already follow. These values are assembled from job
         # names and API timestamps, but a `run:` block that interpolates an output
@@ -1915,7 +1959,7 @@ jobs:
           echo "::notice::Prod arm cancellation classified as '${VERDICT}': ${REASON}"
 
       - name: Alert — the prod canary was killed, not superseded
-        if: steps.classify.outputs.verdict == 'defect'
+        if: steps.classify.outputs.must_page == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TITLE: 'Memory recall canary (prod) is being cancelled, not run'
@@ -1955,7 +1999,7 @@ jobs:
       # The red is the point. An alert on an issue nobody has open in a tab is a
       # filing cabinet; this makes the run itself carry the failure.
       - name: Fail the run
-        if: steps.classify.outputs.verdict == 'defect'
+        if: steps.classify.outputs.must_page == 'true'
         env:
           REASON: ${{ steps.classify.outputs.reason }}
         run: |
