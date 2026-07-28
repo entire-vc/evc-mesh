@@ -209,6 +209,27 @@ def flatten_exc(exc: BaseException) -> str:
 # embedder reads as a code regression and wedges every PR in the repo.
 SEARCH_MODE_UNKNOWN = "unknown"
 
+
+def _envelope_int(payload: Any, key: str) -> int | None:
+    """Read a non-negative integer counter off the recall envelope, or None.
+
+    None means "this server did not report it" and MUST stay distinguishable
+    from 0, which means "the arm returned nothing". Every rejected shape — key
+    absent, null, a string, a float, a bool, a negative — collapses to None
+    rather than to 0, because the failure of a back-compat read must be
+    "unknown", never a finding the gate then acts on.
+
+    `bool` is excluded explicitly: it is a subclass of `int` in Python, so
+    `isinstance(True, int)` is True and a stray `dense_rows: true` would arrive
+    as the integer 1 — a healthy-looking count invented out of a type error.
+    """
+    if not isinstance(payload, dict):
+        return None
+    raw = payload.get(key)
+    if isinstance(raw, bool) or not isinstance(raw, int) or raw < 0:
+        return None
+    return raw
+
 BENCH_IDS_LOG = os.environ.get(
     "BENCH_IDS_LOG", os.path.expanduser("~/bench/store_ids.jsonl")
 )
@@ -421,6 +442,16 @@ class MeshMemoryClient:
         # server does not report it (older Mesh) — never silently assumed healthy.
         self.search_mode: str = SEARCH_MODE_UNKNOWN
         self.degraded: bool | None = None
+        # How many candidates each retrieval arm returned, straight off the
+        # envelope. None means the server did not report it — an OLDER Mesh, not
+        # an empty arm — and the two must never be conflated: see
+        # `resolve_dense_arm_status` in run_ci.py, where None is inert and 0 is a
+        # finding. `search_mode` alone cannot express this, which is the whole
+        # reason these exist: "hybrid" says the dense arm RAN, and a corpus whose
+        # every `memories.embedding` is NULL serves "hybrid", "degraded: false"
+        # and zero vector candidates.
+        self.dense_rows: int | None = None
+        self.sparse_rows: int | None = None
         # The FULL tag-filtered ranked list as it reached the client, before the
         # top_k slice. `ingest_and_search` returns only the scored window, so
         # without this the rank of a gold session that lands outside top_k is
@@ -816,6 +847,8 @@ class MeshMemoryClient:
         self.search_mode = mode if isinstance(mode, str) and mode else SEARCH_MODE_UNKNOWN
         deg = payload.get("degraded") if isinstance(payload, dict) else None
         self.degraded = bool(deg) if isinstance(deg, bool) else None
+        self.dense_rows = _envelope_int(payload, "dense_rows")
+        self.sparse_rows = _envelope_int(payload, "sparse_rows")
 
         items = payload.get("items") or payload.get("results") or []
         if not isinstance(items, list):

@@ -121,6 +121,19 @@ MODE_HYBRID = "hybrid"
 MODE_BM25_ONLY = "bm25-only"
 MODE_UNKNOWN = "unknown"
 
+# What the DENSE arm actually returned, which the mode above cannot express.
+# MODE_HYBRID is set when the dense arm RAN end-to-end — embedder alive, query
+# vectorised, VectorSearch returned no error. It is silent on whether the arm
+# matched a single row, and those are different states: with every
+# `memories.embedding` NULL, VectorSearch matches nothing corpus-wide and Mesh
+# still answers `search_mode: hybrid`, `degraded: false`. That is not
+# hypothetical — run 30316983402 scored `overall 0.9583`, the best ever recorded,
+# on a haystack its dense arm could not see, because every fixture had been
+# written after the chunked-embed deploy.
+DENSE_ARM_SERVED = "served"    # at least one hybrid recall returned dense rows
+DENSE_ARM_EMPTY = "empty"      # every hybrid recall that reported returned zero
+DENSE_ARM_UNKNOWN = "unknown"  # nothing reported it — an older server, not a finding
+
 # Machine-readable reason kinds, grepped out of the log by the CI workflow so it
 # can raise ONE out-of-band alert per reason instead of one per PR.
 REASON_NO_BASELINE = "no-baseline"
@@ -145,6 +158,13 @@ REASON_PERSISTENT_ERRORS = "persistent-errors"
 # baseline survives. Its own kind: "we declined to record a floor" is not an
 # inconclusive verdict, and it has a different reader (whoever dispatched it).
 REASON_CAPTURE_REFUSED = "capture-refused"
+# Its own kind, and deliberately NOT folded into `mode-mismatch`. Both say "this
+# run is not comparable", but they have different owners and different fixes: a
+# mode mismatch is the embedder being down (wait for it, or re-snap), while an
+# empty dense arm is the server reporting `hybrid` for an arm that matched
+# nothing — a data or write-path defect that no re-snap fixes and that a re-snap
+# would in fact PIN as the new floor.
+REASON_DENSE_ARM_EMPTY = "dense-arm-empty"
 REASON_PREFIX = "GATE_REASON:"
 
 # How an errored question is classified. `--max-error-rate` was calibrated for
@@ -376,6 +396,12 @@ def retrieval_observability(entry: dict, client: Any) -> dict:
     `haystack_size` is included because `rows_returned` alone is not
     interpretable: 32 is meaningless until you know it is 32 of 45, and the
     ratio is what shows the candidate pool truncating.
+
+    `dense_rows` is the ONE field here that is not purely advisory — it feeds
+    `resolve_dense_arm_status`, which can take the run INCONCLUSIVE. It is
+    reported per question rather than per run because it is read off a per-recall
+    envelope, and `None` (server too old to report it) has to survive as `None`
+    all the way to the resolver rather than being flattened into a run-level 0.
     """
     return {
         "gold_rank": gold_rank(
@@ -383,6 +409,8 @@ def retrieval_observability(entry: dict, client: Any) -> dict:
         ),
         "rows_returned": getattr(client, "rows_returned", None),
         "haystack_size": len(entry.get("haystack_sessions") or []),
+        "dense_rows": getattr(client, "dense_rows", None),
+        "sparse_rows": getattr(client, "sparse_rows", None),
     }
 
 
@@ -527,6 +555,7 @@ def write_results_artifact(
     repeat: int,
     scores: dict[str, float],
     sizes: dict[str, tuple[int, int]],
+    dense_arm: str = DENSE_ARM_UNKNOWN,
 ) -> Path | None:
     """Write the per-question results the run just produced.
 
@@ -542,6 +571,11 @@ def write_results_artifact(
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "retrieval_only": retrieval_only,
         "search_mode": run_mode,
+        # Recorded next to search_mode because reading one without the other is
+        # what made run 30316983402's `hybrid`/0.9583 look like a record instead
+        # of a blind run. Anyone downloading this artifact should be able to see
+        # both without re-deriving one from the per-question rows.
+        "dense_arm": dense_arm,
         "top_k": top_k,
         "repeat": repeat,
         "scores": scores,
@@ -579,6 +613,48 @@ def resolve_run_search_mode(results: list[dict]) -> str:
     if MODE_BM25_ONLY in modes:
         return MODE_BM25_ONLY
     return MODE_HYBRID
+
+
+def resolve_dense_arm_status(results: list[dict]) -> str:
+    """Did the dense arm actually return anything, across the whole run?
+
+    Only questions served in HYBRID mode are evidence. A bm25-only question has
+    no dense arm by definition — counting its zero would report "dense arm empty"
+    on every deployment that runs without an embedder, which is a legitimate
+    configuration and not a defect. The run-level mode gate already owns that
+    case, and duplicating it here would just alert twice on one cause.
+
+    BACK-COMPAT IS THE LOAD-BEARING PART. A server too old to report `dense_rows`
+    yields None on every question, so nothing is evidence, so the status is
+    UNKNOWN and the verdict is untouched. It has to work that way round: if a
+    missing field read as 0, this gate would take the prod arm INCONCLUSIVE from
+    the moment it merged until the moment the server was deployed — i.e. it would
+    break exactly during the window it was written to fix, and the pressure would
+    be to revert it rather than to finish the rollout.
+
+    EMPTY requires that EVERY reporting hybrid question returned zero, not that
+    one did. The failure this detects is corpus-wide by nature: the vector arm
+    draws from a relevance-neutral candidate pool, so it returns rows for any
+    query as long as anything in the workspace carries an embedding at all. One
+    zero among non-zeros would therefore be a per-query oddity, not a lost arm,
+    and taking a required check inconclusive on it would be a false alarm on a
+    gate whose credibility is its only enforcement mechanism.
+    """
+    # `not isinstance(v, bool)`: bool subclasses int in Python, so a stray
+    # `dense_rows: True` would otherwise count as the integer 1 and report a
+    # healthy arm off a type error.
+    reported = [
+        r["dense_rows"]
+        for r in results
+        if r.get("search_mode") == MODE_HYBRID
+        and isinstance(r.get("dense_rows"), int)
+        and not isinstance(r.get("dense_rows"), bool)
+    ]
+    if not reported:
+        return DENSE_ARM_UNKNOWN
+    if any(n > 0 for n in reported):
+        return DENSE_ARM_SERVED
+    return DENSE_ARM_EMPTY
 
 
 class Baseline(NamedTuple):
@@ -691,6 +767,7 @@ def capture_blockers(
     sizes: dict[str, tuple[int, int]],
     run_mode: str,
     retrieval_only: bool,
+    dense_status: str = DENSE_ARM_UNKNOWN,
 ) -> list[str]:
     """Reasons this run must NOT be written as a baseline. Empty list = sound.
 
@@ -720,6 +797,20 @@ def capture_blockers(
             f"served in retrieval mode '{run_mode}', not '{MODE_HYBRID}' — this "
             "would pin a required check at a DEGRADED quality level, and every "
             "healthy run afterwards would be compared across modes"
+        )
+    # The mode check above cannot see this one: the run IS 'hybrid', and that is
+    # the problem. Capturing here records a floor measured with no dense arm, and
+    # since a later healthy run only ever scores at or above it, the gate would
+    # then be permanently green AND permanently blind — the failure mode this
+    # whole harness exists to remove, installed as the baseline. Default is
+    # UNKNOWN, so a server that does not report `dense_rows` never blocks a
+    # capture on a check it cannot perform.
+    if dense_status == DENSE_ARM_EMPTY:
+        blockers.append(
+            f"served in mode '{MODE_HYBRID}' but the dense arm returned ZERO rows on "
+            "every question — the embedder answered while the vector search matched "
+            "nothing, so this floor was measured by BM25 alone and would be recorded "
+            "as the hybrid standard"
         )
     # "overall" is checked alongside the categories, not instead of them: a run
     # can be complete overall while one category lost questions, and it is the
@@ -1308,6 +1399,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         repeat=repeat,
         scores=scores,
         sizes=sizes,
+        dense_arm=resolve_dense_arm_status(results),
     )
     if results_file is not None:
         print(f"\nPer-question results: {results_file}")
@@ -1323,6 +1415,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     print("=" * 70)
     print(f"{title}  ({ran}/{len(results)} questions ran)")
     print(f"Search mode served: {run_mode}    Baseline mode: {baseline_mode}")
+    print(f"Dense arm: {resolve_dense_arm_status(results)}")
     if baseline is not None:
         print(f"Baseline captured from {baseline.n_runs} pass(es)")
     print("=" * 70)
@@ -1352,7 +1445,9 @@ def cmd_run(args: argparse.Namespace) -> int:
         # Refuse BEFORE writing. A capture guard that reports after the file is on
         # disk is advice, not a guard — the artifact still gets uploaded and the
         # figure still gets committed.
-        blockers = capture_blockers(sizes, run_mode, retrieval_only)
+        blockers = capture_blockers(
+            sizes, run_mode, retrieval_only, resolve_dense_arm_status(results)
+        )
         if blockers and not args.allow_partial_capture:
             print(
                 f"\n✗ CAPTURE REFUSED — {baseline_file.name} was NOT written. This run "
@@ -1483,6 +1578,49 @@ def cmd_run(args: argparse.Namespace) -> int:
         )
         print(f"{REASON_PREFIX} {reason} — baseline='{baseline_mode}' run='{run_mode}'")
         return EXIT_INCONCLUSIVE
+
+    # ── Dense-arm gate: "hybrid" is a claim about the embedder, not the corpus ─
+    # Sits AFTER the mode gate on purpose. Mode-unknown / mode-mismatch are the
+    # broader statements ("we do not know what we measured" / "we measured
+    # something else"), and reporting the narrower cause underneath one of them
+    # would just be a second alert for a condition already owned.
+    #
+    # INCONCLUSIVE, never REGRESSION, for the same reason the mode gate is: the
+    # dense arm being empty is a property of the deployed server and its corpus,
+    # not of the diff under review, and a required check that goes red on
+    # something the author cannot fix is a check that gets bypassed.
+    dense_status = resolve_dense_arm_status(results)
+    if dense_status == DENSE_ARM_EMPTY:
+        print(
+            f"\n⚠ INCONCLUSIVE: every recall was served in mode '{MODE_HYBRID}' and the "
+            "dense/vector arm returned ZERO rows in all of them. The embedder answered "
+            "— which is all `search_mode` ever checked — but the vector search matched "
+            "nothing at all, so this run was served by BM25 alone while reporting itself "
+            "healthy."
+        )
+        print(
+            "  Likely cause: the corpus has no usable embeddings (e.g. every "
+            "`memories.embedding` is NULL because the write path stopped populating "
+            "it). Scores measured here say nothing about the dense arm — including a "
+            "GREEN one, which is how this class of failure gets recorded as a personal "
+            "best. Re-index/backfill embeddings, then re-run."
+        )
+        print(
+            f"{REASON_PREFIX} {REASON_DENSE_ARM_EMPTY} — "
+            f"run='{run_mode}' dense_rows=0 on every reporting question"
+        )
+        return EXIT_INCONCLUSIVE
+    if dense_status == DENSE_ARM_UNKNOWN:
+        # Not a verdict, and deliberately not one: a server that does not report
+        # `dense_rows` leaves this check inert rather than tripping it. Said out
+        # loud so "the gate is watching the dense arm" is never assumed of a
+        # deployment where it structurally cannot.
+        print(
+            "\nNote: this server did not report `dense_rows`, so the dense-arm check "
+            "did not run. A recall served by an EMPTY vector arm is indistinguishable "
+            "from a healthy hybrid one here — deploy a Mesh that reports it to close "
+            "that gap."
+        )
 
     if errors:
         stuck_note = persistent_errors(errors)

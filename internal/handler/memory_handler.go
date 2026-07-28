@@ -431,22 +431,33 @@ func (h *MemoryHandler) Search(c echo.Context) error {
 		opts.HalfLifeDays = f
 	}
 
-	results, searchMode, err := h.memoryService.Recall(c.Request().Context(), opts)
+	results, stats, err := h.memoryService.RecallWithStats(c.Request().Context(), opts)
 	if err != nil {
 		return handleError(c, err)
 	}
 
-	// search_mode / degraded are ADDITIVE — items/total/limit/offset keep their
-	// exact shape, and every existing client (SDK, MCP passthrough) ignores the
-	// new keys. They exist so a caller can tell a degraded recall from a healthy
-	// one: the embedder failing is a silent 200 otherwise.
+	// search_mode / degraded / dense_rows / sparse_rows are ADDITIVE —
+	// items/total/limit/offset keep their exact shape, and every existing client
+	// (SDK, MCP passthrough) ignores the new keys. They exist so a caller can
+	// tell a degraded recall from a healthy one: the embedder failing is a silent
+	// 200 otherwise.
+	//
+	// dense_rows is here because search_mode alone was not enough. "hybrid" means
+	// the dense arm RAN — embed OK, VectorSearch returned no error — and says
+	// nothing about whether it matched a single row. When the chunked-embed write
+	// path left every new memory with a NULL embedding, VectorSearch matched
+	// nothing corpus-wide and this endpoint reported `search_mode: hybrid`,
+	// `degraded: false` on a recall served entirely by BM25. dense_rows == 0 next
+	// to `hybrid` is that state, stated in the envelope instead of inferred.
 	return c.JSON(http.StatusOK, map[string]interface{}{
 		"items":       results,
 		"total":       len(results),
 		"limit":       limit,
 		"offset":      offset,
-		"search_mode": string(searchMode),
-		"degraded":    searchMode.Degraded(),
+		"search_mode": string(stats.Mode),
+		"degraded":    stats.Mode.Degraded(),
+		"dense_rows":  stats.DenseRows,
+		"sparse_rows": stats.SparseRows,
 	})
 }
 
