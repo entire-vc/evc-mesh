@@ -229,3 +229,47 @@ func TestMemoryRepoDB_ListNeedingEmbedding_StopgapRemovedDoesNotSelectWholeChunk
 	assert.Contains(t, memoryIDs(got), needsWork.ID,
 		"a memory with neither embedding nor chunks must still be selected — otherwise the guard is over-broad and nothing ever gets embedded")
 }
+
+// TestMemoryRepoDB_StopgapWrite_PopulatesEmbeddingColumnNotJustWatermark pins the stopgap
+// contract itself (#7cf0f3be): embedChunked must write memories.embedding, not only a
+// watermark. It asserts the COLUMN, deliberately, instead of asserting through
+// ListNeedingEmbedding.
+//
+// Why not through the selector: since the chunk-freshness guard (#dd0fda98) landed, the
+// selector excludes a chunked memory on the chunk branch alone, so reverting
+// UpdateEmbedding -> MarkEmbeddingModel leaves every selector-based test GREEN. Verified by
+// mutation, not assumed. That masking is the guard working as intended — defence in depth —
+// but it means the selector can no longer witness the stopgap regression, and a criterion
+// phrased "red when UpdateEmbedding is reverted" cannot be met by a selector test while the
+// guard is in main.
+//
+// So this test witnesses the write directly. It goes red the moment the stopgap write is
+// removed, which is exactly when a human should be made to think about whether dense-arm
+// visibility still holds — the guard protects reindex convergence, NOT visibility.
+func TestMemoryRepoDB_StopgapWrite_PopulatesEmbeddingColumnNotJustWatermark(t *testing.T) {
+	repo, wsID := setupMemoryRepoChunkingDBTest(t)
+	chunkRepo := NewMemoryChunkRepo(repo.db)
+	ctx := context.Background()
+	mem := newUnembeddedMemory(t, ctx, repo, wsID)
+
+	// embedChunked's real write sequence (memory_service.go): chunks, then the first chunk's
+	// vector into memories.embedding via UpdateEmbedding.
+	require.NoError(t, chunkRepo.ReplaceChunks(ctx, mem.ID, []domain.MemoryChunk{
+		{ChunkIdx: 0, ChunkStart: 0, ChunkEnd: 7, Embedding: "x", EmbeddingModel: "current-model", EmbeddingDim: 4},
+	}))
+	require.NoError(t, repo.UpdateEmbedding(ctx, mem.ID, []float32{0.1, 0.2, 0.3, 0.4}, "current-model", 4))
+
+	var embedding *string
+	var model *string
+	var dim *int
+	require.NoError(t, repo.db.QueryRowContext(ctx,
+		`SELECT embedding, embedding_model, embedding_dim FROM memories WHERE id = $1`, mem.ID,
+	).Scan(&embedding, &model, &dim))
+
+	require.NotNil(t, embedding, "memories.embedding must be populated by the chunked write path — a watermark-only write leaves this NULL and VectorSearch requires embedding IS NOT NULL (live regression #7cf0f3be)")
+	assert.NotEmpty(t, *embedding)
+	require.NotNil(t, model)
+	assert.Equal(t, "current-model", *model)
+	require.NotNil(t, dim)
+	assert.Equal(t, 4, *dim, "embedding_dim must come from the actual vector length, not from config (the env-sourced value is why the column was 0 on all prod rows)")
+}
