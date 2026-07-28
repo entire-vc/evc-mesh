@@ -942,13 +942,51 @@ jobs:
           # Derived from the run id rather than random so an orphaned row names
           # the run that abandoned it.
           BENCH_RUN_NONCE: ${{ github.run_id }}-${{ github.run_attempt }}-p-snap
+          # The commit the pre-flight pin confirmed prod was serving. Empty only when
+          # no pin applied and the endpoint could not be read.
+          SERVED_AT_START: ${{ steps.version.outputs.served }}
         run: |
           cd scripts/memory-bench
           set +e
           python run_ci.py --retrieval-only --update-baseline \
+            --served-commit "${SERVED_AT_START:-}" \
             --repeat "${{ inputs.repeat || '3' }}" 2>&1 | tee resnap.log
           rc=${PIPESTATUS[0]}
           set -e
+
+          # ------------------------------------------------------------------
+          # POST-FLIGHT STABILITY. The gate arm has had this since #e8570874; the
+          # CAPTURE arm never did, and the capture is the arm where it matters
+          # more. A gate run straddling two binaries yields one wrong verdict,
+          # visible that day. A BASELINE straddling two binaries becomes the
+          # standing floor for a required check — every future run is then scored
+          # against a number that measured neither binary, and nothing in the file
+          # says so.
+          #
+          # Not hypothetical. Capture 30336693957 (2026-07-28, --repeat 3): PR #407
+          # merged at 07:35:32Z touching one `*_test.go` file, `deploy-backend.yml`
+          # still matched it under `internal/**`, and prod went 5d2cda8 -> ba7deae
+          # at 07:41:44Z — 42 minutes into a 65-minute capture. The run exited
+          # SUCCESS and wrote a baseline. Recovering what it had measured took a
+          # human diffing two commits by hand afterwards.
+          #
+          # The file is DELETED, not just flagged: `capture_blockers` refuses
+          # before writing precisely because "a guard that reports after the file
+          # is on disk is advice, not a guard" — the artifact still uploads and
+          # the figure still gets committed. This check can only run after the
+          # measurement, so deleting is the only way it inherits that property.
+          if [ "$rc" = "0" ] && [ -n "${SERVED_AT_START:-}" ]; then
+            set +e
+            python3 check_serving_version.py --was "${SERVED_AT_START}" 2>&1 | tee -a resnap.log
+            vrc=${PIPESTATUS[0]}
+            set -e
+            if [ "$vrc" != "0" ]; then
+              rc=2
+              rm -f baseline_retrieval.json
+              echo "✗ CAPTURE DISCARDED — prod was redeployed during the measurement." \
+                | tee -a resnap.log
+            fi
+          fi
 
           {
             echo "## Recall baseline re-snap (required arm)"
@@ -968,8 +1006,15 @@ jobs:
               echo "**Reason:** \`${reason:-unspecified}\`"
               echo
               echo "\`capture-refused\` means the run was not a sound basis for a required"
-              echo "check's threshold — incomplete sample or degraded retrieval mode. Fix the"
-              echo "cause and re-dispatch; do not hand-edit the baseline."
+              echo "check's threshold — incomplete sample or degraded retrieval mode."
+              echo
+              echo "\`version-changed-mid-run\` means a backend deploy landed inside the"
+              echo "measurement window, so the numbers span two binaries and describe"
+              echo "neither. Nothing is wrong with the harness: re-dispatch once the deploy"
+              echo "has settled. Check the open PRs on a \`deploy-backend.yml\` path first,"
+              echo "because a \`--repeat 3\` capture occupies prod for ~65 minutes."
+              echo
+              echo "Either way: fix the cause and re-dispatch; do not hand-edit the baseline."
             fi
             echo
             echo '```'
