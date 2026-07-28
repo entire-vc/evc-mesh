@@ -3228,6 +3228,32 @@ func TestEmbedAndStore_Chunked_ForeignKeyViolationIsNotAnEmbedFailure(t *testing
 		"a memory deleted mid-embed is a race with the deleter, not an embedding failure — counting it masks the real ones")
 }
 
+// TestEmbedAndStore_Chunked_EmbedFailureIncrementsCounter is the positive half of the
+// chunked path's failure accounting, and it was the missing one (#a8cc2bf9): deleting the
+// Inc() on the chunked branch left the whole suite green, because the only test touching
+// that counter here asserts it does NOT move (the FK race). A negative assertion without
+// its positive twin pins nothing — the counter can silently return to "declared and always
+// zero", which is the state that let 538 real failures go unseen, and every one of those
+// was on THIS path.
+//
+// The embedder must fail permanently: embedWithRetry survives a fail-once embedder by
+// design, so a transient mock would exercise the retry and never reach the counter.
+func TestEmbedAndStore_Chunked_EmbedFailureIncrementsCounter(t *testing.T) {
+	before := testutilCounterValue(t, "store")
+
+	memRepo := &mockMemoryRepo{}
+	chunkRepo := newMockMemoryChunkRepo()
+	svc := NewMemoryService(memRepo, &mockMemoryEdgeRepo{}, alwaysFailsEmbedder{dim: 4},
+		MemoryWithChunkRepo(chunkRepo))
+	ms := svc.(*memoryService)
+
+	ms.embedAndStore(uuid.New(), longTranscript(30))
+
+	assert.Greater(t, testutilCounterValue(t, "store"), before,
+		"a chunked-path embed failure must increment mesh_memory_embed_failures_total — this is the path all 538 failures in #67f4e0d9 took, and its visibility is half the point of the fix")
+	assert.Zero(t, chunkRepo.replaceCalls, "a failed embed must not write chunks")
+}
+
 // TestEmbedAndStore_Legacy_EmbedFailureIncrementsCounter covers the non-chunked path's
 // failure accounting. Before this change mesh_memory_embed_failures_total was declared
 // and never incremented anywhere, so a dead embedder read as "no failures".
