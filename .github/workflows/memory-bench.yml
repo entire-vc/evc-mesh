@@ -344,7 +344,7 @@ jobs:
         env:
           MESH_MCP_BIN: ${{ github.workspace }}/mesh-mcp-bin
           RECALL_GRAPH_ENABLED: 'true'
-          BENCH_RUN_NONCE: ${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-ctl
+          BENCH_RUN_NONCE: ${{ github.run_id }}-${{ github.run_attempt }}-b-ctl
         run: |
           cd scripts/memory-bench
           set +e
@@ -356,14 +356,21 @@ jobs:
           if [ "$rc" = "1" ]; then exit 1; fi
           exit 0
 
+      # `!cancelled()` and not the default: a failed dense-arm control must not
+      # skip the two steps that explain it. Skipping them is how a red arrives
+      # with its own evidence missing — the score that would say how bad, and the
+      # power check that says whether the control can be trusted at all. Both are
+      # exactly the artefacts a reviewer needs on a red, and the default `if`
+      # withholds them precisely then. The job still fails: these steps report
+      # their own conclusions, they do not launder the control's.
       - name: Run the recall gate against the branch build
         id: gate
-        if: steps.scope.outputs.relevant == 'true'
+        if: ${{ !cancelled() && steps.scope.outputs.relevant == 'true' }}
         env:
           MESH_MCP_BIN: ${{ github.workspace }}/mesh-mcp-bin
           RECALL_GRAPH_ENABLED: 'true'
           LME_TOP_K: '10'
-          BENCH_RUN_NONCE: ${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}
+          BENCH_RUN_NONCE: ${{ github.run_id }}-${{ github.run_attempt }}-b
         run: |
           cd scripts/memory-bench
           set +e
@@ -426,11 +433,11 @@ jobs:
       # ---------------------------------------------------------------------
       - name: Power check — with the dense arm off, the control must MISS
         id: control_dead
-        if: steps.scope.outputs.relevant == 'true'
+        if: ${{ !cancelled() && steps.scope.outputs.relevant == 'true' }}
         env:
           MESH_MCP_BIN: ${{ github.workspace }}/mesh-mcp-bin
           RECALL_GRAPH_ENABLED: 'true'
-          BENCH_RUN_NONCE: ${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-pwr
+          BENCH_RUN_NONCE: ${{ github.run_id }}-${{ github.run_attempt }}-b-pwr
         run: |
           kill "$(cat scripts/memory-bench/embedder.pid)" 2>/dev/null || true
           # Recall fails OPEN on an embed error (memory_service.go: log, count,
@@ -644,7 +651,7 @@ jobs:
           #
           # Derived from the run id rather than random so an orphaned row names
           # the run that abandoned it.
-          BENCH_RUN_NONCE: ${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}
+          BENCH_RUN_NONCE: ${{ github.run_id }}-${{ github.run_attempt }}-p-snap
         run: |
           cd scripts/memory-bench
           set +e
@@ -721,7 +728,7 @@ jobs:
           #
           # Derived from the run id rather than random so an orphaned row names
           # the run that abandoned it.
-          BENCH_RUN_NONCE: ${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}
+          BENCH_RUN_NONCE: ${{ github.run_id }}-${{ github.run_attempt }}-p
         run: |
           cd scripts/memory-bench
           set +e
@@ -1027,7 +1034,7 @@ jobs:
           #
           # Derived from the run id rather than random so an orphaned row names
           # the run that abandoned it.
-          BENCH_RUN_NONCE: ${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}
+          BENCH_RUN_NONCE: ${{ github.run_id }}-${{ github.run_attempt }}-e-snap
         run: |
           cd scripts/memory-bench
           set +e
@@ -1100,7 +1107,7 @@ jobs:
           #
           # Derived from the run id rather than random so an orphaned row names
           # the run that abandoned it.
-          BENCH_RUN_NONCE: ${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}
+          BENCH_RUN_NONCE: ${{ github.run_id }}-${{ github.run_attempt }}-e
         run: |
           cd scripts/memory-bench
           set +e
