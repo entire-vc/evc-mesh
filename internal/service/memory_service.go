@@ -766,6 +766,7 @@ func (s *memoryService) embedChunked(ctx context.Context, id uuid.UUID, text str
 	pieces := chunkText(text, defaultChunkSize, defaultChunkOverlap)
 	runes := []rune(text)
 	chunks := make([]domain.MemoryChunk, 0, len(pieces))
+	var firstVec []float32
 	for i, p := range pieces {
 		vec, err := s.embedder.Embed(ctx, p.Text)
 		if err != nil {
@@ -773,6 +774,9 @@ func (s *memoryService) embedChunked(ctx context.Context, id uuid.UUID, text str
 		}
 		if len(vec) == 0 {
 			continue
+		}
+		if firstVec == nil {
+			firstVec = vec
 		}
 		chunks = append(chunks, domain.MemoryChunk{
 			ChunkIdx:       i,
@@ -792,12 +796,19 @@ func (s *memoryService) embedChunked(ctx context.Context, id uuid.UUID, text str
 	if err := s.chunkRepo.ReplaceChunks(ctx, id, chunks); err != nil {
 		return err
 	}
-	// Watermark memories.embedding_model so ListNeedingEmbedding (which still
-	// filters on this table) stops matching this memory for the current
-	// model — memory_chunks holds the real vectors now, memories.embedding
-	// itself is deliberately left untouched. See MarkEmbeddingModel's doc.
-	if err := s.memRepo.MarkEmbeddingModel(ctx, id, s.embedder.Model()); err != nil {
-		return fmt.Errorf("mark embedding model: %w", err)
+	// STOPGAP (#b052cdda, live regression caught in #84b0694d verify): VectorSearch's
+	// read path has not been rewired onto memory_chunks yet (that's subtask 6/8,
+	// still open) — it still requires memories.embedding IS NOT NULL. Writing only
+	// the chunks, as the original design intended once read-path lands, made every
+	// memory embedded through this path invisible to dense search: brand-new memories
+	// never had memories.embedding populated at all (~200/hour after deploy). Until
+	// VectorSearch reads memory_chunks directly, keep memories.embedding populated too
+	// — the first chunk's vector, not the whole document, so this stays proportionate
+	// to what a single embed call already produced (no extra embedder round trip).
+	// UpdateEmbedding also sets embedding_model/embedding_dim, so it subsumes the old
+	// MarkEmbeddingModel-only watermark this replaced.
+	if err := s.memRepo.UpdateEmbedding(ctx, id, firstVec, s.embedder.Model(), len(firstVec)); err != nil {
+		return fmt.Errorf("update embedding (chunked stopgap): %w", err)
 	}
 	return nil
 }
