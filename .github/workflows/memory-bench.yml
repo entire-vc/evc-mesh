@@ -51,6 +51,17 @@ on:
           - both
         required: false
         default: end-to-end
+      expect_commit:
+        description: >-
+          Override the commit the gate requires prod to be serving before it will
+          score. Empty (the default) means "derive it": `github.sha` on a main-ref
+          run, and no pin at all on a PR — a PR's `github.sha` is a merge commit
+          that is never deployed, so pinning to it would wedge every PR at
+          INCONCLUSIVE for ever. Supply a value to pin a run on a branch, which is
+          also how the refusal itself is proved: dispatch with a commit prod is
+          not serving and the run must exit 2 naming `version-mismatch`.
+        required: false
+        default: ''
       repeat:
         description: >-
           Passes to average when re-snapping (default 3). One pass is a coin toss:
@@ -81,6 +92,45 @@ on:
   schedule:
     # Nightly 04:00 UTC — the paid end-to-end eval lives here, not on PRs.
     - cron: '0 4 * * *'
+
+# Both arms of this workflow measure ONE shared live endpoint
+# (`secrets.MESH_API_URL`). The harness treated that endpoint as exclusive while
+# GitHub was free to start any number of runs against it, so the runs starved each
+# other: at 03:41 on 2026-07-28 five were in flight, the shared embedder saturated,
+# and `embedChunked` began failing with `context deadline exceeded` — 1821 of them
+# in 110 minutes. The per-minute correlation is exact, and it is concurrency and
+# not workload:
+#
+#   02:47-02:52   273 failures   (1 run)
+#   03:14-03:22   379 failures   (2 runs)
+#   03:23-03:37     4 failures   (1 run, alone)      <-- a lone run costs ~nothing
+#   03:38-03:41   110 failures   (4 runs, climbing)
+#
+# A partially-chunked document then reads downstream as a dense-arm miss that is
+# indistinguishable from a genuine ranking failure, so the contention does not
+# merely slow the gate down — it manufactures the exact signal the gate exists to
+# detect. Same group name shape as `backend-deploy-prod` in deploy-backend.yml,
+# for the same reason: the group names the RESOURCE, not the branch.
+#
+# `cancel-in-progress: false` is deliberate and is the whole point. The template
+# default (`true`) would abort a peer mid-run against the shared prod — the same
+# starvation by another route, and harder to diagnose because no timeout appears
+# in the log. It also orphans that run's bench fixtures in the shared workspace:
+# cleanup is the end of `run_ci.py`, not a step with `if: always()`, so a SIGTERM
+# mid-run leaves `bench-<run_id>-%` rows behind in prod.
+#
+# Known and accepted consequence: GitHub allows at most one RUNNING plus one
+# PENDING run per group, and a third arrival cancels the pending one. So a queued
+# required check can be cancelled — but a pending run has written nothing and
+# leaves nothing behind, so the cost is a re-run click, against the alternative of
+# a corrupted measurement plus orphaned fixtures. Queue depth is the signal to
+# watch: if it grows, the lever is fewer triggers, not a shorter timeout.
+#
+# `timeout-minutes` is unaffected by queueing — GitHub applies it once a job
+# starts, so serialised runs wait for free.
+concurrency:
+  group: memory-bench-prod
+  cancel-in-progress: false
 
 env:
   # Every file whose behaviour the gate is supposed to protect. A memory file
@@ -114,8 +164,16 @@ jobs:
     name: Memory recall gate
     runs-on: ubuntu-latest
     # A recall pass is ~17 min, so a `--repeat 3` capture needs the same headroom
-    # the advisory arm already takes. Unchanged (30) for every PR and nightly.
-    timeout-minutes: ${{ (inputs.update_baseline && 120) || 30 }}
+    # the advisory arm already takes.
+    #
+    # 30 -> 50 because the version pin below now spends IN-JOB time: up to
+    # BENCH_VERSION_WAIT_SECONDS (15 min) waiting for a deploy to land, on top of
+    # a 17-25 min measurement. Leaving the budget at 30 would have made the guard
+    # die on precisely the runs it exists for — a race it waits out would end as a
+    # `cancelled` at the ceiling, which reads as a flake rather than as the deploy
+    # collision it is. The wait is a CEILING, not a cost: a matching first poll
+    # returns in about a second, so a quiet run is no slower than before.
+    timeout-minutes: ${{ (inputs.update_baseline && 120) || 50 }}
     permissions:
       contents: read
       # The gate raises an out-of-band alert when it is BLIND (INCONCLUSIVE), so
@@ -149,6 +207,7 @@ jobs:
           python scripts/memory-bench/test_gate_modes.py
           python scripts/memory-bench/test_gold_rank.py
           python scripts/memory-bench/test_fixture_isolation.py
+          python scripts/memory-bench/test_serving_version.py
 
       # One source of truth for "this dispatch is a capture, not a verdict". Two
       # steps have to agree on it — the capture runs, the gate must not — and two
@@ -187,8 +246,92 @@ jobs:
           echo "This PR changes no memory-path file; the recall gate is a no-op." \
             | tee -a "$GITHUB_STEP_SUMMARY"
 
-      - name: Checkout evc-mesh-mcp
+      # ---------------------------------------------------------------------
+      # Which binary are we about to measure?
+      #
+      # This workflow triggers on `push: branches:[main]`. So does
+      # deploy-backend.yml. Nothing sequences them, so every push-triggered run
+      # used to spend its first ~6 minutes measuring the PREVIOUS binary and then
+      # have the binary swap underneath it. Every run on the night of 2026-07-28
+      # crossed a deploy, including one dispatched at 03:23:43 *specifically* to be
+      # a clean post-deploy run: prod went f161732 -> de52f76 at 03:43:10Z, inside
+      # it. The harness reported a score for that run, because it had no way to say
+      # it could not attribute one.
+      #
+      # Runs BEFORE the Go build so a run that cannot be attributed costs the wait
+      # and nothing else.
+      # ---------------------------------------------------------------------
+      - name: Which commit is prod serving?
+        id: version
         if: steps.scope.outputs.relevant == 'true'
+        env:
+          MESH_API_URL: ${{ secrets.MESH_API_URL }}
+          # Ceiling, not a cost: a matching first poll returns in ~1s. Sized for
+          # the ~6-7 min a backend deploy takes, doubled, so a queued deploy still
+          # fits. Paired with `timeout-minutes: 50` above — raise both together or
+          # the guard dies as a timeout on the runs it exists for.
+          BENCH_VERSION_WAIT_SECONDS: '900'
+        run: |
+          set -euo pipefail
+          # Pin only where `github.sha` names a commit prod is expected to serve.
+          # push to main / schedule / dispatch on main: github.sha IS main's tip,
+          # which deploy-backend.yml ships. A pull_request's github.sha is the
+          # merge commit — never deployed, so a pin there would wedge every PR at
+          # INCONCLUSIVE for ever. Those runs RECORD the serving commit instead and
+          # are judged only on whether it changed underneath them.
+          expect="${{ inputs.expect_commit }}"
+          if [ -z "$expect" ] && [ "${{ github.ref }}" = "refs/heads/main" ]; then
+            expect="${{ github.sha }}"
+          fi
+
+          if [ -n "$expect" ]; then
+            echo "Pinning to $expect (wait up to ${BENCH_VERSION_WAIT_SECONDS}s)."
+            set +e
+            python3 scripts/memory-bench/check_serving_version.py \
+              --expect "$expect" --wait-seconds "${BENCH_VERSION_WAIT_SECONDS}" \
+              2>&1 | tee version.log
+            rc=${PIPESTATUS[0]}
+            set -e
+          else
+            echo "No pin: ${{ github.event_name }} on ${{ github.ref }} is not a commit prod serves."
+            set +e
+            python3 scripts/memory-bench/check_serving_version.py --record 2>&1 | tee version.log
+            rc=${PIPESTATUS[0]}
+            set -e
+          fi
+
+          reason="$(grep -m1 '^GATE_REASON:' version.log | sed 's/^GATE_REASON: *//' || true)"
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          echo "reason=$reason" >> "$GITHUB_OUTPUT"
+          echo "reason_kind=${reason%% *}" >> "$GITHUB_OUTPUT"
+
+          if [ "$rc" != "0" ]; then
+            {
+              echo "## Memory recall gate — NOT RUN"
+              echo
+              echo "### ⚠️ INCONCLUSIVE — could not confirm which binary would be measured"
+              echo
+              echo "> The gate refused to score rather than measure whichever build happened"
+              echo "> to be up. **Nothing was measured, so nothing was enforced.**"
+              echo
+              echo "**Reason:** \`${reason:-unspecified}\`"
+              echo
+              echo "This is infrastructure, not your PR: a backend deploy was in flight, or"
+              echo "prod is serving code that is not on the line under test. Re-run once the"
+              echo "deploy has landed."
+              echo
+              echo '```'
+              tail -30 version.log
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          # Never exit non-zero here. `cannot measure => inconclusive`, and
+          # INCONCLUSIVE must not fail a required check (cf. #342) — the steps
+          # below are skipped and the alert step pages instead.
+          exit 0
+
+      - name: Checkout evc-mesh-mcp
+        if: steps.scope.outputs.relevant == 'true' && steps.version.outputs.rc == '0'
         uses: actions/checkout@v4
         with:
           repository: entire-vc/evc-mesh-mcp
@@ -196,21 +339,21 @@ jobs:
           path: evc-mesh-mcp
 
       - name: Set up Go
-        if: steps.scope.outputs.relevant == 'true'
+        if: steps.scope.outputs.relevant == 'true' && steps.version.outputs.rc == '0'
         uses: actions/setup-go@v5
         with:
           go-version-file: evc-mesh-mcp/go.mod
           cache-dependency-path: evc-mesh-mcp/go.sum
 
       - name: Cross-compile mesh-mcp (linux/amd64)
-        if: steps.scope.outputs.relevant == 'true'
+        if: steps.scope.outputs.relevant == 'true' && steps.version.outputs.rc == '0'
         run: |
           cd evc-mesh-mcp
           GOOS=linux GOARCH=amd64 go build -o ../mesh-mcp-bin .
           chmod +x ../mesh-mcp-bin
 
       - name: Install Python dependencies
-        if: steps.scope.outputs.relevant == 'true'
+        if: steps.scope.outputs.relevant == 'true' && steps.version.outputs.rc == '0'
         # Python itself is already set up above for the gate self-checks.
         # No `openai` — the recall gate must not acquire a paid dependency.
         run: pip install mcp httpx
@@ -234,7 +377,7 @@ jobs:
       # ---------------------------------------------------------------------
       - name: Re-snap the recall baseline
         id: resnap
-        if: steps.scope.outputs.relevant == 'true' && steps.mode.outputs.capture == 'true'
+        if: steps.scope.outputs.relevant == 'true' && steps.version.outputs.rc == '0' && steps.mode.outputs.capture == 'true'
         env:
           MESH_API_URL: ${{ secrets.MESH_API_URL }}
           MESH_AGENT_KEY: ${{ secrets.MESH_BENCH_KEY }}
@@ -311,7 +454,7 @@ jobs:
 
       - name: Run recall gate (no LLM)
         id: gate
-        if: steps.scope.outputs.relevant == 'true' && steps.mode.outputs.capture != 'true'
+        if: steps.scope.outputs.relevant == 'true' && steps.version.outputs.rc == '0' && steps.mode.outputs.capture != 'true'
         env:
           MESH_API_URL: ${{ secrets.MESH_API_URL }}
           MESH_AGENT_KEY: ${{ secrets.MESH_BENCH_KEY }}
@@ -360,6 +503,31 @@ jobs:
             rc=2
             reason="no-baseline — the gate compared against nothing"
           fi
+
+          # The pin above proved which binary we STARTED against. A deploy takes
+          # ~6-7 min and a recall pass 17-25, so the binary can still swap in the
+          # middle — which is exactly what happened to run 30325802161, dispatched
+          # to be a clean post-deploy run and crossed by one anyway at 03:43:10Z.
+          #
+          # This OVERRIDES rc=1 as well as rc=0, on purpose. A score straddling two
+          # binaries is a measurement of neither, so a REGRESSION verdict from one
+          # is no more attributable than a PASS — and blocking a merge on a red
+          # nobody can reproduce is how a gate loses its authority. INCONCLUSIVE
+          # pages instead.
+          if [ -n "${{ steps.version.outputs.served }}" ]; then
+            set +e
+            python3 ../../scripts/memory-bench/check_serving_version.py \
+              --was "${{ steps.version.outputs.served }}" 2>&1 | tee -a gate.log
+            vrc=${PIPESTATUS[0]}
+            set -e
+            if [ "$vrc" != "0" ]; then
+              rc=2
+              reason="$(grep -m1 '^GATE_REASON: version-changed-mid-run' gate.log \
+                        | sed 's/^GATE_REASON: *//' || true)"
+              [ -z "$reason" ] && reason="version-changed-mid-run — prod was redeployed during the measurement"
+            fi
+          fi
+
           [ -z "$reason" ] && reason="unspecified"
 
           echo "rc=$rc" >> "$GITHUB_OUTPUT"
@@ -401,6 +569,15 @@ jobs:
                  echo "**Reason:** \`$reason\`"
                  echo
                  case "${reason%% *}" in
+                   version-changed-mid-run)
+                     echo "A backend deploy landed **during** the measurement, so the score spans"
+                     echo "two binaries and describes neither. The pin at the start of this job"
+                     echo "confirmed which build the run began against; this is the other half —"
+                     echo "the build changed underneath it anyway."
+                     echo
+                     echo "**Fix:** re-run once the deploy has settled. Nothing to change in the PR."
+                     echo "If this recurs, the deploy and the gate are being triggered by the same"
+                     echo "pushes and the wait budget is too short for the deploy queue." ;;
                    persistent-errors)
                      echo "One or more questions failed with an error that is **not transient**:"
                      echo "either the message is not an infrastructure blip, or the question spent"
@@ -462,13 +639,20 @@ jobs:
       # the 292-task alert storm — a poisoned dedup key turns an alert into spam,
       # and spam is ignored, which is the same as having no alert at all).
       # ---------------------------------------------------------------------
+      # Reads from EITHER blind source. The version pin can refuse before the gate
+      # step ever runs, in which case `steps.gate.outputs.rc` is empty — keying the
+      # alert on the gate step alone would make the newest way of going blind the
+      # one way that goes blind SILENTLY, which is the whole failure mode this
+      # alert exists to prevent.
       - name: Alert — recall gate is blind (INCONCLUSIVE)
-        if: steps.scope.outputs.relevant == 'true' && steps.gate.outputs.rc == '2'
+        if: >-
+          steps.scope.outputs.relevant == 'true'
+          && (steps.gate.outputs.rc == '2' || steps.version.outputs.rc == '2')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TITLE: 'Memory recall gate is INCONCLUSIVE (safety net blind)'
-          REASON: ${{ steps.gate.outputs.reason }}
-          REASON_KIND: ${{ steps.gate.outputs.reason_kind }}
+          REASON: ${{ steps.gate.outputs.reason || steps.version.outputs.reason }}
+          REASON_KIND: ${{ steps.gate.outputs.reason_kind || steps.version.outputs.reason_kind }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
@@ -478,6 +662,8 @@ jobs:
           # alert that claims total blindness for a partial gap trains its readers
           # to discount it.
           case "$REASON_KIND" in
+            version-mismatch|version-changed-mid-run|version-unreadable)
+              lede="The memory recall gate could not confirm WHICH BUILD it was measuring, so it refused to produce a score rather than attribute one to the wrong binary. Nothing was measured and nothing was enforced. This clears itself once the deploy in flight has landed; if it does not, the gate and the backend deploy are racing on the same pushes." ;;
             category-unmeasured|baseline-sample-mismatch)
               lede="The memory recall gate could not compare **some** categories. Every comparable category was still measured and enforced — a regression in one of those still blocks a merge. What is unguarded is limited to the categories in the reason below, and **a regression in those can merge unnoticed** until this clears." ;;
             *)
@@ -536,6 +722,7 @@ jobs:
           path: |
             scripts/memory-bench/gate.log
             scripts/memory-bench/results/
+            version.log
           retention-days: 30
 
   # ---------------------------------------------------------------------------
