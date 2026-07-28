@@ -181,9 +181,10 @@ def main() -> int:
     # a database that ceases to exist when the job ends. It grants nothing
     # anywhere else, and `$GITHUB_ENV` is runner-local. Were this pointed at
     # prod, the alert would be correct and this comment would be an excuse.
+    # NB the suppression must TRAIL the flagged line, not precede it — a comment
+    # on the line above is not attached to the alert and does nothing at all.
     with Path(args.env_file).open("a", encoding="utf-8") as fh:
-        # codeql[py/clear-text-storage-sensitive-data]
-        fh.write(f"MESH_AGENT_KEY={key}\n")
+        fh.write(f"MESH_AGENT_KEY={key}\n")  # codeql[py/clear-text-storage-sensitive-data]
         fh.write(f"MESH_WORKSPACE_ID={ws_id}\n")
 
     # Everything that reaches a log is non-secret by construction: two ids and a
