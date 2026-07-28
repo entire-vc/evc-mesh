@@ -51,8 +51,12 @@ from __future__ import annotations
 import asyncio
 import io
 import json
+import os
 import re
+import shutil
+import subprocess
 import sys
+import tempfile
 import tokenize
 import unittest
 from pathlib import Path
@@ -1011,6 +1015,460 @@ class TestToolErrorSurvivesTheTransportTeardown(unittest.TestCase):
         client = mc.MeshMemoryClient(question_id="q1")
         boom = RuntimeError("Connection closed")
         self.assertIs(boom, client._surfaced(boom))
+
+
+# ---------------------------------------------------------------------------
+# 8. RE-ARMED BY ACKNOWLEDGEMENT — the storm guard on the blindness alerts.
+# ---------------------------------------------------------------------------
+# The alert steps dedup by writing an HTML marker (`<!-- recall-gate-blind
+# kind=... -->`) into the comment and refusing to post again while that marker
+# is already live on the tracking issue. The check used to read
+#
+#     (.comments | last | .body) // .body // ""
+#
+# i.e. ONLY the newest comment. Any comment that is not itself an alert — a
+# human acknowledging the issue, asking a question, posting status — displaced
+# the marker from the last position and the next run posted the identical alert
+# again. Acknowledging an alert was precisely the act that re-armed it: the
+# guard was weakest exactly when someone was paying attention.
+#
+# Observed on evc-mesh#397, 2026-07-28, not inferred:
+#     04:43:06Z  github-actions   kind=version-mismatch
+#     04:46:22Z  (human comment)  no marker
+#     04:58:24Z  github-actions   kind=version-mismatch   <- duplicate
+# Run 30328826762 logged `Commented on tracking issue #397.`, not the
+# `already reports` branch, so the kind-scoping was correct and irrelevant —
+# the search WINDOW is what failed.
+#
+# These tests EXECUTE the shipped step. The defect under repair is a misread of
+# what a `jq` expression selects, so a test that reads the expression back is
+# the same act that produced the bug. The script is pulled out of the workflow
+# verbatim (never copied here) and run under bash with a stand-in `gh`, so
+# deleting or reverting the guard turns this red rather than leaving a
+# self-satisfied assertion about a string that no longer runs.
+
+
+def _step_run_script(step_name: str) -> str:
+    """The `run:` body of a named workflow step, dedented, verbatim.
+
+    Extracted rather than transcribed on purpose: a copy of a rule survives the
+    deletion of the rule, and this suite exists to notice deletions.
+    """
+    lines = WORKFLOW.read_text(encoding="utf-8").splitlines()
+    head = f"      - name: {step_name}"
+    if head not in lines:
+        raise AssertionError(
+            f"step {step_name!r} not found in {WORKFLOW}. If it was renamed, rename "
+            f"it here too — this suite is the only thing executing its logic."
+        )
+    body: list[str] = []
+    in_run = False
+    for line in lines[lines.index(head) + 1:]:
+        if not in_run:
+            if line.startswith("      - name:"):
+                raise AssertionError(f"step {step_name!r} has no `run:` block")
+            in_run = line == "        run: |"
+            continue
+        if line.strip() and not line.startswith(" " * 10):
+            break
+        body.append(line[10:])
+    script = "\n".join(body)
+    assert script.strip(), f"empty run: block for {step_name!r}"
+    assert "${{" not in script, (
+        f"step {step_name!r} interpolates a GitHub expression inside `run:`; this "
+        f"harness executes the block under plain bash, so what it proves would no "
+        f"longer be what CI runs. Move the value into `env:` (as the rest of the "
+        f"step already does) or teach this helper to substitute it."
+    )
+    return script
+
+
+# Stands in for `gh`. `issue view --jq` is executed FAITHFULLY — the expression
+# under test is handed to the real jq against a fixture — because that
+# expression is the thing that was wrong. `issue list` is short-circuited to a
+# fixed number: locating the tracking issue is not what this pins, and making
+# the fixture titles line up would add a moving part with no assertion on it.
+_STUB_GH = '''#!/usr/bin/env python3
+import os
+import subprocess
+import sys
+
+argv = sys.argv[1:]
+
+
+def record(line):
+    with open(os.environ["STUB_CALLS"], "a", encoding="utf-8") as fh:
+        fh.write(line + "\\n")
+
+
+if argv[:2] == ["issue", "list"]:
+    record("list")
+    print(os.environ.get("STUB_ISSUE_NUM", ""))
+    sys.exit(0)
+
+if argv[:2] == ["issue", "view"]:
+    record("view")
+    expr = argv[argv.index("--jq") + 1]
+    done = subprocess.run(
+        ["jq", "-r", expr, os.environ["STUB_ISSUE_JSON"]],
+        capture_output=True, text=True,
+    )
+    sys.stderr.write(done.stderr)
+    sys.stdout.write(done.stdout)
+    sys.exit(done.returncode)
+
+if argv[:2] == ["issue", "comment"]:
+    record("comment:" + argv[argv.index("--body") + 1])
+    sys.exit(0)
+
+if argv[:2] == ["issue", "create"]:
+    record("create")
+    sys.exit(0)
+
+record("UNEXPECTED:" + " ".join(argv))
+sys.exit(97)
+'''
+
+
+class TestAcknowledgingAnAlertDoesNotReArmIt(unittest.TestCase):
+    """One alert kind, one comment, however many non-alert comments follow.
+
+    Both blindness alerts carry the same guard and are covered together: the
+    recall gate's (the REQUIRED arm) and the advisory arm's. Fixing one and
+    leaving the other is the failure shape this repo has already paid for once —
+    a family fix that stopped at the caller it started from.
+    """
+
+    STEPS = {
+        "recall gate (required arm)": "Alert — recall gate is blind (INCONCLUSIVE)",
+        "advisory arm": "Alert — advisory arm measured nothing (INCONCLUSIVE)",
+    }
+
+    @classmethod
+    def setUpClass(cls):
+        for tool in ("bash", "jq"):
+            if shutil.which(tool) is None:
+                raise AssertionError(
+                    f"{tool!r} is required to EXECUTE the storm guard; it is present "
+                    f"on ubuntu-latest, where this runs as a gate self-check. "
+                    f"Skipping instead of failing would leave the guard unproven "
+                    f"while reporting green — the exact disease this file pins."
+                )
+
+    def _marker(self, script: str, kind: str) -> str:
+        """The marker the step itself builds, read off the step, not restated."""
+        found = re.search(r'marker="(<!--.*?-->)"', script)
+        self.assertIsNotNone(found, "step no longer builds an HTML dedup marker")
+        return found.group(1).replace("${REASON_KIND}", kind)
+
+    def _run(self, script: str, *, comments: list[str], body: str, kind: str):
+        """Execute the step under bash against a scripted issue.
+
+        Returns (stdout, calls) where `calls` is what the stand-in `gh` was
+        actually asked to do — so the assertion is on the branch taken and on
+        whether a comment was posted, never on a count alone.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            gh = tmp / "gh"
+            gh.write_text(_STUB_GH, encoding="utf-8")
+            gh.chmod(0o755)
+            issue = tmp / "issue.json"
+            issue.write_text(
+                json.dumps({"body": body, "comments": [{"body": c} for c in comments]}),
+                encoding="utf-8",
+            )
+            calls = tmp / "calls.txt"
+            calls.write_text("", encoding="utf-8")
+            step = tmp / "step.sh"
+            step.write_text(script, encoding="utf-8")
+
+            env = dict(os.environ)
+            env.update(
+                PATH=f"{tmp}{os.pathsep}{os.environ['PATH']}",
+                GH_TOKEN="stub",
+                TITLE="Memory recall gate is INCONCLUSIVE (safety net blind)",
+                REASON="baseline captured in bm25-only, run served hybrid",
+                REASON_KIND=kind,
+                RUN_URL="https://example.invalid/run/1",
+                STUB_ISSUE_NUM="397",
+                STUB_ISSUE_JSON=str(issue),
+                STUB_CALLS=str(calls),
+            )
+            done = subprocess.run(
+                ["bash", str(step)], env=env, capture_output=True, text=True, timeout=60,
+            )
+            self.assertEqual(
+                0, done.returncode,
+                f"the step itself failed:\nstdout={done.stdout}\nstderr={done.stderr}",
+            )
+            recorded = [ln for ln in calls.read_text(encoding="utf-8").splitlines() if ln]
+            return done.stdout, recorded
+
+    # -- AC1 -----------------------------------------------------------------
+    def test_a_non_alert_comment_does_not_re_arm_the_same_kind(self):
+        """#397's exact sequence: alert(K), then a human, then alert(K) again.
+
+        Asserted on the BRANCH TAKEN, not on a comment count — the count is also
+        0 when the step never ran, and a guard proven by an absence is the same
+        class of evidence as the bug.
+        """
+        for label, step_name in self.STEPS.items():
+            with self.subTest(step=label):
+                script = _step_run_script(step_name)
+                marker = self._marker(script, "version-mismatch")
+                out, calls = self._run(
+                    script,
+                    body="Tracking issue for recall-gate blindness.",
+                    comments=[
+                        f"{marker}\n\nThe memory recall gate could not produce a verdict.",
+                        "Looking at this now — is it the embedder or the baseline?",
+                    ],
+                    kind="version-mismatch",
+                )
+                self.assertIn(
+                    "already reports", out,
+                    f"{label}: a human comment displaced the marker and the guard "
+                    f"re-alerted. Acknowledging an alert must not re-arm it.\n{out}",
+                )
+                self.assertNotIn(
+                    "Commented on tracking issue", out,
+                    f"{label}: took the commenting branch\n{out}",
+                )
+                self.assertFalse(
+                    [c for c in calls if c.startswith("comment:")],
+                    f"{label}: posted a duplicate alert: {calls}",
+                )
+
+    # -- AC2 -----------------------------------------------------------------
+    def test_a_genuinely_new_reason_kind_still_alerts(self):
+        """Without this, "never comment twice" would satisfy AC1 and destroy the
+        signal the alert exists to carry. A second, DIFFERENT way of going blind
+        is news, and it must reach the issue even though a marker is already on
+        it."""
+        for label, step_name in self.STEPS.items():
+            with self.subTest(step=label):
+                script = _step_run_script(step_name)
+                out, calls = self._run(
+                    script,
+                    body="Tracking issue for recall-gate blindness.",
+                    comments=[
+                        f"{self._marker(script, 'version-mismatch')}\n\nFirst kind.",
+                        "Ack, on it.",
+                    ],
+                    kind="mode-mismatch",
+                )
+                self.assertIn(
+                    "Commented on tracking issue", out,
+                    f"{label}: a NEW reason kind was suppressed — the fix has "
+                    f"traded a storm for silence.\n{out}",
+                )
+                posted = [c for c in calls if c.startswith("comment:")]
+                self.assertEqual(1, len(posted), f"{label}: {calls}")
+                self.assertIn(
+                    self._marker(script, "mode-mismatch"), posted[0],
+                    f"{label}: the new comment does not carry its own kind marker, "
+                    f"so the NEXT run cannot dedup against it.",
+                )
+
+    def test_the_issue_body_alone_still_suppresses(self):
+        """The alert that OPENS the issue writes its marker into the body, not a
+        comment. That case worked before and must keep working: an issue with
+        zero comments is the first repeat's normal state."""
+        for label, step_name in self.STEPS.items():
+            with self.subTest(step=label):
+                script = _step_run_script(step_name)
+                out, calls = self._run(
+                    script,
+                    body=f"{self._marker(script, 'no-baseline')}\n\nOpened by the first alert.",
+                    comments=[],
+                    kind="no-baseline",
+                )
+                self.assertIn("already reports", out, f"{label}: {out}")
+                self.assertFalse([c for c in calls if c.startswith("comment:")], label)
+
+    # -- AC3: the harness is not vacuous ------------------------------------
+    def test_the_harness_reproduces_the_defect_on_the_old_expression(self):
+        """The positive control, and the reason AC1 above means anything.
+
+        Swap only the `jq` window back to what `main` shipped —
+        `(.comments | last | .body) // .body // ""` — leaving every other line of
+        the step alone, and re-run the AC1 fixture. It must post the duplicate.
+        If this ever goes quiet, the harness has stopped exercising the guard and
+        AC1 is passing for some other reason.
+        """
+        old = """--jq '(.comments | last | .body) // .body // ""'"""
+        for label, step_name in self.STEPS.items():
+            with self.subTest(step=label):
+                script = _step_run_script(step_name)
+                mutated, n = re.subn(r"--jq '\(\[\.body\].*?'", old, script, flags=re.S)
+                self.assertEqual(
+                    1, n,
+                    f"{label}: could not find the fixed `issue view --jq` window to "
+                    f"mutate, so this control proves nothing. Script:\n{script}",
+                )
+                self.assertNotEqual(script, mutated)
+                marker = self._marker(script, "version-mismatch")
+                out, calls = self._run(
+                    mutated,
+                    body="Tracking issue for recall-gate blindness.",
+                    comments=[
+                        f"{marker}\n\nThe memory recall gate could not produce a verdict.",
+                        "Looking at this now — is it the embedder or the baseline?",
+                    ],
+                    kind="version-mismatch",
+                )
+                self.assertIn(
+                    "Commented on tracking issue", out,
+                    f"{label}: the old last-comment-only window did NOT duplicate on "
+                    f"#397's own sequence. The harness is not driving the guard.\n{out}",
+                )
+                self.assertTrue([c for c in calls if c.startswith("comment:")], label)
+def _step_if(step_name: str) -> str:
+    """The `if:` expression of the named step, AS SHIPPED, flattened to one line.
+
+    Text-level and extracted, for the same reason `_job_blocks` is: the point of
+    this helper is to read what the file actually says. Handles both the
+    single-line form (`if: a && b`) and the folded form (`if: >-` followed by an
+    indented block), because a step that changes between the two must not thereby
+    escape the check.
+    """
+    text = WORKFLOW.read_text(encoding="utf-8")
+    start = text.find(f"- name: {step_name}\n")
+    assert start != -1, (
+        f"step {step_name!r} not found in memory-bench.yml — if it was renamed, "
+        "this test must be pointed at the new name, not deleted"
+    )
+    body = text[start:]
+    m = re.search(r"^\s*if:[ \t]*(.*)$", body, re.M)
+    assert m, f"step {step_name!r} has no `if:`"
+    first = m.group(1).strip()
+    if first not in (">-", ">", "|-", "|"):
+        return " ".join(first.split())
+    # Folded block: take the indented lines that follow.
+    rest = body[m.end():].splitlines()
+    indent = None
+    parts = []
+    for ln in rest[1:] if rest and not rest[0].strip() else rest:
+        if not ln.strip():
+            break
+        cur = len(ln) - len(ln.lstrip())
+        if indent is None:
+            indent = cur
+        elif cur < indent:
+            break
+        parts.append(ln.strip())
+    return " ".join(" ".join(parts).split())
+
+
+def _event_clauses(expr: str) -> set[str]:
+    """The parts of an `if:` that scope it to an EVENT, normalised.
+
+    Splits on top-level `&&` (parenthesised disjuncts stay whole) and keeps the
+    conjuncts that mention `github.event_name` or `inputs.expect_commit`. The rc
+    predicates are deliberately excluded: alert and resolve are SUPPOSED to
+    differ there ('2' vs '0'). What must match is which runs they act on.
+    """
+    conjuncts, depth, cur = [], 0, ""
+    i = 0
+    while i < len(expr):
+        c = expr[i]
+        if c == "(":
+            depth += 1
+        elif c == ")":
+            depth -= 1
+        if depth == 0 and expr.startswith("&&", i):
+            conjuncts.append(cur)
+            cur = ""
+            i += 2
+            continue
+        cur += c
+        i += 1
+    conjuncts.append(cur)
+    return {
+        " ".join(c.split())
+        for c in conjuncts
+        if "github.event_name" in c or "inputs.expect_commit" in c
+    }
+
+
+class TestBlindnessAlertAndResolveAgreeOnEvents(unittest.TestCase):
+    """An alert that can be RAISED on more events than it can be RESOLVED on
+    bounds an episode by trigger cadence instead of by recovery.
+
+    The recall arm shipped exactly that: the alert had no event clause, the
+    resolve carried `github.event_name == 'push'`. A blind episode detected by
+    the Sunday schedule stayed open until somebody pushed to main.
+
+    It is load-bearing rather than untidy because the dedup key suppresses a
+    same-kind alert while the issue is OPEN — so a stale-open issue MUTES its own
+    re-alerts. The widened dedup is right only while the issue closes on
+    recovery.
+
+    These tests EXTRACT both conditions from the shipped workflow rather than
+    restating them. A restated rule keeps passing after the real one is deleted,
+    which is the failure mode this class exists to prevent.
+    """
+
+    ALERT = "Alert — recall gate is blind (INCONCLUSIVE)"
+    RESOLVE = "Resolve blindness alert (gate is measuring again)"
+    ADV_ALERT = "Alert — advisory arm measured nothing (INCONCLUSIVE)"
+    ADV_RESOLVE = "Resolve advisory blindness alert (arm is measuring again)"
+
+    def test_recall_arm_alert_and_resolve_act_on_the_same_events(self):
+        alert = _event_clauses(_step_if(self.ALERT))
+        resolve = _event_clauses(_step_if(self.RESOLVE))
+        self.assertEqual(
+            alert, resolve,
+            "The recall arm's blindness alert and its resolve disagree about which "
+            "events they act on. Whatever can raise the alert must be able to clear "
+            "it, or the tracking issue outlives the blindness and — via the dedup "
+            "key — silences its own re-alerts.\n"
+            f"  alert   : {sorted(alert)}\n  resolve : {sorted(resolve)}",
+        )
+
+    def test_neither_half_of_the_recall_arm_is_push_scoped(self):
+        """The specific regression: this job is the prod canary and never runs on
+        pull_request, so every run measured PROD. Scoping either half to `push`
+        discards a schedule's verdict about the very thing it just measured."""
+        for step in (self.ALERT, self.RESOLVE):
+            with self.subTest(step=step):
+                self.assertNotIn(
+                    "github.event_name == 'push'", _step_if(step),
+                    f"{step!r} is push-scoped again. A schedule measures prod just as "
+                    "a push does; bounding the episode by push cadence is the defect "
+                    "this test pins.",
+                )
+
+    def test_a_drill_can_neither_raise_nor_clear_the_alert(self):
+        """`expect_commit` marks an operator drill. A drill is not an incident —
+        and by the same token not a recovery, or a dispatch pinned to a commit
+        prod happens to be serving could close an episode it could not open."""
+        for step in (self.ALERT, self.RESOLVE):
+            with self.subTest(step=step):
+                self.assertIn(
+                    "github.event_name != 'workflow_dispatch' || inputs.expect_commit == ''",
+                    _step_if(step),
+                    f"{step!r} lost the drill guard. Losing it on the alert charges a "
+                    "false page for every drill; losing it on the resolve lets a drill "
+                    "silently close a real episode.",
+                )
+
+    def test_advisory_arm_alert_and_resolve_also_agree(self):
+        """AC4: the second copy of this guard must not drift from the first.
+
+        The advisory arm is intentionally scoped differently from the recall arm —
+        it has no version pin and therefore no drill mode, so it carries no event
+        clauses at all. What it may NOT do is disagree with itself, which is the
+        property under test here and the one that actually bit.
+        """
+        alert = _event_clauses(_step_if(self.ADV_ALERT))
+        resolve = _event_clauses(_step_if(self.ADV_RESOLVE))
+        self.assertEqual(
+            alert, resolve,
+            "The advisory arm's alert and resolve disagree about which events they "
+            f"act on.\n  alert   : {sorted(alert)}\n  resolve : {sorted(resolve)}",
+        )
 
 
 if __name__ == "__main__":
