@@ -25,6 +25,12 @@ type NotificationService interface {
 	// UpsertPreferences creates or updates notification preferences for a user.
 	UpsertPreferences(ctx context.Context, pref *domain.NotificationPreference) (*domain.NotificationPreference, error)
 
+	// DeletePreferences removes one subscriber's preference for one workspace and
+	// channel, and reports whether a row was there to remove. The caller is
+	// responsible for having established that it may act on this subject in this
+	// workspace.
+	DeletePreferences(ctx context.Context, workspaceID uuid.UUID, userID, agentID *uuid.UUID, channel string) (bool, error)
+
 	// ListUnread returns unread notifications for the given user (up to 50).
 	ListUnread(ctx context.Context, userID uuid.UUID) ([]domain.Notification, error)
 
@@ -69,8 +75,13 @@ func (s *notificationService) Notify(ctx context.Context, event domain.Notificat
 func (s *notificationService) dispatch(event domain.NotificationEvent) {
 	bgCtx := context.Background()
 
-	// Load all enabled preferences for the workspace.
-	prefs, err := s.repo.GetPreferencesByWorkspace(bgCtx, event.WorkspaceID)
+	// Load the enabled preferences for the workspace whose subscriber actually
+	// belongs to it. The loop below filters on the channel and the event type and
+	// nothing else, so whatever this returns is delivered — which is why the
+	// membership question has to be settled here, in the query, rather than left
+	// to a reader who may not think to ask it. One query, not one per row: this
+	// runs on every comment, assignment and status change.
+	prefs, err := s.repo.GetDeliverablePreferences(bgCtx, event.WorkspaceID)
 	if err != nil {
 		log.Printf("[notification] failed to load preferences for workspace %s: %v", event.WorkspaceID, err)
 		return
@@ -176,6 +187,21 @@ func (s *notificationService) UpsertPreferences(ctx context.Context, pref *domai
 		return nil, err
 	}
 	return pref, nil
+}
+
+// DeletePreferences removes one subscriber's preference row for a workspace and
+// channel.
+func (s *notificationService) DeletePreferences(
+	ctx context.Context,
+	workspaceID uuid.UUID,
+	userID, agentID *uuid.UUID,
+	channel string,
+) (bool, error) {
+	n, err := s.repo.DeletePreferenceBySubject(ctx, workspaceID, userID, agentID, channel)
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
 }
 
 // ListUnread returns unread notifications for the given user (up to 50).

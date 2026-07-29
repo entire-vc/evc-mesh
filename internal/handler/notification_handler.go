@@ -8,18 +8,30 @@ import (
 	"github.com/lib/pq"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	mw "github.com/entire-vc/evc-mesh/internal/middleware"
+	"github.com/entire-vc/evc-mesh/internal/repository"
 	"github.com/entire-vc/evc-mesh/internal/service"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 )
 
 // NotificationHandler handles HTTP requests for in-app notifications.
 type NotificationHandler struct {
-	svc service.NotificationService
+	svc        service.NotificationService
+	members    repository.WorkspaceMemberRepository
+	workspaces repository.WorkspaceRepository
 }
 
 // NewNotificationHandler creates a new NotificationHandler.
-func NewNotificationHandler(svc service.NotificationService) *NotificationHandler {
-	return &NotificationHandler{svc: svc}
+//
+// members and workspaces are needed only by Delete, to tell a workspace's owner
+// or admin — who may evict anybody's subscription — from an ordinary member, who
+// may evict their own.
+func NewNotificationHandler(
+	svc service.NotificationService,
+	members repository.WorkspaceMemberRepository,
+	workspaces repository.WorkspaceRepository,
+) *NotificationHandler {
+	return &NotificationHandler{svc: svc, members: members, workspaces: workspaces}
 }
 
 // List handles GET /notifications
@@ -105,6 +117,13 @@ func (h *NotificationHandler) GetPreferences(c echo.Context) error {
 }
 
 // updatePreferencesRequest is the JSON body for updating preferences.
+//
+// WorkspaceID names the tenant this row is written into, and no route parameter
+// carries it — the path is a bare /notifications/preferences. That is why the
+// route is registered with middleware.RequireBodyWorkspace: without it,
+// RequireWorkspaceMemberScoped has nothing to resolve and never runs, and any
+// authenticated caller can write a row into a workspace they have never been a
+// member of. See the comment on Delete for what such a row was worth.
 type updatePreferencesRequest struct {
 	WorkspaceID string   `json:"workspace_id"`
 	Channel     string   `json:"channel"`
@@ -158,6 +177,155 @@ func (h *NotificationHandler) UpdatePreferences(c echo.Context) error {
 	}
 
 	return c.JSON(http.StatusOK, result)
+}
+
+// deletePreferencesRequest is the JSON body for removing a preference.
+//
+// UserID / AgentID are optional and name whose subscription to remove. Omitted,
+// the caller's own is removed; naming somebody else is the workspace owner's and
+// admins' privilege (see Delete). WorkspaceID is guarded by the same
+// middleware.RequireBodyWorkspace as the PUT.
+type deletePreferencesRequest struct {
+	WorkspaceID string `json:"workspace_id"`
+	Channel     string `json:"channel"`
+	UserID      string `json:"user_id,omitempty"`
+	AgentID     string `json:"agent_id,omitempty"`
+}
+
+// Delete handles DELETE /notifications/preferences
+//
+// Until this existed, a subscription could be created through the API and removed
+// through none of it — not by the subscriber, not by the workspace owner, not by
+// anybody. That is a poor property for an ordinary preference and an unacceptable
+// one for a row that decides who a workspace's comment bodies are delivered to:
+// the only remedy for an unwanted subscription was a manual DELETE against the
+// database.
+//
+// Who may remove what:
+//
+//   - Your own subscription, in any workspace you belong to — always. Naming
+//     nobody means yourself, which is the ordinary case.
+//   - Somebody else's, in a workspace you own or administer — allowed. This is
+//     the incident-response lever, and it grants no authority that was not
+//     already there: an owner or admin can already remove the member outright,
+//     and the row goes with them via ON DELETE CASCADE. Naming the row is the
+//     same power applied less destructively.
+//   - Somebody else's, as an ordinary member — refused. Membership of a
+//     workspace is not authority over what its other members hear about it.
+func (h *NotificationHandler) Delete(c echo.Context) error {
+	var req deletePreferencesRequest
+	if err := c.Bind(&req); err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
+	}
+
+	wsID, err := uuid.Parse(req.WorkspaceID)
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid workspace_id"))
+	}
+
+	channel := req.Channel
+	if channel == "" {
+		channel = "web_push"
+	}
+
+	// Who the caller is, and therefore what "my own" means. RequireBodyWorkspace
+	// has already established that they may act inside wsID at all — for an agent
+	// key as well as a user JWT, which rbac() would not have.
+	var (
+		callerUser  *uuid.UUID
+		callerAgent *uuid.UUID
+	)
+	if mw.IsAgent(c) {
+		agentID, agentErr := mw.GetAgentID(c)
+		if agentErr != nil {
+			return c.JSON(http.StatusUnauthorized, apierror.Unauthorized("authentication required"))
+		}
+		callerAgent = &agentID
+	} else {
+		userID, ok := currentUserID(c)
+		if !ok {
+			return c.JSON(http.StatusUnauthorized, apierror.Unauthorized("authentication required"))
+		}
+		callerUser = &userID
+	}
+
+	// Whose subscription is being removed.
+	targetUser, targetAgent := callerUser, callerAgent
+	if req.UserID != "" {
+		parsed, parseErr := uuid.Parse(req.UserID)
+		if parseErr != nil {
+			return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid user_id"))
+		}
+		targetUser, targetAgent = &parsed, nil
+	}
+	if req.AgentID != "" {
+		if req.UserID != "" {
+			return c.JSON(http.StatusBadRequest, apierror.BadRequest("name either user_id or agent_id, not both"))
+		}
+		parsed, parseErr := uuid.Parse(req.AgentID)
+		if parseErr != nil {
+			return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid agent_id"))
+		}
+		targetUser, targetAgent = nil, &parsed
+	}
+
+	if !sameSubject(callerUser, callerAgent, targetUser, targetAgent) && !h.mayManageWorkspace(c, wsID) {
+		return c.JSON(http.StatusForbidden,
+			apierror.Forbidden("only the subscriber, or a workspace owner or admin, may remove this preference"))
+	}
+
+	if _, err := h.svc.DeletePreferences(c.Request().Context(), wsID, targetUser, targetAgent, channel); err != nil {
+		return handleError(c, err)
+	}
+
+	// 204 whether or not a row was there: the caller asked for the subscription to
+	// be gone and it is. Reporting "no such row" would also report, to somebody
+	// allowed to ask, whether a given person is subscribed.
+	return c.NoContent(http.StatusNoContent)
+}
+
+// sameSubject reports whether the caller is the subject of the row.
+func sameSubject(callerUser, callerAgent, targetUser, targetAgent *uuid.UUID) bool {
+	if callerUser != nil && targetUser != nil {
+		return *callerUser == *targetUser
+	}
+	if callerAgent != nil && targetAgent != nil {
+		return *callerAgent == *targetAgent
+	}
+	return false
+}
+
+// mayManageWorkspace reports whether the caller administers wsID: an owner or
+// admin membership row, or ownership of the workspace itself — the fallback that
+// exists because the workspaces created before membership rows were written have
+// an owner_id and nothing else.
+//
+// Agents are not workspace administrators. An agent key is scoped to a workspace,
+// not granted a role in it, so there is no role to read; an agent may remove its
+// own preference and no one else's.
+func (h *NotificationHandler) mayManageWorkspace(c echo.Context, wsID uuid.UUID) bool {
+	if mw.IsAgent(c) {
+		return false
+	}
+	userID, ok := currentUserID(c)
+	if !ok {
+		return false
+	}
+	ctx := c.Request().Context()
+
+	if h.members != nil {
+		if role, err := h.members.GetRole(ctx, wsID, userID); err == nil {
+			if role == domain.RoleOwner || role == domain.RoleAdmin {
+				return true
+			}
+		}
+	}
+	if h.workspaces != nil {
+		if ws, err := h.workspaces.GetByID(ctx, wsID); err == nil && ws != nil {
+			return ws.OwnerID == userID
+		}
+	}
+	return false
 }
 
 // currentUserID extracts the authenticated user's UUID from the Echo context.

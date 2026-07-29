@@ -221,8 +221,21 @@ func TestBodyTenantFieldsAreDeclared(t *testing.T) {
 var declaredBodyTenantFields = map[string]string{
 	// Guarded by middleware.RequireBodyWorkspace on the route.
 	"rule_handler.go:evaluateRuleRequest.workspace_id": "guarded: bodyWS on POST /rules/evaluate",
-	"rule_handler.go:evaluateRuleRequest.project_id":   "guarded: bodyWS resolves it and requires it to agree with workspace_id",
-	"rule_handler.go:evaluateRuleRequest.task_id":      "benign: only narrows an evaluation already scoped to the guarded workspace",
+	// This one was declared benign, and the declaration is what let it through
+	// review: "a preference row keyed on (workspace_id, the caller's own user_id)"
+	// is a true statement about the WRITE, and the write really is harmless on its
+	// own — the user_id comes from the JWT, the workspace_id is FK-constrained.
+	// The damage was entirely in the read. dispatch() loaded every preference row
+	// in the event's workspace and never asked whose it was, so the harmless row
+	// was a standing subscription to a stranger's workspace and delivered its
+	// comment bodies. A stored row is only ever as safe as its most careless
+	// reader, and this file cannot see the readers — so "benign" is not a verdict
+	// it can support for a row that is keyed on a tenant.
+	"notification_handler.go:updatePreferencesRequest.workspace_id": "guarded: bodyWS on PUT /notifications/preferences; dispatch reads via GetDeliverablePreferences, which requires the row's subscriber to be in the workspace",
+	"notification_handler.go:deletePreferencesRequest.workspace_id": "guarded: bodyWS on DELETE /notifications/preferences",
+	"notification_handler.go:deletePreferencesRequest.agent_id":     "checked: NotificationHandler.Delete requires the caller to be this agent, or an owner/admin of the guarded workspace",
+	"rule_handler.go:evaluateRuleRequest.project_id":                "guarded: bodyWS resolves it and requires it to agree with workspace_id",
+	"rule_handler.go:evaluateRuleRequest.task_id":                   "benign: only narrows an evaluation already scoped to the guarded workspace",
 
 	// Checked in the handler, or in the service it calls.
 	"memory_handler.go:rememberRequest.workspace_id":                   "checked: MemoryHandler.requireWorkspaceID -> workspaceAllowed",
@@ -236,12 +249,11 @@ var declaredBodyTenantFields = map[string]string{
 	// Scoped by something other than the id in the body: the row these end up on is
 	// already pinned to a tenant the guard checked, and the id is stored as an
 	// opaque reference that is never resolved across the boundary.
-	"notification_handler.go:updatePreferencesRequest.workspace_id": "benign: writes a preference row keyed on (workspace_id, the caller's own user_id)",
-	"event_handler.go:createEventRequest.task_id":                   "benign: a reference on an event already scoped to the guarded :proj_id",
-	"agent_handler.go:CreateAgentActivity.task_id":                  "benign: a reference on a log row whose workspace_id is the guarded :agent_id's own",
-	"agent_handler.go:reportSessionRequest.task_id":                 "benign: a reference on the calling agent's own session",
-	"rule_handler.go:createRuleRequest.agent_id":                    "benign: narrows who a rule applies to, inside the guarded :ws_id/:proj_id it is created in",
-	"project_integration_handler.go:teamRelayResponse.project_id":   "benign: a response struct, never bound from a request",
+	"event_handler.go:createEventRequest.task_id":                 "benign: a reference on an event already scoped to the guarded :proj_id",
+	"agent_handler.go:CreateAgentActivity.task_id":                "benign: a reference on a log row whose workspace_id is the guarded :agent_id's own",
+	"agent_handler.go:reportSessionRequest.task_id":               "benign: a reference on the calling agent's own session",
+	"rule_handler.go:createRuleRequest.agent_id":                  "benign: narrows who a rule applies to, inside the guarded :ws_id/:proj_id it is created in",
+	"project_integration_handler.go:teamRelayResponse.project_id": "benign: a response struct, never bound from a request",
 }
 
 // bodyTenantFieldNames are the json field names that identify a tenant, or an

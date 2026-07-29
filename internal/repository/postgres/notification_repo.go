@@ -3,6 +3,8 @@ package postgres
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 
 	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
@@ -50,8 +52,22 @@ func (r *NotificationRepo) GetPreferencesByAgent(ctx context.Context, agentID uu
 	return prefs, nil
 }
 
-// UpsertPreference inserts or updates a notification preference.
-// Match key: (workspace_id, user_id, channel) or (workspace_id, agent_id, channel).
+// ErrNoPreferenceSubject marks a preference that names neither a user nor an
+// agent. The table's chk_single_actor constraint requires exactly one, and
+// without knowing which, there is no key to match an existing row on.
+var ErrNoPreferenceSubject = errors.New("notification preference names neither a user nor an agent")
+
+// UpsertPreference inserts or updates a notification preference, keyed on
+// (workspace_id, user_id, channel) or (workspace_id, agent_id, channel).
+//
+// It conflicts on that key, not on the primary key. Conflicting on the id was
+// the same as not conflicting at all: the caller has no existing row's id to
+// supply — it is looking the row up BY the key — so every call arrived with a
+// fresh uuid, matched nothing, and inserted. The table grew by one row per PUT
+// and the update the user asked for never happened.
+//
+// The two ON CONFLICT targets are the two partial unique indexes from migration
+// 20260729084; which one applies is decided by which subject the row names.
 func (r *NotificationRepo) UpsertPreference(ctx context.Context, pref *domain.NotificationPreference) error {
 	cfg := pref.Config
 	if cfg == nil {
@@ -62,18 +78,29 @@ func (r *NotificationRepo) UpsertPreference(ctx context.Context, pref *domain.No
 		pref.ID = uuid.New()
 	}
 
-	const q = `
+	const base = `
 		INSERT INTO notification_preferences
 			(id, workspace_id, user_id, agent_id, channel, events, is_enabled, config, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now(), now())
-		ON CONFLICT (id) DO UPDATE SET
+		ON CONFLICT %s DO UPDATE SET
 			events     = EXCLUDED.events,
 			is_enabled = EXCLUDED.is_enabled,
 			config     = EXCLUDED.config,
 			updated_at = now()
 		RETURNING id, created_at, updated_at
 	`
-	return r.db.QueryRowContext(ctx, q,
+
+	var conflict string
+	switch {
+	case pref.UserID != nil:
+		conflict = `(workspace_id, user_id, channel) WHERE user_id IS NOT NULL`
+	case pref.AgentID != nil:
+		conflict = `(workspace_id, agent_id, channel) WHERE agent_id IS NOT NULL`
+	default:
+		return ErrNoPreferenceSubject
+	}
+
+	return r.db.QueryRowContext(ctx, fmt.Sprintf(base, conflict),
 		pref.ID, pref.WorkspaceID, pref.UserID, pref.AgentID,
 		pref.Channel, pref.Events, pref.IsEnabled, cfg,
 	).Scan(&pref.ID, &pref.CreatedAt, &pref.UpdatedAt)
@@ -84,6 +111,43 @@ func (r *NotificationRepo) DeletePreference(ctx context.Context, id uuid.UUID) e
 	const q = `DELETE FROM notification_preferences WHERE id = $1`
 	_, err := r.db.ExecContext(ctx, q, id)
 	return err
+}
+
+// DeletePreferenceBySubject removes the preference row for one subscriber in one
+// workspace on one channel, and reports how many rows that was.
+//
+// It takes the workspace as a parameter rather than deleting by id alone so the
+// caller's authorisation — which is over a workspace — and the statement that
+// acts on it cannot disagree. Deleting by id is how the composite-route bugs
+// worked: the id was somebody else's and nothing in the statement said so.
+func (r *NotificationRepo) DeletePreferenceBySubject(
+	ctx context.Context,
+	workspaceID uuid.UUID,
+	userID, agentID *uuid.UUID,
+	channel string,
+) (int64, error) {
+	var (
+		q   string
+		arg uuid.UUID
+	)
+	switch {
+	case userID != nil:
+		q = `DELETE FROM notification_preferences
+		     WHERE workspace_id = $1 AND channel = $2 AND user_id = $3`
+		arg = *userID
+	case agentID != nil:
+		q = `DELETE FROM notification_preferences
+		     WHERE workspace_id = $1 AND channel = $2 AND agent_id = $3`
+		arg = *agentID
+	default:
+		return 0, ErrNoPreferenceSubject
+	}
+
+	res, err := r.db.ExecContext(ctx, q, workspaceID, channel, arg)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
 }
 
 // CreateNotification persists a new notification.
@@ -156,14 +220,53 @@ func (r *NotificationRepo) MarkAllRead(ctx context.Context, userID uuid.UUID) er
 	return err
 }
 
-// GetPreferencesByWorkspace returns all preferences for a workspace, used when
-// dispatching an event to find which users should receive it.
-func (r *NotificationRepo) GetPreferencesByWorkspace(ctx context.Context, workspaceID uuid.UUID) ([]domain.NotificationPreference, error) {
+// GetDeliverablePreferences returns the enabled preferences for a workspace whose
+// subscriber is entitled to be in it — the rows an event in this workspace may
+// actually be delivered to.
+//
+// Membership is part of the query on purpose. Its predecessor selected every
+// enabled row with a matching workspace_id and left the question of whose row it
+// was to the caller, and the caller — dispatch() — never asked: it filtered on
+// the channel and the event type and delivered. A single planted row was
+// therefore a standing subscription to a stranger's workspace, and every comment
+// posted in it went out to the outsider, body and all. There is no caller that
+// wants the unfiltered set, so there is no longer a method that returns it.
+//
+// The membership rule is the one middleware.UserIsWorkspaceMember applies — a
+// workspace_members row, or the owner fallback for the workspaces whose owner row
+// was never written — and for agents, middleware.AgentIsInWorkspace. Duplicating
+// it in SQL rather than calling those per row is what keeps this one query
+// instead of one plus N, on a path that runs on every comment, assignment and
+// status change.
+func (r *NotificationRepo) GetDeliverablePreferences(ctx context.Context, workspaceID uuid.UUID) ([]domain.NotificationPreference, error) {
 	const q = `
-		SELECT id, workspace_id, user_id, agent_id, channel, events, is_enabled, config, created_at, updated_at
-		FROM notification_preferences
-		WHERE workspace_id = $1 AND is_enabled = true
-		ORDER BY created_at ASC
+		SELECT p.id, p.workspace_id, p.user_id, p.agent_id, p.channel,
+		       p.events, p.is_enabled, p.config, p.created_at, p.updated_at
+		FROM notification_preferences p
+		WHERE p.workspace_id = $1
+		  AND p.is_enabled = true
+		  AND (
+		        (p.user_id IS NOT NULL AND (
+		              EXISTS (
+		                  SELECT 1 FROM workspace_members m
+		                  WHERE m.workspace_id = p.workspace_id
+		                    AND m.user_id = p.user_id
+		              )
+		           OR EXISTS (
+		                  SELECT 1 FROM workspaces w
+		                  WHERE w.id = p.workspace_id
+		                    AND w.deleted_at IS NULL
+		                    AND w.owner_id = p.user_id
+		              )
+		        ))
+		     OR (p.agent_id IS NOT NULL AND EXISTS (
+		              SELECT 1 FROM agents a
+		              WHERE a.id = p.agent_id
+		                AND a.deleted_at IS NULL
+		                AND a.workspace_id = p.workspace_id
+		        ))
+		  )
+		ORDER BY p.created_at ASC
 	`
 	var prefs []domain.NotificationPreference
 	if err := r.db.SelectContext(ctx, &prefs, q, workspaceID); err != nil {

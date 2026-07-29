@@ -97,7 +97,7 @@ type mockNotifPrefsGetter struct {
 	prefs []domain.NotificationPreference
 }
 
-func (m *mockNotifPrefsGetter) GetPreferencesByWorkspace(_ context.Context, _ uuid.UUID) ([]domain.NotificationPreference, error) {
+func (m *mockNotifPrefsGetter) GetDeliverablePreferences(_ context.Context, _ uuid.UUID) ([]domain.NotificationPreference, error) {
 	return m.prefs, nil
 }
 

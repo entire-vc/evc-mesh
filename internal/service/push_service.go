@@ -32,10 +32,15 @@ type pushService struct {
 	vapidSubject string
 }
 
-// notifPrefsGetter is a minimal interface for reading notification preferences.
-// Satisfied by *postgres.NotificationRepo.
+// notifPrefsGetter is a minimal interface for reading the notification
+// preferences a workspace's events may be delivered to. Satisfied by
+// *postgres.NotificationRepo.
+//
+// Deliverable, not merely stored: browser push reaches a real device, so a
+// preference row belonging to someone outside the workspace must not be found
+// here either.
 type notifPrefsGetter interface {
-	GetPreferencesByWorkspace(ctx context.Context, workspaceID uuid.UUID) ([]domain.NotificationPreference, error)
+	GetDeliverablePreferences(ctx context.Context, workspaceID uuid.UUID) ([]domain.NotificationPreference, error)
 }
 
 // NewPushService creates a PushService. Missing VAPID keys disable push silently.
@@ -86,7 +91,7 @@ func (s *pushService) SendToUser(ctx context.Context, userID, workspaceID uuid.U
 	}
 
 	// Check browser_push prefs for this user + event type.
-	prefs, err := s.notifRepo.GetPreferencesByWorkspace(ctx, workspaceID)
+	prefs, err := s.notifRepo.GetDeliverablePreferences(ctx, workspaceID)
 	if err != nil {
 		log.Printf("[push] failed to load prefs for workspace %s: %v", workspaceID, err)
 		return nil

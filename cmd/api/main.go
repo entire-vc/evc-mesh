@@ -435,7 +435,7 @@ func main() {
 	workspaceMemberHandler := handler.NewWorkspaceMemberHandler(workspaceMemberService)
 	inviteHandler := handler.NewInviteHandler(inviteService)
 	projectMemberHandler := handler.NewProjectMemberHandler(projectMemberService)
-	notificationHandler := handler.NewNotificationHandler(notificationService)
+	notificationHandler := handler.NewNotificationHandler(notificationService, workspaceMemberRepo, workspaceRepo)
 	pushSubscriptionHandler := handler.NewPushSubscriptionHandler(pushService)
 	autoTransHandler := handler.NewAutoTransitionHandler(autoTransitionSvc)
 	memoryHandler := handler.NewMemoryHandler(memoryService, workspaceMemberRepo)
@@ -925,7 +925,13 @@ func main() {
 	api.GET("/notifications", notificationHandler.List)
 	api.POST("/notifications/mark-read", notificationHandler.MarkRead)
 	api.GET("/notifications/preferences", notificationHandler.GetPreferences)
-	api.PUT("/notifications/preferences", notificationHandler.UpdatePreferences)
+	// These two name their workspace in the body — the path is bare, so
+	// RequireWorkspaceMemberScoped has nothing to resolve and does not run. Without
+	// bodyWS any authenticated caller could write a preference row into a workspace
+	// they are not in, and dispatch() would then deliver that workspace's comments
+	// to them.
+	api.PUT("/notifications/preferences", notificationHandler.UpdatePreferences, bodyWS)
+	api.DELETE("/notifications/preferences", notificationHandler.Delete, bodyWS)
 
 	// Web Push subscription routes.
 	// NOTE: /me/push-subscriptions/vapid-key MUST be before /me/push-subscriptions to avoid routing conflict.
