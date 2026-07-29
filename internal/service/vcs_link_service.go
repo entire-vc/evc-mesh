@@ -155,9 +155,19 @@ func (s *vcsLinkService) HandleGitHubPullRequestEvent(ctx context.Context, ev Gi
 		return PRHandleResult{}, errors.New("vcsLinkService: missing dependency for HandleGitHubPullRequestEvent (taskRepo/statusRepo/taskSvc/commentSvc must be wired)")
 	}
 
-	// 1. Resolve task_id from MESH-<uuid> in title, then body, then fallback
-	//    by previously-linked (provider, link_type, external_id).
-	taskID := extractMeshTaskIDFromTexts(ev.PRTitle, ev.PRBody)
+	// 1. Resolve task_id from any recognised reference spelling in the title,
+	//    body or head branch, then fall back to a previously-linked
+	//    (provider, link_type, external_id).
+	sources := []TaskRefSource{
+		{Name: "title", Text: ev.PRTitle},
+		{Name: "body", Text: ev.PRBody},
+		{Name: "branch", Text: ev.PRBranch},
+	}
+	taskID, matched := s.ResolveTaskRef(ctx, sources...)
+	if taskID != uuid.Nil {
+		log.Printf("[vcs-webhook] pr=%s#%d resolved task=%s via=%s src=%s raw=%q",
+			ev.Repository, ev.PRNumber, taskID, matched.Kind, matched.Source, truncate(matched.Raw, 60))
+	}
 	if taskID == uuid.Nil {
 		links, err := s.repo.ListByExternalID(ctx, domain.VCSProviderGitHub, domain.VCSLinkTypePR, strconv.Itoa(ev.PRNumber))
 		if err != nil {
@@ -165,6 +175,12 @@ func (s *vcsLinkService) HandleGitHubPullRequestEvent(ctx context.Context, ev Gi
 		}
 		switch {
 		case len(links) == 0:
+			// Say what was looked at, not just that nothing was found: for six
+			// weeks this branch was taken 444 times and left no trace at all,
+			// so "200 and silence" was indistinguishable from a healthy webhook.
+			log.Printf("[vcs-webhook] pr=%s#%d no_task_ref: candidates=%d title=%q body=%q branch=%q",
+				ev.Repository, ev.PRNumber, len(ExtractTaskRefs(sources...)),
+				truncate(ev.PRTitle, 80), truncate(ev.PRBody, 160), truncate(ev.PRBranch, 60))
 			return PRHandleResult{Reason: "no_task_ref"}, nil
 		case len(links) == 1:
 			taskID = links[0].TaskID
@@ -332,46 +348,52 @@ func (s *vcsLinkService) resolveStatusBySlug(ctx context.Context, projectID uuid
 	return nil, nil
 }
 
-// extractMeshTaskIDFromTexts scans title then body for the MESH-<uuid> pattern.
-func extractMeshTaskIDFromTexts(parts ...string) uuid.UUID {
-	for _, p := range parts {
-		if id := extractMeshTaskIDFromText(p); id != uuid.Nil {
-			return id
+// ResolveTaskRef scans the sources for every recognised task-reference spelling
+// and returns the first one that names a task that actually exists. Existence
+// is checked, not assumed: vcs_links.task_id carries an FK to tasks(id), so an
+// unverified id turns into a constraint violation at insert time rather than a
+// clean "no reference here".
+//
+// A candidate that fails to resolve is skipped, not fatal — a PR body may well
+// quote a task id from another workspace or a deleted task alongside the real
+// one. Returns uuid.Nil when nothing resolves.
+func (s *vcsLinkService) ResolveTaskRef(ctx context.Context, sources ...TaskRefSource) (uuid.UUID, TaskRef) {
+	for _, ref := range ExtractTaskRefs(sources...) {
+		switch {
+		case ref.Full != uuid.Nil:
+			if s.taskRepo == nil {
+				// CRUD-only construction: no way to verify, and the spelling
+				// was explicit enough to be taken at face value.
+				return ref.Full, ref
+			}
+			t, err := s.taskRepo.GetByID(ctx, ref.Full)
+			if err != nil {
+				log.Printf("[vcs-webhook] lookup task=%s (%s) failed: %v", ref.Full, ref.Kind, err)
+				continue
+			}
+			if t == nil {
+				continue
+			}
+			return t.ID, ref
+
+		case ref.Short != "":
+			if s.taskRepo == nil {
+				continue
+			}
+			// GetByShortID refuses an ambiguous prefix (apierror.BadRequest)
+			// rather than picking one — two tenants behind one 8-hex prefix
+			// must not silently resolve to whichever row sorted first.
+			t, err := s.taskRepo.GetByShortID(ctx, ref.Short)
+			if err != nil || t == nil {
+				if err != nil {
+					log.Printf("[vcs-webhook] short id %q (%s) unresolved: %v", ref.Short, ref.Kind, err)
+				}
+				continue
+			}
+			return t.ID, ref
 		}
 	}
-	return uuid.Nil
-}
-
-// extractMeshTaskIDFromText parses a full MESH-<uuid> token from text. Only a
-// complete (36-char) UUID is recognised; short prefixes seen in the UI must
-// be resolved by callers via the external_id fallback path.
-func extractMeshTaskIDFromText(text string) uuid.UUID {
-	const prefix = "MESH-"
-	idx := strings.Index(text, prefix)
-	if idx == -1 {
-		return uuid.Nil
-	}
-	rest := text[idx+len(prefix):]
-	end := len(rest)
-	if end > 36 {
-		end = 36
-	}
-	candidate := rest[:end]
-	for i, ch := range candidate {
-		if !isHexOrDashByte(ch) {
-			candidate = candidate[:i]
-			break
-		}
-	}
-	id, err := uuid.Parse(candidate)
-	if err != nil {
-		return uuid.Nil
-	}
-	return id
-}
-
-func isHexOrDashByte(ch rune) bool {
-	return (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F') || ch == '-'
+	return uuid.Nil, TaskRef{}
 }
 
 func shortSHA(s string) string {
