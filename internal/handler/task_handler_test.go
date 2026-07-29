@@ -1301,6 +1301,110 @@ func TestTaskHandler_ListSubtasks_ServiceError(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, rec.Code)
 }
 
+// --- CreateSubtask field parity with Create (regression for #d13fe920) ---
+
+// TestTaskHandler_CreateSubtask_WithAssignee mirrors
+// TestTaskHandler_Create_WithAssignee: assignee_id/assignee_type must reach
+// service.CreateSubtaskInput, and when assignee_type is omitted it must be
+// inferred as "agent" (not left empty/unassigned) so an explicit assignee_id
+// is never silently clobbered by applyAutoAssign.
+func TestTaskHandler_CreateSubtask_WithAssignee(t *testing.T) {
+	parentID := uuid.New()
+	assigneeID := uuid.New()
+
+	mockSvc := &MockTaskService{
+		CreateSubtaskFunc: func(ctx context.Context, pid uuid.UUID, input service.CreateSubtaskInput) (*domain.Task, error) {
+			assert.Equal(t, parentID, pid)
+			require.NotNil(t, input.AssigneeID)
+			assert.Equal(t, assigneeID, *input.AssigneeID)
+			assert.Equal(t, domain.AssigneeTypeAgent, input.AssigneeType, "assignee_type must be inferred as agent when assignee_id is set but assignee_type is omitted")
+			return &domain.Task{ID: uuid.New(), Title: input.Title, ParentTaskID: &pid, AssigneeID: input.AssigneeID, AssigneeType: input.AssigneeType}, nil
+		},
+	}
+
+	h, e := setupTaskTest(mockSvc)
+
+	body := `{"title":"Delegated subtask","assignee_id":"` + assigneeID.String() + `"}`
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/tasks/:task_id/subtasks")
+	c.SetParamNames("task_id")
+	c.SetParamValues(parentID.String())
+
+	err := h.CreateSubtask(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusCreated, rec.Code)
+}
+
+// TestTaskHandler_CreateSubtask_WithLabelsAndCustomFields confirms the
+// remaining previously-dropped fields (labels, custom_fields, due_date,
+// estimated_hours) now reach service.CreateSubtaskInput.
+func TestTaskHandler_CreateSubtask_WithLabelsAndCustomFields(t *testing.T) {
+	parentID := uuid.New()
+
+	mockSvc := &MockTaskService{
+		CreateSubtaskFunc: func(ctx context.Context, pid uuid.UUID, input service.CreateSubtaskInput) (*domain.Task, error) {
+			assert.Equal(t, []string{"a", "b"}, input.Labels)
+			require.NotNil(t, input.CustomFields)
+			var cf map[string]any
+			require.NoError(t, json.Unmarshal(input.CustomFields, &cf))
+			assert.Equal(t, "bar", cf["foo"])
+			require.NotNil(t, input.DueDate)
+			require.NotNil(t, input.EstimatedHours)
+			assert.Equal(t, 3.5, *input.EstimatedHours)
+			return &domain.Task{ID: uuid.New(), Title: input.Title, ParentTaskID: &pid}, nil
+		},
+	}
+
+	h, e := setupTaskTest(mockSvc)
+
+	body := `{"title":"Labelled subtask","labels":["a","b"],"custom_fields":{"foo":"bar"},"due_date":"2026-08-01T00:00:00Z","estimated_hours":3.5}`
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/tasks/:task_id/subtasks")
+	c.SetParamNames("task_id")
+	c.SetParamValues(parentID.String())
+
+	err := h.CreateSubtask(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusCreated, rec.Code)
+}
+
+// TestTaskHandler_CreateSubtask_NoAssignee_RegressionUnchanged confirms
+// omitting assignee_id still leaves AssigneeType empty on the input (the
+// service layer defaults it to "unassigned" and may auto-assign) — the fix
+// must not force every subtask to carry an assignee.
+func TestTaskHandler_CreateSubtask_NoAssignee_RegressionUnchanged(t *testing.T) {
+	parentID := uuid.New()
+
+	mockSvc := &MockTaskService{
+		CreateSubtaskFunc: func(ctx context.Context, pid uuid.UUID, input service.CreateSubtaskInput) (*domain.Task, error) {
+			assert.Nil(t, input.AssigneeID)
+			assert.Equal(t, domain.AssigneeType(""), input.AssigneeType, "must not infer an assignee_type when no assignee_id was given")
+			return &domain.Task{ID: uuid.New(), Title: input.Title, ParentTaskID: &pid}, nil
+		},
+	}
+
+	h, e := setupTaskTest(mockSvc)
+
+	body := `{"title":"Undelegated subtask"}`
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/tasks/:task_id/subtasks")
+	c.SetParamNames("task_id")
+	c.SetParamValues(parentID.String())
+
+	err := h.CreateSubtask(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusCreated, rec.Code)
+}
+
 // --- TestTaskHandler_Checkout 409 body ---
 
 func TestTaskHandler_Checkout_409_AllFieldsPresent(t *testing.T) {

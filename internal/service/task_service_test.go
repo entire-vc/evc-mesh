@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"testing"
@@ -899,6 +900,56 @@ func TestTaskService_CreateSubtask(t *testing.T) {
 				stored := repo.items[child.ID]
 				require.NotNil(t, stored)
 				assert.Equal(t, f.todoID, stored.StatusID)
+			},
+		},
+		{
+			// Regression test for #d13fe920: create_subtask used to silently
+			// drop assignee_id/assignee_type/labels/custom_fields/due_date/
+			// estimated_hours — the child was always born unassigned to the
+			// creator with empty labels regardless of what was passed. This
+			// mirrors CreateTask's field-level contract.
+			name: "assignee/labels/custom_fields/due_date/estimated_hours are honoured",
+			setup: func(f subtaskFixture, _ *MockTaskStatusRepository) (uuid.UUID, CreateSubtaskInput) {
+				assigneeID := uuid.New()
+				due := frozenTime.Add(48 * time.Hour)
+				hours := 3.5
+				return f.parentID, CreateSubtaskInput{
+					Title:          "Delegated child",
+					Priority:       domain.PriorityMedium,
+					AssigneeID:     &assigneeID,
+					AssigneeType:   domain.AssigneeTypeAgent,
+					Labels:         []string{"a", "b"},
+					CustomFields:   json.RawMessage(`{"k":"v"}`),
+					DueDate:        &due,
+					EstimatedHours: &hours,
+				}
+			},
+			checkFunc: func(t *testing.T, f subtaskFixture, child *domain.Task, _ *MockTaskRepository) {
+				require.NotNil(t, child.AssigneeID)
+				assert.Equal(t, domain.AssigneeTypeAgent, child.AssigneeType)
+				assert.Equal(t, pq.StringArray{"a", "b"}, child.Labels)
+				assert.JSONEq(t, `{"k":"v"}`, string(child.CustomFields))
+				require.NotNil(t, child.DueDate)
+				assert.Equal(t, frozenTime.Add(48*time.Hour), *child.DueDate)
+				require.NotNil(t, child.EstimatedHours)
+				assert.Equal(t, 3.5, *child.EstimatedHours)
+			},
+		},
+		{
+			// Regression guard the other direction: omitting assignee_id must
+			// keep today's behavior (unassigned, subject to applyAutoAssign) —
+			// the fix must not force every subtask to require an assignee.
+			name: "omitted assignee_id still defaults to unassigned",
+			setup: func(f subtaskFixture, _ *MockTaskStatusRepository) (uuid.UUID, CreateSubtaskInput) {
+				return f.parentID, CreateSubtaskInput{
+					Title:    "Undelegated child",
+					Priority: domain.PriorityMedium,
+				}
+			},
+			checkFunc: func(t *testing.T, f subtaskFixture, child *domain.Task, _ *MockTaskRepository) {
+				assert.Nil(t, child.AssigneeID)
+				assert.Equal(t, domain.AssigneeTypeUnassigned, child.AssigneeType)
+				assert.Empty(t, child.Labels)
 			},
 		},
 		{
