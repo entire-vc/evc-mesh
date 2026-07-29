@@ -316,6 +316,14 @@ func main() {
 	} else {
 		log.Printf("[config] Invite links will be built from MESH_BASE_URL=%s", cfg.Email.BaseURL)
 	}
+	// SMTP_HOST set but SMTP_FROM not: previously this silently sent as
+	// noreply@mesh.entire.host — our domain, on someone else's mail server.
+	// Now it's an empty From header, which most SMTP servers reject outright
+	// at send time. Either way the operator needs to know before their first
+	// invite fails; say so once, at boot, the same as the base-URL check above.
+	if cfg.Email.Host != "" && cfg.Email.From == "" {
+		log.Printf("[config] WARNING: SMTP_HOST is set but SMTP_FROM is not — outbound email will use an empty From address and likely be rejected by your mail server. Set SMTP_FROM to an address your SMTP host is allowed to send as.")
+	}
 	inviteRepo := postgres.NewInviteRepo(db)
 	emailSvc := service.NewEmailService(cfg.Email)
 	inviteService := service.NewInviteService(inviteRepo, userRepo, workspaceMemberRepo, workspaceRepo, emailSvc, authService, cfg.Email.BaseURL)
@@ -488,13 +496,18 @@ func main() {
 	})
 
 	// Build version — public, no auth. All three paths route through Caddy's /api/* block.
+	// spark_enabled rides along here rather than a dedicated endpoint: it's the
+	// one instance capability the frontend currently needs to know before the
+	// user picks a workspace (the Spark Catalog nav link, gated by cfg.Spark.Enabled
+	// above — same source of truth the route registration itself uses).
 	versionHandler := func(c echo.Context) error {
-		return c.JSON(200, map[string]string{
-			"commit":      BuildSHA,
-			"build_time":  BuildTime,
-			"version":     BuildVersion,
-			"environment": BuildEnv,
-			"service":     "evc-mesh-api",
+		return c.JSON(200, map[string]any{
+			"commit":        BuildSHA,
+			"build_time":    BuildTime,
+			"version":       BuildVersion,
+			"environment":   BuildEnv,
+			"service":       "evc-mesh-api",
+			"spark_enabled": cfg.Spark.Enabled,
 		})
 	}
 	e.GET("/api/version", versionHandler)

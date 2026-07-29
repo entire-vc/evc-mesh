@@ -198,10 +198,17 @@ func (s *Service) Register(ctx context.Context, email, password, name string) (*
 		return nil, nil, err
 	}
 
-	// Create default workspace.
+	// Create default workspace, named after the new user rather than a fixed
+	// "My Workspace" every single account got — the first thing anyone sees
+	// after registering shouldn't look like a placeholder nobody filled in.
+	// Falls back to the generic name only if Name somehow arrived empty.
+	wsName := "My Workspace"
+	if trimmed := strings.TrimSpace(name); trimmed != "" {
+		wsName = fmt.Sprintf("%s's Workspace", trimmed)
+	}
 	ws := &domain.Workspace{
 		ID:        uuid.New(),
-		Name:      "My Workspace",
+		Name:      wsName,
 		Slug:      fmt.Sprintf("ws-%s", user.ID.String()[:8]),
 		OwnerID:   user.ID,
 		CreatedAt: now,
