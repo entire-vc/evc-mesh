@@ -33,7 +33,7 @@ type EmailConfig struct {
 	User    string
 	Pass    string
 	From    string
-	BaseURL string // e.g. https://mesh.entire.host — used to build invite accept links
+	BaseURL string // e.g. https://mesh.example.com — used to build invite accept links
 }
 
 // EmbeddingConfig holds configuration for the optional text embedding provider.
@@ -235,7 +235,7 @@ func Load() *Config {
 			APIRPM:     getEnvInt("MESH_RATE_LIMIT_API_RPM", 600),
 		},
 		Spark: SparkConfig{
-			URL:     getEnv("MESH_SPARK_URL", "https://spark.entire.vc"),
+			URL:     getEnv("MESH_SPARK_URL", ""),
 			Enabled: getEnvBool("MESH_SPARK_ENABLED", false),
 		},
 		Webhook: WebhookConfig{
@@ -254,14 +254,14 @@ func Load() *Config {
 		VAPID: VAPIDConfig{
 			PublicKey:  getEnv("MESH_VAPID_PUBLIC_KEY", ""),
 			PrivateKey: getEnv("MESH_VAPID_PRIVATE_KEY", ""),
-			Subject:    getEnv("MESH_VAPID_SUBJECT", "mailto:rj@entire.vc"),
+			Subject:    getEnv("MESH_VAPID_SUBJECT", ""),
 		},
 		Email: EmailConfig{
 			Host:    getEnv("SMTP_HOST", ""),
 			Port:    getEnvInt("SMTP_PORT", 587),
 			User:    getEnv("SMTP_USER", ""),
 			Pass:    getEnv("SMTP_PASSWORD", ""),
-			From:    getEnv("SMTP_FROM", "noreply@mesh.entire.host"),
+			From:    getEnv("SMTP_FROM", ""),
 			BaseURL: getEnv("MESH_BASE_URL", DefaultBaseURL),
 		},
 	}

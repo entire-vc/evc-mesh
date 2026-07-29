@@ -150,7 +150,7 @@ See [Seeding the first admin](#seeding-the-first-admin) below.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `MESH_SPARK_URL` | `https://spark.entire.vc` | Spark agent catalog API base URL |
+| `MESH_SPARK_URL` | *(empty)* | Spark agent catalog API base URL. Required if you enable Spark. |
 | `MESH_SPARK_ENABLED` | `false` | Enable Spark catalog routes (`/api/v1/spark/...`) |
 
 ### Outbound email
@@ -165,7 +165,7 @@ have to hand the link over yourself.
 | `SMTP_PORT` | `587` | SMTP server port |
 | `SMTP_USER` | *(empty)* | SMTP username |
 | `SMTP_PASSWORD` | *(empty)* | SMTP password |
-| `SMTP_FROM` | `noreply@mesh.entire.host` | From address on outbound mail |
+| `SMTP_FROM` | *(empty)* | From address on outbound mail. Set this if you set `SMTP_HOST` — a configured server with no From address will have outbound mail rejected by most providers. |
 | `MESH_BASE_URL` | `http://localhost:5173` | Public base URL of the web UI. Used to build invite links — set this or invitees get a `localhost` link. |
 
 > **Email addresses are canonicalized.** Registration, login and invites trim
@@ -231,7 +231,7 @@ through by `docker-compose.prod.yml`.
 |----------|---------|-------------|
 | `MESH_VAPID_PUBLIC_KEY` | *(empty)* | VAPID public key |
 | `MESH_VAPID_PRIVATE_KEY` | *(empty)* | VAPID private key |
-| `MESH_VAPID_SUBJECT` | `mailto:rj@entire.vc` | `sub` claim of the VAPID JWT. **Change this** — the default is this project's own contact address. |
+| `MESH_VAPID_SUBJECT` | *(empty)* | `sub` claim of the VAPID JWT (a `mailto:` address or URL). Required if you set the VAPID keys above. |
 
 ### Integrations
 

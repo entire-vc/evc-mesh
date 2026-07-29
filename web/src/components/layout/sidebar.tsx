@@ -21,6 +21,7 @@ import { cn } from "@/lib/cn";
 import { MeshIcon } from "@/components/mesh-icon";
 import { api } from "@/lib/api";
 import { useWorkspaceStore } from "@/stores/workspace";
+import { useCapabilitiesStore } from "@/stores/capabilities";
 import { useProjectStore } from "@/stores/project";
 import { useAuthStore } from "@/stores/auth";
 import { useWebSocketStore } from "@/stores/websocket";
@@ -65,6 +66,12 @@ export function Sidebar({ collapsed }: SidebarProps) {
   const [wsError, setWsError] = useState<string | null>(null);
   const [unseenCount, setUnseenCount] = useState(0);
   const unseenFetchedRef = useRef(false);
+  const sparkEnabled = useCapabilitiesStore((s) => s.sparkEnabled);
+  const fetchCapabilities = useCapabilitiesStore((s) => s.fetch);
+
+  useEffect(() => {
+    fetchCapabilities();
+  }, [fetchCapabilities]);
 
   const handleWsNameChange = useCallback((value: string) => {
     setWsName(value);
@@ -239,16 +246,18 @@ export function Sidebar({ collapsed }: SidebarProps) {
           >
             <MonitorDot className="h-4 w-4" />
           </Link>
-          {/* Spark Catalog */}
-          <Link
-            to={wsSlug ? `/w/${wsSlug}/spark` : "/"}
-            className={cn(
-              "flex h-8 w-8 items-center justify-center rounded-lg text-sidebar-foreground hover:bg-sidebar-accent",
-              isSparkRoute && "bg-sidebar-accent text-sidebar-primary",
-            )}
-          >
-            <Sparkles className="h-4 w-4" />
-          </Link>
+          {/* Spark Catalog — hidden when the server has MESH_SPARK_ENABLED=false */}
+          {sparkEnabled && (
+            <Link
+              to={wsSlug ? `/w/${wsSlug}/spark` : "/"}
+              className={cn(
+                "flex h-8 w-8 items-center justify-center rounded-lg text-sidebar-foreground hover:bg-sidebar-accent",
+                isSparkRoute && "bg-sidebar-accent text-sidebar-primary",
+              )}
+            >
+              <Sparkles className="h-4 w-4" />
+            </Link>
+          )}
           {/* Analytics */}
           <Link
             to={wsSlug ? `/w/${wsSlug}/analytics` : "/"}
@@ -474,17 +483,19 @@ export function Sidebar({ collapsed }: SidebarProps) {
           <MonitorDot className="h-4 w-4" />
           Sessions
         </Link>
-        {/* Spark Catalog */}
-        <Link
-          to={wsSlug ? `/w/${wsSlug}/spark` : "/"}
-          className={cn(
-            "flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-sidebar-foreground hover:bg-sidebar-accent",
-            isSparkRoute && "bg-sidebar-accent font-medium",
-          )}
-        >
-          <Sparkles className="h-4 w-4" />
-          Spark Catalog
-        </Link>
+        {/* Spark Catalog — hidden when the server has MESH_SPARK_ENABLED=false */}
+        {sparkEnabled && (
+          <Link
+            to={wsSlug ? `/w/${wsSlug}/spark` : "/"}
+            className={cn(
+              "flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-sidebar-foreground hover:bg-sidebar-accent",
+              isSparkRoute && "bg-sidebar-accent font-medium",
+            )}
+          >
+            <Sparkles className="h-4 w-4" />
+            Spark Catalog
+          </Link>
+        )}
         {/* Analytics */}
         <Link
           to={wsSlug ? `/w/${wsSlug}/analytics` : "/"}
