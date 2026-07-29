@@ -108,7 +108,7 @@ func TestBuildSlackMessage_TaskCreated(t *testing.T) {
 		BaseURL:   "https://example.com",
 	}
 
-	msg := buildSlackMessage(event)
+	msg := buildSlackMessage(event, event.BaseURL)
 
 	if len(msg.Blocks) != 2 {
 		t.Fatalf("expected 2 blocks, got %d", len(msg.Blocks))
@@ -150,7 +150,7 @@ func TestBuildSlackMessage_StatusChanged(t *testing.T) {
 		NewStatus: "in_progress",
 	}
 
-	msg := buildSlackMessage(event)
+	msg := buildSlackMessage(event, "https://example.com")
 
 	section := msg.Blocks[1]
 	found := false
@@ -161,6 +161,32 @@ func TestBuildSlackMessage_StatusChanged(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("expected status transition 'todo → in_progress' in fields: %+v", section.Fields)
+	}
+}
+
+// TestResolveTaskEventBaseURL verifies the fallback chain used to build task deep-links:
+// the event's own BaseURL wins when set; otherwise the deployment's configured
+// MESH_BASE_URL is used; if neither is set, the result is empty (caller must skip
+// sending rather than build a broken link — see NotifyTaskEvent).
+func TestResolveTaskEventBaseURL(t *testing.T) {
+	tests := []struct {
+		name         string
+		eventBaseURL string
+		configured   string
+		want         string
+	}{
+		{"event BaseURL wins over configured default", "https://event.example.com", "https://configured.example.com", "https://event.example.com"},
+		{"falls back to configured MESH_BASE_URL when event has none", "", "https://configured.example.com", "https://configured.example.com"},
+		{"both empty yields empty (no vendor-domain fallback)", "", "", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := resolveTaskEventBaseURL(tt.eventBaseURL, tt.configured)
+			if got != tt.want {
+				t.Errorf("resolveTaskEventBaseURL(%q, %q) = %q, want %q", tt.eventBaseURL, tt.configured, got, tt.want)
+			}
+		})
 	}
 }
 
