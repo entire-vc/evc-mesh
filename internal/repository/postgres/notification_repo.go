@@ -62,7 +62,7 @@ func (r *NotificationRepo) GetPreferencesByAgent(ctx context.Context, agentID uu
 // row: toggling one setting five times left five rows, dispatch iterated all of
 // them, and there was no single row for an unsubscribe to remove.
 //
-// Since 20260729084 the match key is a pair of unique indexes as well, so it is
+// Since 20260729085 the match key is a pair of unique indexes as well, so it is
 // the table's rule and not only this function's: the UPDATE remains the ordinary
 // path, and the INSERT behind it carries ON CONFLICT for the two callers who
 // raced to create the same first row and both found nothing to update.
