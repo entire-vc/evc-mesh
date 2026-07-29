@@ -38,6 +38,9 @@ type stubVCSLinkService struct {
 	listReturn      []domain.VCSLink
 	listReturnErr   error
 	deleteReturnErr error
+	resolveCalls    [][]service.TaskRefSource
+	resolveTaskID   uuid.UUID
+	resolveRef      service.TaskRef
 }
 
 func (s *stubVCSLinkService) Create(_ context.Context, input domain.CreateVCSLinkInput) (*domain.VCSLink, error) {
@@ -61,6 +64,25 @@ func (s *stubVCSLinkService) Delete(_ context.Context, _ uuid.UUID) error {
 
 func (s *stubVCSLinkService) ListByTask(_ context.Context, _ uuid.UUID) ([]domain.VCSLink, error) {
 	return s.listReturn, s.listReturnErr
+}
+
+// ResolveTaskRef records what the push path asked about and answers with a
+// canned task, so a handler test can assert the branch and message actually
+// reached the resolver.
+func (s *stubVCSLinkService) ResolveTaskRef(_ context.Context, sources ...service.TaskRefSource) (uuid.UUID, service.TaskRef) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.resolveCalls = append(s.resolveCalls, sources)
+	return s.resolveTaskID, s.resolveRef
+}
+
+func (s *stubVCSLinkService) lastResolveSources() ([]service.TaskRefSource, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.resolveCalls) == 0 {
+		return nil, false
+	}
+	return s.resolveCalls[len(s.resolveCalls)-1], true
 }
 
 func (s *stubVCSLinkService) HandleGitHubPullRequestEvent(_ context.Context, ev service.GitHubWebhookEvent) (service.PRHandleResult, error) {

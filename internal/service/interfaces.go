@@ -467,6 +467,12 @@ type VCSLinkService interface {
 	// caller may log; an error is only returned for DB/RPC failures, never
 	// for "no task ref" or "no transition".
 	HandleGitHubPullRequestEvent(ctx context.Context, ev GitHubWebhookEvent) (PRHandleResult, error)
+	// ResolveTaskRef finds the first task actually named by any recognised
+	// reference spelling in the given texts — MESH-<uuid>, a /t/<id> link, a
+	// Refs/Closes keyword, a #<short id>, or a branch segment — and verifies it
+	// exists. Returns uuid.Nil when nothing resolves. Exposed so the push
+	// (commit) path gets the same recognition as the pull_request path.
+	ResolveTaskRef(ctx context.Context, sources ...TaskRefSource) (uuid.UUID, TaskRef)
 }
 
 // GitHubWebhookEvent is a minimal projection of the fields the orchestrator
@@ -481,6 +487,7 @@ type GitHubWebhookEvent struct {
 	PRState    string
 	PRMerged   bool
 	MergeSHA   string // pull_request.merge_commit_sha (empty for non-merge close)
+	PRBranch   string // pull_request.head.ref — branches cut from a task often carry its id
 	Repository string // owner/name
 }
 

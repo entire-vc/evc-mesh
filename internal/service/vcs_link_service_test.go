@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/repository"
+	"github.com/entire-vc/evc-mesh/pkg/apierror"
 	"github.com/entire-vc/evc-mesh/pkg/pagination"
 )
 
@@ -111,8 +113,26 @@ func (r *fakeTaskRepo) Create(context.Context, *domain.Task) error { return nil 
 func (r *fakeTaskRepo) GetByID(_ context.Context, id uuid.UUID) (*domain.Task, error) {
 	return r.tasks[id], nil
 }
-func (r *fakeTaskRepo) GetByShortID(context.Context, string) (*domain.Task, error) {
-	return nil, nil
+
+// GetByShortID mirrors the postgres behaviour the resolver depends on: prefix
+// match, apierror.NotFound on no match, apierror.BadRequest when the prefix is
+// ambiguous. A fake that just returned nil would make the ambiguity test pass
+// for the wrong reason.
+func (r *fakeTaskRepo) GetByShortID(_ context.Context, prefix string) (*domain.Task, error) {
+	var hits []*domain.Task
+	for id, tk := range r.tasks {
+		if strings.HasPrefix(id.String(), strings.ToLower(prefix)) {
+			hits = append(hits, tk)
+		}
+	}
+	switch len(hits) {
+	case 0:
+		return nil, apierror.NotFound("Task")
+	case 1:
+		return hits[0], nil
+	default:
+		return nil, apierror.BadRequest("ambiguous short ID: multiple tasks match")
+	}
 }
 func (r *fakeTaskRepo) Search(context.Context, uuid.UUID, repository.TaskFilter, pagination.Params) (*pagination.Page[domain.Task], error) {
 	return nil, nil

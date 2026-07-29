@@ -235,13 +235,21 @@ type GitHubWebhookPayload struct {
 }
 
 type gitHubPRPayload struct {
-	Number         int    `json:"number"`
-	Title          string `json:"title"`
-	Body           string `json:"body"`
-	HTMLURL        string `json:"html_url"`
-	State          string `json:"state"`
-	Merged         bool   `json:"merged"`
-	MergeCommitSHA string `json:"merge_commit_sha"`
+	Number         int              `json:"number"`
+	Title          string           `json:"title"`
+	Body           string           `json:"body"`
+	HTMLURL        string           `json:"html_url"`
+	State          string           `json:"state"`
+	Merged         bool             `json:"merged"`
+	MergeCommitSHA string           `json:"merge_commit_sha"`
+	Head           gitHubRefPayload `json:"head"`
+}
+
+// gitHubRefPayload carries the source branch of a pull request. Worth parsing
+// because a branch cut from a task usually carries its id even when the author
+// wrote nothing task-shaped in the title or body.
+type gitHubRefPayload struct {
+	Ref string `json:"ref"`
 }
 
 type gitHubCommitInfo struct {
@@ -327,6 +335,7 @@ func (h *VCSLinkHandler) GitHubWebhook(c echo.Context) error {
 			PRState:    pr.State,
 			PRMerged:   pr.Merged,
 			MergeSHA:   pr.MergeCommitSHA,
+			PRBranch:   pr.Head.Ref,
 			Repository: payload.Repository.FullName,
 		}
 		result, herr := h.vcsService.HandleGitHubPullRequestEvent(ctx, ev)
@@ -348,10 +357,20 @@ func (h *VCSLinkHandler) GitHubWebhook(c echo.Context) error {
 			return c.JSON(http.StatusOK, map[string]string{"status": "ignored"})
 		}
 		commit := payload.HeadCommit
-		taskID := extractMeshTaskID(commit.Message)
+		// Same recognition as the pull_request path: a commit message carries
+		// "Refs #<short id>" far more often than MESH-<uuid>, and the branch
+		// (payload.Ref, e.g. refs/heads/linus/<id>-slug) is another free signal.
+		taskID, matched := h.vcsService.ResolveTaskRef(ctx,
+			service.TaskRefSource{Name: "body", Text: commit.Message},
+			service.TaskRefSource{Name: "branch", Text: strings.TrimPrefix(payload.Ref, "refs/heads/")},
+		)
 		if taskID == uuid.Nil {
+			c.Logger().Infof("github webhook: push %s no_task_ref: commit=%s msg=%q ref=%q",
+				payload.Repository.FullName, shortCommitSHA(commit.ID), firstLine(commit.Message), payload.Ref)
 			return c.JSON(http.StatusOK, map[string]string{"status": "no_task_ref"})
 		}
+		c.Logger().Infof("github webhook: push %s resolved task=%s via=%s",
+			payload.Repository.FullName, taskID, matched.Kind)
 		input := domain.CreateVCSLinkInput{
 			TaskID:     taskID,
 			Provider:   domain.VCSProviderGitHub,
@@ -392,35 +411,12 @@ func decodeJSON(data []byte, v any) error {
 	return json.Unmarshal(data, v)
 }
 
-// extractMeshTaskID looks for a MESH-{uuid_prefix} pattern in the text
-// and returns the task UUID if found. Returns uuid.Nil if not found.
-func extractMeshTaskID(text string) uuid.UUID {
-	const prefix = "MESH-"
-	idx := strings.Index(text, prefix)
-	if idx == -1 {
-		return uuid.Nil
+// shortCommitSHA abbreviates a commit id for a log line.
+func shortCommitSHA(s string) string {
+	if len(s) > 7 {
+		return s[:7]
 	}
-	rest := text[idx+len(prefix):]
-	end := len(rest)
-	if end > 36 {
-		end = 36
-	}
-	candidate := rest[:end]
-	for i, ch := range candidate {
-		if !isHexOrDash(ch) {
-			candidate = candidate[:i]
-			break
-		}
-	}
-	id, err := uuid.Parse(candidate)
-	if err != nil {
-		return uuid.Nil
-	}
-	return id
-}
-
-func isHexOrDash(ch rune) bool {
-	return (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F') || ch == '-'
+	return s
 }
 
 func firstLine(s string) string {
