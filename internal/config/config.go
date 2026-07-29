@@ -101,9 +101,12 @@ type ServerConfig struct {
 	// `Authorization: Bearer <token>` header. Empty (the default) leaves the
 	// endpoint open — that's the existing behavior for deployments that
 	// front it with their own network control (e.g. Caddy on the internal
-	// prod install). The self-host docker-compose.prod.yml requires this
-	// var rather than leaving it empty, since it publishes the port and has
-	// no such front proxy by default.
+	// prod install).
+	//
+	// Sourced from MESH_METRICS_TOKEN, or from the file named by
+	// MESH_METRICS_TOKEN_FILE when that variable is empty. The self-host
+	// docker-compose.prod.yml uses the file form so it can generate a token
+	// the operator never has to set, and hand the same file to prometheus.
 	MetricsToken string
 }
 
@@ -190,7 +193,7 @@ func Load() *Config {
 			Port:         getEnvInt("SERVER_PORT", 8005),
 			ReadTimeout:  getEnvDuration("SERVER_READ_TIMEOUT", 30*time.Second),
 			WriteTimeout: getEnvDuration("SERVER_WRITE_TIMEOUT", 30*time.Second),
-			MetricsToken: getEnv("MESH_METRICS_TOKEN", ""),
+			MetricsToken: getEnvOrFile("MESH_METRICS_TOKEN", "MESH_METRICS_TOKEN_FILE"),
 		},
 		Database: DatabaseConfig{
 			Host:     getEnv("DB_HOST", "localhost"),
@@ -287,6 +290,28 @@ func getEnv(key, defaultVal string) string {
 		return val
 	}
 	return defaultVal
+}
+
+// getEnvOrFile returns the value of key, falling back to the contents of the
+// file named by fileKey when key is unset or empty. Trailing newlines are
+// trimmed so a file written with `echo` behaves like one written with
+// `printf`. An unreadable file yields the empty string: the caller treats
+// that as "not configured", which for the metrics token means the endpoint
+// keeps its historical open behavior rather than the API refusing to boot
+// over a monitoring knob.
+func getEnvOrFile(key, fileKey string) string {
+	if val := os.Getenv(key); val != "" {
+		return val
+	}
+	path := os.Getenv(fileKey)
+	if path == "" {
+		return ""
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(b))
 }
 
 func getEnvInt(key string, defaultVal int) int {

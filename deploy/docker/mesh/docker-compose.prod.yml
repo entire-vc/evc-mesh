@@ -1,4 +1,36 @@
 services:
+  # Provisions secrets the stack needs but the operator has no reason to
+  # choose by hand. Runs to completion before api and prometheus start.
+  #
+  # MESH_METRICS_TOKEN gates GET /metrics. It has to be the same string on
+  # both sides, which is why it was once a required .env variable — and that
+  # made every upgrade from a release predating it fail at config-parse time
+  # with "required variable MESH_METRICS_TOKEN is missing a value", before a
+  # single container was touched. A variable that is required but absent from
+  # the .env.prod.example the operator installed from is an upgrade break by
+  # construction; see check-required-env.sh, which now fails CI on new ones.
+  #
+  # So the stack generates it instead. Setting MESH_METRICS_TOKEN in .env
+  # still wins — that path is unchanged for anyone already using it.
+  init-secrets:
+    image: alpine:3.20
+    environment:
+      MESH_METRICS_TOKEN: ${MESH_METRICS_TOKEN:-}
+    volumes:
+      - ./volumes/secrets:/secrets
+    command:
+      - sh
+      - -c
+      - |
+        set -eu
+        if [ -n "$${MESH_METRICS_TOKEN:-}" ]; then
+          printf '%s' "$$MESH_METRICS_TOKEN" > /secrets/metrics_token
+        elif [ ! -s /secrets/metrics_token ]; then
+          head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' > /secrets/metrics_token
+          echo "init-secrets: generated a metrics token at volumes/secrets/metrics_token"
+        fi
+        chmod 600 /secrets/metrics_token
+
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
@@ -60,6 +92,8 @@ services:
       dockerfile: deploy/docker/mesh/Dockerfile
     restart: unless-stopped
     depends_on:
+      init-secrets:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       redis:
@@ -70,6 +104,8 @@ services:
         condition: service_healthy
     ports:
       - "${API_PORT:-8005}:8005"
+    volumes:
+      - ./volumes/secrets:/run/mesh-secrets:ro
     environment:
       # SERVER_HOST/SERVER_PORT stay pinned: the container-side port is
       # referenced by the port mapping above, the healthcheck below and the
@@ -145,10 +181,24 @@ services:
       # Gates GET /metrics behind a bearer token — this compose stack
       # publishes the api port and has no front proxy of its own, unlike the
       # non-compose internal deploy this endpoint's comment used to assume.
-      # The prometheus service below is handed the same value via a Compose
-      # secret, not a plain env var, so it isn't sitting in `docker inspect`
-      # output on that container.
-      MESH_METRICS_TOKEN: ${MESH_METRICS_TOKEN:?MESH_METRICS_TOKEN is required}
+      # Read from the file init-secrets wrote, which prometheus reads too, so
+      # the token is neither an operator's problem nor visible in `docker
+      # inspect` on either container.
+      MESH_METRICS_TOKEN_FILE: /run/mesh-secrets/metrics_token
+      # An explicit MESH_METRICS_TOKEN wins over the file (see
+      # getEnvOrFile in internal/config). It is passed here as well as being
+      # written to the file, and that is load-bearing rather than redundant:
+      # the API reads its config once at startup, and Compose only recreates
+      # a container whose spec changed. With the file alone, editing
+      # MESH_METRICS_TOKEN in .env leaves this service's spec identical,
+      # so `up -d` does not restart it and the API keeps serving the old
+      # token while prometheus — which re-reads the file every scrape —
+      # starts sending the new one. Referencing the variable here makes the
+      # edit visible to Compose, which recreates the container.
+      #
+      # Empty (the generated path, and the default) interpolates to "" and
+      # puts nothing in `docker inspect`.
+      MESH_METRICS_TOKEN: ${MESH_METRICS_TOKEN:-}
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "-O", "/dev/null", "http://localhost:8005/health"]
       interval: 15s
@@ -195,12 +245,14 @@ services:
     volumes:
       - ../../../monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./volumes/prometheus/data:/prometheus
+      - ./volumes/secrets:/run/mesh-secrets:ro
     ports:
       - "${PROMETHEUS_PORT:-9090}:9090"
-    secrets:
-      - mesh_metrics_token
     depends_on:
-      - api
+      init-secrets:
+        condition: service_completed_successfully
+      api:
+        condition: service_started
 
   grafana:
     image: grafana/grafana:10.3.1
@@ -217,12 +269,3 @@ services:
       - "${GRAFANA_PORT:-3001}:3000"
     depends_on:
       - prometheus
-
-# Sourced from the MESH_METRICS_TOKEN env var into a file at
-# /run/secrets/mesh_metrics_token inside any service that declares it — used
-# instead of a plain environment variable so the token isn't sitting in
-# `docker inspect`/`docker compose config` output on the prometheus
-# container, which has no other reason to expose it.
-secrets:
-  mesh_metrics_token:
-    environment: MESH_METRICS_TOKEN
