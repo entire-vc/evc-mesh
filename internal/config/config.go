@@ -253,9 +253,22 @@ func Load() *Config {
 			User:    getEnv("SMTP_USER", ""),
 			Pass:    getEnv("SMTP_PASSWORD", ""),
 			From:    getEnv("SMTP_FROM", "noreply@mesh.entire.host"),
-			BaseURL: getEnv("MESH_BASE_URL", "http://localhost:5173"),
+			BaseURL: getEnv("MESH_BASE_URL", DefaultBaseURL),
 		},
 	}
+}
+
+// DefaultBaseURL is where MESH_BASE_URL lands when nobody sets it: the Vite dev
+// server. It is the right default for a developer running the frontend locally
+// and the wrong one for every deployed instance — invite links built from it
+// point at the invitee's own machine. Callers use BaseURLIsDefault to say so out
+// loud at startup rather than mailing out links that quietly go nowhere.
+const DefaultBaseURL = "http://localhost:5173"
+
+// BaseURLIsDefault reports whether invite links will be built from the
+// development fallback rather than a configured public URL.
+func (c EmailConfig) BaseURLIsDefault() bool {
+	return c.BaseURL == DefaultBaseURL
 }
 
 // --- Helper functions ---

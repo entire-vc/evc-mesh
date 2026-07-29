@@ -72,7 +72,7 @@ A separate process that implements the Model Context Protocol for AI agents:
 
 - Supports **stdio** transport (for local agents like Claude Code) and **HTTP SSE** transport (for remote agents)
 - Calls the REST API via HTTP — does not access the database directly
-- 45 tools across 11 categories
+- 49 tools across 11 categories
 - Authenticates using agent API keys
 
 The MCP server is intentionally separate from the API server. This ensures a single audit trail (all operations go through the REST API) and allows independent scaling.

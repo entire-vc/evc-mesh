@@ -52,13 +52,13 @@ docker-up:
 docker-down:
 	cd $(DEPLOY_DIR) && docker compose down
 
-## docker-prod-up: Start production stack (requires .env.prod)
+## docker-prod-up: Start production stack (requires deploy/docker/mesh/.env)
 docker-prod-up:
-	cd $(DEPLOY_DIR) && docker compose -f docker-compose.prod.yml up -d --build
+	cd $(DEPLOY_DIR) && docker compose -f docker-compose.prod.yml --env-file .env up -d --build
 
 ## docker-prod-down: Stop production stack
 docker-prod-down:
-	cd $(DEPLOY_DIR) && docker compose -f docker-compose.prod.yml down
+	cd $(DEPLOY_DIR) && docker compose -f docker-compose.prod.yml --env-file .env down
 
 ## generate: Generate OpenAPI spec and other codegen artifacts
 generate:

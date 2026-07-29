@@ -168,6 +168,11 @@ services:
       MESH_MCP_TRANSPORT: sse
       MESH_MCP_HOST: "0.0.0.0"
       MESH_MCP_PORT: "8081"
+      # Only needed when a reverse proxy serves MCP under a path prefix
+      # (e.g. https://mesh.example.com/mcp). Empty is correct otherwise: the
+      # message endpoint is then advertised relative to the URL the client
+      # connected to. See docs/agent-onboarding.md.
+      MESH_MCP_PUBLIC_URL: ${MESH_MCP_PUBLIC_URL:-}
 
   prometheus:
     image: prom/prometheus:v2.50.0

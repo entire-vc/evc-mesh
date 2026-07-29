@@ -303,6 +303,19 @@ func main() {
 	)
 
 	// Invite service (email-link flow).
+	//
+	// MESH_BASE_URL decides what every invite link points at. Left unset it
+	// falls back to the Vite dev-server URL, and a deployed instance hands out
+	// http://localhost:5173/accept-invite/<token> links that resolve to the
+	// invitee's own laptop. Nothing downstream can detect that, and the operator
+	// finds out only when the person they invited says the link is dead — so say
+	// it here, once, at boot.
+	if cfg.Email.BaseURLIsDefault() {
+		log.Printf("[config] WARNING: MESH_BASE_URL is not set — workspace invite links will point at %s", cfg.Email.BaseURL)
+		log.Printf("[config] WARNING: set MESH_BASE_URL to the public URL of your web UI (e.g. https://mesh.example.com) or invitees get an unusable link.")
+	} else {
+		log.Printf("[config] Invite links will be built from MESH_BASE_URL=%s", cfg.Email.BaseURL)
+	}
 	inviteRepo := postgres.NewInviteRepo(db)
 	emailSvc := service.NewEmailService(cfg.Email)
 	inviteService := service.NewInviteService(inviteRepo, userRepo, workspaceMemberRepo, workspaceRepo, emailSvc, authService, cfg.Email.BaseURL)
