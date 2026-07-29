@@ -41,8 +41,12 @@ ALLOWED_REQUIRED=(
   REDIS_PASSWORD
 )
 
-actual=$(grep -oE '\$\{[A-Za-z_][A-Za-z0-9_]*:\?' "$COMPOSE_FILE" |
-  sed -E 's/^\$\{//; s/:\?$//' | sort -u)
+# Compose has two required-with-no-default forms and they fail identically:
+# ${VAR:?msg} errors when VAR is unset OR empty, ${VAR?msg} only when unset.
+# The colon is optional, so match it that way — an earlier version of this
+# script required it and let the second form through silently.
+actual=$(grep -oE '\$\{[A-Za-z_][A-Za-z0-9_]*:?\?' "$COMPOSE_FILE" |
+  sed -E 's/^\$\{//; s/:?\?$//' | sort -u)
 
 expected=$(printf '%s\n' "${ALLOWED_REQUIRED[@]}" | sort -u)
 
