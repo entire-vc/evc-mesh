@@ -10,6 +10,7 @@ import (
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/repository/postgres"
+	"github.com/entire-vc/evc-mesh/pkg/apierror"
 )
 
 // NotificationService dispatches in-app notifications to users based on their preferences.
@@ -25,6 +26,11 @@ type NotificationService interface {
 	// UpsertPreferences creates or updates notification preferences for a user.
 	UpsertPreferences(ctx context.Context, pref *domain.NotificationPreference) (*domain.NotificationPreference, error)
 
+	// DeletePreference removes one of the caller's own preference rows, which is
+	// how a subscription is cancelled. Returns apierror.NotFound if the row is
+	// not the caller's or no longer exists.
+	DeletePreference(ctx context.Context, userID, prefID uuid.UUID) error
+
 	// ListUnread returns unread notifications for the given user (up to 50).
 	ListUnread(ctx context.Context, userID uuid.UUID) ([]domain.Notification, error)
 
@@ -38,8 +44,28 @@ type NotificationService interface {
 	MarkAllRead(ctx context.Context, userID uuid.UUID) error
 }
 
+// notificationRepository is the slice of *postgres.NotificationRepo this service
+// uses. It is named as an interface so that dispatch — the code that decides who
+// is told the contents of a comment — can be tested against a stranger without a
+// database standing by to make the point.
+type notificationRepository interface {
+	GetPreferencesByWorkspace(ctx context.Context, workspaceID uuid.UUID) ([]domain.NotificationPreference, error)
+	FilterWorkspaceMembers(ctx context.Context, workspaceID uuid.UUID, userIDs []uuid.UUID) (map[uuid.UUID]bool, error)
+	CreateNotification(ctx context.Context, n *domain.Notification) error
+	GetPreferencesByUser(ctx context.Context, userID uuid.UUID) ([]domain.NotificationPreference, error)
+	UpsertPreference(ctx context.Context, pref *domain.NotificationPreference) error
+	DeletePreferenceForUser(ctx context.Context, id, userID uuid.UUID) (int64, error)
+	ListUnread(ctx context.Context, userID uuid.UUID, limit int) ([]domain.Notification, error)
+	CountUnread(ctx context.Context, userID uuid.UUID) (int, error)
+	MarkRead(ctx context.Context, userID uuid.UUID, ids []uuid.UUID) error
+	MarkAllRead(ctx context.Context, userID uuid.UUID) error
+}
+
+// *postgres.NotificationRepo is the only production implementation.
+var _ notificationRepository = (*postgres.NotificationRepo)(nil)
+
 type notificationService struct {
-	repo        *postgres.NotificationRepo
+	repo        notificationRepository
 	pushService PushService
 }
 
@@ -52,7 +78,7 @@ func WithPushService(ps PushService) NotificationServiceOption {
 }
 
 // NewNotificationService creates a new NotificationService.
-func NewNotificationService(repo *postgres.NotificationRepo, opts ...NotificationServiceOption) NotificationService {
+func NewNotificationService(repo notificationRepository, opts ...NotificationServiceOption) NotificationService {
 	svc := &notificationService{repo: repo}
 	for _, opt := range opts {
 		opt(svc)
@@ -76,6 +102,21 @@ func (s *notificationService) dispatch(event domain.NotificationEvent) {
 		return
 	}
 
+	// A preference row is a claim, not an entitlement. Every recipient is checked
+	// against the workspace's membership before being told anything, so that a
+	// subscription created by somebody who was never in this workspace — or who
+	// has since been removed from it — delivers nothing. Without this the
+	// notification body, which carries the comment text, is the payload of any
+	// stray row in notification_preferences.
+	members, err := s.repo.FilterWorkspaceMembers(bgCtx, event.WorkspaceID, subscribedUserIDs(prefs))
+	if err != nil {
+		// Fail closed: an unanswerable membership question is not permission to
+		// send. A dropped notification is a nuisance; a leaked comment is not.
+		log.Printf("[notification] failed to resolve membership for workspace %s, delivering nothing: %v",
+			event.WorkspaceID, err)
+		return
+	}
+
 	meta, _ := json.Marshal(event.Metadata)
 	if meta == nil {
 		meta = json.RawMessage(`{}`)
@@ -86,6 +127,10 @@ func (s *notificationService) dispatch(event domain.NotificationEvent) {
 
 		// Only dispatch to web_push channel (in-app). Agents use AgentNotifyService.
 		if p.Channel != "web_push" {
+			continue
+		}
+
+		if p.UserID != nil && !members[*p.UserID] {
 			continue
 		}
 
@@ -124,6 +169,9 @@ func (s *notificationService) dispatch(event domain.NotificationEvent) {
 			if p.UserID == nil || sentTo[*p.UserID] {
 				continue
 			}
+			if !members[*p.UserID] {
+				continue
+			}
 			if !containsInStringArray(p.Events, event.EventType) {
 				continue
 			}
@@ -155,6 +203,23 @@ func (s *notificationService) dispatch(event domain.NotificationEvent) {
 	}
 }
 
+// subscribedUserIDs is the deduplicated set of users named by these preference
+// rows — the candidate recipients, before anyone has checked whether they are
+// entitled to be one.
+func subscribedUserIDs(prefs []domain.NotificationPreference) []uuid.UUID {
+	seen := make(map[uuid.UUID]bool, len(prefs))
+	ids := make([]uuid.UUID, 0, len(prefs))
+	for i := range prefs {
+		id := prefs[i].UserID
+		if id == nil || seen[*id] {
+			continue
+		}
+		seen[*id] = true
+		ids = append(ids, *id)
+	}
+	return ids
+}
+
 // containsInStringArray checks if a pq.StringArray contains the given value.
 func containsInStringArray(arr pq.StringArray, val string) bool {
 	for _, s := range arr {
@@ -176,6 +241,22 @@ func (s *notificationService) UpsertPreferences(ctx context.Context, pref *domai
 		return nil, err
 	}
 	return pref, nil
+}
+
+// DeletePreference removes one of the caller's own preference rows.
+//
+// Until this existed there was no way to cancel a subscription at all: the API
+// could only create and update them, so a row written by someone who had no
+// business in the workspace stayed there for good.
+func (s *notificationService) DeletePreference(ctx context.Context, userID, prefID uuid.UUID) error {
+	removed, err := s.repo.DeletePreferenceForUser(ctx, prefID, userID)
+	if err != nil {
+		return err
+	}
+	if removed == 0 {
+		return apierror.NotFound("notification preference")
+	}
+	return nil
 }
 
 // ListUnread returns unread notifications for the given user (up to 50).
