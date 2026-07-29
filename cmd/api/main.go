@@ -520,10 +520,12 @@ func main() {
 	})
 
 	// Build version — public, no auth. All three paths route through Caddy's /api/* block.
-	// spark_enabled rides along here rather than a dedicated endpoint: it's the
-	// one instance capability the frontend currently needs to know before the
-	// user picks a workspace (the Spark Catalog nav link, gated by cfg.Spark.Enabled
-	// above — same source of truth the route registration itself uses).
+	// spark_enabled/spark_url ride along here rather than a dedicated endpoint: they're
+	// the instance capabilities the frontend needs to know before the user picks a
+	// workspace (the Spark Catalog nav link, gated by cfg.Spark.Enabled above — same
+	// source of truth the route registration itself uses — and the "View on Spark"
+	// links, which must point at whatever catalog this deployment configured rather
+	// than a hardcoded vendor domain).
 	versionHandler := func(c echo.Context) error {
 		return c.JSON(200, map[string]any{
 			"commit":        BuildSHA,
@@ -532,6 +534,7 @@ func main() {
 			"environment":   BuildEnv,
 			"service":       "evc-mesh-api",
 			"spark_enabled": cfg.Spark.Enabled,
+			"spark_url":     cfg.Spark.URL,
 		})
 	}
 	e.GET("/api/version", versionHandler)

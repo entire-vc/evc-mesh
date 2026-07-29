@@ -11,13 +11,30 @@ const mockedApi = api as unknown as ReturnType<typeof vi.fn>;
 describe("useCapabilitiesStore", () => {
   beforeEach(() => {
     // Reset store state between tests — zustand stores are module-singletons.
-    useCapabilitiesStore.setState({ sparkEnabled: true, fetched: false });
+    useCapabilitiesStore.setState({ sparkEnabled: true, sparkUrl: "", fetched: false });
     mockedApi.mockReset();
   });
   afterEach(() => vi.clearAllMocks());
 
-  it("defaults to sparkEnabled=true before any fetch", () => {
+  it("defaults to sparkEnabled=true, sparkUrl='' before any fetch", () => {
     expect(useCapabilitiesStore.getState().sparkEnabled).toBe(true);
+    expect(useCapabilitiesStore.getState().sparkUrl).toBe("");
+  });
+
+  it("adopts spark_url from /api/version — never a hardcoded vendor domain", async () => {
+    mockedApi.mockResolvedValueOnce({ spark_enabled: true, spark_url: "https://spark.example.com" });
+
+    await useCapabilitiesStore.getState().fetch();
+
+    expect(useCapabilitiesStore.getState().sparkUrl).toBe("https://spark.example.com");
+  });
+
+  it("leaves sparkUrl empty when the server has none configured", async () => {
+    mockedApi.mockResolvedValueOnce({ spark_enabled: true });
+
+    await useCapabilitiesStore.getState().fetch();
+
+    expect(useCapabilitiesStore.getState().sparkUrl).toBe("");
   });
 
   it("adopts spark_enabled=false from /api/version", async () => {
@@ -49,6 +66,7 @@ describe("useCapabilitiesStore", () => {
     await useCapabilitiesStore.getState().fetch();
 
     expect(useCapabilitiesStore.getState().sparkEnabled).toBe(true);
+    expect(useCapabilitiesStore.getState().sparkUrl).toBe("");
     expect(useCapabilitiesStore.getState().fetched).toBe(true);
   });
 
