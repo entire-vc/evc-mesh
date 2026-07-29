@@ -337,7 +337,7 @@ func (s *Server) registerCoreTools() {
 	), s.tracked("recall", s.handleRecall))
 
 	s.mcpServer.AddTool(mcpsdk.NewTool("remember",
-		mcpsdk.WithDescription("Save knowledge to persistent memory. Use for decisions, conventions, preferences. UPSERT by key — calling with same key updates the existing entry."),
+		mcpsdk.WithDescription("Save knowledge to persistent memory. Use for decisions, conventions, preferences. UPSERT by key WITHIN THE DECLARED SCOPE: scope=workspace upserts on (workspace, key) — the same key updates the same entry no matter which project_id/agent_id happens to be attached to a given call; scope=project upserts on (workspace, project_id, key) — the same key in two different projects creates two separate entries; scope=agent upserts on (workspace, agent_id, key)."),
 		mcpsdk.WithString("key", mcpsdk.Required(), mcpsdk.Description("Slug key for UPSERT (e.g. 'api-convention', 'license-decision').")),
 		mcpsdk.WithString("content", mcpsdk.Required(), mcpsdk.Description("What to remember (markdown).")),
 		mcpsdk.WithString("scope", mcpsdk.Description("workspace | project | agent (default: project).")),
@@ -354,7 +354,7 @@ func (s *Server) registerCoreTools() {
 	), s.tracked("forget", s.handleForget))
 
 	s.mcpServer.AddTool(mcpsdk.NewTool("set_project_knowledge",
-		mcpsdk.WithDescription("Write a structured fact to project knowledge. UPSERT by key — calling with same key updates the existing entry. Use for deploy URLs, stack conventions, gotchas. These facts are visible via get_project_knowledge."),
+		mcpsdk.WithDescription("Write a structured fact to project knowledge (stored as a scope=project memory). UPSERT by key WITHIN THE PROJECT — identity is (workspace, project_id, key), so the same key upserts regardless of which agent calls it, but the same key in a different project_id creates a separate entry. Use for deploy URLs, stack conventions, gotchas. These facts are visible via get_project_knowledge."),
 		mcpsdk.WithString("project_id", mcpsdk.Required(), mcpsdk.Description("Project ID to store knowledge for.")),
 		mcpsdk.WithString("key", mcpsdk.Required(), mcpsdk.Description("Slug key for UPSERT (e.g. 'deploy-url', 'stack-convention').")),
 		mcpsdk.WithString("value", mcpsdk.Required(), mcpsdk.Description("The knowledge to store (markdown, max 4000 chars).")),

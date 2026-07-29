@@ -191,19 +191,34 @@ func (r *MemoryRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.Memory,
 	return &m, nil
 }
 
-// GetByKey returns a memory by its composite natural key, or nil if not found.
-// Pass nil for projectID or agentID when those dimensions are not scoped.
+// GetByKey returns a memory by its natural key, or nil if not found. The
+// identity dimensions considered follow the declared scope — not every
+// non-nil pointer the caller happens to pass — so that "workspace-scoped"
+// actually means one row per (workspace, key) regardless of which project_id
+// or agent_id incidentally got attached to a given write, and likewise for
+// project/agent scope. See domain.ScopeWorkspace/ScopeProject/ScopeAgent.
 func (r *MemoryRepo) GetByKey(ctx context.Context, workspaceID uuid.UUID, projectID, agentID *uuid.UUID, key string, scope domain.MemoryScope) (*domain.Memory, error) {
+	var query string
+	args := []interface{}{workspaceID, key, scope}
+
+	switch scope {
+	case domain.ScopeProject:
+		query = fmt.Sprintf(`SELECT %s FROM memories
+			WHERE workspace_id = $1 AND key = $2 AND scope = $3
+			  AND (project_id = $4 OR ($4::uuid IS NULL AND project_id IS NULL))`, memoryColumns)
+		args = append(args, projectID)
+	case domain.ScopeAgent:
+		query = fmt.Sprintf(`SELECT %s FROM memories
+			WHERE workspace_id = $1 AND key = $2 AND scope = $3
+			  AND (agent_id = $4 OR ($4::uuid IS NULL AND agent_id IS NULL))`, memoryColumns)
+		args = append(args, agentID)
+	default: // domain.ScopeWorkspace (and any future/unknown scope defaults to the widest, safest identity)
+		query = fmt.Sprintf(`SELECT %s FROM memories
+			WHERE workspace_id = $1 AND key = $2 AND scope = $3`, memoryColumns)
+	}
+
 	var row memoryRow
-	err := r.db.GetContext(ctx, &row,
-		fmt.Sprintf(`SELECT %s FROM memories
-			WHERE workspace_id = $1
-			  AND key          = $2
-			  AND scope        = $3
-			  AND (project_id = $4 OR ($4::uuid IS NULL AND project_id IS NULL))
-			  AND (agent_id   = $5 OR ($5::uuid IS NULL AND agent_id   IS NULL))`, memoryColumns),
-		workspaceID, key, scope, projectID, agentID,
-	)
+	err := r.db.GetContext(ctx, &row, query, args...)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
