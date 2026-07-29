@@ -500,14 +500,53 @@ need them:
 
 - `EMBEDDING_*` — production runs the no-op embedder, i.e. keyword-only recall
 - `MESH_VAPID_*` — browser push is off
-- `MESH_INTEGRATION_ENCRYPTION_KEY` — integration credentials stored in plaintext
-- `MESH_GITHUB_WEBHOOK_SECRET` — inbound GitHub webhook signatures unverified
 - `MESH_TEAMRELAY_*` — Team Relay routes answer `503`
 - `MEMORY_RECALL_*`, `MESH_ALLOW_REVIEW_AT_CREATE`
+
+`MESH_INTEGRATION_ENCRYPTION_KEY` and `MESH_GITHUB_WEBHOOK_SECRET` used to be
+on that list, and both fail silently when unset — plaintext integration
+credentials and unverified webhook signatures respectively. A security control
+you must first edit the compose file to enable is one most people will not
+enable, so they are now passed through: set them in `.env` and they take
+effect.
 
 `DB_PASSWORD` and the S3 credentials work differently on purpose: under compose
 they are supplied by `POSTGRES_PASSWORD` and `MINIO_ACCESS_KEY` /
 `MINIO_SECRET_KEY`, so one value configures both the server and its client.
+These are the names that differ — everything else in `.env` reaches the API
+under the same name it has in the file:
+
+| In `.env` | What the API reads | Also configures |
+|---|---|---|
+| `POSTGRES_PASSWORD` | `DB_PASSWORD` | the `postgres` server's own password |
+| `DB_USER` | `DB_USER` | `POSTGRES_USER` — one knob, both sides |
+| `DB_NAME` | `DB_NAME` | `POSTGRES_DB` — one knob, both sides |
+| `MINIO_ACCESS_KEY` | `S3_ACCESS_KEY_ID` | MinIO's `MINIO_ROOT_USER` |
+| `MINIO_SECRET_KEY` | `S3_SECRET_ACCESS_KEY` | MinIO's `MINIO_ROOT_PASSWORD` |
+| `CORS_ORIGINS` | `MESH_CORS_ORIGINS` | *(legacy spelling, still accepted)* |
+| `GRAFANA_PASSWORD` | *(not the API)* | Grafana's `GF_SECURITY_ADMIN_PASSWORD` |
+
+⚠️ **Editing `POSTGRES_PASSWORD` after the first boot breaks the API.** The
+Postgres image applies that variable only when it initialises an empty data
+directory; on every later start it is ignored. Change it in `.env`, restart,
+and the API dutifully connects with the new value while the server still wants
+the old one — `password authentication failed for user "mesh"`. Verified on a
+running stack:
+
+```bash
+# from a throwaway client on the compose network, after rotating .env
+psql -h postgres -U mesh -d mesh -c 'select 1'
+#   old password → 1
+#   new password → FATAL: password authentication failed for user "mesh"
+```
+
+Rotate it in both places instead — `ALTER USER mesh PASSWORD '<new>';` on the
+server, then the same value in `.env`.
+
+(Test this yourself from *outside* the container: `docker exec … psql -U mesh`
+connects over the local socket, and `127.0.0.1` inside the container is
+`trust` in the image's `pg_hba.conf`. Both accept any password whatsoever, so
+either one will tell you a rotation "worked" when it did not.)
 
 When in doubt, ask Compose rather than the docs:
 
@@ -698,6 +737,52 @@ docker compose -f docker-compose.prod.yml --env-file .env config | \
 
 ---
 
+## Add your teammates
+
+Registration ships closed, so the admin account seeded at first boot is the only
+way in until you invite someone. Nothing below needs SMTP — without it the API
+prints the invite link instead of emailing it, which is enough to get a second
+person working today.
+
+**From the UI:** workspace → Members → Invite.
+
+**From the API**, using the admin's access token:
+
+```bash
+TOKEN=$(curl -s -X POST http://localhost:${HTTP_PORT}/api/v1/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"admin@localhost","password":"<the bootstrap password>"}' \
+  | python3 -c 'import sys,json; print(json.load(sys.stdin)["tokens"]["access_token"])')
+
+WS=$(curl -s http://localhost:${HTTP_PORT}/api/v1/workspaces \
+  -H "Authorization: Bearer $TOKEN" \
+  | python3 -c 'import sys,json; print(json.load(sys.stdin)[0]["id"])')
+
+curl -s -X POST http://localhost:${HTTP_PORT}/api/v1/workspaces/$WS/invites \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"email":"teammate@example.com","role":"member"}'
+```
+
+With `SMTP_HOST` unset, the link lands in the API log:
+
+```bash
+docker compose -f docker-compose.prod.yml --env-file .env logs api | grep invite
+```
+```
+[email] SMTP not configured — invite link for teammate@example.com:
+        http://localhost:8080/accept-invite/<token>
+```
+
+The invitee opens that link, picks their own password, and is signed in — they
+do **not** need the `/register` page, which is exactly why closing it costs you
+nothing. Their account is created and joined to the workspace in one step.
+
+`MESH_BASE_URL` is what makes the link openable: unset, it falls back to
+`http://localhost:5173` and your teammate gets a link to their own machine. The
+API warns about this at startup.
+
+---
+
 ## Data Persistence
 
 Docker Compose uses bind mounts rooted in `deploy/docker/mesh/volumes/`:
@@ -865,6 +950,51 @@ lsof -i :3000  # Frontend
 ```
 
 Adjust ports in `deploy/docker/mesh/docker-compose.yml` and `deploy/docker/mesh/.env` if needed.
+
+### `429 Rate limit exceeded` while logging in or testing
+
+**Symptom:** login, register or invite calls start answering
+`{"code":429,"message":"Rate limit exceeded"}` after a handful of attempts.
+
+**Cause:** `MESH_RATE_LIMIT_AUTH_RPM` defaults to **5 requests per minute, per
+IP** — deliberately tight against credential stuffing. Behind one NAT'd office
+egress, or while scripting a setup, five is easy to spend: a login, a couple of
+retries and an invite acceptance will do it. The window is a minute; waiting
+clears it.
+
+**Solution:** raise it in `.env` if a whole team shares one egress IP:
+
+```bash
+MESH_RATE_LIMIT_AUTH_RPM=30
+```
+
+Do not raise it for a public instance without thinking about why it is 5.
+
+### `403 registration is closed on this instance`
+
+**Not a misconfiguration.** Both env templates ship
+`MESH_ALLOW_REGISTRATION=false`, so `/register` is closed to walk-ups by design.
+The exception is the *first* account on an empty database, which can always
+register — so this never locks you out of a fresh install.
+
+Add people with [workspace invites](#add-your-teammates) instead. To reopen
+public registration anyway, set `MESH_ALLOW_REGISTRATION=true` and read
+[Closing registration](#closing-registration) first — it describes what happened
+on our own instance when it was left open.
+
+### The invitee cannot open their invite link
+
+**Symptom:** the link points at `http://localhost:5173` (or any host that is not
+your instance), so it opens nothing on their machine.
+
+**Cause:** `MESH_BASE_URL` was unset when the invite was created — links are
+built from it, and it falls back to a localhost dev URL. The API says so at
+startup: `[config] WARNING: MESH_BASE_URL is not set`.
+
+**Solution:** set `MESH_BASE_URL` to the URL your team actually types, restart
+the API, and issue a **new** invite. Existing invite links keep the old host
+baked in; the token is still valid, so the invitee can also just replace the
+scheme+host in the link by hand.
 
 ### Frontend build fails
 

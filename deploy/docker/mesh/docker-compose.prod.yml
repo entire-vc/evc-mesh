@@ -102,6 +102,13 @@ services:
       S3_USE_SSL: ${S3_USE_SSL:-false}
       S3_PUBLIC_URL: ${S3_PUBLIC_URL:-}
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
+      # Empty means integration credentials are written to the database in
+      # plaintext. Not passing it through at all meant setting it in .env did
+      # nothing — the template's own note said to edit this block by hand,
+      # which is a workaround standing in for the one line it describes.
+      MESH_INTEGRATION_ENCRYPTION_KEY: ${MESH_INTEGRATION_ENCRYPTION_KEY:-}
+      # Unset means inbound GitHub webhook signatures are not verified.
+      MESH_GITHUB_WEBHOOK_SECRET: ${MESH_GITHUB_WEBHOOK_SECRET:-}
       CASDOOR_ENDPOINT: ${CASDOOR_ENDPOINT:-}
       CASDOOR_CLIENT_ID: ${CASDOOR_CLIENT_ID:-}
       AGENT_KEY_PREFIX: ${AGENT_KEY_PREFIX:-agk}
