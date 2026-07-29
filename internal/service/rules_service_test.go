@@ -9,7 +9,27 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	"github.com/entire-vc/evc-mesh/internal/repository"
 )
+
+// noopMemberRepo is a minimal repository.WorkspaceMemberRepository stub for
+// tests that exercise importTeamConfig's agent path and never touch humans.
+type noopMemberRepo struct{}
+
+func (noopMemberRepo) Create(context.Context, *domain.WorkspaceMember) error { return nil }
+func (noopMemberRepo) GetByWorkspaceAndUser(context.Context, uuid.UUID, uuid.UUID) (*domain.WorkspaceMember, error) {
+	return nil, nil
+}
+func (noopMemberRepo) GetRole(context.Context, uuid.UUID, uuid.UUID) (string, error) { return "", nil }
+func (noopMemberRepo) List(context.Context, uuid.UUID) ([]domain.WorkspaceMemberWithUser, error) {
+	return nil, nil
+}
+func (noopMemberRepo) ListWithProjects(context.Context, uuid.UUID) ([]repository.HumanWithProjects, error) {
+	return nil, nil
+}
+func (noopMemberRepo) UpdateRole(context.Context, uuid.UUID, uuid.UUID, string) error { return nil }
+func (noopMemberRepo) Delete(context.Context, uuid.UUID, uuid.UUID) error             { return nil }
+func (noopMemberRepo) CountOwners(context.Context, uuid.UUID) (int, error)            { return 0, nil }
 
 // --------------------------------------------------------------------------
 // isAgentAllowedByActors
@@ -286,4 +306,71 @@ func TestUpdateAgentProfile_AllFieldsSetAppliesEverything(t *testing.T) {
 	assert.Equal(t, 5, got.MaxConcurrentTasks)
 	assert.Equal(t, "10:00-18:00", got.WorkingHours)
 	assert.Equal(t, "Full replace", got.ProfileDescription)
+}
+
+// TestImportTeamConfig_AgentProfile_AppliesAllFields exercises the
+// importTeamConfig → UpdateAgentProfile call site directly (via the exported
+// ImportTeam), which builds an AgentProfileUpdate by taking the address of
+// each TeamAgentConfig field. This is the regression test for that
+// construction: every pointer field must actually reach the agent.
+func TestImportTeamConfig_AgentProfile_AppliesAllFields(t *testing.T) {
+	agentRepo := NewMockAgentRepository()
+	svc := NewRulesService(nil, nil, nil, agentRepo, noopMemberRepo{}, nil, nil)
+
+	wsID := uuid.New()
+	agentID := uuid.New()
+	require.NoError(t, agentRepo.Create(context.Background(), &domain.Agent{
+		ID:          agentID,
+		WorkspaceID: wsID,
+		Name:        "TestAgent",
+		Slug:        "test-agent",
+		Role:        "old-role",
+	}))
+
+	yamlData := []byte(`
+agents:
+  - name: TestAgent
+    role: developer
+    responsibility_zone: backend
+    capabilities: [go, testing]
+    accepts_from: ["*"]
+    max_concurrent_tasks: 4
+    working_hours: "09:00-17:00"
+    description: "Updated via team import"
+`)
+
+	result, err := svc.ImportTeam(context.Background(), wsID, yamlData)
+	require.NoError(t, err)
+	assert.Empty(t, result.Errors)
+	assert.Equal(t, 1, result.AgentsUpdated)
+
+	got, err := agentRepo.GetByID(context.Background(), agentID)
+	require.NoError(t, err)
+	assert.Equal(t, "developer", got.Role)
+	assert.Equal(t, "backend", got.ResponsibilityZone)
+	assert.Equal(t, 4, got.MaxConcurrentTasks)
+	assert.Equal(t, "09:00-17:00", got.WorkingHours)
+	assert.Equal(t, "Updated via team import", got.ProfileDescription)
+	assert.JSONEq(t, `["go","testing"]`, string(got.Capabilities))
+}
+
+// TestImportTeamConfig_AgentNotFound_RecordsError verifies the "not found"
+// branch of the same loop still reports an error and does not touch AgentsUpdated.
+func TestImportTeamConfig_AgentNotFound_RecordsError(t *testing.T) {
+	agentRepo := NewMockAgentRepository()
+	svc := NewRulesService(nil, nil, nil, agentRepo, noopMemberRepo{}, nil, nil)
+
+	wsID := uuid.New()
+	yamlData := []byte(`
+agents:
+  - name: GhostAgent
+    role: developer
+`)
+
+	result, err := svc.ImportTeam(context.Background(), wsID, yamlData)
+	require.NoError(t, err)
+	assert.Equal(t, 0, result.AgentsUpdated)
+	require.Len(t, result.Errors, 1)
+	assert.Contains(t, result.Errors[0], "GhostAgent")
+	assert.Contains(t, result.Errors[0], "not found")
 }
