@@ -5,7 +5,23 @@ WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /bin/mesh-api ./cmd/api
+# Build metadata for cmd/api's BuildSHA/BuildTime/BuildVersion/BuildEnv vars
+# (see docs/deploy.md#build-metadata-ldflags) — derived from the .git
+# directory already present in the build context (no .dockerignore excludes
+# it), so /api/version reports the real commit with no extra self-hoster
+# action. A `git clone` (including --depth 1) always has .git; only a
+# tarball built without it falls back to "dev". Scoped to the mesh-api build
+# only: cmd/mcp has no matching vars, and -X against an unknown symbol is a
+# silent linker no-op that just adds noise.
+RUN GIT_SHA=$(git rev-parse HEAD 2>/dev/null || echo dev) && \
+    GIT_VERSION=$(git describe --tags --always 2>/dev/null || echo dev) && \
+    BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ) && \
+    CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w \
+      -X main.BuildSHA=${GIT_SHA} \
+      -X main.BuildTime=${BUILD_TIME} \
+      -X main.BuildVersion=${GIT_VERSION} \
+      -X main.BuildEnv=prod" \
+      -o /bin/mesh-api ./cmd/api
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /bin/mesh-mcp ./cmd/mcp
 
 # Stage 2: Build frontend
