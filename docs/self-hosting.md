@@ -474,7 +474,7 @@ Services included in `docker-compose.prod.yml`:
 | `mcp` | `${MCP_PORT:-8081}` | MCP server in SSE mode for remote agents |
 | `nginx` | `${HTTP_PORT:-80}` | Nginx serving the React SPA, proxying `/api` and `/ws` to the API |
 | `prometheus` | `${PROMETHEUS_PORT:-9090}` | Prometheus scraping `/metrics` from the API |
-| `grafana` | `${GRAFANA_PORT:-3001}` | Grafana dashboards — default password: `${GRAFANA_PASSWORD:-admin}` |
+| `grafana` | `${GRAFANA_PORT:-3001}` | Grafana dashboards — password set by `GRAFANA_PASSWORD` (required, no default) |
 
 Required environment variables for production:
 
@@ -484,10 +484,10 @@ REDIS_PASSWORD=your-redis-password
 JWT_SECRET=your-32-char-minimum-secret
 MINIO_ACCESS_KEY=your-minio-access-key
 MINIO_SECRET_KEY=your-minio-secret-key
+GRAFANA_PASSWORD=your-grafana-admin-password
 # Optional:
 MESH_CORS_ORIGINS=https://mesh.yourdomain.com   # CORS_ORIGINS is also accepted
 MESH_ALLOW_REGISTRATION=false                   # close self-registration
-GRAFANA_PASSWORD=your-grafana-admin-password
 ```
 
 **Not every variable in the reference above reaches the container.**
@@ -703,9 +703,11 @@ docker compose -f docker-compose.prod.yml --env-file .env config | \
    ```
 
    The same applies to the `prometheus` (`9090`) and `grafana` (`3001`)
-   services: `docker-compose.prod.yml` publishes both on all interfaces, and
-   Grafana's admin password defaults to `admin`. Set `GRAFANA_PASSWORD`, or
-   drop the two services entirely if you are not using them.
+   services: `docker-compose.prod.yml` publishes both on all interfaces.
+   Grafana requires `GRAFANA_PASSWORD` to be set (Compose refuses to start
+   otherwise) — but the port is still open to the network, so bind it to
+   `127.0.0.1` as above, or drop the two services entirely if you are not
+   using them.
 
 10. **Do not publish the API port when a proxy fronts it** -- Compose publishes
     `${API_PORT:-8005}` on every interface. With nginx or Caddy terminating TLS
