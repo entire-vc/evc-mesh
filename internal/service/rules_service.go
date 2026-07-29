@@ -337,21 +337,33 @@ func (s *rulesService) UpdateAgentProfile(ctx context.Context, agentID uuid.UUID
 		return fmt.Errorf("agent not found")
 	}
 
-	// Apply profile fields.
-	agent.Role = profile.Role
+	// Apply profile fields. Every field is optional (pointer or nil-able
+	// RawMessage) — a field absent from the request leaves the existing value
+	// untouched instead of zeroing it out (see domain.AgentProfileUpdate doc).
+	if profile.Role != nil {
+		agent.Role = *profile.Role
+	}
 	if profile.Capabilities != nil {
 		agent.Capabilities = profile.Capabilities
 	}
-	agent.ResponsibilityZone = profile.ResponsibilityZone
+	if profile.ResponsibilityZone != nil {
+		agent.ResponsibilityZone = *profile.ResponsibilityZone
+	}
 	if profile.EscalationTo != nil {
 		agent.EscalationTo = &profile.EscalationTo
 	}
 	if profile.AcceptsFrom != nil {
 		agent.AcceptsFrom = profile.AcceptsFrom
 	}
-	agent.MaxConcurrentTasks = profile.MaxConcurrentTasks
-	agent.WorkingHours = profile.WorkingHours
-	agent.ProfileDescription = profile.ProfileDescription
+	if profile.MaxConcurrentTasks != nil {
+		agent.MaxConcurrentTasks = *profile.MaxConcurrentTasks
+	}
+	if profile.WorkingHours != nil {
+		agent.WorkingHours = *profile.WorkingHours
+	}
+	if profile.ProfileDescription != nil {
+		agent.ProfileDescription = *profile.ProfileDescription
+	}
 	agent.UpdatedAt = time.Now()
 
 	return s.agentRepo.Update(ctx, agent)
@@ -873,14 +885,14 @@ func (s *rulesService) importTeamConfig(ctx context.Context, workspaceID uuid.UU
 		escalationJSON, _ := json.Marshal(ac.EscalationTo)
 
 		profile := domain.AgentProfileUpdate{
-			Role:               ac.Role,
+			Role:               &ac.Role,
 			Capabilities:       capJSON,
-			ResponsibilityZone: ac.ResponsibilityZone,
+			ResponsibilityZone: &ac.ResponsibilityZone,
 			EscalationTo:       escalationJSON,
 			AcceptsFrom:        acceptsJSON,
-			MaxConcurrentTasks: ac.MaxConcurrentTasks,
-			WorkingHours:       ac.WorkingHours,
-			ProfileDescription: ac.Description,
+			MaxConcurrentTasks: &ac.MaxConcurrentTasks,
+			WorkingHours:       &ac.WorkingHours,
+			ProfileDescription: &ac.Description,
 		}
 		if err := s.UpdateAgentProfile(ctx, matchedAgent.ID, profile); err != nil {
 			result.Errors = append(result.Errors, fmt.Sprintf("agent %q: update error: %v", ac.Name, err))

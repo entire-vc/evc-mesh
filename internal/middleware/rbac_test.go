@@ -427,6 +427,134 @@ func TestRBAC_Viewer_CannotCreateTask(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Tests: RequireSelfOrPermission — PUT /agents/:agent_id/profile (task #7acd2497)
+// ---------------------------------------------------------------------------
+
+// newRBACAgentContextWithParam is like newRBACAgentContext but also sets the
+// agent_id path param, as the real route (/agents/:agent_id/profile) would.
+func newRBACAgentContextWithParam(callerAgentID, wsID, targetAgentID uuid.UUID) (echo.Context, *httptest.ResponseRecorder) {
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodPut, "/", http.NoBody)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetParamNames("agent_id")
+	c.SetParamValues(targetAgentID.String())
+	c.Set(ContextKeyAuthType, AuthTypeAgent)
+	c.Set(ContextKeyAgentID, callerAgentID)
+	c.Set(ContextKeyWorkspaceID, wsID)
+	return c, rec
+}
+
+// newRBACUserContextWithParam mirrors newRBACAgentContextWithParam for JWT/user auth.
+func newRBACUserContextWithParam(userID, wsID, targetAgentID uuid.UUID) (echo.Context, *httptest.ResponseRecorder) {
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodPut, "/", http.NoBody)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetParamNames("agent_id")
+	c.SetParamValues(targetAgentID.String())
+	c.Set(ContextKeyAuthType, AuthTypeUser)
+	c.Set(ContextKeyUserID, userID)
+	c.Set(ContextKeyWorkspaceID, wsID)
+	return c, rec
+}
+
+// TestRequireSelfOrPermission_AgentEditingOwnProfile_Allowed is the "don't
+// break the legit path" AC: an agent updating its OWN profile (the shape of
+// the update_agent_profile MCP tool call) must succeed with no permission
+// needed at all.
+func TestRequireSelfOrPermission_AgentEditingOwnProfile_Allowed(t *testing.T) {
+	repo := newRBACMockMemberRepo()
+	wsID := uuid.New()
+	agentID := uuid.New()
+
+	c, rec := newRBACAgentContextWithParam(agentID, wsID, agentID)
+
+	h := RequireSelfOrPermission("agent_id", PermDeleteAgent, repo)(okHandler)
+	err := h(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
+// TestRequireSelfOrPermission_AgentEditingAnotherAgent_Forbidden is the core
+// regression test for #7acd2497: agent A, authenticated with its own valid
+// X-Agent-Key, must NOT be able to rewrite agent B's profile.
+func TestRequireSelfOrPermission_AgentEditingAnotherAgent_Forbidden(t *testing.T) {
+	repo := newRBACMockMemberRepo()
+	wsID := uuid.New()
+	agentA := uuid.New()
+	agentB := uuid.New()
+
+	c, rec := newRBACAgentContextWithParam(agentA, wsID, agentB)
+
+	h := RequireSelfOrPermission("agent_id", PermDeleteAgent, repo)(okHandler)
+	err := h(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusForbidden, rec.Code)
+}
+
+// TestRequireSelfOrPermission_OwnerEditingAnotherAgent_Allowed proves the
+// legitimate management path still works: a workspace owner (JWT) holds
+// PermDeleteAgent and may rewrite any agent's profile in their workspace.
+func TestRequireSelfOrPermission_OwnerEditingAnotherAgent_Allowed(t *testing.T) {
+	repo := newRBACMockMemberRepo()
+	wsID := uuid.New()
+	userID := uuid.New()
+	targetAgent := uuid.New()
+	repo.addMember(wsID, userID, domain.RoleOwner)
+
+	c, rec := newRBACUserContextWithParam(userID, wsID, targetAgent)
+
+	h := RequireSelfOrPermission("agent_id", PermDeleteAgent, repo)(okHandler)
+	err := h(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
+// TestRequireSelfOrPermission_MemberEditingAnotherAgent_Forbidden proves a
+// plain workspace member (no PermDeleteAgent) cannot rewrite another agent's
+// profile, even over JWT auth.
+func TestRequireSelfOrPermission_MemberEditingAnotherAgent_Forbidden(t *testing.T) {
+	repo := newRBACMockMemberRepo()
+	wsID := uuid.New()
+	userID := uuid.New()
+	targetAgent := uuid.New()
+	repo.addMember(wsID, userID, domain.RoleMember)
+
+	c, rec := newRBACUserContextWithParam(userID, wsID, targetAgent)
+
+	h := RequireSelfOrPermission("agent_id", PermDeleteAgent, repo)(okHandler)
+	err := h(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusForbidden, rec.Code)
+}
+
+// TestRequireSelfOrPermission_MalformedAgentIDParam_FallsBackToPermissionCheck
+// guards the uuid.Parse failure path: a malformed/missing agent_id param must
+// not be treated as a self-match by accident — it should fall through to the
+// ordinary permission check (and get denied here, since there's no member).
+func TestRequireSelfOrPermission_MalformedAgentIDParam_FallsBackToPermissionCheck(t *testing.T) {
+	repo := newRBACMockMemberRepo()
+	wsID := uuid.New()
+	agentID := uuid.New()
+
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodPut, "/", http.NoBody)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetParamNames("agent_id")
+	c.SetParamValues("not-a-uuid")
+	c.Set(ContextKeyAuthType, AuthTypeAgent)
+	c.Set(ContextKeyAgentID, agentID)
+	c.Set(ContextKeyWorkspaceID, wsID)
+
+	h := RequireSelfOrPermission("agent_id", PermDeleteAgent, repo)(okHandler)
+	err := h(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusForbidden, rec.Code)
+}
+
+// ---------------------------------------------------------------------------
 // Tests: hasPermission helper coverage
 // ---------------------------------------------------------------------------
 
