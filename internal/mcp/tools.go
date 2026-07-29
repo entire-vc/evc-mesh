@@ -415,6 +415,27 @@ func (s *Server) handleCreateSubtask(ctx context.Context, request mcpsdk.CallToo
 	if desc := mcpsdk.ParseString(request, "description", ""); desc != "" {
 		body["description"] = desc
 	}
+	if assigneeID := mcpsdk.ParseString(request, "assignee_id", ""); assigneeID != "" {
+		body["assignee_id"] = assigneeID
+	}
+	if assigneeType := mcpsdk.ParseString(request, "assignee_type", ""); assigneeType != "" {
+		body["assignee_type"] = assigneeType
+	}
+	if dueDateStr := mcpsdk.ParseString(request, "due_date", ""); dueDateStr != "" {
+		if _, err := time.Parse(time.RFC3339, dueDateStr); err != nil {
+			return errResult("invalid due_date format: %v", err)
+		}
+		body["due_date"] = dueDateStr
+	}
+	if eh := mcpsdk.ParseFloat64(request, "estimated_hours", 0); eh > 0 {
+		body["estimated_hours"] = eh
+	}
+	if labels := parseStringSlice(request, "labels"); len(labels) > 0 {
+		body["labels"] = labels
+	}
+	if cfMap := mcpsdk.ParseStringMap(request, "custom_fields", nil); cfMap != nil {
+		body["custom_fields"] = cfMap
+	}
 
 	// Resolve status slug against the parent's project. Omitted → project default.
 	if slug := mcpsdk.ParseString(request, "status_slug", ""); slug != "" {

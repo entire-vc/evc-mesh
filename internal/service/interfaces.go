@@ -75,6 +75,16 @@ type CreateSubtaskInput struct {
 	// StatusID pins the subtask's initial status. When nil the project's
 	// default status is used — never the parent's status.
 	StatusID *uuid.UUID `json:"status_id,omitempty"`
+	// AssigneeID/AssigneeType mirror CreateTask's field-level contract: when
+	// AssigneeID is set and AssigneeType is empty, the caller (handler) infers
+	// "agent" so the explicit assignment is not silently clobbered by
+	// applyAutoAssign, which only fires when AssigneeType is unassigned.
+	AssigneeID     *uuid.UUID          `json:"assignee_id,omitempty"`
+	AssigneeType   domain.AssigneeType `json:"assignee_type,omitempty"`
+	Labels         []string            `json:"labels,omitempty"`
+	CustomFields   json.RawMessage     `json:"custom_fields,omitempty"`
+	DueDate        *time.Time          `json:"due_date,omitempty"`
+	EstimatedHours *float64            `json:"estimated_hours,omitempty"`
 }
 
 // BulkUpdateTasksInput holds parameters for a bulk task update operation.

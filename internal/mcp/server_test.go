@@ -301,9 +301,24 @@ func buildMockServer(state *mockAPIState) *httptest.Server {
 				"description":    stringOrEmpty(body["description"]),
 				"priority":       stringOrDefault(body["priority"], "medium"),
 				"status_id":      fx.todoStatusID.String(),
-				"assignee_type":  "unassigned",
+				"assignee_type":  stringOrDefault(body["assignee_type"], "unassigned"),
 				"created_at":     time.Now().UTC().Format(time.RFC3339),
 				"updated_at":     time.Now().UTC().Format(time.RFC3339),
+			}
+			if ai, ok := body["assignee_id"].(string); ok {
+				sub["assignee_id"] = ai
+			}
+			if labels, ok := body["labels"]; ok {
+				sub["labels"] = labels
+			}
+			if cf, ok := body["custom_fields"]; ok {
+				sub["custom_fields"] = cf
+			}
+			if dd, ok := body["due_date"].(string); ok {
+				sub["due_date"] = dd
+			}
+			if eh, ok := body["estimated_hours"]; ok {
+				sub["estimated_hours"] = eh
 			}
 			state.tasks[subID] = sub
 			writeJSON(w, 201, sub)
@@ -737,6 +752,77 @@ func TestCreateSubtask(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(text), &subtask))
 	assert.Equal(t, "Child Task", subtask["title"])
 	assert.Equal(t, parentID, subtask["parent_task_id"])
+}
+
+// TestCreateSubtask_AssigneeAndLabelsPassThrough is the regression test for
+// #d13fe920: create_subtask used to silently drop assignee_id and labels
+// (200 OK, subtask born unassigned with empty labels regardless of what was
+// requested). Confirms the tool now forwards these fields in the outgoing
+// request body, same as create_task already does.
+func TestCreateSubtask_AssigneeAndLabelsPassThrough(t *testing.T) {
+	srv, state := newTestServer()
+	ctx := context.Background()
+
+	createResult, _ := srv.handleCreateTask(ctx, makeRequest(map[string]any{
+		"project_id": state.fx.projectID.String(),
+		"title":      "Parent Task",
+	}))
+	text := mcpsdk.GetTextFromContent(createResult.Content[0])
+	var parent map[string]any
+	require.NoError(t, json.Unmarshal([]byte(text), &parent))
+	parentID, _ := parent["id"].(string)
+
+	// assignee_type is passed explicitly here — the "infer agent when omitted"
+	// rule lives in the real HTTP handler (TestTaskHandler_CreateSubtask in
+	// internal/handler covers that), not in the MCP tool or this test's mock
+	// backend, so this test only proves the MCP layer forwards what it's given.
+	result, err := srv.handleCreateSubtask(ctx, makeRequest(map[string]any{
+		"parent_task_id": parentID,
+		"title":          "Delegated subtask",
+		"assignee_id":    state.fx.agentID.String(),
+		"assignee_type":  "agent",
+		"labels":         []any{"a", "b"},
+	}))
+	require.NoError(t, err)
+	require.False(t, result.IsError)
+
+	text = mcpsdk.GetTextFromContent(result.Content[0])
+	var subtask map[string]any
+	require.NoError(t, json.Unmarshal([]byte(text), &subtask))
+	assert.Equal(t, state.fx.agentID.String(), subtask["assignee_id"], "assignee_id must not be silently dropped")
+	assert.Equal(t, "agent", subtask["assignee_type"], "assignee_type must not be silently dropped")
+	assert.ElementsMatch(t, []any{"a", "b"}, subtask["labels"], "labels must not be silently dropped")
+}
+
+// TestCreateSubtask_NoAssignee_RegressionUnchanged confirms the fix does not
+// change today's default behavior when assignee_id is omitted — no
+// forced-assignee regression.
+func TestCreateSubtask_NoAssignee_RegressionUnchanged(t *testing.T) {
+	srv, state := newTestServer()
+	ctx := context.Background()
+
+	createResult, _ := srv.handleCreateTask(ctx, makeRequest(map[string]any{
+		"project_id": state.fx.projectID.String(),
+		"title":      "Parent Task",
+	}))
+	text := mcpsdk.GetTextFromContent(createResult.Content[0])
+	var parent map[string]any
+	require.NoError(t, json.Unmarshal([]byte(text), &parent))
+	parentID, _ := parent["id"].(string)
+
+	result, err := srv.handleCreateSubtask(ctx, makeRequest(map[string]any{
+		"parent_task_id": parentID,
+		"title":          "Undelegated subtask",
+	}))
+	require.NoError(t, err)
+	require.False(t, result.IsError)
+
+	text = mcpsdk.GetTextFromContent(result.Content[0])
+	var subtask map[string]any
+	require.NoError(t, json.Unmarshal([]byte(text), &subtask))
+	assert.Equal(t, "unassigned", subtask["assignee_type"])
+	_, hasAssignee := subtask["assignee_id"]
+	assert.False(t, hasAssignee, "no assignee_id must be set when none was requested")
 }
 
 func TestAssignTask_SelfAssign(t *testing.T) {

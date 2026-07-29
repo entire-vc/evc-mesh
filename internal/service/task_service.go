@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/repository"
@@ -872,17 +873,26 @@ func (s *taskService) CreateSubtask(ctx context.Context, parentTaskID uuid.UUID,
 	}
 
 	now := timeNow()
+	assigneeType := input.AssigneeType
+	if assigneeType == "" {
+		assigneeType = domain.AssigneeTypeUnassigned
+	}
 	child := &domain.Task{
-		ID:           uuid.New(),
-		ProjectID:    parent.ProjectID,
-		StatusID:     statusID,
-		Title:        input.Title,
-		Priority:     input.Priority,
-		Description:  input.Description,
-		ParentTaskID: &parentTaskID,
-		AssigneeType: domain.AssigneeTypeUnassigned,
-		CreatedAt:    now,
-		UpdatedAt:    now,
+		ID:             uuid.New(),
+		ProjectID:      parent.ProjectID,
+		StatusID:       statusID,
+		Title:          input.Title,
+		Priority:       input.Priority,
+		Description:    input.Description,
+		ParentTaskID:   &parentTaskID,
+		AssigneeID:     input.AssigneeID,
+		AssigneeType:   assigneeType,
+		Labels:         pq.StringArray(input.Labels),
+		CustomFields:   input.CustomFields,
+		DueDate:        input.DueDate,
+		EstimatedHours: input.EstimatedHours,
+		CreatedAt:      now,
+		UpdatedAt:      now,
 	}
 
 	// Apply auto-assign rules if the subtask has no assignee.

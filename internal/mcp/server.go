@@ -405,6 +405,12 @@ func (s *Server) registerAdvancedTools() {
 		mcpsdk.WithString("description", mcpsdk.Description("Subtask description.")),
 		mcpsdk.WithString("priority", mcpsdk.Description("Priority: urgent, high, medium, low, none."), mcpsdk.DefaultString("medium")),
 		mcpsdk.WithString("status_slug", mcpsdk.Description("Status slug (e.g. 'todo'). Uses project default if omitted.")),
+		mcpsdk.WithString("assignee_id", mcpsdk.Description("Assignee ID (user or agent UUID). Omit to inherit the default unassigned/auto-assign behavior.")),
+		mcpsdk.WithString("assignee_type", mcpsdk.Description("Assignee type: user, agent. Inferred as 'agent' if assignee_id is set and this is omitted.")),
+		mcpsdk.WithArray("labels", mcpsdk.Description("Subtask labels."), mcpsdk.WithStringItems()),
+		mcpsdk.WithObject("custom_fields", mcpsdk.Description("Custom field values as key-value pairs.")),
+		mcpsdk.WithString("due_date", mcpsdk.Description("Due date in RFC3339 format.")),
+		mcpsdk.WithNumber("estimated_hours", mcpsdk.Description("Estimated hours for the subtask.")),
 	), s.tracked("create_subtask", s.handleCreateSubtask))
 
 	s.mcpServer.AddTool(mcpsdk.NewTool("add_dependency",
