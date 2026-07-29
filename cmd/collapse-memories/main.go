@@ -70,6 +70,16 @@ type group struct {
 }
 
 func main() {
+	if err := run(); err != nil {
+		log.Fatal(err)
+	}
+}
+
+// run holds all resources (db, tx) as locals with their own defers, so a
+// mid-function failure always unwinds through those defers before the
+// process exits — main() itself never defers anything, which is what lets
+// it use log.Fatal safely on the returned error.
+func run() error {
 	dryRun := flag.Bool("dry-run", true, "print the collapse plan without writing (default true — pass -dry-run=false to apply)")
 	limit := flag.Int("limit", 25, "max sample rows to print for the project_id-null report (0 = print all)")
 	workspaceID := flag.String("workspace-id", "", "restrict to a single workspace_id (optional, default = all workspaces)")
@@ -77,17 +87,19 @@ func main() {
 
 	db, err := sql.Open("postgres", buildDSN())
 	if err != nil {
-		log.Fatalf("connect: %v", err)
+		return fmt.Errorf("connect: %w", err)
+	}
+	db.SetMaxOpenConns(5)
+	err = db.Ping()
+	if err != nil {
+		db.Close()
+		return fmt.Errorf("ping: %w", err)
 	}
 	defer db.Close()
-	db.SetMaxOpenConns(5)
-	if err := db.Ping(); err != nil {
-		log.Fatalf("ping: %v", err)
-	}
 
 	totalBefore, err := countMemories(db)
 	if err != nil {
-		log.Fatalf("count memories before: %v", err)
+		return fmt.Errorf("count memories before: %w", err)
 	}
 
 	// Everything below runs inside ONE transaction with SELECT ... FOR UPDATE
@@ -97,7 +109,7 @@ func main() {
 	// stale-snapshot races, not write-write races, are the real risk here).
 	tx, err := db.Begin()
 	if err != nil {
-		log.Fatalf("begin tx: %v", err)
+		return fmt.Errorf("begin tx: %w", err)
 	}
 	committed := false
 	defer func() {
@@ -108,12 +120,12 @@ func main() {
 
 	groups, err := loadDuplicateGroups(tx, *workspaceID)
 	if err != nil {
-		log.Fatalf("load duplicate groups: %v", err)
+		return fmt.Errorf("load duplicate groups: %w", err)
 	}
 
 	nullCandidates, err := loadProjectIDNullCandidates(tx, *workspaceID)
 	if err != nil {
-		log.Fatalf("load project_id null candidates: %v", err)
+		return fmt.Errorf("load project_id null candidates: %w", err)
 	}
 	// Rows that are about to become losers will flip to status='superseded'
 	// in this same run, so they no longer satisfy status='active' — exclude
@@ -135,32 +147,35 @@ func main() {
 
 	if *dryRun {
 		fmt.Println("\n[dry-run] no rows written (transaction rolled back). Re-run with -dry-run=false to apply.")
-		return
+		return nil
 	}
 
 	fmt.Println("\n=== APPLYING ===")
-	if err := applyCollapse(tx, groups); err != nil {
-		log.Fatalf("apply collapse: %v", err)
+	err = applyCollapse(tx, groups)
+	if err != nil {
+		return fmt.Errorf("apply collapse: %w", err)
 	}
-	if err := applyProjectIDNull(tx, survivingNullCandidates); err != nil {
-		log.Fatalf("apply project_id null: %v", err)
+	err = applyProjectIDNull(tx, survivingNullCandidates)
+	if err != nil {
+		return fmt.Errorf("apply project_id null: %w", err)
 	}
-	if err := tx.Commit(); err != nil {
-		log.Fatalf("commit: %v", err)
+	err = tx.Commit()
+	if err != nil {
+		return fmt.Errorf("commit: %w", err)
 	}
 	committed = true
 
 	totalAfter, err := countMemories(db)
 	if err != nil {
-		log.Fatalf("count memories after: %v", err)
+		return fmt.Errorf("count memories after: %w", err)
 	}
 	dupLeft, err := countActiveDuplicates(db)
 	if err != nil {
-		log.Fatalf("verify AC3 (duplicate groups): %v", err)
+		return fmt.Errorf("verify AC3 (duplicate groups): %w", err)
 	}
 	nullLeft, err := countActiveWorkspaceWithProjectID(db)
 	if err != nil {
-		log.Fatalf("verify AC4 (project_id nulled): %v", err)
+		return fmt.Errorf("verify AC4 (project_id nulled): %w", err)
 	}
 
 	fmt.Println("\n=== VERIFICATION ===")
@@ -169,11 +184,12 @@ func main() {
 	fmt.Printf("AC4 remaining active scope=workspace rows with project_id set: %d (want 0)\n", nullLeft)
 
 	if totalBefore != totalAfter {
-		log.Fatalf("FATAL: total row count changed even though no DELETE was issued — investigate before trusting this run")
+		return fmt.Errorf("FATAL: total row count changed even though no DELETE was issued — investigate before trusting this run")
 	}
 	if *workspaceID == "" && (dupLeft != 0 || nullLeft != 0) {
-		log.Fatalf("FATAL: AC3/AC4 not satisfied after an unfiltered run — investigate before closing the task")
+		return fmt.Errorf("FATAL: AC3/AC4 not satisfied after an unfiltered run — investigate before closing the task")
 	}
+	return nil
 }
 
 func buildDSN() string {
