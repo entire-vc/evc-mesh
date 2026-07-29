@@ -365,8 +365,11 @@ func (h *VCSLinkHandler) GitHubWebhook(c echo.Context) error {
 			service.TaskRefSource{Name: "branch", Text: strings.TrimPrefix(payload.Ref, "refs/heads/")},
 		)
 		if taskID == uuid.Nil {
+			// firstLine is bounded only by the next newline, so a long
+			// single-line commit message would land in the journal whole.
 			c.Logger().Infof("github webhook: push %s no_task_ref: commit=%s msg=%q ref=%q",
-				payload.Repository.FullName, shortCommitSHA(commit.ID), firstLine(commit.Message), payload.Ref)
+				payload.Repository.FullName, shortCommitSHA(commit.ID),
+				service.TruncateForLog(commit.Message, 160), payload.Ref)
 			return c.JSON(http.StatusOK, map[string]string{"status": "no_task_ref"})
 		}
 		c.Logger().Infof("github webhook: push %s resolved task=%s via=%s",

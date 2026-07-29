@@ -76,8 +76,14 @@ var (
 	// rejects a match inside a longer token and inside an HTML entity (&#8212;).
 	reHashShort = regexp.MustCompile(`(?i)(?:^|[^0-9a-z_/&])#([0-9a-f]{8,12})\b`)
 
-	// Refs 82377a26 — same short id, sigil omitted.
-	reKeywordShort = regexp.MustCompile(`(?i)\b(?:` + refKeywords + `)\b[\s:=]{0,3}#?([0-9a-f]{6,12})\b`)
+	// Refs #82377a26 — a keyword AND the sigil. The sigil is not redundant here:
+	// dropping it makes "Fixes a1b2c3d4" a reference, which is the kernel's
+	// "Fixes: <sha>" trailer naming a commit, and makes "my task abcdef123456"
+	// one too. Both are ordinary English/VCS prose with nothing to do with Mesh,
+	// and either would attach the PR to whatever task sits under that hex
+	// prefix. What a keyword buys is not a looser shape but a looser alphabet:
+	// with it, an all-digit short id is allowed (see isShortID).
+	reKeywordShort = regexp.MustCompile(`(?i)\b(?:` + refKeywords + `)\b[\s:=]{0,3}#([0-9a-f]{6,12})\b`)
 )
 
 // branchDelims splits a branch name into segments. Our convention is
@@ -203,6 +209,11 @@ func isShortID(tok string, requireLetter bool) bool {
 	}
 	return letter || !requireLetter
 }
+
+// TruncateForLog shortens s for a log line, collapsing newlines so one PR body
+// or commit message cannot become forty lines of journal. Exported because the
+// handler logs the same kind of untrusted text on the push path.
+func TruncateForLog(s string, n int) string { return truncate(s, n) }
 
 // truncate shortens s for a log line, collapsing newlines so one PR body cannot
 // become forty lines of journal.

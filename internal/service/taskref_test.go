@@ -1,6 +1,7 @@
 package service
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -69,10 +70,10 @@ func TestExtractTaskRefs_RecognisedSpellings(t *testing.T) {
 			wantShort: testShort,
 		},
 		{
-			name:      "keyword then short id without the sigil",
-			text:      "Fixes " + testShort,
+			name:      "keyword + sigil admits an all-digit short id",
+			text:      "Refs #12345678",
 			wantKind:  RefKindShortID,
-			wantShort: testShort,
+			wantShort: "12345678",
 		},
 		{
 			name:      "12-hex short id",
@@ -121,6 +122,14 @@ func TestExtractTaskRefs_RejectsNonReferences(t *testing.T) {
 		{"short id inside a url path that is not /t/", "https://github.com/entire-vc/evc-mesh/commit/82377a26"},
 		{"empty", ""},
 		{"prose only", "Bump the pinned toolchain and regenerate mocks."},
+
+		// Both found by the independent verify pass on PR #431, before this
+		// shipped anywhere. A keyword alone used to be enough; it is not, because
+		// two of the keywords are ordinary prose in unrelated contexts.
+		{"kernel-style Fixes trailer names a commit, not a task", "Fixes a1b2c3d4 (\"gate: hold money PRs\")"},
+		{"Fixes with a colon, as the trailer is usually written", "Fixes: a1b2c3d4"},
+		{"'task' used as an ordinary English word", "My task abcdef123456 is to refactor this."},
+		{"'closed' as prose next to an id", "We closed abcdef12 last week."},
 	}
 
 	for _, tc := range tests {
@@ -200,4 +209,29 @@ func TestTruncate(t *testing.T) {
 	assert.Equal(t, "short", truncate("short", 20))
 	assert.Equal(t, "a b c", truncate("a\nb\n\nc", 20), "newlines collapse so a body cannot flood the log")
 	assert.Equal(t, "abcde…", truncate("abcdefghij", 5))
+}
+
+// The keyword list contains ordinary English ("task", "closed") and an
+// ordinary VCS convention ("Fixes: <sha>"). Those words may only widen the
+// ALPHABET a reference is allowed to use, never the SHAPE it must have — the
+// '#' is what separates "this is a Mesh id" from "this is prose".
+func TestExtractTaskRefs_KeywordWidensAlphabetNotShape(t *testing.T) {
+	// Same keyword, same token, differing only by the sigil.
+	assert.Empty(t, ExtractTaskRefs(body("Fixes 12345678")),
+		"a keyword without the sigil must not make a bare token a reference")
+
+	refs := ExtractTaskRefs(body("Fixes #12345678"))
+	require.Len(t, refs, 1, "the sigil is what makes it a reference")
+	assert.Equal(t, "12345678", refs[0].Short)
+
+	// And without the keyword the all-digit token is refused again, because
+	// "#12345678" alone is indistinguishable from an issue number.
+	assert.Empty(t, ExtractTaskRefs(body("see #12345678 upstream")))
+}
+
+func TestTruncateForLog_IsBoundedForUntrustedText(t *testing.T) {
+	long := strings.Repeat("a", 500)
+	got := TruncateForLog(long, 160)
+	assert.Equal(t, 160+len("…"), len(got), "a long commit message must not reach the journal whole")
+	assert.Equal(t, "a b", TruncateForLog("a\nb", 80))
 }
