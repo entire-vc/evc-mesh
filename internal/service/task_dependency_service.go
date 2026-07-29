@@ -55,6 +55,19 @@ func (s *taskDependencyService) Create(ctx context.Context, dep *domain.TaskDepe
 		return apierror.NotFound("Task")
 	}
 
+	// Both ends of the edge have to be in the same project.
+	//
+	// depends_on_task_id arrives in the request body, where no route parameter
+	// names it and the workspace guard therefore cannot see it. Until this check
+	// existed, "both tasks exist" was the whole of the validation: a member of any
+	// workspace could point one of their own tasks at a stranger's task id and get
+	// 201, which both wrote an edge across the tenant boundary and — by answering
+	// 404 for an id that does not exist and 201 for one that does — turned the
+	// endpoint into an oracle for enumerating other tenants' task ids.
+	if depTask.ProjectID != task.ProjectID {
+		return apierror.BadRequest("depends_on_task_id must be a task in the same project")
+	}
+
 	// Check for duplicate.
 	exists, err := s.depRepo.Exists(ctx, dep.TaskID, dep.DependsOnTaskID)
 	if err != nil {

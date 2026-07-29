@@ -85,14 +85,45 @@ func (h *DependencyHandler) Create(c echo.Context) error {
 }
 
 // Delete handles DELETE /tasks/:task_id/dependencies/:dep_id
+//
+// The edge has to hang off the task in the path. It did not have to before: only
+// :dep_id was read, and the service deleted by id alone, so a member of any
+// workspace could send one of their own task ids together with a stranger's
+// :dep_id and cut an edge out of another tenant's dependency graph — 204, row
+// gone, and the blocked task silently became startable.
+//
+// The guard refuses this request before it arrives now
+// (middleware.workspaceParamResolvers); this is the same check written where the
+// delete happens.
 func (h *DependencyHandler) Delete(c echo.Context) error {
+	taskID, err := resolveTaskID(c.Request().Context(), c.Param("task_id"), h.taskService)
+	if err != nil {
+		return handleError(c, err)
+	}
+
 	depIDStr := c.Param("dep_id")
 	depID, err := uuid.Parse(depIDStr)
 	if err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid dependency_id"))
 	}
 
-	if err := h.depService.Delete(c.Request().Context(), depID); err != nil {
+	ctx := c.Request().Context()
+	deps, err := h.depService.ListByTask(ctx, taskID)
+	if err != nil {
+		return handleError(c, err)
+	}
+	belongs := false
+	for i := range deps {
+		if deps[i].ID == depID {
+			belongs = true
+			break
+		}
+	}
+	if !belongs {
+		return c.JSON(http.StatusNotFound, apierror.NotFound("TaskDependency"))
+	}
+
+	if err := h.depService.Delete(ctx, depID); err != nil {
 		return handleError(c, err)
 	}
 
