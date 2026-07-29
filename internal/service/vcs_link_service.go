@@ -197,10 +197,39 @@ func (s *vcsLinkService) HandleGitHubPullRequestEvent(ctx context.Context, ev Gi
 		{Name: "body", Text: ev.PRBody},
 		{Name: "branch", Text: ev.PRBranch},
 	}
-	taskID, matched := s.ResolveTaskRef(ctx, sources...)
+	taskID, matched, outcome := s.resolveTaskRef(ctx, sources...)
 	if taskID != uuid.Nil {
 		log.Printf("[vcs-webhook] pr=%s#%d resolved task=%s via=%s src=%s raw=%q",
 			ev.Repository, ev.PRNumber, taskID, matched.Kind, matched.Source, truncate(matched.Raw, 60))
+		// A stored link naming a DIFFERENT task is the fingerprint of an
+		// earlier mislink: the payload is legible now, so whatever is on file
+		// was written when it was not. Upsert keys on task_id, so the old row
+		// survives untouched beside the new one and nothing else would ever
+		// mention it. Say so — the previous version of this bug was invisible
+		// precisely because the wrong row was silent.
+		if stale, err := s.repo.ListByExternalID(ctx, domain.VCSProviderGitHub, domain.VCSLinkTypePR, strconv.Itoa(ev.PRNumber)); err == nil {
+			for _, l := range stale {
+				if l.TaskID != taskID {
+					log.Printf("[vcs-webhook] pr=%s#%d stored link points at task=%s but payload names task=%s; leaving the stale row for review (link_id=%s)",
+						ev.Repository, ev.PRNumber, l.TaskID, taskID, l.ID)
+				}
+			}
+		}
+	}
+	if taskID == uuid.Nil && outcome == refAmbiguous {
+		// Do NOT fall back to the stored link here. The fallback below exists
+		// for payloads that name nothing — a PR linked by hand once, whose
+		// later deliveries should keep updating that link. An AMBIGUOUS payload
+		// is the opposite situation: the fresh read disagreed with itself, and
+		// reusing history would make every redelivery re-confirm whatever was
+		// stored first. That is not hypothetical — PR #433 attached itself to
+		// the task its body quoted as an example, and because each subsequent
+		// delivery took this fallback, the refusal added one commit earlier
+		// could never undo it. A link that can only be corrected by hand is a
+		// link that stays wrong.
+		log.Printf("[vcs-webhook] pr=%s#%d ambiguous_task_ref: refusing to reuse any stored link for this PR",
+			ev.Repository, ev.PRNumber)
+		return PRHandleResult{Reason: "ambiguous_task_ref"}, nil
 	}
 	if taskID == uuid.Nil {
 		links, err := s.repo.ListByExternalID(ctx, domain.VCSProviderGitHub, domain.VCSLinkTypePR, strconv.Itoa(ev.PRNumber))
@@ -406,6 +435,27 @@ const maxRefCandidates = 12
 //
 // Returns uuid.Nil when nothing resolves or the payload is ambiguous.
 func (s *vcsLinkService) ResolveTaskRef(ctx context.Context, sources ...TaskRefSource) (uuid.UUID, TaskRef) {
+	id, ref, _ := s.resolveTaskRef(ctx, sources...)
+	return id, ref
+}
+
+// refOutcome says WHY ResolveTaskRef came back empty. Callers that fall back to
+// stored state need the distinction: "nothing here named a task" invites a
+// fallback, whereas "something did and we refused to choose between them" is an
+// active disagreement, and treating the two alike lets a wrong link outlive the
+// refusal that was supposed to prevent it.
+type refOutcome int
+
+const (
+	// refNone — no candidate in the payload named an existing task.
+	refNone refOutcome = iota
+	// refResolved — exactly one task was named (or the title broke the tie).
+	refResolved
+	// refAmbiguous — several distinct tasks were named and none was decisive.
+	refAmbiguous
+)
+
+func (s *vcsLinkService) resolveTaskRef(ctx context.Context, sources ...TaskRefSource) (uuid.UUID, TaskRef, refOutcome) {
 	type hit struct {
 		id  uuid.UUID
 		ref TaskRef
@@ -433,9 +483,9 @@ func (s *vcsLinkService) ResolveTaskRef(ctx context.Context, sources ...TaskRefS
 
 	switch len(hits) {
 	case 0:
-		return uuid.Nil, TaskRef{}
+		return uuid.Nil, TaskRef{}, refNone
 	case 1:
-		return hits[0].id, hits[0].ref
+		return hits[0].id, hits[0].ref, refResolved
 	}
 
 	// Ambiguous. A title is short and deliberate, so a single reference there
@@ -447,7 +497,7 @@ func (s *vcsLinkService) ResolveTaskRef(ctx context.Context, sources ...TaskRefS
 		}
 	}
 	if len(fromTitle) == 1 {
-		return fromTitle[0].id, fromTitle[0].ref
+		return fromTitle[0].id, fromTitle[0].ref, refResolved
 	}
 
 	ids := make([]string, 0, len(hits))
@@ -456,7 +506,7 @@ func (s *vcsLinkService) ResolveTaskRef(ctx context.Context, sources ...TaskRefS
 	}
 	log.Printf("[vcs-webhook] ambiguous payload names %d distinct tasks, linking none: %s",
 		len(hits), strings.Join(ids, " "))
-	return uuid.Nil, TaskRef{}
+	return uuid.Nil, TaskRef{}, refAmbiguous
 }
 
 // lookupRef turns one candidate into a task id, reporting whether it named a

@@ -305,7 +305,11 @@ func TestHandlePR_BodyNamingSeveralTasks_LinksNone(t *testing.T) {
 
 	res, err := h.svc.HandleGitHubPullRequestEvent(context.Background(), ev)
 	require.NoError(t, err)
-	assert.Equal(t, "no_task_ref", res.Reason,
+	// "ambiguous_task_ref", not "no_task_ref": the two are now distinct on
+	// purpose. Something here DID name tasks, and that is what forbids reusing
+	// a stored link for this PR — see
+	// TestHandlePR_AmbiguousPayload_DoesNotReuseStaleLink.
+	assert.Equal(t, "ambiguous_task_ref", res.Reason,
 		"a payload naming two real tasks must link neither")
 	assert.Equal(t, before, h.linkCount())
 	assert.Empty(t, h.linksFor(documented.ID), "the documented example must not be linked")
@@ -383,4 +387,74 @@ func TestHandlePR_UnresolvableIDDoesNotCreateAmbiguity(t *testing.T) {
 	res, err := h.svc.HandleGitHubPullRequestEvent(context.Background(), ev)
 	require.NoError(t, err)
 	assert.Equal(t, task.ID, res.TaskID)
+}
+
+// A PR that was mislinked once must not keep re-confirming that link.
+//
+// This is the bug the ambiguity refusal did NOT close, found by independent
+// verification of 695d7ddf against the already-deployed code. ResolveTaskRef
+// correctly declined to choose — and the handler then fell through to
+// "reuse whatever is already stored for this PR number", which is the wrong
+// task. Upsert keys on (task_id, provider, link_type, external_id), so every
+// redelivery rewrote the same wrong row: the link could never self-correct,
+// and no log line said anything was amiss.
+func TestHandlePR_AmbiguousPayload_DoesNotReuseStaleLink(t *testing.T) {
+	h := newHarness(t)
+	documented := h.makeTaskWithID(t, fixedTaskID(40), domain.StatusCategoryInProgress)
+	subject := h.makeTaskWithID(t, fixedTaskID(41), domain.StatusCategoryInProgress)
+
+	// The wrong row, exactly as it exists in production for PR #433.
+	stale := &domain.VCSLink{
+		ID:         uuid.New(),
+		TaskID:     documented.ID,
+		Provider:   domain.VCSProviderGitHub,
+		LinkType:   domain.VCSLinkTypePR,
+		ExternalID: "433",
+		URL:        "https://github.com/entire-vc/evc-mesh/pull/433",
+		Status:     domain.VCSLinkStatusOpen,
+	}
+	require.NoError(t, h.repo.Upsert(context.Background(), stale))
+	before := h.linkCount()
+
+	// The same ambiguous body arrives again — a "synchronize" or "closed"
+	// redelivery, which GitHub sends for the life of the pull request.
+	ev := openEvent(433,
+		"fix(vcs-links): a keyword may widen the alphabet, not the shape",
+		"| `Refs #"+documented.ID.String()[:8]+"` | ✅ |\n\nRefs #"+subject.ID.String()[:8],
+		"garfield/taskref-keyword-sigil")
+
+	res, err := h.svc.HandleGitHubPullRequestEvent(context.Background(), ev)
+	require.NoError(t, err)
+	assert.Equal(t, "ambiguous_task_ref", res.Reason,
+		"an ambiguous payload must report the refusal, not silently adopt history")
+	assert.Equal(t, uuid.Nil, res.TaskID,
+		"the stale link must not be resurrected as this delivery's answer")
+	assert.Equal(t, before, h.linkCount(), "no row may be added on a refusal")
+}
+
+// The fallback itself is legitimate and must survive: a PR linked by hand names
+// no task in its own text, and its later deliveries are the only thing that
+// keeps the link's status current. Removing the fallback outright would break
+// exactly the manual path add_vcs_link exists for.
+func TestHandlePR_NoRefInPayload_StillUsesStoredLink(t *testing.T) {
+	h := newHarness(t)
+	task := h.makeTaskWithID(t, fixedTaskID(42), domain.StatusCategoryInProgress)
+
+	linked := &domain.VCSLink{
+		ID:         uuid.New(),
+		TaskID:     task.ID,
+		Provider:   domain.VCSProviderGitHub,
+		LinkType:   domain.VCSLinkTypePR,
+		ExternalID: "434",
+		URL:        "https://github.com/entire-vc/evc-mesh/pull/434",
+		Status:     domain.VCSLinkStatusOpen,
+	}
+	require.NoError(t, h.repo.Upsert(context.Background(), linked))
+
+	ev := openEvent(434, "chore: bump deps", "No task reference anywhere in here.", "chore/deps")
+
+	res, err := h.svc.HandleGitHubPullRequestEvent(context.Background(), ev)
+	require.NoError(t, err)
+	assert.Equal(t, task.ID, res.TaskID,
+		"a payload naming nothing must still ride the link someone created by hand")
 }
