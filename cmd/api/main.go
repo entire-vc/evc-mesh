@@ -925,7 +925,12 @@ func main() {
 	api.GET("/notifications", notificationHandler.List)
 	api.POST("/notifications/mark-read", notificationHandler.MarkRead)
 	api.GET("/notifications/preferences", notificationHandler.GetPreferences)
-	api.PUT("/notifications/preferences", notificationHandler.UpdatePreferences)
+	// bodyWS: the workspace being subscribed to is named in the request body, so
+	// RequireWorkspaceMemberScoped sees a path with nothing in it to resolve and
+	// waves it through. Without this guard any authenticated caller could
+	// subscribe to any workspace and be delivered its comment bodies.
+	api.PUT("/notifications/preferences", notificationHandler.UpdatePreferences, bodyWS)
+	api.DELETE("/notifications/preferences/:pref_id", notificationHandler.DeletePreference)
 
 	// Web Push subscription routes.
 	// NOTE: /me/push-subscriptions/vapid-key MUST be before /me/push-subscriptions to avoid routing conflict.

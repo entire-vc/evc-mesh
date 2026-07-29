@@ -277,9 +277,18 @@ func resolveProjectWorkspace(ctx context.Context, _ *sqlx.DB, projectRepo reposi
 // workspace and answers 404 rather than 403 so the id is not confirmed to exist.
 // Its parameter is spelled :id, which several unrelated routes would also match if
 // it were resolved centrally.
+//
+// /notifications/preferences/:pref_id cancels a subscription, and the row it names
+// belongs to a person rather than to a workspace: the DELETE carries the caller's
+// own user_id in its WHERE clause, so somebody else's preference id removes
+// nothing and answers 404. That is a stricter test than workspace membership, and
+// it has to be — the whole point of the route is that a subscriber who was never
+// in the workspace can still get themselves out of it, which a membership guard
+// would forbid.
 var workspaceScopeHandlerCheckedRoutes = map[string]bool{
-	"/api/v1/memories/:id":         true,
-	"/api/v1/memories/:id/related": true,
+	"/api/v1/memories/:id":                       true,
+	"/api/v1/memories/:id/related":               true,
+	"/api/v1/notifications/preferences/:pref_id": true,
 }
 
 // workspaceScopeExemptRoutes lists routes that carry one of WorkspaceScopedParams

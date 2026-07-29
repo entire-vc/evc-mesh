@@ -220,9 +220,10 @@ func TestBodyTenantFieldsAreDeclared(t *testing.T) {
 // that arrives in a request body. The key is "<file>:<struct>.<json field>".
 var declaredBodyTenantFields = map[string]string{
 	// Guarded by middleware.RequireBodyWorkspace on the route.
-	"rule_handler.go:evaluateRuleRequest.workspace_id": "guarded: bodyWS on POST /rules/evaluate",
-	"rule_handler.go:evaluateRuleRequest.project_id":   "guarded: bodyWS resolves it and requires it to agree with workspace_id",
-	"rule_handler.go:evaluateRuleRequest.task_id":      "benign: only narrows an evaluation already scoped to the guarded workspace",
+	"rule_handler.go:evaluateRuleRequest.workspace_id":              "guarded: bodyWS on POST /rules/evaluate",
+	"notification_handler.go:updatePreferencesRequest.workspace_id": "guarded: bodyWS on PUT /notifications/preferences",
+	"rule_handler.go:evaluateRuleRequest.project_id":                "guarded: bodyWS resolves it and requires it to agree with workspace_id",
+	"rule_handler.go:evaluateRuleRequest.task_id":                   "benign: only narrows an evaluation already scoped to the guarded workspace",
 
 	// Checked in the handler, or in the service it calls.
 	"memory_handler.go:rememberRequest.workspace_id":                   "checked: MemoryHandler.requireWorkspaceID -> workspaceAllowed",
@@ -236,12 +237,11 @@ var declaredBodyTenantFields = map[string]string{
 	// Scoped by something other than the id in the body: the row these end up on is
 	// already pinned to a tenant the guard checked, and the id is stored as an
 	// opaque reference that is never resolved across the boundary.
-	"notification_handler.go:updatePreferencesRequest.workspace_id": "benign: writes a preference row keyed on (workspace_id, the caller's own user_id)",
-	"event_handler.go:createEventRequest.task_id":                   "benign: a reference on an event already scoped to the guarded :proj_id",
-	"agent_handler.go:CreateAgentActivity.task_id":                  "benign: a reference on a log row whose workspace_id is the guarded :agent_id's own",
-	"agent_handler.go:reportSessionRequest.task_id":                 "benign: a reference on the calling agent's own session",
-	"rule_handler.go:createRuleRequest.agent_id":                    "benign: narrows who a rule applies to, inside the guarded :ws_id/:proj_id it is created in",
-	"project_integration_handler.go:teamRelayResponse.project_id":   "benign: a response struct, never bound from a request",
+	"event_handler.go:createEventRequest.task_id":                 "benign: a reference on an event already scoped to the guarded :proj_id",
+	"agent_handler.go:CreateAgentActivity.task_id":                "benign: a reference on a log row whose workspace_id is the guarded :agent_id's own",
+	"agent_handler.go:reportSessionRequest.task_id":               "benign: a reference on the calling agent's own session",
+	"rule_handler.go:createRuleRequest.agent_id":                  "benign: narrows who a rule applies to, inside the guarded :ws_id/:proj_id it is created in",
+	"project_integration_handler.go:teamRelayResponse.project_id": "benign: a response struct, never bound from a request",
 }
 
 // bodyTenantFieldNames are the json field names that identify a tenant, or an
