@@ -82,6 +82,35 @@ curl -s https://mesh.example.com/api/v1/agents/me -H "X-Agent-Key: agk_…"
 
 That returns the agent's own record, or `401` if the key is wrong.
 
+### 1.1 Add the agent to each project it works in
+
+A valid key is not enough. Registering an agent places it in the **workspace**;
+membership of a **project** is separate and is never granted automatically. Until
+you add it, every tool call is correctly authenticated and still returns nothing
+useful:
+
+```
+list_projects  ->  {"items": [], "total_count": 0}
+create_task    ->  Forbidden: agent is not a member of this project
+```
+
+Web UI: open the project, **Members** -> **Add agent**. Over the API:
+
+```bash
+curl -X POST https://mesh.example.com/api/v1/projects/<project_id>/members/agents \
+  -H "Authorization: Bearer <your-jwt>" \
+  -H "Content-Type: application/json" \
+  -d '{"agent_id": "<agent_id>", "role": "member"}'
+```
+
+`role` is one of `admin`, `member`, `viewer`; `member` suits an agent that creates
+and updates tasks. **There is no `agent` role** — "agent" is an actor type,
+authenticated by API key, with its own fixed permission set. Passing
+`"role": "agent"` returns `400 role must be one of: admin, member, viewer`.
+
+This endpoint needs a **user** JWT with permission to manage members; an agent key
+cannot add itself.
+
 ---
 
 ## 2. Connect
@@ -302,6 +331,7 @@ Two caveats:
 | SSE connects, then nothing happens | Proxy buffering the stream | `proxy_buffering off` |
 | Client posts to `0.0.0.0` or to a 404 | Advertised endpoint does not match the client's route | Upgrade; set `MESH_MCP_PUBLIC_URL` if MCP sits under a path prefix |
 | `https://<host>/mcp/sse` returns HTML | Bundled nginx does not proxy MCP | Connect to port `8081`, or add the route (§4) |
+| `list_projects` returns `[]` and `create_task` says `agent is not a member of this project` | The key works; the agent is in the workspace but not on the project | Add it to each project it must work in (§1.1) |
 | Fewer tools than expected | Connected to the core profile | Use `/sse`, or unset `MESH_MCP_PROFILE` for stdio |
 | `Invalid transport "…"` | Typo in `MESH_MCP_TRANSPORT` | Only `stdio` and `sse` are valid |
 

@@ -97,7 +97,37 @@ the workspace slug.
 Creating one over the API instead, or connecting over SSE rather than stdio? See
 [Agent Onboarding](agent-onboarding.md).
 
-### 5.2 Configure MCP
+### 5.2 Add the Agent to Your Project
+
+**Do not skip this.** Registering an agent puts it in the *workspace*; it does not
+give it access to any *project*. Project membership is separate and is not granted
+automatically, so a freshly registered agent sees an empty board:
+
+```
+list_projects  ->  {"items": [], "total_count": 0}
+create_task    ->  Forbidden: agent is not a member of this project
+```
+
+That is the expected response for a non-member, not a broken key or a bad MCP
+config — the agent is authenticating fine and is simply not on the project yet.
+
+In the web UI: open the project, **Members** -> **Add agent**, pick the agent and a
+role. Or over the API:
+
+```bash
+curl -X POST http://localhost:8080/api/v1/projects/<project_id>/members/agents \
+  -H "Authorization: Bearer <your-jwt>" \
+  -H "Content-Type: application/json" \
+  -d '{"agent_id": "<agent_id>", "role": "member"}'
+```
+
+`role` must be one of `admin`, `member`, `viewer` — `member` is the usual choice
+for an agent that creates and updates tasks. There is no `agent` role: "agent" is
+an actor type (authenticated by API key), not a role you assign here.
+
+Repeat for each project the agent should work in.
+
+### 5.3 Configure MCP
 
 Add to your project's `.mcp.json`:
 
@@ -134,7 +164,7 @@ Or, if you built the binary:
 }
 ```
 
-### 5.3 Test the Connection
+### 5.4 Test the Connection
 
 Ask Claude Code to:
 - "List my projects" -- should return the project you created
