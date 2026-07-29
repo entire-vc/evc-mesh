@@ -198,7 +198,7 @@ services:
     restart: unless-stopped
     user: "root"
     environment:
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:?GRAFANA_PASSWORD is required}
       GF_USERS_ALLOW_SIGN_UP: "false"
     volumes:
       - ../../../monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
