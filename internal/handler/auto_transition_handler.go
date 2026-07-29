@@ -93,7 +93,7 @@ func (h *AutoTransitionHandler) Update(c echo.Context) error {
 	if err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid project_id"))
 	}
-	ruleID, err := uuid.Parse(c.Param("rule_id"))
+	ruleID, err := uuid.Parse(c.Param("auto_rule_id"))
 	if err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid rule_id"))
 	}
@@ -134,14 +134,37 @@ func (h *AutoTransitionHandler) Update(c echo.Context) error {
 }
 
 // Delete removes an auto-transition rule.
+//
+// The rule must belong to the project in the path. Until this check existed the
+// project id was parsed and thrown away, and the rule was deleted by its own id:
+// anyone who could manage rules in any project could delete a rule out of any
+// other project — in any other workspace — by naming their own project and
+// somebody else's rule id. Update has always scoped the lookup this way; Delete
+// now matches it, including the 404 for a rule that is not in this project, which
+// is the same answer as for one that does not exist.
 func (h *AutoTransitionHandler) Delete(c echo.Context) error {
-	_, err := uuid.Parse(c.Param("proj_id"))
+	projID, err := uuid.Parse(c.Param("proj_id"))
 	if err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid project_id"))
 	}
-	ruleID, err := uuid.Parse(c.Param("rule_id"))
+	ruleID, err := uuid.Parse(c.Param("auto_rule_id"))
 	if err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid rule_id"))
+	}
+	ctx := c.Request().Context()
+	existingRules, err := h.svc.ListRules(ctx, projID)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, apierror.InternalError(err.Error()))
+	}
+	found := false
+	for i := range existingRules {
+		if existingRules[i].ID == ruleID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return c.JSON(http.StatusNotFound, apierror.NotFound("AutoTransitionRule"))
 	}
 	if err := h.svc.DeleteRule(c.Request().Context(), ruleID); err != nil {
 		return c.JSON(http.StatusInternalServerError, apierror.InternalError(err.Error()))

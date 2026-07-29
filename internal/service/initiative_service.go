@@ -200,6 +200,15 @@ func (s *initiativeService) LinkProject(ctx context.Context, initiativeID, proje
 		return apierror.NotFound("Project")
 	}
 
+	// The project id arrives in the request body, where the middleware guard
+	// cannot see it — only the initiative in the path was checked. Without this,
+	// a caller could link another tenant's project into their own initiative and
+	// read its name back through GET /initiatives/:init_id/projects. Not found
+	// rather than forbidden, so the id is not confirmed to exist elsewhere.
+	if project.WorkspaceID != ini.WorkspaceID {
+		return apierror.NotFound("Project")
+	}
+
 	return s.initiativeRepo.LinkProject(ctx, initiativeID, projectID)
 }
 

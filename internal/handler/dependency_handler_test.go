@@ -209,6 +209,12 @@ func TestDependencyHandler_Delete_Success(t *testing.T) {
 	depID := uuid.New()
 	taskID := uuid.New()
 	mockSvc := &MockTaskDependencyService{
+		// Delete now scopes the dependency to the task in the path, so the
+		// dependency has to actually hang off that task.
+		ListByTaskFunc: func(ctx context.Context, tid uuid.UUID) ([]domain.TaskDependency, error) {
+			assert.Equal(t, taskID, tid)
+			return []domain.TaskDependency{{ID: depID, TaskID: taskID}}, nil
+		},
 		DeleteFunc: func(ctx context.Context, id uuid.UUID) error {
 			assert.Equal(t, depID, id)
 			return nil
@@ -227,6 +233,40 @@ func TestDependencyHandler_Delete_Success(t *testing.T) {
 	err := h.Delete(c)
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusNoContent, rec.Code)
+}
+
+// TestDependencyHandler_Delete_RefusesDependencyOfAnotherTask pins the parent-child
+// check. The handler used to delete by :dep_id alone and never read :task_id, so
+// naming any task together with somebody else's dependency id deleted that
+// dependency and answered 204.
+func TestDependencyHandler_Delete_RefusesDependencyOfAnotherTask(t *testing.T) {
+	otherDepID := uuid.New()
+	taskID := uuid.New()
+	deleted := false
+	mockSvc := &MockTaskDependencyService{
+		ListByTaskFunc: func(ctx context.Context, tid uuid.UUID) ([]domain.TaskDependency, error) {
+			// This task has a dependency, just not the one being asked for.
+			return []domain.TaskDependency{{ID: uuid.New(), TaskID: taskID}}, nil
+		},
+		DeleteFunc: func(ctx context.Context, id uuid.UUID) error {
+			deleted = true
+			return nil
+		},
+	}
+
+	h, e := setupDependencyTest(mockSvc)
+
+	req := httptest.NewRequest(http.MethodDelete, "/", http.NoBody)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/tasks/:task_id/dependencies/:dep_id")
+	c.SetParamNames("task_id", "dep_id")
+	c.SetParamValues(taskID.String(), otherDepID.String())
+
+	err := h.Delete(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+	assert.False(t, deleted, "the handler deleted a dependency that hangs off another task")
 }
 
 func TestDependencyHandler_Delete_InvalidDepID(t *testing.T) {

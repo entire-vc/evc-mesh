@@ -58,24 +58,44 @@ func TestEveryIdentifiedRouteIsWorkspaceScoped(t *testing.T) {
 		if workspaceScopeHandlerCheckedRoutes["/api/v1"+path] {
 			continue
 		}
-		covered := false
+		// EVERY id in the path must resolve a tenant, not just one of them.
+		// Stopping at the first match is what let the composite routes through:
+		// PATCH /projects/:proj_id/statuses/:status_id passed this test on
+		// :proj_id alone while :status_id was resolved by nobody and checked by
+		// nobody, and the handler then updated the status by its own id — across
+		// tenants. A route may only carry an unresolvable id if that id names no
+		// tenant-owned row at all (workspaceUnscopedParams, e.g. :user_id).
+		var unscoped []string
+		anyScoped := false
 		for _, p := range params {
-			if scoped[p] {
-				covered = true
-				break
+			switch {
+			case scoped[p]:
+				anyScoped = true
+			case workspaceUnscopedParams[p]:
+			default:
+				unscoped = append(unscoped, ":"+p)
 			}
 		}
-		if !covered {
-			unguarded = append(unguarded, fmt.Sprintf("%s (params: %s)", path, strings.Join(params, ", ")))
+		if !anyScoped {
+			unguarded = append(unguarded, fmt.Sprintf("%s (no scoped param; params: %s)",
+				path, strings.Join(params, ", ")))
+			continue
+		}
+		if len(unscoped) > 0 {
+			unguarded = append(unguarded, fmt.Sprintf("%s (unresolvable: %s)",
+				path, strings.Join(unscoped, ", ")))
 		}
 	}
 	sort.Strings(unguarded)
 
 	assert.Empty(t, unguarded,
 		"these routes name an object by an id that WorkspaceRLS cannot resolve a workspace from, "+
-			"so RequireWorkspaceMemberScoped never runs on them and any logged-in stranger reaches "+
-			"another tenant's data. Add a resolver to workspaceObjectResolvers, or — if the handler "+
-			"really does check the tenant itself — record the route and the reason in "+
+			"so nothing checks which tenant that object belongs to. A route with NO scoped param is "+
+			"never guarded at all; a route with an unresolvable id ALONGSIDE a scoped one is worse, "+
+			"because it looks guarded — the caller supplies a parent they own and a child that is "+
+			"somebody else's. Add a resolver to workspaceObjectResolvers; or, if the id names no "+
+			"tenant-owned row, add the parameter to workspaceUnscopedParams with the reason; or, if "+
+			"the handler really does check the tenant itself, record the route and the reason in "+
 			"workspaceScopeHandlerCheckedRoutes:\n  %s", strings.Join(unguarded, "\n  "))
 }
 

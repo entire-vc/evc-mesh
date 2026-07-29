@@ -85,11 +85,38 @@ func (h *DependencyHandler) Create(c echo.Context) error {
 }
 
 // Delete handles DELETE /tasks/:task_id/dependencies/:dep_id
+//
+// The dependency must hang off the task in the path. The task id used to be
+// unread and the edge deleted by its own id, so naming any task of your own
+// together with a dependency id from another tenant deleted that tenant's
+// dependency edge and answered 204.
 func (h *DependencyHandler) Delete(c echo.Context) error {
+	taskIDStr := c.Param("task_id")
+	taskID, err := uuid.Parse(taskIDStr)
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid task_id"))
+	}
+
 	depIDStr := c.Param("dep_id")
 	depID, err := uuid.Parse(depIDStr)
 	if err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid dependency_id"))
+	}
+
+	deps, err := h.depService.ListByTask(c.Request().Context(), taskID)
+	if err != nil {
+		return handleError(c, err)
+	}
+	onTask := false
+	for i := range deps {
+		if deps[i].ID == depID {
+			onTask = true
+			break
+		}
+	}
+	if !onTask {
+		// The same answer as for a dependency that does not exist.
+		return c.JSON(http.StatusNotFound, apierror.NotFound("TaskDependency"))
 	}
 
 	if err := h.depService.Delete(c.Request().Context(), depID); err != nil {

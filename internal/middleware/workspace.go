@@ -34,30 +34,16 @@ const (
 )
 
 // WorkspaceScopedParams is the set of route parameters WorkspaceRLS can resolve a
-// tenant from. It is the contract between the resolver below and
+// tenant from. It is the contract between the resolvers below and
 // RequireWorkspaceMemberScoped: a route carrying any of them names another
 // tenant's data, so the guard must run on it.
 //
-// TestWorkspaceScopedParams_CoversEveryResolver reads this file and fails if a
-// resolver is added to WorkspaceRLS without its parameter being listed here —
-// otherwise a new resolver would silently widen the reach of the API without
-// widening the guard, which is the exact shape of the bug this file exists to fix.
-//
-// The tail of the list is not written out by hand: it is derived from
-// workspaceObjectResolvers, so a lookup added there cannot be left unguarded.
-var WorkspaceScopedParams = append([]string{
-	"ws_id",
-	"proj_id",
-	"project_id",
-	"task_id",
-	"artifact_id",
-	"agent_id",
-	"field_id",
-	"init_id",
-	// Resolved from a task id prefix rather than a full uuid, so it has its own
-	// step in WorkspaceRLS rather than a row in workspaceObjectResolvers.
-	"short",
-}, workspaceObjectResolverParams()...)
+// It is derived from workspaceParamResolvers rather than written out by hand, so
+// a resolver cannot be added without the guard widening with it — that divergence
+// is the exact shape of the bug this file exists to fix.
+// TestWorkspaceScopedParams_CoversEveryResolver additionally reads this file and
+// fails if WorkspaceRLS reads a route parameter that no resolver declares.
+var WorkspaceScopedParams = workspaceResolverParams()
 
 // workspaceObjectResolvers maps a route parameter naming a tenant-owned object to
 // the query that says which workspace that object lives in.
@@ -95,6 +81,9 @@ var workspaceObjectResolvers = []struct{ param, query string }{
 	               FROM task_templates tt
 	               JOIN projects p ON tt.project_id = p.id
 	              WHERE tt.id = $1`},
+	// :rule_id here is a governance rule. The project-level auto-transition rules
+	// live in a different table and are spelled :auto_rule_id for that reason —
+	// see the note on that entry below.
 	{"rule_id", `SELECT workspace_id FROM rules WHERE id = $1`},
 	{"link_id", `SELECT p.workspace_id
 	               FROM vcs_links v
@@ -102,14 +91,238 @@ var workspaceObjectResolvers = []struct{ param, query string }{
 	               JOIN projects p ON t.project_id = p.id
 	              WHERE v.id = $1`},
 	{"recurring_id", `SELECT workspace_id FROM recurring_schedules WHERE id = $1`},
+
+	// The child objects of a composite route. Each of these hangs off a parent
+	// that is already resolvable (:proj_id, :task_id, :ws_id), which is precisely
+	// why they were missed: the parent resolved first, satisfied the guard, and
+	// the child id was never looked at. See resolveWorkspaceFromParams.
+	{"status_id", `SELECT p.workspace_id
+	                 FROM task_statuses s
+	                 JOIN projects p ON s.project_id = p.id
+	                WHERE s.id = $1`},
+	{"dep_id", `SELECT p.workspace_id
+	              FROM task_dependencies d
+	              JOIN tasks t ON d.task_id = t.id AND t.deleted_at IS NULL
+	              JOIN projects p ON t.project_id = p.id
+	             WHERE d.id = $1`},
+	// :auto_rule_id, not :rule_id. The parameter had to be renamed in the route
+	// pattern (the public URL is unchanged) because one spelling cannot name two
+	// tables: /rules/:rule_id is a row in `rules`, while
+	// /projects/:proj_id/auto-transition-rules/:rule_id is a row in
+	// `auto_transition_rules`. Resolving both through one entry would look up an
+	// auto-transition rule's id in `rules`, find nothing, and refuse the request —
+	// blocking the legitimate owner as surely as the intruder, while a test that
+	// only asserts "the intruder gets 403" would still pass. The same rename was
+	// applied to /recurring/:id for the same reason.
+	{"auto_rule_id", `SELECT p.workspace_id
+	                    FROM auto_transition_rules a
+	                    JOIN projects p ON a.project_id = p.id
+	                   WHERE a.id = $1`},
+	{"invite_id", `SELECT workspace_id FROM user_invites WHERE id = $1`},
+	{"member_agent_id", `SELECT workspace_id FROM agents WHERE id = $1 AND deleted_at IS NULL`},
 }
 
-func workspaceObjectResolverParams() []string {
-	params := make([]string, 0, len(workspaceObjectResolvers))
+// workspaceParamResolver maps a route parameter to the workspace of the object it
+// names. It is the single place a parameter turns into a tenant, so that the set
+// of parameters the guard fires on cannot drift from the set the resolver reads.
+type workspaceParamResolver struct {
+	// params are the spellings this resolver answers to; the first one present in
+	// the request wins. Only :proj_id / :project_id has more than one — they are
+	// two names for the same thing, kept for backward compatibility.
+	params []string
+	// resolve returns the workspace the value names, or false if it names none.
+	// False is always the safe answer: the caller refuses rather than guesses.
+	resolve func(ctx context.Context, deps workspaceResolverDeps, raw string) (uuid.UUID, bool)
+}
+
+// workspaceResolverDeps carries what the resolvers need to reach the database.
+type workspaceResolverDeps struct {
+	db          *sqlx.DB
+	projectRepo repository.ProjectRepository
+}
+
+// sqlWorkspaceResolver builds a resolver for a parameter holding a uuid whose
+// workspace one query answers. The query takes the uuid as $1 and returns exactly
+// one workspace_id, or no rows if the object does not exist.
+func sqlWorkspaceResolver(query string) func(context.Context, workspaceResolverDeps, string) (uuid.UUID, bool) {
+	return func(ctx context.Context, deps workspaceResolverDeps, raw string) (uuid.UUID, bool) {
+		id, err := uuid.Parse(raw)
+		if err != nil || deps.db == nil {
+			return uuid.Nil, false
+		}
+		var wsID uuid.UUID
+		if err := deps.db.QueryRowContext(ctx, query, id).Scan(&wsID); err != nil {
+			return uuid.Nil, false
+		}
+		return wsID, true
+	}
+}
+
+// workspaceParamResolvers is every way a request can name a tenant through its
+// path, in one table. WorkspaceScopedParams is derived from it.
+var workspaceParamResolvers = buildWorkspaceParamResolvers()
+
+func buildWorkspaceParamResolvers() []workspaceParamResolver {
+	resolvers := []workspaceParamResolver{
+		// A workspace names itself. There is no lookup: an id that exists but is
+		// not the caller's is refused by the membership check, and one that does
+		// not exist is refused the same way, which is also the answer that does
+		// not confirm whether it exists.
+		{params: []string{"ws_id"}, resolve: func(_ context.Context, _ workspaceResolverDeps, raw string) (uuid.UUID, bool) {
+			id, err := uuid.Parse(raw)
+			if err != nil {
+				return uuid.Nil, false
+			}
+			return id, true
+		}},
+		{params: []string{"proj_id", "project_id"}, resolve: func(ctx context.Context, deps workspaceResolverDeps, raw string) (uuid.UUID, bool) {
+			projID, err := uuid.Parse(raw)
+			if err != nil || deps.projectRepo == nil {
+				return uuid.Nil, false
+			}
+			proj, err := deps.projectRepo.GetByID(ctx, projID)
+			if err != nil || proj == nil {
+				return uuid.Nil, false
+			}
+			return proj.WorkspaceID, true
+		}},
+		// :task_id is a full uuid or a 6-12 hex character prefix of one:
+		// resolveTaskID accepts both, so every /tasks/:task_id route does. The
+		// prefix form has to resolve here too, or the guard would refuse a member
+		// their own task whenever they addressed it the short way.
+		{params: []string{"task_id"}, resolve: func(ctx context.Context, deps workspaceResolverDeps, raw string) (uuid.UUID, bool) {
+			if _, err := uuid.Parse(raw); err != nil {
+				return resolveWorkspaceByTaskPrefix(ctx, deps.db, raw)
+			}
+			return sqlWorkspaceResolver(
+				`SELECT p.workspace_id
+				   FROM tasks t
+				   JOIN projects p ON t.project_id = p.id
+				  WHERE t.id = $1 AND t.deleted_at IS NULL`)(ctx, deps, raw)
+		}},
+		// GET /tasks/by-short-id/:short takes a 6-12 hex character prefix of a
+		// task uuid, matched with LIKE across every tenant's tasks. It carried no
+		// guard at all, which made it both a cross-tenant read and an enumeration
+		// oracle. An ambiguous prefix resolves to nothing on purpose: with two
+		// tenants' tasks behind one prefix there is no single workspace to check
+		// membership of, so the request is refused rather than guessed at.
+		{params: []string{"short"}, resolve: func(ctx context.Context, deps workspaceResolverDeps, raw string) (uuid.UUID, bool) {
+			return resolveWorkspaceByTaskPrefix(ctx, deps.db, raw)
+		}},
+		{params: []string{"artifact_id"}, resolve: sqlWorkspaceResolver(
+			`SELECT p.workspace_id
+			   FROM artifacts a
+			   JOIN tasks t ON a.task_id = t.id AND t.deleted_at IS NULL
+			   JOIN projects p ON t.project_id = p.id
+			  WHERE a.id = $1`)},
+		{params: []string{"agent_id"}, resolve: sqlWorkspaceResolver(
+			`SELECT workspace_id FROM agents WHERE id = $1 AND deleted_at IS NULL`)},
+		{params: []string{"field_id"}, resolve: sqlWorkspaceResolver(
+			`SELECT p.workspace_id
+			   FROM custom_field_definitions cf
+			   JOIN projects p ON cf.project_id = p.id
+			  WHERE cf.id = $1`)},
+		{params: []string{"init_id"}, resolve: sqlWorkspaceResolver(
+			`SELECT workspace_id FROM initiatives WHERE id = $1`)},
+	}
 	for _, r := range workspaceObjectResolvers {
-		params = append(params, r.param)
+		resolvers = append(resolvers, workspaceParamResolver{
+			params:  []string{r.param},
+			resolve: sqlWorkspaceResolver(r.query),
+		})
+	}
+	return resolvers
+}
+
+// workspaceResolverParams flattens every parameter spelling the resolvers read.
+func workspaceResolverParams() []string {
+	var params []string
+	for _, r := range workspaceParamResolvers {
+		params = append(params, r.params...)
 	}
 	return params
+}
+
+// workspaceUnscopedParams names route parameters that do not identify a
+// tenant-owned row, so requiring a workspace to be resolvable from one would be
+// meaningless rather than safe.
+//
+// :user_id is a global user account id. The routes carrying it —
+// /workspaces/:ws_id/members/:user_id, /projects/:proj_id/members/:user_id — name
+// their tenant with the parameter in front of it, and the row they act on is the
+// membership itself, which is keyed on both: workspaceMemberService.RemoveMember
+// looks up GetByWorkspaceAndUser and answers 404 when there is no such row, so a
+// user id belonging to another tenant selects nothing here.
+//
+// TestEveryIdentifiedRouteIsWorkspaceScoped still requires such a route to carry
+// at least one parameter that DOES resolve a tenant — this list excuses a
+// parameter from resolving, never a route from being scoped.
+var workspaceUnscopedParams = map[string]bool{
+	"user_id": true,
+}
+
+// resolveWorkspaceFromParams resolves EVERY workspace-scoping parameter the path
+// carries and reports the one workspace they all name.
+//
+// It returns named (the path carried at least one such parameter) and agreed
+// (every one of them resolved, and to the same workspace). The caller treats
+// named && agreed as "the request named a tenant"; anything else falls through to
+// the credentials-derived workspace, which RequireWorkspaceMemberScoped then
+// refuses on a scoped route.
+//
+// Resolving all of them rather than the first that answers is the whole fix.
+// Every one of these routes names a parent and a child:
+//
+//	PATCH  /projects/:proj_id/statuses/:status_id
+//	DELETE /projects/:proj_id/auto-transition-rules/:auto_rule_id
+//	DELETE /tasks/:task_id/dependencies/:dep_id
+//	DELETE /workspaces/:ws_id/invites/:invite_id
+//	GET    /tasks/:task_id/artifacts/:artifact_id/download
+//	DELETE /initiatives/:init_id/projects/:proj_id
+//
+// The old resolver stopped at the first parameter that produced a workspace, and
+// the parent comes first in all of them. So a caller supplied a parent they
+// legitimately own together with a child id belonging to somebody else, the guard
+// checked their membership of their own parent, passed, and the handler then acted
+// on the child by its id alone. That renamed another tenant's status, deleted
+// another tenant's auto-transition rule, and deleted another tenant's dependency
+// edge — with a 200 and a real write behind it, from an ordinary account.
+//
+// A parameter that resolves to nothing makes the whole request unresolved rather
+// than being skipped: an unknown child id is exactly what a probe looks like, and
+// treating it as "nothing to check here" is how the first version of this guard
+// was bypassed.
+func resolveWorkspaceFromParams(c echo.Context, deps workspaceResolverDeps) (wsID uuid.UUID, named, agreed bool) {
+	agreed = true
+	have := false
+
+	for _, r := range workspaceParamResolvers {
+		raw := ""
+		for _, name := range r.params {
+			if v := c.Param(name); v != "" {
+				raw = v
+				break
+			}
+		}
+		if raw == "" {
+			continue
+		}
+		named = true
+
+		got, ok := r.resolve(c.Request().Context(), deps, raw)
+		if !ok {
+			return uuid.Nil, true, false
+		}
+		if have && got != wsID {
+			// The request named two tenants. There is no safe way to pick one:
+			// checking membership of either would authorize an action on the
+			// other.
+			return uuid.Nil, true, false
+		}
+		wsID, have = got, true
+	}
+
+	return wsID, named, agreed
 }
 
 // workspaceScopeHandlerCheckedRoutes lists routes that name a tenant-owned object
@@ -151,9 +364,10 @@ var workspaceScopeExemptRoutes = map[string]bool{
 // Row-Level Security (RLS) policies at the database level.
 //
 // Resolution order:
-//  1. ws_id route parameter (workspace routes)
-//  2. proj_id route parameter -> look up project's workspace_id
-//  3. workspace_id from auth context (agent key auth sets this)
+//  1. every workspace-scoping route parameter present in the path, via
+//     workspaceParamResolvers — see resolveWorkspaceFromParams for why it is
+//     every one of them and not the first that answers
+//  2. workspace_id from auth context (agent key auth sets this)
 //
 // NOTE: set_config('app.current_workspace_id', $1, true) is used with the
 // is_local flag set to true, which makes the value transaction-scoped (equivalent
@@ -164,192 +378,15 @@ var workspaceScopeExemptRoutes = map[string]bool{
 func WorkspaceRLS(db *sqlx.DB, projectRepo repository.ProjectRepository) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
-			var wsID uuid.UUID
-			var resolved bool
-			// Steps 1 through 2e all read a route parameter, so anything they
-			// resolve is a workspace the request named; step 3 overrides this.
+			// 1. Resolve every workspace-scoping parameter the path carries.
+			wsID, named, agreed := resolveWorkspaceFromParams(
+				c, workspaceResolverDeps{db: db, projectRepo: projectRepo})
+			resolved := named && agreed
+			// Anything a parameter resolved is a workspace the request named; the
+			// auth-context fallback below overrides this.
 			source := WorkspaceSourceParam
 
-			// 1. Try ws_id route parameter.
-			if wsIDStr := c.Param("ws_id"); wsIDStr != "" {
-				if id, err := uuid.Parse(wsIDStr); err == nil {
-					wsID = id
-					resolved = true
-				}
-			}
-
-			// 2. Try proj_id route parameter -> look up project's workspace_id.
-			if !resolved {
-				projIDStr := c.Param("proj_id")
-				if projIDStr == "" {
-					// Also check project_id for backward compatibility.
-					projIDStr = c.Param("project_id")
-				}
-				if projIDStr != "" {
-					if projID, err := uuid.Parse(projIDStr); err == nil {
-						proj, err := projectRepo.GetByID(c.Request().Context(), projID)
-						if err == nil && proj != nil {
-							wsID = proj.WorkspaceID
-							resolved = true
-						}
-					}
-				}
-			}
-
-			// 2b. Try task_id route parameter -> look up task's workspace via project.
-			//
-			// The parameter is a full uuid or a 6-12 hex character prefix of one:
-			// resolveTaskID accepts both, so every /tasks/:task_id route does. The
-			// prefix form has to resolve here too, or the guard would refuse a
-			// member their own task whenever they addressed it the short way.
-			if !resolved {
-				if taskIDStr := c.Param("task_id"); taskIDStr != "" {
-					taskID, err := uuid.Parse(taskIDStr)
-					if err != nil {
-						if resolvedWsID, ok := resolveWorkspaceByTaskPrefix(c.Request().Context(), db, taskIDStr); ok {
-							wsID = resolvedWsID
-							resolved = true
-						}
-					} else {
-						var resolvedWsID uuid.UUID
-						err := db.QueryRowContext(c.Request().Context(),
-							"SELECT p.workspace_id FROM tasks t JOIN projects p ON t.project_id = p.id WHERE t.id = $1 AND t.deleted_at IS NULL",
-							taskID,
-						).Scan(&resolvedWsID)
-						if err == nil {
-							wsID = resolvedWsID
-							resolved = true
-						}
-					}
-				}
-			}
-
-			// 2b2. Try artifact_id route parameter -> look up workspace via artifacts → tasks → projects.
-			if !resolved {
-				if artifactIDStr := c.Param("artifact_id"); artifactIDStr != "" {
-					if artifactID, err := uuid.Parse(artifactIDStr); err == nil {
-						var resolvedWsID uuid.UUID
-						err := db.QueryRowContext(c.Request().Context(),
-							`SELECT p.workspace_id
-							   FROM artifacts a
-							   JOIN tasks t ON a.task_id = t.id AND t.deleted_at IS NULL
-							   JOIN projects p ON t.project_id = p.id
-							  WHERE a.id = $1`,
-							artifactID,
-						).Scan(&resolvedWsID)
-						if err == nil {
-							wsID = resolvedWsID
-							resolved = true
-						}
-					}
-				}
-			}
-
-			// 2c. Try agent_id route parameter -> look up agent's workspace_id.
-			if !resolved {
-				if agentIDStr := c.Param("agent_id"); agentIDStr != "" {
-					if agentID, err := uuid.Parse(agentIDStr); err == nil {
-						var resolvedWsID uuid.UUID
-						err := db.QueryRowContext(c.Request().Context(),
-							"SELECT workspace_id FROM agents WHERE id = $1 AND deleted_at IS NULL",
-							agentID,
-						).Scan(&resolvedWsID)
-						if err == nil {
-							wsID = resolvedWsID
-							resolved = true
-						}
-					}
-				}
-			}
-
-			// 2e. Try field_id route parameter -> look up workspace via custom_field_definitions → projects.
-			if !resolved {
-				if fieldIDStr := c.Param("field_id"); fieldIDStr != "" {
-					if fieldID, err := uuid.Parse(fieldIDStr); err == nil {
-						var resolvedWsID uuid.UUID
-						err := db.QueryRowContext(c.Request().Context(),
-							`SELECT p.workspace_id
-							   FROM custom_field_definitions cf
-							   JOIN projects p ON cf.project_id = p.id
-							  WHERE cf.id = $1`,
-							fieldID,
-						).Scan(&resolvedWsID)
-						if err == nil {
-							wsID = resolvedWsID
-							resolved = true
-						}
-					}
-				}
-			}
-
-			// 2d. Try init_id route parameter -> look up initiative's workspace_id.
-			if !resolved {
-				if initIDStr := c.Param("init_id"); initIDStr != "" {
-					if initID, err := uuid.Parse(initIDStr); err == nil {
-						var resolvedWsID uuid.UUID
-						err := db.QueryRowContext(c.Request().Context(),
-							"SELECT workspace_id FROM initiatives WHERE id = $1",
-							initID,
-						).Scan(&resolvedWsID)
-						if err == nil {
-							wsID = resolvedWsID
-							resolved = true
-						}
-					}
-				}
-			}
-
-			// 2f. Try the "flat" object routes: a parameter naming one row whose
-			// workspace the query in workspaceObjectResolvers reads. See that
-			// table for what went unguarded before it existed.
-			//
-			// The first of these parameters present in the path wins, and the loop
-			// stops there whether or not the lookup found anything — no current
-			// route carries two of them, and if one ever did, falling through to
-			// the second would let a request name two tenants and be checked
-			// against the more convenient one. Not resolving is the safe outcome:
-			// RequireWorkspaceMemberScoped refuses a scoped route that produced no
-			// workspace.
-			if !resolved {
-				for _, r := range workspaceObjectResolvers {
-					raw := c.Param(r.param)
-					if raw == "" {
-						continue
-					}
-					id, err := uuid.Parse(raw)
-					if err != nil {
-						break
-					}
-					var resolvedWsID uuid.UUID
-					if err := db.QueryRowContext(c.Request().Context(), r.query, id).Scan(&resolvedWsID); err == nil {
-						wsID = resolvedWsID
-						resolved = true
-					}
-					break
-				}
-			}
-
-			// 2g. Try the short task id -> look up the task's workspace via project.
-			//
-			// GET /tasks/by-short-id/:short takes a 6-12 hex character prefix of a
-			// task uuid, matched with LIKE across every tenant's tasks. It carried
-			// no guard at all, which made it both a cross-tenant read and an
-			// enumeration oracle — a 6-character prefix is 16.7M values and the
-			// handler distinguishes "no such task" from "several tasks match".
-			//
-			// An ambiguous prefix resolves to nothing on purpose: with two tenants'
-			// tasks behind one prefix there is no single workspace to check
-			// membership of, so the request is refused rather than guessed at.
-			if !resolved {
-				if short := c.Param("short"); short != "" {
-					if resolvedWsID, ok := resolveWorkspaceByTaskPrefix(c.Request().Context(), db, short); ok {
-						wsID = resolvedWsID
-						resolved = true
-					}
-				}
-			}
-
-			// 3. Try workspace_id from auth context (set by agent key auth).
+			// 2. Try workspace_id from auth context (set by agent key auth).
 			if !resolved {
 				if ctxWsID, err := GetWorkspaceID(c); err == nil {
 					wsID = ctxWsID

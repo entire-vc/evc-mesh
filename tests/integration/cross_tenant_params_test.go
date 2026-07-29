@@ -639,3 +639,470 @@ func (e *TestEnv) doRequestAsAgent(t *testing.T, method, path string, body any, 
 	require.NoError(t, err, "%s %s", method, path)
 	return resp
 }
+
+// --- Composite routes: a parent id you own plus a child id you do not ---------
+
+// compositeFixture holds a victim tenant carrying one of each object that hangs
+// off a parent in the path, and an intruder tenant with parents of their own to
+// name in its place.
+//
+// The intruder acts with their own user token rather than an agent key, and that
+// is deliberate: they are the OWNER of their workspace, and a workspace owner
+// bypasses the project-membership middleware (RequireProjectMember) on any project
+// in their own workspace. An agent key would be stopped there before ever reaching
+// the handler — the request would be refused for a reason that has nothing to do
+// with the hole, and the test would pass against the unfixed binary and prove
+// nothing. /rules/evaluate is additionally exercised with an agent key below,
+// where rbac() genuinely is the only thing in the way.
+type compositeFixture struct {
+	victim *victimFixture
+
+	victimStatusID   string
+	victimAutoRuleID string
+	victimDepID      string
+	victimInviteID   string
+
+	intruder       *TestEnv
+	intruderKey    string
+	intruderWsID   string
+	intruderProjID string
+	intruderTaskID string
+	intruderInitID string
+}
+
+// A new project is seeded with default statuses, so the fixture's own status
+// needs a name that will not collide with one of them on (project_id, slug).
+const victimStatusName = "Victim Backlog"
+
+// newCompositeFixture builds both tenants.
+//
+// Every id here is required rather than best-effort. An object that failed to be
+// created would turn its assertion into "refused because the id does not exist",
+// which looks identical to a working guard and holds whether or not one is
+// present.
+func newCompositeFixture(t *testing.T, prefix string) *compositeFixture {
+	t.Helper()
+
+	f := &compositeFixture{victim: newVictimFixture(t, prefix+"-victim")}
+	v := f.victim
+
+	f.victimStatusID = v.create(t, "POST", "/api/v1/projects/"+v.projectID+"/statuses", map[string]any{
+		"name":     victimStatusName,
+		"color":    "#6B7280",
+		"category": "backlog",
+	})
+
+	f.victimAutoRuleID = f.victimAutoTransitionRule(t)
+
+	// A dependency needs a second task to point at.
+	otherTaskID := v.create(t, "POST", "/api/v1/projects/"+v.projectID+"/tasks", map[string]any{
+		"title": "Victim blocking task",
+	})
+	f.victimDepID = v.create(t, "POST", "/api/v1/tasks/"+v.taskID+"/dependencies", map[string]any{
+		"depends_on_task_id": otherTaskID,
+		"dependency_type":    "blocks",
+	})
+
+	f.victimInviteID = v.create(t, "POST", "/api/v1/workspaces/"+v.wsID+"/invites", map[string]any{
+		"email": uniqueEmail(prefix + "-invitee"),
+		"role":  "member",
+	})
+
+	// The intruder: an ordinary account, owner of its own workspace.
+	f.intruder = NewTestEnv(t)
+	t.Cleanup(func() { f.intruder.Cleanup(t) })
+	f.intruder.Register(t, uniqueEmail(prefix+"-intruder"), "TestPass123", "Intruder")
+
+	resp := f.intruder.Get(t, "/api/v1/workspaces")
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	var workspaces []map[string]any
+	f.intruder.DecodeJSON(t, resp, &workspaces)
+	require.NotEmpty(t, workspaces, "the intruder has no workspace of their own")
+	f.intruderWsID = workspaces[0]["id"].(string)
+
+	f.intruderProjID = f.createAs(t, f.intruder, "POST", "/api/v1/workspaces/"+f.intruderWsID+"/projects", map[string]any{
+		"name": "Intruder Project",
+	})
+	f.intruder.OnCleanup(func() {
+		ctx := context.Background()
+		_, _ = f.intruder.DB.ExecContext(ctx, "DELETE FROM tasks WHERE project_id = $1", f.intruderProjID)
+		_, _ = f.intruder.DB.ExecContext(ctx, "DELETE FROM task_statuses WHERE project_id = $1", f.intruderProjID)
+		_, _ = f.intruder.DB.ExecContext(ctx, "DELETE FROM projects WHERE id = $1", f.intruderProjID)
+	})
+
+	f.intruderTaskID = f.createAs(t, f.intruder, "POST", "/api/v1/projects/"+f.intruderProjID+"/tasks", map[string]any{
+		"title": "Intruder own task",
+	})
+
+	resp = f.intruder.Post(t, "/api/v1/workspaces/"+f.intruderWsID+"/initiatives", map[string]any{
+		"name": "Intruder Initiative",
+	})
+	if resp.StatusCode == http.StatusCreated {
+		var initiative map[string]any
+		f.intruder.DecodeJSON(t, resp, &initiative)
+		f.intruderInitID = initiative["id"].(string)
+		f.intruder.OnCleanup(func() {
+			_, _ = f.intruder.DB.ExecContext(context.Background(),
+				"DELETE FROM initiatives WHERE id = $1", f.intruderInitID)
+		})
+	} else {
+		_ = resp.Body.Close()
+	}
+
+	f.intruderKey = f.intruder.registerOwnAgent(t, prefix+"-intruder-agent")
+
+	return f
+}
+
+// victimAutoTransitionRule returns the id of an auto-transition rule in the
+// victim's project.
+//
+// A new project is seeded with a rule per trigger, and (project_id, trigger) is
+// unique, so creating one is not reliably possible. The seeded rule is the
+// victim's own object either way, which is all the test needs.
+func (f *compositeFixture) victimAutoTransitionRule(t *testing.T) string {
+	t.Helper()
+	v := f.victim
+
+	resp := v.env.Get(t, "/api/v1/projects/"+v.projectID+"/auto-transition-rules")
+	raw := v.env.ReadBody(t, resp)
+	require.Equal(t, http.StatusOK, resp.StatusCode,
+		"cannot list the victim's auto-transition rules: %s", string(raw))
+
+	var rules []map[string]any
+	require.NoError(t, json.Unmarshal(raw, &rules), "cannot decode rules: %s", string(raw))
+	if len(rules) > 0 {
+		id, _ := rules[0]["id"].(string)
+		require.NotEmpty(t, id, "an auto-transition rule with no id: %s", string(raw))
+		return id
+	}
+
+	return v.create(t, "POST", "/api/v1/projects/"+v.projectID+"/auto-transition-rules", map[string]any{
+		"trigger":          "all_subtasks_done",
+		"target_status_id": f.victimStatusID,
+	})
+}
+
+// createAs posts body to path as env and returns the new object's id.
+func (f *compositeFixture) createAs(t *testing.T, env *TestEnv, method, path string, body map[string]any) string {
+	t.Helper()
+	resp := env.doRequest(t, method, path, body)
+	raw := env.ReadBody(t, resp)
+	require.Equal(t, http.StatusCreated, resp.StatusCode,
+		"fixture setup failed: %s %s returned %d: %s", method, path, resp.StatusCode, string(raw))
+	var created map[string]any
+	require.NoError(t, json.Unmarshal(raw, &created), "cannot decode %s response: %s", path, string(raw))
+	id, _ := created["id"].(string)
+	require.NotEmpty(t, id, "%s returned no id: %s", path, string(raw))
+	return id
+}
+
+// TestCrossTenant_CompositeRouteChildIsChecked is the regression test for the
+// fourth cross-tenant hole, and the one the previous three fixes walked straight
+// past.
+//
+// The guard resolved the tenant from the FIRST route parameter that produced one
+// and checked membership of that. On a route naming a parent and a child, the
+// parent comes first — so a caller supplied a parent they legitimately own
+// together with a child id belonging to another tenant, the guard checked them
+// against their own parent and passed, and the handler then acted on the child by
+// its id alone. The child was never resolved and never checked by anything.
+//
+// Every assertion here is on the database as well as the status code. A 403
+// printed over a completed write is indistinguishable from a refusal if you only
+// read the response: what proves the write did not happen is that the victim's row
+// is still what it was.
+func TestCrossTenant_CompositeRouteChildIsChecked(t *testing.T) {
+	f := newCompositeFixture(t, "xtc")
+	ctx := context.Background()
+
+	t.Run("PATCH /projects/:proj_id/statuses/:status_id", func(t *testing.T) {
+		resp := f.intruder.Patch(t,
+			fmt.Sprintf("/api/v1/projects/%s/statuses/%s", f.intruderProjID, f.victimStatusID),
+			map[string]any{"name": "PWNED-BY-B"})
+		body := string(f.intruder.ReadBody(t, resp))
+		assert.Equal(t, http.StatusForbidden, resp.StatusCode,
+			"a stranger renamed another tenant's status (status %d, body %s)", resp.StatusCode, body)
+
+		var name string
+		require.NoError(t, f.victim.env.DB.QueryRowContext(ctx,
+			"SELECT name FROM task_statuses WHERE id = $1", f.victimStatusID).Scan(&name))
+		assert.Equal(t, victimStatusName, name, "another tenant's status was renamed")
+	})
+
+	t.Run("DELETE /projects/:proj_id/auto-transition-rules/:auto_rule_id", func(t *testing.T) {
+		resp := f.intruder.Delete(t,
+			fmt.Sprintf("/api/v1/projects/%s/auto-transition-rules/%s", f.intruderProjID, f.victimAutoRuleID))
+		body := string(f.intruder.ReadBody(t, resp))
+		assert.Equal(t, http.StatusForbidden, resp.StatusCode,
+			"a stranger deleted another tenant's auto-transition rule (status %d, body %s)", resp.StatusCode, body)
+
+		var n int
+		require.NoError(t, f.victim.env.DB.QueryRowContext(ctx,
+			"SELECT COUNT(*) FROM auto_transition_rules WHERE id = $1", f.victimAutoRuleID).Scan(&n))
+		assert.Equal(t, 1, n, "another tenant's auto-transition rule was deleted")
+	})
+
+	t.Run("DELETE /tasks/:task_id/dependencies/:dep_id", func(t *testing.T) {
+		resp := f.intruder.Delete(t,
+			fmt.Sprintf("/api/v1/tasks/%s/dependencies/%s", f.intruderTaskID, f.victimDepID))
+		body := string(f.intruder.ReadBody(t, resp))
+		assert.Equal(t, http.StatusForbidden, resp.StatusCode,
+			"a stranger deleted another tenant's dependency (status %d, body %s)", resp.StatusCode, body)
+
+		var n int
+		require.NoError(t, f.victim.env.DB.QueryRowContext(ctx,
+			"SELECT COUNT(*) FROM task_dependencies WHERE id = $1", f.victimDepID).Scan(&n))
+		assert.Equal(t, 1, n, "another tenant's dependency edge was deleted")
+	})
+
+	t.Run("POST /workspaces/:ws_id/invites/:invite_id/resend", func(t *testing.T) {
+		resp := f.intruder.Post(t,
+			fmt.Sprintf("/api/v1/workspaces/%s/invites/%s/resend", f.intruderWsID, f.victimInviteID),
+			map[string]any{})
+		body := string(f.intruder.ReadBody(t, resp))
+		assert.Equal(t, http.StatusForbidden, resp.StatusCode,
+			"a stranger re-sent another tenant's invite email (status %d, body %s)", resp.StatusCode, body)
+	})
+
+	t.Run("DELETE /workspaces/:ws_id/invites/:invite_id", func(t *testing.T) {
+		resp := f.intruder.Delete(t,
+			fmt.Sprintf("/api/v1/workspaces/%s/invites/%s", f.intruderWsID, f.victimInviteID))
+		body := string(f.intruder.ReadBody(t, resp))
+		assert.Equal(t, http.StatusForbidden, resp.StatusCode,
+			"a stranger revoked another tenant's invite (status %d, body %s)", resp.StatusCode, body)
+
+		var n int
+		require.NoError(t, f.victim.env.DB.QueryRowContext(ctx,
+			"SELECT COUNT(*) FROM user_invites WHERE id = $1", f.victimInviteID).Scan(&n))
+		assert.Equal(t, 1, n, "another tenant's pending invite was revoked")
+	})
+
+	// This route is the one composite route that was NOT reachable across tenants:
+	// ArtifactHandler.Download already re-checks the artifact against the resolved
+	// workspace itself (GetByIDInWorkspace). What is asserted here is the guard's
+	// fail-closed half — a child id that resolves to nothing is refused before the
+	// handler rather than waved through — because that is the property the other
+	// five routes had no handler check to fall back on.
+	t.Run("GET /tasks/:task_id/artifacts/:artifact_id/download", func(t *testing.T) {
+		resp := f.intruder.Get(t,
+			fmt.Sprintf("/api/v1/tasks/%s/artifacts/%s/download", f.intruderTaskID, dummyUUID))
+		body := string(f.intruder.ReadBody(t, resp))
+		assert.Equal(t, http.StatusForbidden, resp.StatusCode,
+			"an unresolvable artifact id was not refused (status %d, body %s)", resp.StatusCode, body)
+	})
+}
+
+// TestCrossTenant_BodySuppliedWorkspaceIsChecked covers the other half of the same
+// class: routes whose tenant does not come from the path at all.
+//
+// RequireWorkspaceMemberScoped can only check a workspace it can see, and it reads
+// the route path. A handler that instead takes its workspace from a JSON body
+// field is invisible to it — the route looks like /auth/me, a route with nothing
+// to check — so the caller's claim about which tenant they are acting on went
+// unexamined. POST /rules/evaluate has no path parameter at all.
+func TestCrossTenant_BodySuppliedWorkspaceIsChecked(t *testing.T) {
+	f := newCompositeFixture(t, "xtb")
+	ctx := context.Background()
+
+	// /rules/evaluate is a dry run and writes nothing, so the status code and the
+	// absence of the victim's rule in the response body are the whole assertion.
+	t.Run("POST /rules/evaluate as a user", func(t *testing.T) {
+		resp := f.intruder.Post(t, "/api/v1/rules/evaluate", map[string]any{
+			"action":       "move_task",
+			"workspace_id": f.victim.wsID,
+			"task_id":      f.victim.taskID,
+		})
+		body := string(f.intruder.ReadBody(t, resp))
+		assert.Equal(t, http.StatusForbidden, resp.StatusCode,
+			"a stranger evaluated another tenant's rules (status %d, body %s)", resp.StatusCode, body)
+		assert.NotContains(t, body, "Victim Rule", "the victim's rule name leaked")
+	})
+
+	// The agent-key case is the one rbac() does not cover: on an agent key it
+	// short-circuits to a static capability map and never looks at the target
+	// workspace.
+	t.Run("POST /rules/evaluate as an agent", func(t *testing.T) {
+		resp := f.intruder.doRequestAsAgent(t, http.MethodPost, "/api/v1/rules/evaluate", map[string]any{
+			"action":       "move_task",
+			"workspace_id": f.victim.wsID,
+			"task_id":      f.victim.taskID,
+		}, f.intruderKey)
+		body := string(f.intruder.ReadBody(t, resp))
+		assert.Equal(t, http.StatusForbidden, resp.StatusCode,
+			"an agent key evaluated another tenant's rules (status %d, body %s)", resp.StatusCode, body)
+		assert.NotContains(t, body, "Victim Rule", "the victim's rule name leaked")
+	})
+
+	t.Run("PUT /notifications/preferences", func(t *testing.T) {
+		resp := f.intruder.Put(t, "/api/v1/notifications/preferences", map[string]any{
+			"workspace_id": f.victim.wsID,
+			"channel":      "web_push",
+			"events":       []string{"task.assigned"},
+		})
+		body := string(f.intruder.ReadBody(t, resp))
+		assert.Equal(t, http.StatusForbidden, resp.StatusCode,
+			"a stranger wrote preferences into another tenant's workspace (status %d, body %s)",
+			resp.StatusCode, body)
+
+		var n int
+		require.NoError(t, f.victim.env.DB.QueryRowContext(ctx,
+			"SELECT COUNT(*) FROM notification_preferences WHERE workspace_id = $1", f.victim.wsID).Scan(&n))
+		assert.Zero(t, n, "a preferences row reached another tenant's workspace")
+	})
+
+	t.Run("POST /initiatives/:init_id/projects", func(t *testing.T) {
+		if f.intruderInitID == "" {
+			t.Skip("no initiative fixture")
+		}
+		resp := f.intruder.Post(t, "/api/v1/initiatives/"+f.intruderInitID+"/projects", map[string]any{
+			"project_id": f.victim.projectID,
+		})
+		body := string(f.intruder.ReadBody(t, resp))
+		assert.GreaterOrEqual(t, resp.StatusCode, http.StatusBadRequest,
+			"a stranger linked another tenant's project into their initiative (status %d, body %s)",
+			resp.StatusCode, body)
+
+		var n int
+		require.NoError(t, f.victim.env.DB.QueryRowContext(ctx,
+			"SELECT COUNT(*) FROM initiative_projects WHERE project_id = $1", f.victim.projectID).Scan(&n))
+		assert.Zero(t, n, "another tenant's project was linked into a foreign initiative")
+	})
+}
+
+// TestCrossTenant_CompositeRoutesStillWorkForTheirOwner is the half that matters
+// most here, and the reason :rule_id had to be renamed to :auto_rule_id on the
+// auto-transition routes.
+//
+// One parameter spelling cannot name two tables. /rules/:rule_id is a row in
+// `rules`; /projects/:proj_id/auto-transition-rules/:rule_id was a row in
+// `auto_transition_rules`. Had both kept the same spelling, the guard would have
+// looked an auto-transition rule's id up in `rules`, found nothing, and refused —
+// blocking the owner exactly as firmly as the intruder, while a test that only
+// asserted "the intruder gets 403" stayed green over a completely broken feature.
+// So every route touched by this change is exercised here by the person it belongs
+// to, and the assertion is that the effect actually happened.
+func TestCrossTenant_CompositeRoutesStillWorkForTheirOwner(t *testing.T) {
+	f := newCompositeFixture(t, "xtco")
+	v := f.victim
+	ctx := context.Background()
+
+	t.Run("PATCH own status", func(t *testing.T) {
+		resp := v.env.Patch(t,
+			fmt.Sprintf("/api/v1/projects/%s/statuses/%s", v.projectID, f.victimStatusID),
+			map[string]any{"name": "Owner Renamed"})
+		body := string(v.env.ReadBody(t, resp))
+		require.Equal(t, http.StatusOK, resp.StatusCode,
+			"the owner was refused their own status (status %d, body %s)", resp.StatusCode, body)
+
+		var name string
+		require.NoError(t, v.env.DB.QueryRowContext(ctx,
+			"SELECT name FROM task_statuses WHERE id = $1", f.victimStatusID).Scan(&name))
+		assert.Equal(t, "Owner Renamed", name, "the owner's rename did not take effect")
+	})
+
+	t.Run("PUT own auto-transition rule", func(t *testing.T) {
+		enabled := false
+		resp := v.env.Put(t,
+			fmt.Sprintf("/api/v1/projects/%s/auto-transition-rules/%s", v.projectID, f.victimAutoRuleID),
+			map[string]any{"is_enabled": enabled})
+		body := string(v.env.ReadBody(t, resp))
+		require.Equal(t, http.StatusOK, resp.StatusCode,
+			"the owner was refused their own auto-transition rule (status %d, body %s)", resp.StatusCode, body)
+
+		var isEnabled bool
+		require.NoError(t, v.env.DB.QueryRowContext(ctx,
+			"SELECT is_enabled FROM auto_transition_rules WHERE id = $1", f.victimAutoRuleID).Scan(&isEnabled))
+		assert.False(t, isEnabled, "the owner's update did not take effect")
+	})
+
+	t.Run("DELETE own auto-transition rule", func(t *testing.T) {
+		resp := v.env.Delete(t,
+			fmt.Sprintf("/api/v1/projects/%s/auto-transition-rules/%s", v.projectID, f.victimAutoRuleID))
+		body := string(v.env.ReadBody(t, resp))
+		require.Equal(t, http.StatusNoContent, resp.StatusCode,
+			"the owner was refused deleting their own auto-transition rule (status %d, body %s)",
+			resp.StatusCode, body)
+
+		var n int
+		require.NoError(t, v.env.DB.QueryRowContext(ctx,
+			"SELECT COUNT(*) FROM auto_transition_rules WHERE id = $1", f.victimAutoRuleID).Scan(&n))
+		assert.Zero(t, n, "the owner's delete did not take effect")
+	})
+
+	t.Run("DELETE own dependency", func(t *testing.T) {
+		resp := v.env.Delete(t,
+			fmt.Sprintf("/api/v1/tasks/%s/dependencies/%s", v.taskID, f.victimDepID))
+		body := string(v.env.ReadBody(t, resp))
+		require.Equal(t, http.StatusNoContent, resp.StatusCode,
+			"the owner was refused deleting their own dependency (status %d, body %s)", resp.StatusCode, body)
+
+		var n int
+		require.NoError(t, v.env.DB.QueryRowContext(ctx,
+			"SELECT COUNT(*) FROM task_dependencies WHERE id = $1", f.victimDepID).Scan(&n))
+		assert.Zero(t, n, "the owner's delete did not take effect")
+	})
+
+	t.Run("POST /rules/evaluate on own workspace", func(t *testing.T) {
+		resp := v.env.Post(t, "/api/v1/rules/evaluate", map[string]any{
+			"action":       "move_task",
+			"workspace_id": v.wsID,
+			"task_id":      v.taskID,
+		})
+		body := string(v.env.ReadBody(t, resp))
+		assert.Equal(t, http.StatusOK, resp.StatusCode,
+			"the owner was refused evaluating their own rules (status %d, body %s)", resp.StatusCode, body)
+	})
+
+	t.Run("POST /rules/evaluate with an agent key and no workspace_id", func(t *testing.T) {
+		// An agent key carries its own workspace, so omitting workspace_id has to
+		// keep working: the guard falls back to the credential's own tenant, which
+		// needs no check.
+		key := v.env.registerOwnAgent(t, "xtco-victim-agent")
+		resp := v.env.doRequestAsAgent(t, http.MethodPost, "/api/v1/rules/evaluate", map[string]any{
+			"action":  "move_task",
+			"task_id": v.taskID,
+		}, key)
+		body := string(v.env.ReadBody(t, resp))
+		assert.Equal(t, http.StatusOK, resp.StatusCode,
+			"an agent key was refused its own workspace (status %d, body %s)", resp.StatusCode, body)
+	})
+
+	t.Run("PUT own notification preferences", func(t *testing.T) {
+		resp := v.env.Put(t, "/api/v1/notifications/preferences", map[string]any{
+			"workspace_id": v.wsID,
+			"channel":      "web_push",
+			"events":       []string{"task.assigned"},
+		})
+		body := string(v.env.ReadBody(t, resp))
+		assert.Equal(t, http.StatusOK, resp.StatusCode,
+			"the owner was refused their own preferences (status %d, body %s)", resp.StatusCode, body)
+	})
+
+	t.Run("DELETE own invite", func(t *testing.T) {
+		resp := v.env.Delete(t,
+			fmt.Sprintf("/api/v1/workspaces/%s/invites/%s", v.wsID, f.victimInviteID))
+		body := string(v.env.ReadBody(t, resp))
+		require.Equal(t, http.StatusNoContent, resp.StatusCode,
+			"the owner was refused revoking their own invite (status %d, body %s)", resp.StatusCode, body)
+
+		var n int
+		require.NoError(t, v.env.DB.QueryRowContext(ctx,
+			"SELECT COUNT(*) FROM user_invites WHERE id = $1", f.victimInviteID).Scan(&n))
+		assert.Zero(t, n, "the owner's revoke did not take effect")
+	})
+
+	t.Run("DELETE own project member", func(t *testing.T) {
+		// :user_id names a global user account, not a tenant-owned row, so it is
+		// excused from resolving a workspace. This pins that the route still works
+		// and that the composite guard did not start refusing it.
+		resp := v.env.Delete(t,
+			fmt.Sprintf("/api/v1/projects/%s/members/%s", v.projectID, v.env.UserID))
+		body := string(v.env.ReadBody(t, resp))
+		assert.Less(t, resp.StatusCode, http.StatusInternalServerError,
+			"the owner hit a server error on their own project membership (status %d, body %s)",
+			resp.StatusCode, body)
+		assert.NotEqual(t, http.StatusForbidden, resp.StatusCode,
+			"the owner was refused their own project membership route (body %s)", body)
+	})
+}

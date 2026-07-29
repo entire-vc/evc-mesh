@@ -9,6 +9,7 @@ import (
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	mw "github.com/entire-vc/evc-mesh/internal/middleware"
+	"github.com/entire-vc/evc-mesh/internal/repository"
 	"github.com/entire-vc/evc-mesh/internal/service"
 	"github.com/entire-vc/evc-mesh/pkg/actorctx"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
@@ -17,11 +18,16 @@ import (
 // RuleHandler handles HTTP requests for rule management.
 type RuleHandler struct {
 	ruleSvc service.RuleService
+	access  workspaceAccess
 }
 
 // NewRuleHandler creates a new RuleHandler.
-func NewRuleHandler(svc service.RuleService) *RuleHandler {
-	return &RuleHandler{ruleSvc: svc}
+//
+// members authorizes the caller against the workspace named in the body of
+// POST /rules/evaluate — the one route here whose tenant does not come from the
+// path, and which therefore the middleware guard cannot see. See workspaceAccess.
+func NewRuleHandler(svc service.RuleService, members repository.WorkspaceMemberRepository) *RuleHandler {
+	return &RuleHandler{ruleSvc: svc, access: workspaceAccess{members: members}}
 }
 
 // createRuleRequest is the request body for creating a rule.
@@ -252,10 +258,22 @@ func (h *RuleHandler) DeleteRule(c echo.Context) error {
 }
 
 // EvaluateRules handles POST /rules/evaluate (dry-run)
+//
+// The route has no path parameter, so the workspace arrives in the request body
+// and the middleware guard never sees it. Until this check existed the body was
+// believed: any caller — including an ordinary agent key, which rbac() waves
+// through on its static capability map — could evaluate another tenant's
+// governance rules against another tenant's task by naming them in the JSON, and
+// read back the rule names and violation messages that came out.
 func (h *RuleHandler) EvaluateRules(c echo.Context) error {
 	var req evaluateRuleRequest
 	if err := c.Bind(&req); err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
+	}
+
+	wsID, err := h.access.require(c, req.WorkspaceID)
+	if err != nil {
+		return handleError(c, err)
 	}
 
 	actorID, actorType := actorctx.FromContext(c.Request().Context())
@@ -266,7 +284,7 @@ func (h *RuleHandler) EvaluateRules(c echo.Context) error {
 		TargetStatusID: req.TargetStatusID,
 		ActorID:        actorID,
 		ActorType:      actorType,
-		WorkspaceID:    req.WorkspaceID,
+		WorkspaceID:    wsID,
 		ProjectID:      req.ProjectID,
 	}
 

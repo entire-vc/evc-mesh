@@ -8,18 +8,24 @@ import (
 	"github.com/lib/pq"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	"github.com/entire-vc/evc-mesh/internal/repository"
 	"github.com/entire-vc/evc-mesh/internal/service"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 )
 
 // NotificationHandler handles HTTP requests for in-app notifications.
 type NotificationHandler struct {
-	svc service.NotificationService
+	svc    service.NotificationService
+	access workspaceAccess
 }
 
 // NewNotificationHandler creates a new NotificationHandler.
-func NewNotificationHandler(svc service.NotificationService) *NotificationHandler {
-	return &NotificationHandler{svc: svc}
+//
+// members authorizes the caller against the workspace named in the body of
+// PUT /notifications/preferences, which the middleware guard cannot see because
+// the route carries no path parameter. See workspaceAccess.
+func NewNotificationHandler(svc service.NotificationService, members repository.WorkspaceMemberRepository) *NotificationHandler {
+	return &NotificationHandler{svc: svc, access: workspaceAccess{members: members}}
 }
 
 // List handles GET /notifications
@@ -127,6 +133,13 @@ func (h *NotificationHandler) UpdatePreferences(c echo.Context) error {
 	wsID, err := uuid.Parse(req.WorkspaceID)
 	if err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid workspace_id"))
+	}
+
+	// The workspace comes from the body, so nothing has checked that the caller
+	// belongs to it. Without this, any authenticated user could upsert a
+	// notification-preferences row into any workspace by uuid.
+	if _, accessErr := h.access.require(c, wsID); accessErr != nil {
+		return handleError(c, accessErr)
 	}
 
 	channel := req.Channel

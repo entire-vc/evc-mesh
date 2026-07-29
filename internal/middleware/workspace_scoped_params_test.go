@@ -114,22 +114,24 @@ func TestRequireWorkspaceMemberScoped_ExemptRoutePassesThrough(t *testing.T) {
 // The guard fires on the parameter names in that list; WorkspaceRLS resolves a
 // tenant from the parameter names it reads. If those two sets ever diverge, a
 // route becomes reachable across tenants again — exactly the failure this file
-// was written for — so the list is checked against the resolver's own source.
+// was written for.
+//
+// The list is now derived from workspaceParamResolvers, so the two cannot diverge
+// by omission. What can still diverge is a parameter read by a hard-coded name
+// somewhere in this file instead of through the resolver table — that would be a
+// tenant the guard never learns about, which is how :status_id and :dep_id came to
+// be resolved by nobody. So the file's own source is scanned for a literal
+// c.Param("...") and every name found has to be one the guard knows.
+//
+// Zero matches is the expected result and the strongest one: it means every
+// parameter reaches the resolver through workspaceParamResolvers. The table
+// itself is checked for emptiness by TestWorkspaceScopedParams_MatchesResolverTable.
 func TestWorkspaceScopedParams_CoversEveryResolver(t *testing.T) {
 	src, err := os.ReadFile("workspace.go")
 	require.NoError(t, err)
 
-	// Only the resolver reads parameters; routeIsWorkspaceScoped uses the list.
-	body := string(src)
-	start := regexp.MustCompile(`func WorkspaceRLS\(`).FindStringIndex(body)
-	require.NotNil(t, start, "WorkspaceRLS not found — has the resolver been renamed?")
-	end := regexp.MustCompile(`\nfunc RequireWorkspaceMember\(`).FindStringIndex(body)
-	require.NotNil(t, end, "RequireWorkspaceMember not found")
-	resolver := body[start[0]:end[0]]
-
 	re := regexp.MustCompile(`c\.Param\("([a-z_]+)"\)`)
-	matches := re.FindAllStringSubmatch(resolver, -1)
-	require.NotEmpty(t, matches, "WorkspaceRLS reads no route parameters — has the style changed?")
+	matches := re.FindAllStringSubmatch(string(src), -1)
 
 	listed := make(map[string]bool, len(WorkspaceScopedParams))
 	for _, p := range WorkspaceScopedParams {
@@ -138,12 +140,40 @@ func TestWorkspaceScopedParams_CoversEveryResolver(t *testing.T) {
 
 	var missing []string
 	for _, m := range matches {
-		if !listed[m[1]] {
+		if !listed[m[1]] && !workspaceUnscopedParams[m[1]] {
 			missing = append(missing, m[1])
 		}
 	}
 	sort.Strings(missing)
 	assert.Empty(t, missing,
-		"WorkspaceRLS resolves a workspace from these parameters but RequireWorkspaceMemberScoped "+
-			"does not guard them — add them to WorkspaceScopedParams: %v", missing)
+		"WorkspaceRLS reads these route parameters but RequireWorkspaceMemberScoped "+
+			"does not guard them — add a resolver to workspaceParamResolvers: %v", missing)
+}
+
+// TestWorkspaceScopedParams_MatchesResolverTable states the property the
+// derivation guarantees, so that replacing it with a hand-written list — the shape
+// this file's original bug had — fails loudly instead of quietly narrowing the
+// guard.
+func TestWorkspaceScopedParams_MatchesResolverTable(t *testing.T) {
+	require.NotEmpty(t, workspaceParamResolvers, "no resolvers — nothing resolves a tenant at all")
+	require.NotEmpty(t, WorkspaceScopedParams, "the guard fires on no parameter at all")
+
+	listed := make(map[string]bool, len(WorkspaceScopedParams))
+	for _, p := range WorkspaceScopedParams {
+		listed[p] = true
+	}
+	for _, r := range workspaceParamResolvers {
+		require.NotNil(t, r.resolve, "resolver for %v has no lookup", r.params)
+		require.NotEmpty(t, r.params, "a resolver declares no parameter name")
+		for _, name := range r.params {
+			assert.True(t, listed[name],
+				"WorkspaceRLS resolves a workspace from :%s but the guard does not fire on it", name)
+		}
+	}
+
+	// A parameter cannot be both resolvable and excused from resolving.
+	for name := range workspaceUnscopedParams {
+		assert.False(t, listed[name],
+			":%s is in workspaceUnscopedParams but a resolver also claims it", name)
+	}
 }

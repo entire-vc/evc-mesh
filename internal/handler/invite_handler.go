@@ -81,13 +81,24 @@ func (h *InviteHandler) List(c echo.Context) error {
 }
 
 // Resend handles POST /workspaces/:ws_id/invites/:invite_id/resend
+//
+// The workspace in the path is the one the caller was authorized for, and the
+// invite has to be in it. Both of these used to parse the workspace id and drop
+// it, acting on the invite by its own id: a workspace admin could name their own
+// workspace and any other tenant's invite id, and re-send or revoke that tenant's
+// pending invitation.
 func (h *InviteHandler) Resend(c echo.Context) error {
+	wsID, err := uuid.Parse(c.Param("ws_id"))
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid workspace_id"))
+	}
+
 	inviteID, err := uuid.Parse(c.Param("invite_id"))
 	if err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid invite_id"))
 	}
 
-	if err := h.svc.ResendInvite(c.Request().Context(), inviteID); err != nil {
+	if err := h.svc.ResendInvite(c.Request().Context(), wsID, inviteID); err != nil {
 		return handleError(c, err)
 	}
 
@@ -96,12 +107,17 @@ func (h *InviteHandler) Resend(c echo.Context) error {
 
 // Revoke handles DELETE /workspaces/:ws_id/invites/:invite_id
 func (h *InviteHandler) Revoke(c echo.Context) error {
+	wsID, err := uuid.Parse(c.Param("ws_id"))
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid workspace_id"))
+	}
+
 	inviteID, err := uuid.Parse(c.Param("invite_id"))
 	if err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid invite_id"))
 	}
 
-	if err := h.svc.RevokeInvite(c.Request().Context(), inviteID); err != nil {
+	if err := h.svc.RevokeInvite(c.Request().Context(), wsID, inviteID); err != nil {
 		return handleError(c, err)
 	}
 

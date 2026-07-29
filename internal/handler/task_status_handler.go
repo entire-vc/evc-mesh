@@ -92,11 +92,41 @@ func (h *TaskStatusHandler) Create(c echo.Context) error {
 }
 
 // Update handles PATCH /projects/:proj_id/statuses/:status_id
+//
+// The status must belong to the project in the path. The project id used to be
+// ignored entirely and the status updated by its own id, so naming a project you
+// may edit together with a status id from anywhere else renamed that status:
+// another project's, and — because the middleware stopped resolving at the first
+// parameter that answered — another workspace's. Reorder already scopes its ids to
+// the project this way.
 func (h *TaskStatusHandler) Update(c echo.Context) error {
+	projIDStr := c.Param("proj_id")
+	projID, err := uuid.Parse(projIDStr)
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid project_id"))
+	}
+
 	statusIDStr := c.Param("status_id")
 	statusID, err := uuid.Parse(statusIDStr)
 	if err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid status_id"))
+	}
+
+	projectStatuses, err := h.statusService.ListByProject(c.Request().Context(), projID)
+	if err != nil {
+		return handleError(c, err)
+	}
+	inProject := false
+	for i := range projectStatuses {
+		if projectStatuses[i].ID == statusID {
+			inProject = true
+			break
+		}
+	}
+	if !inProject {
+		// The same answer as for a status that does not exist, so the id is not
+		// confirmed to belong to somebody else.
+		return c.JSON(http.StatusNotFound, apierror.NotFound("TaskStatus"))
 	}
 
 	var req updateTaskStatusRequest

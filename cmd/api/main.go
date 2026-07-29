@@ -415,14 +415,14 @@ func main() {
 	projectUpdateHandler := handler.NewProjectUpdateHandler(projectUpdateService)
 	initiativeHandler := handler.NewInitiativeHandler(initiativeService)
 	triageHandler := handler.NewTriageHandler(triageService)
-	ruleHandler := handler.NewRuleHandler(ruleService)
+	ruleHandler := handler.NewRuleHandler(ruleService, workspaceMemberRepo)
 	rulesHandler := handler.NewRulesHandler(rulesService)
 	recurringHandler := handler.NewRecurringHandler(recurringService)
 	taskTemplateHandler := handler.NewTaskTemplateHandler(taskTemplateService)
 	workspaceMemberHandler := handler.NewWorkspaceMemberHandler(workspaceMemberService)
 	inviteHandler := handler.NewInviteHandler(inviteService)
 	projectMemberHandler := handler.NewProjectMemberHandler(projectMemberService)
-	notificationHandler := handler.NewNotificationHandler(notificationService)
+	notificationHandler := handler.NewNotificationHandler(notificationService, workspaceMemberRepo)
 	pushSubscriptionHandler := handler.NewPushSubscriptionHandler(pushService)
 	autoTransHandler := handler.NewAutoTransitionHandler(autoTransitionSvc)
 	memoryHandler := handler.NewMemoryHandler(memoryService, workspaceMemberRepo)
@@ -898,8 +898,12 @@ func main() {
 	// Auto-transition rule routes.
 	api.GET("/projects/:proj_id/auto-transition-rules", autoTransHandler.List, projAccess)
 	api.POST("/projects/:proj_id/auto-transition-rules", autoTransHandler.Create, projAccess, rbac(mw.PermManageRules))
-	api.PUT("/projects/:proj_id/auto-transition-rules/:rule_id", autoTransHandler.Update, projAccess, rbac(mw.PermManageRules))
-	api.DELETE("/projects/:proj_id/auto-transition-rules/:rule_id", autoTransHandler.Delete, projAccess, rbac(mw.PermManageRules))
+	// :auto_rule_id, not :rule_id: these are rows in auto_transition_rules, while
+	// /rules/:rule_id names a row in the governance `rules` table. One parameter
+	// spelling cannot be resolved against two tables, and the public URL is
+	// unchanged by the rename. See workspaceObjectResolvers.
+	api.PUT("/projects/:proj_id/auto-transition-rules/:auto_rule_id", autoTransHandler.Update, projAccess, rbac(mw.PermManageRules))
+	api.DELETE("/projects/:proj_id/auto-transition-rules/:auto_rule_id", autoTransHandler.Delete, projAccess, rbac(mw.PermManageRules))
 
 	// Notification routes.
 	api.GET("/notifications", notificationHandler.List)
