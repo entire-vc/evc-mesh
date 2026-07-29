@@ -62,6 +62,31 @@ const (
 	VCSLinkStatusClosed VCSLinkStatus = "closed"
 )
 
+// VCSLinkStatusNames lists the accepted status values, for validation error
+// messages. Callers may also send "" to mean "not specified" — the service
+// layer fills that in (open, for PR links) rather than the HTTP boundary,
+// since the right default depends on link_type.
+var VCSLinkStatusNames = []string{"open", "merged", "closed"}
+
+// ParseVCSLinkStatus resolves a caller-supplied status. Empty input is valid
+// and means "let the service decide" — everything else must be one of the
+// three known values, case- and whitespace-insensitive, so a caller who
+// knows a PR is already merged (e.g. linking it after the fact, the exact
+// scenario a webhook can never cover) can say so directly instead of the
+// link silently sitting in an unresolvable state.
+func ParseVCSLinkStatus(raw string) (VCSLinkStatus, bool) {
+	trimmed := strings.ToLower(strings.TrimSpace(raw))
+	if trimmed == "" {
+		return "", true
+	}
+	switch VCSLinkStatus(trimmed) {
+	case VCSLinkStatusOpen, VCSLinkStatusMerged, VCSLinkStatusClosed:
+		return VCSLinkStatus(trimmed), true
+	default:
+		return "", false
+	}
+}
+
 // VCSLink associates a task with a GitHub PR, commit, or branch.
 type VCSLink struct {
 	ID         uuid.UUID       `json:"id" db:"id"`

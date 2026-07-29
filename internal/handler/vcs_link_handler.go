@@ -158,6 +158,19 @@ func (h *VCSLinkHandler) Create(c echo.Context) error {
 				": expected one of "+strings.Join(domain.VCSLinkTypeNames, ", ")))
 	}
 
+	// Validate status the same way as link_type: empty means "let the
+	// service pick a default", anything else must be a known value. Without
+	// this, a typo (or a stale caller sending the pre-alias "pull_request"
+	// spelling into the wrong field) would silently store an unrecognised
+	// status string that the done-evidence gate's Status != merged check
+	// then treats as indistinguishable from "open" — no error, wrong state.
+	linkStatus, ok := domain.ParseVCSLinkStatus(req.Status)
+	if !ok {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest(
+			"unsupported status "+strconv.Quote(req.Status)+
+				": expected one of "+strings.Join(domain.VCSLinkStatusNames, ", ")))
+	}
+
 	input := domain.CreateVCSLinkInput{
 		TaskID:     taskID,
 		Provider:   provider,
@@ -165,7 +178,7 @@ func (h *VCSLinkHandler) Create(c echo.Context) error {
 		ExternalID: req.ExternalID,
 		URL:        req.URL,
 		Title:      req.Title,
-		Status:     domain.VCSLinkStatus(req.Status),
+		Status:     linkStatus,
 	}
 
 	link, err := h.vcsService.Create(c.Request().Context(), input)

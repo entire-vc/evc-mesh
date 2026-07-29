@@ -561,7 +561,7 @@ func (s *taskService) MoveTask(ctx context.Context, taskID uuid.UUID, input Move
 					if linksErr == nil {
 						for _, l := range links {
 							if l.LinkType == domain.VCSLinkTypePR && l.Status != domain.VCSLinkStatusMerged && l.Status != domain.VCSLinkStatusClosed {
-								return &DoneEvidenceError{PRURL: l.URL, PRTitle: l.Title}
+								return &DoneEvidenceError{PRURL: l.URL, PRTitle: l.Title, PRStatus: string(l.Status)}
 							}
 						}
 					}
@@ -1327,9 +1327,12 @@ func (e *HumanGateFrozenError) Error() string {
 // DoneEvidenceError is returned when a task is moved to done but evidence is
 // missing or a linked PR has not been merged (or explicitly closed) yet.
 type DoneEvidenceError struct {
-	// PRURL and PRTitle are set when a specific unmerged PR triggered the block.
-	PRURL   string
-	PRTitle string
+	// PRURL, PRTitle and PRStatus are set when a specific unmerged PR
+	// triggered the block. PRStatus is the recorded vcs_links.status value
+	// ("open", or "" for a link created before status tracking existed).
+	PRURL    string
+	PRTitle  string
+	PRStatus string
 }
 
 func (e *DoneEvidenceError) Error() string {
@@ -1338,7 +1341,22 @@ func (e *DoneEvidenceError) Error() string {
 		if ref == "" {
 			ref = e.PRURL
 		}
-		return fmt.Sprintf("PR «%s» is not merged; merge it first or add a justification comment explaining why the PR is not needed", ref)
+		// No "justification comment" escape hatch exists on this branch —
+		// VCSLinkCount > 0 blocks unconditionally on an unmerged/unrecorded
+		// PR link, comments are only consulted when there is NO VCS link at
+		// all. A message promising one taught agents to write a comment,
+		// hit the same 422 again, and conclude the gate itself was broken
+		// (#df734dd9). If the recorded status is empty, the likely cause is
+		// that the link was created for a PR that was already merged before
+		// linking — no webhook will ever arrive to fix that after the fact.
+		if e.PRStatus == "" {
+			return fmt.Sprintf(
+				"PR «%s» has no recorded merge status — if it's actually merged, re-link it with an explicit status "+
+					"(add_vcs_link ... status=merged); if it genuinely isn't merged yet, merge it first", ref)
+		}
+		return fmt.Sprintf(
+			"PR «%s» is not merged (recorded status: %s) — if that's stale, re-link it with an explicit status "+
+				"(add_vcs_link ... status=merged); otherwise merge it first", ref, e.PRStatus)
 	}
 	return "done requires evidence: add a PR/VCS link, artifact upload, or comment with proof before closing"
 }
