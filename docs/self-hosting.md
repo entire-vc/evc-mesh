@@ -261,10 +261,13 @@ artifacts — owned by those users. Back up first (see
 
 By default `POST /auth/register` is a **public, unauthenticated endpoint** —
 anyone who can reach the instance can create an account. Each new account gets
-its own isolated workspace, so a stranger cannot see anyone else's data, but on
-an internet-facing self-host instance this still means: unlimited accounts
-consuming your database/S3/JetStream, and behavior most operators running a
-small team (3-10 people) do not expect from a "closed" tool.
+its own workspace, and every route that names workspace-owned data enforces
+membership (see [Security Checklist](#security-checklist), item 7) — with
+one **known exception documented there**, which is why closing registration is
+recommended rather than optional. On an internet-facing self-host instance the
+open endpoint also means: unlimited accounts consuming your
+database/S3/JetStream, and behavior most operators running a small team (3-10
+people) do not expect from a "closed" tool.
 
 Set `MESH_ALLOW_REGISTRATION=false` and restart the API to close it:
 
@@ -448,6 +451,24 @@ that one value configures both the server and the client.
    - Renaming a workspace or changing its slug
      (`PATCH /workspaces/:ws_id`) is owner/admin only, because the slug appears
      in every `/w/<slug>/...` URL your team has saved.
+
+   ⚠️ **Known gap — do not read the above as "isolation is complete".** The
+   guard resolves the tenant from a **path parameter**. A route that takes the
+   workspace from the **request body** instead has no path parameter to resolve,
+   so the guard never runs on it. `POST /api/v1/rules/evaluate` is such a route
+   today: it reads `workspace_id` from the JSON body and does not check that the
+   caller belongs to it, so any authenticated account can evaluate rules against
+   another workspace. Composite routes that name a child object
+   (`.../statuses/:status_id`, `.../auto-transition-rules/:rule_id`,
+   `/tasks/:task_id/dependencies/:dep_id`) verify the parent but not that the
+   child belongs to it.
+
+   Note what this does and does not mean: closing registration stops a **new**
+   stranger from obtaining credentials, but it does **not** protect you from
+   accounts that already exist on the instance. **If you host unrelated tenants
+   on one instance, do not treat it as a security boundary until this is
+   closed.** Tracked, with reproductions, as the follow-up to the tenancy work
+   in `#416`/`#419`/`#420`.
 
 8. **TLS** -- Set up a reverse proxy (nginx or Caddy) with TLS termination:
 
