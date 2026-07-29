@@ -3890,7 +3890,11 @@ paths:
                   default: github
                 link_type:
                   type: string
-                  enum: [pr, commit, branch]
+                  description: >-
+                    Accepted case-insensitively. "pull_request" is an alias for
+                    "pr" and is stored as "pr" — responses only ever contain the
+                    canonical values [pr, commit, branch].
+                  enum: [pr, pull_request, commit, branch]
                 external_id:
                   type: string
                 url:

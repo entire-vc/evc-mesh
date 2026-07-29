@@ -2,6 +2,7 @@ package domain
 
 import (
 	"encoding/json"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -23,6 +24,34 @@ const (
 	VCSLinkTypeCommit VCSLinkType = "commit"
 	VCSLinkTypeBranch VCSLinkType = "branch"
 )
+
+// vcsLinkTypeAliases maps accepted spellings onto the canonical link type.
+// Keys are lower-cased; ParseVCSLinkType folds case before the lookup.
+//
+// Only the canonical value is ever stored, so every consumer (the unique
+// index on (task_id, provider, link_type, external_id), reporting queries,
+// downstream matchers) keeps seeing exactly one spelling per concept.
+var vcsLinkTypeAliases = map[string]VCSLinkType{
+	"pr":           VCSLinkTypePR,
+	"pull_request": VCSLinkTypePR,
+	"commit":       VCSLinkTypeCommit,
+	"branch":       VCSLinkTypeBranch,
+}
+
+// VCSLinkTypeNames lists the accepted link_type spellings, canonical first,
+// for use in validation error messages.
+var VCSLinkTypeNames = []string{"pr", "pull_request", "commit", "branch"}
+
+// ParseVCSLinkType resolves a caller-supplied link_type to its canonical
+// value. Matching ignores surrounding whitespace and case ("PR" and
+// "Pull_Request" both resolve to "pr"), because link_type is a fixed
+// vocabulary rather than user data — rejecting a capitalised spelling only
+// ever produced a confusing 400. Returns ok=false for anything outside the
+// vocabulary.
+func ParseVCSLinkType(raw string) (VCSLinkType, bool) {
+	lt, ok := vcsLinkTypeAliases[strings.ToLower(strings.TrimSpace(raw))]
+	return lt, ok
+}
 
 // VCSLinkStatus reflects the current state of the linked object (PRs only).
 type VCSLinkStatus string

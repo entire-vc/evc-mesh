@@ -10,6 +10,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -148,12 +149,13 @@ func (h *VCSLinkHandler) Create(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("unsupported provider: "+string(provider)))
 	}
 
-	// Validate link_type.
-	linkType := domain.VCSLinkType(req.LinkType)
-	switch linkType {
-	case domain.VCSLinkTypePR, domain.VCSLinkTypeCommit, domain.VCSLinkTypeBranch:
-	default:
-		return c.JSON(http.StatusBadRequest, apierror.BadRequest("unsupported link_type: "+req.LinkType))
+	// Validate link_type. Accepts the alias "pull_request" and any casing;
+	// only the canonical value reaches the store.
+	linkType, ok := domain.ParseVCSLinkType(req.LinkType)
+	if !ok {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest(
+			"unsupported link_type "+strconv.Quote(req.LinkType)+
+				": expected one of "+strings.Join(domain.VCSLinkTypeNames, ", ")))
 	}
 
 	input := domain.CreateVCSLinkInput{

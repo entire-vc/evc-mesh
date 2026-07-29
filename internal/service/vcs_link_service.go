@@ -88,6 +88,14 @@ func (s *vcsLinkService) Create(ctx context.Context, input domain.CreateVCSLinkI
 		provider = domain.VCSProviderGitHub
 	}
 
+	// Canonicalise here as well as at the HTTP edge: the uniqueness index and
+	// every downstream reader assume one spelling per concept, so an alias
+	// must never reach the repository regardless of which caller supplied it.
+	linkType := input.LinkType
+	if canonical, ok := domain.ParseVCSLinkType(string(linkType)); ok {
+		linkType = canonical
+	}
+
 	metadata := input.Metadata
 	if metadata == nil {
 		metadata = []byte("{}")
@@ -97,7 +105,7 @@ func (s *vcsLinkService) Create(ctx context.Context, input domain.CreateVCSLinkI
 		ID:         uuid.New(),
 		TaskID:     input.TaskID,
 		Provider:   provider,
-		LinkType:   input.LinkType,
+		LinkType:   linkType,
 		ExternalID: input.ExternalID,
 		URL:        input.URL,
 		Title:      input.Title,
