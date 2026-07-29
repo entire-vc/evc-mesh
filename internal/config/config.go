@@ -97,6 +97,14 @@ type ServerConfig struct {
 	Port         int
 	ReadTimeout  time.Duration
 	WriteTimeout time.Duration
+	// MetricsToken, when set, gates GET /metrics behind a matching
+	// `Authorization: Bearer <token>` header. Empty (the default) leaves the
+	// endpoint open — that's the existing behavior for deployments that
+	// front it with their own network control (e.g. Caddy on the internal
+	// prod install). The self-host docker-compose.prod.yml requires this
+	// var rather than leaving it empty, since it publishes the port and has
+	// no such front proxy by default.
+	MetricsToken string
 }
 
 // DatabaseConfig holds PostgreSQL connection settings.
@@ -182,6 +190,7 @@ func Load() *Config {
 			Port:         getEnvInt("SERVER_PORT", 8005),
 			ReadTimeout:  getEnvDuration("SERVER_READ_TIMEOUT", 30*time.Second),
 			WriteTimeout: getEnvDuration("SERVER_WRITE_TIMEOUT", 30*time.Second),
+			MetricsToken: getEnv("MESH_METRICS_TOKEN", ""),
 		},
 		Database: DatabaseConfig{
 			Host:     getEnv("DB_HOST", "localhost"),

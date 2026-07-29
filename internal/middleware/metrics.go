@@ -1,7 +1,10 @@
 package middleware
 
 import (
+	"crypto/subtle"
+	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/labstack/echo/v4"
@@ -55,3 +58,29 @@ func RecordWebhookDispatch(eventType string, success bool) {
 
 // RecordRateLimitHit records a rate-limit rejection for the given key type (ip, user, agent).
 func RecordRateLimitHit(keyType string) { pkgmetrics.RecordRateLimitHit(keyType) }
+
+// MetricsAuth gates GET /metrics behind a bearer token. When token is empty
+// it is a no-op — the endpoint stays open, matching the historical behavior
+// for deployments that gate it at the network layer instead (e.g. the
+// internal prod install, fronted by Caddy). When non-empty, every request
+// must carry a matching "Authorization: Bearer <token>" header; comparison
+// is constant-time so response timing can't be used to guess the token.
+func MetricsAuth(token string) echo.MiddlewareFunc {
+	return func(next echo.HandlerFunc) echo.HandlerFunc {
+		if token == "" {
+			return next
+		}
+		return func(c echo.Context) error {
+			const prefix = "Bearer "
+			auth := c.Request().Header.Get("Authorization")
+			if !strings.HasPrefix(auth, prefix) {
+				return c.NoContent(http.StatusUnauthorized)
+			}
+			got := auth[len(prefix):]
+			if subtle.ConstantTimeCompare([]byte(got), []byte(token)) != 1 {
+				return c.NoContent(http.StatusUnauthorized)
+			}
+			return next(c)
+		}
+	}
+}

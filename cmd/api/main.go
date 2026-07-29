@@ -470,8 +470,14 @@ func main() {
 		AllowHeaders: []string{"Authorization", "Content-Type", "X-Agent-Key", "X-Request-ID"},
 	}))
 
-	// Prometheus metrics scrape endpoint (unauthenticated, bind to internal network in prod).
-	e.GET("/metrics", echo.WrapHandler(promhttp.Handler()))
+	// Prometheus metrics scrape endpoint. Gated by MESH_METRICS_TOKEN when
+	// set (mw.MetricsAuth is a no-op otherwise) — the self-host
+	// docker-compose.prod.yml requires the var and configures Prometheus's
+	// scrape config with the matching bearer_token_file, since that compose
+	// stack publishes this port and has no front proxy of its own. An
+	// unauthenticated deployment (e.g. internal prod, gated by Caddy
+	// upstream) is unaffected by leaving the var unset.
+	e.GET("/metrics", echo.WrapHandler(promhttp.Handler()), mw.MetricsAuth(cfg.Server.MetricsToken))
 
 	// Health check.
 	e.GET("/health", func(c echo.Context) error {

@@ -142,6 +142,13 @@ services:
       SMTP_USER: ${SMTP_USER:-}
       SMTP_PASSWORD: ${SMTP_PASSWORD:-}
       SMTP_FROM: ${SMTP_FROM:-noreply@mesh.entire.host}
+      # Gates GET /metrics behind a bearer token — this compose stack
+      # publishes the api port and has no front proxy of its own, unlike the
+      # non-compose internal deploy this endpoint's comment used to assume.
+      # The prometheus service below is handed the same value via a Compose
+      # secret, not a plain env var, so it isn't sitting in `docker inspect`
+      # output on that container.
+      MESH_METRICS_TOKEN: ${MESH_METRICS_TOKEN:?MESH_METRICS_TOKEN is required}
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "-O", "/dev/null", "http://localhost:8005/health"]
       interval: 15s
@@ -190,6 +197,8 @@ services:
       - ./volumes/prometheus/data:/prometheus
     ports:
       - "${PROMETHEUS_PORT:-9090}:9090"
+    secrets:
+      - mesh_metrics_token
     depends_on:
       - api
 
@@ -208,3 +217,12 @@ services:
       - "${GRAFANA_PORT:-3001}:3000"
     depends_on:
       - prometheus
+
+# Sourced from the MESH_METRICS_TOKEN env var into a file at
+# /run/secrets/mesh_metrics_token inside any service that declares it — used
+# instead of a plain environment variable so the token isn't sitting in
+# `docker inspect`/`docker compose config` output on the prometheus
+# container, which has no other reason to expose it.
+secrets:
+  mesh_metrics_token:
+    environment: MESH_METRICS_TOKEN
