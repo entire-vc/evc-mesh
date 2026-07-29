@@ -1,26 +1,28 @@
 {
   "search_mode": "hybrid",
-  "captured_at": "2026-07-26T15:15:02Z",
+  "arm": "prod",
+  "captured_at": "2026-07-28T09:15:24Z",
   "top_k": 10,
   "n_runs": 3,
   "scores": {
     "knowledge-update": 1.0,
     "multi-session": 1.0,
-    "overall": 0.9027777777777777,
+    "overall": 1.0,
     "single-session-assistant": 1.0,
-    "single-session-preference": 0.9166666666666666,
-    "single-session-user": 0.5,
+    "single-session-preference": 1.0,
+    "single-session-user": 1.0,
     "temporal-reasoning": 1.0
   },
   "spread": {
     "knowledge-update": 0.0,
     "multi-session": 0.0,
-    "overall": 0.04166666666666663,
+    "overall": 0.0,
     "single-session-assistant": 0.0,
-    "single-session-preference": 0.25,
+    "single-session-preference": 0.0,
     "single-session-user": 0.0,
     "temporal-reasoning": 0.0
   },
+  "commit": "ba7deae069f68fe91f50bb2f59a4cb50a8c038c3",
   "sample_sizes": {
     "knowledge-update": [
       4,
