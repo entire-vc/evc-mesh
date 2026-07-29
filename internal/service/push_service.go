@@ -26,22 +26,25 @@ type PushService interface {
 
 type pushService struct {
 	subRepo      repository.PushSubscriptionRepository
-	notifRepo    notifPrefsGetter
+	notifRepo    notifRecipientRepo
 	vapidPublic  string
 	vapidPrivate string
 	vapidSubject string
 }
 
-// notifPrefsGetter is a minimal interface for reading notification preferences.
-// Satisfied by *postgres.NotificationRepo.
-type notifPrefsGetter interface {
+// notifRecipientRepo is the slice of *postgres.NotificationRepo this service
+// needs, and it is two questions rather than one: what the subscriber asked to
+// be sent, and whether they are in the workspace whose contents that would be.
+// Only the second is an entitlement.
+type notifRecipientRepo interface {
 	GetPreferencesByWorkspace(ctx context.Context, workspaceID uuid.UUID) ([]domain.NotificationPreference, error)
+	FilterWorkspaceMembers(ctx context.Context, workspaceID uuid.UUID, userIDs []uuid.UUID) (map[uuid.UUID]bool, error)
 }
 
 // NewPushService creates a PushService. Missing VAPID keys disable push silently.
 func NewPushService(
 	subRepo repository.PushSubscriptionRepository,
-	notifRepo notifPrefsGetter,
+	notifRepo notifRecipientRepo,
 	vapidPublic, vapidPrivate, vapidSubject string,
 ) PushService {
 	if vapidPublic == "" || vapidPrivate == "" {
@@ -82,6 +85,30 @@ func (s *pushService) ListByUser(ctx context.Context, userID uuid.UUID) ([]domai
 
 func (s *pushService) SendToUser(ctx context.Context, userID, workspaceID uuid.UUID, payload domain.PushPayload) error {
 	if s.vapidPublic == "" || s.vapidPrivate == "" {
+		return nil
+	}
+
+	// A push subscription and a preference row are both things the recipient
+	// wrote about themselves. Neither is evidence that they are in this
+	// workspace, and neither stops being true when they are removed from it —
+	// so membership is checked here, before a payload carrying a comment body
+	// is addressed to one of their devices.
+	//
+	// notificationService.dispatch applies the same rule before calling this,
+	// and this is deliberately not a reliance on that. SendToUser is exported
+	// and takes the workspace as an argument; a second caller that forgot would
+	// deliver the workspace's contents to a stranger's browser, and the in-app
+	// path's filter would never see it. Both fan-outs answer to one rule.
+	members, err := s.notifRepo.FilterWorkspaceMembers(ctx, workspaceID, []uuid.UUID{userID})
+	if err != nil {
+		// Fail closed, as dispatch does: a membership question that could not be
+		// answered is not permission to send. A missed push is a nuisance; a
+		// comment body on the wrong device is not.
+		log.Printf("[push] failed to resolve membership for user %s in workspace %s, sending nothing: %v",
+			userID, workspaceID, err)
+		return nil
+	}
+	if !members[userID] {
 		return nil
 	}
 

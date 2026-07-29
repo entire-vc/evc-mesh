@@ -95,10 +95,29 @@ var _ repository.PushSubscriptionRepository = (*mockPushSubRepo)(nil)
 
 type mockNotifPrefsGetter struct {
 	prefs []domain.NotificationPreference
+	// nonMembers are treated as strangers to the workspace. The zero value says
+	// everyone is a member, so the tests that predate the membership check keep
+	// asking only about what they were written to ask about.
+	nonMembers map[uuid.UUID]bool
+	// membershipErr makes the membership lookup unanswerable.
+	membershipErr error
 }
 
 func (m *mockNotifPrefsGetter) GetPreferencesByWorkspace(_ context.Context, _ uuid.UUID) ([]domain.NotificationPreference, error) {
 	return m.prefs, nil
+}
+
+func (m *mockNotifPrefsGetter) FilterWorkspaceMembers(_ context.Context, _ uuid.UUID, userIDs []uuid.UUID) (map[uuid.UUID]bool, error) {
+	if m.membershipErr != nil {
+		return nil, m.membershipErr
+	}
+	members := make(map[uuid.UUID]bool, len(userIDs))
+	for _, id := range userIDs {
+		if !m.nonMembers[id] {
+			members[id] = true
+		}
+	}
+	return members, nil
 }
 
 // prefFor returns a pref with browser_push channel enabled for the given user and events.

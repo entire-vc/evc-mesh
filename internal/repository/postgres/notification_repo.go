@@ -60,10 +60,12 @@ func (r *NotificationRepo) GetPreferencesByAgent(ctx context.Context, agentID uu
 // when it matches nothing. The previous version wrote ON CONFLICT (id) against an
 // id it had just generated, so the conflict never fired and every call appended a
 // row: toggling one setting five times left five rows, dispatch iterated all of
-// them, and there was no single row for an unsubscribe to remove. There is no
-// unique index on the natural key to conflict on, and adding one would first have
-// to dedupe whatever is already stored, so the upsert is done in two statements
-// rather than in the constraint.
+// them, and there was no single row for an unsubscribe to remove.
+//
+// Since 20260729085 the match key is a pair of unique indexes as well, so it is
+// the table's rule and not only this function's: the UPDATE remains the ordinary
+// path, and the INSERT behind it carries ON CONFLICT for the two callers who
+// raced to create the same first row and both found nothing to update.
 func (r *NotificationRepo) UpsertPreference(ctx context.Context, pref *domain.NotificationPreference) error {
 	cfg := pref.Config
 	if cfg == nil {
@@ -98,10 +100,26 @@ func (r *NotificationRepo) UpsertPreference(ctx context.Context, pref *domain.No
 	if pref.ID == uuid.Nil {
 		pref.ID = uuid.New()
 	}
-	const insertQ = `
+
+	// The UPDATE above and this INSERT are two statements, so two callers saving
+	// the first preference for the same actor at the same time both find nothing
+	// to update and both arrive here. uq_notif_prefs_*_channel makes that a
+	// duplicate-key error rather than a duplicate row; DO UPDATE turns the error
+	// into the write the loser meant to make, which is what the caller would have
+	// got had they arrived a moment later.
+	conflictTarget := "(workspace_id, user_id, channel) WHERE user_id IS NOT NULL"
+	if pref.UserID == nil {
+		conflictTarget = "(workspace_id, agent_id, channel) WHERE agent_id IS NOT NULL"
+	}
+	insertQ := `
 		INSERT INTO notification_preferences
 			(id, workspace_id, user_id, agent_id, channel, events, is_enabled, config, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now(), now())
+		ON CONFLICT ` + conflictTarget + ` DO UPDATE
+		SET events     = EXCLUDED.events,
+		    is_enabled = EXCLUDED.is_enabled,
+		    config     = EXCLUDED.config,
+		    updated_at = now()
 		RETURNING id, created_at, updated_at
 	`
 	return r.db.QueryRowContext(ctx, insertQ,
@@ -222,10 +240,21 @@ func (r *NotificationRepo) GetPreferencesByWorkspace(ctx context.Context, worksp
 // FilterWorkspaceMembers returns the subset of userIDs that are entitled to see
 // the workspace's content, in one query rather than one per candidate.
 //
-// It is the membership rule of middleware.UserIsWorkspaceMember — a non-empty
-// role row, or ownership of the workspace, which is how the founding owner is a
-// member without a workspace_members row — asked about many users at once,
-// because the caller asking is a fan-out loop and not a request handler.
+// It is the membership rule of middleware.UserIsWorkspaceMember — a
+// workspace_members row, or ownership of the workspace, which is how the
+// founding owner is a member without a workspace_members row — asked about many
+// users at once, because the caller asking is a fan-out loop and not a request
+// handler.
+//
+// The membership half is the existence of the row and nothing more.
+// UserIsWorkspaceMember reads role into a Go string and then checks role != "",
+// which reads like a condition but cannot fail: workspace_members.role is a NOT
+// NULL workspace_role, whose values are owner/admin/member/viewer. Written back
+// into SQL as a comparison against an empty string literal, it stops being
+// vacuous and starts being an error: PostgreSQL has to coerce that literal to the
+// enum, there is no empty label to coerce it to, and the whole query dies with
+// 22P02. Every caller fails closed on that error, so the effect was not a
+// stricter filter but silence — no notification, in-app or push, reached anybody.
 func (r *NotificationRepo) FilterWorkspaceMembers(ctx context.Context, workspaceID uuid.UUID, userIDs []uuid.UUID) (map[uuid.UUID]bool, error) {
 	members := make(map[uuid.UUID]bool, len(userIDs))
 	if len(userIDs) == 0 {
@@ -240,7 +269,7 @@ func (r *NotificationRepo) FilterWorkspaceMembers(ctx context.Context, workspace
 	const q = `
 		SELECT wm.user_id
 		FROM workspace_members wm
-		WHERE wm.workspace_id = $1 AND wm.user_id = ANY($2::uuid[]) AND wm.role <> ''
+		WHERE wm.workspace_id = $1 AND wm.user_id = ANY($2::uuid[])
 		UNION
 		SELECT w.owner_id
 		FROM workspaces w
