@@ -1,10 +1,12 @@
 package service
 
 import (
+	"context"
 	"testing"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
 )
@@ -178,4 +180,110 @@ func TestComputeAgentPermissions_UnconfiguredPolicyDefaultsAllowed(t *testing.T)
 	assert.True(t, perms.CanCreateTasks)
 	assert.True(t, perms.CanDeleteTasks)
 	assert.True(t, perms.CanReassign)
+}
+
+// --------------------------------------------------------------------------
+// UpdateAgentProfile — partial-update (PATCH-semantics) regression
+// --------------------------------------------------------------------------
+
+// strPtr and intPtr are tiny helpers for building AgentProfileUpdate literals
+// in tests, mirroring how a real caller sends only the fields it means to change.
+func strPtr(s string) *string { return &s }
+func intPtr(i int) *int       { return &i }
+
+// TestUpdateAgentProfile_OmittedFieldsAreNotZeroed pins the documented
+// behavior of domain.AgentProfileUpdate: a request that only sets one field
+// must leave every other existing field untouched, not blank it out. This is
+// the regression test for the "full-replace footgun" described in task #7acd2497 —
+// previously every field was assigned unconditionally, so a caller who forgot
+// to resend e.g. working_hours would silently wipe it.
+func TestUpdateAgentProfile_OmittedFieldsAreNotZeroed(t *testing.T) {
+	agentRepo := NewMockAgentRepository()
+	svc := NewRulesService(nil, nil, nil, agentRepo, nil, nil, nil)
+
+	agentID := uuid.New()
+	original := &domain.Agent{
+		ID:                 agentID,
+		Name:               "test-agent",
+		Slug:               "test-agent",
+		Role:               "developer",
+		ResponsibilityZone: "backend",
+		MaxConcurrentTasks: 3,
+		WorkingHours:       "09:00-17:00",
+		ProfileDescription: "Original description",
+	}
+	require.NoError(t, agentRepo.Create(context.Background(), original))
+
+	// Only ProfileDescription is being changed; every other field is omitted.
+	update := domain.AgentProfileUpdate{
+		ProfileDescription: strPtr("Updated description"),
+	}
+	err := svc.UpdateAgentProfile(context.Background(), agentID, update)
+	require.NoError(t, err)
+
+	got, err := agentRepo.GetByID(context.Background(), agentID)
+	require.NoError(t, err)
+	assert.Equal(t, "Updated description", got.ProfileDescription, "the field actually sent should change")
+	assert.Equal(t, "developer", got.Role, "Role must survive an update that didn't mention it")
+	assert.Equal(t, "backend", got.ResponsibilityZone, "ResponsibilityZone must survive an update that didn't mention it")
+	assert.Equal(t, 3, got.MaxConcurrentTasks, "MaxConcurrentTasks must survive an update that didn't mention it")
+	assert.Equal(t, "09:00-17:00", got.WorkingHours, "WorkingHours must survive an update that didn't mention it")
+}
+
+// TestUpdateAgentProfile_ExplicitEmptyStringClears confirms a caller can still
+// intentionally clear a string field by sending an explicit empty string —
+// the partial-update semantics distinguish "omitted" (nil pointer) from
+// "explicitly set to empty" (non-nil pointer to "").
+func TestUpdateAgentProfile_ExplicitEmptyStringClears(t *testing.T) {
+	agentRepo := NewMockAgentRepository()
+	svc := NewRulesService(nil, nil, nil, agentRepo, nil, nil, nil)
+
+	agentID := uuid.New()
+	require.NoError(t, agentRepo.Create(context.Background(), &domain.Agent{
+		ID:           agentID,
+		Name:         "test-agent",
+		Slug:         "test-agent",
+		WorkingHours: "09:00-17:00",
+	}))
+
+	err := svc.UpdateAgentProfile(context.Background(), agentID, domain.AgentProfileUpdate{
+		WorkingHours: strPtr(""),
+	})
+	require.NoError(t, err)
+
+	got, err := agentRepo.GetByID(context.Background(), agentID)
+	require.NoError(t, err)
+	assert.Equal(t, "", got.WorkingHours, "an explicit empty string must still clear the field")
+}
+
+// TestUpdateAgentProfile_AllFieldsSetAppliesEverything verifies the ordinary
+// "send the full profile" path still works — the legitimate way to use this
+// endpoint as a full replace.
+func TestUpdateAgentProfile_AllFieldsSetAppliesEverything(t *testing.T) {
+	agentRepo := NewMockAgentRepository()
+	svc := NewRulesService(nil, nil, nil, agentRepo, nil, nil, nil)
+
+	agentID := uuid.New()
+	require.NoError(t, agentRepo.Create(context.Background(), &domain.Agent{
+		ID:   agentID,
+		Name: "test-agent",
+		Slug: "test-agent",
+	}))
+
+	err := svc.UpdateAgentProfile(context.Background(), agentID, domain.AgentProfileUpdate{
+		Role:               strPtr("lead"),
+		ResponsibilityZone: strPtr("infra"),
+		MaxConcurrentTasks: intPtr(5),
+		WorkingHours:       strPtr("10:00-18:00"),
+		ProfileDescription: strPtr("Full replace"),
+	})
+	require.NoError(t, err)
+
+	got, err := agentRepo.GetByID(context.Background(), agentID)
+	require.NoError(t, err)
+	assert.Equal(t, "lead", got.Role)
+	assert.Equal(t, "infra", got.ResponsibilityZone)
+	assert.Equal(t, 5, got.MaxConcurrentTasks)
+	assert.Equal(t, "10:00-18:00", got.WorkingHours)
+	assert.Equal(t, "Full replace", got.ProfileDescription)
 }

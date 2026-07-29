@@ -3,6 +3,7 @@ package middleware
 import (
 	"net/http"
 
+	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
@@ -145,6 +146,37 @@ func RequirePermission(perm Permission, memberRepo repository.WorkspaceMemberRep
 			}
 
 			return next(c)
+		}
+	}
+}
+
+// RequireSelfOrPermission returns Echo middleware for routes whose path carries
+// an agent_id that the caller may always manage for themselves (e.g. an agent
+// updating its own profile via X-Agent-Key), but which requires an explicit
+// permission to manage on someone else's behalf.
+//
+// The path param named agentIDParam is compared against the authenticated
+// agent's own ID (agent auth only — users have no agent identity to match
+// against). On a match the request proceeds unconditionally, no permission
+// lookup. On a mismatch, or for user auth, it falls back to the same check
+// RequirePermission would perform — so a user still needs perm via their
+// workspace role, and an agent acting on another agent's resource still needs
+// perm via agentPerms (which today grants none of the management perms to any
+// agent role — cross-agent management is JWT-owner/admin-only until a
+// dedicated agent permission is introduced).
+func RequireSelfOrPermission(agentIDParam string, perm Permission, memberRepo repository.WorkspaceMemberRepository) echo.MiddlewareFunc {
+	fallback := RequirePermission(perm, memberRepo)
+	return func(next echo.HandlerFunc) echo.HandlerFunc {
+		guarded := fallback(next)
+		return func(c echo.Context) error {
+			if IsAgent(c) {
+				if callerID, err := GetAgentID(c); err == nil {
+					if targetID, perr := uuid.Parse(c.Param(agentIDParam)); perr == nil && targetID == callerID {
+						return next(c)
+					}
+				}
+			}
+			return guarded(c)
 		}
 	}
 }

@@ -103,15 +103,21 @@ type PolicyRule struct {
 }
 
 // AgentProfileUpdate represents the updatable profile fields for an agent (team directory).
+//
+// This is a PATCH-semantics partial update, despite the route being PUT
+// /agents/:agent_id/profile: every field is a pointer (or a nil-able
+// json.RawMessage) and a field omitted from the request body is left
+// untouched on the agent rather than being zeroed out. A caller that wants to
+// clear a field must send it explicitly (e.g. "working_hours": "").
 type AgentProfileUpdate struct {
-	Role               string          `json:"role"`
+	Role               *string         `json:"role,omitempty"`
 	Capabilities       json.RawMessage `json:"capabilities"`
-	ResponsibilityZone string          `json:"responsibility_zone"`
+	ResponsibilityZone *string         `json:"responsibility_zone,omitempty"`
 	EscalationTo       json.RawMessage `json:"escalation_to,omitempty"`
 	AcceptsFrom        json.RawMessage `json:"accepts_from"`
-	MaxConcurrentTasks int             `json:"max_concurrent_tasks"`
-	WorkingHours       string          `json:"working_hours"`
-	ProfileDescription string          `json:"profile_description"`
+	MaxConcurrentTasks *int            `json:"max_concurrent_tasks,omitempty"`
+	WorkingHours       *string         `json:"working_hours,omitempty"`
+	ProfileDescription *string         `json:"profile_description,omitempty"`
 }
 
 // TeamDirectoryAgent is the full agent info for team directory API.

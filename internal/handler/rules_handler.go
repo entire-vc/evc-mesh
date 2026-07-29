@@ -54,7 +54,13 @@ func (h *RulesHandler) GetTeamDirectory(c echo.Context) error {
 	return c.JSON(http.StatusOK, dir)
 }
 
-// UpdateAgentProfile handles PUT /agents/:agent_id/profile
+// UpdateAgentProfile handles PUT /agents/:agent_id/profile.
+//
+// Despite the verb, this is a partial update: fields omitted from the request
+// body are left untouched rather than zeroed (see domain.AgentProfileUpdate).
+// An agent may always update its own profile (X-Agent-Key matching agent_id);
+// updating another agent's profile requires PermDeleteAgent (RequireSelfOrPermission,
+// wired at the route in cmd/api/main.go).
 func (h *RulesHandler) UpdateAgentProfile(c echo.Context) error {
 	agentID, err := uuid.Parse(c.Param("agent_id"))
 	if err != nil {

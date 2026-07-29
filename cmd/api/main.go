@@ -895,7 +895,10 @@ func main() {
 
 	// Team Directory routes (Sprint 20).
 	api.GET("/workspaces/:ws_id/team", rulesHandler.GetTeamDirectory)
-	api.PUT("/agents/:agent_id/profile", rulesHandler.UpdateAgentProfile)
+	// Self-service (an agent updating its own profile via X-Agent-Key) is always
+	// allowed; rewriting another agent's profile requires PermDeleteAgent, same
+	// bar as PATCH /agents/:agent_id above.
+	api.PUT("/agents/:agent_id/profile", rulesHandler.UpdateAgentProfile, mw.RequireSelfOrPermission("agent_id", mw.PermDeleteAgent, workspaceMemberRepo))
 
 	// Assignment Rules routes (Sprint 20).
 	api.GET("/workspaces/:ws_id/rules/assignment", rulesHandler.GetWorkspaceAssignmentRules)
