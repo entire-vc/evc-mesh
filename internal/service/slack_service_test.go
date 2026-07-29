@@ -7,9 +7,45 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/entire-vc/evc-mesh/internal/domain"
 )
+
+// fakeIntegrationRepo is a minimal repository.IntegrationRepository stub —
+// only GetByProvider is exercised by NotifyTaskEvent, the rest are unused.
+type fakeIntegrationRepo struct {
+	cfg *domain.IntegrationConfig
+}
+
+func (f *fakeIntegrationRepo) Upsert(context.Context, *domain.IntegrationConfig) error {
+	return nil
+}
+func (f *fakeIntegrationRepo) GetByID(context.Context, uuid.UUID) (*domain.IntegrationConfig, error) {
+	return nil, nil
+}
+func (f *fakeIntegrationRepo) GetByProvider(context.Context, uuid.UUID, domain.IntegrationProvider) (*domain.IntegrationConfig, error) {
+	return f.cfg, nil
+}
+func (f *fakeIntegrationRepo) Update(context.Context, uuid.UUID, domain.UpdateIntegrationInput) (*domain.IntegrationConfig, error) {
+	return nil, nil
+}
+func (f *fakeIntegrationRepo) Delete(context.Context, uuid.UUID) error { return nil }
+func (f *fakeIntegrationRepo) ListByWorkspace(context.Context, uuid.UUID) ([]domain.IntegrationConfig, error) {
+	return nil, nil
+}
+
+// activeSlackConfig builds an active Slack integration config posting to webhookURL.
+func activeSlackConfig(webhookURL string) *domain.IntegrationConfig {
+	raw, _ := json.Marshal(slackConfig{WebhookURL: webhookURL})
+	return &domain.IntegrationConfig{
+		Provider: domain.IntegrationProviderSlack,
+		Config:   raw,
+		IsActive: true,
+	}
+}
 
 // TestSendMessage_Success verifies that SendMessage POSTs valid JSON to the webhook URL.
 func TestSendMessage_Success(t *testing.T) {
@@ -187,6 +223,70 @@ func TestResolveTaskEventBaseURL(t *testing.T) {
 				t.Errorf("resolveTaskEventBaseURL(%q, %q) = %q, want %q", tt.eventBaseURL, tt.configured, got, tt.want)
 			}
 		})
+	}
+}
+
+// TestNotifyTaskEvent_FallsBackToConfiguredBaseURL verifies the end-to-end path:
+// a TaskEvent with no BaseURL of its own still produces a deep-link built from
+// the service's configured MESH_BASE_URL (via NewSlackService), never a
+// hardcoded vendor domain.
+func TestNotifyTaskEvent_FallsBackToConfiguredBaseURL(t *testing.T) {
+	received := make(chan SlackMessage, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var msg SlackMessage
+		_ = json.NewDecoder(r.Body).Decode(&msg)
+		received <- msg
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	repo := &fakeIntegrationRepo{cfg: activeSlackConfig(srv.URL)}
+	svc := NewSlackService(repo, "https://configured.example.com")
+
+	taskID := uuid.New()
+	svc.NotifyTaskEvent(context.Background(), uuid.New(), TaskEvent{
+		EventType: "task.created",
+		TaskID:    taskID,
+		TaskTitle: "Wire up the fallback",
+	})
+
+	select {
+	case msg := <-received:
+		if len(msg.Blocks) < 2 || !strings.Contains(msg.Blocks[1].Fields[0].Text, "https://configured.example.com/tasks/"+taskID.String()) {
+			t.Errorf("expected deep-link built from configured base URL, got: %+v", msg.Blocks)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for Slack notification")
+	}
+}
+
+// TestNotifyTaskEvent_SkipsWhenNoBaseURLConfigured verifies that with neither
+// the event's own BaseURL nor a configured MESH_BASE_URL set, the service
+// skips sending rather than falling back to a hardcoded vendor domain or a
+// broken link.
+func TestNotifyTaskEvent_SkipsWhenNoBaseURLConfigured(t *testing.T) {
+	received := make(chan struct{}, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		received <- struct{}{}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	repo := &fakeIntegrationRepo{cfg: activeSlackConfig(srv.URL)}
+	svc := NewSlackService(repo, "") // no configured MESH_BASE_URL
+
+	svc.NotifyTaskEvent(context.Background(), uuid.New(), TaskEvent{
+		EventType: "task.created",
+		TaskID:    uuid.New(),
+		TaskTitle: "Should not be sent",
+		// BaseURL intentionally left empty.
+	})
+
+	select {
+	case <-received:
+		t.Fatal("expected no Slack notification to be sent when no base URL is configured")
+	case <-time.After(200 * time.Millisecond):
+		// Expected: NotifyTaskEvent's goroutine returned early without calling SendMessage.
 	}
 }
 
