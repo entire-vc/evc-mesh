@@ -131,6 +131,12 @@ jobs:
       # tests, no integration test asserted that an event ARRIVES — only that
       # endpoints answer. Started as a plain container below instead, with the
       # same flags as deploy/docker/mesh/docker-compose.yml.
+      #
+      # minio is not a service container for exactly the same reason: its
+      # default CMD prints usage and exits, and the server only starts with
+      # `server /data`. Started as a plain container below. Without it, every
+      # upload answered "object storage is unreachable" and the workspace-icon
+      # test could not check the one thing it exists to check.
     steps:
       - uses: actions/checkout@v6
       - name: Start NATS with JetStream enabled
@@ -144,6 +150,21 @@ jobs:
             sleep 1
           done
           echo "NATS did not become healthy"; docker logs nats; exit 1
+
+      - name: Start MinIO (object storage)
+        run: |
+          docker run -d --name minio -p 9000:9000 \
+            -e MINIO_ROOT_USER=minioadmin \
+            -e MINIO_ROOT_PASSWORD=minioadmin \
+            minio/minio server /data
+          for _ in $(seq 30); do
+            if curl -sf http://localhost:9000/minio/health/live >/dev/null 2>&1; then
+              echo "MinIO ready"; exit 0
+            fi
+            sleep 1
+          done
+          echo "MinIO did not become healthy"; docker logs minio; exit 1
+
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
@@ -170,6 +191,14 @@ jobs:
           REDIS_HOST: localhost
           REDIS_PORT: "6379"
           NATS_URL: "nats://localhost:4222"
+          # Object storage — the MinIO container started above. The bucket is
+          # created by the API at startup, so nothing sets it up here.
+          S3_ENDPOINT: "localhost:9000"
+          S3_ACCESS_KEY_ID: minioadmin
+          S3_SECRET_ACCESS_KEY: minioadmin
+          S3_BUCKET: mesh-artifacts
+          S3_REGION: us-east-1
+          S3_USE_SSL: "false"
           # Auth — CI-safe values (tests create their own users via /auth/register)
           JWT_SECRET: "ci-test-secret-32chars-minimum!!"
           JWT_ISSUER: "mesh-ci"

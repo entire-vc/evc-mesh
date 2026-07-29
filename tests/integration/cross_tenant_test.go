@@ -317,9 +317,15 @@ func TestCrossTenant_PublicRoutesBehaveExactlyAsRegistered(t *testing.T) {
 	require.Empty(t, anon.AuthToken, "the anonymous client must not be authenticated")
 
 	png := onePixelPNG(t)
-	uploadWorkspaceIcon(t, owner, ownerWS, png)
+	storageAvailable, uploadDetail := uploadIconForRead(t, owner, ownerWS, png)
 
 	t.Run("(a) anonymous GET serves the icon", func(t *testing.T) {
+		if !storageAvailable {
+			// Explicit and loud, never a silent green. (b) and (c) below do not
+			// touch storage and still run.
+			t.Skipf("no object storage in this environment, so there is no icon to read back: %s", uploadDetail)
+		}
+
 		resp := anon.Get(t, "/api/v1/workspaces/"+ownerWS+"/icon")
 		body := anon.ReadBody(t, resp)
 		require.Equal(t, http.StatusOK, resp.StatusCode,
@@ -371,12 +377,38 @@ func onePixelPNG(t *testing.T) []byte {
 	return buf.Bytes()
 }
 
-// uploadWorkspaceIcon uploads an icon and requires it to succeed.
-func uploadWorkspaceIcon(t *testing.T, env *TestEnv, wsID string, content []byte) {
+// storageUnavailableMarker is the API's own wording for "the object storage
+// endpoint never answered". It is the ONLY upload failure that may downgrade
+// subtest (a) to a skip: bad credentials, a bucket that cannot be created, or
+// any other error is a real defect and must fail loudly.
+const storageUnavailableMarker = "Object storage is unreachable"
+
+// uploadIconForRead uploads the icon that subtest (a) reads back, and reports
+// whether object storage exists in this environment at all.
+//
+// It exists because the CI job that runs these tests had no object storage:
+// the upload answered 500 and (a) failed for an environmental reason rather
+// than a defect. MinIO is now started in that job, so the normal path is a
+// successful upload — but a developer running the suite against a bare API
+// still gets an honest result instead of a red herring, and subtests (b) and
+// (c), which never touch storage, keep running either way.
+func uploadIconForRead(t *testing.T, env *TestEnv, wsID string, content []byte) (ok bool, detail string) {
 	t.Helper()
+
 	resp := uploadWorkspaceIconRaw(t, env, wsID, content)
 	body := string(env.ReadBody(t, resp))
-	require.Equal(t, http.StatusOK, resp.StatusCode, "icon upload failed: %s", body)
+	if resp.StatusCode == http.StatusOK {
+		return true, body
+	}
+
+	// Anything other than "storage is not there" is a genuine failure — do not
+	// let it hide behind a skip.
+	require.True(t,
+		resp.StatusCode == http.StatusInternalServerError && strings.Contains(body, storageUnavailableMarker),
+		"icon upload failed for a reason other than absent object storage (status %d): %s",
+		resp.StatusCode, body)
+
+	return false, body
 }
 
 // uploadWorkspaceIconRaw performs the multipart PUT and returns the raw response.
