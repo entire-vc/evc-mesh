@@ -690,16 +690,20 @@ docker compose -f docker-compose.prod.yml --env-file .env config | \
    }
    ```
 
-9. **Do not publish `/metrics`** -- Prometheus metrics are served without
-   authentication, by both the API (`/metrics` on `${API_PORT:-8005}`) and the
-   MCP server (`/metrics` on `${MCP_PORT:-8081}`). They expose route names,
-   traffic volumes and workspace/task counts. Gate the path at your reverse
-   proxy, or bind the port to loopback:
+9. **`/metrics` on the API is token-gated by `MESH_METRICS_TOKEN`** (required
+   in `.env.prod.example`; Compose hands the same value to Prometheus as a
+   secret file, see `monitoring/prometheus.yml`). The MCP server's own
+   `/metrics` (on `${MCP_PORT:-8081}`) has no such gate — it is not scraped
+   by the bundled Prometheus and is not covered by this variable. Both
+   endpoints expose route names, traffic volumes and workspace/task counts,
+   so treat the MCP one the same way you would any other unauthenticated
+   diagnostic endpoint: gate it at your reverse proxy, or bind the port to
+   loopback:
 
    ```yaml
-   # deploy/docker/mesh/docker-compose.prod.yml
+   # deploy/docker/mesh/docker-compose.prod.yml, mcp service
    ports:
-     - "127.0.0.1:${API_PORT:-8005}:8005"
+     - "127.0.0.1:${MCP_PORT:-8081}:8081"
    ```
 
    The same applies to the `prometheus` (`9090`) and `grafana` (`3001`)
