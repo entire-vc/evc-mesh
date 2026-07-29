@@ -64,3 +64,43 @@ func TestVCSLinkTypeNamesMatchAcceptedSet(t *testing.T) {
 		}
 	}
 }
+
+func TestParseVCSLinkStatus(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  VCSLinkStatus
+		ok    bool
+	}{
+		{"empty means unspecified", "", "", true},
+		{"open", "open", VCSLinkStatusOpen, true},
+		{"merged", "merged", VCSLinkStatusMerged, true},
+		{"closed", "closed", VCSLinkStatusClosed, true},
+		{"uppercase", "MERGED", VCSLinkStatusMerged, true},
+		{"surrounding whitespace", "  merged\n", VCSLinkStatusMerged, true},
+		{"unknown word", "pending", "", false},
+		{"pr status confused with link_type", "pr", "", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := ParseVCSLinkStatus(tt.input)
+			if ok != tt.ok {
+				t.Fatalf("ParseVCSLinkStatus(%q) ok = %v, want %v", tt.input, ok, tt.ok)
+			}
+			if got != tt.want {
+				t.Fatalf("ParseVCSLinkStatus(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+// The documented list and the accepted set must not drift apart, same
+// reasoning as TestVCSLinkTypeNamesMatchAcceptedSet.
+func TestVCSLinkStatusNamesMatchAcceptedSet(t *testing.T) {
+	for _, name := range VCSLinkStatusNames {
+		if _, ok := ParseVCSLinkStatus(name); !ok {
+			t.Errorf("documented status %q is not accepted", name)
+		}
+	}
+}

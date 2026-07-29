@@ -2064,6 +2064,54 @@ func TestTaskService_MoveTask_DoneGate_BlockedWhenPROpen(t *testing.T) {
 	var doneErr *DoneEvidenceError
 	require.ErrorAs(t, err, &doneErr)
 	assert.Contains(t, doneErr.Error(), "feat: my feature")
+	assert.Contains(t, doneErr.Error(), "open")
+	// #df734dd9: this branch has no comment-based escape hatch — a
+	// justification comment is only consulted when VCSLinkCount == 0. The
+	// message must not promise one that doesn't exist on this path.
+	assert.NotContains(t, doneErr.Error(), "justification comment")
+}
+
+// #df734dd9: an empty recorded status (a link created before status
+// tracking existed, or one add_vcs_link left blank) gets a message that
+// names the real cause — no webhook can ever arrive for a PR that was
+// merged before the link existed — instead of a generic "not merged" that
+// reads as if the block is just waiting on a merge that hasn't happened.
+func TestTaskService_MoveTask_DoneGate_BlockedWhenPRStatusEmpty_NamesRealCause(t *testing.T) {
+	projectID := uuid.New()
+	taskID := uuid.New()
+	statusID := uuid.New()
+
+	svc, taskRepo, statusRepo, vcsRepo, _ := setupTaskServiceWithDoneGate()
+
+	taskRepo.items[taskID] = &domain.Task{
+		ID:           taskID,
+		ProjectID:    projectID,
+		StatusID:     uuid.New(),
+		Title:        "Task with unrecorded PR status",
+		VCSLinkCount: 1,
+	}
+	statusRepo.items[statusID] = &domain.TaskStatus{
+		ID:        statusID,
+		ProjectID: projectID,
+		Category:  domain.StatusCategoryDone,
+	}
+	vcsRepo.items = append(vcsRepo.items, domain.VCSLink{
+		ID:       uuid.New(),
+		TaskID:   taskID,
+		LinkType: domain.VCSLinkTypePR,
+		Status:   "",
+		URL:      "https://github.com/entire-vc/evc-mesh-mcp/pull/40",
+		Title:    "feat: add_vcs_link",
+	})
+
+	err := svc.MoveTask(context.Background(), taskID, MoveTaskInput{StatusID: &statusID})
+
+	require.Error(t, err)
+	var doneErr *DoneEvidenceError
+	require.ErrorAs(t, err, &doneErr)
+	assert.Contains(t, doneErr.Error(), "no recorded merge status")
+	assert.Contains(t, doneErr.Error(), "status=merged")
+	assert.NotContains(t, doneErr.Error(), "justification comment")
 }
 
 func TestTaskService_MoveTask_DoneGate_PassesWhenPRMerged(t *testing.T) {

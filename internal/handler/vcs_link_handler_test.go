@@ -408,3 +408,67 @@ func TestVCSLinkHandler_Create_RequiresLinkType(t *testing.T) {
 	assert.Contains(t, rec.Body.String(), "link_type is required")
 	assert.Empty(t, svc.createCalls)
 }
+
+// ---------------------------------------------------------------------------
+// Create — status field (#df734dd9: add_vcs_link had no way to record a PR's
+// status at link time, so a link to an already-merged PR sat blocked
+// forever since no webhook fires for a merge that predates the link).
+// ---------------------------------------------------------------------------
+
+func TestVCSLinkHandler_Create_AcceptsExplicitStatus(t *testing.T) {
+	accepted := []struct {
+		name  string
+		given string
+		want  domain.VCSLinkStatus
+	}{
+		{"open", "open", domain.VCSLinkStatusOpen},
+		{"merged", "merged", domain.VCSLinkStatusMerged},
+		{"closed", "closed", domain.VCSLinkStatusClosed},
+		{"uppercase", "MERGED", domain.VCSLinkStatusMerged},
+	}
+
+	for _, tc := range accepted {
+		t.Run(tc.name, func(t *testing.T) {
+			taskID := uuid.New()
+			svc := &stubVCSLinkService{}
+			body := `{"link_type":"pr","external_id":"40","url":"https://github.com/entire-vc/evc-mesh-mcp/pull/40","status":"` + tc.given + `"}`
+
+			rec := postVCSLink(t, svc, taskID, body)
+
+			assert.Equal(t, http.StatusCreated, rec.Code)
+			require.Len(t, svc.createCalls, 1)
+			assert.Equal(t, tc.want, svc.createCalls[0].Status)
+		})
+	}
+}
+
+// Omitting status entirely must still work — the handler passes "" through,
+// leaving the default decision to the service (which knows the link_type).
+func TestVCSLinkHandler_Create_OmittedStatusPassesThrough(t *testing.T) {
+	taskID := uuid.New()
+	svc := &stubVCSLinkService{}
+	body := `{"link_type":"pr","external_id":"42","url":"https://github.com/o/r/pull/42"}`
+
+	rec := postVCSLink(t, svc, taskID, body)
+
+	assert.Equal(t, http.StatusCreated, rec.Code)
+	require.Len(t, svc.createCalls, 1)
+	assert.Equal(t, domain.VCSLinkStatus(""), svc.createCalls[0].Status)
+}
+
+func TestVCSLinkHandler_Create_RejectsUnknownStatus(t *testing.T) {
+	taskID := uuid.New()
+	svc := &stubVCSLinkService{}
+	body := `{"link_type":"pr","external_id":"40","url":"https://github.com/o/r/pull/40","status":"pending"}`
+
+	rec := postVCSLink(t, svc, taskID, body)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Empty(t, svc.createCalls)
+
+	respBody := rec.Body.String()
+	assert.Contains(t, respBody, "pending")
+	for _, name := range domain.VCSLinkStatusNames {
+		assert.Contains(t, respBody, name)
+	}
+}

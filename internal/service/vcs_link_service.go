@@ -101,6 +101,22 @@ func (s *vcsLinkService) Create(ctx context.Context, input domain.CreateVCSLinkI
 		metadata = []byte("{}")
 	}
 
+	// PR links carry a status the done-evidence gate reads (service.MoveTask,
+	// #2697392d). A caller that omits it leaves the column "" — which is not
+	// "open", it's "unknown", but the gate's inequality check
+	// (Status != merged && Status != closed) treats "" exactly like "open"
+	// and blocks anyway. Make that implicit behavior explicit so the stored
+	// value never lies about what we actually know: an empty status IS the
+	// safe default (fail closed), not a bug to route around with silence.
+	//
+	// explicitStatus (before defaulting) also decides Create vs Upsert below
+	// — track it here, not by re-checking input.Status later.
+	explicitStatus := input.Status != ""
+	status := input.Status
+	if !explicitStatus && linkType == domain.VCSLinkTypePR {
+		status = domain.VCSLinkStatusOpen
+	}
+
 	link := &domain.VCSLink{
 		ID:         uuid.New(),
 		TaskID:     input.TaskID,
@@ -109,9 +125,27 @@ func (s *vcsLinkService) Create(ctx context.Context, input domain.CreateVCSLinkI
 		ExternalID: input.ExternalID,
 		URL:        input.URL,
 		Title:      input.Title,
-		Status:     input.Status,
+		Status:     status,
 		Metadata:   metadata,
 		CreatedAt:  time.Now(),
+	}
+
+	if explicitStatus {
+		// A caller who explicitly states the status knows something the
+		// stored row might not — most commonly, linking a PR that was
+		// already merged before the link existed (#df734dd9: no webhook
+		// will ever arrive for that after the fact) or correcting a link
+		// created before status tracking existed. Upsert so this succeeds
+		// whether or not the link already exists, instead of failing on
+		// (task_id, provider, link_type, external_id) uniqueness — the
+		// exact wall that made a3bdf4ad's rows permanently uncorrectable.
+		// A caller that does NOT pass status keeps the plain-Create path
+		// below unchanged: an accidental duplicate add still fails loudly
+		// instead of silently resetting an existing 'merged' row to 'open'.
+		if err := s.repo.Upsert(ctx, link); err != nil {
+			return nil, fmt.Errorf("create vcs link: %w", err)
+		}
+		return link, nil
 	}
 
 	if err := s.repo.Create(ctx, link); err != nil {
