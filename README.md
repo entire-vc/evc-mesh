@@ -73,7 +73,71 @@ Traditional project management tools treat AI agents as an afterthought. Mesh is
 | File Storage | S3-compatible (MinIO for self-hosted) |
 | Migrations | Goose |
 
-## Quick Start
+## Run it with Docker
+
+Docker is the only prerequisite. This builds and starts everything — API, web
+UI, MCP server, Postgres, Redis, NATS, MinIO, nginx — and leaves you with a
+login page. If you want to *develop* Mesh rather than run it, skip to
+[Development setup](#development-setup) instead.
+
+```bash
+git clone https://github.com/entire-vc/evc-mesh && cd evc-mesh/deploy/docker/mesh
+
+# The file must be called .env, in this directory. Compose auto-loads only
+# that name, and a misnamed copy fails as "POSTGRES_PASSWORD is missing a
+# value" — which reads like a missing variable rather than an unread file.
+cp .env.prod.example .env
+
+# Fill in the required secrets, in place. Appending them instead would leave
+# two lines per key — Compose reads the last one, so editing the empty one at
+# the top later would silently do nothing.
+for v in POSTGRES_PASSWORD REDIS_PASSWORD JWT_SECRET MINIO_SECRET_KEY \
+         MESH_INTEGRATION_ENCRYPTION_KEY; do
+  s=$(openssl rand -base64 32)
+  sed "s|^$v=.*|$v=$s|" .env > .env.tmp && mv .env.tmp .env
+done
+sed 's|^MINIO_ACCESS_KEY=.*|MINIO_ACCESS_KEY=meshadmin|' .env > .env.tmp && mv .env.tmp .env
+
+docker compose -f docker-compose.prod.yml --env-file .env up -d --build
+```
+
+The first build compiles the Go binaries and the frontend from source: expect
+**5–10 minutes** (measured: ~8 on an M-series Mac, including image pulls).
+Later starts take seconds.
+
+```bash
+docker compose -f docker-compose.prod.yml --env-file .env ps
+# every service should read "healthy" or "running"
+```
+
+### Get in
+
+`.env.prod.example` ships `MESH_SEED_ADMIN=true`, so the API creates the first
+account on an empty database and prints the password **once**:
+
+```bash
+docker compose -f docker-compose.prod.yml --env-file .env logs api | grep bootstrap
+```
+
+```
+[bootstrap] ────────────────────────────────────────────────────────
+[bootstrap] First admin created: admin@localhost
+[bootstrap] Generated password:  <24 random characters>
+[bootstrap] This password is shown ONCE and is not stored anywhere.
+```
+
+Open `http://localhost:${HTTP_PORT}` (80 by default) and log in with it. To
+choose the password yourself, set `MESH_ADMIN_PASSWORD` **before** the first
+boot — the seed runs only while the database has zero users.
+
+Self-registration ships closed (`MESH_ALLOW_REGISTRATION=false`), so this admin
+account is the only way in until you invite someone. Adding people, SMTP, TLS,
+every environment variable, and the security checklist to run through before
+putting this on a public address: [Self-Hosting Guide](docs/self-hosting.md).
+
+## Development setup
+
+Running from source, with the compose file providing only the backing services.
 
 ### Prerequisites
 
