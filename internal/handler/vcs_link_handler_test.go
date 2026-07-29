@@ -323,3 +323,88 @@ func TestGitHubWebhook_NoSignatureWhenSecretConfigured(t *testing.T) {
 	assert.Equal(t, http.StatusUnauthorized, rec.Code)
 	assert.Empty(t, svc.handleCalls)
 }
+
+// ---------------------------------------------------------------------------
+// Create — link_type spelling.
+// ---------------------------------------------------------------------------
+
+func postVCSLink(t *testing.T, svc *stubVCSLinkService, taskID uuid.UUID, body string) *httptest.ResponseRecorder {
+	t.Helper()
+
+	h := NewVCSLinkHandler(svc)
+	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader([]byte(body)))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := echo.New().NewContext(req, rec)
+	c.SetPath("/tasks/:task_id/vcs-links")
+	c.SetParamNames("task_id")
+	c.SetParamValues(taskID.String())
+
+	require.NoError(t, h.Create(c))
+	return rec
+}
+
+// A pull request has an obvious spelling and a canonical one. Both are
+// accepted, and both are stored as the canonical "pr" — consumers join on the
+// stored value, so a second spelling in the column would silently split the
+// data in two.
+func TestVCSLinkHandler_Create_LinkTypeSpellings(t *testing.T) {
+	accepted := []struct {
+		name  string
+		given string
+		want  domain.VCSLinkType
+	}{
+		{"canonical pr", "pr", domain.VCSLinkTypePR},
+		{"pull_request alias", "pull_request", domain.VCSLinkTypePR},
+		{"uppercase canonical", "PR", domain.VCSLinkTypePR},
+		{"mixed-case alias", "Pull_Request", domain.VCSLinkTypePR},
+		{"commit", "commit", domain.VCSLinkTypeCommit},
+		{"branch", "branch", domain.VCSLinkTypeBranch},
+	}
+
+	for _, tc := range accepted {
+		t.Run(tc.name, func(t *testing.T) {
+			taskID := uuid.New()
+			svc := &stubVCSLinkService{}
+			body := `{"link_type":"` + tc.given + `","external_id":"42","url":"https://github.com/o/r/pull/42"}`
+
+			rec := postVCSLink(t, svc, taskID, body)
+
+			assert.Equal(t, http.StatusCreated, rec.Code)
+			require.Len(t, svc.createCalls, 1)
+			assert.Equal(t, tc.want, svc.createCalls[0].LinkType)
+			assert.Equal(t, taskID, svc.createCalls[0].TaskID)
+		})
+	}
+}
+
+func TestVCSLinkHandler_Create_RejectsUnknownLinkType(t *testing.T) {
+	taskID := uuid.New()
+	svc := &stubVCSLinkService{}
+	body := `{"link_type":"merge_request","external_id":"42","url":"https://example.com/x"}`
+
+	rec := postVCSLink(t, svc, taskID, body)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Empty(t, svc.createCalls)
+
+	// The rejection names the accepted set; the previous message left the
+	// caller to guess which spelling was wanted.
+	respBody := rec.Body.String()
+	assert.Contains(t, respBody, "merge_request")
+	for _, name := range domain.VCSLinkTypeNames {
+		assert.Contains(t, respBody, name)
+	}
+}
+
+func TestVCSLinkHandler_Create_RequiresLinkType(t *testing.T) {
+	taskID := uuid.New()
+	svc := &stubVCSLinkService{}
+	body := `{"external_id":"42","url":"https://github.com/o/r/pull/42"}`
+
+	rec := postVCSLink(t, svc, taskID, body)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Contains(t, rec.Body.String(), "link_type is required")
+	assert.Empty(t, svc.createCalls)
+}

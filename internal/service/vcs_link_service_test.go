@@ -666,3 +666,51 @@ func TestHandlePR_ActionOpened_NoTransition(t *testing.T) {
 	require.Len(t, links, 1)
 	assert.Equal(t, domain.VCSLinkStatusOpen, links[0].Status)
 }
+
+// ---------------------------------------------------------------------------
+// Create: link_type canonicalisation.
+// ---------------------------------------------------------------------------
+
+// The HTTP edge normalises link_type, but the service is the last shared
+// choke point before the repository — and the uniqueness index treats "pr"
+// and "pull_request" as different links to the same PR. Canonicalising here
+// too means no caller can split the vocabulary, whichever entry point it
+// uses.
+func TestVCSLinkService_Create_CanonicalisesLinkType(t *testing.T) {
+	for _, given := range []string{"pr", "pull_request", "PR", "Pull_Request"} {
+		t.Run(given, func(t *testing.T) {
+			h := newHarness(t)
+			task := h.makeTask(t, domain.StatusCategoryInProgress)
+
+			link, err := h.svc.Create(context.Background(), domain.CreateVCSLinkInput{
+				TaskID:     task.ID,
+				LinkType:   domain.VCSLinkType(given),
+				ExternalID: "42",
+				URL:        "https://github.com/entire-vc/evc-mesh/pull/42",
+			})
+			require.NoError(t, err)
+			assert.Equal(t, domain.VCSLinkTypePR, link.LinkType)
+
+			stored, err := h.repo.GetByID(context.Background(), link.ID)
+			require.NoError(t, err)
+			assert.Equal(t, domain.VCSLinkTypePR, stored.LinkType)
+		})
+	}
+}
+
+// An unrecognised value is left untouched rather than coerced — the service
+// is not the validation layer, and silently rewriting an unknown type would
+// hide a caller's mistake instead of surfacing it.
+func TestVCSLinkService_Create_LeavesUnknownLinkTypeAlone(t *testing.T) {
+	h := newHarness(t)
+	task := h.makeTask(t, domain.StatusCategoryInProgress)
+
+	link, err := h.svc.Create(context.Background(), domain.CreateVCSLinkInput{
+		TaskID:     task.ID,
+		LinkType:   domain.VCSLinkType("tag"),
+		ExternalID: "v1.2.3",
+		URL:        "https://github.com/entire-vc/evc-mesh/releases/tag/v1.2.3",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, domain.VCSLinkType("tag"), link.LinkType)
+}
