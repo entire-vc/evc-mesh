@@ -528,9 +528,13 @@ type WorkspaceInviteService interface {
 	// ListInvites returns all pending (non-expired, unaccepted) invites for a workspace.
 	ListInvites(ctx context.Context, workspaceID uuid.UUID) ([]domain.WorkspaceInvite, error)
 	// ResendInvite re-sends the invitation email for an existing pending invite.
-	ResendInvite(ctx context.Context, inviteID uuid.UUID) error
-	// RevokeInvite deletes a pending invite.
-	RevokeInvite(ctx context.Context, inviteID uuid.UUID) error
+	// workspaceID is the workspace named in the route: the invite must be one of
+	// its own, or a caller could re-send a stranger's invite from their own
+	// workspace and mail that stranger's invitee on demand.
+	ResendInvite(ctx context.Context, workspaceID, inviteID uuid.UUID) error
+	// RevokeInvite deletes a pending invite. workspaceID is the workspace named in
+	// the route; see ResendInvite for why it is not optional.
+	RevokeInvite(ctx context.Context, workspaceID, inviteID uuid.UUID) error
 	// GetByToken returns invite info for a given token (used by the accept-invite page).
 	// Returns nil when the token does not exist or the invite is expired/accepted.
 	GetByToken(ctx context.Context, token string) (*domain.WorkspaceInvite, error)

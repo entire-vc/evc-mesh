@@ -105,12 +105,12 @@ func (s *inviteService) ListInvites(ctx context.Context, workspaceID uuid.UUID) 
 	return s.inviteRepo.ListByWorkspace(ctx, workspaceID)
 }
 
-func (s *inviteService) ResendInvite(ctx context.Context, inviteID uuid.UUID) error {
+func (s *inviteService) ResendInvite(ctx context.Context, workspaceID, inviteID uuid.UUID) error {
 	invite, err := s.inviteRepo.GetByID(ctx, inviteID)
 	if err != nil {
 		return fmt.Errorf("invite_service.ResendInvite: %w", err)
 	}
-	if invite == nil {
+	if invite == nil || invite.WorkspaceID != workspaceID {
 		return apierror.NotFound("WorkspaceInvite")
 	}
 	if !invite.IsPending() {
@@ -129,7 +129,22 @@ func (s *inviteService) ResendInvite(ctx context.Context, inviteID uuid.UUID) er
 	return s.emailSvc.SendInvite(ctx, invite.Email, ws.Name, inviteURL)
 }
 
-func (s *inviteService) RevokeInvite(ctx context.Context, inviteID uuid.UUID) error {
+// RevokeInvite deletes a pending invite of workspaceID.
+//
+// The workspace check is the fix for a cross-tenant delete: the route is
+// /workspaces/:ws_id/invites/:invite_id, but only :invite_id ever reached this
+// code, so an admin of any workspace could pass their own :ws_id with a
+// stranger's :invite_id and revoke that tenant's pending invitation — 204, row
+// gone, and their new hire's link stopped working. Resend was the same shape with
+// an email attached.
+func (s *inviteService) RevokeInvite(ctx context.Context, workspaceID, inviteID uuid.UUID) error {
+	invite, err := s.inviteRepo.GetByID(ctx, inviteID)
+	if err != nil {
+		return fmt.Errorf("invite_service.RevokeInvite: %w", err)
+	}
+	if invite == nil || invite.WorkspaceID != workspaceID {
+		return apierror.NotFound("WorkspaceInvite")
+	}
 	return s.inviteRepo.Delete(ctx, inviteID)
 }
 

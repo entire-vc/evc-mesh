@@ -15,8 +15,19 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestWorkspaceRLS_ResolvesFlatObjectParams walks every entry in
-// workspaceObjectResolvers through WorkspaceRLS and asserts the workspace it
+// nonUUIDLookupParams are the resolvers that are not a plain "one uuid in, one
+// workspace_id out" lookup, so the table walk below cannot drive them: :ws_id is
+// the workspace itself, :proj_id/:project_id go through the project repository,
+// and :short is a LIKE over a hex prefix (covered by its own tests further down).
+var nonUUIDLookupParams = map[string]bool{
+	"ws_id":      true,
+	"proj_id":    true,
+	"project_id": true,
+	"short":      true,
+}
+
+// TestWorkspaceRLS_ResolvesFlatObjectParams walks every uuid-keyed entry in
+// workspaceParamResolvers through WorkspaceRLS and asserts the workspace it
 // produced is tagged as coming from the path — which is what makes
 // RequireWorkspaceMemberScoped check it rather than wave it through.
 //
@@ -25,7 +36,10 @@ import (
 // key, the caller's own — and the caller's own workspace says nothing about the
 // object they asked for.
 func TestWorkspaceRLS_ResolvesFlatObjectParams(t *testing.T) {
-	for _, r := range workspaceObjectResolvers {
+	for _, r := range workspaceParamResolvers {
+		if nonUUIDLookupParams[r.param] {
+			continue
+		}
 		t.Run(r.param, func(t *testing.T) {
 			db, mock, err := sqlmock.New()
 			require.NoError(t, err)

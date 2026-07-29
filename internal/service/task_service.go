@@ -1535,6 +1535,35 @@ func (s *taskService) MoveToProject(ctx context.Context, taskID, targetProjectID
 			"project_id": "task is already in the target project",
 		})
 	}
+
+	// The target project has to be in the same workspace as the task.
+	//
+	// project_id arrives in the request body, so no route parameter names it and
+	// the workspace guard cannot see it — it checks :task_id, which is the
+	// caller's own task. Until this check existed, a member of any workspace could
+	// move their task (and, by cascade, its whole subtree) into a stranger's
+	// project, where it showed up on that tenant's board and pulled their status
+	// ids into it.
+	if s.projectRepo == nil {
+		// Fail closed. Without the project repository there is no way to tell the
+		// two workspaces apart, and "cannot check" must not read as "allowed" on
+		// the one code path whose whole job is to decide where a task lands.
+		return nil, apierror.InternalError("project lookup unavailable")
+	}
+	source, err := s.projectRepo.GetByID(ctx, task.ProjectID)
+	if err != nil {
+		return nil, err
+	}
+	target, err := s.projectRepo.GetByID(ctx, targetProjectID)
+	if err != nil {
+		return nil, err
+	}
+	if source == nil || target == nil {
+		return nil, apierror.NotFound("Project")
+	}
+	if source.WorkspaceID != target.WorkspaceID {
+		return nil, apierror.BadRequest("target project belongs to a different workspace")
+	}
 	// Capture sourceProjectID before the repo call mutates the task in-memory.
 	sourceProjectID := task.ProjectID
 

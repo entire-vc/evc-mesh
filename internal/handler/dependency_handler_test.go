@@ -209,6 +209,10 @@ func TestDependencyHandler_Delete_Success(t *testing.T) {
 	depID := uuid.New()
 	taskID := uuid.New()
 	mockSvc := &MockTaskDependencyService{
+		ListByTaskFunc: func(ctx context.Context, id uuid.UUID) ([]domain.TaskDependency, error) {
+			assert.Equal(t, taskID, id)
+			return []domain.TaskDependency{{ID: depID, TaskID: taskID}}, nil
+		},
 		DeleteFunc: func(ctx context.Context, id uuid.UUID) error {
 			assert.Equal(t, depID, id)
 			return nil
@@ -227,6 +231,42 @@ func TestDependencyHandler_Delete_Success(t *testing.T) {
 	err := h.Delete(c)
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusNoContent, rec.Code)
+}
+
+// TestDependencyHandler_Delete_ForeignEdgeIsRefused pins the cross-tenant repro at
+// the handler. DELETE /tasks/:task_id/dependencies/:dep_id used to read only
+// :dep_id and delete by it, so pairing one of your own task ids with a stranger's
+// :dep_id cut an edge out of their dependency graph and answered 204. The edge now
+// has to hang off the task in the path, and nothing is deleted when it does not.
+func TestDependencyHandler_Delete_ForeignEdgeIsRefused(t *testing.T) {
+	ownTask := uuid.New()
+	foreignDep := uuid.New()
+
+	deleted := false
+	mockSvc := &MockTaskDependencyService{
+		ListByTaskFunc: func(ctx context.Context, id uuid.UUID) ([]domain.TaskDependency, error) {
+			assert.Equal(t, ownTask, id)
+			// The caller's own task has an edge, just not this one.
+			return []domain.TaskDependency{{ID: uuid.New(), TaskID: ownTask}}, nil
+		},
+		DeleteFunc: func(ctx context.Context, id uuid.UUID) error {
+			deleted = true
+			return nil
+		},
+	}
+
+	h, e := setupDependencyTest(mockSvc)
+
+	req := httptest.NewRequest(http.MethodDelete, "/", http.NoBody)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/tasks/:task_id/dependencies/:dep_id")
+	c.SetParamNames("task_id", "dep_id")
+	c.SetParamValues(ownTask.String(), foreignDep.String())
+
+	require.NoError(t, h.Delete(c))
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+	assert.False(t, deleted, "a dependency that does not hang off :task_id was deleted anyway")
 }
 
 func TestDependencyHandler_Delete_InvalidDepID(t *testing.T) {

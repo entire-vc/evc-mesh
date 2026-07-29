@@ -257,3 +257,37 @@ func TestTaskDependencyService_CheckCycle(t *testing.T) {
 		})
 	}
 }
+
+// TestTaskDependencyService_Create_RefusesAnotherProjectsTask is the cross-tenant
+// repro at the service.
+//
+// depends_on_task_id arrives in the request body, so no route parameter names it
+// and the workspace guard — which reads route parameters — never sees it; :task_id
+// is the caller's own task and resolves to the caller's own workspace. "Both tasks
+// exist" was the entire check, which made this two things at once: an edge written
+// across the tenant boundary, and an oracle that answered 404 for a task id that
+// does not exist and 201 for one that does, in anybody's workspace.
+func TestTaskDependencyService_Create_RefusesAnotherProjectsTask(t *testing.T) {
+	svc, depRepo, taskRepo := setupTaskDependencyService()
+
+	ownProject := uuid.New()
+	foreignProject := uuid.New()
+
+	ownTask := uuid.New()
+	foreignTask := uuid.New()
+	taskRepo.items[ownTask] = &domain.Task{ID: ownTask, ProjectID: ownProject, Title: "Mine"}
+	taskRepo.items[foreignTask] = &domain.Task{ID: foreignTask, ProjectID: foreignProject, Title: "Theirs"}
+
+	err := svc.Create(context.Background(), &domain.TaskDependency{
+		TaskID:          ownTask,
+		DependsOnTaskID: foreignTask,
+		DependencyType:  domain.DependencyTypeBlocks,
+	})
+	require.Error(t, err, "an edge was written across the tenant boundary")
+
+	var apiErr *apierror.Error
+	if assert.ErrorAs(t, err, &apiErr) {
+		assert.Equal(t, http.StatusBadRequest, apiErr.Code)
+	}
+	assert.Empty(t, depRepo.items, "the edge was persisted anyway")
+}

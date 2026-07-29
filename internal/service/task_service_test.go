@@ -2375,6 +2375,8 @@ type moveToProjectFixture struct {
 	svc         *taskService
 	taskRepo    *MockTaskRepository
 	statusRepo  *MockTaskStatusRepository
+	projectRepo *MockProjectRepository
+	workspaceID uuid.UUID
 	projectA    uuid.UUID
 	projectB    uuid.UUID
 	todoA       uuid.UUID
@@ -2390,7 +2392,9 @@ func setupMoveToProjectFixture() *moveToProjectFixture {
 	statusRepo := NewMockTaskStatusRepository()
 	depRepo := NewMockTaskDependencyRepository()
 	activityRepo := NewMockActivityLogRepository()
-	svc := NewTaskService(taskRepo, statusRepo, depRepo, activityRepo).(*taskService)
+	projectRepo := NewMockProjectRepository()
+	svc := NewTaskService(taskRepo, statusRepo, depRepo, activityRepo,
+		WithProjectRepo(projectRepo)).(*taskService)
 
 	f := &moveToProjectFixture{
 		svc:         svc,
@@ -2406,6 +2410,14 @@ func setupMoveToProjectFixture() *moveToProjectFixture {
 		doneB:       uuid.New(),
 	}
 
+	// Both projects are in one workspace: MoveToProject refuses a move that would
+	// cross a tenant boundary, which is a different test (see
+	// TestMoveToProject_RefusesAnotherWorkspacesProject).
+	f.workspaceID = uuid.New()
+	projectRepo.items[f.projectA] = &domain.Project{ID: f.projectA, WorkspaceID: f.workspaceID}
+	projectRepo.items[f.projectB] = &domain.Project{ID: f.projectB, WorkspaceID: f.workspaceID}
+	f.projectRepo = projectRepo
+
 	// Source project statuses.
 	statusRepo.items[f.todoA] = &domain.TaskStatus{ID: f.todoA, ProjectID: f.projectA, Category: domain.StatusCategoryTodo, Position: 1}
 	statusRepo.items[f.inProgressA] = &domain.TaskStatus{ID: f.inProgressA, ProjectID: f.projectA, Category: domain.StatusCategoryInProgress, Position: 2}
@@ -2417,6 +2429,50 @@ func setupMoveToProjectFixture() *moveToProjectFixture {
 	statusRepo.items[f.doneB] = &domain.TaskStatus{ID: f.doneB, ProjectID: f.projectB, Category: domain.StatusCategoryDone, Position: 3}
 
 	return f
+}
+
+// TestMoveToProject_RefusesAnotherWorkspacesProject is the cross-tenant repro at
+// the service. project_id comes from the request body, where the workspace guard —
+// which reads route parameters — cannot see it; :task_id is the caller's own task
+// and resolves to their own workspace, so nothing upstream had an opinion about
+// where the task was going. "Both projects exist" was the whole of the check, and
+// a member of any workspace could push their task and its whole subtree onto a
+// stranger's board.
+func TestMoveToProject_RefusesAnotherWorkspacesProject(t *testing.T) {
+	f := setupMoveToProjectFixture()
+
+	foreignProject := uuid.New()
+	f.projectRepo.items[foreignProject] = &domain.Project{ID: foreignProject, WorkspaceID: uuid.New()}
+	f.statusRepo.items[uuid.New()] = &domain.TaskStatus{ID: uuid.New(), ProjectID: foreignProject, Category: domain.StatusCategoryTodo, Position: 1}
+
+	taskID := uuid.New()
+	f.taskRepo.items[taskID] = &domain.Task{ID: taskID, ProjectID: f.projectA, StatusID: f.todoA, Title: "Mine"}
+
+	_, err := f.svc.MoveToProject(context.Background(), taskID, foreignProject)
+	require.Error(t, err, "a task was moved into another workspace's project")
+	assert.Equal(t, f.projectA, f.taskRepo.items[taskID].ProjectID, "the task moved anyway")
+}
+
+// TestMoveToProject_WithoutProjectRepoFailsClosed: the project repository is an
+// option on this service, so it can be absent. "Cannot check the workspace" must
+// refuse, not allow — the alternative is a wiring mistake reopening the hole in
+// silence.
+func TestMoveToProject_WithoutProjectRepoFailsClosed(t *testing.T) {
+	taskRepo := NewMockTaskRepository()
+	statusRepo := NewMockTaskStatusRepository()
+	svc := NewTaskService(taskRepo, statusRepo, NewMockTaskDependencyRepository(), NewMockActivityLogRepository())
+
+	projectA, projectB := uuid.New(), uuid.New()
+	todoA, todoB := uuid.New(), uuid.New()
+	statusRepo.items[todoA] = &domain.TaskStatus{ID: todoA, ProjectID: projectA, Category: domain.StatusCategoryTodo, Position: 1}
+	statusRepo.items[todoB] = &domain.TaskStatus{ID: todoB, ProjectID: projectB, Category: domain.StatusCategoryTodo, Position: 1}
+
+	taskID := uuid.New()
+	taskRepo.items[taskID] = &domain.Task{ID: taskID, ProjectID: projectA, StatusID: todoA}
+
+	_, err := svc.MoveToProject(context.Background(), taskID, projectB)
+	require.Error(t, err)
+	assert.Equal(t, projectA, taskRepo.items[taskID].ProjectID)
 }
 
 func TestMoveToProject_CascadesDirectSubtasks(t *testing.T) {

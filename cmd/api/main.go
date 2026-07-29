@@ -667,6 +667,10 @@ func main() {
 
 	// Project-scoped routes — RequireProjectMember enforces membership for :proj_id routes.
 	projAccess := mw.RequireProjectMember(db)
+
+	// Body-scoped guard — for the routes whose tenant is named in the request body
+	// rather than the path, where RequireWorkspaceMemberScoped has nothing to see.
+	bodyWS := mw.RequireBodyWorkspace(db)
 	api.GET("/projects/:proj_id", projectHandler.GetByID, projAccess)
 	api.PATCH("/projects/:proj_id", projectHandler.Update, projAccess)
 	api.DELETE("/projects/:proj_id", projectHandler.Delete, projAccess, rbac(mw.PermDeleteProject))
@@ -893,13 +897,16 @@ func main() {
 	api.GET("/rules/:rule_id", ruleHandler.GetRule)
 	api.PATCH("/rules/:rule_id", ruleHandler.UpdateRule, rbac(mw.PermManageRules))
 	api.DELETE("/rules/:rule_id", ruleHandler.DeleteRule, rbac(mw.PermManageRules))
-	api.POST("/rules/evaluate", ruleHandler.EvaluateRules)
+	// The tenant of this one is in the body, not the path: bodyWS is what checks it.
+	// Without it any authenticated caller could paste another workspace's id in and
+	// read that tenant's rule names and violation messages back.
+	api.POST("/rules/evaluate", ruleHandler.EvaluateRules, bodyWS)
 
 	// Auto-transition rule routes.
 	api.GET("/projects/:proj_id/auto-transition-rules", autoTransHandler.List, projAccess)
 	api.POST("/projects/:proj_id/auto-transition-rules", autoTransHandler.Create, projAccess, rbac(mw.PermManageRules))
-	api.PUT("/projects/:proj_id/auto-transition-rules/:rule_id", autoTransHandler.Update, projAccess, rbac(mw.PermManageRules))
-	api.DELETE("/projects/:proj_id/auto-transition-rules/:rule_id", autoTransHandler.Delete, projAccess, rbac(mw.PermManageRules))
+	api.PUT("/projects/:proj_id/auto-transition-rules/:atr_id", autoTransHandler.Update, projAccess, rbac(mw.PermManageRules))
+	api.DELETE("/projects/:proj_id/auto-transition-rules/:atr_id", autoTransHandler.Delete, projAccess, rbac(mw.PermManageRules))
 
 	// Notification routes.
 	api.GET("/notifications", notificationHandler.List)
