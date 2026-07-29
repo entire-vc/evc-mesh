@@ -16,8 +16,7 @@ import (
 )
 
 const (
-	slackHTTPTimeout    = 5 * time.Second
-	slackDefaultBaseURL = "https://mesh.entire.vc"
+	slackHTTPTimeout = 5 * time.Second
 )
 
 // slackConfig is the Slack Incoming Webhook configuration stored as JSONB
@@ -66,15 +65,21 @@ type TaskEvent struct {
 type slackService struct {
 	integrationRepo repository.IntegrationRepository
 	client          *http.Client
+	// baseURL is the configured MESH_BASE_URL, used to build task deep-links
+	// when the caller doesn't supply TaskEvent.BaseURL itself.
+	baseURL string
 }
 
 // NewSlackService creates a new SlackService backed by the integration repository.
-func NewSlackService(integrationRepo repository.IntegrationRepository) SlackService {
+// baseURL is the deployment's configured public web UI URL (MESH_BASE_URL) — the
+// fallback used to build task deep-links when a TaskEvent arrives with no BaseURL set.
+func NewSlackService(integrationRepo repository.IntegrationRepository, baseURL string) SlackService {
 	return &slackService{
 		integrationRepo: integrationRepo,
 		client: &http.Client{
 			Timeout: slackHTTPTimeout,
 		},
+		baseURL: baseURL,
 	}
 }
 
@@ -109,7 +114,13 @@ func (s *slackService) NotifyTaskEvent(ctx context.Context, workspaceID uuid.UUI
 			return
 		}
 
-		msg := buildSlackMessage(event)
+		baseURL := resolveTaskEventBaseURL(event.BaseURL, s.baseURL)
+		if baseURL == "" {
+			log.Printf("[slack] no base URL configured, skipping notification for event %s (workspace %s)", event.EventType, workspaceID)
+			return
+		}
+
+		msg := buildSlackMessage(event, baseURL)
 		if err := s.SendMessage(bgCtx, sc.WebhookURL, msg); err != nil {
 			log.Printf("[slack] failed to deliver notification for event %s (workspace %s): %v", event.EventType, workspaceID, err)
 		}
@@ -162,14 +173,22 @@ func slackEventSubscribed(notifyEvents []string, eventType string) bool {
 	return false
 }
 
+// resolveTaskEventBaseURL picks the web UI base URL for a task deep-link: the
+// event's own BaseURL when the caller set one, otherwise the deployment's
+// configured MESH_BASE_URL. Returns "" if neither is set.
+func resolveTaskEventBaseURL(eventBaseURL, configuredBaseURL string) string {
+	if eventBaseURL != "" {
+		return eventBaseURL
+	}
+	return configuredBaseURL
+}
+
 // buildSlackMessage constructs a rich Block Kit message for the given TaskEvent.
-func buildSlackMessage(event TaskEvent) SlackMessage {
+// baseURL is the resolved web UI base URL (already falling back past event.BaseURL
+// to the deployment's configured MESH_BASE_URL — see NotifyTaskEvent).
+func buildSlackMessage(event TaskEvent, baseURL string) SlackMessage {
 	header := eventTypeLabel(event.EventType)
 
-	baseURL := event.BaseURL
-	if baseURL == "" {
-		baseURL = slackDefaultBaseURL
-	}
 	taskLink := fmt.Sprintf("%s/tasks/%s", baseURL, event.TaskID)
 
 	taskField := slackTextObj{

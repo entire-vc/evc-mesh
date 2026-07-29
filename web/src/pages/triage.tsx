@@ -172,7 +172,7 @@ function MoveDialog({
   );
 }
 
-function TriageTaskRow({
+export function TriageTaskRow({
   task,
   projectName,
   onMove,
@@ -212,7 +212,7 @@ function TriageTaskRow({
             )}
             <span className="text-xs text-muted-foreground">·</span>
             <a
-              href={`https://mesh.entire.host/t/${task.id}`}
+              href={`/t/${task.id}`}
               onClick={(e) => e.stopPropagation()}
               className="font-mono text-xs text-muted-foreground hover:text-foreground hover:underline"
             >
