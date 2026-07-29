@@ -382,52 +382,121 @@ func (s *vcsLinkService) resolveStatusBySlug(ctx context.Context, projectID uuid
 	return nil, nil
 }
 
-// ResolveTaskRef scans the sources for every recognised task-reference spelling
-// and returns the first one that names a task that actually exists. Existence
-// is checked, not assumed: vcs_links.task_id carries an FK to tasks(id), so an
-// unverified id turns into a constraint violation at insert time rather than a
-// clean "no reference here".
-//
-// A candidate that fails to resolve is skipped, not fatal — a PR body may well
-// quote a task id from another workspace or a deleted task alongside the real
-// one. Returns uuid.Nil when nothing resolves.
-func (s *vcsLinkService) ResolveTaskRef(ctx context.Context, sources ...TaskRefSource) (uuid.UUID, TaskRef) {
-	for _, ref := range ExtractTaskRefs(sources...) {
-		switch {
-		case ref.Full != uuid.Nil:
-			if s.taskRepo == nil {
-				// CRUD-only construction: no way to verify, and the spelling
-				// was explicit enough to be taken at face value.
-				return ref.Full, ref
-			}
-			t, err := s.taskRepo.GetByID(ctx, ref.Full)
-			if err != nil {
-				log.Printf("[vcs-webhook] lookup task=%s (%s) failed: %v", ref.Full, ref.Kind, err)
-				continue
-			}
-			if t == nil {
-				continue
-			}
-			return t.ID, ref
+// maxRefCandidates bounds how many candidate references one payload may cost
+// in database lookups. A PR body naming more than a dozen ids is prose about
+// tasks, not a reference to one.
+const maxRefCandidates = 12
 
-		case ref.Short != "":
-			if s.taskRepo == nil {
-				continue
-			}
-			// GetByShortID refuses an ambiguous prefix (apierror.BadRequest)
-			// rather than picking one — two tenants behind one 8-hex prefix
-			// must not silently resolve to whichever row sorted first.
-			t, err := s.taskRepo.GetByShortID(ctx, ref.Short)
-			if err != nil || t == nil {
-				if err != nil {
-					log.Printf("[vcs-webhook] short id %q (%s) unresolved: %v", ref.Short, ref.Kind, err)
-				}
-				continue
-			}
-			return t.ID, ref
+// ResolveTaskRef scans the sources for every recognised task-reference spelling
+// and returns the task they name — but only when they agree on ONE task.
+//
+// Existence is checked, not assumed: vcs_links.task_id carries an FK to
+// tasks(id), so an unverified id turns into a constraint violation at insert
+// time rather than a clean "no reference here". A candidate that resolves to
+// nothing is dropped quietly; a PR body may quote a deleted task or one from
+// another workspace beside the real reference.
+//
+// When candidates resolve to SEVERAL different tasks the payload is ambiguous
+// and nothing is returned, unless exactly one of them was found in the title.
+// This is the same refusal as an ambiguous short prefix, one level up: picking
+// the first by position is a guess, and a wrong link silently misattributes a
+// pull request. Verified the hard way — the first PR this code saw in
+// production was one whose body documented the reference syntax, and it
+// attached itself to the unrelated task used as the example.
+//
+// Returns uuid.Nil when nothing resolves or the payload is ambiguous.
+func (s *vcsLinkService) ResolveTaskRef(ctx context.Context, sources ...TaskRefSource) (uuid.UUID, TaskRef) {
+	type hit struct {
+		id  uuid.UUID
+		ref TaskRef
+	}
+	var (
+		hits    []hit
+		seen    = map[uuid.UUID]bool{}
+		checked int
+	)
+
+	for _, ref := range ExtractTaskRefs(sources...) {
+		if checked >= maxRefCandidates {
+			log.Printf("[vcs-webhook] stopped after %d candidate refs; payload names too many ids", maxRefCandidates)
+			break
+		}
+		checked++
+
+		id, ok := s.lookupRef(ctx, ref)
+		if !ok || seen[id] {
+			continue
+		}
+		seen[id] = true
+		hits = append(hits, hit{id: id, ref: ref})
+	}
+
+	switch len(hits) {
+	case 0:
+		return uuid.Nil, TaskRef{}
+	case 1:
+		return hits[0].id, hits[0].ref
+	}
+
+	// Ambiguous. A title is short and deliberate, so a single reference there
+	// outranks a crowded body; anything else is a guess we decline to make.
+	var fromTitle []hit
+	for _, h := range hits {
+		if h.ref.Source == "title" {
+			fromTitle = append(fromTitle, h)
 		}
 	}
+	if len(fromTitle) == 1 {
+		return fromTitle[0].id, fromTitle[0].ref
+	}
+
+	ids := make([]string, 0, len(hits))
+	for _, h := range hits {
+		ids = append(ids, h.id.String()+"("+string(h.ref.Kind)+"/"+h.ref.Source+")")
+	}
+	log.Printf("[vcs-webhook] ambiguous payload names %d distinct tasks, linking none: %s",
+		len(hits), strings.Join(ids, " "))
 	return uuid.Nil, TaskRef{}
+}
+
+// lookupRef turns one candidate into a task id, reporting whether it named a
+// task that exists.
+func (s *vcsLinkService) lookupRef(ctx context.Context, ref TaskRef) (uuid.UUID, bool) {
+	switch {
+	case ref.Full != uuid.Nil:
+		if s.taskRepo == nil {
+			// CRUD-only construction: no way to verify, and the spelling was
+			// explicit enough to be taken at face value.
+			return ref.Full, true
+		}
+		t, err := s.taskRepo.GetByID(ctx, ref.Full)
+		if err != nil {
+			log.Printf("[vcs-webhook] lookup task=%s (%s) failed: %v", ref.Full, ref.Kind, err)
+			return uuid.Nil, false
+		}
+		if t == nil {
+			return uuid.Nil, false
+		}
+		return t.ID, true
+
+	case ref.Short != "":
+		if s.taskRepo == nil {
+			return uuid.Nil, false
+		}
+		// GetByShortID refuses an ambiguous prefix (apierror.BadRequest) rather
+		// than picking one — two tenants behind one 8-hex prefix must not
+		// silently resolve to whichever row sorted first.
+		t, err := s.taskRepo.GetByShortID(ctx, ref.Short)
+		if err != nil {
+			log.Printf("[vcs-webhook] short id %q (%s) unresolved: %v", ref.Short, ref.Kind, err)
+			return uuid.Nil, false
+		}
+		if t == nil {
+			return uuid.Nil, false
+		}
+		return t.ID, true
+	}
+	return uuid.Nil, false
 }
 
 func shortSHA(s string) string {

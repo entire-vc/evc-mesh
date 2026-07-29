@@ -279,3 +279,108 @@ func TestExtractTaskRefs_RejectsPrefixShorterThanSix(t *testing.T) {
 	assert.Empty(t, ExtractTaskRefs(TaskRefSource{Name: "body",
 		Text: "https://mesh.entire.host/t/" + strings.Repeat("a", 5)}))
 }
+
+// ---------------------------------------------------------------------------
+// Ambiguity. Added after the first pull request this code met in production
+// linked itself to the wrong task: the PR documented the reference syntax, and
+// the task used as the example in its body was real.
+// ---------------------------------------------------------------------------
+
+// The literal incident, reduced. A body that explains the syntax names several
+// real tasks; picking the first by position is a guess, and the guess was wrong.
+func TestHandlePR_BodyNamingSeveralTasks_LinksNone(t *testing.T) {
+	h := newHarness(t)
+	documented := h.makeTaskWithID(t, fixedTaskID(10), domain.StatusCategoryInProgress)
+	subject := h.makeTaskWithID(t, fixedTaskID(11), domain.StatusCategoryInProgress)
+	before := h.linkCount()
+
+	ev := openEvent(701,
+		"fix(vcs-links): a keyword may widen the alphabet, not the shape",
+		"| text | result |\n"+
+			"|---|---|\n"+
+			"| `Refs #"+documented.ID.String()[:8]+"` | ✅ |\n"+
+			"| `#"+documented.ID.String()[:8]+"` | ✅ |\n\n"+
+			"Refs #"+subject.ID.String()[:8],
+		"garfield/taskref-keyword-sigil")
+
+	res, err := h.svc.HandleGitHubPullRequestEvent(context.Background(), ev)
+	require.NoError(t, err)
+	assert.Equal(t, "no_task_ref", res.Reason,
+		"a payload naming two real tasks must link neither")
+	assert.Equal(t, before, h.linkCount())
+	assert.Empty(t, h.linksFor(documented.ID), "the documented example must not be linked")
+	assert.Empty(t, h.linksFor(subject.ID))
+}
+
+// A title is short and deliberate, so one reference there settles a crowded body.
+func TestHandlePR_TitleBreaksBodyAmbiguity(t *testing.T) {
+	h := newHarness(t)
+	subject := h.makeTaskWithID(t, fixedTaskID(12), domain.StatusCategoryInProgress)
+	a := h.makeTaskWithID(t, fixedTaskID(13), domain.StatusCategoryInProgress)
+	b := h.makeTaskWithID(t, fixedTaskID(14), domain.StatusCategoryInProgress)
+
+	ev := openEvent(702,
+		"docs: reference syntax (Refs #"+subject.ID.String()[:8]+")",
+		"Examples: #"+a.ID.String()[:8]+" and #"+b.ID.String()[:8]+".",
+		"")
+
+	res, err := h.svc.HandleGitHubPullRequestEvent(context.Background(), ev)
+	require.NoError(t, err)
+	assert.Equal(t, subject.ID, res.TaskID)
+	require.Len(t, h.linksFor(subject.ID), 1)
+	assert.Empty(t, h.linksFor(a.ID))
+	assert.Empty(t, h.linksFor(b.ID))
+}
+
+// Two spellings of the SAME task are agreement, not ambiguity — otherwise the
+// common "title says MESH-<uuid>, body links /t/<uuid>" PR would link nothing.
+func TestHandlePR_SameTaskNamedTwice_IsNotAmbiguous(t *testing.T) {
+	h := newHarness(t)
+	task := h.makeTaskWithID(t, fixedTaskID(15), domain.StatusCategoryInProgress)
+
+	ev := openEvent(703,
+		"MESH-"+task.ID.String(),
+		"See https://mesh.entire.host/t/"+task.ID.String()+" and #"+task.ID.String()[:8],
+		"linus/"+task.ID.String()[:8]+"-slug")
+
+	res, err := h.svc.HandleGitHubPullRequestEvent(context.Background(), ev)
+	require.NoError(t, err)
+	assert.Equal(t, task.ID, res.TaskID)
+	require.Len(t, h.linksFor(task.ID), 1)
+}
+
+// One task named by TWO DIFFERENT spellings, neither in the title. The two
+// spellings survive ExtractTaskRefs as separate candidates (a full UUID and a
+// short prefix are different tokens), so only the resolver can tell they mean
+// the same task. Without de-duplication BY RESOLVED TASK these are two hits,
+// the ambiguity rule refuses, and a perfectly clear payload links nothing —
+// with no title reference to rescue it.
+func TestHandlePR_SameTaskViaTwoSpellings_NoTitleRef_StillResolves(t *testing.T) {
+	h := newHarness(t)
+	task := h.makeTaskWithID(t, fixedTaskID(17), domain.StatusCategoryInProgress)
+
+	ev := openEvent(705,
+		"feat: cost tracking dashboard",
+		"Context: https://mesh.entire.host/t/"+task.ID.String()+"\n\nRefs #"+task.ID.String()[:8],
+		"")
+
+	res, err := h.svc.HandleGitHubPullRequestEvent(context.Background(), ev)
+	require.NoError(t, err)
+	assert.Equal(t, task.ID, res.TaskID, "one task named twice is agreement, not ambiguity")
+	require.Len(t, h.linksFor(task.ID), 1)
+}
+
+// An id that names nothing is not a competing candidate — a body quoting a
+// deleted task beside the real reference must still link the real one.
+func TestHandlePR_UnresolvableIDDoesNotCreateAmbiguity(t *testing.T) {
+	h := newHarness(t)
+	task := h.makeTaskWithID(t, fixedTaskID(16), domain.StatusCategoryInProgress)
+	ghost := uuid.New()
+
+	ev := openEvent(704, "fix: something",
+		"Supersedes #"+ghost.String()[:8]+" (deleted). Refs #"+task.ID.String()[:8], "")
+
+	res, err := h.svc.HandleGitHubPullRequestEvent(context.Background(), ev)
+	require.NoError(t, err)
+	assert.Equal(t, task.ID, res.TaskID)
+}
