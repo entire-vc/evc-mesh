@@ -2,8 +2,11 @@
 
 ## Overview
 
-evc-mesh exposes **45 MCP tools** via the [Model Context Protocol](https://modelcontextprotocol.io/).
+evc-mesh exposes **49 MCP tools** via the [Model Context Protocol](https://modelcontextprotocol.io/).
 Supported transports: **stdio** (default), **SSE** (HTTP Server-Sent Events on port 8081).
+
+New to this? [Agent Onboarding](agent-onboarding.md) walks through issuing a key
+and connecting a client end to end. This page is the tool catalogue.
 
 Tools are organized into 11 categories:
 
@@ -17,12 +20,15 @@ Tools are organized into 11 categories:
 | Governance Rules | 2 | Agent-applicable rules, project rules |
 | Team & Configuration | 6 | Team directory (flat/tree), assignment/workflow rules, agent profiles, config import/export |
 | Push Notifications | 1 | Long-poll for task assignments |
-| Recurring Tasks | 4 | Create and manage recurring task schedules and instance history |
-| Auto-Transition Rules | 4 | List, create, update, delete auto-transition rules per project |
+| Recurring Tasks | 6 | Create and manage recurring task schedules and instance history |
+| Auto-Transition Rules | 0 | ⚠️ Documented below but **not implemented** — these tools are not registered by the server |
 | Task Checkout | 3 | Exclusive task locking with TTL to prevent double-work |
 
-> **Note:** The MCP server is also available as a standalone package at
-> [github.com/entire-vc/evc-mesh-mcp](https://github.com/entire-vc/evc-mesh-mcp).
+> **Note:** in this repository the MCP server is `./cmd/mcp`, built as the
+> `mesh-mcp` binary and shipped in the same image as the API. Some snippets
+> below were written for the standalone
+> [github.com/entire-vc/evc-mesh-mcp](https://github.com/entire-vc/evc-mesh-mcp)
+> package and use its paths; substitute `./cmd/mcp` / `mesh-mcp`.
 
 ---
 
@@ -40,7 +46,7 @@ Add to your project's `.mcp.json` or `~/.claude.json`:
 {
   "mcpServers": {
     "evc-mesh": {
-      "command": "./evc-mesh-mcp",
+      "command": "./mesh-mcp",
       "args": ["--transport", "stdio"],
       "env": {
         "MESH_API_URL": "https://your-mesh-instance.example.com",
@@ -51,15 +57,15 @@ Add to your project's `.mcp.json` or `~/.claude.json`:
 }
 ```
 
-If running from source (from the `evc-mesh-mcp` repository):
+If running from source (from this repository):
 
 ```json
 {
   "mcpServers": {
     "evc-mesh": {
       "command": "go",
-      "args": ["run", "."],
-      "cwd": "/path/to/evc-mesh-mcp",
+      "args": ["run", "./cmd/mcp"],
+      "cwd": "/path/to/evc-mesh",
       "env": {
         "MESH_API_URL": "https://your-mesh-instance.example.com",
         "MESH_AGENT_KEY": "agk_your-workspace_your-key"
@@ -76,16 +82,25 @@ SSE mode allows multiple agents to connect simultaneously, each authenticating w
 Start the server:
 
 ```bash
-./evc-mesh-mcp --transport sse
+./mesh-mcp --transport sse
 ```
 
 Or set transport via environment variable:
 
 ```bash
-MESH_MCP_TRANSPORT=sse MESH_API_URL=https://your-mesh-instance.example.com ./evc-mesh-mcp
+MESH_MCP_TRANSPORT=sse MESH_API_URL=https://your-mesh-instance.example.com ./mesh-mcp
 ```
 
-Connect via: `http://localhost:8081/sse`
+Two endpoints are served:
+
+| Endpoint | Profile | Tools |
+|----------|---------|-------|
+| `http://localhost:8081/sse` | full | 49 |
+| `http://localhost:8081/core/sse` | core | 21 |
+
+Behind a reverse proxy, see
+[Agent Onboarding §4](agent-onboarding.md#4-behind-a-reverse-proxy) — a path
+prefix needs `MESH_MCP_PUBLIC_URL` as well as a proxy route.
 
 Agents authenticate per-connection using one of these methods:
 - `Authorization: Bearer agk_...` header
@@ -103,6 +118,8 @@ Agents authenticate per-connection using one of these methods:
 | `MESH_MCP_TRANSPORT` | `stdio` | No | Transport mode: `stdio` or `sse`. Overridden by the `--transport` CLI flag |
 | `MESH_MCP_HOST` | `0.0.0.0` | No | SSE server bind host |
 | `MESH_MCP_PORT` | `8081` | No | SSE server bind port |
+| `MESH_MCP_PUBLIC_URL` | *(empty)* | No | Public base URL of the SSE server. Empty advertises the message endpoint relative to the URL the client connected to, which is correct unless a proxy serves MCP under a path prefix |
+| `MESH_MCP_PROFILE` | `full` | No | Tool profile for **stdio** mode: `full` (49) or `core` (21). In SSE mode the profile follows the endpoint |
 
 ---
 
@@ -1194,7 +1211,12 @@ Immediately creates the next instance of a recurring schedule, without waiting f
 
 ---
 
-### Auto-Transition Rules (4 tools)
+### Auto-Transition Rules (not implemented)
+
+> ⚠️ **These four tools are not registered by the MCP server.** The section
+> below describes an intended interface, not a shipped one — calling any of them
+> returns an unknown-tool error. It is kept for reference until the tools land
+> or the section is removed.
 
 #### 39. `list_auto_transition_rules`
 

@@ -28,3 +28,23 @@ func TestLoad_AllowRegistrationOverride(t *testing.T) {
 
 	assert.False(t, cfg.Auth.AllowRegistration)
 }
+
+// An unset MESH_BASE_URL produces invite links pointing at the invitee's own
+// machine. The API warns about it at startup, so the "is it the fallback?"
+// question has to be answerable rather than guessed at by string-matching in
+// main().
+func TestLoad_BaseURLDefaultsToDevServerAndIsFlagged(t *testing.T) {
+	cfg := Load()
+
+	assert.Equal(t, DefaultBaseURL, cfg.Email.BaseURL)
+	assert.True(t, cfg.Email.BaseURLIsDefault(), "an unset MESH_BASE_URL must be reported as the fallback")
+}
+
+func TestLoad_BaseURLOverrideIsNotFlagged(t *testing.T) {
+	t.Setenv("MESH_BASE_URL", "https://mesh.example.com")
+
+	cfg := Load()
+
+	assert.Equal(t, "https://mesh.example.com", cfg.Email.BaseURL)
+	assert.False(t, cfg.Email.BaseURLIsDefault())
+}

@@ -14,6 +14,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	mcpserver "github.com/entire-vc/evc-mesh/internal/mcp"
+
+	sdkserver "github.com/mark3labs/mcp-go/server"
 )
 
 // ---------------------------------------------------------------------------
@@ -361,6 +363,95 @@ func TestSSEEndpoint_ValidKey_Passes(t *testing.T) {
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
+// ---------------------------------------------------------------------------
+// advertiseOptions — which endpoint URL the SSE handshake hands the client
+// ---------------------------------------------------------------------------
+
+// newTestSSEServer builds an SSE server the way main() does, so the assertions
+// below are about the real handshake behaviour rather than a stand-in.
+func newTestSSEServer(t *testing.T, publicURL, basePath string) *sdkserver.SSEServer {
+	t.Helper()
+	srv := mcpserver.NewServer(mcpserver.ServerConfig{
+		RESTClient: mcpserver.NewRESTClient("http://localhost:8005", ""),
+		Profile:    mcpserver.ProfileCore,
+	})
+	return sdkserver.NewSSEServer(srv.MCPServer(), advertiseOptions(publicURL, basePath)...)
+}
+
+// A client that connects over a published container port or a reverse proxy has
+// to be told where to POST its messages. The listen address must never be the
+// answer: 0.0.0.0 is a wildcard bind, not somewhere a client can dial.
+func TestAdvertiseOptions_NoPublicURL_AdvertisesRelativePath(t *testing.T) {
+	sse := newTestSSEServer(t, "", "")
+
+	req := httptest.NewRequest(http.MethodGet, "/sse", http.NoBody)
+	endpoint := sse.GetMessageEndpointForClient(req, "sid-1")
+
+	assert.Equal(t, "/message?sessionId=sid-1", endpoint)
+	assert.NotContains(t, endpoint, "0.0.0.0", "the wildcard bind address must never reach a client")
+}
+
+func TestAdvertiseOptions_NoPublicURL_CoreProfileKeepsItsBasePath(t *testing.T) {
+	sse := newTestSSEServer(t, "", coreBasePath)
+
+	req := httptest.NewRequest(http.MethodGet, "/core/sse", http.NoBody)
+	endpoint := sse.GetMessageEndpointForClient(req, "sid-2")
+
+	assert.Equal(t, "/core/message?sessionId=sid-2", endpoint)
+}
+
+func TestAdvertiseOptions_PublicURL_AdvertisesAbsoluteURL(t *testing.T) {
+	sse := newTestSSEServer(t, "https://mesh.example.com/mcp", "")
+
+	req := httptest.NewRequest(http.MethodGet, "/sse", http.NoBody)
+	endpoint := sse.GetMessageEndpointForClient(req, "sid-3")
+
+	assert.Equal(t, "https://mesh.example.com/mcp/message?sessionId=sid-3", endpoint)
+}
+
+func TestAdvertiseOptions_PublicURL_CoreProfileIsNestedUnderIt(t *testing.T) {
+	sse := newTestSSEServer(t, "https://mesh.example.com/mcp", coreBasePath)
+
+	req := httptest.NewRequest(http.MethodGet, "/core/sse", http.NoBody)
+	endpoint := sse.GetMessageEndpointForClient(req, "sid-4")
+
+	assert.Equal(t, "https://mesh.example.com/mcp/core/message?sessionId=sid-4", endpoint)
+}
+
+func TestAdvertiseOptions_PublicURL_TrailingSlashDoesNotDoubleUp(t *testing.T) {
+	sse := newTestSSEServer(t, "https://mesh.example.com/mcp/", "")
+
+	req := httptest.NewRequest(http.MethodGet, "/sse", http.NoBody)
+	endpoint := sse.GetMessageEndpointForClient(req, "sid-5")
+
+	assert.Equal(t, "https://mesh.example.com/mcp/message?sessionId=sid-5", endpoint)
+}
+
+// ---------------------------------------------------------------------------
+// dialableURL — the URL printed in the startup log
+// ---------------------------------------------------------------------------
+
+func TestDialableURL(t *testing.T) {
+	cases := []struct {
+		name      string
+		publicURL string
+		host      string
+		port      string
+		want      string
+	}{
+		{"wildcard host is reported as localhost", "", "0.0.0.0", "8081", "http://localhost:8081"},
+		{"ipv6 wildcard too", "", "::", "8081", "http://localhost:8081"},
+		{"explicit host is kept", "", "127.0.0.1", "9000", "http://127.0.0.1:9000"},
+		{"public URL wins", "https://mesh.example.com/mcp", "0.0.0.0", "8081", "https://mesh.example.com/mcp"},
+		{"public URL loses its trailing slash", "https://mesh.example.com/mcp/", "0.0.0.0", "8081", "https://mesh.example.com/mcp"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, dialableURL(tc.publicURL, tc.host, tc.port))
+		})
+	}
 }
 
 // ---------------------------------------------------------------------------

@@ -34,7 +34,7 @@ Traditional project management tools treat AI agents as an afterthought. Mesh is
 - Bulk operations and inline editing in list view
 
 ### Agent Integration
-- **MCP server** with 45 tools across 11 categories (stdio + HTTP SSE transports)
+- **MCP server** with 49 tools across 11 categories (stdio + HTTP SSE transports)
 - **REST API** with 125+ routes at `/api/v1`
 - **Go SDK** (`pkg/sdk/`) for building custom integrations
 - Agent authentication via API keys (`X-Agent-Key`)
@@ -93,9 +93,13 @@ This starts PostgreSQL, Redis, NATS, and MinIO.
 ### 2. Configure environment
 
 ```bash
-cp .env.example .env
-# Edit .env — at minimum, change JWT_SECRET
+export JWT_SECRET=$(openssl rand -base64 32)
 ```
+
+The API server has no dotenv loader — it reads the process environment only, so
+a `.env` file is not picked up by `go run ./cmd/api`. `.env.example` is the
+reference list of names and defaults; Docker Compose is what actually reads an
+env file (`deploy/docker/mesh/.env`).
 
 Defaults in `.env.example` already match the ports the compose file above
 publishes, so local development works without further edits.
@@ -117,8 +121,11 @@ cd web && pnpm install && pnpm dev
 ### 5. Start the MCP server (optional)
 
 ```bash
-go run ./cmd/mcp --transport sse --port 8081
+MESH_MCP_PORT=8081 go run ./cmd/mcp --transport sse
 ```
+
+`--transport` is the only flag; the port is set via `MESH_MCP_PORT`. See
+[Agent Onboarding](docs/agent-onboarding.md) to connect a client.
 
 ### 6. Create the first account
 
@@ -182,7 +189,7 @@ Or connect via SSE for remote agents:
 }
 ```
 
-The MCP server exposes 45 tools for managing projects, tasks, comments, artifacts, events, rules, and more. See [MCP Reference](docs/mcp-reference.md) for the full tool catalog.
+The MCP server exposes 49 tools for managing projects, tasks, comments, artifacts, events, rules, memory, and more. See [MCP Reference](docs/mcp-reference.md) for the full tool catalog, and [Agent Onboarding](docs/agent-onboarding.md) for connecting an agent to a self-hosted instance.
 
 ## Documentation
 
@@ -192,7 +199,8 @@ The MCP server exposes 45 tools for managing projects, tasks, comments, artifact
 | [Self-Hosting Guide](docs/self-hosting.md) | Production deployment with Docker Compose from `deploy/docker/mesh/` |
 | [Architecture](docs/architecture.md) | System architecture and design decisions |
 | [API Authentication](docs/api-authentication.md) | JWT, agent keys, and RBAC |
-| [MCP Reference](docs/mcp-reference.md) | All 45 MCP tools with parameters and examples |
+| [Agent Onboarding](docs/agent-onboarding.md) | Issue agent keys, connect over stdio or SSE, run MCP behind a proxy |
+| [MCP Reference](docs/mcp-reference.md) | All 49 MCP tools with parameters and examples |
 | [Custom Fields](docs/custom-fields.md) | Guide for 12 custom field types |
 | [Webhooks](docs/webhooks.md) | Webhook setup with HMAC-SHA256 validation |
 | [Agent Push Notifications](docs/agent-push-notifications.md) | Callback URL, SSE, and long-polling |
