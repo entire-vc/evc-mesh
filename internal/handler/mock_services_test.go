@@ -747,6 +747,13 @@ type MockMemoryService struct {
 	ForgetFunc         func(ctx context.Context, id uuid.UUID, actorAgentID *uuid.UUID, isAdmin bool) error
 	FindRelatedFunc    func(ctx context.Context, memoryID uuid.UUID, limit int) ([]domain.ScoredMemory, error)
 	BackfillChunksFunc func(ctx context.Context, workspaceID uuid.UUID, limit int) (int, error)
+
+	// The write-side hooks exist so a test can assert the service was NOT reached.
+	// Without them a cross-tenant test on these endpoints can only observe the
+	// status code, which stays 200 for any handler that swallows the error.
+	ImportMemoriesFunc func(ctx context.Context, workspaceID uuid.UUID, data []byte) (int, error)
+	BatchEmbedFunc     func(ctx context.Context, workspaceID uuid.UUID) (int, error)
+	RecallGraphFunc    func(ctx context.Context, opts domain.RecallGraphOpts) ([]domain.RecallGraphResult, error)
 }
 
 func (m *MockMemoryService) ListMemories(ctx context.Context, filter domain.MemoryListFilter) (*service.RecallResult, error) {
@@ -807,9 +814,15 @@ func (m *MockMemoryService) ExportMemories(ctx context.Context, workspaceID uuid
 	return nil, nil
 }
 func (m *MockMemoryService) ImportMemories(ctx context.Context, workspaceID uuid.UUID, data []byte) (int, error) {
+	if m.ImportMemoriesFunc != nil {
+		return m.ImportMemoriesFunc(ctx, workspaceID, data)
+	}
 	return 0, nil
 }
 func (m *MockMemoryService) BatchEmbed(ctx context.Context, workspaceID uuid.UUID) (int, error) {
+	if m.BatchEmbedFunc != nil {
+		return m.BatchEmbedFunc(ctx, workspaceID)
+	}
 	return 0, nil
 }
 func (m *MockMemoryService) BackfillChunks(ctx context.Context, workspaceID uuid.UUID, limit int) (int, error) {
@@ -831,6 +844,9 @@ func (m *MockMemoryService) Supersede(ctx context.Context, oldID, newID uuid.UUI
 	return nil
 }
 func (m *MockMemoryService) RecallGraph(ctx context.Context, opts domain.RecallGraphOpts) ([]domain.RecallGraphResult, error) {
+	if m.RecallGraphFunc != nil {
+		return m.RecallGraphFunc(ctx, opts)
+	}
 	return nil, nil
 }
 
