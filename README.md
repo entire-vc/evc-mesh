@@ -52,7 +52,8 @@ Traditional project management tools treat AI agents as an afterthought. Mesh is
 ### Platform
 - Multi-tenant with workspace isolation on every table
 - Project-level membership enforcement (users and agents)
-- RBAC with 15 permissions across 5 roles (owner, admin, member, viewer, agent)
+- RBAC with 16 permissions across 4 workspace roles (owner, admin, member, viewer);
+  agents authenticate by API key and hold their own fixed permission set
 - Built-in JWT auth (HS256) for users, API keys for agents
 - Rate limiting (per-IP for auth, per-actor for API)
 - Config import/export (YAML) with workflow templates
