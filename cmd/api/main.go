@@ -370,6 +370,30 @@ func main() {
 			s3Client.SetPublicURL(cfg.S3.PublicURL)
 			log.Printf("S3 presigned URLs will use public URL: %s", cfg.S3.PublicURL)
 		}
+
+		// Create the bucket if it is not there yet. Nothing else ever did — not
+		// the compose file, not a migration, not the first upload — so a fresh
+		// self-hosted install had an empty MinIO and every artifact and
+		// workspace-icon upload failed against storage that was itself healthy.
+		//
+		// At boot rather than on first upload: the operator learns about a
+		// broken storage config once, in the startup log they are already
+		// watching, instead of hours later as a user-facing error. Upload still
+		// re-creates the bucket on demand, which covers storage that comes up
+		// after the API and a bucket deleted while running.
+		//
+		// Best-effort by design: storage being down must not stop the API from
+		// serving the rest of the product.
+		ensureCtx, cancelEnsure := context.WithTimeout(context.Background(), 15*time.Second)
+		bucketErr := s3Client.EnsureBucket(ensureCtx)
+		cancelEnsure()
+		if bucketErr != nil {
+			log.Printf("WARNING: object storage bucket %q on %s is not usable — artifact and workspace-icon uploads will fail until this is fixed: %v",
+				s3Client.Bucket(), s3Client.Endpoint(), bucketErr)
+		} else {
+			log.Printf("Object storage ready: bucket %q on %s", s3Client.Bucket(), s3Client.Endpoint())
+		}
+
 		artifactService = service.NewArtifactService(artifactRepo, s3Client, activityLogRepo)
 	}
 
@@ -622,6 +646,48 @@ func main() {
 	invitePublicGroup.GET("/:token", inviteHandler.GetByToken)
 	invitePublicGroup.POST("/:token/accept", inviteHandler.Accept)
 
+	// Workspace icon (read). Unauthenticated on purpose, and it has to be: the
+	// UI renders it as <img src="/api/v1/workspaces/{id}/icon"> and hands the
+	// same URL to <link rel=icon>. Neither carries an Authorization header, so
+	// behind the authenticated group this endpoint answered every browser with
+	// 401 and the icon could never render — the upload was only the first of
+	// the two walls.
+	//
+	// Mesh has no cookie auth — the server never sets one, the token lives only
+	// in a header — so there is no way for a browser subresource to
+	// authenticate at all. A signed token in the URL was rejected as the
+	// alternative: it leaks through logs and Referer headers, for a logo.
+	//
+	// The exposure is a workspace logo to whoever already knows the workspace
+	// UUID, which is only ever handed out in authenticated responses; the UUID
+	// is the capability, exactly as it is for the presigned artifact URLs this
+	// endpoint used to redirect to (those were unauthenticated too, and for far
+	// more sensitive content). A missing workspace and a workspace with no icon
+	// answer byte-identically, so this is not an existence oracle either.
+	// Uploading (PUT) stays members-only and admin-gated.
+	//
+	// This exception is registered in tests/integration/cross_tenant_test.go
+	// (wsPublicRoutes) and its behaviour is pinned there. Do not add to that
+	// list without the same kind of justification.
+	//
+	// Registered per route with explicit middleware rather than on a
+	// v1.Group("/workspaces"): a group would make "which paths are public"
+	// depend on which registrations happen to sit under it, and this must be
+	// exactly two routes and nothing else. Written with the full literal path
+	// so it reads identically to the guarded routes below — the completeness
+	// test greps for both forms and fails on any :ws_id route that appears in
+	// neither table.
+	iconRateLimit := mw.RateLimit(mw.RateLimitConfig{
+		Enabled:     cfg.RateLimit.Enabled,
+		RPM:         cfg.RateLimit.APIRPM,
+		KeyFunc:     mw.RateLimitKeyByIP,
+		RedisClient: sharedRedis,
+	})
+	v1.GET("/workspaces/:ws_id/icon", workspaceHandler.GetIcon, iconRateLimit)
+	// HEAD as well: it is what `curl -I` and cache validators send, and Echo
+	// does not derive it from the GET route. net/http drops the body itself.
+	v1.HEAD("/workspaces/:ws_id/icon", workspaceHandler.GetIcon, iconRateLimit)
+
 	// --- Protected routes (JWT or Agent Key) ---
 	api := v1.Group("")
 	api.Use(mw.DualAuth(authService, agentService))
@@ -665,7 +731,8 @@ func main() {
 	// DELETE and icon upload: owner/admin, not any member who happens to be in.
 	api.PATCH("/workspaces/:ws_id", workspaceHandler.Update, rbac(mw.PermManageMembers))
 	api.DELETE("/workspaces/:ws_id", workspaceHandler.Delete, rbac(mw.PermDeleteWorkspace))
-	api.GET("/workspaces/:ws_id/icon", workspaceHandler.GetIcon)
+	// GET /workspaces/:ws_id/icon is registered on the public group above —
+	// browsers fetch it as a plain <img>/<link rel=icon> subresource.
 	api.PUT("/workspaces/:ws_id/icon", workspaceHandler.UploadIcon, rbac(mw.PermManageMembers))
 
 	// Workspace member routes.

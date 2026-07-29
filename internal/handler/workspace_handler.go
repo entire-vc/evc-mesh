@@ -2,10 +2,13 @@ package handler
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -13,19 +16,34 @@ import (
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/service"
+	"github.com/entire-vc/evc-mesh/internal/storage"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 )
 
 const (
 	maxIconSize = 500 * 1024 // 500 KB
-	iconExpiry  = time.Hour
 	pngMagic    = "\x89PNG"
+
+	// Short enough that a re-uploaded icon appears without a hard refresh even
+	// for clients that ignore the ETag, long enough to keep the icon out of the
+	// request path on ordinary navigation.
+	iconCacheControl = "public, max-age=300"
 )
+
+// IconStorage is the slice of object storage the workspace handler needs.
+// Declared here, at the point of use, so the handler is testable with a fake
+// and does not drag the artifact-service contract along.
+type IconStorage interface {
+	Upload(ctx context.Context, key string, reader io.Reader, size int64, contentType string) error
+	// GetObject opens the object for reading and returns its metadata.
+	// The caller closes the reader.
+	GetObject(ctx context.Context, key string) (io.ReadCloser, storage.ObjectInfo, error)
+}
 
 // WorkspaceHandler handles HTTP requests for workspace management.
 type WorkspaceHandler struct {
 	workspaceService service.WorkspaceService
-	storage          service.StorageClient // nil when S3 is not configured
+	storage          IconStorage // nil when S3 is not configured
 }
 
 // NewWorkspaceHandler creates a new WorkspaceHandler with the given service.
@@ -34,7 +52,7 @@ func NewWorkspaceHandler(ws service.WorkspaceService) *WorkspaceHandler {
 }
 
 // WithStorage attaches a storage client for icon uploads.
-func (h *WorkspaceHandler) WithStorage(s service.StorageClient) {
+func (h *WorkspaceHandler) WithStorage(s IconStorage) {
 	h.storage = s
 }
 
@@ -261,7 +279,10 @@ func (h *WorkspaceHandler) UploadIcon(c echo.Context) error {
 	storageKey := fmt.Sprintf("workspaces/%s/icon.png", wsID)
 	err = h.storage.Upload(c.Request().Context(), storageKey, reader, file.Size, "image/png")
 	if err != nil {
-		return c.JSON(http.StatusInternalServerError, apierror.InternalError("upload failed"))
+		// Full detail (endpoint, bucket, underlying S3 error) goes to the log;
+		// the operator gets a message that names the actual fault.
+		c.Logger().Errorf("workspace icon upload failed for %s (key %s): %v", wsID, storageKey, err)
+		return c.JSON(http.StatusInternalServerError, apierror.InternalError(storageFailureMessage(err, "Icon upload failed")))
 	}
 
 	workspace, err := h.workspaceService.GetByID(c.Request().Context(), wsID)
@@ -277,7 +298,20 @@ func (h *WorkspaceHandler) UploadIcon(c echo.Context) error {
 }
 
 // GetIcon handles GET /workspaces/:ws_id/icon
-// Redirects (302) to a presigned S3 URL for the workspace icon image.
+//
+// It streams the PNG bytes straight from object storage rather than redirecting
+// to a presigned URL. A presigned URL is generated from S3_ENDPOINT, which on
+// every bundled deployment is the compose-internal host `minio:9000` — a name
+// that does not resolve in the visitor's browser and a port that is not
+// published. The redirect therefore pointed at an unreachable address unless
+// the operator also set S3_PUBLIC_URL *and* published MinIO or proxied it, none
+// of which the install instructions asked for. Serving the bytes ourselves
+// keeps the icon working behind any reverse proxy, tunnel or path prefix with
+// no extra configuration, and never leaks the internal storage topology.
+//
+// The cost is bounded: the icon is capped at 500 KB by UploadIcon, it is
+// requested about once per page load, and the ETag below turns repeat requests
+// into 304s.
 func (h *WorkspaceHandler) GetIcon(c echo.Context) error {
 	wsIDStr := c.Param("ws_id")
 	wsID, err := uuid.Parse(wsIDStr)
@@ -287,19 +321,80 @@ func (h *WorkspaceHandler) GetIcon(c echo.Context) error {
 
 	workspace, err := h.workspaceService.GetByID(c.Request().Context(), wsID)
 	if err != nil {
+		// A workspace that does not exist must answer exactly as a workspace
+		// that simply has no icon — see iconNotFound.
+		var apiErr *apierror.Error
+		if errors.As(err, &apiErr) && apiErr.Code == http.StatusNotFound {
+			return iconNotFound(c)
+		}
 		return handleError(c, err)
 	}
-	if workspace.IconStorageKey == nil {
-		return c.JSON(http.StatusNotFound, apierror.NotFound("Workspace icon"))
+	if workspace == nil || workspace.IconStorageKey == nil {
+		return iconNotFound(c)
 	}
 	if h.storage == nil {
 		return c.JSON(http.StatusServiceUnavailable, apierror.BadRequest("icon storage is not configured"))
 	}
 
-	url, err := h.storage.GetPresignedURL(c.Request().Context(), *workspace.IconStorageKey, iconExpiry, "", "")
+	body, info, err := h.storage.GetObject(c.Request().Context(), *workspace.IconStorageKey)
 	if err != nil {
-		return c.JSON(http.StatusInternalServerError, apierror.InternalError("could not generate icon URL"))
+		if errors.Is(err, storage.ErrNotFound) {
+			// The row points at a key the bucket no longer holds (bucket
+			// recreated, object pruned). Not a server fault — there is no icon.
+			return iconNotFound(c)
+		}
+		c.Logger().Errorf("workspace icon fetch failed for %s (key %s): %v", wsID, *workspace.IconStorageKey, err)
+		return c.JSON(http.StatusInternalServerError, apierror.InternalError(storageFailureMessage(err, "Could not read the workspace icon")))
+	}
+	defer body.Close()
+
+	// ETag comes from storage and changes whenever the object does, so a
+	// re-uploaded icon invalidates browser caches immediately.
+	etag := info.ETag
+	if etag != "" {
+		if !strings.HasPrefix(etag, `"`) {
+			etag = `"` + etag + `"`
+		}
+		c.Response().Header().Set("ETag", etag)
+		if match := c.Request().Header.Get("If-None-Match"); match == etag {
+			return c.NoContent(http.StatusNotModified)
+		}
+	}
+	c.Response().Header().Set("Cache-Control", iconCacheControl)
+
+	contentType := info.ContentType
+	if contentType == "" {
+		contentType = "image/png"
 	}
 
-	return c.Redirect(http.StatusFound, url)
+	return c.Stream(http.StatusOK, contentType, body)
+}
+
+// iconNotFound is the single 404 every "no icon here" outcome answers with:
+// unknown workspace, existing workspace with no icon, and a stored key whose
+// object has gone missing.
+//
+// They must be byte-identical. This route is readable without authentication
+// (a browser cannot put a bearer token on an <img>), so a distinguishable
+// "Workspace not found" would turn it into an existence oracle: anyone could
+// probe ids and learn which workspaces are real. Answering the same thing to
+// all three keeps the workspace id the only secret involved.
+func iconNotFound(c echo.Context) error {
+	return c.JSON(http.StatusNotFound, apierror.NotFound("Workspace icon"))
+}
+
+// storageFailureMessage turns a classified storage error into a sentence that
+// tells the operator what to fix. Anything unrecognised falls back to the
+// caller's generic text — better a vague message than a confidently wrong one.
+func storageFailureMessage(err error, fallback string) string {
+	switch {
+	case errors.Is(err, storage.ErrBucketMissing):
+		return "Icon storage bucket does not exist and could not be created — check that the S3 credentials may create buckets, or create the bucket named by S3_BUCKET manually."
+	case errors.Is(err, storage.ErrAccessDenied):
+		return "Object storage rejected the credentials — check S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY."
+	case errors.Is(err, storage.ErrUnreachable):
+		return "Object storage is unreachable — check that the storage service is running and that S3_ENDPOINT points at it."
+	default:
+		return fallback + " — see the API log for the storage error."
+	}
 }

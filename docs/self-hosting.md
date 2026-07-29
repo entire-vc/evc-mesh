@@ -105,10 +105,13 @@ The services will be available at:
 | `S3_ENDPOINT` | `localhost:9002` | S3-compatible endpoint |
 | `S3_ACCESS_KEY_ID` | `minioadmin` | S3 access key |
 | `S3_SECRET_ACCESS_KEY` | `minioadmin` | S3 secret key |
-| `S3_BUCKET` | `mesh-artifacts` | Bucket name for artifacts |
+| `S3_BUCKET` | `mesh-artifacts` | Bucket name for artifacts and workspace icons. Created automatically at API startup if missing. |
 | `S3_REGION` | `us-east-1` | S3 region |
 | `S3_USE_SSL` | `false` | Use SSL for S3 connections |
-| `S3_PUBLIC_URL` | *(empty)* | Public base URL for artifact downloads (e.g. `https://mesh.example.com/s3`). Leave empty to use presigned S3 URLs. |
+| `S3_PUBLIC_URL` | *(empty)* | Public base URL for **artifact** downloads (e.g. `https://mesh.example.com/s3`). Leave empty to use presigned S3 URLs. Not needed for workspace icons — those are served by the API itself. |
+
+See [File storage](#file-storage) below for what the bucket holds and how to
+check it.
 
 ### Authentication
 
@@ -251,6 +254,82 @@ None of these are passed through by `docker-compose.prod.yml`; add them to the
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `MESH_ALLOW_REVIEW_AT_CREATE` | *(off)* | Set to `true` to let `POST /tasks` create a task directly in a review-category status. Intended for bulk imports and migrations; leave off otherwise. |
+
+---
+
+## File storage
+
+Two features write files to object storage: **task artifacts** and the
+**workspace icon** (the PNG shown in the sidebar and used as the browser
+favicon). Both live in a single bucket, `S3_BUCKET` (default `mesh-artifacts`).
+
+### What you have to do
+
+Nothing. The bundled `minio` service is started by both compose files, and the
+API **creates the bucket at startup if it does not exist**. You do not need to
+open the MinIO console or run `mc mb` by hand.
+
+Confirm it on the first boot — the API logs one line either way:
+
+```bash
+cd deploy/docker/mesh
+docker compose -f docker-compose.prod.yml --env-file .env logs api | grep -i "object storage"
+```
+
+```
+Object storage ready: bucket "mesh-artifacts" on minio:9000
+```
+
+If the bucket could not be created you get a warning naming the bucket, the
+endpoint and the reason, and uploads will fail until it is fixed:
+
+```
+WARNING: object storage bucket "mesh-artifacts" on minio:9000 is not usable —
+artifact and workspace-icon uploads will fail until this is fixed: ...
+```
+
+The API keeps serving everything else; it retries the create on the next
+upload, so fixing credentials or starting the storage service is enough — no
+API restart required.
+
+### Using an external S3 bucket
+
+Point `S3_ENDPOINT`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `S3_BUCKET`,
+`S3_REGION` and `S3_USE_SSL` at it, and drop the `minio` service. If the
+credentials are not allowed to create buckets, create `S3_BUCKET` yourself
+first — the startup log will tell you if this is the case.
+
+### How files are served back
+
+| | Served by | Needs `S3_PUBLIC_URL`? |
+|---|---|---|
+| Workspace icon | The API streams the bytes (`GET /api/v1/workspaces/{id}/icon`) | No |
+| Task artifacts | Redirect to a presigned storage URL | Yes, if storage is not reachable from the browser |
+
+The workspace icon is deliberately **not** served via a presigned URL. A
+presigned URL is built from `S3_ENDPOINT`, which under compose is the internal
+host `minio:9000` — a name that does not resolve in a browser and a port that is
+not published. Streaming it through the API means the icon works behind any
+reverse proxy, tunnel or path prefix with no extra configuration, and the
+storage backend is never exposed. The icon is capped at 500 KB and carries an
+`ETag`, so repeat requests are answered `304 Not Modified`.
+
+`GET /api/v1/workspaces/{id}/icon` is **unauthenticated** — it has to be, since
+the browser loads it as a plain `<img>` and `<link rel="icon">`, neither of
+which sends an `Authorization` header. Reaching it requires knowing the
+workspace UUID, which is only ever handed out in authenticated responses; a
+workspace with no icon and a workspace that does not exist both answer `404`.
+No other workspace data is exposed by this route.
+
+### Checking what is in the bucket
+
+```bash
+cd deploy/docker/mesh
+docker compose -f docker-compose.prod.yml --env-file .env exec minio \
+  sh -c 'mc alias set l http://localhost:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null && mc ls --recursive l/mesh-artifacts'
+```
+
+Workspace icons are stored under `workspaces/<workspace-id>/icon.png`.
 
 ---
 
@@ -614,6 +693,17 @@ docker compose -f docker-compose.prod.yml --env-file .env config | \
    (an unknown or deleted id) answers `403` rather than `404`: the guard runs
    before the handler, and it does not confirm which ids exist.
 
+   **One registered exception:** `GET`/`HEAD /workspaces/:ws_id/icon` is
+   readable without authentication, because the browser fetches the workspace
+   icon with an `<img>` tag and a `<link rel="icon">`, and neither can send an
+   `Authorization` header. Knowing the workspace id is the only requirement, and
+   ids are handed out only in authenticated responses; a workspace with no icon
+   and a workspace that does not exist answer byte-identically, so this cannot
+   be used to discover workspaces. Uploading an icon (`PUT`) is unaffected and
+   stays owner/admin only. The exception is registered in `wsPublicRoutes`
+   (`tests/integration/cross_tenant_test.go`) — a workspace route that leaves
+   the guard without being registered there fails the build.
+
    The live event stream (`/ws`) applies the same rule. It is upgraded before any
    API middleware runs, so it checks membership itself: the `workspace=` query
    parameter is verified during the handshake, and every later
@@ -920,14 +1010,37 @@ cd ../..
 go run ./cmd/api
 ```
 
-### MinIO bucket not found
+### Icon or artifact upload fails
 
-**Symptom:** Artifact uploads fail with "bucket not found".
+**Symptom:** Uploading a workspace icon or a task artifact returns an error.
 
-**Solution:** The API auto-creates the bucket on startup. If it fails, create manually:
+The API names the cause in the response and in its log — read it first, the
+three cases have different fixes:
+
+| Message | Cause | Fix |
+|---------|-------|-----|
+| *…bucket does not exist and could not be created…* | The credentials may not create buckets | Create `S3_BUCKET` manually (below), or grant `CreateBucket` |
+| *…rejected the credentials…* | Wrong keys | Check `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` (under compose: `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY`) |
+| *…storage is unreachable…* | Storage is down or `S3_ENDPOINT` is wrong | Check the `minio` service is healthy and `S3_ENDPOINT` points at it |
+
+The bucket is created automatically at API startup and re-created on demand at
+upload time (see [File storage](#file-storage)). To create it by hand anyway:
+
 ```bash
-mc alias set local http://localhost:9002 minioadmin minioadmin
-mc mb local/mesh-artifacts
+cd deploy/docker/mesh
+docker compose -f docker-compose.prod.yml --env-file .env exec minio \
+  sh -c 'mc alias set l http://localhost:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null && mc mb l/mesh-artifacts'
+```
+
+### Workspace icon uploads but does not appear
+
+Hard-refresh once — the icon is cached for 5 minutes. If it is still missing,
+check that your reverse proxy forwards `/api/` to the API without rewriting it;
+`GET /api/v1/workspaces/<id>/icon` must return `200` with `Content-Type:
+image/png`:
+
+```bash
+curl -i http://localhost/api/v1/workspaces/<workspace-id>/icon | head -5
 ```
 
 ### NATS JetStream not available
