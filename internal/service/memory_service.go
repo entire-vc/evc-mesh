@@ -480,7 +480,12 @@ func (s *memoryService) Remember(ctx context.Context, mem *domain.Memory) (Remem
 
 	// ── Slug resolution: if no project_id given but tags contain exactly one
 	// resolvable project:<slug>, look up the project and populate project_id. ──
-	if mem.ProjectID == nil && s.projectRepo != nil {
+	// Scoped to scope=project only: identity for workspace/agent scope does not
+	// include project_id (see GetByKey), so auto-populating it there would just
+	// re-create the "workspace record incoherently carries a project_id" bug
+	// this fix removes — 544 of 1186 active workspace-scoped rows had exactly
+	// that shape before the scope-identity fix.
+	if mem.Scope == domain.ScopeProject && mem.ProjectID == nil && s.projectRepo != nil {
 		if slug, ok := resolveProjectSlug(mem.Tags); ok {
 			if proj, lookupErr := s.projectRepo.GetBySlug(ctx, mem.WorkspaceID, slug); lookupErr == nil && proj != nil {
 				mem.ProjectID = &proj.ID
