@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"regexp"
@@ -372,6 +373,82 @@ func NewCommentService(
 	return s
 }
 
+// maxCommentMetadataBytes caps comment.metadata. The field is a label ("which automation
+// posted this, was it an auto-nudge"), not a payload store — 4 KiB is far above any
+// legitimate tag set and keeps a JSONB column from becoming an accidental blob dump.
+const maxCommentMetadataBytes = 4096
+
+// validateCommentMetadata rejects anything that is not a JSON object, loudly.
+//
+// Absent/null metadata is legal and means "no metadata" — that is the common case and not
+// an error. Anything present but not an object (array, string, number, bool, malformed
+// JSON) is refused with 4xx naming the actual shape received.
+//
+// The refusal is the point. The defect this replaces (#13e391d2) was not that metadata
+// was rejected but that it was accepted-and-discarded: the API answered 201 and returned
+// `{}`, so a caller could not distinguish "stored" from "thrown away", and neither could
+// the detectors reading the field months later. A caller that sends the wrong shape must
+// find out from the response, not from a filter that silently never matches.
+//
+// This validates SHAPE, not provenance. metadata.source is self-declared by whoever posts
+// the comment and is not authenticated — it is a cooperative label for distinguishing
+// automation from human activity, and must not be treated as proof of origin by anything
+// making a security or trust decision.
+func validateCommentMetadata(raw json.RawMessage) error {
+	if len(raw) == 0 {
+		return nil
+	}
+
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" || trimmed == "null" {
+		return nil
+	}
+
+	if len(raw) > maxCommentMetadataBytes {
+		return apierror.ValidationError(map[string]string{
+			"metadata": fmt.Sprintf("metadata must be at most %d bytes, got %d", maxCommentMetadataBytes, len(raw)),
+		})
+	}
+
+	var probe any
+	if err := json.Unmarshal(raw, &probe); err != nil {
+		return apierror.ValidationError(map[string]string{
+			"metadata": "metadata must be a valid JSON object: " + err.Error(),
+		})
+	}
+
+	if _, ok := probe.(map[string]any); !ok {
+		return apierror.ValidationError(map[string]string{
+			"metadata": fmt.Sprintf("metadata must be a JSON object, got %s", jsonKindName(probe)),
+		})
+	}
+
+	return nil
+}
+
+// jsonKindName names the JSON type of a decoded value for error messages, so a rejected
+// caller is told what it actually sent rather than just that something was wrong.
+//
+// There is deliberately no `case nil`: a bare `null` returns early from
+// validateCommentMetadata as legal-and-absent, so nil cannot reach here. The default is
+// the only fallback and exists for a value encoding/json does not currently produce when
+// decoding into `any` — it is unreachable today rather than a path worth pretending is
+// live with its own branch.
+func jsonKindName(v any) string {
+	switch v.(type) {
+	case []any:
+		return "array"
+	case string:
+		return "string"
+	case float64:
+		return "number"
+	case bool:
+		return "boolean"
+	default:
+		return "non-object value"
+	}
+}
+
 // Create validates and persists a new comment.
 // It checks that the task exists, the body is not empty, and if a parent comment
 // is specified, the parent exists and belongs to the same task.
@@ -380,6 +457,10 @@ func (s *commentService) Create(ctx context.Context, comment *domain.Comment) er
 		return apierror.ValidationError(map[string]string{
 			"body": "body is required",
 		})
+	}
+
+	if err := validateCommentMetadata(comment.Metadata); err != nil {
+		return err
 	}
 
 	// Validate the task exists.

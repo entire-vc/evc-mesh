@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"encoding/json"
 	"net/http"
 	"strconv"
 	"time"
@@ -28,10 +29,19 @@ func NewCommentHandler(cs service.CommentService, ts taskIDResolver) *CommentHan
 }
 
 // createCommentRequest represents the JSON body for creating a comment.
+//
+// Metadata is a caller-supplied JSON object stored verbatim on the comment. It exists so
+// automation can label the comments it posts (`{"source":"pr-task-driver","auto":true}`)
+// and so staleness/stall detectors can tell an auto-nudge from genuine activity. Until
+// task #13e391d2 this field was absent from the struct, so `c.Bind` discarded it and the
+// API answered 201 while losing it — every consumer filtering on `metadata.source` was
+// filtering on a value that could never be set. The shape is validated (see
+// validateCommentMetadata); it is never silently dropped.
 type createCommentRequest struct {
-	Body            string     `json:"body"`
-	ParentCommentID *uuid.UUID `json:"parent_comment_id"`
-	IsInternal      bool       `json:"is_internal"`
+	Body            string          `json:"body"`
+	ParentCommentID *uuid.UUID      `json:"parent_comment_id"`
+	IsInternal      bool            `json:"is_internal"`
+	Metadata        json.RawMessage `json:"metadata"`
 }
 
 // updateCommentRequest represents the JSON body for updating a comment.
@@ -111,6 +121,7 @@ func (h *CommentHandler) Create(c echo.Context) error {
 		AuthorType:      authorType,
 		Body:            req.Body,
 		IsInternal:      req.IsInternal,
+		Metadata:        req.Metadata,
 	}
 
 	if err := h.commentService.Create(c.Request().Context(), comment); err != nil {
