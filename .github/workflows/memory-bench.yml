@@ -521,6 +521,92 @@ jobs:
           exit 0
 
       # ---------------------------------------------------------------------
+      # THE ALERT THE SUMMARY ABOVE ALREADY PROMISES.
+      #
+      # The `rc=2` branch of that summary says "the alert below is what stops it
+      # being silent". Until this step existed there was no alert below it: the
+      # blindness-alert shell lived in the prod canary and the advisory arm, and
+      # both read their OWN `steps.*.outputs.rc`, so neither could see this job's
+      # verdict even in principle.
+      #
+      # What that cost, measured from the tracker rather than argued from the
+      # YAML: `no-baseline` was this check's steady state on EVERY run from #394
+      # (2026-07-28 05:02Z) until #f70347b5 committed a baseline — runs on main
+      # (30525387007) and on branches (30334590080, 30336693957, 30522592913,
+      # 30532577681) — and exactly ONE `no-baseline` issue has ever been opened
+      # (#333, 2026-07-13, i.e. predating the split). Every post-#394 blindness
+      # issue is a `version-*` or `mode-*` kind, all of them raised by the prod
+      # canary's version pin, which this arm does not have. Two days blind on the
+      # merge gate, zero pages. It surfaced only because #e8570874's AC4 tripped
+      # over it by accident.
+      #
+      # NOT SCOPED TO PUSH, AND NOT RUN ON pull_request. Both halves carry
+      # `github.event_name != 'pull_request'` and that is a correctness claim,
+      # not convenience:
+      #   - a PR branch's measurement is not authoritative about the repo's
+      #     state, so letting it RAISE means a PR that breaks only its own
+      #     baseline opens a repo-level episode main is fine with, and letting it
+      #     RESOLVE means a PR that fixes its own baseline closes an episode main
+      #     is still blind on. Both directions are wrong, and the second loses
+      #     the alarm;
+      #   - on push/schedule/dispatch this job builds the default branch, so what
+      #     it measured and what the episode is about are the same thing;
+      #   - and a fork PR gets a read-only GITHUB_TOKEN, so alerting from
+      #     `pull_request` would fail this REQUIRED check for an author who could
+      #     not possibly clear it — the #342 rule this whole arm is built around.
+      # The gap this leaves is one push wide: a PR merges with rc=2 visible in
+      # its summary, and the next run on main opens the episode.
+      #
+      # NO DRILL GUARD, deliberately — the prod pair excludes
+      # `inputs.expect_commit` dispatches because that input pins a SERVING
+      # version and a version drill is neither an incident nor a recovery. This
+      # arm builds its own server from the checkout and never reads that input,
+      # so the same clause here would be a guard on a value the job cannot
+      # observe: it would silence real blindness on any dispatch that happened to
+      # set an unrelated input. Pinned, with that reason, by
+      # `test_the_branch_pair_carries_no_drill_guard`.
+      # ---------------------------------------------------------------------
+      - name: Alert — the required recall gate is blind (INCONCLUSIVE)
+        if: >-
+          steps.scope.outputs.relevant == 'true'
+          && steps.gate.outputs.rc == '2'
+          && github.event_name != 'pull_request'
+        uses: ./.github/actions/blindness-issue
+        with:
+          mode: alert
+          title: 'Memory recall gate (branch arm) is INCONCLUSIVE (merge gate blind)'
+          marker-slug: recall-gate-branch-blind
+          arm: 'The **required** `Memory recall gate` (branch build)'
+          reason: ${{ steps.gate.outputs.reason }}
+          reason-kind: ${{ steps.gate.outputs.reason_kind }}
+          stakes: >-
+            This is the merge-gating check. While this episode is open it cannot
+            produce a REGRESSION verdict at all, so **a recall regression can
+            merge into `main` unnoticed** and the only thing looking at memory
+            quality is the advisory prod canary.
+          run-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # EVENT SCOPING IS IDENTICAL TO THE ALERT ABOVE — read the two `if:`s
+      # together. `test_gate_blindness.py` extracts both and fails if they
+      # diverge, because the last time they diverged it was invisible in review
+      # and the episode outlived the blindness.
+      - name: Resolve — the required recall gate is measuring again
+        if: >-
+          steps.scope.outputs.relevant == 'true'
+          && steps.gate.outputs.rc == '0'
+          && github.event_name != 'pull_request'
+        uses: ./.github/actions/blindness-issue
+        with:
+          mode: resolve
+          title: 'Memory recall gate (branch arm) is INCONCLUSIVE (merge gate blind)'
+          recovery-note: >-
+            The required recall gate compared against its branch baseline and
+            produced a verdict again, so it can go red again.
+          run-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # ---------------------------------------------------------------------
       # POSITIVE CONTROL ON THE CONTROL — the step that has been missing every
       # previous time this harness went blind.
       #
@@ -1265,78 +1351,41 @@ jobs:
       # automatic run is strictly worse than the false page it removes.) A drill
       # is never silent either: the operator dispatched it, and `rc=2` plus the
       # reason are in the step summary and the log.
-      - name: Alert — recall gate is blind (INCONCLUSIVE)
+      # The shell that used to live here — marker, dedup window, storm guard — is
+      # now `.github/actions/blindness-issue`, shared with the REQUIRED branch arm
+      # and the advisory arm. It moved rather than being copied a third time
+      # because each existing copy had already lost something different on the way
+      # across; the action's header comment lists which. The `if:` stays here: what
+      # a given arm may alert on is a property of the arm.
+      #
+      # TITLE CHANGED (was `Memory recall gate is INCONCLUSIVE (safety net
+      # blind)`). Since #394 `Memory recall gate` is the name of a DIFFERENT
+      # check — the required branch arm — so an episode raised by this canary and
+      # titled after that check sent its reader to a green check to explain a
+      # blind one. Renamed while no issue with the old title was open (verified
+      # against the tracker: #458, the last one, closed 2026-07-30 05:44Z), so
+      # nothing is orphaned by the change.
+      - name: Alert — the prod recall canary is blind (INCONCLUSIVE)
         if: >-
           steps.scope.outputs.relevant == 'true'
           && (steps.gate.outputs.rc == '2' || steps.version.outputs.rc == '2')
           && (github.event_name != 'workflow_dispatch' || inputs.expect_commit == '')
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TITLE: 'Memory recall gate is INCONCLUSIVE (safety net blind)'
-          REASON: ${{ steps.gate.outputs.reason || steps.version.outputs.reason }}
-          REASON_KIND: ${{ steps.gate.outputs.reason_kind || steps.version.outputs.reason_kind }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          set -euo pipefail
-          marker="<!-- recall-gate-blind kind=${REASON_KIND} -->"
-          # Scoped to the reason kind, for the same reason as the step summary: the
-          # per-category kinds leave every comparable category enforced, and an
-          # alert that claims total blindness for a partial gap trains its readers
-          # to discount it.
-          case "$REASON_KIND" in
-            version-mismatch|version-changed-mid-run|version-unreadable)
-              lede="The memory recall canary could not confirm WHICH BUILD it was measuring, so it refused to produce a score rather than attribute one to the wrong binary. Nothing was measured and nothing was enforced. This clears itself once the deploy in flight has landed; if it does not, the canary and the backend deploy are racing on the same pushes." ;;
-            category-unmeasured|baseline-sample-mismatch)
-              lede="The memory recall gate could not compare **some** categories. Every comparable category was still measured and enforced — a regression in one of those still blocks a merge. What is unguarded is limited to the categories in the reason below, and **a regression in those can merge unnoticed** until this clears." ;;
-            *)
-              lede="The memory recall gate could not produce a verdict: it measured nothing, so it enforced nothing. Until this clears, **memory regressions can merge unnoticed**." ;;
-          esac
-          body=$(printf '%s\n\n%s\n\n%s\n\n%s\n' \
-            "$marker" \
-            "$lede" \
-            "**Reason:** \`${REASON}\`" \
-            "Run: ${RUN_URL}")
-
-          num=$(gh issue list --state open --search "\"${TITLE}\" in:title" \
-                  --json number,title \
-                  --jq "[.[] | select(.title == \"${TITLE}\")] | .[0].number // empty")
-
-          if [ -z "$num" ]; then
-            gh issue create --title "$TITLE" --body "$body" --label memory,ci 2>/dev/null \
-              || gh issue create --title "$TITLE" --body "$body"
-            echo "Opened tracking issue."
-            exit 0
-          fi
-
-          # Storm guard: if THIS reason kind is already reported anywhere on the
-          # issue, the alert is already live — adding a copy per PR would bury it.
-          #
-          # Scan every comment plus the body, not just the newest comment. This
-          # read `(.comments | last | .body) // .body` and so made ACKNOWLEDGING an
-          # alert the act that re-armed it: any comment that is not itself an alert
-          # — a human replying, asking, posting status — displaced the marker from
-          # the last position and the next run posted the identical alert again.
-          # The guard was weakest exactly when somebody was paying attention. Seen
-          # on #397, 2026-07-28: alert 04:43:06Z, human 04:46:22Z, byte-identical
-          # alert 04:58:24Z, both kind=version-mismatch; run 30328826762 logged
-          # `Commented on tracking issue #397.` The dedup KEY was never poisoned —
-          # correct marker, correct kind, wrong search window.
-          #
-          # Widening to the whole issue is bounded rather than unbounded, and needs
-          # no tunable N: "Resolve blindness alert" CLOSES this issue the moment a
-          # comparable verdict returns, and the lookup above is `--state open`. One
-          # open issue is one blindness episode, so each kind is reported once per
-          # episode and a genuinely NEW kind still comments — the marker is
-          # kind-scoped. Executed, not eyeballed, by
-          # TestAcknowledgingAnAlertDoesNotReArmIt in test_gate_blindness.py.
-          seen=$(gh issue view "$num" --json comments,body \
-                   --jq '([.body] + ((.comments // []) | map(.body))) | map(. // "") | join("\n")')
-          if printf '%s' "$seen" | grep -qF "$marker"; then
-            echo "Issue #$num already reports '${REASON_KIND}' — not commenting again."
-            exit 0
-          fi
-          gh issue comment "$num" --body "$body"
-          echo "Commented on tracking issue #$num."
+        uses: ./.github/actions/blindness-issue
+        with:
+          mode: alert
+          title: 'Memory recall canary (prod) is INCONCLUSIVE (safety net blind)'
+          marker-slug: recall-gate-blind
+          arm: 'The memory recall canary (prod)'
+          reason: ${{ steps.gate.outputs.reason || steps.version.outputs.reason }}
+          reason-kind: ${{ steps.gate.outputs.reason_kind || steps.version.outputs.reason_kind }}
+          stakes: >-
+            This arm is advisory and blocks no merge, so its blindness is
+            invisible in the UI. While this episode is open, **nothing is
+            watching whether the recall quality we already DEPLOYED has
+            regressed** — the required branch arm rules on PR builds, never on
+            prod.
+          run-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
       # A gate that recovered should stop shouting: close the tracking issue once
       # a real, comparable verdict is produced again.
@@ -1370,22 +1419,20 @@ jobs:
       # dispatch pinned to a commit prod happens to be serving could close a real
       # episode it was never permitted to open — the same false signal, in the
       # direction that loses the alarm instead of faking one.
-      - name: Resolve blindness alert (gate is measuring again)
+      - name: Resolve — the prod recall canary is measuring again
         if: >-
           steps.scope.outputs.relevant == 'true'
           && steps.gate.outputs.rc == '0'
           && (github.event_name != 'workflow_dispatch' || inputs.expect_commit == '')
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TITLE: 'Memory recall gate is INCONCLUSIVE (safety net blind)'
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          set -euo pipefail
-          num=$(gh issue list --state open --search "\"${TITLE}\" in:title" \
-                  --json number,title \
-                  --jq "[.[] | select(.title == \"${TITLE}\")] | .[0].number // empty")
-          [ -z "$num" ] && { echo "No open blindness issue."; exit 0; }
-          gh issue close "$num" --comment "Recall gate produced a comparable verdict again (baseline and run in the same retrieval mode). Safety net restored: ${RUN_URL}"
+        uses: ./.github/actions/blindness-issue
+        with:
+          mode: resolve
+          title: 'Memory recall canary (prod) is INCONCLUSIVE (safety net blind)'
+          recovery-note: >-
+            The prod canary produced a comparable verdict again (baseline and run
+            in the same retrieval mode).
+          run-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload recall-gate results
         if: always() && steps.scope.outputs.relevant == 'true'
@@ -1743,59 +1790,42 @@ jobs:
       # required to look at. Same one-issue / dedup-on-reason-kind shape as the
       # recall gate: an alert that fires per run is spam, and spam is ignored.
       # ---------------------------------------------------------------------
+      # Third caller of the same shared action. The TITLE is byte-identical to what
+      # this arm has always used, unlike the prod arm's: issue #464 is OPEN under
+      # it right now (raised 2026-07-30 07:05Z), and a retitle here would strand
+      # it — the resolve looks up by exact title, so a renamed arm can never close
+      # the episode it opened under the old name.
       - name: Alert — advisory arm measured nothing (INCONCLUSIVE)
         if: steps.bench.outputs.rc == '2'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TITLE: 'LongMemEval-S advisory arm is INCONCLUSIVE (measuring nothing)'
-          REASON: ${{ steps.bench.outputs.reason }}
-          REASON_KIND: ${{ steps.bench.outputs.reason_kind }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          set -euo pipefail
-          marker="<!-- advisory-arm-blind kind=${REASON_KIND} -->"
-          body=$(printf '%s\n\n%s\n\n%s\n\n%s\n' \
-            "$marker" \
-            "The end-to-end LongMemEval arm produced no verdict: it compared nothing, so it checked nothing. It does not block merges, so this would otherwise be indistinguishable from a nightly pass." \
-            "**Reason:** \`${REASON}\`" \
-            "Run: ${RUN_URL}")
-
-          num=$(gh issue list --state open --search "\"${TITLE}\" in:title" \
-                  --json number,title \
-                  --jq "[.[] | select(.title == \"${TITLE}\")] | .[0].number // empty")
-
-          if [ -z "$num" ]; then
-            gh issue create --title "$TITLE" --body "$body" --label memory,ci 2>/dev/null \
-              || gh issue create --title "$TITLE" --body "$body"
-            echo "Opened tracking issue."
-            exit 0
-          fi
-
-          # Same storm guard, same reason, same window as the recall arm above —
-          # see the comment there. Fixing one and leaving the other is how a
-          # family fix stops at the caller it started from; both are pinned.
-          seen=$(gh issue view "$num" --json comments,body \
-                   --jq '([.body] + ((.comments // []) | map(.body))) | map(. // "") | join("\n")')
-          if printf '%s' "$seen" | grep -qF "$marker"; then
-            echo "Issue #$num already reports '${REASON_KIND}' — not commenting again."
-            exit 0
-          fi
-          gh issue comment "$num" --body "$body"
-          echo "Commented on tracking issue #$num."
+        uses: ./.github/actions/blindness-issue
+        with:
+          mode: alert
+          title: 'LongMemEval-S advisory arm is INCONCLUSIVE (measuring nothing)'
+          marker-slug: advisory-arm-blind
+          # `lede` rather than the derived one: this arm's reason kinds are the
+          # end-to-end harness's, not the recall gate's version/category kinds, so
+          # the derived case statement would fall through to its generic arm and
+          # say less than this sentence does.
+          lede: >-
+            The end-to-end LongMemEval arm produced no verdict: it compared
+            nothing, so it checked nothing.
+          stakes: >-
+            It does not block merges, so this would otherwise be
+            indistinguishable from a nightly pass.
+          reason: ${{ steps.bench.outputs.reason }}
+          reason-kind: ${{ steps.bench.outputs.reason_kind }}
+          run-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Resolve advisory blindness alert (arm is measuring again)
         if: steps.bench.outputs.rc == '0'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TITLE: 'LongMemEval-S advisory arm is INCONCLUSIVE (measuring nothing)'
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          set -euo pipefail
-          num=$(gh issue list --state open --search "\"${TITLE}\" in:title" \
-                  --json number,title \
-                  --jq "[.[] | select(.title == \"${TITLE}\")] | .[0].number // empty")
-          [ -z "$num" ] && { echo "No open advisory-blindness issue."; exit 0; }
-          gh issue close "$num" --comment "The advisory arm produced a comparable verdict again: ${RUN_URL}"
+        uses: ./.github/actions/blindness-issue
+        with:
+          mode: resolve
+          title: 'LongMemEval-S advisory arm is INCONCLUSIVE (measuring nothing)'
+          recovery-note: 'The advisory arm produced a comparable verdict again.'
+          run-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload benchmark results
         if: always() && steps.mode.outputs.capture != 'true'
@@ -2024,11 +2054,31 @@ jobs:
               || gh issue create --title "$TITLE" --body "$body"
             echo "Opened tracking issue."
           else
-            # Same storm guard as the blindness alert: one live report, not one
+            # Same storm guard as the blindness alerts: one live report, not one
             # per run. A poisoned dedup key turns an alert into spam, and spam is
             # ignored, which is the same as having no alert at all.
+            #
+            # That claim used to be FALSE here. This read
+            # `(.comments | last | .body) // .body` — the pre-#397 window, i.e. the
+            # newest comment only — while the two blindness alerts were fixed to
+            # scan the whole issue. The family fix stopped at the callers it
+            # started from, which is the failure shape the whole
+            # `.github/actions/blindness-issue` factoring exists to end, so leaving
+            # a fourth copy still carrying the bug would have made that factoring
+            # a half-truth. Under the old window, ACKNOWLEDGING this alert was the
+            # act that re-armed it: any non-alert comment displaced the marker from
+            # the last position and the next cancellation posted the identical
+            # body again. #411 is open under this title right now, so the marker is
+            # deliberately UNCHANGED (`<!-- prod-arm-cancelled -->`, no `kind=`) —
+            # a new marker shape would not match the comments already on it and the
+            # first fire after this change would duplicate.
+            #
+            # Not routed through the shared action yet: this job has no resolve
+            # half, and "the canary stopped being cancelled" is not a state that
+            # self-clears, so giving it one is a design decision rather than a
+            # refactor. Tracked separately.
             last=$(gh issue view "$num" --json comments,body \
-                     --jq '(.comments | last | .body) // .body // ""')
+                     --jq '([.body] + ((.comments // []) | map(.body))) | map(. // "") | join("\n")')
             if printf '%s' "$last" | grep -qF "$marker"; then
               echo "Issue #$num already reports this — not commenting again."
             else
