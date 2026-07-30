@@ -477,7 +477,13 @@ type VCSLinkRepository interface {
 	// of (task_id, provider, link_type, external_id). Used by the GitHub
 	// webhook orchestrator so repeated deliveries (opened → synchronize →
 	// closed) update the same row rather than failing the unique index.
-	Upsert(ctx context.Context, link *domain.VCSLink) error
+	// On the update branch, id and created_at are NOT touched — they keep the
+	// existing row's values, never the caller-supplied link's. Upsert mutates
+	// *link in place to those actual persisted values so callers never echo a
+	// freshly-generated id/created_at that the database silently discarded
+	// (see #b73171fa). Returns true when this call inserted a new row, false
+	// when it updated an existing one.
+	Upsert(ctx context.Context, link *domain.VCSLink) (created bool, err error)
 	// ListByExternalID returns all links matching (provider, link_type,
 	// external_id), newest first by created_at. Fallback path when a webhook
 	// payload has no MESH-<uuid> ref but the (provider, type, external_id)

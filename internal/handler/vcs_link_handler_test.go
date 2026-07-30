@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
@@ -35,23 +36,32 @@ type stubVCSLinkService struct {
 	createCalls     []domain.CreateVCSLinkInput
 	createReturn    *domain.VCSLink
 	createReturnErr error
-	listReturn      []domain.VCSLink
-	listReturnErr   error
-	deleteReturnErr error
-	resolveCalls    [][]service.TaskRefSource
-	resolveTaskID   uuid.UUID
-	resolveRef      service.TaskRef
+	// createReturnCreated defaults to true (a fresh insert) so existing tests
+	// that don't care about the upsert-vs-insert distinction keep observing
+	// the historical 201. Set false to simulate the upsert-onto-existing-row
+	// branch (#b73171fa).
+	createReturnCreated *bool
+	listReturn          []domain.VCSLink
+	listReturnErr       error
+	deleteReturnErr     error
+	resolveCalls        [][]service.TaskRefSource
+	resolveTaskID       uuid.UUID
+	resolveRef          service.TaskRef
 }
 
-func (s *stubVCSLinkService) Create(_ context.Context, input domain.CreateVCSLinkInput) (*domain.VCSLink, error) {
+func (s *stubVCSLinkService) Create(_ context.Context, input domain.CreateVCSLinkInput) (*domain.VCSLink, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.createCalls = append(s.createCalls, input)
+	created := true
+	if s.createReturnCreated != nil {
+		created = *s.createReturnCreated
+	}
 	if s.createReturn != nil {
-		return s.createReturn, s.createReturnErr
+		return s.createReturn, created, s.createReturnErr
 	}
 	link := &domain.VCSLink{ID: uuid.New(), TaskID: input.TaskID}
-	return link, s.createReturnErr
+	return link, created, s.createReturnErr
 }
 
 func (s *stubVCSLinkService) GetByID(_ context.Context, _ uuid.UUID) (*domain.VCSLink, error) {
@@ -476,6 +486,58 @@ func TestVCSLinkHandler_Create_OmittedStatusPassesThrough(t *testing.T) {
 	assert.Equal(t, http.StatusCreated, rec.Code)
 	require.Len(t, svc.createCalls, 1)
 	assert.Equal(t, domain.VCSLinkStatus(""), svc.createCalls[0].Status)
+}
+
+// The upsert path (explicit status onto an existing link) updates a row
+// rather than inserting one. The handler must reflect that in the status
+// code — 200, not 201 — otherwise the response reads as "a new link was
+// created" when in fact nothing but status/title/metadata/url changed on the
+// SAME row (#b73171fa: the previous handler always answered 201 regardless
+// of which branch the service actually took).
+func TestVCSLinkHandler_Create_UpsertOnExistingLinkReturns200(t *testing.T) {
+	taskID := uuid.New()
+	existingID := uuid.New()
+	existingCreatedAt := "2026-07-29T21:06:46Z"
+	notCreated := false
+	svc := &stubVCSLinkService{
+		createReturn: &domain.VCSLink{
+			ID:        existingID,
+			TaskID:    taskID,
+			Status:    domain.VCSLinkStatusMerged,
+			CreatedAt: mustParseRFC3339(t, existingCreatedAt),
+		},
+		createReturnCreated: &notCreated,
+	}
+	body := `{"link_type":"pr","external_id":"40","url":"https://github.com/entire-vc/evc-mesh-mcp/pull/40","status":"merged"}`
+
+	rec := postVCSLink(t, svc, taskID, body)
+
+	assert.Equal(t, http.StatusOK, rec.Code, "updating an existing link must answer 200, not 201")
+
+	var resp domain.VCSLink
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	assert.Equal(t, existingID, resp.ID, "response must carry the EXISTING row's id, not a freshly generated one")
+	assert.Equal(t, mustParseRFC3339(t, existingCreatedAt), resp.CreatedAt)
+}
+
+// The plain-insert path (no explicit status, or a genuinely new link) still
+// answers 201 — this pins the "insert" side of the same branch so the fix
+// above can't be satisfied by just always returning 200.
+func TestVCSLinkHandler_Create_FreshInsertReturns201(t *testing.T) {
+	taskID := uuid.New()
+	svc := &stubVCSLinkService{}
+	body := `{"link_type":"pr","external_id":"41","url":"https://github.com/entire-vc/evc-mesh-mcp/pull/41","status":"merged"}`
+
+	rec := postVCSLink(t, svc, taskID, body)
+
+	assert.Equal(t, http.StatusCreated, rec.Code)
+}
+
+func mustParseRFC3339(t *testing.T, s string) time.Time {
+	t.Helper()
+	tm, err := time.Parse(time.RFC3339, s)
+	require.NoError(t, err)
+	return tm
 }
 
 func TestVCSLinkHandler_Create_RejectsUnknownStatus(t *testing.T) {
