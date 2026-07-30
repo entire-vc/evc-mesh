@@ -50,6 +50,10 @@ type rememberResponse struct {
 	Memory     *domain.Memory `json:"memory"`
 	Outcome    string         `json:"outcome"`                // "created" or "updated"
 	NearDupKey string         `json:"near_dup_key,omitempty"` // non-empty when a near-duplicate was detected
+	// EmbeddingPending is true when this write is not yet findable by dense/vector
+	// recall (embedding happens asynchronously) — see RememberResult.EmbeddingPending.
+	// Not omitempty: false is as meaningful as true here (e.g. no embedder configured).
+	EmbeddingPending bool `json:"embedding_pending"`
 }
 
 // listMemoriesQuery represents query params for listing memories.
@@ -196,9 +200,10 @@ func (h *MemoryHandler) Remember(c echo.Context) error {
 	}
 
 	return c.JSON(http.StatusOK, rememberResponse{
-		Memory:     mem,
-		Outcome:    result.Outcome,
-		NearDupKey: result.NearDupKey,
+		Memory:           mem,
+		Outcome:          result.Outcome,
+		NearDupKey:       result.NearDupKey,
+		EmbeddingPending: result.EmbeddingPending,
 	})
 }
 
