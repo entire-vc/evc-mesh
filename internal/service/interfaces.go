@@ -886,6 +886,16 @@ type RememberResult struct {
 	// detected at write time. It holds the key of the closest existing near-duplicate.
 	// Empty when no near-duplicate was found.
 	NearDupKey string
+	// EmbeddingPending is true when Remember fired an async embedding goroutine
+	// (embedAndStore) that has not necessarily completed by the time this result
+	// is returned. While pending, the row is invisible to the dense/vector recall
+	// arm (it fails vectorCandidateIDs's predicate) even though Recall's
+	// search_mode still reports "hybrid" — nothing errored, the write just hasn't
+	// landed yet. A caller that recalls immediately after remembering should treat
+	// EmbeddingPending=true as "expect BM25-only results for this row for a short
+	// window", not as a signal to retry or wait. Always false when no embedder is
+	// configured (embedding.IsNoop) — there is nothing pending in that case. See #a2e00afd.
+	EmbeddingPending bool
 }
 
 // MemoryService provides business logic for agent persistent memory.
