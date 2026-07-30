@@ -1,7 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { dirname, resolve } from "node:path";
+// Raw-text import (Vite's `?raw` suffix) rather than node:fs — this file lives
+// under src/, which tsconfig.app.json builds WITHOUT Node types (only
+// tsconfig.node.json, scoped to vite.config.ts, has `types: ["node"]`), so a
+// node:fs import passes plain `tsc --noEmit` (that command silently checks
+// nothing against the root tsconfig's empty `files: []`) but fails the real
+// project build (`tsc -b`, what `pnpm build` runs) with TS2591.
+import indexHtml from "../../index.html?raw";
 
 // web/index.html is the Vite entry HTML, built verbatim into every deployment's
 // served bundle (deploy/docker/mesh/Dockerfile.nginx: `COPY --from=web-builder
@@ -9,10 +13,8 @@ import { dirname, resolve } from "node:path";
 // and canonical pointed at entire.vc, so its own link previews (Slack/Twitter/
 // Telegram unfurlers ignore <meta name="robots">) advertised OUR marketing copy
 // and domain instead of the self-hoster's own instance.
-const indexHtmlPath = resolve(dirname(fileURLToPath(import.meta.url)), "../../index.html");
-
 describe("web/index.html — no vendor domain in the served entry file", () => {
-  const html = readFileSync(indexHtmlPath, "utf-8");
+  const html = indexHtml;
 
   it("never hardcodes entire.vc or entire.host", () => {
     expect(html).not.toMatch(/entire\.(vc|host)/i);
