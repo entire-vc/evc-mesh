@@ -100,6 +100,26 @@ func TestVCSLinkRepo_Upsert_InsertReportsCreatedTrue(t *testing.T) {
 	assert.True(t, created, "a genuinely new (task,provider,link_type,external_id) must report created=true")
 }
 
+// A DB-level failure (here: task_id's FK to tasks(id), violated by a task
+// that was never created) must surface as an error with created=false, not a
+// false-positive success.
+func TestVCSLinkRepo_Upsert_DBErrorReturnsFalseAndError(t *testing.T) {
+	db := vcsLinkUpsertTestDB(t)
+	ctx := context.Background()
+	repo := NewVCSLinkRepo(db)
+
+	link := &domain.VCSLink{
+		ID: uuid.New(), TaskID: uuid.New(), Provider: domain.VCSProviderGitHub,
+		LinkType: domain.VCSLinkTypePR, ExternalID: "40",
+		URL:    "https://github.com/entire-vc/evc-mesh-mcp/pull/40",
+		Status: domain.VCSLinkStatusOpen, CreatedAt: time.Now(),
+	}
+
+	created, err := repo.Upsert(ctx, link)
+	require.Error(t, err, "task_id must satisfy the FK to tasks(id)")
+	assert.False(t, created)
+}
+
 // The core regression: the update branch must return the row that a
 // subsequent GetByID actually finds — not the id/created_at the caller
 // happened to generate before discovering the link already existed.

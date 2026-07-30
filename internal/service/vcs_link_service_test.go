@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -29,6 +30,12 @@ type fakeVCSLinkRepo struct {
 	links map[uuid.UUID]*domain.VCSLink
 	// upsertKey: (task_id|provider|link_type|external_id) → link.ID
 	upsertKey map[string]uuid.UUID
+	// createErr/upsertErr, when set, are returned by Create/Upsert instead of
+	// succeeding — used to exercise vcsLinkService.Create's and
+	// HandleGitHubPullRequestEvent's error branches (a DB failure on either
+	// path, e.g. #b73171fa's Upsert).
+	createErr error
+	upsertErr error
 }
 
 func newFakeVCSLinkRepo() *fakeVCSLinkRepo {
@@ -45,6 +52,9 @@ func conflictKey(taskID uuid.UUID, p domain.VCSProvider, lt domain.VCSLinkType, 
 func (r *fakeVCSLinkRepo) Create(_ context.Context, l *domain.VCSLink) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.createErr != nil {
+		return r.createErr
+	}
 	r.links[l.ID] = l
 	r.upsertKey[conflictKey(l.TaskID, l.Provider, l.LinkType, l.ExternalID)] = l.ID
 	return nil
@@ -78,6 +88,9 @@ func (r *fakeVCSLinkRepo) ListByTask(_ context.Context, taskID uuid.UUID) ([]dom
 func (r *fakeVCSLinkRepo) Upsert(_ context.Context, l *domain.VCSLink) (bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.upsertErr != nil {
+		return false, r.upsertErr
+	}
 	key := conflictKey(l.TaskID, l.Provider, l.LinkType, l.ExternalID)
 	if existingID, ok := r.upsertKey[key]; ok {
 		existing := r.links[existingID]
@@ -902,4 +915,101 @@ func TestVCSLinkService_Create_ImplicitStatusNeverCallsUpsert(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, domain.VCSLinkStatusMerged, stillMerged.Status,
 		"an implicit-status Create on a colliding link must not reset the existing row's status")
+}
+
+// ---------------------------------------------------------------------------
+// Create: required-field validation. Each returns created=false alongside the
+// error — nothing was persisted, so true would misreport the outcome.
+// ---------------------------------------------------------------------------
+
+func TestVCSLinkService_Create_RequiresTaskID(t *testing.T) {
+	h := newHarness(t)
+	link, created, err := h.svc.Create(context.Background(), domain.CreateVCSLinkInput{
+		LinkType: domain.VCSLinkTypePR, ExternalID: "1", URL: "https://github.com/o/r/pull/1",
+	})
+	require.Error(t, err)
+	assert.Nil(t, link)
+	assert.False(t, created)
+}
+
+func TestVCSLinkService_Create_RequiresURL(t *testing.T) {
+	h := newHarness(t)
+	task := h.makeTask(t, domain.StatusCategoryInProgress)
+	link, created, err := h.svc.Create(context.Background(), domain.CreateVCSLinkInput{
+		TaskID: task.ID, LinkType: domain.VCSLinkTypePR, ExternalID: "1",
+	})
+	require.Error(t, err)
+	assert.Nil(t, link)
+	assert.False(t, created)
+}
+
+func TestVCSLinkService_Create_RequiresExternalID(t *testing.T) {
+	h := newHarness(t)
+	task := h.makeTask(t, domain.StatusCategoryInProgress)
+	link, created, err := h.svc.Create(context.Background(), domain.CreateVCSLinkInput{
+		TaskID: task.ID, LinkType: domain.VCSLinkTypePR, URL: "https://github.com/o/r/pull/1",
+	})
+	require.Error(t, err)
+	assert.Nil(t, link)
+	assert.False(t, created)
+}
+
+func TestVCSLinkService_Create_RequiresLinkType(t *testing.T) {
+	h := newHarness(t)
+	task := h.makeTask(t, domain.StatusCategoryInProgress)
+	link, created, err := h.svc.Create(context.Background(), domain.CreateVCSLinkInput{
+		TaskID: task.ID, ExternalID: "1", URL: "https://github.com/o/r/pull/1",
+	})
+	require.Error(t, err)
+	assert.Nil(t, link)
+	assert.False(t, created)
+}
+
+// ---------------------------------------------------------------------------
+// Create: repository failures on both the upsert and plain-insert branches
+// must surface as a wrapped error and created=false, never a silent partial
+// success.
+// ---------------------------------------------------------------------------
+
+func TestVCSLinkService_Create_UpsertRepoErrorIsWrapped(t *testing.T) {
+	h := newHarness(t)
+	task := h.makeTask(t, domain.StatusCategoryInProgress)
+	h.repo.upsertErr = errors.New("db unavailable")
+
+	link, created, err := h.svc.Create(context.Background(), domain.CreateVCSLinkInput{
+		TaskID: task.ID, LinkType: domain.VCSLinkTypePR, ExternalID: "1",
+		URL: "https://github.com/o/r/pull/1", Status: domain.VCSLinkStatusMerged,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "db unavailable")
+	assert.Nil(t, link)
+	assert.False(t, created)
+}
+
+func TestVCSLinkService_Create_PlainInsertRepoErrorIsWrapped(t *testing.T) {
+	h := newHarness(t)
+	task := h.makeTask(t, domain.StatusCategoryInProgress)
+	h.repo.createErr = errors.New("db unavailable")
+
+	link, created, err := h.svc.Create(context.Background(), domain.CreateVCSLinkInput{
+		TaskID: task.ID, LinkType: domain.VCSLinkTypePR, ExternalID: "1",
+		URL: "https://github.com/o/r/pull/1",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "db unavailable")
+	assert.Nil(t, link)
+	assert.False(t, created)
+}
+
+// The webhook orchestrator's own Upsert call (distinct from Create's) must
+// also propagate a repo failure rather than silently reporting success.
+func TestHandlePR_UpsertRepoError_Propagates(t *testing.T) {
+	h := newHarness(t)
+	task := h.makeTask(t, domain.StatusCategoryInProgress)
+	h.repo.upsertErr = errors.New("db unavailable")
+
+	ev := mergedClosedEvent(999, task.ID, "MESH-"+task.ID.String())
+	_, err := h.svc.HandleGitHubPullRequestEvent(context.Background(), ev)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "db unavailable")
 }
