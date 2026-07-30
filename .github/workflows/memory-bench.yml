@@ -276,6 +276,95 @@ jobs:
           echo "This PR changes no memory-path file; the recall gate is a no-op." \
             | tee -a "$GITHUB_STEP_SUMMARY"
 
+      # "The gate produced a verdict" and "the gate can still produce the RED
+      # verdict" are different claims, and only the second is the one that was
+      # broken while baseline_retrieval_branch.json did not exist (#f70347b5).
+      #
+      # Committing that file fixes today's symptom; nothing else would keep the
+      # property. A tolerance widened past every category's headroom, or a
+      # baseline re-snapped from a degraded run, both leave a required check
+      # that is green because it can no longer be anything else — which reads
+      # exactly like the blind state this card was filed about, minus the
+      # `no-baseline` line that made that one noticeable.
+      #
+      # Drives the pure decision functions against the committed baseline:
+      # identity must be OK, a drop past tolerance must name the category, and
+      # a drop INSIDE tolerance must stay OK — that last arm is what stops
+      # "REGRESSION" from merely meaning "differs from baseline at all".
+      #
+      # WHO CAN CLEAR IT decides whether it blocks — the rule this file states
+      # twice (`cf. #342`, and the gate step's own "a red nobody can clear gets
+      # bypassed"). The script's exit codes already carry that distinction, so
+      # they are routed rather than collapsed into a bare non-zero:
+      #
+      #   rc=1  an arm did not behave — the decision logic lost its ability to
+      #         go red. Only a memory-path change can do that, so it is the
+      #         author's to fix: BLOCKS.
+      #   rc=2  the committed baseline is missing / arm-mismatched / has no
+      #         sample_sizes. No PR author can fix that, so it must not fail
+      #         their check. INCONCLUSIVE on a pull_request, and red on
+      #         push/schedule/dispatch, where there is no PR author to punish
+      #         and a red main build is how the repo hears about it.
+      #
+      # My first draft of this step exited non-zero on both, and sat BEFORE the
+      # scope gate — so a docs-only PR touching no memory path would have gone
+      # red on a missing baseline the author had never heard of. That is the
+      # bypass this file already warns about, and it would have re-armed total
+      # blindness by consent. Now gated on scope as well: on non-PR events the
+      # scope step sets relevant=true unconditionally, so main and the schedule
+      # still evaluate this on every run — coverage is unchanged, only the
+      # blast radius is.
+      #
+      # Skipped on a capture, and that is not squeamishness about a red step:
+      # a capture is about to REWRITE this file, so proving properties of the
+      # outgoing one rules on nothing — and on the bootstrap capture (the one
+      # that creates the file in the first place, i.e. exactly the dispatch this
+      # card needed) there is no file to read at all, so an ungated step would
+      # fail the run before it could ever produce the baseline. Gated on
+      # steps.mode — the workflow's single source of truth for capture-vs-judge
+      # — rather than on a second copy of that expression.
+      - name: The gate must still be able to go RED
+        id: redproof
+        if: >-
+          steps.scope.outputs.relevant == 'true'
+          && steps.mode.outputs.capture != 'true'
+        run: |
+          set +e
+          python scripts/memory-bench/prove_gate_can_go_red.py \
+            scripts/memory-bench/baseline_retrieval_branch.json branch 2>&1 \
+            | tee redproof.log
+          rc=${PIPESTATUS[0]}
+          set -e
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+
+          {
+            echo "## Can the recall gate still go RED?"
+            echo
+            case "$rc" in
+              0) echo "✅ All three arms behaved: identity PASSes, a drop past tolerance"
+                 echo "names the category, a drop inside tolerance stays PASS." ;;
+              1) echo "❌ **An arm did not behave** — the gate can no longer produce the"
+                 echo "verdict it exists to produce. A green \`Memory recall gate\` on this"
+                 echo "PR would mean nothing. This blocks the merge." ;;
+              2) echo "### ⚠️ INCONCLUSIVE — could not prove the gate can go red"
+                 echo
+                 echo "The committed \`baseline_retrieval_branch.json\` is missing, records a"
+                 echo "different arm, or carries no \`sample_sizes\`. **Nothing here is the PR"
+                 echo "author's to fix, so this does not fail the check** (cf. \`#342\`) — but"
+                 echo "until it clears, the required gate cannot rule on this baseline." ;;
+              *) echo "❌ Red-proof exited $rc." ;;
+            esac
+            echo
+            echo '```'
+            tail -40 redproof.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$rc" = "2" ] && [ "${{ github.event_name }}" = "pull_request" ]; then
+            exit 0
+          fi
+          exit $rc
+
       - name: Set up Go
         if: steps.scope.outputs.relevant == 'true'
         uses: actions/setup-go@v5
@@ -444,11 +533,41 @@ jobs:
           BENCH_RUN_NONCE: ${{ github.run_id }}-${{ github.run_attempt }}-c
         run: |
           cd scripts/memory-bench
+          # PIPESTATUS, not the pipeline's status. There is no `shell:` key and no
+          # `defaults:` block in this workflow, so every `run:` here gets GitHub's
+          # default `bash -e {0}` — WITHOUT `pipefail`. Piping through `tee` then
+          # yields tee's exit code, and `capture_blockers`' whole point is to
+          # refuse BEFORE writing the file: a refused capture would leave this
+          # step green, write "re-snapped" into the summary, and upload an
+          # artifact containing only resnap.log (`if-no-files-found: error` fires
+          # on NO files, and the log is a file). The gate arm, both dense-arm
+          # controls, and the PROD arm's own re-snap all already do this — 11 of
+          # the 13 tee'd measurement steps in this file. This one was the sole
+          # omission, dropped when #394 copied the prod arm to make the branch arm.
+          set +e
           python run_ci.py --retrieval-only --arm branch --update-baseline \
             --repeat "${{ inputs.repeat || '3' }}" 2>&1 | tee resnap.log
-          echo "### Branch recall baseline re-snapped" >> "$GITHUB_STEP_SUMMARY"
-          echo '`baseline_retrieval_branch.json` is uploaded as an artifact — commit it by hand.' \
-            >> "$GITHUB_STEP_SUMMARY"
+          rc=${PIPESTATUS[0]}
+          set -e
+
+          {
+            if [ "$rc" = "0" ]; then
+              echo "### Branch recall baseline re-snapped"
+              echo
+              echo '`baseline_retrieval_branch.json` is uploaded as an artifact — commit it by hand.'
+            else
+              echo "### ✗ Branch baseline NOT re-snapped (exit $rc)"
+              echo
+              echo "No baseline was written, so there is nothing to commit — and the"
+              echo "upload step is skipped rather than shipping a log that looks like a"
+              echo "capture. Fix the cause and re-dispatch; do not hand-edit a baseline."
+              echo
+              echo '```'
+              tail -40 resnap.log
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit $rc
 
       # Captured HERE and committed by hand, never generated on a laptop: a
       # baseline snapped against a different embedder or a different DB is not
@@ -685,7 +804,16 @@ jobs:
   # ---------------------------------------------------------------------------
   recall-gate:
     name: Memory recall canary (prod)
-    if: github.event_name != 'pull_request'
+    # A `retrieval-branch` capture re-snaps the REQUIRED arm's baseline. That
+    # arm builds and measures its own server, so this prod-judging canary
+    # contributes nothing to it — it only joins `memory-bench-prod` and takes a
+    # slot from whoever is legitimately measuring prod. Excluded by arm name
+    # rather than by "is this a capture": an `end-to-end` or `retrieval`
+    # capture still wants the canary's opinion.
+    if: >-
+      github.event_name != 'pull_request' &&
+      !(github.event_name == 'workflow_dispatch' &&
+        inputs.update_baseline && inputs.baseline_arm == 'retrieval-branch')
     runs-on: ubuntu-latest
     # There is exactly ONE `secrets.MESH_API_URL`, and every job below this line
     # ingests a haystack into it and searches it. Concurrent runs therefore do
@@ -1508,9 +1636,17 @@ jobs:
       # Advisory does not mean unwatched. An arm that cannot compare must page
       # somebody, or tightening its comparison rules just makes it silent.
       issues: write
-    # `baseline_arm: retrieval` is a capture for the OTHER arm — it must not drag
-    # the paid job in with it. Without this, re-snapping the free recall baseline
+    # A retrieval capture is a capture for the OTHER arm — it must not drag the
+    # paid job in with it. Without this, re-snapping a free recall baseline
     # would silently also spend an end-to-end capture.
+    #
+    # Named as the arms this job SERVES, not as the ones it excludes. The
+    # previous form was `baseline_arm != 'retrieval'`, correct while the options
+    # were {end-to-end, retrieval, both}; #394 added `retrieval-branch`, and a
+    # negation cannot know about an option added after it — so the fourth arm
+    # inherited "paid capture" by default and re-armed the exact spend this
+    # guard exists to prevent. An allow-list fails toward not spending money.
+    # Pinned by `test_gate_arm.py::test_only_the_paid_arms_start_the_paid_job`.
     #
     # `push` REMOVED (#3ce651a0). Two independent reasons, either sufficient:
     #
@@ -1541,7 +1677,8 @@ jobs:
       (github.event_name == 'schedule' ||
        (github.event_name == 'workflow_dispatch' &&
          (inputs.full_eval ||
-          (inputs.update_baseline && inputs.baseline_arm != 'retrieval'))))
+          (inputs.update_baseline &&
+           (inputs.baseline_arm == 'end-to-end' || inputs.baseline_arm == 'both')))))
 
     steps:
       # Same one-source-of-truth reason as the recall arm: three steps below key
@@ -1550,7 +1687,7 @@ jobs:
       - name: Capture or judge?
         id: mode
         run: |
-          echo "capture=${{ (inputs.update_baseline && inputs.baseline_arm != 'retrieval') && 'true' || 'false' }}" \
+          echo "capture=${{ (inputs.update_baseline && (inputs.baseline_arm == 'end-to-end' || inputs.baseline_arm == 'both')) && 'true' || 'false' }}" \
             >> "$GITHUB_OUTPUT"
 
       - name: Checkout evc-mesh
