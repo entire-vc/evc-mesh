@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -1514,4 +1515,66 @@ func TestReleaseHumanGateOnWithdrawal_QuotedNegatorFromBystander_StillNoOp(t *te
 
 	assert.Empty(t, env.taskMover.humanGateCalls())
 	assert.Empty(t, env.systemComments())
+}
+
+// TestBlockingMarkerSlugs_QuotedTemplateDoesNotSteerTarget covers the third raw
+// call site found while verifying this change: regex matches come back in source
+// order, so a body carrying BOTH a quoted template and a real marker used to
+// resolve the QUOTED slug first — enforceBlockingTriage would then triage against
+// whoever the documentation example named, not who the real ask names.
+func TestBlockingMarkerSlugs_QuotedTemplateDoesNotSteerTarget(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want []string
+	}{
+		{
+			"fenced template before the real marker",
+			"Шаблон:\n```\n❓ **Blocking @example-user**: <вопрос>\n```\n❓ **Blocking @pavel**: настоящий аск",
+			[]string{"pavel"},
+		},
+		// The two forms below were already safe: the regex is line-anchored, so an
+		// inline-code or blockquoted template never matched even before the strip.
+		// Kept as documentation of that property — neither discriminates the fix.
+		{
+			"inline-code template before the real marker",
+			"пиши `❓ Blocking @example-user`\n❓ **Blocking @pavel**: настоящий аск",
+			[]string{"pavel"},
+		},
+		{
+			"blockquoted template before the real marker",
+			"> ❓ **Blocking @example-user**\n❓ **Blocking @pavel**: настоящий аск",
+			[]string{"pavel"},
+		},
+		{"plain single marker unchanged", "❓ **Blocking @pavel**: ask", []string{"pavel"}},
+		{"quoted only resolves to nothing", "```\n❓ Blocking @pavel\n```", []string{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, blockingMarkerSlugs(tt.body))
+		})
+	}
+}
+
+// TestCompletionKeywordSearchWindow_AnchorsToRealMarker pins the fourth call site:
+// the window must precede the first REAL marker. Anchoring it to a quoted template
+// earlier in the body would hand isAssigneeCompletionReport the wrong text — and,
+// because offsets from the raw body cannot index the stripped one, mixing the two
+// strings would slice at a meaningless position.
+//
+// Only a FENCED template discriminates here. The regex is line-anchored, so an
+// inline-code or blockquoted template never matched in the first place — those
+// forms are safe for free, and a fixture built from them would pass against the
+// unstripped code too, i.e. prove nothing.
+func TestCompletionKeywordSearchWindow_AnchorsToRealMarker(t *testing.T) {
+	body := "Шаблон:\n```\n❓ Blocking @example-user\n```\n" +
+		"Готово, работа завершена.\n" +
+		"❓ **Blocking @pavel**: закрой карточку"
+	win := completionKeywordSearchWindow(body)
+
+	assert.Contains(t, win, "работа завершена",
+		"the window must cover the prose between the quoted template and the real marker")
+	assert.NotContains(t, win, "закрой карточку",
+		"the window must stop at the real marker")
+	assert.True(t, utf8.ValidString(win), "window must never split a multi-byte rune")
 }

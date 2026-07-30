@@ -235,7 +235,11 @@ func extractMentionSlugs(body string) []string {
 // resolving against those via extractMentionSlugs would mis-attribute the triage target
 // to whichever mention happens to resolve first, rather than to who "Blocking" actually names.
 func blockingMarkerSlugs(body string) []string {
-	matches := blockingMarkerRegex.FindAllStringSubmatch(body, -1)
+	// Same stripQuotedSpans discipline as hasBlockingMarker: without it a body that
+	// carries BOTH a quoted template and a real marker resolves the QUOTED slug first
+	// (matches are returned in source order), so firstResolvedUserSlug would triage
+	// against whoever the documentation example happened to name.
+	matches := blockingMarkerRegex.FindAllStringSubmatch(stripQuotedSpans(body), -1)
 	seen := make(map[string]bool, len(matches))
 	out := make([]string, 0, len(matches))
 	for _, m := range matches {
@@ -1294,18 +1298,22 @@ const completionKeywordWindowBytes = 500
 // "❓ Blocking @pavel" question was wrongly classified as a completion report,
 // which suppressed enforceBlockingTriage before it ever reached SetHumanGate.
 func completionKeywordSearchWindow(body string) string {
-	loc := blockingMarkerRegex.FindStringIndex(body)
+	// Operate wholly on the stripped body: the window must be anchored to the first
+	// REAL marker, not to a quoted template that happens to appear earlier. Offsets
+	// from one string can't index the other, so slice the same string we searched.
+	stripped := stripQuotedSpans(body)
+	loc := blockingMarkerRegex.FindStringIndex(stripped)
 	if loc == nil {
-		return body
+		return stripped
 	}
 	start := loc[0] - completionKeywordWindowBytes
 	if start < 0 {
 		start = 0
 	}
-	for start > 0 && !utf8.RuneStart(body[start]) {
+	for start > 0 && !utf8.RuneStart(stripped[start]) {
 		start++
 	}
-	return body[start:loc[0]]
+	return stripped[start:loc[0]]
 }
 
 // isAssigneeCompletionReport returns true when the comment is authored by the
