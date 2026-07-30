@@ -478,6 +478,23 @@ func (s *memoryService) Remember(ctx context.Context, mem *domain.Memory) (Remem
 		mem.ExpiresAt = defaultExpiresAt(mem.Scope, mem.Tags)
 	}
 
+	// A caller-supplied project_id only means something when scope=project:
+	// GetByKey's identity for workspace/agent scope never includes it, and the
+	// project-scoped recall filter (project_id = $N, no OR scope='workspace')
+	// makes a stray project_id on a workspace-scope row silently invisible to
+	// any agent recalling from a DIFFERENT project than the one it happened to
+	// carry. Both known auto-stamp sources (resolveProjectSlug below, and the
+	// MCP client's active-task auto-populate, evc-mesh-mcp#44) were already
+	// gated to scope==project — but neither gate stops a caller from passing
+	// project_id EXPLICITLY alongside scope=workspace/agent. Measured live
+	// 2026-07-30: 4 new such rows landed within ~1h of both auto-stamp fixes
+	// being deployed (#4edf3fb5 cleanup regressing again, task #2c0154db/F3).
+	// Normalize unconditionally, before identity lookup, so no future caller
+	// or code path can reintroduce the drift the cleanup already paid for once.
+	if mem.Scope != domain.ScopeProject {
+		mem.ProjectID = nil
+	}
+
 	// ── Slug resolution: if no project_id given but tags contain exactly one
 	// resolvable project:<slug>, look up the project and populate project_id. ──
 	// Scoped to scope=project only: identity for workspace/agent scope does not
