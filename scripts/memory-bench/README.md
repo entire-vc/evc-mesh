@@ -763,9 +763,35 @@ and judge model. It changes the memory system *and* the models at once, so it
 cannot isolate either, and citing it here read as if this stack had scored it.
 Do not reintroduce it without both variables held fixed.
 
-The bench writes its haystack to the shared workspace under `bench-<qid>` /
-`lme-bench` tags and deletes it in a `finally` block. If you ever see `lme-bench`
-memories surviving a run, cleanup was skipped — they pollute real agents' recall.
+The bench writes its haystack under `bench-<run nonce>-<qid>` / `lme-bench` tags
+and deletes it in a `finally` block. The nonce is load-bearing and this paragraph
+used to omit it: tenancy follows the **credential**, so every bench process
+holding the same `MESH_BENCH_KEY` — every branch, either arm, CI or laptop —
+writes into one workspace, and pre-nonce names made concurrent runs delete each
+other's haystacks mid-measurement (rationale: `_resolve_run_nonce` and the
+"Per-RUN isolation" block in `mesh_client_stdio.py` — the nonce landed in code
+with no mention here at all, which is half of why this paragraph went stale).
+
+Cleanup is best-effort by construction: `_sweep` needs a live connection and the
+case it exists for is the connection dying. Rows a dead run abandoned are
+reclaimed by `_gc_orphans`, which selects on **age** (`lme-bench` umbrella tag,
+older than `BENCH_ORPHAN_GC_MIN_AGE_HOURS`, default 2h) and never on ownership —
+a peer run's live fixtures are also "not mine", so an ownership rule would
+reintroduce the cross-run deletion the nonce exists to stop. Audit with:
+
+```
+GET /api/v1/memories?scope=workspace&tags_any=lme-bench&min_importance=0
+```
+
+Rows there while no bench is running mean cleanup *and* the collector were both
+skipped. **Run that query against the fleet's key too, not only the bench key.**
+`_gc_orphans` sweeps the tenant it authenticates as, so a probe run with a fleet
+credential leaves fixtures the collector can never reach: measured 2026-07-30,
+8 pre-nonce rows (`bench-89527b6b-s0..s7`, no `expires_at`) written into the
+fleet workspace at 2026-07-27T01:21Z by a local probe on an older checkout, four
+days after the nonce landed. `scope=workspace` memories get no default TTL, so
+those surface in real agents' `recall()` indefinitely. Point local probes at the
+bench key.
 
 Tags carry the question id verbatim; memory **keys** carry a sanitized form
 (`sanitize_key_component`), because Mesh validates `key` against
