@@ -1137,6 +1137,53 @@ func TestReleaseHumanGateOnWithdrawal_ReaffirmedByOtherAgent_NoOp(t *testing.T) 
 	assert.Empty(t, env.taskMover.humanGateCalls(), "B now owns the live ask — A's withdrawal must not release it")
 }
 
+// TestReleaseHumanGateOnWithdrawal_MarkerWithUnrelatedNegatorProse_NotSelfNegated
+// reproduces the live incident found by Riker on #7f646f08 (2026-07-30): a
+// comment that raises a FRESH marker as its final line, but ALSO discusses a
+// DIFFERENT, already-resolved ask earlier in the same body using a negator
+// word ("снят"), must still be recognised as a live, un-negated marker — the
+// unrelated prose must not make the comment self-negate its own new ask.
+// Before the fix, hasNegatorInScope's whole-body predecessor found "снят"
+// anywhere in agent B's comment and skipped it as "already negated", so
+// ownership of the live ask silently stayed with agent A — exactly what
+// stranded #7f646f08 after Riker's real withdrawal comment.
+func TestReleaseHumanGateOnWithdrawal_MarkerWithUnrelatedNegatorProse_NotSelfNegated(t *testing.T) {
+	env := setupTriageEnv(t, true)
+	taskID := env.seedGatedTask(env.inProgressID)
+	agentA := uuid.New()
+	agentB := uuid.New()
+	env.seedAgentBlockingComment(taskID, agentA) // CreatedAt: frozenTime - 2h
+
+	// B's comment: analysis discussing an OLD, unrelated ask being "снят" (an
+	// SSH-access ask that resolved itself), THEN a brand-new marker as the
+	// operative final line. This is the actual shape of Riker's 00:12 comment.
+	cid := uuid.New()
+	env.commentRepo.items[cid] = &domain.Comment{
+		ID:         cid,
+		TaskID:     taskID,
+		AuthorID:   agentB,
+		AuthorType: domain.ActorTypeAgent,
+		Body: "Старый аск на SSH-доступ снят — доступ приехал сам с CI-фиксом.\n\n" +
+			"❓ **Blocking @pavel**: закрой эту карточку кнопкой.",
+		CreatedAt: frozenTime.Add(-1 * time.Hour),
+	}
+
+	// B's own later withdrawal — no marker, plain negator.
+	ctx := actorctx.WithActor(context.Background(), agentB, domain.ActorTypeAgent)
+	comment := &domain.Comment{
+		TaskID:     taskID,
+		AuthorID:   agentB,
+		AuthorType: domain.ActorTypeAgent,
+		Body:       "Блокер самоустранился, ask больше не нужен — снимаю.",
+	}
+	require.NoError(t, env.svc.Create(ctx, comment))
+
+	gateCalls := env.taskMover.humanGateCalls()
+	require.Len(t, gateCalls, 1,
+		"B's marker must be recognised as live (not self-negated by unrelated earlier prose), so B's own withdrawal must release the gate")
+	assert.False(t, gateCalls[0].value)
+}
+
 // TestReleaseHumanGateOnWithdrawal_NoPriorMarker_NoOp: task.HumanGate=true with
 // no backing marker comment at all (e.g. a manual PATCH) must fail closed —
 // nothing to withdraw, so nothing is released.
