@@ -69,6 +69,13 @@ import mesh_client_stdio as mc  # noqa: E402
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = REPO_ROOT / ".github/workflows/memory-bench.yml"
 
+# The blindness-alert shell used to be inline in the workflow, twice, and absent
+# from the arm that needed it most. It is now one composite action with one
+# caller per arm. Way 8's harness executes THIS file; way 9 asserts every arm
+# routes through it.
+BLINDNESS_ACTION_REL = ".github/actions/blindness-issue"
+BLINDNESS_ACTION = REPO_ROOT / BLINDNESS_ACTION_REL / "action.yml"
+
 
 def _memory_paths() -> list[str]:
     """The MEMORY_PATHS block from the workflow, as the gate's scope step reads it."""
@@ -138,6 +145,242 @@ def _job_blocks() -> dict[str, str]:
         end = starts[i + 1][0] if i + 1 < len(starts) else len(body)
         out[job_id] = body[pos:end]
     return out
+
+
+# ---------------------------------------------------------------------------
+# 9. AN ARM WITH NO ALERT — the way the REQUIRED check went blind for two days.
+# ---------------------------------------------------------------------------
+# #394 split the recall gate into a required branch arm and an advisory prod
+# canary. The blindness alert stayed with the canary. It reads that job's own
+# `steps.*.outputs.rc`, so it could not see the required arm's verdict even in
+# principle — and the required arm's own step summary told readers that "the
+# alert below is what stops it being silent", with nothing below it.
+#
+# The result was not a false green: a missing baseline is correctly forced from
+# PASS to INCONCLUSIVE. It was that the merge-gating check could not produce a
+# REGRESSION verdict AT ALL, and said so only in a step summary attached to a
+# green check, which nothing polls. `no-baseline` was its steady state on every
+# run from 2026-07-28 05:02Z until a baseline landed — including runs on main —
+# and exactly one `no-baseline` issue exists in the tracker, from before the
+# split.
+#
+# So the pin cannot be "the workflow contains an alert step". It has to be a
+# REGISTRY check: enumerate the arms that can report an INCONCLUSIVE reason, and
+# require each one to have both halves wired to the shared action. That is the
+# assertion #394 needed; a per-step test would have passed on #394's diff,
+# because the step it would have looked at was still there — in the other job.
+
+
+def _steps(job_yaml: str) -> list[str]:
+    """The `- name: ...` step blocks of one job's yaml, in order, verbatim."""
+    marks = [m.start() for m in re.finditer(r"^      - name: ", job_yaml, re.M)]
+    return [
+        job_yaml[s:(marks[i + 1] if i + 1 < len(marks) else len(job_yaml))]
+        for i, s in enumerate(marks)
+    ]
+
+
+def _scalar(block: str, key: str) -> str | None:
+    """One `key: value` from a `with:`/`uses:` mapping, folded blocks included.
+
+    Text-level for the same reason `_job_blocks` is, and because the self-check
+    step that runs this suite has stdlib only — no yaml dependency (see the
+    workflow's "Stdlib only: no secrets, no network, ~1s").
+    """
+    lines = block.splitlines()
+    for i, ln in enumerate(lines):
+        m = re.match(rf"^(\s*){re.escape(key)}:(?:[ \t]+(.*))?$", ln)
+        if not m:
+            continue
+        indent, first = len(m.group(1)), (m.group(2) or "").strip()
+        if first and first not in (">-", ">", "|-", "|"):
+            return first.strip("'\"")
+        parts = []
+        for nxt in lines[i + 1:]:
+            if not nxt.strip():
+                break
+            if len(nxt) - len(nxt.lstrip()) <= indent:
+                break
+            parts.append(nxt.strip())
+        return " ".join(" ".join(parts).split())
+    return None
+
+
+def _blindness_calls() -> dict[str, dict[str, dict]]:
+    """`{job_id: {'alert': {...}, 'resolve': {...}}}` for every arm.
+
+    Each inner dict carries the step `name`, its `if:` expression, and the `with:`
+    inputs as read from the shipped workflow. Extracted rather than restated: a
+    restated registry keeps passing after the real wiring is deleted, which is
+    exactly what happened to the promise in the required arm's step summary.
+    """
+    found: dict[str, dict[str, dict]] = {}
+    for job_id, job_yaml in _job_blocks().items():
+        for step in _steps(job_yaml):
+            if _scalar(step, "uses") != f"./{BLINDNESS_ACTION_REL}":
+                continue
+            mode = _scalar(step, "mode")
+            name = re.match(r"^      - name: (.+)$", step, re.M).group(1).strip()
+            entry = {
+                "name": name,
+                "if": _step_if(name),
+                "title": _scalar(step, "title"),
+                "marker-slug": _scalar(step, "marker-slug"),
+                "step": step,
+            }
+            found.setdefault(job_id, {})[mode] = entry
+    return found
+
+
+def _arms_that_can_go_inconclusive() -> set[str]:
+    """Jobs with a step that publishes a `reason_kind` — i.e. that can report an
+    INCONCLUSIVE cause at all.
+
+    Derived from the workflow, not listed here, so that adding a FOURTH arm (which
+    is how this defect was introduced: #394 added the third) puts it under this
+    test automatically instead of inheriting silence by default. The same shape as
+    `test_only_the_paid_arms_start_the_paid_job`: an allow-list cannot know about
+    an option added after it was written.
+    """
+    return {
+        job_id
+        for job_id, job_yaml in _job_blocks().items()
+        if 'echo "reason_kind=' in job_yaml
+    }
+
+
+class TestEveryInconclusiveArmCanPage(unittest.TestCase):
+    """An arm that can go blind and cannot page is the defect this class pins."""
+
+    def test_every_arm_that_can_go_inconclusive_has_both_halves(self):
+        calls = _blindness_calls()
+        for job_id in sorted(_arms_that_can_go_inconclusive()):
+            with self.subTest(job=job_id):
+                halves = calls.get(job_id, {})
+                self.assertEqual(
+                    {"alert", "resolve"}, set(halves),
+                    f"job {job_id!r} publishes a `reason_kind`, so it can report "
+                    f"INCONCLUSIVE — but its blindness channel is {sorted(halves) or 'absent'}. "
+                    f"An arm with an alert and no resolve leaves the episode open, and "
+                    f"the dedup key then MUTES its own re-alerts; an arm with neither "
+                    f"records its blindness in a step summary nobody polls, which is how "
+                    f"the required check enforced nothing for two days after #394.",
+                )
+
+    def test_the_required_arm_is_one_of_them(self):
+        """Anchor: the discovery above must actually find the arm that bit.
+
+        Without this, a change that stopped `recall-gate-branch` from publishing a
+        reason_kind would silently remove it from the population and turn the test
+        above green by shrinking what it examines.
+        """
+        self.assertIn(
+            "recall-gate-branch", _arms_that_can_go_inconclusive(),
+            "the REQUIRED arm no longer publishes a `reason_kind`, so the registry "
+            "test above is no longer examining it. Either the arm stopped reporting "
+            "its INCONCLUSIVE cause, or the discovery heuristic drifted.",
+        )
+
+    def test_no_arm_keeps_an_inline_copy_of_the_alert_shell(self):
+        """AC1: a shared path, not a third copy.
+
+        Every inline copy of this shell has already lost something the others kept
+        (the dedup window, the push-scoping, the kind-scoping — see the action's
+        header). A new inline `gh issue create` next to a marker is a new place for
+        all three to come back, so it is a red here rather than a review comment.
+        """
+        for job_id, job_yaml in _job_blocks().items():
+            with self.subTest(job=job_id):
+                if job_id == "prod-arm-cancelled":
+                    continue  # not a blindness alert: different question, different marker
+                self.assertNotIn(
+                    "gh issue create", job_yaml,
+                    f"job {job_id!r} opens a tracking issue inline instead of via "
+                    f"{BLINDNESS_ACTION_REL}. Route it through the action.",
+                )
+
+    def test_the_shared_action_exists_and_is_referenced_by_path(self):
+        self.assertTrue(
+            BLINDNESS_ACTION.is_file(),
+            f"{BLINDNESS_ACTION} is missing, so every `uses: ./{BLINDNESS_ACTION_REL}` "
+            f"in the workflow fails at load time — every arm's alert AND resolve at "
+            f"once.",
+        )
+        self.assertGreaterEqual(
+            len(_blindness_calls()), 2,
+            "fewer than two arms route through the shared action; the whole point of "
+            "factoring it was that it has more than one caller.",
+        )
+
+
+class TestBlindnessEpisodesAreNamespacedPerArm(unittest.TestCase):
+    """AC2/AC3: two arms must not silence or close each other.
+
+    The episode identity is the issue TITLE — `resolve` finds what `alert` opened
+    by exact title, and the storm guard only suppresses within one open issue. So
+    two arms sharing a title is not cosmetic: a prod `no-baseline` and a branch
+    `no-baseline` would be the same episode, the first to fire would suppress the
+    second, and the first to RECOVER would close the other's still-live episode.
+    That is a new way to go silently blind, introduced by the fix for the old one.
+    """
+
+    def test_each_arm_alerts_and_resolves_on_the_same_title(self):
+        for job_id, halves in sorted(_blindness_calls().items()):
+            with self.subTest(job=job_id):
+                self.assertEqual(
+                    halves["alert"]["title"], halves["resolve"]["title"],
+                    f"job {job_id!r} raises its episode under one title and clears it "
+                    f"under another, so every episode it opens stays open for ever — "
+                    f"and a permanently open episode mutes its own re-alerts via the "
+                    f"dedup key.",
+                )
+
+    def test_no_two_arms_share_a_title(self):
+        seen: dict[str, str] = {}
+        for job_id, halves in sorted(_blindness_calls().items()):
+            title = halves["alert"]["title"]
+            self.assertNotIn(
+                title, seen,
+                f"jobs {seen.get(title)!r} and {job_id!r} both track blindness under "
+                f"{title!r}. They would share one episode: whichever fires first "
+                f"suppresses the other, and whichever recovers first closes the "
+                f"other's open episode.",
+            )
+            seen[title] = job_id
+
+    def test_no_two_arms_share_a_marker_slug(self):
+        seen: dict[str, str] = {}
+        for job_id, halves in sorted(_blindness_calls().items()):
+            slug = halves["alert"]["marker-slug"]
+            self.assertTrue(
+                slug, f"job {job_id!r} alerts with an empty marker-slug, so its storm "
+                      f"guard keys on `<!--  kind=... -->` and collides with any other "
+                      f"arm that also forgot one.",
+            )
+            self.assertNotIn(
+                slug, seen,
+                f"jobs {seen.get(slug)!r} and {job_id!r} share marker-slug {slug!r}. "
+                f"Titles alone are not enough if a future change ever points two arms "
+                f"at one issue — keep both namespaces distinct.",
+            )
+            seen[slug] = job_id
+
+    def test_the_required_arm_names_the_stake_that_is_specific_to_it(self):
+        """The consequence differs per arm and conflating them is what teaches a
+        reader to discount both: the branch arm going blind means regressions can
+        MERGE, the prod canary going blind means a DEPLOYED regression goes
+        unnoticed. The prod alert used to claim the former, which stopped being
+        true when #394 made it advisory."""
+        calls = _blindness_calls()
+        branch = _scalar(calls["recall-gate-branch"]["alert"]["step"], "stakes") or ""
+        prod = _scalar(calls["recall-gate"]["alert"]["step"], "stakes") or ""
+        self.assertIn("merge", branch.lower(), f"branch-arm stakes: {branch!r}")
+        self.assertNotIn(
+            "can merge", prod.lower(),
+            f"the prod canary's alert claims a regression could MERGE. It is advisory "
+            f"and gates nothing — since #394 the merge gate is `recall-gate-branch`. "
+            f"stakes: {prod!r}",
+        )
 
 
 class TestTheRequiredContextIsStillProduced(unittest.TestCase):
@@ -1048,37 +1291,39 @@ class TestToolErrorSurvivesTheTransportTeardown(unittest.TestCase):
 # self-satisfied assertion about a string that no longer runs.
 
 
-def _step_run_script(step_name: str) -> str:
-    """The `run:` body of a named workflow step, dedented, verbatim.
+def _action_alert_script() -> str:
+    """The shared blindness action's `run:` body, dedented, verbatim.
 
     Extracted rather than transcribed on purpose: a copy of a rule survives the
     deletion of the rule, and this suite exists to notice deletions.
+
+    This used to read the `run:` block of a named step in memory-bench.yml. The
+    shell now lives in a composite action with one caller per arm, so there is
+    ONE body to execute and the per-arm question moved to
+    `TestEveryInconclusiveArmCanPage` (does each arm reach it?). Both halves are
+    needed: executing the script proves the guard works, the registry proves the
+    arm that needed it is wired to the script that has it.
     """
-    lines = WORKFLOW.read_text(encoding="utf-8").splitlines()
-    head = f"      - name: {step_name}"
-    if head not in lines:
-        raise AssertionError(
-            f"step {step_name!r} not found in {WORKFLOW}. If it was renamed, rename "
-            f"it here too — this suite is the only thing executing its logic."
-        )
+    lines = BLINDNESS_ACTION.read_text(encoding="utf-8").splitlines()
+    heads = [i for i, ln in enumerate(lines) if ln.strip() == "run: |"]
+    assert len(heads) == 1, (
+        f"expected exactly one `run: |` in {BLINDNESS_ACTION}, found {len(heads)}. "
+        f"The whole point of the action is that alert and resolve share one body; "
+        f"splitting it puts the issue lookup back to two copies one layer down."
+    )
+    indent = len(lines[heads[0]]) - len(lines[heads[0]].lstrip())
     body: list[str] = []
-    in_run = False
-    for line in lines[lines.index(head) + 1:]:
-        if not in_run:
-            if line.startswith("      - name:"):
-                raise AssertionError(f"step {step_name!r} has no `run:` block")
-            in_run = line == "        run: |"
-            continue
-        if line.strip() and not line.startswith(" " * 10):
+    for line in lines[heads[0] + 1:]:
+        if line.strip() and (len(line) - len(line.lstrip())) <= indent:
             break
-        body.append(line[10:])
+        body.append(line[indent + 2:])
     script = "\n".join(body)
-    assert script.strip(), f"empty run: block for {step_name!r}"
+    assert script.strip(), f"empty run: block in {BLINDNESS_ACTION}"
     assert "${{" not in script, (
-        f"step {step_name!r} interpolates a GitHub expression inside `run:`; this "
+        f"{BLINDNESS_ACTION} interpolates a GitHub expression inside `run:`; this "
         f"harness executes the block under plain bash, so what it proves would no "
-        f"longer be what CI runs. Move the value into `env:` (as the rest of the "
-        f"step already does) or teach this helper to substitute it."
+        f"longer be what CI runs. Move the value into the step's `env:` (as the rest "
+        f"of the action already does) or teach this helper to substitute it."
     )
     return script
 
@@ -1103,7 +1348,23 @@ def record(line):
 
 if argv[:2] == ["issue", "list"]:
     record("list")
+    # Locating the tracking issue is normally not what this pins, so the number
+    # is fixed. But WHICH title is open is load-bearing for the per-arm
+    # namespacing tests, so when STUB_OPEN_TITLE is set the lookup becomes
+    # title-exact — the real `--search ... in:title` plus `select(.title == ...)`
+    # pair behaves that way, and modelling it is what lets a test show that one
+    # arm's recovery cannot close another arm's episode.
+    want = os.environ.get("STUB_OPEN_TITLE")
+    if want is not None:
+        search = argv[argv.index("--search") + 1] if "--search" in argv else ""
+        asked = search.split('"')[1] if search.count('"') >= 2 else search
+        print(os.environ.get("STUB_ISSUE_NUM", "") if asked == want else "")
+        sys.exit(0)
     print(os.environ.get("STUB_ISSUE_NUM", ""))
+    sys.exit(0)
+
+if argv[:2] == ["issue", "close"]:
+    record("close:" + argv[2])
     sys.exit(0)
 
 if argv[:2] == ["issue", "view"]:
@@ -1130,19 +1391,18 @@ sys.exit(97)
 '''
 
 
-class TestAcknowledgingAnAlertDoesNotReArmIt(unittest.TestCase):
-    """One alert kind, one comment, however many non-alert comments follow.
+class _AlertHarness(unittest.TestCase):
+    """Executes the shared blindness action's shell under bash with a stub `gh`.
 
-    Both blindness alerts carry the same guard and are covered together: the
-    recall gate's (the REQUIRED arm) and the advisory arm's. Fixing one and
-    leaving the other is the failure shape this repo has already paid for once —
-    a family fix that stopped at the caller it started from.
+    The script is pulled out of `action.yml` verbatim (never copied here) and run
+    for real, because the defect under repair was a misread of what a `jq`
+    expression SELECTS — so a test that reads the expression back is the same act
+    that produced the bug.
+
+    Every arm now runs this one body, so the guard is proven once. What is
+    per-arm is the identity handed to it (title, marker slug), and that is what
+    the subclasses vary.
     """
-
-    STEPS = {
-        "recall gate (required arm)": "Alert — recall gate is blind (INCONCLUSIVE)",
-        "advisory arm": "Alert — advisory arm measured nothing (INCONCLUSIVE)",
-    }
 
     @classmethod
     def setUpClass(cls):
@@ -1155,19 +1415,35 @@ class TestAcknowledgingAnAlertDoesNotReArmIt(unittest.TestCase):
                     f"while reporting green — the exact disease this file pins."
                 )
 
-    def _marker(self, script: str, kind: str) -> str:
-        """The marker the step itself builds, read off the step, not restated."""
-        found = re.search(r'marker="(<!--.*?-->)"', script)
-        self.assertIsNotNone(found, "step no longer builds an HTML dedup marker")
-        return found.group(1).replace("${REASON_KIND}", kind)
+    def arms(self) -> dict[str, dict]:
+        """`{job_id: {'title': ..., 'marker-slug': ...}}` from the shipped workflow.
 
-    def _run(self, script: str, *, comments: list[str], body: str, kind: str):
-        """Execute the step under bash against a scripted issue.
-
-        Returns (stdout, calls) where `calls` is what the stand-in `gh` was
-        actually asked to do — so the assertion is on the branch taken and on
-        whether a comment was posted, never on a count alone.
+        Read off the workflow rather than listed, so a FOURTH arm is covered by
+        every test below the moment it is wired up. #394 added the third arm and
+        the suite did not notice, which is the whole reason this card exists.
         """
+        return {
+            job: {"title": h["alert"]["title"], "marker-slug": h["alert"]["marker-slug"]}
+            for job, h in _blindness_calls().items()
+        }
+
+    def marker(self, arm: dict, kind: str) -> str:
+        """The marker the SCRIPT builds for this arm — read off the script."""
+        found = re.search(r'marker="(<!--.*?-->)"', _action_alert_script())
+        self.assertIsNotNone(found, "the action no longer builds an HTML dedup marker")
+        return (found.group(1)
+                .replace("${MARKER_SLUG}", arm["marker-slug"])
+                .replace("${REASON_KIND}", kind))
+
+    def run_script(
+        self, *, arm: dict, kind: str = "version-mismatch", comments: list[str],
+        body: str, mode: str = "alert", script: str | None = None,
+        open_title: str | None = None,
+    ):
+        """Returns (stdout, calls) — `calls` is what the stub `gh` was asked to do,
+        so assertions land on the branch TAKEN, never on a count alone (a count is
+        also 0 when the script never ran)."""
+        script = _action_alert_script() if script is None else script
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)
             gh = tmp / "gh"
@@ -1184,26 +1460,47 @@ class TestAcknowledgingAnAlertDoesNotReArmIt(unittest.TestCase):
             step.write_text(script, encoding="utf-8")
 
             env = dict(os.environ)
+            # Every input the action declares, because the shipped step always
+            # passes all of them (defaults are ''), and the body runs under
+            # `set -u`.
             env.update(
                 PATH=f"{tmp}{os.pathsep}{os.environ['PATH']}",
                 GH_TOKEN="stub",
-                TITLE="Memory recall gate is INCONCLUSIVE (safety net blind)",
+                MODE=mode,
+                TITLE=arm["title"],
+                MARKER_SLUG=arm["marker-slug"],
+                ARM="The arm under test",
                 REASON="baseline captured in bm25-only, run served hybrid",
                 REASON_KIND=kind,
+                STAKES="Nothing is guarded while this is open.",
+                LEDE="",
+                RECOVERY_NOTE="It is measuring again.",
                 RUN_URL="https://example.invalid/run/1",
                 STUB_ISSUE_NUM="397",
                 STUB_ISSUE_JSON=str(issue),
                 STUB_CALLS=str(calls),
             )
+            if open_title is not None:
+                env["STUB_OPEN_TITLE"] = open_title
             done = subprocess.run(
                 ["bash", str(step)], env=env, capture_output=True, text=True, timeout=60,
             )
             self.assertEqual(
                 0, done.returncode,
-                f"the step itself failed:\nstdout={done.stdout}\nstderr={done.stderr}",
+                f"the script itself failed:\nstdout={done.stdout}\nstderr={done.stderr}",
             )
             recorded = [ln for ln in calls.read_text(encoding="utf-8").splitlines() if ln]
             return done.stdout, recorded
+
+
+class TestAcknowledgingAnAlertDoesNotReArmIt(_AlertHarness):
+    """One alert kind, one comment, however many non-alert comments follow.
+
+    Driven once per ARM rather than once per copy of the shell. Before the shell
+    was factored, "both alerts carry the same guard" was a claim maintained by
+    hand across two near-identical blocks, and the third arm — the required,
+    merge-gating one — had no block at all to carry it.
+    """
 
     # -- AC1 -----------------------------------------------------------------
     def test_a_non_alert_comment_does_not_re_arm_the_same_kind(self):
@@ -1213,12 +1510,11 @@ class TestAcknowledgingAnAlertDoesNotReArmIt(unittest.TestCase):
         0 when the step never ran, and a guard proven by an absence is the same
         class of evidence as the bug.
         """
-        for label, step_name in self.STEPS.items():
-            with self.subTest(step=label):
-                script = _step_run_script(step_name)
-                marker = self._marker(script, "version-mismatch")
-                out, calls = self._run(
-                    script,
+        for label, arm in self.arms().items():
+            with self.subTest(arm=label):
+                marker = self.marker(arm, "version-mismatch")
+                out, calls = self.run_script(
+                    arm=arm,
                     body="Tracking issue for recall-gate blindness.",
                     comments=[
                         f"{marker}\n\nThe memory recall gate could not produce a verdict.",
@@ -1246,14 +1542,13 @@ class TestAcknowledgingAnAlertDoesNotReArmIt(unittest.TestCase):
         signal the alert exists to carry. A second, DIFFERENT way of going blind
         is news, and it must reach the issue even though a marker is already on
         it."""
-        for label, step_name in self.STEPS.items():
-            with self.subTest(step=label):
-                script = _step_run_script(step_name)
-                out, calls = self._run(
-                    script,
+        for label, arm in self.arms().items():
+            with self.subTest(arm=label):
+                out, calls = self.run_script(
+                    arm=arm,
                     body="Tracking issue for recall-gate blindness.",
                     comments=[
-                        f"{self._marker(script, 'version-mismatch')}\n\nFirst kind.",
+                        f"{self.marker(arm, 'version-mismatch')}\n\nFirst kind.",
                         "Ack, on it.",
                     ],
                     kind="mode-mismatch",
@@ -1266,7 +1561,7 @@ class TestAcknowledgingAnAlertDoesNotReArmIt(unittest.TestCase):
                 posted = [c for c in calls if c.startswith("comment:")]
                 self.assertEqual(1, len(posted), f"{label}: {calls}")
                 self.assertIn(
-                    self._marker(script, "mode-mismatch"), posted[0],
+                    self.marker(arm, "mode-mismatch"), posted[0],
                     f"{label}: the new comment does not carry its own kind marker, "
                     f"so the NEXT run cannot dedup against it.",
                 )
@@ -1275,12 +1570,11 @@ class TestAcknowledgingAnAlertDoesNotReArmIt(unittest.TestCase):
         """The alert that OPENS the issue writes its marker into the body, not a
         comment. That case worked before and must keep working: an issue with
         zero comments is the first repeat's normal state."""
-        for label, step_name in self.STEPS.items():
-            with self.subTest(step=label):
-                script = _step_run_script(step_name)
-                out, calls = self._run(
-                    script,
-                    body=f"{self._marker(script, 'no-baseline')}\n\nOpened by the first alert.",
+        for label, arm in self.arms().items():
+            with self.subTest(arm=label):
+                out, calls = self.run_script(
+                    arm=arm,
+                    body=f"{self.marker(arm, 'no-baseline')}\n\nOpened by the first alert.",
                     comments=[],
                     kind="no-baseline",
                 )
@@ -1298,19 +1592,19 @@ class TestAcknowledgingAnAlertDoesNotReArmIt(unittest.TestCase):
         AC1 is passing for some other reason.
         """
         old = """--jq '(.comments | last | .body) // .body // ""'"""
-        for label, step_name in self.STEPS.items():
-            with self.subTest(step=label):
-                script = _step_run_script(step_name)
-                mutated, n = re.subn(r"--jq '\(\[\.body\].*?'", old, script, flags=re.S)
-                self.assertEqual(
-                    1, n,
-                    f"{label}: could not find the fixed `issue view --jq` window to "
-                    f"mutate, so this control proves nothing. Script:\n{script}",
-                )
-                self.assertNotEqual(script, mutated)
-                marker = self._marker(script, "version-mismatch")
-                out, calls = self._run(
-                    mutated,
+        script = _action_alert_script()
+        mutated, n = re.subn(r"--jq '\(\[\.body\].*?'", old, script, flags=re.S)
+        self.assertEqual(
+            1, n,
+            f"could not find the fixed `issue view --jq` window to mutate, so this "
+            f"control proves nothing. Script:\n{script}",
+        )
+        self.assertNotEqual(script, mutated)
+        for label, arm in self.arms().items():
+            with self.subTest(arm=label):
+                marker = self.marker(arm, "version-mismatch")
+                out, calls = self.run_script(
+                    arm=arm, script=mutated,
                     body="Tracking issue for recall-gate blindness.",
                     comments=[
                         f"{marker}\n\nThe memory recall gate could not produce a verdict.",
@@ -1324,6 +1618,89 @@ class TestAcknowledgingAnAlertDoesNotReArmIt(unittest.TestCase):
                     f"#397's own sequence. The harness is not driving the guard.\n{out}",
                 )
                 self.assertTrue([c for c in calls if c.startswith("comment:")], label)
+
+
+class TestOneArmCannotSilenceOrCloseAnother(_AlertHarness):
+    """AC2 + AC3, executed rather than asserted about the YAML.
+
+    Two arms going blind for the SAME reason kind must produce two episodes, and
+    one arm recovering must not clear the other's. Both properties are the reason
+    a second copy of the shell would have needed a second marker namespace, and
+    both are about what happens with identical inputs — so they are driven, not
+    read off the file.
+    """
+
+    def _pair(self):
+        arms = self.arms()
+        self.assertGreaterEqual(len(arms), 2, f"need two arms to test collision: {arms}")
+        (a_id, a), (b_id, b) = sorted(arms.items())[:2]
+        return (a_id, a), (b_id, b)
+
+    def test_the_same_reason_kind_on_two_arms_opens_two_episodes(self):
+        """Worst case first: pretend both arms somehow landed on ONE issue, and
+        show the kind-scoped marker still lets the second one speak. If the two
+        arms shared a marker slug, arm B would read arm A's marker, take the
+        `already reports` branch, and go silent on a genuinely separate outage."""
+        (a_id, a), (b_id, b) = self._pair()
+        kind = "no-baseline"
+        out, calls = self.run_script(
+            arm=b, kind=kind,
+            body=f"{self.marker(a, kind)}\n\nOpened by {a_id}.",
+            comments=[],
+        )
+        self.assertIn(
+            "Commented on tracking issue", out,
+            f"{b_id} was silenced by {a_id}'s marker for the same kind {kind!r}. The "
+            f"marker namespaces have collided, and one arm's outage now hides the "
+            f"other's — a new way to go silently blind.\n{out}",
+        )
+        posted = [c for c in calls if c.startswith("comment:")]
+        self.assertEqual(1, len(posted), calls)
+        self.assertIn(self.marker(b, kind), posted[0])
+
+    def test_in_the_shipped_wiring_they_do_not_even_share_an_issue(self):
+        """And the primary defence, one layer up: the titles differ, so the two
+        arms' lookups return different issues and the case above cannot arise in
+        production at all. Both layers, because the title is the thing a careless
+        edit changes."""
+        (a_id, a), (b_id, b) = self._pair()
+        self.assertNotEqual(a["title"], b["title"], f"{a_id} vs {b_id}")
+        out, calls = self.run_script(
+            arm=b, kind="no-baseline", body="", comments=[],
+            open_title=a["title"],
+        )
+        self.assertIn(
+            "Opened tracking issue", out,
+            f"{b_id} found {a_id}'s open issue and reported into it. The title lookup "
+            f"is not arm-exact.\n{out}",
+        )
+        self.assertIn("create", calls, calls)
+
+    def test_recovery_on_one_arm_does_not_close_the_others_episode(self):
+        """AC3's negative half. A resolve that closes by relevance rather than by
+        exact title would clear an episode nobody has recovered from — the failure
+        direction that LOSES the alarm, and the one a green test is least likely to
+        notice."""
+        (a_id, a), (b_id, b) = self._pair()
+        out, calls = self.run_script(
+            arm=b, mode="resolve", body="", comments=[], open_title=a["title"],
+        )
+        self.assertIn(
+            "nothing to clear", out,
+            f"{b_id}'s recovery closed {a_id}'s still-open episode.\n{out}",
+        )
+        self.assertFalse([c for c in calls if c.startswith("close:")], calls)
+
+    def test_and_recovery_on_the_right_arm_does_close_it(self):
+        """The positive half — without it, the test above passes on a resolve that
+        can never close anything, which is the same blindness wearing a green
+        check."""
+        (a_id, a), _ = self._pair()
+        out, calls = self.run_script(
+            arm=a, mode="resolve", body="", comments=[], open_title=a["title"],
+        )
+        self.assertIn("Closed episode #397", out, f"{a_id}: {out}")
+        self.assertIn("close:397", calls, calls)
 def _step_if(step_name: str) -> str:
     """The `if:` expression of the named step, AS SHIPPED, flattened to one line.
 
@@ -1334,10 +1711,21 @@ def _step_if(step_name: str) -> str:
     escape the check.
     """
     text = WORKFLOW.read_text(encoding="utf-8")
-    start = text.find(f"- name: {step_name}\n")
+    needle = f"- name: {step_name}\n"
+    start = text.find(needle)
     assert start != -1, (
         f"step {step_name!r} not found in memory-bench.yml — if it was renamed, "
         "this test must be pointed at the new name, not deleted"
+    )
+    # There are now near-identical alert steps in three jobs, so a duplicated
+    # name would make this helper silently return the FIRST one and quietly
+    # repoint every pin that uses it at the wrong arm — relaxing the check to a
+    # single arm while still reading green. Loud instead.
+    assert text.count(needle) == 1, (
+        f"step name {step_name!r} appears {text.count(needle)} times in "
+        f"memory-bench.yml. This helper resolves by name across the whole file, so "
+        f"duplicate names make every `if:` pin read whichever arm comes first. Give "
+        f"each arm's step a distinct name."
     )
     body = text[start:]
     m = re.search(r"^\s*if:[ \t]*(.*)$", body, re.M)
@@ -1410,22 +1798,81 @@ class TestBlindnessAlertAndResolveAgreeOnEvents(unittest.TestCase):
     which is the failure mode this class exists to prevent.
     """
 
-    ALERT = "Alert — recall gate is blind (INCONCLUSIVE)"
-    RESOLVE = "Resolve blindness alert (gate is measuring again)"
+    ALERT = "Alert — the prod recall canary is blind (INCONCLUSIVE)"
+    RESOLVE = "Resolve — the prod recall canary is measuring again"
     ADV_ALERT = "Alert — advisory arm measured nothing (INCONCLUSIVE)"
     ADV_RESOLVE = "Resolve advisory blindness alert (arm is measuring again)"
 
-    def test_recall_arm_alert_and_resolve_act_on_the_same_events(self):
-        alert = _event_clauses(_step_if(self.ALERT))
-        resolve = _event_clauses(_step_if(self.RESOLVE))
-        self.assertEqual(
-            alert, resolve,
-            "The recall arm's blindness alert and its resolve disagree about which "
-            "events they act on. Whatever can raise the alert must be able to clear "
-            "it, or the tracking issue outlives the blindness and — via the dedup "
-            "key — silences its own re-alerts.\n"
-            f"  alert   : {sorted(alert)}\n  resolve : {sorted(resolve)}",
-        )
+    def test_every_arms_alert_and_resolve_act_on_the_same_events(self):
+        """Generalised from the two named pairs to EVERY arm.
+
+        The named-constant version could only ever check the pairs somebody
+        remembered to add, and #394 is the proof that that is not a safe
+        assumption: it created a third arm and nothing in this suite noticed it had
+        no alert at all, let alone a matching resolve. The pairs are now discovered
+        from the shipped workflow, so a fourth arm is under this pin the moment it
+        is wired up.
+        """
+        pairs = _blindness_calls()
+        self.assertGreaterEqual(len(pairs), 3, f"expected all three arms, got {list(pairs)}")
+        for job_id, halves in sorted(pairs.items()):
+            with self.subTest(job=job_id):
+                alert = _event_clauses(halves["alert"]["if"])
+                resolve = _event_clauses(halves["resolve"]["if"])
+                self.assertEqual(
+                    alert, resolve,
+                    f"job {job_id!r}: its blindness alert and its resolve disagree about "
+                    f"which events they act on. Whatever can raise the alert must be able "
+                    f"to clear it, or the tracking issue outlives the blindness and — via "
+                    f"the dedup key — silences its own re-alerts.\n"
+                    f"  alert   : {sorted(alert)}\n  resolve : {sorted(resolve)}",
+                )
+
+    def test_the_required_arm_never_alerts_from_a_pull_request(self):
+        """The branch arm's own scoping, and it is a correctness claim.
+
+        A PR branch's measurement is not authoritative about the repo's state, so a
+        PR that breaks only its own baseline must not open a repo-level episode, and
+        a PR that fixes its own baseline must not CLOSE one main is still blind on —
+        the second direction loses the alarm. And a fork PR gets a read-only
+        GITHUB_TOKEN, so alerting there would fail this REQUIRED check for an author
+        who cannot clear it (the #342 rule).
+        """
+        for step in (
+            "Alert — the required recall gate is blind (INCONCLUSIVE)",
+            "Resolve — the required recall gate is measuring again",
+        ):
+            with self.subTest(step=step):
+                self.assertIn(
+                    "github.event_name != 'pull_request'", _step_if(step),
+                    f"{step!r} lost its pull_request exclusion. On a fork PR this step "
+                    f"cannot write issues, so it would redden the merge gate for an "
+                    f"author with no way to clear it.",
+                )
+
+    def test_the_branch_pair_carries_no_drill_guard(self):
+        """The asymmetry with the prod pair is deliberate and must not be
+        'harmonised'.
+
+        `inputs.expect_commit` names a SERVING version for the prod canary to
+        confirm; a dispatch that sets it is an operator drill, which is neither an
+        incident nor a recovery. The branch arm builds its own server from the
+        checkout and never reads that input, so the same clause here would gate on a
+        value the job cannot observe — silencing real blindness on any dispatch that
+        happened to set an unrelated input. That is the direction that loses the
+        alarm, which is why it is pinned rather than left to taste.
+        """
+        for step in (
+            "Alert — the required recall gate is blind (INCONCLUSIVE)",
+            "Resolve — the required recall gate is measuring again",
+        ):
+            with self.subTest(step=step):
+                self.assertNotIn(
+                    "expect_commit", _step_if(step),
+                    f"{step!r} gained the prod arm's drill guard. The branch arm never "
+                    f"reads `expect_commit`, so this suppresses real blindness on "
+                    f"dispatches that set it for the OTHER arm.",
+                )
 
     def test_neither_half_of_the_recall_arm_is_push_scoped(self):
         """The specific regression: this job is the prod canary and never runs on

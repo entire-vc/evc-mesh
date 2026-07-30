@@ -1,0 +1,238 @@
+name: Blindness tracking issue
+description: >-
+  Raise or clear the tracking issue for one arm's INCONCLUSIVE state. One
+  implementation, one call per arm — because every previous copy of this logic
+  dropped something on the way across.
+
+# WHY THIS IS AN ACTION AND NOT A THIRD COPY OF THE SHELL
+#
+# This block existed twice in memory-bench.yml (the prod canary's and the
+# advisory arm's) and was MISSING from the required arm — the merge-gating
+# `Memory recall gate`, whose step summary nevertheless told readers that "the
+# alert below is what stops it being silent". There was no alert below it. From
+# #394 (2026-07-28 05:02Z) until #f70347b5 landed a baseline, that check's
+# steady state was `GATE_REASON: no-baseline` on every run, on branches AND on
+# main, and it paged nobody. Its blindness was recorded only in a step summary
+# attached to a green check, which nothing polls.
+#
+# The obvious repair — paste the shell a third time with a third marker — is
+# the wrong shape, and this file's own history says why. Copies of this logic
+# have already lost, once each:
+#
+#   * the DEDUP SEARCH WINDOW. `(.comments | last | .body) // .body` read only
+#     the newest comment, so any human reply displaced the marker and the next
+#     run re-posted the identical alert. Acknowledging an alert was the act
+#     that re-armed it — the guard was weakest exactly when somebody was
+#     paying attention (#397, 2026-07-28: alert 04:43:06Z, human 04:46:22Z,
+#     byte-identical alert 04:58:24Z).
+#   * PUSH-SCOPING. The resolve carried `event_name == 'push'` while the alert
+#     did not, so an episode found by the Sunday schedule stayed open until
+#     somebody happened to push. Episodes were bounded by push cadence rather
+#     than by recovery — and because the dedup key suppresses a same-kind alert
+#     while the issue is OPEN, a stale-open issue MUTES its own re-alerts.
+#   * KIND-SCOPING of the marker, so a partial gap stopped claiming total
+#     blindness and readers stopped learning to discount it.
+#
+# And #394 itself demonstrated the failure mode directly: copying the prod
+# arm's re-snap step to make the branch arm's, it dropped the
+# `rc=${PIPESTATUS[0]}` wrapper that 11 of the other 12 tee'd measurements
+# carry, so a capture that refused to capture reported success (fixed in
+# `6553dd6`). A second copy is a second place for all of the above to come
+# back, and it would need a second marker namespace or the two arms' dedup
+# collides — a prod `no-baseline` and a branch `no-baseline` silencing each
+# other, which is a NEW way to go silently blind.
+#
+# So: one script, three callers, and per-arm identity supplied as inputs.
+# `test_gate_blindness.py` executes THIS file's shell under a stand-in `gh`,
+# and separately asserts that every arm which can go INCONCLUSIVE routes
+# through it — that second half is the pin #394 needed and did not have.
+#
+# WHAT STAYS IN THE WORKFLOW, DELIBERATELY: the `if:` conditions. Which runs an
+# arm may alert and resolve on is a property of the arm, not of the alert, and
+# `test_gate_blindness.py` pins each arm's pair against each other. Folding the
+# event scoping in here would mean one arm's correct scoping silently became
+# every arm's.
+
+inputs:
+  mode:
+    description: '`alert` to raise/report an episode, `resolve` to clear it.'
+    required: true
+
+  title:
+    description: >-
+      The issue title. This is the EPISODE IDENTITY: it is how `resolve` finds
+      what `alert` opened, and it is the namespace that keeps two arms from
+      closing each other's issues. It must be unique per arm and byte-identical
+      between an arm's alert and its resolve — pinned by
+      `test_gate_blindness.py`.
+    required: true
+
+  marker-slug:
+    description: >-
+      Per-arm namespace for the kind-scoped storm guard, e.g.
+      `recall-gate-branch-blind`. Combined with the reason kind into the HTML
+      marker. Unused when mode=resolve.
+    required: false
+    default: ''
+
+  arm:
+    description: >-
+      Human name of the arm, used as the subject of the derived lede
+      ("<arm> could not produce a verdict"). Unused when mode=resolve.
+    required: false
+    default: ''
+
+  reason:
+    description: 'The gate''s own `GATE_REASON:` line, verbatim.'
+    required: false
+    default: ''
+
+  reason-kind:
+    description: >-
+      First token of the reason. Scopes the marker AND selects the lede: the
+      per-category kinds leave every comparable category enforced, and an alert
+      that claims total blindness for a partial gap trains its readers to
+      discount it.
+    required: false
+    default: ''
+
+  stakes:
+    description: >-
+      One sentence naming what is actually unguarded while this episode is
+      open. Per-arm because the consequence differs: the required arm going
+      blind means regressions can merge, the prod canary going blind means a
+      deployed regression goes unnoticed, and conflating the two is how a
+      reader learns to discount both.
+    required: false
+    default: ''
+
+  lede:
+    description: >-
+      Overrides the reason-kind-derived lede entirely. For arms whose reason
+      kinds are not the recall gate's (the advisory arm).
+    required: false
+    default: ''
+
+  recovery-note:
+    description: 'The sentence posted when closing on recovery. mode=resolve.'
+    required: false
+    default: 'The arm produced a comparable verdict again.'
+
+  run-url:
+    description: 'Link back to the run that raised or cleared this.'
+    required: true
+
+  github-token:
+    description: '`secrets.GITHUB_TOKEN`. Composite actions do not inherit secrets.'
+    required: true
+
+runs:
+  using: composite
+  steps:
+    # ONE step, not one per mode. `alert` and `resolve` share the issue lookup,
+    # and that shared lookup is the point: a title that drifted between the two
+    # halves would leave every episode permanently open, and a permanently open
+    # episode mutes its own re-alerts via the dedup key. Splitting the modes
+    # into two steps would put the lookup back to two copies, one layer down.
+    - name: Raise or clear the tracking issue
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        MODE: ${{ inputs.mode }}
+        TITLE: ${{ inputs.title }}
+        MARKER_SLUG: ${{ inputs.marker-slug }}
+        ARM: ${{ inputs.arm }}
+        REASON: ${{ inputs.reason }}
+        REASON_KIND: ${{ inputs.reason-kind }}
+        STAKES: ${{ inputs.stakes }}
+        LEDE: ${{ inputs.lede }}
+        RECOVERY_NOTE: ${{ inputs.recovery-note }}
+        RUN_URL: ${{ inputs.run-url }}
+      # No `${{ }}` below this line. `test_gate_blindness.py` executes this
+      # block verbatim under plain bash with a stand-in `gh`, so an expression
+      # interpolated into the body would make the tested text differ from the
+      # text CI runs. Every value arrives through `env:` above.
+      run: |
+        set -euo pipefail
+
+        # The one lookup both modes use. Title-exact rather than search-relevant:
+        # `--search ... in:title` is a full-text match and will happily return a
+        # neighbouring arm's issue, which — before the titles were namespaced —
+        # is precisely how one arm could have closed another's episode.
+        find_open_episode() {
+          gh issue list --state open --search "\"${TITLE}\" in:title" \
+            --json number,title \
+            --jq "[.[] | select(.title == \"${TITLE}\")] | .[0].number // empty"
+        }
+
+        num="$(find_open_episode)"
+
+        if [ "$MODE" = "resolve" ]; then
+          if [ -z "$num" ]; then
+            echo "No open episode titled '${TITLE}' — nothing to clear."
+            exit 0
+          fi
+          gh issue close "$num" --comment "${RECOVERY_NOTE} Safety net restored: ${RUN_URL}"
+          echo "Closed episode #${num}."
+          exit 0
+        fi
+
+        if [ "$MODE" != "alert" ]; then
+          echo "::error::mode must be 'alert' or 'resolve', got '${MODE}'"
+          exit 2
+        fi
+
+        marker="<!-- ${MARKER_SLUG} kind=${REASON_KIND} -->"
+
+        # Scoped to the reason kind for the same reason the step summaries are:
+        # the per-category kinds leave every comparable category measured and
+        # enforced, so an alert that reports them as total blindness is training
+        # its own readers to skim it.
+        if [ -n "${LEDE}" ]; then
+          lede="${LEDE}"
+        else
+          case "$REASON_KIND" in
+            version-mismatch|version-changed-mid-run|version-unreadable)
+              lede="${ARM} could not confirm WHICH BUILD it was measuring, so it refused to produce a score rather than attribute one to the wrong binary. Nothing was measured and nothing was enforced. This clears itself once the deploy in flight has landed; if it does not, the arm and the backend deploy are racing on the same pushes." ;;
+            category-unmeasured|baseline-sample-mismatch)
+              lede="${ARM} could not compare **some** categories. Every comparable category was still measured and enforced. What is unguarded is limited to the categories named in the reason below." ;;
+            *)
+              lede="${ARM} could not produce a verdict: it measured nothing, so it enforced nothing." ;;
+          esac
+        fi
+
+        body="$(printf '%s\n\n%s\n\n%s\n\n%s\n\n%s\n' \
+          "$marker" \
+          "$lede" \
+          "$STAKES" \
+          "**Reason:** \`${REASON}\`" \
+          "Run: ${RUN_URL}")"
+
+        if [ -z "$num" ]; then
+          gh issue create --title "$TITLE" --body "$body" --label memory,ci 2>/dev/null \
+            || gh issue create --title "$TITLE" --body "$body"
+          echo "Opened tracking issue: ${TITLE}"
+          exit 0
+        fi
+
+        # Storm guard. If THIS kind is already reported anywhere on the issue,
+        # the alert is already live and a copy per run would bury it.
+        #
+        # Scan every comment PLUS the body. Reading only the newest comment made
+        # acknowledging an alert the act that re-armed it (#397 — see the header
+        # comment). The dedup KEY was never poisoned; the search WINDOW was.
+        #
+        # Widening to the whole issue is bounded and needs no tunable N: the
+        # resolve mode CLOSES this issue the moment a comparable verdict
+        # returns, and the lookup above is `--state open`. One open issue is one
+        # episode, so each kind is reported once per episode and a genuinely NEW
+        # kind still comments — the marker is kind-scoped. Executed, not
+        # eyeballed, by TestAcknowledgingAnAlertDoesNotReArmIt.
+        seen="$(gh issue view "$num" --json comments,body \
+                 --jq '([.body] + ((.comments // []) | map(.body))) | map(. // "") | join("\n")')"
+        if printf '%s' "$seen" | grep -qF "$marker"; then
+          echo "Issue #${num} already reports '${REASON_KIND}' — not commenting again."
+          exit 0
+        fi
+        gh issue comment "$num" --body "$body"
+        echo "Commented on tracking issue #${num}."
