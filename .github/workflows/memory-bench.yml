@@ -2054,11 +2054,31 @@ jobs:
               || gh issue create --title "$TITLE" --body "$body"
             echo "Opened tracking issue."
           else
-            # Same storm guard as the blindness alert: one live report, not one
+            # Same storm guard as the blindness alerts: one live report, not one
             # per run. A poisoned dedup key turns an alert into spam, and spam is
             # ignored, which is the same as having no alert at all.
+            #
+            # That claim used to be FALSE here. This read
+            # `(.comments | last | .body) // .body` — the pre-#397 window, i.e. the
+            # newest comment only — while the two blindness alerts were fixed to
+            # scan the whole issue. The family fix stopped at the callers it
+            # started from, which is the failure shape the whole
+            # `.github/actions/blindness-issue` factoring exists to end, so leaving
+            # a fourth copy still carrying the bug would have made that factoring
+            # a half-truth. Under the old window, ACKNOWLEDGING this alert was the
+            # act that re-armed it: any non-alert comment displaced the marker from
+            # the last position and the next cancellation posted the identical
+            # body again. #411 is open under this title right now, so the marker is
+            # deliberately UNCHANGED (`<!-- prod-arm-cancelled -->`, no `kind=`) —
+            # a new marker shape would not match the comments already on it and the
+            # first fire after this change would duplicate.
+            #
+            # Not routed through the shared action yet: this job has no resolve
+            # half, and "the canary stopped being cancelled" is not a state that
+            # self-clears, so giving it one is a design decision rather than a
+            # refactor. Tracked separately.
             last=$(gh issue view "$num" --json comments,body \
-                     --jq '(.comments | last | .body) // .body // ""')
+                     --jq '([.body] + ((.comments // []) | map(.body))) | map(. // "") | join("\n")')
             if printf '%s' "$last" | grep -qF "$marker"; then
               echo "Issue #$num already reports this — not commenting again."
             else

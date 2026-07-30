@@ -292,11 +292,48 @@ class TestEveryInconclusiveArmCanPage(unittest.TestCase):
         for job_id, job_yaml in _job_blocks().items():
             with self.subTest(job=job_id):
                 if job_id == "prod-arm-cancelled":
-                    continue  # not a blindness alert: different question, different marker
+                    # The ONE remaining inline copy, and the exemption is narrow and
+                    # named rather than "not a blindness alert". It IS the same shell.
+                    # It is not folded in because it has no resolve half and "the
+                    # canary stopped being cancelled" does not self-clear, so giving
+                    # it one is a design decision, not a refactor. What matters is
+                    # that being exempt from the FACTORING does not make it exempt
+                    # from the guard — see
+                    # `test_no_copy_of_the_dedup_window_regressed_to_last_comment`.
+                    continue
                 self.assertNotIn(
                     "gh issue create", job_yaml,
                     f"job {job_id!r} opens a tracking issue inline instead of via "
                     f"{BLINDNESS_ACTION_REL}. Route it through the action.",
+                )
+
+    def test_no_copy_of_the_dedup_window_regressed_to_last_comment(self):
+        """The #397 bug, pinned across EVERY copy that still exists anywhere.
+
+        Found while factoring: `prod-arm-cancelled` was a fourth copy of this shell
+        and had never received the fix. Its own comment claimed "same storm guard as
+        the blindness alert" while reading `(.comments | last | .body)` — the
+        pre-#397 window. A family fix that stops at the callers it started from is
+        exactly what the shared action exists to prevent, so the guard is asserted
+        over both files rather than over the action alone.
+
+        Under the bad window, acknowledging an alert re-arms it: any non-alert
+        comment displaces the marker from the last position and the next run posts
+        the identical body again. The guard is weakest when somebody is paying
+        attention.
+        """
+        bad = re.compile(r"\.comments\s*\|\s*last\s*\|\s*\.body")
+        for path in (WORKFLOW, BLINDNESS_ACTION):
+            with self.subTest(file=path.name):
+                hits = [
+                    ln for ln in path.read_text(encoding="utf-8").splitlines()
+                    if bad.search(ln) and not ln.lstrip().startswith("#")
+                ]
+                self.assertEqual(
+                    [], hits,
+                    f"{path.name} still dedups on the NEWEST COMMENT ONLY. Scan the "
+                    f"whole issue — body plus every comment — or acknowledging an "
+                    f"alert is what re-arms it (#397). Offending line(s): {hits}",
                 )
 
     def test_the_shared_action_exists_and_is_referenced_by_path(self):
