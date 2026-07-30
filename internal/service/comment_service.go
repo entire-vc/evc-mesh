@@ -41,8 +41,127 @@ var blockingMarkerRegex = regexp.MustCompile(`(?im)^\s*(?:❓\s*)?\*{0,2}\s*Bloc
 var systemActorID = uuid.Nil
 
 // hasBlockingMarker reports whether body contains a "❓ **Blocking @user**" marker.
+//
+// The body is passed through stripQuotedSpans first, so a marker that only appears
+// inside inline code, a fenced block, or a blockquote does NOT count — quoting the
+// template while explaining the mechanism must not arm a gate. The regex is already
+// line-anchored (which excluded `> `-quoted markers by accident); the strip makes
+// that property deliberate and extends it to code spans and fences.
 func hasBlockingMarker(body string) bool {
-	return blockingMarkerRegex.MatchString(body)
+	return blockingMarkerRegex.MatchString(stripQuotedSpans(body))
+}
+
+// stripQuotedSpans blanks out the parts of a markdown body that are QUOTATION rather
+// than assertion: fenced code blocks (``` / ~~~), blockquote lines (`>`), and inline
+// code spans (`…`). Everything else is preserved verbatim, and every input line yields
+// exactly one output line — so line-anchored regexes keep their meaning on the residue.
+//
+// Why this exists (task #5c69b4e5, live probe #a073a896): both the blocking marker and
+// the triage-exit negator vocabulary are matched against the whole comment body, the
+// negators as bare substrings. A comment that DESCRIBES the mechanism — a post-mortem
+// quoting `не нужен` in backticks — therefore performed it: a live human_gate was
+// released 11 ms after a summary comment that had no intent to withdraw anything, and
+// the real, intentional withdrawal 1.75 s later became a no-op. Documenting the gate
+// disarmed the gate. The same root cause silently moved ask OWNERSHIP when a marker
+// comment quoted negators further down its own body.
+//
+// Ambiguity fails CLOSED (keeps the gate): an unterminated fence swallows the rest of
+// the body, an unterminated inline-code run swallows the rest of its line. A negator
+// hidden behind malformed markdown is not counted, so the gate stays up — the safe
+// direction for a mechanism whose whole job is to say "a human is still needed here".
+func stripQuotedSpans(body string) string {
+	lines := strings.Split(body, "\n")
+	out := make([]string, 0, len(lines))
+	inFence := false
+	fenceChar := byte(0)
+	fenceLen := 0
+
+	for _, line := range lines {
+		trimmed := strings.TrimLeft(line, " \t")
+
+		if inFence {
+			// A closing fence is a run of >= fenceLen of the SAME char, per CommonMark.
+			if c, n := fenceRun(trimmed); c == fenceChar && n >= fenceLen {
+				inFence = false
+			}
+			out = append(out, "")
+			continue
+		}
+		if c, n := fenceRun(trimmed); n >= 3 {
+			inFence = true
+			fenceChar = c
+			fenceLen = n
+			out = append(out, "")
+			continue
+		}
+		if strings.HasPrefix(trimmed, ">") {
+			out = append(out, "")
+			continue
+		}
+		out = append(out, stripInlineCode(line))
+	}
+
+	return strings.Join(out, "\n")
+}
+
+// fenceRun returns the fence character and the length of the leading run of it, for a
+// line already left-trimmed. length == 0 means the line does not begin with a fence char.
+func fenceRun(trimmed string) (char byte, length int) {
+	if trimmed == "" {
+		return 0, 0
+	}
+	c := trimmed[0]
+	if c != '`' && c != '~' {
+		return 0, 0
+	}
+	n := 0
+	for n < len(trimmed) && trimmed[n] == c {
+		n++
+	}
+	return c, n
+}
+
+// stripInlineCode removes every `…`-delimited code span from a single line, delimiters
+// included. A span opened by a run of N backticks closes at the next run of exactly N
+// (CommonMark), which is what lets a double-backtick span carry a single backtick
+// inside it. An unterminated run drops the rest of the line — see the fail-closed
+// note on stripQuotedSpans.
+func stripInlineCode(line string) string {
+	var out strings.Builder
+	for i := 0; i < len(line); {
+		if line[i] != '`' {
+			out.WriteByte(line[i])
+			i++
+			continue
+		}
+		j := i
+		for j < len(line) && line[j] == '`' {
+			j++
+		}
+		n := j - i
+
+		closed := -1
+		for k := j; k < len(line); {
+			if line[k] != '`' {
+				k++
+				continue
+			}
+			m := k
+			for m < len(line) && line[m] == '`' {
+				m++
+			}
+			if m-k == n {
+				closed = m
+				break
+			}
+			k = m
+		}
+		if closed == -1 {
+			return out.String() // unterminated → fail closed
+		}
+		i = closed
+	}
+	return out.String()
 }
 
 // autoMarkerSubstrings marks a comment as automation-generated (server or fiddler).
@@ -89,10 +208,21 @@ var triageExitNegators = []string{
 // so only text from the marker onward is searched. A comment with no marker at
 // all (the ordinary shape of a real withdrawal — a separate later comment with
 // nothing else in it) has no scope to restrict, so the whole body is used.
+//
+// Extended 2026-07-30 (task #5c69b4e5, live probe #a073a896): the body is first
+// passed through stripQuotedSpans, so only text the comment ASSERTS is searched —
+// never a negator it merely QUOTES in inline code, a fenced block or a blockquote.
+// Marker-scoping alone does not cover this: the comment that disarmed a live gate
+// carried NO marker (it was a markerless post-mortem), so its scope was the whole
+// body and its backticked `не нужен` counted. Scoping answers "which ask is this
+// about"; stripping answers "is this an assertion or a citation". Both are needed.
+//
+// Search and slice the SAME stripped string — offsets taken from the raw body
+// cannot index the stripped one, and mixing them would cut at a meaningless byte.
 func hasNegatorInScope(body string) bool {
-	scope := body
-	if matches := blockingMarkerRegex.FindAllStringIndex(body, -1); len(matches) > 0 {
-		scope = body[matches[len(matches)-1][0]:]
+	scope := stripQuotedSpans(body)
+	if matches := blockingMarkerRegex.FindAllStringIndex(scope, -1); len(matches) > 0 {
+		scope = scope[matches[len(matches)-1][0]:]
 	}
 	lower := strings.ToLower(scope)
 	for _, n := range triageExitNegators {
@@ -125,7 +255,11 @@ func extractMentionSlugs(body string) []string {
 // resolving against those via extractMentionSlugs would mis-attribute the triage target
 // to whichever mention happens to resolve first, rather than to who "Blocking" actually names.
 func blockingMarkerSlugs(body string) []string {
-	matches := blockingMarkerRegex.FindAllStringSubmatch(body, -1)
+	// Same stripQuotedSpans discipline as hasBlockingMarker: without it a body that
+	// carries BOTH a quoted template and a real marker resolves the QUOTED slug first
+	// (matches are returned in source order), so firstResolvedUserSlug would triage
+	// against whoever the documentation example happened to name.
+	matches := blockingMarkerRegex.FindAllStringSubmatch(stripQuotedSpans(body), -1)
 	seen := make(map[string]bool, len(matches))
 	out := make([]string, 0, len(matches))
 	for _, m := range matches {
@@ -878,8 +1012,10 @@ func (s *commentService) releaseHumanGate(ctx context.Context, comment *domain.C
 //   - task.HumanGate must be true;
 //   - comment.AuthorType must be ActorTypeAgent (user withdrawal is releaseHumanGate;
 //     system/driver comments cannot withdraw anything on anyone's behalf);
-//   - comment.Body must carry a withdrawal negator (triageExitNegators — the same
-//     vocabulary enforceTriageExit already uses to recognise a cancelled ask);
+//   - comment.Body must ASSERT a withdrawal negator (hasNegatorInScope: the same
+//     triageExitNegators vocabulary enforceTriageExit uses, matched against the body
+//     with code spans, fences and blockquotes stripped — a comment that merely QUOTES
+//     "не нужен" while explaining the mechanism withdraws nothing);
 //   - of all prior comments that both hasBlockingMarker AND are not themselves
 //     already negated, the CHRONOLOGICALLY LAST one must be authored by this SAME
 //     agent. A live ask with no marker found at all, or one raised/most-recently
@@ -1076,10 +1212,11 @@ func (s *commentService) enforceTriageExit(ctx context.Context, comment *domain.
 			if !hasBlockingMarker(c.Body) {
 				continue
 			}
-			// A blocking mention that contains a negator is a cancellation, not a live
+			// A blocking mention that ASSERTS a negator is a cancellation, not a live
 			// gate — scoped to text at-or-after the marker (hasNegatorInScope), not the
 			// whole body: see #c375905c, the same self-negation-by-unrelated-prose
 			// defect this function shares with releaseHumanGateOnWithdrawal above.
+			// One that merely QUOTES the vocabulary is still a live gate (#5c69b4e5).
 			if hasNegatorInScope(c.Body) {
 				continue
 			}
@@ -1184,18 +1321,22 @@ const completionKeywordWindowBytes = 500
 // "❓ Blocking @pavel" question was wrongly classified as a completion report,
 // which suppressed enforceBlockingTriage before it ever reached SetHumanGate.
 func completionKeywordSearchWindow(body string) string {
-	loc := blockingMarkerRegex.FindStringIndex(body)
+	// Operate wholly on the stripped body: the window must be anchored to the first
+	// REAL marker, not to a quoted template that happens to appear earlier. Offsets
+	// from one string can't index the other, so slice the same string we searched.
+	stripped := stripQuotedSpans(body)
+	loc := blockingMarkerRegex.FindStringIndex(stripped)
 	if loc == nil {
-		return body
+		return stripped
 	}
 	start := loc[0] - completionKeywordWindowBytes
 	if start < 0 {
 		start = 0
 	}
-	for start > 0 && !utf8.RuneStart(body[start]) {
+	for start > 0 && !utf8.RuneStart(stripped[start]) {
 		start++
 	}
-	return body[start:loc[0]]
+	return stripped[start:loc[0]]
 }
 
 // isAssigneeCompletionReport returns true when the comment is authored by the
