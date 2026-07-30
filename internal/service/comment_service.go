@@ -428,6 +428,12 @@ func validateCommentMetadata(raw json.RawMessage) error {
 
 // jsonKindName names the JSON type of a decoded value for error messages, so a rejected
 // caller is told what it actually sent rather than just that something was wrong.
+//
+// There is deliberately no `case nil`: a bare `null` returns early from
+// validateCommentMetadata as legal-and-absent, so nil cannot reach here. The default is
+// the only fallback and exists for a value encoding/json does not currently produce when
+// decoding into `any` — it is unreachable today rather than a path worth pretending is
+// live with its own branch.
 func jsonKindName(v any) string {
 	switch v.(type) {
 	case []any:
@@ -438,8 +444,6 @@ func jsonKindName(v any) string {
 		return "number"
 	case bool:
 		return "boolean"
-	case nil:
-		return "null"
 	default:
 		return "non-object value"
 	}
