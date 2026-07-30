@@ -97,7 +97,12 @@ GOOSE                 := $(shell go env GOPATH)/bin/goose
 # session-worktree, whose names are randomly prefixed). ?= so an operator can
 # still force a specific value.
 CHECKOUT_ID          := $(shell printf '%s' '$(notdir $(CURDIR))' | tr 'A-Z' 'a-z' | tr -c 'a-z0-9' '-')
-PORT_OFFSET          := $(shell printf '%s' '$(CHECKOUT_ID)' | cksum | awk '{print $$1 % 1000}')
+# Modulus must stay under the SMALLEST gap between any two of the four base
+# ports below (4223/5437/6383/8223 -> smallest consecutive gap is 946,
+# between 5437 and 6383), or two checkouts with different offsets could
+# still collide with each other on, say, one's DB_PORT landing on another's
+# REDIS_PORT range. 900 leaves comfortable margin.
+PORT_OFFSET          := $(shell printf '%s' '$(CHECKOUT_ID)' | cksum | awk '{print $$1 % 900}')
 COMPOSE_PROJECT_NAME ?= mesh-ci-$(CHECKOUT_ID)
 DB_PORT              ?= $(shell echo $$(( 5437 + $(PORT_OFFSET) )))
 REDIS_PORT           ?= $(shell echo $$(( 6383 + $(PORT_OFFSET) )))
@@ -157,7 +162,7 @@ ci-project-env:
 	@if [ ! -f $(DEPLOY_DIR)/.env ]; then \
 		printf 'COMPOSE_PROJECT_NAME=%s\nDB_PORT=%s\nREDIS_PORT=%s\nNATS_PORT=%s\nNATS_MONITOR_PORT=%s\n' \
 			"$(COMPOSE_PROJECT_NAME)" "$(DB_PORT)" "$(REDIS_PORT)" "$(NATS_PORT)" "$(NATS_MONITOR_PORT)" \
-			> $(DEPLOY_DIR)/.env; \
+			> $(DEPLOY_DIR)/.env && \
 		echo "── Wrote $(DEPLOY_DIR)/.env — project=$(COMPOSE_PROJECT_NAME) db=$(DB_PORT) redis=$(REDIS_PORT) nats=$(NATS_PORT) ──"; \
 	fi
 
