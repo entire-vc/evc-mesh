@@ -125,7 +125,16 @@ func (r *VCSLinkRepo) ListByTask(ctx context.Context, taskID uuid.UUID) ([]domai
 // of (task_id, provider, link_type, external_id). Used by the GitHub webhook
 // orchestrator so subsequent deliveries for the same PR (opened → synchronize
 // → closed) update the same row rather than failing the unique index.
-func (r *VCSLinkRepo) Upsert(ctx context.Context, link *domain.VCSLink) error {
+//
+// The UPDATE branch never touches id/created_at — RETURNING (xmax = 0)
+// reports whether THIS statement inserted the row (xmax is unset on a fresh
+// insert) or updated an existing one, and the returned id/created_at are
+// scanned back into *link so the caller always holds the row that is
+// actually on disk, never the id/created_at it happened to generate before
+// finding out the row already existed (#b73171fa: the caller-supplied values
+// used to be echoed back verbatim, making an update look like a freshly
+// created duplicate).
+func (r *VCSLinkRepo) Upsert(ctx context.Context, link *domain.VCSLink) (bool, error) {
 	const q = `
 		INSERT INTO vcs_links (
 			id, task_id, provider, link_type, external_id,
@@ -139,16 +148,26 @@ func (r *VCSLinkRepo) Upsert(ctx context.Context, link *domain.VCSLink) error {
 		    title = EXCLUDED.title,
 		    metadata = EXCLUDED.metadata,
 		    url = EXCLUDED.url
+		RETURNING id, created_at, (xmax = 0) AS inserted
 	`
 	metadata := link.Metadata
 	if metadata == nil {
 		metadata = []byte("{}")
 	}
-	_, err := r.db.ExecContext(ctx, q,
+	var result struct {
+		ID        uuid.UUID `db:"id"`
+		CreatedAt time.Time `db:"created_at"`
+		Inserted  bool      `db:"inserted"`
+	}
+	if err := r.db.GetContext(ctx, &result, q,
 		link.ID, link.TaskID, string(link.Provider), string(link.LinkType), link.ExternalID,
 		link.URL, link.Title, string(link.Status), metadata, link.CreatedAt,
-	)
-	return err
+	); err != nil {
+		return false, err
+	}
+	link.ID = result.ID
+	link.CreatedAt = result.CreatedAt
+	return result.Inserted, nil
 }
 
 // ListByExternalID returns links matching (provider, link_type, external_id),

@@ -413,7 +413,8 @@ func TestHandlePR_AmbiguousPayload_DoesNotReuseStaleLink(t *testing.T) {
 		URL:        "https://github.com/entire-vc/evc-mesh/pull/433",
 		Status:     domain.VCSLinkStatusOpen,
 	}
-	require.NoError(t, h.repo.Upsert(context.Background(), stale))
+	_, err := h.repo.Upsert(context.Background(), stale)
+	require.NoError(t, err)
 	before := h.linkCount()
 
 	// The same ambiguous body arrives again — a "synchronize" or "closed"
@@ -449,7 +450,8 @@ func TestHandlePR_NoRefInPayload_StillUsesStoredLink(t *testing.T) {
 		URL:        "https://github.com/entire-vc/evc-mesh/pull/434",
 		Status:     domain.VCSLinkStatusOpen,
 	}
-	require.NoError(t, h.repo.Upsert(context.Background(), linked))
+	_, err := h.repo.Upsert(context.Background(), linked)
+	require.NoError(t, err)
 
 	ev := openEvent(434, "chore: bump deps", "No task reference anywhere in here.", "chore/deps")
 

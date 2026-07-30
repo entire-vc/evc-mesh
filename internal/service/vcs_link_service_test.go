@@ -75,7 +75,7 @@ func (r *fakeVCSLinkRepo) ListByTask(_ context.Context, taskID uuid.UUID) ([]dom
 	return out, nil
 }
 
-func (r *fakeVCSLinkRepo) Upsert(_ context.Context, l *domain.VCSLink) error {
+func (r *fakeVCSLinkRepo) Upsert(_ context.Context, l *domain.VCSLink) (bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	key := conflictKey(l.TaskID, l.Provider, l.LinkType, l.ExternalID)
@@ -85,11 +85,16 @@ func (r *fakeVCSLinkRepo) Upsert(_ context.Context, l *domain.VCSLink) error {
 		existing.Title = l.Title
 		existing.Metadata = l.Metadata
 		existing.URL = l.URL
-		return nil
+		// Mirrors real Postgres: id/created_at are never touched by the
+		// update branch — reflect the row's actual values back into l, same
+		// contract as VCSLinkRepo.Upsert (#b73171fa).
+		l.ID = existing.ID
+		l.CreatedAt = existing.CreatedAt
+		return false, nil
 	}
 	r.links[l.ID] = l
 	r.upsertKey[key] = l.ID
-	return nil
+	return true, nil
 }
 
 func (r *fakeVCSLinkRepo) ListByExternalID(_ context.Context, p domain.VCSProvider, lt domain.VCSLinkType, eid string) ([]domain.VCSLink, error) {
@@ -549,7 +554,7 @@ func TestHandlePR_MultiPR_PartialMerge_NoTransition(t *testing.T) {
 	// Pre-populate a second OPEN PR linked to the same task so the merge of
 	// PR #500 triggers "awaiting other PRs" rather than a transition.
 	pendingLinkID := uuid.New()
-	err := h.repo.Upsert(context.Background(), &domain.VCSLink{
+	_, err := h.repo.Upsert(context.Background(), &domain.VCSLink{
 		ID:         pendingLinkID,
 		TaskID:     task.ID,
 		Provider:   domain.VCSProviderGitHub,
@@ -579,7 +584,7 @@ func TestHandlePR_MultiPR_AllMerged_TransitionsOnLast(t *testing.T) {
 	task := h.makeTask(t, domain.StatusCategoryInProgress)
 
 	// Pre-populate an already-merged PR #600 so the merge of #601 closes the set.
-	err := h.repo.Upsert(context.Background(), &domain.VCSLink{
+	_, err := h.repo.Upsert(context.Background(), &domain.VCSLink{
 		ID:         uuid.New(),
 		TaskID:     task.ID,
 		Provider:   domain.VCSProviderGitHub,
@@ -631,7 +636,7 @@ func TestHandlePR_NoMeshRef_FallsBackToExternalID(t *testing.T) {
 
 	// Pre-populate an open link for PR #800 — simulates a prior delivery (e.g.
 	// "opened" event that ran when the PR title still had the MESH ref).
-	err := h.repo.Upsert(context.Background(), &domain.VCSLink{
+	_, err := h.repo.Upsert(context.Background(), &domain.VCSLink{
 		ID:         uuid.New(),
 		TaskID:     task.ID,
 		Provider:   domain.VCSProviderGitHub,
@@ -702,7 +707,7 @@ func TestVCSLinkService_Create_CanonicalisesLinkType(t *testing.T) {
 			h := newHarness(t)
 			task := h.makeTask(t, domain.StatusCategoryInProgress)
 
-			link, err := h.svc.Create(context.Background(), domain.CreateVCSLinkInput{
+			link, _, err := h.svc.Create(context.Background(), domain.CreateVCSLinkInput{
 				TaskID:     task.ID,
 				LinkType:   domain.VCSLinkType(given),
 				ExternalID: "42",
@@ -725,7 +730,7 @@ func TestVCSLinkService_Create_LeavesUnknownLinkTypeAlone(t *testing.T) {
 	h := newHarness(t)
 	task := h.makeTask(t, domain.StatusCategoryInProgress)
 
-	link, err := h.svc.Create(context.Background(), domain.CreateVCSLinkInput{
+	link, _, err := h.svc.Create(context.Background(), domain.CreateVCSLinkInput{
 		TaskID:     task.ID,
 		LinkType:   domain.VCSLinkType("tag"),
 		ExternalID: "v1.2.3",
@@ -753,7 +758,7 @@ func TestVCSLinkService_Create_DefaultsEmptyStatusToOpenForPRLink(t *testing.T) 
 	h := newHarness(t)
 	task := h.makeTask(t, domain.StatusCategoryInProgress)
 
-	link, err := h.svc.Create(context.Background(), domain.CreateVCSLinkInput{
+	link, _, err := h.svc.Create(context.Background(), domain.CreateVCSLinkInput{
 		TaskID:     task.ID,
 		LinkType:   domain.VCSLinkTypePR,
 		ExternalID: "42",
@@ -775,7 +780,7 @@ func TestVCSLinkService_Create_DoesNotDefaultStatusForNonPRLinkTypes(t *testing.
 	h := newHarness(t)
 	task := h.makeTask(t, domain.StatusCategoryInProgress)
 
-	link, err := h.svc.Create(context.Background(), domain.CreateVCSLinkInput{
+	link, _, err := h.svc.Create(context.Background(), domain.CreateVCSLinkInput{
 		TaskID:     task.ID,
 		LinkType:   domain.VCSLinkTypeCommit,
 		ExternalID: "deadbeef",
@@ -792,7 +797,7 @@ func TestVCSLinkService_Create_ExplicitMergedStatusIsStored(t *testing.T) {
 	h := newHarness(t)
 	task := h.makeTask(t, domain.StatusCategoryReview)
 
-	link, err := h.svc.Create(context.Background(), domain.CreateVCSLinkInput{
+	link, _, err := h.svc.Create(context.Background(), domain.CreateVCSLinkInput{
 		TaskID:     task.ID,
 		LinkType:   domain.VCSLinkTypePR,
 		ExternalID: "40",
@@ -818,7 +823,7 @@ func TestVCSLinkService_Create_ExplicitStatusUpsertsOnExistingLink(t *testing.T)
 
 	// First call: no status known yet (mirrors the historical add_vcs_link
 	// behavior before this fix) — lands as "open".
-	first, err := h.svc.Create(context.Background(), domain.CreateVCSLinkInput{
+	first, created, err := h.svc.Create(context.Background(), domain.CreateVCSLinkInput{
 		TaskID:     task.ID,
 		LinkType:   domain.VCSLinkTypePR,
 		ExternalID: "40",
@@ -826,10 +831,11 @@ func TestVCSLinkService_Create_ExplicitStatusUpsertsOnExistingLink(t *testing.T)
 	})
 	require.NoError(t, err)
 	require.Equal(t, domain.VCSLinkStatusOpen, first.Status)
+	require.True(t, created, "the first call for a new (task,provider,link_type,external_id) must insert")
 
 	// Second call: the caller now knows it's merged and re-links with an
 	// explicit status. Must not error, and must not create a second row.
-	_, err = h.svc.Create(context.Background(), domain.CreateVCSLinkInput{
+	second, created, err := h.svc.Create(context.Background(), domain.CreateVCSLinkInput{
 		TaskID:     task.ID,
 		LinkType:   domain.VCSLinkTypePR,
 		ExternalID: "40",
@@ -837,6 +843,20 @@ func TestVCSLinkService_Create_ExplicitStatusUpsertsOnExistingLink(t *testing.T)
 		Status:     domain.VCSLinkStatusMerged,
 	})
 	require.NoError(t, err, "re-linking with an explicit status must succeed, not fail on the unique index")
+
+	// The core regression (#b73171fa): the upsert branch used to echo back a
+	// freshly-generated id/created_at instead of the row it actually updated,
+	// making a correctly-applied update look like a newly created duplicate.
+	// Equality, not mere presence — a vacuous "field exists" assert would pass
+	// on the broken code too.
+	assert.False(t, created, "an update onto an existing link must report created=false")
+	assert.Equal(t, first.ID, second.ID, "the upsert response must carry the EXISTING row's id, not a freshly generated one")
+	assert.Equal(t, first.CreatedAt, second.CreatedAt, "the upsert response must carry the EXISTING row's created_at, not time.Now()")
+
+	stored, err := h.repo.GetByID(context.Background(), second.ID)
+	require.NoError(t, err)
+	assert.Equal(t, first.ID, stored.ID, "the response id must match what a follow-up GET actually returns")
+	assert.Equal(t, first.CreatedAt, stored.CreatedAt)
 
 	links, err := h.repo.ListByTask(context.Background(), task.ID)
 	require.NoError(t, err)
@@ -857,7 +877,7 @@ func TestVCSLinkService_Create_ImplicitStatusNeverCallsUpsert(t *testing.T) {
 	h := newHarness(t)
 	task := h.makeTask(t, domain.StatusCategoryReview)
 
-	merged, err := h.svc.Create(context.Background(), domain.CreateVCSLinkInput{
+	merged, _, err := h.svc.Create(context.Background(), domain.CreateVCSLinkInput{
 		TaskID:     task.ID,
 		LinkType:   domain.VCSLinkTypePR,
 		ExternalID: "40",
@@ -869,7 +889,7 @@ func TestVCSLinkService_Create_ImplicitStatusNeverCallsUpsert(t *testing.T) {
 
 	// Same external_id, no status — the exact shape of an accidental
 	// duplicate add_vcs_link call.
-	_, err = h.svc.Create(context.Background(), domain.CreateVCSLinkInput{
+	_, _, err = h.svc.Create(context.Background(), domain.CreateVCSLinkInput{
 		TaskID:     task.ID,
 		LinkType:   domain.VCSLinkTypePR,
 		ExternalID: "40",
