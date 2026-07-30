@@ -32,3 +32,33 @@ jobs:
           format: table
           cache: 'true'
           trivyignores: .trivyignore
+
+      # A suppression that matches nothing does not read as stale — it reads as
+      # clean, and it stays armed for the day the finding comes back. The steps
+      # below only run when .trivyignore actually lists something, so the common
+      # (empty) case costs nothing. See scripts/check-trivyignore-stale.sh.
+      - name: Count .trivyignore suppressions
+        id: suppressions
+        run: |
+          n=$(awk '{ sub(/#.*/, "") } NF { print $1 }' .trivyignore 2>/dev/null | wc -l | tr -d ' ')
+          echo "count=$n" >>"$GITHUB_OUTPUT"
+          echo ".trivyignore lists $n suppression(s)"
+
+      # Deliberately unfiltered: no severity, no ignore-unfixed, no ignorefile.
+      # "Absent from this report" must mean "not in the tree", not "filtered out".
+      - name: Trivy full inventory (for the stale-suppression check)
+        if: steps.suppressions.outputs.count != '0'
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln
+          exit-code: '0'
+          ignore-unfixed: false
+          format: json
+          output: trivy-all.json
+          cache: 'true'
+
+      - name: Fail on stale .trivyignore entries
+        if: steps.suppressions.outputs.count != '0'
+        run: ./scripts/check-trivyignore-stale.sh .trivyignore trivy-all.json
