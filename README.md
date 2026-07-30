@@ -92,7 +92,7 @@ cp .env.prod.example .env
 # two lines per key — Compose reads the last one, so editing the empty one at
 # the top later would silently do nothing.
 for v in POSTGRES_PASSWORD REDIS_PASSWORD JWT_SECRET MINIO_SECRET_KEY \
-         MESH_INTEGRATION_ENCRYPTION_KEY; do
+         GRAFANA_PASSWORD MESH_INTEGRATION_ENCRYPTION_KEY; do
   s=$(openssl rand -base64 32)
   sed "s|^$v=.*|$v=$s|" .env > .env.tmp && mv .env.tmp .env
 done
