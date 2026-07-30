@@ -651,8 +651,8 @@ func AgentIsInWorkspace(ctx context.Context, db *sqlx.DB, wsID, agentID uuid.UUI
 //     fake id becomes a tell.
 //  3. The path's ONLY scoped parameter is one WorkspaceRLS could not resolve,
 //     and that parameter is backed by a real existence query (task_id,
-//     artifact_id — see notFoundResource on workspaceParamResolver): answer
-//     404. There is nothing else in the path to disagree with, so "this task
+//     artifact_id — see notFoundResource on workspaceParamResolver): answer 404.
+//     There is nothing else in the path to disagree with, so "this task
 //     does not exist" is the honest answer, and it costs nothing an attacker
 //     doesn't already have — they supplied the id. Soft-deleted and never-
 //     existed are deliberately the same answer; the deleted_at filter that
