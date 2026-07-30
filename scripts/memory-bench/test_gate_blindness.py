@@ -1489,6 +1489,18 @@ if argv[:2] == ["issue", "comment"]:
 
 if argv[:2] == ["issue", "create"]:
     record("create")
+    # WHICH labels were asked for, recorded separately so the existing
+    # `assertIn("create", calls)` assertions keep matching. A create-COUNT
+    # cannot see this defect: the issue got created either way, once, and the
+    # step exited 0 for all 14 episodes while the labels never landed.
+    labels = argv[argv.index("--label") + 1] if "--label" in argv else ""
+    record("create-labels:" + labels)
+    # The repo not having the labels is not hypothetical — it was the steady
+    # state from #333 to #477. `gh` exits nonzero and explains on stderr, and
+    # that sentence is precisely what `2>/dev/null` used to eat.
+    if labels and os.environ.get("STUB_LABEL_FAILS"):
+        sys.stderr.write("could not add label: '%s' not found\\n" % labels.split(",")[0])
+        sys.exit(1)
     sys.exit(0)
 
 record("UNEXPECTED:" + " ".join(argv))
@@ -1547,11 +1559,14 @@ class _AlertHarness(unittest.TestCase):
     def run_script(
         self, *, arm: dict, kind: str = "version-mismatch", comments: list[str],
         body: str, mode: str = "alert", script: str | None = None,
-        open_title: str | None = None,
+        open_title: str | None = None, label_fails: bool = False,
     ):
         """Returns (stdout, calls) — `calls` is what the stub `gh` was asked to do,
         so assertions land on the branch TAKEN, never on a count alone (a count is
-        also 0 when the script never ran)."""
+        also 0 when the script never ran).
+
+        `label_fails` makes the stub reject `--label`, which is what the real repo
+        did on every fire from #333 to #477."""
         script = _action_alert_script() if script is None else script
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)
@@ -1591,6 +1606,8 @@ class _AlertHarness(unittest.TestCase):
             )
             if open_title is not None:
                 env["STUB_OPEN_TITLE"] = open_title
+            if label_fails:
+                env["STUB_LABEL_FAILS"] = "1"
             done = subprocess.run(
                 ["bash", str(step)], env=env, capture_output=True, text=True, timeout=60,
             )
@@ -1727,6 +1744,156 @@ class TestAcknowledgingAnAlertDoesNotReArmIt(_AlertHarness):
                     f"#397's own sequence. The harness is not driving the guard.\n{out}",
                 )
                 self.assertTrue([c for c in calls if c.startswith("comment:")], label)
+
+
+class TestTheTrackingIssueIsLabelled(_AlertHarness):
+    """Way 10 — the episode's only title-independent handle, never once applied.
+
+    `resolve` finds an episode by EXACT title. That makes a retitle strand it
+    permanently, and the labels are the second, title-independent way to
+    enumerate open episodes (`gh issue list --label memory`). The step asked for
+    them like this:
+
+        gh issue create ... --label memory,ci 2>/dev/null || gh issue create ...
+
+    Neither `memory` nor `ci` existed in entire-vc/evc-mesh. So the first call
+    failed on EVERY fire, `2>/dev/null` ate the reason, the `||` opened the issue
+    unlabelled, and the step printed "Opened tracking issue" and exited 0. All 15
+    episodes ever opened (#333 #344 #352 #355 #362 #367 #392 #397 #398 #411 #412
+    #449 #458 #464 #477) carried no label from this action, and
+    `gh issue list --label ci` returned empty while two of them were open.
+
+    Fifteen, not the fourteen the card listed: enumerating by AUTHOR rather than
+    by remembered issue number turned up #367, a second advisory-arm episode. The
+    five oldest (#333 #344 #352 #355 #362) do carry `mesh-tracked`, but that was
+    applied in error by `oss-issue-steward.py` mistaking a bot issue for
+    community mail (fixed separately in #5658de4e) — not by this action, and not a
+    handle anything looks episodes up by.
+
+    The generalisation, which is why this is a test and not a one-line repair:
+    **`X --extra 2>/dev/null || X` is a permanent silent-degradation path, not a
+    rare safety net.** A fallback taken 100% of the time is indistinguishable
+    from the feature working, and suppressing stderr is the thing that makes it
+    so. Nothing here can be caught by an exit code or a create-count — both were
+    correct throughout — so these tests assert on the ARGV the stub received and
+    on the annotation the step emits.
+
+    The labels themselves are repo state and this suite is offline, so what is
+    pinned here is the CLAUSE and its failure behaviour. That the two labels
+    currently exist was verified out of band (`gh label list`), and if they are
+    ever deleted the `::warning::` below is what says so.
+    """
+
+    def test_the_create_asks_for_both_labels(self):
+        for label, arm in self.arms().items():
+            with self.subTest(arm=label):
+                _, calls = self.run_script(
+                    arm=arm, comments=[], body="", open_title="no-such-open-issue",
+                )
+                asked = [c for c in calls if c.startswith("create-labels:")]
+                self.assertEqual(
+                    ["create-labels:memory,ci"], asked,
+                    f"{label}: the tracking issue was opened without asking for "
+                    f"labels, so an episode is findable only by exact title and a "
+                    f"retitle strands it. calls={calls}",
+                )
+                self.assertEqual(
+                    1, len([c for c in calls if c == "create"]),
+                    f"{label}: the labelled create did not succeed — the bare "
+                    f"fallback ran even though the stub accepted the labels. "
+                    f"calls={calls}",
+                )
+
+    def test_a_label_failure_still_opens_the_episode_and_says_so(self):
+        """The residual failure the `||` is still there to absorb, stated and executed.
+
+        If someone deletes or renames the labels, or the token loses the scope to
+        apply them, an UNLABELLED episode still beats NO episode — going blind
+        about going blind is the failure this whole action exists to prevent. So
+        the retry stays. What must NOT stay is its silence.
+        """
+        for label, arm in self.arms().items():
+            with self.subTest(arm=label):
+                out, calls = self.run_script(
+                    arm=arm, comments=[], body="", open_title="no-such-open-issue",
+                    label_fails=True,
+                )
+                self.assertEqual(
+                    ["create-labels:memory,ci", "create-labels:"],
+                    [c for c in calls if c.startswith("create-labels:")],
+                    f"{label}: expected a labelled attempt followed by a BARE "
+                    f"retry. calls={calls}",
+                )
+                self.assertEqual(
+                    2, len([c for c in calls if c == "create"]),
+                    f"{label}: the labelled create was rejected and NO bare retry "
+                    f"followed, so a real blindness episode would go untracked "
+                    f"entirely. calls={calls}",
+                )
+                self.assertIn(
+                    "::warning::", out,
+                    f"{label}: the label failure was swallowed. This is the exact "
+                    f"defect — 14 episodes' worth — and the whole point of keeping "
+                    f"the fallback is that it now announces itself.\n{out}",
+                )
+                self.assertIn(
+                    "not found", out,
+                    f"{label}: the warning does not carry gh's own reason, so a "
+                    f"reader still cannot tell WHY labelling failed.\n{out}",
+                )
+                self.assertIn(
+                    "Opened tracking issue", out,
+                    f"{label}: the episode was not reported as opened.\n{out}",
+                )
+
+    def test_the_harness_reproduces_the_defect_on_the_old_clause(self):
+        """Positive control. Without it, both tests above could be passing because
+        the harness never drives the create branch at all.
+
+        Swap ONLY the label clause back to what shipped from #333 to #477 —
+        `--label memory,ci 2>/dev/null || <bare retry>` — leave every other line
+        alone, and re-run the same fixture with the labels rejected. It must open
+        the issue, print success, exit 0, and say NOTHING about the failure.
+        """
+        # Written against the DEDENTED script the harness executes, not against
+        # action.yml's own indentation — `_action_alert_script()` strips the
+        # block indent, so anchoring on the file's column would silently match
+        # nothing and this control would pass by finding no defect to reproduce.
+        old = (
+            'gh issue create --title "$TITLE" --body "$body" --label memory,ci '
+            '2>/dev/null \\\n    || gh issue create --title "$TITLE" --body "$body"'
+        )
+        script = _action_alert_script()
+        mutated, n = re.subn(
+            r'if out="\$\(gh issue create.*?\n  fi', old, script, flags=re.S,
+        )
+        self.assertEqual(
+            1, n,
+            f"could not find the fixed label clause to mutate, so this control "
+            f"proves nothing. Script:\n{script}",
+        )
+        self.assertNotEqual(script, mutated)
+        for label, arm in self.arms().items():
+            with self.subTest(arm=label):
+                out, calls = self.run_script(
+                    arm=arm, script=mutated, comments=[], body="",
+                    open_title="no-such-open-issue", label_fails=True,
+                )
+                self.assertEqual(
+                    2, len([c for c in calls if c == "create"]),
+                    f"{label}: the old clause did not take its fallback, so the "
+                    f"harness is not reproducing the defect. calls={calls}",
+                )
+                self.assertNotIn(
+                    "::warning::", out,
+                    f"{label}: the OLD clause warned. Then the fix is not what "
+                    f"these tests think it is.\n{out}",
+                )
+                self.assertIn(
+                    "Opened tracking issue", out,
+                    f"{label}: the old clause is the one that reported success "
+                    f"while dropping the labels — it must still do so here.\n{out}",
+                )
 
 
 class TestOneArmCannotSilenceOrCloseAnother(_AlertHarness):
