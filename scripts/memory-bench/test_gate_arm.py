@@ -560,5 +560,108 @@ class WorkflowRouting(unittest.TestCase):
             self.assertTrue(any(started.values()), f"{arm} starts no job at all")
 
 
+class TheRedProofIsWiredIn(unittest.TestCase):
+    """`prove_gate_can_go_red.py` is not discovered by test_gate_blindness's
+    self-check finder — it matches neither `test_*.py` nor `--selftest`, because
+    it takes a baseline path rather than testing itself. So the invocation has
+    no pin from that direction, and an undiscovered self-check that nothing
+    requires is the exact shape that left test_gate_dense_arm.py unwired while
+    the README credited it as a guard.
+
+    Pinned here on the invocation and its arguments, not on the filename
+    appearing somewhere in the job: naming the script in a comment, or running
+    it against the PROD baseline, would both satisfy a substring check while
+    proving nothing about the required arm.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.text = WORKFLOW.read_text()
+
+    def _required_job_block(self) -> str:
+        blocks = re.split(r"\n  (?=\S+:\n)", self.text)
+        return next(b for b in blocks
+                    if re.search(r"^    name: Memory recall gate\s*$", b, re.M))
+
+    def test_the_required_job_proves_the_gate_can_go_red(self):
+        block = self._required_job_block()
+        # `(?:[^\n]*\\\n)*` walks any number of backslash continuations before
+        # the final line. Without it the match stops at the trailing ` \` and
+        # the argument assertions below inspect a line that has no arguments on
+        # it yet — which is how the first draft of this test failed: it reported
+        # the wired-in invocation as missing its own baseline path.
+        call = re.search(
+            r"python scripts/memory-bench/prove_gate_can_go_red\.py"
+            r"(?:[^\n]*\\\n)*[^\n]*", block)
+        self.assertIsNotNone(
+            call,
+            "the required job never runs prove_gate_can_go_red.py, so nothing "
+            "checks that the gate is still CAPABLE of a REGRESSION verdict. A "
+            "widened tolerance or a baseline captured from a degraded run both "
+            "leave a permanently-green required check — the blind state of "
+            "#f70347b5 without the no-baseline line that made it noticeable.",
+        )
+        invocation = call.group(0)
+        self.assertIn(
+            "baseline_retrieval_branch.json", invocation,
+            "the red-proof must run against the BRANCH baseline — the file this "
+            "required arm actually gates on.",
+        )
+        self.assertRegex(
+            invocation, r"\bbranch\b\s*$",
+            "the red-proof must be told to expect arm 'branch'; without the "
+            "expected-arm argument it would accept a prod baseline, which the "
+            "real gate refuses as arm-mismatch.",
+        )
+
+    def test_the_red_proof_is_skipped_on_a_capture(self):
+        """The bootstrap deadlock, pinned.
+
+        On a capture the baseline file is about to be rewritten, and on the
+        FIRST capture — the dispatch this card exists to make possible — it does
+        not exist at all. prove_gate_can_go_red.py exits 2 on a missing file by
+        design, so an ungated step fails the run before the re-snap can produce
+        the very baseline it wanted to read. The gate would then be permanently
+        un-bootstrappable: `no-baseline` for ever, which is this card verbatim.
+
+        Asserted on the condition, not on the presence of any `if:` — a step
+        gated on something unrelated would satisfy a truthiness check while
+        leaving the deadlock in place.
+        """
+        block = self._required_job_block()
+        step = re.search(
+            r"- name: The gate must still be able to go RED\n(.*?)(?=\n      - name:|\Z)",
+            block, re.S)
+        self.assertIsNotNone(step, "the red-proof step is not in the required job")
+        cond = re.search(r"^\s*if:\s*(.+)$", step.group(1), re.M)
+        self.assertIsNotNone(
+            cond,
+            "the red-proof step has no `if:`, so it runs on captures too — "
+            "including the bootstrap capture, where there is no baseline to "
+            "read and the step's own exit 2 kills the run that would have "
+            "created it.",
+        )
+        self.assertIn(
+            "steps.mode.outputs.capture", cond.group(1),
+            "the red-proof must be gated on the workflow's capture-vs-judge "
+            f"source of truth; found {cond.group(1)!r}",
+        )
+        self.assertIn(
+            "!=", cond.group(1),
+            "the gating must EXCLUDE captures (capture != 'true'); gated the "
+            "other way the proof runs only on the runs that cannot satisfy it.",
+        )
+
+    def test_the_block_finder_actually_found_the_required_job(self):
+        """Positive control. Were the split to return a block that does not
+        contain the self-check step, every assertion above would be searching
+        the wrong text — and the `assertIsNotNone` would fail for a reason that
+        has nothing to do with the wiring it claims to pin."""
+        block = self._required_job_block()
+        self.assertIn("Gate self-checks", block)
+        self.assertIn("test_gate_blindness.py", block)
+        self.assertNotIn("LongMemEval-S end-to-end", block)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -248,6 +248,40 @@ jobs:
           echo "capture=${{ (github.event_name != 'pull_request' && inputs.update_baseline && inputs.baseline_arm == 'retrieval-branch') && 'true' || 'false' }}" \
             >> "$GITHUB_OUTPUT"
 
+      # "The gate produced a verdict" and "the gate can still produce the RED
+      # verdict" are different claims, and only the second is the one that was
+      # broken while baseline_retrieval_branch.json did not exist (#f70347b5).
+      #
+      # Committing that file fixes today's symptom; nothing else would keep the
+      # property. A tolerance widened past every category's headroom, or a
+      # baseline re-snapped from a degraded run, both leave a required check
+      # that is green because it can no longer be anything else — which reads
+      # exactly like the blind state this card was filed about, minus the
+      # `no-baseline` line that made that one noticeable.
+      #
+      # Drives the pure decision functions against the committed baseline:
+      # identity must be OK, a drop past tolerance must name the category, and
+      # a drop INSIDE tolerance must stay OK — that last arm is what stops
+      # "REGRESSION" from merely meaning "differs from baseline at all".
+      #
+      # Intolerant of a missing file on the judging path: exit 2 (no baseline /
+      # no sample_sizes / arm mismatch) fails the step, because each of those is
+      # the gate going blind again by a different route.
+      #
+      # Skipped on a capture, and that is not squeamishness about a red step:
+      # a capture is about to REWRITE this file, so proving properties of the
+      # outgoing one rules on nothing — and on the bootstrap capture (the one
+      # that creates the file in the first place, i.e. exactly the dispatch this
+      # card needed) there is no file to read at all, so an ungated step would
+      # fail the run before it could ever produce the baseline. Gated on
+      # steps.mode — the workflow's single source of truth for capture-vs-judge
+      # — rather than on a second copy of that expression.
+      - name: The gate must still be able to go RED
+        if: steps.mode.outputs.capture != 'true'
+        run: |
+          python scripts/memory-bench/prove_gate_can_go_red.py \
+            scripts/memory-bench/baseline_retrieval_branch.json branch
+
       - name: Does this change touch memory?
         id: scope
         run: |
