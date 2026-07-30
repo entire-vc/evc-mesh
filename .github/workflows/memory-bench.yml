@@ -478,11 +478,41 @@ jobs:
           BENCH_RUN_NONCE: ${{ github.run_id }}-${{ github.run_attempt }}-c
         run: |
           cd scripts/memory-bench
+          # PIPESTATUS, not the pipeline's status. There is no `shell:` key and no
+          # `defaults:` block in this workflow, so every `run:` here gets GitHub's
+          # default `bash -e {0}` — WITHOUT `pipefail`. Piping through `tee` then
+          # yields tee's exit code, and `capture_blockers`' whole point is to
+          # refuse BEFORE writing the file: a refused capture would leave this
+          # step green, write "re-snapped" into the summary, and upload an
+          # artifact containing only resnap.log (`if-no-files-found: error` fires
+          # on NO files, and the log is a file). The gate arm, both dense-arm
+          # controls, and the PROD arm's own re-snap all already do this — 11 of
+          # the 13 tee'd measurement steps in this file. This one was the sole
+          # omission, dropped when #394 copied the prod arm to make the branch arm.
+          set +e
           python run_ci.py --retrieval-only --arm branch --update-baseline \
             --repeat "${{ inputs.repeat || '3' }}" 2>&1 | tee resnap.log
-          echo "### Branch recall baseline re-snapped" >> "$GITHUB_STEP_SUMMARY"
-          echo '`baseline_retrieval_branch.json` is uploaded as an artifact — commit it by hand.' \
-            >> "$GITHUB_STEP_SUMMARY"
+          rc=${PIPESTATUS[0]}
+          set -e
+
+          {
+            if [ "$rc" = "0" ]; then
+              echo "### Branch recall baseline re-snapped"
+              echo
+              echo '`baseline_retrieval_branch.json` is uploaded as an artifact — commit it by hand.'
+            else
+              echo "### ✗ Branch baseline NOT re-snapped (exit $rc)"
+              echo
+              echo "No baseline was written, so there is nothing to commit — and the"
+              echo "upload step is skipped rather than shipping a log that looks like a"
+              echo "capture. Fix the cause and re-dispatch; do not hand-edit a baseline."
+              echo
+              echo '```'
+              tail -40 resnap.log
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit $rc
 
       # Captured HERE and committed by hand, never generated on a laptop: a
       # baseline snapped against a different embedder or a different DB is not

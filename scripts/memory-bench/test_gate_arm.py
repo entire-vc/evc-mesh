@@ -663,5 +663,81 @@ class TheRedProofIsWiredIn(unittest.TestCase):
         self.assertNotIn("LongMemEval-S end-to-end", block)
 
 
+# ---------------------------------------------------------------------------
+# Every measurement piped through `tee` must read PIPESTATUS[0].
+#
+# This workflow has no `shell:` key and no `defaults:` block, so each `run:`
+# gets GitHub's default `bash -e {0}` — `-e` but NOT `pipefail`. `cmd | tee f`
+# therefore exits with tee's status, and a measurement that exited 1 or 2 reads
+# as success.
+#
+# It is not a hypothetical omission and it was not global: 11 of the 13 tee'd
+# steps in this file already wrap the call in `set +e` / `rc=${PIPESTATUS[0]}` /
+# `set -e`, including the PROD arm's re-snap. The BRANCH arm's re-snap was the
+# single exception — dropped when #394 copied the prod arm to create the branch
+# arm — which meant a `capture-refused` (the guard that exists precisely so a
+# degraded run cannot become a required check's floor) left the step green, the
+# summary claiming "re-snapped", and an artifact holding only resnap.log.
+#
+# Pinned as an invariant over the whole file rather than as one assertion about
+# line 482, so the next copied-and-adapted step inherits the check.
+class EveryTeedMeasurementReadsPipestatus(unittest.TestCase):
+    # `echo ... | tee` has no exit code worth protecting, and appending a
+    # rendered block to the step summary is not a measurement.
+    _NOT_MEASUREMENTS = ("GITHUB_STEP_SUMMARY", "echo ")
+
+    def _teed_measurements(self):
+        lines = WORKFLOW.read_text().splitlines()
+        out = []
+        for i, line in enumerate(lines):
+            if not re.search(r"\|\s*tee\b", line):
+                continue
+            # The pipeline may be split over `\`-continuations, so the command
+            # being piped can live on an earlier line. Walk back to the start of
+            # the logical command before deciding whether this is a measurement
+            # — `echo "..." \` + `| tee -a log` is one echo, not a measurement,
+            # and judging it on the `| tee` line alone flags it every time.
+            start = i
+            while start > 0 and lines[start - 1].rstrip().endswith("\\"):
+                start -= 1
+            logical = " ".join(l.strip().rstrip("\\") for l in lines[start : i + 1])
+            if any(tok in logical for tok in self._NOT_MEASUREMENTS):
+                continue
+            out.append((i + 1, logical.strip(), "\n".join(lines[i : i + 4])))
+        return out
+
+    def test_the_workflow_really_has_no_pipefail_default(self):
+        """The premise. If a `defaults:`/`shell:` block ever adds pipefail this
+        whole class becomes unnecessary — it should then fail loudly and be
+        deleted deliberately, not keep passing for a reason that no longer
+        holds."""
+        text = WORKFLOW.read_text()
+        self.assertNotIn("\ndefaults:", text)
+        self.assertNotRegex(text, r"\n\s+shell:\s")
+
+    def test_every_teed_measurement_reads_pipestatus(self):
+        found = self._teed_measurements()
+        self.assertGreaterEqual(len(found), 10, "tee-detection regex stopped matching")
+        missing = [
+            f"L{ln}: {src}" for ln, src, window in found if "PIPESTATUS" not in window
+        ]
+        self.assertEqual(
+            [], missing,
+            "these piped measurements would report tee's exit code, not their "
+            "own:\n  " + "\n  ".join(missing),
+        )
+
+    def test_the_branch_resnap_specifically_guards_its_exit_code(self):
+        """The instance this class was written for. Named separately so a
+        regression points at the branch capture rather than at 'some step'."""
+        text = WORKFLOW.read_text()
+        step = text.split("- name: Re-snap the branch recall baseline", 1)
+        self.assertEqual(len(step), 2, "the branch re-snap step was renamed")
+        body = step[1].split("- name:", 1)[0]
+        self.assertIn("--arm branch --update-baseline", body)
+        self.assertIn("rc=${PIPESTATUS[0]}", body)
+        self.assertIn("exit $rc", body)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
