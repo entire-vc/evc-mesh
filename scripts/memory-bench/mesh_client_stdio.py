@@ -48,7 +48,23 @@ INIT_TIMEOUT = 60.0
 # Sequential stores: the mesh-mcp stdio server closes under high concurrency.
 STORE_CONCURRENCY = 1
 
-RECALL_CANDIDATE_LIMIT = 50
+# The measurement window: how many rows one `recall` may return, and therefore
+# the CEILING on `rows_returned`. It has to clear the LARGEST haystack in the
+# dataset, or those questions are unreachable by construction — no filter and no
+# ranking change can make a 54-session fixture fit in a 50-row page, and the
+# shortfall reads in the artifact exactly like a retrieval miss.
+#
+# At 50 that ceiling was real and measured: run 30525387007 (main @ b94b90a)
+# returned EXACTLY 50 rows for all four 52/52/53/54-session questions and could
+# not have returned more, so 100% was unreachable for them by construction.
+#
+# The window is NOT this constant when graph boost is on — the graph arm reserves
+# `graphBoostReserve(limit)` = limit/4 of the page for neighbours, so the base
+# retrieval window is limit*3/4. That fraction lives in evc-mesh-mcp, NOT here;
+# `test_bench_window.py` mirrors it and says so, because a mirror is the most this
+# repo can check. At 80 the effective window is 60, clearing max(haystack)=54 with
+# 6 rows of headroom.
+RECALL_CANDIDATE_LIMIT = 80
 RECALL_ORDER_BY = "relevance:desc"
 
 # ---------------------------------------------------------------------------
@@ -313,6 +329,32 @@ def _log_store_id(memory_id: str, qid: str, key: str) -> None:
 
 
 def _mesh_env() -> dict[str, str]:
+    """Environment for the mesh-mcp child.
+
+    `RECALL_GRAPH_ENABLED` is forwarded, and the bench workflow sets it to 'true'
+    — graph boost is ON, which makes the retrieval window `limit * 3/4`, not
+    `limit`. Read `rows_returned` knowing that.
+
+    THE HISTORY IS WORTH KEEPING, because it is the reason this docstring exists.
+    Until #467 landed (2026-07-30) a graph neighbour arrived as a
+    `RecallGraphResult` carrying no `tags` field at all, so every neighbour failed
+    this client's per-question isolation filter (`bench_tag in it.tags`) whatever
+    the traversal found. The reserve was therefore PURE SUBTRACTION, and it
+    measured exactly that way: `rows_returned` was 38 on all 24 questions — 50
+    minus a full 12-slot reserve, 0 of 12 reserved slots ever yielding a scorable
+    row. That is what made this dataset's four longest questions unreachable.
+
+    #467 gave `RecallGraphResult` key/scope/tags, and the very next run on main
+    (30525387007) showed the cap gone: `rows_returned` spread over [41..50]
+    instead of sitting at 38. So disabling the boost here — the first fix
+    attempted for #1e4bd289 — became the wrong change while it was in review: it
+    would have been reverting a defect that no longer existed, and it also
+    bundled a second, unrelated variable into one measurement.
+
+    What remains, and is the whole of this fix, is that the window must clear the
+    longest haystack. `test_bench_window.py` pins the EFFECTIVE window (this
+    constant minus the mirrored reserve fraction) against the real dataset.
+    """
     env = dict(os.environ)
     for key in ("MESH_API_URL", "MESH_AGENT_KEY", "RECALL_GRAPH_ENABLED"):
         val = os.environ.get(key)

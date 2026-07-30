@@ -326,6 +326,32 @@ Two things worth knowing before you read these numbers:
   Read `gold_rank` together with `rows_returned` vs `haystack_size`: when
   `rows_returned < haystack_size` the pool truncated, and that — not the index
   — is the first thing to suspect.
+* **Check the CEILING before you call it truncation.** `rows_returned` cannot
+  exceed the page the server may return, so a shortfall has a second, entirely
+  structural cause that looks identical in the artifact. The effective window is
+  `RECALL_CANDIDATE_LIMIT` minus `graphBoostReserve(limit)` = limit/4 whenever
+  graph boost is on, i.e. **limit\*3/4, not limit**. Measured: at limit 50 the
+  window was 38 and `rows_returned` was pinned at exactly **38 on all 24
+  questions** — and the ratio 97.1% → 79.3% was caused by a *correct* fix
+  (#384), not a regression. So: **`rows_returned` constant across differing
+  haystacks means you are reading the window, not the pool.** Varying *with* the
+  haystack is the healthy shape; varying with the unrelated fleet corpus is the
+  real leak (#2c087b2a). `test_bench_window.py` pins the effective window against
+  the real dataset.
+* **A few rows short is normal, and it is not the index.** `rows_returned` is
+  `|dense ∪ sparse|`, and the dense arm cannot see a memory until its embedding
+  lands: `Remember()` commits the row and then does `go s.embedAndStore(...)`,
+  while `vectorCandidateIDs` requires `embedding IS NOT NULL OR EXISTS(chunk)`.
+  This harness stores the haystack and searches with **no settle delay**, so the
+  newest rows are still in flight. Measured over two runs (30525387007 limit 50,
+  30522592913 limit 80): `dense_rows < haystack_size` on **24/24 both times**,
+  deficit **mean 6.4, stdev 1.6, range 3–10**, uncorrelated with haystack size
+  (r = −0.36 / −0.09) and **unchanged by the limit** (6.46 vs 6.38) — the
+  signature of a fixed in-flight tail, not of a window cut. Zero embed errors in
+  either run's `api.log` during the measurement, so nothing failed; it had not
+  finished. Consequence: `rows_returned == haystack_size` on all 24 is **not
+  reachable by any window setting**, and an AC that demands it is unattainable
+  for reasons that have nothing to do with retrieval quality.
 
 Nothing here feeds scoring, thresholds or the exit code. The artifact is
 written *before* the verdict branches, so it still exists on an INCONCLUSIVE or
