@@ -987,6 +987,12 @@ func (m *MockCommentRepository) ListByTask(_ context.Context, taskID uuid.UUID, 
 			all = append(all, *c)
 		}
 	}
+	// Real CommentRepo.ListByTask hardcodes ORDER BY created_at ASC regardless of
+	// pg.SortDir (see comment_repo.go) — ranging over m.items would return Go's
+	// randomized map iteration order instead, which is a different bug for every
+	// caller that (correctly, per the real repo) relies on chronological order,
+	// not just an inconvenience for one test. Sort here so the mock matches prod.
+	sort.Slice(all, func(i, j int) bool { return all[i].CreatedAt.Before(all[j].CreatedAt) })
 	return pagination.NewPage(all, len(all), pg), nil
 }
 

@@ -1020,6 +1020,11 @@ func (env triageTestEnv) seedAgentBlockingComment(taskID, authorID uuid.UUID) {
 		AuthorID:   authorID,
 		AuthorType: domain.ActorTypeAgent,
 		Body:       "❓ **Blocking @pavel**: нужен выбор варианта A/Б",
+		// Explicit, in the past relative to frozenTime (what the withdrawal
+		// comment created via svc.Create receives): releaseHumanGateOnWithdrawal
+		// scans in real chronological order, so tests with more than one
+		// marker comment need genuine, distinct timestamps, not insertion order.
+		CreatedAt: frozenTime.Add(-2 * time.Hour),
 	}
 }
 
@@ -1108,8 +1113,8 @@ func TestReleaseHumanGateOnWithdrawal_ReaffirmedByOtherAgent_NoOp(t *testing.T) 
 	taskID := env.seedGatedTask(env.inProgressID)
 	agentA := uuid.New()
 	agentB := uuid.New()
-	env.seedAgentBlockingComment(taskID, agentA)
-	// B reaffirms — a second, later, non-negated marker.
+	env.seedAgentBlockingComment(taskID, agentA) // CreatedAt: frozenTime - 2h
+	// B reaffirms — a second, later (frozenTime - 1h), non-negated marker.
 	cid := uuid.New()
 	env.commentRepo.items[cid] = &domain.Comment{
 		ID:         cid,
@@ -1117,6 +1122,7 @@ func TestReleaseHumanGateOnWithdrawal_ReaffirmedByOtherAgent_NoOp(t *testing.T) 
 		AuthorID:   agentB,
 		AuthorType: domain.ActorTypeAgent,
 		Body:       "❓ **Blocking @pavel**: подтверждаю, вопрос всё ещё живой",
+		CreatedAt:  frozenTime.Add(-1 * time.Hour),
 	}
 
 	ctx := actorctx.WithActor(context.Background(), agentA, domain.ActorTypeAgent)
