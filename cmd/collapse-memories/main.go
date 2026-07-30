@@ -1,26 +1,43 @@
-// Command collapse-memories dedupes active scope=workspace rows in the
-// memories table by (workspace_id, key) and clears the stray project_id
-// that resolveProjectSlug used to stamp onto workspace-scope rows before
-// PR #444 (memory_service.go:481-487) — see task #4edf3fb5.
+// Command collapse-memories dedupes rows in the memories table by declared
+// scope-identity, and clears the stray project_id that resolveProjectSlug
+// used to stamp onto workspace-scope rows before PR #444
+// (memory_service.go:481-487) — see task #4edf3fb5.
 //
 // It is intentionally standalone: no dependency on internal/service or
 // internal/repository, so it can be built, reviewed and run independently
 // of the application code that produced the bug (task #4edf3fb5, subtask 4).
 //
-// For each (workspace_id, key) group with more than one active row:
-//   - winner = most recent by updated_at (tie-break: larger id)
+// Group predicate is `status <> 'superseded' AND archived = false` — the
+// same "current" definition GetByKey (memory_repo.go) and every read path
+// (recall/FTS/vector) use, NOT `status = 'active'`. Task #2c0154db/F2a found
+// that the original status='active' predicate missed every group where a
+// colliding row sat in status='review_needed': those rows are surfaced as
+// current by every read path but were invisible to this tool's original
+// dedup pass, so 12 keys kept handing recall multiple live-looking versions
+// of the same fact after the first collapse. Winner selection must use the
+// exact same predicate GetByKey uses for identity-lookup, or the two can
+// disagree about which row is "the" current one.
+//
+// Grouped by scope-identity, matching GetByKey's three branches exactly:
+//   - scope=workspace -> (workspace_id, key)
+//   - scope=project   -> (workspace_id, project_id, key)
+//   - scope=agent     -> (workspace_id, agent_id, key)
+//
+// For each group with more than one current row:
+//   - winner = most recent by updated_at (tie-break: larger id) — the same
+//     ORDER BY GetByKey now applies
 //   - losers -> status='superseded', superseded_by=<winner id>
 //   - winner.tags <- distinct union of tags across the whole group
 //
-// Separately, every active scope=workspace row that still has project_id
+// Separately, every current scope=workspace row that still has project_id
 // set (winners and never-duplicated rows alike) gets project_id set to
 // NULL. Hard DELETE is never issued — superseded rows stay queryable for
 // audit, matching the existing status/superseded_by columns (migration
 // 20260704080_memory_health_lifecycle.sql).
 //
-// Idempotent: a second run finds no groups with >1 active row (losers are
-// no longer status='active') and no active rows left with project_id set,
-// so it is a no-op. Safe to re-run after a partial failure.
+// Idempotent: a second run finds no groups with >1 current row (losers are
+// no longer status<>'superseded') and no current rows left with a stray
+// project_id, so it is a no-op. Safe to re-run after a partial failure.
 //
 // Usage:
 //
@@ -63,10 +80,31 @@ type memRow struct {
 }
 
 type group struct {
+	Scope       string // "workspace" | "project" | "agent"
 	WorkspaceID string
-	Key         string
+	// IdentityExtra is the project_id (scope=project) or agent_id
+	// (scope=agent) that, together with WorkspaceID+Key, makes up the full
+	// scope-identity tuple. Empty for scope=workspace.
+	IdentityExtra string
+	Key           string
 	// Rows is winner-first: sorted by updated_at DESC, id DESC by the query.
 	Rows []memRow
+}
+
+// scopeIdentityConfig describes how to load candidate rows for one scope's
+// identity grouping — the column that supplies IdentityExtra (empty for
+// workspace scope, which has none), and the WHERE clause selecting rows of
+// that scope.
+type scopeIdentityConfig struct {
+	scope        string
+	identityCol  string // "" for workspace (no extra identity column)
+	requireExtra bool   // true if identityCol must be NOT NULL to form a valid identity
+}
+
+var scopeConfigs = []scopeIdentityConfig{
+	{scope: "workspace", identityCol: ""},
+	{scope: "project", identityCol: "project_id", requireExtra: true},
+	{scope: "agent", identityCol: "agent_id", requireExtra: true},
 }
 
 func main() {
@@ -211,16 +249,46 @@ func getenv(key, def string) string {
 	return def
 }
 
+// currentPredicate is the single definition of "current" every read path
+// (recall/FTS/vector) and GetByKey's identity-lookup share. Keep this the
+// ONE place that literal lives — see task #2c0154db/F2a and the sibling
+// gap this exact drift caused (learning-status-cleanup-must-match-every-
+// status-predicate): a predicate typed out twice always ends up meaning two
+// different things eventually.
+const currentPredicate = "status <> 'superseded' AND archived = false"
+
 func loadDuplicateGroups(tx *sql.Tx, workspaceFilter string) ([]group, error) {
-	q := `SELECT id, workspace_id, key, tags, project_id, updated_at
+	var dupGroups []group
+	for _, cfg := range scopeConfigs {
+		groups, err := loadDuplicateGroupsForScope(tx, cfg, workspaceFilter)
+		if err != nil {
+			return nil, fmt.Errorf("scope=%s: %w", cfg.scope, err)
+		}
+		dupGroups = append(dupGroups, groups...)
+	}
+	return dupGroups, nil
+}
+
+func loadDuplicateGroupsForScope(tx *sql.Tx, cfg scopeIdentityConfig, workspaceFilter string) ([]group, error) {
+	extraSelect := "'' AS identity_extra"
+	extraOrder := ""
+	if cfg.identityCol != "" {
+		extraSelect = cfg.identityCol + "::text AS identity_extra"
+		extraOrder = "identity_extra, "
+	}
+
+	q := fmt.Sprintf(`SELECT id, workspace_id, %s, key, tags, project_id, updated_at
 		FROM memories
-		WHERE scope = 'workspace' AND status = 'active'`
-	var args []interface{}
+		WHERE scope = $1 AND %s`, extraSelect, currentPredicate)
+	args := []interface{}{cfg.scope}
+	if cfg.requireExtra {
+		q += fmt.Sprintf(" AND %s IS NOT NULL", cfg.identityCol)
+	}
 	if workspaceFilter != "" {
-		q += " AND workspace_id = $1"
+		q += fmt.Sprintf(" AND workspace_id = $%d", len(args)+1)
 		args = append(args, workspaceFilter)
 	}
-	q += " ORDER BY workspace_id, key, updated_at DESC, id DESC FOR UPDATE"
+	q += fmt.Sprintf(" ORDER BY workspace_id, %skey, updated_at DESC, id DESC FOR UPDATE", extraOrder)
 
 	rows, err := tx.Query(q, args...)
 	if err != nil {
@@ -232,18 +300,18 @@ func loadDuplicateGroups(tx *sql.Tx, workspaceFilter string) ([]group, error) {
 	var order []string
 	for rows.Next() {
 		var (
-			id, wsID, key string
-			tags          []string
-			projectID     sql.NullString
-			updatedAt     time.Time
+			id, wsID, extra, key string
+			tags                 []string
+			projectID            sql.NullString
+			updatedAt            time.Time
 		)
-		if err := rows.Scan(&id, &wsID, &key, pq.Array(&tags), &projectID, &updatedAt); err != nil {
+		if err := rows.Scan(&id, &wsID, &extra, &key, pq.Array(&tags), &projectID, &updatedAt); err != nil {
 			return nil, err
 		}
-		gk := wsID + "\x00" + key
+		gk := wsID + "\x00" + extra + "\x00" + key
 		g, ok := byKey[gk]
 		if !ok {
-			g = &group{WorkspaceID: wsID, Key: key}
+			g = &group{Scope: cfg.scope, WorkspaceID: wsID, IdentityExtra: extra, Key: key}
 			byKey[gk] = g
 			order = append(order, gk)
 		}
@@ -266,7 +334,7 @@ func loadDuplicateGroups(tx *sql.Tx, workspaceFilter string) ([]group, error) {
 func loadProjectIDNullCandidates(tx *sql.Tx, workspaceFilter string) ([]memRow, error) {
 	q := `SELECT id, key, project_id
 		FROM memories
-		WHERE scope = 'workspace' AND status = 'active' AND project_id IS NOT NULL`
+		WHERE scope = 'workspace' AND ` + currentPredicate + ` AND project_id IS NOT NULL`
 	var args []interface{}
 	if workspaceFilter != "" {
 		q += " AND workspace_id = $1"
@@ -322,7 +390,7 @@ func tagsEqual(a, b []string) bool {
 }
 
 func printPlan(groups []group, nullCandidates []memRow, limit int) {
-	fmt.Println("=== DUPLICATE GROUPS (scope=workspace, status=active, count>1) ===")
+	fmt.Println("=== DUPLICATE GROUPS (all scopes, current = status<>'superseded' AND archived=false, count>1) ===")
 	if len(groups) == 0 {
 		fmt.Println("(none)")
 	}
@@ -330,7 +398,11 @@ func printPlan(groups []group, nullCandidates []memRow, limit int) {
 		winner := g.Rows[0]
 		losers := g.Rows[1:]
 		merged := mergeTags(g.Rows)
-		fmt.Printf("\nworkspace_id=%s key=%q (%d rows)\n", g.WorkspaceID, g.Key, len(g.Rows))
+		identity := fmt.Sprintf("workspace_id=%s", g.WorkspaceID)
+		if g.IdentityExtra != "" {
+			identity += fmt.Sprintf(" %s_id=%s", g.Scope, g.IdentityExtra)
+		}
+		fmt.Printf("\nscope=%s %s key=%q (%d rows)\n", g.Scope, identity, g.Key, len(g.Rows))
 		fmt.Printf("  WINNER  id=%s updated_at=%s tags=%v\n", winner.ID, winner.UpdatedAt.Format(time.RFC3339), winner.Tags)
 		for _, l := range losers {
 			fmt.Printf("  LOSER   id=%s updated_at=%s tags=%v -> status=superseded, superseded_by=%s\n",
@@ -343,7 +415,7 @@ func printPlan(groups []group, nullCandidates []memRow, limit int) {
 		}
 	}
 
-	fmt.Printf("\n=== PROJECT_ID -> NULL (scope=workspace, status=active, project_id IS NOT NULL, excluding prospective losers above) ===\n")
+	fmt.Printf("\n=== PROJECT_ID -> NULL (scope=workspace, current, project_id IS NOT NULL, excluding prospective losers above) ===\n")
 	fmt.Printf("total rows: %d\n", len(nullCandidates))
 	shown := nullCandidates
 	if limit > 0 && len(shown) > limit {
@@ -370,10 +442,10 @@ func applyCollapse(tx *sql.Tx, groups []group) error {
 
 		if _, err := tx.Exec(
 			`UPDATE memories SET status = 'superseded', superseded_by = $1::uuid
-				WHERE id = ANY($2::uuid[]) AND status = 'active'`,
+				WHERE id = ANY($2::uuid[]) AND `+currentPredicate,
 			winner.ID, pq.Array(loserIDs),
 		); err != nil {
-			return fmt.Errorf("supersede losers for workspace_id=%s key=%q: %w", g.WorkspaceID, g.Key, err)
+			return fmt.Errorf("supersede losers for scope=%s workspace_id=%s key=%q: %w", g.Scope, g.WorkspaceID, g.Key, err)
 		}
 
 		if !tagsEqual(winner.Tags, merged) {
@@ -398,7 +470,7 @@ func applyProjectIDNull(tx *sql.Tx, rows []memRow) error {
 	}
 	_, err := tx.Exec(
 		`UPDATE memories SET project_id = NULL
-			WHERE id = ANY($1::uuid[]) AND scope = 'workspace' AND status = 'active'`,
+			WHERE id = ANY($1::uuid[]) AND scope = 'workspace' AND `+currentPredicate,
 		pq.Array(ids),
 	)
 	return err
@@ -410,12 +482,25 @@ func countMemories(db *sql.DB) (int, error) {
 	return n, err
 }
 
+// countActiveDuplicates is the "same-key-any-scope-2plus-READABLE" metric
+// from task #2c0154db/F2a's own AC: groups by each scope's real identity
+// tuple over the CURRENT predicate (not status='active'), matching exactly
+// what loadDuplicateGroupsForScope collapses. A non-zero result here is what
+// a recall() call can observe as "multiple live versions of one fact".
 func countActiveDuplicates(db *sql.DB) (int, error) {
 	var n int
 	err := db.QueryRow(`
 		SELECT count(*) FROM (
 			SELECT workspace_id, key FROM memories
-			WHERE status = 'active' AND scope = 'workspace'
+			WHERE ` + currentPredicate + ` AND scope = 'workspace'
+			GROUP BY 1, 2 HAVING count(*) > 1
+			UNION ALL
+			SELECT workspace_id, project_id::text || key FROM memories
+			WHERE ` + currentPredicate + ` AND scope = 'project' AND project_id IS NOT NULL
+			GROUP BY 1, 2 HAVING count(*) > 1
+			UNION ALL
+			SELECT workspace_id, agent_id::text || key FROM memories
+			WHERE ` + currentPredicate + ` AND scope = 'agent' AND agent_id IS NOT NULL
 			GROUP BY 1, 2 HAVING count(*) > 1
 		) d`).Scan(&n)
 	return n, err
@@ -424,7 +509,7 @@ func countActiveDuplicates(db *sql.DB) (int, error) {
 func countActiveWorkspaceWithProjectID(db *sql.DB) (int, error) {
 	var n int
 	err := db.QueryRow(
-		`SELECT count(*) FROM memories WHERE scope = 'workspace' AND project_id IS NOT NULL AND status = 'active'`,
+		`SELECT count(*) FROM memories WHERE scope = 'workspace' AND project_id IS NOT NULL AND ` + currentPredicate,
 	).Scan(&n)
 	return n, err
 }
