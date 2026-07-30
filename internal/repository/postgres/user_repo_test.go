@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -62,4 +63,47 @@ func TestUserRepo_Count(t *testing.T) {
 	after, err := repo.Count(ctx)
 	require.NoError(t, err)
 	require.Equal(t, before+1, after, "Count must reflect the newly created user")
+}
+
+// TestUserRepo_GetByEmail_IsCaseAndWhitespaceInsensitive pins the lookup to the
+// same canonical form the unique index ix_users_email_lower enforces
+// (migration 20260728083). Before that, GetByEmail compared the raw column, so
+// an address that differed only in case resolved to "no such user" and the
+// caller returned 401 for an account that plainly existed.
+func TestUserRepo_GetByEmail_IsCaseAndWhitespaceInsensitive(t *testing.T) {
+	db := userRepoTestDB(t)
+	repo := NewUserRepo(db)
+	ctx := context.Background()
+
+	suffix := uuid.New().String()[:8]
+	stored := "getbyemail-" + suffix + "@example.com"
+	u := &domain.User{
+		ID:           uuid.New(),
+		Email:        stored,
+		PasswordHash: "irrelevant-hash",
+		Name:         "GetByEmail Test User",
+		Username:     "getbyemail-" + suffix,
+		IsActive:     true,
+		CreatedAt:    time.Now().UTC().Truncate(time.Microsecond),
+		UpdatedAt:    time.Now().UTC().Truncate(time.Microsecond),
+	}
+	require.NoError(t, repo.Create(ctx, u))
+	t.Cleanup(func() { _, _ = db.ExecContext(ctx, "DELETE FROM users WHERE id = $1", u.ID) })
+
+	for _, spelling := range []string{
+		stored,
+		strings.ToUpper(stored),
+		"  " + stored + "  ",
+		"  " + strings.ToUpper(stored) + "\t",
+	} {
+		got, err := repo.GetByEmail(ctx, spelling)
+		require.NoError(t, err, "GetByEmail(%q)", spelling)
+		require.NotNil(t, got, "GetByEmail(%q) must find the account", spelling)
+		require.Equal(t, u.ID, got.ID)
+	}
+
+	// A genuinely absent address is still (nil, nil), not an error.
+	missing, err := repo.GetByEmail(ctx, "definitely-not-here-"+suffix+"@example.com")
+	require.NoError(t, err)
+	require.Nil(t, missing)
 }

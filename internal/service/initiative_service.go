@@ -200,6 +200,18 @@ func (s *initiativeService) LinkProject(ctx context.Context, initiativeID, proje
 		return apierror.NotFound("Project")
 	}
 
+	// The project has to be in the initiative's own workspace.
+	//
+	// project_id arrives in the request body, so no route parameter names it and
+	// the workspace guard cannot see it — only :init_id is checked, and that is
+	// the caller's own initiative. Until this check existed, linking was allowed
+	// on "both exist", so a member of any workspace could graft a stranger's
+	// project onto their own initiative and read its name and summary back out of
+	// every initiative view.
+	if project.WorkspaceID != ini.WorkspaceID {
+		return apierror.BadRequest("project belongs to a different workspace")
+	}
+
 	return s.initiativeRepo.LinkProject(ctx, initiativeID, projectID)
 }
 

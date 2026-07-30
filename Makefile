@@ -52,13 +52,13 @@ docker-up:
 docker-down:
 	cd $(DEPLOY_DIR) && docker compose down
 
-## docker-prod-up: Start production stack (requires .env.prod)
+## docker-prod-up: Start production stack (requires deploy/docker/mesh/.env)
 docker-prod-up:
-	cd $(DEPLOY_DIR) && docker compose -f docker-compose.prod.yml up -d --build
+	cd $(DEPLOY_DIR) && docker compose -f docker-compose.prod.yml --env-file .env up -d --build
 
 ## docker-prod-down: Stop production stack
 docker-prod-down:
-	cd $(DEPLOY_DIR) && docker compose -f docker-compose.prod.yml down
+	cd $(DEPLOY_DIR) && docker compose -f docker-compose.prod.yml --env-file .env down
 
 ## generate: Generate OpenAPI spec and other codegen artifacts
 generate:
@@ -81,13 +81,50 @@ GOLANGCI_LINT_VERSION := v2.11.3
 GOLANGCI_LINT         := $(shell go env GOPATH)/bin/golangci-lint
 GOOSE                 := $(shell go env GOPATH)/bin/goose
 
-# Local CI service DSNs (dev docker-compose ports: 5437 / 6383 / 4223)
-CI_DB_DSN       ?= postgres://mesh:mesh@localhost:5437/mesh?sslmode=disable
-CI_DATABASE_URL ?= postgres://mesh:mesh@localhost:5437/mesh?sslmode=disable
-CI_REDIS_URL    ?= redis://localhost:6383
-CI_NATS_URL     ?= nats://localhost:4223
+# ── Per-checkout isolation (#89bf0595) ───────────────────────────────────────
+# `docker compose -f deploy/docker/mesh/docker-compose.yml` derives its
+# default project name from the COMPOSE FILE'S OWN DIRECTORY, not from the
+# checkout root — so every checkout of this repo (evc-mesh, evc-mesh-linus,
+# evc-mesh-daedalus, every ephemeral per-task worktree) resolved to the same
+# project "mesh". A second agent's `make ci` didn't get its own stand: compose
+# adopted the first agent's containers under that shared name and recreated
+# them, because the `./volumes/*` bind paths (relative to the compose file's
+# directory) resolved into a different checkout — the first agent's live data
+# silently became empty volumes mid-run.
+#
+# Fix: derive project name + service ports from the checkout directory's own
+# basename, which is already unique per checkout (and per ephemeral
+# session-worktree, whose names are randomly prefixed). ?= so an operator can
+# still force a specific value.
+CHECKOUT_ID          := $(shell printf '%s' '$(notdir $(CURDIR))' | tr 'A-Z' 'a-z' | tr -c 'a-z0-9' '-')
+# Modulus must stay under the SMALLEST gap between any two of the four base
+# ports below (4223/5437/6383/8223 -> smallest consecutive gap is 946,
+# between 5437 and 6383), or two checkouts with different offsets could
+# still collide with each other on, say, one's DB_PORT landing on another's
+# REDIS_PORT range. 900 leaves comfortable margin.
+PORT_OFFSET          := $(shell printf '%s' '$(CHECKOUT_ID)' | cksum | awk '{print $$1 % 900}')
+COMPOSE_PROJECT_NAME ?= mesh-ci-$(CHECKOUT_ID)
+DB_PORT              ?= $(shell echo $$(( 5437 + $(PORT_OFFSET) )))
+REDIS_PORT           ?= $(shell echo $$(( 6383 + $(PORT_OFFSET) )))
+NATS_PORT            ?= $(shell echo $$(( 4223 + $(PORT_OFFSET) )))
+NATS_MONITOR_PORT    ?= $(shell echo $$(( 8223 + $(PORT_OFFSET) )))
+# Deliberately NOT exported file-wide: `docker-prod-up` reads its own
+# COMPOSE_PROJECT_NAME=evc-mesh from deploy/docker/mesh/.env
+# (docs/self-hosting.md's established convention) via --env-file, and a
+# blanket export here would silently override that. ci-project-env below
+# writes these same values into that same .env file instead — Compose
+# auto-loads it from the compose file's own directory with no flag needed,
+# which is what makes them reach `docker compose` without an export.
 
-DEPLOY_COMPOSE := deploy/docker/mesh/docker-compose.yml
+# Local CI service DSNs — ports follow the per-checkout derivation above, not
+# the old hardcoded 5437/6383/4223 (which is still each variable's value for
+# the FIRST checkout to claim offset 0, so nothing changes there).
+CI_DB_DSN       ?= postgres://mesh:mesh@localhost:$(DB_PORT)/mesh?sslmode=disable
+CI_DATABASE_URL ?= postgres://mesh:mesh@localhost:$(DB_PORT)/mesh?sslmode=disable
+CI_REDIS_URL    ?= redis://localhost:$(REDIS_PORT)
+CI_NATS_URL     ?= nats://localhost:$(NATS_PORT)
+
+DEPLOY_COMPOSE := $(DEPLOY_DIR)/docker-compose.yml
 
 ## ci: Full local CI — lint → test → build. Same gates as .github/workflows/ci.yml.
 ci: ci-install-tools ci-lint ci-test ci-build
@@ -111,8 +148,26 @@ ci-lint:
 	$(GOLANGCI_LINT) run ./...
 	@echo "── Lint OK ✓"
 
+## ci-project-env: Write deploy/docker/mesh/.env with this checkout's
+## COMPOSE_PROJECT_NAME + ports, if that file doesn't already exist. Compose
+## auto-loads .env from the compose file's own directory with NO flags
+## needed, so this is what makes a bare `docker compose -f
+## deploy/docker/mesh/docker-compose.yml config` (no make involved) resolve
+## to a per-checkout project name too — not just `make ci`. Idempotent and
+## additive-only: never overwrites an existing .env, since that file doing
+## double duty as the self-host PROD stack's config (docs/self-hosting.md's
+## `cp .env.prod.example .env`) is a pre-existing, unrelated convention this
+## must not clobber.
+ci-project-env:
+	@if [ ! -f $(DEPLOY_DIR)/.env ]; then \
+		printf 'COMPOSE_PROJECT_NAME=%s\nDB_PORT=%s\nREDIS_PORT=%s\nNATS_PORT=%s\nNATS_MONITOR_PORT=%s\n' \
+			"$(COMPOSE_PROJECT_NAME)" "$(DB_PORT)" "$(REDIS_PORT)" "$(NATS_PORT)" "$(NATS_MONITOR_PORT)" \
+			> $(DEPLOY_DIR)/.env && \
+		echo "── Wrote $(DEPLOY_DIR)/.env — project=$(COMPOSE_PROJECT_NAME) db=$(DB_PORT) redis=$(REDIS_PORT) nats=$(NATS_PORT) ──"; \
+	fi
+
 ## ci-services-up: Start postgres + redis + nats via dev docker-compose.
-ci-services-up:
+ci-services-up: ci-project-env
 	@echo "── Starting CI services (postgres redis nats) ──────────────────"
 	docker compose -f $(DEPLOY_COMPOSE) up -d --wait postgres redis nats
 	@echo "── Services ready ✓"

@@ -1,7 +1,10 @@
 package middleware
 
 import (
+	"crypto/subtle"
+	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/labstack/echo/v4"
@@ -55,3 +58,54 @@ func RecordWebhookDispatch(eventType string, success bool) {
 
 // RecordRateLimitHit records a rate-limit rejection for the given key type (ip, user, agent).
 func RecordRateLimitHit(keyType string) { pkgmetrics.RecordRateLimitHit(keyType) }
+
+// MetricsAuthHTTP gates a plain net/http handler behind a bearer token. When
+// token is empty it is a no-op — the endpoint stays open, matching the
+// historical behavior for deployments that gate it at the network layer
+// instead (e.g. the internal prod install, fronted by Caddy). When
+// non-empty, every request must carry a matching "Authorization: Bearer
+// <token>" header; comparison is constant-time so response timing can't be
+// used to guess the token.
+//
+// This is the base implementation. MetricsAuth (below) is a thin Echo
+// adapter over it — there is exactly one comparison to audit, not one per
+// HTTP stack. Use this directly for servers that don't run Echo (e.g.
+// cmd/mcp's plain net/http mux); do not re-derive the check there.
+func MetricsAuthHTTP(token string, next http.Handler) http.Handler {
+	if token == "" {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		const prefix = "Bearer "
+		auth := r.Header.Get("Authorization")
+		if !strings.HasPrefix(auth, prefix) {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		got := auth[len(prefix):]
+		if subtle.ConstantTimeCompare([]byte(got), []byte(token)) != 1 {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// MetricsAuth returns Echo middleware gating GET /metrics behind a bearer
+// token, per the same semantics as MetricsAuthHTTP (which it wraps).
+func MetricsAuth(token string) echo.MiddlewareFunc {
+	return func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			passed := false
+			marker := http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+				passed = true
+			})
+			MetricsAuthHTTP(token, marker).ServeHTTP(c.Response(), c.Request())
+			if !passed {
+				// MetricsAuthHTTP already wrote the 401 to c.Response().
+				return nil
+			}
+			return next(c)
+		}
+	}
+}

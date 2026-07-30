@@ -191,19 +191,59 @@ func (r *MemoryRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.Memory,
 	return &m, nil
 }
 
-// GetByKey returns a memory by its composite natural key, or nil if not found.
-// Pass nil for projectID or agentID when those dimensions are not scoped.
+// GetByKey returns a memory by its natural key, or nil if not found. The
+// identity dimensions considered follow the declared scope — not every
+// non-nil pointer the caller happens to pass — so that "workspace-scoped"
+// actually means one row per (workspace, key) regardless of which project_id
+// or agent_id incidentally got attached to a given write, and likewise for
+// project/agent scope. See domain.ScopeWorkspace/ScopeProject/ScopeAgent.
+//
+// The `status != 'superseded' AND archived = false` predicate and the
+// `ORDER BY updated_at DESC LIMIT 1` are both load-bearing, not cosmetic
+// (task #2c0154db, finding F1). Before them, this query had no status filter
+// at all: after a collapse (cmd/collapse-memories) leaves a winner `active`
+// and losers `superseded` under the SAME natural key, the predicate-less
+// query matched every one of them and sqlx.GetContext silently took whatever
+// row Postgres's heap scan happened to return first — no ORDER BY existed to
+// make that deterministic. On prod that was measured to be the RETIRED row
+// in every checked case, so Upsert's `ON CONFLICT (id) DO UPDATE SET
+// status = EXCLUDED.status` resurrected it and zeroed its `superseded_by` —
+// exactly the audit trail the no-hard-delete rule exists to preserve — and
+// then a real remember() on the same key hit the new unique index (23505),
+// unable to fix the very record the identity fix was written to unblock.
+// The predicate here MUST match what FullTextSearch/vector search/recall
+// treat as "current" (memory_repo.go's other `status != 'superseded' AND
+// archived = false` sites) — NOT `status = 'active'`, which would wrongly
+// exclude `review_needed` rows that reads still surface as live (see F2).
 func (r *MemoryRepo) GetByKey(ctx context.Context, workspaceID uuid.UUID, projectID, agentID *uuid.UUID, key string, scope domain.MemoryScope) (*domain.Memory, error) {
-	var row memoryRow
-	err := r.db.GetContext(ctx, &row,
-		fmt.Sprintf(`SELECT %s FROM memories
-			WHERE workspace_id = $1
-			  AND key          = $2
-			  AND scope        = $3
+	const currentPredicate = "status != 'superseded' AND archived = false"
+	var query string
+	args := []interface{}{workspaceID, key, scope}
+
+	switch scope {
+	case domain.ScopeProject:
+		query = fmt.Sprintf(`SELECT %s FROM memories
+			WHERE workspace_id = $1 AND key = $2 AND scope = $3
 			  AND (project_id = $4 OR ($4::uuid IS NULL AND project_id IS NULL))
-			  AND (agent_id   = $5 OR ($5::uuid IS NULL AND agent_id   IS NULL))`, memoryColumns),
-		workspaceID, key, scope, projectID, agentID,
-	)
+			  AND %s
+			ORDER BY updated_at DESC LIMIT 1`, memoryColumns, currentPredicate)
+		args = append(args, projectID)
+	case domain.ScopeAgent:
+		query = fmt.Sprintf(`SELECT %s FROM memories
+			WHERE workspace_id = $1 AND key = $2 AND scope = $3
+			  AND (agent_id = $4 OR ($4::uuid IS NULL AND agent_id IS NULL))
+			  AND %s
+			ORDER BY updated_at DESC LIMIT 1`, memoryColumns, currentPredicate)
+		args = append(args, agentID)
+	default: // domain.ScopeWorkspace (and any future/unknown scope defaults to the widest, safest identity)
+		query = fmt.Sprintf(`SELECT %s FROM memories
+			WHERE workspace_id = $1 AND key = $2 AND scope = $3
+			  AND %s
+			ORDER BY updated_at DESC LIMIT 1`, memoryColumns, currentPredicate)
+	}
+
+	var row memoryRow
+	err := r.db.GetContext(ctx, &row, query, args...)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil

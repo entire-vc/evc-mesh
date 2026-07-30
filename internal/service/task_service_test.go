@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"testing"
@@ -899,6 +900,56 @@ func TestTaskService_CreateSubtask(t *testing.T) {
 				stored := repo.items[child.ID]
 				require.NotNil(t, stored)
 				assert.Equal(t, f.todoID, stored.StatusID)
+			},
+		},
+		{
+			// Regression test for #d13fe920: create_subtask used to silently
+			// drop assignee_id/assignee_type/labels/custom_fields/due_date/
+			// estimated_hours — the child was always born unassigned to the
+			// creator with empty labels regardless of what was passed. This
+			// mirrors CreateTask's field-level contract.
+			name: "assignee/labels/custom_fields/due_date/estimated_hours are honoured",
+			setup: func(f subtaskFixture, _ *MockTaskStatusRepository) (uuid.UUID, CreateSubtaskInput) {
+				assigneeID := uuid.New()
+				due := frozenTime.Add(48 * time.Hour)
+				hours := 3.5
+				return f.parentID, CreateSubtaskInput{
+					Title:          "Delegated child",
+					Priority:       domain.PriorityMedium,
+					AssigneeID:     &assigneeID,
+					AssigneeType:   domain.AssigneeTypeAgent,
+					Labels:         []string{"a", "b"},
+					CustomFields:   json.RawMessage(`{"k":"v"}`),
+					DueDate:        &due,
+					EstimatedHours: &hours,
+				}
+			},
+			checkFunc: func(t *testing.T, f subtaskFixture, child *domain.Task, _ *MockTaskRepository) {
+				require.NotNil(t, child.AssigneeID)
+				assert.Equal(t, domain.AssigneeTypeAgent, child.AssigneeType)
+				assert.Equal(t, pq.StringArray{"a", "b"}, child.Labels)
+				assert.JSONEq(t, `{"k":"v"}`, string(child.CustomFields))
+				require.NotNil(t, child.DueDate)
+				assert.Equal(t, frozenTime.Add(48*time.Hour), *child.DueDate)
+				require.NotNil(t, child.EstimatedHours)
+				assert.Equal(t, 3.5, *child.EstimatedHours)
+			},
+		},
+		{
+			// Regression guard the other direction: omitting assignee_id must
+			// keep today's behavior (unassigned, subject to applyAutoAssign) —
+			// the fix must not force every subtask to require an assignee.
+			name: "omitted assignee_id still defaults to unassigned",
+			setup: func(f subtaskFixture, _ *MockTaskStatusRepository) (uuid.UUID, CreateSubtaskInput) {
+				return f.parentID, CreateSubtaskInput{
+					Title:    "Undelegated child",
+					Priority: domain.PriorityMedium,
+				}
+			},
+			checkFunc: func(t *testing.T, f subtaskFixture, child *domain.Task, _ *MockTaskRepository) {
+				assert.Nil(t, child.AssigneeID)
+				assert.Equal(t, domain.AssigneeTypeUnassigned, child.AssigneeType)
+				assert.Empty(t, child.Labels)
 			},
 		},
 		{
@@ -2064,6 +2115,54 @@ func TestTaskService_MoveTask_DoneGate_BlockedWhenPROpen(t *testing.T) {
 	var doneErr *DoneEvidenceError
 	require.ErrorAs(t, err, &doneErr)
 	assert.Contains(t, doneErr.Error(), "feat: my feature")
+	assert.Contains(t, doneErr.Error(), "open")
+	// #df734dd9: this branch has no comment-based escape hatch — a
+	// justification comment is only consulted when VCSLinkCount == 0. The
+	// message must not promise one that doesn't exist on this path.
+	assert.NotContains(t, doneErr.Error(), "justification comment")
+}
+
+// #df734dd9: an empty recorded status (a link created before status
+// tracking existed, or one add_vcs_link left blank) gets a message that
+// names the real cause — no webhook can ever arrive for a PR that was
+// merged before the link existed — instead of a generic "not merged" that
+// reads as if the block is just waiting on a merge that hasn't happened.
+func TestTaskService_MoveTask_DoneGate_BlockedWhenPRStatusEmpty_NamesRealCause(t *testing.T) {
+	projectID := uuid.New()
+	taskID := uuid.New()
+	statusID := uuid.New()
+
+	svc, taskRepo, statusRepo, vcsRepo, _ := setupTaskServiceWithDoneGate()
+
+	taskRepo.items[taskID] = &domain.Task{
+		ID:           taskID,
+		ProjectID:    projectID,
+		StatusID:     uuid.New(),
+		Title:        "Task with unrecorded PR status",
+		VCSLinkCount: 1,
+	}
+	statusRepo.items[statusID] = &domain.TaskStatus{
+		ID:        statusID,
+		ProjectID: projectID,
+		Category:  domain.StatusCategoryDone,
+	}
+	vcsRepo.items = append(vcsRepo.items, domain.VCSLink{
+		ID:       uuid.New(),
+		TaskID:   taskID,
+		LinkType: domain.VCSLinkTypePR,
+		Status:   "",
+		URL:      "https://github.com/entire-vc/evc-mesh-mcp/pull/40",
+		Title:    "feat: add_vcs_link",
+	})
+
+	err := svc.MoveTask(context.Background(), taskID, MoveTaskInput{StatusID: &statusID})
+
+	require.Error(t, err)
+	var doneErr *DoneEvidenceError
+	require.ErrorAs(t, err, &doneErr)
+	assert.Contains(t, doneErr.Error(), "no recorded merge status")
+	assert.Contains(t, doneErr.Error(), "status=merged")
+	assert.NotContains(t, doneErr.Error(), "justification comment")
 }
 
 func TestTaskService_MoveTask_DoneGate_PassesWhenPRMerged(t *testing.T) {
@@ -2375,6 +2474,8 @@ type moveToProjectFixture struct {
 	svc         *taskService
 	taskRepo    *MockTaskRepository
 	statusRepo  *MockTaskStatusRepository
+	projectRepo *MockProjectRepository
+	workspaceID uuid.UUID
 	projectA    uuid.UUID
 	projectB    uuid.UUID
 	todoA       uuid.UUID
@@ -2390,7 +2491,9 @@ func setupMoveToProjectFixture() *moveToProjectFixture {
 	statusRepo := NewMockTaskStatusRepository()
 	depRepo := NewMockTaskDependencyRepository()
 	activityRepo := NewMockActivityLogRepository()
-	svc := NewTaskService(taskRepo, statusRepo, depRepo, activityRepo).(*taskService)
+	projectRepo := NewMockProjectRepository()
+	svc := NewTaskService(taskRepo, statusRepo, depRepo, activityRepo,
+		WithProjectRepo(projectRepo)).(*taskService)
 
 	f := &moveToProjectFixture{
 		svc:         svc,
@@ -2406,6 +2509,14 @@ func setupMoveToProjectFixture() *moveToProjectFixture {
 		doneB:       uuid.New(),
 	}
 
+	// Both projects are in one workspace: MoveToProject refuses a move that would
+	// cross a tenant boundary, which is a different test (see
+	// TestMoveToProject_RefusesAnotherWorkspacesProject).
+	f.workspaceID = uuid.New()
+	projectRepo.items[f.projectA] = &domain.Project{ID: f.projectA, WorkspaceID: f.workspaceID}
+	projectRepo.items[f.projectB] = &domain.Project{ID: f.projectB, WorkspaceID: f.workspaceID}
+	f.projectRepo = projectRepo
+
 	// Source project statuses.
 	statusRepo.items[f.todoA] = &domain.TaskStatus{ID: f.todoA, ProjectID: f.projectA, Category: domain.StatusCategoryTodo, Position: 1}
 	statusRepo.items[f.inProgressA] = &domain.TaskStatus{ID: f.inProgressA, ProjectID: f.projectA, Category: domain.StatusCategoryInProgress, Position: 2}
@@ -2417,6 +2528,50 @@ func setupMoveToProjectFixture() *moveToProjectFixture {
 	statusRepo.items[f.doneB] = &domain.TaskStatus{ID: f.doneB, ProjectID: f.projectB, Category: domain.StatusCategoryDone, Position: 3}
 
 	return f
+}
+
+// TestMoveToProject_RefusesAnotherWorkspacesProject is the cross-tenant repro at
+// the service. project_id comes from the request body, where the workspace guard —
+// which reads route parameters — cannot see it; :task_id is the caller's own task
+// and resolves to their own workspace, so nothing upstream had an opinion about
+// where the task was going. "Both projects exist" was the whole of the check, and
+// a member of any workspace could push their task and its whole subtree onto a
+// stranger's board.
+func TestMoveToProject_RefusesAnotherWorkspacesProject(t *testing.T) {
+	f := setupMoveToProjectFixture()
+
+	foreignProject := uuid.New()
+	f.projectRepo.items[foreignProject] = &domain.Project{ID: foreignProject, WorkspaceID: uuid.New()}
+	f.statusRepo.items[uuid.New()] = &domain.TaskStatus{ID: uuid.New(), ProjectID: foreignProject, Category: domain.StatusCategoryTodo, Position: 1}
+
+	taskID := uuid.New()
+	f.taskRepo.items[taskID] = &domain.Task{ID: taskID, ProjectID: f.projectA, StatusID: f.todoA, Title: "Mine"}
+
+	_, err := f.svc.MoveToProject(context.Background(), taskID, foreignProject)
+	require.Error(t, err, "a task was moved into another workspace's project")
+	assert.Equal(t, f.projectA, f.taskRepo.items[taskID].ProjectID, "the task moved anyway")
+}
+
+// TestMoveToProject_WithoutProjectRepoFailsClosed: the project repository is an
+// option on this service, so it can be absent. "Cannot check the workspace" must
+// refuse, not allow — the alternative is a wiring mistake reopening the hole in
+// silence.
+func TestMoveToProject_WithoutProjectRepoFailsClosed(t *testing.T) {
+	taskRepo := NewMockTaskRepository()
+	statusRepo := NewMockTaskStatusRepository()
+	svc := NewTaskService(taskRepo, statusRepo, NewMockTaskDependencyRepository(), NewMockActivityLogRepository())
+
+	projectA, projectB := uuid.New(), uuid.New()
+	todoA, todoB := uuid.New(), uuid.New()
+	statusRepo.items[todoA] = &domain.TaskStatus{ID: todoA, ProjectID: projectA, Category: domain.StatusCategoryTodo, Position: 1}
+	statusRepo.items[todoB] = &domain.TaskStatus{ID: todoB, ProjectID: projectB, Category: domain.StatusCategoryTodo, Position: 1}
+
+	taskID := uuid.New()
+	taskRepo.items[taskID] = &domain.Task{ID: taskID, ProjectID: projectA, StatusID: todoA}
+
+	_, err := svc.MoveToProject(context.Background(), taskID, projectB)
+	require.Error(t, err)
+	assert.Equal(t, projectA, taskRepo.items[taskID].ProjectID)
 }
 
 func TestMoveToProject_CascadesDirectSubtasks(t *testing.T) {

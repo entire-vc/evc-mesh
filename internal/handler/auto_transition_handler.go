@@ -93,7 +93,7 @@ func (h *AutoTransitionHandler) Update(c echo.Context) error {
 	if err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid project_id"))
 	}
-	ruleID, err := uuid.Parse(c.Param("rule_id"))
+	ruleID, err := uuid.Parse(c.Param("atr_id"))
 	if err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid rule_id"))
 	}
@@ -134,16 +134,39 @@ func (h *AutoTransitionHandler) Update(c echo.Context) error {
 }
 
 // Delete removes an auto-transition rule.
+//
+// The rule has to belong to the project in the path. It did not have to before:
+// :proj_id was parsed and thrown away, and DeleteRule went straight at the id, so
+// a member of any workspace could pass their own :proj_id with a stranger's
+// :rule_id and delete another tenant's rule — 204, row gone. Update, four lines
+// up, had always checked. The guard now refuses this request before it arrives
+// (middleware.workspaceParamResolvers), and this is the same check written where
+// the delete happens, so the row is safe whichever one is reached first.
 func (h *AutoTransitionHandler) Delete(c echo.Context) error {
-	_, err := uuid.Parse(c.Param("proj_id"))
+	projID, err := uuid.Parse(c.Param("proj_id"))
 	if err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid project_id"))
 	}
-	ruleID, err := uuid.Parse(c.Param("rule_id"))
+	ruleID, err := uuid.Parse(c.Param("atr_id"))
 	if err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid rule_id"))
 	}
-	if err := h.svc.DeleteRule(c.Request().Context(), ruleID); err != nil {
+	ctx := c.Request().Context()
+	rules, err := h.svc.ListRules(ctx, projID)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, apierror.InternalError(err.Error()))
+	}
+	found := false
+	for i := range rules {
+		if rules[i].ID == ruleID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return c.JSON(http.StatusNotFound, apierror.NotFound("AutoTransitionRule"))
+	}
+	if err := h.svc.DeleteRule(ctx, ruleID); err != nil {
 		return c.JSON(http.StatusInternalServerError, apierror.InternalError(err.Error()))
 	}
 	return c.NoContent(http.StatusNoContent)

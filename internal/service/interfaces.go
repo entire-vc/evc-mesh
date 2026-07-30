@@ -23,6 +23,9 @@ type WorkspaceService interface {
 	Update(ctx context.Context, workspace *domain.Workspace) error
 	Delete(ctx context.Context, id uuid.UUID) error
 	ListByOwner(ctx context.Context, ownerID uuid.UUID) ([]domain.Workspace, error)
+	// ListForUser returns workspaces visible to the user: those they are a
+	// member of plus those they own.
+	ListForUser(ctx context.Context, userID uuid.UUID) ([]domain.Workspace, error)
 }
 
 // ProjectService provides business logic for project management.
@@ -72,6 +75,16 @@ type CreateSubtaskInput struct {
 	// StatusID pins the subtask's initial status. When nil the project's
 	// default status is used — never the parent's status.
 	StatusID *uuid.UUID `json:"status_id,omitempty"`
+	// AssigneeID/AssigneeType mirror CreateTask's field-level contract: when
+	// AssigneeID is set and AssigneeType is empty, the caller (handler) infers
+	// "agent" so the explicit assignment is not silently clobbered by
+	// applyAutoAssign, which only fires when AssigneeType is unassigned.
+	AssigneeID     *uuid.UUID          `json:"assignee_id,omitempty"`
+	AssigneeType   domain.AssigneeType `json:"assignee_type,omitempty"`
+	Labels         []string            `json:"labels,omitempty"`
+	CustomFields   json.RawMessage     `json:"custom_fields,omitempty"`
+	DueDate        *time.Time          `json:"due_date,omitempty"`
+	EstimatedHours *float64            `json:"estimated_hours,omitempty"`
 }
 
 // BulkUpdateTasksInput holds parameters for a bulk task update operation.
@@ -464,6 +477,12 @@ type VCSLinkService interface {
 	// caller may log; an error is only returned for DB/RPC failures, never
 	// for "no task ref" or "no transition".
 	HandleGitHubPullRequestEvent(ctx context.Context, ev GitHubWebhookEvent) (PRHandleResult, error)
+	// ResolveTaskRef finds the first task actually named by any recognised
+	// reference spelling in the given texts — MESH-<uuid>, a /t/<id> link, a
+	// Refs/Closes keyword, a #<short id>, or a branch segment — and verifies it
+	// exists. Returns uuid.Nil when nothing resolves. Exposed so the push
+	// (commit) path gets the same recognition as the pull_request path.
+	ResolveTaskRef(ctx context.Context, sources ...TaskRefSource) (uuid.UUID, TaskRef)
 }
 
 // GitHubWebhookEvent is a minimal projection of the fields the orchestrator
@@ -478,6 +497,7 @@ type GitHubWebhookEvent struct {
 	PRState    string
 	PRMerged   bool
 	MergeSHA   string // pull_request.merge_commit_sha (empty for non-merge close)
+	PRBranch   string // pull_request.head.ref — branches cut from a task often carry its id
 	Repository string // owner/name
 }
 
@@ -525,9 +545,13 @@ type WorkspaceInviteService interface {
 	// ListInvites returns all pending (non-expired, unaccepted) invites for a workspace.
 	ListInvites(ctx context.Context, workspaceID uuid.UUID) ([]domain.WorkspaceInvite, error)
 	// ResendInvite re-sends the invitation email for an existing pending invite.
-	ResendInvite(ctx context.Context, inviteID uuid.UUID) error
-	// RevokeInvite deletes a pending invite.
-	RevokeInvite(ctx context.Context, inviteID uuid.UUID) error
+	// workspaceID is the workspace named in the route: the invite must be one of
+	// its own, or a caller could re-send a stranger's invite from their own
+	// workspace and mail that stranger's invitee on demand.
+	ResendInvite(ctx context.Context, workspaceID, inviteID uuid.UUID) error
+	// RevokeInvite deletes a pending invite. workspaceID is the workspace named in
+	// the route; see ResendInvite for why it is not optional.
+	RevokeInvite(ctx context.Context, workspaceID, inviteID uuid.UUID) error
 	// GetByToken returns invite info for a given token (used by the accept-invite page).
 	// Returns nil when the token does not exist or the invite is expired/accepted.
 	GetByToken(ctx context.Context, token string) (*domain.WorkspaceInvite, error)

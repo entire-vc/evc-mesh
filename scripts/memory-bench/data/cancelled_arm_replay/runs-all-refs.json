@@ -1,0 +1,2020 @@
+{
+ "workflow_runs": [
+  {
+   "id": 30341443166,
+   "event": "pull_request",
+   "created_at": "2026-07-28T08:12:26Z",
+   "head_branch": "riker/pin-honours-negation-and-capture-stability",
+   "head_sha": "c1c8b33071c7bb677432d91fa6d6bd63b2404a6f",
+   "status": "in_progress",
+   "conclusion": null
+  },
+  {
+   "id": 30341227363,
+   "event": "pull_request",
+   "created_at": "2026-07-28T08:09:15Z",
+   "head_branch": "dependabot/github_actions/actions-all-e145d290a1",
+   "head_sha": "b96ed760332a9b6859710b599ccb22586cad4127",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30341157927,
+   "event": "workflow_dispatch",
+   "created_at": "2026-07-28T08:08:16Z",
+   "head_branch": "riker/pin-honours-negation-and-capture-stability",
+   "head_sha": "cae6f125605c87c1e8717483f4efd65fe3aeee62",
+   "status": "in_progress",
+   "conclusion": null
+  },
+  {
+   "id": 30341049070,
+   "event": "pull_request",
+   "created_at": "2026-07-28T08:06:43Z",
+   "head_branch": "riker/pin-honours-negation-and-capture-stability",
+   "head_sha": "cae6f125605c87c1e8717483f4efd65fe3aeee62",
+   "status": "in_progress",
+   "conclusion": null
+  },
+  {
+   "id": 30341031059,
+   "event": "push",
+   "created_at": "2026-07-28T08:06:27Z",
+   "head_branch": "main",
+   "head_sha": "4d689fee3cfe6eee650dc535715bacabbd3aa611",
+   "status": "in_progress",
+   "conclusion": null
+  },
+  {
+   "id": 30340015117,
+   "event": "pull_request",
+   "created_at": "2026-07-28T07:51:27Z",
+   "head_branch": "riker/proof-test-only-no-deploy",
+   "head_sha": "3d99d25fc9de64ebc8f6d2d5786ccf83336de186",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30339252379,
+   "event": "pull_request",
+   "created_at": "2026-07-28T07:39:35Z",
+   "head_branch": "riker/canary-not-evicted-by-sibling",
+   "head_sha": "cf78747ef98d423173a734062fcaea4ee813970f",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30339033810,
+   "event": "workflow_dispatch",
+   "created_at": "2026-07-28T07:36:01Z",
+   "head_branch": "riker/recall-gate-branch-baseline",
+   "head_sha": "f723d89fc801cf04c86d0b1564f89b1cdff99b91",
+   "status": "in_progress",
+   "conclusion": null
+  },
+  {
+   "id": 30338834953,
+   "event": "pull_request",
+   "created_at": "2026-07-28T07:32:53Z",
+   "head_branch": "riker/deploy-trigger-ignore-test-files",
+   "head_sha": "924c2111ba7afa4681356f6f415bdb504778551e",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30338240640,
+   "event": "pull_request",
+   "created_at": "2026-07-28T07:23:36Z",
+   "head_branch": "linus/pin-chunked-embed-failure-counter",
+   "head_sha": "444bc883ee295e84903299eb4b1ed66d9808d6df",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30337589061,
+   "event": "pull_request",
+   "created_at": "2026-07-28T07:13:20Z",
+   "head_branch": "riker/canary-not-evicted-by-sibling",
+   "head_sha": "6935d94b53b918002fbfd4e210f6c118b9071ce6",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30337511797,
+   "event": "push",
+   "created_at": "2026-07-28T07:12:08Z",
+   "head_branch": "main",
+   "head_sha": "7a5aebf8532f108e0e86e9a95c8dc3c0b429f717",
+   "status": "completed",
+   "conclusion": "cancelled"
+  },
+  {
+   "id": 30336693957,
+   "event": "workflow_dispatch",
+   "created_at": "2026-07-28T06:59:10Z",
+   "head_branch": "main",
+   "head_sha": "73cc0eac09c97dfde797527fed0f882499c547af",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30336247825,
+   "event": "pull_request",
+   "created_at": "2026-07-28T06:51:45Z",
+   "head_branch": "riker/canary-not-evicted-by-sibling",
+   "head_sha": "c1875946b55301eac07b81d07a1173849afff013",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30336009731,
+   "event": "pull_request",
+   "created_at": "2026-07-28T06:47:37Z",
+   "head_branch": "garfield/blindness-alert-resolve-symmetry",
+   "head_sha": "ccec728069c87922582dfc0b45f54217328300bb",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30335936552,
+   "event": "pull_request",
+   "created_at": "2026-07-28T06:46:21Z",
+   "head_branch": "riker/canary-not-evicted-by-sibling",
+   "head_sha": "e0914c33bd0ff5fe40b7e2b1019e84f99f9a05c9",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30335245738,
+   "event": "push",
+   "created_at": "2026-07-28T06:34:09Z",
+   "head_branch": "main",
+   "head_sha": "73cc0eac09c97dfde797527fed0f882499c547af",
+   "status": "completed",
+   "conclusion": "cancelled"
+  },
+  {
+   "id": 30335034358,
+   "event": "schedule",
+   "created_at": "2026-07-28T06:30:24Z",
+   "head_branch": "main",
+   "head_sha": "5d2cda8c19d58a03967df3e36bf5f086b2624241",
+   "status": "completed",
+   "conclusion": "cancelled"
+  },
+  {
+   "id": 30334590080,
+   "event": "push",
+   "created_at": "2026-07-28T06:22:28Z",
+   "head_branch": "main",
+   "head_sha": "5d2cda8c19d58a03967df3e36bf5f086b2624241",
+   "status": "completed",
+   "conclusion": "cancelled"
+  },
+  {
+   "id": 30334480033,
+   "event": "pull_request",
+   "created_at": "2026-07-28T06:20:28Z",
+   "head_branch": "garfield/blindness-alert-resolve-symmetry",
+   "head_sha": "e5db4e1ec8d5ce1d55206fd80485fa7ef1aa4928",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30334218645,
+   "event": "pull_request",
+   "created_at": "2026-07-28T06:15:38Z",
+   "head_branch": "dependabot/github_actions/actions-all-e145d290a1",
+   "head_sha": "91dc660ee041e69e98e55a9d1f78998a96a3eb76",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30334077279,
+   "event": "push",
+   "created_at": "2026-07-28T06:13:06Z",
+   "head_branch": "main",
+   "head_sha": "edc082969b632b8edb8510d1632538a492817919",
+   "status": "completed",
+   "conclusion": "cancelled"
+  },
+  {
+   "id": 30333411871,
+   "event": "pull_request",
+   "created_at": "2026-07-28T06:01:05Z",
+   "head_branch": "linus/embed-batch-and-scaled-budget",
+   "head_sha": "38e8324d9b34a613fa8f119de57a4eafabbfb613",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30332996922,
+   "event": "pull_request",
+   "created_at": "2026-07-28T05:53:18Z",
+   "head_branch": "riker/storm-guard-scan-all-comments",
+   "head_sha": "03b0b36ddf1b3c43687095da175371ed2793e116",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30332664586,
+   "event": "pull_request",
+   "created_at": "2026-07-28T05:46:46Z",
+   "head_branch": "linus/embed-batch-and-scaled-budget",
+   "head_sha": "25d98c009b813ac6c0e6ba531a227addc1fc3591",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30332398606,
+   "event": "workflow_dispatch",
+   "created_at": "2026-07-28T05:41:36Z",
+   "head_branch": "riker/bench-gate-version-pin",
+   "head_sha": "adc073374d00ef99408f69b08e1947cf5b3d94fd",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30332391160,
+   "event": "pull_request",
+   "created_at": "2026-07-28T05:41:27Z",
+   "head_branch": "riker/bench-gate-version-pin",
+   "head_sha": "adc073374d00ef99408f69b08e1947cf5b3d94fd",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30330575899,
+   "event": "pull_request",
+   "created_at": "2026-07-28T05:05:02Z",
+   "head_branch": "dependabot/github_actions/actions-all-e145d290a1",
+   "head_sha": "67bf8a347a217f36f379f3443d174b7b8d816473",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30330437164,
+   "event": "push",
+   "created_at": "2026-07-28T05:02:15Z",
+   "head_branch": "main",
+   "head_sha": "d07ed26ed064a537f55eba3f3889664504187042",
+   "status": "completed",
+   "conclusion": "cancelled"
+  },
+  {
+   "id": 30329649283,
+   "event": "workflow_dispatch",
+   "created_at": "2026-07-28T04:45:48Z",
+   "head_branch": "riker/bench-gate-version-pin",
+   "head_sha": "40cb330c20ff4dd5d1ba8f8fc9c10b2ca2526fa2",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30329359608,
+   "event": "pull_request",
+   "created_at": "2026-07-28T04:39:36Z",
+   "head_branch": "linus/pin-stopgap-embedding-column",
+   "head_sha": "c1281667e81ed804dee5a30d13e337bad147e030",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30328826762,
+   "event": "workflow_dispatch",
+   "created_at": "2026-07-28T04:28:02Z",
+   "head_branch": "riker/bench-gate-version-pin",
+   "head_sha": "7392b487c3955a6d5914aa09ce19115fb2efeed8",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30328820759,
+   "event": "workflow_dispatch",
+   "created_at": "2026-07-28T04:27:54Z",
+   "head_branch": "riker/bench-gate-version-pin",
+   "head_sha": "7392b487c3955a6d5914aa09ce19115fb2efeed8",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30328557216,
+   "event": "pull_request",
+   "created_at": "2026-07-28T04:22:13Z",
+   "head_branch": "feat/recall-gate-branch-build",
+   "head_sha": "c023d4b1d9a87e2602fff69b4d1a0f1d3753de96",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30328257621,
+   "event": "push",
+   "created_at": "2026-07-28T04:15:48Z",
+   "head_branch": "main",
+   "head_sha": "b6495e058d4e26211bc12fdc4580345d1e8c58ba",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30328185930,
+   "event": "pull_request",
+   "created_at": "2026-07-28T04:14:20Z",
+   "head_branch": "feat/recall-gate-branch-build",
+   "head_sha": "d59c7abf1ec24362a1f99b57a2ece6bce3459778",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30327801839,
+   "event": "workflow_dispatch",
+   "created_at": "2026-07-28T04:06:32Z",
+   "head_branch": "riker/proof-e3-prod-blind",
+   "head_sha": "fc5e4623356dd508fdb26f5771f3864a9d91fd5f",
+   "status": "completed",
+   "conclusion": "cancelled"
+  },
+  {
+   "id": 30326614775,
+   "event": "pull_request",
+   "created_at": "2026-07-28T03:41:23Z",
+   "head_branch": "feat/recall-gate-branch-build",
+   "head_sha": "b051a68ee246518174f93cda4d85dc6efcbbc5f0",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30326531599,
+   "event": "pull_request",
+   "created_at": "2026-07-28T03:39:38Z",
+   "head_branch": "linus/list-needing-embedding-chunk-freshness",
+   "head_sha": "697ca476a4cb4f33547448934d9a97c1c43f50f8",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30326503498,
+   "event": "workflow_dispatch",
+   "created_at": "2026-07-28T03:39:01Z",
+   "head_branch": "riker/proof-e2-broken",
+   "head_sha": "adfbf499b351de4d32f01e0bfe1680fa924fbeac",
+   "status": "completed",
+   "conclusion": "cancelled"
+  },
+  {
+   "id": 30326419253,
+   "event": "push",
+   "created_at": "2026-07-28T03:37:14Z",
+   "head_branch": "main",
+   "head_sha": "de52f76e1751bc28b6bceec7c2019a74a7777d5c",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30325802161,
+   "event": "workflow_dispatch",
+   "created_at": "2026-07-28T03:23:43Z",
+   "head_branch": "main",
+   "head_sha": "f161732b0c22238b28193ca5671a2b26ebf3fffc",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30324901530,
+   "event": "pull_request",
+   "created_at": "2026-07-28T03:04:20Z",
+   "head_branch": "feat/recall-gate-branch-build",
+   "head_sha": "cbf93f7b441deb9f94c187ab4b810c372d2c4cfe",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30324675115,
+   "event": "pull_request",
+   "created_at": "2026-07-28T02:59:46Z",
+   "head_branch": "feat/recall-gate-branch-build",
+   "head_sha": "736984a70aeaf8a804ce54c985e4504eae0c1d58",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30324665531,
+   "event": "push",
+   "created_at": "2026-07-28T02:59:33Z",
+   "head_branch": "main",
+   "head_sha": "f161732b0c22238b28193ca5671a2b26ebf3fffc",
+   "status": "completed",
+   "conclusion": "failure"
+  },
+  {
+   "id": 30323425190,
+   "event": "pull_request",
+   "created_at": "2026-07-28T02:33:02Z",
+   "head_branch": "garfield/vector-search-max-over-chunks",
+   "head_sha": "d06c49b86e33db86644e434270586f2a568c8d08",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30323318293,
+   "event": "push",
+   "created_at": "2026-07-28T02:30:52Z",
+   "head_branch": "main",
+   "head_sha": "f76ebaddf50f348ef203b03d75b3ee40b79cb709",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30322109389,
+   "event": "workflow_dispatch",
+   "created_at": "2026-07-28T02:05:12Z",
+   "head_branch": "riker/proof-e3-prod-blind",
+   "head_sha": "951e60e32e0e62c5a4efa5589f9b5df0a4e2cfc8",
+   "status": "completed",
+   "conclusion": "cancelled"
+  },
+  {
+   "id": 30321802498,
+   "event": "pull_request",
+   "created_at": "2026-07-28T01:58:54Z",
+   "head_branch": "feat/recall-gate-branch-build",
+   "head_sha": "371dfe7035b1a4781bb483488a7ac9419dedbb70",
+   "status": "completed",
+   "conclusion": "cancelled"
+  },
+  {
+   "id": 30320702577,
+   "event": "pull_request",
+   "created_at": "2026-07-28T01:35:38Z",
+   "head_branch": "feat/recall-gate-branch-build",
+   "head_sha": "4a31b704b7ddadd08e3f1ee7fbf2fee6d6276b2b",
+   "status": "completed",
+   "conclusion": "failure"
+  },
+  {
+   "id": 30320697705,
+   "event": "pull_request",
+   "created_at": "2026-07-28T01:35:33Z",
+   "head_branch": "linus/embed-chunked-stopgap-write-embedding",
+   "head_sha": "16b5771675680b0acb88d6ac8ab18b1b8c63db1d",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30320615520,
+   "event": "workflow_dispatch",
+   "created_at": "2026-07-28T01:33:53Z",
+   "head_branch": "riker/proof-e3-prod-blind",
+   "head_sha": "951e60e32e0e62c5a4efa5589f9b5df0a4e2cfc8",
+   "status": "completed",
+   "conclusion": "cancelled"
+  },
+  {
+   "id": 30320610756,
+   "event": "workflow_dispatch",
+   "created_at": "2026-07-28T01:33:48Z",
+   "head_branch": "riker/proof-e2-broken",
+   "head_sha": "adfbf499b351de4d32f01e0bfe1680fa924fbeac",
+   "status": "completed",
+   "conclusion": "failure"
+  },
+  {
+   "id": 30320606002,
+   "event": "workflow_dispatch",
+   "created_at": "2026-07-28T01:33:41Z",
+   "head_branch": "riker/proof-e1-healthy",
+   "head_sha": "ded1f24850fda98f0f76a71720cf29dc967d6f7e",
+   "status": "completed",
+   "conclusion": "cancelled"
+  },
+  {
+   "id": 30320374654,
+   "event": "pull_request",
+   "created_at": "2026-07-28T01:29:03Z",
+   "head_branch": "feat/recall-gate-dense-rows",
+   "head_sha": "8fc618a1e0258a1e92be216aa4b11424ac215ac2",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30320099744,
+   "event": "pull_request",
+   "created_at": "2026-07-28T01:23:17Z",
+   "head_branch": "linus/embed-chunked-stopgap-write-embedding",
+   "head_sha": "38a3d23a6ff481bcfebcaf663c2c759d8e9a16ad",
+   "status": "completed",
+   "conclusion": "cancelled"
+  },
+  {
+   "id": 30319363931,
+   "event": "pull_request",
+   "created_at": "2026-07-28T01:07:43Z",
+   "head_branch": "feat/recall-gate-branch-build",
+   "head_sha": "5f99af543bf9326c2f5ffd1346f0a93862166097",
+   "status": "completed",
+   "conclusion": "failure"
+  },
+  {
+   "id": 30318786235,
+   "event": "pull_request",
+   "created_at": "2026-07-28T00:56:07Z",
+   "head_branch": "linus/embed-chunked-stopgap-write-embedding",
+   "head_sha": "2b0a06cce402d8519657587f48784a0003c3e093",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30316983402,
+   "event": "workflow_dispatch",
+   "created_at": "2026-07-28T00:19:52Z",
+   "head_branch": "main",
+   "head_sha": "625ee2806e8d324380a6f183e9bf3e28832f74be",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30315425484,
+   "event": "push",
+   "created_at": "2026-07-27T23:50:20Z",
+   "head_branch": "main",
+   "head_sha": "625ee2806e8d324380a6f183e9bf3e28832f74be",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30311854389,
+   "event": "pull_request",
+   "created_at": "2026-07-27T22:45:35Z",
+   "head_branch": "linus/embed-chunks-backfill",
+   "head_sha": "21372c4593b247ec22542ec7f31175fdee4ab08d",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30311697047,
+   "event": "push",
+   "created_at": "2026-07-27T22:42:52Z",
+   "head_branch": "main",
+   "head_sha": "2c8b8d9a44c419f289584741d9865a3db02f4e95",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30310213936,
+   "event": "pull_request",
+   "created_at": "2026-07-27T22:17:57Z",
+   "head_branch": "linus/embed-chunks-backfill",
+   "head_sha": "bd41e879392949d05e6e0ee03b1c85d0adde6de3",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30310009179,
+   "event": "pull_request",
+   "created_at": "2026-07-27T22:14:37Z",
+   "head_branch": "linus/embed-write-path",
+   "head_sha": "0eb0cef2a96aed804f68985ebd70c8e7de3ce90c",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30302443618,
+   "event": "pull_request",
+   "created_at": "2026-07-27T20:24:28Z",
+   "head_branch": "linus/embed-chunks-backfill",
+   "head_sha": "0ab1b420eeaad3002b9367c213992b5019237098",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30302391973,
+   "event": "pull_request",
+   "created_at": "2026-07-27T20:23:45Z",
+   "head_branch": "linus/embed-write-path",
+   "head_sha": "789b014ae52177d36ee15d0f786a823de8b27c91",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30302345052,
+   "event": "pull_request",
+   "created_at": "2026-07-27T20:23:05Z",
+   "head_branch": "linus/memory-chunks-schema",
+   "head_sha": "47d739f77d2d6fa1b7b41bc95619f5e3225e0bb0",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30302275243,
+   "event": "pull_request",
+   "created_at": "2026-07-27T20:22:06Z",
+   "head_branch": "linus/memory-chunks-schema",
+   "head_sha": "441a4fd35daa9b397a7ffbd472364ee44cb6f1ba",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30301144232,
+   "event": "pull_request",
+   "created_at": "2026-07-27T20:06:12Z",
+   "head_branch": "linus/embed-chunks-backfill",
+   "head_sha": "c82a083532a7c847cf0b55fb980aa3c32536da60",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30301051362,
+   "event": "pull_request",
+   "created_at": "2026-07-27T20:04:59Z",
+   "head_branch": "linus/embed-write-path",
+   "head_sha": "43e50307c233fc5aa72523956761ffe6ab549ca7",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30300967925,
+   "event": "pull_request",
+   "created_at": "2026-07-27T20:03:46Z",
+   "head_branch": "linus/memory-chunks-schema",
+   "head_sha": "677ec76705e6e26a5dd542aca8b3698cb076d8ba",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30300087871,
+   "event": "push",
+   "created_at": "2026-07-27T19:51:43Z",
+   "head_branch": "main",
+   "head_sha": "0eb1f629c195ff6a62514feb39ee326698115cfa",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30299217711,
+   "event": "pull_request",
+   "created_at": "2026-07-27T19:39:49Z",
+   "head_branch": "linus/registration-toggle",
+   "head_sha": "8f12303115d5482fa29437f38da39d4044c6ed01",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30298117301,
+   "event": "pull_request",
+   "created_at": "2026-07-27T19:24:41Z",
+   "head_branch": "linus/registration-toggle",
+   "head_sha": "675eeaf819adbf8d7d29bfee6e7b1d2478ce2d88",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30296950872,
+   "event": "pull_request",
+   "created_at": "2026-07-27T19:08:40Z",
+   "head_branch": "linus/memory-chunks-schema",
+   "head_sha": "cffea1741c4b6ce631859a3f6dfe6957d6697dfd",
+   "status": "completed",
+   "conclusion": "failure"
+  },
+  {
+   "id": 30296948997,
+   "event": "pull_request",
+   "created_at": "2026-07-27T19:08:38Z",
+   "head_branch": "linus/embed-chunking",
+   "head_sha": "76ea70a0b5905ea2f949626a7de4272c6c05ae2f",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30296948065,
+   "event": "pull_request",
+   "created_at": "2026-07-27T19:08:38Z",
+   "head_branch": "garfield/embed-truncation-visible",
+   "head_sha": "d1cf4a4e467a344c29928a82cd67532a74268ad6",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30296944325,
+   "event": "pull_request",
+   "created_at": "2026-07-27T19:08:35Z",
+   "head_branch": "garfield/recall-limit-last",
+   "head_sha": "5ae4f06e34ba37d0e527e9e595e117d6996c475b",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30296941576,
+   "event": "pull_request",
+   "created_at": "2026-07-27T19:08:33Z",
+   "head_branch": "linus/registration-toggle",
+   "head_sha": "ed70615157c3e6a6c4cd0af6327139f3c7d03492",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30295771484,
+   "event": "pull_request",
+   "created_at": "2026-07-27T18:53:04Z",
+   "head_branch": "garfield/vectorsearch-max-over-chunks",
+   "head_sha": "83868235909acd947056387d60166244109906f3",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30295449175,
+   "event": "pull_request",
+   "created_at": "2026-07-27T18:48:46Z",
+   "head_branch": "linus/embed-chunks-backfill",
+   "head_sha": "2ea12a7c79d83b1c32415f8d3054e2d24a931098",
+   "status": "completed",
+   "conclusion": "failure"
+  },
+  {
+   "id": 30295094149,
+   "event": "pull_request",
+   "created_at": "2026-07-27T18:44:07Z",
+   "head_branch": "garfield/ci-diff-coverage",
+   "head_sha": "c7eb5e0f316a81d07a3830c0a18f1668f99175bd",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30294782753,
+   "event": "pull_request",
+   "created_at": "2026-07-27T18:40:01Z",
+   "head_branch": "linus/embed-write-path",
+   "head_sha": "76e13138299a9418fc51ffee721d16e6218234f0",
+   "status": "completed",
+   "conclusion": "failure"
+  },
+  {
+   "id": 30294029257,
+   "event": "pull_request",
+   "created_at": "2026-07-27T18:30:02Z",
+   "head_branch": "linus/memory-chunks-schema",
+   "head_sha": "8bf2833373f1a230d44006b46b0a6746f54c439c",
+   "status": "completed",
+   "conclusion": "failure"
+  },
+  {
+   "id": 30293667158,
+   "event": "pull_request",
+   "created_at": "2026-07-27T18:25:06Z",
+   "head_branch": "garfield/vectorsearch-max-over-chunks",
+   "head_sha": "5ef72f94d51eb503e38b2d2dee96b3f3ffcc91d0",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30293365493,
+   "event": "pull_request",
+   "created_at": "2026-07-27T18:21:07Z",
+   "head_branch": "garfield/vectorsearch-max-over-chunks",
+   "head_sha": "771328dd98fdfe71eaf434ae97decfe3957eabea",
+   "status": "completed",
+   "conclusion": "failure"
+  },
+  {
+   "id": 30292511651,
+   "event": "pull_request",
+   "created_at": "2026-07-27T18:09:34Z",
+   "head_branch": "linus/embed-chunking",
+   "head_sha": "d8de32cfd594f2d705861375a19ef48bbf25b166",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30284940676,
+   "event": "pull_request",
+   "created_at": "2026-07-27T16:29:28Z",
+   "head_branch": "garfield/embed-truncation-visible",
+   "head_sha": "ae0e8aa08c96ecb50231bb5fe8873454bedd5418",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30283024967,
+   "event": "pull_request",
+   "created_at": "2026-07-27T16:04:29Z",
+   "head_branch": "linus/registration-toggle",
+   "head_sha": "0e5ad263eab30df0a15df0818bf8a9edb666ea22",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30282292244,
+   "event": "pull_request",
+   "created_at": "2026-07-27T15:55:26Z",
+   "head_branch": "garfield/recall-limit-last",
+   "head_sha": "5376ace9e49a2530a9df92c370ff124569eeb5c6",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30282153812,
+   "event": "pull_request",
+   "created_at": "2026-07-27T15:53:43Z",
+   "head_branch": "linus/registration-toggle",
+   "head_sha": "d40bc4ea2f275bbd9f73ffb2be603ced19ec0c84",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30280709045,
+   "event": "pull_request",
+   "created_at": "2026-07-27T15:35:18Z",
+   "head_branch": "linus/registration-toggle",
+   "head_sha": "52db77f46c531eb8f0ef876df7fe0692595400c8",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30280259093,
+   "event": "pull_request",
+   "created_at": "2026-07-27T15:29:48Z",
+   "head_branch": "garfield/self-hosting-docs-structure",
+   "head_sha": "f7dcdd748279b8c304a012780f258fe42cd5dcc0",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30278284083,
+   "event": "pull_request",
+   "created_at": "2026-07-27T15:05:24Z",
+   "head_branch": "garfield/oss-first-admin-bootstrap",
+   "head_sha": "d1ef9d11f24f93c9585b60e00e0d4e900e10d881",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30277989599,
+   "event": "pull_request",
+   "created_at": "2026-07-27T15:01:57Z",
+   "head_branch": "garfield/oss-first-admin-bootstrap",
+   "head_sha": "f203191a68693fbb85d7bbb44a9d8e64dbbf5bff",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30276885734,
+   "event": "pull_request",
+   "created_at": "2026-07-27T14:48:42Z",
+   "head_branch": "garfield/oss-first-admin-bootstrap",
+   "head_sha": "3137df4967e03c10a2f261b0f55f6fe3fc56dd31",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30267195951,
+   "event": "push",
+   "created_at": "2026-07-27T12:44:54Z",
+   "head_branch": "main",
+   "head_sha": "428085e1826efd41c1c5ef1fb07d9f2ea4ff38d4",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30264558977,
+   "event": "pull_request",
+   "created_at": "2026-07-27T12:06:42Z",
+   "head_branch": "garfield/bench-gc-observability",
+   "head_sha": "f9064e9e5966f185f69c9745431c71b81eeacbfc",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30264299528,
+   "event": "push",
+   "created_at": "2026-07-27T12:03:01Z",
+   "head_branch": "main",
+   "head_sha": "a366e570cd9f59a4f0138778a73d68840e0cc155",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30262993445,
+   "event": "pull_request",
+   "created_at": "2026-07-27T11:43:07Z",
+   "head_branch": "garfield/bench-orphan-gc-predicate",
+   "head_sha": "07ab20e00e5d9ed1e4e8b3c07e86c97f02ca8440",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30261016428,
+   "event": "workflow_dispatch",
+   "created_at": "2026-07-27T11:11:53Z",
+   "head_branch": "main",
+   "head_sha": "d51e180fa5d06e4dc0251f38e9af6583fdd2a1ef",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30260880038,
+   "event": "workflow_dispatch",
+   "created_at": "2026-07-27T11:09:50Z",
+   "head_branch": "main",
+   "head_sha": "d51e180fa5d06e4dc0251f38e9af6583fdd2a1ef",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30260872204,
+   "event": "push",
+   "created_at": "2026-07-27T11:09:43Z",
+   "head_branch": "main",
+   "head_sha": "d51e180fa5d06e4dc0251f38e9af6583fdd2a1ef",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30259731434,
+   "event": "pull_request",
+   "created_at": "2026-07-27T10:52:21Z",
+   "head_branch": "garfield/bench-fixture-run-nonce",
+   "head_sha": "2dd5ed073f97cc739dcb807f4e66e9887eb51d53",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30258444548,
+   "event": "workflow_dispatch",
+   "created_at": "2026-07-27T10:32:08Z",
+   "head_branch": "main",
+   "head_sha": "4a0170e9b4bd4aef2ab26bdd79cc884e5bb22d08",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30257301009,
+   "event": "pull_request",
+   "created_at": "2026-07-27T10:14:47Z",
+   "head_branch": "dependabot/npm_and_yarn/web/typescript-7.0.2",
+   "head_sha": "d8d574cb6d94f9bc507f4c812b009c4f275d4326",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30257147440,
+   "event": "workflow_dispatch",
+   "created_at": "2026-07-27T10:12:34Z",
+   "head_branch": "main",
+   "head_sha": "4a0170e9b4bd4aef2ab26bdd79cc884e5bb22d08",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30255818672,
+   "event": "workflow_dispatch",
+   "created_at": "2026-07-27T09:53:26Z",
+   "head_branch": "main",
+   "head_sha": "8beafde5c3afb443f9b6fb6566c98720c5cbde4e",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30255172286,
+   "event": "pull_request",
+   "created_at": "2026-07-27T09:43:51Z",
+   "head_branch": "dependabot/npm_and_yarn/web/jsdom-30.0.0",
+   "head_sha": "43413ed2af52488747112306ac10a00492929eb9",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30255164949,
+   "event": "pull_request",
+   "created_at": "2026-07-27T09:43:44Z",
+   "head_branch": "dependabot/npm_and_yarn/web/typescript-7.0.2",
+   "head_sha": "368c30872240606cde73e9fb4ab6f504d3b593fc",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30254647197,
+   "event": "workflow_dispatch",
+   "created_at": "2026-07-27T09:36:04Z",
+   "head_branch": "main",
+   "head_sha": "0cdd51d19167fdb1da75b1d33a511537f525a237",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30254250486,
+   "event": "pull_request",
+   "created_at": "2026-07-27T09:30:28Z",
+   "head_branch": "dependabot/github_actions/actions-all-54f596f637",
+   "head_sha": "63097c827a4598dd7f58de3428ec323c3705f0e2",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30254225643,
+   "event": "pull_request",
+   "created_at": "2026-07-27T09:30:09Z",
+   "head_branch": "dependabot/npm_and_yarn/web/testing-library/jest-dom-7.0.0",
+   "head_sha": "2d6dd00ea52cd2c3c6ea5b9660e09be2c304bca6",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30254221603,
+   "event": "pull_request",
+   "created_at": "2026-07-27T09:30:06Z",
+   "head_branch": "dependabot/go_modules/go-minor-and-patch-5ba03c444f",
+   "head_sha": "705b217935211be3bf34e6704b3a0d2e79274780",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30254202562,
+   "event": "pull_request",
+   "created_at": "2026-07-27T09:29:51Z",
+   "head_branch": "dependabot/npm_and_yarn/web/jsdom-30.0.0",
+   "head_sha": "2188770008f9898fbfe9bc4f54e0ac2503466087",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30254191662,
+   "event": "pull_request",
+   "created_at": "2026-07-27T09:29:42Z",
+   "head_branch": "dependabot/npm_and_yarn/web/npm-minor-and-patch-f2efbae153",
+   "head_sha": "68fd531d536fe71f6f1f7912e89e63cce22e850c",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30253519693,
+   "event": "workflow_dispatch",
+   "created_at": "2026-07-27T09:20:23Z",
+   "head_branch": "main",
+   "head_sha": "0cdd51d19167fdb1da75b1d33a511537f525a237",
+   "status": "completed",
+   "conclusion": "cancelled"
+  },
+  {
+   "id": 30252836486,
+   "event": "push",
+   "created_at": "2026-07-27T09:10:58Z",
+   "head_branch": "main",
+   "head_sha": "0cdd51d19167fdb1da75b1d33a511537f525a237",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30246798542,
+   "event": "schedule",
+   "created_at": "2026-07-27T07:37:07Z",
+   "head_branch": "main",
+   "head_sha": "04d8930d964300d4650c3c1ba96c71cad1aada74",
+   "status": "completed",
+   "conclusion": "failure"
+  },
+  {
+   "id": 30230872623,
+   "event": "push",
+   "created_at": "2026-07-27T01:54:05Z",
+   "head_branch": "main",
+   "head_sha": "04d8930d964300d4650c3c1ba96c71cad1aada74",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30230734904,
+   "event": "pull_request",
+   "created_at": "2026-07-27T01:50:25Z",
+   "head_branch": "fix/rrf-weights-configurable",
+   "head_sha": "55c0d6a8f2d004fe78a587a6d3100f16ba474036",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30230669719,
+   "event": "push",
+   "created_at": "2026-07-27T01:48:41Z",
+   "head_branch": "main",
+   "head_sha": "ba79b3999d920ffdb4712fbd54cbb2348eb480cc",
+   "status": "completed",
+   "conclusion": "failure"
+  },
+  {
+   "id": 30230394773,
+   "event": "pull_request",
+   "created_at": "2026-07-27T01:41:41Z",
+   "head_branch": "fix/null-avatar-slug-case",
+   "head_sha": "16c2e7b49ce5289931b7cb8d211b642e1431f4ed",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30229828936,
+   "event": "pull_request",
+   "created_at": "2026-07-27T01:26:59Z",
+   "head_branch": "feat/memory-bench-gold-rank",
+   "head_sha": "12ce42b25267c697f8f9612f9dc99f2f70836b5e",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30229776626,
+   "event": "pull_request",
+   "created_at": "2026-07-27T01:25:35Z",
+   "head_branch": "fix/recall-scope-tags-prefilter",
+   "head_sha": "647566c51bc202ad600a289f64ad1741b1085234",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30229709928,
+   "event": "pull_request",
+   "created_at": "2026-07-27T01:23:55Z",
+   "head_branch": "fix/recall-scope-tags-prefilter",
+   "head_sha": "fa5324dc8ff289f013361fa5aab66034ef93ca4a",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30209484920,
+   "event": "pull_request",
+   "created_at": "2026-07-26T16:02:00Z",
+   "head_branch": "dependabot/github_actions/actions-all-54f596f637",
+   "head_sha": "93f436428eb11237c24bbc4829cebd5cc366a466",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30209385343,
+   "event": "push",
+   "created_at": "2026-07-26T15:59:27Z",
+   "head_branch": "main",
+   "head_sha": "dc8c1b478f408429a1ed0f73166241fab8de0dd4",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30208689694,
+   "event": "pull_request",
+   "created_at": "2026-07-26T15:40:04Z",
+   "head_branch": "riker/land-retrieval-baseline",
+   "head_sha": "83b16ac5f45373af2d28409f5e1b75d7f05f0d2c",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30207833923,
+   "event": "push",
+   "created_at": "2026-07-26T15:16:06Z",
+   "head_branch": "main",
+   "head_sha": "f0fd895e87b031a7a3462307396ef3b239d2430f",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30206940734,
+   "event": "pull_request",
+   "created_at": "2026-07-26T14:50:54Z",
+   "head_branch": "riker/readme-70pct-citation",
+   "head_sha": "efece75cae11cc1c740f1cc0a6fa54d3e572bcb5",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30206806035,
+   "event": "push",
+   "created_at": "2026-07-26T14:47:02Z",
+   "head_branch": "main",
+   "head_sha": "b5f3d1c7120065d782277b1b41ccbff8d8f0d4b0",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30205490462,
+   "event": "workflow_dispatch",
+   "created_at": "2026-07-26T14:09:13Z",
+   "head_branch": "riker/capture-retrieval-baseline",
+   "head_sha": "53f72f1aeaf0ed84ff1d3dbc5ecffb5c8cc057b5",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30205276667,
+   "event": "pull_request",
+   "created_at": "2026-07-26T14:02:44Z",
+   "head_branch": "riker/bench-key-sanitize",
+   "head_sha": "8200c35fddaec8c1169bf8c0e9f952ccf4b3c842",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30204922384,
+   "event": "pull_request",
+   "created_at": "2026-07-26T13:52:20Z",
+   "head_branch": "dependabot/github_actions/actions-all-54f596f637",
+   "head_sha": "aad015a3c1957fb49b0b05e9832c18be862c864c",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30204833015,
+   "event": "push",
+   "created_at": "2026-07-26T13:49:47Z",
+   "head_branch": "main",
+   "head_sha": "2498fadcb28fcf1e7820859946a8700be7c5bc36",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30204433963,
+   "event": "workflow_dispatch",
+   "created_at": "2026-07-26T13:37:57Z",
+   "head_branch": "riker/resnap-retrieval-baseline",
+   "head_sha": "4e8c1e8ed5ceda1d90c2b1ef1cd8786bfbd846fc",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30203971938,
+   "event": "pull_request",
+   "created_at": "2026-07-26T13:24:23Z",
+   "head_branch": "riker/advisory-arm-mode-gate",
+   "head_sha": "ee428ae4dc3d81bdf617433aac999ca2c5c80d3e",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30203813135,
+   "event": "pull_request",
+   "created_at": "2026-07-26T13:19:37Z",
+   "head_branch": "riker/advisory-arm-mode-gate",
+   "head_sha": "115f7964b593aceb6d07b176d912af7dedf16a2c",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30203684990,
+   "event": "pull_request",
+   "created_at": "2026-07-26T13:15:33Z",
+   "head_branch": "riker/bench-key-sanitize",
+   "head_sha": "9263e650182844f77434ee3b53dca01065257634",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30202804527,
+   "event": "push",
+   "created_at": "2026-07-26T12:48:56Z",
+   "head_branch": "main",
+   "head_sha": "c51aaec16e31caf1ea31bbc8db1c5632817b8a75",
+   "status": "completed",
+   "conclusion": "failure"
+  },
+  {
+   "id": 30202780705,
+   "event": "pull_request",
+   "created_at": "2026-07-26T12:48:08Z",
+   "head_branch": "riker/advisory-arm-mode-gate",
+   "head_sha": "1bab375f40ed4b8f467416395dd90465a0b7152c",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30202732563,
+   "event": "workflow_dispatch",
+   "created_at": "2026-07-26T12:46:37Z",
+   "head_branch": "riker/advisory-arm-mode-gate",
+   "head_sha": "1bab375f40ed4b8f467416395dd90465a0b7152c",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30201975117,
+   "event": "pull_request",
+   "created_at": "2026-07-26T12:24:00Z",
+   "head_branch": "riker/recall-gate-per-category-sample",
+   "head_sha": "c9b1796e06e35b20076d6d157f4904f673b3d261",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30197993145,
+   "event": "pull_request",
+   "created_at": "2026-07-26T10:17:07Z",
+   "head_branch": "dependabot/github_actions/actions-all-54f596f637",
+   "head_sha": "a09bcc103aadb6c4e3a20d0f781677327d152683",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30197684236,
+   "event": "pull_request",
+   "created_at": "2026-07-26T10:07:00Z",
+   "head_branch": "fix/pnpm11-overrides-workspace",
+   "head_sha": "63731a19387d00f56eef0708079e9870f635abad",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30197509118,
+   "event": "pull_request",
+   "created_at": "2026-07-26T10:01:21Z",
+   "head_branch": "fix/pnpm11-overrides-workspace",
+   "head_sha": "6de9841bbc6ec3043a240efb6c47ff0151e88e5d",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30191444472,
+   "event": "schedule",
+   "created_at": "2026-07-26T06:40:14Z",
+   "head_branch": "main",
+   "head_sha": "f77383525d702eb779e031cdbc7ffb71bccd33aa",
+   "status": "completed",
+   "conclusion": "failure"
+  },
+  {
+   "id": 30153530246,
+   "event": "pull_request",
+   "created_at": "2026-07-25T09:53:41Z",
+   "head_branch": "linus/backlog-monitor-due-date-promote",
+   "head_sha": "6836677e6a3f9bde299a37a001db14847ca2da7e",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 30147341465,
+   "event": "schedule",
+   "created_at": "2026-07-25T06:20:56Z",
+   "head_branch": "main",
+   "head_sha": "b1f9f77a222d1f6015b7bdcfe06e58d34ecb4855",
+   "status": "completed",
+   "conclusion": "failure"
+  },
+  {
+   "id": 30072411666,
+   "event": "schedule",
+   "created_at": "2026-07-24T06:29:24Z",
+   "head_branch": "main",
+   "head_sha": "b1f9f77a222d1f6015b7bdcfe06e58d34ecb4855",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 29985405338,
+   "event": "schedule",
+   "created_at": "2026-07-23T06:33:23Z",
+   "head_branch": "main",
+   "head_sha": "b1f9f77a222d1f6015b7bdcfe06e58d34ecb4855",
+   "status": "completed",
+   "conclusion": "failure"
+  },
+  {
+   "id": 29902961087,
+   "event": "pull_request",
+   "created_at": "2026-07-22T08:10:26Z",
+   "head_branch": "fix/recurring-prevsummary-truncation-c9fa3b4b",
+   "head_sha": "0149500c621959bfd8d36df9935f5581b72b1c70",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 29897108364,
+   "event": "schedule",
+   "created_at": "2026-07-22T06:32:58Z",
+   "head_branch": "main",
+   "head_sha": "e352e3d83fbe2c99e1ddebf5f635951bd503fe7f",
+   "status": "completed",
+   "conclusion": "failure"
+  },
+  {
+   "id": 29807366999,
+   "event": "schedule",
+   "created_at": "2026-07-21T06:32:59Z",
+   "head_branch": "main",
+   "head_sha": "e352e3d83fbe2c99e1ddebf5f635951bd503fe7f",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 29733400838,
+   "event": "pull_request",
+   "created_at": "2026-07-20T09:58:49Z",
+   "head_branch": "dependabot/npm_and_yarn/web/typescript-7.0.2",
+   "head_sha": "2b73ea301785233c1ab9ecacd5b5f423435178d6",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 29731687874,
+   "event": "pull_request",
+   "created_at": "2026-07-20T09:30:15Z",
+   "head_branch": "dependabot/npm_and_yarn/web/npm-minor-and-patch-6fd7933c93",
+   "head_sha": "9a559ced8c239d693696c8e83e5c99efd760fbbe",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 29731630321,
+   "event": "pull_request",
+   "created_at": "2026-07-20T09:29:23Z",
+   "head_branch": "dependabot/github_actions/actions-all-54f596f637",
+   "head_sha": "9b28049d0f2401f217bd922b8e4fb0e68b269da8",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 29731616862,
+   "event": "pull_request",
+   "created_at": "2026-07-20T09:29:10Z",
+   "head_branch": "dependabot/go_modules/go-minor-and-patch-747fda9c48",
+   "head_sha": "ffdb13b06b7e16e03558b5bd1d4f6a4241a1633b",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 29722835736,
+   "event": "schedule",
+   "created_at": "2026-07-20T06:51:19Z",
+   "head_branch": "main",
+   "head_sha": "438bdaae8235196b69236e3b0d2ed1fe6875dd22",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 29676652186,
+   "event": "schedule",
+   "created_at": "2026-07-19T06:34:12Z",
+   "head_branch": "main",
+   "head_sha": "438bdaae8235196b69236e3b0d2ed1fe6875dd22",
+   "status": "completed",
+   "conclusion": "failure"
+  },
+  {
+   "id": 29633477357,
+   "event": "schedule",
+   "created_at": "2026-07-18T06:08:31Z",
+   "head_branch": "main",
+   "head_sha": "438bdaae8235196b69236e3b0d2ed1fe6875dd22",
+   "status": "completed",
+   "conclusion": "failure"
+  },
+  {
+   "id": 29559773342,
+   "event": "schedule",
+   "created_at": "2026-07-17T06:20:50Z",
+   "head_branch": "main",
+   "head_sha": "438bdaae8235196b69236e3b0d2ed1fe6875dd22",
+   "status": "completed",
+   "conclusion": "failure"
+  },
+  {
+   "id": 29476517603,
+   "event": "schedule",
+   "created_at": "2026-07-16T06:22:30Z",
+   "head_branch": "main",
+   "head_sha": "438bdaae8235196b69236e3b0d2ed1fe6875dd22",
+   "status": "completed",
+   "conclusion": "failure"
+  },
+  {
+   "id": 29419185378,
+   "event": "push",
+   "created_at": "2026-07-15T13:26:30Z",
+   "head_branch": "main",
+   "head_sha": "438bdaae8235196b69236e3b0d2ed1fe6875dd22",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 29417916255,
+   "event": "pull_request",
+   "created_at": "2026-07-15T13:07:40Z",
+   "head_branch": "linus/resnap-recall-gate-baseline",
+   "head_sha": "ef125580f258fd62d5bb52b7acff8e763ce4f7dd",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 29415371331,
+   "event": "push",
+   "created_at": "2026-07-15T12:28:57Z",
+   "head_branch": "main",
+   "head_sha": "db724c94151b85cd642f449de9def8907242440b",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 29414208424,
+   "event": "pull_request",
+   "created_at": "2026-07-15T12:10:01Z",
+   "head_branch": "garfield/fix-recall-gate-silent-tool-error",
+   "head_sha": "4d3c2bf39339efa8c7e2a53fef6d764164bd91cd",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 29413871954,
+   "event": "push",
+   "created_at": "2026-07-15T12:04:26Z",
+   "head_branch": "main",
+   "head_sha": "44a3c650122a0958617c80dee4c87586dfdf18a4",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 29412777436,
+   "event": "pull_request",
+   "created_at": "2026-07-15T11:45:57Z",
+   "head_branch": "feat/embed-bounded-concurrency",
+   "head_sha": "3d2ca126ff340ef43c3d1bb90ae14c9ae9cac27e",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 29410878682,
+   "event": "push",
+   "created_at": "2026-07-15T11:13:28Z",
+   "head_branch": "main",
+   "head_sha": "241b02f2e3106c9cc04755647f228da6e868a0c7",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 29409962964,
+   "event": "pull_request",
+   "created_at": "2026-07-15T10:58:00Z",
+   "head_branch": "feat/embedding-reembed-on-model-switch",
+   "head_sha": "7c483cf68b831a65a2d258a9c06cc87c8babb843",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 29393844517,
+   "event": "schedule",
+   "created_at": "2026-07-15T06:18:55Z",
+   "head_branch": "main",
+   "head_sha": "df03169eb0d0bf53bd42c422ce2d3cd5eaed55b1",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 29357290345,
+   "event": "pull_request",
+   "created_at": "2026-07-14T18:18:03Z",
+   "head_branch": "feat/embedding-reembed-on-model-switch",
+   "head_sha": "f0122b68886a97a145712d2aced1a23d210a0546",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 29310795678,
+   "event": "schedule",
+   "created_at": "2026-07-14T06:15:08Z",
+   "head_branch": "main",
+   "head_sha": "df03169eb0d0bf53bd42c422ce2d3cd5eaed55b1",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 29308351271,
+   "event": "pull_request",
+   "created_at": "2026-07-14T05:22:13Z",
+   "head_branch": "dependabot/github_actions/actions-all-54f596f637",
+   "head_sha": "7f98f601fb612c6cfdca9ea6394765a8fd4956e3",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 29308247063,
+   "event": "push",
+   "created_at": "2026-07-14T05:19:56Z",
+   "head_branch": "main",
+   "head_sha": "df03169eb0d0bf53bd42c422ce2d3cd5eaed55b1",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 29306252550,
+   "event": "pull_request",
+   "created_at": "2026-07-14T04:33:12Z",
+   "head_branch": "riker/recall-gate-blind-spots",
+   "head_sha": "9f5fafd43acdba815907e03f76092f0b43f81908",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 29270597785,
+   "event": "pull_request",
+   "created_at": "2026-07-13T17:28:56Z",
+   "head_branch": "linus/cost-tracking-dashboard",
+   "head_sha": "9e665d00b01f2d89b65b5cb59bbbf92a816838e0",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 29255892030,
+   "event": "pull_request",
+   "created_at": "2026-07-13T13:57:27Z",
+   "head_branch": "fix/memory-delete-role-gate",
+   "head_sha": "994064e736802392d6ac38d16deecd0831a55029",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 29254151218,
+   "event": "push",
+   "created_at": "2026-07-13T13:32:23Z",
+   "head_branch": "main",
+   "head_sha": "480dd66926cfafe6e6d111123b849e89303212e2",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 29253038962,
+   "event": "pull_request",
+   "created_at": "2026-07-13T13:15:02Z",
+   "head_branch": "fix/memories-find-related-cross-tenant",
+   "head_sha": "b02654474e8a2a2eac188c0c9a011f516d01d1e9",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 29249267204,
+   "event": "pull_request",
+   "created_at": "2026-07-13T12:16:51Z",
+   "head_branch": "fix/memory-cross-tenant-workspace-id",
+   "head_sha": "c80af58f3c3ec3f54735e7454534f60b82e48abb",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 29249173055,
+   "event": "pull_request",
+   "created_at": "2026-07-13T12:15:20Z",
+   "head_branch": "fix/memory-cross-tenant-workspace-id",
+   "head_sha": "bd144a56f773f861dcbd7a275c3bf39efc85695a",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 29245308878,
+   "event": "push",
+   "created_at": "2026-07-13T11:10:10Z",
+   "head_branch": "main",
+   "head_sha": "7e1f2bdbc9d46a329233104a3834ac37533cd8b4",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 29245135744,
+   "event": "pull_request",
+   "created_at": "2026-07-13T11:07:23Z",
+   "head_branch": "fix/wire-dod-gate-metric-70eb6dcd",
+   "head_sha": "0bbaf0d1fabc4373beddcc85f7584ae49afbed78",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 29244638278,
+   "event": "workflow_dispatch",
+   "created_at": "2026-07-13T10:59:04Z",
+   "head_branch": "main",
+   "head_sha": "2e2a288be22c1b37261f45805ac52c413014fdcb",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 29244098507,
+   "event": "pull_request",
+   "created_at": "2026-07-13T10:49:42Z",
+   "head_branch": "fix/missing-creds-inconclusive-not-regression",
+   "head_sha": "cf5f54a61dd92bb013556908cc826ece1c0947c2",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 29243704147,
+   "event": "pull_request",
+   "created_at": "2026-07-13T10:42:49Z",
+   "head_branch": "dependabot/npm_and_yarn/web/typescript-7.0.2",
+   "head_sha": "c74b3e4b1ca9919e6fe7f62094b1718a9b625316",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 29243420072,
+   "event": "workflow_dispatch",
+   "created_at": "2026-07-13T10:37:48Z",
+   "head_branch": "main",
+   "head_sha": "8bbe9058c19228de229eb60cb9c66b743778330a",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 29242446237,
+   "event": "pull_request",
+   "created_at": "2026-07-13T10:21:11Z",
+   "head_branch": "fix/advisory-arm-inconclusive-not-red",
+   "head_sha": "474f2919f29ee2392d321c5f77843c9cf006d481",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 29242320766,
+   "event": "push",
+   "created_at": "2026-07-13T10:19:01Z",
+   "head_branch": "main",
+   "head_sha": "21d1d6239368d8706f43ed659628e253aba7068e",
+   "status": "completed",
+   "conclusion": "failure"
+  },
+  {
+   "id": 29241884177,
+   "event": "pull_request",
+   "created_at": "2026-07-13T10:11:41Z",
+   "head_branch": "dependabot/npm_and_yarn/web/vitejs/plugin-react-6.0.3",
+   "head_sha": "cd15c10008b803330fa19d40ebfd580058842219",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 29241880182,
+   "event": "pull_request",
+   "created_at": "2026-07-13T10:11:37Z",
+   "head_branch": "dependabot/npm_and_yarn/web/typescript-7.0.2",
+   "head_sha": "42c90818324c882794ff467f7869122e61d0864e",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 29241392535,
+   "event": "pull_request",
+   "created_at": "2026-07-13T10:03:49Z",
+   "head_branch": "chore/recall-gate-baseline",
+   "head_sha": "ff0f26679cd9295a37eeb36b5bfcf337fe34f10d",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 29240149726,
+   "event": "push",
+   "created_at": "2026-07-13T09:43:08Z",
+   "head_branch": "main",
+   "head_sha": "3ca18787182637a549901a2bd1184b1948710fdb",
+   "status": "completed",
+   "conclusion": "failure"
+  },
+  {
+   "id": 29239995451,
+   "event": "pull_request",
+   "created_at": "2026-07-13T09:40:39Z",
+   "head_branch": "dependabot/npm_and_yarn/web/types/node-26.1.1",
+   "head_sha": "3c7352012b7281fcac093c0e90a0adb3fb90fbcc",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 29239994113,
+   "event": "pull_request",
+   "created_at": "2026-07-13T09:40:38Z",
+   "head_branch": "dependabot/npm_and_yarn/web/vitejs/plugin-react-6.0.3",
+   "head_sha": "3d7b9a63c502b091c3122dedaa7b5bb8b0cebee2",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 29239990542,
+   "event": "pull_request",
+   "created_at": "2026-07-13T09:40:34Z",
+   "head_branch": "dependabot/npm_and_yarn/web/typescript-7.0.2",
+   "head_sha": "9953b66cfc6eebe6546a13ae9dbf973633b952ad",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 29239432128,
+   "event": "pull_request",
+   "created_at": "2026-07-13T09:31:23Z",
+   "head_branch": "dependabot/npm_and_yarn/web/vitejs/plugin-react-6.0.3",
+   "head_sha": "2fc7f5e65f25b206eef601f783db95d88a3ca284",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 29239419287,
+   "event": "pull_request",
+   "created_at": "2026-07-13T09:31:11Z",
+   "head_branch": "dependabot/npm_and_yarn/web/typescript-7.0.2",
+   "head_sha": "2d5c77685eff7a8d6e103a45efb64ea67337a70c",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 29239405409,
+   "event": "pull_request",
+   "created_at": "2026-07-13T09:30:59Z",
+   "head_branch": "dependabot/npm_and_yarn/web/types/node-26.1.1",
+   "head_sha": "ec47b833130a170aa00b7ee2409a8c08ae993e52",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 29239390880,
+   "event": "pull_request",
+   "created_at": "2026-07-13T09:30:46Z",
+   "head_branch": "dependabot/npm_and_yarn/web/react-router-8.2.0",
+   "head_sha": "1c9e1026f9b9926a24297ca5e47955d386d3815d",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 29239368978,
+   "event": "pull_request",
+   "created_at": "2026-07-13T09:30:27Z",
+   "head_branch": "dependabot/npm_and_yarn/web/npm-minor-and-patch-c14e8aa99d",
+   "head_sha": "26ac4c1c371b880968251316c77f58f604770f42",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 29239294051,
+   "event": "pull_request",
+   "created_at": "2026-07-13T09:29:19Z",
+   "head_branch": "dependabot/go_modules/go-minor-and-patch-747fda9c48",
+   "head_sha": "a41017b94e0a582650419b4d0b5e0bd6dc2ec8af",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 29239023004,
+   "event": "pull_request",
+   "created_at": "2026-07-13T09:25:13Z",
+   "head_branch": "fix/recall-gate-mode-aware",
+   "head_sha": "ba2dae43b1eff03f26b52a07f79d6457df400e4a",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 29238063142,
+   "event": "pull_request",
+   "created_at": "2026-07-13T09:10:26Z",
+   "head_branch": "fix/recall-gate-mode-aware",
+   "head_sha": "01a71ec20588ad2e2938e003770cf191e93db59a",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 29236277455,
+   "event": "pull_request",
+   "created_at": "2026-07-13T08:40:43Z",
+   "head_branch": "dependabot/github_actions/actions-all-d453238978",
+   "head_sha": "bdcc0a597953a0322513253e601e2907d43641eb",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 29236115437,
+   "event": "push",
+   "created_at": "2026-07-13T08:37:56Z",
+   "head_branch": "main",
+   "head_sha": "5524cad65ee823eeeaaf545045f12dc0aa50f0f5",
+   "status": "completed",
+   "conclusion": "failure"
+  },
+  {
+   "id": 29234140194,
+   "event": "pull_request",
+   "created_at": "2026-07-13T08:04:26Z",
+   "head_branch": "fix/memory-bench-inconclusive-and-retrieval-gate",
+   "head_sha": "7578453dfcd4bd7f8a94a2916da3ba5ffd59aee5",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 29234055472,
+   "event": "pull_request",
+   "created_at": "2026-07-13T08:02:57Z",
+   "head_branch": "fix/memory-bench-inconclusive-and-retrieval-gate",
+   "head_sha": "082fd3d9adfdfe11522d41737c942f1fc0609890",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 29230889642,
+   "event": "push",
+   "created_at": "2026-07-13T07:04:58Z",
+   "head_branch": "main",
+   "head_sha": "4b7550c3e1596441d6e7ef082b7867563bd189a8",
+   "status": "completed",
+   "conclusion": "failure"
+  },
+  {
+   "id": 29230088502,
+   "event": "pull_request",
+   "created_at": "2026-07-13T06:48:56Z",
+   "head_branch": "fix/bm25-or-fallback",
+   "head_sha": "a8f8766bece920a29463d9529db0f4ca37e5e3fc",
+   "status": "completed",
+   "conclusion": "failure"
+  },
+  {
+   "id": 29097008286,
+   "event": "push",
+   "created_at": "2026-07-10T13:41:39Z",
+   "head_branch": "main",
+   "head_sha": "fca0ee6b09e5ee505659e96850416d57f6cdc780",
+   "status": "completed",
+   "conclusion": "failure"
+  },
+  {
+   "id": 29090063950,
+   "event": "pull_request",
+   "created_at": "2026-07-10T11:38:36Z",
+   "head_branch": "garfield/fix-subtask-status-inheritance",
+   "head_sha": "1e4c81c8b137ba18ad80e8fc4e2fc34a658aa8cf",
+   "status": "completed",
+   "conclusion": "failure"
+  },
+  {
+   "id": 28965182156,
+   "event": "push",
+   "created_at": "2026-07-08T18:11:27Z",
+   "head_branch": "main",
+   "head_sha": "7f160116aa59730a665589f9b64983e47266c2b7",
+   "status": "completed",
+   "conclusion": "failure"
+  },
+  {
+   "id": 28958352709,
+   "event": "pull_request",
+   "created_at": "2026-07-08T16:22:30Z",
+   "head_branch": "daedalus/cas-move-precondition",
+   "head_sha": "9b76ae13e97fabe53b607ef028af842100d96c0d",
+   "status": "completed",
+   "conclusion": "failure"
+  },
+  {
+   "id": 28721258968,
+   "event": "push",
+   "created_at": "2026-07-04T22:11:32Z",
+   "head_branch": "main",
+   "head_sha": "22ee40fcea06b9290d02c36b1934db6ec06886c9",
+   "status": "completed",
+   "conclusion": "failure"
+  },
+  {
+   "id": 28721258928,
+   "event": "workflow_dispatch",
+   "created_at": "2026-07-04T22:11:31Z",
+   "head_branch": "main",
+   "head_sha": "22ee40fcea06b9290d02c36b1934db6ec06886c9",
+   "status": "completed",
+   "conclusion": "success"
+  },
+  {
+   "id": 28720713023,
+   "event": "pull_request",
+   "created_at": "2026-07-04T21:49:30Z",
+   "head_branch": "garfield/fix-bench-tolerance",
+   "head_sha": "753094ccae113359e90c4f0071fdde0dc2b09b19",
+   "status": "completed",
+   "conclusion": "failure"
+  },
+  {
+   "id": 28720172706,
+   "event": "workflow_dispatch",
+   "created_at": "2026-07-04T21:27:17Z",
+   "head_branch": "main",
+   "head_sha": "f48de8e41df9a47d8dba751c870ebabb6e5cb475",
+   "status": "completed",
+   "conclusion": "failure"
+  },
+  {
+   "id": 28719912860,
+   "event": "workflow_dispatch",
+   "created_at": "2026-07-04T21:16:44Z",
+   "head_branch": "main",
+   "head_sha": "fb957ed337f3133e9ad921dd23cf7261df3ec88e",
+   "status": "completed",
+   "conclusion": "failure"
+  },
+  {
+   "id": 28719911283,
+   "event": "push",
+   "created_at": "2026-07-04T21:16:40Z",
+   "head_branch": "main",
+   "head_sha": "fb957ed337f3133e9ad921dd23cf7261df3ec88e",
+   "status": "completed",
+   "conclusion": "failure"
+  },
+  {
+   "id": 28719908110,
+   "event": "pull_request",
+   "created_at": "2026-07-04T21:16:32Z",
+   "head_branch": "daedalus/memory-p3-ci-gate",
+   "head_sha": "a3dabb0452d9e11e7580a2e377a45d2c92ef4f93",
+   "status": "completed",
+   "conclusion": "failure"
+  }
+ ]
+}

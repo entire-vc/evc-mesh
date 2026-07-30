@@ -19,6 +19,40 @@ permissions:
   contents: read
 
 jobs:
+  self-host-env:
+    name: "Self-host env (no new required vars)"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      # A compose variable that is required with no default breaks upgrades
+      # for every existing self-host install that lacks it — at config-parse
+      # time, before a container starts, which our own prod never sees
+      # because it has had the variable all along.
+      - name: check-required-env
+        run: deploy/docker/mesh/check-required-env.sh
+      # The static check above cannot see a variable made required in a way
+      # the regex misses, so also prove it end to end: an .env produced from
+      # the FIRST installable release still parses against today's compose
+      # files. This is the exact upgrade that failed on 2026-07-29
+      # (mesh.prototypes.ventures, 5b672a6 -> 9d7ac87).
+      #
+      # BOTH files, for the reason spelled out in check-required-env.sh: the
+      # first version of this job parsed only the production file, so the same
+      # defect in docker-compose.yml — which docs/self-hosting.md presents as
+      # the default Quick Start path — slipped the static and the dynamic
+      # layer at once. Also parses env_file: references, which the regex
+      # cannot follow.
+      - name: An .env from the first release still parses
+        working-directory: deploy/docker/mesh
+        run: |
+          sed -E 's/^([A-Z_]+)=$/\1=ci-placeholder/' \
+            testdata/first-release.env.example > /tmp/first-release.env
+          for f in docker-compose.prod.yml docker-compose.yml; do
+            echo "--- $f"
+            docker compose -f "$f" \
+              --env-file /tmp/first-release.env config >/dev/null
+          done
+
   lint:
     name: Lint
     runs-on: ubuntu-latest
@@ -122,12 +156,49 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
-      nats:
-        image: nats:2-alpine
-        ports:
-          - 4222:4222
+      # NOTE: nats is deliberately NOT a service container. The event bus needs
+      # JetStream, and JetStream is off unless nats-server is started with
+      # --jetstream. A `services:` entry runs the image's default CMD and GitHub
+      # Actions offers no way to override it, so a service-declared nats ran
+      # without JetStream: PublishEvent failed and no event was ever delivered
+      # to a subscriber. Nothing caught it because until the WebSocket tenancy
+      # tests, no integration test asserted that an event ARRIVES — only that
+      # endpoints answer. Started as a plain container below instead, with the
+      # same flags as deploy/docker/mesh/docker-compose.yml.
+      #
+      # minio is not a service container for exactly the same reason: its
+      # default CMD prints usage and exits, and the server only starts with
+      # `server /data`. Started as a plain container below. Without it, every
+      # upload answered "object storage is unreachable" and the workspace-icon
+      # test could not check the one thing it exists to check.
     steps:
       - uses: actions/checkout@v6
+      - name: Start NATS with JetStream enabled
+        run: |
+          docker run -d --name nats -p 4222:4222 nats:2-alpine \
+            --jetstream --store_dir /data --http_port 8222
+          for _ in $(seq 30); do
+            if docker exec nats wget --spider -q http://127.0.0.1:8222/healthz 2>/dev/null; then
+              echo "NATS ready with JetStream"; exit 0
+            fi
+            sleep 1
+          done
+          echo "NATS did not become healthy"; docker logs nats; exit 1
+
+      - name: Start MinIO (object storage)
+        run: |
+          docker run -d --name minio -p 9000:9000 \
+            -e MINIO_ROOT_USER=minioadmin \
+            -e MINIO_ROOT_PASSWORD=minioadmin \
+            minio/minio server /data
+          for _ in $(seq 30); do
+            if curl -sf http://localhost:9000/minio/health/live >/dev/null 2>&1; then
+              echo "MinIO ready"; exit 0
+            fi
+            sleep 1
+          done
+          echo "MinIO did not become healthy"; docker logs minio; exit 1
+
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
@@ -154,6 +225,14 @@ jobs:
           REDIS_HOST: localhost
           REDIS_PORT: "6379"
           NATS_URL: "nats://localhost:4222"
+          # Object storage — the MinIO container started above. The bucket is
+          # created by the API at startup, so nothing sets it up here.
+          S3_ENDPOINT: "localhost:9000"
+          S3_ACCESS_KEY_ID: minioadmin
+          S3_SECRET_ACCESS_KEY: minioadmin
+          S3_BUCKET: mesh-artifacts
+          S3_REGION: us-east-1
+          S3_USE_SSL: "false"
           # Auth — CI-safe values (tests create their own users via /auth/register)
           JWT_SECRET: "ci-test-secret-32chars-minimum!!"
           JWT_ISSUER: "mesh-ci"

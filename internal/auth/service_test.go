@@ -220,6 +220,13 @@ func (r *mockWorkspaceRepo) ListByOwner(_ context.Context, ownerID uuid.UUID) ([
 	return result, nil
 }
 
+// ListForUser: this mock stores no memberships, so visibility collapses to
+// ownership. Membership listing is covered in internal/service and the
+// postgres integration tests.
+func (r *mockWorkspaceRepo) ListForUser(ctx context.Context, userID uuid.UUID) ([]domain.Workspace, error) {
+	return r.ListByOwner(ctx, userID)
+}
+
 // ---
 
 type mockWorkspaceMemberRepo struct {
@@ -345,6 +352,52 @@ func TestRegister_Success(t *testing.T) {
 	}
 	wsMemberRepo.mu.RUnlock()
 	assert.True(t, foundMember, "workspace member with owner role should be created")
+}
+
+// The default workspace is named after the registering user, not a fixed
+// "My Workspace" every account got — the first thing a new user sees
+// shouldn't read like an unfilled placeholder.
+func TestRegister_DefaultWorkspaceIsNamedAfterUser(t *testing.T) {
+	svc, _, _, wsRepo, _ := newTestService()
+
+	user, _, err := svc.Register(context.Background(), "test@example.com", "StrongP4ss", "Test User")
+	require.NoError(t, err)
+
+	var ws *domain.Workspace
+	wsRepo.mu.RLock()
+	for _, w := range wsRepo.items {
+		if w.OwnerID == user.ID {
+			ws = w
+			break
+		}
+	}
+	wsRepo.mu.RUnlock()
+
+	require.NotNil(t, ws, "default workspace should be created")
+	assert.Equal(t, "Test User's Workspace", ws.Name)
+}
+
+// A caller that somehow passes an empty name (Register does not itself
+// require one) must not produce an empty or malformed workspace name —
+// fall back to the old generic default rather than "'s Workspace".
+func TestRegister_EmptyNameFallsBackToGenericWorkspaceName(t *testing.T) {
+	svc, _, _, wsRepo, _ := newTestService()
+
+	user, _, err := svc.Register(context.Background(), "blank@example.com", "StrongP4ss", "   ")
+	require.NoError(t, err)
+
+	var ws *domain.Workspace
+	wsRepo.mu.RLock()
+	for _, w := range wsRepo.items {
+		if w.OwnerID == user.ID {
+			ws = w
+			break
+		}
+	}
+	wsRepo.mu.RUnlock()
+
+	require.NotNil(t, ws)
+	assert.Equal(t, "My Workspace", ws.Name)
 }
 
 func TestRegister_DuplicateEmail(t *testing.T) {

@@ -473,3 +473,86 @@ func TestCommentHandler_GetRecentByWorkspace_BadCursor(t *testing.T) {
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &apiErr))
 	assert.NotEmpty(t, apiErr.Validation["before"])
 }
+
+// --- comment.metadata pass-through (task #13e391d2) ---
+//
+// The defect these cover was invisible at every layer that had a test: the domain struct,
+// the repository, and the DB column all handled Metadata correctly, and the only thing
+// missing was the field on createCommentRequest — so `c.Bind` dropped it and the API
+// answered 201 with `{}`. A test asserting "POST succeeds" passed throughout. What was
+// missing is an assertion that the value the caller SENT reached the service.
+
+func TestCommentHandler_Create_MetadataReachesService(t *testing.T) {
+	taskID := uuid.New()
+	agentID := uuid.New()
+
+	var got json.RawMessage
+	mockSvc := &MockCommentService{
+		CreateFunc: func(_ context.Context, comment *domain.Comment) error {
+			got = comment.Metadata
+			return nil
+		},
+	}
+
+	h, e := setupCommentTest(mockSvc)
+
+	// Mixed value types on purpose: the original bug report suspected the boolean was to
+	// blame, so a string-only payload would not discriminate between "booleans break it"
+	// and "the whole field is dropped".
+	body := `{"body":"auto nudge","metadata":{"source":"pr-task-driver","auto":true,"attempt":3}}`
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/tasks/:task_id/comments")
+	c.SetParamNames("task_id")
+	c.SetParamValues(taskID.String())
+	c.Set("agent_id", agentID)
+
+	err := h.Create(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusCreated, rec.Code)
+
+	require.NotEmpty(t, got, "metadata never reached the service — the DTO dropped it")
+
+	var decoded map[string]any
+	require.NoError(t, json.Unmarshal(got, &decoded))
+	assert.Equal(t, "pr-task-driver", decoded["source"])
+	assert.Equal(t, true, decoded["auto"])
+	assert.Equal(t, float64(3), decoded["attempt"])
+
+	// And the response must not claim something different from what was stored.
+	var result domain.Comment
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &result))
+	var echoed map[string]any
+	require.NoError(t, json.Unmarshal(result.Metadata, &echoed))
+	assert.Equal(t, "pr-task-driver", echoed["source"])
+}
+
+func TestCommentHandler_Create_MetadataOmittedStaysEmpty(t *testing.T) {
+	taskID := uuid.New()
+
+	called := false
+	mockSvc := &MockCommentService{
+		CreateFunc: func(_ context.Context, comment *domain.Comment) error {
+			called = true
+			assert.Empty(t, comment.Metadata, "absent metadata must not be invented")
+			return nil
+		},
+	}
+
+	h, e := setupCommentTest(mockSvc)
+
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"body":"plain comment"}`))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/tasks/:task_id/comments")
+	c.SetParamNames("task_id")
+	c.SetParamValues(taskID.String())
+	c.Set("user_id", uuid.New())
+
+	require.NoError(t, h.Create(c))
+	assert.Equal(t, http.StatusCreated, rec.Code)
+	assert.True(t, called)
+}

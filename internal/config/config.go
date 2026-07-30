@@ -33,7 +33,7 @@ type EmailConfig struct {
 	User    string
 	Pass    string
 	From    string
-	BaseURL string // e.g. https://mesh.entire.host — used to build invite accept links
+	BaseURL string // e.g. https://mesh.example.com — used to build invite accept links
 }
 
 // EmbeddingConfig holds configuration for the optional text embedding provider.
@@ -53,6 +53,11 @@ type EmbeddingConfig struct {
 	Dimensions int
 	// BatchSize controls how many texts are embedded in a single batch call (default: 32).
 	BatchSize int
+	// MaxInputTokens is the server's input window, used to detect silent truncation.
+	// Embedding servers truncate oversized input by default and report it nowhere in
+	// the response, so a response whose prompt_tokens lands exactly on this value is
+	// the only client-visible sign that content was dropped. 0 disables the check.
+	MaxInputTokens int
 	// Concurrency bounds how many embed calls may run concurrently (default: 0, meaning
 	// unbounded — every write spawns its own embed goroutine, today's exact behavior).
 	Concurrency int
@@ -97,6 +102,17 @@ type ServerConfig struct {
 	Port         int
 	ReadTimeout  time.Duration
 	WriteTimeout time.Duration
+	// MetricsToken, when set, gates GET /metrics behind a matching
+	// `Authorization: Bearer <token>` header. Empty (the default) leaves the
+	// endpoint open — that's the existing behavior for deployments that
+	// front it with their own network control (e.g. Caddy on the internal
+	// prod install).
+	//
+	// Sourced from MESH_METRICS_TOKEN, or from the file named by
+	// MESH_METRICS_TOKEN_FILE when that variable is empty. The self-host
+	// docker-compose.prod.yml uses the file form so it can generate a token
+	// the operator never has to set, and hand the same file to prometheus.
+	MetricsToken string
 }
 
 // DatabaseConfig holds PostgreSQL connection settings.
@@ -182,6 +198,7 @@ func Load() *Config {
 			Port:         getEnvInt("SERVER_PORT", 8005),
 			ReadTimeout:  getEnvDuration("SERVER_READ_TIMEOUT", 30*time.Second),
 			WriteTimeout: getEnvDuration("SERVER_WRITE_TIMEOUT", 30*time.Second),
+			MetricsToken: getEnvOrFile("MESH_METRICS_TOKEN", "MESH_METRICS_TOKEN_FILE"),
 		},
 		Database: DatabaseConfig{
 			Host:     getEnv("DB_HOST", "localhost"),
@@ -226,7 +243,7 @@ func Load() *Config {
 			APIRPM:     getEnvInt("MESH_RATE_LIMIT_API_RPM", 600),
 		},
 		Spark: SparkConfig{
-			URL:     getEnv("MESH_SPARK_URL", "https://spark.entire.vc"),
+			URL:     getEnv("MESH_SPARK_URL", ""),
 			Enabled: getEnvBool("MESH_SPARK_ENABLED", false),
 		},
 		Webhook: WebhookConfig{
@@ -241,21 +258,35 @@ func Load() *Config {
 			BatchSize:       getEnvInt("EMBEDDING_BATCH_SIZE", 32),
 			Concurrency:     getEnvInt("EMBEDDING_CONCURRENCY", 0),
 			HTTPTimeoutSecs: getEnvInt("EMBEDDING_HTTP_TIMEOUT_SECS", 30),
+			MaxInputTokens:  getEnvInt("EMBEDDING_MAX_INPUT_TOKENS", 0),
 		},
 		VAPID: VAPIDConfig{
 			PublicKey:  getEnv("MESH_VAPID_PUBLIC_KEY", ""),
 			PrivateKey: getEnv("MESH_VAPID_PRIVATE_KEY", ""),
-			Subject:    getEnv("MESH_VAPID_SUBJECT", "mailto:rj@entire.vc"),
+			Subject:    getEnv("MESH_VAPID_SUBJECT", ""),
 		},
 		Email: EmailConfig{
 			Host:    getEnv("SMTP_HOST", ""),
 			Port:    getEnvInt("SMTP_PORT", 587),
 			User:    getEnv("SMTP_USER", ""),
 			Pass:    getEnv("SMTP_PASSWORD", ""),
-			From:    getEnv("SMTP_FROM", "noreply@mesh.entire.host"),
-			BaseURL: getEnv("MESH_BASE_URL", "http://localhost:5173"),
+			From:    getEnv("SMTP_FROM", ""),
+			BaseURL: getEnv("MESH_BASE_URL", DefaultBaseURL),
 		},
 	}
+}
+
+// DefaultBaseURL is where MESH_BASE_URL lands when nobody sets it: the Vite dev
+// server. It is the right default for a developer running the frontend locally
+// and the wrong one for every deployed instance — invite links built from it
+// point at the invitee's own machine. Callers use BaseURLIsDefault to say so out
+// loud at startup rather than mailing out links that quietly go nowhere.
+const DefaultBaseURL = "http://localhost:5173"
+
+// BaseURLIsDefault reports whether invite links will be built from the
+// development fallback rather than a configured public URL.
+func (c EmailConfig) BaseURLIsDefault() bool {
+	return c.BaseURL == DefaultBaseURL
 }
 
 // --- Helper functions ---
@@ -265,6 +296,28 @@ func getEnv(key, defaultVal string) string {
 		return val
 	}
 	return defaultVal
+}
+
+// getEnvOrFile returns the value of key, falling back to the contents of the
+// file named by fileKey when key is unset or empty. Trailing newlines are
+// trimmed so a file written with `echo` behaves like one written with
+// `printf`. An unreadable file yields the empty string: the caller treats
+// that as "not configured", which for the metrics token means the endpoint
+// keeps its historical open behavior rather than the API refusing to boot
+// over a monitoring knob.
+func getEnvOrFile(key, fileKey string) string {
+	if val := os.Getenv(key); val != "" {
+		return val
+	}
+	path := os.Getenv(fileKey)
+	if path == "" {
+		return ""
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(b))
 }
 
 func getEnvInt(key string, defaultVal int) int {

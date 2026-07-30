@@ -92,11 +92,43 @@ func (h *TaskStatusHandler) Create(c echo.Context) error {
 }
 
 // Update handles PATCH /projects/:proj_id/statuses/:status_id
+//
+// The status has to belong to the project in the path. It did not have to before:
+// :proj_id was only ever read by the middleware, the handler addressed the status
+// by its own id, and the service merged whatever it found. So a member of any
+// workspace could send their own :proj_id together with a stranger's :status_id
+// and rename, recolour or recategorise another tenant's workflow column — 200, and
+// the write landed. Recategorising is the sharp end: a status silently moved to
+// "done" closes that tenant's tasks out from under them.
+//
+// The guard refuses this request before it arrives now
+// (middleware.workspaceParamResolvers); this is the same check written where the
+// write happens.
 func (h *TaskStatusHandler) Update(c echo.Context) error {
+	projID, err := uuid.Parse(c.Param("proj_id"))
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid project_id"))
+	}
+
 	statusIDStr := c.Param("status_id")
 	statusID, err := uuid.Parse(statusIDStr)
 	if err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid status_id"))
+	}
+
+	existing, err := h.statusService.ListByProject(c.Request().Context(), projID)
+	if err != nil {
+		return handleError(c, err)
+	}
+	belongs := false
+	for i := range existing {
+		if existing[i].ID == statusID {
+			belongs = true
+			break
+		}
+	}
+	if !belongs {
+		return c.JSON(http.StatusNotFound, apierror.NotFound("TaskStatus"))
 	}
 
 	var req updateTaskStatusRequest

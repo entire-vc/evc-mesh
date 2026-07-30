@@ -230,6 +230,7 @@ jobs:
           python scripts/memory-bench/test_fixture_isolation.py
           python scripts/memory-bench/test_serving_version.py
           python scripts/memory-bench/test_classify_cancelled_arm.py
+          python scripts/memory-bench/test_resume_after_deploy.py
           python scripts/memory-bench/dense_arm_control.py --selftest
           python scripts/memory-bench/prod_window.py --selftest
 
@@ -633,11 +634,13 @@ jobs:
     # was wrong about which; enumerate them all or the omitted one is the one
     # that bites.
     #
-    #   (a) A newer RUN's canary evicts an older run's PENDING canary.
+    #   (a) A newer run ON THE SAME REF evicts an older run's PENDING canary.
     #       POSSIBLE, and intended. The canary asks "is what is deployed still
     #       good"; when two commits are deploying, the newer is the one worth
     #       measuring, and the older canary would in any case have been refused
     #       by the version pin for being unable to find its own sha in prod.
+    #       The ref qualifier is load-bearing and was missing here until ordering
+    #       (f) below fired on the very first post-fix push — see there.
     #
     #   (b) The advisory arm evicts the canary of its OWN run.
     #       IMPOSSIBLE now. `needs: recall-gate` keeps the advisory out of the
@@ -680,17 +683,37 @@ jobs:
     #       nightly coverage is ever found to be missing more often than it lands,
     #       the fix is a workflow-level group (one run = one slot), not an alert.
     #
+    #   (f) A run on a DIFFERENT REF evicts this ref's PENDING canary.
+    #       POSSIBLE, and it is the ordering that actually killed the first
+    #       post-fix push. `memory-bench-prod` is a REPOSITORY-scoped group — the
+    #       group name is not namespaced by ref — so every `workflow_dispatch` on
+    #       a feature branch competes for the same single slot as `main`'s
+    #       post-deploy canary. Measured: run 30341031059 (`main`, the merge that
+    #       introduced this very comment) had its canary evicted at 08:08:18Z by a
+    #       dispatch on `riker/pin-honours-negation-and-capture` created 08:08:16Z
+    #       — two seconds earlier.
+    #       NOT accepted, and it is exactly the mistake (b) was: the cost accepted
+    #       in (a) is paid for by "the newer commit is the one worth measuring",
+    #       and a branch dispatch carries no newer commit for this ref at all. The
+    #       verdict is destroyed and nothing is measured in its place. Hence its
+    #       own classifier verdict `contended`, which pages — it is NOT folded
+    #       into (a). Eliminating it would mean keying the group by ref, which
+    #       re-permits two runs against one prod; that trade is deliberately not
+    #       taken, so this stays loud rather than silent.
+    #
     #   NOT possible: a newer run's ADVISORY evicting an older PENDING canary.
     #       The newer run's own canary reaches the group first and is the arrival
     #       that does the eviction — its advisory cannot get there while an older
     #       canary is still pending. Enumerated to record that it was checked
     #       rather than skipped.
     #
-    # (a), (c), (d) and (e) all surface as the same word — `cancelled` — which is the
-    # conclusion every reader has been trained to skim past as an infra hiccup.
-    # That is how (b) hid for its entire existence. The safety net's death must
-    # not look like weather: `prod-arm-cancelled` classifies it and goes red for
-    # everything that is not (a).
+    # (a), (c), (d), (e) and (f) all surface as the same word — `cancelled` — which
+    # is the conclusion every reader has been trained to skim past as an infra
+    # hiccup. That is how (b) hid for its entire existence. The safety net's death
+    # must not look like weather: `prod-arm-cancelled` classifies it and goes red
+    # for everything that is not (a) — where "(a)" now means a same-ref supersede
+    # specifically, since counting (f) as (a) is what made the first post-fix page
+    # name a mechanism its own job list refuted.
     # ------------------------------------------------------------------------
     concurrency:
       group: memory-bench-prod
@@ -745,6 +768,7 @@ jobs:
           python scripts/memory-bench/test_fixture_isolation.py
           python scripts/memory-bench/test_serving_version.py
           python scripts/memory-bench/test_classify_cancelled_arm.py
+          python scripts/memory-bench/test_resume_after_deploy.py
           python scripts/memory-bench/dense_arm_control.py --selftest
           python scripts/memory-bench/prod_window.py --selftest
 
@@ -951,13 +975,51 @@ jobs:
           # Derived from the run id rather than random so an orphaned row names
           # the run that abandoned it.
           BENCH_RUN_NONCE: ${{ github.run_id }}-${{ github.run_attempt }}-p-snap
+          # The commit the pre-flight pin confirmed prod was serving. Empty only when
+          # no pin applied and the endpoint could not be read.
+          SERVED_AT_START: ${{ steps.version.outputs.served }}
         run: |
           cd scripts/memory-bench
           set +e
           python run_ci.py --retrieval-only --update-baseline \
+            --served-commit "${SERVED_AT_START:-}" \
             --repeat "${{ inputs.repeat || '3' }}" 2>&1 | tee resnap.log
           rc=${PIPESTATUS[0]}
           set -e
+
+          # ------------------------------------------------------------------
+          # POST-FLIGHT STABILITY. The gate arm has had this since #e8570874; the
+          # CAPTURE arm never did, and the capture is the arm where it matters
+          # more. A gate run straddling two binaries yields one wrong verdict,
+          # visible that day. A BASELINE straddling two binaries becomes the
+          # standing floor for a required check — every future run is then scored
+          # against a number that measured neither binary, and nothing in the file
+          # says so.
+          #
+          # Not hypothetical. Capture 30336693957 (2026-07-28, --repeat 3): PR #407
+          # merged at 07:35:32Z touching one `*_test.go` file, `deploy-backend.yml`
+          # still matched it under `internal/**`, and prod went 5d2cda8 -> ba7deae
+          # at 07:41:44Z — 42 minutes into a 65-minute capture. The run exited
+          # SUCCESS and wrote a baseline. Recovering what it had measured took a
+          # human diffing two commits by hand afterwards.
+          #
+          # The file is DELETED, not just flagged: `capture_blockers` refuses
+          # before writing precisely because "a guard that reports after the file
+          # is on disk is advice, not a guard" — the artifact still uploads and
+          # the figure still gets committed. This check can only run after the
+          # measurement, so deleting is the only way it inherits that property.
+          if [ "$rc" = "0" ] && [ -n "${SERVED_AT_START:-}" ]; then
+            set +e
+            python3 check_serving_version.py --was "${SERVED_AT_START}" 2>&1 | tee -a resnap.log
+            vrc=${PIPESTATUS[0]}
+            set -e
+            if [ "$vrc" != "0" ]; then
+              rc=2
+              rm -f baseline_retrieval.json
+              echo "✗ CAPTURE DISCARDED — prod was redeployed during the measurement." \
+                | tee -a resnap.log
+            fi
+          fi
 
           {
             echo "## Recall baseline re-snap (required arm)"
@@ -977,8 +1039,15 @@ jobs:
               echo "**Reason:** \`${reason:-unspecified}\`"
               echo
               echo "\`capture-refused\` means the run was not a sound basis for a required"
-              echo "check's threshold — incomplete sample or degraded retrieval mode. Fix the"
-              echo "cause and re-dispatch; do not hand-edit the baseline."
+              echo "check's threshold — incomplete sample or degraded retrieval mode."
+              echo
+              echo "\`version-changed-mid-run\` means a backend deploy landed inside the"
+              echo "measurement window, so the numbers span two binaries and describe"
+              echo "neither. Nothing is wrong with the harness: re-dispatch once the deploy"
+              echo "has settled. Check the open PRs on a \`deploy-backend.yml\` path first,"
+              echo "because a \`--repeat 3\` capture occupies prod for ~65 minutes."
+              echo
+              echo "Either way: fix the cause and re-dispatch; do not hand-edit the baseline."
             fi
             echo
             echo '```'
@@ -1782,7 +1851,14 @@ jobs:
       (needs.recall-gate.result == 'cancelled' ||
        needs.memory-bench.result == 'cancelled')
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    # 8, not 5, because the classifier now waits for the run list to settle
+    # before believing "nothing newer was there" (up to a 150s internal
+    # deadline, on top of checkout + setup-python). A watchdog that hits its own
+    # ceiling dies `cancelled` and says nothing — the exact conclusion-that-reads
+    # -as-weather this job exists to abolish, one level up. The settler's own
+    # deadline is the real bound; this is headroom so the ceiling is never what
+    # stops it.
+    timeout-minutes: 8
     permissions:
       contents: read
       issues: write
@@ -1804,18 +1880,38 @@ jobs:
       # died" and every ordering enumerated on the canary job above is
       # distinguishable:
       #
-      #   0 steps + a newer run   -> (a) superseded. Expected. Not an alert.
-      #   0 steps + no newer run  -> (b)/(c) evicted by a SIBLING or by an older
-      #                              run's advisory. This is the bug. Red.
-      #   >=1 step                -> (d) timeout, or a mid-run cancel. Red.
+      #   0 steps + newer run, SAME ref  -> (a) superseded. Expected. Not an alert.
+      #   0 steps + newer run, OTHER ref -> (f) contended. A branch dispatch took
+      #                                     the slot; no newer commit on this ref,
+      #                                     so nothing was measured in exchange. Red.
+      #   0 steps + no newer run         -> (b)/(c) evicted by a SIBLING or by an
+      #                                     older run's advisory. Red.
+      #   >=1 step                       -> (d) timeout, or a mid-run cancel. Red.
+      #
+      # The ref split exists because without it the two middle rows collapse, and
+      # WHICH way they collapse depends on how the run list was fetched. Fetched
+      # with `?branch=`, an (f) is invisible and reads as the bottom row — the
+      # first post-fix push paged for "a sibling job of its own run" while its
+      # sibling was `skipped` in the same payload. Fetched repo-wide without the
+      # split, an (f) reads as the top row and goes silent, which is worse.
       #
       # `created_at <= completed_at` on the newer-run filter is not tidiness. A
       # bare "is there a newer run" is evaluated whenever this job happens to get
       # a runner, so a push arriving in that gap would relabel a genuine
       # sibling-eviction as an expected supersede — the alarm would go quiet
       # exactly on a busy repo. Only a run that already existed at the instant of
-      # death can have caused it. It also makes the verdict a pure function of
-      # recorded history, which is what lets the control below be re-run.
+      # death can have caused it.
+      #
+      # An earlier version of this comment went on to claim the bound "makes the
+      # verdict a pure function of recorded history". It does not, and the gap
+      # produced a false alert on this watchdog's first live firing (#13fb482b).
+      # The verdict is a pure function of THE PAYLOAD IT IS HANDED. Handed a live
+      # read taken seconds after the death, it is a function of GitHub API
+      # propagation: the evictor existed, satisfied every clause of the test, and
+      # was simply not in the response yet. Hence the settling step below, and
+      # hence a reason text that says "was VISIBLE in the run list" rather than
+      # "existed". The replay controls stay controls precisely because the
+      # freshness metadata is reported but never fed into the verdict.
       #
       # POSITIVE CONTROL, taken before this job was trusted, and it caught a real
       # error in the first draft — see `test_classify_cancelled_arm.py`, which
@@ -1861,13 +1957,41 @@ jobs:
           # are the same code path.
           gh api "${api}/actions/runs/${GITHUB_RUN_ID}/attempts/${GITHUB_RUN_ATTEMPT}/jobs?per_page=100" \
             > jobs.json || echo '__unreadable__' > jobs.json
-          gh api "${api}/actions/workflows/memory-bench.yml/runs?branch=${GITHUB_REF_NAME}&per_page=100" \
-            > runs.json || echo '__unreadable__' > runs.json
 
+          # The run list is NOT fetched here any more, and not because the shell
+          # was ugly. It is fetched inside the classifier so that WHEN it is read
+          # is testable.
+          #
+          # Two properties the old one-shot `gh api > runs.json` did not have:
+          #
+          #   * NOT `?branch=`. `memory-bench-prod` is a REPO-scoped concurrency
+          #     group, so a run on any ref can evict a pending arm here.
+          #     Filtering to this run's own branch made the commonest real
+          #     evictor — someone's `workflow_dispatch` on a feature branch —
+          #     structurally invisible, and the classifier reported the one
+          #     mechanism left in its enumeration.
+          #   * SETTLED, not instantaneous. This job starts seconds after the
+          #     death it is asked about, and `/actions/runs` lags: run
+          #     30341157927 was created at 08:08:16Z, killed the canary at
+          #     08:08:18Z, and was still absent from the list at ~08:08:30Z when
+          #     the watchdog read it. The verdict flipped on replay. The run most
+          #     likely to be the superseder is the newest one, which is exactly
+          #     the row a lagging list endpoint is missing, so this is aimed at
+          #     the evidence the verdict turns on rather than being a rare tail.
+          #
+          # The settler waits out a grace measured FROM THE DEATH and then polls
+          # until consecutive reads agree. It can only ever make more runs
+          # visible, and the classifier's `created_at <= death` bound means an
+          # added run genuinely predated the death — so settling cannot invent a
+          # superseder, only stop us from missing one. `payload_settled` is
+          # reported either way, and an unsettled payload makes the reason text
+          # say so instead of asserting "no newer run existed".
           python scripts/memory-bench/classify_cancelled_arm.py \
             --jobs-json jobs.json \
-            --runs-json runs.json \
+            --settle-repo "${GITHUB_REPOSITORY}" \
+            --settle-workflow memory-bench.yml \
             --run-id "${GITHUB_RUN_ID}" \
+            --run-ref "${GITHUB_REF_NAME}" \
             --github-output "$GITHUB_OUTPUT" \
             --step-summary "$GITHUB_STEP_SUMMARY"
 
@@ -1876,7 +2000,11 @@ jobs:
       # is red routinely is a check people learn to scroll past — which is the
       # failure this whole job exists to undo, reintroduced one level up.
       - name: Expected supersede — nothing to page
-        if: steps.classify.outputs.verdict != 'defect'
+        # Gated on `must_page`, NOT on `verdict != 'defect'`. The classifier now
+        # has a third pageable verdict (`contended`), and a negation guard would
+        # have adopted it into the quiet branch silently — the guard must name
+        # what it serves, not what it excludes.
+        if: steps.classify.outputs.must_page != 'true'
         # Through `env:`, not `${{ }}` inside the script — the same convention the
         # alert steps above already follow. These values are assembled from job
         # names and API timestamps, but a `run:` block that interpolates an output
@@ -1888,7 +2016,7 @@ jobs:
           echo "::notice::Prod arm cancellation classified as '${VERDICT}': ${REASON}"
 
       - name: Alert — the prod canary was killed, not superseded
-        if: steps.classify.outputs.verdict == 'defect'
+        if: steps.classify.outputs.must_page == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TITLE: 'Memory recall canary (prod) is being cancelled, not run'
@@ -1928,7 +2056,7 @@ jobs:
       # The red is the point. An alert on an issue nobody has open in a tab is a
       # filing cabinet; this makes the run itself carry the failure.
       - name: Fail the run
-        if: steps.classify.outputs.verdict == 'defect'
+        if: steps.classify.outputs.must_page == 'true'
         env:
           REASON: ${{ steps.classify.outputs.reason }}
         run: |

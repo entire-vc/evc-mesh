@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"regexp"
@@ -41,8 +42,127 @@ var blockingMarkerRegex = regexp.MustCompile(`(?im)^\s*(?:❓\s*)?\*{0,2}\s*Bloc
 var systemActorID = uuid.Nil
 
 // hasBlockingMarker reports whether body contains a "❓ **Blocking @user**" marker.
+//
+// The body is passed through stripQuotedSpans first, so a marker that only appears
+// inside inline code, a fenced block, or a blockquote does NOT count — quoting the
+// template while explaining the mechanism must not arm a gate. The regex is already
+// line-anchored (which excluded `> `-quoted markers by accident); the strip makes
+// that property deliberate and extends it to code spans and fences.
 func hasBlockingMarker(body string) bool {
-	return blockingMarkerRegex.MatchString(body)
+	return blockingMarkerRegex.MatchString(stripQuotedSpans(body))
+}
+
+// stripQuotedSpans blanks out the parts of a markdown body that are QUOTATION rather
+// than assertion: fenced code blocks (``` / ~~~), blockquote lines (`>`), and inline
+// code spans (`…`). Everything else is preserved verbatim, and every input line yields
+// exactly one output line — so line-anchored regexes keep their meaning on the residue.
+//
+// Why this exists (task #5c69b4e5, live probe #a073a896): both the blocking marker and
+// the triage-exit negator vocabulary are matched against the whole comment body, the
+// negators as bare substrings. A comment that DESCRIBES the mechanism — a post-mortem
+// quoting `не нужен` in backticks — therefore performed it: a live human_gate was
+// released 11 ms after a summary comment that had no intent to withdraw anything, and
+// the real, intentional withdrawal 1.75 s later became a no-op. Documenting the gate
+// disarmed the gate. The same root cause silently moved ask OWNERSHIP when a marker
+// comment quoted negators further down its own body.
+//
+// Ambiguity fails CLOSED (keeps the gate): an unterminated fence swallows the rest of
+// the body, an unterminated inline-code run swallows the rest of its line. A negator
+// hidden behind malformed markdown is not counted, so the gate stays up — the safe
+// direction for a mechanism whose whole job is to say "a human is still needed here".
+func stripQuotedSpans(body string) string {
+	lines := strings.Split(body, "\n")
+	out := make([]string, 0, len(lines))
+	inFence := false
+	fenceChar := byte(0)
+	fenceLen := 0
+
+	for _, line := range lines {
+		trimmed := strings.TrimLeft(line, " \t")
+
+		if inFence {
+			// A closing fence is a run of >= fenceLen of the SAME char, per CommonMark.
+			if c, n := fenceRun(trimmed); c == fenceChar && n >= fenceLen {
+				inFence = false
+			}
+			out = append(out, "")
+			continue
+		}
+		if c, n := fenceRun(trimmed); n >= 3 {
+			inFence = true
+			fenceChar = c
+			fenceLen = n
+			out = append(out, "")
+			continue
+		}
+		if strings.HasPrefix(trimmed, ">") {
+			out = append(out, "")
+			continue
+		}
+		out = append(out, stripInlineCode(line))
+	}
+
+	return strings.Join(out, "\n")
+}
+
+// fenceRun returns the fence character and the length of the leading run of it, for a
+// line already left-trimmed. length == 0 means the line does not begin with a fence char.
+func fenceRun(trimmed string) (char byte, length int) {
+	if trimmed == "" {
+		return 0, 0
+	}
+	c := trimmed[0]
+	if c != '`' && c != '~' {
+		return 0, 0
+	}
+	n := 0
+	for n < len(trimmed) && trimmed[n] == c {
+		n++
+	}
+	return c, n
+}
+
+// stripInlineCode removes every `…`-delimited code span from a single line, delimiters
+// included. A span opened by a run of N backticks closes at the next run of exactly N
+// (CommonMark), which is what lets a double-backtick span carry a single backtick
+// inside it. An unterminated run drops the rest of the line — see the fail-closed
+// note on stripQuotedSpans.
+func stripInlineCode(line string) string {
+	var out strings.Builder
+	for i := 0; i < len(line); {
+		if line[i] != '`' {
+			out.WriteByte(line[i])
+			i++
+			continue
+		}
+		j := i
+		for j < len(line) && line[j] == '`' {
+			j++
+		}
+		n := j - i
+
+		closed := -1
+		for k := j; k < len(line); {
+			if line[k] != '`' {
+				k++
+				continue
+			}
+			m := k
+			for m < len(line) && line[m] == '`' {
+				m++
+			}
+			if m-k == n {
+				closed = m
+				break
+			}
+			k = m
+		}
+		if closed == -1 {
+			return out.String() // unterminated → fail closed
+		}
+		i = closed
+	}
+	return out.String()
 }
 
 // autoMarkerSubstrings marks a comment as automation-generated (server or fiddler).
@@ -74,6 +194,46 @@ var triageExitNegators = []string{
 	"разблок", "уже ответил", "ответил в коммент",
 }
 
+// hasNegatorInScope reports whether body carries a triageExitNegators substring,
+// scoped to text at-or-after the comment's OWN blocking marker (the LAST one, if
+// several) — never text that only precedes it.
+//
+// Fixed 2026-07-30 (task #c375905c, live incident on #7f646f08, found by Riker):
+// a whole-body strings.Contains search let a comment self-negate its OWN marker
+// via unrelated prose. Riker's comment raised a fresh "❓ Blocking @pavel" as its
+// final line, but earlier paragraphs discussed a DIFFERENT, already-resolved ask
+// using the word "снят" — a whole-body scan found that substring and treated the
+// brand-new marker as pre-cancelled, silently handing ownership of the live ask
+// to whoever's marker preceded it. A marker is conventionally the operative ask
+// of a comment; analysis before it is context, not itself the thing negated —
+// so only text from the marker onward is searched. A comment with no marker at
+// all (the ordinary shape of a real withdrawal — a separate later comment with
+// nothing else in it) has no scope to restrict, so the whole body is used.
+//
+// Extended 2026-07-30 (task #5c69b4e5, live probe #a073a896): the body is first
+// passed through stripQuotedSpans, so only text the comment ASSERTS is searched —
+// never a negator it merely QUOTES in inline code, a fenced block or a blockquote.
+// Marker-scoping alone does not cover this: the comment that disarmed a live gate
+// carried NO marker (it was a markerless post-mortem), so its scope was the whole
+// body and its backticked `не нужен` counted. Scoping answers "which ask is this
+// about"; stripping answers "is this an assertion or a citation". Both are needed.
+//
+// Search and slice the SAME stripped string — offsets taken from the raw body
+// cannot index the stripped one, and mixing them would cut at a meaningless byte.
+func hasNegatorInScope(body string) bool {
+	scope := stripQuotedSpans(body)
+	if matches := blockingMarkerRegex.FindAllStringIndex(scope, -1); len(matches) > 0 {
+		scope = scope[matches[len(matches)-1][0]:]
+	}
+	lower := strings.ToLower(scope)
+	for _, n := range triageExitNegators {
+		if strings.Contains(lower, n) {
+			return true
+		}
+	}
+	return false
+}
+
 // extractMentionSlugs returns unique lowercase slugs found in body, preserving order.
 func extractMentionSlugs(body string) []string {
 	matches := mentionRegex.FindAllStringSubmatch(body, -1)
@@ -96,7 +256,11 @@ func extractMentionSlugs(body string) []string {
 // resolving against those via extractMentionSlugs would mis-attribute the triage target
 // to whichever mention happens to resolve first, rather than to who "Blocking" actually names.
 func blockingMarkerSlugs(body string) []string {
-	matches := blockingMarkerRegex.FindAllStringSubmatch(body, -1)
+	// Same stripQuotedSpans discipline as hasBlockingMarker: without it a body that
+	// carries BOTH a quoted template and a real marker resolves the QUOTED slug first
+	// (matches are returned in source order), so firstResolvedUserSlug would triage
+	// against whoever the documentation example happened to name.
+	matches := blockingMarkerRegex.FindAllStringSubmatch(stripQuotedSpans(body), -1)
 	seen := make(map[string]bool, len(matches))
 	out := make([]string, 0, len(matches))
 	for _, m := range matches {
@@ -209,6 +373,82 @@ func NewCommentService(
 	return s
 }
 
+// maxCommentMetadataBytes caps comment.metadata. The field is a label ("which automation
+// posted this, was it an auto-nudge"), not a payload store — 4 KiB is far above any
+// legitimate tag set and keeps a JSONB column from becoming an accidental blob dump.
+const maxCommentMetadataBytes = 4096
+
+// validateCommentMetadata rejects anything that is not a JSON object, loudly.
+//
+// Absent/null metadata is legal and means "no metadata" — that is the common case and not
+// an error. Anything present but not an object (array, string, number, bool, malformed
+// JSON) is refused with 4xx naming the actual shape received.
+//
+// The refusal is the point. The defect this replaces (#13e391d2) was not that metadata
+// was rejected but that it was accepted-and-discarded: the API answered 201 and returned
+// `{}`, so a caller could not distinguish "stored" from "thrown away", and neither could
+// the detectors reading the field months later. A caller that sends the wrong shape must
+// find out from the response, not from a filter that silently never matches.
+//
+// This validates SHAPE, not provenance. metadata.source is self-declared by whoever posts
+// the comment and is not authenticated — it is a cooperative label for distinguishing
+// automation from human activity, and must not be treated as proof of origin by anything
+// making a security or trust decision.
+func validateCommentMetadata(raw json.RawMessage) error {
+	if len(raw) == 0 {
+		return nil
+	}
+
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" || trimmed == "null" {
+		return nil
+	}
+
+	if len(raw) > maxCommentMetadataBytes {
+		return apierror.ValidationError(map[string]string{
+			"metadata": fmt.Sprintf("metadata must be at most %d bytes, got %d", maxCommentMetadataBytes, len(raw)),
+		})
+	}
+
+	var probe any
+	if err := json.Unmarshal(raw, &probe); err != nil {
+		return apierror.ValidationError(map[string]string{
+			"metadata": "metadata must be a valid JSON object: " + err.Error(),
+		})
+	}
+
+	if _, ok := probe.(map[string]any); !ok {
+		return apierror.ValidationError(map[string]string{
+			"metadata": fmt.Sprintf("metadata must be a JSON object, got %s", jsonKindName(probe)),
+		})
+	}
+
+	return nil
+}
+
+// jsonKindName names the JSON type of a decoded value for error messages, so a rejected
+// caller is told what it actually sent rather than just that something was wrong.
+//
+// There is deliberately no `case nil`: a bare `null` returns early from
+// validateCommentMetadata as legal-and-absent, so nil cannot reach here. The default is
+// the only fallback and exists for a value encoding/json does not currently produce when
+// decoding into `any` — it is unreachable today rather than a path worth pretending is
+// live with its own branch.
+func jsonKindName(v any) string {
+	switch v.(type) {
+	case []any:
+		return "array"
+	case string:
+		return "string"
+	case float64:
+		return "number"
+	case bool:
+		return "boolean"
+	default:
+		return "non-object value"
+	}
+}
+
 // Create validates and persists a new comment.
 // It checks that the task exists, the body is not empty, and if a parent comment
 // is specified, the parent exists and belongs to the same task.
@@ -217,6 +457,10 @@ func (s *commentService) Create(ctx context.Context, comment *domain.Comment) er
 		return apierror.ValidationError(map[string]string{
 			"body": "body is required",
 		})
+	}
+
+	if err := validateCommentMetadata(comment.Metadata); err != nil {
+		return err
 	}
 
 	// Validate the task exists.
@@ -319,6 +563,8 @@ func (s *commentService) Create(ctx context.Context, comment *domain.Comment) er
 		s.enforceBlockingTriage(ctx, comment, task, wsID)
 		// Symmetric release: user comment after a prior blocking marker → clear human_gate.
 		s.releaseHumanGate(ctx, comment, task, wsID)
+		// Symmetric release: the SAME agent who raised a still-live ask withdraws it.
+		s.releaseHumanGateOnWithdrawal(ctx, comment, task, wsID)
 		// General triage EXIT: human user responds on a non-gated triage task → in_progress.
 		s.enforceTriageExit(ctx, comment, task, wsID)
 	}
@@ -830,6 +1076,158 @@ func (s *commentService) releaseHumanGate(ctx context.Context, comment *domain.C
 	}
 }
 
+// releaseHumanGateOnWithdrawal is the AGENT-side counterpart to releaseHumanGate,
+// closing the gap in task #c375905c: a Pavel-ask has no path to be withdrawn once
+// its underlying blocker has resolved but Pavel himself hasn't (and may never)
+// comment. Left unaddressed, human_gate stays sticky forever — task #7f646f08 sat
+// gated 20 days after its triggering alert had already self-healed.
+//
+// Only the SAME agent who raised the currently-live ask may withdraw it — allowing
+// any other agent to do so would let the fleet learn to silence its own Pavel gate,
+// which is strictly worse than the original defect. This mirrors how the ask is
+// armed: enforceBlockingTriage arms on whoever posts the marker; this releases on
+// that same author retracting it, never on a bystander's say-so.
+//
+// Guards (in order):
+//   - taskSvc must be wired;
+//   - task.HumanGate must be true;
+//   - comment.AuthorType must be ActorTypeAgent (user withdrawal is releaseHumanGate;
+//     system/driver comments cannot withdraw anything on anyone's behalf);
+//   - comment.Body must ASSERT a withdrawal negator (hasNegatorInScope: the same
+//     triageExitNegators vocabulary enforceTriageExit uses, matched against the body
+//     with code spans, fences and blockquotes stripped — a comment that merely QUOTES
+//     "не нужен" while explaining the mechanism withdraws nothing);
+//   - of all prior comments that both hasBlockingMarker AND are not themselves
+//     already negated, the CHRONOLOGICALLY LAST one must be authored by this SAME
+//     agent. A live ask with no marker found at all, or one raised/most-recently
+//     reaffirmed by someone else, is left gated — this is the negative control:
+//     an unwithdrawn or another-agent's ask must not clear.
+//
+// ListByTask's SortDir is NOT honoured by the real repository (it hardcodes
+// ORDER BY created_at ASC regardless — see CommentRepo.ListByTask), unlike what
+// releaseHumanGate's own comment above claims. So "most recent" here means the
+// LAST qualifying match found while iterating in that real ascending order, not
+// the first — do not copy the break-on-first-match idiom other scans in this
+// file use for simple existence checks.
+func (s *commentService) releaseHumanGateOnWithdrawal(ctx context.Context, comment *domain.Comment, task *domain.Task, wsID uuid.UUID) {
+	if s.taskSvc == nil {
+		return
+	}
+	if !task.HumanGate {
+		return
+	}
+	if comment.AuthorType != domain.ActorTypeAgent {
+		return
+	}
+	if !hasNegatorInScope(comment.Body) {
+		return
+	}
+
+	// Find who owns the currently-live ask: the CHRONOLOGICALLY LAST marker-bearing
+	// comment that is not itself already negated. Mirrors enforceBlockingTriage's
+	// own arm criterion (hasBlockingMarker, no auto-generated-comment carve-out) so
+	// "who armed it" is judged by the same rule that actually armed it.
+	pg := pagination.Params{Page: 1, PageSize: 100}
+	pg.Normalize()
+	page, err := s.commentRepo.ListByTask(ctx, task.ID, repository.CommentFilter{IncludeInternal: true}, pg)
+	if err != nil {
+		log.Printf("[human-gate] WARNING: ListByTask on task %s failed: %v", task.ID, err)
+		return
+	}
+
+	var markerAuthorID uuid.UUID
+	var markerAuthorType domain.ActorType
+	found := false
+	if page != nil {
+		// Real order is created_at ASC (see doc comment above) — keep overwriting so
+		// the LAST qualifying match, not the first, wins.
+		for _, c := range page.Items {
+			if c.ID == comment.ID {
+				continue
+			}
+			if !hasBlockingMarker(c.Body) {
+				continue
+			}
+			if hasNegatorInScope(c.Body) {
+				continue // already-negated marker isn't the live ask
+			}
+			markerAuthorID = c.AuthorID
+			markerAuthorType = c.AuthorType
+			found = true
+		}
+	}
+	if !found {
+		return // no live marker on record — fail closed, leave the flag as-is
+	}
+	if markerAuthorType != domain.ActorTypeAgent || markerAuthorID != comment.AuthorID {
+		return // a different author owns the live ask — only they (or a human) may release it
+	}
+
+	if err := s.taskSvc.SetHumanGate(ctx, task.ID, false); err != nil {
+		log.Printf("[human-gate] WARNING: SetHumanGate(false) on task %s (agent withdrawal) failed: %v", task.ID, err)
+		return
+	}
+
+	movedFromTriage := false
+	if s.statusRepo != nil {
+		if curStatus, err := s.statusRepo.GetByID(ctx, task.StatusID); err == nil && curStatus != nil &&
+			curStatus.Category == domain.StatusCategoryTriage {
+			if inProgressID, err := findStatusIDByCategory(ctx, s.statusRepo, task.ProjectID, domain.StatusCategoryInProgress); err == nil && inProgressID != uuid.Nil {
+				if moveErr := s.taskSvc.MoveTask(ctx, task.ID, MoveTaskInput{StatusID: &inProgressID}); moveErr != nil {
+					log.Printf("[human-gate] WARNING: move task %s from triage to in_progress failed: %v", task.ID, moveErr)
+				} else {
+					movedFromTriage = true
+				}
+			}
+		}
+	}
+
+	now := timeNow()
+	releaseBody := "🔓 Auto: human_gate снят — автор запроса отозвал его сам (blocker самоустранился)."
+	if movedFromTriage {
+		releaseBody = "🔓 Auto: human_gate снят, задача переведена из triage → in_progress — автор запроса отозвал его сам (blocker самоустранился)."
+	}
+	sysComment := &domain.Comment{
+		ID:         uuid.New(),
+		TaskID:     task.ID,
+		AuthorID:   systemActorID,
+		AuthorType: domain.ActorTypeSystem,
+		Body:       releaseBody,
+		CreatedAt:  now,
+		UpdatedAt:  now,
+	}
+	if err := s.commentRepo.Create(ctx, sysComment); err != nil {
+		log.Printf("[human-gate] WARNING: create system comment on task %s failed: %v", task.ID, err)
+	}
+	if s.ctxCacheInv != nil {
+		s.ctxCacheInv.Invalidate(ctx, task.ID)
+	}
+
+	if s.agentNotifySvc != nil && task.AssigneeType == domain.AssigneeTypeAgent && task.AssigneeID != nil {
+		taskSnap := s.buildTaskSnap(ctx, task)
+		actorID, _ := actorctx.FromContext(ctx)
+		commentBody := comment.Body
+		if len(commentBody) > 500 {
+			commentBody = commentBody[:500]
+		}
+		s.agentNotifySvc.NotifyAgent(ctx, *task.AssigneeID, AgentNotification{
+			EventType:   "task.human_gate_released",
+			Timestamp:   now,
+			WorkspaceID: wsID,
+			Task:        taskSnap,
+			AgentID:     *task.AssigneeID,
+			ActorID:     actorID,
+			ActorType:   string(domain.ActorTypeAgent),
+			Comment: map[string]any{
+				"id":   comment.ID,
+				"body": commentBody,
+			},
+			TaskID:    task.ID,
+			ProjectID: task.ProjectID,
+		})
+	}
+}
+
 // enforceTriageExit is the general server-side triage EXIT rule, complementing the
 // enforceBlockingTriage ENTRY rule and the human_gate release path.
 //
@@ -895,16 +1293,12 @@ func (s *commentService) enforceTriageExit(ctx context.Context, comment *domain.
 			if !hasBlockingMarker(c.Body) {
 				continue
 			}
-			// A blocking mention that contains a negator is a cancellation, not a live gate.
-			lower := strings.ToLower(c.Body)
-			negated := false
-			for _, n := range triageExitNegators {
-				if strings.Contains(lower, n) {
-					negated = true
-					break
-				}
-			}
-			if negated {
+			// A blocking mention that ASSERTS a negator is a cancellation, not a live
+			// gate — scoped to text at-or-after the marker (hasNegatorInScope), not the
+			// whole body: see #c375905c, the same self-negation-by-unrelated-prose
+			// defect this function shares with releaseHumanGateOnWithdrawal above.
+			// One that merely QUOTES the vocabulary is still a live gate (#5c69b4e5).
+			if hasNegatorInScope(c.Body) {
 				continue
 			}
 			foundRealBlock = true
@@ -1008,18 +1402,22 @@ const completionKeywordWindowBytes = 500
 // "❓ Blocking @pavel" question was wrongly classified as a completion report,
 // which suppressed enforceBlockingTriage before it ever reached SetHumanGate.
 func completionKeywordSearchWindow(body string) string {
-	loc := blockingMarkerRegex.FindStringIndex(body)
+	// Operate wholly on the stripped body: the window must be anchored to the first
+	// REAL marker, not to a quoted template that happens to appear earlier. Offsets
+	// from one string can't index the other, so slice the same string we searched.
+	stripped := stripQuotedSpans(body)
+	loc := blockingMarkerRegex.FindStringIndex(stripped)
 	if loc == nil {
-		return body
+		return stripped
 	}
 	start := loc[0] - completionKeywordWindowBytes
 	if start < 0 {
 		start = 0
 	}
-	for start > 0 && !utf8.RuneStart(body[start]) {
+	for start > 0 && !utf8.RuneStart(stripped[start]) {
 		start++
 	}
-	return body[start:loc[0]]
+	return stripped[start:loc[0]]
 }
 
 // isAssigneeCompletionReport returns true when the comment is authored by the

@@ -189,7 +189,7 @@ func main() {
 
 	// Slack service sends notifications via Slack Incoming Webhooks when a workspace has
 	// an active Slack integration configured. It is injected into webhookService below.
-	slackService := service.NewSlackService(integrationRepo)
+	slackService := service.NewSlackService(integrationRepo, cfg.Email.BaseURL)
 
 	// Webhook service is created before taskService so it can be injected for agent wakeup dispatch.
 	// SlackService is co-injected so that every Dispatch call also notifies Slack when configured.
@@ -303,6 +303,27 @@ func main() {
 	)
 
 	// Invite service (email-link flow).
+	//
+	// MESH_BASE_URL decides what every invite link points at. Left unset it
+	// falls back to the Vite dev-server URL, and a deployed instance hands out
+	// http://localhost:5173/accept-invite/<token> links that resolve to the
+	// invitee's own laptop. Nothing downstream can detect that, and the operator
+	// finds out only when the person they invited says the link is dead — so say
+	// it here, once, at boot.
+	if cfg.Email.BaseURLIsDefault() {
+		log.Printf("[config] WARNING: MESH_BASE_URL is not set — workspace invite links will point at %s", cfg.Email.BaseURL)
+		log.Printf("[config] WARNING: set MESH_BASE_URL to the public URL of your web UI (e.g. https://mesh.example.com) or invitees get an unusable link.")
+	} else {
+		log.Printf("[config] Invite links will be built from MESH_BASE_URL=%s", cfg.Email.BaseURL)
+	}
+	// SMTP_HOST set but SMTP_FROM not: previously this silently sent as
+	// noreply@mesh.entire.host — our domain, on someone else's mail server.
+	// Now it's an empty From header, which most SMTP servers reject outright
+	// at send time. Either way the operator needs to know before their first
+	// invite fails; say so once, at boot, the same as the base-URL check above.
+	if cfg.Email.Host != "" && cfg.Email.From == "" {
+		log.Printf("[config] WARNING: SMTP_HOST is set but SMTP_FROM is not — outbound email will use an empty From address and likely be rejected by your mail server. Set SMTP_FROM to an address your SMTP host is allowed to send as.")
+	}
 	inviteRepo := postgres.NewInviteRepo(db)
 	emailSvc := service.NewEmailService(cfg.Email)
 	inviteService := service.NewInviteService(inviteRepo, userRepo, workspaceMemberRepo, workspaceRepo, emailSvc, authService, cfg.Email.BaseURL)
@@ -349,6 +370,30 @@ func main() {
 			s3Client.SetPublicURL(cfg.S3.PublicURL)
 			log.Printf("S3 presigned URLs will use public URL: %s", cfg.S3.PublicURL)
 		}
+
+		// Create the bucket if it is not there yet. Nothing else ever did — not
+		// the compose file, not a migration, not the first upload — so a fresh
+		// self-hosted install had an empty MinIO and every artifact and
+		// workspace-icon upload failed against storage that was itself healthy.
+		//
+		// At boot rather than on first upload: the operator learns about a
+		// broken storage config once, in the startup log they are already
+		// watching, instead of hours later as a user-facing error. Upload still
+		// re-creates the bucket on demand, which covers storage that comes up
+		// after the API and a bucket deleted while running.
+		//
+		// Best-effort by design: storage being down must not stop the API from
+		// serving the rest of the product.
+		ensureCtx, cancelEnsure := context.WithTimeout(context.Background(), 15*time.Second)
+		bucketErr := s3Client.EnsureBucket(ensureCtx)
+		cancelEnsure()
+		if bucketErr != nil {
+			log.Printf("WARNING: object storage bucket %q on %s is not usable — artifact and workspace-icon uploads will fail until this is fixed: %v",
+				s3Client.Bucket(), s3Client.Endpoint(), bucketErr)
+		} else {
+			log.Printf("Object storage ready: bucket %q on %s", s3Client.Bucket(), s3Client.Endpoint())
+		}
+
 		artifactService = service.NewArtifactService(artifactRepo, s3Client, activityLogRepo)
 	}
 
@@ -457,8 +502,14 @@ func main() {
 		AllowHeaders: []string{"Authorization", "Content-Type", "X-Agent-Key", "X-Request-ID"},
 	}))
 
-	// Prometheus metrics scrape endpoint (unauthenticated, bind to internal network in prod).
-	e.GET("/metrics", echo.WrapHandler(promhttp.Handler()))
+	// Prometheus metrics scrape endpoint. Gated by MESH_METRICS_TOKEN when
+	// set (mw.MetricsAuth is a no-op otherwise) — the self-host
+	// docker-compose.prod.yml requires the var and configures Prometheus's
+	// scrape config with the matching bearer_token_file, since that compose
+	// stack publishes this port and has no front proxy of its own. An
+	// unauthenticated deployment (e.g. internal prod, gated by Caddy
+	// upstream) is unaffected by leaving the var unset.
+	e.GET("/metrics", echo.WrapHandler(promhttp.Handler()), mw.MetricsAuth(cfg.Server.MetricsToken))
 
 	// Health check.
 	e.GET("/health", func(c echo.Context) error {
@@ -469,13 +520,21 @@ func main() {
 	})
 
 	// Build version — public, no auth. All three paths route through Caddy's /api/* block.
+	// spark_enabled/spark_url ride along here rather than a dedicated endpoint: they're
+	// the instance capabilities the frontend needs to know before the user picks a
+	// workspace (the Spark Catalog nav link, gated by cfg.Spark.Enabled above — same
+	// source of truth the route registration itself uses — and the "View on Spark"
+	// links, which must point at whatever catalog this deployment configured rather
+	// than a hardcoded vendor domain).
 	versionHandler := func(c echo.Context) error {
-		return c.JSON(200, map[string]string{
-			"commit":      BuildSHA,
-			"build_time":  BuildTime,
-			"version":     BuildVersion,
-			"environment": BuildEnv,
-			"service":     "evc-mesh-api",
+		return c.JSON(200, map[string]any{
+			"commit":        BuildSHA,
+			"build_time":    BuildTime,
+			"version":       BuildVersion,
+			"environment":   BuildEnv,
+			"service":       "evc-mesh-api",
+			"spark_enabled": cfg.Spark.Enabled,
+			"spark_url":     cfg.Spark.URL,
 		})
 	}
 	e.GET("/api/version", versionHandler)
@@ -536,8 +595,13 @@ func main() {
 	}()
 	log.Println("Checkout reaper started (interval: 60s)")
 
-	// WebSocket upgrade endpoint (before auth middleware, auth is handled in the handler).
-	e.GET("/ws", wsHub.Handler(hub, authService, agentService))
+	// WebSocket upgrade endpoint. It sits on the root instance, ahead of the
+	// /api/v1 group, so none of the group middleware below (WorkspaceRLS,
+	// RequireWorkspaceMemberScoped) can ever run on it: both authentication and
+	// the cross-tenant check are the handler's own responsibility. The authorizer
+	// is what lets it apply the same membership rule as the REST API instead of a
+	// second, divergent copy.
+	e.GET("/ws", wsHub.Handler(hub, authService, agentService, wsHub.NewDBAuthorizer(db)))
 
 	// 9. Register all routes.
 	v1 := e.Group("/api/v1")
@@ -585,11 +649,62 @@ func main() {
 	invitePublicGroup.GET("/:token", inviteHandler.GetByToken)
 	invitePublicGroup.POST("/:token/accept", inviteHandler.Accept)
 
+	// Workspace icon (read). Unauthenticated on purpose, and it has to be: the
+	// UI renders it as <img src="/api/v1/workspaces/{id}/icon"> and hands the
+	// same URL to <link rel=icon>. Neither carries an Authorization header, so
+	// behind the authenticated group this endpoint answered every browser with
+	// 401 and the icon could never render — the upload was only the first of
+	// the two walls.
+	//
+	// Mesh has no cookie auth — the server never sets one, the token lives only
+	// in a header — so there is no way for a browser subresource to
+	// authenticate at all. A signed token in the URL was rejected as the
+	// alternative: it leaks through logs and Referer headers, for a logo.
+	//
+	// The exposure is a workspace logo to whoever already knows the workspace
+	// UUID, which is only ever handed out in authenticated responses; the UUID
+	// is the capability, exactly as it is for the presigned artifact URLs this
+	// endpoint used to redirect to (those were unauthenticated too, and for far
+	// more sensitive content). A missing workspace and a workspace with no icon
+	// answer byte-identically, so this is not an existence oracle either.
+	// Uploading (PUT) stays members-only and admin-gated.
+	//
+	// This exception is registered in tests/integration/cross_tenant_test.go
+	// (wsPublicRoutes) and its behaviour is pinned there. Do not add to that
+	// list without the same kind of justification.
+	//
+	// Registered per route with explicit middleware rather than on a
+	// v1.Group("/workspaces"): a group would make "which paths are public"
+	// depend on which registrations happen to sit under it, and this must be
+	// exactly two routes and nothing else. Written with the full literal path
+	// so it reads identically to the guarded routes below — the completeness
+	// test greps for both forms and fails on any :ws_id route that appears in
+	// neither table.
+	iconRateLimit := mw.RateLimit(mw.RateLimitConfig{
+		Enabled:     cfg.RateLimit.Enabled,
+		RPM:         cfg.RateLimit.APIRPM,
+		KeyFunc:     mw.RateLimitKeyByIP,
+		RedisClient: sharedRedis,
+	})
+	v1.GET("/workspaces/:ws_id/icon", workspaceHandler.GetIcon, iconRateLimit)
+	// HEAD as well: it is what `curl -I` and cache validators send, and Echo
+	// does not derive it from the GET route. net/http drops the body itself.
+	v1.HEAD("/workspaces/:ws_id/icon", workspaceHandler.GetIcon, iconRateLimit)
+
 	// --- Protected routes (JWT or Agent Key) ---
 	api := v1.Group("")
 	api.Use(mw.DualAuth(authService, agentService))
 	api.Use(activityTracker.Middleware())
 	api.Use(mw.WorkspaceRLS(db, projectRepo))
+	// Cross-tenant guard. Applies to every route in this group that carries a
+	// :ws_id parameter, and is inert on the rest. Group-level on purpose: the
+	// per-route form was attached to 2 of 46 :ws_id routes, and the 44 that were
+	// missed leaked member emails, the team directory, analytics and the full
+	// workspace config export to any logged-in stranger — and let one rename
+	// another tenant's workspace. Placed here, a newly added :ws_id route is
+	// guarded by construction rather than by the author remembering.
+	// Must run after WorkspaceRLS, which resolves and stores the workspace role.
+	api.Use(mw.RequireWorkspaceMemberScoped(db))
 	// Rate-limit API endpoints by authenticated actor (user/agent ID).
 	// Uses the Redis-backed sliding window limiter for multi-instance deployments.
 	api.Use(mw.RateLimit(mw.RateLimitConfig{
@@ -614,9 +729,13 @@ func main() {
 	api.GET("/workspaces", workspaceHandler.List)
 	api.POST("/workspaces", workspaceHandler.Create)
 	api.GET("/workspaces/:ws_id", workspaceHandler.GetByID)
-	api.PATCH("/workspaces/:ws_id", workspaceHandler.Update)
+	// Update carries the workspace slug, and changing a slug rewrites every
+	// /w/<slug>/... URL the team has bookmarked or pasted into a doc. Same bar as
+	// DELETE and icon upload: owner/admin, not any member who happens to be in.
+	api.PATCH("/workspaces/:ws_id", workspaceHandler.Update, rbac(mw.PermManageMembers))
 	api.DELETE("/workspaces/:ws_id", workspaceHandler.Delete, rbac(mw.PermDeleteWorkspace))
-	api.GET("/workspaces/:ws_id/icon", workspaceHandler.GetIcon)
+	// GET /workspaces/:ws_id/icon is registered on the public group above —
+	// browsers fetch it as a plain <img>/<link rel=icon> subresource.
 	api.PUT("/workspaces/:ws_id/icon", workspaceHandler.UploadIcon, rbac(mw.PermManageMembers))
 
 	// Workspace member routes.
@@ -626,7 +745,14 @@ func main() {
 	api.POST("/workspaces/:ws_id/members", workspaceMemberHandler.Add, rbac(mw.PermManageMembers))
 	api.PATCH("/workspaces/:ws_id/members/:user_id", workspaceMemberHandler.UpdateRole, rbac(mw.PermManageMembers))
 	api.DELETE("/workspaces/:ws_id/members/:user_id", workspaceMemberHandler.Remove, rbac(mw.PermManageMembers))
-	api.GET("/workspaces/:ws_id/users/search", workspaceMemberHandler.SearchUsers)
+	// SearchUsers deliberately searches the whole instance, not the workspace —
+	// that is the point, you look people up in order to add ones who are not
+	// members yet. So it cannot be narrowed to workspace scope without removing
+	// add-member-by-search. What it can be is restricted to the people allowed to
+	// add members at all: before this, any authenticated user could page the
+	// entire instance's user directory, emails included, out of someone else's
+	// workspace. Invite-by-email (POST .../invites) stays the tenant-safe path.
+	api.GET("/workspaces/:ws_id/users/search", workspaceMemberHandler.SearchUsers, rbac(mw.PermManageMembers))
 
 	// Workspace invite routes (email-link flow).
 	api.POST("/workspaces/:ws_id/invites", inviteHandler.Create, rbac(mw.PermManageMembers))
@@ -643,6 +769,10 @@ func main() {
 
 	// Project-scoped routes — RequireProjectMember enforces membership for :proj_id routes.
 	projAccess := mw.RequireProjectMember(db)
+
+	// Body-scoped guard — for the routes whose tenant is named in the request body
+	// rather than the path, where RequireWorkspaceMemberScoped has nothing to see.
+	bodyWS := mw.RequireBodyWorkspace(db)
 	api.GET("/projects/:proj_id", projectHandler.GetByID, projAccess)
 	api.PATCH("/projects/:proj_id", projectHandler.Update, projAccess)
 	api.DELETE("/projects/:proj_id", projectHandler.Delete, projAccess, rbac(mw.PermDeleteProject))
@@ -812,13 +942,18 @@ func main() {
 	api.GET("/workspaces/:ws_id/triage", triageHandler.List)
 
 	// Recurring task schedule routes.
+	//
+	// The parameter is spelled :recurring_id rather than :id so WorkspaceRLS can
+	// resolve the schedule's workspace from it and the membership guard applies.
+	// The URLs are unchanged. :id is also what /memories/:id is spelled with, and
+	// one central resolver cannot serve two different tables.
 	api.POST("/projects/:proj_id/recurring", recurringHandler.Create, projAccess, rbac(mw.PermCreateTask))
 	api.GET("/projects/:proj_id/recurring", recurringHandler.List, projAccess)
-	api.GET("/recurring/:id", recurringHandler.GetByID)
-	api.PATCH("/recurring/:id", recurringHandler.Update, rbac(mw.PermUpdateTask))
-	api.DELETE("/recurring/:id", recurringHandler.Delete, rbac(mw.PermDeleteTask))
-	api.POST("/recurring/:id/trigger", recurringHandler.Trigger, rbac(mw.PermCreateTask))
-	api.GET("/recurring/:id/history", recurringHandler.History)
+	api.GET("/recurring/:recurring_id", recurringHandler.GetByID)
+	api.PATCH("/recurring/:recurring_id", recurringHandler.Update, rbac(mw.PermUpdateTask))
+	api.DELETE("/recurring/:recurring_id", recurringHandler.Delete, rbac(mw.PermDeleteTask))
+	api.POST("/recurring/:recurring_id/trigger", recurringHandler.Trigger, rbac(mw.PermCreateTask))
+	api.GET("/recurring/:recurring_id/history", recurringHandler.History)
 
 	// Task template routes.
 	api.POST("/projects/:proj_id/templates", taskTemplateHandler.Create, projAccess, rbac(mw.PermCreateTask))
@@ -830,7 +965,10 @@ func main() {
 
 	// Team Directory routes (Sprint 20).
 	api.GET("/workspaces/:ws_id/team", rulesHandler.GetTeamDirectory)
-	api.PUT("/agents/:agent_id/profile", rulesHandler.UpdateAgentProfile)
+	// Self-service (an agent updating its own profile via X-Agent-Key) is always
+	// allowed; rewriting another agent's profile requires PermDeleteAgent, same
+	// bar as PATCH /agents/:agent_id above.
+	api.PUT("/agents/:agent_id/profile", rulesHandler.UpdateAgentProfile, mw.RequireSelfOrPermission("agent_id", mw.PermDeleteAgent, workspaceMemberRepo))
 
 	// Assignment Rules routes (Sprint 20).
 	api.GET("/workspaces/:ws_id/rules/assignment", rulesHandler.GetWorkspaceAssignmentRules)
@@ -864,19 +1002,27 @@ func main() {
 	api.GET("/rules/:rule_id", ruleHandler.GetRule)
 	api.PATCH("/rules/:rule_id", ruleHandler.UpdateRule, rbac(mw.PermManageRules))
 	api.DELETE("/rules/:rule_id", ruleHandler.DeleteRule, rbac(mw.PermManageRules))
-	api.POST("/rules/evaluate", ruleHandler.EvaluateRules)
+	// The tenant of this one is in the body, not the path: bodyWS is what checks it.
+	// Without it any authenticated caller could paste another workspace's id in and
+	// read that tenant's rule names and violation messages back.
+	api.POST("/rules/evaluate", ruleHandler.EvaluateRules, bodyWS)
 
 	// Auto-transition rule routes.
 	api.GET("/projects/:proj_id/auto-transition-rules", autoTransHandler.List, projAccess)
 	api.POST("/projects/:proj_id/auto-transition-rules", autoTransHandler.Create, projAccess, rbac(mw.PermManageRules))
-	api.PUT("/projects/:proj_id/auto-transition-rules/:rule_id", autoTransHandler.Update, projAccess, rbac(mw.PermManageRules))
-	api.DELETE("/projects/:proj_id/auto-transition-rules/:rule_id", autoTransHandler.Delete, projAccess, rbac(mw.PermManageRules))
+	api.PUT("/projects/:proj_id/auto-transition-rules/:atr_id", autoTransHandler.Update, projAccess, rbac(mw.PermManageRules))
+	api.DELETE("/projects/:proj_id/auto-transition-rules/:atr_id", autoTransHandler.Delete, projAccess, rbac(mw.PermManageRules))
 
 	// Notification routes.
 	api.GET("/notifications", notificationHandler.List)
 	api.POST("/notifications/mark-read", notificationHandler.MarkRead)
 	api.GET("/notifications/preferences", notificationHandler.GetPreferences)
-	api.PUT("/notifications/preferences", notificationHandler.UpdatePreferences)
+	// bodyWS: the workspace being subscribed to is named in the request body, so
+	// RequireWorkspaceMemberScoped sees a path with nothing in it to resolve and
+	// waves it through. Without this guard any authenticated caller could
+	// subscribe to any workspace and be delivered its comment bodies.
+	api.PUT("/notifications/preferences", notificationHandler.UpdatePreferences, bodyWS)
+	api.DELETE("/notifications/preferences/:pref_id", notificationHandler.DeletePreference)
 
 	// Web Push subscription routes.
 	// NOTE: /me/push-subscriptions/vapid-key MUST be before /me/push-subscriptions to avoid routing conflict.
@@ -922,7 +1068,7 @@ func main() {
 	// Spark catalog routes (optional; only registered when MESH_SPARK_ENABLED=true).
 	if cfg.Spark.Enabled {
 		sparkClient := spark.NewClient(cfg.Spark.URL)
-		sparkHandler := handler.NewSparkHandler(sparkClient, agentService)
+		sparkHandler := handler.NewSparkHandler(sparkClient, agentService, workspaceMemberRepo)
 		api.GET("/spark/agents", sparkHandler.Search)
 		api.GET("/spark/agents/popular", sparkHandler.Popular)
 		api.GET("/spark/agents/:agent_id", sparkHandler.GetByID)

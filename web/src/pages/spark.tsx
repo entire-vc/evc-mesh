@@ -5,6 +5,7 @@ import { cn } from "@/lib/cn";
 import { api } from "@/lib/api";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { useSparkStore } from "@/stores/spark";
+import { useCapabilitiesStore } from "@/stores/capabilities";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -25,8 +26,6 @@ import {
 } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { IntegrationConfig, SparkAgentManifest } from "@/types";
-
-const SPARK_BASE_URL = "https://spark.entire.vc";
 
 // Pre-populated domain expertise tags shown as clickable badge-pills.
 const DOMAIN_TAGS = [
@@ -91,6 +90,16 @@ export function SparkPage() {
   // Check if the Spark integration is enabled for this workspace.
   const [sparkEnabled, setSparkEnabled] = useState<boolean | null>(null);
 
+  // The deployment's configured Spark catalog URL (MESH_SPARK_URL server-side,
+  // via /api/version — see stores/capabilities.ts). Never fall back to a
+  // hardcoded vendor domain here; an unconfigured self-host just gets no link.
+  const sparkBaseUrl = useCapabilitiesStore((s) => s.sparkUrl);
+  const fetchCapabilities = useCapabilitiesStore((s) => s.fetch);
+
+  useEffect(() => {
+    fetchCapabilities();
+  }, [fetchCapabilities]);
+
   useEffect(() => {
     if (!currentWorkspace) return;
     api<{ integrations: IntegrationConfig[] }>(
@@ -145,12 +154,16 @@ export function SparkPage() {
     setCustomTags((prev) => prev.filter((t) => t !== tag));
   }, []);
 
-  const handleCardOpen = useCallback((agent: SparkAgentManifest) => {
-    const url = agent.slug
-      ? `${SPARK_BASE_URL}/agents/${agent.slug}`
-      : `${SPARK_BASE_URL}/catalog?q=${encodeURIComponent(agent.name)}`;
-    window.open(url, "_blank", "noopener,noreferrer");
-  }, []);
+  const handleCardOpen = useCallback(
+    (agent: SparkAgentManifest) => {
+      if (!sparkBaseUrl) return;
+      const url = agent.slug
+        ? `${sparkBaseUrl}/agents/${agent.slug}`
+        : `${sparkBaseUrl}/catalog?q=${encodeURIComponent(agent.name)}`;
+      window.open(url, "_blank", "noopener,noreferrer");
+    },
+    [sparkBaseUrl],
+  );
 
   const handleInstallClick = useCallback(
     (agent: SparkAgentManifest) => {

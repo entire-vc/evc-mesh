@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/repository"
+	"github.com/entire-vc/evc-mesh/pkg/apierror"
 	"github.com/entire-vc/evc-mesh/pkg/pagination"
 )
 
@@ -111,8 +113,26 @@ func (r *fakeTaskRepo) Create(context.Context, *domain.Task) error { return nil 
 func (r *fakeTaskRepo) GetByID(_ context.Context, id uuid.UUID) (*domain.Task, error) {
 	return r.tasks[id], nil
 }
-func (r *fakeTaskRepo) GetByShortID(context.Context, string) (*domain.Task, error) {
-	return nil, nil
+
+// GetByShortID mirrors the postgres behaviour the resolver depends on: prefix
+// match, apierror.NotFound on no match, apierror.BadRequest when the prefix is
+// ambiguous. A fake that just returned nil would make the ambiguity test pass
+// for the wrong reason.
+func (r *fakeTaskRepo) GetByShortID(_ context.Context, prefix string) (*domain.Task, error) {
+	var hits []*domain.Task
+	for id, tk := range r.tasks {
+		if strings.HasPrefix(id.String(), strings.ToLower(prefix)) {
+			hits = append(hits, tk)
+		}
+	}
+	switch len(hits) {
+	case 0:
+		return nil, apierror.NotFound("Task")
+	case 1:
+		return hits[0], nil
+	default:
+		return nil, apierror.BadRequest("ambiguous short ID: multiple tasks match")
+	}
 }
 func (r *fakeTaskRepo) Search(context.Context, uuid.UUID, repository.TaskFilter, pagination.Params) (*pagination.Page[domain.Task], error) {
 	return nil, nil
@@ -665,4 +685,201 @@ func TestHandlePR_ActionOpened_NoTransition(t *testing.T) {
 	links, _ := h.repo.ListByTask(context.Background(), task.ID)
 	require.Len(t, links, 1)
 	assert.Equal(t, domain.VCSLinkStatusOpen, links[0].Status)
+}
+
+// ---------------------------------------------------------------------------
+// Create: link_type canonicalisation.
+// ---------------------------------------------------------------------------
+
+// The HTTP edge normalises link_type, but the service is the last shared
+// choke point before the repository — and the uniqueness index treats "pr"
+// and "pull_request" as different links to the same PR. Canonicalising here
+// too means no caller can split the vocabulary, whichever entry point it
+// uses.
+func TestVCSLinkService_Create_CanonicalisesLinkType(t *testing.T) {
+	for _, given := range []string{"pr", "pull_request", "PR", "Pull_Request"} {
+		t.Run(given, func(t *testing.T) {
+			h := newHarness(t)
+			task := h.makeTask(t, domain.StatusCategoryInProgress)
+
+			link, err := h.svc.Create(context.Background(), domain.CreateVCSLinkInput{
+				TaskID:     task.ID,
+				LinkType:   domain.VCSLinkType(given),
+				ExternalID: "42",
+				URL:        "https://github.com/entire-vc/evc-mesh/pull/42",
+			})
+			require.NoError(t, err)
+			assert.Equal(t, domain.VCSLinkTypePR, link.LinkType)
+
+			stored, err := h.repo.GetByID(context.Background(), link.ID)
+			require.NoError(t, err)
+			assert.Equal(t, domain.VCSLinkTypePR, stored.LinkType)
+		})
+	}
+}
+
+// An unrecognised value is left untouched rather than coerced — the service
+// is not the validation layer, and silently rewriting an unknown type would
+// hide a caller's mistake instead of surfacing it.
+func TestVCSLinkService_Create_LeavesUnknownLinkTypeAlone(t *testing.T) {
+	h := newHarness(t)
+	task := h.makeTask(t, domain.StatusCategoryInProgress)
+
+	link, err := h.svc.Create(context.Background(), domain.CreateVCSLinkInput{
+		TaskID:     task.ID,
+		LinkType:   domain.VCSLinkType("tag"),
+		ExternalID: "v1.2.3",
+		URL:        "https://github.com/entire-vc/evc-mesh/releases/tag/v1.2.3",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, domain.VCSLinkType("tag"), link.LinkType)
+}
+
+// ---------------------------------------------------------------------------
+// Create: status defaulting and explicit-status re-link (#df734dd9).
+//
+// Root cause under test: add_vcs_link previously had no way to record a PR's
+// status at link time, so a link created for an already-merged PR sat with
+// status="" forever — no webhook fires for a merge that happened before the
+// link existed — and the done-evidence gate (service.MoveTask, #2697392d)
+// blocks any non-merged/non-closed PR link unconditionally.
+// ---------------------------------------------------------------------------
+
+// A caller that omits status on a PR link gets an explicit "open", not an
+// ambiguous "". The done-evidence gate's inequality check already treated ""
+// the same as "open" (blocks either way), so this is a data-quality fix, not
+// a behavior change: the stored value now says what we actually know.
+func TestVCSLinkService_Create_DefaultsEmptyStatusToOpenForPRLink(t *testing.T) {
+	h := newHarness(t)
+	task := h.makeTask(t, domain.StatusCategoryInProgress)
+
+	link, err := h.svc.Create(context.Background(), domain.CreateVCSLinkInput{
+		TaskID:     task.ID,
+		LinkType:   domain.VCSLinkTypePR,
+		ExternalID: "42",
+		URL:        "https://github.com/entire-vc/evc-mesh/pull/42",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, domain.VCSLinkStatusOpen, link.Status)
+
+	stored, err := h.repo.GetByID(context.Background(), link.ID)
+	require.NoError(t, err)
+	assert.Equal(t, domain.VCSLinkStatusOpen, stored.Status)
+}
+
+// Non-PR link types (commit, branch) have no meaningful "open/merged/closed"
+// state — VCSLinkStatus is documented as "PRs only" — so an omitted status
+// must stay empty rather than being defaulted to "open", which would be a
+// meaningless claim about a commit.
+func TestVCSLinkService_Create_DoesNotDefaultStatusForNonPRLinkTypes(t *testing.T) {
+	h := newHarness(t)
+	task := h.makeTask(t, domain.StatusCategoryInProgress)
+
+	link, err := h.svc.Create(context.Background(), domain.CreateVCSLinkInput{
+		TaskID:     task.ID,
+		LinkType:   domain.VCSLinkTypeCommit,
+		ExternalID: "deadbeef",
+		URL:        "https://github.com/entire-vc/evc-mesh/commit/deadbeef",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, domain.VCSLinkStatus(""), link.Status)
+}
+
+// The core fix: a caller who knows the PR is already merged (the exact
+// scenario a webhook can never cover, since it was merged before the link
+// existed) can say so at link time and have it stick.
+func TestVCSLinkService_Create_ExplicitMergedStatusIsStored(t *testing.T) {
+	h := newHarness(t)
+	task := h.makeTask(t, domain.StatusCategoryReview)
+
+	link, err := h.svc.Create(context.Background(), domain.CreateVCSLinkInput{
+		TaskID:     task.ID,
+		LinkType:   domain.VCSLinkTypePR,
+		ExternalID: "40",
+		URL:        "https://github.com/entire-vc/evc-mesh-mcp/pull/40",
+		Status:     domain.VCSLinkStatusMerged,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, domain.VCSLinkStatusMerged, link.Status)
+
+	stored, err := h.repo.GetByID(context.Background(), link.ID)
+	require.NoError(t, err)
+	assert.Equal(t, domain.VCSLinkStatusMerged, stored.Status)
+}
+
+// Re-linking with an explicit status must succeed even when a link to the
+// same (task, provider, link_type, external_id) already exists — that
+// uniqueness collision is exactly what made a3bdf4ad's rows permanently
+// uncorrectable before this fix: the only way to record the real status was
+// to add_vcs_link again, and a plain insert 409s/500s on the unique index.
+func TestVCSLinkService_Create_ExplicitStatusUpsertsOnExistingLink(t *testing.T) {
+	h := newHarness(t)
+	task := h.makeTask(t, domain.StatusCategoryReview)
+
+	// First call: no status known yet (mirrors the historical add_vcs_link
+	// behavior before this fix) — lands as "open".
+	first, err := h.svc.Create(context.Background(), domain.CreateVCSLinkInput{
+		TaskID:     task.ID,
+		LinkType:   domain.VCSLinkTypePR,
+		ExternalID: "40",
+		URL:        "https://github.com/entire-vc/evc-mesh-mcp/pull/40",
+	})
+	require.NoError(t, err)
+	require.Equal(t, domain.VCSLinkStatusOpen, first.Status)
+
+	// Second call: the caller now knows it's merged and re-links with an
+	// explicit status. Must not error, and must not create a second row.
+	_, err = h.svc.Create(context.Background(), domain.CreateVCSLinkInput{
+		TaskID:     task.ID,
+		LinkType:   domain.VCSLinkTypePR,
+		ExternalID: "40",
+		URL:        "https://github.com/entire-vc/evc-mesh-mcp/pull/40",
+		Status:     domain.VCSLinkStatusMerged,
+	})
+	require.NoError(t, err, "re-linking with an explicit status must succeed, not fail on the unique index")
+
+	links, err := h.repo.ListByTask(context.Background(), task.ID)
+	require.NoError(t, err)
+	require.Len(t, links, 1, "re-linking the same PR must update the existing row, not duplicate it")
+	assert.Equal(t, domain.VCSLinkStatusMerged, links[0].Status)
+}
+
+// A caller that omits status keeps the plain-insert path (explicitStatus ==
+// false must call repo.Create, never repo.Upsert). Proved by colliding on
+// the same (task, provider, link_type, external_id) as an existing 'merged'
+// link without stating a status: if this ever went through Upsert instead,
+// the second call's defaulted "open" would silently overwrite the existing
+// row's real status. It must not — an accidental duplicate/uninformed
+// add_vcs_link call is a distinct case from "I'm correcting the status"
+// (that case is Test_ExplicitStatusUpsertsOnExistingLink above), and must
+// leave the original row exactly as it was.
+func TestVCSLinkService_Create_ImplicitStatusNeverCallsUpsert(t *testing.T) {
+	h := newHarness(t)
+	task := h.makeTask(t, domain.StatusCategoryReview)
+
+	merged, err := h.svc.Create(context.Background(), domain.CreateVCSLinkInput{
+		TaskID:     task.ID,
+		LinkType:   domain.VCSLinkTypePR,
+		ExternalID: "40",
+		URL:        "https://github.com/entire-vc/evc-mesh-mcp/pull/40",
+		Status:     domain.VCSLinkStatusMerged,
+	})
+	require.NoError(t, err)
+	require.Equal(t, domain.VCSLinkStatusMerged, merged.Status)
+
+	// Same external_id, no status — the exact shape of an accidental
+	// duplicate add_vcs_link call.
+	_, err = h.svc.Create(context.Background(), domain.CreateVCSLinkInput{
+		TaskID:     task.ID,
+		LinkType:   domain.VCSLinkTypePR,
+		ExternalID: "40",
+		URL:        "https://github.com/entire-vc/evc-mesh-mcp/pull/40",
+	})
+	require.NoError(t, err)
+
+	// The original row, addressed by its own ID, must still say 'merged'.
+	stillMerged, err := h.repo.GetByID(context.Background(), merged.ID)
+	require.NoError(t, err)
+	assert.Equal(t, domain.VCSLinkStatusMerged, stillMerged.Status,
+		"an implicit-status Create on a colliding link must not reset the existing row's status")
 }

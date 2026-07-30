@@ -4,32 +4,46 @@
 
 - **Docker** and **Docker Compose v2+**
 - **Go 1.22+** (for building the API server)
-- **Node.js 18+** and **pnpm** (for the frontend)
+- **Node.js 20+** and **pnpm** (for the frontend; CI builds on Node 22)
 - 2 GB RAM minimum
 - 10 GB disk space
 
+> Running a **production** install? Skip to
+> [Production Deployment](#production-deployment) — it is a different compose
+> file with a different env file, and the two are easy to mix up.
+
 ## Quick Start
+
+This is the **development** path: infrastructure in Docker, API and frontend
+running from source on your machine.
 
 ```bash
 # 1. Clone the repository
 git clone https://github.com/entire-vc/evc-mesh && cd evc-mesh
 
-# 2. Create your env file -- at minimum, change JWT_SECRET!
-cp .env.example .env
-#    nano .env
-#    JWT_SECRET=your-strong-secret-at-least-32-chars
-
-# 3. Start infrastructure (PostgreSQL, Redis, NATS, MinIO)
+# 2. Start infrastructure (PostgreSQL, Redis, NATS, MinIO)
 cd deploy/docker/mesh && docker compose up -d
 #    or from the repo root: make docker-up
 
-# 4. Build and start the API server
-cd ../..
-go run ./cmd/api
+# 3. Start the API server -- from the repo root, see the note below
+cd ../../..
+JWT_SECRET=$(openssl rand -base64 32) go run ./cmd/api
 
-# 5. In a separate terminal, start the frontend
+# 4. In a separate terminal, start the frontend
 cd web && pnpm install && pnpm dev
 ```
+
+> **The API server does not read a `.env` file.** It has no dotenv loader —
+> `config.Load()` reads the process environment and nothing else. Creating a
+> root `.env` has no effect on `go run ./cmd/api`; export the variables, put
+> them on the command line, or use the Docker Compose path where compose reads
+> the env file for you. `.env.example` is a reference list of names and
+> defaults, not a file the server loads.
+
+> **Run the API from the repo root.** It applies database migrations at startup
+> and resolves `migrations/` relative to the working directory. Started
+> elsewhere it exits with `Failed to run migrations: migrations directory does
+> not exist`.
 
 A fresh install has **no users and no default password** — open
 http://localhost:3000/register and create the first account, or see
@@ -57,6 +71,8 @@ The services will be available at:
 | `SERVER_PORT` | `8005` | API server bind port |
 | `SERVER_READ_TIMEOUT` | `30s` | HTTP read timeout |
 | `SERVER_WRITE_TIMEOUT` | `30s` | HTTP write timeout |
+| `MESH_METRICS_TOKEN` | _(empty)_ | Gates `GET /metrics` behind `Authorization: Bearer <token>`. Empty leaves it open — correct when you gate it at the network layer. The Compose stack generates one for you; see [the security checklist](#security-checklist). |
+| `MESH_METRICS_TOKEN_FILE` | _(empty)_ | File to read `MESH_METRICS_TOKEN` from when that variable is empty. How the Compose stack shares a generated token with Prometheus. |
 
 ### PostgreSQL
 
@@ -91,10 +107,13 @@ The services will be available at:
 | `S3_ENDPOINT` | `localhost:9002` | S3-compatible endpoint |
 | `S3_ACCESS_KEY_ID` | `minioadmin` | S3 access key |
 | `S3_SECRET_ACCESS_KEY` | `minioadmin` | S3 secret key |
-| `S3_BUCKET` | `mesh-artifacts` | Bucket name for artifacts |
+| `S3_BUCKET` | `mesh-artifacts` | Bucket name for artifacts and workspace icons. Created automatically at API startup if missing. |
 | `S3_REGION` | `us-east-1` | S3 region |
 | `S3_USE_SSL` | `false` | Use SSL for S3 connections |
-| `S3_PUBLIC_URL` | *(empty)* | Public base URL for artifact downloads (e.g. `https://mesh.example.com/s3`). Leave empty to use presigned S3 URLs. |
+| `S3_PUBLIC_URL` | *(empty)* | Public base URL for **artifact** downloads (e.g. `https://mesh.example.com/s3`). Leave empty to use presigned S3 URLs. Not needed for workspace icons — those are served by the API itself. |
+
+See [File storage](#file-storage) below for what the bucket holds and how to
+check it.
 
 ### Authentication
 
@@ -110,7 +129,7 @@ The services will be available at:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `MESH_SEED_ADMIN` | `false` | Create the first admin at boot. Runs **only** when the database has zero users. |
+| `MESH_SEED_ADMIN` | `false` | Create the first admin at boot. Runs **only** when the database has zero users. Must be the exact string `true`; anything else (including `1` or `TRUE`) is treated as off. **`docker-compose.prod.yml` overrides this default to `true`** — under production compose the seed is armed unless you set it to `false` yourself. |
 | `MESH_ADMIN_EMAIL` | `admin@localhost` | Email for the seeded admin |
 | `MESH_ADMIN_PASSWORD` | *(generated)* | Password for the seeded admin. If unset, a strong one is generated and printed **once** at boot. |
 | `MESH_ADMIN_NAME` | `Admin` | Display name for the seeded admin |
@@ -128,15 +147,191 @@ See [Seeding the first admin](#seeding-the-first-admin) below.
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `MESH_RATE_LIMIT_ENABLED` | `true` | Enable or disable rate limiting globally |
-| `MESH_RATE_LIMIT_AUTH_RPM` | `20` | Maximum requests per minute for auth endpoints (per IP) |
+| `MESH_RATE_LIMIT_AUTH_RPM` | `5` | Maximum requests per minute for auth endpoints (per IP). Deliberately tight — raise it if a whole office shares one NAT'd egress IP. |
+| `MESH_RATE_LIMIT_REFRESH_RPM` | `60` | Maximum requests per minute for token refresh (per IP) |
 | `MESH_RATE_LIMIT_API_RPM` | `600` | Maximum requests per minute for API endpoints (per authenticated actor) |
 
 ### Spark Catalog
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `MESH_SPARK_URL` | `https://spark.entire.vc` | Spark agent catalog API base URL |
+| `MESH_SPARK_URL` | *(empty)* | Spark agent catalog API base URL. Required if you enable Spark. |
 | `MESH_SPARK_ENABLED` | `false` | Enable Spark catalog routes (`/api/v1/spark/...`) |
+
+### Outbound email
+
+Workspace invites are emailed to the invitee. With `SMTP_HOST` unset the API
+logs the invite link instead of sending it — the invite still works, you just
+have to hand the link over yourself.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `SMTP_HOST` | *(empty)* | SMTP server host. Empty disables sending. |
+| `SMTP_PORT` | `587` | SMTP server port |
+| `SMTP_USER` | *(empty)* | SMTP username |
+| `SMTP_PASSWORD` | *(empty)* | SMTP password |
+| `SMTP_FROM` | *(empty)* | From address on outbound mail. Set this if you set `SMTP_HOST` — a configured server with no From address will have outbound mail rejected by most providers. |
+| `MESH_BASE_URL` | `http://localhost:5173` | Public base URL of the web UI. Used to build invite links — set this or invitees get a `localhost` link. |
+
+> **Email addresses are canonicalized.** Registration, login and invites trim
+> surrounding whitespace and lowercase the address, and the database enforces
+> uniqueness on `lower(email)`. `Carol@Example.COM` and `carol@example.com` are
+> the same account.
+
+### MCP server
+
+Read by the `mesh-mcp` binary (`cmd/mcp`), not by the API. In SSE mode
+`docker-compose.prod.yml` sets the transport, host and port for you.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MESH_MCP_TRANSPORT` | `stdio` | `stdio` or `sse`. The `--transport` flag overrides it. Any other value is fatal at startup. |
+| `MESH_API_URL` | `http://localhost:8005` | Mesh REST API the MCP server proxies to |
+| `MESH_AGENT_KEY` | *(none)* | Agent key for stdio mode. **Required** — stdio mode exits without it. Ignored in SSE mode, where each connection carries its own key. |
+| `MESH_MCP_HOST` | `0.0.0.0` | SSE listen host |
+| `MESH_MCP_PORT` | `8081` | SSE listen port |
+| `MESH_MCP_PUBLIC_URL` | *(empty)* | Public base URL of the SSE server (e.g. `https://mesh.example.com/mcp`). Empty means the message endpoint is advertised as a path relative to whatever URL the client connected to, which is correct for localhost, a published container port and a reverse proxy alike. Set it only for clients that require an absolute endpoint URL. |
+| `MESH_MCP_PROFILE` | `full` | `full` (49 tools) or `core` (21 tools). Applies to stdio mode; in SSE mode the profile is chosen by which endpoint the client connects to (`/sse` vs `/core/sse`). |
+
+See [Agent onboarding](agent-onboarding.md) for issuing keys and connecting a
+client.
+
+### Embeddings (semantic memory recall)
+
+Unset, the API runs a no-op embedder and memory recall is keyword-only. Nothing
+fails; results are just less good. `docker-compose.prod.yml` does not pass these
+through, so setting them requires editing the compose file's `environment:`
+block as well.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `EMBEDDING_PROVIDER` | `none` | `none`, `ollama` or `openai` |
+| `EMBEDDING_MODEL` | *(provider default)* | `nomic-embed-text` for ollama, `text-embedding-3-small` for openai |
+| `EMBEDDING_ENDPOINT` | *(provider default)* | `http://localhost:11434` for ollama, `https://api.openai.com` for openai |
+| `EMBEDDING_API_KEY` | *(empty)* | Bearer token for the openai provider |
+| `EMBEDDING_DIMENSIONS` | `0` | Expected vector length (`0` = whatever the model returns) |
+| `EMBEDDING_BATCH_SIZE` | `32` | Texts per batch embed call |
+| `EMBEDDING_CONCURRENCY` | `0` | Concurrent embed calls (`0` = unbounded) |
+| `EMBEDDING_HTTP_TIMEOUT_SECS` | `30` | Embedder HTTP timeout |
+
+### Memory recall tuning
+
+Scoring knobs for `recall`. The defaults are the tuned values; change them only
+with a benchmark in hand.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MEMORY_RECALL_HALF_LIFE_DAYS` | `30` | Half-life of the recency decay applied to recall scores |
+| `MEMORY_RECALL_RRF_VECTOR_WEIGHT` | `0.7` | Weight of the vector arm in reciprocal-rank fusion (`0` disables it) |
+| `MEMORY_RECALL_RRF_TEXT_WEIGHT` | `0.3` | Weight of the keyword arm |
+| `RECONCILER_EPOCH` | *(build time)* | RFC3339 cutoff; only memories created after it are eligible for stale-marking. Guards against a cold start marking your whole history stale. Unparseable values are logged and ignored. |
+
+### Browser push notifications
+
+All three must be set or push is disabled — the API logs `[push] VAPID keys not
+set — browser push disabled (safe for local dev)` and carries on. Not passed
+through by `docker-compose.prod.yml`.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MESH_VAPID_PUBLIC_KEY` | *(empty)* | VAPID public key |
+| `MESH_VAPID_PRIVATE_KEY` | *(empty)* | VAPID private key |
+| `MESH_VAPID_SUBJECT` | *(empty)* | `sub` claim of the VAPID JWT (a `mailto:` address or URL). Required if you set the VAPID keys above. |
+
+### Integrations
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MESH_INTEGRATION_ENCRYPTION_KEY` | *(empty)* | Base64 32-byte AES-256-GCM key encrypting stored integration credentials. **Empty means those credentials are stored in plaintext** — the API only logs a warning. See the [Security Checklist](#security-checklist). Generate with `openssl rand -base64 32`. |
+| `MESH_GITHUB_WEBHOOK_SECRET` | *(empty)* | HMAC-SHA256 secret for inbound GitHub webhooks. Empty disables signature validation, i.e. anyone who can reach the webhook endpoint can post to it. |
+| `MESH_TEAMRELAY_TRANSPORT_ENABLED` | `false` | Push artifacts to Team Relay. Must be the exact string `true`. |
+| `MESH_TEAMRELAY_RELAY_URL` | *(empty)* | Team Relay API base URL. Empty makes relay search and preview return `503`. |
+| `MESH_TEAMRELAY_WEB_BASE_URL` | *(falls back to `MESH_TEAMRELAY_RELAY_URL`)* | Base URL used to build relay preview links |
+
+None of these are passed through by `docker-compose.prod.yml`; add them to the
+`api` service's `environment:` block if you need them.
+
+### Escape hatches
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MESH_ALLOW_REVIEW_AT_CREATE` | *(off)* | Set to `true` to let `POST /tasks` create a task directly in a review-category status. Intended for bulk imports and migrations; leave off otherwise. |
+
+---
+
+## File storage
+
+Two features write files to object storage: **task artifacts** and the
+**workspace icon** (the PNG shown in the sidebar and used as the browser
+favicon). Both live in a single bucket, `S3_BUCKET` (default `mesh-artifacts`).
+
+### What you have to do
+
+Nothing. The bundled `minio` service is started by both compose files, and the
+API **creates the bucket at startup if it does not exist**. You do not need to
+open the MinIO console or run `mc mb` by hand.
+
+Confirm it on the first boot — the API logs one line either way:
+
+```bash
+cd deploy/docker/mesh
+docker compose -f docker-compose.prod.yml --env-file .env logs api | grep -i "object storage"
+```
+
+```
+Object storage ready: bucket "mesh-artifacts" on minio:9000
+```
+
+If the bucket could not be created you get a warning naming the bucket, the
+endpoint and the reason, and uploads will fail until it is fixed:
+
+```
+WARNING: object storage bucket "mesh-artifacts" on minio:9000 is not usable —
+artifact and workspace-icon uploads will fail until this is fixed: ...
+```
+
+The API keeps serving everything else; it retries the create on the next
+upload, so fixing credentials or starting the storage service is enough — no
+API restart required.
+
+### Using an external S3 bucket
+
+Point `S3_ENDPOINT`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `S3_BUCKET`,
+`S3_REGION` and `S3_USE_SSL` at it, and drop the `minio` service. If the
+credentials are not allowed to create buckets, create `S3_BUCKET` yourself
+first — the startup log will tell you if this is the case.
+
+### How files are served back
+
+| | Served by | Needs `S3_PUBLIC_URL`? |
+|---|---|---|
+| Workspace icon | The API streams the bytes (`GET /api/v1/workspaces/{id}/icon`) | No |
+| Task artifacts | Redirect to a presigned storage URL | Yes, if storage is not reachable from the browser |
+
+The workspace icon is deliberately **not** served via a presigned URL. A
+presigned URL is built from `S3_ENDPOINT`, which under compose is the internal
+host `minio:9000` — a name that does not resolve in a browser and a port that is
+not published. Streaming it through the API means the icon works behind any
+reverse proxy, tunnel or path prefix with no extra configuration, and the
+storage backend is never exposed. The icon is capped at 500 KB and carries an
+`ETag`, so repeat requests are answered `304 Not Modified`.
+
+`GET /api/v1/workspaces/{id}/icon` is **unauthenticated** — it has to be, since
+the browser loads it as a plain `<img>` and `<link rel="icon">`, neither of
+which sends an `Authorization` header. Reaching it requires knowing the
+workspace UUID, which is only ever handed out in authenticated responses; a
+workspace with no icon and a workspace that does not exist both answer `404`.
+No other workspace data is exposed by this route.
+
+### Checking what is in the bucket
+
+```bash
+cd deploy/docker/mesh
+docker compose -f docker-compose.prod.yml --env-file .env exec minio \
+  sh -c 'mc alias set l http://localhost:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null && mc ls --recursive l/mesh-artifacts'
+```
+
+Workspace icons are stored under `workspaces/<workspace-id>/icon.png`.
 
 ---
 
@@ -240,10 +435,13 @@ artifacts — owned by those users. Back up first (see
 
 By default `POST /auth/register` is a **public, unauthenticated endpoint** —
 anyone who can reach the instance can create an account. Each new account gets
-its own isolated workspace, so a stranger cannot see anyone else's data, but on
-an internet-facing self-host instance this still means: unlimited accounts
-consuming your database/S3/JetStream, and behavior most operators running a
-small team (3-10 people) do not expect from a "closed" tool.
+its own workspace, and every route that names workspace-owned data enforces
+membership (see [Security Checklist](#security-checklist), item 7) — with
+one **known exception documented there**, which is why closing registration is
+recommended rather than optional. On an internet-facing self-host instance the
+open endpoint also means: unlimited accounts consuming your
+database/S3/JetStream, and behavior most operators running a small team (3-10
+people) do not expect from a "closed" tool.
 
 Set `MESH_ALLOW_REGISTRATION=false` and restart the API to close it:
 
@@ -288,11 +486,21 @@ is not configured (`SMTP_HOST` unset), the invite is not emailed; the link is
 logged instead (`[email] SMTP not configured — invite link for ...`) so you
 can pass it along manually.
 
-**Default stays `true` for now.** Flipping the default to `false` would be a
-breaking change for every instance that already relies on the current
-"register at `/register`" flow described above, so this release only adds the
-flag — a future release may switch the default, called out in its own
-CHANGELOG entry.
+**The shipped templates default to closed; the binary still defaults to open.**
+`.env.example` and `deploy/docker/mesh/.env.prod.example` both ship
+`MESH_ALLOW_REGISTRATION=false`, so a new install that starts from a template is
+closed from the first boot — and thanks to the zero-users exception above, you
+can still register your first admin normally. The binary's own fallback stays
+`true` so that existing instances upgrading to this version do not have
+registration disappear underneath them. A future release may flip that too, in
+its own CHANGELOG entry.
+
+Why closed is the right starting point: on our own instance, one day of open
+registration produced eight accounts nobody had invited, and one of them used
+the cross-workspace user lookup described in the
+[Security Checklist](#security-checklist) to find an administrator and add them
+to a workspace of their own. Nothing there was a bug — it is what an open
+`/register` on a public address means.
 
 ---
 
@@ -303,17 +511,43 @@ CHANGELOG entry.
 For production, use `deploy/docker/mesh/docker-compose.prod.yml` instead of `deploy/docker/mesh/docker-compose.yml`. It builds all services from source and adds nginx, Prometheus, and Grafana.
 
 ```bash
-# Fill in production env vars in deploy/docker/mesh/.env
-# For a production template, start from deploy/docker/mesh/.env.prod.example
-
-# Build and start all services
 cd deploy/docker/mesh
+
+# 1. Create the env file. The name matters -- see the warning below.
+cp .env.prod.example .env
+#    nano .env   -- fill in every variable under the "# Required" comment near
+#                   the top of the file. Treat that comment as authoritative,
+#                   not this sentence: deploy/docker/mesh/check-required-env.sh
+#                   enforces in CI that it lists exactly what
+#                   docker-compose.prod.yml requires, so it cannot go stale the
+#                   way this paragraph twice has. As of this writing that's
+#                   POSTGRES_PASSWORD, REDIS_PASSWORD, JWT_SECRET,
+#                   MINIO_ACCESS_KEY, MINIO_SECRET_KEY, GRAFANA_PASSWORD.
+
+# 2. Build and start all services
 docker compose -f docker-compose.prod.yml --env-file .env up -d --build
 # or from the repo root: make docker-prod-up
 
-# Verify all services are healthy
-docker compose -f docker-compose.prod.yml ps
+# 3. Verify all services are healthy
+docker compose -f docker-compose.prod.yml --env-file .env ps
 ```
+
+> ⚠️ **The file must be called `.env`, in `deploy/docker/mesh/`.** The template
+> is named `.env.prod.example`, which makes `.env.prod` the obvious name to copy
+> it to — but Compose only auto-loads `.env` from the directory holding the
+> compose file, and it never reads the repo-root `.env`. With a `.env.prod`
+> sitting right there, `docker compose -f docker-compose.prod.yml config` still
+> fails with `required variable POSTGRES_PASSWORD is missing a value`, which
+> reads like a missing variable rather than an unread file.
+>
+> Pass `--env-file .env` explicitly on every command, as above. It costs
+> nothing when the name is already right and it turns a silent misread into an
+> explicit one. Verify what Compose actually resolved before starting anything:
+>
+> ```bash
+> docker compose -f docker-compose.prod.yml --env-file .env config | \
+>   grep -E 'MESH_BASE_URL|MESH_ALLOW_REGISTRATION|MESH_SEED_ADMIN'
+> ```
 
 Services included in `docker-compose.prod.yml`:
 
@@ -327,7 +561,7 @@ Services included in `docker-compose.prod.yml`:
 | `mcp` | `${MCP_PORT:-8081}` | MCP server in SSE mode for remote agents |
 | `nginx` | `${HTTP_PORT:-80}` | Nginx serving the React SPA, proxying `/api` and `/ws` to the API |
 | `prometheus` | `${PROMETHEUS_PORT:-9090}` | Prometheus scraping `/metrics` from the API |
-| `grafana` | `${GRAFANA_PORT:-3001}` | Grafana dashboards — default password: `${GRAFANA_PASSWORD:-admin}` |
+| `grafana` | `${GRAFANA_PORT:-3001}` | Grafana dashboards — password set by `GRAFANA_PASSWORD` (required, no default) |
 
 Required environment variables for production:
 
@@ -337,9 +571,75 @@ REDIS_PASSWORD=your-redis-password
 JWT_SECRET=your-32-char-minimum-secret
 MINIO_ACCESS_KEY=your-minio-access-key
 MINIO_SECRET_KEY=your-minio-secret-key
-# Optional:
-CORS_ORIGINS=https://mesh.yourdomain.com
 GRAFANA_PASSWORD=your-grafana-admin-password
+# Optional:
+MESH_CORS_ORIGINS=https://mesh.yourdomain.com   # CORS_ORIGINS is also accepted
+MESH_ALLOW_REGISTRATION=false                   # close self-registration
+```
+
+**Not every variable in the reference above reaches the container.**
+`docker-compose.prod.yml` passes through the core set — server, database, Redis,
+NATS, S3, auth, CORS, rate limits, first-admin seed, SMTP, `MESH_BASE_URL`,
+`MESH_ALLOW_REGISTRATION` — and setting those in `.env` is enough. The
+following groups are **not** in the `api` service's `environment:` block, so
+setting them in `.env` does nothing; add them to the compose file too if you
+need them:
+
+- `EMBEDDING_*` — production runs the no-op embedder, i.e. keyword-only recall
+- `MESH_VAPID_*` — browser push is off
+- `MESH_TEAMRELAY_*` — Team Relay routes answer `503`
+- `MEMORY_RECALL_*`, `MESH_ALLOW_REVIEW_AT_CREATE`
+
+`MESH_INTEGRATION_ENCRYPTION_KEY` and `MESH_GITHUB_WEBHOOK_SECRET` used to be
+on that list, and both fail silently when unset — plaintext integration
+credentials and unverified webhook signatures respectively. A security control
+you must first edit the compose file to enable is one most people will not
+enable, so they are now passed through: set them in `.env` and they take
+effect.
+
+`DB_PASSWORD` and the S3 credentials work differently on purpose: under compose
+they are supplied by `POSTGRES_PASSWORD` and `MINIO_ACCESS_KEY` /
+`MINIO_SECRET_KEY`, so one value configures both the server and its client.
+These are the names that differ — everything else in `.env` reaches the API
+under the same name it has in the file:
+
+| In `.env` | What the API reads | Also configures |
+|---|---|---|
+| `POSTGRES_PASSWORD` | `DB_PASSWORD` | the `postgres` server's own password |
+| `DB_USER` | `DB_USER` | `POSTGRES_USER` — one knob, both sides |
+| `DB_NAME` | `DB_NAME` | `POSTGRES_DB` — one knob, both sides |
+| `MINIO_ACCESS_KEY` | `S3_ACCESS_KEY_ID` | MinIO's `MINIO_ROOT_USER` |
+| `MINIO_SECRET_KEY` | `S3_SECRET_ACCESS_KEY` | MinIO's `MINIO_ROOT_PASSWORD` |
+| `CORS_ORIGINS` | `MESH_CORS_ORIGINS` | *(legacy spelling, still accepted)* |
+| `GRAFANA_PASSWORD` | *(not the API)* | Grafana's `GF_SECURITY_ADMIN_PASSWORD` |
+
+⚠️ **Editing `POSTGRES_PASSWORD` after the first boot breaks the API.** The
+Postgres image applies that variable only when it initialises an empty data
+directory; on every later start it is ignored. Change it in `.env`, restart,
+and the API dutifully connects with the new value while the server still wants
+the old one — `password authentication failed for user "mesh"`. Verified on a
+running stack:
+
+```bash
+# from a throwaway client on the compose network, after rotating .env
+psql -h postgres -U mesh -d mesh -c 'select 1'
+#   old password → 1
+#   new password → FATAL: password authentication failed for user "mesh"
+```
+
+Rotate it in both places instead — `ALTER USER mesh PASSWORD '<new>';` on the
+server, then the same value in `.env`.
+
+(Test this yourself from *outside* the container: `docker exec … psql -U mesh`
+connects over the local socket, and `127.0.0.1` inside the container is
+`trust` in the image's `pg_hba.conf`. Both accept any password whatsoever, so
+either one will tell you a rotation "worked" when it did not.)
+
+When in doubt, ask Compose rather than the docs:
+
+```bash
+docker compose -f docker-compose.prod.yml --env-file .env config | \
+  sed -n '/^  api:/,/^  [a-z]/p'
 ```
 
 ### Security Checklist
@@ -349,18 +649,25 @@ GRAFANA_PASSWORD=your-grafana-admin-password
    openssl rand -base64 32
    ```
 
-2. **Database password** -- Change `DB_PASSWORD` from the default:
+2. **Database password** -- Change it from the default. Under
+   `docker-compose.prod.yml` one variable configures both the server and the
+   API client:
    ```bash
-   # Also update deploy/docker/mesh/.env
-   DB_PASSWORD=your-strong-db-password
+   # deploy/docker/mesh/.env
+   POSTGRES_PASSWORD=your-strong-db-password
    ```
+   Running the API against an external Postgres instead? Set `DB_PASSWORD`
+   (plus `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_NAME`, `DB_SSL_MODE`) directly.
 
-3. **MinIO credentials** -- Change from defaults:
+3. **MinIO credentials** -- Change from defaults. Same pattern: under compose
+   these configure both MinIO and the API's S3 client:
    ```bash
-   S3_ACCESS_KEY_ID=your-access-key
-   S3_SECRET_ACCESS_KEY=your-secret-key
-   # Also update deploy/docker/mesh/.env
+   # deploy/docker/mesh/.env
+   MINIO_ACCESS_KEY=your-access-key
+   MINIO_SECRET_KEY=your-secret-key
    ```
+   Against an external S3/R2 bucket, set `S3_ENDPOINT`, `S3_ACCESS_KEY_ID`,
+   `S3_SECRET_ACCESS_KEY`, `S3_BUCKET`, `S3_REGION` and `S3_USE_SSL` instead.
 
 4. **Redis password** -- Set a password:
    ```bash
@@ -368,15 +675,83 @@ GRAFANA_PASSWORD=your-grafana-admin-password
    # The production compose file already passes this to redis-server
    ```
 
-5. **CORS** -- Configure allowed origins (currently allows `*`). Update the API server configuration for your domain.
+5. **CORS** -- Configure allowed origins (the default allows `*`):
+   ```bash
+   # deploy/docker/mesh/.env
+   MESH_CORS_ORIGINS=https://mesh.yourdomain.com
+   ```
 
-6. **Registration** -- If this instance is reachable from the public internet,
-   set `MESH_ALLOW_REGISTRATION=false` **after** creating your first admin
-   account, so strangers cannot self-register. See
-   [Closing registration](#closing-registration). Add people afterward via
-   workspace invites, not the open `/register` endpoint.
+6. **Registration** -- Keep `MESH_ALLOW_REGISTRATION=false` (the value both env
+   templates ship). The first account on an empty database can register
+   regardless of the flag, so this costs you nothing during setup and closes the
+   door for everyone after. Add people afterward via workspace invites, not the
+   open `/register` endpoint. See
+   [Closing registration](#closing-registration) — including what happened on
+   our own instance when it was left open.
 
-7. **TLS** -- Set up a reverse proxy (nginx or Caddy) with TLS termination:
+7. **Workspace isolation** -- Every endpoint that names workspace-owned data
+   requires the caller to be a member of that workspace (agents: to belong to
+   it), enforced for the whole authenticated API group rather than per route.
+   A logged-in user from another workspace gets `403` on all of them.
+
+   This covers any route whose path carries `:ws_id`, `:proj_id`, `:task_id`,
+   `:artifact_id`, `:agent_id`, `:field_id` or `:init_id` — the tenant is
+   resolved from whichever of those the route has, and membership is required
+   for the workspace that comes out. A route whose parameter resolves to nothing
+   (an unknown or deleted id) answers `403` rather than `404`: the guard runs
+   before the handler, and it does not confirm which ids exist.
+
+   **One registered exception:** `GET`/`HEAD /workspaces/:ws_id/icon` is
+   readable without authentication, because the browser fetches the workspace
+   icon with an `<img>` tag and a `<link rel="icon">`, and neither can send an
+   `Authorization` header. Knowing the workspace id is the only requirement, and
+   ids are handed out only in authenticated responses; a workspace with no icon
+   and a workspace that does not exist answer byte-identically, so this cannot
+   be used to discover workspaces. Uploading an icon (`PUT`) is unaffected and
+   stays owner/admin only. The exception is registered in `wsPublicRoutes`
+   (`tests/integration/cross_tenant_test.go`) — a workspace route that leaves
+   the guard without being registered there fails the build.
+
+   The live event stream (`/ws`) applies the same rule. It is upgraded before any
+   API middleware runs, so it checks membership itself: the `workspace=` query
+   parameter is verified during the handshake, and every later
+   `{"action":"subscribe"}` is authorised too — a connection may subscribe only
+   to its own workspace channel, to projects inside that workspace, and to its
+   own user's mention feed. Agent connections take their workspace from the agent
+   key, never from the query string.
+
+   Two consequences worth knowing:
+
+   - Looking people up by name or email
+     (`GET /workspaces/:ws_id/users/search`) searches the whole instance, not
+     just the workspace — that is what makes "add an existing user" work. It is
+     therefore restricted to roles that can manage members (owner/admin). On a
+     shared instance hosting unrelated tenants, treat workspace admin as
+     "can see that an account exists"; invite by email if that is not
+     acceptable.
+   - Renaming a workspace or changing its slug
+     (`PATCH /workspaces/:ws_id`) is owner/admin only, because the slug appears
+     in every `/w/<slug>/...` URL your team has saved.
+
+   ⚠️ **Known gap — do not read the above as "isolation is complete".** The
+   guard resolves the tenant from a **path parameter**. A route that takes the
+   workspace from the **request body** instead has no path parameter to resolve,
+   so the guard never runs on it. `POST /api/v1/rules/evaluate` is such a route
+   today: it reads `workspace_id` from the JSON body and does not check that the
+   caller belongs to it, so any authenticated account can evaluate rules against
+   another workspace. Composite routes that name a child object
+   (`.../statuses/:status_id`, `.../auto-transition-rules/:rule_id`,
+   `/tasks/:task_id/dependencies/:dep_id`) verify the parent but not that the
+   child belongs to it.
+
+   Note what this does and does not mean: closing registration stops a **new**
+   stranger from obtaining credentials, but it does **not** protect you from
+   accounts that already exist on the instance. **If you host unrelated tenants
+   on one instance, do not treat it as a security boundary until this is
+   closed.** Tracked, with reproductions, as the follow-up to the tenancy work
+   in `#416`/`#419`/`#420`.
+
+8. **TLS** -- Set up a reverse proxy (nginx or Caddy) with TLS termination:
 
    **Caddy example (`Caddyfile`):**
    ```
@@ -412,6 +787,118 @@ GRAFANA_PASSWORD=your-grafana-admin-password
      }
    }
    ```
+
+9. **`/metrics` on both the API and the MCP server is token-gated**, by the
+   same `MESH_METRICS_TOKEN`. Compose generates the token on first start
+   into `deploy/docker/mesh/volumes/secrets/metrics_token` and gives the
+   same file to the API (`MESH_METRICS_TOKEN_FILE`), the MCP service
+   (`MESH_METRICS_TOKEN_FILE`), and Prometheus (`bearer_token_file`, see
+   `monitoring/prometheus.yml`) — there is nothing to set, and the value is
+   not in `docker inspect` output on any of the three. Set
+   `MESH_METRICS_TOKEN` in `.env` to choose it yourself; that value is
+   written to the same file and wins for both services. Scrape either
+   endpoint from outside the stack with
+   `curl -H "Authorization: Bearer $(cat deploy/docker/mesh/volumes/secrets/metrics_token)" http://localhost:8005/metrics`
+   (API) or the same against `http://localhost:${MCP_PORT:-8081}/metrics`
+   (MCP — note the bundled Prometheus does not scrape this one; nothing in
+   the stack consumes it, the gate exists so exposing the port doesn't leak
+   route names, traffic volumes and workspace/task counts to anyone who can
+   reach it). Outside Compose both binaries read `MESH_METRICS_TOKEN`
+   directly, and leaving it unset keeps the endpoint open for deployments
+   that gate it at the network layer instead (e.g. the internal prod
+   install, fronted by Caddy). If you'd rather not expose the MCP metrics
+   port at all, bind it to loopback instead:
+
+   ```yaml
+   # deploy/docker/mesh/docker-compose.prod.yml, mcp service
+   ports:
+     - "127.0.0.1:${MCP_PORT:-8081}:8081"
+   ```
+
+   Don't do this as the shipped default, though — the mcp service exists so
+   remote agents can reach `/sse` and `/message` on this same port; binding
+   it to loopback closes those along with `/metrics`.
+
+   The same publish-by-default caveat applies to the `prometheus` (`9090`) and `grafana` (`3001`)
+   services: `docker-compose.prod.yml` publishes both on all interfaces.
+   Grafana requires `GRAFANA_PASSWORD` to be set (Compose refuses to start
+   otherwise) — but the port is still open to the network, so bind it to
+   `127.0.0.1` as above, or drop the two services entirely if you are not
+   using them.
+
+10. **Do not publish the API port when a proxy fronts it** -- Compose publishes
+    `${API_PORT:-8005}` on every interface. With nginx or Caddy terminating TLS
+    in front, that port is a plaintext bypass around it, rate limits and all.
+    Bind it to `127.0.0.1` as above, or remove the mapping.
+
+    Note that Docker's published ports are inserted into iptables ahead of most
+    host firewall rules, so a `ufw`/`firewalld` "deny" you added afterwards
+    likely is not covering them. Check from another machine, not from the host.
+
+11. **Set `MESH_INTEGRATION_ENCRYPTION_KEY`** -- Without it, credentials for
+    configured integrations are written to the database **in plaintext**; the
+    API notes this in a startup warning and continues. It is not passed through
+    by `docker-compose.prod.yml`, so it needs adding to the `api` service's
+    `environment:` block as well as to `.env`:
+
+    ```bash
+    openssl rand -base64 32
+    ```
+
+12. **Set `MESH_BASE_URL`** -- Not a confidentiality issue, but the one people
+    hit: unset, it falls back to `http://localhost:5173` and every workspace
+    invite link points at the invitee's own machine. Since this version the API
+    warns about it at startup:
+
+    ```
+    [config] WARNING: MESH_BASE_URL is not set — workspace invite links will point at http://localhost:5173
+    ```
+
+---
+
+## Add your teammates
+
+Registration ships closed, so the admin account seeded at first boot is the only
+way in until you invite someone. Nothing below needs SMTP — without it the API
+prints the invite link instead of emailing it, which is enough to get a second
+person working today.
+
+**From the UI:** workspace → Members → Invite.
+
+**From the API**, using the admin's access token:
+
+```bash
+TOKEN=$(curl -s -X POST http://localhost:${HTTP_PORT}/api/v1/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"admin@localhost","password":"<the bootstrap password>"}' \
+  | python3 -c 'import sys,json; print(json.load(sys.stdin)["tokens"]["access_token"])')
+
+WS=$(curl -s http://localhost:${HTTP_PORT}/api/v1/workspaces \
+  -H "Authorization: Bearer $TOKEN" \
+  | python3 -c 'import sys,json; print(json.load(sys.stdin)[0]["id"])')
+
+curl -s -X POST http://localhost:${HTTP_PORT}/api/v1/workspaces/$WS/invites \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"email":"teammate@example.com","role":"member"}'
+```
+
+With `SMTP_HOST` unset, the link lands in the API log:
+
+```bash
+docker compose -f docker-compose.prod.yml --env-file .env logs api | grep invite
+```
+```
+[email] SMTP not configured — invite link for teammate@example.com:
+        http://localhost:8080/accept-invite/<token>
+```
+
+The invitee opens that link, picks their own password, and is signed in — they
+do **not** need the `/register` page, which is exactly why closing it costs you
+nothing. Their account is created and joined to the workspace in one step.
+
+`MESH_BASE_URL` is what makes the link openable: unset, it falls back to
+`http://localhost:5173` and your teammate gets a link to their own machine. The
+API warns about this at startup.
 
 ---
 
@@ -546,14 +1033,37 @@ cd ../..
 go run ./cmd/api
 ```
 
-### MinIO bucket not found
+### Icon or artifact upload fails
 
-**Symptom:** Artifact uploads fail with "bucket not found".
+**Symptom:** Uploading a workspace icon or a task artifact returns an error.
 
-**Solution:** The API auto-creates the bucket on startup. If it fails, create manually:
+The API names the cause in the response and in its log — read it first, the
+three cases have different fixes:
+
+| Message | Cause | Fix |
+|---------|-------|-----|
+| *…bucket does not exist and could not be created…* | The credentials may not create buckets | Create `S3_BUCKET` manually (below), or grant `CreateBucket` |
+| *…rejected the credentials…* | Wrong keys | Check `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` (under compose: `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY`) |
+| *…storage is unreachable…* | Storage is down or `S3_ENDPOINT` is wrong | Check the `minio` service is healthy and `S3_ENDPOINT` points at it |
+
+The bucket is created automatically at API startup and re-created on demand at
+upload time (see [File storage](#file-storage)). To create it by hand anyway:
+
 ```bash
-mc alias set local http://localhost:9002 minioadmin minioadmin
-mc mb local/mesh-artifacts
+cd deploy/docker/mesh
+docker compose -f docker-compose.prod.yml --env-file .env exec minio \
+  sh -c 'mc alias set l http://localhost:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null && mc mb l/mesh-artifacts'
+```
+
+### Workspace icon uploads but does not appear
+
+Hard-refresh once — the icon is cached for 5 minutes. If it is still missing,
+check that your reverse proxy forwards `/api/` to the API without rewriting it;
+`GET /api/v1/workspaces/<id>/icon` must return `200` with `Content-Type:
+image/png`:
+
+```bash
+curl -i http://localhost/api/v1/workspaces/<workspace-id>/icon | head -5
 ```
 
 ### NATS JetStream not available
@@ -583,6 +1093,51 @@ lsof -i :3000  # Frontend
 
 Adjust ports in `deploy/docker/mesh/docker-compose.yml` and `deploy/docker/mesh/.env` if needed.
 
+### `429 Rate limit exceeded` while logging in or testing
+
+**Symptom:** login, register or invite calls start answering
+`{"code":429,"message":"Rate limit exceeded"}` after a handful of attempts.
+
+**Cause:** `MESH_RATE_LIMIT_AUTH_RPM` defaults to **5 requests per minute, per
+IP** — deliberately tight against credential stuffing. Behind one NAT'd office
+egress, or while scripting a setup, five is easy to spend: a login, a couple of
+retries and an invite acceptance will do it. The window is a minute; waiting
+clears it.
+
+**Solution:** raise it in `.env` if a whole team shares one egress IP:
+
+```bash
+MESH_RATE_LIMIT_AUTH_RPM=30
+```
+
+Do not raise it for a public instance without thinking about why it is 5.
+
+### `403 registration is closed on this instance`
+
+**Not a misconfiguration.** Both env templates ship
+`MESH_ALLOW_REGISTRATION=false`, so `/register` is closed to walk-ups by design.
+The exception is the *first* account on an empty database, which can always
+register — so this never locks you out of a fresh install.
+
+Add people with [workspace invites](#add-your-teammates) instead. To reopen
+public registration anyway, set `MESH_ALLOW_REGISTRATION=true` and read
+[Closing registration](#closing-registration) first — it describes what happened
+on our own instance when it was left open.
+
+### The invitee cannot open their invite link
+
+**Symptom:** the link points at `http://localhost:5173` (or any host that is not
+your instance), so it opens nothing on their machine.
+
+**Cause:** `MESH_BASE_URL` was unset when the invite was created — links are
+built from it, and it falls back to a localhost dev URL. The API says so at
+startup: `[config] WARNING: MESH_BASE_URL is not set`.
+
+**Solution:** set `MESH_BASE_URL` to the URL your team actually types, restart
+the API, and issue a **new** invite. Existing invite links keep the old host
+baked in; the token is still valid, so the invitee can also just replace the
+scheme+host in the link by hand.
+
 ### Frontend build fails
 
 **Symptom:** `pnpm install` or `pnpm dev` fails.
@@ -605,21 +1160,32 @@ pnpm dev
 
 ## Upgrading
 
+### Docker Compose
+
 1. Pull the latest code:
    ```bash
    git pull origin main
    ```
 
-2. Run database migrations (applied automatically on API startup).
+2. **Compare your `.env` against the example.** New releases add variables,
+   and a release that adds one you do not have can stop the upgrade before
+   anything starts:
+   ```bash
+   cd deploy/docker/mesh
+   diff <(grep -oE '^[A-Z_]+' .env.prod.example | sort -u) \
+        <(grep -oE '^[A-Z_]+' .env | sort -u)
+   ```
+   Lines marked `<` are in the example but not in your `.env`. Most are
+   optional and documented in
+   [the reference above](#environment-variables-reference) — read what each
+   one does and set the ones you want. None of them are required for the
+   upgrade to proceed; see the note below.
 
 3. Rebuild and restart:
    ```bash
-   # API — use make build-prod for cross-compilation with all ldflags
-   make build-prod
-
-   # Frontend
-   cd web && pnpm install && pnpm build && pnpm start
+   docker compose -f docker-compose.prod.yml --env-file .env up -d --build
    ```
+   Migrations are applied automatically at API startup.
 
 4. Verify health and version:
    ```bash
@@ -627,3 +1193,43 @@ pnpm dev
    curl http://localhost:8005/api/version
    # → {"commit":"abc1234","build_time":"2026-05-20T...","version":"v1.2.3","environment":"prod","service":"evc-mesh-api"}
    ```
+   `commit` should be the revision you just pulled. If it still shows the
+   old one, the containers were restarted but not rebuilt — check that
+   `--build` was passed.
+
+#### If the upgrade fails before anything starts
+
+An error of this shape comes from Docker Compose, not from Mesh:
+
+```
+error while interpolating services.api.environment.SOME_VAR:
+required variable SOME_VAR is missing a value
+```
+
+Compose refuses to parse the file, so nothing is rebuilt and nothing is
+stopped — your instance keeps serving on the old containers while you fix
+it. Set the named variable in `deploy/docker/mesh/.env` (step 2 above shows
+what you are missing) and re-run.
+
+This should not happen on an upgrade. The variables the stack requires
+without a default are fixed — `POSTGRES_PASSWORD`, `REDIS_PASSWORD`,
+`JWT_SECRET`, `MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY`, `GRAFANA_PASSWORD` —
+and all of them have shipped in `.env.prod.example` since the first
+installable release, so any working install already has them. Anything
+added later gets a default or is generated by the stack instead;
+`deploy/docker/mesh/check-required-env.sh` enforces that in CI. If you hit
+this error on a released version, it is a bug worth reporting.
+
+> **Upgrading from a release before 2026-07-29?** One version briefly
+> required `MESH_METRICS_TOKEN` with no default and broke exactly this way.
+> It is no longer required — the stack generates the token into
+> `deploy/docker/mesh/volumes/secrets/metrics_token` on first start. If you
+> worked around it by adding `MESH_METRICS_TOKEN` to your `.env`, that still
+> works and takes precedence; you can also drop the line.
+
+### Building from source
+
+1. Pull, then run `make build-prod` for the API (cross-compilation with all
+   ldflags) and `cd web && pnpm install && pnpm build` for the frontend.
+2. Restart your service manager's units. Migrations apply at API startup.
+3. Verify with the same `/health` and `/api/version` checks as above.

@@ -1572,7 +1572,7 @@ func TestRemember_SlugResolution(t *testing.T) {
 	wsID := uuid.New()
 	projID := uuid.New()
 
-	t.Run("sets project_id from project:mesh tag", func(t *testing.T) {
+	t.Run("sets project_id from project:mesh tag on scope=project", func(t *testing.T) {
 		var upserted *domain.Memory
 		memRepo := &mockMemoryRepo{
 			upsertFn: func(_ context.Context, m *domain.Memory) error {
@@ -1594,13 +1594,83 @@ func TestRemember_SlugResolution(t *testing.T) {
 			WorkspaceID: wsID,
 			Key:         "checkpoint-mesh",
 			Content:     "session end",
+			Scope:       domain.ScopeProject,
+			Tags:        []string{"kind:session-checkpoint", "project:mesh", "owner:garfield"},
+		}
+		_, err := svc.Remember(context.Background(), mem)
+		require.NoError(t, err)
+		require.NotNil(t, upserted.ProjectID, "project_id must be set when project:mesh tag resolves on scope=project")
+		assert.Equal(t, projID, *upserted.ProjectID)
+	})
+
+	// Regression guard for the scope-identity fix (task #4edf3fb5): slug
+	// resolution must NOT populate project_id on scope=workspace, even when
+	// the tag resolves cleanly — 544 of 1186 active workspace-scoped rows had
+	// exactly this shape (a workspace-wide record incoherently carrying a
+	// project_id) before this fix, because the old code ran resolveProjectSlug
+	// unconditionally regardless of the memory's declared scope.
+	t.Run("does NOT set project_id from project:mesh tag on scope=workspace", func(t *testing.T) {
+		var upserted *domain.Memory
+		memRepo := &mockMemoryRepo{
+			upsertFn: func(_ context.Context, m *domain.Memory) error {
+				upserted = m
+				return nil
+			},
+		}
+		projRepo := &mockProjectRepo{
+			getBySlugFn: func(_ context.Context, wsID uuid.UUID, slug string) (*domain.Project, error) {
+				if slug == "mesh-dev" {
+					return &domain.Project{ID: projID}, nil
+				}
+				return nil, nil
+			},
+		}
+		svc := NewMemoryService(memRepo, &mockMemoryEdgeRepo{}, nil, MemoryWithProjectRepo(projRepo))
+
+		mem := &domain.Memory{
+			WorkspaceID: wsID,
+			Key:         "checkpoint-mesh-ws",
+			Content:     "session end",
 			Scope:       domain.ScopeWorkspace,
 			Tags:        []string{"kind:session-checkpoint", "project:mesh", "owner:garfield"},
 		}
 		_, err := svc.Remember(context.Background(), mem)
 		require.NoError(t, err)
-		require.NotNil(t, upserted.ProjectID, "project_id must be set when project:mesh tag resolves")
-		assert.Equal(t, projID, *upserted.ProjectID)
+		assert.Nil(t, upserted.ProjectID, "scope=workspace must never get an auto-populated project_id")
+	})
+
+	// Same guard for scope=agent — the resolver must be a strict project-scope
+	// opt-in, not project-scope-or-anything-without-an-explicit-project_id.
+	t.Run("does NOT set project_id from project:mesh tag on scope=agent", func(t *testing.T) {
+		var upserted *domain.Memory
+		memRepo := &mockMemoryRepo{
+			upsertFn: func(_ context.Context, m *domain.Memory) error {
+				upserted = m
+				return nil
+			},
+		}
+		projRepo := &mockProjectRepo{
+			getBySlugFn: func(_ context.Context, wsID uuid.UUID, slug string) (*domain.Project, error) {
+				if slug == "mesh-dev" {
+					return &domain.Project{ID: projID}, nil
+				}
+				return nil, nil
+			},
+		}
+		svc := NewMemoryService(memRepo, &mockMemoryEdgeRepo{}, nil, MemoryWithProjectRepo(projRepo))
+
+		agentID := uuid.New()
+		mem := &domain.Memory{
+			WorkspaceID: wsID,
+			AgentID:     &agentID,
+			Key:         "checkpoint-mesh-agent",
+			Content:     "session end",
+			Scope:       domain.ScopeAgent,
+			Tags:        []string{"kind:session-checkpoint", "project:mesh", "owner:garfield"},
+		}
+		_, err := svc.Remember(context.Background(), mem)
+		require.NoError(t, err)
+		assert.Nil(t, upserted.ProjectID, "scope=agent must never get an auto-populated project_id")
 	})
 
 	t.Run("leaves project_id nil when already set", func(t *testing.T) {
@@ -1699,6 +1769,93 @@ func TestRemember_SlugResolution(t *testing.T) {
 		_, err := svc.Remember(context.Background(), mem)
 		require.NoError(t, err)
 		assert.Nil(t, upserted.ProjectID)
+	})
+}
+
+// ---------------------------------------------------------------------------
+// TestRemember_ExplicitProjectIDNormalizedByScope
+//
+// Task #2c0154db/F3 gated BOTH known project_id auto-stamp sources (server
+// resolveProjectSlug, MCP client active-task auto-populate) to scope=project
+// only. Neither gate stops a CALLER from passing project_id explicitly
+// alongside scope=workspace/agent — measured live: 4 fresh rows got exactly
+// that shape within ~1h of both gates being deployed. This is the fix for
+// that gap: normalize unconditionally at the Remember() boundary.
+// ---------------------------------------------------------------------------
+
+func TestRemember_ExplicitProjectIDNormalizedByScope(t *testing.T) {
+	wsID := uuid.New()
+	explicitProjID := uuid.New()
+
+	t.Run("explicit project_id is stripped on scope=workspace", func(t *testing.T) {
+		var upserted *domain.Memory
+		memRepo := &mockMemoryRepo{
+			upsertFn: func(_ context.Context, m *domain.Memory) error {
+				upserted = m
+				return nil
+			},
+		}
+		svc := NewMemoryService(memRepo, &mockMemoryEdgeRepo{}, nil)
+
+		mem := &domain.Memory{
+			WorkspaceID: wsID,
+			ProjectID:   &explicitProjID, // caller passed it explicitly, not via slug/auto-populate
+			Key:         "explicit-ws-proj",
+			Content:     "content",
+			Scope:       domain.ScopeWorkspace,
+		}
+		_, err := svc.Remember(context.Background(), mem)
+		require.NoError(t, err)
+		assert.Nil(t, upserted.ProjectID, "an explicit project_id must not survive on scope=workspace")
+	})
+
+	t.Run("explicit project_id is stripped on scope=agent", func(t *testing.T) {
+		var upserted *domain.Memory
+		memRepo := &mockMemoryRepo{
+			upsertFn: func(_ context.Context, m *domain.Memory) error {
+				upserted = m
+				return nil
+			},
+		}
+		svc := NewMemoryService(memRepo, &mockMemoryEdgeRepo{}, nil)
+
+		agentID := uuid.New()
+		mem := &domain.Memory{
+			WorkspaceID: wsID,
+			AgentID:     &agentID,
+			ProjectID:   &explicitProjID,
+			Key:         "explicit-agent-proj",
+			Content:     "content",
+			Scope:       domain.ScopeAgent,
+		}
+		_, err := svc.Remember(context.Background(), mem)
+		require.NoError(t, err)
+		assert.Nil(t, upserted.ProjectID, "an explicit project_id must not survive on scope=agent")
+	})
+
+	// Regression/mutation-control guard: scope=project is the one case where an
+	// explicit project_id IS the caller's actual intent and must survive.
+	t.Run("explicit project_id survives on scope=project", func(t *testing.T) {
+		var upserted *domain.Memory
+		memRepo := &mockMemoryRepo{
+			upsertFn: func(_ context.Context, m *domain.Memory) error {
+				upserted = m
+				return nil
+			},
+		}
+		svc := NewMemoryService(memRepo, &mockMemoryEdgeRepo{}, nil)
+
+		mem := &domain.Memory{
+			WorkspaceID: wsID,
+			ProjectID:   &explicitProjID,
+			Key:         "explicit-proj-proj",
+			Content:     "content",
+			Scope:       domain.ScopeProject,
+		}
+		_, err := svc.Remember(context.Background(), mem)
+		require.NoError(t, err)
+		require.NotNil(t, upserted.ProjectID, "scope=project must keep a caller-supplied project_id")
+		assert.Equal(t, explicitProjID, *upserted.ProjectID)
 	})
 }
 

@@ -252,10 +252,30 @@ func (h *RuleHandler) DeleteRule(c echo.Context) error {
 }
 
 // EvaluateRules handles POST /rules/evaluate (dry-run)
+//
+// The workspace comes from the body, which is why this route carries
+// middleware.RequireBodyWorkspace: the path names no tenant, so the group-level
+// guard sees nothing to check and every authenticated caller — user or agent key —
+// could evaluate against any workspace id they cared to type and read the
+// matching rules' names and violation messages back out of the response.
+//
+// The guard has already refused any workspace the caller cannot act in by the time
+// this runs, and has put the workspace it accepted in the request context; reading
+// it back from there rather than from the body is what keeps the two from drifting
+// apart, and what gives an omitted workspace_id the caller's own workspace instead
+// of the zero uuid.
 func (h *RuleHandler) EvaluateRules(c echo.Context) error {
 	var req evaluateRuleRequest
 	if err := c.Bind(&req); err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
+	}
+
+	if req.WorkspaceID == uuid.Nil {
+		wsID, err := mw.GetWorkspaceID(c)
+		if err != nil {
+			return c.JSON(http.StatusBadRequest, apierror.BadRequest("workspace_id is required"))
+		}
+		req.WorkspaceID = wsID
 	}
 
 	actorID, actorType := actorctx.FromContext(c.Request().Context())

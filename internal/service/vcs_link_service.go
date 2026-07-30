@@ -88,22 +88,64 @@ func (s *vcsLinkService) Create(ctx context.Context, input domain.CreateVCSLinkI
 		provider = domain.VCSProviderGitHub
 	}
 
+	// Canonicalise here as well as at the HTTP edge: the uniqueness index and
+	// every downstream reader assume one spelling per concept, so an alias
+	// must never reach the repository regardless of which caller supplied it.
+	linkType := input.LinkType
+	if canonical, ok := domain.ParseVCSLinkType(string(linkType)); ok {
+		linkType = canonical
+	}
+
 	metadata := input.Metadata
 	if metadata == nil {
 		metadata = []byte("{}")
+	}
+
+	// PR links carry a status the done-evidence gate reads (service.MoveTask,
+	// #2697392d). A caller that omits it leaves the column "" — which is not
+	// "open", it's "unknown", but the gate's inequality check
+	// (Status != merged && Status != closed) treats "" exactly like "open"
+	// and blocks anyway. Make that implicit behavior explicit so the stored
+	// value never lies about what we actually know: an empty status IS the
+	// safe default (fail closed), not a bug to route around with silence.
+	//
+	// explicitStatus (before defaulting) also decides Create vs Upsert below
+	// — track it here, not by re-checking input.Status later.
+	explicitStatus := input.Status != ""
+	status := input.Status
+	if !explicitStatus && linkType == domain.VCSLinkTypePR {
+		status = domain.VCSLinkStatusOpen
 	}
 
 	link := &domain.VCSLink{
 		ID:         uuid.New(),
 		TaskID:     input.TaskID,
 		Provider:   provider,
-		LinkType:   input.LinkType,
+		LinkType:   linkType,
 		ExternalID: input.ExternalID,
 		URL:        input.URL,
 		Title:      input.Title,
-		Status:     input.Status,
+		Status:     status,
 		Metadata:   metadata,
 		CreatedAt:  time.Now(),
+	}
+
+	if explicitStatus {
+		// A caller who explicitly states the status knows something the
+		// stored row might not — most commonly, linking a PR that was
+		// already merged before the link existed (#df734dd9: no webhook
+		// will ever arrive for that after the fact) or correcting a link
+		// created before status tracking existed. Upsert so this succeeds
+		// whether or not the link already exists, instead of failing on
+		// (task_id, provider, link_type, external_id) uniqueness — the
+		// exact wall that made a3bdf4ad's rows permanently uncorrectable.
+		// A caller that does NOT pass status keeps the plain-Create path
+		// below unchanged: an accidental duplicate add still fails loudly
+		// instead of silently resetting an existing 'merged' row to 'open'.
+		if err := s.repo.Upsert(ctx, link); err != nil {
+			return nil, fmt.Errorf("create vcs link: %w", err)
+		}
+		return link, nil
 	}
 
 	if err := s.repo.Create(ctx, link); err != nil {
@@ -147,9 +189,48 @@ func (s *vcsLinkService) HandleGitHubPullRequestEvent(ctx context.Context, ev Gi
 		return PRHandleResult{}, errors.New("vcsLinkService: missing dependency for HandleGitHubPullRequestEvent (taskRepo/statusRepo/taskSvc/commentSvc must be wired)")
 	}
 
-	// 1. Resolve task_id from MESH-<uuid> in title, then body, then fallback
-	//    by previously-linked (provider, link_type, external_id).
-	taskID := extractMeshTaskIDFromTexts(ev.PRTitle, ev.PRBody)
+	// 1. Resolve task_id from any recognised reference spelling in the title,
+	//    body or head branch, then fall back to a previously-linked
+	//    (provider, link_type, external_id).
+	sources := []TaskRefSource{
+		{Name: "title", Text: ev.PRTitle},
+		{Name: "body", Text: ev.PRBody},
+		{Name: "branch", Text: ev.PRBranch},
+	}
+	taskID, matched, outcome := s.resolveTaskRef(ctx, sources...)
+	if taskID != uuid.Nil {
+		log.Printf("[vcs-webhook] pr=%s#%d resolved task=%s via=%s src=%s raw=%q",
+			ev.Repository, ev.PRNumber, taskID, matched.Kind, matched.Source, truncate(matched.Raw, 60))
+		// A stored link naming a DIFFERENT task is the fingerprint of an
+		// earlier mislink: the payload is legible now, so whatever is on file
+		// was written when it was not. Upsert keys on task_id, so the old row
+		// survives untouched beside the new one and nothing else would ever
+		// mention it. Say so — the previous version of this bug was invisible
+		// precisely because the wrong row was silent.
+		if stale, err := s.repo.ListByExternalID(ctx, domain.VCSProviderGitHub, domain.VCSLinkTypePR, strconv.Itoa(ev.PRNumber)); err == nil {
+			for _, l := range stale {
+				if l.TaskID != taskID {
+					log.Printf("[vcs-webhook] pr=%s#%d stored link points at task=%s but payload names task=%s; leaving the stale row for review (link_id=%s)",
+						ev.Repository, ev.PRNumber, l.TaskID, taskID, l.ID)
+				}
+			}
+		}
+	}
+	if taskID == uuid.Nil && outcome == refAmbiguous {
+		// Do NOT fall back to the stored link here. The fallback below exists
+		// for payloads that name nothing — a PR linked by hand once, whose
+		// later deliveries should keep updating that link. An AMBIGUOUS payload
+		// is the opposite situation: the fresh read disagreed with itself, and
+		// reusing history would make every redelivery re-confirm whatever was
+		// stored first. That is not hypothetical — PR #433 attached itself to
+		// the task its body quoted as an example, and because each subsequent
+		// delivery took this fallback, the refusal added one commit earlier
+		// could never undo it. A link that can only be corrected by hand is a
+		// link that stays wrong.
+		log.Printf("[vcs-webhook] pr=%s#%d ambiguous_task_ref: refusing to reuse any stored link for this PR",
+			ev.Repository, ev.PRNumber)
+		return PRHandleResult{Reason: "ambiguous_task_ref"}, nil
+	}
 	if taskID == uuid.Nil {
 		links, err := s.repo.ListByExternalID(ctx, domain.VCSProviderGitHub, domain.VCSLinkTypePR, strconv.Itoa(ev.PRNumber))
 		if err != nil {
@@ -157,6 +238,12 @@ func (s *vcsLinkService) HandleGitHubPullRequestEvent(ctx context.Context, ev Gi
 		}
 		switch {
 		case len(links) == 0:
+			// Say what was looked at, not just that nothing was found: for six
+			// weeks this branch was taken 444 times and left no trace at all,
+			// so "200 and silence" was indistinguishable from a healthy webhook.
+			log.Printf("[vcs-webhook] pr=%s#%d no_task_ref: candidates=%d title=%q body=%q branch=%q",
+				ev.Repository, ev.PRNumber, len(ExtractTaskRefs(sources...)),
+				truncate(ev.PRTitle, 80), truncate(ev.PRBody, 160), truncate(ev.PRBranch, 60))
 			return PRHandleResult{Reason: "no_task_ref"}, nil
 		case len(links) == 1:
 			taskID = links[0].TaskID
@@ -324,46 +411,142 @@ func (s *vcsLinkService) resolveStatusBySlug(ctx context.Context, projectID uuid
 	return nil, nil
 }
 
-// extractMeshTaskIDFromTexts scans title then body for the MESH-<uuid> pattern.
-func extractMeshTaskIDFromTexts(parts ...string) uuid.UUID {
-	for _, p := range parts {
-		if id := extractMeshTaskIDFromText(p); id != uuid.Nil {
-			return id
-		}
-	}
-	return uuid.Nil
+// maxRefCandidates bounds how many candidate references one payload may cost
+// in database lookups. A PR body naming more than a dozen ids is prose about
+// tasks, not a reference to one.
+const maxRefCandidates = 12
+
+// ResolveTaskRef scans the sources for every recognised task-reference spelling
+// and returns the task they name — but only when they agree on ONE task.
+//
+// Existence is checked, not assumed: vcs_links.task_id carries an FK to
+// tasks(id), so an unverified id turns into a constraint violation at insert
+// time rather than a clean "no reference here". A candidate that resolves to
+// nothing is dropped quietly; a PR body may quote a deleted task or one from
+// another workspace beside the real reference.
+//
+// When candidates resolve to SEVERAL different tasks the payload is ambiguous
+// and nothing is returned, unless exactly one of them was found in the title.
+// This is the same refusal as an ambiguous short prefix, one level up: picking
+// the first by position is a guess, and a wrong link silently misattributes a
+// pull request. Verified the hard way — the first PR this code saw in
+// production was one whose body documented the reference syntax, and it
+// attached itself to the unrelated task used as the example.
+//
+// Returns uuid.Nil when nothing resolves or the payload is ambiguous.
+func (s *vcsLinkService) ResolveTaskRef(ctx context.Context, sources ...TaskRefSource) (uuid.UUID, TaskRef) {
+	id, ref, _ := s.resolveTaskRef(ctx, sources...)
+	return id, ref
 }
 
-// extractMeshTaskIDFromText parses a full MESH-<uuid> token from text. Only a
-// complete (36-char) UUID is recognised; short prefixes seen in the UI must
-// be resolved by callers via the external_id fallback path.
-func extractMeshTaskIDFromText(text string) uuid.UUID {
-	const prefix = "MESH-"
-	idx := strings.Index(text, prefix)
-	if idx == -1 {
-		return uuid.Nil
+// refOutcome says WHY ResolveTaskRef came back empty. Callers that fall back to
+// stored state need the distinction: "nothing here named a task" invites a
+// fallback, whereas "something did and we refused to choose between them" is an
+// active disagreement, and treating the two alike lets a wrong link outlive the
+// refusal that was supposed to prevent it.
+type refOutcome int
+
+const (
+	// refNone — no candidate in the payload named an existing task.
+	refNone refOutcome = iota
+	// refResolved — exactly one task was named (or the title broke the tie).
+	refResolved
+	// refAmbiguous — several distinct tasks were named and none was decisive.
+	refAmbiguous
+)
+
+func (s *vcsLinkService) resolveTaskRef(ctx context.Context, sources ...TaskRefSource) (uuid.UUID, TaskRef, refOutcome) {
+	type hit struct {
+		id  uuid.UUID
+		ref TaskRef
 	}
-	rest := text[idx+len(prefix):]
-	end := len(rest)
-	if end > 36 {
-		end = 36
-	}
-	candidate := rest[:end]
-	for i, ch := range candidate {
-		if !isHexOrDashByte(ch) {
-			candidate = candidate[:i]
+	var (
+		hits    []hit
+		seen    = map[uuid.UUID]bool{}
+		checked int
+	)
+
+	for _, ref := range ExtractTaskRefs(sources...) {
+		if checked >= maxRefCandidates {
+			log.Printf("[vcs-webhook] stopped after %d candidate refs; payload names too many ids", maxRefCandidates)
 			break
 		}
+		checked++
+
+		id, ok := s.lookupRef(ctx, ref)
+		if !ok || seen[id] {
+			continue
+		}
+		seen[id] = true
+		hits = append(hits, hit{id: id, ref: ref})
 	}
-	id, err := uuid.Parse(candidate)
-	if err != nil {
-		return uuid.Nil
+
+	switch len(hits) {
+	case 0:
+		return uuid.Nil, TaskRef{}, refNone
+	case 1:
+		return hits[0].id, hits[0].ref, refResolved
 	}
-	return id
+
+	// Ambiguous. A title is short and deliberate, so a single reference there
+	// outranks a crowded body; anything else is a guess we decline to make.
+	var fromTitle []hit
+	for _, h := range hits {
+		if h.ref.Source == "title" {
+			fromTitle = append(fromTitle, h)
+		}
+	}
+	if len(fromTitle) == 1 {
+		return fromTitle[0].id, fromTitle[0].ref, refResolved
+	}
+
+	ids := make([]string, 0, len(hits))
+	for _, h := range hits {
+		ids = append(ids, h.id.String()+"("+string(h.ref.Kind)+"/"+h.ref.Source+")")
+	}
+	log.Printf("[vcs-webhook] ambiguous payload names %d distinct tasks, linking none: %s",
+		len(hits), strings.Join(ids, " "))
+	return uuid.Nil, TaskRef{}, refAmbiguous
 }
 
-func isHexOrDashByte(ch rune) bool {
-	return (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F') || ch == '-'
+// lookupRef turns one candidate into a task id, reporting whether it named a
+// task that exists.
+func (s *vcsLinkService) lookupRef(ctx context.Context, ref TaskRef) (uuid.UUID, bool) {
+	switch {
+	case ref.Full != uuid.Nil:
+		if s.taskRepo == nil {
+			// CRUD-only construction: no way to verify, and the spelling was
+			// explicit enough to be taken at face value.
+			return ref.Full, true
+		}
+		t, err := s.taskRepo.GetByID(ctx, ref.Full)
+		if err != nil {
+			log.Printf("[vcs-webhook] lookup task=%s (%s) failed: %v", ref.Full, ref.Kind, err)
+			return uuid.Nil, false
+		}
+		if t == nil {
+			return uuid.Nil, false
+		}
+		return t.ID, true
+
+	case ref.Short != "":
+		if s.taskRepo == nil {
+			return uuid.Nil, false
+		}
+		// GetByShortID refuses an ambiguous prefix (apierror.BadRequest) rather
+		// than picking one — two tenants behind one 8-hex prefix must not
+		// silently resolve to whichever row sorted first.
+		t, err := s.taskRepo.GetByShortID(ctx, ref.Short)
+		if err != nil {
+			log.Printf("[vcs-webhook] short id %q (%s) unresolved: %v", ref.Short, ref.Kind, err)
+			return uuid.Nil, false
+		}
+		if t == nil {
+			return uuid.Nil, false
+		}
+		return t.ID, true
+	}
+	return uuid.Nil, false
 }
 
 func shortSHA(s string) string {

@@ -735,10 +735,16 @@ func (h *TaskHandler) AssignTask(c echo.Context) error {
 
 // createSubtaskRequest represents the JSON body for creating a subtask.
 type createSubtaskRequest struct {
-	Title       string          `json:"title"`
-	Description string          `json:"description"`
-	Priority    domain.Priority `json:"priority"`
-	StatusID    string          `json:"status_id"`
+	Title          string              `json:"title"`
+	Description    string              `json:"description"`
+	Priority       domain.Priority     `json:"priority"`
+	StatusID       string              `json:"status_id"`
+	AssigneeID     *uuid.UUID          `json:"assignee_id"`
+	AssigneeType   domain.AssigneeType `json:"assignee_type"`
+	Labels         []string            `json:"labels"`
+	CustomFields   json.RawMessage     `json:"custom_fields"`
+	DueDate        *time.Time          `json:"due_date"`
+	EstimatedHours *float64            `json:"estimated_hours"`
 }
 
 // CreateSubtask handles POST /tasks/:task_id/subtasks
@@ -764,10 +770,24 @@ func (h *TaskHandler) CreateSubtask(c echo.Context) error {
 		priority = domain.PriorityMedium
 	}
 
+	// Resolve assignee type. When assignee_id is supplied without a type,
+	// infer "agent" so the explicit assignee_id is not silently clobbered
+	// by applyAutoAssign (which fires on "unassigned") — same rule as Create.
+	assigneeType := req.AssigneeType
+	if assigneeType == "" && req.AssigneeID != nil {
+		assigneeType = domain.AssigneeTypeAgent
+	}
+
 	input := service.CreateSubtaskInput{
-		Title:       req.Title,
-		Description: req.Description,
-		Priority:    priority,
+		Title:          req.Title,
+		Description:    req.Description,
+		Priority:       priority,
+		AssigneeID:     req.AssigneeID,
+		AssigneeType:   assigneeType,
+		Labels:         req.Labels,
+		CustomFields:   req.CustomFields,
+		DueDate:        req.DueDate,
+		EstimatedHours: req.EstimatedHours,
 	}
 
 	// Omitted status_id means "project default" — resolved by the service.

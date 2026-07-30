@@ -44,6 +44,82 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import check_serving_version as csv  # noqa: E402
 
 REAL_DEPLOY_WORKFLOW = csv.DEPLOY_WORKFLOW
+REAL_BENCH_WORKFLOW = (
+    Path(__file__).resolve().parents[2] / ".github" / "workflows" / "memory-bench.yml"
+)
+
+
+def workflow_step(text: str, name: str) -> str:
+    """Return the body of the `- name: <name>` step, or "" if it is not there.
+
+    Stdlib only — these self-checks run before `pip install`, so no PyYAML. Slices
+    on the `      - name:` indent the file already uses uniformly.
+    """
+    lines = text.splitlines()
+    marker = f"      - name: {name}"
+    try:
+        start = lines.index(marker)
+    except ValueError:
+        return ""
+    body: list[str] = []
+    for line in lines[start + 1 :]:
+        if line.startswith("      - name: "):
+            break
+        body.append(line)
+    return "\n".join(body)
+
+
+class CaptureStepCallsTheGuard(unittest.TestCase):
+    """The guard exists; these pin that the CAPTURE path actually CALLS it.
+
+    `test_a_mid_run_deploy_is_inconclusive_and_named` proves `--was` refuses when
+    invoked. For a year it could have proved that while nothing invoked it from
+    the capture arm — which is exactly what happened: the post-flight check lived
+    inside the scoring step only, so a `--repeat 3` capture measured across two
+    binaries (run 30336693957, prod 5d2cda8 -> ba7deae 42 min in), exited SUCCESS
+    and wrote the baseline. A test for the non-call without a test for the call
+    is half a guard.
+
+    Deliberately asserted against the REAL workflow: a copy of the YAML in the
+    test would keep passing after somebody edited the file.
+    """
+
+    def setUp(self):
+        self.assertTrue(REAL_BENCH_WORKFLOW.exists(), REAL_BENCH_WORKFLOW)
+        self.text = REAL_BENCH_WORKFLOW.read_text()
+
+    def test_the_slicer_finds_a_real_step(self):
+        """Positive control for the helper — an empty body would pass every test below."""
+        body = workflow_step(self.text, "Re-snap the recall baseline")
+        self.assertTrue(body.strip(), "the capture step was not found — the tests below are vacuous")
+        self.assertEqual("", workflow_step(self.text, "a step that does not exist"))
+
+    def test_the_capture_step_runs_the_post_flight_stability_check(self):
+        body = workflow_step(self.text, "Re-snap the recall baseline")
+        self.assertIn("SERVED_AT_START", body)
+        self.assertIn("check_serving_version.py --was", body)
+
+    def test_the_capture_step_removes_the_baseline_when_the_binary_swapped(self):
+        """Refusing loudly is not enough — the file must not survive to be committed.
+
+        `capture_blockers` refuses BEFORE writing for this reason: a guard that
+        reports after the file is on disk is advice, the artifact still uploads
+        and the figure still gets committed. This check can only run after the
+        measurement, so deletion is how it inherits that property.
+        """
+        body = workflow_step(self.text, "Re-snap the recall baseline")
+        self.assertIn("rm -f baseline_retrieval.json", body)
+
+    def test_the_capture_step_records_which_binary_it_measured(self):
+        body = workflow_step(self.text, "Re-snap the recall baseline")
+        self.assertIn("--served-commit", body)
+
+    def test_the_scoring_step_still_has_its_own_check(self):
+        """The two arms must not drift — fixing one by moving it is not a fix."""
+        body = workflow_step(self.text, "Run recall gate (no LLM)")
+        self.assertTrue(body.strip(), "the scoring step was not found")
+        self.assertIn("check_serving_version.py \\", body)
+        self.assertIn("--was", body)
 
 
 class ParseDeployPaths(unittest.TestCase):
@@ -59,6 +135,39 @@ class ParseDeployPaths(unittest.TestCase):
         self.assertIn("cmd/**", paths)
         self.assertIn("migrations/**", paths)
         self.assertNotIn("scripts/memory-bench/**", paths)
+
+    def test_the_real_files_exclusions_survive_into_a_git_pathspec(self):
+        """The coupling that broke once: `!` is GitHub's exclude, `:!` is git's.
+
+        A bare `!pattern` in a `git diff -- …` pathspec is not an exclusion, it is
+        an ordinary pattern matching nothing — so every exclusion in the real
+        workflow evaporated and its files kept counting as deployable. That fails
+        in the direction that never clears: evc-mesh#408 stopped `*_test.go`
+        merges deploying, so prod legitimately stays behind after one, and a pin
+        that still thinks the file deploys waits for a deploy nobody will ever
+        make. Pinned against the REAL file so the next exclusion added there
+        cannot desynchronise this quietly.
+        """
+        paths = csv.parse_deploy_paths(REAL_DEPLOY_WORKFLOW.read_text())
+        spec = csv.to_git_pathspec(paths)
+        self.assertEqual(len(paths), len(spec), "translation must not drop patterns")
+        for raw, translated in zip(paths, spec):
+            if raw.startswith("!"):
+                self.assertEqual(":!" + raw[1:], translated)
+            else:
+                self.assertEqual(raw, translated)
+        self.assertFalse(
+            [s for s in spec if s.startswith("!")],
+            "a bare `!` reached the pathspec — git reads it as a literal, not an exclusion",
+        )
+
+    def test_a_list_of_only_exclusions_reads_as_cannot_tell(self):
+        """`[:!x]` would diff EVERYTHING-except and read as 'the whole tree deploys'."""
+        self.assertIsNone(
+            csv.parse_deploy_paths(
+                "on:\n  push:\n    paths:\n      - '!**/*_test.go'\n"
+            )
+        )
 
     def test_unparseable_yields_none_not_empty(self):
         """None (cannot tell) and [] (nothing deploys) must never collapse."""
@@ -138,6 +247,25 @@ class Classify(unittest.TestCase):
         head = self.repo.commit("internal/service/memory_service.go", "v2\n")
         ok, why = csv.classify(self.base, head, self.PATHS)
         self.assertFalse(ok)
+        self.assertIn("deployable", why)
+
+    def test_a_test_only_change_is_not_a_deployable_diff(self):
+        """`_test.go` never enters a non-test build, so prod is entitled to lag.
+
+        The negative control is the same file without the `_test` suffix: if the
+        exclusion were over-broad it would swallow that too, and the guard would
+        wave through a run measuring the previous binary — the failure this whole
+        tool exists to prevent. Both directions, or neither proves anything.
+        """
+        paths = [*self.PATHS, "!**/*_test.go"]
+        excluded = self.repo.commit("internal/service/memory_service_test.go", "t\n")
+        ok, why = csv.classify(self.base, excluded, paths)
+        self.assertTrue(ok, why)
+        self.assertIn("equivalent", why)
+
+        included = self.repo.commit("internal/service/memory_service.go", "v2\n")
+        ok, why = csv.classify(self.base, included, paths)
+        self.assertFalse(ok, why)
         self.assertIn("deployable", why)
 
     def test_prod_ahead_of_the_commit_under_test_is_refused(self):

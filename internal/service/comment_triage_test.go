@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -1006,6 +1007,327 @@ func TestEnforceTriageExit_TaskNotInTriage_NoOp(t *testing.T) {
 	assert.Empty(t, env.systemComments())
 }
 
+// ---------------------------------------------------------------------------
+// releaseHumanGateOnWithdrawal (via Create) — task #c375905c
+// ---------------------------------------------------------------------------
+
+// seedAgentBlockingComment inserts a "❓ Blocking @pavel" comment authored by
+// authorID, so ownership of the live ask can be pinned to a specific agent.
+func (env triageTestEnv) seedAgentBlockingComment(taskID, authorID uuid.UUID) {
+	cid := uuid.New()
+	env.commentRepo.items[cid] = &domain.Comment{
+		ID:         cid,
+		TaskID:     taskID,
+		AuthorID:   authorID,
+		AuthorType: domain.ActorTypeAgent,
+		Body:       "❓ **Blocking @pavel**: нужен выбор варианта A/Б",
+		// Explicit, in the past relative to frozenTime (what the withdrawal
+		// comment created via svc.Create receives): releaseHumanGateOnWithdrawal
+		// scans in real chronological order, so tests with more than one
+		// marker comment need genuine, distinct timestamps, not insertion order.
+		CreatedAt: frozenTime.Add(-2 * time.Hour),
+	}
+}
+
+// TestReleaseHumanGateOnWithdrawal_SameAgentNegates_ReleasesFlag is AC1's happy
+// path: the same agent who raised the still-live ask posts a withdrawal, and the
+// gate clears so move_task(done) is no longer blocked.
+func TestReleaseHumanGateOnWithdrawal_SameAgentNegates_ReleasesFlag(t *testing.T) {
+	env := setupTriageEnv(t, true)
+	taskID := env.seedGatedTask(env.inProgressID)
+	askerID := uuid.New()
+	env.seedAgentBlockingComment(taskID, askerID)
+
+	ctx := actorctx.WithActor(context.Background(), askerID, domain.ActorTypeAgent)
+	comment := &domain.Comment{
+		TaskID:     taskID,
+		AuthorID:   askerID,
+		AuthorType: domain.ActorTypeAgent,
+		Body:       "Blocker самоустранился, ask не нужен — снимаю.",
+	}
+	require.NoError(t, env.svc.Create(ctx, comment))
+
+	gateCalls := env.taskMover.humanGateCalls()
+	require.Len(t, gateCalls, 1, "SetHumanGate must be called exactly once")
+	assert.Equal(t, taskID, gateCalls[0].taskID)
+	assert.False(t, gateCalls[0].value, "gate must be cleared (value=false)")
+
+	sys := env.systemComments()
+	require.Len(t, sys, 1)
+	assert.Contains(t, sys[0].Body, "human_gate снят")
+	assert.Contains(t, sys[0].Body, "отозвал его сам")
+}
+
+// TestReleaseHumanGateOnWithdrawal_DifferentAgent_NoOp is the core negative
+// control from the task's own AC2: an agent OTHER than the one who raised the
+// ask cannot silence it, even with a negator phrase — otherwise the fleet
+// learns to bypass its own Pavel gate, which is worse than the original bug.
+func TestReleaseHumanGateOnWithdrawal_DifferentAgent_NoOp(t *testing.T) {
+	env := setupTriageEnv(t, true)
+	taskID := env.seedGatedTask(env.inProgressID)
+	askerID := uuid.New()
+	env.seedAgentBlockingComment(taskID, askerID)
+
+	bystanderID := uuid.New()
+	ctx := actorctx.WithActor(context.Background(), bystanderID, domain.ActorTypeAgent)
+	comment := &domain.Comment{
+		TaskID:     taskID,
+		AuthorID:   bystanderID,
+		AuthorType: domain.ActorTypeAgent,
+		Body:       "Ask не нужен, снимаю за коллегу.",
+	}
+	require.NoError(t, env.svc.Create(ctx, comment))
+
+	assert.Empty(t, env.taskMover.humanGateCalls(), "a different agent must not release someone else's ask")
+	assert.Empty(t, env.systemComments())
+}
+
+// TestReleaseHumanGateOnWithdrawal_NoNegator_NoOp is AC2's other half: a live,
+// unwithdrawn ask must not clear just because the SAME asker comments again
+// without an actual negator — ordinary progress updates must not accidentally
+// release the gate.
+func TestReleaseHumanGateOnWithdrawal_NoNegator_NoOp(t *testing.T) {
+	env := setupTriageEnv(t, true)
+	taskID := env.seedGatedTask(env.inProgressID)
+	askerID := uuid.New()
+	env.seedAgentBlockingComment(taskID, askerID)
+
+	ctx := actorctx.WithActor(context.Background(), askerID, domain.ActorTypeAgent)
+	comment := &domain.Comment{
+		TaskID:     taskID,
+		AuthorID:   askerID,
+		AuthorType: domain.ActorTypeAgent,
+		Body:       "Всё ещё жду ответа.",
+	}
+	require.NoError(t, env.svc.Create(ctx, comment))
+
+	assert.Empty(t, env.taskMover.humanGateCalls(), "no negator present — the live ask must stay gated")
+	assert.Empty(t, env.systemComments())
+}
+
+// TestReleaseHumanGateOnWithdrawal_ReaffirmedByOtherAgent_NoOp exercises the
+// "chronologically LAST" ownership rule: agent A raises the ask, agent B later
+// reaffirms it (a fresh, non-negated marker) — ownership of the LIVE ask moves
+// to B. A's later negator must not release a gate B is now the owner of.
+func TestReleaseHumanGateOnWithdrawal_ReaffirmedByOtherAgent_NoOp(t *testing.T) {
+	env := setupTriageEnv(t, true)
+	taskID := env.seedGatedTask(env.inProgressID)
+	agentA := uuid.New()
+	agentB := uuid.New()
+	env.seedAgentBlockingComment(taskID, agentA) // CreatedAt: frozenTime - 2h
+	// B reaffirms — a second, later (frozenTime - 1h), non-negated marker.
+	cid := uuid.New()
+	env.commentRepo.items[cid] = &domain.Comment{
+		ID:         cid,
+		TaskID:     taskID,
+		AuthorID:   agentB,
+		AuthorType: domain.ActorTypeAgent,
+		Body:       "❓ **Blocking @pavel**: подтверждаю, вопрос всё ещё живой",
+		CreatedAt:  frozenTime.Add(-1 * time.Hour),
+	}
+
+	ctx := actorctx.WithActor(context.Background(), agentA, domain.ActorTypeAgent)
+	comment := &domain.Comment{
+		TaskID:     taskID,
+		AuthorID:   agentA,
+		AuthorType: domain.ActorTypeAgent,
+		Body:       "С моей стороны ask не нужен, снимаю.",
+	}
+	require.NoError(t, env.svc.Create(ctx, comment))
+
+	assert.Empty(t, env.taskMover.humanGateCalls(), "B now owns the live ask — A's withdrawal must not release it")
+}
+
+// TestReleaseHumanGateOnWithdrawal_MarkerWithUnrelatedNegatorProse_NotSelfNegated
+// reproduces the live incident found by Riker on #7f646f08 (2026-07-30): a
+// comment that raises a FRESH marker as its final line, but ALSO discusses a
+// DIFFERENT, already-resolved ask earlier in the same body using a negator
+// word ("снят"), must still be recognised as a live, un-negated marker — the
+// unrelated prose must not make the comment self-negate its own new ask.
+// Before the fix, hasNegatorInScope's whole-body predecessor found "снят"
+// anywhere in agent B's comment and skipped it as "already negated", so
+// ownership of the live ask silently stayed with agent A — exactly what
+// stranded #7f646f08 after Riker's real withdrawal comment.
+func TestReleaseHumanGateOnWithdrawal_MarkerWithUnrelatedNegatorProse_NotSelfNegated(t *testing.T) {
+	env := setupTriageEnv(t, true)
+	taskID := env.seedGatedTask(env.inProgressID)
+	agentA := uuid.New()
+	agentB := uuid.New()
+	env.seedAgentBlockingComment(taskID, agentA) // CreatedAt: frozenTime - 2h
+
+	// B's comment: analysis discussing an OLD, unrelated ask being "снят" (an
+	// SSH-access ask that resolved itself), THEN a brand-new marker as the
+	// operative final line. This is the actual shape of Riker's 00:12 comment.
+	cid := uuid.New()
+	env.commentRepo.items[cid] = &domain.Comment{
+		ID:         cid,
+		TaskID:     taskID,
+		AuthorID:   agentB,
+		AuthorType: domain.ActorTypeAgent,
+		Body: "Старый аск на SSH-доступ снят — доступ приехал сам с CI-фиксом.\n\n" +
+			"❓ **Blocking @pavel**: закрой эту карточку кнопкой.",
+		CreatedAt: frozenTime.Add(-1 * time.Hour),
+	}
+
+	// B's own later withdrawal — no marker, plain negator.
+	ctx := actorctx.WithActor(context.Background(), agentB, domain.ActorTypeAgent)
+	comment := &domain.Comment{
+		TaskID:     taskID,
+		AuthorID:   agentB,
+		AuthorType: domain.ActorTypeAgent,
+		Body:       "Блокер самоустранился, ask больше не нужен — снимаю.",
+	}
+	require.NoError(t, env.svc.Create(ctx, comment))
+
+	gateCalls := env.taskMover.humanGateCalls()
+	require.Len(t, gateCalls, 1,
+		"B's marker must be recognised as live (not self-negated by unrelated earlier prose), so B's own withdrawal must release the gate")
+	assert.False(t, gateCalls[0].value)
+}
+
+// TestReleaseHumanGateOnWithdrawal_NoPriorMarker_NoOp: task.HumanGate=true with
+// no backing marker comment at all (e.g. a manual PATCH) must fail closed —
+// nothing to withdraw, so nothing is released.
+func TestReleaseHumanGateOnWithdrawal_NoPriorMarker_NoOp(t *testing.T) {
+	env := setupTriageEnv(t, true)
+	taskID := env.seedGatedTask(env.inProgressID)
+	askerID := uuid.New()
+
+	ctx := actorctx.WithActor(context.Background(), askerID, domain.ActorTypeAgent)
+	comment := &domain.Comment{
+		TaskID:     taskID,
+		AuthorID:   askerID,
+		AuthorType: domain.ActorTypeAgent,
+		Body:       "Не нужен, снимаю.",
+	}
+	require.NoError(t, env.svc.Create(ctx, comment))
+
+	assert.Empty(t, env.taskMover.humanGateCalls())
+}
+
+// TestReleaseHumanGateOnWithdrawal_TaskNotGated_NoOp: gate already false — no
+// SetHumanGate call needed regardless of body content.
+func TestReleaseHumanGateOnWithdrawal_TaskNotGated_NoOp(t *testing.T) {
+	env := setupTriageEnv(t, true)
+	taskID := env.seedTask(env.inProgressID) // human_gate=false by default
+	askerID := uuid.New()
+	env.seedAgentBlockingComment(taskID, askerID)
+
+	ctx := actorctx.WithActor(context.Background(), askerID, domain.ActorTypeAgent)
+	comment := &domain.Comment{
+		TaskID:     taskID,
+		AuthorID:   askerID,
+		AuthorType: domain.ActorTypeAgent,
+		Body:       "Не нужен, снимаю.",
+	}
+	require.NoError(t, env.svc.Create(ctx, comment))
+
+	assert.Empty(t, env.taskMover.humanGateCalls())
+}
+
+// TestReleaseHumanGateOnWithdrawal_TriageTask_MovesToInProgress mirrors
+// TestReleaseHumanGate_TriageTask_MovesToInProgress for the agent-withdrawal path.
+func TestReleaseHumanGateOnWithdrawal_TriageTask_MovesToInProgress(t *testing.T) {
+	env := setupTriageEnv(t, true)
+	taskID := uuid.New()
+	askerID := uuid.New()
+	env.taskRepo.items[taskID] = &domain.Task{
+		ID: taskID, ProjectID: env.projID, StatusID: env.triageID, Title: "Gated in triage",
+		HumanGate: true,
+	}
+	env.seedAgentBlockingComment(taskID, askerID)
+
+	ctx := actorctx.WithActor(context.Background(), askerID, domain.ActorTypeAgent)
+	comment := &domain.Comment{
+		TaskID:     taskID,
+		AuthorID:   askerID,
+		AuthorType: domain.ActorTypeAgent,
+		Body:       "Blocker снят.",
+	}
+	require.NoError(t, env.svc.Create(ctx, comment))
+
+	gateCalls := env.taskMover.humanGateCalls()
+	require.Len(t, gateCalls, 1)
+	assert.False(t, gateCalls[0].value)
+
+	moves := env.taskMover.calls()
+	require.Len(t, moves, 1, "task must be moved from triage to in_progress")
+	require.NotNil(t, moves[0].input.StatusID)
+	assert.Equal(t, env.inProgressID, *moves[0].input.StatusID)
+
+	sys := env.systemComments()
+	require.Len(t, sys, 1)
+	assert.Contains(t, sys[0].Body, "human_gate снят")
+	assert.Contains(t, sys[0].Body, "in_progress")
+}
+
+// TestReleaseHumanGateOnWithdrawal_NotifiesAssigneeAgent verifies that once the
+// gate is released, the task's assignee agent is woken via AgentNotifyService
+// so a fiddler/dispatcher session re-feeds the task on its next cycle — the
+// same wake-up guarantee releaseHumanGate already gives the human-release path.
+func TestReleaseHumanGateOnWithdrawal_NotifiesAssigneeAgent(t *testing.T) {
+	commentRepo := NewMockCommentRepository()
+	taskRepo := NewMockTaskRepository()
+	activityRepo := NewMockActivityLogRepository()
+	statusRepo := NewMockTaskStatusRepository()
+	projectRepo := NewMockProjectRepository()
+	taskMover := &fakeTaskMover{}
+	agentNotify := NewMockAgentNotifyService()
+
+	wsID := uuid.New()
+	projID := uuid.New()
+	projectRepo.items[projID] = &domain.Project{ID: projID, WorkspaceID: wsID}
+	inProgressID := uuid.New()
+	statusRepo.items[inProgressID] = &domain.TaskStatus{
+		ID: inProgressID, ProjectID: projID, Category: domain.StatusCategoryInProgress, Name: "In Progress",
+	}
+	timeNow = func() time.Time { return frozenTime }
+
+	svc := NewCommentService(commentRepo, taskRepo, activityRepo,
+		WithCommentProjectRepo(projectRepo),
+		WithCommentStatusRepo(statusRepo),
+		WithCommentTaskService(taskMover),
+		WithCommentAgentNotify(agentNotify),
+	).(*commentService)
+
+	assigneeID := uuid.New()
+	askerID := uuid.New()
+	taskID := uuid.New()
+	taskRepo.items[taskID] = &domain.Task{
+		ID: taskID, ProjectID: projID, StatusID: inProgressID, Title: "Gated",
+		HumanGate: true, AssigneeType: domain.AssigneeTypeAgent, AssigneeID: &assigneeID,
+	}
+	cid := uuid.New()
+	commentRepo.items[cid] = &domain.Comment{
+		ID: cid, TaskID: taskID, AuthorID: askerID, AuthorType: domain.ActorTypeAgent,
+		Body: "❓ **Blocking @pavel**: нужен выбор варианта A/Б",
+	}
+
+	ctx := actorctx.WithActor(context.Background(), askerID, domain.ActorTypeAgent)
+	comment := &domain.Comment{
+		TaskID:     taskID,
+		AuthorID:   askerID,
+		AuthorType: domain.ActorTypeAgent,
+		Body:       "Ask не нужен, blocker снят.",
+	}
+	require.NoError(t, svc.Create(ctx, comment))
+
+	require.Len(t, taskMover.humanGateCalls(), 1)
+	assert.False(t, taskMover.humanGateCalls()[0].value)
+
+	// Create also fires a generic "task.commented" notification independent of
+	// this path — filter to the release-specific event so this test targets
+	// exactly what releaseHumanGateOnWithdrawal itself is responsible for.
+	var released []AgentNotification
+	for _, n := range agentNotify.Calls() {
+		if n.EventType == "task.human_gate_released" {
+			released = append(released, n)
+		}
+	}
+	require.Len(t, released, 1, "assignee agent must be notified so it re-feeds the task")
+	assert.Equal(t, assigneeID, released[0].AgentID)
+}
+
 // TestIsAutoGeneratedComment tests the auto-marker detector.
 func TestIsAutoGeneratedComment(t *testing.T) {
 	cases := []struct {
@@ -1023,4 +1345,283 @@ func TestIsAutoGeneratedComment(t *testing.T) {
 	for _, c := range cases {
 		assert.Equal(t, c.want, isAutoGeneratedComment(c.body), "body: %q", c.body)
 	}
+}
+
+// ---------------------------------------------------------------------------
+// stripQuotedSpans / hasNegatorInScope quoting — task #5c69b4e5
+//
+// A comment that QUOTES the negator vocabulary while explaining the mechanism
+// used to perform a withdrawal: live probe #a073a896 released a real human_gate
+// 11 ms after a summary comment whose only "не нужен" sat in backticks inside a
+// blockquote, and the genuine withdrawal 1.75 s later became a no-op.
+// ---------------------------------------------------------------------------
+
+func TestStripQuotedSpans(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want string
+	}{
+		{"plain text untouched", "ask не нужен", "ask не нужен"},
+		{"inline code removed", "цитата (`не нужен`) тут", "цитата () тут"},
+		{"double-backtick span with inner backtick", "x ``a ` b`` y", "x  y"},
+		{"blockquote line blanked", "before\n> не нужен\nafter", "before\n\nafter"},
+		{"indented blockquote blanked", "  >  не нужен", ""},
+		{"fenced block blanked, fence survives as blank", "a\n```\nне нужен\n```\nb", "a\n\n\n\nb"},
+		{"tilde fence blanked", "a\n~~~\nне нужен\n~~~\nb", "a\n\n\n\nb"},
+		{"longer closing fence closes", "```\nx\n````\nне нужен", "\n\n\nне нужен"},
+		{"wrong fence char does not close", "```\nне нужен\n~~~\nне нужен", "\n\n\n"},
+		{"unterminated fence swallows rest (fail closed)", "a\n```\nне нужен\nи ещё", "a\n\n\n"},
+		{"unterminated inline code swallows rest of line only", "a `не нужен\nсразу", "a \nсразу"},
+		{"line count always preserved", "a\nb\nc", "a\nb\nc"},
+		{"empty", "", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, stripQuotedSpans(tt.body))
+		})
+	}
+}
+
+// liveProbeSummaryBody is the shape of the comment that actually disarmed a live
+// gate in probe #a073a896: a blockquoted, backticked citation of the vocabulary
+// inside a post-mortem that intended to withdraw nothing.
+const liveProbeSummaryBody = "Сводка механизма:\n\n" +
+	"> «негатор того же автора 02:58:05.226Z (`не нужен`) → системный коммент…»\n\n" +
+	"Разбор выше описывает предыдущий отзыв, а не новый."
+
+func TestHasNegatorInScope_QuotedVocabulary(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want bool
+	}{
+		{"plain assertion", "Blocker самоустранился, ask не нужен — снимаю.", true},
+		{"mid-sentence prose still counts", "Блокер снят, вопрос закрыт.", true},
+		{"english negator", "Question resolved, closing.", true},
+		{"uppercase", "RESOLVED", true},
+		{"inline code only", "словарь: `не нужен`, `снят`", false},
+		{"fenced block only", "```\nне нужен\nснят\n```", false},
+		{"blockquote only", "> ask не нужен", false},
+		{"the live probe body that disarmed a real gate", liveProbeSummaryBody, false},
+		{"quote plus a real assertion still withdraws", "цитата (`не нужен`)\n\nи да, ask действительно снят", true},
+		{"no negator at all", "Всё ещё жду ответа.", false},
+		{"empty", "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, hasNegatorInScope(tt.body))
+		})
+	}
+}
+
+// TestHasBlockingMarker_QuotedFormsDoNotArm covers the symmetric arm-side leak:
+// documenting the marker template must not raise a one-way Pavel gate. The `> `
+// case already worked by accident (the regex is line-anchored); the fenced and
+// inline-code cases did not.
+func TestHasBlockingMarker_QuotedFormsDoNotArm(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want bool
+	}{
+		{"fenced template", "Как поднять аск:\n```\n❓ **Blocking @pavel**: <вопрос>\n```\n", false},
+		{"inline code template", "поставь `❓ **Blocking @pavel**` последним", false},
+		{"blockquoted template", "> ❓ **Blocking @pavel**: пример", false},
+		{"real marker still arms", "❓ **Blocking @pavel**: нужен выбор A/Б", true},
+		{"real marker after a quoted one still arms", "```\n❓ Blocking @pavel\n```\n❓ **Blocking @pavel**: настоящий аск", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, hasBlockingMarker(tt.body))
+		})
+	}
+}
+
+// TestReleaseHumanGateOnWithdrawal_QuotedNegatorOnly_KeepsGate is this task's AC1:
+// with a live human_gate raised by THIS agent, a comment whose only negator sits in
+// inline code / a fenced block / a blockquote must leave the gate armed and post no
+// system comment. Before the fix each of these released the gate.
+func TestReleaseHumanGateOnWithdrawal_QuotedNegatorOnly_KeepsGate(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+	}{
+		{"inline code", "Механизм: негатор (`не нужен`) того же автора снимает флаг."},
+		{"fenced block", "Словарь негаторов:\n```\nне нужен\nснят\nresolved\n```\nЭто справка."},
+		{"blockquote", "Цитирую тред:\n> ask не нужен, снят\n\nПросто фиксирую."},
+		{"the live probe #a073a896 body", liveProbeSummaryBody},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			env := setupTriageEnv(t, true)
+			taskID := env.seedGatedTask(env.inProgressID)
+			askerID := uuid.New()
+			env.seedAgentBlockingComment(taskID, askerID)
+
+			ctx := actorctx.WithActor(context.Background(), askerID, domain.ActorTypeAgent)
+			comment := &domain.Comment{
+				TaskID:     taskID,
+				AuthorID:   askerID,
+				AuthorType: domain.ActorTypeAgent,
+				Body:       tc.body,
+			}
+			require.NoError(t, env.svc.Create(ctx, comment))
+
+			assert.Empty(t, env.taskMover.humanGateCalls(),
+				"a QUOTED negator is not a withdrawal — the gate must stay armed")
+			assert.Empty(t, env.systemComments())
+		})
+	}
+}
+
+// TestReleaseHumanGateOnWithdrawal_SummaryThenRealWithdrawal reproduces the live
+// incident end to end and carries AC2's positive control in the SAME run: the
+// documenting comment must be a no-op, and the intentional withdrawal that follows
+// it must still work. In probe #a073a896 these were inverted — the summary released
+// the gate and the real withdrawal 1.75 s later did nothing.
+func TestReleaseHumanGateOnWithdrawal_SummaryThenRealWithdrawal(t *testing.T) {
+	env := setupTriageEnv(t, true)
+	taskID := env.seedGatedTask(env.inProgressID)
+	askerID := uuid.New()
+	env.seedAgentBlockingComment(taskID, askerID)
+	ctx := actorctx.WithActor(context.Background(), askerID, domain.ActorTypeAgent)
+
+	summary := &domain.Comment{
+		TaskID: taskID, AuthorID: askerID, AuthorType: domain.ActorTypeAgent,
+		Body: liveProbeSummaryBody,
+	}
+	require.NoError(t, env.svc.Create(ctx, summary))
+	require.Empty(t, env.taskMover.humanGateCalls(), "the summary must not withdraw anything")
+
+	withdrawal := &domain.Comment{
+		TaskID: taskID, AuthorID: askerID, AuthorType: domain.ActorTypeAgent,
+		Body: "Ответ получен, ask больше не нужен — снимаю.",
+	}
+	require.NoError(t, env.svc.Create(ctx, withdrawal))
+
+	gateCalls := env.taskMover.humanGateCalls()
+	require.Len(t, gateCalls, 1, "the real withdrawal must still release (PR #451 not broken)")
+	assert.Equal(t, taskID, gateCalls[0].taskID)
+	assert.False(t, gateCalls[0].value)
+	require.Len(t, env.systemComments(), 1)
+	assert.Contains(t, env.systemComments()[0].Body, "human_gate снят")
+}
+
+// TestReleaseHumanGateOnWithdrawal_MarkerQuotingNegators_KeepsOwnership covers the
+// sibling trap of the same root cause (#7f646f08): the OWNERSHIP scan also matched
+// negators over the whole body, so a marker comment that discussed earlier asks
+// self-negated — ownership of the live ask silently fell back to an older marker by
+// a different agent, and the real author's own withdrawal was refused by the
+// author-match guard. That guard is untouched here; what is fixed is who it points at.
+func TestReleaseHumanGateOnWithdrawal_MarkerQuotingNegators_KeepsOwnership(t *testing.T) {
+	env := setupTriageEnv(t, true)
+	taskID := env.seedGatedTask(env.inProgressID)
+	agentA := uuid.New() // older marker, different agent
+	agentB := uuid.New() // newest marker — the real owner
+
+	env.seedAgentBlockingComment(taskID, agentA) // frozenTime - 2h
+
+	cid := uuid.New()
+	env.commentRepo.items[cid] = &domain.Comment{
+		ID: cid, TaskID: taskID, AuthorID: agentB, AuthorType: domain.ActorTypeAgent,
+		Body: "❓ **Blocking @pavel**: закрой карточку кнопкой\n\n" +
+			"Контекст: старый аск (ssh) `снят`, и\n> «снятия нет ни в одном скрипте»",
+		CreatedAt: frozenTime.Add(-1 * time.Hour),
+	}
+
+	ctx := actorctx.WithActor(context.Background(), agentB, domain.ActorTypeAgent)
+	comment := &domain.Comment{
+		TaskID: taskID, AuthorID: agentB, AuthorType: domain.ActorTypeAgent,
+		Body: "Pavel ответил, ask не нужен.",
+	}
+	require.NoError(t, env.svc.Create(ctx, comment))
+
+	gateCalls := env.taskMover.humanGateCalls()
+	require.Len(t, gateCalls, 1,
+		"B's marker only QUOTED negators — it is still the live ask, so B may withdraw it")
+	assert.False(t, gateCalls[0].value)
+}
+
+// TestReleaseHumanGateOnWithdrawal_QuotedNegatorFromBystander_StillNoOp pins the
+// governance guard the task explicitly asked not to weaken: stripping quotes must
+// not become a side door for a third party.
+func TestReleaseHumanGateOnWithdrawal_QuotedNegatorFromBystander_StillNoOp(t *testing.T) {
+	env := setupTriageEnv(t, true)
+	taskID := env.seedGatedTask(env.inProgressID)
+	askerID := uuid.New()
+	env.seedAgentBlockingComment(taskID, askerID)
+
+	bystanderID := uuid.New()
+	ctx := actorctx.WithActor(context.Background(), bystanderID, domain.ActorTypeAgent)
+	comment := &domain.Comment{
+		TaskID: taskID, AuthorID: bystanderID, AuthorType: domain.ActorTypeAgent,
+		Body: "Ask не нужен, снимаю за коллегу.",
+	}
+	require.NoError(t, env.svc.Create(ctx, comment))
+
+	assert.Empty(t, env.taskMover.humanGateCalls())
+	assert.Empty(t, env.systemComments())
+}
+
+// TestBlockingMarkerSlugs_QuotedTemplateDoesNotSteerTarget covers the third raw
+// call site found while verifying this change: regex matches come back in source
+// order, so a body carrying BOTH a quoted template and a real marker used to
+// resolve the QUOTED slug first — enforceBlockingTriage would then triage against
+// whoever the documentation example named, not who the real ask names.
+func TestBlockingMarkerSlugs_QuotedTemplateDoesNotSteerTarget(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want []string
+	}{
+		{
+			"fenced template before the real marker",
+			"Шаблон:\n```\n❓ **Blocking @example-user**: <вопрос>\n```\n❓ **Blocking @pavel**: настоящий аск",
+			[]string{"pavel"},
+		},
+		// The two forms below were already safe: the regex is line-anchored, so an
+		// inline-code or blockquoted template never matched even before the strip.
+		// Kept as documentation of that property — neither discriminates the fix.
+		{
+			"inline-code template before the real marker",
+			"пиши `❓ Blocking @example-user`\n❓ **Blocking @pavel**: настоящий аск",
+			[]string{"pavel"},
+		},
+		{
+			"blockquoted template before the real marker",
+			"> ❓ **Blocking @example-user**\n❓ **Blocking @pavel**: настоящий аск",
+			[]string{"pavel"},
+		},
+		{"plain single marker unchanged", "❓ **Blocking @pavel**: ask", []string{"pavel"}},
+		{"quoted only resolves to nothing", "```\n❓ Blocking @pavel\n```", []string{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, blockingMarkerSlugs(tt.body))
+		})
+	}
+}
+
+// TestCompletionKeywordSearchWindow_AnchorsToRealMarker pins the fourth call site:
+// the window must precede the first REAL marker. Anchoring it to a quoted template
+// earlier in the body would hand isAssigneeCompletionReport the wrong text — and,
+// because offsets from the raw body cannot index the stripped one, mixing the two
+// strings would slice at a meaningless position.
+//
+// Only a FENCED template discriminates here. The regex is line-anchored, so an
+// inline-code or blockquoted template never matched in the first place — those
+// forms are safe for free, and a fixture built from them would pass against the
+// unstripped code too, i.e. prove nothing.
+func TestCompletionKeywordSearchWindow_AnchorsToRealMarker(t *testing.T) {
+	body := "Шаблон:\n```\n❓ Blocking @example-user\n```\n" +
+		"Готово, работа завершена.\n" +
+		"❓ **Blocking @pavel**: закрой карточку"
+	win := completionKeywordSearchWindow(body)
+
+	assert.Contains(t, win, "работа завершена",
+		"the window must cover the prose between the quoted template and the real marker")
+	assert.NotContains(t, win, "закрой карточку",
+		"the window must stop at the real marker")
+	assert.True(t, utf8.ValidString(win), "window must never split a multi-byte rune")
 }

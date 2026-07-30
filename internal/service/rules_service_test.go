@@ -1,13 +1,35 @@
 package service
 
 import (
+	"context"
 	"testing"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	"github.com/entire-vc/evc-mesh/internal/repository"
 )
+
+// noopMemberRepo is a minimal repository.WorkspaceMemberRepository stub for
+// tests that exercise importTeamConfig's agent path and never touch humans.
+type noopMemberRepo struct{}
+
+func (noopMemberRepo) Create(context.Context, *domain.WorkspaceMember) error { return nil }
+func (noopMemberRepo) GetByWorkspaceAndUser(context.Context, uuid.UUID, uuid.UUID) (*domain.WorkspaceMember, error) {
+	return nil, nil
+}
+func (noopMemberRepo) GetRole(context.Context, uuid.UUID, uuid.UUID) (string, error) { return "", nil }
+func (noopMemberRepo) List(context.Context, uuid.UUID) ([]domain.WorkspaceMemberWithUser, error) {
+	return nil, nil
+}
+func (noopMemberRepo) ListWithProjects(context.Context, uuid.UUID) ([]repository.HumanWithProjects, error) {
+	return nil, nil
+}
+func (noopMemberRepo) UpdateRole(context.Context, uuid.UUID, uuid.UUID, string) error { return nil }
+func (noopMemberRepo) Delete(context.Context, uuid.UUID, uuid.UUID) error             { return nil }
+func (noopMemberRepo) CountOwners(context.Context, uuid.UUID) (int, error)            { return 0, nil }
 
 // --------------------------------------------------------------------------
 // isAgentAllowedByActors
@@ -178,4 +200,177 @@ func TestComputeAgentPermissions_UnconfiguredPolicyDefaultsAllowed(t *testing.T)
 	assert.True(t, perms.CanCreateTasks)
 	assert.True(t, perms.CanDeleteTasks)
 	assert.True(t, perms.CanReassign)
+}
+
+// --------------------------------------------------------------------------
+// UpdateAgentProfile — partial-update (PATCH-semantics) regression
+// --------------------------------------------------------------------------
+
+// strPtr and intPtr are tiny helpers for building AgentProfileUpdate literals
+// in tests, mirroring how a real caller sends only the fields it means to change.
+func strPtr(s string) *string { return &s }
+func intPtr(i int) *int       { return &i }
+
+// TestUpdateAgentProfile_OmittedFieldsAreNotZeroed pins the documented
+// behavior of domain.AgentProfileUpdate: a request that only sets one field
+// must leave every other existing field untouched, not blank it out. This is
+// the regression test for the "full-replace footgun" described in task #7acd2497 —
+// previously every field was assigned unconditionally, so a caller who forgot
+// to resend e.g. working_hours would silently wipe it.
+func TestUpdateAgentProfile_OmittedFieldsAreNotZeroed(t *testing.T) {
+	agentRepo := NewMockAgentRepository()
+	svc := NewRulesService(nil, nil, nil, agentRepo, nil, nil, nil)
+
+	agentID := uuid.New()
+	original := &domain.Agent{
+		ID:                 agentID,
+		Name:               "test-agent",
+		Slug:               "test-agent",
+		Role:               "developer",
+		ResponsibilityZone: "backend",
+		MaxConcurrentTasks: 3,
+		WorkingHours:       "09:00-17:00",
+		ProfileDescription: "Original description",
+	}
+	require.NoError(t, agentRepo.Create(context.Background(), original))
+
+	// Only ProfileDescription is being changed; every other field is omitted.
+	update := domain.AgentProfileUpdate{
+		ProfileDescription: strPtr("Updated description"),
+	}
+	err := svc.UpdateAgentProfile(context.Background(), agentID, update)
+	require.NoError(t, err)
+
+	got, err := agentRepo.GetByID(context.Background(), agentID)
+	require.NoError(t, err)
+	assert.Equal(t, "Updated description", got.ProfileDescription, "the field actually sent should change")
+	assert.Equal(t, "developer", got.Role, "Role must survive an update that didn't mention it")
+	assert.Equal(t, "backend", got.ResponsibilityZone, "ResponsibilityZone must survive an update that didn't mention it")
+	assert.Equal(t, 3, got.MaxConcurrentTasks, "MaxConcurrentTasks must survive an update that didn't mention it")
+	assert.Equal(t, "09:00-17:00", got.WorkingHours, "WorkingHours must survive an update that didn't mention it")
+}
+
+// TestUpdateAgentProfile_ExplicitEmptyStringClears confirms a caller can still
+// intentionally clear a string field by sending an explicit empty string —
+// the partial-update semantics distinguish "omitted" (nil pointer) from
+// "explicitly set to empty" (non-nil pointer to "").
+func TestUpdateAgentProfile_ExplicitEmptyStringClears(t *testing.T) {
+	agentRepo := NewMockAgentRepository()
+	svc := NewRulesService(nil, nil, nil, agentRepo, nil, nil, nil)
+
+	agentID := uuid.New()
+	require.NoError(t, agentRepo.Create(context.Background(), &domain.Agent{
+		ID:           agentID,
+		Name:         "test-agent",
+		Slug:         "test-agent",
+		WorkingHours: "09:00-17:00",
+	}))
+
+	err := svc.UpdateAgentProfile(context.Background(), agentID, domain.AgentProfileUpdate{
+		WorkingHours: strPtr(""),
+	})
+	require.NoError(t, err)
+
+	got, err := agentRepo.GetByID(context.Background(), agentID)
+	require.NoError(t, err)
+	assert.Equal(t, "", got.WorkingHours, "an explicit empty string must still clear the field")
+}
+
+// TestUpdateAgentProfile_AllFieldsSetAppliesEverything verifies the ordinary
+// "send the full profile" path still works — the legitimate way to use this
+// endpoint as a full replace.
+func TestUpdateAgentProfile_AllFieldsSetAppliesEverything(t *testing.T) {
+	agentRepo := NewMockAgentRepository()
+	svc := NewRulesService(nil, nil, nil, agentRepo, nil, nil, nil)
+
+	agentID := uuid.New()
+	require.NoError(t, agentRepo.Create(context.Background(), &domain.Agent{
+		ID:   agentID,
+		Name: "test-agent",
+		Slug: "test-agent",
+	}))
+
+	err := svc.UpdateAgentProfile(context.Background(), agentID, domain.AgentProfileUpdate{
+		Role:               strPtr("lead"),
+		ResponsibilityZone: strPtr("infra"),
+		MaxConcurrentTasks: intPtr(5),
+		WorkingHours:       strPtr("10:00-18:00"),
+		ProfileDescription: strPtr("Full replace"),
+	})
+	require.NoError(t, err)
+
+	got, err := agentRepo.GetByID(context.Background(), agentID)
+	require.NoError(t, err)
+	assert.Equal(t, "lead", got.Role)
+	assert.Equal(t, "infra", got.ResponsibilityZone)
+	assert.Equal(t, 5, got.MaxConcurrentTasks)
+	assert.Equal(t, "10:00-18:00", got.WorkingHours)
+	assert.Equal(t, "Full replace", got.ProfileDescription)
+}
+
+// TestImportTeamConfig_AgentProfile_AppliesAllFields exercises the
+// importTeamConfig → UpdateAgentProfile call site directly (via the exported
+// ImportTeam), which builds an AgentProfileUpdate by taking the address of
+// each TeamAgentConfig field. This is the regression test for that
+// construction: every pointer field must actually reach the agent.
+func TestImportTeamConfig_AgentProfile_AppliesAllFields(t *testing.T) {
+	agentRepo := NewMockAgentRepository()
+	svc := NewRulesService(nil, nil, nil, agentRepo, noopMemberRepo{}, nil, nil)
+
+	wsID := uuid.New()
+	agentID := uuid.New()
+	require.NoError(t, agentRepo.Create(context.Background(), &domain.Agent{
+		ID:          agentID,
+		WorkspaceID: wsID,
+		Name:        "TestAgent",
+		Slug:        "test-agent",
+		Role:        "old-role",
+	}))
+
+	yamlData := []byte(`
+agents:
+  - name: TestAgent
+    role: developer
+    responsibility_zone: backend
+    capabilities: [go, testing]
+    accepts_from: ["*"]
+    max_concurrent_tasks: 4
+    working_hours: "09:00-17:00"
+    description: "Updated via team import"
+`)
+
+	result, err := svc.ImportTeam(context.Background(), wsID, yamlData)
+	require.NoError(t, err)
+	assert.Empty(t, result.Errors)
+	assert.Equal(t, 1, result.AgentsUpdated)
+
+	got, err := agentRepo.GetByID(context.Background(), agentID)
+	require.NoError(t, err)
+	assert.Equal(t, "developer", got.Role)
+	assert.Equal(t, "backend", got.ResponsibilityZone)
+	assert.Equal(t, 4, got.MaxConcurrentTasks)
+	assert.Equal(t, "09:00-17:00", got.WorkingHours)
+	assert.Equal(t, "Updated via team import", got.ProfileDescription)
+	assert.JSONEq(t, `["go","testing"]`, string(got.Capabilities))
+}
+
+// TestImportTeamConfig_AgentNotFound_RecordsError verifies the "not found"
+// branch of the same loop still reports an error and does not touch AgentsUpdated.
+func TestImportTeamConfig_AgentNotFound_RecordsError(t *testing.T) {
+	agentRepo := NewMockAgentRepository()
+	svc := NewRulesService(nil, nil, nil, agentRepo, noopMemberRepo{}, nil, nil)
+
+	wsID := uuid.New()
+	yamlData := []byte(`
+agents:
+  - name: GhostAgent
+    role: developer
+`)
+
+	result, err := svc.ImportTeam(context.Background(), wsID, yamlData)
+	require.NoError(t, err)
+	assert.Equal(t, 0, result.AgentsUpdated)
+	require.Len(t, result.Errors, 1)
+	assert.Contains(t, result.Errors[0], "GhostAgent")
+	assert.Contains(t, result.Errors[0], "not found")
 }

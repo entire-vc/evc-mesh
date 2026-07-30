@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/repository"
@@ -561,7 +562,7 @@ func (s *taskService) MoveTask(ctx context.Context, taskID uuid.UUID, input Move
 					if linksErr == nil {
 						for _, l := range links {
 							if l.LinkType == domain.VCSLinkTypePR && l.Status != domain.VCSLinkStatusMerged && l.Status != domain.VCSLinkStatusClosed {
-								return &DoneEvidenceError{PRURL: l.URL, PRTitle: l.Title}
+								return &DoneEvidenceError{PRURL: l.URL, PRTitle: l.Title, PRStatus: string(l.Status)}
 							}
 						}
 					}
@@ -872,17 +873,26 @@ func (s *taskService) CreateSubtask(ctx context.Context, parentTaskID uuid.UUID,
 	}
 
 	now := timeNow()
+	assigneeType := input.AssigneeType
+	if assigneeType == "" {
+		assigneeType = domain.AssigneeTypeUnassigned
+	}
 	child := &domain.Task{
-		ID:           uuid.New(),
-		ProjectID:    parent.ProjectID,
-		StatusID:     statusID,
-		Title:        input.Title,
-		Priority:     input.Priority,
-		Description:  input.Description,
-		ParentTaskID: &parentTaskID,
-		AssigneeType: domain.AssigneeTypeUnassigned,
-		CreatedAt:    now,
-		UpdatedAt:    now,
+		ID:             uuid.New(),
+		ProjectID:      parent.ProjectID,
+		StatusID:       statusID,
+		Title:          input.Title,
+		Priority:       input.Priority,
+		Description:    input.Description,
+		ParentTaskID:   &parentTaskID,
+		AssigneeID:     input.AssigneeID,
+		AssigneeType:   assigneeType,
+		Labels:         pq.StringArray(input.Labels),
+		CustomFields:   input.CustomFields,
+		DueDate:        input.DueDate,
+		EstimatedHours: input.EstimatedHours,
+		CreatedAt:      now,
+		UpdatedAt:      now,
 	}
 
 	// Apply auto-assign rules if the subtask has no assignee.
@@ -1327,9 +1337,12 @@ func (e *HumanGateFrozenError) Error() string {
 // DoneEvidenceError is returned when a task is moved to done but evidence is
 // missing or a linked PR has not been merged (or explicitly closed) yet.
 type DoneEvidenceError struct {
-	// PRURL and PRTitle are set when a specific unmerged PR triggered the block.
-	PRURL   string
-	PRTitle string
+	// PRURL, PRTitle and PRStatus are set when a specific unmerged PR
+	// triggered the block. PRStatus is the recorded vcs_links.status value
+	// ("open", or "" for a link created before status tracking existed).
+	PRURL    string
+	PRTitle  string
+	PRStatus string
 }
 
 func (e *DoneEvidenceError) Error() string {
@@ -1338,7 +1351,22 @@ func (e *DoneEvidenceError) Error() string {
 		if ref == "" {
 			ref = e.PRURL
 		}
-		return fmt.Sprintf("PR «%s» is not merged; merge it first or add a justification comment explaining why the PR is not needed", ref)
+		// No "justification comment" escape hatch exists on this branch —
+		// VCSLinkCount > 0 blocks unconditionally on an unmerged/unrecorded
+		// PR link, comments are only consulted when there is NO VCS link at
+		// all. A message promising one taught agents to write a comment,
+		// hit the same 422 again, and conclude the gate itself was broken
+		// (#df734dd9). If the recorded status is empty, the likely cause is
+		// that the link was created for a PR that was already merged before
+		// linking — no webhook will ever arrive to fix that after the fact.
+		if e.PRStatus == "" {
+			return fmt.Sprintf(
+				"PR «%s» has no recorded merge status — if it's actually merged, re-link it with an explicit status "+
+					"(add_vcs_link ... status=merged); if it genuinely isn't merged yet, merge it first", ref)
+		}
+		return fmt.Sprintf(
+			"PR «%s» is not merged (recorded status: %s) — if that's stale, re-link it with an explicit status "+
+				"(add_vcs_link ... status=merged); otherwise merge it first", ref, e.PRStatus)
 	}
 	return "done requires evidence: add a PR/VCS link, artifact upload, or comment with proof before closing"
 }
@@ -1534,6 +1562,35 @@ func (s *taskService) MoveToProject(ctx context.Context, taskID, targetProjectID
 		return nil, apierror.ValidationError(map[string]string{
 			"project_id": "task is already in the target project",
 		})
+	}
+
+	// The target project has to be in the same workspace as the task.
+	//
+	// project_id arrives in the request body, so no route parameter names it and
+	// the workspace guard cannot see it — it checks :task_id, which is the
+	// caller's own task. Until this check existed, a member of any workspace could
+	// move their task (and, by cascade, its whole subtree) into a stranger's
+	// project, where it showed up on that tenant's board and pulled their status
+	// ids into it.
+	if s.projectRepo == nil {
+		// Fail closed. Without the project repository there is no way to tell the
+		// two workspaces apart, and "cannot check" must not read as "allowed" on
+		// the one code path whose whole job is to decide where a task lands.
+		return nil, apierror.InternalError("project lookup unavailable")
+	}
+	source, err := s.projectRepo.GetByID(ctx, task.ProjectID)
+	if err != nil {
+		return nil, err
+	}
+	target, err := s.projectRepo.GetByID(ctx, targetProjectID)
+	if err != nil {
+		return nil, err
+	}
+	if source == nil || target == nil {
+		return nil, apierror.NotFound("Project")
+	}
+	if source.WorkspaceID != target.WorkspaceID {
+		return nil, apierror.BadRequest("target project belongs to a different workspace")
 	}
 	// Capture sourceProjectID before the repo call mutates the task in-memory.
 	sourceProjectID := task.ProjectID

@@ -34,7 +34,7 @@ Traditional project management tools treat AI agents as an afterthought. Mesh is
 - Bulk operations and inline editing in list view
 
 ### Agent Integration
-- **MCP server** with 45 tools across 11 categories (stdio + HTTP SSE transports)
+- **MCP server** with 49 tools across 11 categories (stdio + HTTP SSE transports)
 - **REST API** with 125+ routes at `/api/v1`
 - **Go SDK** (`pkg/sdk/`) for building custom integrations
 - Agent authentication via API keys (`X-Agent-Key`)
@@ -52,7 +52,8 @@ Traditional project management tools treat AI agents as an afterthought. Mesh is
 ### Platform
 - Multi-tenant with workspace isolation on every table
 - Project-level membership enforcement (users and agents)
-- RBAC with 15 permissions across 5 roles (owner, admin, member, viewer, agent)
+- RBAC with 16 permissions across 4 workspace roles (owner, admin, member, viewer);
+  agents authenticate by API key and hold their own fixed permission set
 - Built-in JWT auth (HS256) for users, API keys for agents
 - Rate limiting (per-IP for auth, per-actor for API)
 - Config import/export (YAML) with workflow templates
@@ -72,7 +73,71 @@ Traditional project management tools treat AI agents as an afterthought. Mesh is
 | File Storage | S3-compatible (MinIO for self-hosted) |
 | Migrations | Goose |
 
-## Quick Start
+## Run it with Docker
+
+Docker is the only prerequisite. This builds and starts everything — API, web
+UI, MCP server, Postgres, Redis, NATS, MinIO, nginx — and leaves you with a
+login page. If you want to *develop* Mesh rather than run it, skip to
+[Development setup](#development-setup) instead.
+
+```bash
+git clone https://github.com/entire-vc/evc-mesh && cd evc-mesh/deploy/docker/mesh
+
+# The file must be called .env, in this directory. Compose auto-loads only
+# that name, and a misnamed copy fails as "POSTGRES_PASSWORD is missing a
+# value" — which reads like a missing variable rather than an unread file.
+cp .env.prod.example .env
+
+# Fill in the required secrets, in place. Appending them instead would leave
+# two lines per key — Compose reads the last one, so editing the empty one at
+# the top later would silently do nothing.
+for v in POSTGRES_PASSWORD REDIS_PASSWORD JWT_SECRET MINIO_SECRET_KEY \
+         GRAFANA_PASSWORD MESH_INTEGRATION_ENCRYPTION_KEY; do
+  s=$(openssl rand -base64 32)
+  sed "s|^$v=.*|$v=$s|" .env > .env.tmp && mv .env.tmp .env
+done
+sed 's|^MINIO_ACCESS_KEY=.*|MINIO_ACCESS_KEY=meshadmin|' .env > .env.tmp && mv .env.tmp .env
+
+docker compose -f docker-compose.prod.yml --env-file .env up -d --build
+```
+
+The first build compiles the Go binaries and the frontend from source: expect
+**5–10 minutes** (measured: ~8 on an M-series Mac, including image pulls).
+Later starts take seconds.
+
+```bash
+docker compose -f docker-compose.prod.yml --env-file .env ps
+# every service should read "healthy" or "running"
+```
+
+### Get in
+
+`.env.prod.example` ships `MESH_SEED_ADMIN=true`, so the API creates the first
+account on an empty database and prints the password **once**:
+
+```bash
+docker compose -f docker-compose.prod.yml --env-file .env logs api | grep bootstrap
+```
+
+```
+[bootstrap] ────────────────────────────────────────────────────────
+[bootstrap] First admin created: admin@localhost
+[bootstrap] Generated password:  <24 random characters>
+[bootstrap] This password is shown ONCE and is not stored anywhere.
+```
+
+Open `http://localhost:${HTTP_PORT}` (80 by default) and log in with it. To
+choose the password yourself, set `MESH_ADMIN_PASSWORD` **before** the first
+boot — the seed runs only while the database has zero users.
+
+Self-registration ships closed (`MESH_ALLOW_REGISTRATION=false`), so this admin
+account is the only way in until you invite someone. Adding people, SMTP, TLS,
+every environment variable, and the security checklist to run through before
+putting this on a public address: [Self-Hosting Guide](docs/self-hosting.md).
+
+## Development setup
+
+Running from source, with the compose file providing only the backing services.
 
 ### Prerequisites
 
@@ -93,9 +158,13 @@ This starts PostgreSQL, Redis, NATS, and MinIO.
 ### 2. Configure environment
 
 ```bash
-cp .env.example .env
-# Edit .env — at minimum, change JWT_SECRET
+export JWT_SECRET=$(openssl rand -base64 32)
 ```
+
+The API server has no dotenv loader — it reads the process environment only, so
+a `.env` file is not picked up by `go run ./cmd/api`. `.env.example` is the
+reference list of names and defaults; Docker Compose is what actually reads an
+env file (`deploy/docker/mesh/.env`).
 
 Defaults in `.env.example` already match the ports the compose file above
 publishes, so local development works without further edits.
@@ -117,8 +186,11 @@ cd web && pnpm install && pnpm dev
 ### 5. Start the MCP server (optional)
 
 ```bash
-go run ./cmd/mcp --transport sse --port 8081
+MESH_MCP_PORT=8081 go run ./cmd/mcp --transport sse
 ```
+
+`--transport` is the only flag; the port is set via `MESH_MCP_PORT`. See
+[Agent Onboarding](docs/agent-onboarding.md) to connect a client.
 
 ### 6. Create the first account
 
@@ -182,7 +254,7 @@ Or connect via SSE for remote agents:
 }
 ```
 
-The MCP server exposes 45 tools for managing projects, tasks, comments, artifacts, events, rules, and more. See [MCP Reference](docs/mcp-reference.md) for the full tool catalog.
+The MCP server exposes 49 tools for managing projects, tasks, comments, artifacts, events, rules, memory, and more. See [MCP Reference](docs/mcp-reference.md) for the full tool catalog, and [Agent Onboarding](docs/agent-onboarding.md) for connecting an agent to a self-hosted instance.
 
 ## Documentation
 
@@ -192,7 +264,8 @@ The MCP server exposes 45 tools for managing projects, tasks, comments, artifact
 | [Self-Hosting Guide](docs/self-hosting.md) | Production deployment with Docker Compose from `deploy/docker/mesh/` |
 | [Architecture](docs/architecture.md) | System architecture and design decisions |
 | [API Authentication](docs/api-authentication.md) | JWT, agent keys, and RBAC |
-| [MCP Reference](docs/mcp-reference.md) | All 45 MCP tools with parameters and examples |
+| [Agent Onboarding](docs/agent-onboarding.md) | Issue agent keys, connect over stdio or SSE, run MCP behind a proxy |
+| [MCP Reference](docs/mcp-reference.md) | All 49 MCP tools with parameters and examples |
 | [Custom Fields](docs/custom-fields.md) | Guide for 12 custom field types |
 | [Webhooks](docs/webhooks.md) | Webhook setup with HMAC-SHA256 validation |
 | [Agent Push Notifications](docs/agent-push-notifications.md) | Callback URL, SSE, and long-polling |

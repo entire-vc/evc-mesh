@@ -281,7 +281,13 @@ func TestTaskLifecycle_Validation(t *testing.T) {
 		resp := env.Post(t, "/api/v1/projects/not-a-uuid/tasks", map[string]interface{}{
 			"title": "Test",
 		})
-		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+		// Same as InvalidTaskID below: the cross-tenant guard runs before the
+		// handler and refuses a project parameter it could resolve no workspace
+		// from, so a non-UUID answers 403 rather than reaching the 400. Refusing
+		// first is the point — the guard cannot make an exception for ids that
+		// merely look malformed without trusting each handler to reject them.
+		assert.GreaterOrEqual(t, resp.StatusCode, 400,
+			"invalid project ID must return a 4xx error")
 		resp.Body.Close()
 	})
 

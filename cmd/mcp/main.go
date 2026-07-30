@@ -11,7 +11,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/entire-vc/evc-mesh/internal/config"
 	mcpserver "github.com/entire-vc/evc-mesh/internal/mcp"
+	"github.com/entire-vc/evc-mesh/internal/middleware"
 
 	sdkserver "github.com/mark3labs/mcp-go/server"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -142,8 +144,7 @@ func main() {
 			port = "8081"
 		}
 		addr := host + ":" + port
-		baseURL := fmt.Sprintf("http://%s:%s", host, port)
-		coreBaseURL := baseURL + "/core"
+		publicURL := strings.TrimSpace(os.Getenv("MESH_MCP_PUBLIC_URL"))
 
 		// Build the shared SSE context function used by both core and full servers.
 		// It injects the authenticated agent session and per-agent REST client.
@@ -182,26 +183,33 @@ func main() {
 			Profile:    mcpserver.ProfileCore,
 		})
 
-		// Build SSE transport servers.
-		fullSSE := sdkserver.NewSSEServer(
-			fullSrv.MCPServer(),
-			sdkserver.WithBaseURL(baseURL),
-			sdkserver.WithKeepAlive(true),
-			sdkserver.WithSSEContextFunc(sseContextFunc),
-		)
+		// Build SSE transport servers. advertiseOptions decides which URL each
+		// server hands back in its `endpoint` event — see the comment on that
+		// function for why this is not simply the listen address.
+		// A fresh slice per server: appending to one shared slice would let the
+		// two servers share a backing array.
+		sseOpts := func(basePath string) []sdkserver.SSEOption {
+			opts := []sdkserver.SSEOption{
+				sdkserver.WithKeepAlive(true),
+				sdkserver.WithSSEContextFunc(sseContextFunc),
+			}
+			return append(opts, advertiseOptions(publicURL, basePath)...)
+		}
 
-		coreSSE := sdkserver.NewSSEServer(
-			coreSrv.MCPServer(),
-			sdkserver.WithBaseURL(coreBaseURL),
-			sdkserver.WithKeepAlive(true),
-			sdkserver.WithSSEContextFunc(sseContextFunc),
-		)
+		fullSSE := sdkserver.NewSSEServer(fullSrv.MCPServer(), sseOpts("")...)
+		coreSSE := sdkserver.NewSSEServer(coreSrv.MCPServer(), sseOpts(coreBasePath)...)
 
 		// Build HTTP mux with auth wrappers.
 		mux := http.NewServeMux()
 
-		// Prometheus metrics — no auth required (Caddy gates this path to tw-mon IP).
-		mux.Handle("/metrics", promhttp.Handler())
+		// Prometheus metrics, gated by MESH_METRICS_TOKEN when set — same
+		// variable and file-fallback as the API's /metrics (config.Load
+		// reads MESH_METRICS_TOKEN / MESH_METRICS_TOKEN_FILE), same no-op-
+		// when-empty behavior via middleware.MetricsAuthHTTP. An empty token
+		// leaves this open for deployments that gate it at the network layer
+		// instead (e.g. internal prod, fronted by Caddy).
+		metricsToken := config.Load().Server.MetricsToken
+		mux.Handle("/metrics", middleware.MetricsAuthHTTP(metricsToken, promhttp.Handler()))
 
 		// Full profile: /sse and /message (backward compatible).
 		mux.HandleFunc("/sse", func(w http.ResponseWriter, r *http.Request) {
@@ -224,7 +232,7 @@ func main() {
 		mux.Handle("/message", fullSSE.MessageHandler())
 
 		// Core profile: /core/sse and /core/message.
-		mux.HandleFunc("/core/sse", func(w http.ResponseWriter, r *http.Request) {
+		mux.HandleFunc(coreBasePath+"/sse", func(w http.ResponseWriter, r *http.Request) {
 			key := extractAgentKeyFromRequest(r)
 			if key == "" {
 				http.Error(w, "Missing agent key: provide Authorization: Bearer agk_..., X-Agent-Key header, or ?agent_key query param", http.StatusUnauthorized)
@@ -241,13 +249,17 @@ func main() {
 
 			coreSSE.SSEHandler().ServeHTTP(w, r)
 		})
-		mux.Handle("/core/message", coreSSE.MessageHandler())
+		mux.Handle(coreBasePath+"/message", coreSSE.MessageHandler())
 
 		log.Printf("Starting MCP SSE server on %s (multi-agent mode)", addr)
-		log.Printf("  Full profile SSE endpoint:    %s/sse", baseURL)
-		log.Printf("  Full profile message endpoint: %s/message", baseURL)
-		log.Printf("  Core profile SSE endpoint:    %s/core/sse", baseURL)
-		log.Printf("  Core profile message endpoint: %s/core/message", baseURL)
+		log.Printf("  Full profile SSE endpoint: %s/sse", dialableURL(publicURL, host, port))
+		log.Printf("  Core profile SSE endpoint: %s%s/sse", dialableURL(publicURL, host, port), coreBasePath)
+		if publicURL == "" {
+			log.Printf("  Message endpoint is advertised relative to the URL each client connects to.")
+			log.Printf("  Set MESH_MCP_PUBLIC_URL if your clients require an absolute endpoint URL.")
+		} else {
+			log.Printf("  Message endpoint is advertised under MESH_MCP_PUBLIC_URL=%s", publicURL)
+		}
 		log.Printf("  Auth: Authorization: Bearer agk_..., X-Agent-Key, or ?agent_key=agk_...")
 
 		httpServer := &http.Server{
@@ -258,6 +270,55 @@ func main() {
 			log.Fatalf("MCP SSE server error: %v", err)
 		}
 	}
+}
+
+// coreBasePath is the path prefix the lightweight (core-profile) SSE endpoints
+// are mounted at. It has to be known to both the mux and the URL the server
+// advertises to clients, so it lives in one place.
+const coreBasePath = "/core"
+
+// advertiseOptions configures which URL the SSE server hands a client in its
+// `endpoint` event — the address the client will POST every subsequent JSON-RPC
+// message to.
+//
+// This is deliberately not derived from the listen address. The server listens
+// on 0.0.0.0 so that a published container port works at all, but 0.0.0.0 is a
+// wildcard bind, not a destination: a client told to POST to
+// http://0.0.0.0:8081/message has been handed an address it cannot dial. That
+// is what made a correctly published MCP port look unreachable from outside the
+// host while working fine from inside it.
+//
+// With MESH_MCP_PUBLIC_URL unset we advertise a relative path ("/message?...").
+// Every MCP client resolves it against the URL it connected to, so the answer is
+// automatically correct for localhost, for a published container port, and for
+// any reverse proxy — none of which the server can guess on its own.
+//
+// Set MESH_MCP_PUBLIC_URL (e.g. https://mesh.example.com/mcp) to advertise
+// absolute URLs instead, for clients that reject relative endpoints or for a
+// proxy that rewrites the path.
+func advertiseOptions(publicURL, basePath string) []sdkserver.SSEOption {
+	var opts []sdkserver.SSEOption
+	if basePath != "" {
+		opts = append(opts, sdkserver.WithStaticBasePath(basePath))
+	}
+	if publicURL == "" {
+		return append(opts, sdkserver.WithUseFullURLForMessageEndpoint(false))
+	}
+	return append(opts, sdkserver.WithBaseURL(strings.TrimSuffix(publicURL, "/")))
+}
+
+// dialableURL returns a URL an operator can paste into a client, for logging
+// only. A wildcard listen host is reported as localhost, because that is the
+// address that actually works from the machine reading the log.
+func dialableURL(publicURL, host, port string) string {
+	if publicURL != "" {
+		return strings.TrimSuffix(publicURL, "/")
+	}
+	switch host {
+	case "0.0.0.0", "::", "[::]", "":
+		host = "localhost"
+	}
+	return fmt.Sprintf("http://%s:%s", host, port)
 }
 
 // buildSession creates an AgentSession from API response strings.

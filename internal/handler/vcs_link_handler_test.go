@@ -38,6 +38,9 @@ type stubVCSLinkService struct {
 	listReturn      []domain.VCSLink
 	listReturnErr   error
 	deleteReturnErr error
+	resolveCalls    [][]service.TaskRefSource
+	resolveTaskID   uuid.UUID
+	resolveRef      service.TaskRef
 }
 
 func (s *stubVCSLinkService) Create(_ context.Context, input domain.CreateVCSLinkInput) (*domain.VCSLink, error) {
@@ -61,6 +64,25 @@ func (s *stubVCSLinkService) Delete(_ context.Context, _ uuid.UUID) error {
 
 func (s *stubVCSLinkService) ListByTask(_ context.Context, _ uuid.UUID) ([]domain.VCSLink, error) {
 	return s.listReturn, s.listReturnErr
+}
+
+// ResolveTaskRef records what the push path asked about and answers with a
+// canned task, so a handler test can assert the branch and message actually
+// reached the resolver.
+func (s *stubVCSLinkService) ResolveTaskRef(_ context.Context, sources ...service.TaskRefSource) (uuid.UUID, service.TaskRef) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.resolveCalls = append(s.resolveCalls, sources)
+	return s.resolveTaskID, s.resolveRef
+}
+
+func (s *stubVCSLinkService) lastResolveSources() ([]service.TaskRefSource, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.resolveCalls) == 0 {
+		return nil, false
+	}
+	return s.resolveCalls[len(s.resolveCalls)-1], true
 }
 
 func (s *stubVCSLinkService) HandleGitHubPullRequestEvent(_ context.Context, ev service.GitHubWebhookEvent) (service.PRHandleResult, error) {
@@ -322,4 +344,153 @@ func TestGitHubWebhook_NoSignatureWhenSecretConfigured(t *testing.T) {
 	require.NoError(t, h.GitHubWebhook(c))
 	assert.Equal(t, http.StatusUnauthorized, rec.Code)
 	assert.Empty(t, svc.handleCalls)
+}
+
+// ---------------------------------------------------------------------------
+// Create — link_type spelling.
+// ---------------------------------------------------------------------------
+
+func postVCSLink(t *testing.T, svc *stubVCSLinkService, taskID uuid.UUID, body string) *httptest.ResponseRecorder {
+	t.Helper()
+
+	h := NewVCSLinkHandler(svc)
+	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader([]byte(body)))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := echo.New().NewContext(req, rec)
+	c.SetPath("/tasks/:task_id/vcs-links")
+	c.SetParamNames("task_id")
+	c.SetParamValues(taskID.String())
+
+	require.NoError(t, h.Create(c))
+	return rec
+}
+
+// A pull request has an obvious spelling and a canonical one. Both are
+// accepted, and both are stored as the canonical "pr" — consumers join on the
+// stored value, so a second spelling in the column would silently split the
+// data in two.
+func TestVCSLinkHandler_Create_LinkTypeSpellings(t *testing.T) {
+	accepted := []struct {
+		name  string
+		given string
+		want  domain.VCSLinkType
+	}{
+		{"canonical pr", "pr", domain.VCSLinkTypePR},
+		{"pull_request alias", "pull_request", domain.VCSLinkTypePR},
+		{"uppercase canonical", "PR", domain.VCSLinkTypePR},
+		{"mixed-case alias", "Pull_Request", domain.VCSLinkTypePR},
+		{"commit", "commit", domain.VCSLinkTypeCommit},
+		{"branch", "branch", domain.VCSLinkTypeBranch},
+	}
+
+	for _, tc := range accepted {
+		t.Run(tc.name, func(t *testing.T) {
+			taskID := uuid.New()
+			svc := &stubVCSLinkService{}
+			body := `{"link_type":"` + tc.given + `","external_id":"42","url":"https://github.com/o/r/pull/42"}`
+
+			rec := postVCSLink(t, svc, taskID, body)
+
+			assert.Equal(t, http.StatusCreated, rec.Code)
+			require.Len(t, svc.createCalls, 1)
+			assert.Equal(t, tc.want, svc.createCalls[0].LinkType)
+			assert.Equal(t, taskID, svc.createCalls[0].TaskID)
+		})
+	}
+}
+
+func TestVCSLinkHandler_Create_RejectsUnknownLinkType(t *testing.T) {
+	taskID := uuid.New()
+	svc := &stubVCSLinkService{}
+	body := `{"link_type":"merge_request","external_id":"42","url":"https://example.com/x"}`
+
+	rec := postVCSLink(t, svc, taskID, body)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Empty(t, svc.createCalls)
+
+	// The rejection names the accepted set; the previous message left the
+	// caller to guess which spelling was wanted.
+	respBody := rec.Body.String()
+	assert.Contains(t, respBody, "merge_request")
+	for _, name := range domain.VCSLinkTypeNames {
+		assert.Contains(t, respBody, name)
+	}
+}
+
+func TestVCSLinkHandler_Create_RequiresLinkType(t *testing.T) {
+	taskID := uuid.New()
+	svc := &stubVCSLinkService{}
+	body := `{"external_id":"42","url":"https://github.com/o/r/pull/42"}`
+
+	rec := postVCSLink(t, svc, taskID, body)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Contains(t, rec.Body.String(), "link_type is required")
+	assert.Empty(t, svc.createCalls)
+}
+
+// ---------------------------------------------------------------------------
+// Create — status field (#df734dd9: add_vcs_link had no way to record a PR's
+// status at link time, so a link to an already-merged PR sat blocked
+// forever since no webhook fires for a merge that predates the link).
+// ---------------------------------------------------------------------------
+
+func TestVCSLinkHandler_Create_AcceptsExplicitStatus(t *testing.T) {
+	accepted := []struct {
+		name  string
+		given string
+		want  domain.VCSLinkStatus
+	}{
+		{"open", "open", domain.VCSLinkStatusOpen},
+		{"merged", "merged", domain.VCSLinkStatusMerged},
+		{"closed", "closed", domain.VCSLinkStatusClosed},
+		{"uppercase", "MERGED", domain.VCSLinkStatusMerged},
+	}
+
+	for _, tc := range accepted {
+		t.Run(tc.name, func(t *testing.T) {
+			taskID := uuid.New()
+			svc := &stubVCSLinkService{}
+			body := `{"link_type":"pr","external_id":"40","url":"https://github.com/entire-vc/evc-mesh-mcp/pull/40","status":"` + tc.given + `"}`
+
+			rec := postVCSLink(t, svc, taskID, body)
+
+			assert.Equal(t, http.StatusCreated, rec.Code)
+			require.Len(t, svc.createCalls, 1)
+			assert.Equal(t, tc.want, svc.createCalls[0].Status)
+		})
+	}
+}
+
+// Omitting status entirely must still work — the handler passes "" through,
+// leaving the default decision to the service (which knows the link_type).
+func TestVCSLinkHandler_Create_OmittedStatusPassesThrough(t *testing.T) {
+	taskID := uuid.New()
+	svc := &stubVCSLinkService{}
+	body := `{"link_type":"pr","external_id":"42","url":"https://github.com/o/r/pull/42"}`
+
+	rec := postVCSLink(t, svc, taskID, body)
+
+	assert.Equal(t, http.StatusCreated, rec.Code)
+	require.Len(t, svc.createCalls, 1)
+	assert.Equal(t, domain.VCSLinkStatus(""), svc.createCalls[0].Status)
+}
+
+func TestVCSLinkHandler_Create_RejectsUnknownStatus(t *testing.T) {
+	taskID := uuid.New()
+	svc := &stubVCSLinkService{}
+	body := `{"link_type":"pr","external_id":"40","url":"https://github.com/o/r/pull/40","status":"pending"}`
+
+	rec := postVCSLink(t, svc, taskID, body)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Empty(t, svc.createCalls)
+
+	respBody := rec.Body.String()
+	assert.Contains(t, respBody, "pending")
+	for _, name := range domain.VCSLinkStatusNames {
+		assert.Contains(t, respBody, name)
+	}
 }

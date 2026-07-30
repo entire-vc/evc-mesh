@@ -18,13 +18,16 @@ type openAIEmbedder struct {
 	model      string
 	dimensions int
 	client     *http.Client
+
+	maxInputTokens   int
+	reportTruncation TruncationReporter
 }
 
 // NewOpenAIEmbedder returns an Embedder backed by the OpenAI embeddings API.
 // endpoint defaults to "https://api.openai.com" when empty.
 // model defaults to "text-embedding-3-small" when empty.
 // httpTimeoutSecs defaults to 30 when zero or negative (today's hardcoded behavior).
-func NewOpenAIEmbedder(endpoint, apiKey, model string, dimensions, httpTimeoutSecs int) Embedder {
+func NewOpenAIEmbedder(endpoint, apiKey, model string, dimensions, httpTimeoutSecs int, opts ...OpenAIOption) Embedder {
 	if endpoint == "" {
 		endpoint = "https://api.openai.com"
 	}
@@ -34,12 +37,31 @@ func NewOpenAIEmbedder(endpoint, apiKey, model string, dimensions, httpTimeoutSe
 	if httpTimeoutSecs <= 0 {
 		httpTimeoutSecs = 30
 	}
-	return &openAIEmbedder{
+	e := &openAIEmbedder{
 		endpoint:   strings.TrimRight(endpoint, "/"),
 		apiKey:     apiKey,
 		model:      model,
 		dimensions: dimensions,
 		client:     &http.Client{Timeout: time.Duration(httpTimeoutSecs) * time.Second},
+	}
+	for _, opt := range opts {
+		opt(e)
+	}
+	return e
+}
+
+// noteTruncation reports a response whose token count landed exactly on the
+// server's input window, which is what truncation looks like from the client
+// side: the server stopped counting because it stopped reading.
+//
+// Deliberately not an error. The vector is real and usable, just partial, and
+// failing the write would lose the memory entirely rather than lose its tail.
+func (o *openAIEmbedder) noteTruncation(promptTokens int) {
+	if o.maxInputTokens <= 0 || o.reportTruncation == nil {
+		return
+	}
+	if promptTokens >= o.maxInputTokens {
+		o.reportTruncation(o.model, promptTokens, o.maxInputTokens)
 	}
 }
 
@@ -67,9 +89,42 @@ type openAIEmbedData struct {
 	Index     int       `json:"index"`
 }
 
-type openAIEmbedResponse struct {
-	Data []openAIEmbedData `json:"data"`
+type openAIEmbedUsage struct {
+	PromptTokens int `json:"prompt_tokens"`
 }
+
+type openAIEmbedResponse struct {
+	Data  []openAIEmbedData `json:"data"`
+	Usage openAIEmbedUsage  `json:"usage"`
+}
+
+// TruncationReporter is notified when the server embedded only a prefix of the
+// text it was given.
+//
+// Embedding servers truncate by default and say so nowhere in the response: TEI
+// ships `auto_truncate: true`, returns HTTP 200, and hands back a well-formed
+// vector for the first N tokens of a document of any size. The caller cannot
+// tell a fully-represented memory from one whose content was 87% discarded, so
+// a memory can be missing from semantic recall for weeks while every health
+// check is green. Reporting it is what makes that class of loss findable.
+type TruncationReporter func(model string, promptTokens, maxTokens int)
+
+// WithMaxInputTokens tells the embedder the server's input window so it can spot
+// truncation, and where to report it. A response whose prompt_tokens has landed
+// exactly on the window is the signal: the server stopped counting because it
+// stopped reading.
+//
+// maxTokens <= 0 disables the check — an unknown window cannot be compared
+// against, and guessing one would produce false reports on short documents.
+func WithMaxInputTokens(window int, report TruncationReporter) OpenAIOption {
+	return func(o *openAIEmbedder) {
+		o.maxInputTokens = window
+		o.reportTruncation = report
+	}
+}
+
+// OpenAIOption configures an openAIEmbedder.
+type OpenAIOption func(*openAIEmbedder)
 
 func (o *openAIEmbedder) Embed(ctx context.Context, text string) ([]float32, error) {
 	vecs, err := o.embedOnce(ctx, []string{text})
@@ -141,6 +196,14 @@ func (o *openAIEmbedder) embedOnce(ctx context.Context, inputs []string) ([][]fl
 	}
 	if len(result.Data) == 0 {
 		return nil, fmt.Errorf("openai embed: empty data in response")
+	}
+	// prompt_tokens is a total across every input in the request, not a per-input count.
+	// Comparing it against maxInputTokens is only meaningful for a single-input call —
+	// a batch of several under-window chunks can sum past the window with none of them
+	// individually truncated, which would make the counter fire on ordinary chunked
+	// writes instead of the truncation it exists to catch.
+	if len(inputs) == 1 {
+		o.noteTruncation(result.Usage.PromptTokens)
 	}
 
 	out := make([][]float32, len(inputs))

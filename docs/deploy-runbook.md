@@ -15,7 +15,7 @@ Hands-on guide for deploying the evc-mesh API server on prod (systemd, bare-meta
 
 ## Normal deploy (no out-of-order migrations)
 
-**Mandatory order (per [CLAUDE-workflow.md §1b Deploy Discipline](../CLAUDE-workflow.md)):**
+**Mandatory order:**
 `migrate (goose up)` → `binary swap` → `restart`. Never swap the binary before migrations pass.
 
 CI enforces this automatically via the `migrate` job in `deploy-backend.yml`. For manual hotfix deploys that bypass CI, follow the steps below exactly — do not skip the migration step.
@@ -40,7 +40,10 @@ ssh root@prod-host
   # STEP 1 — Run migrations BEFORE touching the binary (fail-closed).
   # goose CLI is installed at /opt/evc-mesh/bin/goose by the CI migrate job.
   # If this exits non-zero, STOP — do NOT proceed to the binary swap.
-  DB_URL=$(grep ^DATABASE_URL /opt/evc-mesh/.env.prod | cut -d= -f2-)
+  # Build the DSN from the component vars .env.prod actually contains
+  # (there is no DATABASE_URL — see "Environment variables" below).
+  set -a; source /opt/evc-mesh/.env.prod; set +a
+  DB_URL="postgres://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT:-5432}/${DB_NAME}?sslmode=${DB_SSL_MODE:-disable}"
   /opt/evc-mesh/bin/goose -dir /opt/evc-mesh/migrations postgres "$DB_URL" up
 
   # STEP 2 — Swap binary atomically (only after migrations succeed)
@@ -61,8 +64,7 @@ ssh root@prod-host
 
 ## evc-mesh-mcp deploy (manual — no CI)
 
-evc-mesh-mcp has no CD pipeline. **Mandatory order (per
-[CLAUDE-workflow.md §1b Deploy Discipline](../CLAUDE-workflow.md)):**
+evc-mesh-mcp has no CD pipeline. **Mandatory order:**
 `migrate (goose up)` → `binary swap` → `restart`. Never swap the binary before migrations pass.
 
 > evc-mesh-mcp does not run its own migrations — it reads the same DB as the evc-mesh API.
@@ -70,7 +72,7 @@ evc-mesh-mcp has no CD pipeline. **Mandatory order (per
 
 ```bash
 # 1. Build for the prod target (cross-compile from Mac/Linux dev machine)
-GOOS=linux GOARCH=amd64 go build -o evc-mesh-mcp ./cmd/mesh-mcp
+GOOS=linux GOARCH=amd64 go build -o evc-mesh-mcp ./cmd/mcp
 
 # 2. Copy binary to prod
 scp evc-mesh-mcp root@prod-host:/opt/evc-mesh-mcp/evc-mesh-mcp.new
@@ -81,7 +83,10 @@ ssh root@prod-host
   # STEP 1 — Run evc-mesh DB migrations (fail-closed).
   # goose CLI is installed at /opt/evc-mesh/bin/goose by the CI migrate job.
   # If this exits non-zero, STOP — do NOT swap the binary.
-  DB_URL=$(grep ^DATABASE_URL /opt/evc-mesh/.env.prod | cut -d= -f2-)
+  # Build the DSN from the component vars .env.prod actually contains
+  # (there is no DATABASE_URL — see "Environment variables" below).
+  set -a; source /opt/evc-mesh/.env.prod; set +a
+  DB_URL="postgres://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT:-5432}/${DB_NAME}?sslmode=${DB_SSL_MODE:-disable}"
   /opt/evc-mesh/bin/goose -dir /opt/evc-mesh/migrations postgres "$DB_URL" up
 
   # STEP 2 — Swap binary (only after migrations succeed)
@@ -91,8 +96,9 @@ ssh root@prod-host
   # STEP 3 — Restart
   sudo systemctl restart evc-mesh-mcp
 
-  # STEP 4 — Smoke test
-  curl -sf http://localhost:8081/health || echo "SMOKE FAILED"
+  # STEP 4 — Smoke test. The MCP SSE server has no /health route; it serves
+  # /metrics, /sse and /message. /metrics is the unauthenticated liveness probe.
+  curl -sf http://localhost:8081/metrics >/dev/null || echo "SMOKE FAILED"
 ```
 
 ---
@@ -156,8 +162,9 @@ mv bin/mesh-api.bak.$(ls bin/ | grep '\.bak\.' | sort | tail -1 | grep -oP '(?<=
 
 # Rollback migrations if the new version added migrations.
 # goose CLI is installed at /opt/evc-mesh/bin/goose by CI. Rolls back one migration at a time:
+set -a; source /opt/evc-mesh/.env.prod; set +a
 /opt/evc-mesh/bin/goose -dir /opt/evc-mesh/migrations postgres \
-  "$(grep DATABASE_URL /opt/evc-mesh/.env.prod | cut -d= -f2-)" \
+  "postgres://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT:-5432}/${DB_NAME}?sslmode=${DB_SSL_MODE:-disable}" \
   down
 
 # Restart with old binary
@@ -216,16 +223,21 @@ curl -s http://localhost:8005/health
 
 ---
 
-## Environment variables (`.env.prod`)
+## Environment variables
 
-| Variable | Description |
-|----------|-------------|
-| `DATABASE_URL` | PostgreSQL DSN |
-| `REDIS_URL` | Redis address |
-| `NATS_URL` | NATS address |
-| `MESH_JWT_SECRET` | JWT signing secret |
-| `MESH_SEED_ADMIN` | Set to `true` on first boot |
-| `MESH_ADMIN_EMAIL` | Seed admin email |
-| `MESH_ADMIN_PASSWORD` | Seed admin password (change immediately) |
+The full reference — every variable, its real default, and whether the container
+actually receives it — lives in
+[self-hosting.md](self-hosting.md#environment-variables-reference). It is
+written from the code rather than from memory; do not maintain a second copy
+here.
 
-See `internal/config/config.go` for the full list.
+Two naming traps this runbook used to fall into:
+
+- There is **no `DATABASE_URL`, `REDIS_URL` or `MESH_JWT_SECRET`.** The API
+  reads component variables (`DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`,
+  `DB_NAME`, `DB_SSL_MODE`; `REDIS_HOST`, `REDIS_PORT`, …) and the JWT secret is
+  plain `JWT_SECRET`. `NATS_URL` is real.
+- The **Docker Compose** deployment reads `deploy/docker/mesh/.env`, not
+  `.env.prod` and not the repo-root `.env`. The `/opt/evc-mesh/.env.prod` paths
+  in this runbook belong to the systemd/binary deployment described here, which
+  is a different thing from the compose stack in the self-hosting guide.

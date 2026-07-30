@@ -105,6 +105,15 @@ func (h *NotificationHandler) GetPreferences(c echo.Context) error {
 }
 
 // updatePreferencesRequest is the JSON body for updating preferences.
+//
+// WorkspaceID names a tenant the route does not, which is the shape that has to
+// be guarded outside the handler: middleware.RequireBodyWorkspace is registered on
+// PUT /notifications/preferences and refuses a caller who is not in the workspace
+// they are subscribing to. Before it was, any authenticated user could subscribe
+// to any workspace by pasting its id here, and the dispatcher then delivered that
+// workspace's comment bodies to them. It is recorded as guarded in
+// declaredBodyTenantFields, and TestBodyWorkspaceIDGuardsAreWiredToTheirRoutes
+// declines to take that record on trust — it reads the router back.
 type updatePreferencesRequest struct {
 	WorkspaceID string   `json:"workspace_id"`
 	Channel     string   `json:"channel"`
@@ -158,6 +167,35 @@ func (h *NotificationHandler) UpdatePreferences(c echo.Context) error {
 	}
 
 	return c.JSON(http.StatusOK, result)
+}
+
+// DeletePreference handles DELETE /notifications/preferences/:pref_id
+//
+// This is how a subscription is cancelled, and until it existed there was no way
+// to cancel one: the API could create and update preference rows and nothing
+// else, so a subscription to a workspace the subscriber had no business in
+// outlived any attempt to undo it.
+//
+// The route names a row by id and no workspace can be resolved from it, so it is
+// recorded in workspaceScopeHandlerCheckedRoutes: the check is the caller's own
+// user_id in the DELETE's WHERE clause, which is stricter than workspace
+// membership, not weaker. Somebody else's preference id answers 404.
+func (h *NotificationHandler) DeletePreference(c echo.Context) error {
+	userID, ok := currentUserID(c)
+	if !ok {
+		return c.JSON(http.StatusUnauthorized, apierror.Unauthorized("authentication required"))
+	}
+
+	prefID, err := uuid.Parse(c.Param("pref_id"))
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid preference id"))
+	}
+
+	if err := h.svc.DeletePreference(c.Request().Context(), userID, prefID); err != nil {
+		return handleError(c, err)
+	}
+
+	return c.NoContent(http.StatusNoContent)
 }
 
 // currentUserID extracts the authenticated user's UUID from the Echo context.

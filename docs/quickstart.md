@@ -32,12 +32,15 @@ go run ./cmd/api
 
 You should see output like:
 ```
-Starting EVC Mesh API on 0.0.0.0:8005
-Database connected
-NATS JetStream connected
-MinIO connected, bucket mesh-artifacts ready
+Connected to PostgreSQL
+Database migrations applied
+[eventbus] Connected to NATS at nats://localhost:4223
 WebSocket hub started
+Starting evc-mesh API server on 0.0.0.0:8005
 ```
+
+Run it from the repo root — migrations are resolved relative to the working
+directory, and elsewhere it exits with `migrations directory does not exist`.
 
 Verify: `curl http://localhost:8005/health`
 
@@ -83,14 +86,48 @@ one you create. There is nothing to log in with until you do.
 ### 5.1 Register an Agent
 
 In the web UI:
-1. Navigate to your workspace **Settings > Agents** tab
+1. Open your workspace **Org Chart** (`/w/<workspace-slug>/org-chart`)
 2. Click **Register Agent**
 3. Choose a name (e.g. "claude-code") and type "claude_code"
 4. **Copy the API key** -- it is shown only once!
 
-The key looks like: `agk_my-team_a1b2c3d4e5f6...`
+The key looks like: `agk_my-team_a1b2c3d4e5f6...`, where the middle segment is
+the workspace slug.
 
-### 5.2 Configure MCP
+Creating one over the API instead, or connecting over SSE rather than stdio? See
+[Agent Onboarding](agent-onboarding.md).
+
+### 5.2 Add the Agent to Your Project
+
+**Do not skip this.** Registering an agent puts it in the *workspace*; it does not
+give it access to any *project*. Project membership is separate and is not granted
+automatically, so a freshly registered agent sees an empty board:
+
+```
+list_projects  ->  {"items": [], "total_count": 0}
+create_task    ->  Forbidden: agent is not a member of this project
+```
+
+That is the expected response for a non-member, not a broken key or a bad MCP
+config — the agent is authenticating fine and is simply not on the project yet.
+
+In the web UI: open the project, **Members** -> **Add agent**, pick the agent and a
+role. Or over the API:
+
+```bash
+curl -X POST http://localhost:8080/api/v1/projects/<project_id>/members/agents \
+  -H "Authorization: Bearer <your-jwt>" \
+  -H "Content-Type: application/json" \
+  -d '{"agent_id": "<agent_id>", "role": "member"}'
+```
+
+`role` must be one of `admin`, `member`, `viewer` — `member` is the usual choice
+for an agent that creates and updates tasks. There is no `agent` role: "agent" is
+an actor type (authenticated by API key), not a role you assign here.
+
+Repeat for each project the agent should work in.
+
+### 5.3 Configure MCP
 
 Add to your project's `.mcp.json`:
 
@@ -102,6 +139,7 @@ Add to your project's `.mcp.json`:
       "args": ["run", "./cmd/mcp"],
       "cwd": "/path/to/evc-mesh",
       "env": {
+        "MESH_API_URL": "http://localhost:8005",
         "MESH_AGENT_KEY": "agk_my-team_your-key-here"
       }
     }
@@ -115,9 +153,10 @@ Or, if you built the binary:
 {
   "mcpServers": {
     "evc-mesh": {
-      "command": "/path/to/evc-mesh-mcp",
+      "command": "/path/to/mesh-mcp",
       "args": ["--transport", "stdio"],
       "env": {
+        "MESH_API_URL": "http://localhost:8005",
         "MESH_AGENT_KEY": "agk_my-team_your-key-here"
       }
     }
@@ -125,7 +164,7 @@ Or, if you built the binary:
 }
 ```
 
-### 5.3 Test the Connection
+### 5.4 Test the Connection
 
 Ask Claude Code to:
 - "List my projects" -- should return the project you created
@@ -170,7 +209,8 @@ With evc-mesh connected, Claude Code can:
 
 ## Next Steps
 
+- Read [Agent Onboarding](agent-onboarding.md) for agent keys, the SSE transport, and running MCP behind a reverse proxy
 - Read [Self-Hosting Guide](self-hosting.md) for production deployment, backup, and security hardening
-- Read [MCP Tool Reference](mcp-reference.md) for detailed documentation on all 45 MCP tools
-- Read the [OpenAPI spec](openapi.yaml) or visit `http://localhost:8005/docs` for the full REST API reference
+- Read [MCP Tool Reference](mcp-reference.md) for detailed documentation on all 49 MCP tools
+- Read the [OpenAPI spec](openapi.yaml) for the full REST API specification
 - Set up multiple agents to explore multi-agent collaboration via the event bus
