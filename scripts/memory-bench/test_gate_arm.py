@@ -583,6 +583,45 @@ class TheRedProofIsWiredIn(unittest.TestCase):
         return next(b for b in blocks
                     if re.search(r"^    name: Memory recall gate\s*$", b, re.M))
 
+    def _step(self, name: str) -> str:
+        block = self._required_job_block()
+        step = re.search(
+            rf"- name: {re.escape(name)}\n(.*?)(?=\n      - name:|\Z)",
+            block, re.S)
+        self.assertIsNotNone(step, f"step {name!r} is not in the required job")
+        return step.group(1)
+
+    @staticmethod
+    def _condition(step_text: str) -> str | None:
+        """Extract a step's `if:`, INCLUDING the folded (`>-`) spelling.
+
+        The inline-only reader this replaces captured the literal `>-` and then
+        asserted substrings against it, so every assertion about a folded
+        condition passed or failed on the fold marker rather than on the
+        condition. It did not fail safe: `assertIn('steps.mode…', '>-')` fails
+        loudly, but a NEGATIVE assertion (`assertNotIn`) against `'>-'` would
+        have passed for any condition whatsoever. Both spellings are live in
+        this file, so reading only one is reading half the workflow.
+        """
+        m = re.search(r"^(\s*)if:[ \t]*(.*)$", step_text, re.M)
+        if not m:
+            return None
+        indent, first = m.group(1), m.group(2).strip()
+        if first not in (">-", ">", "|-", "|"):
+            return first
+        # Folded: take the more-indented lines that follow.
+        rest, started = [], False
+        for line in step_text[m.end():].splitlines():
+            if not line.strip():
+                if started:
+                    break
+                continue
+            if len(line) - len(line.lstrip()) <= len(indent):
+                break
+            started = True
+            rest.append(line.strip())
+        return " ".join(rest)
+
     def test_the_required_job_proves_the_gate_can_go_red(self):
         block = self._required_job_block()
         # `(?:[^\n]*\\\n)*` walks any number of backslash continuations before
@@ -607,11 +646,26 @@ class TheRedProofIsWiredIn(unittest.TestCase):
             "the red-proof must run against the BRANCH baseline — the file this "
             "required arm actually gates on.",
         )
-        self.assertRegex(
-            invocation, r"\bbranch\b\s*$",
-            "the red-proof must be told to expect arm 'branch'; without the "
-            "expected-arm argument it would accept a prod baseline, which the "
-            "real gate refuses as arm-mismatch.",
+        # Asserted POSITIONALLY — the token after the baseline path — because the
+        # previous spelling `\bbranch\b\s*$` was anchored to end-of-string and
+        # broke the moment the invocation grew a `| tee`: over-fit to the text
+        # rather than to the property, which is what a pin must never be.
+        #
+        # (I first justified this by claiming an unanchored `\bbranch\b` would
+        # false-match `baseline_retrieval_branch.json`. It does not: `_branch`
+        # puts a word character before `b`, so there is no `\b` there. Recorded
+        # because the wrong reason was checkable in one line and would otherwise
+        # have been read back as the rationale for this shape.)
+        cmd = invocation.replace("\\\n", " ").split("|")[0]      # drop `| tee …`
+        argv = [t for t in cmd.split() if not t.startswith("2>&1")]
+        self.assertIn("scripts/memory-bench/baseline_retrieval_branch.json", argv)
+        i = argv.index("scripts/memory-bench/baseline_retrieval_branch.json")
+        self.assertEqual(
+            argv[i + 1:i + 2], ["branch"],
+            "the red-proof must be told to expect arm 'branch' as the argument "
+            "AFTER the baseline path; without the expected-arm argument it would "
+            "accept a prod baseline, which the real gate refuses as arm-mismatch. "
+            f"argv={argv!r}",
         )
 
     def test_the_red_proof_is_skipped_on_a_capture(self):
@@ -628,12 +682,7 @@ class TheRedProofIsWiredIn(unittest.TestCase):
         gated on something unrelated would satisfy a truthiness check while
         leaving the deadlock in place.
         """
-        block = self._required_job_block()
-        step = re.search(
-            r"- name: The gate must still be able to go RED\n(.*?)(?=\n      - name:|\Z)",
-            block, re.S)
-        self.assertIsNotNone(step, "the red-proof step is not in the required job")
-        cond = re.search(r"^\s*if:\s*(.+)$", step.group(1), re.M)
+        cond = self._condition(self._step("The gate must still be able to go RED"))
         self.assertIsNotNone(
             cond,
             "the red-proof step has no `if:`, so it runs on captures too — "
@@ -642,14 +691,83 @@ class TheRedProofIsWiredIn(unittest.TestCase):
             "created it.",
         )
         self.assertIn(
-            "steps.mode.outputs.capture", cond.group(1),
+            "steps.mode.outputs.capture", cond,
             "the red-proof must be gated on the workflow's capture-vs-judge "
-            f"source of truth; found {cond.group(1)!r}",
+            f"source of truth; found {cond!r}",
         )
         self.assertIn(
-            "!=", cond.group(1),
+            "!=", cond,
             "the gating must EXCLUDE captures (capture != 'true'); gated the "
             "other way the proof runs only on the runs that cannot satisfy it.",
+        )
+
+    def test_the_red_proof_does_not_block_a_pr_that_touches_no_memory_path(self):
+        """#342, applied to the step this card added.
+
+        The first draft of the red-proof sat before the scope gate and exited
+        non-zero on rc=2, so a docs-only PR would have gone red because a
+        baseline its author had never heard of was missing. This file states the
+        consequence twice — `cf. #342`, and the gate step's own "a red nobody can
+        clear gets bypassed" — and a bypassed required check is total blindness
+        restored by consent, i.e. this card's own defect with extra steps.
+
+        Coverage is not what pays for that: on push/schedule/dispatch the scope
+        step sets relevant=true unconditionally, so main still evaluates the
+        red-proof on every run.
+        """
+        cond = self._condition(self._step("The gate must still be able to go RED"))
+        self.assertIn(
+            "steps.scope.outputs.relevant", cond,
+            "the red-proof must be gated on memory-path relevance, or it fails "
+            f"the required check for PR authors who cannot clear it; found {cond!r}",
+        )
+
+    def test_rc1_blocks_but_rc2_does_not_fail_a_pull_request(self):
+        """The routing, asserted as behaviour rather than as text.
+
+        Both exit codes mean "the gate is not currently trustworthy", so it is
+        tempting to treat them alike — but they differ in WHO CAN CLEAR THEM,
+        which is the only thing that decides whether a required check may block:
+
+          rc=1  an arm misbehaved => the decision logic lost its red-ability,
+                which only a memory-path change can do => the author's to fix.
+          rc=2  the committed baseline is missing / arm-mismatched / has no
+                sample_sizes => nobody on the PR can fix it.
+
+        Extracts the step's own exit logic and evaluates it, so an equivalent
+        rewrite stays green and a collapse of the two codes into one bare
+        non-zero turns red.
+        """
+        body = self._step("The gate must still be able to go RED")
+        m = re.search(r'if \[ "\$rc" = "2" \] && \[ "\$\{\{ github\.event_name \}\}" = '
+                      r'"pull_request" \]; then\s*\n\s*exit 0\s*\n\s*fi\s*\n\s*exit \$rc',
+                      body)
+        self.assertIsNotNone(
+            m,
+            "the red-proof's exit routing is not the expected shape. rc=2 must "
+            "exit 0 on a pull_request and rc must be propagated otherwise; a bare "
+            "`exit $rc` blocks PR authors on a missing baseline, and a bare "
+            "`exit 0` makes the proof advisory on main as well, where there is no "
+            f"author to protect. Step body:\n{body}",
+        )
+
+    def test_the_red_proof_reads_pipestatus_not_tees_exit_code(self):
+        """Same defect as `6553dd6`, one step over.
+
+        This step pipes through `tee`, and the workflow declares no `shell:` and
+        no `defaults:`, so it runs under `bash -e` WITHOUT pipefail — `$?` is
+        tee's, which is 0 whatever python did. Unguarded, an rc=1 (the gate can
+        no longer go red) would report success.
+        `test_every_teed_measurement_reads_pipestatus` in this file covers it as
+        a file-wide invariant; named here as well so a regression points at this
+        step rather than at "some step".
+        """
+        body = self._step("The gate must still be able to go RED")
+        self.assertIn("| tee redproof.log", body)
+        self.assertIn(
+            "rc=${PIPESTATUS[0]}", body,
+            "the red-proof takes tee's exit code, so every verdict it reaches "
+            "is discarded and the step is green unconditionally.",
         )
 
     def test_the_block_finder_actually_found_the_required_job(self):

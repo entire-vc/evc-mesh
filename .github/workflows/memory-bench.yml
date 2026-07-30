@@ -249,40 +249,6 @@ jobs:
           echo "capture=${{ (github.event_name != 'pull_request' && inputs.update_baseline && inputs.baseline_arm == 'retrieval-branch') && 'true' || 'false' }}" \
             >> "$GITHUB_OUTPUT"
 
-      # "The gate produced a verdict" and "the gate can still produce the RED
-      # verdict" are different claims, and only the second is the one that was
-      # broken while baseline_retrieval_branch.json did not exist (#f70347b5).
-      #
-      # Committing that file fixes today's symptom; nothing else would keep the
-      # property. A tolerance widened past every category's headroom, or a
-      # baseline re-snapped from a degraded run, both leave a required check
-      # that is green because it can no longer be anything else — which reads
-      # exactly like the blind state this card was filed about, minus the
-      # `no-baseline` line that made that one noticeable.
-      #
-      # Drives the pure decision functions against the committed baseline:
-      # identity must be OK, a drop past tolerance must name the category, and
-      # a drop INSIDE tolerance must stay OK — that last arm is what stops
-      # "REGRESSION" from merely meaning "differs from baseline at all".
-      #
-      # Intolerant of a missing file on the judging path: exit 2 (no baseline /
-      # no sample_sizes / arm mismatch) fails the step, because each of those is
-      # the gate going blind again by a different route.
-      #
-      # Skipped on a capture, and that is not squeamishness about a red step:
-      # a capture is about to REWRITE this file, so proving properties of the
-      # outgoing one rules on nothing — and on the bootstrap capture (the one
-      # that creates the file in the first place, i.e. exactly the dispatch this
-      # card needed) there is no file to read at all, so an ungated step would
-      # fail the run before it could ever produce the baseline. Gated on
-      # steps.mode — the workflow's single source of truth for capture-vs-judge
-      # — rather than on a second copy of that expression.
-      - name: The gate must still be able to go RED
-        if: steps.mode.outputs.capture != 'true'
-        run: |
-          python scripts/memory-bench/prove_gate_can_go_red.py \
-            scripts/memory-bench/baseline_retrieval_branch.json branch
-
       - name: Does this change touch memory?
         id: scope
         run: |
@@ -309,6 +275,95 @@ jobs:
         run: |
           echo "This PR changes no memory-path file; the recall gate is a no-op." \
             | tee -a "$GITHUB_STEP_SUMMARY"
+
+      # "The gate produced a verdict" and "the gate can still produce the RED
+      # verdict" are different claims, and only the second is the one that was
+      # broken while baseline_retrieval_branch.json did not exist (#f70347b5).
+      #
+      # Committing that file fixes today's symptom; nothing else would keep the
+      # property. A tolerance widened past every category's headroom, or a
+      # baseline re-snapped from a degraded run, both leave a required check
+      # that is green because it can no longer be anything else — which reads
+      # exactly like the blind state this card was filed about, minus the
+      # `no-baseline` line that made that one noticeable.
+      #
+      # Drives the pure decision functions against the committed baseline:
+      # identity must be OK, a drop past tolerance must name the category, and
+      # a drop INSIDE tolerance must stay OK — that last arm is what stops
+      # "REGRESSION" from merely meaning "differs from baseline at all".
+      #
+      # WHO CAN CLEAR IT decides whether it blocks — the rule this file states
+      # twice (`cf. #342`, and the gate step's own "a red nobody can clear gets
+      # bypassed"). The script's exit codes already carry that distinction, so
+      # they are routed rather than collapsed into a bare non-zero:
+      #
+      #   rc=1  an arm did not behave — the decision logic lost its ability to
+      #         go red. Only a memory-path change can do that, so it is the
+      #         author's to fix: BLOCKS.
+      #   rc=2  the committed baseline is missing / arm-mismatched / has no
+      #         sample_sizes. No PR author can fix that, so it must not fail
+      #         their check. INCONCLUSIVE on a pull_request, and red on
+      #         push/schedule/dispatch, where there is no PR author to punish
+      #         and a red main build is how the repo hears about it.
+      #
+      # My first draft of this step exited non-zero on both, and sat BEFORE the
+      # scope gate — so a docs-only PR touching no memory path would have gone
+      # red on a missing baseline the author had never heard of. That is the
+      # bypass this file already warns about, and it would have re-armed total
+      # blindness by consent. Now gated on scope as well: on non-PR events the
+      # scope step sets relevant=true unconditionally, so main and the schedule
+      # still evaluate this on every run — coverage is unchanged, only the
+      # blast radius is.
+      #
+      # Skipped on a capture, and that is not squeamishness about a red step:
+      # a capture is about to REWRITE this file, so proving properties of the
+      # outgoing one rules on nothing — and on the bootstrap capture (the one
+      # that creates the file in the first place, i.e. exactly the dispatch this
+      # card needed) there is no file to read at all, so an ungated step would
+      # fail the run before it could ever produce the baseline. Gated on
+      # steps.mode — the workflow's single source of truth for capture-vs-judge
+      # — rather than on a second copy of that expression.
+      - name: The gate must still be able to go RED
+        id: redproof
+        if: >-
+          steps.scope.outputs.relevant == 'true'
+          && steps.mode.outputs.capture != 'true'
+        run: |
+          set +e
+          python scripts/memory-bench/prove_gate_can_go_red.py \
+            scripts/memory-bench/baseline_retrieval_branch.json branch 2>&1 \
+            | tee redproof.log
+          rc=${PIPESTATUS[0]}
+          set -e
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+
+          {
+            echo "## Can the recall gate still go RED?"
+            echo
+            case "$rc" in
+              0) echo "✅ All three arms behaved: identity PASSes, a drop past tolerance"
+                 echo "names the category, a drop inside tolerance stays PASS." ;;
+              1) echo "❌ **An arm did not behave** — the gate can no longer produce the"
+                 echo "verdict it exists to produce. A green \`Memory recall gate\` on this"
+                 echo "PR would mean nothing. This blocks the merge." ;;
+              2) echo "### ⚠️ INCONCLUSIVE — could not prove the gate can go red"
+                 echo
+                 echo "The committed \`baseline_retrieval_branch.json\` is missing, records a"
+                 echo "different arm, or carries no \`sample_sizes\`. **Nothing here is the PR"
+                 echo "author's to fix, so this does not fail the check** (cf. \`#342\`) — but"
+                 echo "until it clears, the required gate cannot rule on this baseline." ;;
+              *) echo "❌ Red-proof exited $rc." ;;
+            esac
+            echo
+            echo '```'
+            tail -40 redproof.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$rc" = "2" ] && [ "${{ github.event_name }}" = "pull_request" ]; then
+            exit 0
+          fi
+          exit $rc
 
       - name: Set up Go
         if: steps.scope.outputs.relevant == 'true'
