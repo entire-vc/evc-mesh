@@ -372,6 +372,16 @@ class TestBlindnessEpisodesAreNamespacedPerArm(unittest.TestCase):
         unnoticed. The prod alert used to claim the former, which stopped being
         true when #394 made it advisory."""
         calls = _blindness_calls()
+        for job in ("recall-gate-branch", "recall-gate"):
+            # A KeyError here would be an ERROR, not a FAILURE, and an errored test
+            # reads as "the suite is broken" rather than "the workflow is wrong" —
+            # the wrong signal for a missing alert, which is the defect itself.
+            self.assertIn(
+                job, calls,
+                f"job {job!r} has no alert wired to {BLINDNESS_ACTION_REL}, so it has "
+                f"no stakes to state — see "
+                f"TestEveryInconclusiveArmCanPage for what that costs.",
+            )
         branch = _scalar(calls["recall-gate-branch"]["alert"]["step"], "stakes") or ""
         prod = _scalar(calls["recall-gate"]["alert"]["step"], "stakes") or ""
         self.assertIn("merge", branch.lower(), f"branch-arm stakes: {branch!r}")
