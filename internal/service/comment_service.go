@@ -74,6 +74,35 @@ var triageExitNegators = []string{
 	"разблок", "уже ответил", "ответил в коммент",
 }
 
+// hasNegatorInScope reports whether body carries a triageExitNegators substring,
+// scoped to text at-or-after the comment's OWN blocking marker (the LAST one, if
+// several) — never text that only precedes it.
+//
+// Fixed 2026-07-30 (task #c375905c, live incident on #7f646f08, found by Riker):
+// a whole-body strings.Contains search let a comment self-negate its OWN marker
+// via unrelated prose. Riker's comment raised a fresh "❓ Blocking @pavel" as its
+// final line, but earlier paragraphs discussed a DIFFERENT, already-resolved ask
+// using the word "снят" — a whole-body scan found that substring and treated the
+// brand-new marker as pre-cancelled, silently handing ownership of the live ask
+// to whoever's marker preceded it. A marker is conventionally the operative ask
+// of a comment; analysis before it is context, not itself the thing negated —
+// so only text from the marker onward is searched. A comment with no marker at
+// all (the ordinary shape of a real withdrawal — a separate later comment with
+// nothing else in it) has no scope to restrict, so the whole body is used.
+func hasNegatorInScope(body string) bool {
+	scope := body
+	if matches := blockingMarkerRegex.FindAllStringIndex(body, -1); len(matches) > 0 {
+		scope = body[matches[len(matches)-1][0]:]
+	}
+	lower := strings.ToLower(scope)
+	for _, n := range triageExitNegators {
+		if strings.Contains(lower, n) {
+			return true
+		}
+	}
+	return false
+}
+
 // extractMentionSlugs returns unique lowercase slugs found in body, preserving order.
 func extractMentionSlugs(body string) []string {
 	matches := mentionRegex.FindAllStringSubmatch(body, -1)
@@ -873,15 +902,7 @@ func (s *commentService) releaseHumanGateOnWithdrawal(ctx context.Context, comme
 	if comment.AuthorType != domain.ActorTypeAgent {
 		return
 	}
-	lower := strings.ToLower(comment.Body)
-	hasNegator := false
-	for _, n := range triageExitNegators {
-		if strings.Contains(lower, n) {
-			hasNegator = true
-			break
-		}
-	}
-	if !hasNegator {
+	if !hasNegatorInScope(comment.Body) {
 		return
 	}
 
@@ -910,15 +931,7 @@ func (s *commentService) releaseHumanGateOnWithdrawal(ctx context.Context, comme
 			if !hasBlockingMarker(c.Body) {
 				continue
 			}
-			cLower := strings.ToLower(c.Body)
-			negated := false
-			for _, n := range triageExitNegators {
-				if strings.Contains(cLower, n) {
-					negated = true
-					break
-				}
-			}
-			if negated {
+			if hasNegatorInScope(c.Body) {
 				continue // already-negated marker isn't the live ask
 			}
 			markerAuthorID = c.AuthorID
@@ -1063,16 +1076,11 @@ func (s *commentService) enforceTriageExit(ctx context.Context, comment *domain.
 			if !hasBlockingMarker(c.Body) {
 				continue
 			}
-			// A blocking mention that contains a negator is a cancellation, not a live gate.
-			lower := strings.ToLower(c.Body)
-			negated := false
-			for _, n := range triageExitNegators {
-				if strings.Contains(lower, n) {
-					negated = true
-					break
-				}
-			}
-			if negated {
+			// A blocking mention that contains a negator is a cancellation, not a live
+			// gate — scoped to text at-or-after the marker (hasNegatorInScope), not the
+			// whole body: see #c375905c, the same self-negation-by-unrelated-prose
+			// defect this function shares with releaseHumanGateOnWithdrawal above.
+			if hasNegatorInScope(c.Body) {
 				continue
 			}
 			foundRealBlock = true
