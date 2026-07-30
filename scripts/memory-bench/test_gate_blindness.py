@@ -232,6 +232,37 @@ def _blindness_calls() -> dict[str, dict[str, dict]]:
     return found
 
 
+def _both_halves(test: unittest.TestCase, job_id: str, halves: dict) -> tuple[dict, dict]:
+    """Assert this caller has an alert AND a resolve, then hand both back.
+
+    Exists so that a caller with one half produces a FAILURE naming the missing
+    half, instead of a `KeyError` from `halves["resolve"]` in whichever test
+    happened to index it first. That distinction is load-bearing rather than
+    cosmetic, and this file says so elsewhere in its own words: an errored test
+    reads as "the suite is broken", a failed one reads as "the workflow is wrong",
+    and for a MISSING ALERT the first reading sends the reader to the wrong file.
+
+    Measured before this helper existed: deleting the cancellation watchdog's
+    `uses:` line — leaving its resolve behind, which is exactly what a careless
+    edit does — turned 13 tests across 5 classes into ERRORs and buried the one
+    clean failure that named the cause.
+
+    A single-mode caller is never legitimate. An alert with no resolve leaves every
+    episode open, and an open episode mutes its own re-alerts through the dedup
+    key; a resolve with no alert closes episodes nothing can raise.
+    """
+    missing = {"alert", "resolve"} - set(halves)
+    test.assertFalse(
+        missing,
+        f"job {job_id!r} routes through {BLINDNESS_ACTION_REL} with only "
+        f"{sorted(halves)} — {sorted(missing)} is missing. An alert with no resolve "
+        f"leaves the episode open for ever and the dedup key then MUTES its own "
+        f"re-alerts (measured: #411 muted a real `defect` cancellation two days "
+        f"after it opened); a resolve with no alert clears episodes nothing raises.",
+    )
+    return halves["alert"], halves["resolve"]
+
+
 def _arms_that_can_go_inconclusive() -> set[str]:
     """Jobs with a step that publishes a `reason_kind` — i.e. that can report an
     INCONCLUSIVE cause at all.
@@ -288,24 +319,50 @@ class TestEveryInconclusiveArmCanPage(unittest.TestCase):
         (the dedup window, the push-scoping, the kind-scoping — see the action's
         header). A new inline `gh issue create` next to a marker is a new place for
         all three to come back, so it is a red here rather than a review comment.
+
+        NO EXEMPTIONS. `prod-arm-cancelled` held the last one, on the stated ground
+        that it had no resolve half and so could not be folded in without first
+        deciding what recovery meant. #5e38c799 decided (the arm reaching a
+        conclusion, not producing a verdict) and wired both halves, so the
+        exemption is deleted rather than left as a narrow `continue`. It has to be
+        deleted: an exemption keyed on a job NAME goes on excusing that job after
+        the reason for it is gone, and the next inline copy someone adds to it is
+        then invisible to this test.
         """
         for job_id, job_yaml in _job_blocks().items():
             with self.subTest(job=job_id):
-                if job_id == "prod-arm-cancelled":
-                    # The ONE remaining inline copy, and the exemption is narrow and
-                    # named rather than "not a blindness alert". It IS the same shell.
-                    # It is not folded in because it has no resolve half and "the
-                    # canary stopped being cancelled" does not self-clear, so giving
-                    # it one is a design decision, not a refactor. What matters is
-                    # that being exempt from the FACTORING does not make it exempt
-                    # from the guard — see
-                    # `test_no_copy_of_the_dedup_window_regressed_to_last_comment`.
-                    continue
                 self.assertNotIn(
                     "gh issue create", job_yaml,
                     f"job {job_id!r} opens a tracking issue inline instead of via "
                     f"{BLINDNESS_ACTION_REL}. Route it through the action.",
                 )
+
+    def test_the_cancellation_watchdog_is_one_of_the_callers(self):
+        """Anchor for the test above, in the shape `test_the_required_arm_is_one_of_them`
+        already uses for the other population.
+
+        Without it, deleting the watchdog's `uses:` line turns the assertion above
+        green — the job would keep no inline copy because it would raise no alert at
+        all. That is the failure this whole file exists to catch, and it reads
+        identically to success.
+        """
+        calls = _blindness_calls()
+        self.assertIn(
+            "prod-arm-cancelled", calls,
+            "the cancellation watchdog no longer routes through "
+            f"{BLINDNESS_ACTION_REL}. Either it went back to an inline copy of the "
+            "shell, or it stopped alerting altogether.",
+        )
+        self.assertEqual(
+            {"alert", "resolve"}, set(calls["prod-arm-cancelled"]),
+            "the cancellation watchdog has "
+            f"{sorted(calls['prod-arm-cancelled'])} and needs both. It shipped for "
+            "two days with an alert and no resolve: #411 stayed open from "
+            "2026-07-28 onward and MUTED a real `defect` cancellation on "
+            "2026-07-30 (run 30519997368 logged `already reports this — not "
+            "commenting again`, and the issue carried 0 comments for its whole "
+            "life).",
+        )
 
     def test_no_copy_of_the_dedup_window_regressed_to_last_comment(self):
         """The #397 bug, pinned across EVERY copy that still exists anywhere.
@@ -364,8 +421,9 @@ class TestBlindnessEpisodesAreNamespacedPerArm(unittest.TestCase):
     def test_each_arm_alerts_and_resolves_on_the_same_title(self):
         for job_id, halves in sorted(_blindness_calls().items()):
             with self.subTest(job=job_id):
+                alert, resolve = _both_halves(self, job_id, halves)
                 self.assertEqual(
-                    halves["alert"]["title"], halves["resolve"]["title"],
+                    alert["title"], resolve["title"],
                     f"job {job_id!r} raises its episode under one title and clears it "
                     f"under another, so every episode it opens stays open for ever — "
                     f"and a permanently open episode mutes its own re-alerts via the "
@@ -375,7 +433,7 @@ class TestBlindnessEpisodesAreNamespacedPerArm(unittest.TestCase):
     def test_no_two_arms_share_a_title(self):
         seen: dict[str, str] = {}
         for job_id, halves in sorted(_blindness_calls().items()):
-            title = halves["alert"]["title"]
+            title = _both_halves(self, job_id, halves)[0]["title"]
             self.assertNotIn(
                 title, seen,
                 f"jobs {seen.get(title)!r} and {job_id!r} both track blindness under "
@@ -388,7 +446,7 @@ class TestBlindnessEpisodesAreNamespacedPerArm(unittest.TestCase):
     def test_no_two_arms_share_a_marker_slug(self):
         seen: dict[str, str] = {}
         for job_id, halves in sorted(_blindness_calls().items()):
-            slug = halves["alert"]["marker-slug"]
+            slug = _both_halves(self, job_id, halves)[0]["marker-slug"]
             self.assertTrue(
                 slug, f"job {job_id!r} alerts with an empty marker-slug, so its storm "
                       f"guard keys on `<!--  kind=... -->` and collides with any other "
@@ -1469,9 +1527,13 @@ class _AlertHarness(unittest.TestCase):
         every test below the moment it is wired up. #394 added the third arm and
         the suite did not notice, which is the whole reason this card exists.
         """
+        calls = _blindness_calls()
+        for job_id, halves in sorted(calls.items()):
+            # Loud here rather than a KeyError three frames down in run_script.
+            _both_halves(self, job_id, halves)
         return {
             job: {"title": h["alert"]["title"], "marker-slug": h["alert"]["marker-slug"]}
-            for job, h in _blindness_calls().items()
+            for job, h in calls.items()
         }
 
     def marker(self, arm: dict, kind: str) -> str:
@@ -1864,8 +1926,9 @@ class TestBlindnessAlertAndResolveAgreeOnEvents(unittest.TestCase):
         self.assertGreaterEqual(len(pairs), 3, f"expected all three arms, got {list(pairs)}")
         for job_id, halves in sorted(pairs.items()):
             with self.subTest(job=job_id):
-                alert = _event_clauses(halves["alert"]["if"])
-                resolve = _event_clauses(halves["resolve"]["if"])
+                a, r = _both_halves(self, job_id, halves)
+                alert = _event_clauses(a["if"])
+                resolve = _event_clauses(r["if"])
                 self.assertEqual(
                     alert, resolve,
                     f"job {job_id!r}: its blindness alert and its resolve disagree about "
@@ -1962,6 +2025,223 @@ class TestBlindnessAlertAndResolveAgreeOnEvents(unittest.TestCase):
             alert, resolve,
             "The advisory arm's alert and resolve disagree about which events they "
             f"act on.\n  alert   : {sorted(alert)}\n  resolve : {sorted(resolve)}",
+        )
+
+
+class TestTheCancellationAlertIsReArmable(_AlertHarness):
+    """AC4, driven end to end: an alert that cannot fire twice is not an alert.
+
+    The three assertions below are one episode's life cycle for the cancellation
+    watchdog's own identity, read off the shipped workflow: raise, be correctly
+    quiet while it is live, and — the half that did not exist until #5e38c799 —
+    RAISE AGAIN once it has been cleared.
+
+    The middle step is the one that shipped. It is correct on its own: a copy per
+    run buries the alert. It is only correct while something closes the issue, and
+    for two days nothing could. What that cost, measured on #411 rather than
+    argued: opened 2026-07-28T08:08:35Z, and on 2026-07-30 run 30519997368 logged
+    `Issue #411 already reports this — not commenting again.` for a fresh `defect`
+    cancellation. 0 comments across the issue's whole life.
+
+    State between the three calls is supplied rather than persisted — the stub `gh`
+    is one process per call, so what is being proven is the branch the script takes
+    for each state, not that GitHub transitions between them.
+    """
+
+    def arm(self) -> dict:
+        arms = self.arms()
+        self.assertIn(
+            "prod-arm-cancelled", arms,
+            f"the cancellation watchdog is not among the action's callers: {sorted(arms)}",
+        )
+        return arms["prod-arm-cancelled"]
+
+    def test_1_it_raises_when_no_episode_is_open(self):
+        arm = self.arm()
+        out, calls = self.run_script(
+            arm=arm, kind="defect", body="", comments=[], open_title="nothing is open",
+        )
+        self.assertIn("Opened tracking issue", out, out)
+        self.assertIn("create", calls, calls)
+
+    def test_2_it_stays_quiet_while_that_episode_is_live(self):
+        arm = self.arm()
+        out, calls = self.run_script(
+            arm=arm, kind="defect", comments=[],
+            body=f"{self.marker(arm, 'defect')}\n\nOpened by the watchdog.",
+        )
+        self.assertIn("already reports", out, out)
+        self.assertFalse([c for c in calls if c.startswith("comment:")], calls)
+
+    def test_3_and_raises_again_once_the_episode_is_cleared(self):
+        """The property the missing resolve half made unreachable. Same arm, same
+        kind as step 2 — the only thing that changed is that the episode is closed."""
+        arm = self.arm()
+        out, calls = self.run_script(
+            arm=arm, kind="defect", body="", comments=[], open_title="nothing is open",
+        )
+        self.assertIn(
+            "Opened tracking issue", out,
+            "with no episode open, a second cancellation of the same kind must open a "
+            "new one. If this is quiet, the alert fires once per repository lifetime.\n"
+            f"{out}",
+        )
+        self.assertIn("create", calls, calls)
+
+    def test_4_a_second_pageable_kind_speaks_during_a_live_episode(self):
+        """The marker is kind-scoped as of #5e38c799, so `contended` (a foreign ref
+        took the concurrency slot) is still reported while a `defect` episode is
+        open. Under the bare marker the first of the two silenced the other for the
+        whole episode, and they have different fixes."""
+        arm = self.arm()
+        out, calls = self.run_script(
+            arm=arm, kind="contended", comments=[],
+            body=f"{self.marker(arm, 'defect')}\n\nOpened by the watchdog.",
+        )
+        self.assertIn("Commented on tracking issue", out, out)
+        posted = [c for c in calls if c.startswith("comment:")]
+        self.assertEqual(1, len(posted), calls)
+        self.assertIn(self.marker(arm, "contended"), posted[0])
+
+    def test_5_the_resolve_closes_that_arms_own_episode(self):
+        arm = self.arm()
+        out, calls = self.run_script(
+            arm=arm, mode="resolve", body="", comments=[], open_title=arm["title"],
+        )
+        self.assertIn("Closed episode", out, out)
+        self.assertTrue([c for c in calls if c.startswith("close:")], calls)
+
+
+class TestTheCancellationEpisodeClearsOnEvidence(unittest.TestCase):
+    """#5e38c799. The watchdog's recovery condition, pinned in both directions.
+
+    This arm is scoped by JOB RESULTS, not by events — which is why
+    `TestBlindnessAlertAndResolveAgreeOnEvents` passes on it with two empty sets
+    and proves nothing about it. Both halves live in one job, so they share that
+    job's `if:` and cannot disagree about events by construction. What they CAN
+    disagree about is which job results count, and that is what is checked here.
+
+    The failure direction that matters is the tidy one. `success || failure` is
+    three words longer than `!= 'cancelled'` and the short form is wrong: the
+    canary reports `skipped` on every pull_request, so the negation would close a
+    prod episode from a PR run that never touched prod — losing the alarm, from a
+    change that looks like cleanup.
+    """
+
+    RESOLVE = "Resolve — the prod canary is running again, not being cancelled"
+    ALERT = "Alert — the prod canary was killed, not superseded"
+    JOB = "prod-arm-cancelled"
+
+    def _job_if(self) -> str:
+        block = _job_blocks()[self.JOB]
+        m = re.search(r"^    if: *(>-|>|\|-|\|)?[ \t]*(.*)$", block, re.M)
+        assert m, f"job {self.JOB!r} has no job-level `if:`"
+        if not m.group(1):
+            return " ".join(m.group(2).split())
+        parts = []
+        for ln in block[m.end():].splitlines()[1:]:
+            if not ln.strip() or not ln.startswith("      "):
+                break
+            parts.append(ln.strip())
+        return " ".join(" ".join(parts).split())
+
+    def test_the_resolve_names_the_results_it_serves(self):
+        expr = _step_if(self.RESOLVE)
+        for want in (
+            "needs.recall-gate.result == 'success'",
+            "needs.recall-gate.result == 'failure'",
+        ):
+            self.assertIn(
+                want, expr,
+                f"the resolve no longer requires {want!r}. It must clear the episode "
+                f"only on a run where the canary REACHED A CONCLUSION.\n  if: {expr}",
+            )
+
+    def test_the_resolve_is_not_a_negation_of_cancelled(self):
+        """The whole point of the allow-list form, and the one edit most likely to
+        undo it while reading as a simplification."""
+        expr = _step_if(self.RESOLVE)
+        self.assertNotIn(
+            "!= 'cancelled'", expr,
+            "the resolve now clears on anything that is not `cancelled`, which "
+            "includes `skipped` — the canary's result on every pull_request. A PR "
+            "run that never measured prod would close a live prod episode. Name the "
+            f"results that are evidence.\n  if: {expr}",
+        )
+
+    def test_a_classifier_that_died_blocks_the_resolve(self):
+        """`must_page` is read from the classifier's `$GITHUB_OUTPUT`. A classifier
+        that died before writing it leaves the EMPTY STRING, and `!= 'true'` is true
+        for the empty string — so without this clause a run whose cancellation was
+        never classified would CLEAR the episode. "Could not tell" must not read as
+        "nothing to page"."""
+        self.assertIn(
+            "steps.classify.outcome != 'failure'", _step_if(self.RESOLVE),
+            "the resolve no longer checks that the classifier survived, so an "
+            "unclassified cancellation closes the episode via an empty `must_page`.",
+        )
+
+    def test_a_live_pageable_cancellation_blocks_the_resolve(self):
+        """Both halves can be reached in one run: the advisory arm cancelled
+        pageably while the canary succeeded. Without this clause the episode would
+        be opened and closed by the same run, and the close would win."""
+        self.assertIn(
+            "steps.classify.outputs.must_page != 'true'", _step_if(self.RESOLVE),
+            "the resolve can now fire in the same run as the alert, so a run that "
+            "pages for a cancelled advisory arm would immediately clear the episode "
+            "it just opened.",
+        )
+
+    def test_the_job_can_actually_start_on_a_recovery_run(self):
+        """The resolve is only as real as the job's own `if:`.
+
+        Until #5e38c799 this job ran ONLY when an arm was cancelled, so a resolve
+        step added to it could never have executed — a resolve that cannot run is
+        the same blindness wearing a green check, which is what
+        `test_and_recovery_on_the_right_arm_does_close_it` says about the harness
+        and this says about the wiring.
+        """
+        expr = self._job_if()
+        for want in (
+            "needs.recall-gate.result == 'success'",
+            "needs.recall-gate.result == 'failure'",
+        ):
+            self.assertIn(
+                want, expr,
+                f"job {self.JOB!r} cannot start on a healthy run ({want!r} is not in "
+                f"its `if:`), so its resolve step can never execute and every episode "
+                f"it opens stays open — muting its own re-alerts via the dedup key, "
+                f"which is the defect #5e38c799 fixed.\n  if: {expr}",
+            )
+
+    def test_the_classifier_does_not_run_on_a_recovery_run(self):
+        """A verdict nothing produced is worse than no verdict: `must_page` would be
+        the empty string, every `!= 'true'` guard would read true, and the quiet
+        branch would announce a classification for a run with nothing to classify.
+        """
+        expr = _step_if("Classify the cancellation")
+        self.assertIn("needs.recall-gate.result == 'cancelled'", expr, expr)
+        self.assertIn("needs.memory-bench.result == 'cancelled'", expr, expr)
+
+    def test_the_marker_is_kind_scoped_now_that_no_issue_is_open_under_it(self):
+        """The bare `<!-- prod-arm-cancelled -->` let the first pageable verdict of
+        an episode silence the other. `defect` (sibling eviction or timeout) and
+        `contended` (a foreign ref took the slot) are different faults with
+        different fixes.
+
+        The migration hazard is real but one-shot: a marker shape change orphans the
+        comments already on an OPEN issue. #411 was closed on its recovery evidence
+        before this landed, which is the same precondition #064eabca recorded when it
+        renamed the prod canary's title.
+        """
+        halves = _blindness_calls().get(self.JOB, {})
+        step = _both_halves(self, self.JOB, halves)[0]["step"]
+        kind = _scalar(step, "reason-kind") or ""
+        self.assertIn(
+            "verdict", kind,
+            "the cancellation alert no longer scopes its marker by the classifier's "
+            f"verdict, so one pageable verdict mutes the other for a whole episode. "
+            f"reason-kind: {kind!r}",
         )
 
 

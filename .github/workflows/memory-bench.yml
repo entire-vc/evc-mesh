@@ -1997,10 +1997,24 @@ jobs:
     # `always()` is load-bearing and not boilerplate: a job whose dependency was
     # CANCELLED is skipped by default, which would make this watchdog absent from
     # precisely the runs it exists for. `!cancelled()` would do the same thing.
+    #
+    # THE LAST TWO CLAUSES ARE THE RECOVERY CASE, and this job now runs on healthy
+    # runs too. Until #5e38c799 it ran only when something was cancelled, which is
+    # why it had no resolve half: there was no run on which one could have fired.
+    # The cost of that was not theoretical — see the resolve step below for the
+    # measured 2-day mute.
+    #
+    # Spelled as an allow-list of the results that are EVIDENCE, not as
+    # `!= 'cancelled'`. A negation would adopt `skipped`, and `skipped` is what the
+    # canary reports on every pull_request — so the tidier form would close a prod
+    # episode from a PR run that never touched prod. Same rule as the quiet branch
+    # below, and the same rule #406's guard was rewritten under.
     if: >-
       always() &&
       (needs.recall-gate.result == 'cancelled' ||
-       needs.memory-bench.result == 'cancelled')
+       needs.memory-bench.result == 'cancelled' ||
+       needs.recall-gate.result == 'success' ||
+       needs.recall-gate.result == 'failure')
     runs-on: ubuntu-latest
     # 8, not 5, because the classifier now waits for the run list to settle
     # before believing "nothing newer was there" (up to a 150s internal
@@ -2094,8 +2108,16 @@ jobs:
       # incident. `test_classify_cancelled_arm.py` replays the three recorded
       # deaths through it on every PR, which is how the first draft's missing
       # time-bound was caught before it shipped instead of after.
+      # Gated, because the job now also runs on healthy runs to clear episodes.
+      # There is nothing to classify when nothing was cancelled, and a classifier
+      # handed a run with no cancelled arm would have to invent a verdict for it.
+      # Naming the case it SERVES keeps the recovery path from silently acquiring
+      # a `verdict`/`must_page` pair that no cancellation produced.
       - name: Classify the cancellation
         id: classify
+        if: >-
+          needs.recall-gate.result == 'cancelled' ||
+          needs.memory-bench.result == 'cancelled'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -2155,7 +2177,15 @@ jobs:
         # has a third pageable verdict (`contended`), and a negation guard would
         # have adopted it into the quiet branch silently — the guard must name
         # what it serves, not what it excludes.
-        if: steps.classify.outputs.must_page != 'true'
+        #
+        # `steps.classify.outcome == 'success'` is the second half of that same
+        # rule, added with the recovery path: on a healthy run the classifier is
+        # skipped, so `must_page` is the EMPTY STRING and `!= 'true'` is true. This
+        # step would then announce "classified as ''" on every green run — a notice
+        # that reports a verdict nothing produced.
+        if: >-
+          steps.classify.outcome == 'success'
+          && steps.classify.outputs.must_page != 'true'
         # Through `env:`, not `${{ }}` inside the script — the same convention the
         # alert steps above already follow. These values are assembled from job
         # names and API timestamps, but a `run:` block that interpolates an output
@@ -2166,63 +2196,56 @@ jobs:
         run: |
           echo "::notice::Prod arm cancellation classified as '${VERDICT}': ${REASON}"
 
+      # ROUTED THROUGH THE SHARED ACTION as of #5e38c799. It was the fourth and
+      # last inline copy of this shell, exempt from #064eabca's factoring because
+      # it had no resolve half and "the canary stopped being cancelled" is not a
+      # state that self-clears. It has one now — see the resolve step below — so
+      # the exemption is gone, and with it the narrow `continue` that let this job
+      # skip `test_no_arm_keeps_an_inline_copy_of_the_alert_shell`.
+      #
+      # THE MARKER IS NOW KIND-SCOPED (`<!-- prod-arm-cancelled kind=defect -->`,
+      # was a bare `<!-- prod-arm-cancelled -->`). Two things had to be true first,
+      # and both were checked rather than assumed:
+      #
+      #   * No issue may be open under this title when the shape changes, or the
+      #     first fire afterwards fails to match what is already there and posts a
+      #     duplicate. #411 was open — opened 2026-07-28T08:08:35Z — and is now
+      #     closed on its real recovery evidence (below).
+      #   * The kinds must actually distinguish something. `verdict` is one of
+      #     `defect` / `contended`, both pageable and different faults: `contended`
+      #     is a foreign ref taking the concurrency slot, `defect` is a sibling or
+      #     an outright timeout. Under the bare marker the first of the two to fire
+      #     silenced the other for the whole episode.
       - name: Alert — the prod canary was killed, not superseded
         if: steps.classify.outputs.must_page == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TITLE: 'Memory recall canary (prod) is being cancelled, not run'
-          REASON: ${{ steps.classify.outputs.reason }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          set -euo pipefail
-          marker="<!-- prod-arm-cancelled -->"
-          body=$(printf '%s\n\n%s\n\n%s\n\n%s\n' \
-            "$marker" \
-            "A prod arm of the memory benchmark ended \`cancelled\` for a reason that is **not** a newer run superseding it. While this holds, the post-deploy recall canary produces no verdict at all — and it does so silently, because \`cancelled\` reads as an infra hiccup." \
-            "**Reason:** ${REASON}" \
-            "Run: ${RUN_URL}")
-
-          num=$(gh issue list --state open --search "\"${TITLE}\" in:title" \
-                  --json number,title \
-                  --jq "[.[] | select(.title == \"${TITLE}\")] | .[0].number // empty")
-
-          if [ -z "$num" ]; then
-            gh issue create --title "$TITLE" --body "$body" --label memory,ci 2>/dev/null \
-              || gh issue create --title "$TITLE" --body "$body"
-            echo "Opened tracking issue."
-          else
-            # Same storm guard as the blindness alerts: one live report, not one
-            # per run. A poisoned dedup key turns an alert into spam, and spam is
-            # ignored, which is the same as having no alert at all.
-            #
-            # That claim used to be FALSE here. This read
-            # `(.comments | last | .body) // .body` — the pre-#397 window, i.e. the
-            # newest comment only — while the two blindness alerts were fixed to
-            # scan the whole issue. The family fix stopped at the callers it
-            # started from, which is the failure shape the whole
-            # `.github/actions/blindness-issue` factoring exists to end, so leaving
-            # a fourth copy still carrying the bug would have made that factoring
-            # a half-truth. Under the old window, ACKNOWLEDGING this alert was the
-            # act that re-armed it: any non-alert comment displaced the marker from
-            # the last position and the next cancellation posted the identical
-            # body again. #411 is open under this title right now, so the marker is
-            # deliberately UNCHANGED (`<!-- prod-arm-cancelled -->`, no `kind=`) —
-            # a new marker shape would not match the comments already on it and the
-            # first fire after this change would duplicate.
-            #
-            # Not routed through the shared action yet: this job has no resolve
-            # half, and "the canary stopped being cancelled" is not a state that
-            # self-clears, so giving it one is a design decision rather than a
-            # refactor. Tracked separately.
-            last=$(gh issue view "$num" --json comments,body \
-                     --jq '([.body] + ((.comments // []) | map(.body))) | map(. // "") | join("\n")')
-            if printf '%s' "$last" | grep -qF "$marker"; then
-              echo "Issue #$num already reports this — not commenting again."
-            else
-              gh issue comment "$num" --body "$body"
-              echo "Commented on tracking issue #$num."
-            fi
-          fi
+        uses: ./.github/actions/blindness-issue
+        with:
+          mode: alert
+          title: 'Memory recall canary (prod) is being cancelled, not run'
+          marker-slug: prod-arm-cancelled
+          arm: 'The memory recall canary (prod)'
+          reason: ${{ steps.classify.outputs.reason }}
+          # The classifier's verdict, not a `reason_kind` — this job reports a
+          # cancellation cause, not an INCONCLUSIVE cause, so it is deliberately
+          # absent from `_arms_that_can_go_inconclusive()`.
+          reason-kind: ${{ steps.classify.outputs.verdict }}
+          # Overridden rather than derived: the action's `case` maps the recall
+          # gate's INCONCLUSIVE kinds, and `defect` matches none of them, so the
+          # default lede would say "could not produce a verdict" — true, but it
+          # describes blindness while this episode is about the arm never having
+          # RUN. Two failure modes with one sentence is how a reader learns to
+          # skim both.
+          lede: >-
+            A prod arm of the memory benchmark ended `cancelled` for a reason that
+            is **not** a newer run superseding it. It did not measure prod and then
+            fail to compare — it never ran.
+          stakes: >-
+            While this holds, the post-deploy recall canary produces no verdict at
+            all, and it does so quietly: `cancelled` is the conclusion everyone
+            reads as an infra hiccup. The run itself is still failed by the step
+            below, so this episode is a durable record rather than the only signal.
+          run-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
       # The red is the point. An alert on an issue nobody has open in a tab is a
       # filing cabinet; this makes the run itself carry the failure.
@@ -2233,3 +2256,96 @@ jobs:
         run: |
           echo "::error::${REASON}"
           exit 1
+
+      # ---------------------------------------------------------------------
+      # THE RESOLVE HALF. #5e38c799.
+      #
+      # WHAT RECOVERY MEANS HERE, and it is not the same answer the other three
+      # arms give. Their episodes are about being INCONCLUSIVE, so they clear on
+      # `rc == '0'` — a comparable verdict. This episode is about the arm never
+      # having RUN, so it clears on the arm REACHING A CONCLUSION, whatever that
+      # conclusion is. A canary that completes and scores a regression (`failure`)
+      # has proved it was not cancelled, which is the entire claim of this issue.
+      #
+      # Requiring a comparable verdict here instead would conflate two faults: a
+      # canary that runs but goes blind would leave the CANCELLATION episode open,
+      # and an open episode mutes its own re-alerts through the dedup key — which
+      # is the exact defect this step exists to fix, reintroduced via its own
+      # recovery condition. Blindness has its own episode, raised by the canary
+      # job's own alert pair; these two must not be able to hold each other open.
+      #
+      # WHY THIS WAS MISSING RATHER THAN FORGOTTEN: until now the job only ran when
+      # something was cancelled, so there was no run on which a resolve could
+      # execute. Hence the job-level `if:` above gained the two success/failure
+      # clauses; the resolve is not merely a step, it needed the job to be allowed
+      # to start.
+      #
+      # THE MEASURED COST OF ITS ABSENCE, on this exact issue and not by argument:
+      #   #411 opened 2026-07-28T08:08:35Z and never closed, because nothing could
+      #   close it. Two days later, run 30519997368 (push on main, 06:34Z) had its
+      #   canary cancelled, the classifier returned `verdict: defect / must_page:
+      #   true`, the alert step ran — and logged `Issue #411 already reports this —
+      #   not commenting again.` A genuine, separate cancellation two days after
+      #   the episode began produced no record. #411 carried 0 comments for its
+      #   whole life. The canary then recovered at 08:06:43Z (run 30525387007,
+      #   `success`) and #411 stayed open anyway, muting everything after it.
+      #   That 08:06 run is the evidence this step would have acted on, and it is
+      #   what #411 was finally closed against by hand.
+      #
+      # FAILURE DIRECTION, NAMED, because the honest part of this decision is what
+      # it gets wrong: the watchdog watches TWO arms (`recall-gate` and
+      # `memory-bench`) under ONE title, so an episode opened solely by an
+      # ADVISORY-arm cancellation can be closed by a healthy canary. That is a
+      # false close. It is the safe direction: the issue is then CLOSED, so the
+      # next advisory cancellation opens a NEW issue and pages again. The cost is a
+      # redundant open/close cycle; it cannot produce silence. The alternative —
+      # requiring both arms healthy — fails toward leaving the episode open, and an
+      # open episode is exactly what mutes re-alerts. Splitting the title per arm
+      # would remove the trade entirely and is the right follow-up; it is not done
+      # here because changing the title is what orphans an open episode, and one
+      # such migration (#411) is enough for one change.
+      #
+      # Likewise, intermittent cancellations now produce open/close churn instead
+      # of one permanently muted issue. That is loud, and for an alert whose whole
+      # purpose is not being silent, loud is the correct direction to fail in. If
+      # the churn ever becomes the complaint, it is a measurement of how often the
+      # arm is being cancelled, not a fault in the alert.
+      #
+      # `must_page != 'true'` and not `steps.classify.outcome == 'skipped'`: when
+      # the advisory arm was cancelled but only as an expected supersede, the
+      # classifier RAN and stayed quiet, and the canary's own conclusion is still
+      # valid recovery evidence. What must block the resolve is a live pageable
+      # cancellation, which is what `must_page` names.
+      # ---------------------------------------------------------------------
+      # `steps.classify.outcome != 'failure'` is fail-closed and the one clause here
+      # that guards a path nobody has reached yet. `must_page` is read from the
+      # classifier's `$GITHUB_OUTPUT`; if the classifier ever died before writing it
+      # — an uncaught exception rather than one of the failure modes it already
+      # handles, all of which fail toward `must_page=true` — the output would be the
+      # EMPTY STRING, `!= 'true'` would be true, and a run whose cancellation was
+      # never classified would clear the episode. "I could not tell" must not read
+      # as "nothing to page", which is the same rule the classifier applies to an
+      # unsettled run list. Added after an adversarial pass could not find a
+      # reachable path to it and could not rule one out either; the clause costs
+      # nothing and closes the class.
+      - name: Resolve — the prod canary is running again, not being cancelled
+        if: >-
+          steps.classify.outcome != 'failure'
+          && steps.classify.outputs.must_page != 'true'
+          && (needs.recall-gate.result == 'success' ||
+              needs.recall-gate.result == 'failure')
+        uses: ./.github/actions/blindness-issue
+        with:
+          mode: resolve
+          # Byte-identical to the alert's title above. It is the episode identity:
+          # the resolve finds what the alert opened by exact title, so a character
+          # of drift here leaves every episode open for ever — and a permanently
+          # open episode mutes its own re-alerts. Pinned by
+          # `test_each_arm_alerts_and_resolves_on_the_same_title`.
+          title: 'Memory recall canary (prod) is being cancelled, not run'
+          recovery-note: >-
+            The prod canary reached a conclusion instead of being cancelled, so it
+            is running again. Whether it also produced a comparable verdict is a
+            separate question with its own episode.
+          run-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
