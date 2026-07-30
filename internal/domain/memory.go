@@ -400,8 +400,17 @@ const (
 
 // RecallGraphResult is a single entry in the response of a multi-hop graph traversal.
 // CompositeScore = seed_score × Π(edge_weight along the chain from seed to this node).
+//
+// Key/Scope/Tags exist so the CALLER can verify a scope/tag filter for itself,
+// not just trust that the server applied one. Task #37e9344c found that a
+// graph-boosted row carrying no metadata at all is indistinguishable from a
+// row that legitimately passed a filter — the missing fields hid the fact
+// that filters weren't reaching this arm in the first place.
 type RecallGraphResult struct {
 	ID              uuid.UUID             `json:"id"`
+	Key             string                `json:"key"`
+	Scope           MemoryScope           `json:"scope"`
+	Tags            []string              `json:"tags"`
 	Content         string                `json:"content"`
 	ImportanceScore float32               `json:"importance_score"`
 	CompositeScore  float64               `json:"composite_score"`

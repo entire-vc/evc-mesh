@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -688,4 +689,80 @@ func TestRecallGraph_ForeignNeighborDropped(t *testing.T) {
 			"SECURITY: foreign workspace content leaked through BFS hop-expansion")
 	}
 	assert.Len(t, results, 1, "only the seed should survive")
+}
+
+// ---------------------------------------------------------------------------
+// 18. TestRecallGraph_ResultsCarryKeyScopeAndTags
+// ---------------------------------------------------------------------------
+
+// TestRecallGraph_ResultsCarryKeyScopeAndTags is the regression test for task
+// #37e9344c: RecallGraphResult carried no key/scope/tags at all, so a caller
+// receiving a graph-boosted row had no way to check for itself whether a
+// scope/tag filter it asked for was actually honoured — a row missing its
+// filter simply looked identical to a row that legitimately passed one. Both
+// hop 0 (seed, via:recall) and hop 1 (expanded, via:graph) must carry the
+// fields, since they come from two different construction sites in
+// RecallGraph.
+func TestRecallGraph_ResultsCarryKeyScopeAndTags(t *testing.T) {
+	clearRecallGraphCache()
+	opts := freshOpts("carries metadata")
+	seedID := uuid.New()
+	neighborID := uuid.New()
+
+	mem := &mockMemoryRepo{
+		fullTextSearchRankedFn: func(_ context.Context, _ uuid.UUID, _ *uuid.UUID, _ string, _ domain.MemorySearchFilter, _ int) ([]domain.ScoredMemory, error) {
+			return []domain.ScoredMemory{
+				{
+					Memory: domain.Memory{
+						ID:              seedID,
+						Key:             "seed-key",
+						Scope:           domain.ScopeWorkspace,
+						Tags:            pq.StringArray{"kind:decision", "owner:linus"},
+						Content:         "seed content",
+						ImportanceScore: 0.6,
+					},
+					Score: 0.9,
+				},
+			}, nil
+		},
+		getByIDFn: func(_ context.Context, id uuid.UUID) (*domain.Memory, error) {
+			if id != neighborID {
+				return nil, nil
+			}
+			return &domain.Memory{
+				ID:              neighborID,
+				WorkspaceID:     opts.WorkspaceID,
+				Key:             "neighbor-key",
+				Scope:           domain.ScopeProject,
+				Tags:            pq.StringArray{"kind:learning"},
+				Content:         "neighbor content",
+				ImportanceScore: 0.6,
+			}, nil
+		},
+	}
+	er := &testEdgeRepo{
+		getNeighborsFn: func(_ context.Context, _ []uuid.UUID, _ float64, _ int) ([]domain.MemoryEdge, error) {
+			return []domain.MemoryEdge{graphEdge(seedID, neighborID, 0.8)}, nil
+		},
+	}
+	svc := newGraphService(mem, er)
+
+	results, err := svc.RecallGraph(context.Background(), opts)
+	require.NoError(t, err)
+	require.Len(t, results, 2)
+
+	byID := map[uuid.UUID]domain.RecallGraphResult{}
+	for _, r := range results {
+		byID[r.ID] = r
+	}
+
+	seed := byID[seedID]
+	assert.Equal(t, "seed-key", seed.Key, "seed result must carry its key")
+	assert.Equal(t, domain.ScopeWorkspace, seed.Scope, "seed result must carry its scope")
+	assert.ElementsMatch(t, []string{"kind:decision", "owner:linus"}, seed.Tags, "seed result must carry its tags")
+
+	neighbor := byID[neighborID]
+	assert.Equal(t, "neighbor-key", neighbor.Key, "graph-expanded result must carry its key")
+	assert.Equal(t, domain.ScopeProject, neighbor.Scope, "graph-expanded result must carry its scope")
+	assert.ElementsMatch(t, []string{"kind:learning"}, neighbor.Tags, "graph-expanded result must carry its tags")
 }

@@ -1986,6 +1986,9 @@ func (s *memoryService) RecallGraph(ctx context.Context, opts domain.RecallGraph
 		nodes[sm.ID] = &nodeInfo{
 			result: domain.RecallGraphResult{
 				ID:              sm.ID,
+				Key:             sm.Key,
+				Scope:           sm.Scope,
+				Tags:            []string(sm.Tags),
 				Content:         sm.Content,
 				ImportanceScore: sm.ImportanceScore,
 				CompositeScore:  sm.Score,
@@ -2078,6 +2081,9 @@ func (s *memoryService) RecallGraph(ctx context.Context, opts domain.RecallGraph
 			nodes[neighborID] = &nodeInfo{
 				result: domain.RecallGraphResult{
 					ID:              mem.ID,
+					Key:             mem.Key,
+					Scope:           mem.Scope,
+					Tags:            []string(mem.Tags),
 					Content:         mem.Content,
 					ImportanceScore: mem.ImportanceScore,
 					CompositeScore:  newScore,
