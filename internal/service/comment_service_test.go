@@ -2,8 +2,10 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -755,4 +757,110 @@ func TestCommentService_ListRecentByWorkspace(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "connection timeout")
 	})
+}
+
+// --- comment.metadata validation (task #13e391d2) ---
+//
+// The acceptance criterion these encode: metadata is either stored as sent, or refused
+// with a reason. The one outcome that is not allowed is 200-and-discarded, which is what
+// shipped for months and left three consumers filtering on a field nobody could set.
+
+func TestValidateCommentMetadata(t *testing.T) {
+	tests := []struct {
+		name    string
+		raw     string
+		wantErr bool
+		errWant string
+	}{
+		{name: "absent is legal", raw: "", wantErr: false},
+		{name: "explicit null is legal", raw: `null`, wantErr: false},
+		{name: "object accepted", raw: `{"source":"pr-task-driver","auto":true}`, wantErr: false},
+		{name: "empty object accepted", raw: `{}`, wantErr: false},
+		{name: "nested object accepted", raw: `{"source":"x","ctx":{"pr":435}}`, wantErr: false},
+
+		// Refused shapes — each must name what was actually sent.
+		{name: "array refused", raw: `["source","x"]`, wantErr: true, errWant: "got array"},
+		{name: "string refused", raw: `"pr-task-driver"`, wantErr: true, errWant: "got string"},
+		{name: "number refused", raw: `42`, wantErr: true, errWant: "got number"},
+		{name: "bool refused", raw: `true`, wantErr: true, errWant: "got boolean"},
+		{name: "malformed refused", raw: `{"source":`, wantErr: true, errWant: "valid JSON object"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateCommentMetadata(json.RawMessage(tt.raw))
+			if !tt.wantErr {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err, "shape must be refused, not silently dropped")
+			// The reason must be legible to the CALLER, which reads the structured
+			// validation map off the JSON body — Error() only carries "[400] Validation
+			// failed", so asserting on it would pass for any rejection whatsoever and
+			// would not prove the caller is told what it sent wrong.
+			apiErr, ok := err.(*apierror.Error)
+			require.True(t, ok, "must be an apierror so the 4xx reaches the caller as 400")
+			assert.Equal(t, http.StatusBadRequest, apiErr.Code)
+			assert.Contains(t, apiErr.Validation["metadata"], tt.errWant)
+		})
+	}
+}
+
+func TestValidateCommentMetadata_SizeCap(t *testing.T) {
+	// A valid object that is simply too large is refused by size, not truncated —
+	// truncation would be the same silent-corruption failure in a new costume.
+	big := `{"pad":"` + strings.Repeat("x", maxCommentMetadataBytes) + `"}`
+	err := validateCommentMetadata(json.RawMessage(big))
+	require.Error(t, err)
+	apiErr, ok := err.(*apierror.Error)
+	require.True(t, ok)
+	assert.Equal(t, http.StatusBadRequest, apiErr.Code)
+	assert.Contains(t, apiErr.Validation["metadata"], "at most")
+
+	justUnder := `{"pad":"` + strings.Repeat("x", 100) + `"}`
+	require.NoError(t, validateCommentMetadata(json.RawMessage(justUnder)))
+}
+
+func TestCommentService_Create_PersistsMetadata(t *testing.T) {
+	svc, commentRepo, taskRepo := setupCommentService()
+
+	taskID := uuid.New()
+	taskRepo.items[taskID] = &domain.Task{ID: taskID, Title: "A task"}
+
+	c := &domain.Comment{
+		TaskID:     taskID,
+		AuthorID:   uuid.New(),
+		AuthorType: domain.ActorTypeAgent,
+		Body:       "🤖 Auto: nudge",
+		Metadata:   json.RawMessage(`{"source":"pr-task-driver","auto":true}`),
+	}
+
+	require.NoError(t, svc.Create(context.Background(), c))
+
+	stored := commentRepo.items[c.ID]
+	require.NotNil(t, stored)
+	var decoded map[string]any
+	require.NoError(t, json.Unmarshal(stored.Metadata, &decoded))
+	assert.Equal(t, "pr-task-driver", decoded["source"])
+	assert.Equal(t, true, decoded["auto"])
+}
+
+func TestCommentService_Create_RejectsNonObjectMetadata(t *testing.T) {
+	svc, commentRepo, taskRepo := setupCommentService()
+
+	taskID := uuid.New()
+	taskRepo.items[taskID] = &domain.Task{ID: taskID, Title: "A task"}
+
+	c := &domain.Comment{
+		TaskID:     taskID,
+		AuthorID:   uuid.New(),
+		AuthorType: domain.ActorTypeAgent,
+		Body:       "bad metadata",
+		Metadata:   json.RawMessage(`["not","an","object"]`),
+	}
+
+	err := svc.Create(context.Background(), c)
+	require.Error(t, err)
+	// And nothing was written — a refused comment must not land half-way.
+	assert.Empty(t, commentRepo.items)
 }
