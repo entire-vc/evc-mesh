@@ -164,26 +164,6 @@ func stripInlineCode(line string) string {
 	return out.String()
 }
 
-// hasWithdrawalNegator reports whether body ASSERTS that a block was cancelled, as
-// opposed to merely mentioning the vocabulary. It is the single entry point for the
-// triageExitNegators dictionary on the human_gate paths: the dictionary is matched
-// against stripQuotedSpans(body), never the raw body.
-//
-// Deliberately NOT done here: anchoring negators to line start, and introducing a
-// dedicated "🔓 Withdraw" marker. Anchoring would break real withdrawals, which are
-// mid-sentence prose ("Блокер снят, вопрос закрыт"); a new marker would ADD a trigger,
-// widening exactly the surface this change exists to narrow. The author-match guard is
-// untouched — a bystander still cannot silence someone else's ask.
-func hasWithdrawalNegator(body string) bool {
-	lower := strings.ToLower(stripQuotedSpans(body))
-	for _, n := range triageExitNegators {
-		if strings.Contains(lower, n) {
-			return true
-		}
-	}
-	return false
-}
-
 // autoMarkerSubstrings marks a comment as automation-generated (server or fiddler).
 // Such comments must NOT be treated as real "❓ Blocking @user" gates even if they
 // incidentally match the blocking marker regex.
@@ -211,6 +191,46 @@ var triageExitNegators = []string{
 	"снят", "снято",
 	"resolved", "async",
 	"разблок", "уже ответил", "ответил в коммент",
+}
+
+// hasNegatorInScope reports whether body carries a triageExitNegators substring,
+// scoped to text at-or-after the comment's OWN blocking marker (the LAST one, if
+// several) — never text that only precedes it.
+//
+// Fixed 2026-07-30 (task #c375905c, live incident on #7f646f08, found by Riker):
+// a whole-body strings.Contains search let a comment self-negate its OWN marker
+// via unrelated prose. Riker's comment raised a fresh "❓ Blocking @pavel" as its
+// final line, but earlier paragraphs discussed a DIFFERENT, already-resolved ask
+// using the word "снят" — a whole-body scan found that substring and treated the
+// brand-new marker as pre-cancelled, silently handing ownership of the live ask
+// to whoever's marker preceded it. A marker is conventionally the operative ask
+// of a comment; analysis before it is context, not itself the thing negated —
+// so only text from the marker onward is searched. A comment with no marker at
+// all (the ordinary shape of a real withdrawal — a separate later comment with
+// nothing else in it) has no scope to restrict, so the whole body is used.
+//
+// Extended 2026-07-30 (task #5c69b4e5, live probe #a073a896): the body is first
+// passed through stripQuotedSpans, so only text the comment ASSERTS is searched —
+// never a negator it merely QUOTES in inline code, a fenced block or a blockquote.
+// Marker-scoping alone does not cover this: the comment that disarmed a live gate
+// carried NO marker (it was a markerless post-mortem), so its scope was the whole
+// body and its backticked `не нужен` counted. Scoping answers "which ask is this
+// about"; stripping answers "is this an assertion or a citation". Both are needed.
+//
+// Search and slice the SAME stripped string — offsets taken from the raw body
+// cannot index the stripped one, and mixing them would cut at a meaningless byte.
+func hasNegatorInScope(body string) bool {
+	scope := stripQuotedSpans(body)
+	if matches := blockingMarkerRegex.FindAllStringIndex(scope, -1); len(matches) > 0 {
+		scope = scope[matches[len(matches)-1][0]:]
+	}
+	lower := strings.ToLower(scope)
+	for _, n := range triageExitNegators {
+		if strings.Contains(lower, n) {
+			return true
+		}
+	}
+	return false
 }
 
 // extractMentionSlugs returns unique lowercase slugs found in body, preserving order.
@@ -992,7 +1012,7 @@ func (s *commentService) releaseHumanGate(ctx context.Context, comment *domain.C
 //   - task.HumanGate must be true;
 //   - comment.AuthorType must be ActorTypeAgent (user withdrawal is releaseHumanGate;
 //     system/driver comments cannot withdraw anything on anyone's behalf);
-//   - comment.Body must ASSERT a withdrawal negator (hasWithdrawalNegator: the same
+//   - comment.Body must ASSERT a withdrawal negator (hasNegatorInScope: the same
 //     triageExitNegators vocabulary enforceTriageExit uses, matched against the body
 //     with code spans, fences and blockquotes stripped — a comment that merely QUOTES
 //     "не нужен" while explaining the mechanism withdraws nothing);
@@ -1018,7 +1038,7 @@ func (s *commentService) releaseHumanGateOnWithdrawal(ctx context.Context, comme
 	if comment.AuthorType != domain.ActorTypeAgent {
 		return
 	}
-	if !hasWithdrawalNegator(comment.Body) {
+	if !hasNegatorInScope(comment.Body) {
 		return
 	}
 
@@ -1047,7 +1067,7 @@ func (s *commentService) releaseHumanGateOnWithdrawal(ctx context.Context, comme
 			if !hasBlockingMarker(c.Body) {
 				continue
 			}
-			if hasWithdrawalNegator(c.Body) {
+			if hasNegatorInScope(c.Body) {
 				continue // already-negated marker isn't the live ask
 			}
 			markerAuthorID = c.AuthorID
@@ -1193,8 +1213,11 @@ func (s *commentService) enforceTriageExit(ctx context.Context, comment *domain.
 				continue
 			}
 			// A blocking mention that ASSERTS a negator is a cancellation, not a live
-			// gate — one that merely quotes the vocabulary still is (hasWithdrawalNegator).
-			if hasWithdrawalNegator(c.Body) {
+			// gate — scoped to text at-or-after the marker (hasNegatorInScope), not the
+			// whole body: see #c375905c, the same self-negation-by-unrelated-prose
+			// defect this function shares with releaseHumanGateOnWithdrawal above.
+			// One that merely QUOTES the vocabulary is still a live gate (#5c69b4e5).
+			if hasNegatorInScope(c.Body) {
 				continue
 			}
 			foundRealBlock = true
