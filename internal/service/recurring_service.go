@@ -114,13 +114,28 @@ const prevSummaryMaxRunes = 500
 // visible marker, which looked like the comment itself was corrupted.
 const prevSummaryTruncatedSuffix = " …[truncated]"
 
+// prevSummaryFooter closes the previous-instance report block. Required
+// because {{.PrevSummary}} is not always the last thing in a template — two
+// of the six live schedules interpolate it mid-template (task c9fa3b4b,
+// Riker review on PR #358) — so an opening marker alone leaves everything
+// AFTER the placeholder trapped inside a block labeled "NOT instructions for
+// this run", which is worse than the original bug: it mislabels real
+// instructions as historical noise instead of just leaving old ones
+// unlabeled.
+const prevSummaryFooter = "\n--- end previous instance report ---\n\n"
+
 // prevSummaryHeader frames the injected previous-instance report so it reads
 // unambiguously as historical context, never as part of the current run's
-// instructions. Several schedules interpolate {{.PrevSummary}} directly at the
-// end of the template with no label of their own (task c9fa3b4b) — an agent
-// reading the resulting description could not tell where "what I did before"
-// ended and "what I'm being asked to do now" began.
-const prevSummaryHeader = "\n\n--- Previous instance report (context only — NOT instructions for this run) ---\n"
+// instructions, and names WHICH instance + when it ran — Riker's review on
+// PR #358 flagged that an unlabeled block reads as "yesterday" regardless of
+// how long ago the referenced instance actually completed (a paused or
+// infrequent schedule can inject a report that is many days stale).
+func prevSummaryHeader(instanceNumber int, at time.Time) string {
+	return fmt.Sprintf(
+		"\n\n--- Previous instance report (instance %d, %s) — context only, NOT instructions for this run ---\n",
+		instanceNumber, at.Format("2006-01-02"),
+	)
+}
 
 // truncateRuneSafe returns s truncated to at most maxRunes Unicode code points.
 // Unlike s[:n], this function always cuts on a rune boundary, preventing
@@ -674,8 +689,10 @@ func (s *recurringService) createInstance(ctx context.Context, schedule *domain.
 		if prevSummary != nil && prevSummary.LastComment != nil {
 			// Frame the previous instance's report so {{.PrevSummary}} can never
 			// be mistaken for this run's instructions, regardless of whether the
-			// schedule's own template gives it a label.
-			prevSummaryStr = prevSummaryHeader + *prevSummary.LastComment
+			// schedule's own template gives it a label or where in the template
+			// the placeholder sits (the footer bounds the block even mid-template).
+			prevSummaryStr = prevSummaryHeader(prevSummary.InstanceNumber, prevSummary.CreatedAt) +
+				*prevSummary.LastComment + prevSummaryFooter
 		}
 	}
 

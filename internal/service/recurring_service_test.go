@@ -532,6 +532,92 @@ func TestCreateInstance_PrevSummaryIsFramedAsContext(t *testing.T) {
 	}
 
 	lastComment := "Done. Rolled out fix X, verified Y."
+	prevCreatedAt := time.Now().Add(-time.Hour)
+	repo.history[scheduleID] = []domain.RecurringInstanceSummary{
+		{
+			TaskID:         uuid.New(),
+			InstanceNumber: 7,
+			Title:          "Task 7",
+			StatusCategory: "done",
+			LastComment:    &lastComment,
+			CreatedAt:      prevCreatedAt,
+		},
+	}
+
+	_, err := svc.createInstance(context.Background(), schedule, time.Now())
+	if err != nil {
+		t.Fatalf("createInstance returned error: %v", err)
+	}
+
+	taskSvc.mu.Lock()
+	created := taskSvc.created
+	taskSvc.mu.Unlock()
+	if len(created) == 0 {
+		t.Fatal("expected taskSvc.Create to be called")
+	}
+	desc := created[0].Description
+
+	header := prevSummaryHeader(7, prevCreatedAt)
+	if !strings.Contains(desc, header) {
+		t.Fatalf("expected description to contain the framing header %q, got %q", header, desc)
+	}
+	if !strings.Contains(desc, prevSummaryFooter) {
+		t.Fatalf("expected description to contain the closing marker %q, got %q", prevSummaryFooter, desc)
+	}
+	headerIdx := strings.Index(desc, header)
+	commentIdx := strings.Index(desc, lastComment)
+	footerIdx := strings.Index(desc, prevSummaryFooter)
+	if commentIdx == -1 {
+		t.Fatalf("expected description to still contain the previous comment text, got %q", desc)
+	}
+	if headerIdx == -1 || headerIdx > commentIdx {
+		t.Fatalf("expected framing header to precede the previous comment, got %q", desc)
+	}
+	if footerIdx == -1 || footerIdx < commentIdx {
+		t.Fatalf("expected closing marker to follow the previous comment, got %q", desc)
+	}
+	instructionsIdx := strings.Index(desc, "Do the daily sweep.")
+	if instructionsIdx == -1 || instructionsIdx > headerIdx {
+		t.Fatalf("expected this run's own instructions to precede the framed prior-report block, got %q", desc)
+	}
+}
+
+// Riker's review on PR #358 (task c9fa3b4b): two of six live schedules put
+// {{.PrevSummary}} mid-template, not at the end. Without a closing marker,
+// everything after the placeholder falls inside the "NOT instructions for
+// this run" block — an inversion of the original bug: real instructions get
+// mislabeled as historical noise instead of the other way round. This test
+// reproduces that exact template shape and asserts the text AFTER the
+// placeholder sits OUTSIDE the framed block.
+func TestCreateInstance_PrevSummaryMidTemplate_LaterStepsStayOutsideFrame(t *testing.T) {
+	repo := NewMockRecurringRepository()
+	taskSvc := NewStubTaskService()
+	svc := NewRecurringService(repo, taskSvc).(*recurringService)
+
+	scheduleID := uuid.New()
+	const step2Marker = "Step 2 — must stay outside the framed block."
+	schedule := &domain.RecurringSchedule{
+		ID:                  scheduleID,
+		ProjectID:           uuid.New(),
+		WorkspaceID:         uuid.New(),
+		TitleTemplate:       "Task {{.Number}}",
+		DescriptionTemplate: "Step 1.\n{{.PrevSummary}}\n" + step2Marker,
+		Frequency:           domain.RecurringFrequencyCustom,
+		CronExpr:            "0 9 * * *",
+		Timezone:            "UTC",
+		AssigneeType:        domain.AssigneeTypeAgent,
+		Priority:            domain.PriorityMedium,
+		Labels:              pq.StringArray{},
+		IsActive:            true,
+		StartsAt:            time.Now().Add(-time.Hour),
+		InstanceCount:       1,
+		CreatedBy:           uuid.New(),
+		CreatedByType:       domain.ActorTypeUser,
+		CreatedAt:           time.Now(),
+		UpdatedAt:           time.Now(),
+	}
+
+	lastComment := "Done. Yesterday's report."
 	repo.history[scheduleID] = []domain.RecurringInstanceSummary{
 		{
 			TaskID:         uuid.New(),
@@ -556,20 +642,17 @@ func TestCreateInstance_PrevSummaryIsFramedAsContext(t *testing.T) {
 	}
 	desc := created[0].Description
 
-	if !strings.Contains(desc, prevSummaryHeader) {
-		t.Fatalf("expected description to contain the framing header %q, got %q", prevSummaryHeader, desc)
+	footerIdx := strings.Index(desc, prevSummaryFooter)
+	step2Idx := strings.Index(desc, step2Marker)
+	if footerIdx == -1 {
+		t.Fatalf("expected description to contain the closing marker, got %q", desc)
 	}
-	headerIdx := strings.Index(desc, prevSummaryHeader)
-	commentIdx := strings.Index(desc, lastComment)
-	if commentIdx == -1 {
-		t.Fatalf("expected description to still contain the previous comment text, got %q", desc)
+	if step2Idx == -1 {
+		t.Fatalf("expected description to still contain Step 2's text, got %q", desc)
 	}
-	if headerIdx == -1 || headerIdx > commentIdx {
-		t.Fatalf("expected framing header to precede the previous comment, got %q", desc)
-	}
-	instructionsIdx := strings.Index(desc, "Do the daily sweep.")
-	if instructionsIdx == -1 || instructionsIdx > headerIdx {
-		t.Fatalf("expected this run's own instructions to precede the framed prior-report block, got %q", desc)
+	if step2Idx < footerIdx {
+		t.Fatalf("Step 2 lands INSIDE the framed prior-report block (before the closing marker) — "+
+			"real instructions would read as historical context, got %q", desc)
 	}
 }
 
