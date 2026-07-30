@@ -223,10 +223,14 @@ services:
     restart: unless-stopped
     command: ["mesh-mcp", "--transport", "sse"]
     depends_on:
+      init-secrets:
+        condition: service_completed_successfully
       api:
         condition: service_healthy
     ports:
       - "${MCP_PORT:-8081}:8081"
+    volumes:
+      - ./volumes/secrets:/run/mesh-secrets:ro
     environment:
       MESH_API_URL: http://api:8005
       MESH_MCP_TRANSPORT: sse
@@ -237,6 +241,14 @@ services:
       # message endpoint is then advertised relative to the URL the client
       # connected to. See docs/agent-onboarding.md.
       MESH_MCP_PUBLIC_URL: ${MESH_MCP_PUBLIC_URL:-}
+      # Gates this service's own GET /metrics — a separate promhttp handler
+      # in a separate binary from the api service, not covered by that
+      # service's MESH_METRICS_TOKEN wiring. Same file + explicit-var-wins
+      # pattern as the api service above, and for the same reason: an
+      # edit to MESH_METRICS_TOKEN in .env must change this service's spec
+      # too, or Compose won't recreate it and it keeps serving the old token.
+      MESH_METRICS_TOKEN_FILE: /run/mesh-secrets/metrics_token
+      MESH_METRICS_TOKEN: ${MESH_METRICS_TOKEN:-}
 
   prometheus:
     image: prom/prometheus:v2.50.0
