@@ -2180,9 +2180,21 @@ jobs:
       # valid recovery evidence. What must block the resolve is a live pageable
       # cancellation, which is what `must_page` names.
       # ---------------------------------------------------------------------
+      # `steps.classify.outcome != 'failure'` is fail-closed and the one clause here
+      # that guards a path nobody has reached yet. `must_page` is read from the
+      # classifier's `$GITHUB_OUTPUT`; if the classifier ever died before writing it
+      # — an uncaught exception rather than one of the failure modes it already
+      # handles, all of which fail toward `must_page=true` — the output would be the
+      # EMPTY STRING, `!= 'true'` would be true, and a run whose cancellation was
+      # never classified would clear the episode. "I could not tell" must not read
+      # as "nothing to page", which is the same rule the classifier applies to an
+      # unsettled run list. Added after an adversarial pass could not find a
+      # reachable path to it and could not rule one out either; the clause costs
+      # nothing and closes the class.
       - name: Resolve — the prod canary is running again, not being cancelled
         if: >-
-          steps.classify.outputs.must_page != 'true'
+          steps.classify.outcome != 'failure'
+          && steps.classify.outputs.must_page != 'true'
           && (needs.recall-gate.result == 'success' ||
               needs.recall-gate.result == 'failure')
         uses: ./.github/actions/blindness-issue

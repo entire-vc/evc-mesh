@@ -2169,6 +2169,18 @@ class TestTheCancellationEpisodeClearsOnEvidence(unittest.TestCase):
             f"results that are evidence.\n  if: {expr}",
         )
 
+    def test_a_classifier_that_died_blocks_the_resolve(self):
+        """`must_page` is read from the classifier's `$GITHUB_OUTPUT`. A classifier
+        that died before writing it leaves the EMPTY STRING, and `!= 'true'` is true
+        for the empty string — so without this clause a run whose cancellation was
+        never classified would CLEAR the episode. "Could not tell" must not read as
+        "nothing to page"."""
+        self.assertIn(
+            "steps.classify.outcome != 'failure'", _step_if(self.RESOLVE),
+            "the resolve no longer checks that the classifier survived, so an "
+            "unclassified cancellation closes the episode via an empty `must_page`.",
+        )
+
     def test_a_live_pageable_cancellation_blocks_the_resolve(self):
         """Both halves can be reached in one run: the advisory arm cancelled
         pageably while the canary succeeded. Without this clause the episode would
