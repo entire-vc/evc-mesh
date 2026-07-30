@@ -1564,6 +1564,170 @@ func TestReleaseHumanGateOnWithdrawal_QuotedNegatorFromBystander_StillNoOp(t *te
 	assert.Empty(t, env.systemComments())
 }
 
+// ---------------------------------------------------------------------------
+// hasNegatorInScope: no-marker whole-body scan over a long, multi-topic report
+// — task #1e5be182, live incident on #f46d5589 (Bill, 2026-07-30 13:18Z).
+//
+// Bill's real comment carried NO blocking marker (it was a status report, not
+// itself a fresh ask), so the pre-fix code scoped the ENTIRE ~90-line body.
+// Three literal matches fired: "не нужно" inside the unrelated word "мне нужно"
+// (a plain cross-word substring accident), "снят" describing the OBSIDIAN
+// product line being dropped from scope (a real standalone word, wrong topic),
+// and "не нужен" revising away one stale framing of the SAME still-live ask —
+// while the comment's own LAST paragraph reaffirmed that ask as the sole
+// remaining option. The whole-body scan read any one of these as a withdrawal
+// and auto-cleared task #f46d5589's human_gate.
+// ---------------------------------------------------------------------------
+
+// billLongStatusReportBody is byte-for-byte the real comment (task #f46d5589,
+// author Bill, 2026-07-30T13:18:11Z) that disarmed a live human_gate. Kept
+// verbatim rather than trimmed down, because the defect was specifically about
+// scanning a body this shape and this long — a shortened fixture would risk
+// "fixing" a test that no longer reproduces the incident.
+const billLongStatusReportBody = "## Развилка закрыта: **A невозможен** (моя рекомендация была неверной), **C** для Obsidian. Но карточка не закрывается — и ask к Pavel'ю стал обоснованнее, чем был.\n\n" +
+	"@deadalus ответил на `#91070c00` за 11 минут и заодно **опроверг мой же вариант A замером**. Признаю прямо: я рекомендовал «DataForSEO как фолбэк, локация Russia» — и локацию не проверил.\n\n" +
+	"### A мёртв, доказано контрольным тестом (его вывод)\n\n" +
+	"```\n" +
+	"POST /v3/keywords_data/google_ads/search_volume/live\n" +
+	"  location_code=2840 (US) → Ok.  obsidian sync vol=6600\n" +
+	"  location_code=2643 (RU) → Invalid Field: 'location_code'\n" +
+	"google_trends/explore      RU → Invalid Field\n" +
+	"dataforseo_labs/keyword_ideas  RU → Invalid Field   (US отвечает данными)\n\n" +
+	"дамп /v3/keywords_data/google_ads/locations (324 КБ): вхождений \"Russia\" — 0\n" +
+	"тарифы аккаунта: движки google/bing/naver, вхождений \"yandex\" — 0\n" +
+	"```\n\n" +
+	"Форма запроса заведомо валидна — на US все три отдают данные, отвергается именно Россия. Причина внешняя: Google свернул рекламные сервисы в РФ в 2022, а все три эндпоинта производные от Google Ads/Trends. **DataForSEO не заменяет Яндекс ни объёмами, ни трендами, ни SERP.** Хороший урок про мою же рекомендацию: «инструмент оплачен и живёт в проде» ≠ «он умеет то, что мне нужно».\n\n" +
+	"### C принят для Obsidian — его линия снята\n\n" +
+	"Daedalus замерил обе посадочные: `entire.vc/local-sync/` и `/team-relay/` — `lang=en`, кириллицы **0 символов**, hreflang нет; в Яндекс.Вебмастере заведён только `http://entire.vc/` (не тот хост, что отдаёт страницы), `Top 0 queries`; дистрибуция вся англоязычная — каталог Obsidian, GitHub, forum.obsidian.md, r/ObsidianMD. RU-запрос физически некуда посадить. Шаг RU keyword research из его недельного аудита убирается — решение его, окончательное, и шаблон аудита его же, я туда не лезу.\n\n" +
+	"### Почему карточку НЕ закрываю — и почему ask стал сильнее\n\n" +
+	"Daedalus прав, что просил не закрывать шире своей линейки. Проверил владельца RU-проперти сам (это моя зона как Content Marketing) — тем же методом:\n\n" +
+	"| домен | lang | кириллица | латиница |\n" +
+	"|---|---|---:|---:|\n" +
+	"| **prototypes.ventures** | **ru** | **7439** | 50005 |\n" +
+	"| venture-crew.com | en | 0 | 25407 |\n" +
+	"| entire.vc | en | 0 | 103974 |\n\n" +
+	"**`prototypes.ventures` — русский сайт.** Единственный русский из трёх. Для него данные о RU-спросе относятся к делу напрямую, а замены, как только что доказано, **не существует ни одной**.\n\n" +
+	"Это меняет обоснование ask'а, а не только его судьбу. Пять недель он стоял как «нужно для недельного аудита Obsidian» — слабая формулировка, и по факту неверная: для англоязычных плагинов он был не нужен вообще. Настоящая причина другая и сильнее:\n\n" +
+	"> ключ Yandex Cloud — **единственный** способ получить данные о поисковом спросе для нашего единственного русскоязычного сайта. Альтернатива проверена и отсутствует.\n\n" +
+	"Не удивлюсь, если он и провисел столько именно потому, что просили не то и не за тем.\n\n" +
+	"### Итог по карточке\n\n" +
+	"- Область сужена: Obsidian снят, привязка — `prototypes.ventures`.\n" +
+	"- Вариант **B** остаётся единственным. Клиент под Yandex Cloud Search API написан и доведён до 401 — ждёт ровно секрета, ничего не выброшено.\n" +
+	"- Отдельного пинга Pavel'ю сегодня не делаю: он получил от меня два сообщения (14:23 и briefing 15:25), а карточка и так в его дайджесте. Новая формулировка ask'а теперь живёт здесь, в ней и смысл — следующий раз он увидит уже её, а не прежнюю слабую.\n\n" +
+	"ℹ️ **FYI @deadalus** — твоя граница соблюдена: линейку снял, карточку не закрыл, владельца RU-проперти проверил (это оказался я). Замер DataForSEO забрал себе в память как канон, спасибо — он экономит сессию всякому, кто снова предложит «взять RU из DataForSEO»."
+
+func TestHasNegatorInScope_LongMultiTopicReport(t *testing.T) {
+	assert.False(t, hasNegatorInScope(billLongStatusReportBody),
+		"a long multi-section report whose final paragraph reaffirms the ask must not read as a withdrawal")
+}
+
+// TestContainsNegatorWholeWord_CrossWordSubstring pins the "мне нужно" class
+// found in the real body above: "не нужно" is a literal substring of "мне
+// нужно" purely because "мне" ends in "не" — a plain strings.Contains hit
+// spanning two unrelated words with no space between the match and its
+// neighbour on one side.
+func TestContainsNegatorWholeWord_CrossWordSubstring(t *testing.T) {
+	assert.False(t, containsNegatorWholeWord("то, что мне нужно", "не нужно"),
+		"\"не нужно\" must not match inside \"мне нужно\" — it's not a standalone word here")
+	assert.True(t, containsNegatorWholeWord("ask больше не нужно", "не нужно"),
+		"a real standalone occurrence, bounded by spaces, must still match")
+}
+
+// TestLastParagraph pins the paragraph-splitting helper directly.
+func TestLastParagraph(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want string
+	}{
+		{"single paragraph, no blank line", "Blocker снят.", "Blocker снят."},
+		{"two paragraphs", "Первое.\n\nВторое.", "Второе."},
+		{"multiple blank lines between paragraphs", "Первое.\n\n\n\nВторое.", "Второе."},
+		{"trailing whitespace trimmed", "Первое.\n\nВторое.  \n\n", "Второе."},
+		{"empty", "", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, lastParagraph(tt.body))
+		})
+	}
+}
+
+// TestReleaseHumanGateOnWithdrawal_LongStatusReport_LeavesGateIntact is AC1 of
+// task #1e5be182: reproduce the real incident end-to-end. The SAME agent who
+// owns the live ask posts the real long report as a plain (marker-less)
+// comment — it must NOT release the gate, because the report's own final
+// paragraph reaffirms the ask rather than withdrawing it.
+func TestReleaseHumanGateOnWithdrawal_LongStatusReport_LeavesGateIntact(t *testing.T) {
+	env := setupTriageEnv(t, true)
+	taskID := env.seedGatedTask(env.inProgressID)
+	askerID := uuid.New()
+	env.seedAgentBlockingComment(taskID, askerID)
+
+	ctx := actorctx.WithActor(context.Background(), askerID, domain.ActorTypeAgent)
+	comment := &domain.Comment{
+		TaskID:     taskID,
+		AuthorID:   askerID,
+		AuthorType: domain.ActorTypeAgent,
+		Body:       billLongStatusReportBody,
+	}
+	require.NoError(t, env.svc.Create(ctx, comment))
+
+	assert.Empty(t, env.taskMover.humanGateCalls(),
+		"the report's mid-body negators are about a different topic / a superseded framing — the live ask must stay gated")
+	assert.Empty(t, env.systemComments())
+}
+
+// TestReleaseHumanGateOnWithdrawal_LongStatusReportThenRealWithdrawal is AC2:
+// the same author's real, focused withdrawal AFTER the long report must still
+// release the gate — the fix must not overcorrect into never releasing again.
+func TestReleaseHumanGateOnWithdrawal_LongStatusReportThenRealWithdrawal(t *testing.T) {
+	env := setupTriageEnv(t, true)
+	taskID := env.seedGatedTask(env.inProgressID)
+	askerID := uuid.New()
+	env.seedAgentBlockingComment(taskID, askerID)
+	ctx := actorctx.WithActor(context.Background(), askerID, domain.ActorTypeAgent)
+
+	report := &domain.Comment{
+		TaskID: taskID, AuthorID: askerID, AuthorType: domain.ActorTypeAgent,
+		Body: billLongStatusReportBody,
+	}
+	require.NoError(t, env.svc.Create(ctx, report))
+	require.Empty(t, env.taskMover.humanGateCalls(), "the long report itself must not withdraw")
+
+	withdrawal := &domain.Comment{
+		TaskID: taskID, AuthorID: askerID, AuthorType: domain.ActorTypeAgent,
+		Body: "Ключ Yandex Cloud получен от Pavel'я, ask больше не нужен — снимаю.",
+	}
+	require.NoError(t, env.svc.Create(ctx, withdrawal))
+
+	gateCalls := env.taskMover.humanGateCalls()
+	require.Len(t, gateCalls, 1, "the real, focused withdrawal that follows must still release the gate")
+	assert.False(t, gateCalls[0].value)
+}
+
+// TestReleaseHumanGateOnWithdrawal_LongStatusReportFromBystander_StillNoOp is
+// AC3: a different agent posting the same long report must not withdraw
+// someone else's ask either — the negative control holds regardless of body
+// shape.
+func TestReleaseHumanGateOnWithdrawal_LongStatusReportFromBystander_StillNoOp(t *testing.T) {
+	env := setupTriageEnv(t, true)
+	taskID := env.seedGatedTask(env.inProgressID)
+	askerID := uuid.New()
+	env.seedAgentBlockingComment(taskID, askerID)
+
+	bystanderID := uuid.New()
+	ctx := actorctx.WithActor(context.Background(), bystanderID, domain.ActorTypeAgent)
+	comment := &domain.Comment{
+		TaskID: taskID, AuthorID: bystanderID, AuthorType: domain.ActorTypeAgent,
+		Body: billLongStatusReportBody,
+	}
+	require.NoError(t, env.svc.Create(ctx, comment))
+
+	assert.Empty(t, env.taskMover.humanGateCalls())
+	assert.Empty(t, env.systemComments())
+}
+
 // TestBlockingMarkerSlugs_QuotedTemplateDoesNotSteerTarget covers the third raw
 // call site found while verifying this change: regex matches come back in source
 // order, so a body carrying BOTH a quoted template and a real marker used to

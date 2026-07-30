@@ -7,6 +7,7 @@ import (
 	"log"
 	"regexp"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
@@ -218,20 +219,112 @@ var triageExitNegators = []string{
 // body and its backticked `не нужен` counted. Scoping answers "which ask is this
 // about"; stripping answers "is this an assertion or a citation". Both are needed.
 //
+// Extended again 2026-07-30 (task #1e5be182, live incident on #f46d5589, Bill):
+// the "no marker → whole body" fallback above assumed a real withdrawal is always
+// a short, dedicated comment with "nothing else in it" — but Bill's genuine status
+// update was a ~90-line multi-section report that, in an EARLIER section, revised
+// away one framing of the SAME still-live ask ("не нужен") and, in another, said a
+// completely unrelated product line was "снят" (dropped from scope) — while the
+// comment's own LAST paragraph reaffirmed the ask as the sole remaining option.
+// A whole-body scan cannot tell "superseded earlier in this body" from "actually
+// withdrawn"; mirroring the marker-scoping precedent above (only the LAST relevant
+// unit counts, never an earlier one), a marker-less body is now scoped to its own
+// last paragraph — the comment's final say, which is the closest marker-less
+// equivalent of "at-or-after the marker".
+//
+// Also switched from strings.Contains to containsNegatorWholeWord: the same real
+// comment contained "мне нужно" (ordinary "what I need"), which Contains matched
+// as the negator "не нужно" purely because "мне" ends in "не" — a plain substring
+// hit spanning two unrelated words. Go's \b is ASCII-only (RE2's \w excludes every
+// Cyrillic letter), so a regexp anchor would not have caught this; the whole-word
+// check below inspects the actual rune on each side instead.
+//
 // Search and slice the SAME stripped string — offsets taken from the raw body
 // cannot index the stripped one, and mixing them would cut at a meaningless byte.
 func hasNegatorInScope(body string) bool {
 	scope := stripQuotedSpans(body)
 	if matches := blockingMarkerRegex.FindAllStringIndex(scope, -1); len(matches) > 0 {
 		scope = scope[matches[len(matches)-1][0]:]
+	} else {
+		scope = lastParagraph(scope)
 	}
 	lower := strings.ToLower(scope)
 	for _, n := range triageExitNegators {
-		if strings.Contains(lower, n) {
+		if containsNegatorWholeWord(lower, n) {
 			return true
 		}
 	}
 	return false
+}
+
+// paragraphBreakRegex matches one or more consecutive blank (or whitespace-only)
+// lines — the boundary lastParagraph splits on.
+var paragraphBreakRegex = regexp.MustCompile(`\n[ \t]*\n`)
+
+// lastParagraph returns the final non-blank paragraph of body, trimmed of
+// surrounding whitespace. Paragraphs are separated by one or more blank lines.
+// A body with no blank line at all is itself a single paragraph and is returned
+// unchanged (trimmed) — this keeps every existing short, single-paragraph
+// withdrawal comment (the documented ordinary shape) behaving exactly as before.
+func lastParagraph(body string) string {
+	trimmed := strings.TrimRight(body, " \t\r\n")
+	if trimmed == "" {
+		return ""
+	}
+	parts := paragraphBreakRegex.Split(trimmed, -1)
+	for i := len(parts) - 1; i >= 0; i-- {
+		if p := strings.TrimSpace(parts[i]); p != "" {
+			return p
+		}
+	}
+	return ""
+}
+
+// containsNegatorWholeWord reports whether needle occurs in haystack as a
+// standalone word/phrase: the rune immediately before the match (if any) and
+// the rune immediately after it (if any) must not themselves be a letter or
+// digit. This is deliberately NOT regexp \b — Go's RE2 defines \w (and hence
+// \b) as [0-9A-Za-z_] only, so it never recognises a boundary next to a
+// Cyrillic letter; a haystack of "мне нужно" would look, to \b, identical
+// mid-word and at a real word edge. Scanning runes directly sidesteps that.
+func containsNegatorWholeWord(haystack, needle string) bool {
+	if needle == "" {
+		return false
+	}
+	searchFrom := 0
+	for {
+		rel := strings.Index(haystack[searchFrom:], needle)
+		if rel == -1 {
+			return false
+		}
+		start := searchFrom + rel
+		end := start + len(needle)
+		if !isWordRuneBefore(haystack, start) && !isWordRuneAfter(haystack, end) {
+			return true
+		}
+		searchFrom = start + 1
+	}
+}
+
+// isWordRuneBefore reports whether the rune ending exactly at byte offset pos
+// (i.e. the last rune of haystack[:pos]) is a letter or digit. pos<=0 (start
+// of string) is never a word rune.
+func isWordRuneBefore(haystack string, pos int) bool {
+	if pos <= 0 {
+		return false
+	}
+	r, _ := utf8.DecodeLastRuneInString(haystack[:pos])
+	return unicode.IsLetter(r) || unicode.IsDigit(r)
+}
+
+// isWordRuneAfter reports whether the rune starting exactly at byte offset pos
+// is a letter or digit. pos at or past the end of string is never a word rune.
+func isWordRuneAfter(haystack string, pos int) bool {
+	if pos < 0 || pos >= len(haystack) {
+		return false
+	}
+	r, _ := utf8.DecodeRuneInString(haystack[pos:])
+	return unicode.IsLetter(r) || unicode.IsDigit(r)
 }
 
 // extractMentionSlugs returns unique lowercase slugs found in body, preserving order.
