@@ -782,24 +782,26 @@ docker compose -f docker-compose.prod.yml --env-file .env config | \
    }
    ```
 
-9. **`/metrics` on the API is token-gated.** Compose generates the token on
-   first start into `deploy/docker/mesh/volumes/secrets/metrics_token` and
-   gives the same file to the API (`MESH_METRICS_TOKEN_FILE`) and to
-   Prometheus (`bearer_token_file`, see `monitoring/prometheus.yml`) — there
-   is nothing to set, and the value is not in `docker inspect` output on
-   either container. Set `MESH_METRICS_TOKEN` in `.env` to choose it
-   yourself; that value is written to the same file and wins. Scrape it from
-   outside the stack with
-   `curl -H "Authorization: Bearer $(cat deploy/docker/mesh/volumes/secrets/metrics_token)" http://localhost:8005/metrics`.
-   Outside Compose the API reads `MESH_METRICS_TOKEN` directly, and leaving
-   it unset keeps the endpoint open for deployments that gate it at the
-   network layer instead. The MCP server's own
-   `/metrics` (on `${MCP_PORT:-8081}`) has no such gate — it is not scraped
-   by the bundled Prometheus and is not covered by this variable. Both
-   endpoints expose route names, traffic volumes and workspace/task counts,
-   so treat the MCP one the same way you would any other unauthenticated
-   diagnostic endpoint: gate it at your reverse proxy, or bind the port to
-   loopback:
+9. **`/metrics` on both the API and the MCP server is token-gated**, by the
+   same `MESH_METRICS_TOKEN`. Compose generates the token on first start
+   into `deploy/docker/mesh/volumes/secrets/metrics_token` and gives the
+   same file to the API (`MESH_METRICS_TOKEN_FILE`), the MCP service
+   (`MESH_METRICS_TOKEN_FILE`), and Prometheus (`bearer_token_file`, see
+   `monitoring/prometheus.yml`) — there is nothing to set, and the value is
+   not in `docker inspect` output on any of the three. Set
+   `MESH_METRICS_TOKEN` in `.env` to choose it yourself; that value is
+   written to the same file and wins for both services. Scrape either
+   endpoint from outside the stack with
+   `curl -H "Authorization: Bearer $(cat deploy/docker/mesh/volumes/secrets/metrics_token)" http://localhost:8005/metrics`
+   (API) or the same against `http://localhost:${MCP_PORT:-8081}/metrics`
+   (MCP — note the bundled Prometheus does not scrape this one; nothing in
+   the stack consumes it, the gate exists so exposing the port doesn't leak
+   route names, traffic volumes and workspace/task counts to anyone who can
+   reach it). Outside Compose both binaries read `MESH_METRICS_TOKEN`
+   directly, and leaving it unset keeps the endpoint open for deployments
+   that gate it at the network layer instead (e.g. the internal prod
+   install, fronted by Caddy). If you'd rather not expose the MCP metrics
+   port at all, bind it to loopback instead:
 
    ```yaml
    # deploy/docker/mesh/docker-compose.prod.yml, mcp service
@@ -807,7 +809,11 @@ docker compose -f docker-compose.prod.yml --env-file .env config | \
      - "127.0.0.1:${MCP_PORT:-8081}:8081"
    ```
 
-   The same applies to the `prometheus` (`9090`) and `grafana` (`3001`)
+   Don't do this as the shipped default, though — the mcp service exists so
+   remote agents can reach `/sse` and `/message` on this same port; binding
+   it to loopback closes those along with `/metrics`.
+
+   The same publish-by-default caveat applies to the `prometheus` (`9090`) and `grafana` (`3001`)
    services: `docker-compose.prod.yml` publishes both on all interfaces.
    Grafana requires `GRAFANA_PASSWORD` to be set (Compose refuses to start
    otherwise) — but the port is still open to the network, so bind it to

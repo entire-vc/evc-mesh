@@ -11,7 +11,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/entire-vc/evc-mesh/internal/config"
 	mcpserver "github.com/entire-vc/evc-mesh/internal/mcp"
+	"github.com/entire-vc/evc-mesh/internal/middleware"
 
 	sdkserver "github.com/mark3labs/mcp-go/server"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -200,8 +202,14 @@ func main() {
 		// Build HTTP mux with auth wrappers.
 		mux := http.NewServeMux()
 
-		// Prometheus metrics — no auth required (Caddy gates this path to tw-mon IP).
-		mux.Handle("/metrics", promhttp.Handler())
+		// Prometheus metrics, gated by MESH_METRICS_TOKEN when set — same
+		// variable and file-fallback as the API's /metrics (config.Load
+		// reads MESH_METRICS_TOKEN / MESH_METRICS_TOKEN_FILE), same no-op-
+		// when-empty behavior via middleware.MetricsAuthHTTP. An empty token
+		// leaves this open for deployments that gate it at the network layer
+		// instead (e.g. internal prod, fronted by Caddy).
+		metricsToken := config.Load().Server.MetricsToken
+		mux.Handle("/metrics", middleware.MetricsAuthHTTP(metricsToken, promhttp.Handler()))
 
 		// Full profile: /sse and /message (backward compatible).
 		mux.HandleFunc("/sse", func(w http.ResponseWriter, r *http.Request) {
