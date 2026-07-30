@@ -1006,6 +1006,280 @@ func TestEnforceTriageExit_TaskNotInTriage_NoOp(t *testing.T) {
 	assert.Empty(t, env.systemComments())
 }
 
+// ---------------------------------------------------------------------------
+// releaseHumanGateOnWithdrawal (via Create) — task #c375905c
+// ---------------------------------------------------------------------------
+
+// seedAgentBlockingComment inserts a "❓ Blocking @pavel" comment authored by
+// authorID, so ownership of the live ask can be pinned to a specific agent.
+func (env triageTestEnv) seedAgentBlockingComment(taskID, authorID uuid.UUID) {
+	cid := uuid.New()
+	env.commentRepo.items[cid] = &domain.Comment{
+		ID:         cid,
+		TaskID:     taskID,
+		AuthorID:   authorID,
+		AuthorType: domain.ActorTypeAgent,
+		Body:       "❓ **Blocking @pavel**: нужен выбор варианта A/Б",
+		// Explicit, in the past relative to frozenTime (what the withdrawal
+		// comment created via svc.Create receives): releaseHumanGateOnWithdrawal
+		// scans in real chronological order, so tests with more than one
+		// marker comment need genuine, distinct timestamps, not insertion order.
+		CreatedAt: frozenTime.Add(-2 * time.Hour),
+	}
+}
+
+// TestReleaseHumanGateOnWithdrawal_SameAgentNegates_ReleasesFlag is AC1's happy
+// path: the same agent who raised the still-live ask posts a withdrawal, and the
+// gate clears so move_task(done) is no longer blocked.
+func TestReleaseHumanGateOnWithdrawal_SameAgentNegates_ReleasesFlag(t *testing.T) {
+	env := setupTriageEnv(t, true)
+	taskID := env.seedGatedTask(env.inProgressID)
+	askerID := uuid.New()
+	env.seedAgentBlockingComment(taskID, askerID)
+
+	ctx := actorctx.WithActor(context.Background(), askerID, domain.ActorTypeAgent)
+	comment := &domain.Comment{
+		TaskID:     taskID,
+		AuthorID:   askerID,
+		AuthorType: domain.ActorTypeAgent,
+		Body:       "Blocker самоустранился, ask не нужен — снимаю.",
+	}
+	require.NoError(t, env.svc.Create(ctx, comment))
+
+	gateCalls := env.taskMover.humanGateCalls()
+	require.Len(t, gateCalls, 1, "SetHumanGate must be called exactly once")
+	assert.Equal(t, taskID, gateCalls[0].taskID)
+	assert.False(t, gateCalls[0].value, "gate must be cleared (value=false)")
+
+	sys := env.systemComments()
+	require.Len(t, sys, 1)
+	assert.Contains(t, sys[0].Body, "human_gate снят")
+	assert.Contains(t, sys[0].Body, "отозвал его сам")
+}
+
+// TestReleaseHumanGateOnWithdrawal_DifferentAgent_NoOp is the core negative
+// control from the task's own AC2: an agent OTHER than the one who raised the
+// ask cannot silence it, even with a negator phrase — otherwise the fleet
+// learns to bypass its own Pavel gate, which is worse than the original bug.
+func TestReleaseHumanGateOnWithdrawal_DifferentAgent_NoOp(t *testing.T) {
+	env := setupTriageEnv(t, true)
+	taskID := env.seedGatedTask(env.inProgressID)
+	askerID := uuid.New()
+	env.seedAgentBlockingComment(taskID, askerID)
+
+	bystanderID := uuid.New()
+	ctx := actorctx.WithActor(context.Background(), bystanderID, domain.ActorTypeAgent)
+	comment := &domain.Comment{
+		TaskID:     taskID,
+		AuthorID:   bystanderID,
+		AuthorType: domain.ActorTypeAgent,
+		Body:       "Ask не нужен, снимаю за коллегу.",
+	}
+	require.NoError(t, env.svc.Create(ctx, comment))
+
+	assert.Empty(t, env.taskMover.humanGateCalls(), "a different agent must not release someone else's ask")
+	assert.Empty(t, env.systemComments())
+}
+
+// TestReleaseHumanGateOnWithdrawal_NoNegator_NoOp is AC2's other half: a live,
+// unwithdrawn ask must not clear just because the SAME asker comments again
+// without an actual negator — ordinary progress updates must not accidentally
+// release the gate.
+func TestReleaseHumanGateOnWithdrawal_NoNegator_NoOp(t *testing.T) {
+	env := setupTriageEnv(t, true)
+	taskID := env.seedGatedTask(env.inProgressID)
+	askerID := uuid.New()
+	env.seedAgentBlockingComment(taskID, askerID)
+
+	ctx := actorctx.WithActor(context.Background(), askerID, domain.ActorTypeAgent)
+	comment := &domain.Comment{
+		TaskID:     taskID,
+		AuthorID:   askerID,
+		AuthorType: domain.ActorTypeAgent,
+		Body:       "Всё ещё жду ответа.",
+	}
+	require.NoError(t, env.svc.Create(ctx, comment))
+
+	assert.Empty(t, env.taskMover.humanGateCalls(), "no negator present — the live ask must stay gated")
+	assert.Empty(t, env.systemComments())
+}
+
+// TestReleaseHumanGateOnWithdrawal_ReaffirmedByOtherAgent_NoOp exercises the
+// "chronologically LAST" ownership rule: agent A raises the ask, agent B later
+// reaffirms it (a fresh, non-negated marker) — ownership of the LIVE ask moves
+// to B. A's later negator must not release a gate B is now the owner of.
+func TestReleaseHumanGateOnWithdrawal_ReaffirmedByOtherAgent_NoOp(t *testing.T) {
+	env := setupTriageEnv(t, true)
+	taskID := env.seedGatedTask(env.inProgressID)
+	agentA := uuid.New()
+	agentB := uuid.New()
+	env.seedAgentBlockingComment(taskID, agentA) // CreatedAt: frozenTime - 2h
+	// B reaffirms — a second, later (frozenTime - 1h), non-negated marker.
+	cid := uuid.New()
+	env.commentRepo.items[cid] = &domain.Comment{
+		ID:         cid,
+		TaskID:     taskID,
+		AuthorID:   agentB,
+		AuthorType: domain.ActorTypeAgent,
+		Body:       "❓ **Blocking @pavel**: подтверждаю, вопрос всё ещё живой",
+		CreatedAt:  frozenTime.Add(-1 * time.Hour),
+	}
+
+	ctx := actorctx.WithActor(context.Background(), agentA, domain.ActorTypeAgent)
+	comment := &domain.Comment{
+		TaskID:     taskID,
+		AuthorID:   agentA,
+		AuthorType: domain.ActorTypeAgent,
+		Body:       "С моей стороны ask не нужен, снимаю.",
+	}
+	require.NoError(t, env.svc.Create(ctx, comment))
+
+	assert.Empty(t, env.taskMover.humanGateCalls(), "B now owns the live ask — A's withdrawal must not release it")
+}
+
+// TestReleaseHumanGateOnWithdrawal_NoPriorMarker_NoOp: task.HumanGate=true with
+// no backing marker comment at all (e.g. a manual PATCH) must fail closed —
+// nothing to withdraw, so nothing is released.
+func TestReleaseHumanGateOnWithdrawal_NoPriorMarker_NoOp(t *testing.T) {
+	env := setupTriageEnv(t, true)
+	taskID := env.seedGatedTask(env.inProgressID)
+	askerID := uuid.New()
+
+	ctx := actorctx.WithActor(context.Background(), askerID, domain.ActorTypeAgent)
+	comment := &domain.Comment{
+		TaskID:     taskID,
+		AuthorID:   askerID,
+		AuthorType: domain.ActorTypeAgent,
+		Body:       "Не нужен, снимаю.",
+	}
+	require.NoError(t, env.svc.Create(ctx, comment))
+
+	assert.Empty(t, env.taskMover.humanGateCalls())
+}
+
+// TestReleaseHumanGateOnWithdrawal_TaskNotGated_NoOp: gate already false — no
+// SetHumanGate call needed regardless of body content.
+func TestReleaseHumanGateOnWithdrawal_TaskNotGated_NoOp(t *testing.T) {
+	env := setupTriageEnv(t, true)
+	taskID := env.seedTask(env.inProgressID) // human_gate=false by default
+	askerID := uuid.New()
+	env.seedAgentBlockingComment(taskID, askerID)
+
+	ctx := actorctx.WithActor(context.Background(), askerID, domain.ActorTypeAgent)
+	comment := &domain.Comment{
+		TaskID:     taskID,
+		AuthorID:   askerID,
+		AuthorType: domain.ActorTypeAgent,
+		Body:       "Не нужен, снимаю.",
+	}
+	require.NoError(t, env.svc.Create(ctx, comment))
+
+	assert.Empty(t, env.taskMover.humanGateCalls())
+}
+
+// TestReleaseHumanGateOnWithdrawal_TriageTask_MovesToInProgress mirrors
+// TestReleaseHumanGate_TriageTask_MovesToInProgress for the agent-withdrawal path.
+func TestReleaseHumanGateOnWithdrawal_TriageTask_MovesToInProgress(t *testing.T) {
+	env := setupTriageEnv(t, true)
+	taskID := uuid.New()
+	askerID := uuid.New()
+	env.taskRepo.items[taskID] = &domain.Task{
+		ID: taskID, ProjectID: env.projID, StatusID: env.triageID, Title: "Gated in triage",
+		HumanGate: true,
+	}
+	env.seedAgentBlockingComment(taskID, askerID)
+
+	ctx := actorctx.WithActor(context.Background(), askerID, domain.ActorTypeAgent)
+	comment := &domain.Comment{
+		TaskID:     taskID,
+		AuthorID:   askerID,
+		AuthorType: domain.ActorTypeAgent,
+		Body:       "Blocker снят.",
+	}
+	require.NoError(t, env.svc.Create(ctx, comment))
+
+	gateCalls := env.taskMover.humanGateCalls()
+	require.Len(t, gateCalls, 1)
+	assert.False(t, gateCalls[0].value)
+
+	moves := env.taskMover.calls()
+	require.Len(t, moves, 1, "task must be moved from triage to in_progress")
+	require.NotNil(t, moves[0].input.StatusID)
+	assert.Equal(t, env.inProgressID, *moves[0].input.StatusID)
+
+	sys := env.systemComments()
+	require.Len(t, sys, 1)
+	assert.Contains(t, sys[0].Body, "human_gate снят")
+	assert.Contains(t, sys[0].Body, "in_progress")
+}
+
+// TestReleaseHumanGateOnWithdrawal_NotifiesAssigneeAgent verifies that once the
+// gate is released, the task's assignee agent is woken via AgentNotifyService
+// so a fiddler/dispatcher session re-feeds the task on its next cycle — the
+// same wake-up guarantee releaseHumanGate already gives the human-release path.
+func TestReleaseHumanGateOnWithdrawal_NotifiesAssigneeAgent(t *testing.T) {
+	commentRepo := NewMockCommentRepository()
+	taskRepo := NewMockTaskRepository()
+	activityRepo := NewMockActivityLogRepository()
+	statusRepo := NewMockTaskStatusRepository()
+	projectRepo := NewMockProjectRepository()
+	taskMover := &fakeTaskMover{}
+	agentNotify := NewMockAgentNotifyService()
+
+	wsID := uuid.New()
+	projID := uuid.New()
+	projectRepo.items[projID] = &domain.Project{ID: projID, WorkspaceID: wsID}
+	inProgressID := uuid.New()
+	statusRepo.items[inProgressID] = &domain.TaskStatus{
+		ID: inProgressID, ProjectID: projID, Category: domain.StatusCategoryInProgress, Name: "In Progress",
+	}
+	timeNow = func() time.Time { return frozenTime }
+
+	svc := NewCommentService(commentRepo, taskRepo, activityRepo,
+		WithCommentProjectRepo(projectRepo),
+		WithCommentStatusRepo(statusRepo),
+		WithCommentTaskService(taskMover),
+		WithCommentAgentNotify(agentNotify),
+	).(*commentService)
+
+	assigneeID := uuid.New()
+	askerID := uuid.New()
+	taskID := uuid.New()
+	taskRepo.items[taskID] = &domain.Task{
+		ID: taskID, ProjectID: projID, StatusID: inProgressID, Title: "Gated",
+		HumanGate: true, AssigneeType: domain.AssigneeTypeAgent, AssigneeID: &assigneeID,
+	}
+	cid := uuid.New()
+	commentRepo.items[cid] = &domain.Comment{
+		ID: cid, TaskID: taskID, AuthorID: askerID, AuthorType: domain.ActorTypeAgent,
+		Body: "❓ **Blocking @pavel**: нужен выбор варианта A/Б",
+	}
+
+	ctx := actorctx.WithActor(context.Background(), askerID, domain.ActorTypeAgent)
+	comment := &domain.Comment{
+		TaskID:     taskID,
+		AuthorID:   askerID,
+		AuthorType: domain.ActorTypeAgent,
+		Body:       "Ask не нужен, blocker снят.",
+	}
+	require.NoError(t, svc.Create(ctx, comment))
+
+	require.Len(t, taskMover.humanGateCalls(), 1)
+	assert.False(t, taskMover.humanGateCalls()[0].value)
+
+	// Create also fires a generic "task.commented" notification independent of
+	// this path — filter to the release-specific event so this test targets
+	// exactly what releaseHumanGateOnWithdrawal itself is responsible for.
+	var released []AgentNotification
+	for _, n := range agentNotify.Calls() {
+		if n.EventType == "task.human_gate_released" {
+			released = append(released, n)
+		}
+	}
+	require.Len(t, released, 1, "assignee agent must be notified so it re-feeds the task")
+	assert.Equal(t, assigneeID, released[0].AgentID)
+}
+
 // TestIsAutoGeneratedComment tests the auto-marker detector.
 func TestIsAutoGeneratedComment(t *testing.T) {
 	cases := []struct {

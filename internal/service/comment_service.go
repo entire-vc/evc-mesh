@@ -319,6 +319,8 @@ func (s *commentService) Create(ctx context.Context, comment *domain.Comment) er
 		s.enforceBlockingTriage(ctx, comment, task, wsID)
 		// Symmetric release: user comment after a prior blocking marker → clear human_gate.
 		s.releaseHumanGate(ctx, comment, task, wsID)
+		// Symmetric release: the SAME agent who raised a still-live ask withdraws it.
+		s.releaseHumanGateOnWithdrawal(ctx, comment, task, wsID)
 		// General triage EXIT: human user responds on a non-gated triage task → in_progress.
 		s.enforceTriageExit(ctx, comment, task, wsID)
 	}
@@ -820,6 +822,172 @@ func (s *commentService) releaseHumanGate(ctx context.Context, comment *domain.C
 			AgentID:     *task.AssigneeID,
 			ActorID:     actorID,
 			ActorType:   string(domain.ActorTypeUser),
+			Comment: map[string]any{
+				"id":   comment.ID,
+				"body": commentBody,
+			},
+			TaskID:    task.ID,
+			ProjectID: task.ProjectID,
+		})
+	}
+}
+
+// releaseHumanGateOnWithdrawal is the AGENT-side counterpart to releaseHumanGate,
+// closing the gap in task #c375905c: a Pavel-ask has no path to be withdrawn once
+// its underlying blocker has resolved but Pavel himself hasn't (and may never)
+// comment. Left unaddressed, human_gate stays sticky forever — task #7f646f08 sat
+// gated 20 days after its triggering alert had already self-healed.
+//
+// Only the SAME agent who raised the currently-live ask may withdraw it — allowing
+// any other agent to do so would let the fleet learn to silence its own Pavel gate,
+// which is strictly worse than the original defect. This mirrors how the ask is
+// armed: enforceBlockingTriage arms on whoever posts the marker; this releases on
+// that same author retracting it, never on a bystander's say-so.
+//
+// Guards (in order):
+//   - taskSvc must be wired;
+//   - task.HumanGate must be true;
+//   - comment.AuthorType must be ActorTypeAgent (user withdrawal is releaseHumanGate;
+//     system/driver comments cannot withdraw anything on anyone's behalf);
+//   - comment.Body must carry a withdrawal negator (triageExitNegators — the same
+//     vocabulary enforceTriageExit already uses to recognise a cancelled ask);
+//   - of all prior comments that both hasBlockingMarker AND are not themselves
+//     already negated, the CHRONOLOGICALLY LAST one must be authored by this SAME
+//     agent. A live ask with no marker found at all, or one raised/most-recently
+//     reaffirmed by someone else, is left gated — this is the negative control:
+//     an unwithdrawn or another-agent's ask must not clear.
+//
+// ListByTask's SortDir is NOT honoured by the real repository (it hardcodes
+// ORDER BY created_at ASC regardless — see CommentRepo.ListByTask), unlike what
+// releaseHumanGate's own comment above claims. So "most recent" here means the
+// LAST qualifying match found while iterating in that real ascending order, not
+// the first — do not copy the break-on-first-match idiom other scans in this
+// file use for simple existence checks.
+func (s *commentService) releaseHumanGateOnWithdrawal(ctx context.Context, comment *domain.Comment, task *domain.Task, wsID uuid.UUID) {
+	if s.taskSvc == nil {
+		return
+	}
+	if !task.HumanGate {
+		return
+	}
+	if comment.AuthorType != domain.ActorTypeAgent {
+		return
+	}
+	lower := strings.ToLower(comment.Body)
+	hasNegator := false
+	for _, n := range triageExitNegators {
+		if strings.Contains(lower, n) {
+			hasNegator = true
+			break
+		}
+	}
+	if !hasNegator {
+		return
+	}
+
+	// Find who owns the currently-live ask: the CHRONOLOGICALLY LAST marker-bearing
+	// comment that is not itself already negated. Mirrors enforceBlockingTriage's
+	// own arm criterion (hasBlockingMarker, no auto-generated-comment carve-out) so
+	// "who armed it" is judged by the same rule that actually armed it.
+	pg := pagination.Params{Page: 1, PageSize: 100}
+	pg.Normalize()
+	page, err := s.commentRepo.ListByTask(ctx, task.ID, repository.CommentFilter{IncludeInternal: true}, pg)
+	if err != nil {
+		log.Printf("[human-gate] WARNING: ListByTask on task %s failed: %v", task.ID, err)
+		return
+	}
+
+	var markerAuthorID uuid.UUID
+	var markerAuthorType domain.ActorType
+	found := false
+	if page != nil {
+		// Real order is created_at ASC (see doc comment above) — keep overwriting so
+		// the LAST qualifying match, not the first, wins.
+		for _, c := range page.Items {
+			if c.ID == comment.ID {
+				continue
+			}
+			if !hasBlockingMarker(c.Body) {
+				continue
+			}
+			cLower := strings.ToLower(c.Body)
+			negated := false
+			for _, n := range triageExitNegators {
+				if strings.Contains(cLower, n) {
+					negated = true
+					break
+				}
+			}
+			if negated {
+				continue // already-negated marker isn't the live ask
+			}
+			markerAuthorID = c.AuthorID
+			markerAuthorType = c.AuthorType
+			found = true
+		}
+	}
+	if !found {
+		return // no live marker on record — fail closed, leave the flag as-is
+	}
+	if markerAuthorType != domain.ActorTypeAgent || markerAuthorID != comment.AuthorID {
+		return // a different author owns the live ask — only they (or a human) may release it
+	}
+
+	if err := s.taskSvc.SetHumanGate(ctx, task.ID, false); err != nil {
+		log.Printf("[human-gate] WARNING: SetHumanGate(false) on task %s (agent withdrawal) failed: %v", task.ID, err)
+		return
+	}
+
+	movedFromTriage := false
+	if s.statusRepo != nil {
+		if curStatus, err := s.statusRepo.GetByID(ctx, task.StatusID); err == nil && curStatus != nil &&
+			curStatus.Category == domain.StatusCategoryTriage {
+			if inProgressID, err := findStatusIDByCategory(ctx, s.statusRepo, task.ProjectID, domain.StatusCategoryInProgress); err == nil && inProgressID != uuid.Nil {
+				if moveErr := s.taskSvc.MoveTask(ctx, task.ID, MoveTaskInput{StatusID: &inProgressID}); moveErr != nil {
+					log.Printf("[human-gate] WARNING: move task %s from triage to in_progress failed: %v", task.ID, moveErr)
+				} else {
+					movedFromTriage = true
+				}
+			}
+		}
+	}
+
+	now := timeNow()
+	releaseBody := "🔓 Auto: human_gate снят — автор запроса отозвал его сам (blocker самоустранился)."
+	if movedFromTriage {
+		releaseBody = "🔓 Auto: human_gate снят, задача переведена из triage → in_progress — автор запроса отозвал его сам (blocker самоустранился)."
+	}
+	sysComment := &domain.Comment{
+		ID:         uuid.New(),
+		TaskID:     task.ID,
+		AuthorID:   systemActorID,
+		AuthorType: domain.ActorTypeSystem,
+		Body:       releaseBody,
+		CreatedAt:  now,
+		UpdatedAt:  now,
+	}
+	if err := s.commentRepo.Create(ctx, sysComment); err != nil {
+		log.Printf("[human-gate] WARNING: create system comment on task %s failed: %v", task.ID, err)
+	}
+	if s.ctxCacheInv != nil {
+		s.ctxCacheInv.Invalidate(ctx, task.ID)
+	}
+
+	if s.agentNotifySvc != nil && task.AssigneeType == domain.AssigneeTypeAgent && task.AssigneeID != nil {
+		taskSnap := s.buildTaskSnap(ctx, task)
+		actorID, _ := actorctx.FromContext(ctx)
+		commentBody := comment.Body
+		if len(commentBody) > 500 {
+			commentBody = commentBody[:500]
+		}
+		s.agentNotifySvc.NotifyAgent(ctx, *task.AssigneeID, AgentNotification{
+			EventType:   "task.human_gate_released",
+			Timestamp:   now,
+			WorkspaceID: wsID,
+			Task:        taskSnap,
+			AgentID:     *task.AssigneeID,
+			ActorID:     actorID,
+			ActorType:   string(domain.ActorTypeAgent),
 			Comment: map[string]any{
 				"id":   comment.ID,
 				"body": commentBody,
