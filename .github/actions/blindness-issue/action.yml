@@ -209,8 +209,39 @@ runs:
           "Run: ${RUN_URL}")"
 
         if [ -z "$num" ]; then
-          gh issue create --title "$TITLE" --body "$body" --label memory,ci 2>/dev/null \
-            || gh issue create --title "$TITLE" --body "$body"
+          # THE LABELS ARE THE TITLE-INDEPENDENT HANDLE, which is why this clause
+          # is worth keeping rather than deleting. `resolve` finds an episode by
+          # EXACT title, so a retitle strands it permanently and leaves no second
+          # way to enumerate open episodes; `gh issue list --label memory` is that
+          # second way.
+          #
+          # It had never once worked. Until 2026-07-30 this read
+          # `--label memory,ci 2>/dev/null || <retry bare>`, and NEITHER LABEL
+          # EXISTED in the repo — so the primary call failed on every fire, the
+          # `2>/dev/null` ate the one sentence that said why, the `||` opened the
+          # issue unlabelled, and the step echoed "Opened tracking issue" and
+          # exited 0. All 15 episodes ever opened (#333 … #477) carried no label
+          # from this action. `gh issue view 477 --json labels` -> `{"labels":[]}`:
+          # read the ARTEFACT, because the exit code was 0 throughout.
+          #
+          # Generalised, because this shape is everywhere: `X --extra 2>/dev/null
+          # || X` is not a rare safety net, it is a PERMANENT silent-degradation
+          # path. A fallback that runs 100% of the time is indistinguishable from
+          # the feature working, and suppressing stderr is what makes it so.
+          #
+          # So the fallback stays — but it must SPEAK. What it is still here to
+          # absorb, now that `memory` and `ci` exist: someone deletes or renames
+          # them (repo state, which nothing in this repo pins), or the token loses
+          # the scope to apply them. In that case an UNLABELLED episode still
+          # beats NO episode — going blind about going blind is the exact failure
+          # this action exists to prevent — so we retry bare. The `::warning::` is
+          # what stops the retry from being invisible a second time.
+          if out="$(gh issue create --title "$TITLE" --body "$body" --label memory,ci 2>&1)"; then
+            echo "$out"
+          else
+            echo "::warning::Could not apply labels \`memory,ci\` to the tracking issue; opening it unlabelled. Open episodes are then findable only by exact title, and a retitle strands them. Recreate the labels in this repo. gh said: ${out}"
+            gh issue create --title "$TITLE" --body "$body"
+          fi
           echo "Opened tracking issue: ${TITLE}"
           exit 0
         fi
