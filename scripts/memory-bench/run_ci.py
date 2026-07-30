@@ -43,8 +43,17 @@ A baseline is a claim about a DISTRIBUTION, not a sample:
   snapped from ONE run therefore records a coin toss, and the one it replaced
   happened to land on the MAXIMUM ever observed in 6 of 7 categories.
   So: `--update-baseline --repeat N` captures the MEAN of N passes and records
-  the observed per-category `spread` beside it; the verdict threshold is
-  `baseline - max(tolerance, spread)`. Where that threshold falls to zero the
+  the observed per-category `within_capture_spread` beside it; the verdict
+  threshold is `baseline - max(tolerance, within_capture_spread)`.
+
+  Read that second term for exactly what it is: the N passes share ONE process,
+  so it is repeatability, not the run-to-run noise it was called until
+  2026-07-30 (#ee17a86f). On every shipped baseline it reads 0.000, while two
+  runs at the same measurement-path SHA moved a category by a full 0.250. The
+  term that absorbs inter-run noise is therefore `tolerance`, floored at
+  `MIN_TOLERANCE` — see that constant for the measurement and its limits.
+
+  Where that threshold falls to zero the
   category is reported as "no verdict possible" with its reason, never as a ✓ —
   a category that cannot fail must not be counted as one that passed.
 
@@ -685,10 +694,30 @@ def resolve_dense_arm_status(results: list[dict]) -> str:
 class Baseline(NamedTuple):
     """A parsed baseline file.
 
-    `n_runs` and `spread` are what make a baseline honest about its own
-    precision. A baseline captured from one pass records `n_runs=1` and an empty
-    spread, and the gate then has no idea how much of any delta is judge noise —
-    so it says so out loud instead of ruling on it.
+    `n_runs` and `within_capture_spread` are what make a baseline honest about
+    its own precision. A baseline captured from one pass records `n_runs=1` and
+    an empty spread, and the gate then has no idea how much of any delta is
+    judge noise — so it says so out loud instead of ruling on it.
+
+    WHAT THAT SPREAD IS, AND WHAT IT IS NOT (#ee17a86f). It is the max−min over
+    the `--repeat N` passes of ONE capture, and those passes run in one process,
+    one container, one seeded workspace, one embedder (`for p in range(1,
+    repeat+1)` in `main`). That is REPEATABILITY. It is **not** reproducibility,
+    and it is not the run-to-run noise this field was documented as until
+    2026-07-30 — measured, the two differ by the whole tolerance:
+
+        30543232410 (acd64b9)  overall 0.875   single-session-assistant 0.750
+        30545673968 (67802f4)  overall 0.958   single-session-assistant 1.000
+
+    Same committed baseline, same branch, and `git diff --name-only` between the
+    two heads touches no `.go` and no measurement code — yet the recorded
+    within-capture spread for every category in that baseline is 0.000.
+
+    So: read it as a LOWER BOUND on noise, never as an estimate of it. Using it
+    in `max(tolerance, …)` is still correct — a category that cannot even
+    reproduce itself inside one process certainly cannot support a tight verdict
+    — but the protection against inter-run movement comes from the tolerance
+    floor (`MIN_TOLERANCE`), not from this number.
     """
 
     scores: dict[str, float]
@@ -729,7 +758,19 @@ def load_baseline(path: Path) -> Baseline:
             scores={k: float(v) for k, v in raw["scores"].items()},
             search_mode=str(raw.get("search_mode") or MODE_UNKNOWN),
             n_runs=int(raw.get("n_runs") or 1),
-            spread={k: float(v) for k, v in (raw.get("spread") or {}).items()},
+            # New name first, old name as fallback — the read half of the expand
+            # in `build_baseline_payload`. Written this way round so that when
+            # `spread` is finally dropped from the writer, every baseline already
+            # committed under the old name keeps its guard instead of silently
+            # reading as "no spread recorded".
+            spread={
+                k: float(v)
+                for k, v in (
+                    raw.get("within_capture_spread")
+                    or raw.get("spread")
+                    or {}
+                ).items()
+            },
             sample_sizes={
                 k: (int(v[0]), int(v[1]))
                 for k, v in (raw.get("sample_sizes") or {}).items()
@@ -792,6 +833,23 @@ def build_baseline_payload(
         "top_k": top_k,
         "n_runs": len(per_pass_scores),
         "scores": scores,
+        # BOTH keys, deliberately, and this is expand-not-rename (#ee17a86f).
+        #
+        # `within_capture_spread` is the honest name: these passes share one
+        # process, so the number is repeatability, not the run-to-run noise the
+        # old name implied. A reader who opens this file and sees `spread: 0.000`
+        # on every category concludes the harness is deterministic — it is not,
+        # and that conclusion is the one dangerous thing you can do with this
+        # field (lower `--tolerance` under it).
+        #
+        # `spread` stays because a bare rename has already cost this harness a
+        # guard once: `samples` → `sample_sizes` left captures written to the dead
+        # name reading as ABSENT, which silently disarmed the check rather than
+        # failing it. A stale `run_ci.py` reading a new baseline is a real case
+        # (the prod arm reads a committed file it did not write), and the failure
+        # is inert-not-loud, so it would not announce itself. Drop `spread` only
+        # once no reader of it remains — contract phase, its own change.
+        "within_capture_spread": spread,
         "spread": spread,
     }
     if served_commit:
@@ -887,10 +945,18 @@ def modes_comparable(baseline_mode: str, run_mode: str) -> bool:
 def effective_tolerance(category: str, tolerance: float, baseline: Baseline) -> float:
     """How far below baseline a score must fall before it means anything.
 
-    At least `--tolerance`, and at least the run-to-run spread the baseline
-    actually observed in this category. A category whose score swings 0.75
-    between two identical runs cannot support a 0.25 verdict — calling that
-    swing a regression reports the judge's nondeterminism as a code defect.
+    At least `--tolerance`, and at least the WITHIN-CAPTURE spread the baseline
+    observed in this category. A category whose score swings 0.75 between two
+    identical runs cannot support a 0.25 verdict — calling that swing a
+    regression reports the judge's nondeterminism as a code defect.
+
+    The second term used to be documented as "the run-to-run spread the baseline
+    actually observed". It is not (#ee17a86f): those passes share one process, so
+    the number is repeatability and reads 0.000 across every category of the
+    shipped baselines while real inter-run movement is a full tolerance-width.
+    It is a lower bound, and `max()` with a lower bound is sound — it just means
+    the term that actually absorbs inter-run noise is `tolerance`, which is why
+    `MIN_TOLERANCE` exists and why lowering it is gated.
     """
     return max(tolerance, baseline.spread.get(category, 0.0))
 
@@ -909,6 +975,34 @@ def effective_tolerance(category: str, tolerance: float, baseline: Baseline) -> 
 #            no-op this whole card exists to avoid — so it only forces a verdict
 #            when it holds for EVERY category and the run therefore enforced
 #            nothing at all.
+# The tolerance may not be lowered below the noise the instrument actually has
+# (#ee17a86f). This is the guard the recorded spread cannot be, because that
+# number is within-capture repeatability and reads 0.000 everywhere.
+#
+# WHY A FLOOR AT ALL. `effective_tolerance` is `max(tolerance, spread)`. With
+# spread ≡ 0.000 the max() is inert and `tolerance` is the only term left, so
+# "the harness looks deterministic, tighten the gate" is a one-character change
+# from a required check that reddens on noise no PR author can clear — the
+# bypass path #342 exists to prevent.
+#
+# WHY 0.25. It is one question on a 4-question CI category, and one question is
+# the movement measured between two runs at the same measurement-path SHA:
+# 30543232410 → 30545673968 moved `single-session-assistant` 0.750 → 1.000 and
+# `single-session-preference` 0.500 → 0.750.
+#
+# ⚠️ 0.25 IS NOT AN UPPER BOUND ON THE NOISE. It is the smallest tolerance the
+# retrieval arm's observed movement is known to fit inside, on a handful of
+# samples. Two independent reasons not to read it as "the noise is ≤ 0.25":
+#   * n is small (2 pairs), so it bounds what was seen, not the distribution;
+#   * the LLM-judged arm is louder by construction — this file's own module
+#     docstring records `single-session-assistant` at 1.000 / 0.250 / 1.000 on
+#     three consecutive nightlies of identical code, a 0.750 swing. That arm is
+#     judged by a model, the retrieval arm by hit/miss, so do not carry one
+#     arm's number to the other in either direction.
+# Raising this floor needs new measurement, not an argument; lowering it needs
+# the override below and a reason on the card.
+MIN_TOLERANCE = 0.25
+
 INELIGIBLE_SAMPLE = "sample"
 INELIGIBLE_SPREAD = "spread"
 
@@ -1360,6 +1454,29 @@ def cmd_run(args: argparse.Namespace) -> int:
     _require_env("MESH_AGENT_KEY")
     top_k = int(os.environ.get("LME_TOP_K", "10"))
     tolerance = args.tolerance
+    # Fail-closed, and BEFORE anything is measured: a run that would rule on a
+    # tolerance tighter than the instrument's own noise must not produce a
+    # verdict at all.
+    #
+    # INCONCLUSIVE rather than a hard error, on purpose. rc=2 routes into the
+    # blindness channel — it opens a tracking issue via the alert/resolve pair
+    # and does NOT redden the required check. That matters because the tolerance
+    # arrives as a WORKFLOW INPUT: the person who would eat a red here is
+    # whichever PR happens to run next, who did not set it and cannot clear it
+    # (#342). rc=2 puts the complaint where the person who CAN fix it will read
+    # it, and the `GATE_REASON:` line below gives that episode its own marker
+    # kind so it does not merge into an unrelated blind episode.
+    if tolerance < MIN_TOLERANCE and not getattr(args, "allow_tolerance_below_floor", False):
+        print(
+            f"❌ --tolerance {tolerance} is below the noise floor {MIN_TOLERANCE}.\n"
+            f"   The recorded `within_capture_spread` cannot protect you here: it is\n"
+            f"   repeatability inside one capture process and reads 0.000 on every\n"
+            f"   category, while measured run-to-run movement is a full 0.25 (see\n"
+            f"   MIN_TOLERANCE). A gate this tight reddens on noise nobody can clear.\n"
+            f"   If you mean it: --allow-tolerance-below-floor, and say why on the card."
+        )
+        print(f"GATE_REASON: tolerance-below-floor — {tolerance} < {MIN_TOLERANCE}")
+        return EXIT_INCONCLUSIVE
 
     chat_client = judge_client = None
     chat_model = judge_model = ""
@@ -1938,8 +2055,21 @@ def main() -> int:
     parser.add_argument(
         "--tolerance",
         type=float,
-        default=0.25,
-        help="Allowed per-category regression below baseline (default: 0.25 — 1-question variance on 4q/category CI subset)",
+        default=MIN_TOLERANCE,
+        help=(
+            f"Allowed per-category regression below baseline (default: {MIN_TOLERANCE} — "
+            f"1-question variance on 4q/category CI subset). Values below "
+            f"{MIN_TOLERANCE} are refused unless --allow-tolerance-below-floor."
+        ),
+    )
+    parser.add_argument(
+        "--allow-tolerance-below-floor",
+        action="store_true",
+        help=(
+            f"Permit --tolerance below {MIN_TOLERANCE}. The recorded spread cannot "
+            f"justify it — that number is within-capture repeatability, not run-to-run "
+            f"noise (#ee17a86f). Needs a fresh inter-run measurement, not an argument."
+        ),
     )
     parser.add_argument(
         "--retrieval-only",

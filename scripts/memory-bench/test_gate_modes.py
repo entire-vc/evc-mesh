@@ -21,6 +21,7 @@ import contextlib
 import io
 import json
 import os
+import re
 import sys
 import tempfile
 import unittest
@@ -32,6 +33,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import run_ci  # noqa: E402
 from run_ci import (  # noqa: E402
     EXIT_INCONCLUSIVE,
+    MIN_TOLERANCE,
     EXIT_OK,
     EXIT_REGRESSION,
     MODE_BM25_ONLY,
@@ -1652,6 +1654,185 @@ class TestResultsArtifact(_ArmHarness):
         after = sorted(p.name for p in real.glob("*.json")) if real.exists() else []
         self.assertEqual(before, after, "tests must not write into the uploaded dir")
         self.assertTrue(self.RETRIEVAL_RESULTS_FILE.exists())
+
+
+class TestTheRecordedSpreadIsNotRunToRunNoise(unittest.TestCase):
+    """#ee17a86f. The field is repeatability inside one capture, and the tolerance
+    floor — not the field — is what absorbs inter-run movement.
+
+    The defect this class pins is not a wrong number, it is a wrong READING of a
+    correct number: `spread: 0.000` on every category invites "the harness is
+    deterministic, tighten the gate", and measured inter-run movement at the same
+    measurement-path SHA is a full 0.250.
+    """
+
+    def test_the_payload_states_the_scope_in_the_field_name(self):
+        payload = build_baseline_payload([{"a": 1.0}, {"a": 0.5}], MODE_HYBRID, 10)
+        self.assertIn(
+            "within_capture_spread", payload,
+            "the honest name is gone, so a reader of the committed baseline sees only "
+            "`spread` again and has nothing telling them its scope is one process.",
+        )
+        self.assertEqual(payload["within_capture_spread"], payload["spread"])
+
+    def test_the_old_key_is_still_written(self):
+        """Expand, not rename. A bare rename already cost this harness a guard once
+        (`samples` → `sample_sizes`): a capture written to the dead name reads as
+        ABSENT, which disarms the check silently instead of failing it."""
+        payload = build_baseline_payload([{"a": 1.0}, {"a": 0.5}], MODE_HYBRID, 10)
+        self.assertIn("spread", payload)
+
+    def test_a_baseline_written_under_the_old_key_alone_still_guards(self):
+        """Every baseline committed before this change carries only `spread`. If the
+        reader stopped honouring it they would all silently fall back to bare
+        tolerance — the inert direction, which announces nothing."""
+        with tempfile.TemporaryDirectory() as tmp:
+            f = Path(tmp) / "b.json"
+            f.write_text(json.dumps({
+                "search_mode": MODE_HYBRID, "n_runs": 3,
+                "scores": {"a": 1.0}, "spread": {"a": 0.75},
+            }), encoding="utf-8")
+            self.assertEqual(load_baseline(f).spread, {"a": 0.75})
+
+    def test_the_new_key_wins_when_both_are_present(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            f = Path(tmp) / "b.json"
+            f.write_text(json.dumps({
+                "search_mode": MODE_HYBRID, "n_runs": 3, "scores": {"a": 1.0},
+                "within_capture_spread": {"a": 0.75}, "spread": {"a": 0.10},
+            }), encoding="utf-8")
+            self.assertEqual(load_baseline(f).spread, {"a": 0.75})
+
+    def test_neither_key_reads_as_no_spread_recorded(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            f = Path(tmp) / "b.json"
+            f.write_text(json.dumps({
+                "search_mode": MODE_HYBRID, "n_runs": 1, "scores": {"a": 1.0},
+            }), encoding="utf-8")
+            self.assertEqual(load_baseline(f).spread, {})
+
+
+class TestTheToleranceFloor(unittest.TestCase):
+    """#ee17a86f AC2. `max(tolerance, spread)` is inert while spread is 0.000, so
+    `tolerance` is the only term standing between the gate and one-question noise.
+    Nothing stopped it being lowered."""
+
+    def test_the_floor_value_itself_is_pinned_to_its_evidence(self):
+        """Lowering `MIN_TOLERANCE` is the dangerous edit, and because the argparse
+        default is bound to it, doing so also moves the default and reddens a
+        scattering of unrelated-looking verdict tests. None of those say WHY. This
+        one does, and it is the first failure a reader will scan to.
+
+        0.25 is one question on a 4-question CI category — the movement measured
+        between 30543232410 and 30545673968, two runs whose diff touches no
+        measurement code. Lowering it is a claim that the instrument got quieter,
+        which is a measurement, not an argument.
+        """
+        self.assertEqual(
+            0.25, MIN_TOLERANCE,
+            "MIN_TOLERANCE moved. It is not a taste knob: it is the smallest "
+            "tolerance the retrieval arm's MEASURED inter-run movement fits inside "
+            "(0.250, one question on a 4q category). Lowering it re-arms the failure "
+            "#ee17a86f was filed for — a required check reddening on noise no PR "
+            "author can clear. Raise or lower it only with a fresh pair of runs at "
+            "one measurement-path SHA quoted on the card.",
+        )
+
+    def test_the_argparse_default_is_the_floor_itself(self):
+        """Read off the shipped parser, not restated: a default that drifted below
+        the floor would otherwise be caught only when someone passed the flag."""
+        src = (Path(__file__).resolve().parent / "run_ci.py").read_text(encoding="utf-8")
+        m = re.search(r'"--tolerance",\s*\n\s*type=float,\s*\n\s*default=([A-Za-z_0-9.]+),', src)
+        self.assertIsNotNone(m, "the --tolerance default moved; repoint this pin")
+        self.assertEqual(
+            "MIN_TOLERANCE", m.group(1),
+            f"--tolerance defaults to {m.group(1)!r} rather than the floor constant, so "
+            f"the two can drift apart silently.",
+        )
+
+    def test_the_workflow_does_not_pass_a_tolerance_under_the_floor(self):
+        """The likely edit is in the WORKFLOW, not in Python: `inputs.tolerance ||
+        '0.25'` appears twice as a literal. A floor enforced only in argparse would
+        never see a change made there."""
+        wf = (Path(__file__).resolve().parents[2]
+              / ".github" / "workflows" / "memory-bench.yml").read_text(encoding="utf-8")
+        literals = re.findall(r"inputs\.tolerance \|\| '([0-9.]+)'", wf)
+        self.assertTrue(literals, "the tolerance default literal moved; repoint this pin")
+        for lit in literals:
+            self.assertGreaterEqual(
+                float(lit), MIN_TOLERANCE,
+                f"the workflow defaults --tolerance to {lit}, under the {MIN_TOLERANCE} "
+                f"noise floor. The gate would redden on movement measured between two "
+                f"runs of identical measurement code, which no PR author can clear.",
+            )
+
+    def test_a_tolerance_under_the_floor_is_refused_before_measuring(self):
+        rc, out, reached = _run_gate_with_tolerance(0.1)
+        self.assertEqual(EXIT_INCONCLUSIVE, rc, out)
+        self.assertIn("below the noise floor", out)
+        self.assertIn("GATE_REASON: tolerance-below-floor", out)
+        self.assertFalse(
+            reached,
+            "the refusal fired but only AFTER measuring. The point of the floor is "
+            "that a run which cannot support a verdict does not spend a measurement "
+            "to find that out.",
+        )
+
+    def test_the_override_lets_it_through(self):
+        """Deliberate, loud, and possible — a floor with no override gets worked
+        around by editing the constant, which leaves no trace at the call site."""
+        _rc, out, reached = _run_gate_with_tolerance(0.1, override=True)
+        self.assertNotIn("below the noise floor", out)
+        self.assertTrue(reached, "the override did not actually let the run proceed")
+
+    def test_the_floor_itself_is_allowed(self):
+        _rc, out, reached = _run_gate_with_tolerance(MIN_TOLERANCE)
+        self.assertNotIn("below the noise floor", out)
+        self.assertTrue(reached, "the floor value itself was refused; it must be allowed")
+
+
+class _MeasurementReached(Exception):
+    """Raised by the stubbed measurement so the driver can assert, positively, that
+    the floor check let the run through — rather than inferring it from the absence
+    of a message."""
+
+
+def _run_gate_with_tolerance(tolerance: float, override: bool = False):
+    """Drive the shipped `main()` up to the first measurement.
+
+    `run_single` is stubbed to raise immediately, which does three things: it keeps
+    the check under test (the floor is evaluated BEFORE anything is measured) as the
+    only thing that can decide the outcome; it makes "did we get past the floor?" a
+    positive signal instead of the absence of a string; and it keeps the real
+    dataset's 24 questions and their error spew out of the job log — these suites run
+    inside the required check, and a self-check that prints its own fixture failures
+    there is indistinguishable from the gate failing.
+
+    Returns (rc, stdout, reached_measurement).
+    """
+    argv = ["run_ci.py", "--retrieval-only", "--tolerance", str(tolerance)]
+    if override:
+        argv.append("--allow-tolerance-below-floor")
+    buf = io.StringIO()
+    env = {"MESH_API_URL": "http://127.0.0.1:1", "MESH_AGENT_KEY": "x"}
+    reached = False
+
+    def _stub(*_a, **_kw):
+        nonlocal reached
+        reached = True
+        raise _MeasurementReached
+
+    with mock.patch.dict(os.environ, env, clear=False), \
+         mock.patch.object(sys, "argv", argv), \
+         mock.patch.object(run_ci, "run_single", side_effect=_stub), \
+         contextlib.redirect_stdout(buf):
+        try:
+            rc = run_ci.main()
+        except SystemExit as exc:
+            rc = exc.code
+        except (_MeasurementReached, Exception):  # noqa: BLE001
+            rc = None
+    return rc, buf.getvalue(), reached
 
 
 if __name__ == "__main__":
