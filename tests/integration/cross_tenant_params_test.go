@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"os"
 	"regexp"
@@ -42,15 +43,16 @@ var exemptRoutes = map[string]bool{
 // victimFixture is one tenant's data, created by its legitimate owner, for an
 // unrelated stranger to fail to reach.
 type victimFixture struct {
-	env       *TestEnv
-	wsID      string
-	wsSlug    string
-	projectID string
-	taskID    string
-	shortID   string
-	fieldID   string
-	agentID   string
-	initID    string
+	env        *TestEnv
+	wsID       string
+	wsSlug     string
+	projectID  string
+	taskID     string
+	shortID    string
+	fieldID    string
+	agentID    string
+	initID     string
+	artifactID string
 
 	// The "flat" objects: routes naming them carry no workspace or project in
 	// the path, which is why the guard used to miss them entirely.
@@ -147,6 +149,18 @@ func newVictimFixture(t *testing.T, prefix string) *victimFixture {
 	f.shortID = strings.ReplaceAll(f.taskID, "-", "")[:8]
 	f.createFlatObjects(t)
 
+	// Required, not best-effort, for the same reason as createFlatObjects: a
+	// missing fixture turns the route's assertion into "403 because the id
+	// does not exist", which passes whether or not cross-tenant access is
+	// actually blocked — see #a49500c5, which is exactly this failure mode
+	// (concreteURL had no :artifact_id fixture and fell through to a dummy
+	// UUID, so the test never exercised "real artifact, foreign workspace"
+	// at all).
+	f.artifactID = f.createArtifact(t)
+	env.OnCleanup(func() {
+		_, _ = env.DB.ExecContext(context.Background(), "DELETE FROM artifacts WHERE id = $1", f.artifactID)
+	})
+
 	return f
 }
 
@@ -209,6 +223,53 @@ func (f *victimFixture) createFlatObjects(t *testing.T) {
 	})
 }
 
+// createArtifact uploads a real file to the victim's task and returns the
+// artifact's id. Artifact upload is multipart/form-data, unlike every other
+// fixture here, so it can't go through the shared JSON create() helper.
+func (f *victimFixture) createArtifact(t *testing.T) string {
+	t.Helper()
+	resp := uploadArtifactRaw(t, f.env, f.taskID, "victim-artifact.txt",
+		[]byte("Victim confidential artifact content"))
+	raw := f.env.ReadBody(t, resp)
+	require.Equal(t, http.StatusCreated, resp.StatusCode,
+		"fixture setup failed: artifact upload returned %d: %s", resp.StatusCode, string(raw))
+
+	var created map[string]any
+	require.NoError(t, json.Unmarshal(raw, &created), "cannot decode artifact upload response: %s", string(raw))
+	id, _ := created["id"].(string)
+	require.NotEmpty(t, id, "artifact upload returned no id: %s", string(raw))
+	return id
+}
+
+// uploadArtifactRaw performs the multipart artifact upload and returns the raw
+// response — the shared TestEnv.Post helper only speaks JSON, and artifact
+// upload takes name/artifact_type/file as multipart form fields.
+func uploadArtifactRaw(t *testing.T, env *TestEnv, taskID, filename string, content []byte) *http.Response {
+	t.Helper()
+
+	var buf bytes.Buffer
+	w := multipart.NewWriter(&buf)
+	require.NoError(t, w.WriteField("name", filename))
+	require.NoError(t, w.WriteField("artifact_type", "file"))
+	part, err := w.CreateFormFile("file", filename)
+	require.NoError(t, err)
+	_, err = part.Write(content)
+	require.NoError(t, err)
+	require.NoError(t, w.Close())
+
+	req, err := http.NewRequest(http.MethodPost,
+		env.BaseURL+"/api/v1/tasks/"+taskID+"/artifacts", &buf)
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	if env.AuthToken != "" {
+		req.Header.Set("Authorization", "Bearer "+env.AuthToken)
+	}
+
+	resp, err := env.HTTPClient.Do(req)
+	require.NoError(t, err)
+	return resp
+}
+
 // create posts body to path as the victim and returns the new object's id.
 func (f *victimFixture) create(t *testing.T, method, path string, body map[string]any) string {
 	t.Helper()
@@ -233,6 +294,7 @@ func (f *victimFixture) concreteURL(pattern string) string {
 		":ws_id":        f.wsID,
 		":proj_id":      f.projectID,
 		":task_id":      f.taskID,
+		":artifact_id":  f.artifactID,
 		":field_id":     f.fieldID,
 		":agent_id":     f.agentID,
 		":init_id":      f.initID,
@@ -383,6 +445,8 @@ func TestCrossTenant_ScopedRoutesStillWorkForTheirOwner(t *testing.T) {
 		"/api/v1/tasks/" + victim.taskID + "/activity",
 		"/api/v1/tasks/" + victim.taskID + "/vcs-links",
 		"/api/v1/tasks/" + victim.taskID + "/comments",
+		"/api/v1/artifacts/" + victim.artifactID,
+		"/api/v1/artifacts/" + victim.artifactID + "/download",
 		"/api/v1/custom-fields/" + victim.fieldID,
 		"/api/v1/agents/" + victim.agentID,
 		"/api/v1/agents/" + victim.agentID + "/sub-agents",
