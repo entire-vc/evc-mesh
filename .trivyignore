@@ -11,10 +11,11 @@
 # Format (one finding ID per line):
 #   # CVE-YYYY-NNNNN — <reason not exploitable / no adoptable fix>. Accepted by <name> <date>.
 #   CVE-YYYY-NNNNN
-
-# CVE-2026-32285 — github.com/buger/jsonparser (indirect) HIGH, DoS via malformed
-#   JSON. Fix exists (v1.1.2), but the bump touches go.mod/go.sum which the
-#   deploy-backend.yml pipeline auto-deploys to prod — that requires Bob's
-#   approval. TEMPORARY ignore until the deploy-gated bump PR lands; remove this
-#   line in that PR. Accepted by Garfield 2026-05-23.
-CVE-2026-32285
+#
+# A line here outlives whatever made it necessary. CVE-2026-32285 was accepted
+# 2026-05-23 pending a deploy-gated bump; Dependabot shipped the same bump 15
+# minutes later (#123) and the dependency left the tree entirely on 2026-07-08
+# (#257) — the suppression stayed for 68 days, silently disarmed for a CVE that
+# would have muzzled trivy had the dependency ever come back transitively.
+# So the trivy job now fails if any ID below matches nothing trivy can see:
+# see the "stale .trivyignore entries" step in .github/workflows/trivy.yml.
