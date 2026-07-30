@@ -33,15 +33,25 @@ jobs:
       # The static check above cannot see a variable made required in a way
       # the regex misses, so also prove it end to end: an .env produced from
       # the FIRST installable release still parses against today's compose
-      # file. This is the exact upgrade that failed on 2026-07-29
+      # files. This is the exact upgrade that failed on 2026-07-29
       # (mesh.prototypes.ventures, 5b672a6 -> 9d7ac87).
+      #
+      # BOTH files, for the reason spelled out in check-required-env.sh: the
+      # first version of this job parsed only the production file, so the same
+      # defect in docker-compose.yml — which docs/self-hosting.md presents as
+      # the default Quick Start path — slipped the static and the dynamic
+      # layer at once. Also parses env_file: references, which the regex
+      # cannot follow.
       - name: An .env from the first release still parses
         working-directory: deploy/docker/mesh
         run: |
           sed -E 's/^([A-Z_]+)=$/\1=ci-placeholder/' \
             testdata/first-release.env.example > /tmp/first-release.env
-          docker compose -f docker-compose.prod.yml \
-            --env-file /tmp/first-release.env config >/dev/null
+          for f in docker-compose.prod.yml docker-compose.yml; do
+            echo "--- $f"
+            docker compose -f "$f" \
+              --env-file /tmp/first-release.env config >/dev/null
+          done
 
   lint:
     name: Lint
