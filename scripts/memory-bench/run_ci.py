@@ -79,7 +79,12 @@ Required for the full (non --retrieval-only) eval:
 Optional:
   MESH_MCP_BIN        — Path to mesh-mcp binary (default: ~/bin/mesh-mcp)
   LME_TOP_K           — Recall top-k (default: 10)
-  RECALL_GRAPH_ENABLED — Pass to mesh-mcp (default: false)
+  RECALL_GRAPH_ENABLED — Pass to mesh-mcp (default: false; the bench workflow
+                        sets it to 'true'). It costs `graphBoostReserve(limit)`
+                        = limit/4 of the page, so the retrieval window is
+                        limit*3/4 — read `rows_returned` against that ceiling,
+                        not against the limit. See `_mesh_env` in
+                        mesh_client_stdio.py.
 """
 
 from __future__ import annotations
