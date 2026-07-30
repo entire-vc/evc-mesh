@@ -515,8 +515,14 @@ cd deploy/docker/mesh
 
 # 1. Create the env file. The name matters -- see the warning below.
 cp .env.prod.example .env
-#    nano .env   -- fill in POSTGRES_PASSWORD, REDIS_PASSWORD, JWT_SECRET,
-#                   MINIO_ACCESS_KEY, MINIO_SECRET_KEY, MESH_BASE_URL
+#    nano .env   -- fill in every variable under the "# Required" comment near
+#                   the top of the file. Treat that comment as authoritative,
+#                   not this sentence: deploy/docker/mesh/check-required-env.sh
+#                   enforces in CI that it lists exactly what
+#                   docker-compose.prod.yml requires, so it cannot go stale the
+#                   way this paragraph twice has. As of this writing that's
+#                   POSTGRES_PASSWORD, REDIS_PASSWORD, JWT_SECRET,
+#                   MINIO_ACCESS_KEY, MINIO_SECRET_KEY, GRAFANA_PASSWORD.
 
 # 2. Build and start all services
 docker compose -f docker-compose.prod.yml --env-file .env up -d --build
