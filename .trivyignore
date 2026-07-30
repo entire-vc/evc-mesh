@@ -19,6 +19,3 @@
 # would have muzzled trivy had the dependency ever come back transitively.
 # So the trivy job now fails if any ID below matches nothing trivy can see:
 # see the "stale .trivyignore entries" step in .github/workflows/trivy.yml.
-
-# NEGATIVE CONTROL — temporary, reverted in the next commit.
-CVE-2026-32285
