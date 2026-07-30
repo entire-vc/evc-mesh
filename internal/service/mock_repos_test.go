@@ -2127,20 +2127,25 @@ func (m *MockVCSLinkRepository) ListByTask(_ context.Context, taskID uuid.UUID) 
 	return out, nil
 }
 
-func (m *MockVCSLinkRepository) Upsert(_ context.Context, link *domain.VCSLink) error {
+func (m *MockVCSLinkRepository) Upsert(_ context.Context, link *domain.VCSLink) (bool, error) {
 	if m.errToReturn != nil {
-		return m.errToReturn
+		return false, m.errToReturn
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for i, l := range m.items {
 		if l.TaskID == link.TaskID && l.Provider == link.Provider && l.LinkType == link.LinkType && l.ExternalID == link.ExternalID {
+			// Mirrors real Postgres: ON CONFLICT DO UPDATE never touches
+			// id/created_at — preserve them and reflect that back into the
+			// caller's link, same contract as VCSLinkRepo.Upsert.
+			link.ID = l.ID
+			link.CreatedAt = l.CreatedAt
 			m.items[i] = *link
-			return nil
+			return false, nil
 		}
 	}
 	m.items = append(m.items, *link)
-	return nil
+	return true, nil
 }
 
 func (m *MockVCSLinkRepository) ListByExternalID(_ context.Context, provider domain.VCSProvider, linkType domain.VCSLinkType, externalID string) ([]domain.VCSLink, error) {

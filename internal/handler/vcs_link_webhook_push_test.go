@@ -3,6 +3,7 @@ package handler
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -90,6 +91,23 @@ func TestGitHubWebhook_Push_NoReference_CreatesNothing(t *testing.T) {
 	resp := sendPush(t, h, newPushRequest(t, "push-2", "refs/heads/garfield/gofmt", "chore: gofmt"))
 	assert.Equal(t, "no_task_ref", resp["status"])
 	assert.Empty(t, svc.createCalls, "no link may be created without a resolvable reference")
+}
+
+// A Create failure on the commit-link path (e.g. a DB error) must not fail
+// the webhook response — GitHub retries on non-2xx, and this failure is
+// already logged server-side. It's just swallowed, not surfaced to the caller.
+func TestGitHubWebhook_Push_CreateError_StillReturnsOK(t *testing.T) {
+	taskID := uuid.New()
+	svc := &stubVCSLinkService{
+		resolveTaskID:   taskID,
+		resolveRef:      service.TaskRef{Kind: service.RefKindShortID, Short: taskID.String()[:8]},
+		createReturnErr: errors.New("db unavailable"),
+	}
+	h := NewVCSLinkHandler(svc, WithWebhookDedupStore(newMemDedupStore()))
+
+	resp := sendPush(t, h, newPushRequest(t, "push-4", "refs/heads/linus/82377a26-gate", "Refs #82377a26"))
+	assert.Equal(t, "ok", resp["status"])
+	require.Len(t, svc.createCalls, 1, "Create must still have been attempted")
 }
 
 // A push with no head_commit (branch deletion, tag push) must not reach the

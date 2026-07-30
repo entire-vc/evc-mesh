@@ -181,12 +181,20 @@ func (h *VCSLinkHandler) Create(c echo.Context) error {
 		Status:     linkStatus,
 	}
 
-	link, err := h.vcsService.Create(c.Request().Context(), input)
+	link, created, err := h.vcsService.Create(c.Request().Context(), input)
 	if err != nil {
 		return handleError(c, err)
 	}
 
-	return c.JSON(http.StatusCreated, link)
+	// The upsert path (explicit status on an existing link) updates a row
+	// rather than creating one — 201 there would claim a fresh row exists
+	// when it doesn't, reading as a duplicate to any caller that trusts the
+	// echo instead of re-fetching (#b73171fa).
+	status := http.StatusCreated
+	if !created {
+		status = http.StatusOK
+	}
+	return c.JSON(status, link)
 }
 
 // List handles GET /tasks/:task_id/vcs-links
@@ -382,7 +390,7 @@ func (h *VCSLinkHandler) GitHubWebhook(c echo.Context) error {
 			URL:        commit.URL,
 			Title:      firstLine(commit.Message),
 		}
-		if _, err := h.vcsService.Create(ctx, input); err != nil {
+		if _, _, err := h.vcsService.Create(ctx, input); err != nil {
 			c.Logger().Errorf("github webhook: create vcs link: %v", err)
 		}
 	}

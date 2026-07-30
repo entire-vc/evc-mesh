@@ -465,7 +465,13 @@ type WebhookService interface {
 
 // VCSLinkService provides business logic for VCS link management.
 type VCSLinkService interface {
-	Create(ctx context.Context, input domain.CreateVCSLinkInput) (*domain.VCSLink, error)
+	// Create creates a new VCS link, or — when input.Status is explicitly set
+	// — upserts onto an existing (task_id, provider, link_type, external_id)
+	// match. The returned bool is true on insert, false on update; the
+	// returned *domain.VCSLink always reflects the actual persisted row
+	// (id/created_at included), never a caller-generated value that the
+	// database discarded on conflict (#b73171fa).
+	Create(ctx context.Context, input domain.CreateVCSLinkInput) (link *domain.VCSLink, created bool, err error)
 	GetByID(ctx context.Context, id uuid.UUID) (*domain.VCSLink, error)
 	Delete(ctx context.Context, id uuid.UUID) error
 	ListByTask(ctx context.Context, taskID uuid.UUID) ([]domain.VCSLink, error)

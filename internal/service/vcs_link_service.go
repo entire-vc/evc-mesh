@@ -68,19 +68,22 @@ func NewVCSLinkService(repo repository.VCSLinkRepository, opts ...VCSLinkService
 	return s
 }
 
-// Create creates a new VCS link.
-func (s *vcsLinkService) Create(ctx context.Context, input domain.CreateVCSLinkInput) (*domain.VCSLink, error) {
+// Create creates a new VCS link, or updates an existing one when the caller
+// supplies an explicit status (see the explicitStatus branch below). The
+// returned bool is true when a new row was inserted, false when an existing
+// one was updated in place — the handler uses it to pick 201 vs 200.
+func (s *vcsLinkService) Create(ctx context.Context, input domain.CreateVCSLinkInput) (*domain.VCSLink, bool, error) {
 	if input.TaskID == uuid.Nil {
-		return nil, apierror.BadRequest("task_id is required")
+		return nil, false, apierror.BadRequest("task_id is required")
 	}
 	if input.URL == "" {
-		return nil, apierror.BadRequest("url is required")
+		return nil, false, apierror.BadRequest("url is required")
 	}
 	if input.ExternalID == "" {
-		return nil, apierror.BadRequest("external_id is required")
+		return nil, false, apierror.BadRequest("external_id is required")
 	}
 	if input.LinkType == "" {
-		return nil, apierror.BadRequest("link_type is required")
+		return nil, false, apierror.BadRequest("link_type is required")
 	}
 
 	provider := input.Provider
@@ -142,16 +145,21 @@ func (s *vcsLinkService) Create(ctx context.Context, input domain.CreateVCSLinkI
 		// A caller that does NOT pass status keeps the plain-Create path
 		// below unchanged: an accidental duplicate add still fails loudly
 		// instead of silently resetting an existing 'merged' row to 'open'.
-		if err := s.repo.Upsert(ctx, link); err != nil {
-			return nil, fmt.Errorf("create vcs link: %w", err)
+		//
+		// Upsert mutates link's ID/CreatedAt in place to the actual persisted
+		// row when this call updated an existing one (see its doc) — so link
+		// is safe to return as-is either way.
+		created, err := s.repo.Upsert(ctx, link)
+		if err != nil {
+			return nil, false, fmt.Errorf("create vcs link: %w", err)
 		}
-		return link, nil
+		return link, created, nil
 	}
 
 	if err := s.repo.Create(ctx, link); err != nil {
-		return nil, fmt.Errorf("create vcs link: %w", err)
+		return nil, false, fmt.Errorf("create vcs link: %w", err)
 	}
-	return link, nil
+	return link, true, nil
 }
 
 // GetByID retrieves a VCS link by ID.
@@ -281,7 +289,7 @@ func (s *vcsLinkService) HandleGitHubPullRequestEvent(ctx context.Context, ev Gi
 		Metadata:   []byte("{}"),
 		CreatedAt:  time.Now(),
 	}
-	if err := s.repo.Upsert(ctx, link); err != nil {
+	if _, err := s.repo.Upsert(ctx, link); err != nil {
 		return PRHandleResult{TaskID: taskID}, fmt.Errorf("upsert vcs link: %w", err)
 	}
 
