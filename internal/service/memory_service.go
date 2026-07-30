@@ -575,8 +575,12 @@ func (s *memoryService) Remember(ctx context.Context, mem *domain.Memory) (Remem
 		return RememberResult{}, fmt.Errorf("memory remember: upsert: %w", err)
 	}
 
-	// Async embedding — fire and forget, non-fatal.
-	if !embedding.IsNoop(s.embedder) {
+	// Async embedding — fire and forget, non-fatal. The row is invisible to the
+	// dense recall arm until this goroutine lands (see EmbeddingPending's doc);
+	// embeddingPending is reported to the caller below regardless of how long
+	// the goroutine actually takes.
+	embeddingPending := !embedding.IsNoop(s.embedder)
+	if embeddingPending {
 		memID := mem.ID
 		content := mem.Key + " " + mem.Content + " " + strings.Join(mem.Tags, " ")
 		go s.embedAndStore(memID, content)
@@ -694,7 +698,7 @@ func (s *memoryService) Remember(ctx context.Context, mem *domain.Memory) (Remem
 		}
 	}
 
-	return RememberResult{Outcome: outcome, NearDupKey: nearDupKey}, nil
+	return RememberResult{Outcome: outcome, NearDupKey: nearDupKey, EmbeddingPending: embeddingPending}, nil
 }
 
 // defaultExpiresAt applies the server-side TTL policy when the caller does not supply expires_at.
