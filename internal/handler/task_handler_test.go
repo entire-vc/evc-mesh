@@ -705,6 +705,103 @@ func TestUpdate_HumanGate_AgentSetTrue(t *testing.T) {
 	assert.True(t, updateCalled)
 }
 
+// TestUpdate_HumanGate_AgentSetTrue_PostsRawArmComment is task #a2e2ac72: a raw
+// false→true PATCH (agent or user, either way — arming itself stays
+// unrestricted) must leave a trace, or releaseHumanGateOnWithdrawal's
+// soleMarkerAuthor fast path (comment_service.go, task #9959f201) cannot tell
+// a genuine first marker apart from one fabricated onto an already-armed
+// gate. See hasRawArmMarker for the read side this comment feeds.
+func TestUpdate_HumanGate_AgentSetTrue_PostsRawArmComment(t *testing.T) {
+	taskID := uuid.New()
+	existingTask := &domain.Task{ID: taskID, HumanGate: false}
+
+	mockSvc := &MockTaskService{
+		GetByIDFunc: func(_ context.Context, _ uuid.UUID) (*domain.Task, error) {
+			return existingTask, nil
+		},
+		UpdateFunc: func(_ context.Context, task *domain.Task) error {
+			return nil
+		},
+	}
+	commentCaptured := false
+	mockComment := &MockCommentService{
+		CreateFunc: func(_ context.Context, c *domain.Comment) error {
+			commentCaptured = true
+			assert.Equal(t, taskID, c.TaskID)
+			assert.True(t, c.IsInternal)
+			assert.Contains(t, c.Body, "human_gate взведён напрямую")
+			return nil
+		},
+	}
+
+	e := echo.New()
+	h := NewTaskHandler(mockSvc).WithCommentService(mockComment)
+
+	trueVal := true
+	body, _ := json.Marshal(map[string]interface{}{"human_gate": trueVal})
+	req := httptest.NewRequest(http.MethodPatch, "/", strings.NewReader(string(body)))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	agentID := uuid.New()
+	ctx := actorctx.WithActor(req.Context(), agentID, domain.ActorTypeAgent)
+	req = req.WithContext(ctx)
+
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/tasks/:task_id")
+	c.SetParamNames("task_id")
+	c.SetParamValues(taskID.String())
+
+	err := h.Update(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.True(t, commentCaptured, "a raw arm must post the system comment releaseHumanGateOnWithdrawal looks for")
+}
+
+// TestUpdate_HumanGate_AlreadyTrue_NoDuplicateArmComment ensures the raw-arm
+// comment only fires on a genuine false→true transition, not on every PATCH
+// that merely re-asserts an already-true gate (which would let a bystander
+// pad the thread with fresh "arm" markers indefinitely).
+func TestUpdate_HumanGate_AlreadyTrue_NoDuplicateArmComment(t *testing.T) {
+	taskID := uuid.New()
+	existingTask := &domain.Task{ID: taskID, HumanGate: true}
+
+	mockSvc := &MockTaskService{
+		GetByIDFunc: func(_ context.Context, _ uuid.UUID) (*domain.Task, error) {
+			return existingTask, nil
+		},
+		UpdateFunc: func(_ context.Context, task *domain.Task) error {
+			return nil
+		},
+	}
+	mockComment := &MockCommentService{
+		CreateFunc: func(_ context.Context, c *domain.Comment) error {
+			t.Fatalf("no comment should be created when human_gate was already true")
+			return nil
+		},
+	}
+
+	e := echo.New()
+	h := NewTaskHandler(mockSvc).WithCommentService(mockComment)
+
+	trueVal := true
+	body, _ := json.Marshal(map[string]interface{}{"human_gate": trueVal})
+	req := httptest.NewRequest(http.MethodPatch, "/", strings.NewReader(string(body)))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	agentID := uuid.New()
+	ctx := actorctx.WithActor(req.Context(), agentID, domain.ActorTypeAgent)
+	req = req.WithContext(ctx)
+
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/tasks/:task_id")
+	c.SetParamNames("task_id")
+	c.SetParamValues(taskID.String())
+
+	err := h.Update(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
 func TestUpdate_CompletionSignal_AgentSetsTrue(t *testing.T) {
 	taskID := uuid.New()
 	existingTask := &domain.Task{ID: taskID, CompletionSignal: false}

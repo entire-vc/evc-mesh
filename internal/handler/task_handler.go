@@ -462,6 +462,27 @@ func (h *TaskHandler) Update(c echo.Context) error {
 		})
 	}
 
+	// Task #a2e2ac72: a false→true PATCH (or UI, same endpoint) carries no
+	// "❓ Blocking @user" comment at all — unlike enforceBlockingTriage's arm
+	// path, nothing here records WHO raised this ask or WHY. Without this,
+	// releaseHumanGateOnWithdrawal's soleMarkerAuthor check (task #9959f201)
+	// cannot tell "this agent's marker is the one genuine ask on this thread"
+	// apart from "this agent fabricated a marker onto a gate someone else (or
+	// a human via UI) already armed" — the two are byte-identical in the
+	// comment log otherwise. Post a system comment marking the raw arm so
+	// that check has something to look for; see hasRawArmMarker in
+	// comment_service.go for the matching read side.
+	if !prevHumanGate && req.HumanGate != nil && *req.HumanGate && h.commentService != nil {
+		actorID, actorType := actorctx.FromContext(c.Request().Context())
+		_ = h.commentService.Create(c.Request().Context(), &domain.Comment{
+			TaskID:     task.ID,
+			AuthorID:   actorID,
+			AuthorType: actorType,
+			Body:       fmt.Sprintf("🔒 Auto: human_gate взведён напрямую (PATCH/UI), без маркерного коммента — actor: %s", actorID),
+			IsInternal: true,
+		})
+	}
+
 	task.URL = computeTaskURL(c.Request(), task.ID)
 	return c.JSON(http.StatusOK, task)
 }
