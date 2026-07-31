@@ -1169,6 +1169,15 @@ func (s *commentService) releaseHumanGate(ctx context.Context, comment *domain.C
 	}
 }
 
+// minReaffirmToWithdrawalGap is the minimum real time that must separate a
+// reaffirming marker from that same (non-sole) agent's own negator before
+// releaseHumanGateOnWithdrawal will honour it — see that function's own
+// comment (task #9959f201) for the full rationale. 30 minutes is long enough
+// that a scripted two-comment sequence in one turn cannot satisfy it, and
+// short enough not to meaningfully delay a genuine hand-off that actually
+// did the work (the #7f646f08 case took real investigation, not seconds).
+const minReaffirmToWithdrawalGap = 30 * time.Minute
+
 // releaseHumanGateOnWithdrawal is the AGENT-side counterpart to releaseHumanGate,
 // closing the gap in task #c375905c: a Pavel-ask has no path to be withdrawn once
 // its underlying blocker has resolved but Pavel himself hasn't (and may never)
@@ -1195,6 +1204,8 @@ func (s *commentService) releaseHumanGate(ctx context.Context, comment *domain.C
 //     agent. A live ask with no marker found at all, or one raised/most-recently
 //     reaffirmed by someone else, is left gated — this is the negative control:
 //     an unwithdrawn or another-agent's ask must not clear.
+//   - minReaffirmToWithdrawalGap (below) if this agent is not the ask's SOLE
+//     marker-author — see that guard's own comment for why.
 //
 // ListByTask's SortDir is NOT honoured by the real repository (it hardcodes
 // ORDER BY created_at ASC regardless — see CommentRepo.ListByTask), unlike what
@@ -1220,6 +1231,11 @@ func (s *commentService) releaseHumanGateOnWithdrawal(ctx context.Context, comme
 	// comment that is not itself already negated. Mirrors enforceBlockingTriage's
 	// own arm criterion (hasBlockingMarker, no auto-generated-comment carve-out) so
 	// "who armed it" is judged by the same rule that actually armed it.
+	//
+	// While iterating, also track (a) that marker's own CreatedAt (markerCreatedAt,
+	// for the time-gap guard below) and (b) whether every marker-bearing comment on
+	// the whole thread shares ONE author (soleMarkerAuthor) — both computed from the
+	// same page fetched once, no second query.
 	pg := pagination.Params{Page: 1, PageSize: 100}
 	pg.Normalize()
 	page, err := s.commentRepo.ListByTask(ctx, task.ID, repository.CommentFilter{IncludeInternal: true}, pg)
@@ -1230,7 +1246,11 @@ func (s *commentService) releaseHumanGateOnWithdrawal(ctx context.Context, comme
 
 	var markerAuthorID uuid.UUID
 	var markerAuthorType domain.ActorType
+	var markerCreatedAt time.Time
 	found := false
+	soleMarkerAuthor := true
+	haveSeenAnyMarkerAuthor := false
+	var firstMarkerAuthorSeen uuid.UUID
 	if page != nil {
 		// Real order is created_at ASC (see doc comment above) — keep overwriting so
 		// the LAST qualifying match, not the first, wins.
@@ -1241,11 +1261,23 @@ func (s *commentService) releaseHumanGateOnWithdrawal(ctx context.Context, comme
 			if !hasBlockingMarker(c.Body) {
 				continue
 			}
+			// Task #9959f201's soleMarkerAuthor scan intentionally counts EVERY
+			// marker-bearing comment ever posted on this thread, negated or not —
+			// unlike the "who owns it right now" scan just below, which only cares
+			// about the live one. A negated marker still PROVES someone else once
+			// held this ask, which is exactly the fact the time-gap guard needs.
+			if !haveSeenAnyMarkerAuthor {
+				firstMarkerAuthorSeen = c.AuthorID
+				haveSeenAnyMarkerAuthor = true
+			} else if c.AuthorID != firstMarkerAuthorSeen {
+				soleMarkerAuthor = false
+			}
 			if hasNegatorInScope(c.Body) {
 				continue // already-negated marker isn't the live ask
 			}
 			markerAuthorID = c.AuthorID
 			markerAuthorType = c.AuthorType
+			markerCreatedAt = c.CreatedAt
 			found = true
 		}
 	}
@@ -1256,9 +1288,74 @@ func (s *commentService) releaseHumanGateOnWithdrawal(ctx context.Context, comme
 		return // a different author owns the live ask — only they (or a human) may release it
 	}
 
+	// Fixed 2026-07-31 (task #9959f201, live finding by Bill on prod-sha b2a8068):
+	// the guard above only checked that the WITHDRAWING agent matches the CURRENT
+	// live marker's author — but ownership of "the current live marker" transfers
+	// to WHOEVER posts the next fresh, non-negated marker (enforceBlockingTriage's
+	// own arm criterion, deliberately reused here so #7f646f08-style orphaned asks
+	// stay withdrawable once their original raiser is gone). That is correct and
+	// load-bearing on its own. Composed with an UNCONDITIONAL self-negate, it is
+	// not: any agent could arm the SAME gate as "themselves" in one comment, then
+	// immediately negate their own brand-new marker in the very next — becoming
+	// owner and releasing owner in two back-to-back comments, no permission check,
+	// no trace in activity_log. Bill's live repro on b2a8068 did exactly this.
+	//
+	// The two scenarios that must be told apart are structurally identical in the
+	// comment data (an agent withdraws a marker that is their own) — the only real
+	// difference is INTENT, and intent isn't recoverable from comment text. What
+	// IS recoverable: whether this agent has EVER shared this ask with a different
+	// author (soleMarkerAuthor, computed above). If nobody else has ever posted a
+	// marker here, this agent has always been the sole owner — self-clear stays
+	// immediate, exactly AC1 of #c375905c, unaffected. If ownership was transferred
+	// via a reaffirm, require the reaffirming marker and this negator to be
+	// genuinely separated in time — a same-turn hijack cannot satisfy that; a real
+	// hand-off (the #7f646f08 case: read the thread, check Alertmanager, THEN
+	// withdraw) always does.
+	//
+	// This is a mitigation, not a semantic proof of good faith — an attacker who is
+	// willing to wait out minReaffirmToWithdrawalGap still succeeds. What it removes
+	// is the free, silent, single-turn version Bill demonstrated; what makes even a
+	// patient attempt visible is the activity_log entry below (AC4). Whether a
+	// deliberate, time-spaced takeover of someone else's live ask should ALSO be
+	// blocked outright is a policy call this fix does not make — see the PR/task
+	// comment for that open question.
+	if !soleMarkerAuthor {
+		if comment.CreatedAt.Sub(markerCreatedAt) < minReaffirmToWithdrawalGap {
+			log.Printf("[human-gate] WARNING: task %s withdrawal by %s rejected — reaffirmed marker is only %s old (need %s), this agent is not the ask's sole author",
+				task.ID, comment.AuthorID, comment.CreatedAt.Sub(markerCreatedAt), minReaffirmToWithdrawalGap)
+			return
+		}
+	}
+
 	if err := s.taskSvc.SetHumanGate(ctx, task.ID, false); err != nil {
 		log.Printf("[human-gate] WARNING: SetHumanGate(false) on task %s (agent withdrawal) failed: %v", task.ID, err)
 		return
+	}
+
+	// AC4 of #9959f201: make every release of this specific path visible in the
+	// task's activity log — before this, /activity carried no human_gate signal at
+	// all (only created/checkout/moved), so a withdrawal — legitimate or not — left
+	// no audit trail distinguishing it from any other cause of human_gate=false.
+	if s.activityRepo != nil {
+		changes, _ := json.Marshal(map[string]any{
+			"released_by":        comment.AuthorID,
+			"marker_author_id":   markerAuthorID,
+			"sole_marker_author": soleMarkerAuthor,
+			"reaffirm_gap":       comment.CreatedAt.Sub(markerCreatedAt).String(),
+		})
+		if logErr := s.activityRepo.Create(ctx, &domain.ActivityLog{
+			ID:          uuid.New(),
+			WorkspaceID: wsID,
+			EntityType:  "task",
+			EntityID:    task.ID,
+			Action:      "human_gate.released_by",
+			ActorID:     comment.AuthorID,
+			ActorType:   domain.ActorTypeAgent,
+			Changes:     changes,
+			CreatedAt:   timeNow(),
+		}); logErr != nil {
+			log.Printf("[human-gate] WARNING: activity log for task %s withdrawal failed: %v", task.ID, logErr)
+		}
 	}
 
 	movedFromTriage := false

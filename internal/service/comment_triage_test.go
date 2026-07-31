@@ -13,6 +13,7 @@ import (
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/pkg/actorctx"
+	"github.com/entire-vc/evc-mesh/pkg/pagination"
 )
 
 // ---------------------------------------------------------------------------
@@ -62,6 +63,7 @@ type triageTestEnv struct {
 	wsID         uuid.UUID
 	inProgressID uuid.UUID
 	triageID     uuid.UUID
+	activityRepo *MockActivityLogRepository
 }
 
 // setupTriageEnv wires a commentService with the deps the enforcement path needs.
@@ -105,7 +107,7 @@ func setupTriageEnv(t *testing.T, withTriageColumn bool) triageTestEnv {
 
 	return triageTestEnv{
 		svc, commentRepo, taskRepo, statusRepo, userRepo, taskMover,
-		projID, wsID, inProgressID, triageID,
+		projID, wsID, inProgressID, triageID, activityRepo,
 	}
 }
 
@@ -1726,6 +1728,153 @@ func TestReleaseHumanGateOnWithdrawal_LongStatusReportFromBystander_StillNoOp(t 
 
 	assert.Empty(t, env.taskMover.humanGateCalls())
 	assert.Empty(t, env.systemComments())
+}
+
+// ---------------------------------------------------------------------------
+// releaseHumanGateOnWithdrawal: two-comment ownership hijack — task #9959f201,
+// live finding by Bill on prod-sha b2a8068 (2026-07-31), following #c375905c.
+//
+// The existing "last non-negated marker" ownership scan is, on its own, correct
+// and required (TestReleaseHumanGateOnWithdrawal_MarkerWithUnrelatedNegatorProse_NotSelfNegated
+// above depends on it: a genuinely orphaned ask must stay withdrawable once
+// picked up by a different agent). The composition is the bug: nothing stopped
+// that SAME agent from posting the reaffirming marker and the negator back to
+// back, becoming owner and releasing owner in one uninterrupted turn, with zero
+// permission check and — before this fix — zero activity_log trace.
+// ---------------------------------------------------------------------------
+
+// TestReleaseHumanGateOnWithdrawal_TwoCommentHijack_Blocked is the task's AC1:
+// reproduces Bill's live repro exactly. agentB, a bystander to agentA's live
+// ask, posts their OWN marker (legitimately becomes the live owner per the
+// existing reaffirm rule) and IMMEDIATELY — same instant under the frozen test
+// clock, matching a real same-turn two-comment sequence — posts their own
+// negator. Before the fix this released the gate; after, it must not, because
+// agentB is not this ask's sole marker-author and no real gap separates the
+// two comments.
+func TestReleaseHumanGateOnWithdrawal_TwoCommentHijack_Blocked(t *testing.T) {
+	env := setupTriageEnv(t, true)
+	taskID := env.seedGatedTask(env.inProgressID)
+	agentA := uuid.New()
+	agentB := uuid.New()
+	env.seedAgentBlockingComment(taskID, agentA) // frozenTime - 2h, still live/non-negated
+
+	// Step 1: agentB posts their own fresh marker — legitimately becomes owner.
+	hijackMarkerID := uuid.New()
+	env.commentRepo.items[hijackMarkerID] = &domain.Comment{
+		ID: hijackMarkerID, TaskID: taskID, AuthorID: agentB, AuthorType: domain.ActorTypeAgent,
+		Body:      "❓ **Blocking @pavel**: подтверждаю, вопрос ещё актуален",
+		CreatedAt: frozenTime, // "now" — posted this turn
+	}
+
+	// Step 2: agentB immediately negates their own brand-new marker.
+	ctx := actorctx.WithActor(context.Background(), agentB, domain.ActorTypeAgent)
+	comment := &domain.Comment{
+		TaskID: taskID, AuthorID: agentB, AuthorType: domain.ActorTypeAgent,
+		Body: "Ask не нужен, снимаю.", // CreatedAt via svc.Create → timeNow() → also frozenTime, zero gap
+	}
+	require.NoError(t, env.svc.Create(ctx, comment))
+
+	assert.Empty(t, env.taskMover.humanGateCalls(),
+		"a bystander must not be able to arm-and-release someone else's live ask in one uninterrupted turn")
+	assert.Empty(t, env.systemComments())
+}
+
+// TestReleaseHumanGateOnWithdrawal_TwoCommentHijack_AllowedAfterRealGap proves
+// the fix is a gap requirement, not a blanket ban on a reaffirming agent ever
+// withdrawing — the exact scenario above still succeeds once real time (or at
+// least minReaffirmToWithdrawalGap) separates the two comments, matching what
+// a genuine hand-off (read the thread, verify the blocker, THEN withdraw)
+// naturally looks like.
+func TestReleaseHumanGateOnWithdrawal_TwoCommentHijack_AllowedAfterRealGap(t *testing.T) {
+	env := setupTriageEnv(t, true)
+	taskID := env.seedGatedTask(env.inProgressID)
+	agentA := uuid.New()
+	agentB := uuid.New()
+	env.seedAgentBlockingComment(taskID, agentA) // frozenTime - 2h
+
+	reaffirmID := uuid.New()
+	env.commentRepo.items[reaffirmID] = &domain.Comment{
+		ID: reaffirmID, TaskID: taskID, AuthorID: agentB, AuthorType: domain.ActorTypeAgent,
+		Body:      "❓ **Blocking @pavel**: подтверждаю, вопрос ещё актуален",
+		CreatedAt: frozenTime.Add(-45 * time.Minute), // reaffirmed 45m before the withdrawal below
+	}
+
+	ctx := actorctx.WithActor(context.Background(), agentB, domain.ActorTypeAgent)
+	comment := &domain.Comment{
+		TaskID: taskID, AuthorID: agentB, AuthorType: domain.ActorTypeAgent,
+		Body: "Ask не нужен, снимаю.", // CreatedAt = frozenTime → 45m gap ≥ minReaffirmToWithdrawalGap
+	}
+	require.NoError(t, env.svc.Create(ctx, comment))
+
+	gateCalls := env.taskMover.humanGateCalls()
+	require.Len(t, gateCalls, 1, "a real gap after a genuine reaffirm must still release the gate — this is not a blanket ban")
+	assert.False(t, gateCalls[0].value)
+}
+
+// TestReleaseHumanGateOnWithdrawal_SoleOwner_NoGapRequired confirms AC2's (a)
+// half is unaffected: the gate's ORIGINAL and ONLY-ever marker author still
+// self-clears immediately, zero gap, exactly AC1 of #c375905c. This is the
+// same fixture as TestReleaseHumanGateOnWithdrawal_SameAgentNegates_ReleasesFlag
+// but named to make explicit that it is what THIS task's soleMarkerAuthor
+// carve-out protects.
+func TestReleaseHumanGateOnWithdrawal_SoleOwner_NoGapRequired(t *testing.T) {
+	env := setupTriageEnv(t, true)
+	taskID := env.seedGatedTask(env.inProgressID)
+	askerID := uuid.New()
+	env.seedAgentBlockingComment(taskID, askerID) // frozenTime - 2h, but irrelevant here — see below
+
+	// Overwrite with a marker at frozenTime itself, so the gap to the withdrawal
+	// (also frozenTime, via svc.Create) is exactly ZERO — the strictest possible
+	// case for "no gap required when sole owner".
+	for id, c := range env.commentRepo.items {
+		if c.TaskID == taskID {
+			c.CreatedAt = frozenTime
+			env.commentRepo.items[id] = c
+		}
+	}
+
+	ctx := actorctx.WithActor(context.Background(), askerID, domain.ActorTypeAgent)
+	comment := &domain.Comment{
+		TaskID: taskID, AuthorID: askerID, AuthorType: domain.ActorTypeAgent,
+		Body: "Blocker самоустранился, ask не нужен — снимаю.",
+	}
+	require.NoError(t, env.svc.Create(ctx, comment))
+
+	gateCalls := env.taskMover.humanGateCalls()
+	require.Len(t, gateCalls, 1, "the sole/original owner must release immediately, zero gap required")
+	assert.False(t, gateCalls[0].value)
+}
+
+// TestReleaseHumanGateOnWithdrawal_LogsReleasedByToActivityLog is the task's
+// AC4: a successful release must now be visible in the task's activity log —
+// before this fix, /activity carried no human_gate signal at all.
+func TestReleaseHumanGateOnWithdrawal_LogsReleasedByToActivityLog(t *testing.T) {
+	env := setupTriageEnv(t, true)
+	taskID := env.seedGatedTask(env.inProgressID)
+	askerID := uuid.New()
+	env.seedAgentBlockingComment(taskID, askerID)
+
+	ctx := actorctx.WithActor(context.Background(), askerID, domain.ActorTypeAgent)
+	comment := &domain.Comment{
+		TaskID: taskID, AuthorID: askerID, AuthorType: domain.ActorTypeAgent,
+		Body: "Blocker самоустранился, ask не нужен — снимаю.",
+	}
+	require.NoError(t, env.svc.Create(ctx, comment))
+	require.Len(t, env.taskMover.humanGateCalls(), 1, "sanity: the release itself must have happened")
+
+	page, err := env.activityRepo.ListByTask(context.Background(), taskID, pagination.Params{Page: 1, PageSize: 10})
+	require.NoError(t, err)
+	require.NotNil(t, page)
+	var found *domain.ActivityLog
+	for i := range page.Items {
+		if page.Items[i].Action == "human_gate.released_by" {
+			found = &page.Items[i]
+		}
+	}
+	require.NotNil(t, found, "a human_gate.released_by activity log entry must exist")
+	assert.Equal(t, askerID, found.ActorID)
+	assert.Equal(t, domain.ActorTypeAgent, found.ActorType)
+	assert.Contains(t, string(found.Changes), askerID.String())
 }
 
 // TestBlockingMarkerSlugs_QuotedTemplateDoesNotSteerTarget covers the third raw
