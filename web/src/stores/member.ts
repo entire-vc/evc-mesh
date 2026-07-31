@@ -28,11 +28,17 @@ interface MemberState {
     email: string,
     role: WorkspaceRole,
     password?: string,
+    name?: string,
   ) => Promise<WorkspaceMemberWithUser>;
   updateWorkspaceMemberRole: (
     workspaceId: string,
     userId: string,
     role: WorkspaceRole,
+  ) => Promise<void>;
+  updateWorkspaceMemberName: (
+    workspaceId: string,
+    userId: string,
+    name: string,
   ) => Promise<void>;
   removeWorkspaceMember: (workspaceId: string, userId: string) => Promise<void>;
 
@@ -106,9 +112,13 @@ export const useMemberStore = create<MemberState>((set) => ({
     email: string,
     role: WorkspaceRole,
     password?: string,
+    name?: string,
   ): Promise<WorkspaceMemberWithUser> => {
     const body: Record<string, string> = { email, role };
     if (password) body.password = password;
+    // Only meaningful when the account is being created here; the API ignores
+    // it for an address that already belongs to somebody.
+    if (name?.trim()) body.name = name.trim();
     const member = await api<WorkspaceMemberWithUser>(
       `/api/v1/workspaces/${workspaceId}/members`,
       { method: "POST", body },
@@ -135,6 +145,25 @@ export const useMemberStore = create<MemberState>((set) => ({
     }));
   },
 
+  // Fills in a display name that was never chosen. The API refuses (403) if the
+  // member has since set their own — their name is not a workspace admin's to
+  // rewrite, because it is the name every other workspace sees too.
+  updateWorkspaceMemberName: async (
+    workspaceId: string,
+    userId: string,
+    name: string,
+  ) => {
+    const updated = await api<WorkspaceMemberWithUser>(
+      `/api/v1/workspaces/${workspaceId}/members/${userId}`,
+      { method: "PATCH", body: { name } },
+    );
+    set((state) => ({
+      workspaceMembers: state.workspaceMembers.map((m) =>
+        m.user_id === userId ? updated : m,
+      ),
+    }));
+  },
+
   removeWorkspaceMember: async (workspaceId: string, userId: string) => {
     await api(`/api/v1/workspaces/${workspaceId}/members/${userId}`, {
       method: "DELETE",
@@ -146,6 +175,11 @@ export const useMemberStore = create<MemberState>((set) => ({
     }));
   },
 
+  // The endpoint answers {users, count}, not a bare array. Typing the response
+  // as UserSearchResult[] put the envelope object into userSearchResults, so
+  // `userSearchResults.length` was undefined, the "add an existing user"
+  // dropdown never rendered once, and adding somebody who already had an
+  // account looked impossible from the UI.
   searchUsers: async (workspaceId: string, query: string) => {
     if (!query.trim()) {
       set({ userSearchResults: [] });
@@ -153,11 +187,11 @@ export const useMemberStore = create<MemberState>((set) => ({
     }
     set({ isSearching: true });
     try {
-      const results = await api<UserSearchResult[]>(
+      const resp = await api<{ users: UserSearchResult[]; count: number }>(
         `/api/v1/workspaces/${workspaceId}/users/search`,
         { params: { q: query } },
       );
-      set({ userSearchResults: results ?? [], isSearching: false });
+      set({ userSearchResults: resp?.users ?? [], isSearching: false });
     } catch {
       set({ userSearchResults: [], isSearching: false });
     }

@@ -573,14 +573,24 @@ type WorkspaceInviteService interface {
 // WorkspaceMemberService provides business logic for workspace member management.
 type WorkspaceMemberService interface {
 	ListMembers(ctx context.Context, workspaceID uuid.UUID) ([]domain.WorkspaceMemberWithUser, error)
+	// GetMember returns one membership with its user details, or (nil, nil) when
+	// the user is not a member of this workspace.
+	GetMember(ctx context.Context, workspaceID, userID uuid.UUID) (*domain.WorkspaceMemberWithUser, error)
 	AddMember(ctx context.Context, workspaceID uuid.UUID, email, role string, invitedBy uuid.UUID) (*domain.WorkspaceMemberWithUser, error)
 	// AddMemberWithCreate adds an existing user or creates a new one (when password is provided).
-	AddMemberWithCreate(ctx context.Context, workspaceID uuid.UUID, email, role, password string, invitedBy uuid.UUID) (*domain.WorkspaceMemberWithUser, error)
+	// name sets the display name of a newly created account; it falls back to the address.
+	AddMemberWithCreate(ctx context.Context, workspaceID uuid.UUID, email, name, role, password string, invitedBy uuid.UUID) (*domain.WorkspaceMemberWithUser, error)
 	UpdateMemberRole(ctx context.Context, workspaceID, targetUserID uuid.UUID, newRole string) error
+	// SetMemberDisplayName fills in a member's display name. Refuses when that
+	// member has already set their own — the name is account-wide, so overwriting
+	// a chosen one from inside one workspace would change how the person appears
+	// in every other workspace they belong to.
+	SetMemberDisplayName(ctx context.Context, workspaceID, targetUserID uuid.UUID, name string) error
 	RemoveMember(ctx context.Context, workspaceID, targetUserID uuid.UUID) error
 	GetMyRole(ctx context.Context, workspaceID, userID uuid.UUID) (string, error)
-	// SearchUsers searches for users by email or name and annotates each result with membership status.
-	SearchUsers(ctx context.Context, workspaceID uuid.UUID, query string) ([]domain.UserWithMemberStatus, error)
+	// SearchUsers finds accounts callerID may add to workspaceID, annotated with
+	// membership status. callerID bounds what is visible — see the repository.
+	SearchUsers(ctx context.Context, workspaceID, callerID uuid.UUID, query string) ([]domain.UserWithMemberStatus, error)
 }
 
 // ProjectMemberService provides business logic for project member management.

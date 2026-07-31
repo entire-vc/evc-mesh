@@ -10,6 +10,7 @@ import { useWorkspaceStore } from "@/stores/workspace";
 import { useMemberStore } from "@/stores/member";
 import { useAgentStore } from "@/stores/agent";
 import type { Agent, CustomFieldDefinition, WorkspaceMemberWithUser } from "@/types";
+import { displayName, isNamePlaceholder } from "@/lib/user-display";
 
 // Determine whether to use dark or light text on a given background color.
 function getContrastColor(hexColor: string): string {
@@ -233,8 +234,10 @@ function UserRefSelect({
   const options: RefSelectOption[] = workspaceMembers.map(
     (m: WorkspaceMemberWithUser) => ({
       id: m.user_id,
-      label: m.user.name || m.user.email,
-      sublabel: m.user.email,
+      label: displayName(m.user),
+      // Repeating the address under itself when no name is set says nothing —
+      // and puts a second copy of it on screen for no benefit.
+      sublabel: isNamePlaceholder(m.user) ? undefined : m.user.email,
       badge: m.role,
     }),
   );

@@ -107,3 +107,88 @@ func TestUserRepo_GetByEmail_IsCaseAndWhitespaceInsensitive(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, missing)
 }
+
+// TestUserRepo_UpdateKeepsUsernameWhenBlank is the regression for a live 500.
+//
+// GetByID did not select username, so every read-modify-write through it
+// carried Username="" back into Update, which wrote `username = NULLIF($5,”)`
+// — NULL into a NOT NULL column. PATCH /api/v1/auth/me is the only path users
+// can reach that does exactly this, so editing your own display name failed on
+// the constraint every time. Both halves are pinned here: the projection must
+// include username, and Update must treat a blank one as "unchanged".
+func TestUserRepo_UpdateKeepsUsernameWhenBlank(t *testing.T) {
+	db := userRepoTestDB(t)
+	repo := NewUserRepo(db)
+	ctx := context.Background()
+
+	suffix := uuid.New().String()[:8]
+	u := &domain.User{
+		ID:           uuid.New(),
+		Email:        "keepuser-" + suffix + "@example.com",
+		PasswordHash: "irrelevant-hash",
+		Name:         "keepuser-" + suffix + "@example.com",
+		Username:     "keepuser-" + suffix,
+		IsActive:     true,
+		CreatedAt:    time.Now().UTC(),
+		UpdatedAt:    time.Now().UTC(),
+	}
+	require.NoError(t, repo.Create(ctx, u))
+	t.Cleanup(func() { _, _ = db.ExecContext(ctx, "DELETE FROM users WHERE id = $1", u.ID) })
+
+	loaded, err := repo.GetByID(ctx, u.ID)
+	require.NoError(t, err)
+	require.NotNil(t, loaded)
+	require.Equal(t, u.Username, loaded.Username, "GetByID must project username")
+	require.False(t, loaded.DisplayNameSelfSet, "a freshly provisioned account has an unowned name")
+	require.True(t, loaded.NameIsPlaceholder())
+
+	// The self-edit: a new name, no username supplied.
+	loaded.Name = "Keep User"
+	loaded.DisplayNameSelfSet = true
+	require.NoError(t, repo.Update(ctx, loaded), "updating only the name must not violate the NOT NULL username")
+
+	after, err := repo.GetByID(ctx, u.ID)
+	require.NoError(t, err)
+	require.Equal(t, "Keep User", after.Name)
+	require.Equal(t, u.Username, after.Username, "an omitted username means unchanged, never cleared")
+	require.True(t, after.DisplayNameSelfSet, "provenance must round-trip")
+	require.False(t, after.NameIsPlaceholder())
+
+	// An explicitly blank username on a struct that was never loaded must also
+	// leave the stored one alone rather than abort the statement.
+	blank := *after
+	blank.Username = ""
+	require.NoError(t, repo.Update(ctx, &blank))
+	still, err := repo.GetByID(ctx, u.ID)
+	require.NoError(t, err)
+	require.Equal(t, u.Username, still.Username)
+}
+
+// GetByEmail feeds the add-member path, which builds the member payload
+// straight off this struct — so it has to project the same columns GetByID does.
+func TestUserRepo_GetByEmailProjectsUsernameAndProvenance(t *testing.T) {
+	db := userRepoTestDB(t)
+	repo := NewUserRepo(db)
+	ctx := context.Background()
+
+	suffix := uuid.New().String()[:8]
+	u := &domain.User{
+		ID:                 uuid.New(),
+		Email:              "projemail-" + suffix + "@example.com",
+		PasswordHash:       "irrelevant-hash",
+		Name:               "Proj Email",
+		Username:           "projemail-" + suffix,
+		IsActive:           true,
+		DisplayNameSelfSet: true,
+		CreatedAt:          time.Now().UTC(),
+		UpdatedAt:          time.Now().UTC(),
+	}
+	require.NoError(t, repo.Create(ctx, u))
+	t.Cleanup(func() { _, _ = db.ExecContext(ctx, "DELETE FROM users WHERE id = $1", u.ID) })
+
+	got, err := repo.GetByEmail(ctx, strings.ToUpper(u.Email))
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.Equal(t, u.Username, got.Username)
+	require.True(t, got.DisplayNameSelfSet, "Create must persist the flag and GetByEmail must project it")
+}

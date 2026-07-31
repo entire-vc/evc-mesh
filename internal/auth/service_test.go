@@ -69,7 +69,7 @@ func (r *mockUserRepo) Update(_ context.Context, user *domain.User) error {
 	return nil
 }
 
-func (r *mockUserRepo) SearchUsers(_ context.Context, _ string, _ int) ([]domain.User, error) {
+func (r *mockUserRepo) SearchAddableUsers(_ context.Context, _ uuid.UUID, _ string, _ int) ([]domain.User, error) {
 	return nil, nil
 }
 func (r *mockUserRepo) GetByUsername(_ context.Context, _ uuid.UUID, _ string) (*domain.User, error) {

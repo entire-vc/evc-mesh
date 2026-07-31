@@ -23,6 +23,7 @@ import { useTemplateStore } from "@/stores/template";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { useRulesStore } from "@/stores/rules";
 import { getAccessToken } from "@/lib/api";
+import { inlineLabel } from "@/lib/user-display";
 import type { AssigneeType, Artifact, Priority, DelegationLevel, CreateTaskRequest } from "@/types";
 import { DelegationLevelSelect } from "@/components/delegation-level-select";
 
@@ -370,7 +371,7 @@ export function CreateTaskDialog({
                   const isSelf = user && m.user.id === user.id;
                   return (
                     <option key={m.id} value={`user:${m.user.id}`}>
-                      {m.user.name}{isSelf ? " (you)" : ""} — {m.role}
+                      {inlineLabel(m.user)}{isSelf ? " (you)" : ""} — {m.role}
                     </option>
                   );
                 }

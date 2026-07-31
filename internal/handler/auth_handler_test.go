@@ -67,7 +67,7 @@ func (r *authTestUserRepo) Update(_ context.Context, u *domain.User) error {
 func (r *authTestUserRepo) UsernameExists(_ context.Context, _ string) (bool, error) {
 	return false, nil
 }
-func (r *authTestUserRepo) SearchUsers(_ context.Context, _ string, _ int) ([]domain.User, error) {
+func (r *authTestUserRepo) SearchAddableUsers(_ context.Context, _ uuid.UUID, _ string, _ int) ([]domain.User, error) {
 	return nil, nil
 }
 func (r *authTestUserRepo) GetByUsername(_ context.Context, _ uuid.UUID, _ string) (*domain.User, error) {

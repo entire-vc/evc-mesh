@@ -745,13 +745,22 @@ func main() {
 	api.POST("/workspaces/:ws_id/members", workspaceMemberHandler.Add, rbac(mw.PermManageMembers))
 	api.PATCH("/workspaces/:ws_id/members/:user_id", workspaceMemberHandler.UpdateRole, rbac(mw.PermManageMembers))
 	api.DELETE("/workspaces/:ws_id/members/:user_id", workspaceMemberHandler.Remove, rbac(mw.PermManageMembers))
-	// SearchUsers deliberately searches the whole instance, not the workspace —
-	// that is the point, you look people up in order to add ones who are not
-	// members yet. So it cannot be narrowed to workspace scope without removing
-	// add-member-by-search. What it can be is restricted to the people allowed to
-	// add members at all: before this, any authenticated user could page the
-	// entire instance's user directory, emails included, out of someone else's
-	// workspace. Invite-by-email (POST .../invites) stays the tenant-safe path.
+	// SearchUsers cannot be narrowed to the workspace in the path — its entire
+	// job is to surface people who are NOT in it yet, which is how one account
+	// joins a second workspace instead of becoming a second account.
+	//
+	// It is bounded by the CALLER instead: an exact address match anywhere on the
+	// instance (knowing the address is the credential for inviting somebody),
+	// plus loose name matching restricted to people the caller already shares a
+	// workspace with — data they can already read off a member list. See
+	// UserRepo.SearchAddableUsers.
+	//
+	// Restricting the route to manage-members, which is all it had before, is not
+	// by itself a tenant boundary: creating a workspace is open to every
+	// authenticated user and makes them its owner, so anyone could hold that
+	// permission and page the whole instance directory, addresses included, with
+	// ?q=a. Invite-by-email (POST .../invites) remains the path that needs no
+	// directory at all.
 	api.GET("/workspaces/:ws_id/users/search", workspaceMemberHandler.SearchUsers, rbac(mw.PermManageMembers))
 
 	// Workspace invite routes (email-link flow).

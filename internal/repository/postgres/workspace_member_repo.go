@@ -65,17 +65,18 @@ func (r *WorkspaceMemberRepo) GetRole(ctx context.Context, workspaceID, userID u
 
 // workspaceMemberRow is a flat DB scan struct for the JOIN query.
 type workspaceMemberRow struct {
-	ID          uuid.UUID  `db:"id"`
-	WorkspaceID uuid.UUID  `db:"workspace_id"`
-	UserID      uuid.UUID  `db:"user_id"`
-	Role        string     `db:"role"`
-	InvitedBy   *uuid.UUID `db:"invited_by"`
-	CreatedAt   time.Time  `db:"created_at"`
-	UpdatedAt   time.Time  `db:"updated_at"`
-	UserIDJoin  uuid.UUID  `db:"u_id"`
-	UserEmail   string     `db:"u_email"`
-	UserName    string     `db:"u_display_name"`
-	UserAvatar  string     `db:"u_avatar_url"`
+	ID           uuid.UUID  `db:"id"`
+	WorkspaceID  uuid.UUID  `db:"workspace_id"`
+	UserID       uuid.UUID  `db:"user_id"`
+	Role         string     `db:"role"`
+	InvitedBy    *uuid.UUID `db:"invited_by"`
+	CreatedAt    time.Time  `db:"created_at"`
+	UpdatedAt    time.Time  `db:"updated_at"`
+	UserIDJoin   uuid.UUID  `db:"u_id"`
+	UserEmail    string     `db:"u_email"`
+	UserName     string     `db:"u_display_name"`
+	UserUsername string     `db:"u_username"`
+	UserAvatar   string     `db:"u_avatar_url"`
 }
 
 // List returns all workspace members with their user details.
@@ -83,7 +84,8 @@ func (r *WorkspaceMemberRepo) List(ctx context.Context, workspaceID uuid.UUID) (
 	const q = `
 		SELECT
 			wm.id, wm.workspace_id, wm.user_id, wm.role, wm.invited_by, wm.created_at, wm.updated_at,
-			u.id AS u_id, u.email AS u_email, u.display_name AS u_display_name, COALESCE(u.avatar_url, '') AS u_avatar_url
+			u.id AS u_id, u.email AS u_email, u.display_name AS u_display_name,
+			COALESCE(u.username, '') AS u_username, COALESCE(u.avatar_url, '') AS u_avatar_url
 		FROM workspace_members wm
 		JOIN users u ON u.id = wm.user_id
 		WHERE wm.workspace_id = $1
@@ -110,6 +112,7 @@ func (r *WorkspaceMemberRepo) List(ctx context.Context, workspaceID uuid.UUID) (
 				ID:        row.UserIDJoin,
 				Email:     row.UserEmail,
 				Name:      row.UserName,
+				Username:  row.UserUsername,
 				AvatarURL: row.UserAvatar,
 			},
 		}
@@ -152,7 +155,8 @@ func (r *WorkspaceMemberRepo) ListWithProjects(ctx context.Context, workspaceID 
 	const q = `
 		SELECT
 			wm.id, wm.workspace_id, wm.user_id, wm.role, wm.invited_by, wm.created_at, wm.updated_at,
-			u.id AS u_id, u.email AS u_email, u.display_name AS u_display_name, COALESCE(u.avatar_url, '') AS u_avatar_url,
+			u.id AS u_id, u.email AS u_email, u.display_name AS u_display_name,
+			COALESCE(u.username, '') AS u_username, COALESCE(u.avatar_url, '') AS u_avatar_url,
 			COALESCE(
 			    json_agg(DISTINCT p.name) FILTER (WHERE p.id IS NOT NULL),
 			    '[]'::json
