@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net/smtp"
@@ -10,8 +11,27 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/config"
 )
 
+// ErrEmailNotConfigured is returned by send operations when no SMTP host is
+// configured, which is the default for a self-hosted instance.
+//
+// It is deliberately an error rather than a silent nil: returning nil here used
+// to make "delivered" and "there is no mail server at all" indistinguishable to
+// every caller, so the API answered 201 and the UI said "Invite sent" for a mail
+// that could not have left the building. The only trace was a log line the
+// person clicking Invite never reads.
+//
+// Callers are expected to handle this sentinel explicitly (surface the invite
+// link instead of claiming delivery) rather than treat it as a failure.
+var ErrEmailNotConfigured = errors.New("email delivery is not configured")
+
 // EmailService sends transactional emails.
 type EmailService interface {
+	// Enabled reports whether outbound email is configured at all. When false,
+	// send operations return ErrEmailNotConfigured without attempting a send.
+	Enabled() bool
+	// SendInvite delivers an invitation email. It returns ErrEmailNotConfigured
+	// when email is disabled, and a wrapped transport error when a configured
+	// server refuses or is unreachable.
 	SendInvite(ctx context.Context, toEmail, workspaceName, inviteURL string) error
 }
 
@@ -20,15 +40,22 @@ type smtpEmailService struct {
 }
 
 // NewEmailService creates an EmailService backed by SMTP.
-// When cfg.Host is empty, email sending is disabled; invite URLs are logged instead.
+// When cfg.Host is empty, email sending is disabled and send operations report
+// ErrEmailNotConfigured so callers can offer the invite link directly instead.
 func NewEmailService(cfg config.EmailConfig) EmailService {
 	return &smtpEmailService{cfg: cfg}
 }
 
+func (s *smtpEmailService) Enabled() bool { return s.cfg.Host != "" }
+
 func (s *smtpEmailService) SendInvite(_ context.Context, toEmail, workspaceName, inviteURL string) error {
-	if s.cfg.Host == "" {
-		log.Printf("[email] SMTP not configured — invite link for %s: %s", toEmail, inviteURL)
-		return nil
+	if !s.Enabled() {
+		// The accept URL carries the invite token in its path; anyone holding it
+		// can join the workspace. Logs are routinely shipped to collectors and
+		// read by more people than the workspace itself, so the token stays out
+		// of them — the link is returned to the caller instead.
+		log.Printf("[email] SMTP not configured — no invitation email sent to %s; the invite link is returned to the inviter in the API response instead", toEmail)
+		return ErrEmailNotConfigured
 	}
 
 	subject := fmt.Sprintf("You've been invited to %s on Mesh", workspaceName)

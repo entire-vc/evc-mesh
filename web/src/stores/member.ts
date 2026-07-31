@@ -1,6 +1,8 @@
 import { create } from "zustand";
 import { api } from "@/lib/api";
 import type {
+  CreateInviteResponse,
+  InviteDelivery,
   ProjectMemberWithUser,
   ProjectRole,
   UserSearchResult,
@@ -42,8 +44,12 @@ interface MemberState {
 
   // Invite actions
   fetchWorkspaceInvites: (workspaceId: string) => Promise<void>;
-  createInvite: (workspaceId: string, email: string, role: WorkspaceRole) => Promise<WorkspaceInvite>;
-  resendInvite: (workspaceId: string, inviteId: string) => Promise<void>;
+  createInvite: (
+    workspaceId: string,
+    email: string,
+    role: WorkspaceRole,
+  ) => Promise<CreateInviteResponse>;
+  resendInvite: (workspaceId: string, inviteId: string) => Promise<InviteDelivery>;
   revokeInvite: (workspaceId: string, inviteId: string) => Promise<void>;
 
   // Project member actions
@@ -179,8 +185,15 @@ export const useMemberStore = create<MemberState>((set) => ({
     }
   },
 
-  createInvite: async (workspaceId: string, email: string, role: WorkspaceRole): Promise<WorkspaceInvite> => {
-    const invite = await api<WorkspaceInvite>(
+  createInvite: async (
+    workspaceId: string,
+    email: string,
+    role: WorkspaceRole,
+  ): Promise<CreateInviteResponse> => {
+    // The response carries the invite AND what became of its email. Callers
+    // must read email_sent rather than infer delivery from the 201 — on an
+    // instance with no SMTP server the invite is created and nothing is sent.
+    const invite = await api<CreateInviteResponse>(
       `/api/v1/workspaces/${workspaceId}/invites`,
       { method: "POST", body: { email, role } },
     );
@@ -190,8 +203,8 @@ export const useMemberStore = create<MemberState>((set) => ({
     return invite;
   },
 
-  resendInvite: async (workspaceId: string, inviteId: string) => {
-    await api(
+  resendInvite: async (workspaceId: string, inviteId: string): Promise<InviteDelivery> => {
+    return await api<InviteDelivery>(
       `/api/v1/workspaces/${workspaceId}/invites/${inviteId}/resend`,
       { method: "POST" },
     );

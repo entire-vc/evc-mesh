@@ -34,6 +34,7 @@ import { Avatar } from "@/components/ui/avatar";
 import { Select } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { InviteMemberDialog } from "@/components/invite-member-dialog";
+import { InviteLinkBox } from "@/components/invite-link-box";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { useAuthStore } from "@/stores/auth";
@@ -43,6 +44,7 @@ import { cn } from "@/lib/cn";
 import type {
   AssignmentRulesConfig,
   ImportResult,
+  InviteDelivery,
   RuleViolation,
   TeamDirectoryAgent,
   TeamDirectoryHuman,
@@ -681,6 +683,12 @@ export function WorkspaceSettingsPage() {
     useState<WorkspaceMemberWithUser | null>(null);
   const [isRemoving, setIsRemoving] = useState(false);
   const [removeError, setRemoveError] = useState<string | null>(null);
+  // Outcome of the last Resend, scoped to the invite it belongs to.
+  const [resendResult, setResendResult] = useState<{
+    inviteId: string;
+    delivery?: InviteDelivery;
+    error?: string;
+  } | null>(null);
 
   // Rules saving state
   const [isSavingRules, setIsSavingRules] = useState(false);
@@ -1462,7 +1470,8 @@ export function WorkspaceSettingsPage() {
         <CardContent>
           <div className="divide-y divide-border">
             {workspaceInvites.map((invite) => (
-              <div key={invite.id} className="flex items-center gap-3 py-3">
+              <div key={invite.id} className="py-3">
+                <div className="flex items-center gap-3">
                 <div className="flex-1 min-w-0">
                   <p className="truncate text-sm font-medium">{invite.email}</p>
                   <p className="text-xs text-muted-foreground capitalize">
@@ -1476,9 +1485,18 @@ export function WorkspaceSettingsPage() {
                       size="sm"
                       className="h-7 text-xs"
                       onClick={async () => {
-                        if (currentWorkspace) {
-                          try { await resendInvite(currentWorkspace.id, invite.id); }
-                          catch { /* ignore */ }
+                        if (!currentWorkspace) return;
+                        // Report what the resend actually did. This used to
+                        // swallow every outcome in an empty catch, so a resend
+                        // that sent nothing looked exactly like one that worked.
+                        try {
+                          const delivery = await resendInvite(currentWorkspace.id, invite.id);
+                          setResendResult({ inviteId: invite.id, delivery });
+                        } catch (err) {
+                          setResendResult({
+                            inviteId: invite.id,
+                            error: err instanceof Error ? err.message : "Resend failed",
+                          });
                         }
                       }}
                     >
@@ -1498,6 +1516,32 @@ export function WorkspaceSettingsPage() {
                     >
                       <Trash2 className="h-3.5 w-3.5" />
                     </Button>
+                  </div>
+                )}
+                </div>
+
+                {/* Resend outcome for this invite, plus the link whenever no
+                    email went out — otherwise the operator is left guessing. */}
+                {resendResult?.inviteId === invite.id && (
+                  <div className="mt-2 space-y-1.5">
+                    {resendResult.error ? (
+                      <p className="text-xs text-destructive">{resendResult.error}</p>
+                    ) : resendResult.delivery?.email_sent ? (
+                      <p className="text-xs text-green-600 dark:text-green-400">
+                        Invite email sent to {invite.email}
+                      </p>
+                    ) : (
+                      <>
+                        <p className="text-xs text-muted-foreground">
+                          {resendResult.delivery?.delivery_status === "not_configured"
+                            ? "No email server is configured — nothing was sent. Share this link instead:"
+                            : "The invitation email could not be sent. Share this link instead:"}
+                        </p>
+                        {resendResult.delivery && (
+                          <InviteLinkBox url={resendResult.delivery.invite_url} />
+                        )}
+                      </>
+                    )}
                   </div>
                 )}
               </div>

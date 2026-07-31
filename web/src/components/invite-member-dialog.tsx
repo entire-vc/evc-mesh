@@ -13,8 +13,9 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Avatar } from "@/components/ui/avatar";
 import { Select } from "@/components/ui/select";
+import { InviteLinkBox } from "@/components/invite-link-box";
 import { useMemberStore } from "@/stores/member";
-import type { UserSearchResult, WorkspaceRole } from "@/types";
+import type { InviteDelivery, UserSearchResult, WorkspaceRole } from "@/types";
 
 interface InviteMemberDialogProps {
   open: boolean;
@@ -54,6 +55,10 @@ export function InviteMemberDialog({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
+  // Set when an invite was created but not emailed. The dialog then stays open
+  // and hands the link over, because closing it would strand the invitation:
+  // nothing was sent and this is the only place the link is shown.
+  const [handoff, setHandoff] = useState<InviteDelivery | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -67,6 +72,7 @@ export function InviteMemberDialog({
       setShowDropdown(false);
       setError(null);
       setSuccessMsg(null);
+      setHandoff(null);
       clearSearchResults();
     }
   }, [open, clearSearchResults]);
@@ -114,12 +120,21 @@ export function InviteMemberDialog({
     setIsSubmitting(true);
     setError(null);
     setSuccessMsg(null);
+    setHandoff(null);
 
     try {
       if (mode === "email_link" && !selectedUser) {
-        await createInvite(workspaceId, emailValue, role);
-        setSuccessMsg(`Invite sent to ${emailValue}`);
-        setTimeout(onClose, 1500);
+        // Only claim the invite was emailed if it actually was. This used to be
+        // an unconditional "Invite sent to …", which was wrong on every
+        // instance without a mail server — the invitee got nothing and the
+        // inviter had no way to find out.
+        const invite = await createInvite(workspaceId, emailValue, role);
+        if (invite.email_sent) {
+          setSuccessMsg(`Invite sent to ${emailValue}`);
+          setTimeout(onClose, 1500);
+        } else {
+          setHandoff(invite);
+        }
       } else if (mode === "create_now" && !selectedUser) {
         await addWorkspaceMember(workspaceId, emailValue, role, password);
         onClose();
@@ -313,20 +328,42 @@ export function InviteMemberDialog({
           {error && <p className="text-sm text-destructive">{error}</p>}
           {successMsg && <p className="text-sm text-green-600 dark:text-green-400">{successMsg}</p>}
 
+          {/* Invite created, but no email went out — hand the link over. */}
+          {handoff && (
+            <div className="space-y-2 rounded-lg border border-border bg-muted/40 p-3">
+              <p className="text-sm font-medium">
+                Invite created — no email was sent
+              </p>
+              <p className="text-xs text-muted-foreground">
+                {handoff.delivery_status === "not_configured"
+                  ? "This instance has no email server configured. Send this link to the invitee yourself."
+                  : "The invitation email could not be sent. The invite is valid — send this link to the invitee yourself."}
+              </p>
+              <InviteLinkBox url={handoff.invite_url} />
+              {handoff.delivery_error && (
+                <p className="text-xs text-muted-foreground">
+                  Mail server said: {handoff.delivery_error}
+                </p>
+              )}
+            </div>
+          )}
+
           <DialogFooter>
             <Button type="button" variant="outline" onClick={onClose} disabled={isSubmitting}>
-              Cancel
+              {handoff ? "Done" : "Cancel"}
             </Button>
-            <Button type="submit" disabled={isSubmitting}>
-              {isSubmitting ? (
-                mode === "email_link" && !selectedUser ? "Sending..." : "Adding..."
-              ) : (
-                <>
-                  <UserPlus className="h-4 w-4" />
-                  {mode === "email_link" && !selectedUser ? "Send Invite" : "Add Member"}
-                </>
-              )}
-            </Button>
+            {!handoff && (
+              <Button type="submit" disabled={isSubmitting}>
+                {isSubmitting ? (
+                  mode === "email_link" && !selectedUser ? "Sending..." : "Adding..."
+                ) : (
+                  <>
+                    <UserPlus className="h-4 w-4" />
+                    {mode === "email_link" && !selectedUser ? "Send Invite" : "Add Member"}
+                  </>
+                )}
+              </Button>
+            )}
           </DialogFooter>
         </form>
       </DialogContent>
