@@ -60,6 +60,7 @@ import type { AssigneeType, Priority, DelegationLevel } from "@/types";
 import { DelegationLevelSelect } from "@/components/delegation-level-select";
 import { CostQualityBlock } from "@/components/cost-quality-block";
 import { getTaskCostSummary, type TaskCostSummary } from "@/lib/api";
+import { inlineLabel } from "@/lib/user-display";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -768,7 +769,7 @@ export function TaskSlideOver({
                           const isSelf = user && m.user.id === user.id;
                           return (
                             <option key={m.id} value={`user:${m.user.id}`}>
-                              {m.user.name}{isSelf ? " (you)" : ""} — {m.role}
+                              {inlineLabel(m.user)}{isSelf ? " (you)" : ""} — {m.role}
                             </option>
                           );
                         }

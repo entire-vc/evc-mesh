@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -180,9 +181,19 @@ func (s *inviteService) AcceptInvite(ctx context.Context, input AcceptInviteInpu
 	// and the closing login all agree on one identity.
 	email := auth.NormalizeEmail(invite.Email)
 
-	name := input.Name
-	if name == "" {
+	// Falling back to the address is a last resort, not the normal path. It is
+	// how a whole instance ends up with every member displayed as their own
+	// address: the accept form never asked, so this line answered for them. The
+	// form asks now; this stays only so a client that omits the field still gets
+	// a usable account — and it is recorded as not-self-chosen, so a workspace
+	// admin can still fill it in afterwards.
+	name := strings.TrimSpace(input.Name)
+	selfNamed := name != ""
+	if !selfNamed {
 		name = email
+	}
+	if len([]rune(name)) > 100 {
+		return "", "", apierror.ValidationError(map[string]string{"name": "name must be at most 100 characters"})
 	}
 
 	// Get or create user.
@@ -207,14 +218,15 @@ func (s *inviteService) AcceptInvite(ctx context.Context, input AcceptInviteInpu
 		}
 		now := time.Now()
 		user = &domain.User{
-			ID:           uuid.New(),
-			Email:        email,
-			Name:         name,
-			Username:     username,
-			PasswordHash: string(hash),
-			IsActive:     true,
-			CreatedAt:    now,
-			UpdatedAt:    now,
+			ID:                 uuid.New(),
+			Email:              email,
+			Name:               name,
+			Username:           username,
+			PasswordHash:       string(hash),
+			IsActive:           true,
+			DisplayNameSelfSet: selfNamed,
+			CreatedAt:          now,
+			UpdatedAt:          now,
 		}
 		if createErr := s.userRepo.Create(ctx, user); createErr != nil {
 			// Never surface the raw driver/constraint text to the client.

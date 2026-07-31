@@ -127,6 +127,9 @@ export interface WorkspaceMemberWithUser {
     id: string;
     email: string;
     name: string;
+    /** Stable secondary identifier, so telling two people apart does not
+     *  require printing an address. */
+    username?: string;
     avatar_url: string;
   };
 }

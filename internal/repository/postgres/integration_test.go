@@ -633,7 +633,7 @@ func TestTaskRepo_List_IdTiebreaker(t *testing.T) {
 
 // TestNullAvatarURL inserts a user row with avatar_url = NULL directly (bypassing
 // the Create path which always writes a value) and asserts that GetByID, GetByEmail,
-// SearchUsers, and WorkspaceMemberRepo.List all return "" instead of failing with
+// SearchAddableUsers, and WorkspaceMemberRepo.List all return "" instead of failing with
 // "converting NULL to string is unsupported".
 func TestNullAvatarURL(t *testing.T) {
 	db := testDB(t)
@@ -688,8 +688,9 @@ func TestNullAvatarURL(t *testing.T) {
 		assert.Equal(t, "", u.AvatarURL)
 	})
 
-	t.Run("SearchUsers", func(t *testing.T) {
-		users, err := userRepo.SearchUsers(ctx, "nullavatar", 10)
+	t.Run("SearchAddableUsers", func(t *testing.T) {
+		// Exact address, which resolves regardless of who is asking.
+		users, err := userRepo.SearchAddableUsers(ctx, uuid.Nil, email, 10)
 		require.NoError(t, err)
 		found := false
 		for _, u := range users {

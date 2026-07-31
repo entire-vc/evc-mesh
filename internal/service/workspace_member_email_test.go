@@ -65,7 +65,7 @@ func TestAddMemberWithCreate_RejectsBlankEmail(t *testing.T) {
 	svc, _ := newMemberServiceForEmailTests()
 
 	for _, blank := range []string{"", "   "} {
-		_, err := svc.AddMemberWithCreate(context.Background(), uuid.New(), blank, domain.RoleMember, "StrongP4ss", uuid.Nil)
+		_, err := svc.AddMemberWithCreate(context.Background(), uuid.New(), blank, "", domain.RoleMember, "StrongP4ss", uuid.Nil)
 		require.Error(t, err, "AddMemberWithCreate(%q) must be rejected", blank)
 
 		var apiErr *apierror.Error
@@ -78,7 +78,7 @@ func TestAddMemberWithCreate_NormalizesEmailOnCreate(t *testing.T) {
 	svc, userRepo := newMemberServiceForEmailTests()
 
 	member, err := svc.AddMemberWithCreate(context.Background(), uuid.New(),
-		"  Dave@Example.COM ", domain.RoleMember, "StrongP4ss", uuid.Nil)
+		"  Dave@Example.COM ", "", domain.RoleMember, "StrongP4ss", uuid.Nil)
 	require.NoError(t, err)
 	assert.Equal(t, "dave@example.com", member.User.Email)
 

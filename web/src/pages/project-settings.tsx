@@ -56,6 +56,7 @@ import { useTemplateStore } from "@/stores/template";
 import { statusCategoryConfig } from "@/lib/utils";
 import { cn } from "@/lib/cn";
 import { api } from "@/lib/api";
+import { displayName, inlineLabel, isNamePlaceholder } from "@/lib/user-display";
 import type {
   Agent,
   AssignmentRulesConfig,
@@ -556,7 +557,7 @@ function WorkflowRulesSection({
                                       key={m.user_id}
                                       value={`user:${m.user_id}`}
                                     >
-                                      {m.user.name} ({m.user.email})
+                                      {inlineLabel(m.user)}
                                     </option>
                                   ))}
                               </optgroup>
@@ -667,7 +668,7 @@ function AssigneeSelect({
         <optgroup label="Members">
           {members.map((m) => (
             <option key={m.user_id} value={`user:${m.user_id}`}>
-              {m.user.name} ({m.user.email})
+              {inlineLabel(m.user)}
             </option>
           ))}
         </optgroup>
@@ -2043,21 +2044,27 @@ export function ProjectSettingsPage() {
                   >
                     <Avatar
                       src={member.user?.avatar_url || undefined}
-                      name={member.user?.name || member.user?.email || ""}
+                      name={displayName(member.user)}
                       size="md"
                     />
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-1.5">
                         <span className="truncate text-sm font-medium">
-                          {member.user?.name}
+                          {displayName(member.user)}
                         </span>
                         {isMe && (
                           <span className="text-xs text-muted-foreground">(you)</span>
                         )}
                       </div>
-                      <p className="truncate text-xs text-muted-foreground">
-                        {member.user?.email}
-                      </p>
+                      {isNamePlaceholder(member.user) ? (
+                        <p className="truncate text-xs text-muted-foreground italic">
+                          No name set
+                        </p>
+                      ) : (
+                        <p className="truncate text-xs text-muted-foreground">
+                          {member.user?.email}
+                        </p>
+                      )}
                     </div>
                     <Select
                       value={member.role}

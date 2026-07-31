@@ -327,8 +327,14 @@ type UserRepository interface {
 	Update(ctx context.Context, user *domain.User) error
 	// UsernameExists reports whether any user already holds the given username (case-insensitive, global).
 	UsernameExists(ctx context.Context, username string) (bool, error)
-	// SearchUsers returns users whose email or display_name match the query (ILIKE), up to limit.
-	SearchUsers(ctx context.Context, query string, limit int) ([]domain.User, error)
+	// SearchAddableUsers returns users the caller may be shown while looking for
+	// someone to add to a workspace: an exact address match anywhere on the
+	// instance, plus loose matches restricted to people the caller already shares
+	// a workspace with. Pass uuid.Nil for callerID when the caller is not a user
+	// (agent key), which leaves only the exact-address rule. It replaced an
+	// instance-wide substring search that let any workspace owner enumerate the
+	// whole user directory — see the implementation for the full note.
+	SearchAddableUsers(ctx context.Context, callerID uuid.UUID, query string, limit int) ([]domain.User, error)
 	// GetByUsername returns the user with the given username in the workspace, or (nil, nil) if not found.
 	GetByUsername(ctx context.Context, workspaceID uuid.UUID, username string) (*domain.User, error)
 	// SearchInWorkspace returns users who are workspace members and whose display_name, username, or email match the query (ILIKE), up to limit results.

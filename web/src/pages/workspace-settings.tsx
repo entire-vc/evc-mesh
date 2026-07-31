@@ -10,6 +10,7 @@ import {
   Download,
   FileDown,
   FileUp,
+  Pencil,
   Plus,
   Save,
   Settings,
@@ -38,8 +39,17 @@ import { ConfirmDialog } from "@/components/confirm-dialog";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { useAuthStore } from "@/stores/auth";
 import { useMemberStore } from "@/stores/member";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { useRulesStore } from "@/stores/rules";
 import { cn } from "@/lib/cn";
+import { displayName, inlineLabel, isNamePlaceholder } from "@/lib/user-display";
 import type {
   AssignmentRulesConfig,
   ImportResult,
@@ -273,7 +283,7 @@ function WsAssigneeSelect({
         <optgroup label="Members">
           {members.map((m) => (
             <option key={m.user_id} value={`user:${m.user_id}`}>
-              {m.user.name} ({m.user.email})
+              {inlineLabel(m.user)}
             </option>
           ))}
         </optgroup>
@@ -632,6 +642,7 @@ export function WorkspaceSettingsPage() {
     fetchWorkspaceMembers,
     fetchMyRole,
     updateWorkspaceMemberRole,
+    updateWorkspaceMemberName,
     removeWorkspaceMember,
     workspaceInvites,
     fetchWorkspaceInvites,
@@ -681,6 +692,11 @@ export function WorkspaceSettingsPage() {
     useState<WorkspaceMemberWithUser | null>(null);
   const [isRemoving, setIsRemoving] = useState(false);
   const [removeError, setRemoveError] = useState<string | null>(null);
+  const [memberToRename, setMemberToRename] =
+    useState<WorkspaceMemberWithUser | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const [isRenaming, setIsRenaming] = useState(false);
+  const [renameError, setRenameError] = useState<string | null>(null);
 
   // Rules saving state
   const [isSavingRules, setIsSavingRules] = useState(false);
@@ -891,6 +907,33 @@ export function WorkspaceSettingsPage() {
       await updateWorkspaceMemberRole(currentWorkspace.id, member.user_id, newRole);
     } catch {
       // Silently fail — role will revert in UI since store didn't update
+    }
+  };
+
+  const handleOpenRename = (member: WorkspaceMemberWithUser) => {
+    setMemberToRename(member);
+    // Prefilling with a placeholder would just make the operator delete the
+    // address before typing, so start empty when there is no real name.
+    setRenameValue(isNamePlaceholder(member.user) ? "" : member.user.name);
+    setRenameError(null);
+  };
+
+  const handleConfirmRename = async () => {
+    if (!currentWorkspace || !memberToRename) return;
+    const trimmed = renameValue.trim();
+    if (!trimmed) {
+      setRenameError("Name is required");
+      return;
+    }
+    setIsRenaming(true);
+    setRenameError(null);
+    try {
+      await updateWorkspaceMemberName(currentWorkspace.id, memberToRename.user_id, trimmed);
+      setMemberToRename(null);
+    } catch (err) {
+      setRenameError(err instanceof Error ? err.message : "Failed to update name");
+    } finally {
+      setIsRenaming(false);
     }
   };
 
@@ -1373,28 +1416,52 @@ export function WorkspaceSettingsPage() {
                     {/* Avatar */}
                     <Avatar
                       src={member.user.avatar_url || undefined}
-                      name={member.user.name || member.user.email}
+                      name={displayName(member.user)}
                       size="md"
                     />
 
-                    {/* Info */}
+                    {/* Info. Name first, address only when it disambiguates —
+                        for an account that never got a name the two are the
+                        same string, and printing it twice reads as a bug. */}
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-1.5">
                         <span className="truncate text-sm font-medium">
-                          {member.user.name}
+                          {displayName(member.user)}
                         </span>
                         {isMe && (
                           <span className="text-xs text-muted-foreground">(you)</span>
                         )}
                         <RoleIcon role={member.role} />
                       </div>
-                      <p className="truncate text-xs text-muted-foreground">
-                        {member.user.email}
-                      </p>
+                      {isNamePlaceholder(member.user) ? (
+                        <p className="truncate text-xs text-muted-foreground italic">
+                          No name set
+                          {canManageMembers && !isMe && " — click the pencil to add one"}
+                        </p>
+                      ) : (
+                        <p className="truncate text-xs text-muted-foreground">
+                          {member.user.email}
+                        </p>
+                      )}
                       <p className="text-xs text-muted-foreground">
                         Joined {formatDate(member.created_at)}
                       </p>
                     </div>
+
+                    {/* Edit name. Own name is edited on the Profile tab, which
+                        is also the only place it can be changed once its owner
+                        has chosen it. */}
+                    {canManageMembers && !isMe && (
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8 text-muted-foreground hover:text-foreground"
+                        onClick={() => handleOpenRename(member)}
+                        title="Edit display name"
+                      >
+                        <Pencil className="h-4 w-4" />
+                      </Button>
+                    )}
 
                     {/* Role badge or dropdown */}
                     {canEditRole ? (
@@ -2012,13 +2079,72 @@ export function WorkspaceSettingsPage() {
         title="Remove Member"
         description={
           memberToRemove
-            ? `Are you sure you want to remove ${memberToRemove.user.name} (${memberToRemove.user.email}) from this workspace?`
+            ? `Are you sure you want to remove ${displayName(memberToRemove.user)} (${memberToRemove.user.email}) from this workspace?`
             : ""
         }
         confirmText="Remove Member"
         variant="destructive"
         isLoading={isRemoving}
       />
+
+      {/* Rename member. Scoped to a display name that nobody has claimed: the
+          API answers 403 once its owner has set it themselves, because the name
+          is account-wide and would change how they appear in every other
+          workspace too. */}
+      <Dialog
+        open={!!memberToRename}
+        onOpenChange={(next) => { if (!next) setMemberToRename(null); }}
+      >
+        <DialogContent onClose={() => setMemberToRename(null)}>
+          <DialogHeader>
+            <DialogTitle>Edit display name</DialogTitle>
+            <DialogDescription>
+              {memberToRename
+                ? `How ${memberToRename.user.email} appears on tasks, comments and mentions.`
+                : ""}
+            </DialogDescription>
+          </DialogHeader>
+
+          <form
+            className="mt-4 space-y-4"
+            onSubmit={(e) => { e.preventDefault(); void handleConfirmRename(); }}
+          >
+            <div className="space-y-1.5">
+              <label htmlFor="ws-rename" className="text-sm font-medium">
+                Name <span className="text-destructive">*</span>
+              </label>
+              <Input
+                id="ws-rename"
+                value={renameValue}
+                onChange={(e) => setRenameValue(e.target.value)}
+                placeholder="Jane Cooper"
+                autoFocus
+                maxLength={100}
+              />
+              <p className="text-xs text-muted-foreground">
+                They can change it themselves at any time, and once they do this
+                becomes theirs to edit only.
+              </p>
+            </div>
+
+            {renameError && <p className="text-sm text-destructive">{renameError}</p>}
+
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setMemberToRename(null)}
+                disabled={isRenaming}
+              >
+                Cancel
+              </Button>
+              <Button type="submit" disabled={isRenaming}>
+                {isRenaming ? "Saving…" : "Save name"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
 
       {removeError && (
         <p className="text-sm text-destructive">{removeError}</p>

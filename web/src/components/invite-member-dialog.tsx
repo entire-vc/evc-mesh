@@ -14,6 +14,7 @@ import { Badge } from "@/components/ui/badge";
 import { Avatar } from "@/components/ui/avatar";
 import { Select } from "@/components/ui/select";
 import { useMemberStore } from "@/stores/member";
+import { displayName, isNamePlaceholder } from "@/lib/user-display";
 import type { UserSearchResult, WorkspaceRole } from "@/types";
 
 interface InviteMemberDialogProps {
@@ -45,6 +46,7 @@ export function InviteMemberDialog({
   } = useMemberStore();
 
   const [email, setEmail] = useState("");
+  const [name, setName] = useState("");
   const [role, setRole] = useState<WorkspaceRole>("member");
   const [mode, setMode] = useState<InviteMode>("email_link");
   const [password, setPassword] = useState("");
@@ -59,6 +61,7 @@ export function InviteMemberDialog({
   useEffect(() => {
     if (open) {
       setEmail("");
+      setName("");
       setRole("member");
       setMode("email_link");
       setPassword("");
@@ -110,6 +113,13 @@ export function InviteMemberDialog({
       setError("Password is required when creating an account now");
       return;
     }
+    // Asked for here because this is the only moment anybody knows it. Skipping
+    // it stores the address in the name field, which is what makes an existing
+    // instance show every member as their own address with no way to correct it.
+    if (mode === "create_now" && !selectedUser && !name.trim()) {
+      setError("Name is required — it is what the team sees on tasks and mentions");
+      return;
+    }
 
     setIsSubmitting(true);
     setError(null);
@@ -121,7 +131,7 @@ export function InviteMemberDialog({
         setSuccessMsg(`Invite sent to ${emailValue}`);
         setTimeout(onClose, 1500);
       } else if (mode === "create_now" && !selectedUser) {
-        await addWorkspaceMember(workspaceId, emailValue, role, password);
+        await addWorkspaceMember(workspaceId, emailValue, role, password, name);
         onClose();
       } else {
         // Selected existing user — always direct add (no password needed).
@@ -141,7 +151,8 @@ export function InviteMemberDialog({
         <DialogHeader>
           <DialogTitle>Add Member</DialogTitle>
           <DialogDescription>
-            Add a user to this workspace by email address.
+            Type an address. If it already has an account, pick it from the list —
+            the same login joins this workspace, no second account is made.
           </DialogDescription>
         </DialogHeader>
 
@@ -181,12 +192,18 @@ export function InviteMemberDialog({
                     >
                       <Avatar
                         src={user.avatar_url || undefined}
-                        name={user.name || user.email}
+                        name={displayName(user)}
                         size="sm"
                       />
                       <div className="flex-1 min-w-0">
-                        <p className="truncate text-sm font-medium">{user.name}</p>
-                        <p className="truncate text-xs text-muted-foreground">{user.email}</p>
+                        <p className="truncate text-sm font-medium">{displayName(user)}</p>
+                        {isNamePlaceholder(user) ? (
+                          <p className="truncate text-xs text-muted-foreground italic">
+                            no name set
+                          </p>
+                        ) : (
+                          <p className="truncate text-xs text-muted-foreground">{user.email}</p>
+                        )}
                       </div>
                       {user.is_member && (
                         <Badge variant="secondary" className="text-xs shrink-0">
@@ -205,12 +222,17 @@ export function InviteMemberDialog({
             <div className="flex items-center gap-3 rounded-lg border border-border px-3 py-2.5">
               <Avatar
                 src={selectedUser.avatar_url || undefined}
-                name={selectedUser.name || selectedUser.email}
+                name={displayName(selectedUser)}
                 size="sm"
               />
               <div className="flex-1 min-w-0">
-                <p className="truncate text-sm font-medium">{selectedUser.name}</p>
-                <p className="truncate text-xs text-muted-foreground">{selectedUser.email}</p>
+                <p className="truncate text-sm font-medium">{displayName(selectedUser)}</p>
+                {!isNamePlaceholder(selectedUser) && (
+                  <p className="truncate text-xs text-muted-foreground">{selectedUser.email}</p>
+                )}
+                <p className="truncate text-xs text-muted-foreground">
+                  Existing account — joins this workspace with the same login.
+                </p>
               </div>
               <button
                 type="button"
@@ -259,6 +281,27 @@ export function InviteMemberDialog({
                 </span>
               </label>
             </fieldset>
+          )}
+
+          {/* Name — only when the account is being created here. For an existing
+              account the name is already the person's own and not ours to set. */}
+          {mode === "create_now" && !selectedUser && (
+            <div className="space-y-1.5">
+              <label htmlFor="imd-name" className="text-sm font-medium">
+                Name <span className="text-destructive">*</span>
+              </label>
+              <Input
+                id="imd-name"
+                type="text"
+                placeholder="Jane Cooper"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                autoComplete="off"
+              />
+              <p className="text-xs text-muted-foreground">
+                Shown on tasks, comments and mentions. They can change it later.
+              </p>
+            </div>
           )}
 
           {/* Password — only for create_now with unknown user */}

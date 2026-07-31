@@ -1760,10 +1760,11 @@ func (m *MockRulesService) SetWorkflowTemplates(_ context.Context, _ uuid.UUID, 
 // MockUserRepository implements repository.UserRepository. Users are keyed by
 // "<workspaceID>/<username>" for GetByUsername lookups and by ID for GetByID.
 type MockUserRepository struct {
-	mu          sync.RWMutex
-	byUsername  map[string]*domain.User
-	byID        map[uuid.UUID]*domain.User
-	errToReturn error
+	mu            sync.RWMutex
+	byUsername    map[string]*domain.User
+	byID          map[uuid.UUID]*domain.User
+	searchResults []domain.User
+	errToReturn   error
 }
 
 func NewMockUserRepository() *MockUserRepository {
@@ -1835,12 +1836,22 @@ func (m *MockUserRepository) GetByEmail(_ context.Context, email string) (*domai
 	return nil, nil
 }
 
-func (m *MockUserRepository) Update(_ context.Context, _ *domain.User) error {
-	return m.errToReturn
+// Update persists a copy rather than the caller's pointer, so a test that
+// asserts a write really happened cannot be satisfied by the service having
+// mutated the struct GetByID handed it.
+func (m *MockUserRepository) Update(_ context.Context, u *domain.User) error {
+	if m.errToReturn != nil {
+		return m.errToReturn
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	stored := *u
+	m.byID[u.ID] = &stored
+	return nil
 }
 
-func (m *MockUserRepository) SearchUsers(_ context.Context, _ string, _ int) ([]domain.User, error) {
-	return nil, m.errToReturn
+func (m *MockUserRepository) SearchAddableUsers(_ context.Context, _ uuid.UUID, _ string, _ int) ([]domain.User, error) {
+	return m.searchResults, m.errToReturn
 }
 
 func (m *MockUserRepository) SearchInWorkspace(_ context.Context, _ uuid.UUID, _ string, _ int) ([]domain.User, error) {

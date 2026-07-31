@@ -55,6 +55,7 @@ import { DescriptionEditor } from "@/components/description-editor";
 import { MarkdownWithRelay } from "@/components/MarkdownWithRelay";
 import { RecurringHistoryPanel } from "@/components/recurring-history-panel";
 import { cn } from "@/lib/cn";
+import { inlineLabel } from "@/lib/user-display";
 import {
   formatDate,
   formatRelative,
@@ -679,7 +680,7 @@ export function TaskPanel({
               const isSelf = user?.id === m.user_id;
               return (
                 <option key={m.id} value={`user:${m.user_id}`}>
-                  {m.user.name}{isSelf ? " (you)" : ""} — {m.role}
+                  {inlineLabel(m.user)}{isSelf ? " (you)" : ""} — {m.role}
                 </option>
               );
             }

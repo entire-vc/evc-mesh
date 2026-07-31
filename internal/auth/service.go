@@ -469,6 +469,11 @@ func (s *Service) UpdateProfile(ctx context.Context, userID uuid.UUID, name, use
 	}
 
 	user.Name = name
+	// The subject of the change is also its author, so from here on the name
+	// belongs to this account: SetMemberDisplayName refuses to overwrite it, and
+	// a workspace admin can no longer decide how this person appears to the other
+	// workspaces they are in.
+	user.DisplayNameSelfSet = true
 	if username != "" {
 		user.Username = username
 	}

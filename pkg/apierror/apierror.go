@@ -76,6 +76,16 @@ func NotFound(resource string) *Error {
 	}
 }
 
+// NotFoundWithDetails creates a 404 error that also says what to do about it.
+// Use it where "not found" is a fork in the flow rather than a dead end.
+func NotFoundWithDetails(resource, details string) *Error {
+	return &Error{
+		Code:    http.StatusNotFound,
+		Message: fmt.Sprintf("%s not found", resource),
+		Details: details,
+	}
+}
+
 // Conflict creates a 409 error.
 func Conflict(message string) *Error {
 	return &Error{Code: http.StatusConflict, Message: message}

@@ -45,6 +45,14 @@ export function AcceptInvitePage() {
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
+    // Required, not optional. When it was optional the server fell back to
+    // storing the address in display_name, and nothing in the product could
+    // correct it afterwards — which is how an instance ends up showing every
+    // member as their own address on every task and comment.
+    if (!name.trim()) {
+      setError("Please enter your name — it is what your team sees on tasks and comments");
+      return;
+    }
     if (!password) {
       setError("Password is required");
       return;
@@ -60,7 +68,7 @@ export function AcceptInvitePage() {
     try {
       const resp = await api<{ access_token: string; refresh_token: string }>(
         `/api/v1/invites/${token}/accept`,
-        { method: "POST", body: { name, password }, noAuth: true },
+        { method: "POST", body: { name: name.trim(), password }, noAuth: true },
       );
       setTokens(resp.access_token, resp.refresh_token);
       await fetchMe();
@@ -110,7 +118,7 @@ export function AcceptInvitePage() {
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-1.5">
             <label htmlFor="ai-name" className="text-sm font-medium">
-              Display name
+              Your name <span className="text-destructive">*</span>
             </label>
             <Input
               id="ai-name"
@@ -119,7 +127,11 @@ export function AcceptInvitePage() {
               value={name}
               onChange={(e) => setName(e.target.value)}
               autoFocus
+              maxLength={100}
             />
+            <p className="text-xs text-muted-foreground">
+              Shown on tasks, comments and mentions. You can change it later.
+            </p>
           </div>
 
           <div className="space-y-1.5">

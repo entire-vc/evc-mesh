@@ -20,6 +20,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import type { Agent, AgentType } from "@/types";
+import { inlineLabel } from "@/lib/user-display";
 
 interface AgentDetailDialogProps {
   open: boolean;
@@ -517,7 +518,7 @@ export function AgentDetailDialog({
                 <optgroup label="Members">
                   {workspaceMembers.map((m) => (
                     <option key={`user:${m.user_id}`} value={`user:${m.user_id}`}>
-                      {m.user.name || m.user.email}
+                      {inlineLabel(m.user)}
                     </option>
                   ))}
                 </optgroup>

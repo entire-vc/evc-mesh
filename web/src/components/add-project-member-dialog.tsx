@@ -13,6 +13,7 @@ import { Select } from "@/components/ui/select";
 import { Avatar } from "@/components/ui/avatar";
 import { useMemberStore } from "@/stores/member";
 import type { ProjectRole, WorkspaceMemberWithUser } from "@/types";
+import { inlineLabel } from "@/lib/user-display";
 
 interface AddProjectMemberDialogProps {
   open: boolean;
@@ -114,7 +115,7 @@ export function AddProjectMemberDialog({
                 >
                   {availableMembers.map((member) => (
                     <option key={member.user_id} value={member.user_id}>
-                      {member.user.name} ({member.user.email})
+                      {inlineLabel(member.user)}
                     </option>
                   ))}
                 </Select>
