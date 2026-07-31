@@ -1845,6 +1845,111 @@ func TestReleaseHumanGateOnWithdrawal_SoleOwner_NoGapRequired(t *testing.T) {
 	assert.False(t, gateCalls[0].value)
 }
 
+// seedRawArmMarker inserts task_handler.go's raw PATCH/UI arm system comment
+// directly, simulating a human_gate that went false→true with no "❓ Blocking
+// @user" comment involved at all — see hasRawArmMarker.
+func (env triageTestEnv) seedRawArmMarker(taskID uuid.UUID, at time.Time) {
+	cid := uuid.New()
+	env.commentRepo.items[cid] = &domain.Comment{
+		ID:         cid,
+		TaskID:     taskID,
+		AuthorID:   uuid.New(),
+		AuthorType: domain.ActorTypeAgent,
+		Body:       "🔒 Auto: human_gate взведён напрямую (PATCH/UI), без маркерного коммента — actor: 4e2f...",
+		IsInternal: true,
+		CreatedAt:  at,
+	}
+}
+
+// TestReleaseHumanGateOnWithdrawal_GateArmedWithoutMarker_BystanderBlocked is
+// task #a2e2ac72's own repro (Bill's live proof on #ed8b4af6, prod-sha
+// 871fb04): the gate was armed via a raw PATCH/UI call with NO marker comment
+// in the thread at all. A bystander agent then posts their own marker and
+// immediately negates it. Before this fix, soleMarkerAuthor was trivially
+// true (there is still only ONE marker author ever — the bystander's own
+// fabricated one), so #9959f201's fast path released the gate anyway —
+// exactly as easily as the original two-comment hijack it was meant to close,
+// just needing one identity instead of two. This must stay gated: the raw-arm
+// marker predates the bystander's own marker, so rawArmPrecedesMarker forces
+// the same friction as "not sole author".
+func TestReleaseHumanGateOnWithdrawal_GateArmedWithoutMarker_BystanderBlocked(t *testing.T) {
+	env := setupTriageEnv(t, true)
+	taskID := env.seedGatedTask(env.inProgressID)
+	env.seedRawArmMarker(taskID, frozenTime.Add(-1*time.Hour)) // PATCH arm, 1h before the marker below
+
+	bystanderID := uuid.New()
+	hijackMarkerID := uuid.New()
+	env.commentRepo.items[hijackMarkerID] = &domain.Comment{
+		ID: hijackMarkerID, TaskID: taskID, AuthorID: bystanderID, AuthorType: domain.ActorTypeAgent,
+		Body:      "❓ **Blocking @pavel**: подтверждаю, вопрос ещё актуален",
+		CreatedAt: frozenTime, // "now" — posted this turn
+	}
+
+	ctx := actorctx.WithActor(context.Background(), bystanderID, domain.ActorTypeAgent)
+	comment := &domain.Comment{
+		TaskID: taskID, AuthorID: bystanderID, AuthorType: domain.ActorTypeAgent,
+		Body: "Ask не нужен, снимаю.", // CreatedAt via svc.Create → timeNow() → also frozenTime, zero gap
+	}
+	require.NoError(t, env.svc.Create(ctx, comment))
+
+	assert.Empty(t, env.taskMover.humanGateCalls(),
+		"a marker fabricated onto an already (raw-armed) gate must not grant the sole-owner fast path")
+	assert.Empty(t, env.systemComments())
+}
+
+// TestReleaseHumanGateOnWithdrawal_GateArmedWithoutMarker_AllowedAfterRealGap
+// proves the fix above is the same friction-not-ban shape as
+// TwoCommentHijack_AllowedAfterRealGap: once real time separates the
+// bystander's marker from their own negator, the release still succeeds.
+func TestReleaseHumanGateOnWithdrawal_GateArmedWithoutMarker_AllowedAfterRealGap(t *testing.T) {
+	env := setupTriageEnv(t, true)
+	taskID := env.seedGatedTask(env.inProgressID)
+	env.seedRawArmMarker(taskID, frozenTime.Add(-2*time.Hour)) // PATCH arm, well before the marker below
+
+	bystanderID := uuid.New()
+	markerID := uuid.New()
+	env.commentRepo.items[markerID] = &domain.Comment{
+		ID: markerID, TaskID: taskID, AuthorID: bystanderID, AuthorType: domain.ActorTypeAgent,
+		Body:      "❓ **Blocking @pavel**: подтверждаю, вопрос ещё актуален",
+		CreatedAt: frozenTime.Add(-45 * time.Minute), // 45m before the withdrawal below
+	}
+
+	ctx := actorctx.WithActor(context.Background(), bystanderID, domain.ActorTypeAgent)
+	comment := &domain.Comment{
+		TaskID: taskID, AuthorID: bystanderID, AuthorType: domain.ActorTypeAgent,
+		Body: "Ask не нужен, снимаю.", // CreatedAt = frozenTime → 45m gap ≥ minReaffirmToWithdrawalGap
+	}
+	require.NoError(t, env.svc.Create(ctx, comment))
+
+	gateCalls := env.taskMover.humanGateCalls()
+	require.Len(t, gateCalls, 1, "a real gap after the raw arm must still release the gate — this is not a blanket ban")
+	assert.False(t, gateCalls[0].value)
+}
+
+// TestReleaseHumanGateOnWithdrawal_RawArmAfterMarker_SoleOwnerStillNoGapRequired
+// guards the comparison direction: a raw PATCH/UI arm comment that lands AFTER
+// a genuine marker (e.g. a redundant re-arm following a real ask) must NOT
+// retroactively strip the sole owner's zero-gap self-clear — only a raw arm
+// that PRECEDES the live marker is suspect.
+func TestReleaseHumanGateOnWithdrawal_RawArmAfterMarker_SoleOwnerStillNoGapRequired(t *testing.T) {
+	env := setupTriageEnv(t, true)
+	taskID := env.seedGatedTask(env.inProgressID)
+	askerID := uuid.New()
+	env.seedAgentBlockingComment(taskID, askerID) // frozenTime - 2h — the genuine, original ask
+	env.seedRawArmMarker(taskID, frozenTime.Add(-1*time.Hour))
+
+	ctx := actorctx.WithActor(context.Background(), askerID, domain.ActorTypeAgent)
+	comment := &domain.Comment{
+		TaskID: taskID, AuthorID: askerID, AuthorType: domain.ActorTypeAgent,
+		Body: "Blocker самоустранился, ask не нужен — снимаю.",
+	}
+	require.NoError(t, env.svc.Create(ctx, comment))
+
+	gateCalls := env.taskMover.humanGateCalls()
+	require.Len(t, gateCalls, 1, "a raw arm AFTER the genuine marker must not retroactively block the sole owner")
+	assert.False(t, gateCalls[0].value)
+}
+
 // TestReleaseHumanGateOnWithdrawal_LogsReleasedByToActivityLog is the task's
 // AC4: a successful release must now be visible in the task's activity log —
 // before this fix, /activity carried no human_gate signal at all.
