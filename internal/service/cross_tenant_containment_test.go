@@ -43,6 +43,8 @@ func (f *fakeWorkspaceRepoForInvites) GetByID(context.Context, uuid.UUID) (*doma
 
 type recordingEmailService struct{ sent int }
 
+func (r *recordingEmailService) Enabled() bool { return true }
+
 func (r *recordingEmailService) SendInvite(context.Context, string, string, string) error {
 	r.sent++
 	return nil
@@ -90,7 +92,7 @@ func TestInviteService_ResendAndRevoke_AreScopedToTheWorkspace(t *testing.T) {
 	t.Run("resend from another workspace sends no email", func(t *testing.T) {
 		svc, _, email := newSvc()
 
-		err := svc.ResendInvite(context.Background(), intruderWS, inviteID)
+		_, err := svc.ResendInvite(context.Background(), intruderWS, inviteID)
 		require.Error(t, err, "another tenant's invitee was mailed")
 		assert.Zero(t, email.sent, "the invitation email went out anyway")
 	})
@@ -98,8 +100,10 @@ func TestInviteService_ResendAndRevoke_AreScopedToTheWorkspace(t *testing.T) {
 	t.Run("the owning workspace still works", func(t *testing.T) {
 		svc, _, email := newSvc()
 
-		require.NoError(t, svc.ResendInvite(context.Background(), victimWS, inviteID),
+		delivery, err := svc.ResendInvite(context.Background(), victimWS, inviteID)
+		require.NoError(t, err,
 			"the workspace that owns the invite was refused its own resend")
+		assert.Equal(t, InviteDeliverySent, delivery.Status)
 		assert.Equal(t, 1, email.sent)
 
 		svc2, repo2, _ := newSvc()

@@ -233,11 +233,13 @@ type mockInviteService struct {
 	revoke func(ctx context.Context, workspaceID, inviteID uuid.UUID) error
 }
 
-func (m *mockInviteService) ResendInvite(ctx context.Context, workspaceID, inviteID uuid.UUID) error {
+func (m *mockInviteService) ResendInvite(ctx context.Context, workspaceID, inviteID uuid.UUID) (service.InviteDelivery, error) {
 	if m.resend != nil {
-		return m.resend(ctx, workspaceID, inviteID)
+		if err := m.resend(ctx, workspaceID, inviteID); err != nil {
+			return service.InviteDelivery{}, err
+		}
 	}
-	return nil
+	return service.InviteDelivery{Status: service.InviteDeliverySent}, nil
 }
 
 func (m *mockInviteService) RevokeInvite(ctx context.Context, workspaceID, inviteID uuid.UUID) error {

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -326,6 +327,15 @@ func main() {
 	}
 	inviteRepo := postgres.NewInviteRepo(db)
 	emailSvc := service.NewEmailService(cfg.Email)
+	// State the mail configuration once at boot, the same as object storage
+	// below, rather than leaving the operator to discover it from a log line
+	// emitted during their first invite. Unconfigured email is a supported
+	// setup, not a failure: invites still work, handed over as links.
+	if emailSvc.Enabled() {
+		log.Printf("Email ready: sending via %s:%d as %q", cfg.Email.Host, cfg.Email.Port, cfg.Email.From)
+	} else {
+		log.Printf("Email is not configured (SMTP_HOST is empty) — no invitation emails will be sent. Invites still work: the invite link is shown in the UI for you to pass on. Set SMTP_HOST/SMTP_FROM to send email instead.")
+	}
 	inviteService := service.NewInviteService(inviteRepo, userRepo, workspaceMemberRepo, workspaceRepo, emailSvc, authService, cfg.Email.BaseURL)
 
 	savedViewService := service.NewSavedViewService(savedViewRepo)
@@ -490,7 +500,7 @@ func main() {
 		LogURI:    true,
 		LogStatus: true,
 		LogValuesFunc: func(c echo.Context, v middleware.RequestLoggerValues) error {
-			log.Printf("%s %s -> %d", c.Request().Method, v.URI, v.Status)
+			log.Printf("%s %s -> %d", c.Request().Method, redactInviteToken(v.URI), v.Status)
 			return nil
 		},
 	}))
@@ -1285,4 +1295,33 @@ func main() {
 	}
 
 	log.Println("Server stopped")
+}
+
+// redactInviteToken strips the invite token out of a request URI before the
+// access log sees it.
+//
+// GET /api/v1/invites/:token and its /accept sibling are public routes whose
+// path segment IS the credential: anyone holding it can join the workspace. The
+// access logger printed the raw URI, so every time an invitee opened their link
+// the token was written to the log in full — and logs get shipped to collectors
+// that far more people can read than the workspace has members.
+//
+// Only the public top-level route is redacted. The admin route
+// /api/v1/workspaces/:ws_id/invites/:invite_id carries a database id, not a
+// secret, and stays readable.
+func redactInviteToken(uri string) string {
+	const prefix = "/api/v1/invites/"
+	if !strings.HasPrefix(uri, prefix) {
+		return uri
+	}
+	rest := uri[len(prefix):]
+	if rest == "" {
+		return uri
+	}
+	// Preserve any trailing path ("/accept") and query string so the log line
+	// still says which operation it was.
+	if end := strings.IndexAny(rest, "/?"); end != -1 {
+		return prefix + "<redacted>" + rest[end:]
+	}
+	return prefix + "<redacted>"
 }

@@ -548,17 +548,59 @@ type AcceptInviteInput struct {
 	Password string
 }
 
+// Invite delivery statuses reported by CreateInvite and ResendInvite.
+const (
+	// InviteDeliverySent means the invitation email was handed to the SMTP server.
+	InviteDeliverySent = "sent"
+	// InviteDeliveryNotConfigured means no SMTP host is configured, so no email
+	// was attempted. This is the normal state of a fresh self-hosted instance,
+	// not an error: the invite exists and its link is usable.
+	InviteDeliveryNotConfigured = "not_configured"
+	// InviteDeliveryFailed means email is configured but the send failed.
+	InviteDeliveryFailed = "failed"
+)
+
+// InviteDelivery reports what actually happened to the invitation email, so that
+// callers can stop conflating "created" with "delivered".
+//
+// Creating the invite and mailing it are separate outcomes: the invite row is
+// written first and is valid regardless of whether any mail could be sent. URL
+// is therefore always populated — it is the fallback delivery channel when
+// Status is not InviteDeliverySent, and the inviter is expected to pass it on
+// themselves.
+type InviteDelivery struct {
+	// Status is one of InviteDeliverySent, InviteDeliveryNotConfigured, InviteDeliveryFailed.
+	Status string
+	// URL is the invite accept link. Always set.
+	URL string
+	// Error carries the send failure message when Status is InviteDeliveryFailed.
+	Error string
+}
+
+// Sent reports whether an invitation email actually went out.
+func (d InviteDelivery) Sent() bool { return d.Status == InviteDeliverySent }
+
+// CreateInviteResult is the outcome of creating an invite: the stored invite
+// plus what became of its email.
+type CreateInviteResult struct {
+	Invite   *domain.WorkspaceInvite
+	Delivery InviteDelivery
+}
+
 // WorkspaceInviteService provides business logic for workspace invite management.
 type WorkspaceInviteService interface {
-	// CreateInvite creates a pending invite, sends the invitation email, and returns the invite.
-	CreateInvite(ctx context.Context, input CreateInviteInput) (*domain.WorkspaceInvite, error)
+	// CreateInvite creates a pending invite and attempts to email it. A failure
+	// to send is reported in the returned delivery status, not as an error: the
+	// invite is created either way and the caller is handed its link.
+	CreateInvite(ctx context.Context, input CreateInviteInput) (*CreateInviteResult, error)
 	// ListInvites returns all pending (non-expired, unaccepted) invites for a workspace.
 	ListInvites(ctx context.Context, workspaceID uuid.UUID) ([]domain.WorkspaceInvite, error)
-	// ResendInvite re-sends the invitation email for an existing pending invite.
+	// ResendInvite re-sends the invitation email for an existing pending invite,
+	// reporting the outcome in the returned delivery status.
 	// workspaceID is the workspace named in the route: the invite must be one of
 	// its own, or a caller could re-send a stranger's invite from their own
 	// workspace and mail that stranger's invitee on demand.
-	ResendInvite(ctx context.Context, workspaceID, inviteID uuid.UUID) error
+	ResendInvite(ctx context.Context, workspaceID, inviteID uuid.UUID) (InviteDelivery, error)
 	// RevokeInvite deletes a pending invite. workspaceID is the workspace named in
 	// the route; see ResendInvite for why it is not optional.
 	RevokeInvite(ctx context.Context, workspaceID, inviteID uuid.UUID) error
