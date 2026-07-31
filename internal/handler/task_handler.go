@@ -295,6 +295,23 @@ func resolveTaskID(ctx context.Context, s string, svc taskIDResolver) (uuid.UUID
 	return uuid.Nil, apierror.BadRequest("invalid task_id")
 }
 
+// attachHumanGateInfo populates task.HumanGateInfo (task #040cddcf) — a
+// read-only exposure of the ownership commentService already computes
+// internally to gate withdrawal, via GetHumanGateOwner. No-op when the task
+// isn't gated or commentService isn't wired; failures are logged, never
+// surfaced as an error, so a lookup hiccup can't turn a GET into a 500.
+func (h *TaskHandler) attachHumanGateInfo(ctx context.Context, task *domain.Task) {
+	if task == nil || !task.HumanGate || h.commentService == nil {
+		return
+	}
+	info, err := h.commentService.GetHumanGateOwner(ctx, task.ID)
+	if err != nil {
+		log.Printf("[human-gate] WARNING: GetHumanGateOwner for task %s failed: %v", task.ID, err)
+		return
+	}
+	task.HumanGateInfo = info
+}
+
 // GetByID handles GET /tasks/:task_id
 // Falls back to short-ID lookup when task_id is a 6–12 char hex prefix rather than a full UUID.
 func (h *TaskHandler) GetByID(c echo.Context) error {
@@ -306,6 +323,7 @@ func (h *TaskHandler) GetByID(c echo.Context) error {
 			if err2 != nil {
 				return handleError(c, err2)
 			}
+			h.attachHumanGateInfo(c.Request().Context(), task)
 			task.URL = computeTaskURL(c.Request(), task.ID)
 			return c.JSON(http.StatusOK, task)
 		}
@@ -317,6 +335,7 @@ func (h *TaskHandler) GetByID(c echo.Context) error {
 		return handleError(c, err)
 	}
 
+	h.attachHumanGateInfo(c.Request().Context(), task)
 	task.URL = computeTaskURL(c.Request(), task.ID)
 	return c.JSON(http.StatusOK, task)
 }
@@ -333,6 +352,7 @@ func (h *TaskHandler) GetByShortID(c echo.Context) error {
 		return handleError(c, err)
 	}
 
+	h.attachHumanGateInfo(c.Request().Context(), task)
 	task.URL = computeTaskURL(c.Request(), task.ID)
 	return c.JSON(http.StatusOK, task)
 }

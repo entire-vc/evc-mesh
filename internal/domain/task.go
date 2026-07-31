@@ -126,6 +126,38 @@ type Task struct {
 	// URL is the canonical short deep-link, e.g. https://mesh.entire.host/t/<id>.
 	// Populated by HTTP handlers from request scheme+host. Empty in non-HTTP contexts.
 	URL string `json:"url,omitempty"`
+	// HumanGateInfo surfaces WHO currently owns a live human_gate ask and
+	// whether they can clear it themselves (task #040cddcf) — never
+	// persisted, populated only by GET handlers when HumanGate is true, same
+	// pattern as URL above.
+	HumanGateInfo *HumanGateInfo `json:"human_gate_info,omitempty"`
+}
+
+// HumanGateInfo exposes, read-only, the ownership service.commentService
+// already computes internally to decide whether a human_gate withdrawal
+// comment may clear the flag (task #9959f201/#a2e2ac72) — task #040cddcf
+// found that this was never surfaced anywhere: a live measurement showed 46
+// of 47 gated tasks HAD a clearable owner, but nothing ever told them so.
+//
+// This does not change who CAN clear a gate — it only reports what the
+// existing rule already decides. ClearableByOwner/ReasonIfNot mirror what
+// would happen if OwnerAgentID posted a withdrawal negator RIGHT NOW:
+//   - no live marker at all           → gated but no owner, ReasonIfNot="no_live_marker"
+//   - owner exists, can clear instantly → ClearableByOwner=true, ReasonIfNot=""
+//   - owner exists, but the 30-minute reaffirm-gap (minReaffirmToWithdrawalGap)
+//     hasn't elapsed yet — either because ownership transferred to a
+//     different agent (ReasonIfNot="reaffirm_pending") or because the gate
+//     was raw-armed via PATCH/UI before this marker existed
+//     (ReasonIfNot="raw_armed") — → ClearableByOwner=false; it becomes true
+//     once real time passes, with no further action needed.
+type HumanGateInfo struct {
+	Gated            bool       `json:"gated"`
+	OwnerAgentID     *uuid.UUID `json:"owner_agent_id,omitempty"`
+	OwnerName        string     `json:"owner_name,omitempty"`
+	MarkerCommentID  *uuid.UUID `json:"marker_comment_id,omitempty"`
+	MarkerCreatedAt  *time.Time `json:"marker_created_at,omitempty"`
+	ClearableByOwner bool       `json:"clearable_by_owner"`
+	ReasonIfNot      string     `json:"reason_if_not,omitempty"`
 }
 
 // CheckoutInfo carries checkout state for API responses on GET task endpoints.

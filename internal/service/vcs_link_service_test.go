@@ -354,6 +354,9 @@ func (c *fakeCommentService) ListByAuthor(context.Context, uuid.UUID, repository
 func (c *fakeCommentService) ListRecentByWorkspace(context.Context, uuid.UUID, repository.CommentViewFilter) (*domain.CommentViewPage, error) {
 	return nil, nil
 }
+func (c *fakeCommentService) GetHumanGateOwner(context.Context, uuid.UUID) (*domain.HumanGateInfo, error) {
+	return nil, nil
+}
 
 // ---------------------------------------------------------------------------
 // Test fixtures.

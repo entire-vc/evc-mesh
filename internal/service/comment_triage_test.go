@@ -2027,6 +2027,160 @@ func TestHasRawArmMarker_RequiresSystemAuthorType(t *testing.T) {
 	assert.False(t, hasRawArmMarker(body, domain.ActorTypeUser), "a user-authored comment must never count as a raw-arm marker")
 }
 
+// ---------------------------------------------------------------------------
+// GetHumanGateOwner (task #040cddcf) — read-only exposure of ownership
+// ---------------------------------------------------------------------------
+
+// TestGetHumanGateOwner_SoleOwner_ClearableNow is the common case: a single
+// agent raised the still-live ask and nobody else ever touched it — exactly
+// the population #040cddcf measured at 46/47 open gated tasks. Reported
+// owner must match the marker author, and ClearableByOwner must be true with
+// zero gap required — mirrors TestReleaseHumanGateOnWithdrawal_SoleOwner_NoGapRequired.
+func TestGetHumanGateOwner_SoleOwner_ClearableNow(t *testing.T) {
+	env := setupTriageEnv(t, true)
+	taskID := env.seedGatedTask(env.inProgressID)
+	askerID := uuid.New()
+	env.seedAgentBlockingComment(taskID, askerID)
+
+	info, err := env.svc.GetHumanGateOwner(context.Background(), taskID)
+	require.NoError(t, err)
+	require.NotNil(t, info)
+	assert.True(t, info.Gated)
+	require.NotNil(t, info.OwnerAgentID)
+	assert.Equal(t, askerID, *info.OwnerAgentID)
+	assert.True(t, info.ClearableByOwner, "sole marker author must be reported as clearable right now")
+	assert.Empty(t, info.ReasonIfNot)
+	require.NotNil(t, info.MarkerCommentID)
+	require.NotNil(t, info.MarkerCreatedAt)
+}
+
+// TestGetHumanGateOwner_NoLiveMarker_ReasonNoLiveMarker is #040cddcf's own
+// negative control: a gate with no marker comment in the thread at all (the
+// class the task's own live measurement found exactly ONE of 47 open gated
+// tasks belongs to) must report no owner, not a fabricated one.
+func TestGetHumanGateOwner_NoLiveMarker_ReasonNoLiveMarker(t *testing.T) {
+	env := setupTriageEnv(t, true)
+	taskID := env.seedGatedTask(env.inProgressID)
+	// No marker seeded at all — matches releaseHumanGateOnWithdrawal's own
+	// TestReleaseHumanGateOnWithdrawal_NoPriorMarker_NoOp fixture shape.
+
+	info, err := env.svc.GetHumanGateOwner(context.Background(), taskID)
+	require.NoError(t, err)
+	require.NotNil(t, info)
+	assert.True(t, info.Gated)
+	assert.Nil(t, info.OwnerAgentID)
+	assert.Empty(t, info.OwnerName)
+	assert.False(t, info.ClearableByOwner)
+	assert.Equal(t, "no_live_marker", info.ReasonIfNot)
+}
+
+// TestGetHumanGateOwner_RawArmed_NotYetClearable is #a2e2ac72's raw-arm case
+// (same fixture as TestReleaseHumanGateOnWithdrawal_GateArmedWithoutMarker_BystanderBlocked):
+// there IS a reported owner (the bystander's marker), but ClearableByOwner
+// must be false with ReasonIfNot="raw_armed" — the API must not tell that
+// agent they can clear it right now when releaseHumanGateOnWithdrawal would
+// refuse them.
+func TestGetHumanGateOwner_RawArmed_NotYetClearable(t *testing.T) {
+	env := setupTriageEnv(t, true)
+	taskID := env.seedGatedTask(env.inProgressID)
+	env.seedRawArmMarker(taskID, frozenTime.Add(-1*time.Hour))
+
+	bystanderID := uuid.New()
+	env.commentRepo.items[uuid.New()] = &domain.Comment{
+		ID: uuid.New(), TaskID: taskID, AuthorID: bystanderID, AuthorType: domain.ActorTypeAgent,
+		Body:      "❓ **Blocking @pavel**: подтверждаю, вопрос ещё актуален",
+		CreatedAt: frozenTime, // "now" — well within the 30-minute gap
+	}
+
+	info, err := env.svc.GetHumanGateOwner(context.Background(), taskID)
+	require.NoError(t, err)
+	require.NotNil(t, info)
+	require.NotNil(t, info.OwnerAgentID)
+	assert.Equal(t, bystanderID, *info.OwnerAgentID, "an owner IS reported — just not yet clearable")
+	assert.False(t, info.ClearableByOwner)
+	assert.Equal(t, "raw_armed", info.ReasonIfNot)
+}
+
+// TestGetHumanGateOwner_RawArmed_ClearableAfterGap proves ClearableByOwner is
+// a live, time-dependent answer, not a static verdict frozen at scan time:
+// once minReaffirmToWithdrawalGap has genuinely elapsed since the marker, the
+// SAME raw-armed thread reports clearable — matching
+// TestReleaseHumanGateOnWithdrawal_GateArmedWithoutMarker_AllowedAfterRealGap.
+func TestGetHumanGateOwner_RawArmed_ClearableAfterGap(t *testing.T) {
+	env := setupTriageEnv(t, true)
+	taskID := env.seedGatedTask(env.inProgressID)
+	env.seedRawArmMarker(taskID, frozenTime.Add(-2*time.Hour))
+
+	bystanderID := uuid.New()
+	env.commentRepo.items[uuid.New()] = &domain.Comment{
+		ID: uuid.New(), TaskID: taskID, AuthorID: bystanderID, AuthorType: domain.ActorTypeAgent,
+		Body:      "❓ **Blocking @pavel**: подтверждаю, вопрос ещё актуален",
+		CreatedAt: frozenTime.Add(-45 * time.Minute), // 45m before "now" (frozenTime)
+	}
+
+	info, err := env.svc.GetHumanGateOwner(context.Background(), taskID)
+	require.NoError(t, err)
+	require.NotNil(t, info)
+	assert.True(t, info.ClearableByOwner, "45m gap exceeds minReaffirmToWithdrawalGap — must report clearable")
+	assert.Empty(t, info.ReasonIfNot)
+}
+
+// TestGetHumanGateOwner_ReaffirmPending_NotYetClearable is the OTHER source
+// of required friction besides raw-arm: ownership transferred to a second
+// agent via reaffirm (soleMarkerAuthor=false), same shape as
+// TestReleaseHumanGateOnWithdrawal_TwoCommentHijack_Blocked. The task's own
+// JSON sketch names only "no_live_marker"/"raw_armed" as example reasons;
+// this is the third, real case the shared predicate produces and it must not
+// be silently reported as clearable.
+func TestGetHumanGateOwner_ReaffirmPending_NotYetClearable(t *testing.T) {
+	env := setupTriageEnv(t, true)
+	taskID := env.seedGatedTask(env.inProgressID)
+	agentA := uuid.New()
+	agentB := uuid.New()
+	env.seedAgentBlockingComment(taskID, agentA) // frozenTime - 2h
+	env.commentRepo.items[uuid.New()] = &domain.Comment{
+		ID: uuid.New(), TaskID: taskID, AuthorID: agentB, AuthorType: domain.ActorTypeAgent,
+		Body:      "❓ **Blocking @pavel**: подтверждаю, вопрос ещё актуален",
+		CreatedAt: frozenTime, // reaffirmed just now — zero gap so far
+	}
+
+	info, err := env.svc.GetHumanGateOwner(context.Background(), taskID)
+	require.NoError(t, err)
+	require.NotNil(t, info)
+	require.NotNil(t, info.OwnerAgentID)
+	assert.Equal(t, agentB, *info.OwnerAgentID, "ownership follows the chronologically last non-negated marker")
+	assert.False(t, info.ClearableByOwner)
+	assert.Equal(t, "reaffirm_pending", info.ReasonIfNot)
+}
+
+// TestGetHumanGateOwner_PredictionMatchesActualWithdrawal is #040cddcf's own
+// AC3 in spirit: the SAME shared scan must back both the read path and the
+// clearing path, so what GetHumanGateOwner predicts and what
+// releaseHumanGateOnWithdrawal actually does can never disagree. Proven here
+// by DOING both in sequence on one fixture, not just asserting they call the
+// same private method.
+func TestGetHumanGateOwner_PredictionMatchesActualWithdrawal(t *testing.T) {
+	env := setupTriageEnv(t, true)
+	taskID := env.seedGatedTask(env.inProgressID)
+	askerID := uuid.New()
+	env.seedAgentBlockingComment(taskID, askerID)
+
+	info, err := env.svc.GetHumanGateOwner(context.Background(), taskID)
+	require.NoError(t, err)
+	require.True(t, info.ClearableByOwner, "prediction: this owner can clear it right now")
+
+	ctx := actorctx.WithActor(context.Background(), askerID, domain.ActorTypeAgent)
+	comment := &domain.Comment{
+		TaskID: taskID, AuthorID: askerID, AuthorType: domain.ActorTypeAgent,
+		Body: "Blocker самоустранился, ask не нужен — снимаю.",
+	}
+	require.NoError(t, env.svc.Create(ctx, comment))
+
+	gateCalls := env.taskMover.humanGateCalls()
+	require.Len(t, gateCalls, 1, "the prediction must be borne out: the actual withdrawal succeeds")
+	assert.False(t, gateCalls[0].value)
+}
+
 // TestReleaseHumanGateOnWithdrawal_LogsReleasedByToActivityLog is the task's
 // AC4: a successful release must now be visible in the task's activity log —
 // before this fix, /activity carried no human_gate signal at all.

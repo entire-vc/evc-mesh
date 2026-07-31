@@ -176,6 +176,7 @@ type MockCommentService struct {
 	ListByTaskFunc            func(ctx context.Context, taskID uuid.UUID, filter repository.CommentFilter, pg pagination.Params) (*pagination.Page[domain.Comment], error)
 	ListByAuthorFunc          func(ctx context.Context, authorID uuid.UUID, filter repository.CommentViewFilter) (*domain.CommentViewPage, error)
 	ListRecentByWorkspaceFunc func(ctx context.Context, wsID uuid.UUID, filter repository.CommentViewFilter) (*domain.CommentViewPage, error)
+	GetHumanGateOwnerFunc     func(ctx context.Context, taskID uuid.UUID) (*domain.HumanGateInfo, error)
 }
 
 func (m *MockCommentService) Create(ctx context.Context, comment *domain.Comment) error {
@@ -218,6 +219,13 @@ func (m *MockCommentService) ListRecentByWorkspace(ctx context.Context, wsID uui
 		return m.ListRecentByWorkspaceFunc(ctx, wsID, filter)
 	}
 	return &domain.CommentViewPage{Items: []domain.CommentView{}}, nil
+}
+
+func (m *MockCommentService) GetHumanGateOwner(ctx context.Context, taskID uuid.UUID) (*domain.HumanGateInfo, error) {
+	if m.GetHumanGateOwnerFunc != nil {
+		return m.GetHumanGateOwnerFunc(ctx, taskID)
+	}
+	return nil, nil
 }
 
 // MockTaskDependencyService implements service.TaskDependencyService for testing.
