@@ -472,13 +472,26 @@ func (h *TaskHandler) Update(c echo.Context) error {
 	// comment log otherwise. Post a system comment marking the raw arm so
 	// that check has something to look for; see hasRawArmMarker in
 	// comment_service.go for the matching read side.
+	//
+	// Fixed 2026-07-31 (task #15694816, found in cross-verification of #486):
+	// this MUST be authored as ActorTypeSystem / systemActorID (uuid.Nil), not
+	// the real actor — comment_handler.go's Create always derives AuthorType
+	// from the caller's OWN authenticated identity (agent or user, NEVER
+	// system) for any comment posted through the public API, so an
+	// ActorTypeSystem comment is the one thing no external caller can forge.
+	// Using the real actor here (as the symmetric release-comment below does,
+	// safely, because ONLY users can reach that branch) would have let any
+	// agent post an ordinary comment containing the same substring BEFORE a
+	// real ask ever existed — pinning lastRawArmAt in the past and applying
+	// the 30-minute friction to every future legitimate sole-owner withdrawal
+	// on that task, forever. See hasRawArmMarker's matching AuthorType check.
 	if !prevHumanGate && req.HumanGate != nil && *req.HumanGate && h.commentService != nil {
 		actorID, actorType := actorctx.FromContext(c.Request().Context())
 		_ = h.commentService.Create(c.Request().Context(), &domain.Comment{
 			TaskID:     task.ID,
-			AuthorID:   actorID,
-			AuthorType: actorType,
-			Body:       fmt.Sprintf("🔒 Auto: human_gate взведён напрямую (PATCH/UI), без маркерного коммента — actor: %s", actorID),
+			AuthorID:   uuid.Nil,
+			AuthorType: domain.ActorTypeSystem,
+			Body:       fmt.Sprintf("🔒 Auto: human_gate взведён напрямую (PATCH/UI), без маркерного коммента — actor: %s (%s)", actorID, actorType),
 			IsInternal: true,
 		})
 	}
