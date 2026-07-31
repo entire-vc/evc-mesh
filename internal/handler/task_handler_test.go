@@ -344,6 +344,99 @@ func TestTaskHandler_GetByID_Found(t *testing.T) {
 	assert.Equal(t, "Found Task", result.Title)
 }
 
+// TestTaskHandler_GetByID_GatedTask_AttachesHumanGateInfo is task #040cddcf:
+// a gated task's GET response must carry human_gate_info populated from
+// commentService.GetHumanGateOwner, not just the bare human_gate boolean.
+func TestTaskHandler_GetByID_GatedTask_AttachesHumanGateInfo(t *testing.T) {
+	taskID := uuid.New()
+	ownerID := uuid.New()
+	markerID := uuid.New()
+	markerAt := time.Date(2026, 7, 30, 10, 0, 0, 0, time.UTC)
+	gatedTask := &domain.Task{ID: taskID, HumanGate: true, Title: "Gated"}
+
+	mockSvc := &MockTaskService{
+		GetByIDFunc: func(_ context.Context, id uuid.UUID) (*domain.Task, error) {
+			assert.Equal(t, taskID, id)
+			return gatedTask, nil
+		},
+	}
+	mockComment := &MockCommentService{
+		GetHumanGateOwnerFunc: func(_ context.Context, gotTaskID uuid.UUID) (*domain.HumanGateInfo, error) {
+			assert.Equal(t, taskID, gotTaskID)
+			return &domain.HumanGateInfo{
+				Gated:            true,
+				OwnerAgentID:     &ownerID,
+				OwnerName:        "Howard",
+				MarkerCommentID:  &markerID,
+				MarkerCreatedAt:  &markerAt,
+				ClearableByOwner: true,
+			}, nil
+		},
+	}
+
+	e := echo.New()
+	h := NewTaskHandler(mockSvc).WithCommentService(mockComment)
+
+	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/tasks/:task_id")
+	c.SetParamNames("task_id")
+	c.SetParamValues(taskID.String())
+
+	err := h.GetByID(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var result domain.Task
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &result))
+	require.NotNil(t, result.HumanGateInfo)
+	assert.True(t, result.HumanGateInfo.Gated)
+	require.NotNil(t, result.HumanGateInfo.OwnerAgentID)
+	assert.Equal(t, ownerID, *result.HumanGateInfo.OwnerAgentID)
+	assert.Equal(t, "Howard", result.HumanGateInfo.OwnerName)
+	assert.True(t, result.HumanGateInfo.ClearableByOwner)
+}
+
+// TestTaskHandler_GetByID_UngatedTask_NoHumanGateInfoLookup ensures the
+// lookup is skipped entirely (no wasted comment-thread scan) when the task
+// isn't gated — the common case, and the one #040cddcf's live measurement
+// says applies to nearly every task in the workspace.
+func TestTaskHandler_GetByID_UngatedTask_NoHumanGateInfoLookup(t *testing.T) {
+	taskID := uuid.New()
+	ungatedTask := &domain.Task{ID: taskID, HumanGate: false, Title: "Ungated"}
+
+	mockSvc := &MockTaskService{
+		GetByIDFunc: func(_ context.Context, id uuid.UUID) (*domain.Task, error) {
+			return ungatedTask, nil
+		},
+	}
+	mockComment := &MockCommentService{
+		GetHumanGateOwnerFunc: func(_ context.Context, _ uuid.UUID) (*domain.HumanGateInfo, error) {
+			t.Fatal("GetHumanGateOwner must not be called for an ungated task")
+			return nil, nil
+		},
+	}
+
+	e := echo.New()
+	h := NewTaskHandler(mockSvc).WithCommentService(mockComment)
+
+	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/tasks/:task_id")
+	c.SetParamNames("task_id")
+	c.SetParamValues(taskID.String())
+
+	err := h.GetByID(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var result domain.Task
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &result))
+	assert.Nil(t, result.HumanGateInfo)
+}
+
 func TestTaskHandler_GetByID_NotFound(t *testing.T) {
 	taskID := uuid.New()
 	mockSvc := &MockTaskService{

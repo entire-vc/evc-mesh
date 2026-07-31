@@ -244,6 +244,10 @@ type CommentService interface {
 	ListByTask(ctx context.Context, taskID uuid.UUID, filter repository.CommentFilter, pg pagination.Params) (*pagination.Page[domain.Comment], error)
 	ListByAuthor(ctx context.Context, authorID uuid.UUID, filter repository.CommentViewFilter) (*domain.CommentViewPage, error)
 	ListRecentByWorkspace(ctx context.Context, wsID uuid.UUID, filter repository.CommentViewFilter) (*domain.CommentViewPage, error)
+	// GetHumanGateOwner reports who owns taskID's currently-live human_gate
+	// ask (task #040cddcf), read-only — see the domain.HumanGateInfo and
+	// commentService.scanHumanGateOwnership doc comments for the full rule.
+	GetHumanGateOwner(ctx context.Context, taskID uuid.UUID) (*domain.HumanGateInfo, error)
 }
 
 // UploadArtifactInput holds parameters for uploading an artifact.
