@@ -67,11 +67,13 @@ func TestRechunkStale_PreservesUpdatedAt(t *testing.T) {
 		"the repair path must write the vector through UpdateEmbeddingKeepUpdatedAt")
 }
 
-// A write path, by contrast, SHOULD bump updated_at — the caller really did change the
-// memory. This is the negative control for the test above: without it, "preserves
-// updated_at" would also pass if the preserving variant had simply replaced the normal one
-// everywhere, which would silently freeze the timestamp on genuine edits.
-func TestBackfillChunks_StillBumpsUpdatedAt(t *testing.T) {
+// BackfillChunks, like RechunkStale, must hold updated_at too (#f96b6670): it chunks a memory
+// that already existed with content nobody is editing right now — the same "catching up an
+// existing row's index, not writing to the row" shape as the repair job, just triggered by
+// "never chunked yet" instead of "chunked under the old scheme". Before this fix it wrote
+// through UpdateEmbedding and bumped the timestamp on every row it backfilled; reverting this
+// call site back to UpdateEmbedding reds this test.
+func TestBackfillChunks_HoldsUpdatedAt(t *testing.T) {
 	id := uuid.New()
 	memRepo := &mockMemoryRepo{
 		notYetChunked: []domain.Memory{{ID: id, Key: "k", Content: "some content"}},
@@ -83,9 +85,44 @@ func TestBackfillChunks_StillBumpsUpdatedAt(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, n)
 
-	assert.Empty(t, memRepo.keptUpdatedAtIDs,
-		"only the rechunk repair holds updated_at; the ordinary chunked-embed path must keep bumping it")
+	assert.Equal(t, []uuid.UUID{id}, memRepo.keptUpdatedAtIDs,
+		"BackfillChunks re-embeds an existing, unedited memory — it must write through UpdateEmbeddingKeepUpdatedAt")
 	assert.Equal(t, id, memRepo.embeddedID, "the backfill still writes the embedding")
+}
+
+// BatchEmbed's chunked branch must hold updated_at for the same reason: a model switch
+// selects the model-mismatched rows via ListNeedingEmbedding, none of which anyone edited.
+func TestBatchEmbed_Chunked_HoldsUpdatedAt(t *testing.T) {
+	id := uuid.New()
+	memRepo := &mockMemoryRepo{
+		needEmbedding: []domain.Memory{{ID: id, Key: "k", Content: "some content"}},
+	}
+	svc := NewMemoryService(memRepo, &mockMemoryEdgeRepo{}, &switchModelEmbedder{model: "e5-small", dim: 4},
+		MemoryWithChunkRepo(newMockMemoryChunkRepo()))
+
+	n, err := svc.BatchEmbed(context.Background(), uuid.New())
+	require.NoError(t, err)
+	require.Equal(t, 1, n)
+
+	assert.Equal(t, []uuid.UUID{id}, memRepo.keptUpdatedAtIDs,
+		"BatchEmbed's chunked branch re-embeds an existing, unedited memory — it must hold updated_at")
+}
+
+// BatchEmbed's non-chunked branch (chunkRepo == nil) must hold updated_at too — same
+// population, same reasoning, different write-back call.
+func TestBatchEmbed_NonChunked_HoldsUpdatedAt(t *testing.T) {
+	id := uuid.New()
+	memRepo := &mockMemoryRepo{
+		needEmbedding: []domain.Memory{{ID: id, Key: "k", Content: "some content"}},
+	}
+	svc := NewMemoryService(memRepo, &mockMemoryEdgeRepo{}, &switchModelEmbedder{model: "e5-small", dim: 4})
+
+	n, err := svc.BatchEmbed(context.Background(), uuid.New())
+	require.NoError(t, err)
+	require.Equal(t, 1, n)
+
+	assert.Equal(t, []uuid.UUID{id}, memRepo.keptUpdatedAtIDs,
+		"BatchEmbed's non-chunked branch re-embeds an existing, unedited memory — it must hold updated_at")
 }
 
 // `remaining` is read from the database after the batch, never derived from `processed`.
