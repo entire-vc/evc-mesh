@@ -687,7 +687,8 @@ jobs:
       # ---------------------------------------------------------------------
       - name: Alert — the required recall gate is blind (INCONCLUSIVE)
         if: >-
-          steps.scope.outputs.relevant == 'true'
+          !cancelled()
+          && steps.scope.outputs.relevant == 'true'
           && steps.gate.outputs.rc == '2'
           && github.event_name != 'pull_request'
         uses: ./.github/actions/blindness-issue
@@ -712,7 +713,8 @@ jobs:
       # and the episode outlived the blindness.
       - name: Resolve — the required recall gate is measuring again
         if: >-
-          steps.scope.outputs.relevant == 'true'
+          !cancelled()
+          && steps.scope.outputs.relevant == 'true'
           && steps.gate.outputs.rc == '0'
           && github.event_name != 'pull_request'
         uses: ./.github/actions/blindness-issue
@@ -1495,7 +1497,8 @@ jobs:
       # nothing is orphaned by the change.
       - name: Alert — the prod recall canary is blind (INCONCLUSIVE)
         if: >-
-          steps.scope.outputs.relevant == 'true'
+          !cancelled()
+          && steps.scope.outputs.relevant == 'true'
           && (steps.gate.outputs.rc == '2' || steps.version.outputs.rc == '2')
           && (github.event_name != 'workflow_dispatch' || inputs.expect_commit == '')
         uses: ./.github/actions/blindness-issue
@@ -1549,7 +1552,8 @@ jobs:
       # direction that loses the alarm instead of faking one.
       - name: Resolve — the prod recall canary is measuring again
         if: >-
-          steps.scope.outputs.relevant == 'true'
+          !cancelled()
+          && steps.scope.outputs.relevant == 'true'
           && steps.gate.outputs.rc == '0'
           && (github.event_name != 'workflow_dispatch' || inputs.expect_commit == '')
         uses: ./.github/actions/blindness-issue
@@ -1933,7 +1937,9 @@ jobs:
       # it — the resolve looks up by exact title, so a renamed arm can never close
       # the episode it opened under the old name.
       - name: Alert — advisory arm measured nothing (INCONCLUSIVE)
-        if: steps.bench.outputs.rc == '2'
+        if: >-
+          !cancelled()
+          && steps.bench.outputs.rc == '2'
         uses: ./.github/actions/blindness-issue
         with:
           mode: alert
@@ -1955,7 +1961,9 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Resolve advisory blindness alert (arm is measuring again)
-        if: steps.bench.outputs.rc == '0'
+        if: >-
+          !cancelled()
+          && steps.bench.outputs.rc == '0'
         uses: ./.github/actions/blindness-issue
         with:
           mode: resolve
@@ -2217,7 +2225,9 @@ jobs:
       #     an outright timeout. Under the bare marker the first of the two to fire
       #     silenced the other for the whole episode.
       - name: Alert — the prod canary was killed, not superseded
-        if: steps.classify.outputs.must_page == 'true'
+        if: >-
+          !cancelled()
+          && steps.classify.outputs.must_page == 'true'
         uses: ./.github/actions/blindness-issue
         with:
           mode: alert
@@ -2330,7 +2340,8 @@ jobs:
       # nothing and closes the class.
       - name: Resolve — the prod canary is running again, not being cancelled
         if: >-
-          steps.classify.outcome != 'failure'
+          !cancelled()
+          && steps.classify.outcome != 'failure'
           && steps.classify.outputs.must_page != 'true'
           && (needs.recall-gate.result == 'success' ||
               needs.recall-gate.result == 'failure')

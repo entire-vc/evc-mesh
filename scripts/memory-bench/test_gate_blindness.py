@@ -2056,6 +2056,357 @@ def _event_clauses(expr: str) -> set[str]:
     }
 
 
+# ---------------------------------------------------------------------------
+# 10. THE ALERT THAT SKIPS ITSELF — a step `if:` with no status-check function.
+# ---------------------------------------------------------------------------
+# GitHub ANDs an implicit `success()` into any step `if:` that names none of
+# `success()` / `failure()` / `cancelled()` / `always()`. So an `if:` that reads
+# like a pure predicate on this step's own inputs silently carries a fifth
+# conjunct — "and no earlier step in this job has failed" — and an unrelated red
+# step upstream skips it.
+#
+# That is not symmetric between the two halves. On the ALERT it is close to
+# harmless: the job is already red, which is louder than the issue would be. On
+# the RESOLVE it loses the alarm. A previous run opens a blindness episode; the
+# next run measures fine and would clear it; some unrelated step (the dense-arm
+# control, a baseline re-snap, the embedder) goes red — and the resolve is
+# skipped. The episode is now unclearable by the only thing that clears it, and
+# an open episode MUTES its own re-alerts through the dedup key. The gate ends up
+# blind, silent, and holding an open issue that says so, which is precisely the
+# state the whole alert/resolve pair exists to prevent.
+#
+# Observed live on run 30741991305: the branch arm reported
+# `GATE_REASON: dense-arm-empty` (a real INCONCLUSIVE) while `Dense-arm control`
+# had already failed, so both halves were `skipped`.
+#
+# The same class was fixed one floor down in this file on 07-28 — steps 18/19
+# were moved to `!cancelled()` because "a red control must not skip the two steps
+# that explain it". The alert/resolve pair was left behind, and so were the other
+# three arms'.
+#
+# The pin below EVALUATES the shipped `if:`, it does not grep it. A substring
+# check for "!cancelled()" would pass on `success() && !cancelled() && ...`,
+# which still skips. It also carries its own mutation control
+# (`test_the_pin_would_fail_on_the_shipped_defect`): the same expression with the
+# guard removed must evaluate FALSE under the same context, so a green here
+# cannot mean "the evaluator does not discriminate".
+
+_STATUS_FN = re.compile(r"\b(?:success|failure|cancelled|always)\s*\(\s*\)")
+
+# A total tokenizer: every byte of the expression must be consumed by one of
+# these. Anything else is a LOUD failure rather than a silent mis-parse — a
+# half-understood `if:` evaluated to a confident boolean is the same shape of bug
+# as the one under test.
+_IF_TOKEN = re.compile(
+    r"""
+      (?P<ws>\s+)
+    | (?P<fn>\b(?:success|failure|cancelled|always)\s*\(\s*\))
+    | (?P<path>\b(?:steps|github|inputs|needs|env|job|vars)(?:\.[A-Za-z0-9_-]+)+)
+    | (?P<str>'[^']*')
+    | (?P<bool>\b(?:true|false)\b)
+    | (?P<op>&&|\|\||==|!=|!|\(|\))
+    """,
+    re.X,
+)
+
+_OPS = {"&&": " and ", "||": " or ", "!": " not ", "==": " == ", "!=": " != ",
+        "(": "(", ")": ")"}
+
+
+def _translate_if(expr: str) -> str:
+    """The GitHub expression as equivalent Python source."""
+    out, pos = [], 0
+    while pos < len(expr):
+        m = _IF_TOKEN.match(expr, pos)
+        assert m, (
+            f"unhandled syntax in an `if:` expression at offset {pos}: "
+            f"{expr[pos:pos + 40]!r}. Teach the tokenizer rather than loosening it — "
+            f"an expression this evaluator only half understands yields a confident "
+            f"boolean about a condition nobody checked."
+        )
+        pos, kind, val = m.end(), m.lastgroup, m.group()
+        if kind == "ws":
+            out.append(" ")
+        elif kind == "fn":
+            out.append({
+                "success": "_success", "failure": "_failure",
+                "cancelled": "_cancelled", "always": "True",
+            }[val.split("(")[0].strip()])
+        elif kind == "path":
+            out.append(f"_ctx({val!r})")
+        elif kind == "str":
+            out.append(val)
+        elif kind == "bool":
+            out.append("True" if val == "true" else "False")
+        else:
+            out.append(_OPS[val])
+    return "".join(out)
+
+
+def evaluate_if(expr: str, *, context: dict, success: bool, cancelled: bool) -> bool:
+    """Would GitHub run a step carrying this `if:`, in this situation?
+
+    `context` maps a dotted path to its value; an absent path is the empty string,
+    as GitHub does. `success` is "no earlier step in this job has failed";
+    `cancelled` is "the run was cancelled".
+
+    The load-bearing part is the implicit conjunct: GitHub inserts `success() &&`
+    when — and only when — the expression names no status-check function. That
+    insertion is the whole defect, so it is modelled here rather than assumed away.
+    """
+    expr = expr.strip()
+    if expr.startswith("${{") and expr.endswith("}}"):
+        expr = expr[3:-2].strip()
+    if not _STATUS_FN.search(expr):
+        expr = f"success() && ({expr})"
+    return bool(eval(  # noqa: S307 - fixed grammar, tokenized above, no builtins
+        _translate_if(expr),
+        {"__builtins__": {}},
+        {
+            "_ctx": lambda path: context.get(path, ""),
+            "_success": success,
+            # `failure()` is "some earlier step failed". Unused by these `if:`s
+            # today; modelled so that adding it does not silently read as False.
+            "_failure": not success and not cancelled,
+            "_cancelled": cancelled,
+        },
+    ))
+
+
+# One fixture per verdict, shared by every arm. Values are the ones that make each
+# arm's OWN predicates true, so the only thing left varying between "runs" is the
+# status of unrelated steps — which is the variable under test.
+#
+# A fifth arm that reads a path missing from here evaluates it as '' and fails
+# these tests rather than passing them. That direction is deliberate: the fixture
+# is a thing to extend, not a filter that quietly shrinks the population (the
+# `_arms_that_can_go_inconclusive` lesson, one level down).
+_BLIND = {
+    "steps.scope.outputs.relevant": "true",
+    "steps.gate.outputs.rc": "2",
+    "steps.version.outputs.rc": "2",
+    "steps.bench.outputs.rc": "2",
+    "steps.classify.outputs.must_page": "true",
+    "steps.classify.outcome": "success",
+    "needs.recall-gate.result": "failure",
+    "github.event_name": "push",
+    "inputs.expect_commit": "",
+}
+_MEASURING = {
+    **_BLIND,
+    "steps.gate.outputs.rc": "0",
+    "steps.version.outputs.rc": "0",
+    "steps.bench.outputs.rc": "0",
+    "steps.classify.outputs.must_page": "false",
+}
+
+
+class TestABlindnessStepIsNotSkippedByAnUnrelatedRedStep(unittest.TestCase):
+    """Way 10, over EVERY arm — the registry shape this file already uses.
+
+    Scoped to the arm that bit, this test would pass on the next arm added with
+    the same omission, which is exactly how #394 slipped through the alert
+    coverage tests. All four arms shipped without a status-check function; all
+    four have failure-capable steps ahead of their alert (the dense-arm control
+    and the branch re-snap, the prod re-snap and gate, the advisory re-snap, and
+    the cancellation classifier).
+    """
+
+    CONTEXT = {"alert": _BLIND, "resolve": _MEASURING}
+
+    def test_every_half_still_runs_when_an_earlier_step_went_red(self):
+        for job_id, halves in sorted(_blindness_calls().items()):
+            alert, resolve = _both_halves(self, job_id, halves)
+            for mode, entry in (("alert", alert), ("resolve", resolve)):
+                with self.subTest(job=job_id, mode=mode):
+                    self.assertTrue(
+                        evaluate_if(
+                            entry["if"], context=self.CONTEXT[mode],
+                            success=False, cancelled=False,
+                        ),
+                        f"{job_id!r}'s {mode} is SKIPPED when an unrelated earlier step "
+                        f"failed, because its `if:` names no status-check function and "
+                        f"GitHub therefore ANDs in `success()`. On the resolve this is "
+                        f"the alarm-losing direction: the episode cannot be closed by "
+                        f"the run that fixed it, and an open episode mutes its own "
+                        f"re-alerts.\n  if: {entry['if']}",
+                    )
+
+    def test_the_pin_would_fail_on_the_shipped_defect(self):
+        """Mutation control, run against the real expressions.
+
+        Deleting the guard from each shipped `if:` must flip the assertion above to
+        FALSE. Without this, a green up there is satisfiable by an evaluator that
+        cannot discriminate at all — the failure mode every other positive control
+        in this file exists to close.
+        """
+        for job_id, halves in sorted(_blindness_calls().items()):
+            alert, resolve = _both_halves(self, job_id, halves)
+            for mode, entry in (("alert", alert), ("resolve", resolve)):
+                with self.subTest(job=job_id, mode=mode):
+                    mutated = re.sub(
+                        r"!\s*cancelled\s*\(\s*\)\s*&&\s*", "", entry["if"], count=1
+                    )
+                    self.assertNotEqual(
+                        mutated, entry["if"],
+                        f"{job_id!r}'s {mode} carries no leading `!cancelled() &&`, so "
+                        f"this control mutated nothing and proves nothing.",
+                    )
+                    self.assertFalse(
+                        evaluate_if(
+                            mutated, context=self.CONTEXT[mode],
+                            success=False, cancelled=False,
+                        ),
+                        f"removing the guard from {job_id!r}'s {mode} did NOT stop it "
+                        f"running, so the test above is not measuring the guard.",
+                    )
+
+    def test_no_half_fires_on_a_cancelled_run(self):
+        """`always()` would satisfy the test above and be wrong.
+
+        A cancelled run measured nothing, so it has no standing either to open a
+        blindness episode or to close one. `!cancelled()` is the narrowest guard
+        that fixes the defect; this is what stops it being widened to the one that
+        reads the same and pages on every operator cancellation.
+        """
+        for job_id, halves in sorted(_blindness_calls().items()):
+            alert, resolve = _both_halves(self, job_id, halves)
+            for mode, entry in (("alert", alert), ("resolve", resolve)):
+                with self.subTest(job=job_id, mode=mode):
+                    self.assertFalse(
+                        evaluate_if(
+                            entry["if"], context=self.CONTEXT[mode],
+                            success=False, cancelled=True,
+                        ),
+                        f"{job_id!r}'s {mode} runs on a CANCELLED run — `always()` "
+                        f"where `!cancelled()` was meant. A cancelled run measured "
+                        f"nothing and may neither raise nor clear an episode.",
+                    )
+
+    def test_the_guard_did_not_swallow_the_predicates_it_was_added_next_to(self):
+        """The other direction: a step that now runs unconditionally is not fixed,
+        it is a pager. Each half must still be gated on its own arm's verdict."""
+        for job_id, halves in sorted(_blindness_calls().items()):
+            alert, resolve = _both_halves(self, job_id, halves)
+            with self.subTest(job=job_id, mode="alert"):
+                self.assertFalse(
+                    evaluate_if(
+                        alert["if"], context=_MEASURING, success=True, cancelled=False
+                    ),
+                    f"{job_id!r} raises a blindness episode on a run that MEASURED "
+                    f"fine.\n  if: {alert['if']}",
+                )
+            with self.subTest(job=job_id, mode="resolve"):
+                self.assertFalse(
+                    evaluate_if(
+                        resolve["if"], context=_BLIND, success=True, cancelled=False
+                    ),
+                    f"{job_id!r} clears its episode on a run that is still BLIND — the "
+                    f"alarm-losing direction.\n  if: {resolve['if']}",
+                )
+
+    def test_the_required_arms_event_scoping_survived_the_edit(self):
+        """The branch pair's `pull_request` exclusion, asserted by EVALUATION.
+
+        `test_the_required_arm_never_alerts_from_a_pull_request` asserts the clause
+        is present as text. This asserts it still binds once the new conjunct sits
+        in front of it — a guard that is present but no longer reachable is the
+        defect this whole class is about, one level up.
+        """
+        calls = _blindness_calls()["recall-gate-branch"]
+        for mode, ctx in (("alert", _BLIND), ("resolve", _MEASURING)):
+            with self.subTest(mode=mode):
+                self.assertFalse(
+                    evaluate_if(
+                        calls[mode]["if"],
+                        context={**ctx, "github.event_name": "pull_request"},
+                        success=True, cancelled=False,
+                    ),
+                    f"the required arm's {mode} acts on a pull_request run. On a fork "
+                    f"PR the token is read-only, so this reddens the REQUIRED merge "
+                    f"gate for an author who cannot clear it (#342).",
+                )
+
+
+class TestTheIfEvaluatorItself(unittest.TestCase):
+    """Positive controls on the instrument, in both directions.
+
+    The class above is only as good as this evaluator: were `evaluate_if` to
+    return True unconditionally, every assertion there would pass while checking
+    nothing — and the mutation control is what would catch it, so that control
+    needs its own floor too.
+    """
+
+    def test_the_implicit_success_conjunct_is_modelled(self):
+        expr = "steps.gate.outputs.rc == '2'"
+        ctx = {"steps.gate.outputs.rc": "2"}
+        self.assertTrue(evaluate_if(expr, context=ctx, success=True, cancelled=False))
+        self.assertFalse(
+            evaluate_if(expr, context=ctx, success=False, cancelled=False),
+            "an `if:` naming no status function must inherit `success()` — without "
+            "this the whole defect is invisible to the suite",
+        )
+
+    def test_the_guard_lifts_the_implicit_conjunct(self):
+        expr = "!cancelled() && steps.gate.outputs.rc == '2'"
+        ctx = {"steps.gate.outputs.rc": "2"}
+        self.assertTrue(evaluate_if(expr, context=ctx, success=False, cancelled=False))
+        self.assertFalse(evaluate_if(expr, context=ctx, success=False, cancelled=True))
+
+    def test_always_differs_from_not_cancelled(self):
+        ctx = {"steps.gate.outputs.rc": "2"}
+        self.assertTrue(evaluate_if(
+            "always() && steps.gate.outputs.rc == '2'",
+            context=ctx, success=False, cancelled=True,
+        ))
+
+    def test_an_absent_context_path_is_the_empty_string(self):
+        self.assertFalse(evaluate_if(
+            "!cancelled() && steps.nope.outputs.rc == '2'",
+            context={}, success=True, cancelled=False,
+        ))
+
+    def test_disjunction_parenthesisation_is_respected(self):
+        expr = ("!cancelled() && steps.a.outputs.rc == '1' "
+                "&& (steps.b.outputs.rc == '2' || steps.c.outputs.rc == '3')")
+        base = {"steps.a.outputs.rc": "1", "steps.b.outputs.rc": "x",
+                "steps.c.outputs.rc": "3"}
+        self.assertTrue(evaluate_if(expr, context=base, success=True, cancelled=False))
+        self.assertFalse(evaluate_if(
+            expr, context={**base, "steps.c.outputs.rc": "y"},
+            success=True, cancelled=False,
+        ))
+
+    def test_inequality_is_not_mangled_into_a_negation(self):
+        """`!=` and unary `!` share a character; translating naively turns
+        `a != 'x'` into `a not = 'x'` — a SyntaxError if you are lucky and a
+        silent inversion if you are not."""
+        self.assertTrue(evaluate_if(
+            "!cancelled() && github.event_name != 'pull_request'",
+            context={"github.event_name": "push"}, success=False, cancelled=False,
+        ))
+        self.assertFalse(evaluate_if(
+            "!cancelled() && github.event_name != 'pull_request'",
+            context={"github.event_name": "pull_request"},
+            success=False, cancelled=False,
+        ))
+
+    def test_the_expression_wrapper_is_stripped(self):
+        self.assertTrue(evaluate_if(
+            "${{ !cancelled() && steps.gate.outputs.rc == '2' }}",
+            context={"steps.gate.outputs.rc": "2"}, success=False, cancelled=False,
+        ))
+
+    def test_syntax_the_tokenizer_does_not_know_is_loud(self):
+        """A silent mis-parse would hand every caller a confident boolean about a
+        condition nobody evaluated — the failure this file is entirely about."""
+        with self.assertRaises(AssertionError):
+            evaluate_if(
+                "!cancelled() && contains(github.ref, 'main')",
+                context={}, success=True, cancelled=False,
+            )
+
+
 class TestBlindnessAlertAndResolveAgreeOnEvents(unittest.TestCase):
     """An alert that can be RAISED on more events than it can be RESOLVED on
     bounds an episode by trigger cadence instead of by recovery.
