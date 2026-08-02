@@ -827,6 +827,20 @@ func (s *memoryService) embedAndStore(id uuid.UUID, content, prefix string) {
 // embedded would look chunked but silently drop content, the same class of failure this
 // entire fix exists to close.
 func (s *memoryService) embedChunked(ctx context.Context, id uuid.UUID, content, prefix string) error {
+	return s.embedChunkedStoring(ctx, id, content, prefix, s.memRepo.UpdateEmbedding)
+}
+
+// embedChunkedStoring is embedChunked with the memories.embedding write-back injected, so a
+// repair path can re-embed an existing memory without the `updated_at = NOW()` bump that
+// UpdateEmbedding carries (RechunkStale passes UpdateEmbeddingKeepUpdatedAt). Only the
+// write-back differs — chunking, prefixing and ReplaceChunks are shared, so the two paths
+// cannot drift into producing different chunks for the same memory.
+func (s *memoryService) embedChunkedStoring(
+	ctx context.Context,
+	id uuid.UUID,
+	content, prefix string,
+	storeVector func(context.Context, uuid.UUID, []float32, string, int) error,
+) error {
 	pieces := chunkText(content, defaultChunkSize, defaultChunkOverlap)
 	if len(pieces) == 0 {
 		return nil
@@ -888,7 +902,7 @@ func (s *memoryService) embedChunked(ctx context.Context, id uuid.UUID, content,
 	// to what a single embed call already produced (no extra embedder round trip).
 	// UpdateEmbedding also sets embedding_model/embedding_dim, so it subsumes the old
 	// MarkEmbeddingModel-only watermark this replaced.
-	if err := s.memRepo.UpdateEmbedding(ctx, id, firstVec, s.embedder.Model(), len(firstVec)); err != nil {
+	if err := storeVector(ctx, id, firstVec, s.embedder.Model(), len(firstVec)); err != nil {
 		return fmt.Errorf("update embedding (chunked stopgap): %w", err)
 	}
 	return nil
@@ -1788,6 +1802,58 @@ func (s *memoryService) BackfillChunks(ctx context.Context, workspaceID uuid.UUI
 	}
 
 	return count, nil
+}
+
+// RechunkStale re-embeds memories whose chunk offsets no longer index their content — the
+// pre-#494 corpus, chunked as the composite key+content+tags rather than content alone. See
+// the interface doc for the contract and ListNeedingRechunk's doc for why the selection reads
+// chunk offsets instead of a version column.
+//
+// `remaining` is re-counted from the database AFTER the batch, never derived from
+// `processed`. The two are independent on purpose: a repair job that reports how many rows it
+// touched cannot tell "healed them all" from "never selected the sick ones", and the second
+// is what actually happened in #b052cdda. When rows fail to re-embed, `processed` falls
+// behind the batch size while `remaining` stops dropping — visible, instead of a confident
+// count and a corpus that never converges.
+func (s *memoryService) RechunkStale(ctx context.Context, workspaceID uuid.UUID, limit int) (processed, remaining int, err error) {
+	if s.chunkRepo == nil || embedding.IsNoop(s.embedder) {
+		// Not an error: same "nothing to do in this configuration" convention as
+		// BackfillChunks. Still report `remaining` — an operator running this against a
+		// deployment with chunking switched off deserves to see the population is there
+		// and untouched, rather than a bare 0 that reads like "already converged".
+		idle, countErr := s.memRepo.CountNeedingRechunk(ctx, workspaceID)
+		if countErr != nil {
+			return 0, 0, fmt.Errorf("rechunk stale: count: %w", countErr)
+		}
+		return 0, idle, nil
+	}
+	if limit <= 0 {
+		limit = 100
+	}
+
+	memories, listErr := s.memRepo.ListNeedingRechunk(ctx, workspaceID, limit)
+	if listErr != nil {
+		return 0, 0, fmt.Errorf("rechunk stale: list: %w", listErr)
+	}
+
+	for _, m := range memories {
+		prefix := m.Key + " " + strings.Join(m.Tags, " ") + " "
+		// UpdateEmbeddingKeepUpdatedAt, not UpdateEmbedding: this is a repair of how an
+		// existing memory was indexed, not an edit of the memory. Bumping updated_at here
+		// would irreversibly reset staleness (MarkStaleByAge) and relevance decay
+		// (DecayRelevance) for the entire corpus in one run.
+		if embedErr := s.embedChunkedStoring(ctx, m.ID, m.Content, prefix, s.memRepo.UpdateEmbeddingKeepUpdatedAt); embedErr != nil {
+			log.Printf("memory rechunk stale: id=%s: %v", m.ID, embedErr)
+			continue
+		}
+		processed++
+	}
+
+	remaining, countErr := s.memRepo.CountNeedingRechunk(ctx, workspaceID)
+	if countErr != nil {
+		return processed, 0, fmt.Errorf("rechunk stale: count remaining: %w", countErr)
+	}
+	return processed, remaining, nil
 }
 
 // FindRelated returns memories related to the given memory by performing a full-text

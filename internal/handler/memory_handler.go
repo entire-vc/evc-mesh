@@ -797,6 +797,39 @@ func (h *MemoryHandler) BackfillChunks(c echo.Context) error {
 	return c.JSON(http.StatusOK, map[string]int{"chunked": count})
 }
 
+// RechunkStale handles POST /api/v1/memories/rechunk-stale
+// Re-embeds up to `limit` (default 100) memories in the workspace whose chunk offsets no
+// longer index their content — the corpus embedded before #494, when the composite
+// key+content+tags string was chunked as a whole instead of content alone.
+//
+// A third repair endpoint alongside Reindex and BackfillChunks because neither of those can
+// see these rows: they already have chunks, and those chunks already carry the current
+// model's name. Call repeatedly until "remaining" is 0 — and drive the loop on "remaining"
+// (a direct count of the damaged population), not on "rechunked" (how many this call
+// processed). Those two are reported separately so that a selector which stops matching its
+// patients shows up as a healthy "rechunked" next to a "remaining" that will not fall.
+func (h *MemoryHandler) RechunkStale(c echo.Context) error {
+	wsIDStr := c.QueryParam("workspace_id")
+	wsID, err := h.requireWorkspaceID(c, wsIDStr)
+	if err != nil {
+		return handleError(c, err)
+	}
+
+	limit := 0 // RechunkStale defaults this to 100 when <= 0
+	if l := c.QueryParam("limit"); l != "" {
+		if n, convErr := strconv.Atoi(l); convErr == nil {
+			limit = n
+		}
+	}
+
+	processed, remaining, err := h.memoryService.RechunkStale(c.Request().Context(), wsID, limit)
+	if err != nil {
+		return handleError(c, err)
+	}
+
+	return c.JSON(http.StatusOK, map[string]int{"rechunked": processed, "remaining": remaining})
+}
+
 // FindRelated handles GET /api/v1/memories/:id/related
 // Returns memories related to the given memory ID via full-text search.
 func (h *MemoryHandler) FindRelated(c echo.Context) error {

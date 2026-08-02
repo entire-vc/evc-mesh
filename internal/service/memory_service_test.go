@@ -55,6 +55,14 @@ type mockMemoryRepo struct {
 	needEmbedding []domain.Memory
 	// rows the fake repo hands back as "not yet chunked" (ListNotYetChunked)
 	notYetChunked []domain.Memory
+	// rows the fake repo hands back as "chunk offsets no longer index content"
+	// (ListNeedingRechunk), plus the population size CountNeedingRechunk reports and the
+	// IDs written through the updated_at-preserving embedding write-back
+	needRechunk            []domain.Memory
+	rechunkRemaining       int
+	listNeedingRechunkErr  error
+	countNeedingRechunkErr error
+	keptUpdatedAtIDs       []uuid.UUID
 	// captured by UpdateEmbedding
 	embeddedWithModel  string
 	embeddedDim        int
@@ -193,6 +201,35 @@ func (m *mockMemoryRepo) ListNotYetChunked(_ context.Context, _ uuid.UUID, _ int
 	out := m.notYetChunked
 	m.notYetChunked = nil // one batch, then drained — mirrors the real resumable-by-exclusion loop
 	return out, nil
+}
+
+func (m *mockMemoryRepo) ListNeedingRechunk(_ context.Context, _ uuid.UUID, _ int) ([]domain.Memory, error) {
+	if m.listNeedingRechunkErr != nil {
+		return nil, m.listNeedingRechunkErr
+	}
+	out := m.needRechunk
+	m.needRechunk = nil // one batch, then drained — mirrors the resumable-by-exclusion loop
+	return out, nil
+}
+
+func (m *mockMemoryRepo) CountNeedingRechunk(_ context.Context, _ uuid.UUID) (int, error) {
+	if m.countNeedingRechunkErr != nil {
+		return 0, m.countNeedingRechunkErr
+	}
+	return m.rechunkRemaining, nil
+}
+
+// UpdateEmbeddingKeepUpdatedAt records the ID separately from UpdateEmbedding's capture so a
+// test can assert WHICH write-back a path chose — the difference between them (does
+// updated_at move) is invisible in the stored vector itself.
+func (m *mockMemoryRepo) UpdateEmbeddingKeepUpdatedAt(ctx context.Context, id uuid.UUID, vec []float32, model string, dim int) error {
+	if err := m.UpdateEmbedding(ctx, id, vec, model, dim); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.keptUpdatedAtIDs = append(m.keptUpdatedAtIDs, id)
+	return nil
 }
 
 func (m *mockMemoryRepo) List(_ context.Context, _ domain.MemoryListFilter) (*domain.MemoryListResult, error) {

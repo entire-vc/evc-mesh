@@ -1065,6 +1065,7 @@ func main() {
 	api.POST("/memories/import", memoryHandler.ImportMemories)
 	api.POST("/memories/reindex", memoryHandler.Reindex)
 	api.POST("/memories/backfill-chunks", memoryHandler.BackfillChunks)
+	api.POST("/memories/rechunk-stale", memoryHandler.RechunkStale)
 	api.GET("/memories/:id", memoryHandler.GetByID)
 	api.GET("/memories/:id/related", memoryHandler.FindRelated)
 	api.DELETE("/memories/:id", memoryHandler.Delete)
