@@ -755,6 +755,7 @@ type MockMemoryService struct {
 	ForgetFunc         func(ctx context.Context, id uuid.UUID, actorAgentID *uuid.UUID, isAdmin bool) error
 	FindRelatedFunc    func(ctx context.Context, memoryID uuid.UUID, limit int) ([]domain.ScoredMemory, error)
 	BackfillChunksFunc func(ctx context.Context, workspaceID uuid.UUID, limit int) (int, error)
+	RechunkStaleFunc   func(ctx context.Context, workspaceID uuid.UUID, limit int) (int, int, error)
 
 	// The write-side hooks exist so a test can assert the service was NOT reached.
 	// Without them a cross-tenant test on these endpoints can only observe the
@@ -838,6 +839,12 @@ func (m *MockMemoryService) BackfillChunks(ctx context.Context, workspaceID uuid
 		return m.BackfillChunksFunc(ctx, workspaceID, limit)
 	}
 	return 0, nil
+}
+func (m *MockMemoryService) RechunkStale(ctx context.Context, workspaceID uuid.UUID, limit int) (processed, remaining int, err error) {
+	if m.RechunkStaleFunc != nil {
+		return m.RechunkStaleFunc(ctx, workspaceID, limit)
+	}
+	return 0, 0, nil
 }
 func (m *MockMemoryService) FindRelated(ctx context.Context, memoryID uuid.UUID, limit int) ([]domain.ScoredMemory, error) {
 	if m.FindRelatedFunc != nil {

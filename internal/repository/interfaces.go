@@ -623,7 +623,21 @@ type MemoryRepository interface {
 	// When no embeddings are stored, an empty slice is returned without error.
 	VectorSearch(ctx context.Context, queryVec []float32, workspaceID uuid.UUID, projectID *uuid.UUID, filter domain.MemorySearchFilter, limit int) ([]domain.ScoredMemory, error)
 	// UpdateEmbedding stores the embedding vector (encoded as JSON) for a single memory.
+	// Also bumps updated_at — correct on a write path (the caller just changed the memory),
+	// wrong on a repair path: see UpdateEmbeddingKeepUpdatedAt.
 	UpdateEmbedding(ctx context.Context, id uuid.UUID, vec []float32, model string, dim int) error
+	// UpdateEmbeddingKeepUpdatedAt stores the embedding exactly as UpdateEmbedding does but
+	// leaves updated_at alone, for jobs that re-embed EXISTING memories nobody edited.
+	//
+	// updated_at is not a cosmetic column and re-embedding the corpus through UpdateEmbedding
+	// would rewrite it irrecoverably for every row: MarkStaleByAge keys staleness off it (the
+	// whole corpus would get a fresh staleness window), DecayRelevance keys its 30-day
+	// threshold off it (agent-scope relevance decay would stall for a month), and
+	// applyRecencyBlend computes Δt from it (the recency term collapses to uniform, though
+	// only for callers passing recency_weight > 0). DecayRelevance already writes
+	// `updated_at = updated_at` for exactly this reason; this method extends the same rule to
+	// the embed path.
+	UpdateEmbeddingKeepUpdatedAt(ctx context.Context, id uuid.UUID, vec []float32, model string, dim int) error
 	// MarkEmbeddingModel sets embedding_model without touching embedding/embedding_dim.
 	// NOT called by the chunked embed path — embedChunked uses UpdateEmbedding (see its doc).
 	// An earlier revision used this alone as a watermark, on the belief that
@@ -663,6 +677,23 @@ type MemoryRepository interface {
 	// naturally resumable (a memory chunked by an earlier call is excluded by construction, no
 	// separate cursor to track).
 	ListNotYetChunked(ctx context.Context, workspaceID uuid.UUID, limit int) ([]domain.Memory, error)
+	// ListNeedingRechunk returns up to limit memories in workspaceID whose stored chunk
+	// offsets no longer index their current content — the rows still embedded under the
+	// pre-#494 scheme, where the composite `key + " " + content + " " + tags` was chunked as a
+	// whole instead of content alone.
+	//
+	// A THIRD selection query rather than a tweak to either of the two above, because neither
+	// can see these rows: they have chunks (ListNotYetChunked excludes them by construction)
+	// and those chunks carry the current model's name (ListNeedingEmbedding's mismatch filter
+	// never fires). Nothing about the damage is visible in a column the write path maintains,
+	// which is why the predicate reads chunk offsets instead — see the implementation's doc
+	// for what that proves and the one thing it does not.
+	ListNeedingRechunk(ctx context.Context, workspaceID uuid.UUID, limit int) ([]domain.Memory, error)
+	// CountNeedingRechunk returns the FULL remaining count of memories matching
+	// ListNeedingRechunk's predicate, uncapped by any batch limit — so convergence can be
+	// judged against the damaged population directly instead of against the repair job's own
+	// processed-count, which is the number that lies when a selector misses its patients.
+	CountNeedingRechunk(ctx context.Context, workspaceID uuid.UUID) (int, error)
 	// FindByShortID returns the first memory in workspaceID whose UUID starts with prefix (6–12 lowercase hex chars).
 	// Returns nil without error when no match is found.
 	FindByShortID(ctx context.Context, workspaceID uuid.UUID, prefix string) (*domain.Memory, error)

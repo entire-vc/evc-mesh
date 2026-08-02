@@ -125,6 +125,7 @@ var declaredQueryTenantParams = map[string]string{
 	"memory_handler.go:ImportMemories.workspace_id":      "checked: MemoryHandler.requireWorkspaceID",
 	"memory_handler.go:Reindex.workspace_id":             "checked: MemoryHandler.requireWorkspaceID",
 	"memory_handler.go:BackfillChunks.workspace_id":      "checked: MemoryHandler.requireWorkspaceID",
+	"memory_handler.go:RechunkStale.workspace_id":        "checked: MemoryHandler.requireWorkspaceID",
 
 	// --- Conjuncts on a query pinned elsewhere -------------------------------
 	//

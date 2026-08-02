@@ -1201,6 +1201,27 @@ func (r *MemoryRepo) UpdateEmbedding(ctx context.Context, id uuid.UUID, vec []fl
 	return err
 }
 
+// UpdateEmbeddingKeepUpdatedAt is UpdateEmbedding minus the `updated_at = NOW()` bump — see
+// the interface doc for why a repair job must not touch that column. `updated_at = updated_at`
+// is written explicitly rather than omitted: this is a deliberate hold, not an oversight, and
+// DecayRelevance already states the same intent the same way.
+func (r *MemoryRepo) UpdateEmbeddingKeepUpdatedAt(ctx context.Context, id uuid.UUID, vec []float32, model string, dim int) error {
+	encoded, err := json.Marshal(vec)
+	if err != nil {
+		return fmt.Errorf("update embedding (keep updated_at): encode vector: %w", err)
+	}
+	_, err = r.db.ExecContext(ctx,
+		`UPDATE memories
+		 SET embedding       = $1,
+		     embedding_model = $2,
+		     embedding_dim   = $3,
+		     updated_at      = updated_at
+		 WHERE id = $4`,
+		string(encoded), model, dim, id,
+	)
+	return err
+}
+
 // MarkEmbeddingModel sets embedding_model without touching embedding/embedding_dim — see the
 // interface doc: not called by the chunked embed path (embedChunked uses UpdateEmbedding),
 // kept as a general repo primitive.
@@ -1489,6 +1510,94 @@ func (r *MemoryRepo) ListNotYetChunked(ctx context.Context, workspaceID uuid.UUI
 		memories[i] = row.toDomain()
 	}
 	return memories, nil
+}
+
+// chunkOffsetsStalePredicate is the SQL condition identifying a memory whose stored chunk
+// offsets do not index its CURRENT content — the discriminating signal for "embedded under
+// the pre-#494 scheme", and the shared body of ListNeedingRechunk and CountNeedingRechunk
+// (one predicate, two callers, so the repair job and the convergence check can never drift
+// apart and disagree about what "damaged" means).
+//
+// Why offsets and not a version watermark: chunkText always covers its whole input, so the
+// largest chunk_end equals the byte length of the text that was actually chunked. Before
+// #494 that text was the composite `key + " " + content + " " + tags`; since #494 it is
+// content alone. So `max(chunk_end) <> octet_length(content)` reads the physical trace of
+// which string the write path fed the chunker, rather than trusting a column the write path
+// set about itself — the failure mode of #84b0694d, where embedding_model was stamped as a
+// watermark while memories.embedding stayed NULL and the row was never actually repaired.
+// Measured against prod before this shipped: 3254 of 3260 chunked memories matched the
+// composite length EXACTLY (99.82%, the same reconstruction rate #38bb958c measured), 0
+// matched content length, and the 6 that matched neither had content or tags edited after
+// their last embed — stale offsets, correctly in the population.
+//
+// The predicate is therefore broader than "old scheme" in a way that is desirable: it means
+// "these offsets no longer describe this content", which also catches a row edited without a
+// re-embed. It is self-converging by construction — a repaired row's offsets index content,
+// so it leaves the population and no cursor is needed.
+//
+// Honest limit: it detects content-only CHUNKING, the observable signature of the #494 fix,
+// not the key+tags PREFIX itself. A row chunked on content but embedded without the prefix
+// would be invisible here; no code path in main can produce one (embedChunked does both in
+// the same call), but a future one that splits them must not rely on this predicate alone.
+const chunkOffsetsStalePredicate = `
+	m.workspace_id = $1
+	AND (m.expires_at IS NULL OR m.expires_at > now())
+	AND EXISTS (SELECT 1 FROM memory_chunks c WHERE c.memory_id = m.id)
+	AND (SELECT max(c.chunk_end) FROM memory_chunks c WHERE c.memory_id = m.id)
+	    IS DISTINCT FROM octet_length(m.content)`
+
+// ListNeedingRechunk returns up to limit memories in workspaceID whose chunk offsets no
+// longer index their content — see chunkOffsetsStalePredicate for what that establishes and
+// what it does not.
+//
+// Deliberately NOT a change to ListNeedingEmbedding, and deliberately not ListNotYetChunked:
+// these rows HAVE chunks (so ListNotYetChunked excludes them by construction — the exact trap
+// recorded in `repair-job-selector-excludes-damaged-rows`) and they carry the current model's
+// name (so ListNeedingEmbedding's model-mismatch filter never selects them either). Widening
+// an existing repair predicate was the other option and was rejected: BatchEmbed's
+// non-chunked branch (chunkRepo == nil) would then select these rows forever and never clear
+// them, because writing memories.embedding alone cannot move a chunk offset.
+//
+// ORDER BY updated_at DESC matches its sibling queries. Convergence does not depend on the
+// order: the population is CLOSED — every write path since #494 chunks content alone, so no
+// new row can enter it — which is what makes "returned < limit ⇒ drained" reachable here,
+// unlike the churning-population case in #b052cdda where fixtures kept jumping the queue.
+func (r *MemoryRepo) ListNeedingRechunk(ctx context.Context, workspaceID uuid.UUID, limit int) ([]domain.Memory, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	q := fmt.Sprintf(`
+		SELECT %s FROM memories m
+		WHERE %s
+		ORDER BY m.updated_at DESC
+		LIMIT $2`,
+		memoryColumns, chunkOffsetsStalePredicate,
+	)
+	var rows []memoryRow
+	if err := r.db.SelectContext(ctx, &rows, q, workspaceID, limit); err != nil {
+		return nil, fmt.Errorf("memory list needing rechunk: %w", err)
+	}
+	memories := make([]domain.Memory, len(rows))
+	for i, row := range rows {
+		memories[i] = row.toDomain()
+	}
+	return memories, nil
+}
+
+// CountNeedingRechunk returns how many memories in workspaceID currently satisfy
+// ListNeedingRechunk's predicate — the whole remaining population, uncapped by any batch
+// limit. It exists so convergence is judged by a direct count of the damaged population
+// rather than by the repair endpoint's own "how many did I process" counter: a job whose
+// selector misses the damaged rows reports a confident number and heals nothing
+// (`solution-repair-job-selector-excludes-damaged-rows`). Both numbers are returned by the
+// endpoint precisely so they can disagree visibly.
+func (r *MemoryRepo) CountNeedingRechunk(ctx context.Context, workspaceID uuid.UUID) (int, error) {
+	q := fmt.Sprintf(`SELECT count(*) FROM memories m WHERE %s`, chunkOffsetsStalePredicate)
+	var n int
+	if err := r.db.GetContext(ctx, &n, q, workspaceID); err != nil {
+		return 0, fmt.Errorf("memory count needing rechunk: %w", err)
+	}
+	return n, nil
 }
 
 // cosineSimilarity returns the cosine similarity between two float32 vectors.

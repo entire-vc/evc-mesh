@@ -960,6 +960,22 @@ type MemoryService interface {
 	// Returns 0, nil (not an error) when chunked embedding is not configured, matching BatchEmbed's
 	// no-op-on-noop-embedder convention.
 	BackfillChunks(ctx context.Context, workspaceID uuid.UUID, limit int) (int, error)
+	// RechunkStale re-embeds up to limit memories whose chunk offsets no longer index their
+	// content — the corpus still chunked as the composite `key + " " + content + " " + tags`
+	// before #494 moved chunking onto content alone with key+tags prefixed per chunk.
+	//
+	// Returns (processed, remaining): how many this call re-embedded, and how many still match
+	// the predicate afterwards. `remaining` is a direct count of the damaged population, not a
+	// derivative of `processed`, so the two disagreeing is the signal that the selector and the
+	// damage have come apart. Drive it from `remaining == 0`; a repair job's own processed-count
+	// cannot distinguish "healed everything" from "never selected the sick rows".
+	//
+	// Idempotent and resumable with no cursor: a repaired row's offsets index content and it
+	// leaves the population. Preserves updated_at on every row it touches (see
+	// UpdateEmbeddingKeepUpdatedAt) — nobody edited these memories, and the column drives
+	// staleness and relevance decay. Returns (0, remaining, nil) when chunked embedding is not
+	// configured or the embedder is a noop, matching BackfillChunks' convention.
+	RechunkStale(ctx context.Context, workspaceID uuid.UUID, limit int) (processed, remaining int, err error)
 	// FindRelated returns memories related to the given memory ID via full-text search on its key+tags.
 	// The source memory itself is excluded from results.
 	FindRelated(ctx context.Context, memoryID uuid.UUID, limit int) ([]domain.ScoredMemory, error)
