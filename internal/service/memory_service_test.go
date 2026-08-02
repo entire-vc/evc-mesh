@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -2900,7 +2901,7 @@ func TestEmbedAndStore_Chunked_AllEmptyVectorsLeavesExistingChunksAlone(t *testi
 	ms := svc.(*memoryService)
 
 	id := uuid.New()
-	require.NoError(t, ms.embedChunked(context.Background(), id, longTranscript(30)))
+	require.NoError(t, ms.embedChunked(context.Background(), id, longTranscript(30), ""))
 
 	assert.Zero(t, chunkRepo.replaceCalls, "every chunk embedding empty must skip ReplaceChunks entirely")
 	assert.Zero(t, memRepo.embeddedID, "must not touch memories.embedding for a memory nothing was actually embedded for")
@@ -2914,7 +2915,7 @@ func TestEmbedChunked_ReplaceChunksError_IsReturned(t *testing.T) {
 		MemoryWithChunkRepo(chunkRepo))
 	ms := svc.(*memoryService)
 
-	err := ms.embedChunked(context.Background(), uuid.New(), "some content")
+	err := ms.embedChunked(context.Background(), uuid.New(), "some content", "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "simulated db failure")
 	assert.Zero(t, memRepo.embeddedID, "a failed ReplaceChunks must not be followed by an embedding write")
@@ -2931,7 +2932,7 @@ func TestEmbedChunked_UpdateEmbeddingError_IsWrappedAndReturned(t *testing.T) {
 	ms := svc.(*memoryService)
 
 	id := uuid.New()
-	err := ms.embedChunked(context.Background(), id, "some content")
+	err := ms.embedChunked(context.Background(), id, "some content", "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "update embedding")
 	assert.Contains(t, err.Error(), "simulated db failure")
@@ -3017,7 +3018,7 @@ func TestEmbedAndStore_Chunked_WritesMultipleChunksAndWatermarksModel(t *testing
 
 	id := uuid.New()
 	text := longTranscript(30) // well over defaultChunkSize
-	ms.embedAndStore(id, text)
+	ms.embedAndStore(id, text, "")
 
 	got, err := chunkRepo.ListByMemoryIDs(context.Background(), []uuid.UUID{id})
 	require.NoError(t, err)
@@ -3046,7 +3047,7 @@ func TestEmbedAndStore_Chunked_ReembedReplacesRatherThanAccumulates(t *testing.T
 	ms := svc.(*memoryService)
 
 	id := uuid.New()
-	ms.embedAndStore(id, longTranscript(30))
+	ms.embedAndStore(id, longTranscript(30), "")
 	first, err := chunkRepo.ListByMemoryIDs(context.Background(), []uuid.UUID{id})
 	require.NoError(t, err)
 	firstCount := len(first)
@@ -3054,7 +3055,7 @@ func TestEmbedAndStore_Chunked_ReembedReplacesRatherThanAccumulates(t *testing.T
 
 	// Re-embed with much shorter content — a real re-embed after the memory's
 	// content changed. Old chunks must be gone, not left alongside the new ones.
-	ms.embedAndStore(id, "a short memory now")
+	ms.embedAndStore(id, "a short memory now", "")
 	second, err := chunkRepo.ListByMemoryIDs(context.Background(), []uuid.UUID{id})
 	require.NoError(t, err)
 	assert.Len(t, second, 1, "shorter re-embedded content must fully replace the old chunk set, not accumulate")
@@ -3073,7 +3074,7 @@ func TestEmbedAndStore_Chunked_PartialEmbedFailureNeverWritesPartialChunks(t *te
 	ms := svc.(*memoryService)
 
 	id := uuid.New()
-	ms.embedAndStore(id, longTranscript(30))
+	ms.embedAndStore(id, longTranscript(30), "")
 
 	assert.Equal(t, 0, chunkRepo.replaceCalls, "a failed embed call must abort before ReplaceChunks is ever called — no partial chunk set")
 	got, err := chunkRepo.ListByMemoryIDs(context.Background(), []uuid.UUID{id})
@@ -3170,7 +3171,7 @@ func TestEmbedConcurrencyBound(t *testing.T) {
 	for i := 0; i < calls; i++ {
 		go func() {
 			defer wg.Done()
-			ms.embedAndStore(uuid.New(), "some memory content")
+			ms.embedAndStore(uuid.New(), "some memory content", "")
 		}()
 	}
 	wg.Wait()
@@ -3199,7 +3200,7 @@ func TestEmbedConcurrencyUnboundedByDefault(t *testing.T) {
 	for i := 0; i < calls; i++ {
 		go func() {
 			defer wg.Done()
-			ms.embedAndStore(uuid.New(), "some memory content")
+			ms.embedAndStore(uuid.New(), "some memory content", "")
 		}()
 	}
 	wg.Wait()
@@ -3294,7 +3295,7 @@ func TestEmbedAndStore_Chunked_UsesOneBatchedCallNotOnePerChunk(t *testing.T) {
 	svc := NewMemoryService(memRepo, &mockMemoryEdgeRepo{}, emb, MemoryWithChunkRepo(chunkRepo))
 	ms := svc.(*memoryService)
 
-	ms.embedAndStore(uuid.New(), longTranscript(30))
+	ms.embedAndStore(uuid.New(), longTranscript(30), "")
 
 	stored, err := chunkRepo.ListByMemoryIDs(context.Background(), []uuid.UUID{})
 	require.NoError(t, err)
@@ -3345,7 +3346,7 @@ func TestEmbedAndStore_Chunked_TransientEmbedFailureIsRetried(t *testing.T) {
 	ms := svc.(*memoryService)
 
 	id := uuid.New()
-	ms.embedAndStore(id, longTranscript(30))
+	ms.embedAndStore(id, longTranscript(30), "")
 
 	got, err := chunkRepo.ListByMemoryIDs(context.Background(), []uuid.UUID{id})
 	require.NoError(t, err)
@@ -3392,7 +3393,7 @@ func TestEmbedAndStore_Chunked_ForeignKeyViolationIsNotAnEmbedFailure(t *testing
 		MemoryWithChunkRepo(chunkRepo))
 	ms := svc.(*memoryService)
 
-	ms.embedAndStore(uuid.New(), longTranscript(30))
+	ms.embedAndStore(uuid.New(), longTranscript(30), "")
 
 	assert.Equal(t, before, testutilCounterValue(t, "store"),
 		"a memory deleted mid-embed is a race with the deleter, not an embedding failure — counting it masks the real ones")
@@ -3417,7 +3418,7 @@ func TestEmbedAndStore_Chunked_EmbedFailureIncrementsCounter(t *testing.T) {
 		MemoryWithChunkRepo(chunkRepo))
 	ms := svc.(*memoryService)
 
-	ms.embedAndStore(uuid.New(), longTranscript(30))
+	ms.embedAndStore(uuid.New(), longTranscript(30), "")
 
 	assert.Greater(t, testutilCounterValue(t, "store"), before,
 		"a chunked-path embed failure must increment mesh_memory_embed_failures_total — this is the path all 538 failures in #67f4e0d9 took, and its visibility is half the point of the fix")
@@ -3434,10 +3435,148 @@ func TestEmbedAndStore_Legacy_EmbedFailureIncrementsCounter(t *testing.T) {
 	svc := NewMemoryService(memRepo, &mockMemoryEdgeRepo{}, alwaysFailsEmbedder{dim: 4})
 	ms := svc.(*memoryService)
 
-	ms.embedAndStore(uuid.New(), "short text, single vector path")
+	ms.embedAndStore(uuid.New(), "short text, single vector path", "")
 
 	assert.Greater(t, testutilCounterValue(t, "store"), before,
 		"an embedder failure must be visible as a metric, not only as a log line")
+}
+
+// ---------------------------------------------------------------------------
+// B2 key+tags-per-chunk prefix fix (#38bb958c measurement, task e11fe15e)
+// ---------------------------------------------------------------------------
+
+// capturingPrefixEmbedder records every text handed to EmbedBatch/Embed, across calls,
+// in call order — so a test can assert what was actually SENT to the embedder, not just
+// what ended up stored.
+type capturingPrefixEmbedder struct {
+	mu    sync.Mutex
+	dim   int
+	calls [][]string
+}
+
+func (e *capturingPrefixEmbedder) Embed(_ context.Context, text string) ([]float32, error) {
+	e.mu.Lock()
+	e.calls = append(e.calls, []string{text})
+	e.mu.Unlock()
+	return make([]float32, e.dim), nil
+}
+
+func (e *capturingPrefixEmbedder) EmbedBatch(_ context.Context, texts []string) ([][]float32, error) {
+	e.mu.Lock()
+	e.calls = append(e.calls, append([]string(nil), texts...))
+	e.mu.Unlock()
+	out := make([][]float32, len(texts))
+	for i := range texts {
+		out[i] = make([]float32, e.dim)
+	}
+	return out, nil
+}
+
+func (e *capturingPrefixEmbedder) Model() string   { return "capturing-model" }
+func (e *capturingPrefixEmbedder) Dimensions() int { return e.dim }
+
+// allTexts flattens every recorded call's texts into one slice, in call order.
+func (e *capturingPrefixEmbedder) allTexts() []string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	var out []string
+	for _, c := range e.calls {
+		out = append(out, c...)
+	}
+	return out
+}
+
+// TestEmbedChunked_KeyTagsPrefix_PresentInEveryChunk is AC1 of the B2 fix (task
+// e11fe15e, measurement closed on #38bb958c): before this fix, `key + " " + content +
+// " " + tags` was built as ONE composite string and THAT was chunked — so the key
+// survived only in chunk 0 and tags only in the last chunk. On a multi-chunk memory,
+// ~94% of chunks were searchable without the memory's own key. B2 chunks content alone
+// and prepends the key+tags prefix to every chunk's embedded text, so the prefix must
+// appear in the text sent to the embedder for EVERY chunk, not just the first.
+//
+// Mutation check (AC3): reverting `texts[i] = prefix + p.Text` back to `texts[i] =
+// p.Text` (or reintroducing it only for i==0 — the pre-fix/B1 shape) reds this test on
+// every chunk index >= 1, verified by hand. That is what makes this a regression test
+// for the fix rather than a restatement of it.
+func TestEmbedChunked_KeyTagsPrefix_PresentInEveryChunk(t *testing.T) {
+	memRepo := &mockMemoryRepo{}
+	chunkRepo := newMockMemoryChunkRepo()
+	embedder := &capturingPrefixEmbedder{dim: 4}
+	svc := NewMemoryService(memRepo, &mockMemoryEdgeRepo{}, embedder, MemoryWithChunkRepo(chunkRepo))
+	ms := svc.(*memoryService)
+
+	id := uuid.New()
+	content := longTranscript(30) // well over defaultChunkSize, forces multiple chunks
+	key := "keytags-prefix-marker-9f3a"
+	tags := []string{"tag-alpha", "tag-beta"}
+	prefix := key + " " + strings.Join(tags, " ") + " "
+
+	require.NoError(t, ms.embedChunked(context.Background(), id, content, prefix))
+
+	texts := embedder.allTexts()
+	require.Greater(t, len(texts), 1, "fixture must actually produce multiple chunks or this test proves nothing")
+
+	for i, text := range texts {
+		assert.True(t, strings.HasPrefix(text, prefix),
+			"chunk %d's embedded text must start with the key+tags prefix — got a text that does not, meaning this chunk would be unsearchable by its own memory's key", i)
+	}
+}
+
+// longCyrillicText returns long, plain (no speaker-turn markers) Cyrillic text so
+// chunkText falls back to slidingWindow — the path that computes ChunkStart/ChunkEnd
+// via runeOffsetToByteOffset. Cyrillic characters are 2 bytes in UTF-8, so an offset
+// bug (rune offsets stored as-is, or offsets computed against prefix+content instead
+// of content alone) is invisible on an ASCII-only fixture, where rune and byte offsets
+// coincide, and only surfaces once multi-byte runes precede the offset in question.
+func longCyrillicText(repeats int) string {
+	const para = "это тестовый текст для проверки чанкования не-ASCII содержимого. "
+	return strings.Repeat(para, repeats)
+}
+
+// TestEmbedChunked_NonASCIIContent_ByteOffsetsMatchContentSlices is AC2 of the B2 fix
+// (task e11fe15e): chunk_start/chunk_end must remain BYTE offsets into content alone
+// (ADR-0002) and stay internally consistent — in particular the last chunk must reach
+// content's end — now that chunking runs on content alone instead of the composite
+// key+content+tags string. This is deliberately a non-ASCII fixture: on ASCII content,
+// rune and byte offsets are numerically identical, so a bug that stores rune offsets,
+// or computes offsets against prefix+content instead of content, would pass silently.
+func TestEmbedChunked_NonASCIIContent_ByteOffsetsMatchContentSlices(t *testing.T) {
+	memRepo := &mockMemoryRepo{}
+	chunkRepo := newMockMemoryChunkRepo()
+	embedder := &capturingPrefixEmbedder{dim: 4}
+	svc := NewMemoryService(memRepo, &mockMemoryEdgeRepo{}, embedder, MemoryWithChunkRepo(chunkRepo))
+	ms := svc.(*memoryService)
+
+	id := uuid.New()
+	content := longCyrillicText(40) // over defaultChunkSize runes, multi-byte throughout
+	prefix := "somekey some-tag some-other-tag "
+
+	require.NoError(t, ms.embedChunked(context.Background(), id, content, prefix))
+
+	got, err := chunkRepo.ListByMemoryIDs(context.Background(), []uuid.UUID{id})
+	require.NoError(t, err)
+	require.Greater(t, len(got), 1, "fixture must actually produce multiple chunks or this test proves nothing")
+
+	sort.Slice(got, func(i, j int) bool { return got[i].ChunkIdx < got[j].ChunkIdx })
+
+	// Ground truth: the same chunk boundaries chunkText computed (rune offsets),
+	// converted to byte offsets the same way embedChunked does.
+	pieces := chunkText(content, defaultChunkSize, defaultChunkOverlap)
+	require.Equal(t, len(pieces), len(got), "one stored chunk per chunkText piece")
+
+	contentBytes := []byte(content)
+	require.NotEqual(t, len([]rune(content)), len(contentBytes),
+		"fixture must contain multi-byte runes, or this test cannot distinguish a byte-offset bug from a rune-offset bug")
+
+	for i, c := range got {
+		require.LessOrEqual(t, c.ChunkEnd, len(contentBytes), "chunk %d: chunk_end must not exceed content's byte length", i)
+		slice := string(contentBytes[c.ChunkStart:c.ChunkEnd])
+		assert.Equal(t, pieces[i].Text, slice,
+			"chunk %d: byte-slicing content[chunk_start:chunk_end] must reproduce chunkText's piece verbatim — a wrong offset (rune-as-byte, or an offset into prefix+content instead of content) corrupts this slice", i)
+	}
+
+	assert.Equal(t, 0, got[0].ChunkStart, "first chunk must start at content's beginning")
+	assert.Equal(t, len(contentBytes), got[len(got)-1].ChunkEnd, "last chunk must reach content's end")
 }
 
 func TestIsForeignKeyViolation(t *testing.T) {
