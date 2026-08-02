@@ -582,8 +582,8 @@ func (s *memoryService) Remember(ctx context.Context, mem *domain.Memory) (Remem
 	embeddingPending := !embedding.IsNoop(s.embedder)
 	if embeddingPending {
 		memID := mem.ID
-		content := mem.Key + " " + mem.Content + " " + strings.Join(mem.Tags, " ")
-		go s.embedAndStore(memID, content)
+		prefix := mem.Key + " " + strings.Join(mem.Tags, " ") + " "
+		go s.embedAndStore(memID, mem.Content, prefix)
 	}
 
 	// ── Hook 1: relates_to edge on semantic tag overlap ≥60% ─────────────────
@@ -746,7 +746,14 @@ func defaultExpiresAt(scope domain.MemoryScope, tags []string) *time.Time {
 // than that needs more than one vector to be fully searchable) and each chunk's vector is
 // stored in memory_chunks — memories.embedding is left untouched for that memory. Without
 // chunkRepo, the legacy single-vector path applies unchanged.
-func (s *memoryService) embedAndStore(id uuid.UUID, text string) {
+// embedAndStore embeds a memory's content and persists the resulting vector(s).
+// prefix (the memory's key + tags, space-joined) is prepended to every embedded
+// unit — the whole content in the single-vector path below, and every chunk in
+// embedChunked — but is never itself chunked and never shifts chunk_start/
+// chunk_end, which stay byte offsets into content alone (see embedChunked's doc
+// and #38bb958c: prefixing only chunk 0 of a composite pre-chunked string left
+// ~94% of a multi-chunk memory's chunks searchable without its own key).
+func (s *memoryService) embedAndStore(id uuid.UUID, content, prefix string) {
 	if s.embedSem != nil {
 		s.embedSem <- struct{}{}
 		defer func() { <-s.embedSem }()
@@ -760,10 +767,10 @@ func (s *memoryService) embedAndStore(id uuid.UUID, text string) {
 		// failures at chunk 12-15 of 18-24 in one loaded window, #67f4e0d9) — silently,
 		// since the goroutine only logs. Batching makes it one round trip for almost
 		// every memory; this scaling is the insurance for when it isn't.
-		pieces := chunkText(text, defaultChunkSize, defaultChunkOverlap)
+		pieces := chunkText(content, defaultChunkSize, defaultChunkOverlap)
 		ctx, cancel := context.WithTimeout(context.Background(), embedBudget(len(pieces)))
 		defer cancel()
-		if err := s.embedChunked(ctx, id, text); err != nil {
+		if err := s.embedChunked(ctx, id, content, prefix); err != nil {
 			if isForeignKeyViolation(err) {
 				// The memory was deleted while this goroutine was still embedding it
 				// (bench fixtures are created and swept within seconds). Not an
@@ -779,7 +786,7 @@ func (s *memoryService) embedAndStore(id uuid.UUID, text string) {
 	ctx, cancel := context.WithTimeout(context.Background(), embedBudget(1))
 	defer cancel()
 
-	vec, err := s.embedder.Embed(ctx, text)
+	vec, err := s.embedder.Embed(ctx, prefix+content)
 	if err != nil {
 		pkgmetrics.MemoryEmbedFailuresTotal.WithLabelValues("store").Inc()
 		log.Printf("memory embed: id=%s error=%v", id, err)
@@ -793,10 +800,21 @@ func (s *memoryService) embedAndStore(id uuid.UUID, text string) {
 	}
 }
 
-// embedChunked splits text into chunks, embeds each one individually, and atomically
-// replaces the memory's chunk rows (ReplaceChunks — delete+reinsert in one transaction,
-// which is what makes re-embedding idempotent: chunkText is deterministic, so re-running
-// this on the same text always produces the same rows).
+// embedChunked splits content into chunks, embeds each one (with prefix prepended)
+// individually, and atomically replaces the memory's chunk rows (ReplaceChunks —
+// delete+reinsert in one transaction, which is what makes re-embedding idempotent:
+// chunkText is deterministic, so re-running this on the same content always produces
+// the same rows).
+//
+// prefix (key + tags, space-joined — see embedAndStore) is prepended to EVERY chunk's
+// embedded text, never chunked itself and never part of the stored chunk_start/
+// chunk_end. Before this, the composite key+content+tags string was chunked as a
+// whole, so the key landed only in chunk 0 and tags only in the last chunk — ~94% of
+// a multi-chunk memory's chunks were searchable without the memory's own key
+// (#38bb958c). Measured fix (variant B2, not the naive "prefix the existing composite
+// chunks" B1, which failed its own single-chunk control): +0.058 MRR on the live query
+// distribution, +0.112 on multi-chunk memories specifically, and a genuine ~0 on the
+// single-chunk control where the mechanism cannot apply.
 //
 // embedding_dim is taken from len(vec) — the actual returned vector — never from
 // s.embedder.Dimensions() (the configured value). Trusting the config is exactly the bug
@@ -808,14 +826,14 @@ func (s *memoryService) embedAndStore(id uuid.UUID, text string) {
 // calling ReplaceChunks) rather than writing a partial set — a memory with 3 of 4 chunks
 // embedded would look chunked but silently drop content, the same class of failure this
 // entire fix exists to close.
-func (s *memoryService) embedChunked(ctx context.Context, id uuid.UUID, text string) error {
-	pieces := chunkText(text, defaultChunkSize, defaultChunkOverlap)
+func (s *memoryService) embedChunked(ctx context.Context, id uuid.UUID, content, prefix string) error {
+	pieces := chunkText(content, defaultChunkSize, defaultChunkOverlap)
 	if len(pieces) == 0 {
 		return nil
 	}
 	texts := make([]string, len(pieces))
 	for i, p := range pieces {
-		texts[i] = p.Text
+		texts[i] = prefix + p.Text
 	}
 
 	// ONE batched call (per 32 chunks) instead of one call per chunk. Sequential
@@ -830,7 +848,7 @@ func (s *memoryService) embedChunked(ctx context.Context, id uuid.UUID, text str
 		return fmt.Errorf("embed %d chunks: embedder returned %d vectors", len(pieces), len(vecs))
 	}
 
-	runes := []rune(text)
+	runes := []rune(content)
 	chunks := make([]domain.MemoryChunk, 0, len(pieces))
 	var firstVec []float32
 	for i, p := range pieces {
@@ -1498,8 +1516,8 @@ func (s *memoryService) ExtractFromEvent(ctx context.Context, event *domain.Even
 	// Async embedding for auto-extracted memories.
 	if mem.ID != uuid.Nil && !embedding.IsNoop(s.embedder) {
 		memID := mem.ID
-		content := mem.Key + " " + mem.Content + " " + strings.Join(mem.Tags, " ")
-		go s.embedAndStore(memID, content)
+		prefix := mem.Key + " " + strings.Join(mem.Tags, " ") + " "
+		go s.embedAndStore(memID, mem.Content, prefix)
 	}
 
 	return nil
@@ -1712,10 +1730,10 @@ func (s *memoryService) BatchEmbed(ctx context.Context, workspaceID uuid.UUID) (
 
 	count := 0
 	for _, m := range memories {
-		text := m.Key + " " + m.Content + " " + strings.Join(m.Tags, " ")
+		prefix := m.Key + " " + strings.Join(m.Tags, " ") + " "
 
 		if s.chunkRepo != nil {
-			if embedErr := s.embedChunked(ctx, m.ID, text); embedErr != nil {
+			if embedErr := s.embedChunked(ctx, m.ID, m.Content, prefix); embedErr != nil {
 				log.Printf("memory batch embed (chunked): id=%s: %v", m.ID, embedErr)
 				continue
 			}
@@ -1723,7 +1741,7 @@ func (s *memoryService) BatchEmbed(ctx context.Context, workspaceID uuid.UUID) (
 			continue
 		}
 
-		vec, embedErr := s.embedder.Embed(ctx, text)
+		vec, embedErr := s.embedder.Embed(ctx, prefix+m.Content)
 		if embedErr != nil {
 			log.Printf("memory batch embed: embed id=%s: %v", m.ID, embedErr)
 			continue
@@ -1761,8 +1779,8 @@ func (s *memoryService) BackfillChunks(ctx context.Context, workspaceID uuid.UUI
 
 	count := 0
 	for _, m := range memories {
-		text := m.Key + " " + m.Content + " " + strings.Join(m.Tags, " ")
-		if embedErr := s.embedChunked(ctx, m.ID, text); embedErr != nil {
+		prefix := m.Key + " " + strings.Join(m.Tags, " ") + " "
+		if embedErr := s.embedChunked(ctx, m.ID, m.Content, prefix); embedErr != nil {
 			log.Printf("memory backfill chunks: id=%s: %v", m.ID, embedErr)
 			continue
 		}
