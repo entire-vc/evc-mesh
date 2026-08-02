@@ -1731,6 +1731,14 @@ func (s *memoryService) ImportMemories(ctx context.Context, workspaceID uuid.UUI
 // supported operation: a vector from another model sits in another vector space, scores 0
 // in cosineSimilarity (dimension guard), and would otherwise remain invisible to semantic
 // recall forever. Call this repeatedly (it works in batches) after changing the provider.
+//
+// Both branches write through UpdateEmbeddingKeepUpdatedAt, not UpdateEmbedding: every row
+// this selects is an EXISTING memory nobody edited — only its embedding representation is
+// catching up (to the current model, or, via the chunked branch, to the current chunking
+// scheme). Bumping updated_at here would be the same defect RechunkStale was built to avoid
+// (see its doc and #f96b6670): MarkStaleByAge and DecayRelevance key off that column, and a
+// provider switch selects the WHOLE corpus into this loop, silently resetting both clocks in
+// one run with the original timestamps recoverable from nowhere.
 func (s *memoryService) BatchEmbed(ctx context.Context, workspaceID uuid.UUID) (int, error) {
 	if embedding.IsNoop(s.embedder) {
 		return 0, nil
@@ -1747,7 +1755,7 @@ func (s *memoryService) BatchEmbed(ctx context.Context, workspaceID uuid.UUID) (
 		prefix := m.Key + " " + strings.Join(m.Tags, " ") + " "
 
 		if s.chunkRepo != nil {
-			if embedErr := s.embedChunked(ctx, m.ID, m.Content, prefix); embedErr != nil {
+			if embedErr := s.embedChunkedStoring(ctx, m.ID, m.Content, prefix, s.memRepo.UpdateEmbeddingKeepUpdatedAt); embedErr != nil {
 				log.Printf("memory batch embed (chunked): id=%s: %v", m.ID, embedErr)
 				continue
 			}
@@ -1763,7 +1771,7 @@ func (s *memoryService) BatchEmbed(ctx context.Context, workspaceID uuid.UUID) (
 		if len(vec) == 0 {
 			continue
 		}
-		if storeErr := s.memRepo.UpdateEmbedding(ctx, m.ID, vec, s.embedder.Model(), s.embedder.Dimensions()); storeErr != nil {
+		if storeErr := s.memRepo.UpdateEmbeddingKeepUpdatedAt(ctx, m.ID, vec, s.embedder.Model(), s.embedder.Dimensions()); storeErr != nil {
 			log.Printf("memory batch embed: store id=%s: %v", m.ID, storeErr)
 			continue
 		}
@@ -1778,6 +1786,10 @@ func (s *memoryService) BatchEmbed(ctx context.Context, workspaceID uuid.UUID) (
 // selection query rather than reusing BatchEmbed's model-switch filter. A no-op (0, nil)
 // when chunked embedding isn't configured or the embedder is a noop, matching BatchEmbed's
 // convention: this is a normal "nothing to do yet" state, not an error.
+//
+// Writes through UpdateEmbeddingKeepUpdatedAt for the same reason as BatchEmbed above: this
+// is chunking a memory that already existed with content nobody is editing right now, not a
+// write to the memory itself.
 func (s *memoryService) BackfillChunks(ctx context.Context, workspaceID uuid.UUID, limit int) (int, error) {
 	if s.chunkRepo == nil || embedding.IsNoop(s.embedder) {
 		return 0, nil
@@ -1794,7 +1806,7 @@ func (s *memoryService) BackfillChunks(ctx context.Context, workspaceID uuid.UUI
 	count := 0
 	for _, m := range memories {
 		prefix := m.Key + " " + strings.Join(m.Tags, " ") + " "
-		if embedErr := s.embedChunked(ctx, m.ID, m.Content, prefix); embedErr != nil {
+		if embedErr := s.embedChunkedStoring(ctx, m.ID, m.Content, prefix, s.memRepo.UpdateEmbeddingKeepUpdatedAt); embedErr != nil {
 			log.Printf("memory backfill chunks: id=%s: %v", m.ID, embedErr)
 			continue
 		}
