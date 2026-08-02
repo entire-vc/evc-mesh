@@ -971,7 +971,21 @@ func appendMemorySearchFilter(
 // is that of its best-matching passage. Aggregating instead would rank a long
 // memory with many mediocre chunks above a short one that answers the query
 // exactly — which is the opposite of the reason chunking was introduced.
+// denseArmSevered is the deliberate break carried by the ADR-0003 proof branch,
+// and it exists on that branch alone. It is a package-level variable rather than
+// a constant or a bare early `return` on purpose: the claim under test is that
+// the recall gate is the ONLY red required check on this PR, so the break must
+// not also trip staticcheck's unreachable-code rule and hand `Lint` a failure
+// that `BLOCKED` could be attributed to instead.
+var denseArmSevered = true
+
 func (r *MemoryRepo) VectorSearch(ctx context.Context, queryVec []float32, workspaceID uuid.UUID, projectID *uuid.UUID, filter domain.MemorySearchFilter, limit int) ([]domain.ScoredMemory, error) {
+	// DELIBERATE SABOTAGE — proof branch for ADR-0003. DO NOT MERGE.
+	// Severs the dense arm: every recall is served by BM25 alone.
+	if denseArmSevered {
+		return []domain.ScoredMemory{}, nil
+	}
+
 	if limit <= 0 {
 		limit = 20
 	}
