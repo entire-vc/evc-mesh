@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"math"
 	"testing"
 	"time"
 
@@ -179,6 +180,89 @@ func TestMemoryRepoDB_CountNeedingRechunk_IgnoresBatchLimit(t *testing.T) {
 	n, err := repo.CountNeedingRechunk(ctx, wsID)
 	require.NoError(t, err)
 	assert.Equal(t, 3, n, "the count must see the whole population regardless of any batch limit")
+}
+
+// The service-level test can only prove WHICH write-back the repair chose; whether that
+// write-back actually holds the column is a property of the SQL, and only real Postgres can
+// answer it. This is the test that would catch `updated_at = updated_at` being dropped in a
+// future edit of that statement — the corpus-wide, unrecoverable failure.
+func TestMemoryRepoDB_UpdateEmbeddingKeepUpdatedAt_HoldsTimestampAndStillWritesVector(t *testing.T) {
+	repo, wsID := setupMemoryRepoChunkingDBTest(t)
+	ctx := context.Background()
+
+	mem := &domain.Memory{
+		ID:          uuid.New(),
+		WorkspaceID: wsID,
+		Key:         "keeps-timestamp-" + uuid.New().String()[:8],
+		Content:     "content",
+		Scope:       domain.ScopeWorkspace,
+		SourceType:  domain.SourceAgent,
+	}
+	require.NoError(t, repo.Upsert(ctx, mem))
+
+	var before time.Time
+	require.NoError(t, repo.db.GetContext(ctx, &before, `SELECT updated_at FROM memories WHERE id = $1`, mem.ID))
+
+	// Postgres resolves NOW() to microseconds; without a gap a bumped timestamp could
+	// compare equal to the original and the assertion would pass on a broken statement.
+	time.Sleep(10 * time.Millisecond)
+	require.NoError(t, repo.UpdateEmbeddingKeepUpdatedAt(ctx, mem.ID, []float32{0.1, 0.2}, "e5-small", 2))
+
+	var after time.Time
+	var model string
+	var dim int
+	require.NoError(t, repo.db.QueryRowxContext(ctx,
+		`SELECT updated_at, embedding_model, embedding_dim FROM memories WHERE id = $1`, mem.ID,
+	).Scan(&after, &model, &dim))
+
+	assert.True(t, before.Equal(after), "updated_at moved: %s → %s", before, after)
+	assert.Equal(t, "e5-small", model, "the embedding itself must still be written")
+	assert.Equal(t, 2, dim)
+
+	// Positive control: the ordinary variant on the same row DOES move it, so the assertion
+	// above is discriminating rather than a statement about the clock.
+	time.Sleep(10 * time.Millisecond)
+	require.NoError(t, repo.UpdateEmbedding(ctx, mem.ID, []float32{0.3, 0.4}, "e5-small", 2))
+	var bumped time.Time
+	require.NoError(t, repo.db.GetContext(ctx, &bumped, `SELECT updated_at FROM memories WHERE id = $1`, mem.ID))
+	assert.True(t, bumped.After(after), "UpdateEmbedding must still bump updated_at on the write path")
+}
+
+func TestMemoryRepoDB_UpdateEmbeddingKeepUpdatedAt_UnencodableVectorIsReported(t *testing.T) {
+	repo, wsID := setupMemoryRepoChunkingDBTest(t)
+	ctx := context.Background()
+
+	mem := &domain.Memory{
+		ID:          uuid.New(),
+		WorkspaceID: wsID,
+		Key:         "bad-vector-" + uuid.New().String()[:8],
+		Content:     "content",
+		Scope:       domain.ScopeWorkspace,
+		SourceType:  domain.SourceAgent,
+	}
+	require.NoError(t, repo.Upsert(ctx, mem))
+
+	inf := float32(math.Inf(1)) // encoding/json refuses non-finite floats
+	err := repo.UpdateEmbeddingKeepUpdatedAt(ctx, mem.ID, []float32{inf}, "e5-small", 1)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "encode vector")
+}
+
+// A failed query must surface as an error, never as an empty page or a zero count — the
+// latter reads as "converged" to the caller driving the repair loop.
+func TestMemoryRepoDB_RechunkQueries_FailureIsAnErrorNotAnEmptyAnswer(t *testing.T) {
+	repo, wsID := setupMemoryRepoChunkingDBTest(t)
+	dead, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := repo.ListNeedingRechunk(dead, wsID, 10)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "list needing rechunk")
+
+	n, err := repo.CountNeedingRechunk(dead, wsID)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "count needing rechunk")
+	assert.Zero(t, n, "a failed count must not hand back a number the caller could act on")
 }
 
 // Repairing a row must remove it from the population — otherwise the job re-selects the same

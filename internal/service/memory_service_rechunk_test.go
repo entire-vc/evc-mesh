@@ -155,6 +155,19 @@ func TestRechunkStale_NoopEmbedder_ReportsPopulationInsteadOfZero(t *testing.T) 
 	assert.Equal(t, 5, remaining)
 }
 
+// Even the no-op configuration must not answer remaining=0 when it could not count. That
+// value is the loop's stop condition, and "I could not look" must never render as "there is
+// nothing there".
+func TestRechunkStale_NoChunkRepo_CountError_IsReturned(t *testing.T) {
+	memRepo := &mockMemoryRepo{countNeedingRechunkErr: errors.New("simulated db failure")}
+	svc := NewMemoryService(memRepo, &mockMemoryEdgeRepo{}, &switchModelEmbedder{model: "e5-small", dim: 4})
+
+	_, remaining, err := svc.RechunkStale(context.Background(), uuid.New(), 0)
+	require.Error(t, err)
+	assert.Zero(t, remaining)
+	assert.Contains(t, err.Error(), "rechunk stale: count")
+}
+
 func TestRechunkStale_ListError_IsWrappedAndReturned(t *testing.T) {
 	memRepo := &mockMemoryRepo{listNeedingRechunkErr: errors.New("simulated db failure")}
 	svc := NewMemoryService(memRepo, &mockMemoryEdgeRepo{}, &switchModelEmbedder{model: "e5-small", dim: 4},
