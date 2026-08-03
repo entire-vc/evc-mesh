@@ -299,3 +299,94 @@ func TestAssigneeEnrolment_NoAssigneeAndNoDuplicate(t *testing.T) {
 	svc.ensureAssigneeProjectMember(ctx, projectID, &agentID, domain.AssigneeTypeAgent)
 	assert.Len(t, pmRepo.members, 1, "re-enrolling an existing member must not duplicate the row")
 }
+
+// ---------------------------------------------------------------------------
+// 6. CreateSubtask must resolve the assignee's REAL type before enrolling.
+// ---------------------------------------------------------------------------
+
+// TestAssigneeEnrolment_SubtaskToUserWithMistypedAssigneeType covers the one
+// enrolment site whose assignee type is caller-supplied and therefore untrustworthy.
+//
+// The HTTP handler defaults an omitted assignee_type to "agent", so a subtask
+// assigned to a human arrived here typed as an agent. ensureAssigneeProjectMember
+// dispatches on that type, so enrolment went to ensureAgentProjectMember with a user
+// UUID; in production the project_members.agent_id foreign key rejects that insert and
+// the error is logged and swallowed — the assignee ends up holding a task they cannot
+// transition, with no signal anywhere.
+//
+// The test deliberately passes the WRONG type rather than omitting it: omitting it
+// would let a future handler-side default satisfy the test without the service ever
+// resolving anything, which is how a test passes for the wrong reason.
+func TestAssigneeEnrolment_SubtaskToUserWithMistypedAssigneeType(t *testing.T) {
+	ctx := context.Background()
+	projectID, parentID := uuid.New(), uuid.New()
+	captainID, humanID := uuid.New(), uuid.New()
+	wsID := uuid.New()
+
+	env := setupMembershipEnv(nil, nil)
+	svc, taskRepo, statusRepo, projRepo, pmRepo := env.svc, env.tasks, env.statuses, env.projects, env.members
+
+	userRepo := NewMockUserRepository()
+	userRepo.AddUser(wsID, &domain.User{ID: humanID, Username: "pavel"})
+	svc.userRepo = userRepo
+
+	todoID := uuid.New()
+	statusRepo.items[todoID] = &domain.TaskStatus{ID: todoID, ProjectID: projectID, Category: domain.StatusCategoryTodo, Name: "todo"}
+	projRepo.items[projectID] = &domain.Project{ID: projectID, WorkspaceID: wsID}
+	taskRepo.items[parentID] = &domain.Task{ID: parentID, ProjectID: projectID, StatusID: todoID, Title: "epic"}
+
+	ctx = actorctx.WithActor(ctx, captainID, domain.ActorTypeAgent)
+	child, err := svc.CreateSubtask(ctx, parentID, CreateSubtaskInput{
+		Title:      "human review step",
+		StatusID:   &todoID,
+		AssigneeID: &humanID,
+		// The lie the handler tells when assignee_type is omitted:
+		AssigneeType: domain.AssigneeTypeAgent,
+	})
+	require.NoError(t, err)
+
+	// Enrolled against the USER column, not the agent one.
+	ok, err := pmRepo.ExistsMember(ctx, projectID, &humanID, nil)
+	require.NoError(t, err)
+	assert.True(t, ok,
+		"a human subtask assignee must be enrolled as a user — dispatching on the "+
+			"handler's guess sends the insert at project_members.agent_id, where the "+
+			"foreign key rejects it silently")
+
+	// And must NOT have been attempted as an agent.
+	asAgent, err := pmRepo.ExistsMember(ctx, projectID, nil, &humanID)
+	require.NoError(t, err)
+	assert.False(t, asAgent, "must not be enrolled against the agent column")
+
+	// The stored type is corrected too, so the row does not persist the guess.
+	assert.Equal(t, domain.AssigneeTypeUser, child.AssigneeType,
+		"the subtask must be stored with the resolved type, not the caller's")
+}
+
+// TestAssigneeEnrolment_SubtaskAgentTypeStillResolves is the positive control: the
+// ordinary agent case must keep working, so the fix cannot be satisfied by a service
+// that simply always resolves to user.
+func TestAssigneeEnrolment_SubtaskAgentTypeStillResolves(t *testing.T) {
+	ctx := context.Background()
+	projectID, parentID := uuid.New(), uuid.New()
+	captainID, ownerID := uuid.New(), uuid.New()
+
+	env := setupMembershipEnv(nil, nil)
+	svc, taskRepo, statusRepo, agentRepo, projRepo, pmRepo := env.svc, env.tasks, env.statuses, env.agents, env.projects, env.members
+
+	todoID := uuid.New()
+	statusRepo.items[todoID] = &domain.TaskStatus{ID: todoID, ProjectID: projectID, Category: domain.StatusCategoryTodo, Name: "todo"}
+	projRepo.items[projectID] = &domain.Project{ID: projectID}
+	agentRepo.items[ownerID] = &domain.Agent{ID: ownerID, Slug: "owner"}
+	taskRepo.items[parentID] = &domain.Task{ID: parentID, ProjectID: projectID, StatusID: todoID, Title: "epic"}
+
+	ctx = actorctx.WithActor(ctx, captainID, domain.ActorTypeAgent)
+	child, err := svc.CreateSubtask(ctx, parentID, CreateSubtaskInput{
+		Title: "agent unit of work", StatusID: &todoID,
+		AssigneeID: &ownerID, AssigneeType: domain.AssigneeTypeAgent,
+	})
+	require.NoError(t, err)
+
+	assertEnrolled(t, pmRepo, projectID, ownerID, "an agent assignee must still enrol as an agent")
+	assert.Equal(t, domain.AssigneeTypeAgent, child.AssigneeType)
+}
