@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"log"
 	"net/http"
 
 	"github.com/google/uuid"
@@ -13,8 +14,13 @@ import (
 
 // RequireProjectMember returns Echo middleware that enforces project-level membership.
 //
+// It is only meaningful on routes whose pattern contains :proj_id. Mounted anywhere
+// else it fails closed with a 500 and a logged error, because there is no project to
+// check and passing the request through would present an absent gate as a present one.
+// Task-scoped routes want RequireWorkspaceMember instead.
+//
 // Resolution:
-//   - Extracts project_id from :proj_id route param.
+//   - Extracts project_id from :proj_id route param; absent → 500 (misconfiguration).
 //   - Workspace owners and admins bypass (they have access to all projects).
 //   - For members/viewers/agents: checks project_members table.
 //   - Returns 403 if the actor is not a project member.
@@ -26,8 +32,29 @@ func RequireProjectMember(db *sqlx.DB) echo.MiddlewareFunc {
 			// Extract project_id from route.
 			projIDStr := c.Param("proj_id")
 			if projIDStr == "" {
-				// No project in route — skip check (non-project route).
-				return next(c)
+				// This middleware is mounted on a route whose pattern carries no
+				// :proj_id, so there is no project whose membership could be checked.
+				//
+				// This used to `return next(c)`, which made the guard a silent no-op:
+				// a route reading `api.GET("/tasks/:task_id/x", h, projAccess)` looked
+				// in the route table like it was locked behind project membership while
+				// in fact running with NO gate at all — the workspace check isn't in
+				// this chain either. That is strictly worse than an obviously ungated
+				// route, because it is believed and then stops being reviewed.
+				//
+				// It is a wiring mistake, not a runtime condition: Echo route patterns
+				// are static, so this either never fires or fires on every request to
+				// that route. Fail closed and say so.
+				//
+				// 500, not 403, deliberately: the caller is not forbidden — the server
+				// is misconfigured. Answering 403 would send whoever debugs it hunting
+				// for a membership problem that does not exist, which is the same
+				// "error names the wrong thing" failure this guard is meant to prevent.
+				log.Printf("ERROR: RequireProjectMember is mounted on route %q which has no :proj_id parameter — "+
+					"this guard cannot check anything there and would otherwise pass every caller through; "+
+					"use RequireWorkspaceMember for task-scoped routes", c.Path())
+				return c.JSON(http.StatusInternalServerError,
+					apierror.InternalError("route misconfiguration: project guard applied to a route without a project"))
 			}
 
 			projID, err := uuid.Parse(projIDStr)
