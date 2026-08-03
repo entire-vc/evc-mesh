@@ -57,6 +57,27 @@ func (h *TaskStatusHandler) List(c echo.Context) error {
 	return c.JSON(http.StatusOK, statuses)
 }
 
+// ListByTask handles GET /tasks/:task_id/statuses
+//
+// It returns the statuses of the project the task belongs to. The route is registered
+// under the workspace gate — deliberately the same gate as POST /tasks/:task_id/move,
+// which cannot be performed without this lookup. Project-scoped status routes keep
+// their project gate; this is an additive path, not a relaxation of those.
+func (h *TaskStatusHandler) ListByTask(c echo.Context) error {
+	taskIDStr := c.Param("task_id")
+	taskID, err := uuid.Parse(taskIDStr)
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid task_id"))
+	}
+
+	statuses, err := h.statusService.ListByTask(c.Request().Context(), taskID)
+	if err != nil {
+		return handleError(c, err)
+	}
+
+	return c.JSON(http.StatusOK, statuses)
+}
+
 // Create handles POST /projects/:proj_id/statuses
 func (h *TaskStatusHandler) Create(c echo.Context) error {
 	projIDStr := c.Param("proj_id")

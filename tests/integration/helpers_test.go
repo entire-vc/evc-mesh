@@ -264,6 +264,87 @@ func (e *TestEnv) doRequest(t *testing.T, method, path string, body interface{})
 	return resp
 }
 
+// GetWithAgentKey performs a GET authenticated as an agent (X-Agent-Key), not as a
+// user. Agent auth is a distinct path through DualAuth/WorkspaceRLS, so tests about
+// agent-facing gates must not be written with a user JWT.
+func (e *TestEnv) GetWithAgentKey(t *testing.T, path, agentKey string) *http.Response {
+	t.Helper()
+	return e.doRequestWithAgentKey(t, http.MethodGet, path, agentKey, nil)
+}
+
+// PostWithAgentKey performs a POST authenticated as an agent (X-Agent-Key).
+func (e *TestEnv) PostWithAgentKey(t *testing.T, path, agentKey string, body interface{}) *http.Response {
+	t.Helper()
+	return e.doRequestWithAgentKey(t, http.MethodPost, path, agentKey, body)
+}
+
+// doRequestWithAgentKey issues a request carrying only the agent key — the user
+// bearer token is deliberately omitted so the agent's own gates are what is tested.
+func (e *TestEnv) doRequestWithAgentKey(t *testing.T, method, path, agentKey string, body interface{}) *http.Response {
+	t.Helper()
+
+	var bodyReader io.Reader
+	if body != nil {
+		jsonBytes, err := json.Marshal(body)
+		if err != nil {
+			t.Fatalf("Failed to marshal request body: %v", err)
+		}
+		bodyReader = bytes.NewReader(jsonBytes)
+	}
+
+	req, err := http.NewRequest(method, e.BaseURL+path, bodyReader)
+	if err != nil {
+		t.Fatalf("Failed to create request: %v", err)
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	req.Header.Set("X-Agent-Key", agentKey)
+
+	resp, err := e.HTTPClient.Do(req)
+	if err != nil {
+		t.Fatalf("Request failed: %s %s: %v", method, path, err)
+	}
+	return resp
+}
+
+// CreateAgent registers an agent in the workspace and returns its id and API key.
+// The agent is NOT added to any project — project membership is a separate grant.
+func (e *TestEnv) CreateAgent(t *testing.T, wsID, name string) (agentID, apiKey string) {
+	t.Helper()
+
+	resp := e.Post(t, fmt.Sprintf("/api/v1/workspaces/%s/agents", wsID), map[string]interface{}{
+		"name":       name,
+		"agent_type": "claude_code",
+	})
+	if resp.StatusCode != http.StatusCreated {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		t.Fatalf("CreateAgent failed with status %d: %s", resp.StatusCode, string(bodyBytes))
+	}
+
+	var result map[string]interface{}
+	e.DecodeJSON(t, resp, &result)
+
+	if agent, ok := result["agent"].(map[string]interface{}); ok {
+		agentID, _ = agent["id"].(string)
+	}
+	apiKey, _ = result["api_key"].(string)
+
+	if agentID == "" || apiKey == "" {
+		t.Fatalf("CreateAgent returned no id/api_key: %v", result)
+	}
+
+	e.OnCleanup(func() {
+		_, _ = e.DB.ExecContext(context.Background(),
+			"DELETE FROM project_members WHERE agent_id = $1", agentID)
+		_, _ = e.DB.ExecContext(context.Background(),
+			"DELETE FROM agents WHERE id = $1", agentID)
+	})
+
+	return agentID, apiKey
+}
+
 // uniqueEmail generates a collision-free email for test isolation.
 func uniqueEmail(prefix string) string {
 	return fmt.Sprintf("%s-%d@test.mesh.local", prefix, time.Now().UnixNano())

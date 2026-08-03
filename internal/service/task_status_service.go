@@ -131,6 +131,23 @@ func (s *taskStatusService) ListByProject(ctx context.Context, projectID uuid.UU
 	return s.statusRepo.ListByProject(ctx, projectID)
 }
 
+// ListByTask returns the statuses of the project the given task belongs to.
+//
+// This exists so that resolving a status slug carries the same access gate as the
+// transition it serves: POST /tasks/:task_id/move is workspace-gated, so the lookup
+// that tells a caller which statuses that move may target must not be project-gated.
+// A read that a write cannot complete without must never be stricter than the write.
+func (s *taskStatusService) ListByTask(ctx context.Context, taskID uuid.UUID) ([]domain.TaskStatus, error) {
+	task, err := s.taskRepo.GetByID(ctx, taskID)
+	if err != nil {
+		return nil, err
+	}
+	if task == nil {
+		return nil, apierror.NotFound("Task")
+	}
+	return s.statusRepo.ListByProject(ctx, task.ProjectID)
+}
+
 // Reorder sets the order of statuses within a project.
 // All provided IDs must belong to the same project.
 func (s *taskStatusService) Reorder(ctx context.Context, projectID uuid.UUID, statusIDs []uuid.UUID) error {
