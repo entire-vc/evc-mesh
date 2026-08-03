@@ -907,6 +907,11 @@ func (s *taskService) CreateSubtask(ctx context.Context, parentTaskID uuid.UUID,
 	if creatorType == domain.ActorTypeAgent && creatorID != uuid.Nil {
 		s.ensureAgentProjectMember(ctx, parent.ProjectID, creatorID)
 	}
+	// ...and the assignee, who is usually NOT the creator here: decomposing an epic
+	// means creating subtasks owned by whoever will do the work. Enrolling only the
+	// creator leaves that owner able to comment on a task they cannot transition.
+	// Placed after applyAutoAssign so a rule-assigned subtask is covered too.
+	s.ensureAssigneeProjectMember(ctx, parent.ProjectID, child.AssigneeID, child.AssigneeType)
 
 	if err := s.taskRepo.Create(ctx, child); err != nil {
 		return nil, err
@@ -1469,7 +1474,15 @@ func (s *taskService) evaluateRulesForMove(ctx context.Context, task *domain.Tas
 // ensureAssigneeProjectMember auto-enrolls whoever is about to become a task's
 // assignee into that task's project, dispatching on assignee type.
 //
-// EVERY write path that sets assignee_id must call this. Being the assignee of a
+// EVERY write path that sets assignee_id must call this. As of this commit that
+// is: Create, Update (and BulkUpdate through it), MoveTask, AssignTask,
+// CreateSubtask, applyReviewAssignee and restorePreReviewAssignee — seven.
+// applyAutoAssign needs no call of its own: both of its callers enrol after it.
+// Task creation from a recurring schedule or a template routes through Create.
+// If you add an eighth, add the call — `grep -n 'AssigneeID = \|AssigneeID:'`
+// over internal/service is how this list was checked.
+//
+// Being the assignee of a
 // task in a project you are not a member of is a dead end: task-scoped routes
 // (get, comment, assign) are only workspace-gated and succeed, but a status
 // transition resolves its status slug through the project-gated

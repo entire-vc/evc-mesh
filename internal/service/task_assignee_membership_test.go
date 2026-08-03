@@ -24,6 +24,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	"github.com/entire-vc/evc-mesh/pkg/actorctx"
 )
 
 // assertEnrolled fails when the agent is not a member of the project.
@@ -184,6 +185,65 @@ func TestAssigneeEnrolment_UpdateAndAssignTaskAgree(t *testing.T) {
 				tc.name+" must enrol the assignee — assign_task and update_task must not disagree")
 		})
 	}
+}
+
+// ---------------------------------------------------------------------------
+// 3b. create_subtask — the epic-decomposition path. The assignee here is
+//     usually NOT the creator: a captain decomposes an epic into subtasks owned
+//     by whoever will do the work. Enrolling only the creator (which is all this
+//     path used to do) leaves that owner able to comment but not transition.
+// ---------------------------------------------------------------------------
+
+func TestAssigneeEnrolment_CreateSubtaskEnrolsAssigneeNotOnlyCreator(t *testing.T) {
+	ctx := context.Background()
+	projectID, parentID := uuid.New(), uuid.New()
+	captainID, ownerID := uuid.New(), uuid.New()
+
+	env := setupMembershipEnv(nil, nil)
+	svc, taskRepo, statusRepo, agentRepo, projRepo, pmRepo := env.svc, env.tasks, env.statuses, env.agents, env.projects, env.members
+
+	todoID := uuid.New()
+	statusRepo.items[todoID] = &domain.TaskStatus{ID: todoID, ProjectID: projectID, Category: domain.StatusCategoryTodo, Name: "todo"}
+	projRepo.items[projectID] = &domain.Project{ID: projectID}
+	agentRepo.items[ownerID] = &domain.Agent{ID: ownerID, Slug: "owner"}
+	taskRepo.items[parentID] = &domain.Task{ID: parentID, ProjectID: projectID, StatusID: todoID, Title: "epic"}
+
+	// The captain creates the subtask; a different agent is meant to own it.
+	ctx = actorctx.WithActor(ctx, captainID, domain.ActorTypeAgent)
+	_, err := svc.CreateSubtask(ctx, parentID, CreateSubtaskInput{
+		Title:        "unit of work",
+		StatusID:     &todoID,
+		AssigneeID:   &ownerID,
+		AssigneeType: domain.AssigneeTypeAgent,
+	})
+	require.NoError(t, err)
+
+	assertEnrolled(t, pmRepo, projectID, captainID,
+		"precondition: the creator was already enrolled before this fix")
+	assertEnrolled(t, pmRepo, projectID, ownerID,
+		"create_subtask must enrol the ASSIGNEE too, not just the creator — this is the epic-decomposition path")
+}
+
+// ---------------------------------------------------------------------------
+// 3c. Create with an explicit assignee. This path already enrolled before the
+//     fix, but nothing pinned it, so a refactor could silently drop it.
+// ---------------------------------------------------------------------------
+
+func TestAssigneeEnrolment_CreateWithAssignee(t *testing.T) {
+	projectID, agentID := uuid.New(), uuid.New()
+	env := setupMembershipEnv(nil, nil)
+	svc, agentRepo, projRepo, pmRepo := env.svc, env.agents, env.projects, env.members
+
+	projRepo.items[projectID] = &domain.Project{ID: projectID}
+	agentRepo.items[agentID] = &domain.Agent{ID: agentID, Slug: "owner"}
+
+	require.NoError(t, svc.Create(context.Background(), &domain.Task{
+		ProjectID: projectID, Title: "t",
+		AssigneeID: &agentID, AssigneeType: domain.AssigneeTypeAgent,
+	}))
+
+	assertEnrolled(t, pmRepo, projectID, agentID,
+		"create_task with an assignee must enrol that assignee")
 }
 
 // ---------------------------------------------------------------------------
