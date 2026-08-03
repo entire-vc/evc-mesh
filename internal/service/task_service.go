@@ -235,12 +235,7 @@ func (s *taskService) Create(ctx context.Context, task *domain.Task) error {
 		s.ensureAgentProjectMember(ctx, task.ProjectID, actorID)
 	}
 	// Auto-enroll assignee into project members.
-	switch {
-	case task.AssigneeType == domain.AssigneeTypeAgent && task.AssigneeID != nil:
-		s.ensureAgentProjectMember(ctx, task.ProjectID, *task.AssigneeID)
-	case task.AssigneeType == domain.AssigneeTypeUser && task.AssigneeID != nil:
-		s.ensureUserProjectMember(ctx, task.ProjectID, *task.AssigneeID)
-	}
+	s.ensureAssigneeProjectMember(ctx, task.ProjectID, task.AssigneeID, task.AssigneeType)
 
 	if err := s.taskRepo.Create(ctx, task); err != nil {
 		return err
@@ -323,6 +318,10 @@ func (s *taskService) Update(ctx context.Context, task *domain.Task) error {
 	// Normalize assignee_type before write.
 	if task.AssigneeID != nil {
 		task.AssigneeType = s.resolveAssigneeType(ctx, task.AssigneeID, task.AssigneeType)
+	}
+	// Auto-enroll the assignee — PATCH can change assignee_id just like assign_task.
+	if existing.AssigneeID == nil || task.AssigneeID == nil || *existing.AssigneeID != *task.AssigneeID {
+		s.ensureAssigneeProjectMember(ctx, task.ProjectID, task.AssigneeID, task.AssigneeType)
 	}
 	task.UpdatedAt = timeNow()
 	if err := s.taskRepo.Update(ctx, task); err != nil {
@@ -714,6 +713,7 @@ func (s *taskService) MoveTask(ctx context.Context, taskID uuid.UUID, input Move
 	if input.AssigneeID != nil {
 		task.AssigneeID = input.AssigneeID
 		task.AssigneeType = s.resolveAssigneeType(ctx, input.AssigneeID, input.AssigneeType)
+		s.ensureAssigneeProjectMember(ctx, task.ProjectID, task.AssigneeID, task.AssigneeType)
 		task.UpdatedAt = timeNow()
 		if err := s.taskRepo.Update(ctx, task); err != nil {
 			log.Printf("[move-assign] WARNING: failed to assign task %s: %v", taskID, err)
@@ -794,12 +794,7 @@ func (s *taskService) AssignTask(ctx context.Context, taskID uuid.UUID, input As
 	task.UpdatedAt = timeNow()
 
 	// Auto-enroll assignee into project members.
-	switch {
-	case resolvedType == domain.AssigneeTypeAgent && input.AssigneeID != nil:
-		s.ensureAgentProjectMember(ctx, task.ProjectID, *input.AssigneeID)
-	case resolvedType == domain.AssigneeTypeUser && input.AssigneeID != nil:
-		s.ensureUserProjectMember(ctx, task.ProjectID, *input.AssigneeID)
-	}
+	s.ensureAssigneeProjectMember(ctx, task.ProjectID, input.AssigneeID, resolvedType)
 
 	if err := s.taskRepo.Update(ctx, task); err != nil {
 		return err
@@ -1471,6 +1466,29 @@ func (s *taskService) evaluateRulesForMove(ctx context.Context, task *domain.Tas
 	return s.ruleSvc.Evaluate(ctx, input)
 }
 
+// ensureAssigneeProjectMember auto-enrolls whoever is about to become a task's
+// assignee into that task's project, dispatching on assignee type.
+//
+// EVERY write path that sets assignee_id must call this. Being the assignee of a
+// task in a project you are not a member of is a dead end: task-scoped routes
+// (get, comment, assign) are only workspace-gated and succeed, but a status
+// transition resolves its status slug through the project-gated
+// GET /projects/:proj_id/statuses and 403s — so the assignee can do the work and
+// then move the task neither forward nor back. Enrolment on assignment is what
+// keeps that state unreachable; a path that assigns without enrolling silently
+// manufactures it. A set_reviewer rotation did exactly that in production.
+func (s *taskService) ensureAssigneeProjectMember(ctx context.Context, projectID uuid.UUID, assigneeID *uuid.UUID, assigneeType domain.AssigneeType) {
+	if assigneeID == nil {
+		return
+	}
+	switch assigneeType {
+	case domain.AssigneeTypeAgent:
+		s.ensureAgentProjectMember(ctx, projectID, *assigneeID)
+	case domain.AssigneeTypeUser:
+		s.ensureUserProjectMember(ctx, projectID, *assigneeID)
+	}
+}
+
 // ensureAgentProjectMember auto-enrolls an agent into a project's member list
 // if it is not already a member. This is called on task assignment, task creation,
 // and subtask creation so that agents can always access the projects they work in.
@@ -1919,6 +1937,7 @@ func (s *taskService) applyReviewAssignee(ctx context.Context, task *domain.Task
 
 	task.AssigneeID = reviewerID
 	task.AssigneeType = assigneeType
+	s.ensureAssigneeProjectMember(ctx, task.ProjectID, task.AssigneeID, task.AssigneeType)
 	task.UpdatedAt = timeNow()
 	if err := s.taskRepo.Update(ctx, task); err != nil {
 		log.Printf("[review-assign] WARNING: failed to assign set_reviewer for task %s: %v", task.ID, err)
@@ -1956,6 +1975,7 @@ func (s *taskService) restorePreReviewAssignee(ctx context.Context, task *domain
 
 	task.AssigneeID = prevAssigneeID
 	task.AssigneeType = prevAssigneeType
+	s.ensureAssigneeProjectMember(ctx, task.ProjectID, task.AssigneeID, task.AssigneeType)
 	task.PreReviewAssigneeID = nil
 	task.PreReviewAssigneeType = nil
 	task.UpdatedAt = timeNow()
