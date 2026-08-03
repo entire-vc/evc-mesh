@@ -195,12 +195,12 @@ jobs:
 
     steps:
       - name: Checkout evc-mesh
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
       - name: Set up Python (gate self-checks)
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: '3.12'
 
@@ -367,7 +367,7 @@ jobs:
 
       - name: Set up Go
         if: steps.scope.outputs.relevant == 'true'
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
@@ -376,7 +376,7 @@ jobs:
       # than silently serving the old weights against the new baseline.
       - name: Cache the CI embedder model
         if: steps.scope.outputs.relevant == 'true'
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: scripts/memory-bench/.fastembed_cache
           key: fastembed-bge-small-en-v1.5-v1
@@ -464,7 +464,7 @@ jobs:
 
       - name: Checkout evc-mesh-mcp
         if: steps.scope.outputs.relevant == 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: entire-vc/evc-mesh-mcp
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -575,7 +575,7 @@ jobs:
       # same not-comparable this workflow already exits 2 over (`arm-mismatch`).
       - name: Upload the re-snapped branch baseline
         if: ${{ !cancelled() && steps.resnap.outcome == 'success' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: baseline-retrieval-branch
           path: |
@@ -786,7 +786,7 @@ jobs:
 
       - name: Upload branch-arm results
         if: always() && steps.scope.outputs.relevant == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: recall-gate-branch-results
           path: |
@@ -947,7 +947,7 @@ jobs:
 
     steps:
       - name: Checkout evc-mesh
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -961,7 +961,7 @@ jobs:
       # IS a legitimate merge block, and unlike an infra failure the author can
       # clear it: list the file.
       - name: Set up Python (gate self-checks)
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: '3.12'
 
@@ -1108,7 +1108,7 @@ jobs:
 
       - name: Checkout evc-mesh-mcp
         if: steps.scope.outputs.relevant == 'true' && steps.version.outputs.rc == '0'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: entire-vc/evc-mesh-mcp
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -1116,7 +1116,7 @@ jobs:
 
       - name: Set up Go
         if: steps.scope.outputs.relevant == 'true' && steps.version.outputs.rc == '0'
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version-file: evc-mesh-mcp/go.mod
           cache-dependency-path: evc-mesh-mcp/go.sum
@@ -1267,7 +1267,7 @@ jobs:
 
       - name: Upload the re-snapped recall baseline
         if: always() && steps.mode.outputs.capture == 'true' && steps.scope.outputs.relevant == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: recall-gate-baseline
           path: |
@@ -1568,7 +1568,7 @@ jobs:
 
       - name: Upload recall-gate results
         if: always() && steps.scope.outputs.relevant == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: recall-gate-results
           path: |
@@ -1695,17 +1695,17 @@ jobs:
             >> "$GITHUB_OUTPUT"
 
       - name: Checkout evc-mesh
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Checkout evc-mesh-mcp
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: entire-vc/evc-mesh-mcp
           token: ${{ secrets.GITHUB_TOKEN }}
           path: evc-mesh-mcp
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version-file: evc-mesh-mcp/go.mod
           cache-dependency-path: evc-mesh-mcp/go.sum
@@ -1718,7 +1718,7 @@ jobs:
           echo "mesh-mcp built: $(file ../mesh-mcp-bin)"
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: '3.12'
 
@@ -1799,7 +1799,7 @@ jobs:
 
       - name: Upload the re-snapped baseline
         if: always() && steps.mode.outputs.capture == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: memory-bench-baseline
           path: |
@@ -1974,7 +1974,7 @@ jobs:
 
       - name: Upload benchmark results
         if: always() && steps.mode.outputs.capture != 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: memory-bench-results
           path: |
@@ -2103,10 +2103,10 @@ jobs:
       # unfalsifiable; reproducing the OLD one is the free calibration.
       # ---------------------------------------------------------------------
       - name: Checkout evc-mesh
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: '3.12'
 
