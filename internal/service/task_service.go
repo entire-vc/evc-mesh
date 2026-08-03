@@ -907,6 +907,22 @@ func (s *taskService) CreateSubtask(ctx context.Context, parentTaskID uuid.UUID,
 	if creatorType == domain.ActorTypeAgent && creatorID != uuid.Nil {
 		s.ensureAgentProjectMember(ctx, parent.ProjectID, creatorID)
 	}
+	// Resolve the assignee's real type before enrolling. This is the only enrolment
+	// site whose type is caller-supplied and therefore untrustworthy: the HTTP handler
+	// defaults an omitted assignee_type to "agent", so a subtask assigned to a human
+	// arrived here typed as an agent. ensureAssigneeProjectMember switches on that
+	// type, so the enrolment went to ensureAgentProjectMember with a user UUID, the
+	// project_members.agent_id foreign key rejected the insert, and the error was
+	// logged and swallowed — no enrolment, no signal, and the assignee left holding a
+	// task they could not transition. Resolving by directory lookup also stores the
+	// correct type on the row instead of persisting the handler's guess.
+	//
+	// The other six enrolment sites do not need this: Create, Update, MoveTask and
+	// AssignTask already resolve, applyReviewAssignee gets its type from
+	// resolveSetReviewer's own agent lookup, and restorePreReviewAssignee restores a
+	// type that was resolved when it was stashed.
+	child.AssigneeType = s.resolveAssigneeType(ctx, child.AssigneeID, child.AssigneeType)
+
 	// ...and the assignee, who is usually NOT the creator here: decomposing an epic
 	// means creating subtasks owned by whoever will do the work. Enrolling only the
 	// creator leaves that owner able to comment on a task they cannot transition.
@@ -1481,6 +1497,17 @@ func (s *taskService) evaluateRulesForMove(ctx context.Context, task *domain.Tas
 // Task creation from a recurring schedule or a template routes through Create.
 // If you add an eighth, add the call — `grep -n 'AssigneeID = \|AssigneeID:'`
 // over internal/service is how this list was checked.
+//
+// The caller must pass a TRUE assignee type, because this function dispatches on it
+// and a wrong type enrols against the wrong column: an agent-typed user UUID hits the
+// project_members.agent_id foreign key, the insert is rejected, and the failure is
+// logged and swallowed — indistinguishable from success at the call site. Four of the
+// seven resolve it via resolveAssigneeType (Create, Update, MoveTask, AssignTask) and
+// CreateSubtask now does too, because its type is caller-supplied. The remaining two
+// are safe without a lookup: applyReviewAssignee takes the type from
+// resolveSetReviewer's agent lookup, restorePreReviewAssignee restores a type that was
+// already resolved when it was stashed. `grep -n 'resolveAssigneeType(ctx' ` next to
+// the list above is how that split was checked.
 //
 // Being the assignee of a
 // task in a project you are not a member of is a dead end: task-scoped routes
