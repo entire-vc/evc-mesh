@@ -818,6 +818,11 @@ func main() {
 	api.DELETE("/tasks/:task_id", taskHandler.Delete, wsAccess, rbac(mw.PermDeleteTask))
 	api.POST("/tasks/:task_id/move", taskHandler.MoveTask, wsAccess, rbac(mw.PermUpdateTask))
 	api.POST("/tasks/:task_id/move-to-project", taskHandler.MoveToProject, wsAccess, rbac(mw.PermUpdateTask))
+	// Statuses of the task's project, under the SAME gate as /tasks/:task_id/move.
+	// Resolving a status slug is a precondition of the move; gating the lookup more
+	// strictly than the move itself makes the move unreachable and reports the refusal
+	// against the wrong resource. Project-scoped status routes above keep projAccess.
+	api.GET("/tasks/:task_id/statuses", statusHandler.ListByTask, wsAccess)
 	api.GET("/tasks/:task_id/subtasks", taskHandler.ListSubtasks, wsAccess)
 	api.POST("/tasks/:task_id/subtasks", taskHandler.CreateSubtask, wsAccess, rbac(mw.PermCreateTask))
 	api.POST("/tasks/:task_id/assign", taskHandler.AssignTask, wsAccess, rbac(mw.PermUpdateTask))

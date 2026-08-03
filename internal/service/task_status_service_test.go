@@ -276,3 +276,64 @@ func TestTaskStatusService_Reorder(t *testing.T) {
 		})
 	}
 }
+
+// ---------------------------------------------------------------------------
+// TestTaskStatusService_ListByTask
+// ---------------------------------------------------------------------------
+
+// TestTaskStatusService_ListByTask verifies the task→project hop that lets a
+// workspace-gated caller resolve a status slug for a workspace-gated move.
+func TestTaskStatusService_ListByTask(t *testing.T) {
+	t.Run("returns the statuses of the task's own project", func(t *testing.T) {
+		svc, statusRepo, taskRepo := setupTaskStatusService()
+
+		ownProject := uuid.New()
+		otherProject := uuid.New()
+
+		wantID := uuid.New()
+		statusRepo.items[wantID] = &domain.TaskStatus{
+			ID: wantID, ProjectID: ownProject, Name: "Done", Slug: "done",
+			Category: domain.StatusCategoryDone,
+		}
+		// A decoy in a different project: if the lookup ignored the task's project
+		// this would leak in, and the caller would resolve a slug to a foreign status.
+		decoyID := uuid.New()
+		statusRepo.items[decoyID] = &domain.TaskStatus{
+			ID: decoyID, ProjectID: otherProject, Name: "Done", Slug: "done",
+			Category: domain.StatusCategoryDone,
+		}
+
+		taskID := uuid.New()
+		taskRepo.items[taskID] = &domain.Task{
+			ID: taskID, ProjectID: ownProject, StatusID: wantID, Title: "A task",
+		}
+
+		got, err := svc.ListByTask(context.Background(), taskID)
+		require.NoError(t, err)
+		require.Len(t, got, 1, "must return only the task's own project statuses")
+		assert.Equal(t, wantID, got[0].ID)
+		assert.Equal(t, ownProject, got[0].ProjectID)
+	})
+
+	t.Run("unknown task is 404, not an empty list", func(t *testing.T) {
+		svc, _, _ := setupTaskStatusService()
+
+		got, err := svc.ListByTask(context.Background(), uuid.New())
+		require.Error(t, err)
+		assert.Nil(t, got)
+
+		var apiErr *apierror.Error
+		require.ErrorAs(t, err, &apiErr)
+		assert.Equal(t, http.StatusNotFound, apiErr.Code,
+			"an unknown task must not degrade into an empty status list — "+
+				"a caller would read that as 'no such status' instead of 'no such task'")
+	})
+
+	t.Run("repository error propagates", func(t *testing.T) {
+		svc, _, taskRepo := setupTaskStatusService()
+		taskRepo.errToReturn = assert.AnError
+
+		_, err := svc.ListByTask(context.Background(), uuid.New())
+		require.Error(t, err)
+	})
+}

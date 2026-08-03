@@ -210,6 +210,9 @@ type TaskStatusService interface {
 	Update(ctx context.Context, status *domain.TaskStatus) error
 	Delete(ctx context.Context, id uuid.UUID) error
 	ListByProject(ctx context.Context, projectID uuid.UUID) ([]domain.TaskStatus, error)
+	// ListByTask returns the statuses of the project owning the given task, so a
+	// workspace-gated caller can resolve a status slug for a workspace-gated move.
+	ListByTask(ctx context.Context, taskID uuid.UUID) ([]domain.TaskStatus, error)
 	Reorder(ctx context.Context, projectID uuid.UUID, statusIDs []uuid.UUID) error
 }
 

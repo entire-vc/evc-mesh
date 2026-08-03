@@ -234,3 +234,90 @@ func TestTaskStatusHandler_Reorder_ServiceError(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
 }
+
+// --- TestTaskStatusHandler_ListByTask ---
+
+func TestTaskStatusHandler_ListByTask_Success(t *testing.T) {
+	taskID := uuid.New()
+	projID := uuid.New()
+	statuses := []domain.TaskStatus{
+		{ID: uuid.New(), ProjectID: projID, Name: "Todo", Slug: "todo", Category: domain.StatusCategoryTodo, Position: 0},
+		{ID: uuid.New(), ProjectID: projID, Name: "Done", Slug: "done", Category: domain.StatusCategoryDone, Position: 1},
+	}
+
+	var gotTaskID uuid.UUID
+	mockSvc := &MockTaskStatusService{
+		ListByTaskFunc: func(ctx context.Context, id uuid.UUID) ([]domain.TaskStatus, error) {
+			gotTaskID = id
+			return statuses, nil
+		},
+	}
+	h, e := setupTaskStatusTest(mockSvc)
+
+	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/tasks/:task_id/statuses")
+	c.SetParamNames("task_id")
+	c.SetParamValues(taskID.String())
+
+	err := h.ListByTask(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, taskID, gotTaskID, "handler must pass the task_id through, not a project id")
+
+	var result []domain.TaskStatus
+	err = json.Unmarshal(rec.Body.Bytes(), &result)
+	require.NoError(t, err)
+	require.Len(t, result, 2)
+	// The MCP slug resolver reads exactly these fields; the shape must match
+	// GET /projects/:proj_id/statuses so it is a drop-in replacement.
+	assert.Equal(t, "todo", result[0].Slug)
+	assert.Equal(t, domain.StatusCategoryTodo, result[0].Category)
+	assert.NotEqual(t, uuid.Nil, result[0].ID)
+}
+
+func TestTaskStatusHandler_ListByTask_InvalidTaskID(t *testing.T) {
+	called := false
+	mockSvc := &MockTaskStatusService{
+		ListByTaskFunc: func(ctx context.Context, id uuid.UUID) ([]domain.TaskStatus, error) {
+			called = true
+			return nil, nil
+		},
+	}
+	h, e := setupTaskStatusTest(mockSvc)
+
+	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/tasks/:task_id/statuses")
+	c.SetParamNames("task_id")
+	c.SetParamValues("not-a-uuid")
+
+	err := h.ListByTask(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.False(t, called, "service must not be reached with an unparseable task_id")
+}
+
+func TestTaskStatusHandler_ListByTask_TaskNotFound(t *testing.T) {
+	mockSvc := &MockTaskStatusService{
+		ListByTaskFunc: func(ctx context.Context, id uuid.UUID) ([]domain.TaskStatus, error) {
+			return nil, apierror.NotFound("Task")
+		},
+	}
+	h, e := setupTaskStatusTest(mockSvc)
+
+	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/tasks/:task_id/statuses")
+	c.SetParamNames("task_id")
+	c.SetParamValues(uuid.New().String())
+
+	err := h.ListByTask(c)
+	require.NoError(t, err)
+	// A missing task must read as 404, never as a permission refusal — mislabelling
+	// this as 403 is the exact failure mode this endpoint exists to remove.
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+}

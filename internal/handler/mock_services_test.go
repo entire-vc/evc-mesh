@@ -130,6 +130,7 @@ type MockTaskStatusService struct {
 	UpdateFunc        func(ctx context.Context, status *domain.TaskStatus) error
 	DeleteFunc        func(ctx context.Context, id uuid.UUID) error
 	ListByProjectFunc func(ctx context.Context, projectID uuid.UUID) ([]domain.TaskStatus, error)
+	ListByTaskFunc    func(ctx context.Context, taskID uuid.UUID) ([]domain.TaskStatus, error)
 	ReorderFunc       func(ctx context.Context, projectID uuid.UUID, statusIDs []uuid.UUID) error
 }
 
@@ -157,6 +158,13 @@ func (m *MockTaskStatusService) Delete(ctx context.Context, id uuid.UUID) error 
 func (m *MockTaskStatusService) ListByProject(ctx context.Context, projectID uuid.UUID) ([]domain.TaskStatus, error) {
 	if m.ListByProjectFunc != nil {
 		return m.ListByProjectFunc(ctx, projectID)
+	}
+	return nil, nil
+}
+
+func (m *MockTaskStatusService) ListByTask(ctx context.Context, taskID uuid.UUID) ([]domain.TaskStatus, error) {
+	if m.ListByTaskFunc != nil {
+		return m.ListByTaskFunc(ctx, taskID)
 	}
 	return nil, nil
 }
