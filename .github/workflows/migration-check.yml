@@ -35,14 +35,14 @@ jobs:
           --health-timeout 5s
           --health-retries 5
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - name: Check migration version ordering
         run: |
           git fetch origin ${{ github.base_ref || 'main' }} --depth=1
           bash scripts/check-migration-version.sh migrations
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
       - name: Install goose

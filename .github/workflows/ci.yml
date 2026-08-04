@@ -23,7 +23,7 @@ jobs:
     name: "Self-host env (no new required vars)"
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       # A compose variable that is required with no default breaks upgrades
       # for every existing self-host install that lacks it — at config-parse
       # time, before a container starts, which our own prod never sees
@@ -57,8 +57,8 @@ jobs:
     name: Lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
       - name: golangci-lint
@@ -101,8 +101,8 @@ jobs:
         # GitHub Actions services don't support 'command',
         # so we'll configure NATS connection to work without JetStream in unit tests
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
@@ -172,7 +172,7 @@ jobs:
       # upload answered "object storage is unreachable" and the workspace-icon
       # test could not check the one thing it exists to check.
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Start NATS with JetStream enabled
         run: |
           docker run -d --name nats -p 4222:4222 nats:2-alpine \
@@ -199,7 +199,7 @@ jobs:
           done
           echo "MinIO did not become healthy"; docker logs minio; exit 1
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
@@ -289,11 +289,11 @@ jobs:
         ports:
           - 4222:4222
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
@@ -429,11 +429,11 @@ jobs:
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v6
-      - uses: pnpm/action-setup@v6
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6.0.9
         with:
           version: 10
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: pnpm
@@ -462,11 +462,11 @@ jobs:
       image: mcr.microsoft.com/playwright:v1.44.0-jammy
       options: --ipc=host
     steps:
-      - uses: actions/checkout@v6
-      - uses: pnpm/action-setup@v6
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6.0.9
         with:
           version: 10
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: pnpm
@@ -496,16 +496,16 @@ jobs:
     runs-on: ubuntu-latest
     needs: test
     steps:
-      - uses: actions/checkout@v6
-      - uses: pnpm/action-setup@v6
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6.0.9
         with:
           version: 10
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: pnpm
           cache-dependency-path: web/pnpm-lock.yaml
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
