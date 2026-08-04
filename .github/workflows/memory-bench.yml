@@ -1696,6 +1696,25 @@ jobs:
 
       - name: Checkout evc-mesh
         uses: actions/checkout@v4
+        with:
+          # `check_serving_version.py` decides "prod is close enough" by DIFFING
+          # prod's commit against this one and asking whether anything
+          # deploy-backend.yml deploys changed. Both commits therefore have to be
+          # in the checkout, and the default depth-1 clone has exactly one.
+          #
+          # Without this the pin below cannot fail SAFE — it can only fail. The
+          # string compare that precedes the diff means the step passes solely
+          # when prod already serves this exact sha; every other case, including
+          # the ordinary one (a CI-only merge prod will never deploy), reads as
+          # "commit <sha> is not in this checkout" and refuses. The pin that was
+          # added so a capture could not straddle a deploy would instead have
+          # blocked EVERY capture, forever.
+          #
+          # Observed on the first dispatch after that pin merged: run
+          # 30909509069, prod on ff6a694, checkout 328ed3f, diff empty because
+          # #505 touched only CI files — polled 900s and aborted a capture that
+          # was correctly attributable the whole time.
+          fetch-depth: 0
 
       # ---------------------------------------------------------------------
       # Which binary is this CAPTURE about to measure?
