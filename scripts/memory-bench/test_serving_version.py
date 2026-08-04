@@ -114,6 +114,56 @@ class CaptureStepCallsTheGuard(unittest.TestCase):
         body = workflow_step(self.text, "Re-snap the recall baseline")
         self.assertIn("--served-commit", body)
 
+    def test_the_advisory_capture_step_is_pinned_the_same_way(self):
+        """The ADVISORY capture writes a standing floor too, so it gets the same guard.
+
+        The required arm got version attribution in #410; this arm kept none of
+        it, and the gap is worse here rather than milder: `baseline.json` is what
+        the advisory arm is judged against for weeks, and until #f0e655e7 it was
+        a file that stated neither its retrieval mode nor its binary. A capture
+        straddling a deploy would have become that floor with nothing in the file
+        saying so.
+
+        Asserted per-property rather than by diffing the two steps: the arms
+        legitimately differ (different baseline file, different refusal text), so
+        a "these two steps are identical" test would go false the day either one
+        is edited for a reason that has nothing to do with this guard.
+        """
+        body = workflow_step(self.text, "Re-snap the end-to-end baseline")
+        self.assertTrue(body.strip(), "the advisory capture step was not found")
+        self.assertIn("SERVED_AT_START", body)
+        self.assertIn("--served-commit", body)
+        self.assertIn("check_serving_version.py --was", body)
+        self.assertIn("rm -f baseline.json", body)
+
+    def test_the_advisory_capture_pins_before_it_spends_an_hour(self):
+        """Pre-flight pin, and it must gate the capture rather than merely log it.
+
+        `--was` alone would catch a mid-run deploy only AFTER paying for the
+        measurement. The pre-flight step is what makes an unattributable capture
+        cost the wait and nothing else — so it must both run and be able to stop
+        the job (`exit $rc`), not just record a sha.
+        """
+        body = workflow_step(self.text, "Which commit will this capture measure?")
+        self.assertTrue(body.strip(), "the pre-flight pin step was not found")
+        self.assertIn("check_serving_version.py", body)
+        self.assertIn("exit $rc", body)
+
+    def test_the_two_pin_steps_do_not_share_a_name(self):
+        """`workflow_step` takes the FIRST match, so a shared name is a vacuous test.
+
+        The recall arm already has a step called `Which commit is prod serving?`.
+        Had the advisory one reused that name, the test above would have sliced
+        the recall arm's body, passed on ITS wiring, and reported the advisory
+        arm as pinned while it was not.
+        """
+        for name in ("Which commit is prod serving?",
+                     "Which commit will this capture measure?"):
+            self.assertEqual(
+                1, self.text.count(f"      - name: {name}\n"),
+                f"step name {name!r} is not unique in the workflow",
+            )
+
     def test_the_scoring_step_still_has_its_own_check(self):
         """The two arms must not drift — fixing one by moving it is not a fix."""
         body = workflow_step(self.text, "Run recall gate (no LLM)")
