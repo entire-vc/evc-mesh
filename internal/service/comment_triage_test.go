@@ -2274,3 +2274,122 @@ func TestCompletionKeywordSearchWindow_AnchorsToRealMarker(t *testing.T) {
 		"the window must stop at the real marker")
 	assert.True(t, utf8.ValidString(win), "window must never split a multi-byte rune")
 }
+
+// ---------------------------------------------------------------------------
+// scanHumanGateOwnership vs enforceBlockingTriage disagreement — task #5d3d2402
+//
+// enforceBlockingTriage arms human_gate on hasBlockingMarker alone; it has
+// never looked at negators. Before this fix, scanHumanGateOwnership (which
+// backs both GetHumanGateOwner and releaseHumanGateOnWithdrawal) skipped a
+// marker-bearing comment whenever hasNegatorInScope found a negator AFTER the
+// marker WITHIN THAT SAME COMMENT — e.g. "❓ Blocking @pavel: … отвечать не
+// нужно, отзову сам". A comment shaped exactly like that armed the gate and
+// simultaneously had no recognised owner: ReasonIfNot="no_live_marker",
+// ClearableByOwner=false for everyone, including the marker's own author.
+// Live census (task #649c966b's own probe #7badb727): 2 of 46 gated cards
+// were stuck exactly this way.
+// ---------------------------------------------------------------------------
+
+// selfNegatingMarkerBody is the literal shape that triggered the live probe:
+// a marker whose own trailing clause asserts a triageExitNegators substring
+// ("не нужно") about answering IT, not about a different, earlier ask.
+const selfNegatingMarkerBody = "❓ **Blocking @pavel**: это техническая проба механизма гейта, " +
+	"отвечать не нужно — отзову сам через пару минут."
+
+// TestGetHumanGateOwner_MarkerSelfNegated_StillOwnedAndClearable is this
+// task's AC1: a marker comment that also asserts a negator about itself, in
+// its own body, must still report a clearable owner — the marker's author —
+// not the no_live_marker dead end. This is the direct scanHumanGateOwnership
+// regression test: it seeds the comment directly (no Create call), so it
+// isolates the scan from enforceBlockingTriage's own behavior.
+func TestGetHumanGateOwner_MarkerSelfNegated_StillOwnedAndClearable(t *testing.T) {
+	env := setupTriageEnv(t, true)
+	taskID := env.seedGatedTask(env.inProgressID)
+	askerID := uuid.New()
+	cid := uuid.New()
+	env.commentRepo.items[cid] = &domain.Comment{
+		ID: cid, TaskID: taskID, AuthorID: askerID, AuthorType: domain.ActorTypeAgent,
+		Body:      selfNegatingMarkerBody,
+		CreatedAt: frozenTime.Add(-2 * time.Hour),
+	}
+
+	info, err := env.svc.GetHumanGateOwner(context.Background(), taskID)
+	require.NoError(t, err)
+	require.NotNil(t, info)
+	assert.True(t, info.Gated)
+	require.NotNil(t, info.OwnerAgentID, "the marker's own author must still be reported as owner")
+	assert.Equal(t, askerID, *info.OwnerAgentID)
+	assert.True(t, info.ClearableByOwner,
+		"sole marker author must be clearable now — must not fall back to no_live_marker")
+	assert.Empty(t, info.ReasonIfNot)
+}
+
+// TestEnforceBlockingTriage_MarkerSelfNegated_StillArmsGate documents the
+// asymmetry this task fixes: enforceBlockingTriage arms on hasBlockingMarker
+// alone and has never consulted negators, so a self-negating marker body
+// still arms the gate exactly like an ordinary one. The fix makes
+// scanHumanGateOwnership agree with this, not the other way around — this
+// test pins the arm side so a future change can't "fix" the mismatch by
+// silently making arming start honouring negators instead (fork option (A)
+// the task explicitly rejected).
+func TestEnforceBlockingTriage_MarkerSelfNegated_StillArmsGate(t *testing.T) {
+	env := setupTriageEnv(t, true)
+	taskID := env.seedTask(env.inProgressID)
+
+	comment := &domain.Comment{
+		TaskID: taskID, AuthorID: uuid.New(), AuthorType: domain.ActorTypeAgent,
+		Body: selfNegatingMarkerBody,
+	}
+	require.NoError(t, env.svc.Create(context.Background(), comment))
+
+	gateCalls := env.taskMover.humanGateCalls()
+	require.Len(t, gateCalls, 1, "a self-negating marker must still arm human_gate")
+	assert.True(t, gateCalls[0].value)
+}
+
+// TestReleaseHumanGateOnWithdrawal_MarkerSelfNegated_AuthorCanWithdrawLater is
+// this task's AC2, the bidirectional control: with the scan no longer
+// disqualifying a self-negating marker, the marker's own author must still
+// be able to withdraw it later via an ordinary SEPARATE comment — the
+// releaseHumanGateOnWithdrawal path this fix does not touch.
+func TestReleaseHumanGateOnWithdrawal_MarkerSelfNegated_AuthorCanWithdrawLater(t *testing.T) {
+	env := setupTriageEnv(t, true)
+	taskID := env.seedGatedTask(env.inProgressID)
+	askerID := uuid.New()
+	cid := uuid.New()
+	env.commentRepo.items[cid] = &domain.Comment{
+		ID: cid, TaskID: taskID, AuthorID: askerID, AuthorType: domain.ActorTypeAgent,
+		Body:      selfNegatingMarkerBody,
+		CreatedAt: frozenTime.Add(-2 * time.Hour),
+	}
+
+	ctx := actorctx.WithActor(context.Background(), askerID, domain.ActorTypeAgent)
+	withdrawal := &domain.Comment{
+		TaskID: taskID, AuthorID: askerID, AuthorType: domain.ActorTypeAgent,
+		Body: "Блокер выше снят — вопрос решился сам, ask больше не нужен.",
+	}
+	require.NoError(t, env.svc.Create(ctx, withdrawal))
+
+	gateCalls := env.taskMover.humanGateCalls()
+	require.Len(t, gateCalls, 1, "the marker's own author must be able to withdraw it via a later comment")
+	assert.False(t, gateCalls[0].value)
+}
+
+// TestGetHumanGateOwner_RawArmedNoMarker_StillNoLiveMarker is this task's
+// AC3, the negative control: a gate armed via raw PATCH/UI with NO marker
+// comment in the thread at all must still report no owner. This must not
+// regress into "any negator-adjacent thread reports an owner" — the fix is
+// scoped to a marker's own self-negation, not to inventing owners generally.
+func TestGetHumanGateOwner_RawArmedNoMarker_StillNoLiveMarker(t *testing.T) {
+	env := setupTriageEnv(t, true)
+	taskID := env.seedGatedTask(env.inProgressID)
+	env.seedRawArmMarker(taskID, frozenTime.Add(-1*time.Hour))
+
+	info, err := env.svc.GetHumanGateOwner(context.Background(), taskID)
+	require.NoError(t, err)
+	require.NotNil(t, info)
+	assert.True(t, info.Gated)
+	assert.Nil(t, info.OwnerAgentID)
+	assert.False(t, info.ClearableByOwner)
+	assert.Equal(t, "no_live_marker", info.ReasonIfNot)
+}
