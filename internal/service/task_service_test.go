@@ -1920,6 +1920,91 @@ func TestTaskService_Update_DelegationLevelNoNotifyIfUnchanged(t *testing.T) {
 	}
 }
 
+// setupTaskServiceForAssigneeNotify wires a task service with both the
+// agent-notify mock and the user-facing notification mock, so Update's
+// dispatchUserNotification("task.assigned") call is observable.
+func setupTaskServiceForAssigneeNotify() (*taskService, *MockTaskRepository, *MockNotificationService, *MockProjectRepository) {
+	taskRepo := NewMockTaskRepository()
+	statusRepo := NewMockTaskStatusRepository()
+	depRepo := NewMockTaskDependencyRepository()
+	activityRepo := NewMockActivityLogRepository()
+	notifySvc := NewMockNotificationService()
+	projRepo := NewMockProjectRepository()
+
+	svc := NewTaskService(taskRepo, statusRepo, depRepo, activityRepo,
+		WithNotificationService(notifySvc),
+		WithProjectRepo(projRepo),
+	).(*taskService)
+	timeNow = func() time.Time { return frozenTime }
+	return svc, taskRepo, notifySvc, projRepo
+}
+
+func TestTaskService_Update_AssigneeChanged_DispatchesUserNotification(t *testing.T) {
+	svc, taskRepo, notifySvc, projRepo := setupTaskServiceForAssigneeNotify()
+	ctx := context.Background()
+
+	projID := uuid.New()
+	wsID := uuid.New()
+	projRepo.items[projID] = &domain.Project{ID: projID, WorkspaceID: wsID}
+
+	oldAssignee := uuid.New()
+	newAssignee := uuid.New()
+	taskID := uuid.New()
+	taskRepo.items[taskID] = &domain.Task{
+		ID: taskID, ProjectID: projID, Title: "T",
+		AssigneeID: &oldAssignee, AssigneeType: domain.AssigneeTypeAgent,
+	}
+
+	err := svc.Update(ctx, &domain.Task{
+		ID: taskID, ProjectID: projID, Title: "T",
+		AssigneeID: &newAssignee, AssigneeType: domain.AssigneeTypeAgent,
+	})
+	require.NoError(t, err)
+
+	var found bool
+	for _, call := range notifySvc.Calls() {
+		if call.EventType == "task.assigned" {
+			found = true
+			assert.Contains(t, call.Title, "Task assigned:")
+		}
+	}
+	assert.True(t, found, "expected task.assigned in-app notification when assignee changes via Update")
+}
+
+// TestTaskService_Update_AssigneeUnchanged_DoesNotDispatchNotification is a
+// regression test for a pointer-vs-value comparison bug: existing and the
+// incoming task come from two independent reads, so their AssigneeID
+// pointers differ even when the UUID they point to is identical. Using two
+// separately allocated pointers to the SAME value (not literally sharing one
+// &var, which would mask the bug) reproduces that.
+func TestTaskService_Update_AssigneeUnchanged_DoesNotDispatchNotification(t *testing.T) {
+	svc, taskRepo, notifySvc, projRepo := setupTaskServiceForAssigneeNotify()
+	ctx := context.Background()
+
+	projID := uuid.New()
+	wsID := uuid.New()
+	projRepo.items[projID] = &domain.Project{ID: projID, WorkspaceID: wsID}
+
+	assignee := uuid.New()
+	taskID := uuid.New()
+	taskRepo.items[taskID] = &domain.Task{
+		ID: taskID, ProjectID: projID, Title: "T",
+		AssigneeID: &assignee, AssigneeType: domain.AssigneeTypeAgent,
+	}
+
+	sameValueDifferentPointer := assignee
+	err := svc.Update(ctx, &domain.Task{
+		ID: taskID, ProjectID: projID, Title: "T changed",
+		AssigneeID: &sameValueDifferentPointer, AssigneeType: domain.AssigneeTypeAgent,
+	})
+	require.NoError(t, err)
+
+	for _, call := range notifySvc.Calls() {
+		assert.NotEqual(t, "task.assigned", call.EventType,
+			"must not notify task.assigned when assignee value is unchanged, even via a different pointer")
+	}
+}
+
 // ---------------------------------------------------------------------------
 // TestTaskService_*Reviewer* — Reviewer field notification tests
 // ---------------------------------------------------------------------------
@@ -2876,4 +2961,27 @@ func TestMoveToProject_NoSubtasks(t *testing.T) {
 
 	assert.Equal(t, f.projectB, updated.ProjectID, "task must be moved to projectB")
 	assert.Equal(t, f.todoB, f.taskRepo.items[parentID].StatusID, "status must be remapped to target project default")
+}
+
+// Update's two early exits. They are trivial branches, but Update is the busiest
+// write path in the service and "task vanished between read and write" is a real
+// concurrent-delete shape — a silent nil-deref here would surface as a 500 on an
+// ordinary PATCH.
+func TestTaskService_Update_MissingTaskReturnsNotFound(t *testing.T) {
+	svc, _, _ := setupTaskService()
+
+	err := svc.Update(context.Background(), &domain.Task{ID: uuid.New(), Title: "T"})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Task", "a missing task must surface as NotFound, not a nil-deref")
+}
+
+func TestTaskService_Update_RepoErrorPropagates(t *testing.T) {
+	svc, taskRepo, _ := setupTaskService()
+	taskRepo.errToReturn = assert.AnError
+
+	err := svc.Update(context.Background(), &domain.Task{ID: uuid.New(), Title: "T"})
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, assert.AnError, "a read failure must propagate, not be reported as NotFound")
 }

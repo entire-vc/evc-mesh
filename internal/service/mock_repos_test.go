@@ -1379,6 +1379,63 @@ func (m *MockAgentNotifyService) Calls() []AgentNotification {
 }
 
 // ---------------------------------------------------------------------------
+// MockNotificationService — records Notify calls for assertion in tests.
+// Preference/read-state methods are unused by task_service tests and return
+// zero values.
+// ---------------------------------------------------------------------------
+
+type MockNotificationService struct {
+	mu    sync.Mutex
+	calls []domain.NotificationEvent
+}
+
+func NewMockNotificationService() *MockNotificationService {
+	return &MockNotificationService{}
+}
+
+func (m *MockNotificationService) Notify(_ context.Context, event domain.NotificationEvent) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.calls = append(m.calls, event)
+}
+
+func (m *MockNotificationService) Calls() []domain.NotificationEvent {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]domain.NotificationEvent, len(m.calls))
+	copy(out, m.calls)
+	return out
+}
+
+func (m *MockNotificationService) GetPreferences(_ context.Context, _ uuid.UUID) ([]domain.NotificationPreference, error) {
+	return nil, nil
+}
+
+func (m *MockNotificationService) UpsertPreferences(_ context.Context, pref *domain.NotificationPreference) (*domain.NotificationPreference, error) {
+	return pref, nil
+}
+
+func (m *MockNotificationService) DeletePreference(_ context.Context, _, _ uuid.UUID) error {
+	return nil
+}
+
+func (m *MockNotificationService) ListUnread(_ context.Context, _ uuid.UUID) ([]domain.Notification, error) {
+	return nil, nil
+}
+
+func (m *MockNotificationService) CountUnread(_ context.Context, _ uuid.UUID) (int, error) {
+	return 0, nil
+}
+
+func (m *MockNotificationService) MarkRead(_ context.Context, _ uuid.UUID, _ []uuid.UUID) error {
+	return nil
+}
+
+func (m *MockNotificationService) MarkAllRead(_ context.Context, _ uuid.UUID) error {
+	return nil
+}
+
+// ---------------------------------------------------------------------------
 // MockAgentService — minimal stub for comment mention tests.
 // Only GetBySlug is implemented; all other methods panic.
 // ---------------------------------------------------------------------------

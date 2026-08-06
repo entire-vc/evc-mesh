@@ -384,7 +384,11 @@ func (s *taskService) Update(ctx context.Context, task *domain.Task) error {
 	if existing.Priority != task.Priority {
 		changes["priority"] = map[string]interface{}{"old": string(existing.Priority), "new": string(task.Priority)}
 	}
-	assigneeChanged := existing.AssigneeID != task.AssigneeID
+	// existing and task come from two separate GetByID calls, so their
+	// AssigneeID pointers never compare equal even when unchanged — compare
+	// by value. Shares uuidPtrChanged with the reviewer diff above rather than
+	// carrying a second, inverted copy of the same three lines.
+	assigneeChanged := uuidPtrChanged(existing.AssigneeID, task.AssigneeID)
 	if assigneeChanged {
 		changes["assignee_id"] = map[string]interface{}{"old": existing.AssigneeID, "new": task.AssigneeID}
 	}
@@ -428,6 +432,10 @@ func (s *taskService) Update(ctx context.Context, task *domain.Task) error {
 		s.notifyAssignedAgent(ctx, task, "task.assigned", map[string]any{
 			"assignee_id": map[string]any{"old": existing.AssigneeID, "new": task.AssigneeID},
 		})
+
+		// Dispatch in-app notification to subscribed workspace users — Create
+		// and AssignTask already do this, Update never did.
+		s.dispatchUserNotification(ctx, task, "task.assigned", "Task assigned: "+task.Title, "")
 	}
 
 	// Notify assignee agent when delegation_level changes (e.g. task becomes supervised).
