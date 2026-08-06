@@ -14,6 +14,7 @@ import {
   Upload,
 } from "lucide-react";
 import { api } from "@/lib/api";
+import { toast } from "@/components/ui/toast";
 import { formatBytes, formatRelative } from "@/lib/utils";
 import { useProjectTrIntegration } from "@/hooks/useProjectTrIntegration";
 import { Button } from "@/components/ui/button";
@@ -175,8 +176,9 @@ export function ArtifactList({ taskId, refreshKey, projId, onRelayDocSelect }: A
       );
       window.open(data.url, "_blank");
     } catch {
-      const baseUrl = import.meta.env.VITE_API_URL || "";
-      window.open(`${baseUrl}/api/v1/artifacts/${artifactId}/download`, "_blank");
+      // The bare API endpoint requires auth the browser won't send on a plain
+      // window.open — it can only ever 401, so don't fall back to it.
+      toast("Could not open file — try downloading it instead");
     }
   };
 
@@ -198,8 +200,8 @@ export function ArtifactList({ taskId, refreshKey, projId, onRelayDocSelect }: A
       a.remove();
       URL.revokeObjectURL(objUrl);
     } catch {
-      const baseUrl = import.meta.env.VITE_API_URL || "";
-      window.open(`${baseUrl}/api/v1/artifacts/${artifactId}/download`, "_blank");
+      // Same reasoning as handleOpen: the bare API endpoint 401s without auth.
+      toast("Could not download file");
     } finally {
       setDownloadingId(null);
     }
