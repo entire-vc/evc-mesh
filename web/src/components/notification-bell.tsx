@@ -4,7 +4,6 @@ import { Bell, Check, CheckCheck, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useNotificationStore } from "@/stores/notification";
 import { useAuthStore } from "@/stores/auth";
-import { useWorkspaceStore } from "@/stores/workspace";
 import type { Notification } from "@/types";
 
 // ---------------------------------------------------------------------------
@@ -14,7 +13,6 @@ import type { Notification } from "@/types";
 export function NotificationBell() {
   const navigate = useNavigate();
   const { isAuthenticated } = useAuthStore();
-  const { currentWorkspace } = useWorkspaceStore();
   const {
     notifications,
     unreadCount,
@@ -65,21 +63,19 @@ export function NotificationBell() {
       if (!n.is_read) {
         void markAsRead([n.id]);
       }
-      // Navigate to task if task_id is present in metadata
+      // Navigate to task if task_id is present in metadata.
+      // /t/:taskId is the deep-link resolver (task-deep-link.tsx) — it looks
+      // up the task's workspace/project slugs itself, so no need for
+      // project_id or currentWorkspace here.
       const meta = n.metadata as Record<string, unknown>;
       const taskId = meta?.task_id as string | undefined;
-      const projectId = meta?.project_id as string | undefined;
 
-      if (taskId && projectId && currentWorkspace) {
-        // We only have IDs, not slugs — navigate to a search/task page.
-        // Use the workspace slug from currentWorkspace and task_id directly.
-        navigate(
-          `/w/${currentWorkspace.slug}/t/${taskId}`,
-        );
+      if (taskId) {
+        navigate(`/t/${taskId}`);
       }
       setOpen(false);
     },
-    [markAsRead, navigate, currentWorkspace],
+    [markAsRead, navigate],
   );
 
   const handleMarkAll = useCallback(
