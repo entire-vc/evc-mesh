@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router";
-import { Bell, Check, CheckCheck, Loader2 } from "lucide-react";
+import { Bell, Check, CheckCheck, Loader2, Settings } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useNotificationStore } from "@/stores/notification";
 import { useAuthStore } from "@/stores/auth";
+import { useWorkspaceStore } from "@/stores/workspace";
 import type { Notification } from "@/types";
 
 // ---------------------------------------------------------------------------
@@ -13,6 +14,9 @@ import type { Notification } from "@/types";
 export function NotificationBell() {
   const navigate = useNavigate();
   const { isAuthenticated } = useAuthStore();
+  // Still needed by handleOpenSettings below — the notification-settings route
+  // is workspace-scoped. handleNotificationClick no longer needs it.
+  const { currentWorkspace } = useWorkspaceStore();
   const {
     notifications,
     unreadCount,
@@ -86,6 +90,17 @@ export function NotificationBell() {
     [markAllAsRead],
   );
 
+  const handleOpenSettings = useCallback(
+    (e: React.MouseEvent) => {
+      e.stopPropagation();
+      if (currentWorkspace) {
+        navigate(`/w/${currentWorkspace.slug}/notifications`);
+      }
+      setOpen(false);
+    },
+    [navigate, currentWorkspace],
+  );
+
   const unreadItems = notifications.filter((n) => !n.is_read);
 
   return (
@@ -126,6 +141,16 @@ export function NotificationBell() {
                   Mark all read
                 </Button>
               )}
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-6 w-6 text-muted-foreground hover:text-foreground"
+                onClick={handleOpenSettings}
+                title="Notification settings"
+                aria-label="Notification settings"
+              >
+                <Settings className="h-3.5 w-3.5" />
+              </Button>
             </div>
           </div>
 
