@@ -55,7 +55,7 @@ export const useNotificationStore = create<NotificationState>((set, get) => ({
     try {
       await api("/api/v1/notifications/mark-read", {
         method: "POST",
-        body: JSON.stringify({ ids }),
+        body: { ids },
       });
       set((state) => ({
         notifications: state.notifications.map((n) =>
@@ -78,7 +78,7 @@ export const useNotificationStore = create<NotificationState>((set, get) => ({
     try {
       await api("/api/v1/notifications/mark-read", {
         method: "POST",
-        body: JSON.stringify({ mark_all: true }),
+        body: { mark_all: true },
       });
       set((state) => ({
         notifications: state.notifications.map((n) => ({
@@ -104,28 +104,26 @@ export const useNotificationStore = create<NotificationState>((set, get) => ({
   },
 
   updatePreferences: async (req: UpdateNotificationPreferencesRequest) => {
-    try {
-      const updated = await api<NotificationPreference>(
-        "/api/v1/notifications/preferences",
-        {
-          method: "PUT",
-          body: JSON.stringify(req),
-        },
+    // Let failures propagate — the settings page shows them to the user.
+    // Swallowing here previously masked every save failure as a silent success.
+    const updated = await api<NotificationPreference>(
+      "/api/v1/notifications/preferences",
+      {
+        method: "PUT",
+        body: req,
+      },
+    );
+    set((state) => {
+      const existing = state.preferences.findIndex(
+        (p) => p.id === updated.id,
       );
-      set((state) => {
-        const existing = state.preferences.findIndex(
-          (p) => p.id === updated.id,
-        );
-        if (existing >= 0) {
-          const next = [...state.preferences];
-          next[existing] = updated;
-          return { preferences: next };
-        }
-        return { preferences: [...state.preferences, updated] };
-      });
-    } catch {
-      // Silently ignore preference update failures
-    }
+      if (existing >= 0) {
+        const next = [...state.preferences];
+        next[existing] = updated;
+        return { preferences: next };
+      }
+      return { preferences: [...state.preferences, updated] };
+    });
   },
 
   startPolling: () => {

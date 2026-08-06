@@ -92,6 +92,15 @@ interface RequestOptions {
   noAuth?: boolean;
 }
 
+// api() always owns JSON-encoding the body. A caller that pre-stringifies (as
+// notification.ts once did) would otherwise get double-encoded: this guards
+// against that recurring, since a pre-stringified body silently becomes a
+// JSON string of a JSON string that the server can't bind into a struct.
+function serializeBody(body: unknown): string | undefined {
+  if (body === undefined) return undefined;
+  return typeof body === "string" ? body : JSON.stringify(body);
+}
+
 export async function api<T>(
   path: string,
   options: RequestOptions = {},
@@ -125,7 +134,7 @@ export async function api<T>(
   let res = await fetch(url, {
     method,
     headers,
-    body: body ? JSON.stringify(body) : undefined,
+    body: serializeBody(body),
     credentials: noAuth ? "omit" : "same-origin",
   });
 
@@ -143,7 +152,7 @@ export async function api<T>(
       res = await fetch(url, {
         method,
         headers,
-        body: body ? JSON.stringify(body) : undefined,
+        body: serializeBody(body),
         credentials: "same-origin",
       });
     } catch {
