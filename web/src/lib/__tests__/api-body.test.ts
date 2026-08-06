@@ -28,7 +28,7 @@ describe("api() body encoding", () => {
     });
 
     const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
-    const [, init] = fetchMock.mock.calls[0];
+    const init = fetchMock.mock.calls[0]?.[1];
     expect(typeof init.body).toBe("string");
     // Decodes to the object directly — not to a string that itself needs a
     // second JSON.parse to reach the object.
@@ -47,7 +47,7 @@ describe("api() body encoding", () => {
     });
 
     const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
-    const [, init] = fetchMock.mock.calls[0];
+    const init = fetchMock.mock.calls[0]?.[1];
     // Sent as-is (single-encoded), not re-wrapped in another layer of quotes.
     expect(init.body).toBe(preStringified);
     expect(JSON.parse(init.body)).toEqual({ ids: ["a", "b"] });
