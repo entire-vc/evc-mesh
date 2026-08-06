@@ -41,11 +41,15 @@ import { useSavedViewStore } from "@/stores/saved-view-store";
 import { CreateRecurringDialog } from "@/components/create-recurring-dialog";
 import { AssigneeAvatar } from "@/components/assignee-avatar";
 import { applyViewFilters, type CFFilters } from "@/components/view-filters";
+import { loadBoardFilters, saveBoardFilters } from "@/lib/board-view-storage";
 import type { Task, TaskStatus, WSMessage, Priority, StatusCategory } from "@/types";
 
 // ---------------------------------------------------------------------------
 // Priority metadata (for GroupBy=priority columns)
 // ---------------------------------------------------------------------------
+
+const GROUP_BY_VALUES: GroupBy[] = ["status", "priority", "assignee"];
+const SORT_BY_VALUES: SortBy[] = ["manual", "updated", "priority", "due_date", "created", "title"];
 
 const PRIORITY_ORDER: Record<Priority, number> = {
   urgent: 0,
@@ -312,6 +316,12 @@ export function BoardPage() {
   // by assignee_type (user/agent/unassigned), not by who specifically.
   const [assigneeIdsFilter, setAssigneeIdsFilter] = useState<string[]>([]);
 
+  // True once this project's persisted filters (or defaults, if none were
+  // saved) have been applied. Gates the save effect below so it never
+  // overwrites a project's saved filters with another project's stale state
+  // during the brief window while switching projects.
+  const [filtersHydrated, setFiltersHydrated] = useState(false);
+
   const sensors = useSensors(
     useSensor(PointerSensor, {
       activationConstraint: { distance: 5 },
@@ -363,6 +373,67 @@ export function BoardPage() {
       fetchProjectMembers(currentProject.id);
     }
   }, [currentProject, fetchStatuses, fetchTasks, fetchCustomFields, fetchProjectMembers]);
+
+  // Restore this project's persisted grouping/sort/filters (or defaults, if
+  // this is the first visit) so a reload or navigating away and back doesn't
+  // reset the board to its out-of-the-box view.
+  const currentProjectId = currentProject?.id;
+  useEffect(() => {
+    if (!currentProjectId) return;
+    setFiltersHydrated(false);
+    const saved = loadBoardFilters(currentProjectId);
+    if (saved) {
+      if (GROUP_BY_VALUES.includes(saved.groupBy as GroupBy)) {
+        setGroupBy(saved.groupBy as GroupBy);
+      }
+      if (SORT_BY_VALUES.includes(saved.sortBy as SortBy)) {
+        setSortBy(saved.sortBy as SortBy);
+      }
+      setShowClosed(saved.showClosed ?? false);
+      setShowSubtasks(saved.showSubtasks ?? false);
+      setSearchQuery(saved.searchQuery ?? "");
+      setPriorityFilter(saved.priorityFilter ?? "all");
+      setAssigneeFilter(saved.assigneeFilter ?? "all");
+      setCustomFieldFilters(saved.customFieldFilters ?? {});
+      setSelectedTags(saved.selectedTags ?? []);
+      setCFFilters(saved.cfFilters ?? {});
+      setAssigneeIdsFilter(saved.assigneeIdsFilter ?? []);
+    }
+    setFiltersHydrated(true);
+  }, [currentProjectId]);
+
+  // Persist grouping/sort/filters whenever they change, once this project's
+  // saved state has been loaded (avoids clobbering it with defaults first).
+  useEffect(() => {
+    if (!currentProjectId || !filtersHydrated) return;
+    saveBoardFilters(currentProjectId, {
+      groupBy,
+      sortBy,
+      showClosed,
+      showSubtasks,
+      searchQuery,
+      priorityFilter,
+      assigneeFilter,
+      customFieldFilters,
+      selectedTags,
+      cfFilters,
+      assigneeIdsFilter,
+    });
+  }, [
+    currentProjectId,
+    filtersHydrated,
+    groupBy,
+    sortBy,
+    showClosed,
+    showSubtasks,
+    searchQuery,
+    priorityFilter,
+    assigneeFilter,
+    customFieldFilters,
+    selectedTags,
+    cfFilters,
+    assigneeIdsFilter,
+  ]);
 
   const sortedStatuses = useMemo(
     () => [...statuses].sort((a, b) => a.position - b.position),
