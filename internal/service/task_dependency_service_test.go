@@ -184,6 +184,129 @@ func TestTaskDependencyService_Create(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// TestTaskDependencyService_Create_IsChildOf
+//
+// is_child_of is the one dependency type that must also set parent_task_id
+// on the child task, since that's what the Subtasks tab and subtask_count
+// actually read (see #5d670601: the "Child of" field recorded an edge
+// nothing else consumed).
+// ---------------------------------------------------------------------------
+
+func TestTaskDependencyService_Create_IsChildOf(t *testing.T) {
+	t.Run("sets parent_task_id on the child", func(t *testing.T) {
+		svc, _, taskRepo := setupTaskDependencyService()
+		ctx := context.Background()
+
+		child := uuid.New()
+		parent := uuid.New()
+		addTask(taskRepo, child)
+		addTask(taskRepo, parent)
+
+		err := svc.Create(ctx, &domain.TaskDependency{
+			TaskID:          child,
+			DependsOnTaskID: parent,
+			DependencyType:  domain.DependencyTypeIsChildOf,
+		})
+		require.NoError(t, err)
+
+		got, err := taskRepo.GetByID(ctx, child)
+		require.NoError(t, err)
+		require.NotNil(t, got.ParentTaskID)
+		assert.Equal(t, parent, *got.ParentTaskID)
+	})
+
+	t.Run("re-adding the same parent is idempotent", func(t *testing.T) {
+		svc, depRepo, taskRepo := setupTaskDependencyService()
+		ctx := context.Background()
+
+		child := uuid.New()
+		parent := uuid.New()
+		addTask(taskRepo, child)
+		addTask(taskRepo, parent)
+		taskRepo.items[child].ParentTaskID = &parent
+
+		err := svc.Create(ctx, &domain.TaskDependency{
+			TaskID:          child,
+			DependsOnTaskID: parent,
+			DependencyType:  domain.DependencyTypeIsChildOf,
+		})
+		require.NoError(t, err)
+		assert.Len(t, depRepo.items, 1)
+	})
+
+	t.Run("error - task already has a different parent", func(t *testing.T) {
+		svc, _, taskRepo := setupTaskDependencyService()
+		ctx := context.Background()
+
+		child := uuid.New()
+		existingParent := uuid.New()
+		newParent := uuid.New()
+		addTask(taskRepo, child)
+		addTask(taskRepo, existingParent)
+		addTask(taskRepo, newParent)
+		taskRepo.items[child].ParentTaskID = &existingParent
+
+		err := svc.Create(ctx, &domain.TaskDependency{
+			TaskID:          child,
+			DependsOnTaskID: newParent,
+			DependencyType:  domain.DependencyTypeIsChildOf,
+		})
+		require.Error(t, err)
+		var apiErr *apierror.Error
+		require.ErrorAs(t, err, &apiErr)
+		assert.Equal(t, http.StatusConflict, apiErr.Code)
+	})
+
+	t.Run("error - would create a parent-tree cycle", func(t *testing.T) {
+		svc, _, taskRepo := setupTaskDependencyService()
+		ctx := context.Background()
+
+		grandparent := uuid.New()
+		parent := uuid.New()
+		child := uuid.New()
+		addTask(taskRepo, grandparent)
+		addTask(taskRepo, parent)
+		addTask(taskRepo, child)
+		// parent is already a child of grandparent; child is already a child of parent.
+		taskRepo.items[parent].ParentTaskID = &grandparent
+		taskRepo.items[child].ParentTaskID = &parent
+
+		// Now try to make grandparent a child of child: child -> parent -> grandparent -> child.
+		err := svc.Create(ctx, &domain.TaskDependency{
+			TaskID:          grandparent,
+			DependsOnTaskID: child,
+			DependencyType:  domain.DependencyTypeIsChildOf,
+		})
+		require.Error(t, err)
+		var apiErr *apierror.Error
+		require.ErrorAs(t, err, &apiErr)
+		assert.Equal(t, http.StatusBadRequest, apiErr.Code)
+		assert.Contains(t, apiErr.Message, "cycle")
+	})
+
+	t.Run("other dependency types do not touch parent_task_id", func(t *testing.T) {
+		svc, _, taskRepo := setupTaskDependencyService()
+		ctx := context.Background()
+
+		taskA := uuid.New()
+		taskB := uuid.New()
+		addTask(taskRepo, taskA)
+		addTask(taskRepo, taskB)
+
+		err := svc.Create(ctx, &domain.TaskDependency{
+			TaskID:          taskA,
+			DependsOnTaskID: taskB,
+			DependencyType:  domain.DependencyTypeBlocks,
+		})
+		require.NoError(t, err)
+
+		got, err := taskRepo.GetByID(ctx, taskA)
+		require.NoError(t, err)
+		assert.Nil(t, got.ParentTaskID)
+	})
+}
+
+// ---------------------------------------------------------------------------
 // TestTaskDependencyService_CheckCycle
 // ---------------------------------------------------------------------------
 
@@ -290,4 +413,95 @@ func TestTaskDependencyService_Create_RefusesAnotherProjectsTask(t *testing.T) {
 		assert.Equal(t, http.StatusBadRequest, apiErr.Code)
 	}
 	assert.Empty(t, depRepo.items, "the edge was persisted anyway")
+}
+
+// Delete has to undo what Create did, or the pair is a one-way trap: the
+// is_child_of edge is the only UI that can set a parent, Create refuses a second
+// one while the first is set, and updateTaskRequest carries no parent_task_id.
+// So a task whose edge is deleted without clearing the parent stays parented
+// with nothing left to remove.
+func TestTaskDependencyService_Delete_IsChildOf(t *testing.T) {
+	newParentedPair := func(t *testing.T) (*taskDependencyService, *MockTaskDependencyRepository, *MockTaskRepository, uuid.UUID, uuid.UUID, uuid.UUID) {
+		t.Helper()
+		svc, depRepo, taskRepo := setupTaskDependencyService()
+		child, parent := uuid.New(), uuid.New()
+		addTask(taskRepo, child)
+		addTask(taskRepo, parent)
+
+		dep := &domain.TaskDependency{
+			TaskID:          child,
+			DependsOnTaskID: parent,
+			DependencyType:  domain.DependencyTypeIsChildOf,
+		}
+		require.NoError(t, svc.Create(context.Background(), dep))
+		require.NotNil(t, taskRepo.items[child].ParentTaskID, "precondition: Create must have set the parent")
+		return svc, depRepo, taskRepo, dep.ID, child, parent
+	}
+
+	t.Run("clears parent_task_id", func(t *testing.T) {
+		svc, depRepo, taskRepo, depID, child, _ := newParentedPair(t)
+
+		require.NoError(t, svc.Delete(context.Background(), depID))
+
+		assert.Nil(t, taskRepo.items[child].ParentTaskID,
+			"removing the Child-of edge must un-parent the task — it is the only way back")
+		assert.Empty(t, depRepo.items, "the edge itself must still be gone")
+	})
+
+	t.Run("the task can then be re-parented", func(t *testing.T) {
+		svc, _, taskRepo, depID, child, _ := newParentedPair(t)
+		ctx := context.Background()
+		require.NoError(t, svc.Delete(ctx, depID))
+
+		newParent := uuid.New()
+		addTask(taskRepo, newParent)
+		require.NoError(t, svc.Create(ctx, &domain.TaskDependency{
+			TaskID:          child,
+			DependsOnTaskID: newParent,
+			DependencyType:  domain.DependencyTypeIsChildOf,
+		}), "re-parenting after removing the old edge must not hit 'already has a parent'")
+
+		require.NotNil(t, taskRepo.items[child].ParentTaskID)
+		assert.Equal(t, newParent, *taskRepo.items[child].ParentTaskID)
+	})
+
+	// A stale edge must not detach a task that has since been re-parented, or
+	// deleting old history would silently break a current relationship.
+	t.Run("leaves a parent this edge did not set", func(t *testing.T) {
+		svc, _, taskRepo, depID, child, _ := newParentedPair(t)
+
+		otherParent := uuid.New()
+		taskRepo.items[child].ParentTaskID = &otherParent
+
+		require.NoError(t, svc.Delete(context.Background(), depID))
+
+		require.NotNil(t, taskRepo.items[child].ParentTaskID,
+			"a stale edge must not detach a task that was re-parented elsewhere")
+		assert.Equal(t, otherParent, *taskRepo.items[child].ParentTaskID)
+	})
+
+	// Only is_child_of carries the side effect; every other edge type must leave
+	// the hierarchy alone.
+	t.Run("other dependency types leave parent_task_id untouched", func(t *testing.T) {
+		svc, _, taskRepo := setupTaskDependencyService()
+		ctx := context.Background()
+
+		child, parent, blocker := uuid.New(), uuid.New(), uuid.New()
+		addTask(taskRepo, child)
+		addTask(taskRepo, parent)
+		addTask(taskRepo, blocker)
+		taskRepo.items[child].ParentTaskID = &parent
+
+		blocks := &domain.TaskDependency{
+			TaskID:          child,
+			DependsOnTaskID: blocker,
+			DependencyType:  domain.DependencyTypeBlocks,
+		}
+		require.NoError(t, svc.Create(ctx, blocks))
+		require.NoError(t, svc.Delete(ctx, blocks.ID))
+
+		require.NotNil(t, taskRepo.items[child].ParentTaskID,
+			"deleting a blocks edge must not touch the parent hierarchy")
+		assert.Equal(t, parent, *taskRepo.items[child].ParentTaskID)
+	})
 }

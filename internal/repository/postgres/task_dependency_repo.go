@@ -33,6 +33,19 @@ func (r *TaskDependencyRepo) Create(ctx context.Context, dep *domain.TaskDepende
 	return err
 }
 
+// GetByID returns the dependency, or (nil, nil) when no row matches.
+func (r *TaskDependencyRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.TaskDependency, error) {
+	const q = `SELECT * FROM task_dependencies WHERE id = $1`
+	var dep domain.TaskDependency
+	if err := r.db.GetContext(ctx, &dep, q, id); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &dep, nil
+}
+
 func (r *TaskDependencyRepo) Delete(ctx context.Context, id uuid.UUID) error {
 	const q = `DELETE FROM task_dependencies WHERE id = $1`
 	res, err := r.db.ExecContext(ctx, q, id)

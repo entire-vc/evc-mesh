@@ -142,6 +142,10 @@ type TaskStatusRepository interface {
 // TaskDependencyRepository manages persistence for task dependencies.
 type TaskDependencyRepository interface {
 	Create(ctx context.Context, dep *domain.TaskDependency) error
+	// GetByID returns the dependency, or (nil, nil) when it does not exist.
+	// Deleting an is_child_of edge has to undo the parent_task_id it set, and
+	// that needs the edge's type and endpoints before the row goes away.
+	GetByID(ctx context.Context, id uuid.UUID) (*domain.TaskDependency, error)
 	Delete(ctx context.Context, id uuid.UUID) error
 	ListByTask(ctx context.Context, taskID uuid.UUID) ([]domain.TaskDependency, error)
 	ListDependents(ctx context.Context, taskID uuid.UUID) ([]domain.TaskDependency, error)
