@@ -27,6 +27,7 @@ import {
 import { useProjectStore } from "@/stores/project";
 import { useTaskStore } from "@/stores/task";
 import { useCustomFieldStore } from "@/stores/custom-field";
+import { useMemberStore } from "@/stores/member";
 import { useWebSocket } from "@/hooks/use-websocket";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -282,6 +283,7 @@ export function BoardPage() {
   const { tasks, tasksByStatus, isLoading, fetchTasks, moveTask } = useTaskStore();
   const { fields: customFieldDefs, fetchFields: fetchCustomFields } =
     useCustomFieldStore();
+  const { projectMembers, fetchProjectMembers } = useMemberStore();
 
   // Dialog state
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -305,6 +307,10 @@ export function BoardPage() {
   // New filter state
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [cfFilters, setCFFilters] = useState<CFFilters>({});
+  // Specific-assignee filter: task.assignee_id (or "unassigned") must be in this
+  // set. Empty = no filtering. Distinct from assigneeFilter above, which filters
+  // by assignee_type (user/agent/unassigned), not by who specifically.
+  const [assigneeIdsFilter, setAssigneeIdsFilter] = useState<string[]>([]);
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -354,8 +360,9 @@ export function BoardPage() {
       fetchCustomFields(currentProject.id).catch(() => {
         // Custom fields API may not be available yet
       });
+      fetchProjectMembers(currentProject.id);
     }
-  }, [currentProject, fetchStatuses, fetchTasks, fetchCustomFields]);
+  }, [currentProject, fetchStatuses, fetchTasks, fetchCustomFields, fetchProjectMembers]);
 
   const sortedStatuses = useMemo(
     () => [...statuses].sort((a, b) => a.position - b.position),
@@ -379,6 +386,31 @@ export function BoardPage() {
     return Array.from(tagSet).sort();
   }, [tasks]);
 
+  // Candidates for the specific-assignee filter: project members (so people
+  // with zero currently-loaded tasks are still pickable) merged with whoever
+  // tasks are actually assigned to (covers a legacy assignee no longer a
+  // formal member). Deduped by id, named assignees sorted first.
+  const assigneeCandidates = useMemo(() => {
+    const byId = new Map<string, { id: string; name: string; type: "user" | "agent" }>();
+    for (const m of projectMembers) {
+      if (m.user) {
+        byId.set(m.user.id, { id: m.user.id, name: m.user.name || m.user.email, type: "user" });
+      } else if (m.agent_id) {
+        byId.set(m.agent_id, { id: m.agent_id, name: m.agent_name ?? "Agent", type: "agent" });
+      }
+    }
+    for (const task of tasks) {
+      if (task.assignee_id && !byId.has(task.assignee_id)) {
+        byId.set(task.assignee_id, {
+          id: task.assignee_id,
+          name: task.assignee_name ?? task.assignee_id,
+          type: task.assignee_type === "agent" ? "agent" : "user",
+        });
+      }
+    }
+    return Array.from(byId.values()).sort((a, b) => a.name.localeCompare(b.name));
+  }, [projectMembers, tasks]);
+
   // ---------------------------------------------------------------------------
   // Base task filter (search + priority + assignee + tags + CF + subtasks)
   // Applied before grouping.
@@ -393,12 +425,27 @@ export function BoardPage() {
       }
       if (priorityFilter !== "all" && task.priority !== priorityFilter) return false;
       if (assigneeFilter !== "all" && task.assignee_type !== assigneeFilter) return false;
+      if (
+        assigneeIdsFilter.length > 0 &&
+        !assigneeIdsFilter.includes(task.assignee_id ?? "unassigned")
+      ) {
+        return false;
+      }
       return true;
     });
 
     // Second pass: tag + CF filters via shared pure function
     return applyViewFilters(basic, selectedTags, cfFilters);
-  }, [tasks, showSubtasks, searchQuery, priorityFilter, assigneeFilter, selectedTags, cfFilters]);
+  }, [
+    tasks,
+    showSubtasks,
+    searchQuery,
+    priorityFilter,
+    assigneeFilter,
+    assigneeIdsFilter,
+    selectedTags,
+    cfFilters,
+  ]);
 
   // ---------------------------------------------------------------------------
   // Build columns + task groups based on groupBy
@@ -615,10 +662,18 @@ export function BoardPage() {
         search: searchQuery,
         priority: priorityFilter,
         assignee: assigneeFilter,
+        assignee_ids: assigneeIdsFilter,
         custom_fields: customFieldFilters,
       },
     });
-  }, [searchQuery, priorityFilter, assigneeFilter, customFieldFilters, setCurrentViewState]);
+  }, [
+    searchQuery,
+    priorityFilter,
+    assigneeFilter,
+    assigneeIdsFilter,
+    customFieldFilters,
+    setCurrentViewState,
+  ]);
 
   // Listen for saved view applied from ViewTabBar
   useEffect(() => {
@@ -627,6 +682,7 @@ export function BoardPage() {
       setSearchQuery((filters.search as string) ?? "");
       setPriorityFilter((filters.priority as string) ?? "all");
       setAssigneeFilter((filters.assignee as string) ?? "all");
+      setAssigneeIdsFilter((filters.assignee_ids as string[]) ?? []);
       setCustomFieldFilters((filters.custom_fields as Record<string, unknown>) ?? {});
       clearPendingView();
     }
@@ -680,6 +736,9 @@ export function BoardPage() {
           onPriorityFilterChange={setPriorityFilter}
           assigneeFilter={assigneeFilter}
           onAssigneeFilterChange={setAssigneeFilter}
+          assigneeCandidates={assigneeCandidates}
+          assigneeIdsFilter={assigneeIdsFilter}
+          onAssigneeIdsFilterChange={setAssigneeIdsFilter}
           allTags={allTags}
           selectedTags={selectedTags}
           onTagsChange={setSelectedTags}
