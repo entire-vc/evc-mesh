@@ -74,7 +74,12 @@ type Task struct {
 	// explicit assignee_id, then clears the stash.
 	PreReviewAssigneeID   *uuid.UUID      `json:"pre_review_assignee_id,omitempty" db:"pre_review_assignee_id"`
 	PreReviewAssigneeType *AssigneeType   `json:"pre_review_assignee_type,omitempty" db:"pre_review_assignee_type"`
-	Priority              Priority        `json:"priority" db:"priority"`
+	// ReviewerID/ReviewerType hold the person or agent responsible for checking the
+	// work — independent of AssigneeID, which is who does it. Nil means no reviewer
+	// is set. Unlike AssigneeType, there's no "unassigned" sentinel: absence is nil.
+	ReviewerID   *uuid.UUID    `json:"reviewer_id,omitempty" db:"reviewer_id"`
+	ReviewerType *AssigneeType `json:"reviewer_type,omitempty" db:"reviewer_type"`
+	Priority     Priority      `json:"priority" db:"priority"`
 	ParentTaskID          *uuid.UUID      `json:"parent_task_id" db:"parent_task_id"`
 	Position              float64         `json:"position" db:"position"`
 	DueDate               *time.Time      `json:"due_date" db:"due_date"`
@@ -120,6 +125,7 @@ type Task struct {
 	// Computed fields — populated by enriched list/get queries, not stored columns.
 	SubtaskCount  int     `json:"subtask_count"`
 	AssigneeName  *string `json:"assignee_name,omitempty"`
+	ReviewerName  *string `json:"reviewer_name,omitempty"`
 	CreatedByName *string `json:"created_by_name,omitempty"`
 	ArtifactCount int     `json:"artifact_count"`
 	VCSLinkCount  int     `json:"vcs_link_count"`

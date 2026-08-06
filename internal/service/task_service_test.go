@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sync"
 	"testing"
 	"time"
 
@@ -1916,6 +1917,194 @@ func TestTaskService_Update_DelegationLevelNoNotifyIfUnchanged(t *testing.T) {
 	for _, call := range notifySvc.Calls() {
 		assert.NotEqual(t, "task.delegation_changed", call.EventType,
 			"must not notify task.delegation_changed when delegation_level is unchanged")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestTaskService_*Reviewer* — Reviewer field notification tests
+// ---------------------------------------------------------------------------
+
+// fakeUserNotifyService captures Notify() calls so tests can assert on
+// EventType and TargetUserID without a real notificationService/DB.
+type fakeUserNotifyService struct {
+	mu    sync.Mutex
+	calls []domain.NotificationEvent
+}
+
+func (f *fakeUserNotifyService) Notify(_ context.Context, event domain.NotificationEvent) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, event)
+}
+func (f *fakeUserNotifyService) GetPreferences(context.Context, uuid.UUID) ([]domain.NotificationPreference, error) {
+	return nil, nil
+}
+func (f *fakeUserNotifyService) UpsertPreferences(_ context.Context, p *domain.NotificationPreference) (*domain.NotificationPreference, error) {
+	return p, nil
+}
+func (f *fakeUserNotifyService) DeletePreference(context.Context, uuid.UUID, uuid.UUID) error {
+	return nil
+}
+func (f *fakeUserNotifyService) ListUnread(context.Context, uuid.UUID) ([]domain.Notification, error) {
+	return nil, nil
+}
+func (f *fakeUserNotifyService) CountUnread(context.Context, uuid.UUID) (int, error) { return 0, nil }
+func (f *fakeUserNotifyService) MarkRead(context.Context, uuid.UUID, []uuid.UUID) error {
+	return nil
+}
+func (f *fakeUserNotifyService) MarkAllRead(context.Context, uuid.UUID) error { return nil }
+
+func (f *fakeUserNotifyService) Calls() []domain.NotificationEvent {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]domain.NotificationEvent(nil), f.calls...)
+}
+
+var _ NotificationService = (*fakeUserNotifyService)(nil)
+
+// setupTaskServiceForReviewer wires a task service with agent-push + in-app
+// notification fakes for reviewer-field tests.
+func setupTaskServiceForReviewer() (*taskService, *MockTaskRepository, *MockTaskStatusRepository, *MockAgentNotifyService, *fakeUserNotifyService, *MockProjectRepository) {
+	taskRepo := NewMockTaskRepository()
+	statusRepo := NewMockTaskStatusRepository()
+	depRepo := NewMockTaskDependencyRepository()
+	activityRepo := NewMockActivityLogRepository()
+	agentNotify := NewMockAgentNotifyService()
+	userNotify := &fakeUserNotifyService{}
+	projRepo := NewMockProjectRepository()
+
+	svc := NewTaskService(taskRepo, statusRepo, depRepo, activityRepo,
+		WithAgentNotifyService(agentNotify),
+		WithNotificationService(userNotify),
+		WithProjectRepo(projRepo),
+	).(*taskService)
+	timeNow = func() time.Time { return frozenTime }
+	return svc, taskRepo, statusRepo, agentNotify, userNotify, projRepo
+}
+
+func TestTaskService_Update_ReviewerAssigned_AgentReviewerNotified(t *testing.T) {
+	svc, taskRepo, _, agentNotify, userNotify, projRepo := setupTaskServiceForReviewer()
+	ctx := context.Background()
+
+	projID := uuid.New()
+	projRepo.items[projID] = &domain.Project{ID: projID, WorkspaceID: uuid.New()}
+
+	taskID := uuid.New()
+	taskRepo.items[taskID] = &domain.Task{ID: taskID, ProjectID: projID, Title: "T"}
+
+	reviewerID := uuid.New()
+	reviewerType := domain.AssigneeTypeAgent
+	err := svc.Update(ctx, &domain.Task{
+		ID: taskID, ProjectID: projID, Title: "T",
+		ReviewerID: &reviewerID, ReviewerType: &reviewerType,
+	})
+	require.NoError(t, err)
+
+	var found bool
+	for _, call := range agentNotify.Calls() {
+		if call.EventType == "task.reviewer_assigned" && call.AgentID == reviewerID {
+			found = true
+		}
+	}
+	assert.True(t, found, "expected task.reviewer_assigned push to agent reviewer")
+	assert.Empty(t, userNotify.Calls(), "agent reviewer must not also go through the in-app user path")
+}
+
+func TestTaskService_Update_ReviewerAssigned_UserReviewerNotifiedTargeted(t *testing.T) {
+	svc, taskRepo, _, agentNotify, userNotify, projRepo := setupTaskServiceForReviewer()
+	ctx := context.Background()
+
+	projID := uuid.New()
+	projRepo.items[projID] = &domain.Project{ID: projID, WorkspaceID: uuid.New()}
+
+	taskID := uuid.New()
+	taskRepo.items[taskID] = &domain.Task{ID: taskID, ProjectID: projID, Title: "T"}
+
+	reviewerID := uuid.New()
+	reviewerType := domain.AssigneeTypeUser
+	err := svc.Update(ctx, &domain.Task{
+		ID: taskID, ProjectID: projID, Title: "T",
+		ReviewerID: &reviewerID, ReviewerType: &reviewerType,
+	})
+	require.NoError(t, err)
+
+	require.Len(t, userNotify.Calls(), 1)
+	call := userNotify.Calls()[0]
+	assert.Equal(t, "task.reviewer_assigned", call.EventType)
+	require.NotNil(t, call.TargetUserID, "reviewer notification must be targeted, not broadcast")
+	assert.Equal(t, reviewerID, *call.TargetUserID)
+	assert.Empty(t, agentNotify.Calls())
+}
+
+// TestTaskService_Update_ReviewerNoNotifyIfUnchanged is the regression test for
+// the pointer-vs-value bug: existing and task come from two separate GetByID
+// calls, so a raw pointer comparison (existing.ReviewerID != task.ReviewerID)
+// would report "changed" on every update even when the reviewer stayed the same,
+// firing a spurious "Review requested" notification on every unrelated edit.
+func TestTaskService_Update_ReviewerNoNotifyIfUnchanged(t *testing.T) {
+	svc, taskRepo, _, agentNotify, userNotify, projRepo := setupTaskServiceForReviewer()
+	ctx := context.Background()
+
+	projID := uuid.New()
+	projRepo.items[projID] = &domain.Project{ID: projID, WorkspaceID: uuid.New()}
+
+	reviewerID := uuid.New()
+	reviewerType := domain.AssigneeTypeUser
+	taskID := uuid.New()
+	taskRepo.items[taskID] = &domain.Task{
+		ID: taskID, ProjectID: projID, Title: "T",
+		ReviewerID: &reviewerID, ReviewerType: &reviewerType,
+	}
+
+	// Same reviewer UUID *value*, but a fresh pointer allocation — as would
+	// happen after a plain title edit that leaves reviewer_id untouched.
+	sameReviewerID := reviewerID
+	sameReviewerType := reviewerType
+	err := svc.Update(ctx, &domain.Task{
+		ID: taskID, ProjectID: projID, Title: "T (edited)",
+		ReviewerID: &sameReviewerID, ReviewerType: &sameReviewerType,
+	})
+	require.NoError(t, err)
+
+	assert.Empty(t, userNotify.Calls(), "must not notify when the reviewer value did not actually change")
+	assert.Empty(t, agentNotify.Calls())
+}
+
+func TestTaskService_MoveTask_ReadyForReview_NotifiesReviewer(t *testing.T) {
+	svc, taskRepo, statusRepo, agentNotify, userNotify, projRepo := setupTaskServiceForReviewer()
+	ctx := context.Background()
+
+	projID := uuid.New()
+	projRepo.items[projID] = &domain.Project{ID: projID, WorkspaceID: uuid.New()}
+
+	fromStatusID := uuid.New()
+	toStatusID := uuid.New()
+	statusRepo.items[fromStatusID] = &domain.TaskStatus{ID: fromStatusID, ProjectID: projID, Category: domain.StatusCategoryInProgress, Name: "In Progress"}
+	statusRepo.items[toStatusID] = &domain.TaskStatus{ID: toStatusID, ProjectID: projID, Category: domain.StatusCategoryReview, Name: "Review"}
+
+	reviewerID := uuid.New()
+	reviewerType := domain.AssigneeTypeUser
+	taskID := uuid.New()
+	taskRepo.items[taskID] = &domain.Task{
+		ID: taskID, ProjectID: projID, Title: "T", StatusID: fromStatusID,
+		ReviewerID: &reviewerID, ReviewerType: &reviewerType,
+	}
+
+	err := svc.MoveTask(ctx, taskID, MoveTaskInput{StatusID: &toStatusID})
+	require.NoError(t, err)
+
+	var found bool
+	for _, call := range userNotify.Calls() {
+		if call.EventType == "task.ready_for_review" {
+			found = true
+			require.NotNil(t, call.TargetUserID)
+			assert.Equal(t, reviewerID, *call.TargetUserID)
+		}
+	}
+	assert.True(t, found, "expected task.ready_for_review targeted notification when task with a reviewer enters review")
+	for _, call := range agentNotify.Calls() {
+		assert.NotEqual(t, "task.ready_for_review", call.EventType,
+			"a user reviewer must not also receive the agent-push path")
 	}
 }
 

@@ -70,7 +70,8 @@ const taskBaseColsNoAlias = `
 	recurring_schedule_id, recurring_instance_number,
 	checked_out_by, checkout_token, checkout_expires, checkout_acquired_at,
 	delegation_level, thread_id, human_gate, is_shipped, assigned_by, dod_checks,
-	completion_signal, status_changed_at, pre_review_assignee_id, pre_review_assignee_type`
+	completion_signal, status_changed_at, pre_review_assignee_id, pre_review_assignee_type,
+	reviewer_id, reviewer_type`
 
 const taskComputedCols = `
 	(SELECT COUNT(*) FROM tasks st WHERE st.parent_task_id = tasks.id AND st.deleted_at IS NULL) AS subtask_count,
@@ -83,6 +84,13 @@ const taskComputedCols = `
 			(SELECT display_name FROM users WHERE id = tasks.assignee_id)
 		ELSE NULL
 	END AS assignee_name,
+	CASE
+		WHEN tasks.reviewer_type = 'agent' THEN
+			(SELECT name FROM agents WHERE id = tasks.reviewer_id AND deleted_at IS NULL)
+		WHEN tasks.reviewer_type = 'user' THEN
+			(SELECT display_name FROM users WHERE id = tasks.reviewer_id)
+		ELSE NULL
+	END AS reviewer_name,
 	CASE
 		WHEN tasks.created_by_type = 'agent' THEN
 			(SELECT name FROM agents WHERE id = tasks.created_by AND deleted_at IS NULL)
@@ -102,6 +110,13 @@ const taskComputedColsAliased = `
 			(SELECT display_name FROM users WHERE id = t.assignee_id)
 		ELSE NULL
 	END AS assignee_name,
+	CASE
+		WHEN t.reviewer_type = 'agent' THEN
+			(SELECT name FROM agents WHERE id = t.reviewer_id AND deleted_at IS NULL)
+		WHEN t.reviewer_type = 'user' THEN
+			(SELECT display_name FROM users WHERE id = t.reviewer_id)
+		ELSE NULL
+	END AS reviewer_name,
 	CASE
 		WHEN t.created_by_type = 'agent' THEN
 			(SELECT name FROM agents WHERE id = t.created_by AND deleted_at IS NULL)
@@ -152,6 +167,10 @@ type taskRow struct {
 	PreReviewAssigneeID   *uuid.UUID           `db:"pre_review_assignee_id"`
 	PreReviewAssigneeType *domain.AssigneeType `db:"pre_review_assignee_type"`
 
+	// Reviewer — see domain.Task doc comment.
+	ReviewerID   *uuid.UUID           `db:"reviewer_id"`
+	ReviewerType *domain.AssigneeType `db:"reviewer_type"`
+
 	// Checkout fields.
 	CheckedOutBy       *uuid.UUID `db:"checked_out_by"`
 	CheckoutToken      *uuid.UUID `db:"checkout_token"`
@@ -161,6 +180,7 @@ type taskRow struct {
 	// Computed enrichment fields populated by enriched queries.
 	SubtaskCount  int     `db:"subtask_count"`
 	AssigneeName  *string `db:"assignee_name"`
+	ReviewerName  *string `db:"reviewer_name"`
 	CreatedByName *string `db:"created_by_name"`
 	ArtifactCount int     `db:"artifact_count"`
 	VCSLinkCount  int     `db:"vcs_link_count"`
@@ -199,12 +219,15 @@ func (r *taskRow) toDomain() domain.Task {
 		StatusChangedAt:         r.StatusChangedAt,
 		PreReviewAssigneeID:     r.PreReviewAssigneeID,
 		PreReviewAssigneeType:   r.PreReviewAssigneeType,
+		ReviewerID:              r.ReviewerID,
+		ReviewerType:            r.ReviewerType,
 		CheckedOutBy:            r.CheckedOutBy,
 		CheckoutToken:           r.CheckoutToken,
 		CheckoutExpires:         r.CheckoutExpires,
 		CheckoutAcquiredAt:      r.CheckoutAcquiredAt,
 		SubtaskCount:            r.SubtaskCount,
 		AssigneeName:            r.AssigneeName,
+		ReviewerName:            r.ReviewerName,
 		CreatedByName:           r.CreatedByName,
 		ArtifactCount:           r.ArtifactCount,
 		VCSLinkCount:            r.VCSLinkCount,
@@ -453,7 +476,8 @@ func (r *TaskRepo) Update(ctx context.Context, task *domain.Task) error {
 		    delegation_level = $18, thread_id = $19,
 		    human_gate = $20, is_shipped = $21, assigned_by = $22,
 		    completion_signal = $23, status_changed_at = $24,
-		    pre_review_assignee_id = $25, pre_review_assignee_type = $26
+		    pre_review_assignee_id = $25, pre_review_assignee_type = $26,
+		    reviewer_id = $27, reviewer_type = $28
 		WHERE id = $1 AND deleted_at IS NULL
 	`
 	customFields := task.CustomFields
@@ -479,6 +503,7 @@ func (r *TaskRepo) Update(ctx context.Context, task *domain.Task) error {
 		delegationLevel, task.ThreadID,
 		task.HumanGate, task.IsShipped, task.AssignedBy, task.CompletionSignal, task.StatusChangedAt,
 		task.PreReviewAssigneeID, task.PreReviewAssigneeType,
+		task.ReviewerID, task.ReviewerType,
 	)
 	pkgmetrics.RecordDBQuery("task.update", time.Since(dbStart))
 	if err != nil {

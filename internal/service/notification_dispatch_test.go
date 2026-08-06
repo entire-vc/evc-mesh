@@ -303,6 +303,75 @@ func TestDispatch_UnsubscribedEventTypeIsStillHonoured(t *testing.T) {
 	assert.Empty(t, repo.notifiedUsers())
 }
 
+// TestDispatch_TargetUserIDSkipsOtherWorkspaceSubscribers is the repro for the
+// reviewer-notification bug: a task.reviewer_assigned event is about one specific
+// person, but dispatchUserNotification's underlying fan-out has no notion of "the
+// reviewer" — it is gated purely by each subscriber's own preference row. Without
+// TargetUserID, every workspace member subscribed to the event type would learn
+// that someone else was made reviewer on someone else's task.
+func TestDispatch_TargetUserIDSkipsOtherWorkspaceSubscribers(t *testing.T) {
+	wsID := uuid.New()
+	reviewer := uuid.New()
+	bystander := uuid.New()
+
+	reviewerPref := webPushPref(wsID, reviewer)
+	reviewerPref.Events = pq.StringArray{"task.reviewer_assigned"}
+	bystanderPref := webPushPref(wsID, bystander)
+	bystanderPref.Events = pq.StringArray{"task.reviewer_assigned"}
+
+	repo := &fakeNotificationRepo{
+		prefs:   []domain.NotificationPreference{reviewerPref, bystanderPref},
+		members: map[uuid.UUID]bool{reviewer: true, bystander: true},
+	}
+	svc := NewNotificationService(repo).(*notificationService)
+
+	event := domain.NotificationEvent{
+		WorkspaceID:  wsID,
+		EventType:    "task.reviewer_assigned",
+		Title:        "Review requested",
+		TargetUserID: &reviewer,
+	}
+	svc.dispatch(event)
+
+	assert.Equal(t, []uuid.UUID{reviewer}, repo.notifiedUsers(),
+		"a targeted reviewer-assigned event was broadcast to a bystander subscribed to the same event type")
+}
+
+// TestDispatch_TargetUserIDGatesBrowserPushToo: same rule, second loop — see
+// TestDispatch_BrowserPushSkipsStrangersToo for why these are checked separately.
+func TestDispatch_TargetUserIDGatesBrowserPushToo(t *testing.T) {
+	wsID := uuid.New()
+	reviewer := uuid.New()
+	bystander := uuid.New()
+
+	reviewerPref := webPushPref(wsID, reviewer)
+	reviewerPref.Channel = "browser_push"
+	reviewerPref.Events = pq.StringArray{"task.reviewer_assigned"}
+	bystanderPref := webPushPref(wsID, bystander)
+	bystanderPref.Channel = "browser_push"
+	bystanderPref.Events = pq.StringArray{"task.reviewer_assigned"}
+
+	push := &fakePushService{}
+	repo := &fakeNotificationRepo{
+		prefs:   []domain.NotificationPreference{reviewerPref, bystanderPref},
+		members: map[uuid.UUID]bool{reviewer: true, bystander: true},
+	}
+	svc := NewNotificationService(repo, WithPushService(push)).(*notificationService)
+
+	event := domain.NotificationEvent{
+		WorkspaceID:  wsID,
+		EventType:    "task.reviewer_assigned",
+		Title:        "Review requested",
+		TargetUserID: &reviewer,
+	}
+	svc.dispatch(event)
+
+	require.Eventually(t, func() bool { return len(push.recipients()) > 0 }, time.Second, 5*time.Millisecond,
+		"the reviewer never received their push")
+	assert.Equal(t, []uuid.UUID{reviewer}, push.recipients(),
+		"a targeted reviewer-assigned push went to a bystander too")
+}
+
 // TestNotify_DispatchesInTheBackground keeps the fire-and-forget contract: the
 // caller is a request handler and must not wait on this.
 func TestNotify_DispatchesInTheBackground(t *testing.T) {

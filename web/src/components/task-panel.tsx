@@ -426,6 +426,26 @@ export function TaskPanel({
     }
   };
 
+  const handleReviewerChange = async (value: string) => {
+    if (!currentTask) return;
+    try {
+      if (value === "unassigned") {
+        await updateTask(currentTask.id, { clear_reviewer: true });
+      } else {
+        const [type, id] = value.split(":");
+        await updateTask(currentTask.id, {
+          reviewer_id: id,
+          reviewer_type: type as AssigneeType,
+        });
+      }
+      onTaskUpdated?.();
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "Failed to change reviewer",
+      );
+    }
+  };
+
   const handleDueDateChange = async (value: string) => {
     if (!currentTask) return;
     try {
@@ -707,6 +727,76 @@ export function TaskPanel({
             if (!resolved) return null;
             return (
               <option value={`${currentTask.assignee_type}:${currentTask.assignee_id}`}>
+                {resolved} (not a project member)
+              </option>
+            );
+          })()}
+        </Select>
+
+        {/* Reviewer */}
+        <label className="flex items-center gap-1 pt-1 text-xs text-muted-foreground">
+          {currentTask.reviewer_id && currentTask.reviewer_type === "agent" ? (
+            <Bot className="h-3 w-3" />
+          ) : (
+            <User className="h-3 w-3" />
+          )}
+          Reviewer
+        </label>
+        <Select
+          value={
+            currentTask.reviewer_id
+              ? `${currentTask.reviewer_type}:${currentTask.reviewer_id}`
+              : "unassigned"
+          }
+          onChange={(e) => void handleReviewerChange(e.target.value)}
+          className="h-7 text-xs"
+        >
+          <option value="unassigned">No reviewer</option>
+          {user && !projectMembers.some((m) => m.user_id === user.id) && (
+            <option value={`user:${user.id}`}>
+              {user.name} (you)
+            </option>
+          )}
+          {(() => {
+            const ownerId = currentWorkspace?.owner_id;
+            if (!ownerId || user?.id === ownerId) return null;
+            if (projectMembers.some((m) => m.user_id === ownerId)) return null;
+            const ownerName = teamDirectory?.humans.find((h) => h.id === ownerId)?.name;
+            if (!ownerName) return null;
+            return <option key={`reviewer-owner-${ownerId}`} value={`user:${ownerId}`}>{ownerName}</option>;
+          })()}
+          {projectMembers.map((m) => {
+            if (m.user_id && m.user) {
+              const isSelf = user?.id === m.user_id;
+              return (
+                <option key={`reviewer-${m.id}`} value={`user:${m.user_id}`}>
+                  {inlineLabel(m.user)}{isSelf ? " (you)" : ""} — {m.role}
+                </option>
+              );
+            }
+            if (m.agent_id) {
+              const desc = [m.agent_role, m.agent_description].filter(Boolean).join(" · ");
+              return (
+                <option key={`reviewer-${m.id}`} value={`agent:${m.agent_id}`}>
+                  {m.agent_name} (agent){desc ? ` — ${desc}` : ""}
+                </option>
+              );
+            }
+            return null;
+          })}
+          {currentTask.reviewer_id && !projectMembers.some((m) =>
+            m.user_id === currentTask.reviewer_id || m.agent_id === currentTask.reviewer_id
+          ) && (() => {
+            if (currentWorkspace?.owner_id === currentTask.reviewer_id) return null;
+            const resolved =
+              teamDirectory?.agents.find((a) => a.id === currentTask.reviewer_id)?.name ??
+              teamDirectory?.humans.find((h) => h.id === currentTask.reviewer_id)?.name ??
+              (currentTask.reviewer_name && !UUID_RE.test(currentTask.reviewer_name)
+                ? currentTask.reviewer_name
+                : null);
+            if (!resolved) return null;
+            return (
+              <option value={`${currentTask.reviewer_type}:${currentTask.reviewer_id}`}>
                 {resolved} (not a project member)
               </option>
             );

@@ -120,6 +120,9 @@ type updateTaskRequest struct {
 	Priority         *domain.Priority        `json:"priority"`
 	AssigneeID       *uuid.UUID              `json:"assignee_id"`
 	AssigneeType     *domain.AssigneeType    `json:"assignee_type"`
+	ReviewerID       *uuid.UUID              `json:"reviewer_id"`
+	ReviewerType     *domain.AssigneeType    `json:"reviewer_type"`
+	ClearReviewer    bool                    `json:"clear_reviewer"`
 	DueDate          flexTime                `json:"due_date"`
 	EstimatedHours   *float64                `json:"estimated_hours"`
 	Labels           *[]string               `json:"labels"`
@@ -427,6 +430,13 @@ func (h *TaskHandler) Update(c echo.Context) error {
 	}
 	if req.AssigneeType != nil {
 		task.AssigneeType = *req.AssigneeType
+	}
+	if req.ClearReviewer {
+		task.ReviewerID = nil
+		task.ReviewerType = nil
+	} else if req.ReviewerID != nil {
+		task.ReviewerID = req.ReviewerID
+		task.ReviewerType = req.ReviewerType
 	}
 	if req.DueDate.wasSet {
 		task.DueDate = req.DueDate.Time // nil clears, non-nil sets

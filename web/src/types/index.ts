@@ -249,6 +249,9 @@ export interface Task {
   assignee_id: string | null;
   assignee_type: AssigneeType;
   assignee_name?: string | null;
+  reviewer_id?: string | null;
+  reviewer_type?: AssigneeType | null;
+  reviewer_name?: string | null;
   created_by_name?: string | null;
   priority: Priority;
   delegation_level?: DelegationLevel;
@@ -470,6 +473,11 @@ export interface UpdateTaskRequest {
   delegation_level?: DelegationLevel;
   assignee_id?: string | null;
   assignee_type?: AssigneeType;
+  reviewer_id?: string | null;
+  reviewer_type?: AssigneeType | null;
+  // clear_reviewer explicitly clears the reviewer — reviewer_id:null alone is
+  // indistinguishable from "not provided" once JSON-decoded on the Go side.
+  clear_reviewer?: boolean;
   labels?: string[];
   status_id?: string;
   due_date?: string | null;

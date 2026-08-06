@@ -127,6 +127,14 @@ export const TaskCard = forwardRef<HTMLDivElement, TaskCardProps>(
             size="sm"
           />
 
+          {task.reviewer_id && (
+            <AssigneeAvatar
+              name={task.reviewer_name ?? undefined}
+              type={task.reviewer_type ?? "unassigned"}
+              size="sm"
+            />
+          )}
+
           {task.priority !== "none" && (
             <PriorityFlag priority={task.priority} size="sm" />
           )}

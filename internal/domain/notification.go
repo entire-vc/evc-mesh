@@ -37,13 +37,18 @@ type Notification struct {
 
 // NotificationEvent carries the data used to build and dispatch a notification.
 type NotificationEvent struct {
-	WorkspaceID uuid.UUID      `json:"workspace_id"`
-	TaskID      *uuid.UUID     `json:"task_id,omitempty"`
-	ProjectID   *uuid.UUID     `json:"project_id,omitempty"`
-	EventType   string         `json:"event_type"`
-	Title       string         `json:"title"`
-	Body        string         `json:"body"`
-	Metadata    map[string]any `json:"metadata,omitempty"`
+	WorkspaceID uuid.UUID  `json:"workspace_id"`
+	TaskID      *uuid.UUID `json:"task_id,omitempty"`
+	ProjectID   *uuid.UUID `json:"project_id,omitempty"`
+	EventType   string     `json:"event_type"`
+	Title       string     `json:"title"`
+	Body        string     `json:"body"`
+	// TargetUserID, when set, restricts delivery to this one user's own preference
+	// row instead of fanning out to every subscribed workspace member. Use for
+	// events that are inherently about one specific person (e.g. "you were made
+	// reviewer"), where broadcasting to the whole workspace would be wrong.
+	TargetUserID *uuid.UUID     `json:"target_user_id,omitempty"`
+	Metadata     map[string]any `json:"metadata,omitempty"`
 }
 
 // PushSubscription represents a browser Web Push subscription for a user.

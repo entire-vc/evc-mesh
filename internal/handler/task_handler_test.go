@@ -1930,3 +1930,95 @@ func TestTaskHandler_MoveTask_DefaultSource_IsAPI(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.Equal(t, "api", capturedSource)
 }
+
+// --- Reviewer binding on PATCH /tasks/:task_id ---
+//
+// reviewer_id and clear_reviewer are two fields rather than one nullable field on
+// purpose, and the asymmetry is the part worth pinning: a PATCH that omits
+// reviewer_id must leave an existing reviewer alone (otherwise every unrelated
+// edit — retitling a card — silently unassigns the reviewer), so "absent" cannot
+// also mean "remove". clear_reviewer carries the removal intent explicitly.
+
+// updateTaskWithBody runs h.Update against a task whose current state is `existing`
+// and returns whatever the handler handed to the service.
+func updateTaskWithBody(t *testing.T, existing *domain.Task, body string) *domain.Task {
+	t.Helper()
+	var got *domain.Task
+	mockSvc := &MockTaskService{
+		GetByIDFunc: func(ctx context.Context, id uuid.UUID) (*domain.Task, error) {
+			return existing, nil
+		},
+		UpdateFunc: func(ctx context.Context, task *domain.Task) error {
+			got = task
+			return nil
+		},
+	}
+	h, e := setupTaskTest(mockSvc)
+
+	req := httptest.NewRequest(http.MethodPatch, "/", strings.NewReader(body))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/tasks/:task_id")
+	c.SetParamNames("task_id")
+	c.SetParamValues(existing.ID.String())
+
+	require.NoError(t, h.Update(c))
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.NotNil(t, got, "service Update was never called")
+	return got
+}
+
+func newReviewerTask(reviewerID *uuid.UUID, reviewerType *domain.AssigneeType) *domain.Task {
+	return &domain.Task{
+		ID: uuid.New(), ProjectID: uuid.New(), Title: "Old Title",
+		Priority: domain.PriorityLow, ReviewerID: reviewerID, ReviewerType: reviewerType,
+	}
+}
+
+func TestTaskHandler_Update_SetsReviewer(t *testing.T) {
+	reviewerID := uuid.New()
+	got := updateTaskWithBody(t, newReviewerTask(nil, nil),
+		fmt.Sprintf(`{"reviewer_id":%q,"reviewer_type":"user"}`, reviewerID))
+
+	require.NotNil(t, got.ReviewerID)
+	assert.Equal(t, reviewerID, *got.ReviewerID)
+	require.NotNil(t, got.ReviewerType)
+	assert.Equal(t, domain.AssigneeTypeUser, *got.ReviewerType)
+}
+
+func TestTaskHandler_Update_ClearReviewerRemovesBothFields(t *testing.T) {
+	existingID := uuid.New()
+	existingType := domain.AssigneeTypeUser
+	got := updateTaskWithBody(t, newReviewerTask(&existingID, &existingType),
+		`{"clear_reviewer":true}`)
+
+	assert.Nil(t, got.ReviewerID, "clear_reviewer must drop the reviewer id")
+	assert.Nil(t, got.ReviewerType,
+		"clear_reviewer must drop the type too — a dangling reviewer_type is the "+
+			"inconsistent-row shape the assignee columns had to be repaired for")
+}
+
+// clear_reviewer wins over a reviewer_id sent in the same body. Pinning a
+// deterministic winner matters because the two fields are independent on the wire
+// and a client can send both.
+func TestTaskHandler_Update_ClearReviewerBeatsReviewerID(t *testing.T) {
+	got := updateTaskWithBody(t, newReviewerTask(nil, nil),
+		fmt.Sprintf(`{"clear_reviewer":true,"reviewer_id":%q,"reviewer_type":"user"}`, uuid.New()))
+
+	assert.Nil(t, got.ReviewerID, "clear_reviewer must win over a reviewer_id in the same body")
+	assert.Nil(t, got.ReviewerType)
+}
+
+// The regression this guards: an omitted reviewer_id must not be read as "clear".
+func TestTaskHandler_Update_OmittedReviewerLeavesItUntouched(t *testing.T) {
+	existingID := uuid.New()
+	existingType := domain.AssigneeTypeAgent
+	got := updateTaskWithBody(t, newReviewerTask(&existingID, &existingType),
+		`{"title":"New Title"}`)
+
+	require.NotNil(t, got.ReviewerID, "an unrelated edit must not unassign the reviewer")
+	assert.Equal(t, existingID, *got.ReviewerID)
+	require.NotNil(t, got.ReviewerType)
+	assert.Equal(t, domain.AssigneeTypeAgent, *got.ReviewerType)
+}

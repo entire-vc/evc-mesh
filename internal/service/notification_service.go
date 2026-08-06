@@ -144,6 +144,13 @@ func (s *notificationService) dispatch(event domain.NotificationEvent) {
 			continue
 		}
 
+		// A targeted event (e.g. "you were made reviewer") is about one specific
+		// person, not the workspace at large — everyone else's matching preference
+		// row is not a delivery instruction for this event.
+		if event.TargetUserID != nil && *p.UserID != *event.TargetUserID {
+			continue
+		}
+
 		n := &domain.Notification{
 			WorkspaceID: event.WorkspaceID,
 			UserID:      p.UserID,
@@ -173,6 +180,9 @@ func (s *notificationService) dispatch(event domain.NotificationEvent) {
 				continue
 			}
 			if !containsInStringArray(p.Events, event.EventType) {
+				continue
+			}
+			if event.TargetUserID != nil && *p.UserID != *event.TargetUserID {
 				continue
 			}
 			taskURL := ""
