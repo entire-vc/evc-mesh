@@ -34,6 +34,15 @@ export function slugify(text: string): string {
     .replace(/^-+|-+$/g, "");
 }
 
+// Custom field slugs are stored as snake_case (backend constraint:
+// ^[a-z0-9_]{1,100}$, no hyphens) — unlike workspace/project slugs.
+export function slugifyFieldKey(text: string): string {
+  return transliterate(text.toLowerCase())
+    .replace(/[^\w\s_]/g, "")
+    .replace(/[\s-]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
 export function formatBytes(bytes: number): string {
   if (bytes === 0) return "0 B";
   const k = 1024;

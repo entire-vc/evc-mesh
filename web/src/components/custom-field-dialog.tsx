@@ -13,7 +13,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Select } from "@/components/ui/select";
 import { useCustomFieldStore } from "@/stores/custom-field";
-import { slugify } from "@/lib/utils";
+import { slugifyFieldKey } from "@/lib/utils";
 import type { CustomFieldDefinition, FieldType } from "@/types";
 
 interface CustomFieldDialogProps {
@@ -157,7 +157,7 @@ export function CustomFieldDialog({
   const handleNameChange = (value: string) => {
     setName(value);
     if (!isEdit) {
-      setSlug(slugify(value));
+      setSlug(slugifyFieldKey(value));
     }
   };
 
@@ -335,7 +335,7 @@ export function CustomFieldDialog({
               </label>
               <Input
                 id="cf-slug"
-                placeholder="story-points"
+                placeholder="story_points"
                 value={slug}
                 onChange={(e) => setSlug(e.target.value)}
               />
