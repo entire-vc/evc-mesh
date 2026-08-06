@@ -631,8 +631,13 @@ export function ListViewPage() {
   // Sync current state to saved-view store
   const { pendingView, clearPendingView, setCurrentViewState } = useSavedViewStore();
   useEffect(() => {
-    setCurrentViewState({ sortBy: sortField, sortOrder: sortDir });
-  }, [sortField, sortDir, setCurrentViewState]);
+    setCurrentViewState({
+      sortBy: sortField,
+      sortOrder: sortDir,
+      filters: { tags: selectedTags, custom_fields: cfFilters },
+      columns: Array.from(visibleColumns),
+    });
+  }, [sortField, sortDir, selectedTags, cfFilters, visibleColumns, setCurrentViewState]);
 
   // Listen for saved view applied from ViewTabBar
   useEffect(() => {
@@ -642,6 +647,13 @@ export function ListViewPage() {
       }
       if (pendingView.sort_order === "asc" || pendingView.sort_order === "desc") {
         setSortDir(pendingView.sort_order);
+      }
+      const filters = pendingView.filters ?? {};
+      setSelectedTags(Array.isArray(filters.tags) ? (filters.tags as string[]) : []);
+      setCFFilters((filters.custom_fields as CFFilters) ?? {});
+      if (pendingView.columns) {
+        // "name" is always visible (required, see handleColumnChange).
+        setVisibleColumns(new Set([...pendingView.columns, "name"]));
       }
       clearPendingView();
     }

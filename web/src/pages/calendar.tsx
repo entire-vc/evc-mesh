@@ -528,8 +528,10 @@ export function CalendarPage() {
   // Sync current state to saved-view store
   const { pendingView, clearPendingView, setCurrentViewState } = useSavedViewStore();
   useEffect(() => {
-    setCurrentViewState({ filters: { search: searchQuery } });
-  }, [searchQuery, setCurrentViewState]);
+    setCurrentViewState({
+      filters: { search: searchQuery, show_unscheduled: showUnscheduled },
+    });
+  }, [searchQuery, showUnscheduled, setCurrentViewState]);
 
   // Listen for saved view applied from ViewTabBar
   useEffect(() => {
@@ -537,6 +539,7 @@ export function CalendarPage() {
       if (pendingView.filters) {
         const f = pendingView.filters as Record<string, unknown>;
         if (typeof f.search === "string") setSearchQuery(f.search);
+        setShowUnscheduled(Boolean(f.show_unscheduled));
       }
       clearPendingView();
     }

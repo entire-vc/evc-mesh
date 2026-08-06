@@ -725,7 +725,10 @@ export function BoardPage() {
 
   // ----- New task helpers -----
 
-  // Sync current filter state to saved-view store (so ViewTabBar can save it)
+  // Sync current filter state to saved-view store (so ViewTabBar can save it).
+  // `custom_fields` carries `cfFilters` (the filter that actually drives
+  // filteredTasks via applyViewFilters) — not the unused `customFieldFilters`
+  // state, which is dead (board-toolbar.tsx never reads it).
   const { pendingView, clearPendingView, setCurrentViewState } = useSavedViewStore();
   useEffect(() => {
     setCurrentViewState({
@@ -734,15 +737,25 @@ export function BoardPage() {
         priority: priorityFilter,
         assignee: assigneeFilter,
         assignee_ids: assigneeIdsFilter,
-        custom_fields: customFieldFilters,
+        custom_fields: cfFilters,
+        tags: selectedTags,
+        group_by: groupBy,
+        show_closed: showClosed,
+        show_subtasks: showSubtasks,
       },
+      sortBy,
     });
   }, [
     searchQuery,
     priorityFilter,
     assigneeFilter,
     assigneeIdsFilter,
-    customFieldFilters,
+    cfFilters,
+    selectedTags,
+    groupBy,
+    showClosed,
+    showSubtasks,
+    sortBy,
     setCurrentViewState,
   ]);
 
@@ -753,8 +766,15 @@ export function BoardPage() {
       setSearchQuery((filters.search as string) ?? "");
       setPriorityFilter((filters.priority as string) ?? "all");
       setAssigneeFilter((filters.assignee as string) ?? "all");
-      setAssigneeIdsFilter((filters.assignee_ids as string[]) ?? []);
-      setCustomFieldFilters((filters.custom_fields as Record<string, unknown>) ?? {});
+      setAssigneeIdsFilter(
+        Array.isArray(filters.assignee_ids) ? (filters.assignee_ids as string[]) : [],
+      );
+      setCFFilters((filters.custom_fields as CFFilters) ?? {});
+      setSelectedTags(Array.isArray(filters.tags) ? (filters.tags as string[]) : []);
+      setGroupBy((filters.group_by as GroupBy) ?? "status");
+      setShowClosed(Boolean(filters.show_closed));
+      setShowSubtasks(Boolean(filters.show_subtasks));
+      if (pendingView.sort_by) setSortBy(pendingView.sort_by as SortBy);
       clearPendingView();
     }
   }, [pendingView, clearPendingView]);
