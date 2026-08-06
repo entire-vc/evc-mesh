@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router";
-import { ListTree } from "lucide-react";
+import { ListTree, Loader2, Plus } from "lucide-react";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { priorityConfig } from "@/lib/utils";
 import { useProjectStore } from "@/stores/project";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { Task } from "@/types";
 
@@ -20,6 +22,10 @@ export function SubtaskList({ taskId, onOpenSubtask }: SubtaskListProps) {
   const { statuses, projects } = useProjectStore();
   const [subtasks, setSubtasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
+  const [showForm, setShowForm] = useState(false);
+  const [title, setTitle] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const fetchSubtasks = useCallback(async () => {
     try {
@@ -38,6 +44,92 @@ export function SubtaskList({ taskId, onOpenSubtask }: SubtaskListProps) {
     void fetchSubtasks();
   }, [fetchSubtasks]);
 
+  const handleAdd = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const trimmed = title.trim();
+    if (!trimmed) {
+      setError("Title is required.");
+      return;
+    }
+    setSubmitting(true);
+    setError(null);
+    try {
+      const created = await api<Task>(`/api/v1/tasks/${taskId}/subtasks`, {
+        method: "POST",
+        body: { title: trimmed },
+      });
+      setSubtasks((prev) => [...prev, created]);
+      setTitle("");
+      setShowForm(false);
+    } catch (err: unknown) {
+      setError(
+        err instanceof Error ? err.message : "Failed to add subtask.",
+      );
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const addSubtaskForm = showForm && (
+    <form
+      onSubmit={(e) => void handleAdd(e)}
+      className="space-y-2 rounded-lg border border-border bg-muted/20 p-3"
+    >
+      <Input
+        value={title}
+        onChange={(e) => setTitle(e.target.value)}
+        placeholder="Subtask title"
+        className="h-8 text-sm"
+        autoFocus
+      />
+      {error && <p className="text-xs text-destructive">{error}</p>}
+      <div className="flex gap-2">
+        <Button
+          type="submit"
+          size="sm"
+          className="flex-1"
+          disabled={submitting || !title.trim()}
+        >
+          {submitting ? (
+            <>
+              <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
+              Adding...
+            </>
+          ) : (
+            "Add Subtask"
+          )}
+        </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          onClick={() => {
+            setShowForm(false);
+            setError(null);
+            setTitle("");
+          }}
+        >
+          Cancel
+        </Button>
+      </div>
+    </form>
+  );
+
+  const addSubtaskButton = (
+    <Button
+      variant="ghost"
+      size="sm"
+      className="h-7 gap-1 text-xs"
+      onClick={() => {
+        setShowForm((v) => !v);
+        setError(null);
+      }}
+    >
+      <Plus className="h-3 w-3" />
+      Add subtask
+    </Button>
+  );
+
   if (loading) {
     return (
       <div className="space-y-2">
@@ -49,15 +141,21 @@ export function SubtaskList({ taskId, onOpenSubtask }: SubtaskListProps) {
 
   if (subtasks.length === 0) {
     return (
-      <div className="flex flex-col items-center py-8 text-muted-foreground">
-        <ListTree className="mb-2 h-8 w-8" />
-        <p className="text-sm">No subtasks.</p>
+      <div className="space-y-3">
+        <div className="flex justify-end">{addSubtaskButton}</div>
+        {addSubtaskForm}
+        <div className="flex flex-col items-center py-8 text-muted-foreground">
+          <ListTree className="mb-2 h-8 w-8" />
+          <p className="text-sm">No subtasks.</p>
+        </div>
       </div>
     );
   }
 
   return (
     <div className="space-y-2">
+      <div className="flex justify-end">{addSubtaskButton}</div>
+      {addSubtaskForm}
       {subtasks.map((subtask) => {
         const pConfig = priorityConfig[subtask.priority];
         const status = statuses.find((s) => s.id === subtask.status_id);
