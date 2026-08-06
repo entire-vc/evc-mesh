@@ -13,6 +13,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Select } from "@/components/ui/select";
 import { useCustomFieldStore } from "@/stores/custom-field";
+import { slugify } from "@/lib/utils";
 import type { CustomFieldDefinition, FieldType } from "@/types";
 
 interface CustomFieldDialogProps {
@@ -87,6 +88,7 @@ export function CustomFieldDialog({
   const isEdit = !!field;
 
   const [name, setName] = useState("");
+  const [slug, setSlug] = useState("");
   const [fieldType, setFieldType] = useState<FieldType>("text");
   const [description, setDescription] = useState("");
   const [isRequired, setIsRequired] = useState(false);
@@ -136,6 +138,7 @@ export function CustomFieldDialog({
         }
       } else {
         setName("");
+        setSlug("");
         setFieldType("text");
         setDescription("");
         setIsRequired(false);
@@ -150,6 +153,13 @@ export function CustomFieldDialog({
       setError(null);
     }
   }, [open, field]);
+
+  const handleNameChange = (value: string) => {
+    setName(value);
+    if (!isEdit) {
+      setSlug(slugify(value));
+    }
+  };
 
   const buildOptions = (): Record<string, unknown> | undefined => {
     if (fieldType === "select" || fieldType === "multiselect") {
@@ -196,6 +206,11 @@ export function CustomFieldDialog({
       return;
     }
 
+    if (!isEdit && !slug.trim()) {
+      setError("Slug is required");
+      return;
+    }
+
     if (
       (fieldType === "select" || fieldType === "multiselect") &&
       choices.filter((c) => c.value.trim() !== "").length === 0
@@ -222,6 +237,7 @@ export function CustomFieldDialog({
       } else {
         await createField(projectId, {
           name: name.trim(),
+          slug: slug.trim(),
           field_type: fieldType,
           description: description.trim() || undefined,
           options,
@@ -307,10 +323,24 @@ export function CustomFieldDialog({
               id="cf-name"
               placeholder="e.g. Story Points"
               value={name}
-              onChange={(e) => setName(e.target.value)}
+              onChange={(e) => handleNameChange(e.target.value)}
               autoFocus
             />
           </div>
+
+          {!isEdit && (
+            <div className="space-y-1.5">
+              <label htmlFor="cf-slug" className="text-sm font-medium">
+                Slug <span className="text-destructive">*</span>
+              </label>
+              <Input
+                id="cf-slug"
+                placeholder="story-points"
+                value={slug}
+                onChange={(e) => setSlug(e.target.value)}
+              />
+            </div>
+          )}
 
           <div className="space-y-1.5">
             <label htmlFor="cf-type" className="text-sm font-medium">
