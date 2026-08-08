@@ -477,15 +477,23 @@ penalty, chosen to sit far above the 0.0534 % the ranking can resolve):
 
 | corpus | decay toggled | required outcome | what it proves |
 |---|---|---|---|
-| backdated | on vs off | gold rank **differs** | the ages reach the ranking |
+| backdated | on vs off | gold rank moves, and moves **DOWN** | the ages reach the ranking |
 | born at ingest | on vs off | gold rank **identical** | what moved it *is* age, not the parameter |
 
-The positive arm additionally requires gold to be rank 1 with decay **off** —
-otherwise "decay moved it" cannot be told from "content ranking moved it" — and
-the fixture's own `--selftest` asserts that its query does **not** trip the
-temporal auto-classifier. Without that last check the server would force decay on
-in both arms, both would agree, and the negative control would pass while
-measuring nothing.
+Measured live (run 31274262413): rank **2** with decay off, rank **5** with it.
+
+The positive arm enforces the **direction**, not "gold is rank 1 on content".
+Only one variable differs between the two arms, so gold's absolute content rank
+is not part of the argument — and an earlier version that demanded rank 1
+discarded exactly the valid measurement above as "unarmed". What still blocks: no
+movement (the bench is blind), movement the wrong way (decay promoting the oldest
+row is a sign error, not a pass), and gold absent with decay off (no baseline
+position to move from).
+
+The fixture's `--selftest` additionally asserts that its query does **not** trip
+the temporal auto-classifier. Without that the server would force decay on in
+both arms, both would agree, and the negative control would pass while measuring
+nothing.
 
 ### Known limit: the temporal category cannot produce a verdict
 

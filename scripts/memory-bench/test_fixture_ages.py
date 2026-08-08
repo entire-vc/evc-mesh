@@ -252,6 +252,51 @@ class TestAgeingAloneDoesNotMeanTheGateMeasuresRecency(unittest.TestCase):
                 os.environ[ENV_APPLY_DECAY] = saved
 
 
+class TestThePositiveControlEnforcesDirectionNotRankOne(unittest.TestCase):
+    """The verdict logic of `recency_control.py --expect visible`, read off source.
+
+    Running it for real needs Mesh, an embedder and a writable database, so what
+    is pinned here is the part that a well-meaning edit would quietly break: the
+    three outcomes must stay distinct. No movement is a REGRESSION (the bench is
+    blind); movement the wrong way is also a REGRESSION (a sign error, and the
+    one failure a "the ranks differ" check would bless); movement in the
+    predicted direction is the pass, whatever gold's absolute content rank was.
+    """
+
+    def setUp(self):
+        src = (Path(__file__).resolve().parent / "recency_control.py").read_text()
+        self.aged = src.split("if aged:")[1].split("# ── AC3")[0]
+
+    def test_no_movement_is_a_regression(self):
+        self.assertIn("if rank_on == rank_off:", self.aged)
+        after = self.aged.split("if rank_on == rank_off:")[1]
+        self.assertIn("EXIT_REGRESSION", after.split("if rank_on < rank_off:")[0])
+
+    def test_movement_the_wrong_way_is_also_a_regression(self):
+        self.assertIn(
+            "if rank_on < rank_off:", self.aged,
+            "decay promoting the OLDEST fixture must not count as 'the ranks "
+            "differ, so ages are visible' — that is a sign error passing as proof",
+        )
+        self.assertIn("EXIT_REGRESSION", self.aged.split("if rank_on < rank_off:")[1])
+
+    def test_a_content_rank_other_than_one_no_longer_refuses(self):
+        """It did, and that refusal discarded a valid measurement (rank_off=2,
+        rank_on=5) on the first live run. Pinned so it is not reintroduced by
+        someone tightening the fixture check without reading why it loosened."""
+        self.assertNotIn(
+            "control-unarmed — gold is not rank 1 without decay", self.aged
+        )
+        self.assertIn("NOTE: gold ranks", self.aged)
+
+    def test_gold_absent_without_decay_is_still_inconclusive(self):
+        """The one precondition that IS load-bearing: with no baseline position
+        for gold, there is nothing for decay to move it from, and two arms that
+        both fail to find it agree for a reason unrelated to age."""
+        src = (Path(__file__).resolve().parent / "recency_control.py").read_text()
+        self.assertIn("control-unarmed — gold absent with decay off", src)
+
+
 class TestTheClientAgesBetweenIngestAndRecall(unittest.TestCase):
     """The placement is the correctness property, not an implementation detail.
 

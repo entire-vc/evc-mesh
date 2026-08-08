@@ -30,14 +30,23 @@ One corpus, five sessions, all on the same topic and near-tied on content.
 GOLD is the session that answers the query most directly, and is also the
 OLDEST — 180 days back, against distractors 0-3 days old.
 
-    decay OFF : ranking is content only            -> gold is rank 1
+    decay OFF : ranking is content only            -> gold ranks near the top
     decay ON  : every score is multiplied by
                 exp(-Δt·ln2/30d); gold takes a
                 2^(180/30) = 64x penalty and the
-                fresher near-ties overtake it      -> gold rank > 1
+                fresher near-ties overtake it      -> gold ranks strictly WORSE
 
-So the two runs must DISAGREE on an aged corpus, and that disagreement is the
-whole positive control (AC2): it can only happen if the ages reached the server.
+So the two runs must DISAGREE on an aged corpus, and disagree in the predicted
+DIRECTION — that is the positive control (AC2). It can only happen if the ages
+reached the server. Measured live on run 31274262413: rank 2 with decay off,
+rank 5 with it.
+
+The requirement is the direction, not "gold is rank 1 on content". Only one
+variable differs between the arms, so gold's absolute content rank is not part of
+the argument; a rank-1 fixture merely reads more cleanly. Demanding it cost a
+valid measurement once already (see the AC2 block in `run`). What IS blocking:
+no movement at all (the bench is still blind), and movement the wrong way (decay
+promoting the oldest row is a sign error, not a pass).
 
 `--expect blind` is the negative control (AC3)
 ----------------------------------------------
@@ -241,18 +250,33 @@ def run(expect: str, top_k: int) -> int:
 
     if aged:
         # ── AC2: the positive control ─────────────────────────────────────────
+        #
+        # The requirement is DIRECTIONAL, not "gold must be rank 1 on content".
+        #
+        # The first version demanded rank_off == 1 and refused otherwise. Live on
+        # run 31274262413 it measured rank_off=2, rank_on=5 — the ages were
+        # plainly reaching the ranking, and the control called itself unarmed and
+        # returned INCONCLUSIVE. That precondition was about how cleanly the
+        # result reads, not about whether it is valid, and it was costing the
+        # measurement it was meant to protect.
+        #
+        # What actually makes the comparison sound is that both arms differ by
+        # ONE variable: same corpus, same query, same code, only the decay flag.
+        # The negative control is what licenses attributing the difference to
+        # age — it shows the flag alone moves nothing on an un-aged corpus. Gold's
+        # absolute content rank is not part of that argument.
+        #
+        # So: rank must move, and it must move DOWN, because gold is the oldest
+        # fixture and decay penalises age. The direction was predicted from the
+        # mechanism before any run, which is what keeps this from being a
+        # threshold fitted to an observation.
         if rank_off != 1:
-            # Gold is meant to be the strongest content match; if it is not, then
-            # "decay moved it" cannot be told apart from "content ranking moved
-            # it", and a later green would be uninformative.
             print(
-                f"\n⚠ INCONCLUSIVE — gold ranks {rank_off} with decay OFF, not 1. "
-                "The fixture no longer isolates recency: retune SESSIONS so gold "
-                "is the clear content winner before reading anything into the "
-                "decay-on arm."
+                f"NOTE: gold ranks {rank_off} on content (decay off), not 1. The "
+                "fixture is not a clean content winner — the verdict below is "
+                "still sound (one variable differs between the arms), but a "
+                "sharper fixture would read better."
             )
-            print(f"{REASON_PREFIX} control-unarmed — gold is not rank 1 without decay")
-            return EXIT_INCONCLUSIVE
         if rank_on == rank_off:
             print(
                 f"\n✗ REGRESSION — the corpus was aged (gold {GOLD_AGE_DAYS:.0f} days "
@@ -264,10 +288,24 @@ def run(expect: str, top_k: int) -> int:
                 "which is the defect this control exists to keep closed."
             )
             return EXIT_REGRESSION
+        if rank_on < rank_off:
+            # Not merely "unexpected" — a sign error. Decay that PROMOTES the
+            # oldest row is `exp(+λΔt)`, and the harness would then be certifying
+            # a ranking that prefers stale memories. Accepting this as "the ranks
+            # differ, so ages are visible" is how a control blesses the bug it was
+            # built to catch.
+            print(
+                f"\n✗ REGRESSION — decay PROMOTED the oldest fixture: gold went "
+                f"from rank {rank_off} (decay off) to {rank_on} (decay on), while "
+                f"being {GOLD_AGE_DAYS:.0f} days older than every distractor. The "
+                "recency term has the wrong sign, or gold is not the oldest row "
+                "in the corpus this run actually wrote."
+            )
+            return EXIT_REGRESSION
         print(
             f"\n✓ the bench can see fixture age — gold is rank {rank_off} without "
-            f"decay and rank {rank_on} with it, on one corpus, from one "
-            f"{GOLD_AGE_DAYS:.0f}-day age difference"
+            f"decay and rank {rank_on} with it, demoted by one "
+            f"{GOLD_AGE_DAYS:.0f}-day age difference on an otherwise identical run"
         )
         return EXIT_OK
 
