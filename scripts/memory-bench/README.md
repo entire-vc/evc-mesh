@@ -358,6 +358,220 @@ written *before* the verdict branches, so it still exists on an INCONCLUSIVE or
 a refused capture, and a failure to write is logged but never changes the
 verdict: an observability artifact must not be able to fail a required check.
 
+## Fixture AGE, and why the corpus is backdated
+
+`remember` has no `created_at` field, so every fixture the bench writes is born at
+ingest. Stores are sequential (`STORE_CONCURRENCY = 1`), so a 42-54 session
+haystack spans seconds. Recall multiplies each score by
+`exp(-Δt·ln2/half_life)` — at equal ages that is a **common factor**, which
+scales every score and reorders nothing.
+
+Measured on the live corpus (#4772db75):
+
+| quantity | value |
+|---|---|
+| decay perturbation across a 60 s ingest window | 0.0069 % |
+| … across 300 s | 0.0344 % |
+| smallest gap between adjacent RRF scores | 0.0534 % |
+| median gap | 2.280 % |
+
+The age signal sat one to two orders of magnitude **below the resolution of the
+ranking it is supposed to move**. So every age-dependent mechanism —
+`apply_recency_decay`, `half_life_days`, `recency_weight`, `ProfileTemporal` —
+was unmeasurable here in *both* directions: a change that improved one and a
+change that broke one produced the same number. That is what blocked acceptance
+on evc-mesh-mcp#30: not a weak signal, no signal.
+
+### What the fix does
+
+`fixture_ages.py` rewrites `created_at` and `updated_at` on the freshly-ingested
+haystack, in the branch arm only, against the ephemeral postgres that arm owns.
+
+- **Both columns, not one.** `apply_recency_decay` and `decayed_relevance` read
+  `created_at`; the `recency_weight` FTS blend reads `updated_at`
+  (`applyRecencyBlend`). Backdating only `created_at` would have left a third of
+  the age-dependent surface blind while looking complete.
+- **Anchored on `question_date`, not the literal dataset date.** LongMemEval
+  dates are 2023 and the bench runs in 2026; written literally, the whole corpus
+  is ~1100 days old, which is a *different* common factor and therefore just as
+  invisible — while pushing scores into float noise. Shifting the timeline so
+  `question_date` lands on `now` reproduces exactly the ages the dataset asserts:
+  min 0.00 d, median 7.3 d, max 183.1 d over 1147 sessions, with zero sessions
+  dated after their own question.
+- **Inside the attempt, between the last store and the first recall.** `_sweep`
+  deletes the haystack in the `finally` of every attempt and `--repeat N`
+  re-ingests per pass, so there is no "after ingest" outside that window; and
+  `BoostRelevance` stamps `updated_at = NOW()` on every row a recall returns, so
+  a backdate applied afterwards is overwritten for exactly the rows that ranked.
+- **Never against prod.** `assert_local_dsn` refuses any non-loopback host, so a
+  copy-pasted prod DSN fails closed instead of rewriting timestamps in the
+  fleet's live memory. `test_fixture_ages.py` additionally scans the whole
+  workflow so a new step cannot introduce a remote one.
+- **Exact or it fails.** The `UPDATE` returns its row count and any number other
+  than the fixture count raises: too few leaves two age regimes in one corpus
+  (no score over which is attributable), too many means the update reached rows
+  this code does not own.
+
+### Ageing the corpus is NOT the same as measuring recency
+
+Read this before concluding anything from a backdated run. In **evc-mesh-mcp**
+— the binary the bench actually drives — `apply_recency_decay` defaults to
+**false**. A recall that does not weight age ranks a 183-day corpus and a
+183-second corpus identically. So ages alone move nothing.
+
+What reaches the ages is mesh-mcp's **query auto-classifier**: `ClassifyQuery`
+runs on every recall, and a matched `temporal` profile does
+`applyDecay = true` **over the caller's explicit `false`**, plus
+`order_by=decayed_relevance:desc` and a **7-day** half-life instead of 30.
+Measured over `data/lme_s_24.json`: **2 of 24** questions trip it (`031748ae`,
+"…when I just started…"; `9a707b81`, "How many days ago…"). The other 22 run with
+decay off and cannot be moved by ageing at all.
+
+Every run therefore prints both lines:
+
+```
+Fixture ages: question-anchored — 1147 fixtures over 24 questions: min=0.00d median-of-medians=7.30d max=183.10d
+Age-sensitive questions: 2 of 24 trip mesh-mcp's temporal profile (decay forced ON, half-life 7d, decayed_relevance ordering): 031748ae, 9a707b81. The other 22 run with decay off — ages cannot move them. [mirror of evc-mesh-mcp; advisory]
+```
+
+To measure an age-dependent change across the whole dataset, set
+`BENCH_APPLY_RECENCY_DECAY=true` (three states: unset = let the server decide,
+`true`/`false` = send it) **and re-snap the baseline** — see the age gate below.
+
+### The age gate: a regime change must not arrive as a REGRESSION
+
+Fixture age is the **third comparability axis**, after `arm` (which system) and
+`search_mode` (which retrieval path). The baseline records `fixture_age_mode`,
+and a mismatch against the run is **INCONCLUSIVE with `GATE_REASON:
+age-mode-mismatch`** — never `REGRESSION`.
+
+That is deliberate and it is what lets this land without a flag day. Turning
+ageing on changes the regime for every run on the merge path at once; judged
+against a floor cut under the old regime, honest movement would arrive as a red
+on every open PR simultaneously — the same shape as capturing a baseline under
+fixture-isolation the nightlies lacked, which this harness has already been
+bitten by once.
+
+An **unstated** `fixture_age_mode` reads as `ingest-now`. Unlike `arm`, that is
+not leniency: every baseline captured before this field existed *was* measured on
+a corpus born at ingest, so unstated has a known correct reading. Absence of the
+field on a run's questions reads the same way, for the same reason — otherwise
+the gate would take itself INCONCLUSIVE on every run until the last producer of a
+result dict had been upgraded.
+
+### The controls: `recency_control.py`
+
+Backdating is a side effect on a database, and every way of getting it wrong —
+an `UPDATE` that matched no rows, an age mode that fell back to the default, a
+decay flag that never reached the server — produces exactly the numbers the
+blindness produced. So it is verified the same way the dense arm is: with a pair
+of controls that bracket the claim, both run on every PR.
+
+```bash
+python recency_control.py --expect visible   # aged corpus   → the decay toggle MUST move gold
+python recency_control.py --expect blind     # un-aged corpus → it must NOT
+```
+
+One 5-session fixture, gold 180 days older than its near-ties (a 64x decay
+penalty, chosen to sit far above the 0.0534 % the ranking can resolve):
+
+| corpus | decay toggled | required outcome | what it proves |
+|---|---|---|---|
+| backdated | on vs off | gold rank moves, and moves **DOWN** | the ages reach the ranking |
+| born at ingest | on vs off | gold rank **identical** | what moved it *is* age, not the parameter |
+
+Measured live (run 31274262413): rank **2** with decay off, rank **5** with it.
+
+The positive arm enforces the **direction**, not "gold is rank 1 on content".
+Only one variable differs between the two arms, so gold's absolute content rank
+is not part of the argument — and an earlier version that demanded rank 1
+discarded exactly the valid measurement above as "unarmed". What still blocks: no
+movement (the bench is blind), movement the wrong way (decay promoting the oldest
+row is a sign error, not a pass), and gold absent with decay off (no baseline
+position to move from).
+
+The fixture's `--selftest` additionally asserts that its query does **not** trip
+the temporal auto-classifier. Without that the server would force decay on in
+both arms, both would agree, and the negative control would pass while measuring
+nothing.
+
+### What ageing actually cost, measured against `main`
+
+Like-for-like, `main` un-aged (run 31271277215) vs this branch aged (capture,
+3 passes, spread 0.000 on every category):
+
+| category | main | aged |
+|---|--:|--:|
+| knowledge-update | 1.000 | **0.750** |
+| temporal-reasoning | 1.000 | **0.750** |
+| single-session-preference | 0.250 | 0.250 |
+| multi-session / ss-assistant / ss-user | — | unchanged |
+| overall | 0.833 | 0.750 |
+
+**Exactly the two categories holding the two age-sensitive questions moved.** The
+other 22 questions are bit-identical in outcome, which is the mechanism claim
+above turning into a measurement: decay is off for them, so ages cannot reach
+them. The two that moved are the two that *should* move — `031748ae` and
+`9a707b81` now face the recency ranking a real agent's temporal query gets, and
+lose to fresher distractors. That is the property this harness could not see
+before, and the floor now prices it in.
+
+One anomaly, unexplained and recorded rather than smoothed: one earlier aged run
+scored four of these questions at rank 1-2 where `main`, this capture's three
+passes, and a second aged run all put them at rank 35-44. It moves scores
+*upward*, so it does not threaten the floor, but it is not understood.
+
+### `single-session-preference` is knowingly un-rulable
+
+It scores **0.250 against a 0.250 tolerance**, so its threshold is exactly 0 and
+the gate prints `ⓘ no verdict` for it. This is NOT caused by ageing — `main`
+scores the same 0.250 on those four questions. What the change did was force an
+honest re-snap, and the honest number is below what a 1-question tolerance on a
+4-question category can rule on.
+
+The previously committed floor said 0.500 for this category, which had drifted a
+full question away from what `main` actually scores. That is worse than
+ineligible: it is a threshold sitting exactly on the current score, so the next
+legitimate miss would have fired `REGRESSION` at whichever innocent PR was open.
+
+`check_captured_baseline.py` therefore distinguishes two causes of an ineligible
+category, because they take different remedies and were reported as one:
+
+* **spread-blinded** (`spread > tolerance`) — the capture is too noisy. Re-snap
+  in a quiet window. Hard blocker, never acceptable.
+* **score-bounded** (score ≤ tolerance) — no capture can fix it; the number is
+  what the system scores. Blocks unless accepted by NAME:
+  `--accept-ineligible single-session-preference`.
+
+Naming it keeps the acknowledgement narrow: a *second* category going ineligible
+still fails. `test_check_captured_baseline.py` now also runs the checker against
+`baseline_retrieval_branch.json` — the file the REQUIRED arm reads, which this
+test suite had never covered while checking the advisory prod file.
+
+### Known limit: the temporal category cannot produce a verdict
+
+`temporal-reasoning` holds **4 questions** and the branch baseline records
+`1.000` for it. A category at its ceiling can only move down, and one flipped
+answer moves it by 0.25 — exactly the tolerance — so `score < baseline −
+tolerance` is `0.75 < 0.75`, false, and the flip is absorbed. **Two** flips are
+needed to go red, i.e. 50 % of the category.
+
+Consequences, stated rather than glossed:
+
+- an *improvement* in temporal retrieval is unrepresentable here: the number is
+  already 1.000;
+- a *single-question* regression is invisible;
+- so any change whose whole purpose is temporal ranking has, at best, one bit of
+  headroom in this category, and a green on it is not evidence the change worked.
+
+This is the same shape as an acceptance criterion set at the current baseline:
+it passes when the change does nothing. Until the category has more questions,
+read a temporal change through `gold_rank` on the named questions (both arms
+print it per question) and through `recency_control.py`, **not** through the
+category score. Growing the dataset is the real fix and is not in this change;
+`test_fixture_ages.py` pins that at least one question remains age-sensitive, so
+a dataset edit cannot silently remove the last one.
+
 ## The eight ways this gate goes blind
 
 The gate is required, which makes its *silence* more dangerous than its red. Each

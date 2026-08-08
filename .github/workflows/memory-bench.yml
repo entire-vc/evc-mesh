@@ -236,7 +236,7 @@ jobs:
       # nothing, which is how test_gate_dense_arm.py and
       # test_check_captured_baseline.py sat unwired while the README credited
       # them as the pin for their failure mode.
-      - name: Gate self-checks (blind-spot, mode, arm, control)
+      - name: Gate self-checks (blind-spot, mode, arm, control, ages)
         run: |
           python scripts/memory-bench/test_gate_blindness.py
           python scripts/memory-bench/test_gate_modes.py
@@ -249,8 +249,11 @@ jobs:
           python scripts/memory-bench/test_classify_cancelled_arm.py
           python scripts/memory-bench/test_resume_after_deploy.py
           python scripts/memory-bench/test_bench_window.py
+          python scripts/memory-bench/test_fixture_ages.py
           python scripts/memory-bench/dense_arm_control.py --selftest
           python scripts/memory-bench/prod_window.py --selftest
+          python scripts/memory-bench/fixture_ages.py --selftest
+          python scripts/memory-bench/recency_control.py --selftest
 
       # One source of truth for "this dispatch is a capture, not a verdict" —
       # the re-snap must run and the judging gate must not, and two copies of the
@@ -532,6 +535,68 @@ jobs:
           if [ "$rc" = "1" ]; then exit 1; fi
           exit 0
 
+      # ---------------------------------------------------------------------
+      # The recency control, in both directions. Same shape and same reasoning
+      # as the dense-arm pair above: an assertion that can only pass is not a
+      # control, so the green ("the bench can see fixture age") is followed by
+      # the check that it CAN go red for the right reason ("what it sees is age
+      # and not the parameter").
+      #
+      # `--expect visible` ages one corpus and toggles apply_recency_decay over
+      # it: gold must MOVE. `--expect blind` does the same toggle over an
+      # un-aged corpus: gold must NOT move. Neither uses the scored dataset —
+      # they build a 5-session fixture whose gold is 180 days older than its
+      # near-ties, i.e. a 64x decay penalty, chosen to sit far above the
+      # 0.0534 % gap between adjacent RRF scores that the scored corpus can
+      # resolve.
+      #
+      # Why these are needed at all: backdating is a side effect on a database,
+      # and every way of getting it wrong (an update that matched no rows, an age
+      # mode that fell back to the default, a decay flag that never reached the
+      # server) produces exactly the numbers the blindness produced. A green
+      # scored gate cannot tell those apart; these two steps can.
+      # ---------------------------------------------------------------------
+      - name: Recency control — fixture age must be visible to the bench
+        id: control_recency_visible
+        if: ${{ !cancelled() && steps.scope.outputs.relevant == 'true' }}
+        env:
+          MESH_MCP_BIN: ${{ github.workspace }}/mesh-mcp-bin
+          RECALL_GRAPH_ENABLED: 'true'
+          BENCH_RUN_NONCE: ${{ github.run_id }}-${{ github.run_attempt }}-b-age
+          BENCH_BACKDATE_DSN: postgres://mesh:mesh@127.0.0.1:5432/mesh?sslmode=disable
+        run: |
+          cd scripts/memory-bench
+          set +e
+          python recency_control.py --expect visible 2>&1 | tee control_recency_visible.log
+          rc=${PIPESTATUS[0]}
+          set -e
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          if [ "$rc" = "1" ]; then exit 1; fi
+          exit 0
+
+      # `!cancelled()`, not the default: a failed positive control must not skip
+      # the step that says whether the control had any power. A red whose own
+      # power check was withheld is the exact artefact a reviewer cannot act on.
+      - name: Recency control — and what it sees is AGE, not the parameter
+        id: control_recency_blind
+        if: ${{ !cancelled() && steps.scope.outputs.relevant == 'true' }}
+        env:
+          MESH_MCP_BIN: ${{ github.workspace }}/mesh-mcp-bin
+          RECALL_GRAPH_ENABLED: 'true'
+          BENCH_RUN_NONCE: ${{ github.run_id }}-${{ github.run_attempt }}-b-age-neg
+          # Deliberately NO BENCH_BACKDATE_DSN: this arm's corpus must be born at
+          # ingest. Handing it a DSN it does not use would be harmless and would
+          # also make the negative control's premise unreadable from the YAML.
+        run: |
+          cd scripts/memory-bench
+          set +e
+          python recency_control.py --expect blind 2>&1 | tee control_recency_blind.log
+          rc=${PIPESTATUS[0]}
+          set -e
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          if [ "$rc" = "1" ]; then exit 1; fi
+          exit 0
+
       # `!cancelled()` and not the default: a failed dense-arm control must not
       # skip the two steps that explain it. Skipping them is how a red arrives
       # with its own evidence missing — the score that would say how bad, and the
@@ -558,6 +623,13 @@ jobs:
           RECALL_GRAPH_ENABLED: 'true'
           LME_TOP_K: '10'
           BENCH_RUN_NONCE: ${{ github.run_id }}-${{ github.run_attempt }}-c
+          # Captured under the SAME age regime the gate below judges in. This is
+          # the whole reason the regime is a recorded baseline field: a floor cut
+          # on a corpus born at ingest, compared against runs on a corpus aged
+          # over the dataset's real 0-183 day span, would read honest movement as
+          # a regression on every open PR at once.
+          BENCH_FIXTURE_AGE_MODE: question-anchored
+          BENCH_BACKDATE_DSN: postgres://mesh:mesh@127.0.0.1:5432/mesh?sslmode=disable
         run: |
           cd scripts/memory-bench
           # PIPESTATUS, not the pipeline's status. There is no `shell:` key and no
@@ -618,6 +690,17 @@ jobs:
           RECALL_GRAPH_ENABLED: 'true'
           LME_TOP_K: '10'
           BENCH_RUN_NONCE: ${{ github.run_id }}-${{ github.run_attempt }}-b
+          # Fixtures are aged after ingest, against the ephemeral postgres this
+          # job owns (`fixture_ages.py` refuses any non-loopback DSN, so the prod
+          # arm cannot be pointed at this even by editing the YAML). Without it
+          # every fixture is seconds old, every score carries the same decay
+          # factor, and nothing that depends on memory age — apply_recency_decay,
+          # half_life_days, recency_weight, any temporal profile — moves the
+          # number this gate enforces on. `run_ci` prints the resulting age
+          # distribution, so "the corpus was aged" is evidence in gate.log rather
+          # than an inference from this variable existing.
+          BENCH_FIXTURE_AGE_MODE: question-anchored
+          BENCH_BACKDATE_DSN: postgres://mesh:mesh@127.0.0.1:5432/mesh?sslmode=disable
         run: |
           cd scripts/memory-bench
           set +e

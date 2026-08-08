@@ -23,7 +23,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from check_captured_baseline import EXPECTED_SAMPLES, blockers  # noqa: E402
+from check_captured_baseline import (  # noqa: E402
+    EXPECTED_SAMPLES,
+    blockers,
+    ineligible_categories,
+)
 from run_ci import load_baseline  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
@@ -69,6 +73,41 @@ class TestTheCommittedBaseline(unittest.TestCase):
         """The whole point. If this fails, the required gate has a bad floor."""
         baseline = load_baseline(HERE / "baseline_retrieval.json")
         self.assertEqual(blockers(baseline, 0.25), [])
+
+    def test_the_BRANCH_baseline_in_the_tree_is_fit_to_commit(self):
+        """The file behind the REQUIRED check — and it was not covered here.
+
+        This class checked `baseline_retrieval.json` only, which is the PROD
+        canary's floor. The required, merge-blocking arm reads
+        `baseline_retrieval_branch.json`, so the checker that exists to keep a
+        bad floor out of the tree was pointed at the advisory file and not at
+        the blocking one. Same shape as the gate's own failure modes: a guard
+        aimed one file to the left of the thing it is guarding.
+
+        `single-session-preference` is accepted deliberately: it scores 0.250
+        against a 0.250 tolerance, so its threshold is exactly 0 and the gate
+        cannot rule on it. That is NOT a capture artefact — `main` scores the
+        same 0.250 on those four questions — so no re-snap can clear it. The
+        acknowledgement is named rather than blanket, so a SECOND category
+        going ineligible still fails this test.
+        """
+        baseline = load_baseline(HERE / "baseline_retrieval_branch.json")
+        self.assertEqual(
+            blockers(baseline, 0.25, frozenset({"single-session-preference"})), []
+        )
+
+    def test_the_branch_acknowledgement_is_still_needed_and_not_wider(self):
+        """Two directions at once: if the accepted category ever becomes
+        rulable, this test says so (delete the acknowledgement); and the
+        acknowledgement must not be silently covering a second category."""
+        baseline = load_baseline(HERE / "baseline_retrieval_branch.json")
+        ineligible = {c for c, _, _ in ineligible_categories(baseline, 0.25)}
+        self.assertEqual(
+            {"single-session-preference"}, ineligible,
+            "the set of categories the branch gate cannot rule on has changed — "
+            "update the acknowledgement in the test above and say why in the PR, "
+            "rather than widening it",
+        )
 
     def test_the_committed_baseline_covers_all_24_questions(self):
         baseline = load_baseline(HERE / "baseline_retrieval.json")

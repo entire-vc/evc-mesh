@@ -34,7 +34,10 @@ import logging
 import os
 import re
 import time
+from datetime import datetime, timezone
 from typing import Any
+
+import fixture_ages
 
 logger = logging.getLogger(__name__)
 
@@ -452,6 +455,9 @@ class MeshMemoryClient:
         workspace_id: str | None = None,
         agent_id: str | None = None,
         run_nonce: str | None = None,
+        age_mode: str | None = None,
+        backdate_dsn: str | None = None,
+        apply_recency_decay: bool | None = None,
         **_ignore: Any,
     ) -> None:
         self.qid = question_id
@@ -512,6 +518,33 @@ class MeshMemoryClient:
         # cannot distinguish them.
         self.attempts_made = 0
         self.attempts_allowed = 0
+        # ── Fixture ages ──────────────────────────────────────────────────────
+        # Which age regime this question's corpus is written under, and (when it
+        # is not the historical "everything is born now") where to apply it.
+        # Both fall back to the environment so run_ci needs no plumbing, and are
+        # injectable so `recency_control.py` can hold a backdated and a
+        # non-backdated client side by side in one process — which is exactly
+        # what its negative control is.
+        self.age_mode = fixture_ages.resolve_age_mode(age_mode)
+        self.backdate_dsn = (
+            backdate_dsn
+            if backdate_dsn is not None
+            else os.environ.get(fixture_ages.ENV_BACKDATE_DSN, "")
+        ).strip()
+        # Set by `_backdate` on every attempt: the ages this question's corpus
+        # actually carried when it was searched. run_ci aggregates these into the
+        # run-level distribution, so "the fixtures were aged" is a number in the
+        # log rather than an inference from the env var being set.
+        self.age_summary: dict[str, float] | None = None
+        self.ages_clamped = 0
+        # None = "do not send the parameter", which is NOT the same as False.
+        # Three distinct regimes, and the difference is not academic: mesh-mcp's
+        # recall auto-classifies the QUERY and a matched profile overrides the
+        # caller (`if pp.ApplyDecay { applyDecay = true }`), forcing decay on plus
+        # a 7-day half-life and `decayed_relevance` ordering. So "unset" is the
+        # only value that lets the server's own policy stand, and the controls
+        # need to be able to name true and false explicitly.
+        self.apply_recency_decay = fixture_ages.resolve_apply_decay(apply_recency_decay)
 
     def ingest_and_search(
         self,
@@ -521,6 +554,7 @@ class MeshMemoryClient:
         format_session_text,
         query: str,
         top_k: int,
+        question_date: str = "",
     ) -> list[dict[str, Any]]:
         attempts = (
             1
@@ -535,7 +569,9 @@ class MeshMemoryClient:
             self.tool_error = None
             try:
                 out = asyncio.run(
-                    self._run(sessions, dates, format_session_text, query, top_k)
+                    self._run(
+                        sessions, dates, format_session_text, query, top_k, question_date
+                    )
                 )
             except BaseException as exc:  # noqa: BLE001 — re-raised below
                 last = self._surfaced(exc)
@@ -605,7 +641,53 @@ class MeshMemoryClient:
         promoted.__cause__ = exc
         return promoted
 
-    async def _run(self, sessions, dates, format_session_text, query, top_k):
+    def _backdate(self, dates, question_date) -> None:
+        """Age this question's freshly-ingested fixtures. No-op in `ingest-now`.
+
+        Runs INSIDE the attempt, between the stores and the recall, and that
+        placement is load-bearing in two independent ways:
+
+          - `_sweep` deletes the whole haystack in the `finally` of every
+            attempt, and `--repeat N` re-ingests from scratch each pass, so the
+            rows a workflow-level step would have aged do not exist by the time
+            the next pass searches. There is no "after ingest" outside this
+            function.
+          - `BoostRelevance` (memory_repo.go) stamps `updated_at = NOW()` on
+            every row a recall returns. A backdate applied before the first
+            recall is what the ranking sees; one applied after is overwritten
+            for exactly the rows that matter.
+
+        Failure raises. An age-mode that silently degrades to "now" would report
+        the same numbers as the blindness this whole change exists to remove.
+        """
+        if self.age_mode == fixture_ages.AGE_MODE_NOW:
+            return
+        if not self.backdate_dsn:
+            raise fixture_ages.BackdateError(
+                f"age mode {self.age_mode!r} needs {fixture_ages.ENV_BACKDATE_DSN} "
+                "(only the branch arm's ephemeral postgres can be written to)"
+            )
+        if not question_date:
+            raise fixture_ages.BackdateError(
+                f"{self.qid}: age mode {self.age_mode!r} anchors the corpus on "
+                "question_date, and none was passed"
+            )
+        now = datetime.now(timezone.utc)
+        stamps, clamped = fixture_ages.target_timestamps(dates, question_date, now)
+        keyed = {f"{self.key_prefix}-s{idx}": ts for idx, ts in enumerate(stamps)}
+        updated = fixture_ages.backdate(self.backdate_dsn, keyed)
+        self.ages_clamped = clamped
+        self.age_summary = fixture_ages.age_summary(stamps, now)
+        logger.info(
+            "%s: aged %d fixtures (%s) mode=%s%s",
+            self.qid,
+            updated,
+            fixture_ages.format_age_summary(self.age_summary),
+            self.age_mode,
+            f" clamped={clamped}" if clamped else "",
+        )
+
+    async def _run(self, sessions, dates, format_session_text, query, top_k, question_date=""):
         from mcp import ClientSession, StdioServerParameters
         from mcp.client.stdio import stdio_client
 
@@ -646,6 +728,17 @@ class MeshMemoryClient:
                             zip(sessions, dates, strict=False)
                         )
                     ])
+                    # Between the last store and the first recall — see
+                    # `_backdate` for why no other point in the run works.
+                    #
+                    # Off-loop: `_backdate` shells out to psql, and the stdio
+                    # transport's reader is a task on THIS loop. Blocking it for
+                    # the length of a subprocess risks starving that reader into
+                    # a read timeout — a transport failure manufactured by the
+                    # measurement, and one that would surface as the same
+                    # BrokenResourceError this client already had to learn to
+                    # unwrap.
+                    await asyncio.to_thread(self._backdate, dates, question_date)
                     return await self._search(session, query, top_k)
                 except BaseException:
                     # This attempt is abandoning rows on a connection that may
@@ -878,6 +971,13 @@ class MeshMemoryClient:
         _rw = float(os.environ.get("BENCH_RECENCY_WEIGHT", "0") or 0)
         if _rw > 0:
             args["recency_weight"] = _rw
+        # Only sent when the caller named it. mesh-mcp's own default is `false`,
+        # AND a query-matched profile can force it to `true` over an explicit
+        # `false` — so "unset" is a genuine third state (let the server's policy
+        # stand) rather than a synonym for either value. The recency controls
+        # need to name both, and would prove nothing if this collapsed.
+        if self.apply_recency_decay is not None:
+            args["apply_recency_decay"] = self.apply_recency_decay
         result = await session.call_tool("recall", args)
         payload = _parse_tool_payload(result)
         if isinstance(payload, dict) and payload.get("error"):
