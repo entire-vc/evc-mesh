@@ -28,11 +28,12 @@ type testFixtures struct {
 
 // mockAPIState holds in-memory state for the mock REST API.
 type mockAPIState struct {
-	fx       testFixtures
-	tasks    map[string]map[string]any
-	comments map[string][]map[string]any // taskID -> comments
-	events   []map[string]any
-	deps     []map[string]any
+	fx        testFixtures
+	tasks     map[string]map[string]any
+	comments  map[string][]map[string]any // taskID -> comments
+	artifacts map[string][]map[string]any // taskID -> artifacts
+	events    []map[string]any
+	deps      []map[string]any
 }
 
 func newMockAPIState() *mockAPIState {
@@ -45,9 +46,10 @@ func newMockAPIState() *mockAPIState {
 		doneStatusID:       uuid.New(),
 	}
 	return &mockAPIState{
-		fx:       fx,
-		tasks:    make(map[string]map[string]any),
-		comments: make(map[string][]map[string]any),
+		fx:        fx,
+		tasks:     make(map[string]map[string]any),
+		comments:  make(map[string][]map[string]any),
+		artifacts: make(map[string][]map[string]any),
 	}
 }
 
@@ -381,9 +383,32 @@ func buildMockServer(state *mockAPIState) *httptest.Server {
 			})
 
 		case subpath == "artifacts" && r.Method == "GET":
+			// Pagination-aware for the same reason comments is (above): lets
+			// tests exercise the artifacts_total_count/artifacts_has_more
+			// envelope propagation in handleGetTask without needing sort_dir
+			// reversal, which is out of scope for artifacts (task 4222c17d).
+			all := state.artifacts[taskID]
+			pageSize := 50
+			if v, err := strconv.Atoi(r.URL.Query().Get("page_size")); err == nil && v > 0 {
+				pageSize = v
+			}
+			page := 1
+			if v, err := strconv.Atoi(r.URL.Query().Get("page")); err == nil && v > 0 {
+				page = v
+			}
+			start := min((page-1)*pageSize, len(all))
+			end := min(start+pageSize, len(all))
+			pageItems := all[start:end]
+			items := make([]any, len(pageItems))
+			for i, a := range pageItems {
+				items[i] = a
+			}
 			writeJSON(w, 200, map[string]any{
-				"items":       []any{},
-				"total_count": 0,
+				"items":       items,
+				"total_count": len(all),
+				"has_more":    end < len(all),
+				"page":        page,
+				"page_size":   pageSize,
 			})
 
 		case subpath == "artifacts" && r.Method == "POST":
@@ -663,6 +688,90 @@ func TestGetTask_IncludeComments_TailVisibleAndEnvelopePropagated(t *testing.T) 
 	assert.Equal(t, true, resp["comments_truncated"], "D2: an explicit truncation marker must be present")
 	note, _ := resp["comments_note"].(string)
 	assert.NotEmpty(t, note, "D2: a human-readable hint must accompany the truncation marker")
+}
+
+// TestGetTask_IncludeArtifacts_EnvelopePropagated is the artifacts-side
+// companion to the comments test above: same envelope-stripping defect,
+// fixed in its own commit per task 4222c17d's explicit "same class, separate
+// commit" instruction. Artifacts already list newest-first, so there is no
+// ordering half to test here — only that total_count/has_more/truncated/note
+// survive instead of being discarded.
+func TestGetTask_IncludeArtifacts_EnvelopePropagated(t *testing.T) {
+	srv, state := newTestServer()
+	ctx := context.Background()
+
+	createResult, err := srv.handleCreateTask(ctx, makeRequest(map[string]any{
+		"project_id": state.fx.projectID.String(),
+		"title":      "Many artifacts task",
+	}))
+	require.NoError(t, err)
+	require.False(t, createResult.IsError)
+	var created map[string]any
+	require.NoError(t, json.Unmarshal([]byte(mcpsdk.GetTextFromContent(createResult.Content[0])), &created))
+	taskID, _ := created["id"].(string)
+	require.NotEmpty(t, taskID)
+
+	const total = 55 // > pagination.DefaultPageSize (50)
+	for i := 0; i < total; i++ {
+		state.artifacts[taskID] = append(state.artifacts[taskID], map[string]any{
+			"id":      uuid.New().String(),
+			"task_id": taskID,
+			"name":    "file.txt",
+		})
+	}
+
+	result, err := srv.handleGetTask(ctx, makeRequest(map[string]any{
+		"task_id":           taskID,
+		"include_artifacts": true,
+	}))
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.False(t, result.IsError)
+
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal([]byte(mcpsdk.GetTextFromContent(result.Content[0])), &resp))
+
+	artifacts, ok := resp["artifacts"].([]any)
+	require.True(t, ok)
+	assert.Len(t, artifacts, 50, "must fetch DefaultPageSize artifacts, not fewer")
+
+	totalCount, _ := resp["artifacts_total_count"].(float64)
+	assert.Equal(t, float64(total), totalCount, "total_count must be propagated, not discarded")
+	assert.Equal(t, true, resp["artifacts_has_more"], "has_more must be propagated")
+	assert.Equal(t, true, resp["artifacts_truncated"], "an explicit truncation marker must be present")
+	note, _ := resp["artifacts_note"].(string)
+	assert.NotEmpty(t, note, "a human-readable hint must accompany the truncation marker")
+}
+
+// TestGetTask_IncludeArtifacts_NotTruncated is the negative case: a task with
+// fewer artifacts than DefaultPageSize must NOT carry a truncation marker.
+func TestGetTask_IncludeArtifacts_NotTruncated(t *testing.T) {
+	srv, state := newTestServer()
+	ctx := context.Background()
+
+	createResult, err := srv.handleCreateTask(ctx, makeRequest(map[string]any{
+		"project_id": state.fx.projectID.String(),
+		"title":      "Few artifacts task",
+	}))
+	require.NoError(t, err)
+	var created map[string]any
+	require.NoError(t, json.Unmarshal([]byte(mcpsdk.GetTextFromContent(createResult.Content[0])), &created))
+	taskID, _ := created["id"].(string)
+
+	state.artifacts[taskID] = []map[string]any{{"id": uuid.New().String(), "name": "one.txt"}}
+
+	result, err := srv.handleGetTask(ctx, makeRequest(map[string]any{
+		"task_id":           taskID,
+		"include_artifacts": true,
+	}))
+	require.NoError(t, err)
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal([]byte(mcpsdk.GetTextFromContent(result.Content[0])), &resp))
+
+	assert.Equal(t, float64(1), resp["artifacts_total_count"])
+	assert.Equal(t, false, resp["artifacts_has_more"])
+	_, hasTruncatedKey := resp["artifacts_truncated"]
+	assert.False(t, hasTruncatedKey, "must not carry a truncation marker when nothing was truncated")
 }
 
 func TestCreateTask(t *testing.T) {

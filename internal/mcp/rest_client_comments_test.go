@@ -85,6 +85,24 @@ func TestRESTClient_GetTaskComments_EmptyThread(t *testing.T) {
 	assert.Empty(t, items)
 }
 
+// TestRESTClient_GetTaskComments_PropagatesError ensures a failed request
+// (e.g. the task doesn't exist, or the server errors) surfaces as an error
+// rather than being swallowed — the reversal loop must never run against a
+// nil/partial result.
+func TestRESTClient_GetTaskComments_PropagatesError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		_ = json.NewEncoder(w).Encode(map[string]any{"message": "task not found"})
+	}))
+	defer srv.Close()
+
+	c := NewRESTClient(srv.URL, "agk_test_key")
+	result, err := c.GetTaskComments(t.Context(), "missing-task")
+	require.Error(t, err)
+	assert.Nil(t, result)
+}
+
 // TestRESTClient_GetTaskComments_SingleItem guards the same swap loop's other
 // edge: one item must not panic or get dropped by the i<j loop condition.
 func TestRESTClient_GetTaskComments_SingleItem(t *testing.T) {
