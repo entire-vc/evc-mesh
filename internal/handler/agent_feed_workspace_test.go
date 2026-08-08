@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
+	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -129,4 +130,62 @@ func TestHandleError_ForeignAssigneeIsUnprocessableNotForbidden(t *testing.T) {
 	assert.NotContains(t, rec.Body.String(), foreignWS.String(),
 		"the refusal must not name the workspace the principal actually belongs to — that would "+
 			"turn it into an oracle for probing which ids live in which tenant")
+}
+
+// The long-poll twin of the feed carries the same guard, and the reason it is
+// resolved BEFORE the poll rather than after matters: refusing a caller who has
+// already been parked for thirty seconds reports an authorization outcome as a
+// timeout, which is indistinguishable from "no work right now".
+//
+// A non-nil Redis client is required only to get past the handler's
+// not-configured check — these cases all return before anything subscribes, so
+// the address is never dialled.
+func pollHandlerWithUnusedRedis(ts service.TaskService) *AgentHandler {
+	rdb := redis.NewClient(&redis.Options{Addr: "127.0.0.1:1"})
+	return NewAgentHandlerFull(nil, ts, nil, rdb)
+}
+
+func TestPollTasks_RefusesWhenTheKeyResolvesNoWorkspace(t *testing.T) {
+	called := false
+	h := pollHandlerWithUnusedRedis(&MockTaskService{
+		GetMyTasksFunc: func(_ context.Context, _, _ uuid.UUID, _ domain.AssigneeType) ([]domain.Task, error) {
+			called = true
+			return nil, nil
+		},
+	})
+
+	e := echo.New()
+	rec := httptest.NewRecorder()
+	c := e.NewContext(httptest.NewRequest(http.MethodGet, "/", http.NoBody), rec)
+	c.Set(mw.ContextKeyAgentID, uuid.New())
+
+	require.NoError(t, h.PollTasks(c))
+
+	assert.Equal(t, http.StatusForbidden, rec.Code,
+		"the refusal must arrive immediately, not after the poll window — a 403 says "+
+			"'not allowed', a timed-out empty result says 'nothing to do'")
+	assert.False(t, called)
+}
+
+func TestPollTasks_RefusesWithoutAnAgentIdentity(t *testing.T) {
+	h := pollHandlerWithUnusedRedis(&MockTaskService{})
+
+	e := echo.New()
+	rec := httptest.NewRecorder()
+	c := e.NewContext(httptest.NewRequest(http.MethodGet, "/", http.NoBody), rec)
+
+	require.NoError(t, h.PollTasks(c))
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+}
+
+func TestPollTasks_RejectsAMalformedAgentIdentity(t *testing.T) {
+	h := pollHandlerWithUnusedRedis(&MockTaskService{})
+
+	e := echo.New()
+	rec := httptest.NewRecorder()
+	c := e.NewContext(httptest.NewRequest(http.MethodGet, "/", http.NoBody), rec)
+	c.Set(mw.ContextKeyAgentID, "not-a-uuid")
+
+	require.NoError(t, h.PollTasks(c))
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
 }
