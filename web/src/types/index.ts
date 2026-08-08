@@ -72,6 +72,7 @@ export interface CustomFieldDefinition {
 
 export interface CreateCustomFieldRequest {
   name: string;
+  slug: string;
   field_type: FieldType;
   description?: string;
   options?: Record<string, unknown>;

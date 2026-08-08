@@ -13,12 +13,34 @@ export function formatRelative(dateString: string): string {
   return formatDistanceToNow(parseISO(dateString), { addSuffix: true });
 }
 
+// Cyrillic -> Latin transliteration so slugify() doesn't collapse Cyrillic
+// names (e.g. "витрина") to an empty string.
+const CYRILLIC_TRANSLIT: Record<string, string> = {
+  а: "a", б: "b", в: "v", г: "g", д: "d", е: "e", ё: "e", ж: "zh",
+  з: "z", и: "i", й: "y", к: "k", л: "l", м: "m", н: "n", о: "o",
+  п: "p", р: "r", с: "s", т: "t", у: "u", ф: "f", х: "h", ц: "ts",
+  ч: "ch", ш: "sh", щ: "sch", ъ: "", ы: "y", ь: "", э: "e", ю: "yu",
+  я: "ya",
+};
+
+function transliterate(text: string): string {
+  return text.replace(/[Ѐ-ӿ]/g, (ch) => CYRILLIC_TRANSLIT[ch] ?? "");
+}
+
 export function slugify(text: string): string {
-  return text
-    .toLowerCase()
+  return transliterate(text.toLowerCase())
     .replace(/[^\w\s-]/g, "")
     .replace(/[\s_]+/g, "-")
     .replace(/^-+|-+$/g, "");
+}
+
+// Custom field slugs are stored as snake_case (backend constraint:
+// ^[a-z0-9_]{1,100}$, no hyphens) — unlike workspace/project slugs.
+export function slugifyFieldKey(text: string): string {
+  return transliterate(text.toLowerCase())
+    .replace(/[^\w\s_]/g, "")
+    .replace(/[\s-]+/g, "_")
+    .replace(/^_+|_+$/g, "");
 }
 
 export function formatBytes(bytes: number): string {
