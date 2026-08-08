@@ -690,6 +690,44 @@ func TestGetTask_IncludeComments_TailVisibleAndEnvelopePropagated(t *testing.T) 
 	assert.NotEmpty(t, note, "D2: a human-readable hint must accompany the truncation marker")
 }
 
+// TestGetTask_IncludeComments_NotTruncated is the comments-side negative
+// case, sibling to TestGetTask_IncludeArtifacts_NotTruncated: a thread
+// shorter than DefaultPageSize must not carry a truncation marker — the code
+// is symmetric with artifacts, but only artifacts had this case covered.
+func TestGetTask_IncludeComments_NotTruncated(t *testing.T) {
+	srv, state := newTestServer()
+	ctx := context.Background()
+
+	createResult, err := srv.handleCreateTask(ctx, makeRequest(map[string]any{
+		"project_id": state.fx.projectID.String(),
+		"title":      "Short thread task",
+	}))
+	require.NoError(t, err)
+	var created map[string]any
+	require.NoError(t, json.Unmarshal([]byte(mcpsdk.GetTextFromContent(createResult.Content[0])), &created))
+	taskID, _ := created["id"].(string)
+
+	state.comments[taskID] = []map[string]any{{
+		"id": uuid.New().String(), "body": "hi", "author_type": "agent",
+		"created_at": time.Now().UTC().Format(time.RFC3339),
+	}}
+
+	result, err := srv.handleGetTask(ctx, makeRequest(map[string]any{
+		"task_id":          taskID,
+		"include_comments": true,
+	}))
+	require.NoError(t, err)
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal([]byte(mcpsdk.GetTextFromContent(result.Content[0])), &resp))
+
+	assert.Equal(t, float64(1), resp["comments_total_count"])
+	assert.Equal(t, false, resp["comments_has_more"])
+	_, hasTruncatedKey := resp["comments_truncated"]
+	assert.False(t, hasTruncatedKey, "must not carry a truncation marker when nothing was truncated")
+	_, hasNoteKey := resp["comments_note"]
+	assert.False(t, hasNoteKey, "must not carry a hint note when nothing was truncated")
+}
+
 // TestGetTask_IncludeArtifacts_EnvelopePropagated is the artifacts-side
 // companion to the comments test above: same envelope-stripping defect,
 // fixed in its own commit per task 4222c17d's explicit "same class, separate
