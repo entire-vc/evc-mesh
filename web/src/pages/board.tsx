@@ -42,14 +42,17 @@ import { CreateRecurringDialog } from "@/components/create-recurring-dialog";
 import { AssigneeAvatar } from "@/components/assignee-avatar";
 import { applyViewFilters, type CFFilters } from "@/components/view-filters";
 import { loadBoardFilters, saveBoardFilters } from "@/lib/board-view-storage";
+import {
+  GROUP_BY_VALUES,
+  SORT_BY_VALUES,
+  buildBoardSavedViewState,
+  readBoardSavedViewState,
+} from "@/lib/board-saved-view";
 import type { Task, TaskStatus, WSMessage, Priority, StatusCategory } from "@/types";
 
 // ---------------------------------------------------------------------------
 // Priority metadata (for GroupBy=priority columns)
 // ---------------------------------------------------------------------------
-
-const GROUP_BY_VALUES: GroupBy[] = ["status", "priority", "assignee"];
-const SORT_BY_VALUES: SortBy[] = ["manual", "updated", "priority", "due_date", "created", "title"];
 
 const PRIORITY_ORDER: Record<Priority, number> = {
   urgent: 0,
@@ -726,25 +729,25 @@ export function BoardPage() {
   // ----- New task helpers -----
 
   // Sync current filter state to saved-view store (so ViewTabBar can save it).
-  // `custom_fields` carries `cfFilters` (the filter that actually drives
-  // filteredTasks via applyViewFilters) — not the unused `customFieldFilters`
-  // state, which is dead (board-toolbar.tsx never reads it).
+  // Capture and restore both go through board-saved-view.ts, which keeps the
+  // two halves symmetric — see that module for why `custom_fields` carries
+  // `cfFilters` rather than the dead `customFieldFilters` state.
   const { pendingView, clearPendingView, setCurrentViewState } = useSavedViewStore();
   useEffect(() => {
-    setCurrentViewState({
-      filters: {
-        search: searchQuery,
-        priority: priorityFilter,
-        assignee: assigneeFilter,
-        assignee_ids: assigneeIdsFilter,
-        custom_fields: cfFilters,
-        tags: selectedTags,
-        group_by: groupBy,
-        show_closed: showClosed,
-        show_subtasks: showSubtasks,
-      },
-      sortBy,
-    });
+    setCurrentViewState(
+      buildBoardSavedViewState({
+        searchQuery,
+        priorityFilter,
+        assigneeFilter,
+        assigneeIdsFilter,
+        cfFilters,
+        selectedTags,
+        groupBy,
+        showClosed,
+        showSubtasks,
+        sortBy,
+      }),
+    );
   }, [
     searchQuery,
     priorityFilter,
@@ -762,19 +765,18 @@ export function BoardPage() {
   // Listen for saved view applied from ViewTabBar
   useEffect(() => {
     if (pendingView && pendingView.view_type === "board") {
-      const filters = pendingView.filters ?? {};
-      setSearchQuery((filters.search as string) ?? "");
-      setPriorityFilter((filters.priority as string) ?? "all");
-      setAssigneeFilter((filters.assignee as string) ?? "all");
-      setAssigneeIdsFilter(
-        Array.isArray(filters.assignee_ids) ? (filters.assignee_ids as string[]) : [],
-      );
-      setCFFilters((filters.custom_fields as CFFilters) ?? {});
-      setSelectedTags(Array.isArray(filters.tags) ? (filters.tags as string[]) : []);
-      setGroupBy((filters.group_by as GroupBy) ?? "status");
-      setShowClosed(Boolean(filters.show_closed));
-      setShowSubtasks(Boolean(filters.show_subtasks));
-      if (pendingView.sort_by) setSortBy(pendingView.sort_by as SortBy);
+      const restored = readBoardSavedViewState(pendingView.filters ?? {}, pendingView.sort_by);
+      setSearchQuery(restored.searchQuery);
+      setPriorityFilter(restored.priorityFilter);
+      setAssigneeFilter(restored.assigneeFilter);
+      setAssigneeIdsFilter(restored.assigneeIdsFilter);
+      setCFFilters(restored.cfFilters);
+      setSelectedTags(restored.selectedTags);
+      setGroupBy(restored.groupBy);
+      setShowClosed(restored.showClosed);
+      setShowSubtasks(restored.showSubtasks);
+      // No sort_by on the view: keep whatever sort is currently active.
+      if (restored.sortBy) setSortBy(restored.sortBy);
       clearPendingView();
     }
   }, [pendingView, clearPendingView]);
