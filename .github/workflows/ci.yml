@@ -512,6 +512,8 @@ jobs:
       - name: Install frontend dependencies
         working-directory: web
         run: pnpm install --frozen-lockfile
+      - name: Assert typecheck is not vacuous
+        run: ./scripts/assert-typecheck-is-not-vacuous.sh
       - name: Typecheck frontend
         working-directory: web
         run: pnpm typecheck
