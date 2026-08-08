@@ -1239,9 +1239,11 @@ const minReaffirmToWithdrawalGap = 30 * time.Minute
 //     triageExitNegators vocabulary enforceTriageExit uses, matched against the body
 //     with code spans, fences and blockquotes stripped — a comment that merely QUOTES
 //     "не нужен" while explaining the mechanism withdraws nothing);
-//   - of all prior comments that both hasBlockingMarker AND are not themselves
-//     already negated, the CHRONOLOGICALLY LAST one must be authored by this SAME
-//     agent. A live ask with no marker found at all, or one raised/most-recently
+//   - of all prior comments that hasBlockingMarker, the CHRONOLOGICALLY LAST one
+//     must be authored by this SAME agent (task #5d3d2402: that marker's OWN body
+//     may itself carry a negator — e.g. it doubled as an FYI aside — and that no
+//     longer disqualifies it as the live ask; see scanHumanGateOwnership's doc).
+//     A live ask with no marker found at all, or one raised/most-recently
 //     reaffirmed by someone else, is left gated — this is the negative control:
 //     an unwithdrawn or another-agent's ask must not clear.
 //   - minReaffirmToWithdrawalGap (below) if this agent is not the ask's SOLE
@@ -1278,10 +1280,36 @@ type humanGateMarkerScan struct {
 }
 
 // scanHumanGateOwnership finds who owns taskID's currently-live human_gate
-// ask: the CHRONOLOGICALLY LAST marker-bearing comment that is not itself
-// already negated. Mirrors enforceBlockingTriage's own arm criterion
-// (hasBlockingMarker, no auto-generated-comment carve-out) so "who armed it"
-// is judged by the same rule that actually armed it.
+// ask: the CHRONOLOGICALLY LAST marker-bearing comment. Mirrors
+// enforceBlockingTriage's own arm criterion EXACTLY (hasBlockingMarker, no
+// negator carve-out, no auto-generated-comment carve-out) so "who armed it"
+// is judged by the same rule that actually armed it — see the fixed defect
+// below for what happens when the two rules disagree.
+//
+// Fixed 2026-08-05 (task #5d3d2402, found by Garfield reproducing #649c966b):
+// this scan used to skip a marker-bearing comment when hasNegatorInScope(c.Body)
+// found a negator AFTER the marker WITHIN THAT SAME COMMENT — e.g. "❓ Blocking
+// @pavel: … отвечать не нужно, отзову сам". enforceBlockingTriage arms on
+// hasBlockingMarker alone and has never looked at negators, so that comment
+// armed human_gate regardless. The two predicates then disagreed on the ask
+// this exact comment raised: armed with no owner (scan.found=false ⇒
+// ReasonIfNot="no_live_marker"), which releaseHumanGateOnWithdrawal's own
+// !scan.found fail-closed guard (below) makes permanent — not even the
+// marker's own author could ever withdraw it, because the withdrawal path
+// requires scan.found=true to compare authors against. A live census (48
+// gated tasks) found 2 real cards stuck exactly this way, both fulfilled asks
+// with no path back down.
+//
+// For "who owns this ask", a negator inside the marker's own body answers a
+// different question (whether the ask is even live) than the one this scan
+// asks (who raised it, given that it undisputedly IS live — task.HumanGate is
+// already true by the time anything calls this). If the gate is up, it has an
+// author; hasNegatorInScope stays exactly as it was for the ONE question it
+// still answers here — does a SEPARATE, LATER comment (no marker of its own,
+// checked by releaseHumanGateOnWithdrawal directly against comment.Body, not
+// through this scan) assert a withdrawal of the marker this scan finds.
+// Negator narrowing itself (which substrings count, how quoting is stripped)
+// is unchanged and out of scope — task #3d148c21 owns that surface.
 //
 // While iterating, also tracks (a) that marker's own CreatedAt, for the
 // time-gap guard callers apply, and (b) whether every marker-bearing comment
@@ -1338,9 +1366,10 @@ func (s *commentService) scanHumanGateOwnership(ctx context.Context, taskID uuid
 			} else if c.AuthorID != firstMarkerAuthorSeen {
 				scan.soleMarkerAuthor = false
 			}
-			if hasNegatorInScope(c.Body) {
-				continue // already-negated marker isn't the live ask
-			}
+			// Deliberately NOT checking hasNegatorInScope(c.Body) here — see the
+			// function doc above (#5d3d2402). enforceBlockingTriage armed this gate
+			// on hasBlockingMarker alone; ownership must be judged by the same rule,
+			// or an armed gate can end up with no owner at all.
 			scan.found = true
 			scan.markerCommentID = c.ID
 			scan.markerAuthorID = c.AuthorID

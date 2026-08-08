@@ -69,6 +69,37 @@ def workflow_step(text: str, name: str) -> str:
     return "\n".join(body)
 
 
+def workflow_jobs(text: str) -> dict[str, str]:
+    """Split the file into `{job id: job body}` on the `  <id>:` indent.
+
+    Step-level slicing is not enough for anything a job may hold more than one
+    of. `Checkout evc-mesh` appears in four jobs; `workflow_step` takes the
+    FIRST, so a step-level assertion about a checkout reports on whichever job
+    happens to come first in the file — which is the recall arm, the one that
+    was already correct.
+    """
+    lines = text.splitlines()
+    try:
+        start = lines.index("jobs:")
+    except ValueError:
+        return {}
+    jobs: dict[str, list[str]] = {}
+    current: str | None = None
+    for line in lines[start + 1 :]:
+        stripped = line.strip()
+        if (
+            line.startswith("  ")
+            and not line.startswith("   ")
+            and stripped.endswith(":")
+            and not stripped.startswith("#")
+        ):
+            current = stripped[:-1]
+            jobs[current] = []
+        elif current is not None:
+            jobs[current].append(line)
+    return {name: "\n".join(body) for name, body in jobs.items()}
+
+
 class CaptureStepCallsTheGuard(unittest.TestCase):
     """The guard exists; these pin that the CAPTURE path actually CALLS it.
 
@@ -114,12 +145,112 @@ class CaptureStepCallsTheGuard(unittest.TestCase):
         body = workflow_step(self.text, "Re-snap the recall baseline")
         self.assertIn("--served-commit", body)
 
+    def test_the_advisory_capture_step_is_pinned_the_same_way(self):
+        """The ADVISORY capture writes a standing floor too, so it gets the same guard.
+
+        The required arm got version attribution in #410; this arm kept none of
+        it, and the gap is worse here rather than milder: `baseline.json` is what
+        the advisory arm is judged against for weeks, and until #f0e655e7 it was
+        a file that stated neither its retrieval mode nor its binary. A capture
+        straddling a deploy would have become that floor with nothing in the file
+        saying so.
+
+        Asserted per-property rather than by diffing the two steps: the arms
+        legitimately differ (different baseline file, different refusal text), so
+        a "these two steps are identical" test would go false the day either one
+        is edited for a reason that has nothing to do with this guard.
+        """
+        body = workflow_step(self.text, "Re-snap the end-to-end baseline")
+        self.assertTrue(body.strip(), "the advisory capture step was not found")
+        self.assertIn("SERVED_AT_START", body)
+        self.assertIn("--served-commit", body)
+        self.assertIn("check_serving_version.py --was", body)
+        self.assertIn("rm -f baseline.json", body)
+
+    def test_the_advisory_capture_pins_before_it_spends_an_hour(self):
+        """Pre-flight pin, and it must gate the capture rather than merely log it.
+
+        `--was` alone would catch a mid-run deploy only AFTER paying for the
+        measurement. The pre-flight step is what makes an unattributable capture
+        cost the wait and nothing else — so it must both run and be able to stop
+        the job (`exit $rc`), not just record a sha.
+        """
+        body = workflow_step(self.text, "Which commit will this capture measure?")
+        self.assertTrue(body.strip(), "the pre-flight pin step was not found")
+        self.assertIn("check_serving_version.py", body)
+        self.assertIn("exit $rc", body)
+
+    def test_the_two_pin_steps_do_not_share_a_name(self):
+        """`workflow_step` takes the FIRST match, so a shared name is a vacuous test.
+
+        The recall arm already has a step called `Which commit is prod serving?`.
+        Had the advisory one reused that name, the test above would have sliced
+        the recall arm's body, passed on ITS wiring, and reported the advisory
+        arm as pinned while it was not.
+        """
+        for name in ("Which commit is prod serving?",
+                     "Which commit will this capture measure?"):
+            self.assertEqual(
+                1, self.text.count(f"      - name: {name}\n"),
+                f"step name {name!r} is not unique in the workflow",
+            )
+
     def test_the_scoring_step_still_has_its_own_check(self):
         """The two arms must not drift — fixing one by moving it is not a fix."""
         body = workflow_step(self.text, "Run recall gate (no LLM)")
         self.assertTrue(body.strip(), "the scoring step was not found")
         self.assertIn("check_serving_version.py \\", body)
         self.assertIn("--was", body)
+
+    def test_every_job_that_calls_the_guard_checks_out_full_history(self):
+        """The guard's precondition, asserted where the guard is USED.
+
+        `classify` compares by diffing prod's commit against this one over
+        `deploy-backend.yml`'s paths, so it needs both commits present and
+        refuses rather than guesses when one is not — its own docstring says
+        `fetch-depth: 0` is what makes that true in CI. Two of the jobs calling
+        it had that depth; the advisory capture, which got the guard in #505,
+        was left on the default depth-1 clone.
+
+        The result is not a weaker guard, it is an inverted one. `classify`
+        string-compares before it diffs, so the step passes only when prod
+        already serves this exact sha — and a capture is dispatched on main
+        right after a merge, which is precisely when it does not. Run
+        30909509069: prod ff6a694, checkout 328ed3f, zero deployable files
+        between them, polled the full 900s and refused. A pin added so a capture
+        could not straddle a deploy would have refused every capture instead.
+
+        Asserted over every job that calls the script rather than by naming the
+        advisory one: the coupling belongs to the caller, so a job that starts
+        calling it tomorrow inherits the requirement without anyone remembering
+        this.
+        """
+        jobs = workflow_jobs(self.text)
+        self.assertIn("memory-bench", jobs, "job slicer found no `memory-bench` job")
+
+        callers = {n: b for n, b in jobs.items() if "check_serving_version.py" in b}
+        # Positive control: if the slicer or the script name ever drifts, an
+        # empty caller set would make the loop below assert nothing at all.
+        #
+        # Two, not three: `recall-gate-branch` also checks out full history but
+        # never calls the guard, and correctly so — it scores the build from the
+        # PR branch, so "which commit is prod serving" is not a question it has.
+        self.assertEqual(
+            ["memory-bench", "recall-gate"], sorted(callers),
+            f"expected the two prod-facing jobs to call the guard, found {sorted(callers)} — "
+            "the slicer or the script name has drifted and this test is vacuous",
+        )
+
+        for name, body in sorted(callers.items()):
+            checkout = workflow_step(body, "Checkout evc-mesh")
+            self.assertTrue(
+                checkout.strip(), f"job {name} calls the guard but has no evc-mesh checkout",
+            )
+            self.assertIn(
+                "fetch-depth: 0", checkout,
+                f"job {name} calls check_serving_version.py on a shallow checkout — "
+                "the guard cannot resolve prod's commit and will refuse every run",
+            )
 
 
 class ParseDeployPaths(unittest.TestCase):

@@ -1536,6 +1536,31 @@ func (s *taskService) ensureAgentProjectMember(ctx context.Context, projectID, a
 	if s.projectMemberRepo == nil || agentID == uuid.Nil {
 		return
 	}
+	// Confirm the id really is an agent before writing it into project_members.agent_id.
+	//
+	// The type this dispatches on is not always trustworthy: resolveAssigneeType falls
+	// back to the caller's value when the id is in neither directory, so a deleted or
+	// bogus assignee arrives here typed by guess. Without this check the insert is
+	// attempted anyway, the agent_id foreign key rejects it, and the error is logged
+	// and swallowed — enrolment silently does not happen and nothing distinguishes
+	// that from "already a member".
+	// Only a POSITIVE absence blocks the write. A lookup error means we could not
+	// check, which is not the same as checking and finding nothing: refusing on an
+	// unreadable directory would turn a transient blip into a missing enrolment — the
+	// dead end this whole mechanism exists to prevent. On error, fall through and let
+	// the foreign key remain the backstop.
+	if s.agentRepo != nil {
+		a, aerr := s.agentRepo.GetByID(ctx, agentID)
+		switch {
+		case aerr != nil:
+			log.Printf("[task-svc] auto-enroll: could not verify agent %s (%v) — attempting enrolment anyway", agentID, aerr)
+		case a == nil:
+			log.Printf("[task-svc] auto-enroll SKIPPED: %s is not a known agent, refusing to enroll it "+
+				"as one in project %s (the assignee type was a caller's guess, not a lookup)", agentID, projectID)
+			return
+		}
+	}
+
 	exists, err := s.projectMemberRepo.ExistsMember(ctx, projectID, nil, &agentID)
 	if err != nil || exists {
 		return
@@ -1562,6 +1587,22 @@ func (s *taskService) ensureUserProjectMember(ctx context.Context, projectID, us
 	if s.projectMemberRepo == nil || userID == uuid.Nil {
 		return
 	}
+	// Same guard as the agent path: confirm the id really is a user before writing it
+	// into project_members.user_id.
+	// Same rule as the agent path: a positive absence blocks, an unreadable directory
+	// does not.
+	if s.userRepo != nil {
+		u, uerr := s.userRepo.GetByID(ctx, userID)
+		switch {
+		case uerr != nil:
+			log.Printf("[task-svc] auto-enroll: could not verify user %s (%v) — attempting enrolment anyway", userID, uerr)
+		case u == nil:
+			log.Printf("[task-svc] auto-enroll SKIPPED: %s is not a known user, refusing to enroll it "+
+				"as one in project %s (the assignee type was a caller's guess, not a lookup)", userID, projectID)
+			return
+		}
+	}
+
 	exists, err := s.projectMemberRepo.ExistsMember(ctx, projectID, &userID, nil)
 	if err != nil || exists {
 		return

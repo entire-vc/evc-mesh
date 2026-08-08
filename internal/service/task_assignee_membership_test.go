@@ -51,6 +51,12 @@ func setupMembershipEnv(wfResp *domain.WorkflowRulesResponse, effectiveRules *do
 	svc, taskRepo, statusRepo, agentRepo, projRepo := setupTaskServiceWithWorkflow(wfResp, effectiveRules)
 	pmRepo := NewMockProjectMemberRepository()
 	svc.projectMemberRepo = pmRepo
+	// Production wires BOTH directories (main.go: WithAgentRepo + WithUserRepoTask).
+	// Leaving userRepo nil here made the enrolment directory check skip on the user
+	// path, so a test could observe a ghost id being enrolled as a user — an outcome
+	// production cannot produce. Individual tests still override this when they need
+	// to seed specific users.
+	svc.userRepo = NewMockUserRepository()
 	return membershipEnv{
 		svc: svc, tasks: taskRepo, statuses: statusRepo,
 		agents: agentRepo, projects: projRepo, members: pmRepo,
@@ -90,6 +96,9 @@ func TestAssigneeEnrolment_SetReviewerRotationEnrolsReviewerAndBuilder(t *testin
 	statusRepo.items[todoID] = &domain.TaskStatus{ID: todoID, ProjectID: projectID, Category: domain.StatusCategoryTodo, Name: "todo"}
 	projRepo.items[projectID] = &domain.Project{ID: projectID, WorkspaceID: workspaceID}
 	agentRepo.items[leadID] = &domain.Agent{ID: leadID, WorkspaceID: workspaceID, Slug: "garfield"}
+	// The builder is a real agent too; enrolment now verifies the directory before
+	// writing, so an unseeded id models a row the database would refuse.
+	agentRepo.items[builderID] = &domain.Agent{ID: builderID, WorkspaceID: workspaceID, Slug: "builder"}
 	taskRepo.items[taskID] = &domain.Task{
 		ID: taskID, ProjectID: projectID, StatusID: inProgressID,
 		AssigneeID: &builderID, AssigneeType: domain.AssigneeTypeAgent,
@@ -206,6 +215,9 @@ func TestAssigneeEnrolment_CreateSubtaskEnrolsAssigneeNotOnlyCreator(t *testing.
 	statusRepo.items[todoID] = &domain.TaskStatus{ID: todoID, ProjectID: projectID, Category: domain.StatusCategoryTodo, Name: "todo"}
 	projRepo.items[projectID] = &domain.Project{ID: projectID}
 	agentRepo.items[ownerID] = &domain.Agent{ID: ownerID, Slug: "owner"}
+	// The creator is a real agent in production; seed it so enrolment's directory
+	// check sees what it would see live.
+	agentRepo.items[captainID] = &domain.Agent{ID: captainID, Slug: "captain"}
 	taskRepo.items[parentID] = &domain.Task{ID: parentID, ProjectID: projectID, StatusID: todoID, Title: "epic"}
 
 	// The captain creates the subtask; a different agent is meant to own it.
@@ -285,6 +297,11 @@ func TestAssigneeEnrolment_NoAssigneeAndNoDuplicate(t *testing.T) {
 	projectID, agentID := uuid.New(), uuid.New()
 	env := setupMembershipEnv(nil, nil)
 	svc, pmRepo := env.svc, env.members
+
+	// Seed the agent. Enrolment now refuses an id that is in no directory, because the
+	// real project_members.agent_id foreign key would reject that insert anyway — an
+	// unseeded id models a state production cannot reach.
+	env.agents.items[agentID] = &domain.Agent{ID: agentID, Slug: "worker"}
 
 	// No assignee → no row.
 	svc.ensureAssigneeProjectMember(ctx, projectID, nil, domain.AssigneeTypeAgent)
@@ -389,4 +406,71 @@ func TestAssigneeEnrolment_SubtaskAgentTypeStillResolves(t *testing.T) {
 
 	assertEnrolled(t, pmRepo, projectID, ownerID, "an agent assignee must still enrol as an agent")
 	assert.Equal(t, domain.AssigneeTypeAgent, child.AssigneeType)
+}
+
+// ---------------------------------------------------------------------------
+// 7. An assignee that exists in NEITHER directory must not be enrolled by guess.
+// ---------------------------------------------------------------------------
+
+// TestAssigneeEnrolment_UnknownUUIDIsNotEnrolledByGuess covers the last way a wrong
+// column could be written.
+//
+// resolveAssigneeType falls back to the caller's value when the id is in neither the
+// agent nor the user directory — it cannot do better, and preserving caller intent on
+// the stored row is right. But enrolment then dispatched on that guess: a deleted or
+// bogus id typed "agent" was inserted against project_members.agent_id, the foreign
+// key rejected it, and the error was logged and swallowed. No row, no signal, and
+// nothing to distinguish that from "already a member".
+//
+// Enrolment now checks the directory it is about to write to.
+func TestAssigneeEnrolment_UnknownUUIDIsNotEnrolledByGuess(t *testing.T) {
+	ctx := context.Background()
+	projectID, ghostID := uuid.New(), uuid.New()
+	env := setupMembershipEnv(nil, nil)
+	svc, pmRepo := env.svc, env.members
+
+	// ghostID is deliberately in no directory — a deleted agent, or a typo.
+	svc.ensureAssigneeProjectMember(ctx, projectID, &ghostID, domain.AssigneeTypeAgent)
+	assert.Empty(t, pmRepo.members,
+		"an id that is in no directory must not be enrolled as an agent on the strength of a guessed type")
+
+	// And the same id guessed the other way must not land in the user column either.
+	svc.ensureAssigneeProjectMember(ctx, projectID, &ghostID, domain.AssigneeTypeUser)
+	assert.Empty(t, pmRepo.members,
+		"nor as a user — the guess is wrong in both directions")
+}
+
+// TestAssigneeEnrolment_KnownAgentStillEnrols is the positive control. Without it the
+// test above is satisfied by an enrolment path that refuses everything, which would
+// re-open the dead end for every legitimate assignee.
+func TestAssigneeEnrolment_KnownAgentStillEnrols(t *testing.T) {
+	ctx := context.Background()
+	projectID, agentID := uuid.New(), uuid.New()
+	env := setupMembershipEnv(nil, nil)
+	svc, pmRepo := env.svc, env.members
+	env.agents.items[agentID] = &domain.Agent{ID: agentID, Slug: "real"}
+
+	svc.ensureAssigneeProjectMember(ctx, projectID, &agentID, domain.AssigneeTypeAgent)
+	assert.Len(t, pmRepo.members, 1, "a known agent must still be enrolled")
+}
+
+// TestAssigneeEnrolment_UnreadableDirectoryDoesNotBlockEnrolment pins the failure
+// DIRECTION, which is the subtle half of this change.
+//
+// "I could not check" is not "I checked and found nothing". Refusing on a lookup
+// error would convert a transient directory blip into a missing enrolment — exactly
+// the dead end this mechanism exists to prevent — so an error falls through and lets
+// the database's foreign key remain the backstop. Only a positive absence refuses.
+func TestAssigneeEnrolment_UnreadableDirectoryDoesNotBlockEnrolment(t *testing.T) {
+	ctx := context.Background()
+	projectID, agentID := uuid.New(), uuid.New()
+	env := setupMembershipEnv(nil, nil)
+	svc, pmRepo := env.svc, env.members
+
+	env.agents.errToReturn = assert.AnError // the directory is unreadable, not empty
+
+	svc.ensureAssigneeProjectMember(ctx, projectID, &agentID, domain.AssigneeTypeAgent)
+	assert.Len(t, pmRepo.members, 1,
+		"a directory we could not read must not block enrolment — that would turn a "+
+			"transient failure into the permission dead end this guard protects against")
 }
