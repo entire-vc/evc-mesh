@@ -102,6 +102,7 @@ import argparse
 import json
 import logging
 import os
+import statistics
 import sys
 import time
 import traceback
@@ -111,6 +112,19 @@ from typing import Any, NamedTuple
 logger = logging.getLogger(__name__)
 
 SCRIPT_DIR = Path(__file__).resolve().parent
+
+# The bench directory joins sys.path HERE, at import time, so sibling modules
+# resolve however this file was reached — as `python run_ci.py`, as an import
+# from a test that inserted the path itself, or as an import from a control
+# script. `main()` re-inserts it for the heavyweight clients (mesh_client_stdio
+# pulls in the MCP SDK, which must stay out of the offline self-checks); this
+# insertion exists so that pure-stdlib siblings like `fixture_ages` can be
+# imported at module scope without inheriting that constraint.
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from fixture_ages import AGE_MODE_NOW  # noqa: E402 — needs the sys.path line above
+
 DATA_FILE = SCRIPT_DIR / "data" / "lme_s_24.json"
 BASELINE_FILE = SCRIPT_DIR / "baseline.json"
 RETRIEVAL_BASELINE_FILE = SCRIPT_DIR / "baseline_retrieval.json"
@@ -188,6 +202,7 @@ REASON_PERSISTENT_ERRORS = "persistent-errors"
 # is "you are holding the wrong file", and a run that continues past it produces
 # a numerically valid comparison between two unrelated systems.
 REASON_ARM_MISMATCH = "arm-mismatch"
+REASON_AGE_MODE_MISMATCH = "age-mode-mismatch"
 # A capture that could not be trusted is refused BEFORE the write, so the previous
 # baseline survives. Its own kind: "we declined to record a floor" is not an
 # inconclusive verdict, and it has a different reader (whoever dispatched it).
@@ -437,6 +452,7 @@ def retrieval_observability(entry: dict, client: Any) -> dict:
     envelope, and `None` (server too old to report it) has to survive as `None`
     all the way to the resolver rather than being flattened into a run-level 0.
     """
+    ages = getattr(client, "age_summary", None)
     return {
         "gold_rank": gold_rank(
             getattr(client, "ranked_records", []), gold_session_indices(entry)
@@ -445,6 +461,14 @@ def retrieval_observability(entry: dict, client: Any) -> dict:
         "haystack_size": len(entry.get("haystack_sessions") or []),
         "dense_rows": getattr(client, "dense_rows", None),
         "sparse_rows": getattr(client, "sparse_rows", None),
+        # The age regime this question's corpus was searched under, and the ages
+        # it actually carried. Carried per question rather than once per run
+        # because that is where the evidence has to be: `fixture_age_mode` in the
+        # header states an INTENTION, and a corpus that failed to age would say
+        # exactly the same thing there. `fixture_ages` is None under `ingest-now`
+        # — the honest report of "no ages were set", not a row of zeros.
+        "fixture_age_mode": getattr(client, "age_mode", None),
+        "fixture_ages": ages,
     }
 
 
@@ -500,6 +524,11 @@ def run_single(
             format_session_text=format_session_text,
             query=entry["question"],
             top_k=top_k,
+            # The anchor for fixture ages. Ignored in `ingest-now`; in
+            # `question-anchored` the whole haystack is shifted so this instant
+            # is "now", which reproduces the ages the dataset asserts instead of
+            # the ~seconds-apart ages the ingest loop produces.
+            question_date=entry.get("question_date", ""),
         )
     except Exception as exc:
         traceback.print_exc()
@@ -691,6 +720,106 @@ def resolve_dense_arm_status(results: list[dict]) -> str:
     return DENSE_ARM_EMPTY
 
 
+def resolve_fixture_age_mode(results: list[dict]) -> str:
+    """The age regime the run was served under, read off the questions.
+
+    Read from the RESULTS and not from the environment for the same reason
+    `resolve_run_search_mode` is: the env var is what was asked for, the results
+    are what happened.
+
+    NOTHING reported reads as `ingest-now`, and that is not the same shrug as
+    `search_mode`'s UNKNOWN. A client that does not report an age mode is a
+    client that cannot age fixtures — every result that predates this field was
+    measured on a corpus born at ingest, so `ingest-now` is the KNOWN answer,
+    not a guess. Returning UNKNOWN here instead would take the gate INCONCLUSIVE
+    on every run until every producer of a result dict was upgraded, which is a
+    self-inflicted outage on a required check.
+
+    A run that mixed regimes IS unknown. Two corpus ages pooled into one score is
+    not a number anything can be compared against, and silently taking the
+    majority would be the same mis-comparison one level down.
+    """
+    seen = {
+        r["fixture_age_mode"]
+        for r in results
+        if isinstance(r.get("fixture_age_mode"), str) and r["fixture_age_mode"]
+    }
+    if not seen:
+        return AGE_MODE_NOW
+    if len(seen) > 1:
+        return MODE_UNKNOWN
+    return seen.pop()
+
+
+def describe_fixture_ages(results: list[dict]) -> str:
+    """One line for the step log: the regime plus the ages actually stamped.
+
+    This is the AC1 artifact. "ingested N" cannot distinguish an aged corpus
+    from an un-aged one, which is how the harness spent its whole life
+    measuring a haystack whose every row was seconds old while reporting
+    nothing that would have said so.
+    """
+    mode = resolve_fixture_age_mode(results)
+    if mode == AGE_MODE_NOW:
+        return (
+            f"{mode} — every fixture born at ingest; age-dependent ranking "
+            "(apply_recency_decay / half_life_days / recency_weight) is NOT "
+            "measured by this run"
+        )
+    summaries = [
+        r["fixture_ages"] for r in results if isinstance(r.get("fixture_ages"), dict)
+    ]
+    if not summaries:
+        return f"{mode} — no per-question age summary was recorded"
+    mins = min(s["min_days"] for s in summaries)
+    maxs = max(s["max_days"] for s in summaries)
+    medians = sorted(s["median_days"] for s in summaries)
+    rows = sum(int(s["n"]) for s in summaries)
+    return (
+        f"{mode} — {rows} fixtures over {len(summaries)} questions: "
+        f"min={mins:.2f}d median-of-medians={statistics.median(medians):.2f}d "
+        f"max={maxs:.2f}d"
+    )
+
+
+def describe_age_sensitivity(dataset: list[dict]) -> str:
+    """Which questions the fixture ages can move at all, and which they cannot.
+
+    Ageing the corpus is necessary for measuring recency and not sufficient: a
+    recall that does not weight age ranks identically over a corpus spanning 183
+    days and one spanning 183 seconds. In mesh-mcp, `apply_recency_decay`
+    defaults to FALSE — so the ONLY scored questions the ages reach are the ones
+    whose text trips the temporal auto-classifier, which then forces decay on
+    (with a 7-day half-life, not 30).
+
+    Printing this next to the age distribution is what stops the obvious
+    misreading of a backdated run: "the fixtures are aged" invites "so the gate
+    now measures recency", and for 22 of these 24 questions it does not.
+
+    Derived from a MIRROR of another repo's classifier — see
+    `fixture_ages.trips_temporal_profile`. Advisory: it feeds no verdict.
+    """
+    from fixture_ages import trips_temporal_profile
+
+    hits = [
+        e["question_id"]
+        for e in dataset
+        if trips_temporal_profile(e.get("question", ""))
+    ]
+    if not hits:
+        return (
+            f"0 of {len(dataset)} — no question trips mesh-mcp's temporal profile, "
+            "so fixture ages cannot move this score at all (decay defaults off)"
+        )
+    shown = ", ".join(h[:12] for h in hits[:6])
+    return (
+        f"{len(hits)} of {len(dataset)} trip mesh-mcp's temporal profile "
+        f"(decay forced ON, half-life 7d, decayed_relevance ordering): {shown}. "
+        f"The other {len(dataset) - len(hits)} run with decay off — ages cannot "
+        "move them. [mirror of evc-mesh-mcp; advisory]"
+    )
+
+
 class Baseline(NamedTuple):
     """A parsed baseline file.
 
@@ -733,6 +862,11 @@ class Baseline(NamedTuple):
     # same arm as this run" — the whole point is that an unlabelled file cannot
     # vouch for where it came from.
     arm: str = ""
+    # How old the corpus was that produced these numbers. Empty means the file
+    # predates fixture ageing, and every such file WAS captured on a corpus born
+    # at ingest — so unlike `arm`, unstated here has a known, correct reading
+    # (`ingest-now`) rather than being merely unvouched. See the age gate.
+    fixture_age_mode: str = ""
 
 
 def load_baseline(path: Path) -> Baseline:
@@ -776,6 +910,7 @@ def load_baseline(path: Path) -> Baseline:
                 for k, v in (raw.get("sample_sizes") or {}).items()
             },
             arm=str(raw.get("arm") or ""),
+            fixture_age_mode=str(raw.get("fixture_age_mode") or ""),
         )
     return Baseline(
         scores={k: float(v) for k, v in raw.items()},
@@ -784,6 +919,7 @@ def load_baseline(path: Path) -> Baseline:
         spread={},
         sample_sizes={},
         arm="",
+        fixture_age_mode="",
     )
 
 
@@ -794,6 +930,7 @@ def build_baseline_payload(
     sizes: dict[str, tuple[int, int]] | None = None,
     arm: str = ARM_PROD,
     served_commit: str = "",
+    fixture_age_mode: str = AGE_MODE_NOW,
 ) -> dict[str, Any]:
     """Aggregate N passes' scores into one mode-scoped baseline payload.
 
@@ -829,6 +966,12 @@ def build_baseline_payload(
         # scopes the baseline to a retrieval mode; this scopes it to a target,
         # which is the axis #b052cdda got wrong.
         "arm": arm,
+        # How OLD the corpus was. The third comparability axis: recall multiplies
+        # scores by exp(-Δt·ln2/half_life) with decay on by default, so the same
+        # code scores differently against a corpus born at ingest and one aged
+        # over the dataset's real 0-183 day span. Without this field the regime
+        # change would arrive as a REGRESSION on every open PR at once.
+        "fixture_age_mode": fixture_age_mode,
         "captured_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "top_k": top_k,
         "n_runs": len(per_pass_scores),
@@ -1590,6 +1733,8 @@ def cmd_run(args: argparse.Namespace) -> int:
     print(f"{title}  ({ran}/{len(results)} questions ran)")
     print(f"Search mode served: {run_mode}    Baseline mode: {baseline_mode}")
     print(f"Dense arm: {resolve_dense_arm_status(results)}")
+    print(f"Fixture ages: {describe_fixture_ages(results)}")
+    print(f"Age-sensitive questions: {describe_age_sensitivity(dataset)}")
     if baseline is not None:
         print(f"Baseline captured from {baseline.n_runs} pass(es)")
     print("=" * 70)
@@ -1651,7 +1796,17 @@ def cmd_run(args: argparse.Namespace) -> int:
         # INCONCLUSIVE. The advisory arm used to write a flat mode-less dict here,
         # which made its own mode gate permanently unsatisfiable.
         payload = build_baseline_payload(
-            per_pass_scores, run_mode, top_k, sizes, arm, args.served_commit
+            per_pass_scores,
+            run_mode,
+            top_k,
+            sizes,
+            arm,
+            args.served_commit,
+            # Recorded from the RESULTS, not from the env: a capture that asked
+            # for aged fixtures and did not get them must not label itself as
+            # though it had, or it becomes a floor that permanently mis-states
+            # the regime every later run is judged against.
+            fixture_age_mode=resolve_fixture_age_mode(results),
         )
         baseline_file.write_text(json.dumps(payload, indent=2) + "\n")
         print(
@@ -1748,6 +1903,58 @@ def cmd_run(args: argparse.Namespace) -> int:
         print(
             f"{REASON_PREFIX} {REASON_ARM_MISMATCH} — baseline states no arm, "
             f"run arm '{arm}' requires one"
+        )
+        return EXIT_INCONCLUSIVE
+
+    # ── Age gate: was the corpus the same AGE as the one the floor was cut on ─
+    # The third axis of comparability, after arm (which system) and mode (which
+    # retrieval path). Fixture age changes the ranking directly: recall
+    # multiplies every score by `exp(-Δt·ln2/half_life)`, and the MCP tool
+    # defaults `apply_recency_decay` to TRUE — so a corpus aged over 183 days is
+    # ranked differently from one whose every row is seconds old, on identical
+    # code.
+    #
+    # This gate is what lets the age fix land without a flag day. Turning
+    # backdating on changes the regime for every run on the merge path at once;
+    # judged against a floor cut under the old regime, honest movement would
+    # arrive as REGRESSION on every open PR simultaneously. Same class as
+    # capturing a baseline under a different fixture-isolation regime, which
+    # this harness has already been bitten by. So: mismatch is INCONCLUSIVE, the
+    # capture is re-run under the new regime, and the committed floor makes the
+    # gate enforcing again.
+    #
+    # UNSTATED ("") is accepted only for `ingest-now`, and that asymmetry is the
+    # point rather than back-compat politeness: every baseline captured before
+    # this change WAS measured on an un-aged corpus, so unstated genuinely means
+    # `ingest-now` and reading it that way is correct, not lenient. Reading it as
+    # "matches whatever this run did" would be exactly the silent mis-comparison
+    # the gate exists to prevent.
+    run_age_mode = resolve_fixture_age_mode(results)
+    baseline_age_mode = baseline.fixture_age_mode or AGE_MODE_NOW
+    if run_age_mode == MODE_UNKNOWN:
+        print(
+            "\n⚠ EVAL INCONCLUSIVE — the questions in this run do not agree on a "
+            "fixture age regime (or none reported one). A score pooled across two "
+            "corpus ages cannot be compared with anything."
+        )
+        print(
+            f"{REASON_PREFIX} {REASON_AGE_MODE_MISMATCH} — run reports no single "
+            "fixture age mode"
+        )
+        return EXIT_INCONCLUSIVE
+    if run_age_mode != baseline_age_mode:
+        print(
+            f"\n⚠ EVAL INCONCLUSIVE — {baseline_file.name} was captured with "
+            f"fixture ages '{baseline_age_mode}', and this run measured "
+            f"'{run_age_mode}'. Recency decay makes those two different "
+            "measurements of the same code, so the comparison would be "
+            "arithmetically valid and factually meaningless. Nothing was "
+            "enforced. Re-snap with --update-baseline under the age mode the "
+            "gate now runs, and commit the result."
+        )
+        print(
+            f"{REASON_PREFIX} {REASON_AGE_MODE_MISMATCH} — baseline "
+            f"'{baseline_age_mode}' != run '{run_age_mode}'"
         )
         return EXIT_INCONCLUSIVE
 
