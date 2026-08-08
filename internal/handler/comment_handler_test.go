@@ -222,6 +222,54 @@ func TestCommentHandler_List_WithIncludeInternal(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rec.Code)
 }
 
+// TestCommentHandler_List_SortDirBinding pins that the handler binds and
+// normalizes sort_dir and passes it through to the service unchanged — the
+// actual defect (task 4222c17d, D3) was one layer down, in the repository
+// hardcoding ASC regardless of what the handler bound, so this test alone
+// would NOT have caught the regression. It documents that this layer was
+// already correct, so a future change here doesn't quietly break it while
+// the repo-level test (comment_repo_test.go, real DB per §1o) covers the
+// part that was actually broken.
+func TestCommentHandler_List_SortDirBinding(t *testing.T) {
+	taskID := uuid.New()
+
+	cases := []struct {
+		name        string
+		query       string
+		wantSortDir string
+	}{
+		{"explicit desc", "?sort_dir=desc", "desc"},
+		{"explicit asc", "?sort_dir=asc", "asc"},
+		{"unspecified defaults to asc", "", "asc"},
+		{"unrecognized value falls back to asc, not left as-is", "?sort_dir=bogus", "asc"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var gotSortDir string
+			mockSvc := &MockCommentService{
+				ListByTaskFunc: func(ctx context.Context, tid uuid.UUID, filter repository.CommentFilter, pg pagination.Params) (*pagination.Page[domain.Comment], error) {
+					gotSortDir = pg.SortDir
+					return pagination.NewPage([]domain.Comment{}, 0, pg), nil
+				},
+			}
+			h, e := setupCommentTest(mockSvc)
+
+			req := httptest.NewRequest(http.MethodGet, "/"+tc.query, http.NoBody)
+			rec := httptest.NewRecorder()
+			c := e.NewContext(req, rec)
+			c.SetPath("/tasks/:task_id/comments")
+			c.SetParamNames("task_id")
+			c.SetParamValues(taskID.String())
+
+			err := h.List(c)
+			require.NoError(t, err)
+			assert.Equal(t, http.StatusOK, rec.Code)
+			assert.Equal(t, tc.wantSortDir, gotSortDir)
+		})
+	}
+}
+
 func TestCommentHandler_List_IncludesReplies(t *testing.T) {
 	taskID := uuid.New()
 	parentID := uuid.New()
