@@ -87,17 +87,106 @@ func (s *taskDependencyService) Create(ctx context.Context, dep *domain.TaskDepe
 		return apierror.BadRequest("adding this dependency would create a cycle")
 	}
 
+	// is_child_of is the only dependency type that also drives the actual
+	// parent/subtask hierarchy (parent_task_id), which is what feeds the
+	// Subtasks tab and subtask_count. Without this, selecting "Child of" in
+	// the Dependencies tab recorded an edge nothing else read.
+	if dep.DependencyType == domain.DependencyTypeIsChildOf {
+		if task.ParentTaskID != nil && *task.ParentTaskID != dep.DependsOnTaskID {
+			return apierror.Conflict("task already has a parent; remove the existing parent relationship first")
+		}
+		hasParentCycle, err := s.hasParentCycle(ctx, dep.TaskID, dep.DependsOnTaskID)
+		if err != nil {
+			return err
+		}
+		if hasParentCycle {
+			return apierror.BadRequest("adding this dependency would create a cycle in the task hierarchy")
+		}
+	}
+
 	if dep.ID == uuid.Nil {
 		dep.ID = uuid.New()
 	}
 	dep.CreatedAt = timeNow()
 
-	return s.depRepo.Create(ctx, dep)
+	if err := s.depRepo.Create(ctx, dep); err != nil {
+		return err
+	}
+
+	if dep.DependencyType == domain.DependencyTypeIsChildOf {
+		parentID := dep.DependsOnTaskID
+		task.ParentTaskID = &parentID
+		if err := s.taskRepo.Update(ctx, task); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// hasParentCycle reports whether making newParentID the parent of taskID
+// would create a cycle in the parent_task_id tree, i.e. whether taskID is
+// already an ancestor of newParentID.
+func (s *taskDependencyService) hasParentCycle(ctx context.Context, taskID, newParentID uuid.UUID) (bool, error) {
+	current := newParentID
+	visited := make(map[uuid.UUID]bool)
+	for {
+		if current == taskID {
+			return true, nil
+		}
+		if visited[current] {
+			return false, nil
+		}
+		visited[current] = true
+
+		t, err := s.taskRepo.GetByID(ctx, current)
+		if err != nil {
+			return false, err
+		}
+		if t == nil || t.ParentTaskID == nil {
+			return false, nil
+		}
+		current = *t.ParentTaskID
+	}
 }
 
 // Delete removes a task dependency.
+//
+// Removing an is_child_of edge also clears the parent_task_id it set. Without
+// this, Create's side effect is one-way and the pair traps the user: the edge
+// is the only UI that can set a parent, and Create refuses a second one
+// ("remove the existing parent relationship first") — so once the edge is gone
+// the task is parented permanently. PATCH cannot help either; parent_task_id is
+// accepted on create but not on updateTaskRequest.
 func (s *taskDependencyService) Delete(ctx context.Context, id uuid.UUID) error {
-	return s.depRepo.Delete(ctx, id)
+	// Read the edge before deleting it — afterwards its type and endpoints are gone.
+	// A read failure must not block the delete: the edge removal is what the caller
+	// asked for, and leaving it in place because we could not check its type would
+	// be the worse failure. Treat unknown as "nothing to undo".
+	dep, getErr := s.depRepo.GetByID(ctx, id)
+	if getErr != nil {
+		dep = nil
+	}
+
+	if err := s.depRepo.Delete(ctx, id); err != nil {
+		return err
+	}
+
+	if dep == nil || dep.DependencyType != domain.DependencyTypeIsChildOf {
+		return nil
+	}
+
+	task, err := s.taskRepo.GetByID(ctx, dep.TaskID)
+	if err != nil {
+		return err
+	}
+	// Only clear a parent this edge is actually responsible for. If the task has
+	// since been re-parented elsewhere, deleting this stale edge must not detach it.
+	if task == nil || task.ParentTaskID == nil || *task.ParentTaskID != dep.DependsOnTaskID {
+		return nil
+	}
+	task.ParentTaskID = nil
+	return s.taskRepo.Update(ctx, task)
 }
 
 // ListByTask returns all dependencies for the given task.

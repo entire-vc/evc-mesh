@@ -757,6 +757,19 @@ func (m *MockTaskDependencyRepository) Create(_ context.Context, dep *domain.Tas
 	return nil
 }
 
+func (m *MockTaskDependencyRepository) GetByID(_ context.Context, id uuid.UUID) (*domain.TaskDependency, error) {
+	if m.errToReturn != nil {
+		return nil, m.errToReturn
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	dep, ok := m.items[id]
+	if !ok {
+		return nil, nil
+	}
+	return dep, nil
+}
+
 func (m *MockTaskDependencyRepository) Delete(_ context.Context, id uuid.UUID) error {
 	if m.errToReturn != nil {
 		return m.errToReturn

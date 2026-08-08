@@ -1987,6 +1987,9 @@ func (m *mockTaskDepRepo) ListByTask(ctx context.Context, taskID uuid.UUID) ([]d
 
 func (m *mockTaskDepRepo) Create(_ context.Context, _ *domain.TaskDependency) error { return nil }
 func (m *mockTaskDepRepo) Delete(_ context.Context, _ uuid.UUID) error              { return nil }
+func (m *mockTaskDepRepo) GetByID(_ context.Context, _ uuid.UUID) (*domain.TaskDependency, error) {
+	return nil, nil
+}
 func (m *mockTaskDepRepo) ListDependents(_ context.Context, _ uuid.UUID) ([]domain.TaskDependency, error) {
 	return nil, nil
 }
