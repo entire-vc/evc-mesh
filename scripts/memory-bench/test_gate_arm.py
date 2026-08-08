@@ -36,7 +36,9 @@ import json
 import os
 import re
 import sys
+import subprocess
 import tempfile
+import textwrap
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -722,7 +724,29 @@ class TheRedProofIsWiredIn(unittest.TestCase):
             f"the required check for PR authors who cannot clear it; found {cond!r}",
         )
 
-    def test_rc1_blocks_but_rc2_does_not_fail_a_pull_request(self):
+    # The exit matrix, as behaviour. `None` for the event means "any".
+    #   (rc, event) -> the exit status the STEP must produce
+    RED_PROOF_EXIT_MATRIX = [
+        # rc=2 is unclearable by anyone on the change, so it must not block a
+        # pre-merge gate. Both pre-merge events are listed; see the docstring.
+        (2, "pull_request", 0),
+        (2, "merge_group", 0),
+        # ...but on main and on the nightly it must still be loud: there is no
+        # author to protect there, and a silent rc=2 is the blind gate itself.
+        (2, "push", 2),
+        (2, "schedule", 2),
+        # rc=1 means the decision logic lost its red-ability, which only a
+        # memory-path change can do. Always the author's to fix, always blocks.
+        (1, "pull_request", 1),
+        (1, "merge_group", 1),
+        (1, "push", 1),
+        # Healthy runs pass everywhere.
+        (0, "pull_request", 0),
+        (0, "merge_group", 0),
+        (0, "push", 0),
+    ]
+
+    def test_rc1_blocks_but_rc2_does_not_fail_a_pre_merge_gate(self):
         """The routing, asserted as behaviour rather than as text.
 
         Both exit codes mean "the gate is not currently trustworthy", so it is
@@ -732,24 +756,65 @@ class TheRedProofIsWiredIn(unittest.TestCase):
           rc=1  an arm misbehaved => the decision logic lost its red-ability,
                 which only a memory-path change can do => the author's to fix.
           rc=2  the committed baseline is missing / arm-mismatched / has no
-                sample_sizes => nobody on the PR can fix it.
+                sample_sizes => nobody on the change can fix it.
 
-        Extracts the step's own exit logic and evaluates it, so an equivalent
-        rewrite stays green and a collapse of the two codes into one bare
-        non-zero turns red.
+        `merge_group` sits with `pull_request` on the rc=2 row, and the argument
+        there is stronger rather than weaker: a queue entry has no author at all,
+        and a required check that goes red on an unclearable infra fault under
+        `enforce_admins: true` is not a blocked PR but a frozen repository. It is
+        also behaviour-preserving — that change merges today, because today it
+        merges from a PR. The blindness ALERT still fires on both events, so the
+        episode is opened either way; it just does not wedge the queue.
+
+        This used to be a regex over the step's literal text, which contradicted
+        this docstring's own promise that "an equivalent rewrite stays green": it
+        pinned one spelling, so ADDING an event to the tolerated set turned it red
+        as loudly as collapsing the two codes would have. Now it extracts the exit
+        logic and RUNS it, under the same shell GitHub uses, against the full
+        matrix. Every collapse this was written to catch still turns it red — a
+        bare `exit 0` fails the (1, push) row, a bare `exit $rc` fails the
+        (2, pull_request) row — and a rewrite that preserves behaviour passes.
         """
         body = self._step("The gate must still be able to go RED")
-        m = re.search(r'if \[ "\$rc" = "2" \] && \[ "\$\{\{ github\.event_name \}\}" = '
-                      r'"pull_request" \]; then\s*\n\s*exit 0\s*\n\s*fi\s*\n\s*exit \$rc',
-                      body)
-        self.assertIsNotNone(
-            m,
-            "the red-proof's exit routing is not the expected shape. rc=2 must "
-            "exit 0 on a pull_request and rc must be propagated otherwise; a bare "
-            "`exit $rc` blocks PR authors on a missing baseline, and a bare "
-            "`exit 0` makes the proof advisory on main as well, where there is no "
-            f"author to protect. Step body:\n{body}",
+        # Cut at the end of the job-summary block, NOT at the first `if [ "$rc"`.
+        # Anchoring on the routing's own syntax is what made the first version of
+        # this rewrite still over-pin: a `case`-outside-`if` spelling put an `if`
+        # in the middle, extraction started there, and a behaviour-preserving
+        # rewrite failed exactly as loudly as a collapse. The summary redirect is
+        # the last thing before the routing and is not part of what is under
+        # test, so it is the boundary that lets the routing be rewritten freely.
+        marker = '>> "$GITHUB_STEP_SUMMARY"'
+        self.assertIn(
+            marker, body,
+            f"the red-proof step no longer writes a job summary, so this test "
+            f"cannot locate the exit routing that follows it:\n{body}",
         )
+        routing = textwrap.dedent(body.rsplit(marker, 1)[-1])
+        self.assertIn(
+            "exit", routing,
+            f"no exit routing found after the job summary:\n{body}",
+        )
+
+        for rc, event, expected in self.RED_PROOF_EXIT_MATRIX:
+            script = routing.replace("${{ github.event_name }}", event)
+            self.assertNotIn(
+                "${{", script,
+                f"the exit routing interpolates something other than "
+                f"github.event_name; this test can only substitute that one:\n{routing}",
+            )
+            with self.subTest(rc=rc, event=event):
+                proc = subprocess.run(
+                    ["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c",
+                     f"rc={rc}\n{script}"],
+                    capture_output=True, text=True,
+                )
+                self.assertEqual(
+                    expected, proc.returncode,
+                    f"red-proof rc={rc} on {event} exited {proc.returncode}, "
+                    f"expected {expected}. rc=2 must not block a pre-merge gate "
+                    f"(nobody can clear it) and must stay loud on main; rc=1 must "
+                    f"always block. Routing:\n{routing}",
+                )
 
     def test_the_red_proof_reads_pipestatus_not_tees_exit_code(self):
         """Same defect as `6553dd6`, one step over.

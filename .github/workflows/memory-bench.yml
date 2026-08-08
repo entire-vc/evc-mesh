@@ -83,6 +83,23 @@ on:
   pull_request:
     branches: [main]
 
+  # Same reasoning as the PR trigger, one level up: `Memory recall gate` is a
+  # required context, a merge queue waits for the required contexts on the
+  # `merge_group` event, and a workflow that does not list that event produces
+  # none of them. Without this the queue cannot be enabled at all — an entry
+  # would wait forever for a check that is never requested.
+  #
+  # Deliberately NO `paths:` filter here either, and — unlike the PR arm — the
+  # in-job scope step does not narrow on this event: `Does this change touch
+  # memory?` short-circuits to relevant=true for any non-`pull_request` event,
+  # so a merge group always pays the full bench. That is the intended direction.
+  # A group is several PRs at once, the cost is paid once per batch rather than
+  # once per PR, and the failure this file exists to prevent (#347: the gate
+  # reporting green having measured nothing) is the one that must not be
+  # reachable by adding a trigger.
+  merge_group:
+    types: [checks_requested]
+
   push:
     branches: [main]
     paths:
@@ -360,8 +377,18 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-          if [ "$rc" = "2" ] && [ "${{ github.event_name }}" = "pull_request" ]; then
-            exit 0
+          # rc=2 is "could not measure" — an infra fault, not a verdict, and
+          # `#342`'s rule is that a red nobody can clear gets bypassed rather
+          # than respected. `merge_group` is on this list for a stronger reason
+          # than `pull_request` is: a merge-queue entry has no author at all, and
+          # a required check that goes red on infra with `enforce_admins: true`
+          # is not a blocked PR but a frozen repository. The blindness ALERT
+          # below deliberately still fires on both events, so nothing is
+          # swallowed — the episode is opened, it just does not wedge the queue.
+          if [ "$rc" = "2" ]; then
+            case "${{ github.event_name }}" in
+              pull_request|merge_group) exit 0 ;;
+            esac
           fi
           exit $rc
 
@@ -812,8 +839,24 @@ jobs:
     # slot from whoever is legitimately measuring prod. Excluded by arm name
     # rather than by "is this a capture": an `end-to-end` or `retrieval`
     # capture still wants the canary's opinion.
+    # Spelled as an ALLOW-LIST of the events on which "is what we deployed still
+    # good?" is even a question — not as `!= 'pull_request'`, which is what it
+    # used to say. That negation was correct for exactly as long as the trigger
+    # list was, and adding `merge_group:` to `on:` silently recruited this job
+    # into the queue: a candidate branch that is not deployed anywhere would have
+    # been judged against production, taken a `memory-bench-prod` slot from
+    # whoever was legitimately measuring prod, and — via `prod-arm-cancelled` —
+    # been able to open and resolve prod incident issues from a tree that never
+    # shipped. The same rule this file already applies to `!= 'cancelled'` two
+    # jobs down; it just had not been applied to event names yet.
+    #
+    # These three are exactly the events reachable before `merge_group:` existed,
+    # so this is behaviour-preserving for every existing trigger.
+    # `test_the_prod_canary_does_not_run_on_merge_group` pins it.
     if: >-
-      github.event_name != 'pull_request' &&
+      (github.event_name == 'push' ||
+       github.event_name == 'schedule' ||
+       github.event_name == 'workflow_dispatch') &&
       !(github.event_name == 'workflow_dispatch' &&
         inputs.update_baseline && inputs.baseline_arm == 'retrieval-branch')
     runs-on: ubuntu-latest

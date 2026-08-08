@@ -10,8 +10,24 @@ on:
   # Doc-only PRs pay a full CI run; that is cheaper than a wedged branch.
   pull_request:
     branches: [main]
+  # A merge queue runs the required checks on the `merge_group` event, against
+  # the batched tree, and waits for the SAME context strings it waits for on a
+  # PR. A workflow that does not list this event produces none of them there:
+  # with `enforce_admins: true` and six required contexts, turning the queue on
+  # while this line is missing wedges the repository — every entry sits waiting
+  # for checks that will never be requested, and no one can override.
+  #
+  # So this trigger lands BEFORE the queue is enabled, never with it. Also note
+  # the deploy workflows deliberately do NOT get this event: a queue branch is a
+  # candidate, not main, and must not deploy.
+  merge_group:
+    types: [checks_requested]
 
 concurrency:
+  # `head_ref` is empty outside `pull_request`; on `merge_group` this falls
+  # through to `github.ref`, which is the queue's own
+  # `refs/heads/gh-readonly-queue/main/pr-N-<sha>` — unique per group, so groups
+  # do not cancel each other.
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
 
@@ -58,6 +74,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      # Lives here rather than beside the coverage gate's own self-check, which
+      # is guarded by `if: steps.affected.outputs.pkgs != ''` and so does not run
+      # on a workflow-only diff — exactly the diff that can break this. `Lint` is
+      # required, runs on every PR unconditionally, and this is stdlib-only and
+      # instant. An unwired self-check guards nothing (cf. #2a079432, where two
+      # existed, passed, and were credited by the README while appearing in no
+      # workflow step).
+      - name: Merge-queue preconditions
+        run: python3 scripts/ci/test_merge_queue_preconditions.py
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
@@ -306,14 +331,35 @@ jobs:
           go install github.com/pressly/goose/v3/cmd/goose@latest
           goose -dir migrations up
 
+      # BASE is resolved ONCE here and republished as an output, because the
+      # threshold step below needs the identical value and used to re-derive it
+      # from its own copy of this expression. Two expressions encoding one fact
+      # drift silently, and the direction they drift in is the dangerous one:
+      # a narrower BASE means fewer changed lines, which reads as a pass.
+      #
+      # `HEAD~1` is right for `push` (one squashed commit on main) and WRONG for
+      # `merge_group`. A queue branch is base + one commit per queued PR, so on a
+      # batch of three `HEAD~1` scores only the last PR and the other two enter
+      # main ungated — the gate would go green having measured a third of the
+      # change. `merge_group.base_sha` ("the SHA of the merge group's parent
+      # commit", a required field of the checks_requested payload) is the whole
+      # batch's parent, so the diff covers every PR in the group.
       - name: Compute affected-set (changed pkgs + reverse-dep closure)
         id: affected
         run: |
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            BASE="${{ github.event.pull_request.base.sha }}"
-          else
-            BASE="HEAD~1"
+          case "${{ github.event_name }}" in
+            pull_request) BASE="${{ github.event.pull_request.base.sha }}" ;;
+            merge_group)  BASE="${{ github.event.merge_group.base_sha }}" ;;
+            *)            BASE="HEAD~1" ;;
+          esac
+          # An empty BASE would make `git diff` compare against the working tree
+          # and silently report nothing changed — fail loudly instead.
+          if [ -z "$BASE" ]; then
+            echo "::error::BASE is empty for event '${{ github.event_name }}'"
+            exit 1
           fi
+          echo "base=$BASE" >> "$GITHUB_OUTPUT"
+          echo "Diff base ($GITHUB_EVENT_NAME): $BASE"
           chmod +x docs/ci-templates/scripts/affected_set_go.sh
           AFFECTED=$(docs/ci-templates/scripts/affected_set_go.sh "$BASE" 2>/dev/null || true)
           echo "pkgs<<EOF" >> "$GITHUB_OUTPUT"
@@ -388,8 +434,7 @@ jobs:
       - name: Gate on diff coverage (lines this change touches)
         if: steps.affected.outputs.pkgs != ''
         run: |
-          BASE="${{ github.event_name == 'pull_request'
-                    && github.event.pull_request.base.sha || 'HEAD~1' }}"
+          BASE="${{ steps.affected.outputs.base }}"
           if [ ! -f /tmp/merged_cover.out ]; then
             echo "No merged profile — nothing to gate."
             exit 0
