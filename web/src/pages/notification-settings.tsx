@@ -2,7 +2,6 @@ import { useEffect, useState } from "react";
 import { useParams } from "react-router";
 import { Bell, Check, Save, Monitor, MonitorOff, AlertTriangle } from "lucide-react";
 import { subscribeUser, unsubscribeUser, isSubscribed, getPermissionState } from "@/lib/push";
-import { toast } from "@/components/ui/toast";
 import {
   Card,
   CardContent,
