@@ -495,6 +495,59 @@ the temporal auto-classifier. Without that the server would force decay on in
 both arms, both would agree, and the negative control would pass while measuring
 nothing.
 
+### What ageing actually cost, measured against `main`
+
+Like-for-like, `main` un-aged (run 31271277215) vs this branch aged (capture,
+3 passes, spread 0.000 on every category):
+
+| category | main | aged |
+|---|--:|--:|
+| knowledge-update | 1.000 | **0.750** |
+| temporal-reasoning | 1.000 | **0.750** |
+| single-session-preference | 0.250 | 0.250 |
+| multi-session / ss-assistant / ss-user | — | unchanged |
+| overall | 0.833 | 0.750 |
+
+**Exactly the two categories holding the two age-sensitive questions moved.** The
+other 22 questions are bit-identical in outcome, which is the mechanism claim
+above turning into a measurement: decay is off for them, so ages cannot reach
+them. The two that moved are the two that *should* move — `031748ae` and
+`9a707b81` now face the recency ranking a real agent's temporal query gets, and
+lose to fresher distractors. That is the property this harness could not see
+before, and the floor now prices it in.
+
+One anomaly, unexplained and recorded rather than smoothed: one earlier aged run
+scored four of these questions at rank 1-2 where `main`, this capture's three
+passes, and a second aged run all put them at rank 35-44. It moves scores
+*upward*, so it does not threaten the floor, but it is not understood.
+
+### `single-session-preference` is knowingly un-rulable
+
+It scores **0.250 against a 0.250 tolerance**, so its threshold is exactly 0 and
+the gate prints `ⓘ no verdict` for it. This is NOT caused by ageing — `main`
+scores the same 0.250 on those four questions. What the change did was force an
+honest re-snap, and the honest number is below what a 1-question tolerance on a
+4-question category can rule on.
+
+The previously committed floor said 0.500 for this category, which had drifted a
+full question away from what `main` actually scores. That is worse than
+ineligible: it is a threshold sitting exactly on the current score, so the next
+legitimate miss would have fired `REGRESSION` at whichever innocent PR was open.
+
+`check_captured_baseline.py` therefore distinguishes two causes of an ineligible
+category, because they take different remedies and were reported as one:
+
+* **spread-blinded** (`spread > tolerance`) — the capture is too noisy. Re-snap
+  in a quiet window. Hard blocker, never acceptable.
+* **score-bounded** (score ≤ tolerance) — no capture can fix it; the number is
+  what the system scores. Blocks unless accepted by NAME:
+  `--accept-ineligible single-session-preference`.
+
+Naming it keeps the acknowledgement narrow: a *second* category going ineligible
+still fails. `test_check_captured_baseline.py` now also runs the checker against
+`baseline_retrieval_branch.json` — the file the REQUIRED arm reads, which this
+test suite had never covered while checking the advisory prod file.
+
 ### Known limit: the temporal category cannot produce a verdict
 
 `temporal-reasoning` holds **4 questions** and the branch baseline records

@@ -1,17 +1,27 @@
 {
   "search_mode": "hybrid",
   "arm": "branch",
-  "captured_at": "2026-07-30T12:16:18Z",
+  "fixture_age_mode": "question-anchored",
+  "captured_at": "2026-08-08T21:31:43Z",
   "top_k": 10,
   "n_runs": 3,
   "scores": {
-    "knowledge-update": 1.0,
+    "knowledge-update": 0.75,
     "multi-session": 1.0,
-    "overall": 0.875,
+    "overall": 0.75,
     "single-session-assistant": 0.75,
-    "single-session-preference": 0.5,
+    "single-session-preference": 0.25,
     "single-session-user": 1.0,
-    "temporal-reasoning": 1.0
+    "temporal-reasoning": 0.75
+  },
+  "within_capture_spread": {
+    "knowledge-update": 0.0,
+    "multi-session": 0.0,
+    "overall": 0.0,
+    "single-session-assistant": 0.0,
+    "single-session-preference": 0.0,
+    "single-session-user": 0.0,
+    "temporal-reasoning": 0.0
   },
   "spread": {
     "knowledge-update": 0.0,
