@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router";
-import { Bell, Check, CheckCheck, Loader2 } from "lucide-react";
+import { Bell, Check, CheckCheck, Loader2, Settings } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useNotificationStore } from "@/stores/notification";
 import { useAuthStore } from "@/stores/auth";
@@ -14,6 +14,8 @@ import type { Notification } from "@/types";
 export function NotificationBell() {
   const navigate = useNavigate();
   const { isAuthenticated } = useAuthStore();
+  // Still needed by handleOpenSettings below — the notification-settings route
+  // is workspace-scoped. handleNotificationClick no longer needs it.
   const { currentWorkspace } = useWorkspaceStore();
   const {
     notifications,
@@ -65,21 +67,19 @@ export function NotificationBell() {
       if (!n.is_read) {
         void markAsRead([n.id]);
       }
-      // Navigate to task if task_id is present in metadata
+      // Navigate to task if task_id is present in metadata.
+      // /t/:taskId is the deep-link resolver (task-deep-link.tsx) — it looks
+      // up the task's workspace/project slugs itself, so no need for
+      // project_id or currentWorkspace here.
       const meta = n.metadata as Record<string, unknown>;
       const taskId = meta?.task_id as string | undefined;
-      const projectId = meta?.project_id as string | undefined;
 
-      if (taskId && projectId && currentWorkspace) {
-        // We only have IDs, not slugs — navigate to a search/task page.
-        // Use the workspace slug from currentWorkspace and task_id directly.
-        navigate(
-          `/w/${currentWorkspace.slug}/t/${taskId}`,
-        );
+      if (taskId) {
+        navigate(`/t/${taskId}`);
       }
       setOpen(false);
     },
-    [markAsRead, navigate, currentWorkspace],
+    [markAsRead, navigate],
   );
 
   const handleMarkAll = useCallback(
@@ -88,6 +88,17 @@ export function NotificationBell() {
       void markAllAsRead();
     },
     [markAllAsRead],
+  );
+
+  const handleOpenSettings = useCallback(
+    (e: React.MouseEvent) => {
+      e.stopPropagation();
+      if (currentWorkspace) {
+        navigate(`/w/${currentWorkspace.slug}/notifications`);
+      }
+      setOpen(false);
+    },
+    [navigate, currentWorkspace],
   );
 
   const unreadItems = notifications.filter((n) => !n.is_read);
@@ -130,6 +141,16 @@ export function NotificationBell() {
                   Mark all read
                 </Button>
               )}
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-6 w-6 text-muted-foreground hover:text-foreground"
+                onClick={handleOpenSettings}
+                title="Notification settings"
+                aria-label="Notification settings"
+              >
+                <Settings className="h-3.5 w-3.5" />
+              </Button>
             </div>
           </div>
 
