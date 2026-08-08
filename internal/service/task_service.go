@@ -280,7 +280,7 @@ func (s *taskService) Create(ctx context.Context, task *domain.Task) error {
 	})
 
 	// Dispatch in-app notification to subscribed workspace users.
-	s.dispatchUserNotification(ctx, task, "task.assigned", "Task assigned: "+task.Title, "")
+	s.dispatchUserNotification(ctx, task, "task.assigned", "Task assigned: "+task.Title)
 
 	return nil
 }
@@ -384,7 +384,11 @@ func (s *taskService) Update(ctx context.Context, task *domain.Task) error {
 	if existing.Priority != task.Priority {
 		changes["priority"] = map[string]interface{}{"old": string(existing.Priority), "new": string(task.Priority)}
 	}
-	assigneeChanged := existing.AssigneeID != task.AssigneeID
+	// existing and task come from two separate GetByID calls, so their
+	// AssigneeID pointers never compare equal even when unchanged — compare
+	// by value. Shares uuidPtrChanged with the reviewer diff above rather than
+	// carrying a second, inverted copy of the same three lines.
+	assigneeChanged := uuidPtrChanged(existing.AssigneeID, task.AssigneeID)
 	if assigneeChanged {
 		changes["assignee_id"] = map[string]interface{}{"old": existing.AssigneeID, "new": task.AssigneeID}
 	}
@@ -428,6 +432,10 @@ func (s *taskService) Update(ctx context.Context, task *domain.Task) error {
 		s.notifyAssignedAgent(ctx, task, "task.assigned", map[string]any{
 			"assignee_id": map[string]any{"old": existing.AssigneeID, "new": task.AssigneeID},
 		})
+
+		// Dispatch in-app notification to subscribed workspace users — Create
+		// and AssignTask already do this, Update never did.
+		s.dispatchUserNotification(ctx, task, "task.assigned", "Task assigned: "+task.Title)
 	}
 
 	// Notify assignee agent when delegation_level changes (e.g. task becomes supervised).
@@ -810,7 +818,7 @@ func (s *taskService) MoveTask(ctx context.Context, taskID uuid.UUID, input Move
 			"status_id": map[string]any{"old": oldStatusID.String(), "new": input.StatusID.String()},
 		})
 		// Dispatch in-app notification to subscribed workspace users.
-		s.dispatchUserNotification(ctx, task, "task.status_changed", "Task status changed: "+task.Title, "")
+		s.dispatchUserNotification(ctx, task, "task.status_changed", "Task status changed: "+task.Title)
 	}
 
 	// Task carrying a reviewer just landed on a review-category status: tell the
@@ -877,7 +885,7 @@ func (s *taskService) AssignTask(ctx context.Context, taskID uuid.UUID, input As
 	})
 
 	// Dispatch in-app notification to subscribed workspace users.
-	s.dispatchUserNotification(ctx, task, "task.assigned", "Task assigned: "+task.Title, "")
+	s.dispatchUserNotification(ctx, task, "task.assigned", "Task assigned: "+task.Title)
 
 	return nil
 }
@@ -1410,10 +1418,15 @@ func (s *taskService) publishTaskEvent(ctx context.Context, wsID, projectID, tas
 	}
 }
 
-// dispatchUserNotification sends an in-app notification to subscribed workspace users
-// for the given task event. It resolves workspace_id from the project, then fires
+// dispatchUserNotification sends an in-app notification to every workspace member
+// subscribed to eventType. It resolves workspace_id from the project, then fires
 // NotificationService.Notify asynchronously.
-func (s *taskService) dispatchUserNotification(ctx context.Context, task *domain.Task, eventType, title, body string) {
+//
+// It takes no body: all four call sites passed "", and unparam flags a parameter
+// that is provably always the same constant. NotificationEvent.Body stays in the
+// domain type — dispatchTargetedUserNotification still carries one — so a caller
+// that needs a body can pass it there rather than reviving a dead parameter here.
+func (s *taskService) dispatchUserNotification(ctx context.Context, task *domain.Task, eventType, title string) {
 	if s.notifySvc == nil || s.projectRepo == nil {
 		return
 	}
@@ -1432,7 +1445,6 @@ func (s *taskService) dispatchUserNotification(ctx context.Context, task *domain
 		ProjectID:   &projIDCopy,
 		EventType:   eventType,
 		Title:       title,
-		Body:        body,
 		Metadata: map[string]any{
 			"task_id":    task.ID,
 			"task_title": task.Title,
