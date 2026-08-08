@@ -12,6 +12,7 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	mw "github.com/entire-vc/evc-mesh/internal/middleware"
 	"github.com/entire-vc/evc-mesh/internal/repository"
 	"github.com/entire-vc/evc-mesh/internal/service"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
@@ -113,7 +114,45 @@ func (h *ActivityHandler) ListByTask(c echo.Context) error {
 		return handleError(c, err)
 	}
 
+	// GET /tasks/:task_id/activity is workspace-gated (WorkspaceRLS resolves
+	// :task_id, RequireWorkspaceMemberScoped enforces it — see cmd/api/main.go)
+	// but deliberately carries no rbac(mw.PermExportAuditLog): the web UI's
+	// per-task activity feed (web/src/components/activity-log.tsx) calls this
+	// route for every workspace member, not just owner/admin. What must stay
+	// behind PermExportAuditLog is the *content* of Changes — it stores the
+	// prior value of whatever field was edited, task descriptions included,
+	// and a prior revision can carry a secret that was pasted in and then
+	// removed (see task cab1e85f: a rotated prod password leaked exactly this
+	// way). Callers without the permission still get the event itself
+	// (action/actor/created_at), just not the diff.
+	if !callerHasExportAuditLogPerm(c) {
+		redactActivityChanges(page.Items)
+	}
+
 	return c.JSON(http.StatusOK, page)
+}
+
+// callerHasExportAuditLogPerm reports whether the caller holds
+// PermExportAuditLog in the resolved workspace. Agents never hold it — see
+// agentPerms in internal/middleware/rbac.go — so this never queries for an
+// agent caller. For a user it reads the workspace_role WorkspaceRLS already
+// resolved into context (internal/middleware/workspace.go), so checking it
+// here costs a context read, not a second DB round trip.
+func callerHasExportAuditLogPerm(c echo.Context) bool {
+	if mw.IsAgent(c) {
+		return false
+	}
+	role, _ := c.Get(mw.ContextKeyWorkspaceRole).(string)
+	return mw.RoleHasPermission(role, mw.PermExportAuditLog)
+}
+
+// redactActivityChanges clears Changes on every entry in place, so a caller
+// without PermExportAuditLog sees only the event's metadata, never the
+// field-level diff.
+func redactActivityChanges(items []domain.ActivityLog) {
+	for i := range items {
+		items[i].Changes = nil
+	}
 }
 
 // exportActivityQuery represents query parameters for the export endpoint.
