@@ -213,6 +213,14 @@ services:
     depends_on:
       api:
         condition: service_healthy
+      # nginx.conf proxies /s3/ to the literal upstream `minio:9000`, and nginx
+      # resolves literal upstreams once at config load: if the name does not
+      # resolve it exits with "host not found in upstream" and the whole UI is
+      # down, not just downloads. service_started (not service_healthy) is
+      # enough — the container only has to exist for compose DNS to answer —
+      # and it keeps the UI's availability decoupled from MinIO's health.
+      minio:
+        condition: service_started
     ports:
       - "${HTTP_PORT:-80}:80"
 
