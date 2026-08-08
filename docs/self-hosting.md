@@ -319,6 +319,21 @@ first — the startup log will tell you if this is the case.
 | Workspace icon | The API streams the bytes (`GET /api/v1/workspaces/{id}/icon`) | No |
 | Task artifacts | Redirect to a presigned storage URL | Yes, if storage is not reachable from the browser |
 
+Under the bundled compose stack storage is *never* reachable from the browser —
+`minio:9000` is an internal name on an unpublished port — so artifact downloads
+need `S3_PUBLIC_URL`. The bundled nginx ships a `/s3/` location that proxies
+through to MinIO for exactly this, so setting
+`S3_PUBLIC_URL=https://your-domain.com/s3` is all that is required. That
+location deliberately does not override the `Host` header: the presigned
+signature is computed against `S3_ENDPOINT`, and MinIO validates it against the
+`Host` it receives, so nginx must pass the upstream host through unchanged.
+
+Note that `/s3/` fronts the MinIO endpoint as a whole, not just the artifact
+bucket. Every operation behind it still requires a valid SigV4 signature —
+unsigned requests get `403` — but if you would rather not expose it at all,
+leave `S3_PUBLIC_URL` empty and put artifacts on an external bucket the browser
+can reach directly.
+
 The workspace icon is deliberately **not** served via a presigned URL. A
 presigned URL is built from `S3_ENDPOINT`, which under compose is the internal
 host `minio:9000` — a name that does not resolve in a browser and a port that is
