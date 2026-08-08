@@ -321,6 +321,7 @@ type MockActivityLogService struct {
 	LogFunc        func(ctx context.Context, entry *domain.ActivityLog) error
 	ListFunc       func(ctx context.Context, workspaceID uuid.UUID, filter repository.ActivityLogFilter, pg pagination.Params) (*pagination.Page[domain.ActivityLog], error)
 	ListByTaskFunc func(ctx context.Context, taskID uuid.UUID, pg pagination.Params) (*pagination.Page[domain.ActivityLog], error)
+	ExportFunc     func(ctx context.Context, workspaceID uuid.UUID, filter repository.ActivityLogFilter, limit int) ([]domain.ActivityLog, error)
 }
 
 func (m *MockActivityLogService) Log(ctx context.Context, entry *domain.ActivityLog) error {
@@ -340,6 +341,13 @@ func (m *MockActivityLogService) List(ctx context.Context, workspaceID uuid.UUID
 func (m *MockActivityLogService) ListByTask(ctx context.Context, taskID uuid.UUID, pg pagination.Params) (*pagination.Page[domain.ActivityLog], error) {
 	if m.ListByTaskFunc != nil {
 		return m.ListByTaskFunc(ctx, taskID, pg)
+	}
+	return nil, nil
+}
+
+func (m *MockActivityLogService) Export(ctx context.Context, workspaceID uuid.UUID, filter repository.ActivityLogFilter, limit int) ([]domain.ActivityLog, error) {
+	if m.ExportFunc != nil {
+		return m.ExportFunc(ctx, workspaceID, filter, limit)
 	}
 	return nil, nil
 }

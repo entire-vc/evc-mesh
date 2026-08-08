@@ -9,6 +9,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 )
@@ -17,17 +18,45 @@ import (
 type RESTClient struct {
 	baseURL    string
 	agentKey   string
+	basicUser  string // HTTP basic-auth username (empty = disabled)
+	basicPass  string
 	httpClient *http.Client
 }
 
 // NewRESTClient creates a new RESTClient for the given API base URL and agent key.
+//
+// A self-hosted Mesh instance may sit behind an HTTP basic-auth gate on its
+// reverse proxy (e.g. a partner instance whose UI is password-walled while the
+// API authenticates callers itself). Basic auth rides the Authorization header;
+// the Mesh app authenticates via X-Agent-Key, so the two never collide. When
+// MESH_BASIC_AUTH is set (as "user:pass") every request also carries the basic
+// credential, letting one binary reach both an open instance and a gated one.
+// Unset — the default for the whole fleet against mesh.entire.host — is a no-op.
 func NewRESTClient(baseURL, agentKey string) *RESTClient {
-	return &RESTClient{
+	c := &RESTClient{
 		baseURL:  strings.TrimRight(baseURL, "/"),
 		agentKey: agentKey,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
+	}
+	if ba := strings.TrimSpace(os.Getenv("MESH_BASIC_AUTH")); ba != "" {
+		// SplitN on the FIRST colon only: a bcrypt/htpasswd-style password can
+		// itself contain colons, and only the username is delimiter-free.
+		if user, pass, ok := strings.Cut(ba, ":"); ok {
+			c.basicUser, c.basicPass = user, pass
+		}
+	}
+	return c
+}
+
+// applyAuth sets the headers every request needs: the agent key the Mesh app
+// reads, plus the optional proxy basic-auth. Centralised so `do` and
+// `doMultipart` cannot drift apart on which credentials they attach.
+func (c *RESTClient) applyAuth(req *http.Request) {
+	req.Header.Set("X-Agent-Key", c.agentKey)
+	if c.basicUser != "" {
+		req.SetBasicAuth(c.basicUser, c.basicPass)
 	}
 }
 
@@ -48,7 +77,7 @@ func (c *RESTClient) do(ctx context.Context, method, path string, body any) (*ht
 		return nil, fmt.Errorf("create request: %w", err)
 	}
 
-	req.Header.Set("X-Agent-Key", c.agentKey)
+	c.applyAuth(req)
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
@@ -116,7 +145,7 @@ func (c *RESTClient) doMultipart(ctx context.Context, path string, fields map[st
 		return fmt.Errorf("create request: %w", err)
 	}
 
-	req.Header.Set("X-Agent-Key", c.agentKey)
+	c.applyAuth(req)
 	req.Header.Set("Content-Type", mw.FormDataContentType())
 
 	resp, err := c.httpClient.Do(req)
@@ -552,7 +581,7 @@ func (c *RESTClient) doRaw(ctx context.Context, method, path, contentType string
 		return nil, 0, fmt.Errorf("create request: %w", err)
 	}
 
-	req.Header.Set("X-Agent-Key", c.agentKey)
+	c.applyAuth(req)
 	if rawBody != nil {
 		req.Header.Set("Content-Type", contentType)
 	}

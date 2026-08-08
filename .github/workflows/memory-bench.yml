@@ -1696,6 +1696,118 @@ jobs:
 
       - name: Checkout evc-mesh
         uses: actions/checkout@v4
+        with:
+          # `check_serving_version.py` decides "prod is close enough" by DIFFING
+          # prod's commit against this one and asking whether anything
+          # deploy-backend.yml deploys changed. Both commits therefore have to be
+          # in the checkout, and the default depth-1 clone has exactly one.
+          #
+          # Without this the pin below cannot fail SAFE — it can only fail. The
+          # string compare that precedes the diff means the step passes solely
+          # when prod already serves this exact sha; every other case, including
+          # the ordinary one (a CI-only merge prod will never deploy), reads as
+          # "commit <sha> is not in this checkout" and refuses. The pin that was
+          # added so a capture could not straddle a deploy would instead have
+          # blocked EVERY capture, forever.
+          #
+          # Observed on the first dispatch after that pin merged: run
+          # 30909509069, prod on ff6a694, checkout 328ed3f, diff empty because
+          # #505 touched only CI files — polled 900s and aborted a capture that
+          # was correctly attributable the whole time.
+          fetch-depth: 0
+
+      # ---------------------------------------------------------------------
+      # Which binary is this CAPTURE about to measure?
+      #
+      # The required arm has had this since #410; this arm never did, and the
+      # asymmetry is not defensible on the capture path. A judging run that
+      # straddles two binaries yields one wrong advisory verdict, visible that
+      # day. A BASELINE that straddles two binaries becomes the standing floor
+      # this arm is compared against for weeks, and nothing in the file says so
+      # — which is this card's own defect (#f0e655e7) re-manufactured from the
+      # capture side.
+      #
+      # Capture only, deliberately. Pinning the nightly judging run is a real
+      # gap too, but a different one: it is about attributing a single night's
+      # score, not about what a standing floor measured. Scoping it here keeps
+      # the paid nightly on its current trigger conditions.
+      #
+      # Runs BEFORE the Go build so a capture that cannot be attributed costs
+      # the wait and nothing else — no build, no ~60 min of prod, no tokens.
+      # ---------------------------------------------------------------------
+      # Named distinctly from the recall arm's identical-purpose step on
+      # purpose: the workflow self-checks slice this file by `- name:` and take
+      # the FIRST match, so two steps sharing a name make the second one's test
+      # silently assert against the first — a green test for wiring that is not
+      # there.
+      - name: Which commit will this capture measure?
+        id: version
+        if: steps.mode.outputs.capture == 'true'
+        env:
+          MESH_API_URL: ${{ secrets.MESH_API_URL }}
+          # Ceiling, not a cost: a matching first poll returns in ~1s. Sized for
+          # the ~6-7 min a backend deploy takes, doubled, so a queued deploy
+          # still fits. Paired with this job's `timeout-minutes` — raise both
+          # together or the guard dies as a timeout on the runs it exists for.
+          BENCH_VERSION_WAIT_SECONDS: '900'
+          # Operator-supplied, so it goes through the environment rather than
+          # `${{ }}` interpolation into the script body — an input spliced into
+          # a shell line is the standard Actions script-injection shape, and
+          # this one runs with the bench credentials in scope.
+          EXPECT_COMMIT_INPUT: ${{ inputs.expect_commit }}
+        run: |
+          set -euo pipefail
+          # Pin only where `github.sha` names a commit prod is expected to serve.
+          # A capture is dispatched on main, which deploy-backend.yml ships.
+          expect="${EXPECT_COMMIT_INPUT:-}"
+          if [ -z "$expect" ] && [ "${{ github.ref }}" = "refs/heads/main" ]; then
+            expect="${{ github.sha }}"
+          fi
+
+          if [ -n "$expect" ]; then
+            echo "Pinning to $expect (wait up to ${BENCH_VERSION_WAIT_SECONDS}s)."
+            set +e
+            python3 scripts/memory-bench/check_serving_version.py \
+              --expect "$expect" --wait-seconds "${BENCH_VERSION_WAIT_SECONDS}" \
+              2>&1 | tee version.log
+            rc=${PIPESTATUS[0]}
+            set -e
+          else
+            echo "No pin: ${{ github.event_name }} on ${{ github.ref }} is not a commit prod serves."
+            set +e
+            python3 scripts/memory-bench/check_serving_version.py --record 2>&1 | tee version.log
+            rc=${PIPESTATUS[0]}
+            set -e
+          fi
+
+          reason="$(grep -m1 '^GATE_REASON:' version.log | sed 's/^GATE_REASON: *//' || true)"
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          echo "reason=$reason" >> "$GITHUB_OUTPUT"
+
+          # A capture ABORTS here rather than proceeding unattributed. The
+          # judging path has an INCONCLUSIVE to fall back on; a capture does
+          # not — its only output is a file that will be committed, and an
+          # unattributable one is worse than none.
+          if [ "$rc" != "0" ]; then
+            {
+              echo "## LongMemEval-S baseline re-snap — NOT RUN"
+              echo
+              echo "### ⚠️ Refused: could not confirm which binary would be measured"
+              echo
+              echo "**Reason:** \`${reason:-unspecified}\`"
+              echo
+              echo "> Nothing was measured and no baseline was written. A backend deploy"
+              echo "> was in flight, or prod is serving code that is not on the line under"
+              echo "> test. Re-dispatch once the deploy has landed — a \`--repeat 3\`"
+              echo "> capture occupies prod for ~60 minutes, so check the open PRs on a"
+              echo "> \`deploy-backend.yml\` path first."
+              echo
+              echo '```'
+              tail -30 version.log
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit $rc
 
       - name: Checkout evc-mesh-mcp
         uses: actions/checkout@v4
@@ -1771,12 +1883,43 @@ jobs:
           # Derived from the run id rather than random so an orphaned row names
           # the run that abandoned it.
           BENCH_RUN_NONCE: ${{ github.run_id }}-${{ github.run_attempt }}-e-snap
+          # The commit the pre-flight pin confirmed prod was serving. Empty only
+          # when no pin applied and the endpoint could not be read.
+          SERVED_AT_START: ${{ steps.version.outputs.served }}
         run: |
           cd scripts/memory-bench
           set +e
-          python run_ci.py --update-baseline --repeat "${{ inputs.repeat || '3' }}" 2>&1 | tee resnap.log
+          python run_ci.py --update-baseline \
+            --served-commit "${SERVED_AT_START:-}" \
+            --repeat "${{ inputs.repeat || '3' }}" 2>&1 | tee resnap.log
           rc=${PIPESTATUS[0]}
           set -e
+
+          # POST-FLIGHT STABILITY. The pin above says which binary the capture
+          # STARTED on; only this says it was still that binary at the end. The
+          # documented case is capture 30336693957 (2026-07-28): prod went
+          # 5d2cda8 -> ba7deae 42 minutes into a 65-minute capture, the run
+          # exited SUCCESS, and recovering what it had measured took a human
+          # diffing two commits by hand afterwards.
+          #
+          # The file is DELETED, not just flagged. `capture_blockers` refuses
+          # BEFORE writing for exactly this reason: a guard that reports after
+          # the file is on disk is advice, not a guard — the artifact still
+          # uploads and the figure still gets committed. This check can only run
+          # after the measurement, so deleting is how it inherits that property.
+          if [ "$rc" = "0" ] && [ -n "${SERVED_AT_START:-}" ]; then
+            set +e
+            python3 check_serving_version.py --was "${SERVED_AT_START}" 2>&1 | tee -a resnap.log
+            vrc=${PIPESTATUS[0]}
+            set -e
+            if [ "$vrc" != "0" ]; then
+              rc=2
+              rm -f baseline.json
+              echo "✗ CAPTURE DISCARDED — prod was redeployed during the measurement." \
+                | tee -a resnap.log
+            fi
+          fi
+
           {
             echo "## LongMemEval-S baseline re-snap"
             echo
@@ -1788,7 +1931,18 @@ jobs:
               cat baseline.json
               echo '```'
             else
-              echo "⚠️ Capture exited $rc — the baseline was NOT written. See the log."
+              reason="$(grep -m1 '^GATE_REASON:' resnap.log | sed 's/^GATE_REASON: *//' || true)"
+              echo "⚠️ Capture exited $rc — \`baseline.json\` was **NOT** written."
+              echo
+              echo "**Reason:** \`${reason:-unspecified}\`"
+              echo
+              echo "\`version-changed-mid-run\` means a backend deploy landed inside the"
+              echo "measurement window, so the numbers span two binaries and describe"
+              echo "neither. Nothing is wrong with the harness: re-dispatch once the deploy"
+              echo "has settled. Check the open PRs on a \`deploy-backend.yml\` path first,"
+              echo "because a \`--repeat 3\` capture occupies prod for ~60 minutes."
+              echo
+              echo "Either way: fix the cause and re-dispatch; do not hand-edit the baseline."
             fi
             echo
             echo '```'
