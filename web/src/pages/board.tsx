@@ -27,6 +27,7 @@ import {
 import { useProjectStore } from "@/stores/project";
 import { useTaskStore } from "@/stores/task";
 import { useCustomFieldStore } from "@/stores/custom-field";
+import { useMemberStore } from "@/stores/member";
 import { useWebSocket } from "@/hooks/use-websocket";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -40,6 +41,13 @@ import { useSavedViewStore } from "@/stores/saved-view-store";
 import { CreateRecurringDialog } from "@/components/create-recurring-dialog";
 import { AssigneeAvatar } from "@/components/assignee-avatar";
 import { applyViewFilters, type CFFilters } from "@/components/view-filters";
+import { loadBoardFilters, saveBoardFilters } from "@/lib/board-view-storage";
+import {
+  GROUP_BY_VALUES,
+  SORT_BY_VALUES,
+  buildBoardSavedViewState,
+  readBoardSavedViewState,
+} from "@/lib/board-saved-view";
 import type { Task, TaskStatus, WSMessage, Priority, StatusCategory } from "@/types";
 
 // ---------------------------------------------------------------------------
@@ -282,6 +290,7 @@ export function BoardPage() {
   const { tasks, tasksByStatus, isLoading, fetchTasks, moveTask } = useTaskStore();
   const { fields: customFieldDefs, fetchFields: fetchCustomFields } =
     useCustomFieldStore();
+  const { projectMembers, fetchProjectMembers } = useMemberStore();
 
   // Dialog state
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -305,6 +314,16 @@ export function BoardPage() {
   // New filter state
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [cfFilters, setCFFilters] = useState<CFFilters>({});
+  // Specific-assignee filter: task.assignee_id (or "unassigned") must be in this
+  // set. Empty = no filtering. Distinct from assigneeFilter above, which filters
+  // by assignee_type (user/agent/unassigned), not by who specifically.
+  const [assigneeIdsFilter, setAssigneeIdsFilter] = useState<string[]>([]);
+
+  // True once this project's persisted filters (or defaults, if none were
+  // saved) have been applied. Gates the save effect below so it never
+  // overwrites a project's saved filters with another project's stale state
+  // during the brief window while switching projects.
+  const [filtersHydrated, setFiltersHydrated] = useState(false);
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -354,8 +373,70 @@ export function BoardPage() {
       fetchCustomFields(currentProject.id).catch(() => {
         // Custom fields API may not be available yet
       });
+      fetchProjectMembers(currentProject.id);
     }
-  }, [currentProject, fetchStatuses, fetchTasks, fetchCustomFields]);
+  }, [currentProject, fetchStatuses, fetchTasks, fetchCustomFields, fetchProjectMembers]);
+
+  // Restore this project's persisted grouping/sort/filters (or defaults, if
+  // this is the first visit) so a reload or navigating away and back doesn't
+  // reset the board to its out-of-the-box view.
+  const currentProjectId = currentProject?.id;
+  useEffect(() => {
+    if (!currentProjectId) return;
+    setFiltersHydrated(false);
+    const saved = loadBoardFilters(currentProjectId);
+    if (saved) {
+      if (GROUP_BY_VALUES.includes(saved.groupBy as GroupBy)) {
+        setGroupBy(saved.groupBy as GroupBy);
+      }
+      if (SORT_BY_VALUES.includes(saved.sortBy as SortBy)) {
+        setSortBy(saved.sortBy as SortBy);
+      }
+      setShowClosed(saved.showClosed ?? false);
+      setShowSubtasks(saved.showSubtasks ?? false);
+      setSearchQuery(saved.searchQuery ?? "");
+      setPriorityFilter(saved.priorityFilter ?? "all");
+      setAssigneeFilter(saved.assigneeFilter ?? "all");
+      setCustomFieldFilters(saved.customFieldFilters ?? {});
+      setSelectedTags(saved.selectedTags ?? []);
+      setCFFilters(saved.cfFilters ?? {});
+      setAssigneeIdsFilter(saved.assigneeIdsFilter ?? []);
+    }
+    setFiltersHydrated(true);
+  }, [currentProjectId]);
+
+  // Persist grouping/sort/filters whenever they change, once this project's
+  // saved state has been loaded (avoids clobbering it with defaults first).
+  useEffect(() => {
+    if (!currentProjectId || !filtersHydrated) return;
+    saveBoardFilters(currentProjectId, {
+      groupBy,
+      sortBy,
+      showClosed,
+      showSubtasks,
+      searchQuery,
+      priorityFilter,
+      assigneeFilter,
+      customFieldFilters,
+      selectedTags,
+      cfFilters,
+      assigneeIdsFilter,
+    });
+  }, [
+    currentProjectId,
+    filtersHydrated,
+    groupBy,
+    sortBy,
+    showClosed,
+    showSubtasks,
+    searchQuery,
+    priorityFilter,
+    assigneeFilter,
+    customFieldFilters,
+    selectedTags,
+    cfFilters,
+    assigneeIdsFilter,
+  ]);
 
   const sortedStatuses = useMemo(
     () => [...statuses].sort((a, b) => a.position - b.position),
@@ -379,6 +460,31 @@ export function BoardPage() {
     return Array.from(tagSet).sort();
   }, [tasks]);
 
+  // Candidates for the specific-assignee filter: project members (so people
+  // with zero currently-loaded tasks are still pickable) merged with whoever
+  // tasks are actually assigned to (covers a legacy assignee no longer a
+  // formal member). Deduped by id, named assignees sorted first.
+  const assigneeCandidates = useMemo(() => {
+    const byId = new Map<string, { id: string; name: string; type: "user" | "agent" }>();
+    for (const m of projectMembers) {
+      if (m.user) {
+        byId.set(m.user.id, { id: m.user.id, name: m.user.name || m.user.email, type: "user" });
+      } else if (m.agent_id) {
+        byId.set(m.agent_id, { id: m.agent_id, name: m.agent_name ?? "Agent", type: "agent" });
+      }
+    }
+    for (const task of tasks) {
+      if (task.assignee_id && !byId.has(task.assignee_id)) {
+        byId.set(task.assignee_id, {
+          id: task.assignee_id,
+          name: task.assignee_name ?? task.assignee_id,
+          type: task.assignee_type === "agent" ? "agent" : "user",
+        });
+      }
+    }
+    return Array.from(byId.values()).sort((a, b) => a.name.localeCompare(b.name));
+  }, [projectMembers, tasks]);
+
   // ---------------------------------------------------------------------------
   // Base task filter (search + priority + assignee + tags + CF + subtasks)
   // Applied before grouping.
@@ -393,12 +499,27 @@ export function BoardPage() {
       }
       if (priorityFilter !== "all" && task.priority !== priorityFilter) return false;
       if (assigneeFilter !== "all" && task.assignee_type !== assigneeFilter) return false;
+      if (
+        assigneeIdsFilter.length > 0 &&
+        !assigneeIdsFilter.includes(task.assignee_id ?? "unassigned")
+      ) {
+        return false;
+      }
       return true;
     });
 
     // Second pass: tag + CF filters via shared pure function
     return applyViewFilters(basic, selectedTags, cfFilters);
-  }, [tasks, showSubtasks, searchQuery, priorityFilter, assigneeFilter, selectedTags, cfFilters]);
+  }, [
+    tasks,
+    showSubtasks,
+    searchQuery,
+    priorityFilter,
+    assigneeFilter,
+    assigneeIdsFilter,
+    selectedTags,
+    cfFilters,
+  ]);
 
   // ---------------------------------------------------------------------------
   // Build columns + task groups based on groupBy
@@ -607,27 +728,55 @@ export function BoardPage() {
 
   // ----- New task helpers -----
 
-  // Sync current filter state to saved-view store (so ViewTabBar can save it)
+  // Sync current filter state to saved-view store (so ViewTabBar can save it).
+  // Capture and restore both go through board-saved-view.ts, which keeps the
+  // two halves symmetric — see that module for why `custom_fields` carries
+  // `cfFilters` rather than the dead `customFieldFilters` state.
   const { pendingView, clearPendingView, setCurrentViewState } = useSavedViewStore();
   useEffect(() => {
-    setCurrentViewState({
-      filters: {
-        search: searchQuery,
-        priority: priorityFilter,
-        assignee: assigneeFilter,
-        custom_fields: customFieldFilters,
-      },
-    });
-  }, [searchQuery, priorityFilter, assigneeFilter, customFieldFilters, setCurrentViewState]);
+    setCurrentViewState(
+      buildBoardSavedViewState({
+        searchQuery,
+        priorityFilter,
+        assigneeFilter,
+        assigneeIdsFilter,
+        cfFilters,
+        selectedTags,
+        groupBy,
+        showClosed,
+        showSubtasks,
+        sortBy,
+      }),
+    );
+  }, [
+    searchQuery,
+    priorityFilter,
+    assigneeFilter,
+    assigneeIdsFilter,
+    cfFilters,
+    selectedTags,
+    groupBy,
+    showClosed,
+    showSubtasks,
+    sortBy,
+    setCurrentViewState,
+  ]);
 
   // Listen for saved view applied from ViewTabBar
   useEffect(() => {
     if (pendingView && pendingView.view_type === "board") {
-      const filters = pendingView.filters ?? {};
-      setSearchQuery((filters.search as string) ?? "");
-      setPriorityFilter((filters.priority as string) ?? "all");
-      setAssigneeFilter((filters.assignee as string) ?? "all");
-      setCustomFieldFilters((filters.custom_fields as Record<string, unknown>) ?? {});
+      const restored = readBoardSavedViewState(pendingView.filters ?? {}, pendingView.sort_by);
+      setSearchQuery(restored.searchQuery);
+      setPriorityFilter(restored.priorityFilter);
+      setAssigneeFilter(restored.assigneeFilter);
+      setAssigneeIdsFilter(restored.assigneeIdsFilter);
+      setCFFilters(restored.cfFilters);
+      setSelectedTags(restored.selectedTags);
+      setGroupBy(restored.groupBy);
+      setShowClosed(restored.showClosed);
+      setShowSubtasks(restored.showSubtasks);
+      // No sort_by on the view: keep whatever sort is currently active.
+      if (restored.sortBy) setSortBy(restored.sortBy);
       clearPendingView();
     }
   }, [pendingView, clearPendingView]);
@@ -680,6 +829,9 @@ export function BoardPage() {
           onPriorityFilterChange={setPriorityFilter}
           assigneeFilter={assigneeFilter}
           onAssigneeFilterChange={setAssigneeFilter}
+          assigneeCandidates={assigneeCandidates}
+          assigneeIdsFilter={assigneeIdsFilter}
+          onAssigneeIdsFilterChange={setAssigneeIdsFilter}
           allTags={allTags}
           selectedTags={selectedTags}
           onTagsChange={setSelectedTags}
