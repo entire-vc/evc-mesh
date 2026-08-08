@@ -72,21 +72,26 @@ type Task struct {
 	// immediately before applyReviewAssignee reassigned it to a configured SetReviewer.
 	// MoveTask restores them when the task bounces back out of review without an
 	// explicit assignee_id, then clears the stash.
-	PreReviewAssigneeID   *uuid.UUID      `json:"pre_review_assignee_id,omitempty" db:"pre_review_assignee_id"`
-	PreReviewAssigneeType *AssigneeType   `json:"pre_review_assignee_type,omitempty" db:"pre_review_assignee_type"`
-	Priority              Priority        `json:"priority" db:"priority"`
-	ParentTaskID          *uuid.UUID      `json:"parent_task_id" db:"parent_task_id"`
-	Position              float64         `json:"position" db:"position"`
-	DueDate               *time.Time      `json:"due_date" db:"due_date"`
-	EstimatedHours        *float64        `json:"estimated_hours" db:"estimated_hours"`
-	CustomFields          json.RawMessage `json:"custom_fields" db:"custom_fields"`
-	Labels                pq.StringArray  `json:"labels" db:"labels"`
-	ThreadID              *string         `json:"thread_id,omitempty" db:"thread_id"`
-	CreatedBy             uuid.UUID       `json:"created_by" db:"created_by"`
-	CreatedByType         ActorType       `json:"created_by_type" db:"created_by_type"`
-	CreatedAt             time.Time       `json:"created_at" db:"created_at"`
-	UpdatedAt             time.Time       `json:"updated_at" db:"updated_at"`
-	CompletedAt           *time.Time      `json:"completed_at" db:"completed_at"`
+	PreReviewAssigneeID   *uuid.UUID    `json:"pre_review_assignee_id,omitempty" db:"pre_review_assignee_id"`
+	PreReviewAssigneeType *AssigneeType `json:"pre_review_assignee_type,omitempty" db:"pre_review_assignee_type"`
+	// ReviewerID/ReviewerType hold the person or agent responsible for checking the
+	// work — independent of AssigneeID, which is who does it. Nil means no reviewer
+	// is set. Unlike AssigneeType, there's no "unassigned" sentinel: absence is nil.
+	ReviewerID     *uuid.UUID      `json:"reviewer_id,omitempty" db:"reviewer_id"`
+	ReviewerType   *AssigneeType   `json:"reviewer_type,omitempty" db:"reviewer_type"`
+	Priority       Priority        `json:"priority" db:"priority"`
+	ParentTaskID   *uuid.UUID      `json:"parent_task_id" db:"parent_task_id"`
+	Position       float64         `json:"position" db:"position"`
+	DueDate        *time.Time      `json:"due_date" db:"due_date"`
+	EstimatedHours *float64        `json:"estimated_hours" db:"estimated_hours"`
+	CustomFields   json.RawMessage `json:"custom_fields" db:"custom_fields"`
+	Labels         pq.StringArray  `json:"labels" db:"labels"`
+	ThreadID       *string         `json:"thread_id,omitempty" db:"thread_id"`
+	CreatedBy      uuid.UUID       `json:"created_by" db:"created_by"`
+	CreatedByType  ActorType       `json:"created_by_type" db:"created_by_type"`
+	CreatedAt      time.Time       `json:"created_at" db:"created_at"`
+	UpdatedAt      time.Time       `json:"updated_at" db:"updated_at"`
+	CompletedAt    *time.Time      `json:"completed_at" db:"completed_at"`
 
 	// Recurring series fields — populated when the task is an instance of a recurring schedule.
 	RecurringScheduleID     *uuid.UUID `json:"recurring_schedule_id,omitempty" db:"recurring_schedule_id"`
@@ -120,6 +125,7 @@ type Task struct {
 	// Computed fields — populated by enriched list/get queries, not stored columns.
 	SubtaskCount  int     `json:"subtask_count"`
 	AssigneeName  *string `json:"assignee_name,omitempty"`
+	ReviewerName  *string `json:"reviewer_name,omitempty"`
 	CreatedByName *string `json:"created_by_name,omitempty"`
 	ArtifactCount int     `json:"artifact_count"`
 	VCSLinkCount  int     `json:"vcs_link_count"`

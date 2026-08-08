@@ -474,3 +474,134 @@ func TestAssigneeEnrolment_UnreadableDirectoryDoesNotBlockEnrolment(t *testing.T
 		"a directory we could not read must not block enrolment — that would turn a "+
 			"transient failure into the permission dead end this guard protects against")
 }
+
+// ---------------------------------------------------------------------------
+// 7. Reviewer — the eighth write path that puts a principal on a task.
+//
+//	The Reviewer field arrived on a branch that predated the enrolment work, so
+//	it set reviewer_id without ever enrolling. It is the worst-placed instance of
+//	the bug rather than just another one: being made reviewer *notifies you*, so
+//	the reviewer follows a notification to a task whose every transition 403s.
+//
+// ---------------------------------------------------------------------------
+
+// reviewerUpdate returns the task as an Update caller would submit it: a fresh
+// struct, not the pointer the repo holds. That separation matters — it is what
+// uuidPtrChanged exists to handle, and reusing the stored pointer would let a
+// change go undetected.
+func reviewerUpdate(stored *domain.Task, reviewerID uuid.UUID, reviewerType *domain.AssigneeType) *domain.Task {
+	updated := *stored
+	id := reviewerID
+	updated.ReviewerID = &id
+	updated.ReviewerType = reviewerType
+	return &updated
+}
+
+func TestReviewerEnrolment_UserReviewerEnrolledOnUpdate(t *testing.T) {
+	ctx := context.Background()
+	projectID, reviewerID, taskID, wsID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	env := setupMembershipEnv(nil, nil)
+	svc, taskRepo, projRepo, pmRepo := env.svc, env.tasks, env.projects, env.members
+
+	userRepo := NewMockUserRepository()
+	userRepo.AddUser(wsID, &domain.User{ID: reviewerID, Username: "pavel"})
+	svc.userRepo = userRepo
+
+	projRepo.items[projectID] = &domain.Project{ID: projectID, WorkspaceID: wsID}
+	taskRepo.items[taskID] = &domain.Task{
+		ID: taskID, ProjectID: projectID, Title: "t", AssigneeType: domain.AssigneeTypeUnassigned,
+	}
+
+	// Precondition: the reviewer is a stranger to this project, or the test passes vacuously.
+	exists, err := pmRepo.ExistsMember(ctx, projectID, &reviewerID, nil)
+	require.NoError(t, err)
+	require.False(t, exists, "precondition: reviewer must start as a non-member")
+
+	userType := domain.AssigneeTypeUser
+	require.NoError(t, svc.Update(ctx, reviewerUpdate(taskRepo.items[taskID], reviewerID, &userType)))
+
+	ok, err := pmRepo.ExistsMember(ctx, projectID, &reviewerID, nil)
+	require.NoError(t, err)
+	assert.True(t, ok,
+		"being made reviewer must enrol you — the notification sends you to a task "+
+			"whose status transitions would otherwise all 403")
+}
+
+// reviewer_type is caller-supplied on updateTaskRequest and is not to be trusted,
+// exactly as CreateSubtask's was in #501. Enrolment dispatches on the type, so an
+// agent handed over as "user" would be written against project_members.user_id —
+// rejected by the foreign key, logged, and swallowed, leaving no membership row.
+func TestReviewerEnrolment_MistypedAgentReviewerIsResolvedNotTrusted(t *testing.T) {
+	ctx := context.Background()
+	projectID, reviewerID, taskID, wsID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	env := setupMembershipEnv(nil, nil)
+	svc, taskRepo, projRepo, agentRepo, pmRepo := env.svc, env.tasks, env.projects, env.agents, env.members
+
+	projRepo.items[projectID] = &domain.Project{ID: projectID, WorkspaceID: wsID}
+	agentRepo.items[reviewerID] = &domain.Agent{ID: reviewerID, WorkspaceID: wsID, Slug: "garfield"}
+	taskRepo.items[taskID] = &domain.Task{
+		ID: taskID, ProjectID: projectID, Title: "t", AssigneeType: domain.AssigneeTypeUnassigned,
+	}
+
+	// The caller insists this agent is a user.
+	wrongType := domain.AssigneeTypeUser
+	require.NoError(t, svc.Update(ctx, reviewerUpdate(taskRepo.items[taskID], reviewerID, &wrongType)))
+
+	assertEnrolled(t, pmRepo, projectID, reviewerID,
+		"an agent reviewer mistyped as a user must be enrolled against the agent column")
+
+	stored := taskRepo.items[taskID]
+	require.NotNil(t, stored.ReviewerType)
+	assert.Equal(t, domain.AssigneeTypeAgent, *stored.ReviewerType,
+		"the resolved type must be persisted, not the caller's guess")
+}
+
+// A nil reviewer_type is a legitimate shape: the field is optional on the request.
+// Resolution must still find the directory entry rather than skipping enrolment.
+func TestReviewerEnrolment_NilReviewerTypeStillResolves(t *testing.T) {
+	ctx := context.Background()
+	projectID, reviewerID, taskID, wsID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	env := setupMembershipEnv(nil, nil)
+	svc, taskRepo, projRepo, agentRepo, pmRepo := env.svc, env.tasks, env.projects, env.agents, env.members
+
+	projRepo.items[projectID] = &domain.Project{ID: projectID, WorkspaceID: wsID}
+	agentRepo.items[reviewerID] = &domain.Agent{ID: reviewerID, WorkspaceID: wsID, Slug: "garfield"}
+	taskRepo.items[taskID] = &domain.Task{
+		ID: taskID, ProjectID: projectID, Title: "t", AssigneeType: domain.AssigneeTypeUnassigned,
+	}
+
+	require.NoError(t, svc.Update(ctx, reviewerUpdate(taskRepo.items[taskID], reviewerID, nil)))
+
+	assertEnrolled(t, pmRepo, projectID, reviewerID,
+		"an omitted reviewer_type must be resolved from the directory, not treated as no reviewer")
+}
+
+// Guard: clearing the reviewer must not enrol anything, and an unchanged reviewer
+// must not re-enrol on every PATCH.
+func TestReviewerEnrolment_ClearAndUnchangedDoNotEnrol(t *testing.T) {
+	ctx := context.Background()
+	projectID, reviewerID, taskID, wsID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	env := setupMembershipEnv(nil, nil)
+	svc, taskRepo, projRepo, agentRepo, pmRepo := env.svc, env.tasks, env.projects, env.agents, env.members
+
+	projRepo.items[projectID] = &domain.Project{ID: projectID, WorkspaceID: wsID}
+	agentRepo.items[reviewerID] = &domain.Agent{ID: reviewerID, WorkspaceID: wsID, Slug: "garfield"}
+	agentType := domain.AssigneeTypeAgent
+	taskRepo.items[taskID] = &domain.Task{
+		ID: taskID, ProjectID: projectID, Title: "t", AssigneeType: domain.AssigneeTypeUnassigned,
+		ReviewerID: &reviewerID, ReviewerType: &agentType,
+	}
+
+	// Same reviewer, submitted through a separate struct: uuidPtrChanged must read
+	// this as unchanged even though the pointers differ.
+	require.NoError(t, svc.Update(ctx, reviewerUpdate(taskRepo.items[taskID], reviewerID, &agentType)))
+	assert.Empty(t, pmRepo.members,
+		"an unchanged reviewer must not re-enrol — a raw pointer compare would fire on every PATCH")
+
+	// Clearing the reviewer enrols nobody.
+	cleared := *taskRepo.items[taskID]
+	cleared.ReviewerID = nil
+	cleared.ReviewerType = nil
+	require.NoError(t, svc.Update(ctx, &cleared))
+	assert.Empty(t, pmRepo.members, "clearing the reviewer must not enrol anyone")
+}

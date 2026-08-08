@@ -24,6 +24,18 @@ import (
 // timeNow is a package-level variable so tests can override the clock.
 var timeNow = time.Now
 
+// uuidPtrChanged reports whether two optional UUIDs differ by value. A raw
+// pointer comparison (existing.X != task.X) is wrong here: existing and task
+// come from two separate GetByID calls, each allocating its own *uuid.UUID
+// for the same underlying value, so it would report "changed" even when the
+// value didn't move.
+func uuidPtrChanged(a, b *uuid.UUID) bool {
+	if a == nil || b == nil {
+		return a != b
+	}
+	return *a != *b
+}
+
 type taskService struct {
 	taskRepo          repository.TaskRepository
 	statusRepo        repository.TaskStatusRepository
@@ -323,6 +335,36 @@ func (s *taskService) Update(ctx context.Context, task *domain.Task) error {
 	if existing.AssigneeID == nil || task.AssigneeID == nil || *existing.AssigneeID != *task.AssigneeID {
 		s.ensureAssigneeProjectMember(ctx, task.ProjectID, task.AssigneeID, task.AssigneeType)
 	}
+
+	// Reviewer is the eighth write path that puts a principal on a task, and it needs
+	// the same two guarantees as the assignee ones — see ensureAssigneeProjectMember's
+	// contract. reviewer_type arrives caller-supplied from updateTaskRequest (and may be
+	// nil), so it is resolved against the directories rather than trusted: enrolment
+	// dispatches on the type, and a user UUID typed "agent" is rejected by the
+	// project_members.agent_id foreign key and then swallowed, leaving no membership row.
+	// Without enrolment the reviewer lands in exactly the dead end the assignee paths
+	// were fixed to prevent — worse here, because being made reviewer *sends them a
+	// notification*, so they follow it to a task whose status transitions all 403.
+	//
+	// KNOWN GAP, inherited not introduced: neither this path nor the seven assignee
+	// ones check that the principal belongs to the task's workspace. The directory
+	// lookups behind resolveAssigneeType are global (agents/users WHERE id = $1), and
+	// project_members has no composite workspace foreign key, so a caller who may
+	// PATCH a task here can name a principal from another workspace and have them
+	// enrolled. This is deliberately NOT fixed here — it needs one change covering all
+	// eight paths, and a user-side check needs a workspace-membership repo this
+	// service does not yet hold. Reviewer is kept consistent with assignee rather
+	// than half-fixed.
+	if uuidPtrChanged(existing.ReviewerID, task.ReviewerID) && task.ReviewerID != nil {
+		fallback := domain.AssigneeTypeUser
+		if task.ReviewerType != nil {
+			fallback = *task.ReviewerType
+		}
+		resolved := s.resolveAssigneeType(ctx, task.ReviewerID, fallback)
+		task.ReviewerType = &resolved
+		s.ensureAssigneeProjectMember(ctx, task.ProjectID, task.ReviewerID, resolved)
+	}
+
 	task.UpdatedAt = timeNow()
 	if err := s.taskRepo.Update(ctx, task); err != nil {
 		return err
@@ -362,6 +404,11 @@ func (s *taskService) Update(ctx context.Context, task *domain.Task) error {
 			"new": string(task.DelegationLevel),
 		}
 	}
+	reviewerChanged := uuidPtrChanged(existing.ReviewerID, task.ReviewerID)
+	if reviewerChanged {
+		changes["reviewer_id"] = map[string]interface{}{"old": existing.ReviewerID, "new": task.ReviewerID}
+		changes["reviewer_type"] = map[string]interface{}{"old": existing.ReviewerType, "new": task.ReviewerType}
+	}
 	s.logActivity(ctx, task.ProjectID, task.ID, "task.updated", changes)
 
 	// Dispatch webhook for task.assigned when the assignee changes (agent wakeup pipeline).
@@ -391,6 +438,12 @@ func (s *taskService) Update(ctx context.Context, task *domain.Task) error {
 				"new": string(task.DelegationLevel),
 			},
 		})
+	}
+
+	// Tell the newly set reviewer, and only the reviewer — this event is about one
+	// specific person, not workspace-wide news.
+	if reviewerChanged && task.ReviewerID != nil {
+		s.notifyReviewer(ctx, task, "task.reviewer_assigned", "Review requested: "+task.Title)
 	}
 
 	return nil
@@ -758,6 +811,16 @@ func (s *taskService) MoveTask(ctx context.Context, taskID uuid.UUID, input Move
 		})
 		// Dispatch in-app notification to subscribed workspace users.
 		s.dispatchUserNotification(ctx, task, "task.status_changed", "Task status changed: "+task.Title, "")
+	}
+
+	// Task carrying a reviewer just landed on a review-category status: tell the
+	// reviewer specifically, so they don't have to watch the board to know it's
+	// their turn.
+	if statusChanged && task.ReviewerID != nil {
+		if newStatus, err := s.statusRepo.GetByID(ctx, task.StatusID); err == nil && newStatus != nil &&
+			newStatus.Category == domain.StatusCategoryReview {
+			s.notifyReviewer(ctx, task, "task.ready_for_review", "Ready for review: "+task.Title)
+		}
 	}
 
 	return nil
@@ -1175,6 +1238,88 @@ func (s *taskService) notifyAssignedAgent(ctx context.Context, task *domain.Task
 		TaskID:      task.ID,
 		ProjectID:   task.ProjectID,
 	})
+}
+
+// notifyReviewerAgent sends a push notification to the reviewer if it's an agent type.
+// Mirrors notifyAssignedAgent but targets ReviewerID/ReviewerType instead of the assignee.
+func (s *taskService) notifyReviewerAgent(ctx context.Context, task *domain.Task, eventType string, changes map[string]any) {
+	if s.agentNotifySvc == nil || task.ReviewerType == nil || *task.ReviewerType != domain.AssigneeTypeAgent || task.ReviewerID == nil {
+		return
+	}
+
+	var wsID uuid.UUID
+	if s.projectRepo != nil {
+		if proj, err := s.projectRepo.GetByID(ctx, task.ProjectID); err == nil && proj != nil {
+			wsID = proj.WorkspaceID
+		}
+	}
+
+	actorID, actorType := actorctx.FromContext(ctx)
+	actorName := actorctx.NameFromContext(ctx)
+
+	s.agentNotifySvc.NotifyAgent(ctx, *task.ReviewerID, AgentNotification{
+		EventType:   eventType,
+		Timestamp:   timeNow(),
+		WorkspaceID: wsID,
+		Task:        s.buildTaskSnapshot(ctx, task),
+		AgentID:     *task.ReviewerID,
+		ActorID:     actorID,
+		ActorType:   string(actorType),
+		ActorName:   actorName,
+		Changes:     changes,
+		TaskID:      task.ID,
+		ProjectID:   task.ProjectID,
+	})
+}
+
+// dispatchTargetedUserNotification is dispatchUserNotification restricted to one
+// specific user, for events that are inherently about that one person (e.g. "you
+// were made reviewer") rather than workspace-wide news. Broadcasting those via the
+// plain dispatchUserNotification would tell every subscribed workspace member
+// about someone else's reviewer assignment.
+func (s *taskService) dispatchTargetedUserNotification(ctx context.Context, task *domain.Task, eventType, title, body string, targetUserID uuid.UUID) {
+	if s.notifySvc == nil || s.projectRepo == nil {
+		return
+	}
+	var wsID uuid.UUID
+	if proj, err := s.projectRepo.GetByID(ctx, task.ProjectID); err == nil && proj != nil {
+		wsID = proj.WorkspaceID
+	}
+	if wsID == uuid.Nil {
+		return
+	}
+	taskIDCopy := task.ID
+	projIDCopy := task.ProjectID
+	targetCopy := targetUserID
+	s.notifySvc.Notify(ctx, domain.NotificationEvent{
+		WorkspaceID:  wsID,
+		TaskID:       &taskIDCopy,
+		ProjectID:    &projIDCopy,
+		EventType:    eventType,
+		Title:        title,
+		Body:         body,
+		TargetUserID: &targetCopy,
+		Metadata: map[string]any{
+			"task_id":    task.ID,
+			"task_title": task.Title,
+			"project_id": task.ProjectID,
+		},
+	})
+}
+
+// notifyReviewer delivers a reviewer-targeted notification through whichever
+// channel matches the reviewer's type: agent push for an agent reviewer,
+// targeted in-app notification for a human one. No-op if no reviewer is set.
+func (s *taskService) notifyReviewer(ctx context.Context, task *domain.Task, eventType, title string) {
+	if task.ReviewerID == nil || task.ReviewerType == nil {
+		return
+	}
+	switch *task.ReviewerType {
+	case domain.AssigneeTypeAgent:
+		s.notifyReviewerAgent(ctx, task, eventType, nil)
+	case domain.AssigneeTypeUser:
+		s.dispatchTargetedUserNotification(ctx, task, eventType, title, "", *task.ReviewerID)
+	}
 }
 
 // logActivity writes an activity log entry and publishes an event bus message.

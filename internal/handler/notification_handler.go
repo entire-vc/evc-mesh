@@ -145,7 +145,10 @@ func (h *NotificationHandler) UpdatePreferences(c echo.Context) error {
 
 	events := req.Events
 	if len(events) == 0 {
-		events = []string{"task.assigned", "task.status_changed", "comment.created", "task.blocking_triage"}
+		events = []string{
+			"task.assigned", "task.status_changed", "comment.created", "task.blocking_triage",
+			"task.reviewer_assigned", "task.ready_for_review",
+		}
 	}
 
 	isEnabled := true
