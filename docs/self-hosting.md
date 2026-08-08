@@ -239,9 +239,12 @@ with a benchmark in hand.
 
 ### Browser push notifications
 
-All three must be set or push is disabled — the API logs `[push] VAPID keys not
-set — browser push disabled (safe for local dev)` and carries on. Not passed
-through by `docker-compose.prod.yml`.
+Set all three or leave all three empty. With the keypair empty push is
+disabled — the API logs `[push] VAPID keys not set — browser push disabled
+(safe for local dev)` and carries on. `MESH_VAPID_SUBJECT` is not part of that
+check, but push services reject a VAPID token whose `sub` claim is missing, so
+keys without a subject give you a service that looks enabled and delivers
+nothing.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
