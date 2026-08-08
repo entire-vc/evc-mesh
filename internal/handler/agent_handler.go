@@ -14,6 +14,7 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	mw "github.com/entire-vc/evc-mesh/internal/middleware"
 	"github.com/entire-vc/evc-mesh/internal/presence"
 	"github.com/entire-vc/evc-mesh/internal/repository"
 	"github.com/entire-vc/evc-mesh/internal/service"
@@ -749,6 +750,24 @@ func (h *AgentHandler) ListSubAgents(c echo.Context) error {
 	})
 }
 
+// agentFeedWorkspace resolves the workspace an agent's own task feed is confined
+// to, from the AUTHENTICATED key rather than from anything in the request.
+//
+// /agents/me/tasks and its long-poll twin carry no path parameter, so the only
+// workspace in play is the one the agent's API key resolved to — which is the
+// property that makes the scoping meaningful. Taking it from a query parameter
+// instead would hand the caller back the very choice this guard removes.
+//
+// Fails closed: an unresolvable workspace yields no feed rather than an
+// unscoped one.
+func agentFeedWorkspace(c echo.Context) (uuid.UUID, error) {
+	wsID, err := mw.GetWorkspaceID(c)
+	if err != nil || wsID == uuid.Nil {
+		return uuid.Nil, fmt.Errorf("workspace unresolved for agent key")
+	}
+	return wsID, nil
+}
+
 // GetMyTasks handles GET /agents/me/tasks
 // Returns tasks assigned to the current agent.
 // Optional query params: status_category (backlog|todo|in_progress|review|done|cancelled)
@@ -767,7 +786,12 @@ func (h *AgentHandler) GetMyTasks(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid agent_id in context"))
 	}
 
-	tasks, err := h.taskService.GetMyTasks(c.Request().Context(), agentID, domain.AssigneeTypeAgent)
+	workspaceID, wsErr := agentFeedWorkspace(c)
+	if wsErr != nil {
+		return c.JSON(http.StatusForbidden, apierror.Forbidden("workspace access denied"))
+	}
+
+	tasks, err := h.taskService.GetMyTasks(c.Request().Context(), workspaceID, agentID, domain.AssigneeTypeAgent)
 	if err != nil {
 		return handleError(c, err)
 	}
@@ -972,6 +996,13 @@ func (h *AgentHandler) PollTasks(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid agent_id in context"))
 	}
 
+	// Resolved up front, before the caller is parked on a long poll: refusing
+	// after a 30-second wait would report an authorization outcome as a timeout.
+	workspaceID, wsErr := agentFeedWorkspace(c)
+	if wsErr != nil {
+		return c.JSON(http.StatusForbidden, apierror.Forbidden("workspace access denied"))
+	}
+
 	// Parse timeout query parameter (default 30s, max 120s).
 	timeoutSecs := agentPollDefaultTimeout
 	if raw := c.QueryParam("timeout"); raw != "" {
@@ -1016,7 +1047,7 @@ func (h *AgentHandler) PollTasks(c echo.Context) error {
 
 	// Fetch current tasks for this agent.
 	ctx := context.Background()
-	tasks, err := h.taskService.GetMyTasks(ctx, agentID, domain.AssigneeTypeAgent)
+	tasks, err := h.taskService.GetMyTasks(ctx, workspaceID, agentID, domain.AssigneeTypeAgent)
 	if err != nil {
 		return handleError(c, err)
 	}

@@ -365,7 +365,7 @@ type MockTaskService struct {
 	AssignTaskFunc           func(ctx context.Context, taskID uuid.UUID, input service.AssignTaskInput) error
 	CreateSubtaskFunc        func(ctx context.Context, parentTaskID uuid.UUID, input service.CreateSubtaskInput) (*domain.Task, error)
 	ListSubtasksFunc         func(ctx context.Context, parentTaskID uuid.UUID) ([]domain.Task, error)
-	GetMyTasksFunc           func(ctx context.Context, assigneeID uuid.UUID, assigneeType domain.AssigneeType) ([]domain.Task, error)
+	GetMyTasksFunc           func(ctx context.Context, workspaceID, assigneeID uuid.UUID, assigneeType domain.AssigneeType) ([]domain.Task, error)
 	GetUserActiveTasksFunc   func(ctx context.Context, workspaceID, userID uuid.UUID, pg pagination.Params) (*pagination.Page[domain.Task], error)
 	GetDefaultStatusFunc     func(ctx context.Context, projectID uuid.UUID) (*domain.TaskStatus, error)
 	GetStatusByIDFunc        func(ctx context.Context, id uuid.UUID) (*domain.TaskStatus, error)
@@ -441,9 +441,9 @@ func (m *MockTaskService) ListSubtasks(ctx context.Context, parentTaskID uuid.UU
 	return nil, nil
 }
 
-func (m *MockTaskService) GetMyTasks(ctx context.Context, assigneeID uuid.UUID, assigneeType domain.AssigneeType) ([]domain.Task, error) {
+func (m *MockTaskService) GetMyTasks(ctx context.Context, workspaceID, assigneeID uuid.UUID, assigneeType domain.AssigneeType) ([]domain.Task, error) {
 	if m.GetMyTasksFunc != nil {
-		return m.GetMyTasksFunc(ctx, assigneeID, assigneeType)
+		return m.GetMyTasksFunc(ctx, workspaceID, assigneeID, assigneeType)
 	}
 	return nil, nil
 }

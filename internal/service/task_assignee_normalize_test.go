@@ -74,7 +74,7 @@ func TestAssignTask_HumanUUID_SavesTypeUser(t *testing.T) {
 	userRepo := NewMockUserRepository()
 	pmRepo := NewMockProjectMemberRepository()
 
-	svc := NewTaskService(taskRepo, statusRepo, depRepo, activityRepo,
+	svc := newTestTaskService(taskRepo, statusRepo, depRepo, activityRepo,
 		WithTaskAgentRepo(agentRepo),
 		WithUserRepoTask(userRepo),
 		WithProjectMemberRepoTask(pmRepo),
@@ -116,7 +116,7 @@ func TestAssignTask_AgentUUID_SavesTypeAgent(t *testing.T) {
 	userRepo := NewMockUserRepository()
 	pmRepo := NewMockProjectMemberRepository()
 
-	svc := NewTaskService(taskRepo, statusRepo, depRepo, activityRepo,
+	svc := newTestTaskService(taskRepo, statusRepo, depRepo, activityRepo,
 		WithTaskAgentRepo(agentRepo),
 		WithUserRepoTask(userRepo),
 		WithProjectMemberRepoTask(pmRepo),
@@ -158,7 +158,7 @@ func TestAssignTask_UserAssignee_EnrolledInProjectMembers(t *testing.T) {
 	userRepo := NewMockUserRepository()
 	pmRepo := NewMockProjectMemberRepository()
 
-	svc := NewTaskService(taskRepo, statusRepo, depRepo, activityRepo,
+	svc := newTestTaskService(taskRepo, statusRepo, depRepo, activityRepo,
 		WithTaskAgentRepo(agentRepo),
 		WithUserRepoTask(userRepo),
 		WithProjectMemberRepoTask(pmRepo),
@@ -196,7 +196,7 @@ func TestAssignTask_AgentAssignee_NoUserMemberEnroll(t *testing.T) {
 	userRepo := NewMockUserRepository()
 	pmRepo := NewMockProjectMemberRepository()
 
-	svc := NewTaskService(taskRepo, statusRepo, depRepo, activityRepo,
+	svc := newTestTaskService(taskRepo, statusRepo, depRepo, activityRepo,
 		WithTaskAgentRepo(agentRepo),
 		WithUserRepoTask(userRepo),
 		WithProjectMemberRepoTask(pmRepo),
@@ -241,7 +241,7 @@ func TestCreate_HumanAssigneeID_NormalizesToUser(t *testing.T) {
 	agentRepo := NewMockAgentRepository()
 	userRepo := NewMockUserRepository()
 
-	svc := NewTaskService(taskRepo, statusRepo, depRepo, activityRepo,
+	svc := newTestTaskService(taskRepo, statusRepo, depRepo, activityRepo,
 		WithTaskAgentRepo(agentRepo),
 		WithUserRepoTask(userRepo),
 	).(*taskService)

@@ -148,7 +148,10 @@ type TaskService interface {
 	AssignTask(ctx context.Context, taskID uuid.UUID, input AssignTaskInput) error
 	CreateSubtask(ctx context.Context, parentTaskID uuid.UUID, input CreateSubtaskInput) (*domain.Task, error)
 	ListSubtasks(ctx context.Context, parentTaskID uuid.UUID) ([]domain.Task, error)
-	GetMyTasks(ctx context.Context, assigneeID uuid.UUID, assigneeType domain.AssigneeType) ([]domain.Task, error)
+	// GetMyTasks lists the principal's tasks inside one workspace. The caller must
+	// pass the workspace of the AUTHENTICATED principal, never one taken from the
+	// request, or the scoping is decorative.
+	GetMyTasks(ctx context.Context, workspaceID, assigneeID uuid.UUID, assigneeType domain.AssigneeType) ([]domain.Task, error)
 	// GetUserActiveTasks returns non-done/cancelled tasks for a human user in a workspace.
 	GetUserActiveTasks(ctx context.Context, workspaceID, userID uuid.UUID, pg pagination.Params) (*pagination.Page[domain.Task], error)
 	GetDefaultStatus(ctx context.Context, projectID uuid.UUID) (*domain.TaskStatus, error)

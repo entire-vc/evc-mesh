@@ -38,7 +38,7 @@ func buildAutoTransitionFixture() (
 	activityRepo := NewMockActivityLogRepository()
 
 	// Create a real taskService so that MoveTask writes back to taskRepo.
-	taskSvc := NewTaskService(taskRepo, statusRepo, depRepo, activityRepo)
+	taskSvc := newTestTaskService(taskRepo, statusRepo, depRepo, activityRepo)
 	// Pass nil ruleRepo — falls back to hardcoded category lookup (backward compat).
 	atSvc := NewAutoTransitionService(taskRepo, statusRepo, depRepo, taskSvc, nil)
 

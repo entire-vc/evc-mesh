@@ -77,7 +77,9 @@ type TaskRepository interface {
 	List(ctx context.Context, projectID uuid.UUID, filter TaskFilter, pg pagination.Params) (*pagination.Page[domain.Task], error)
 	// Search searches tasks across all projects in a workspace by text query.
 	Search(ctx context.Context, workspaceID uuid.UUID, filter TaskFilter, pg pagination.Params) (*pagination.Page[domain.Task], error)
-	ListByAssignee(ctx context.Context, assigneeID uuid.UUID, assigneeType domain.AssigneeType) ([]domain.Task, error)
+	// ListByAssignee is workspace-scoped by contract: see the implementation for why
+	// the predicate is mandatory rather than a filter.
+	ListByAssignee(ctx context.Context, workspaceID, assigneeID uuid.UUID, assigneeType domain.AssigneeType) ([]domain.Task, error)
 	// ListByUserActive returns tasks assigned to a user in a workspace, excluding done/cancelled categories.
 	ListByUserActive(ctx context.Context, workspaceID, userID uuid.UUID, pg pagination.Params) (*pagination.Page[domain.Task], error)
 	ListSubtasks(ctx context.Context, parentTaskID uuid.UUID) ([]domain.Task, error)
