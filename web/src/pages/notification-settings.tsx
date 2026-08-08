@@ -11,6 +11,7 @@ import {
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { toast } from "@/components/ui/toast";
 import { useNotificationStore } from "@/stores/notification";
 import { useWorkspaceStore } from "@/stores/workspace";
 
@@ -45,6 +46,16 @@ const NOTIFICATION_EVENTS: EventConfig[] = [
     label: "Blocking triage",
     description: "When a task you're mentioned in is auto-moved to triage as a blocker",
   },
+  {
+    key: "task.reviewer_assigned",
+    label: "Review requested",
+    description: "When you're set as the reviewer on a task",
+  },
+  {
+    key: "task.ready_for_review",
+    label: "Ready for review",
+    description: "When a task you're reviewing moves to a review status",
+  },
 ];
 
 // ---------------------------------------------------------------------------
@@ -58,7 +69,10 @@ export default function NotificationSettingsPage() {
     useNotificationStore();
 
   const [selectedEvents, setSelectedEvents] = useState<Set<string>>(
-    new Set(["task.assigned", "task.status_changed", "comment.created", "task.blocking_triage"]),
+    new Set([
+      "task.assigned", "task.status_changed", "comment.created", "task.blocking_triage",
+      "task.reviewer_assigned", "task.ready_for_review",
+    ]),
   );
   const [isEnabled, setIsEnabled] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
@@ -69,7 +83,10 @@ export default function NotificationSettingsPage() {
   const [pushSubscribed, setPushSubscribed] = useState(false);
   const [pushLoading, setPushLoading] = useState(false);
   const [pushEvents, setPushEvents] = useState<Set<string>>(
-    new Set(['task.assigned', 'task.status_changed', 'comment.created', 'task.mentioned', 'task.blocking_triage']),
+    new Set([
+      'task.assigned', 'task.status_changed', 'comment.created', 'task.mentioned', 'task.blocking_triage',
+      'task.reviewer_assigned', 'task.ready_for_review',
+    ]),
   );
   const [pushEventsSaving, setPushEventsSaving] = useState(false);
   const [pushEventsSaved, setPushEventsSaved] = useState(false);
@@ -125,6 +142,10 @@ export default function NotificationSettingsPage() {
       });
       setPushEventsSaved(true);
       setTimeout(() => setPushEventsSaved(false), 2000);
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "Failed to save push preferences",
+      );
     } finally {
       setPushEventsSaving(false);
     }
@@ -171,6 +192,10 @@ export default function NotificationSettingsPage() {
       });
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "Failed to save notification settings",
+      );
     } finally {
       setIsSaving(false);
     }
@@ -349,6 +374,8 @@ export default function NotificationSettingsPage() {
                   { key: 'comment.created', label: 'New comment', desc: 'When a comment is added' },
                   { key: 'task.mentioned', label: 'Mention', desc: 'When someone @mentions you' },
                   { key: 'task.blocking_triage', label: 'Blocking triage', desc: 'When a task you blocked is auto-moved to triage' },
+                  { key: 'task.reviewer_assigned', label: 'Review requested', desc: 'When you\'re set as the reviewer on a task' },
+                  { key: 'task.ready_for_review', label: 'Ready for review', desc: 'When a task you\'re reviewing moves to a review status' },
                 ].map((evt) => (
                   <div
                     key={evt.key}
