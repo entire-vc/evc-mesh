@@ -63,6 +63,29 @@ cd web && pnpm lint && pnpm tsc --noEmit
 5. **Run lint** — ensure `cd web && pnpm lint` passes (for frontend changes)
 6. **Submit a PR** against `main` with a clear description
 
+### How your PR actually merges
+
+`main` uses a **merge queue**. You do not merge your own pull request directly —
+you add it to the queue, and the queue merges it once it has built and tested the
+result of your change *combined with everything else queued ahead of it*.
+
+What that changes for you:
+
+- **Approving checks on your branch is not the last word.** Your PR's checks run
+  against your branch merged with `main` **as it was when the run started**. If
+  `main` moves on, that green is about a tree that no longer exists. The queue
+  re-tests the real combination before anything lands, which is the whole point
+  of it — two PRs that are each fine alone can still break `main` together.
+- **Your PR may be removed from the queue** if the combined build fails, even
+  when your branch alone was green. That is not a flaky CI run to retry; it
+  means your change conflicts with something else that queued. Rebase on the
+  current `main`, work out the interaction, and re-queue.
+- **Queued entries are batched**, so merging is not instant. A batch waits
+  briefly for company before it builds.
+
+The queue merges with **squash**, so keep your PR's title and description
+meaningful — the squashed commit inherits them.
+
 ### PR Guidelines
 
 - Keep PRs small and focused (one feature or fix per PR)
