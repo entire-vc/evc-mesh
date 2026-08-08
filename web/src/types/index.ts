@@ -177,6 +177,27 @@ export interface WorkspaceInvite {
   created_at: string;
 }
 
+/**
+ * What became of the invitation email.
+ *
+ * "not_configured" is the normal state of a self-hosted instance with no SMTP
+ * server: the invite is valid and its link works, there is simply nothing to
+ * send it with. Treat it as a handover — show the link — not as an error.
+ */
+export type InviteDeliveryStatus = "sent" | "not_configured" | "failed";
+
+export interface InviteDelivery {
+  /** True only when an email actually went out. Never assume it from the 201. */
+  email_sent: boolean;
+  delivery_status: InviteDeliveryStatus;
+  /** The accept link. Always present, whatever happened to the email. */
+  invite_url: string;
+  /** Present only when delivery_status is "failed". */
+  delivery_error?: string;
+}
+
+export type CreateInviteResponse = WorkspaceInvite & InviteDelivery;
+
 export interface Project {
   id: string;
   workspace_id: string;

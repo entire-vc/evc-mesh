@@ -257,10 +257,13 @@ func TestAcceptInvite_CreateFailureIsGenericInternalError(t *testing.T) {
 		"constraint names must never reach the client")
 }
 
-// noopEmailService swallows the invite email; CreateInvite ignores its error
-// anyway, this just keeps the call from panicking on a nil interface.
+// noopEmailService reports a successful send without doing anything; it just
+// keeps the call from panicking on a nil interface in tests that are not about
+// delivery. Tests that care about delivery outcomes are in
+// invite_delivery_status_test.go.
 type noopEmailService struct{}
 
+func (noopEmailService) Enabled() bool                                      { return true }
 func (noopEmailService) SendInvite(_ context.Context, _, _, _ string) error { return nil }
 
 func TestCreateInvite_NormalizesEmail(t *testing.T) {
@@ -276,13 +279,13 @@ func TestCreateInvite_NormalizesEmail(t *testing.T) {
 
 	invites := NewInviteService(inviteRepo, userRepo, &minimalWorkspaceMemberRepo{}, wsRepo, noopEmailService{}, authSvc, "https://mesh.example.com")
 
-	invite, err := invites.CreateInvite(context.Background(), CreateInviteInput{
+	res, err := invites.CreateInvite(context.Background(), CreateInviteInput{
 		WorkspaceID: wsID,
 		Email:       "  Frank@Example.COM ",
 		Role:        domain.RoleMember,
 	})
 	require.NoError(t, err)
-	assert.Equal(t, "frank@example.com", invite.Email)
+	assert.Equal(t, "frank@example.com", res.Invite.Email)
 
 	// A whitespace-only address is not an address.
 	_, err = invites.CreateInvite(context.Background(), CreateInviteInput{

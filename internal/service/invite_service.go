@@ -51,7 +51,33 @@ func NewInviteService(
 	}
 }
 
-func (s *inviteService) CreateInvite(ctx context.Context, input CreateInviteInput) (*domain.WorkspaceInvite, error) {
+// deliver sends an invitation email and classifies the outcome.
+//
+// A send failure never propagates as an error to the caller: the invite row is
+// already committed and its link works, so failing the whole request would
+// throw away a valid invite over a mail problem. The outcome is reported
+// instead, and the API hands the link back so the inviter can deliver it.
+func (s *inviteService) deliver(ctx context.Context, toEmail, workspaceName, inviteURL string) InviteDelivery {
+	d := InviteDelivery{URL: inviteURL}
+
+	err := s.emailSvc.SendInvite(ctx, toEmail, workspaceName, inviteURL)
+	switch {
+	case err == nil:
+		d.Status = InviteDeliverySent
+	case errors.Is(err, ErrEmailNotConfigured):
+		d.Status = InviteDeliveryNotConfigured
+	default:
+		d.Status = InviteDeliveryFailed
+		d.Error = err.Error()
+		// Configured-but-broken mail is the case that used to vanish entirely:
+		// the error was assigned to _ and the API still answered 201. Record it
+		// where an operator can find it, without the token.
+		log.Printf("invite_service: sending invitation email to %s failed: %v", toEmail, err)
+	}
+	return d
+}
+
+func (s *inviteService) CreateInvite(ctx context.Context, input CreateInviteInput) (*CreateInviteResult, error) {
 	// Store the invite against the canonical address so that accepting it
 	// resolves to the same account a normal login would.
 	input.Email = auth.NormalizeEmail(input.Email)
@@ -97,37 +123,39 @@ func (s *inviteService) CreateInvite(ctx context.Context, input CreateInviteInpu
 	}
 
 	inviteURL := fmt.Sprintf("%s/accept-invite/%s", s.baseURL, token)
-	_ = s.emailSvc.SendInvite(ctx, input.Email, ws.Name, inviteURL)
 
-	return invite, nil
+	return &CreateInviteResult{
+		Invite:   invite,
+		Delivery: s.deliver(ctx, input.Email, ws.Name, inviteURL),
+	}, nil
 }
 
 func (s *inviteService) ListInvites(ctx context.Context, workspaceID uuid.UUID) ([]domain.WorkspaceInvite, error) {
 	return s.inviteRepo.ListByWorkspace(ctx, workspaceID)
 }
 
-func (s *inviteService) ResendInvite(ctx context.Context, workspaceID, inviteID uuid.UUID) error {
+func (s *inviteService) ResendInvite(ctx context.Context, workspaceID, inviteID uuid.UUID) (InviteDelivery, error) {
 	invite, err := s.inviteRepo.GetByID(ctx, inviteID)
 	if err != nil {
-		return fmt.Errorf("invite_service.ResendInvite: %w", err)
+		return InviteDelivery{}, fmt.Errorf("invite_service.ResendInvite: %w", err)
 	}
 	if invite == nil || invite.WorkspaceID != workspaceID {
-		return apierror.NotFound("WorkspaceInvite")
+		return InviteDelivery{}, apierror.NotFound("WorkspaceInvite")
 	}
 	if !invite.IsPending() {
-		return apierror.BadRequest("invite is no longer pending")
+		return InviteDelivery{}, apierror.BadRequest("invite is no longer pending")
 	}
 
 	ws, err := s.workspaceRepo.GetByID(ctx, invite.WorkspaceID)
 	if err != nil {
-		return fmt.Errorf("invite_service.ResendInvite: %w", err)
+		return InviteDelivery{}, fmt.Errorf("invite_service.ResendInvite: %w", err)
 	}
 	if ws == nil {
-		return apierror.NotFound("Workspace")
+		return InviteDelivery{}, apierror.NotFound("Workspace")
 	}
 
 	inviteURL := fmt.Sprintf("%s/accept-invite/%s", s.baseURL, invite.Token)
-	return s.emailSvc.SendInvite(ctx, invite.Email, ws.Name, inviteURL)
+	return s.deliver(ctx, invite.Email, ws.Name, inviteURL), nil
 }
 
 // RevokeInvite deletes a pending invite of workspaceID.

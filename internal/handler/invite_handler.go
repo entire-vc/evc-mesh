@@ -27,6 +27,42 @@ type createInviteRequest struct {
 	Role  string `json:"role"`
 }
 
+// InviteDeliveryFields describes what became of the invitation email.
+//
+// A 201 on its own only ever meant "the invite row was written" — but with no
+// delivery information in the body, every client read it as "the email is on its
+// way", which is false whenever SMTP is unconfigured (the default for a
+// self-hosted instance) or the send failed. These fields make the two outcomes
+// distinguishable, and always carry the link so the inviter has a way to
+// deliver the invitation themselves.
+type InviteDeliveryFields struct {
+	// EmailSent is true only when an invitation email actually went out.
+	EmailSent bool `json:"email_sent"`
+	// DeliveryStatus is "sent", "not_configured", or "failed".
+	DeliveryStatus string `json:"delivery_status"`
+	// InviteURL is the accept link. Always present.
+	InviteURL string `json:"invite_url"`
+	// DeliveryError is the send failure detail, present only on "failed".
+	DeliveryError string `json:"delivery_error,omitempty"`
+}
+
+func deliveryFields(d service.InviteDelivery) InviteDeliveryFields {
+	return InviteDeliveryFields{
+		EmailSent:      d.Sent(),
+		DeliveryStatus: d.Status,
+		InviteURL:      d.URL,
+		DeliveryError:  d.Error,
+	}
+}
+
+// createInviteResponse embeds the invite so the existing object keeps its exact
+// shape at the top level — the delivery fields are purely additive and no
+// current client breaks.
+type createInviteResponse struct {
+	domain.WorkspaceInvite
+	InviteDeliveryFields
+}
+
 // Create handles POST /workspaces/:ws_id/invites
 func (h *InviteHandler) Create(c echo.Context) error {
 	wsID, err := uuid.Parse(c.Param("ws_id"))
@@ -46,7 +82,7 @@ func (h *InviteHandler) Create(c echo.Context) error {
 		}
 	}
 
-	invite, err := h.svc.CreateInvite(c.Request().Context(), service.CreateInviteInput{
+	res, err := h.svc.CreateInvite(c.Request().Context(), service.CreateInviteInput{
 		WorkspaceID: wsID,
 		Email:       req.Email,
 		Role:        req.Role,
@@ -56,7 +92,10 @@ func (h *InviteHandler) Create(c echo.Context) error {
 		return handleError(c, err)
 	}
 
-	return c.JSON(http.StatusCreated, invite)
+	return c.JSON(http.StatusCreated, createInviteResponse{
+		WorkspaceInvite:      *res.Invite,
+		InviteDeliveryFields: deliveryFields(res.Delivery),
+	})
 }
 
 // List handles GET /workspaces/:ws_id/invites
@@ -92,11 +131,14 @@ func (h *InviteHandler) Resend(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid invite_id"))
 	}
 
-	if err := h.svc.ResendInvite(c.Request().Context(), wsID, inviteID); err != nil {
+	// The old response was a hardcoded {"status":"sent"} that did not depend on
+	// anything the send actually did.
+	delivery, err := h.svc.ResendInvite(c.Request().Context(), wsID, inviteID)
+	if err != nil {
 		return handleError(c, err)
 	}
 
-	return c.JSON(http.StatusOK, map[string]string{"status": "sent"})
+	return c.JSON(http.StatusOK, deliveryFields(delivery))
 }
 
 // Revoke handles DELETE /workspaces/:ws_id/invites/:invite_id

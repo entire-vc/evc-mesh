@@ -160,9 +160,20 @@ See [Seeding the first admin](#seeding-the-first-admin) below.
 
 ### Outbound email
 
-Workspace invites are emailed to the invitee. With `SMTP_HOST` unset the API
-logs the invite link instead of sending it — the invite still works, you just
-have to hand the link over yourself.
+**Email is not configured by default, and that is a supported way to run Mesh.**
+With `SMTP_HOST` unset nothing is emailed; instead every invite hands you its
+link directly in the UI, with a copy button, for you to pass on however you
+like. The invite itself is completely normal — it is only the delivery that is
+manual.
+
+The API says which mode it is in once at startup:
+
+```
+Email is not configured (SMTP_HOST is empty) — no invitation emails will be sent. ...
+Email ready: sending via smtp.example.com:587 as "mesh@example.com"
+```
+
+Only set the variables below if you want Mesh to send the mail itself.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -481,10 +492,24 @@ curl -X POST https://mesh.yourdomain.com/api/v1/workspaces/<ws_id>/invites \
 The invited person gets a link to `/accept-invite/<token>`, sets their own
 password there, and is added straight to that workspace — no open `/register`
 needed. `GET /api/v1/invites/:token` and `POST /api/v1/invites/:token/accept`
-stay public precisely so this path works on a fully closed instance. If SMTP
-is not configured (`SMTP_HOST` unset), the invite is not emailed; the link is
-logged instead (`[email] SMTP not configured — invite link for ...`) so you
-can pass it along manually.
+stay public precisely so this path works on a fully closed instance.
+
+The response tells you whether the invite was actually emailed — do not read the
+`201` as delivery:
+
+```json
+{
+  "id": "...", "email": "newperson@example.com", "token": "...",
+  "email_sent": false,
+  "delivery_status": "not_configured",
+  "invite_url": "https://mesh.example.com/accept-invite/<token>"
+}
+```
+
+`delivery_status` is `sent`, `not_configured` (no `SMTP_HOST`), or `failed`
+(configured, but the send did not work — `delivery_error` says why). `invite_url`
+is always present, so whenever `email_sent` is `false` you have the link to pass
+along yourself. The UI shows it with a copy button in exactly those cases.
 
 **The shipped templates default to closed; the binary still defaults to open.**
 `.env.example` and `deploy/docker/mesh/.env.prod.example` both ship
@@ -859,11 +884,14 @@ docker compose -f docker-compose.prod.yml --env-file .env config | \
 ## Add your teammates
 
 Registration ships closed, so the admin account seeded at first boot is the only
-way in until you invite someone. Nothing below needs SMTP — without it the API
-prints the invite link instead of emailing it, which is enough to get a second
-person working today.
+way in until you invite someone. Nothing below needs SMTP — without it Mesh hands
+you the invite link to pass on yourself, which is enough to get a second person
+working today.
 
-**From the UI:** workspace → Members → Invite.
+**From the UI:** workspace → Members → Invite. With no mail server configured the
+dialog stays open and shows the invite link with a copy button — that is the
+normal flow, not an error. The same link is available from the Resend button on
+any pending invite.
 
 **From the API**, using the admin's access token:
 
@@ -882,15 +910,20 @@ curl -s -X POST http://localhost:${HTTP_PORT}/api/v1/workspaces/$WS/invites \
   -d '{"email":"teammate@example.com","role":"member"}'
 ```
 
-With `SMTP_HOST` unset, the link lands in the API log:
+With `SMTP_HOST` unset, the response says so and carries the link:
 
-```bash
-docker compose -f docker-compose.prod.yml --env-file .env logs api | grep invite
+```json
+{
+  "email_sent": false,
+  "delivery_status": "not_configured",
+  "invite_url": "http://localhost:8080/accept-invite/<token>"
+}
 ```
-```
-[email] SMTP not configured — invite link for teammate@example.com:
-        http://localhost:8080/accept-invite/<token>
-```
+
+The link is deliberately **not** written to the API log. It is a bearer
+credential for joining the workspace, and logs are routinely shipped to
+collectors that more people can read than the workspace has members. The log
+records only that no mail was sent, and to whom.
 
 The invitee opens that link, picks their own password, and is signed in — they
 do **not** need the `/register` page, which is exactly why closing it costs you
