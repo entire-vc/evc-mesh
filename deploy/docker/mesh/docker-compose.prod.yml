@@ -171,6 +171,13 @@ services:
       MESH_RATE_LIMIT_API_RPM: ${MESH_RATE_LIMIT_API_RPM:-600}
       MESH_SPARK_ENABLED: ${MESH_SPARK_ENABLED:-false}
       MESH_SPARK_URL: ${MESH_SPARK_URL:-}
+      # Web Push. An empty public or private key disables browser push —
+      # NewPushService logs it once and every send becomes a no-op. SUBJECT is
+      # the VAPID JWT "sub" claim; push services reject a token without one.
+      # Not passing these through at all meant setting them in .env did nothing.
+      MESH_VAPID_PUBLIC_KEY: ${MESH_VAPID_PUBLIC_KEY:-}
+      MESH_VAPID_PRIVATE_KEY: ${MESH_VAPID_PRIVATE_KEY:-}
+      MESH_VAPID_SUBJECT: ${MESH_VAPID_SUBJECT:-}
       # Outbound email — required for workspace invites to actually be
       # delivered. Left empty the API logs the invite link instead of sending.
       SMTP_HOST: ${SMTP_HOST:-}

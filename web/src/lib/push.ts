@@ -1,3 +1,5 @@
+import { api } from '@/lib/api';
+
 const PUSH_SUB_KEY_ENDPOINT = '/api/v1/me/push-subscriptions/vapid-key';
 const PUSH_SUB_ENDPOINT = '/api/v1/me/push-subscriptions';
 
@@ -14,11 +16,7 @@ export async function isSubscribed(): Promise<boolean> {
 }
 
 async function fetchVAPIDKey(): Promise<string> {
-  const res = await fetch(PUSH_SUB_KEY_ENDPOINT, {
-    headers: { Authorization: `Bearer ${localStorage.getItem('token') ?? ''}` },
-  });
-  if (!res.ok) throw new Error('Failed to fetch VAPID key');
-  const data = (await res.json()) as { publicKey: string };
+  const data = await api<{ publicKey: string }>(PUSH_SUB_KEY_ENDPOINT);
   return data.publicKey;
 }
 
@@ -40,16 +38,12 @@ export async function subscribeUser(): Promise<PushSubscription> {
     applicationServerKey: urlBase64ToUint8Array(vapidKey),
   });
   const json = sub.toJSON();
-  await fetch(PUSH_SUB_ENDPOINT, {
+  await api(PUSH_SUB_ENDPOINT, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${localStorage.getItem('token') ?? ''}`,
-    },
-    body: JSON.stringify({
+    body: {
       endpoint: sub.endpoint,
       keys: { p256dh: json.keys?.p256dh ?? '', auth: json.keys?.auth ?? '' },
-    }),
+    },
   });
   return sub;
 }
@@ -61,12 +55,8 @@ export async function unsubscribeUser(): Promise<void> {
   if (!sub) return;
   const endpoint = sub.endpoint;
   await sub.unsubscribe();
-  await fetch(PUSH_SUB_ENDPOINT, {
+  await api(PUSH_SUB_ENDPOINT, {
     method: 'DELETE',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${localStorage.getItem('token') ?? ''}`,
-    },
-    body: JSON.stringify({ endpoint }),
+    body: { endpoint },
   });
 }

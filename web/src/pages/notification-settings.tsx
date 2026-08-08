@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useParams } from "react-router";
 import { Bell, Check, Save, Monitor, MonitorOff, AlertTriangle } from "lucide-react";
 import { subscribeUser, unsubscribeUser, isSubscribed, getPermissionState } from "@/lib/push";
+import { toast } from "@/components/ui/toast";
 import {
   Card,
   CardContent,
@@ -104,8 +105,8 @@ export default function NotificationSettingsPage() {
       await subscribeUser();
       setPushPermission(await getPermissionState());
       setPushSubscribed(true);
-    } catch {
-      // permission denied or not supported
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to enable browser push");
     } finally {
       setPushLoading(false);
     }
@@ -116,6 +117,8 @@ export default function NotificationSettingsPage() {
     try {
       await unsubscribeUser();
       setPushSubscribed(false);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to disable browser push");
     } finally {
       setPushLoading(false);
     }
