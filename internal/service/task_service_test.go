@@ -1962,9 +1962,23 @@ func (f *fakeUserNotifyService) Calls() []domain.NotificationEvent {
 
 var _ NotificationService = (*fakeUserNotifyService)(nil)
 
+// reviewerEnv bundles the repos and notification fakes a reviewer-field test
+// seeds and asserts on. A struct rather than six return values: the tuple form
+// tripped gocritic's tooManyResultsChecker, and every call site was already
+// blanking at least one position. Mirrors membershipEnv in
+// task_assignee_membership_test.go.
+type reviewerEnv struct {
+	svc         *taskService
+	tasks       *MockTaskRepository
+	statuses    *MockTaskStatusRepository
+	agentNotify *MockAgentNotifyService
+	userNotify  *fakeUserNotifyService
+	projects    *MockProjectRepository
+}
+
 // setupTaskServiceForReviewer wires a task service with agent-push + in-app
 // notification fakes for reviewer-field tests.
-func setupTaskServiceForReviewer() (*taskService, *MockTaskRepository, *MockTaskStatusRepository, *MockAgentNotifyService, *fakeUserNotifyService, *MockProjectRepository) {
+func setupTaskServiceForReviewer() reviewerEnv {
 	taskRepo := NewMockTaskRepository()
 	statusRepo := NewMockTaskStatusRepository()
 	depRepo := NewMockTaskDependencyRepository()
@@ -1979,11 +1993,15 @@ func setupTaskServiceForReviewer() (*taskService, *MockTaskRepository, *MockTask
 		WithProjectRepo(projRepo),
 	).(*taskService)
 	timeNow = func() time.Time { return frozenTime }
-	return svc, taskRepo, statusRepo, agentNotify, userNotify, projRepo
+	return reviewerEnv{
+		svc: svc, tasks: taskRepo, statuses: statusRepo,
+		agentNotify: agentNotify, userNotify: userNotify, projects: projRepo,
+	}
 }
 
 func TestTaskService_Update_ReviewerAssigned_AgentReviewerNotified(t *testing.T) {
-	svc, taskRepo, _, agentNotify, userNotify, projRepo := setupTaskServiceForReviewer()
+	env := setupTaskServiceForReviewer()
+	svc, taskRepo, agentNotify, userNotify, projRepo := env.svc, env.tasks, env.agentNotify, env.userNotify, env.projects
 	ctx := context.Background()
 
 	projID := uuid.New()
@@ -2011,7 +2029,8 @@ func TestTaskService_Update_ReviewerAssigned_AgentReviewerNotified(t *testing.T)
 }
 
 func TestTaskService_Update_ReviewerAssigned_UserReviewerNotifiedTargeted(t *testing.T) {
-	svc, taskRepo, _, agentNotify, userNotify, projRepo := setupTaskServiceForReviewer()
+	env := setupTaskServiceForReviewer()
+	svc, taskRepo, agentNotify, userNotify, projRepo := env.svc, env.tasks, env.agentNotify, env.userNotify, env.projects
 	ctx := context.Background()
 
 	projID := uuid.New()
@@ -2042,7 +2061,8 @@ func TestTaskService_Update_ReviewerAssigned_UserReviewerNotifiedTargeted(t *tes
 // would report "changed" on every update even when the reviewer stayed the same,
 // firing a spurious "Review requested" notification on every unrelated edit.
 func TestTaskService_Update_ReviewerNoNotifyIfUnchanged(t *testing.T) {
-	svc, taskRepo, _, agentNotify, userNotify, projRepo := setupTaskServiceForReviewer()
+	env := setupTaskServiceForReviewer()
+	svc, taskRepo, agentNotify, userNotify, projRepo := env.svc, env.tasks, env.agentNotify, env.userNotify, env.projects
 	ctx := context.Background()
 
 	projID := uuid.New()
@@ -2071,7 +2091,8 @@ func TestTaskService_Update_ReviewerNoNotifyIfUnchanged(t *testing.T) {
 }
 
 func TestTaskService_MoveTask_ReadyForReview_NotifiesReviewer(t *testing.T) {
-	svc, taskRepo, statusRepo, agentNotify, userNotify, projRepo := setupTaskServiceForReviewer()
+	env := setupTaskServiceForReviewer()
+	svc, taskRepo, statusRepo, agentNotify, userNotify, projRepo := env.svc, env.tasks, env.statuses, env.agentNotify, env.userNotify, env.projects
 	ctx := context.Background()
 
 	projID := uuid.New()
