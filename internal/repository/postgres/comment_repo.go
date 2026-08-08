@@ -126,8 +126,13 @@ func (r *CommentRepo) ListByTask(ctx context.Context, taskID uuid.UUID, filter r
 		return nil, err
 	}
 
-	// Data -- all comments (top-level + replies) ordered by creation time
-	dataQ := fmt.Sprintf(commentEnrichedSelect+` FROM comments c %s ORDER BY c.created_at ASC %s`, where, paginationClause(pg))
+	// Data -- all comments (top-level + replies) ordered by creation time.
+	// sort_by is intentionally not extended beyond created_at: an unknown
+	// value falls back to the default column rather than erroring, per the
+	// product decision on task 4222c17d (an unrecognized sort_dir is still
+	// caught earlier by pagination.Params.Normalize, which clamps it to "asc").
+	order := orderClause(pg, allowedSortColumns{"created_at": "c.created_at"}, "c.created_at")
+	dataQ := fmt.Sprintf(commentEnrichedSelect+` FROM comments c %s %s %s`, where, order, paginationClause(pg))
 	var comments []domain.Comment
 	if err := r.db.SelectContext(ctx, &comments, dataQ, args...); err != nil {
 		return nil, err
