@@ -525,12 +525,7 @@ func newTestServer() (*Server, *mockAPIState) {
 // makeRequest creates a CallToolRequest with the given arguments.
 func makeRequest(args map[string]any) mcpsdk.CallToolRequest {
 	return mcpsdk.CallToolRequest{
-		Params: struct {
-			Name      string             `json:"name"`
-			Arguments any                `json:"arguments,omitempty"`
-			Meta      *mcpsdk.Meta       `json:"_meta,omitempty"`
-			Task      *mcpsdk.TaskParams `json:"task,omitempty"`
-		}{
+		Params: mcpsdk.CallToolParams{
 			Arguments: args,
 		},
 	}
