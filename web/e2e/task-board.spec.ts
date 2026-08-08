@@ -15,7 +15,6 @@ async function withF1Fixture(
   page: Page,
   fn: () => Promise<void>
 ): Promise<void> {
-  const consoleErrors: string[] = [];
   const pageErrors: string[] = [];
 
   // Inject console.error collector before navigation
