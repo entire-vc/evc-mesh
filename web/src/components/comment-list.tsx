@@ -324,22 +324,46 @@ export function CommentList({ taskId, projId }: CommentListProps) {
     }
   };
 
-  const fetchComments = useCallback(async () => {
-    try {
-      const data = await api<PaginatedResponse<Comment>>(
-        `/api/v1/tasks/${taskId}/comments`,
-      );
-      setComments(data.items ?? []);
-    } catch {
-      // silently fail — will show empty list
-    } finally {
-      setLoading(false);
-    }
-  }, [taskId]);
+  const [page, setPage] = useState(1);
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+
+  // sort_dir=desc requests the NEWEST page first — the unparameterized GET
+  // this used to send defaults to oldest-first, so a thread with more than
+  // one page silently showed only its earliest comments (the freshest
+  // activity never got fetched at all, regardless of how the fetched items
+  // were sorted for display). "Show earlier" pages further back in the same
+  // order. See task 4222c17d (D4) / parent diagnosis 9855f866.
+  const fetchComments = useCallback(
+    async (pageNum: number, append: boolean) => {
+      try {
+        const data = await api<PaginatedResponse<Comment>>(
+          `/api/v1/tasks/${taskId}/comments`,
+          { params: { sort_dir: "desc", page: pageNum } },
+        );
+        const items = data.items ?? [];
+        setComments((prev) => (append ? [...prev, ...items] : items));
+        setHasMore(data.has_more);
+        setPage(data.page);
+      } catch {
+        // silently fail — will show empty list
+      } finally {
+        setLoading(false);
+        setLoadingMore(false);
+      }
+    },
+    [taskId],
+  );
 
   useEffect(() => {
-    void fetchComments();
+    setLoading(true);
+    void fetchComments(1, false);
   }, [fetchComments]);
+
+  const handleLoadEarlier = async () => {
+    setLoadingMore(true);
+    await fetchComments(page + 1, true);
+  };
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -474,6 +498,19 @@ export function CommentList({ taskId, projId }: CommentListProps) {
             />
           ))}
         </div>
+
+        {hasMore && (
+          <div className="flex justify-center pt-2">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => void handleLoadEarlier()}
+              disabled={loadingMore}
+            >
+              {loadingMore ? "Loading..." : "Load more"}
+            </Button>
+          </div>
+        )}
       </div>
 
       {/* Reply form — shrink-0 keeps it pinned at the bottom of the flex column */}
