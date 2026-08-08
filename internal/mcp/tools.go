@@ -155,10 +155,28 @@ func (s *Server) handleGetTask(ctx context.Context, request mcpsdk.CallToolReque
 		if err != nil {
 			return errResult("failed to list comments: %v", err)
 		}
+		var itemCount int
 		if items, ok := page["items"]; ok {
 			resp["comments"] = items
+			if arr, ok := items.([]any); ok {
+				itemCount = len(arr)
+			}
 		} else {
 			resp["comments"] = []any{}
+		}
+		// Propagate the truncation envelope REST already returns (total_count,
+		// has_more) — the old code discarded both, which is exactly what made
+		// a truncated response indistinguishable from a complete one. See D2,
+		// task 4222c17d.
+		totalCount, _ := page["total_count"].(float64)
+		hasMore, _ := page["has_more"].(bool)
+		resp["comments_total_count"] = int(totalCount)
+		resp["comments_has_more"] = hasMore
+		if hasMore {
+			resp["comments_truncated"] = true
+			resp["comments_note"] = fmt.Sprintf(
+				"showing the last %d of %d comments; call list_comments(task_id, page_size=200) or page through /comments for the rest",
+				itemCount, int(totalCount))
 		}
 	}
 

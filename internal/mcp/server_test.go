@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -344,17 +345,39 @@ func buildMockServer(state *mockAPIState) *httptest.Server {
 			writeJSON(w, 201, comment)
 
 		case subpath == "comments" && r.Method == "GET":
+			// Pagination-aware, mirroring the real REST /comments contract
+			// (sort_dir/page/page_size/has_more) so tests can exercise D1
+			// (client requests sort_dir=desc to reach the tail) and D2
+			// (handleGetTask propagates total_count/has_more) end to end.
 			comments := state.comments[taskID]
-			if comments == nil {
-				comments = []map[string]any{}
+			ordered := make([]map[string]any, len(comments))
+			copy(ordered, comments)
+			if r.URL.Query().Get("sort_dir") == "desc" {
+				for i, j := 0, len(ordered)-1; i < j; i, j = i+1, j-1 {
+					ordered[i], ordered[j] = ordered[j], ordered[i]
+				}
 			}
-			items := make([]any, len(comments))
-			for i, c := range comments {
+			pageSize := 50
+			if v, err := strconv.Atoi(r.URL.Query().Get("page_size")); err == nil && v > 0 {
+				pageSize = v
+			}
+			page := 1
+			if v, err := strconv.Atoi(r.URL.Query().Get("page")); err == nil && v > 0 {
+				page = v
+			}
+			start := min((page-1)*pageSize, len(ordered))
+			end := min(start+pageSize, len(ordered))
+			pageItems := ordered[start:end]
+			items := make([]any, len(pageItems))
+			for i, c := range pageItems {
 				items[i] = c
 			}
 			writeJSON(w, 200, map[string]any{
 				"items":       items,
-				"total_count": len(items),
+				"total_count": len(ordered),
+				"has_more":    end < len(ordered),
+				"page":        page,
+				"page_size":   pageSize,
 			})
 
 		case subpath == "artifacts" && r.Method == "GET":
@@ -577,6 +600,69 @@ func TestGetProject(t *testing.T) {
 	assert.Equal(t, "Test Project", project["name"])
 	statuses, _ := resp["statuses"].([]any)
 	assert.Len(t, statuses, 3)
+}
+
+// TestGetTask_IncludeComments_TailVisibleAndEnvelopePropagated is the
+// end-to-end regression test for D1+D2 together (task 4222c17d): a thread
+// longer than DefaultPageSize must surface its NEWEST comment through
+// get_task(include_comments=true) (D1 — the client used to be stuck on the
+// server's oldest-first default), and the response must say so was
+// truncated rather than looking complete (D2 — tools.go used to discard
+// total_count/has_more entirely). This is the exact call the READ-BEFORE-ACT
+// gate tells every agent to trust as "the whole thread, read to the end".
+func TestGetTask_IncludeComments_TailVisibleAndEnvelopePropagated(t *testing.T) {
+	srv, state := newTestServer()
+	ctx := context.Background()
+
+	createResult, err := srv.handleCreateTask(ctx, makeRequest(map[string]any{
+		"project_id": state.fx.projectID.String(),
+		"title":      "Long thread task",
+	}))
+	require.NoError(t, err)
+	require.False(t, createResult.IsError)
+	var created map[string]any
+	require.NoError(t, json.Unmarshal([]byte(mcpsdk.GetTextFromContent(createResult.Content[0])), &created))
+	taskID, _ := created["id"].(string)
+	require.NotEmpty(t, taskID)
+
+	const total = 60 // > pagination.DefaultPageSize (50)
+	for i := 0; i < total; i++ {
+		state.comments[taskID] = append(state.comments[taskID], map[string]any{
+			"id":          uuid.New().String(),
+			"task_id":     taskID,
+			"body":        "comment",
+			"author_id":   state.fx.agentID.String(),
+			"author_type": "agent",
+			"created_at":  time.Now().UTC().Add(time.Duration(i) * time.Second).Format(time.RFC3339),
+			"updated_at":  time.Now().UTC().Add(time.Duration(i) * time.Second).Format(time.RFC3339),
+		})
+	}
+	newestID, _ := state.comments[taskID][total-1]["id"].(string)
+
+	result, err := srv.handleGetTask(ctx, makeRequest(map[string]any{
+		"task_id":          taskID,
+		"include_comments": true,
+	}))
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.False(t, result.IsError)
+
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal([]byte(mcpsdk.GetTextFromContent(result.Content[0])), &resp))
+
+	comments, ok := resp["comments"].([]any)
+	require.True(t, ok)
+	require.Len(t, comments, 50, "D1: must fetch DefaultPageSize comments, not fewer")
+	last, ok := comments[len(comments)-1].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, newestID, last["id"], "D1: the LAST element must be the thread's actual newest comment")
+
+	totalCount, _ := resp["comments_total_count"].(float64)
+	assert.Equal(t, float64(total), totalCount, "D2: total_count must be propagated, not discarded")
+	assert.Equal(t, true, resp["comments_has_more"], "D2: has_more must be propagated")
+	assert.Equal(t, true, resp["comments_truncated"], "D2: an explicit truncation marker must be present")
+	note, _ := resp["comments_note"].(string)
+	assert.NotEmpty(t, note, "D2: a human-readable hint must accompany the truncation marker")
 }
 
 func TestCreateTask(t *testing.T) {
