@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useParams } from "react-router";
 import { Bell, Check, Save, Monitor, MonitorOff, AlertTriangle } from "lucide-react";
 import { subscribeUser, unsubscribeUser, isSubscribed, getPermissionState } from "@/lib/push";
+import { toast } from "@/components/ui/toast";
 import {
   Card,
   CardContent,
@@ -132,7 +133,13 @@ export default function NotificationSettingsPage() {
 
   // Load preferences on mount
   useEffect(() => {
-    void fetchPreferences().then(() => setIsLoaded(true));
+    void fetchPreferences()
+      .then(() => setIsLoaded(true))
+      .catch((err: unknown) => {
+        toast.error(
+          err instanceof Error ? err.message : "Failed to load notification preferences",
+        );
+      });
   }, [fetchPreferences]);
 
   // Sync preferences into local state when loaded
