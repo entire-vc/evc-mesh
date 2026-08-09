@@ -266,7 +266,7 @@ func (m *MockTaskDependencyService) ListByTask(ctx context.Context, taskID uuid.
 	return nil, nil
 }
 
-func (m *MockTaskDependencyService) ListByTaskBothDirections(ctx context.Context, taskID uuid.UUID) ([]domain.EnrichedTaskDependency, []domain.EnrichedTaskDependency, error) {
+func (m *MockTaskDependencyService) ListByTaskBothDirections(ctx context.Context, taskID uuid.UUID) (outgoing, incoming []domain.EnrichedTaskDependency, err error) {
 	if m.ListByTaskBothDirectionsFunc != nil {
 		return m.ListByTaskBothDirectionsFunc(ctx, taskID)
 	}

@@ -213,9 +213,13 @@ func (s *taskDependencyService) ListByTaskBothDirections(ctx context.Context, ta
 		if t, ok := cache[id]; ok {
 			return t, nil
 		}
-		t, err := s.taskRepo.GetByID(ctx, id)
-		if err != nil {
-			return nil, err
+		// `getErr`, not `err`: this closure sits inside a function with a NAMED
+		// `err` result, so a plain `:=` here shadows it (govet/shadow). Harmless
+		// today because every path returns explicitly, but it is one `return`
+		// away from silently returning a nil error over a real failure.
+		t, getErr := s.taskRepo.GetByID(ctx, id)
+		if getErr != nil {
+			return nil, getErr
 		}
 		cache[id] = t
 		return t, nil
