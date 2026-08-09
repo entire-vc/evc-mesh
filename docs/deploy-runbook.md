@@ -39,6 +39,58 @@ Two consequences for anyone timing a deploy:
 
 Details and how to inspect the queue: `docs/contributing.md`.
 
+### Re-landing a batch: turn batching on, then turn it back off
+
+By default the queue merges **each entry as soon as its own group is green**
+(`min_entries_to_merge: 1`). That is deliberate for normal traffic — with one or
+two open PRs there is nothing to batch, and waiting for company would only add
+latency to every merge.
+
+Before a **re-land batch** (several PRs that must all go back in), raising the
+minimum makes the queue collect entries into one group: one build, one test run,
+one merge, instead of one of each per PR. Turn it off again afterwards.
+
+Read-modify-write, so the other six parameters are carried over rather than
+reset — sending a bare `{"min_entries_to_merge": 2}` would drop
+`check_response_timeout_minutes: 60`, and a lower timeout ejects every group
+whose memory bench runs the normal 30-45 minutes.
+
+```bash
+# ENABLE batching (before the re-land):
+gh api repos/entire-vc/evc-mesh/rulesets/20589286 \
+  | jq '{rules: [.rules[] | if .type=="merge_queue"
+        then .parameters.min_entries_to_merge = 2 else . end]}' \
+  | gh api --method PUT repos/entire-vc/evc-mesh/rulesets/20589286 --input -
+
+# VERIFY (read back, do not trust the write's echo):
+gh api repos/entire-vc/evc-mesh/rulesets/20589286 \
+  --jq '.rules[]|select(.type=="merge_queue")|.parameters.min_entries_to_merge'
+# -> 2
+
+# ROLLBACK (immediately after the batch has landed):
+gh api repos/entire-vc/evc-mesh/rulesets/20589286 \
+  | jq '{rules: [.rules[] | if .type=="merge_queue"
+        then .parameters.min_entries_to_merge = 1 else . end]}' \
+  | gh api --method PUT repos/entire-vc/evc-mesh/rulesets/20589286 --input -
+```
+
+**The price, while it is on:** every *single* PR waits for company for up to
+`min_entries_to_merge_wait_minutes` (currently 5) before it merges alone. That
+is a tax on the common case to buy a saving on the rare one, which is why it is
+a temporary switch and not the default. Turn it back to `1` as soon as the batch
+is in.
+
+**What it does and does not buy:** it saves CI *runs*, not wall-clock — two
+entries under `min: 1` build two groups **in parallel**, so the elapsed time is
+about the same either way. The saving is one fewer full memory bench per extra
+PR in the batch.
+
+> Not yet exercised: the read-modify-write payload above was verified to change
+> `min_entries_to_merge` and nothing else, but the `PUT` itself has never been
+> run — the queue has only ever operated at `min: 1`. Whoever runs this first
+> should treat the verify step as load-bearing and check the read-back before
+> queuing the batch.
+
 ---
 
 ## Normal deploy (no out-of-order migrations)
