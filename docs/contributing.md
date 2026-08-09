@@ -86,6 +86,34 @@ What that changes for you:
 The queue merges with **squash**, so keep your PR's title and description
 meaningful — the squashed commit inherits them.
 
+### Where the queue is configured, and why `branch protection` will not show it
+
+The queue is a **repository ruleset**, not a branch-protection setting. Classic
+branch protection on `main` (`strict`, the six required contexts,
+`enforce_admins`) is still in force and unchanged — rulesets are a parallel
+system that adds to it rather than replacing it.
+
+That split has one consequence worth knowing before you go looking: the
+habitual check reports nothing about the queue, and reports it *successfully*,
+which reads like "no queue" rather than "wrong place to look".
+
+```bash
+# Does NOT mention the queue — no error, just silence:
+gh api repos/entire-vc/evc-mesh/branches/main/protection --jq 'keys'
+
+# Where it actually lives:
+gh api repos/entire-vc/evc-mesh/rulesets --jq '.[] | {id, name, enforcement}'
+
+# Whether a branch has one right now, and its settings:
+gh api graphql -f query='{repository(owner:"entire-vc",name:"evc-mesh"){
+  mergeQueue(branch:"main"){ id configuration{ mergeMethod minimumEntriesToMerge } } }}'
+```
+
+`mergeQueue` returning `null` means the branch has no queue. Note that a failed
+GraphQL request also returns HTTP 200 with nulls plus an `errors` array, so
+"there is no queue" and "the query failed" arrive in the same shape — read
+`errors` before believing the `null`.
+
 ### PR Guidelines
 
 - Keep PRs small and focused (one feature or fix per PR)
