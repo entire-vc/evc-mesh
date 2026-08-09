@@ -216,6 +216,50 @@ type RecallStats struct {
 	SparseRows int
 }
 
+// Canonical `order_by` values. These were bare string literals repeated across
+// four files (domain doc comments, the REST handler, the SQL ORDER BY switch, and
+// the recall service's decay predicate) until 2026-08-09 (#655c6d12) — and they had
+// already drifted: the service compared against "decayed_relevance" while every
+// producer in the codebase emits "decayed_relevance:desc", so that comparison was
+// dead code from the day it was written. Nothing failed; the branch simply never
+// ran, which is the quietest way for a feature to not exist.
+const (
+	OrderByCreatedAtDesc        = "created_at:desc"
+	OrderByCreatedAtAsc         = "created_at:asc"
+	OrderByRelevanceDesc        = "relevance:desc"
+	OrderByDecayedRelevanceDesc = "decayed_relevance:desc"
+)
+
+// CanonicalOrderBy maps an order_by value onto its canonical form, so the same
+// intent expressed two ways resolves to one string. A bare sort key without a
+// direction suffix means descending — that is the direction every one of these
+// keys is useful in, and it is what a caller writing `order_by=decayed_relevance`
+// plainly means.
+//
+// Normalising HERE, once, is the point: the alternative is every consumer deciding
+// for itself which spellings count, which is exactly how the decay predicate and
+// the SQL switch came to disagree about a value they both name `decayed_relevance`.
+// An unrecognised value is returned unchanged — callers keep their own default
+// behaviour for it rather than having one invented here.
+func CanonicalOrderBy(orderBy string) string {
+	switch orderBy {
+	case "created_at":
+		return OrderByCreatedAtDesc
+	case "relevance":
+		return OrderByRelevanceDesc
+	case "decayed_relevance":
+		return OrderByDecayedRelevanceDesc
+	default:
+		return orderBy
+	}
+}
+
+// IsDecayedRelevanceOrder reports whether orderBy asks for decay-weighted ordering,
+// in either the canonical suffixed form or the bare key.
+func IsDecayedRelevanceOrder(orderBy string) bool {
+	return CanonicalOrderBy(orderBy) == OrderByDecayedRelevanceDesc
+}
+
 // RecallOpts specifies parameters for a memory recall (full-text search) operation.
 type RecallOpts struct {
 	Query       string

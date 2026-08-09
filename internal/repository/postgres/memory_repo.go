@@ -794,12 +794,15 @@ func (r *MemoryRepo) List(ctx context.Context, filter domain.MemoryListFilter) (
 	// ── ORDER BY ──────────────────────────────────────────────────────────────
 	decayApplied := false
 	var orderExpr string
-	switch filter.OrderBy {
-	case "relevance:desc":
+	// Normalised so that a bare key and its suffixed form cannot mean different
+	// things here than they do in the recall service's decay predicate — the two
+	// used to disagree about `decayed_relevance` (#655c6d12).
+	switch domain.CanonicalOrderBy(filter.OrderBy) {
+	case domain.OrderByRelevanceDesc:
 		orderExpr = "relevance DESC"
-	case "created_at:asc":
+	case domain.OrderByCreatedAtAsc:
 		orderExpr = "created_at ASC"
-	case "decayed_relevance:desc":
+	case domain.OrderByDecayedRelevanceDesc:
 		// Recency-weighted relevance incorporating freshness_score and configurable half-life.
 		// Formula: relevance * freshness_score * exp(-Δt * ln2 / half_life_days)
 		halfLife := filter.HalfLifeDays
