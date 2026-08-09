@@ -13,6 +13,34 @@ Hands-on guide for deploying the evc-mesh API server on prod (systemd, bare-meta
 
 ---
 
+## Getting the change into `main` first
+
+Everything below deploys what is already on `main`. Landing it there no longer
+goes through a direct merge: `main` has a **merge queue**, so a pull request is
+*enqueued* and the queue merges it after building and testing your change
+combined with whatever is queued ahead of it. A raw
+`gh api -X PUT repos/.../pulls/<n>/merge` no longer merges anything.
+
+Both fleet merge paths detect the queue per call and switch by themselves, so
+the command you run is unchanged:
+
+```bash
+~/bin/gh-merge <pr> entire-vc/evc-mesh        # enqueues when the branch has a queue
+```
+
+Two consequences for anyone timing a deploy:
+
+- **Enqueued is not merged.** The entry can still be rejected if the combined
+  tree fails, so wait for `state=MERGED` before starting a deploy — an
+  `ENQUEUED` report is not a landing.
+- **A merge group is not instant.** Every group runs the full memory bench,
+  because that gate's scope check treats any non-`pull_request` event as
+  in-scope by design, so budget tens of minutes rather than seconds.
+
+Details and how to inspect the queue: `docs/contributing.md`.
+
+---
+
 ## Normal deploy (no out-of-order migrations)
 
 **Mandatory order:**
