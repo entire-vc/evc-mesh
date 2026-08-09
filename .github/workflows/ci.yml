@@ -559,6 +559,8 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Assert typecheck is not vacuous
         run: ./scripts/assert-typecheck-is-not-vacuous.sh
+      - name: Assert typecheck covers e2e/
+        run: ./scripts/assert-typecheck-covers-e2e.sh
       - name: Typecheck frontend
         working-directory: web
         run: pnpm typecheck

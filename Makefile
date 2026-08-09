@@ -192,8 +192,9 @@ ci-test: ci-services-up
 ci-build:
 	@echo "── Build (Go API + MCP) ────────────────────────────────────────"
 	go build -o /dev/null ./cmd/api ./cmd/mcp
-	@echo "── Frontend: typecheck (negative control first) ────────────────"
+	@echo "── Frontend: typecheck (negative controls first) ────────────────"
 	./scripts/assert-typecheck-is-not-vacuous.sh
+	./scripts/assert-typecheck-covers-e2e.sh
 	cd web && pnpm typecheck
 	@echo "── Frontend: build ─────────────────────────────────────────────"
 	cd web && pnpm build
