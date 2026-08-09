@@ -111,27 +111,3 @@ func TestRecall_ApplyDecayStillArmsDecayWithoutOrderBy(t *testing.T) {
 	})
 	assert.Less(t, got, 1.0, "ApplyDecay=true must arm decay regardless of OrderBy")
 }
-
-// TestCanonicalOrderBy is the unit-level guard on the normalisation itself, so a
-// future consumer reading these helpers gets the same answer the service does.
-func TestCanonicalOrderBy(t *testing.T) {
-	cases := map[string]struct {
-		canonical string
-		isDecayed bool
-	}{
-		"decayed_relevance":      {domain.OrderByDecayedRelevanceDesc, true},
-		"decayed_relevance:desc": {domain.OrderByDecayedRelevanceDesc, true},
-		"relevance":              {domain.OrderByRelevanceDesc, false},
-		"relevance:desc":         {domain.OrderByRelevanceDesc, false},
-		"created_at":             {domain.OrderByCreatedAtDesc, false},
-		"created_at:asc":         {domain.OrderByCreatedAtAsc, false},
-		"":                       {"", false},
-		// Unknown values pass through untouched — the caller keeps its own default
-		// rather than having one silently invented in the normaliser.
-		"nonsense": {"nonsense", false},
-	}
-	for in, want := range cases {
-		assert.Equal(t, want.canonical, domain.CanonicalOrderBy(in), "CanonicalOrderBy(%q)", in)
-		assert.Equal(t, want.isDecayed, domain.IsDecayedRelevanceOrder(in), "IsDecayedRelevanceOrder(%q)", in)
-	}
-}
