@@ -558,12 +558,43 @@ jobs:
           } >> "$GITHUB_ENV"
           echo "mesh-mcp client: ref=$branch commit=$(git -C evc-mesh-mcp rev-parse --short HEAD)"
 
+      # WHICH CLIENT IS ACTUALLY IN THE BINARY — read out of the artifact, not
+      # claimed by the step that fetched the source.
+      #
+      # `MCP_REF`/`MCP_COMMIT` above describe the CHECKOUT. Everything between
+      # that checkout and this compiler is unproven by them: a reordered step, a
+      # stale `mesh-mcp-bin` left in the workspace, a `cd` into the wrong
+      # directory, and the bench measures a client nobody selected while every
+      # log line still names the right ref. That is the same defect this whole
+      # card is about (#faf92388) wearing a different hat — the harness stating
+      # something it did not observe.
+      #
+      # `go build` with no `-buildvcs=false` stamps the source commit into the
+      # binary, so the artifact answers for itself. Measured, not assumed:
+      # `go version -m` on a cross-compiled binary prints
+      # `build vcs.revision=06fa62a5e3…` equal to that tree's HEAD.
+      #
+      # THE ASSERTION BINDS ONLY WHEN A REF WAS DISPATCHED, deliberately. That
+      # is exactly when a wrong binary corrupts an A/B silently; on
+      # pull_request / merge_group / push / schedule the default branch is the
+      # correct answer anyway, so a broken pin there costs nothing and a hard
+      # failure would paint a required check red for an author who cannot fix
+      # it (the #342 rule). Unstamped counts as a mismatch on that path: an
+      # unverifiable provenance claim is not a passing one.
       - name: Cross-compile mesh-mcp (linux/amd64)
         if: steps.scope.outputs.relevant == 'true'
+        env:
+          MCP_REF_INPUT: ${{ inputs.mcp_ref }}
         run: |
           cd evc-mesh-mcp
           GOOS=linux GOARCH=amd64 go build -o ../mesh-mcp-bin .
           chmod +x ../mesh-mcp-bin
+          built="$(go version -m ../mesh-mcp-bin | sed -n 's/.*vcs\.revision=//p' | head -1)"
+          echo "mesh-mcp binary: vcs.revision=${built:-<unstamped>} (checkout ${MCP_COMMIT:-<unset>})"
+          if [ -n "$MCP_REF_INPUT" ] && [ "$built" != "$MCP_COMMIT" ]; then
+            echo "::error::dispatched mcp_ref='${MCP_REF_INPUT}' resolved to ${MCP_COMMIT:-<unset>}, but the binary carries '${built:-<unstamped>}' — this run would have measured a client nobody asked for"
+            exit 1
+          fi
 
       # ---------------------------------------------------------------------
       # The dense-arm control, run BEFORE the scored bench so a severed vector
@@ -1345,12 +1376,22 @@ jobs:
           go-version-file: evc-mesh-mcp/go.mod
           cache-dependency-path: evc-mesh-mcp/go.sum
 
+      # Second copy of the binary-provenance check — see the branch arm's copy
+      # for why the checkout's own report does not answer this question.
       - name: Cross-compile mesh-mcp (linux/amd64)
         if: steps.scope.outputs.relevant == 'true' && steps.version.outputs.rc == '0'
+        env:
+          MCP_REF_INPUT: ${{ inputs.mcp_ref }}
         run: |
           cd evc-mesh-mcp
           GOOS=linux GOARCH=amd64 go build -o ../mesh-mcp-bin .
           chmod +x ../mesh-mcp-bin
+          built="$(go version -m ../mesh-mcp-bin | sed -n 's/.*vcs\.revision=//p' | head -1)"
+          echo "mesh-mcp binary: vcs.revision=${built:-<unstamped>} (checkout ${MCP_COMMIT:-<unset>})"
+          if [ -n "$MCP_REF_INPUT" ] && [ "$built" != "$MCP_COMMIT" ]; then
+            echo "::error::dispatched mcp_ref='${MCP_REF_INPUT}' resolved to ${MCP_COMMIT:-<unset>}, but the binary carries '${built:-<unstamped>}' — this run would have measured a client nobody asked for"
+            exit 1
+          fi
 
       - name: Install Python dependencies
         if: steps.scope.outputs.relevant == 'true' && steps.version.outputs.rc == '0'
@@ -2073,12 +2114,23 @@ jobs:
           go-version-file: evc-mesh-mcp/go.mod
           cache-dependency-path: evc-mesh-mcp/go.sum
 
+      # Third copy of the binary-provenance check — see the branch arm's copy.
+      # `file` already said what KIND of binary this is; it never said which
+      # source produced it, which is the only part a client A/B depends on.
       - name: Cross-compile mesh-mcp (linux/amd64)
+        env:
+          MCP_REF_INPUT: ${{ inputs.mcp_ref }}
         run: |
           cd evc-mesh-mcp
           GOOS=linux GOARCH=amd64 go build -o ../mesh-mcp-bin .
           chmod +x ../mesh-mcp-bin
           echo "mesh-mcp built: $(file ../mesh-mcp-bin)"
+          built="$(go version -m ../mesh-mcp-bin | sed -n 's/.*vcs\.revision=//p' | head -1)"
+          echo "mesh-mcp binary: vcs.revision=${built:-<unstamped>} (checkout ${MCP_COMMIT:-<unset>})"
+          if [ -n "$MCP_REF_INPUT" ] && [ "$built" != "$MCP_COMMIT" ]; then
+            echo "::error::dispatched mcp_ref='${MCP_REF_INPUT}' resolved to ${MCP_COMMIT:-<unset>}, but the binary carries '${built:-<unstamped>}' — this run would have measured a client nobody asked for"
+            exit 1
+          fi
 
       - name: Set up Python
         uses: actions/setup-python@v7

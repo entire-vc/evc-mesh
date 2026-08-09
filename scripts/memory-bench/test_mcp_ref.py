@@ -279,6 +279,68 @@ class TestABranchClientCannotBecomeTheFloor(unittest.TestCase):
         self.assertEqual([], capture_blockers({}, "hybrid", False))
 
 
+class TestTheBinaryAnswersForItself(unittest.TestCase):
+    """AC4 — the run must show which client is in the BINARY, not which one was
+    fetched.
+
+    `MCP_REF`/`MCP_COMMIT` describe the checkout. Everything between that and the
+    compiler is unproven by them: a reordered step, a stale `mesh-mcp-bin` in the
+    workspace, a `cd` into the wrong tree — and the bench measures a client nobody
+    selected while every log line still names the right ref. `go build` stamps the
+    source commit into the artifact, so the artifact can be asked directly.
+    """
+
+    def setUp(self):
+        self.src = WORKFLOW.read_text()
+        self.builds = [
+            s for s in re.split(r"\n      - name:", self.src)
+            if "go build -o ../mesh-mcp-bin" in s
+        ]
+
+    def test_the_detector_finds_every_build(self):
+        # Positive control — one build step per arm.
+        self.assertEqual(3, len(self.builds))
+
+    def test_every_build_reads_the_revision_out_of_the_binary(self):
+        for step in self.builds:
+            self.assertIn(
+                "vcs.revision", step,
+                "this build never asks the binary which source it came from; "
+                "the checkout's own report is not evidence about the artifact.\n"
+                + step[:300],
+            )
+
+    def test_every_build_compares_it_against_the_checkout(self):
+        """Printing the revision is observability; comparing it is the control."""
+        for step in self.builds:
+            self.assertIn('"$built" != "$MCP_COMMIT"', step)
+            self.assertIn("exit 1", step)
+
+    def test_the_assertion_cannot_redden_an_ordinary_run(self):
+        """Scoped to a dispatched ref, and that scoping is load-bearing.
+
+        On pull_request / merge_group / push / schedule the default branch IS the
+        right client, so a broken pin costs nothing there — while a hard failure
+        would paint a REQUIRED check red for an author who cannot clear it (#342).
+        Without the `-n "$MCP_REF_INPUT"` guard, an unstamped build would fail
+        every PR in the repo.
+        """
+        for step in self.builds:
+            self.assertIn('[ -n "$MCP_REF_INPUT" ]', step)
+            self.assertIn("MCP_REF_INPUT: ${{ inputs.mcp_ref }}", step)
+
+    def test_unstamped_is_a_mismatch_not_a_pass(self):
+        """An unverifiable provenance claim must not read as a verified one.
+
+        `built` empty (Go stopped stamping) is `!= $MCP_COMMIT`, so the dispatch
+        path fails. Pinned because the tempting `[ -n "$built" ] &&` guard would
+        turn the control off exactly when it stopped working.
+        """
+        for step in self.builds:
+            self.assertNotIn('-n "$built"', step)
+            self.assertNotIn("-z \"$built\"", step)
+
+
 class TestADeliberateClientABDoesNotPageAnIncident(unittest.TestCase):
     """The first real use of `mcp_ref` opened two blindness episodes.
 
