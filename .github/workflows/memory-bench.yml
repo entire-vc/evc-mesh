@@ -67,6 +67,35 @@ on:
           builds and measures its own server and has no deployed version to race.
         required: false
         default: ''
+      mcp_ref:
+        description: >-
+          Ref of `entire-vc/evc-mesh-mcp` to build the bench CLIENT from. Empty
+          (the default) means that repo's default branch — which is what every
+          non-dispatch trigger gets and what every committed baseline was
+          captured against, so leaving it empty reproduces today's behaviour
+          exactly.
+
+          Supply a branch to measure a pull request in the CLIENT. That is not a
+          nicety: the client is not a thin wrapper. `handleRecall` resolves a
+          query profile and OVERRIDES the caller's parameters — it can force
+          `apply_recency_decay` on over an explicit false, replace `order_by`,
+          raise `min_importance`, widen `limit` — so a large share of the
+          behaviour this bench scores is decided by this binary. Until this
+          input existed all three arms checked out the client with no `ref:`,
+          which meant every arm always built `main` and no client PR was
+          measurable by this harness at all (#faf92388). One such change moved a
+          gold answer from rank 1 to rank 32, out of the scored window, and the
+          gate could not see it.
+
+          A run on a non-default ref is reported INCONCLUSIVE against the
+          committed baseline (`GATE_REASON: mcp-ref-mismatch`) rather than
+          scored: the baseline was captured on a different client, so the
+          comparison would be arithmetically valid and factually meaningless.
+          To A/B two clients, dispatch twice and diff the two
+          `results/recall_gate.json` artifacts, which now record the ref and the
+          resolved commit.
+        required: false
+        default: ''
       repeat:
         description: >-
           Passes to average when re-snapping (default 3). One pass is a coin toss:
@@ -236,8 +265,9 @@ jobs:
       # nothing, which is how test_gate_dense_arm.py and
       # test_check_captured_baseline.py sat unwired while the README credited
       # them as the pin for their failure mode.
-      - name: Gate self-checks (blind-spot, mode, arm, control, ages)
+      - name: Gate self-checks (blind-spot, mode, arm, control, ages, client)
         run: |
+          python scripts/memory-bench/test_mcp_ref.py
           python scripts/memory-bench/test_gate_blindness.py
           python scripts/memory-bench/test_gate_modes.py
           python scripts/memory-bench/test_gate_arm.py
@@ -497,8 +527,36 @@ jobs:
         uses: actions/checkout@v7
         with:
           repository: entire-vc/evc-mesh-mcp
+          # Empty is not the same as absent to a reader, but it IS the same to
+          # actions/checkout: `ref` is falsy-checked, so '' resolves to the
+          # default branch exactly as no key at all did. That equivalence is what
+          # keeps the pull_request / merge_group / push / schedule triggers —
+          # none of which populate `inputs` — behaving as before.
+          ref: ${{ inputs.mcp_ref }}
           token: ${{ secrets.GITHUB_TOKEN }}
           path: evc-mesh-mcp
+
+      - name: Resolve which mesh-mcp this run measures
+        if: steps.scope.outputs.relevant == 'true'
+        env:
+          MCP_REF_INPUT: ${{ inputs.mcp_ref }}
+        run: |
+          # Read the ref back off the CHECKOUT rather than echoing the input:
+          # the input is empty on every non-dispatch trigger, and "" tells a
+          # later reader nothing about which client produced the numbers. This
+          # also makes an explicit `mcp_ref=main` and an empty input resolve to
+          # the same string, so dispatching the default branch by name is not a
+          # spurious mismatch.
+          branch="$(git -C evc-mesh-mcp rev-parse --abbrev-ref HEAD)"
+          if [ "$branch" = "HEAD" ]; then
+            # Detached: dispatched with a SHA or a tag, so the input IS the name.
+            branch="${MCP_REF_INPUT:-unknown}"
+          fi
+          {
+            echo "MCP_REF=$branch"
+            echo "MCP_COMMIT=$(git -C evc-mesh-mcp rev-parse HEAD)"
+          } >> "$GITHUB_ENV"
+          echo "mesh-mcp client: ref=$branch commit=$(git -C evc-mesh-mcp rev-parse --short HEAD)"
 
       - name: Cross-compile mesh-mcp (linux/amd64)
         if: steps.scope.outputs.relevant == 'true'
@@ -1236,9 +1294,26 @@ jobs:
         if: steps.scope.outputs.relevant == 'true' && steps.version.outputs.rc == '0'
         uses: actions/checkout@v7
         with:
+          # See the branch arm's copy of this key for why '' == default branch.
+          ref: ${{ inputs.mcp_ref }}
           repository: entire-vc/evc-mesh-mcp
           token: ${{ secrets.GITHUB_TOKEN }}
           path: evc-mesh-mcp
+
+      - name: Resolve which mesh-mcp this run measures
+        if: steps.scope.outputs.relevant == 'true' && steps.version.outputs.rc == '0'
+        env:
+          MCP_REF_INPUT: ${{ inputs.mcp_ref }}
+        run: |
+          branch="$(git -C evc-mesh-mcp rev-parse --abbrev-ref HEAD)"
+          if [ "$branch" = "HEAD" ]; then
+            branch="${MCP_REF_INPUT:-unknown}"
+          fi
+          {
+            echo "MCP_REF=$branch"
+            echo "MCP_COMMIT=$(git -C evc-mesh-mcp rev-parse HEAD)"
+          } >> "$GITHUB_ENV"
+          echo "mesh-mcp client: ref=$branch commit=$(git -C evc-mesh-mcp rev-parse --short HEAD)"
 
       - name: Set up Go
         if: steps.scope.outputs.relevant == 'true' && steps.version.outputs.rc == '0'
@@ -1938,9 +2013,25 @@ jobs:
       - name: Checkout evc-mesh-mcp
         uses: actions/checkout@v7
         with:
+          # See the branch arm's copy of this key for why '' == default branch.
+          ref: ${{ inputs.mcp_ref }}
           repository: entire-vc/evc-mesh-mcp
           token: ${{ secrets.GITHUB_TOKEN }}
           path: evc-mesh-mcp
+
+      - name: Resolve which mesh-mcp this run measures
+        env:
+          MCP_REF_INPUT: ${{ inputs.mcp_ref }}
+        run: |
+          branch="$(git -C evc-mesh-mcp rev-parse --abbrev-ref HEAD)"
+          if [ "$branch" = "HEAD" ]; then
+            branch="${MCP_REF_INPUT:-unknown}"
+          fi
+          {
+            echo "MCP_REF=$branch"
+            echo "MCP_COMMIT=$(git -C evc-mesh-mcp rev-parse HEAD)"
+          } >> "$GITHUB_ENV"
+          echo "mesh-mcp client: ref=$branch commit=$(git -C evc-mesh-mcp rev-parse --short HEAD)"
 
       - name: Set up Go
         uses: actions/setup-go@v7

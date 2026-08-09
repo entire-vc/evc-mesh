@@ -203,6 +203,14 @@ REASON_PERSISTENT_ERRORS = "persistent-errors"
 # a numerically valid comparison between two unrelated systems.
 REASON_ARM_MISMATCH = "arm-mismatch"
 REASON_AGE_MODE_MISMATCH = "age-mode-mismatch"
+# The run built its mesh-mcp CLIENT from a different ref than the baseline was
+# captured with. Its own kind because the owner and the fix differ from every
+# neighbour above: nothing is broken, nobody should re-snap, and the run is not
+# worse — it measured a different client on purpose. The correct next step is to
+# diff this run's results artifact against another run's, not to touch the
+# committed floor. Folding it into `arm-mismatch` would tell that reader to go
+# find the right file, which does not exist.
+REASON_MCP_REF_MISMATCH = "mcp-ref-mismatch"
 # A capture that could not be trusted is refused BEFORE the write, so the previous
 # baseline survives. Its own kind: "we declined to record a floor" is not an
 # inconclusive verdict, and it has a different reader (whoever dispatched it).
@@ -215,6 +223,31 @@ REASON_CAPTURE_REFUSED = "capture-refused"
 # would in fact PIN as the new floor.
 REASON_DENSE_ARM_EMPTY = "dense-arm-empty"
 REASON_PREFIX = "GATE_REASON:"
+
+# Which build of the mesh-mcp CLIENT a run measured. Supplied by the workflow's
+# "Resolve which mesh-mcp this run measures" step, which reads it back off the
+# checkout rather than echoing the dispatch input — so it is the branch actually
+# built, and an explicit `mcp_ref=main` and an empty input give the same string.
+MCP_REF_ENV = "MCP_REF"
+MCP_COMMIT_ENV = "MCP_COMMIT"
+
+# How to read a baseline (or a run) that states no client ref.
+#
+# Same asymmetry as `fixture_age_mode`, and for the same reason: unstated has a
+# KNOWN correct reading here, not an unknown one. Every baseline committed before
+# this field existed was captured by a workflow that checked the client out with
+# no `ref:` at all — i.e. evc-mesh-mcp's default branch — so reading unstated as
+# that branch is correct rather than lenient. Reading it as "matches whatever
+# this run built" would be precisely the silent mis-comparison this axis exists
+# to stop.
+#
+# The literal name is a dependency on evc-mesh-mcp's default branch staying
+# `main`. If it is ever renamed, resolved refs stop matching this constant and
+# every run goes INCONCLUSIVE naming `mcp-ref-mismatch` — loud and one line to
+# fix, which is the direction this should fail in. The fallback also stops
+# mattering per-file as soon as a baseline is re-snapped, since the capture
+# writes the field explicitly.
+MCP_REF_UNSTATED_AS = "main"
 
 # How an errored question is classified. `--max-error-rate` was calibrated for
 # TRANSIENT infrastructure failures — a mesh-api restart mid-run, a 502 — where
@@ -639,6 +672,17 @@ def write_results_artifact(
         # of a blind run. Anyone downloading this artifact should be able to see
         # both without re-deriving one from the per-question rows.
         "dense_arm": dense_arm,
+        # WHICH CLIENT asked the questions. `search_mode` describes the server's
+        # retrieval path and `arm` the target system; neither says anything about
+        # the binary on the other end of stdio, and that binary decides a large
+        # part of the behaviour scored here — `handleRecall` overrides the
+        # caller's decay flag, ordering, importance floor and page size from a
+        # query profile. Until #faf92388 all three arms built it from the default
+        # branch unconditionally, so a run could not even state this, let alone
+        # vary it. `mcp_ref` is the comparability axis; `mcp_commit` is the exact
+        # build, recorded and never compared.
+        "mcp_ref": resolve_mcp_ref(),
+        "mcp_commit": resolve_mcp_commit(),
         "top_k": top_k,
         "repeat": repeat,
         "scores": scores,
@@ -718,6 +762,36 @@ def resolve_dense_arm_status(results: list[dict]) -> str:
     if any(n > 0 for n in reported):
         return DENSE_ARM_SERVED
     return DENSE_ARM_EMPTY
+
+
+def resolve_mcp_ref() -> str:
+    """Which mesh-mcp ref this run measured, from the environment.
+
+    Unlike `search_mode` and `fixture_age_mode`, this is NOT derivable from the
+    per-question results: the client is the process asking the questions, and it
+    reports nothing about its own provenance. The workflow step that checks it
+    out is the only place that knows, so this reads what that step exported.
+
+    An unset variable is read as the default branch — see MCP_REF_UNSTATED_AS.
+    That keeps a local `python run_ci.py`, and any arm whose resolve step has not
+    landed yet, behaving exactly as before rather than going permanently
+    inconclusive. The risk it accepts is narrow: the variable is exported by the
+    step immediately after the checkout, so losing it means the checkout did not
+    run either, and there is no client build to mis-attribute.
+    """
+    return os.environ.get(MCP_REF_ENV, "").strip() or MCP_REF_UNSTATED_AS
+
+
+def resolve_mcp_commit() -> str:
+    """The exact client commit, for the record. Never compared.
+
+    Observability only, deliberately — the ref is the comparability axis and the
+    commit is not. `main` moves under every run, so gating on the commit would
+    make every run inconclusive against yesterday's baseline. Same split the
+    server side already makes with `commit` next to `arm`: one field says which
+    thing, the other says which build of it.
+    """
+    return os.environ.get(MCP_COMMIT_ENV, "").strip()
 
 
 def resolve_fixture_age_mode(results: list[dict]) -> str:
@@ -867,6 +941,12 @@ class Baseline(NamedTuple):
     # at ingest — so unlike `arm`, unstated here has a known, correct reading
     # (`ingest-now`) rather than being merely unvouched. See the age gate.
     fixture_age_mode: str = ""
+    # Which mesh-mcp CLIENT built the numbers. Empty means the file predates the
+    # field, and every such file WAS captured with the client checked out at its
+    # default branch (no `ref:` existed in the workflow) — so, like
+    # `fixture_age_mode` and unlike `arm`, unstated here has a known correct
+    # reading. See MCP_REF_UNSTATED_AS and the client gate.
+    mcp_ref: str = ""
 
 
 def load_baseline(path: Path) -> Baseline:
@@ -911,6 +991,7 @@ def load_baseline(path: Path) -> Baseline:
             },
             arm=str(raw.get("arm") or ""),
             fixture_age_mode=str(raw.get("fixture_age_mode") or ""),
+            mcp_ref=str(raw.get("mcp_ref") or ""),
         )
     return Baseline(
         scores={k: float(v) for k, v in raw.items()},
@@ -920,6 +1001,7 @@ def load_baseline(path: Path) -> Baseline:
         sample_sizes={},
         arm="",
         fixture_age_mode="",
+        mcp_ref="",
     )
 
 
@@ -972,6 +1054,12 @@ def build_baseline_payload(
         # over the dataset's real 0-183 day span. Without this field the regime
         # change would arrive as a REGRESSION on every open PR at once.
         "fixture_age_mode": fixture_age_mode,
+        # WHICH CLIENT. The fourth comparability axis, alongside search_mode /
+        # arm / fixture_age_mode — see write_results_artifact for why the binary
+        # on the other end of stdio is not a detail. A baseline that does not
+        # state its client cannot be checked for comparability against a run that
+        # built a different one.
+        "mcp_ref": resolve_mcp_ref(),
         "captured_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "top_k": top_k,
         "n_runs": len(per_pass_scores),
@@ -1041,6 +1129,22 @@ def capture_blockers(
     if not retrieval_only:
         return []
     blockers: list[str] = []
+    # Capturing a floor on a non-default CLIENT would poison the required check
+    # in the least visible way available: the committed baseline would state that
+    # branch, so every ordinary PR run afterwards — all of which build the
+    # default branch — goes INCONCLUSIVE naming `mcp-ref-mismatch`, and the
+    # required arm stops ruling on anything until a human notices the field.
+    # The dispatch that makes this reachable is `mcp_ref=<branch>` together with
+    # `update_baseline`, which is a plausible thing to do while investigating a
+    # client change (#faf92388).
+    run_mcp_ref = resolve_mcp_ref()
+    if run_mcp_ref != MCP_REF_UNSTATED_AS:
+        blockers.append(
+            f"built the mesh-mcp client from '{run_mcp_ref}', not "
+            f"'{MCP_REF_UNSTATED_AS}' — a floor captured on a branch client makes "
+            "every subsequent default-client run incomparable to it, which "
+            "disables the required check rather than tightening it"
+        )
     if run_mode != MODE_HYBRID:
         blockers.append(
             f"served in retrieval mode '{run_mode}', not '{MODE_HYBRID}' — this "
@@ -1721,6 +1825,18 @@ def cmd_run(args: argparse.Namespace) -> int:
     if results_file is not None:
         print(f"\nPer-question results: {results_file}")
 
+    # In gate.log, unconditionally, next to the other provenance the reader needs
+    # to interpret a number. gate.log is what anyone actually opens after a run;
+    # a verdict that does not say which client produced it is the same class as a
+    # baseline without `sample_sizes` — checkable-looking and not checkable.
+    # Printed before every verdict branch below for the same reason the artifact
+    # is written there: the branches return early.
+    _mcp_commit = resolve_mcp_commit()
+    print(
+        f"mesh-mcp client: ref={resolve_mcp_ref()}"
+        + (f" commit={_mcp_commit[:8]}" if _mcp_commit else " commit=unreported")
+    )
+
     baseline: Baseline | None = None
     baseline_mode = MODE_UNKNOWN
     if baseline_file.exists():
@@ -1955,6 +2071,47 @@ def cmd_run(args: argparse.Namespace) -> int:
         print(
             f"{REASON_PREFIX} {REASON_AGE_MODE_MISMATCH} — baseline "
             f"'{baseline_age_mode}' != run '{run_age_mode}'"
+        )
+        return EXIT_INCONCLUSIVE
+
+    # ── Client gate: which mesh-mcp asked the questions ──────────────────────
+    #
+    # The fourth comparability axis. The other three describe the SERVER and the
+    # corpus; this one describes the process on the other end of stdio, and that
+    # process is not a pipe. `handleRecall` resolves a query profile and
+    # overrides the caller's parameters from it — it can force
+    # `apply_recency_decay` on over an explicit false, replace `order_by`, raise
+    # `min_importance`, widen `limit`. A measured instance: one profile's 7-day
+    # half-life moved a gold answer from rank 1 to rank 32, outside the scored
+    # window. That is the exact class of regression this gate exists to catch,
+    # and it lived entirely in the client.
+    #
+    # Until #faf92388 the question could not even be asked: all three arms
+    # checked the client out with no `ref:`, so every arm always built the
+    # default branch and no client pull request was measurable here at all.
+    #
+    # INCONCLUSIVE, never REGRESSION — deliberately, and for the same reason as
+    # every gate above it. A run on a different client is not evidence that this
+    # PR made memory worse; it is a measurement of something else. The reader's
+    # next step is to diff two runs' `results/recall_gate.json` against each
+    # other, NOT to re-snap the committed floor, which is why this carries its
+    # own reason kind rather than reusing `arm-mismatch`.
+    run_mcp_ref = resolve_mcp_ref()
+    baseline_mcp_ref = baseline.mcp_ref or MCP_REF_UNSTATED_AS
+    if run_mcp_ref != baseline_mcp_ref:
+        print(
+            f"\n⚠ EVAL INCONCLUSIVE — {baseline_file.name} was captured with the "
+            f"mesh-mcp client at '{baseline_mcp_ref}', and this run built "
+            f"'{run_mcp_ref}'. The client decides part of what recall does, so "
+            "these are two measurements of different systems and the comparison "
+            "would be arithmetically valid and factually meaningless. Nothing "
+            "was enforced. To judge a client change, dispatch this workflow "
+            "twice — once with mcp_ref empty, once with your branch — and diff "
+            "the two results/recall_gate.json artifacts."
+        )
+        print(
+            f"{REASON_PREFIX} {REASON_MCP_REF_MISMATCH} — baseline "
+            f"'{baseline_mcp_ref}' != run '{run_mcp_ref}'"
         )
         return EXIT_INCONCLUSIVE
 
