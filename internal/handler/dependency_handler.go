@@ -30,6 +30,15 @@ type createDependencyRequest struct {
 	DependencyType  domain.DependencyType `json:"dependency_type"`
 }
 
+// dependencyListResponse is returned by List. It replaces the old bare-array
+// shape: a task's dependency graph has two sides, and returning only the
+// outgoing one meant a parent task had no way to see its own subtasks or
+// blockers here — it had to be the other end of the edge to see it at all.
+type dependencyListResponse struct {
+	Outgoing []domain.EnrichedTaskDependency `json:"outgoing"`
+	Incoming []domain.EnrichedTaskDependency `json:"incoming"`
+}
+
 // List handles GET /tasks/:task_id/dependencies
 func (h *DependencyHandler) List(c echo.Context) error {
 	taskIDStr := c.Param("task_id")
@@ -38,12 +47,12 @@ func (h *DependencyHandler) List(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid task_id"))
 	}
 
-	deps, err := h.depService.ListByTask(c.Request().Context(), taskID)
+	outgoing, incoming, err := h.depService.ListByTaskBothDirections(c.Request().Context(), taskID)
 	if err != nil {
 		return handleError(c, err)
 	}
 
-	return c.JSON(http.StatusOK, deps)
+	return c.JSON(http.StatusOK, dependencyListResponse{Outgoing: outgoing, Incoming: incoming})
 }
 
 // Create handles POST /tasks/:task_id/dependencies

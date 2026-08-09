@@ -194,6 +194,69 @@ func (s *taskDependencyService) ListByTask(ctx context.Context, taskID uuid.UUID
 	return s.depRepo.ListByTask(ctx, taskID)
 }
 
+// ListByTaskBothDirections implements TaskDependencyService.
+func (s *taskDependencyService) ListByTaskBothDirections(ctx context.Context, taskID uuid.UUID) (outgoing, incoming []domain.EnrichedTaskDependency, err error) {
+	outDeps, err := s.depRepo.ListByTask(ctx, taskID)
+	if err != nil {
+		return nil, nil, err
+	}
+	inDeps, err := s.depRepo.ListDependents(ctx, taskID)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// One cache shared across both directions: a small dependency set commonly
+	// repeats the same related task (e.g. several is_child_of edges all pointing
+	// at the same parent), and this keeps it to one GetByID per distinct task.
+	cache := make(map[uuid.UUID]*domain.Task)
+	get := func(id uuid.UUID) (*domain.Task, error) {
+		if t, ok := cache[id]; ok {
+			return t, nil
+		}
+		t, err := s.taskRepo.GetByID(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		cache[id] = t
+		return t, nil
+	}
+
+	outgoing, err = enrichDependencies(outDeps, func(d domain.TaskDependency) uuid.UUID { return d.DependsOnTaskID }, get)
+	if err != nil {
+		return nil, nil, err
+	}
+	incoming, err = enrichDependencies(inDeps, func(d domain.TaskDependency) uuid.UUID { return d.TaskID }, get)
+	if err != nil {
+		return nil, nil, err
+	}
+	return outgoing, incoming, nil
+}
+
+// enrichDependencies attaches the related task's title/status to each dependency,
+// where relatedID picks the OTHER task in the edge (the one that is not the task
+// the list was fetched for).
+func enrichDependencies(
+	deps []domain.TaskDependency,
+	relatedID func(domain.TaskDependency) uuid.UUID,
+	get func(uuid.UUID) (*domain.Task, error),
+) ([]domain.EnrichedTaskDependency, error) {
+	out := make([]domain.EnrichedTaskDependency, len(deps))
+	for i, d := range deps {
+		out[i] = domain.EnrichedTaskDependency{TaskDependency: d}
+		t, err := get(relatedID(d))
+		if err != nil {
+			return nil, err
+		}
+		if t != nil {
+			title := t.Title
+			status := t.StatusID
+			out[i].RelatedTaskTitle = &title
+			out[i].RelatedTaskStatusID = &status
+		}
+	}
+	return out, nil
+}
+
 // CheckCycle implements DFS cycle detection.
 // It checks whether adding an edge taskID -> dependsOnTaskID would create a cycle.
 // A cycle exists if, starting from dependsOnTaskID and following existing "depends on"

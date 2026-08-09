@@ -158,6 +158,10 @@ export function TaskPanel({
   const [hideEmpty, setHideEmpty] = useState(true);
   const [recurringHistoryOpen, setRecurringHistoryOpen] = useState(false);
   const [costSummary, setCostSummary] = useState<TaskCostSummary | null>(null);
+  // Bumped whenever DependencyList reports a change, so both SubtaskList
+  // mounts (mobile + desktop tabs) refetch — an is_child_of edge added or
+  // removed there changes the Subtasks tab without the user reopening the card.
+  const [depRefreshKey, setDepRefreshKey] = useState(0);
 
   // Inline title editing
   const [editingTitle, setEditingTitle] = useState(false);
@@ -1029,7 +1033,11 @@ export function TaskPanel({
               <Separator />
             </div>
             <div className="col-span-2">
-              <DependencyList taskId={currentTask.id} />
+              <DependencyList
+                taskId={currentTask.id}
+                onOpenTask={pushTask}
+                onChanged={() => setDepRefreshKey((k) => k + 1)}
+              />
             </div>
           </>
         )}
@@ -1394,6 +1402,7 @@ export function TaskPanel({
                     <SubtaskList
                       taskId={currentTask.id}
                       onOpenSubtask={pushTask}
+                      refreshKey={depRefreshKey}
                     />
                   </div>
                 )}
@@ -1515,6 +1524,7 @@ export function TaskPanel({
                   <SubtaskList
                     taskId={currentTask.id}
                     onOpenSubtask={pushTask}
+                    refreshKey={depRefreshKey}
                   />
                 </div>
               )}
