@@ -67,6 +67,35 @@ on:
           builds and measures its own server and has no deployed version to race.
         required: false
         default: ''
+      mcp_ref:
+        description: >-
+          Ref of `entire-vc/evc-mesh-mcp` to build the bench CLIENT from. Empty
+          (the default) means that repo's default branch — which is what every
+          non-dispatch trigger gets and what every committed baseline was
+          captured against, so leaving it empty reproduces today's behaviour
+          exactly.
+
+          Supply a branch to measure a pull request in the CLIENT. That is not a
+          nicety: the client is not a thin wrapper. `handleRecall` resolves a
+          query profile and OVERRIDES the caller's parameters — it can force
+          `apply_recency_decay` on over an explicit false, replace `order_by`,
+          raise `min_importance`, widen `limit` — so a large share of the
+          behaviour this bench scores is decided by this binary. Until this
+          input existed all three arms checked out the client with no `ref:`,
+          which meant every arm always built `main` and no client PR was
+          measurable by this harness at all (#faf92388). One such change moved a
+          gold answer from rank 1 to rank 32, out of the scored window, and the
+          gate could not see it.
+
+          A run on a non-default ref is reported INCONCLUSIVE against the
+          committed baseline (`GATE_REASON: mcp-ref-mismatch`) rather than
+          scored: the baseline was captured on a different client, so the
+          comparison would be arithmetically valid and factually meaningless.
+          To A/B two clients, dispatch twice and diff the two
+          `results/recall_gate.json` artifacts, which now record the ref and the
+          resolved commit.
+        required: false
+        default: ''
       repeat:
         description: >-
           Passes to average when re-snapping (default 3). One pass is a coin toss:
@@ -236,8 +265,9 @@ jobs:
       # nothing, which is how test_gate_dense_arm.py and
       # test_check_captured_baseline.py sat unwired while the README credited
       # them as the pin for their failure mode.
-      - name: Gate self-checks (blind-spot, mode, arm, control, ages)
+      - name: Gate self-checks (blind-spot, mode, arm, control, ages, client)
         run: |
+          python scripts/memory-bench/test_mcp_ref.py
           python scripts/memory-bench/test_gate_blindness.py
           python scripts/memory-bench/test_gate_modes.py
           python scripts/memory-bench/test_gate_arm.py
@@ -497,8 +527,36 @@ jobs:
         uses: actions/checkout@v7
         with:
           repository: entire-vc/evc-mesh-mcp
+          # Empty is not the same as absent to a reader, but it IS the same to
+          # actions/checkout: `ref` is falsy-checked, so '' resolves to the
+          # default branch exactly as no key at all did. That equivalence is what
+          # keeps the pull_request / merge_group / push / schedule triggers —
+          # none of which populate `inputs` — behaving as before.
+          ref: ${{ inputs.mcp_ref }}
           token: ${{ secrets.GITHUB_TOKEN }}
           path: evc-mesh-mcp
+
+      - name: Resolve which mesh-mcp this run measures
+        if: steps.scope.outputs.relevant == 'true'
+        env:
+          MCP_REF_INPUT: ${{ inputs.mcp_ref }}
+        run: |
+          # Read the ref back off the CHECKOUT rather than echoing the input:
+          # the input is empty on every non-dispatch trigger, and "" tells a
+          # later reader nothing about which client produced the numbers. This
+          # also makes an explicit `mcp_ref=main` and an empty input resolve to
+          # the same string, so dispatching the default branch by name is not a
+          # spurious mismatch.
+          branch="$(git -C evc-mesh-mcp rev-parse --abbrev-ref HEAD)"
+          if [ "$branch" = "HEAD" ]; then
+            # Detached: dispatched with a SHA or a tag, so the input IS the name.
+            branch="${MCP_REF_INPUT:-unknown}"
+          fi
+          {
+            echo "MCP_REF=$branch"
+            echo "MCP_COMMIT=$(git -C evc-mesh-mcp rev-parse HEAD)"
+          } >> "$GITHUB_ENV"
+          echo "mesh-mcp client: ref=$branch commit=$(git -C evc-mesh-mcp rev-parse --short HEAD)"
 
       - name: Cross-compile mesh-mcp (linux/amd64)
         if: steps.scope.outputs.relevant == 'true'
@@ -786,7 +844,7 @@ jobs:
       # The gap this leaves is one push wide: a PR merges with rc=2 visible in
       # its summary, and the next run on main opens the episode.
       #
-      # NO DRILL GUARD, deliberately — the prod pair excludes
+      # NO VERSION-DRILL GUARD, deliberately — the prod pair excludes
       # `inputs.expect_commit` dispatches because that input pins a SERVING
       # version and a version drill is neither an incident nor a recovery. This
       # arm builds its own server from the checkout and never reads that input,
@@ -794,6 +852,25 @@ jobs:
       # observe: it would silence real blindness on any dispatch that happened to
       # set an unrelated input. Pinned, with that reason, by
       # `test_the_branch_pair_carries_no_drill_guard`.
+      #
+      # THERE IS A CLIENT-DRILL GUARD, and it is the same idea applied to the one
+      # input this arm DOES read. `mcp_ref` was added by #faf92388 so a run can
+      # measure a mesh-mcp client branch; such a run is INCONCLUSIVE by design
+      # (`mcp-ref-mismatch`) because the committed floor was captured on a
+      # different client. Without the clause below, the feature's intended use
+      # pages an episode saying the merge gate is blind — and it is not: the PR
+      # and merge_group arms build the default client, untouched by a dispatch.
+      # Measured on the very first such run (31321344020): TWO false episodes,
+      # #543 here and #541 on the canary, both `kind=mcp-ref-mismatch`, one of
+      # them asserting "a recall regression can merge into main unnoticed" about
+      # a run that gated nothing.
+      #
+      # Spelled over the RESOLVED ref rather than over `inputs.mcp_ref != ''` so
+      # an explicit `mcp_ref=main` — identical in every respect to leaving it
+      # empty — keeps both halves live, and so real blindness on such a dispatch
+      # still pages. The empty disjunct is the fail-OPEN direction: an arm that
+      # never resolved a client (its resolve step skipped) must still be able to
+      # alert, which is why this is not simply `env.MCP_REF == 'main'`.
       # ---------------------------------------------------------------------
       - name: Alert — the required recall gate is blind (INCONCLUSIVE)
         if: >-
@@ -801,6 +878,8 @@ jobs:
           && steps.scope.outputs.relevant == 'true'
           && steps.gate.outputs.rc == '2'
           && github.event_name != 'pull_request'
+          && (github.event_name != 'workflow_dispatch'
+              || env.MCP_REF == '' || env.MCP_REF == 'main')
         uses: ./.github/actions/blindness-issue
         with:
           mode: alert
@@ -827,6 +906,8 @@ jobs:
           && steps.scope.outputs.relevant == 'true'
           && steps.gate.outputs.rc == '0'
           && github.event_name != 'pull_request'
+          && (github.event_name != 'workflow_dispatch'
+              || env.MCP_REF == '' || env.MCP_REF == 'main')
         uses: ./.github/actions/blindness-issue
         with:
           mode: resolve
@@ -1236,9 +1317,26 @@ jobs:
         if: steps.scope.outputs.relevant == 'true' && steps.version.outputs.rc == '0'
         uses: actions/checkout@v7
         with:
+          # See the branch arm's copy of this key for why '' == default branch.
+          ref: ${{ inputs.mcp_ref }}
           repository: entire-vc/evc-mesh-mcp
           token: ${{ secrets.GITHUB_TOKEN }}
           path: evc-mesh-mcp
+
+      - name: Resolve which mesh-mcp this run measures
+        if: steps.scope.outputs.relevant == 'true' && steps.version.outputs.rc == '0'
+        env:
+          MCP_REF_INPUT: ${{ inputs.mcp_ref }}
+        run: |
+          branch="$(git -C evc-mesh-mcp rev-parse --abbrev-ref HEAD)"
+          if [ "$branch" = "HEAD" ]; then
+            branch="${MCP_REF_INPUT:-unknown}"
+          fi
+          {
+            echo "MCP_REF=$branch"
+            echo "MCP_COMMIT=$(git -C evc-mesh-mcp rev-parse HEAD)"
+          } >> "$GITHUB_ENV"
+          echo "mesh-mcp client: ref=$branch commit=$(git -C evc-mesh-mcp rev-parse --short HEAD)"
 
       - name: Set up Go
         if: steps.scope.outputs.relevant == 'true' && steps.version.outputs.rc == '0'
@@ -1621,12 +1719,21 @@ jobs:
       # blind one. Renamed while no issue with the old title was open (verified
       # against the tracker: #458, the last one, closed 2026-07-30 05:44Z), so
       # nothing is orphaned by the change.
+      # SECOND DRILL GUARD, same shape, different input — see the branch arm's
+      # copy for the measured false page (#541 was this step's). `mcp_ref` names
+      # a CLIENT to build; a dispatch that sets it is measuring a different
+      # system on purpose, which is neither an incident nor a recovery. The
+      # `env.MCP_REF == ''` disjunct matters more here than on the branch arm:
+      # this job's resolve-the-client step is skipped when the version pin fails,
+      # and the version-blindness path must keep paging.
       - name: Alert — the prod recall canary is blind (INCONCLUSIVE)
         if: >-
           !cancelled()
           && steps.scope.outputs.relevant == 'true'
           && (steps.gate.outputs.rc == '2' || steps.version.outputs.rc == '2')
           && (github.event_name != 'workflow_dispatch' || inputs.expect_commit == '')
+          && (github.event_name != 'workflow_dispatch'
+              || env.MCP_REF == '' || env.MCP_REF == 'main')
         uses: ./.github/actions/blindness-issue
         with:
           mode: alert
@@ -1682,6 +1789,8 @@ jobs:
           && steps.scope.outputs.relevant == 'true'
           && steps.gate.outputs.rc == '0'
           && (github.event_name != 'workflow_dispatch' || inputs.expect_commit == '')
+          && (github.event_name != 'workflow_dispatch'
+              || env.MCP_REF == '' || env.MCP_REF == 'main')
         uses: ./.github/actions/blindness-issue
         with:
           mode: resolve
@@ -1938,9 +2047,25 @@ jobs:
       - name: Checkout evc-mesh-mcp
         uses: actions/checkout@v7
         with:
+          # See the branch arm's copy of this key for why '' == default branch.
+          ref: ${{ inputs.mcp_ref }}
           repository: entire-vc/evc-mesh-mcp
           token: ${{ secrets.GITHUB_TOKEN }}
           path: evc-mesh-mcp
+
+      - name: Resolve which mesh-mcp this run measures
+        env:
+          MCP_REF_INPUT: ${{ inputs.mcp_ref }}
+        run: |
+          branch="$(git -C evc-mesh-mcp rev-parse --abbrev-ref HEAD)"
+          if [ "$branch" = "HEAD" ]; then
+            branch="${MCP_REF_INPUT:-unknown}"
+          fi
+          {
+            echo "MCP_REF=$branch"
+            echo "MCP_COMMIT=$(git -C evc-mesh-mcp rev-parse HEAD)"
+          } >> "$GITHUB_ENV"
+          echo "mesh-mcp client: ref=$branch commit=$(git -C evc-mesh-mcp rev-parse --short HEAD)"
 
       - name: Set up Go
         uses: actions/setup-go@v7
@@ -2216,10 +2341,18 @@ jobs:
       # it right now (raised 2026-07-30 07:05Z), and a retitle here would strand
       # it — the resolve looks up by exact title, so a renamed arm can never close
       # the episode it opened under the old name.
+      # THIRD DRILL GUARD — see the branch arm's copy. This arm reaches the same
+      # client gate in `run_ci.py` (the comparison is per baseline FILE, not per
+      # arm), so `full_eval=true` together with `mcp_ref=<branch>` would page an
+      # episode about a run that deliberately measured another client. Not
+      # observed live only because that combination has not been dispatched yet;
+      # the other two arms both produced their false episode on the first try.
       - name: Alert — advisory arm measured nothing (INCONCLUSIVE)
         if: >-
           !cancelled()
           && steps.bench.outputs.rc == '2'
+          && (github.event_name != 'workflow_dispatch'
+              || env.MCP_REF == '' || env.MCP_REF == 'main')
         uses: ./.github/actions/blindness-issue
         with:
           mode: alert
@@ -2244,6 +2377,8 @@ jobs:
         if: >-
           !cancelled()
           && steps.bench.outputs.rc == '0'
+          && (github.event_name != 'workflow_dispatch'
+              || env.MCP_REF == '' || env.MCP_REF == 'main')
         uses: ./.github/actions/blindness-issue
         with:
           mode: resolve

@@ -2191,6 +2191,11 @@ _BLIND = {
     "needs.recall-gate.result": "failure",
     "github.event_name": "push",
     "inputs.expect_commit": "",
+    # Which mesh-mcp CLIENT the run built (#faf92388). `main` is what every
+    # non-dispatch trigger resolves to, so this keeps the fixture describing an
+    # ordinary run; the client-drill guard's own discriminating cases live in
+    # `test_mcp_ref.py`, which varies this path deliberately.
+    "env.MCP_REF": "main",
 }
 _MEASURING = {
     **_BLIND,
