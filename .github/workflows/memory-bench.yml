@@ -844,7 +844,7 @@ jobs:
       # The gap this leaves is one push wide: a PR merges with rc=2 visible in
       # its summary, and the next run on main opens the episode.
       #
-      # NO DRILL GUARD, deliberately — the prod pair excludes
+      # NO VERSION-DRILL GUARD, deliberately — the prod pair excludes
       # `inputs.expect_commit` dispatches because that input pins a SERVING
       # version and a version drill is neither an incident nor a recovery. This
       # arm builds its own server from the checkout and never reads that input,
@@ -852,6 +852,25 @@ jobs:
       # observe: it would silence real blindness on any dispatch that happened to
       # set an unrelated input. Pinned, with that reason, by
       # `test_the_branch_pair_carries_no_drill_guard`.
+      #
+      # THERE IS A CLIENT-DRILL GUARD, and it is the same idea applied to the one
+      # input this arm DOES read. `mcp_ref` was added by #faf92388 so a run can
+      # measure a mesh-mcp client branch; such a run is INCONCLUSIVE by design
+      # (`mcp-ref-mismatch`) because the committed floor was captured on a
+      # different client. Without the clause below, the feature's intended use
+      # pages an episode saying the merge gate is blind — and it is not: the PR
+      # and merge_group arms build the default client, untouched by a dispatch.
+      # Measured on the very first such run (31321344020): TWO false episodes,
+      # #543 here and #541 on the canary, both `kind=mcp-ref-mismatch`, one of
+      # them asserting "a recall regression can merge into main unnoticed" about
+      # a run that gated nothing.
+      #
+      # Spelled over the RESOLVED ref rather than over `inputs.mcp_ref != ''` so
+      # an explicit `mcp_ref=main` — identical in every respect to leaving it
+      # empty — keeps both halves live, and so real blindness on such a dispatch
+      # still pages. The empty disjunct is the fail-OPEN direction: an arm that
+      # never resolved a client (its resolve step skipped) must still be able to
+      # alert, which is why this is not simply `env.MCP_REF == 'main'`.
       # ---------------------------------------------------------------------
       - name: Alert — the required recall gate is blind (INCONCLUSIVE)
         if: >-
@@ -859,6 +878,8 @@ jobs:
           && steps.scope.outputs.relevant == 'true'
           && steps.gate.outputs.rc == '2'
           && github.event_name != 'pull_request'
+          && (github.event_name != 'workflow_dispatch'
+              || env.MCP_REF == '' || env.MCP_REF == 'main')
         uses: ./.github/actions/blindness-issue
         with:
           mode: alert
@@ -885,6 +906,8 @@ jobs:
           && steps.scope.outputs.relevant == 'true'
           && steps.gate.outputs.rc == '0'
           && github.event_name != 'pull_request'
+          && (github.event_name != 'workflow_dispatch'
+              || env.MCP_REF == '' || env.MCP_REF == 'main')
         uses: ./.github/actions/blindness-issue
         with:
           mode: resolve
@@ -1696,12 +1719,21 @@ jobs:
       # blind one. Renamed while no issue with the old title was open (verified
       # against the tracker: #458, the last one, closed 2026-07-30 05:44Z), so
       # nothing is orphaned by the change.
+      # SECOND DRILL GUARD, same shape, different input — see the branch arm's
+      # copy for the measured false page (#541 was this step's). `mcp_ref` names
+      # a CLIENT to build; a dispatch that sets it is measuring a different
+      # system on purpose, which is neither an incident nor a recovery. The
+      # `env.MCP_REF == ''` disjunct matters more here than on the branch arm:
+      # this job's resolve-the-client step is skipped when the version pin fails,
+      # and the version-blindness path must keep paging.
       - name: Alert — the prod recall canary is blind (INCONCLUSIVE)
         if: >-
           !cancelled()
           && steps.scope.outputs.relevant == 'true'
           && (steps.gate.outputs.rc == '2' || steps.version.outputs.rc == '2')
           && (github.event_name != 'workflow_dispatch' || inputs.expect_commit == '')
+          && (github.event_name != 'workflow_dispatch'
+              || env.MCP_REF == '' || env.MCP_REF == 'main')
         uses: ./.github/actions/blindness-issue
         with:
           mode: alert
@@ -1757,6 +1789,8 @@ jobs:
           && steps.scope.outputs.relevant == 'true'
           && steps.gate.outputs.rc == '0'
           && (github.event_name != 'workflow_dispatch' || inputs.expect_commit == '')
+          && (github.event_name != 'workflow_dispatch'
+              || env.MCP_REF == '' || env.MCP_REF == 'main')
         uses: ./.github/actions/blindness-issue
         with:
           mode: resolve
@@ -2307,10 +2341,18 @@ jobs:
       # it right now (raised 2026-07-30 07:05Z), and a retitle here would strand
       # it — the resolve looks up by exact title, so a renamed arm can never close
       # the episode it opened under the old name.
+      # THIRD DRILL GUARD — see the branch arm's copy. This arm reaches the same
+      # client gate in `run_ci.py` (the comparison is per baseline FILE, not per
+      # arm), so `full_eval=true` together with `mcp_ref=<branch>` would page an
+      # episode about a run that deliberately measured another client. Not
+      # observed live only because that combination has not been dispatched yet;
+      # the other two arms both produced their false episode on the first try.
       - name: Alert — advisory arm measured nothing (INCONCLUSIVE)
         if: >-
           !cancelled()
           && steps.bench.outputs.rc == '2'
+          && (github.event_name != 'workflow_dispatch'
+              || env.MCP_REF == '' || env.MCP_REF == 'main')
         uses: ./.github/actions/blindness-issue
         with:
           mode: alert
@@ -2335,6 +2377,8 @@ jobs:
         if: >-
           !cancelled()
           && steps.bench.outputs.rc == '0'
+          && (github.event_name != 'workflow_dispatch'
+              || env.MCP_REF == '' || env.MCP_REF == 'main')
         uses: ./.github/actions/blindness-issue
         with:
           mode: resolve

@@ -6,12 +6,14 @@ this harness at all. The failure was silent in the worst direction: runs looked
 complete, the gate ruled, and the thing it could not vary was a binary that
 overrides the caller's recall parameters from a query profile.
 
-These tests pin three separate things, because fixing only the first would leave
+These tests pin four separate things, because fixing only the first would leave
 the hole reachable:
   1. the workflow structurally cannot check that repo out unpinned again,
   2. a run states which client it measured, in both artifacts,
   3. a run on a different client is INCONCLUSIVE, never REGRESSION, and cannot
-     be written as a baseline.
+     be written as a baseline,
+  4. and that INCONCLUSIVE does not page an incident — the feature's intended
+     use is not an outage.
 """
 
 import json
@@ -22,6 +24,7 @@ import unittest
 from pathlib import Path
 
 import run_ci
+import test_gate_blindness as blind
 from run_ci import (
     MCP_REF_UNSTATED_AS,
     Baseline,
@@ -274,6 +277,149 @@ class TestABranchClientCannotBecomeTheFloor(unittest.TestCase):
         for none at all."""
         os.environ["MCP_REF"] = "some-branch"
         self.assertEqual([], capture_blockers({}, "hybrid", False))
+
+
+class TestADeliberateClientABDoesNotPageAnIncident(unittest.TestCase):
+    """The first real use of `mcp_ref` opened two blindness episodes.
+
+    Run 31321344020 dispatched the branch with `mcp_ref=garfield/…`, both arms
+    correctly returned INCONCLUSIVE naming `mcp-ref-mismatch` — and both then
+    raised an episode, #543 claiming the MERGE GATE was blind and #541 claiming
+    nothing was watching prod. Neither was true: a dispatch gates no merge, and
+    the PR / merge_group / push arms all build the default client regardless of
+    what a dispatch chose. A feature whose intended use pages an incident trains
+    people to close the page unread, which is how the real blindness — the kind
+    these episodes exist for — stops being read too.
+
+    The guard is therefore over the RESOLVED ref, not over `inputs.mcp_ref != ''`:
+    `mcp_ref=main` is indistinguishable from empty and must keep both halves live.
+    """
+
+    # Arms whose verdict is a run_ci exit code — i.e. whose blindness is a
+    # statement about a COMPARISON, which is what the client axis can invalidate.
+    # The cancellation watchdog is deliberately not one of them: its subject is
+    # "a prod arm was cancelled", which is true or false independently of which
+    # client got built. Selected structurally so a fifth comparing arm is caught.
+    @staticmethod
+    def _comparison_arms():
+        return {
+            job_id: halves
+            for job_id, halves in blind._blindness_calls().items()
+            if re.search(r"steps\.\w+\.outputs\.rc == '2'", halves["alert"]["if"])
+        }
+
+    def test_the_selector_finds_the_three_known_arms(self):
+        # Positive control: a selector narrowed to zero passes every assertion
+        # below without checking anything.
+        self.assertEqual(
+            {"recall-gate-branch", "recall-gate", "memory-bench"},
+            set(self._comparison_arms()),
+        )
+
+    def test_every_comparing_arm_guards_both_halves(self):
+        for job_id, halves in sorted(self._comparison_arms().items()):
+            for mode in ("alert", "resolve"):
+                with self.subTest(job=job_id, mode=mode):
+                    self.assertIn(
+                        "env.MCP_REF", halves[mode]["if"],
+                        f"{job_id!r}'s {mode} has no client-drill guard. On the "
+                        f"alert that charges a false page for every deliberate "
+                        f"client A/B; on the resolve it lets one close a real "
+                        f"episode it was never allowed to open.\n"
+                        f"  if: {halves[mode]['if']}",
+                    )
+
+    def test_the_guard_names_the_same_default_branch_the_gate_does(self):
+        """Two copies of one branch name, in two languages, must not drift.
+
+        `run_ci.MCP_REF_UNSTATED_AS` decides which runs are comparable; the YAML
+        literal decides which are pageable. If evc-mesh-mcp's default branch is
+        renamed and only one is updated, the two disagree silently — the gate
+        calls every run a mismatch while the alert either pages on all of them
+        or on none.
+        """
+        for job_id, halves in sorted(self._comparison_arms().items()):
+            for mode in ("alert", "resolve"):
+                literals = re.findall(
+                    r"env\.MCP_REF == '([^']*)'", halves[mode]["if"]
+                )
+                with self.subTest(job=job_id, mode=mode):
+                    self.assertEqual(
+                        ["", MCP_REF_UNSTATED_AS], sorted(set(literals)),
+                        f"{job_id!r}'s {mode} compares MCP_REF against "
+                        f"{literals!r}; expected '' (fail-open when the client "
+                        f"was never resolved) and {MCP_REF_UNSTATED_AS!r} "
+                        f"(run_ci.MCP_REF_UNSTATED_AS).",
+                    )
+
+    def _ctx(self, mode, **over):
+        base = dict(blind._BLIND if mode == "alert" else blind._MEASURING)
+        base["github.event_name"] = "workflow_dispatch"
+        base["inputs.expect_commit"] = ""
+        base.update(over)
+        return base
+
+    def test_a_client_ab_dispatch_neither_pages_nor_clears(self):
+        for job_id, halves in sorted(self._comparison_arms().items()):
+            for mode in ("alert", "resolve"):
+                with self.subTest(job=job_id, mode=mode):
+                    self.assertFalse(
+                        blind.evaluate_if(
+                            halves[mode]["if"],
+                            context=self._ctx(mode, **{"env.MCP_REF": "some/branch"}),
+                            success=True, cancelled=False,
+                        ),
+                        f"{job_id!r}'s {mode} still fires on a dispatch that "
+                        f"deliberately built another client — the shape that "
+                        f"opened #541 and #543.",
+                    )
+
+    def test_the_same_dispatch_on_the_default_client_still_fires(self):
+        """The discriminating control, in both directions.
+
+        Without it the assertion above is satisfied by a guard that switches the
+        arms off on every dispatch — which would lose real blindness found by an
+        operator run, the one trigger a human reaches for when something looks
+        wrong. `''` covers the arm whose resolve step was skipped.
+        """
+        for job_id, halves in sorted(self._comparison_arms().items()):
+            for mode in ("alert", "resolve"):
+                for ref in (MCP_REF_UNSTATED_AS, ""):
+                    with self.subTest(job=job_id, mode=mode, ref=ref or "(unset)"):
+                        self.assertTrue(
+                            blind.evaluate_if(
+                                halves[mode]["if"],
+                                context=self._ctx(mode, **{"env.MCP_REF": ref}),
+                                success=True, cancelled=False,
+                            ),
+                            f"{job_id!r}'s {mode} no longer fires on a dispatch "
+                            f"measuring the default client (MCP_REF={ref!r}), so "
+                            f"the guard silences real blindness too.",
+                        )
+
+    def test_a_non_dispatch_run_is_untouched_by_the_guard(self):
+        """push / schedule resolve the client off the checkout, so they read
+        `main` — but if the default branch is ever renamed they would read the
+        new name, and suppressing THEM would be the silent direction. The event
+        disjunct is what keeps those runs pageable; this pins it."""
+        for job_id, halves in sorted(self._comparison_arms().items()):
+            for mode in ("alert", "resolve"):
+                with self.subTest(job=job_id, mode=mode):
+                    self.assertTrue(
+                        blind.evaluate_if(
+                            halves[mode]["if"],
+                            context=self._ctx(
+                                mode,
+                                **{
+                                    "github.event_name": "push",
+                                    "env.MCP_REF": "renamed-default",
+                                },
+                            ),
+                            success=True, cancelled=False,
+                        ),
+                        f"{job_id!r}'s {mode} was silenced on a push by the "
+                        f"client guard; only a dispatch chooses a client.",
+                    )
 
 
 if __name__ == "__main__":
