@@ -2175,6 +2175,103 @@ func TestTaskService_Update_ReviewerNoNotifyIfUnchanged(t *testing.T) {
 	assert.Empty(t, agentNotify.Calls())
 }
 
+// ---------------------------------------------------------------------------
+// Create — the reviewer-on-create path (task #6bf97281). Reviewer used to be
+// settable only via a follow-up PATCH; these mirror the Update reviewer tests
+// above one-for-one so Create can't silently diverge from Update's contract.
+// ---------------------------------------------------------------------------
+
+func TestTaskService_Create_ReviewerAssigned_AgentReviewerNotified(t *testing.T) {
+	env := setupTaskServiceForReviewer()
+	svc, agentNotify, userNotify, projRepo := env.svc, env.agentNotify, env.userNotify, env.projects
+	ctx := context.Background()
+
+	projID := uuid.New()
+	projRepo.items[projID] = &domain.Project{ID: projID, WorkspaceID: uuid.New()}
+
+	reviewerID := uuid.New()
+	reviewerType := domain.AssigneeTypeAgent
+	task := &domain.Task{
+		ProjectID: projID, Title: "T",
+		ReviewerID: &reviewerID, ReviewerType: &reviewerType,
+	}
+	require.NoError(t, svc.Create(ctx, task))
+
+	var found bool
+	for _, call := range agentNotify.Calls() {
+		if call.EventType == "task.reviewer_assigned" && call.AgentID == reviewerID {
+			found = true
+		}
+	}
+	assert.True(t, found, "expected task.reviewer_assigned push to agent reviewer on create")
+	// Create() also fires an unconditional workspace-wide "task.assigned"
+	// broadcast unrelated to the reviewer (pre-existing behavior, out of this
+	// task's scope) — only assert that no reviewer_assigned leaked onto the
+	// broadcast path meant for the assignee.
+	for _, call := range userNotify.Calls() {
+		assert.NotEqual(t, "task.reviewer_assigned", call.EventType,
+			"an agent reviewer must go through the agent push path, not the in-app broadcast")
+	}
+}
+
+func TestTaskService_Create_ReviewerAssigned_UserReviewerNotifiedTargeted(t *testing.T) {
+	env := setupTaskServiceForReviewer()
+	svc, agentNotify, userNotify, projRepo := env.svc, env.agentNotify, env.userNotify, env.projects
+	ctx := context.Background()
+
+	projID := uuid.New()
+	projRepo.items[projID] = &domain.Project{ID: projID, WorkspaceID: uuid.New()}
+
+	reviewerID := uuid.New()
+	reviewerType := domain.AssigneeTypeUser
+	task := &domain.Task{
+		ProjectID: projID, Title: "T",
+		ReviewerID: &reviewerID, ReviewerType: &reviewerType,
+	}
+	require.NoError(t, svc.Create(ctx, task))
+
+	// Create() also fires an unconditional workspace-wide "task.assigned"
+	// broadcast unrelated to the reviewer (pre-existing behavior, out of this
+	// task's scope) — find the reviewer-specific call among them rather than
+	// assuming it is the only one.
+	var call *domain.NotificationEvent
+	for i, c := range userNotify.Calls() {
+		if c.EventType == "task.reviewer_assigned" {
+			call = &userNotify.Calls()[i]
+		}
+	}
+	require.NotNil(t, call, "expected a task.reviewer_assigned in-app notification")
+	require.NotNil(t, call.TargetUserID, "reviewer notification on create must be targeted, not broadcast")
+	assert.Equal(t, reviewerID, *call.TargetUserID)
+	assert.Empty(t, agentNotify.Calls())
+}
+
+// TestTaskService_Create_NoReviewer_SendsNoReviewerNotification is the AC6
+// regression test: creating a task without a reviewer must not fire
+// task.reviewer_assigned to anyone. This is exactly the class of bug the task
+// description warns against repeating — task.assigned used to fire
+// unconditionally on Create even when no assignee was set.
+func TestTaskService_Create_NoReviewer_SendsNoReviewerNotification(t *testing.T) {
+	env := setupTaskServiceForReviewer()
+	svc, agentNotify, userNotify, projRepo := env.svc, env.agentNotify, env.userNotify, env.projects
+	ctx := context.Background()
+
+	projID := uuid.New()
+	projRepo.items[projID] = &domain.Project{ID: projID, WorkspaceID: uuid.New()}
+
+	task := &domain.Task{ProjectID: projID, Title: "T, no reviewer"}
+	require.NoError(t, svc.Create(ctx, task))
+
+	for _, call := range agentNotify.Calls() {
+		assert.NotEqual(t, "task.reviewer_assigned", call.EventType,
+			"no reviewer set — must not fire task.reviewer_assigned via agent push")
+	}
+	for _, call := range userNotify.Calls() {
+		assert.NotEqual(t, "task.reviewer_assigned", call.EventType,
+			"no reviewer set — must not fire task.reviewer_assigned via in-app notification")
+	}
+}
+
 func TestTaskService_MoveTask_ReadyForReview_NotifiesReviewer(t *testing.T) {
 	env := setupTaskServiceForReviewer()
 	svc, taskRepo, statusRepo, agentNotify, userNotify, projRepo := env.svc, env.tasks, env.statuses, env.agentNotify, env.userNotify, env.projects

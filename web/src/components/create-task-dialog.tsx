@@ -68,6 +68,8 @@ export function CreateTaskDialog({
   const [dueDate, setDueDate] = useState(defaultDueDate ?? "");
   // "unassigned" | "user:{id}" | "agent:{id}"
   const [assigneeValue, setAssigneeValue] = useState("unassigned");
+  // "unassigned" | "user:{id}" | "agent:{id}"
+  const [reviewerValue, setReviewerValue] = useState("unassigned");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -85,6 +87,7 @@ export function CreateTaskDialog({
     setStatusId(defaultStatusId ?? "");
     setDueDate(defaultDueDate ?? "");
     setAssigneeValue("unassigned");
+    setReviewerValue("unassigned");
     setError(null);
     pendingImagesRef.current = [];
   };
@@ -162,6 +165,14 @@ export function CreateTaskDialog({
         assigneeType = type as AssigneeType;
       }
 
+      let reviewerId: string | undefined;
+      let reviewerType: AssigneeType | undefined;
+      if (reviewerValue !== "unassigned") {
+        const [type, id] = reviewerValue.split(":");
+        reviewerId = id;
+        reviewerType = type as AssigneeType;
+      }
+
       const req: CreateTaskRequest = {
         title: title.trim(),
         description: description.trim() || undefined,
@@ -170,6 +181,8 @@ export function CreateTaskDialog({
         labels: labels.length > 0 ? labels : undefined,
         assignee_id: assigneeId,
         assignee_type: assigneeType,
+        reviewer_id: reviewerId,
+        reviewer_type: reviewerType,
         due_date: dueDate ? `${dueDate}T00:00:00Z` : undefined,
         status_id: statusId || undefined,
       };
@@ -379,6 +392,53 @@ export function CreateTaskDialog({
                   const desc = [m.agent_role, m.agent_description].filter(Boolean).join(" · ");
                   return (
                     <option key={m.id} value={`agent:${m.agent_id}`}>
+                      {m.agent_name} (agent){desc ? ` — ${desc}` : ""}
+                    </option>
+                  );
+                }
+                return null;
+              })}
+            </Select>
+
+            {/* Reviewer */}
+            <label className="flex items-center gap-1 text-xs text-muted-foreground">
+              {reviewerValue.startsWith("agent:") ? (
+                <Bot className="h-3 w-3" />
+              ) : (
+                <User className="h-3 w-3" />
+              )}
+              Reviewer
+            </label>
+            <Select
+              value={reviewerValue}
+              onChange={(e) => setReviewerValue(e.target.value)}
+              className="h-7 text-xs"
+            >
+              <option value="unassigned">No reviewer</option>
+              {user && !projectMembers.some((m) => m.user_id === user.id) && (
+                <option value={`user:${user.id}`}>{user.name} (you)</option>
+              )}
+              {(() => {
+                const ownerId = currentWorkspace?.owner_id;
+                if (!ownerId || user?.id === ownerId) return null;
+                if (projectMembers.some((m) => m.user_id === ownerId)) return null;
+                const ownerName = teamDirectory?.humans.find((h) => h.id === ownerId)?.name;
+                if (!ownerName) return null;
+                return <option key={`reviewer-owner-${ownerId}`} value={`user:${ownerId}`}>{ownerName}</option>;
+              })()}
+              {projectMembers.map((m) => {
+                if (m.user) {
+                  const isSelf = user && m.user.id === user.id;
+                  return (
+                    <option key={`reviewer-${m.id}`} value={`user:${m.user.id}`}>
+                      {inlineLabel(m.user)}{isSelf ? " (you)" : ""} — {m.role}
+                    </option>
+                  );
+                }
+                if (m.agent_id) {
+                  const desc = [m.agent_role, m.agent_description].filter(Boolean).join(" · ");
+                  return (
+                    <option key={`reviewer-${m.id}`} value={`agent:${m.agent_id}`}>
                       {m.agent_name} (agent){desc ? ` — ${desc}` : ""}
                     </option>
                   );

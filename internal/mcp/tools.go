@@ -264,6 +264,12 @@ func (s *Server) handleCreateTask(ctx context.Context, request mcpsdk.CallToolRe
 	if assigneeID := mcpsdk.ParseString(request, "assignee_id", ""); assigneeID != "" {
 		body["assignee_id"] = assigneeID
 	}
+	if reviewerID := mcpsdk.ParseString(request, "reviewer_id", ""); reviewerID != "" {
+		body["reviewer_id"] = reviewerID
+		if reviewerType := mcpsdk.ParseString(request, "reviewer_type", ""); reviewerType != "" {
+			body["reviewer_type"] = reviewerType
+		}
+	}
 	if parentTaskID := mcpsdk.ParseString(request, "parent_task_id", ""); parentTaskID != "" {
 		body["parent_task_id"] = parentTaskID
 	}
