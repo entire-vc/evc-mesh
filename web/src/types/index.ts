@@ -460,6 +460,8 @@ export interface CreateTaskRequest {
   delegation_level?: DelegationLevel;
   assignee_id?: string;
   assignee_type?: AssigneeType;
+  reviewer_id?: string;
+  reviewer_type?: AssigneeType;
   labels?: string[];
   custom_fields?: Record<string, unknown>;
   due_date?: string | null;

@@ -605,3 +605,74 @@ func TestReviewerEnrolment_ClearAndUnchangedDoNotEnrol(t *testing.T) {
 	require.NoError(t, svc.Update(ctx, &cleared))
 	assert.Empty(t, pmRepo.members, "clearing the reviewer must not enrol anyone")
 }
+
+// ---------------------------------------------------------------------------
+// 8. Reviewer set at task creation (task #6bf97281) — the ninth write path.
+//    Same contract as Update's reviewer handling: enrol on set, no-op when
+//    absent.
+// ---------------------------------------------------------------------------
+
+func TestReviewerEnrolment_UserReviewerEnrolledOnCreate(t *testing.T) {
+	ctx := context.Background()
+	projectID, reviewerID, wsID := uuid.New(), uuid.New(), uuid.New()
+	env := setupMembershipEnv(nil, nil)
+	svc, projRepo, pmRepo := env.svc, env.projects, env.members
+
+	userRepo := NewMockUserRepository()
+	userRepo.AddUser(wsID, &domain.User{ID: reviewerID, Username: "pavel"})
+	svc.userRepo = userRepo
+
+	projRepo.items[projectID] = &domain.Project{ID: projectID, WorkspaceID: wsID}
+
+	userType := domain.AssigneeTypeUser
+	task := &domain.Task{
+		ProjectID: projectID, Title: "t",
+		ReviewerID: &reviewerID, ReviewerType: &userType,
+	}
+	require.NoError(t, svc.Create(ctx, task))
+
+	ok, err := pmRepo.ExistsMember(ctx, projectID, &reviewerID, nil)
+	require.NoError(t, err)
+	assert.True(t, ok,
+		"a reviewer set at task creation must be enrolled — same trap as the update path: "+
+			"being made reviewer notifies you, and an un-enrolled reviewer's status transitions all 403")
+}
+
+// reviewer_type is caller-supplied on createTaskRequest too — resolve it against
+// the directory rather than trust it, exactly as the Update path does.
+func TestReviewerEnrolment_MistypedAgentReviewerIsResolvedNotTrustedOnCreate(t *testing.T) {
+	ctx := context.Background()
+	projectID, reviewerID, wsID := uuid.New(), uuid.New(), uuid.New()
+	env := setupMembershipEnv(nil, nil)
+	svc, projRepo, agentRepo, pmRepo := env.svc, env.projects, env.agents, env.members
+
+	projRepo.items[projectID] = &domain.Project{ID: projectID, WorkspaceID: wsID}
+	agentRepo.items[reviewerID] = &domain.Agent{ID: reviewerID, WorkspaceID: wsID, Slug: "garfield"}
+
+	// The caller insists this agent is a user.
+	wrongType := domain.AssigneeTypeUser
+	task := &domain.Task{
+		ProjectID: projectID, Title: "t",
+		ReviewerID: &reviewerID, ReviewerType: &wrongType,
+	}
+	require.NoError(t, svc.Create(ctx, task))
+
+	assertEnrolled(t, pmRepo, projectID, reviewerID,
+		"an agent reviewer mistyped as a user at creation must be enrolled against the agent column")
+	require.NotNil(t, task.ReviewerType)
+	assert.Equal(t, domain.AssigneeTypeAgent, *task.ReviewerType,
+		"the resolved type must be persisted, not the caller's guess")
+}
+
+// Guard: creating a task with no reviewer must not enrol anyone.
+func TestReviewerEnrolment_NoReviewerAtCreateEnrolsNothing(t *testing.T) {
+	ctx := context.Background()
+	projectID := uuid.New()
+	env := setupMembershipEnv(nil, nil)
+	svc, projRepo, pmRepo := env.svc, env.projects, env.members
+
+	projRepo.items[projectID] = &domain.Project{ID: projectID}
+
+	require.NoError(t, svc.Create(ctx, &domain.Task{ProjectID: projectID, Title: "no reviewer"}))
+	assert.Empty(t, pmRepo.members, "creating a task with no reviewer must not enrol anyone")
+}

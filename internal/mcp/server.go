@@ -250,6 +250,8 @@ func (s *Server) registerCoreTools() {
 		mcpsdk.WithString("priority", mcpsdk.Description("Priority: urgent, high, medium, low, none."), mcpsdk.DefaultString("medium")),
 		mcpsdk.WithString("assignee_id", mcpsdk.Description("Assignee ID (user or agent UUID).")),
 		mcpsdk.WithString("assignee_type", mcpsdk.Description("Assignee type: user, agent."), mcpsdk.DefaultString("unassigned")),
+		mcpsdk.WithString("reviewer_id", mcpsdk.Description("Reviewer ID (user or agent UUID). Omit for no reviewer.")),
+		mcpsdk.WithString("reviewer_type", mcpsdk.Description("Reviewer type: user, agent. Only used with reviewer_id.")),
 		mcpsdk.WithArray("labels", mcpsdk.Description("Task labels."), mcpsdk.WithStringItems()),
 		mcpsdk.WithObject("custom_fields", mcpsdk.Description("Custom field values as key-value pairs.")),
 		mcpsdk.WithString("parent_task_id", mcpsdk.Description("Parent task ID for subtask.")),

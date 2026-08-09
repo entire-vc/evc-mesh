@@ -232,6 +232,16 @@ func (s *taskService) Create(ctx context.Context, task *domain.Task) error {
 	if task.AssigneeID != nil {
 		task.AssigneeType = s.resolveAssigneeType(ctx, task.AssigneeID, task.AssigneeType)
 	}
+	// Normalize: look up reviewer in agent/user directory to correct reviewer_type.
+	// Mirrors the assignee normalization above and Update's reviewer handling (:358-365).
+	if task.ReviewerID != nil {
+		fallback := domain.AssigneeTypeUser
+		if task.ReviewerType != nil {
+			fallback = *task.ReviewerType
+		}
+		resolved := s.resolveAssigneeType(ctx, task.ReviewerID, fallback)
+		task.ReviewerType = &resolved
+	}
 
 	if task.ID == uuid.Nil {
 		task.ID = uuid.New()
@@ -248,6 +258,13 @@ func (s *taskService) Create(ctx context.Context, task *domain.Task) error {
 	}
 	// Auto-enroll assignee into project members.
 	s.ensureAssigneeProjectMember(ctx, task.ProjectID, task.AssigneeID, task.AssigneeType)
+	// Auto-enroll reviewer into project members — same contract as the assignee
+	// path above (see Update's reviewer comment at :339-357 for why this matters:
+	// a reviewer left off project_members follows a notification into a task
+	// whose status transitions all 403).
+	if task.ReviewerID != nil && task.ReviewerType != nil {
+		s.ensureAssigneeProjectMember(ctx, task.ProjectID, task.ReviewerID, *task.ReviewerType)
+	}
 
 	if err := s.taskRepo.Create(ctx, task); err != nil {
 		return err
@@ -281,6 +298,12 @@ func (s *taskService) Create(ctx context.Context, task *domain.Task) error {
 
 	// Dispatch in-app notification to subscribed workspace users.
 	s.dispatchUserNotification(ctx, task, "task.assigned", "Task assigned: "+task.Title)
+
+	// Tell the reviewer, and only the reviewer — notifyReviewer no-ops when no
+	// reviewer was set, so this stays silent for the (still) common no-reviewer
+	// case rather than repeating the task.assigned-always-fires bug this task
+	// exists to not reintroduce (see the task description's own warning).
+	s.notifyReviewer(ctx, task, "task.reviewer_assigned", "Review requested: "+task.Title)
 
 	return nil
 }

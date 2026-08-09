@@ -77,6 +77,8 @@ type createTaskRequest struct {
 	ParentTaskID    *uuid.UUID             `json:"parent_task_id"`
 	AssigneeID      *uuid.UUID             `json:"assignee_id"`
 	AssigneeType    domain.AssigneeType    `json:"assignee_type"`
+	ReviewerID      *uuid.UUID             `json:"reviewer_id"`
+	ReviewerType    *domain.AssigneeType   `json:"reviewer_type"`
 	DueDate         *time.Time             `json:"due_date"`
 	EstimatedHours  *float64               `json:"estimated_hours"`
 	Labels          []string               `json:"labels"`
@@ -237,6 +239,8 @@ func (h *TaskHandler) Create(c echo.Context) error {
 		ParentTaskID:    req.ParentTaskID,
 		AssigneeID:      req.AssigneeID,
 		AssigneeType:    assigneeType,
+		ReviewerID:      req.ReviewerID,
+		ReviewerType:    req.ReviewerType,
 		DueDate:         req.DueDate,
 		EstimatedHours:  req.EstimatedHours,
 		Labels:          pq.StringArray(req.Labels),
