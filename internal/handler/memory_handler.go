@@ -285,7 +285,7 @@ func (h *MemoryHandler) List(c echo.Context) error {
 	filter.IncludeArchived = q.IncludeArchived == "true" || q.IncludeArchived == "1"
 	filter.ApplyDecay = q.ApplyRecencyDecay == "true" || q.ApplyRecencyDecay == "1"
 	if filter.ApplyDecay && filter.OrderBy == "" {
-		filter.OrderBy = "decayed_relevance:desc"
+		filter.OrderBy = domain.OrderByDecayedRelevanceDesc
 	}
 
 	filter.Limit = 20

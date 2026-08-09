@@ -1112,7 +1112,16 @@ func (s *memoryService) RecallWithStats(ctx context.Context, opts domain.RecallO
 		halfLife = opts.HalfLifeDays
 	}
 	lambda := math.Log(2) / halfLife
-	applyTimeDecay := opts.ApplyDecay || opts.OrderBy == "decayed_relevance"
+	// Was `opts.OrderBy == "decayed_relevance"` — a strict compare against a form
+	// nothing produces (#655c6d12). Every caller sends the suffixed
+	// "decayed_relevance:desc": the REST handler substitutes it, the MCP temporal
+	// profile hard-codes it, and the SQL switch matches only it. So the right-hand
+	// side never fired, and decay on this path came exclusively from ApplyDecay.
+	// It stayed invisible because the one profile that asks for this ordering
+	// (temporal) also sets ApplyDecay=true, so the intended behaviour happened for
+	// the wrong reason — a caller passing order_by ALONE, exactly as the tool
+	// description and the RecallOpts doc comment invite, silently got no decay.
+	applyTimeDecay := opts.ApplyDecay || domain.IsDecayedRelevanceOrder(opts.OrderBy)
 
 	for i := range merged {
 		m := &merged[i]
