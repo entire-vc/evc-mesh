@@ -209,11 +209,27 @@ jobs:
       issues: write
 
     services:
+      # Pulled from mirror.gcr.io, not registry-1.docker.io — this job is the
+      # required "Memory recall gate" context under `enforce_admins: true`, so a
+      # container pull failure here blocks every PR with no override for anyone,
+      # the repo owner included. GitHub Actions starts `services:` containers in
+      # an "Initialize containers" step BELOW this workflow's own steps, which
+      # runs before the harness's INCONCLUSIVE (exit 2) path exists to catch it —
+      # a Docker Hub blip therefore surfaces as a hard job failure indistinguishable
+      # from a real gate red, not as the "could not measure" signal the harness
+      # was built to give (#31cc6f73, live: PR #551 knocked out of the merge queue
+      # by `context deadline exceeded` against registry-1.docker.io on
+      # 2026-08-10, run 31376506182). mirror.gcr.io is Google's public read-through
+      # cache of Docker Hub's `library/*` images — same tags, no credentials, and
+      # a different network path than Docker Hub itself, so an outage on one
+      # rarely takes out the other. Verified all three resolve there via
+      # `docker manifest inspect mirror.gcr.io/library/<image>` before landing.
+      #
       # Stock postgres:16 is enough — `migrations/20260315044_memories_vector_columns.sql`
       # stores embeddings as TEXT and does the cosine in application code
       # specifically so pgvector is not a database-level requirement.
       postgres:
-        image: postgres:16
+        image: mirror.gcr.io/library/postgres:16
         env:
           POSTGRES_USER: mesh
           POSTGRES_PASSWORD: mesh
@@ -226,7 +242,7 @@ jobs:
           --health-timeout 5s
           --health-retries 5
       redis:
-        image: redis:7-alpine
+        image: mirror.gcr.io/library/redis:7-alpine
         ports:
           - 6379:6379
         options: >-
@@ -235,7 +251,7 @@ jobs:
           --health-timeout 5s
           --health-retries 5
       nats:
-        image: nats:2-alpine
+        image: mirror.gcr.io/library/nats:2-alpine
         ports:
           - 4222:4222
 
