@@ -337,6 +337,40 @@ func TestDispatch_TargetUserIDSkipsOtherWorkspaceSubscribers(t *testing.T) {
 		"a targeted reviewer-assigned event was broadcast to a bystander subscribed to the same event type")
 }
 
+// TestDispatch_TargetUserIDSkipsOtherWorkspaceSubscribers_TaskAssigned is the
+// same repro as TestDispatch_TargetUserIDSkipsOtherWorkspaceSubscribers, for
+// task.assigned instead of task.reviewer_assigned: that event used to go
+// through the workspace-wide dispatchUserNotification instead of a targeted
+// one, so every subscriber learned about every assignment regardless of whose
+// task it was.
+func TestDispatch_TargetUserIDSkipsOtherWorkspaceSubscribers_TaskAssigned(t *testing.T) {
+	wsID := uuid.New()
+	assignee := uuid.New()
+	bystander := uuid.New()
+
+	assigneePref := webPushPref(wsID, assignee)
+	assigneePref.Events = pq.StringArray{"task.assigned"}
+	bystanderPref := webPushPref(wsID, bystander)
+	bystanderPref.Events = pq.StringArray{"task.assigned"}
+
+	repo := &fakeNotificationRepo{
+		prefs:   []domain.NotificationPreference{assigneePref, bystanderPref},
+		members: map[uuid.UUID]bool{assignee: true, bystander: true},
+	}
+	svc := NewNotificationService(repo).(*notificationService)
+
+	event := domain.NotificationEvent{
+		WorkspaceID:  wsID,
+		EventType:    "task.assigned",
+		Title:        "Task assigned",
+		TargetUserID: &assignee,
+	}
+	svc.dispatch(event)
+
+	assert.Equal(t, []uuid.UUID{assignee}, repo.notifiedUsers(),
+		"a targeted task.assigned event was broadcast to a bystander subscribed to the same event type")
+}
+
 // TestDispatch_TargetUserIDGatesBrowserPushToo: same rule, second loop — see
 // TestDispatch_BrowserPushSkipsStrangersToo for why these are checked separately.
 func TestDispatch_TargetUserIDGatesBrowserPushToo(t *testing.T) {

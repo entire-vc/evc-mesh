@@ -296,8 +296,9 @@ func (s *taskService) Create(ctx context.Context, task *domain.Task) error {
 		"assignee_id": map[string]any{"old": nil, "new": task.AssigneeID},
 	})
 
-	// Dispatch in-app notification to subscribed workspace users.
-	s.dispatchUserNotification(ctx, task, "task.assigned", "Task assigned: "+task.Title)
+	// Notify the assignee, and only the assignee — see notifyAssignee for why a
+	// user-typed assignee gets this and an agent-typed one doesn't.
+	s.notifyAssignee(ctx, task, "task.assigned", "Task assigned: "+task.Title)
 
 	// Tell the reviewer, and only the reviewer — notifyReviewer no-ops when no
 	// reviewer was set, so this stays silent for the (still) common no-reviewer
@@ -456,9 +457,9 @@ func (s *taskService) Update(ctx context.Context, task *domain.Task) error {
 			"assignee_id": map[string]any{"old": existing.AssigneeID, "new": task.AssigneeID},
 		})
 
-		// Dispatch in-app notification to subscribed workspace users — Create
-		// and AssignTask already do this, Update never did.
-		s.dispatchUserNotification(ctx, task, "task.assigned", "Task assigned: "+task.Title)
+		// Notify the assignee, and only the assignee — Create and AssignTask
+		// already do this, Update never did.
+		s.notifyAssignee(ctx, task, "task.assigned", "Task assigned: "+task.Title)
 	}
 
 	// Notify assignee agent when delegation_level changes (e.g. task becomes supervised).
@@ -907,8 +908,8 @@ func (s *taskService) AssignTask(ctx context.Context, taskID uuid.UUID, input As
 		"assignee_type": map[string]any{"old": string(oldAssigneeType), "new": string(input.AssigneeType)},
 	})
 
-	// Dispatch in-app notification to subscribed workspace users.
-	s.dispatchUserNotification(ctx, task, "task.assigned", "Task assigned: "+task.Title)
+	// Notify the assignee, and only the assignee.
+	s.notifyAssignee(ctx, task, "task.assigned", "Task assigned: "+task.Title)
 
 	return nil
 }
@@ -1308,7 +1309,7 @@ func (s *taskService) notifyReviewerAgent(ctx context.Context, task *domain.Task
 // were made reviewer") rather than workspace-wide news. Broadcasting those via the
 // plain dispatchUserNotification would tell every subscribed workspace member
 // about someone else's reviewer assignment.
-func (s *taskService) dispatchTargetedUserNotification(ctx context.Context, task *domain.Task, eventType, title, body string, targetUserID uuid.UUID) {
+func (s *taskService) dispatchTargetedUserNotification(ctx context.Context, task *domain.Task, eventType, title, body string, targetUserID uuid.UUID, extraMeta map[string]any) {
 	if s.notifySvc == nil || s.projectRepo == nil {
 		return
 	}
@@ -1322,6 +1323,14 @@ func (s *taskService) dispatchTargetedUserNotification(ctx context.Context, task
 	taskIDCopy := task.ID
 	projIDCopy := task.ProjectID
 	targetCopy := targetUserID
+	meta := map[string]any{
+		"task_id":    task.ID,
+		"task_title": task.Title,
+		"project_id": task.ProjectID,
+	}
+	for k, v := range extraMeta {
+		meta[k] = v
+	}
 	s.notifySvc.Notify(ctx, domain.NotificationEvent{
 		WorkspaceID:  wsID,
 		TaskID:       &taskIDCopy,
@@ -1330,12 +1339,27 @@ func (s *taskService) dispatchTargetedUserNotification(ctx context.Context, task
 		Title:        title,
 		Body:         body,
 		TargetUserID: &targetCopy,
-		Metadata: map[string]any{
-			"task_id":    task.ID,
-			"task_title": task.Title,
-			"project_id": task.ProjectID,
-		},
+		Metadata:     meta,
 	})
+}
+
+// notifyAssignee delivers an in-app notification to the newly assigned user, and
+// only that user — the targeted counterpart to notifyReviewer, replacing the
+// workspace-wide dispatchUserNotification("task.assigned") broadcast every
+// subscriber used to receive regardless of whether the task was theirs.
+// No-ops in two cases:
+//   - agent assignee: notifyAssignedAgent already woke them via push/SSE/callback,
+//     and only user rows exist in the notifications table.
+//   - self-assignment: the actor already knows what they just did.
+func (s *taskService) notifyAssignee(ctx context.Context, task *domain.Task, eventType, title string) {
+	if task.AssigneeID == nil || task.AssigneeType != domain.AssigneeTypeUser {
+		return
+	}
+	if actorID, _ := actorctx.FromContext(ctx); actorID != uuid.Nil && actorID == *task.AssigneeID {
+		return
+	}
+	s.dispatchTargetedUserNotification(ctx, task, eventType, title, "", *task.AssigneeID,
+		map[string]any{"assignee_id": *task.AssigneeID})
 }
 
 // notifyReviewer delivers a reviewer-targeted notification through whichever
@@ -1349,7 +1373,7 @@ func (s *taskService) notifyReviewer(ctx context.Context, task *domain.Task, eve
 	case domain.AssigneeTypeAgent:
 		s.notifyReviewerAgent(ctx, task, eventType, nil)
 	case domain.AssigneeTypeUser:
-		s.dispatchTargetedUserNotification(ctx, task, eventType, title, "", *task.ReviewerID)
+		s.dispatchTargetedUserNotification(ctx, task, eventType, title, "", *task.ReviewerID, nil)
 	}
 }
 
