@@ -67,6 +67,7 @@ export default function NotificationSettingsPage() {
   const { currentWorkspace } = useWorkspaceStore();
   const { preferences, fetchPreferences, updatePreferences } =
     useNotificationStore();
+  const wsID = currentWorkspace?.id ?? wsId;
 
   const [selectedEvents, setSelectedEvents] = useState<Set<string>>(
     new Set([
@@ -132,7 +133,6 @@ export default function NotificationSettingsPage() {
   };
 
   const handleSavePushEvents = async () => {
-    const wsID = currentWorkspace?.id ?? wsId;
     if (!wsID) return;
     setPushEventsSaving(true);
     try {
@@ -160,13 +160,24 @@ export default function NotificationSettingsPage() {
 
   // Sync preferences into local state when loaded
   useEffect(() => {
-    if (!isLoaded || preferences.length === 0) return;
-    const webPushPref = preferences.find((p) => p.channel === "web_push");
+    if (!isLoaded || preferences.length === 0 || !wsID) return;
+    const webPushPref = preferences.find(
+      (p) => p.channel === "web_push" && p.workspace_id === wsID,
+    );
     if (webPushPref) {
       setSelectedEvents(new Set(webPushPref.events));
       setIsEnabled(webPushPref.is_enabled);
     }
-  }, [isLoaded, preferences]);
+    // Event selection is a standing preference, saved and restored on its own —
+    // it must not depend on whether the browser happens to be subscribed right
+    // now (that comes from isSubscribed() separately, above).
+    const browserPushPref = preferences.find(
+      (p) => p.channel === "browser_push" && p.workspace_id === wsID,
+    );
+    if (browserPushPref) {
+      setPushEvents(new Set(browserPushPref.events));
+    }
+  }, [isLoaded, preferences, wsID]);
 
   const toggleEvent = (key: string) => {
     setSelectedEvents((prev) => {
@@ -181,7 +192,6 @@ export default function NotificationSettingsPage() {
   };
 
   const handleSave = async () => {
-    const wsID = currentWorkspace?.id ?? wsId;
     if (!wsID) return;
 
     setIsSaving(true);
