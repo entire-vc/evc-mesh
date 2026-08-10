@@ -43,6 +43,7 @@ import { AssigneeAvatar } from "@/components/assignee-avatar";
 import { applyViewFilters, type CFFilters } from "@/components/view-filters";
 import { loadBoardFilters, saveBoardFilters } from "@/lib/board-view-storage";
 import {
+  BOARD_FILTER_DEFAULTS,
   GROUP_BY_VALUES,
   SORT_BY_VALUES,
   buildBoardSavedViewState,
@@ -732,7 +733,13 @@ export function BoardPage() {
   // Capture and restore both go through board-saved-view.ts, which keeps the
   // two halves symmetric — see that module for why `custom_fields` carries
   // `cfFilters` rather than the dead `customFieldFilters` state.
-  const { pendingView, clearPendingView, setCurrentViewState } = useSavedViewStore();
+  const {
+    pendingView,
+    clearPendingView,
+    setCurrentViewState,
+    resetFiltersRequest,
+    clearResetFiltersRequest,
+  } = useSavedViewStore();
   useEffect(() => {
     setCurrentViewState(
       buildBoardSavedViewState({
@@ -780,6 +787,21 @@ export function BoardPage() {
       clearPendingView();
     }
   }, [pendingView, clearPendingView]);
+
+  // Reset filters to defaults (Saved Views menu → "Reset filters"). Leaves
+  // groupBy/sortBy untouched — those are the board's layout, not a filter.
+  useEffect(() => {
+    if (!resetFiltersRequest) return;
+    setSearchQuery(BOARD_FILTER_DEFAULTS.searchQuery);
+    setPriorityFilter(BOARD_FILTER_DEFAULTS.priorityFilter);
+    setAssigneeFilter(BOARD_FILTER_DEFAULTS.assigneeFilter);
+    setAssigneeIdsFilter(BOARD_FILTER_DEFAULTS.assigneeIdsFilter);
+    setCFFilters(BOARD_FILTER_DEFAULTS.cfFilters);
+    setSelectedTags(BOARD_FILTER_DEFAULTS.selectedTags);
+    setShowClosed(BOARD_FILTER_DEFAULTS.showClosed);
+    setShowSubtasks(BOARD_FILTER_DEFAULTS.showSubtasks);
+    clearResetFiltersRequest();
+  }, [resetFiltersRequest, clearResetFiltersRequest]);
 
   const openCreateDialog = useCallback((statusId?: string) => {
     setDialogStatusId(statusId);

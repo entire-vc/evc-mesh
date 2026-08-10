@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildBoardSavedViewState,
+  isBoardFiltersAtDefault,
   readBoardSavedViewState,
   type BoardSavedViewState,
 } from "@/lib/board-saved-view";
@@ -92,5 +93,57 @@ describe("board saved-view capture/restore", () => {
     const restored = readBoardSavedViewState({ tags: "bug", assignee_ids: 42 });
     expect(restored.selectedTags).toEqual([]);
     expect(restored.assigneeIdsFilter).toEqual([]);
+  });
+});
+
+describe("isBoardFiltersAtDefault (Reset filters menu item's disabled state)", () => {
+  it("is true for an empty payload (nothing saved yet / no filters set)", () => {
+    expect(isBoardFiltersAtDefault({})).toBe(true);
+  });
+
+  it("is true when group_by/sort_by are non-default but every filter is", () => {
+    // Reset filters must not disable itself off changes to layout-only state.
+    const { filters } = buildBoardSavedViewState({
+      ...fullState,
+      searchQuery: "",
+      priorityFilter: "all",
+      assigneeFilter: "all",
+      assigneeIdsFilter: [],
+      cfFilters: {},
+      selectedTags: [],
+      showClosed: false,
+      showSubtasks: false,
+    });
+    expect(isBoardFiltersAtDefault(filters)).toBe(true);
+  });
+
+  it.each([
+    ["searchQuery", { search: "bug" }],
+    ["priorityFilter", { priority: "high" }],
+    ["assigneeFilter", { assignee: "agent" }],
+    ["assigneeIdsFilter", { assignee_ids: ["user-1"] }],
+    ["selectedTags", { tags: ["prod"] }],
+    ["showClosed", { show_closed: true }],
+    ["showSubtasks", { show_subtasks: true }],
+  ])("is false when %s differs from default", (_name, filters) => {
+    expect(isBoardFiltersAtDefault(filters)).toBe(false);
+  });
+
+  it("is false when a custom-field filter is active", () => {
+    expect(
+      isBoardFiltersAtDefault({
+        custom_fields: { owner: { type: "text", textValue: "riker" } },
+      }),
+    ).toBe(false);
+  });
+
+  it("is true when a custom-field entry exists but carries no active value", () => {
+    // Matches countActiveCFFilters semantics: an entry with type "select" and
+    // selectValue "all" (or unset) isn't an active filter.
+    expect(
+      isBoardFiltersAtDefault({
+        custom_fields: { owner: { type: "select", selectValue: "all" } },
+      }),
+    ).toBe(true);
   });
 });

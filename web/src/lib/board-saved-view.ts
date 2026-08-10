@@ -15,7 +15,7 @@
  */
 
 import type { GroupBy, SortBy } from "@/components/board-toolbar";
-import type { CFFilters } from "@/components/view-filters";
+import { countActiveCFFilters, type CFFilters } from "@/components/view-filters";
 
 export const GROUP_BY_VALUES: GroupBy[] = ["status", "priority", "assignee"];
 export const SORT_BY_VALUES: SortBy[] = [
@@ -91,4 +91,37 @@ export function readBoardSavedViewState(
       ? { sortBy: sortBy as SortBy }
       : {}),
   };
+}
+
+/**
+ * Default value for every FILTER field (excludes `groupBy`/`sortBy` — those
+ * are the board's layout, not a filter, and "Reset filters" must not touch
+ * them). Drawn from the same `BoardSavedViewState` shape so a future filter
+ * added to that type doesn't get silently left out of a reset.
+ */
+export const BOARD_FILTER_DEFAULTS: Omit<BoardSavedViewState, "groupBy" | "sortBy"> = {
+  searchQuery: "",
+  priorityFilter: "all",
+  assigneeFilter: "all",
+  assigneeIdsFilter: [],
+  cfFilters: {},
+  selectedTags: [],
+  showClosed: false,
+  showSubtasks: false,
+};
+
+/** True when a saved-view-shaped filters payload matches the reset defaults
+ *  — i.e. there is nothing left for "Reset filters" to do. */
+export function isBoardFiltersAtDefault(filters: Record<string, unknown>): boolean {
+  const restored = readBoardSavedViewState(filters);
+  return (
+    restored.searchQuery === BOARD_FILTER_DEFAULTS.searchQuery &&
+    restored.priorityFilter === BOARD_FILTER_DEFAULTS.priorityFilter &&
+    restored.assigneeFilter === BOARD_FILTER_DEFAULTS.assigneeFilter &&
+    restored.assigneeIdsFilter.length === 0 &&
+    countActiveCFFilters(restored.cfFilters) === 0 &&
+    restored.selectedTags.length === 0 &&
+    restored.showClosed === BOARD_FILTER_DEFAULTS.showClosed &&
+    restored.showSubtasks === BOARD_FILTER_DEFAULTS.showSubtasks
+  );
 }
