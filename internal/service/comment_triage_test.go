@@ -655,6 +655,71 @@ func TestEnforceBlockingTriage_UnrelatedCompletionWordFarFromMarker_ArmsGate(t *
 	assert.True(t, gateCalls[0].value, "SetHumanGate must arm the flag (value=true)")
 }
 
+// TestEnforceBlockingTriage_NegatedCompletionKeyword_ArmsGate is the
+// regression for task #3948173f (live case #90750c66, found by Bill during a
+// sweep): isAssigneeCompletionReport used a bare strings.Contains for
+// "выполнен" (done) — which is also a substring of "не выполнен" (NOT done).
+// Riker's real comment on #90750c66 formally states its own AC is unmet
+// ("Но формально пункт AC не выполнен") right before a genuinely live
+// "❓ Blocking @pavel" question, and the old heuristic misread the negated
+// keyword as a completion report, silently suppressing SetHumanGate — the
+// exact class of bug this ticket exists to close. Body is the EXACT comment
+// from #90750c66 (Riker, 2026-08-02T04:34:44Z), not a paraphrase.
+func TestEnforceBlockingTriage_NegatedCompletionKeyword_ArmsGate(t *testing.T) {
+	env := setupTriageEnv(t, true)
+	assigneeID := uuid.New()
+	taskID := uuid.New()
+	env.taskRepo.items[taskID] = &domain.Task{
+		ID:              taskID,
+		ProjectID:       env.projID,
+		StatusID:        env.inProgressID,
+		Title:           "T",
+		AssigneeID:      &assigneeID,
+		AssigneeType:    domain.AssigneeTypeAgent,
+		DelegationLevel: domain.DelegationLevelAuto,
+	}
+
+	comment := &domain.Comment{
+		TaskID:     taskID,
+		AuthorID:   assigneeID,
+		AuthorType: domain.ActorTypeAgent,
+		Body: "## Закрыть не могу — сервер запрещает. Это настоящий human-gate, ставлю маркер.\n\n" +
+			"Попробовал закрыть по факту живого прода и получил отказ **дважды**, на обоих терминальных переходах:\n\n" +
+			"```\n" +
+			"move → done    : Forbidden: supervised_requires_human_signoff\n" +
+			"move → review  : Forbidden: supervised_requires_human_signoff\n" +
+			"```\n\n" +
+			"`delegation_level=supervised` — это ровно про то, что финальную приёмку ставит человек, и агентский ключ " +
+			"её не поставит ни в `done`, ни в `review`. Так что мой предыдущий коммент «закрываю в done» был " +
+			"преждевременным: я описал намерение, а не результат. Не закрыл — не могу.\n\n" +
+			"Промежуточно карточка полежала в `in_progress` (я двигал её к `done` через активный статус) — вернул " +
+			"в `backlog`, чтобы диспетчер не начал респавнить Riker'а на работу, которой нет.\n\n" +
+			"**Факты для приёмки — перепроверены живьём сегодня, 02.08:**\n\n" +
+			"| проверка | результат |\n" +
+			"|---|---|\n" +
+			"| `DISPATCHER_RECALL_GRAPH` в plist | `1` |\n" +
+			"| он же в env **работающего** процесса (`ps eww 27527`) | `1` |\n" +
+			"| `recall_graph: injected` в логе диспетчера | **135** раз |\n" +
+			"| последний инжект | 2026-07-30T18:30:35, captain task `d914e693` |\n" +
+			"| обе подзадачи (`843e0ccd`, `7462318a`) | `done` |\n\n" +
+			"Deliverable из описания — «mesh-dispatcher update + config flag» — на месте и работает в проде с 07.06.\n\n" +
+			"Единственное расхождение с исходным AC: латентность эндпоинта p95 ~551ms при бюджете <500ms " +
+			"(замер 07.06, n=12). На спавн это не влияет — вызов ограничен таймаутом 3s и при любой ошибке молча " +
+			"пропускается, спавн идёт байт-в-байт как раньше. Но формально пункт AC не выполнен, и решать, " +
+			"считается ли это приёмкой, — не мне.\n\n" +
+			"❓ **Blocking @pavel**: принимаешь G1-s3 как done при p95 551ms вместо заявленных <500ms " +
+			"(фича живёт в проде с 07.06, 135 инжектов) — или считаем AC невыполненным и заводим отдельную " +
+			"карточку на латентность recall_graph?",
+	}
+	require.NoError(t, env.svc.Create(context.Background(), comment))
+
+	assert.Empty(t, env.taskMover.calls(), "auto-mode must not trigger triage move")
+	gateCalls := env.taskMover.humanGateCalls()
+	require.Len(t, gateCalls, 1, "a negated completion keyword ('AC не выполнен') must not suppress SetHumanGate")
+	assert.Equal(t, taskID, gateCalls[0].taskID)
+	assert.True(t, gateCalls[0].value, "human_gate must be armed — the completion keyword was negated, not asserted")
+}
+
 // ---------------------------------------------------------------------------
 // Bug fix: Pavel's response must move the task from triage → in_progress
 // ---------------------------------------------------------------------------
@@ -1843,6 +1908,44 @@ func TestReleaseHumanGateOnWithdrawal_SoleOwner_NoGapRequired(t *testing.T) {
 	gateCalls := env.taskMover.humanGateCalls()
 	require.Len(t, gateCalls, 1, "the sole/original owner must release immediately, zero gap required")
 	assert.False(t, gateCalls[0].value)
+}
+
+// TestReleaseHumanGateOnWithdrawal_RepeatPingNotNeeded_DoesNotRelease is the
+// regression for task #3948173f (live case #0f4bd758, a money-critical PSP
+// activation card, found by Bill during a sweep): CLAUDE-workflow.md §0b
+// tells agents not to re-ping Pavel about a state he has already seen, so a
+// compliant agent's withdrawal comment said "повторный ask здесь не нужен"
+// (no need to repeat the ask) — and the OLD hasNegatorInScope read the bare
+// "не нужен" substring as "the ask itself is no longer needed", silently
+// releasing a live gate on a still-open blocker, even though the SAME
+// comment opens by asserting the blocker is "не закрыт и не забыт" (not
+// closed and not forgotten). Body is the EXACT comment from #0f4bd758
+// (Wally, 2026-08-09T01:53:28Z), not a paraphrase.
+func TestReleaseHumanGateOnWithdrawal_RepeatPingNotNeeded_DoesNotRelease(t *testing.T) {
+	env := setupTriageEnv(t, true)
+	taskID := env.seedGatedTask(env.inProgressID)
+	askerID := uuid.New()
+	env.seedAgentBlockingComment(taskID, askerID)
+
+	ctx := actorctx.WithActor(context.Background(), askerID, domain.ActorTypeAgent)
+	comment := &domain.Comment{
+		TaskID:     taskID,
+		AuthorID:   askerID,
+		AuthorType: domain.ActorTypeAgent,
+		Body: "Отзываю свой запрос (маркер от 26.07) — ответ по-прежнему нужен, но в другой форме: снимаю сам " +
+			"маркер как его автор, чтобы карточка могла уйти в `backlog` и перестала генерировать идентичные " +
+			"эскалации каждые несколько дней (22+ подряд без прогресса, все хвосты — комментарий Bill " +
+			"27.07/29.07).\n\n" +
+			"Блокер не закрыт и не забыт: нужны `CLOUDPAYMENTS_PUBLIC_ID` + `CLOUDPAYMENTS_API_SECRET` от " +
+			"зарегистрированного merchant-аккаунта CloudPayments (чеклист — комментарий от 2026-05-24). Уже " +
+			"вынесено Pavel'ю в дайджесте Bill 29.07 с альтернативой «креды либо не активируем» — повторный ask " +
+			"здесь не нужен. Как только появятся креды или решение — задачу вернут в `todo` назначением.",
+	}
+	require.NoError(t, env.svc.Create(ctx, comment))
+
+	assert.Empty(t, env.taskMover.humanGateCalls(),
+		"\"повторный ask не нужен\" must not release a gate the same comment says is still open (\"не закрыт и не забыт\")")
+	assert.Empty(t, env.systemComments())
 }
 
 // seedRawArmMarker inserts task_handler.go's raw PATCH/UI arm system comment
