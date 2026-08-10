@@ -281,6 +281,61 @@ var triageExitNegators = []string{
 //
 // Search and slice the SAME stripped string — offsets taken from the raw body
 // cannot index the stripped one, and mixing them would cut at a meaningless byte.
+// blockerStillOpenMarkers are whole-word/phrase assertions that the blocker
+// itself is still live. Present anywhere in a negator scope, they override
+// any triageExitNegators match found in the same scope — a comment cannot
+// simultaneously say "the blocker is not closed" and have that same body
+// read as a withdrawal of the ask. See #3948173f / live case #0f4bd758.
+var blockerStillOpenMarkers = []string{
+	"не закрыт", "не забыт", "still blocked",
+}
+
+// repeatPingWords / askWords: see isRepeatPingNegation.
+var repeatPingWords = []string{"повторный", "повторно", "дублир", "repeat", "duplicate"}
+var askWords = []string{"ask", "пинг", "вопрос", "ping", "question"}
+
+// repeatPingWindowBytes bounds the proximity check in isRepeatPingNegation.
+const repeatPingWindowBytes = 60
+
+// isRepeatPingNegation reports whether the text around a triageExitNegators
+// match — [start,end) in haystack — is talking about not repeating a PING/ask
+// ("повторный ask здесь не нужен") rather than withdrawing the underlying
+// blocker. Fixed 2026-08-10 (task #3948173f, live incident on #0f4bd758,
+// found by Bill): CLAUDE-workflow.md §0b tells agents not to re-ping Pavel
+// about a state he's already seen, so a compliant agent writes exactly this
+// phrase — and the same "не нужен" that means "don't ask again" was read by
+// hasNegatorInScope as "the ask itself is no longer needed", silently
+// releasing a live money-critical gate. The rule and the mechanism
+// contradicted each other; this closes the mechanism side by refusing to
+// count a negator that sits next to both a "repeat" word and an "ask" word.
+func isRepeatPingNegation(haystack string, start, end int) bool {
+	winStart := start - repeatPingWindowBytes
+	if winStart < 0 {
+		winStart = 0
+	}
+	winEnd := end + repeatPingWindowBytes
+	if winEnd > len(haystack) {
+		winEnd = len(haystack)
+	}
+	window := haystack[winStart:winEnd]
+	hasRepeat := false
+	for _, w := range repeatPingWords {
+		if strings.Contains(window, w) {
+			hasRepeat = true
+			break
+		}
+	}
+	if !hasRepeat {
+		return false
+	}
+	for _, w := range askWords {
+		if strings.Contains(window, w) {
+			return true
+		}
+	}
+	return false
+}
+
 func hasNegatorInScope(body string) bool {
 	scope := stripQuotedSpans(body)
 	if matches := blockingMarkerRegex.FindAllStringIndex(scope, -1); len(matches) > 0 {
@@ -289,9 +344,17 @@ func hasNegatorInScope(body string) bool {
 		scope = lastParagraph(scope)
 	}
 	lower := strings.ToLower(scope)
+	for _, m := range blockerStillOpenMarkers {
+		if containsNegatorWholeWord(lower, m) {
+			return false
+		}
+	}
 	for _, n := range triageExitNegators {
-		if containsNegatorWholeWord(lower, n) {
-			return true
+		for _, start := range wholeWordMatches(lower, n) {
+			end := start + len(n)
+			if !isRepeatPingNegation(lower, start, end) {
+				return true
+			}
 		}
 	}
 	return false
@@ -328,19 +391,28 @@ func lastParagraph(body string) string {
 // Cyrillic letter; a haystack of "мне нужно" would look, to \b, identical
 // mid-word and at a real word edge. Scanning runes directly sidesteps that.
 func containsNegatorWholeWord(haystack, needle string) bool {
+	return len(wholeWordMatches(haystack, needle)) > 0
+}
+
+// wholeWordMatches returns the start byte offset of every standalone
+// whole-word/phrase occurrence of needle in haystack, using the same
+// boundary rule as containsNegatorWholeWord (see its doc comment for why
+// this is hand-rolled rather than regexp \b).
+func wholeWordMatches(haystack, needle string) []int {
 	if needle == "" {
-		return false
+		return nil
 	}
+	var out []int
 	searchFrom := 0
 	for {
 		rel := strings.Index(haystack[searchFrom:], needle)
 		if rel == -1 {
-			return false
+			return out
 		}
 		start := searchFrom + rel
 		end := start + len(needle)
 		if !isWordRuneBefore(haystack, start) && !isWordRuneAfter(haystack, end) {
-			return true
+			out = append(out, start)
 		}
 		searchFrom = start + 1
 	}
@@ -1800,12 +1872,74 @@ func completionKeywordSearchWindow(body string) string {
 	return stripped[start:loc[0]]
 }
 
+// negationTokens are lower-cased words that, immediately preceding a
+// completionKeywords match, invert its meaning ("AC не выполнен" = the AC is
+// NOT done). isAssigneeCompletionReport does not do full negation-scope
+// parsing — it only checks the single word directly before the match — but
+// that is enough to close the failure mode task #3948173f measured live:
+// "выполнен" (done) is a bare substring of "не выполнен" (NOT done), and the
+// old strings.Contains scan could not tell them apart.
+var negationTokens = map[string]bool{
+	"не": true, "not": true,
+	"isn't": true, "wasn't": true, "doesn't": true, "didn't": true,
+	"hasn't": true, "haven't": true, "aren't": true, "weren't": true,
+}
+
+// hasImmediateNegationBefore reports whether the word directly preceding byte
+// offset pos in lower — skipping whitespace, but no further — is a
+// negationTokens entry. Only a word RIGHT BEFORE the match counts: this is a
+// local adjacency check, not a clause-level negation parse.
+func hasImmediateNegationBefore(lower string, pos int) bool {
+	end := pos
+	for end > 0 {
+		r, size := utf8.DecodeLastRuneInString(lower[:end])
+		if !unicode.IsSpace(r) {
+			break
+		}
+		end -= size
+	}
+	if end == 0 {
+		return false
+	}
+	start := end
+	for start > 0 {
+		r, size := utf8.DecodeLastRuneInString(lower[:start])
+		if unicode.IsSpace(r) {
+			break
+		}
+		start -= size
+	}
+	word := strings.TrimFunc(lower[start:end], func(r rune) bool {
+		return !unicode.IsLetter(r) && r != '\''
+	})
+	return negationTokens[word]
+}
+
+// hasUnnegatedKeyword reports whether kw occurs anywhere in lower WITHOUT an
+// immediately-preceding negation token. A completion keyword that only ever
+// appears negated ("AC не выполнен") must not count as a completion report —
+// see the #90750c66 live regression this closes.
+func hasUnnegatedKeyword(lower, kw string) bool {
+	searchFrom := 0
+	for {
+		rel := strings.Index(lower[searchFrom:], kw)
+		if rel == -1 {
+			return false
+		}
+		start := searchFrom + rel
+		if !hasImmediateNegationBefore(lower, start) {
+			return true
+		}
+		searchFrom = start + 1
+	}
+}
+
 // isAssigneeCompletionReport returns true when the comment is authored by the
 // task's own assignee AND the text immediately preceding its blocking marker
-// contains at least one completion keyword. Used to suppress enforceBlockingTriage
-// on progress/handoff reports that append a "❓ Blocking @user" marker as
-// citation/context, without false-positiving on unrelated completion words used
-// elsewhere in a longer comment.
+// contains at least one completion keyword that is not itself negated. Used
+// to suppress enforceBlockingTriage on progress/handoff reports that append a
+// "❓ Blocking @user" marker as citation/context, without false-positiving on
+// unrelated (or negated) completion words used elsewhere in a longer comment.
 func isAssigneeCompletionReport(comment *domain.Comment, task *domain.Task) bool {
 	if task.AssigneeID == nil {
 		return false
@@ -1815,7 +1949,7 @@ func isAssigneeCompletionReport(comment *domain.Comment, task *domain.Task) bool
 	}
 	lower := strings.ToLower(completionKeywordSearchWindow(comment.Body))
 	for _, kw := range completionKeywords {
-		if strings.Contains(lower, kw) {
+		if hasUnnegatedKeyword(lower, kw) {
 			return true
 		}
 	}
