@@ -106,7 +106,6 @@ export function Sidebar({ collapsed }: SidebarProps) {
   const isMemoriesRoute = location.pathname.endsWith("/memories");
   const isSessionsRoute = location.pathname.endsWith("/sessions");
   const isActivityRoute = location.pathname.includes("/activity");
-  const isNotificationsRoute = location.pathname.endsWith("/notifications");
 
   // Fetch unseen mention count once on mount, then refresh on cache invalidation.
   useEffect(() => {
@@ -546,18 +545,6 @@ export function Sidebar({ collapsed }: SidebarProps) {
           >
             <Settings className="h-4 w-4" />
             Workspace Settings
-          </Link>
-        )}
-        {wsSlug && (
-          <Link
-            to={`/w/${wsSlug}/notifications`}
-            className={cn(
-              "flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-sidebar-foreground hover:bg-sidebar-accent",
-              isNotificationsRoute && "bg-sidebar-accent font-medium",
-            )}
-          >
-            <Bell className="h-4 w-4" />
-            Notification Settings
           </Link>
         )}
         {wsSlug && projectSlug && (
