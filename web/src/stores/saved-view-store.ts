@@ -24,6 +24,15 @@ interface SavedViewState {
   /** ViewTabBar calls this to signal a view was selected */
   applyView: (view: SavedView) => void;
 
+  /** Set by ViewTabBar's "Reset filters"; consumed by the board page. Same
+   *  request/clear shape as pendingView above, kept separate because a reset
+   *  carries no view payload. */
+  resetFiltersRequest: boolean;
+  /** The board calls this after it applies the reset */
+  clearResetFiltersRequest: () => void;
+  /** ViewTabBar calls this to signal the filters should reset */
+  requestResetFilters: () => void;
+
   /** Pages write their current filter/sort state here so ViewTabBar can save it */
   currentViewState: CurrentViewState;
   setCurrentViewState: (state: CurrentViewState) => void;
@@ -46,6 +55,9 @@ export const useSavedViewStore = create<SavedViewState>((set) => ({
   pendingView: null,
   clearPendingView: () => set({ pendingView: null }),
   applyView: (view: SavedView) => set({ pendingView: view }),
+  resetFiltersRequest: false,
+  clearResetFiltersRequest: () => set({ resetFiltersRequest: false }),
+  requestResetFilters: () => set({ resetFiltersRequest: true }),
   currentViewState: {},
   setCurrentViewState: (state) => set({ currentViewState: state }),
 

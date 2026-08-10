@@ -5,6 +5,7 @@ import {
   BookmarkPlus,
   Calendar,
   Columns3,
+  FilterX,
   GitBranch,
   List,
   MoreVertical,
@@ -29,6 +30,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useSavedViewStore } from "@/stores/saved-view-store";
+import { isBoardFiltersAtDefault } from "@/lib/board-saved-view";
 import { toast } from "@/components/ui/toast";
 import type { ViewType } from "@/types";
 
@@ -90,6 +92,7 @@ export function ViewTabBar({
     updateView,
     deleteView,
     currentViewState,
+    requestResetFilters,
   } = useSavedViewStore();
 
   const [saveDialogOpen, setSaveDialogOpen] = useState(false);
@@ -117,6 +120,18 @@ export function ViewTabBar({
     applyView(view);
     toast(`Applied view: ${view.name}`);
   };
+
+  const handleResetFilters = () => {
+    requestResetFilters();
+    toast("Filters reset");
+  };
+
+  // Only meaningful on the board tab — list/timeline/calendar don't feed
+  // their filter state into currentViewState the same way, and the task's
+  // filters (search/priority/assignee/tags/custom fields/show-closed/
+  // show-subtasks) are board-specific.
+  const filtersAtDefault =
+    currentView === "board" && isBoardFiltersAtDefault(currentViewState.filters ?? {});
 
   const handleToggleShare = async (view: import("@/types").SavedView) => {
     try {
@@ -208,6 +223,22 @@ export function ViewTabBar({
                   <BookmarkPlus className="h-3.5 w-3.5" />
                   Save current view
                 </DropdownMenuItem>
+
+                {/* Reset filters — board only; list/timeline/calendar don't
+                    report their filter state into currentViewState. */}
+                {currentView === "board" && (
+                  <DropdownMenuItem
+                    onClick={filtersAtDefault ? undefined : handleResetFilters}
+                    aria-disabled={filtersAtDefault}
+                    className={cn(
+                      "gap-2",
+                      filtersAtDefault && "pointer-events-none opacity-50",
+                    )}
+                  >
+                    <FilterX className="h-3.5 w-3.5" />
+                    Reset filters
+                  </DropdownMenuItem>
+                )}
 
                 {/* Personal views */}
                 {personalViews.length > 0 && (
