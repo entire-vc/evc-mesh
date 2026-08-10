@@ -887,7 +887,7 @@ type MockArtifactService struct {
 	UploadFunc             func(ctx context.Context, input service.UploadArtifactInput) (*domain.Artifact, error)
 	GetByIDFunc            func(ctx context.Context, id uuid.UUID) (*domain.Artifact, error)
 	GetByIDInWorkspaceFunc func(ctx context.Context, id, workspaceID uuid.UUID) (*domain.Artifact, error)
-	GetDownloadURLFunc     func(ctx context.Context, id uuid.UUID) (string, error)
+	GetDownloadURLFunc     func(ctx context.Context, id uuid.UUID, inline bool) (string, error)
 	DeleteFunc             func(ctx context.Context, id uuid.UUID) error
 	ListByTaskFunc         func(ctx context.Context, taskID uuid.UUID, pg pagination.Params) (*pagination.Page[domain.Artifact], error)
 }
@@ -913,9 +913,9 @@ func (m *MockArtifactService) GetByIDInWorkspace(ctx context.Context, id, worksp
 	return nil, nil
 }
 
-func (m *MockArtifactService) GetDownloadURL(ctx context.Context, id uuid.UUID) (string, error) {
+func (m *MockArtifactService) GetDownloadURL(ctx context.Context, id uuid.UUID, inline bool) (string, error) {
 	if m.GetDownloadURLFunc != nil {
-		return m.GetDownloadURLFunc(ctx, id)
+		return m.GetDownloadURLFunc(ctx, id, inline)
 	}
 	return "", nil
 }

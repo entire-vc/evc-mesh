@@ -1689,9 +1689,10 @@ func (m *MockActivityLogRepository) Export(_ context.Context, workspaceID uuid.U
 // ---------------------------------------------------------------------------
 
 type MockStorageClient struct {
-	mu          sync.RWMutex
-	objects     map[string][]byte
-	errToReturn error
+	mu           sync.RWMutex
+	objects      map[string][]byte
+	errToReturn  error
+	lastFilename string
 }
 
 func NewMockStorageClient() *MockStorageClient {
@@ -1712,12 +1713,13 @@ func (m *MockStorageClient) Upload(_ context.Context, key string, reader io.Read
 	return nil
 }
 
-func (m *MockStorageClient) GetPresignedURL(_ context.Context, key string, expiry time.Duration, _, _ string) (string, error) {
+func (m *MockStorageClient) GetPresignedURL(_ context.Context, key string, expiry time.Duration, _, filename string) (string, error) {
 	if m.errToReturn != nil {
 		return "", m.errToReturn
 	}
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	m.mu.Lock()
+	m.lastFilename = filename
+	m.mu.Unlock()
 	return fmt.Sprintf("https://s3.example.com/%s?expiry=%s", key, expiry), nil
 }
 

@@ -272,7 +272,9 @@ type ArtifactService interface {
 	// GetByIDInWorkspace is the workspace-scoped variant: returns 404 when the
 	// artifact belongs to a different workspace (defense-in-depth after wsAccess).
 	GetByIDInWorkspace(ctx context.Context, id, workspaceID uuid.UUID) (*domain.Artifact, error)
-	GetDownloadURL(ctx context.Context, id uuid.UUID) (string, error)
+	// GetDownloadURL generates a presigned URL. inline=true omits Content-Disposition
+	// so the browser renders the file (image/PDF/etc.) instead of downloading it.
+	GetDownloadURL(ctx context.Context, id uuid.UUID, inline bool) (string, error)
 	Delete(ctx context.Context, id uuid.UUID) error
 	ListByTask(ctx context.Context, taskID uuid.UUID, pg pagination.Params) (*pagination.Page[domain.Artifact], error)
 }

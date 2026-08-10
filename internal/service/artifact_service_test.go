@@ -381,6 +381,7 @@ func TestArtifactService_GetByIDInWorkspace(t *testing.T) {
 func TestArtifactService_GetDownloadURL(t *testing.T) {
 	tests := []struct {
 		name    string
+		inline  bool
 		setup   func(repo *MockArtifactRepository) uuid.UUID
 		wantErr bool
 		errCode int
@@ -410,7 +411,7 @@ func TestArtifactService_GetDownloadURL(t *testing.T) {
 			ctx := context.Background()
 			id := tt.setup(artifactRepo)
 
-			url, err := svc.GetDownloadURL(ctx, id)
+			url, err := svc.GetDownloadURL(ctx, id, tt.inline)
 
 			if tt.wantErr {
 				require.Error(t, err)
@@ -425,6 +426,21 @@ func TestArtifactService_GetDownloadURL(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestArtifactService_GetDownloadURL_Disposition(t *testing.T) {
+	svc, artifactRepo, storage := setupArtifactService()
+	ctx := context.Background()
+	id := uuid.New()
+	artifactRepo.items[id] = &domain.Artifact{ID: id, Name: "test.png", StorageKey: "ws/task/id/test.png"}
+
+	_, err := svc.GetDownloadURL(ctx, id, false)
+	require.NoError(t, err)
+	assert.Equal(t, "test.png", storage.lastFilename, "attachment download must set Content-Disposition via filename")
+
+	_, err = svc.GetDownloadURL(ctx, id, true)
+	require.NoError(t, err)
+	assert.Empty(t, storage.lastFilename, "inline preview must omit filename so no Content-Disposition header is set")
 }
 
 // ---------------------------------------------------------------------------

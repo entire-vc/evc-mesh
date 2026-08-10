@@ -160,7 +160,9 @@ func (s *artifactService) GetByIDInWorkspace(ctx context.Context, id, workspaceI
 }
 
 // GetDownloadURL generates a presigned URL for downloading the artifact.
-func (s *artifactService) GetDownloadURL(ctx context.Context, id uuid.UUID) (string, error) {
+// inline=true requests no Content-Disposition header, so the browser renders
+// the file using the response Content-Type instead of forcing a download.
+func (s *artifactService) GetDownloadURL(ctx context.Context, id uuid.UUID, inline bool) (string, error) {
 	artifact, err := s.artifactRepo.GetByID(ctx, id)
 	if err != nil {
 		return "", err
@@ -173,7 +175,12 @@ func (s *artifactService) GetDownloadURL(ctx context.Context, id uuid.UUID) (str
 		return "", apierror.ServiceUnavailable("storage backend not configured")
 	}
 
-	url, err := s.storage.GetPresignedURL(ctx, artifact.StorageKey, presignedURLExpiry, artifact.MimeType, artifact.Name)
+	filename := artifact.Name
+	if inline {
+		filename = ""
+	}
+
+	url, err := s.storage.GetPresignedURL(ctx, artifact.StorageKey, presignedURLExpiry, artifact.MimeType, filename)
 	if err != nil {
 		return "", apierror.InternalError("failed to generate download URL")
 	}
