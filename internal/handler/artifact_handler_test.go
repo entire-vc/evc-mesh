@@ -96,6 +96,46 @@ func TestArtifactHandler_GetByID_StripsTrAgentKey(t *testing.T) {
 	assert.Equal(t, "https://relay.example.com/f", rawMeta["tr_public_url"])
 }
 
+// --- Download handler tests ---
+
+func TestArtifactHandler_Download_Disposition(t *testing.T) {
+	tests := []struct {
+		name       string
+		query      string
+		wantInline bool
+	}{
+		{name: "default is attachment", query: "", wantInline: false},
+		{name: "disposition=inline requests inline", query: "?disposition=inline", wantInline: true},
+		{name: "unknown disposition value is not inline", query: "?disposition=bogus", wantInline: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			artifactID := uuid.New()
+			var gotInline bool
+			mockSvc := &MockArtifactService{
+				GetDownloadURLFunc: func(_ context.Context, _ uuid.UUID, inline bool) (string, error) {
+					gotInline = inline
+					return "https://s3.example.com/presigned", nil
+				},
+			}
+
+			h, e := setupArtifactTest(mockSvc)
+
+			req := httptest.NewRequest(http.MethodGet, "/"+tt.query, http.NoBody)
+			rec := httptest.NewRecorder()
+			c := e.NewContext(req, rec)
+			c.SetPath("/artifacts/:artifact_id/download")
+			c.SetParamNames("artifact_id")
+			c.SetParamValues(artifactID.String())
+
+			require.NoError(t, h.Download(c))
+			assert.Equal(t, http.StatusOK, rec.Code)
+			assert.Equal(t, tt.wantInline, gotInline)
+		})
+	}
+}
+
 // --- List handler tests ---
 
 func TestArtifactHandler_List_StripsTrAgentKey(t *testing.T) {

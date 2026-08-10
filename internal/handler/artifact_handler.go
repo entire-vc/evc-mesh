@@ -163,7 +163,8 @@ func (h *ArtifactHandler) Download(c echo.Context) error {
 		}
 	}
 
-	url, err := h.artifactService.GetDownloadURL(c.Request().Context(), artifactID)
+	inline := c.QueryParam("disposition") == "inline"
+	url, err := h.artifactService.GetDownloadURL(c.Request().Context(), artifactID, inline)
 	if err != nil {
 		return handleError(c, err)
 	}

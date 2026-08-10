@@ -53,6 +53,27 @@ const artifactTypeBadgeVariant: Record<ArtifactType, "default" | "secondary" | "
   data: "outline",
 };
 
+// Mime types browsers download rather than render inline regardless of the
+// Content-Disposition header. Hide "Open in new tab" for these so the button
+// doesn't promise a preview it can't deliver.
+const NON_PREVIEWABLE_MIME_PREFIXES = [
+  "application/zip",
+  "application/x-7z-compressed",
+  "application/x-rar-compressed",
+  "application/x-tar",
+  "application/gzip",
+  "application/x-gzip",
+  "application/vnd.openxmlformats-officedocument",
+  "application/vnd.ms-excel",
+  "application/vnd.ms-powerpoint",
+  "application/msword",
+  "application/octet-stream",
+];
+
+function canPreviewInline(mimeType: string): boolean {
+  return !NON_PREVIEWABLE_MIME_PREFIXES.some((prefix) => mimeType.startsWith(prefix));
+}
+
 export function ArtifactList({ taskId, refreshKey, projId, onRelayDocSelect }: ArtifactListProps) {
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
   const [loading, setLoading] = useState(true);
@@ -172,7 +193,7 @@ export function ArtifactList({ taskId, refreshKey, projId, onRelayDocSelect }: A
     }
     try {
       const data = await api<{ url: string }>(
-        `/api/v1/artifacts/${artifactId}/download`,
+        `/api/v1/artifacts/${artifactId}/download?disposition=inline`,
       );
       window.open(data.url, "_blank");
     } catch {
@@ -326,25 +347,28 @@ export function ArtifactList({ taskId, refreshKey, projId, onRelayDocSelect }: A
             </div>
 
             <div className="ml-3 flex shrink-0 items-center gap-1">
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-8 w-8"
-                onClick={() =>
-                  void handleOpen(
-                    artifact.id,
-                    typeof artifact.metadata?.tr_public_url === "string"
-                      ? artifact.metadata.tr_public_url
-                      : undefined,
-                    typeof artifact.metadata?.tr_agent_key === "string"
-                      ? artifact.metadata.tr_agent_key
-                      : undefined,
-                  )
-                }
-                title="Open in new tab"
-              >
-                <ExternalLink className="h-4 w-4" />
-              </Button>
+              {(typeof artifact.metadata?.tr_public_url === "string" ||
+                canPreviewInline(artifact.mime_type)) && (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8"
+                  onClick={() =>
+                    void handleOpen(
+                      artifact.id,
+                      typeof artifact.metadata?.tr_public_url === "string"
+                        ? artifact.metadata.tr_public_url
+                        : undefined,
+                      typeof artifact.metadata?.tr_agent_key === "string"
+                        ? artifact.metadata.tr_agent_key
+                        : undefined,
+                    )
+                  }
+                  title="Open in new tab"
+                >
+                  <ExternalLink className="h-4 w-4" />
+                </Button>
+              )}
               <Button
                 variant="ghost"
                 size="icon"
