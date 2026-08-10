@@ -1922,7 +1922,7 @@ func TestTaskService_Update_DelegationLevelNoNotifyIfUnchanged(t *testing.T) {
 
 // setupTaskServiceForAssigneeNotify wires a task service with both the
 // agent-notify mock and the user-facing notification mock, so Update's
-// dispatchUserNotification("task.assigned") call is observable.
+// notifyAssignee("task.assigned") call is observable.
 func setupTaskServiceForAssigneeNotify() (*taskService, *MockTaskRepository, *MockNotificationService, *MockProjectRepository) {
 	taskRepo := NewMockTaskRepository()
 	statusRepo := NewMockTaskStatusRepository()
@@ -1952,6 +1952,46 @@ func TestTaskService_Update_AssigneeChanged_DispatchesUserNotification(t *testin
 	taskID := uuid.New()
 	taskRepo.items[taskID] = &domain.Task{
 		ID: taskID, ProjectID: projID, Title: "T",
+		AssigneeID: &oldAssignee, AssigneeType: domain.AssigneeTypeUser,
+	}
+
+	err := svc.Update(ctx, &domain.Task{
+		ID: taskID, ProjectID: projID, Title: "T",
+		AssigneeID: &newAssignee, AssigneeType: domain.AssigneeTypeUser,
+	})
+	require.NoError(t, err)
+
+	var call *domain.NotificationEvent
+	for i, c := range notifySvc.Calls() {
+		if c.EventType == "task.assigned" {
+			call = &notifySvc.Calls()[i]
+		}
+	}
+	require.NotNil(t, call, "expected task.assigned in-app notification when assignee changes via Update")
+	assert.Contains(t, call.Title, "Task assigned:")
+	require.NotNil(t, call.TargetUserID, "task.assigned notification must be targeted, not broadcast")
+	assert.Equal(t, newAssignee, *call.TargetUserID)
+	assert.Equal(t, newAssignee, call.Metadata["assignee_id"], "metadata must carry the assignee's identifier")
+}
+
+// TestTaskService_Update_AssigneeChangedToAgent_NoInAppNotification is the
+// AC5 regression test: an agent assignee is woken via notifyAssignedAgent's
+// push/SSE/callback path, not the in-app notifications table (which only
+// holds user rows) — so Update must not also fire a targeted in-app event
+// for an agent assignee.
+func TestTaskService_Update_AssigneeChangedToAgent_NoInAppNotification(t *testing.T) {
+	svc, taskRepo, notifySvc, projRepo := setupTaskServiceForAssigneeNotify()
+	ctx := context.Background()
+
+	projID := uuid.New()
+	wsID := uuid.New()
+	projRepo.items[projID] = &domain.Project{ID: projID, WorkspaceID: wsID}
+
+	oldAssignee := uuid.New()
+	newAssignee := uuid.New()
+	taskID := uuid.New()
+	taskRepo.items[taskID] = &domain.Task{
+		ID: taskID, ProjectID: projID, Title: "T",
 		AssigneeID: &oldAssignee, AssigneeType: domain.AssigneeTypeAgent,
 	}
 
@@ -1961,14 +2001,41 @@ func TestTaskService_Update_AssigneeChanged_DispatchesUserNotification(t *testin
 	})
 	require.NoError(t, err)
 
-	var found bool
 	for _, call := range notifySvc.Calls() {
-		if call.EventType == "task.assigned" {
-			found = true
-			assert.Contains(t, call.Title, "Task assigned:")
-		}
+		assert.NotEqual(t, "task.assigned", call.EventType,
+			"an agent assignee must go through notifyAssignedAgent's push path, not the in-app table")
 	}
-	assert.True(t, found, "expected task.assigned in-app notification when assignee changes via Update")
+}
+
+// TestTaskService_Update_SelfAssign_NoInAppNotification is the AC2 regression
+// test: assigning a task to yourself must not notify you about your own action.
+func TestTaskService_Update_SelfAssign_NoInAppNotification(t *testing.T) {
+	svc, taskRepo, notifySvc, projRepo := setupTaskServiceForAssigneeNotify()
+
+	self := uuid.New()
+	ctx := actorctx.WithActor(context.Background(), self, domain.ActorTypeUser)
+
+	projID := uuid.New()
+	wsID := uuid.New()
+	projRepo.items[projID] = &domain.Project{ID: projID, WorkspaceID: wsID}
+
+	oldAssignee := uuid.New()
+	taskID := uuid.New()
+	taskRepo.items[taskID] = &domain.Task{
+		ID: taskID, ProjectID: projID, Title: "T",
+		AssigneeID: &oldAssignee, AssigneeType: domain.AssigneeTypeUser,
+	}
+
+	err := svc.Update(ctx, &domain.Task{
+		ID: taskID, ProjectID: projID, Title: "T",
+		AssigneeID: &self, AssigneeType: domain.AssigneeTypeUser,
+	})
+	require.NoError(t, err)
+
+	for _, call := range notifySvc.Calls() {
+		assert.NotEqual(t, "task.assigned", call.EventType,
+			"must not notify the actor about assigning a task to themselves")
+	}
 }
 
 // TestTaskService_Update_AssigneeUnchanged_DoesNotDispatchNotification is a
@@ -2003,6 +2070,56 @@ func TestTaskService_Update_AssigneeUnchanged_DoesNotDispatchNotification(t *tes
 		assert.NotEqual(t, "task.assigned", call.EventType,
 			"must not notify task.assigned when assignee value is unchanged, even via a different pointer")
 	}
+}
+
+// TestTaskService_Create_AssigneeSet_DispatchesTargetedUserNotification covers
+// the Create() call site — the same targeted contract as Update, checked
+// separately since Create builds the task object rather than mutating a
+// fetched one.
+func TestTaskService_Create_AssigneeSet_DispatchesTargetedUserNotification(t *testing.T) {
+	svc, _, notifySvc, projRepo := setupTaskServiceForAssigneeNotify()
+	ctx := context.Background()
+
+	projID := uuid.New()
+	wsID := uuid.New()
+	projRepo.items[projID] = &domain.Project{ID: projID, WorkspaceID: wsID}
+
+	assignee := uuid.New()
+	task := &domain.Task{
+		ProjectID: projID, Title: "T",
+		AssigneeID: &assignee, AssigneeType: domain.AssigneeTypeUser,
+	}
+	require.NoError(t, svc.Create(ctx, task))
+
+	require.Len(t, notifySvc.Calls(), 1)
+	call := notifySvc.Calls()[0]
+	assert.Equal(t, "task.assigned", call.EventType)
+	require.NotNil(t, call.TargetUserID, "task.assigned on create must be targeted, not broadcast")
+	assert.Equal(t, assignee, *call.TargetUserID)
+}
+
+// TestTaskService_AssignTask_DispatchesTargetedUserNotification covers the
+// third call site — POST /tasks/{id}/assign.
+func TestTaskService_AssignTask_DispatchesTargetedUserNotification(t *testing.T) {
+	svc, taskRepo, notifySvc, projRepo := setupTaskServiceForAssigneeNotify()
+	ctx := context.Background()
+
+	projID := uuid.New()
+	wsID := uuid.New()
+	projRepo.items[projID] = &domain.Project{ID: projID, WorkspaceID: wsID}
+
+	taskID := uuid.New()
+	taskRepo.items[taskID] = &domain.Task{ID: taskID, ProjectID: projID, Title: "T"}
+
+	assignee := uuid.New()
+	err := svc.AssignTask(ctx, taskID, AssignTaskInput{AssigneeID: &assignee, AssigneeType: domain.AssigneeTypeUser})
+	require.NoError(t, err)
+
+	require.Len(t, notifySvc.Calls(), 1)
+	call := notifySvc.Calls()[0]
+	assert.Equal(t, "task.assigned", call.EventType)
+	require.NotNil(t, call.TargetUserID, "task.assigned via AssignTask must be targeted, not broadcast")
+	assert.Equal(t, assignee, *call.TargetUserID)
 }
 
 // ---------------------------------------------------------------------------
@@ -2204,10 +2321,8 @@ func TestTaskService_Create_ReviewerAssigned_AgentReviewerNotified(t *testing.T)
 		}
 	}
 	assert.True(t, found, "expected task.reviewer_assigned push to agent reviewer on create")
-	// Create() also fires an unconditional workspace-wide "task.assigned"
-	// broadcast unrelated to the reviewer (pre-existing behavior, out of this
-	// task's scope) — only assert that no reviewer_assigned leaked onto the
-	// broadcast path meant for the assignee.
+	// No assignee was set on this task, so notifyAssignee no-ops and Calls()
+	// holds only the reviewer path — assert nothing leaked from it.
 	for _, call := range userNotify.Calls() {
 		assert.NotEqual(t, "task.reviewer_assigned", call.EventType,
 			"an agent reviewer must go through the agent push path, not the in-app broadcast")
@@ -2230,17 +2345,11 @@ func TestTaskService_Create_ReviewerAssigned_UserReviewerNotifiedTargeted(t *tes
 	}
 	require.NoError(t, svc.Create(ctx, task))
 
-	// Create() also fires an unconditional workspace-wide "task.assigned"
-	// broadcast unrelated to the reviewer (pre-existing behavior, out of this
-	// task's scope) — find the reviewer-specific call among them rather than
-	// assuming it is the only one.
-	var call *domain.NotificationEvent
-	for i, c := range userNotify.Calls() {
-		if c.EventType == "task.reviewer_assigned" {
-			call = &userNotify.Calls()[i]
-		}
-	}
-	require.NotNil(t, call, "expected a task.reviewer_assigned in-app notification")
+	// No assignee was set on this task, so notifyAssignee no-ops and the
+	// reviewer notification is the only in-app call.
+	require.Len(t, userNotify.Calls(), 1)
+	call := userNotify.Calls()[0]
+	assert.Equal(t, "task.reviewer_assigned", call.EventType)
 	require.NotNil(t, call.TargetUserID, "reviewer notification on create must be targeted, not broadcast")
 	assert.Equal(t, reviewerID, *call.TargetUserID)
 	assert.Empty(t, agentNotify.Calls())
