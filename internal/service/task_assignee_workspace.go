@@ -63,6 +63,63 @@ func (e *AssigneeNotInWorkspaceError) Error() string {
 		e.PrincipalID, e.AssigneeType, e.ProjectID, e.Reason)
 }
 
+// AssigneeUnresolvedError reports an assignee_id that names no principal at all —
+// neither an agent nor a user — and therefore could not be typed.
+//
+// It is separate from AssigneeNotInWorkspaceError because the two are different
+// mistakes and want different corrections: that one means "this principal exists,
+// but not here", this one means "this id is not anybody". Answering the second with
+// the first sends the caller to compare workspaces for an id that has no workspace.
+//
+// Why this must be an error rather than a shrug: resolveAssigneeType falls back to
+// the caller's declared type when the directory lookup finds nothing, so an
+// unresolvable id keeps whatever type the caller sent. When that type is a
+// principal type the tenancy guard already refuses it. When it is "unassigned" (or
+// empty) the guard used to skip out — correctly, on its own terms, since nothing
+// typed "unassigned" can be read back through ListByAssignee — and the row was
+// written with a dangling assignee_id and no assignment.
+//
+// That silence is the whole defect. The card looks created and carries an id that
+// reads like a real one; nobody is assigned, so no lane is ever fed, and the work
+// simply does not happen. Two such rows are in this database (2026-03-26 and
+// 2026-06-13), and the first names 7bcbd908-0000-0000-0000-000000000000 — the
+// zero-padded form of agent howard's short id, i.e. exactly the failure this
+// message is written to pre-empt.
+type AssigneeUnresolvedError struct {
+	PrincipalID  uuid.UUID
+	AssigneeType domain.AssigneeType
+	ProjectID    uuid.UUID
+}
+
+func (e *AssigneeUnresolvedError) Error() string {
+	return fmt.Sprintf(
+		"assignee_id %s names no agent and no user, so it could not be typed "+
+			"(arrived as type %q) and cannot be assigned to a task in project %s",
+		e.PrincipalID, e.AssigneeType, e.ProjectID)
+}
+
+// assertAssigneeIsTyped refuses an assignee_id that survived type resolution
+// without becoming a principal.
+//
+// The invariant: assignee_id is non-null IF AND ONLY IF assignee_type is a
+// principal type. The pair is the pointer; half of it is not a weaker assignment,
+// it is a dangling one. Clearing an assignee is expressed by sending no id at all,
+// which this function permits (see the nil checks), so nothing legitimate needs the
+// contradictory shape.
+func assertAssigneeIsTyped(projectID uuid.UUID, assigneeID *uuid.UUID, assigneeType domain.AssigneeType) error {
+	if assigneeID == nil || *assigneeID == uuid.Nil {
+		return nil
+	}
+	if assigneeType == domain.AssigneeTypeAgent || assigneeType == domain.AssigneeTypeUser {
+		return nil
+	}
+	return &AssigneeUnresolvedError{
+		PrincipalID:  *assigneeID,
+		AssigneeType: assigneeType,
+		ProjectID:    projectID,
+	}
+}
+
 // WorkspaceMembershipReader reports whether a human principal may act inside a
 // workspace — a workspace_members row, or the owner fallback for the workspaces
 // whose owner row was never written.

@@ -632,6 +632,8 @@ func TestTaskService_MoveTask_ReviewAssignee(t *testing.T) {
 
 	t.Run("explicit assignee_id overrides config (regression)", func(t *testing.T) {
 		explicitReviewerID := uuid.New()
+		// Seeded below as a real agent: an id resolving to no principal is now refused
+		// before this subtest's config-vs-explicit precedence is ever reached.
 		wfResp := &domain.WorkflowRulesResponse{
 			WorkflowRulesConfig: domain.WorkflowRulesConfig{
 				Transitions: map[string]domain.TransitionRule{
@@ -642,7 +644,7 @@ func TestTaskService_MoveTask_ReviewAssignee(t *testing.T) {
 				},
 			},
 		}
-		svc, taskRepo, statusRepo, _, projRepo := setupTaskServiceWithWorkflow(wfResp, nil)
+		svc, taskRepo, statusRepo, agentRepo, projRepo := setupTaskServiceWithWorkflow(wfResp, nil)
 
 		oldStatusID := uuid.New()
 		newStatusID := uuid.New()
@@ -651,6 +653,9 @@ func TestTaskService_MoveTask_ReviewAssignee(t *testing.T) {
 		statusRepo.items[oldStatusID] = inProgressStatus(oldStatusID)
 		statusRepo.items[newStatusID] = reviewStatus(newStatusID)
 		projRepo.items[projectID] = &domain.Project{ID: projectID, WorkspaceID: workspaceID}
+		agentRepo.items[explicitReviewerID] = &domain.Agent{
+			ID: explicitReviewerID, WorkspaceID: workspaceID, Slug: "explicit-lead",
+		}
 		taskRepo.items[taskID] = &domain.Task{
 			ID:            taskID,
 			ProjectID:     projectID,
@@ -762,6 +767,12 @@ func TestTaskService_MoveTask_ReviewAssignee(t *testing.T) {
 		// re-checks the stashed principal before handing the card back, because a stash
 		// can outlive the agent it names.
 		agentRepo.items[builderID] = &domain.Agent{ID: builderID, WorkspaceID: workspaceID, Slug: "builder"}
+		// Same reason as the subtest above: the explicit assignee handed to MoveTask
+		// must name a real agent, or it is refused before "explicit wins over restore"
+		// — the property under test here — is ever reached.
+		agentRepo.items[explicitAssigneeID] = &domain.Agent{
+			ID: explicitAssigneeID, WorkspaceID: workspaceID, Slug: "explicit-assignee",
+		}
 		taskRepo.items[taskID] = &domain.Task{
 			ID:            taskID,
 			ProjectID:     projectID,
@@ -1542,13 +1553,30 @@ func TestTaskService_Create_ExplicitAssigneeIDNotClobbered(t *testing.T) {
 	svc, taskRepo := setupTaskServiceWithRules(rules)
 	ctx := context.Background()
 
+	// The explicit assignee must be a REAL agent: an id naming no principal is now
+	// refused outright (AssigneeUnresolvedError), so an unseeded uuid would fail this
+	// test on a completely different rule and stop exercising auto-assign at all.
+	//
+	// Seeding does NOT weaken what is under test. Create's auto-assign guard reads
+	// `(type == unassigned || type == "") && AssigneeID == nil`, and it runs BEFORE
+	// resolveAssigneeType corrects the type — so at that moment the type below is
+	// still "unassigned" and the ONLY thing stopping the clobber is the AssigneeID
+	// clause, exactly as before. Proven by mutation: delete `&& task.AssigneeID == nil`
+	// and this test fails.
+	// autoAssignDefault is seeded too, deliberately. If it were not a real agent, a
+	// regression that let auto-assign clobber the explicit id would be caught by the
+	// unresolved-assignee guard instead of by this test's own assertion — the test
+	// would still go red, but for the wrong reason, and it would stop proving
+	// anything about clobbering the moment that guard changed.
+	seedTestAgents(t, svc, explicitAssignee, autoAssignDefault)
+
 	task := &domain.Task{
 		ProjectID: uuid.New(),
 		StatusID:  uuid.New(),
 		Title:     "Explicit assignee should not be clobbered",
 		Priority:  domain.PriorityMedium,
-		// Simulate the bug: assignee_id provided but assignee_type left as "unassigned"
-		// (the old handler default when type was omitted from the request).
+		// assignee_id provided but assignee_type left as "unassigned" — the old
+		// handler default when type was omitted from the request.
 		AssigneeID:   &explicitAssignee,
 		AssigneeType: domain.AssigneeTypeUnassigned,
 	}

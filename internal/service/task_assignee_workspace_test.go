@@ -454,3 +454,137 @@ func TestValidateAssigneeForProject_NilAssignee_ReturnsUnassignedWithoutLookup(t
 	assert.Equal(t, domain.AssigneeTypeUnassigned, resolved,
 		"no assignee means nothing to validate — must not error and must not claim a real type")
 }
+
+// ---------------------------------------------------------------------------
+// An assignee_id that names nobody (#96f1dfc6)
+//
+// Distinct from the foreign-principal case above: there the id resolves to a real
+// principal in the wrong workspace, here it resolves to nothing at all, so
+// resolveAssigneeType cannot type it and hands back whatever the caller declared.
+// When that declared type is not a principal type the tenancy guard skips — by
+// design, since nothing typed "unassigned" is readable through ListByAssignee — and
+// before this fix the row was written carrying a dangling assignee_id.
+//
+// The consequence is a card that looks assigned and is not: no lane is ever fed for
+// it, and nothing errors. Two such rows exist in prod (2026-03-26, 2026-06-13); the
+// first names the zero-padded form of a real agent's short id.
+// ---------------------------------------------------------------------------
+
+func TestCrossWorkspaceAssignee_CreateRefusesAnIdThatNamesNobody(t *testing.T) {
+	env := setupTenancyEnv(t, nil)
+	ghost := uuid.New() // in neither directory
+
+	err := env.svc.Create(context.Background(), &domain.Task{
+		ProjectID: env.projectID, Title: "task for a ghost",
+		AssigneeID: &ghost, AssigneeType: domain.AssigneeTypeUnassigned,
+	})
+
+	require.Error(t, err, "an assignee_id naming no principal must be refused")
+	var unresolved *AssigneeUnresolvedError
+	require.ErrorAs(t, err, &unresolved,
+		"must be the unresolved error, not the tenancy one — the id has no workspace to be "+
+			"outside of, and answering 'wrong workspace' sends the caller to compare tenants")
+	assert.Empty(t, env.tasks.items,
+		"a refused assignee must leave no task behind: a created-but-unassigned card is "+
+			"exactly the silent failure this refusal exists to prevent")
+}
+
+// TestCrossWorkspaceAssignee_CreateAllowsNoAssigneeAtAll is the control that keeps
+// the refusal from becoming "refuse everything unassigned". Creating a task with no
+// assignee is the normal way to file work nobody owns yet, and it must still work.
+func TestCrossWorkspaceAssignee_CreateAllowsNoAssigneeAtAll(t *testing.T) {
+	env := setupTenancyEnv(t, nil)
+
+	require.NoError(t, env.svc.Create(context.Background(), &domain.Task{
+		ProjectID: env.projectID, Title: "unowned task",
+		AssigneeType: domain.AssigneeTypeUnassigned,
+	}), "a task with no assignee at all must still be creatable")
+	assert.Len(t, env.tasks.items, 1)
+}
+
+// TestCrossWorkspaceAssignee_CreateAllowsARealAssigneeWithoutADeclaredType is the
+// second control, and the one that matters most for blast radius: the common call
+// supplies an id and lets the server work out the type. That must keep working —
+// resolveAssigneeType types it before the guard sees it.
+func TestCrossWorkspaceAssignee_CreateAllowsARealAssigneeWithoutADeclaredType(t *testing.T) {
+	env := setupTenancyEnv(t, nil)
+
+	require.NoError(t, env.svc.Create(context.Background(), &domain.Task{
+		ProjectID: env.projectID, Title: "task for a real agent",
+		AssigneeID: &env.nativeAgent, AssigneeType: domain.AssigneeTypeUnassigned,
+	}), "a real agent named without a declared type must still be assignable")
+	require.Len(t, env.tasks.items, 1)
+	for _, task := range env.tasks.items {
+		assert.Equal(t, domain.AssigneeTypeAgent, task.AssigneeType,
+			"the stored type must be the resolved one, not the caller's placeholder")
+	}
+}
+
+// TestAssertAssigneeIsTyped_UnitTable pins the predicate directly, including the
+// two shapes that must NOT be refused.
+func TestAssertAssigneeIsTyped_UnitTable(t *testing.T) {
+	projectID := uuid.New()
+	id := uuid.New()
+	var nilID uuid.UUID
+
+	cases := []struct {
+		name    string
+		id      *uuid.UUID
+		typ     domain.AssigneeType
+		refused bool
+	}{
+		{"id + agent", &id, domain.AssigneeTypeAgent, false},
+		{"id + user", &id, domain.AssigneeTypeUser, false},
+		{"id + unassigned", &id, domain.AssigneeTypeUnassigned, true},
+		{"id + empty type", &id, domain.AssigneeType(""), true},
+		{"no id + unassigned", nil, domain.AssigneeTypeUnassigned, false},
+		{"no id + agent", nil, domain.AssigneeTypeAgent, false},
+		// uuid.Nil is "no assignee" spelled with a value; refusing it would break
+		// every caller that zeroes the field instead of nilling the pointer.
+		{"zero uuid + unassigned", &nilID, domain.AssigneeTypeUnassigned, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := assertAssigneeIsTyped(projectID, tc.id, tc.typ)
+			if tc.refused {
+				require.Error(t, err)
+				var unresolved *AssigneeUnresolvedError
+				require.ErrorAs(t, err, &unresolved)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
+// TestValidateAssigneeForProject_RefusesAnIdThatNamesNobody covers the SECOND
+// funnel. Template and recurring-schedule writes do not go through
+// ensureAssigneeProjectMember — #558 gave them ValidateAssigneeForProject instead —
+// so a guard placed in only one of the two would cover part of the class and read
+// as covering all of it.
+func TestValidateAssigneeForProject_RefusesAnIdThatNamesNobody(t *testing.T) {
+	env := setupTenancyEnv(t, nil)
+	ghost := uuid.New()
+
+	_, err := env.svc.ValidateAssigneeForProject(
+		context.Background(), env.projectID, &ghost, domain.AssigneeTypeUnassigned)
+
+	require.Error(t, err, "a template/schedule assignee naming no principal must be refused")
+	var unresolved *AssigneeUnresolvedError
+	require.ErrorAs(t, err, &unresolved)
+}
+
+// Controls for the above: the two shapes this funnel must keep accepting.
+func TestValidateAssigneeForProject_AllowsRealAndEmpty(t *testing.T) {
+	env := setupTenancyEnv(t, nil)
+
+	resolved, err := env.svc.ValidateAssigneeForProject(
+		context.Background(), env.projectID, &env.nativeAgent, domain.AssigneeTypeUnassigned)
+	require.NoError(t, err, "a real agent must still validate")
+	assert.Equal(t, domain.AssigneeTypeAgent, resolved, "and must come back correctly typed")
+
+	resolved, err = env.svc.ValidateAssigneeForProject(
+		context.Background(), env.projectID, nil, domain.AssigneeTypeUnassigned)
+	require.NoError(t, err, "a template with no assignee at all must still validate")
+	assert.Equal(t, domain.AssigneeTypeUnassigned, resolved)
+}

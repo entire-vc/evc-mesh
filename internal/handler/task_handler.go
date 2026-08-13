@@ -1270,6 +1270,22 @@ func handleError(c echo.Context, err error) error {
 		})
 	}
 
+	var unresolvedAssigneeErr *service.AssigneeUnresolvedError
+	if errors.As(err, &unresolvedAssigneeErr) {
+		// 422 for the same reason as the sibling above, but a distinct code and a
+		// message naming the mistake that actually produces this: an 8-hex short id
+		// padded out into a full UUID. Only the first 8 hex of a task/agent id are
+		// visible in short form; the other 24 are not guessable, so a reconstructed
+		// UUID names nobody. Resolve short ids by lookup instead of arithmetic.
+		return c.JSON(http.StatusUnprocessableEntity, map[string]any{
+			"code": "assignee_unresolved",
+			"message": "assignee_id does not match any agent or user. If you built this id from an " +
+				"8-character short id, it is not recoverable that way — only the first 8 hex " +
+				"digits are shared. Look the principal up in GET /workspaces/:ws_id/team and " +
+				"use the full id it returns, or omit assignee_id to create the task unassigned.",
+		})
+	}
+
 	var doneEvidenceErr *service.DoneEvidenceError
 	if errors.As(err, &doneEvidenceErr) {
 		return c.JSON(http.StatusUnprocessableEntity, map[string]any{
