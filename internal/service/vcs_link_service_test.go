@@ -332,6 +332,9 @@ func (t *fakeTaskService) ShipTask(context.Context, uuid.UUID, bool) error     {
 func (t *fakeTaskService) SetDodCheck(context.Context, uuid.UUID, string, string, string) error {
 	return nil
 }
+func (t *fakeTaskService) ValidateAssigneeForProject(_ context.Context, _ uuid.UUID, _ *uuid.UUID, assigneeType domain.AssigneeType) (domain.AssigneeType, error) {
+	return assigneeType, nil
+}
 
 // fakeCommentService captures Create calls so tests can assert on the comment
 // body and authorship.
