@@ -2402,10 +2402,15 @@ func TestTaskService_Create_ReviewerAssigned_AgentReviewerNotified(t *testing.T)
 	ctx := context.Background()
 
 	projID := uuid.New()
-	projRepo.items[projID] = &domain.Project{ID: projID, WorkspaceID: uuid.New()}
+	// One tenant: the reviewer below must belong to the project's workspace —
+	// same contract as the Update twin above. Reviewer-at-creation is a write
+	// path that names a principal by id, so it carries the assignee tenancy
+	// guard, and an agent reviewer must be a real agent of this workspace.
+	projRepo.items[projID] = &domain.Project{ID: projID, WorkspaceID: testDefaultWorkspaceID}
 
 	reviewerID := uuid.New()
 	reviewerType := domain.AssigneeTypeAgent
+	seedTestAgents(t, svc, reviewerID)
 	task := &domain.Task{
 		ProjectID: projID, Title: "T",
 		ReviewerID: &reviewerID, ReviewerType: &reviewerType,

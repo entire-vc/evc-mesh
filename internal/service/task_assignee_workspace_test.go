@@ -337,6 +337,49 @@ func TestCrossWorkspaceAssignee_UpdateRefusesForeignReviewer(t *testing.T) {
 	require.ErrorAs(t, err, &foreign)
 }
 
+// TestCrossWorkspaceAssignee_CreateRefusesForeignReviewer covers the reviewer's
+// SECOND write path, which landed on main (#545, "allow setting reviewer at task
+// creation") while this branch sat in conflict — the ninth path acquired a tenth
+// entrance before the fix for it had merged.
+//
+// This is the rule from the guard's own file arriving on schedule twice over: a
+// field that names a principal by id grows new write sites faster than a review
+// cycle closes, so the guard has to sit in the funnel rather than at any one
+// call site. Update's reviewer error was propagated by this branch; Create's had
+// to be, too, and a discarded error there would have reopened exactly the gap
+// the ninth-path commit closed — silently, since Create's happy path is green
+// either way.
+func TestCrossWorkspaceAssignee_CreateRefusesForeignReviewer(t *testing.T) {
+	env := setupTenancyEnv(t, nil)
+	reviewerType := domain.AssigneeTypeAgent
+
+	err := env.svc.Create(context.Background(), &domain.Task{
+		ProjectID: env.projectID, Title: "new task",
+		ReviewerID: &env.foreignAgent, ReviewerType: &reviewerType,
+	})
+
+	require.Error(t, err, "a reviewer from another workspace must be refused at creation")
+	var foreign *AssigneeNotInWorkspaceError
+	require.ErrorAs(t, err, &foreign)
+	assert.Empty(t, env.tasks.items,
+		"a refused reviewer must leave no task behind — the check runs before taskRepo.Create, "+
+			"so the caller gets a refusal rather than a created task they must notice is unreviewed")
+}
+
+// TestCrossWorkspaceAssignee_CreateAllowsNativeReviewer is its positive control:
+// without it the test above is satisfied by a Create that refuses every reviewer.
+func TestCrossWorkspaceAssignee_CreateAllowsNativeReviewer(t *testing.T) {
+	env := setupTenancyEnv(t, nil)
+	reviewerType := domain.AssigneeTypeAgent
+
+	require.NoError(t, env.svc.Create(context.Background(), &domain.Task{
+		ProjectID: env.projectID, Title: "new task",
+		ReviewerID: &env.nativeAgent, ReviewerType: &reviewerType,
+	}), "an agent of this workspace must still be settable as reviewer at creation")
+
+	assert.Len(t, env.tasks.items, 1, "the task must actually have been created")
+}
+
 // TestCrossWorkspaceAssignee_UpdateAllowsNativeReviewer is its positive control.
 func TestCrossWorkspaceAssignee_UpdateAllowsNativeReviewer(t *testing.T) {
 	env := setupTenancyEnv(t, nil)
