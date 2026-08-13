@@ -376,6 +376,7 @@ type MockTaskService struct {
 	ExtendCheckoutFunc       func(ctx context.Context, taskID uuid.UUID, token uuid.UUID, ttlMinutes int) (*service.CheckoutResult, error)
 	ForceReleaseCheckoutFunc func(ctx context.Context, taskID uuid.UUID) error
 	MoveToProjectFunc        func(ctx context.Context, taskID, targetProjectID uuid.UUID) (*domain.Task, error)
+	ValidateAssigneeFunc     func(ctx context.Context, projectID uuid.UUID, assigneeID *uuid.UUID, assigneeType domain.AssigneeType) (domain.AssigneeType, error)
 }
 
 func (m *MockTaskService) Create(ctx context.Context, task *domain.Task) error {
@@ -540,6 +541,13 @@ func (m *MockTaskService) SetHumanGate(_ context.Context, _ uuid.UUID, _ bool) e
 func (m *MockTaskService) ShipTask(_ context.Context, _ uuid.UUID, _ bool) error     { return nil }
 func (m *MockTaskService) SetDodCheck(_ context.Context, _ uuid.UUID, _, _, _ string) error {
 	return nil
+}
+
+func (m *MockTaskService) ValidateAssigneeForProject(ctx context.Context, projectID uuid.UUID, assigneeID *uuid.UUID, assigneeType domain.AssigneeType) (domain.AssigneeType, error) {
+	if m.ValidateAssigneeFunc != nil {
+		return m.ValidateAssigneeFunc(ctx, projectID, assigneeID, assigneeType)
+	}
+	return assigneeType, nil
 }
 
 // MockAgentService implements service.AgentService for testing.

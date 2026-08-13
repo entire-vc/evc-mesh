@@ -25,7 +25,26 @@ func NewTaskTemplateService(repo repository.TaskTemplateRepository, taskSvc Task
 }
 
 // Create inserts a new task template for the given project.
+//
+// A template's assignee_id is written straight into the template row, not into
+// a task — CreateTaskFromTemplate is the only path that later calls
+// taskSvc.Create, which is where the task write-path tenancy guard lives. A
+// template never routes through it itself, so without this check a foreign
+// assignee is accepted here and only refused when the template is next used,
+// as an opaque task-creation failure with no template-side signal at all.
 func (s *taskTemplateService) Create(ctx context.Context, input domain.CreateTemplateInput) (*domain.TaskTemplate, error) {
+	if input.AssigneeID != nil {
+		assigneeType := domain.AssigneeTypeUnassigned
+		if input.AssigneeType != nil {
+			assigneeType = *input.AssigneeType
+		}
+		resolved, err := s.taskSvc.ValidateAssigneeForProject(ctx, input.ProjectID, input.AssigneeID, assigneeType)
+		if err != nil {
+			return nil, err
+		}
+		input.AssigneeType = &resolved
+	}
+
 	priority := input.Priority
 	if priority == "" {
 		priority = domain.PriorityMedium
@@ -79,8 +98,29 @@ func (s *taskTemplateService) List(ctx context.Context, projectID uuid.UUID) ([]
 	return tmpls, nil
 }
 
-// Update partially updates an existing task template.
+// Update partially updates an existing task template. A nil AssigneeID means
+// "leave the assignee unchanged" (see UpdateTemplateInput's doc) — the tenancy
+// check only runs when the caller is actually setting one.
 func (s *taskTemplateService) Update(ctx context.Context, id uuid.UUID, input domain.UpdateTemplateInput) (*domain.TaskTemplate, error) {
+	if input.AssigneeID != nil {
+		// The project (and therefore the workspace) an existing template
+		// belongs to is not part of UpdateTemplateInput, so it has to be read
+		// back before the new assignee can be checked against it.
+		existing, err := s.repo.GetByID(ctx, id)
+		if err != nil {
+			return nil, fmt.Errorf("taskTemplateService.Update: fetch existing: %w", err)
+		}
+		assigneeType := domain.AssigneeTypeUnassigned
+		if input.AssigneeType != nil {
+			assigneeType = *input.AssigneeType
+		}
+		resolved, err := s.taskSvc.ValidateAssigneeForProject(ctx, existing.ProjectID, input.AssigneeID, assigneeType)
+		if err != nil {
+			return nil, err
+		}
+		input.AssigneeType = &resolved
+	}
+
 	tmpl, err := s.repo.Update(ctx, id, input)
 	if err != nil {
 		return nil, fmt.Errorf("taskTemplateService.Update: %w", err)

@@ -181,6 +181,10 @@ type StubTaskService struct {
 	created       []*domain.Task
 	createErr     error
 	defaultStatus *domain.TaskStatus
+	// validateAssigneeErr, when set, makes ValidateAssigneeForProject refuse —
+	// tests exercising the tenancy-refusal path set this instead of building a
+	// real cross-workspace fixture, matching how createErr is used above.
+	validateAssigneeErr error
 }
 
 func NewStubTaskService() *StubTaskService {
@@ -270,6 +274,18 @@ func (s *StubTaskService) Search(_ context.Context, _ uuid.UUID, _ repository.Ta
 
 func (s *StubTaskService) SupersedeRecurringInstances(_ context.Context, _, _ uuid.UUID) error {
 	return nil
+}
+
+func (s *StubTaskService) ValidateAssigneeForProject(_ context.Context, _ uuid.UUID, assigneeID *uuid.UUID, assigneeType domain.AssigneeType) (domain.AssigneeType, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if assigneeID == nil || *assigneeID == uuid.Nil {
+		return domain.AssigneeTypeUnassigned, nil
+	}
+	if s.validateAssigneeErr != nil {
+		return assigneeType, s.validateAssigneeErr
+	}
+	return assigneeType, nil
 }
 
 func (s *StubTaskService) SetHumanGate(_ context.Context, _ uuid.UUID, _ bool) error { return nil }
@@ -1108,5 +1124,149 @@ func TestRunOneSchedule_CallsSupersede(t *testing.T) {
 	spy.StubTaskService.mu.Unlock()
 	if calls[0].newTaskID != createdTask.ID {
 		t.Errorf("supersede newTaskID = %v, want %v", calls[0].newTaskID, createdTask.ID)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Assignee tenancy wiring — Create/Update must call taskSvc.ValidateAssigneeForProject
+// and propagate its refusal, the same funnel task write paths go through.
+// ---------------------------------------------------------------------------
+
+func TestRecurringService_Create_RefusesWhenFunnelRefuses(t *testing.T) {
+	stub := NewStubTaskService()
+	stub.validateAssigneeErr = &AssigneeNotInWorkspaceError{Reason: "agent belongs to a different workspace"}
+	repo := NewMockRecurringRepository()
+	svc := NewRecurringService(repo, stub)
+
+	foreignAgent := uuid.New()
+	_, err := svc.Create(context.Background(), CreateRecurringInput{
+		ProjectID: uuid.New(), TitleTemplate: "x", Frequency: domain.RecurringFrequencyDaily,
+		AssigneeID: &foreignAgent, AssigneeType: domain.AssigneeTypeAgent,
+	})
+
+	var refused *AssigneeNotInWorkspaceError
+	if !errors.As(err, &refused) {
+		t.Fatalf("Create() error = %v, want *AssigneeNotInWorkspaceError", err)
+	}
+	if len(repo.schedules) != 0 {
+		t.Fatalf("refused Create must not persist a row, found %d", len(repo.schedules))
+	}
+}
+
+func TestRecurringService_Create_NativeAssigneeStillPersists(t *testing.T) {
+	stub := NewStubTaskService() // no validateAssigneeErr set: funnel says OK
+	repo := NewMockRecurringRepository()
+	svc := NewRecurringService(repo, stub)
+
+	nativeAgent := uuid.New()
+	sched, err := svc.Create(context.Background(), CreateRecurringInput{
+		ProjectID: uuid.New(), TitleTemplate: "x", Frequency: domain.RecurringFrequencyDaily,
+		AssigneeID: &nativeAgent, AssigneeType: domain.AssigneeTypeAgent,
+	})
+	if err != nil {
+		t.Fatalf("Create() unexpected error: %v", err)
+	}
+	if sched.AssigneeID == nil || *sched.AssigneeID != nativeAgent {
+		t.Fatalf("Create() assignee_id = %v, want %v", sched.AssigneeID, nativeAgent)
+	}
+}
+
+func TestRecurringService_Create_NoAssignee_SkipsTheFunnel(t *testing.T) {
+	stub := NewStubTaskService()
+	stub.validateAssigneeErr = &AssigneeNotInWorkspaceError{Reason: "should never be reached"}
+	repo := NewMockRecurringRepository()
+	svc := NewRecurringService(repo, stub)
+
+	_, err := svc.Create(context.Background(), CreateRecurringInput{
+		ProjectID: uuid.New(), TitleTemplate: "x", Frequency: domain.RecurringFrequencyDaily,
+	})
+	if err != nil {
+		t.Fatalf("Create() unexpected error for an unassigned schedule: %v", err)
+	}
+}
+
+// TestRecurringService_Update_RefusesWhenFunnelRefuses covers the PATCH path,
+// and specifically the case where only AssigneeID changes on the request —
+// AssigneeID and AssigneeType are independent optional fields on
+// UpdateRecurringInput, so the check has to validate the MERGED schedule state
+// (existing AssigneeType + new AssigneeID), not just whichever field the PATCH
+// happened to name.
+func TestRecurringService_Update_RefusesWhenFunnelRefuses(t *testing.T) {
+	stub := NewStubTaskService()
+	repo := NewMockRecurringRepository()
+	svc := NewRecurringService(repo, stub)
+
+	nativeAgent := uuid.New()
+	created, err := svc.Create(context.Background(), CreateRecurringInput{
+		ProjectID: uuid.New(), TitleTemplate: "x", Frequency: domain.RecurringFrequencyDaily,
+		AssigneeID: &nativeAgent, AssigneeType: domain.AssigneeTypeAgent,
+	})
+	if err != nil {
+		t.Fatalf("setup Create() failed: %v", err)
+	}
+
+	stub.validateAssigneeErr = &AssigneeNotInWorkspaceError{Reason: "agent belongs to a different workspace"}
+	foreignAgent := uuid.New()
+
+	_, err = svc.Update(context.Background(), created.ID, UpdateRecurringInput{AssigneeID: &foreignAgent})
+
+	var refused *AssigneeNotInWorkspaceError
+	if !errors.As(err, &refused) {
+		t.Fatalf("Update() error = %v, want *AssigneeNotInWorkspaceError", err)
+	}
+	stored, _ := repo.GetByID(context.Background(), created.ID)
+	if stored.AssigneeID == nil || *stored.AssigneeID != nativeAgent {
+		t.Fatalf("refused Update must leave the original assignee in place, got %v, want %v", stored.AssigneeID, nativeAgent)
+	}
+}
+
+func TestRecurringService_Update_UnrelatedFieldSkipsTheFunnel(t *testing.T) {
+	stub := NewStubTaskService()
+	repo := NewMockRecurringRepository()
+	svc := NewRecurringService(repo, stub)
+
+	created, err := svc.Create(context.Background(), CreateRecurringInput{
+		ProjectID: uuid.New(), TitleTemplate: "x", Frequency: domain.RecurringFrequencyDaily,
+	})
+	if err != nil {
+		t.Fatalf("setup Create() failed: %v", err)
+	}
+
+	stub.validateAssigneeErr = &AssigneeNotInWorkspaceError{Reason: "should never be reached"}
+	newTitle := "renamed"
+	_, err = svc.Update(context.Background(), created.ID, UpdateRecurringInput{TitleTemplate: &newTitle})
+	if err != nil {
+		t.Fatalf("Update() unexpected error for a PATCH that never touches assignee_id: %v", err)
+	}
+}
+
+// TestRecurringService_Update_NativeAssigneeSucceeds_RealTaskService is the
+// success-path counterpart to TestRecurringService_Update_RefusesWhenFunnelRefuses,
+// run against the REAL taskService (setupTenancyEnv), not a stub — proving the
+// wiring works end to end through the actual resolveAssigneeType +
+// assertAssigneeInProjectWorkspace funnel.
+func TestRecurringService_Update_NativeAssigneeSucceeds_RealTaskService(t *testing.T) {
+	env := setupTenancyEnv(t, nil)
+	repo := NewMockRecurringRepository()
+	svc := NewRecurringService(repo, env.svc)
+
+	created, err := svc.Create(context.Background(), CreateRecurringInput{
+		ProjectID: env.projectID, TitleTemplate: "x", Frequency: domain.RecurringFrequencyDaily,
+	})
+	if err != nil {
+		t.Fatalf("setup Create() failed: %v", err)
+	}
+
+	updated, err := svc.Update(context.Background(), created.ID, UpdateRecurringInput{
+		AssigneeID: &env.nativeAgent,
+	})
+	if err != nil {
+		t.Fatalf("Update() unexpected error for a native-workspace agent: %v", err)
+	}
+	if updated.AssigneeID == nil || *updated.AssigneeID != env.nativeAgent {
+		t.Fatalf("Update() assignee_id = %v, want %v", updated.AssigneeID, env.nativeAgent)
+	}
+	if updated.AssigneeType != domain.AssigneeTypeAgent {
+		t.Fatalf("Update() assignee_type = %v, want agent (resolved from directory)", updated.AssigneeType)
 	}
 }

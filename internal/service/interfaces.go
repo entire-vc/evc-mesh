@@ -198,6 +198,25 @@ type TaskService interface {
 	// reporter is a free-form string identifying the caller (e.g. "verify-driver").
 	// Returns an error if the gate name is not configured on the project's dod_gates.
 	SetDodCheck(ctx context.Context, taskID uuid.UUID, gateName, status, reporter string) error
+	// ValidateAssigneeForProject resolves assigneeID's true type via directory
+	// lookup (the same resolution every task write path applies before
+	// enrolling) and refuses it with AssigneeNotInWorkspaceError if it does not
+	// belong to the workspace owning projectID — by calling the same tenancy
+	// funnel task writes go through, not a re-implementation of it.
+	//
+	// It exists for callers that persist an assignee_id without ever going
+	// through Create/Update/MoveTask/AssignTask themselves: a task template or a
+	// recurring schedule stores the assignee in its own row, and that row is not
+	// a task, so none of the seven task write-path guards ever see it. Without
+	// this call a foreign assignee saved into a template or schedule is accepted
+	// silently and only refused later, at materialization time, as an opaque
+	// failed task-creation.
+	//
+	// assigneeID == nil (or the nil UUID) returns (AssigneeTypeUnassigned, nil)
+	// without any lookup — there is nothing to validate. Returns the resolved
+	// type so the caller can persist it instead of trusting the caller-supplied
+	// one, exactly as Create/Update do for tasks.
+	ValidateAssigneeForProject(ctx context.Context, projectID uuid.UUID, assigneeID *uuid.UUID, assigneeType domain.AssigneeType) (domain.AssigneeType, error)
 }
 
 // TaskServiceAutoTransitionConfigurable extends TaskService with the ability

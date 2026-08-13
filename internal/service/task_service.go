@@ -1907,6 +1907,25 @@ func (s *taskService) resolveAssigneeType(ctx context.Context, assigneeID *uuid.
 	return fallback
 }
 
+// ValidateAssigneeForProject is the funnel non-task write paths call into the
+// tenancy guard through. See the TaskService interface doc for why it exists.
+//
+// It runs the exact two steps Create/Update/MoveTask/AssignTask run before
+// enrolling an assignee — resolveAssigneeType then assertAssigneeInProjectWorkspace
+// — as calls into those functions, not a second copy of either. A re-implemented
+// predicate is exactly how a check like this drifts from the one it was meant to
+// match without either side failing a build.
+func (s *taskService) ValidateAssigneeForProject(ctx context.Context, projectID uuid.UUID, assigneeID *uuid.UUID, assigneeType domain.AssigneeType) (domain.AssigneeType, error) {
+	if assigneeID == nil || *assigneeID == uuid.Nil {
+		return domain.AssigneeTypeUnassigned, nil
+	}
+	resolved := s.resolveAssigneeType(ctx, assigneeID, assigneeType)
+	if err := s.assertAssigneeInProjectWorkspace(ctx, projectID, assigneeID, resolved); err != nil {
+		return resolved, err
+	}
+	return resolved, nil
+}
+
 // MoveToProject moves a task to a different project. It finds the default status
 // for the target project, validates the task is not already there, calls the
 // repository to atomically update project_id/status_id/task_number, logs activity,

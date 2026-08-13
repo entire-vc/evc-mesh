@@ -292,11 +292,26 @@ func (s *recurringService) getPreviousInstanceSummary(ctx context.Context, sched
 }
 
 // Create validates input, resolves the cron expression, and persists a new recurring schedule.
+//
+// A schedule's assignee_id is written straight into the schedule row, not into a
+// task — createInstance is the only path that later calls taskSvc.Create, which
+// is where the task write-path tenancy guard lives. Without this check here a
+// foreign assignee is accepted at Create and only refused at the next scheduler
+// tick, surfacing as a createInstance failure with no owner and no obvious cause
+// (three of those in a row quarantines the schedule — see maxConsecutiveFailures).
 func (s *recurringService) Create(ctx context.Context, input CreateRecurringInput) (*domain.RecurringSchedule, error) {
 	if input.TitleTemplate == "" {
 		return nil, apierror.ValidationError(map[string]string{
 			"title_template": "title_template is required",
 		})
+	}
+
+	if input.AssigneeID != nil {
+		resolved, err := s.taskSvc.ValidateAssigneeForProject(ctx, input.ProjectID, input.AssigneeID, input.AssigneeType)
+		if err != nil {
+			return nil, err
+		}
+		input.AssigneeType = resolved
 	}
 
 	// Validate timezone.
@@ -421,6 +436,18 @@ func (s *recurringService) Update(ctx context.Context, id uuid.UUID, input Updat
 	}
 	if input.AssigneeType != nil {
 		schedule.AssigneeType = *input.AssigneeType
+	}
+	// Validate against the MERGED assignee, not just whichever of the two
+	// fields this call happened to touch — AssigneeID and AssigneeType are
+	// independent optional fields, so a caller can PATCH one without the
+	// other, and the pair that ends up on schedule after the two blocks above
+	// is what actually gets persisted and later handed to a task.
+	if input.AssigneeID != nil || input.AssigneeType != nil {
+		resolved, err := s.taskSvc.ValidateAssigneeForProject(ctx, schedule.ProjectID, schedule.AssigneeID, schedule.AssigneeType)
+		if err != nil {
+			return nil, err
+		}
+		schedule.AssigneeType = resolved
 	}
 	if input.Priority != nil {
 		schedule.Priority = *input.Priority
