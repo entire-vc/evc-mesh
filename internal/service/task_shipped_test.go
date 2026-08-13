@@ -38,7 +38,7 @@ func newShippedEnv(t *testing.T) *shippedEnv {
 	todoID := makeStatus(domain.StatusCategoryTodo)
 	inProgID := makeStatus(domain.StatusCategoryInProgress)
 
-	svc := NewTaskService(taskRepo, statusRepo, nil, nil)
+	svc := newTestTaskService(taskRepo, statusRepo, nil, nil)
 	return &shippedEnv{
 		svc: svc, taskRepo: taskRepo, statusRepo: statusRepo,
 		projectID: projectID, doneID: doneID, todoID: todoID, inProgID: inProgID,

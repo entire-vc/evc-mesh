@@ -741,13 +741,23 @@ func (r *TaskRepo) List(ctx context.Context, projectID uuid.UUID, filter reposit
 	return pagination.NewPage(taskRowsToSlice(rows), totalCount, pg), nil
 }
 
-func (r *TaskRepo) ListByAssignee(ctx context.Context, assigneeID uuid.UUID, assigneeType domain.AssigneeType) ([]domain.Task, error) {
+// ListByAssignee returns the principal's tasks WITHIN one workspace.
+//
+// The workspace predicate is not optional and not a convenience filter. This
+// query backs GET /agents/me/tasks and its long-poll twin, which are how an agent
+// discovers work; without it the query returned every task carrying the
+// principal's id regardless of tenant, so an assignment made from another
+// workspace showed up in the agent's own feed and the notify path then posted the
+// task snapshot to that agent's callback_url. Scoping the write path alone would
+// have left every row already written still readable.
+func (r *TaskRepo) ListByAssignee(ctx context.Context, workspaceID, assigneeID uuid.UUID, assigneeType domain.AssigneeType) ([]domain.Task, error) {
 	q := `SELECT ` + taskBaseColsNoAlias + `, ` + taskComputedCols + `
 		FROM tasks
 		WHERE assignee_id = $1 AND assignee_type = $2 AND deleted_at IS NULL
+		  AND project_id IN (SELECT id FROM projects WHERE workspace_id = $3)
 		ORDER BY created_at ASC`
 	var rows []taskRow
-	if err := r.db.SelectContext(ctx, &rows, q, assigneeID, assigneeType); err != nil {
+	if err := r.db.SelectContext(ctx, &rows, q, assigneeID, assigneeType, workspaceID); err != nil {
 		return nil, err
 	}
 	return taskRowsToSlice(rows), nil

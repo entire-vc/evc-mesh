@@ -56,6 +56,7 @@ type taskService struct {
 	agentNotifySvc    AgentNotifyService
 	notifySvc         NotificationService
 	ctxCacheInv       ContextCacheInvalidator
+	wsMembership      WorkspaceMembershipReader
 }
 
 // NewTaskService returns a new TaskService backed by the given repositories.
@@ -256,14 +257,24 @@ func (s *taskService) Create(ctx context.Context, task *domain.Task) error {
 	if actorType == domain.ActorTypeAgent && actorID != uuid.Nil {
 		s.ensureAgentProjectMember(ctx, task.ProjectID, actorID)
 	}
-	// Auto-enroll assignee into project members.
-	s.ensureAssigneeProjectMember(ctx, task.ProjectID, task.AssigneeID, task.AssigneeType)
+	// Auto-enroll assignee into project members — and refuse a foreign one. This
+	// runs before taskRepo.Create, so a refused assignment creates no task at all
+	// rather than a task the caller then has to notice is unassigned.
+	if err := s.ensureAssigneeProjectMember(ctx, task.ProjectID, task.AssigneeID, task.AssigneeType); err != nil {
+		return err
+	}
 	// Auto-enroll reviewer into project members — same contract as the assignee
 	// path above (see Update's reviewer comment at :339-357 for why this matters:
 	// a reviewer left off project_members follows a notification into a task
-	// whose status transitions all 403).
+	// whose status transitions all 403). Reviewer-at-creation landed on main
+	// while this branch was open: it is a write path that names a principal by
+	// id, so it carries the same refusal, and the error is propagated for the
+	// same reason Update's is — a discarded error here is exactly how the
+	// reviewer path stayed unguarded the first time.
 	if task.ReviewerID != nil && task.ReviewerType != nil {
-		s.ensureAssigneeProjectMember(ctx, task.ProjectID, task.ReviewerID, *task.ReviewerType)
+		if err := s.ensureAssigneeProjectMember(ctx, task.ProjectID, task.ReviewerID, *task.ReviewerType); err != nil {
+			return err
+		}
 	}
 
 	if err := s.taskRepo.Create(ctx, task); err != nil {
@@ -357,7 +368,9 @@ func (s *taskService) Update(ctx context.Context, task *domain.Task) error {
 	}
 	// Auto-enroll the assignee — PATCH can change assignee_id just like assign_task.
 	if existing.AssigneeID == nil || task.AssigneeID == nil || *existing.AssigneeID != *task.AssigneeID {
-		s.ensureAssigneeProjectMember(ctx, task.ProjectID, task.AssigneeID, task.AssigneeType)
+		if err := s.ensureAssigneeProjectMember(ctx, task.ProjectID, task.AssigneeID, task.AssigneeType); err != nil {
+			return err
+		}
 	}
 
 	// Reviewer is the eighth write path that puts a principal on a task, and it needs
@@ -370,15 +383,17 @@ func (s *taskService) Update(ctx context.Context, task *domain.Task) error {
 	// were fixed to prevent — worse here, because being made reviewer *sends them a
 	// notification*, so they follow it to a task whose status transitions all 403.
 	//
-	// KNOWN GAP, inherited not introduced: neither this path nor the seven assignee
-	// ones check that the principal belongs to the task's workspace. The directory
-	// lookups behind resolveAssigneeType are global (agents/users WHERE id = $1), and
-	// project_members has no composite workspace foreign key, so a caller who may
-	// PATCH a task here can name a principal from another workspace and have them
-	// enrolled. This is deliberately NOT fixed here — it needs one change covering all
-	// eight paths, and a user-side check needs a workspace-membership repo this
-	// service does not yet hold. Reviewer is kept consistent with assignee rather
-	// than half-fixed.
+	// The workspace gap this comment used to record as KNOWN and deliberately unfixed
+	// ("it needs one change covering all eight paths, and a user-side check needs a
+	// workspace-membership repo this service does not yet hold") is now closed, by
+	// exactly that one change: ensureAssigneeProjectMember calls
+	// assertAssigneeInProjectWorkspace first, and the membership repo it was waiting
+	// for is WorkspaceMembershipReader. Reviewer stays consistent with assignee, which
+	// now means checked rather than unchecked.
+	//
+	// Propagating the error is the whole point — this call already existed and already
+	// went through the funnel, but dropped what the funnel returned, so a refusal here
+	// would have been logged into the void and the reviewer written anyway.
 	if uuidPtrChanged(existing.ReviewerID, task.ReviewerID) && task.ReviewerID != nil {
 		fallback := domain.AssigneeTypeUser
 		if task.ReviewerType != nil {
@@ -386,7 +401,9 @@ func (s *taskService) Update(ctx context.Context, task *domain.Task) error {
 		}
 		resolved := s.resolveAssigneeType(ctx, task.ReviewerID, fallback)
 		task.ReviewerType = &resolved
-		s.ensureAssigneeProjectMember(ctx, task.ProjectID, task.ReviewerID, resolved)
+		if err := s.ensureAssigneeProjectMember(ctx, task.ProjectID, task.ReviewerID, resolved); err != nil {
+			return err
+		}
 	}
 
 	task.UpdatedAt = timeNow()
@@ -550,6 +567,21 @@ func (s *taskService) MoveTask(ctx context.Context, taskID uuid.UUID, input Move
 		return &CASConflictError{
 			CurrentStatusID:  task.StatusID,
 			CurrentUpdatedAt: task.UpdatedAt,
+		}
+	}
+
+	// Tenancy of an explicit assignee is decided BEFORE anything is applied.
+	//
+	// The move and the assignment are one request but two writes, and the
+	// assignment write happens well after the status change has been persisted and
+	// logged. Checking it at the point of use would leave a refused assignment
+	// sitting on top of an already-committed move — half the request applied, with
+	// the failure reported as if the whole of it had failed. Refusing here costs
+	// one directory read and keeps the operation atomic from the caller's side.
+	if input.AssigneeID != nil {
+		assigneeType := s.resolveAssigneeType(ctx, input.AssigneeID, input.AssigneeType)
+		if err := s.assertAssigneeInProjectWorkspace(ctx, task.ProjectID, input.AssigneeID, assigneeType); err != nil {
+			return err
 		}
 	}
 
@@ -798,7 +830,13 @@ func (s *taskService) MoveTask(ctx context.Context, taskID uuid.UUID, input Move
 	if input.AssigneeID != nil {
 		task.AssigneeID = input.AssigneeID
 		task.AssigneeType = s.resolveAssigneeType(ctx, input.AssigneeID, input.AssigneeType)
-		s.ensureAssigneeProjectMember(ctx, task.ProjectID, task.AssigneeID, task.AssigneeType)
+		// Already vetted at the top of MoveTask; this call is the enrolment, and
+		// the error path is unreachable in practice. It is still propagated rather
+		// than dropped, so that the guard cannot be silently defeated by a future
+		// edit that removes the up-front check.
+		if err := s.ensureAssigneeProjectMember(ctx, task.ProjectID, task.AssigneeID, task.AssigneeType); err != nil {
+			return err
+		}
 		task.UpdatedAt = timeNow()
 		if err := s.taskRepo.Update(ctx, task); err != nil {
 			log.Printf("[move-assign] WARNING: failed to assign task %s: %v", taskID, err)
@@ -883,13 +921,18 @@ func (s *taskService) AssignTask(ctx context.Context, taskID uuid.UUID, input As
 	// Normalize: look up assignee in agent/user directory to correct assignee_type.
 	resolvedType := s.resolveAssigneeType(ctx, input.AssigneeID, input.AssigneeType)
 
+	// Refuse a foreign principal BEFORE touching the task. The order matters
+	// beyond tidiness: taskRepo hands out a pointer to the live task, so mutating
+	// it first and refusing afterwards leaves the rejected assignee sitting on the
+	// in-memory object for anything else holding that pointer.
+	if err := s.ensureAssigneeProjectMember(ctx, task.ProjectID, input.AssigneeID, resolvedType); err != nil {
+		return err
+	}
+
 	task.AssigneeID = input.AssigneeID
 	task.AssigneeType = resolvedType
 	task.AssignedBy = source
 	task.UpdatedAt = timeNow()
-
-	// Auto-enroll assignee into project members.
-	s.ensureAssigneeProjectMember(ctx, task.ProjectID, input.AssigneeID, resolvedType)
 
 	if err := s.taskRepo.Update(ctx, task); err != nil {
 		return err
@@ -1022,7 +1065,9 @@ func (s *taskService) CreateSubtask(ctx context.Context, parentTaskID uuid.UUID,
 	// means creating subtasks owned by whoever will do the work. Enrolling only the
 	// creator leaves that owner able to comment on a task they cannot transition.
 	// Placed after applyAutoAssign so a rule-assigned subtask is covered too.
-	s.ensureAssigneeProjectMember(ctx, parent.ProjectID, child.AssigneeID, child.AssigneeType)
+	if err := s.ensureAssigneeProjectMember(ctx, parent.ProjectID, child.AssigneeID, child.AssigneeType); err != nil {
+		return nil, err
+	}
 
 	if err := s.taskRepo.Create(ctx, child); err != nil {
 		return nil, err
@@ -1114,9 +1159,9 @@ func (s *taskService) bulkUpdateOne(ctx context.Context, projectID, taskID uuid.
 	return nil
 }
 
-// GetMyTasks returns all tasks assigned to the given actor.
-func (s *taskService) GetMyTasks(ctx context.Context, assigneeID uuid.UUID, assigneeType domain.AssigneeType) ([]domain.Task, error) {
-	return s.taskRepo.ListByAssignee(ctx, assigneeID, assigneeType)
+// GetMyTasks returns the actor's tasks within workspaceID.
+func (s *taskService) GetMyTasks(ctx context.Context, workspaceID, assigneeID uuid.UUID, assigneeType domain.AssigneeType) ([]domain.Task, error) {
+	return s.taskRepo.ListByAssignee(ctx, workspaceID, assigneeID, assigneeType)
 }
 
 // GetUserActiveTasks returns non-done/cancelled tasks for a human user in a workspace.
@@ -1694,13 +1739,22 @@ func (s *taskService) evaluateRulesForMove(ctx context.Context, task *domain.Tas
 // ensureAssigneeProjectMember auto-enrolls whoever is about to become a task's
 // assignee into that task's project, dispatching on assignee type.
 //
-// EVERY write path that sets assignee_id must call this. As of this commit that
-// is: Create, Update (and BulkUpdate through it), MoveTask, AssignTask,
-// CreateSubtask, applyReviewAssignee and restorePreReviewAssignee — seven.
-// applyAutoAssign needs no call of its own: both of its callers enrol after it.
-// Task creation from a recurring schedule or a template routes through Create.
-// If you add an eighth, add the call — `grep -n 'AssigneeID = \|AssigneeID:'`
-// over internal/service is how this list was checked.
+// It is also the point at which a cross-workspace assignee is REFUSED: it calls
+// assertAssigneeInProjectWorkspace first and returns that error without writing
+// anything, so a caller that propagates the error cannot persist the assignment.
+// Enrolling a principal from another tenant was the most damaging half of that
+// defect — it manufactured the project_members row that made the foreign
+// principal look native to every later check.
+//
+// EVERY write path that sets assignee_id must call this AND propagate its error.
+// As of this commit that is: Create, Update (and BulkUpdate through it), MoveTask,
+// AssignTask, CreateSubtask, applyReviewAssignee and restorePreReviewAssignee —
+// seven. applyAutoAssign needs no call of its own: both of its callers enrol after
+// it. Task creation from a recurring schedule or a template routes through Create.
+// If you add an eighth, add the call — and
+// TestEveryAssigneeWritePathIsWorkspaceChecked will fail until you do, which is
+// the point: the previous version of this comment was prose, and prose does not
+// fail a build.
 //
 // The caller must pass a TRUE assignee type, because this function dispatches on it
 // and a wrong type enrols against the wrong column: an agent-typed user UUID hits the
@@ -1721,9 +1775,13 @@ func (s *taskService) evaluateRulesForMove(ctx context.Context, task *domain.Tas
 // then move the task neither forward nor back. Enrolment on assignment is what
 // keeps that state unreachable; a path that assigns without enrolling silently
 // manufactures it. A set_reviewer rotation did exactly that in production.
-func (s *taskService) ensureAssigneeProjectMember(ctx context.Context, projectID uuid.UUID, assigneeID *uuid.UUID, assigneeType domain.AssigneeType) {
+func (s *taskService) ensureAssigneeProjectMember(ctx context.Context, projectID uuid.UUID, assigneeID *uuid.UUID, assigneeType domain.AssigneeType) error {
 	if assigneeID == nil {
-		return
+		return nil
+	}
+	// Tenancy first: refuse before granting anything.
+	if err := s.assertAssigneeInProjectWorkspace(ctx, projectID, assigneeID, assigneeType); err != nil {
+		return err
 	}
 	switch assigneeType {
 	case domain.AssigneeTypeAgent:
@@ -1731,6 +1789,7 @@ func (s *taskService) ensureAssigneeProjectMember(ctx context.Context, projectID
 	case domain.AssigneeTypeUser:
 		s.ensureUserProjectMember(ctx, projectID, *assigneeID)
 	}
+	return nil
 }
 
 // ensureAgentProjectMember auto-enrolls an agent into a project's member list
@@ -2213,6 +2272,22 @@ func (s *taskService) applyReviewAssignee(ctx context.Context, task *domain.Task
 		return
 	}
 
+	// Tenancy of the configured reviewer is decided before the in-memory task is
+	// touched. This function mutates the caller's task and only then persists it,
+	// so a refusal discovered mid-way would have to be unwound — and MoveTask goes
+	// on to use the same pointer. Checking first means there is nothing to unwind.
+	//
+	// A workflow rule naming a reviewer from another workspace is a misconfigured
+	// rule, not a caller's request: it cannot be answered with a 4xx to anyone, so
+	// it is logged loudly and the rotation is skipped. The task stays with its
+	// current assignee, which is the safe outcome — the alternative is handing the
+	// card, and its callback delivery, to a foreign principal.
+	if err := s.assertAssigneeInProjectWorkspace(ctx, task.ProjectID, reviewerID, assigneeType); err != nil {
+		log.Printf("[review-assign] REFUSED: set_reviewer=%q for task %s resolves to a principal outside "+
+			"the task's workspace, leaving the assignee unchanged: %v", tr.OnTransition.SetReviewer, task.ID, err)
+		return
+	}
+
 	// Stash the current assignee so a later bounce out of review (MoveTask's
 	// restorePreReviewAssignee) can return the task to whoever was doing the work,
 	// instead of stranding it on the reviewer.
@@ -2222,7 +2297,10 @@ func (s *taskService) applyReviewAssignee(ctx context.Context, task *domain.Task
 
 	task.AssigneeID = reviewerID
 	task.AssigneeType = assigneeType
-	s.ensureAssigneeProjectMember(ctx, task.ProjectID, task.AssigneeID, task.AssigneeType)
+	if err := s.ensureAssigneeProjectMember(ctx, task.ProjectID, task.AssigneeID, task.AssigneeType); err != nil {
+		log.Printf("[review-assign] WARNING: enrolment refused for task %s after the tenancy check passed: %v", task.ID, err)
+		return
+	}
 	task.UpdatedAt = timeNow()
 	if err := s.taskRepo.Update(ctx, task); err != nil {
 		log.Printf("[review-assign] WARNING: failed to assign set_reviewer for task %s: %v", task.ID, err)
@@ -2258,9 +2336,21 @@ func (s *taskService) restorePreReviewAssignee(ctx context.Context, task *domain
 	prevAssigneeID := task.PreReviewAssigneeID
 	prevAssigneeType := *task.PreReviewAssigneeType
 
+	// The stashed assignee was in-workspace when it was stashed, but the stash can
+	// outlive that fact — an agent can be moved or deleted while the card sits in
+	// review. Re-check before restoring rather than trusting the stash's age.
+	if err := s.assertAssigneeInProjectWorkspace(ctx, task.ProjectID, prevAssigneeID, prevAssigneeType); err != nil {
+		log.Printf("[review-assign] REFUSED: pre-review assignee of task %s is no longer valid for its "+
+			"workspace, leaving the task with the reviewer: %v", task.ID, err)
+		return
+	}
+
 	task.AssigneeID = prevAssigneeID
 	task.AssigneeType = prevAssigneeType
-	s.ensureAssigneeProjectMember(ctx, task.ProjectID, task.AssigneeID, task.AssigneeType)
+	if err := s.ensureAssigneeProjectMember(ctx, task.ProjectID, task.AssigneeID, task.AssigneeType); err != nil {
+		log.Printf("[review-assign] WARNING: enrolment refused restoring pre-review assignee of task %s: %v", task.ID, err)
+		return
+	}
 	task.PreReviewAssigneeID = nil
 	task.PreReviewAssigneeType = nil
 	task.UpdatedAt = timeNow()

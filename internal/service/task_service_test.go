@@ -24,12 +24,70 @@ import (
 var frozenTime = time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
 
 // setupTaskService returns a taskService wired to fresh mocks.
+// testDefaultWorkspaceID is the single tenant every service test runs inside
+// unless it deliberately builds a second one. The assignee tenancy guard needs a
+// workspace behind every project and principal; without a shared default, each
+// test would have to grow a workspace fixture it is not about.
+var testDefaultWorkspaceID = uuid.MustParse("11111111-1111-4111-8111-111111111111")
+
+// wireTenancyDeps gives a task service the directories production always wires.
+// Leaving any of them nil is not a neutral test simplification: the tenancy guard
+// refuses what it cannot check, so a half-wired service models a state production
+// cannot reach — the same argument setupMembershipEnv already makes for userRepo.
+func wireTenancyDeps(projRepo *MockProjectRepository, agentRepo *MockAgentRepository) []TaskServiceOption {
+	projRepo.WithDefaultWorkspace(testDefaultWorkspaceID)
+	agentRepo.WithDefaultWorkspace(testDefaultWorkspaceID)
+	return []TaskServiceOption{
+		WithProjectRepo(projRepo),
+		WithTaskAgentRepo(agentRepo),
+		WithWorkspaceMembershipReader(NewPermissiveWorkspaceMembershipReader()),
+	}
+}
+
+// newTestTaskService is NewTaskService with the tenancy directories production
+// always wires. The defaults are prepended, so a caller's own WithProjectRepo /
+// WithTaskAgentRepo still wins — this only stops a test from accidentally
+// building a service that cannot answer "which workspace is this?", which the
+// assignee guard treats (correctly) as a refusal.
+func newTestTaskService(
+	taskRepo repository.TaskRepository,
+	statusRepo repository.TaskStatusRepository,
+	depRepo repository.TaskDependencyRepository,
+	activityRepo repository.ActivityLogRepository,
+	opts ...TaskServiceOption,
+) TaskService {
+	base := []TaskServiceOption{
+		WithProjectRepo(NewMockProjectRepository().WithDefaultWorkspace(testDefaultWorkspaceID)),
+		WithTaskAgentRepo(NewMockAgentRepository()),
+		WithWorkspaceMembershipReader(NewPermissiveWorkspaceMembershipReader()),
+	}
+	return NewTaskService(taskRepo, statusRepo, depRepo, activityRepo, append(base, opts...)...)
+}
+
+// seedTestAgents registers agents in whatever directory the service is wired to.
+//
+// The assignee tenancy guard refuses a principal it cannot find — an id in no
+// directory cannot be shown to belong to the task's workspace — so a test that
+// assigns an ad-hoc uuid has to say that uuid is a real agent first. Before the
+// guard, such an assignment "succeeded" and produced a task pointing at nobody.
+func seedTestAgents(t *testing.T, svc *taskService, ids ...uuid.UUID) {
+	t.Helper()
+	repo, ok := svc.agentRepo.(*MockAgentRepository)
+	require.True(t, ok, "service is not wired to a MockAgentRepository")
+	repo.mu.Lock()
+	defer repo.mu.Unlock()
+	for _, id := range ids {
+		repo.items[id] = &domain.Agent{ID: id, Slug: "seeded"}
+	}
+}
+
 func setupTaskService() (*taskService, *MockTaskRepository, *MockTaskStatusRepository) {
 	taskRepo := NewMockTaskRepository()
 	statusRepo := NewMockTaskStatusRepository()
 	depRepo := NewMockTaskDependencyRepository()
 	activityRepo := NewMockActivityLogRepository()
-	svc := NewTaskService(taskRepo, statusRepo, depRepo, activityRepo).(*taskService)
+	opts := wireTenancyDeps(NewMockProjectRepository(), NewMockAgentRepository())
+	svc := newTestTaskService(taskRepo, statusRepo, depRepo, activityRepo, opts...).(*taskService)
 
 	// Freeze the clock for deterministic tests.
 	timeNow = func() time.Time { return frozenTime }
@@ -462,17 +520,14 @@ func setupTaskServiceWithWorkflow(workflowResp *domain.WorkflowRulesResponse, ef
 
 	mockRules := NewMockRulesService(effectiveRules).WithWorkflowRules(workflowResp)
 
-	svc := NewTaskService(taskRepo, statusRepo, depRepo, activityRepo,
-		WithRulesConfigService(mockRules),
-		WithTaskAgentRepo(agentRepo),
-		WithProjectRepo(projRepo),
-	).(*taskService)
+	opts := append(wireTenancyDeps(projRepo, agentRepo), WithRulesConfigService(mockRules))
+	svc := newTestTaskService(taskRepo, statusRepo, depRepo, activityRepo, opts...).(*taskService)
 	timeNow = func() time.Time { return frozenTime }
 	return svc, taskRepo, statusRepo, agentRepo, projRepo
 }
 
 func TestTaskService_MoveTask_ReviewAssignee(t *testing.T) {
-	workspaceID := uuid.New()
+	workspaceID := testDefaultWorkspaceID // single-tenant: the assignee guard resolves every principal against this one workspace
 	projectID := uuid.New()
 	builderID := uuid.New()
 	creatorID := uuid.New()
@@ -552,6 +607,10 @@ func TestTaskService_MoveTask_ReviewAssignee(t *testing.T) {
 		statusRepo.items[newStatusID] = reviewStatus(newStatusID)
 		projRepo.items[projectID] = &domain.Project{ID: projectID, WorkspaceID: workspaceID}
 		agentRepo.items[leadID] = &domain.Agent{ID: leadID, WorkspaceID: workspaceID, Slug: "garfield"}
+		// The builder must be a real in-workspace agent too: restorePreReviewAssignee
+		// re-checks the stashed principal before handing the card back, because a stash
+		// can outlive the agent it names.
+		agentRepo.items[builderID] = &domain.Agent{ID: builderID, WorkspaceID: workspaceID, Slug: "builder"}
 		taskRepo.items[taskID] = &domain.Task{
 			ID:            taskID,
 			ProjectID:     projectID,
@@ -639,6 +698,10 @@ func TestTaskService_MoveTask_ReviewAssignee(t *testing.T) {
 		statusRepo.items[backToTodoStatusID] = &domain.TaskStatus{ID: backToTodoStatusID, ProjectID: projectID, Category: domain.StatusCategoryTodo, Name: "todo"}
 		projRepo.items[projectID] = &domain.Project{ID: projectID, WorkspaceID: workspaceID}
 		agentRepo.items[leadID] = &domain.Agent{ID: leadID, WorkspaceID: workspaceID, Slug: "garfield"}
+		// The builder must be a real in-workspace agent too: restorePreReviewAssignee
+		// re-checks the stashed principal before handing the card back, because a stash
+		// can outlive the agent it names.
+		agentRepo.items[builderID] = &domain.Agent{ID: builderID, WorkspaceID: workspaceID, Slug: "builder"}
 		taskRepo.items[taskID] = &domain.Task{
 			ID:            taskID,
 			ProjectID:     projectID,
@@ -695,6 +758,10 @@ func TestTaskService_MoveTask_ReviewAssignee(t *testing.T) {
 		statusRepo.items[backToTodoStatusID] = &domain.TaskStatus{ID: backToTodoStatusID, ProjectID: projectID, Category: domain.StatusCategoryTodo, Name: "todo"}
 		projRepo.items[projectID] = &domain.Project{ID: projectID, WorkspaceID: workspaceID}
 		agentRepo.items[leadID] = &domain.Agent{ID: leadID, WorkspaceID: workspaceID, Slug: "garfield"}
+		// The builder must be a real in-workspace agent too: restorePreReviewAssignee
+		// re-checks the stashed principal before handing the card back, because a stash
+		// can outlive the agent it names.
+		agentRepo.items[builderID] = &domain.Agent{ID: builderID, WorkspaceID: workspaceID, Slug: "builder"}
 		taskRepo.items[taskID] = &domain.Task{
 			ID:            taskID,
 			ProjectID:     projectID,
@@ -803,6 +870,12 @@ func TestTaskService_AssignTask(t *testing.T) {
 			svc, taskRepo, _ := setupTaskService()
 			ctx := context.Background()
 			taskID := tt.setup(taskRepo)
+			// Agent assignees must exist in the directory for the tenancy guard;
+			// user assignees are decided by the membership reader instead, and
+			// seeding them here would make resolveAssigneeType call them agents.
+			if tt.input.AssigneeID != nil && tt.input.AssigneeType == domain.AssigneeTypeAgent {
+				seedTestAgents(t, svc, *tt.input.AssigneeID)
+			}
 
 			err := svc.AssignTask(ctx, taskID, tt.input)
 
@@ -1026,6 +1099,11 @@ func TestTaskService_CreateSubtask(t *testing.T) {
 			ctx := context.Background()
 			f := newSubtaskFixture(taskRepo, statusRepo)
 			parentID, input := tt.setup(f, statusRepo)
+			// An agent-typed assignee must exist in the directory before the
+			// tenancy guard will let it hold a task.
+			if input.AssigneeID != nil && input.AssigneeType != domain.AssigneeTypeUser {
+				seedTestAgents(t, svc, *input.AssigneeID)
+			}
 
 			child, err := svc.CreateSubtask(ctx, parentID, input)
 
@@ -1111,7 +1189,7 @@ func setupTaskServiceWithRules(rules *domain.EffectiveAssignmentRules) (*taskSer
 	activityRepo := NewMockActivityLogRepository()
 	mockRules := NewMockRulesService(rules)
 
-	svc := NewTaskService(taskRepo, statusRepo, depRepo, activityRepo,
+	svc := newTestTaskService(taskRepo, statusRepo, depRepo, activityRepo,
 		WithRulesConfigService(mockRules),
 	).(*taskService)
 
@@ -1422,6 +1500,14 @@ func TestTaskService_applyAutoAssign(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			svc, taskRepo := setupTaskServiceWithRules(tt.rules)
 			ctx := context.Background()
+			// The rule engine hands back principal ids; the tenancy guard then
+			// insists an AGENT id is really in the agent directory. Seeding the
+			// user-typed cases too would make resolveAssigneeType call them agents,
+			// so seed only where the expectation is an agent. User-typed ids are
+			// cleared by the workspace membership reader instead.
+			if tt.wantAssigneeType == domain.AssigneeTypeAgent {
+				seedTestAgents(t, svc, agentIDStr, agentIDStr2)
+			}
 
 			err := svc.Create(ctx, tt.task)
 			require.NoError(t, err, "Create should never fail due to rules errors")
@@ -1488,7 +1574,7 @@ func TestTaskService_applyAutoAssign_RulesServiceError(t *testing.T) {
 	mockRules := NewMockRulesService(nil)
 	mockRules.errToReturn = fmt.Errorf("database unavailable")
 
-	svc := NewTaskService(taskRepo, statusRepo, depRepo, activityRepo,
+	svc := newTestTaskService(taskRepo, statusRepo, depRepo, activityRepo,
 		WithRulesConfigService(mockRules),
 	).(*taskService)
 	timeNow = func() time.Time { return frozenTime }
@@ -1586,14 +1672,14 @@ func setupTransitionGateService(wfResp *domain.WorkflowRulesResponse) (
 	mockRules := NewMockRulesService(nil).WithWorkflowRules(wfResp)
 
 	projectID := uuid.New()
-	workspaceID := uuid.New()
+	workspaceID := testDefaultWorkspaceID // single-tenant: the assignee guard resolves every principal against this one workspace
 	projRepo.items[projectID] = &domain.Project{ID: projectID, WorkspaceID: workspaceID}
 
 	// Pre-register a task so tests can set ProjectID via the shared projectID.
 	// Tests override this in their own setup.
 	_ = projectID
 
-	svc := NewTaskService(taskRepo, statusRepo, depRepo, activityRepo,
+	svc := newTestTaskService(taskRepo, statusRepo, depRepo, activityRepo,
 		WithRulesConfigService(mockRules),
 		WithProjectRepo(projRepo),
 	).(*taskService)
@@ -1603,7 +1689,7 @@ func setupTransitionGateService(wfResp *domain.WorkflowRulesResponse) (
 
 func TestTaskService_MoveTask_TransitionGate(t *testing.T) {
 	projectID := uuid.New()
-	workspaceID := uuid.New()
+	workspaceID := testDefaultWorkspaceID // single-tenant: the assignee guard resolves every principal against this one workspace
 
 	// makeTask creates a task in a given from-status and registers the target status.
 	// fromStatusName and toStatusName are set as status.Name for config lookup.
@@ -1810,7 +1896,7 @@ func setupTaskServiceForDelegation() (*taskService, *MockTaskRepository, *MockAc
 	notifySvc := NewMockAgentNotifyService()
 	projRepo := NewMockProjectRepository()
 
-	svc := NewTaskService(taskRepo, statusRepo, depRepo, activityRepo,
+	svc := newTestTaskService(taskRepo, statusRepo, depRepo, activityRepo,
 		WithAgentNotifyService(notifySvc),
 		WithProjectRepo(projRepo),
 	).(*taskService)
@@ -1931,7 +2017,7 @@ func setupTaskServiceForAssigneeNotify() (*taskService, *MockTaskRepository, *Mo
 	notifySvc := NewMockNotificationService()
 	projRepo := NewMockProjectRepository()
 
-	svc := NewTaskService(taskRepo, statusRepo, depRepo, activityRepo,
+	svc := newTestTaskService(taskRepo, statusRepo, depRepo, activityRepo,
 		WithNotificationService(notifySvc),
 		WithProjectRepo(projRepo),
 	).(*taskService)
@@ -1994,6 +2080,13 @@ func TestTaskService_Update_AssigneeChangedToAgent_NoInAppNotification(t *testin
 		ID: taskID, ProjectID: projID, Title: "T",
 		AssigneeID: &oldAssignee, AssigneeType: domain.AssigneeTypeAgent,
 	}
+	// The new assignee must be a real agent of this project's workspace, or the
+	// tenancy guard refuses the reassignment before any notification is dispatched.
+	seedTestAgents(t, svc, oldAssignee, newAssignee)
+	agentRepo, ok := svc.agentRepo.(*MockAgentRepository)
+	require.True(t, ok)
+	agentRepo.items[newAssignee].WorkspaceID = wsID
+	agentRepo.items[oldAssignee].WorkspaceID = wsID
 
 	err := svc.Update(ctx, &domain.Task{
 		ID: taskID, ProjectID: projID, Title: "T",
@@ -2189,10 +2282,12 @@ func setupTaskServiceForReviewer() reviewerEnv {
 	userNotify := &fakeUserNotifyService{}
 	projRepo := NewMockProjectRepository()
 
-	svc := NewTaskService(taskRepo, statusRepo, depRepo, activityRepo,
+	// newTestTaskService, not NewTaskService: the reviewer field now carries the
+	// same tenancy check as the assignee, and an unwired directory refuses.
+	svc := newTestTaskService(taskRepo, statusRepo, depRepo, activityRepo,
 		WithAgentNotifyService(agentNotify),
 		WithNotificationService(userNotify),
-		WithProjectRepo(projRepo),
+		WithProjectRepo(projRepo.WithDefaultWorkspace(testDefaultWorkspaceID)),
 	).(*taskService)
 	timeNow = func() time.Time { return frozenTime }
 	return reviewerEnv{
@@ -2207,13 +2302,16 @@ func TestTaskService_Update_ReviewerAssigned_AgentReviewerNotified(t *testing.T)
 	ctx := context.Background()
 
 	projID := uuid.New()
-	projRepo.items[projID] = &domain.Project{ID: projID, WorkspaceID: uuid.New()}
+	// One tenant: the reviewer below must belong to the project's workspace.
+	projRepo.items[projID] = &domain.Project{ID: projID, WorkspaceID: testDefaultWorkspaceID}
 
 	taskID := uuid.New()
 	taskRepo.items[taskID] = &domain.Task{ID: taskID, ProjectID: projID, Title: "T"}
 
 	reviewerID := uuid.New()
 	reviewerType := domain.AssigneeTypeAgent
+	// An agent reviewer must be a real agent of this workspace, same as an assignee.
+	seedTestAgents(t, svc, reviewerID)
 	err := svc.Update(ctx, &domain.Task{
 		ID: taskID, ProjectID: projID, Title: "T",
 		ReviewerID: &reviewerID, ReviewerType: &reviewerType,
@@ -2304,10 +2402,15 @@ func TestTaskService_Create_ReviewerAssigned_AgentReviewerNotified(t *testing.T)
 	ctx := context.Background()
 
 	projID := uuid.New()
-	projRepo.items[projID] = &domain.Project{ID: projID, WorkspaceID: uuid.New()}
+	// One tenant: the reviewer below must belong to the project's workspace —
+	// same contract as the Update twin above. Reviewer-at-creation is a write
+	// path that names a principal by id, so it carries the assignee tenancy
+	// guard, and an agent reviewer must be a real agent of this workspace.
+	projRepo.items[projID] = &domain.Project{ID: projID, WorkspaceID: testDefaultWorkspaceID}
 
 	reviewerID := uuid.New()
 	reviewerType := domain.AssigneeTypeAgent
+	seedTestAgents(t, svc, reviewerID)
 	task := &domain.Task{
 		ProjectID: projID, Title: "T",
 		ReviewerID: &reviewerID, ReviewerType: &reviewerType,
@@ -2432,7 +2535,7 @@ func setupTaskServiceWithCommentRepo() (*taskService, *MockTaskRepository, *Mock
 	activityRepo := NewMockActivityLogRepository()
 	commentRepo := NewMockCommentRepository()
 
-	svc := NewTaskService(taskRepo, statusRepo, depRepo, activityRepo,
+	svc := newTestTaskService(taskRepo, statusRepo, depRepo, activityRepo,
 		WithCommentRepoTask(commentRepo),
 	).(*taskService)
 	timeNow = func() time.Time { return frozenTime }
@@ -2574,7 +2677,7 @@ func setupTaskServiceWithDoneGate() (*taskService, *MockTaskRepository, *MockTas
 	vcsRepo := NewMockVCSLinkRepository()
 	commentRepo := NewMockCommentRepository()
 
-	svc := NewTaskService(taskRepo, statusRepo, depRepo, activityRepo,
+	svc := newTestTaskService(taskRepo, statusRepo, depRepo, activityRepo,
 		WithVCSLinkRepoTask(vcsRepo),
 		WithCommentRepoTask(commentRepo),
 	).(*taskService)
@@ -2993,7 +3096,7 @@ func setupMoveToProjectFixture() *moveToProjectFixture {
 	depRepo := NewMockTaskDependencyRepository()
 	activityRepo := NewMockActivityLogRepository()
 	projectRepo := NewMockProjectRepository()
-	svc := NewTaskService(taskRepo, statusRepo, depRepo, activityRepo,
+	svc := newTestTaskService(taskRepo, statusRepo, depRepo, activityRepo,
 		WithProjectRepo(projectRepo)).(*taskService)
 
 	f := &moveToProjectFixture{
@@ -3060,6 +3163,8 @@ func TestMoveToProject_RefusesAnotherWorkspacesProject(t *testing.T) {
 func TestMoveToProject_WithoutProjectRepoFailsClosed(t *testing.T) {
 	taskRepo := NewMockTaskRepository()
 	statusRepo := NewMockTaskStatusRepository()
+	// Deliberately NOT newTestTaskService: this test is about the absent project
+	// repo, which that helper always supplies.
 	svc := NewTaskService(taskRepo, statusRepo, NewMockTaskDependencyRepository(), NewMockActivityLogRepository())
 
 	projectA, projectB := uuid.New(), uuid.New()

@@ -267,6 +267,11 @@ func main() {
 		service.WithUserRepoTask(userRepo),
 		service.WithCommentRepoTask(commentRepo), // enables review-evidence gate
 		service.WithVCSLinkRepoTask(vcsLinkRepo), // enables done-evidence gate
+		// Human half of the assignee tenancy guard. Without it the user path of
+		// assertAssigneeInProjectWorkspace cannot be decided and refuses every
+		// user assignment, so this wiring is load-bearing, not optional —
+		// TestTaskServiceWiresTheAssigneeTenancyGuard reads it back out of this file.
+		service.WithWorkspaceMembershipReader(postgres.NewWorkspaceMembershipReader(db)),
 	)
 
 	// Wire auto-transition service. It calls taskService.MoveTask, so taskService must already

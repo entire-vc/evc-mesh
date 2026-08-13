@@ -1256,6 +1256,20 @@ func handleError(c echo.Context, err error) error {
 		})
 	}
 
+	var foreignAssigneeErr *service.AssigneeNotInWorkspaceError
+	if errors.As(err, &foreignAssigneeErr) {
+		// 422, not 403: the caller is normally a legitimate member of this
+		// workspace and it is the principal they named that is invalid here.
+		// Answering "forbidden" would send them to audit their own permissions.
+		// The message never reveals which workspace the principal does belong to.
+		return c.JSON(http.StatusUnprocessableEntity, map[string]any{
+			"code": "assignee_not_in_workspace",
+			"message": "Assignee does not belong to this task's workspace. Tasks can only be assigned to " +
+				"agents and users of the workspace that owns the project. Pick an assignee from " +
+				"GET /workspaces/:ws_id/team.",
+		})
+	}
+
 	var doneEvidenceErr *service.DoneEvidenceError
 	if errors.As(err, &doneEvidenceErr) {
 		return c.JSON(http.StatusUnprocessableEntity, map[string]any{

@@ -25,7 +25,7 @@ func setupCheckoutTaskService() (*taskService, *MockTaskRepository, *MockTaskSta
 	depRepo := NewMockTaskDependencyRepository()
 	activityRepo := NewMockActivityLogRepository()
 	agentRepo := NewMockAgentRepository()
-	svc := NewTaskService(taskRepo, statusRepo, depRepo, activityRepo,
+	svc := newTestTaskService(taskRepo, statusRepo, depRepo, activityRepo,
 		WithTaskAgentRepo(agentRepo),
 	).(*taskService)
 	timeNow = func() time.Time { return frozenTime }

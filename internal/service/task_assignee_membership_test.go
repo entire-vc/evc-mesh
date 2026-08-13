@@ -57,6 +57,9 @@ func setupMembershipEnv(wfResp *domain.WorkflowRulesResponse, effectiveRules *do
 	// production cannot produce. Individual tests still override this when they need
 	// to seed specific users.
 	svc.userRepo = NewMockUserRepository()
+	// These tests mint their own workspace ids and are about enrolment, not
+	// tenancy; the strict reader is used by the dedicated tenancy tests.
+	svc.wsMembership = NewPermissiveWorkspaceMembershipReader()
 	return membershipEnv{
 		svc: svc, tasks: taskRepo, statuses: statusRepo,
 		agents: agentRepo, projects: projRepo, members: pmRepo,
@@ -69,7 +72,7 @@ func setupMembershipEnv(wfResp *domain.WorkflowRulesResponse, effectiveRules *do
 // ---------------------------------------------------------------------------
 
 func TestAssigneeEnrolment_SetReviewerRotationEnrolsReviewerAndBuilder(t *testing.T) {
-	workspaceID := uuid.New()
+	workspaceID := testDefaultWorkspaceID // single-tenant: the assignee guard resolves every principal against this one workspace
 	projectID := uuid.New()
 	builderID := uuid.New()
 	leadID := uuid.New()
@@ -454,14 +457,31 @@ func TestAssigneeEnrolment_KnownAgentStillEnrols(t *testing.T) {
 	assert.Len(t, pmRepo.members, 1, "a known agent must still be enrolled")
 }
 
-// TestAssigneeEnrolment_UnreadableDirectoryDoesNotBlockEnrolment pins the failure
-// DIRECTION, which is the subtle half of this change.
+// TestAssigneeEnrolment_UnreadableDirectoryRefusesTheASSIGNMENT pins the failure
+// DIRECTION — and it is the OPPOSITE of what this test asserted before the
+// cross-workspace assignee guard landed. The reversal is deliberate; read on.
 //
-// "I could not check" is not "I checked and found nothing". Refusing on a lookup
-// error would convert a transient directory blip into a missing enrolment — exactly
-// the dead end this mechanism exists to prevent — so an error falls through and lets
-// the database's foreign key remain the backstop. Only a positive absence refuses.
-func TestAssigneeEnrolment_UnreadableDirectoryDoesNotBlockEnrolment(t *testing.T) {
+// The original rule was: "I could not check" must not block ENROLMENT, because
+// refusing on a lookup error turns a transient directory blip into a missing
+// project_members row — the permission dead end this whole mechanism exists to
+// prevent. That reasoning is still correct about enrolment considered on its own,
+// and it is preserved verbatim by the test below this one.
+//
+// What changed is that enrolment is no longer the first question. In front of it
+// now sits assertAssigneeInProjectWorkspace, which asks whether this principal
+// belongs to the task's workspace at all — an AUTHORIZATION question, and the
+// same directory read answers it. The two questions want opposite failure
+// directions from the same error:
+//
+//	enrolment      — grants a row to someone already entitled  → fail OPEN
+//	tenancy check  — decides whether they are entitled at all  → fail CLOSED
+//
+// When they conflict the authorization answer wins, because "I could not check"
+// reading as "I checked and it was fine" is precisely the equivalence that let a
+// foreign principal onto a task in the first place. The cost is real and worth
+// naming: a directory blip during an assignment now surfaces as a failed
+// assignment the caller retries, instead of a silent cross-tenant grant.
+func TestAssigneeEnrolment_UnreadableDirectoryRefusesTheASSIGNMENT(t *testing.T) {
 	ctx := context.Background()
 	projectID, agentID := uuid.New(), uuid.New()
 	env := setupMembershipEnv(nil, nil)
@@ -469,10 +489,35 @@ func TestAssigneeEnrolment_UnreadableDirectoryDoesNotBlockEnrolment(t *testing.T
 
 	env.agents.errToReturn = assert.AnError // the directory is unreadable, not empty
 
-	svc.ensureAssigneeProjectMember(ctx, projectID, &agentID, domain.AssigneeTypeAgent)
-	assert.Len(t, pmRepo.members, 1,
-		"a directory we could not read must not block enrolment — that would turn a "+
-			"transient failure into the permission dead end this guard protects against")
+	err := svc.ensureAssigneeProjectMember(ctx, projectID, &agentID, domain.AssigneeTypeAgent)
+
+	require.Error(t, err,
+		"an unreadable principal directory must refuse the assignment: we cannot show this "+
+			"principal belongs to the workspace, and an unverifiable grant is the defect")
+	var foreign *AssigneeNotInWorkspaceError
+	require.ErrorAs(t, err, &foreign)
+	assert.Empty(t, pmRepo.members,
+		"a refused assignment must not leave an enrolment row behind — that row is what "+
+			"makes a foreign principal look native to every later check")
+}
+
+// TestAssigneeEnrolment_UnreadableMemberTableStillEnrols preserves the ORIGINAL
+// fail-open property in the place it still governs.
+//
+// Once tenancy is settled — the agent is readable and in this workspace — a
+// failure in the project_members lookup is the transient blip the old rule was
+// written about, and it must not block the grant. Without this test the reversal
+// above could be over-applied into "refuse on any error", which would re-open the
+// dead end for legitimate assignees.
+func TestAssigneeEnrolment_UnreadableMemberTableStillEnrols(t *testing.T) {
+	ctx := context.Background()
+	projectID, agentID := uuid.New(), uuid.New()
+	env := setupMembershipEnv(nil, nil)
+	svc := env.svc
+	env.agents.items[agentID] = &domain.Agent{ID: agentID, Slug: "real"}
+
+	require.NoError(t, svc.ensureAssigneeProjectMember(ctx, projectID, &agentID, domain.AssigneeTypeAgent),
+		"a readable, in-workspace agent must be assignable even when the member table is unhappy")
 }
 
 // ---------------------------------------------------------------------------

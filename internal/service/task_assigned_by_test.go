@@ -30,12 +30,20 @@ func newAssignedByEnv(t *testing.T) *assignedByEnv {
 	if err := statusRepo.Create(context.Background(), st); err != nil {
 		t.Fatalf("create status: %v", err)
 	}
-	svc := NewTaskService(taskRepo, statusRepo, nil, nil)
+	// Both agents must exist in the directory: the assignee tenancy guard refuses
+	// a principal it cannot find, because an id in no directory cannot be shown to
+	// belong to this workspace.
+	agentRepo := NewMockAgentRepository()
+	agentA, agentB := uuid.New(), uuid.New()
+	agentRepo.items[agentA] = &domain.Agent{ID: agentA, Slug: "agent-a"}
+	agentRepo.items[agentB] = &domain.Agent{ID: agentB, Slug: "agent-b"}
+
+	svc := newTestTaskService(taskRepo, statusRepo, nil, nil, WithTaskAgentRepo(agentRepo))
 	e := &assignedByEnv{
 		svc: svc, taskRepo: taskRepo, statusRepo: statusRepo,
 		projectID: projectID,
-		agentA:    uuid.New(),
-		agentB:    uuid.New(),
+		agentA:    agentA,
+		agentB:    agentB,
 	}
 
 	// Seed the status so task creation works.

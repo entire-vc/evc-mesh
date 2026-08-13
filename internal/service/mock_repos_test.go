@@ -158,9 +158,29 @@ type MockProjectRepository struct {
 	mu          sync.RWMutex
 	items       map[uuid.UUID]*domain.Project
 	errToReturn error
+	// defaultWorkspace makes an unseeded project id resolve to one tenant instead
+	// of to "no such project". Most service tests never create a project row and
+	// only care that SOME workspace exists behind the id; the assignee tenancy
+	// guard, which refuses when it cannot resolve one, would otherwise fail all of
+	// them for a reason none of them are about. A test that needs a SECOND tenant
+	// seeds a real project with its own workspace_id, and a test that needs "the
+	// project is missing" leaves this unset.
+	defaultWorkspace uuid.UUID
+}
+
+// WithDefaultWorkspace declares the tenant that unseeded project ids belong to.
+func (m *MockProjectRepository) WithDefaultWorkspace(wsID uuid.UUID) *MockProjectRepository {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.defaultWorkspace = wsID
+	return m
 }
 
 func NewMockProjectRepository() *MockProjectRepository {
+	// NOT single-tenant by default: several tests depend on an unseeded id
+	// resolving to "no such project" (TestMoveToProject_WithoutProjectRepoFailsClosed,
+	// TestProjectService_GetByID). Opt in with WithDefaultWorkspace where a test
+	// needs every id to resolve.
 	return &MockProjectRepository{items: make(map[uuid.UUID]*domain.Project)}
 }
 
@@ -182,7 +202,19 @@ func (m *MockProjectRepository) GetByID(_ context.Context, id uuid.UUID) (*domai
 	defer m.mu.RUnlock()
 	p, ok := m.items[id]
 	if !ok {
+		if m.defaultWorkspace != uuid.Nil {
+			return &domain.Project{ID: id, WorkspaceID: m.defaultWorkspace}, nil
+		}
 		return nil, nil
+	}
+	// A project seeded without a workspace_id belongs to the default tenant, the
+	// same rule MockAgentRepository applies to agents — otherwise the two mocks
+	// disagree about who the default tenant is and every seeded project looks
+	// foreign to every unseeded agent.
+	if p.WorkspaceID == uuid.Nil && m.defaultWorkspace != uuid.Nil {
+		clone := *p
+		clone.WorkspaceID = m.defaultWorkspace
+		return &clone, nil
 	}
 	return p, nil
 }
@@ -241,9 +273,12 @@ func (m *MockProjectRepository) List(_ context.Context, workspaceID uuid.UUID, _
 // ---------------------------------------------------------------------------
 
 type MockTaskRepository struct {
-	mu          sync.RWMutex
-	items       map[uuid.UUID]*domain.Task
-	errToReturn error
+	// LastListByAssigneeWorkspace records the workspace argument of the most recent
+	// ListByAssignee call, so a caller can be checked for scoping its own feed read.
+	LastListByAssigneeWorkspace uuid.UUID
+	mu                          sync.RWMutex
+	items                       map[uuid.UUID]*domain.Task
+	errToReturn                 error
 	// statusCategoryOf, if set, resolves a status ID to its category — used by
 	// FindDueMonitorBacklogTasks to emulate the real query's join against
 	// task_statuses without this mock needing a direct dependency on
@@ -328,10 +363,19 @@ func (m *MockTaskRepository) List(_ context.Context, projectID uuid.UUID, _ repo
 	return pagination.NewPage(all, len(all), pg), nil
 }
 
-func (m *MockTaskRepository) ListByAssignee(_ context.Context, assigneeID uuid.UUID, assigneeType domain.AssigneeType) ([]domain.Task, error) {
+// ListByAssignee records the workspace it was scoped with so a caller can be
+// checked for passing one, and otherwise filters on the assignee alone: this mock
+// holds no project->workspace mapping, so it CANNOT prove the predicate reaches
+// SQL. That proof lives in the integration test against a real database
+// (TestCrossWorkspaceAssignee_*); asserting scoping here would only assert that
+// the mock filters, which is not the claim.
+func (m *MockTaskRepository) ListByAssignee(_ context.Context, workspaceID, assigneeID uuid.UUID, assigneeType domain.AssigneeType) ([]domain.Task, error) {
 	if m.errToReturn != nil {
 		return nil, m.errToReturn
 	}
+	m.mu.Lock()
+	m.LastListByAssigneeWorkspace = workspaceID
+	m.mu.Unlock()
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	var result []domain.Task
@@ -1190,13 +1234,20 @@ func (m *MockArtifactRepository) ListByTask(_ context.Context, taskID uuid.UUID,
 // ---------------------------------------------------------------------------
 
 type MockAgentRepository struct {
-	mu          sync.RWMutex
-	items       map[uuid.UUID]*domain.Agent
-	errToReturn error
+	// defaultWorkspace — see WithDefaultWorkspace.
+	defaultWorkspace uuid.UUID
+	mu               sync.RWMutex
+	items            map[uuid.UUID]*domain.Agent
+	errToReturn      error
 }
 
 func NewMockAgentRepository() *MockAgentRepository {
-	return &MockAgentRepository{items: make(map[uuid.UUID]*domain.Agent)}
+	// Agents seeded without a workspace_id belong to the single default tenant; an
+	// agent seeded WITH one keeps it, which is how a foreign principal is built.
+	return &MockAgentRepository{
+		items:            make(map[uuid.UUID]*domain.Agent),
+		defaultWorkspace: testDefaultWorkspaceID,
+	}
 }
 
 func (m *MockAgentRepository) Create(_ context.Context, a *domain.Agent) error {
@@ -1209,6 +1260,16 @@ func (m *MockAgentRepository) Create(_ context.Context, a *domain.Agent) error {
 	return nil
 }
 
+// WithDefaultWorkspace declares the tenant that agents seeded WITHOUT an explicit
+// workspace_id belong to. An agent seeded WITH one keeps it — that is how a test
+// builds the foreign principal the tenancy guard must refuse.
+func (m *MockAgentRepository) WithDefaultWorkspace(wsID uuid.UUID) *MockAgentRepository {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.defaultWorkspace = wsID
+	return m
+}
+
 func (m *MockAgentRepository) GetByID(_ context.Context, id uuid.UUID) (*domain.Agent, error) {
 	if m.errToReturn != nil {
 		return nil, m.errToReturn
@@ -1218,6 +1279,11 @@ func (m *MockAgentRepository) GetByID(_ context.Context, id uuid.UUID) (*domain.
 	a, ok := m.items[id]
 	if !ok {
 		return nil, nil
+	}
+	if a.WorkspaceID == uuid.Nil && m.defaultWorkspace != uuid.Nil {
+		clone := *a
+		clone.WorkspaceID = m.defaultWorkspace
+		return &clone, nil
 	}
 	return a, nil
 }
@@ -2301,3 +2367,88 @@ func (m *MockRuleRepository) GetEffective(_ context.Context, _ uuid.UUID, _, _ *
 }
 
 var _ repository.RuleRepository = (*MockRuleRepository)(nil)
+
+// ---------------------------------------------------------------------------
+// MockWorkspaceMembershipReader — the human half of the assignee tenancy guard.
+// ---------------------------------------------------------------------------
+
+// MockWorkspaceMembershipReader answers service.WorkspaceMembershipReader.
+//
+// Default-allow inside defaultWorkspace mirrors what MockProjectRepository does
+// for projects: the ordinary service test has no workspace_members fixture and is
+// not about membership. A test that needs a user REFUSED names a different
+// workspace, or calls Deny.
+type MockWorkspaceMembershipReader struct {
+	mu          sync.RWMutex
+	permissive  bool
+	allowed     map[string]bool
+	denied      map[string]bool
+	errToReturn error
+}
+
+// NewMembershipTableReader models an actual workspace_members table: nobody is a
+// member until Allow says so.
+//
+// The first version of this mock returned "true for any user, as long as the
+// WORKSPACE is the default one" — which never looked at the user at all, so the
+// foreign-user test passed a foreign user and got a cheerful yes. A membership
+// mock that ignores the principal cannot fail the test it exists for.
+func NewMembershipTableReader() *MockWorkspaceMembershipReader {
+	return &MockWorkspaceMembershipReader{
+		allowed: make(map[string]bool),
+		denied:  make(map[string]bool),
+	}
+}
+
+// NewPermissiveWorkspaceMembershipReader treats every user as a member of every
+// workspace except pairs passed to Deny.
+//
+// For tests that are about ENROLMENT rather than tenancy and that mint their own
+// workspace ids: forcing each of them to also build a membership fixture would be
+// noise, and the tenancy rule itself is proven by the tests that use the strict
+// reader. The agent half of the guard stays live either way — it reads the agent
+// directory, not this.
+func NewPermissiveWorkspaceMembershipReader() *MockWorkspaceMembershipReader {
+	return &MockWorkspaceMembershipReader{
+		permissive: true,
+		allowed:    make(map[string]bool),
+		denied:     make(map[string]bool),
+	}
+}
+
+// Allow records a workspace_members row.
+func (m *MockWorkspaceMembershipReader) Allow(workspaceID, userID uuid.UUID) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.allowed[workspaceID.String()+"/"+userID.String()] = true
+}
+
+// Deny marks one (workspace, user) pair as a non-member.
+func (m *MockWorkspaceMembershipReader) Deny(workspaceID, userID uuid.UUID) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.denied[workspaceID.String()+"/"+userID.String()] = true
+}
+
+// FailWith makes every lookup return an error, so a test can prove the guard
+// refuses when it cannot read rather than assuming a "no".
+func (m *MockWorkspaceMembershipReader) FailWith(err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.errToReturn = err
+}
+
+func (m *MockWorkspaceMembershipReader) IsWorkspaceMember(_ context.Context, workspaceID, userID uuid.UUID) (bool, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.errToReturn != nil {
+		return false, m.errToReturn
+	}
+	if m.denied[workspaceID.String()+"/"+userID.String()] {
+		return false, nil
+	}
+	if m.permissive {
+		return true, nil
+	}
+	return m.allowed[workspaceID.String()+"/"+userID.String()], nil
+}

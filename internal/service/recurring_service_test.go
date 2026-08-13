@@ -234,7 +234,7 @@ func (s *StubTaskService) CreateSubtask(_ context.Context, _ uuid.UUID, _ Create
 func (s *StubTaskService) ListSubtasks(_ context.Context, _ uuid.UUID) ([]domain.Task, error) {
 	panic("StubTaskService.ListSubtasks not implemented")
 }
-func (s *StubTaskService) GetMyTasks(_ context.Context, _ uuid.UUID, _ domain.AssigneeType) ([]domain.Task, error) {
+func (s *StubTaskService) GetMyTasks(_ context.Context, _, _ uuid.UUID, _ domain.AssigneeType) ([]domain.Task, error) {
 	panic("StubTaskService.GetMyTasks not implemented")
 }
 func (s *StubTaskService) GetUserActiveTasks(_ context.Context, _, _ uuid.UUID, pg pagination.Params) (*pagination.Page[domain.Task], error) {
