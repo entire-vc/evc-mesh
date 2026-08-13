@@ -1779,7 +1779,13 @@ func (s *taskService) ensureAssigneeProjectMember(ctx context.Context, projectID
 	if assigneeID == nil {
 		return nil
 	}
-	// Tenancy first: refuse before granting anything.
+	// Typed first: an id that resolved to no principal keeps the caller's declared
+	// type, and when that type is not a principal type the tenancy guard below
+	// deliberately skips — which used to let the dangling id be written silently.
+	if err := assertAssigneeIsTyped(projectID, assigneeID, assigneeType); err != nil {
+		return err
+	}
+	// Tenancy second: refuse before granting anything.
 	if err := s.assertAssigneeInProjectWorkspace(ctx, projectID, assigneeID, assigneeType); err != nil {
 		return err
 	}
@@ -1920,6 +1926,15 @@ func (s *taskService) ValidateAssigneeForProject(ctx context.Context, projectID 
 		return domain.AssigneeTypeUnassigned, nil
 	}
 	resolved := s.resolveAssigneeType(ctx, assigneeID, assigneeType)
+	// Same order as ensureAssigneeProjectMember, and for the same reason: when the id
+	// resolves to no principal, resolveAssigneeType hands back the caller's declared
+	// type, and a non-principal type makes the tenancy check below skip. Without this
+	// line a template or schedule would store an assignee_id that names nobody and
+	// report success — the defect this pair of guards exists to close, arriving
+	// through the second funnel instead of the first.
+	if err := assertAssigneeIsTyped(projectID, assigneeID, resolved); err != nil {
+		return resolved, err
+	}
 	if err := s.assertAssigneeInProjectWorkspace(ctx, projectID, assigneeID, resolved); err != nil {
 		return resolved, err
 	}
