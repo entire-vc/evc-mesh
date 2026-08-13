@@ -280,11 +280,14 @@ export function IntegrationsPage() {
                       <div className="space-y-3">
                         <div className="rounded-lg border border-dashed border-border bg-muted/30 p-3">
                           <p className="text-xs font-medium text-muted-foreground mb-1">
-                            SSE Endpoint
+                            SSE Endpoint — for remote agents
                           </p>
                           <code className="block rounded bg-background px-2 py-1.5 text-xs font-mono select-all">
                             {window.location.origin}/mcp/sse
                           </code>
+                          <p className="text-xs text-muted-foreground mt-1.5">
+                            Works if this deployment's reverse proxy routes <code className="rounded bg-muted px-1">/mcp</code> to the MCP server. If it doesn't connect, use the stdio config below instead.
+                          </p>
                         </div>
 
                         <div className="rounded-lg border border-dashed border-border bg-muted/30 p-3">
