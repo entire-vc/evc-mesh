@@ -1239,3 +1239,34 @@ func TestRecurringService_Update_UnrelatedFieldSkipsTheFunnel(t *testing.T) {
 		t.Fatalf("Update() unexpected error for a PATCH that never touches assignee_id: %v", err)
 	}
 }
+
+// TestRecurringService_Update_NativeAssigneeSucceeds_RealTaskService is the
+// success-path counterpart to TestRecurringService_Update_RefusesWhenFunnelRefuses,
+// run against the REAL taskService (setupTenancyEnv), not a stub — proving the
+// wiring works end to end through the actual resolveAssigneeType +
+// assertAssigneeInProjectWorkspace funnel.
+func TestRecurringService_Update_NativeAssigneeSucceeds_RealTaskService(t *testing.T) {
+	env := setupTenancyEnv(t, nil)
+	repo := NewMockRecurringRepository()
+	svc := NewRecurringService(repo, env.svc)
+
+	created, err := svc.Create(context.Background(), CreateRecurringInput{
+		ProjectID: env.projectID, TitleTemplate: "x", Frequency: domain.RecurringFrequencyDaily,
+	})
+	if err != nil {
+		t.Fatalf("setup Create() failed: %v", err)
+	}
+
+	updated, err := svc.Update(context.Background(), created.ID, UpdateRecurringInput{
+		AssigneeID: &env.nativeAgent,
+	})
+	if err != nil {
+		t.Fatalf("Update() unexpected error for a native-workspace agent: %v", err)
+	}
+	if updated.AssigneeID == nil || *updated.AssigneeID != env.nativeAgent {
+		t.Fatalf("Update() assignee_id = %v, want %v", updated.AssigneeID, env.nativeAgent)
+	}
+	if updated.AssigneeType != domain.AssigneeTypeAgent {
+		t.Fatalf("Update() assignee_type = %v, want agent (resolved from directory)", updated.AssigneeType)
+	}
+}

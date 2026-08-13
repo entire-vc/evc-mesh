@@ -17,6 +17,10 @@ import (
 // "what actually ends up on the row" question the real repo answers.
 type fakeTaskTemplateRepo struct {
 	byID map[uuid.UUID]*domain.TaskTemplate
+	// getByIDErr, when set, makes GetByID fail regardless of whether the id
+	// exists — exercises Update's own "could not read back the existing
+	// template" branch, distinct from the tenancy funnel's refusal.
+	getByIDErr error
 }
 
 func newFakeTaskTemplateRepo() *fakeTaskTemplateRepo {
@@ -30,6 +34,9 @@ func (r *fakeTaskTemplateRepo) Create(_ context.Context, tmpl *domain.TaskTempla
 }
 
 func (r *fakeTaskTemplateRepo) GetByID(_ context.Context, id uuid.UUID) (*domain.TaskTemplate, error) {
+	if r.getByIDErr != nil {
+		return nil, r.getByIDErr
+	}
 	tmpl, ok := r.byID[id]
 	if !ok {
 		return nil, errors.New("not found")
@@ -225,5 +232,65 @@ func TestTaskTemplateService_Update_UnrelatedFieldSkipsTheFunnel(t *testing.T) {
 	}
 	if len(spy.calls) != 0 {
 		t.Fatalf("ValidateAssigneeForProject called %d times for a PATCH that never touches assignee_id, want 0", len(spy.calls))
+	}
+}
+
+// TestTaskTemplateService_Update_NativeAssigneeSucceeds_RealTaskService is the
+// success-path counterpart to TestTaskTemplateService_Update_RefusesWhenFunnelRefuses,
+// run against the REAL taskService (setupTenancyEnv), not a stub/spy — proving
+// the wiring works end to end through the actual resolveAssigneeType +
+// assertAssigneeInProjectWorkspace funnel, not just against a double that
+// always answers what the test wants.
+func TestTaskTemplateService_Update_NativeAssigneeSucceeds_RealTaskService(t *testing.T) {
+	env := setupTenancyEnv(t, nil)
+	repo := newFakeTaskTemplateRepo()
+	svc := NewTaskTemplateService(repo, env.svc)
+
+	created, err := svc.Create(context.Background(), domain.CreateTemplateInput{
+		ProjectID: env.projectID, TitleTemplate: "x",
+	})
+	if err != nil {
+		t.Fatalf("setup Create() failed: %v", err)
+	}
+
+	agentType := domain.AssigneeTypeAgent
+	updated, err := svc.Update(context.Background(), created.ID, domain.UpdateTemplateInput{
+		AssigneeID: &env.nativeAgent, AssigneeType: &agentType,
+	})
+	if err != nil {
+		t.Fatalf("Update() unexpected error for a native-workspace agent: %v", err)
+	}
+	if updated.AssigneeID == nil || *updated.AssigneeID != env.nativeAgent {
+		t.Fatalf("Update() assignee_id = %v, want %v", updated.AssigneeID, env.nativeAgent)
+	}
+	if updated.AssigneeType == nil || *updated.AssigneeType != domain.AssigneeTypeAgent {
+		t.Fatalf("Update() assignee_type = %v, want agent", updated.AssigneeType)
+	}
+}
+
+// TestTaskTemplateService_Update_PropagatesReadBackFailure covers the read-back
+// itself failing — distinct from the tenancy funnel refusing. Without a
+// project_id to validate against, Update cannot proceed at all.
+func TestTaskTemplateService_Update_PropagatesReadBackFailure(t *testing.T) {
+	spy := newSpyValidatingTaskService()
+	repo := newFakeTaskTemplateRepo()
+	svc := NewTaskTemplateService(repo, spy)
+
+	created, err := svc.Create(context.Background(), domain.CreateTemplateInput{ProjectID: uuid.New(), TitleTemplate: "x"})
+	if err != nil {
+		t.Fatalf("setup Create() failed: %v", err)
+	}
+
+	repo.getByIDErr = errors.New("db unavailable")
+	agentType := domain.AssigneeTypeAgent
+	someAgent := uuid.New()
+	_, err = svc.Update(context.Background(), created.ID, domain.UpdateTemplateInput{
+		AssigneeID: &someAgent, AssigneeType: &agentType,
+	})
+	if err == nil {
+		t.Fatal("Update() expected an error when the existing template cannot be read back, got nil")
+	}
+	if len(spy.calls) != 0 {
+		t.Fatalf("ValidateAssigneeForProject called %d times when the read-back failed before it could run, want 0", len(spy.calls))
 	}
 }

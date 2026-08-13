@@ -396,3 +396,61 @@ func TestCrossWorkspaceAssignee_UpdateAllowsNativeReviewer(t *testing.T) {
 			"a notification, and without enrolment they follow it to a task whose status "+
 			"transitions all 403")
 }
+
+// ---------------------------------------------------------------------------
+// ValidateAssigneeForProject — the funnel non-task write paths (template,
+// recurring schedule) call into. Everything above exercises it indirectly
+// through Create/Update/MoveTask/etc; these call it directly, against the real
+// taskService (not a mock/stub), the way task_template_service.go and
+// recurring_service.go actually do.
+// ---------------------------------------------------------------------------
+
+func TestValidateAssigneeForProject_RefusesForeignAgent(t *testing.T) {
+	env := setupTenancyEnv(t, nil)
+
+	resolved, err := env.svc.ValidateAssigneeForProject(
+		context.Background(), env.projectID, &env.foreignAgent, domain.AssigneeTypeAgent)
+
+	var foreign *AssigneeNotInWorkspaceError
+	require.ErrorAs(t, err, &foreign, "a foreign agent must be refused")
+	assert.Equal(t, domain.AssigneeTypeAgent, resolved,
+		"the resolved type is still returned alongside the error — callers may want it for logging")
+}
+
+// TestValidateAssigneeForProject_AllowsNativeAgent is the positive control:
+// without it the refusal test above is satisfied by a funnel that refuses
+// everything, which would break every template/schedule assignment fleet-wide.
+func TestValidateAssigneeForProject_AllowsNativeAgent(t *testing.T) {
+	env := setupTenancyEnv(t, nil)
+
+	resolved, err := env.svc.ValidateAssigneeForProject(
+		context.Background(), env.projectID, &env.nativeAgent, domain.AssigneeTypeAgent)
+
+	require.NoError(t, err, "an agent of this workspace must be accepted")
+	assert.Equal(t, domain.AssigneeTypeAgent, resolved)
+}
+
+func TestValidateAssigneeForProject_ResolvesTypeFromDirectoryNotCaller(t *testing.T) {
+	env := setupTenancyEnv(t, nil)
+
+	// Caller claims "user", but nativeAgent is only registered in the agent
+	// directory — resolveAssigneeType must correct it, the same as every other
+	// task write path does, not trust the caller-supplied type.
+	resolved, err := env.svc.ValidateAssigneeForProject(
+		context.Background(), env.projectID, &env.nativeAgent, domain.AssigneeTypeUser)
+
+	require.NoError(t, err)
+	assert.Equal(t, domain.AssigneeTypeAgent, resolved,
+		"resolved type must come from the directory lookup, not the caller-supplied type")
+}
+
+func TestValidateAssigneeForProject_NilAssignee_ReturnsUnassignedWithoutLookup(t *testing.T) {
+	env := setupTenancyEnv(t, nil)
+
+	resolved, err := env.svc.ValidateAssigneeForProject(
+		context.Background(), env.projectID, nil, domain.AssigneeTypeAgent)
+
+	require.NoError(t, err)
+	assert.Equal(t, domain.AssigneeTypeUnassigned, resolved,
+		"no assignee means nothing to validate — must not error and must not claim a real type")
+}
