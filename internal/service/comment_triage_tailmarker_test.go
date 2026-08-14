@@ -27,11 +27,11 @@ import (
 
 // tailMarkerEnv builds a task assigned to the comment's author, which is the only
 // configuration in which isAssigneeCompletionReport can fire at all.
-func tailMarkerEnv(t *testing.T) (triageTestEnv, uuid.UUID, uuid.UUID) {
+func tailMarkerEnv(t *testing.T) (env triageTestEnv, taskID, assigneeID uuid.UUID) {
 	t.Helper()
-	env := setupTriageEnv(t, true)
-	assigneeID := uuid.New()
-	taskID := uuid.New()
+	env = setupTriageEnv(t, true)
+	assigneeID = uuid.New()
+	taskID = uuid.New()
 	env.taskRepo.items[taskID] = &domain.Task{
 		ID:              taskID,
 		ProjectID:       env.projID,
@@ -46,9 +46,9 @@ func tailMarkerEnv(t *testing.T) (triageTestEnv, uuid.UUID, uuid.UUID) {
 
 const tailMarker = "❓ **Blocking @pavel**: нужно твоё решение — вариант A или вариант B?"
 
-// TestEnforceBlockingTriage_TailMarkerAfterReport_ArmsGate is AC #1: four bodies that
-// all carry the same live marker at the tail of an assignee-authored report. All four
-// must arm human_gate.
+// TestEnforceBlockingTriage_TailMarkerAfterReport_ArmsGate is AC #1: bodies that all
+// carry the same live marker at the tail of an assignee-authored report, plus the
+// first-line control. All of them must arm human_gate.
 func TestEnforceBlockingTriage_TailMarkerAfterReport_ArmsGate(t *testing.T) {
 	// Two of these bodies are the live losses, quoted from prod, not paraphrased.
 	//
