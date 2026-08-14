@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	"github.com/entire-vc/evc-mesh/pkg/actorctx"
 )
 
 // ---------------------------------------------------------------------------
@@ -165,4 +166,45 @@ func TestEnforceBlockingTriage_TailMarkerNegativeControls(t *testing.T) {
 			assert.Empty(t, env.taskMover.calls(), "must not move the task")
 		})
 	}
+}
+
+// TestTailMarkerArmedGate_WithdrawableByAuthor closes the risk this fix introduces.
+// Arming on shapes that were previously (and silently) dropped means MORE gated
+// cards. A gate that cannot be released is a permanent entry in a human's queue, so
+// the round trip has to hold: the same author who armed via a tail marker must be
+// able to withdraw it with an ordinary negator comment.
+//
+// Guards against a specific failure: releaseHumanGateOnWithdrawal identifies the
+// owner via scanHumanGateOwnership, which re-reads the comment thread rather than
+// anything enforceBlockingTriage recorded. That independence is what makes the round
+// trip work, and it is worth an assertion rather than an assumption.
+func TestTailMarkerArmedGate_WithdrawableByAuthor(t *testing.T) {
+	env, taskID, assigneeID := tailMarkerEnv(t)
+	ctx := actorctx.WithActor(context.Background(), assigneeID, domain.ActorTypeAgent)
+
+	// Arm: the §5a shape — report, rule, marker at the tail.
+	require.NoError(t, env.svc.Create(ctx, &domain.Comment{
+		TaskID:     taskID,
+		AuthorID:   assigneeID,
+		AuthorType: domain.ActorTypeAgent,
+		Body:       "## Отчёт\n\nРабота завершена, все фиксы выполнены.\n\n---\n\n" + tailMarker,
+	}))
+	armCalls := env.taskMover.humanGateCalls()
+	require.Len(t, armCalls, 1)
+	require.True(t, armCalls[0].value, "tail marker must arm the gate")
+
+	// The gate is now live on the task, as the server would have recorded it.
+	env.taskRepo.items[taskID].HumanGate = true
+
+	// Withdraw: same author, ordinary negator, no marker of its own.
+	require.NoError(t, env.svc.Create(ctx, &domain.Comment{
+		TaskID:     taskID,
+		AuthorID:   assigneeID,
+		AuthorType: domain.ActorTypeAgent,
+		Body:       "Отзываю свой запрос — ответ больше не нужен, блокер самоустранился.",
+	}))
+
+	calls := env.taskMover.humanGateCalls()
+	require.Len(t, calls, 2, "withdrawal must produce a second SetHumanGate call")
+	assert.False(t, calls[1].value, "gate must be cleared (value=false)")
 }
