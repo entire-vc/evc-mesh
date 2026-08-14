@@ -1060,13 +1060,6 @@ func (s *commentService) enforceBlockingTriage(ctx context.Context, comment *dom
 		return
 	}
 
-	// Completion reports from the task's own assignee must not trigger triage —
-	// the blocking marker may appear as handoff/escalation context rather than a
-	// genuine work blocker (e.g. "Done. ❓ Blocking @pavel: please close manually").
-	if isAssigneeCompletionReport(comment, task) {
-		return
-	}
-
 	// Human-gate: only act when the slug the "Blocking" marker actually names (not just
 	// any @-mention elsewhere in the body) resolves to a real user, not just an agent.
 	// Resolve this BEFORE the auto-mode early return so we can set the sticky flag.
@@ -1081,12 +1074,25 @@ func (s *commentService) enforceBlockingTriage(ctx context.Context, comment *dom
 
 	// Arm the sticky human_gate flag regardless of delegation level so the MoveTask
 	// gate protects the task even after a delegation_level change (audit P0 #3).
+	//
+	// This is deliberately placed BEFORE the isAssigneeCompletionReport check below.
+	// Arming is what DELIVERS the ask (freezes the card, queues it for the named user);
+	// the completion-report heuristic exists to suppress the TRIAGE MOVE, and gating
+	// delivery on it made a live ask vanish silently — see the check's own note.
 	if setErr := s.taskSvc.SetHumanGate(ctx, task.ID, true); setErr != nil {
 		log.Printf("[comment-triage] WARNING: SetHumanGate on task %s failed: %v", task.ID, setErr)
 	}
 
 	// auto-mode tasks self-manage; triage escalation is suppressed (flag already set above).
 	if task.DelegationLevel == domain.DelegationLevelAuto {
+		return
+	}
+
+	// Completion reports from the task's own assignee must not trigger the triage MOVE —
+	// the blocking marker may appear as handoff/escalation context rather than a
+	// genuine work blocker (e.g. "Done. ❓ Blocking @pavel: please close manually").
+	// The gate is already armed above: a live marker naming a real user always delivers.
+	if isAssigneeCompletionReport(comment, task) {
 		return
 	}
 
@@ -1937,9 +1943,28 @@ func hasUnnegatedKeyword(lower, kw string) bool {
 // isAssigneeCompletionReport returns true when the comment is authored by the
 // task's own assignee AND the text immediately preceding its blocking marker
 // contains at least one completion keyword that is not itself negated. Used
-// to suppress enforceBlockingTriage on progress/handoff reports that append a
+// to suppress the TRIAGE MOVE on progress/handoff reports that append a
 // "❓ Blocking @user" marker as citation/context, without false-positiving on
 // unrelated (or negated) completion words used elsewhere in a longer comment.
+//
+// SCOPE (task #a84b443c, 2026-08-14): this heuristic must NEVER gate SetHumanGate.
+// It is a keyword scan over a 500-byte window, and the canonical ask shape from
+// CLAUDE-communication.md §5a — a work report, then "---", then the marker at the
+// tail — puts a completion word in that window as a matter of course. Whenever it
+// misfired it did not merely skip a triage move: it skipped ARMING, so the card was
+// never frozen and the ask was never queued, while the comment published normally
+// and the author believed the question was handed over. Two live losses, different
+// agents and projects, same shape:
+//
+//   - #8286e487 (Bill, 10.08) — "…в незакрытые треды…" (закрыт ⊂ незакрытые);
+//   - #29a0a879 (Deadalus, 13.08) — "**Уже сделано** (авто-intake…)" (сделан ⊂ сделано),
+//     a legitimate MIT-violation escalation that sat undelivered for 8 hours.
+//
+// Both are covered by TestEnforceBlockingTriage_TailMarkerAfterReport_ArmsGate.
+// Two prior fixes narrowed this predicate instead of moving it — #69fbb698 bounded
+// the window to 500 bytes, #3948173f/#548 added negation tokens — and each left the
+// class open, because the defect is not the predicate's width but what it gates.
+// Narrowing it a third time is not the fix; keeping it off the arming path is.
 func isAssigneeCompletionReport(comment *domain.Comment, task *domain.Task) bool {
 	if task.AssigneeID == nil {
 		return false

@@ -519,8 +519,16 @@ func TestReleaseHumanGate_TaskNotGated_NoOp(t *testing.T) {
 // TestEnforceBlockingTriage_AssigneeCompletionReport_NoTriage verifies that when
 // the task's own assignee writes a completion summary that incidentally contains a
 // "❓ Blocking @pavel" marker (e.g. "Done. ❓ Blocking @pavel: please close"), the
-// task is NOT moved to triage and the human_gate flag is NOT armed.
+// task is NOT moved to triage.
 // Regression: task #0a46e636 was re-triaged when Garfield wrote the final summary.
+//
+// AMENDED 2026-08-14 (task #a84b443c): this test also asserted that human_gate was
+// NOT armed, and that half is now inverted. The regression it was written for is the
+// unwanted triage MOVE — that assertion is unchanged and still carries the test. But
+// suppressing the ARMING made the ask undeliverable, and this body is the clearest
+// case that it should be delivered: the marker asks Pavel to close a supervised task
+// by hand, which is precisely an ask no agent can satisfy. Two live losses of the same
+// shape are in comment_triage_tailmarker_test.go.
 func TestEnforceBlockingTriage_AssigneeCompletionReport_NoTriage(t *testing.T) {
 	env := setupTriageEnv(t, true)
 	assigneeID := uuid.New()
@@ -548,7 +556,9 @@ func TestEnforceBlockingTriage_AssigneeCompletionReport_NoTriage(t *testing.T) {
 	require.NoError(t, env.svc.Create(context.Background(), comment))
 
 	assert.Empty(t, env.taskMover.calls(), "completion report from assignee must not trigger triage move")
-	assert.Empty(t, env.taskMover.humanGateCalls(), "completion report from assignee must not arm human_gate")
+	gateCalls := env.taskMover.humanGateCalls()
+	require.Len(t, gateCalls, 1, "a live marker naming a real user must arm human_gate even in a completion report")
+	assert.True(t, gateCalls[0].value, "SetHumanGate must arm the flag (value=true)")
 	assert.Empty(t, env.systemComments(), "no system comment expected")
 }
 
