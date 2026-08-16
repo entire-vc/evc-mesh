@@ -436,6 +436,14 @@ func (s *Service) Logout(ctx context.Context, userID uuid.UUID) error {
 	return s.refreshTokenRepo.RevokeByUserID(ctx, userID)
 }
 
+// RefreshTokenTTL returns the configured lifetime of a refresh token. Callers
+// that mirror the token's lifetime onto a client-side artifact (the refresh
+// cookie's Max-Age) read it from here rather than hardcoding a second copy
+// that would silently drift if this service's TTL ever changed.
+func (s *Service) RefreshTokenTTL() time.Duration {
+	return s.refreshTokenTTL
+}
+
 // UpdateProfile updates the display_name, username (optional), and avatar_url for the given user.
 // name is trimmed and must be non-empty, max 100 runes. username is validated and checked for global uniqueness.
 func (s *Service) UpdateProfile(ctx context.Context, userID uuid.UUID, name, username, avatarURL string) (*domain.User, error) {

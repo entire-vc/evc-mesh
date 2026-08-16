@@ -17,6 +17,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/cookiejar"
+	neturl "net/url"
 	"os"
 	"testing"
 	"time"
@@ -66,10 +68,18 @@ func NewTestEnv(t *testing.T) *TestEnv {
 		t.Skipf("Database ping failed, skipping integration test: %v", err)
 	}
 
+	// The refresh token now travels as an httpOnly cookie instead of a body
+	// field — the client needs a cookie jar to carry it across requests the
+	// same way a real browser does (Login sets it, Refresh/Logout read it).
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatalf("Failed to create cookie jar: %v", err)
+	}
+
 	return &TestEnv{
 		BaseURL:    baseURL,
 		DB:         db,
-		HTTPClient: &http.Client{Timeout: 10 * time.Second},
+		HTTPClient: &http.Client{Timeout: 10 * time.Second, Jar: jar},
 		t:          t,
 	}
 }
@@ -113,7 +123,8 @@ func (e *TestEnv) Register(t *testing.T, email, password, name string) map[strin
 	}
 	_ = resp.Body.Close()
 
-	// Extract tokens.
+	// Extract the access token. The refresh token is no longer in the body —
+	// it arrives as an httpOnly cookie the jar picks up automatically.
 	tokens, ok := result["tokens"].(map[string]interface{})
 	if ok {
 		if at, exists := tokens["access_token"]; exists {
@@ -169,7 +180,7 @@ func (e *TestEnv) Login(t *testing.T, email, password string) map[string]interfa
 	}
 	_ = resp.Body.Close()
 
-	// Extract tokens.
+	// Extract the access token; the refresh token arrives as a cookie.
 	tokens, ok := result["tokens"].(map[string]interface{})
 	if ok {
 		if at, exists := tokens["access_token"]; exists {
@@ -178,6 +189,28 @@ func (e *TestEnv) Login(t *testing.T, email, password string) map[string]interfa
 	}
 
 	return result
+}
+
+// RefreshCookieValue returns the raw refresh_token cookie value currently
+// held in the client's cookie jar, for tests that need to replay a token
+// deliberately (e.g. reuse-detection) after it has been rotated out from
+// under the jar's own copy.
+func (e *TestEnv) RefreshCookieValue(t *testing.T) string {
+	t.Helper()
+	// Must match the cookie's own Path (/api/v1/auth/refresh) — the jar
+	// applies RFC 6265 path-matching, so asking it about the bare base URL
+	// ("/") would silently return nothing.
+	u, err := neturl.Parse(e.BaseURL + "/api/v1/auth/refresh")
+	if err != nil {
+		t.Fatalf("Failed to parse base URL: %v", err)
+	}
+	for _, c := range e.HTTPClient.Jar.Cookies(u) {
+		if c.Name == "refresh_token" {
+			return c.Value
+		}
+	}
+	t.Fatalf("no refresh_token cookie in jar for %s", e.BaseURL)
+	return ""
 }
 
 // Get performs an authenticated GET request to the API.

@@ -480,7 +480,7 @@ func main() {
 	recurringHandler := handler.NewRecurringHandler(recurringService)
 	taskTemplateHandler := handler.NewTaskTemplateHandler(taskTemplateService)
 	workspaceMemberHandler := handler.NewWorkspaceMemberHandler(workspaceMemberService)
-	inviteHandler := handler.NewInviteHandler(inviteService)
+	inviteHandler := handler.NewInviteHandler(inviteService, authService)
 	projectMemberHandler := handler.NewProjectMemberHandler(projectMemberService)
 	notificationHandler := handler.NewNotificationHandler(notificationService)
 	pushSubscriptionHandler := handler.NewPushSubscriptionHandler(pushService)
@@ -511,10 +511,26 @@ func main() {
 	}))
 	e.Use(middleware.Recover())
 	e.Use(middleware.RequestID())
+	// AllowCredentials lets the browser store/send the httpOnly refresh
+	// cookie on cross-origin requests (credentials: "include" — see
+	// web/src/lib/api.ts). It is a no-op for the common same-origin
+	// deployment (frontend and API behind one reverse proxy), where cookies
+	// already flow regardless of any CORS header. It only matters once
+	// MESH_CORS_ORIGINS names actual origins — the echo middleware refuses
+	// to combine AllowCredentials with a literal "*" origin (that combination
+	// is invalid per the Fetch spec and browsers reject it), so leaving
+	// MESH_CORS_ORIGINS at its default wildcard silently blocks credentialed
+	// cross-origin login, not same-origin login.
+	if len(cfg.CORS.AllowOrigins) == 1 && cfg.CORS.AllowOrigins[0] == "*" {
+		log.Printf("[config] MESH_CORS_ORIGINS is unset (default \"*\") — cross-origin login/refresh " +
+			"will not work (browsers refuse credentialed requests against a wildcard origin). " +
+			"Same-origin deployments (frontend served from the API's own host) are unaffected.")
+	}
 	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
-		AllowOrigins: cfg.CORS.AllowOrigins,
-		AllowMethods: []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
-		AllowHeaders: []string{"Authorization", "Content-Type", "X-Agent-Key", "X-Request-ID"},
+		AllowOrigins:     cfg.CORS.AllowOrigins,
+		AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
+		AllowHeaders:     []string{"Authorization", "Content-Type", "X-Agent-Key", "X-Request-ID"},
+		AllowCredentials: true,
 	}))
 
 	// Prometheus metrics scrape endpoint. Gated by MESH_METRICS_TOKEN when

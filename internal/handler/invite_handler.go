@@ -6,6 +6,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
 
+	"github.com/entire-vc/evc-mesh/internal/auth"
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/service"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
@@ -13,12 +14,15 @@ import (
 
 // InviteHandler handles HTTP requests for workspace invite management.
 type InviteHandler struct {
-	svc service.WorkspaceInviteService
+	svc         service.WorkspaceInviteService
+	authService *auth.Service
 }
 
-// NewInviteHandler creates a new InviteHandler.
-func NewInviteHandler(svc service.WorkspaceInviteService) *InviteHandler {
-	return &InviteHandler{svc: svc}
+// NewInviteHandler creates a new InviteHandler. authService is only used to
+// set the refresh cookie at the same TTL as every other login path — see
+// Accept.
+func NewInviteHandler(svc service.WorkspaceInviteService, authService *auth.Service) *InviteHandler {
+	return &InviteHandler{svc: svc, authService: authService}
 }
 
 // createInviteRequest is the JSON body for POST /workspaces/:ws_id/invites.
@@ -211,8 +215,9 @@ func (h *InviteHandler) Accept(c echo.Context) error {
 		return handleError(c, err)
 	}
 
+	setRefreshCookie(c, refreshToken, h.authService.RefreshTokenTTL())
+
 	return c.JSON(http.StatusOK, map[string]string{
-		"access_token":  accessToken,
-		"refresh_token": refreshToken,
+		"access_token": accessToken,
 	})
 }

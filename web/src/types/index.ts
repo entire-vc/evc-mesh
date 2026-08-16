@@ -371,9 +371,11 @@ export interface ActivityLog {
 
 // API response types
 
+// The refresh token never appears here — it travels only in the httpOnly
+// cookie the server sets alongside this response.
 export interface TokenPair {
   access_token: string;
-  refresh_token: string;
+  expires_in: number;
 }
 
 export interface AuthResponse {

@@ -2,39 +2,40 @@ import type { ApiError, RefreshResponse } from "@/types";
 
 const BASE_URL = import.meta.env.VITE_API_URL || "";
 
+// The access token lives ONLY here — a module-scoped variable, gone the
+// instant the tab reloads or closes. It is never written to localStorage,
+// sessionStorage, or a cookie: an XSS payload or a malicious extension can
+// still read process memory, but it can no longer walk out with a token that
+// survives the page it stole it from.
 let accessToken: string | null = null;
-let refreshToken: string | null = null;
 let refreshPromise: Promise<string> | null = null;
 
-export function setTokens(access: string, refresh: string) {
-  accessToken = access;
-  refreshToken = refresh;
-  localStorage.setItem("access_token", access);
-  localStorage.setItem("refresh_token", refresh);
-}
-
-export function loadTokens() {
-  accessToken = localStorage.getItem("access_token");
-  refreshToken = localStorage.getItem("refresh_token");
-}
-
-export function clearTokens() {
-  accessToken = null;
-  refreshToken = null;
+// One-time migration: earlier versions of this app kept both tokens in
+// localStorage. Strip them unconditionally on every load so an upgraded
+// browser doesn't keep sitting on exactly the value this rewrite exists to
+// stop exposing — this runs regardless of whether the user is logged in.
+try {
   localStorage.removeItem("access_token");
   localStorage.removeItem("refresh_token");
+} catch {
+  // localStorage can throw in locked-down contexts (private browsing in some
+  // older engines, disabled storage). Nothing to clean up if it's unusable.
+}
+
+export function setAccessToken(access: string) {
+  accessToken = access;
+}
+
+export function clearAccessToken() {
+  accessToken = null;
 }
 
 // Best-effort clear of any non-httpOnly session cookies left by a previous
 // Mesh/Casdoor instance. Cannot touch httpOnly cookies — those expire naturally.
+// (The current refresh_token cookie IS httpOnly and is not, and cannot be,
+// touched here — only the server can clear it, via POST /auth/logout.)
 export function clearSessionCookies() {
-  const cookiesToClear = [
-    "access_token",
-    "refresh_token",
-    "mesh_session",
-    "casdoor_session",
-    "session",
-  ];
+  const cookiesToClear = ["mesh_session", "casdoor_session", "session"];
   for (const name of cookiesToClear) {
     document.cookie = `${name}=; max-age=0; path=/; SameSite=Lax`;
     document.cookie = `${name}=; max-age=0; path=/; domain=${location.hostname}; SameSite=Lax`;
@@ -45,25 +46,56 @@ export function getAccessToken(): string | null {
   return accessToken;
 }
 
-async function refreshAccessToken(): Promise<string> {
-  if (!refreshToken) {
-    throw new ApiRequestError("No refresh token", "UNAUTHORIZED", 401);
-  }
-
+// The refresh endpoint reads the token from an httpOnly cookie the browser
+// attaches automatically — nothing to send here but the request itself.
+// credentials: "include" is what makes the browser both attach that cookie
+// and store the rotated one the response sets.
+async function refreshOnce(): Promise<string> {
   const res = await fetch(`${BASE_URL}/api/v1/auth/refresh`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ refresh_token: refreshToken }),
+    credentials: "include",
   });
 
   if (!res.ok) {
-    clearTokens();
+    accessToken = null;
     throw new ApiRequestError("Session expired", "UNAUTHORIZED", 401);
   }
 
   const data = (await res.json()) as RefreshResponse;
-  setTokens(data.tokens.access_token, data.tokens.refresh_token);
-  return data.tokens.access_token;
+  accessToken = data.tokens.access_token;
+  return accessToken;
+}
+
+// Refresh tokens rotate one-shot: the server revokes the presented token the
+// instant it issues a new one, and reuse of a revoked token kills every
+// session for the user. With the access token now living only in tab memory,
+// every tab hits this on load — open two tabs at once and both would race to
+// present the SAME cookie-borne token before either's response updates it,
+// tripping that theft detector on ordinary use, not an attack.
+//
+// navigator.locks serializes the actual network call across every tab of
+// this origin (it is a browser-wide lock manager, not a per-tab one): only
+// one tab is ever mid-refresh at a time, so by the time a waiting tab's
+// fetch goes out, the cookie the browser attaches is already the winner's
+// rotated one, not the stale value another tab is mid-rotating. Browsers
+// without the Web Locks API (very old Safari/Firefox) fall back to an
+// unserialized call — rarer race, not a security hole, since the theft
+// detector still just costs the pair of tabs a re-login rather than silently
+// misbehaving.
+async function refreshAccessToken(): Promise<string> {
+  if (typeof navigator !== "undefined" && navigator.locks) {
+    return navigator.locks.request("mesh-auth-refresh", refreshOnce);
+  }
+  return refreshOnce();
+}
+
+// Called once at app startup (see useAuthStore.initialize) to silently trade
+// the httpOnly refresh cookie for an access token, before the app knows
+// whether the visitor is logged in at all. A missing/expired/absent cookie
+// throws the same UNAUTHORIZED as any other failed refresh — the caller
+// treats that as "not logged in", not as an error to surface.
+export async function bootstrapSession(): Promise<string> {
+  return refreshAccessToken();
 }
 
 export class ApiRequestError extends Error {
@@ -90,6 +122,10 @@ interface RequestOptions {
   body?: unknown;
   params?: Record<string, string | number | undefined>;
   noAuth?: boolean;
+  // Send/receive cookies on an otherwise-noAuth request — needed by the
+  // endpoints that set or must present the httpOnly refresh cookie (login,
+  // register, invite-accept) while still not sending a Bearer token.
+  withCredentials?: boolean;
 }
 
 // api() always owns JSON-encoding the body. A caller that pre-stringifies (as
@@ -105,7 +141,7 @@ export async function api<T>(
   path: string,
   options: RequestOptions = {},
 ): Promise<T> {
-  const { method = "GET", body, params, noAuth = false } = options;
+  const { method = "GET", body, params, noAuth = false, withCredentials = false } = options;
 
   let url = `${BASE_URL}${path}`;
   if (params) {
@@ -127,19 +163,27 @@ export async function api<T>(
     headers["Authorization"] = `Bearer ${accessToken}`;
   }
 
-  // noAuth requests (login, register) must not send session cookies — stale
-  // cookies from a previous instance can cause the server to reject the request
-  // with a non-JSON error body (e.g. 431 Too Large), which then surfaces as
-  // "An unexpected error occurred" instead of a clean login form.
+  // Plain noAuth requests (e.g. GET /auth/config, GET /invites/:token) must
+  // not send session cookies — stale cookies from a previous instance can
+  // cause the server to reject the request with a non-JSON error body (e.g.
+  // 431 Too Large), which then surfaces as "An unexpected error occurred"
+  // instead of a clean login form. withCredentials opts a specific noAuth
+  // request back in when it needs to set/read the refresh cookie.
+  const credentials: RequestCredentials = withCredentials
+    ? "include"
+    : noAuth
+      ? "omit"
+      : "same-origin";
+
   let res = await fetch(url, {
     method,
     headers,
     body: serializeBody(body),
-    credentials: noAuth ? "omit" : "same-origin",
+    credentials,
   });
 
   // Auto-refresh on 401
-  if (res.status === 401 && !noAuth && refreshToken) {
+  if (res.status === 401 && !noAuth) {
     if (!refreshPromise) {
       refreshPromise = refreshAccessToken().finally(() => {
         refreshPromise = null;
@@ -156,7 +200,7 @@ export async function api<T>(
         credentials: "same-origin",
       });
     } catch {
-      clearTokens();
+      accessToken = null;
       window.location.href = "/login";
       throw new ApiRequestError("Session expired", "UNAUTHORIZED", 401);
     }
