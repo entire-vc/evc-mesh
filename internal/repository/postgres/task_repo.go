@@ -282,7 +282,8 @@ func (r *TaskRepo) Create(ctx context.Context, task *domain.Task) error {
 			due_date, estimated_hours, custom_fields, labels,
 			task_number, created_by, created_by_type, created_at, updated_at, completed_at,
 			recurring_schedule_id, recurring_instance_number,
-			delegation_level, thread_id, human_gate, is_shipped, assigned_by, completion_signal, status_changed_at
+			delegation_level, thread_id, human_gate, is_shipped, assigned_by, completion_signal, status_changed_at,
+			reviewer_id, reviewer_type
 		) VALUES (
 			$1, $2::uuid, $3, $4, $5,
 			$6, $7, $8, $9, $10,
@@ -290,7 +291,8 @@ func (r *TaskRepo) Create(ctx context.Context, task *domain.Task) error {
 			(SELECT COALESCE(MAX(task_number), 0) + 1 FROM tasks WHERE project_id = $2::uuid),
 			$15, $16, $17, $18, $19,
 			$20, $21,
-			$22, $23, $24, $25, $26, $27, NOW()
+			$22, $23, $24, $25, $26, $27, NOW(),
+			$28, $29
 		)
 	`
 	customFields := task.CustomFields
@@ -340,6 +342,7 @@ func (r *TaskRepo) Create(ctx context.Context, task *domain.Task) error {
 				task.CreatedBy, task.CreatedByType, task.CreatedAt, task.UpdatedAt, task.CompletedAt,
 				task.RecurringScheduleID, task.RecurringInstanceNumber,
 				delegationLevel, task.ThreadID, task.HumanGate, task.IsShipped, task.AssignedBy, task.CompletionSignal,
+				task.ReviewerID, task.ReviewerType,
 			)
 			if err != nil {
 				return err
