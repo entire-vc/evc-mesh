@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/mail"
 	"net/smtp"
 	"strings"
 
@@ -39,6 +40,10 @@ type smtpEmailService struct {
 	cfg config.EmailConfig
 }
 
+// sendMailFunc wraps smtp.SendMail so tests can capture the envelope sender
+// without touching the network.
+var sendMailFunc = smtp.SendMail
+
 // NewEmailService creates an EmailService backed by SMTP.
 // When cfg.Host is empty, email sending is disabled and send operations report
 // ErrEmailNotConfigured so callers can offer the invite link directly instead.
@@ -58,11 +63,16 @@ func (s *smtpEmailService) SendInvite(_ context.Context, toEmail, workspaceName,
 		return ErrEmailNotConfigured
 	}
 
+	envelopeFrom, headerFrom, err := s.parseFrom()
+	if err != nil {
+		return fmt.Errorf("email_service.SendInvite: %w", err)
+	}
+
 	subject := fmt.Sprintf("You've been invited to %s on Mesh", workspaceName)
 	body := buildInviteEmail(toEmail, workspaceName, inviteURL)
 
 	msg := "MIME-version: 1.0;\nContent-Type: text/html; charset=\"UTF-8\";\r\n"
-	msg += fmt.Sprintf("From: Mesh <%s>\r\n", s.cfg.From)
+	msg += fmt.Sprintf("From: %s\r\n", headerFrom)
 	msg += fmt.Sprintf("To: %s\r\n", toEmail)
 	msg += fmt.Sprintf("Subject: %s\r\n", subject)
 	msg += "\r\n" + body
@@ -73,10 +83,34 @@ func (s *smtpEmailService) SendInvite(_ context.Context, toEmail, workspaceName,
 		auth = smtp.PlainAuth("", s.cfg.User, s.cfg.Pass, s.cfg.Host)
 	}
 
-	if err := smtp.SendMail(addr, auth, s.cfg.From, []string{toEmail}, []byte(msg)); err != nil {
+	if err := sendMailFunc(addr, auth, envelopeFrom, []string{toEmail}, []byte(msg)); err != nil {
 		return fmt.Errorf("email_service.SendInvite: %w", err)
 	}
 	return nil
+}
+
+// parseFrom splits cfg.From into the bare envelope-sender address required by
+// the SMTP MAIL FROM command and the "Name <addr>" form used for the From:
+// header. Operators commonly set SMTP_FROM by copying the From: header
+// format ("Mesh <noreply@example.com>"); passed straight through as the
+// envelope sender, that display name makes the server reject the whole
+// envelope with "501 Bad sender address syntax" before the message body is
+// ever considered. An empty or malformed SMTP_FROM is treated as a
+// configuration error rather than sent through to the wire.
+func (s *smtpEmailService) parseFrom() (envelope, header string, err error) {
+	if s.cfg.From == "" {
+		log.Printf("[email] SMTP_FROM is empty but SMTP_HOST is configured — set SMTP_FROM to a bare sender address (e.g. noreply@yourdomain.com); refusing to send with no sender")
+		return "", "", errors.New("SMTP_FROM is not configured")
+	}
+	addr, err := mail.ParseAddress(s.cfg.From)
+	if err != nil {
+		log.Printf("[email] SMTP_FROM %q is not a valid email address (%v) — set it to a bare address like noreply@yourdomain.com, optionally as \"Name <addr>\"", s.cfg.From, err)
+		return "", "", fmt.Errorf("SMTP_FROM %q is not a valid email address: %w", s.cfg.From, err)
+	}
+	if addr.Name == "" {
+		return addr.Address, fmt.Sprintf("Mesh <%s>", addr.Address), nil
+	}
+	return addr.Address, s.cfg.From, nil
 }
 
 func buildInviteEmail(toEmail, workspaceName, inviteURL string) string {
