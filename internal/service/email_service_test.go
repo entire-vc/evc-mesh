@@ -96,6 +96,23 @@ func TestSendInvite_TransportErrorStillPropagates(t *testing.T) {
 	}
 }
 
+func TestSendInvite_RecipientWithCRLFIsRejected(t *testing.T) {
+	called := false
+	stubSendMail(t, func(_ string, _ smtp.Auth, _ string, _ []string, _ []byte) error {
+		called = true
+		return nil
+	})
+
+	svc := NewEmailService(config.EmailConfig{Host: "smtp.example.com", Port: 587, From: "noreply@example.com"})
+	err := svc.SendInvite(context.Background(), "victim@example.com\r\nBcc: attacker@evil.com", "Acme", "https://mesh.example.com/invite/abc")
+	if err == nil {
+		t.Fatal("expected an error for a recipient address containing CRLF, got nil")
+	}
+	if called {
+		t.Error("sendMailFunc must not be called for an invalid recipient address")
+	}
+}
+
 func TestSendInvite_DisabledWhenHostEmpty(t *testing.T) {
 	svc := NewEmailService(config.EmailConfig{Host: "", From: "noreply@example.com"})
 	if svc.Enabled() {

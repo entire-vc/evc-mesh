@@ -63,17 +63,28 @@ func (s *smtpEmailService) SendInvite(_ context.Context, toEmail, workspaceName,
 		return ErrEmailNotConfigured
 	}
 
+	// toEmail is the workspace-invite address entered by whoever sent the
+	// invite; invite_service only lowercases/trims it before this call. Parsed
+	// (rather than interpolated as-is) so a value carrying CRLF can't inject
+	// extra headers into the raw SMTP message below (CWE-640) — ParseAddress
+	// rejects control characters in the address, and addr.Address is the
+	// clean, canonical form.
+	recipient, err := mail.ParseAddress(toEmail)
+	if err != nil {
+		return fmt.Errorf("email_service.SendInvite: invalid recipient address %q: %w", toEmail, err)
+	}
+
 	envelopeFrom, headerFrom, err := s.parseFrom()
 	if err != nil {
 		return fmt.Errorf("email_service.SendInvite: %w", err)
 	}
 
 	subject := fmt.Sprintf("You've been invited to %s on Mesh", workspaceName)
-	body := buildInviteEmail(toEmail, workspaceName, inviteURL)
+	body := buildInviteEmail(recipient.Address, workspaceName, inviteURL)
 
 	msg := "MIME-version: 1.0;\nContent-Type: text/html; charset=\"UTF-8\";\r\n"
 	msg += fmt.Sprintf("From: %s\r\n", headerFrom)
-	msg += fmt.Sprintf("To: %s\r\n", toEmail)
+	msg += fmt.Sprintf("To: %s\r\n", recipient.Address)
 	msg += fmt.Sprintf("Subject: %s\r\n", subject)
 	msg += "\r\n" + body
 
@@ -83,7 +94,7 @@ func (s *smtpEmailService) SendInvite(_ context.Context, toEmail, workspaceName,
 		auth = smtp.PlainAuth("", s.cfg.User, s.cfg.Pass, s.cfg.Host)
 	}
 
-	if err := sendMailFunc(addr, auth, envelopeFrom, []string{toEmail}, []byte(msg)); err != nil {
+	if err := sendMailFunc(addr, auth, envelopeFrom, []string{recipient.Address}, []byte(msg)); err != nil {
 		return fmt.Errorf("email_service.SendInvite: %w", err)
 	}
 	return nil
