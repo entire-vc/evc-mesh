@@ -69,13 +69,20 @@ components:
           type: boolean
 
     # ---------- Auth ----------
+    # The refresh token is deliberately absent from this schema. It is returned
+    # only as an httpOnly, Secure, SameSite=Strict cookie named `refresh_token`,
+    # scoped to Path=/api/v1/auth/refresh, so that no JavaScript on the page can
+    # read it. Clients must send credentials (browsers: `credentials:
+    # "include"`; curl: `--cookie-jar`/`--cookie`) rather than reading the token
+    # out of a response body.
     TokenPair:
       type: object
       properties:
         access_token:
           type: string
-        refresh_token:
-          type: string
+        expires_in:
+          type: integer
+          description: Access-token lifetime in seconds.
 
     AuthResponse:
       type: object
@@ -1106,20 +1113,15 @@ paths:
     post:
       tags: [Auth]
       summary: Refresh an access token
+      description: >
+        Takes no request body. The refresh token is read from the httpOnly
+        `refresh_token` cookie set by login/register/invite-accept, and the
+        response sets a rotated cookie. Send the request with credentials
+        included. A missing or empty cookie returns 401.
       security: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [refresh_token]
-              properties:
-                refresh_token:
-                  type: string
       responses:
         "200":
-          description: New token pair
+          description: New access token; rotated refresh cookie set via Set-Cookie
           content:
             application/json:
               schema:

@@ -134,7 +134,9 @@ func (r *authTestRefreshTokenRepo) RevokeByHash(_ context.Context, tokenHash str
 }
 func (r *authTestRefreshTokenRepo) DeleteExpired(_ context.Context) error { return nil }
 
-type authTestWorkspaceRepo struct{ mu sync.Mutex }
+// authTestWorkspaceRepo is a pure no-op stub: every method returns a zero
+// value without touching shared state, so it needs no mutex of its own.
+type authTestWorkspaceRepo struct{}
 
 func (r *authTestWorkspaceRepo) Create(_ context.Context, _ *domain.Workspace) error { return nil }
 func (r *authTestWorkspaceRepo) GetByID(_ context.Context, _ uuid.UUID) (*domain.Workspace, error) {

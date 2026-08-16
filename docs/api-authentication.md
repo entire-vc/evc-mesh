@@ -9,12 +9,17 @@ Mesh uses dual authentication — every API endpoint accepts either a **user JWT
 ```bash
 curl -X POST http://localhost:8005/api/v1/auth/register \
   -H "Content-Type: application/json" \
+  --cookie-jar mesh-cookies.txt \
   -d '{
     "email": "user@example.com",
     "password": "SecurePass1",
     "display_name": "Jane Doe"
   }'
 ```
+
+`--cookie-jar` matters: the refresh token is **not** in the response body. It
+comes back only as an httpOnly cookie (see [Token storage](#token-storage)),
+and a client that discards cookies will be unable to refresh.
 
 Password requirements:
 - Minimum 8 characters
@@ -30,9 +35,18 @@ Response:
     "email": "user@example.com",
     "display_name": "Jane Doe"
   },
-  "access_token": "eyJhbGciOiJIUzI1NiIs...",
-  "refresh_token": "rt_a1b2c3d4e5f6..."
+  "tokens": {
+    "access_token": "eyJhbGciOiJIUzI1NiIs...",
+    "expires_in": 900
+  }
 }
+```
+
+plus a `Set-Cookie` header carrying the refresh token:
+
+```
+Set-Cookie: refresh_token=rt_a1b2c3d4e5f6...; Path=/api/v1/auth/refresh;
+            Max-Age=604800; HttpOnly; Secure; SameSite=Strict
 ```
 
 ### Login
@@ -61,18 +75,39 @@ Access tokens expire after **15 minutes**.
 
 ### Refreshing Tokens
 
+The endpoint takes **no request body** — it reads the refresh token from the
+httpOnly cookie and rotates it in the response:
+
 ```bash
 curl -X POST http://localhost:8005/api/v1/auth/refresh \
-  -H "Content-Type: application/json" \
-  -d '{
-    "refresh_token": "rt_a1b2c3d4e5f6..."
-  }'
+  --cookie mesh-cookies.txt --cookie-jar mesh-cookies.txt
 ```
+
+A missing or empty cookie returns `401 missing refresh token`.
 
 Refresh tokens:
 - Valid for **7 days**
-- **Single-use** — each refresh issues a new token pair
-- **Theft detection** — reusing a revoked refresh token revokes ALL user sessions
+- **Single-use** — each refresh issues a new token and rotates the cookie
+- **Theft detection** — reusing a revoked refresh token revokes ALL user
+  sessions, and clears the cookie on the client that presented it
+
+### Token storage
+
+The two tokens are deliberately handled differently, because they have
+different blast radii if stolen:
+
+| | Access token | Refresh token |
+|---|---|---|
+| Returned in | JSON body | `Set-Cookie` only |
+| Lifetime | 15 minutes | 7 days |
+| Readable by page JS | yes (by design — you attach it) | **no** — `HttpOnly` |
+| Sent to | any endpoint, via `Authorization` | only `/api/v1/auth/refresh`, via `Path` scope |
+
+Neither token is written to `localStorage` or `sessionStorage` by the web
+client; the access token is held in memory for the life of the tab. A browser
+client must therefore call `/auth/refresh` with `credentials: "include"` on
+startup to obtain an access token, and non-browser clients must persist
+cookies between calls.
 
 ### Logout
 
