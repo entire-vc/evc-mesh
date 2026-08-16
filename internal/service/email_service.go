@@ -67,11 +67,15 @@ func (s *smtpEmailService) SendInvite(_ context.Context, toEmail, workspaceName,
 	// invite; invite_service only lowercases/trims it before this call. Parsed
 	// (rather than interpolated as-is) so a value carrying CRLF can't inject
 	// extra headers into the raw SMTP message below (CWE-640) — ParseAddress
-	// rejects control characters in the address, and addr.Address is the
-	// clean, canonical form.
+	// already rejects unescaped control characters, and the explicit check
+	// below re-asserts that on the exact string reaching the message and the
+	// wire, rather than relying on a library call a reader can't see from here.
 	recipient, err := mail.ParseAddress(toEmail)
 	if err != nil {
 		return fmt.Errorf("email_service.SendInvite: invalid recipient address %q: %w", toEmail, err)
+	}
+	if strings.ContainsAny(recipient.Address, "\r\n") {
+		return fmt.Errorf("email_service.SendInvite: invalid recipient address %q: contains control characters", toEmail)
 	}
 
 	envelopeFrom, headerFrom, err := s.parseFrom()
