@@ -391,6 +391,99 @@ func TestTaskRepo_CreateAndGetByID(t *testing.T) {
 	assert.Equal(t, pq.StringArray{"test", "integration"}, got.Labels)
 }
 
+// TestTaskRepo_Create_ReviewerRoundTrip is the repository-level regression test
+// for the reviewer_id/reviewer_type columns missing from Create's INSERT: a
+// service-layer test with a mocked repo cannot see a real INSERT silently
+// dropping columns, which is exactly how this shipped unnoticed.
+func TestTaskRepo_Create_ReviewerRoundTrip(t *testing.T) {
+	db := testDB(t)
+	_, proj, status := createTestProject(t, db)
+	repo := NewTaskRepo(db)
+	ctx := context.Background()
+
+	reviewerID := uuid.New()
+	reviewerType := domain.AssigneeTypeUser
+	task := &domain.Task{
+		ID:            uuid.New(),
+		ProjectID:     proj.ID,
+		StatusID:      status.ID,
+		Title:         "Task with reviewer set at creation",
+		AssigneeType:  domain.AssigneeTypeUnassigned,
+		Priority:      domain.PriorityMedium,
+		ReviewerID:    &reviewerID,
+		ReviewerType:  &reviewerType,
+		CreatedBy:     uuid.New(),
+		CreatedByType: domain.ActorTypeUser,
+		CreatedAt:     time.Now().UTC().Truncate(time.Microsecond),
+		UpdatedAt:     time.Now().UTC().Truncate(time.Microsecond),
+	}
+	require.NoError(t, repo.Create(ctx, task))
+
+	got, err := repo.GetByID(ctx, task.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.NotNil(t, got.ReviewerID, "reviewer_id must survive Create, not just Update")
+	assert.Equal(t, reviewerID, *got.ReviewerID)
+	require.NotNil(t, got.ReviewerType)
+	assert.Equal(t, domain.AssigneeTypeUser, *got.ReviewerType)
+
+	// Same check for an agent-typed reviewer (AC2).
+	agentTask := &domain.Task{
+		ID:            uuid.New(),
+		ProjectID:     proj.ID,
+		StatusID:      status.ID,
+		Title:         "Task with agent reviewer set at creation",
+		AssigneeType:  domain.AssigneeTypeUnassigned,
+		Priority:      domain.PriorityMedium,
+		ReviewerID:    &reviewerID,
+		ReviewerType:  func() *domain.AssigneeType { a := domain.AssigneeTypeAgent; return &a }(),
+		CreatedBy:     uuid.New(),
+		CreatedByType: domain.ActorTypeUser,
+		CreatedAt:     time.Now().UTC().Truncate(time.Microsecond),
+		UpdatedAt:     time.Now().UTC().Truncate(time.Microsecond),
+	}
+	require.NoError(t, repo.Create(ctx, agentTask))
+
+	gotAgent, err := repo.GetByID(ctx, agentTask.ID)
+	require.NoError(t, err)
+	require.NotNil(t, gotAgent)
+	require.NotNil(t, gotAgent.ReviewerID)
+	assert.Equal(t, reviewerID, *gotAgent.ReviewerID)
+	require.NotNil(t, gotAgent.ReviewerType)
+	assert.Equal(t, domain.AssigneeTypeAgent, *gotAgent.ReviewerType)
+}
+
+// TestTaskRepo_Create_NoReviewerIsNull verifies the common no-reviewer path
+// still inserts cleanly with both columns NULL — a naive fix (e.g. defaulting
+// reviewer_type to the empty string or to "unassigned") would either break
+// every task creation with an enum-mismatch error or desync the two columns.
+func TestTaskRepo_Create_NoReviewerIsNull(t *testing.T) {
+	db := testDB(t)
+	_, proj, status := createTestProject(t, db)
+	repo := NewTaskRepo(db)
+	ctx := context.Background()
+
+	task := &domain.Task{
+		ID:            uuid.New(),
+		ProjectID:     proj.ID,
+		StatusID:      status.ID,
+		Title:         "Task with no reviewer",
+		AssigneeType:  domain.AssigneeTypeUnassigned,
+		Priority:      domain.PriorityMedium,
+		CreatedBy:     uuid.New(),
+		CreatedByType: domain.ActorTypeUser,
+		CreatedAt:     time.Now().UTC().Truncate(time.Microsecond),
+		UpdatedAt:     time.Now().UTC().Truncate(time.Microsecond),
+	}
+	require.NoError(t, repo.Create(ctx, task))
+
+	got, err := repo.GetByID(ctx, task.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Nil(t, got.ReviewerID)
+	assert.Nil(t, got.ReviewerType)
+}
+
 func TestTaskRepo_Update_PreReviewAssigneeRoundTrip(t *testing.T) {
 	db := testDB(t)
 	_, proj, status := createTestProject(t, db)

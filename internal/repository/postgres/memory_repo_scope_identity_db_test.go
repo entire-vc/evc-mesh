@@ -33,7 +33,7 @@ func setupMemoryScopeIdentityDBTest(t *testing.T) (*MemoryRepo, uuid.UUID) {
 	return NewMemoryRepo(db), ws.ID
 }
 
-func createTestProject(t *testing.T, db interface {
+func createScopeIdentityTestProject(t *testing.T, db interface {
 	Create(ctx context.Context, p *domain.Project) error
 }, wsID uuid.UUID) uuid.UUID {
 	t.Helper()
@@ -75,8 +75,8 @@ func TestMemoryRepoDB_WorkspaceScope_IdentityIgnoresProjectAndAgent(t *testing.T
 	projRepo := NewProjectRepo(repo.db)
 	ctx := context.Background()
 
-	proj1 := createTestProject(t, projRepo, wsID)
-	proj2 := createTestProject(t, projRepo, wsID)
+	proj1 := createScopeIdentityTestProject(t, projRepo, wsID)
+	proj2 := createScopeIdentityTestProject(t, projRepo, wsID)
 	key := "fork-repro-" + uuid.New().String()[:8]
 
 	m1 := &domain.Memory{
@@ -132,8 +132,8 @@ func TestMemoryRepoDB_ProjectScope_IdentityIsPerProject(t *testing.T) {
 	projRepo := NewProjectRepo(repo.db)
 	ctx := context.Background()
 
-	proj1 := createTestProject(t, projRepo, wsID)
-	proj2 := createTestProject(t, projRepo, wsID)
+	proj1 := createScopeIdentityTestProject(t, projRepo, wsID)
+	proj2 := createScopeIdentityTestProject(t, projRepo, wsID)
 	key := "per-project-" + uuid.New().String()[:8]
 
 	m1 := &domain.Memory{
@@ -189,8 +189,8 @@ func TestMemoryRepoDB_AgentScope_IdentityIgnoresProject(t *testing.T) {
 
 	agent1 := createTestAgent(t, agentRepo, wsID)
 	agent2 := createTestAgent(t, agentRepo, wsID)
-	proj1 := createTestProject(t, projRepo, wsID)
-	proj2 := createTestProject(t, projRepo, wsID)
+	proj1 := createScopeIdentityTestProject(t, projRepo, wsID)
+	proj2 := createScopeIdentityTestProject(t, projRepo, wsID)
 	key := "agent-scope-" + uuid.New().String()[:8]
 
 	m1 := &domain.Memory{
