@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -438,4 +439,85 @@ func TestAuthHandler_Logout_ClearsCookie(t *testing.T) {
 
 	cleared := findRefreshCookie(t, rec)
 	assert.LessOrEqual(t, cleared.MaxAge, 0)
+}
+
+// TestIsRequestSecure_DoesNotTrustForwardedProto pins the Secure attribute
+// against the topology that actually broke it. Our production edge terminates
+// TLS and forwards over plain HTTP to a Caddy that rewrites X-Forwarded-Proto
+// to "http" (measured, no trusted_proxies configured). A header-trusting
+// implementation therefore drops Secure on a live https:// host, so the first
+// case below is the regression test, not a hypothetical.
+func TestIsRequestSecure_DoesNotTrustForwardedProto(t *testing.T) {
+	tests := []struct {
+		name       string
+		host       string
+		fwdProto   string
+		tls        bool
+		optOut     bool
+		wantSecure bool
+	}{
+		{
+			name:       "public host behind proxy that rewrote XFP to http",
+			host:       "mesh.entire.host",
+			fwdProto:   "http",
+			wantSecure: true,
+		},
+		{
+			name:       "public host, XFP absent entirely",
+			host:       "mesh.entire.host",
+			wantSecure: true,
+		},
+		{
+			name:       "public host, attacker-supplied XFP cannot downgrade",
+			host:       "mesh.entire.host",
+			fwdProto:   "http, http",
+			wantSecure: true,
+		},
+		{
+			name:       "localhost dev over plain http gets no Secure",
+			host:       "localhost:8005",
+			wantSecure: false,
+		},
+		{
+			name:       "127.0.0.1 dev over plain http gets no Secure",
+			host:       "127.0.0.1:8005",
+			wantSecure: false,
+		},
+		{
+			name:       "IPv6 loopback dev over plain http gets no Secure",
+			host:       "[::1]:8005",
+			wantSecure: false,
+		},
+		{
+			name:       "localhost with real TLS still gets Secure",
+			host:       "localhost:8443",
+			tls:        true,
+			wantSecure: true,
+		},
+		{
+			name:       "explicit opt-out disables Secure on a public host",
+			host:       "mesh.internal.lan",
+			optOut:     true,
+			wantSecure: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			prev := cookieInsecureOptOut
+			cookieInsecureOptOut = tc.optOut
+			defer func() { cookieInsecureOptOut = prev }()
+
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/refresh", http.NoBody)
+			req.Host = tc.host
+			if tc.fwdProto != "" {
+				req.Header.Set("X-Forwarded-Proto", tc.fwdProto)
+			}
+			if tc.tls {
+				req.TLS = &tls.ConnectionState{}
+			}
+
+			assert.Equal(t, tc.wantSecure, isRequestSecure(req))
+		})
+	}
 }

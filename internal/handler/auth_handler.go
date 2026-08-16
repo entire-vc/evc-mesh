@@ -2,7 +2,10 @@ package handler
 
 import (
 	"errors"
+	"net"
 	"net/http"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/labstack/echo/v4"
@@ -62,15 +65,62 @@ func clearRefreshCookie(c echo.Context) {
 	})
 }
 
-// isRequestSecure reports whether the client's original connection was
-// HTTPS, trusting X-Forwarded-Proto from the reverse proxy (Caddy/nginx) over
-// the Go server's own (always-plain-HTTP-behind-a-proxy) r.TLS. Falls back to
-// r.TLS for direct/dev connections with no proxy in front.
+// cookieInsecureOptOut disables the Secure attribute on the refresh cookie for
+// the one deployment that legitimately cannot set it: Mesh served over plain
+// HTTP on a trusted LAN (a self-hoster on http://192.168.x.y:8005). It is an
+// opt-out rather than the default because getting it wrong in the safe
+// direction costs a self-hoster a failed login they will notice immediately,
+// while getting it wrong in the unsafe direction silently puts a 7-day refresh
+// token on the wire in cleartext.
+var cookieInsecureOptOut = os.Getenv("MESH_COOKIE_INSECURE") == "true"
+
+// isRequestSecure reports whether the refresh cookie should carry Secure.
+//
+// It deliberately does NOT trust X-Forwarded-Proto. That header is set by
+// whatever spoke to us last, and in our own production topology it is
+// provably wrong: the hel01 edge terminates TLS and forwards to mesh-vm's
+// Caddy over plain :80, and Caddy (v2.11.4, no `trusted_proxies` configured)
+// OVERWRITES the inbound X-Forwarded-Proto with the scheme of the hop it
+// received rather than preserving it. Measured on the host, echo server
+// behind the same binary:
+//
+//	direct, client sends https  -> X-Forwarded-Proto='https'
+//	through Caddy, same request -> X-Forwarded-Proto='http'
+//
+// So a header-trusting check returns false on https://mesh.entire.host and
+// drops Secure from the cookie — on a host that has no HSTS and answers on
+// port 80, which is exactly the setup where a cleartext request carries the
+// cookie out before the 308 redirect can upgrade it.
+//
+// Instead: Secure unless this is plainly a local dev connection, with an
+// explicit env opt-out for plain-HTTP LAN deployments. Unknown topology gets
+// the safe answer.
 func isRequestSecure(r *http.Request) bool {
-	if p := r.Header.Get("X-Forwarded-Proto"); p != "" {
-		return p == "https"
+	if cookieInsecureOptOut {
+		return false
 	}
-	return r.TLS != nil
+	if isLoopbackHost(r.Host) {
+		return r.TLS != nil
+	}
+	return true
+}
+
+// isLoopbackHost reports whether the request was addressed to this machine by
+// a loopback name — the dev case (`go run` + Vite proxy on localhost), where
+// the browser will not accept a Secure cookie over http.
+func isLoopbackHost(host string) bool {
+	h := host
+	if parsed, _, err := net.SplitHostPort(host); err == nil {
+		h = parsed
+	}
+	h = strings.Trim(h, "[]")
+	if h == "localhost" {
+		return true
+	}
+	if ip := net.ParseIP(h); ip != nil {
+		return ip.IsLoopback()
+	}
+	return false
 }
 
 // tokenResponse is the JSON shape returned for access-token-only responses —
