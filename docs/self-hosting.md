@@ -150,6 +150,17 @@ See [Seeding the first admin](#seeding-the-first-admin) below.
 > silently strip `Secure` on a genuinely HTTPS site. The cookie is marked
 > `Secure` unless the request is to loopback or you set the variable above.
 
+> **Topology constraint: the frontend must be same-site with the API.** The
+> refresh cookie is `SameSite=Strict`, so browsers send it only on same-site
+> requests. "Same-site" is judged on the registrable domain, not the origin, so
+> `mesh.example.com` and `app.example.com` are same-site and work normally —
+> different origins, one site. What does *not* work is serving the frontend from
+> a genuinely different site (say `mesh-ui.net` against an API on
+> `example.com`): the browser withholds the cookie, refresh fails, and adding
+> the origin to `MESH_CORS_ORIGINS` will not help, because the restriction is
+> the cookie's, not CORS's. Keep the UI and the API under one registrable
+> domain.
+
 ### Rate Limiting
 
 | Variable | Default | Description |
