@@ -36,8 +36,10 @@ func (minimalRefreshTokenRepo) GetByHash(_ context.Context, _ string) (*reposito
 	return nil, nil
 }
 func (minimalRefreshTokenRepo) RevokeByUserID(_ context.Context, _ uuid.UUID) error { return nil }
-func (minimalRefreshTokenRepo) RevokeByHash(_ context.Context, _ string) error      { return nil }
-func (minimalRefreshTokenRepo) DeleteExpired(_ context.Context) error               { return nil }
+func (minimalRefreshTokenRepo) RevokeByHash(_ context.Context, _ string) (bool, error) {
+	return true, nil
+}
+func (minimalRefreshTokenRepo) DeleteExpired(_ context.Context) error { return nil }
 
 // minimalInviteRepo backs one pending invite, looked up by token.
 type minimalInviteRepo struct {

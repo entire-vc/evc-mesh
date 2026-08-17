@@ -293,10 +293,18 @@ func (s *Service) RefreshTokens(ctx context.Context, refreshToken string) (*Toke
 		return nil, ErrRefreshTokenExpired
 	}
 
-	// Revoke the old refresh token.
-	err = s.refreshTokenRepo.RevokeByHash(ctx, tokenHash)
+	// Revoke the old refresh token. The conditional revoke — not the RevokedAt read
+	// above — is what actually decides the winner: the read is only an early-out, and
+	// between it and this line another request can consume the same one-shot token.
+	// Losing here is indistinguishable from presenting an already-revoked token, so it
+	// takes the same theft-detection path.
+	revoked, err := s.refreshTokenRepo.RevokeByHash(ctx, tokenHash)
 	if err != nil {
 		return nil, apierror.Wrap(err)
+	}
+	if !revoked {
+		_ = s.refreshTokenRepo.RevokeByUserID(ctx, stored.UserID)
+		return nil, ErrTokenReused
 	}
 
 	// Look up the user to generate new tokens.

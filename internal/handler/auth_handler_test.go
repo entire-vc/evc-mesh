@@ -124,14 +124,16 @@ func (r *authTestRefreshTokenRepo) RevokeByUserID(_ context.Context, userID uuid
 	}
 	return nil
 }
-func (r *authTestRefreshTokenRepo) RevokeByHash(_ context.Context, tokenHash string) error {
+func (r *authTestRefreshTokenRepo) RevokeByHash(_ context.Context, tokenHash string) (bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if t, ok := r.tokens[tokenHash]; ok {
-		now := time.Now()
-		t.RevokedAt = &now
+	t, ok := r.tokens[tokenHash]
+	if !ok || t.RevokedAt != nil {
+		return false, nil
 	}
-	return nil
+	now := time.Now()
+	t.RevokedAt = &now
+	return true, nil
 }
 func (r *authTestRefreshTokenRepo) DeleteExpired(_ context.Context) error { return nil }
 
