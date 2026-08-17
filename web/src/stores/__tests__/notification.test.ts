@@ -10,7 +10,7 @@ const mockedApi = api as unknown as ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   mockedApi.mockReset();
-  useNotificationStore.setState({ notifications: [], unreadCount: 0, preferences: [] });
+  useNotificationStore.setState({ notifications: [], unreadCount: 0, preferences: [], emailAvailable: false });
 });
 afterEach(() => vi.clearAllMocks());
 
@@ -66,5 +66,42 @@ describe("notification store body encoding", () => {
         is_enabled: true,
       }),
     ).rejects.toThrow("400 invalid request body");
+  });
+
+  it("updatePreferences passes config through for the email channel", async () => {
+    const req = {
+      workspace_id: "ws1",
+      channel: "email",
+      events: ["comment.created"],
+      is_enabled: true,
+      config: { email: "user@example.com" },
+    };
+    mockedApi.mockResolvedValue({ id: "p1", ...req });
+
+    await useNotificationStore.getState().updatePreferences(req);
+
+    expect(mockedApi).toHaveBeenCalledWith(
+      "/api/v1/notifications/preferences",
+      expect.objectContaining({ body: req }),
+    );
+  });
+});
+
+describe("fetchEmailAvailability", () => {
+  it("stores the server's availability flag", async () => {
+    mockedApi.mockResolvedValue({ available: true });
+
+    await useNotificationStore.getState().fetchEmailAvailability();
+
+    expect(useNotificationStore.getState().emailAvailable).toBe(true);
+  });
+
+  it("fails closed on a request error", async () => {
+    useNotificationStore.setState({ emailAvailable: true });
+    mockedApi.mockRejectedValue(new Error("network error"));
+
+    await useNotificationStore.getState().fetchEmailAvailability();
+
+    expect(useNotificationStore.getState().emailAvailable).toBe(false);
   });
 });

@@ -67,6 +67,7 @@ func (m *mockNotificationService) MarkRead(context.Context, uuid.UUID, []uuid.UU
 	return nil
 }
 func (m *mockNotificationService) MarkAllRead(context.Context, uuid.UUID) error { return nil }
+func (m *mockNotificationService) EmailAvailable() bool                         { return false }
 
 // --- harness ----------------------------------------------------------------
 

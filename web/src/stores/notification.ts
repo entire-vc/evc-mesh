@@ -13,6 +13,7 @@ interface NotificationState {
   notifications: Notification[];
   unreadCount: number;
   preferences: NotificationPreference[];
+  emailAvailable: boolean;
   isLoading: boolean;
   pollingHandle: ReturnType<typeof setInterval> | null;
 
@@ -20,6 +21,7 @@ interface NotificationState {
   markAsRead: (ids: string[]) => Promise<void>;
   markAllAsRead: () => Promise<void>;
   fetchPreferences: () => Promise<void>;
+  fetchEmailAvailability: () => Promise<void>;
   updatePreferences: (
     req: UpdateNotificationPreferencesRequest,
   ) => Promise<void>;
@@ -31,6 +33,7 @@ export const useNotificationStore = create<NotificationState>((set, get) => ({
   notifications: [],
   unreadCount: 0,
   preferences: [],
+  emailAvailable: false,
   isLoading: false,
   pollingHandle: null,
 
@@ -100,6 +103,20 @@ export const useNotificationStore = create<NotificationState>((set, get) => ({
       set({ preferences: data.preferences ?? [] });
     } catch {
       // Silently ignore preference fetch failures
+    }
+  },
+
+  fetchEmailAvailability: async () => {
+    try {
+      const data = await api<{ available: boolean }>(
+        "/api/v1/notifications/email-availability",
+      );
+      set({ emailAvailable: data.available ?? false });
+    } catch {
+      // Fail closed: an instance we couldn't ask is treated the same as one
+      // that answered "no" — the settings page must not invite a subscription
+      // it cannot confirm will ever deliver.
+      set({ emailAvailable: false });
     }
   },
 

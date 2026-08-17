@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useParams } from "react-router";
-import { Bell, Check, Save, Monitor, MonitorOff, AlertTriangle } from "lucide-react";
+import { Bell, Check, Save, Monitor, MonitorOff, AlertTriangle, Mail } from "lucide-react";
 import { subscribeUser, unsubscribeUser, isSubscribed, getPermissionState } from "@/lib/push";
 import {
   Card,
@@ -14,6 +14,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "@/components/ui/toast";
 import { useNotificationStore } from "@/stores/notification";
 import { useWorkspaceStore } from "@/stores/workspace";
+import { useAuthStore } from "@/stores/auth";
 
 // ---------------------------------------------------------------------------
 // Event definitions shown in the settings UI
@@ -65,8 +66,9 @@ const NOTIFICATION_EVENTS: EventConfig[] = [
 export default function NotificationSettingsPage() {
   const { wsId } = useParams();
   const { currentWorkspace } = useWorkspaceStore();
-  const { preferences, fetchPreferences, updatePreferences } =
+  const { preferences, emailAvailable, fetchPreferences, fetchEmailAvailability, updatePreferences } =
     useNotificationStore();
+  const { user } = useAuthStore();
   const wsID = currentWorkspace?.id ?? wsId;
 
   const [selectedEvents, setSelectedEvents] = useState<Set<string>>(
@@ -92,12 +94,28 @@ export default function NotificationSettingsPage() {
   const [pushEventsSaving, setPushEventsSaving] = useState(false);
   const [pushEventsSaved, setPushEventsSaved] = useState(false);
 
+  const [emailEnabled, setEmailEnabled] = useState(true);
+  const [emailEvents, setEmailEvents] = useState<Set<string>>(
+    new Set([
+      "task.assigned", "task.status_changed", "comment.created", "task.blocking_triage",
+      "task.reviewer_assigned", "task.ready_for_review",
+    ]),
+  );
+  const [emailAddress, setEmailAddress] = useState("");
+  // Distinguishes "nothing loaded yet" from "user cleared the field on
+  // purpose" — without it, the account-email fallback below would stomp on an
+  // edit the user is still typing every time preferences/user re-render.
+  const [emailAddressInitialized, setEmailAddressInitialized] = useState(false);
+  const [emailSaving, setEmailSaving] = useState(false);
+  const [emailSaved, setEmailSaved] = useState(false);
+
   useEffect(() => {
     void (async () => {
       setPushPermission(await getPermissionState());
       setPushSubscribed(await isSubscribed());
     })();
-  }, []);
+    void fetchEmailAvailability();
+  }, [fetchEmailAvailability]);
 
   const handleEnablePush = async () => {
     setPushLoading(true);
@@ -177,7 +195,28 @@ export default function NotificationSettingsPage() {
     if (browserPushPref) {
       setPushEvents(new Set(browserPushPref.events));
     }
+    const emailPref = preferences.find(
+      (p) => p.channel === "email" && p.workspace_id === wsID,
+    );
+    if (emailPref) {
+      setEmailEvents(new Set(emailPref.events));
+      setEmailEnabled(emailPref.is_enabled);
+      const savedAddress = emailPref.config?.email;
+      if (typeof savedAddress === "string" && savedAddress) {
+        setEmailAddress(savedAddress);
+        setEmailAddressInitialized(true);
+      }
+    }
   }, [isLoaded, preferences, wsID]);
+
+  // The address field defaults to the account email until a saved custom
+  // address (above) or a manual edit (the input's own onChange) claims it —
+  // this only ever fires once, before either of those has had a chance to.
+  useEffect(() => {
+    if (emailAddressInitialized || !user?.email) return;
+    setEmailAddress(user.email);
+    setEmailAddressInitialized(true);
+  }, [emailAddressInitialized, user?.email]);
 
   const toggleEvent = (key: string) => {
     setSelectedEvents((prev) => {
@@ -210,6 +249,42 @@ export default function NotificationSettingsPage() {
       );
     } finally {
       setIsSaving(false);
+    }
+  };
+
+  const toggleEmailEvent = (key: string) => {
+    setEmailEvents((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+  };
+
+  const handleSaveEmail = async () => {
+    if (!wsID) return;
+    const trimmed = emailAddress.trim();
+    if (!trimmed) {
+      toast.error("Enter an email address");
+      return;
+    }
+
+    setEmailSaving(true);
+    try {
+      await updatePreferences({
+        workspace_id: wsID,
+        channel: "email",
+        events: Array.from(emailEvents),
+        is_enabled: emailEnabled,
+        config: { email: trimmed },
+      });
+      setEmailSaved(true);
+      setTimeout(() => setEmailSaved(false), 2000);
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "Failed to save email notification settings",
+      );
+    } finally {
+      setEmailSaving(false);
     }
   };
 
@@ -424,6 +499,134 @@ export default function NotificationSettingsPage() {
                     <><Check className="h-4 w-4" />Saved</>
                   ) : (
                     <><Save className="h-4 w-4" />{pushEventsSaving ? 'Saving...' : 'Save preferences'}</>
+                  )}
+                </Button>
+              </div>
+            </>
+          )}
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base flex items-center gap-2">
+            <Mail className="h-4 w-4" />
+            Email Notifications
+          </CardTitle>
+          <CardDescription>
+            Receive notifications by email, at the account address or a custom
+            one you set below.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {!isLoaded ? (
+            <Skeleton className="h-16 w-full" />
+          ) : !emailAvailable ? (
+            <div className="flex items-start gap-3 rounded-lg border border-border p-3">
+              <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-destructive" />
+              <div>
+                <p className="font-medium">Email notifications are not available</p>
+                <p className="text-sm text-muted-foreground">
+                  This Mesh instance has no outbound email server configured. Ask
+                  your administrator to set one up to enable this channel.
+                </p>
+              </div>
+            </div>
+          ) : (
+            <>
+              {/* Master toggle */}
+              <div className="flex items-center justify-between rounded-lg border border-border p-3">
+                <div>
+                  <p className="font-medium">Enable email notifications</p>
+                  <p className="text-sm text-muted-foreground">
+                    Receive an email for the events selected below
+                  </p>
+                </div>
+                <button
+                  role="switch"
+                  aria-checked={emailEnabled}
+                  onClick={() => setEmailEnabled((prev) => !prev)}
+                  className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+                    emailEnabled ? "bg-primary" : "bg-muted-foreground/30"
+                  }`}
+                >
+                  <span
+                    className={`inline-block h-4 w-4 rounded-full bg-white shadow transition-transform ${
+                      emailEnabled ? "translate-x-4" : "translate-x-0.5"
+                    }`}
+                  />
+                </button>
+              </div>
+
+              {/* Delivery address */}
+              <div className="space-y-1.5 rounded-lg border border-border p-3">
+                <label htmlFor="email-address" className="font-medium">
+                  Email address
+                </label>
+                <p className="text-sm text-muted-foreground">
+                  Defaults to your account email. Change it to deliver
+                  notifications somewhere else.
+                </p>
+                <input
+                  id="email-address"
+                  type="email"
+                  value={emailAddress}
+                  onChange={(e) => {
+                    setEmailAddress(e.target.value);
+                    setEmailAddressInitialized(true);
+                  }}
+                  placeholder={user?.email ?? "you@example.com"}
+                  className="mt-1 w-full rounded-md border border-border bg-background px-3 py-1.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                />
+              </div>
+
+              {/* Per-event toggles */}
+              <div
+                className={`space-y-2 transition-opacity ${emailEnabled ? "opacity-100" : "opacity-40 pointer-events-none"}`}
+              >
+                {NOTIFICATION_EVENTS.map((evt) => (
+                  <div
+                    key={evt.key}
+                    className="flex items-center justify-between rounded-lg border border-border p-3 transition-colors hover:bg-accent/30"
+                  >
+                    <div>
+                      <p className="font-medium">{evt.label}</p>
+                      <p className="text-sm text-muted-foreground">
+                        {evt.description}
+                      </p>
+                    </div>
+                    <button
+                      role="switch"
+                      aria-checked={emailEvents.has(evt.key)}
+                      onClick={() => toggleEmailEvent(evt.key)}
+                      disabled={!emailEnabled}
+                      className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+                        emailEvents.has(evt.key)
+                          ? "bg-primary"
+                          : "bg-muted-foreground/30"
+                      }`}
+                    >
+                      <span
+                        className={`inline-block h-4 w-4 rounded-full bg-white shadow transition-transform ${
+                          emailEvents.has(evt.key)
+                            ? "translate-x-4"
+                            : "translate-x-0.5"
+                        }`}
+                      />
+                    </button>
+                  </div>
+                ))}
+              </div>
+
+              <div className="flex justify-end pt-2">
+                <Button
+                  onClick={() => void handleSaveEmail()}
+                  disabled={emailSaving}
+                  className="gap-2"
+                >
+                  {emailSaved ? (
+                    <><Check className="h-4 w-4" />Saved</>
+                  ) : (
+                    <><Save className="h-4 w-4" />{emailSaving ? "Saving..." : "Save preferences"}</>
                   )}
                 </Button>
               </div>
