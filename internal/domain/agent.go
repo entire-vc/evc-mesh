@@ -32,14 +32,19 @@ const (
 // Agent represents a registered AI agent within a workspace.
 // Agents authenticate via API keys and interact through MCP or REST API.
 type Agent struct {
-	ID                  uuid.UUID       `json:"id" db:"id"`
-	WorkspaceID         uuid.UUID       `json:"workspace_id" db:"workspace_id"`
-	ParentAgentID       *uuid.UUID      `json:"parent_agent_id,omitempty" db:"parent_agent_id"`
-	SupervisorUserID    *uuid.UUID      `json:"supervisor_user_id,omitempty" db:"supervisor_user_id"`
-	Name                string          `json:"name" db:"name"`
-	Slug                string          `json:"slug" db:"slug"`
-	AgentType           AgentType       `json:"agent_type" db:"agent_type"`
-	APIKeyHash          string          `json:"-" db:"api_key_hash"`
+	ID               uuid.UUID  `json:"id" db:"id"`
+	WorkspaceID      uuid.UUID  `json:"workspace_id" db:"workspace_id"`
+	ParentAgentID    *uuid.UUID `json:"parent_agent_id,omitempty" db:"parent_agent_id"`
+	SupervisorUserID *uuid.UUID `json:"supervisor_user_id,omitempty" db:"supervisor_user_id"`
+	Name             string     `json:"name" db:"name"`
+	Slug             string     `json:"slug" db:"slug"`
+	AgentType        AgentType  `json:"agent_type" db:"agent_type"`
+	APIKeyHash       string     `json:"-" db:"api_key_hash"`
+	// APIKeySHA256 is the keyed digest of the same key that APIKeyHash covers
+	// with bcrypt. Empty means the fast path has not been populated for this
+	// agent yet (no backfill is possible from a bcrypt hash), not that the key
+	// is invalid — see migration 20260817092.
+	APIKeySHA256        string          `json:"-" db:"api_key_sha256"`
 	APIKeyPrefix        string          `json:"api_key_prefix" db:"api_key_prefix"`
 	Capabilities        json.RawMessage `json:"capabilities" db:"capabilities"`
 	Status              AgentStatus     `json:"status" db:"status"`

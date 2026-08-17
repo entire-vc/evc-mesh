@@ -43,6 +43,9 @@ func (m *activityMockRepo) GetByID(_ context.Context, _ uuid.UUID) (*domain.Agen
 func (m *activityMockRepo) GetByAPIKeyPrefix(_ context.Context, _ uuid.UUID, _ string) (*domain.Agent, error) {
 	return nil, nil
 }
+func (m *activityMockRepo) SetAPIKeySHA256(_ context.Context, _ uuid.UUID, _, _ string) error {
+	return nil
+}
 func (m *activityMockRepo) Update(_ context.Context, _ *domain.Agent) error { return nil }
 func (m *activityMockRepo) Delete(_ context.Context, _ uuid.UUID) error     { return nil }
 func (m *activityMockRepo) UpdateHeartbeat(_ context.Context, _ uuid.UUID, _ *repository.UpdateHeartbeatParams) error {

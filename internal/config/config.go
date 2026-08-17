@@ -168,6 +168,13 @@ type AuthConfig struct {
 	CasdoorEndpoint string
 	CasdoorClientID string
 	AgentKeyPrefix  string
+	// AgentKeyPepper is an OPTIONAL server-side secret mixed into the fast
+	// API-key digest (MESH_AGENT_KEY_PEPPER). Leaving it unset is the supported
+	// default and is safe: agent keys are 192 bits of crypto/rand, so the digest
+	// has nothing to stretch. Setting it means a database dump alone cannot be
+	// used to forge a digest. Rotating it is self-healing — every key falls back
+	// to its bcrypt hash once and the new digest is written on the way through.
+	AgentKeyPepper string
 	// AllowRegistration gates POST /auth/register once the instance already has
 	// at least one user. Defaults to true so existing installs keep working
 	// unchanged. The first user on a fresh install can always register

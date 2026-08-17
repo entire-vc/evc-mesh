@@ -128,11 +128,14 @@ func (s *agentService) Register(ctx context.Context, input RegisterAgentInput) (
 		Slug:          slugify(input.Name),
 		AgentType:     input.AgentType,
 		APIKeyHash:    string(hash),
-		APIKeyPrefix:  prefix,
-		Status:        domain.AgentStatusOffline,
-		ExpiresAt:     &expires,
-		CreatedAt:     now,
-		UpdatedAt:     now,
+		// Written at issue time, the one moment the plaintext exists, so a
+		// freshly registered agent never pays bcrypt at all.
+		APIKeySHA256: agentKeyDigest(rawKey),
+		APIKeyPrefix: prefix,
+		Status:       domain.AgentStatusOffline,
+		ExpiresAt:    &expires,
+		CreatedAt:    now,
+		UpdatedAt:    now,
 	}
 
 	// Capabilities are stored as-is; marshalling happens at the repo layer.
@@ -269,8 +272,8 @@ func (s *agentService) Authenticate(ctx context.Context, workspaceSlug, apiKey s
 		return nil, apierror.Unauthorized("invalid API key")
 	}
 
-	if err := bcrypt.CompareHashAndPassword([]byte(agent.APIKeyHash), []byte(apiKey)); err != nil {
-		return nil, apierror.Unauthorized("invalid API key")
+	if err := s.verifyAPIKey(ctx, agent, apiKey); err != nil {
+		return nil, err
 	}
 
 	if agent.IsKeyExpiredAt(timeNow()) {
@@ -278,6 +281,40 @@ func (s *agentService) Authenticate(ctx context.Context, workspaceSlug, apiKey s
 	}
 
 	return agent, nil
+}
+
+// verifyAPIKey checks apiKey against the agent's stored credentials, preferring
+// the keyed digest and falling back to bcrypt.
+//
+// The fallback is not a permanent second branch: it exists because bcrypt is
+// one-way, so no migration could have backfilled api_key_sha256 — the plaintext
+// only exists at the moment a key is issued or presented. A row therefore leaves
+// the slow path the first time its key is used, and never returns to it.
+//
+// Note what the fast path also fixes: a WRONG key against an agent whose digest
+// is populated now costs one HMAC instead of a full bcrypt comparison. Before
+// this, presenting a valid prefix with a wrong secret burned ~163 ms of server
+// CPU per attempt, from an unauthenticated caller.
+func (s *agentService) verifyAPIKey(ctx context.Context, agent *domain.Agent, apiKey string) error {
+	if agent.APIKeySHA256 != "" {
+		if !agentKeyDigestMatches(agent.APIKeySHA256, apiKey) {
+			return apierror.Unauthorized("invalid API key")
+		}
+		return nil
+	}
+
+	if err := bcrypt.CompareHashAndPassword([]byte(agent.APIKeyHash), []byte(apiKey)); err != nil {
+		return apierror.Unauthorized("invalid API key")
+	}
+
+	// Opportunistic write: the plaintext is in hand exactly here and nowhere
+	// else. A failure is not the caller's problem — the key verified — so it
+	// only costs this agent one more slow authentication.
+	digest := agentKeyDigest(apiKey)
+	if setErr := s.agentRepo.SetAPIKeySHA256(ctx, agent.ID, digest, agent.APIKeyHash); setErr == nil {
+		agent.APIKeySHA256 = digest
+	}
+	return nil
 }
 
 // ListSubAgents returns direct children (recursive=false) or all descendants
@@ -340,6 +377,7 @@ func (s *agentService) RotateAPIKey(ctx context.Context, agentID uuid.UUID) (str
 	expires := now.Add(agentKeyDefaultTTL)
 
 	agent.APIKeyHash = string(hash)
+	agent.APIKeySHA256 = agentKeyDigest(rawKey)
 	agent.APIKeyPrefix = extractPrefix(rawKey, ws.Slug)
 	agent.LastRotatedAt = &now
 	agent.ExpiresAt = &expires

@@ -1299,6 +1299,20 @@ func (m *MockAgentRepository) GetByID(_ context.Context, id uuid.UUID) (*domain.
 	return a, nil
 }
 
+// SetAPIKeySHA256 mirrors the real repository's guard: the write only lands
+// while the bcrypt hash the caller verified against is still the current one.
+func (m *MockAgentRepository) SetAPIKeySHA256(_ context.Context, agentID uuid.UUID, digest, expectedBcryptHash string) error {
+	if m.errToReturn != nil {
+		return m.errToReturn
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if a, ok := m.items[agentID]; ok && a.APIKeyHash == expectedBcryptHash {
+		a.APIKeySHA256 = digest
+	}
+	return nil
+}
+
 func (m *MockAgentRepository) GetByAPIKeyPrefix(_ context.Context, workspaceID uuid.UUID, prefix string) (*domain.Agent, error) {
 	if m.errToReturn != nil {
 		return nil, m.errToReturn
