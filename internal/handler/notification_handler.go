@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/mail"
+	"sort"
 	"strings"
 	"time"
 
@@ -178,6 +179,64 @@ func (h *NotificationHandler) GetTelegramBotInfo(c echo.Context) error {
 	})
 }
 
+// deliverableChannels is the set of channel names notificationService.dispatch
+// actually has a delivery branch for. It is the whitelist PUT
+// /notifications/preferences validates against.
+//
+// The route used to store whatever string arrived. A row saved with a channel
+// nobody dispatches — a typo like "e-mail", or a channel someone assumed
+// existed, like "slack" — was answered 200 with the stored row echoed back, and
+// then skipped by every fan-out loop without a log line, because each loop
+// selects the rows it recognises rather than rejecting the ones it does not. The
+// subscription looked saved in the UI and delivered nothing, forever, with no
+// evidence anywhere that it never could. Refusing the value at the edge is the
+// only place the difference between "no notifications yet" and "this channel
+// does not exist" is still visible.
+//
+// Keep in step with the branches in notificationService.dispatch.
+var deliverableChannels = map[string]bool{
+	"web_push":     true, // in-app bell: rows in the notifications table
+	"browser_push": true, // W3C web push via PushService
+	"email":        true, // SMTP via EmailService
+	"telegram":     true, // per-workspace bot via TelegramClient
+}
+
+// dispatchableEvents is the set of event types some producer actually emits
+// through NotificationService.Notify. Subscribing to anything else is the same
+// dead-end as an unknown channel: stored, echoed back, never delivered.
+//
+// Keep in step with the Notify call sites (task_service.go, comment_service.go).
+var dispatchableEvents = map[string]bool{
+	"task.assigned":          true,
+	"task.status_changed":    true,
+	"task.mentioned":         true,
+	"task.blocking_triage":   true,
+	"task.reviewer_assigned": true,
+	"task.ready_for_review":  true,
+	"comment.created":        true,
+}
+
+// defaultSubscribedEvents is what a preference row gets when the caller names no
+// events. Every dispatchable event is included: the caller asked to be notified
+// and said nothing about exclusions, so the default is the full set rather than
+// a subset that quietly drops mentions.
+func defaultSubscribedEvents() []string { return sortedEvents() }
+
+func sortedChannels() []string { return sortedKeys(deliverableChannels) }
+
+func sortedEvents() []string { return sortedKeys(dispatchableEvents) }
+
+// sortedKeys returns the set's members in a stable order, so the error messages
+// built from them do not reshuffle between identical requests.
+func sortedKeys(set map[string]bool) []string {
+	out := make([]string, 0, len(set))
+	for k := range set {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
 // updatePreferencesRequest is the JSON body for updating preferences.
 //
 // WorkspaceID names a tenant the route does not, which is the shape that has to
@@ -222,12 +281,19 @@ func (h *NotificationHandler) UpdatePreferences(c echo.Context) error {
 	if channel == "" {
 		channel = "web_push"
 	}
+	if !deliverableChannels[channel] {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest(
+			"unknown notification channel: "+channel+" (supported: "+strings.Join(sortedChannels(), ", ")+")"))
+	}
 
 	events := req.Events
 	if len(events) == 0 {
-		events = []string{
-			"task.assigned", "task.status_changed", "comment.created", "task.blocking_triage",
-			"task.reviewer_assigned", "task.ready_for_review",
+		events = defaultSubscribedEvents()
+	}
+	for _, ev := range events {
+		if !dispatchableEvents[ev] {
+			return c.JSON(http.StatusBadRequest, apierror.BadRequest(
+				"unknown notification event: "+ev+" (supported: "+strings.Join(sortedEvents(), ", ")+")"))
 		}
 	}
 
