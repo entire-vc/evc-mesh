@@ -37,7 +37,8 @@ type fakeNotificationRepo struct {
 	membersErr   error
 	membersAsked [][]uuid.UUID
 
-	created []domain.Notification
+	created  []domain.Notification
+	upserted []domain.NotificationPreference
 
 	deleted        int64
 	deleteErr      error
@@ -85,8 +86,19 @@ func (f *fakeNotificationRepo) notifiedUsers() []uuid.UUID {
 func (f *fakeNotificationRepo) GetPreferencesByUser(context.Context, uuid.UUID) ([]domain.NotificationPreference, error) {
 	return nil, nil
 }
-func (f *fakeNotificationRepo) UpsertPreference(context.Context, *domain.NotificationPreference) error {
+func (f *fakeNotificationRepo) UpsertPreference(_ context.Context, pref *domain.NotificationPreference) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.upserted = append(f.upserted, *pref)
 	return nil
+}
+
+func (f *fakeNotificationRepo) upsertedPrefs() []domain.NotificationPreference {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]domain.NotificationPreference, len(f.upserted))
+	copy(out, f.upserted)
+	return out
 }
 func (f *fakeNotificationRepo) ListUnread(context.Context, uuid.UUID, int) ([]domain.Notification, error) {
 	return nil, nil

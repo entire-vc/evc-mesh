@@ -38,19 +38,25 @@ import (
 
 type mockNotificationService struct {
 	upsertCalled bool
+	upsertedPref *domain.NotificationPreference
 	deletedPref  uuid.UUID
 	deletedUser  uuid.UUID
 	deleteErr    error
+
+	// existingPrefs is what GetPreferences returns — used by the Telegram
+	// bind-token tests to simulate "already bound" (a row with chat_id set).
+	existingPrefs []domain.NotificationPreference
 }
 
 func (m *mockNotificationService) Notify(context.Context, domain.NotificationEvent) {}
 
 func (m *mockNotificationService) GetPreferences(context.Context, uuid.UUID) ([]domain.NotificationPreference, error) {
-	return nil, nil
+	return m.existingPrefs, nil
 }
 
 func (m *mockNotificationService) UpsertPreferences(_ context.Context, pref *domain.NotificationPreference) (*domain.NotificationPreference, error) {
 	m.upsertCalled = true
+	m.upsertedPref = pref
 	return pref, nil
 }
 
