@@ -173,9 +173,30 @@ func (h *NotificationHandler) GetTelegramBotInfo(c echo.Context) error {
 	}
 
 	botUsername, available := h.svc.TelegramBotInfo(c.Request().Context(), wsID)
+
+	// "available" only ever meant "a bot is configured and its token
+	// decrypts" — a question answered entirely from the database. That is not
+	// the same as the channel working, and the gap between the two is where a
+	// real instance sat silently broken: the bot was configured, the settings
+	// page looked healthy, people connected their accounts, and no message was
+	// ever delivered because the api container had no route to
+	// api.telegram.org. The probe is what closes that gap, so it is reported
+	// on the same response the page already reads rather than behind a second
+	// endpoint the page would have to remember to call.
+	//
+	// Only asked when a bot is configured: with nothing to probe with, the
+	// answer is already known and a network round trip would just make the
+	// page slower to say so.
+	reachable, reason := false, ""
+	if available {
+		reachable, reason = h.svc.TelegramReachable(c.Request().Context(), wsID)
+	}
+
 	return c.JSON(http.StatusOK, map[string]any{
-		"available":    available,
-		"bot_username": botUsername,
+		"available":          available,
+		"bot_username":       botUsername,
+		"reachable":          reachable,
+		"unavailable_reason": reason,
 	})
 }
 

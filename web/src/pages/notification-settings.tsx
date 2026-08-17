@@ -134,6 +134,7 @@ export default function NotificationSettingsPage() {
   const [telegramBindLink, setTelegramBindLink] = useState<string | null>(null);
   const [telegramSaving, setTelegramSaving] = useState(false);
   const [telegramSaved, setTelegramSaved] = useState(false);
+  const [telegramUnbinding, setTelegramUnbinding] = useState(false);
 
   useEffect(() => {
     void (async () => {
@@ -341,21 +342,33 @@ export default function NotificationSettingsPage() {
     });
   };
 
-  const handleSaveTelegram = async () => {
+  // Save and Disconnect are the same PUT; the only difference is that
+  // disconnecting turns the channel off.
+  //
+  // That is the whole mechanism: the server carries chat_id forward only while
+  // is_enabled is true, so saving a disabled row drops the binding and any
+  // outstanding bind token with it. Disconnect therefore needs no API of its
+  // own — it is the disable path with a name, which is the part that was
+  // actually missing. Nothing on this page told a user that turning the toggle
+  // off and saving is how you stop the bot messaging you, so in practice
+  // nobody could.
+  const submitTelegram = async (unbind: boolean) => {
     if (!wsID) return;
     const trimmed = telegramUsername.trim();
-    if (telegramEnabled && !trimmed) {
+    const nextEnabled = unbind ? false : telegramEnabled;
+    if (nextEnabled && !trimmed) {
       toast.error("Enter your Telegram username");
       return;
     }
 
-    setTelegramSaving(true);
+    if (unbind) setTelegramUnbinding(true);
+    else setTelegramSaving(true);
     try {
       const updated = await updatePreferences({
         workspace_id: wsID,
         channel: "telegram",
         events: Array.from(telegramEvents),
-        is_enabled: telegramEnabled,
+        is_enabled: nextEnabled,
         config: { telegram_username: trimmed },
       });
       const cfg = updated.config as TelegramPreferenceConfig | undefined;
@@ -365,16 +378,29 @@ export default function NotificationSettingsPage() {
           ? `https://t.me/${telegramBotInfo.bot_username}?start=${cfg.telegram_bind_token}`
           : null,
       );
-      setTelegramSaved(true);
-      setTimeout(() => setTelegramSaved(false), 2000);
+      if (unbind) {
+        setTelegramEnabled(false);
+        toast.success("Telegram disconnected — the bot can no longer message you");
+      } else {
+        setTelegramSaved(true);
+        setTimeout(() => setTelegramSaved(false), 2000);
+      }
     } catch (err) {
       toast.error(
-        err instanceof Error ? err.message : "Failed to save Telegram notification settings",
+        err instanceof Error
+          ? err.message
+          : unbind
+            ? "Failed to disconnect Telegram"
+            : "Failed to save Telegram notification settings",
       );
     } finally {
-      setTelegramSaving(false);
+      if (unbind) setTelegramUnbinding(false);
+      else setTelegramSaving(false);
     }
   };
+
+  const handleSaveTelegram = () => submitTelegram(false);
+  const handleDisconnectTelegram = () => submitTelegram(true);
 
   return (
     <div className="mx-auto max-w-2xl space-y-6 p-6">
@@ -749,6 +775,30 @@ export default function NotificationSettingsPage() {
             </div>
           ) : (
             <>
+              {/* A configured bot on a host that cannot reach Telegram is the
+                  failure this banner exists for: everything below still works,
+                  the connect link still opens, the account still binds — and
+                  nothing is ever delivered. Shown above the controls rather
+                  than replacing them, because the bot is genuinely configured
+                  and the fix is on the server, not on this page. */}
+              {!telegramBotInfo.reachable && (
+                <div
+                  role="alert"
+                  className="flex items-start gap-3 rounded-lg border border-destructive/50 bg-destructive/5 p-3"
+                >
+                  <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-destructive" />
+                  <div>
+                    <p className="font-medium">
+                      Telegram notifications cannot be delivered right now
+                    </p>
+                    <p className="text-sm text-muted-foreground">
+                      {telegramBotInfo.unavailable_reason ||
+                        "This server could not reach the Telegram Bot API."}
+                    </p>
+                  </div>
+                </div>
+              )}
+
               {/* Master toggle */}
               <div className="flex items-center justify-between rounded-lg border border-border p-3">
                 <div>
@@ -791,10 +841,20 @@ export default function NotificationSettingsPage() {
                   className="mt-1 w-full rounded-md border border-border bg-background px-3 py-1.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 />
                 {telegramChatID ? (
-                  <p className="flex items-center gap-1.5 pt-1 text-sm text-teal-600">
-                    <Check className="h-4 w-4" />
-                    Connected — @{telegramBotInfo.bot_username} can message you
-                  </p>
+                  <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+                    <p className="flex items-center gap-1.5 text-sm text-teal-600">
+                      <Check className="h-4 w-4" />
+                      Connected — @{telegramBotInfo.bot_username} can message you
+                    </p>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => void handleDisconnectTelegram()}
+                      disabled={telegramUnbinding}
+                    >
+                      {telegramUnbinding ? "Disconnecting..." : "Disconnect"}
+                    </Button>
+                  </div>
                 ) : telegramBindLink ? (
                   <a
                     href={telegramBindLink}

@@ -2391,6 +2391,10 @@ func (f *fakeUserNotifyService) TelegramBotInfo(context.Context, uuid.UUID) (str
 	return "", false
 }
 
+func (f *fakeUserNotifyService) TelegramReachable(context.Context, uuid.UUID) (reachable bool, reason string) {
+	return false, ""
+}
+
 func (f *fakeUserNotifyService) Calls() []domain.NotificationEvent {
 	f.mu.Lock()
 	defer f.mu.Unlock()

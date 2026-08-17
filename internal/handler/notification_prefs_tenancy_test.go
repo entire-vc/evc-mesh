@@ -78,6 +78,10 @@ func (m *mockNotificationService) TelegramBotInfo(context.Context, uuid.UUID) (s
 	return "", false
 }
 
+func (m *mockNotificationService) TelegramReachable(context.Context, uuid.UUID) (reachable bool, reason string) {
+	return false, ""
+}
+
 // --- harness ----------------------------------------------------------------
 
 // putPreferences serves PUT /notifications/preferences through the same guard the

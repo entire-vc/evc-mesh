@@ -48,6 +48,29 @@ type NotificationEvent struct {
 	// events that are inherently about one specific person (e.g. "you were made
 	// reviewer"), where broadcasting to the whole workspace would be wrong.
 	TargetUserID *uuid.UUID `json:"target_user_id,omitempty"`
+	// RelevantUserIDs names the people this event is actually about, for events
+	// that are not addressed to one person (TargetUserID) but are not the whole
+	// workspace's business either: a comment concerns the task's assignee,
+	// reviewer and creator, plus the person being replied to — not every
+	// colleague who happens to subscribe to comment.created.
+	//
+	// It is TargetUserID generalised from one recipient to a set, and every
+	// channel honours it in exactly the same place TargetUserID is honoured.
+	// Delivery is not a per-channel opinion about who deserves to know: a
+	// recipient set that is right for email is right for the in-app bell too,
+	// and the alternative — one channel quietly keeping a wider audience than
+	// the others — is the kind of difference nobody discovers until it leaks.
+	//
+	// Nil means "no relevance information available", which is not the same as
+	// "nobody is relevant": channels treat nil as the old broadcast behaviour and
+	// only narrow delivery when the caller actually supplied a set. That
+	// distinction is what keeps a producer that has not been taught to fill this
+	// in from silently going quiet, and it is why deliberately workspace-wide
+	// events (task.status_changed) can simply leave it unset.
+	//
+	// Advisory, and never widening: it can only remove recipients that the
+	// membership, subscription and TargetUserID checks already allowed.
+	RelevantUserIDs []uuid.UUID `json:"relevant_user_ids,omitempty"`
 	// Labels carries the task's labels/tags at the moment the event was
 	// raised, for channels (Telegram) whose message format includes them.
 	// Not persisted; purely a dispatch-time hint from the caller, which

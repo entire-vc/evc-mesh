@@ -55,6 +55,10 @@ func (m *recordingNotificationService) TelegramBotInfo(context.Context, uuid.UUI
 	return "", false
 }
 
+func (m *recordingNotificationService) TelegramReachable(context.Context, uuid.UUID) (reachable bool, reason string) {
+	return false, ""
+}
+
 // putPreferencesNoTenancyGuard serves PUT /notifications/preferences without
 // mw.RequireBodyWorkspace in front of it — that guard is exercised in
 // notification_prefs_tenancy_test.go; these tests are about the handler's own

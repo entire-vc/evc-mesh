@@ -784,13 +784,14 @@ func (s *commentService) Create(ctx context.Context, comment *domain.Comment) er
 				commentBody = commentBody[:200]
 			}
 			s.notifySvc.Notify(ctx, domain.NotificationEvent{
-				WorkspaceID: proj.WorkspaceID,
-				TaskID:      &taskIDCopy,
-				ProjectID:   &projIDCopy,
-				EventType:   "comment.created",
-				Title:       "New comment on: " + task.Title,
-				Body:        commentBody,
-				Labels:      []string(task.Labels),
+				WorkspaceID:     proj.WorkspaceID,
+				TaskID:          &taskIDCopy,
+				ProjectID:       &projIDCopy,
+				EventType:       "comment.created",
+				Title:           "New comment on: " + task.Title,
+				Body:            commentBody,
+				RelevantUserIDs: s.commentParticipants(ctx, comment, task),
+				Labels:          []string(task.Labels),
 				Metadata: map[string]any{
 					"task_id":    task.ID,
 					"task_title": task.Title,
