@@ -3,7 +3,9 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/lib/pq"
@@ -30,6 +32,13 @@ type NotificationService interface {
 	// how a subscription is cancelled. Returns apierror.NotFound if the row is
 	// not the caller's or no longer exists.
 	DeletePreference(ctx context.Context, userID, prefID uuid.UUID) error
+
+	// EmailAvailable reports whether the email notification channel can
+	// actually deliver anything on this instance — i.e. whether an EmailService
+	// was wired in and its SMTP config is set. The Notification Settings page
+	// uses this to tell the user email is unavailable instead of letting them
+	// subscribe to a channel that will silently never send.
+	EmailAvailable() bool
 
 	// ListUnread returns unread notifications for the given user (up to 50).
 	ListUnread(ctx context.Context, userID uuid.UUID) ([]domain.Notification, error)
@@ -64,9 +73,19 @@ type notificationRepository interface {
 // *postgres.NotificationRepo is the only production implementation.
 var _ notificationRepository = (*postgres.NotificationRepo)(nil)
 
+// userEmailLookup is the slice of *postgres.UserRepo the email channel needs:
+// the account address to fall back to when a subscriber has not set a custom
+// delivery address on their preference row.
+type userEmailLookup interface {
+	GetByID(ctx context.Context, id uuid.UUID) (*domain.User, error)
+}
+
 type notificationService struct {
-	repo        notificationRepository
-	pushService PushService
+	repo         notificationRepository
+	pushService  PushService
+	emailSvc     EmailService
+	userRepo     userEmailLookup
+	emailBaseURL string
 }
 
 // NotificationServiceOption is a functional option for configuring notificationService.
@@ -75,6 +94,20 @@ type NotificationServiceOption func(*notificationService)
 // WithPushService injects an optional PushService for browser push fan-out.
 func WithPushService(ps PushService) NotificationServiceOption {
 	return func(s *notificationService) { s.pushService = ps }
+}
+
+// WithEmailService injects the email channel's dependencies: the transport,
+// account lookup for the default delivery address, and the base URL used to
+// build the task link in the email body. Without this option the email
+// channel is a no-op — preference rows can still be saved, but dispatch skips
+// them the same way it would if SMTP were unconfigured, and EmailAvailable
+// reports false.
+func WithEmailService(svc EmailService, users userEmailLookup, baseURL string) NotificationServiceOption {
+	return func(s *notificationService) {
+		s.emailSvc = svc
+		s.userRepo = users
+		s.emailBaseURL = baseURL
+	}
 }
 
 // NewNotificationService creates a new NotificationService.
@@ -211,6 +244,82 @@ func (s *notificationService) dispatch(event domain.NotificationEvent) {
 			}()
 		}
 	}
+
+	// Fan-out to email (per-user, respects the email channel's own prefs).
+	//
+	// Silently skipped when the channel isn't wired up or SMTP isn't
+	// configured, same as browser push above when pushService is nil. This is
+	// not the "tell the user" half of the SMTP-unconfigured story — that is
+	// EmailAvailable(), read by the settings page before anyone subscribes.
+	// Here, after a subscription already exists, the alternative to skipping
+	// is failing every dispatch loop's other channels over a channel nobody
+	// can currently receive.
+	if s.emailSvc != nil && s.emailSvc.Enabled() {
+		sentTo := make(map[uuid.UUID]bool)
+		for i := range prefs {
+			p := &prefs[i]
+			if p.Channel != "email" || p.UserID == nil || sentTo[*p.UserID] {
+				continue
+			}
+			if !members[*p.UserID] {
+				continue
+			}
+			if !containsInStringArray(p.Events, event.EventType) {
+				continue
+			}
+			// Same personal-event restriction as web_push/browser_push above:
+			// task.assigned / task.reviewer_assigned are about one specific
+			// person, and everyone else's matching row is not a delivery
+			// instruction for them.
+			if event.TargetUserID != nil && *p.UserID != *event.TargetUserID {
+				continue
+			}
+			sentTo[*p.UserID] = true
+			userID := *p.UserID
+			taskURL := ""
+			if event.TaskID != nil && s.emailBaseURL != "" {
+				taskURL = strings.TrimRight(s.emailBaseURL, "/") + "/t/" + event.TaskID.String()
+			}
+			go func(prefConfig json.RawMessage) {
+				addr, err := s.resolveEmailAddress(context.Background(), userID, prefConfig)
+				if err != nil {
+					log.Printf("[email] could not resolve delivery address for user %s: %v", userID, err)
+					return
+				}
+				body := buildNotificationEmail(event.Title, event.Body, taskURL)
+				if err := s.emailSvc.SendNotification(context.Background(), addr, event.Title, body); err != nil {
+					log.Printf("[email] SendNotification error for %s: %v", userID, err)
+				}
+			}(p.Config)
+		}
+	}
+}
+
+// notificationEmailConfig is the shape stored in NotificationPreference.Config
+// for the email channel — currently just the optional custom delivery address.
+type notificationEmailConfig struct {
+	Email string `json:"email"`
+}
+
+// resolveEmailAddress returns the address a notification email should go to:
+// the custom address saved on the preference row's Config, or — when that is
+// empty, which is the default state for a row nobody has edited yet — the
+// user's account email.
+func (s *notificationService) resolveEmailAddress(ctx context.Context, userID uuid.UUID, cfg json.RawMessage) (string, error) {
+	if len(cfg) > 0 {
+		var parsed notificationEmailConfig
+		if err := json.Unmarshal(cfg, &parsed); err == nil && parsed.Email != "" {
+			return parsed.Email, nil
+		}
+	}
+	user, err := s.userRepo.GetByID(ctx, userID)
+	if err != nil {
+		return "", err
+	}
+	if user == nil || user.Email == "" {
+		return "", fmt.Errorf("user %s has no account email on file", userID)
+	}
+	return user.Email, nil
 }
 
 // subscribedUserIDs is the deduplicated set of users named by these preference
@@ -267,6 +376,12 @@ func (s *notificationService) DeletePreference(ctx context.Context, userID, pref
 		return apierror.NotFound("notification preference")
 	}
 	return nil
+}
+
+// EmailAvailable reports whether the email channel can deliver anything on
+// this instance.
+func (s *notificationService) EmailAvailable() bool {
+	return s.emailSvc != nil && s.emailSvc.Enabled()
 }
 
 // ListUnread returns unread notifications for the given user (up to 50).

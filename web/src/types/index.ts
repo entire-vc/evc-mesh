@@ -821,6 +821,7 @@ export interface UpdateNotificationPreferencesRequest {
   channel?: string;
   events?: string[];
   is_enabled?: boolean;
+  config?: Record<string, string>;
 }
 
 // API error type

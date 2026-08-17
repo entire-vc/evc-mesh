@@ -17,7 +17,8 @@ import { getPermissionState, isSubscribed, subscribeUser } from "@/lib/push";
 import NotificationSettingsPage from "@/pages/notification-settings";
 import { useNotificationStore } from "@/stores/notification";
 import { useWorkspaceStore } from "@/stores/workspace";
-import type { NotificationPreference, Workspace } from "@/types";
+import { useAuthStore } from "@/stores/auth";
+import type { NotificationPreference, User, Workspace } from "@/types";
 
 const mockedApi = api as unknown as ReturnType<typeof vi.fn>;
 const mockedGetPermissionState = getPermissionState as unknown as ReturnType<
@@ -77,12 +78,23 @@ function switchInRowLabeled(label: string, occurrence = 0) {
   return btn;
 }
 
+const USER: User = {
+  id: "u1",
+  email: "account@example.com",
+  name: "Test User",
+  avatar_url: "",
+  is_active: true,
+  created_at: "2026-01-01T00:00:00Z",
+  updated_at: "2026-01-01T00:00:00Z",
+};
+
 beforeEach(() => {
   mockedApi.mockReset();
   mockedGetPermissionState.mockReset().mockResolvedValue("granted");
   mockedIsSubscribed.mockReset().mockResolvedValue(true);
-  useNotificationStore.setState({ notifications: [], unreadCount: 0, preferences: [] });
+  useNotificationStore.setState({ notifications: [], unreadCount: 0, preferences: [], emailAvailable: true });
   useWorkspaceStore.setState({ currentWorkspace: WORKSPACE, workspaces: [WORKSPACE] });
+  useAuthStore.setState({ user: USER, isAuthenticated: true, isLoading: false });
 });
 afterEach(() => vi.clearAllMocks());
 
@@ -157,5 +169,98 @@ describe("NotificationSettingsPage — Browser Push hydration (task 9d837f67)", 
       );
     });
     expect(switchInRowLabeled("Mention")).toHaveAttribute("aria-checked", "true");
+  });
+});
+
+// Route api() by URL/method so email-availability, preference GET, and
+// preference PUT can each answer differently within one test.
+function mockApiByRoute(routes: {
+  preferences?: NotificationPreference[];
+  available?: boolean;
+  onSave?: (body: unknown) => void;
+}) {
+  mockedApi.mockImplementation(
+    (url: string, opts?: { method?: string; body?: unknown }) => {
+      if (url === "/api/v1/notifications/email-availability") {
+        return Promise.resolve({ available: routes.available ?? true });
+      }
+      if (url === "/api/v1/notifications/preferences" && opts?.method === "PUT") {
+        routes.onSave?.(opts.body);
+        return Promise.resolve({ id: "new", ...(opts.body as object) });
+      }
+      if (url === "/api/v1/notifications/preferences") {
+        return Promise.resolve({ preferences: routes.preferences ?? [] });
+      }
+      return Promise.resolve({});
+    },
+  );
+}
+
+describe("NotificationSettingsPage — Email channel", () => {
+  it("defaults the address field to the account email when no preference is saved", async () => {
+    mockApiByRoute({ preferences: [] });
+
+    renderPage();
+
+    await waitFor(() =>
+      expect(screen.getByLabelText("Email address")).toHaveValue("account@example.com"),
+    );
+  });
+
+  it("hydrates the saved custom address and event set from a stored email preference", async () => {
+    mockApiByRoute({
+      preferences: [
+        pref({
+          id: "e1",
+          channel: "email",
+          events: ["comment.created"],
+          config: { email: "custom@example.com" },
+        }),
+      ],
+    });
+
+    renderPage();
+
+    await waitFor(() =>
+      expect(screen.getByLabelText("Email address")).toHaveValue("custom@example.com"),
+    );
+    // "New comment" is the only subscribed event on the stored row — reusing
+    // the account default here would silently mean "someone's edited address
+    // came with an event set that isn't theirs."
+    expect(switchInRowLabeled("New comment", 2)).toHaveAttribute("aria-checked", "true");
+    expect(switchInRowLabeled("Task assigned", 2)).toHaveAttribute("aria-checked", "false");
+  });
+
+  it("shows an unavailable notice and hides the controls when SMTP is not configured", async () => {
+    mockApiByRoute({ preferences: [], available: false });
+
+    renderPage();
+
+    await waitFor(() =>
+      expect(screen.getByText("Email notifications are not available")).toBeInTheDocument(),
+    );
+    expect(screen.queryByLabelText("Email address")).not.toBeInTheDocument();
+  });
+
+  it("saves the email channel with the address wrapped in config", async () => {
+    let savedBody: unknown;
+    mockApiByRoute({ preferences: [], onSave: (body) => { savedBody = body; } });
+
+    renderPage();
+    await waitFor(() =>
+      expect(screen.getByLabelText("Email address")).toHaveValue("account@example.com"),
+    );
+
+    const saveButtons = screen.getAllByRole("button", { name: /Save preferences/ });
+    const emailSaveButton = saveButtons[saveButtons.length - 1];
+    if (!emailSaveButton) throw new Error("expected an email Save preferences button");
+    emailSaveButton.click();
+
+    await waitFor(() => expect(savedBody).toBeDefined());
+    expect(savedBody).toMatchObject({
+      channel: "email",
+      config: { email: "account@example.com" },
+      workspace_id: "ws1",
+    });
   });
 });

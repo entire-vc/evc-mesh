@@ -30,6 +30,11 @@ func (s *stubEmailService) SendInvite(_ context.Context, _, _, _ string) error {
 	return s.err
 }
 
+func (s *stubEmailService) SendNotification(_ context.Context, _, _, _ string) error {
+	s.calls++
+	return s.err
+}
+
 func newInviteSvcWithEmail(t *testing.T, email EmailService) (WorkspaceInviteService, uuid.UUID) {
 	t.Helper()
 

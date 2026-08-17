@@ -50,6 +50,11 @@ func (r *recordingEmailService) SendInvite(context.Context, string, string, stri
 	return nil
 }
 
+func (r *recordingEmailService) SendNotification(context.Context, string, string, string) error {
+	r.sent++
+	return nil
+}
+
 // TestInviteService_ResendAndRevoke_AreScopedToTheWorkspace is the cross-tenant
 // repro at the service.
 //

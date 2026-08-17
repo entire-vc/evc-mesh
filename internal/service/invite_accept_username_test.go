@@ -263,8 +263,9 @@ func TestAcceptInvite_CreateFailureIsGenericInternalError(t *testing.T) {
 // invite_delivery_status_test.go.
 type noopEmailService struct{}
 
-func (noopEmailService) Enabled() bool                                      { return true }
-func (noopEmailService) SendInvite(_ context.Context, _, _, _ string) error { return nil }
+func (noopEmailService) Enabled() bool                                            { return true }
+func (noopEmailService) SendInvite(_ context.Context, _, _, _ string) error       { return nil }
+func (noopEmailService) SendNotification(_ context.Context, _, _, _ string) error { return nil }
 
 func TestCreateInvite_NormalizesEmail(t *testing.T) {
 	userRepo := NewMockUserRepository()

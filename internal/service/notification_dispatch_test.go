@@ -127,6 +127,65 @@ func (f *fakePushService) recipients() []uuid.UUID {
 	return append([]uuid.UUID(nil), f.sent...)
 }
 
+// --- fake email service + user repo ------------------------------------------
+
+type sentEmail struct {
+	to, subject, body string
+}
+
+type fakeEmailService struct {
+	mu      sync.Mutex
+	enabled bool
+	sent    []sentEmail
+}
+
+func (f *fakeEmailService) Enabled() bool { return f.enabled }
+func (f *fakeEmailService) SendInvite(context.Context, string, string, string) error {
+	return nil
+}
+func (f *fakeEmailService) SendNotification(_ context.Context, to, subject, body string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sent = append(f.sent, sentEmail{to: to, subject: subject, body: body})
+	return nil
+}
+func (f *fakeEmailService) recipients() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]string, 0, len(f.sent))
+	for _, s := range f.sent {
+		out = append(out, s.to)
+	}
+	return out
+}
+
+var _ EmailService = (*fakeEmailService)(nil)
+
+// fakeUserRepoForEmail resolves a user's account email — the default delivery
+// address a preference row's Config falls back to when it has none of its own.
+type fakeUserRepoForEmail struct {
+	emails map[uuid.UUID]string
+}
+
+func (f *fakeUserRepoForEmail) GetByID(_ context.Context, id uuid.UUID) (*domain.User, error) {
+	email, ok := f.emails[id]
+	if !ok {
+		return nil, errors.New("user not found")
+	}
+	return &domain.User{ID: id, Email: email}, nil
+}
+
+func emailPref(wsID, userID uuid.UUID) domain.NotificationPreference {
+	return domain.NotificationPreference{
+		ID:          uuid.New(),
+		WorkspaceID: wsID,
+		UserID:      &userID,
+		Channel:     "email",
+		Events:      pq.StringArray{"comment.created"},
+		IsEnabled:   true,
+	}
+}
+
 // --- helpers ----------------------------------------------------------------
 
 func webPushPref(wsID, userID uuid.UUID) domain.NotificationPreference {
@@ -404,6 +463,154 @@ func TestDispatch_TargetUserIDGatesBrowserPushToo(t *testing.T) {
 		"the reviewer never received their push")
 	assert.Equal(t, []uuid.UUID{reviewer}, push.recipients(),
 		"a targeted reviewer-assigned push went to a bystander too")
+}
+
+// --- email channel ------------------------------------------------------
+
+// TestDispatch_EmailUsesAccountAddressByDefault: a preference row with no
+// custom address (empty Config) falls back to the subscriber's account email
+// — the default the settings page shows before anyone edits the field.
+func TestDispatch_EmailUsesAccountAddressByDefault(t *testing.T) {
+	wsID := uuid.New()
+	member := uuid.New()
+
+	email := &fakeEmailService{enabled: true}
+	users := &fakeUserRepoForEmail{emails: map[uuid.UUID]string{member: "member@example.com"}}
+	repo := &fakeNotificationRepo{
+		prefs:   []domain.NotificationPreference{emailPref(wsID, member)},
+		members: map[uuid.UUID]bool{member: true},
+	}
+	svc := NewNotificationService(repo, WithEmailService(email, users, "https://mesh.example.com")).(*notificationService)
+
+	svc.dispatch(commentEvent(wsID))
+
+	require.Eventually(t, func() bool { return len(email.recipients()) > 0 }, time.Second, 5*time.Millisecond)
+	assert.Equal(t, []string{"member@example.com"}, email.recipients())
+}
+
+// TestDispatch_EmailUsesCustomAddressFromConfig: a saved custom address in
+// Config overrides the account email as the delivery target.
+func TestDispatch_EmailUsesCustomAddressFromConfig(t *testing.T) {
+	wsID := uuid.New()
+	member := uuid.New()
+
+	pref := emailPref(wsID, member)
+	pref.Config = []byte(`{"email":"custom@example.com"}`)
+
+	email := &fakeEmailService{enabled: true}
+	users := &fakeUserRepoForEmail{emails: map[uuid.UUID]string{member: "member@example.com"}}
+	repo := &fakeNotificationRepo{
+		prefs:   []domain.NotificationPreference{pref},
+		members: map[uuid.UUID]bool{member: true},
+	}
+	svc := NewNotificationService(repo, WithEmailService(email, users, "")).(*notificationService)
+
+	svc.dispatch(commentEvent(wsID))
+
+	require.Eventually(t, func() bool { return len(email.recipients()) > 0 }, time.Second, 5*time.Millisecond)
+	assert.Equal(t, []string{"custom@example.com"}, email.recipients())
+}
+
+// TestDispatch_EmailSkippedWhenSMTPNotConfigured: the settings page tells the
+// user email is unavailable via EmailAvailable(); dispatch itself must not
+// attempt a send it cannot make, and must not error the other channels doing
+// so.
+func TestDispatch_EmailSkippedWhenSMTPNotConfigured(t *testing.T) {
+	wsID := uuid.New()
+	member := uuid.New()
+
+	email := &fakeEmailService{enabled: false}
+	users := &fakeUserRepoForEmail{emails: map[uuid.UUID]string{member: "member@example.com"}}
+	repo := &fakeNotificationRepo{
+		prefs:   []domain.NotificationPreference{emailPref(wsID, member)},
+		members: map[uuid.UUID]bool{member: true},
+	}
+	svc := NewNotificationService(repo, WithEmailService(email, users, "")).(*notificationService)
+
+	svc.dispatch(commentEvent(wsID))
+
+	time.Sleep(20 * time.Millisecond)
+	assert.Empty(t, email.recipients(), "an email was sent despite SMTP being unconfigured")
+}
+
+// TestDispatch_EmailSkipsStrangers: same membership rule as the other two
+// channels — a preference row is a claim, not an entitlement.
+func TestDispatch_EmailSkipsStrangers(t *testing.T) {
+	wsID := uuid.New()
+	member := uuid.New()
+	stranger := uuid.New()
+
+	email := &fakeEmailService{enabled: true}
+	users := &fakeUserRepoForEmail{emails: map[uuid.UUID]string{
+		member:   "member@example.com",
+		stranger: "stranger@example.com",
+	}}
+	repo := &fakeNotificationRepo{
+		prefs:   []domain.NotificationPreference{emailPref(wsID, member), emailPref(wsID, stranger)},
+		members: map[uuid.UUID]bool{member: true},
+	}
+	svc := NewNotificationService(repo, WithEmailService(email, users, "")).(*notificationService)
+
+	svc.dispatch(commentEvent(wsID))
+
+	require.Eventually(t, func() bool { return len(email.recipients()) > 0 }, time.Second, 5*time.Millisecond)
+	assert.Equal(t, []string{"member@example.com"}, email.recipients())
+}
+
+// TestDispatch_EmailTargetUserIDGatesDeliveryToo: same targeted-event rule as
+// web_push/browser_push — see TestDispatch_TargetUserIDGatesBrowserPushToo.
+func TestDispatch_EmailTargetUserIDGatesDeliveryToo(t *testing.T) {
+	wsID := uuid.New()
+	reviewer := uuid.New()
+	bystander := uuid.New()
+
+	reviewerPref := emailPref(wsID, reviewer)
+	reviewerPref.Events = pq.StringArray{"task.reviewer_assigned"}
+	bystanderPref := emailPref(wsID, bystander)
+	bystanderPref.Events = pq.StringArray{"task.reviewer_assigned"}
+
+	email := &fakeEmailService{enabled: true}
+	users := &fakeUserRepoForEmail{emails: map[uuid.UUID]string{
+		reviewer:  "reviewer@example.com",
+		bystander: "bystander@example.com",
+	}}
+	repo := &fakeNotificationRepo{
+		prefs:   []domain.NotificationPreference{reviewerPref, bystanderPref},
+		members: map[uuid.UUID]bool{reviewer: true, bystander: true},
+	}
+	svc := NewNotificationService(repo, WithEmailService(email, users, "")).(*notificationService)
+
+	event := domain.NotificationEvent{
+		WorkspaceID:  wsID,
+		EventType:    "task.reviewer_assigned",
+		Title:        "Review requested",
+		TargetUserID: &reviewer,
+	}
+	svc.dispatch(event)
+
+	require.Eventually(t, func() bool { return len(email.recipients()) > 0 }, time.Second, 5*time.Millisecond)
+	assert.Equal(t, []string{"reviewer@example.com"}, email.recipients())
+}
+
+// TestEmailAvailable reflects the wired EmailService's own Enabled() state —
+// the settings page's source of truth for whether to let anyone subscribe.
+func TestEmailAvailable(t *testing.T) {
+	repo := &fakeNotificationRepo{}
+
+	t.Run("no email service wired", func(t *testing.T) {
+		svc := NewNotificationService(repo)
+		assert.False(t, svc.EmailAvailable())
+	})
+
+	t.Run("wired but SMTP not configured", func(t *testing.T) {
+		svc := NewNotificationService(repo, WithEmailService(&fakeEmailService{enabled: false}, &fakeUserRepoForEmail{}, ""))
+		assert.False(t, svc.EmailAvailable())
+	})
+
+	t.Run("wired and configured", func(t *testing.T) {
+		svc := NewNotificationService(repo, WithEmailService(&fakeEmailService{enabled: true}, &fakeUserRepoForEmail{}, ""))
+		assert.True(t, svc.EmailAvailable())
+	})
 }
 
 // TestNotify_DispatchesInTheBackground keeps the fire-and-forget contract: the

@@ -1,7 +1,9 @@
 package handler
 
 import (
+	"encoding/json"
 	"net/http"
+	"net/mail"
 
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
@@ -104,6 +106,18 @@ func (h *NotificationHandler) GetPreferences(c echo.Context) error {
 	return c.JSON(http.StatusOK, map[string]any{"preferences": prefs})
 }
 
+// GetEmailAvailability handles GET /notifications/email-availability
+//
+// Read by the settings page before it lets anyone subscribe to the email
+// channel, the same role GET /me/push-subscriptions/vapid-key plays for
+// browser push: an instance without SMTP configured can still store an email
+// preference row (nothing about save requires SMTP), but dispatch will never
+// deliver it, so the UI needs to say so up front rather than let the setting
+// look like it works.
+func (h *NotificationHandler) GetEmailAvailability(c echo.Context) error {
+	return c.JSON(http.StatusOK, map[string]any{"available": h.svc.EmailAvailable()})
+}
+
 // updatePreferencesRequest is the JSON body for updating preferences.
 //
 // WorkspaceID names a tenant the route does not, which is the shape that has to
@@ -119,6 +133,12 @@ type updatePreferencesRequest struct {
 	Channel     string   `json:"channel"`
 	Events      []string `json:"events"`
 	IsEnabled   *bool    `json:"is_enabled"`
+	// Config carries channel-specific settings — currently just the email
+	// channel's optional custom delivery address ({"email": "..."}). Passed
+	// through to the stored preference row as-is except for the validation
+	// below; empty/absent means "use the account default", decided at
+	// dispatch time, not here.
+	Config map[string]string `json:"config,omitempty"`
 }
 
 // UpdatePreferences handles PUT /notifications/preferences
@@ -156,12 +176,32 @@ func (h *NotificationHandler) UpdatePreferences(c echo.Context) error {
 		isEnabled = *req.IsEnabled
 	}
 
+	// A custom delivery address is only meaningful on the email channel, but
+	// checked whenever present rather than gated on channel=="email" — a typo'd
+	// address saved under the wrong channel should still fail loudly instead of
+	// waiting to surface as a silently undelivered email later.
+	if addr, ok := req.Config["email"]; ok && addr != "" {
+		if _, addrErr := mail.ParseAddress(addr); addrErr != nil {
+			return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid email address: "+addr))
+		}
+	}
+
+	var cfgJSON json.RawMessage
+	if len(req.Config) > 0 {
+		encoded, marshalErr := json.Marshal(req.Config)
+		if marshalErr != nil {
+			return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid config"))
+		}
+		cfgJSON = encoded
+	}
+
 	pref := &domain.NotificationPreference{
 		WorkspaceID: wsID,
 		UserID:      &userID,
 		Channel:     channel,
 		Events:      pq.StringArray(events),
 		IsEnabled:   isEnabled,
+		Config:      cfgJSON,
 	}
 
 	result, err := h.svc.UpsertPreferences(c.Request().Context(), pref)

@@ -1514,6 +1514,10 @@ func (m *MockNotificationService) MarkAllRead(_ context.Context, _ uuid.UUID) er
 	return nil
 }
 
+func (m *MockNotificationService) EmailAvailable() bool {
+	return false
+}
+
 // ---------------------------------------------------------------------------
 // MockAgentService — minimal stub for comment mention tests.
 // Only GetBySlug is implemented; all other methods panic.

@@ -248,9 +248,23 @@ func main() {
 		log.Printf("Web Push VAPID enabled (public key length: %d)", len(cfg.VAPID.PublicKey))
 	}
 
+	// Email service — shared by the invite flow (below) and the email
+	// notification channel. Created here, ahead of both, so notificationService
+	// can be wired with it; the invite-specific base-URL/SMTP_FROM warnings stay
+	// down by inviteService since they are about invite links specifically.
+	emailSvc := service.NewEmailService(cfg.Email)
+	if emailSvc.Enabled() {
+		log.Printf("Email ready: sending via %s:%d as %q", cfg.Email.Host, cfg.Email.Port, cfg.Email.From)
+	} else {
+		log.Printf("Email is not configured (SMTP_HOST is empty) — no invitation or notification emails will be sent. Invites still work: the invite link is shown in the UI for you to pass on. Set SMTP_HOST/SMTP_FROM to send email instead.")
+	}
+
 	// Notification service for in-app push notifications to workspace users.
 	// Created before taskService and commentService so it can be injected as a dependency.
-	notificationService := service.NewNotificationService(notificationRepo, service.WithPushService(pushService))
+	notificationService := service.NewNotificationService(notificationRepo,
+		service.WithPushService(pushService),
+		service.WithEmailService(emailSvc, userRepo, cfg.Email.BaseURL),
+	)
 
 	taskService := service.NewTaskService(taskRepo, taskStatusRepo, taskDependencyRepo, activityLogRepo,
 		service.WithCustomFieldService(customFieldService),
@@ -331,16 +345,9 @@ func main() {
 		log.Printf("[config] WARNING: SMTP_HOST is set but SMTP_FROM is not — outbound email will use an empty From address and likely be rejected by your mail server. Set SMTP_FROM to an address your SMTP host is allowed to send as.")
 	}
 	inviteRepo := postgres.NewInviteRepo(db)
-	emailSvc := service.NewEmailService(cfg.Email)
-	// State the mail configuration once at boot, the same as object storage
-	// below, rather than leaving the operator to discover it from a log line
-	// emitted during their first invite. Unconfigured email is a supported
-	// setup, not a failure: invites still work, handed over as links.
-	if emailSvc.Enabled() {
-		log.Printf("Email ready: sending via %s:%d as %q", cfg.Email.Host, cfg.Email.Port, cfg.Email.From)
-	} else {
-		log.Printf("Email is not configured (SMTP_HOST is empty) — no invitation emails will be sent. Invites still work: the invite link is shown in the UI for you to pass on. Set SMTP_HOST/SMTP_FROM to send email instead.")
-	}
+	// emailSvc was created earlier, ahead of notificationService — reused here
+	// rather than constructed again so the two channels share one SMTP client
+	// and one boot-time "Email ready"/"not configured" log line.
 	inviteService := service.NewInviteService(inviteRepo, userRepo, workspaceMemberRepo, workspaceRepo, emailSvc, authService, cfg.Email.BaseURL)
 
 	savedViewService := service.NewSavedViewService(savedViewRepo)
@@ -1062,6 +1069,7 @@ func main() {
 	api.GET("/notifications", notificationHandler.List)
 	api.POST("/notifications/mark-read", notificationHandler.MarkRead)
 	api.GET("/notifications/preferences", notificationHandler.GetPreferences)
+	api.GET("/notifications/email-availability", notificationHandler.GetEmailAvailability)
 	// bodyWS: the workspace being subscribed to is named in the request body, so
 	// RequireWorkspaceMemberScoped sees a path with nothing in it to resolve and
 	// waves it through. Without this guard any authenticated caller could
