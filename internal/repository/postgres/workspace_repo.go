@@ -139,10 +139,27 @@ func (r *WorkspaceRepo) Update(ctx context.Context, workspace *domain.Workspace)
 	return nil
 }
 
-// Delete performs a soft delete by setting deleted_at.
+// Delete performs a soft delete of the workspace and, in the same
+// transaction, cascades to every project and task inside it.
+//
+// Without the cascade a deleted workspace disappears from every query that
+// lists WORKSPACES (GET /workspaces, membership checks, ...) while its
+// projects and tasks stay exactly as visible as before to every query that
+// only ever checked their OWN deleted_at — cross-cutting reads like
+// /me/comments, /me/mentions, and a member's active-task list do exactly
+// that, and have no other way to learn the workspace is gone. Cascading
+// closes that by construction: those queries already filter tasks.deleted_at/
+// projects.deleted_at (or now do, see the fixes alongside this one), so once
+// this cascade runs there is nothing left for them to find.
 func (r *WorkspaceRepo) Delete(ctx context.Context, id uuid.UUID) error {
-	const q = `UPDATE workspaces SET deleted_at = NOW() WHERE id = $1 AND deleted_at IS NULL`
-	res, err := r.db.ExecContext(ctx, q, id)
+	tx, err := r.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }() // no-op once committed
+
+	res, err := tx.ExecContext(ctx,
+		`UPDATE workspaces SET deleted_at = NOW() WHERE id = $1 AND deleted_at IS NULL`, id)
 	if err != nil {
 		return err
 	}
@@ -150,7 +167,24 @@ func (r *WorkspaceRepo) Delete(ctx context.Context, id uuid.UUID) error {
 	if n == 0 {
 		return apierror.NotFound("Workspace")
 	}
-	return nil
+
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE tasks SET deleted_at = NOW()
+		 WHERE deleted_at IS NULL
+		   AND project_id IN (SELECT id FROM projects WHERE workspace_id = $1)`,
+		id,
+	); err != nil {
+		return err
+	}
+
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE projects SET deleted_at = NOW() WHERE workspace_id = $1 AND deleted_at IS NULL`,
+		id,
+	); err != nil {
+		return err
+	}
+
+	return tx.Commit()
 }
 
 // ListByOwner returns the workspaces owned by the given user. It ignores

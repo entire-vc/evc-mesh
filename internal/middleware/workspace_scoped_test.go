@@ -140,7 +140,7 @@ func TestRequireWorkspaceMemberScoped_AgentOfAnotherWorkspace_Forbidden(t *testi
 	c, rec := scopedCtx(e, targetWS.String(), targetWS, AuthTypeAgent)
 	c.Set(ContextKeyAgentID, agentID)
 
-	mock.ExpectQuery("SELECT workspace_id FROM agents").
+	mock.ExpectQuery(`SELECT a\.workspace_id FROM agents a\s+JOIN workspaces w ON w\.id = a\.workspace_id\s+WHERE a\.id = \$1 AND a\.deleted_at IS NULL AND w\.deleted_at IS NULL`).
 		WithArgs(agentID).
 		WillReturnRows(sqlmock.NewRows([]string{"workspace_id"}).AddRow(agentWS))
 

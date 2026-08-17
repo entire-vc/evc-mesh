@@ -79,14 +79,14 @@ func TestDBAuthorizer_UserIsWorkspaceMember(t *testing.T) {
 
 	wsID := uuid.New()
 	member := uuid.New()
-	mock.ExpectQuery("SELECT role FROM workspace_members").
+	mock.ExpectQuery(`SELECT wm\.role FROM workspace_members wm\s+JOIN workspaces w ON w\.id = wm\.workspace_id\s+WHERE wm\.workspace_id = \$1 AND wm\.user_id = \$2 AND w\.deleted_at IS NULL`).
 		WithArgs(wsID, member).
 		WillReturnRows(sqlmock.NewRows([]string{"role"}).AddRow("member"))
 	assert.True(t, authz.UserIsWorkspaceMember(context.Background(), wsID, member))
 
 	// A stranger: no membership row, and not the owner either.
 	stranger := uuid.New()
-	mock.ExpectQuery("SELECT role FROM workspace_members").
+	mock.ExpectQuery(`SELECT wm\.role FROM workspace_members wm\s+JOIN workspaces w ON w\.id = wm\.workspace_id\s+WHERE wm\.workspace_id = \$1 AND wm\.user_id = \$2 AND w\.deleted_at IS NULL`).
 		WithArgs(wsID, stranger).
 		WillReturnError(errors.New("no rows"))
 	mock.ExpectQuery("SELECT owner_id FROM workspaces").

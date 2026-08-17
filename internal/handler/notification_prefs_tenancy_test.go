@@ -128,7 +128,7 @@ func TestUpdatePreferences_ForeignWorkspaceIsRefused(t *testing.T) {
 	victimWS := uuid.New()
 	stranger := uuid.New()
 
-	mock.ExpectQuery("SELECT role FROM workspace_members").
+	mock.ExpectQuery(`SELECT wm\.role FROM workspace_members wm\s+JOIN workspaces w ON w\.id = wm\.workspace_id\s+WHERE wm\.workspace_id = \$1 AND wm\.user_id = \$2 AND w\.deleted_at IS NULL`).
 		WithArgs(victimWS, stranger).
 		WillReturnRows(sqlmock.NewRows([]string{"role"}))
 	mock.ExpectQuery("SELECT owner_id FROM workspaces").
@@ -155,7 +155,7 @@ func TestUpdatePreferences_ForeignWorkspaceIsRefusedForAgentKey(t *testing.T) {
 	victimWS := uuid.New()
 	intruder := uuid.New()
 
-	mock.ExpectQuery("SELECT workspace_id FROM agents").
+	mock.ExpectQuery(`SELECT a\.workspace_id FROM agents a\s+JOIN workspaces w ON w\.id = a\.workspace_id\s+WHERE a\.id = \$1 AND a\.deleted_at IS NULL AND w\.deleted_at IS NULL`).
 		WithArgs(intruder).
 		WillReturnRows(sqlmock.NewRows([]string{"workspace_id"}).AddRow(uuid.New()))
 
@@ -176,7 +176,7 @@ func TestUpdatePreferences_OwnWorkspaceStillWorks(t *testing.T) {
 	ownWS := uuid.New()
 	member := uuid.New()
 
-	mock.ExpectQuery("SELECT role FROM workspace_members").
+	mock.ExpectQuery(`SELECT wm\.role FROM workspace_members wm\s+JOIN workspaces w ON w\.id = wm\.workspace_id\s+WHERE wm\.workspace_id = \$1 AND wm\.user_id = \$2 AND w\.deleted_at IS NULL`).
 		WithArgs(ownWS, member).
 		WillReturnRows(sqlmock.NewRows([]string{"role"}).AddRow("member"))
 

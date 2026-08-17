@@ -144,7 +144,7 @@ func TestRequireWorkspaceMember_Agent_SameWorkspace(t *testing.T) {
 	agentID := uuid.New()
 
 	db, mock := newMockDB(t)
-	mock.ExpectQuery(`SELECT workspace_id FROM agents WHERE id = \$1 AND deleted_at IS NULL`).
+	mock.ExpectQuery(`SELECT a\.workspace_id FROM agents a\s+JOIN workspaces w ON w\.id = a\.workspace_id\s+WHERE a\.id = \$1 AND a\.deleted_at IS NULL AND w\.deleted_at IS NULL`).
 		WithArgs(agentID).
 		WillReturnRows(sqlmock.NewRows([]string{"workspace_id"}).AddRow(wsID.String()))
 
@@ -172,7 +172,7 @@ func TestRequireWorkspaceMember_Agent_CrossWorkspace_IDOR(t *testing.T) {
 
 	db, mock := newMockDB(t)
 	// DB returns agent's real workspace (A); context has the target workspace (B).
-	mock.ExpectQuery(`SELECT workspace_id FROM agents WHERE id = \$1 AND deleted_at IS NULL`).
+	mock.ExpectQuery(`SELECT a\.workspace_id FROM agents a\s+JOIN workspaces w ON w\.id = a\.workspace_id\s+WHERE a\.id = \$1 AND a\.deleted_at IS NULL AND w\.deleted_at IS NULL`).
 		WithArgs(agentID).
 		WillReturnRows(sqlmock.NewRows([]string{"workspace_id"}).AddRow(workspaceA.String()))
 
@@ -198,7 +198,7 @@ func TestRequireWorkspaceMember_Agent_NotFound(t *testing.T) {
 	agentID := uuid.New()
 
 	db, mock := newMockDB(t)
-	mock.ExpectQuery(`SELECT workspace_id FROM agents WHERE id = \$1 AND deleted_at IS NULL`).
+	mock.ExpectQuery(`SELECT a\.workspace_id FROM agents a\s+JOIN workspaces w ON w\.id = a\.workspace_id\s+WHERE a\.id = \$1 AND a\.deleted_at IS NULL AND w\.deleted_at IS NULL`).
 		WithArgs(agentID).
 		WillReturnRows(sqlmock.NewRows([]string{"workspace_id"})) // empty result set → sql.ErrNoRows
 

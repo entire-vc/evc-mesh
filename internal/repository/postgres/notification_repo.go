@@ -166,12 +166,18 @@ func (r *NotificationRepo) CreateNotification(ctx context.Context, n *domain.Not
 }
 
 // ListUnread returns up to limit unread notifications for the given user, newest first.
+//
+// notifications rows are written once, at event time, and never touched
+// again by anything that later deletes the workspace they're about — unlike
+// tasks/comments there is no cascade to lean on here, so this joins
+// workspaces directly and checks its own deleted_at.
 func (r *NotificationRepo) ListUnread(ctx context.Context, userID uuid.UUID, limit int) ([]domain.Notification, error) {
 	const q = `
-		SELECT id, workspace_id, user_id, event_type, title, body, metadata, is_read, created_at
-		FROM notifications
-		WHERE user_id = $1 AND is_read = false
-		ORDER BY created_at DESC
+		SELECT n.id, n.workspace_id, n.user_id, n.event_type, n.title, n.body, n.metadata, n.is_read, n.created_at
+		FROM notifications n
+		JOIN workspaces w ON w.id = n.workspace_id
+		WHERE n.user_id = $1 AND n.is_read = false AND w.deleted_at IS NULL
+		ORDER BY n.created_at DESC
 		LIMIT $2
 	`
 	var items []domain.Notification
@@ -183,7 +189,12 @@ func (r *NotificationRepo) ListUnread(ctx context.Context, userID uuid.UUID, lim
 
 // CountUnread returns the number of unread notifications for the given user.
 func (r *NotificationRepo) CountUnread(ctx context.Context, userID uuid.UUID) (int, error) {
-	const q = `SELECT COUNT(*) FROM notifications WHERE user_id = $1 AND is_read = false`
+	const q = `
+		SELECT COUNT(*)
+		FROM notifications n
+		JOIN workspaces w ON w.id = n.workspace_id
+		WHERE n.user_id = $1 AND n.is_read = false AND w.deleted_at IS NULL
+	`
 	var count int
 	if err := r.db.GetContext(ctx, &count, q, userID); err != nil {
 		return 0, err
