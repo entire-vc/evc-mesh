@@ -176,6 +176,17 @@ var declaredQueryTenantParams = map[string]string{
 	// is which of the two predicates the caller controls.
 	"task_handler.go:GetCurrentUserTasks.workspace_id": "narrows: WHERE p.workspace_id = $1 — pinned by AND t.assignee_id = $2",
 
+	// GET /agents/me/tasks and its long-poll twin, both served through
+	// parseAgentFeedFilter. Same shape as GetCurrentUserTasks above and, like it,
+	// worth reading in the right direction. The caller supplies project_id; it
+	// cannot supply either of the two terms that pin the query. assignee_id comes
+	// from the agent id the API key resolved to, and the workspace comes from
+	// agentFeedWorkspace, which reads it off that same key and fails closed rather
+	// than falling back to anything in the request. So a foreign project id adds a
+	// conjunct to a set that already contains only this agent's own tasks inside
+	// its own workspace: the answer is empty, never another tenant's rows.
+	"agent_handler.go:parseAgentFeedFilter.project_id": "narrows: project_id = $%d — pinned by assignee_id = $1",
+
 	// --- Stored in a key -----------------------------------------------------
 	//
 	// GET /memories/recall_graph writes: results are memoised in a package-level

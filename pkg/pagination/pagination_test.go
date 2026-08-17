@@ -452,3 +452,42 @@ func TestConstants(t *testing.T) {
 	assert.Equal(t, 50, DefaultPageSize)
 	assert.Equal(t, 200, MaxPageSize)
 }
+
+// ---------------------------------------------------------------------------
+// ?limit= alias
+// ---------------------------------------------------------------------------
+
+// ?limit=N was accepted by the router, bound to nothing, and silently replaced
+// with the 50-item default. The caller got a well-formed page back, so the
+// request looked honoured: GET /tasks/:id/comments?limit=1 and ?limit=100
+// returned byte-identical 42 KB bodies.
+func TestParams_LimitAliasFeedsPageSize(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    Params
+		expected int
+	}{
+		{"limit_alone_is_used", Params{RawLimit: 7}, 7},
+		{"explicit_page_size_wins", Params{PageSize: 20, RawLimit: 7}, 20},
+		{"limit_is_clamped_to_max", Params{RawLimit: MaxPageSize + 500}, MaxPageSize},
+		{"zero_limit_falls_back_to_default", Params{RawLimit: 0}, DefaultPageSize},
+		{"negative_limit_falls_back_to_default", Params{RawLimit: -3}, DefaultPageSize},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := tt.input
+			p.Normalize()
+			assert.Equal(t, tt.expected, p.PageSize)
+			assert.Equal(t, tt.expected, p.Limit(),
+				"Limit() is what the repositories put in the SQL, so it must follow PageSize")
+		})
+	}
+}
+
+// The alias must not disturb OFFSET: page 2 of limit=10 starts at row 10.
+func TestParams_LimitAliasStillPaginates(t *testing.T) {
+	p := Params{Page: 2, RawLimit: 10}
+	p.Normalize()
+	assert.Equal(t, 10, p.Limit())
+	assert.Equal(t, 10, p.Offset())
+}

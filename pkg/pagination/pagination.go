@@ -12,12 +12,30 @@ type Params struct {
 	PageSize int    `query:"page_size"`
 	SortBy   string `query:"sort_by"`
 	SortDir  string `query:"sort_dir"` // "asc" or "desc"
+
+	// RawLimit binds ?limit=N, the spelling every hand-written client reaches
+	// for. Until this existed, ?limit=1 on a paginated endpoint was silently
+	// discarded and the caller got the 50-item default instead — the request
+	// looked honoured because a well-formed page came back.
+	//
+	// It is a separate field rather than a second tag on PageSize because Echo
+	// binds one tag per field, and it is not named Limit because Limit() below
+	// is already the accessor the repositories call.
+	//
+	// Normalize folds it into PageSize; nothing downstream reads it.
+	RawLimit int `query:"limit"`
 }
 
 // Normalize ensures pagination parameters are within valid bounds.
+//
+// An explicit page_size wins over limit when a caller sends both, on the
+// grounds that page_size is the documented name.
 func (p *Params) Normalize() {
 	if p.Page < 1 {
 		p.Page = 1
+	}
+	if p.PageSize < 1 && p.RawLimit > 0 {
+		p.PageSize = p.RawLimit
 	}
 	if p.PageSize < 1 {
 		p.PageSize = DefaultPageSize

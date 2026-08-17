@@ -151,7 +151,11 @@ type TaskService interface {
 	// GetMyTasks lists the principal's tasks inside one workspace. The caller must
 	// pass the workspace of the AUTHENTICATED principal, never one taken from the
 	// request, or the scoping is decorative.
-	GetMyTasks(ctx context.Context, workspaceID, assigneeID uuid.UUID, assigneeType domain.AssigneeType) ([]domain.Task, error)
+	//
+	// filter is applied in SQL. The second return value is the total number of
+	// matches before filter.Limit was applied, so the handler can report a
+	// truncated feed as truncated rather than as "no more work".
+	GetMyTasks(ctx context.Context, workspaceID, assigneeID uuid.UUID, assigneeType domain.AssigneeType, filter repository.AssigneeTaskFilter) (tasks []domain.Task, total int, err error)
 	// GetUserActiveTasks returns non-done/cancelled tasks for a human user in a workspace.
 	GetUserActiveTasks(ctx context.Context, workspaceID, userID uuid.UUID, pg pagination.Params) (*pagination.Page[domain.Task], error)
 	GetDefaultStatus(ctx context.Context, projectID uuid.UUID) (*domain.TaskStatus, error)

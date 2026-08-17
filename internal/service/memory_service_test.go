@@ -1924,8 +1924,8 @@ func (m *mockTaskRepo) List(_ context.Context, _ uuid.UUID, _ repository.TaskFil
 func (m *mockTaskRepo) Search(_ context.Context, _ uuid.UUID, _ repository.TaskFilter, _ pagination.Params) (*pagination.Page[domain.Task], error) {
 	return nil, nil
 }
-func (m *mockTaskRepo) ListByAssignee(_ context.Context, _, _ uuid.UUID, _ domain.AssigneeType) ([]domain.Task, error) {
-	return nil, nil
+func (m *mockTaskRepo) ListByAssignee(_ context.Context, _, _ uuid.UUID, _ domain.AssigneeType, _ repository.AssigneeTaskFilter) ([]domain.Task, int, error) {
+	return nil, 0, nil
 }
 func (m *mockTaskRepo) ListByUserActive(_ context.Context, _, _ uuid.UUID, _ pagination.Params) (*pagination.Page[domain.Task], error) {
 	return nil, nil
