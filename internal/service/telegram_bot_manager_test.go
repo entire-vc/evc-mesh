@@ -191,6 +191,62 @@ func TestHandleStart_UsernameMatchIsCaseAndAtInsensitive(t *testing.T) {
 	require.Len(t, repo.upsertedPrefs(), 1, "case/@ differences should not block a legitimate match")
 }
 
+// --- tests: Reload --------------------------------------------------------------
+
+func TestReload_StartsAPollerForAUsableIntegration(t *testing.T) {
+	intID := uuid.New()
+	cfg := telegramIntegration(true, "tok")
+	integrations := &fakeTelegramIntegrationSource{byID: map[uuid.UUID]*domain.IntegrationConfig{intID: cfg}}
+	mgr := NewTelegramBotManager(&fakeTelegramClient{}, integrations, &fakeNotificationRepo{}, &fakeTelegramUserLookup{}, &fakeTelegramProjectLookup{}, &fakeWorkspaceNameLookup{})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	mgr.rootCtx = ctx // simulate Start() having run
+
+	mgr.Reload(context.Background(), intID)
+
+	mgr.mu.Lock()
+	_, running := mgr.cancels[intID]
+	mgr.mu.Unlock()
+	assert.True(t, running, "Reload did not start a poller for a usable integration")
+}
+
+func TestReload_DoesNotStartAPollerForAnUnknownIntegration(t *testing.T) {
+	intID := uuid.New()
+	integrations := &fakeTelegramIntegrationSource{byID: map[uuid.UUID]*domain.IntegrationConfig{}} // GetByID -> nil
+	mgr := NewTelegramBotManager(&fakeTelegramClient{}, integrations, &fakeNotificationRepo{}, &fakeTelegramUserLookup{}, &fakeTelegramProjectLookup{}, &fakeWorkspaceNameLookup{})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	mgr.rootCtx = ctx
+
+	mgr.Reload(context.Background(), intID) // must not panic
+
+	mgr.mu.Lock()
+	_, running := mgr.cancels[intID]
+	mgr.mu.Unlock()
+	assert.False(t, running)
+}
+
+func TestReload_StopsAndDoesNotRestartADeactivatedIntegration(t *testing.T) {
+	intID := uuid.New()
+	cfg := telegramIntegration(false, "tok") // deactivated
+	integrations := &fakeTelegramIntegrationSource{byID: map[uuid.UUID]*domain.IntegrationConfig{intID: cfg}}
+	mgr := NewTelegramBotManager(&fakeTelegramClient{}, integrations, &fakeNotificationRepo{}, &fakeTelegramUserLookup{}, &fakeTelegramProjectLookup{}, &fakeWorkspaceNameLookup{})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	mgr.rootCtx = ctx
+	mgr.EnsureRunning(intID) // pretend it was running before the deactivation
+
+	mgr.Reload(context.Background(), intID)
+
+	mgr.mu.Lock()
+	_, running := mgr.cancels[intID]
+	mgr.mu.Unlock()
+	assert.False(t, running, "Reload restarted a poller for a deactivated integration")
+}
+
 // --- tests: handleUpdate -------------------------------------------------------
 
 func TestHandleUpdate_IgnoresEverythingButStart(t *testing.T) {
