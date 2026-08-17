@@ -891,7 +891,7 @@ export interface CreateVCSLinkRequest {
 
 // Integration types
 
-export type IntegrationProvider = "slack" | "github" | "spark" | "mcp";
+export type IntegrationProvider = "slack" | "github" | "spark" | "mcp" | "telegram";
 
 export interface IntegrationConfig {
   id: string;
@@ -901,6 +901,26 @@ export interface IntegrationConfig {
   is_active: boolean;
   created_at: string;
   updated_at: string;
+}
+
+// A telegram IntegrationConfig's `config` is always this shape — the API
+// never returns bot_token, encrypted or not, only whether one is set.
+export interface TelegramIntegrationConfig {
+  bot_username?: string;
+  bot_token_set?: boolean;
+}
+
+// A telegram-channel NotificationPreference's `config` is always this shape.
+export interface TelegramPreferenceConfig {
+  telegram_username?: string;
+  telegram_chat_id?: number;
+  telegram_bind_token?: string;
+  telegram_bind_expires_at?: string;
+}
+
+export interface TelegramBotInfo {
+  available: boolean;
+  bot_username: string;
 }
 
 // Recurring tasks types
