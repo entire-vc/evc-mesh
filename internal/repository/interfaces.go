@@ -65,6 +65,27 @@ type TaskFilter struct {
 	CustomFields   map[string]CustomFieldFilter // key = field slug
 }
 
+// AssigneeTaskFilter narrows the principal's own task feed (GET /agents/me/tasks
+// and its long-poll twin).
+//
+// These three used to be applied — or not applied at all — AFTER the whole feed
+// had been read out of Postgres and marshalled into Go: the repository returned
+// every task carrying the principal's id (836 rows / ~1 MB for one real agent),
+// and the handler then dropped the ones whose status category did not match. A
+// request that answered with an empty array cost exactly as much as one that
+// answered with everything. Putting them in the SQL is the whole point of the
+// type; nothing here is a convenience.
+type AssigneeTaskFilter struct {
+	// StatusCategory keeps only tasks whose status belongs to this category.
+	StatusCategory *domain.StatusCategory
+	// ProjectID keeps only tasks in one project.
+	ProjectID *uuid.UUID
+	// Limit caps the number of rows returned. 0 means no limit — the feed is how
+	// an agent discovers work, so truncation is opt-in and always reported back
+	// via the total the call returns.
+	Limit int
+}
+
 // TaskRepository manages persistence for tasks.
 type TaskRepository interface {
 	Create(ctx context.Context, task *domain.Task) error
@@ -79,7 +100,11 @@ type TaskRepository interface {
 	Search(ctx context.Context, workspaceID uuid.UUID, filter TaskFilter, pg pagination.Params) (*pagination.Page[domain.Task], error)
 	// ListByAssignee is workspace-scoped by contract: see the implementation for why
 	// the predicate is mandatory rather than a filter.
-	ListByAssignee(ctx context.Context, workspaceID, assigneeID uuid.UUID, assigneeType domain.AssigneeType) ([]domain.Task, error)
+	//
+	// Returns the matching page and the TOTAL number of matches, so a caller that
+	// asked for a limit can tell a full answer from a truncated one. With
+	// filter.Limit == 0 there is no truncation and total equals len(tasks).
+	ListByAssignee(ctx context.Context, workspaceID, assigneeID uuid.UUID, assigneeType domain.AssigneeType, filter AssigneeTaskFilter) (tasks []domain.Task, total int, err error)
 	// ListByUserActive returns tasks assigned to a user in a workspace, excluding done/cancelled categories.
 	ListByUserActive(ctx context.Context, workspaceID, userID uuid.UUID, pg pagination.Params) (*pagination.Page[domain.Task], error)
 	ListSubtasks(ctx context.Context, parentTaskID uuid.UUID) ([]domain.Task, error)

@@ -768,9 +768,71 @@ func agentFeedWorkspace(c echo.Context) (uuid.UUID, error) {
 	return wsID, nil
 }
 
+// validStatusCategories is the closed set accepted by the ?status_category
+// filter. An unrecognised value is rejected rather than quietly matching
+// nothing: an agent that mistypes the category and receives {"tasks":[]}
+// concludes it has no work, which is indistinguishable from being idle.
+var validStatusCategories = map[domain.StatusCategory]struct{}{
+	domain.StatusCategoryBacklog:    {},
+	domain.StatusCategoryTodo:       {},
+	domain.StatusCategoryInProgress: {},
+	domain.StatusCategoryReview:     {},
+	domain.StatusCategoryDone:       {},
+	domain.StatusCategoryCancelled:  {},
+	domain.StatusCategoryTriage:     {},
+}
+
+// parseAgentFeedFilter reads the feed's query parameters into a repository
+// filter applied in SQL.
+//
+// limit is accepted under both names: the MCP client has always sent page_size
+// (internal/mcp/tools.go, get_my_tasks), and "limit" is what a hand-written
+// caller reaches for. Neither was read before this change, so an agent asking
+// for 50 tasks was served all of them.
+func parseAgentFeedFilter(c echo.Context) (repository.AssigneeTaskFilter, error) {
+	var filter repository.AssigneeTaskFilter
+
+	if raw := c.QueryParam("status_category"); raw != "" {
+		cat := domain.StatusCategory(raw)
+		if _, ok := validStatusCategories[cat]; !ok {
+			return filter, fmt.Errorf("unknown status_category %q", raw)
+		}
+		filter.StatusCategory = &cat
+	}
+
+	if raw := c.QueryParam("project_id"); raw != "" {
+		projID, err := uuid.Parse(raw)
+		if err != nil {
+			return filter, fmt.Errorf("project_id must be a UUID")
+		}
+		filter.ProjectID = &projID
+	}
+
+	rawLimit := c.QueryParam("limit")
+	if rawLimit == "" {
+		rawLimit = c.QueryParam("page_size")
+	}
+	if rawLimit != "" {
+		n, err := strconv.Atoi(rawLimit)
+		if err != nil || n < 1 {
+			return filter, fmt.Errorf("limit must be a positive integer")
+		}
+		filter.Limit = n
+	}
+
+	return filter, nil
+}
+
 // GetMyTasks handles GET /agents/me/tasks
 // Returns tasks assigned to the current agent.
-// Optional query params: status_category (backlog|todo|in_progress|review|done|cancelled)
+//
+// Optional query params, all applied in SQL:
+//   - status_category — backlog|todo|in_progress|review|done|cancelled|triage
+//   - project_id      — restrict to one project
+//   - limit/page_size — cap the number of rows; omit for the whole feed
+//
+// When a limit truncates the result the response carries total_count and
+// has_more, so a partial feed is never mistaken for an empty one.
 func (h *AgentHandler) GetMyTasks(c echo.Context) error {
 	if h.taskService == nil {
 		return c.JSON(http.StatusNotImplemented, apierror.InternalError("task service not configured"))
@@ -791,40 +853,22 @@ func (h *AgentHandler) GetMyTasks(c echo.Context) error {
 		return c.JSON(http.StatusForbidden, apierror.Forbidden("workspace access denied"))
 	}
 
-	tasks, err := h.taskService.GetMyTasks(c.Request().Context(), workspaceID, agentID, domain.AssigneeTypeAgent)
+	filter, filterErr := parseAgentFeedFilter(c)
+	if filterErr != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest(filterErr.Error()))
+	}
+
+	tasks, total, err := h.taskService.GetMyTasks(
+		c.Request().Context(), workspaceID, agentID, domain.AssigneeTypeAgent, filter)
 	if err != nil {
 		return handleError(c, err)
 	}
 
-	// Filter by status_category if provided.
-	// Since we don't have status category on the task itself, filter via
-	// the status service injected into the agent handler.
-	if cat := c.QueryParam("status_category"); cat != "" && h.statusService != nil {
-		categoryMap := make(map[uuid.UUID]domain.StatusCategory)
-		projectsSeen := make(map[uuid.UUID]bool)
-		for _, t := range tasks {
-			if !projectsSeen[t.ProjectID] {
-				projectsSeen[t.ProjectID] = true
-				if statuses, err := h.statusService.ListByProject(c.Request().Context(), t.ProjectID); err == nil {
-					for _, s := range statuses {
-						categoryMap[s.ID] = s.Category
-					}
-				}
-			}
-		}
-		targetCat := domain.StatusCategory(cat)
-		filtered := make([]domain.Task, 0, len(tasks))
-		for _, t := range tasks {
-			if categoryMap[t.StatusID] == targetCat {
-				filtered = append(filtered, t)
-			}
-		}
-		tasks = filtered
-	}
-
 	return c.JSON(http.StatusOK, map[string]any{
-		"tasks": tasks,
-		"count": len(tasks),
+		"tasks":       tasks,
+		"count":       len(tasks),
+		"total_count": total,
+		"has_more":    len(tasks) < total,
 	})
 }
 
@@ -1003,6 +1047,13 @@ func (h *AgentHandler) PollTasks(c echo.Context) error {
 		return c.JSON(http.StatusForbidden, apierror.Forbidden("workspace access denied"))
 	}
 
+	// Parsed before parking the caller for up to two minutes: a malformed filter
+	// is a client bug and must be reported immediately, not after the timeout.
+	filter, filterErr := parseAgentFeedFilter(c)
+	if filterErr != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest(filterErr.Error()))
+	}
+
 	// Parse timeout query parameter (default 30s, max 120s).
 	timeoutSecs := agentPollDefaultTimeout
 	if raw := c.QueryParam("timeout"); raw != "" {
@@ -1045,16 +1096,20 @@ func (h *AgentHandler) PollTasks(c echo.Context) error {
 		// Timeout reached — return current tasks with changed=false.
 	}
 
-	// Fetch current tasks for this agent.
+	// Fetch current tasks for this agent. The same filters as the non-polling
+	// twin apply, so a long-poller can ask for just its todo queue instead of
+	// re-downloading the whole feed on every wake-up.
 	ctx := context.Background()
-	tasks, err := h.taskService.GetMyTasks(ctx, workspaceID, agentID, domain.AssigneeTypeAgent)
+	tasks, total, err := h.taskService.GetMyTasks(ctx, workspaceID, agentID, domain.AssigneeTypeAgent, filter)
 	if err != nil {
 		return handleError(c, err)
 	}
 
 	return c.JSON(http.StatusOK, map[string]any{
-		"tasks":   tasks,
-		"count":   len(tasks),
-		"changed": changed,
+		"tasks":       tasks,
+		"count":       len(tasks),
+		"total_count": total,
+		"has_more":    len(tasks) < total,
+		"changed":     changed,
 	})
 }

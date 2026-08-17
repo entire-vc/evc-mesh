@@ -15,6 +15,7 @@ import (
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	mw "github.com/entire-vc/evc-mesh/internal/middleware"
+	"github.com/entire-vc/evc-mesh/internal/repository"
 	"github.com/entire-vc/evc-mesh/internal/service"
 )
 
@@ -32,9 +33,9 @@ func TestGetMyTasks_RefusesWhenTheKeyResolvesNoWorkspace(t *testing.T) {
 	agentID := uuid.New()
 	called := false
 	taskSvc := &MockTaskService{
-		GetMyTasksFunc: func(_ context.Context, _, _ uuid.UUID, _ domain.AssigneeType) ([]domain.Task, error) {
+		GetMyTasksFunc: func(_ context.Context, _, _ uuid.UUID, _ domain.AssigneeType, _ repository.AssigneeTaskFilter) ([]domain.Task, int, error) {
 			called = true
-			return nil, nil
+			return nil, 0, nil
 		},
 	}
 	h := NewAgentHandlerWithTaskService(nil, taskSvc)
@@ -57,9 +58,9 @@ func TestGetMyTasks_ScopesToTheWorkspaceOnTheKey(t *testing.T) {
 	agentID, wsID := uuid.New(), uuid.New()
 	var gotWorkspace, gotAssignee uuid.UUID
 	taskSvc := &MockTaskService{
-		GetMyTasksFunc: func(_ context.Context, workspaceID, assigneeID uuid.UUID, _ domain.AssigneeType) ([]domain.Task, error) {
+		GetMyTasksFunc: func(_ context.Context, workspaceID, assigneeID uuid.UUID, _ domain.AssigneeType, _ repository.AssigneeTaskFilter) ([]domain.Task, int, error) {
 			gotWorkspace, gotAssignee = workspaceID, assigneeID
-			return []domain.Task{}, nil
+			return []domain.Task{}, 0, nil
 		},
 	}
 	h := NewAgentHandlerWithTaskService(nil, taskSvc)
@@ -148,9 +149,9 @@ func pollHandlerWithUnusedRedis(ts service.TaskService) *AgentHandler {
 func TestPollTasks_RefusesWhenTheKeyResolvesNoWorkspace(t *testing.T) {
 	called := false
 	h := pollHandlerWithUnusedRedis(&MockTaskService{
-		GetMyTasksFunc: func(_ context.Context, _, _ uuid.UUID, _ domain.AssigneeType) ([]domain.Task, error) {
+		GetMyTasksFunc: func(_ context.Context, _, _ uuid.UUID, _ domain.AssigneeType, _ repository.AssigneeTaskFilter) ([]domain.Task, int, error) {
 			called = true
-			return nil, nil
+			return nil, 0, nil
 		},
 	})
 

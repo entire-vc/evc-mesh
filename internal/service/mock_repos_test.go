@@ -276,9 +276,13 @@ type MockTaskRepository struct {
 	// LastListByAssigneeWorkspace records the workspace argument of the most recent
 	// ListByAssignee call, so a caller can be checked for scoping its own feed read.
 	LastListByAssigneeWorkspace uuid.UUID
-	mu                          sync.RWMutex
-	items                       map[uuid.UUID]*domain.Task
-	errToReturn                 error
+	// LastListByAssigneeFilter records the filter argument of the most recent
+	// ListByAssignee call, so a caller can be checked for pushing its narrowing
+	// down to the repository instead of doing it in Go afterwards.
+	LastListByAssigneeFilter repository.AssigneeTaskFilter
+	mu                       sync.RWMutex
+	items                    map[uuid.UUID]*domain.Task
+	errToReturn              error
 	// statusCategoryOf, if set, resolves a status ID to its category — used by
 	// FindDueMonitorBacklogTasks to emulate the real query's join against
 	// task_statuses without this mock needing a direct dependency on
@@ -369,10 +373,13 @@ func (m *MockTaskRepository) List(_ context.Context, projectID uuid.UUID, _ repo
 // SQL. That proof lives in the integration test against a real database
 // (TestCrossWorkspaceAssignee_*); asserting scoping here would only assert that
 // the mock filters, which is not the claim.
-func (m *MockTaskRepository) ListByAssignee(_ context.Context, workspaceID, assigneeID uuid.UUID, assigneeType domain.AssigneeType) ([]domain.Task, error) {
+func (m *MockTaskRepository) ListByAssignee(_ context.Context, workspaceID, assigneeID uuid.UUID, assigneeType domain.AssigneeType, filter repository.AssigneeTaskFilter) ([]domain.Task, int, error) {
 	if m.errToReturn != nil {
-		return nil, m.errToReturn
+		return nil, 0, m.errToReturn
 	}
+	m.mu.Lock()
+	m.LastListByAssigneeFilter = filter
+	m.mu.Unlock()
 	m.mu.Lock()
 	m.LastListByAssigneeWorkspace = workspaceID
 	m.mu.Unlock()
@@ -384,7 +391,11 @@ func (m *MockTaskRepository) ListByAssignee(_ context.Context, workspaceID, assi
 			result = append(result, *t)
 		}
 	}
-	return result, nil
+	total := len(result)
+	if filter.Limit > 0 && len(result) > filter.Limit {
+		result = result[:filter.Limit]
+	}
+	return result, total, nil
 }
 
 func (m *MockTaskRepository) ListByUserActive(_ context.Context, _, _ uuid.UUID, pg pagination.Params) (*pagination.Page[domain.Task], error) {

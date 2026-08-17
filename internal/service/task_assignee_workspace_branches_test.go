@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	"github.com/entire-vc/evc-mesh/internal/repository"
 )
 
 // Every refusal reason of assertAssigneeInProjectWorkspace, one case each.
@@ -209,7 +210,8 @@ func TestGetMyTasksPassesTheWorkspaceThrough(t *testing.T) {
 		NewMockTaskDependencyRepository(), NewMockActivityLogRepository()).(*taskService)
 
 	wsID, agentID := uuid.New(), uuid.New()
-	_, err := svc.GetMyTasks(context.Background(), wsID, agentID, domain.AssigneeTypeAgent)
+	_, _, err := svc.GetMyTasks(context.Background(), wsID, agentID, domain.AssigneeTypeAgent,
+		repository.AssigneeTaskFilter{})
 	require.NoError(t, err)
 
 	assert.Equal(t, wsID, taskRepo.LastListByAssigneeWorkspace,

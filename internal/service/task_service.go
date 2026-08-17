@@ -1159,9 +1159,15 @@ func (s *taskService) bulkUpdateOne(ctx context.Context, projectID, taskID uuid.
 	return nil
 }
 
-// GetMyTasks returns the actor's tasks within workspaceID.
-func (s *taskService) GetMyTasks(ctx context.Context, workspaceID, assigneeID uuid.UUID, assigneeType domain.AssigneeType) ([]domain.Task, error) {
-	return s.taskRepo.ListByAssignee(ctx, workspaceID, assigneeID, assigneeType)
+// GetMyTasks returns the actor's tasks within workspaceID, narrowed in SQL by
+// filter, along with the total number of matches before filter.Limit.
+func (s *taskService) GetMyTasks(
+	ctx context.Context,
+	workspaceID, assigneeID uuid.UUID,
+	assigneeType domain.AssigneeType,
+	filter repository.AssigneeTaskFilter,
+) ([]domain.Task, int, error) {
+	return s.taskRepo.ListByAssignee(ctx, workspaceID, assigneeID, assigneeType, filter)
 }
 
 // GetUserActiveTasks returns non-done/cancelled tasks for a human user in a workspace.

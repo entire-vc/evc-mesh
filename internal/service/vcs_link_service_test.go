@@ -163,8 +163,8 @@ func (r *fakeTaskRepo) Delete(context.Context, uuid.UUID) error { return nil }
 func (r *fakeTaskRepo) List(context.Context, uuid.UUID, repository.TaskFilter, pagination.Params) (*pagination.Page[domain.Task], error) {
 	return nil, nil
 }
-func (r *fakeTaskRepo) ListByAssignee(context.Context, uuid.UUID, uuid.UUID, domain.AssigneeType) ([]domain.Task, error) {
-	return nil, nil
+func (r *fakeTaskRepo) ListByAssignee(context.Context, uuid.UUID, uuid.UUID, domain.AssigneeType, repository.AssigneeTaskFilter) ([]domain.Task, int, error) {
+	return nil, 0, nil
 }
 func (r *fakeTaskRepo) ListSubtasks(context.Context, uuid.UUID) ([]domain.Task, error) {
 	return nil, nil
@@ -296,8 +296,8 @@ func (t *fakeTaskService) CreateSubtask(context.Context, uuid.UUID, CreateSubtas
 func (t *fakeTaskService) ListSubtasks(context.Context, uuid.UUID) ([]domain.Task, error) {
 	return nil, nil
 }
-func (t *fakeTaskService) GetMyTasks(context.Context, uuid.UUID, uuid.UUID, domain.AssigneeType) ([]domain.Task, error) {
-	return nil, nil
+func (t *fakeTaskService) GetMyTasks(context.Context, uuid.UUID, uuid.UUID, domain.AssigneeType, repository.AssigneeTaskFilter) ([]domain.Task, int, error) {
+	return nil, 0, nil
 }
 func (t *fakeTaskService) GetDefaultStatus(context.Context, uuid.UUID) (*domain.TaskStatus, error) {
 	return nil, nil
