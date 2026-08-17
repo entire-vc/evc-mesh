@@ -125,6 +125,145 @@ const taskComputedColsAliased = `
 		ELSE NULL
 	END AS created_by_name`
 
+// ── Page-scoped enrichment ───────────────────────────────────────────────────
+//
+// taskComputedCols above evaluates five correlated subqueries PER ROW. On a
+// single-row lookup that is the right shape and this file still uses it there.
+// On a list it is not: for a 836-row page it means 836 subtask counts, 836
+// artifact counts, 836 vcs_link counts and 836 name lookups, each a separate
+// index descent. Measured on that page it cost 12.2 ms and touched ~14,000
+// buffers, against 1.9 ms and 486 buffers for the same rows without enrichment.
+//
+// enrichTaskPage keeps the identical output columns but computes them ONCE for
+// the page: the inner query becomes a CTE, and the counts arrive as three
+// grouped aggregates restricted to that page's ids while the six name lookups
+// become plain equi-joins.
+//
+// Two properties the callers depend on:
+//
+//   - The CTE is referenced four times, so Postgres materialises it rather than
+//     inlining — which is exactly what makes "once per page" true. Do not add a
+//     NOT MATERIALIZED hint here.
+//   - A join does not preserve input order, so the ORDER BY must be repeated on
+//     the outside against the page alias. That is what outerOrder is for, and
+//     omitting it silently returns the right rows in the wrong order.
+const taskPageEnrichment = `
+	COALESCE(sub_c.cnt, 0) AS subtask_count,
+	COALESCE(art_c.cnt, 0) AS artifact_count,
+	COALESCE(vcs_c.cnt, 0) AS vcs_link_count,
+	COALESCE(ag_as.name, us_as.display_name) AS assignee_name,
+	COALESCE(ag_rv.name, us_rv.display_name) AS reviewer_name,
+	COALESCE(ag_cb.name, NULLIF(us_cb.display_name, ''), SPLIT_PART(us_cb.email, '@', 1)) AS created_by_name`
+
+// taskPageEnrichmentJoins resolves each enrichment column for the page.
+//
+// The name joins carry the type discriminator in the ON clause, which is what
+// reproduces the CASE in taskComputedCols: for an agent assignee the users side
+// cannot match, and vice versa, so the COALESCE above never has to choose
+// between two live values. A deleted agent matches nothing and yields NULL,
+// same as the subquery's `AND deleted_at IS NULL` did.
+const taskPageEnrichmentJoins = `
+	LEFT JOIN (
+		SELECT st.parent_task_id AS task_id, COUNT(*) AS cnt
+		  FROM tasks st
+		 WHERE st.deleted_at IS NULL
+		   AND st.parent_task_id IN (SELECT id FROM task_page)
+		 GROUP BY st.parent_task_id
+	) sub_c ON sub_c.task_id = p.id
+	LEFT JOIN (
+		SELECT a.task_id, COUNT(*) AS cnt
+		  FROM artifacts a
+		 WHERE a.task_id IN (SELECT id FROM task_page)
+		 GROUP BY a.task_id
+	) art_c ON art_c.task_id = p.id
+	LEFT JOIN (
+		SELECT v.task_id, COUNT(*) AS cnt
+		  FROM vcs_links v
+		 WHERE v.task_id IN (SELECT id FROM task_page)
+		 GROUP BY v.task_id
+	) vcs_c ON vcs_c.task_id = p.id
+	LEFT JOIN agents ag_as ON ag_as.id = p.assignee_id
+		AND p.assignee_type = 'agent' AND ag_as.deleted_at IS NULL
+	LEFT JOIN users us_as ON us_as.id = p.assignee_id
+		AND p.assignee_type = 'user'
+	LEFT JOIN agents ag_rv ON ag_rv.id = p.reviewer_id
+		AND p.reviewer_type = 'agent' AND ag_rv.deleted_at IS NULL
+	LEFT JOIN users us_rv ON us_rv.id = p.reviewer_id
+		AND p.reviewer_type = 'user'
+	LEFT JOIN agents ag_cb ON ag_cb.id = p.created_by
+		AND p.created_by_type = 'agent' AND ag_cb.deleted_at IS NULL
+	LEFT JOIN users us_cb ON us_cb.id = p.created_by
+		AND p.created_by_type = 'user'`
+
+// taskLegacyCoreColsT and taskLegacyCoreColsP are the column list the older
+// joined queries (Search, ListByStatusCategory, ListByUserActive) have always
+// returned, in the two qualifications the CTE rewrite needs.
+//
+// It is deliberately NOT taskBaseColsNoAlias: that list is longer, and widening
+// these three to it would change what the API returns. They currently omit
+// reviewer_id, human_gate, is_shipped, assigned_by, dod_checks,
+// completion_signal, status_changed_at and pre_review_* — which arrive at the
+// caller zero-valued rather than absent, so "is_shipped: false" from these
+// endpoints means "not selected", not "not shipped". That is a real defect and
+// a separate change; this one keeps the output byte-identical.
+const taskLegacyCoreColsT = `
+	t.id, t.project_id, t.status_id, t.title, t.description,
+	t.assignee_id, t.assignee_type, t.priority, t.parent_task_id, t.position,
+	t.due_date, t.estimated_hours, t.custom_fields, t.labels,
+	t.task_number, t.created_by, t.created_by_type, t.created_at, t.updated_at,
+	t.completed_at, t.deleted_at,
+	t.recurring_schedule_id, t.recurring_instance_number`
+
+const taskLegacyCoreColsP = `
+	p.id, p.project_id, p.status_id, p.title, p.description,
+	p.assignee_id, p.assignee_type, p.priority, p.parent_task_id, p.position,
+	p.due_date, p.estimated_hours, p.custom_fields, p.labels,
+	p.task_number, p.created_by, p.created_by_type, p.created_at, p.updated_at,
+	p.completed_at, p.deleted_at,
+	p.recurring_schedule_id, p.recurring_instance_number`
+
+// taskPageJoinKeysT are the columns the enrichment joins read but the legacy
+// column list above does not carry. They ride along inside the CTE and are not
+// emitted by the outer SELECT, so the response shape is unchanged.
+const taskPageJoinKeysT = `, t.reviewer_id, t.reviewer_type`
+
+// taskPageOutCols is taskBaseColsNoAlias qualified with the page alias. It has
+// to be spelled out rather than "p.*" so that a caller whose CTE carries extra
+// join keys (reviewer_id/reviewer_type on the older aliased queries) does not
+// start returning columns it never returned before.
+const taskPageOutCols = `
+	p.id, p.project_id, p.status_id, p.title, p.description,
+	p.assignee_id, p.assignee_type, p.priority, p.parent_task_id, p.position,
+	p.due_date, p.estimated_hours, p.custom_fields, p.labels,
+	p.task_number, p.created_by, p.created_by_type, p.created_at, p.updated_at,
+	p.completed_at, p.deleted_at,
+	p.recurring_schedule_id, p.recurring_instance_number,
+	p.checked_out_by, p.checkout_token, p.checkout_expires, p.checkout_acquired_at,
+	p.delegation_level, p.thread_id, p.human_gate, p.is_shipped, p.assigned_by, p.dod_checks,
+	p.completion_signal, p.status_changed_at, p.pre_review_assignee_id, p.pre_review_assignee_type,
+	p.reviewer_id, p.reviewer_type`
+
+// enrichTaskPage wraps pageQuery — which must select the base task columns and
+// already carry its own WHERE / ORDER BY / LIMIT — and appends the computed
+// fields, evaluated once for the whole page.
+//
+// outerOrder must repeat pageQuery's ordering against the "p" alias, e.g.
+// "ORDER BY p.updated_at DESC, p.id ASC". Pass "" only for a query whose result
+// order genuinely does not matter.
+func enrichTaskPage(pageQuery, outCols, outerOrder string) string {
+	return `WITH task_page AS (` + pageQuery + `)
+		SELECT ` + outCols + `,` + taskPageEnrichment + `
+		FROM task_page p` + taskPageEnrichmentJoins + `
+		` + outerOrder
+}
+
+// orderClauseWithPrefix is orderClause with every column qualified by prefix.
+// It exists for the outer ORDER BY of an enrichTaskPage wrapper, which sorts the
+// CTE alias rather than the base table.
+func orderClauseWithPrefix(pg pagination.Params, allowed allowedSortColumns, defaultCol, prefix string) string {
+	return strings.Replace(orderClause(pg, allowed, defaultCol), "ORDER BY ", "ORDER BY "+prefix+".", 1)
+}
+
 // taskRow is the DB row representation (includes task_number and deleted_at
 // that the domain model does not have, plus 4 computed enrichment fields).
 type taskRow struct {
@@ -450,14 +589,11 @@ func (r *TaskRepo) Search(ctx context.Context, workspaceID uuid.UUID, filter rep
 		return nil, err
 	}
 
-	dataQ := fmt.Sprintf(`SELECT t.id, t.project_id, t.status_id, t.title, t.description,
-		t.assignee_id, t.assignee_type, t.priority, t.parent_task_id, t.position,
-		t.due_date, t.estimated_hours, t.custom_fields, t.labels,
-		t.task_number, t.created_by, t.created_by_type, t.created_at, t.updated_at,
-		t.completed_at, t.deleted_at,
-		t.recurring_schedule_id, t.recurring_instance_number, `+taskComputedColsAliased+`
+	dataQ := enrichTaskPage(
+		fmt.Sprintf(`SELECT `+taskLegacyCoreColsT+taskPageJoinKeysT+`
 		FROM tasks t INNER JOIN projects p ON p.id = t.project_id
-		%s ORDER BY t.updated_at DESC, t.id ASC LIMIT $%d OFFSET $%d`, where, argIdx, argIdx+1)
+		%s ORDER BY t.updated_at DESC, t.id ASC LIMIT $%d OFFSET $%d`, where, argIdx, argIdx+1),
+		taskLegacyCoreColsP, "ORDER BY p.updated_at DESC, p.id ASC")
 	args = append(args, pg.Limit(), pg.Offset())
 	var rows []taskRow
 	if err := r.db.SelectContext(ctx, &rows, dataQ, args...); err != nil {
@@ -712,14 +848,18 @@ func (r *TaskRepo) List(ctx context.Context, projectID uuid.UUID, filter reposit
 		pg.SortBy = "updated_at"
 		pg.SortDir = "desc"
 	}
-	order := orderClause(pg, allowedSortColumns{
+	sortable := allowedSortColumns{
 		"title":      "title",
 		"priority":   "priority",
 		"position":   "position",
 		"created_at": "created_at",
 		"updated_at": "updated_at",
 		"due_date":   "due_date",
-	}, "updated_at") + ", tasks.id ASC"
+	}
+	order := orderClause(pg, sortable, "updated_at") + ", tasks.id ASC"
+	// The enrichment joins do not preserve the page's order, so the same sort is
+	// repeated on the outside against the CTE alias.
+	outerOrder := orderClauseWithPrefix(pg, sortable, "updated_at", "p") + ", p.id ASC"
 
 	// Count
 	countQ := fmt.Sprintf(`SELECT COUNT(*) FROM tasks %s`, where)
@@ -731,8 +871,11 @@ func (r *TaskRepo) List(ctx context.Context, projectID uuid.UUID, filter reposit
 	}
 	pkgmetrics.RecordDBQuery("task.list_count", time.Since(dbStart))
 
-	// Data — use enriched select to populate computed fields in a single query.
-	dataQ := fmt.Sprintf(`SELECT `+taskBaseColsNoAlias+`, `+taskComputedCols+` FROM tasks %s %s %s`, where, order, paginationClause(pg))
+	// Data — one query, with the computed fields evaluated once for the page
+	// rather than once per row.
+	dataQ := enrichTaskPage(
+		fmt.Sprintf(`SELECT `+taskBaseColsNoAlias+` FROM tasks %s %s %s`, where, order, paginationClause(pg)),
+		taskPageOutCols, outerOrder)
 	var rows []taskRow
 	dbStart = time.Now()
 	if err := r.db.SelectContext(ctx, &rows, dataQ, args...); err != nil {
@@ -799,13 +942,14 @@ func (r *TaskRepo) ListByAssignee(
 		pkgmetrics.RecordDBQuery("task.list_by_assignee_count", time.Since(dbStart))
 	}
 
-	q := `SELECT ` + taskBaseColsNoAlias + `, ` + taskComputedCols + `
+	page := `SELECT ` + taskBaseColsNoAlias + `
 		FROM tasks ` + where + `
 		ORDER BY created_at ASC`
 	if filter.Limit > 0 {
 		args = append(args, filter.Limit)
-		q += fmt.Sprintf(" LIMIT $%d", len(args))
+		page += fmt.Sprintf(" LIMIT $%d", len(args))
 	}
+	q := enrichTaskPage(page, taskPageOutCols, "ORDER BY p.created_at ASC")
 
 	var rows []taskRow
 	dbStart := time.Now()
@@ -823,10 +967,12 @@ func (r *TaskRepo) ListByAssignee(
 }
 
 func (r *TaskRepo) ListSubtasks(ctx context.Context, parentTaskID uuid.UUID) ([]domain.Task, error) {
-	q := `SELECT ` + taskBaseColsNoAlias + `, ` + taskComputedCols + `
+	q := enrichTaskPage(
+		`SELECT `+taskBaseColsNoAlias+`
 		FROM tasks
 		WHERE parent_task_id = $1 AND deleted_at IS NULL
-		ORDER BY position ASC, created_at ASC`
+		ORDER BY position ASC, created_at ASC`,
+		taskPageOutCols, "ORDER BY p.position ASC, p.created_at ASC")
 	var rows []taskRow
 	if err := r.db.SelectContext(ctx, &rows, q, parentTaskID); err != nil {
 		return nil, err
@@ -900,12 +1046,8 @@ func (r *TaskRepo) ListByStatusCategory(ctx context.Context, workspaceID uuid.UU
 		return nil, err
 	}
 
-	dataQ := `SELECT t.id, t.project_id, t.status_id, t.title, t.description,
-		t.assignee_id, t.assignee_type, t.priority, t.parent_task_id, t.position,
-		t.due_date, t.estimated_hours, t.custom_fields, t.labels,
-		t.task_number, t.created_by, t.created_by_type, t.created_at, t.updated_at,
-		t.completed_at, t.deleted_at,
-		t.recurring_schedule_id, t.recurring_instance_number, ` + taskComputedColsAliased + `
+	dataQ := enrichTaskPage(
+		`SELECT `+taskLegacyCoreColsT+taskPageJoinKeysT+`
 		FROM tasks t
 		INNER JOIN task_statuses ts ON ts.id = t.status_id
 		INNER JOIN projects p ON p.id = t.project_id
@@ -914,7 +1056,8 @@ func (r *TaskRepo) ListByStatusCategory(ctx context.Context, workspaceID uuid.UU
 		  AND t.deleted_at IS NULL
 		  AND p.deleted_at IS NULL
 		ORDER BY t.created_at DESC
-		LIMIT $3 OFFSET $4`
+		LIMIT $3 OFFSET $4`,
+		taskLegacyCoreColsP, "ORDER BY p.created_at DESC")
 	var rows []taskRow
 	if err := r.db.SelectContext(ctx, &rows, dataQ, workspaceID, category, pg.Limit(), pg.Offset()); err != nil {
 		return nil, err
@@ -1154,12 +1297,8 @@ func (r *TaskRepo) ListByUserActive(ctx context.Context, workspaceID, userID uui
 		return nil, err
 	}
 
-	const dataQ = `SELECT t.id, t.project_id, t.status_id, t.title, t.description,
-		t.assignee_id, t.assignee_type, t.priority, t.parent_task_id, t.position,
-		t.due_date, t.estimated_hours, t.custom_fields, t.labels,
-		t.task_number, t.created_by, t.created_by_type, t.created_at, t.updated_at,
-		t.completed_at, t.deleted_at,
-		t.recurring_schedule_id, t.recurring_instance_number, ` + taskComputedColsAliased + `
+	dataQ := enrichTaskPage(
+		`SELECT `+taskLegacyCoreColsT+taskPageJoinKeysT+`
 		FROM tasks t
 		INNER JOIN task_statuses ts ON ts.id = t.status_id
 		INNER JOIN projects p ON p.id = t.project_id
@@ -1170,7 +1309,8 @@ func (r *TaskRepo) ListByUserActive(ctx context.Context, workspaceID, userID uui
 		  AND t.deleted_at IS NULL
 		  AND p.deleted_at IS NULL
 		ORDER BY t.updated_at DESC, t.id ASC
-		LIMIT $3 OFFSET $4`
+		LIMIT $3 OFFSET $4`,
+		taskLegacyCoreColsP, "ORDER BY p.updated_at DESC, p.id ASC")
 	var rows []taskRow
 	if err := r.db.SelectContext(ctx, &rows, dataQ, workspaceID, userID, pg.Limit(), pg.Offset()); err != nil {
 		return nil, err
