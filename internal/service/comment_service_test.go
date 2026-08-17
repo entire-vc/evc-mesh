@@ -532,6 +532,131 @@ func TestCommentService_Create_FiresMention(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// TestCommentService_Create_CommentNotify* — regression coverage for
+// comment.created going to only the users a comment actually concerns
+// (mentioned / assignee / reviewer), not a workspace-wide broadcast.
+// ---------------------------------------------------------------------------
+
+// setupCommentServiceForCommentNotify wires a commentService with the deps needed
+// to exercise the comment.created targeted-dispatch path: user repo (for @mention
+// resolution) and the in-app NotificationService (distinct from MockAgentNotifyService,
+// which only covers the agent SSE/push path).
+func setupCommentServiceForCommentNotify() (svc *commentService, taskRepo *MockTaskRepository, userRepo *MockUserRepository, notifySvc *MockNotificationService, wsID, projID uuid.UUID) {
+	commentRepo := NewMockCommentRepository()
+	taskRepo = NewMockTaskRepository()
+	activityRepo := NewMockActivityLogRepository()
+	projectRepo := NewMockProjectRepository()
+	userRepo = NewMockUserRepository()
+	notifySvc = NewMockNotificationService()
+
+	wsID = uuid.New()
+	projID = uuid.New()
+	projectRepo.items[projID] = &domain.Project{ID: projID, WorkspaceID: wsID}
+
+	timeNow = func() time.Time { return frozenTime }
+
+	svc = NewCommentService(commentRepo, taskRepo, activityRepo,
+		WithCommentUserRepo(userRepo),
+		WithCommentProjectRepo(projectRepo),
+		WithCommentNotificationService(notifySvc),
+	).(*commentService)
+
+	return svc, taskRepo, userRepo, notifySvc, wsID, projID
+}
+
+// TestCommentService_Create_CommentNotifiesOnlyMentionedAssigneeReviewer is the
+// direct regression test for the bug: comment.created used to broadcast to every
+// workspace subscriber (no TargetUserID at all). It must now reach only the
+// @-mentioned user, the task assignee, and the task reviewer — and a workspace
+// "witness" subscriber with no connection to the task must get nothing.
+func TestCommentService_Create_CommentNotifiesOnlyMentionedAssigneeReviewer(t *testing.T) {
+	svc, taskRepo, userRepo, notifySvc, wsID, projID := setupCommentServiceForCommentNotify()
+
+	mentioned := &domain.User{ID: uuid.New(), Username: "mentioned-user"}
+	assignee := &domain.User{ID: uuid.New(), Username: "assignee-user"}
+	reviewer := &domain.User{ID: uuid.New(), Username: "reviewer-user"}
+	author := &domain.User{ID: uuid.New(), Username: "author-user"}
+	// witness: a subscriber with no relation to the task at all — must not be notified.
+	witness := &domain.User{ID: uuid.New(), Username: "witness-user"}
+	userRepo.AddUser(wsID, mentioned)
+	userRepo.AddUser(wsID, assignee)
+	userRepo.AddUser(wsID, reviewer)
+	userRepo.AddUser(wsID, author)
+	userRepo.AddUser(wsID, witness)
+
+	reviewerType := domain.AssigneeTypeUser
+	taskID := uuid.New()
+	taskRepo.items[taskID] = &domain.Task{
+		ID:           taskID,
+		ProjectID:    projID,
+		Title:        "Test task",
+		AssigneeID:   &assignee.ID,
+		AssigneeType: domain.AssigneeTypeUser,
+		ReviewerID:   &reviewer.ID,
+		ReviewerType: &reviewerType,
+	}
+
+	comment := &domain.Comment{
+		TaskID:     taskID,
+		AuthorID:   author.ID,
+		AuthorType: domain.ActorTypeUser,
+		Body:       "cc @mentioned-user please take a look",
+	}
+	require.NoError(t, svc.Create(context.Background(), comment))
+
+	calls := filterNotifyByEvent(notifySvc.Calls(), "comment.created")
+	require.Len(t, calls, 3)
+
+	var targets []uuid.UUID
+	for _, c := range calls {
+		require.NotNil(t, c.TargetUserID, "comment.created must always be targeted, never a workspace broadcast")
+		targets = append(targets, *c.TargetUserID)
+	}
+	assert.ElementsMatch(t, []uuid.UUID{mentioned.ID, assignee.ID, reviewer.ID}, targets)
+	assert.NotContains(t, targets, witness.ID)
+	assert.NotContains(t, targets, author.ID)
+}
+
+// TestCommentService_Create_CommentAuthorNotSelfNotified verifies the assignee
+// commenting on their own task does not generate a comment.created addressed to
+// themselves.
+func TestCommentService_Create_CommentAuthorNotSelfNotified(t *testing.T) {
+	svc, taskRepo, userRepo, notifySvc, wsID, projID := setupCommentServiceForCommentNotify()
+
+	assignee := &domain.User{ID: uuid.New(), Username: "self-assignee"}
+	userRepo.AddUser(wsID, assignee)
+
+	taskID := uuid.New()
+	taskRepo.items[taskID] = &domain.Task{
+		ID:           taskID,
+		ProjectID:    projID,
+		Title:        "Own task",
+		AssigneeID:   &assignee.ID,
+		AssigneeType: domain.AssigneeTypeUser,
+	}
+
+	comment := &domain.Comment{
+		TaskID:     taskID,
+		AuthorID:   assignee.ID,
+		AuthorType: domain.ActorTypeUser,
+		Body:       "progress update, no mentions here",
+	}
+	require.NoError(t, svc.Create(context.Background(), comment))
+
+	assert.Empty(t, filterNotifyByEvent(notifySvc.Calls(), "comment.created"))
+}
+
+func filterNotifyByEvent(calls []domain.NotificationEvent, eventType string) []domain.NotificationEvent {
+	var out []domain.NotificationEvent
+	for _, c := range calls {
+		if c.EventType == eventType {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// ---------------------------------------------------------------------------
 // TestCommentService_Create_NoNotifyOnTerminalTask (incident #56a6d5b2)
 // ---------------------------------------------------------------------------
 

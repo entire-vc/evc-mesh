@@ -761,9 +761,10 @@ func (s *commentService) Create(ctx context.Context, comment *domain.Comment) er
 		})
 	}
 
-	// Notify @-mentioned agents.
+	// Notify @-mentioned agents/users.
+	var mentionedUserIDs []uuid.UUID
 	if wsID != uuid.Nil {
-		s.notifyMentions(ctx, comment, task, "", wsID)
+		mentionedUserIDs = s.notifyMentions(ctx, comment, task, "", wsID)
 		// Server-side enforcement: "❓ Blocking @user" → auto-move task to triage + arm gate.
 		s.enforceBlockingTriage(ctx, comment, task, wsID)
 		// Symmetric release: user comment after a prior blocking marker → clear human_gate.
@@ -774,30 +775,54 @@ func (s *commentService) Create(ctx context.Context, comment *domain.Comment) er
 		s.enforceTriageExit(ctx, comment, task, wsID)
 	}
 
-	// Dispatch in-app notification to subscribed workspace users for comment.created.
-	if s.notifySvc != nil && s.projectRepo != nil {
-		if proj, err := s.projectRepo.GetByID(ctx, task.ProjectID); err == nil && proj != nil {
+	// Dispatch comment.created only to users the comment actually concerns:
+	// @-mentioned, the task's assignee, and its reviewer. A workspace-wide
+	// broadcast (the old behavior) meant every subscriber — including a
+	// witness with no connection to this task — received the comment body on
+	// every channel (in-app/push/email/telegram), which turns a personal
+	// Telegram channel into a firehose of unrelated tasks.
+	if s.notifySvc != nil && wsID != uuid.Nil {
+		targets := make(map[uuid.UUID]bool, len(mentionedUserIDs)+2)
+		for _, id := range mentionedUserIDs {
+			targets[id] = true
+		}
+		if task.AssigneeType == domain.AssigneeTypeUser && task.AssigneeID != nil {
+			targets[*task.AssigneeID] = true
+		}
+		if task.ReviewerType != nil && *task.ReviewerType == domain.AssigneeTypeUser && task.ReviewerID != nil {
+			targets[*task.ReviewerID] = true
+		}
+		// The comment's own author already knows what they just wrote.
+		if comment.AuthorType == domain.ActorTypeUser {
+			delete(targets, comment.AuthorID)
+		}
+
+		if len(targets) > 0 {
 			taskIDCopy := task.ID
 			projIDCopy := task.ProjectID
 			commentBody := comment.Body
 			if len(commentBody) > 200 {
 				commentBody = commentBody[:200]
 			}
-			s.notifySvc.Notify(ctx, domain.NotificationEvent{
-				WorkspaceID: proj.WorkspaceID,
-				TaskID:      &taskIDCopy,
-				ProjectID:   &projIDCopy,
-				EventType:   "comment.created",
-				Title:       "New comment on: " + task.Title,
-				Body:        commentBody,
-				Labels:      []string(task.Labels),
-				Metadata: map[string]any{
-					"task_id":    task.ID,
-					"task_title": task.Title,
-					"project_id": task.ProjectID,
-					"comment_id": comment.ID,
-				},
-			})
+			for userID := range targets {
+				target := userID
+				s.notifySvc.Notify(ctx, domain.NotificationEvent{
+					WorkspaceID:  wsID,
+					TaskID:       &taskIDCopy,
+					ProjectID:    &projIDCopy,
+					EventType:    "comment.created",
+					Title:        "New comment on: " + task.Title,
+					Body:         commentBody,
+					TargetUserID: &target,
+					Labels:       []string(task.Labels),
+					Metadata: map[string]any{
+						"task_id":    task.ID,
+						"task_title": task.Title,
+						"project_id": task.ProjectID,
+						"comment_id": comment.ID,
+					},
+				})
+			}
 		}
 	}
 
@@ -924,7 +949,9 @@ func (s *commentService) buildTaskSnap(ctx context.Context, task *domain.Task) m
 }
 
 // notifyMentions resolves @-mentioned slugs to agents/users, persists comment_mentions rows,
-// sends task.mentioned SSE to agents, and pushes WS badge-update events to users.
+// sends task.mentioned SSE to agents, and pushes WS badge-update events to users. It returns
+// the resolved user IDs (not agents) so the caller can fold them into comment.created's
+// recipient list without re-parsing/re-resolving the same slugs.
 // When oldBody is non-empty, only slugs newly added (not in oldBody) are processed.
 func (s *commentService) notifyMentions(
 	ctx context.Context,
@@ -932,10 +959,10 @@ func (s *commentService) notifyMentions(
 	task *domain.Task,
 	oldBody string,
 	workspaceID uuid.UUID,
-) {
+) []uuid.UUID {
 	newSlugs := extractMentionSlugs(comment.Body)
 	if len(newSlugs) == 0 {
-		return
+		return nil
 	}
 	if oldBody != "" {
 		oldSet := make(map[string]bool)
@@ -950,7 +977,7 @@ func (s *commentService) notifyMentions(
 		}
 		newSlugs = diff
 		if len(newSlugs) == 0 {
-			return
+			return nil
 		}
 	}
 
@@ -970,6 +997,7 @@ func (s *commentService) notifyMentions(
 
 	seenID := make(map[uuid.UUID]bool)
 	var dbRows []domain.CommentMention
+	var mentionedUserIDs []uuid.UUID
 
 	for _, slug := range newSlugs {
 		// Try agent lookup first.
@@ -1014,6 +1042,7 @@ func (s *commentService) notifyMentions(
 			if err == nil && user != nil && !seenID[user.ID] &&
 				(actorType != domain.ActorTypeUser || user.ID != actorID) {
 				seenID[user.ID] = true
+				mentionedUserIDs = append(mentionedUserIDs, user.ID)
 				dbRows = append(dbRows, domain.CommentMention{
 					CommentID:     comment.ID,
 					MentionedID:   user.ID,
@@ -1037,6 +1066,8 @@ func (s *commentService) notifyMentions(
 	if s.mentionRepo != nil && len(dbRows) > 0 {
 		_ = s.mentionRepo.InsertBatch(ctx, dbRows)
 	}
+
+	return mentionedUserIDs
 }
 
 // enforceBlockingTriage is the server-side defense-in-depth for CLAUDE-workflow.md §0b:
