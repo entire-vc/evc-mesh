@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"sync"
 	"time"
@@ -59,9 +61,9 @@ type cachedAgentAuth struct {
 	AgentService
 
 	mu sync.RWMutex
-	// entries is keyed by SHA-256 of (workspaceSlug, apiKey) — never by the raw
-	// key, so a heap dump or a map iteration in a debugger does not hand over
-	// live credentials.
+	// entries is keyed by HMAC-SHA256 of (workspaceSlug, apiKey) — never by the
+	// raw key, so a heap dump or a map iteration in a debugger does not hand
+	// over live credentials.
 	entries map[[sha256.Size]byte]cachedAuthEntry
 	// byAgent maps agent ID -> its cache keys, so rotation and deletion can
 	// evict without knowing the raw key. An agent normally has exactly one
@@ -91,6 +93,34 @@ func NewCachedAgentAuth(inner AgentService, ttl time.Duration) AgentService {
 	}
 }
 
+// processAuthCacheSalt is generated once, at process start, and used as the
+// HMAC key for agentAuthCacheKey below.
+//
+// A bare SHA-256 digest of (workspaceSlug, apiKey) is a stable, portable
+// identifier for that key: the same input reproduces the same digest in any
+// process, in a core dump, or years later. HMAC with a random per-process
+// salt removes that property — the digest is only meaningful inside the
+// process that generated it, and a new process (a redeploy, a restart)
+// invalidates every previously-computed digest. This is the map key for an
+// in-process cache only (never stored, transmitted, or compared against
+// untrusted input), so the digest was never a password hash in the sense
+// CodeQL's go/weak-sensitive-data-hashing rule targets; HMAC is applied here
+// anyway because it removes the finding for real instead of asserting why it
+// doesn't apply.
+var processAuthCacheSalt = mustRandomSalt(32)
+
+func mustRandomSalt(n int) []byte {
+	salt := make([]byte, n)
+	if _, err := rand.Read(salt); err != nil {
+		// crypto/rand failing means the process has no working source of
+		// randomness at all — nothing downstream (session tokens, API keys)
+		// would be safe either, so fail loudly at startup rather than run
+		// with a predictable salt.
+		panic("agent_auth_cache: crypto/rand unavailable: " + err.Error())
+	}
+	return salt
+}
+
 // agentAuthCacheKey derives the map key for a (workspaceSlug, apiKey) pair.
 //
 // The slug is part of the digest, not just a prefix of the key: Authenticate
@@ -98,7 +128,7 @@ func NewCachedAgentAuth(inner AgentService, ttl time.Duration) AgentService {
 // the API key alone would let a hit computed for one slug answer a request made
 // under another.
 func agentAuthCacheKey(workspaceSlug, apiKey string) [sha256.Size]byte {
-	h := sha256.New()
+	h := hmac.New(sha256.New, processAuthCacheSalt)
 	h.Write([]byte(workspaceSlug))
 	// NUL separator: without it ("ab","c") and ("a","bc") hash identically.
 	h.Write([]byte{0})
