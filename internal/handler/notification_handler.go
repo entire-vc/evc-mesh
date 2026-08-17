@@ -357,6 +357,13 @@ const telegramBindTokenTTL = 15 * time.Minute
 // (re)issued only when enabling with no existing chat_id, so a user who is
 // already bound and just adjusts their per-event toggles does not get a
 // fresh, unnecessary link on every save.
+//
+// Disabling the channel (isEnabled=false) is how a user unbinds: the prior
+// chat_id is deliberately NOT carried forward in that case, so it comes back
+// empty. Without this, chat_id survived every save regardless of the toggle
+// — there was no way to stop delivery to a bound account or switch which
+// Telegram account is bound, since a fresh bind token is only ever issued
+// when chat_id is already empty (see below).
 func (h *NotificationHandler) buildTelegramPreferenceConfig(ctx context.Context, userID, wsID uuid.UUID, isEnabled bool, username string) (json.RawMessage, *apierror.Error) {
 	username = strings.TrimPrefix(username, "@")
 	if isEnabled && username == "" {
@@ -365,14 +372,16 @@ func (h *NotificationHandler) buildTelegramPreferenceConfig(ctx context.Context,
 
 	cfg := service.TelegramPreferenceConfig{Username: username}
 
-	if existing, err := h.svc.GetPreferences(ctx, userID); err == nil {
-		for i := range existing {
-			if existing[i].WorkspaceID == wsID && existing[i].Channel == "telegram" && len(existing[i].Config) > 0 {
-				var prev service.TelegramPreferenceConfig
-				if json.Unmarshal(existing[i].Config, &prev) == nil {
-					cfg.ChatID = prev.ChatID
+	if isEnabled {
+		if existing, err := h.svc.GetPreferences(ctx, userID); err == nil {
+			for i := range existing {
+				if existing[i].WorkspaceID == wsID && existing[i].Channel == "telegram" && len(existing[i].Config) > 0 {
+					var prev service.TelegramPreferenceConfig
+					if json.Unmarshal(existing[i].Config, &prev) == nil {
+						cfg.ChatID = prev.ChatID
+					}
+					break
 				}
-				break
 			}
 		}
 	}
