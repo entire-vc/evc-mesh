@@ -537,31 +537,53 @@ func TestCommentService_Create_FiresMention(t *testing.T) {
 // (mentioned / assignee / reviewer), not a workspace-wide broadcast.
 // ---------------------------------------------------------------------------
 
+// commentNotifyEnv is what setupCommentServiceForCommentNotify hands back.
+//
+// A struct rather than a six-value return: gocritic's tooManyResultsChecker caps
+// a function at five results, and the positional form was also the kind that
+// silently swaps two same-typed values (wsID/projID are both uuid.UUID) when a
+// caller reorders them.
+type commentNotifyEnv struct {
+	svc       *commentService
+	taskRepo  *MockTaskRepository
+	userRepo  *MockUserRepository
+	notifySvc *MockNotificationService
+	wsID      uuid.UUID
+	projID    uuid.UUID
+}
+
 // setupCommentServiceForCommentNotify wires a commentService with the deps needed
 // to exercise the comment.created targeted-dispatch path: user repo (for @mention
 // resolution) and the in-app NotificationService (distinct from MockAgentNotifyService,
 // which only covers the agent SSE/push path).
-func setupCommentServiceForCommentNotify() (svc *commentService, taskRepo *MockTaskRepository, userRepo *MockUserRepository, notifySvc *MockNotificationService, wsID, projID uuid.UUID) {
+func setupCommentServiceForCommentNotify() commentNotifyEnv {
 	commentRepo := NewMockCommentRepository()
-	taskRepo = NewMockTaskRepository()
+	taskRepo := NewMockTaskRepository()
 	activityRepo := NewMockActivityLogRepository()
 	projectRepo := NewMockProjectRepository()
-	userRepo = NewMockUserRepository()
-	notifySvc = NewMockNotificationService()
+	userRepo := NewMockUserRepository()
+	notifySvc := NewMockNotificationService()
 
-	wsID = uuid.New()
-	projID = uuid.New()
+	wsID := uuid.New()
+	projID := uuid.New()
 	projectRepo.items[projID] = &domain.Project{ID: projID, WorkspaceID: wsID}
 
 	timeNow = func() time.Time { return frozenTime }
 
-	svc = NewCommentService(commentRepo, taskRepo, activityRepo,
+	svc := NewCommentService(commentRepo, taskRepo, activityRepo,
 		WithCommentUserRepo(userRepo),
 		WithCommentProjectRepo(projectRepo),
 		WithCommentNotificationService(notifySvc),
 	).(*commentService)
 
-	return svc, taskRepo, userRepo, notifySvc, wsID, projID
+	return commentNotifyEnv{
+		svc:       svc,
+		taskRepo:  taskRepo,
+		userRepo:  userRepo,
+		notifySvc: notifySvc,
+		wsID:      wsID,
+		projID:    projID,
+	}
 }
 
 // TestCommentService_Create_CommentNotifiesOnlyMentionedAssigneeReviewer is the
@@ -570,7 +592,9 @@ func setupCommentServiceForCommentNotify() (svc *commentService, taskRepo *MockT
 // @-mentioned user, the task assignee, and the task reviewer — and a workspace
 // "witness" subscriber with no connection to the task must get nothing.
 func TestCommentService_Create_CommentNotifiesOnlyMentionedAssigneeReviewer(t *testing.T) {
-	svc, taskRepo, userRepo, notifySvc, wsID, projID := setupCommentServiceForCommentNotify()
+	fx := setupCommentServiceForCommentNotify()
+	svc, taskRepo, userRepo, notifySvc, wsID, projID :=
+		fx.svc, fx.taskRepo, fx.userRepo, fx.notifySvc, fx.wsID, fx.projID
 
 	mentioned := &domain.User{ID: uuid.New(), Username: "mentioned-user"}
 	assignee := &domain.User{ID: uuid.New(), Username: "assignee-user"}
@@ -621,7 +645,9 @@ func TestCommentService_Create_CommentNotifiesOnlyMentionedAssigneeReviewer(t *t
 // commenting on their own task does not generate a comment.created addressed to
 // themselves.
 func TestCommentService_Create_CommentAuthorNotSelfNotified(t *testing.T) {
-	svc, taskRepo, userRepo, notifySvc, wsID, projID := setupCommentServiceForCommentNotify()
+	fx := setupCommentServiceForCommentNotify()
+	svc, taskRepo, userRepo, notifySvc, wsID, projID :=
+		fx.svc, fx.taskRepo, fx.userRepo, fx.notifySvc, fx.wsID, fx.projID
 
 	assignee := &domain.User{ID: uuid.New(), Username: "self-assignee"}
 	userRepo.AddUser(wsID, assignee)
