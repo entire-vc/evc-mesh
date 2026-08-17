@@ -181,15 +181,15 @@ func (h *NotificationHandler) UpdatePreferences(c echo.Context) error {
 	// address saved under the wrong channel should still fail loudly instead of
 	// waiting to surface as a silently undelivered email later.
 	if addr, ok := req.Config["email"]; ok && addr != "" {
-		if _, err := mail.ParseAddress(addr); err != nil {
+		if _, addrErr := mail.ParseAddress(addr); addrErr != nil {
 			return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid email address: "+addr))
 		}
 	}
 
 	var cfgJSON json.RawMessage
 	if len(req.Config) > 0 {
-		encoded, err := json.Marshal(req.Config)
-		if err != nil {
+		encoded, marshalErr := json.Marshal(req.Config)
+		if marshalErr != nil {
 			return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid config"))
 		}
 		cfgJSON = encoded

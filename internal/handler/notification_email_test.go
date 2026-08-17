@@ -116,7 +116,7 @@ func TestGetEmailAvailability_ReflectsService(t *testing.T) {
 		h := NewNotificationHandler(svc)
 
 		e := echo.New()
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/notifications/email-availability", nil)
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/notifications/email-availability", http.NoBody)
 		rec := httptest.NewRecorder()
 		c := e.NewContext(req, rec)
 
