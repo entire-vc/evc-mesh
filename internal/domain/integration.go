@@ -11,10 +11,11 @@ import (
 type IntegrationProvider string
 
 const (
-	IntegrationProviderSlack  IntegrationProvider = "slack"
-	IntegrationProviderGitHub IntegrationProvider = "github"
-	IntegrationProviderSpark  IntegrationProvider = "spark"
-	IntegrationProviderMCP    IntegrationProvider = "mcp"
+	IntegrationProviderSlack    IntegrationProvider = "slack"
+	IntegrationProviderGitHub   IntegrationProvider = "github"
+	IntegrationProviderSpark    IntegrationProvider = "spark"
+	IntegrationProviderMCP      IntegrationProvider = "mcp"
+	IntegrationProviderTelegram IntegrationProvider = "telegram"
 )
 
 // IntegrationConfig stores provider-specific configuration for a workspace integration.

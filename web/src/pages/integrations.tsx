@@ -5,17 +5,25 @@ import {
   Circle,
   GitBranch,
   MessageSquare,
+  Send,
   Server,
   Sparkles,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { useWorkspaceStore } from "@/stores/workspace";
+import { useMemberStore } from "@/stores/member";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+import { toast } from "@/components/ui/toast";
 import { cn } from "@/lib/cn";
-import type { IntegrationConfig, IntegrationProvider } from "@/types";
+import type {
+  IntegrationConfig,
+  IntegrationProvider,
+  TelegramIntegrationConfig,
+} from "@/types";
 
 // ---------------------------------------------------------------------------
 // Provider metadata
@@ -59,6 +67,13 @@ const PROVIDERS: ProviderMeta[] = [
       "Connect AI agents (Claude Code, Cline, Aider) via Model Context Protocol. Supports stdio and SSE transports.",
     icon: Server,
   },
+  {
+    id: "telegram",
+    name: "Telegram",
+    description:
+      "Deliver notifications and activity to a Telegram bot. Each member connects their own account from Notification Settings.",
+    icon: Send,
+  },
 ];
 
 // ---------------------------------------------------------------------------
@@ -68,10 +83,17 @@ const PROVIDERS: ProviderMeta[] = [
 export function IntegrationsPage() {
   useParams();
   const { currentWorkspace } = useWorkspaceStore();
+  const { myRole, fetchMyRole } = useMemberStore();
 
   const [configs, setConfigs] = useState<IntegrationConfig[]>([]);
   const [loading, setLoading] = useState(true);
   const [toggling, setToggling] = useState<string | null>(null);
+
+  const [telegramTokenInput, setTelegramTokenInput] = useState("");
+  const [telegramEditingToken, setTelegramEditingToken] = useState(false);
+  const [telegramSaving, setTelegramSaving] = useState(false);
+
+  const canManageTelegram = myRole === "owner" || myRole === "admin";
 
   const fetchConfigs = useCallback(async () => {
     if (!currentWorkspace) return;
@@ -91,8 +113,50 @@ export function IntegrationsPage() {
     void fetchConfigs();
   }, [fetchConfigs]);
 
+  useEffect(() => {
+    if (currentWorkspace) void fetchMyRole(currentWorkspace.id);
+  }, [currentWorkspace, fetchMyRole]);
+
   const getConfig = (provider: IntegrationProvider) =>
     configs.find((c) => c.provider === provider);
+
+  const handleSaveTelegramToken = async () => {
+    if (!currentWorkspace) return;
+    const token = telegramTokenInput.trim();
+    if (!token) {
+      toast.error("Enter a bot token");
+      return;
+    }
+
+    setTelegramSaving(true);
+    try {
+      const existing = getConfig("telegram");
+      const updated = existing
+        ? await api<IntegrationConfig>(`/api/v1/integrations/${existing.id}`, {
+            method: "PATCH",
+            body: { config: { bot_token: token }, is_active: true },
+          })
+        : await api<IntegrationConfig>(
+            `/api/v1/workspaces/${currentWorkspace.id}/integrations`,
+            {
+              method: "POST",
+              body: { provider: "telegram", config: { bot_token: token }, is_active: true },
+            },
+          );
+
+      setConfigs((prev) =>
+        existing ? prev.map((c) => (c.id === updated.id ? updated : c)) : [...prev, updated],
+      );
+      setTelegramTokenInput("");
+      setTelegramEditingToken(false);
+      const botUsername = (updated.config as TelegramIntegrationConfig).bot_username;
+      toast.success(botUsername ? `Connected as @${botUsername}` : "Telegram bot connected");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to save the Telegram bot token");
+    } finally {
+      setTelegramSaving(false);
+    }
+  };
 
   const handleToggle = async (provider: IntegrationProvider, enabled: boolean) => {
     if (!currentWorkspace) return;
@@ -154,11 +218,18 @@ export function IntegrationsPage() {
           </div>
         ) : (
           <div className="space-y-4 max-w-2xl">
-            {PROVIDERS.map((provider) => {
+            {PROVIDERS.filter(
+              (provider) => provider.id !== "telegram" || canManageTelegram,
+            ).map((provider) => {
               const cfg = getConfig(provider.id);
               const isActive = cfg?.is_active ?? false;
               const isLoading = toggling === provider.id;
               const Icon = provider.icon;
+              const telegramCfg =
+                provider.id === "telegram"
+                  ? ((cfg?.config as TelegramIntegrationConfig | undefined) ?? {})
+                  : undefined;
+              const telegramTokenSet = telegramCfg?.bot_token_set === true;
 
               return (
                 <Card key={provider.id}>
@@ -196,32 +267,37 @@ export function IntegrationsPage() {
                             Remove
                           </button>
                         )}
-                        <Button
-                          size="sm"
-                          variant={isActive ? "default" : "outline"}
-                          disabled={isLoading || provider.comingSoon}
-                          onClick={() =>
-                            void handleToggle(provider.id, !isActive)
-                          }
-                          className={cn(
-                            isActive &&
-                              "bg-teal-600 hover:bg-teal-700 border-teal-600",
-                          )}
-                        >
-                          {isLoading ? (
-                            "..."
-                          ) : isActive ? (
-                            <span className="flex items-center gap-1.5">
-                              <CheckCircle2 className="h-3.5 w-3.5" />
-                              Enabled
-                            </span>
-                          ) : (
-                            <span className="flex items-center gap-1.5">
-                              <Circle className="h-3.5 w-3.5" />
-                              Enable
-                            </span>
-                          )}
-                        </Button>
+                        {/* Telegram has nothing to toggle until a bot token has
+                            been saved — the button here would just enable an
+                            integration that can never poll anything. */}
+                        {provider.id !== "telegram" || telegramTokenSet ? (
+                          <Button
+                            size="sm"
+                            variant={isActive ? "default" : "outline"}
+                            disabled={isLoading || provider.comingSoon}
+                            onClick={() =>
+                              void handleToggle(provider.id, !isActive)
+                            }
+                            className={cn(
+                              isActive &&
+                                "bg-teal-600 hover:bg-teal-700 border-teal-600",
+                            )}
+                          >
+                            {isLoading ? (
+                              "..."
+                            ) : isActive ? (
+                              <span className="flex items-center gap-1.5">
+                                <CheckCircle2 className="h-3.5 w-3.5" />
+                                Enabled
+                              </span>
+                            ) : (
+                              <span className="flex items-center gap-1.5">
+                                <Circle className="h-3.5 w-3.5" />
+                                Enable
+                              </span>
+                            )}
+                          </Button>
+                        ) : null}
                       </div>
                     </div>
                   </CardHeader>
@@ -317,6 +393,67 @@ export function IntegrationsPage() {
                           MCP provides 34 tools: task management, comments, events, artifacts, and more.
                         </p>
                       </div>
+                    </CardContent>
+                  )}
+
+                  {provider.id === "telegram" && (
+                    <CardContent className="pt-0">
+                      {telegramTokenSet && !telegramEditingToken ? (
+                        <div className="flex items-center justify-between rounded-lg border border-dashed border-border bg-muted/30 p-3">
+                          <p className="text-xs text-muted-foreground">
+                            Connected as{" "}
+                            <span className="font-medium text-foreground">
+                              @{telegramCfg?.bot_username}
+                            </span>
+                            . Members connect from their own Notification Settings.
+                          </p>
+                          <button
+                            onClick={() => setTelegramEditingToken(true)}
+                            className="shrink-0 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                          >
+                            Change token
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="space-y-2">
+                          <p className="text-xs text-muted-foreground">
+                            Create a bot with{" "}
+                            <span className="font-medium">@BotFather</span> on
+                            Telegram and paste its token here. The token is
+                            encrypted at rest and never shown again.
+                          </p>
+                          <div className="flex gap-2">
+                            <Input
+                              type="password"
+                              placeholder="123456789:AAExampleBotTokenHere"
+                              value={telegramTokenInput}
+                              onChange={(e) => setTelegramTokenInput(e.target.value)}
+                              disabled={telegramSaving}
+                              className="font-mono text-xs"
+                            />
+                            <Button
+                              size="sm"
+                              onClick={() => void handleSaveTelegramToken()}
+                              disabled={telegramSaving || !telegramTokenInput.trim()}
+                            >
+                              {telegramSaving ? "Connecting…" : "Connect"}
+                            </Button>
+                            {telegramTokenSet && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                disabled={telegramSaving}
+                                onClick={() => {
+                                  setTelegramEditingToken(false);
+                                  setTelegramTokenInput("");
+                                }}
+                              >
+                                Cancel
+                              </Button>
+                            )}
+                          </div>
+                        </div>
+                      )}
                     </CardContent>
                   )}
                 </Card>

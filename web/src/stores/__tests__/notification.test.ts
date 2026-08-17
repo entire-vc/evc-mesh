@@ -10,7 +10,13 @@ const mockedApi = api as unknown as ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   mockedApi.mockReset();
-  useNotificationStore.setState({ notifications: [], unreadCount: 0, preferences: [], emailAvailable: false });
+  useNotificationStore.setState({
+    notifications: [],
+    unreadCount: 0,
+    preferences: [],
+    emailAvailable: false,
+    telegramBotInfo: null,
+  });
 });
 afterEach(() => vi.clearAllMocks());
 
@@ -85,6 +91,44 @@ describe("notification store body encoding", () => {
       expect.objectContaining({ body: req }),
     );
   });
+
+  it("updatePreferences passes config through for the telegram channel", async () => {
+    const req = {
+      workspace_id: "ws1",
+      channel: "telegram",
+      events: ["comment.created"],
+      is_enabled: true,
+      config: { telegram_username: "alice" },
+    };
+    mockedApi.mockResolvedValue({ id: "p1", ...req });
+
+    await useNotificationStore.getState().updatePreferences(req);
+
+    expect(mockedApi).toHaveBeenCalledWith(
+      "/api/v1/notifications/preferences",
+      expect.objectContaining({ body: req }),
+    );
+  });
+
+  it("updatePreferences returns the server's response for the caller to read a fresh bind token/chat_id from", async () => {
+    const req = {
+      workspace_id: "ws1",
+      channel: "telegram",
+      events: ["comment.created"],
+      is_enabled: true,
+      config: { telegram_username: "alice" },
+    };
+    const serverResponse = {
+      id: "p1",
+      ...req,
+      config: { telegram_username: "alice", telegram_bind_token: "abc123" },
+    };
+    mockedApi.mockResolvedValue(serverResponse);
+
+    const result = await useNotificationStore.getState().updatePreferences(req);
+
+    expect(result).toEqual(serverResponse);
+  });
 });
 
 describe("fetchEmailAvailability", () => {
@@ -103,5 +147,35 @@ describe("fetchEmailAvailability", () => {
     await useNotificationStore.getState().fetchEmailAvailability();
 
     expect(useNotificationStore.getState().emailAvailable).toBe(false);
+  });
+});
+
+describe("fetchTelegramBotInfo", () => {
+  it("stores the server's bot info, scoped by workspace_id in the query string", async () => {
+    mockedApi.mockResolvedValue({ available: true, bot_username: "mesh_bot" });
+
+    await useNotificationStore.getState().fetchTelegramBotInfo("ws1");
+
+    expect(mockedApi).toHaveBeenCalledWith(
+      "/api/v1/notifications/telegram-bot-info?workspace_id=ws1",
+    );
+    expect(useNotificationStore.getState().telegramBotInfo).toEqual({
+      available: true,
+      bot_username: "mesh_bot",
+    });
+  });
+
+  it("fails closed on a request error", async () => {
+    useNotificationStore.setState({
+      telegramBotInfo: { available: true, bot_username: "mesh_bot" },
+    });
+    mockedApi.mockRejectedValue(new Error("network error"));
+
+    await useNotificationStore.getState().fetchTelegramBotInfo("ws1");
+
+    expect(useNotificationStore.getState().telegramBotInfo).toEqual({
+      available: false,
+      bot_username: "",
+    });
   });
 });

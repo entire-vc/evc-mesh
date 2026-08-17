@@ -38,19 +38,25 @@ import (
 
 type mockNotificationService struct {
 	upsertCalled bool
+	upsertedPref *domain.NotificationPreference
 	deletedPref  uuid.UUID
 	deletedUser  uuid.UUID
 	deleteErr    error
+
+	// existingPrefs is what GetPreferences returns — used by the Telegram
+	// bind-token tests to simulate "already bound" (a row with chat_id set).
+	existingPrefs []domain.NotificationPreference
 }
 
 func (m *mockNotificationService) Notify(context.Context, domain.NotificationEvent) {}
 
 func (m *mockNotificationService) GetPreferences(context.Context, uuid.UUID) ([]domain.NotificationPreference, error) {
-	return nil, nil
+	return m.existingPrefs, nil
 }
 
 func (m *mockNotificationService) UpsertPreferences(_ context.Context, pref *domain.NotificationPreference) (*domain.NotificationPreference, error) {
 	m.upsertCalled = true
+	m.upsertedPref = pref
 	return pref, nil
 }
 
@@ -68,6 +74,9 @@ func (m *mockNotificationService) MarkRead(context.Context, uuid.UUID, []uuid.UU
 }
 func (m *mockNotificationService) MarkAllRead(context.Context, uuid.UUID) error { return nil }
 func (m *mockNotificationService) EmailAvailable() bool                         { return false }
+func (m *mockNotificationService) TelegramBotInfo(context.Context, uuid.UUID) (string, bool) {
+	return "", false
+}
 
 // --- harness ----------------------------------------------------------------
 
@@ -77,7 +86,7 @@ func putPreferences(t *testing.T, db *sqlx.DB, authType string, actorID uuid.UUI
 	t.Helper()
 
 	svc := &mockNotificationService{}
-	h := NewNotificationHandler(svc)
+	h := NewNotificationHandler(svc, nil)
 
 	e := echo.New()
 	e.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
@@ -186,7 +195,7 @@ func deletePreference(t *testing.T, svc *mockNotificationService, userID uuid.UU
 	t.Helper()
 
 	e := echo.New()
-	h := NewNotificationHandler(svc)
+	h := NewNotificationHandler(svc, nil)
 	e.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
 			if userID != uuid.Nil {

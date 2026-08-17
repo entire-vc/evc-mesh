@@ -4,6 +4,7 @@ import type {
   Notification,
   NotificationListResponse,
   NotificationPreference,
+  TelegramBotInfo,
   UpdateNotificationPreferencesRequest,
 } from "@/types";
 
@@ -14,6 +15,7 @@ interface NotificationState {
   unreadCount: number;
   preferences: NotificationPreference[];
   emailAvailable: boolean;
+  telegramBotInfo: TelegramBotInfo | null;
   isLoading: boolean;
   pollingHandle: ReturnType<typeof setInterval> | null;
 
@@ -22,9 +24,10 @@ interface NotificationState {
   markAllAsRead: () => Promise<void>;
   fetchPreferences: () => Promise<void>;
   fetchEmailAvailability: () => Promise<void>;
+  fetchTelegramBotInfo: (workspaceId: string) => Promise<void>;
   updatePreferences: (
     req: UpdateNotificationPreferencesRequest,
-  ) => Promise<void>;
+  ) => Promise<NotificationPreference>;
   startPolling: () => void;
   stopPolling: () => void;
 }
@@ -34,6 +37,7 @@ export const useNotificationStore = create<NotificationState>((set, get) => ({
   unreadCount: 0,
   preferences: [],
   emailAvailable: false,
+  telegramBotInfo: null,
   isLoading: false,
   pollingHandle: null,
 
@@ -120,6 +124,19 @@ export const useNotificationStore = create<NotificationState>((set, get) => ({
     }
   },
 
+  fetchTelegramBotInfo: async (workspaceId: string) => {
+    try {
+      const data = await api<TelegramBotInfo>(
+        `/api/v1/notifications/telegram-bot-info?workspace_id=${workspaceId}`,
+      );
+      set({ telegramBotInfo: data });
+    } catch {
+      // Fail closed, same reasoning as fetchEmailAvailability: an instance we
+      // couldn't ask is treated as having no bot configured.
+      set({ telegramBotInfo: { available: false, bot_username: "" } });
+    }
+  },
+
   updatePreferences: async (req: UpdateNotificationPreferencesRequest) => {
     // Let failures propagate — the settings page shows them to the user.
     // Swallowing here previously masked every save failure as a silent success.
@@ -141,6 +158,7 @@ export const useNotificationStore = create<NotificationState>((set, get) => ({
       }
       return { preferences: [...state.preferences, updated] };
     });
+    return updated;
   },
 
   startPolling: () => {

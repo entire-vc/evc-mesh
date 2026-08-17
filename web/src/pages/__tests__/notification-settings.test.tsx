@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 
 vi.mock("@/lib/api", () => ({
@@ -92,7 +92,13 @@ beforeEach(() => {
   mockedApi.mockReset();
   mockedGetPermissionState.mockReset().mockResolvedValue("granted");
   mockedIsSubscribed.mockReset().mockResolvedValue(true);
-  useNotificationStore.setState({ notifications: [], unreadCount: 0, preferences: [], emailAvailable: true });
+  useNotificationStore.setState({
+    notifications: [],
+    unreadCount: 0,
+    preferences: [],
+    emailAvailable: true,
+    telegramBotInfo: null,
+  });
   useWorkspaceStore.setState({ currentWorkspace: WORKSPACE, workspaces: [WORKSPACE] });
   useAuthStore.setState({ user: USER, isAuthenticated: true, isLoading: false });
 });
@@ -172,21 +178,32 @@ describe("NotificationSettingsPage — Browser Push hydration (task 9d837f67)", 
   });
 });
 
-// Route api() by URL/method so email-availability, preference GET, and
-// preference PUT can each answer differently within one test.
+// Route api() by URL/method so email-availability, telegram-bot-info,
+// preference GET, and preference PUT can each answer differently within one
+// test.
 function mockApiByRoute(routes: {
   preferences?: NotificationPreference[];
   available?: boolean;
+  telegramAvailable?: boolean;
+  telegramBotUsername?: string;
   onSave?: (body: unknown) => void;
+  onSaveResponse?: (body: unknown) => object;
 }) {
   mockedApi.mockImplementation(
     (url: string, opts?: { method?: string; body?: unknown }) => {
       if (url === "/api/v1/notifications/email-availability") {
         return Promise.resolve({ available: routes.available ?? true });
       }
+      if (url.startsWith("/api/v1/notifications/telegram-bot-info")) {
+        return Promise.resolve({
+          available: routes.telegramAvailable ?? false,
+          bot_username: routes.telegramBotUsername ?? "",
+        });
+      }
       if (url === "/api/v1/notifications/preferences" && opts?.method === "PUT") {
         routes.onSave?.(opts.body);
-        return Promise.resolve({ id: "new", ...(opts.body as object) });
+        const extra = routes.onSaveResponse?.(opts.body) ?? {};
+        return Promise.resolve({ id: "new", ...(opts.body as object), ...extra });
       }
       if (url === "/api/v1/notifications/preferences") {
         return Promise.resolve({ preferences: routes.preferences ?? [] });
@@ -260,6 +277,97 @@ describe("NotificationSettingsPage — Email channel", () => {
     expect(savedBody).toMatchObject({
       channel: "email",
       config: { email: "account@example.com" },
+      workspace_id: "ws1",
+    });
+  });
+});
+
+describe("NotificationSettingsPage — Telegram channel", () => {
+  it("shows an unavailable notice when the workspace has no bot connected", async () => {
+    mockApiByRoute({ preferences: [], telegramAvailable: false });
+
+    renderPage();
+
+    await waitFor(() =>
+      expect(screen.getByText("Telegram is not connected")).toBeInTheDocument(),
+    );
+    expect(screen.queryByLabelText("Telegram username")).not.toBeInTheDocument();
+  });
+
+  it("shows a connect link built from the bot username and a fresh bind token", async () => {
+    mockApiByRoute({
+      preferences: [
+        pref({
+          id: "t1",
+          channel: "telegram",
+          events: ["comment.created"],
+          config: { telegram_username: "alice", telegram_bind_token: "tok123" },
+        }),
+      ],
+      telegramAvailable: true,
+      telegramBotUsername: "mesh_bot",
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      const link = screen.getByRole("link", { name: /Open @mesh_bot to finish connecting/ });
+      expect(link).toHaveAttribute("href", "https://t.me/mesh_bot?start=tok123");
+    });
+  });
+
+  it("shows connected status instead of a link once chat_id is bound", async () => {
+    mockApiByRoute({
+      preferences: [
+        pref({
+          id: "t1",
+          channel: "telegram",
+          events: ["comment.created"],
+          config: { telegram_username: "alice", telegram_chat_id: 555 },
+        }),
+      ],
+      telegramAvailable: true,
+      telegramBotUsername: "mesh_bot",
+    });
+
+    renderPage();
+
+    await waitFor(() =>
+      expect(screen.getByText(/Connected — @mesh_bot can message you/)).toBeInTheDocument(),
+    );
+    expect(
+      screen.queryByRole("link", { name: /finish connecting/ }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("saves the telegram channel with the username wrapped in config", async () => {
+    let savedBody: unknown;
+    mockApiByRoute({
+      preferences: [],
+      telegramAvailable: true,
+      telegramBotUsername: "mesh_bot",
+      onSave: (body) => { savedBody = body; },
+      onSaveResponse: () => ({ config: { telegram_username: "alice", telegram_bind_token: "new-token" } }),
+    });
+
+    renderPage();
+    await waitFor(() =>
+      expect(screen.getByLabelText("Telegram username")).toBeInTheDocument(),
+    );
+
+    fireEvent.change(screen.getByLabelText("Telegram username"), {
+      target: { value: "alice" },
+    });
+
+    const saveButtons = screen.getAllByRole("button", { name: /Save preferences/ });
+    const telegramSaveButton = saveButtons[saveButtons.length - 1];
+    if (!telegramSaveButton) throw new Error("expected a telegram Save preferences button");
+    telegramSaveButton.click();
+
+    await waitFor(() => expect(savedBody).toBeDefined());
+    expect(savedBody).toMatchObject({
+      channel: "telegram",
+      config: { telegram_username: "alice" },
       workspace_id: "ws1",
     });
   });

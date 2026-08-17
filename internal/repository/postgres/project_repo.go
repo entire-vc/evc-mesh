@@ -128,6 +128,28 @@ func (r *ProjectRepo) Update(ctx context.Context, project *domain.Project) error
 	return nil
 }
 
+// ListForUserInWorkspace returns the projects in workspaceID that userID is a
+// member of, ordered by name. Built for the Telegram bind welcome message
+// ("here are your projects") — nothing else in this codebase needed "a
+// user's projects, scoped to one workspace" as its own query.
+func (r *ProjectRepo) ListForUserInWorkspace(ctx context.Context, workspaceID, userID uuid.UUID) ([]domain.Project, error) {
+	const q = `
+		SELECT p.* FROM projects p
+		JOIN project_members pm ON pm.project_id = p.id
+		WHERE p.workspace_id = $1 AND pm.user_id = $2 AND p.deleted_at IS NULL
+		ORDER BY p.name ASC
+	`
+	var rows []projectRow
+	if err := r.db.SelectContext(ctx, &rows, q, workspaceID, userID); err != nil {
+		return nil, err
+	}
+	result := make([]domain.Project, len(rows))
+	for i := range rows {
+		result[i] = rows[i].toDomain()
+	}
+	return result, nil
+}
+
 // Delete performs a soft delete by setting deleted_at.
 func (r *ProjectRepo) Delete(ctx context.Context, id uuid.UUID) error {
 	const q = `UPDATE projects SET deleted_at = NOW() WHERE id = $1 AND deleted_at IS NULL`

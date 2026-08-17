@@ -1384,6 +1384,7 @@ func (s *taskService) dispatchTargetedUserNotification(ctx context.Context, task
 		Title:        title,
 		Body:         body,
 		TargetUserID: &targetCopy,
+		Labels:       []string(task.Labels),
 		Metadata:     meta,
 	})
 }
@@ -1537,6 +1538,7 @@ func (s *taskService) dispatchUserNotification(ctx context.Context, task *domain
 		ProjectID:   &projIDCopy,
 		EventType:   eventType,
 		Title:       title,
+		Labels:      []string(task.Labels),
 		Metadata: map[string]any{
 			"task_id":    task.ID,
 			"task_title": task.Title,

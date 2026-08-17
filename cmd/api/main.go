@@ -259,11 +259,21 @@ func main() {
 		log.Printf("Email is not configured (SMTP_HOST is empty) — no invitation or notification emails will be sent. Invites still work: the invite link is shown in the UI for you to pass on. Set SMTP_HOST/SMTP_FROM to send email instead.")
 	}
 
+	// Telegram — bot API client + the manager that long-polls every active
+	// workspace bot and handles /start. Created here, ahead of
+	// notificationService, for the same reason as emailSvc: the dispatch
+	// channel below needs it as a dependency.
+	telegramClient := service.NewTelegramClient()
+	telegramBotManager := service.NewTelegramBotManager(
+		telegramClient, integrationRepo, notificationRepo, userRepo, projectRepo, workspaceRepo,
+	)
+
 	// Notification service for in-app push notifications to workspace users.
 	// Created before taskService and commentService so it can be injected as a dependency.
 	notificationService := service.NewNotificationService(notificationRepo,
 		service.WithPushService(pushService),
 		service.WithEmailService(emailSvc, userRepo, cfg.Email.BaseURL),
+		service.WithTelegramService(telegramClient, integrationRepo, workspaceRepo, projectRepo),
 	)
 
 	taskService := service.NewTaskService(taskRepo, taskStatusRepo, taskDependencyRepo, activityLogRepo,
@@ -477,7 +487,7 @@ func main() {
 		handler.WithGitHubWebhookSecret(cfg.Webhook.GitHubSecret),
 		handler.WithWebhookDedupStore(handler.NewRedisWebhookDedupStore(agentNotifyRedis)),
 	)
-	integrationHandler := handler.NewIntegrationHandler(integrationService)
+	integrationHandler := handler.NewIntegrationHandler(integrationService, telegramClient, telegramBotManager)
 	analyticsHandler := handler.NewAnalyticsHandler(analyticsService)
 	projectUpdateHandler := handler.NewProjectUpdateHandler(projectUpdateService)
 	initiativeHandler := handler.NewInitiativeHandler(initiativeService)
@@ -489,7 +499,7 @@ func main() {
 	workspaceMemberHandler := handler.NewWorkspaceMemberHandler(workspaceMemberService)
 	inviteHandler := handler.NewInviteHandler(inviteService, authService)
 	projectMemberHandler := handler.NewProjectMemberHandler(projectMemberService)
-	notificationHandler := handler.NewNotificationHandler(notificationService)
+	notificationHandler := handler.NewNotificationHandler(notificationService, workspaceMemberRepo)
 	pushSubscriptionHandler := handler.NewPushSubscriptionHandler(pushService)
 	autoTransHandler := handler.NewAutoTransitionHandler(autoTransitionSvc)
 	memoryHandler := handler.NewMemoryHandler(memoryService, workspaceMemberRepo)
@@ -631,6 +641,13 @@ func main() {
 			}
 		}
 	}()
+
+	// Telegram bot manager: long-polls getUpdates for every workspace with an
+	// active bot, so a fresh /start lands within one poll cycle of being sent
+	// rather than waiting for the next deploy/restart.
+	telegramCtx, telegramCancel := context.WithCancel(context.Background())
+	go telegramBotManager.Start(telegramCtx)
+	log.Println("Telegram bot manager started")
 	log.Println("Checkout reaper started (interval: 60s)")
 
 	// WebSocket upgrade endpoint. It sits on the root instance, ahead of the
@@ -1070,6 +1087,10 @@ func main() {
 	api.POST("/notifications/mark-read", notificationHandler.MarkRead)
 	api.GET("/notifications/preferences", notificationHandler.GetPreferences)
 	api.GET("/notifications/email-availability", notificationHandler.GetEmailAvailability)
+	// requireWorkspaceMember (called inside the handler) is the tenancy guard
+	// here — see declaredQueryTenantParams in internal/middleware for why a
+	// query-string workspace_id needs one of its own.
+	api.GET("/notifications/telegram-bot-info", notificationHandler.GetTelegramBotInfo)
 	// bodyWS: the workspace being subscribed to is named in the request body, so
 	// RequireWorkspaceMemberScoped sees a path with nothing in it to resolve and
 	// waves it through. Without this guard any authenticated caller could
@@ -1302,6 +1323,9 @@ func main() {
 
 	// Stop checkout reaper.
 	reaperCancel()
+
+	// Stop every Telegram bot poller.
+	telegramCancel()
 
 	// Flush activity tracker and cancel its background loop.
 	activityCancel()
