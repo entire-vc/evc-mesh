@@ -130,6 +130,64 @@ func TestUpdatePreferences_TelegramDisableDoesNotRequireUsername(t *testing.T) {
 	assert.True(t, svc.upsertCalled)
 }
 
+// TestUpdatePreferences_TelegramDisableClearsChatID is the direct regression
+// test for the unbind bug: chat_id used to be carried forward unconditionally
+// regardless of is_enabled, so there was no way to stop delivery to a bound
+// account or ever bind a different one. Disabling the channel must clear it.
+func TestUpdatePreferences_TelegramDisableClearsChatID(t *testing.T) {
+	db, mock := newSQLMock(t)
+	wsID, member := uuid.New(), uuid.New()
+	mock.ExpectQuery(`SELECT wm\.role FROM workspace_members wm\s+JOIN workspaces w ON w\.id = wm\.workspace_id\s+WHERE wm\.workspace_id = \$1 AND wm\.user_id = \$2 AND w\.deleted_at IS NULL`).
+		WithArgs(wsID, member).
+		WillReturnRows(sqlmock.NewRows([]string{"role"}).AddRow("member"))
+
+	existingCfg, _ := json.Marshal(service.TelegramPreferenceConfig{Username: "alice", ChatID: 777})
+	existing := []domain.NotificationPreference{{
+		WorkspaceID: wsID, UserID: &member, Channel: "telegram", Config: existingCfg,
+	}}
+
+	svc, rec := putTelegramPreferences(t, db, member, existing,
+		`{"workspace_id":"`+wsID.String()+`","channel":"telegram","is_enabled":false}`)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.NotNil(t, svc.upsertedPref)
+
+	var cfg service.TelegramPreferenceConfig
+	require.NoError(t, json.Unmarshal(svc.upsertedPref.Config, &cfg))
+	assert.Zero(t, cfg.ChatID, "disabling the channel must clear a prior chat_id, or the bot can never be unbound")
+}
+
+// TestUpdatePreferences_TelegramReenableAfterDisableIssuesFreshToken covers the
+// full unbind-then-rebind flow: after a disable (chat_id cleared), re-enabling
+// must issue a new bind token rather than staying permanently unbindable
+// because a token is only ever generated when chat_id is already empty.
+func TestUpdatePreferences_TelegramReenableAfterDisableIssuesFreshToken(t *testing.T) {
+	db, mock := newSQLMock(t)
+	wsID, member := uuid.New(), uuid.New()
+	mock.ExpectQuery(`SELECT wm\.role FROM workspace_members wm\s+JOIN workspaces w ON w\.id = wm\.workspace_id\s+WHERE wm\.workspace_id = \$1 AND wm\.user_id = \$2 AND w\.deleted_at IS NULL`).
+		WithArgs(wsID, member).
+		WillReturnRows(sqlmock.NewRows([]string{"role"}).AddRow("member"))
+
+	// Simulates the state right after a disable: username still on file, but
+	// chat_id already cleared (ChatID intentionally left zero).
+	existingCfg, _ := json.Marshal(service.TelegramPreferenceConfig{Username: "alice"})
+	existing := []domain.NotificationPreference{{
+		WorkspaceID: wsID, UserID: &member, Channel: "telegram", IsEnabled: false, Config: existingCfg,
+	}}
+
+	svc, rec := putTelegramPreferences(t, db, member, existing,
+		`{"workspace_id":"`+wsID.String()+`","channel":"telegram","is_enabled":true,"config":{"telegram_username":"bob"}}`)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.NotNil(t, svc.upsertedPref)
+
+	var cfg service.TelegramPreferenceConfig
+	require.NoError(t, json.Unmarshal(svc.upsertedPref.Config, &cfg))
+	assert.Equal(t, "bob", cfg.Username, "re-enabling should accept a different account's username")
+	assert.NotEmpty(t, cfg.BindToken, "re-enabling after an unbind must issue a fresh bind token")
+	assert.Zero(t, cfg.ChatID)
+}
+
 // --- GET /notifications/telegram-bot-info ------------------------------------
 
 // telegramBotInfoService is mockNotificationService with a fixed
