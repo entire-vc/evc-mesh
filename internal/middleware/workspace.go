@@ -439,8 +439,14 @@ func WorkspaceRLS(db *sqlx.DB, projectRepo repository.ProjectRepository) echo.Mi
 				if !IsAgent(c) {
 					if userID, err := GetUserID(c); err == nil {
 						var role string
+						// Joined to workspaces so a member of a soft-deleted
+						// workspace resolves no role — see
+						// WorkspaceMemberRepo.GetRole for why this check lives
+						// wherever a role is read, not just there.
 						err := db.QueryRowContext(c.Request().Context(),
-							"SELECT role FROM workspace_members WHERE workspace_id = $1 AND user_id = $2",
+							`SELECT wm.role FROM workspace_members wm
+							 JOIN workspaces w ON w.id = wm.workspace_id
+							 WHERE wm.workspace_id = $1 AND wm.user_id = $2 AND w.deleted_at IS NULL`,
 							wsID, userID,
 						).Scan(&role)
 						if err == nil {
@@ -579,7 +585,9 @@ func UserIsWorkspaceMember(ctx context.Context, db *sqlx.DB, wsID, userID uuid.U
 	}
 	var role string
 	if err := db.QueryRowContext(ctx,
-		"SELECT role FROM workspace_members WHERE workspace_id = $1 AND user_id = $2",
+		`SELECT wm.role FROM workspace_members wm
+		 JOIN workspaces w ON w.id = wm.workspace_id
+		 WHERE wm.workspace_id = $1 AND wm.user_id = $2 AND w.deleted_at IS NULL`,
 		wsID, userID,
 	).Scan(&role); err == nil && role != "" {
 		return true
@@ -594,7 +602,9 @@ func AgentIsInWorkspace(ctx context.Context, db *sqlx.DB, wsID, agentID uuid.UUI
 	}
 	var agentWsID uuid.UUID
 	if err := db.QueryRowContext(ctx,
-		"SELECT workspace_id FROM agents WHERE id = $1 AND deleted_at IS NULL",
+		`SELECT a.workspace_id FROM agents a
+		 JOIN workspaces w ON w.id = a.workspace_id
+		 WHERE a.id = $1 AND a.deleted_at IS NULL AND w.deleted_at IS NULL`,
 		agentID,
 	).Scan(&agentWsID); err != nil {
 		return false

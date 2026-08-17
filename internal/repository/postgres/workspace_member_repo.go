@@ -50,9 +50,21 @@ func (r *WorkspaceMemberRepo) GetByWorkspaceAndUser(ctx context.Context, workspa
 }
 
 // GetRole returns the workspace_role for a specific workspace + user combination.
-// Returns an error (sql.ErrNoRows wrapped) if the membership does not exist.
+// Returns an error (sql.ErrNoRows wrapped) if the membership does not exist —
+// including when it exists but the workspace itself has been (soft-)deleted.
+// A deleted workspace is not a workspace anyone still has a role in: this is
+// the central role lookup RequirePermission/rbac(), MemoryHandler.
+// workspaceAllowed and every other caller share, so joining the deleted_at
+// check in here closes the "existing member keeps full API access to a
+// workspace after it's been deleted" gap in every one of them at once,
+// rather than needing the same fix repeated at each call site.
 func (r *WorkspaceMemberRepo) GetRole(ctx context.Context, workspaceID, userID uuid.UUID) (string, error) {
-	const q = `SELECT role FROM workspace_members WHERE workspace_id = $1 AND user_id = $2`
+	const q = `
+		SELECT wm.role
+		FROM workspace_members wm
+		JOIN workspaces w ON w.id = wm.workspace_id
+		WHERE wm.workspace_id = $1 AND wm.user_id = $2 AND w.deleted_at IS NULL
+	`
 	var role string
 	if err := r.db.GetContext(ctx, &role, q, workspaceID, userID); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {

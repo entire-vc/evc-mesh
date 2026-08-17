@@ -51,7 +51,7 @@ func putTelegramPreferences(t *testing.T, db *sqlx.DB, userID uuid.UUID, existin
 func TestUpdatePreferences_TelegramEnableWithoutUsernameIsRejected(t *testing.T) {
 	db, mock := newSQLMock(t)
 	wsID, member := uuid.New(), uuid.New()
-	mock.ExpectQuery("SELECT role FROM workspace_members").
+	mock.ExpectQuery(`SELECT wm\.role FROM workspace_members wm\s+JOIN workspaces w ON w\.id = wm\.workspace_id\s+WHERE wm\.workspace_id = \$1 AND wm\.user_id = \$2 AND w\.deleted_at IS NULL`).
 		WithArgs(wsID, member).
 		WillReturnRows(sqlmock.NewRows([]string{"role"}).AddRow("member"))
 
@@ -67,7 +67,7 @@ func TestUpdatePreferences_TelegramEnableWithoutUsernameIsRejected(t *testing.T)
 func TestUpdatePreferences_TelegramFirstEnableIssuesABindToken(t *testing.T) {
 	db, mock := newSQLMock(t)
 	wsID, member := uuid.New(), uuid.New()
-	mock.ExpectQuery("SELECT role FROM workspace_members").
+	mock.ExpectQuery(`SELECT wm\.role FROM workspace_members wm\s+JOIN workspaces w ON w\.id = wm\.workspace_id\s+WHERE wm\.workspace_id = \$1 AND wm\.user_id = \$2 AND w\.deleted_at IS NULL`).
 		WithArgs(wsID, member).
 		WillReturnRows(sqlmock.NewRows([]string{"role"}).AddRow("member"))
 
@@ -93,7 +93,7 @@ func TestUpdatePreferences_TelegramFirstEnableIssuesABindToken(t *testing.T) {
 func TestUpdatePreferences_TelegramAlreadyBoundDoesNotReissueToken(t *testing.T) {
 	db, mock := newSQLMock(t)
 	wsID, member := uuid.New(), uuid.New()
-	mock.ExpectQuery("SELECT role FROM workspace_members").
+	mock.ExpectQuery(`SELECT wm\.role FROM workspace_members wm\s+JOIN workspaces w ON w\.id = wm\.workspace_id\s+WHERE wm\.workspace_id = \$1 AND wm\.user_id = \$2 AND w\.deleted_at IS NULL`).
 		WithArgs(wsID, member).
 		WillReturnRows(sqlmock.NewRows([]string{"role"}).AddRow("member"))
 
@@ -119,7 +119,7 @@ func TestUpdatePreferences_TelegramAlreadyBoundDoesNotReissueToken(t *testing.T)
 func TestUpdatePreferences_TelegramDisableDoesNotRequireUsername(t *testing.T) {
 	db, mock := newSQLMock(t)
 	wsID, member := uuid.New(), uuid.New()
-	mock.ExpectQuery("SELECT role FROM workspace_members").
+	mock.ExpectQuery(`SELECT wm\.role FROM workspace_members wm\s+JOIN workspaces w ON w\.id = wm\.workspace_id\s+WHERE wm\.workspace_id = \$1 AND wm\.user_id = \$2 AND w\.deleted_at IS NULL`).
 		WithArgs(wsID, member).
 		WillReturnRows(sqlmock.NewRows([]string{"role"}).AddRow("member"))
 

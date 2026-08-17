@@ -109,7 +109,7 @@ func TestRequireWorkspaceMemberScoped_TaskID_Live_Returns200(t *testing.T) {
 		WithArgs(wsID.String()).
 		WillReturnRows(sqlmock.NewRows([]string{"set_config"}).AddRow(wsID.String()))
 	// RequireWorkspaceMember's agent branch: agent belongs to the same workspace.
-	mock.ExpectQuery("SELECT workspace_id FROM agents").
+	mock.ExpectQuery(`SELECT a\.workspace_id FROM agents a\s+JOIN workspaces w ON w\.id = a\.workspace_id\s+WHERE a\.id = \$1 AND a\.deleted_at IS NULL AND w\.deleted_at IS NULL`).
 		WithArgs(agentID).
 		WillReturnRows(sqlmock.NewRows([]string{"workspace_id"}).AddRow(wsID))
 
@@ -152,7 +152,7 @@ func TestRequireWorkspaceMemberScoped_TaskID_ForeignWorkspace_Not200(t *testing.
 		WithArgs(foreignWS.String()).
 		WillReturnRows(sqlmock.NewRows([]string{"set_config"}).AddRow(foreignWS.String()))
 	// The agent belongs to a DIFFERENT workspace than the task.
-	mock.ExpectQuery("SELECT workspace_id FROM agents").
+	mock.ExpectQuery(`SELECT a\.workspace_id FROM agents a\s+JOIN workspaces w ON w\.id = a\.workspace_id\s+WHERE a\.id = \$1 AND a\.deleted_at IS NULL AND w\.deleted_at IS NULL`).
 		WithArgs(agentID).
 		WillReturnRows(sqlmock.NewRows([]string{"workspace_id"}).AddRow(ownWS))
 

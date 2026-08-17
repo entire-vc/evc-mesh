@@ -316,3 +316,83 @@ func TestGetPreferencesByWorkspace_ReturnsTheTableAsItIs(t *testing.T) {
 			"where it can fail closed")
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
+
+// --- ListUnread / CountUnread: deleted-workspace exclusion -------------------
+//
+// notification rows are written once, at event time, and never touched again
+// by anything that later deletes the workspace they're about — unlike
+// tasks/comments there is no cascade to lean on, so these two joins are the
+// only thing standing between a deleted workspace and its notifications still
+// showing up in every user's inbox forever.
+
+func TestListUnread_ExcludesNotificationsFromADeletedWorkspace(t *testing.T) {
+	repo, mock := newNotificationRepoMock(t)
+	userID := uuid.New()
+
+	mock.ExpectQuery("FROM notifications n").
+		WithArgs(userID, 50).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"id", "workspace_id", "user_id", "event_type", "title", "body", "metadata", "is_read", "created_at",
+		}))
+
+	items, err := repo.ListUnread(context.Background(), userID, 50)
+	require.NoError(t, err)
+	assert.Empty(t, items)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestListUnread_SQL(t *testing.T) {
+	var captured string
+	rawDB, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(
+		sqlmock.QueryMatcherFunc(func(_, actualSQL string) error {
+			captured = actualSQL
+			return nil
+		})))
+	require.NoError(t, err)
+	defer func() { _ = rawDB.Close() }()
+
+	repo := NewNotificationRepo(sqlx.NewDb(rawDB, "postgres"))
+	mock.ExpectQuery(".*").WillReturnRows(sqlmock.NewRows([]string{
+		"id", "workspace_id", "user_id", "event_type", "title", "body", "metadata", "is_read", "created_at",
+	}))
+
+	_, err = repo.ListUnread(context.Background(), uuid.New(), 50)
+	require.NoError(t, err)
+
+	assert.Contains(t, captured, "JOIN workspaces w ON w.id = n.workspace_id")
+	assert.Contains(t, captured, "w.deleted_at IS NULL")
+}
+
+func TestCountUnread_ExcludesNotificationsFromADeletedWorkspace(t *testing.T) {
+	repo, mock := newNotificationRepoMock(t)
+	userID := uuid.New()
+
+	mock.ExpectQuery("FROM notifications n").
+		WithArgs(userID).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
+
+	count, err := repo.CountUnread(context.Background(), userID)
+	require.NoError(t, err)
+	assert.Zero(t, count)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestCountUnread_SQL(t *testing.T) {
+	var captured string
+	rawDB, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(
+		sqlmock.QueryMatcherFunc(func(_, actualSQL string) error {
+			captured = actualSQL
+			return nil
+		})))
+	require.NoError(t, err)
+	defer func() { _ = rawDB.Close() }()
+
+	repo := NewNotificationRepo(sqlx.NewDb(rawDB, "postgres"))
+	mock.ExpectQuery(".*").WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
+
+	_, err = repo.CountUnread(context.Background(), uuid.New())
+	require.NoError(t, err)
+
+	assert.Contains(t, captured, "JOIN workspaces w ON w.id = n.workspace_id")
+	assert.Contains(t, captured, "w.deleted_at IS NULL")
+}

@@ -26,7 +26,7 @@ func TestUserIsWorkspaceMember(t *testing.T) {
 
 	wsID := uuid.New()
 	member := uuid.New()
-	mock.ExpectQuery("SELECT role FROM workspace_members").
+	mock.ExpectQuery(`SELECT wm.role FROM workspace_members wm\s+JOIN workspaces w ON w.id = wm.workspace_id\s+WHERE wm.workspace_id = \$1 AND wm.user_id = \$2 AND w.deleted_at IS NULL`).
 		WithArgs(wsID, member).
 		WillReturnRows(sqlmock.NewRows([]string{"role"}).AddRow("viewer"))
 	assert.True(t, UserIsWorkspaceMember(context.Background(), sqlxDB, wsID, member))
@@ -46,7 +46,7 @@ func TestUserIsWorkspaceMember_OwnerWithoutMemberRow(t *testing.T) {
 
 	wsID := uuid.New()
 	owner := uuid.New()
-	mock.ExpectQuery("SELECT role FROM workspace_members").
+	mock.ExpectQuery(`SELECT wm.role FROM workspace_members wm\s+JOIN workspaces w ON w.id = wm.workspace_id\s+WHERE wm.workspace_id = \$1 AND wm.user_id = \$2 AND w.deleted_at IS NULL`).
 		WithArgs(wsID, owner).
 		WillReturnError(errors.New("no rows"))
 	mock.ExpectQuery("SELECT owner_id FROM workspaces").
@@ -67,7 +67,7 @@ func TestUserIsWorkspaceMember_EmptyRoleIsNotMembership(t *testing.T) {
 
 	wsID := uuid.New()
 	userID := uuid.New()
-	mock.ExpectQuery("SELECT role FROM workspace_members").
+	mock.ExpectQuery(`SELECT wm.role FROM workspace_members wm\s+JOIN workspaces w ON w.id = wm.workspace_id\s+WHERE wm.workspace_id = \$1 AND wm.user_id = \$2 AND w.deleted_at IS NULL`).
 		WithArgs(wsID, userID).
 		WillReturnRows(sqlmock.NewRows([]string{"role"}).AddRow(""))
 	mock.ExpectQuery("SELECT owner_id FROM workspaces").
@@ -75,6 +75,33 @@ func TestUserIsWorkspaceMember_EmptyRoleIsNotMembership(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"owner_id"}).AddRow(uuid.New()))
 
 	assert.False(t, UserIsWorkspaceMember(context.Background(), sqlxDB, wsID, userID))
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestUserIsWorkspaceMember_DeletedWorkspaceMemberRowIsNotMembership: an
+// existing workspace_members row must stop granting access once the
+// workspace itself is soft-deleted — the join's own WHERE clause makes this
+// the same "no rows" shape as never having been a member, so the owner
+// fallback below has to run and, for a non-owner, also come up empty.
+func TestUserIsWorkspaceMember_DeletedWorkspaceMemberRowIsNotMembership(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+	sqlxDB := sqlx.NewDb(db, "postgres")
+
+	wsID := uuid.New()
+	member := uuid.New()
+	// The join's own deleted_at filter is what excludes the row — modelled
+	// here as the query returning nothing, same as sqlmock has no way to
+	// evaluate a WHERE clause itself.
+	mock.ExpectQuery(`SELECT wm.role FROM workspace_members wm\s+JOIN workspaces w ON w.id = wm.workspace_id\s+WHERE wm.workspace_id = \$1 AND wm.user_id = \$2 AND w.deleted_at IS NULL`).
+		WithArgs(wsID, member).
+		WillReturnRows(sqlmock.NewRows([]string{"role"}))
+	mock.ExpectQuery("SELECT owner_id FROM workspaces").
+		WithArgs(wsID).
+		WillReturnRows(sqlmock.NewRows([]string{"owner_id"}).AddRow(uuid.New()))
+
+	assert.False(t, UserIsWorkspaceMember(context.Background(), sqlxDB, wsID, member))
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -106,15 +133,33 @@ func TestAgentIsInWorkspace(t *testing.T) {
 
 	wsID := uuid.New()
 	agentID := uuid.New()
-	mock.ExpectQuery("SELECT workspace_id FROM agents").
+	mock.ExpectQuery(`SELECT a.workspace_id FROM agents a\s+JOIN workspaces w ON w.id = a.workspace_id\s+WHERE a.id = \$1 AND a.deleted_at IS NULL AND w.deleted_at IS NULL`).
 		WithArgs(agentID).
 		WillReturnRows(sqlmock.NewRows([]string{"workspace_id"}).AddRow(wsID))
 	assert.True(t, AgentIsInWorkspace(context.Background(), sqlxDB, wsID, agentID))
 
 	// An agent of a different workspace.
-	mock.ExpectQuery("SELECT workspace_id FROM agents").
+	mock.ExpectQuery(`SELECT a.workspace_id FROM agents a\s+JOIN workspaces w ON w.id = a.workspace_id\s+WHERE a.id = \$1 AND a.deleted_at IS NULL AND w.deleted_at IS NULL`).
 		WithArgs(agentID).
 		WillReturnRows(sqlmock.NewRows([]string{"workspace_id"}).AddRow(uuid.New()))
+	assert.False(t, AgentIsInWorkspace(context.Background(), sqlxDB, wsID, agentID))
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestAgentIsInWorkspace_DeletedWorkspaceIsNotMembership: an agent whose own
+// row is untouched must still be refused once its workspace is deleted.
+func TestAgentIsInWorkspace_DeletedWorkspaceIsNotMembership(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+	sqlxDB := sqlx.NewDb(db, "postgres")
+
+	wsID := uuid.New()
+	agentID := uuid.New()
+	mock.ExpectQuery(`SELECT a.workspace_id FROM agents a\s+JOIN workspaces w ON w.id = a.workspace_id\s+WHERE a.id = \$1 AND a.deleted_at IS NULL AND w.deleted_at IS NULL`).
+		WithArgs(agentID).
+		WillReturnRows(sqlmock.NewRows([]string{"workspace_id"}))
+
 	assert.False(t, AgentIsInWorkspace(context.Background(), sqlxDB, wsID, agentID))
 	assert.NoError(t, mock.ExpectationsWereMet())
 }

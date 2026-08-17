@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useParams } from "react-router";
+import { useNavigate, useParams } from "react-router";
 import {
   AlertTriangle,
   ArrowRight,
@@ -635,7 +635,8 @@ function ViolationRow({ v }: { v: RuleViolation }) {
 
 export function WorkspaceSettingsPage() {
   const { wsSlug } = useParams<{ wsSlug: string }>();
-  const { currentWorkspace, updateWorkspace, uploadIcon } = useWorkspaceStore();
+  const navigate = useNavigate();
+  const { currentWorkspace, updateWorkspace, uploadIcon, deleteWorkspace } = useWorkspaceStore();
   const { user, updateProfile, checkUsername } = useAuthStore();
   const {
     workspaceMembers,
@@ -687,6 +688,11 @@ export function WorkspaceSettingsPage() {
     message: string;
   } | null>(null);
   const iconFileInputRef = useRef<HTMLInputElement>(null);
+
+  // Danger zone (delete workspace) state
+  const [deleteWorkspaceDialogOpen, setDeleteWorkspaceDialogOpen] = useState(false);
+  const [isDeletingWorkspace, setIsDeletingWorkspace] = useState(false);
+  const [deleteWorkspaceError, setDeleteWorkspaceError] = useState<string | null>(null);
 
   // Members state
   const [inviteDialogOpen, setInviteDialogOpen] = useState(false);
@@ -827,6 +833,7 @@ export function WorkspaceSettingsPage() {
 
   const canManageMembers = myRole === "owner" || myRole === "admin";
   const canManageRules = myRole === "owner" || myRole === "admin";
+  const canDeleteWorkspace = myRole === "owner" || myRole === "admin";
 
   // Count owners to disable remove on last owner
   const ownerCount = workspaceMembers.filter((m) => m.role === "owner").length;
@@ -906,6 +913,29 @@ export function WorkspaceSettingsPage() {
     } finally {
       setIsUploadingIcon(false);
       if (iconFileInputRef.current) iconFileInputRef.current.value = "";
+    }
+  };
+
+  // Deleting cascades server-side (workspace, its projects, and their tasks
+  // are all soft-deleted together) — see WorkspaceRepo.Delete. The store's
+  // deleteWorkspace already drops the workspace from the local list and
+  // clears currentWorkspace if it was the one removed; navigating to "/"
+  // with no workspace in the URL is what hands control back to AppLayout,
+  // which redirects to another workspace's activity page, or to the
+  // create-workspace screen if none are left — the same logic that already
+  // runs on first load, reused rather than duplicated here.
+  const handleDeleteWorkspace = async () => {
+    if (!currentWorkspace) return;
+    setIsDeletingWorkspace(true);
+    setDeleteWorkspaceError(null);
+    try {
+      await deleteWorkspace(currentWorkspace.id);
+      navigate("/", { replace: true });
+    } catch (err) {
+      setDeleteWorkspaceError(
+        err instanceof Error ? err.message : "Failed to delete workspace.",
+      );
+      setIsDeletingWorkspace(false);
     }
   };
 
@@ -1300,6 +1330,38 @@ export function WorkspaceSettingsPage() {
               )}
             </div>
           </div>
+        </CardContent>
+      </Card>
+      )}
+
+      {/* Danger Zone — owner/admin only. Member/viewer never see this section,
+          even though the server would also refuse the request (PermDeleteWorkspace):
+          a button that is guaranteed to 403 is a bad interface, not a second guard. */}
+      {activeTab === "general" && canDeleteWorkspace && (
+      <Card className="mt-4 border-destructive/50">
+        <CardHeader>
+          <CardTitle className="text-destructive">Danger Zone</CardTitle>
+          <CardDescription>Irreversible actions for this workspace</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="flex items-center justify-between rounded-lg border border-destructive/30 p-4">
+            <div>
+              <p className="text-sm font-medium">Delete Workspace</p>
+              <p className="text-sm text-muted-foreground">
+                Permanently delete this workspace, its projects, tasks, and
+                comments for everyone in it. This action cannot be undone.
+              </p>
+            </div>
+            <Button
+              variant="destructive"
+              onClick={() => setDeleteWorkspaceDialogOpen(true)}
+            >
+              Delete
+            </Button>
+          </div>
+          {deleteWorkspaceError && (
+            <p className="text-sm text-destructive">{deleteWorkspaceError}</p>
+          )}
         </CardContent>
       </Card>
       )}
@@ -2193,6 +2255,22 @@ export function WorkspaceSettingsPage() {
       {removeError && (
         <p className="text-sm text-destructive">{removeError}</p>
       )}
+
+      {/* Delete Workspace Confirmation */}
+      <ConfirmDialog
+        open={deleteWorkspaceDialogOpen}
+        onClose={() => {
+          setDeleteWorkspaceDialogOpen(false);
+          setDeleteWorkspaceError(null);
+        }}
+        onConfirm={() => void handleDeleteWorkspace()}
+        title="Delete Workspace"
+        description={`This will permanently delete "${currentWorkspace.name}" — its projects, tasks, and comments — for everyone in it. This action cannot be undone.`}
+        confirmText="Delete Workspace"
+        variant="destructive"
+        requireText={currentWorkspace.name}
+        isLoading={isDeletingWorkspace}
+      />
       </div>
     </div>
   );

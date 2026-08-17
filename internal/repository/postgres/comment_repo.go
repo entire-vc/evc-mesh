@@ -173,8 +173,8 @@ const commentViewSelect = `SELECT
 	c.created_at,
 	c.updated_at
 FROM comments c
-JOIN tasks t ON t.id = c.task_id
-JOIN projects p ON p.id = t.project_id`
+JOIN tasks t ON t.id = c.task_id AND t.deleted_at IS NULL
+JOIN projects p ON p.id = t.project_id AND p.deleted_at IS NULL`
 
 // ListByAuthor returns the caller's own comments across workspaces, newest first.
 func (r *CommentRepo) ListByAuthor(ctx context.Context, authorID uuid.UUID, filter repository.CommentViewFilter) ([]domain.CommentView, *time.Time, error) {

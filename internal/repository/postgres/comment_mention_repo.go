@@ -46,7 +46,11 @@ func (r *CommentMentionRepo) List(ctx context.Context, mentionedID uuid.UUID, me
 	}
 
 	args := []any{mentionedID, mentionedKind}
-	where := `cm.mentioned_id = $1 AND cm.mentioned_kind = $2`
+	// t.deleted_at IS NULL is the only thing standing between this list and a
+	// mention on a task that either got individually deleted or was cascaded
+	// away by its workspace being deleted (WorkspaceRepo.Delete) — this join
+	// already exists for task_title/project_id, the filter just wasn't applied.
+	where := `cm.mentioned_id = $1 AND cm.mentioned_kind = $2 AND t.deleted_at IS NULL`
 
 	if filter.Seen != nil {
 		if *filter.Seen {
@@ -102,7 +106,16 @@ func (r *CommentMentionRepo) MarkSeen(ctx context.Context, commentID, mentionedI
 }
 
 func (r *CommentMentionRepo) CountUnseen(ctx context.Context, mentionedID uuid.UUID, mentionedKind string) (int64, error) {
-	const q = `SELECT COUNT(*) FROM comment_mentions WHERE mentioned_id = $1 AND mentioned_kind = $2 AND seen_at IS NULL`
+	// Joined to comments/tasks (same chain List uses) so a mention on a
+	// deleted or workspace-cascaded task doesn't inflate the unseen badge
+	// for something the user can no longer open.
+	const q = `
+		SELECT COUNT(*)
+		FROM comment_mentions cm
+		JOIN comments c ON c.id = cm.comment_id
+		JOIN tasks t ON t.id = c.task_id
+		WHERE cm.mentioned_id = $1 AND cm.mentioned_kind = $2 AND cm.seen_at IS NULL AND t.deleted_at IS NULL
+	`
 	var count int64
 	if err := r.db.GetContext(ctx, &count, q, mentionedID, mentionedKind); err != nil {
 		return 0, err

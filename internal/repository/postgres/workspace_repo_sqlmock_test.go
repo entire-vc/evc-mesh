@@ -149,3 +149,104 @@ func TestWorkspaceRepo_ListByOwner_QueryError(t *testing.T) {
 	assert.Nil(t, got)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
+
+// --- Delete: cascade to projects and tasks -----------------------------------
+
+// TestWorkspaceRepo_Delete_CascadesToTasksAndProjects pins the fix for the
+// orphaned-rows problem: deleting a workspace with nothing downstream left
+// its projects and tasks fully live and fully visible to any query that only
+// ever checked their OWN deleted_at. All three UPDATEs must run in the same
+// transaction, in the order workspace → tasks → projects, and commit together.
+func TestWorkspaceRepo_Delete_CascadesToTasksAndProjects(t *testing.T) {
+	repo, mock := newWorkspaceRepoMock(t)
+	wsID := uuid.New()
+
+	mock.ExpectBegin()
+	mock.ExpectExec("UPDATE workspaces SET deleted_at = NOW[(][)] WHERE id = [$]1 AND deleted_at IS NULL").
+		WithArgs(wsID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("UPDATE tasks SET deleted_at = NOW[(][)]").
+		WithArgs(wsID).
+		WillReturnResult(sqlmock.NewResult(0, 3))
+	mock.ExpectExec("UPDATE projects SET deleted_at = NOW[(][)] WHERE workspace_id = [$]1 AND deleted_at IS NULL").
+		WithArgs(wsID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	err := repo.Delete(context.Background(), wsID)
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestWorkspaceRepo_Delete_NotFoundRollsBackWithoutTouchingChildren: a
+// workspace that doesn't exist (or is already deleted) must not cascade —
+// the workspace UPDATE affecting 0 rows has to stop the transaction before
+// the tasks/projects UPDATEs ever run.
+func TestWorkspaceRepo_Delete_NotFoundRollsBackWithoutTouchingChildren(t *testing.T) {
+	repo, mock := newWorkspaceRepoMock(t)
+	wsID := uuid.New()
+
+	mock.ExpectBegin()
+	mock.ExpectExec("UPDATE workspaces SET deleted_at = NOW[(][)] WHERE id = [$]1 AND deleted_at IS NULL").
+		WithArgs(wsID).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectRollback()
+
+	err := repo.Delete(context.Background(), wsID)
+	require.Error(t, err)
+	require.NoError(t, mock.ExpectationsWereMet(), "the tasks/projects UPDATEs must not run for a not-found workspace")
+}
+
+// TestWorkspaceRepo_Delete_TaskCascadeFailureRollsBackTheWorkspaceToo: if the
+// task cascade fails partway through, the workspace itself must not end up
+// deleted while its tasks stayed live — the transaction is what prevents that
+// half-cascaded state.
+func TestWorkspaceRepo_Delete_TaskCascadeFailureRollsBackTheWorkspaceToo(t *testing.T) {
+	repo, mock := newWorkspaceRepoMock(t)
+	wsID := uuid.New()
+
+	mock.ExpectBegin()
+	mock.ExpectExec("UPDATE workspaces SET deleted_at = NOW[(][)] WHERE id = [$]1 AND deleted_at IS NULL").
+		WithArgs(wsID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("UPDATE tasks SET deleted_at = NOW[(][)]").
+		WithArgs(wsID).
+		WillReturnError(errors.New("connection reset"))
+	mock.ExpectRollback()
+
+	err := repo.Delete(context.Background(), wsID)
+	require.Error(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestWorkspaceRepo_Delete_SQL locks in the cascade's exact shape: the tasks
+// UPDATE reaches every task via a project_id subquery scoped to this
+// workspace (tasks have no workspace_id column of their own), and the
+// projects UPDATE is scoped directly.
+func TestWorkspaceRepo_Delete_SQL(t *testing.T) {
+	var captured []string
+	rawDB, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(
+		sqlmock.QueryMatcherFunc(func(_, actualSQL string) error {
+			captured = append(captured, actualSQL)
+			return nil
+		})))
+	require.NoError(t, err)
+	defer func() { _ = rawDB.Close() }()
+
+	repo := NewWorkspaceRepo(sqlx.NewDb(rawDB, "postgres"))
+	mock.ExpectBegin()
+	mock.ExpectExec(".*").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(".*").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(".*").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	require.NoError(t, repo.Delete(context.Background(), uuid.New()))
+	require.Len(t, captured, 3)
+
+	normalize := func(s string) string { return regexp.MustCompile(`\s+`).ReplaceAllString(s, " ") }
+	assert.Contains(t, normalize(captured[0]), "UPDATE workspaces SET deleted_at = NOW()")
+	assert.Contains(t, normalize(captured[1]), "UPDATE tasks SET deleted_at = NOW()")
+	assert.Contains(t, normalize(captured[1]), "project_id IN (SELECT id FROM projects WHERE workspace_id = $1)",
+		"tasks have no workspace_id column — must reach it through projects")
+	assert.Contains(t, normalize(captured[2]), "UPDATE projects SET deleted_at = NOW() WHERE workspace_id = $1 AND deleted_at IS NULL")
+}
