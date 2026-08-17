@@ -58,6 +58,27 @@ type agentRow struct {
 	DeletedAt           *time.Time         `db:"deleted_at"`
 }
 
+// agentSelectCols is every column agentRow scans, listed explicitly.
+//
+// It replaces selecting every column with a wildcard, which made this
+// repository break on any schema change it does not know about: sqlx
+// refuses to scan a column with no
+// matching struct field, so an `ADD COLUMN` that lands before this binary is
+// redeployed turns "additive migration" into "every agent read fails,
+// including API-key verification". Naming the columns makes an added column
+// invisible to older reads; a REMOVED one still breaks, which is the
+// direction that should break.
+const agentSelectCols = `
+	id, workspace_id, parent_agent_id, supervisor_user_id, name, slug, agent_type,
+	api_key_hash, api_key_prefix, capabilities, status,
+	last_heartbeat, heartbeat_status, heartbeat_message, heartbeat_metadata,
+	current_task_id, settings,
+	total_tasks_completed, total_errors, external_agent_id,
+	role, responsibility_zone, escalation_to, accepts_from,
+	max_concurrent_tasks, working_hours, profile_description,
+	callback_url, expires_at, last_rotated_at,
+	created_at, updated_at, deleted_at`
+
 func (r *agentRow) toDomain() domain.Agent {
 	return domain.Agent{
 		ID:                  r.ID,
@@ -164,7 +185,7 @@ func (r *AgentRepo) Create(ctx context.Context, agent *domain.Agent) error {
 }
 
 func (r *AgentRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.Agent, error) {
-	const q = `SELECT * FROM agents WHERE id = $1 AND deleted_at IS NULL`
+	const q = `SELECT ` + agentSelectCols + ` FROM agents WHERE id = $1 AND deleted_at IS NULL`
 	var row agentRow
 	if err := r.db.GetContext(ctx, &row, q, id); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -177,7 +198,7 @@ func (r *AgentRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.Agent, e
 }
 
 func (r *AgentRepo) GetByAPIKeyPrefix(ctx context.Context, workspaceID uuid.UUID, prefix string) (*domain.Agent, error) {
-	const q = `SELECT * FROM agents WHERE workspace_id = $1 AND api_key_prefix = $2 AND deleted_at IS NULL`
+	const q = `SELECT ` + agentSelectCols + ` FROM agents WHERE workspace_id = $1 AND api_key_prefix = $2 AND deleted_at IS NULL`
 	var row agentRow
 	if err := r.db.GetContext(ctx, &row, q, workspaceID, prefix); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -298,7 +319,7 @@ func (r *AgentRepo) List(ctx context.Context, workspaceID uuid.UUID, filter repo
 	}
 
 	// Data
-	dataQ := fmt.Sprintf(`SELECT * FROM agents %s %s %s`, where, order, paginationClause(pg))
+	dataQ := fmt.Sprintf(`SELECT `+agentSelectCols+` FROM agents %s %s %s`, where, order, paginationClause(pg))
 	var rows []agentRow
 	if err := r.db.SelectContext(ctx, &rows, dataQ, args...); err != nil {
 		return nil, err
@@ -312,8 +333,8 @@ func (r *AgentRepo) List(ctx context.Context, workspaceID uuid.UUID, filter repo
 func (r *AgentRepo) GetSubAgentTree(ctx context.Context, parentID uuid.UUID) ([]domain.Agent, error) {
 	const q = `
 		WITH RECURSIVE agent_tree AS (
-			SELECT *, 1 AS depth FROM agents
-			WHERE parent_agent_id = $1 AND deleted_at IS NULL
+			SELECT a.*, 1 AS depth FROM agents a
+			WHERE a.parent_agent_id = $1 AND a.deleted_at IS NULL
 			UNION ALL
 			SELECT a.*, t.depth + 1 FROM agents a
 			INNER JOIN agent_tree t ON a.parent_agent_id = t.id
@@ -405,7 +426,7 @@ type agentWithProjectsRow struct {
 // GetBySlug returns the agent with the given slug in a workspace.
 // Returns (nil, nil) when no matching agent is found.
 func (r *AgentRepo) GetBySlug(ctx context.Context, workspaceID uuid.UUID, slug string) (*domain.Agent, error) {
-	const q = `SELECT * FROM agents WHERE workspace_id = $1 AND slug = $2 AND deleted_at IS NULL`
+	const q = `SELECT ` + agentSelectCols + ` FROM agents WHERE workspace_id = $1 AND slug = $2 AND deleted_at IS NULL`
 	var row agentRow
 	if err := r.db.GetContext(ctx, &row, q, workspaceID, slug); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -463,7 +484,7 @@ func (r *AgentRepo) ListWithProjects(ctx context.Context, workspaceID uuid.UUID)
 // sorted by exact-prefix match first then name, up to limit results.
 func (r *AgentRepo) SearchByPrefix(ctx context.Context, workspaceID uuid.UUID, prefix string, limit int) ([]domain.Agent, error) {
 	const q = `
-		SELECT * FROM agents
+		SELECT ` + agentSelectCols + ` FROM agents
 		WHERE workspace_id = $1 AND deleted_at IS NULL
 		  AND (name ILIKE $2 OR slug ILIKE $2)
 		ORDER BY
