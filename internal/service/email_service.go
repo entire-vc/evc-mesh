@@ -118,20 +118,20 @@ func (s *smtpEmailService) send(toEmail, subject, htmlBody string) error {
 	// upstream of this sink validates it, so a title/name containing CRLF
 	// would otherwise inject arbitrary extra headers (CWE-93) into the raw
 	// message below — e.g. a forged Bcc that silently copies every
-	// notification email elsewhere. Stripped rather than rejected: a stray
-	// newline in a title is not a reason to fail delivery of a legitimate
-	// notification.
-	sanitizedSubject := strings.Map(func(r rune) rune {
-		if r == '\r' || r == '\n' {
-			return -1
-		}
-		return r
-	}, subject)
+	// notification email elsewhere. Checked explicitly on the exact variable
+	// used at the sink, same shape as the recipient check above: a prior
+	// version stripped the characters via strings.Map instead, which is
+	// functionally equivalent but is not recognized as a sanitizer by this
+	// repo's CodeQL Go email-injection query — the alert stayed open even
+	// though the value was genuinely clean by the time it reached the sink.
+	if strings.ContainsAny(subject, "\r\n") {
+		return fmt.Errorf("invalid subject: contains control characters")
+	}
 
 	msg := "MIME-version: 1.0;\nContent-Type: text/html; charset=\"UTF-8\";\r\n"
 	msg += fmt.Sprintf("From: %s\r\n", headerFrom)
 	msg += fmt.Sprintf("To: %s\r\n", recipient.Address)
-	msg += fmt.Sprintf("Subject: %s\r\n", sanitizedSubject)
+	msg += fmt.Sprintf("Subject: %s\r\n", subject)
 	msg += "\r\n" + htmlBody
 
 	addr := fmt.Sprintf("%s:%d", s.cfg.Host, s.cfg.Port)
