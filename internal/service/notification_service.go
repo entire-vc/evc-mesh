@@ -296,7 +296,19 @@ func (s *notificationService) dispatch(event domain.NotificationEvent) {
 	// Here, after a subscription already exists, the alternative to skipping
 	// is failing every dispatch loop's other channels over a channel nobody
 	// can currently receive.
-	if s.emailSvc != nil && s.emailSvc.Enabled() {
+	if s.emailSvc == nil || !s.emailSvc.Enabled() {
+		// Say so, once, and only when somebody was actually waiting on it.
+		// The skip itself is deliberate (see the comment above), but skipping
+		// silently is what let "email notifications don't arrive" go unnoticed:
+		// the rows were in the table, the events were firing, and the one place
+		// that knew the two would never meet said nothing. Counting the
+		// would-be recipients keeps this to one line per dispatch instead of
+		// one per subscriber.
+		if n := subscriberCountForChannel(prefs, "email", event, members); n > 0 {
+			log.Printf("[notification][email] channel unavailable on this instance (no SMTP configured) — %d subscriber(s) to %s in workspace %s were not emailed",
+				n, event.EventType, event.WorkspaceID)
+		}
+	} else {
 		sentTo := make(map[uuid.UUID]bool)
 		for i := range prefs {
 			p := &prefs[i]
@@ -325,12 +337,18 @@ func (s *notificationService) dispatch(event domain.NotificationEvent) {
 			go func(prefConfig json.RawMessage) {
 				addr, err := s.resolveEmailAddress(context.Background(), userID, prefConfig)
 				if err != nil {
-					log.Printf("[email] could not resolve delivery address for user %s: %v", userID, err)
+					log.Printf("[notification][email] NOT DELIVERED: no usable address for user %s (event %s, workspace %s): %v",
+						userID, event.EventType, event.WorkspaceID, err)
 					return
 				}
 				body := buildNotificationEmail(event.Title, event.Body, taskURL)
 				if err := s.emailSvc.SendNotification(context.Background(), addr, event.Title, body); err != nil {
-					log.Printf("[email] SendNotification error for %s: %v", userID, err)
+					// The address is logged deliberately: the failures this line
+					// exists to diagnose (a rejected sender, a typo'd custom
+					// address, a bounce) are unreadable without knowing which
+					// recipient the server refused.
+					log.Printf("[notification][email] NOT DELIVERED: send to %s failed for user %s (event %s, workspace %s): %v",
+						addr, userID, event.EventType, event.WorkspaceID, err)
 				}
 			}(p.Config)
 		}
@@ -452,6 +470,40 @@ func (s *notificationService) resolveEmailAddress(ctx context.Context, userID uu
 		return "", fmt.Errorf("user %s has no account email on file", userID)
 	}
 	return user.Email, nil
+}
+
+// subscriberCountForChannel counts the distinct users who would have received
+// this event on the named channel had it been able to deliver — i.e. the rows
+// that pass exactly the same membership, event-type and targeting filters the
+// channel's own fan-out loop applies, so the number in the log is the number of
+// people actually affected rather than the size of the table.
+//
+// Used only to decide whether an unavailable channel is worth a log line, and
+// what to say in it.
+func subscriberCountForChannel(
+	prefs []domain.NotificationPreference,
+	channel string,
+	event domain.NotificationEvent,
+	members map[uuid.UUID]bool,
+) int {
+	counted := make(map[uuid.UUID]bool)
+	for i := range prefs {
+		p := &prefs[i]
+		if p.Channel != channel || p.UserID == nil || counted[*p.UserID] {
+			continue
+		}
+		if !members[*p.UserID] {
+			continue
+		}
+		if !containsInStringArray(p.Events, event.EventType) {
+			continue
+		}
+		if event.TargetUserID != nil && *p.UserID != *event.TargetUserID {
+			continue
+		}
+		counted[*p.UserID] = true
+	}
+	return len(counted)
 }
 
 // subscribedUserIDs is the deduplicated set of users named by these preference

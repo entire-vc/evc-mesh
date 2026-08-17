@@ -126,7 +126,7 @@ describe("NotificationSettingsPage — Browser Push hydration (task 9d837f67)", 
         "false",
       );
     });
-    expect(switchInRowLabeled("Mention")).toHaveAttribute("aria-checked", "true");
+    expect(switchInRowLabeled("Mention", 1)).toHaveAttribute("aria-checked", "true");
   });
 
   it("does not apply a browser_push preference belonging to a different workspace", async () => {
@@ -145,7 +145,7 @@ describe("NotificationSettingsPage — Browser Push hydration (task 9d837f67)", 
     // since the fetched pref is scoped to a workspace the user isn't viewing.
     // Give the hydration effect a real chance to (wrongly) apply first.
     await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(switchInRowLabeled("Mention")).toHaveAttribute("aria-checked", "true");
+    expect(switchInRowLabeled("Mention", 1)).toHaveAttribute("aria-checked", "true");
   });
 
   it("keeps the saved browser_push event set across a subscribe/unsubscribe cycle", async () => {
@@ -163,8 +163,14 @@ describe("NotificationSettingsPage — Browser Push hydration (task 9d837f67)", 
     renderPage();
     await waitFor(() => expect(mockedApi).toHaveBeenCalled());
     // Panel is gated behind live subscription, so the toggles aren't on
-    // screen while unsubscribed.
-    expect(screen.queryByText("Mention")).not.toBeInTheDocument();
+    // screen while unsubscribed. Asserted on the browser-push panel's own
+    // wording rather than the row label "Mention": that label is also a row in
+    // the shared NOTIFICATION_EVENTS list the in-app/email/telegram sections
+    // render unconditionally, so its presence no longer says anything about
+    // this panel.
+    expect(
+      screen.queryByText("When someone @mentions you"),
+    ).not.toBeInTheDocument();
 
     screen.getByRole("button", { name: /Enable/ }).click();
 
@@ -174,7 +180,7 @@ describe("NotificationSettingsPage — Browser Push hydration (task 9d837f67)", 
         "false",
       );
     });
-    expect(switchInRowLabeled("Mention")).toHaveAttribute("aria-checked", "true");
+    expect(switchInRowLabeled("Mention", 1)).toHaveAttribute("aria-checked", "true");
   });
 });
 
