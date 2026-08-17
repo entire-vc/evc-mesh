@@ -199,7 +199,16 @@ func main() {
 	projectIntegrationRepo := postgres.NewProjectIntegrationRepo(db)
 
 	agentActLogRepo := postgres.NewAgentActivityLogRepo(db)
-	agentService := service.NewAgentService(agentRepo, activityLogRepo, workspaceRepo)
+	// The cache wrapper is applied at construction so that EVERY consumer of
+	// AgentService gets it — the three auth middlewares and the WebSocket
+	// handshake all call Authenticate, and each of them was paying a full
+	// cost-12 bcrypt comparison (~163 ms of CPU) on every single request from an
+	// already-known key. Successful verifications only; failures still run
+	// bcrypt, and rotation/deletion evict explicitly.
+	agentService := service.NewCachedAgentAuth(
+		service.NewAgentService(agentRepo, activityLogRepo, workspaceRepo),
+		service.AgentAuthCacheTTL,
+	)
 	// Wire agent activity log repository for monitoring.
 	if configurable, ok := agentService.(service.AgentServiceConfigurable); ok {
 		configurable.SetAgentActivityLogRepo(agentActLogRepo)
