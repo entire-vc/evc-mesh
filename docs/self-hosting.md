@@ -7,6 +7,10 @@
 - **Node.js 20+** and **pnpm** (for the frontend; CI builds on Node 22)
 - 2 GB RAM minimum
 - 10 GB disk space
+- **Outbound HTTPS (port 443) from the `api` container**, if you intend to use
+  the Telegram notification channel — it calls `api.telegram.org` directly. See
+  [Telegram notifications](#telegram-notifications). Nothing else in Mesh needs
+  outbound internet access, so a locked-down network is otherwise fine.
 
 > Running a **production** install? Skip to
 > [Production Deployment](#production-deployment) — it is a different compose
@@ -207,6 +211,45 @@ Only set the variables below if you want Mesh to send the mail itself.
 > surrounding whitespace and lowercase the address, and the database enforces
 > uniqueness on `lower(email)`. `Carol@Example.COM` and `carol@example.com` are
 > the same account.
+
+### Telegram notifications
+
+The Telegram channel is configured per workspace from the **Integrations**
+page, not through environment variables. It has one infrastructure
+requirement, and it is easy to miss because nothing else in Mesh has it:
+
+> **The `api` container must be able to reach `api.telegram.org` on port 443.**
+> Either allow outbound HTTPS to that host, or give the container an
+> `HTTPS_PROXY` / `HTTP_PROXY` that can.
+
+Check from the host running the container:
+
+```bash
+curl -sS --max-time 10 https://api.telegram.org
+# healthy: {"ok":false,"error_code":404,...}  <- a reply at all is the point
+# blocked: curl: (28) Operation timed out
+```
+
+and from inside the container itself, which is the answer that actually
+matters — host and container do not always have the same egress:
+
+```bash
+docker compose exec api curl -sS --max-time 10 https://api.telegram.org
+```
+
+Without that route the channel fails in a way that looks like nothing is
+wrong: the bot is configured, the settings page offers the connect link, users
+bind their accounts successfully — and no message is ever delivered, because
+every send times out. Mesh reports this rather than leaving you to guess:
+
+- **Notification settings** shows *"Telegram notifications cannot be delivered
+  right now"* with the reason, above the Telegram controls.
+- **The API log** names the host and the fix on every failed call, e.g.
+  `telegram sendMessage: cannot reach https://api.telegram.org — check that
+  this host has outbound HTTPS (443) access to it, or set HTTPS_PROXY ...`
+
+If you do not use the Telegram channel, none of this applies — leave it
+unconfigured and Mesh never calls out.
 
 ### MCP server
 

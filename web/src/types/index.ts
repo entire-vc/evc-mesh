@@ -919,8 +919,18 @@ export interface TelegramPreferenceConfig {
 }
 
 export interface TelegramBotInfo {
+  /** A bot is configured for this workspace and its token decrypts. */
   available: boolean;
   bot_username: string;
+  /**
+   * This server could actually reach the Telegram Bot API just now. Distinct
+   * from `available`, which only says a bot is on file: a configured bot on a
+   * host with no outbound route to api.telegram.org looks perfectly healthy
+   * and delivers nothing.
+   */
+  reachable: boolean;
+  /** Why the channel cannot deliver, ready to show. Empty when it can. */
+  unavailable_reason: string;
 }
 
 // Recurring tasks types

@@ -1533,6 +1533,10 @@ func (m *MockNotificationService) TelegramBotInfo(context.Context, uuid.UUID) (s
 	return "", false
 }
 
+func (m *MockNotificationService) TelegramReachable(context.Context, uuid.UUID) (reachable bool, reason string) {
+	return false, ""
+}
+
 // ---------------------------------------------------------------------------
 // MockAgentService — minimal stub for comment mention tests.
 // Only GetBySlug is implemented; all other methods panic.

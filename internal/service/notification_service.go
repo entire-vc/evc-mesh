@@ -47,6 +47,19 @@ type NotificationService interface {
 	// the t.me/<bot>?start=<token> link without calling Telegram itself.
 	TelegramBotInfo(ctx context.Context, workspaceID uuid.UUID) (botUsername string, available bool)
 
+	// TelegramReachable reports whether this instance can actually talk to the
+	// Telegram Bot API with workspaceID's configured bot, and why not when it
+	// cannot. It is the Telegram counterpart of EmailAvailable, and it has to
+	// make a real call because the failure it exists to catch — no outbound
+	// route from this host to api.telegram.org — is invisible to every check
+	// that only reads the database. A configured, decryptable, perfectly valid
+	// bot token looks completely healthy right up until the first send times
+	// out.
+	//
+	// Bounded by telegramProbeTimeout so a settings page asking the question
+	// cannot hang on the same timeout the dispatcher hits.
+	TelegramReachable(ctx context.Context, workspaceID uuid.UUID) (reachable bool, reason string)
+
 	// ListUnread returns unread notifications for the given user (up to 50).
 	ListUnread(ctx context.Context, userID uuid.UUID) ([]domain.Notification, error)
 
@@ -226,6 +239,13 @@ func (s *notificationService) dispatch(event domain.NotificationEvent) {
 			continue
 		}
 
+		// And the same for an event that is about several specific people
+		// rather than one — a comment concerns the task's own people, not
+		// every colleague subscribed to comment.created.
+		if !relevantToUser(event, *p.UserID) {
+			continue
+		}
+
 		n := &domain.Notification{
 			WorkspaceID: event.WorkspaceID,
 			UserID:      p.UserID,
@@ -258,6 +278,9 @@ func (s *notificationService) dispatch(event domain.NotificationEvent) {
 				continue
 			}
 			if event.TargetUserID != nil && *p.UserID != *event.TargetUserID {
+				continue
+			}
+			if !relevantToUser(event, *p.UserID) {
 				continue
 			}
 			taskURL := ""
@@ -328,6 +351,9 @@ func (s *notificationService) dispatch(event domain.NotificationEvent) {
 			if event.TargetUserID != nil && *p.UserID != *event.TargetUserID {
 				continue
 			}
+			if !relevantToUser(event, *p.UserID) {
+				continue
+			}
 			sentTo[*p.UserID] = true
 			userID := *p.UserID
 			taskURL := ""
@@ -355,14 +381,25 @@ func (s *notificationService) dispatch(event domain.NotificationEvent) {
 	}
 
 	// Fan-out to Telegram (per-user, respects the telegram channel's own
-	// prefs). Silently skipped when no channel deps were wired in, or when
-	// this workspace has no active bot configured — same shape as the email
-	// branch above.
-	if s.telegramClient != nil && s.telegramIntegrations != nil {
+	// prefs).
+	//
+	// Every way this channel can fail to deliver now says so. It used to have
+	// three silent exits — deps not wired, no active bot for the workspace, and
+	// a subscriber who never finished /start — and all three present to the
+	// person waiting as "Telegram notifications don't work", with nothing in the
+	// log to tell them apart. telegramUndeliverable renders whichever applies,
+	// once per dispatch, and only when somebody was actually waiting on it.
+	switch {
+	case s.telegramClient == nil || s.telegramIntegrations == nil:
+		s.logTelegramUndeliverable(prefs, event, members, "the Telegram channel is not wired up on this instance")
+	default:
 		integration, err := s.telegramIntegrations.GetByProvider(bgCtx, event.WorkspaceID, domain.IntegrationProviderTelegram)
 		if err != nil {
 			log.Printf("[telegram] failed to load bot integration for workspace %s: %v", event.WorkspaceID, err)
-		} else if token, _, ok := decodeTelegramIntegration(integration); ok {
+			s.logTelegramUndeliverable(prefs, event, members, "the workspace's bot integration could not be read")
+		} else if token, _, ok := decodeTelegramIntegration(integration); !ok {
+			s.logTelegramUndeliverable(prefs, event, members, "this workspace has no active Telegram bot configured")
+		} else {
 			wsName := ""
 			if s.telegramWorkspaces != nil {
 				if ws, wsErr := s.telegramWorkspaces.GetByID(bgCtx, event.WorkspaceID); wsErr == nil && ws != nil {
@@ -377,6 +414,7 @@ func (s *notificationService) dispatch(event domain.NotificationEvent) {
 			}
 			text := buildTelegramNotificationText(wsName, projName, event.Labels, event.Title, event.Body)
 
+			unbound := 0
 			sentTo := make(map[uuid.UUID]bool)
 			for i := range prefs {
 				p := &prefs[i]
@@ -392,6 +430,9 @@ func (s *notificationService) dispatch(event domain.NotificationEvent) {
 				if event.TargetUserID != nil && *p.UserID != *event.TargetUserID {
 					continue
 				}
+				if !relevantToUser(event, *p.UserID) {
+					continue
+				}
 				var cfg TelegramPreferenceConfig
 				if len(p.Config) > 0 {
 					_ = json.Unmarshal(p.Config, &cfg)
@@ -400,6 +441,10 @@ func (s *notificationService) dispatch(event domain.NotificationEvent) {
 					// Enabled and a username is on file, but /start was never
 					// completed (or the bot was later blocked and this row
 					// hasn't been re-bound) — nothing to deliver to yet.
+					// Counted rather than logged per row: a workspace where
+					// nobody finished /start would otherwise produce a line per
+					// subscriber per event.
+					unbound++
 					continue
 				}
 				sentTo[*p.UserID] = true
@@ -409,16 +454,72 @@ func (s *notificationService) dispatch(event domain.NotificationEvent) {
 					sendCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 					defer cancel()
 					if sendErr := s.telegramClient.SendMessage(sendCtx, token, chatID, text); sendErr != nil {
-						log.Printf("[telegram] SendMessage error for user %s: %v", userID, sendErr)
 						var apiErr *TelegramAPIError
 						if errors.As(sendErr, &apiErr) && apiErr.Forbidden() {
+							// The bot was blocked or the chat deleted. Distinct
+							// from a transient failure and worth saying so: the
+							// subscription is being switched off, and the user
+							// will not find out from Telegram.
+							log.Printf("[notification][telegram] NOT DELIVERED: user %s has blocked the bot (event %s, workspace %s) — disabling their Telegram channel: %v",
+								userID, event.EventType, event.WorkspaceID, sendErr)
 							s.disableTelegramForUser(context.Background(), event.WorkspaceID, userID)
+							return
 						}
+						log.Printf("[notification][telegram] NOT DELIVERED: send to chat %d failed for user %s (event %s, workspace %s): %v",
+							chatID, userID, event.EventType, event.WorkspaceID, sendErr)
 					}
 				}()
 			}
+
+			if unbound > 0 {
+				log.Printf("[notification][telegram] NOT DELIVERED: %d subscriber(s) to %s in workspace %s have not completed /start — no chat is bound to their account yet",
+					unbound, event.EventType, event.WorkspaceID)
+			}
 		}
 	}
+}
+
+// relevantToUser reports whether userID is one of the people this event is
+// about, according to its producer (RelevantUserIDs). An event that carries no
+// relevance information is relevant to everyone who subscribed to it, which is
+// the behaviour every channel had before this existed.
+//
+// Every fan-out loop calls this, in the same position as the TargetUserID check
+// it generalises. Which events narrow is decided once, by the producer that
+// knows who the event is about, rather than four times over by each channel
+// guessing — so a comment reaches the same people whether they read it in the
+// bell, their inbox or Telegram, and adding a fifth channel cannot accidentally
+// ship with a wider audience than the four before it.
+func relevantToUser(event domain.NotificationEvent, userID uuid.UUID) bool {
+	if len(event.RelevantUserIDs) == 0 {
+		return true
+	}
+	for _, id := range event.RelevantUserIDs {
+		if id == userID {
+			return true
+		}
+	}
+	return false
+}
+
+// logTelegramUndeliverable reports, once per dispatch, that the Telegram
+// channel could not deliver anything at all — and to how many people. Mirrors
+// the email branch's unavailable-channel line, and for the same reason: the
+// rows are in the table and the events are firing, so the only place the
+// difference between "nothing happened yet" and "this can never arrive" is
+// still visible is the moment dispatch declines to try.
+func (s *notificationService) logTelegramUndeliverable(
+	prefs []domain.NotificationPreference,
+	event domain.NotificationEvent,
+	members map[uuid.UUID]bool,
+	reason string,
+) {
+	n := subscriberCountForChannel(prefs, "telegram", event, members)
+	if n == 0 {
+		return
+	}
+	log.Printf("[notification][telegram] NOT DELIVERED: %s — %d subscriber(s) to %s in workspace %s got nothing",
+		reason, n, event.EventType, event.WorkspaceID)
 }
 
 // disableTelegramForUser turns off the telegram preference row for one user
@@ -501,6 +602,9 @@ func subscriberCountForChannel(
 		if event.TargetUserID != nil && *p.UserID != *event.TargetUserID {
 			continue
 		}
+		if !relevantToUser(event, *p.UserID) {
+			continue
+		}
 		counted[*p.UserID] = true
 	}
 	return len(counted)
@@ -580,6 +684,53 @@ func (s *notificationService) TelegramBotInfo(ctx context.Context, workspaceID u
 	}
 	_, botUsername, ok := decodeTelegramIntegration(cfg)
 	return botUsername, ok
+}
+
+// telegramProbeTimeout bounds the reachability probe. It is deliberately much
+// shorter than the dispatcher's 10s send timeout: this one runs while somebody
+// is looking at a settings page, and an unreachable host answers by not
+// answering, so the timeout *is* the response time in exactly the case the
+// probe exists for. Long enough for a healthy round trip to Telegram, short
+// enough that a blocked egress reports itself rather than looking like a hung
+// page.
+const telegramProbeTimeout = 3 * time.Second
+
+// TelegramReachable reports whether this instance can reach the Telegram Bot
+// API with workspaceID's bot.
+func (s *notificationService) TelegramReachable(ctx context.Context, workspaceID uuid.UUID) (reachable bool, reason string) {
+	if s.telegramClient == nil || s.telegramIntegrations == nil {
+		return false, "The Telegram channel is not enabled on this instance."
+	}
+	integration, err := s.telegramIntegrations.GetByProvider(ctx, workspaceID, domain.IntegrationProviderTelegram)
+	if err != nil {
+		return false, "This workspace's Telegram bot configuration could not be read."
+	}
+	token, _, ok := decodeTelegramIntegration(integration)
+	if !ok {
+		return false, "No active Telegram bot is configured for this workspace."
+	}
+
+	probeCtx, cancel := context.WithTimeout(ctx, telegramProbeTimeout)
+	defer cancel()
+
+	if _, err := s.telegramClient.GetMe(probeCtx, token); err != nil {
+		var unreachable *TelegramUnreachableError
+		if errors.As(err, &unreachable) {
+			// The case this whole probe exists for. Said in full, because the
+			// person reading it is in a browser and will not be reading the
+			// server log where the same explanation is waiting.
+			log.Printf("[notification][telegram] unreachable from this host (workspace %s): %v", workspaceID, err)
+			return false, "This server cannot reach api.telegram.org. Telegram notifications will not be delivered until the api container is allowed outbound HTTPS (port 443) to api.telegram.org, or an HTTPS_PROXY is configured for it."
+		}
+		var apiErr *TelegramAPIError
+		if errors.As(err, &apiErr) {
+			log.Printf("[notification][telegram] bot token rejected for workspace %s: %v", workspaceID, err)
+			return false, "Telegram rejected this workspace's bot token. Reconnect the bot from the Integrations page."
+		}
+		log.Printf("[notification][telegram] reachability probe failed for workspace %s: %v", workspaceID, err)
+		return false, "The Telegram bot could not be reached. Check the server logs for details."
+	}
+	return true, ""
 }
 
 // ListUnread returns unread notifications for the given user (up to 50).
