@@ -252,7 +252,9 @@ describe("NotificationSettingsPage — Email channel", () => {
     );
 
     const saveButtons = screen.getAllByRole("button", { name: /Save preferences/ });
-    saveButtons[saveButtons.length - 1].click();
+    const emailSaveButton = saveButtons[saveButtons.length - 1];
+    if (!emailSaveButton) throw new Error("expected an email Save preferences button");
+    emailSaveButton.click();
 
     await waitFor(() => expect(savedBody).toBeDefined());
     expect(savedBody).toMatchObject({

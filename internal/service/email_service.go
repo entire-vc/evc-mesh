@@ -111,28 +111,38 @@ func (s *smtpEmailService) send(toEmail, subject, htmlBody string) error {
 		return err
 	}
 
-	// subject is untrusted for SendNotification (built from a task title or
-	// comment body a workspace member wrote) and, for SendInvite, from a
-	// workspace name — both free-text fields with no newline restriction at
-	// the point they were entered. Unlike recipient.Address above, nothing
-	// upstream of this sink validates it, so a title/name containing CRLF
-	// would otherwise inject arbitrary extra headers (CWE-93) into the raw
-	// message below — e.g. a forged Bcc that silently copies every
-	// notification email elsewhere. Checked explicitly on the exact variable
-	// used at the sink, same shape as the recipient check above: a prior
-	// version stripped the characters via strings.Map instead, which is
-	// functionally equivalent but is not recognized as a sanitizer by this
-	// repo's CodeQL Go email-injection query — the alert stayed open even
-	// though the value was genuinely clean by the time it reached the sink.
-	if strings.ContainsAny(subject, "\r\n") {
-		return fmt.Errorf("invalid subject: contains control characters")
-	}
+	// Every field below is untrusted by the time it reaches this sink: toEmail
+	// (recipient address) and subject may come straight from an invite sender
+	// or a notification-preference row a user edited, or (for subject and
+	// htmlBody) transitively from a task title, comment body, or workspace
+	// name — none of which is restricted from containing CRLF at the point it
+	// was entered. Interpolated as-is, a CRLF in any of them would inject
+	// arbitrary extra SMTP headers into the raw message below (CWE-93/CWE-640)
+	// — e.g. a forged Bcc that silently copies the email elsewhere.
+	//
+	// strings.ReplaceAll on the exact variable used a few lines below, right
+	// here at the sink, is deliberate rather than a guard-and-reject (like the
+	// recipient check above) or a strings.Map closure: this repo's CodeQL Go
+	// email-injection query recognizes ReplaceAll-shaped transforms as a
+	// sanitizer (it models a "string replacement" barrier) but does not
+	// recognize a ContainsAny guard or a Map callback as one, even though both
+	// are equally effective at runtime — the alert stayed open against both
+	// of those forms during review. htmlBody's embedded newlines become <br>
+	// instead of being dropped, since — unlike a header value — a body
+	// legitimately contains user line breaks; converting rather than
+	// discarding keeps multi-line comments and task titles readable in the
+	// rendered email.
+	cleanAddress := strings.ReplaceAll(strings.ReplaceAll(recipient.Address, "\r", ""), "\n", "")
+	cleanSubject := strings.ReplaceAll(strings.ReplaceAll(subject, "\r", ""), "\n", "")
+	cleanBody := strings.ReplaceAll(htmlBody, "\r\n", "<br>")
+	cleanBody = strings.ReplaceAll(cleanBody, "\n", "<br>")
+	cleanBody = strings.ReplaceAll(cleanBody, "\r", "")
 
 	msg := "MIME-version: 1.0;\nContent-Type: text/html; charset=\"UTF-8\";\r\n"
 	msg += fmt.Sprintf("From: %s\r\n", headerFrom)
-	msg += fmt.Sprintf("To: %s\r\n", recipient.Address)
-	msg += fmt.Sprintf("Subject: %s\r\n", subject)
-	msg += "\r\n" + htmlBody
+	msg += fmt.Sprintf("To: %s\r\n", cleanAddress)
+	msg += fmt.Sprintf("Subject: %s\r\n", cleanSubject)
+	msg += "\r\n" + cleanBody
 
 	addr := fmt.Sprintf("%s:%d", s.cfg.Host, s.cfg.Port)
 	var auth smtp.Auth
@@ -140,7 +150,7 @@ func (s *smtpEmailService) send(toEmail, subject, htmlBody string) error {
 		auth = smtp.PlainAuth("", s.cfg.User, s.cfg.Pass, s.cfg.Host)
 	}
 
-	return sendMailFunc(addr, auth, envelopeFrom, []string{recipient.Address}, []byte(msg))
+	return sendMailFunc(addr, auth, envelopeFrom, []string{cleanAddress}, []byte(msg))
 }
 
 // parseFrom splits cfg.From into the bare envelope-sender address required by
@@ -179,7 +189,11 @@ func buildNotificationEmail(title, body, taskURL string) string {
 	b.WriteString(`<!DOCTYPE html><html><body style="font-family:sans-serif;color:#111;max-width:480px;margin:40px auto;padding:0 16px">`)
 	fmt.Fprintf(&b, `<h2 style="font-size:18px">%s</h2>`, html.EscapeString(title))
 	if body != "" {
-		fmt.Fprintf(&b, `<p style="color:#555;white-space:pre-wrap">%s</p>`, html.EscapeString(body))
+		// Newlines survive html.EscapeString (it only escapes <>&'"), so this
+		// still carries raw \n at this point — send() converts them to <br>
+		// right before the message is built, which is also where CRLF is
+		// stripped from every field reaching the wire.
+		fmt.Fprintf(&b, `<p style="color:#555">%s</p>`, html.EscapeString(body))
 	}
 	if taskURL != "" {
 		fmt.Fprintf(&b, `<a href=%q style="display:inline-block;margin:24px 0;padding:12px 24px;background:#18181b;color:#fff;text-decoration:none;border-radius:6px;font-weight:600">View task</a>`, taskURL)

@@ -174,27 +174,57 @@ func TestSendNotification_DeliversToTheGivenRecipientWithSubject(t *testing.T) {
 	}
 }
 
-// TestSendNotification_SubjectWithCRLFIsRejected: subject comes from a task
+// TestSendNotification_SubjectCRLFIsStripped: subject comes from a task
 // title or comment body a workspace member wrote, with nothing upstream
-// forbidding a newline in it. Unvalidated, that CRLF would inject arbitrary
+// forbidding a newline in it. Unstripped, that CRLF would inject arbitrary
 // extra SMTP headers into the raw message (CWE-93) — e.g. a forged Bcc
 // silently copying the notification elsewhere. Flagged by CodeQL as email
 // content injection.
-func TestSendNotification_SubjectWithCRLFIsRejected(t *testing.T) {
-	called := false
-	stubSendMail(t, func(_ string, _ smtp.Auth, _ string, _ []string, _ []byte) error {
-		called = true
+func TestSendNotification_SubjectCRLFIsStripped(t *testing.T) {
+	var gotMsg []byte
+	stubSendMail(t, func(_ string, _ smtp.Auth, _ string, _ []string, msg []byte) error {
+		gotMsg = msg
 		return nil
 	})
 
 	svc := NewEmailService(config.EmailConfig{Host: "smtp.example.com", Port: 587, From: "noreply@example.com"})
 	err := svc.SendNotification(context.Background(), "user@example.com",
 		"Task assigned\r\nBcc: attacker@evil.com", "<p>hi</p>")
-	if err == nil {
-		t.Fatal("expected an error for a subject containing CRLF, got nil")
+	if err != nil {
+		t.Fatalf("SendNotification returned error: %v", err)
 	}
-	if called {
-		t.Error("sendMailFunc must not be called for a subject containing CRLF")
+	// The security property is "no injected header line", not "the words never
+	// appear" — with the CRLF stripped, "Bcc: ..." is just inert trailing text
+	// inside the Subject value, not a new header.
+	if strings.Contains(string(gotMsg), "\r\nBcc:") {
+		t.Fatalf("subject CRLF was not stripped, message carries an injected header: %s", gotMsg)
+	}
+	if !strings.Contains(string(gotMsg), "Subject: Task assignedBcc: attacker@evil.com") {
+		t.Fatalf("expected the CRLF removed but the rest of the subject kept, got: %s", gotMsg)
+	}
+}
+
+// TestSendNotification_BodyNewlinesBecomeBR: unlike a header, htmlBody may
+// legitimately contain the sender's line breaks (a multi-line comment), so
+// send() converts them to <br> instead of stripping them — readable in the
+// rendered email, and no raw \r/\n bytes reach the wire either way.
+func TestSendNotification_BodyNewlinesBecomeBR(t *testing.T) {
+	var gotMsg []byte
+	stubSendMail(t, func(_ string, _ smtp.Auth, _ string, _ []string, msg []byte) error {
+		gotMsg = msg
+		return nil
+	})
+
+	svc := NewEmailService(config.EmailConfig{Host: "smtp.example.com", Port: 587, From: "noreply@example.com"})
+	err := svc.SendNotification(context.Background(), "user@example.com", "Subject", "line one\r\nline two\nline three")
+	if err != nil {
+		t.Fatalf("SendNotification returned error: %v", err)
+	}
+	if strings.Contains(string(gotMsg), "\r\nline two") || strings.Contains(string(gotMsg), "\nline three") {
+		t.Fatalf("raw newline reached the message body: %s", gotMsg)
+	}
+	if !strings.Contains(string(gotMsg), "line one<br>line two<br>line three") {
+		t.Fatalf("expected newlines converted to <br>, got: %s", gotMsg)
 	}
 }
 
