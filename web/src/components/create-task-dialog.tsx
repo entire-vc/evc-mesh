@@ -23,6 +23,7 @@ import { useTemplateStore } from "@/stores/template";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { useRulesStore } from "@/stores/rules";
 import { getAccessToken } from "@/lib/api";
+import { artifactDownloadPath } from "@/lib/artifact-links";
 import { inlineLabel } from "@/lib/user-display";
 import type { AssigneeType, Artifact, Priority, DelegationLevel, CreateTaskRequest } from "@/types";
 import { DelegationLevelSelect } from "@/components/delegation-level-select";
@@ -212,7 +213,7 @@ export function CreateTaskDialog({
 
             if (res.ok) {
               const artifact = (await res.json()) as Artifact;
-              const realMd = `![${pending.file.name}](${artifact.storage_url})`;
+              const realMd = `![${pending.file.name}](${artifactDownloadPath(artifact.id)})`;
               updatedDescription = updatedDescription.replace(
                 pending.placeholder,
                 realMd,
