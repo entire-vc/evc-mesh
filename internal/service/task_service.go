@@ -309,7 +309,7 @@ func (s *taskService) Create(ctx context.Context, task *domain.Task) error {
 
 	// Notify the assignee, and only the assignee — see notifyAssignee for why a
 	// user-typed assignee gets this and an agent-typed one doesn't.
-	s.notifyAssignee(ctx, task, "task.assigned", "Task assigned: "+task.Title)
+	s.notifyAssignee(ctx, task, "Task assigned: "+task.Title)
 
 	// Tell the reviewer, and only the reviewer — notifyReviewer no-ops when no
 	// reviewer was set, so this stays silent for the (still) common no-reviewer
@@ -476,7 +476,7 @@ func (s *taskService) Update(ctx context.Context, task *domain.Task) error {
 
 		// Notify the assignee, and only the assignee — Create and AssignTask
 		// already do this, Update never did.
-		s.notifyAssignee(ctx, task, "task.assigned", "Task assigned: "+task.Title)
+		s.notifyAssignee(ctx, task, "Task assigned: "+task.Title)
 	}
 
 	// Notify assignee agent when delegation_level changes (e.g. task becomes supervised).
@@ -952,7 +952,7 @@ func (s *taskService) AssignTask(ctx context.Context, taskID uuid.UUID, input As
 	})
 
 	// Notify the assignee, and only the assignee.
-	s.notifyAssignee(ctx, task, "task.assigned", "Task assigned: "+task.Title)
+	s.notifyAssignee(ctx, task, "Task assigned: "+task.Title)
 
 	return nil
 }
@@ -1076,6 +1076,17 @@ func (s *taskService) CreateSubtask(ctx context.Context, parentTaskID uuid.UUID,
 		"title":          map[string]interface{}{"old": nil, "new": child.Title},
 		"parent_task_id": map[string]interface{}{"old": nil, "new": parentTaskID.String()},
 	})
+
+	// Same two-channel contract as Create: push-wake an agent assignee,
+	// targeted in-app notify a user assignee. Both no-op on no assignee or
+	// self-assignment — this path had neither, which is the bug this fixes.
+	// CreateSubtaskInput carries no reviewer field, so there is no reviewer
+	// notification to send here.
+	s.notifyAssignedAgent(ctx, child, "task.assigned", map[string]any{
+		"assignee_id": map[string]any{"old": nil, "new": child.AssigneeID},
+	})
+	s.notifyAssignee(ctx, child, "Task assigned: "+child.Title)
+
 	return child, nil
 }
 
@@ -1403,14 +1414,14 @@ func (s *taskService) dispatchTargetedUserNotification(ctx context.Context, task
 //   - agent assignee: notifyAssignedAgent already woke them via push/SSE/callback,
 //     and only user rows exist in the notifications table.
 //   - self-assignment: the actor already knows what they just did.
-func (s *taskService) notifyAssignee(ctx context.Context, task *domain.Task, eventType, title string) {
+func (s *taskService) notifyAssignee(ctx context.Context, task *domain.Task, title string) {
 	if task.AssigneeID == nil || task.AssigneeType != domain.AssigneeTypeUser {
 		return
 	}
 	if actorID, _ := actorctx.FromContext(ctx); actorID != uuid.Nil && actorID == *task.AssigneeID {
 		return
 	}
-	s.dispatchTargetedUserNotification(ctx, task, eventType, title, "", *task.AssigneeID,
+	s.dispatchTargetedUserNotification(ctx, task, "task.assigned", title, "", *task.AssigneeID,
 		map[string]any{"assignee_id": *task.AssigneeID})
 }
 
