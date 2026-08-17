@@ -172,21 +172,38 @@ ci-services-up: ci-project-env
 	docker compose -f $(DEPLOY_COMPOSE) up -d --wait postgres redis nats
 	@echo "── Services ready ✓"
 
-## ci-services-down: Stop CI services.
+## ci-services-down: Stop AND REMOVE this checkout's CI containers + network
+## (`down -v`, not `stop`). `stop` — the previous behavior — left the
+## containers and this project's docker network sitting around forever: it
+## releases neither, so even a caller that remembered to call it would only
+## have paused the leak, not fixed it. See #03eed881: nothing ever called
+## this target at all, so 26 abandoned per-checkout networks (~78 containers)
+## piled up across every worktree/push on this shared host until Docker's
+## whole address pool was exhausted and `ci-services-up` started failing for
+## everyone, not just the checkout that leaked.
 ci-services-down:
-	docker compose -f $(DEPLOY_COMPOSE) stop postgres redis nats
+	docker compose -f $(DEPLOY_COMPOSE) down -v
 
 ## ci-test: Run migrations + go test ./... -race (requires ci-services-up).
+##
+## The whole recipe is ONE shell invocation (line-continued with `\`) so a
+## single `trap ... EXIT` covers it end to end: services come down whether
+## the migration fails, the tests fail, or everything passes. Before this,
+## a failure here left the just-started stack (and its network) running
+## forever, which is the majority case that produced #03eed881 — a failing
+## `make ci` is a normal, frequent outcome, not an edge case worth
+## leaving unhandled.
 ci-test: ci-services-up
-	@echo "── Migrations ──────────────────────────────────────────────────"
+	@trap '$(MAKE) ci-services-down' EXIT; \
+	echo "── Migrations ──────────────────────────────────────────────────"; \
 	GOOSE_DRIVER=postgres GOOSE_DBSTRING="$(CI_DB_DSN)" \
-		$(GOOSE) -dir migrations up
-	@echo "── Tests (go test -race) ───────────────────────────────────────"
+		$(GOOSE) -dir migrations up && \
+	echo "── Tests (go test -race) ───────────────────────────────────────" && \
 	DATABASE_URL="$(CI_DATABASE_URL)" \
 	REDIS_URL="$(CI_REDIS_URL)" \
 	NATS_URL="$(CI_NATS_URL)" \
-		go test ./... -v -race -coverprofile=coverage.out -covermode=atomic
-	@echo "── Tests OK ✓"
+		go test ./... -v -race -coverprofile=coverage.out -covermode=atomic && \
+	echo "── Tests OK ✓"
 
 ## ci-build: Compile Go binaries + frontend typecheck + build.
 ci-build:
