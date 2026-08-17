@@ -1076,6 +1076,17 @@ func (s *taskService) CreateSubtask(ctx context.Context, parentTaskID uuid.UUID,
 		"title":          map[string]interface{}{"old": nil, "new": child.Title},
 		"parent_task_id": map[string]interface{}{"old": nil, "new": parentTaskID.String()},
 	})
+
+	// Same two-channel contract as Create: push-wake an agent assignee,
+	// targeted in-app notify a user assignee. Both no-op on no assignee or
+	// self-assignment — this path had neither, which is the bug this fixes.
+	// CreateSubtaskInput carries no reviewer field, so there is no reviewer
+	// notification to send here.
+	s.notifyAssignedAgent(ctx, child, "task.assigned", map[string]any{
+		"assignee_id": map[string]any{"old": nil, "new": child.AssigneeID},
+	})
+	s.notifyAssignee(ctx, child, "task.assigned", "Task assigned: "+child.Title)
+
 	return child, nil
 }
 
