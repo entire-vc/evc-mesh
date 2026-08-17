@@ -65,7 +65,9 @@ func TestInviteFlow_NewTeammateCanAcceptAndLogIn(t *testing.T) {
 	var accepted map[string]interface{}
 	require.NoError(t, json.Unmarshal(body, &accepted))
 	assert.NotEmpty(t, accepted["access_token"])
-	assert.NotEmpty(t, accepted["refresh_token"])
+	_, hasRefreshInBody := accepted["refresh_token"]
+	assert.False(t, hasRefreshInBody, "refresh_token must not be in the accept-invite response body")
+	assert.NotEmpty(t, acceptClient.RefreshCookieValue(t), "refresh token must have arrived as a cookie")
 
 	// --- The new account is real: it has a valid username and can log in ---
 	var username, storedEmail string

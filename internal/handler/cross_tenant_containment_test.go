@@ -304,7 +304,9 @@ func inviteRequest(t *testing.T, svc service.WorkspaceInviteService, method, op,
 	t.Helper()
 
 	e := echo.New()
-	h := NewInviteHandler(svc)
+	// nil authService is safe here — this helper only ever drives
+	// Resend/Revoke, neither of which touches it (only Accept does).
+	h := NewInviteHandler(svc, nil)
 
 	rec := httptest.NewRecorder()
 	c := e.NewContext(httptest.NewRequest(method, "/", http.NoBody), rec)

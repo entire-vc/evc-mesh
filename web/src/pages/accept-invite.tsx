@@ -3,7 +3,7 @@ import { useNavigate, useParams } from "react-router";
 import { Eye, EyeOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { api, setTokens } from "@/lib/api";
+import { api, setAccessToken } from "@/lib/api";
 import { useAuthStore } from "@/stores/auth";
 
 interface InviteInfo {
@@ -66,11 +66,11 @@ export function AcceptInvitePage() {
     setError(null);
 
     try {
-      const resp = await api<{ access_token: string; refresh_token: string }>(
+      const resp = await api<{ access_token: string }>(
         `/api/v1/invites/${token}/accept`,
-        { method: "POST", body: { name: name.trim(), password }, noAuth: true },
+        { method: "POST", body: { name: name.trim(), password }, noAuth: true, withCredentials: true },
       );
-      setTokens(resp.access_token, resp.refresh_token);
+      setAccessToken(resp.access_token);
       await fetchMe();
       navigate("/", { replace: true });
     } catch (err) {

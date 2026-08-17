@@ -34,8 +34,10 @@ func TestAuthFlow_RegisterLoginLogout(t *testing.T) {
 		tokens, ok := result["tokens"].(map[string]interface{})
 		require.True(t, ok, "response must contain tokens")
 		assert.NotEmpty(t, tokens["access_token"])
-		assert.NotEmpty(t, tokens["refresh_token"])
 		assert.NotZero(t, tokens["expires_in"])
+		_, hasRefreshInBody := tokens["refresh_token"]
+		assert.False(t, hasRefreshInBody, "refresh_token must not be in the response body — it belongs only in the httpOnly cookie")
+		assert.NotEmpty(t, env.RefreshCookieValue(t), "refresh token must have arrived as a cookie")
 	})
 
 	// --- Step 2: Duplicate registration should fail ---
@@ -50,15 +52,15 @@ func TestAuthFlow_RegisterLoginLogout(t *testing.T) {
 	})
 
 	// --- Step 3: Login ---
-	var refreshToken string
 	t.Run("Login", func(t *testing.T) {
 		result := env.Login(t, email, password)
 
 		tokens, ok := result["tokens"].(map[string]interface{})
 		require.True(t, ok)
 		assert.NotEmpty(t, tokens["access_token"])
-		refreshToken = tokens["refresh_token"].(string)
-		assert.NotEmpty(t, refreshToken)
+		_, hasRefreshInBody := tokens["refresh_token"]
+		assert.False(t, hasRefreshInBody, "refresh_token must not be in the response body")
+		assert.NotEmpty(t, env.RefreshCookieValue(t))
 	})
 
 	// --- Step 4: /auth/me ---
@@ -72,11 +74,13 @@ func TestAuthFlow_RegisterLoginLogout(t *testing.T) {
 		assert.Equal(t, "Auth Test User", user["name"])
 	})
 
-	// --- Step 5: Token refresh ---
+	// --- Step 5: Token refresh (refresh token rides the jar's cookie now,
+	// not a body field) ---
+	var preRefreshToken string
 	t.Run("RefreshToken", func(t *testing.T) {
-		resp := env.Post(t, "/api/v1/auth/refresh", map[string]string{
-			"refresh_token": refreshToken,
-		})
+		preRefreshToken = env.RefreshCookieValue(t)
+
+		resp := env.Post(t, "/api/v1/auth/refresh", nil)
 		require.Equal(t, http.StatusOK, resp.StatusCode)
 
 		var result map[string]interface{}
@@ -84,17 +88,30 @@ func TestAuthFlow_RegisterLoginLogout(t *testing.T) {
 		tokens, ok := result["tokens"].(map[string]interface{})
 		require.True(t, ok)
 		assert.NotEmpty(t, tokens["access_token"])
-		assert.NotEmpty(t, tokens["refresh_token"])
+		_, hasRefreshInBody := tokens["refresh_token"]
+		assert.False(t, hasRefreshInBody)
+
+		rotated := env.RefreshCookieValue(t)
+		assert.NotEqual(t, preRefreshToken, rotated, "refresh must rotate the cookie, not reissue the same token")
 
 		// Update auth token for subsequent requests.
 		env.AuthToken = tokens["access_token"].(string)
 	})
 
 	// --- Step 6: Reuse old refresh token (theft detection) ---
+	// The jar now holds the ROTATED cookie, so replay the pre-rotation value
+	// explicitly via a raw request — this is exactly the scenario the task's
+	// tab-race concern is about: an old, already-revoked token showing up.
 	t.Run("RefreshTokenReuse", func(t *testing.T) {
-		resp := env.Post(t, "/api/v1/auth/refresh", map[string]string{
-			"refresh_token": refreshToken,
-		})
+		req, err := http.NewRequest(http.MethodPost, env.BaseURL+"/api/v1/auth/refresh", nil)
+		require.NoError(t, err)
+		req.AddCookie(&http.Cookie{Name: "refresh_token", Value: preRefreshToken})
+
+		// A plain, jar-less client — env.HTTPClient's own jar already holds
+		// the ROTATED cookie, and a Jar-backed Do() would silently append
+		// its current cookie alongside the one we set here.
+		resp, err := (&http.Client{}).Do(req)
+		require.NoError(t, err)
 		// Should be 401 because token was already rotated.
 		assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
 		resp.Body.Close()

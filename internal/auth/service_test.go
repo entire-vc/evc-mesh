@@ -97,9 +97,42 @@ func (r *mockUserRepo) Count(_ context.Context) (int, error) {
 
 // ---
 
+// raceBarrier releases its waiters only once n of them have arrived. It exists so a
+// concurrency test can pin one specific interleaving instead of hoping the scheduler
+// produces it: without it, goroutines racing through a mutex-guarded mock almost always
+// serialise, each losing racer reads an already-revoked row, and the test passes even
+// against code that has the race. That variant was written first and confirmed vacuous —
+// it stayed green with the fix mutated out.
+type raceBarrier struct {
+	mu      sync.Mutex
+	n       int
+	arrived int
+	ready   chan struct{}
+}
+
+func newRaceBarrier(n int) *raceBarrier {
+	return &raceBarrier{n: n, ready: make(chan struct{})}
+}
+
+func (b *raceBarrier) wait() {
+	b.mu.Lock()
+	b.arrived++
+	if b.arrived == b.n {
+		close(b.ready)
+	}
+	b.mu.Unlock()
+	<-b.ready
+}
+
 type mockRefreshTokenRepo struct {
 	mu     sync.RWMutex
 	tokens map[string]*repository.RefreshToken
+
+	// readBarrier, when non-nil, holds every GetByHash caller until n of them have
+	// read. That is the TOCTOU window made deterministic: all callers leave with a
+	// snapshot saying "not revoked", so nothing but the atomicity of the revoke
+	// itself can decide who is allowed to mint.
+	readBarrier *raceBarrier
 }
 
 func newMockRefreshTokenRepo() *mockRefreshTokenRepo {
@@ -119,14 +152,26 @@ func (r *mockRefreshTokenRepo) Create(_ context.Context, userID uuid.UUID, token
 	return nil
 }
 
+// GetByHash returns a COPY, mirroring the real repo, which scans a fresh struct out of
+// the DB on every call. Handing out the stored pointer would let a caller read RevokedAt
+// while a concurrent RevokeByHash writes it — a data race manufactured by the test double
+// itself, which -race would report against code that does not have one.
 func (r *mockRefreshTokenRepo) GetByHash(_ context.Context, tokenHash string) (*repository.RefreshToken, error) {
 	r.mu.RLock()
-	defer r.mu.RUnlock()
 	t, ok := r.tokens[tokenHash]
+	var snapshot repository.RefreshToken
+	if ok {
+		snapshot = *t
+	}
+	r.mu.RUnlock() // released before the barrier: blocking under the lock would deadlock
+
+	if r.readBarrier != nil {
+		r.readBarrier.wait()
+	}
 	if !ok {
 		return nil, nil
 	}
-	return t, nil
+	return &snapshot, nil
 }
 
 func (r *mockRefreshTokenRepo) RevokeByUserID(_ context.Context, userID uuid.UUID) error {
@@ -141,14 +186,19 @@ func (r *mockRefreshTokenRepo) RevokeByUserID(_ context.Context, userID uuid.UUI
 	return nil
 }
 
-func (r *mockRefreshTokenRepo) RevokeByHash(_ context.Context, tokenHash string) error {
+// RevokeByHash models the real repo's conditional UPDATE: the test-and-set happens under
+// one lock, so exactly one concurrent caller can observe true for a given token. A mock
+// that unconditionally reported true would make the concurrency test below vacuous.
+func (r *mockRefreshTokenRepo) RevokeByHash(_ context.Context, tokenHash string) (bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if t, ok := r.tokens[tokenHash]; ok {
-		now := time.Now()
-		t.RevokedAt = &now
+	t, ok := r.tokens[tokenHash]
+	if !ok || t.RevokedAt != nil {
+		return false, nil
 	}
-	return nil
+	now := time.Now()
+	t.RevokedAt = &now
+	return true, nil
 }
 
 func (r *mockRefreshTokenRepo) DeleteExpired(_ context.Context) error {
@@ -687,6 +737,67 @@ func TestRefreshTokens_RevokedToken_TheftDetection(t *testing.T) {
 	_, err = svc.RefreshTokens(context.Background(), tokens.RefreshToken)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "reuse detected")
+}
+
+// TestRefreshTokens_ConcurrentRequests_OnlyOneSucceeds pins the one-shot guarantee under
+// concurrency, which is where it used to break. Presenting one refresh token N times at
+// once must mint exactly one pair — never N — and every loser must land on the same
+// theft-detection path as a sequential replay.
+//
+// This is a genuine regression test, not a restatement of the implementation: with the
+// pre-fix service (revoke, then mint unconditionally) every goroutine here returns a
+// distinct valid access token and the assertion below fails. Verified by mutation — the
+// fix was removed and this test went red, then restored and it went green. Run under -race.
+func TestRefreshTokens_ConcurrentRequests_OnlyOneSucceeds(t *testing.T) {
+	const racers = 8
+
+	svc, _, refreshRepo, _, _ := newTestService()
+
+	_, tokens, err := svc.Register(context.Background(), "race@example.com", "StrongP4ss", "User")
+	require.NoError(t, err)
+
+	// Install the barrier only now, so registration's own repo calls don't trip it.
+	// Every racer will hold inside GetByHash until all 8 have read the token as
+	// un-revoked — the exact window the old code minted from.
+	refreshRepo.readBarrier = newRaceBarrier(racers)
+
+	// Release every goroutine at once so they collide inside RefreshTokens rather than
+	// serialising on goroutine start-up.
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	results := make([]*TokenPair, racers)
+	errs := make([]error, racers)
+
+	for i := 0; i < racers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			results[i], errs[i] = svc.RefreshTokens(context.Background(), tokens.RefreshToken)
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	var succeeded int
+	minted := make(map[string]struct{})
+	for i := 0; i < racers; i++ {
+		if errs[i] == nil {
+			succeeded++
+			require.NotNil(t, results[i])
+			minted[results[i].AccessToken] = struct{}{}
+			continue
+		}
+		// Every loser must be told the token was reused, not handed some other error.
+		assert.ErrorIs(t, errs[i], ErrTokenReused,
+			"racer %d lost the rotation but did not get the theft-detection error", i)
+		assert.Nil(t, results[i], "racer %d got an error AND a token pair", i)
+	}
+
+	assert.Equal(t, 1, succeeded,
+		"one-shot refresh token minted %d pairs under %d concurrent requests; exactly 1 is allowed",
+		succeeded, racers)
+	assert.Len(t, minted, succeeded, "distinct access tokens must equal the number of winners")
 }
 
 func TestRefreshTokens_InvalidToken(t *testing.T) {

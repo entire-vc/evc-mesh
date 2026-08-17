@@ -39,7 +39,9 @@ func createInvite(t *testing.T, svc service.WorkspaceInviteService, wsID uuid.UU
 	t.Helper()
 
 	e := echo.New()
-	h := NewInviteHandler(svc)
+	// nil authService is safe here — this helper only drives CreateInvite,
+	// which never touches it (only Accept does).
+	h := NewInviteHandler(svc, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"email":"teammate@example.com","role":"member"}`))
 	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)

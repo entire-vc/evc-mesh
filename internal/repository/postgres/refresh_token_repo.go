@@ -49,10 +49,23 @@ func (r *RefreshTokenRepo) RevokeByUserID(ctx context.Context, userID uuid.UUID)
 	return err
 }
 
-func (r *RefreshTokenRepo) RevokeByHash(ctx context.Context, tokenHash string) error {
-	const q = `UPDATE refresh_tokens SET revoked_at = $1 WHERE token_hash = $2 AND revoked_at IS NULL`
-	_, err := r.db.ExecContext(ctx, q, time.Now(), tokenHash)
-	return err
+// RevokeByHash revokes an un-revoked refresh token and reports whether this call is
+// the one that did it. The conditional UPDATE is the atomicity primitive: under
+// concurrent rotation of the same one-shot token, PostgreSQL serialises the writers on
+// the row, and every writer after the first re-evaluates `revoked_at IS NULL` against
+// the already-updated row, matches nothing, and gets sql.ErrNoRows here. So exactly one
+// caller receives true. Do not replace this with a read-then-write in Go — that is the
+// check-then-act race this signature exists to make unrepresentable.
+func (r *RefreshTokenRepo) RevokeByHash(ctx context.Context, tokenHash string) (bool, error) {
+	const q = `UPDATE refresh_tokens SET revoked_at = $1 WHERE token_hash = $2 AND revoked_at IS NULL RETURNING id`
+	var id uuid.UUID
+	if err := r.db.GetContext(ctx, &id, q, time.Now(), tokenHash); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
 }
 
 func (r *RefreshTokenRepo) DeleteExpired(ctx context.Context) error {

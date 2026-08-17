@@ -1,7 +1,12 @@
 package handler
 
 import (
+	"errors"
+	"net"
 	"net/http"
+	"os"
+	"strings"
+	"time"
 
 	"github.com/labstack/echo/v4"
 
@@ -20,6 +25,114 @@ func NewAuthHandler(as *auth.Service) *AuthHandler {
 	return &AuthHandler{authService: as}
 }
 
+// refreshCookieName is the httpOnly cookie carrying the refresh token. It is
+// scoped to refreshCookiePath so the browser never attaches it to any other
+// request — a stolen access token (which never lives in a cookie) or an XSS
+// payload reading document.cookie on some other page cannot reach it either.
+const (
+	refreshCookieName = "refresh_token"
+	refreshCookiePath = "/api/v1/auth/refresh"
+)
+
+// setRefreshCookie attaches the refresh token to the response as an httpOnly,
+// SameSite=Strict cookie instead of returning it in the JSON body. ttl mirrors
+// the token's actual database lifetime (auth.Service.RefreshTokenTTL) so the
+// cookie never outlives, or gets dropped before, the token it carries.
+func setRefreshCookie(c echo.Context, token string, ttl time.Duration) {
+	c.SetCookie(&http.Cookie{
+		Name:     refreshCookieName,
+		Value:    token,
+		Path:     refreshCookiePath,
+		MaxAge:   int(ttl.Seconds()),
+		HttpOnly: true,
+		Secure:   isRequestSecure(c.Request()),
+		SameSite: http.SameSiteStrictMode,
+	})
+}
+
+// clearRefreshCookie expires the refresh cookie immediately. Path must match
+// setRefreshCookie's exactly — browsers key cookie deletion on Name+Path
+// (+Domain), so a mismatched Path silently leaves the old cookie in place.
+func clearRefreshCookie(c echo.Context) {
+	c.SetCookie(&http.Cookie{
+		Name:     refreshCookieName,
+		Value:    "",
+		Path:     refreshCookiePath,
+		MaxAge:   -1,
+		HttpOnly: true,
+		Secure:   isRequestSecure(c.Request()),
+		SameSite: http.SameSiteStrictMode,
+	})
+}
+
+// cookieInsecureOptOut disables the Secure attribute on the refresh cookie for
+// the one deployment that legitimately cannot set it: Mesh served over plain
+// HTTP on a trusted LAN (a self-hoster on http://192.168.x.y:8005). It is an
+// opt-out rather than the default because getting it wrong in the safe
+// direction costs a self-hoster a failed login they will notice immediately,
+// while getting it wrong in the unsafe direction silently puts a 7-day refresh
+// token on the wire in cleartext.
+var cookieInsecureOptOut = os.Getenv("MESH_COOKIE_INSECURE") == "true"
+
+// isRequestSecure reports whether the refresh cookie should carry Secure.
+//
+// It deliberately does NOT trust X-Forwarded-Proto. That header is set by
+// whatever spoke to us last, and in our own production topology it is
+// provably wrong: the hel01 edge terminates TLS and forwards to mesh-vm's
+// Caddy over plain :80, and Caddy (v2.11.4, no `trusted_proxies` configured)
+// OVERWRITES the inbound X-Forwarded-Proto with the scheme of the hop it
+// received rather than preserving it. Measured on the host, echo server
+// behind the same binary:
+//
+//	direct, client sends https  -> X-Forwarded-Proto='https'
+//	through Caddy, same request -> X-Forwarded-Proto='http'
+//
+// So a header-trusting check returns false on https://mesh.entire.host and
+// drops Secure from the cookie — on a host that has no HSTS and answers on
+// port 80, which is exactly the setup where a cleartext request carries the
+// cookie out before the 308 redirect can upgrade it.
+//
+// Instead: Secure unless this is plainly a local dev connection, with an
+// explicit env opt-out for plain-HTTP LAN deployments. Unknown topology gets
+// the safe answer.
+func isRequestSecure(r *http.Request) bool {
+	if cookieInsecureOptOut {
+		return false
+	}
+	if isLoopbackHost(r.Host) {
+		return r.TLS != nil
+	}
+	return true
+}
+
+// isLoopbackHost reports whether the request was addressed to this machine by
+// a loopback name — the dev case (`go run` + Vite proxy on localhost), where
+// the browser will not accept a Secure cookie over http.
+func isLoopbackHost(host string) bool {
+	h := host
+	if parsed, _, err := net.SplitHostPort(host); err == nil {
+		h = parsed
+	}
+	h = strings.Trim(h, "[]")
+	if h == "localhost" {
+		return true
+	}
+	if ip := net.ParseIP(h); ip != nil {
+		return ip.IsLoopback()
+	}
+	return false
+}
+
+// tokenResponse is the JSON shape returned for access-token-only responses —
+// the refresh token travels in the httpOnly cookie set alongside it, never in
+// the body.
+func tokenResponse(tokens *auth.TokenPair) map[string]interface{} {
+	return map[string]interface{}{
+		"access_token": tokens.AccessToken,
+		"expires_in":   tokens.ExpiresIn,
+	}
+}
+
 // registerRequest represents the JSON body for user registration.
 type registerRequest struct {
 	Email    string `json:"email"`
@@ -31,11 +144,6 @@ type registerRequest struct {
 type loginRequest struct {
 	Email    string `json:"email"`
 	Password string `json:"password"`
-}
-
-// refreshRequest represents the JSON body for token refresh.
-type refreshRequest struct {
-	RefreshToken string `json:"refresh_token"`
 }
 
 // Register handles POST /api/v1/auth/register
@@ -66,9 +174,11 @@ func (h *AuthHandler) Register(c echo.Context) error {
 		return handleError(c, err)
 	}
 
+	setRefreshCookie(c, tokens.RefreshToken, h.authService.RefreshTokenTTL())
+
 	return c.JSON(http.StatusCreated, map[string]interface{}{
 		"user":   user,
-		"tokens": tokens,
+		"tokens": tokenResponse(tokens),
 	})
 }
 
@@ -103,37 +213,46 @@ func (h *AuthHandler) Login(c echo.Context) error {
 		return handleError(c, err)
 	}
 
+	setRefreshCookie(c, tokens.RefreshToken, h.authService.RefreshTokenTTL())
+
 	return c.JSON(http.StatusOK, map[string]interface{}{
 		"user":   user,
-		"tokens": tokens,
+		"tokens": tokenResponse(tokens),
 	})
 }
 
-// Refresh handles POST /api/v1/auth/refresh
+// Refresh handles POST /api/v1/auth/refresh. The refresh token comes from the
+// httpOnly cookie set by Login/Register/Refresh/invite-accept — never from
+// the request body, since a body-carried refresh token is exactly the
+// JS-readable value this endpoint exists to eliminate.
 func (h *AuthHandler) Refresh(c echo.Context) error {
-	var req refreshRequest
-	if err := c.Bind(&req); err != nil {
-		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
+	cookie, err := c.Cookie(refreshCookieName)
+	if err != nil || cookie.Value == "" {
+		return c.JSON(http.StatusUnauthorized, apierror.Unauthorized("missing refresh token"))
 	}
 
-	if req.RefreshToken == "" {
-		return c.JSON(http.StatusBadRequest, apierror.ValidationError(map[string]string{
-			"refresh_token": "refresh_token is required",
-		}))
-	}
-
-	tokens, err := h.authService.RefreshTokens(c.Request().Context(), req.RefreshToken)
+	tokens, err := h.authService.RefreshTokens(c.Request().Context(), cookie.Value)
 	if err != nil {
+		if errors.Is(err, auth.ErrTokenReused) {
+			// The presented token was already revoked — every session for this
+			// user has just been killed server-side. Kill the cookie on this
+			// client too, rather than leaving a corpse that re-triggers the
+			// same reuse error (and re-revokes an already-revoked user) on
+			// every reload until it expires on its own.
+			clearRefreshCookie(c)
+		}
 		return handleError(c, err)
 	}
 
+	setRefreshCookie(c, tokens.RefreshToken, h.authService.RefreshTokenTTL())
+
 	return c.JSON(http.StatusOK, map[string]interface{}{
-		"tokens": tokens,
+		"tokens": tokenResponse(tokens),
 	})
 }
 
 // Logout handles POST /api/v1/auth/logout (protected endpoint).
-// Revokes all refresh tokens for the current user.
+// Revokes all refresh tokens for the current user and clears the cookie.
 func (h *AuthHandler) Logout(c echo.Context) error {
 	userID, err := mw.GetUserID(c)
 	if err != nil {
@@ -143,6 +262,8 @@ func (h *AuthHandler) Logout(c echo.Context) error {
 	if err := h.authService.Logout(c.Request().Context(), userID); err != nil {
 		return handleError(c, err)
 	}
+
+	clearRefreshCookie(c)
 
 	return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
 }

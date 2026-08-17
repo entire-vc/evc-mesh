@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { api, clearTokens, clearSessionCookies, loadTokens, setTokens } from "@/lib/api";
+import { api, bootstrapSession, clearAccessToken, clearSessionCookies, setAccessToken } from "@/lib/api";
 import type {
   AuthResponse,
   LoginRequest,
@@ -27,17 +27,15 @@ export const useAuthStore = create<AuthState>((set) => ({
   isLoading: true,
 
   initialize: async () => {
-    loadTokens();
-    const token = localStorage.getItem("access_token");
-    if (!token) {
-      set({ isLoading: false, isAuthenticated: false });
-      return;
-    }
+    // No token to check for anymore — the access token never survives a
+    // reload. Silently trade the httpOnly refresh cookie for a new one; a
+    // missing/expired cookie throws, which just means "not logged in".
     try {
+      await bootstrapSession();
       const user = await api<User>("/api/v1/auth/me");
       set({ user, isAuthenticated: true, isLoading: false });
     } catch {
-      clearTokens();
+      clearAccessToken();
       set({ user: null, isAuthenticated: false, isLoading: false });
     }
   },
@@ -47,8 +45,9 @@ export const useAuthStore = create<AuthState>((set) => ({
       method: "POST",
       body: req,
       noAuth: true,
+      withCredentials: true,
     });
-    setTokens(data.tokens.access_token, data.tokens.refresh_token);
+    setAccessToken(data.tokens.access_token);
     set({ user: data.user, isAuthenticated: true });
   },
 
@@ -57,8 +56,9 @@ export const useAuthStore = create<AuthState>((set) => ({
       method: "POST",
       body: req,
       noAuth: true,
+      withCredentials: true,
     });
-    setTokens(data.tokens.access_token, data.tokens.refresh_token);
+    setAccessToken(data.tokens.access_token);
     set({ user: data.user, isAuthenticated: true });
   },
 
@@ -69,10 +69,11 @@ export const useAuthStore = create<AuthState>((set) => ({
       // Ignore errors — backend may be unreachable or token already expired.
       // We always clear local state regardless.
     }
-    clearTokens();
+    clearAccessToken();
     // Best-effort: clear any non-httpOnly session cookies that may have been
     // set by a previous Mesh/Casdoor instance. Prevents stale cookies from
-    // blocking subsequent logins with an "unexpected error".
+    // blocking subsequent logins with an "unexpected error". (The httpOnly
+    // refresh cookie itself was just cleared server-side by /auth/logout.)
     clearSessionCookies();
     set({ user: null, isAuthenticated: false });
   },

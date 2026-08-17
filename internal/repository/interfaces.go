@@ -386,7 +386,13 @@ type RefreshTokenRepository interface {
 	Create(ctx context.Context, userID uuid.UUID, tokenHash string, expiresAt time.Time) error
 	GetByHash(ctx context.Context, tokenHash string) (*RefreshToken, error)
 	RevokeByUserID(ctx context.Context, userID uuid.UUID) error
-	RevokeByHash(ctx context.Context, tokenHash string) error
+	// RevokeByHash atomically revokes the token with this hash if and only if it is
+	// still un-revoked. It reports whether THIS call performed the revocation, which
+	// is the sole authority on who won a concurrent one-shot rotation: exactly one
+	// caller can ever observe true for a given token. A false with a nil error means
+	// the token was already consumed (by a racing request or an earlier one) — the
+	// caller must treat it as reuse, never as success.
+	RevokeByHash(ctx context.Context, tokenHash string) (bool, error)
 	DeleteExpired(ctx context.Context) error
 }
 
