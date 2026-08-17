@@ -753,17 +753,73 @@ func (r *TaskRepo) List(ctx context.Context, projectID uuid.UUID, filter reposit
 // workspace showed up in the agent's own feed and the notify path then posted the
 // task snapshot to that agent's callback_url. Scoping the write path alone would
 // have left every row already written still readable.
-func (r *TaskRepo) ListByAssignee(ctx context.Context, workspaceID, assigneeID uuid.UUID, assigneeType domain.AssigneeType) ([]domain.Task, error) {
-	q := `SELECT ` + taskBaseColsNoAlias + `, ` + taskComputedCols + `
-		FROM tasks
-		WHERE assignee_id = $1 AND assignee_type = $2 AND deleted_at IS NULL
-		  AND project_id IN (SELECT id FROM projects WHERE workspace_id = $3)
-		ORDER BY created_at ASC`
-	var rows []taskRow
-	if err := r.db.SelectContext(ctx, &rows, q, assigneeID, assigneeType, workspaceID); err != nil {
-		return nil, err
+// filter narrows the feed IN SQL. Every predicate here used to be applied in Go
+// after the full row set had already been read and marshalled — see
+// repository.AssigneeTaskFilter for why that is not a detail.
+//
+// The returned total is the count BEFORE the limit, so a caller that asked for a
+// page can tell a complete answer from a truncated one. It costs one extra
+// COUNT query and is therefore only run when a limit was actually requested.
+func (r *TaskRepo) ListByAssignee(
+	ctx context.Context,
+	workspaceID, assigneeID uuid.UUID,
+	assigneeType domain.AssigneeType,
+	filter repository.AssigneeTaskFilter,
+) ([]domain.Task, int, error) {
+	conditions := []string{
+		"assignee_id = $1",
+		"assignee_type = $2",
+		"deleted_at IS NULL",
+		"project_id IN (SELECT id FROM projects WHERE workspace_id = $3)",
 	}
-	return taskRowsToSlice(rows), nil
+	args := []any{assigneeID, assigneeType, workspaceID}
+
+	if filter.ProjectID != nil {
+		args = append(args, *filter.ProjectID)
+		conditions = append(conditions, fmt.Sprintf("project_id = $%d", len(args)))
+	}
+	if filter.StatusCategory != nil {
+		// status_id identifies one (project, status) row, so a global lookup by
+		// category needs no project predicate of its own.
+		args = append(args, string(*filter.StatusCategory))
+		conditions = append(conditions,
+			fmt.Sprintf("status_id IN (SELECT id FROM task_statuses WHERE category = $%d)", len(args)))
+	}
+
+	where := "WHERE " + joinAnd(conditions)
+
+	total := 0
+	if filter.Limit > 0 {
+		dbStart := time.Now()
+		if err := r.db.GetContext(ctx, &total,
+			`SELECT COUNT(*) FROM tasks `+where, args...); err != nil {
+			pkgmetrics.RecordDBQuery("task.list_by_assignee_count", time.Since(dbStart))
+			return nil, 0, err
+		}
+		pkgmetrics.RecordDBQuery("task.list_by_assignee_count", time.Since(dbStart))
+	}
+
+	q := `SELECT ` + taskBaseColsNoAlias + `, ` + taskComputedCols + `
+		FROM tasks ` + where + `
+		ORDER BY created_at ASC`
+	if filter.Limit > 0 {
+		args = append(args, filter.Limit)
+		q += fmt.Sprintf(" LIMIT $%d", len(args))
+	}
+
+	var rows []taskRow
+	dbStart := time.Now()
+	if err := r.db.SelectContext(ctx, &rows, q, args...); err != nil {
+		pkgmetrics.RecordDBQuery("task.list_by_assignee", time.Since(dbStart))
+		return nil, 0, err
+	}
+	pkgmetrics.RecordDBQuery("task.list_by_assignee", time.Since(dbStart))
+
+	tasks := taskRowsToSlice(rows)
+	if filter.Limit <= 0 {
+		total = len(tasks)
+	}
+	return tasks, total, nil
 }
 
 func (r *TaskRepo) ListSubtasks(ctx context.Context, parentTaskID uuid.UUID) ([]domain.Task, error) {

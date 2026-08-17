@@ -125,6 +125,15 @@ var (
 		},
 		[]string{"model"},
 	)
+
+	// AgentAuthTotal counts agent API-key verifications by cache outcome.
+	AgentAuthTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "mesh_agent_auth_total",
+			Help: "Agent API-key verifications by cache result (hit|miss); a miss runs a cost-12 bcrypt comparison",
+		},
+		[]string{"result"},
+	)
 )
 
 // RecordMCPToolCall records a single MCP tool call with its outcome status.
@@ -158,4 +167,16 @@ func RecordMemoryEmbedFailure(op string) {
 // was actually served in ("hybrid" or "bm25-only").
 func RecordMemoryRecall(searchMode string) {
 	MemoryRecallTotal.WithLabelValues(searchMode).Inc()
+}
+
+// RecordAgentAuth records one agent API-key verification, labelled "hit" when it
+// was served from the in-process cache and "miss" when it had to run bcrypt.
+//
+// A miss costs ~163 ms of CPU (cost-12 bcrypt), so the miss RATE — not the
+// absolute count — is the number that predicts API latency under load. A miss
+// rate that stops falling after a deploy means the cache is not being reached
+// (wrapper dropped from the wiring, or every request arriving with a distinct
+// key).
+func RecordAgentAuth(result string) {
+	AgentAuthTotal.WithLabelValues(result).Inc()
 }

@@ -1,8 +1,25 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { Bold, BookOpen, Code, Italic, Link } from "lucide-react";
+import {
+  type ClipboardEvent,
+  type DragEvent,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
+import { Bold, BookOpen, Code, Image as ImageIcon, Italic, Link, Paperclip } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { RelayDocPicker } from "@/components/RelayDocPicker";
 import { useProjectTrIntegration } from "@/hooks/useProjectTrIntegration";
+import { uploadArtifact } from "@/components/markdown-editor";
+import { toast } from "@/components/ui/toast";
+import {
+  artifactDownloadPath,
+  handleArtifactLinkClick,
+  isArtifactDownloadPath,
+  renderArtifactAwareImage,
+  renderArtifactAwareLink,
+  resolveArtifactImages,
+} from "@/lib/artifact-links";
 
 // ---------------------------------------------------------------------------
 // Markdown renderer (no external library)
@@ -106,8 +123,17 @@ function applyInline(text: string): string {
     '<code class="bg-muted rounded px-1 py-0.5 text-xs font-mono">$1</code>',
   );
 
+  // Image ![alt](url) — must run before the link regex below, since it shares
+  // the same [..](..) shape with a leading "!".
+  out = out.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_match, alt, url) =>
+    renderArtifactAwareImage(alt, url),
+  );
+
   // Link [text](url)
   out = out.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, label, href) => {
+    if (isArtifactDownloadPath(href)) {
+      return renderArtifactAwareLink(label, href);
+    }
     // Only allow http/https links for safety
     const safe =
       href.startsWith("http://") || href.startsWith("https://")
@@ -161,6 +187,8 @@ export interface DescriptionEditorProps {
   projectSettings?: Record<string, unknown>;
   /** Project ID — required to show the TR doc picker. */
   projId?: string;
+  /** Task ID — required to attach files/images (uploaded as task artifacts). */
+  taskId?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -173,10 +201,21 @@ export function DescriptionEditor({
   placeholder = "Add a description...",
   className,
   projId,
+  taskId,
 }: DescriptionEditorProps) {
   const [mode, setMode] = useState<"edit" | "preview">("edit");
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const previewRef = useRef<HTMLDivElement>(null);
+  const imageInputRef = useRef<HTMLInputElement>(null);
+  const attachInputRef = useRef<HTMLInputElement>(null);
+
+  // Keep a ref to the latest value so async upload callbacks (which may
+  // resolve after further keystrokes) don't clobber newer edits.
+  const valueRef = useRef(value);
+  valueRef.current = value;
 
   const { enabled: hasTrIntegration } = useProjectTrIntegration(projId);
 
@@ -225,7 +264,126 @@ export function DescriptionEditor({
     [onChange],
   );
 
+  // Insert text at the cursor (or at the end, if the textarea isn't mounted).
+  const insertAtCursor = useCallback(
+    (text: string) => {
+      const textarea = textareaRef.current;
+      if (!textarea) {
+        onChange(value + text);
+        return;
+      }
+      const start = textarea.selectionStart;
+      const end = textarea.selectionEnd;
+      const newValue = value.slice(0, start) + text + value.slice(end);
+      onChange(newValue);
+      const newPos = start + text.length;
+      setTimeout(() => {
+        textarea.setSelectionRange(newPos, newPos);
+        textarea.focus();
+      }, 0);
+    },
+    [value, onChange],
+  );
+
+  // Upload a file as a task artifact and insert a markdown reference to it.
+  // Images become ![name](url); everything else becomes a [name](url) link.
+  const handleUploadFile = useCallback(
+    async (file: File) => {
+      if (!taskId) return;
+      const isImage = file.type.startsWith("image/");
+      setUploading(true);
+      const placeholder = isImage
+        ? `![Uploading ${file.name}...]()`
+        : `[Uploading ${file.name}...]()`;
+      insertAtCursor(placeholder);
+
+      try {
+        const artifact = await uploadArtifact(taskId, file);
+        const url = artifactDownloadPath(artifact.id);
+        const finalMd = isImage ? `![${file.name}](${url})` : `[${file.name}](${url})`;
+        onChange(valueRef.current.replace(placeholder, finalMd));
+      } catch (err) {
+        onChange(valueRef.current.replace(placeholder, ""));
+        toast(err instanceof Error ? err.message : "Upload failed");
+      } finally {
+        setUploading(false);
+      }
+    },
+    [taskId, insertAtCursor, onChange],
+  );
+
+  // Clipboard paste: upload a pasted screenshot/image immediately.
+  const handlePaste = useCallback(
+    (e: ClipboardEvent<HTMLTextAreaElement>) => {
+      if (!taskId) return;
+      const imageItem = Array.from(e.clipboardData.items).find((item) =>
+        item.type.startsWith("image/"),
+      );
+      if (!imageItem) return;
+      const file = imageItem.getAsFile();
+      if (!file) return;
+      e.preventDefault();
+      const ext = file.type.split("/")[1] ?? "png";
+      const renamedFile = new File([file], `pasted-image-${Date.now()}.${ext}`, {
+        type: file.type,
+      });
+      void handleUploadFile(renamedFile);
+    },
+    [taskId, handleUploadFile],
+  );
+
+  // Drag-and-drop: upload any dropped files (image or not) in order.
+  const handleDragOver = useCallback(
+    (e: DragEvent<HTMLTextAreaElement>) => {
+      if (!taskId) return;
+      e.preventDefault();
+      e.stopPropagation();
+      setDragOver(true);
+    },
+    [taskId],
+  );
+
+  const handleDragLeave = useCallback((e: DragEvent<HTMLTextAreaElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragOver(false);
+  }, []);
+
+  const handleDrop = useCallback(
+    async (e: DragEvent<HTMLTextAreaElement>) => {
+      if (!taskId) return;
+      e.preventDefault();
+      e.stopPropagation();
+      setDragOver(false);
+      for (const file of Array.from(e.dataTransfer.files)) {
+        await handleUploadFile(file);
+      }
+    },
+    [taskId, handleUploadFile],
+  );
+
+  // Toolbar / file-picker uploads (image button restricts to image/*, attach allows anything).
+  const handleFileInputChange = useCallback(
+    async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const fileList = Array.from(e.target.files ?? []);
+      if (!fileList.length) return;
+      e.target.value = "";
+      for (const file of fileList) {
+        await handleUploadFile(file);
+      }
+    },
+    [handleUploadFile],
+  );
+
   const previewHtml = renderMarkdown(value);
+
+  // Resolve internal artifact images to a fresh presigned URL whenever the
+  // preview is shown or its content changes — see artifact-links.ts.
+  useEffect(() => {
+    if (mode === "preview" && previewRef.current) {
+      void resolveArtifactImages(previewRef.current);
+    }
+  }, [mode, previewHtml]);
 
   return (
     <div className={cn("rounded-lg border border-border", className)}>
@@ -291,6 +449,41 @@ export function DescriptionEditor({
             >
               <Link className="h-3.5 w-3.5" />
             </button>
+            <button
+              type="button"
+              title={taskId ? "Insert image" : "Save the task to attach images"}
+              onClick={() => imageInputRef.current?.click()}
+              disabled={!taskId}
+              className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-muted-foreground"
+            >
+              <ImageIcon className="h-3.5 w-3.5" />
+            </button>
+            <button
+              type="button"
+              title={taskId ? "Attach file" : "Save the task to attach files"}
+              onClick={() => attachInputRef.current?.click()}
+              disabled={!taskId}
+              className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-muted-foreground"
+            >
+              <Paperclip className="h-3.5 w-3.5" />
+            </button>
+            <input
+              ref={imageInputRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={(e) => void handleFileInputChange(e)}
+            />
+            <input
+              ref={attachInputRef}
+              type="file"
+              multiple
+              className="hidden"
+              onChange={(e) => void handleFileInputChange(e)}
+            />
+            {uploading && (
+              <span className="ml-1 text-[11px] text-muted-foreground">Uploading…</span>
+            )}
             {hasTrIntegration && (
               <>
                 <div className="mx-1 h-3.5 w-px bg-border" />
@@ -310,29 +503,51 @@ export function DescriptionEditor({
 
       {/* Edit mode */}
       {mode === "edit" && (
-        <textarea
-          ref={textareaRef}
-          value={value}
-          onChange={(e) => {
-            onChange(e.target.value);
-            autoResize();
-          }}
-          onBlur={() => onChange(value)}
-          placeholder={placeholder}
-          className="block w-full resize-none bg-transparent px-3 py-2.5 font-mono text-xs leading-relaxed text-foreground placeholder:text-muted-foreground focus:outline-none"
-          style={{ minHeight: "120px" }}
-        />
+        <div className="relative">
+          <textarea
+            ref={textareaRef}
+            value={value}
+            onChange={(e) => {
+              onChange(e.target.value);
+              autoResize();
+            }}
+            onBlur={() => onChange(value)}
+            onPaste={handlePaste}
+            onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
+            onDrop={(e) => void handleDrop(e)}
+            placeholder={placeholder}
+            disabled={uploading}
+            className="block w-full resize-none bg-transparent px-3 py-2.5 font-mono text-xs leading-relaxed text-foreground placeholder:text-muted-foreground focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+            style={{ minHeight: "120px" }}
+          />
+          {dragOver && (
+            <div className="pointer-events-none absolute inset-0 flex items-center justify-center rounded-b-lg border-2 border-dashed border-primary bg-primary/5">
+              <span className="text-sm font-medium text-primary">Drop files to attach</span>
+            </div>
+          )}
+        </div>
       )}
 
       {/* Preview mode */}
       {mode === "preview" && (
         <div
+          ref={previewRef}
           className="prose-mesh min-h-[120px] px-3 py-2.5 text-sm leading-relaxed"
+          onClick={(e) => {
+            handleArtifactLinkClick(e);
+          }}
           // eslint-disable-next-line react/no-danger
           dangerouslySetInnerHTML={{
             __html: previewHtml || `<span class="text-muted-foreground text-xs">${placeholder}</span>`,
           }}
         />
+      )}
+
+      {mode === "edit" && taskId && (
+        <div className="border-t border-border px-3 py-1 text-[11px] text-muted-foreground">
+          Paste, drop, or attach files and images
+        </div>
       )}
 
       {hasTrIntegration && (

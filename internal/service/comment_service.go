@@ -1030,6 +1030,26 @@ func (s *commentService) notifyMentions(
 						"comment_id":   comment.ID,
 					})
 				}
+
+				// Hand the mention to the notification service as well, so it
+				// reaches the channels the mentioned person actually subscribed
+				// to — in-app, browser push, email, Telegram.
+				//
+				// The WS badge above is not a notification: it only lands if
+				// that user has the app open at the instant the comment is
+				// written, and it is discarded otherwise. Until this dispatch
+				// existed, "task.mentioned" was emitted solely to agents via
+				// AgentNotifyService, so the "When someone @mentions you"
+				// toggle the settings page offers a human could be switched on
+				// and would never produce anything on any channel — an
+				// advertised subscription with no publisher behind it.
+				//
+				// TargetUserID is what keeps a mention private to the person
+				// mentioned: dispatch delivers a targeted event only to that
+				// user's own preference rows, so a comment naming one member
+				// is not fanned out to everyone in the workspace who happens
+				// to subscribe to task.mentioned.
+				s.notifyUserMention(ctx, comment, task, workspaceID, user.ID, actorName)
 			}
 		}
 	}
@@ -1037,6 +1057,61 @@ func (s *commentService) notifyMentions(
 	if s.mentionRepo != nil && len(dbRows) > 0 {
 		_ = s.mentionRepo.InsertBatch(ctx, dbRows)
 	}
+}
+
+// notifyUserMention dispatches the "task.mentioned" notification event for one
+// @-mentioned human, so the mention reaches whichever channels that person
+// subscribed to rather than only the live WebSocket badge.
+//
+// Targeted at the mentioned user via TargetUserID: dispatch's personal-event
+// rule then restricts delivery to that user's own preference rows. Without it,
+// a mention would be broadcast to every task.mentioned subscriber in the
+// workspace — which, since the body carries the comment text, would turn one
+// person being named into a workspace-wide disclosure.
+//
+// Best-effort, like every other notify call on this path: a comment is never
+// failed because of what could not be announced about it.
+func (s *commentService) notifyUserMention(
+	ctx context.Context,
+	comment *domain.Comment,
+	task *domain.Task,
+	workspaceID, mentionedUserID uuid.UUID,
+	actorName string,
+) {
+	if s.notifySvc == nil {
+		return
+	}
+
+	body := comment.Body
+	if len(body) > 200 {
+		body = body[:200]
+	}
+
+	title := "You were mentioned on: " + task.Title
+	if actorName != "" {
+		title = actorName + " mentioned you on: " + task.Title
+	}
+
+	taskIDCopy := task.ID
+	projIDCopy := task.ProjectID
+	mentionedCopy := mentionedUserID
+
+	s.notifySvc.Notify(ctx, domain.NotificationEvent{
+		WorkspaceID:  workspaceID,
+		TaskID:       &taskIDCopy,
+		ProjectID:    &projIDCopy,
+		TargetUserID: &mentionedCopy,
+		EventType:    "task.mentioned",
+		Title:        title,
+		Body:         body,
+		Labels:       []string(task.Labels),
+		Metadata: map[string]any{
+			"task_id":    task.ID,
+			"task_title": task.Title,
+			"project_id": task.ProjectID,
+			"comment_id": comment.ID,
+		},
+	})
 }
 
 // enforceBlockingTriage is the server-side defense-in-depth for CLAUDE-workflow.md §0b:

@@ -1,6 +1,13 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useNavigate } from "react-router";
 import { cn } from "@/lib/cn";
+import {
+  handleArtifactLinkClick,
+  isArtifactDownloadPath,
+  renderArtifactAwareImage,
+  renderArtifactAwareLink,
+  resolveArtifactImages,
+} from "@/lib/artifact-links";
 
 export interface MentionEntry {
   kind: "agent" | "user";
@@ -31,17 +38,20 @@ function renderInline(
 ): string {
   let result = escapeHtml(text);
 
-  // Images: ![alt](url)
+  // Images: ![alt](url) — alt is already HTML-escaped by the escapeHtml(text) above
   result = result.replace(
     /!\[([^\]]*)\]\(([^)]+)\)/g,
-    (_match, alt: string, url: string) =>
-      `<img src="${url}" alt="${escapeHtml(alt)}" style="max-width:100%;border-radius:4px;" />`,
+    (_match, alt: string, url: string) => renderArtifactAwareImage(alt, url),
   );
 
-  // Links: [text](url) — only allow safe protocols
+  // Links: [text](url) — only allow safe protocols, except our own internal
+  // artifact links which route through click-time resolution instead of href
   result = result.replace(
     /\[([^\]]+)\]\(([^)]+)\)/g,
     (_match, linkText: string, url: string) => {
+      if (isArtifactDownloadPath(url)) {
+        return renderArtifactAwareLink(linkText, url);
+      }
       const decoded = url.replace(/&amp;/g, "&");
       const isSafe = /^(https?:\/\/|\/|#|mailto:)/i.test(decoded);
       if (!isSafe) return `${linkText} (${url})`;
@@ -229,15 +239,26 @@ export function MarkdownRenderer({
   wsSlug,
 }: MarkdownRendererProps) {
   const navigate = useNavigate();
+  const containerRef = useRef<HTMLDivElement>(null);
 
   const html = useMemo(
     () => renderMarkdown(content, mentionables, wsSlug),
     [content, mentionables, wsSlug],
   );
 
-  // Intercept mention-link clicks for SPA navigation (avoid full-page reload)
+  // Resolve internal artifact images to a fresh presigned URL after each
+  // render — the src can't be a plain URL (see artifact-links.ts).
+  useEffect(() => {
+    if (containerRef.current) {
+      void resolveArtifactImages(containerRef.current);
+    }
+  }, [html]);
+
+  // Intercept mention-link clicks (SPA navigation) and internal artifact-link
+  // clicks (fetch a fresh presigned URL instead of following a dead href).
   const handleClick = useCallback(
     (e: React.MouseEvent<HTMLDivElement>) => {
+      if (handleArtifactLinkClick(e)) return;
       const target = e.target as HTMLElement;
       const link = target.closest("a.mention-link");
       if (link instanceof HTMLAnchorElement) {
@@ -254,8 +275,9 @@ export function MarkdownRenderer({
 
   return (
     <div
+      ref={containerRef}
       className={cn("text-sm text-foreground", className)}
-      onClick={mentionables ? handleClick : undefined}
+      onClick={handleClick}
       // Safe: we control the sanitization in renderMarkdown via escapeHtml
       dangerouslySetInnerHTML={{ __html: html }}
     />

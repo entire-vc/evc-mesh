@@ -25,6 +25,11 @@ export const NOTIFICATION_EVENTS: EventConfig[] = [
     description: "When a comment is added to a task",
   },
   {
+    key: "task.mentioned",
+    label: "Mention",
+    description: "When someone @mentions you in a comment",
+  },
+  {
     key: "task.blocking_triage",
     label: "Blocking triage",
     description: "When a task you're mentioned in is auto-moved to triage as a blocker",

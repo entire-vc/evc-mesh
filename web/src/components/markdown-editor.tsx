@@ -23,6 +23,7 @@ import { Button } from "@/components/ui/button";
 import { MarkdownRenderer } from "@/components/markdown-renderer";
 import { RelayDocPicker } from "@/components/RelayDocPicker";
 import { getAccessToken } from "@/lib/api";
+import { artifactDownloadPath } from "@/lib/artifact-links";
 import type { Artifact, ArtifactType } from "@/types";
 
 // Pending image: clipboard File + placeholder text used before upload
@@ -284,7 +285,7 @@ export function MarkdownEditor({
 
         try {
           const artifact = await uploadArtifact(taskId, renamedFile);
-          const imageUrl = artifact.storage_url;
+          const imageUrl = artifactDownloadPath(artifact.id);
           const finalMd = `![${fileName}](${imageUrl})`;
           onChange(valueRef.current.replace(placeholder, finalMd));
           notifyUploaded(artifact);
@@ -340,7 +341,7 @@ export function MarkdownEditor({
 
       try {
         const artifact = await uploadArtifact(taskId, file);
-        const url = artifact.storage_url;
+        const url = artifactDownloadPath(artifact.id);
         const finalMd = image
           ? `![${file.name}](${url})`
           : `[${file.name}](${url})`;

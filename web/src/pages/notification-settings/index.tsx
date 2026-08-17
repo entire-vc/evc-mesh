@@ -54,7 +54,7 @@ export default function NotificationSettingsPage() {
 
   const [selectedEvents, setSelectedEvents] = useState<Set<string>>(
     new Set([
-      "task.assigned", "task.status_changed", "comment.created", "task.blocking_triage",
+      "task.assigned", "task.status_changed", "comment.created", "task.mentioned", "task.blocking_triage",
       "task.reviewer_assigned", "task.ready_for_review",
     ]),
   );
@@ -78,7 +78,7 @@ export default function NotificationSettingsPage() {
   const [emailEnabled, setEmailEnabled] = useState(true);
   const [emailEvents, setEmailEvents] = useState<Set<string>>(
     new Set([
-      "task.assigned", "task.status_changed", "comment.created", "task.blocking_triage",
+      "task.assigned", "task.status_changed", "comment.created", "task.mentioned", "task.blocking_triage",
       "task.reviewer_assigned", "task.ready_for_review",
     ]),
   );
@@ -93,7 +93,7 @@ export default function NotificationSettingsPage() {
   const [telegramEnabled, setTelegramEnabled] = useState(true);
   const [telegramEvents, setTelegramEvents] = useState<Set<string>>(
     new Set([
-      "task.assigned", "task.status_changed", "comment.created", "task.blocking_triage",
+      "task.assigned", "task.status_changed", "comment.created", "task.mentioned", "task.blocking_triage",
       "task.reviewer_assigned", "task.ready_for_review",
     ]),
   );
