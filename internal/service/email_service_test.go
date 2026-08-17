@@ -174,6 +174,35 @@ func TestSendNotification_DeliversToTheGivenRecipientWithSubject(t *testing.T) {
 	}
 }
 
+// TestSendNotification_SubjectCRLFIsStripped: subject comes from a task title
+// or comment body a workspace member wrote, with nothing upstream forbidding
+// a newline in it. Unstripped, that CRLF would inject arbitrary extra SMTP
+// headers into the raw message (CWE-93) — e.g. a forged Bcc silently copying
+// the notification elsewhere. Flagged by CodeQL as email content injection.
+func TestSendNotification_SubjectCRLFIsStripped(t *testing.T) {
+	var gotMsg []byte
+	stubSendMail(t, func(_ string, _ smtp.Auth, _ string, _ []string, msg []byte) error {
+		gotMsg = msg
+		return nil
+	})
+
+	svc := NewEmailService(config.EmailConfig{Host: "smtp.example.com", Port: 587, From: "noreply@example.com"})
+	err := svc.SendNotification(context.Background(), "user@example.com",
+		"Task assigned\r\nBcc: attacker@evil.com", "<p>hi</p>")
+	if err != nil {
+		t.Fatalf("SendNotification returned error: %v", err)
+	}
+	// The security property is "no injected header line", not "the words never
+	// appear" — with the CRLF stripped, "Bcc: ..." is just inert trailing text
+	// inside the Subject value, not a new header. Assert on the line break.
+	if strings.Contains(string(gotMsg), "\r\nBcc:") {
+		t.Fatalf("subject CRLF was not stripped, message carries an injected header: %s", gotMsg)
+	}
+	if !strings.Contains(string(gotMsg), "Subject: Task assignedBcc: attacker@evil.com") {
+		t.Fatalf("expected the CRLF removed but the rest of the subject kept, got: %s", gotMsg)
+	}
+}
+
 func TestSendNotification_TransportErrorPropagates(t *testing.T) {
 	wantErr := errors.New("connection refused")
 	stubSendMail(t, func(_ string, _ smtp.Auth, _ string, _ []string, _ []byte) error {

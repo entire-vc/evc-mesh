@@ -111,10 +111,27 @@ func (s *smtpEmailService) send(toEmail, subject, htmlBody string) error {
 		return err
 	}
 
+	// subject is untrusted for SendNotification (built from a task title or
+	// comment body a workspace member wrote) and, for SendInvite, from a
+	// workspace name — both free-text fields with no newline restriction at
+	// the point they were entered. Unlike recipient.Address above, nothing
+	// upstream of this sink validates it, so a title/name containing CRLF
+	// would otherwise inject arbitrary extra headers (CWE-93) into the raw
+	// message below — e.g. a forged Bcc that silently copies every
+	// notification email elsewhere. Stripped rather than rejected: a stray
+	// newline in a title is not a reason to fail delivery of a legitimate
+	// notification.
+	sanitizedSubject := strings.Map(func(r rune) rune {
+		if r == '\r' || r == '\n' {
+			return -1
+		}
+		return r
+	}, subject)
+
 	msg := "MIME-version: 1.0;\nContent-Type: text/html; charset=\"UTF-8\";\r\n"
 	msg += fmt.Sprintf("From: %s\r\n", headerFrom)
 	msg += fmt.Sprintf("To: %s\r\n", recipient.Address)
-	msg += fmt.Sprintf("Subject: %s\r\n", subject)
+	msg += fmt.Sprintf("Subject: %s\r\n", sanitizedSubject)
 	msg += "\r\n" + htmlBody
 
 	addr := fmt.Sprintf("%s:%d", s.cfg.Host, s.cfg.Port)
