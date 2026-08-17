@@ -1136,6 +1136,116 @@ func TestTaskService_CreateSubtask(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// TestTaskService_CreateSubtask_Notify — task #9304f2cc: CreateSubtask used to
+// skip notifyAssignee/notifyAssignedAgent entirely, so a subtask's assignee
+// never heard about it. These mirror the Create() notification tests above
+// one-for-one so the subtask code path can't silently diverge again.
+// ---------------------------------------------------------------------------
+
+// setupTaskServiceForSubtaskNotify wires a task service with agent-push +
+// in-app notification fakes plus the tenancy directories CreateSubtask's
+// assignee enrolment needs, and returns the statusRepo subtaskFixture requires.
+func setupTaskServiceForSubtaskNotify() (*taskService, *MockTaskRepository, *MockTaskStatusRepository, *MockNotificationService, *MockAgentNotifyService) {
+	taskRepo := NewMockTaskRepository()
+	statusRepo := NewMockTaskStatusRepository()
+	depRepo := NewMockTaskDependencyRepository()
+	activityRepo := NewMockActivityLogRepository()
+	notifySvc := NewMockNotificationService()
+	agentNotify := NewMockAgentNotifyService()
+	opts := append(wireTenancyDeps(NewMockProjectRepository(), NewMockAgentRepository()),
+		WithNotificationService(notifySvc),
+		WithAgentNotifyService(agentNotify),
+	)
+	svc := newTestTaskService(taskRepo, statusRepo, depRepo, activityRepo, opts...).(*taskService)
+	timeNow = func() time.Time { return frozenTime }
+	return svc, taskRepo, statusRepo, notifySvc, agentNotify
+}
+
+func TestTaskService_CreateSubtask_UserAssignee_DispatchesTargetedNotification(t *testing.T) {
+	svc, taskRepo, statusRepo, notifySvc, agentNotify := setupTaskServiceForSubtaskNotify()
+	ctx := context.Background()
+	f := newSubtaskFixture(taskRepo, statusRepo)
+
+	assignee := uuid.New()
+	child, err := svc.CreateSubtask(ctx, f.parentID, CreateSubtaskInput{
+		Title:        "Child task",
+		Priority:     domain.PriorityMedium,
+		AssigneeID:   &assignee,
+		AssigneeType: domain.AssigneeTypeUser,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, child)
+
+	require.Len(t, notifySvc.Calls(), 1)
+	call := notifySvc.Calls()[0]
+	assert.Equal(t, "task.assigned", call.EventType)
+	require.NotNil(t, call.TargetUserID, "subtask assignment must be targeted, not broadcast")
+	assert.Equal(t, assignee, *call.TargetUserID)
+	assert.Empty(t, agentNotify.Calls())
+}
+
+func TestTaskService_CreateSubtask_AgentAssignee_NotifiesViaPush(t *testing.T) {
+	svc, taskRepo, statusRepo, notifySvc, agentNotify := setupTaskServiceForSubtaskNotify()
+	ctx := context.Background()
+	f := newSubtaskFixture(taskRepo, statusRepo)
+
+	assignee := uuid.New()
+	seedTestAgents(t, svc, assignee)
+	child, err := svc.CreateSubtask(ctx, f.parentID, CreateSubtaskInput{
+		Title:        "Child task",
+		Priority:     domain.PriorityMedium,
+		AssigneeID:   &assignee,
+		AssigneeType: domain.AssigneeTypeAgent,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, child)
+
+	var found bool
+	for _, call := range agentNotify.Calls() {
+		if call.EventType == "task.assigned" && call.AgentID == assignee {
+			found = true
+		}
+	}
+	assert.True(t, found, "expected task.assigned push to the agent assignee")
+	assert.Empty(t, notifySvc.Calls(), "an agent assignee must go through the push path, not the in-app table")
+}
+
+func TestTaskService_CreateSubtask_SelfAssign_NoNotification(t *testing.T) {
+	svc, taskRepo, statusRepo, notifySvc, agentNotify := setupTaskServiceForSubtaskNotify()
+	self := uuid.New()
+	ctx := actorctx.WithActor(context.Background(), self, domain.ActorTypeUser)
+	f := newSubtaskFixture(taskRepo, statusRepo)
+
+	child, err := svc.CreateSubtask(ctx, f.parentID, CreateSubtaskInput{
+		Title:        "Child task",
+		Priority:     domain.PriorityMedium,
+		AssigneeID:   &self,
+		AssigneeType: domain.AssigneeTypeUser,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, child)
+
+	assert.Empty(t, notifySvc.Calls(), "must not notify the actor about assigning a subtask to themselves")
+	assert.Empty(t, agentNotify.Calls())
+}
+
+func TestTaskService_CreateSubtask_NoAssignee_NoNotification(t *testing.T) {
+	svc, taskRepo, statusRepo, notifySvc, agentNotify := setupTaskServiceForSubtaskNotify()
+	ctx := context.Background()
+	f := newSubtaskFixture(taskRepo, statusRepo)
+
+	child, err := svc.CreateSubtask(ctx, f.parentID, CreateSubtaskInput{
+		Title:    "Unassigned child",
+		Priority: domain.PriorityMedium,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, child)
+
+	assert.Empty(t, notifySvc.Calls())
+	assert.Empty(t, agentNotify.Calls())
+}
+
+// ---------------------------------------------------------------------------
 // TestTaskService_Delete
 // ---------------------------------------------------------------------------
 
