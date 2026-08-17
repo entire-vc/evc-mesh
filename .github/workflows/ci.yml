@@ -279,6 +279,59 @@ jobs:
           TEST_DB_DSN: "host=localhost port=5432 user=mesh password=mesh dbname=mesh sslmode=disable"
         run: go test ./tests/integration/ -v -tags=integration -timeout=120s
 
+  # ─── A2. Repo-layer integration tests ──────────────────────────────────────
+  # internal/repository/postgres/integration_test.go carries `//go:build
+  # integration` and was invisible to every other job: the Test job runs
+  # `go test ./...` with no build tag (so the file is excluded from
+  # compilation entirely), and the Integration job above passes `-tags=integration`
+  # but scopes to ./tests/integration/ only. Net effect: ~9 repo-level tests —
+  # including the ones that exist specifically to catch a field present in an
+  # UPDATE but missing from the matching INSERT (the reviewer_id class of bug,
+  # #564) — never ran in CI. Unlike the Integration job above, this one is a
+  # normal blocking job (no continue-on-error): it exists to be a real gate,
+  # not a report.
+  repo-integration:
+    name: "Repo tests (integration)"
+    runs-on: ubuntu-latest
+    needs: lint
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: mesh
+          POSTGRES_PASSWORD: mesh
+          POSTGRES_DB: mesh
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U mesh"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Install goose
+        run: go install github.com/pressly/goose/v3/cmd/goose@latest
+      - name: Run migrations
+        env:
+          GOOSE_DRIVER: postgres
+          GOOSE_DBSTRING: "postgres://mesh:mesh@localhost:5432/mesh?sslmode=disable"
+        run: goose -dir migrations up
+      - name: Run repo-layer integration tests
+        env:
+          # DATABASE_URL is for this package's other DB tests (the ones with
+          # no build tag, e.g. user_repo_test.go's userRepoTestDB) which the
+          # Test job already exercises — setting it here too means running
+          # this job doesn't accidentally skip them. TEST_DATABASE_URL is
+          # what integration_test.go's testDB() actually reads.
+          DATABASE_URL: "postgres://mesh:mesh@localhost:5432/mesh?sslmode=disable"
+          TEST_DATABASE_URL: "postgres://mesh:mesh@localhost:5432/mesh?sslmode=disable"
+        run: go test ./internal/repository/postgres/... -v -race -tags=integration
+
   # ─── B. Affected-set coverage gate (Go) ────────────────────────────────────
   # Coverage ≥80% on changed_packages ∪ reverse_dep_closure.
   # ENFORCE mode: failures block merge (enforced 2026-06-22, burn-in complete).
