@@ -1,27 +1,51 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/mail"
+	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
 	"github.com/lib/pq"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	"github.com/entire-vc/evc-mesh/internal/repository"
 	"github.com/entire-vc/evc-mesh/internal/service"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 )
 
 // NotificationHandler handles HTTP requests for in-app notifications.
 type NotificationHandler struct {
-	svc service.NotificationService
+	svc     service.NotificationService
+	members repository.WorkspaceMemberRepository
 }
 
-// NewNotificationHandler creates a new NotificationHandler.
-func NewNotificationHandler(svc service.NotificationService) *NotificationHandler {
-	return &NotificationHandler{svc: svc}
+// NewNotificationHandler creates a new NotificationHandler. members is used
+// only by GetTelegramBotInfo, to authorize the ?workspace_id= it reads — see
+// requireWorkspaceMember.
+func NewNotificationHandler(svc service.NotificationService, members repository.WorkspaceMemberRepository) *NotificationHandler {
+	return &NotificationHandler{svc: svc, members: members}
+}
+
+// requireWorkspaceMember reports whether the authenticated caller is a member
+// of wsID. Mirrors MemoryHandler.workspaceAllowed — same rule (workspace_members
+// row via GetRole), same caveat (a founding owner with no explicit membership
+// row is not covered; memories has carried that gap since this pattern was
+// introduced and this reuses it rather than inventing a second one).
+func (h *NotificationHandler) requireWorkspaceMember(c echo.Context, wsID uuid.UUID) bool {
+	if wsID == uuid.Nil || h.members == nil {
+		return false
+	}
+	userID, ok := currentUserID(c)
+	if !ok {
+		return false
+	}
+	_, err := h.members.GetRole(c.Request().Context(), wsID, userID)
+	return err == nil
 }
 
 // List handles GET /notifications
@@ -118,6 +142,42 @@ func (h *NotificationHandler) GetEmailAvailability(c echo.Context) error {
 	return c.JSON(http.StatusOK, map[string]any{"available": h.svc.EmailAvailable()})
 }
 
+// telegramBotInfoQuery binds ?workspace_id= via echo's struct-tag path so the
+// query-tenant AST scan in internal/middleware picks it up the same way it
+// already does for memory_handler.go's structs — see declaredQueryTenantParams
+// in internal/middleware/query_tenant_verdict_test.go.
+type telegramBotInfoQuery struct {
+	WorkspaceID string `query:"workspace_id"`
+}
+
+// GetTelegramBotInfo handles GET /notifications/telegram-bot-info?workspace_id=...
+//
+// Read by the settings page the same way GetEmailAvailability is, except the
+// Telegram channel is configured per workspace rather than instance-wide, so
+// availability needs a workspace to ask about — and unlike every other route
+// in this handler, that workspace has to be named in the query string rather
+// than being implied by the caller. requireWorkspaceMember is what makes that
+// safe: this is the "checked:" verdict declaredQueryTenantParams records for it.
+func (h *NotificationHandler) GetTelegramBotInfo(c echo.Context) error {
+	var q telegramBotInfoQuery
+	if err := c.Bind(&q); err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request"))
+	}
+	wsID, err := uuid.Parse(q.WorkspaceID)
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid workspace_id"))
+	}
+	if !h.requireWorkspaceMember(c, wsID) {
+		return c.JSON(http.StatusForbidden, apierror.Forbidden("workspace access denied"))
+	}
+
+	botUsername, available := h.svc.TelegramBotInfo(c.Request().Context(), wsID)
+	return c.JSON(http.StatusOK, map[string]any{
+		"available":    available,
+		"bot_username": botUsername,
+	})
+}
+
 // updatePreferencesRequest is the JSON body for updating preferences.
 //
 // WorkspaceID names a tenant the route does not, which is the shape that has to
@@ -187,7 +247,13 @@ func (h *NotificationHandler) UpdatePreferences(c echo.Context) error {
 	}
 
 	var cfgJSON json.RawMessage
-	if len(req.Config) > 0 {
+	if channel == "telegram" {
+		encoded, tgErr := h.buildTelegramPreferenceConfig(c.Request().Context(), userID, wsID, isEnabled, strings.TrimSpace(req.Config["telegram_username"]))
+		if tgErr != nil {
+			return c.JSON(tgErr.StatusCode(), tgErr)
+		}
+		cfgJSON = encoded
+	} else if len(req.Config) > 0 {
 		encoded, marshalErr := json.Marshal(req.Config)
 		if marshalErr != nil {
 			return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid config"))
@@ -210,6 +276,56 @@ func (h *NotificationHandler) UpdatePreferences(c echo.Context) error {
 	}
 
 	return c.JSON(http.StatusOK, result)
+}
+
+// telegramBindTokenTTL is how long a t.me/<bot>?start=<token> link stays
+// valid before the /start handler treats it the same as an unknown token.
+const telegramBindTokenTTL = 15 * time.Minute
+
+// buildTelegramPreferenceConfig computes the Config JSON to store for a
+// channel="telegram" preference row.
+//
+// chat_id is never set here — it is written only by a successful /start,
+// which is the whole point of the token/TTL dance below: this endpoint can
+// only ask to be linked, never claim a binding itself. A bind token is
+// (re)issued only when enabling with no existing chat_id, so a user who is
+// already bound and just adjusts their per-event toggles does not get a
+// fresh, unnecessary link on every save.
+func (h *NotificationHandler) buildTelegramPreferenceConfig(ctx context.Context, userID, wsID uuid.UUID, isEnabled bool, username string) (json.RawMessage, *apierror.Error) {
+	username = strings.TrimPrefix(username, "@")
+	if isEnabled && username == "" {
+		return nil, apierror.BadRequest("telegram_username is required to enable Telegram notifications")
+	}
+
+	cfg := service.TelegramPreferenceConfig{Username: username}
+
+	if existing, err := h.svc.GetPreferences(ctx, userID); err == nil {
+		for i := range existing {
+			if existing[i].WorkspaceID == wsID && existing[i].Channel == "telegram" && len(existing[i].Config) > 0 {
+				var prev service.TelegramPreferenceConfig
+				if json.Unmarshal(existing[i].Config, &prev) == nil {
+					cfg.ChatID = prev.ChatID
+				}
+				break
+			}
+		}
+	}
+
+	if isEnabled && cfg.ChatID == 0 {
+		token, tokenErr := service.GenerateTelegramBindToken()
+		if tokenErr != nil {
+			return nil, apierror.BadRequestWithDetails("failed to prepare Telegram binding", tokenErr.Error())
+		}
+		expires := time.Now().Add(telegramBindTokenTTL)
+		cfg.BindToken = token
+		cfg.BindExpiresAt = &expires
+	}
+
+	encoded, err := json.Marshal(cfg)
+	if err != nil {
+		return nil, apierror.BadRequestWithDetails("invalid config", err.Error())
+	}
+	return encoded, nil
 }
 
 // DeletePreference handles DELETE /notifications/preferences/:pref_id

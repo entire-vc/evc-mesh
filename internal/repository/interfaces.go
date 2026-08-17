@@ -604,6 +604,11 @@ type IntegrationRepository interface {
 	Update(ctx context.Context, id uuid.UUID, input domain.UpdateIntegrationInput) (*domain.IntegrationConfig, error)
 	Delete(ctx context.Context, id uuid.UUID) error
 	ListByWorkspace(ctx context.Context, workspaceID uuid.UUID) ([]domain.IntegrationConfig, error)
+	// ListActiveByProvider returns every active integration for one provider,
+	// across all workspaces. Used at API startup to know which Telegram bots
+	// to start long-polling — ListByWorkspace only answers "what does one
+	// workspace have configured", not "what needs a poller right now".
+	ListActiveByProvider(ctx context.Context, provider domain.IntegrationProvider) ([]domain.IntegrationConfig, error)
 }
 
 // MemoryRepository manages persistence for agent memories (knowledge base).

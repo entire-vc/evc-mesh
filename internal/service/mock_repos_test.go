@@ -1518,6 +1518,10 @@ func (m *MockNotificationService) EmailAvailable() bool {
 	return false
 }
 
+func (m *MockNotificationService) TelegramBotInfo(context.Context, uuid.UUID) (string, bool) {
+	return "", false
+}
+
 // ---------------------------------------------------------------------------
 // MockAgentService — minimal stub for comment mention tests.
 // Only GetBySlug is implemented; all other methods panic.

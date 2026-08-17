@@ -47,8 +47,13 @@ type NotificationEvent struct {
 	// row instead of fanning out to every subscribed workspace member. Use for
 	// events that are inherently about one specific person (e.g. "you were made
 	// reviewer"), where broadcasting to the whole workspace would be wrong.
-	TargetUserID *uuid.UUID     `json:"target_user_id,omitempty"`
-	Metadata     map[string]any `json:"metadata,omitempty"`
+	TargetUserID *uuid.UUID `json:"target_user_id,omitempty"`
+	// Labels carries the task's labels/tags at the moment the event was
+	// raised, for channels (Telegram) whose message format includes them.
+	// Not persisted; purely a dispatch-time hint from the caller, which
+	// already has the task object in hand.
+	Labels   []string       `json:"labels,omitempty"`
+	Metadata map[string]any `json:"metadata,omitempty"`
 }
 
 // PushSubscription represents a browser Web Push subscription for a user.

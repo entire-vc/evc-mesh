@@ -2277,6 +2277,9 @@ func (f *fakeUserNotifyService) MarkRead(context.Context, uuid.UUID, []uuid.UUID
 }
 func (f *fakeUserNotifyService) MarkAllRead(context.Context, uuid.UUID) error { return nil }
 func (f *fakeUserNotifyService) EmailAvailable() bool                         { return false }
+func (f *fakeUserNotifyService) TelegramBotInfo(context.Context, uuid.UUID) (string, bool) {
+	return "", false
+}
 
 func (f *fakeUserNotifyService) Calls() []domain.NotificationEvent {
 	f.mu.Lock()

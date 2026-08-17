@@ -127,6 +127,15 @@ var declaredQueryTenantParams = map[string]string{
 	"memory_handler.go:BackfillChunks.workspace_id":      "checked: MemoryHandler.requireWorkspaceID",
 	"memory_handler.go:RechunkStale.workspace_id":        "checked: MemoryHandler.requireWorkspaceID",
 
+	// GET /notifications/telegram-bot-info — the one notification route that
+	// cannot rely on RequireBodyWorkspace (a GET has no body) or an implied
+	// tenant (the Telegram channel is configured per workspace, unlike
+	// EmailAvailable which asks about the whole instance). requireWorkspaceMember
+	// checks the caller against workspace_members before the bot username for
+	// that workspace is returned, the same rule MemoryHandler.workspaceAllowed
+	// uses.
+	"notification_handler.go:telegramBotInfoQuery.workspace_id": "checked: NotificationHandler.requireWorkspaceMember",
+
 	// --- Conjuncts on a query pinned elsewhere -------------------------------
 	//
 	// A project_id inside an already-checked workspace can only make the answer

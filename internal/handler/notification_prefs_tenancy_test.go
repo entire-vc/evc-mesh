@@ -68,6 +68,9 @@ func (m *mockNotificationService) MarkRead(context.Context, uuid.UUID, []uuid.UU
 }
 func (m *mockNotificationService) MarkAllRead(context.Context, uuid.UUID) error { return nil }
 func (m *mockNotificationService) EmailAvailable() bool                         { return false }
+func (m *mockNotificationService) TelegramBotInfo(context.Context, uuid.UUID) (string, bool) {
+	return "", false
+}
 
 // --- harness ----------------------------------------------------------------
 
@@ -77,7 +80,7 @@ func putPreferences(t *testing.T, db *sqlx.DB, authType string, actorID uuid.UUI
 	t.Helper()
 
 	svc := &mockNotificationService{}
-	h := NewNotificationHandler(svc)
+	h := NewNotificationHandler(svc, nil)
 
 	e := echo.New()
 	e.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
@@ -186,7 +189,7 @@ func deletePreference(t *testing.T, svc *mockNotificationService, userID uuid.UU
 	t.Helper()
 
 	e := echo.New()
-	h := NewNotificationHandler(svc)
+	h := NewNotificationHandler(svc, nil)
 	e.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
 			if userID != uuid.Nil {

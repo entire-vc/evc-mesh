@@ -790,6 +790,7 @@ func (s *commentService) Create(ctx context.Context, comment *domain.Comment) er
 				EventType:   "comment.created",
 				Title:       "New comment on: " + task.Title,
 				Body:        commentBody,
+				Labels:      []string(task.Labels),
 				Metadata: map[string]any{
 					"task_id":    task.ID,
 					"task_title": task.Title,
@@ -1153,6 +1154,7 @@ func (s *commentService) enforceBlockingTriage(ctx context.Context, comment *dom
 			EventType:   "task.blocking_triage",
 			Title:       "Task moved to triage: " + task.Title,
 			Body:        fmt.Sprintf("@%s marked this task as blocking — auto-moved to triage.", userSlug),
+			Labels:      []string(task.Labels),
 			Metadata: map[string]any{
 				"task_id":    task.ID,
 				"task_title": task.Title,

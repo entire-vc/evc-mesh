@@ -3,9 +3,11 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/lib/pq"
@@ -39,6 +41,11 @@ type NotificationService interface {
 	// uses this to tell the user email is unavailable instead of letting them
 	// subscribe to a channel that will silently never send.
 	EmailAvailable() bool
+
+	// TelegramBotInfo reports whether workspaceID has an active Telegram bot
+	// configured and, if so, its @username — so the settings page can build
+	// the t.me/<bot>?start=<token> link without calling Telegram itself.
+	TelegramBotInfo(ctx context.Context, workspaceID uuid.UUID) (botUsername string, available bool)
 
 	// ListUnread returns unread notifications for the given user (up to 50).
 	ListUnread(ctx context.Context, userID uuid.UUID) ([]domain.Notification, error)
@@ -80,12 +87,32 @@ type userEmailLookup interface {
 	GetByID(ctx context.Context, id uuid.UUID) (*domain.User, error)
 }
 
+// telegramTokenLookup is the slice of *postgres.IntegrationRepo the Telegram
+// channel needs: the workspace's telegram integration row, from which the
+// bot token is decrypted (see decodeTelegramIntegration).
+type telegramTokenLookup interface {
+	GetByProvider(ctx context.Context, workspaceID uuid.UUID, provider domain.IntegrationProvider) (*domain.IntegrationConfig, error)
+}
+
+// telegramProjectNameLookup is the slice of *postgres.ProjectRepo dispatch
+// needs for the message header — narrower than telegram_bot_manager.go's
+// projectLookup, which also needs ListForUserInWorkspace for the welcome
+// message dispatch never sends.
+type telegramProjectNameLookup interface {
+	GetByID(ctx context.Context, id uuid.UUID) (*domain.Project, error)
+}
+
 type notificationService struct {
 	repo         notificationRepository
 	pushService  PushService
 	emailSvc     EmailService
 	userRepo     userEmailLookup
 	emailBaseURL string
+
+	telegramClient       TelegramClient
+	telegramIntegrations telegramTokenLookup
+	telegramWorkspaces   workspaceNameLookup
+	telegramProjects     telegramProjectNameLookup
 }
 
 // NotificationServiceOption is a functional option for configuring notificationService.
@@ -107,6 +134,21 @@ func WithEmailService(svc EmailService, users userEmailLookup, baseURL string) N
 		s.emailSvc = svc
 		s.userRepo = users
 		s.emailBaseURL = baseURL
+	}
+}
+
+// WithTelegramService injects the Telegram channel's dependencies: the bot
+// API client, per-workspace bot-token lookup, and the workspace/project name
+// lookups the message header needs. Without this option the channel is a
+// no-op — preference rows can still be saved and even bound via /start
+// through the bot manager, but dispatch skips them the same way it would if
+// no bot were configured.
+func WithTelegramService(client TelegramClient, integrations telegramTokenLookup, workspaces workspaceNameLookup, projects telegramProjectNameLookup) NotificationServiceOption {
+	return func(s *notificationService) {
+		s.telegramClient = client
+		s.telegramIntegrations = integrations
+		s.telegramWorkspaces = workspaces
+		s.telegramProjects = projects
 	}
 }
 
@@ -293,6 +335,96 @@ func (s *notificationService) dispatch(event domain.NotificationEvent) {
 			}(p.Config)
 		}
 	}
+
+	// Fan-out to Telegram (per-user, respects the telegram channel's own
+	// prefs). Silently skipped when no channel deps were wired in, or when
+	// this workspace has no active bot configured — same shape as the email
+	// branch above.
+	if s.telegramClient != nil && s.telegramIntegrations != nil {
+		integration, err := s.telegramIntegrations.GetByProvider(bgCtx, event.WorkspaceID, domain.IntegrationProviderTelegram)
+		if err != nil {
+			log.Printf("[telegram] failed to load bot integration for workspace %s: %v", event.WorkspaceID, err)
+		} else if token, _, ok := decodeTelegramIntegration(integration); ok {
+			wsName := ""
+			if s.telegramWorkspaces != nil {
+				if ws, wsErr := s.telegramWorkspaces.GetByID(bgCtx, event.WorkspaceID); wsErr == nil && ws != nil {
+					wsName = ws.Name
+				}
+			}
+			projName := ""
+			if s.telegramProjects != nil && event.ProjectID != nil {
+				if proj, projErr := s.telegramProjects.GetByID(bgCtx, *event.ProjectID); projErr == nil && proj != nil {
+					projName = proj.Name
+				}
+			}
+			text := buildTelegramNotificationText(wsName, projName, event.Labels, event.Title, event.Body)
+
+			sentTo := make(map[uuid.UUID]bool)
+			for i := range prefs {
+				p := &prefs[i]
+				if p.Channel != "telegram" || p.UserID == nil || sentTo[*p.UserID] {
+					continue
+				}
+				if !members[*p.UserID] {
+					continue
+				}
+				if !containsInStringArray(p.Events, event.EventType) {
+					continue
+				}
+				if event.TargetUserID != nil && *p.UserID != *event.TargetUserID {
+					continue
+				}
+				var cfg TelegramPreferenceConfig
+				if len(p.Config) > 0 {
+					_ = json.Unmarshal(p.Config, &cfg)
+				}
+				if cfg.ChatID == 0 {
+					// Enabled and a username is on file, but /start was never
+					// completed (or the bot was later blocked and this row
+					// hasn't been re-bound) — nothing to deliver to yet.
+					continue
+				}
+				sentTo[*p.UserID] = true
+				userID := *p.UserID
+				chatID := cfg.ChatID
+				go func() {
+					sendCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+					defer cancel()
+					if sendErr := s.telegramClient.SendMessage(sendCtx, token, chatID, text); sendErr != nil {
+						log.Printf("[telegram] SendMessage error for user %s: %v", userID, sendErr)
+						var apiErr *TelegramAPIError
+						if errors.As(sendErr, &apiErr) && apiErr.Forbidden() {
+							s.disableTelegramForUser(context.Background(), event.WorkspaceID, userID)
+						}
+					}
+				}()
+			}
+		}
+	}
+}
+
+// disableTelegramForUser turns off the telegram preference row for one user
+// in one workspace after Telegram reports the bot is blocked (403) — the
+// chat_id will never accept another message until they unblock it, so
+// leaving is_enabled=true would just mean every future dispatch calls
+// SendMessage and gets 403 again, forever. Mirrors the existing
+// auto-deactivation of a webhook that starts failing the same way.
+func (s *notificationService) disableTelegramForUser(ctx context.Context, workspaceID, userID uuid.UUID) {
+	prefs, err := s.repo.GetPreferencesByWorkspace(ctx, workspaceID)
+	if err != nil {
+		log.Printf("[telegram] failed to load preferences while disabling blocked channel for user %s: %v", userID, err)
+		return
+	}
+	for i := range prefs {
+		p := &prefs[i]
+		if p.Channel == "telegram" && p.UserID != nil && *p.UserID == userID {
+			p.IsEnabled = false
+			if upsertErr := s.repo.UpsertPreference(ctx, p); upsertErr != nil {
+				log.Printf("[telegram] failed to disable channel for user %s after blocked bot: %v", userID, upsertErr)
+			}
+			return
+		}
+	}
 }
 
 // notificationEmailConfig is the shape stored in NotificationPreference.Config
@@ -382,6 +514,20 @@ func (s *notificationService) DeletePreference(ctx context.Context, userID, pref
 // this instance.
 func (s *notificationService) EmailAvailable() bool {
 	return s.emailSvc != nil && s.emailSvc.Enabled()
+}
+
+// TelegramBotInfo reports whether workspaceID has an active Telegram bot
+// configured and, if so, its @username.
+func (s *notificationService) TelegramBotInfo(ctx context.Context, workspaceID uuid.UUID) (string, bool) {
+	if s.telegramIntegrations == nil {
+		return "", false
+	}
+	cfg, err := s.telegramIntegrations.GetByProvider(ctx, workspaceID, domain.IntegrationProviderTelegram)
+	if err != nil {
+		return "", false
+	}
+	_, botUsername, ok := decodeTelegramIntegration(cfg)
+	return botUsername, ok
 }
 
 // ListUnread returns unread notifications for the given user (up to 50).

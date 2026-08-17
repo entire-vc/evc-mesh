@@ -51,6 +51,9 @@ func (m *recordingNotificationService) MarkRead(context.Context, uuid.UUID, []uu
 }
 func (m *recordingNotificationService) MarkAllRead(context.Context, uuid.UUID) error { return nil }
 func (m *recordingNotificationService) EmailAvailable() bool                         { return m.emailAvailable }
+func (m *recordingNotificationService) TelegramBotInfo(context.Context, uuid.UUID) (string, bool) {
+	return "", false
+}
 
 // putPreferencesNoTenancyGuard serves PUT /notifications/preferences without
 // mw.RequireBodyWorkspace in front of it — that guard is exercised in
@@ -58,7 +61,7 @@ func (m *recordingNotificationService) EmailAvailable() bool                    
 // request-body validation, which runs regardless of the guard.
 func putPreferencesNoTenancyGuard(t *testing.T, svc *recordingNotificationService, body string) *httptest.ResponseRecorder {
 	t.Helper()
-	h := NewNotificationHandler(svc)
+	h := NewNotificationHandler(svc, nil)
 
 	e := echo.New()
 	e.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
@@ -113,7 +116,7 @@ func TestUpdatePreferences_EmptyConfigLeavesConfigNilForAccountDefault(t *testin
 func TestGetEmailAvailability_ReflectsService(t *testing.T) {
 	for _, available := range []bool{true, false} {
 		svc := &recordingNotificationService{emailAvailable: available}
-		h := NewNotificationHandler(svc)
+		h := NewNotificationHandler(svc, nil)
 
 		e := echo.New()
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/notifications/email-availability", http.NoBody)
