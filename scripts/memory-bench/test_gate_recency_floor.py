@@ -90,6 +90,17 @@ class RecencyFloor(unittest.TestCase):
     def test_gold_absent_is_still_unarmed(self):
         self.assertEqual(_run("visible", rank_on=None, rank_off=None, rows=5), EXIT_INCONCLUSIVE)
 
+    # ── 4. gold present with decay off, absent with it ────────────────────────
+    def test_gold_absent_only_with_decay_on_is_unarmed_not_a_crash(self):
+        """Regression: this reached `rank_on < rank_off` with rank_on=None and
+        raised TypeError, so the required job went red with a traceback and no
+        verdict — reached by the strongest demotion the control can observe."""
+        self.assertEqual(_run("visible", rank_on=None, rank_off=2, rows=5), EXIT_INCONCLUSIVE)
+
+    def test_gold_absent_with_decay_on_does_not_crash_at_the_floor_either(self):
+        """Floor guard is evaluated on rank_off and must not be confused by it."""
+        self.assertEqual(_run("visible", rank_on=None, rank_off=5, rows=5), EXIT_INCONCLUSIVE)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

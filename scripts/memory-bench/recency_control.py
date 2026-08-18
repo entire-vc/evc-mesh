@@ -289,6 +289,39 @@ def run(expect: str, top_k: int) -> int:
         print(f"{REASON_PREFIX} control-unarmed — gold already last with decay off")
         return EXIT_INCONCLUSIVE
 
+    if aged and rank_on is None:
+        # Gold was retrieved without decay and is absent WITH it. Two different
+        # things produce that, and this arm cannot tell them apart:
+        #
+        #   * decay demoted gold clean out of the candidate pool — movement in
+        #     exactly the predicted direction, and arguably the strongest pass
+        #     this control could ever record; or
+        #   * gold never arrived for a reason that has nothing to do with age.
+        #     `gold_rank`'s own caveat applies — `ranked_records` is what
+        #     SURVIVED to the client, and scope/tags are post-filters over a
+        #     workspace-wide pool, so a perfectly indexed fixture can be missing.
+        #
+        # Calling it a pass would certify a measurement whose cause is not
+        # established, which is the one thing a control may never do. So:
+        # unarmed, with its own reason.
+        #
+        # Before this branch existed the comparisons below reached
+        # `rank_on < rank_off` with rank_on=None and raised
+        # `TypeError: '<' not supported between instances of 'NoneType' and
+        # 'int'`. A traceback exits non-zero, so the required job went red with
+        # no verdict at all — the same queue-blocking non-measurement this file
+        # is being fixed for, reached by the *success* case of the very demotion
+        # the control exists to observe.
+        print(
+            f"\n⚠ INCONCLUSIVE — gold ranks {rank_off} with decay off and is "
+            "absent from the ranked result entirely with decay on. That is "
+            "either a demotion past the end of the pool or a fixture that never "
+            "arrived, and this arm cannot separate the two. Re-run; if it "
+            "persists, compare rows_returned against the haystack size."
+        )
+        print(f"{REASON_PREFIX} control-unarmed — gold absent with decay on")
+        return EXIT_INCONCLUSIVE
+
     if aged:
         # ── AC2: the positive control ─────────────────────────────────────────
         #
