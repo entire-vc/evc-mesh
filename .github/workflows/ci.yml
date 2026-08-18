@@ -34,10 +34,23 @@ concurrency:
 permissions:
   contents: read
 
+# Every job carries `timeout-minutes`. GitHub's default is 360 (six hours), and
+# this workflow runs on `merge_group` — so a job that hangs holds the whole merge
+# queue behind it, which is how #72d1bf09 (queue stalled 5h) started life as
+# "the benchmark is hanging". The ceilings below are ~4-6x the p100 measured over
+# the last 8 green runs (slowest: coverage-gate 5.7m, test 5.2m), and every one is
+# under the ruleset's `check_response_timeout_minutes: 60`. That ordering is the
+# point: a stuck job must die and report a DEFINITE failure the queue can act on,
+# rather than going quiet and leaving the queue to time out on "no response" —
+# a cancelled/absent check does not evict the entry cleanly.
+# memory-bench.yml already does this (45m branch arm, 50m prod arm); this file was
+# the half of the merge-queue surface that did not, and the gap was missed once by
+# checking only the workflow that had been blamed.
 jobs:
   self-host-env:
     name: "Self-host env (no new required vars)"
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
       # A compose variable that is required with no default breaks upgrades
@@ -72,6 +85,7 @@ jobs:
   lint:
     name: Lint
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
       # Lives here rather than beside the coverage gate's own self-check, which
@@ -94,6 +108,7 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: lint
     services:
       postgres:
@@ -156,6 +171,7 @@ jobs:
   integration:
     name: "Integration tests (REPORT)"
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     continue-on-error: true
     needs: build
     services:
@@ -293,6 +309,7 @@ jobs:
   repo-integration:
     name: "Repo tests (integration)"
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     needs: lint
     services:
       postgres:
@@ -338,6 +355,7 @@ jobs:
   coverage-gate:
     name: "Go coverage ≥80% (affected-set)"
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: lint
     services:
       postgres:
@@ -525,6 +543,7 @@ jobs:
   frontend-coverage:
     name: "Frontend coverage (vitest, REPORT)"
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     continue-on-error: true
     steps:
       - uses: actions/checkout@v7
@@ -556,6 +575,7 @@ jobs:
   playwright-e2e:
     name: "Authed E2E"
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     container:
       image: mcr.microsoft.com/playwright:v1.44.0-jammy
       options: --ipc=host
@@ -592,6 +612,7 @@ jobs:
   build:
     name: Build
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     needs: test
     steps:
       - uses: actions/checkout@v7
