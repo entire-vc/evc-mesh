@@ -5,6 +5,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"strings"
 	"testing"
 	"time"
 
@@ -109,35 +110,81 @@ func TestAuthenticate_AcceptsAKeyThroughTheDigest(t *testing.T) {
 	assert.Equal(t, agent.ID, got.ID)
 }
 
-// The point of the whole change: a wrong secret must not cost a bcrypt
-// comparison once the digest exists. Corrupting the bcrypt hash to something
-// bcrypt cannot even parse proves the fast path answered, because the slow path
-// would have errored differently on the way to the same 401.
-func TestAuthenticate_WrongKeyIsRejectedWithoutTouchingBcrypt(t *testing.T) {
-	svc, agentRepo, agent, _ := registerAgentForDigest(t)
-
-	stored := agentRepo.items[agent.ID]
-	stored.APIKeyHash = "not-a-bcrypt-hash-at-all"
-
-	_, err := svc.Authenticate(context.Background(), "acme", "agk_acme_"+
-		"ffffffffffffffffffffffffffffffffffffffffffffffff")
-	require.Error(t, err)
-
-	// And the right key still works against the same unparseable bcrypt hash,
-	// which is only possible if bcrypt is not being consulted.
-	_, rawKeyErr := svc.Authenticate(context.Background(), "acme", "agk_acme_deadbeef")
-	assert.Error(t, rawKeyErr)
+// sameePrefixWrongKey returns a key that resolves to the SAME agent as rawKey —
+// identical prefix — but carries a different secret.
+//
+// The prefix matters more than it looks. An earlier version of the test below
+// used a key of all "f"s, whose prefix matched no agent at all, so
+// GetByAPIKeyPrefix returned nil and Authenticate answered 401 from the lookup
+// without ever reaching the verification branch. The test asserted an error and
+// passed for the wrong reason; CI's diff-coverage gate is what caught it, by
+// reporting the rejection branch as unexecuted.
+func samePrefixWrongKey(rawKey string) string {
+	// extractPrefix takes the first apiKeyPrefixLen chars after "agk_{slug}_",
+	// so keeping that head and replacing the tail lands on the same agent.
+	head := rawKey[:len("agk_acme_")+apiKeyPrefixLen]
+	return head + strings.Repeat("0", len(rawKey)-len(head))
 }
 
-func TestAuthenticate_DigestPathIgnoresAnUnusableBcryptHash(t *testing.T) {
+// The point of the whole change: once the digest exists, a wrong secret must be
+// rejected without a bcrypt comparison.
+//
+// This is set up so the two paths give OPPOSITE answers, which is the only way
+// to tell which one decided. The stored bcrypt hash is a valid hash OF THE WRONG
+// KEY, so bcrypt would accept it; the digest is of the real key, so the digest
+// rejects it. A 401 therefore proves the digest answered — had the code fallen
+// through to bcrypt, this call would have succeeded.
+func TestAuthenticate_WrongKeyIsRejectedWithoutTouchingBcrypt(t *testing.T) {
 	svc, agentRepo, agent, rawKey := registerAgentForDigest(t)
 
-	agentRepo.items[agent.ID].APIKeyHash = "garbage-not-bcrypt"
+	wrongKey := samePrefixWrongKey(rawKey)
+	require.NotEqual(t, rawKey, wrongKey)
+	require.Equal(t, extractPrefix(rawKey, "acme"), extractPrefix(wrongKey, "acme"),
+		"the wrong key must resolve to the same agent, or this tests the lookup and not the branch")
+
+	bcryptOfWrongKey, err := bcrypt.GenerateFromPassword([]byte(wrongKey), bcryptCost)
+	require.NoError(t, err)
+	agentRepo.items[agent.ID].APIKeyHash = string(bcryptOfWrongKey)
+
+	_, err = svc.Authenticate(context.Background(), "acme", wrongKey)
+	require.Error(t, err,
+		"bcrypt would have accepted this key; rejecting it is what proves the digest decided")
+}
+
+// The mirror image, and the same trick in reverse: the stored bcrypt hash is a
+// valid hash of a DIFFERENT key, so bcrypt would reject the real key. Accepting
+// it proves bcrypt was never consulted.
+func TestAuthenticate_DigestPathIsNotBackedByBcrypt(t *testing.T) {
+	svc, agentRepo, agent, rawKey := registerAgentForDigest(t)
+
+	bcryptOfSomethingElse, err := bcrypt.GenerateFromPassword(
+		[]byte(samePrefixWrongKey(rawKey)), bcryptCost)
+	require.NoError(t, err)
+	agentRepo.items[agent.ID].APIKeyHash = string(bcryptOfSomethingElse)
 
 	got, err := svc.Authenticate(context.Background(), "acme", rawKey)
 	require.NoError(t, err,
 		"with a populated digest the bcrypt column must not be read at all")
 	assert.Equal(t, agent.ID, got.ID)
+}
+
+// A digest that is present but does not match must not fall through to bcrypt
+// "just in case" — that would reopen the CPU-burn the digest closes.
+func TestAuthenticate_MismatchedDigestDoesNotFallBackToBcrypt(t *testing.T) {
+	svc, agentRepo, agent, rawKey := registerAgentForDigest(t)
+
+	// Digest of some other key, bcrypt hash of the REAL key: bcrypt would say
+	// yes, the digest says no. The digest must win.
+	agentRepo.items[agent.ID].APIKeySHA256 = agentKeyDigest("agk_acme_something-else")
+
+	_, err := svc.Authenticate(context.Background(), "acme", rawKey)
+	require.Error(t, err,
+		"a stale or wrong digest must reject outright; falling back to bcrypt would mean "+
+			"an attacker can still force the slow path on every request")
+
+	assert.NotEqual(t, agentKeyDigest(rawKey), agentRepo.items[agent.ID].APIKeySHA256,
+		"and the rejected attempt must not have rewritten the digest — only the bcrypt "+
+			"path is allowed to backfill")
 }
 
 // A row that predates the column still authenticates, via bcrypt — and comes
