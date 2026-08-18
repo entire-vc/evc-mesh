@@ -17,6 +17,7 @@ type CommentView struct {
 	AuthorID    uuid.UUID `json:"author_id"    db:"author_id"`
 	AuthorName  string    `json:"author_name"  db:"author_name"`
 	AuthorKind  string    `json:"author_kind"  db:"author_kind"`
+	IsInternal  bool      `json:"is_internal"  db:"is_internal"`
 	CreatedAt   time.Time `json:"created_at"   db:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"   db:"updated_at"`
 }

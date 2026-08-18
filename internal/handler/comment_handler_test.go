@@ -626,6 +626,54 @@ func TestCommentHandler_GetRecentByWorkspace_TupleCursor(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rec.Code)
 }
 
+// TestCommentHandler_GetRecentByWorkspace_IncludeInternal pins the query-param
+// wiring for #a7ae4c76 pt.2: default false (unset), explicit values pass
+// through, and an unparseable value is silently ignored — same behavior as
+// the `include_internal` handling on the task-scoped List handler above.
+func TestCommentHandler_GetRecentByWorkspace_IncludeInternal(t *testing.T) {
+	wsID := uuid.New()
+	page := &domain.CommentViewPage{Items: []domain.CommentView{}}
+
+	cases := []struct {
+		name  string
+		query string
+		want  bool
+	}{
+		{"unset defaults to false", "", false},
+		{"true", "include_internal=true", true},
+		{"false", "include_internal=false", false},
+		{"garbage is ignored, stays false", "include_internal=not-a-bool", false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var gotIncludeInternal bool
+			mockSvc := &MockCommentService{
+				ListRecentByWorkspaceFunc: func(_ context.Context, _ uuid.UUID, filter repository.CommentViewFilter) (*domain.CommentViewPage, error) {
+					gotIncludeInternal = filter.IncludeInternal
+					return page, nil
+				},
+			}
+			h, e := setupCommentTest(mockSvc)
+
+			url := "/"
+			if tc.query != "" {
+				url += "?" + tc.query
+			}
+			req := httptest.NewRequest(http.MethodGet, url, http.NoBody)
+			rec := httptest.NewRecorder()
+			c := e.NewContext(req, rec)
+			c.SetParamNames("ws_id")
+			c.SetParamValues(wsID.String())
+
+			err := h.GetRecentByWorkspace(c)
+			require.NoError(t, err)
+			assert.Equal(t, http.StatusOK, rec.Code)
+			assert.Equal(t, tc.want, gotIncludeInternal)
+		})
+	}
+}
+
 // --- comment.metadata pass-through (task #13e391d2) ---
 //
 // The defect these cover was invisible at every layer that had a test: the domain struct,

@@ -170,6 +170,7 @@ const commentViewSelect = `SELECT
 			(SELECT COALESCE(NULLIF(u.display_name, ''), SPLIT_PART(u.email, '@', 1)) FROM users u WHERE u.id = c.author_id)
 		ELSE ''
 	END AS author_name,
+	c.is_internal,
 	c.created_at,
 	c.updated_at
 FROM comments c
@@ -254,7 +255,10 @@ func (r *CommentRepo) ListRecentByWorkspace(ctx context.Context, wsID uuid.UUID,
 	}
 
 	args := []any{wsID}
-	where := `p.workspace_id = $1 AND c.is_internal = false`
+	where := `p.workspace_id = $1`
+	if !filter.IncludeInternal {
+		where += ` AND c.is_internal = false`
+	}
 	where, args = cursorWhere(where, args, filter)
 
 	args = append(args, limit)

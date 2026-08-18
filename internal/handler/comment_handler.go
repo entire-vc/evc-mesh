@@ -260,6 +260,11 @@ func (h *CommentHandler) GetRecentByWorkspace(c echo.Context) error {
 		}
 		filter.BeforeID = &id
 	}
+	if v := c.QueryParam("include_internal"); v != "" {
+		if b, parseErr := strconv.ParseBool(v); parseErr == nil {
+			filter.IncludeInternal = b
+		}
+	}
 
 	page, err := h.commentService.ListRecentByWorkspace(c.Request().Context(), wsID, filter)
 	if err != nil {
