@@ -307,6 +307,11 @@ export interface CommentView {
 export interface CommentViewPage {
   items: CommentView[];
   next_cursor: string | null;
+  // Tie-breaker paired with next_cursor: created_at alone is not unique (a
+  // page boundary landing inside a group of same-timestamp comments would
+  // otherwise silently drop the rest of the group — #c6dc694e). Echo both
+  // back as before/before_id on the next "Load more" request.
+  next_cursor_id: string | null;
 }
 
 export interface TaskDependency {

@@ -44,6 +44,20 @@ function formatRelative(isoStr: string): string {
 
 type Tab = "mentions" | "my-comments" | "all-recent";
 
+// Page-boundary cursor for the comment view endpoints: created_at alone is
+// not a unique sort key, so a page boundary landing inside a group of
+// same-timestamp comments needs the id tie-breaker too, or the rest of that
+// group silently never loads — #c6dc694e.
+interface CommentCursor {
+  before: string;
+  beforeId: string;
+}
+
+function cursorFromPage(page: CommentViewPage | null | undefined): CommentCursor | null {
+  if (!page?.next_cursor || !page.next_cursor_id) return null;
+  return { before: page.next_cursor, beforeId: page.next_cursor_id };
+}
+
 const TABS: { id: Tab; label: string }[] = [
   { id: "mentions", label: "Mentions" },
   { id: "my-comments", label: "My comments" },
@@ -82,8 +96,8 @@ export function ActivityPage() {
   const [recentComments, setRecentComments] = useState<CommentView[]>([]);
   const [loading, setLoading] = useState(false);
   const [lastVisit, setLastVisit] = useState<Date | null>(null);
-  const [myCommentsNextCursor, setMyCommentsNextCursor] = useState<string | null>(null);
-  const [recentNextCursor, setRecentNextCursor] = useState<string | null>(null);
+  const [myCommentsNextCursor, setMyCommentsNextCursor] = useState<CommentCursor | null>(null);
+  const [recentNextCursor, setRecentNextCursor] = useState<CommentCursor | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
 
   // Snapshot of shown IDs at mount (from localStorage). Updated via ref after each fetch
@@ -109,50 +123,56 @@ export function ActivityPage() {
     }
   }, []);
 
-  const fetchMyComments = useCallback(async (before?: string) => {
-    if (before) setLoadingMore(true);
+  const fetchMyComments = useCallback(async (cursor?: CommentCursor) => {
+    if (cursor) setLoadingMore(true);
     else {
       setLoading(true);
       setMyCommentsNextCursor(null);
     }
     try {
       const params: Record<string, string | number | undefined> = { limit: 50 };
-      if (before) params.before = before;
+      if (cursor) {
+        params.before = cursor.before;
+        params.before_id = cursor.beforeId;
+      }
       const data = await api<CommentViewPage>("/api/v1/me/comments", { params });
       const items = data?.items ?? [];
-      if (before) setMyComments((prev) => [...prev, ...items]);
+      if (cursor) setMyComments((prev) => [...prev, ...items]);
       else setMyComments(items);
-      setMyCommentsNextCursor(data?.next_cursor ?? null);
+      setMyCommentsNextCursor(cursorFromPage(data));
     } catch {
       toast.error("Failed to load comments");
     } finally {
-      if (before) setLoadingMore(false);
+      if (cursor) setLoadingMore(false);
       else setLoading(false);
     }
   }, []);
 
-  const fetchRecentComments = useCallback(async (before?: string) => {
+  const fetchRecentComments = useCallback(async (cursor?: CommentCursor) => {
     if (!currentWorkspace) return;
-    if (before) setLoadingMore(true);
+    if (cursor) setLoadingMore(true);
     else {
       setLoading(true);
       setRecentNextCursor(null);
     }
     try {
       const params: Record<string, string | number | undefined> = { limit: 50 };
-      if (before) params.before = before;
+      if (cursor) {
+        params.before = cursor.before;
+        params.before_id = cursor.beforeId;
+      }
       const data = await api<CommentViewPage>(
         `/api/v1/workspaces/${currentWorkspace.id}/comments/recent`,
         { params },
       );
       const items = data?.items ?? [];
-      if (before) setRecentComments((prev) => [...prev, ...items]);
+      if (cursor) setRecentComments((prev) => [...prev, ...items]);
       else setRecentComments(items);
-      setRecentNextCursor(data?.next_cursor ?? null);
+      setRecentNextCursor(cursorFromPage(data));
     } catch {
       toast.error("Failed to load recent comments");
     } finally {
-      if (before) setLoadingMore(false);
+      if (cursor) setLoadingMore(false);
       else setLoading(false);
     }
   }, [currentWorkspace]);
