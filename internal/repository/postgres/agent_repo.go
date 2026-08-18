@@ -31,6 +31,7 @@ type agentRow struct {
 	Slug                string             `db:"slug"`
 	AgentType           domain.AgentType   `db:"agent_type"`
 	APIKeyHash          string             `db:"api_key_hash"`
+	APIKeySHA256        *string            `db:"api_key_sha256"`
 	APIKeyPrefix        string             `db:"api_key_prefix"`
 	Capabilities        json.RawMessage    `db:"capabilities"`
 	Status              domain.AgentStatus `db:"status"`
@@ -58,6 +59,48 @@ type agentRow struct {
 	DeletedAt           *time.Time         `db:"deleted_at"`
 }
 
+// agentSelectCols is every column agentRow scans, listed explicitly.
+//
+// It replaces `SELECT *`, which made this repository break on a schema change
+// it did not know about: sqlx refuses to scan a column with no matching struct
+// field, so the moment migration 20260817092 added api_key_sha256, ANY binary
+// compiled before it started failing every agent lookup — including the API-key
+// verification — with "missing destination name". A rollback to such a binary
+// is exactly that situation. Naming the columns makes an added column invisible
+// to older reads; a REMOVED one still breaks, which is the direction that
+// should break.
+const agentSelectCols = `
+	id, workspace_id, parent_agent_id, supervisor_user_id, name, slug, agent_type,
+	api_key_hash, api_key_sha256, api_key_prefix, capabilities, status,
+	last_heartbeat, heartbeat_status, heartbeat_message, heartbeat_metadata,
+	current_task_id, settings,
+	total_tasks_completed, total_errors, external_agent_id,
+	role, responsibility_zone, escalation_to, accepts_from,
+	max_concurrent_tasks, working_hours, profile_description,
+	callback_url, expires_at, last_rotated_at,
+	created_at, updated_at, deleted_at`
+
+// nullIfEmpty is derefString's inverse on the write side: the domain spells
+// "not populated" as "", the column spells it as NULL, and the partial unique
+// index on api_key_sha256 depends on the NULL spelling to let many un-populated
+// rows coexist.
+func nullIfEmpty(v string) *string {
+	if v == "" {
+		return nil
+	}
+	return &v
+}
+
+// derefString flattens a nullable TEXT column to "". The only nullable string
+// on this row is api_key_sha256, where NULL means "fast path not populated yet"
+// — a state the domain already spells as the empty string.
+func derefString(v *string) string {
+	if v == nil {
+		return ""
+	}
+	return *v
+}
+
 func (r *agentRow) toDomain() domain.Agent {
 	return domain.Agent{
 		ID:                  r.ID,
@@ -68,6 +111,7 @@ func (r *agentRow) toDomain() domain.Agent {
 		Slug:                r.Slug,
 		AgentType:           r.AgentType,
 		APIKeyHash:          r.APIKeyHash,
+		APIKeySHA256:        derefString(r.APIKeySHA256),
 		APIKeyPrefix:        r.APIKeyPrefix,
 		Capabilities:        r.Capabilities,
 		Status:              r.Status,
@@ -124,7 +168,8 @@ func (r *AgentRepo) Create(ctx context.Context, agent *domain.Agent) error {
 			max_concurrent_tasks, working_hours, profile_description,
 			callback_url,
 			expires_at, last_rotated_at,
-			created_at, updated_at
+			created_at, updated_at,
+			api_key_sha256
 		) VALUES (
 			$1, $2, $3, $4, $5, $6, $7,
 			$8, $9, $10, $11,
@@ -134,7 +179,8 @@ func (r *AgentRepo) Create(ctx context.Context, agent *domain.Agent) error {
 			$21, $22, $23,
 			$24,
 			$25, $26,
-			$27, $28
+			$27, $28,
+			$29
 		)
 	`
 	capabilities := agent.Capabilities
@@ -159,12 +205,15 @@ func (r *AgentRepo) Create(ctx context.Context, agent *domain.Agent) error {
 		agent.CallbackURL,
 		agent.ExpiresAt, agent.LastRotatedAt,
 		agent.CreatedAt, agent.UpdatedAt,
+		// NULL rather than "" so the partial unique index treats un-populated
+		// rows as distinct instead of colliding on the empty string.
+		nullIfEmpty(agent.APIKeySHA256),
 	)
 	return err
 }
 
 func (r *AgentRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.Agent, error) {
-	const q = `SELECT * FROM agents WHERE id = $1 AND deleted_at IS NULL`
+	const q = `SELECT ` + agentSelectCols + ` FROM agents WHERE id = $1 AND deleted_at IS NULL`
 	var row agentRow
 	if err := r.db.GetContext(ctx, &row, q, id); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -177,7 +226,7 @@ func (r *AgentRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.Agent, e
 }
 
 func (r *AgentRepo) GetByAPIKeyPrefix(ctx context.Context, workspaceID uuid.UUID, prefix string) (*domain.Agent, error) {
-	const q = `SELECT * FROM agents WHERE workspace_id = $1 AND api_key_prefix = $2 AND deleted_at IS NULL`
+	const q = `SELECT ` + agentSelectCols + ` FROM agents WHERE workspace_id = $1 AND api_key_prefix = $2 AND deleted_at IS NULL`
 	var row agentRow
 	if err := r.db.GetContext(ctx, &row, q, workspaceID, prefix); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -187,6 +236,24 @@ func (r *AgentRepo) GetByAPIKeyPrefix(ctx context.Context, workspaceID uuid.UUID
 	}
 	a := row.toDomain()
 	return &a, nil
+}
+
+// SetAPIKeySHA256 writes the fast-path digest without touching any other
+// column, so it can run on the read path without racing a concurrent update to
+// the rest of the row.
+func (r *AgentRepo) SetAPIKeySHA256(ctx context.Context, agentID uuid.UUID, digest, expectedBcryptHash string) error {
+	const q = `
+		UPDATE agents
+		SET api_key_sha256 = $2
+		WHERE id = $1
+		  AND deleted_at IS NULL
+		  AND api_key_hash = $3
+		  AND api_key_sha256 IS DISTINCT FROM $2
+	`
+	// No rows affected is the normal outcome of a race (the key was rotated, or
+	// another request populated the digest first), not an error.
+	_, err := r.db.ExecContext(ctx, q, agentID, digest, expectedBcryptHash)
+	return err
 }
 
 func (r *AgentRepo) Update(ctx context.Context, agent *domain.Agent) error {
@@ -202,7 +269,8 @@ func (r *AgentRepo) Update(ctx context.Context, agent *domain.Agent) error {
 		    max_concurrent_tasks = $20, working_hours = $21, profile_description = $22,
 		    callback_url = $23,
 		    expires_at = $24, last_rotated_at = $25,
-		    updated_at = $26
+		    updated_at = $26,
+		    api_key_sha256 = $27
 		WHERE id = $1 AND deleted_at IS NULL
 	`
 	capabilities := agent.Capabilities
@@ -229,6 +297,7 @@ func (r *AgentRepo) Update(ctx context.Context, agent *domain.Agent) error {
 		agent.CallbackURL,
 		agent.ExpiresAt, agent.LastRotatedAt,
 		agent.UpdatedAt,
+		nullIfEmpty(agent.APIKeySHA256),
 	)
 	if err != nil {
 		return err
@@ -298,7 +367,7 @@ func (r *AgentRepo) List(ctx context.Context, workspaceID uuid.UUID, filter repo
 	}
 
 	// Data
-	dataQ := fmt.Sprintf(`SELECT * FROM agents %s %s %s`, where, order, paginationClause(pg))
+	dataQ := fmt.Sprintf(`SELECT `+agentSelectCols+` FROM agents %s %s %s`, where, order, paginationClause(pg))
 	var rows []agentRow
 	if err := r.db.SelectContext(ctx, &rows, dataQ, args...); err != nil {
 		return nil, err
@@ -320,7 +389,11 @@ func (r *AgentRepo) GetSubAgentTree(ctx context.Context, parentID uuid.UUID) ([]
 			WHERE a.deleted_at IS NULL AND t.depth < 10
 		)
 		SELECT id, workspace_id, parent_agent_id, supervisor_user_id, name, slug, agent_type,
-		       api_key_hash, api_key_prefix, capabilities, status,
+		       -- api_key_sha256 is selected even though a subtree read never
+		       -- authenticates: a caller that reads an agent here and passes it
+		       -- to Update would otherwise write NULL back over the digest and
+		       -- silently return that agent to the bcrypt path.
+		       api_key_hash, api_key_sha256, api_key_prefix, capabilities, status,
 		       last_heartbeat, heartbeat_status, heartbeat_message, heartbeat_metadata,
 		       current_task_id, settings,
 		       total_tasks_completed, total_errors, external_agent_id,
@@ -405,7 +478,7 @@ type agentWithProjectsRow struct {
 // GetBySlug returns the agent with the given slug in a workspace.
 // Returns (nil, nil) when no matching agent is found.
 func (r *AgentRepo) GetBySlug(ctx context.Context, workspaceID uuid.UUID, slug string) (*domain.Agent, error) {
-	const q = `SELECT * FROM agents WHERE workspace_id = $1 AND slug = $2 AND deleted_at IS NULL`
+	const q = `SELECT ` + agentSelectCols + ` FROM agents WHERE workspace_id = $1 AND slug = $2 AND deleted_at IS NULL`
 	var row agentRow
 	if err := r.db.GetContext(ctx, &row, q, workspaceID, slug); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -463,7 +536,7 @@ func (r *AgentRepo) ListWithProjects(ctx context.Context, workspaceID uuid.UUID)
 // sorted by exact-prefix match first then name, up to limit results.
 func (r *AgentRepo) SearchByPrefix(ctx context.Context, workspaceID uuid.UUID, prefix string, limit int) ([]domain.Agent, error) {
 	const q = `
-		SELECT * FROM agents
+		SELECT ` + agentSelectCols + ` FROM agents
 		WHERE workspace_id = $1 AND deleted_at IS NULL
 		  AND (name ILIKE $2 OR slug ILIKE $2)
 		ORDER BY

@@ -259,6 +259,12 @@ type AgentRepository interface {
 	Create(ctx context.Context, agent *domain.Agent) error
 	GetByID(ctx context.Context, id uuid.UUID) (*domain.Agent, error)
 	GetByAPIKeyPrefix(ctx context.Context, workspaceID uuid.UUID, prefix string) (*domain.Agent, error)
+	// SetAPIKeySHA256 fills in the fast-verification digest for an agent whose
+	// row still predates it. expectedBcryptHash guards the write: it is the hash
+	// the caller just verified the presented key against, so a rotation that
+	// landed in between makes the UPDATE match no row rather than stamping a
+	// digest of the superseded key onto the new one.
+	SetAPIKeySHA256(ctx context.Context, agentID uuid.UUID, digest, expectedBcryptHash string) error
 	// GetBySlug returns the agent with the given slug in a workspace, or (nil, nil) if not found.
 	GetBySlug(ctx context.Context, workspaceID uuid.UUID, slug string) (*domain.Agent, error)
 	Update(ctx context.Context, agent *domain.Agent) error
