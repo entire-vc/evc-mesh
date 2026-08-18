@@ -886,20 +886,32 @@ func (s *commentService) ListByTask(ctx context.Context, taskID uuid.UUID, filte
 
 // ListByAuthor returns the caller's own comments, newest first (activity feed).
 func (s *commentService) ListByAuthor(ctx context.Context, authorID uuid.UUID, filter repository.CommentViewFilter) (*domain.CommentViewPage, error) {
-	items, nextCursor, err := s.commentRepo.ListByAuthor(ctx, authorID, filter)
+	items, cursor, err := s.commentRepo.ListByAuthor(ctx, authorID, filter)
 	if err != nil {
 		return nil, err
 	}
-	return &domain.CommentViewPage{Items: items, NextCursor: nextCursor}, nil
+	return commentViewPage(items, cursor), nil
 }
 
 // ListRecentByWorkspace returns workspace-wide recent comments, newest first (activity feed).
 func (s *commentService) ListRecentByWorkspace(ctx context.Context, wsID uuid.UUID, filter repository.CommentViewFilter) (*domain.CommentViewPage, error) {
-	items, nextCursor, err := s.commentRepo.ListRecentByWorkspace(ctx, wsID, filter)
+	items, cursor, err := s.commentRepo.ListRecentByWorkspace(ctx, wsID, filter)
 	if err != nil {
 		return nil, err
 	}
-	return &domain.CommentViewPage{Items: items, NextCursor: nextCursor}, nil
+	return commentViewPage(items, cursor), nil
+}
+
+// commentViewPage splits a repo-level tuple cursor back into the page's two
+// JSON fields — NextCursor (RFC3339, read by old and new clients alike) and
+// NextCursorID (the tie-breaker new clients should echo back as before_id).
+func commentViewPage(items []domain.CommentView, cursor *domain.CommentCursor) *domain.CommentViewPage {
+	page := &domain.CommentViewPage{Items: items}
+	if cursor != nil {
+		page.NextCursor = &cursor.CreatedAt
+		page.NextCursorID = &cursor.ID
+	}
+	return page
 }
 
 // buildTaskSnap constructs the task snapshot map used in agent notifications.

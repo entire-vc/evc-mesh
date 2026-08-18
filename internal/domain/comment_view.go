@@ -21,9 +21,24 @@ type CommentView struct {
 	UpdatedAt   time.Time `json:"updated_at"   db:"updated_at"`
 }
 
+// CommentCursor identifies a page boundary as a (created_at, id) tuple rather
+// than created_at alone, which is not unique — a bulk-insert (or any two
+// comments landing in the same microsecond) can put dozens of rows on one
+// timestamp, and a strict `created_at < cursor` comparison silently drops
+// every unread member of that tie group at a page boundary. Same class as
+// the task-list cursor fix in #a1012e55. See #c6dc694e.
+type CommentCursor struct {
+	CreatedAt time.Time
+	ID        uuid.UUID
+}
+
 // CommentViewPage is the cursor-paginated response for comment view endpoints.
-// NextCursor is nil when there are no more pages.
+// NextCursor/NextCursorID are nil together when there are no more pages.
+// NextCursor alone (RFC3339) stays valid for old clients paginating with only
+// a timestamp; NextCursorID is the tie-breaker new clients should also send
+// back as before_id for a page boundary that lands inside a tie group.
 type CommentViewPage struct {
-	Items      []CommentView `json:"items"`
-	NextCursor *time.Time    `json:"next_cursor"`
+	Items        []CommentView `json:"items"`
+	NextCursor   *time.Time    `json:"next_cursor"`
+	NextCursorID *uuid.UUID    `json:"next_cursor_id"`
 }

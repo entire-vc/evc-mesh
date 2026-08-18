@@ -449,6 +449,59 @@ func TestCommentHandler_GetMyComments_BadCursor(t *testing.T) {
 	assert.NotEmpty(t, apiErr.Validation["before"])
 }
 
+func TestCommentHandler_GetMyComments_BadBeforeID(t *testing.T) {
+	userID := uuid.New()
+	mockSvc := &MockCommentService{}
+	h, e := setupCommentTest(mockSvc)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/me/comments?before=2026-01-01T00:00:00Z&before_id=not-a-uuid", http.NoBody)
+	ctx := actorctx.WithActor(req.Context(), userID, domain.ActorTypeUser)
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	err := h.GetMyComments(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+
+	var apiErr apierror.Error
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &apiErr))
+	assert.NotEmpty(t, apiErr.Validation["before_id"])
+}
+
+// TestCommentHandler_GetMyComments_TupleCursor pins that before/before_id
+// reach the service as a pair (#c6dc694e) — the id half is the tiebreaker
+// that keeps a page boundary landing inside a same-timestamp group from
+// silently dropping the rest of that group.
+func TestCommentHandler_GetMyComments_TupleCursor(t *testing.T) {
+	userID := uuid.New()
+	before := time.Now().UTC()
+	beforeID := uuid.New()
+	page := &domain.CommentViewPage{Items: []domain.CommentView{}}
+
+	mockSvc := &MockCommentService{
+		ListByAuthorFunc: func(_ context.Context, _ uuid.UUID, filter repository.CommentViewFilter) (*domain.CommentViewPage, error) {
+			require.NotNil(t, filter.Before)
+			require.NotNil(t, filter.BeforeID)
+			assert.WithinDuration(t, before, *filter.Before, time.Second)
+			assert.Equal(t, beforeID, *filter.BeforeID)
+			return page, nil
+		},
+	}
+	h, e := setupCommentTest(mockSvc)
+
+	url := "/api/v1/me/comments?before=" + before.Format(time.RFC3339) + "&before_id=" + beforeID.String()
+	req := httptest.NewRequest(http.MethodGet, url, http.NoBody)
+	ctx := actorctx.WithActor(req.Context(), userID, domain.ActorTypeUser)
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	err := h.GetMyComments(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
 // --- TestCommentHandler_GetRecentByWorkspace ---
 
 func TestCommentHandler_GetRecentByWorkspace_Success(t *testing.T) {
@@ -520,6 +573,57 @@ func TestCommentHandler_GetRecentByWorkspace_BadCursor(t *testing.T) {
 	var apiErr apierror.Error
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &apiErr))
 	assert.NotEmpty(t, apiErr.Validation["before"])
+}
+
+func TestCommentHandler_GetRecentByWorkspace_BadBeforeID(t *testing.T) {
+	wsID := uuid.New()
+	mockSvc := &MockCommentService{}
+	h, e := setupCommentTest(mockSvc)
+
+	req := httptest.NewRequest(http.MethodGet, "/?before=2026-01-01T00:00:00Z&before_id=not-a-uuid", http.NoBody)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetParamNames("ws_id")
+	c.SetParamValues(wsID.String())
+
+	err := h.GetRecentByWorkspace(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+
+	var apiErr apierror.Error
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &apiErr))
+	assert.NotEmpty(t, apiErr.Validation["before_id"])
+}
+
+// TestCommentHandler_GetRecentByWorkspace_TupleCursor pins that before/before_id
+// reach the service as a pair (#c6dc694e) — see the /me/comments twin above.
+func TestCommentHandler_GetRecentByWorkspace_TupleCursor(t *testing.T) {
+	wsID := uuid.New()
+	before := time.Now().UTC()
+	beforeID := uuid.New()
+	page := &domain.CommentViewPage{Items: []domain.CommentView{}}
+
+	mockSvc := &MockCommentService{
+		ListRecentByWorkspaceFunc: func(_ context.Context, _ uuid.UUID, filter repository.CommentViewFilter) (*domain.CommentViewPage, error) {
+			require.NotNil(t, filter.Before)
+			require.NotNil(t, filter.BeforeID)
+			assert.WithinDuration(t, before, *filter.Before, time.Second)
+			assert.Equal(t, beforeID, *filter.BeforeID)
+			return page, nil
+		},
+	}
+	h, e := setupCommentTest(mockSvc)
+
+	url := "/?before=" + before.Format(time.RFC3339) + "&before_id=" + beforeID.String()
+	req := httptest.NewRequest(http.MethodGet, url, http.NoBody)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetParamNames("ws_id")
+	c.SetParamValues(wsID.String())
+
+	err := h.GetRecentByWorkspace(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, rec.Code)
 }
 
 // --- comment.metadata pass-through (task #13e391d2) ---
