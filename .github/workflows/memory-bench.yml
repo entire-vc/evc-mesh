@@ -118,14 +118,13 @@ on:
   # none of them. Without this the queue cannot be enabled at all — an entry
   # would wait forever for a check that is never requested.
   #
-  # Deliberately NO `paths:` filter here either, and — unlike the PR arm — the
-  # in-job scope step does not narrow on this event: `Does this change touch
-  # memory?` short-circuits to relevant=true for any non-`pull_request` event,
-  # so a merge group always pays the full bench. That is the intended direction.
-  # A group is several PRs at once, the cost is paid once per batch rather than
-  # once per PR, and the failure this file exists to prevent (#347: the gate
-  # reporting green having measured nothing) is the one that must not be
-  # reachable by adding a trigger.
+  # Deliberately NO `paths:` filter here either — a path-filtered required check
+  # never reports on the groups it filters out, and the queue would wait forever.
+  # The narrowing happens IN-JOB instead, in `Does this change touch memory?`,
+  # which diffs the group's own `base_sha..head_sha` exactly as the PR arm diffs
+  # `base..head`. This used to short-circuit to relevant=true on every non-PR
+  # event; that cost the queue 29-42 min per group for batches with no memory
+  # path in them at all. Rationale and fail-closed rules: scope_relevant.sh.
   merge_group:
     types: [checks_requested]
 
@@ -288,6 +287,7 @@ jobs:
           python scripts/memory-bench/test_gate_modes.py
           python scripts/memory-bench/test_gate_arm.py
           python scripts/memory-bench/test_gate_dense_arm.py
+          python scripts/memory-bench/test_gate_scope.py
           python scripts/memory-bench/test_check_captured_baseline.py
           python scripts/memory-bench/test_gold_rank.py
           python scripts/memory-bench/test_fixture_isolation.py
@@ -317,26 +317,19 @@ jobs:
           echo "capture=${{ (github.event_name != 'pull_request' && inputs.update_baseline && inputs.baseline_arm == 'retrieval-branch') && 'true' || 'false' }}" \
             >> "$GITHUB_OUTPUT"
 
+      # One predicate, two callers — see scope_relevant.sh for why merge_group is
+      # diffed rather than short-circuited, and for the fail-closed rules. The
+      # SHAs are passed as env, never interpolated into the script body: on
+      # pull_request the PR's OWN base..head (never the merge ref — a guard that
+      # reads the merge ref deadlocks every open PR), on merge_group the group's
+      # base..head, which is main plus exactly the batch.
       - name: Does this change touch memory?
         id: scope
-        run: |
-          if [ "${{ github.event_name }}" != "pull_request" ]; then
-            echo "relevant=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          # Diff the PR's own base..head — never the merge ref (a guard that reads
-          # the merge ref deadlocks every open PR).
-          changed=$(git diff --name-only \
-            "${{ github.event.pull_request.base.sha }}" \
-            "${{ github.event.pull_request.head.sha }}")
-          echo "Changed files:"; echo "$changed"
-          relevant=false
-          while IFS= read -r p; do
-            [ -z "$p" ] && continue
-            if echo "$changed" | grep -qE "^${p}"; then relevant=true; fi
-          done <<< "$(printf '%s' "${MEMORY_PATHS}" | tr -d '\r')"
-          echo "relevant=$relevant" >> "$GITHUB_OUTPUT"
-          echo "memory-relevant: $relevant"
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
+        run: bash scripts/memory-bench/scope_relevant.sh
 
       - name: No memory paths touched — nothing to gate
         if: steps.scope.outputs.relevant != 'true'
@@ -1227,6 +1220,7 @@ jobs:
           python scripts/memory-bench/test_gate_modes.py
           python scripts/memory-bench/test_gate_arm.py
           python scripts/memory-bench/test_gate_dense_arm.py
+          python scripts/memory-bench/test_gate_scope.py
           python scripts/memory-bench/test_check_captured_baseline.py
           python scripts/memory-bench/test_gold_rank.py
           python scripts/memory-bench/test_fixture_isolation.py
@@ -1247,26 +1241,19 @@ jobs:
           echo "capture=${{ (inputs.update_baseline && (inputs.baseline_arm == 'retrieval' || inputs.baseline_arm == 'both')) && 'true' || 'false' }}" \
             >> "$GITHUB_OUTPUT"
 
+      # One predicate, two callers — see scope_relevant.sh for why merge_group is
+      # diffed rather than short-circuited, and for the fail-closed rules. The
+      # SHAs are passed as env, never interpolated into the script body: on
+      # pull_request the PR's OWN base..head (never the merge ref — a guard that
+      # reads the merge ref deadlocks every open PR), on merge_group the group's
+      # base..head, which is main plus exactly the batch.
       - name: Does this change touch memory?
         id: scope
-        run: |
-          if [ "${{ github.event_name }}" != "pull_request" ]; then
-            echo "relevant=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          # Diff the PR's own base..head — never the merge ref (a guard that reads
-          # the merge ref deadlocks every open PR).
-          changed=$(git diff --name-only \
-            "${{ github.event.pull_request.base.sha }}" \
-            "${{ github.event.pull_request.head.sha }}")
-          echo "Changed files:"; echo "$changed"
-          relevant=false
-          while IFS= read -r p; do
-            [ -z "$p" ] && continue
-            if echo "$changed" | grep -qE "^${p}"; then relevant=true; fi
-          done <<< "$(printf '%s' "${MEMORY_PATHS}" | tr -d '\r')"
-          echo "relevant=$relevant" >> "$GITHUB_OUTPUT"
-          echo "memory-relevant: $relevant"
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
+        run: bash scripts/memory-bench/scope_relevant.sh
 
       - name: No memory paths touched — nothing to gate
         if: steps.scope.outputs.relevant != 'true'
