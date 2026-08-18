@@ -296,6 +296,7 @@ jobs:
           python scripts/memory-bench/test_resume_after_deploy.py
           python scripts/memory-bench/test_bench_window.py
           python scripts/memory-bench/test_fixture_ages.py
+          python scripts/memory-bench/test_search_settle.py
           python scripts/memory-bench/dense_arm_control.py --selftest
           python scripts/memory-bench/prod_window.py --selftest
           python scripts/memory-bench/fixture_ages.py --selftest
