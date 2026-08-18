@@ -29,6 +29,17 @@ type workspaceRow struct {
 	DeletedAt         *time.Time      `db:"deleted_at"`
 }
 
+// workspaceSelectCols is every column workspaceRow scans, listed explicitly
+// — see agentSelectCols in agent_repo.go for why `SELECT *` is unsafe: sqlx
+// refuses to scan a column with no matching struct field, so an additive
+// migration to this table breaks every read until redeployed.
+const workspaceSelectCols = `id, name, slug, owner_id, settings, billing_plan_id, billing_customer_id, icon_url, created_at, updated_at, deleted_at`
+
+// workspaceSelectColsQualified is workspaceSelectCols prefixed with the `w`
+// JOIN alias, for queries that select from workspaces alongside other
+// tables.
+const workspaceSelectColsQualified = `w.id, w.name, w.slug, w.owner_id, w.settings, w.billing_plan_id, w.billing_customer_id, w.icon_url, w.created_at, w.updated_at, w.deleted_at`
+
 func (r *workspaceRow) toDomain() *domain.Workspace {
 	ws := &domain.Workspace{
 		ID:             r.ID,
@@ -84,7 +95,7 @@ func (r *WorkspaceRepo) Create(ctx context.Context, workspace *domain.Workspace)
 }
 
 func (r *WorkspaceRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.Workspace, error) {
-	const q = `SELECT * FROM workspaces WHERE id = $1 AND deleted_at IS NULL`
+	const q = `SELECT ` + workspaceSelectCols + ` FROM workspaces WHERE id = $1 AND deleted_at IS NULL`
 	var row workspaceRow
 	if err := r.db.GetContext(ctx, &row, q, id); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -96,7 +107,7 @@ func (r *WorkspaceRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.Work
 }
 
 func (r *WorkspaceRepo) GetBySlug(ctx context.Context, slug string) (*domain.Workspace, error) {
-	const q = `SELECT * FROM workspaces WHERE slug = $1 AND deleted_at IS NULL`
+	const q = `SELECT ` + workspaceSelectCols + ` FROM workspaces WHERE slug = $1 AND deleted_at IS NULL`
 	var row workspaceRow
 	if err := r.db.GetContext(ctx, &row, q, slug); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -190,7 +201,7 @@ func (r *WorkspaceRepo) Delete(ctx context.Context, id uuid.UUID) error {
 // ListByOwner returns the workspaces owned by the given user. It ignores
 // membership — use ListForUser for the user-facing workspace list.
 func (r *WorkspaceRepo) ListByOwner(ctx context.Context, ownerID uuid.UUID) ([]domain.Workspace, error) {
-	const q = `SELECT * FROM workspaces WHERE owner_id = $1 AND deleted_at IS NULL ORDER BY created_at ASC`
+	const q = `SELECT ` + workspaceSelectCols + ` FROM workspaces WHERE owner_id = $1 AND deleted_at IS NULL ORDER BY created_at ASC`
 	var rows []workspaceRow
 	if err := r.db.SelectContext(ctx, &rows, q, ownerID); err != nil {
 		return nil, err
@@ -209,7 +220,7 @@ func (r *WorkspaceRepo) ListByOwner(ctx context.Context, ownerID uuid.UUID) ([]d
 // de-duplicated when the user is both owner and member.
 func (r *WorkspaceRepo) ListForUser(ctx context.Context, userID uuid.UUID) ([]domain.Workspace, error) {
 	const q = `
-		SELECT w.* FROM workspaces w
+		SELECT ` + workspaceSelectColsQualified + ` FROM workspaces w
 		WHERE w.deleted_at IS NULL
 		  AND (
 		      w.owner_id = $1

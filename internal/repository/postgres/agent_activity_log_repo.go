@@ -28,6 +28,12 @@ type agentActivityLogRow struct {
 	CreatedAt   time.Time       `db:"created_at"`
 }
 
+// agentActivityLogSelectCols is every column agentActivityLogRow scans,
+// listed explicitly — see agentSelectCols in agent_repo.go for why `SELECT *`
+// is unsafe: sqlx refuses to scan a column with no matching struct field, so
+// an additive migration to this table breaks every read until redeployed.
+const agentActivityLogSelectCols = `id, agent_id, workspace_id, event_type, task_id, message, metadata, created_at`
+
 func (r *agentActivityLogRow) toDomain() domain.AgentActivityLog {
 	return domain.AgentActivityLog{
 		ID:          r.ID,
@@ -90,7 +96,7 @@ func (r *AgentActivityLogRepo) List(ctx context.Context, agentID uuid.UUID, filt
 		return nil, err
 	}
 
-	dataQ := fmt.Sprintf(`SELECT * FROM agent_activity_log %s ORDER BY created_at DESC %s`, where, paginationClause(pg))
+	dataQ := fmt.Sprintf(`SELECT `+agentActivityLogSelectCols+` FROM agent_activity_log %s ORDER BY created_at DESC %s`, where, paginationClause(pg))
 	var rows []agentActivityLogRow
 	if err := r.db.SelectContext(ctx, &rows, dataQ, args...); err != nil {
 		return nil, err
@@ -120,7 +126,7 @@ func (r *AgentActivityLogRepo) ListByWorkspace(ctx context.Context, workspaceID 
 		return nil, err
 	}
 
-	dataQ := fmt.Sprintf(`SELECT * FROM agent_activity_log %s ORDER BY created_at DESC %s`, where, paginationClause(pg))
+	dataQ := fmt.Sprintf(`SELECT `+agentActivityLogSelectCols+` FROM agent_activity_log %s ORDER BY created_at DESC %s`, where, paginationClause(pg))
 	var rows []agentActivityLogRow
 	if err := r.db.SelectContext(ctx, &rows, dataQ, args...); err != nil {
 		return nil, err

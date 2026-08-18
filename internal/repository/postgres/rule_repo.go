@@ -25,6 +25,19 @@ func NewRuleRepo(db *sqlx.DB) *RuleRepo {
 	return &RuleRepo{db: db}
 }
 
+// ruleSelectCols is every column domain.Rule scans, listed explicitly — see
+// agentSelectCols in agent_repo.go for why `SELECT *` is unsafe here: sqlx
+// (both GetContext/SelectContext and the rows.StructScan used by scanRules)
+// refuses to scan a column with no matching struct field, so an additive
+// migration to the rules table breaks every read on this table until every
+// binary is redeployed.
+const ruleSelectCols = `
+	id, workspace_id, project_id, agent_id,
+	scope, rule_type, name, description, config,
+	applies_to_actor_types, applies_to_roles,
+	enforcement, priority, is_enabled,
+	created_by, created_by_type, created_at, updated_at`
+
 func scanRules(db *sqlx.DB, ctx context.Context, query string, args ...interface{}) ([]domain.Rule, error) {
 	rows, err := db.QueryxContext(ctx, query, args...)
 	if err != nil {
@@ -84,7 +97,7 @@ func (r *RuleRepo) Create(ctx context.Context, rule *domain.Rule) error {
 
 // GetByID retrieves a rule by its primary key. Returns nil if not found.
 func (r *RuleRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.Rule, error) {
-	const q = `SELECT * FROM rules WHERE id = $1`
+	const q = `SELECT ` + ruleSelectCols + ` FROM rules WHERE id = $1`
 	var rule domain.Rule
 	if err := r.db.GetContext(ctx, &rule, q, id); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -143,7 +156,7 @@ func (r *RuleRepo) Delete(ctx context.Context, id uuid.UUID) error {
 
 // ListByWorkspace returns all workspace-scoped rules.
 func (r *RuleRepo) ListByWorkspace(ctx context.Context, workspaceID uuid.UUID, includeDisabled bool) ([]domain.Rule, error) {
-	q := `SELECT * FROM rules WHERE workspace_id = $1 AND scope = 'workspace'`
+	q := `SELECT ` + ruleSelectCols + ` FROM rules WHERE workspace_id = $1 AND scope = 'workspace'`
 	if !includeDisabled {
 		q += ` AND is_enabled = TRUE`
 	}
@@ -153,7 +166,7 @@ func (r *RuleRepo) ListByWorkspace(ctx context.Context, workspaceID uuid.UUID, i
 
 // ListByProject returns all project-scoped rules for the given project.
 func (r *RuleRepo) ListByProject(ctx context.Context, projectID uuid.UUID, includeDisabled bool) ([]domain.Rule, error) {
-	q := `SELECT * FROM rules WHERE project_id = $1 AND scope = 'project'`
+	q := `SELECT ` + ruleSelectCols + ` FROM rules WHERE project_id = $1 AND scope = 'project'`
 	if !includeDisabled {
 		q += ` AND is_enabled = TRUE`
 	}
@@ -163,7 +176,7 @@ func (r *RuleRepo) ListByProject(ctx context.Context, projectID uuid.UUID, inclu
 
 // ListByAgent returns all agent-scoped rules for the given agent.
 func (r *RuleRepo) ListByAgent(ctx context.Context, agentID uuid.UUID, includeDisabled bool) ([]domain.Rule, error) {
-	q := `SELECT * FROM rules WHERE agent_id = $1 AND scope = 'agent'`
+	q := `SELECT ` + ruleSelectCols + ` FROM rules WHERE agent_id = $1 AND scope = 'agent'`
 	if !includeDisabled {
 		q += ` AND is_enabled = TRUE`
 	}
@@ -191,7 +204,7 @@ func (r *RuleRepo) GetEffective(ctx context.Context, workspaceID uuid.UUID, proj
 	}
 
 	q := fmt.Sprintf(
-		`SELECT * FROM rules WHERE (%s) ORDER BY scope ASC, priority ASC, created_at ASC`,
+		`SELECT `+ruleSelectCols+` FROM rules WHERE (%s) ORDER BY scope ASC, priority ASC, created_at ASC`,
 		strings.Join(conds, " OR "),
 	)
 	return scanRules(r.db, ctx, q, args...)
