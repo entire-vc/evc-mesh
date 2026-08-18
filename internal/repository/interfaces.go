@@ -202,6 +202,12 @@ type CommentViewFilter struct {
 	BeforeID    *uuid.UUID // cursor tie-breaker, paired with Before: (created_at, id) < (Before, BeforeID). Optional — a lone Before still applies the old strict-timestamp comparison, for backward compat with cursors issued before this field existed.
 	WorkspaceID *uuid.UUID // optional workspace scope (used by ListByAuthor)
 	ProjectID   *uuid.UUID // optional project scope (used by ListByAuthor)
+	// IncludeInternal, when true, drops the default `is_internal = false`
+	// predicate on ListRecentByWorkspace — see #a7ae4c76. Not honored by
+	// ListByAuthor (a caller's own comments aren't the internal-mentions
+	// corpus this exists for). Defaults to false: excluded, same as before
+	// this field existed.
+	IncludeInternal bool
 }
 
 // CommentRepository manages persistence for comments.
