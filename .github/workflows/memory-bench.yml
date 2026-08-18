@@ -300,6 +300,7 @@ jobs:
           python scripts/memory-bench/prod_window.py --selftest
           python scripts/memory-bench/fixture_ages.py --selftest
           python scripts/memory-bench/recency_control.py --selftest
+          python scripts/memory-bench/test_gate_recency_floor.py
 
       # One source of truth for "this dispatch is a capture, not a verdict" —
       # the re-snap must run and the judging gate must not, and two copies of the
