@@ -448,17 +448,42 @@ func (r *MemoryRepo) ftsORFallback(
 	return mergeORScoredRows(andRows, orRows, limit), nil
 }
 
-// mergeORScoredRows merges strict-AND hits with OR-token hits: AND results keep their raw
-// score, OR-only results are discounted by orScoreMultiplier so exact AND matches always
-// rank above partial ones. Rows already present in andRows are skipped (an ID can never
-// appear twice), the merged set is re-sorted by score and capped at limit.
+// mergeORScoredRows merges strict-AND hits with OR-token hits onto ONE comparable scale.
+//
+// AND and OR scores are NOT the same quantity even though both come from ts_rank_cd: the
+// AND arm ranks by cover density against a plainto_tsquery (an AND of every query term —
+// rewards proximity, penalizes spread), the OR arm ranks by additive term-overlap against a
+// to_tsquery OR-fragment (roughly proportional to how many distinct terms matched). Sorting
+// raw AND scores next to raw-but-discounted OR scores compares numbers with different units.
+//
+// Measured live (task f13865d5, fixture from recency_control.py): a row matching ALL FOUR
+// query terms scored 0.025 on the AND (cover-density) scale while four PARTIAL matches
+// scored 0.08-0.24 on the discounted OR scale — the exact match ranked dead last, the
+// opposite of the "exact AND matches always outrank partial ones" invariant this function's
+// old comment claimed but never enforced.
+//
+// Fix: every row is ranked on the OR arm's scale. A row present in BOTH andRows and orRows
+// (a genuine exact match — it satisfied the OR query too) keeps its OR-scale score
+// UNDISCOUNTED, since it earned every term. A row present only in orRows is a partial match
+// and is discounted by orScoreMultiplier, as before. Rows already present in andRows are
+// never duplicated (an ID can only appear once in the merged set); an AND row absent from
+// orRows (possible if the OR query's own LIMIT truncated it) falls back to its raw AND
+// score — the least-bad option when there is nothing on the OR scale to compare it against.
 func mergeORScoredRows(andRows, orRows []scoredMemoryRow, limit int) []scoredMemoryRow {
-	idSeen := make(map[uuid.UUID]bool, len(andRows))
-	for _, row := range andRows {
-		idSeen[row.ID] = true
+	orScoreByID := make(map[uuid.UUID]float64, len(orRows))
+	for _, row := range orRows {
+		orScoreByID[row.ID] = row.Score
 	}
+
+	idSeen := make(map[uuid.UUID]bool, len(andRows))
 	merged := make([]scoredMemoryRow, len(andRows), len(andRows)+len(orRows))
-	copy(merged, andRows)
+	for i, row := range andRows {
+		idSeen[row.ID] = true
+		if orScore, ok := orScoreByID[row.ID]; ok {
+			row.Score = orScore
+		}
+		merged[i] = row
+	}
 
 	for _, row := range orRows {
 		if idSeen[row.ID] {
