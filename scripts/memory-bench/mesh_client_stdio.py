@@ -186,6 +186,19 @@ _TRANSIENT_RE = re.compile(
 # clock instead of failing fast and loudly.
 BREAKER_TRIP_AFTER = 2
 
+# Remember() embeds asynchronously (memory_service.go: `go s.embedAndStore(...)`,
+# see task a2e00afd) — the API returns and the row is BM25-findable before its
+# embedding lands. `search_settle_ok`-driven retries below exist ONLY to absorb
+# that documented race for a caller that stores then immediately searches
+# inside one question and needs the dense arm's contribution specifically
+# (today: dense_arm_control.py's `--expect alive` path). Opt-in per call, and
+# gated on the store phase having actually reported `embedding_pending` — a
+# dense arm that is genuinely dead (or an embedder that is genuinely down)
+# still exhausts the budget and fails exactly as before; this cannot turn a
+# real regression into a pass, only a timing loss into a wait.
+SEARCH_SETTLE_ATTEMPTS = 6
+SEARCH_SETTLE_DELAY_SECS = 0.5
+
 
 def is_transient_text(text: str) -> bool:
     """The transient predicate over an already-rendered error string.
@@ -486,6 +499,11 @@ class MeshMemoryClient:
         # rows whose id we never received — so the next attempt sweeps by TAG.
         self._pending: list[str] = []
         self._dirty = False
+        # Set by _store when a `remember` response reports `embedding_pending:
+        # true` for a fixture this question stored. Gates the search-settle
+        # retry in _run: never retried on its own say-so, only alongside a
+        # caller-supplied `search_settle_ok` predicate — see SEARCH_SETTLE_*.
+        self._any_embedding_pending = False
         # Populated by _search from the recall envelope. Stays UNKNOWN if the
         # server does not report it (older Mesh) — never silently assumed healthy.
         self.search_mode: str = SEARCH_MODE_UNKNOWN
@@ -555,6 +573,7 @@ class MeshMemoryClient:
         query: str,
         top_k: int,
         question_date: str = "",
+        search_settle_ok=None,
     ) -> list[dict[str, Any]]:
         attempts = (
             1
@@ -570,7 +589,8 @@ class MeshMemoryClient:
             try:
                 out = asyncio.run(
                     self._run(
-                        sessions, dates, format_session_text, query, top_k, question_date
+                        sessions, dates, format_session_text, query, top_k, question_date,
+                        search_settle_ok=search_settle_ok,
                     )
                 )
             except BaseException as exc:  # noqa: BLE001 — re-raised below
@@ -687,7 +707,10 @@ class MeshMemoryClient:
             f" clamped={clamped}" if clamped else "",
         )
 
-    async def _run(self, sessions, dates, format_session_text, query, top_k, question_date=""):
+    async def _run(
+        self, sessions, dates, format_session_text, query, top_k, question_date="",
+        search_settle_ok=None,
+    ):
         from mcp import ClientSession, StdioServerParameters
         from mcp.client.stdio import stdio_client
 
@@ -739,7 +762,9 @@ class MeshMemoryClient:
                     # BrokenResourceError this client already had to learn to
                     # unwrap.
                     await asyncio.to_thread(self._backdate, dates, question_date)
-                    return await self._search(session, query, top_k)
+                    return await self._search_settled(
+                        session, query, top_k, search_settle_ok
+                    )
                 except BaseException:
                     # This attempt is abandoning rows on a connection that may
                     # already be dead. Whatever cleanup fails here is the next
@@ -953,6 +978,12 @@ class MeshMemoryClient:
         payload = _parse_tool_payload(result)
         if isinstance(payload, dict) and payload.get("error"):
             raise self._tool_failure("remember", payload["error"])
+        # `embedding_pending` sits alongside `memory` in the REST envelope, not
+        # inside it (rememberResponse, internal/handler/memory_handler.go) — the
+        # MCP layer passes the envelope through verbatim, same as `_search`'s
+        # `search_mode`/`dense_rows`.
+        if isinstance(payload, dict) and payload.get("embedding_pending") is True:
+            self._any_embedding_pending = True
         mem = payload.get("memory") if isinstance(payload, dict) else None
         if isinstance(mem, dict):
             _log_store_id(mem.get("id", ""), self.qid, mem.get("key", ""))
@@ -1004,3 +1035,29 @@ class MeshMemoryClient:
         self.ranked_records = ranked
         self.rows_returned = len(ranked)
         return ranked[:top_k]
+
+    async def _search_settled(self, session, query, top_k, ok):
+        """`_search`, optionally retried while embeddings are still landing.
+
+        A no-op wrapper (one call, today's behaviour byte-for-byte) unless BOTH:
+        (a) the caller passed a settle predicate `ok(results) -> bool`, and
+        (b) this question's own store phase reported `embedding_pending` (see
+        `_any_embedding_pending`) — i.e. there is a specific, documented reason
+        to expect the dense arm needs a moment, not a blanket retry-until-green.
+
+        Every attempt re-queries; nothing is re-stored. `self.search_mode` /
+        `dense_rows` / `ranked_records` etc. reflect the LAST attempt made,
+        exactly as a single `_search` call would leave them — a caller reading
+        those fields after this returns cannot tell a settled retry from a
+        first-try pass, which is the point: this closes a timing gap, it does
+        not add a new server-observable state.
+        """
+        results = await self._search(session, query, top_k)
+        if ok is None or not self._any_embedding_pending:
+            return results
+        for _ in range(SEARCH_SETTLE_ATTEMPTS - 1):
+            if ok(results):
+                return results
+            await asyncio.sleep(SEARCH_SETTLE_DELAY_SECS)
+            results = await self._search(session, query, top_k)
+        return results

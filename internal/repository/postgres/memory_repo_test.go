@@ -164,18 +164,25 @@ func TestMergeORScoredRows(t *testing.T) {
 		}
 	})
 
-	t.Run("dedupe_keeps_undiscounted_and_score", func(t *testing.T) {
-		// A row found by BOTH arms must appear once, keeping its raw AND score.
+	t.Run("dedupe_appears_once_undiscounted", func(t *testing.T) {
+		// A row found by BOTH arms must appear once, and — because it genuinely
+		// satisfied the OR query too — must NOT be discounted like an OR-only
+		// row. AND and OR scores here are deliberately DIFFERENT (0.5 vs 0.9,
+		// not the same value) so this test can't pass by coincidence: it
+		// distinguishes "adopts the OR-scale score" (0.9, correct — every row
+		// in the merged set must be on one scale) from "keeps the raw AND
+		// score" (0.5, the pre-fix behavior that made an exact match rank
+		// against an incomparable number).
 		got := mergeORScoredRows(
 			[]scoredMemoryRow{scoredRow(idA, 0.5)},
-			[]scoredMemoryRow{scoredRow(idA, 0.5), scoredRow(idB, 0.1)},
+			[]scoredMemoryRow{scoredRow(idA, 0.9), scoredRow(idB, 0.1)},
 			10,
 		)
 		if len(got) != 2 {
 			t.Fatalf("len = %d, want 2 (idA must not appear twice)", len(got))
 		}
-		if got[0].ID != idA || math.Abs(got[0].Score-0.5) > 1e-9 {
-			t.Errorf("idA = %v score %v, want raw 0.5 (no discount)", got[0].ID, got[0].Score)
+		if got[0].ID != idA || math.Abs(got[0].Score-0.9) > 1e-9 {
+			t.Errorf("idA = %v score %v, want its OR-scale score 0.9 (undiscounted)", got[0].ID, got[0].Score)
 		}
 	})
 
@@ -190,6 +197,49 @@ func TestMergeORScoredRows(t *testing.T) {
 		}
 		if got[0].ID != idA || got[1].ID != idB {
 			t.Errorf("order = [%v %v], want [idA idB] (lowest-scoring idC dropped)", got[0].ID, got[1].ID)
+		}
+	})
+
+	t.Run("an_exact_AND_match_cannot_rank_below_a_partial_OR_match", func(t *testing.T) {
+		// Reproduces the defect measured live against a real corpus (task
+		// f13865d5): the AND arm's cover-density score and the OR arm's
+		// term-overlap score are different quantities, and comparing them raw
+		// let a row matching ALL FOUR query terms rank LAST behind four rows
+		// matching only a SUBSET. gold's AND score (0.025, cover density) is
+		// deliberately far below every OR-only row's raw score (0.1-0.4) —
+		// that gap is exactly what the pre-fix code compared directly and got
+		// backwards. gold also appears in orRows (it satisfies the OR query
+		// too, at 0.4 — the honest reading of "matched every term") the way a
+		// real ftsRankedORFallback response would.
+		gold := uuid.MustParse("00000000-0000-0000-0000-00000000d0d0")
+		partial1 := uuid.MustParse("00000000-0000-0000-0000-00000000d1d1")
+		partial2 := uuid.MustParse("00000000-0000-0000-0000-00000000d2d2")
+		partial3 := uuid.MustParse("00000000-0000-0000-0000-00000000d3d3")
+		partial4 := uuid.MustParse("00000000-0000-0000-0000-00000000d4d4")
+
+		got := mergeORScoredRows(
+			[]scoredMemoryRow{scoredRow(gold, 0.025)},
+			[]scoredMemoryRow{
+				scoredRow(gold, 0.4),
+				scoredRow(partial1, 0.3),
+				scoredRow(partial2, 0.3),
+				scoredRow(partial3, 0.2),
+				scoredRow(partial4, 0.1),
+			},
+			10,
+		)
+		if len(got) != 5 {
+			t.Fatalf("len = %d, want 5", len(got))
+		}
+		if got[0].ID != gold {
+			ids := make([]uuid.UUID, len(got))
+			for i, row := range got {
+				ids[i] = row.ID
+			}
+			t.Fatalf("exact match must rank first, got order %v (gold=%v)", ids, gold)
+		}
+		if math.Abs(got[0].Score-0.4) > 1e-9 {
+			t.Errorf("gold score = %v, want its undiscounted OR-scale score 0.4", got[0].Score)
 		}
 	})
 
