@@ -49,6 +49,18 @@ func (r *projectRow) toDomain() domain.Project {
 	}
 }
 
+// projectSelectCols is every column projectRow scans, listed explicitly —
+// see agentSelectCols in agent_repo.go for why `SELECT *` (bare or alias-
+// qualified, e.g. `p.*`) is unsafe: sqlx refuses to scan a column with no
+// matching struct field, so an additive migration to this table breaks every
+// read until redeployed. Shared with initiative_repo.go's ListLinkedProjects,
+// which also scans into projectRow.
+const projectSelectCols = `id, workspace_id, name, description, slug, icon, settings, default_assignee_type, is_archived, created_at, updated_at, deleted_at`
+
+// projectSelectColsQualified is projectSelectCols with every column prefixed
+// `p.`, for queries that JOIN projects against other tables.
+const projectSelectColsQualified = `p.id, p.workspace_id, p.name, p.description, p.slug, p.icon, p.settings, p.default_assignee_type, p.is_archived, p.created_at, p.updated_at, p.deleted_at`
+
 // ProjectRepo implements repository.ProjectRepository with PostgreSQL.
 type ProjectRepo struct {
 	db *sqlx.DB
@@ -77,7 +89,7 @@ func (r *ProjectRepo) Create(ctx context.Context, project *domain.Project) error
 }
 
 func (r *ProjectRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.Project, error) {
-	const q = `SELECT * FROM projects WHERE id = $1 AND deleted_at IS NULL`
+	const q = `SELECT ` + projectSelectCols + ` FROM projects WHERE id = $1 AND deleted_at IS NULL`
 	var row projectRow
 	if err := r.db.GetContext(ctx, &row, q, id); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -90,7 +102,7 @@ func (r *ProjectRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.Projec
 }
 
 func (r *ProjectRepo) GetBySlug(ctx context.Context, workspaceID uuid.UUID, slug string) (*domain.Project, error) {
-	const q = `SELECT * FROM projects WHERE workspace_id = $1 AND slug = $2 AND deleted_at IS NULL`
+	const q = `SELECT ` + projectSelectCols + ` FROM projects WHERE workspace_id = $1 AND slug = $2 AND deleted_at IS NULL`
 	var row projectRow
 	if err := r.db.GetContext(ctx, &row, q, workspaceID, slug); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -134,7 +146,7 @@ func (r *ProjectRepo) Update(ctx context.Context, project *domain.Project) error
 // user's projects, scoped to one workspace" as its own query.
 func (r *ProjectRepo) ListForUserInWorkspace(ctx context.Context, workspaceID, userID uuid.UUID) ([]domain.Project, error) {
 	const q = `
-		SELECT p.* FROM projects p
+		SELECT ` + projectSelectColsQualified + ` FROM projects p
 		JOIN project_members pm ON pm.project_id = p.id
 		WHERE p.workspace_id = $1 AND pm.user_id = $2 AND p.deleted_at IS NULL
 		ORDER BY p.name ASC
@@ -214,7 +226,7 @@ func (r *ProjectRepo) List(ctx context.Context, workspaceID uuid.UUID, filter re
 	}
 
 	// Data query
-	dataQ := fmt.Sprintf(`SELECT p.* FROM %s %s %s %s`, fromClause, where, order, paginationClause(pg))
+	dataQ := fmt.Sprintf(`SELECT `+projectSelectColsQualified+` FROM %s %s %s %s`, fromClause, where, order, paginationClause(pg))
 	var rows []projectRow
 	if err := r.db.SelectContext(ctx, &rows, dataQ, args...); err != nil {
 		return nil, err

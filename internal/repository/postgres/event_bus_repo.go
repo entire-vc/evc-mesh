@@ -63,6 +63,17 @@ func NewEventBusMessageRepo(db *sqlx.DB) *EventBusMessageRepo {
 	return &EventBusMessageRepo{db: db}
 }
 
+// eventBusSelectCols is every column eventBusRow scans, listed explicitly —
+// see agentSelectCols in agent_repo.go for why `SELECT *` (bare or alias-
+// qualified, e.g. `e.*`) is unsafe: sqlx refuses to scan a column with no
+// matching struct field, so an additive migration to this table breaks every
+// read until redeployed.
+const eventBusSelectCols = `id, workspace_id, project_id, task_id, agent_id, event_type, subject, payload, tags, ttl, created_at, expires_at, memory_hint`
+
+// eventBusSelectColsQualified is eventBusSelectCols with every column
+// prefixed `e.`, for the List query's `e.created_at` ORDER BY alias.
+const eventBusSelectColsQualified = `e.id, e.workspace_id, e.project_id, e.task_id, e.agent_id, e.event_type, e.subject, e.payload, e.tags, e.ttl, e.created_at, e.expires_at, e.memory_hint`
+
 func (r *EventBusMessageRepo) Create(ctx context.Context, msg *domain.EventBusMessage) error {
 	// The DB requires expires_at NOT NULL.
 	// If the caller set expires_at, use it directly. Otherwise compute from TTL.
@@ -141,7 +152,7 @@ func (r *EventBusMessageRepo) Upsert(ctx context.Context, msg *domain.EventBusMe
 }
 
 func (r *EventBusMessageRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.EventBusMessage, error) {
-	const q = `SELECT * FROM event_bus_messages WHERE id = $1`
+	const q = `SELECT ` + eventBusSelectCols + ` FROM event_bus_messages WHERE id = $1`
 	var row eventBusRow
 	if err := r.db.GetContext(ctx, &row, q, id); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -207,7 +218,7 @@ func (r *EventBusMessageRepo) List(ctx context.Context, projectID uuid.UUID, fil
 		return nil, err
 	}
 
-	dataQ := fmt.Sprintf(`SELECT e.* FROM event_bus_messages e %s ORDER BY e.created_at DESC %s`, where, paginationClause(pg))
+	dataQ := fmt.Sprintf(`SELECT `+eventBusSelectColsQualified+` FROM event_bus_messages e %s ORDER BY e.created_at DESC %s`, where, paginationClause(pg))
 	var rows []eventBusRow
 	if err := r.db.SelectContext(ctx, &rows, dataQ, args...); err != nil {
 		return nil, err

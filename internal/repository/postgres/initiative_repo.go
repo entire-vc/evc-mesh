@@ -24,6 +24,19 @@ func NewInitiativeRepo(db *sqlx.DB) *InitiativeRepo {
 	return &InitiativeRepo{db: db}
 }
 
+// initiativeSelectCols is every column domain.Initiative scans, listed
+// explicitly — see agentSelectCols in agent_repo.go for why `SELECT *`
+// (bare or alias-qualified, e.g. `i.*`) is unsafe: sqlx refuses to scan a
+// column with no matching struct field, so an additive migration to this
+// table breaks every read until redeployed. LinkedProjects/TotalTasks/
+// CompletedTasks are `db:"-"` on domain.Initiative (service-layer only), so
+// they are deliberately absent here.
+const initiativeSelectCols = `id, workspace_id, name, description, status, target_date, created_by, created_at, updated_at`
+
+// initiativeSelectColsQualified is initiativeSelectCols with every column
+// prefixed `i.`, for GetByProjectID's JOIN against initiative_projects.
+const initiativeSelectColsQualified = `i.id, i.workspace_id, i.name, i.description, i.status, i.target_date, i.created_by, i.created_at, i.updated_at`
+
 func (r *InitiativeRepo) Create(ctx context.Context, ini *domain.Initiative) error {
 	const q = `
 		INSERT INTO initiatives
@@ -39,7 +52,7 @@ func (r *InitiativeRepo) Create(ctx context.Context, ini *domain.Initiative) err
 }
 
 func (r *InitiativeRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.Initiative, error) {
-	const q = `SELECT * FROM initiatives WHERE id = $1`
+	const q = `SELECT ` + initiativeSelectCols + ` FROM initiatives WHERE id = $1`
 	var ini domain.Initiative
 	if err := r.db.GetContext(ctx, &ini, q, id); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -83,7 +96,7 @@ func (r *InitiativeRepo) Delete(ctx context.Context, id uuid.UUID) error {
 }
 
 func (r *InitiativeRepo) List(ctx context.Context, workspaceID uuid.UUID) ([]domain.Initiative, error) {
-	const q = `SELECT * FROM initiatives WHERE workspace_id = $1 ORDER BY created_at DESC`
+	const q = `SELECT ` + initiativeSelectCols + ` FROM initiatives WHERE workspace_id = $1 ORDER BY created_at DESC`
 	var items []domain.Initiative
 	if err := r.db.SelectContext(ctx, &items, q, workspaceID); err != nil {
 		return nil, err
@@ -119,7 +132,7 @@ func (r *InitiativeRepo) UnlinkProject(ctx context.Context, initiativeID, projec
 
 func (r *InitiativeRepo) GetByProjectID(ctx context.Context, projectID uuid.UUID) ([]domain.Initiative, error) {
 	const q = `
-		SELECT i.* FROM initiatives i
+		SELECT ` + initiativeSelectColsQualified + ` FROM initiatives i
 		INNER JOIN initiative_projects ip ON ip.initiative_id = i.id
 		WHERE ip.project_id = $1
 		ORDER BY i.name ASC
@@ -136,7 +149,7 @@ func (r *InitiativeRepo) GetByProjectID(ctx context.Context, projectID uuid.UUID
 
 func (r *InitiativeRepo) ListLinkedProjects(ctx context.Context, initiativeID uuid.UUID) ([]domain.Project, error) {
 	const q = `
-		SELECT p.* FROM projects p
+		SELECT ` + projectSelectColsQualified + ` FROM projects p
 		INNER JOIN initiative_projects ip ON ip.project_id = p.id
 		WHERE ip.initiative_id = $1 AND p.deleted_at IS NULL
 		ORDER BY p.name ASC

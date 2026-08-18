@@ -83,6 +83,16 @@ func (r *webhookDeliveryRow) toDomain() domain.WebhookDelivery {
 	}
 }
 
+// webhookConfigSelectCols is every column webhookConfigRow scans, listed
+// explicitly — see agentSelectCols in agent_repo.go for why `SELECT *` is
+// unsafe: sqlx refuses to scan a column with no matching struct field, so an
+// additive migration to this table breaks every read until redeployed.
+const webhookConfigSelectCols = `id, workspace_id, name, url, secret, events, is_active, failure_count, last_failure_at, last_success_at, created_by, created_at, updated_at`
+
+// webhookDeliverySelectCols is every column webhookDeliveryRow scans, listed
+// explicitly, for the same reason as webhookConfigSelectCols.
+const webhookDeliverySelectCols = `id, webhook_id, event_type, payload, response_status, response_body, duration_ms, success, attempt, created_at`
+
 // WebhookRepo implements repository.WebhookRepository with PostgreSQL.
 type WebhookRepo struct {
 	db *sqlx.DB
@@ -117,7 +127,7 @@ func (r *WebhookRepo) Create(ctx context.Context, webhook *domain.WebhookConfig)
 
 // GetByID retrieves a webhook configuration by its ID.
 func (r *WebhookRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.WebhookConfig, error) {
-	const q = `SELECT * FROM webhook_configs WHERE id = $1`
+	const q = `SELECT ` + webhookConfigSelectCols + ` FROM webhook_configs WHERE id = $1`
 	var row webhookConfigRow
 	if err := r.db.GetContext(ctx, &row, q, id); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -183,7 +193,7 @@ func (r *WebhookRepo) Delete(ctx context.Context, id uuid.UUID) error {
 
 // ListByWorkspace returns all webhook configurations for a workspace.
 func (r *WebhookRepo) ListByWorkspace(ctx context.Context, workspaceID uuid.UUID) ([]domain.WebhookConfig, error) {
-	const q = `SELECT * FROM webhook_configs WHERE workspace_id = $1 ORDER BY created_at DESC`
+	const q = `SELECT ` + webhookConfigSelectCols + ` FROM webhook_configs WHERE workspace_id = $1 ORDER BY created_at DESC`
 	var rows []webhookConfigRow
 	if err := r.db.SelectContext(ctx, &rows, q, workspaceID); err != nil {
 		return nil, err
@@ -198,7 +208,7 @@ func (r *WebhookRepo) ListByWorkspace(ctx context.Context, workspaceID uuid.UUID
 // ListActiveByEvent returns active webhook configurations that subscribe to the given event type.
 func (r *WebhookRepo) ListActiveByEvent(ctx context.Context, workspaceID uuid.UUID, eventType string) ([]domain.WebhookConfig, error) {
 	const q = `
-		SELECT * FROM webhook_configs
+		SELECT ` + webhookConfigSelectCols + ` FROM webhook_configs
 		WHERE workspace_id = $1
 		  AND is_active = true
 		  AND $2 = ANY(events)
@@ -265,7 +275,7 @@ func (r *WebhookRepo) CreateDelivery(ctx context.Context, delivery *domain.Webho
 // ListDeliveries returns recent delivery records for a webhook, newest first.
 func (r *WebhookRepo) ListDeliveries(ctx context.Context, webhookID uuid.UUID, limit int) ([]domain.WebhookDelivery, error) {
 	const q = `
-		SELECT * FROM webhook_deliveries
+		SELECT ` + webhookDeliverySelectCols + ` FROM webhook_deliveries
 		WHERE webhook_id = $1
 		ORDER BY created_at DESC
 		LIMIT $2

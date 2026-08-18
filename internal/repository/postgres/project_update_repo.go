@@ -23,6 +23,12 @@ func NewProjectUpdateRepo(db *sqlx.DB) *ProjectUpdateRepo {
 	return &ProjectUpdateRepo{db: db}
 }
 
+// projectUpdateSelectCols is every column domain.ProjectUpdate scans, listed
+// explicitly — see agentSelectCols in agent_repo.go for why `SELECT *` is
+// unsafe: sqlx refuses to scan a column with no matching struct field, so an
+// additive migration to this table breaks every read until redeployed.
+const projectUpdateSelectCols = `id, project_id, title, status, summary, highlights, blockers, next_steps, metrics, created_by, created_at`
+
 func (r *ProjectUpdateRepo) Create(ctx context.Context, u *domain.ProjectUpdate) error {
 	const q = `
 		INSERT INTO project_updates
@@ -63,7 +69,7 @@ func (r *ProjectUpdateRepo) List(ctx context.Context, projectID uuid.UUID, pg pa
 	}
 
 	const dataQ = `
-		SELECT * FROM project_updates
+		SELECT ` + projectUpdateSelectCols + ` FROM project_updates
 		WHERE project_id = $1
 		ORDER BY created_at DESC
 		LIMIT $2 OFFSET $3
@@ -81,7 +87,7 @@ func (r *ProjectUpdateRepo) List(ctx context.Context, projectID uuid.UUID, pg pa
 
 func (r *ProjectUpdateRepo) GetLatest(ctx context.Context, projectID uuid.UUID) (*domain.ProjectUpdate, error) {
 	const q = `
-		SELECT * FROM project_updates
+		SELECT ` + projectUpdateSelectCols + ` FROM project_updates
 		WHERE project_id = $1
 		ORDER BY created_at DESC
 		LIMIT 1

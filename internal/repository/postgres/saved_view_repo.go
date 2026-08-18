@@ -72,6 +72,12 @@ func NewSavedViewRepo(db *sqlx.DB) *SavedViewRepo {
 	return &SavedViewRepo{db: db}
 }
 
+// savedViewSelectCols is every column savedViewRow scans, listed explicitly —
+// see agentSelectCols in agent_repo.go for why `SELECT *` is unsafe: sqlx
+// refuses to scan a column with no matching struct field, so an additive
+// migration to this table breaks every read until redeployed.
+const savedViewSelectCols = `id, project_id, name, view_type, filters, sort_by, sort_order, columns, is_shared, created_by, created_at, updated_at`
+
 // Create inserts a new saved view.
 func (r *SavedViewRepo) Create(ctx context.Context, view *domain.SavedView) error {
 	filtersJSON, err := json.Marshal(view.Filters)
@@ -102,7 +108,7 @@ func (r *SavedViewRepo) Create(ctx context.Context, view *domain.SavedView) erro
 
 // GetByID retrieves a saved view by its ID.
 func (r *SavedViewRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.SavedView, error) {
-	const q = `SELECT * FROM saved_views WHERE id = $1`
+	const q = `SELECT ` + savedViewSelectCols + ` FROM saved_views WHERE id = $1`
 	var row savedViewRow
 	if err := r.db.GetContext(ctx, &row, q, id); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -189,7 +195,7 @@ func (r *SavedViewRepo) Delete(ctx context.Context, id uuid.UUID) error {
 // own views + shared views.
 func (r *SavedViewRepo) ListByProject(ctx context.Context, projectID, userID uuid.UUID) ([]domain.SavedView, error) {
 	const q = `
-		SELECT * FROM saved_views
+		SELECT ` + savedViewSelectCols + ` FROM saved_views
 		WHERE project_id = $1
 		  AND (created_by = $2 OR is_shared = true)
 		ORDER BY created_at ASC
