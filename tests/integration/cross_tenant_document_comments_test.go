@@ -227,8 +227,11 @@ func TestCrossTenant_DocumentMetadataDoesNotLeakEditorNames(t *testing.T) {
 
 	docID := victim.createDocument(t, "xtdm-victim runbook")
 
-	// An edit, so updated_by is somebody rather than nothing.
-	resp := victim.env.Patch(t, "/api/v1/documents/"+docID, map[string]any{"title": "xtdm-victim runbook v2"})
+	// An edit, so updated_by is somebody rather than nothing. base_version is 1:
+	// the document was created a line ago and nothing has written to it since,
+	// and a PATCH without one is refused before it ever reaches the tenant check.
+	resp := victim.env.Patch(t, "/api/v1/documents/"+docID,
+		map[string]any{"title": "xtdm-victim runbook v2", "base_version": 1})
 	require.Equal(t, http.StatusOK, resp.StatusCode, "%s", string(victim.env.ReadBody(t, resp)))
 
 	t.Run("the intruder sees neither the document nor its byline", func(t *testing.T) {

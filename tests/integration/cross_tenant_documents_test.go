@@ -84,8 +84,15 @@ func TestCrossTenant_DocumentIsNotReadableFromAnotherWorkspace(t *testing.T) {
 	})
 
 	t.Run("PATCH /documents/:doc_id", func(t *testing.T) {
+		// base_version 1 — the CORRECT one for a document created a moment ago and
+		// not written to since. It has to be here and it has to be right: a PATCH
+		// with no base_version is refused with a 400 before the request reaches
+		// the tenant check at all, which would satisfy the >= 400 assertion below
+		// while proving nothing about cross-tenant access. With a valid base
+		// version, the only thing left that can refuse this write is the guard
+		// this test is about.
 		resp := intruder.env.Patch(t, "/api/v1/documents/"+docID,
-			map[string]any{"title": "hijacked", "body": "overwritten"})
+			map[string]any{"title": "hijacked", "body": "overwritten", "base_version": 1})
 		body := string(intruder.env.ReadBody(t, resp))
 
 		assert.GreaterOrEqual(t, resp.StatusCode, http.StatusBadRequest,
