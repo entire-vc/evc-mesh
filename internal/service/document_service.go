@@ -124,6 +124,11 @@ func (s *documentService) Create(ctx context.Context, input CreateDocumentInput)
 	}
 
 	now := timeNow()
+	// The creator is also the last editor: writing the document IS its most recent
+	// change, and updated_at already says so. Leaving the pair NULL until somebody
+	// edits would make "never edited" and "predates the column" the same value, and
+	// the read model has to be able to tell those apart — see the migration.
+	createdBy, createdByType := input.CreatedBy, input.CreatedByType
 	doc := &domain.Document{
 		ID:            id,
 		ProjectID:     input.ProjectID,
@@ -132,8 +137,10 @@ func (s *documentService) Create(ctx context.Context, input CreateDocumentInput)
 		Title:         title,
 		StorageKey:    storageKey,
 		Position:      input.Position,
-		CreatedBy:     input.CreatedBy,
-		CreatedByType: input.CreatedByType,
+		CreatedBy:     createdBy,
+		CreatedByType: createdByType,
+		UpdatedBy:     &createdBy,
+		UpdatedByType: &createdByType,
 		CreatedAt:     now,
 		UpdatedAt:     now,
 		Body:          input.Body,
@@ -254,9 +261,25 @@ func (s *documentService) Update(ctx context.Context, id, workspaceID uuid.UUID,
 		doc.Body = *input.Body
 	}
 
+	// Stamped on every path that reaches the write, not per-field: a caller who
+	// only moved the document in the tree still changed it, and "last updated by"
+	// that skipped some kinds of change would name the wrong person the rest of
+	// the time.
+	updatedBy, updatedByType := input.UpdatedBy, input.UpdatedByType
 	doc.UpdatedAt = timeNow()
+	doc.UpdatedBy = &updatedBy
+	doc.UpdatedByType = &updatedByType
 	if upErr := s.documentRepo.Update(ctx, doc); upErr != nil {
 		return nil, upErr
+	}
+
+	// Re-read so the caller gets the resolved display names alongside the ids —
+	// the same enrich-after-write the comment service does. A failure here is not
+	// fatal: the write succeeded, and answering 500 would tell the caller their
+	// edit was lost when it was not.
+	if enriched, getErr := s.documentRepo.GetByIDInWorkspace(ctx, doc.ID, workspaceID); getErr == nil && enriched != nil {
+		enriched.Body = doc.Body
+		return enriched, nil
 	}
 
 	return doc, nil
@@ -268,7 +291,7 @@ func (s *documentService) Update(ctx context.Context, id, workspaceID uuid.UUID,
 // design (deleted_at, not DELETE), and dropping the body would make a restored
 // document an empty one — a silent data loss that the row still claims to have
 // content for.
-func (s *documentService) Delete(ctx context.Context, id, workspaceID uuid.UUID) error {
+func (s *documentService) Delete(ctx context.Context, id, workspaceID, deletedBy uuid.UUID, deletedByType domain.ActorType) error {
 	doc, err := s.documentRepo.GetByIDInWorkspace(ctx, id, workspaceID)
 	if err != nil {
 		return err
@@ -276,7 +299,7 @@ func (s *documentService) Delete(ctx context.Context, id, workspaceID uuid.UUID)
 	if doc == nil {
 		return apierror.NotFound("Document")
 	}
-	return s.documentRepo.SoftDelete(ctx, id, timeNow())
+	return s.documentRepo.SoftDelete(ctx, id, timeNow(), deletedBy, deletedByType)
 }
 
 // ListByProject returns a paginated list of the project's live documents.

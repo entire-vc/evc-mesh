@@ -955,7 +955,7 @@ type MockDocumentService struct {
 	CreateFunc             func(ctx context.Context, input service.CreateDocumentInput) (*domain.Document, error)
 	GetByIDInWorkspaceFunc func(ctx context.Context, id, workspaceID uuid.UUID) (*domain.Document, error)
 	UpdateFunc             func(ctx context.Context, id, workspaceID uuid.UUID, input service.UpdateDocumentInput) (*domain.Document, error)
-	DeleteFunc             func(ctx context.Context, id, workspaceID uuid.UUID) error
+	DeleteFunc             func(ctx context.Context, id, workspaceID, deletedBy uuid.UUID, deletedByType domain.ActorType) error
 	ListByProjectFunc      func(ctx context.Context, projectID uuid.UUID, pg pagination.Params) (*pagination.Page[domain.Document], error)
 }
 
@@ -980,9 +980,9 @@ func (m *MockDocumentService) Update(ctx context.Context, id, workspaceID uuid.U
 	return nil, nil
 }
 
-func (m *MockDocumentService) Delete(ctx context.Context, id, workspaceID uuid.UUID) error {
+func (m *MockDocumentService) Delete(ctx context.Context, id, workspaceID, deletedBy uuid.UUID, deletedByType domain.ActorType) error {
 	if m.DeleteFunc != nil {
-		return m.DeleteFunc(ctx, id, workspaceID)
+		return m.DeleteFunc(ctx, id, workspaceID, deletedBy, deletedByType)
 	}
 	return nil
 }
@@ -1026,6 +1026,52 @@ func (m *MockDocumentAttachmentService) ListByDocument(ctx context.Context, docu
 func (m *MockDocumentAttachmentService) Delete(ctx context.Context, id, workspaceID uuid.UUID) error {
 	if m.DeleteFunc != nil {
 		return m.DeleteFunc(ctx, id, workspaceID)
+	}
+	return nil
+}
+
+// MockDocumentCommentService implements service.DocumentCommentService for testing.
+type MockDocumentCommentService struct {
+	CreateFunc func(ctx context.Context, input service.CreateDocumentCommentInput) (*domain.DocumentComment, error)
+
+	ListByDocumentFunc func(ctx context.Context, documentID, workspaceID uuid.UUID, filter repository.DocumentCommentFilter, pg pagination.Params) (*pagination.Page[domain.DocumentComment], error)
+
+	UpdateFunc      func(ctx context.Context, id, workspaceID uuid.UUID, input service.UpdateDocumentCommentInput) (*domain.DocumentComment, error)
+	SetResolvedFunc func(ctx context.Context, id, workspaceID uuid.UUID, input service.ResolveDocumentCommentInput) (*domain.DocumentComment, error)
+	DeleteFunc      func(ctx context.Context, id, workspaceID, actorID uuid.UUID, actorType domain.ActorType) error
+}
+
+func (m *MockDocumentCommentService) Create(ctx context.Context, input service.CreateDocumentCommentInput) (*domain.DocumentComment, error) {
+	if m.CreateFunc != nil {
+		return m.CreateFunc(ctx, input)
+	}
+	return nil, nil
+}
+
+func (m *MockDocumentCommentService) ListByDocument(ctx context.Context, documentID, workspaceID uuid.UUID, filter repository.DocumentCommentFilter, pg pagination.Params) (*pagination.Page[domain.DocumentComment], error) {
+	if m.ListByDocumentFunc != nil {
+		return m.ListByDocumentFunc(ctx, documentID, workspaceID, filter, pg)
+	}
+	return nil, nil
+}
+
+func (m *MockDocumentCommentService) Update(ctx context.Context, id, workspaceID uuid.UUID, input service.UpdateDocumentCommentInput) (*domain.DocumentComment, error) {
+	if m.UpdateFunc != nil {
+		return m.UpdateFunc(ctx, id, workspaceID, input)
+	}
+	return nil, nil
+}
+
+func (m *MockDocumentCommentService) SetResolved(ctx context.Context, id, workspaceID uuid.UUID, input service.ResolveDocumentCommentInput) (*domain.DocumentComment, error) {
+	if m.SetResolvedFunc != nil {
+		return m.SetResolvedFunc(ctx, id, workspaceID, input)
+	}
+	return nil, nil
+}
+
+func (m *MockDocumentCommentService) Delete(ctx context.Context, id, workspaceID, actorID uuid.UUID, actorType domain.ActorType) error {
+	if m.DeleteFunc != nil {
+		return m.DeleteFunc(ctx, id, workspaceID, actorID, actorType)
 	}
 	return nil
 }

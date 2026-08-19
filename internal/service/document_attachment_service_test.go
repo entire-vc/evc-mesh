@@ -268,7 +268,7 @@ func TestDocumentAttachmentService_Upload_UnknownDocument(t *testing.T) {
 // page would resurrect content in something its owner believes is gone.
 func TestDocumentAttachmentService_Upload_SoftDeletedDocument(t *testing.T) {
 	f := setupDocumentAttachmentService(t)
-	require.NoError(t, f.docRepo.SoftDelete(context.Background(), f.documentID, frozenTime))
+	require.NoError(t, f.docRepo.SoftDelete(context.Background(), f.documentID, frozenTime, uuid.New(), domain.ActorTypeUser))
 
 	_, err := f.svc.Upload(context.Background(), UploadDocumentAttachmentInput{
 		DocumentID:  f.documentID,

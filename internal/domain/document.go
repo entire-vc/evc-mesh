@@ -20,11 +20,34 @@ type Document struct {
 	StorageKey string     `json:"storage_key" db:"storage_key"`
 	Position   int        `json:"position" db:"position"`
 
-	CreatedBy     uuid.UUID  `json:"created_by" db:"created_by"`
-	CreatedByType ActorType  `json:"created_by_type" db:"created_by_type"`
-	CreatedAt     time.Time  `json:"created_at" db:"created_at"`
-	UpdatedAt     time.Time  `json:"updated_at" db:"updated_at"`
-	DeletedAt     *time.Time `json:"deleted_at,omitempty" db:"deleted_at"`
+	CreatedBy     uuid.UUID `json:"created_by" db:"created_by"`
+	CreatedByType ActorType `json:"created_by_type" db:"created_by_type"`
+
+	// UpdatedBy is who last changed the document. It is a pointer because the rows
+	// that predate the column have no honest answer — see
+	// migrations/20260819099_document_updated_by.sql for why they were not
+	// back-filled with the creator. Every row written since is stamped, on create
+	// as well as on every later mutation, so nil means "not recorded" and never
+	// "never edited".
+	UpdatedBy     *uuid.UUID `json:"updated_by" db:"updated_by"`
+	UpdatedByType *ActorType `json:"updated_by_type" db:"updated_by_type"`
+
+	CreatedAt time.Time  `json:"created_at" db:"created_at"`
+	UpdatedAt time.Time  `json:"updated_at" db:"updated_at"`
+	DeletedAt *time.Time `json:"deleted_at,omitempty" db:"deleted_at"`
+
+	// Computed (not DB columns — populated via correlated subqueries in SELECT,
+	// the same arrangement as Comment.AuthorName).
+	//
+	// Resolved at read time rather than denormalized at write time on purpose: a
+	// stored copy of a display name freezes it, so somebody who renames themselves
+	// keeps their old name on every document they ever touched. Reading through to
+	// the actor heals history instead of preserving it wrong.
+	//
+	// nil where no name can be resolved: an unstamped legacy row, a system actor,
+	// or a principal that has since been deleted.
+	CreatedByName *string `json:"created_by_name,omitempty" db:"created_by_name"`
+	UpdatedByName *string `json:"updated_by_name,omitempty" db:"updated_by_name"`
 
 	// Body is the markdown fetched from object storage. There is no such column:
 	// it is populated only by the reads that ask for it (a single document), so a

@@ -82,6 +82,7 @@ func main() {
 	artifactRepo := postgres.NewArtifactRepo(db)
 	documentRepo := postgres.NewDocumentRepo(db)
 	documentAttachmentRepo := postgres.NewDocumentAttachmentRepo(db)
+	documentCommentRepo := postgres.NewDocumentCommentRepo(db)
 	agentRepo := postgres.NewAgentRepo(db)
 	eventBusRepo := postgres.NewEventBusMessageRepo(db)
 	activityLogRepo := postgres.NewActivityLogRepo(db)
@@ -456,6 +457,11 @@ func main() {
 	// not nil, and the service's "storage not configured" branch tests exactly that.
 	documentAttachmentService := service.NewDocumentAttachmentService(documentAttachmentRepo, documentRepo, attachmentStore)
 
+	// No storage dependency: a comment's text is a column, not an object. It takes
+	// the document repository so every entry point can resolve the document inside
+	// the caller's workspace before touching a comment.
+	documentCommentService := service.NewDocumentCommentService(documentCommentRepo, documentRepo)
+
 	// Wire Team Relay publisher into artifact service (best-effort; fires on upload).
 	projectIntegrationService := service.NewProjectIntegrationService(projectIntegrationRepo)
 	relayClient := teamrelay.NewClient(projectIntegrationRepo, taskRepo, projectRepo)
@@ -504,6 +510,7 @@ func main() {
 	artifactHandler := handler.NewArtifactHandler(artifactService, taskService)
 	documentHandler := handler.NewDocumentHandler(documentService)
 	documentAttachmentHandler := handler.NewDocumentAttachmentHandler(documentAttachmentService)
+	documentCommentHandler := handler.NewDocumentCommentHandler(documentCommentService)
 	depHandler := handler.NewDependencyHandler(depService, taskService)
 	agentHandler := handler.NewAgentHandlerWithEvents(agentService, taskService, taskStatusService, agentNotifyRedis, agentEventsRepo, sessionRepo)
 	eventHandler := handler.NewEventHandler(eventBusService)
@@ -969,6 +976,31 @@ func main() {
 	api.POST("/documents/:doc_id/attachments", documentAttachmentHandler.Upload, wsAccess, rbac(mw.PermUploadArtifact))
 	api.GET("/document-attachments/:att_id/download", documentAttachmentHandler.Download, wsAccess)
 	api.DELETE("/document-attachments/:att_id", documentAttachmentHandler.Delete, wsAccess, rbac(mw.PermUploadArtifact))
+
+	// Document comment routes — Confluence-style inline comments on document text.
+	//
+	// The list/create pair hangs off :doc_id, which already resolves a tenant; the
+	// object routes name the comment directly and are guarded by the :dcom_id
+	// resolver. wsAccess throughout, not projAccess: none of these paths carry a
+	// :proj_id, and RequireProjectMember answers 500 on a path without one.
+	//
+	// :dcom_id appears under exactly one collection segment — document-comments —
+	// and must stay that way: resolvers are keyed on the parameter name alone, so
+	// mounting the same id under /documents/:doc_id/comments/:dcom_id as well
+	// would make the name ambiguous (TestScopedParamNamesAreUnambiguous). It is
+	// spelled :dcom_id rather than :comment_id for the same reason — that name is
+	// taken by task comments, whose resolver reads the unrelated `comments` table.
+	//
+	// PermAddComment for the writes: commenting on a document is the same act the
+	// permission already names, held by the same roles (owner/admin/member and
+	// agents), so nothing gains or loses reach. Resolve/unresolve sit under it too
+	// — putting a thread away is part of taking part in it, not an admin power.
+	api.GET("/documents/:doc_id/comments", documentCommentHandler.List, wsAccess)
+	api.POST("/documents/:doc_id/comments", documentCommentHandler.Create, wsAccess, rbac(mw.PermAddComment))
+	api.PATCH("/document-comments/:dcom_id", documentCommentHandler.Update, wsAccess, rbac(mw.PermAddComment))
+	api.POST("/document-comments/:dcom_id/resolve", documentCommentHandler.Resolve, wsAccess, rbac(mw.PermAddComment))
+	api.POST("/document-comments/:dcom_id/unresolve", documentCommentHandler.Unresolve, wsAccess, rbac(mw.PermAddComment))
+	api.DELETE("/document-comments/:dcom_id", documentCommentHandler.Delete, wsAccess, rbac(mw.PermAddComment))
 
 	// Agent routes.
 	// NOTE: /agents/me/* routes MUST be registered before /agents/:agent_id to avoid

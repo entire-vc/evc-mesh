@@ -31,17 +31,20 @@ func newDocumentRepoMock(t *testing.T) (*DocumentRepo, sqlmock.Sqlmock) {
 	return NewDocumentRepo(sqlx.NewDb(rawDB, "postgres")), mock
 }
 
-// documentRows builds a result set with every column documentRow scans, so a
-// column added to the query without a matching field fails here rather than in
+// documentRows builds a result set with every column documentRow scans — the
+// stored ones and the two names documentEnrichedSelect computes — so a column
+// added to the query without a matching field fails here rather than in
 // production (see artifactSelectCols for why nothing uses SELECT *).
 func documentRows(docs ...domain.Document) *sqlmock.Rows {
 	rows := sqlmock.NewRows([]string{
 		"id", "project_id", "parent_id", "slug", "title", "storage_key",
-		"position", "created_by", "created_by_type", "created_at", "updated_at", "deleted_at",
+		"position", "created_by", "created_by_type", "updated_by", "updated_by_type",
+		"created_at", "updated_at", "deleted_at", "created_by_name", "updated_by_name",
 	})
 	for _, d := range docs {
 		rows.AddRow(d.ID, d.ProjectID, d.ParentID, d.Slug, d.Title, d.StorageKey,
-			d.Position, d.CreatedBy, d.CreatedByType, d.CreatedAt, d.UpdatedAt, d.DeletedAt)
+			d.Position, d.CreatedBy, d.CreatedByType, d.UpdatedBy, d.UpdatedByType,
+			d.CreatedAt, d.UpdatedAt, d.DeletedAt, d.CreatedByName, d.UpdatedByName)
 	}
 	return rows
 }
@@ -49,6 +52,9 @@ func documentRows(docs ...domain.Document) *sqlmock.Rows {
 func sampleDocument() domain.Document {
 	now := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
 	parent := uuid.New()
+	editor := uuid.New()
+	editorType := domain.ActorTypeAgent
+	creatorName, editorName := "Ada", "howard"
 	return domain.Document{
 		ID:            uuid.New(),
 		ProjectID:     uuid.New(),
@@ -59,8 +65,12 @@ func sampleDocument() domain.Document {
 		Position:      3,
 		CreatedBy:     uuid.New(),
 		CreatedByType: domain.ActorTypeUser,
+		UpdatedBy:     &editor,
+		UpdatedByType: &editorType,
 		CreatedAt:     now,
 		UpdatedAt:     now,
+		CreatedByName: &creatorName,
+		UpdatedByName: &editorName,
 	}
 }
 
@@ -70,7 +80,8 @@ func TestDocumentRepo_Create(t *testing.T) {
 
 	mock.ExpectExec("INSERT INTO documents").
 		WithArgs(doc.ID, doc.ProjectID, doc.ParentID, doc.Slug, doc.Title, doc.StorageKey,
-			doc.Position, doc.CreatedBy, doc.CreatedByType, doc.CreatedAt, doc.UpdatedAt).
+			doc.Position, doc.CreatedBy, doc.CreatedByType, doc.UpdatedBy, doc.UpdatedByType,
+			doc.CreatedAt, doc.UpdatedAt).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	require.NoError(t, repo.Create(context.Background(), &doc))
@@ -118,7 +129,7 @@ func TestDocumentRepo_GetByID(t *testing.T) {
 	repo, mock := newDocumentRepoMock(t)
 	doc := sampleDocument()
 
-	mock.ExpectQuery("FROM documents WHERE id = \\$1 AND deleted_at IS NULL").
+	mock.ExpectQuery("FROM documents d WHERE d.id = \\$1 AND d.deleted_at IS NULL").
 		WithArgs(doc.ID).
 		WillReturnRows(documentRows(doc))
 
@@ -133,8 +144,50 @@ func TestDocumentRepo_GetByID(t *testing.T) {
 	assert.Equal(t, "runbook", got.Slug)
 	assert.Equal(t, 3, got.Position)
 	assert.Equal(t, domain.ActorTypeUser, got.CreatedByType)
+	require.NotNil(t, got.UpdatedBy)
+	assert.Equal(t, *doc.UpdatedBy, *got.UpdatedBy)
+	require.NotNil(t, got.UpdatedByType)
+	assert.Equal(t, domain.ActorTypeAgent, *got.UpdatedByType)
 	assert.Empty(t, got.Body, "the body is not a column; the service fills it from storage")
 	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// The two display names are what make the byline renderable — a caller handed
+// bare uuids would have to fan out to resolve them — so the scan has to carry
+// them off the enriched SELECT and onto the domain object.
+func TestDocumentRepo_GetByID_CarriesTheResolvedActorNames(t *testing.T) {
+	repo, mock := newDocumentRepoMock(t)
+	doc := sampleDocument()
+
+	mock.ExpectQuery("created_by_name").WillReturnRows(documentRows(doc))
+
+	got, err := repo.GetByID(context.Background(), doc.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+
+	require.NotNil(t, got.CreatedByName)
+	assert.Equal(t, "Ada", *got.CreatedByName)
+	require.NotNil(t, got.UpdatedByName)
+	assert.Equal(t, "howard", *got.UpdatedByName)
+}
+
+// A row written before updated_by existed has no last editor, and nothing may
+// invent one for it — that is the whole reason the column was not back-filled.
+func TestDocumentRepo_GetByID_LegacyRowHasNoLastEditor(t *testing.T) {
+	repo, mock := newDocumentRepoMock(t)
+	doc := sampleDocument()
+	doc.UpdatedBy, doc.UpdatedByType, doc.UpdatedByName = nil, nil, nil
+
+	mock.ExpectQuery("FROM documents d").WillReturnRows(documentRows(doc))
+
+	got, err := repo.GetByID(context.Background(), doc.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+
+	assert.Nil(t, got.UpdatedBy)
+	assert.Nil(t, got.UpdatedByType)
+	assert.Nil(t, got.UpdatedByName, "an unresolvable name is absent, not an empty string")
+	assert.NotNil(t, got.CreatedByName, "the creator is still known")
 }
 
 // A missing (or soft-deleted) row is nil and no error, so the service can answer
@@ -182,7 +235,8 @@ func TestDocumentRepo_Update(t *testing.T) {
 	doc := sampleDocument()
 
 	mock.ExpectExec("UPDATE documents").
-		WithArgs(doc.ID, doc.Title, doc.ParentID, doc.Position, doc.UpdatedAt).
+		WithArgs(doc.ID, doc.Title, doc.ParentID, doc.Position, doc.UpdatedAt,
+			doc.UpdatedBy, doc.UpdatedByType).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	require.NoError(t, repo.Update(context.Background(), &doc))
@@ -220,15 +274,18 @@ func TestDocumentRepo_Update_SlugConflictOnReparent(t *testing.T) {
 
 func TestDocumentRepo_SoftDelete(t *testing.T) {
 	repo, mock := newDocumentRepoMock(t)
-	id := uuid.New()
+	id, by := uuid.New(), uuid.New()
 	at := time.Now().UTC()
 
 	// Two rows: the document and one descendant the recursive statement caught.
+	// The deleter is stamped on both — a delete is a change to every row it
+	// touches, and a restored child must not claim its last editor was whoever
+	// happened to touch it last week.
 	mock.ExpectExec("WITH RECURSIVE subtree").
-		WithArgs(id, at).
+		WithArgs(id, at, by, domain.ActorTypeUser).
 		WillReturnResult(sqlmock.NewResult(0, 2))
 
-	require.NoError(t, repo.SoftDelete(context.Background(), id, at))
+	require.NoError(t, repo.SoftDelete(context.Background(), id, at, by, domain.ActorTypeUser))
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -237,7 +294,7 @@ func TestDocumentRepo_SoftDelete_NoRowsIsNotFound(t *testing.T) {
 
 	mock.ExpectExec("WITH RECURSIVE subtree").WillReturnResult(sqlmock.NewResult(0, 0))
 
-	err := repo.SoftDelete(context.Background(), uuid.New(), time.Now())
+	err := repo.SoftDelete(context.Background(), uuid.New(), time.Now(), uuid.New(), domain.ActorTypeAgent)
 
 	var apiErr *apierror.Error
 	require.ErrorAs(t, err, &apiErr)
@@ -254,7 +311,7 @@ func TestDocumentRepo_ListByProject(t *testing.T) {
 	mock.ExpectQuery("SELECT COUNT\\(\\*\\) FROM documents").
 		WithArgs(projID).
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(2))
-	mock.ExpectQuery("ORDER BY position ASC, created_at ASC, id ASC").
+	mock.ExpectQuery("ORDER BY d.position ASC, d.created_at ASC, d.id ASC").
 		WithArgs(projID).
 		WillReturnRows(documentRows(first, second))
 

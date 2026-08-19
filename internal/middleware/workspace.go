@@ -215,6 +215,39 @@ var workspaceParamResolvers = []workspaceParamResolver{
 	                           JOIN documents d ON a.document_id = d.id
 	                           JOIN projects p ON d.project_id = p.id
 	                          WHERE a.id = $1`)},
+	// An inline comment on a document names its tenant exactly the way an
+	// attachment does — through its document, which names it through its project.
+	//
+	// Spelled :dcom_id, not :comment_id, and the rename is load-bearing for the
+	// same reason :atr_id is: resolvers are keyed on the parameter name alone, and
+	// :comment_id above reads the `comments` table, which holds task comments and
+	// knows nothing about these. One name over two tables would send every
+	// document comment id to the wrong lookup and refuse every legitimate request
+	// — the bug /projects/:proj_id/auto-transition-rules/:rule_id was one step
+	// away from. TestScopedParamNamesAreUnambiguous is what keeps it from coming
+	// back, and it is why this id must stay under exactly one collection segment
+	// (/document-comments/:dcom_id) and never also be mounted at
+	// /documents/:doc_id/comments/:dcom_id.
+	//
+	// Soft-deleted rows still resolve here, as they do for :doc_id and :att_id:
+	// the guard's question is "whose is this", and a deleted comment is still that
+	// tenant's. The repository's deleted_at filters are what turn the read into a
+	// 404 — for its owner and a stranger alike, so the two answers stay
+	// indistinguishable.
+	//
+	// No notFoundResource, following :att_id rather than :artifact_id. That field
+	// turns "this id resolves to nothing" into a 404 instead of the 403 a
+	// wrong-tenant id gets, which is only safe where the route-coverage fixture
+	// supplies a REAL object so the distinction is never exercised against a
+	// guessed id. There is no document-comment fixture in newVictimFixture, so
+	// setting it would make TestCrossTenant_NonMemberIsRefusedOnEveryScopedRoute
+	// see 404 where it requires 403. Omitting it answers 403 to an unknown id and
+	// another tenant's id alike — the stronger behaviour anyway.
+	{param: "dcom_id", resolve: uuidResolver(`SELECT p.workspace_id
+	                            FROM document_comments dc
+	                            JOIN documents d ON dc.document_id = d.id
+	                            JOIN projects p ON d.project_id = p.id
+	                           WHERE dc.id = $1`)},
 	{param: "webhook_id", resolve: uuidResolver(`SELECT workspace_id FROM webhook_configs WHERE id = $1`)},
 	{param: "int_id", resolve: uuidResolver(`SELECT workspace_id FROM integration_configs WHERE id = $1`)},
 	{param: "tmpl_id", resolve: uuidResolver(`SELECT p.workspace_id
