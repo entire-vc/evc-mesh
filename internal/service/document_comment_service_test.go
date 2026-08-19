@@ -546,12 +546,30 @@ func TestDocumentCommentService_Update_BodyValidation(t *testing.T) {
 	}
 }
 
-func TestDocumentCommentService_Update_RepositoryErrorIsReturned(t *testing.T) {
+func TestDocumentCommentService_Update_LookupErrorIsReturned(t *testing.T) {
 	f := setupDocumentCommentService(t)
 	c := f.create(t)
 	f.comments.FailWith(assert.AnError)
 
 	_, err := f.svc.Update(context.Background(), c.ID, f.wsID, UpdateDocumentCommentInput{
+		Body: "x", EditorID: f.author, EditorType: domain.ActorTypeUser,
+	})
+	assert.ErrorIs(t, err, assert.AnError)
+}
+
+// A failed write is the one error that must NOT be swallowed the way the
+// enrichment re-read is: the caller's edit did not land, and answering 200 would
+// show them their new text over a row that still holds the old.
+func TestDocumentCommentService_Update_WriteErrorIsReturned(t *testing.T) {
+	f := setupDocumentCommentService(t)
+	c := f.create(t)
+
+	svc := &documentCommentService{
+		commentRepo:  &writeFailsRepo{MockDocumentCommentRepository: f.comments},
+		documentRepo: f.docs,
+	}
+
+	_, err := svc.Update(context.Background(), c.ID, f.wsID, UpdateDocumentCommentInput{
 		Body: "x", EditorID: f.author, EditorType: domain.ActorTypeUser,
 	})
 	assert.ErrorIs(t, err, assert.AnError)
@@ -656,12 +674,28 @@ func TestDocumentCommentService_SetResolved_OtherWorkspaceIsNotFound(t *testing.
 	assert.Equal(t, 404, apiErr.StatusCode())
 }
 
-func TestDocumentCommentService_SetResolved_RepositoryErrorIsReturned(t *testing.T) {
+func TestDocumentCommentService_SetResolved_LookupErrorIsReturned(t *testing.T) {
 	f := setupDocumentCommentService(t)
 	c := f.create(t)
 	f.comments.FailWith(assert.AnError)
 
 	_, err := f.svc.SetResolved(context.Background(), c.ID, f.wsID,
+		ResolveDocumentCommentInput{Resolved: true, ActorID: f.author, ActorType: domain.ActorTypeUser})
+	assert.ErrorIs(t, err, assert.AnError)
+}
+
+// A resolve that failed to write must not answer 200 with resolved_at set —
+// the thread would disappear from the reader's listing and come back on refresh.
+func TestDocumentCommentService_SetResolved_WriteErrorIsReturned(t *testing.T) {
+	f := setupDocumentCommentService(t)
+	c := f.create(t)
+
+	svc := &documentCommentService{
+		commentRepo:  &writeFailsRepo{MockDocumentCommentRepository: f.comments},
+		documentRepo: f.docs,
+	}
+
+	_, err := svc.SetResolved(context.Background(), c.ID, f.wsID,
 		ResolveDocumentCommentInput{Resolved: true, ActorID: f.author, ActorType: domain.ActorTypeUser})
 	assert.ErrorIs(t, err, assert.AnError)
 }
@@ -749,4 +783,14 @@ type readFailsAfterWriteRepo struct {
 
 func (r *readFailsAfterWriteRepo) GetByID(context.Context, uuid.UUID) (*domain.DocumentComment, error) {
 	return nil, assert.AnError
+}
+
+// writeFailsRepo is the mock with Update broken and every read intact, so a test
+// can reach the write and fail only there.
+type writeFailsRepo struct {
+	*MockDocumentCommentRepository
+}
+
+func (r *writeFailsRepo) Update(context.Context, *domain.DocumentComment) error {
+	return assert.AnError
 }

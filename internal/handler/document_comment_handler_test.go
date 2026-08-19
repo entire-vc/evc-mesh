@@ -131,6 +131,27 @@ func TestDocumentCommentHandler_List_IncludeResolvedIsStrict(t *testing.T) {
 	assert.False(t, gotFilter.IncludeResolved)
 }
 
+// Malformed pagination is the caller's mistake, and it has to be named as one:
+// binding it silently would serve page 1 of 50 to somebody who asked for
+// something else and looked like it worked.
+func TestDocumentCommentHandler_List_MalformedPagination(t *testing.T) {
+	wsID := uuid.New()
+	called := false
+	mockSvc := &MockDocumentCommentService{
+		ListByDocumentFunc: func(context.Context, uuid.UUID, uuid.UUID, repository.DocumentCommentFilter, pagination.Params) (*pagination.Page[domain.DocumentComment], error) {
+			called = true
+			return nil, nil
+		},
+	}
+	h, e := setupDocumentCommentTest(mockSvc)
+
+	c, rec := docCommentListRequest(e, http.MethodGet, uuid.New().String(), &wsID, "/?page_size=not-a-number", "")
+	require.NoError(t, h.List(c))
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.False(t, called)
+}
+
 func TestDocumentCommentHandler_List_InvalidDocumentID(t *testing.T) {
 	wsID := uuid.New()
 	h, e := setupDocumentCommentTest(&MockDocumentCommentService{})
