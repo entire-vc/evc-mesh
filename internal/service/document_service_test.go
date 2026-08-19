@@ -395,3 +395,100 @@ func TestDocumentService_NoStorageConfigured(t *testing.T) {
 	require.ErrorAs(t, err, &apiErr)
 	assert.Equal(t, 503, apiErr.StatusCode())
 }
+
+func TestDocumentService_Create_BodyTooLarge(t *testing.T) {
+	f := setupDocumentService(t)
+
+	_, err := f.svc.Create(context.Background(), CreateDocumentInput{
+		ProjectID: f.projectID,
+		Title:     "Huge",
+		Body:      strings.Repeat("x", maxDocumentBodyBytes+1),
+	})
+
+	var apiErr *apierror.Error
+	require.ErrorAs(t, err, &apiErr)
+	assert.Equal(t, 400, apiErr.StatusCode())
+	assert.Empty(t, f.storage.objects, "an oversized body was streamed to storage before being refused")
+}
+
+// An upload that fails must not leave a row pointing at an object that is not
+// there: the document would read as an empty one forever.
+func TestDocumentService_Create_UploadFailureCreatesNoRow(t *testing.T) {
+	f := setupDocumentService(t)
+	f.storage.errToReturn = errors.New("s3 down")
+
+	_, err := f.svc.Create(context.Background(), CreateDocumentInput{
+		ProjectID: f.projectID,
+		Title:     "Doomed",
+		Body:      "content",
+	})
+
+	require.Error(t, err)
+	page, listErr := f.svc.ListByProject(context.Background(), f.projectID, pagination.Params{})
+	require.NoError(t, listErr)
+	assert.Empty(t, page.Items, "a document row survived a failed upload")
+}
+
+func TestDocumentService_Update_RejectsEmptyTitle(t *testing.T) {
+	f := setupDocumentService(t)
+	created := f.create(t, "Draft", "body")
+
+	blank := "   "
+	_, err := f.svc.Update(context.Background(), created.ID, f.wsID, UpdateDocumentInput{Title: &blank})
+
+	var apiErr *apierror.Error
+	require.ErrorAs(t, err, &apiErr)
+	assert.Equal(t, 400, apiErr.StatusCode())
+}
+
+func TestDocumentService_Update_UploadFailureIsAnError(t *testing.T) {
+	f := setupDocumentService(t)
+	created := f.create(t, "Draft", "old")
+	f.storage.errToReturn = errors.New("s3 down")
+
+	newBody := "new"
+	_, err := f.svc.Update(context.Background(), created.ID, f.wsID, UpdateDocumentInput{Body: &newBody})
+
+	require.Error(t, err)
+	stored, getErr := f.repo.GetByID(context.Background(), created.ID)
+	require.NoError(t, getErr)
+	assert.Equal(t, "Draft", stored.Title, "the row was updated even though the body never landed")
+}
+
+// The three read/write paths that need object storage each say "unavailable"
+// rather than failing as an internal error when it is not configured. These only
+// fire when S3 is down, which is exactly when nobody is watching them.
+func TestDocumentService_NoStorageConfigured_ReadAndUpdate(t *testing.T) {
+	ctx := context.Background()
+	projectID, wsID, docID := uuid.New(), uuid.New(), uuid.New()
+
+	repo := NewMockDocumentRepository().WithProjectWorkspace(projectID, wsID)
+	repo.Seed(&domain.Document{ID: docID, ProjectID: projectID, Title: "Runbook", StorageKey: "documents/x/y.md"})
+	projectRepo := NewMockProjectRepository()
+	require.NoError(t, projectRepo.Create(ctx, &domain.Project{ID: projectID, WorkspaceID: wsID}))
+
+	svc := NewDocumentService(repo, nil, projectRepo)
+
+	t.Run("read", func(t *testing.T) {
+		_, err := svc.GetByIDInWorkspace(ctx, docID, wsID)
+		var apiErr *apierror.Error
+		require.ErrorAs(t, err, &apiErr)
+		assert.Equal(t, 503, apiErr.StatusCode())
+	})
+
+	t.Run("update with a body", func(t *testing.T) {
+		body := "new"
+		_, err := svc.Update(ctx, docID, wsID, UpdateDocumentInput{Body: &body})
+		var apiErr *apierror.Error
+		require.ErrorAs(t, err, &apiErr)
+		assert.Equal(t, 503, apiErr.StatusCode())
+	})
+
+	// A metadata-only update needs no storage at all, so it still works.
+	t.Run("update without a body", func(t *testing.T) {
+		title := "Renamed"
+		doc, err := svc.Update(ctx, docID, wsID, UpdateDocumentInput{Title: &title})
+		require.NoError(t, err)
+		assert.Equal(t, "Renamed", doc.Title)
+	})
+}
