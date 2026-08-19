@@ -20,7 +20,9 @@ import {
   SquareCode,
   Table as TableIcon,
 } from "lucide-react";
+import { createPortal } from "react-dom";
 import type { Node as ProseNode, Schema } from "@milkdown/kit/prose/model";
+import type { EditorView } from "@milkdown/kit/prose/view";
 import { editorViewCtx } from "@milkdown/kit/core";
 import {
   toggleEmphasisCommand,
@@ -44,6 +46,14 @@ import {
 } from "@/lib/artifact-links";
 import { uploadDocumentAttachment } from "@/lib/document-attachments";
 import { makeDocEditor } from "@/lib/milkdown/editor";
+import {
+  type AnchorMatch,
+  type DocAnchor,
+  buildBlocks,
+  encodeAnchor,
+  makeAnchor,
+  resolveAnchor,
+} from "@/lib/docs/anchor";
 import "@/components/doc-editor.css";
 
 export interface DocEditorProps {
@@ -59,6 +69,22 @@ export interface DocEditorProps {
    * placeholders nothing will replace.
    */
   documentId?: string;
+  /**
+   * A paragraph to reveal once the document is on screen — the target of a
+   * "copy link to this paragraph" link. Viewer only.
+   */
+  anchor?: DocAnchor | null;
+  /**
+   * How `anchor` resolved. The page owns telling the reader when the paragraph
+   * has changed or gone: this component knows the answer, but the honest
+   * message belongs next to the document, not inside the prose.
+   */
+  onAnchorResolved?: (match: AnchorMatch) => void;
+  /**
+   * Right-click on a paragraph in the viewer. Receives the anchor; the page
+   * turns it into a URL, because the route is the page's business.
+   */
+  onCopyAnchor?: (anchor: DocAnchor) => void;
 }
 
 // The prose classes are shared by the editor and the viewer on purpose: they are
@@ -96,10 +122,94 @@ function ToolbarButton({
 }
 
 // ---------------------------------------------------------------------------
+// Paragraph context menu
+// ---------------------------------------------------------------------------
+
+/** Class the revealed paragraph wears; the fade-out lives in the stylesheet. */
+const ANCHOR_HIT_CLASS = "mesh-doc-anchor-hit";
+
+function ParagraphMenu({
+  x,
+  y,
+  onCopy,
+  onClose,
+}: {
+  x: number;
+  y: number;
+  onCopy: () => void;
+  onClose: () => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [position, setPosition] = useState({ left: x, top: y });
+
+  // Measure, then keep the menu inside the viewport. Done after mount because
+  // the size is not known until it is rendered.
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const { width, height } = el.getBoundingClientRect();
+    setPosition({
+      left: Math.min(x, Math.max(8, window.innerWidth - width - 8)),
+      top: Math.min(y, Math.max(8, window.innerHeight - height - 8)),
+    });
+    el.querySelector("button")?.focus();
+  }, [x, y]);
+
+  useEffect(() => {
+    const dismiss = () => onClose();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    // `true` on scroll: a menu pinned to viewport coordinates is wrong the
+    // moment anything under it moves, and the scroll happens on an inner
+    // container that does not bubble.
+    window.addEventListener("scroll", dismiss, true);
+    window.addEventListener("resize", dismiss);
+    document.addEventListener("mousedown", dismiss);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("scroll", dismiss, true);
+      window.removeEventListener("resize", dismiss);
+      document.removeEventListener("mousedown", dismiss);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [onClose]);
+
+  return createPortal(
+    <div
+      ref={ref}
+      role="menu"
+      style={{ left: position.left, top: position.top }}
+      className="fixed z-50 min-w-[13rem] rounded-md border border-border bg-popover p-1 shadow-md"
+      onMouseDown={(e) => e.stopPropagation()}
+    >
+      <button
+        type="button"
+        role="menuitem"
+        onClick={onCopy}
+        className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-foreground hover:bg-accent"
+      >
+        <LinkIcon className="h-3.5 w-3.5" />
+        Copy link to this paragraph
+      </button>
+    </div>,
+    document.body,
+  );
+}
+
+// ---------------------------------------------------------------------------
 // The editing / viewing surface
 // ---------------------------------------------------------------------------
 
-function MilkdownDoc({ value, onChange, readOnly, documentId }: DocEditorProps) {
+function MilkdownDoc({
+  value,
+  onChange,
+  readOnly,
+  documentId,
+  anchor,
+  onAnchorResolved,
+  onCopyAnchor,
+}: DocEditorProps) {
   const navigate = useNavigate();
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -219,6 +329,118 @@ function MilkdownDoc({ value, onChange, readOnly, documentId }: DocEditorProps) 
     if (loading || !containerRef.current) return;
     void resolveArtifactImages(containerRef.current);
   }, [value, loading, uploading]);
+
+  // ---- Paragraph anchors --------------------------------------------------
+  // The editor is the only place that knows which DOM element is which
+  // top-level block, so making and resolving anchors lives here. Everything
+  // about *what an anchor means* is in lib/docs/anchor.ts and is tested there
+  // without a browser.
+
+  const [menu, setMenu] = useState<{ x: number; y: number; index: number } | null>(
+    null,
+  );
+  const highlightedRef = useRef<HTMLElement | null>(null);
+  const onAnchorResolvedRef = useRef(onAnchorResolved);
+  onAnchorResolvedRef.current = onAnchorResolved;
+
+  const withView = useCallback(
+    <T,>(fn: (view: EditorView) => T): T | null => {
+      const editor = getInstance();
+      if (!editor) return null;
+      return editor.action((ctx) => fn(ctx.get(editorViewCtx))) as T;
+    },
+    [getInstance],
+  );
+
+  // The text projection the anchor module works in: one entry per top-level
+  // block, in document order — the same order as view.dom.children, which is
+  // what lets an index name both a block and an element.
+  const blocksFromView = (view: EditorView) => {
+    const texts: string[] = [];
+    view.state.doc.forEach((node) => {
+      texts.push(node.textContent);
+    });
+    return buildBlocks(texts);
+  };
+
+  const anchorsEnabled = !!readOnly && !!onCopyAnchor;
+
+  const handleContextMenu = useCallback(
+    (e: React.MouseEvent<HTMLDivElement>) => {
+      if (!anchorsEnabled) return;
+      const target = e.target as HTMLElement;
+      // Links and images keep their own menu — "open in new tab" and "save
+      // image" are the reason a reader right-clicks those, and taking them away
+      // to offer one extra item is a bad trade.
+      if (target.closest("a, img")) return;
+
+      const index = withView((view) => {
+        const root = view.dom as HTMLElement;
+        let el: HTMLElement | null = target;
+        while (el && el !== root && el.parentElement !== root) {
+          el = el.parentElement;
+        }
+        if (!el || el === root || el.parentElement !== root) return null;
+        const i = Array.prototype.indexOf.call(root.children, el);
+        return i >= 0 ? i : null;
+      });
+      if (index === null || index === undefined) return;
+
+      e.preventDefault();
+      setMenu({ x: e.clientX, y: e.clientY, index });
+    },
+    [anchorsEnabled, withView],
+  );
+
+  const copyAnchor = useCallback(() => {
+    const index = menu?.index;
+    setMenu(null);
+    if (index === undefined || !onCopyAnchor) return;
+    const built = withView((view) => makeAnchor(blocksFromView(view), index));
+    if (built) onCopyAnchor(built);
+  }, [menu, onCopyAnchor, withView]);
+
+  // Reveal the linked paragraph. Keyed on the encoded anchor rather than the
+  // object so that an unchanged link does not re-scroll on every render.
+  const anchorKey = anchor ? encodeAnchor(anchor) : null;
+  useEffect(() => {
+    if (loading || !anchor || !readOnly) return;
+
+    // One frame: ProseMirror has the document, but the browser has not laid it
+    // out yet, and scrollIntoView before layout scrolls to the wrong place.
+    const frame = requestAnimationFrame(() => {
+      const found = withView((view) => {
+        const match = resolveAnchor(blocksFromView(view), anchor);
+        const child =
+          match.index === null ? null : view.dom.children[match.index];
+        return {
+          match,
+          el: child instanceof HTMLElement ? child : null,
+        };
+      });
+      if (!found) return;
+
+      onAnchorResolvedRef.current?.(found.match);
+      if (!found.el) return;
+
+      highlightedRef.current?.classList.remove(ANCHOR_HIT_CLASS);
+      found.el.scrollIntoView({ block: "center", behavior: "smooth" });
+      found.el.classList.add(ANCHOR_HIT_CLASS);
+      highlightedRef.current = found.el;
+    });
+
+    return () => cancelAnimationFrame(frame);
+    // `value` is here because the body arrives after the first render: the
+    // document loads empty and is filled in once the fetch lands.
+  }, [anchorKey, anchor, loading, readOnly, value, withView]);
+
+  // The highlight is a transient, so it must not outlive the view that owns it.
+  useEffect(() => {
+    return () => {
+      highlightedRef.current?.classList.remove(ANCHOR_HIT_CLASS);
+      highlightedRef.current = null;
+    };
+  }, []);
 
   const runCommand = useCallback(
     (key: Parameters<typeof callCommand>[0], payload?: unknown) => {
@@ -427,10 +649,20 @@ function MilkdownDoc({ value, onChange, readOnly, documentId }: DocEditorProps) 
       <div
         ref={containerRef}
         onClick={handleClick}
+        onContextMenu={handleContextMenu}
         className={cn(!readOnly && "px-3 py-2")}
       >
         <Milkdown />
       </div>
+
+      {menu && (
+        <ParagraphMenu
+          x={menu.x}
+          y={menu.y}
+          onCopy={copyAnchor}
+          onClose={() => setMenu(null)}
+        />
+      )}
 
       {!readOnly && (
         <div className="border-t border-border px-3 py-1 text-[11px] text-muted-foreground">
@@ -461,6 +693,9 @@ export function DocEditor({
   onChange,
   readOnly = false,
   documentId,
+  anchor,
+  onAnchorResolved,
+  onCopyAnchor,
 }: DocEditorProps) {
   if (readOnly && !value.trim()) {
     return <p className="text-sm text-muted-foreground">This page is empty.</p>;
@@ -477,6 +712,9 @@ export function DocEditor({
         onChange={onChange}
         readOnly={readOnly}
         documentId={documentId}
+        anchor={anchor}
+        onAnchorResolved={onAnchorResolved}
+        onCopyAnchor={onCopyAnchor}
       />
     </MilkdownProvider>
   );
