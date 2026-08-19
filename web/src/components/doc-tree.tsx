@@ -116,6 +116,39 @@ export function moveTargets(
   return targets;
 }
 
+/**
+ * The chain of documents from a root down to `docId`, inclusive — what the
+ * breadcrumb shows.
+ *
+ * Walks the forest buildDocTree already produced instead of following parent_id
+ * a second time, so the breadcrumb and the tree agree in exactly the cases
+ * where the data is odd: a document whose parent is missing is a root in both,
+ * and a parent cycle costs the same one misplaced node rather than hanging the
+ * tab in one place and not the other.
+ *
+ * Returns [] when `docId` is not in `documents` at all — the list has not
+ * arrived yet, or the document belongs to another project.
+ */
+export function buildDocPath(
+  documents: ProjectDocument[],
+  docId: string,
+): ProjectDocument[] {
+  const walk = (
+    nodes: DocTreeNode[],
+    trail: ProjectDocument[],
+  ): ProjectDocument[] | null => {
+    for (const node of nodes) {
+      const next = [...trail, node.doc];
+      if (node.doc.id === docId) return next;
+      const found = walk(node.children, next);
+      if (found) return found;
+    }
+    return null;
+  };
+
+  return walk(buildDocTree(documents), []) ?? [];
+}
+
 interface DocTreeProps {
   documents: ProjectDocument[];
   selectedId?: string | null;
@@ -202,11 +235,35 @@ function DocTreeItem({
         aria-selected={isSelected}
         aria-expanded={hasChildren ? isOpen : undefined}
         className={cn(
-          "group flex items-center gap-0.5 rounded-md pr-1 text-sm hover:bg-accent",
-          isSelected && "bg-accent font-medium",
+          "group relative flex items-center gap-0.5 rounded-md pr-1 text-sm",
+          // Hover is a neutral tint. It used to be --accent, which is a
+          // saturated teal, not a tint: every row the pointer crossed turned
+          // into a solid brand-coloured block with near-black text on it.
+          "hover:bg-muted",
+          isSelected && [
+            // --secondary is the palette's light teal-green (teal-100 in light
+            // mode, the raised dark-teal surface in dark) and it ships with a
+            // foreground that reads on it: 16.3:1 light, 11.4:1 dark. Both are
+            // computed, not eyeballed — see the doc-tree tests.
+            "bg-secondary font-medium text-secondary-foreground",
+          ],
         )}
         style={{ paddingLeft: `${depth * 12}px` }}
       >
+        {/* --secondary and --muted are close in lightness by design, so the
+            selected row does not rely on its fill to be told apart from the one
+            under the pointer: it also carries a brand-coloured bar at the
+            column edge (5.8:1 against the fill in light, 6.6:1 in dark). A real
+            element rather than a border, because the row's left padding encodes
+            tree depth and a border would shift every nested title by 3px. */}
+        {isSelected && (
+          <span
+            aria-hidden="true"
+            data-selected-bar=""
+            className="absolute inset-y-1 left-0 w-[3px] rounded-full bg-primary"
+          />
+        )}
+
         {hasChildren ? (
           <button
             type="button"

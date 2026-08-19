@@ -13,15 +13,26 @@ import {
   FilePlus2,
   FileText,
   Loader2,
+  MoreHorizontal,
   NotebookText,
   Pencil,
   Plus,
   Unlink,
 } from "lucide-react";
+import { DocBreadcrumbs } from "@/components/doc-breadcrumbs";
 import { DocEditor } from "@/components/doc-editor";
+import { DocMeta } from "@/components/doc-meta";
 import { DocTree, moveTargets } from "@/components/doc-tree";
 import { ConfirmDialog } from "@/components/confirm-dialog";
+import { ResizableDivider } from "@/components/resizable-divider";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -40,6 +51,13 @@ import {
   anchorFromHash,
   anchorToHash,
 } from "@/lib/docs/anchor";
+import {
+  DOC_TREE_DEFAULT_WIDTH,
+  DOC_TREE_MAX_WIDTH,
+  DOC_TREE_MIN_WIDTH,
+  loadDocTreeWidth,
+  saveDocTreeWidth,
+} from "@/lib/docs-layout-storage";
 import { useDocumentStore } from "@/stores/document";
 import { useProjectStore } from "@/stores/project";
 import type { ProjectDocument } from "@/types";
@@ -365,6 +383,12 @@ export function DocsPage() {
   const [deleteTarget, setDeleteTarget] = useState<ProjectDocument | null>(null);
   const [deleting, setDeleting] = useState(false);
 
+  // Read once, at mount: the stored width is the starting point, not a live
+  // source, or a second tab would yank the column mid-read.
+  const [treeWidth, setTreeWidth] = useState(
+    () => loadDocTreeWidth() ?? DOC_TREE_DEFAULT_WIDTH,
+  );
+
   // The body last known to be on the server. The autosave compares against this
   // rather than against openDoc.body so that a failed save leaves the editor
   // dirty and keeps retrying, instead of quietly deciding it is up to date.
@@ -599,12 +623,25 @@ export function DocsPage() {
     : 0;
 
   // ---- Render --------------------------------------------------------------
+  // One surface split by a thin line, not two floating cards: the tree, the
+  // divider and the page are siblings on the page background, and the only
+  // border between them is the divider itself — which is also the control that
+  // decides how wide the tree is.
+  //
+  // `h-full` + `overflow-hidden` here rather than a change to <main>: the app
+  // shell scrolls its own padding box for every other page, and Docs is the one
+  // page that owns two independently scrolling columns.
   return (
-    <div className="flex h-full min-h-0 gap-3 overflow-hidden">
+    <div className="flex h-full min-h-0 overflow-hidden">
       {/* Document tree */}
-      <div className="hidden w-64 shrink-0 flex-col rounded-lg border border-border md:flex">
-        <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-2">
-          <h2 className="text-sm font-semibold">Documents</h2>
+      <aside
+        className="hidden min-h-0 shrink-0 flex-col pr-3 md:flex"
+        style={{ width: `${treeWidth}px` }}
+      >
+        <div className="flex items-center justify-between gap-2 pb-2">
+          <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            Documents
+          </h2>
           <Button
             type="button"
             variant="ghost"
@@ -618,7 +655,7 @@ export function DocsPage() {
           </Button>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-2">
+        <div className="min-h-0 flex-1 overflow-y-auto pb-4">
           {isLoading ? (
             <div className="space-y-2 p-1">
               <Skeleton className="h-5 w-full" />
@@ -654,13 +691,28 @@ export function DocsPage() {
             />
           )}
         </div>
-      </div>
+      </aside>
+
+      {/* The line between the two columns — and the handle that moves it.
+          Hidden below md for the same reason the tree is: there is nothing on
+          its left to resize. */}
+      <ResizableDivider
+        className="hidden md:block"
+        label="Resize document tree"
+        value={treeWidth}
+        min={DOC_TREE_MIN_WIDTH}
+        max={DOC_TREE_MAX_WIDTH}
+        defaultValue={DOC_TREE_DEFAULT_WIDTH}
+        onChange={setTreeWidth}
+        onCommit={saveDocTreeWidth}
+      />
 
       {/* Document area */}
-      <div className="flex flex-1 flex-col overflow-hidden rounded-lg border border-border">
+      <section className="flex min-w-0 flex-1 flex-col overflow-hidden md:pl-6">
         {docLoading ? (
-          <div className="space-y-3 p-6">
-            <Skeleton className="h-7 w-64" />
+          <div className="space-y-3 pt-1">
+            <Skeleton className="h-4 w-48" />
+            <Skeleton className="h-9 w-80" />
             <Skeleton className="h-4 w-full" />
             <Skeleton className="h-4 w-5/6" />
           </div>
@@ -671,11 +723,19 @@ export function DocsPage() {
           </div>
         ) : openDoc ? (
           <>
-            <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-2">
-              <h1 className="truncate text-base font-semibold">
-                {openDoc.title}
-              </h1>
-              <div className="flex shrink-0 items-center gap-2">
+            {/* Breadcrumbs and actions stay put while the page scrolls: Edit
+                must not be something you have to scroll back up to find. */}
+            <div className="shrink-0 pb-3">
+              <DocBreadcrumbs
+                documents={documents}
+                current={openDoc}
+                onNavigateRoot={() => navigate(docsPath)}
+                onNavigate={(doc) => navigate(`${docsPath}/${doc.id}`)}
+              />
+
+              {/* Actions row. The left end is deliberately empty — that is
+                  where the comments toggle goes when comments land. */}
+              <div className="mt-2 flex items-center justify-end gap-2">
                 <SaveIndicator state={saveState} onRetry={() => void flushBody()} />
                 {editing ? (
                   <Button
@@ -699,35 +759,78 @@ export function DocsPage() {
                     Edit
                   </Button>
                 )}
+                {/* Rare and destructive live behind the overflow, so the one
+                    thing you came to do stays the one obvious button. */}
+                <DropdownMenu>
+                  <DropdownMenuTrigger
+                    title="More actions"
+                    aria-label="More actions"
+                    className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+                  >
+                    <MoreHorizontal className="h-4 w-4" />
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent className="min-w-[9rem]">
+                    <DropdownMenuItem onClick={() => setRenameTarget(openDoc)}>
+                      Rename
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => setMoveTarget(openDoc)}>
+                      Move
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      onClick={() => setDeleteTarget(openDoc)}
+                      className="text-destructive"
+                    >
+                      Delete
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
               </div>
             </div>
+            {/* Outside the scroll container, as before: the notice explains why
+                the page did not jump where the link promised, and scrolling it
+                out of sight would take the explanation away with it. */}
             {!editing && anchorMatch && <AnchorNotice match={anchorMatch} />}
-            <div className="flex-1 overflow-y-auto p-4">
-              {editing ? (
-                <DocEditor value={draft} onChange={setDraft} documentId={docId} />
-              ) : draft.trim() ? (
-                <DocEditor
-                  value={draft}
-                  onChange={setDraft}
-                  readOnly
-                  anchor={anchor}
-                  onAnchorResolved={setAnchorMatch}
-                  onCopyAnchor={handleCopyAnchor}
-                />
-              ) : (
-                <div className="flex flex-col items-start gap-2">
-                  <DocEditor value={draft} onChange={setDraft} readOnly />
-                  <Button
-                    type="button"
-                    size="sm"
-                    className="h-7 gap-1 px-2 text-xs"
-                    onClick={() => setEditing(true)}
-                  >
-                    <Pencil className="h-3.5 w-3.5" />
-                    Start writing
-                  </Button>
-                </div>
-              )}
+
+            <div className="min-h-0 flex-1 overflow-y-auto">
+              {/* A flex row with one child today; the comments rail becomes the
+                  second one, beside the article rather than under it. */}
+              <div className="flex gap-8">
+                <article className="min-w-0 flex-1 pb-16 xl:max-w-4xl">
+                  <h1 className="text-2xl font-semibold tracking-tight md:text-3xl">
+                    {openDoc.title}
+                  </h1>
+                  <DocMeta doc={openDoc} className="mt-2" />
+
+                  <div className="mt-6">
+                    {editing ? (
+                      <DocEditor value={draft} onChange={setDraft} documentId={docId} />
+                    ) : draft.trim() ? (
+                      <DocEditor
+                        value={draft}
+                        onChange={setDraft}
+                        readOnly
+                        anchor={anchor}
+                        onAnchorResolved={setAnchorMatch}
+                        onCopyAnchor={handleCopyAnchor}
+                      />
+                    ) : (
+                      <div className="flex flex-col items-start gap-2">
+                        <DocEditor value={draft} onChange={setDraft} readOnly />
+                        <Button
+                          type="button"
+                          size="sm"
+                          className="h-7 gap-1 px-2 text-xs"
+                          onClick={() => setEditing(true)}
+                        >
+                          <Pencil className="h-3.5 w-3.5" />
+                          Start writing
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                </article>
+              </div>
             </div>
           </>
         ) : (
@@ -752,7 +855,7 @@ export function DocsPage() {
             </Button>
           </div>
         )}
-      </div>
+      </section>
 
       {createOpen && (
         <TitleDialog

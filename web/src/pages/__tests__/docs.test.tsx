@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router";
 
 const mockedNavigate = vi.fn();
@@ -172,6 +172,9 @@ beforeEach(() => {
   vi.mocked(toast.error).mockReset();
   useProjectStore.setState({ currentProject: PROJECT });
   useDocumentStore.getState().reset();
+  // The tree column width lives here; a width left behind by one test would
+  // otherwise be the starting width of the next.
+  localStorage.clear();
 });
 
 afterEach(() => {
@@ -375,6 +378,147 @@ describe("DocsPage — open, view and edit", () => {
     renderDocs("doc-1");
 
     expect(await screen.findByText("Document not found")).toBeInTheDocument();
+  });
+});
+
+describe("DocsPage — the page's own header", () => {
+  const parent = makeDoc({ id: "p", title: "Engineering" });
+  const child = makeDoc({ id: "c", title: "ADR-004 Document storage", parent_id: "p" });
+
+  function mockOpen(target: ProjectDocument) {
+    mockRoutes([parent, child], (path) => {
+      if (path === `/api/v1/documents/${target.id}`) {
+        return Promise.resolve({ ...target, body: "text" });
+      }
+      return undefined;
+    });
+  }
+
+  it("leads with breadcrumbs down to the open page", async () => {
+    mockOpen(child);
+    renderDocs("c");
+
+    const nav = await screen.findByRole("navigation", { name: "Breadcrumb" });
+    expect(nav).toHaveTextContent("Documents");
+    expect(nav).toHaveTextContent("Engineering");
+    expect(nav).toHaveTextContent("ADR-004 Document storage");
+  });
+
+  it("navigates to an ancestor from the breadcrumb", async () => {
+    mockOpen(child);
+    renderDocs("c");
+
+    const nav = await screen.findByRole("navigation", { name: "Breadcrumb" });
+    fireEvent.click(within(nav).getByRole("button", { name: "Engineering" }));
+    expect(mockedNavigate).toHaveBeenCalledWith("/w/acme/p/demo/docs/p");
+  });
+
+  it("shows the title as the page heading with the meta line under it", async () => {
+    mockOpen(child);
+    renderDocs("c");
+
+    expect(
+      await screen.findByRole("heading", {
+        level: 1,
+        name: "ADR-004 Document storage",
+      }),
+    ).toBeInTheDocument();
+    // updated_by is not in the API yet — the line must render regardless.
+    expect(screen.getByText(/Created by/)).toBeInTheDocument();
+    expect(screen.getByText(/Updated Aug 1, 2026/)).toBeInTheDocument();
+  });
+
+  it("keeps Edit primary and puts rename and delete behind the overflow", async () => {
+    mockOpen(child);
+    renderDocs("c");
+
+    expect(await screen.findByRole("button", { name: /^Edit$/ })).toBeInTheDocument();
+    // Closed by default: the destructive item is not one stray click away.
+    expect(screen.queryByRole("menuitem", { name: "Delete" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByLabelText("More actions"));
+    expect(screen.getByRole("menuitem", { name: "Rename" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Delete" })).toBeInTheDocument();
+  });
+
+  it("renames the open page from the overflow menu", async () => {
+    let patched: unknown;
+    mockRoutes([parent], (path, opts) => {
+      if (path === "/api/v1/documents/p" && opts?.method === "PATCH") {
+        patched = opts.body;
+        return Promise.resolve({ ...parent, title: "Platform" });
+      }
+      if (path === "/api/v1/documents/p") {
+        return Promise.resolve({ ...parent, body: "text" });
+      }
+      return undefined;
+    });
+    renderDocs("p");
+
+    fireEvent.click(await screen.findByLabelText("More actions"));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Rename" }));
+    fireEvent.change(screen.getByLabelText("Title"), {
+      target: { value: "Platform" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(patched).toEqual({ title: "Platform" }));
+    expect(
+      await screen.findByRole("heading", { level: 1, name: "Platform" }),
+    ).toBeInTheDocument();
+  });
+
+  it("deletes the open page from the overflow menu", async () => {
+    let deleted = false;
+    mockRoutes([parent], (path, opts) => {
+      if (path === "/api/v1/documents/p" && opts?.method === "DELETE") {
+        deleted = true;
+        return Promise.resolve(undefined);
+      }
+      if (path === "/api/v1/documents/p") {
+        return Promise.resolve({ ...parent, body: "text" });
+      }
+      return undefined;
+    });
+    renderDocs("p");
+
+    fireEvent.click(await screen.findByLabelText("More actions"));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Delete" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Delete" }));
+
+    await waitFor(() => expect(deleted).toBe(true));
+    expect(mockedNavigate).toHaveBeenCalledWith("/w/acme/p/demo/docs");
+  });
+});
+
+describe("DocsPage — tree column width", () => {
+  const doc = makeDoc({ id: "doc-1", title: "Runbook" });
+
+  it("starts at the stored width and writes back the one the reader drags to", async () => {
+    localStorage.setItem("mesh_docs_tree_width", "320");
+    mockRoutes([doc]);
+    renderDocs();
+
+    const handle = await screen.findByRole("separator", {
+      name: "Resize document tree",
+    });
+    expect(handle).toHaveAttribute("aria-valuenow", "320");
+
+    fireEvent.mouseDown(handle, { clientX: 320, button: 0 });
+    fireEvent.mouseMove(window, { clientX: 400 });
+    fireEvent.mouseUp(window, { clientX: 400 });
+
+    expect(handle).toHaveAttribute("aria-valuenow", "400");
+    expect(localStorage.getItem("mesh_docs_tree_width")).toBe("400");
+  });
+
+  it("falls back to the default when nothing is stored", async () => {
+    mockRoutes([doc]);
+    renderDocs();
+
+    expect(
+      await screen.findByRole("separator", { name: "Resize document tree" }),
+    ).toHaveAttribute("aria-valuenow", "280");
   });
 });
 
