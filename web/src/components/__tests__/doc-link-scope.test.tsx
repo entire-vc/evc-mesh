@@ -222,3 +222,39 @@ describe("the scope switcher", () => {
     });
   });
 });
+
+describe("the two sources are merged, not swapped", () => {
+  it("keeps a title match the server cannot find", async () => {
+    // The two matchers answer different questions. The local list matches
+    // SUBSTRINGS, so "run" finds "Deploy runbook". The server matches whole
+    // tokens over a 'simple' index, so "run" does NOT find "runbook" there.
+    //
+    // An earlier version rendered `hits ?? local`, so the moment the server
+    // answered with nothing the title matches vanished and typing the first few
+    // letters of a document's name stopped finding it. It passed locally and
+    // failed on CI, because whether the assertion ran before or after the
+    // debounce decided which list was on screen — the bug and the flake were the
+    // same bug.
+    searchDocuments.mockResolvedValue([]);
+    mount();
+    type("See [[run");
+
+    await waitFor(() => expect(searchDocuments).toHaveBeenCalled());
+    expect(await screen.findByRole("option", { name: /Deploy runbook/ })).toBeInTheDocument();
+  });
+
+  it("puts server hits first and does not repeat a document in both lists", async () => {
+    searchDocuments.mockResolvedValue([
+      { id: "doc-9", title: "Onboarding", snippet: "…", snippetIsMatch: true },
+      // The same document the local title list will also match.
+      { id: "doc-1", title: "Deploy runbook", snippet: "…", snippetIsMatch: true },
+    ]);
+    mount();
+    type("See [[run");
+
+    await waitFor(() => expect(searchDocuments).toHaveBeenCalled());
+    const options = await screen.findAllByRole("option");
+    expect(options.map((o) => o.textContent)).toHaveLength(2);
+    expect(options[0]!.textContent).toContain("Onboarding");
+  });
+});

@@ -4,6 +4,7 @@ import {
   applyDocLinkInsertion,
   documentMarkdownLink,
   linkLabel,
+  DOC_LINK_SUGGESTION_LIMIT,
   findDocLinkTrigger,
   matchDocuments,
 } from "@/lib/docs/doc-link";
@@ -51,6 +52,26 @@ export interface UseDocLinkPicker {
 
 /** How long after the last keystroke the server is asked. */
 const SEARCH_DEBOUNCE_MS = 200;
+
+/**
+ * Server hits first, then title matches that are not already in the list.
+ *
+ * Capped at the same number the local matcher uses, so the menu stays a hint
+ * rather than becoming a page of results.
+ */
+function mergeSuggestions(
+  hits: readonly DocumentSearchHit[],
+  local: readonly DocumentSearchHit[],
+): DocumentSearchHit[] {
+  const seen = new Set(hits.map((h) => h.id));
+  const merged = [...hits];
+  for (const doc of local) {
+    if (seen.has(doc.id)) continue;
+    seen.add(doc.id);
+    merged.push(doc);
+  }
+  return merged.slice(0, DOC_LINK_SUGGESTION_LIMIT);
+}
 
 export function useDocLinkPicker(
   projectId: string | undefined,
@@ -104,20 +125,28 @@ export function useDocLinkPicker(
     };
   }, [trigger, projectId]);
 
-  // Two sources, and which one answers is the whole point of this unit.
+  // Two sources, MERGED — not one replacing the other.
   //
-  // The already-loaded title list answers instantly and is what makes the menu
-  // browsable the moment `[[` is typed — a picker that shows nothing until a
-  // request returns feels broken. The server answers the question titles cannot:
-  // where a phrase appears INSIDE a document.
+  // The local title list matches substrings, so `[[run` finds "Deploy runbook"
+  // the moment it is typed. The server matches whole tokens
+  // (plainto_tsquery over a 'simple' index), so `run` does NOT find "runbook"
+  // there — it answers a different question: where a phrase appears INSIDE a
+  // document.
   //
-  // So the local list is shown first and replaced by hits when they arrive. The
-  // Team Relay scope has no local list at all; there the menu is empty until the
-  // search returns, which is honest — we genuinely know nothing about that vault
-  // until we ask.
+  // An earlier version showed `hits ?? local`, which looked right and was not:
+  // as soon as the server answered with zero results the title matches
+  // disappeared, so typing the first few letters of a document's name — the most
+  // common thing anyone does here — stopped finding it. Worse, it passed locally
+  // and failed on CI, because whether the assertion ran before or after the
+  // debounce decided which list was on screen.
+  //
+  // Server hits come first (they are the ones with evidence attached) and the
+  // title matches fill the rest, deduped by id.
+  const localMatches =
+    trigger && scope === "docs" ? matchDocuments(documents, trigger.query) : [];
   const suggestions = !trigger
     ? []
-    : hits ?? (scope === "docs" ? matchDocuments(documents, trigger.query) : []);
+    : mergeSuggestions(hits ?? [], localMatches);
 
   // Ask the server. Debounced, and only once there is something to ask about:
   // an empty query is refused by the API, and firing it on every `[[` would put
