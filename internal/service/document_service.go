@@ -102,8 +102,8 @@ func (s *documentService) Create(ctx context.Context, input CreateDocumentInput)
 	id := uuid.New()
 
 	if input.ParentID != nil {
-		if err = s.requireParentInProject(ctx, *input.ParentID, input.ProjectID); err != nil {
-			return nil, err
+		if perr := s.requireParentInProject(ctx, *input.ParentID, input.ProjectID); perr != nil {
+			return nil, perr
 		}
 	}
 
@@ -213,8 +213,8 @@ func (s *documentService) Update(ctx context.Context, id, workspaceID uuid.UUID,
 				"parent_id": "a document cannot be its own parent",
 			})
 		}
-		if err = s.requireParentInProject(ctx, *input.ParentID, doc.ProjectID); err != nil {
-			return nil, err
+		if perr := s.requireParentInProject(ctx, *input.ParentID, doc.ProjectID); perr != nil {
+			return nil, perr
 		}
 		// A document moved under one of its own descendants takes the whole
 		// subtree out of the tree: the cycle is reachable from nothing that walks
@@ -255,8 +255,8 @@ func (s *documentService) Update(ctx context.Context, id, workspaceID uuid.UUID,
 	}
 
 	doc.UpdatedAt = timeNow()
-	if err = s.documentRepo.Update(ctx, doc); err != nil {
-		return nil, err
+	if upErr := s.documentRepo.Update(ctx, doc); upErr != nil {
+		return nil, upErr
 	}
 
 	return doc, nil
