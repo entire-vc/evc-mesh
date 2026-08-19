@@ -31,6 +31,18 @@ function escapeHtml(text: string): string {
 }
 
 // Render inline markdown: bold, italic, code, links, images, @mentions
+/**
+ * Is this a path into this app rather than somewhere else?
+ *
+ * Root-relative only: a protocol-relative `//host/x` is another origin wearing a
+ * leading slash, and treating it as internal would hand it to the router, which
+ * would then render a route that does not exist. A bare `#fragment` is not a
+ * route either.
+ */
+function isInternalRoute(url: string): boolean {
+  return url.startsWith("/") && !url.startsWith("//");
+}
+
 function renderInline(
   text: string,
   mentionables?: Map<string, MentionEntry>,
@@ -55,6 +67,15 @@ function renderInline(
       const decoded = url.replace(/&amp;/g, "&");
       const isSafe = /^(https?:\/\/|\/|#|mailto:)/i.test(decoded);
       if (!isSafe) return `${linkText} (${url})`;
+      // A link to a route of this app is not an external link and must not be
+      // treated as one. Rendered with target="_blank" it leaves the app, full
+      // page load and all, in a tab the reader did not ask for — measured, and
+      // the reason a document link inserted into a task description could not
+      // simply be a link until now. Marked for the click handler below, which
+      // navigates in place.
+      if (isInternalRoute(decoded)) {
+        return `<a href="${url}" class="internal-link text-primary underline underline-offset-2 hover:text-primary/80">${linkText}</a>`;
+      }
       return `<a href="${url}" target="_blank" rel="noopener noreferrer" class="text-primary underline underline-offset-2 hover:text-primary/80">${linkText}</a>`;
     },
   );
@@ -260,8 +281,14 @@ export function MarkdownRenderer({
     (e: React.MouseEvent<HTMLDivElement>) => {
       if (handleArtifactLinkClick(e)) return;
       const target = e.target as HTMLElement;
-      const link = target.closest("a.mention-link");
+      // Mentions and in-app routes both navigate in place. They are one branch
+      // because they are one behaviour — the class names differ only so the
+      // markup says which kind of link it is.
+      const link = target.closest("a.mention-link, a.internal-link");
       if (link instanceof HTMLAnchorElement) {
+        // A modified click is the reader deliberately asking for a new tab or
+        // window; taking that over would be worse than the bug this fixes.
+        if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
         e.preventDefault();
         void navigate(link.getAttribute("href") ?? "/");
       }

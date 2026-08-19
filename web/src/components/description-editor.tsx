@@ -9,6 +9,8 @@ import {
 import { Bold, BookOpen, Code, Image as ImageIcon, Italic, Link, Paperclip } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { RelayDocPicker } from "@/components/RelayDocPicker";
+import { DocLinkMenu } from "@/components/doc-link-menu";
+import { useDocLinkPicker } from "@/hooks/use-doc-link-picker";
 import { useProjectTrIntegration } from "@/hooks/useProjectTrIntegration";
 import { uploadArtifact } from "@/components/markdown-editor";
 import { toast } from "@/components/ui/toast";
@@ -218,6 +220,10 @@ export function DescriptionEditor({
   valueRef.current = value;
 
   const { enabled: hasTrIntegration } = useProjectTrIntegration(projId);
+
+  // `[[` links a document from this project. Not gated on an integration the way
+  // the Relay picker is: our own documents are always there.
+  const docLinks = useDocLinkPicker(projId, value, onChange, textareaRef);
 
   // Auto-resize textarea height
   const autoResize = useCallback(() => {
@@ -510,8 +516,18 @@ export function DescriptionEditor({
             onChange={(e) => {
               onChange(e.target.value);
               autoResize();
+              docLinks.onValueChange(
+                e.target.value,
+                e.target.selectionStart ?? e.target.value.length,
+              );
             }}
-            onBlur={() => onChange(value)}
+            onKeyDown={(e) => {
+              docLinks.onKeyDown(e);
+            }}
+            onBlur={() => {
+              docLinks.close();
+              onChange(value);
+            }}
             onPaste={handlePaste}
             onDragOver={handleDragOver}
             onDragLeave={handleDragLeave}
@@ -521,6 +537,14 @@ export function DescriptionEditor({
             className="block w-full resize-none bg-transparent px-3 py-2.5 font-mono text-xs leading-relaxed text-foreground placeholder:text-muted-foreground focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
             style={{ minHeight: "120px" }}
           />
+          {docLinks.trigger && (
+            <DocLinkMenu
+              suggestions={docLinks.suggestions}
+              activeIndex={docLinks.activeIndex}
+              onPick={docLinks.pick}
+              onHover={docLinks.setActiveIndex}
+            />
+          )}
           {dragOver && (
             <div className="pointer-events-none absolute inset-0 flex items-center justify-center rounded-b-lg border-2 border-dashed border-primary bg-primary/5">
               <span className="text-sm font-medium text-primary">Drop files to attach</span>
