@@ -19,6 +19,12 @@ import {
   Unlink,
 } from "lucide-react";
 import { DocEditor } from "@/components/doc-editor";
+import {
+  CommentComposer,
+  CommentThreadList,
+  SelectionCommentButton,
+} from "@/components/doc-comments";
+import { useDocComments } from "@/hooks/use-doc-comments";
 import { DocTree, moveTargets } from "@/components/doc-tree";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { Button } from "@/components/ui/button";
@@ -40,6 +46,7 @@ import {
   anchorFromHash,
   anchorToHash,
 } from "@/lib/docs/anchor";
+import { useAuthStore } from "@/stores/auth";
 import { useDocumentStore } from "@/stores/document";
 import { useProjectStore } from "@/stores/project";
 import type { ProjectDocument } from "@/types";
@@ -333,6 +340,7 @@ export function DocsPage() {
   const location = useLocation();
   const navigate = useNavigate();
   const { currentProject } = useProjectStore();
+  const currentUser = useAuthStore((state) => state.user);
   const {
     documents,
     isLoading,
@@ -354,6 +362,9 @@ export function DocsPage() {
   const [editing, setEditing] = useState(false);
   const [saveState, setSaveState] = useState<SaveState>({ status: "idle" });
   const [anchorMatch, setAnchorMatch] = useState<AnchorMatch | null>(null);
+  // The rendered body, handed over by the viewer. Comment anchors are resolved
+  // and painted against it — see useDocComments.
+  const [surface, setSurface] = useState<HTMLElement | null>(null);
 
   const [createUnder, setCreateUnder] = useState<ProjectDocument | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
@@ -498,6 +509,12 @@ export function DocsPage() {
     },
     [docId, docsPath],
   );
+
+  // ---- Comments ------------------------------------------------------------
+  // Suspended while editing: a comment is anchored to the text as published, and
+  // a half-typed paragraph is not that text yet. The anchors are re-resolved the
+  // moment the reader returns to view mode.
+  const comments = useDocComments(docId, surface, draft, !!openDoc && !editing);
 
   const handleDone = useCallback(() => {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
@@ -702,7 +719,12 @@ export function DocsPage() {
               </div>
             </div>
             {!editing && anchorMatch && <AnchorNotice match={anchorMatch} />}
-            <div className="flex-1 overflow-y-auto p-4">
+            {comments.error && (
+              <p className="border-b border-border bg-destructive/10 px-4 py-1.5 text-xs text-destructive">
+                {comments.error}
+              </p>
+            )}
+            <div className="relative flex-1 overflow-y-auto p-4">
               {editing ? (
                 <DocEditor value={draft} onChange={setDraft} documentId={docId} />
               ) : draft.trim() ? (
@@ -713,6 +735,7 @@ export function DocsPage() {
                   anchor={anchor}
                   onAnchorResolved={setAnchorMatch}
                   onCopyAnchor={handleCopyAnchor}
+                  onSurface={setSurface}
                 />
               ) : (
                 <div className="flex flex-col items-start gap-2">
@@ -728,7 +751,41 @@ export function DocsPage() {
                   </Button>
                 </div>
               )}
+
+              {comments.selection && (
+                <SelectionCommentButton
+                  top={comments.selection.spot.top}
+                  left={comments.selection.spot.left}
+                  onClick={comments.beginComment}
+                />
+              )}
+              {comments.pending && (
+                <CommentComposer
+                  quote={comments.pending.quote}
+                  top={comments.pending.spot.top}
+                  left={comments.pending.spot.left}
+                  busy={comments.busy}
+                  onSubmit={(text) => void comments.submitComment(text)}
+                  onCancel={comments.cancelComment}
+                />
+              )}
             </div>
+
+            {!editing && (
+              <div className="max-h-64 shrink-0 overflow-y-auto">
+                <CommentThreadList
+                  threads={comments.threads}
+                  currentActorId={currentUser?.id ?? null}
+                  onReply={(rootId, text) => void comments.reply(rootId, text)}
+                  onEdit={(id, text) => void comments.edit(id, text)}
+                  onDelete={(id) => void comments.remove(id)}
+                  onToggleResolved={(rootId, resolved) =>
+                    void comments.setResolved(rootId, resolved)
+                  }
+                  onFocusThread={comments.focusThread}
+                />
+              </div>
+            )}
           </>
         ) : (
           <div className="flex flex-1 flex-col items-center justify-center gap-2 overflow-y-auto p-6 text-center">

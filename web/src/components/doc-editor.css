@@ -309,3 +309,23 @@
     background-color: transparent;
   }
 }
+
+/* ---- commented ranges ----
+   Painted with the CSS Custom Highlight API rather than by wrapping words in
+   elements: the document is a ProseMirror tree that owns its own DOM, and markup
+   inserted into it is either reconciled away or — worse — kept and written back
+   into the saved body. A highlight draws over a Range and mutates nothing.
+
+   Only threads whose anchor still resolves to their own words are painted (see
+   useDocComments). A thread whose text was edited or deleted is listed and
+   flagged instead: drawing it over whatever now occupies those coordinates is
+   precisely the failure the anchor scheme exists to prevent. */
+
+::highlight(mesh-doc-comment) {
+  background-color: hsl(var(--primary) / 0.16);
+}
+
+/* The thread the reader just jumped to, until the jump stops being news. */
+::highlight(mesh-doc-comment-active) {
+  background-color: hsl(var(--primary) / 0.34);
+}

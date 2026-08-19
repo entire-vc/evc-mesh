@@ -85,6 +85,18 @@ export interface DocEditorProps {
    * turns it into a URL, because the route is the page's business.
    */
   onCopyAnchor?: (anchor: DocAnchor) => void;
+  /**
+   * The rendered surface, handed over once the editor has one and again as null
+   * when it goes away.
+   *
+   * This is the seam for anything that has to reason about the text as the
+   * reader sees it — today, comment anchors: which words a selection covers, and
+   * where a stored range is now. That work needs a DOM element and nothing else
+   * from the editor, so it lives outside rather than growing a prop per feature
+   * (see useDocComments). Handing out the element is also what keeps the editor
+   * from acquiring an opinion about comments.
+   */
+  onSurface?: (surface: HTMLElement | null) => void;
 }
 
 // The prose classes are shared by the editor and the viewer on purpose: they are
@@ -209,6 +221,7 @@ function MilkdownDoc({
   anchor,
   onAnchorResolved,
   onCopyAnchor,
+  onSurface,
 }: DocEditorProps) {
   const navigate = useNavigate();
   const containerRef = useRef<HTMLDivElement>(null);
@@ -433,6 +446,18 @@ function MilkdownDoc({
     // `value` is here because the body arrives after the first render: the
     // document loads empty and is filled in once the fetch lands.
   }, [anchorKey, anchor, loading, readOnly, value, withView]);
+
+  // Hand the rendered surface out once it exists, and take it back when the view
+  // is torn down — a stale element would have its holder painting highlights onto
+  // a detached tree, silently and forever.
+  const onSurfaceRef = useRef(onSurface);
+  onSurfaceRef.current = onSurface;
+  useEffect(() => {
+    if (loading) return;
+    const surface = withView((view) => view.dom as HTMLElement);
+    onSurfaceRef.current?.(surface ?? null);
+    return () => onSurfaceRef.current?.(null);
+  }, [loading, withView]);
 
   // The highlight is a transient, so it must not outlive the view that owns it.
   useEffect(() => {
@@ -696,6 +721,7 @@ export function DocEditor({
   anchor,
   onAnchorResolved,
   onCopyAnchor,
+  onSurface,
 }: DocEditorProps) {
   if (readOnly && !value.trim()) {
     return <p className="text-sm text-muted-foreground">This page is empty.</p>;
@@ -715,6 +741,7 @@ export function DocEditor({
         anchor={anchor}
         onAnchorResolved={onAnchorResolved}
         onCopyAnchor={onCopyAnchor}
+        onSurface={onSurface}
       />
     </MilkdownProvider>
   );
