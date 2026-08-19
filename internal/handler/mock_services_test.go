@@ -1112,3 +1112,49 @@ func (m *MockDocumentService) Search(ctx context.Context, projectID, workspaceID
 	}
 	return nil, nil
 }
+
+// MockProjectIntegrationService is a service.ProjectIntegrationService whose
+// every method is a swappable func, so a test names only the behaviour it is
+// about.
+type MockProjectIntegrationService struct {
+	GetTeamRelayFunc    func(ctx context.Context, projectID uuid.UUID) (*domain.ProjectIntegration, error)
+	UpsertTeamRelayFunc func(ctx context.Context, projectID uuid.UUID, input service.UpsertProjectIntegrationInput) (*domain.ProjectIntegration, error)
+	DeleteTeamRelayFunc func(ctx context.Context, projectID uuid.UUID) error
+	ListFunc            func(ctx context.Context, projectID uuid.UUID) ([]domain.ProjectIntegration, error)
+	SearchTRFunc        func(ctx context.Context, shareSlug, q string, limit int) ([]domain.RelayFileItem, error)
+}
+
+func (m *MockProjectIntegrationService) GetTeamRelay(ctx context.Context, projectID uuid.UUID) (*domain.ProjectIntegration, error) {
+	if m.GetTeamRelayFunc != nil {
+		return m.GetTeamRelayFunc(ctx, projectID)
+	}
+	return nil, nil
+}
+
+func (m *MockProjectIntegrationService) UpsertTeamRelay(ctx context.Context, projectID uuid.UUID, input service.UpsertProjectIntegrationInput) (*domain.ProjectIntegration, error) {
+	if m.UpsertTeamRelayFunc != nil {
+		return m.UpsertTeamRelayFunc(ctx, projectID, input)
+	}
+	return nil, nil
+}
+
+func (m *MockProjectIntegrationService) DeleteTeamRelay(ctx context.Context, projectID uuid.UUID) error {
+	if m.DeleteTeamRelayFunc != nil {
+		return m.DeleteTeamRelayFunc(ctx, projectID)
+	}
+	return nil
+}
+
+func (m *MockProjectIntegrationService) List(ctx context.Context, projectID uuid.UUID) ([]domain.ProjectIntegration, error) {
+	if m.ListFunc != nil {
+		return m.ListFunc(ctx, projectID)
+	}
+	return nil, nil
+}
+
+func (m *MockProjectIntegrationService) SearchTR(ctx context.Context, shareSlug, q string, limit int) ([]domain.RelayFileItem, error) {
+	if m.SearchTRFunc != nil {
+		return m.SearchTRFunc(ctx, shareSlug, q, limit)
+	}
+	return nil, nil
+}

@@ -542,7 +542,7 @@ func main() {
 	mentionHandler := handler.NewMentionHandler(mentionService)
 	projectIntegrationHandler := handler.NewProjectIntegrationHandler(projectIntegrationService)
 	trSearchHandler := handler.NewTrSearchHandler(projectIntegrationService)
-	trPreviewURLHandler := handler.NewTrPreviewURLHandler(projectIntegrationService)
+	trDocumentHandler := handler.NewTrDocumentHandler(projectIntegrationService)
 	canonicalUpdatesHandler := handler.NewCanonicalUpdatesHandler(memoryService, sessionRepo, agentService)
 	mentionablesService := service.NewMentionablesService(agentRepo, userRepo)
 	mentionablesHandler := handler.NewMentionablesHandler(mentionablesService)
@@ -1083,7 +1083,10 @@ func main() {
 
 	// TR document search and authenticated preview-url resolution (Team Relay share contents).
 	api.GET("/projects/:proj_id/tr/search", trSearchHandler.Search, projAccess)
-	api.GET("/projects/:proj_id/tr/preview-url", trPreviewURLHandler.Get, projAccess)
+	// The Team Relay document is read server-side and rendered by our own editor
+	// (D10). The route it replaces resolved an iframe src for an embedded
+	// TeamRelay page; the iframe, its 6s timeout and its dead end are gone with it.
+	api.GET("/projects/:proj_id/tr/document", trDocumentHandler.Get, projAccess)
 
 	// Analytics routes.
 	api.GET("/workspaces/:ws_id/analytics", analyticsHandler.GetMetrics)

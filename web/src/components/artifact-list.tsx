@@ -156,33 +156,23 @@ export function ArtifactList({ taskId, refreshKey, projId, onRelayDocSelect }: A
     [handleUploadFiles],
   );
 
-  // Open = for TR private-share artifacts, resolve an authenticated URL through
-  // the preview-url endpoint, which mints a short-lived embed token server-side.
-  // For non-TR artifacts, use the S3 presigned URL.
+  // Open = a Team Relay artifact opens in Team Relay; anything else opens through
+  // its S3 presigned URL.
   //
-  // This used to take a "fast path" when metadata carried tr_agent_key, building
-  // the URL client-side with ?agent_key=. That path was already unreachable — the
-  // API redacts tr_agent_key — and it is now impossible: the key is no longer
-  // stored on the artifact at all. Reading it here only hid the fact that the
-  // server-side branch is the one that always runs.
+  // It used to ask the server to mint a short-lived embed token first and open
+  // THAT. The token existed to authenticate an <iframe> we embedded, and the
+  // iframe is gone (D10) — a Team Relay document is now read and rendered by our
+  // own editor. Minting an embed token to open a new browser tab was the last
+  // caller of that machinery, and keeping a credential-minting endpoint alive for
+  // it would have left exactly the orphan this unit set out to remove.
+  //
+  // Named change, not a silent one: on a PRIVATE share the reader previously got
+  // an authenticated view via that token and now gets Team Relay's own page,
+  // where they sign in as themselves. That is what every other "Open in Team
+  // Relay" control in this product already does, and it is the correct party to
+  // be deciding whether this person may read that share.
   const handleOpen = async (artifactId: string, trPublicUrl?: string) => {
     if (trPublicUrl) {
-      if (projId) {
-        try {
-          const relayUrl =
-            "relay://" + new URL(trPublicUrl).pathname.replace(/^\/+/, "");
-          const prev = await api<{ available: boolean; iframe_src?: string }>(
-            `/api/v1/projects/${projId}/tr/preview-url?relay_url=${encodeURIComponent(relayUrl)}`,
-          );
-          if (prev.available && prev.iframe_src) {
-            window.open(prev.iframe_src, "_blank");
-            return;
-          }
-        } catch {
-          // fall through
-        }
-      }
-      // Public share or preview-url unavailable — open bare URL.
       window.open(trPublicUrl, "_blank");
       return;
     }
