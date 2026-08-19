@@ -54,7 +54,23 @@ import {
   makeAnchor,
   resolveAnchor,
 } from "@/lib/docs/anchor";
+import { toast } from "@/components/ui/toast";
 import "@/components/doc-editor.css";
+
+/**
+ * Tell the user an upload failed, by name.
+ *
+ * Every failure on this path used to be swallowed: the toolbar handler ran as
+ * `void insertUploaded(...)` with no catch, and the drag/drop uploader rejected
+ * into Milkdown's plugin, which logs to the console and leaves its "Upload in
+ * progress..." decoration on screen forever. Both produced the same thing for
+ * the user — they picked a file and the document did not change — which is
+ * indistinguishable from the button being dead.
+ */
+function reportUploadFailure(file: File, err: unknown): void {
+  const detail = err instanceof Error ? err.message : "upload failed";
+  toast.error(`Could not attach ${file.name}`, { description: detail });
+}
 
 export interface DocEditorProps {
   /** Markdown source of the document. */
@@ -252,7 +268,18 @@ function MilkdownDoc({
       if (!uploadTarget) return [];
       const nodes: ProseNode[] = [];
       for (const file of files) {
-        const url = await uploadTarget(file);
+        // Caught per file rather than around the loop: Milkdown's upload plugin
+        // treats a rejected uploader as "log it and walk away", which strands
+        // its placeholder decoration in the document. Answering with the files
+        // that did succeed keeps the plugin's own bookkeeping intact, and the
+        // toast is what stops a failure from being silent.
+        let url: string;
+        try {
+          url = await uploadTarget(file);
+        } catch (err) {
+          reportUploadFailure(file, err);
+          continue;
+        }
         if (file.type.startsWith("image/")) {
           const node = schema.nodes.image?.createAndFill({
             src: url,
@@ -462,7 +489,15 @@ function MilkdownDoc({
       setUploading(true);
       try {
         for (const file of files) {
-          const url = await uploadTarget(file);
+          let url: string;
+          try {
+            url = await uploadTarget(file);
+          } catch (err) {
+            // One bad file does not cancel the rest of the selection, and the
+            // user hears about it either way.
+            reportUploadFailure(file, err);
+            continue;
+          }
           editor.action((ctx) => {
             const view = ctx.get(editorViewCtx);
             const { schema } = view.state;

@@ -1,4 +1,4 @@
-import { beforeAll, describe, it, expect, vi } from "vitest";
+import { beforeAll, beforeEach, describe, it, expect, vi } from "vitest";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import { DocEditor } from "@/components/doc-editor";
@@ -10,6 +10,18 @@ vi.mock("@/lib/api", () => ({
   api: vi.fn(),
   getAccessToken: vi.fn(() => null),
 }));
+
+vi.mock("@/components/ui/toast", () => ({
+  toast: Object.assign(vi.fn(), { error: vi.fn(), success: vi.fn(), info: vi.fn() }),
+}));
+
+vi.mock("@/lib/document-attachments", () => ({
+  uploadDocumentAttachment: vi.fn(),
+}));
+
+import { api } from "@/lib/api";
+import { toast } from "@/components/ui/toast";
+import { uploadDocumentAttachment } from "@/lib/document-attachments";
 
 function renderInRouter(ui: React.ReactElement) {
   return render(<MemoryRouter>{ui}</MemoryRouter>);
@@ -44,6 +56,12 @@ Cited[^n].
 `;
 
 describe("DocEditor", () => {
+  beforeEach(() => {
+    vi.mocked(api).mockReset();
+    vi.mocked(uploadDocumentAttachment).mockReset();
+    vi.mocked(toast.error).mockReset();
+  });
+
   it("says so when a read-only document has no body", () => {
     renderInRouter(<DocEditor value="   " onChange={vi.fn()} readOnly />);
 
@@ -141,6 +159,68 @@ describe("DocEditor", () => {
 
     expect(screen.queryByTitle(/insert image/i)).not.toBeInTheDocument();
     expect(screen.queryByTitle(/attach file/i)).not.toBeInTheDocument();
+  });
+
+  // The reported bug, in the form the user meets it: the picker opens, a file
+  // is chosen, the upload is refused by the server — and the document is
+  // unchanged with nothing on screen to say why. Every failure in this path was
+  // swallowed (an unhandled rejection off `void insertUploaded(...)`), so
+  // "nothing happens" was the whole of the user-visible behaviour.
+  it("tells the user when a picked file fails to upload", async () => {
+    vi.mocked(uploadDocumentAttachment).mockRejectedValue(new Error("insufficient permissions"));
+    const onChange = vi.fn();
+    const { container } = renderInRouter(
+      <DocEditor value="hello" onChange={onChange} documentId="doc-1" />,
+    );
+    await surface(container);
+
+    const picker = container.querySelector<HTMLInputElement>(
+      'input[type="file"][accept="image/*"]',
+    );
+    if (!picker) throw new Error("image picker missing");
+    fireEvent.change(picker, {
+      target: { files: [new File(["x"], "pic.png", { type: "image/png" })] },
+    });
+
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalled();
+    });
+    expect(String(vi.mocked(toast.error).mock.calls[0]?.[0])).toMatch(/pic\.png/);
+    // The failure must not leave the "Uploading..." indicator behind either.
+    expect(screen.queryByText(/Uploading/i)).not.toBeInTheDocument();
+  });
+
+  // An attachment link cannot be followed as an href — the download endpoint
+  // needs an Authorization header, and the path is not an app route. Before the
+  // fix the click fell through to the router, which navigated the whole SPA
+  // away from the document the user was reading.
+  it("opens an attached file rather than navigating the app to the API path", async () => {
+    vi.mocked(api).mockResolvedValue({ url: "https://s3.example/presigned" });
+    const openSpy = vi.fn();
+    vi.stubGlobal("open", openSpy);
+
+    const { container } = renderInRouter(
+      <DocEditor
+        value={"[spec.pdf](/api/v1/document-attachments/att-9/download?disposition=inline)"}
+        onChange={vi.fn()}
+        readOnly
+      />,
+    );
+    const el = await surface(container);
+    const link = within(el).getByText("spec.pdf").closest("a");
+    if (!link) throw new Error("attachment link missing");
+
+    fireEvent.click(link);
+
+    await waitFor(() => {
+      expect(api).toHaveBeenCalledWith(
+        "/api/v1/document-attachments/att-9/download?disposition=inline",
+      );
+    });
+    await waitFor(() => {
+      expect(openSpy).toHaveBeenCalledWith("https://s3.example/presigned", "_blank");
+    });
+    vi.unstubAllGlobals();
   });
 
   it("takes in a document changed from outside without being re-created", async () => {
