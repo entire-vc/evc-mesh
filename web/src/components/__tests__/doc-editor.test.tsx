@@ -28,9 +28,9 @@ describe("DocEditor", () => {
     expect(screen.getByText("This page is empty.")).toBeInTheDocument();
   });
 
-  it("edits through a single onChange, and does not offer task attachments", () => {
+  it("edits through a single onChange, and never shows the task-editor footer", () => {
     const onChange = vi.fn();
-    renderInRouter(<DocEditor value="hello" onChange={onChange} />);
+    renderInRouter(<DocEditor value="hello" onChange={onChange} documentId="doc-1" />);
 
     const textbox = screen.getByRole("textbox");
     expect(textbox).toHaveValue("hello");
@@ -38,12 +38,26 @@ describe("DocEditor", () => {
     fireEvent.change(textbox, { target: { value: "hello there" } });
     expect(onChange).toHaveBeenCalledWith("hello there");
 
-    // The task-editor footer ("uploads after task is saved") makes no sense on
-    // a document — the boundary replaces it, and the attachment buttons that
-    // would need a task id are gone rather than dead.
-    expect(screen.getByText("Markdown supported")).toBeInTheDocument();
+    // "uploads after task is saved" makes no sense on a document, whatever the
+    // upload affordances do — the boundary replaces that footer outright.
     expect(screen.queryByText(/after task is saved/)).not.toBeInTheDocument();
-    expect(screen.queryByTitle(/attach file/i)).not.toBeInTheDocument();
+  });
+
+  // The two halves of the same rule, and both are needed: asserting only the
+  // absence would keep passing if the buttons were removed altogether, and
+  // asserting only the presence would keep passing if they were shown on a
+  // document that does not exist yet — where an upload has nothing to attach to.
+  it("offers attachments once the document exists", () => {
+    renderInRouter(<DocEditor value="hello" onChange={vi.fn()} documentId="doc-1" />);
+
+    expect(screen.getByTitle(/insert image/i)).toBeInTheDocument();
+    expect(screen.getByTitle(/attach file/i)).toBeInTheDocument();
+  });
+
+  it("drops the attachment affordances while there is no document to own the bytes", () => {
+    renderInRouter(<DocEditor value="hello" onChange={vi.fn()} />);
+
     expect(screen.queryByTitle(/insert image/i)).not.toBeInTheDocument();
+    expect(screen.queryByTitle(/attach file/i)).not.toBeInTheDocument();
   });
 });

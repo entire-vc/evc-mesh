@@ -3,6 +3,7 @@ import {
   type DragEvent,
   type KeyboardEvent,
   useCallback,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -23,7 +24,8 @@ import { Button } from "@/components/ui/button";
 import { MarkdownRenderer } from "@/components/markdown-renderer";
 import { RelayDocPicker } from "@/components/RelayDocPicker";
 import { getAccessToken } from "@/lib/api";
-import { artifactDownloadPath } from "@/lib/artifact-links";
+import { artifactDownloadPath, documentAttachmentDownloadPath } from "@/lib/artifact-links";
+import { uploadDocumentAttachment } from "@/lib/document-attachments";
 import type { Artifact, ArtifactType } from "@/types";
 
 // Pending image: clipboard File + placeholder text used before upload
@@ -37,6 +39,13 @@ interface MarkdownEditorProps {
   onChange: (value: string) => void;
   /** Present when editing an existing task — enables immediate image upload */
   taskId?: string;
+  /**
+   * Present when editing a document body — uploads become document attachments
+   * instead of task artifacts. Mutually exclusive with taskId in practice; if
+   * both arrive, the document wins, because that is the owner of the text being
+   * edited.
+   */
+  documentId?: string;
   projectId?: string;
   projectSettings?: Record<string, unknown>;
   placeholder?: string;
@@ -48,9 +57,9 @@ interface MarkdownEditorProps {
    */
   hint?: string;
   /**
-   * Attachments ride on the task artifact API, so they are unavailable when
-   * there is no task. Set false to drop the affordances entirely rather than
-   * offer buttons that insert a placeholder nothing will ever replace.
+   * Set false to drop the upload affordances entirely, rather than offer buttons
+   * that insert a placeholder nothing will ever replace. Only needed where there
+   * is neither a task nor a document to own the bytes.
    */
   attachments?: boolean;
   /** Callback fired after a file is successfully uploaded as artifact */
@@ -163,6 +172,7 @@ export function MarkdownEditor({
   value,
   onChange,
   taskId,
+  documentId,
   projectId,
   projectSettings,
   placeholder = "Write a description... (Markdown supported)",
@@ -274,6 +284,40 @@ export function MarkdownEditor({
   // ---------------------------------------------------------------------------
   // Clipboard paste: detect image files
   // ---------------------------------------------------------------------------
+  // Where uploaded bytes go.
+  //
+  // One seam rather than an `if (taskId) … else if (documentId) …` at each of the
+  // four upload sites (paste, picker, drop, toolbar state). Both owners answer
+  // the same two questions — where to POST the file, and what stable path to
+  // write into the markdown — and the rest of the editor only needs the answers.
+  //
+  // `null` means there is no owner yet: the task-create flow, where files are
+  // held as pending images until the task exists. A document is never in that
+  // state, because the Docs page creates the row before it can be edited.
+  // ---------------------------------------------------------------------------
+  const uploadTarget = useMemo(() => {
+    if (documentId) {
+      return {
+        upload: async (file: File) => {
+          const att = await uploadDocumentAttachment(documentId, file);
+          // No Artifact to hand back: onArtifactUploaded is a task-side
+          // affordance (it refreshes the task's attachment list), and a document
+          // has no such list on screen.
+          return { url: documentAttachmentDownloadPath(att.id), artifact: null };
+        },
+      };
+    }
+    if (taskId) {
+      return {
+        upload: async (file: File) => {
+          const artifact = await uploadArtifact(taskId, file);
+          return { url: artifactDownloadPath(artifact.id), artifact };
+        },
+      };
+    }
+    return null;
+  }, [documentId, taskId]);
+
   const handlePaste = useCallback(
     async (e: ClipboardEvent<HTMLTextAreaElement>) => {
       if (!attachments) return;
@@ -291,18 +335,17 @@ export function MarkdownEditor({
       const fileName = `pasted-image-${Date.now()}.${ext}`;
       const renamedFile = new File([file], fileName, { type: file.type });
 
-      if (taskId) {
-        // Task exists — upload immediately and insert real URL
+      if (uploadTarget) {
+        // The owner exists — upload immediately and insert the real path
         setUploading(true);
         const placeholder = `![Uploading ${fileName}...]()`;
         insertText(placeholder);
 
         try {
-          const artifact = await uploadArtifact(taskId, renamedFile);
-          const imageUrl = artifactDownloadPath(artifact.id);
+          const { url: imageUrl, artifact } = await uploadTarget.upload(renamedFile);
           const finalMd = `![${fileName}](${imageUrl})`;
           onChange(valueRef.current.replace(placeholder, finalMd));
-          notifyUploaded(artifact);
+          if (artifact) notifyUploaded(artifact);
         } catch (err) {
           onChange(
             valueRef.current.replace(
@@ -314,13 +357,13 @@ export function MarkdownEditor({
           setUploading(false);
         }
       } else {
-        // No taskId yet (create flow) — insert placeholder and notify parent
+        // No owner yet (task-create flow) — insert placeholder and notify parent
         const placeholder = `![${fileName}](pending:${fileName})`;
         insertText(placeholder);
         onPendingImage?.({ file: renamedFile, placeholder });
       }
     },
-    [attachments, taskId, onChange, insertText, notifyUploaded, onPendingImage],
+    [attachments, uploadTarget, onChange, insertText, notifyUploaded, onPendingImage],
   );
 
   // ---------------------------------------------------------------------------
@@ -337,7 +380,7 @@ export function MarkdownEditor({
     async (file: File) => {
       const image = isImageFile(file);
 
-      if (!taskId) {
+      if (!uploadTarget) {
         if (image) {
           const placeholder = `![${file.name}](pending:${file.name})`;
           insertText(placeholder);
@@ -354,13 +397,12 @@ export function MarkdownEditor({
       insertText(placeholder);
 
       try {
-        const artifact = await uploadArtifact(taskId, file);
-        const url = artifactDownloadPath(artifact.id);
+        const { url, artifact } = await uploadTarget.upload(file);
         const finalMd = image
           ? `![${file.name}](${url})`
           : `[${file.name}](${url})`;
         onChange(valueRef.current.replace(placeholder, finalMd));
-        notifyUploaded(artifact);
+        if (artifact) notifyUploaded(artifact);
       } catch (err) {
         onChange(
           valueRef.current.replace(
@@ -372,7 +414,7 @@ export function MarkdownEditor({
         setUploading(false);
       }
     },
-    [taskId, onChange, insertText, notifyUploaded, onPendingImage],
+    [uploadTarget, onChange, insertText, notifyUploaded, onPendingImage],
   );
 
   const handleFileChange = useCallback(
@@ -448,7 +490,7 @@ export function MarkdownEditor({
         {attachments && (
           <>
             <ToolbarButton
-              title={taskId ? "Insert image" : "Insert image (available after task is created)"}
+              title={uploadTarget ? "Insert image" : "Insert image (available after task is created)"}
               onClick={handleImageButtonClick}
             >
               <Image className="h-3.5 w-3.5" />
@@ -456,7 +498,7 @@ export function MarkdownEditor({
             <ToolbarButton
               title="Attach file"
               onClick={() => attachInputRef.current?.click()}
-              disabled={!taskId}
+              disabled={!uploadTarget}
               disabledTooltip="Файл можно прикрепить после создания задачи"
             >
               <Paperclip className="h-3.5 w-3.5" />
@@ -567,7 +609,7 @@ export function MarkdownEditor({
           {hint ?? (
             <>
               Markdown supported &middot; Paste, drop, or attach files
-              {!taskId && " (uploads after task is saved)"}
+              {!uploadTarget && " (uploads after task is saved)"}
             </>
           )}
         </div>

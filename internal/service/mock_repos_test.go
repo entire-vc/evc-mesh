@@ -2656,3 +2656,104 @@ func (m *MockDocumentRepository) HasAncestor(_ context.Context, docID, ancestorI
 	}
 	return false, nil
 }
+
+// ---------------------------------------------------------------------------
+// MockDocumentAttachmentRepository
+// ---------------------------------------------------------------------------
+
+// MockDocumentAttachmentRepository is an in-memory
+// repository.DocumentAttachmentRepository.
+//
+// documentOf maps an attachment's document to its tenant, the same way
+// MockDocumentRepository's workspaceOf maps a project to one: refusing another
+// tenant's attachment is the behaviour several tests are about, so the mock has
+// to be able to get it wrong.
+type MockDocumentAttachmentRepository struct {
+	mu          sync.RWMutex
+	items       map[uuid.UUID]*domain.DocumentAttachment
+	workspaceOf map[uuid.UUID]uuid.UUID
+	errToReturn error
+	createErr   error
+}
+
+func NewMockDocumentAttachmentRepository() *MockDocumentAttachmentRepository {
+	return &MockDocumentAttachmentRepository{
+		items:       make(map[uuid.UUID]*domain.DocumentAttachment),
+		workspaceOf: make(map[uuid.UUID]uuid.UUID),
+	}
+}
+
+// WithDocumentWorkspace declares which tenant a document belongs to.
+func (m *MockDocumentAttachmentRepository) WithDocumentWorkspace(documentID, workspaceID uuid.UUID) *MockDocumentAttachmentRepository {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.workspaceOf[documentID] = workspaceID
+	return m
+}
+
+func (m *MockDocumentAttachmentRepository) Create(_ context.Context, att *domain.DocumentAttachment) error {
+	if m.createErr != nil {
+		return m.createErr
+	}
+	if m.errToReturn != nil {
+		return m.errToReturn
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	copied := *att
+	m.items[att.ID] = &copied
+	return nil
+}
+
+func (m *MockDocumentAttachmentRepository) GetByIDInWorkspace(_ context.Context, id, workspaceID uuid.UUID) (*domain.DocumentAttachment, error) {
+	if m.errToReturn != nil {
+		return nil, m.errToReturn
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	att, ok := m.items[id]
+	if !ok || att.DeletedAt != nil {
+		return nil, nil
+	}
+	if m.workspaceOf[att.DocumentID] != workspaceID {
+		return nil, nil
+	}
+	copied := *att
+	return &copied, nil
+}
+
+func (m *MockDocumentAttachmentRepository) ListByDocument(_ context.Context, documentID uuid.UUID, pg pagination.Params) (*pagination.Page[domain.DocumentAttachment], error) {
+	if m.errToReturn != nil {
+		return nil, m.errToReturn
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var items []domain.DocumentAttachment
+	for _, a := range m.items {
+		if a.DocumentID == documentID && a.DeletedAt == nil {
+			items = append(items, *a)
+		}
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if !items[i].CreatedAt.Equal(items[j].CreatedAt) {
+			return items[i].CreatedAt.Before(items[j].CreatedAt)
+		}
+		return items[i].ID.String() < items[j].ID.String()
+	})
+	return pagination.NewPage(items, len(items), pg), nil
+}
+
+func (m *MockDocumentAttachmentRepository) SoftDelete(_ context.Context, id uuid.UUID, at time.Time) error {
+	if m.errToReturn != nil {
+		return m.errToReturn
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	att, ok := m.items[id]
+	if !ok || att.DeletedAt != nil {
+		return apierror.NotFound("Attachment")
+	}
+	stamp := at
+	att.DeletedAt = &stamp
+	return nil
+}

@@ -262,6 +262,24 @@ type DocumentRepository interface {
 	HasAncestor(ctx context.Context, docID, ancestorID uuid.UUID) (bool, error)
 }
 
+// DocumentAttachmentRepository manages persistence for the files uploaded into a
+// document. Every read here hides soft-deleted rows; only Create writes.
+//
+// There is no Update: nothing about an attachment is mutable. The name is what was
+// uploaded, and the storage key is derived from the immutable id — a rename that
+// moved the key would orphan the object it used to name.
+type DocumentAttachmentRepository interface {
+	Create(ctx context.Context, att *domain.DocumentAttachment) error
+	// GetByIDInWorkspace returns nil when the attachment's document belongs to a
+	// project outside workspaceID, or when either row is soft-deleted. Callers
+	// answer 404 on nil, so a stranger's id and a nonexistent one look the same.
+	GetByIDInWorkspace(ctx context.Context, id, workspaceID uuid.UUID) (*domain.DocumentAttachment, error)
+	ListByDocument(ctx context.Context, documentID uuid.UUID, pg pagination.Params) (*pagination.Page[domain.DocumentAttachment], error)
+	// SoftDelete stamps deleted_at. The stored object is deliberately left alone —
+	// see documentAttachmentService.Delete.
+	SoftDelete(ctx context.Context, id uuid.UUID, at time.Time) error
+}
+
 // AgentFilter defines filtering options for listing agents.
 type AgentFilter struct {
 	Status        *domain.AgentStatus

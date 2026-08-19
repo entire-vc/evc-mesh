@@ -353,6 +353,44 @@ type DocumentService interface {
 	ListByProject(ctx context.Context, projectID uuid.UUID, pg pagination.Params) (*pagination.Page[domain.Document], error)
 }
 
+// UploadDocumentAttachmentInput holds parameters for uploading a file into a
+// document.
+//
+// WorkspaceID is the caller's, resolved from the route by wsAccess — never taken
+// from the request body. It is what makes DocumentID checkable: without it the
+// service would attach the file to whatever document id it was handed, including
+// another tenant's.
+type UploadDocumentAttachmentInput struct {
+	DocumentID  uuid.UUID `json:"document_id"`
+	WorkspaceID uuid.UUID `json:"workspace_id"`
+
+	Name     string `json:"name"`
+	MimeType string `json:"mime_type"`
+	// Size is the length the client declared. It is checked against the cap, and
+	// then checked again while reading — see documentAttachmentService.Upload.
+	Size   int64     `json:"size"`
+	Reader io.Reader `json:"-"`
+
+	UploadedBy     uuid.UUID        `json:"uploaded_by"`
+	UploadedByType domain.ActorType `json:"uploaded_by_type"`
+}
+
+// DocumentAttachmentService provides business logic for the files uploaded into a
+// document: metadata in Postgres, bytes in object storage, handed to the browser
+// as presigned URLs.
+type DocumentAttachmentService interface {
+	Upload(ctx context.Context, input UploadDocumentAttachmentInput) (*domain.DocumentAttachment, error)
+	// GetDownloadURL generates a presigned URL, and only when the attachment
+	// belongs to workspaceID. inline=true omits Content-Disposition so the browser
+	// renders the file — that is what makes an <img> display instead of download.
+	GetDownloadURL(ctx context.Context, id, workspaceID uuid.UUID, inline bool) (string, error)
+	// ListByDocument lists a document's live attachments, and only when the
+	// document belongs to workspaceID.
+	ListByDocument(ctx context.Context, documentID, workspaceID uuid.UUID, pg pagination.Params) (*pagination.Page[domain.DocumentAttachment], error)
+	// Delete soft-deletes the attachment; the stored object is kept.
+	Delete(ctx context.Context, id, workspaceID uuid.UUID) error
+}
+
 // RegisterAgentInput holds parameters for registering a new agent.
 type RegisterAgentInput struct {
 	WorkspaceID   uuid.UUID        `json:"workspace_id"`

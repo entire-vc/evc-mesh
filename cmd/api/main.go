@@ -81,6 +81,7 @@ func main() {
 	commentRepo := postgres.NewCommentRepo(db)
 	artifactRepo := postgres.NewArtifactRepo(db)
 	documentRepo := postgres.NewDocumentRepo(db)
+	documentAttachmentRepo := postgres.NewDocumentAttachmentRepo(db)
 	agentRepo := postgres.NewAgentRepo(db)
 	eventBusRepo := postgres.NewEventBusMessageRepo(db)
 	activityLogRepo := postgres.NewActivityLogRepo(db)
@@ -398,6 +399,7 @@ func main() {
 	// *S3Client in an interface is not nil, and the service's "storage not
 	// configured" branch tests exactly that.
 	var documentStore service.DocumentStore
+	var attachmentStore service.StorageClient
 	s3Client, s3Err := storage.NewS3Client(
 		cfg.S3.Endpoint,
 		cfg.S3.AccessKeyID,
@@ -442,8 +444,17 @@ func main() {
 
 		artifactService = service.NewArtifactService(artifactRepo, s3Client, activityLogRepo)
 		documentStore = s3Client
+		attachmentStore = s3Client
 	}
 	documentService := service.NewDocumentService(documentRepo, documentStore, projectRepo)
+
+	// The attachment service takes the full StorageClient, not documentStore: an
+	// attachment is fetched by the browser through a presigned URL (an <img> cannot
+	// send an Authorization header), so it needs the GetPresignedURL that the
+	// narrower document-body port deliberately omits. attachmentStore stays nil for
+	// the same reason documentStore does — a typed-nil *S3Client in an interface is
+	// not nil, and the service's "storage not configured" branch tests exactly that.
+	documentAttachmentService := service.NewDocumentAttachmentService(documentAttachmentRepo, documentRepo, attachmentStore)
 
 	// Wire Team Relay publisher into artifact service (best-effort; fires on upload).
 	projectIntegrationService := service.NewProjectIntegrationService(projectIntegrationRepo)
@@ -492,6 +503,7 @@ func main() {
 	commentHandler := handler.NewCommentHandler(commentService, taskService)
 	artifactHandler := handler.NewArtifactHandler(artifactService, taskService)
 	documentHandler := handler.NewDocumentHandler(documentService)
+	documentAttachmentHandler := handler.NewDocumentAttachmentHandler(documentAttachmentService)
 	depHandler := handler.NewDependencyHandler(depService, taskService)
 	agentHandler := handler.NewAgentHandlerWithEvents(agentService, taskService, taskStatusService, agentNotifyRedis, agentEventsRepo, sessionRepo)
 	eventHandler := handler.NewEventHandler(eventBusService)
@@ -940,6 +952,23 @@ func main() {
 	api.GET("/documents/:doc_id", documentHandler.GetByID, wsAccess)
 	api.PATCH("/documents/:doc_id", documentHandler.Update, wsAccess, rbac(mw.PermUploadArtifact))
 	api.DELETE("/documents/:doc_id", documentHandler.Delete, wsAccess, rbac(mw.PermUploadArtifact))
+
+	// Document attachment routes. The upload/list pair hangs off :doc_id, which
+	// already resolves a tenant; the object routes name the attachment directly and
+	// are guarded by the :att_id resolver.
+	//
+	// :att_id appears under exactly one collection segment — document-attachments —
+	// and must stay that way: resolvers are keyed on the parameter name alone, so
+	// mounting the same id under /documents/:doc_id/attachments/:att_id as well
+	// would make the name ambiguous (TestScopedParamNamesAreUnambiguous).
+	//
+	// PermUploadArtifact for the writes, same reasoning as the document routes: an
+	// attachment is project content whose bytes go to object storage, which is
+	// literally what that permission covers.
+	api.GET("/documents/:doc_id/attachments", documentAttachmentHandler.List, wsAccess)
+	api.POST("/documents/:doc_id/attachments", documentAttachmentHandler.Upload, wsAccess, rbac(mw.PermUploadArtifact))
+	api.GET("/document-attachments/:att_id/download", documentAttachmentHandler.Download, wsAccess)
+	api.DELETE("/document-attachments/:att_id", documentAttachmentHandler.Delete, wsAccess, rbac(mw.PermUploadArtifact))
 
 	// Agent routes.
 	// NOTE: /agents/me/* routes MUST be registered before /agents/:agent_id to avoid
