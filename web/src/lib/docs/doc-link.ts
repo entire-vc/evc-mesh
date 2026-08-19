@@ -29,14 +29,16 @@ export function documentHref(
 /**
  * A label safe to put between `[` and `]`.
  *
- * The markdown dialect this app renders (markdown-renderer.tsx) matches a link
- * label as `[^\]]+` and has no escape for a bracket. A title containing one
- * therefore produces NO link at all — the whole construct falls through as
- * literal text — which is a worse outcome than a title missing two characters,
- * and a silent one: the writer sees their link vanish and has no idea why.
+ * Written for the hand-written renderer this app used to have, whose link label
+ * was `[^\]]+` with no escape for a bracket: a title containing one produced NO
+ * link at all, and silently — the writer saw their link vanish with no idea why.
  *
- * Stripping is the honest repair available inside a dialect that cannot express
- * the alternative.
+ * That renderer is gone and the dialect is now CommonMark, which CAN escape a
+ * bracket, so the stripping is no longer forced. It is kept because the label is
+ * inserted as a ProseMirror link mark and serialised by remark: what comes back
+ * out would be `\[` escapes in the saved body, which is noise in a title for the
+ * sake of two characters nobody misses. Widening it is a deliberate change with
+ * a round-trip test behind it, not a cleanup.
  */
 export function linkLabel(title: string): string {
   const stripped = title.replace(/[[\]]/g, "").trim();
@@ -94,40 +96,6 @@ export function findDocLinkTrigger(
   const query = before.slice(start + DOC_LINK_TRIGGER.length);
   if (/[\n\]]/.test(query)) return null;
   return { start, query };
-}
-
-/** The result of accepting a suggestion: the new text and where the caret goes. */
-export interface DocLinkInsertion {
-  value: string;
-  caret: number;
-}
-
-/**
- * Replace the trigger and its query with the finished link.
- *
- * The caret lands after the link and a single separating space, so the writer
- * keeps typing the sentence rather than inside the URL — the same behaviour the
- * mention menu has, and the reason it does not feel like a dialog.
- *
- * The space is added only when there is not one already. Appending
- * unconditionally is what a first draft does, and it inserts a double space
- * whenever the link is dropped into the middle of a sentence — which is the
- * common case, not the edge one: the writer types `[[run` in a gap they left,
- * accepts, and their prose gains a stray space they have to go back and delete.
- */
-export function applyDocLinkInsertion(
-  text: string,
-  trigger: DocLinkTrigger,
-  caret: number,
-  link: string,
-): DocLinkInsertion {
-  const before = text.slice(0, trigger.start);
-  const after = text.slice(caret);
-  const insertion = /^\s/.test(after) ? link : `${link} `;
-  return {
-    value: `${before}${insertion}${after}`,
-    caret: trigger.start + insertion.length,
-  };
 }
 
 // ---------------------------------------------------------------------------

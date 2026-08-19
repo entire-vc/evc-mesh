@@ -21,7 +21,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { RelayDocPicker } from "@/components/RelayDocPicker";
-import { uploadArtifact } from "@/components/markdown-editor";
+import { uploadArtifact } from "@/lib/task-artifacts";
 import type { Artifact, ArtifactType, PaginatedResponse } from "@/types";
 
 interface ArtifactListProps {

@@ -45,7 +45,7 @@ import { VCSLinks } from "@/components/vcs-links";
 import { DependencyList } from "@/components/dependency-list";
 import { CustomFieldRenderer } from "@/components/custom-field-renderer";
 import { DatePickerPopover } from "@/components/date-picker-popover";
-import { DescriptionEditor } from "@/components/description-editor";
+import { RichTextEditor } from "@/components/rich-text-editor";
 import { MarkdownWithRelay } from "@/components/MarkdownWithRelay";
 import { cn } from "@/lib/cn";
 import {
@@ -1078,16 +1078,12 @@ export function TaskSlideOver({
                     </div>
                   </div>
                   {editingDescription ? (
-                    <DescriptionEditor
+                    <RichTextEditor
                       value={descDraft}
                       onChange={setDescDraft}
                       placeholder="Add a description..."
                       projId={currentTask.project_id}
                       taskId={currentTask.id}
-                      projectSettings={
-                        (projects.find((p) => p.id === currentTask.project_id) ??
-                          currentProject)?.settings
-                      }
                     />
                   ) : (
                     <div

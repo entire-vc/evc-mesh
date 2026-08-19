@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 
 const mockedApi = vi.fn();
@@ -44,16 +44,26 @@ import { useWorkspaceStore } from "@/stores/workspace";
 import type { Project, Workspace } from "@/types";
 
 /**
- * The third surface.
+ * The comment box writes with the same editor the task description does.
  *
- * Comments already had an inline `@` menu before this unit; the description and
- * markdown editors had nothing. The risk in fixing that is the mirror image —
- * building the document picker for the two that were missing it and leaving the
- * one that already had a menu alone, so a writer learns `[[` on a task and finds
- * it dead in the comment box underneath.
+ * This file used to run the `[[` and `@` menus against CommentList directly,
+ * because there were three separate editors and the risk was that a writer
+ * would learn `[[` on a task and find it dead in the comment box underneath.
  *
- * Hence this file, separate from the editor table only because CommentList needs
- * its own fetch stubbed.
+ * That risk is now structural rather than behavioural: the comment composer,
+ * the comment edit box, the task description and the create dialog all mount
+ * ONE component (RichTextEditor), so there is no second implementation left to
+ * drift. The behaviour those tests asserted — which trigger opens, what the
+ * accepted suggestion inserts, the exact markdown that gets saved — is asserted
+ * against a real editor in lib/milkdown/__tests__/suggestion.test.ts, where it
+ * can be driven by ProseMirror positions instead of by a textarea's
+ * selectionStart.
+ *
+ * What is worth keeping here is the wiring claim, and it is the one that would
+ * actually regress: that the comment box mounts that editor at all, rather than
+ * quietly falling back to a plain textarea with no menus and no rich text. Both
+ * places a comment is written are checked, because the edit box was the one
+ * that got forgotten before.
  */
 
 const PROJECT = {
@@ -80,57 +90,44 @@ beforeEach(() => {
   });
 });
 
-function commentBox(): HTMLTextAreaElement {
-  return screen.getByPlaceholderText(/to link a document/i) as HTMLTextAreaElement;
+/**
+ * The writing surface, identified by what makes it the shared editor rather
+ * than a textarea: a ProseMirror contenteditable inside the box.
+ */
+function editorSurfaces(): HTMLElement[] {
+  return Array.from(document.querySelectorAll<HTMLElement>(".mesh-doc-prose"));
 }
 
-describe("CommentList — linking a document", () => {
-  it("offers the same [[ picker the task editors have", async () => {
+describe("CommentList — the writing surface", () => {
+  it("mounts the shared rich-text editor, not a textarea", async () => {
     render(
       <MemoryRouter>
         <CommentList taskId="task-1" projId={PROJECT.id} />
       </MemoryRouter>,
     );
-    const el = await waitFor(commentBox);
-
-    fireEvent.change(el, { target: { value: "See [[run", selectionStart: 9 } });
-
-    expect(await screen.findByRole("option", { name: /Deploy runbook/ })).toBeInTheDocument();
-  });
-
-  it("inserts the same link the task editors insert", async () => {
-    render(
-      <MemoryRouter>
-        <CommentList taskId="task-1" projId={PROJECT.id} />
-      </MemoryRouter>,
-    );
-    const el = await waitFor(commentBox);
-    fireEvent.change(el, { target: { value: "See [[run", selectionStart: 9 } });
-
-    fireEvent.mouseDown(await screen.findByRole("option", { name: /Deploy runbook/ }));
 
     await waitFor(() => {
-      expect(el.value).toBe("See [Deploy runbook](/w/acme/p/demo/docs/doc-1) ");
+      expect(editorSurfaces().length).toBeGreaterThan(0);
     });
+    const surface = editorSurfaces()[0]!;
+
+    expect(surface.getAttribute("contenteditable")).toBe("true");
+    // The negative control. Asserting only "an editor is present" would pass on
+    // a box that still rendered the old textarea beside it.
+    expect(document.querySelector("textarea")).toBeNull();
   });
 
-  it("leaves the mention menu working", async () => {
-    // The negative control for the wiring: the document picker takes the keydown
-    // first, and a version that swallowed every key would silently kill `@`.
-    mockedMentionables.mockResolvedValue([
-      { id: "u1", slug: "pavel", display_name: "Pavel", kind: "user" },
-    ]);
+  it("offers the same formatting affordances the task description has", async () => {
+    // These come from RichTextEditor's toolbar. If the comment box were wired to
+    // some cut-down surface instead, this is what would be missing.
     render(
       <MemoryRouter>
         <CommentList taskId="task-1" projId={PROJECT.id} />
       </MemoryRouter>,
     );
-    const el = await waitFor(commentBox);
 
-    fireEvent.change(el, { target: { value: "ping @pav", selectionStart: 9 } });
-
-    // The mention fetch is debounced 150ms, so this waits rather than asserting
-    // on the render that follows the keystroke.
-    expect(await screen.findByText("@pavel", {}, { timeout: 2000 })).toBeInTheDocument();
+    expect(await screen.findByTitle("Table")).toBeInTheDocument();
+    expect(screen.getByTitle("Code block")).toBeInTheDocument();
+    expect(screen.getByTitle("Bullet list")).toBeInTheDocument();
   });
 });

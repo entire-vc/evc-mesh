@@ -51,7 +51,7 @@ import { VCSLinks } from "@/components/vcs-links";
 import { DependencyList } from "@/components/dependency-list";
 import { CustomFieldRenderer } from "@/components/custom-field-renderer";
 import { DatePickerPopover } from "@/components/date-picker-popover";
-import { DescriptionEditor } from "@/components/description-editor";
+import { RichTextEditor } from "@/components/rich-text-editor";
 import { MarkdownWithRelay } from "@/components/MarkdownWithRelay";
 import { RecurringHistoryPanel } from "@/components/recurring-history-panel";
 import { cn } from "@/lib/cn";
@@ -1162,16 +1162,12 @@ export function TaskPanel({
         </div>
       </div>
       {editingDescription ? (
-        <DescriptionEditor
+        <RichTextEditor
           value={descDraft}
           onChange={setDescDraft}
           placeholder="Add a description..."
           projId={currentTask.project_id}
           taskId={currentTask.id}
-          projectSettings={
-            (projects.find((p) => p.id === currentTask.project_id) ??
-              currentProject)?.settings
-          }
         />
       ) : (
         <div className="min-h-[60px] rounded-lg border border-border p-3 text-sm">

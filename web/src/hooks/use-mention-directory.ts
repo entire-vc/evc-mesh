@@ -1,5 +1,5 @@
 import { useEffect, useMemo } from "react";
-import type { MentionEntry } from "@/components/markdown-renderer";
+import type { MentionEntry } from "@/components/markdown-view";
 import { useRulesStore } from "@/stores/rules";
 import { useWorkspaceStore } from "@/stores/workspace";
 

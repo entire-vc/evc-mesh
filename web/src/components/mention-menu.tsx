@@ -1,42 +1,70 @@
 import { Bot, User } from "lucide-react";
 import { cn } from "@/lib/cn";
+import type { Mentionable } from "@/types";
 import type { UseMentionPicker } from "@/hooks/use-mention-picker";
 
+export type { Mentionable };
+
 /**
- * The `@` dropdown, rendered above the box it belongs to.
+ * The list that appears under `@`.
  *
- * A component rather than markup repeated per surface, for the same reason
- * useMentionPicker is a hook: the list, the icons and the highlight are what
- * make the menu recognisable, and a second copy is a second thing to keep in
- * step.
+ * Lifted out of comment-list.tsx, because the editor that owns the trigger is
+ * now shared by comments and task descriptions — and the point of that unit is
+ * that a writer gets the same affordances in both. Leaving the markup inline in
+ * the comment box is how it came to exist in exactly one of the three places
+ * you could write markdown in this app.
  *
- * The parent must be `position: relative` — this positions itself against it.
+ * Deliberately the same shape as DocLinkMenu beside it: a writer who has
+ * learned one has learned the other.
  *
- * onMouseDown, not onClick: mousedown fires before the textarea loses focus, so
- * preventing its default keeps the caret where the insertion is about to happen.
+ * Presentational on purpose: it takes a list and an index, not a hook. Two
+ * different mechanisms drive it — ProseMirror selection inside the rich text
+ * editor, and caret offsets inside a plain textarea (MentionPickerMenu below) —
+ * and neither should have to know what the other needs. What must NOT fork
+ * again is the markup: the list, the icons and the highlight are what make the
+ * menu recognisable.
  */
-export function MentionMenu({ picker }: { picker: UseMentionPicker }) {
-  if (picker.trigger === null || picker.suggestions.length === 0) return null;
+export function MentionMenu({
+  suggestions,
+  activeIndex,
+  onPick,
+  onHover,
+  className,
+}: {
+  suggestions: readonly Mentionable[];
+  activeIndex: number;
+  onPick: (m: Mentionable) => void;
+  onHover?: (index: number) => void;
+  className?: string;
+}) {
+  if (suggestions.length === 0) return null;
 
   return (
     <div
       role="listbox"
       aria-label="Mention a person or agent"
-      className="absolute bottom-full left-0 right-0 z-50 mb-1 max-h-48 overflow-y-auto rounded-md border border-border bg-background shadow-md"
+      className={cn(
+        "max-h-48 overflow-y-auto rounded-md border border-border bg-background shadow-md",
+        className ?? "w-72",
+      )}
     >
-      {picker.suggestions.map((m, i) => (
+      {suggestions.map((m, i) => (
         <button
           key={m.id}
           type="button"
           role="option"
-          aria-selected={i === picker.activeIndex}
+          aria-selected={i === activeIndex}
           className={cn(
             "flex w-full items-center gap-2 px-3 py-2 text-sm hover:bg-muted",
-            i === picker.activeIndex && "bg-muted",
+            i === activeIndex && "bg-muted",
           )}
+          onMouseEnter={() => onHover?.(i)}
+          // mousedown, not click: mousedown fires before the box loses focus,
+          // so preventing its default keeps the caret (or the ProseMirror
+          // selection) where the insertion is about to happen.
           onMouseDown={(e) => {
             e.preventDefault();
-            picker.pick(m);
+            onPick(m);
           }}
         >
           {m.kind === "agent" ? (
@@ -46,11 +74,34 @@ export function MentionMenu({ picker }: { picker: UseMentionPicker }) {
           )}
           <span className="font-mono text-xs text-muted-foreground">@{m.slug}</span>
           <span className="truncate">{m.display_name}</span>
-          <span className="ml-auto text-[10px] capitalize text-muted-foreground">
-            {m.kind}
-          </span>
+          <span className="ml-auto text-[10px] capitalize text-muted-foreground">{m.kind}</span>
         </button>
       ))}
+    </div>
+  );
+}
+
+/**
+ * The same menu, driven by useMentionPicker — the textarea-based surfaces.
+ *
+ * Document comments are still written in a plain textarea, so they keep the
+ * caret-offset picker; task comments and descriptions moved to the rich text
+ * editor and drive the list above directly. One component, two drivers, rather
+ * than two components that have to be kept looking alike.
+ *
+ * The parent must be `position: relative` — this positions itself against it.
+ */
+export function MentionPickerMenu({ picker }: { picker: UseMentionPicker }) {
+  if (picker.trigger === null || picker.suggestions.length === 0) return null;
+
+  return (
+    <div className="absolute bottom-full left-0 right-0 z-50 mb-1">
+      <MentionMenu
+        suggestions={picker.suggestions}
+        activeIndex={picker.activeIndex}
+        onPick={picker.pick}
+        className="w-full"
+      />
     </div>
   );
 }
