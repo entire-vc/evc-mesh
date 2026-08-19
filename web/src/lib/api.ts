@@ -132,8 +132,18 @@ interface RequestOptions {
 // notification.ts once did) would otherwise get double-encoded: this guards
 // against that recurring, since a pre-stringified body silently becomes a
 // JSON string of a JSON string that the server can't bind into a struct.
-function serializeBody(body: unknown): string | undefined {
+//
+// FormData is the one exception, and it is the reason file uploads used to be
+// written as a raw fetch alongside this helper instead of through it: a
+// multipart body must reach fetch untouched, and its Content-Type must be left
+// for the browser to generate — it carries the boundary, which only the browser
+// knows. Handling that here rather than in each uploader is what lets an upload
+// inherit the 401 refresh-and-replay below. A raw fetch cannot, which made an
+// upload the one action in the app that a lapsed 15-minute access token killed
+// outright while everything else silently recovered.
+function serializeBody(body: unknown): BodyInit | undefined {
   if (body === undefined) return undefined;
+  if (body instanceof FormData) return body;
   return typeof body === "string" ? body : JSON.stringify(body);
 }
 
@@ -155,9 +165,10 @@ export async function api<T>(
     if (qs) url += `?${qs}`;
   }
 
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-  };
+  const headers: Record<string, string> = {};
+  if (!(body instanceof FormData)) {
+    headers["Content-Type"] = "application/json";
+  }
 
   if (!noAuth && accessToken) {
     headers["Authorization"] = `Bearer ${accessToken}`;

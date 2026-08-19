@@ -103,17 +103,41 @@ export async function resolveArtifactImages(container: HTMLElement): Promise<voi
 }
 
 /**
+ * Read the internal download path off a clicked anchor, in either of the two
+ * shapes a renderer produces.
+ *
+ * The HTML renderer withholds the href and parks the path on
+ * data-artifact-download (see renderArtifactAwareLink). Milkdown's `link` mark
+ * has no such attribute to park it on — it stores an href and nothing else — so
+ * an attachment link in a document body arrives here as an ordinary
+ * `<a href="/api/v1/document-attachments/...">`. Recognising only the first
+ * shape is what made an attached file unopenable: the click fell through to the
+ * router, which took the whole app to the API path and landed the reader on the
+ * workspace fallback page, out of the document they were reading.
+ *
+ * Both shapes are checked against the same allow-list, so this cannot become a
+ * way to resolve an arbitrary href through an authenticated fetch.
+ */
+function attachmentPathOf(link: HTMLAnchorElement): string | null {
+  const parked = link.getAttribute("data-artifact-download");
+  if (parked) return isResolvableAttachmentPath(parked) ? parked : null;
+  const href = link.getAttribute("href");
+  if (href && isResolvableAttachmentPath(href)) return href;
+  return null;
+}
+
+/**
  * Delegated click handler for rendered-markdown containers: intercepts clicks
  * on internal artifact/attachment download links and opens a freshly-resolved
  * URL. Returns true if it handled the click (caller should skip its own logic).
  */
 export function handleArtifactLinkClick(e: React.MouseEvent): boolean {
   const target = e.target as HTMLElement;
-  const link = target.closest("a[data-artifact-download]");
+  const link = target.closest("a");
   if (!(link instanceof HTMLAnchorElement)) return false;
+  const path = attachmentPathOf(link);
+  if (!path) return false;
   e.preventDefault();
-  const path = link.getAttribute("data-artifact-download");
-  if (!path) return true;
   void api<{ url: string }>(path)
     .then((data) => window.open(data.url, "_blank"))
     .catch(() => toast("Could not open file"));

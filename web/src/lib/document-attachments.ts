@@ -1,4 +1,4 @@
-import { getAccessToken } from "@/lib/api";
+import { api } from "@/lib/api";
 
 /**
  * A file uploaded into a document — mirrors domain.DocumentAttachment.
@@ -24,10 +24,17 @@ export interface DocumentAttachment {
 /**
  * Upload a file into a document.
  *
- * Deliberately not routed through `api()`: that helper sets a JSON Content-Type,
- * and a multipart body needs the browser to set its own with the boundary it
- * generated. Same shape as uploadArtifact in markdown-editor.tsx, which does this
- * for the same reason.
+ * Routed through `api()` with a FormData body, which api() passes to fetch
+ * untouched and without a Content-Type of its own (see serializeBody there) —
+ * the browser must set that header itself because it carries the multipart
+ * boundary.
+ *
+ * This used to be a raw fetch, for exactly that Content-Type reason, and the
+ * cost of that shortcut was the whole of this bug: api() is also where a 401 is
+ * turned into a token refresh and a replay of the request. Mesh access tokens
+ * live 15 minutes in tab memory and are only refreshed when something gets a 401
+ * back, so an upload attempted across that boundary was the one action in the
+ * app that could not recover — it just threw, and the editor said nothing.
  *
  * The returned `id` is what a markdown reference is built from — see
  * documentAttachmentDownloadPath in artifact-links.ts. Nothing writes a presigned
@@ -37,28 +44,12 @@ export async function uploadDocumentAttachment(
   documentId: string,
   file: File,
 ): Promise<DocumentAttachment> {
-  const token = getAccessToken();
-  const baseUrl = import.meta.env.VITE_API_URL || "";
-
   const form = new FormData();
   form.append("file", file, file.name);
   form.append("name", file.name);
 
-  const headers: HeadersInit = {};
-  if (token) {
-    headers["Authorization"] = `Bearer ${token}`;
-  }
-
-  const res = await fetch(`${baseUrl}/api/v1/documents/${documentId}/attachments`, {
+  return api<DocumentAttachment>(`/api/v1/documents/${documentId}/attachments`, {
     method: "POST",
-    headers,
     body: form,
   });
-
-  if (!res.ok) {
-    const err = (await res.json().catch(() => ({}))) as { message?: string };
-    throw new Error(err.message ?? `Upload failed (${res.status})`);
-  }
-
-  return (await res.json()) as DocumentAttachment;
 }
