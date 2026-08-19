@@ -2757,3 +2757,168 @@ func (m *MockDocumentAttachmentRepository) SoftDelete(_ context.Context, id uuid
 	att.DeletedAt = &stamp
 	return nil
 }
+
+// ---------------------------------------------------------------------------
+// MockDocumentCommentRepository
+// ---------------------------------------------------------------------------
+
+// MockDocumentCommentRepository is an in-memory
+// repository.DocumentCommentRepository.
+//
+// workspaceOf maps a comment's document to its tenant, exactly as
+// MockDocumentAttachmentRepository does: refusing another tenant's comment is the
+// behaviour several tests are about, so the mock has to be able to get it wrong.
+//
+// SoftDelete walks the subtree the way the real recursive CTE does. A mock that
+// deleted only the named row would let a test pass that the database would fail —
+// which is the whole failure mode of mocking a thing you own.
+type MockDocumentCommentRepository struct {
+	mu          sync.RWMutex
+	items       map[uuid.UUID]*domain.DocumentComment
+	workspaceOf map[uuid.UUID]uuid.UUID
+	errToReturn error
+	createErr   error
+}
+
+func NewMockDocumentCommentRepository() *MockDocumentCommentRepository {
+	return &MockDocumentCommentRepository{
+		items:       make(map[uuid.UUID]*domain.DocumentComment),
+		workspaceOf: make(map[uuid.UUID]uuid.UUID),
+	}
+}
+
+// WithDocumentWorkspace declares which tenant a document belongs to.
+func (m *MockDocumentCommentRepository) WithDocumentWorkspace(documentID, workspaceID uuid.UUID) *MockDocumentCommentRepository {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.workspaceOf[documentID] = workspaceID
+	return m
+}
+
+// Seed inserts a comment directly, bypassing Create.
+func (m *MockDocumentCommentRepository) Seed(c *domain.DocumentComment) *MockDocumentCommentRepository {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	copied := *c
+	m.items[c.ID] = &copied
+	return m
+}
+
+func (m *MockDocumentCommentRepository) Create(_ context.Context, c *domain.DocumentComment) error {
+	if m.createErr != nil {
+		return m.createErr
+	}
+	if m.errToReturn != nil {
+		return m.errToReturn
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	copied := *c
+	m.items[c.ID] = &copied
+	return nil
+}
+
+func (m *MockDocumentCommentRepository) GetByIDInWorkspace(_ context.Context, id, workspaceID uuid.UUID) (*domain.DocumentComment, error) {
+	if m.errToReturn != nil {
+		return nil, m.errToReturn
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	c, ok := m.items[id]
+	if !ok || c.DeletedAt != nil {
+		return nil, nil
+	}
+	if m.workspaceOf[c.DocumentID] != workspaceID {
+		return nil, nil
+	}
+	copied := *c
+	return &copied, nil
+}
+
+func (m *MockDocumentCommentRepository) ListByDocument(_ context.Context, documentID uuid.UUID) ([]domain.DocumentComment, error) {
+	if m.errToReturn != nil {
+		return nil, m.errToReturn
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var items []domain.DocumentComment
+	for _, c := range m.items {
+		if c.DocumentID == documentID && c.DeletedAt == nil {
+			items = append(items, *c)
+		}
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if !items[i].CreatedAt.Equal(items[j].CreatedAt) {
+			return items[i].CreatedAt.Before(items[j].CreatedAt)
+		}
+		return items[i].ID.String() < items[j].ID.String()
+	})
+	return items, nil
+}
+
+func (m *MockDocumentCommentRepository) UpdateBody(_ context.Context, id uuid.UUID, body string, at time.Time) error {
+	if m.errToReturn != nil {
+		return m.errToReturn
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	c, ok := m.items[id]
+	if !ok || c.DeletedAt != nil {
+		return apierror.NotFound("Comment")
+	}
+	c.Body = body
+	c.UpdatedAt = at
+	return nil
+}
+
+func (m *MockDocumentCommentRepository) SetResolved(_ context.Context, id uuid.UUID, resolvedBy *uuid.UUID, byType *domain.ActorType, at time.Time) error {
+	if m.errToReturn != nil {
+		return m.errToReturn
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	c, ok := m.items[id]
+	// `ParentID != nil` mirrors the real WHERE clause: resolving a reply matches
+	// no row and is a 404, not a silent success.
+	if !ok || c.DeletedAt != nil || c.ParentID != nil {
+		return apierror.NotFound("Comment")
+	}
+	if resolvedBy == nil {
+		c.ResolvedAt, c.ResolvedBy, c.ResolvedByType = nil, nil, nil
+	} else {
+		stamp := at
+		c.ResolvedAt, c.ResolvedBy, c.ResolvedByType = &stamp, resolvedBy, byType
+	}
+	c.UpdatedAt = at
+	return nil
+}
+
+func (m *MockDocumentCommentRepository) SoftDelete(_ context.Context, id uuid.UUID, at time.Time) error {
+	if m.errToReturn != nil {
+		return m.errToReturn
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	root, ok := m.items[id]
+	if !ok || root.DeletedAt != nil {
+		return apierror.NotFound("Comment")
+	}
+	// Breadth-first over parent_comment_id, matching the recursive CTE.
+	queue := []uuid.UUID{id}
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+		c, ok := m.items[current]
+		if !ok || c.DeletedAt != nil {
+			continue
+		}
+		stamp := at
+		c.DeletedAt = &stamp
+		for _, child := range m.items {
+			if child.ParentID != nil && *child.ParentID == current {
+				queue = append(queue, child.ID)
+			}
+		}
+	}
+	return nil
+}

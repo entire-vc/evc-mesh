@@ -391,6 +391,56 @@ type DocumentAttachmentService interface {
 	Delete(ctx context.Context, id, workspaceID uuid.UUID) error
 }
 
+// CreateDocumentCommentInput holds parameters for adding a comment to a document.
+//
+// WorkspaceID is the caller's, resolved from the route by wsAccess — never taken
+// from the request body. It is what makes DocumentID checkable: without it the
+// service would hang the comment off whatever document id it was handed,
+// including another tenant's.
+//
+// Anchor and ParentID are mutually exclusive and exactly one is required: a
+// thread root points at a range of text, a reply points at a comment. The service
+// refuses both other combinations rather than letting the CHECK constraint turn
+// them into a 500.
+type CreateDocumentCommentInput struct {
+	DocumentID  uuid.UUID `json:"document_id"`
+	WorkspaceID uuid.UUID `json:"workspace_id"`
+
+	Body     string                 `json:"body"`
+	ParentID *uuid.UUID             `json:"parent_comment_id,omitempty"`
+	Anchor   *domain.DocumentAnchor `json:"anchor,omitempty"`
+
+	AuthorID   uuid.UUID        `json:"author_id"`
+	AuthorType domain.ActorType `json:"author_type"`
+}
+
+// DocumentCommentService provides business logic for comments anchored to a range
+// of text inside a document.
+//
+// Anchors are stored and returned, never interpreted here. Resolving one needs
+// the document body, which lives in object storage and which the reader has
+// already fetched and parsed; a server-side resolver would be a second
+// implementation of the same ladder, free to disagree with the one the reader
+// sees. See domain.DocumentAnchor.
+type DocumentCommentService interface {
+	Create(ctx context.Context, input CreateDocumentCommentInput) (*domain.DocumentComment, error)
+	// ListByDocument returns every live comment of the document, oldest first,
+	// and only when the document belongs to workspaceID. Unpaginated: the caller
+	// needs the whole tree to render any of it.
+	ListByDocument(ctx context.Context, documentID, workspaceID uuid.UUID) ([]domain.DocumentComment, error)
+	// UpdateBody rewrites the text. Only the author may — a comment is attributed
+	// speech, and an edit by anyone else would be words put in someone's mouth.
+	UpdateBody(ctx context.Context, id, workspaceID uuid.UUID, body string, editorID uuid.UUID) (*domain.DocumentComment, error)
+	// SetResolved marks a thread root resolved or unresolves it. Anyone with write
+	// access may: resolving is a statement about the conversation, not about
+	// authorship, and a note only its author could close is a note that outlives
+	// them.
+	SetResolved(ctx context.Context, id, workspaceID uuid.UUID, resolved bool, actorID uuid.UUID, actorType domain.ActorType) (*domain.DocumentComment, error)
+	// Delete soft-deletes the comment and every reply beneath it. Only the author
+	// may delete their own comment.
+	Delete(ctx context.Context, id, workspaceID, actorID uuid.UUID) error
+}
+
 // RegisterAgentInput holds parameters for registering a new agent.
 type RegisterAgentInput struct {
 	WorkspaceID   uuid.UUID        `json:"workspace_id"`

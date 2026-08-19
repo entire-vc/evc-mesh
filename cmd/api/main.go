@@ -82,6 +82,7 @@ func main() {
 	artifactRepo := postgres.NewArtifactRepo(db)
 	documentRepo := postgres.NewDocumentRepo(db)
 	documentAttachmentRepo := postgres.NewDocumentAttachmentRepo(db)
+	documentCommentRepo := postgres.NewDocumentCommentRepo(db)
 	agentRepo := postgres.NewAgentRepo(db)
 	eventBusRepo := postgres.NewEventBusMessageRepo(db)
 	activityLogRepo := postgres.NewActivityLogRepo(db)
@@ -455,6 +456,7 @@ func main() {
 	// the same reason documentStore does — a typed-nil *S3Client in an interface is
 	// not nil, and the service's "storage not configured" branch tests exactly that.
 	documentAttachmentService := service.NewDocumentAttachmentService(documentAttachmentRepo, documentRepo, attachmentStore)
+	documentCommentService := service.NewDocumentCommentService(documentCommentRepo, documentRepo)
 
 	// Wire Team Relay publisher into artifact service (best-effort; fires on upload).
 	projectIntegrationService := service.NewProjectIntegrationService(projectIntegrationRepo)
@@ -504,6 +506,7 @@ func main() {
 	artifactHandler := handler.NewArtifactHandler(artifactService, taskService)
 	documentHandler := handler.NewDocumentHandler(documentService)
 	documentAttachmentHandler := handler.NewDocumentAttachmentHandler(documentAttachmentService)
+	documentCommentHandler := handler.NewDocumentCommentHandler(documentCommentService)
 	depHandler := handler.NewDependencyHandler(depService, taskService)
 	agentHandler := handler.NewAgentHandlerWithEvents(agentService, taskService, taskStatusService, agentNotifyRedis, agentEventsRepo, sessionRepo)
 	eventHandler := handler.NewEventHandler(eventBusService)
@@ -965,6 +968,26 @@ func main() {
 	// PermUploadArtifact for the writes, same reasoning as the document routes: an
 	// attachment is project content whose bytes go to object storage, which is
 	// literally what that permission covers.
+	// Document comment routes. Same shape as the attachments above: the
+	// list/create pair hangs off :doc_id, which already resolves a tenant, and the
+	// object routes name the comment directly and are guarded by the :dc_id
+	// resolver.
+	//
+	// :dc_id appears under exactly one collection segment — document-comments —
+	// and must stay that way: resolvers are keyed on the parameter name alone, so
+	// mounting the same id under /documents/:doc_id/comments/:dc_id as well would
+	// make the name ambiguous (TestScopedParamNamesAreUnambiguous).
+	//
+	// PermUploadArtifact for the writes, matching documents and attachments: a
+	// comment is project content, and the permission is held by the same roles as
+	// create_task, so nothing gains or loses reach. Note this is the WRITE gate
+	// only — who may edit or delete a particular comment is its authorship, which
+	// no role can override and which the service checks.
+	api.GET("/documents/:doc_id/comments", documentCommentHandler.List, wsAccess)
+	api.POST("/documents/:doc_id/comments", documentCommentHandler.Create, wsAccess, rbac(mw.PermUploadArtifact))
+	api.PATCH("/document-comments/:dc_id", documentCommentHandler.Update, wsAccess, rbac(mw.PermUploadArtifact))
+	api.DELETE("/document-comments/:dc_id", documentCommentHandler.Delete, wsAccess, rbac(mw.PermUploadArtifact))
+
 	api.GET("/documents/:doc_id/attachments", documentAttachmentHandler.List, wsAccess)
 	api.POST("/documents/:doc_id/attachments", documentAttachmentHandler.Upload, wsAccess, rbac(mw.PermUploadArtifact))
 	api.GET("/document-attachments/:att_id/download", documentAttachmentHandler.Download, wsAccess)

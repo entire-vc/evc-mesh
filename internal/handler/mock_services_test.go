@@ -1030,6 +1030,51 @@ func (m *MockDocumentAttachmentService) Delete(ctx context.Context, id, workspac
 	return nil
 }
 
+// MockDocumentCommentService is a service.DocumentCommentService whose every
+// method is a swappable func, so a test names only the behaviour it is about.
+type MockDocumentCommentService struct {
+	CreateFunc         func(ctx context.Context, input service.CreateDocumentCommentInput) (*domain.DocumentComment, error)
+	ListByDocumentFunc func(ctx context.Context, documentID, workspaceID uuid.UUID) ([]domain.DocumentComment, error)
+	UpdateBodyFunc     func(ctx context.Context, id, workspaceID uuid.UUID, body string, editorID uuid.UUID) (*domain.DocumentComment, error)
+	SetResolvedFunc    func(ctx context.Context, id, workspaceID uuid.UUID, resolved bool, actorID uuid.UUID, actorType domain.ActorType) (*domain.DocumentComment, error)
+	DeleteFunc         func(ctx context.Context, id, workspaceID uuid.UUID, actorID uuid.UUID) error
+}
+
+func (m *MockDocumentCommentService) Create(ctx context.Context, input service.CreateDocumentCommentInput) (*domain.DocumentComment, error) {
+	if m.CreateFunc != nil {
+		return m.CreateFunc(ctx, input)
+	}
+	return nil, nil
+}
+
+func (m *MockDocumentCommentService) ListByDocument(ctx context.Context, documentID, workspaceID uuid.UUID) ([]domain.DocumentComment, error) {
+	if m.ListByDocumentFunc != nil {
+		return m.ListByDocumentFunc(ctx, documentID, workspaceID)
+	}
+	return nil, nil
+}
+
+func (m *MockDocumentCommentService) UpdateBody(ctx context.Context, id, workspaceID uuid.UUID, body string, editorID uuid.UUID) (*domain.DocumentComment, error) {
+	if m.UpdateBodyFunc != nil {
+		return m.UpdateBodyFunc(ctx, id, workspaceID, body, editorID)
+	}
+	return nil, nil
+}
+
+func (m *MockDocumentCommentService) SetResolved(ctx context.Context, id, workspaceID uuid.UUID, resolved bool, actorID uuid.UUID, actorType domain.ActorType) (*domain.DocumentComment, error) {
+	if m.SetResolvedFunc != nil {
+		return m.SetResolvedFunc(ctx, id, workspaceID, resolved, actorID, actorType)
+	}
+	return nil, nil
+}
+
+func (m *MockDocumentCommentService) Delete(ctx context.Context, id, workspaceID, actorID uuid.UUID) error {
+	if m.DeleteFunc != nil {
+		return m.DeleteFunc(ctx, id, workspaceID, actorID)
+	}
+	return nil
+}
+
 type MockAgentSessionRepository struct {
 	GetPreviousStartedAtFunc func(ctx context.Context, agentID uuid.UUID) (*time.Time, error)
 }

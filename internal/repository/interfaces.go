@@ -280,6 +280,36 @@ type DocumentAttachmentRepository interface {
 	SoftDelete(ctx context.Context, id uuid.UUID, at time.Time) error
 }
 
+// DocumentCommentRepository manages persistence for comments anchored inside a
+// document. Every read here hides soft-deleted rows.
+//
+// There is no paginated list and no per-id read by design. Every consumer wants
+// the same thing — every live comment of one document, so the client can build
+// the tree and resolve the anchors against the body it already has — and that is
+// one indexed query. A page boundary through a comment tree would hand the client
+// replies whose roots are on the next page.
+type DocumentCommentRepository interface {
+	Create(ctx context.Context, c *domain.DocumentComment) error
+	// GetByIDInWorkspace returns nil when the comment's document belongs to a
+	// project outside workspaceID, or when either row is soft-deleted. Callers
+	// answer 404 on nil, so a stranger's id and a nonexistent one look the same.
+	GetByIDInWorkspace(ctx context.Context, id, workspaceID uuid.UUID) (*domain.DocumentComment, error)
+	// ListByDocument returns every live comment of the document, oldest first.
+	ListByDocument(ctx context.Context, documentID uuid.UUID) ([]domain.DocumentComment, error)
+	// UpdateBody rewrites the text of one comment. The anchor is deliberately not
+	// updatable: editing the words of a note does not move where it points, and a
+	// caller that could rewrite both at once could move a comment onto text its
+	// author never saw.
+	UpdateBody(ctx context.Context, id uuid.UUID, body string, at time.Time) error
+	// SetResolved marks a thread root resolved or clears it. Passing a nil actor
+	// unresolves. Returns apierror.NotFound when the id is not a live root.
+	SetResolved(ctx context.Context, id uuid.UUID, resolvedBy *uuid.UUID, byType *domain.ActorType, at time.Time) error
+	// SoftDelete stamps deleted_at on the comment AND every descendant. A reply
+	// that outlived its root would be a comment on nothing: the root is what ties
+	// the thread to a place in the document.
+	SoftDelete(ctx context.Context, id uuid.UUID, at time.Time) error
+}
+
 // AgentFilter defines filtering options for listing agents.
 type AgentFilter struct {
 	Status        *domain.AgentStatus

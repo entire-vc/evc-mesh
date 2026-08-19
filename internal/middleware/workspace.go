@@ -215,6 +215,22 @@ var workspaceParamResolvers = []workspaceParamResolver{
 	                           JOIN documents d ON a.document_id = d.id
 	                           JOIN projects p ON d.project_id = p.id
 	                          WHERE a.id = $1`)},
+	// A document comment names its tenant the same way an attachment does: through
+	// its document, which names it through its project.
+	//
+	// This entry is what makes /document-comments/:dc_id a guarded route at all —
+	// nothing else in its path names a tenant, so without a resolver
+	// RequireWorkspaceMemberScoped would see a route with nothing to check and wave
+	// it through, exactly as it did for /events/:event_id.
+	//
+	// No notFoundResource, following :doc_id and :att_id: an unknown id and another
+	// tenant's id both answer 403, which is the stronger of the two behaviours and
+	// keeps them indistinguishable.
+	{param: "dc_id", resolve: uuidResolver(`SELECT p.workspace_id
+	                           FROM document_comments dc
+	                           JOIN documents d ON dc.document_id = d.id
+	                           JOIN projects p ON d.project_id = p.id
+	                          WHERE dc.id = $1`)},
 	{param: "webhook_id", resolve: uuidResolver(`SELECT workspace_id FROM webhook_configs WHERE id = $1`)},
 	{param: "int_id", resolve: uuidResolver(`SELECT workspace_id FROM integration_configs WHERE id = $1`)},
 	{param: "tmpl_id", resolve: uuidResolver(`SELECT p.workspace_id
