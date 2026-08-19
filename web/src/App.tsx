@@ -149,6 +149,13 @@ export function App() {
             path="w/:wsSlug/p/:projectSlug/docs"
             element={<DocsPage />}
           />
+          {/* A selected document is its own URL so it can be linked and
+              reloaded. It must be registered here: the catch-all below
+              redirects anything unrouted to "/" without a word. */}
+          <Route
+            path="w/:wsSlug/p/:projectSlug/docs/:docId"
+            element={<DocsPage />}
+          />
           <Route
             path="w/:wsSlug/p/:projectSlug/updates"
             element={<ProjectUpdatesPage />}

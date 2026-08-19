@@ -354,6 +354,48 @@ export interface Agent {
   updated_at: string;
 }
 
+// A markdown page inside a project. Named ProjectDocument rather than Document
+// because `Document` is a DOM global: a type by that name shadows it inside any
+// file that imports it, and `document.querySelector` then type-errors somewhere
+// unrelated.
+//
+// `body` is absent from the list response — the API fills it in only for the
+// single-document read (GET /documents/:id), so treat it as optional everywhere.
+export interface ProjectDocument {
+  id: string;
+  project_id: string;
+  parent_id: string | null;
+  slug: string;
+  title: string;
+  storage_key: string;
+  position: number;
+  created_by: string;
+  created_by_type: ActorType;
+  created_at: string;
+  updated_at: string;
+  deleted_at?: string | null;
+  body?: string;
+}
+
+export interface CreateDocumentRequest {
+  title: string;
+  slug?: string;
+  parent_id?: string | null;
+  position?: number;
+  body?: string;
+}
+
+export interface UpdateDocumentRequest {
+  title?: string;
+  parent_id?: string;
+  // The API cannot read "move to the root" from parent_id: null — a null in the
+  // JSON is indistinguishable from an omitted field once bound into *uuid.UUID.
+  // clear_parent is the backend's explicit spelling for it.
+  clear_parent?: boolean;
+  position?: number;
+  body?: string;
+}
+
 export interface Artifact {
   id: string;
   task_id: string;

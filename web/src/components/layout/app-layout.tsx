@@ -113,7 +113,12 @@ export function AppLayout() {
   // to icons on entry to avoid three competing columns, and is restored on
   // exit. Only route transitions act; if the user toggles the sidebar while in
   // Docs, toggleSidebar clears the memo and their choice sticks on the way out.
-  const isDocsRoute = /\/w\/[^/]+\/p\/[^/]+\/docs\/?$/.test(location.pathname);
+  // The trailing segment is optional because /docs/:docId is Docs too: without
+  // it, opening a document counted as leaving Docs and the sidebar sprang back
+  // to three columns on the first click in the tree.
+  const isDocsRoute = /\/w\/[^/]+\/p\/[^/]+\/docs(\/[^/]+)?\/?$/.test(
+    location.pathname,
+  );
   const wasDocsRoute = useRef(false);
   useEffect(() => {
     if (isDocsRoute === wasDocsRoute.current) return;
