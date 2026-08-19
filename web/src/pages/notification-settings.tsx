@@ -49,6 +49,11 @@ const NOTIFICATION_EVENTS: EventConfig[] = [
     description: "When someone @mentions you in a comment",
   },
   {
+    key: "document.mentioned",
+    label: "Mention on a document",
+    description: "When someone @mentions you in a comment on a document page",
+  },
+  {
     key: "task.blocking_triage",
     label: "Blocking triage",
     description: "When a task you're mentioned in is auto-moved to triage as a blocker",
@@ -87,7 +92,8 @@ export default function NotificationSettingsPage() {
   const [selectedEvents, setSelectedEvents] = useState<Set<string>>(
     new Set([
       "task.assigned", "task.status_changed", "comment.created", "task.mentioned",
-      "task.blocking_triage", "task.reviewer_assigned", "task.ready_for_review",
+      "document.mentioned", "task.blocking_triage", "task.reviewer_assigned",
+      "task.ready_for_review",
     ]),
   );
   const [isEnabled, setIsEnabled] = useState(true);
@@ -100,7 +106,8 @@ export default function NotificationSettingsPage() {
   const [pushLoading, setPushLoading] = useState(false);
   const [pushEvents, setPushEvents] = useState<Set<string>>(
     new Set([
-      'task.assigned', 'task.status_changed', 'comment.created', 'task.mentioned', 'task.blocking_triage',
+      'task.assigned', 'task.status_changed', 'comment.created', 'task.mentioned',
+      'document.mentioned', 'task.blocking_triage',
       'task.reviewer_assigned', 'task.ready_for_review',
     ]),
   );
@@ -111,7 +118,8 @@ export default function NotificationSettingsPage() {
   const [emailEvents, setEmailEvents] = useState<Set<string>>(
     new Set([
       "task.assigned", "task.status_changed", "comment.created", "task.mentioned",
-      "task.blocking_triage", "task.reviewer_assigned", "task.ready_for_review",
+      "document.mentioned", "task.blocking_triage", "task.reviewer_assigned",
+      "task.ready_for_review",
     ]),
   );
   const [emailAddress, setEmailAddress] = useState("");
@@ -126,7 +134,8 @@ export default function NotificationSettingsPage() {
   const [telegramEvents, setTelegramEvents] = useState<Set<string>>(
     new Set([
       "task.assigned", "task.status_changed", "comment.created", "task.mentioned",
-      "task.blocking_triage", "task.reviewer_assigned", "task.ready_for_review",
+      "document.mentioned", "task.blocking_triage", "task.reviewer_assigned",
+      "task.ready_for_review",
     ]),
   );
   const [telegramUsername, setTelegramUsername] = useState("");
@@ -574,6 +583,7 @@ export default function NotificationSettingsPage() {
                   { key: 'task.status_changed', label: 'Status changed', desc: 'When a task status changes' },
                   { key: 'comment.created', label: 'New comment', desc: 'When a comment is added' },
                   { key: 'task.mentioned', label: 'Mention', desc: 'When someone @mentions you' },
+                  { key: 'document.mentioned', label: 'Mention on a document', desc: 'When someone @mentions you on a document page' },
                   { key: 'task.blocking_triage', label: 'Blocking triage', desc: 'When a task you blocked is auto-moved to triage' },
                   { key: 'task.reviewer_assigned', label: 'Review requested', desc: 'When you\'re set as the reviewer on a task' },
                   { key: 'task.ready_for_review', label: 'Ready for review', desc: 'When a task you\'re reviewing moves to a review status' },

@@ -82,6 +82,13 @@ var paramCollectionAliases = map[string]bool{
 	// collection segment is "mentions" only because the row being written is the
 	// mention, not the comment. The resolver is correct for it.
 	"/me/mentions/:comment_id/seen": true,
+	// And the same for the document-comment inbox: POST
+	// /me/document-mentions/:dcom_id/seen marks the caller's own mention row for a
+	// document comment, so :dcom_id there is a document_comments.id exactly as it
+	// is under /document-comments — the collection segment reads
+	// "document-mentions" only because the row being written is the mention. The
+	// resolver is the right one for it, which is the property this test protects.
+	"/me/document-mentions/:dcom_id/seen": true,
 }
 
 // TestScopedParamNamesAreUnambiguous keeps one parameter name from meaning two

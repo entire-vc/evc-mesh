@@ -42,6 +42,10 @@ var criticalSSEEventTypes = map[string]bool{
 	"task.assigned":  true,
 	"task.created":   true,
 	"task.mentioned": true,
+	// Same reasoning as task.mentioned: an agent that was offline for a day and
+	// replays a 24h window would miss the one event that was addressed to it by
+	// name, which is the failure mode being @mentioned exists to prevent.
+	DocumentMentionedEvent: true,
 }
 
 func sseEventTTL(eventType string) time.Duration {

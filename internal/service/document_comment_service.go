@@ -29,6 +29,60 @@ const maxAnchorTextBytes = 2000
 type documentCommentService struct {
 	commentRepo  repository.DocumentCommentRepository
 	documentRepo repository.DocumentRepository
+
+	// The @-mention dependencies, all optional and all nil-checked at the point
+	// of use. They are options rather than constructor arguments because the
+	// comment CRUD above is complete without any of them, and a constructor
+	// taking eight collaborators to support one feature makes every test that
+	// does not care about mentions build seven mocks that do nothing.
+	//
+	// The one thing a nil dependency must never do is make a mention look
+	// delivered — see mentionsEnabled, which turns "cannot resolve anything" into
+	// a log line rather than a silent no-op.
+	agentSvc       AgentService
+	userRepo       repository.UserRepository
+	mentionRepo    repository.DocumentCommentMentionRepository
+	agentNotifySvc AgentNotifyService
+	notifySvc      NotificationService
+	wsPublisher    WSPublisher
+}
+
+// DocumentCommentServiceOption configures optional collaborators on the service.
+type DocumentCommentServiceOption func(*documentCommentService)
+
+// WithDocumentCommentAgentService sets the agent lookup used to resolve @-slugs
+// to agents.
+func WithDocumentCommentAgentService(a AgentService) DocumentCommentServiceOption {
+	return func(s *documentCommentService) { s.agentSvc = a }
+}
+
+// WithDocumentCommentUserRepo sets the user lookup used to resolve @-slugs to
+// people.
+func WithDocumentCommentUserRepo(r repository.UserRepository) DocumentCommentServiceOption {
+	return func(s *documentCommentService) { s.userRepo = r }
+}
+
+// WithDocumentCommentMentionRepo sets the repository that persists
+// document_comment_mentions rows.
+func WithDocumentCommentMentionRepo(r repository.DocumentCommentMentionRepository) DocumentCommentServiceOption {
+	return func(s *documentCommentService) { s.mentionRepo = r }
+}
+
+// WithDocumentCommentAgentNotifier sets the push channel for mentioned agents.
+func WithDocumentCommentAgentNotifier(n AgentNotifyService) DocumentCommentServiceOption {
+	return func(s *documentCommentService) { s.agentNotifySvc = n }
+}
+
+// WithDocumentCommentNotificationService sets the fan-out for mentioned humans —
+// in-app bell, browser push, email, Telegram.
+func WithDocumentCommentNotificationService(n NotificationService) DocumentCommentServiceOption {
+	return func(s *documentCommentService) { s.notifySvc = n }
+}
+
+// WithDocumentCommentWSPublisher sets the live badge channel for mentioned
+// humans who currently have the app open.
+func WithDocumentCommentWSPublisher(p WSPublisher) DocumentCommentServiceOption {
+	return func(s *documentCommentService) { s.wsPublisher = p }
 }
 
 // NewDocumentCommentService returns a DocumentCommentService backed by the given
@@ -41,8 +95,13 @@ type documentCommentService struct {
 func NewDocumentCommentService(
 	commentRepo repository.DocumentCommentRepository,
 	documentRepo repository.DocumentRepository,
+	opts ...DocumentCommentServiceOption,
 ) DocumentCommentService {
-	return &documentCommentService{commentRepo: commentRepo, documentRepo: documentRepo}
+	s := &documentCommentService{commentRepo: commentRepo, documentRepo: documentRepo}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 // Create records a comment on a document, optionally as a reply.
@@ -91,6 +150,14 @@ func (s *documentCommentService) Create(ctx context.Context, input CreateDocumen
 		parentID = &id
 	}
 
+	// Before the insert, not after: an unresolvable @-slug fails the whole
+	// request, and a comment that was written and then refused would be a row
+	// the author was told did not exist.
+	recipients, err := s.resolveMentions(ctx, input.WorkspaceID, body, nil)
+	if err != nil {
+		return nil, err
+	}
+
 	now := timeNow()
 	comment := &domain.DocumentComment{
 		ID:              uuid.New(),
@@ -107,6 +174,8 @@ func (s *documentCommentService) Create(ctx context.Context, input CreateDocumen
 	if createErr := s.commentRepo.Create(ctx, comment); createErr != nil {
 		return nil, createErr
 	}
+
+	s.deliverMentions(ctx, comment, doc, input.WorkspaceID, recipients)
 
 	return s.enriched(ctx, comment), nil
 }
@@ -162,13 +231,51 @@ func (s *documentCommentService) Update(
 		return nil, apierror.Forbidden("you can only edit your own comments")
 	}
 
+	// Only slugs the edit ADDS are resolved and notified. Re-checking the ones
+	// that were already there would let a departed member turn every later edit
+	// of an old comment into a 400, and re-notifying them would make "fixed a
+	// typo" ping everybody the paragraph names, every time.
+	alreadyMentioned := make(map[string]bool)
+	for _, slug := range extractDocumentMentionSlugs(comment.Body) {
+		alreadyMentioned[slug] = true
+	}
+	recipients, err := s.resolveMentions(ctx, workspaceID, body, alreadyMentioned)
+	if err != nil {
+		return nil, err
+	}
+
 	comment.Body = body
 	comment.UpdatedAt = timeNow()
 	if updErr := s.commentRepo.Update(ctx, comment); updErr != nil {
 		return nil, updErr
 	}
 
+	// Guarded rather than left to deliverMentions' own early return: documentFor
+	// is a database read, and an edit that added no mentions should not pay for
+	// one.
+	if len(recipients) > 0 {
+		s.deliverMentions(ctx, comment, s.documentFor(ctx, comment, workspaceID), workspaceID, recipients)
+	}
+
 	return s.enriched(ctx, comment), nil
+}
+
+// documentFor loads the page a comment lives on, for the notification copy.
+//
+// A nil result would be a nil dereference in the notifier, and the comment has
+// already been written by the time this is called, so an unreadable document
+// degrades to an untitled placeholder rather than failing the edit. It cannot
+// return another tenant's page: the workspace is the caller's own, resolved by
+// the route guard.
+func (s *documentCommentService) documentFor(
+	ctx context.Context,
+	comment *domain.DocumentComment,
+	workspaceID uuid.UUID,
+) *domain.Document {
+	if doc, err := s.documentRepo.GetByIDInWorkspace(ctx, comment.DocumentID, workspaceID); err == nil && doc != nil {
+		return doc
+	}
+	return &domain.Document{ID: comment.DocumentID, Title: "a document"}
 }
 
 // SetResolved resolves or unresolves a thread.

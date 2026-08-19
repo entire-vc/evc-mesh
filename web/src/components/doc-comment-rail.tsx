@@ -13,6 +13,11 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { MentionMenu } from "@/components/mention-menu";
+import { MentionText } from "@/components/mention-text";
+import { useMentionPicker } from "@/hooks/use-mention-picker";
+import { useMentionDirectory } from "@/hooks/use-mention-directory";
+import { useWorkspaceStore } from "@/stores/workspace";
 import { cn } from "@/lib/cn";
 import { formatRelative } from "@/lib/utils";
 import type {
@@ -21,6 +26,9 @@ import type {
   ThreadPlacement,
 } from "@/lib/doc-comments/use-doc-comments";
 import type { ActorType, DocumentComment } from "@/types";
+
+/** What the body renderer needs to tell a mention from an @ in prose. */
+type MentionDirectory = ReturnType<typeof useMentionDirectory>;
 import "@/components/doc-comments.css";
 
 // ---------------------------------------------------------------------------
@@ -121,6 +129,11 @@ function Composer({
   const [error, setError] = useState<string | null>(null);
   const ref = useRef<HTMLTextAreaElement>(null);
 
+  // Wired here rather than at each of the three call sites, because all three —
+  // a new thread, a reply and an edit — go through this one component.
+  const currentWorkspace = useWorkspaceStore((s) => s.currentWorkspace);
+  const mentions = useMentionPicker(currentWorkspace?.id, value, setValue, ref);
+
   useEffect(() => {
     if (autoFocus) ref.current?.focus();
   }, [autoFocus]);
@@ -141,6 +154,10 @@ function Composer({
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    // The mention menu gets the key first when it is open, so Enter picks a name
+    // instead of submitting and Escape closes the menu instead of throwing away
+    // the draft. It returns false for every key it did not handle.
+    if (mentions.onKeyDown(e)) return;
     if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
       e.preventDefault();
       void submit();
@@ -152,13 +169,20 @@ function Composer({
   };
 
   return (
-    <div className="space-y-2">
+    <div className="relative space-y-2">
+      <MentionMenu picker={mentions} />
       <Textarea
         ref={ref}
         rows={3}
         value={value}
         placeholder={placeholder}
-        onChange={(e) => setValue(e.target.value)}
+        onChange={(e) => {
+          setValue(e.target.value);
+          mentions.onValueChange(
+            e.target.value,
+            e.target.selectionStart ?? e.target.value.length,
+          );
+        }}
         onKeyDown={onKeyDown}
         className="min-h-[64px] text-sm"
       />
@@ -195,10 +219,12 @@ function Composer({
 function CommentBody({
   comment,
   controller,
+  directory,
   isReply,
 }: {
   comment: DocumentComment;
   controller: DocCommentsController;
+  directory: MentionDirectory;
   isReply?: boolean;
 }) {
   const [editing, setEditing] = useState(false);
@@ -231,7 +257,12 @@ function CommentBody({
           />
         </div>
       ) : (
-        <p className="mt-1 whitespace-pre-wrap break-words text-sm">{comment.body}</p>
+        <MentionText
+          text={comment.body}
+          mentionables={directory.mentionables}
+          wsSlug={directory.wsSlug}
+          className="mt-1 block whitespace-pre-wrap break-words text-sm"
+        />
       )}
 
       {/* Edit and delete are author-only — the server refuses them for anybody
@@ -299,9 +330,11 @@ function CommentBody({
 function Thread({
   thread,
   controller,
+  directory,
 }: {
   thread: PlacedThread;
   controller: DocCommentsController;
+  directory: MentionDirectory;
 }) {
   const [replying, setReplying] = useState(false);
   const ref = useRef<HTMLElement>(null);
@@ -338,10 +371,16 @@ function Thread({
         <Quote text={thread.root.anchor.exact} placement={thread.placement} />
       )}
 
-      <CommentBody comment={thread.root} controller={controller} />
+      <CommentBody comment={thread.root} controller={controller} directory={directory} />
 
       {thread.replies.map((reply) => (
-        <CommentBody key={reply.id} comment={reply} controller={controller} isReply />
+        <CommentBody
+          key={reply.id}
+          comment={reply}
+          controller={controller}
+          directory={directory}
+          isReply
+        />
       ))}
 
       {!controller.readOnly && (
@@ -385,7 +424,7 @@ function Thread({
       {replying && (
         <div className="mt-2">
           <Composer
-            placeholder="Reply..."
+            placeholder="Reply… @ to mention"
             submitLabel="Reply"
             autoFocus
             onSubmit={async (body) => {
@@ -416,6 +455,10 @@ export function DocCommentRail({
   onShowResolvedChange,
 }: DocCommentRailProps) {
   const { threads, draft, isLoading, error } = controller;
+  // Once for the whole rail, not once per comment: fetchTeamDirectory is
+  // unconditional, so a hook inside CommentBody would issue one request per
+  // comment on screen.
+  const directory = useMentionDirectory();
   const visible = showResolved ? threads : threads.filter((t) => !t.resolved);
   const resolvedCount = threads.length - threads.filter((t) => !t.resolved).length;
 
@@ -467,7 +510,7 @@ export function DocCommentRail({
             </p>
           )}
           <Composer
-            placeholder="Add a comment..."
+            placeholder="Add a comment… @ to mention"
             submitLabel="Comment"
             autoFocus
             onSubmit={controller.submitDraft}
@@ -495,7 +538,12 @@ export function DocCommentRail({
       ) : (
         <div className="space-y-2 pb-8">
           {visible.map((thread) => (
-            <Thread key={thread.root.id} thread={thread} controller={controller} />
+            <Thread
+              key={thread.root.id}
+              thread={thread}
+              controller={controller}
+              directory={directory}
+            />
           ))}
         </div>
       )}

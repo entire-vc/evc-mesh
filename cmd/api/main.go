@@ -108,6 +108,7 @@ func main() {
 	memoryEdgesRepo := postgres.NewMemoryEdgesRepo(db)
 	memoryChunkRepo := postgres.NewMemoryChunkRepo(db)
 	commentMentionRepo := postgres.NewCommentMentionRepo(db)
+	documentCommentMentionRepo := postgres.NewDocumentCommentMentionRepo(db)
 
 	// 5. Create auth service.
 	authService := auth.NewService(
@@ -322,6 +323,7 @@ func main() {
 
 	// Real service implementations (replacing stubs from earlier sprints).
 	mentionService := service.NewMentionService(commentMentionRepo)
+	documentMentionService := service.NewDocumentMentionService(documentCommentMentionRepo)
 
 	commentService := service.NewCommentService(commentRepo, taskRepo, activityLogRepo,
 		service.WithCommentAgentNotify(agentNotifySvc),
@@ -460,7 +462,22 @@ func main() {
 	// No storage dependency: a comment's text is a column, not an object. It takes
 	// the document repository so every entry point can resolve the document inside
 	// the caller's workspace before touching a comment.
-	documentCommentService := service.NewDocumentCommentService(documentCommentRepo, documentRepo)
+	//
+	// The @-mention options are what make a mention in a document comment arrive
+	// rather than merely be stored. All six are required for the feature to be
+	// whole: agentService and userRepo resolve a slug (and, crucially, decide
+	// whether it resolves at all — without them the service refuses to guess and
+	// says so in the log), documentCommentMentionRepo records who was named,
+	// agentNotifySvc is an agent's channel, and notificationService plus
+	// wsPublisher are a person's.
+	documentCommentService := service.NewDocumentCommentService(documentCommentRepo, documentRepo,
+		service.WithDocumentCommentAgentService(agentService),
+		service.WithDocumentCommentUserRepo(userRepo),
+		service.WithDocumentCommentMentionRepo(documentCommentMentionRepo),
+		service.WithDocumentCommentAgentNotifier(agentNotifySvc),
+		service.WithDocumentCommentNotificationService(notificationService),
+		service.WithDocumentCommentWSPublisher(wsPublisher),
+	)
 
 	// Wire Team Relay publisher into artifact service (best-effort; fires on upload).
 	projectIntegrationService := service.NewProjectIntegrationService(projectIntegrationRepo)
@@ -540,6 +557,7 @@ func main() {
 	autoTransHandler := handler.NewAutoTransitionHandler(autoTransitionSvc)
 	memoryHandler := handler.NewMemoryHandler(memoryService, workspaceMemberRepo)
 	mentionHandler := handler.NewMentionHandler(mentionService)
+	documentMentionHandler := handler.NewDocumentMentionHandler(documentMentionService)
 	projectIntegrationHandler := handler.NewProjectIntegrationHandler(projectIntegrationService)
 	trSearchHandler := handler.NewTrSearchHandler(projectIntegrationService)
 	trDocumentHandler := handler.NewTrDocumentHandler(projectIntegrationService)
@@ -1241,6 +1259,17 @@ func main() {
 	api.GET("/me/mentions", mentionHandler.List)
 	api.GET("/me/mentions/unseen_count", mentionHandler.UnseenCount)
 	api.POST("/me/mentions/:comment_id/seen", mentionHandler.MarkSeen)
+	// The same inbox for @-mentions inside document comments. Separate routes
+	// rather than a widened /me/mentions: the rows name a document and no task,
+	// and folding them in would put a nullable task_id on a response shape three
+	// existing screens read as non-null.
+	//
+	// :dcom_id is resolved to a workspace by workspaceParamResolvers, so
+	// RequireWorkspaceMemberScoped (group-level, above) refuses another tenant's
+	// comment id here exactly as it does on /document-comments/:dcom_id.
+	api.GET("/me/document-mentions", documentMentionHandler.List)
+	api.GET("/me/document-mentions/unseen_count", documentMentionHandler.UnseenCount)
+	api.POST("/me/document-mentions/:dcom_id/seen", documentMentionHandler.MarkSeen)
 	api.GET("/workspaces/:ws_id/mentionables", mentionablesHandler.Search)
 
 	// Current user's active tasks (excludes done/cancelled).

@@ -133,7 +133,7 @@ func TestUpdatePreferences_EmptyEventsDefaultsToAllDispatchable(t *testing.T) {
 	require.NotNil(t, svc.upserted)
 	assert.ElementsMatch(t, sortedEvents(), []string(svc.upserted.Events),
 		"an empty events list must default to every dispatchable event, not a subset that quietly drops some")
-	assert.Len(t, svc.upserted.Events, 7)
+	assert.Len(t, svc.upserted.Events, len(dispatchableEvents))
 }
 
 // TestUpdatePreferences_ValidEventSubsetIsStoredUnchanged: naming a subset is
@@ -179,6 +179,7 @@ func TestSortedEvents_MatchesWhitelistSorted(t *testing.T) {
 
 	assert.Equal(t, []string{
 		"comment.created",
+		"document.mentioned",
 		"task.assigned",
 		"task.blocking_triage",
 		"task.mentioned",

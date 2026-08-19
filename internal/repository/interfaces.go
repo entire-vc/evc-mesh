@@ -531,6 +531,20 @@ type CommentMentionRepository interface {
 	CountUnseen(ctx context.Context, mentionedID uuid.UUID, mentionedKind string) (int64, error)
 }
 
+// DocumentCommentMentionRepository manages persistence for
+// document_comment_mentions rows.
+//
+// Deliberately the same four operations as CommentMentionRepository, over the
+// same MentionFilter: a mention on a document page and a mention on a task are
+// the same thing to whoever was named, and the read side should not be two
+// different shapes because the write side has two parent tables.
+type DocumentCommentMentionRepository interface {
+	InsertBatch(ctx context.Context, mentions []domain.DocumentCommentMention) error
+	List(ctx context.Context, mentionedID uuid.UUID, mentionedKind string, filter MentionFilter) ([]domain.DocumentCommentMentionView, error)
+	MarkSeen(ctx context.Context, commentID, mentionedID uuid.UUID) error
+	CountUnseen(ctx context.Context, mentionedID uuid.UUID, mentionedKind string) (int64, error)
+}
+
 // RefreshToken represents a stored refresh token record.
 type RefreshToken struct {
 	ID        uuid.UUID  `db:"id"`
