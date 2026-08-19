@@ -116,7 +116,14 @@ func (r *MemoryReconciler) runLinker(ctx context.Context) error {
 		return nil
 	}
 
-	// Batch-embed all memory contents in one API call.
+	// Batch-embed all memory contents in one API call. Deliberately NOT gated by
+	// memoryService's embedSem (#3d10774e): this reconciler holds its own embedder
+	// reference (constructed alongside, not through, memoryService) with no shared
+	// semaphore plumbed in, it runs on a 6h ticker over at most linkerMaxBatch=50
+	// memories, and it is already one round trip rather than one call per memory.
+	// If this ever needs the same bound, share memoryService's *embedding.Semaphore
+	// (or equivalent) at construction in cmd/api/main.go rather than duplicating a
+	// second unbounded-by-default limit here.
 	texts := make([]string, len(mems))
 	for i, m := range mems {
 		texts[i] = m.Content

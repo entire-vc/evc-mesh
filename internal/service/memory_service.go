@@ -739,7 +739,11 @@ func defaultExpiresAt(scope domain.MemoryScope, tags []string) *time.Time {
 // embedAndStore embeds text and persists the resulting vector(s) for the given memory ID.
 // Called asynchronously from Remember; errors are logged but never surfaced to callers.
 // When embedSem is configured (MemoryWithEmbedConcurrency), it caps how many embed calls
-// run concurrently; otherwise embedding remains unbounded.
+// run concurrently; otherwise embedding remains unbounded. embedSem is shared with the
+// query-embed call in RecallWithStats and with BatchEmbed (see acquireEmbedSem) — it is
+// a bound on the whole memoryService's embedder client, not just this write path (#3d10774e:
+// EMBEDDING_CONCURRENCY looked like a global bound but originally only gated this one call
+// site, leaving the recall query embed to stampede the embedder unbounded).
 //
 // When chunkRepo is configured (MemoryWithChunkRepo), text is split into chunks (see
 // #e8063a65: the prod embedder silently truncates past ~2000 chars, so a memory longer
@@ -753,11 +757,34 @@ func defaultExpiresAt(scope domain.MemoryScope, tags []string) *time.Time {
 // chunk_end, which stay byte offsets into content alone (see embedChunked's doc
 // and #38bb958c: prefixing only chunk 0 of a composite pre-chunked string left
 // ~94% of a multi-chunk memory's chunks searchable without its own key).
-func (s *memoryService) embedAndStore(id uuid.UUID, content, prefix string) {
-	if s.embedSem != nil {
-		s.embedSem <- struct{}{}
-		defer func() { <-s.embedSem }()
+// acquireEmbedSem blocks until an embedSem slot is free, or ctx is done — in which
+// case it returns ctx.Err() and holds no slot. A nil embedSem (the default,
+// EMBEDDING_CONCURRENCY unset) always succeeds immediately, so every call site can
+// use this unconditionally regardless of whether a limit is configured.
+//
+// Pass context.Background() (never the call's own ctx) at a site that establishes
+// its OWN embed-budget deadline immediately after acquiring — embedAndStore's
+// chunked and single-vector paths both do this via embedBudget() — so time spent
+// queued for a slot is never charged against that budget; see embedAndStore's doc
+// for why that matters. Pass the caller's own ctx at a site with no such invented
+// budget (RecallWithStats, BatchEmbed) — there, honoring the caller's deadline
+// while queued is correct: a recall stuck behind a full semaphore should fail open
+// to BM25 like any other embed failure, not outlive the request that asked for it.
+func (s *memoryService) acquireEmbedSem(ctx context.Context) (release func(), err error) {
+	if s.embedSem == nil {
+		return func() {}, nil
 	}
+	select {
+	case s.embedSem <- struct{}{}:
+		return func() { <-s.embedSem }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func (s *memoryService) embedAndStore(id uuid.UUID, content, prefix string) {
+	release, _ := s.acquireEmbedSem(context.Background()) // never errors on a Background ctx
+	defer release()
 
 	if s.chunkRepo != nil {
 		// Budget scales with the number of embedder ROUND TRIPS this memory needs, not
@@ -1021,6 +1048,20 @@ func (s *memoryService) RecallWithStats(ctx context.Context, opts domain.RecallO
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			// Query embed shares embedAndStore's embedSem (#3d10774e) — without this,
+			// EMBEDDING_CONCURRENCY bounded only the write path, and every concurrent
+			// recall fired its own unbounded embed call straight at the embedder. Wait
+			// on the caller's own ctx (not context.Background()): a recall stuck behind
+			// a full semaphore should fail open to BM25 like any other embed failure,
+			// not hold a goroutine open past the request's own deadline.
+			release, semErr := s.acquireEmbedSem(ctx)
+			if semErr != nil {
+				log.Printf("memory recall: embed semaphore wait aborted, using bm25-only: %v", semErr)
+				pkgmetrics.RecordMemoryEmbedFailure("recall")
+				return
+			}
+			defer release()
+
 			queryVec, embedErr := s.embedder.Embed(ctx, opts.Query)
 			if embedErr != nil {
 				// FAIL OPEN: recall still succeeds, but on BM25 alone. This is the
@@ -1763,8 +1804,21 @@ func (s *memoryService) BatchEmbed(ctx context.Context, workspaceID uuid.UUID) (
 	for _, m := range memories {
 		prefix := m.Key + " " + strings.Join(m.Tags, " ") + " "
 
+		// This loop is already sequential (one memory at a time), so the semaphore
+		// never gates BatchEmbed against itself. It still needs a slot: BatchEmbed
+		// shares s.embedder with embedAndStore and RecallWithStats, and a manual
+		// backfill run concurrently with live write/recall traffic must count
+		// against the same budget rather than adding an extra unbounded caller.
+		release, semErr := s.acquireEmbedSem(ctx)
+		if semErr != nil {
+			log.Printf("memory batch embed: semaphore wait aborted: %v", semErr)
+			break // ctx is dead; every remaining acquire would fail identically
+		}
+
 		if s.chunkRepo != nil {
-			if embedErr := s.embedChunkedStoring(ctx, m.ID, m.Content, prefix, s.memRepo.UpdateEmbeddingKeepUpdatedAt); embedErr != nil {
+			embedErr := s.embedChunkedStoring(ctx, m.ID, m.Content, prefix, s.memRepo.UpdateEmbeddingKeepUpdatedAt)
+			release()
+			if embedErr != nil {
 				log.Printf("memory batch embed (chunked): id=%s: %v", m.ID, embedErr)
 				continue
 			}
@@ -1773,6 +1827,7 @@ func (s *memoryService) BatchEmbed(ctx context.Context, workspaceID uuid.UUID) (
 		}
 
 		vec, embedErr := s.embedder.Embed(ctx, prefix+m.Content)
+		release()
 		if embedErr != nil {
 			log.Printf("memory batch embed: embed id=%s: %v", m.ID, embedErr)
 			continue
