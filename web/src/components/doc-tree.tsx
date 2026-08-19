@@ -77,12 +77,52 @@ export function buildDocTree(documents: ProjectDocument[]): DocTreeNode[] {
   return [...tree, ...stranded];
 }
 
+/** A candidate parent, carrying the depth the picker indents it by. */
+export interface DocMoveTarget {
+  doc: ProjectDocument;
+  depth: number;
+}
+
+/**
+ * The documents `docId` may legally be moved under, in tree order.
+ *
+ * Excludes the document itself and everything beneath it. The server rejects
+ * both anyway (`document_service.go` — "cannot be its own parent" and "cannot be
+ * moved under one of its own descendants"), but a destination that cannot be
+ * chosen is better than one that is offered and then refused: the user finds out
+ * before the click rather than after it.
+ *
+ * The current parent is deliberately still listed. Moving a document to where it
+ * already is is a no-op, not an error, and hiding it would make the list shift
+ * under the user depending on which node they opened the picker from.
+ */
+export function moveTargets(
+  documents: ProjectDocument[],
+  docId: string,
+): DocMoveTarget[] {
+  const targets: DocMoveTarget[] = [];
+
+  const walk = (nodes: DocTreeNode[], depth: number) => {
+    for (const node of nodes) {
+      // Skipping the subtree wholesale is what excludes the descendants: they
+      // are only reachable through this node, so not recursing is enough.
+      if (node.doc.id === docId) continue;
+      targets.push({ doc: node.doc, depth });
+      walk(node.children, depth + 1);
+    }
+  };
+  walk(buildDocTree(documents), 0);
+
+  return targets;
+}
+
 interface DocTreeProps {
   documents: ProjectDocument[];
   selectedId?: string | null;
   onSelect: (doc: ProjectDocument) => void;
   onCreateChild: (parent: ProjectDocument) => void;
   onRename: (doc: ProjectDocument) => void;
+  onMove: (doc: ProjectDocument) => void;
   onDelete: (doc: ProjectDocument) => void;
 }
 
@@ -92,6 +132,7 @@ export function DocTree({
   onSelect,
   onCreateChild,
   onRename,
+  onMove,
   onDelete,
 }: DocTreeProps) {
   // Collapsed rather than expanded: a document created under a node is visible
@@ -122,6 +163,7 @@ export function DocTree({
           onSelect={onSelect}
           onCreateChild={onCreateChild}
           onRename={onRename}
+          onMove={onMove}
           onDelete={onDelete}
         />
       ))}
@@ -145,6 +187,7 @@ function DocTreeItem({
   onSelect,
   onCreateChild,
   onRename,
+  onMove,
   onDelete,
 }: DocTreeItemProps) {
   const { doc, children } = node;
@@ -214,6 +257,9 @@ function DocTreeItem({
               <DropdownMenuItem onClick={() => onRename(doc)}>
                 Rename
               </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => onMove(doc)}>
+                Move to...
+              </DropdownMenuItem>
               <DropdownMenuItem
                 onClick={() => onDelete(doc)}
                 className="text-destructive"
@@ -238,6 +284,7 @@ function DocTreeItem({
               onSelect={onSelect}
               onCreateChild={onCreateChild}
               onRename={onRename}
+              onMove={onMove}
               onDelete={onDelete}
             />
           ))}

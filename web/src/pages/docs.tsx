@@ -10,13 +10,14 @@ import {
   AlertCircle,
   Check,
   FilePlus2,
+  FileText,
   Loader2,
   NotebookText,
   Pencil,
   Plus,
 } from "lucide-react";
 import { DocEditor } from "@/components/doc-editor";
-import { DocTree } from "@/components/doc-tree";
+import { DocTree, moveTargets } from "@/components/doc-tree";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -29,6 +30,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { toast } from "@/components/ui/toast";
+import { cn } from "@/lib/cn";
 import { useDocumentStore } from "@/stores/document";
 import { useProjectStore } from "@/stores/project";
 import type { ProjectDocument } from "@/types";
@@ -125,6 +127,117 @@ function TitleDialog({
 }
 
 // ---------------------------------------------------------------------------
+// Move dialog
+// ---------------------------------------------------------------------------
+
+/**
+ * Picks the document's new parent.
+ *
+ * A list rather than drag-and-drop: the tree is a scrolling 256px column, and
+ * dragging a node onto a target that may be collapsed, off-screen or its own
+ * descendant is the hard version of a problem that a list does not have. The
+ * list also states the illegal moves by omission — the document's own subtree is
+ * simply not in it.
+ */
+function MoveDialog({
+  open,
+  doc,
+  targets,
+  isLoading,
+  onClose,
+  onSubmit,
+}: {
+  open: boolean;
+  doc: ProjectDocument;
+  targets: { doc: ProjectDocument; depth: number }[];
+  isLoading: boolean;
+  onClose: () => void;
+  onSubmit: (parentId: string | null) => void;
+}) {
+  // null is "top level", which is a real destination and not "nothing picked" —
+  // hence a separate `touched` flag rather than treating null as unset.
+  const [selected, setSelected] = useState<string | null>(doc.parent_id);
+
+  const currentParent = doc.parent_id;
+
+  return (
+    <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
+      <DialogContent onClose={onClose}>
+        <DialogHeader>
+          <DialogTitle>Move "{doc.title}"</DialogTitle>
+        </DialogHeader>
+
+        <div className="mt-4 max-h-72 overflow-y-auto rounded-md border border-border p-1">
+          <ul role="listbox" aria-label="New parent" className="space-y-0.5">
+            <li>
+              <button
+                type="button"
+                role="option"
+                aria-selected={selected === null}
+                onClick={() => setSelected(null)}
+                className={cn(
+                  "flex w-full items-center gap-1.5 rounded px-2 py-1.5 text-left text-sm hover:bg-accent",
+                  selected === null && "bg-accent font-medium",
+                )}
+              >
+                <NotebookText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                <span className="truncate">Top level</span>
+                {currentParent === null && (
+                  <span className="ml-auto shrink-0 text-xs text-muted-foreground">
+                    current
+                  </span>
+                )}
+              </button>
+            </li>
+            {targets.map(({ doc: target, depth }) => (
+              <li key={target.id}>
+                <button
+                  type="button"
+                  role="option"
+                  aria-selected={selected === target.id}
+                  onClick={() => setSelected(target.id)}
+                  className={cn(
+                    "flex w-full items-center gap-1.5 rounded px-2 py-1.5 text-left text-sm hover:bg-accent",
+                    selected === target.id && "bg-accent font-medium",
+                  )}
+                  style={{ paddingLeft: `${8 + depth * 12}px` }}
+                >
+                  <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                  <span className="truncate">{target.title}</span>
+                  {currentParent === target.id && (
+                    <span className="ml-auto shrink-0 text-xs text-muted-foreground">
+                      current
+                    </span>
+                  )}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+
+        <DialogFooter>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={onClose}
+            disabled={isLoading}
+          >
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            onClick={() => onSubmit(selected)}
+            disabled={isLoading || selected === currentParent}
+          >
+            {isLoading ? "Moving..." : "Move"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Save indicator — says what actually happened, including when it failed
 // ---------------------------------------------------------------------------
 
@@ -205,6 +318,8 @@ export function DocsPage() {
   const [creating, setCreating] = useState(false);
   const [renameTarget, setRenameTarget] = useState<ProjectDocument | null>(null);
   const [renaming, setRenaming] = useState(false);
+  const [moveTarget, setMoveTarget] = useState<ProjectDocument | null>(null);
+  const [moving, setMoving] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<ProjectDocument | null>(null);
   const [deleting, setDeleting] = useState(false);
 
@@ -368,6 +483,28 @@ export function DocsPage() {
     }
   };
 
+  const handleMove = async (parentId: string | null) => {
+    if (!moveTarget) return;
+    setMoving(true);
+    try {
+      // clear_parent is the only spelling the API reads as "to the top level":
+      // parent_id: null arrives at a *uuid.UUID indistinguishable from omitted.
+      const updated = await updateDocument(
+        moveTarget.id,
+        parentId === null ? { clear_parent: true } : { parent_id: parentId },
+      );
+      if (openDoc?.id === updated.id) setOpenDoc(updated);
+      setMoveTarget(null);
+    } catch (err) {
+      // The server refuses a move whose destination already holds a live child
+      // with this slug (409). That is the one failure a user can act on, so it
+      // is surfaced verbatim rather than folded into a generic message.
+      toast.error(errorMessage(err, "Failed to move page"));
+    } finally {
+      setMoving(false);
+    }
+  };
+
   const handleDelete = async () => {
     if (!deleteTarget) return;
     setDeleting(true);
@@ -444,6 +581,7 @@ export function DocsPage() {
               onSelect={(doc) => navigate(`${docsPath}/${doc.id}`)}
               onCreateChild={(parent) => openCreate(parent)}
               onRename={(doc) => setRenameTarget(doc)}
+              onMove={(doc) => setMoveTarget(doc)}
               onDelete={(doc) => setDeleteTarget(doc)}
             />
           )}
@@ -566,6 +704,17 @@ export function DocsPage() {
           isLoading={renaming}
           onClose={() => setRenameTarget(null)}
           onSubmit={(value) => void handleRename(value)}
+        />
+      )}
+
+      {moveTarget && (
+        <MoveDialog
+          open
+          doc={moveTarget}
+          targets={moveTargets(documents, moveTarget.id)}
+          isLoading={moving}
+          onClose={() => setMoveTarget(null)}
+          onSubmit={(parentId) => void handleMove(parentId)}
         />
       )}
 
