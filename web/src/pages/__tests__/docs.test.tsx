@@ -17,6 +17,45 @@ vi.mock("@/components/ui/toast", () => ({
   toast: { error: vi.fn(), success: vi.fn() },
 }));
 
+/**
+ * The page's subject is the save orchestration — debounce, flush on leave,
+ * failure reporting — not what renders the body. DocEditor is stubbed with the
+ * smallest thing that honours its contract (`value` / `onChange` / `readOnly`),
+ * so these tests keep asserting the page's behaviour and stay indifferent to
+ * which editor sits behind the boundary. That indifference is the whole point of
+ * having the boundary; the editor has its own tests in
+ * components/__tests__/doc-editor.test.tsx.
+ *
+ * It is also the only way to drive it: the real editor is a ProseMirror
+ * contenteditable, which does not respond to fireEvent.change.
+ */
+vi.mock("@/components/doc-editor", () => ({
+  DocEditor: ({
+    value,
+    onChange,
+    readOnly,
+  }: {
+    value: string;
+    onChange: (v: string) => void;
+    readOnly?: boolean;
+  }) => {
+    if (readOnly) {
+      return value.trim() ? (
+        <div data-testid="doc-view">{value}</div>
+      ) : (
+        <p>This page is empty.</p>
+      );
+    }
+    return (
+      <textarea
+        aria-label="Document body"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+      />
+    );
+  },
+}));
+
 import { api } from "@/lib/api";
 import { toast } from "@/components/ui/toast";
 import { DocsPage } from "@/pages/docs";
@@ -199,11 +238,11 @@ describe("DocsPage — open, view and edit", () => {
     });
   }
 
-  it("opens in view mode: rendered body, no textarea", async () => {
+  it("opens in view mode: the body is shown, with nothing to type into", async () => {
     mockWithBody("# Deploy\n\nRun the thing.");
     renderDocs("doc-1");
 
-    expect(await screen.findByText("Deploy")).toBeInTheDocument();
+    expect(await screen.findByTestId("doc-view")).toHaveTextContent("Run the thing.");
     expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /edit/i })).toBeInTheDocument();
   });
