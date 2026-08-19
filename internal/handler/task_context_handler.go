@@ -112,6 +112,14 @@ func (h *TaskContextHandler) GetTaskContext(c echo.Context) error {
 	artifactPg := pagination.Params{Page: 1, PageSize: 100, SortBy: "created_at", SortDir: "desc"}
 	artifactPg.Normalize()
 	if artifactPage, err := h.artifactService.ListByTask(c.Request().Context(), taskID, artifactPg); err == nil {
+		// Same redaction the dedicated artifact endpoints apply. This path was
+		// missed when stripSensitiveMetadata was introduced, so GET
+		// /tasks/:id/context — the endpoint behind get_task_context, which the
+		// fleet calls routinely — served tr_agent_key in the clear to any caller
+		// with workspace access, and cached it in Redis for 60s besides.
+		for i := range artifactPage.Items {
+			stripSensitiveMetadata(&artifactPage.Items[i])
+		}
 		resp["artifacts"] = artifactPage.Items
 	} else {
 		resp["artifacts"] = []any{}
