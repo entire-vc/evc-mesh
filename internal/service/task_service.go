@@ -2341,12 +2341,17 @@ func (s *taskService) applyReviewAssignee(ctx context.Context, task *domain.Task
 		return
 	}
 
+	// Capture the current holder before it is overwritten below — this is the real
+	// "old" for the activity entry and comment, not the caller's request (there is
+	// no caller here; the server is moving the task on its own).
+	oldAssigneeID := task.AssigneeID
+	oldAssigneeType := task.AssigneeType
+
 	// Stash the current assignee so a later bounce out of review (MoveTask's
 	// restorePreReviewAssignee) can return the task to whoever was doing the work,
 	// instead of stranding it on the reviewer.
-	prevAssigneeType := task.AssigneeType
-	task.PreReviewAssigneeID = task.AssigneeID
-	task.PreReviewAssigneeType = &prevAssigneeType
+	task.PreReviewAssigneeID = oldAssigneeID
+	task.PreReviewAssigneeType = &oldAssigneeType
 
 	task.AssigneeID = reviewerID
 	task.AssigneeType = assigneeType
@@ -2360,14 +2365,16 @@ func (s *taskService) applyReviewAssignee(ctx context.Context, task *domain.Task
 		return
 	}
 	log.Printf("[review-assign] task %s assigned to set_reviewer=%q on review", task.ID, tr.OnTransition.SetReviewer)
+	const reason = "set_reviewer on review transition"
 	s.logActivity(ctx, task.ProjectID, task.ID, "task.assigned", map[string]interface{}{
-		"assignee_id": map[string]interface{}{"old": nil, "new": reviewerID.String()},
-		"reason":      "set_reviewer on review transition",
+		"assignee_id": map[string]interface{}{"old": oldAssigneeID, "new": reviewerID.String()},
+		"reason":      reason,
 	})
 	s.notifyAssignedAgent(ctx, task, "task.assigned", map[string]any{
-		"assignee_id": map[string]any{"old": nil, "new": reviewerID.String()},
-		"reason":      "set_reviewer on review transition",
+		"assignee_id": map[string]any{"old": oldAssigneeID, "new": reviewerID.String()},
+		"reason":      reason,
 	})
+	s.postAssigneeChangeComment(ctx, task, oldAssigneeID, reviewerID, reason)
 }
 
 // restorePreReviewAssignee returns the task to whoever held it before applyReviewAssignee
@@ -2398,6 +2405,10 @@ func (s *taskService) restorePreReviewAssignee(ctx context.Context, task *domain
 		return
 	}
 
+	// Capture the reviewer (the current holder, about to be overwritten) as the real
+	// "old" for the activity entry and comment.
+	oldAssigneeID := task.AssigneeID
+
 	task.AssigneeID = prevAssigneeID
 	task.AssigneeType = prevAssigneeType
 	if err := s.ensureAssigneeProjectMember(ctx, task.ProjectID, task.AssigneeID, task.AssigneeType); err != nil {
@@ -2416,14 +2427,52 @@ func (s *taskService) restorePreReviewAssignee(ctx context.Context, task *domain
 		restoredID = prevAssigneeID.String()
 	}
 	log.Printf("[review-assign] task %s assignee restored to pre-review holder on bounce out of review", task.ID)
+	const reason = "restored pre-review assignee on bounce out of review"
 	s.logActivity(ctx, task.ProjectID, task.ID, "task.assigned", map[string]interface{}{
-		"assignee_id": map[string]interface{}{"old": nil, "new": restoredID},
-		"reason":      "restored pre-review assignee on bounce out of review",
+		"assignee_id": map[string]interface{}{"old": oldAssigneeID, "new": restoredID},
+		"reason":      reason,
 	})
 	s.notifyAssignedAgent(ctx, task, "task.assigned", map[string]any{
-		"assignee_id": map[string]any{"old": nil, "new": restoredID},
-		"reason":      "restored pre-review assignee on bounce out of review",
+		"assignee_id": map[string]any{"old": oldAssigneeID, "new": restoredID},
+		"reason":      reason,
 	})
+	s.postAssigneeChangeComment(ctx, task, oldAssigneeID, prevAssigneeID, reason)
+}
+
+// postAssigneeChangeComment writes an audit comment on the card explaining a
+// server-initiated (not caller-requested) assignee change — applyReviewAssignee's
+// reviewer bounce and restorePreReviewAssignee's restore are the only two write
+// paths that move assignee_id without the caller asking for it, and both were
+// previously silent: the activity log recorded "old": nil, and no comment was
+// posted at all, so an agent reading the thread had no way to tell the card had
+// moved out from under them (source: task f06ebeb7). A comment-post failure must
+// not unwind the assignee change itself — it is logged loudly and the change stands.
+func (s *taskService) postAssigneeChangeComment(ctx context.Context, task *domain.Task, oldID, newID *uuid.UUID, reason string) {
+	if s.commentRepo == nil {
+		return
+	}
+	describe := func(id *uuid.UUID) string {
+		if id == nil {
+			return "(unassigned)"
+		}
+		return id.String()
+	}
+	now := timeNow()
+	comment := &domain.Comment{
+		ID:         uuid.New(),
+		TaskID:     task.ID,
+		AuthorID:   uuid.Nil,
+		AuthorType: domain.ActorTypeSystem,
+		Body: fmt.Sprintf(
+			"🔄 Авто-смена исполнителя: %s → %s (%s).",
+			describe(oldID), describe(newID), reason,
+		),
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	if err := s.commentRepo.Create(ctx, comment); err != nil {
+		log.Printf("[review-assign] WARNING: failed to post assignee-change comment on task %s: %v", task.ID, err)
+	}
 }
 
 // resolveSetReviewer resolves a SetReviewer config value to an agent UUID.
