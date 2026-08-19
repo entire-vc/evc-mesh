@@ -62,3 +62,35 @@ export function saveDocTreeWidth(width: number): void {
     // width simply won't outlive the session, which is a safe degradation.
   }
 }
+
+// ---------------------------------------------------------------------------
+// The comments rail
+// ---------------------------------------------------------------------------
+
+const RAIL_KEY = "mesh_docs_comments_rail";
+
+/**
+ * Whether the comments rail is open. Defaults to open.
+ *
+ * A closed-by-default rail is how a feature ships and nobody finds it: the only
+ * other sign that a document has comments is a highlight in text you have to
+ * already be reading. Open by default, and remembered once the reader has an
+ * opinion — the same treatment the tree width gets, and for the same reason.
+ */
+export function loadDocCommentsRailOpen(): boolean {
+  try {
+    const raw = localStorage.getItem(RAIL_KEY);
+    if (raw === null) return true;
+    return raw === "1";
+  } catch {
+    return true;
+  }
+}
+
+export function saveDocCommentsRailOpen(open: boolean): void {
+  try {
+    localStorage.setItem(RAIL_KEY, open ? "1" : "0");
+  } catch {
+    // Same degradation as the width: forgotten at the end of the session.
+  }
+}
