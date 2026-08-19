@@ -326,10 +326,13 @@ describe("DocCommentToggle", () => {
     expect(badge).toHaveTextContent("2");
   });
 
-  it("falls back to the total when everything is resolved", () => {
+  it("shows a tick, not a number, when nothing is open", () => {
+    // "3" next to Comments reads as three comments waiting for you. It is the
+    // opposite of what an all-resolved document means.
     const controller = makeController({ unresolvedCount: 0, totalCount: 3 });
     render(<DocCommentToggle controller={controller} open={false} onToggle={vi.fn()} />);
-    expect(screen.getByTitle("All resolved")).toHaveTextContent("3");
+    expect(screen.getByTestId("doc-comment-toggle")).not.toHaveTextContent("3");
+    expect(screen.getByLabelText("All 3 resolved")).toBeInTheDocument();
   });
 
   it("shows no count on a document with no comments", () => {
