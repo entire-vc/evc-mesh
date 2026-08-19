@@ -318,7 +318,7 @@ func TestDocumentService_Delete_SoftDeletesAndKeepsTheBody(t *testing.T) {
 	ctx := context.Background()
 	created := f.create(t, "Doomed", "still here")
 
-	require.NoError(t, f.svc.Delete(ctx, created.ID, f.wsID))
+	require.NoError(t, f.svc.Delete(ctx, created.ID, f.wsID, uuid.New(), domain.ActorTypeUser))
 
 	gone, err := f.repo.GetByID(ctx, created.ID)
 	require.NoError(t, err)
@@ -339,7 +339,7 @@ func TestDocumentService_Delete_TakesTheSubtreeWithIt(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	require.NoError(t, f.svc.Delete(ctx, parent.ID, f.wsID))
+	require.NoError(t, f.svc.Delete(ctx, parent.ID, f.wsID, uuid.New(), domain.ActorTypeUser))
 
 	orphan, err := f.repo.GetByID(ctx, child.ID)
 	require.NoError(t, err)
@@ -350,7 +350,7 @@ func TestDocumentService_Delete_OtherWorkspaceIsNotFound(t *testing.T) {
 	f := setupDocumentService(t)
 	created := f.create(t, "Confidential", "secret")
 
-	err := f.svc.Delete(context.Background(), created.ID, uuid.New())
+	err := f.svc.Delete(context.Background(), created.ID, uuid.New(), uuid.New(), domain.ActorTypeUser)
 
 	var apiErr *apierror.Error
 	require.ErrorAs(t, err, &apiErr)

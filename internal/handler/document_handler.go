@@ -123,12 +123,18 @@ func (h *DocumentHandler) Update(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
 	}
 
+	callerID, callerType := callerActor(c)
+
 	doc, err := h.documentService.Update(c.Request().Context(), docID, wsID, service.UpdateDocumentInput{
 		Title:       req.Title,
 		ParentID:    req.ParentID,
 		ClearParent: req.ClearParent,
 		Position:    req.Position,
 		Body:        req.Body,
+		// The editor is read from the request, never bound from the body: an
+		// updated_by a caller could choose is a byline anyone can forge.
+		UpdatedBy:     callerID,
+		UpdatedByType: callerType,
 	})
 	if err != nil {
 		return handleError(c, err)
@@ -144,7 +150,9 @@ func (h *DocumentHandler) Delete(c echo.Context) error {
 		return c.JSON(apiErr.StatusCode(), apiErr)
 	}
 
-	if err := h.documentService.Delete(c.Request().Context(), docID, wsID); err != nil {
+	callerID, callerType := callerActor(c)
+
+	if err := h.documentService.Delete(c.Request().Context(), docID, wsID, callerID, callerType); err != nil {
 		return handleError(c, err)
 	}
 

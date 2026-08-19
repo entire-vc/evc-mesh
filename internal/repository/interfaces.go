@@ -249,12 +249,14 @@ type DocumentRepository interface {
 	// project does not belong to workspaceID — the defense-in-depth ownership
 	// check behind the /documents/:doc_id routes.
 	GetByIDInWorkspace(ctx context.Context, id, workspaceID uuid.UUID) (*domain.Document, error)
-	// Update writes title, parent_id, position and updated_at. Nothing else on a
-	// document is mutable: the body is in object storage, and project_id and slug
-	// are what its siblings are unique against.
+	// Update writes title, parent_id, position, updated_at and the updated_by
+	// pair. Nothing else on a document is mutable: the body is in object storage,
+	// and project_id and slug are what its siblings are unique against.
 	Update(ctx context.Context, doc *domain.Document) error
-	// SoftDelete stamps deleted_at, freeing the slug for a new sibling.
-	SoftDelete(ctx context.Context, id uuid.UUID, at time.Time) error
+	// SoftDelete stamps deleted_at, freeing the slug for a new sibling, and
+	// records who did it: a delete is a change to the row, and "last updated by"
+	// has to survive a restore to be worth anything.
+	SoftDelete(ctx context.Context, id uuid.UUID, at time.Time, by uuid.UUID, byType domain.ActorType) error
 	ListByProject(ctx context.Context, projectID uuid.UUID, pg pagination.Params) (*pagination.Page[domain.Document], error)
 	// HasAncestor reports whether ancestorID appears above docID in the parent
 	// chain. Re-parenting uses it to refuse the cycles that would otherwise
@@ -278,6 +280,42 @@ type DocumentAttachmentRepository interface {
 	// SoftDelete stamps deleted_at. The stored object is deliberately left alone —
 	// see documentAttachmentService.Delete.
 	SoftDelete(ctx context.Context, id uuid.UUID, at time.Time) error
+}
+
+// DocumentCommentFilter narrows a document's comment listing.
+type DocumentCommentFilter struct {
+	// IncludeResolved keeps resolved threads in the result. It defaults to false
+	// — a resolved thread is one somebody deliberately put away, and the reading
+	// view is the default one — and it filters by THREAD, not by comment: a
+	// resolved root takes its replies with it, or a listing would show answers to
+	// a question that is no longer there.
+	//
+	// Same shape and same default as CommentFilter.IncludeInternal.
+	IncludeResolved bool
+}
+
+// DocumentCommentRepository manages persistence for comments anchored to a
+// document's text. Every read here hides soft-deleted rows.
+type DocumentCommentRepository interface {
+	Create(ctx context.Context, comment *domain.DocumentComment) error
+	// GetByID ignores tenancy and is only for the checks that already have a
+	// tenant-scoped object in hand — validating that a reply's parent lives on
+	// the same document. Never call it with an id straight off the wire.
+	GetByID(ctx context.Context, id uuid.UUID) (*domain.DocumentComment, error)
+	// GetByIDInWorkspace returns nil when the comment's document belongs to a
+	// project outside workspaceID, or when any row in that chain is soft-deleted.
+	// Callers answer 404 on nil, so a stranger's id and a nonexistent one look
+	// the same.
+	GetByIDInWorkspace(ctx context.Context, id, workspaceID uuid.UUID) (*domain.DocumentComment, error)
+	// Update writes body, the resolution triple and updated_at — the whole of
+	// what is mutable. The anchor is not: it records what the comment was written
+	// about, and rewriting it would relabel the past.
+	Update(ctx context.Context, comment *domain.DocumentComment) error
+	// SoftDelete stamps deleted_at on the comment and, when it is a thread root,
+	// on its replies in the same statement: a reply that outlived the comment it
+	// answers is an answer to nothing.
+	SoftDelete(ctx context.Context, id uuid.UUID, at time.Time) error
+	ListByDocument(ctx context.Context, documentID uuid.UUID, filter DocumentCommentFilter, pg pagination.Params) (*pagination.Page[domain.DocumentComment], error)
 }
 
 // AgentFilter defines filtering options for listing agents.

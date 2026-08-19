@@ -338,6 +338,14 @@ type UpdateDocumentInput struct {
 	ClearParent bool    `json:"clear_parent"`
 	Position    *int    `json:"position"`
 	Body        *string `json:"body"`
+
+	// UpdatedBy is the caller, resolved from the request by the handler — never
+	// taken from the request body, which would let anyone sign an edit with
+	// somebody else's name. It is required rather than optional: a mutation that
+	// left "last updated by" as it found it would report the previous editor as
+	// the current one, which is worse than the NULL the legacy rows carry.
+	UpdatedBy     uuid.UUID        `json:"updated_by"`
+	UpdatedByType domain.ActorType `json:"updated_by_type"`
 }
 
 // DocumentService provides business logic for project documents: metadata in
@@ -348,8 +356,10 @@ type DocumentService interface {
 	// belongs to workspaceID (defense-in-depth after wsAccess).
 	GetByIDInWorkspace(ctx context.Context, id, workspaceID uuid.UUID) (*domain.Document, error)
 	Update(ctx context.Context, id, workspaceID uuid.UUID, input UpdateDocumentInput) (*domain.Document, error)
-	// Delete soft-deletes the document and its descendants; the stored body is kept.
-	Delete(ctx context.Context, id, workspaceID uuid.UUID) error
+	// Delete soft-deletes the document and its descendants; the stored body is
+	// kept. deletedBy is recorded as the last editor of every row it touches — a
+	// delete is a change, and the restore path needs to be able to say who made it.
+	Delete(ctx context.Context, id, workspaceID, deletedBy uuid.UUID, deletedByType domain.ActorType) error
 	ListByProject(ctx context.Context, projectID uuid.UUID, pg pagination.Params) (*pagination.Page[domain.Document], error)
 }
 
@@ -389,6 +399,73 @@ type DocumentAttachmentService interface {
 	ListByDocument(ctx context.Context, documentID, workspaceID uuid.UUID, pg pagination.Params) (*pagination.Page[domain.DocumentAttachment], error)
 	// Delete soft-deletes the attachment; the stored object is kept.
 	Delete(ctx context.Context, id, workspaceID uuid.UUID) error
+}
+
+// CreateDocumentCommentInput holds parameters for commenting on a document.
+//
+// DocumentID comes from the route and WorkspaceID from the caller's resolved
+// tenant — never from the request body. WorkspaceID is what makes DocumentID
+// checkable: without it the service would hang the comment off whatever document
+// id it was handed, including another tenant's.
+type CreateDocumentCommentInput struct {
+	DocumentID  uuid.UUID `json:"document_id"`
+	WorkspaceID uuid.UUID `json:"workspace_id"`
+
+	// ParentCommentID makes this a reply. The parent must live on the same
+	// document and must itself be top-level.
+	ParentCommentID *uuid.UUID `json:"parent_comment_id"`
+
+	Body string `json:"body"`
+
+	// Anchor is the selected text this comment is about, absent for a comment on
+	// the document as a whole and forbidden on a reply (a reply inherits its
+	// parent's anchor rather than carrying a copy that can drift from it).
+	Anchor *domain.DocumentCommentAnchor `json:"anchor"`
+
+	AuthorID   uuid.UUID        `json:"author_id"`
+	AuthorType domain.ActorType `json:"author_type"`
+}
+
+// UpdateDocumentCommentInput holds the fields for editing a comment.
+//
+// Only the body: the anchor records what was written about and the author records
+// who wrote it, and an edit that could move either would let a comment be
+// relabelled onto text its author never read.
+type UpdateDocumentCommentInput struct {
+	Body string `json:"body"`
+
+	// EditorID/EditorType are the caller. The service refuses an edit by anybody
+	// but the author, so these are an authorization input, not a record of one.
+	EditorID   uuid.UUID        `json:"editor_id"`
+	EditorType domain.ActorType `json:"editor_type"`
+}
+
+// ResolveDocumentCommentInput holds the actor and the direction of a resolution
+// change. Unlike an edit, resolving is not restricted to the author: the point of
+// a resolved thread is that whoever addressed the feedback can put it away.
+type ResolveDocumentCommentInput struct {
+	// Resolved is the state being asked for, not a toggle: a toggle applied twice
+	// by two clients racing on the same thread lands wherever the ordering did.
+	Resolved  bool             `json:"resolved"`
+	ActorID   uuid.UUID        `json:"actor_id"`
+	ActorType domain.ActorType `json:"actor_type"`
+}
+
+// DocumentCommentService provides business logic for comments anchored to a
+// document's text: threading, resolution and the tenancy checks behind them.
+type DocumentCommentService interface {
+	Create(ctx context.Context, input CreateDocumentCommentInput) (*domain.DocumentComment, error)
+	// ListByDocument lists a document's live comments, and only when the document
+	// belongs to workspaceID.
+	ListByDocument(ctx context.Context, documentID, workspaceID uuid.UUID, filter repository.DocumentCommentFilter, pg pagination.Params) (*pagination.Page[domain.DocumentComment], error)
+	// Update edits the body of the caller's OWN comment; anybody else's is a 403.
+	Update(ctx context.Context, id, workspaceID uuid.UUID, input UpdateDocumentCommentInput) (*domain.DocumentComment, error)
+	// SetResolved resolves or unresolves a thread. Only a thread root can be
+	// resolved — resolution is a property of the conversation, not of one line in
+	// it — and it is idempotent, so re-resolving does not rewrite who resolved it.
+	SetResolved(ctx context.Context, id, workspaceID uuid.UUID, input ResolveDocumentCommentInput) (*domain.DocumentComment, error)
+	// Delete soft-deletes the caller's own comment, and its replies with it.
+	Delete(ctx context.Context, id, workspaceID, actorID uuid.UUID, actorType domain.ActorType) error
 }
 
 // RegisterAgentInput holds parameters for registering a new agent.

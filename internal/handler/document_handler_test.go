@@ -316,6 +316,88 @@ func TestDocumentHandler_Update(t *testing.T) {
 	assert.False(t, gotInput.ClearParent)
 }
 
+// The editor is read from the request context, never bound from the body — an
+// updated_by a caller could choose is a byline anyone can forge.
+func TestDocumentHandler_Update_RecordsTheCallerAsTheEditor(t *testing.T) {
+	wsID, agentID := uuid.New(), uuid.New()
+	var gotInput service.UpdateDocumentInput
+
+	mockSvc := &MockDocumentService{
+		UpdateFunc: func(_ context.Context, id, _ uuid.UUID, input service.UpdateDocumentInput) (*domain.Document, error) {
+			gotInput = input
+			return &domain.Document{ID: id}, nil
+		},
+	}
+	h, e := setupDocumentTest(mockSvc)
+
+	// A body that names somebody else as the editor: the field is not bound, so
+	// it must have no effect at all.
+	body := `{"title":"Final","updated_by":"` + uuid.New().String() + `"}`
+	c, rec := docRequest(e, http.MethodPatch, uuid.New().String(), &wsID, body)
+	c.Set("agent_id", agentID)
+
+	require.NoError(t, h.Update(c))
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, agentID, gotInput.UpdatedBy)
+	assert.Equal(t, domain.ActorTypeAgent, gotInput.UpdatedByType)
+}
+
+// The byline this feature exists for has to survive serialization: bare ids would
+// leave the client fanning out to resolve them.
+func TestDocumentHandler_GetByID_ReturnsTheBylineNames(t *testing.T) {
+	wsID := uuid.New()
+	editor := uuid.New()
+	editorType := domain.ActorTypeAgent
+	creatorName, editorName := "Ada", "howard"
+
+	mockSvc := &MockDocumentService{
+		GetByIDInWorkspaceFunc: func(_ context.Context, id, _ uuid.UUID) (*domain.Document, error) {
+			return &domain.Document{
+				ID: id, Title: "Runbook",
+				CreatedBy: uuid.New(), CreatedByType: domain.ActorTypeUser,
+				UpdatedBy: &editor, UpdatedByType: &editorType,
+				CreatedByName: &creatorName, UpdatedByName: &editorName,
+			}, nil
+		},
+	}
+	h, e := setupDocumentTest(mockSvc)
+
+	c, rec := docRequest(e, http.MethodGet, uuid.New().String(), &wsID, "")
+	require.NoError(t, h.GetByID(c))
+
+	var doc map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &doc))
+	assert.Equal(t, "Ada", doc["created_by_name"])
+	assert.Equal(t, "howard", doc["updated_by_name"])
+	assert.Equal(t, editor.String(), doc["updated_by"])
+	assert.Equal(t, "agent", doc["updated_by_type"])
+}
+
+// A document written before the column existed has no last editor, and the
+// response must say so rather than repeat the creator.
+func TestDocumentHandler_GetByID_LegacyDocumentHasNoEditor(t *testing.T) {
+	wsID := uuid.New()
+	creatorName := "Ada"
+
+	mockSvc := &MockDocumentService{
+		GetByIDInWorkspaceFunc: func(_ context.Context, id, _ uuid.UUID) (*domain.Document, error) {
+			return &domain.Document{ID: id, CreatedByName: &creatorName}, nil
+		},
+	}
+	h, e := setupDocumentTest(mockSvc)
+
+	c, rec := docRequest(e, http.MethodGet, uuid.New().String(), &wsID, "")
+	require.NoError(t, h.GetByID(c))
+
+	var doc map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &doc))
+	assert.Nil(t, doc["updated_by"])
+	assert.Nil(t, doc["updated_by_type"])
+	_, present := doc["updated_by_name"]
+	assert.False(t, present, "an unresolvable name is omitted, not sent as an empty string")
+}
+
 // A field nobody sent must stay nil all the way to the service: bound as a zero
 // value it would blank the title of every document patched for its position.
 func TestDocumentHandler_Update_AbsentFieldsStayNil(t *testing.T) {
@@ -410,22 +492,27 @@ func TestDocumentHandler_Update_NotFound(t *testing.T) {
 func TestDocumentHandler_Delete(t *testing.T) {
 	docID := uuid.New()
 	wsID := uuid.New()
-	var gotID, gotWS uuid.UUID
+	userID := uuid.New()
+	var gotID, gotWS, gotBy uuid.UUID
+	var gotByType domain.ActorType
 
 	mockSvc := &MockDocumentService{
-		DeleteFunc: func(_ context.Context, id, ws uuid.UUID) error {
-			gotID, gotWS = id, ws
+		DeleteFunc: func(_ context.Context, id, ws, by uuid.UUID, byType domain.ActorType) error {
+			gotID, gotWS, gotBy, gotByType = id, ws, by, byType
 			return nil
 		},
 	}
 	h, e := setupDocumentTest(mockSvc)
 
 	c, rec := docRequest(e, http.MethodDelete, docID.String(), &wsID, "")
+	c.Set("user_id", userID)
 	require.NoError(t, h.Delete(c))
 
 	assert.Equal(t, http.StatusNoContent, rec.Code)
 	assert.Equal(t, docID, gotID)
 	assert.Equal(t, wsID, gotWS)
+	assert.Equal(t, userID, gotBy, "the deleter is recorded as the row's last editor")
+	assert.Equal(t, domain.ActorTypeUser, gotByType)
 }
 
 func TestDocumentHandler_Delete_InvalidUUID(t *testing.T) {
@@ -441,7 +528,7 @@ func TestDocumentHandler_Delete_InvalidUUID(t *testing.T) {
 func TestDocumentHandler_Delete_NoWorkspaceInContext(t *testing.T) {
 	called := false
 	mockSvc := &MockDocumentService{
-		DeleteFunc: func(context.Context, uuid.UUID, uuid.UUID) error {
+		DeleteFunc: func(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, domain.ActorType) error {
 			called = true
 			return nil
 		},
@@ -458,7 +545,7 @@ func TestDocumentHandler_Delete_NoWorkspaceInContext(t *testing.T) {
 func TestDocumentHandler_Delete_NotFound(t *testing.T) {
 	wsID := uuid.New()
 	mockSvc := &MockDocumentService{
-		DeleteFunc: func(context.Context, uuid.UUID, uuid.UUID) error {
+		DeleteFunc: func(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, domain.ActorType) error {
 			return apierror.NotFound("Document")
 		},
 	}
