@@ -1,3 +1,6 @@
+/// <reference types="node" />
+import { readFileSync } from "node:fs";
+import { resolve as resolvePath } from "node:path";
 import { describe, it, expect, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { DocTree, buildDocTree, moveTargets } from "@/components/doc-tree";
@@ -162,6 +165,148 @@ describe("DocTree", () => {
 
     expect(selected).toHaveLength(1);
     expect(selected[0]).toHaveTextContent("Child A");
+  });
+
+  it("fills the selected row with the light secondary surface and its own foreground", () => {
+    // Pinned deliberately. The selected row used to be --accent, a saturated
+    // teal carrying the default near-black text, and "you cannot see what is
+    // there" is exactly how it was reported. A refactor that drops either half
+    // of this pairing reintroduces that.
+    renderTree({ selectedId: "child-a" });
+
+    const [row] = screen
+      .getAllByRole("treeitem")
+      .filter((el) => el.getAttribute("aria-selected") === "true");
+
+    expect(row).toHaveClass("bg-secondary");
+    expect(row).toHaveClass("text-secondary-foreground");
+    expect(row).not.toHaveClass("bg-accent");
+  });
+
+  it("gives the selected row a second cue beyond its fill", () => {
+    // --secondary and --muted (the hover fill) are close in lightness on
+    // purpose, so selection cannot be carried by the fill alone: the row also
+    // gets a brand-coloured bar at the column edge and heavier text.
+    renderTree({ selectedId: "child-a" });
+
+    const [row] = screen
+      .getAllByRole("treeitem")
+      .filter((el) => el.getAttribute("aria-selected") === "true");
+
+    expect(row!.querySelector("[data-selected-bar]")).toBeInTheDocument();
+    expect(row).toHaveClass("font-medium");
+  });
+
+  it("leaves the unselected rows to the neutral hover tint", () => {
+    renderTree({ selectedId: "child-a" });
+
+    const [other] = screen
+      .getAllByRole("treeitem")
+      .filter((el) => el.textContent?.includes("Child B"));
+
+    expect(other).toHaveClass("hover:bg-muted");
+    expect(other).not.toHaveClass("bg-secondary");
+    expect(other!.querySelector("[data-selected-bar]")).toBeNull();
+  });
+});
+
+/**
+ * The selected row's colours are theme tokens, so the check that they are
+ * readable belongs to the tokens rather than to a rendered pixel. These read
+ * brandkit.css — the file the app actually ships — and compute WCAG contrast
+ * for the pairing the tree uses, in both themes. Eyeballing is what produced
+ * the bug this replaces.
+ */
+describe("selected-row contrast", () => {
+  // Resolved from the package root rather than import.meta.url: the jsdom
+  // environment reports an http:// module URL, which fileURLToPath rejects.
+  // Comments are stripped first: several declarations sit on the line after a
+  // /* ... */ and the line-wise parse below would otherwise skip exactly those.
+  const css = readFileSync(
+    resolvePath(process.cwd(), "src/styles/brandkit.css"),
+    "utf8",
+  ).replace(/\/\*[\s\S]*?\*\//g, "");
+
+  /** `--name: <value>;` inside the `:root {...}` or `.dark {...}` blocks. */
+  function tokens(selector: string): Map<string, string> {
+    const found = new Map<string, string>();
+    // Several :root blocks exist (primitives, then semantics); take them all,
+    // later declarations winning, exactly as the cascade does.
+    const blocks = css.matchAll(
+      new RegExp(`${selector}\\s*\\{([^}]*)\\}`, "g"),
+    );
+    for (const block of blocks) {
+      for (const line of block[1]!.split(";")) {
+        const m = /^\s*(--[\w-]+)\s*:\s*(.+)$/.exec(line);
+        if (m) found.set(m[1]!, m[2]!.trim());
+      }
+    }
+    return found;
+  }
+
+  const light = tokens(":root");
+  const dark = new Map([...light, ...tokens("\\.dark")]);
+
+  /** Follows `var(--x)` indirection down to three raw HSL numbers. */
+  function resolve(scope: Map<string, string>, name: string): [number, number, number] {
+    let value = scope.get(name);
+    for (let hops = 0; value && hops < 10; hops++) {
+      const ref = /^var\((--[\w-]+)\)$/.exec(value);
+      if (!ref) break;
+      value = scope.get(ref[1]!);
+    }
+    const parts = (value ?? "").match(/[\d.]+/g);
+    if (!parts || parts.length < 3) throw new Error(`cannot resolve ${name}: ${value}`);
+    return [Number(parts[0]), Number(parts[1]) / 100, Number(parts[2]) / 100];
+  }
+
+  function relativeLuminance([h, s, l]: [number, number, number]): number {
+    const c = (1 - Math.abs(2 * l - 1)) * s;
+    const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
+    const m = l - c / 2;
+    const seg = Math.floor(h / 60) % 6;
+    const rgb = [
+      [c, x, 0],
+      [x, c, 0],
+      [0, c, x],
+      [0, x, c],
+      [x, 0, c],
+      [c, 0, x],
+    ][seg]!.map((v) => v + m);
+    const lin = rgb.map((v) =>
+      v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4,
+    );
+    return 0.2126 * lin[0]! + 0.7152 * lin[1]! + 0.0722 * lin[2]!;
+  }
+
+  function contrast(scope: Map<string, string>, a: string, b: string): number {
+    const la = relativeLuminance(resolve(scope, a));
+    const lb = relativeLuminance(resolve(scope, b));
+    const [hi, lo] = la > lb ? [la, lb] : [lb, la];
+    return (hi + 0.05) / (lo + 0.05);
+  }
+
+  it("reads on the light theme", () => {
+    // WCAG AA for body text.
+    expect(contrast(light, "--secondary", "--secondary-foreground")).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it("reads on the dark theme", () => {
+    expect(contrast(dark, "--secondary", "--secondary-foreground")).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it("beats what it replaced, which is why this was reported", () => {
+    // --accent with the inherited body foreground: the old selected row.
+    const before = contrast(light, "--accent", "--foreground");
+    const after = contrast(light, "--secondary", "--secondary-foreground");
+    expect(before).toBeLessThan(4.5);
+    expect(after).toBeGreaterThan(before);
+  });
+
+  it("keeps the accent bar visible against the row it sits on", () => {
+    // Non-text contrast (WCAG 1.4.11) is 3:1.
+    expect(contrast(light, "--secondary", "--primary")).toBeGreaterThanOrEqual(3);
+    expect(contrast(dark, "--secondary", "--primary")).toBeGreaterThanOrEqual(3);
   });
 
   it("offers creating a child under a node", () => {

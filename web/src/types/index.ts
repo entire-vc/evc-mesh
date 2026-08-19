@@ -371,6 +371,13 @@ export interface ProjectDocument {
   position: number;
   created_by: string;
   created_by_type: ActorType;
+  // Actor names and the last editor are being added to the document responses
+  // by a separate change. Optional here so the page that shows them renders
+  // against today's API too, and starts naming the editor the moment the field
+  // appears — same treatment Task gives created_by_name.
+  created_by_name?: string | null;
+  updated_by?: string | null;
+  updated_by_name?: string | null;
   created_at: string;
   updated_at: string;
   deleted_at?: string | null;
