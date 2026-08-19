@@ -258,6 +258,18 @@ type DocumentRepository interface {
 	// has to survive a restore to be worth anything.
 	SoftDelete(ctx context.Context, id uuid.UUID, at time.Time, by uuid.UUID, byType domain.ActorType) error
 	ListByProject(ctx context.Context, projectID uuid.UUID, pg pagination.Params) (*pagination.Page[domain.Document], error)
+	// GetByPathInWorkspace walks a chain of slugs down the project's document
+	// tree, starting at a root document, and returns the deepest document the
+	// path reached together with how many segments it matched.
+	//
+	// It reports the partial match rather than just nil so the caller can say
+	// WHICH segment is missing. A bare "not found" for the whole path cannot
+	// distinguish a typo in the last segment from the wrong project, and the
+	// caller has no cheaper way to find out than walking the tree by hand.
+	//
+	// matched == len(segments) means the whole path resolved. A nil document
+	// with matched == 0 means even the first segment named nothing.
+	GetByPathInWorkspace(ctx context.Context, projectID, workspaceID uuid.UUID, segments []string) (doc *domain.Document, matched int, err error)
 	// HasAncestor reports whether ancestorID appears above docID in the parent
 	// chain. Re-parenting uses it to refuse the cycles that would otherwise
 	// detach a subtree from every listing that walks down from the roots.

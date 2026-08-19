@@ -3,6 +3,7 @@ package handler
 import (
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
@@ -147,6 +148,85 @@ func (h *DocumentHandler) GetByID(c echo.Context) error {
 	}
 
 	return c.JSON(http.StatusOK, doc)
+}
+
+// TOC handles GET /documents/:doc_id/toc — the heading outline of the document.
+//
+// Separate from GET /documents/:doc_id rather than a field on it: the outline is
+// what a caller reads INSTEAD of the body, and returning both would defeat the
+// point. It is recomputed from the body on every request and cached nowhere.
+func (h *DocumentHandler) TOC(c echo.Context) error {
+	docID, wsID, apiErr := documentScope(c)
+	if apiErr != nil {
+		return c.JSON(apiErr.StatusCode(), apiErr)
+	}
+
+	toc, err := h.documentService.TOC(c.Request().Context(), docID, wsID)
+	if err != nil {
+		return handleError(c, err)
+	}
+
+	return c.JSON(http.StatusOK, toc)
+}
+
+// Section handles GET /documents/:doc_id/section?ref=<anchor|heading/path>.
+//
+// ref is an anchor from the table of contents (`linux-1`) or a path of heading
+// slugs (`установка/linux`). A ref matching several headings is a 400 listing
+// the anchors that resolve it — never a first match dressed up as an answer.
+func (h *DocumentHandler) Section(c echo.Context) error {
+	docID, wsID, apiErr := documentScope(c)
+	if apiErr != nil {
+		return c.JSON(apiErr.StatusCode(), apiErr)
+	}
+
+	section, err := h.documentService.Section(c.Request().Context(), docID, wsID, c.QueryParam("ref"))
+	if err != nil {
+		return handleError(c, err)
+	}
+
+	return c.JSON(http.StatusOK, section)
+}
+
+// GetByPath handles GET /projects/:proj_id/documents/by-path?path=a/b/c
+// with an optional &section=<ref>.
+//
+// The section parameter is what makes this worth one call instead of three: an
+// agent that knows the path and the heading it wants gets that heading, rather
+// than resolving a path, then an id, then a section, downloading the whole body
+// on the way.
+//
+// The two shapes are deliberate and documented: without `section` this returns
+// the document exactly as GET /documents/:doc_id does; with it, the section
+// envelope. It is the same trade the route exists to make — say what you want and
+// carry only that.
+func (h *DocumentHandler) GetByPath(c echo.Context) error {
+	projID, err := uuid.Parse(c.Param("proj_id"))
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid proj_id"))
+	}
+
+	wsID, wsErr := mw.GetWorkspaceID(c)
+	if wsErr != nil {
+		return c.JSON(http.StatusForbidden, apierror.Forbidden("workspace access denied"))
+	}
+
+	doc, err := h.documentService.GetByPathInWorkspace(c.Request().Context(), projID, wsID, c.QueryParam("path"))
+	if err != nil {
+		return handleError(c, err)
+	}
+
+	ref := c.QueryParam("section")
+	if strings.TrimSpace(ref) == "" {
+		return c.JSON(http.StatusOK, doc)
+	}
+
+	section, err := h.documentService.Section(c.Request().Context(), doc.ID, wsID, ref)
+	if err != nil {
+		return handleError(c, err)
+	}
+
+	return c.JSON(http.StatusOK, section)
 }
 
 // Update handles PATCH /documents/:doc_id

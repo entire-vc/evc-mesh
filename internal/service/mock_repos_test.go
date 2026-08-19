@@ -2581,6 +2581,61 @@ func (m *MockDocumentRepository) GetByIDInWorkspace(_ context.Context, id, works
 	return &copied, nil
 }
 
+// GetByPathInWorkspace walks the slug chain the same way the recursive CTE in
+// DocumentRepo does, including reporting the depth it reached.
+//
+// This is an in-memory stand-in for the tree walk, not for the SQL: whether the
+// real query filters by workspace, hides soft-deleted rows and uses the sibling
+// indexes is proven against a real Postgres in
+// internal/repository/postgres/document_path_db_test.go. A fake cannot prove a
+// query, and this one does not pretend to.
+func (m *MockDocumentRepository) GetByPathInWorkspace(
+	_ context.Context,
+	projectID, workspaceID uuid.UUID,
+	segments []string,
+) (*domain.Document, int, error) {
+	if m.errToReturn != nil {
+		return nil, 0, m.errToReturn
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	if m.workspaceOf[projectID] != workspaceID {
+		return nil, 0, nil
+	}
+
+	var (
+		current *domain.Document
+		matched int
+	)
+	for _, seg := range segments {
+		var next *domain.Document
+		for _, d := range m.items {
+			if d.DeletedAt != nil || d.ProjectID != projectID || d.Slug != seg {
+				continue
+			}
+			if current == nil && d.ParentID == nil {
+				next = d
+				break
+			}
+			if current != nil && d.ParentID != nil && *d.ParentID == current.ID {
+				next = d
+				break
+			}
+		}
+		if next == nil {
+			break
+		}
+		current, matched = next, matched+1
+	}
+
+	if current == nil {
+		return nil, 0, nil
+	}
+	copied := *current
+	return &copied, matched, nil
+}
+
 func (m *MockDocumentRepository) Update(_ context.Context, doc *domain.Document) error {
 	if m.errToReturn != nil {
 		return m.errToReturn

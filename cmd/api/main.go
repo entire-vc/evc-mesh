@@ -959,8 +959,16 @@ func main() {
 	// /projects/:proj_id so the tenant is named by the path rather than by a
 	// query parameter.
 	api.GET("/projects/:proj_id/documents/search", documentHandler.Search, projAccess)
+	// Address a document by its slug path through the tree rather than by id.
+	// A static segment under the same prefix, so it cannot shadow anything.
+	api.GET("/projects/:proj_id/documents/by-path", documentHandler.GetByPath, projAccess)
 	api.POST("/projects/:proj_id/documents", documentHandler.Create, projAccess, rbac(mw.PermUploadArtifact))
 	api.GET("/documents/:doc_id", documentHandler.GetByID, wsAccess)
+	// Read a document without paying for all of it: the outline, or one
+	// section of it. Both are additive — GET /documents/:doc_id is unchanged
+	// and still returns the whole body.
+	api.GET("/documents/:doc_id/toc", documentHandler.TOC, wsAccess)
+	api.GET("/documents/:doc_id/section", documentHandler.Section, wsAccess)
 	api.PATCH("/documents/:doc_id", documentHandler.Update, wsAccess, rbac(mw.PermUploadArtifact))
 	api.DELETE("/documents/:doc_id", documentHandler.Delete, wsAccess, rbac(mw.PermUploadArtifact))
 

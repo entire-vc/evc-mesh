@@ -958,6 +958,9 @@ type MockDocumentService struct {
 	DeleteFunc             func(ctx context.Context, id, workspaceID, deletedBy uuid.UUID, deletedByType domain.ActorType) error
 	ListByProjectFunc      func(ctx context.Context, projectID uuid.UUID, pg pagination.Params) (*pagination.Page[domain.Document], error)
 	SearchFunc             func(ctx context.Context, projectID, workspaceID uuid.UUID, query string, limit int) ([]domain.DocumentSearchHit, error)
+	TOCFunc                func(ctx context.Context, id, workspaceID uuid.UUID) (*service.DocumentTOC, error)
+	SectionFunc            func(ctx context.Context, id, workspaceID uuid.UUID, ref string) (*service.DocumentSection, error)
+	GetByPathFunc          func(ctx context.Context, projectID, workspaceID uuid.UUID, path string) (*domain.Document, error)
 }
 
 func (m *MockDocumentService) Create(ctx context.Context, input service.CreateDocumentInput) (*domain.Document, error) {
@@ -991,6 +994,27 @@ func (m *MockDocumentService) Delete(ctx context.Context, id, workspaceID, delet
 func (m *MockDocumentService) ListByProject(ctx context.Context, projectID uuid.UUID, pg pagination.Params) (*pagination.Page[domain.Document], error) {
 	if m.ListByProjectFunc != nil {
 		return m.ListByProjectFunc(ctx, projectID, pg)
+	}
+	return nil, nil
+}
+
+func (m *MockDocumentService) TOC(ctx context.Context, id, workspaceID uuid.UUID) (*service.DocumentTOC, error) {
+	if m.TOCFunc != nil {
+		return m.TOCFunc(ctx, id, workspaceID)
+	}
+	return nil, nil
+}
+
+func (m *MockDocumentService) Section(ctx context.Context, id, workspaceID uuid.UUID, ref string) (*service.DocumentSection, error) {
+	if m.SectionFunc != nil {
+		return m.SectionFunc(ctx, id, workspaceID, ref)
+	}
+	return nil, nil
+}
+
+func (m *MockDocumentService) GetByPathInWorkspace(ctx context.Context, projectID, workspaceID uuid.UUID, path string) (*domain.Document, error) {
+	if m.GetByPathFunc != nil {
+		return m.GetByPathFunc(ctx, projectID, workspaceID, path)
 	}
 	return nil, nil
 }

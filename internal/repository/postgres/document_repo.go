@@ -334,3 +334,81 @@ func (r *DocumentRepo) SearchInProject(
 	}
 	return hits, nil
 }
+
+// documentPathRow is documentRow plus how deep in the requested path this row
+// sits, which is what lets the service name the segment that failed.
+type documentPathRow struct {
+	documentRow
+	Depth int `db:"depth"`
+}
+
+// GetByPathInWorkspace resolves a slug path through the project's document tree.
+//
+// One recursive CTE rather than a query per segment: a four-segment path is one
+// round trip, and every step is served by the same partial unique indexes that
+// enforce sibling-slug uniqueness (uq_documents_root_slug for the anchor,
+// uq_documents_sibling_slug for each recursive step), so the walk is an index
+// lookup per level rather than a scan.
+//
+// The walk returns the DEEPEST row it reached, not only a complete match. A path
+// that breaks at segment three is a different answer from one that names nothing
+// at all, and the caller can only say so if the query tells it where the walk
+// stopped.
+//
+// Deleted rows are excluded at every level, so a live document under a
+// soft-deleted parent is unreachable by path — which is the same thing the tree
+// listing shows, and the alternative would resurrect a subtree through a side
+// door.
+func (r *DocumentRepo) GetByPathInWorkspace(
+	ctx context.Context,
+	projectID, workspaceID uuid.UUID,
+	segments []string,
+) (*domain.Document, int, error) {
+	if len(segments) == 0 {
+		return nil, 0, nil
+	}
+
+	q := `
+		WITH RECURSIVE walk AS (
+			SELECT d.id, 1 AS depth
+			  FROM documents d
+			  JOIN projects p ON p.id = d.project_id
+			 WHERE d.project_id = $1
+			   AND p.workspace_id = $2
+			   AND d.parent_id IS NULL
+			   AND d.slug = ($3::text[])[1]
+			   AND d.deleted_at IS NULL
+			UNION ALL
+			SELECT c.id, w.depth + 1
+			  FROM documents c
+			  JOIN walk w ON c.parent_id = w.id
+			 WHERE c.project_id = $1
+			   AND c.deleted_at IS NULL
+			   -- Redundant with the line below — indexing past the end of the
+			   -- array yields NULL and a slug = NULL test is never true, so the
+			   -- recursion would terminate anyway. Kept because the
+			   -- termination of a recursive CTE should be visible in the
+			   -- query rather than inferred from NULL comparison semantics.
+			   AND w.depth < array_length($3::text[], 1)
+			   AND c.slug = ($3::text[])[w.depth + 1]
+		)
+		` + documentEnrichedSelect + `, w.depth
+		  FROM walk w
+		  JOIN documents d ON d.id = w.id
+		 ORDER BY w.depth DESC
+		 LIMIT 1`
+
+	var row documentPathRow
+	if err := r.db.GetContext(ctx, &row, q, projectID, workspaceID, pq.Array(segments)); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			// Not even the first segment matched. Zero depth is the honest
+			// answer, and it is not an error: asking for a path that does not
+			// exist is a normal thing for a caller to do.
+			return nil, 0, nil
+		}
+		return nil, 0, err
+	}
+
+	d := row.toDomain()
+	return &d, row.Depth, nil
+}

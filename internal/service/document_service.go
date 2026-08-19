@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/repository"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
+	"github.com/entire-vc/evc-mesh/pkg/markdown"
 	"github.com/entire-vc/evc-mesh/pkg/pagination"
 )
 
@@ -174,20 +176,11 @@ func (s *documentService) GetByIDInWorkspace(ctx context.Context, id, workspaceI
 		return nil, apierror.NotFound("Document")
 	}
 
-	if s.storage == nil {
-		return nil, apierror.ServiceUnavailable("storage backend not configured")
-	}
-	rc, err := s.storage.Download(ctx, doc.StorageKey)
+	body, err := s.loadBody(ctx, doc.StorageKey)
 	if err != nil {
-		return nil, apierror.InternalError("failed to read document body from storage")
+		return nil, err
 	}
-	defer func() { _ = rc.Close() }()
-
-	body, err := io.ReadAll(io.LimitReader(rc, maxDocumentBodyBytes))
-	if err != nil {
-		return nil, apierror.InternalError("failed to read document body from storage")
-	}
-	doc.Body = string(body)
+	doc.Body = body
 
 	return doc, nil
 }
@@ -381,4 +374,171 @@ func (s *documentService) requireParentInProject(ctx context.Context, parentID, 
 		})
 	}
 	return nil
+}
+
+// maxDocumentPathDepth caps how deep a path lookup will walk. The tree has no
+// depth limit of its own, and the resolver is a recursive CTE — a caller sending
+// a thousand segments would otherwise buy a thousand recursion levels for a
+// document that cannot exist.
+const maxDocumentPathDepth = 32
+
+// TOC returns the document's table of contents.
+//
+// It is computed from the body on every call and stored nowhere. A persisted
+// table of contents disagrees with its document from the first edit onwards, and
+// does it silently: the entries still look plausible, they just point at text
+// that has moved. Recomputing costs one pass over a body that has already been
+// fetched.
+func (s *documentService) TOC(ctx context.Context, id, workspaceID uuid.UUID) (*DocumentTOC, error) {
+	doc, err := s.GetByIDInWorkspace(ctx, id, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	return &DocumentTOC{
+		DocumentID: doc.ID,
+		Title:      doc.Title,
+		Headings:   markdown.TOC(doc.Body),
+	}, nil
+}
+
+// Section returns one section of the document: the heading addressed by ref and
+// the markdown from that heading down to the next one of the same or higher
+// rank. Subsections are included; the following sibling is not.
+//
+// This is the point of the whole unit. A caller that wants one section of a
+// 5 MiB runbook pays for one section.
+func (s *documentService) Section(ctx context.Context, id, workspaceID uuid.UUID, ref string) (*DocumentSection, error) {
+	if strings.TrimSpace(ref) == "" {
+		return nil, apierror.ValidationError(map[string]string{
+			"ref": "a section reference is required",
+		})
+	}
+
+	doc, err := s.GetByIDInWorkspace(ctx, id, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+
+	heading, content, err := markdown.Section(doc.Body, ref)
+	if err != nil {
+		return nil, documentSectionError(err, ref)
+	}
+
+	return &DocumentSection{
+		DocumentID: doc.ID,
+		Title:      doc.Title,
+		Heading:    heading,
+		Content:    content,
+	}, nil
+}
+
+// documentSectionError translates an addressing failure into the API's shape.
+//
+// An ambiguous reference is a 400, not a 404: the section exists, the caller was
+// not specific enough, and the answer is the list of references that resolve.
+// Answering 404 would send them looking for a section that is right there.
+func documentSectionError(err error, ref string) error {
+	var ambiguous *markdown.AmbiguousError
+	if errors.As(err, &ambiguous) {
+		return apierror.BadRequestWithDetails(
+			fmt.Sprintf("section reference %q matches %d headings", ref, len(ambiguous.Anchors)),
+			"address one of them directly: "+strings.Join(ambiguous.Anchors, ", "),
+		)
+	}
+	var notFound *markdown.NotFoundError
+	if errors.As(err, &notFound) {
+		return apierror.NotFoundWithDetails("Section",
+			fmt.Sprintf("no heading in this document matches %q", ref))
+	}
+	return err
+}
+
+// GetByPathInWorkspace resolves a slash-separated slug path inside a project —
+// `architecture/adr/adr-004` — and returns the document with its body.
+//
+// Agents think in paths. Making them look up a uuid first costs an extra call on
+// every single reference, which is exactly the overhead this unit exists to
+// remove.
+//
+// The path is the chain of slugs down the document TREE, not a stored field. A
+// document moved to a different parent is therefore reachable at a different
+// path, and any link written against the old one stops resolving. That is
+// accepted deliberately: the alternative is a second, stored address that drifts
+// out of agreement with the tree, and a link that quietly resolves to the wrong
+// document is worse than one that visibly stops resolving. Callers that need an
+// address stable across moves use the document id, which never moves.
+func (s *documentService) GetByPathInWorkspace(ctx context.Context, projectID, workspaceID uuid.UUID, path string) (*domain.Document, error) {
+	segments := splitDocumentPath(path)
+	if len(segments) == 0 {
+		return nil, apierror.ValidationError(map[string]string{
+			"path": "a document path is required, e.g. architecture/adr/adr-004",
+		})
+	}
+	if len(segments) > maxDocumentPathDepth {
+		return nil, apierror.ValidationError(map[string]string{
+			"path": fmt.Sprintf("a document path may have at most %d segments", maxDocumentPathDepth),
+		})
+	}
+
+	doc, matched, err := s.documentRepo.GetByPathInWorkspace(ctx, projectID, workspaceID, segments)
+	if err != nil {
+		return nil, err
+	}
+	// A path that breaks halfway is answered by naming WHERE it broke. "not
+	// found" for the whole path leaves the caller unable to tell a typo in the
+	// last segment from a wrong project, which is the difference between a
+	// one-second fix and a hunt.
+	if doc == nil || matched < len(segments) {
+		return nil, apierror.NotFoundWithDetails("Document", documentPathMiss(segments, matched))
+	}
+
+	body, err := s.loadBody(ctx, doc.StorageKey)
+	if err != nil {
+		return nil, err
+	}
+	doc.Body = body
+	return doc, nil
+}
+
+// documentPathMiss describes where a path stopped resolving.
+func documentPathMiss(segments []string, matched int) string {
+	if matched <= 0 {
+		return fmt.Sprintf("no document %q at the root of this project", segments[0])
+	}
+	return fmt.Sprintf("no document %q under %q",
+		segments[matched], strings.Join(segments[:matched], "/"))
+}
+
+// splitDocumentPath turns `/architecture/adr/adr-004/` into its slugs. Empty
+// segments are dropped so that stray or doubled separators are noise rather
+// than a lookup for a document with an empty slug.
+func splitDocumentPath(path string) []string {
+	var out []string
+	for _, seg := range strings.Split(path, "/") {
+		if seg = strings.TrimSpace(seg); seg != "" {
+			out = append(out, seg)
+		}
+	}
+	return out
+}
+
+// loadBody fetches a document body from object storage.
+//
+// A body that cannot be read is an error rather than an empty string: an editor
+// that renders "" and then saves overwrites the real document with nothing.
+func (s *documentService) loadBody(ctx context.Context, storageKey string) (string, error) {
+	if s.storage == nil {
+		return "", apierror.ServiceUnavailable("storage backend not configured")
+	}
+	rc, err := s.storage.Download(ctx, storageKey)
+	if err != nil {
+		return "", apierror.InternalError("failed to read document body from storage")
+	}
+	defer func() { _ = rc.Close() }()
+
+	body, err := io.ReadAll(io.LimitReader(rc, maxDocumentBodyBytes))
+	if err != nil {
+		return "", apierror.InternalError("failed to read document body from storage")
+	}
+	return string(body), nil
 }

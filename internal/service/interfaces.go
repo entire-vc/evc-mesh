@@ -12,6 +12,7 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/eventbus"
 	"github.com/entire-vc/evc-mesh/internal/repository"
+	"github.com/entire-vc/evc-mesh/pkg/markdown"
 	"github.com/entire-vc/evc-mesh/pkg/pagination"
 )
 
@@ -365,6 +366,36 @@ type DocumentService interface {
 	// content. workspaceID is the tenancy check; an empty query is refused rather
 	// than answered with everything.
 	Search(ctx context.Context, projectID, workspaceID uuid.UUID, query string, limit int) ([]domain.DocumentSearchHit, error)
+	// TOC returns the document's table of contents, derived from the body on
+	// every call. Nothing about it is stored — see documentService.TOC.
+	TOC(ctx context.Context, id, workspaceID uuid.UUID) (*DocumentTOC, error)
+	// Section returns one section addressed by anchor or heading path. An
+	// ambiguous reference is refused with the references that resolve it,
+	// never answered with a first match.
+	Section(ctx context.Context, id, workspaceID uuid.UUID, ref string) (*DocumentSection, error)
+	// GetByPathInWorkspace resolves a slug path through the document tree,
+	// e.g. `architecture/adr/adr-004`, and returns the document with its body.
+	GetByPathInWorkspace(ctx context.Context, projectID, workspaceID uuid.UUID, path string) (*domain.Document, error)
+}
+
+// DocumentTOC is a document's table of contents.
+//
+// Computed on read. There is no stored counterpart and there is deliberately no
+// cache: an index that can disagree with the text it indexes is worse than no
+// index, because it still looks right.
+type DocumentTOC struct {
+	DocumentID uuid.UUID          `json:"document_id"`
+	Title      string             `json:"title"`
+	Headings   []markdown.Heading `json:"headings"`
+}
+
+// DocumentSection is one section of a document: the heading that opens it and
+// the markdown it covers, subsections included.
+type DocumentSection struct {
+	DocumentID uuid.UUID        `json:"document_id"`
+	Title      string           `json:"title"`
+	Heading    markdown.Heading `json:"heading"`
+	Content    string           `json:"content"`
 }
 
 // UploadDocumentAttachmentInput holds parameters for uploading a file into a
