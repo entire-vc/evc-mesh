@@ -58,8 +58,14 @@ type EmbeddingConfig struct {
 	// the response, so a response whose prompt_tokens lands exactly on this value is
 	// the only client-visible sign that content was dropped. 0 disables the check.
 	MaxInputTokens int
-	// Concurrency bounds how many embed calls may run concurrently (default: 0, meaning
-	// unbounded — every write spawns its own embed goroutine, today's exact behavior).
+	// Concurrency bounds how many embed calls (write + recall + backfill combined —
+	// see memoryService.acquireEmbedSem) may run against the embedder at once.
+	// Default: 4. A CPU-bound self-hosted embedder (TEI, e5-small on 8 cores) gets
+	// SLOWER past its core count — an unbounded stampede thrashes it into timeouts
+	// rather than serving more throughput (measured live 2026-08-19, #9fe5bb71:
+	// throughput +60% after capping in-flight requests from ~40 to 4). 0 restores
+	// the old unbounded behavior; only use that against a horizontally-scaled or
+	// hosted embedding API that can actually absorb unbounded concurrency.
 	Concurrency int
 	// HTTPTimeoutSecs is the timeout, in seconds, for the embedder's HTTP client (default: 30).
 	HTTPTimeoutSecs int
@@ -263,7 +269,7 @@ func Load() *Config {
 			APIKey:          getEnv("EMBEDDING_API_KEY", ""),
 			Dimensions:      getEnvInt("EMBEDDING_DIMENSIONS", 0),
 			BatchSize:       getEnvInt("EMBEDDING_BATCH_SIZE", 32),
-			Concurrency:     getEnvInt("EMBEDDING_CONCURRENCY", 0),
+			Concurrency:     getEnvInt("EMBEDDING_CONCURRENCY", 4),
 			HTTPTimeoutSecs: getEnvInt("EMBEDDING_HTTP_TIMEOUT_SECS", 30),
 			MaxInputTokens:  getEnvInt("EMBEDDING_MAX_INPUT_TOKENS", 0),
 		},
