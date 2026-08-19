@@ -403,6 +403,57 @@ export interface UpdateDocumentRequest {
   body?: string;
 }
 
+// A comment anchored to a run of a document's text — the W3C Web Annotation
+// selector pair, the same shape Hypothesis stores.
+//
+// `start`/`end` are **byte** offsets into the document's markdown, half-open,
+// and are NOT JavaScript string indices. Convert with lib/doc-comments/offsets.
+//
+// Three states are legal, and the server enforces them:
+//   - no quote            -> not anchored (a page-level comment, or a reply)
+//   - quote + offsets     -> anchored
+//   - quote, offsets null -> orphaned: we know what it was about, not where
+//
+// `orphaned` is computed by the server from whether the offsets are present. It
+// is never sent on a write.
+export interface DocumentCommentAnchor {
+  exact: string;
+  prefix: string;
+  suffix: string;
+  start: number | null;
+  end: number | null;
+  orphaned?: boolean;
+}
+
+export interface DocumentComment {
+  id: string;
+  document_id: string;
+  parent_comment_id: string | null;
+  author_id: string;
+  author_type: ActorType;
+  author_name?: string | null;
+  body: string;
+  /** Null when the comment was never anchored. A reply never carries one. */
+  anchor: DocumentCommentAnchor | null;
+  resolved_at: string | null;
+  resolved_by: string | null;
+  resolved_by_type: ActorType | null;
+  resolved_by_name?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateDocumentCommentRequest {
+  body: string;
+  /** Set only on a reply. The server refuses a reply to a reply. */
+  parent_comment_id?: string;
+  /**
+   * Omitted for a page-level comment, and forbidden on a reply — a reply
+   * inherits its parent's anchor and the server answers 400 if it carries one.
+   */
+  anchor?: Omit<DocumentCommentAnchor, "orphaned">;
+}
+
 export interface Artifact {
   id: string;
   task_id: string;
