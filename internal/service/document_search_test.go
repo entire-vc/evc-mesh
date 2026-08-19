@@ -82,6 +82,7 @@ func TestDocumentSearch_UpdateReindexesTheNewBody(t *testing.T) {
 	body := "second version, entirely rewritten"
 	_, err := f.svc.Update(context.Background(), doc.ID, f.wsID, UpdateDocumentInput{
 		Body:          &body,
+		BaseVersion:   &doc.Version,
 		UpdatedBy:     f.actorID,
 		UpdatedByType: domain.ActorTypeUser,
 	})
@@ -98,6 +99,7 @@ func TestDocumentSearch_RenameDoesNotRewriteTheIndexedBody(t *testing.T) {
 	title := "Runbook, renamed"
 	_, err := f.svc.Update(context.Background(), doc.ID, f.wsID, UpdateDocumentInput{
 		Title:         &title,
+		BaseVersion:   &doc.Version,
 		UpdatedBy:     f.actorID,
 		UpdatedByType: domain.ActorTypeUser,
 	})
@@ -108,6 +110,31 @@ func TestDocumentSearch_RenameDoesNotRewriteTheIndexedBody(t *testing.T) {
 	indexed, ok := f.repo.SearchText(doc.ID)
 	require.True(t, ok)
 	assert.Equal(t, "a megabyte of unchanged prose", indexed)
+}
+
+// Append is a body write, so it has to reach the index too. Without this the
+// text agents add to a page — the most common automated write there is — would
+// be unfindable until somebody happened to save the page some other way.
+func TestDocumentSearch_AppendReindexesTheWholeBody(t *testing.T) {
+	f := setupDocumentSearch(t)
+	doc := f.create(t, "Run log", "# Run log\n")
+
+	_, err := f.svc.AppendBody(context.Background(), doc.ID, f.wsID, AppendDocumentInput{
+		Text:          "the rollback procedure was exercised\n",
+		UpdatedBy:     f.actorID,
+		UpdatedByType: domain.ActorTypeAgent,
+	})
+	require.NoError(t, err)
+
+	indexed, ok := f.repo.SearchText(doc.ID)
+	require.True(t, ok)
+	assert.Equal(t, "# Run log\nthe rollback procedure was exercised\n", indexed,
+		"the index carries the body as it now stands, not just the appended fragment")
+
+	// And it is genuinely findable by the added words, which is the point.
+	hits, searchErr := f.svc.Search(context.Background(), f.projectID, f.wsID, "rollback", 0)
+	require.NoError(t, searchErr)
+	assert.Len(t, hits, 1)
 }
 
 func TestDocumentSearch_IndexFailureDoesNotFailTheSave(t *testing.T) {
