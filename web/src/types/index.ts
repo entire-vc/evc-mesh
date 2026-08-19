@@ -566,6 +566,16 @@ export interface SparkInstallResponse {
 
 export type ViewType = "board" | "list" | "timeline" | "calendar";
 
+/**
+ * Tabs reachable from the project view strip.
+ *
+ * Superset of ViewType on purpose: Docs is a navigation destination, not a
+ * savable view. The server's saved-view enum (internal/service/
+ * saved_view_service.go) only accepts board/list/timeline/calendar, so widening
+ * ViewType itself would let the UI POST a view_type the API rejects.
+ */
+export type ProjectViewTab = ViewType | "docs";
+
 export interface SavedView {
   id: string;
   project_id: string;
