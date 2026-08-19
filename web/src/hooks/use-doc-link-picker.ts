@@ -1,12 +1,18 @@
 import { type KeyboardEvent, type RefObject, useCallback, useEffect, useRef, useState } from "react";
 import {
   type DocLinkTrigger,
-  type LinkableDocument,
   applyDocLinkInsertion,
   documentMarkdownLink,
+  linkLabel,
   findDocLinkTrigger,
   matchDocuments,
 } from "@/lib/docs/doc-link";
+import {
+  type DocumentSearchHit,
+  type SearchScope,
+  searchDocuments,
+  searchRelayDocuments,
+} from "@/lib/docs/document-search";
 import { fetchLinkableDocuments } from "@/lib/docs/linkable-documents";
 import { useProjectStore } from "@/stores/project";
 import { useWorkspaceStore } from "@/stores/workspace";
@@ -29,16 +35,22 @@ import { useWorkspaceStore } from "@/stores/workspace";
 export interface UseDocLinkPicker {
   /** Non-null while the menu should be shown. */
   trigger: DocLinkTrigger | null;
-  suggestions: LinkableDocument[];
+  suggestions: DocumentSearchHit[];
+  scope: SearchScope;
+  setScope: (scope: SearchScope) => void;
+  loading: boolean;
   activeIndex: number;
   setActiveIndex: (index: number) => void;
   /** Call from the textarea's onChange, AFTER the value has been set. */
   onValueChange: (value: string, caret: number) => void;
   /** Call from the textarea's onKeyDown, first. Returns true when it handled the key. */
   onKeyDown: (e: KeyboardEvent<HTMLTextAreaElement>) => boolean;
-  pick: (doc: LinkableDocument) => void;
+  pick: (doc: DocumentSearchHit) => void;
   close: () => void;
 }
+
+/** How long after the last keystroke the server is asked. */
+const SEARCH_DEBOUNCE_MS = 200;
 
 export function useDocLinkPicker(
   projectId: string | undefined,
@@ -47,7 +59,10 @@ export function useDocLinkPicker(
   textareaRef: RefObject<HTMLTextAreaElement | null>,
 ): UseDocLinkPicker {
   const [trigger, setTrigger] = useState<DocLinkTrigger | null>(null);
-  const [documents, setDocuments] = useState<LinkableDocument[]>([]);
+  const [documents, setDocuments] = useState<DocumentSearchHit[]>([]);
+  const [hits, setHits] = useState<DocumentSearchHit[] | null>(null);
+  const [scope, setScope] = useState<SearchScope>("docs");
+  const [loading, setLoading] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
 
   const projects = useProjectStore((s) => s.projects);
@@ -73,7 +88,11 @@ export function useDocLinkPicker(
     let cancelled = false;
     fetchLinkableDocuments(projectId)
       .then((items) => {
-        if (!cancelled) setDocuments(items);
+        if (!cancelled) {
+          setDocuments(
+            items.map((d) => ({ ...d, snippet: "", snippetIsMatch: false })),
+          );
+        }
       })
       // A failed fetch leaves the menu empty, which reads as "no documents
       // match". That is the honest state: we do not know of any.
@@ -85,19 +104,69 @@ export function useDocLinkPicker(
     };
   }, [trigger, projectId]);
 
-  const suggestions = trigger ? matchDocuments(documents, trigger.query) : [];
+  // Two sources, and which one answers is the whole point of this unit.
+  //
+  // The already-loaded title list answers instantly and is what makes the menu
+  // browsable the moment `[[` is typed — a picker that shows nothing until a
+  // request returns feels broken. The server answers the question titles cannot:
+  // where a phrase appears INSIDE a document.
+  //
+  // So the local list is shown first and replaced by hits when they arrive. The
+  // Team Relay scope has no local list at all; there the menu is empty until the
+  // search returns, which is honest — we genuinely know nothing about that vault
+  // until we ask.
+  const suggestions = !trigger
+    ? []
+    : hits ?? (scope === "docs" ? matchDocuments(documents, trigger.query) : []);
+
+  // Ask the server. Debounced, and only once there is something to ask about:
+  // an empty query is refused by the API, and firing it on every `[[` would put
+  // a rejected request behind a keystroke.
+  const query = trigger?.query ?? "";
+  useEffect(() => {
+    if (!trigger || !projectId || query.trim() === "") {
+      setHits(null);
+      setLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setLoading(true);
+    const timer = setTimeout(() => {
+      const search = scope === "relay" ? searchRelayDocuments : searchDocuments;
+      search(projectId, query)
+        .then((found) => {
+          if (!cancelled) setHits(found);
+        })
+        // A failed search leaves the local title matches in place rather than
+        // emptying the menu: degraded is better than blank, and blank would read
+        // as "there is no such document".
+        .catch(() => {
+          if (!cancelled) setHits(null);
+        })
+        .finally(() => {
+          if (!cancelled) setLoading(false);
+        });
+    }, SEARCH_DEBOUNCE_MS);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [trigger, projectId, query, scope]);
 
   const onValueChange = useCallback(
     (next: string, caret: number) => {
       const found = findDocLinkTrigger(next, caret);
       setTrigger(found);
-      if (!found) setActiveIndex(0);
+      if (!found) {
+        setActiveIndex(0);
+        setHits(null);
+      }
     },
     [],
   );
 
   const pick = useCallback(
-    (doc: LinkableDocument) => {
+    (doc: DocumentSearchHit) => {
       const textarea = textareaRef.current;
       const caret = textarea?.selectionStart ?? valueRef.current.length;
       const active = findDocLinkTrigger(valueRef.current, caret);
@@ -110,16 +179,23 @@ export function useDocLinkPicker(
         return;
       }
 
-      const wsSlug = currentWorkspace?.slug;
-      const project =
-        projects.find((p) => p.id === projectId) ??
-        (currentProject?.id === projectId ? currentProject : undefined);
-      if (!wsSlug || !project) {
-        close();
-        return;
+      // A Team Relay document has no route in this app — that is exactly why the
+      // relay:// pseudo-scheme exists — so it is inserted as the URL the existing
+      // renderer already recognises, not as a link to a page we do not serve.
+      let link: string;
+      if (doc.relayUrl) {
+        link = `[${linkLabel(doc.title)}](${doc.relayUrl})`;
+      } else {
+        const wsSlug = currentWorkspace?.slug;
+        const project =
+          projects.find((p) => p.id === projectId) ??
+          (currentProject?.id === projectId ? currentProject : undefined);
+        if (!wsSlug || !project) {
+          close();
+          return;
+        }
+        link = documentMarkdownLink(doc.title, wsSlug, project.slug, doc.id);
       }
-
-      const link = documentMarkdownLink(doc.title, wsSlug, project.slug, doc.id);
       const out = applyDocLinkInsertion(valueRef.current, active, caret, link);
       onChangeRef.current(out.value);
       close();
@@ -171,6 +247,9 @@ export function useDocLinkPicker(
   return {
     trigger,
     suggestions,
+    scope,
+    setScope,
+    loading,
     activeIndex,
     setActiveIndex,
     onValueChange,

@@ -55,3 +55,29 @@ type Document struct {
 	// Artifact.StorageURL — a domain field the storage layer fills in.
 	Body string `json:"body,omitempty" db:"-"`
 }
+
+// DocumentSearchHit is one result of a full-text search over document content.
+//
+// It is not a Document: a hit carries a snippet and a rank that exist only for
+// this query, and it deliberately omits the body and the storage key so a search
+// result cannot be mistaken for the document itself.
+type DocumentSearchHit struct {
+	ID        uuid.UUID `json:"id" db:"id"`
+	ProjectID uuid.UUID `json:"project_id" db:"project_id"`
+	Title     string    `json:"title" db:"title"`
+	Slug      string    `json:"slug" db:"slug"`
+
+	// Snippet is a fragment of the document with the matched words marked, or —
+	// when the match lies past the window ts_headline was given — the opening of
+	// the document with nothing marked.
+	Snippet string `json:"snippet" db:"snippet"`
+	// SnippetIsMatch says which of those two the snippet is.
+	//
+	// Without it the caller cannot tell a fragment containing the match from the
+	// document's first sentence, and would highlight both. Showing a reader the
+	// start of a document as though it were the reason the document matched is a
+	// small lie that makes the whole result list untrustworthy.
+	SnippetIsMatch bool `json:"snippet_is_match"`
+
+	Rank float64 `json:"rank" db:"rank"`
+}

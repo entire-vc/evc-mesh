@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -251,4 +252,85 @@ func isDocumentSlugConflict(err error) bool {
 		return false
 	}
 	return pqErr.Constraint == "uq_documents_sibling_slug" || pqErr.Constraint == "uq_documents_root_slug"
+}
+
+// ---------------------------------------------------------------------------
+// Full-text search
+// ---------------------------------------------------------------------------
+
+// searchHeadlineWindow bounds the text ts_headline is asked to look at.
+//
+// ts_headline is linear in the text it is given and is run once per hit, so
+// handing it a 5 MiB body times a page of results is seconds of CPU for a
+// snippet. The window is the opening of the document; a match deeper than this
+// still RANKS (the tsvector covers far more), it just cannot be quoted, and the
+// hit says so via SnippetIsMatch rather than passing off the first sentence as
+// the reason it matched.
+const searchHeadlineWindow = 20000
+
+// Markers chosen so nothing in a markdown body can be mistaken for them: a
+// document may well contain <b> or **, and mistaking the author's own text for
+// our highlight would mark the wrong words.
+const (
+	searchMarkStart = "\uE000"
+	searchMarkEnd   = "\uE001"
+)
+
+// SetSearchText stores the copy of the body the index is built from. The trigger
+// on documents recomputes search_vector from it.
+func (r *DocumentRepo) SetSearchText(ctx context.Context, documentID uuid.UUID, text string) error {
+	// updated_at is deliberately NOT touched: indexing is not an edit, and moving
+	// the timestamp would reorder every list that sorts by it.
+	const q = `UPDATE documents SET search_text = $2 WHERE id = $1 AND deleted_at IS NULL`
+	_, err := r.db.ExecContext(ctx, q, documentID, text)
+	return err
+}
+
+func (r *DocumentRepo) SearchInProject(
+	ctx context.Context,
+	projectID, workspaceID uuid.UUID,
+	query string,
+	limit int,
+) ([]domain.DocumentSearchHit, error) {
+	// The JOIN onto projects is the tenancy check and is not optional: a project
+	// id is a caller-supplied value, and without this a caller who learned one
+	// could read another tenant's documents through this endpoint.
+	const q = `
+		SELECT d.id, d.project_id, d.title, d.slug,
+		       ts_headline('simple', left(coalesce(d.search_text, ''), $5), tsq,
+		                   'StartSel=' || $6 || ',StopSel=' || $7 ||
+		                   ',MaxWords=18,MinWords=6,ShortWord=2,MaxFragments=1') AS snippet,
+		       ts_rank(d.search_vector, tsq) AS rank
+		  FROM documents d
+		  JOIN projects p ON d.project_id = p.id
+		  CROSS JOIN LATERAL plainto_tsquery('simple', $3) AS tsq
+		 WHERE d.project_id = $1
+		   AND p.workspace_id = $2
+		   AND d.deleted_at IS NULL
+		   AND d.search_vector @@ tsq
+		 ORDER BY rank DESC, d.updated_at DESC, d.id ASC
+		 LIMIT $4`
+
+	var rows []struct {
+		domain.DocumentSearchHit
+		Snippet string `db:"snippet"`
+	}
+	if err := r.db.SelectContext(ctx, &rows, q,
+		projectID, workspaceID, query, limit,
+		searchHeadlineWindow, searchMarkStart, searchMarkEnd,
+	); err != nil {
+		return nil, err
+	}
+
+	hits := make([]domain.DocumentSearchHit, len(rows))
+	for i := range rows {
+		hit := rows[i].DocumentSearchHit
+		raw := rows[i].Snippet
+		// A headline with no marker in it means the match is past the window, so
+		// the text is the document's opening rather than the matched passage.
+		hit.SnippetIsMatch = strings.Contains(raw, searchMarkStart)
+		hit.Snippet = raw
+		hits[i] = hit
+	}
+	return hits, nil
 }

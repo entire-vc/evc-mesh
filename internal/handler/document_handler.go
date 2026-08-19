@@ -2,6 +2,7 @@ package handler
 
 import (
 	"net/http"
+	"strconv"
 
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
@@ -63,6 +64,43 @@ func (h *DocumentHandler) List(c echo.Context) error {
 	}
 
 	return c.JSON(http.StatusOK, page)
+}
+
+// Search handles GET /projects/:proj_id/documents/search?q=&limit=
+//
+// The project is named by the PATH, not by a query parameter, and that is not a
+// style choice: a tenant-shaped value in the query string pulls this route into
+// the declared-query-tenant grammar, where every verdict has to be spelled a
+// particular way. In the path it costs one resolver and the guard already
+// understands it.
+func (h *DocumentHandler) Search(c echo.Context) error {
+	projID, err := uuid.Parse(c.Param("proj_id"))
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid proj_id"))
+	}
+
+	wsID, wsErr := mw.GetWorkspaceID(c)
+	if wsErr != nil {
+		return c.JSON(http.StatusForbidden, apierror.Forbidden("workspace access denied"))
+	}
+
+	limit := 0
+	if raw := c.QueryParam("limit"); raw != "" {
+		parsed, convErr := strconv.Atoi(raw)
+		if convErr != nil {
+			return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid limit"))
+		}
+		limit = parsed
+	}
+
+	hits, err := h.documentService.Search(c.Request().Context(), projID, wsID, c.QueryParam("q"), limit)
+	if err != nil {
+		return handleError(c, err)
+	}
+
+	// `items`, matching every other list this API returns, so a caller does not
+	// need a second shape for this one.
+	return c.JSON(http.StatusOK, map[string]any{"items": hits})
 }
 
 // Create handles POST /projects/:proj_id/documents

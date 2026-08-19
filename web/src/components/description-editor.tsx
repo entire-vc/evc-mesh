@@ -3,6 +3,7 @@ import {
   type DragEvent,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -224,6 +225,15 @@ export function DescriptionEditor({
   // `[[` links a document from this project. Not gated on an integration the way
   // the Relay picker is: our own documents are always there.
   const docLinks = useDocLinkPicker(projId, value, onChange, textareaRef);
+  // Team Relay appears as a scope only when the project is connected to one.
+  // A switcher with a single option is a control that cannot do anything.
+  const docLinkScopes = useMemo(
+    () =>
+      hasTrIntegration
+        ? ([{ id: "docs", label: "Docs" }, { id: "relay", label: "Team Relay" }] as const)
+        : ([{ id: "docs", label: "Docs" }] as const),
+    [hasTrIntegration],
+  );
 
   // Auto-resize textarea height
   const autoResize = useCallback(() => {
@@ -543,6 +553,10 @@ export function DescriptionEditor({
               activeIndex={docLinks.activeIndex}
               onPick={docLinks.pick}
               onHover={docLinks.setActiveIndex}
+              scope={docLinks.scope}
+              scopes={docLinkScopes}
+              onScope={docLinks.setScope}
+              loading={docLinks.loading}
             />
           )}
           {dragOver && (

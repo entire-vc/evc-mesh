@@ -237,6 +237,15 @@ export function CommentList({ taskId, projId }: CommentListProps) {
   // description has, deliberately identical in behaviour to the `@` menu right
   // beside it.
   const docLinks = useDocLinkPicker(projId, body, setBody, textareaRef);
+  // Team Relay appears as a scope only when the project is connected to one.
+  // A switcher with a single option is a control that cannot do anything.
+  const docLinkScopes = useMemo(
+    () =>
+      hasTrIntegration
+        ? ([{ id: "docs", label: "Docs" }, { id: "relay", label: "Team Relay" }] as const)
+        : ([{ id: "docs", label: "Docs" }] as const),
+    [hasTrIntegration],
+  );
 
   // @-mention autocomplete state
   const [mentionQuery, setMentionQuery] = useState<string | null>(null);
@@ -576,6 +585,10 @@ export function CommentList({ taskId, projId }: CommentListProps) {
                 activeIndex={docLinks.activeIndex}
                 onPick={docLinks.pick}
                 onHover={docLinks.setActiveIndex}
+                scope={docLinks.scope}
+                scopes={docLinkScopes}
+                onScope={docLinks.setScope}
+                loading={docLinks.loading}
               />
             </div>
           )}

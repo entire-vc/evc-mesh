@@ -2503,8 +2503,13 @@ type MockDocumentRepository struct {
 	mu          sync.RWMutex
 	items       map[uuid.UUID]*domain.Document
 	workspaceOf map[uuid.UUID]uuid.UUID
-	errToReturn error
-	createErr   error
+	searchText  map[uuid.UUID]string
+	// failSearchTextOnly makes SetSearchText fail while every other call
+	// succeeds — the shape needed to prove that a failed INDEX write does not
+	// fail the document write.
+	failSearchTextOnly bool
+	errToReturn        error
+	createErr          error
 }
 
 func NewMockDocumentRepository() *MockDocumentRepository {
@@ -2945,4 +2950,65 @@ func (m *MockDocumentCommentRepository) ListByDocument(
 		return items[i].ID.String() < items[j].ID.String()
 	})
 	return pagination.NewPage(items, len(items), pg), nil
+}
+
+// searchText mirrors what the trigger indexes, so a service test can assert that
+// the body actually reached the index rather than that a method was called.
+func (m *MockDocumentRepository) SetSearchText(_ context.Context, documentID uuid.UUID, text string) error {
+	if m.failSearchTextOnly {
+		return assertAnError{}
+	}
+	if m.errToReturn != nil {
+		return m.errToReturn
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.searchText == nil {
+		m.searchText = make(map[uuid.UUID]string)
+	}
+	m.searchText[documentID] = text
+	return nil
+}
+
+// SearchText reports what was indexed for a document, for assertions.
+func (m *MockDocumentRepository) SearchText(documentID uuid.UUID) (string, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	text, ok := m.searchText[documentID]
+	return text, ok
+}
+
+func (m *MockDocumentRepository) SearchInProject(
+	_ context.Context,
+	projectID, workspaceID uuid.UUID,
+	query string,
+	limit int,
+) ([]domain.DocumentSearchHit, error) {
+	if m.errToReturn != nil {
+		return nil, m.errToReturn
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var hits []domain.DocumentSearchHit
+	for _, doc := range m.items {
+		if doc.ProjectID != projectID || doc.DeletedAt != nil {
+			continue
+		}
+		if m.workspaceOf[doc.ProjectID] != workspaceID {
+			continue
+		}
+		// Substring over title AND indexed text — a stand-in for the tsvector,
+		// enough to tell "searched the content" from "searched the title".
+		haystack := strings.ToLower(doc.Title + " " + m.searchText[doc.ID])
+		if !strings.Contains(haystack, strings.ToLower(query)) {
+			continue
+		}
+		hits = append(hits, domain.DocumentSearchHit{
+			ID: doc.ID, ProjectID: doc.ProjectID, Title: doc.Title, Slug: doc.Slug,
+		})
+		if len(hits) >= limit {
+			break
+		}
+	}
+	return hits, nil
 }
