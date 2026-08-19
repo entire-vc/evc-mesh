@@ -234,6 +234,62 @@ func TestDocumentCommentHandler_Create(t *testing.T) {
 	assert.Equal(t, 17, *got.Anchor.End)
 }
 
+// A quote-anchored create — the shape an agent sends, with no offsets in it.
+//
+// The handler's whole job here is not to lose the fields on the way through, so
+// that is what is asserted: the quote and its context arrive, and no anchor is
+// invented alongside them.
+func TestDocumentCommentHandler_Create_ByQuote(t *testing.T) {
+	docID, wsID, agentID := uuid.New(), uuid.New(), uuid.New()
+	var got service.CreateDocumentCommentInput
+
+	mockSvc := &MockDocumentCommentService{
+		CreateFunc: func(_ context.Context, in service.CreateDocumentCommentInput) (*domain.DocumentComment, error) {
+			got = in
+			return &domain.DocumentComment{ID: uuid.New(), DocumentID: in.DocumentID, Body: in.Body}, nil
+		},
+	}
+	h, e := setupDocumentCommentTest(mockSvc)
+
+	body := `{"body":"это противоречит абзацу выше",` +
+		`"quote":"Правильный ответ — байты",` +
+		`"quote_context":"символы. Правильный ответ — байты, а не"}`
+	c, rec := docCommentListRequest(e, http.MethodPost, docID.String(), &wsID, "/", body)
+	c.Set("agent_id", agentID)
+
+	require.NoError(t, h.Create(c))
+
+	assert.Equal(t, http.StatusCreated, rec.Code)
+	assert.Equal(t, "Правильный ответ — байты", got.Quote)
+	assert.Equal(t, "символы. Правильный ответ — байты, а не", got.QuoteContext)
+	assert.Nil(t, got.Anchor, "a quote must not arrive as an anchor with zeroed offsets")
+	assert.Equal(t, domain.ActorTypeAgent, got.AuthorType)
+}
+
+// The two halves of the context pair travel separately when that is how they were
+// sent — the service, not the handler, decides that giving both forms is an error.
+func TestDocumentCommentHandler_Create_ByQuoteWithPrefixAndSuffix(t *testing.T) {
+	wsID := uuid.New()
+	var got service.CreateDocumentCommentInput
+
+	mockSvc := &MockDocumentCommentService{
+		CreateFunc: func(_ context.Context, in service.CreateDocumentCommentInput) (*domain.DocumentComment, error) {
+			got = in
+			return &domain.DocumentComment{ID: uuid.New()}, nil
+		},
+	}
+	h, e := setupDocumentCommentTest(mockSvc)
+
+	body := `{"body":"note","quote":"Токен","quote_prefix":"миграцию. ","quote_suffix":" обязателен."}`
+	c, rec := docCommentListRequest(e, http.MethodPost, uuid.New().String(), &wsID, "/", body)
+	require.NoError(t, h.Create(c))
+
+	assert.Equal(t, http.StatusCreated, rec.Code)
+	assert.Equal(t, "Токен", got.Quote)
+	assert.Equal(t, "миграцию. ", got.QuotePrefix)
+	assert.Equal(t, " обязателен.", got.QuoteSuffix)
+}
+
 // An absent anchor stays absent all the way to the service: bound as a zero value
 // it would arrive as an anchor with an empty quote, which is a different request.
 func TestDocumentCommentHandler_Create_WithoutAnAnchor(t *testing.T) {

@@ -457,10 +457,12 @@ func main() {
 	// not nil, and the service's "storage not configured" branch tests exactly that.
 	documentAttachmentService := service.NewDocumentAttachmentService(documentAttachmentRepo, documentRepo, attachmentStore)
 
-	// No storage dependency: a comment's text is a column, not an object. It takes
-	// the document repository so every entry point can resolve the document inside
-	// the caller's workspace before touching a comment.
-	documentCommentService := service.NewDocumentCommentService(documentCommentRepo, documentRepo)
+	// It takes the document repository so every entry point can resolve the document
+	// inside the caller's workspace before touching a comment, and the document
+	// SERVICE for the one path that needs the markdown itself: a comment anchored by
+	// quote rather than by offsets, where the server locates the quote in the body.
+	// Everything else here is columns, not objects, and pays no storage round-trip.
+	documentCommentService := service.NewDocumentCommentService(documentCommentRepo, documentRepo, documentService)
 
 	// Wire Team Relay publisher into artifact service (best-effort; fires on upload).
 	projectIntegrationService := service.NewProjectIntegrationService(projectIntegrationRepo)

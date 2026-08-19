@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -15,6 +16,19 @@ import (
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 	"github.com/entire-vc/evc-mesh/pkg/pagination"
 )
+
+// runbookBody is the markdown the fixture document holds.
+//
+// It is Russian because that is where a byte offset and a character offset are
+// different numbers: an ASCII fixture would let a resolver using either one pass.
+// It repeats "токен" on purpose, so the ambiguity path has something to be
+// ambiguous about, and carries one bold run for the markup-tolerant path.
+const runbookBody = `# Рунбук отката
+
+Сначала верните образ, потом применяйте миграцию. Токен берётся из 1Password.
+
+Порядок отката: **сначала верните образ**, потом миграцию. Токен обязателен.
+`
 
 // documentCommentFixture is one document inside one workspace, with the service
 // under test wired to fresh mocks.
@@ -35,14 +49,17 @@ func setupDocumentCommentService(t *testing.T) *documentCommentFixture {
 	projectID, wsID, documentID := uuid.New(), uuid.New(), uuid.New()
 
 	docs := NewMockDocumentRepository().WithProjectWorkspace(projectID, wsID)
-	docs.Seed(&domain.Document{ID: documentID, ProjectID: projectID, Title: "Runbook"})
+	docs.Seed(&domain.Document{ID: documentID, ProjectID: projectID, Title: "Runbook", Body: runbookBody})
 
 	comments := NewMockDocumentCommentRepository().WithDocumentWorkspace(documentID, wsID)
 
 	timeNow = func() time.Time { return frozenTime }
 
 	return &documentCommentFixture{
-		svc:         NewDocumentCommentService(comments, docs),
+		// The document repository doubles as the body reader here: in production
+		// those are two different objects (the reader fetches from object storage),
+		// but the port is one method with one signature and the fake satisfies it.
+		svc:         NewDocumentCommentService(comments, docs, docs),
 		comments:    comments,
 		docs:        docs,
 		documentID:  documentID,
@@ -793,4 +810,244 @@ type writeFailsRepo struct {
 
 func (r *writeFailsRepo) Update(context.Context, *domain.DocumentComment) error {
 	return assert.AnError
+}
+
+// --- Create by quote: the caller has no selection, the server measures ---
+//
+// These exercise the path an agent takes over MCP. The unit under test is the
+// service plus the real resolver: nothing is stubbed between "here is a quote"
+// and "here are the offsets", because a stub there would be a second answer to
+// the question this whole unit exists to answer once.
+
+// quoteInput is a create that names its target by quote rather than by offsets.
+func (f *documentCommentFixture) quoteInput(quote string) CreateDocumentCommentInput {
+	in := f.createInput()
+	in.Anchor = nil
+	in.Quote = quote
+	return in
+}
+
+func TestDocumentCommentService_Create_ByQuote_BuildsTheAnchorFromTheBody(t *testing.T) {
+	f := setupDocumentCommentService(t)
+	quote := "Сначала верните образ, потом применяйте миграцию."
+
+	c, err := f.svc.Create(context.Background(), f.quoteInput(quote))
+	require.NoError(t, err)
+
+	require.NotNil(t, c.Anchor)
+	require.NotNil(t, c.Anchor.Start)
+	require.NotNil(t, c.Anchor.End)
+	assert.Equal(t, quote, c.Anchor.Exact)
+	assert.False(t, c.Anchor.IsOrphaned())
+
+	// The acceptance criterion: slice the body bytes with what came back.
+	assert.Equal(t, quote, runbookBody[*c.Anchor.Start:*c.Anchor.End],
+		"the stored offsets do not slice back to the quote")
+
+	// And the offsets are bytes, not characters — on this body those differ.
+	assert.NotEqual(t, utf8.RuneCountInString(runbookBody[:*c.Anchor.Start]), *c.Anchor.Start,
+		"character offsets and byte offsets coincide here, so this assertion proves nothing")
+}
+
+func TestDocumentCommentService_Create_ByQuote_FillsTheNeighbours(t *testing.T) {
+	f := setupDocumentCommentService(t)
+
+	c, err := f.svc.Create(context.Background(), f.quoteInput("Токен берётся из 1Password."))
+	require.NoError(t, err)
+
+	require.NotNil(t, c.Anchor)
+	assert.True(t, strings.HasSuffix(runbookBody[:*c.Anchor.Start], c.Anchor.Prefix))
+	assert.True(t, strings.HasPrefix(runbookBody[*c.Anchor.End:], c.Anchor.Suffix))
+	assert.NotEmpty(t, c.Anchor.Prefix, "there is text before this quote; the anchor should carry some of it")
+}
+
+func TestDocumentCommentService_Create_ByQuote_AmbiguousSaysHowManyTimes(t *testing.T) {
+	f := setupDocumentCommentService(t)
+
+	// "Токен" appears twice in the body and nothing says which is meant.
+	_, err := f.svc.Create(context.Background(), f.quoteInput("Токен"))
+
+	var apiErr *apierror.Error
+	require.ErrorAs(t, err, &apiErr)
+	assert.Equal(t, 400, apiErr.StatusCode())
+	assert.Contains(t, apiErr.Validation["quote"], "2 times",
+		"the caller needs the count to act on: %q", apiErr.Validation["quote"])
+	assert.Contains(t, apiErr.Validation["quote"], "quote_context",
+		"say what to send next, not just that it failed")
+}
+
+func TestDocumentCommentService_Create_ByQuote_AmbiguousWritesNothing(t *testing.T) {
+	f := setupDocumentCommentService(t)
+
+	_, err := f.svc.Create(context.Background(), f.quoteInput("Токен"))
+	require.Error(t, err)
+
+	page, listErr := f.svc.ListByDocument(context.Background(), f.documentID, f.wsID,
+		repository.DocumentCommentFilter{}, pagination.Params{})
+	require.NoError(t, listErr)
+	assert.Empty(t, page.Items,
+		"an ambiguous quote must not land on the first occurrence — or anywhere else")
+}
+
+func TestDocumentCommentService_Create_ByQuote_ContextNarrowsIt(t *testing.T) {
+	f := setupDocumentCommentService(t)
+	in := f.quoteInput("Токен")
+	in.QuoteContext = "миграцию. Токен обязателен."
+
+	c, err := f.svc.Create(context.Background(), in)
+	require.NoError(t, err)
+
+	require.NotNil(t, c.Anchor)
+	assert.Equal(t, "Токен", runbookBody[*c.Anchor.Start:*c.Anchor.End])
+	assert.Equal(t, strings.LastIndex(runbookBody, "Токен"), *c.Anchor.Start,
+		"the context named the second occurrence")
+}
+
+func TestDocumentCommentService_Create_ByQuote_SuffixNarrowsIt(t *testing.T) {
+	f := setupDocumentCommentService(t)
+	in := f.quoteInput("Токен")
+	in.QuoteSuffix = " обязателен."
+
+	c, err := f.svc.Create(context.Background(), in)
+	require.NoError(t, err)
+	assert.Equal(t, strings.LastIndex(runbookBody, "Токен"), *c.Anchor.Start)
+}
+
+func TestDocumentCommentService_Create_ByQuote_ContextThatFitsBothIsStillRefused(t *testing.T) {
+	f := setupDocumentCommentService(t)
+	in := f.quoteInput("Токен")
+	// True of BOTH occurrences — every sentence in this body ends that way. A
+	// context that narrows nothing must not be treated as having narrowed
+	// something, or the caller gets an arbitrary pick reported as a decision.
+	in.QuotePrefix = "миграцию. "
+
+	_, err := f.svc.Create(context.Background(), in)
+
+	var apiErr *apierror.Error
+	require.ErrorAs(t, err, &apiErr)
+	assert.Equal(t, 400, apiErr.StatusCode())
+	assert.Contains(t, apiErr.Validation["quote"], "2 times")
+}
+
+func TestDocumentCommentService_Create_ByQuote_MissingQuoteIsNamed(t *testing.T) {
+	f := setupDocumentCommentService(t)
+
+	_, err := f.svc.Create(context.Background(), f.quoteInput("этой фразы в документе нет"))
+
+	var apiErr *apierror.Error
+	require.ErrorAs(t, err, &apiErr)
+	assert.Equal(t, 400, apiErr.StatusCode())
+	assert.Contains(t, apiErr.Validation["quote"], "no such quote in the document")
+}
+
+func TestDocumentCommentService_Create_ByQuote_SpanningMarkupResolves(t *testing.T) {
+	f := setupDocumentCommentService(t)
+	// What a reader sees. The source has "**сначала верните образ**".
+	quote := "сначала верните образ, потом миграцию."
+
+	c, err := f.svc.Create(context.Background(), f.quoteInput(quote))
+	require.NoError(t, err)
+
+	require.NotNil(t, c.Anchor)
+	slice := runbookBody[*c.Anchor.Start:*c.Anchor.End]
+	assert.Contains(t, slice, "**", "the raw slice carries the markup the quote does not")
+	assert.Equal(t, quote, c.Anchor.Exact)
+}
+
+func TestDocumentCommentService_Create_ByQuote_AndAnchorTogetherIsRefused(t *testing.T) {
+	f := setupDocumentCommentService(t)
+	in := f.createInput() // carries an anchor
+	in.Quote = "Токен берётся из 1Password."
+
+	_, err := f.svc.Create(context.Background(), in)
+
+	var apiErr *apierror.Error
+	require.ErrorAs(t, err, &apiErr)
+	assert.Equal(t, 400, apiErr.StatusCode())
+	assert.Contains(t, apiErr.Validation["quote"], "not both")
+}
+
+func TestDocumentCommentService_Create_ByQuote_OnAReplyIsRefused(t *testing.T) {
+	f := setupDocumentCommentService(t)
+	root := f.create(t)
+
+	in := f.quoteInput("Токен берётся из 1Password.")
+	in.ParentCommentID = &root.ID
+
+	_, err := f.svc.Create(context.Background(), in)
+
+	var apiErr *apierror.Error
+	require.ErrorAs(t, err, &apiErr)
+	assert.Equal(t, 400, apiErr.StatusCode())
+	assert.Contains(t, apiErr.Validation["quote"], "inherits its parent's anchor",
+		"the reply rule is reported against the field the caller actually sent")
+}
+
+func TestDocumentCommentService_Create_ContextWithoutAQuoteIsRefused(t *testing.T) {
+	f := setupDocumentCommentService(t)
+	in := f.createInput()
+	in.Anchor = nil
+	in.QuoteContext = "миграцию. Токен обязателен."
+
+	_, err := f.svc.Create(context.Background(), in)
+
+	var apiErr *apierror.Error
+	require.ErrorAs(t, err, &apiErr)
+	assert.Equal(t, 400, apiErr.StatusCode())
+	assert.Contains(t, apiErr.Validation["quote"], "required")
+}
+
+func TestDocumentCommentService_Create_ByQuote_BothContextFormsAtOnceIsRefused(t *testing.T) {
+	f := setupDocumentCommentService(t)
+	in := f.quoteInput("Токен")
+	in.QuoteContext = "миграцию. Токен обязателен."
+	in.QuotePrefix = "миграцию. "
+
+	_, err := f.svc.Create(context.Background(), in)
+
+	var apiErr *apierror.Error
+	require.ErrorAs(t, err, &apiErr)
+	assert.Equal(t, 400, apiErr.StatusCode())
+	assert.Contains(t, apiErr.Validation["quote_context"], "not both")
+}
+
+func TestDocumentCommentService_Create_ByQuote_OversizedQuoteIsRefused(t *testing.T) {
+	f := setupDocumentCommentService(t)
+
+	_, err := f.svc.Create(context.Background(), f.quoteInput(strings.Repeat("я", maxAnchorTextBytes)))
+
+	var apiErr *apierror.Error
+	require.ErrorAs(t, err, &apiErr)
+	assert.Equal(t, 400, apiErr.StatusCode())
+	assert.Contains(t, apiErr.Validation["quote"], "at most")
+}
+
+func TestDocumentCommentService_Create_ByQuote_WithoutABodyReaderIs503(t *testing.T) {
+	f := setupDocumentCommentService(t)
+	// A deployment with no object storage: everything else about comments keeps
+	// working, and only the path that genuinely needs the markdown says it cannot.
+	svc := NewDocumentCommentService(f.comments, f.docs, nil)
+
+	_, err := svc.Create(context.Background(), f.quoteInput("Токен берётся из 1Password."))
+
+	var apiErr *apierror.Error
+	require.ErrorAs(t, err, &apiErr)
+	assert.Equal(t, 503, apiErr.StatusCode())
+
+	// The control: the same service still takes an ordinary comment.
+	_, err = svc.Create(context.Background(), f.createInput())
+	assert.NoError(t, err)
+}
+
+func TestDocumentCommentService_Create_ByQuote_EmptyBodySaysSo(t *testing.T) {
+	f := setupDocumentCommentService(t)
+	f.docs.Seed(&domain.Document{ID: f.documentID, ProjectID: f.projectID, Title: "Runbook", Body: ""})
+
+	_, err := f.svc.Create(context.Background(), f.quoteInput("Токен"))
+
+	var apiErr *apierror.Error
+	require.ErrorAs(t, err, &apiErr)
+	assert.Equal(t, 400, apiErr.StatusCode())
+	assert.Contains(t, apiErr.Validation["quote"], "no body",
+		"an unfetched body must not read as an absent quote")
 }

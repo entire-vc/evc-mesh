@@ -424,10 +424,43 @@ type CreateDocumentCommentInput struct {
 	// Anchor is the selected text this comment is about, absent for a comment on
 	// the document as a whole and forbidden on a reply (a reply inherits its
 	// parent's anchor rather than carrying a copy that can drift from it).
+	//
+	// It carries offsets, so it is for a caller that has a selection to measure —
+	// the editor. A caller without one sends Quote instead and the server measures.
 	Anchor *domain.DocumentCommentAnchor `json:"anchor"`
+
+	// Quote is the text the comment is about, for a caller with no selection: an
+	// agent over MCP. The server finds it in the document body and builds the
+	// anchor from where it actually sits.
+	//
+	// This exists because an agent computing byte offsets itself gets them wrong,
+	// and wrong offsets do not fail — they point at different words. Measured on a
+	// live Cyrillic body: a naive character index gave 475 where the byte answer
+	// was 853. So offsets are never accepted from that caller at all; Quote and
+	// Anchor are mutually exclusive.
+	Quote string `json:"quote"`
+
+	// QuoteContext, QuotePrefix and QuoteSuffix narrow a quote that occurs more
+	// than once. Give either the surrounding fragment or the prefix/suffix pair,
+	// not both. Without them a repeated quote is refused rather than guessed at.
+	QuoteContext string `json:"quote_context"`
+	QuotePrefix  string `json:"quote_prefix"`
+	QuoteSuffix  string `json:"quote_suffix"`
 
 	AuthorID   uuid.UUID        `json:"author_id"`
 	AuthorType domain.ActorType `json:"author_type"`
+}
+
+// DocumentBodyReader is the slice of document reading the quote resolver needs:
+// the markdown itself, fetched inside the caller's workspace.
+//
+// It is a port rather than a use of DocumentService directly so that the comment
+// service depends on the one method it calls, and so that the tenancy argument
+// stays in the signature — a body reader that did not take a workspace would be
+// one call away from resolving a quote against another tenant's document.
+// *documentService satisfies it.
+type DocumentBodyReader interface {
+	GetByIDInWorkspace(ctx context.Context, id, workspaceID uuid.UUID) (*domain.Document, error)
 }
 
 // UpdateDocumentCommentInput holds the fields for editing a comment.

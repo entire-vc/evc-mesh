@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -9,6 +10,7 @@ import (
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/repository"
+	"github.com/entire-vc/evc-mesh/internal/textanchor"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 	"github.com/entire-vc/evc-mesh/pkg/pagination"
 )
@@ -29,6 +31,10 @@ const maxAnchorTextBytes = 2000
 type documentCommentService struct {
 	commentRepo  repository.DocumentCommentRepository
 	documentRepo repository.DocumentRepository
+	// bodies reads the markdown, and only for the quote path. A nil one is allowed
+	// — same arrangement as a nil object store elsewhere — and makes a quote
+	// answer 503 while every other kind of comment keeps working.
+	bodies DocumentBodyReader
 }
 
 // NewDocumentCommentService returns a DocumentCommentService backed by the given
@@ -38,11 +44,17 @@ type documentCommentService struct {
 // check rather than a convenience: every entry point resolves the document inside
 // the caller's workspace first, so a comment id or a document id from another
 // tenant has nothing to attach to.
+//
+// bodies is the document-body reader the quote resolver needs. It is separate
+// from documentRepo because reading a body is a round-trip to object storage, and
+// only one of the five entry points here ever wants one: charging every comment
+// for it would be paying an S3 fetch to write a reply. May be nil.
 func NewDocumentCommentService(
 	commentRepo repository.DocumentCommentRepository,
 	documentRepo repository.DocumentRepository,
+	bodies DocumentBodyReader,
 ) DocumentCommentService {
-	return &documentCommentService{commentRepo: commentRepo, documentRepo: documentRepo}
+	return &documentCommentService{commentRepo: commentRepo, documentRepo: documentRepo, bodies: bodies}
 }
 
 // Create records a comment on a document, optionally as a reply.
@@ -68,27 +80,37 @@ func (s *documentCommentService) Create(ctx context.Context, input CreateDocumen
 		return nil, apierror.NotFound("Document")
 	}
 
-	anchor, err := validateAnchor(input.Anchor)
-	if err != nil {
-		return nil, err
-	}
-
 	var parentID *uuid.UUID
 	if input.ParentCommentID != nil {
 		parent, perr := s.requireReplyableParent(ctx, *input.ParentCommentID, doc.ID)
 		if perr != nil {
 			return nil, perr
 		}
-		if anchor != nil {
-			// A reply with its own anchor is two claims about what one thread is
-			// about, and nothing keeps them pointing at the same words once the
-			// document is edited. The reply inherits the root's anchor instead.
+		// A reply with its own anchor is two claims about what one thread is about,
+		// and nothing keeps them pointing at the same words once the document is
+		// edited. The reply inherits the root's anchor instead.
+		//
+		// Refused here, before the anchor is worked out, so that a reply carrying a
+		// quote is told the actual problem rather than "no such quote" from a
+		// resolution that should never have been attempted — and so that it does not
+		// pay a body fetch to be turned away. Named by whichever field the caller
+		// sent, so an agent is not told about a field it never used.
+		if input.Anchor != nil || strings.TrimSpace(input.Quote) != "" {
+			field := "anchor"
+			if strings.TrimSpace(input.Quote) != "" {
+				field = "quote"
+			}
 			return nil, apierror.ValidationError(map[string]string{
-				"anchor": "a reply inherits its parent's anchor and cannot carry one of its own",
+				field: "a reply inherits its parent's anchor and cannot carry one of its own",
 			})
 		}
 		id := parent.ID
 		parentID = &id
+	}
+
+	anchor, err := s.resolveAnchor(ctx, input, doc)
+	if err != nil {
+		return nil, err
 	}
 
 	now := timeNow()
@@ -355,4 +377,121 @@ func validateAnchor(anchor *domain.DocumentCommentAnchor) (*domain.DocumentComme
 	}
 
 	return domain.NewDocumentCommentAnchor(exact, anchor.Prefix, anchor.Suffix, anchor.Start, anchor.End), nil
+}
+
+// resolveAnchor turns whatever the caller said about position into a validated
+// anchor: offsets they measured, or a quote the server measures for them.
+//
+// The two are mutually exclusive by design and not by oversight. Accepting both
+// would mean accepting offsets from a caller that also admits it does not know
+// where the text is, and then having to decide which of the two to believe —
+// silently, on every write.
+func (s *documentCommentService) resolveAnchor(
+	ctx context.Context,
+	input CreateDocumentCommentInput,
+	doc *domain.Document,
+) (*domain.DocumentCommentAnchor, error) {
+	quote := strings.TrimSpace(input.Quote)
+	hasContext := input.QuoteContext != "" || input.QuotePrefix != "" || input.QuoteSuffix != ""
+
+	if quote == "" {
+		if hasContext {
+			return nil, apierror.ValidationError(map[string]string{
+				"quote": "quote is required when quote context is given",
+			})
+		}
+		return validateAnchor(input.Anchor)
+	}
+	if input.Anchor != nil {
+		return nil, apierror.ValidationError(map[string]string{
+			"quote": "give either a quote or an anchor, not both: an anchor carries offsets and a quote asks the server to compute them",
+		})
+	}
+	if len(quote) > maxAnchorTextBytes {
+		return nil, apierror.ValidationError(map[string]string{
+			"quote": fmt.Sprintf("quote must be at most %d bytes", maxAnchorTextBytes),
+		})
+	}
+
+	body, err := s.documentBody(ctx, doc.ID, input.WorkspaceID)
+	if err != nil {
+		return nil, err
+	}
+
+	anchor, err := textanchor.Resolve(body, quote, textanchor.Context{
+		Prefix:   input.QuotePrefix,
+		Suffix:   input.QuoteSuffix,
+		Fragment: input.QuoteContext,
+	})
+	if err != nil {
+		return nil, quoteError(err)
+	}
+
+	start, end := anchor.Start, anchor.End
+	return domain.NewDocumentCommentAnchor(anchor.Exact, anchor.Prefix, anchor.Suffix, &start, &end), nil
+}
+
+// documentBody fetches the markdown the quote is resolved against.
+func (s *documentCommentService) documentBody(ctx context.Context, documentID, workspaceID uuid.UUID) (string, error) {
+	if s.bodies == nil {
+		return "", apierror.ServiceUnavailable("storage backend not configured; a quote cannot be located without the document body")
+	}
+	doc, err := s.bodies.GetByIDInWorkspace(ctx, documentID, workspaceID)
+	if err != nil {
+		return "", err
+	}
+	if doc == nil {
+		return "", apierror.NotFound("Document")
+	}
+	if doc.Body == "" {
+		// Said plainly rather than left to fall through the resolver, which would
+		// answer "no such quote in the document" — true, and indistinguishable from
+		// a body reader wired to something that does not fetch bodies. A refusal
+		// that reads as a normal outcome is how a misconfiguration survives.
+		return "", apierror.ValidationError(map[string]string{
+			"quote": "the document has no body to search for a quote in",
+		})
+	}
+	return doc.Body, nil
+}
+
+// quoteError turns a resolver refusal into the 400 the caller can act on.
+//
+// Each one names the field and says what to do next, because the caller is an
+// agent with no screen: "ambiguous" is not actionable, "occurs 4 times, narrow it
+// with quote_context" is. The match count travels in the message for the same
+// reason.
+func quoteError(err error) error {
+	var notFound *textanchor.NotFoundError
+	if errors.As(err, &notFound) {
+		return apierror.ValidationError(map[string]string{
+			"quote": "no such quote in the document; quote the text exactly as it appears",
+		})
+	}
+
+	var ambiguous *textanchor.AmbiguousError
+	if errors.As(err, &ambiguous) {
+		occurs := fmt.Sprintf("%d times", ambiguous.Matches)
+		if ambiguous.AtLeast {
+			occurs = fmt.Sprintf("at least %d times", ambiguous.Matches)
+		}
+		return apierror.ValidationError(map[string]string{
+			"quote": fmt.Sprintf(
+				"this quote occurs %s in the document; narrow it with quote_context, or with quote_prefix/quote_suffix",
+				occurs),
+		})
+	}
+
+	var contextErr *textanchor.ContextError
+	if errors.As(err, &contextErr) {
+		return apierror.ValidationError(map[string]string{"quote_context": contextErr.Error()})
+	}
+
+	if errors.Is(err, textanchor.ErrEmptyQuote) {
+		return apierror.ValidationError(map[string]string{"quote": "quote is required"})
+	}
+
+	// Not a refusal this function knows how to explain. Passing it through
+	// unlabelled would be worse than saying so.
+	return apierror.Wrap(err)
 }

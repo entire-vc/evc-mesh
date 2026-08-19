@@ -59,10 +59,28 @@ func (a *documentCommentAnchorBody) toDomain() *domain.DocumentCommentAnchor {
 // createDocumentCommentRequest is the JSON body for creating a comment. The
 // document is named by the route, so it is deliberately absent here: an id in the
 // body is one the workspace guard cannot see (see declaredBodyTenantFields).
+//
+// There are two ways to say what the comment is about and they are for two
+// different callers. `anchor` carries offsets and is for a client that measured a
+// selection — the editor. `quote` carries the text and asks the server to find
+// it, and is for a client that has no selection to measure — an agent. Sending
+// both is refused: offsets from a caller that also says it does not know where
+// the text is are two answers to one question.
 type createDocumentCommentRequest struct {
 	Body            string                     `json:"body"`
 	ParentCommentID *uuid.UUID                 `json:"parent_comment_id"`
 	Anchor          *documentCommentAnchorBody `json:"anchor"`
+
+	// Quote is the text this comment is about, verbatim as it appears in the
+	// document. The server locates it and builds the anchor.
+	Quote string `json:"quote"`
+
+	// QuoteContext is a fragment surrounding the quote, for a quote that occurs
+	// more than once; QuotePrefix and QuoteSuffix say the same thing as two
+	// separate strings. Give one form or the other, never both.
+	QuoteContext string `json:"quote_context"`
+	QuotePrefix  string `json:"quote_prefix"`
+	QuoteSuffix  string `json:"quote_suffix"`
 }
 
 // updateDocumentCommentRequest is the JSON body for editing a comment. Only the
@@ -119,6 +137,10 @@ func (h *DocumentCommentHandler) Create(c echo.Context) error {
 		ParentCommentID: req.ParentCommentID,
 		Body:            req.Body,
 		Anchor:          req.Anchor.toDomain(),
+		Quote:           req.Quote,
+		QuoteContext:    req.QuoteContext,
+		QuotePrefix:     req.QuotePrefix,
+		QuoteSuffix:     req.QuoteSuffix,
 		AuthorID:        callerID,
 		AuthorType:      callerType,
 	})

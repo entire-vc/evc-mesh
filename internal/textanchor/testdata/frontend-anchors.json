@@ -1,0 +1,89 @@
+{
+  "note": "GENERATED — do not hand-edit. Anchors produced by web/src/lib/doc-comments/anchor.ts (buildAnchorFromSelection) over scripts/anchor-contract/cases.json. Regenerate with scripts/anchor-contract/regenerate.sh.",
+  "generated_from": {
+    "module": "web/src/lib/doc-comments/anchor.ts"
+  },
+  "anchors": [
+    {
+      "name": "cyrillic-plain-prose",
+      "why": "The baseline. Byte offsets and character offsets differ throughout, so an implementation using either coordinate system is distinguishable here.",
+      "exact": "байтовые смещения в исходный markdown",
+      "prefix": "Резолвер цитаты в якорь\nСмещения якоря — это ",
+      "suffix": ", полуинтервал [start, end).\nПравильный ответ — ",
+      "start": 86,
+      "end": 148
+    },
+    {
+      "name": "cyrillic-selection-at-the-end",
+      "why": "The further into a Cyrillic document the selection sits, the wider the gap between the two coordinate systems. This is the case the 475-vs-853 measurement came from.",
+      "exact": "Проверять срезом байтов по полученным смещениям.",
+      "prefix": ", end).\nПравильный ответ — байты, а не символы. ",
+      "suffix": "",
+      "start": 262,
+      "end": 352
+    },
+    {
+      "name": "selection-spanning-bold",
+      "why": "The selection covers inline markup, so the raw slice carries asterisks the quote does not. This is the case a naive body[start:end] == quote check breaks on.",
+      "exact": "сначала верните образ, потом миграцию.",
+      "prefix": "Порядок отката: ",
+      "suffix": "",
+      "start": 31,
+      "end": 103
+    },
+    {
+      "name": "selection-spanning-a-link",
+      "why": "The link tail is skipped as one unit; its innards are not markup characters and would otherwise stop the scan.",
+      "exact": "руководство по деплою перед выкаткой.",
+      "prefix": "См. ",
+      "suffix": "",
+      "start": 7,
+      "end": 105
+    },
+    {
+      "name": "selection-across-a-soft-line-break",
+      "why": "Markdown wraps lines and readers do not: one rendered space stands for a newline in the source. Whitespace runs have to compare as runs.",
+      "exact": "markdown, полуинтервал [start, end).",
+      "prefix": "ещения якоря — это байтовые смещения в исходный ",
+      "suffix": "",
+      "start": 93,
+      "end": 141
+    },
+    {
+      "name": "repeated-phrase-disambiguated-by-context",
+      "why": "The quote occurs three times, and the selection is the SECOND. Nothing but the context can distinguish them, so both sides have to weigh it the same way — picking the first occurrence is the failure this case exists to catch.",
+      "exact": "раз здесь",
+      "prefix": "Первый раз здесь. Второй ",
+      "suffix": ". Третий раз здесь.",
+      "start": 45,
+      "end": 62
+    },
+    {
+      "name": "cyrillic-with-emoji",
+      "why": "An emoji is two UTF-16 units and four UTF-8 bytes, so it separates the two coordinate systems in the other direction from Cyrillic.",
+      "exact": "выкачено в прод",
+      "prefix": "Статус: 🚀 ",
+      "suffix": ", проверено живьём.",
+      "start": 19,
+      "end": 47
+    },
+    {
+      "name": "combining-accent",
+      "why": "\"café\" written as e + U+0301 is two code points and one glyph. Neither side may end an offset between them.",
+      "exact": "café latte",
+      "prefix": "Заказ: ",
+      "suffix": ", оплачено картой.",
+      "start": 12,
+      "end": 24
+    },
+    {
+      "name": "ascii-control",
+      "why": "The negative control for the fixture itself: on ASCII the coordinate systems coincide, so this case passing proves nothing on its own. It is here to show the suite is not merely ASCII.",
+      "exact": "before the code",
+      "prefix": "The migration runs ",
+      "suffix": " that reads it.",
+      "start": 19,
+      "end": 34
+    }
+  ]
+}
