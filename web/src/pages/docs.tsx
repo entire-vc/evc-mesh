@@ -2,10 +2,11 @@ import {
   type FormEvent,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
-import { useNavigate, useParams } from "react-router";
+import { useLocation, useNavigate, useParams } from "react-router";
 import {
   AlertCircle,
   Check,
@@ -15,6 +16,7 @@ import {
   NotebookText,
   Pencil,
   Plus,
+  Unlink,
 } from "lucide-react";
 import { DocEditor } from "@/components/doc-editor";
 import { DocTree, moveTargets } from "@/components/doc-tree";
@@ -31,6 +33,13 @@ import {
 } from "@/components/ui/dialog";
 import { toast } from "@/components/ui/toast";
 import { cn } from "@/lib/cn";
+import { copyText } from "@/lib/clipboard";
+import {
+  type AnchorMatch,
+  type DocAnchor,
+  anchorFromHash,
+  anchorToHash,
+} from "@/lib/docs/anchor";
 import { useDocumentStore } from "@/stores/document";
 import { useProjectStore } from "@/stores/project";
 import type { ProjectDocument } from "@/types";
@@ -285,11 +294,43 @@ function SaveIndicator({
 }
 
 // ---------------------------------------------------------------------------
+// What a paragraph link found when it arrived
+// ---------------------------------------------------------------------------
+
+/**
+ * Said out loud only when the answer is not "here it is".
+ *
+ * A link to a paragraph has two ways of going wrong and they need different
+ * sentences. `edited` means the place is known but the words are not the ones
+ * the link was made from — the reader is looking at the right spot and must not
+ * assume it is the quoted text. `lost` means nothing could be located at all,
+ * and the page stays where it is rather than scrolling somewhere arbitrary. The
+ * two statuses this does not render — `exact` and `moved` — are the cases where
+ * the paragraph itself is on screen, and a banner would only be noise.
+ */
+function AnchorNotice({ match }: { match: AnchorMatch }) {
+  if (match.status === "exact" || match.status === "moved") return null;
+
+  const text =
+    match.status === "edited"
+      ? "This paragraph has been edited since the link was created. You are at its place in the document, but the text is not what was linked."
+      : "The linked paragraph is no longer in this document. It was edited or removed after the link was created.";
+
+  return (
+    <div className="flex items-start gap-2 border-b border-border bg-muted/60 px-4 py-2 text-xs text-muted-foreground">
+      <Unlink className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+      <p>{text}</p>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Page
 // ---------------------------------------------------------------------------
 
 export function DocsPage() {
   const { wsSlug, projectSlug, docId } = useParams();
+  const location = useLocation();
   const navigate = useNavigate();
   const { currentProject } = useProjectStore();
   const {
@@ -312,6 +353,7 @@ export function DocsPage() {
   const [draft, setDraft] = useState("");
   const [editing, setEditing] = useState(false);
   const [saveState, setSaveState] = useState<SaveState>({ status: "idle" });
+  const [anchorMatch, setAnchorMatch] = useState<AnchorMatch | null>(null);
 
   const [createUnder, setCreateUnder] = useState<ProjectDocument | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
@@ -430,6 +472,32 @@ export function DocsPage() {
       });
     };
   }, [docId, updateDocument]);
+
+  // ---- Paragraph links -----------------------------------------------------
+  // The anchor rides in the hash: it names a fragment of the document, no
+  // server ever needs to see it, and it survives being pasted into a chat.
+  const anchor = useMemo<DocAnchor | null>(
+    () => anchorFromHash(location.hash),
+    [location.hash],
+  );
+
+  // A verdict belongs to one arrival. Clear it when the link or the document
+  // changes, so a stale "this paragraph has changed" cannot outlive its cause.
+  useEffect(() => {
+    setAnchorMatch(null);
+  }, [location.hash, docId]);
+
+  const handleCopyAnchor = useCallback(
+    (built: DocAnchor) => {
+      if (!docId) return;
+      const url = `${window.location.origin}${docsPath}/${docId}${anchorToHash(built)}`;
+      void copyText(url).then(
+        () => toast.success("Link to paragraph copied"),
+        () => toast.error("Could not copy the link"),
+      );
+    },
+    [docId, docsPath],
+  );
 
   const handleDone = useCallback(() => {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
@@ -633,11 +701,19 @@ export function DocsPage() {
                 )}
               </div>
             </div>
+            {!editing && anchorMatch && <AnchorNotice match={anchorMatch} />}
             <div className="flex-1 overflow-y-auto p-4">
               {editing ? (
                 <DocEditor value={draft} onChange={setDraft} documentId={docId} />
               ) : draft.trim() ? (
-                <DocEditor value={draft} onChange={setDraft} readOnly />
+                <DocEditor
+                  value={draft}
+                  onChange={setDraft}
+                  readOnly
+                  anchor={anchor}
+                  onAnchorResolved={setAnchorMatch}
+                  onCopyAnchor={handleCopyAnchor}
+                />
               ) : (
                 <div className="flex flex-col items-start gap-2">
                   <DocEditor value={draft} onChange={setDraft} readOnly />

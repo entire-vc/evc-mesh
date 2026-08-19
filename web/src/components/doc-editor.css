@@ -277,3 +277,35 @@
 .mesh-doc-prose .ProseMirror-selectednode {
   outline: 2px solid hsl(var(--ring));
 }
+
+/* ---- linked paragraph ----
+   The target of a "copy link to this paragraph" link, revealed on arrival. The
+   tint fades on its own rather than on a timer in JS: the highlight is a hint
+   about how the reader got here, and a permanent one would read as document
+   state. The left rule stays, so the paragraph is still identifiable after the
+   fade — which matters most in exactly the case where the text has changed and
+   the reader is being told so. */
+
+.mesh-doc-prose > .mesh-doc-anchor-hit {
+  border-left: 3px solid hsl(var(--primary));
+  margin-left: -0.75rem;
+  padding-left: calc(0.75rem - 3px);
+  border-radius: 2px;
+  animation: mesh-doc-anchor-fade 3.5s ease-out forwards;
+}
+
+@keyframes mesh-doc-anchor-fade {
+  from {
+    background-color: hsl(var(--primary) / 0.14);
+  }
+  to {
+    background-color: transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mesh-doc-prose > .mesh-doc-anchor-hit {
+    animation: none;
+    background-color: transparent;
+  }
+}

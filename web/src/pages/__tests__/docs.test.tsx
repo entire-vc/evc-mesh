@@ -29,19 +29,53 @@ vi.mock("@/components/ui/toast", () => ({
  * It is also the only way to drive it: the real editor is a ProseMirror
  * contenteditable, which does not respond to fireEvent.change.
  */
+/**
+ * Anchors: the page owns the URL and the message, the editor owns the DOM. The
+ * stub therefore exposes the two calls the real editor makes — "the reader
+ * asked for a link to this paragraph" and "here is what the incoming link
+ * resolved to" — and nothing else.
+ */
+const stubAnchor = {
+  start: 12,
+  end: 40,
+  exact: "Second paragraph, linked.",
+  prefix: "The introduction.",
+  suffix: "The conclusion.",
+};
+/** Set by a test before rendering; reported to the page as if resolved. */
+let stubMatch: { status: string; index: number | null } | null = null;
+
 vi.mock("@/components/doc-editor", () => ({
   DocEditor: ({
     value,
     onChange,
     readOnly,
+    anchor,
+    onAnchorResolved,
+    onCopyAnchor,
   }: {
     value: string;
     onChange: (v: string) => void;
     readOnly?: boolean;
+    anchor?: unknown;
+    onAnchorResolved?: (m: unknown) => void;
+    onCopyAnchor?: (a: unknown) => void;
   }) => {
     if (readOnly) {
       return value.trim() ? (
-        <div data-testid="doc-view">{value}</div>
+        <div data-testid="doc-view">
+          {value}
+          <span data-testid="anchor-received">{anchor ? "yes" : "no"}</span>
+          <button type="button" onClick={() => onCopyAnchor?.(stubAnchor)}>
+            stub copy anchor
+          </button>
+          <button
+            type="button"
+            onClick={() => stubMatch && onAnchorResolved?.(stubMatch)}
+          >
+            stub resolve anchor
+          </button>
+        </div>
       ) : (
         <p>This page is empty.</p>
       );
@@ -56,8 +90,12 @@ vi.mock("@/components/doc-editor", () => ({
   },
 }));
 
+vi.mock("@/lib/clipboard", () => ({ copyText: vi.fn(() => Promise.resolve()) }));
+
 import { api } from "@/lib/api";
 import { toast } from "@/components/ui/toast";
+import { copyText } from "@/lib/clipboard";
+import { anchorFromHash, anchorToHash } from "@/lib/docs/anchor";
 import { DocsPage } from "@/pages/docs";
 import { useDocumentStore } from "@/stores/document";
 import { useProjectStore } from "@/stores/project";
@@ -116,10 +154,10 @@ function mockRoutes(
   );
 }
 
-function renderDocs(docId?: string) {
+function renderDocs(docId?: string, hash = "") {
   const base = "/w/acme/p/demo/docs";
   return render(
-    <MemoryRouter initialEntries={[docId ? `${base}/${docId}` : base]}>
+    <MemoryRouter initialEntries={[(docId ? `${base}/${docId}` : base) + hash]}>
       <Routes>
         <Route path="/w/:wsSlug/p/:projectSlug/docs" element={<DocsPage />} />
         <Route path="/w/:wsSlug/p/:projectSlug/docs/:docId" element={<DocsPage />} />
@@ -540,5 +578,107 @@ describe("DocsPage — move", () => {
     await waitFor(() => expect(screen.getByLabelText("Collapse Other")).toBeInTheDocument());
     fireEvent.click(screen.getByLabelText("Collapse Other"));
     expect(screen.queryByText("Child")).not.toBeInTheDocument();
+  });
+});
+
+describe("DocsPage — links to a paragraph", () => {
+  const doc = makeDoc({ id: "doc-1", title: "Runbook" });
+
+  function mockWithBody(body: string) {
+    mockRoutes([doc], (path, opts) => {
+      if (path === "/api/v1/documents/doc-1" && !opts?.method) {
+        return Promise.resolve({ ...doc, body });
+      }
+      return undefined;
+    });
+  }
+
+  beforeEach(() => {
+    stubMatch = null;
+    vi.mocked(copyText).mockClear();
+    vi.mocked(toast.success).mockReset();
+  });
+
+  it("copies a link that carries the anchor and points at this document", async () => {
+    mockWithBody("The introduction.\n\nSecond paragraph, linked.\n");
+    renderDocs("doc-1");
+
+    fireEvent.click(await screen.findByRole("button", { name: /stub copy anchor/i }));
+
+    await waitFor(() => expect(copyText).toHaveBeenCalledTimes(1));
+    const url = new URL(vi.mocked(copyText).mock.calls[0]![0]);
+    expect(url.pathname).toBe("/w/acme/p/demo/docs/doc-1");
+    // Not "contains something anchor-shaped": the link must decode back to the
+    // exact anchor the editor handed over, or it points somewhere else.
+    expect(anchorFromHash(url.hash)).toEqual(stubAnchor);
+    expect(toast.success).toHaveBeenCalled();
+  });
+
+  it("passes an incoming anchor down, and passes none when the hash has none", async () => {
+    mockWithBody("The introduction.\n\nSecond paragraph, linked.\n");
+    const withAnchor = renderDocs("doc-1", anchorToHash(stubAnchor));
+    expect(await screen.findByTestId("anchor-received")).toHaveTextContent("yes");
+    withAnchor.unmount();
+
+    mockWithBody("The introduction.\n\nSecond paragraph, linked.\n");
+    renderDocs("doc-1", "#not-an-anchor");
+    expect(await screen.findByTestId("anchor-received")).toHaveTextContent("no");
+  });
+
+  it("says nothing when the link landed on the paragraph it was made from", async () => {
+    mockWithBody("The introduction.\n\nSecond paragraph, linked.\n");
+    stubMatch = { status: "exact", index: 1 };
+    renderDocs("doc-1", anchorToHash(stubAnchor));
+
+    fireEvent.click(await screen.findByRole("button", { name: /stub resolve anchor/i }));
+
+    expect(screen.queryByText(/has been edited since/i)).toBeNull();
+    expect(screen.queryByText(/no longer in this document/i)).toBeNull();
+  });
+
+  it("stays quiet when the paragraph merely moved", async () => {
+    mockWithBody("The introduction.\n\nSecond paragraph, linked.\n");
+    stubMatch = { status: "moved", index: 3 };
+    renderDocs("doc-1", anchorToHash(stubAnchor));
+
+    fireEvent.click(await screen.findByRole("button", { name: /stub resolve anchor/i }));
+
+    expect(screen.queryByText(/has been edited since/i)).toBeNull();
+  });
+
+  it("tells the reader when the paragraph itself was edited", async () => {
+    mockWithBody("The introduction.\n\nSecond paragraph, rewritten.\n");
+    stubMatch = { status: "edited", index: 1 };
+    renderDocs("doc-1", anchorToHash(stubAnchor));
+
+    fireEvent.click(await screen.findByRole("button", { name: /stub resolve anchor/i }));
+
+    expect(await screen.findByText(/has been edited since the link was created/i))
+      .toBeInTheDocument();
+  });
+
+  it("tells the reader when the paragraph could not be found at all", async () => {
+    mockWithBody("Something else entirely.\n");
+    stubMatch = { status: "lost", index: null };
+    renderDocs("doc-1", anchorToHash(stubAnchor));
+
+    fireEvent.click(await screen.findByRole("button", { name: /stub resolve anchor/i }));
+
+    expect(await screen.findByText(/no longer in this document/i)).toBeInTheDocument();
+  });
+
+  it("drops the notice when the reader starts editing", async () => {
+    mockWithBody("Something else entirely.\n");
+    stubMatch = { status: "lost", index: null };
+    renderDocs("doc-1", anchorToHash(stubAnchor));
+
+    fireEvent.click(await screen.findByRole("button", { name: /stub resolve anchor/i }));
+    expect(await screen.findByText(/no longer in this document/i)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /edit/i }));
+
+    // A verdict about a link is about the document as the reader arrived at it;
+    // leaving it on screen while they rewrite the page turns it into a lie.
+    expect(screen.queryByText(/no longer in this document/i)).toBeNull();
   });
 });

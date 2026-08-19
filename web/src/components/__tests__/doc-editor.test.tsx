@@ -1,7 +1,8 @@
-import { describe, it, expect, vi } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { beforeAll, describe, it, expect, vi } from "vitest";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import { DocEditor } from "@/components/doc-editor";
+import { buildBlocks, makeAnchor } from "@/lib/docs/anchor";
 
 // The editor resolves internal attachment links through the API helper and
 // navigates internal links through the router.
@@ -181,5 +182,204 @@ describe("DocEditor", () => {
     // An echo here would mark the document dirty on open and have the autosave
     // write it straight back — a save the user never asked for.
     expect(onChange).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Paragraph anchors
+// ---------------------------------------------------------------------------
+
+/**
+ * The pure anchor logic is tested in lib/docs/__tests__ without a browser. What
+ * is tested here is the wiring that only exists once there is a real editor: a
+ * right-click has to name the paragraph under the pointer, and a resolved
+ * anchor has to reveal *that* element and no other. Both are the kind of thing
+ * that fails by being one paragraph off, which looks like it works.
+ */
+
+const ANCHOR_DOC = `First paragraph, the introduction.
+
+Second paragraph, the one that gets linked.
+
+Third paragraph, the conclusion.
+`;
+
+beforeAll(() => {
+  // jsdom has no layout, so it has no scrollIntoView.
+  Element.prototype.scrollIntoView = vi.fn();
+});
+
+/** The Nth top-level block element of the rendered document. */
+async function blockAt(container: HTMLElement, index: number) {
+  const pm = await surface(container);
+  const el = pm.children[index];
+  if (!(el instanceof HTMLElement)) throw new Error(`no block ${index}`);
+  return el;
+}
+
+describe("DocEditor paragraph anchors", () => {
+  it("offers a link to the paragraph the pointer is on, and hands back its text", async () => {
+    const onCopyAnchor = vi.fn();
+    const { container } = renderInRouter(
+      <DocEditor
+        value={ANCHOR_DOC}
+        onChange={vi.fn()}
+        readOnly
+        onCopyAnchor={onCopyAnchor}
+      />,
+    );
+    const second = await blockAt(container, 1);
+
+    // The native menu IS suppressed here — which is what makes the "left alone
+    // on a link" test below a real assertion rather than a tautology.
+    const notCancelled = fireEvent.contextMenu(second, { clientX: 40, clientY: 60 });
+    expect(notCancelled).toBe(false);
+
+    fireEvent.click(await screen.findByRole("menuitem"));
+
+    expect(onCopyAnchor).toHaveBeenCalledTimes(1);
+    const anchor = onCopyAnchor.mock.calls[0]![0];
+    expect(anchor.exact).toBe("Second paragraph, the one that gets linked.");
+    // The neighbours travel with it — they are what locates the paragraph once
+    // its own text has been edited away.
+    expect(anchor.prefix).toContain("introduction");
+    expect(anchor.suffix).toContain("Third paragraph");
+  });
+
+  it("names a different paragraph for a different right-click", async () => {
+    // The negative half of the test above: without this, a handler that always
+    // returned block 1 would pass.
+    const onCopyAnchor = vi.fn();
+    const { container } = renderInRouter(
+      <DocEditor
+        value={ANCHOR_DOC}
+        onChange={vi.fn()}
+        readOnly
+        onCopyAnchor={onCopyAnchor}
+      />,
+    );
+
+    fireEvent.contextMenu(await blockAt(container, 2), { clientX: 10, clientY: 10 });
+    fireEvent.click(await screen.findByRole("menuitem"));
+
+    expect(onCopyAnchor.mock.calls[0]![0].exact).toBe(
+      "Third paragraph, the conclusion.",
+    );
+  });
+
+  it("leaves the browser's own menu alone on a link", async () => {
+    const { container } = renderInRouter(
+      <DocEditor
+        value={"A [link](https://example.com) in a paragraph."}
+        onChange={vi.fn()}
+        readOnly
+        onCopyAnchor={vi.fn()}
+      />,
+    );
+    const pm = await surface(container);
+    const link = pm.querySelector("a");
+    expect(link).not.toBeNull();
+
+    const prevented = !fireEvent.contextMenu(link!, { clientX: 5, clientY: 5 });
+
+    expect(prevented).toBe(false);
+    expect(screen.queryByRole("menuitem")).toBeNull();
+  });
+
+  it("offers nothing while the document is being edited", async () => {
+    const { container } = renderInRouter(
+      <DocEditor value={ANCHOR_DOC} onChange={vi.fn()} onCopyAnchor={vi.fn()} />,
+    );
+
+    fireEvent.contextMenu(await blockAt(container, 1), { clientX: 5, clientY: 5 });
+
+    expect(screen.queryByRole("menuitem")).toBeNull();
+  });
+
+  it("reveals the linked paragraph, and only it", async () => {
+    const anchor = makeAnchor(
+      buildBlocks([
+        "First paragraph, the introduction.",
+        "Second paragraph, the one that gets linked.",
+        "Third paragraph, the conclusion.",
+      ]),
+      1,
+    )!;
+    const onAnchorResolved = vi.fn();
+    const { container } = renderInRouter(
+      <DocEditor
+        value={ANCHOR_DOC}
+        onChange={vi.fn()}
+        readOnly
+        anchor={anchor}
+        onAnchorResolved={onAnchorResolved}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(onAnchorResolved).toHaveBeenCalledWith({ status: "exact", index: 1 });
+    });
+    expect((await blockAt(container, 1)).className).toContain("mesh-doc-anchor-hit");
+    expect((await blockAt(container, 0)).className).not.toContain(
+      "mesh-doc-anchor-hit",
+    );
+    expect((await blockAt(container, 2)).className).not.toContain(
+      "mesh-doc-anchor-hit",
+    );
+  });
+
+  it("follows the paragraph after text is inserted above it", async () => {
+    const anchor = makeAnchor(
+      buildBlocks([
+        "First paragraph, the introduction.",
+        "Second paragraph, the one that gets linked.",
+        "Third paragraph, the conclusion.",
+      ]),
+      1,
+    )!;
+    const onAnchorResolved = vi.fn();
+    const { container } = renderInRouter(
+      <DocEditor
+        value={`A paragraph added later.\n\n${ANCHOR_DOC}`}
+        onChange={vi.fn()}
+        readOnly
+        anchor={anchor}
+        onAnchorResolved={onAnchorResolved}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(onAnchorResolved).toHaveBeenCalledWith({ status: "moved", index: 2 });
+    });
+    const revealed = await blockAt(container, 2);
+    expect(revealed.textContent).toContain("gets linked");
+    expect(revealed.className).toContain("mesh-doc-anchor-hit");
+  });
+
+  it("highlights nothing when the paragraph is gone, and says so", async () => {
+    const anchor = makeAnchor(
+      buildBlocks([
+        "First paragraph, the introduction.",
+        "Second paragraph, the one that gets linked.",
+        "Third paragraph, the conclusion.",
+      ]),
+      1,
+    )!;
+    const onAnchorResolved = vi.fn();
+    const { container } = renderInRouter(
+      <DocEditor
+        value={"Something else entirely.\n\nAnd another unrelated thing.\n"}
+        onChange={vi.fn()}
+        readOnly
+        anchor={anchor}
+        onAnchorResolved={onAnchorResolved}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(onAnchorResolved).toHaveBeenCalledWith({ status: "lost", index: null });
+    });
+    const pm = await surface(container);
+    expect(pm.querySelector(".mesh-doc-anchor-hit")).toBeNull();
   });
 });
