@@ -20,6 +20,11 @@ import {
   Unlink,
 } from "lucide-react";
 import { DocBreadcrumbs } from "@/components/doc-breadcrumbs";
+import {
+  DocCommentAffordance,
+  DocCommentRail,
+  DocCommentToggle,
+} from "@/components/doc-comment-rail";
 import { DocEditor } from "@/components/doc-editor";
 import { DocMeta } from "@/components/doc-meta";
 import { DocTree, moveTargets } from "@/components/doc-tree";
@@ -45,17 +50,24 @@ import {
 import { toast } from "@/components/ui/toast";
 import { cn } from "@/lib/cn";
 import { copyText } from "@/lib/clipboard";
+// Two unrelated anchor systems live on this page. `@/lib/docs/anchor` (D6) is
+// the fragment link that points at a paragraph; `@/lib/doc-comments` (D7) is
+// the range a comment is attached to. Same word, different features — keep the
+// import paths distinct and do not fold one into the other.
 import {
   type AnchorMatch,
   type DocAnchor,
   anchorFromHash,
   anchorToHash,
 } from "@/lib/docs/anchor";
+import { useDocComments } from "@/lib/doc-comments/use-doc-comments";
 import {
   DOC_TREE_DEFAULT_WIDTH,
   DOC_TREE_MAX_WIDTH,
   DOC_TREE_MIN_WIDTH,
+  loadDocCommentsRailOpen,
   loadDocTreeWidth,
+  saveDocCommentsRailOpen,
   saveDocTreeWidth,
 } from "@/lib/docs-layout-storage";
 import { useDocumentStore } from "@/stores/document";
@@ -389,6 +401,9 @@ export function DocsPage() {
     () => loadDocTreeWidth() ?? DOC_TREE_DEFAULT_WIDTH,
   );
 
+  const [railOpen, setRailOpen] = useState(loadDocCommentsRailOpen);
+  const [showResolved, setShowResolved] = useState(false);
+
   // The body last known to be on the server. The autosave compares against this
   // rather than against openDoc.body so that a failed save leaves the editor
   // dirty and keeps retrying, instead of quietly deciding it is up to date.
@@ -497,7 +512,7 @@ export function DocsPage() {
     };
   }, [docId, updateDocument]);
 
-  // ---- Paragraph links -----------------------------------------------------
+  // ---- Paragraph links (D6) ------------------------------------------------
   // The anchor rides in the hash: it names a fragment of the document, no
   // server ever needs to see it, and it survives being pasted into a chat.
   const anchor = useMemo<DocAnchor | null>(
@@ -522,6 +537,32 @@ export function DocsPage() {
     },
     [docId, docsPath],
   );
+
+  // ---- Comments (D7) -------------------------------------------------------
+  // Unrelated to the paragraph links above: those address a fragment for a
+  // shareable URL, these address a text range a thread hangs off.
+  // `draft` rather than openDoc.body is the markdown the anchors are measured
+  // against: openDoc is loaded once and never re-read after an autosave, so its
+  // body goes stale the moment anybody types. In view mode — the only mode where
+  // anchoring runs — draft is what was last written to the server.
+  const comments = useDocComments({
+    documentId: docId,
+    source: draft,
+    enabled: !editing && !!openDoc,
+    onCommentCreated: () => setRailOpen(true),
+  });
+
+  // Starting a comment must not put the composer somewhere the reader cannot see.
+  useEffect(() => {
+    if (comments.draft) setRailOpen(true);
+  }, [comments.draft]);
+
+  const toggleRail = useCallback(() => {
+    setRailOpen((prev) => {
+      saveDocCommentsRailOpen(!prev);
+      return !prev;
+    });
+  }, []);
 
   const handleDone = useCallback(() => {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
@@ -723,9 +764,9 @@ export function DocsPage() {
           </div>
         ) : openDoc ? (
           <>
-            {/* Breadcrumbs and actions stay put while the page scrolls: Edit
-                must not be something you have to scroll back up to find. */}
-            <div className="shrink-0 pb-3">
+            {/* Breadcrumbs, title and actions stay put while the body scrolls:
+                Edit must not be something you have to scroll back up to find. */}
+            <div className="shrink-0 pb-4">
               <DocBreadcrumbs
                 documents={documents}
                 current={openDoc}
@@ -733,80 +774,119 @@ export function DocsPage() {
                 onNavigate={(doc) => navigate(`${docsPath}/${doc.id}`)}
               />
 
-              {/* Actions row. The left end is deliberately empty — that is
-                  where the comments toggle goes when comments land. */}
-              <div className="mt-2 flex items-center justify-end gap-2">
-                <SaveIndicator state={saveState} onRetry={() => void flushBody()} />
-                {editing ? (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="h-7 px-2 text-xs"
-                    onClick={handleDone}
-                  >
-                    Done
-                  </Button>
-                ) : (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="h-7 gap-1 px-2 text-xs"
-                    onClick={() => setEditing(true)}
-                  >
-                    <Pencil className="h-3.5 w-3.5" />
-                    Edit
-                  </Button>
-                )}
-                {/* Rare and destructive live behind the overflow, so the one
-                    thing you came to do stays the one obvious button. */}
-                <DropdownMenu>
-                  <DropdownMenuTrigger
-                    title="More actions"
-                    aria-label="More actions"
-                    className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
-                  >
-                    <MoreHorizontal className="h-4 w-4" />
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent className="min-w-[9rem]">
-                    <DropdownMenuItem onClick={() => setRenameTarget(openDoc)}>
-                      Rename
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => setMoveTarget(openDoc)}>
-                      Move
-                    </DropdownMenuItem>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuItem
-                      onClick={() => setDeleteTarget(openDoc)}
-                      className="text-destructive"
+              {/* Title and actions share one row. They used to be two: the
+                  actions owned a full-width line of their own above the title,
+                  which cost a row of vertical space and bought nothing. */}
+              <div className="mt-2 flex items-center gap-3">
+                {/* `truncate` needs the `min-w-0`, or the flex item refuses to
+                    shrink below its text and shoves the actions off the row.
+                    The full title stays reachable on hover and to a screen
+                    reader, so nothing is actually lost to the ellipsis. */}
+                <h1
+                  title={openDoc.title}
+                  className="min-w-0 flex-1 truncate text-2xl font-semibold tracking-tight md:text-3xl"
+                >
+                  {openDoc.title}
+                </h1>
+
+                {/* `shrink-0`: the title gives way, the actions never move. */}
+                <div className="flex shrink-0 items-center gap-2">
+                  {/* How many conversations are open on this page, and the
+                      switch for the rail that holds them. */}
+                  <DocCommentToggle
+                    controller={comments}
+                    open={railOpen}
+                    onToggle={toggleRail}
+                  />
+                  <SaveIndicator state={saveState} onRetry={() => void flushBody()} />
+                  {editing ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-7 px-2 text-xs"
+                      onClick={handleDone}
                     >
-                      Delete
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
+                      Done
+                    </Button>
+                  ) : (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-7 gap-1 px-2 text-xs"
+                      onClick={() => setEditing(true)}
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
+                      Edit
+                    </Button>
+                  )}
+                  {/* Rare and destructive live behind the overflow, so the one
+                      thing you came to do stays the one obvious button. */}
+                  <DropdownMenu>
+                    <DropdownMenuTrigger
+                      title="More actions"
+                      aria-label="More actions"
+                      className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+                    >
+                      <MoreHorizontal className="h-4 w-4" />
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent className="min-w-[9rem]">
+                      <DropdownMenuItem onClick={() => setRenameTarget(openDoc)}>
+                        Rename
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => setMoveTarget(openDoc)}>
+                        Move
+                      </DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem
+                        onClick={() => setDeleteTarget(openDoc)}
+                        className="text-destructive"
+                      >
+                        Delete
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </div>
               </div>
+
+              <DocMeta doc={openDoc} className="mt-1" />
             </div>
             {/* Outside the scroll container, as before: the notice explains why
                 the page did not jump where the link promised, and scrolling it
                 out of sight would take the explanation away with it. */}
             {!editing && anchorMatch && <AnchorNotice match={anchorMatch} />}
 
+            {/* The one scroller for the document area. Everything below grows
+                rather than scrolling on its own, so a long page moves this box
+                and nothing else — no scrollbar inside a scrollbar. */}
             <div className="min-h-0 flex-1 overflow-y-auto">
-              {/* A flex row with one child today; the comments rail becomes the
-                  second one, beside the article rather than under it. */}
-              <div className="flex gap-8">
-                <article className="min-w-0 flex-1 pb-16 xl:max-w-4xl">
-                  <h1 className="text-2xl font-semibold tracking-tight md:text-3xl">
-                    {openDoc.title}
-                  </h1>
-                  <DocMeta doc={openDoc} className="mt-2" />
-
-                  <div className="mt-6">
+              {/* Beside the article on a wide screen, under it on a narrow one:
+                  a 320px rail and a readable column do not both fit below lg.
+                  `min-h-full` is what lets the editor below reach the bottom of
+                  the viewport on a short document: it gives the column a height
+                  to fill, while leaving it free to grow past that on a long one. */}
+              <div className="flex min-h-full flex-col gap-8 lg:flex-row">
+                <article className="flex min-w-0 flex-1 flex-col pb-16 xl:max-w-4xl">
+                  {/* `relative` so the selection affordance can be placed inside
+                      it; the ref is what the comment layer measures and reads
+                      selections from. Neither touches the DOM ProseMirror owns.
+                      `flex-1` with the default `min-height: auto` fills the
+                      space that is there and grows when the body needs more. */}
+                  <div
+                    ref={comments.containerRef}
+                    className="relative flex flex-1 flex-col"
+                  >
                     {editing ? (
-                      <DocEditor value={draft} onChange={setDraft} documentId={docId} />
+                      <DocEditor
+                        className="flex-1"
+                        value={draft}
+                        onChange={setDraft}
+                        documentId={docId}
+                      />
                     ) : draft.trim() ? (
                       <DocEditor
+                        className="flex-1"
                         value={draft}
                         onChange={setDraft}
                         readOnly
@@ -828,8 +908,17 @@ export function DocsPage() {
                         </Button>
                       </div>
                     )}
+                    <DocCommentAffordance controller={comments} />
                   </div>
                 </article>
+
+                {railOpen && (
+                  <DocCommentRail
+                    controller={comments}
+                    showResolved={showResolved}
+                    onShowResolvedChange={setShowResolved}
+                  />
+                )}
               </div>
             </div>
           </>
