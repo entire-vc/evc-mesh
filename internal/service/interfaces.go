@@ -339,11 +339,34 @@ type UpdateDocumentInput struct {
 	Position    *int    `json:"position"`
 	Body        *string `json:"body"`
 
+	// BaseVersion is the document version this edit was built on. It is
+	// REQUIRED: an update that does not carry one is refused, not treated as an
+	// unconditional write.
+	//
+	// A pointer so that "absent" and "zero" are different values. That
+	// distinction is the whole point — a guard any caller switches off by
+	// omitting a field is not a guard, it is a suggestion, and the caller most
+	// likely to omit it is the one that has never read the document and so has
+	// the least idea what it is about to overwrite.
+	BaseVersion *int64 `json:"base_version"`
+
 	// UpdatedBy is the caller, resolved from the request by the handler — never
 	// taken from the request body, which would let anyone sign an edit with
 	// somebody else's name. It is required rather than optional: a mutation that
 	// left "last updated by" as it found it would report the previous editor as
 	// the current one, which is worse than the NULL the legacy rows carry.
+	UpdatedBy     uuid.UUID        `json:"updated_by"`
+	UpdatedByType domain.ActorType `json:"updated_by_type"`
+}
+
+// AppendDocumentInput holds the text to add to the end of a document body.
+//
+// There is deliberately no BaseVersion here — see DocumentService.AppendBody.
+type AppendDocumentInput struct {
+	Text string `json:"text"`
+
+	// UpdatedBy is the caller, resolved from the request by the handler. Same
+	// rule as UpdateDocumentInput: never bound from the request body.
 	UpdatedBy     uuid.UUID        `json:"updated_by"`
 	UpdatedByType domain.ActorType `json:"updated_by_type"`
 }
@@ -355,7 +378,17 @@ type DocumentService interface {
 	// GetByIDInWorkspace returns the document with its body, and only when it
 	// belongs to workspaceID (defense-in-depth after wsAccess).
 	GetByIDInWorkspace(ctx context.Context, id, workspaceID uuid.UUID) (*domain.Document, error)
+	// Update applies a partial change. input.BaseVersion is required and the write
+	// is refused with a *DocumentVersionConflictError when the document has moved
+	// past it.
 	Update(ctx context.Context, id, workspaceID uuid.UUID, input UpdateDocumentInput) (*domain.Document, error)
+	// AppendBody adds text to the end of the document body and takes NO base
+	// version. An append cannot conflict by construction — it does not claim to
+	// know what the document currently says and it removes nothing — so requiring
+	// a read-compare-write cycle around it would only add a way to fail. It is
+	// also the common shape of an agent write: a report, a decision record, a run
+	// log, each added to the end of a page several writers share.
+	AppendBody(ctx context.Context, id, workspaceID uuid.UUID, input AppendDocumentInput) (*domain.Document, error)
 	// Delete soft-deletes the document and its descendants; the stored body is
 	// kept. deletedBy is recorded as the last editor of every row it touches — a
 	// delete is a change, and the restore path needs to be able to say who made it.

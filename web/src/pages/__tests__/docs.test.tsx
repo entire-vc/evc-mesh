@@ -8,10 +8,18 @@ vi.mock("react-router", async () => {
   return { ...actual, useNavigate: () => mockedNavigate };
 });
 
-vi.mock("@/lib/api", () => ({
-  api: vi.fn(),
-  getAccessToken: vi.fn(() => null),
-}));
+// api() is stubbed; ApiRequestError is NOT. The page reads `status === 409` off
+// a real instance to tell a version conflict from any other failure, so a fake
+// class here would let that branch pass against a shape the client never
+// produces.
+vi.mock("@/lib/api", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/api")>();
+  return {
+    ...actual,
+    api: vi.fn(),
+    getAccessToken: vi.fn(() => null),
+  };
+});
 
 vi.mock("@/components/ui/toast", () => ({
   toast: { error: vi.fn(), success: vi.fn() },
@@ -92,7 +100,7 @@ vi.mock("@/components/doc-editor", () => ({
 
 vi.mock("@/lib/clipboard", () => ({ copyText: vi.fn(() => Promise.resolve()) }));
 
-import { api } from "@/lib/api";
+import { ApiRequestError, api } from "@/lib/api";
 import { toast } from "@/components/ui/toast";
 import { copyText } from "@/lib/clipboard";
 import { anchorFromHash, anchorToHash } from "@/lib/docs/anchor";
@@ -129,6 +137,7 @@ function makeDoc(overrides: Partial<ProjectDocument> & { id: string }): ProjectD
     created_by_type: "user",
     created_at: "2026-08-01T00:00:00Z",
     updated_at: "2026-08-01T00:00:00Z",
+    version: 1,
     ...overrides,
   };
 }
@@ -314,7 +323,7 @@ describe("DocsPage — open, view and edit", () => {
     expect(patched).toHaveLength(0); // debounced, not per keystroke
     await vi.advanceTimersByTimeAsync(2000);
 
-    expect(patched).toEqual([{ body: "hello world" }]);
+    expect(patched).toEqual([{ body: "hello world", base_version: 1 }]);
     expect(await screen.findByText("Saved")).toBeInTheDocument();
   });
 
@@ -365,7 +374,9 @@ describe("DocsPage — open, view and edit", () => {
     // Leaving well inside the 2s window.
     unmount();
 
-    await waitFor(() => expect(patched).toEqual([{ body: "half-typed" }]));
+    await waitFor(() =>
+      expect(patched).toEqual([{ body: "half-typed", base_version: 1 }]),
+    );
   });
 
   it("reports a document that cannot be loaded", async () => {
@@ -462,7 +473,7 @@ describe("DocsPage — the page's own header", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
-    await waitFor(() => expect(patched).toEqual({ title: "Platform" }));
+    await waitFor(() => expect(patched).toEqual({ title: "Platform", base_version: 1 }));
     expect(
       await screen.findByRole("heading", { level: 1, name: "Platform" }),
     ).toBeInTheDocument();
@@ -544,7 +555,7 @@ describe("DocsPage — rename and delete", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
-    await waitFor(() => expect(patched).toEqual({ title: "Renamed" }));
+    await waitFor(() => expect(patched).toEqual({ title: "Renamed", base_version: 1 }));
     expect(await screen.findByText("Renamed")).toBeInTheDocument();
   });
 
@@ -625,7 +636,7 @@ describe("DocsPage — move", () => {
     fireEvent.click(await screen.findByRole("option", { name: /Other/ }));
     fireEvent.click(screen.getByRole("button", { name: "Move" }));
 
-    await waitFor(() => expect(patched).toEqual({ parent_id: "o" }));
+    await waitFor(() => expect(patched).toEqual({ parent_id: "o", base_version: 1 }));
   });
 
   it("moves a document to the top level with clear_parent, not parent_id: null", async () => {
@@ -647,7 +658,7 @@ describe("DocsPage — move", () => {
     // The distinction is load-bearing: the API binds parent_id into a *uuid.UUID,
     // where an explicit null is indistinguishable from an omitted field, so a
     // null here would be read as "leave the parent alone" and silently no-op.
-    await waitFor(() => expect(patched).toEqual({ clear_parent: true }));
+    await waitFor(() => expect(patched).toEqual({ clear_parent: true, base_version: 1 }));
   });
 
   it("does not offer the document itself or its descendants as a destination", async () => {
@@ -824,5 +835,168 @@ describe("DocsPage — links to a paragraph", () => {
     // A verdict about a link is about the document as the reader arrived at it;
     // leaving it on screen while they rewrite the page turns it into a lie.
     expect(screen.queryByText(/no longer in this document/i)).toBeNull();
+  });
+});
+
+describe("DocsPage — conditional saves", () => {
+  const doc = makeDoc({ id: "doc-1", title: "Runbook", version: 4 });
+
+  /** Answers the open and PATCHes with whatever `onPatch` decides. */
+  function mockDoc(
+    body: string,
+    onPatch: (b: unknown) => unknown,
+    open: ProjectDocument = doc,
+  ) {
+    mockRoutes([open], (path, opts) => {
+      if (path === "/api/v1/documents/doc-1" && !opts?.method) {
+        return Promise.resolve({ ...open, body });
+      }
+      if (path === "/api/v1/documents/doc-1" && opts?.method === "PATCH") {
+        return onPatch(opts.body);
+      }
+      return undefined;
+    });
+  }
+
+  it("saves against the version the document was opened at", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const patched: unknown[] = [];
+    mockDoc("hello", (body) => {
+      patched.push(body);
+      return Promise.resolve({ ...doc, version: 5, body: "hello world" });
+    });
+    renderDocs("doc-1");
+
+    fireEvent.click(await screen.findByRole("button", { name: /edit/i }));
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "hello world" } });
+    await vi.advanceTimersByTimeAsync(2000);
+
+    expect(patched).toEqual([{ body: "hello world", base_version: 4 }]);
+  });
+
+  // The version the server hands back is the base for the next save. Reusing
+  // the opening version would make the second autosave of a session collide
+  // with the first — an editor that saves once and then stops.
+  it("advances the base version to whatever the last save returned", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const patched: unknown[] = [];
+    let version = 4;
+    mockDoc("hello", (body) => {
+      patched.push(body);
+      version += 1;
+      return Promise.resolve({ ...doc, version, body: "" });
+    });
+    renderDocs("doc-1");
+
+    fireEvent.click(await screen.findByRole("button", { name: /edit/i }));
+
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "first" } });
+    await vi.advanceTimersByTimeAsync(2000);
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "second" } });
+    await vi.advanceTimersByTimeAsync(2000);
+
+    expect(patched).toEqual([
+      { body: "first", base_version: 4 },
+      { body: "second", base_version: 5 },
+    ]);
+  });
+
+  it("reports a collision and keeps the text the user typed", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    mockDoc("hello", () =>
+      Promise.reject(
+        new ApiRequestError("This page changed since you opened it.", "CONFLICT", 409),
+      ),
+    );
+    renderDocs("doc-1");
+
+    fireEvent.click(await screen.findByRole("button", { name: /edit/i }));
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "my words" } });
+    await vi.advanceTimersByTimeAsync(2000);
+
+    expect(
+      await screen.findByText(/Not saved: This page changed since you opened it\./),
+    ).toBeInTheDocument();
+    // The one thing that must never happen on a collision.
+    expect(screen.getByRole("textbox")).toHaveValue("my words");
+  });
+
+  // Every retry carries the same stale base version, so it can only ever be
+  // refused again. Without this latch the autosave fires on each keystroke and
+  // turns one collision into a stream of writes that cannot land.
+  it("stops autosaving after a collision instead of retrying forever", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let attempts = 0;
+    mockDoc("hello", () => {
+      attempts += 1;
+      return Promise.reject(new ApiRequestError("changed elsewhere", "CONFLICT", 409));
+    });
+    renderDocs("doc-1");
+
+    fireEvent.click(await screen.findByRole("button", { name: /edit/i }));
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "one" } });
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(attempts).toBe(1);
+
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "one two" } });
+    await vi.advanceTimersByTimeAsync(2000);
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "one two three" } });
+    await vi.advanceTimersByTimeAsync(2000);
+
+    expect(attempts).toBe(1);
+    expect(screen.getByRole("textbox")).toHaveValue("one two three");
+  });
+
+  // An ordinary failure is retryable — same base version, the server was simply
+  // unreachable — so the Retry affordance stays and the latch must not fire.
+  it("keeps offering Retry for a failure that is not a collision", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let attempts = 0;
+    mockDoc("hello", () => {
+      attempts += 1;
+      return Promise.reject(new Error("network down"));
+    });
+    renderDocs("doc-1");
+
+    fireEvent.click(await screen.findByRole("button", { name: /edit/i }));
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "words" } });
+    await vi.advanceTimersByTimeAsync(2000);
+
+    expect(await screen.findByText(/Not saved: network down/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /retry/i }));
+    await waitFor(() => expect(attempts).toBe(2));
+  });
+
+  // A rename is a write, so it moves the version. The open editor has to pick
+  // the new one up, or the user's own rename collides with their own typing.
+  it("carries a rename's new version into the body autosave", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const patched: unknown[] = [];
+    mockDoc("hello", (body) => {
+      patched.push(body);
+      const req = body as { title?: string };
+      return Promise.resolve({
+        ...doc,
+        version: req.title ? 5 : 6,
+        title: req.title ?? doc.title,
+        body: "",
+      });
+    });
+    renderDocs("doc-1");
+
+    fireEvent.click(await screen.findByLabelText("More actions"));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Rename" }));
+    fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Platform" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() =>
+      expect(patched).toEqual([{ title: "Platform", base_version: 4 }]),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /edit/i }));
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "typed after rename" } });
+    await vi.advanceTimersByTimeAsync(2000);
+
+    expect(patched[1]).toEqual({ body: "typed after rename", base_version: 5 });
   });
 });

@@ -249,10 +249,22 @@ type DocumentRepository interface {
 	// project does not belong to workspaceID — the defense-in-depth ownership
 	// check behind the /documents/:doc_id routes.
 	GetByIDInWorkspace(ctx context.Context, id, workspaceID uuid.UUID) (*domain.Document, error)
-	// Update writes title, parent_id, position, updated_at and the updated_by
-	// pair. Nothing else on a document is mutable: the body is in object storage,
-	// and project_id and slug are what its siblings are unique against.
-	Update(ctx context.Context, doc *domain.Document) error
+	// MutateLocked is the only write path for an existing document. It locks the
+	// row, runs mutate against the locked copy, then persists title, parent_id,
+	// position, updated_at and the updated_by pair and bumps version by one.
+	// Nothing else on a document is mutable: the body is in object storage, and
+	// project_id and slug are what its siblings are unique against.
+	//
+	// The body write belongs INSIDE mutate. A document body is a
+	// read-modify-write across Postgres and object storage, which no single
+	// statement can make atomic; the row lock is what serializes two writers on
+	// the same page, and an upload done outside the callback is not covered by it.
+	//
+	// Returns (nil, nil) when no live document with this id belongs to
+	// workspaceID. An error from mutate rolls the transaction back and is
+	// returned unwrapped, so a typed refusal raised inside — a version conflict,
+	// say — reaches the caller intact.
+	MutateLocked(ctx context.Context, id, workspaceID uuid.UUID, mutate func(locked *domain.Document) error) (*domain.Document, error)
 	// SoftDelete stamps deleted_at, freeing the slug for a new sibling, and
 	// records who did it: a delete is a change to the row, and "last updated by"
 	// has to survive a restore to be worth anything.

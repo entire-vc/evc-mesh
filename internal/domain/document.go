@@ -32,6 +32,20 @@ type Document struct {
 	UpdatedBy     *uuid.UUID `json:"updated_by" db:"updated_by"`
 	UpdatedByType *ActorType `json:"updated_by_type" db:"updated_by_type"`
 
+	// Version is bumped by one on every write to the document — body, title,
+	// place in the tree, all of it. It is what a conditional write is checked
+	// against: a caller sends back the version it read, and a write built on a
+	// version the document has since moved past is refused instead of silently
+	// winning. See migrations/20260820102_documents_version.sql for why this is a
+	// counter and not UpdatedAt.
+	//
+	// Always populated: the column is NOT NULL DEFAULT 1, so a document read from
+	// the database is never at version 0. A zero here means the value came from
+	// somewhere other than a read — an unset field in a request, most likely —
+	// and the service treats that as "no base version supplied" rather than as a
+	// version to compare against.
+	Version int64 `json:"version" db:"version"`
+
 	CreatedAt time.Time  `json:"created_at" db:"created_at"`
 	UpdatedAt time.Time  `json:"updated_at" db:"updated_at"`
 	DeletedAt *time.Time `json:"deleted_at,omitempty" db:"deleted_at"`

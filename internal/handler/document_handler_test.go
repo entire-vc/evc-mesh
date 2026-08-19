@@ -601,3 +601,191 @@ func TestCallerActor(t *testing.T) {
 		assert.Equal(t, domain.ActorTypeSystem, at)
 	})
 }
+
+// --- Conditional writes + append ---
+
+// The HTTP shape of the guard: base_version travels from the body to the
+// service, unbound and unchanged.
+func TestDocumentHandler_Update_PassesBaseVersionThrough(t *testing.T) {
+	docID, wsID := uuid.New(), uuid.New()
+	var got *int64
+
+	mockSvc := &MockDocumentService{
+		UpdateFunc: func(_ context.Context, id, _ uuid.UUID, input service.UpdateDocumentInput) (*domain.Document, error) {
+			got = input.BaseVersion
+			return &domain.Document{ID: id, Version: 8}, nil
+		},
+	}
+	h, e := setupDocumentTest(mockSvc)
+
+	c, rec := docRequest(e, http.MethodPatch, docID.String(), &wsID, `{"body":"edited","base_version":7}`)
+	require.NoError(t, h.Update(c))
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	require.NotNil(t, got, "base_version did not reach the service")
+	assert.Equal(t, int64(7), *got)
+
+	var doc map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &doc))
+	assert.Equal(t, float64(8), doc["version"], "the response carries the new version to save against next")
+}
+
+// An omitted base_version must arrive at the service as nil, not as 0. The
+// service tells "you did not send one" (400) from "you sent a stale one" (409),
+// and it can only do that if the handler preserves the difference.
+func TestDocumentHandler_Update_OmittedBaseVersionArrivesAsNil(t *testing.T) {
+	docID, wsID := uuid.New(), uuid.New()
+	sent := true
+	var got *int64
+
+	mockSvc := &MockDocumentService{
+		UpdateFunc: func(_ context.Context, id, _ uuid.UUID, input service.UpdateDocumentInput) (*domain.Document, error) {
+			got, sent = input.BaseVersion, input.BaseVersion != nil
+			return &domain.Document{ID: id}, nil
+		},
+	}
+	h, e := setupDocumentTest(mockSvc)
+
+	c, _ := docRequest(e, http.MethodPatch, docID.String(), &wsID, `{"body":"edited"}`)
+	require.NoError(t, h.Update(c))
+
+	assert.False(t, sent)
+	assert.Nil(t, got)
+}
+
+// The service's refusal of a base-version-less write reaches the client as a
+// 400 naming the field, not as a 500 and not as a quiet success.
+func TestDocumentHandler_Update_MissingBaseVersionIsRelayedAs400(t *testing.T) {
+	docID, wsID := uuid.New(), uuid.New()
+
+	mockSvc := &MockDocumentService{
+		UpdateFunc: func(context.Context, uuid.UUID, uuid.UUID, service.UpdateDocumentInput) (*domain.Document, error) {
+			return nil, apierror.ValidationError(map[string]string{"base_version": "base_version is required"})
+		},
+	}
+	h, e := setupDocumentTest(mockSvc)
+
+	c, rec := docRequest(e, http.MethodPatch, docID.String(), &wsID, `{"body":"edited"}`)
+	require.NoError(t, h.Update(c))
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Contains(t, rec.Body.String(), "base_version")
+}
+
+// A stale write is a 409 whose body names the version the document is at. The
+// status code alone sends the caller back to a GET to find out what happened,
+// and a client that has to re-read anyway tends to re-read and then write
+// unconditionally — the behaviour this change exists to remove.
+func TestDocumentHandler_Update_VersionConflictIs409WithTheCurrentVersion(t *testing.T) {
+	docID, wsID := uuid.New(), uuid.New()
+
+	mockSvc := &MockDocumentService{
+		UpdateFunc: func(_ context.Context, id, _ uuid.UUID, _ service.UpdateDocumentInput) (*domain.Document, error) {
+			return nil, &service.DocumentVersionConflictError{
+				DocumentID: id, BaseVersion: 3, CurrentVersion: 7,
+			}
+		},
+	}
+	h, e := setupDocumentTest(mockSvc)
+
+	c, rec := docRequest(e, http.MethodPatch, docID.String(), &wsID, `{"body":"edited","base_version":3}`)
+	require.NoError(t, h.Update(c))
+
+	assert.Equal(t, http.StatusConflict, rec.Code)
+
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	assert.Equal(t, "document_version_conflict", body["code"])
+	assert.Equal(t, float64(7), body["current_version"], "the caller learns the current version from the refusal")
+	assert.Equal(t, float64(3), body["base_version"])
+	assert.NotEmpty(t, body["message"])
+}
+
+func TestDocumentHandler_Append(t *testing.T) {
+	docID, wsID := uuid.New(), uuid.New()
+	agentID := uuid.New()
+	var gotText string
+	var gotWS, gotEditor uuid.UUID
+	var gotType domain.ActorType
+
+	mockSvc := &MockDocumentService{
+		AppendBodyFunc: func(_ context.Context, id, ws uuid.UUID, input service.AppendDocumentInput) (*domain.Document, error) {
+			gotText, gotWS, gotEditor, gotType = input.Text, ws, input.UpdatedBy, input.UpdatedByType
+			return &domain.Document{ID: id, Version: 4, Body: "existing\nappended"}, nil
+		},
+	}
+	h, e := setupDocumentTest(mockSvc)
+
+	c, rec := docRequest(e, http.MethodPost, docID.String(), &wsID, `{"text":"appended"}`)
+	c.Set("agent_id", agentID)
+	require.NoError(t, h.Append(c))
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, "appended", gotText)
+	assert.Equal(t, wsID, gotWS, "the append is narrowed to the caller's workspace")
+	assert.Equal(t, agentID, gotEditor, "the editor is read from the request, never from the body")
+	assert.Equal(t, domain.ActorTypeAgent, gotType)
+
+	var doc map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &doc))
+	assert.Equal(t, "existing\nappended", doc["body"])
+	assert.Equal(t, float64(4), doc["version"])
+}
+
+// Append reads no base_version, and sending one must not smuggle a conditional
+// write in through the endpoint that is documented as having none.
+func TestDocumentHandler_Append_IgnoresAnyBaseVersionInTheBody(t *testing.T) {
+	docID, wsID := uuid.New(), uuid.New()
+	called := false
+
+	mockSvc := &MockDocumentService{
+		AppendBodyFunc: func(_ context.Context, id, _ uuid.UUID, input service.AppendDocumentInput) (*domain.Document, error) {
+			called = true
+			assert.Equal(t, "more", input.Text)
+			return &domain.Document{ID: id}, nil
+		},
+	}
+	h, e := setupDocumentTest(mockSvc)
+
+	c, rec := docRequest(e, http.MethodPost, docID.String(), &wsID, `{"text":"more","base_version":99}`)
+	require.NoError(t, h.Append(c))
+
+	assert.True(t, called)
+	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
+func TestDocumentHandler_Append_InvalidDocumentID(t *testing.T) {
+	wsID := uuid.New()
+	h, e := setupDocumentTest(&MockDocumentService{})
+
+	c, rec := docRequest(e, http.MethodPost, "not-a-uuid", &wsID, `{"text":"x"}`)
+	require.NoError(t, h.Append(c))
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
+// Without a resolved workspace there is nothing to narrow the lookup to, so the
+// route refuses rather than falling back to an unscoped write.
+func TestDocumentHandler_Append_NoWorkspaceIsForbidden(t *testing.T) {
+	h, e := setupDocumentTest(&MockDocumentService{})
+
+	c, rec := docRequest(e, http.MethodPost, uuid.New().String(), nil, `{"text":"x"}`)
+	require.NoError(t, h.Append(c))
+
+	assert.Equal(t, http.StatusForbidden, rec.Code)
+}
+
+func TestDocumentHandler_Append_ServiceErrorIsRelayed(t *testing.T) {
+	wsID := uuid.New()
+	mockSvc := &MockDocumentService{
+		AppendBodyFunc: func(context.Context, uuid.UUID, uuid.UUID, service.AppendDocumentInput) (*domain.Document, error) {
+			return nil, apierror.NotFound("Document")
+		},
+	}
+	h, e := setupDocumentTest(mockSvc)
+
+	c, rec := docRequest(e, http.MethodPost, uuid.New().String(), &wsID, `{"text":"x"}`)
+	require.NoError(t, h.Append(c))
+
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+}

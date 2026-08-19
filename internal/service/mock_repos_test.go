@@ -2510,13 +2510,34 @@ type MockDocumentRepository struct {
 	failSearchTextOnly bool
 	errToReturn        error
 	createErr          error
+
+	// One mutex per document, standing in for the row lock MutateLocked takes in
+	// Postgres. A single mutex over the whole map would not do: the callback runs
+	// while the lock is held and calls back into this repository (GetByID, for the
+	// parent check), so a global write lock would deadlock against its own caller.
+	// Per-document also matches the real contention shape — two writers on one
+	// page serialize, two writers on different pages do not.
+	locksMu sync.Mutex
+	locks   map[uuid.UUID]*sync.Mutex
 }
 
 func NewMockDocumentRepository() *MockDocumentRepository {
 	return &MockDocumentRepository{
 		items:       make(map[uuid.UUID]*domain.Document),
 		workspaceOf: make(map[uuid.UUID]uuid.UUID),
+		locks:       make(map[uuid.UUID]*sync.Mutex),
 	}
+}
+
+func (m *MockDocumentRepository) lockFor(id uuid.UUID) *sync.Mutex {
+	m.locksMu.Lock()
+	defer m.locksMu.Unlock()
+	lock, ok := m.locks[id]
+	if !ok {
+		lock = &sync.Mutex{}
+		m.locks[id] = lock
+	}
+	return lock
 }
 
 // WithProjectWorkspace declares which tenant a project belongs to.
@@ -2581,19 +2602,45 @@ func (m *MockDocumentRepository) GetByIDInWorkspace(_ context.Context, id, works
 	return &copied, nil
 }
 
-func (m *MockDocumentRepository) Update(_ context.Context, doc *domain.Document) error {
+// MutateLocked mirrors the real repository: the document is locked for the whole
+// of mutate, and the persisted row's version is the stored one plus one — never
+// whatever the callback left on its copy. A mock that took the caller's version
+// at face value would happily pass a service that computed it wrong.
+func (m *MockDocumentRepository) MutateLocked(
+	ctx context.Context,
+	id, workspaceID uuid.UUID,
+	mutate func(locked *domain.Document) error,
+) (*domain.Document, error) {
 	if m.errToReturn != nil {
-		return m.errToReturn
+		return nil, m.errToReturn
 	}
+
+	lock := m.lockFor(id)
+	lock.Lock()
+	defer lock.Unlock()
+
+	locked, err := m.GetByIDInWorkspace(ctx, id, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	if locked == nil {
+		return nil, nil
+	}
+	if mErr := mutate(locked); mErr != nil {
+		return nil, mErr
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	existing, ok := m.items[doc.ID]
+	existing, ok := m.items[id]
 	if !ok || existing.DeletedAt != nil {
-		return apierror.NotFound("Document")
+		return nil, apierror.NotFound("Document")
 	}
-	copied := *doc
-	m.items[doc.ID] = &copied
-	return nil
+	stored := *locked
+	stored.Version = existing.Version + 1
+	m.items[id] = &stored
+	out := stored
+	return &out, nil
 }
 
 func (m *MockDocumentRepository) SoftDelete(_ context.Context, id uuid.UUID, at time.Time, by uuid.UUID, byType domain.ActorType) error {

@@ -31,6 +31,7 @@ type documentRow struct {
 	CreatedByType domain.ActorType  `db:"created_by_type"`
 	UpdatedBy     *uuid.UUID        `db:"updated_by"`
 	UpdatedByType *domain.ActorType `db:"updated_by_type"`
+	Version       int64             `db:"version"`
 	CreatedAt     time.Time         `db:"created_at"`
 	UpdatedAt     time.Time         `db:"updated_at"`
 	DeletedAt     *time.Time        `db:"deleted_at"`
@@ -45,7 +46,8 @@ type documentRow struct {
 // serves the plain reads and the ones that JOIN projects (both tables have
 // created_at). See artifactSelectCols for why no query here uses `SELECT *`.
 const documentSelectCols = `d.id, d.project_id, d.parent_id, d.slug, d.title, d.storage_key, d.position,
-	d.created_by, d.created_by_type, d.updated_by, d.updated_by_type, d.created_at, d.updated_at, d.deleted_at`
+	d.created_by, d.created_by_type, d.updated_by, d.updated_by_type, d.version,
+	d.created_at, d.updated_at, d.deleted_at`
 
 // documentEnrichedSelect is documentSelectCols plus the two display names, each
 // resolved through to the agent or user that authored the change rather than read
@@ -69,6 +71,7 @@ func (r *documentRow) toDomain() domain.Document {
 		CreatedByType: r.CreatedByType,
 		UpdatedBy:     r.UpdatedBy,
 		UpdatedByType: r.UpdatedByType,
+		Version:       r.Version,
 		CreatedAt:     r.CreatedAt,
 		UpdatedAt:     r.UpdatedAt,
 		DeletedAt:     r.DeletedAt,
@@ -92,13 +95,13 @@ func (r *DocumentRepo) Create(ctx context.Context, doc *domain.Document) error {
 		INSERT INTO documents (
 			id, project_id, parent_id, slug, title, storage_key,
 			position, created_by, created_by_type, updated_by, updated_by_type,
-			created_at, updated_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+			version, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 	`
 	_, err := r.db.ExecContext(ctx, q,
 		doc.ID, doc.ProjectID, doc.ParentID, doc.Slug, doc.Title, doc.StorageKey,
 		doc.Position, doc.CreatedBy, doc.CreatedByType, doc.UpdatedBy, doc.UpdatedByType,
-		doc.CreatedAt, doc.UpdatedAt,
+		doc.Version, doc.CreatedAt, doc.UpdatedAt,
 	)
 	if isDocumentSlugConflict(err) {
 		return apierror.Conflict("a document with this slug already exists in this location")
@@ -140,25 +143,128 @@ func (r *DocumentRepo) GetByIDInWorkspace(ctx context.Context, id, workspaceID u
 	return &d, nil
 }
 
-func (r *DocumentRepo) Update(ctx context.Context, doc *domain.Document) error {
-	const q = `
+// MutateLocked is the one write path for an existing document, and the only one:
+// it holds a row-level lock on the document for the whole of mutate, then
+// persists the mutable columns and bumps version by one.
+//
+// The lock is what makes a document body safe to change at all. The body is not
+// a column — it is an object in S3 addressed by storage_key — so every body
+// write is a read-modify-write across two stores that no single statement can
+// make atomic. Two writers running that concurrently is exactly the incident
+// this exists to prevent: both read the same body, both upload, and the second
+// upload erases the first with nothing anywhere reporting a failure. Serializing
+// on the row means the second writer either sees the first writer's committed
+// version (and its conditional check refuses) or waits behind it.
+//
+// Ordering inside the transaction is: lock, mutate, UPDATE, commit. mutate runs
+// while the lock is held, which is why the object-storage write belongs inside
+// it rather than around the call: an upload done before the lock is taken, or
+// after it is released, is unserialized again and the lock bought nothing.
+//
+// mutate returning an error rolls the transaction back and the error is returned
+// as-is, so a caller can raise a typed refusal (a version conflict, a validation
+// error) from inside and have it reach the client unwrapped.
+//
+// Residual failure worth naming: if mutate uploads a body and the UPDATE or the
+// COMMIT then fails, the stored object is ahead of the row — new body, unchanged
+// version. That is a failed request that nevertheless changed content, reported
+// as an error rather than as success. It is not the lost-update this method
+// exists to stop, because no other writer could have interleaved: the lock was
+// held throughout, so the next writer reads a consistent pair.
+//
+// Returns (nil, nil) when there is no live document with this id in this
+// workspace — the same "no error, no row" shape as GetByIDInWorkspace, so the
+// caller answers 404 without revealing whether the id exists in another tenant.
+// On success it returns the document re-read through documentEnrichedSelect, so
+// the caller gets the bumped version and the resolved display names together.
+func (r *DocumentRepo) MutateLocked(
+	ctx context.Context,
+	id, workspaceID uuid.UUID,
+	mutate func(locked *domain.Document) error,
+) (*domain.Document, error) {
+	tx, err := r.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }() //nolint:errcheck // best-effort rollback after commit or on error
+
+	// FOR UPDATE OF d: the row being locked is the document, not the project the
+	// join brings in for the tenant check. Without the OF clause Postgres locks a
+	// row in projects too, and every document write in a project would serialize
+	// against every other one instead of only against writes to the same page.
+	//
+	// Not SKIP LOCKED and not NOWAIT: a concurrent writer is expected here and the
+	// correct behaviour is to wait for it, then see what it committed.
+	lockQ := documentEnrichedSelect + `
+		  FROM documents d
+		  JOIN projects p ON d.project_id = p.id
+		 WHERE d.id = $1
+		   AND d.deleted_at IS NULL
+		   AND p.workspace_id = $2
+		   FOR UPDATE OF d`
+	var row documentRow
+	if err = tx.GetContext(ctx, &row, lockQ, id, workspaceID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	// The version as the locked read found it, kept aside before mutate can touch
+	// the copy it is handed.
+	observedVersion := row.Version
+
+	locked := row.toDomain()
+	if mErr := mutate(&locked); mErr != nil {
+		return nil, mErr
+	}
+
+	// `AND version = $8` is redundant while the lock above holds — nothing can
+	// have changed the row in between. It is here for the day it does not: a
+	// weakened or accidentally dropped FOR UPDATE turns a lost update into
+	// silent data loss, which is the failure this whole file exists to prevent
+	// and the one nobody notices. With the predicate, the same regression makes
+	// the write match zero rows and fail loudly instead. Measured: removing FOR
+	// UPDATE with this predicate in place makes concurrent appends error;
+	// without it, they silently overwrite each other.
+	const updateQ = `
 		UPDATE documents
 		   SET title = $2, parent_id = $3, position = $4, updated_at = $5,
-		       updated_by = $6, updated_by_type = $7
-		 WHERE id = $1 AND deleted_at IS NULL`
-	res, err := r.db.ExecContext(ctx, q, doc.ID, doc.Title, doc.ParentID, doc.Position, doc.UpdatedAt,
-		doc.UpdatedBy, doc.UpdatedByType)
+		       updated_by = $6, updated_by_type = $7, version = version + 1
+		 WHERE id = $1 AND deleted_at IS NULL AND version = $8`
+	res, err := tx.ExecContext(ctx, updateQ, locked.ID, locked.Title, locked.ParentID, locked.Position,
+		locked.UpdatedAt, locked.UpdatedBy, locked.UpdatedByType, observedVersion)
 	if isDocumentSlugConflict(err) {
-		return apierror.Conflict("a document with this slug already exists in this location")
+		return nil, apierror.Conflict("a document with this slug already exists in this location")
 	}
 	if err != nil {
-		return err
+		return nil, err
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {
-		return apierror.NotFound("Document")
+		// The row was located and locked a few statements ago, so this is not the
+		// ordinary "no such document": it means the row was deleted or its version
+		// moved while this transaction held the lock, which the lock makes
+		// impossible. Answered as a refusal rather than an ignored zero — a write
+		// that matched nothing must never report success.
+		return nil, apierror.Conflict("the document changed while this write was in flight")
 	}
-	return nil
+
+	if cErr := tx.Commit(); cErr != nil {
+		return nil, cErr
+	}
+
+	// Re-read outside the transaction for the resolved display names and the
+	// committed version, the same enrich-after-write the callers of Update relied
+	// on. Falling back to the locked copy with version stepped on by hand keeps a
+	// successful write reported as one even if this read fails — answering an
+	// error here would tell the caller their edit was lost when it was not.
+	enriched, getErr := r.GetByIDInWorkspace(ctx, locked.ID, workspaceID)
+	if getErr != nil || enriched == nil {
+		locked.Version++
+		return &locked, nil
+	}
+	return enriched, nil
 }
 
 // SoftDelete stamps deleted_at. The children go with it: ON DELETE CASCADE only

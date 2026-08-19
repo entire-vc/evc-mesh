@@ -48,6 +48,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { toast } from "@/components/ui/toast";
+import { ApiRequestError } from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { copyText } from "@/lib/clipboard";
 // Two unrelated anchor systems live on this page. `@/lib/docs/anchor` (D6) is
@@ -82,10 +83,22 @@ type SaveState =
   | { status: "idle" }
   | { status: "saving" }
   | { status: "saved" }
-  | { status: "error"; message: string };
+  | { status: "error"; message: string }
+  // Somebody else wrote to this page while it was open. Distinct from "error"
+  // because it is not retryable: the same request repeated is the same stale
+  // base_version and the same refusal. The editor keeps the text — the one
+  // thing that must not happen here is the user's words disappearing on the way
+  // to being told about the collision.
+  | { status: "conflict"; message: string };
 
 function errorMessage(err: unknown, fallback: string): string {
   return err instanceof Error ? err.message : fallback;
+}
+
+// A write refused because the document moved on: the API answers 409. Read from
+// the status rather than by matching the message, which is prose and changes.
+function isVersionConflict(err: unknown): boolean {
+  return err instanceof ApiRequestError && err.status === 409;
 }
 
 // ---------------------------------------------------------------------------
@@ -303,6 +316,17 @@ function SaveIndicator({
       </span>
     );
   }
+  // A collision, not a failure: no Retry, because the same request would be
+  // refused the same way. The message is the server's, verbatim — it is the one
+  // that says what to do about it.
+  if (state.status === "conflict") {
+    return (
+      <span className="flex items-center gap-1 text-xs text-destructive">
+        <AlertCircle className="h-3 w-3" />
+        Not saved: {state.message}
+      </span>
+    );
+  }
   if (state.status === "error") {
     return (
       <span className="flex items-center gap-1 text-xs text-destructive">
@@ -410,6 +434,20 @@ export function DocsPage() {
   const savedBodyRef = useRef("");
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // The version every save is built on. A ref rather than state because the
+  // saves that need it are fired from timers and from an unmount cleanup, where
+  // a value captured in a render closure is the version as it was several saves
+  // ago — and a save built on that is refused. It is set from the document on
+  // open and advanced by whatever each successful write returns.
+  const versionRef = useRef(0);
+
+  // Latched when a save is refused because somebody else wrote to this page.
+  // Every subsequent attempt carries the same stale version and gets the same
+  // refusal, so retrying is only a way to hammer the server with writes that
+  // cannot land; the editor stops saving and says so, and the text stays put.
+  // Cleared when the document is loaded again — reopening it is the recovery.
+  const conflictRef = useRef(false);
+
   // Read by the "leaving the document" cleanup below, which runs on a render
   // where docId is already the next document but these still hold the one being
   // left behind.
@@ -428,6 +466,8 @@ export function DocsPage() {
       setOpenDoc(null);
       setDraft("");
       savedBodyRef.current = "";
+      versionRef.current = 0;
+      conflictRef.current = false;
       setLoadError(null);
       setEditing(false);
       return;
@@ -443,6 +483,8 @@ export function DocsPage() {
         const body = doc.body ?? "";
         setDraft(body);
         savedBodyRef.current = body;
+        versionRef.current = doc.version;
+        conflictRef.current = false;
         // View mode on open, every time — switching document must not leave the
         // next one sitting in an editor the user did not ask for.
         setEditing(false);
@@ -466,14 +508,30 @@ export function DocsPage() {
   const flushBody = useCallback(async () => {
     const doc = openDoc;
     if (!doc) return;
+    // A page that has already collided is not saved again: the base version in
+    // hand is stale by definition, so the only thing another attempt can
+    // achieve is another 409.
+    if (conflictRef.current) return;
     const body = draft;
     if (body === savedBodyRef.current) return;
     setSaveState({ status: "saving" });
     try {
-      await updateDocument(doc.id, { body });
+      const updated = await updateDocument(doc.id, {
+        body,
+        base_version: versionRef.current,
+      });
       savedBodyRef.current = body;
+      versionRef.current = updated.version;
       setSaveState({ status: "saved" });
     } catch (err) {
+      if (isVersionConflict(err)) {
+        conflictRef.current = true;
+        setSaveState({
+          status: "conflict",
+          message: errorMessage(err, "this page changed elsewhere"),
+        });
+        return;
+      }
       setSaveState({
         status: "error",
         message: errorMessage(err, "save failed"),
@@ -484,6 +542,7 @@ export function DocsPage() {
   // Debounced autosave, mirroring the task description editor.
   useEffect(() => {
     if (!editing) return;
+    if (conflictRef.current) return;
     if (draft === savedBodyRef.current) return;
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(() => {
@@ -501,10 +560,14 @@ export function DocsPage() {
     return () => {
       const doc = openDocRef.current;
       if (!doc) return;
+      if (conflictRef.current) return;
       const body = draftRef.current;
       if (body === savedBodyRef.current) return;
       savedBodyRef.current = body;
-      void updateDocument(doc.id, { body }).catch((err: unknown) => {
+      void updateDocument(doc.id, {
+        body,
+        base_version: versionRef.current,
+      }).catch((err: unknown) => {
         toast.error(
           `"${doc.title}" was not saved: ${errorMessage(err, "save failed")}`,
         );
@@ -606,8 +669,17 @@ export function DocsPage() {
     if (!renameTarget) return;
     setRenaming(true);
     try {
-      const updated = await updateDocument(renameTarget.id, { title });
-      if (openDoc?.id === updated.id) setOpenDoc(updated);
+      const updated = await updateDocument(renameTarget.id, {
+        title,
+        base_version: renameTarget.version,
+      });
+      if (openDoc?.id === updated.id) {
+        setOpenDoc(updated);
+        // The rename bumped the version. Without this the open editor keeps
+        // saving against the pre-rename number and every autosave collides with
+        // a write the same user just made.
+        versionRef.current = updated.version;
+      }
       setRenameTarget(null);
     } catch (err) {
       toast.error(errorMessage(err, "Failed to rename page"));
@@ -624,9 +696,14 @@ export function DocsPage() {
       // parent_id: null arrives at a *uuid.UUID indistinguishable from omitted.
       const updated = await updateDocument(
         moveTarget.id,
-        parentId === null ? { clear_parent: true } : { parent_id: parentId },
+        parentId === null
+          ? { clear_parent: true, base_version: moveTarget.version }
+          : { parent_id: parentId, base_version: moveTarget.version },
       );
-      if (openDoc?.id === updated.id) setOpenDoc(updated);
+      if (openDoc?.id === updated.id) {
+        setOpenDoc(updated);
+        versionRef.current = updated.version;
+      }
       setMoveTarget(null);
     } catch (err) {
       // The server refuses a move whose destination already holds a live child

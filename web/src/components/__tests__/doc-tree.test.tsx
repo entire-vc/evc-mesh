@@ -18,6 +18,7 @@ function makeDoc(overrides: Partial<ProjectDocument> & { id: string }): ProjectD
     created_by_type: "user",
     created_at: "2026-08-01T00:00:00Z",
     updated_at: "2026-08-01T00:00:00Z",
+    version: 1,
     ...overrides,
   };
 }

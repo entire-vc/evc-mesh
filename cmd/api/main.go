@@ -962,6 +962,10 @@ func main() {
 	api.POST("/projects/:proj_id/documents", documentHandler.Create, projAccess, rbac(mw.PermUploadArtifact))
 	api.GET("/documents/:doc_id", documentHandler.GetByID, wsAccess)
 	api.PATCH("/documents/:doc_id", documentHandler.Update, wsAccess, rbac(mw.PermUploadArtifact))
+	// Append is a write to the body like PATCH is, so it carries the same guards.
+	// It differs only in taking no base_version: an append cannot destroy an edit
+	// it did not read, so there is nothing for a conditional write to protect.
+	api.POST("/documents/:doc_id/append", documentHandler.Append, wsAccess, rbac(mw.PermUploadArtifact))
 	api.DELETE("/documents/:doc_id", documentHandler.Delete, wsAccess, rbac(mw.PermUploadArtifact))
 
 	// Document attachment routes. The upload/list pair hangs off :doc_id, which

@@ -57,6 +57,7 @@ func TestDocumentService_Update_StampsTheEditor(t *testing.T) {
 	newBody := "v2"
 	updated, err := f.svc.Update(ctx, created.ID, f.wsID, UpdateDocumentInput{
 		Body:          &newBody,
+		BaseVersion:   &created.Version,
 		UpdatedBy:     editor,
 		UpdatedByType: domain.ActorTypeAgent,
 	})
@@ -88,6 +89,7 @@ func TestDocumentService_Update_StampsEvenWhenOnlyThePositionMoved(t *testing.T)
 	pos := 9
 	updated, err := f.svc.Update(ctx, created.ID, f.wsID, UpdateDocumentInput{
 		Position:      &pos,
+		BaseVersion:   &created.Version,
 		UpdatedBy:     editor,
 		UpdatedByType: domain.ActorTypeUser,
 	})
@@ -151,6 +153,7 @@ func TestDocumentService_Update_ReturnsTheResolvedNames(t *testing.T) {
 	newBody := "v2"
 	updated, err := f.svc.Update(ctx, created.ID, f.wsID, UpdateDocumentInput{
 		Body:          &newBody,
+		BaseVersion:   &created.Version,
 		UpdatedBy:     uuid.New(),
 		UpdatedByType: domain.ActorTypeAgent,
 	})

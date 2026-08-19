@@ -378,6 +378,15 @@ export interface ProjectDocument {
   created_by_name?: string | null;
   updated_by?: string | null;
   updated_by_name?: string | null;
+  // Bumped by one on every write to the document — body, title, position, all
+  // of it. Send it back as `base_version` on the next save; the API refuses a
+  // write built on a version the document has already moved past, which is what
+  // stops two editors overwriting each other without either being told.
+  //
+  // Required rather than optional, unlike the byline fields above: a save
+  // cannot be made without it, so a response missing one is a bug to surface at
+  // the type level rather than a field to render as absent.
+  version: number;
   created_at: string;
   updated_at: string;
   deleted_at?: string | null;
@@ -401,6 +410,11 @@ export interface UpdateDocumentRequest {
   clear_parent?: boolean;
   position?: number;
   body?: string;
+  // The version this edit was built on. Required, and required by the API too:
+  // a PATCH without it is rejected rather than written unconditionally. Take it
+  // from the `version` of the document you read (or from the response of your
+  // own last save, which carries the new one).
+  base_version: number;
 }
 
 // A comment anchored to a run of a document's text — the W3C Web Annotation

@@ -219,9 +219,10 @@ func TestDocumentService_Update(t *testing.T) {
 	newBody := "new body"
 	newPos := 7
 	updated, err := f.svc.Update(context.Background(), created.ID, f.wsID, UpdateDocumentInput{
-		Title:    &newTitle,
-		Body:     &newBody,
-		Position: &newPos,
+		Title:       &newTitle,
+		Body:        &newBody,
+		Position:    &newPos,
+		BaseVersion: &created.Version,
 	})
 	require.NoError(t, err)
 
@@ -243,7 +244,8 @@ func TestDocumentService_Update_ClearParentMovesToRoot(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, child.ParentID)
 
-	updated, err := f.svc.Update(context.Background(), child.ID, f.wsID, UpdateDocumentInput{ClearParent: true})
+	updated, err := f.svc.Update(context.Background(), child.ID, f.wsID,
+		UpdateDocumentInput{ClearParent: true, BaseVersion: &child.Version})
 	require.NoError(t, err)
 	assert.Nil(t, updated.ParentID)
 }
@@ -252,7 +254,8 @@ func TestDocumentService_Update_RejectsSelfParent(t *testing.T) {
 	f := setupDocumentService(t)
 	doc := f.create(t, "Self", "")
 
-	_, err := f.svc.Update(context.Background(), doc.ID, f.wsID, UpdateDocumentInput{ParentID: &doc.ID})
+	_, err := f.svc.Update(context.Background(), doc.ID, f.wsID,
+		UpdateDocumentInput{ParentID: &doc.ID, BaseVersion: &doc.Version})
 
 	var apiErr *apierror.Error
 	require.ErrorAs(t, err, &apiErr)
@@ -274,7 +277,8 @@ func TestDocumentService_Update_RejectsCycle(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	_, err = f.svc.Update(ctx, parent.ID, f.wsID, UpdateDocumentInput{ParentID: &child.ID})
+	_, err = f.svc.Update(ctx, parent.ID, f.wsID,
+		UpdateDocumentInput{ParentID: &child.ID, BaseVersion: &parent.Version})
 
 	var apiErr *apierror.Error
 	require.ErrorAs(t, err, &apiErr)
@@ -286,7 +290,8 @@ func TestDocumentService_Update_OtherWorkspaceIsNotFound(t *testing.T) {
 	created := f.create(t, "Confidential", "secret")
 
 	newTitle := "hijacked"
-	_, err := f.svc.Update(context.Background(), created.ID, uuid.New(), UpdateDocumentInput{Title: &newTitle})
+	_, err := f.svc.Update(context.Background(), created.ID, uuid.New(),
+		UpdateDocumentInput{Title: &newTitle, BaseVersion: &created.Version})
 
 	var apiErr *apierror.Error
 	require.ErrorAs(t, err, &apiErr)
@@ -302,7 +307,8 @@ func TestDocumentService_Update_BodyTooLarge(t *testing.T) {
 	created := f.create(t, "Draft", "small")
 
 	huge := strings.Repeat("x", maxDocumentBodyBytes+1)
-	_, err := f.svc.Update(context.Background(), created.ID, f.wsID, UpdateDocumentInput{Body: &huge})
+	_, err := f.svc.Update(context.Background(), created.ID, f.wsID,
+		UpdateDocumentInput{Body: &huge, BaseVersion: &created.Version})
 
 	var apiErr *apierror.Error
 	require.ErrorAs(t, err, &apiErr)
@@ -434,7 +440,8 @@ func TestDocumentService_Update_RejectsEmptyTitle(t *testing.T) {
 	created := f.create(t, "Draft", "body")
 
 	blank := "   "
-	_, err := f.svc.Update(context.Background(), created.ID, f.wsID, UpdateDocumentInput{Title: &blank})
+	_, err := f.svc.Update(context.Background(), created.ID, f.wsID,
+		UpdateDocumentInput{Title: &blank, BaseVersion: &created.Version})
 
 	var apiErr *apierror.Error
 	require.ErrorAs(t, err, &apiErr)
@@ -447,7 +454,8 @@ func TestDocumentService_Update_UploadFailureIsAnError(t *testing.T) {
 	f.storage.errToReturn = errors.New("s3 down")
 
 	newBody := "new"
-	_, err := f.svc.Update(context.Background(), created.ID, f.wsID, UpdateDocumentInput{Body: &newBody})
+	_, err := f.svc.Update(context.Background(), created.ID, f.wsID,
+		UpdateDocumentInput{Body: &newBody, BaseVersion: &created.Version})
 
 	require.Error(t, err)
 	stored, getErr := f.repo.GetByID(context.Background(), created.ID)
@@ -463,7 +471,8 @@ func TestDocumentService_NoStorageConfigured_ReadAndUpdate(t *testing.T) {
 	projectID, wsID, docID := uuid.New(), uuid.New(), uuid.New()
 
 	repo := NewMockDocumentRepository().WithProjectWorkspace(projectID, wsID)
-	repo.Seed(&domain.Document{ID: docID, ProjectID: projectID, Title: "Runbook", StorageKey: "documents/x/y.md"})
+	repo.Seed(&domain.Document{ID: docID, ProjectID: projectID, Title: "Runbook",
+		StorageKey: "documents/x/y.md", Version: 1})
 	projectRepo := NewMockProjectRepository()
 	require.NoError(t, projectRepo.Create(ctx, &domain.Project{ID: projectID, WorkspaceID: wsID}))
 
@@ -476,9 +485,19 @@ func TestDocumentService_NoStorageConfigured_ReadAndUpdate(t *testing.T) {
 		assert.Equal(t, 503, apiErr.StatusCode())
 	})
 
+	base := int64(1)
+
 	t.Run("update with a body", func(t *testing.T) {
 		body := "new"
-		_, err := svc.Update(ctx, docID, wsID, UpdateDocumentInput{Body: &body})
+		_, err := svc.Update(ctx, docID, wsID, UpdateDocumentInput{Body: &body, BaseVersion: &base})
+		var apiErr *apierror.Error
+		require.ErrorAs(t, err, &apiErr)
+		assert.Equal(t, 503, apiErr.StatusCode())
+	})
+
+	// Append is always a body write, so it has nowhere to go without storage.
+	t.Run("append", func(t *testing.T) {
+		_, err := svc.AppendBody(ctx, docID, wsID, AppendDocumentInput{Text: "more"})
 		var apiErr *apierror.Error
 		require.ErrorAs(t, err, &apiErr)
 		assert.Equal(t, 503, apiErr.StatusCode())
@@ -487,7 +506,7 @@ func TestDocumentService_NoStorageConfigured_ReadAndUpdate(t *testing.T) {
 	// A metadata-only update needs no storage at all, so it still works.
 	t.Run("update without a body", func(t *testing.T) {
 		title := "Renamed"
-		doc, err := svc.Update(ctx, docID, wsID, UpdateDocumentInput{Title: &title})
+		doc, err := svc.Update(ctx, docID, wsID, UpdateDocumentInput{Title: &title, BaseVersion: &base})
 		require.NoError(t, err)
 		assert.Equal(t, "Renamed", doc.Title)
 	})

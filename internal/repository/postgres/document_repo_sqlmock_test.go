@@ -39,12 +39,12 @@ func documentRows(docs ...domain.Document) *sqlmock.Rows {
 	rows := sqlmock.NewRows([]string{
 		"id", "project_id", "parent_id", "slug", "title", "storage_key",
 		"position", "created_by", "created_by_type", "updated_by", "updated_by_type",
-		"created_at", "updated_at", "deleted_at", "created_by_name", "updated_by_name",
+		"version", "created_at", "updated_at", "deleted_at", "created_by_name", "updated_by_name",
 	})
 	for _, d := range docs {
 		rows.AddRow(d.ID, d.ProjectID, d.ParentID, d.Slug, d.Title, d.StorageKey,
 			d.Position, d.CreatedBy, d.CreatedByType, d.UpdatedBy, d.UpdatedByType,
-			d.CreatedAt, d.UpdatedAt, d.DeletedAt, d.CreatedByName, d.UpdatedByName)
+			d.Version, d.CreatedAt, d.UpdatedAt, d.DeletedAt, d.CreatedByName, d.UpdatedByName)
 	}
 	return rows
 }
@@ -67,6 +67,7 @@ func sampleDocument() domain.Document {
 		CreatedByType: domain.ActorTypeUser,
 		UpdatedBy:     &editor,
 		UpdatedByType: &editorType,
+		Version:       4,
 		CreatedAt:     now,
 		UpdatedAt:     now,
 		CreatedByName: &creatorName,
@@ -81,7 +82,7 @@ func TestDocumentRepo_Create(t *testing.T) {
 	mock.ExpectExec("INSERT INTO documents").
 		WithArgs(doc.ID, doc.ProjectID, doc.ParentID, doc.Slug, doc.Title, doc.StorageKey,
 			doc.Position, doc.CreatedBy, doc.CreatedByType, doc.UpdatedBy, doc.UpdatedByType,
-			doc.CreatedAt, doc.UpdatedAt).
+			doc.Version, doc.CreatedAt, doc.UpdatedAt).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	require.NoError(t, repo.Create(context.Background(), &doc))
@@ -230,46 +231,178 @@ func TestDocumentRepo_GetByIDInWorkspace_OtherTenantIsNil(t *testing.T) {
 	assert.Nil(t, got)
 }
 
-func TestDocumentRepo_Update(t *testing.T) {
-	repo, mock := newDocumentRepoMock(t)
-	doc := sampleDocument()
+// noopMutate is the callback for the MutateLocked cases that are about the SQL
+// rather than about what the caller does with the locked row.
+func noopMutate(*domain.Document) error { return nil }
 
+// expectMutateLocked queues the fixed statement sequence MutateLocked issues on
+// the happy path: begin, lock the row, write it, commit, then the re-read for
+// display names.
+func expectMutateLocked(mock sqlmock.Sqlmock, doc domain.Document) {
+	mock.ExpectBegin()
+	mock.ExpectQuery("FOR UPDATE OF d").WillReturnRows(documentRows(doc))
 	mock.ExpectExec("UPDATE documents").
 		WithArgs(doc.ID, doc.Title, doc.ParentID, doc.Position, doc.UpdatedAt,
-			doc.UpdatedBy, doc.UpdatedByType).
+			doc.UpdatedBy, doc.UpdatedByType, doc.Version).
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+}
 
-	require.NoError(t, repo.Update(context.Background(), &doc))
+func TestDocumentRepo_MutateLocked(t *testing.T) {
+	repo, mock := newDocumentRepoMock(t)
+	doc := sampleDocument()
+	wsID := uuid.New()
+
+	expectMutateLocked(mock, doc)
+	// The re-read after commit: same row, version as the database now holds it.
+	reread := doc
+	reread.Version = doc.Version + 1
+	mock.ExpectQuery("JOIN projects p ON d.project_id = p.id").
+		WithArgs(doc.ID, wsID).
+		WillReturnRows(documentRows(reread))
+
+	got, err := repo.MutateLocked(context.Background(), doc.ID, wsID, noopMutate)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, doc.Version+1, got.Version, "the write bumps the version by one")
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestDocumentRepo_Update_NoRowsIsNotFound(t *testing.T) {
+// The lock is taken with the version still in hand, so the caller's callback can
+// compare against it before anything is written. This pins that the row handed
+// to the callback is the LOCKED read and not a stale one.
+func TestDocumentRepo_MutateLocked_CallbackSeesLockedRow(t *testing.T) {
 	repo, mock := newDocumentRepoMock(t)
 	doc := sampleDocument()
+	wsID := uuid.New()
 
-	mock.ExpectExec("UPDATE documents").WillReturnResult(sqlmock.NewResult(0, 0))
+	expectMutateLocked(mock, doc)
+	mock.ExpectQuery("JOIN projects p ON d.project_id = p.id").WillReturnRows(documentRows(doc))
 
-	err := repo.Update(context.Background(), &doc)
-
-	var apiErr *apierror.Error
-	require.ErrorAs(t, err, &apiErr)
-	assert.Equal(t, 404, apiErr.StatusCode())
+	var seen int64
+	_, err := repo.MutateLocked(context.Background(), doc.ID, wsID, func(locked *domain.Document) error {
+		seen = locked.Version
+		return nil
+	})
+	require.NoError(t, err)
+	assert.Equal(t, doc.Version, seen)
 }
 
-// Re-parenting changes which siblings a document is unique against, so the slug
-// index can fire on an update that never touched the slug.
-func TestDocumentRepo_Update_SlugConflictOnReparent(t *testing.T) {
+// A callback refusal must roll the transaction back and reach the caller
+// unwrapped — a version conflict is raised from in there, and it has to survive
+// the trip to be answerable as a 409 rather than a 500.
+func TestDocumentRepo_MutateLocked_CallbackErrorRollsBack(t *testing.T) {
 	repo, mock := newDocumentRepoMock(t)
 	doc := sampleDocument()
 
-	mock.ExpectExec("UPDATE documents").
-		WillReturnError(&pq.Error{Code: "23505", Constraint: "uq_documents_sibling_slug"})
+	mock.ExpectBegin()
+	mock.ExpectQuery("FOR UPDATE OF d").WillReturnRows(documentRows(doc))
+	mock.ExpectRollback()
 
-	err := repo.Update(context.Background(), &doc)
+	sentinel := errors.New("caller refused this write")
+	got, err := repo.MutateLocked(context.Background(), doc.ID, uuid.New(),
+		func(*domain.Document) error { return sentinel })
+
+	assert.Nil(t, got)
+	assert.ErrorIs(t, err, sentinel, "the callback's error must not be wrapped or replaced")
+	assert.NoError(t, mock.ExpectationsWereMet(), "no UPDATE may be issued after a refused callback")
+}
+
+// No live document in this workspace is (nil, nil), the same shape
+// GetByIDInWorkspace uses: the caller answers 404 without confirming the id
+// exists in some other tenant.
+func TestDocumentRepo_MutateLocked_MissingIsNilNil(t *testing.T) {
+	repo, mock := newDocumentRepoMock(t)
+
+	mock.ExpectBegin()
+	mock.ExpectQuery("FOR UPDATE OF d").WillReturnRows(documentRows())
+	mock.ExpectRollback()
+
+	got, err := repo.MutateLocked(context.Background(), uuid.New(), uuid.New(), noopMutate)
+	require.NoError(t, err)
+	assert.Nil(t, got)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// The UPDATE carries `AND version = <the version the lock read>`, which is
+// redundant while the lock holds and is the tripwire for the day it does not.
+// Zero rows means the row moved under a held lock — impossible by construction,
+// so it is answered as a conflict rather than swallowed as a no-op write.
+func TestDocumentRepo_MutateLocked_ZeroRowsIsAConflictNotASilentNoOp(t *testing.T) {
+	repo, mock := newDocumentRepoMock(t)
+	doc := sampleDocument()
+
+	mock.ExpectBegin()
+	mock.ExpectQuery("FOR UPDATE OF d").WillReturnRows(documentRows(doc))
+	mock.ExpectExec("UPDATE documents").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectRollback()
+
+	_, err := repo.MutateLocked(context.Background(), doc.ID, uuid.New(), noopMutate)
 
 	var apiErr *apierror.Error
 	require.ErrorAs(t, err, &apiErr)
 	assert.Equal(t, 409, apiErr.StatusCode())
+}
+
+// The version in the WHERE clause is the one the LOCKED READ returned, not
+// whatever the callback left on its copy. A callback that edited Version — by
+// mistake or by a future refactor — must not be able to steer which row the
+// write matches.
+func TestDocumentRepo_MutateLocked_ConditionUsesTheLockedVersionNotTheCallbacks(t *testing.T) {
+	repo, mock := newDocumentRepoMock(t)
+	doc := sampleDocument()
+
+	mock.ExpectBegin()
+	mock.ExpectQuery("FOR UPDATE OF d").WillReturnRows(documentRows(doc))
+	mock.ExpectExec("UPDATE documents").
+		WithArgs(doc.ID, doc.Title, doc.ParentID, doc.Position, doc.UpdatedAt,
+			doc.UpdatedBy, doc.UpdatedByType, doc.Version).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+	mock.ExpectQuery("JOIN projects p ON d.project_id = p.id").WillReturnRows(documentRows(doc))
+
+	_, err := repo.MutateLocked(context.Background(), doc.ID, uuid.New(), func(locked *domain.Document) error {
+		locked.Version = 9999
+		return nil
+	})
+	require.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// Re-parenting changes which siblings a document is unique against, so the slug
+// index can fire on an update that never touched the slug.
+func TestDocumentRepo_MutateLocked_SlugConflictOnReparent(t *testing.T) {
+	repo, mock := newDocumentRepoMock(t)
+	doc := sampleDocument()
+
+	mock.ExpectBegin()
+	mock.ExpectQuery("FOR UPDATE OF d").WillReturnRows(documentRows(doc))
+	mock.ExpectExec("UPDATE documents").
+		WillReturnError(&pq.Error{Code: "23505", Constraint: "uq_documents_sibling_slug"})
+	mock.ExpectRollback()
+
+	_, err := repo.MutateLocked(context.Background(), doc.ID, uuid.New(), noopMutate)
+
+	var apiErr *apierror.Error
+	require.ErrorAs(t, err, &apiErr)
+	assert.Equal(t, 409, apiErr.StatusCode())
+}
+
+// The write committed; only the cosmetic re-read failed. Reporting an error here
+// would tell a caller their edit was lost when it is on disk, so the committed
+// row is returned with the version stepped on by hand instead.
+func TestDocumentRepo_MutateLocked_RereadFailureStillReportsSuccess(t *testing.T) {
+	repo, mock := newDocumentRepoMock(t)
+	doc := sampleDocument()
+
+	expectMutateLocked(mock, doc)
+	mock.ExpectQuery("JOIN projects p ON d.project_id = p.id").
+		WillReturnError(errors.New("connection reset"))
+
+	got, err := repo.MutateLocked(context.Background(), doc.ID, uuid.New(), noopMutate)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, doc.Version+1, got.Version)
 }
 
 func TestDocumentRepo_SoftDelete(t *testing.T) {

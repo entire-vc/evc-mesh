@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 
@@ -43,6 +44,37 @@ type updateDocumentRequest struct {
 	ClearParent bool       `json:"clear_parent"`
 	Position    *int       `json:"position"`
 	Body        *string    `json:"body"`
+
+	// BaseVersion is the version the caller read before editing. Required — the
+	// service refuses an update without one, rather than writing it
+	// unconditionally. A pointer so an omitted field is distinguishable from a
+	// sent zero; binding it into an int64 would turn "I forgot" into "version 0"
+	// and the refusal into a confusing conflict.
+	BaseVersion *int64 `json:"base_version"`
+}
+
+// appendDocumentRequest is the JSON body for adding text to the end of a
+// document. No base_version: an append is unconditional by design — see
+// service.DocumentService.AppendBody.
+type appendDocumentRequest struct {
+	Text string `json:"text"`
+}
+
+// documentVersionConflictResponse is the 409 body for a write built on a stale
+// version.
+//
+// It carries the version the document is actually at, which is the thing the
+// caller needs and cannot get from the status code. Without it the only way
+// forward from a 409 is another GET, and a client that has to re-read anyway
+// tends to re-read and then write unconditionally, which is the behaviour this
+// whole change exists to remove.
+type documentVersionConflictResponse struct {
+	Code string `json:"code"`
+	// Message is what a user-facing client is expected to show verbatim; the
+	// numbers below are for the client's own logic.
+	Message        string `json:"message"`
+	BaseVersion    int64  `json:"base_version"`
+	CurrentVersion int64  `json:"current_version"`
 }
 
 // List handles GET /projects/:proj_id/documents
@@ -169,16 +201,69 @@ func (h *DocumentHandler) Update(c echo.Context) error {
 		ClearParent: req.ClearParent,
 		Position:    req.Position,
 		Body:        req.Body,
+		BaseVersion: req.BaseVersion,
 		// The editor is read from the request, never bound from the body: an
 		// updated_by a caller could choose is a byline anyone can forge.
 		UpdatedBy:     callerID,
 		UpdatedByType: callerType,
 	})
 	if err != nil {
-		return handleError(c, err)
+		return documentError(c, err)
 	}
 
 	return c.JSON(http.StatusOK, doc)
+}
+
+// Append handles POST /documents/:doc_id/append — add text to the end of the
+// body.
+//
+// Its own route rather than a field on PATCH, because it is its own contract:
+// PATCH requires a base_version and this must not, and folding them together
+// would mean one endpoint whose validation rules depend on which fields are
+// present. Separate routes say which one a caller asked for.
+func (h *DocumentHandler) Append(c echo.Context) error {
+	docID, wsID, apiErr := documentScope(c)
+	if apiErr != nil {
+		return c.JSON(apiErr.StatusCode(), apiErr)
+	}
+
+	var req appendDocumentRequest
+	if err := c.Bind(&req); err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
+	}
+
+	callerID, callerType := callerActor(c)
+
+	doc, err := h.documentService.AppendBody(c.Request().Context(), docID, wsID, service.AppendDocumentInput{
+		Text:          req.Text,
+		UpdatedBy:     callerID,
+		UpdatedByType: callerType,
+	})
+	if err != nil {
+		return documentError(c, err)
+	}
+
+	return c.JSON(http.StatusOK, doc)
+}
+
+// documentError is handleError plus the one refusal that needs a body of its
+// own: a stale-version write, answered 409 with the version the document is
+// actually at.
+//
+// Kept here rather than added as another branch inside handleError because it is
+// document-specific, and handleError is the shared funnel every handler in the
+// package routes through.
+func documentError(c echo.Context, err error) error {
+	var conflict *service.DocumentVersionConflictError
+	if errors.As(err, &conflict) {
+		return c.JSON(http.StatusConflict, documentVersionConflictResponse{
+			Code:           "document_version_conflict",
+			Message:        "This page changed since you opened it. Reload it to see the current version before saving again.",
+			BaseVersion:    conflict.BaseVersion,
+			CurrentVersion: conflict.CurrentVersion,
+		})
+	}
+	return handleError(c, err)
 }
 
 // Delete handles DELETE /documents/:doc_id — soft delete.

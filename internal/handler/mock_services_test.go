@@ -955,6 +955,7 @@ type MockDocumentService struct {
 	CreateFunc             func(ctx context.Context, input service.CreateDocumentInput) (*domain.Document, error)
 	GetByIDInWorkspaceFunc func(ctx context.Context, id, workspaceID uuid.UUID) (*domain.Document, error)
 	UpdateFunc             func(ctx context.Context, id, workspaceID uuid.UUID, input service.UpdateDocumentInput) (*domain.Document, error)
+	AppendBodyFunc         func(ctx context.Context, id, workspaceID uuid.UUID, input service.AppendDocumentInput) (*domain.Document, error)
 	DeleteFunc             func(ctx context.Context, id, workspaceID, deletedBy uuid.UUID, deletedByType domain.ActorType) error
 	ListByProjectFunc      func(ctx context.Context, projectID uuid.UUID, pg pagination.Params) (*pagination.Page[domain.Document], error)
 	SearchFunc             func(ctx context.Context, projectID, workspaceID uuid.UUID, query string, limit int) ([]domain.DocumentSearchHit, error)
@@ -977,6 +978,13 @@ func (m *MockDocumentService) GetByIDInWorkspace(ctx context.Context, id, worksp
 func (m *MockDocumentService) Update(ctx context.Context, id, workspaceID uuid.UUID, input service.UpdateDocumentInput) (*domain.Document, error) {
 	if m.UpdateFunc != nil {
 		return m.UpdateFunc(ctx, id, workspaceID, input)
+	}
+	return nil, nil
+}
+
+func (m *MockDocumentService) AppendBody(ctx context.Context, id, workspaceID uuid.UUID, input service.AppendDocumentInput) (*domain.Document, error) {
+	if m.AppendBodyFunc != nil {
+		return m.AppendBodyFunc(ctx, id, workspaceID, input)
 	}
 	return nil, nil
 }
