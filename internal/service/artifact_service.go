@@ -117,14 +117,18 @@ func (s *artifactService) Upload(ctx context.Context, input UploadArtifactInput)
 					return
 				}
 			}
-			publicURL, agentKey, _ := rp.Publish(context.Background(), art.TaskID, art.Name, content, art.MimeType)
-			// Persist the relay public URL and agent key so the UI can construct the
-			// authenticated open URL (tr_public_url + ?agent_key=) without a server round-trip.
+			publicURL, _, _ := rp.Publish(context.Background(), art.TaskID, art.Name, content, art.MimeType)
+			// Persist only the relay public URL.
+			//
+			// The share's agent key was persisted here too, in the clear, so the UI
+			// could build tr_public_url + ?agent_key= without a round-trip. That put
+			// a long-lived credential — one we encrypt at rest in project_integrations
+			// — into artifacts.metadata, readable by anything with DB or backup
+			// access, and it reached the API through the one read path that did not
+			// redact it. The UI resolves the key server-side via the preview-url
+			// endpoint instead; nothing needs it stored.
 			if publicURL != "" {
 				meta := mergeMetadata(art.Metadata, "tr_public_url", publicURL)
-				if agentKey != "" {
-					meta = mergeMetadata(meta, "tr_agent_key", agentKey)
-				}
 				if upErr := repo.UpdateMetadata(context.Background(), art.ID, meta); upErr != nil {
 					log.Printf("teamrelay: failed to persist TR metadata for artifact %s: %v", art.ID, upErr)
 				}
