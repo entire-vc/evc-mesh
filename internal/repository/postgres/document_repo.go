@@ -13,6 +13,7 @@ import (
 	"github.com/lib/pq"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	"github.com/entire-vc/evc-mesh/internal/repository"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 	"github.com/entire-vc/evc-mesh/pkg/pagination"
 )
@@ -27,6 +28,7 @@ type documentRow struct {
 	Title         string            `db:"title"`
 	StorageKey    string            `db:"storage_key"`
 	Position      int               `db:"position"`
+	Version       int               `db:"version"`
 	CreatedBy     uuid.UUID         `db:"created_by"`
 	CreatedByType domain.ActorType  `db:"created_by_type"`
 	UpdatedBy     *uuid.UUID        `db:"updated_by"`
@@ -44,7 +46,7 @@ type documentRow struct {
 // — every read here goes through the `documents d` alias so that one column list
 // serves the plain reads and the ones that JOIN projects (both tables have
 // created_at). See artifactSelectCols for why no query here uses `SELECT *`.
-const documentSelectCols = `d.id, d.project_id, d.parent_id, d.slug, d.title, d.storage_key, d.position,
+const documentSelectCols = `d.id, d.project_id, d.parent_id, d.slug, d.title, d.storage_key, d.position, d.version,
 	d.created_by, d.created_by_type, d.updated_by, d.updated_by_type, d.created_at, d.updated_at, d.deleted_at`
 
 // documentEnrichedSelect is documentSelectCols plus the two display names, each
@@ -65,6 +67,7 @@ func (r *documentRow) toDomain() domain.Document {
 		Title:         r.Title,
 		StorageKey:    r.StorageKey,
 		Position:      r.Position,
+		Version:       r.Version,
 		CreatedBy:     r.CreatedBy,
 		CreatedByType: r.CreatedByType,
 		UpdatedBy:     r.UpdatedBy,
@@ -88,17 +91,21 @@ func NewDocumentRepo(db *sqlx.DB) *DocumentRepo {
 }
 
 func (r *DocumentRepo) Create(ctx context.Context, doc *domain.Document) error {
+	// version is written explicitly rather than left to the column default so the
+	// row and the domain object the caller keeps agree on it without a re-read: a
+	// document that came back saying version 0 would be refused by its own first
+	// conditional write.
 	const q = `
 		INSERT INTO documents (
 			id, project_id, parent_id, slug, title, storage_key,
 			position, created_by, created_by_type, updated_by, updated_by_type,
-			created_at, updated_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+			created_at, updated_at, version
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 	`
 	_, err := r.db.ExecContext(ctx, q,
 		doc.ID, doc.ProjectID, doc.ParentID, doc.Slug, doc.Title, doc.StorageKey,
 		doc.Position, doc.CreatedBy, doc.CreatedByType, doc.UpdatedBy, doc.UpdatedByType,
-		doc.CreatedAt, doc.UpdatedAt,
+		doc.CreatedAt, doc.UpdatedAt, doc.Version,
 	)
 	if isDocumentSlugConflict(err) {
 		return apierror.Conflict("a document with this slug already exists in this location")
@@ -140,25 +147,61 @@ func (r *DocumentRepo) GetByIDInWorkspace(ctx context.Context, id, workspaceID u
 	return &d, nil
 }
 
-func (r *DocumentRepo) Update(ctx context.Context, doc *domain.Document) error {
-	const q = `
+// Update writes the mutable metadata and, when asked, bumps the version — see
+// repository.DocumentRepository.Update for the contract.
+//
+// The version predicate, the version bump and the field writes are one statement
+// because that is the only arrangement in which the check means anything. A
+// SELECT that read the version followed by an UPDATE that trusted it would leave
+// the two writers of the 2026-08-19 incident both passing the check and both
+// writing — the window is small, which is precisely why it would be found in
+// production and not in a test.
+//
+// RETURNING version is what makes the mismatch reportable: on a conflict the
+// UPDATE matches nothing, so a second read gets the version the row is actually
+// at, which is what the caller needs in order to re-read and retry.
+func (r *DocumentRepo) Update(ctx context.Context, doc *domain.Document, expectedVersion *int, bumpVersion bool) (int, error) {
+	versionExpr := "version"
+	if bumpVersion {
+		versionExpr = "version + 1"
+	}
+
+	q := `
 		UPDATE documents
 		   SET title = $2, parent_id = $3, position = $4, updated_at = $5,
-		       updated_by = $6, updated_by_type = $7
-		 WHERE id = $1 AND deleted_at IS NULL`
-	res, err := r.db.ExecContext(ctx, q, doc.ID, doc.Title, doc.ParentID, doc.Position, doc.UpdatedAt,
-		doc.UpdatedBy, doc.UpdatedByType)
+		       updated_by = $6, updated_by_type = $7, version = ` + versionExpr + `
+		 WHERE id = $1 AND deleted_at IS NULL
+		   AND ($8::int IS NULL OR version = $8::int)
+		RETURNING version`
+
+	var newVersion int
+	err := r.db.GetContext(ctx, &newVersion, q, doc.ID, doc.Title, doc.ParentID, doc.Position,
+		doc.UpdatedAt, doc.UpdatedBy, doc.UpdatedByType, expectedVersion)
 	if isDocumentSlugConflict(err) {
-		return apierror.Conflict("a document with this slug already exists in this location")
+		return 0, apierror.Conflict("a document with this slug already exists in this location")
 	}
-	if err != nil {
-		return err
+	if err == nil {
+		return newVersion, nil
 	}
-	n, _ := res.RowsAffected()
-	if n == 0 {
-		return apierror.NotFound("Document")
+	if !errors.Is(err, sql.ErrNoRows) {
+		return 0, err
 	}
-	return nil
+
+	// Nothing matched. Either the row is gone (or soft-deleted), which is a 404,
+	// or it is alive at a different version, which is the conflict. The second
+	// query is what tells those apart, and it only runs on the failure path.
+	if expectedVersion == nil {
+		return 0, apierror.NotFound("Document")
+	}
+	var current int
+	switch curErr := r.db.GetContext(ctx, &current,
+		`SELECT version FROM documents WHERE id = $1 AND deleted_at IS NULL`, doc.ID); {
+	case errors.Is(curErr, sql.ErrNoRows):
+		return 0, apierror.NotFound("Document")
+	case curErr != nil:
+		return 0, curErr
+	}
+	return current, repository.ErrDocumentVersionMismatch
 }
 
 // SoftDelete stamps deleted_at. The children go with it: ON DELETE CASCADE only
@@ -225,6 +268,76 @@ func (r *DocumentRepo) ListByProject(ctx context.Context, projectID uuid.UUID, p
 	}
 
 	return pagination.NewPage(items, totalCount, pg), nil
+}
+
+// GetByPathInProject walks a slug path down from the project's top level.
+//
+// One recursive CTE rather than one round-trip per segment: the depth is small
+// but the number of path lookups is not — an agent addresses a document by path
+// on every single access, which is the whole reason paths exist here.
+//
+// It is unambiguous at every level because uq_documents_sibling_slug and
+// uq_documents_root_slug make a slug unique among LIVE siblings, so each step of
+// the walk matches at most one row. Deleted rows are excluded at every level, not
+// just the last: a deleted document is not a step you can walk through, and its
+// slug is already free for a sibling to take.
+//
+// The second return value is how far the walk got. A caller that only knows "not
+// found" can say nothing useful; a caller that knows the path resolved three
+// segments deep can name the segment that failed, which is the difference between
+// a usable error and a shrug.
+func (r *DocumentRepo) GetByPathInProject(ctx context.Context, projectID uuid.UUID, segments []string) (*domain.Document, int, error) {
+	if len(segments) == 0 {
+		return nil, 0, nil
+	}
+
+	// walk holds one row per segment successfully matched, so its deepest row is
+	// both how far the path resolved and — when that depth is the whole path — the
+	// document named.
+	const walkQ = `
+		WITH RECURSIVE seg(slug, depth) AS (
+			SELECT s.slug, s.ord FROM unnest($2::text[]) WITH ORDINALITY AS s(slug, ord)
+		), walk AS (
+			SELECT d.id, 1 AS depth
+			  FROM documents d
+			  JOIN seg s ON s.depth = 1 AND d.slug = s.slug
+			 WHERE d.project_id = $1 AND d.parent_id IS NULL AND d.deleted_at IS NULL
+			UNION ALL
+			SELECT d.id, w.depth + 1
+			  FROM walk w
+			  JOIN documents d ON d.parent_id = w.id
+			  JOIN seg s ON s.depth = w.depth + 1 AND d.slug = s.slug
+			 WHERE d.project_id = $1 AND d.deleted_at IS NULL
+		)
+		SELECT id, depth FROM walk ORDER BY depth DESC LIMIT 1`
+
+	var found struct {
+		ID    uuid.UUID `db:"id"`
+		Depth int       `db:"depth"`
+	}
+	if err := r.db.GetContext(ctx, &found, walkQ, projectID, pq.Array(segments)); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			// Not even the first segment matched.
+			return nil, 0, nil
+		}
+		return nil, 0, err
+	}
+	if found.Depth < len(segments) {
+		return nil, found.Depth, nil
+	}
+
+	// Resolved in full. Re-select the leaf through the enriched projection: the
+	// walk carries ids only, and every read of a document is expected to carry its
+	// bylines.
+	doc, err := r.GetByID(ctx, found.ID)
+	if err != nil {
+		return nil, 0, err
+	}
+	if doc == nil {
+		// Deleted between the two queries. A plain miss, at the last segment.
+		return nil, len(segments) - 1, nil
+	}
+	return doc, found.Depth, nil
 }
 
 func (r *DocumentRepo) HasAncestor(ctx context.Context, docID, ancestorID uuid.UUID) (bool, error) {

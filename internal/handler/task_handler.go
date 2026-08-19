@@ -23,6 +23,7 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/service"
 	"github.com/entire-vc/evc-mesh/pkg/actorctx"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
+	"github.com/entire-vc/evc-mesh/pkg/mdoc"
 	"github.com/entire-vc/evc-mesh/pkg/pagination"
 )
 
@@ -1333,6 +1334,34 @@ func handleError(c echo.Context, err error) error {
 			Error:      "rule_violation",
 			Message:    msg,
 			Violations: ruleErr.Violations,
+		})
+	}
+
+	var ambiguousQuoteErr *mdoc.AmbiguousQuoteError
+	if errors.As(err, &ambiguousQuoteErr) {
+		// The match count is the whole content of this answer: it is what tells the
+		// caller whether to add a few words of context or to quote something else
+		// entirely. Flattening it into prose would make it unreadable by the agent
+		// that has to act on it.
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"code":    "ambiguous_quote",
+			"message": ambiguousQuoteErr.Error(),
+			"matches": ambiguousQuoteErr.Matches,
+		})
+	}
+
+	var docVersionErr *service.DocumentVersionConflictError
+	if errors.As(err, &docVersionErr) {
+		// 409 carrying the version the document is actually at, so the caller can
+		// re-read that revision and retry instead of guessing at a number. Nothing
+		// was written — not the row, not the markdown in object storage — which is
+		// the part worth being able to rely on.
+		return c.JSON(http.StatusConflict, map[string]any{
+			"code": "document_version_conflict",
+			"message": "Document was modified since you read it — re-read it, re-apply your change and " +
+				"retry with the new base_version. To add to the end of a document without reading it " +
+				"first, send append_body instead, which needs no base_version.",
+			"current_version": docVersionErr.CurrentVersion,
 		})
 	}
 

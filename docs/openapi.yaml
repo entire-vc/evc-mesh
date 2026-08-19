@@ -349,6 +349,13 @@ components:
         position:
           type: integer
           description: Sibling ordering.
+        version:
+          type: integer
+          description: |
+            Monotonic counter, bumped by every write to the body or the title. A
+            move in the tree does not bump it. Send it back as `base_version` on
+            PATCH to make that write conditional: a document that has moved on
+            answers 409 and nothing is written.
         created_by:
           type: string
           format: uuid
@@ -364,6 +371,55 @@ components:
         body:
           type: string
           description: Markdown, present on the single-document read.
+
+    DocumentHeading:
+      type: object
+      description: One entry of a document's outline.
+      properties:
+        level:
+          type: integer
+          description: 1 for `#` through 6 for `######`.
+        text:
+          type: string
+          description: The heading as written, without the `#` markers.
+        anchor:
+          type: string
+          description: |
+            Addresses this heading uniquely within the document. GitHub's scheme:
+            lower-cased, punctuation dropped, spaces hyphenated, non-ASCII letters
+            kept. Repeated headings get `-1`, `-2` suffixes in document order.
+        line:
+          type: integer
+          description: 1-based line number of the heading.
+        start:
+          type: integer
+          description: Byte offset of the heading line.
+        end:
+          type: integer
+          description: |
+            Byte offset one past the section this heading owns — everything down
+            to the next heading of the same or a higher level. Subsections are
+            inside it, the next sibling is not.
+
+    DocumentAnchor:
+      type: object
+      description: |
+        A resolved comment anchor: a W3C Web Annotation selector pair, the shape
+        document_comments stores. `start`/`end` are BYTE offsets into the
+        markdown, half-open.
+      properties:
+        exact:
+          type: string
+        prefix:
+          type: string
+          description: Up to 48 characters of the document before the quote.
+        suffix:
+          type: string
+          description: Up to 48 characters of the document after the quote.
+        start:
+          type: integer
+        end:
+          type: integer
 
     Agent:
       type: object
@@ -2504,6 +2560,20 @@ paths:
     patch:
       tags: [Documents]
       summary: Update a document's title, place in the tree, position or body
+      description: |
+        Send `base_version` to make the write conditional. A document whose
+        version has moved on since you read it answers 409 with the version it is
+        actually at, and nothing is written — not the row, not the markdown in
+        object storage.
+
+        An ABSENT `base_version` is an unconditional write. That is a deliberate
+        compatibility choice: PATCH is live and the editor's autosave uses it, so
+        requiring the field would 400 every current client. The cost is that a
+        caller who does not ask is not protected against a lost update.
+
+        `append_body` adds to the end instead of replacing, and needs no
+        `base_version`: an append cannot destroy an edit it never read. Sending
+        both `body` and `append_body` is refused.
       requestBody:
         required: true
         content:
@@ -2523,6 +2593,12 @@ paths:
                   type: integer
                 body:
                   type: string
+                append_body:
+                  type: string
+                  description: Markdown appended to the end of the document. Mutually exclusive with body.
+                base_version:
+                  type: integer
+                  description: The version you read. Omit for an unconditional write.
       responses:
         "200":
           description: Updated document
@@ -2530,6 +2606,23 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Document"
+        "409":
+          description: |
+            The document's version no longer matches base_version. Nothing was
+            written. Re-read the document, re-apply the change and retry with the
+            version returned here.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code:
+                    type: string
+                    enum: [document_version_conflict]
+                  message:
+                    type: string
+                  current_version:
+                    type: integer
     delete:
       tags: [Documents]
       summary: Soft-delete a document and its descendants
@@ -2537,6 +2630,202 @@ paths:
       responses:
         "204":
           description: Deleted
+
+  /api/v1/documents/{doc_id}/outline:
+    parameters:
+      - name: doc_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Documents]
+      summary: The document's heading structure, without the body
+      description: |
+        Computed from the markdown on every read, never stored: a stored outline
+        drifts from the document the first time a heading is edited, and a stale
+        table of contents is worse than none because it looks authoritative.
+
+        A `#` inside a fenced code block or inside YAML frontmatter is not a
+        heading.
+      responses:
+        "200":
+          description: Outline
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  document_id:
+                    type: string
+                    format: uuid
+                  title:
+                    type: string
+                  version:
+                    type: integer
+                    description: The version the outline was computed from.
+                  outline:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/DocumentHeading"
+
+  /api/v1/documents/{doc_id}/section:
+    parameters:
+      - name: doc_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Documents]
+      summary: One heading and the markdown under it
+      description: |
+        From the heading down to the next heading of the same or a higher level:
+        subsections are included, the next sibling is not.
+
+        So that an agent answering a question about one section does not have to
+        read, and pay for, the whole page.
+      parameters:
+        - name: heading
+          in: query
+          required: true
+          schema:
+            type: string
+          description: |
+            An anchor from the outline, or the heading text. The anchor is tried
+            first because it is the unambiguous one. Heading TEXT that occurs more
+            than once answers 400 naming the anchors that separate the two.
+      responses:
+        "200":
+          description: Section
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  document_id:
+                    type: string
+                    format: uuid
+                  version:
+                    type: integer
+                  heading:
+                    $ref: "#/components/schemas/DocumentHeading"
+                  content:
+                    type: string
+                    description: Markdown, starting at the heading line.
+        "400":
+          description: The heading text names more than one heading.
+        "404":
+          description: No such heading. The details list the document's anchors.
+
+  /api/v1/documents/{doc_id}/resolve-anchor:
+    parameters:
+      - name: doc_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [Documents]
+      summary: Resolve a quotation to a comment anchor
+      description: |
+        A POST that changes nothing — its input is a quotation of up to 2000
+        bytes, which does not belong in a query string.
+
+        It exists because an agent has no text selection to compute an anchor
+        from, and computing byte offsets from text is where it gets them wrong: a
+        Cyrillic quote at byte 853 sits at character 475, and an anchor off by
+        that much points at a different sentence with total confidence. The rules
+        mirror the web client's (web/src/lib/doc-comments/anchor.ts) so the two
+        place the same quote in the same spot.
+
+        A quote occurring more than once is refused with the match count rather
+        than resolved to the first occurrence. Send `prefix` and/or `suffix` to
+        disambiguate.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [quote]
+              properties:
+                quote:
+                  type: string
+                  description: The text to locate. Trimmed; at most 2000 bytes.
+                prefix:
+                  type: string
+                  description: Text immediately before the quote. Used only to disambiguate.
+                suffix:
+                  type: string
+                  description: Text immediately after the quote. Used only to disambiguate.
+      responses:
+        "200":
+          description: The anchor
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DocumentAnchor"
+        "400":
+          description: |
+            The quote is absent from the document, empty, over the size limit, or
+            occurs more than once. The ambiguous case carries `matches`.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code:
+                    type: string
+                    enum: [ambiguous_quote]
+                  message:
+                    type: string
+                  matches:
+                    type: integer
+
+  /api/v1/projects/{proj_id}/documents/by-path/{path}:
+    parameters:
+      - name: proj_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: path
+        in: path
+        required: true
+        schema:
+          type: string
+        description: |
+          A slash-separated slug path from the project's top level, e.g.
+          `architecture/adr/adr-004`. Matched against the trailing wildcard of the
+          route, so it may contain any number of segments.
+    get:
+      tags: [Documents]
+      summary: Get a document by its slug path, with its body
+      description: |
+        Agents think in paths, and making them resolve a uuid first adds a call to
+        every access.
+
+        A path is a lookup key derived from where a document currently sits, not
+        an identifier for it. Move the document and the old path stops resolving;
+        a later document that takes the slug in the old place will answer to it.
+        Paths are not versioned, aliased or redirected — the document's `id`,
+        returned here, is the reference that survives a reorganisation.
+      responses:
+        "200":
+          description: Document metadata and body
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Document"
+        "404":
+          description: |
+            No such path. The details say how far it resolved and which segment
+            failed.
 
   # ------------------------------------------------------------------
   # Agents

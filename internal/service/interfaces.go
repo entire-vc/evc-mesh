@@ -12,6 +12,7 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/eventbus"
 	"github.com/entire-vc/evc-mesh/internal/repository"
+	"github.com/entire-vc/evc-mesh/pkg/mdoc"
 	"github.com/entire-vc/evc-mesh/pkg/pagination"
 )
 
@@ -339,6 +340,30 @@ type UpdateDocumentInput struct {
 	Position    *int    `json:"position"`
 	Body        *string `json:"body"`
 
+	// AppendBody adds text to the end of the document instead of replacing it.
+	//
+	// A separate field rather than a mode flag on Body, because the two have
+	// different conflict semantics and that difference is the point: a replacement
+	// overwrites whatever arrived since the writer last read, so it needs
+	// BaseVersion to be safe, while an append cannot destroy an edit it never
+	// looked at. Appending is also the commonest thing an agent does to a document
+	// — a report, a decision record, a run log — and requiring read-compare-write
+	// on it would invent a race in the one operation that does not have one.
+	//
+	// Sending both is refused: "replace the body and also add to it" has no
+	// meaning, and picking an order for the caller would silently drop one.
+	AppendBody *string `json:"append_body"`
+
+	// BaseVersion is the document version the caller believes it is editing. When
+	// set, the write lands only if the stored version still matches; a mismatch is
+	// DocumentVersionConflictError carrying the version now stored, and nothing is
+	// written — not the row, not the object in storage.
+	//
+	// Absent means an unconditional write. That is a deliberate compatibility
+	// choice, not an oversight — see documentService.Update for what it buys and
+	// what it costs.
+	BaseVersion *int `json:"base_version"`
+
 	// UpdatedBy is the caller, resolved from the request by the handler — never
 	// taken from the request body, which would let anyone sign an edit with
 	// somebody else's name. It is required rather than optional: a mutation that
@@ -365,6 +390,56 @@ type DocumentService interface {
 	// content. workspaceID is the tenancy check; an empty query is refused rather
 	// than answered with everything.
 	Search(ctx context.Context, projectID, workspaceID uuid.UUID, query string, limit int) ([]domain.DocumentSearchHit, error)
+
+	// Outline returns the document's heading structure, computed from the body on
+	// every call. See pkg/mdoc for why it is never stored.
+	Outline(ctx context.Context, id, workspaceID uuid.UUID) (*DocumentOutline, error)
+	// Section returns one heading and the markdown it owns — subsections
+	// included, the next sibling excluded. ref is an anchor from the outline or
+	// the heading text.
+	//
+	// It exists so that an agent answering a question about one section does not
+	// have to read, and pay for, the whole page.
+	Section(ctx context.Context, id, workspaceID uuid.UUID, ref string) (*DocumentSection, error)
+	// GetByPath resolves a slug path within a project — "architecture/adr/adr-004"
+	// — to the document it names, body included.
+	GetByPath(ctx context.Context, projectID uuid.UUID, path string) (*domain.Document, error)
+	// ResolveAnchor turns a quotation into a comment anchor against the document's
+	// current body: byte offsets plus the quote and its neighbours, the shape
+	// document_comments stores.
+	ResolveAnchor(ctx context.Context, id, workspaceID uuid.UUID, input ResolveAnchorInput) (*mdoc.Anchor, error)
+}
+
+// DocumentOutline is a document's heading structure.
+type DocumentOutline struct {
+	DocumentID uuid.UUID `json:"document_id"`
+	Title      string    `json:"title"`
+	// Version of the body the outline was computed from, so a caller that reads
+	// the outline and then writes has the base_version to write safely with,
+	// without a second read.
+	Version int            `json:"version"`
+	Outline []mdoc.Heading `json:"outline"`
+}
+
+// DocumentSection is one heading of a document and the markdown under it.
+type DocumentSection struct {
+	DocumentID uuid.UUID `json:"document_id"`
+	// Version of the body this section was cut from — see DocumentOutline.Version.
+	Version int          `json:"version"`
+	Heading mdoc.Heading `json:"heading"`
+	Content string       `json:"content"`
+}
+
+// ResolveAnchorInput is a quotation to locate in a document.
+//
+// Prefix and Suffix are optional and are used only to tell repeats of the same
+// quote apart. They are not stored as given: the anchor's neighbourhood is taken
+// from the document at the match, so an anchor describes where the text is rather
+// than what the caller believed was around it.
+type ResolveAnchorInput struct {
+	Quote  string `json:"quote"`
+	Prefix string `json:"prefix"`
+	Suffix string `json:"suffix"`
 }
 
 // UploadDocumentAttachmentInput holds parameters for uploading a file into a

@@ -964,6 +964,39 @@ func main() {
 	api.PATCH("/documents/:doc_id", documentHandler.Update, wsAccess, rbac(mw.PermUploadArtifact))
 	api.DELETE("/documents/:doc_id", documentHandler.Delete, wsAccess, rbac(mw.PermUploadArtifact))
 
+	// Reading a document in pieces, for callers that should not have to fetch the
+	// whole page to work with one part of it — an agent answering a question about
+	// one section otherwise pays for every section.
+	//
+	// All reads, so wsAccess and no rbac: whoever may GET the document may ask for
+	// its outline, for a section of it, or for where a sentence in it sits.
+	//
+	// resolve-anchor is a POST that changes nothing. It has to be a POST — its
+	// input is a quotation of up to 2000 bytes, which does not belong in a query
+	// string — and it is deliberately not behind a write permission, because it
+	// writes nothing. It exists because an agent has no text selection to compute a
+	// comment anchor from, and computing byte offsets from text is exactly where it
+	// gets them wrong: a Cyrillic quote at byte 853 is at character 475, and an
+	// anchor off by that much points at a different sentence with total confidence.
+	api.GET("/documents/:doc_id/outline", documentHandler.Outline, wsAccess)
+	api.GET("/documents/:doc_id/section", documentHandler.Section, wsAccess)
+	api.POST("/documents/:doc_id/resolve-anchor", documentHandler.ResolveAnchor, wsAccess)
+
+	// Addressing a document by its slug path instead of its uuid, because agents
+	// think in paths and making them resolve an id first adds a call to every
+	// single access.
+	//
+	// projAccess, like the rest of the project-scoped pair: the only id on the
+	// route is :proj_id, and the segments after by-path are slugs inside the
+	// project the guard has already checked the caller against — they can name
+	// nothing outside it.
+	//
+	// A trailing wildcard rather than a query parameter, so the URL reads the way
+	// the path is written. It cannot collide with the collection route above: Echo
+	// matches the literal `documents` segment first, and `by-path` is a literal
+	// segment no document slug lookup starts from by accident.
+	api.GET("/projects/:proj_id/documents/by-path/*", documentHandler.GetByPath, projAccess)
+
 	// Document attachment routes. The upload/list pair hangs off :doc_id, which
 	// already resolves a tenant; the object routes name the attachment directly and
 	// are guarded by the :att_id resolver.

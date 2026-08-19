@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
@@ -249,10 +250,32 @@ type DocumentRepository interface {
 	// project does not belong to workspaceID — the defense-in-depth ownership
 	// check behind the /documents/:doc_id routes.
 	GetByIDInWorkspace(ctx context.Context, id, workspaceID uuid.UUID) (*domain.Document, error)
+	// GetByPathInProject resolves a slug path — ["architecture", "adr", "adr-004"]
+	// — to the document it names, walking down from the project's top level. It
+	// returns the document, or nil with the number of segments that did resolve so
+	// the caller can say where the path went wrong instead of only that it did.
+	//
+	// Live rows only, at every level: a soft-deleted document is not a step you can
+	// walk through, and its slug is free for a sibling to take.
+	GetByPathInProject(ctx context.Context, projectID uuid.UUID, segments []string) (doc *domain.Document, resolvedDepth int, err error)
 	// Update writes title, parent_id, position, updated_at and the updated_by
 	// pair. Nothing else on a document is mutable: the body is in object storage,
 	// and project_id and slug are what its siblings are unique against.
-	Update(ctx context.Context, doc *domain.Document) error
+	//
+	// expectedVersion, when non-nil, makes the write conditional: the UPDATE only
+	// matches a row still at that version, and a row that has moved on is left
+	// untouched and reported as ErrDocumentVersionMismatch. The compare and the
+	// write are one statement on purpose — a service that read the version and
+	// then wrote would leave open exactly the window the check exists to close.
+	//
+	// bumpVersion sets version = version + 1 in the same statement. It is passed
+	// rather than inferred because only the caller knows whether this write
+	// touched the document's content: a move in the tree must not bump.
+	//
+	// Returns the version the row now carries. On ErrDocumentVersionMismatch that
+	// is the version actually stored, which is what the caller has to be told to
+	// be able to retry.
+	Update(ctx context.Context, doc *domain.Document, expectedVersion *int, bumpVersion bool) (version int, err error)
 	// SoftDelete stamps deleted_at, freeing the slug for a new sibling, and
 	// records who did it: a delete is a change to the row, and "last updated by"
 	// has to survive a restore to be worth anything.
@@ -275,6 +298,15 @@ type DocumentRepository interface {
 	// GetByIDInWorkspace applies: a project id alone is not proof of ownership.
 	SearchInProject(ctx context.Context, projectID, workspaceID uuid.UUID, query string, limit int) ([]domain.DocumentSearchHit, error)
 }
+
+// ErrDocumentVersionMismatch reports that a conditional document write found the
+// row at a version other than the one the caller expected, so nothing was
+// written. DocumentRepository.Update returns the version actually stored
+// alongside it.
+//
+// A sentinel rather than a typed error carrying the number, because the number is
+// already in the other return value and two copies of it could disagree.
+var ErrDocumentVersionMismatch = errors.New("document version mismatch")
 
 // DocumentAttachmentRepository manages persistence for the files uploaded into a
 // document. Every read here hides soft-deleted rows; only Create writes.

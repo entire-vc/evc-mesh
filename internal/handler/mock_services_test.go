@@ -9,6 +9,7 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/repository"
 	"github.com/entire-vc/evc-mesh/internal/service"
+	"github.com/entire-vc/evc-mesh/pkg/mdoc"
 	"github.com/entire-vc/evc-mesh/pkg/pagination"
 )
 
@@ -958,6 +959,38 @@ type MockDocumentService struct {
 	DeleteFunc             func(ctx context.Context, id, workspaceID, deletedBy uuid.UUID, deletedByType domain.ActorType) error
 	ListByProjectFunc      func(ctx context.Context, projectID uuid.UUID, pg pagination.Params) (*pagination.Page[domain.Document], error)
 	SearchFunc             func(ctx context.Context, projectID, workspaceID uuid.UUID, query string, limit int) ([]domain.DocumentSearchHit, error)
+	OutlineFunc            func(ctx context.Context, id, workspaceID uuid.UUID) (*service.DocumentOutline, error)
+	SectionFunc            func(ctx context.Context, id, workspaceID uuid.UUID, ref string) (*service.DocumentSection, error)
+	GetByPathFunc          func(ctx context.Context, projectID uuid.UUID, path string) (*domain.Document, error)
+	ResolveAnchorFunc      func(ctx context.Context, id, workspaceID uuid.UUID, input service.ResolveAnchorInput) (*mdoc.Anchor, error)
+}
+
+func (m *MockDocumentService) Outline(ctx context.Context, id, workspaceID uuid.UUID) (*service.DocumentOutline, error) {
+	if m.OutlineFunc != nil {
+		return m.OutlineFunc(ctx, id, workspaceID)
+	}
+	return nil, nil
+}
+
+func (m *MockDocumentService) Section(ctx context.Context, id, workspaceID uuid.UUID, ref string) (*service.DocumentSection, error) {
+	if m.SectionFunc != nil {
+		return m.SectionFunc(ctx, id, workspaceID, ref)
+	}
+	return nil, nil
+}
+
+func (m *MockDocumentService) GetByPath(ctx context.Context, projectID uuid.UUID, path string) (*domain.Document, error) {
+	if m.GetByPathFunc != nil {
+		return m.GetByPathFunc(ctx, projectID, path)
+	}
+	return nil, nil
+}
+
+func (m *MockDocumentService) ResolveAnchor(ctx context.Context, id, workspaceID uuid.UUID, input service.ResolveAnchorInput) (*mdoc.Anchor, error) {
+	if m.ResolveAnchorFunc != nil {
+		return m.ResolveAnchorFunc(ctx, id, workspaceID, input)
+	}
+	return nil, nil
 }
 
 func (m *MockDocumentService) Create(ctx context.Context, input service.CreateDocumentInput) (*domain.Document, error) {
