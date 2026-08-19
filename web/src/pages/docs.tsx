@@ -497,7 +497,7 @@ export function DocsPage() {
             </div>
             <div className="flex-1 overflow-y-auto p-4">
               {editing ? (
-                <DocEditor value={draft} onChange={setDraft} />
+                <DocEditor value={draft} onChange={setDraft} documentId={docId} />
               ) : draft.trim() ? (
                 <DocEditor value={draft} onChange={setDraft} readOnly />
               ) : (
