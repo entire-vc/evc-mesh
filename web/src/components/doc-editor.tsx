@@ -119,6 +119,39 @@ const PROSE_CLASS =
 // Toolbar
 // ---------------------------------------------------------------------------
 
+/**
+ * The pointer-over fill for a control in the toolbar.
+ *
+ * `--secondary`, the palette's light teal-green, with the foreground that ships
+ * with it. It used to be `--accent` — a saturated near-black teal — carrying
+ * either the inherited body foreground (2.82:1 light, 1.73:1 dark) or the
+ * resting `--muted-foreground` (1.21:1 light, 1.64:1 dark). Both are far under
+ * the 4.5:1 WCAG AA floor, and "the buttons go dark and I cannot read them" is
+ * how it was reported. The pairing here measures 16.31:1 and 11.39:1.
+ *
+ * The same pairing the Docs tree's selected row was moved to, deliberately: one
+ * fix for one defect, not two colours that drift apart. Numbers are computed
+ * from brandkit.css by the tests, never eyeballed.
+ */
+const TOOLBAR_HOVER =
+  "text-muted-foreground transition-colors hover:bg-secondary hover:text-secondary-foreground";
+
+/**
+ * Held down.
+ *
+ * `--secondary` is a light tint, so a pressed button cannot be told from a
+ * hovered one by fill alone — and darkening the fill is what produced the bug
+ * above. So pressing adds a cue instead of changing the colour: a brand-coloured
+ * inset ring, 5.78:1 against the fill in light and 6.59:1 in dark, comfortably
+ * over the 3:1 WCAG non-text floor. Same move as the tree's selected-row bar.
+ *
+ * This is the only press feedback these buttons have: `onMouseDown` is
+ * preventDefault-ed so the editor keeps its selection, which also means the
+ * button never takes focus and never shows a focus ring from the pointer.
+ */
+const TOOLBAR_PRESSED =
+  "active:bg-secondary active:text-secondary-foreground active:ring-1 active:ring-inset active:ring-primary";
+
 function ToolbarButton({
   title,
   onClick,
@@ -136,7 +169,11 @@ function ToolbarButton({
       // has nothing to apply to.
       onMouseDown={(e) => e.preventDefault()}
       onClick={onClick}
-      className="flex h-7 w-7 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+      className={cn(
+        "flex h-7 w-7 items-center justify-center rounded",
+        TOOLBAR_HOVER,
+        TOOLBAR_PRESSED,
+      )}
     >
       {children}
     </button>
@@ -209,7 +246,11 @@ function ParagraphMenu({
         type="button"
         role="menuitem"
         onClick={onCopy}
-        className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-foreground hover:bg-accent"
+        // Same pairing as the toolbar, and for the same reason: this item was
+        // `text-foreground` over `hover:bg-accent`, the 2.82:1 / 1.73:1 fill
+        // that had to be fixed on the tree. One item is still an item you have
+        // to read while the pointer is on it.
+        className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-foreground hover:bg-secondary hover:text-secondary-foreground"
       >
         <LinkIcon className="h-3.5 w-3.5" />
         Copy link to this paragraph
@@ -573,123 +614,145 @@ function MilkdownDoc({
         className,
       )}
     >
+      {/* The toolbar follows the reader down a long document.
+
+          `position: sticky` and NOT an inner scrolling container. The editor
+          deliberately grows and lets the page column do the scrolling, because
+          the inline-comment affordance is positioned from selection rects minus
+          this container's bounding rect with no `scrollTop` term — a scrollport
+          anywhere inside it would drift the affordance away from its own text
+          by however far the reader had scrolled. Sticky needs no such thing: it
+          resolves against the page column's scrollport, which already exists,
+          and leaves the scroll structure exactly as it was.
+
+          Consequences of sticking, both required: an opaque `bg-background`, or
+          the prose would scroll visibly through the bar, and a stacking order
+          above the flowing content it now overlaps. The link form lives inside
+          the same sticky box rather than under it — it is opened from the
+          toolbar and closes onto the toolbar, so it must not be the one part
+          that scrolls away. */}
       {!readOnly && (
-        <div className="flex flex-wrap items-center gap-0.5 border-b border-border px-2 py-1">
-          <ToolbarButton
-            title="Bold (Ctrl+B)"
-            onClick={() => runCommand(toggleStrongCommand.key)}
-          >
-            <Bold className="h-3.5 w-3.5" />
-          </ToolbarButton>
-          <ToolbarButton
-            title="Italic (Ctrl+I)"
-            onClick={() => runCommand(toggleEmphasisCommand.key)}
-          >
-            <Italic className="h-3.5 w-3.5" />
-          </ToolbarButton>
-          <ToolbarButton
-            title="Inline code"
-            onClick={() => runCommand(toggleInlineCodeCommand.key)}
-          >
-            <Code className="h-3.5 w-3.5" />
-          </ToolbarButton>
-          <ToolbarButton title="Link" onClick={() => setLinkOpen((v) => !v)}>
-            <LinkIcon className="h-3.5 w-3.5" />
-          </ToolbarButton>
+        <div
+          data-doc-toolbar=""
+          className="sticky top-0 z-10 shrink-0 rounded-t-lg bg-background"
+        >
+          <div className="flex flex-wrap items-center gap-0.5 border-b border-border px-2 py-1">
+            <ToolbarButton
+              title="Bold (Ctrl+B)"
+              onClick={() => runCommand(toggleStrongCommand.key)}
+            >
+              <Bold className="h-3.5 w-3.5" />
+            </ToolbarButton>
+            <ToolbarButton
+              title="Italic (Ctrl+I)"
+              onClick={() => runCommand(toggleEmphasisCommand.key)}
+            >
+              <Italic className="h-3.5 w-3.5" />
+            </ToolbarButton>
+            <ToolbarButton
+              title="Inline code"
+              onClick={() => runCommand(toggleInlineCodeCommand.key)}
+            >
+              <Code className="h-3.5 w-3.5" />
+            </ToolbarButton>
+            <ToolbarButton title="Link" onClick={() => setLinkOpen((v) => !v)}>
+              <LinkIcon className="h-3.5 w-3.5" />
+            </ToolbarButton>
+  
+            <div className="mx-1 h-3.5 w-px bg-border" />
+  
+            <ToolbarButton
+              title="Bullet list"
+              onClick={() => runCommand(wrapInBulletListCommand.key)}
+            >
+              <List className="h-3.5 w-3.5" />
+            </ToolbarButton>
+            <ToolbarButton
+              title="Numbered list"
+              onClick={() => runCommand(wrapInOrderedListCommand.key)}
+            >
+              <ListOrdered className="h-3.5 w-3.5" />
+            </ToolbarButton>
+            <ToolbarButton
+              title="Quote"
+              onClick={() => runCommand(wrapInBlockquoteCommand.key)}
+            >
+              <Quote className="h-3.5 w-3.5" />
+            </ToolbarButton>
+            <ToolbarButton
+              title="Code block"
+              onClick={() => runCommand(createCodeBlockCommand.key)}
+            >
+              <SquareCode className="h-3.5 w-3.5" />
+            </ToolbarButton>
+            <ToolbarButton
+              title="Table"
+              onClick={() => runCommand(insertTableCommand.key)}
+            >
+              <TableIcon className="h-3.5 w-3.5" />
+            </ToolbarButton>
+  
+            {uploadTarget && (
+              <>
+                <div className="mx-1 h-3.5 w-px bg-border" />
+                <ToolbarButton
+                  title="Insert image"
+                  onClick={() => imageInputRef.current?.click()}
+                >
+                  <ImageIcon className="h-3.5 w-3.5" />
+                </ToolbarButton>
+                <ToolbarButton
+                  title="Attach file"
+                  onClick={() => fileInputRef.current?.click()}
+                >
+                  <Paperclip className="h-3.5 w-3.5" />
+                </ToolbarButton>
+                <input
+                  ref={imageInputRef}
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  className="hidden"
+                  onChange={handleFiles}
+                />
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  multiple
+                  className="hidden"
+                  onChange={handleFiles}
+                />
+              </>
+            )}
+  
+            <div className="flex-1" />
+            {uploading && (
+              <span className="mr-2 text-xs text-muted-foreground">Uploading...</span>
+            )}
+          </div>
 
-          <div className="mx-1 h-3.5 w-px bg-border" />
-
-          <ToolbarButton
-            title="Bullet list"
-            onClick={() => runCommand(wrapInBulletListCommand.key)}
-          >
-            <List className="h-3.5 w-3.5" />
-          </ToolbarButton>
-          <ToolbarButton
-            title="Numbered list"
-            onClick={() => runCommand(wrapInOrderedListCommand.key)}
-          >
-            <ListOrdered className="h-3.5 w-3.5" />
-          </ToolbarButton>
-          <ToolbarButton
-            title="Quote"
-            onClick={() => runCommand(wrapInBlockquoteCommand.key)}
-          >
-            <Quote className="h-3.5 w-3.5" />
-          </ToolbarButton>
-          <ToolbarButton
-            title="Code block"
-            onClick={() => runCommand(createCodeBlockCommand.key)}
-          >
-            <SquareCode className="h-3.5 w-3.5" />
-          </ToolbarButton>
-          <ToolbarButton
-            title="Table"
-            onClick={() => runCommand(insertTableCommand.key)}
-          >
-            <TableIcon className="h-3.5 w-3.5" />
-          </ToolbarButton>
-
-          {uploadTarget && (
-            <>
-              <div className="mx-1 h-3.5 w-px bg-border" />
-              <ToolbarButton
-                title="Insert image"
-                onClick={() => imageInputRef.current?.click()}
-              >
-                <ImageIcon className="h-3.5 w-3.5" />
-              </ToolbarButton>
-              <ToolbarButton
-                title="Attach file"
-                onClick={() => fileInputRef.current?.click()}
-              >
-                <Paperclip className="h-3.5 w-3.5" />
-              </ToolbarButton>
+          {linkOpen && (
+            <form
+              onSubmit={submitLink}
+              className="flex items-center gap-2 border-b border-border px-2 py-1"
+            >
               <input
-                ref={imageInputRef}
-                type="file"
-                accept="image/*"
-                multiple
-                className="hidden"
-                onChange={handleFiles}
+                autoFocus
+                value={linkHref}
+                onChange={(e) => setLinkHref(e.target.value)}
+                placeholder="https://example.com"
+                aria-label="Link URL"
+                className="h-7 flex-1 rounded border border-input bg-background px-2 text-xs focus:outline-none focus:ring-1 focus:ring-ring"
               />
-              <input
-                ref={fileInputRef}
-                type="file"
-                multiple
-                className="hidden"
-                onChange={handleFiles}
-              />
-            </>
-          )}
-
-          <div className="flex-1" />
-          {uploading && (
-            <span className="mr-2 text-xs text-muted-foreground">Uploading...</span>
+              <button
+                type="submit"
+                className={cn(TOOLBAR_HOVER, TOOLBAR_PRESSED, "h-7 rounded px-2 text-xs")}
+              >
+                Apply
+              </button>
+            </form>
           )}
         </div>
-      )}
-
-      {!readOnly && linkOpen && (
-        <form
-          onSubmit={submitLink}
-          className="flex items-center gap-2 border-b border-border px-2 py-1"
-        >
-          <input
-            autoFocus
-            value={linkHref}
-            onChange={(e) => setLinkHref(e.target.value)}
-            placeholder="https://example.com"
-            aria-label="Link URL"
-            className="h-7 flex-1 rounded border border-input bg-background px-2 text-xs focus:outline-none focus:ring-1 focus:ring-ring"
-          />
-          <button
-            type="submit"
-            className="h-7 rounded px-2 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
-          >
-            Apply
-          </button>
-        </form>
       )}
 
       {/* `mesh-doc-editor-body` carries the fill down to the contenteditable

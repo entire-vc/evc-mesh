@@ -1,8 +1,17 @@
+/// <reference types="node" />
+import { readFileSync } from "node:fs";
+import { resolve as resolvePath } from "node:path";
 import { beforeAll, beforeEach, describe, it, expect, vi } from "vitest";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import { DocEditor } from "@/components/doc-editor";
 import { buildBlocks, makeAnchor } from "@/lib/docs/anchor";
+import {
+  AA_NON_TEXT,
+  AA_TEXT,
+  brandkitThemes,
+  contrast,
+} from "@/test-utils/brandkit-contrast";
 
 // The editor resolves internal attachment links through the API helper and
 // navigates internal links through the router.
@@ -461,5 +470,226 @@ describe("DocEditor paragraph anchors", () => {
     });
     const pm = await surface(container);
     expect(pm.querySelector(".mesh-doc-anchor-hit")).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The toolbar stays put
+// ---------------------------------------------------------------------------
+
+/**
+ * Reported from production: in a long document the formatting toolbar scrolls
+ * out of view, so formatting is unavailable exactly when you are editing the
+ * middle of a page.
+ *
+ * The fix is `position: sticky` against the scroller the Docs page already has,
+ * and the thing these tests actually defend is the *other* half of it — that no
+ * scrolling container was introduced inside the editor to get there. The editor
+ * grows and the page column scrolls, on purpose: the inline-comment affordance
+ * is positioned from selection rects minus the container's bounding rect with
+ * no `scrollTop` term, so a scrollport inside that container would leave the
+ * affordance floating however far the reader had scrolled away from its text.
+ *
+ * jsdom has no layout, so "does it stick" is not observable here. What is
+ * observable, and what regresses, is the structure: the declaration, the opaque
+ * fill it needs, and the absence of an inner scroller.
+ */
+describe("DocEditor toolbar placement", () => {
+  async function toolbar(container: HTMLElement): Promise<HTMLElement> {
+    await surface(container);
+    const el = container.querySelector<HTMLElement>("[data-doc-toolbar]");
+    if (!el) throw new Error("toolbar missing");
+    return el;
+  }
+
+  it("pins the toolbar to the top of the scroller instead of letting it scroll away", async () => {
+    const { container } = renderInRouter(
+      <DocEditor value={"para\n\n".repeat(200)} onChange={vi.fn()} documentId="doc-1" />,
+    );
+    const bar = await toolbar(container);
+
+    expect(bar).toHaveClass("sticky");
+    expect(bar).toHaveClass("top-0");
+    // Sticky over flowing prose needs both of these or the text scrolls
+    // visibly through the bar.
+    expect(bar).toHaveClass("bg-background");
+    expect(bar.className).toMatch(/\bz-\d+\b/);
+
+    // It is the toolbar that sticks, not some empty wrapper next to it.
+    expect(bar.contains(screen.getByTitle("Bold (Ctrl+B)"))).toBe(true);
+  });
+
+  it("keeps the link form with the toolbar rather than under it", async () => {
+    // The form is opened from a sticky button and applies to the selection you
+    // are looking at. Left outside the sticky box it would be the one part of
+    // the bar that scrolls away, with its own button still on screen.
+    const { container } = renderInRouter(
+      <DocEditor value="hello" onChange={vi.fn()} documentId="doc-1" />,
+    );
+    const bar = await toolbar(container);
+
+    fireEvent.click(screen.getByTitle("Link"));
+
+    expect(bar.contains(screen.getByLabelText("Link URL"))).toBe(true);
+  });
+
+  it("adds no scrolling container inside the editor to achieve it", async () => {
+    // The regression this exists for: making the toolbar stick by wrapping the
+    // body in `overflow-y: auto`. That works visually and silently breaks the
+    // inline-comment affordance, which has no scrollTop term.
+    const { container } = renderInRouter(
+      <DocEditor value={RICH} onChange={vi.fn()} documentId="doc-1" />,
+    );
+    await surface(container);
+
+    const offenders = Array.from(container.querySelectorAll<HTMLElement>("*"))
+      .map((el) => el.className)
+      .filter((c) => typeof c === "string")
+      .filter((c) => /(^|\s)(overflow|overflow-y)-(auto|scroll)(\s|$)/.test(c));
+
+    expect(offenders).toEqual([]);
+  });
+
+  it("declares no vertical scrollport in the editor stylesheet either", async () => {
+    // The fill chain in doc-editor.css crosses two wrappers this component
+    // cannot put a className on, so a scroller could be introduced there
+    // without appearing in any rendered class list above.
+    const css = readFileSync(
+      resolvePath(process.cwd(), "src/components/doc-editor.css"),
+      "utf8",
+    ).replace(/\/\*[\s\S]*?\*\//g, "");
+
+    // `overflow-x: auto` on <pre> and .tableWrapper is deliberate and
+    // harmless — a wide code block or table scrolls sideways within its own
+    // line box and never moves the text vertically.
+    expect(css).not.toMatch(/overflow-y\s*:\s*(auto|scroll)/);
+    expect(css).not.toMatch(/overflow\s*:\s*(auto|scroll)/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The toolbar is readable under the pointer
+// ---------------------------------------------------------------------------
+
+/**
+ * The second half of the same report: the toolbar buttons went dark on hover.
+ *
+ * They were `hover:bg-accent hover:text-foreground` — a saturated near-black
+ * teal fill under near-black text. Identical to the defect fixed on the Docs
+ * tree's selected row, so it is fixed with the identical token pair rather than
+ * with a fresh colour, and measured rather than eyeballed: eyeballing is how it
+ * got here.
+ */
+describe("DocEditor toolbar hover", () => {
+  it("fills a hovered button with the light secondary surface and its own foreground", async () => {
+    const { container } = renderInRouter(
+      <DocEditor value="hello" onChange={vi.fn()} documentId="doc-1" />,
+    );
+    await surface(container);
+    const bold = screen.getByTitle("Bold (Ctrl+B)");
+
+    // Both halves are load-bearing. Keeping the fill and dropping the paired
+    // foreground is exactly the shape of the original bug.
+    expect(bold).toHaveClass("hover:bg-secondary");
+    expect(bold).toHaveClass("hover:text-secondary-foreground");
+    expect(bold).not.toHaveClass("hover:bg-accent");
+  });
+
+  it("gives every toolbar control the same treatment, including Apply", async () => {
+    // A row of buttons where one behaves differently reads as a bug, and the
+    // Apply button carried the same class string verbatim.
+    const { container } = renderInRouter(
+      <DocEditor value="hello" onChange={vi.fn()} documentId="doc-1" />,
+    );
+    await surface(container);
+    fireEvent.click(screen.getByTitle("Link"));
+
+    const bar = container.querySelector<HTMLElement>("[data-doc-toolbar]");
+    const buttons = Array.from(bar!.querySelectorAll("button"));
+    expect(buttons.length).toBeGreaterThan(8);
+    for (const button of buttons) {
+      expect(button).toHaveClass("hover:bg-secondary");
+      expect(button).not.toHaveClass("hover:bg-accent");
+    }
+  });
+
+  it("tells a pressed button from a hovered one without darkening it", async () => {
+    // --secondary is a light tint, so pressing cannot be signalled by the fill.
+    // Darkening it is precisely what produced the reported bug, so the press
+    // adds a second cue — a brand-coloured inset ring — and keeps the fill.
+    const { container } = renderInRouter(
+      <DocEditor value="hello" onChange={vi.fn()} documentId="doc-1" />,
+    );
+    await surface(container);
+    const bold = screen.getByTitle("Bold (Ctrl+B)");
+
+    expect(bold).toHaveClass("active:ring-primary");
+    expect(bold).toHaveClass("active:ring-inset");
+    expect(bold).toHaveClass("active:bg-secondary");
+    expect(bold.className).not.toMatch(/active:bg-(accent|primary|foreground)/);
+  });
+
+  it("keeps the paragraph menu readable under the pointer too", async () => {
+    // Same file, same defect, same fix: this item was text-foreground over
+    // hover:bg-accent.
+    const { container } = renderInRouter(
+      <DocEditor value={ANCHOR_DOC} onChange={vi.fn()} readOnly onCopyAnchor={vi.fn()} />,
+    );
+    const pm = await surface(container);
+    fireEvent.contextMenu(pm.children[1]!, { clientX: 10, clientY: 10 });
+
+    const item = await screen.findByRole("menuitem");
+    expect(item).toHaveClass("hover:bg-secondary");
+    expect(item).toHaveClass("hover:text-secondary-foreground");
+    expect(item).not.toHaveClass("hover:bg-accent");
+  });
+});
+
+/**
+ * The hover colours are theme tokens, so the readability check belongs to the
+ * tokens and not to a rendered pixel. Same helper the Docs tree uses; it reads
+ * brandkit.css, the file the app actually ships.
+ */
+describe("toolbar hover contrast", () => {
+  const { light, dark } = brandkitThemes();
+
+  it("reads on both themes", () => {
+    expect(contrast(light, "--secondary", "--secondary-foreground")).toBeCloseTo(16.31, 1);
+    expect(contrast(dark, "--secondary", "--secondary-foreground")).toBeCloseTo(11.39, 1);
+    expect(contrast(light, "--secondary", "--secondary-foreground")).toBeGreaterThanOrEqual(AA_TEXT);
+    expect(contrast(dark, "--secondary", "--secondary-foreground")).toBeGreaterThanOrEqual(AA_TEXT);
+  });
+
+  it("beats what it replaced, in both themes and against both foregrounds", () => {
+    // The button rests at --muted-foreground and the old hover swapped it to
+    // --foreground, so the old pairing was unreadable coming and going.
+    expect(contrast(light, "--accent", "--foreground")).toBeCloseTo(2.82, 1);
+    expect(contrast(dark, "--accent", "--foreground")).toBeCloseTo(1.73, 1);
+    expect(contrast(light, "--accent", "--muted-foreground")).toBeCloseTo(1.21, 1);
+    expect(contrast(dark, "--accent", "--muted-foreground")).toBeCloseTo(1.64, 1);
+
+    for (const theme of [light, dark]) {
+      expect(contrast(theme, "--accent", "--foreground")).toBeLessThan(AA_TEXT);
+      expect(contrast(theme, "--secondary", "--secondary-foreground")).toBeGreaterThan(
+        contrast(theme, "--accent", "--foreground"),
+      );
+    }
+  });
+
+  it("keeps the pressed ring visible against the fill it sits on", () => {
+    // Non-text contrast (WCAG 1.4.11) is 3:1. This is what stops "pressed" and
+    // "hovered" from being the same button.
+    expect(contrast(light, "--secondary", "--primary")).toBeCloseTo(5.78, 1);
+    expect(contrast(dark, "--secondary", "--primary")).toBeCloseTo(6.59, 1);
+    expect(contrast(light, "--secondary", "--primary")).toBeGreaterThanOrEqual(AA_NON_TEXT);
+    expect(contrast(dark, "--secondary", "--primary")).toBeGreaterThanOrEqual(AA_NON_TEXT);
+  });
+
+  it("leaves the icon readable in the moment before the foreground swaps", () => {
+    // transition-colors runs fill and text at the same duration, but a dropped
+    // hover:text-* would leave --muted-foreground on the fill permanently. That
+    // must still clear AA rather than merely being better than before.
+    expect(contrast(light, "--secondary", "--muted-foreground")).toBeCloseTo(4.78, 1);
+    expect(contrast(dark, "--secondary", "--muted-foreground")).toBeCloseTo(4.03, 1);
   });
 });
