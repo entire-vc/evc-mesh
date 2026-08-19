@@ -254,7 +254,10 @@ unconfigured and Mesh never calls out.
 ### MCP server
 
 Read by the `mesh-mcp` binary (`cmd/mcp`), not by the API. In SSE mode
-`docker-compose.prod.yml` sets the transport, host and port for you.
+`docker-compose.prod.yml` sets the transport, host and port for you, and also
+proxies it under `/mcp/` on the same origin as the web UI (`nginx.conf`) —
+`https://<your-host>/mcp/sse` works out of the box once `MESH_BASE_URL` is set,
+with no separate port to open.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -263,7 +266,7 @@ Read by the `mesh-mcp` binary (`cmd/mcp`), not by the API. In SSE mode
 | `MESH_AGENT_KEY` | *(none)* | Agent key for stdio mode. **Required** — stdio mode exits without it. Ignored in SSE mode, where each connection carries its own key. |
 | `MESH_MCP_HOST` | `0.0.0.0` | SSE listen host |
 | `MESH_MCP_PORT` | `8081` | SSE listen port |
-| `MESH_MCP_PUBLIC_URL` | *(empty)* | Public base URL of the SSE server (e.g. `https://mesh.example.com/mcp`). Empty means the message endpoint is advertised as a path relative to whatever URL the client connected to, which is correct for localhost, a published container port and a reverse proxy alike. Set it only for clients that require an absolute endpoint URL. |
+| `MESH_MCP_PUBLIC_URL` | *(empty — the binary's own default; see note)* | Public base URL of the SSE server (e.g. `https://mesh.example.com/mcp`). Empty means the message endpoint is advertised as a path relative to whatever URL the client connected to — correct for localhost and a directly-published container port, but **not** for a reverse proxy that strips a path prefix (like the bundled nginx's `/mcp/` route), which needs the prefix included explicitly. |
 | `MESH_MCP_PROFILE` | `full` | `full` (49 tools) or `core` (21 tools). Applies to stdio mode; in SSE mode the profile is chosen by which endpoint the client connects to (`/sse` vs `/core/sse`). |
 
 See [Agent onboarding](agent-onboarding.md) for issuing keys and connecting a
@@ -664,7 +667,7 @@ Services included in `docker-compose.prod.yml`:
 | `minio` | *(internal)* | MinIO object storage — required env: `MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY` |
 | `api` | `${API_PORT:-8005}` | Mesh API server (Go binary, runs DB migrations on startup) |
 | `mcp` | `${MCP_PORT:-8081}` | MCP server in SSE mode for remote agents |
-| `nginx` | `${HTTP_PORT:-80}` | Nginx serving the React SPA, proxying `/api` and `/ws` to the API |
+| `nginx` | `${HTTP_PORT:-80}` | Nginx serving the React SPA, proxying `/api`, `/ws` and `/mcp` (SSE, see [Agent onboarding](agent-onboarding.md)) |
 | `prometheus` | `${PROMETHEUS_PORT:-9090}` | Prometheus scraping `/metrics` from the API |
 | `grafana` | `${GRAFANA_PORT:-3001}` | Grafana dashboards — password set by `GRAFANA_PASSWORD` (required, no default) |
 
