@@ -11,7 +11,9 @@ import { api } from "@/lib/api";
 import { toast } from "@/components/ui/toast";
 import {
   artifactDownloadPath,
+  documentAttachmentDownloadPath,
   isArtifactDownloadPath,
+  isResolvableAttachmentPath,
   renderArtifactAwareImage,
   renderArtifactAwareLink,
   resolveArtifactImages,
@@ -176,5 +178,128 @@ describe("handleArtifactLinkClick", () => {
     await vi.waitFor(() => {
       expect(toast).toHaveBeenCalledWith("Could not open file");
     });
+  });
+});
+
+// The predicate is the allow-list that decides what may become a
+// data-artifact-src, so widening it to a second route family is the change worth
+// stating twice: once for what it now accepts, and once — at more length — for
+// what it still refuses.
+describe("documentAttachmentDownloadPath / isResolvableAttachmentPath", () => {
+  it("builds a stable, inline-disposition path from an attachment id", () => {
+    expect(documentAttachmentDownloadPath("att-1")).toBe(
+      "/api/v1/document-attachments/att-1/download?disposition=inline",
+    );
+  });
+
+  it("accepts BOTH generated forms through one predicate", () => {
+    expect(
+      isResolvableAttachmentPath(artifactDownloadPath("6b1f9c2a-1111-4a2b-8c3d-000000000001")),
+    ).toBe(true);
+    expect(
+      isResolvableAttachmentPath(
+        documentAttachmentDownloadPath("6b1f9c2a-1111-4a2b-8c3d-000000000002"),
+      ),
+    ).toBe(true);
+  });
+
+  it("accepts the bare paths without a query string", () => {
+    expect(isResolvableAttachmentPath("/api/v1/artifacts/a1/download")).toBe(true);
+    expect(isResolvableAttachmentPath("/api/v1/document-attachments/a1/download")).toBe(true);
+  });
+
+  it("refuses a path traversal appended after /download", () => {
+    // The id group is [^/?]+ and the pattern is anchored, so an extra path
+    // segment cannot ride along behind the part that looks legitimate.
+    expect(isResolvableAttachmentPath("/api/v1/artifacts/x/download/../../evil")).toBe(false);
+    expect(
+      isResolvableAttachmentPath("/api/v1/document-attachments/x/download/../../evil"),
+    ).toBe(false);
+  });
+
+  it("refuses a traversal inside the id segment", () => {
+    expect(isResolvableAttachmentPath("/api/v1/document-attachments/../../evil/download")).toBe(
+      false,
+    );
+  });
+
+  it("refuses an absolute URL on another origin that merely contains the path", () => {
+    // Anchoring at ^ is what stops this: without it, an attacker-controlled
+    // origin with our path as a suffix would resolve as an internal reference and
+    // be fetched with the caller's credentials.
+    expect(
+      isResolvableAttachmentPath("https://evil.example/api/v1/document-attachments/x/download"),
+    ).toBe(false);
+    expect(isResolvableAttachmentPath("https://evil.example/api/v1/artifacts/x/download")).toBe(
+      false,
+    );
+  });
+
+  it("refuses a document path that is not an attachment download", () => {
+    expect(isResolvableAttachmentPath("/api/v1/documents/x")).toBe(false);
+    expect(isResolvableAttachmentPath("/api/v1/documents/x/attachments")).toBe(false);
+    expect(isResolvableAttachmentPath("/api/v1/document-attachments/x")).toBe(false);
+  });
+
+  it("still refuses the unrelated URLs the artifact-only predicate refused", () => {
+    expect(isResolvableAttachmentPath("https://evil.example.com/x")).toBe(false);
+    expect(isResolvableAttachmentPath("javascript:alert(1)")).toBe(false);
+  });
+
+  it("keeps isArtifactDownloadPath as the same predicate for its existing importers", () => {
+    // Several components import the old name. It has to be the widened predicate,
+    // not a surviving narrow copy, or a document attachment would render as plain
+    // alt text in exactly those components.
+    expect(isArtifactDownloadPath).toBe(isResolvableAttachmentPath);
+    expect(isArtifactDownloadPath(documentAttachmentDownloadPath("att-1"))).toBe(true);
+  });
+});
+
+describe("the renderers treat a document attachment exactly like an artifact", () => {
+  it("defers an attachment image to data-artifact-src", () => {
+    const url = documentAttachmentDownloadPath("att-1");
+    const html = renderArtifactAwareImage("screenshot", url);
+    expect(html).toContain(`data-artifact-src="${url}"`);
+    expect(html).not.toMatch(/(?<!data-artifact-)src="/);
+  });
+
+  it("routes an attachment link through data-artifact-download", () => {
+    const url = documentAttachmentDownloadPath("att-1");
+    const html = renderArtifactAwareLink("spec.pdf", url);
+    expect(html).toContain(`data-artifact-download="${url}"`);
+    expect(html).toContain('href="#"');
+  });
+
+  it("resolves an attachment image through the same authenticated fetch", async () => {
+    const path = documentAttachmentDownloadPath("att-1");
+    vi.mocked(api).mockReset();
+    vi.mocked(api).mockResolvedValue({ url: "https://s3.example.com/fresh-attachment" });
+
+    const container = document.createElement("div");
+    container.innerHTML = `<img data-artifact-src="${path}" alt="shot" />`;
+    document.body.appendChild(container);
+
+    await resolveArtifactImages(container);
+
+    expect(api).toHaveBeenCalledWith(path);
+    expect(container.querySelector("img")!.src).toBe("https://s3.example.com/fresh-attachment");
+  });
+});
+
+// The path written into a markdown body must carry no signature material at all.
+// This is the mechanical half of "the image still opens an hour later": a stored
+// reference that contained a signature would be a reference with an expiry date,
+// and the page would break exactly one hour after it was written. The Go side
+// proves the other half — that resolving it twice yields two different signatures.
+describe("stored markdown references carry no expiring credential", () => {
+  it("has no AWS signature material in either generated path", () => {
+    for (const path of [
+      artifactDownloadPath("6b1f9c2a-1111-4a2b-8c3d-000000000001"),
+      documentAttachmentDownloadPath("6b1f9c2a-1111-4a2b-8c3d-000000000002"),
+    ]) {
+      expect(path).not.toContain("X-Amz-");
+      expect(path).not.toMatch(/[?&](Signature|Expires|Policy)=/i);
+      expect(path.startsWith("/api/v1/")).toBe(true);
+    }
   });
 });

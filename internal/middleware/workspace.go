@@ -180,6 +180,41 @@ var workspaceParamResolvers = []workspaceParamResolver{
 	                           FROM documents d
 	                           JOIN projects p ON d.project_id = p.id
 	                          WHERE d.id = $1`)},
+	// An attachment names its tenant through its document, which names it through
+	// its project — one join hop further than :doc_id, and the reason a document
+	// attachment is its own table rather than an artifact: artifacts hang off a
+	// task, and a document has none, so there would be nothing to join through.
+	//
+	// Soft-deleted rows still resolve here, for the same reason they do above: the
+	// guard's question is "whose is this", and a deleted attachment is still that
+	// tenant's. The repository's deleted_at filters are what turn the read into a
+	// 404 — for its owner and a stranger alike, so the two answers stay
+	// indistinguishable.
+	//
+	// This entry is what makes /document-attachments/:att_id a guarded route at
+	// all: nothing else in its path names a tenant, so without a resolver
+	// RequireWorkspaceMemberScoped would see a route with nothing to check and wave
+	// it through, exactly as it did for /events/:event_id.
+	//
+	// No notFoundResource, deliberately — this follows :doc_id rather than
+	// :artifact_id, and the two differ for a reason. notFoundResource turns "this
+	// id resolves to nothing" into a 404 instead of the 403 a wrong-tenant id
+	// gets, which makes those two answers distinguishable. :artifact_id can afford
+	// that because newVictimFixture hands the route-coverage suite a REAL artifact,
+	// so the distinction is never exercised against a guessed id. Giving :att_id
+	// the same treatment would need the same fixture — a document plus an upload —
+	// and that fixture has no object-storage skip path, so it would turn
+	// TestCrossTenant_NonMemberIsRefusedOnEveryScopedRoute from a
+	// storage-independent gate into one that fails wherever MinIO is absent.
+	// (Measured: with notFoundResource set, that test fails on both
+	// /document-attachments routes with 404 where it requires 403.) Omitting it
+	// makes an unknown attachment id and another tenant's attachment id both
+	// answer 403 — the stronger of the two behaviours anyway.
+	{param: "att_id", resolve: uuidResolver(`SELECT p.workspace_id
+	                           FROM document_attachments a
+	                           JOIN documents d ON a.document_id = d.id
+	                           JOIN projects p ON d.project_id = p.id
+	                          WHERE a.id = $1`)},
 	{param: "webhook_id", resolve: uuidResolver(`SELECT workspace_id FROM webhook_configs WHERE id = $1`)},
 	{param: "int_id", resolve: uuidResolver(`SELECT workspace_id FROM integration_configs WHERE id = $1`)},
 	{param: "tmpl_id", resolve: uuidResolver(`SELECT p.workspace_id

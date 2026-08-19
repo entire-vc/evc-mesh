@@ -994,6 +994,42 @@ func (m *MockDocumentService) ListByProject(ctx context.Context, projectID uuid.
 	return nil, nil
 }
 
+// MockDocumentAttachmentService implements service.DocumentAttachmentService for testing.
+type MockDocumentAttachmentService struct {
+	UploadFunc         func(ctx context.Context, input service.UploadDocumentAttachmentInput) (*domain.DocumentAttachment, error)
+	GetDownloadURLFunc func(ctx context.Context, id, workspaceID uuid.UUID, inline bool) (string, error)
+	ListByDocumentFunc func(ctx context.Context, documentID, workspaceID uuid.UUID, pg pagination.Params) (*pagination.Page[domain.DocumentAttachment], error)
+	DeleteFunc         func(ctx context.Context, id, workspaceID uuid.UUID) error
+}
+
+func (m *MockDocumentAttachmentService) Upload(ctx context.Context, input service.UploadDocumentAttachmentInput) (*domain.DocumentAttachment, error) {
+	if m.UploadFunc != nil {
+		return m.UploadFunc(ctx, input)
+	}
+	return nil, nil
+}
+
+func (m *MockDocumentAttachmentService) GetDownloadURL(ctx context.Context, id, workspaceID uuid.UUID, inline bool) (string, error) {
+	if m.GetDownloadURLFunc != nil {
+		return m.GetDownloadURLFunc(ctx, id, workspaceID, inline)
+	}
+	return "", nil
+}
+
+func (m *MockDocumentAttachmentService) ListByDocument(ctx context.Context, documentID, workspaceID uuid.UUID, pg pagination.Params) (*pagination.Page[domain.DocumentAttachment], error) {
+	if m.ListByDocumentFunc != nil {
+		return m.ListByDocumentFunc(ctx, documentID, workspaceID, pg)
+	}
+	return nil, nil
+}
+
+func (m *MockDocumentAttachmentService) Delete(ctx context.Context, id, workspaceID uuid.UUID) error {
+	if m.DeleteFunc != nil {
+		return m.DeleteFunc(ctx, id, workspaceID)
+	}
+	return nil
+}
+
 type MockAgentSessionRepository struct {
 	GetPreviousStartedAtFunc func(ctx context.Context, agentID uuid.UUID) (*time.Time, error)
 }
