@@ -47,6 +47,9 @@ export interface DocumentComment {
   resolved_by_type?: ActorType | null;
   author_id: string;
   author_type: ActorType;
+  /** Resolved by the API alongside the ids; absent when the actor is gone. */
+  author_name?: string | null;
+  resolved_by_name?: string | null;
   created_at: string;
   updated_at: string;
 }

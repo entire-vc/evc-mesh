@@ -249,3 +249,19 @@ describe("shouldPaint — what may be drawn over the document", () => {
     expect(shouldPaint("exact", undefined)).toBe(true);
   });
 });
+
+describe("who wrote it", () => {
+  it("shows the resolved name the API supplies", () => {
+    renderList([
+      thread({ id: "t1", root: { author_name: "Pavel Rogozhin" } as never }),
+    ]);
+    expect(screen.getByText("Pavel Rogozhin")).toBeInTheDocument();
+  });
+
+  it("falls back to the actor KIND when the name is gone", () => {
+    // Not a bare "someone": whether a person or a service wrote a comment
+    // changes how the next reader treats it.
+    renderList([thread({ id: "t1", root: { author_type: "agent" } as never })]);
+    expect(screen.getByText("Agent")).toBeInTheDocument();
+  });
+});

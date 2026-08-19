@@ -47,7 +47,16 @@ export function shouldPaint(
   return isAnchored(state) && !resolvedAt;
 }
 
+/**
+ * Who wrote it.
+ *
+ * The API resolves the name alongside the id, so the fallback is only reached
+ * for an actor that no longer exists — and there the KIND is still worth saying,
+ * because "someone" and "a service wrote this" read very differently to whoever
+ * is deciding whether to act on the comment.
+ */
 function actorLabel(comment: DocumentComment): string {
+  if (comment.author_name) return comment.author_name;
   return comment.author_type === "agent" ? "Agent" : "User";
 }
 
