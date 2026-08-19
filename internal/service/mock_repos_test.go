@@ -2489,3 +2489,170 @@ func (m *MockWorkspaceMembershipReader) IsWorkspaceMember(_ context.Context, wor
 	}
 	return m.allowed[workspaceID.String()+"/"+userID.String()], nil
 }
+
+// ---------------------------------------------------------------------------
+// MockDocumentRepository
+// ---------------------------------------------------------------------------
+
+// MockDocumentRepository is an in-memory repository.DocumentRepository.
+//
+// workspaceOf maps a project to its tenant so that GetByIDInWorkspace can refuse
+// a document belonging to another one — the cross-tenant behaviour is the point
+// of several of the tests, so the mock has to be able to get it wrong.
+type MockDocumentRepository struct {
+	mu          sync.RWMutex
+	items       map[uuid.UUID]*domain.Document
+	workspaceOf map[uuid.UUID]uuid.UUID
+	errToReturn error
+	createErr   error
+}
+
+func NewMockDocumentRepository() *MockDocumentRepository {
+	return &MockDocumentRepository{
+		items:       make(map[uuid.UUID]*domain.Document),
+		workspaceOf: make(map[uuid.UUID]uuid.UUID),
+	}
+}
+
+// WithProjectWorkspace declares which tenant a project belongs to.
+func (m *MockDocumentRepository) WithProjectWorkspace(projectID, workspaceID uuid.UUID) *MockDocumentRepository {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.workspaceOf[projectID] = workspaceID
+	return m
+}
+
+// Seed inserts a document directly, bypassing Create.
+func (m *MockDocumentRepository) Seed(doc *domain.Document) *MockDocumentRepository {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	copied := *doc
+	m.items[doc.ID] = &copied
+	return m
+}
+
+func (m *MockDocumentRepository) Create(_ context.Context, doc *domain.Document) error {
+	if m.createErr != nil {
+		return m.createErr
+	}
+	if m.errToReturn != nil {
+		return m.errToReturn
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	copied := *doc
+	m.items[doc.ID] = &copied
+	return nil
+}
+
+func (m *MockDocumentRepository) GetByID(_ context.Context, id uuid.UUID) (*domain.Document, error) {
+	if m.errToReturn != nil {
+		return nil, m.errToReturn
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	doc, ok := m.items[id]
+	if !ok || doc.DeletedAt != nil {
+		return nil, nil
+	}
+	copied := *doc
+	return &copied, nil
+}
+
+func (m *MockDocumentRepository) GetByIDInWorkspace(_ context.Context, id, workspaceID uuid.UUID) (*domain.Document, error) {
+	if m.errToReturn != nil {
+		return nil, m.errToReturn
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	doc, ok := m.items[id]
+	if !ok || doc.DeletedAt != nil {
+		return nil, nil
+	}
+	if m.workspaceOf[doc.ProjectID] != workspaceID {
+		return nil, nil
+	}
+	copied := *doc
+	return &copied, nil
+}
+
+func (m *MockDocumentRepository) Update(_ context.Context, doc *domain.Document) error {
+	if m.errToReturn != nil {
+		return m.errToReturn
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	existing, ok := m.items[doc.ID]
+	if !ok || existing.DeletedAt != nil {
+		return apierror.NotFound("Document")
+	}
+	copied := *doc
+	m.items[doc.ID] = &copied
+	return nil
+}
+
+func (m *MockDocumentRepository) SoftDelete(_ context.Context, id uuid.UUID, at time.Time) error {
+	if m.errToReturn != nil {
+		return m.errToReturn
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	doc, ok := m.items[id]
+	if !ok || doc.DeletedAt != nil {
+		return apierror.NotFound("Document")
+	}
+	// Mirrors the recursive statement in the real repository: the subtree goes
+	// with the document, or a child outlives its parent.
+	stamp := at
+	var markSubtree func(parent uuid.UUID)
+	markSubtree = func(parent uuid.UUID) {
+		for _, d := range m.items {
+			if d.ParentID != nil && *d.ParentID == parent && d.DeletedAt == nil {
+				d.DeletedAt = &stamp
+				markSubtree(d.ID)
+			}
+		}
+	}
+	doc.DeletedAt = &stamp
+	markSubtree(id)
+	return nil
+}
+
+func (m *MockDocumentRepository) ListByProject(_ context.Context, projectID uuid.UUID, pg pagination.Params) (*pagination.Page[domain.Document], error) {
+	if m.errToReturn != nil {
+		return nil, m.errToReturn
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var items []domain.Document
+	for _, d := range m.items {
+		if d.ProjectID == projectID && d.DeletedAt == nil {
+			items = append(items, *d)
+		}
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].Position != items[j].Position {
+			return items[i].Position < items[j].Position
+		}
+		return items[i].CreatedAt.Before(items[j].CreatedAt)
+	})
+	return pagination.NewPage(items, len(items), pg), nil
+}
+
+func (m *MockDocumentRepository) HasAncestor(_ context.Context, docID, ancestorID uuid.UUID) (bool, error) {
+	if m.errToReturn != nil {
+		return false, m.errToReturn
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	seen := map[uuid.UUID]bool{}
+	cur, ok := m.items[docID]
+	for ok && cur != nil && cur.ParentID != nil && !seen[*cur.ParentID] {
+		if *cur.ParentID == ancestorID {
+			return true, nil
+		}
+		seen[*cur.ParentID] = true
+		cur, ok = m.items[*cur.ParentID]
+	}
+	return false, nil
+}

@@ -171,6 +171,15 @@ var workspaceParamResolvers = []workspaceParamResolver{
 	                            FROM saved_views v
 	                            JOIN projects p ON v.project_id = p.id
 	                           WHERE v.id = $1`)},
+	// A document names its tenant through its project. Soft-deleted documents
+	// still resolve here: the guard's question is "whose is this", and a deleted
+	// document is still that tenant's. The repository's deleted_at filter is what
+	// turns the read into a 404 — for its owner and a stranger alike, so the two
+	// answers stay indistinguishable.
+	{param: "doc_id", resolve: uuidResolver(`SELECT p.workspace_id
+	                           FROM documents d
+	                           JOIN projects p ON d.project_id = p.id
+	                          WHERE d.id = $1`)},
 	{param: "webhook_id", resolve: uuidResolver(`SELECT workspace_id FROM webhook_configs WHERE id = $1`)},
 	{param: "int_id", resolve: uuidResolver(`SELECT workspace_id FROM integration_configs WHERE id = $1`)},
 	{param: "tmpl_id", resolve: uuidResolver(`SELECT p.workspace_id

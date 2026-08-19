@@ -321,6 +321,50 @@ components:
           type: string
           format: date-time
 
+    Document:
+      type: object
+      description: |
+        A markdown page inside a project. Only the metadata lives in Postgres;
+        the markdown itself is an object in S3/MinIO under storage_key. `body` is
+        returned by the single-document read only -- a list never goes to object
+        storage for every row.
+      properties:
+        id:
+          type: string
+          format: uuid
+        project_id:
+          type: string
+          format: uuid
+        parent_id:
+          type: string
+          format: uuid
+          nullable: true
+        slug:
+          type: string
+          description: Unique among live siblings; derived from the title when omitted.
+        title:
+          type: string
+        storage_key:
+          type: string
+        position:
+          type: integer
+          description: Sibling ordering.
+        created_by:
+          type: string
+          format: uuid
+        created_by_type:
+          type: string
+          enum: [user, agent, system]
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        body:
+          type: string
+          description: Markdown, present on the single-document read.
+
     Agent:
       type: object
       properties:
@@ -2369,6 +2413,130 @@ paths:
               schema:
                 type: string
                 format: uri
+
+  # ------------------------------------------------------------------
+  # Documents
+  # ------------------------------------------------------------------
+  /api/v1/projects/{proj_id}/documents:
+    parameters:
+      - name: proj_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Documents]
+      summary: List a project's documents
+      parameters:
+        - $ref: "#/components/parameters/PageParam"
+        - $ref: "#/components/parameters/PageSizeParam"
+      responses:
+        "200":
+          description: Paginated list of documents, in sibling order. Bodies are not included.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/PaginatedResponse"
+                  - type: object
+                    properties:
+                      items:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/Document"
+    post:
+      tags: [Documents]
+      summary: Create a document
+      description: |
+        The project comes from the path; there is no project_id in the body.
+        Requires the upload_artifact permission.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title]
+              properties:
+                title:
+                  type: string
+                slug:
+                  type: string
+                  description: Optional; derived from the title when omitted.
+                parent_id:
+                  type: string
+                  format: uuid
+                  nullable: true
+                position:
+                  type: integer
+                body:
+                  type: string
+                  description: Markdown, stored in object storage.
+      responses:
+        "201":
+          description: Document created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Document"
+        "409":
+          description: A live sibling already uses this slug
+
+  /api/v1/documents/{doc_id}:
+    parameters:
+      - name: doc_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Documents]
+      summary: Get a document with its markdown body
+      responses:
+        "200":
+          description: Document metadata and body
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Document"
+    patch:
+      tags: [Documents]
+      summary: Update a document's title, place in the tree, position or body
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title:
+                  type: string
+                parent_id:
+                  type: string
+                  format: uuid
+                clear_parent:
+                  type: boolean
+                  description: Move the document to the top level. Separate from parent_id because an absent and a null parent_id are indistinguishable once bound.
+                position:
+                  type: integer
+                body:
+                  type: string
+      responses:
+        "200":
+          description: Updated document
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Document"
+    delete:
+      tags: [Documents]
+      summary: Soft-delete a document and its descendants
+      description: The stored body is kept, so the delete stays reversible.
+      responses:
+        "204":
+          description: Deleted
 
   # ------------------------------------------------------------------
   # Agents

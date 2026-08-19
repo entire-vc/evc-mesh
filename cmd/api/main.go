@@ -80,6 +80,7 @@ func main() {
 	taskDependencyRepo := postgres.NewTaskDependencyRepo(db)
 	commentRepo := postgres.NewCommentRepo(db)
 	artifactRepo := postgres.NewArtifactRepo(db)
+	documentRepo := postgres.NewDocumentRepo(db)
 	agentRepo := postgres.NewAgentRepo(db)
 	eventBusRepo := postgres.NewEventBusMessageRepo(db)
 	activityLogRepo := postgres.NewActivityLogRepo(db)
@@ -391,8 +392,12 @@ func main() {
 
 	// rulesService, customFieldService, and notificationService were already created above (before taskService).
 
-	// Initialize S3 storage client for artifacts.
+	// Initialize S3 storage client for artifacts and document bodies.
 	var artifactService service.ArtifactService
+	// documentStore stays nil until the client is proven usable — a typed-nil
+	// *S3Client in an interface is not nil, and the service's "storage not
+	// configured" branch tests exactly that.
+	var documentStore service.DocumentStore
 	s3Client, s3Err := storage.NewS3Client(
 		cfg.S3.Endpoint,
 		cfg.S3.AccessKeyID,
@@ -436,7 +441,9 @@ func main() {
 		}
 
 		artifactService = service.NewArtifactService(artifactRepo, s3Client, activityLogRepo)
+		documentStore = s3Client
 	}
+	documentService := service.NewDocumentService(documentRepo, documentStore, projectRepo)
 
 	// Wire Team Relay publisher into artifact service (best-effort; fires on upload).
 	projectIntegrationService := service.NewProjectIntegrationService(projectIntegrationRepo)
@@ -484,6 +491,7 @@ func main() {
 	statusHandler := handler.NewTaskStatusHandler(taskStatusService)
 	commentHandler := handler.NewCommentHandler(commentService, taskService)
 	artifactHandler := handler.NewArtifactHandler(artifactService, taskService)
+	documentHandler := handler.NewDocumentHandler(documentService)
 	depHandler := handler.NewDependencyHandler(depService, taskService)
 	agentHandler := handler.NewAgentHandlerWithEvents(agentService, taskService, taskStatusService, agentNotifyRedis, agentEventsRepo, sessionRepo)
 	eventHandler := handler.NewEventHandler(eventBusService)
@@ -918,6 +926,20 @@ func main() {
 	api.GET("/artifacts/:artifact_id/download", artifactHandler.Download, wsAccess)
 	api.GET("/tasks/:task_id/artifacts/:artifact_id/download", artifactHandler.Download, wsAccess)
 	api.DELETE("/artifacts/:artifact_id", artifactHandler.Delete, wsAccess, rbac(mw.PermUploadArtifact))
+
+	// Document routes. The project-scoped pair takes projAccess; the object routes
+	// take wsAccess, because RequireProjectMember answers 500 on a path with no
+	// :proj_id in it.
+	//
+	// PermUploadArtifact is the closest existing write permission: a document is
+	// project content whose body is written into object storage, which is exactly
+	// what that permission already covers, and it is held by the same roles as
+	// create_task (owner/admin/member and agents), so nothing gains or loses reach.
+	api.GET("/projects/:proj_id/documents", documentHandler.List, projAccess)
+	api.POST("/projects/:proj_id/documents", documentHandler.Create, projAccess, rbac(mw.PermUploadArtifact))
+	api.GET("/documents/:doc_id", documentHandler.GetByID, wsAccess)
+	api.PATCH("/documents/:doc_id", documentHandler.Update, wsAccess, rbac(mw.PermUploadArtifact))
+	api.DELETE("/documents/:doc_id", documentHandler.Delete, wsAccess, rbac(mw.PermUploadArtifact))
 
 	// Agent routes.
 	// NOTE: /agents/me/* routes MUST be registered before /agents/:agent_id to avoid

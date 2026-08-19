@@ -1,0 +1,223 @@
+package postgres
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/jmoiron/sqlx"
+	"github.com/lib/pq"
+
+	"github.com/entire-vc/evc-mesh/internal/domain"
+	"github.com/entire-vc/evc-mesh/pkg/apierror"
+	"github.com/entire-vc/evc-mesh/pkg/pagination"
+)
+
+// documentRow is the DB row representation. domain.Document.Body has no column —
+// it is filled from object storage by the service layer.
+type documentRow struct {
+	ID            uuid.UUID        `db:"id"`
+	ProjectID     uuid.UUID        `db:"project_id"`
+	ParentID      *uuid.UUID       `db:"parent_id"`
+	Slug          string           `db:"slug"`
+	Title         string           `db:"title"`
+	StorageKey    string           `db:"storage_key"`
+	Position      int              `db:"position"`
+	CreatedBy     uuid.UUID        `db:"created_by"`
+	CreatedByType domain.ActorType `db:"created_by_type"`
+	CreatedAt     time.Time        `db:"created_at"`
+	UpdatedAt     time.Time        `db:"updated_at"`
+	DeletedAt     *time.Time       `db:"deleted_at"`
+}
+
+// documentSelectCols lists every column documentRow scans — see artifactSelectCols
+// for why no query here uses `SELECT *`.
+const documentSelectCols = `id, project_id, parent_id, slug, title, storage_key, position, created_by, created_by_type, created_at, updated_at, deleted_at`
+
+// documentSelectColsQualified is documentSelectCols prefixed `d.`, for the queries
+// that JOIN projects (both tables have created_at).
+const documentSelectColsQualified = `d.id, d.project_id, d.parent_id, d.slug, d.title, d.storage_key, d.position, d.created_by, d.created_by_type, d.created_at, d.updated_at, d.deleted_at`
+
+func (r *documentRow) toDomain() domain.Document {
+	return domain.Document{
+		ID:            r.ID,
+		ProjectID:     r.ProjectID,
+		ParentID:      r.ParentID,
+		Slug:          r.Slug,
+		Title:         r.Title,
+		StorageKey:    r.StorageKey,
+		Position:      r.Position,
+		CreatedBy:     r.CreatedBy,
+		CreatedByType: r.CreatedByType,
+		CreatedAt:     r.CreatedAt,
+		UpdatedAt:     r.UpdatedAt,
+		DeletedAt:     r.DeletedAt,
+	}
+}
+
+// DocumentRepo implements repository.DocumentRepository with PostgreSQL.
+type DocumentRepo struct {
+	db *sqlx.DB
+}
+
+// NewDocumentRepo creates a new DocumentRepo.
+func NewDocumentRepo(db *sqlx.DB) *DocumentRepo {
+	return &DocumentRepo{db: db}
+}
+
+func (r *DocumentRepo) Create(ctx context.Context, doc *domain.Document) error {
+	const q = `
+		INSERT INTO documents (
+			id, project_id, parent_id, slug, title, storage_key,
+			position, created_by, created_by_type, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+	`
+	_, err := r.db.ExecContext(ctx, q,
+		doc.ID, doc.ProjectID, doc.ParentID, doc.Slug, doc.Title, doc.StorageKey,
+		doc.Position, doc.CreatedBy, doc.CreatedByType, doc.CreatedAt, doc.UpdatedAt,
+	)
+	if isDocumentSlugConflict(err) {
+		return apierror.Conflict("a document with this slug already exists in this location")
+	}
+	return err
+}
+
+func (r *DocumentRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.Document, error) {
+	const q = `SELECT ` + documentSelectCols + ` FROM documents WHERE id = $1 AND deleted_at IS NULL`
+	var row documentRow
+	if err := r.db.GetContext(ctx, &row, q, id); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	d := row.toDomain()
+	return &d, nil
+}
+
+// GetByIDInWorkspace returns the document only when its project belongs to
+// workspaceID. Returns nil (no error) otherwise, so callers answer 404 without
+// telling the caller whether the id exists in some other tenant.
+func (r *DocumentRepo) GetByIDInWorkspace(ctx context.Context, id, workspaceID uuid.UUID) (*domain.Document, error) {
+	const q = `
+		SELECT ` + documentSelectColsQualified + `
+		  FROM documents d
+		  JOIN projects p ON d.project_id = p.id
+		 WHERE d.id = $1
+		   AND d.deleted_at IS NULL
+		   AND p.workspace_id = $2`
+	var row documentRow
+	if err := r.db.GetContext(ctx, &row, q, id, workspaceID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	d := row.toDomain()
+	return &d, nil
+}
+
+func (r *DocumentRepo) Update(ctx context.Context, doc *domain.Document) error {
+	const q = `
+		UPDATE documents
+		   SET title = $2, parent_id = $3, position = $4, updated_at = $5
+		 WHERE id = $1 AND deleted_at IS NULL`
+	res, err := r.db.ExecContext(ctx, q, doc.ID, doc.Title, doc.ParentID, doc.Position, doc.UpdatedAt)
+	if isDocumentSlugConflict(err) {
+		return apierror.Conflict("a document with this slug already exists in this location")
+	}
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return apierror.NotFound("Document")
+	}
+	return nil
+}
+
+// SoftDelete stamps deleted_at. The children go with it: ON DELETE CASCADE only
+// covers hard deletes, so the descendants are stamped in the same statement —
+// leaving them behind would strand a subtree with a deleted parent, invisible to
+// every listing but still holding its slug.
+func (r *DocumentRepo) SoftDelete(ctx context.Context, id uuid.UUID, at time.Time) error {
+	const q = `
+		WITH RECURSIVE subtree AS (
+			SELECT id FROM documents WHERE id = $1 AND deleted_at IS NULL
+			UNION ALL
+			SELECT d.id FROM documents d JOIN subtree s ON d.parent_id = s.id WHERE d.deleted_at IS NULL
+		)
+		UPDATE documents SET deleted_at = $2, updated_at = $2
+		 WHERE id IN (SELECT id FROM subtree)`
+	res, err := r.db.ExecContext(ctx, q, id, at)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return apierror.NotFound("Document")
+	}
+	return nil
+}
+
+func (r *DocumentRepo) ListByProject(ctx context.Context, projectID uuid.UUID, pg pagination.Params) (*pagination.Page[domain.Document], error) {
+	pg.Normalize()
+
+	const countQ = `SELECT COUNT(*) FROM documents WHERE project_id = $1 AND deleted_at IS NULL`
+	var totalCount int
+	if err := r.db.GetContext(ctx, &totalCount, countQ, projectID); err != nil {
+		return nil, err
+	}
+
+	// Ordered by the sibling order the tree renders in, with created_at as the
+	// tiebreak so a page boundary cannot repeat or skip a row when several
+	// documents share a position.
+	dataQ := fmt.Sprintf(
+		`SELECT `+documentSelectCols+`
+		   FROM documents
+		  WHERE project_id = $1 AND deleted_at IS NULL
+		  ORDER BY position ASC, created_at ASC, id ASC %s`,
+		paginationClause(pg),
+	)
+	var rows []documentRow
+	if err := r.db.SelectContext(ctx, &rows, dataQ, projectID); err != nil {
+		return nil, err
+	}
+
+	items := make([]domain.Document, len(rows))
+	for i := range rows {
+		items[i] = rows[i].toDomain()
+	}
+
+	return pagination.NewPage(items, totalCount, pg), nil
+}
+
+func (r *DocumentRepo) HasAncestor(ctx context.Context, docID, ancestorID uuid.UUID) (bool, error) {
+	const q = `
+		WITH RECURSIVE ancestors AS (
+			SELECT parent_id FROM documents WHERE id = $1
+			UNION ALL
+			SELECT d.parent_id FROM documents d JOIN ancestors a ON d.id = a.parent_id
+		)
+		SELECT EXISTS (SELECT 1 FROM ancestors WHERE parent_id = $2)`
+	var found bool
+	if err := r.db.GetContext(ctx, &found, q, docID, ancestorID); err != nil {
+		return false, err
+	}
+	return found, nil
+}
+
+// isDocumentSlugConflict reports whether err is the partial unique index on
+// (project, parent, slug) refusing a duplicate among live siblings — a caller
+// mistake worth a 409, not a 500. Constraint-named rather than code-only so an
+// unrelated future unique index does not inherit the wording.
+func isDocumentSlugConflict(err error) bool {
+	var pqErr *pq.Error
+	if !errors.As(err, &pqErr) || pqErr.Code != "23505" {
+		return false
+	}
+	return pqErr.Constraint == "uq_documents_sibling_slug" || pqErr.Constraint == "uq_documents_root_slug"
+}
