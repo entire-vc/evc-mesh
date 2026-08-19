@@ -156,22 +156,17 @@ export function ArtifactList({ taskId, refreshKey, projId, onRelayDocSelect }: A
     [handleUploadFiles],
   );
 
-  // Open = for TR private-share artifacts, build the authenticated docs URL
-  // directly from tr_public_url + ?agent_key= (both stored in metadata at upload
-  // time). For older artifacts without tr_agent_key in metadata, fall back to the
-  // preview-url endpoint which resolves the key server-side. For non-TR artifacts,
-  // use the S3 presigned URL.
-  const handleOpen = async (artifactId: string, trPublicUrl?: string, trAgentKey?: string) => {
+  // Open = for TR private-share artifacts, resolve an authenticated URL through
+  // the preview-url endpoint, which mints a short-lived embed token server-side.
+  // For non-TR artifacts, use the S3 presigned URL.
+  //
+  // This used to take a "fast path" when metadata carried tr_agent_key, building
+  // the URL client-side with ?agent_key=. That path was already unreachable — the
+  // API redacts tr_agent_key — and it is now impossible: the key is no longer
+  // stored on the artifact at all. Reading it here only hid the fact that the
+  // server-side branch is the one that always runs.
+  const handleOpen = async (artifactId: string, trPublicUrl?: string) => {
     if (trPublicUrl) {
-      if (trAgentKey) {
-        // Fast path: agent key is in metadata — build the authenticated URL directly.
-        const u = new URL(trPublicUrl);
-        u.searchParams.set("agent_key", trAgentKey);
-        window.open(u.toString(), "_blank");
-        return;
-      }
-      // Fallback for older artifacts (no tr_agent_key) or public shares: try the
-      // preview-url endpoint which appends the key server-side.
       if (projId) {
         try {
           const relayUrl =
@@ -358,9 +353,6 @@ export function ArtifactList({ taskId, refreshKey, projId, onRelayDocSelect }: A
                       artifact.id,
                       typeof artifact.metadata?.tr_public_url === "string"
                         ? artifact.metadata.tr_public_url
-                        : undefined,
-                      typeof artifact.metadata?.tr_agent_key === "string"
-                        ? artifact.metadata.tr_agent_key
                         : undefined,
                     )
                   }

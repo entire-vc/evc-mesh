@@ -154,7 +154,12 @@ func TestArtifactService_Upload_RelayPublishWritesPublicURL(t *testing.T) {
 		}, 2*time.Second, 10*time.Millisecond, "tr_public_url should be persisted to metadata")
 	})
 
-	t.Run("agent key is merged into metadata alongside public url", func(t *testing.T) {
+	// Flipped from "agent key is merged into metadata alongside public url", which
+	// asserted the behaviour this test now forbids. The share's agent key is a
+	// long-lived credential encrypted at rest in project_integrations; persisting
+	// a plaintext copy on every artifact made the weakest copy the one that
+	// defined its protection, and one API read path served it unredacted.
+	t.Run("agent key is never persisted to metadata even when the publisher returns one", func(t *testing.T) {
 		svc, artifactRepo, _ := setupArtifactService()
 		pub := &stubRelayPublisher{
 			publicURL: "https://relay.example.com/mesh/foo.md",
@@ -176,6 +181,10 @@ func TestArtifactService_Upload_RelayPublishWritesPublicURL(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, artifact)
 
+		// Wait on the public URL, not on the key: waiting for the key would only
+		// ever time out, so the assertion below must run after a state we can
+		// positively observe — otherwise it would pass against a publish that
+		// never happened at all.
 		assert.Eventually(t, func() bool {
 			md := artifactRepo.MetadataOf(artifact.ID)
 			if len(md) == 0 {
@@ -185,8 +194,15 @@ func TestArtifactService_Upload_RelayPublishWritesPublicURL(t *testing.T) {
 			if jErr := json.Unmarshal(md, &m); jErr != nil {
 				return false
 			}
-			return m["tr_agent_key"] == "tr_agent_abc123"
-		}, 2*time.Second, 10*time.Millisecond, "tr_agent_key should be persisted to metadata")
+			return m["tr_public_url"] == "https://relay.example.com/mesh/foo.md"
+		}, 2*time.Second, 10*time.Millisecond, "tr_public_url should be persisted to metadata")
+
+		var m map[string]any
+		require.NoError(t, json.Unmarshal(artifactRepo.MetadataOf(artifact.ID), &m))
+		assert.NotContains(t, m, "tr_agent_key",
+			"the share agent key must never be written to artifact metadata")
+		assert.NotContains(t, string(artifactRepo.MetadataOf(artifact.ID)), "tr_agent_abc123",
+			"the credential value must not appear in metadata under any key")
 	})
 
 	t.Run("no agent key leaves tr_agent_key absent from metadata", func(t *testing.T) {

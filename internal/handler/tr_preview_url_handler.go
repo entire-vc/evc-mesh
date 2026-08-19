@@ -37,9 +37,10 @@ func NewTrPreviewURLHandler(piService service.ProjectIntegrationService) *TrPrev
 // Returns { available: false } when TR is disabled or the slug doesn't match —
 // the frontend falls back to public scheme-substitution in those cases.
 //
-// When the web-publish supports /api/embed-token (D5-b), the returned iframe_src
-// uses a short-lived signed token instead of the long-lived agent key. Falls back
-// to the legacy ?agent_key= approach if the endpoint is not available.
+// The returned iframe_src always uses a short-lived signed token from
+// web-publish's /api/embed-token (D5-b). If that token cannot be obtained for any
+// reason, the response is { available: false } — the long-lived agent key is
+// never placed in a URL.
 func (h *TrPreviewURLHandler) Get(c echo.Context) error {
 	projectID, err := uuid.Parse(c.Param("proj_id"))
 	if err != nil {
@@ -98,15 +99,20 @@ func (h *TrPreviewURLHandler) Get(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid relay_url path"))
 	}
 
-	// Attempt D5-b: request a short-lived embed token from web-publish
+	// Request a short-lived embed token from web-publish (D5-b).
+	//
+	// There is deliberately no fallback here. This path previously answered a
+	// token failure by putting pi.AgentKey — the long-lived, non-rotating
+	// TeamRelay integration key we encrypt at rest — into the iframe URL's query
+	// string, where it reaches browser history, referrers, and any proxy log on
+	// the TeamRelay side. That triggered on ordinary transient failures (network,
+	// the 5s timeout, web-publish down), so a blip silently downgraded a
+	// short-lived token to a permanent credential. Reporting the preview as
+	// unavailable is the honest answer; the frontend already degrades to an
+	// "Open in Team Relay" link.
 	iframeSrc, tokenErr := h.fetchEmbedToken(c.Request().Context(), webBase, slug, docPath, pi.AgentKey)
 	if tokenErr != nil {
-		// Fall back to legacy ?agent_key= URL (backward compat with older web-publish)
-		baseU, _ := url.Parse(webBase + "/" + rawPath)
-		q := url.Values{}
-		q.Set("agent_key", pi.AgentKey)
-		baseU.RawQuery = q.Encode()
-		iframeSrc = baseU.String()
+		return c.JSON(http.StatusOK, map[string]any{"available": false})
 	}
 
 	return c.JSON(http.StatusOK, map[string]any{
