@@ -214,6 +214,14 @@ export function DocsPage() {
   const savedBodyRef = useRef("");
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Read by the "leaving the document" cleanup below, which runs on a render
+  // where docId is already the next document but these still hold the one being
+  // left behind.
+  const draftRef = useRef("");
+  draftRef.current = draft;
+  const openDocRef = useRef<ProjectDocument | null>(null);
+  openDocRef.current = openDoc;
+
   useEffect(() => {
     if (projectId) void fetchDocuments(projectId);
   }, [projectId, fetchDocuments]);
@@ -289,6 +297,24 @@ export function DocsPage() {
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     };
   }, [draft, editing, flushBody]);
+
+  // Picking another page in the tree, or leaving Docs entirely, happens well
+  // inside the two-second debounce. Without this the pending keystrokes are
+  // simply dropped, which is the one thing an autosaving editor must never do.
+  useEffect(() => {
+    return () => {
+      const doc = openDocRef.current;
+      if (!doc) return;
+      const body = draftRef.current;
+      if (body === savedBodyRef.current) return;
+      savedBodyRef.current = body;
+      void updateDocument(doc.id, { body }).catch((err: unknown) => {
+        toast.error(
+          `"${doc.title}" was not saved: ${errorMessage(err, "save failed")}`,
+        );
+      });
+    };
+  }, [docId, updateDocument]);
 
   const handleDone = useCallback(() => {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);

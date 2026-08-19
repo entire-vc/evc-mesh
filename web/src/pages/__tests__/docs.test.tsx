@@ -254,6 +254,40 @@ describe("DocsPage — open, view and edit", () => {
     expect(screen.getByRole("textbox")).toHaveValue("unsaved words");
   });
 
+  it("saves pending keystrokes when the document is left before the debounce fires", async () => {
+    const other = makeDoc({ id: "doc-2", title: "Other" });
+    const patched: unknown[] = [];
+    mockedApi.mockImplementation(
+      (path: string, opts?: { method?: string; body?: unknown }) => {
+        if (path === LIST_PATH && (opts?.method ?? "GET") === "GET") {
+          return Promise.resolve({ items: [doc, other], has_more: false });
+        }
+        if (path === "/api/v1/documents/doc-1" && opts?.method === "PATCH") {
+          patched.push(opts.body);
+          return Promise.resolve({ ...doc, body: "half-typed" });
+        }
+        if (path === "/api/v1/documents/doc-1") {
+          return Promise.resolve({ ...doc, body: "hello" });
+        }
+        if (path === "/api/v1/documents/doc-2") {
+          return Promise.resolve({ ...other, body: "" });
+        }
+        return Promise.reject(new Error(`unexpected: ${path}`));
+      },
+    );
+
+    const { unmount } = renderDocs("doc-1");
+    fireEvent.click(await screen.findByRole("button", { name: /edit/i }));
+    fireEvent.change(screen.getByRole("textbox"), {
+      target: { value: "half-typed" },
+    });
+
+    // Leaving well inside the 2s window.
+    unmount();
+
+    await waitFor(() => expect(patched).toEqual([{ body: "half-typed" }]));
+  });
+
   it("reports a document that cannot be loaded", async () => {
     mockRoutes([doc], (path) => {
       if (path === "/api/v1/documents/doc-1") {
