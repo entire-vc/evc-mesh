@@ -240,6 +240,28 @@ type ArtifactRepository interface {
 	UpdateMetadata(ctx context.Context, id uuid.UUID, metadata json.RawMessage) error
 }
 
+// DocumentRepository manages persistence for project documents. Every read here
+// hides soft-deleted rows; only Create and Update write.
+type DocumentRepository interface {
+	Create(ctx context.Context, doc *domain.Document) error
+	GetByID(ctx context.Context, id uuid.UUID) (*domain.Document, error)
+	// GetByIDInWorkspace is like GetByID but returns nil when the document's
+	// project does not belong to workspaceID — the defense-in-depth ownership
+	// check behind the /documents/:doc_id routes.
+	GetByIDInWorkspace(ctx context.Context, id, workspaceID uuid.UUID) (*domain.Document, error)
+	// Update writes title, parent_id, position and updated_at. Nothing else on a
+	// document is mutable: the body is in object storage, and project_id and slug
+	// are what its siblings are unique against.
+	Update(ctx context.Context, doc *domain.Document) error
+	// SoftDelete stamps deleted_at, freeing the slug for a new sibling.
+	SoftDelete(ctx context.Context, id uuid.UUID, at time.Time) error
+	ListByProject(ctx context.Context, projectID uuid.UUID, pg pagination.Params) (*pagination.Page[domain.Document], error)
+	// HasAncestor reports whether ancestorID appears above docID in the parent
+	// chain. Re-parenting uses it to refuse the cycles that would otherwise
+	// detach a subtree from every listing that walks down from the roots.
+	HasAncestor(ctx context.Context, docID, ancestorID uuid.UUID) (bool, error)
+}
+
 // AgentFilter defines filtering options for listing agents.
 type AgentFilter struct {
 	Status        *domain.AgentStatus

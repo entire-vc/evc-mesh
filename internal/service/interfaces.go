@@ -312,6 +312,47 @@ type ArtifactService interface {
 	ListByTask(ctx context.Context, taskID uuid.UUID, pg pagination.Params) (*pagination.Page[domain.Artifact], error)
 }
 
+// CreateDocumentInput holds parameters for creating a project document.
+// ProjectID comes from the route, never from the request body.
+type CreateDocumentInput struct {
+	ProjectID uuid.UUID  `json:"project_id"`
+	ParentID  *uuid.UUID `json:"parent_id"`
+	// Slug is optional; an empty one is derived from the title.
+	Slug     string `json:"slug"`
+	Title    string `json:"title"`
+	Body     string `json:"body"`
+	Position int    `json:"position"`
+
+	CreatedBy     uuid.UUID        `json:"created_by"`
+	CreatedByType domain.ActorType `json:"created_by_type"`
+}
+
+// UpdateDocumentInput holds the fields for partially updating a document. A nil
+// field is left alone.
+type UpdateDocumentInput struct {
+	Title    *string    `json:"title"`
+	ParentID *uuid.UUID `json:"parent_id"`
+	// ClearParent moves the document to the top level. It is a separate flag
+	// because an absent parent_id and a null one are the same nil pointer once
+	// bound — the same reason updateTaskRequest carries ClearReviewer.
+	ClearParent bool    `json:"clear_parent"`
+	Position    *int    `json:"position"`
+	Body        *string `json:"body"`
+}
+
+// DocumentService provides business logic for project documents: metadata in
+// Postgres, markdown body in object storage.
+type DocumentService interface {
+	Create(ctx context.Context, input CreateDocumentInput) (*domain.Document, error)
+	// GetByIDInWorkspace returns the document with its body, and only when it
+	// belongs to workspaceID (defense-in-depth after wsAccess).
+	GetByIDInWorkspace(ctx context.Context, id, workspaceID uuid.UUID) (*domain.Document, error)
+	Update(ctx context.Context, id, workspaceID uuid.UUID, input UpdateDocumentInput) (*domain.Document, error)
+	// Delete soft-deletes the document and its descendants; the stored body is kept.
+	Delete(ctx context.Context, id, workspaceID uuid.UUID) error
+	ListByProject(ctx context.Context, projectID uuid.UUID, pg pagination.Params) (*pagination.Page[domain.Document], error)
+}
+
 // RegisterAgentInput holds parameters for registering a new agent.
 type RegisterAgentInput struct {
 	WorkspaceID   uuid.UUID        `json:"workspace_id"`
