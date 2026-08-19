@@ -101,6 +101,12 @@ export interface DocEditorProps {
    * turns it into a URL, because the route is the page's business.
    */
   onCopyAnchor?: (anchor: DocAnchor) => void;
+  /**
+   * Extra classes for the outermost element. The page uses it to hand the
+   * editor a share of the column's height (`flex-1`); how much room there is
+   * to fill is the page's business, not this component's.
+   */
+  className?: string;
 }
 
 // The prose classes are shared by the editor and the viewer on purpose: they are
@@ -225,6 +231,7 @@ function MilkdownDoc({
   anchor,
   onAnchorResolved,
   onCopyAnchor,
+  className,
 }: DocEditorProps) {
   const navigate = useNavigate();
   const containerRef = useRef<HTMLDivElement>(null);
@@ -558,8 +565,12 @@ function MilkdownDoc({
   return (
     <div
       className={cn(
+        // Both modes are a flex column so the prose can be told to fill the
+        // height the page hands down; only the editor draws a box around it.
+        "flex flex-col",
         !readOnly &&
-          "flex flex-col rounded-lg border border-input bg-background focus-within:ring-2 focus-within:ring-ring",
+          "rounded-lg border border-input bg-background focus-within:ring-2 focus-within:ring-ring",
+        className,
       )}
     >
       {!readOnly && (
@@ -681,11 +692,16 @@ function MilkdownDoc({
         </form>
       )}
 
+      {/* `mesh-doc-editor-body` carries the fill down to the contenteditable
+          across the two wrapper elements Milkdown renders for itself, which
+          take no className from us — see doc-editor.css. No `min-h-0`: this box
+          must be free to grow past its share, or a long document would be
+          clipped instead of lengthening the page. */}
       <div
         ref={containerRef}
         onClick={handleClick}
         onContextMenu={handleContextMenu}
-        className={cn(!readOnly && "px-3 py-2")}
+        className={cn("mesh-doc-editor-body flex flex-1 flex-col", !readOnly && "px-3 py-2")}
       >
         <Milkdown />
       </div>
@@ -731,6 +747,7 @@ export function DocEditor({
   anchor,
   onAnchorResolved,
   onCopyAnchor,
+  className,
 }: DocEditorProps) {
   if (readOnly && !value.trim()) {
     return <p className="text-sm text-muted-foreground">This page is empty.</p>;
@@ -747,6 +764,7 @@ export function DocEditor({
         onChange={onChange}
         readOnly={readOnly}
         documentId={documentId}
+        className={className}
         anchor={anchor}
         onAnchorResolved={onAnchorResolved}
         onCopyAnchor={onCopyAnchor}

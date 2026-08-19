@@ -19,6 +19,40 @@
   word-break: break-word;
 }
 
+/*
+ * ---- filling the column ----
+ *
+ * The editable surface takes the height its box is given instead of stopping at
+ * min-h-[8rem] and leaving a dead area under it — an editor you cannot click
+ * into for most of its height reads as broken.
+ *
+ * This is a stylesheet rather than utility classes because the chain has to
+ * cross TWO elements we do not render and cannot put a className on:
+ * <Milkdown /> renders a wrapper, Milkdown puts its own `.milkdown` div inside
+ * that, and ProseMirror mounts the contenteditable inside THAT. Miss either one
+ * and the fill stops there — the editable area stays at its min-height while
+ * the box around it is tall, which is the bug this is here to fix.
+ *
+ * The selectors stay pinned to those two wrapper levels. A blanket
+ * `.mesh-doc-editor-body div` would also hit the divs inside the document
+ * itself (tables, code blocks) and turn the prose into flex boxes.
+ *
+ * `flex: 1 1 auto` everywhere, never `flex-basis: 0` and never `min-height: 0`:
+ * every box here must be able to fill the space that is there AND to outgrow it
+ * when the document is longer than the viewport. Growing is what keeps the
+ * single scroller on the page column instead of nesting one inside the editor.
+ */
+.mesh-doc-editor-body > div,
+.mesh-doc-editor-body > div > .milkdown {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+}
+
+.mesh-doc-editor-body .mesh-doc-prose {
+  flex: 1 1 auto;
+}
+
 /* ---- blocks ---- */
 
 .mesh-doc-prose > * + * {
