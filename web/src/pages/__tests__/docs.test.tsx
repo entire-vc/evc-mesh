@@ -416,3 +416,129 @@ describe("DocsPage — rename and delete", () => {
     });
   });
 });
+
+describe("DocsPage — move", () => {
+  const parent = makeDoc({ id: "p", title: "Parent" });
+  const child = makeDoc({ id: "c", title: "Child", parent_id: "p" });
+  const other = makeDoc({ id: "o", title: "Other", position: 1 });
+
+  function openMoveDialogFor(title: string) {
+    fireEvent.click(screen.getByLabelText(`Actions for ${title}`));
+    fireEvent.click(screen.getByText("Move to..."));
+  }
+
+  it("moves a document under another, sending parent_id", async () => {
+    let patched: unknown;
+    mockRoutes([parent, child, other], (path, opts) => {
+      if (path === "/api/v1/documents/c" && opts?.method === "PATCH") {
+        patched = opts.body;
+        return Promise.resolve({ ...child, parent_id: "o" });
+      }
+      return undefined;
+    });
+    renderDocs();
+
+    await screen.findByText("Child");
+    openMoveDialogFor("Child");
+    fireEvent.click(await screen.findByRole("option", { name: /Other/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Move" }));
+
+    await waitFor(() => expect(patched).toEqual({ parent_id: "o" }));
+  });
+
+  it("moves a document to the top level with clear_parent, not parent_id: null", async () => {
+    let patched: unknown;
+    mockRoutes([parent, child], (path, opts) => {
+      if (path === "/api/v1/documents/c" && opts?.method === "PATCH") {
+        patched = opts.body;
+        return Promise.resolve({ ...child, parent_id: null });
+      }
+      return undefined;
+    });
+    renderDocs();
+
+    await screen.findByText("Child");
+    openMoveDialogFor("Child");
+    fireEvent.click(await screen.findByRole("option", { name: /Top level/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Move" }));
+
+    // The distinction is load-bearing: the API binds parent_id into a *uuid.UUID,
+    // where an explicit null is indistinguishable from an omitted field, so a
+    // null here would be read as "leave the parent alone" and silently no-op.
+    await waitFor(() => expect(patched).toEqual({ clear_parent: true }));
+  });
+
+  it("does not offer the document itself or its descendants as a destination", async () => {
+    mockRoutes([parent, child, other]);
+    renderDocs();
+
+    await screen.findByText("Parent");
+    openMoveDialogFor("Parent");
+
+    await screen.findByRole("option", { name: /Top level/ });
+    expect(screen.getByRole("option", { name: /Other/ })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: /Parent/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: /Child/ })).not.toBeInTheDocument();
+  });
+
+  it("keeps Move disabled until a different parent is picked", async () => {
+    mockRoutes([parent, child, other]);
+    renderDocs();
+
+    await screen.findByText("Child");
+    openMoveDialogFor("Child");
+
+    // Opens on the current parent, so the button starts inert.
+    expect(await screen.findByRole("button", { name: "Move" })).toBeDisabled();
+
+    fireEvent.click(screen.getByRole("option", { name: /Other/ }));
+    expect(screen.getByRole("button", { name: "Move" })).toBeEnabled();
+  });
+
+  it("surfaces a refused move instead of closing as if it worked", async () => {
+    mockRoutes([parent, child, other], (path, opts) => {
+      if (path === "/api/v1/documents/c" && opts?.method === "PATCH") {
+        return Promise.reject(
+          new Error("a document with this slug already exists in this location"),
+        );
+      }
+      return undefined;
+    });
+    renderDocs();
+
+    await screen.findByText("Child");
+    openMoveDialogFor("Child");
+    fireEvent.click(await screen.findByRole("option", { name: /Other/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Move" }));
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(
+        "a document with this slug already exists in this location",
+      ),
+    );
+    // Still open: the user has to see the destination they picked was refused.
+    expect(screen.getByRole("button", { name: "Move" })).toBeInTheDocument();
+  });
+
+  it("re-parents the node in the tree after a move", async () => {
+    mockRoutes([parent, child, other], (path, opts) => {
+      if (path === "/api/v1/documents/c" && opts?.method === "PATCH") {
+        return Promise.resolve({ ...child, parent_id: "o" });
+      }
+      return undefined;
+    });
+    renderDocs();
+
+    await screen.findByText("Child");
+    openMoveDialogFor("Child");
+    fireEvent.click(await screen.findByRole("option", { name: /Other/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Move" }));
+
+    // Collapsing the new parent must take the moved node with it — that is the
+    // observable difference between "the store was updated" and "the tree was
+    // rebuilt from it".
+    await waitFor(() => expect(screen.getByLabelText("Collapse Other")).toBeInTheDocument());
+    fireEvent.click(screen.getByLabelText("Collapse Other"));
+    expect(screen.queryByText("Child")).not.toBeInTheDocument();
+  });
+});

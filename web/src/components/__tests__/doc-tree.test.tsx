@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
-import { DocTree, buildDocTree } from "@/components/doc-tree";
+import { DocTree, buildDocTree, moveTargets } from "@/components/doc-tree";
 import type { ProjectDocument } from "@/types";
 
 function makeDoc(overrides: Partial<ProjectDocument> & { id: string }): ProjectDocument {
@@ -37,6 +37,7 @@ function renderTree(overrides: Partial<Parameters<typeof DocTree>[0]> = {}) {
     onSelect: vi.fn(),
     onCreateChild: vi.fn(),
     onRename: vi.fn(),
+    onMove: vi.fn(),
     onDelete: vi.fn(),
     ...overrides,
   };
@@ -91,6 +92,38 @@ describe("buildDocTree", () => {
   });
 });
 
+describe("moveTargets", () => {
+  it("excludes the document itself and its whole subtree", () => {
+    const ids = moveTargets(DOCS, "child-a").map((t) => t.doc.id);
+
+    // "grandchild" is the descendant: offering it would be offering a move the
+    // server rejects, and one that would strand the subtree if it did not.
+    expect(ids).not.toContain("child-a");
+    expect(ids).not.toContain("grandchild");
+  });
+
+  it("offers every other document, in tree order with its depth", () => {
+    expect(moveTargets(DOCS, "child-a")).toEqual([
+      { doc: expect.objectContaining({ id: "root" }), depth: 0 },
+      { doc: expect.objectContaining({ id: "child-b" }), depth: 1 },
+    ]);
+  });
+
+  it("still offers the current parent, so the list does not shift under the user", () => {
+    const ids = moveTargets(DOCS, "grandchild").map((t) => t.doc.id);
+
+    expect(ids).toContain("child-a");
+  });
+
+  it("excludes a descendant reached through more than one level", () => {
+    const ids = moveTargets(DOCS, "root").map((t) => t.doc.id);
+
+    // Everything in this fixture sits under root, so a correct answer is empty.
+    // A prune that only skipped direct children would return the grandchild.
+    expect(ids).toEqual([]);
+  });
+});
+
 describe("DocTree", () => {
   it("renders the hierarchy with children visible by default", () => {
     renderTree();
@@ -141,12 +174,18 @@ describe("DocTree", () => {
     );
   });
 
-  it("exposes rename and delete in the per-node menu", () => {
+  it("exposes rename, move and delete in the per-node menu", () => {
     const props = renderTree();
 
     fireEvent.click(screen.getByLabelText("Actions for Child B"));
     fireEvent.click(screen.getByText("Rename"));
     expect(props.onRename).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "child-b" }),
+    );
+
+    fireEvent.click(screen.getByLabelText("Actions for Child B"));
+    fireEvent.click(screen.getByText("Move to..."));
+    expect(props.onMove).toHaveBeenCalledWith(
       expect.objectContaining({ id: "child-b" }),
     );
 
