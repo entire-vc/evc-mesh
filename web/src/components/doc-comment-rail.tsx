@@ -569,23 +569,23 @@ export function DocCommentToggle({
     >
       <MessageSquare className="h-3.5 w-3.5" />
       Comments
-      {totalCount > 0 && (
+      {/* The badge counts what is still OPEN, never the total. A document with
+          one resolved thread and nothing outstanding showing "1" reads as one
+          comment waiting for you, which is the opposite of what it means — so
+          that case gets a tick rather than a number. */}
+      {unresolvedCount > 0 ? (
         <span
-          className={cn(
-            "rounded px-1 text-[11px] font-medium tabular-nums",
-            unresolvedCount > 0
-              ? "bg-yellow-400/25 text-yellow-900 dark:text-yellow-200"
-              : "text-muted-foreground",
-          )}
-          title={
-            unresolvedCount > 0
-              ? `${unresolvedCount} open of ${totalCount}`
-              : "All resolved"
-          }
+          className="rounded bg-yellow-400/25 px-1 text-[11px] font-medium tabular-nums text-yellow-900 dark:text-yellow-200"
+          title={`${unresolvedCount} open of ${totalCount}`}
         >
-          {unresolvedCount > 0 ? unresolvedCount : totalCount}
+          {unresolvedCount}
         </span>
-      )}
+      ) : totalCount > 0 ? (
+        <Check
+          className="h-3.5 w-3.5 text-success"
+          aria-label={`All ${totalCount} resolved`}
+        />
+      ) : null}
     </Button>
   );
 }
