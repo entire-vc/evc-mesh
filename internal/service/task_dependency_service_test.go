@@ -695,3 +695,95 @@ func TestTaskDependencyService_Delete_ErrorPaths(t *testing.T) {
 		require.ErrorIs(t, svc2.Delete(ctx, dep.ID), assert.AnError)
 	})
 }
+
+// ---------------------------------------------------------------------------
+// TestTaskDependencyService_ListByTaskBothDirections
+// ---------------------------------------------------------------------------
+
+func TestTaskDependencyService_ListByTaskBothDirections(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("parent sees its subtask as incoming, child sees its parent as outgoing", func(t *testing.T) {
+		svc, _, taskRepo := setupTaskDependencyService()
+		child, parent := seedPair(taskRepo)
+		taskRepo.items[parent].Title = "Parent task"
+		taskRepo.items[child].Title = "Child task"
+
+		dep := &domain.TaskDependency{TaskID: child, DependsOnTaskID: parent, DependencyType: domain.DependencyTypeIsChildOf}
+		require.NoError(t, svc.Create(ctx, dep))
+
+		// From the child's side: the edge it created is outgoing.
+		outFromChild, inFromChild, err := svc.ListByTaskBothDirections(ctx, child)
+		require.NoError(t, err)
+		require.Len(t, outFromChild, 1)
+		assert.Empty(t, inFromChild)
+		assert.Equal(t, parent, outFromChild[0].DependsOnTaskID)
+		require.NotNil(t, outFromChild[0].RelatedTaskTitle)
+		assert.Equal(t, "Parent task", *outFromChild[0].RelatedTaskTitle)
+		require.NotNil(t, outFromChild[0].RelatedTaskStatusID)
+		assert.Equal(t, taskRepo.items[parent].StatusID, *outFromChild[0].RelatedTaskStatusID)
+
+		// From the parent's side: the same edge only shows up as incoming — this
+		// is exactly what ListByTask (task_id = $1 only) could never surface.
+		outFromParent, inFromParent, err := svc.ListByTaskBothDirections(ctx, parent)
+		require.NoError(t, err)
+		assert.Empty(t, outFromParent)
+		require.Len(t, inFromParent, 1)
+		assert.Equal(t, child, inFromParent[0].TaskID)
+		require.NotNil(t, inFromParent[0].RelatedTaskTitle)
+		assert.Equal(t, "Child task", *inFromParent[0].RelatedTaskTitle)
+	})
+
+	t.Run("related task deleted out from under the edge — edge kept, title nil", func(t *testing.T) {
+		svc, depRepo, taskRepo := setupTaskDependencyService()
+		child, parent := seedPair(taskRepo)
+		dep := &domain.TaskDependency{ID: uuid.New(), TaskID: child, DependsOnTaskID: parent, DependencyType: domain.DependencyTypeBlocks}
+		require.NoError(t, depRepo.Create(ctx, dep))
+
+		delete(taskRepo.items, parent) // simulate a hard-deleted related task
+
+		outgoing, _, err := svc.ListByTaskBothDirections(ctx, child)
+		require.NoError(t, err)
+		require.Len(t, outgoing, 1, "the edge itself must still be returned")
+		assert.Nil(t, outgoing[0].RelatedTaskTitle)
+		assert.Nil(t, outgoing[0].RelatedTaskStatusID)
+	})
+
+	t.Run("outgoing read failure propagates", func(t *testing.T) {
+		taskRepo := NewMockTaskRepository()
+		depRepo := &listByTaskFailDepRepo{NewMockTaskDependencyRepository(), assert.AnError}
+		svc := NewTaskDependencyService(depRepo, taskRepo, NewMockActivityLogRepository())
+
+		_, _, err := svc.ListByTaskBothDirections(ctx, uuid.New())
+		require.ErrorIs(t, err, assert.AnError)
+	})
+
+	t.Run("incoming read failure propagates", func(t *testing.T) {
+		taskRepo := NewMockTaskRepository()
+		depRepo := &listDependentsFailDepRepo{NewMockTaskDependencyRepository(), assert.AnError}
+		svc := NewTaskDependencyService(depRepo, taskRepo, NewMockActivityLogRepository())
+
+		_, _, err := svc.ListByTaskBothDirections(ctx, uuid.New())
+		require.ErrorIs(t, err, assert.AnError)
+	})
+}
+
+// listByTaskFailDepRepo fails only ListByTask; every other method is the real mock.
+type listByTaskFailDepRepo struct {
+	*MockTaskDependencyRepository
+	err error
+}
+
+func (r *listByTaskFailDepRepo) ListByTask(context.Context, uuid.UUID) ([]domain.TaskDependency, error) {
+	return nil, r.err
+}
+
+// listDependentsFailDepRepo fails only ListDependents; every other method is the real mock.
+type listDependentsFailDepRepo struct {
+	*MockTaskDependencyRepository
+	err error
+}
+
+func (r *listDependentsFailDepRepo) ListDependents(context.Context, uuid.UUID) ([]domain.TaskDependency, error) {
+	return nil, r.err
+}

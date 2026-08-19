@@ -321,6 +321,13 @@ export interface TaskDependency {
   depends_on_task_id: string;
   dependency_type: DependencyType;
   created_at: string;
+  related_task_title?: string;
+  related_task_status_id?: string;
+}
+
+export interface TaskDependencyList {
+  outgoing: TaskDependency[];
+  incoming: TaskDependency[];
 }
 
 export interface Agent {

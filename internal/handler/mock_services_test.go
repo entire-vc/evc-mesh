@@ -238,10 +238,11 @@ func (m *MockCommentService) GetHumanGateOwner(ctx context.Context, taskID uuid.
 
 // MockTaskDependencyService implements service.TaskDependencyService for testing.
 type MockTaskDependencyService struct {
-	CreateFunc     func(ctx context.Context, dep *domain.TaskDependency) error
-	DeleteFunc     func(ctx context.Context, id uuid.UUID) error
-	ListByTaskFunc func(ctx context.Context, taskID uuid.UUID) ([]domain.TaskDependency, error)
-	CheckCycleFunc func(ctx context.Context, taskID, dependsOnTaskID uuid.UUID) (bool, error)
+	CreateFunc                   func(ctx context.Context, dep *domain.TaskDependency) error
+	DeleteFunc                   func(ctx context.Context, id uuid.UUID) error
+	ListByTaskFunc               func(ctx context.Context, taskID uuid.UUID) ([]domain.TaskDependency, error)
+	ListByTaskBothDirectionsFunc func(ctx context.Context, taskID uuid.UUID) (outgoing, incoming []domain.EnrichedTaskDependency, err error)
+	CheckCycleFunc               func(ctx context.Context, taskID, dependsOnTaskID uuid.UUID) (bool, error)
 }
 
 func (m *MockTaskDependencyService) Create(ctx context.Context, dep *domain.TaskDependency) error {
@@ -263,6 +264,13 @@ func (m *MockTaskDependencyService) ListByTask(ctx context.Context, taskID uuid.
 		return m.ListByTaskFunc(ctx, taskID)
 	}
 	return nil, nil
+}
+
+func (m *MockTaskDependencyService) ListByTaskBothDirections(ctx context.Context, taskID uuid.UUID) (outgoing, incoming []domain.EnrichedTaskDependency, err error) {
+	if m.ListByTaskBothDirectionsFunc != nil {
+		return m.ListByTaskBothDirectionsFunc(ctx, taskID)
+	}
+	return nil, nil, nil
 }
 
 func (m *MockTaskDependencyService) CheckCycle(ctx context.Context, taskID, dependsOnTaskID uuid.UUID) (bool, error) {

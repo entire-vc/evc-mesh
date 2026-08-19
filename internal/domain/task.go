@@ -234,3 +234,14 @@ type TaskDependency struct {
 	DependencyType  DependencyType `json:"dependency_type" db:"dependency_type"`
 	CreatedAt       time.Time      `json:"created_at" db:"created_at"`
 }
+
+// EnrichedTaskDependency is a TaskDependency joined with the OTHER task in the
+// edge (title + status), so a client can render a name instead of the bare
+// UUID that used to be all the Dependencies tab had to show. RelatedTask* are
+// nil when that task no longer exists (e.g. hard-deleted) — the edge itself is
+// still returned rather than silently dropped.
+type EnrichedTaskDependency struct {
+	TaskDependency
+	RelatedTaskTitle    *string    `json:"related_task_title,omitempty"`
+	RelatedTaskStatusID *uuid.UUID `json:"related_task_status_id,omitempty"`
+}

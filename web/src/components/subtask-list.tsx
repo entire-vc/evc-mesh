@@ -14,9 +14,12 @@ import type { Task } from "@/types";
 interface SubtaskListProps {
   taskId: string;
   onOpenSubtask?: (subtaskId: string) => void;
+  /** Bump this to force a refetch — e.g. after a Dependencies-tab change that
+   *  may have added or removed a subtask via an is_child_of edge. */
+  refreshKey?: number;
 }
 
-export function SubtaskList({ taskId, onOpenSubtask }: SubtaskListProps) {
+export function SubtaskList({ taskId, onOpenSubtask, refreshKey }: SubtaskListProps) {
   const { wsSlug, projectSlug } = useParams();
   const navigate = useNavigate();
   const { statuses, projects } = useProjectStore();
@@ -42,7 +45,7 @@ export function SubtaskList({ taskId, onOpenSubtask }: SubtaskListProps) {
 
   useEffect(() => {
     void fetchSubtasks();
-  }, [fetchSubtasks]);
+  }, [fetchSubtasks, refreshKey]);
 
   const handleAdd = async (e: React.FormEvent) => {
     e.preventDefault();

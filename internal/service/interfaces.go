@@ -247,6 +247,13 @@ type TaskDependencyService interface {
 	Create(ctx context.Context, dep *domain.TaskDependency) error
 	Delete(ctx context.Context, id uuid.UUID) error
 	ListByTask(ctx context.Context, taskID uuid.UUID) ([]domain.TaskDependency, error)
+	// ListByTaskBothDirections returns taskID's dependencies split by direction,
+	// each enriched with the related task's title and status. Outgoing = edges
+	// where taskID is task_id (unchanged ListByTask semantics). Incoming = edges
+	// where taskID is depends_on_task_id — e.g. the is_child_of edges its own
+	// subtasks recorded, which ListByTask alone never surfaced because it only
+	// ever queried WHERE task_id = $1.
+	ListByTaskBothDirections(ctx context.Context, taskID uuid.UUID) (outgoing, incoming []domain.EnrichedTaskDependency, err error)
 	// CheckCycle validates that adding a dependency does not create a circular reference.
 	CheckCycle(ctx context.Context, taskID, dependsOnTaskID uuid.UUID) (bool, error)
 }
