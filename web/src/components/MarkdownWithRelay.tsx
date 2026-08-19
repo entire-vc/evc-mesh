@@ -1,6 +1,6 @@
 import { Fragment } from "react";
 import { MarkdownRenderer, type MentionEntry } from "@/components/markdown-renderer";
-import { RelayPreviewCard } from "@/components/RelayPreviewCard";
+import { RelayDocCard } from "@/components/RelayDocCard";
 
 interface Segment {
   type: "text" | "relay";
@@ -49,7 +49,10 @@ interface MarkdownWithRelayProps {
   projId?: string;
 }
 
-// Drop-in replacement for MarkdownRenderer that renders relay:// URLs as preview cards.
+// Drop-in replacement for MarkdownRenderer that renders relay:// URLs as the
+// document itself, opened in our own editor (D10). The splitting is unchanged:
+// the links are a pseudo-scheme in free text with no entity behind them, so the
+// strings people already wrote keep working and only what is drawn changed.
 export function MarkdownWithRelay({
   content,
   className,
@@ -75,7 +78,7 @@ export function MarkdownWithRelay({
     <div className={className}>
       {segments.map((seg, idx) =>
         seg.type === "relay" ? (
-          <RelayPreviewCard key={seg.value} relayUrl={seg.value} label={seg.label} projId={projId} />
+          <RelayDocCard key={seg.value} relayUrl={seg.value} label={seg.label} projId={projId} />
         ) : seg.value.trim() ? (
           <MarkdownRenderer
             key={idx}
