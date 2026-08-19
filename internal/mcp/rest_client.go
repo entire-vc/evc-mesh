@@ -479,13 +479,64 @@ func (c *RESTClient) GetTaskArtifacts(ctx context.Context, taskID string) (map[s
 	return c.ListArtifacts(ctx, taskID)
 }
 
-// GetTaskDependencies returns dependencies for a task.
-func (c *RESTClient) GetTaskDependencies(ctx context.Context, taskID string) ([]map[string]any, error) {
-	var result []map[string]any
-	if err := c.doJSON(ctx, http.MethodGet, "/api/v1/tasks/"+taskID+"/dependencies", nil, &result); err != nil {
+// GetTaskDependencies returns a task's dependencies, normalized to
+// {"outgoing": [...], "incoming": [...]} regardless of which server version
+// answered.
+//
+// Two shapes exist in the wild and BOTH must keep working:
+//
+//   - object, {"outgoing": [], "incoming": []} — since #544. A task's graph has
+//     two sides, and the old response carried only one.
+//   - bare array — every server older than #544, which includes any self-hosted
+//     instance that has not updated yet. This binary is handed out to run
+//     against those, so dropping the legacy shape would break them on upgrade
+//     of the CLIENT alone.
+//
+// Decoding straight into []map[string]any is what shipped with #544 and it is
+// why get_task(include_dependencies=true) failed outright against an updated
+// server: encoding/json cannot unmarshal an object into a slice, the handler
+// does not swallow that error, and the WHOLE get_task call returned an error —
+// not just the dependencies section.
+//
+// A legacy array is reported as outgoing, which is exactly what it was: the
+// pre-#544 endpoint returned only the edges the task itself declared.
+func (c *RESTClient) GetTaskDependencies(ctx context.Context, taskID string) (map[string]any, error) {
+	var raw json.RawMessage
+	if err := c.doJSON(ctx, http.MethodGet, "/api/v1/tasks/"+taskID+"/dependencies", nil, &raw); err != nil {
 		return nil, err
 	}
-	return result, nil
+
+	// Object first: a bare array fails to unmarshal into the struct, so the
+	// fallback below is reached only for the legacy shape. Probing in the other
+	// order would be ambiguous — `null` decodes happily into a slice.
+	var both struct {
+		Outgoing []map[string]any `json:"outgoing"`
+		Incoming []map[string]any `json:"incoming"`
+	}
+	if err := json.Unmarshal(raw, &both); err == nil {
+		return map[string]any{
+			"outgoing": nonNil(both.Outgoing),
+			"incoming": nonNil(both.Incoming),
+		}, nil
+	}
+
+	var legacy []map[string]any
+	if err := json.Unmarshal(raw, &legacy); err != nil {
+		return nil, fmt.Errorf("decode dependencies: unrecognized shape: %w", err)
+	}
+	return map[string]any{
+		"outgoing": nonNil(legacy),
+		"incoming": []map[string]any{},
+	}, nil
+}
+
+// nonNil keeps an absent list rendering as [] rather than null, so a caller
+// never has to tell "no dependencies" apart from "field missing".
+func nonNil(v []map[string]any) []map[string]any {
+	if v == nil {
+		return []map[string]any{}
+	}
+	return v
 }
 
 // UpdateAgent updates the current agent.

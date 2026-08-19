@@ -216,6 +216,9 @@ func (s *Server) handleGetTask(ctx context.Context, request mcpsdk.CallToolReque
 		if err != nil {
 			return errResult("failed to list dependencies: %v", err)
 		}
+		// Object with both directions since #544; GetTaskDependencies normalizes
+		// the pre-#544 bare array into the same shape, so this key is stable
+		// whichever server version answered.
 		resp["dependencies"] = deps
 	}
 
