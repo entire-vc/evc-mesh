@@ -42,6 +42,17 @@ interface MarkdownEditorProps {
   placeholder?: string;
   rows?: number;
   disabled?: boolean;
+  /**
+   * Replaces the footer hint. The default mentions task attachments, which is
+   * wrong wherever this editor is not editing a task (documents, for one).
+   */
+  hint?: string;
+  /**
+   * Attachments ride on the task artifact API, so they are unavailable when
+   * there is no task. Set false to drop the affordances entirely rather than
+   * offer buttons that insert a placeholder nothing will ever replace.
+   */
+  attachments?: boolean;
   /** Callback fired after a file is successfully uploaded as artifact */
   onArtifactUploaded?: (artifact: Artifact) => void;
   /** @deprecated Use onArtifactUploaded instead */
@@ -157,6 +168,8 @@ export function MarkdownEditor({
   placeholder = "Write a description... (Markdown supported)",
   rows = 6,
   disabled = false,
+  hint,
+  attachments = true,
   onArtifactUploaded,
   onImageUploaded,
   onPendingImage,
@@ -263,6 +276,7 @@ export function MarkdownEditor({
   // ---------------------------------------------------------------------------
   const handlePaste = useCallback(
     async (e: ClipboardEvent<HTMLTextAreaElement>) => {
+      if (!attachments) return;
       const items = Array.from(e.clipboardData.items);
       const imageItem = items.find((item) => item.type.startsWith("image/"));
       if (!imageItem) return;
@@ -306,7 +320,7 @@ export function MarkdownEditor({
         onPendingImage?.({ file: renamedFile, placeholder });
       }
     },
-    [taskId, onChange, insertText, notifyUploaded, onPendingImage],
+    [attachments, taskId, onChange, insertText, notifyUploaded, onPendingImage],
   );
 
   // ---------------------------------------------------------------------------
@@ -394,6 +408,7 @@ export function MarkdownEditor({
       e.preventDefault();
       e.stopPropagation();
       setDragOver(false);
+      if (!attachments) return;
 
       const files = Array.from(e.dataTransfer.files);
       if (!files.length) return;
@@ -402,7 +417,7 @@ export function MarkdownEditor({
         await handleUploadFile(file);
       }
     },
-    [handleUploadFile],
+    [attachments, handleUploadFile],
   );
 
   // Ref for the general file attachment picker (all file types)
@@ -430,21 +445,25 @@ export function MarkdownEditor({
         <ToolbarButton title="Bullet list" onClick={handleList}>
           <List className="h-3.5 w-3.5" />
         </ToolbarButton>
-        <ToolbarButton
-          title={taskId ? "Insert image" : "Insert image (available after task is created)"}
-          onClick={handleImageButtonClick}
-        >
-          <Image className="h-3.5 w-3.5" />
-        </ToolbarButton>
-        <ToolbarButton
-          title="Attach file"
-          onClick={() => attachInputRef.current?.click()}
-          disabled={!taskId}
-          disabledTooltip="Файл можно прикрепить после создания задачи"
-        >
-          <Paperclip className="h-3.5 w-3.5" />
-        </ToolbarButton>
-        {hasTrIntegration && (
+        {attachments && (
+          <>
+            <ToolbarButton
+              title={taskId ? "Insert image" : "Insert image (available after task is created)"}
+              onClick={handleImageButtonClick}
+            >
+              <Image className="h-3.5 w-3.5" />
+            </ToolbarButton>
+            <ToolbarButton
+              title="Attach file"
+              onClick={() => attachInputRef.current?.click()}
+              disabled={!taskId}
+              disabledTooltip="Файл можно прикрепить после создания задачи"
+            >
+              <Paperclip className="h-3.5 w-3.5" />
+            </ToolbarButton>
+          </>
+        )}
+        {hasTrIntegration && attachments && (
           <>
             <div className="mx-1 h-3.5 w-px bg-border" />
             <ToolbarButton title="Attach Obsidian doc" onClick={() => setPickerOpen(true)}>
@@ -545,12 +564,16 @@ export function MarkdownEditor({
       {/* Hint */}
       {!showPreview && (
         <div className="border-t border-border px-3 py-1 text-[11px] text-muted-foreground">
-          Markdown supported &middot; Paste, drop, or attach files
-          {!taskId && " (uploads after task is saved)"}
+          {hint ?? (
+            <>
+              Markdown supported &middot; Paste, drop, or attach files
+              {!taskId && " (uploads after task is saved)"}
+            </>
+          )}
         </div>
       )}
 
-      {hasTrIntegration && (
+      {hasTrIntegration && attachments && (
         <RelayDocPicker
           projId={projectId!}
           open={pickerOpen}

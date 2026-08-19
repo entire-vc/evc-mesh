@@ -419,7 +419,9 @@ function useCurrentView(): ProjectViewTab | null {
   if (path.endsWith("/list")) return "list";
   if (path.endsWith("/timeline")) return "timeline";
   if (path.endsWith("/calendar")) return "calendar";
-  if (path.endsWith("/docs")) return "docs";
+  // /docs and /docs/:docId are the same tab — matching only the bare path left
+  // an open document with no tab highlighted and no view strip at all.
+  if (/\/docs(\/[^/]+)?\/?$/.test(path)) return "docs";
   // Check if we're on a project page (board is the default project view)
   if (/\/w\/[^/]+\/p\/[^/]+\/?$/.test(path)) return "board";
   return null;
