@@ -9,6 +9,20 @@ vi.mock("@/hooks/useProjectTrIntegration", () => ({
 
 // The picker's own data source, stubbed so these tests are about the wiring in
 // each editor rather than about pagination.
+// Same reason as in doc-link-in-comments: this file's subject is the wiring in
+// each editor, not the content search, and leaving the search unmocked makes
+// every assertion here wait on a debounce first.
+vi.mock("@/lib/docs/document-search", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/docs/document-search")>(
+    "@/lib/docs/document-search",
+  );
+  return {
+    ...actual,
+    searchDocuments: vi.fn(async () => []),
+    searchRelayDocuments: vi.fn(async () => []),
+  };
+});
+
 vi.mock("@/lib/docs/linkable-documents", () => ({
   fetchLinkableDocuments: vi.fn(async () => [
     { id: "doc-1", title: "Deploy runbook" },

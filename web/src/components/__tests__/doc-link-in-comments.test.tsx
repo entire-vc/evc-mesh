@@ -21,6 +21,22 @@ vi.mock("@/lib/docs/linkable-documents", () => ({
   forgetLinkableDocuments: vi.fn(),
 }));
 
+// The content search too. Its subject is a different test file; leaving it
+// unmocked here makes this one wait on a debounce and a rejected request before
+// the local title matches render — which passes on a quiet machine and fails on
+// a loaded CI runner. A test that depends on how fast the box is does not test
+// what it says it does.
+vi.mock("@/lib/docs/document-search", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/docs/document-search")>(
+    "@/lib/docs/document-search",
+  );
+  return {
+    ...actual,
+    searchDocuments: vi.fn(async () => []),
+    searchRelayDocuments: vi.fn(async () => []),
+  };
+});
+
 import { CommentList } from "@/components/comment-list";
 import { useProjectStore } from "@/stores/project";
 import { useRulesStore } from "@/stores/rules";
