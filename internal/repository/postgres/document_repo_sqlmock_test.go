@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"testing"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	"github.com/entire-vc/evc-mesh/internal/repository"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 	"github.com/entire-vc/evc-mesh/pkg/pagination"
 )
@@ -38,12 +40,12 @@ func newDocumentRepoMock(t *testing.T) (*DocumentRepo, sqlmock.Sqlmock) {
 func documentRows(docs ...domain.Document) *sqlmock.Rows {
 	rows := sqlmock.NewRows([]string{
 		"id", "project_id", "parent_id", "slug", "title", "storage_key",
-		"position", "created_by", "created_by_type", "updated_by", "updated_by_type",
+		"position", "version", "created_by", "created_by_type", "updated_by", "updated_by_type",
 		"created_at", "updated_at", "deleted_at", "created_by_name", "updated_by_name",
 	})
 	for _, d := range docs {
 		rows.AddRow(d.ID, d.ProjectID, d.ParentID, d.Slug, d.Title, d.StorageKey,
-			d.Position, d.CreatedBy, d.CreatedByType, d.UpdatedBy, d.UpdatedByType,
+			d.Position, d.Version, d.CreatedBy, d.CreatedByType, d.UpdatedBy, d.UpdatedByType,
 			d.CreatedAt, d.UpdatedAt, d.DeletedAt, d.CreatedByName, d.UpdatedByName)
 	}
 	return rows
@@ -63,6 +65,7 @@ func sampleDocument() domain.Document {
 		Title:         "Runbook",
 		StorageKey:    "documents/p/d.md",
 		Position:      3,
+		Version:       4,
 		CreatedBy:     uuid.New(),
 		CreatedByType: domain.ActorTypeUser,
 		UpdatedBy:     &editor,
@@ -81,7 +84,7 @@ func TestDocumentRepo_Create(t *testing.T) {
 	mock.ExpectExec("INSERT INTO documents").
 		WithArgs(doc.ID, doc.ProjectID, doc.ParentID, doc.Slug, doc.Title, doc.StorageKey,
 			doc.Position, doc.CreatedBy, doc.CreatedByType, doc.UpdatedBy, doc.UpdatedByType,
-			doc.CreatedAt, doc.UpdatedAt).
+			doc.CreatedAt, doc.UpdatedAt, doc.Version).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	require.NoError(t, repo.Create(context.Background(), &doc))
@@ -234,22 +237,94 @@ func TestDocumentRepo_Update(t *testing.T) {
 	repo, mock := newDocumentRepoMock(t)
 	doc := sampleDocument()
 
-	mock.ExpectExec("UPDATE documents").
+	mock.ExpectQuery("UPDATE documents").
 		WithArgs(doc.ID, doc.Title, doc.ParentID, doc.Position, doc.UpdatedAt,
-			doc.UpdatedBy, doc.UpdatedByType).
-		WillReturnResult(sqlmock.NewResult(0, 1))
+			doc.UpdatedBy, doc.UpdatedByType, nil).
+		WillReturnRows(sqlmock.NewRows([]string{"version"}).AddRow(4))
 
-	require.NoError(t, repo.Update(context.Background(), &doc))
+	version, err := repo.Update(context.Background(), &doc, nil, false)
+	require.NoError(t, err)
+	assert.Equal(t, 4, version, "an update that did not touch the content leaves the version alone")
 	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// The bump is part of the same statement as the write, so a content change and
+// its version can never be separated by a crash between two statements.
+func TestDocumentRepo_Update_BumpsVersionInTheSameStatement(t *testing.T) {
+	repo, mock := newDocumentRepoMock(t)
+	doc := sampleDocument()
+
+	mock.ExpectQuery("SET title = .* version = version \\+ 1").
+		WillReturnRows(sqlmock.NewRows([]string{"version"}).AddRow(5))
+
+	version, err := repo.Update(context.Background(), &doc, nil, true)
+	require.NoError(t, err)
+	assert.Equal(t, 5, version)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// The expected version travels as a parameter of the UPDATE itself. A read
+// followed by a write would leave the window the check exists to close.
+func TestDocumentRepo_Update_ConditionalPredicateIsInTheWrite(t *testing.T) {
+	repo, mock := newDocumentRepoMock(t)
+	doc := sampleDocument()
+	expected := 4
+
+	mock.ExpectQuery("AND \\(\\$8::int IS NULL OR version = \\$8::int\\)").
+		WithArgs(doc.ID, doc.Title, doc.ParentID, doc.Position, doc.UpdatedAt,
+			doc.UpdatedBy, doc.UpdatedByType, expected).
+		WillReturnRows(sqlmock.NewRows([]string{"version"}).AddRow(5))
+
+	version, err := repo.Update(context.Background(), &doc, &expected, true)
+	require.NoError(t, err)
+	assert.Equal(t, 5, version)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// A conditional write that matched nothing while the row is alive is a version
+// conflict, and the caller is told the version it is actually at — without that
+// number a retry is a guess.
+func TestDocumentRepo_Update_VersionMismatchReportsCurrent(t *testing.T) {
+	repo, mock := newDocumentRepoMock(t)
+	doc := sampleDocument()
+	expected := 4
+
+	mock.ExpectQuery("UPDATE documents").WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery("SELECT version FROM documents").
+		WithArgs(doc.ID).
+		WillReturnRows(sqlmock.NewRows([]string{"version"}).AddRow(9))
+
+	current, err := repo.Update(context.Background(), &doc, &expected, true)
+
+	require.ErrorIs(t, err, repository.ErrDocumentVersionMismatch)
+	assert.Equal(t, 9, current, "the version the row is actually at, so the caller can re-read it")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// The same "matched nothing" against a row that is gone is a 404, not a
+// conflict. Telling those apart is what the second query is for.
+func TestDocumentRepo_Update_ConditionalOnMissingRowIsNotFound(t *testing.T) {
+	repo, mock := newDocumentRepoMock(t)
+	doc := sampleDocument()
+	expected := 4
+
+	mock.ExpectQuery("UPDATE documents").WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery("SELECT version FROM documents").WillReturnError(sql.ErrNoRows)
+
+	_, err := repo.Update(context.Background(), &doc, &expected, true)
+
+	var apiErr *apierror.Error
+	require.ErrorAs(t, err, &apiErr)
+	assert.Equal(t, 404, apiErr.StatusCode())
 }
 
 func TestDocumentRepo_Update_NoRowsIsNotFound(t *testing.T) {
 	repo, mock := newDocumentRepoMock(t)
 	doc := sampleDocument()
 
-	mock.ExpectExec("UPDATE documents").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery("UPDATE documents").WillReturnError(sql.ErrNoRows)
 
-	err := repo.Update(context.Background(), &doc)
+	_, err := repo.Update(context.Background(), &doc, nil, false)
 
 	var apiErr *apierror.Error
 	require.ErrorAs(t, err, &apiErr)
@@ -262,14 +337,74 @@ func TestDocumentRepo_Update_SlugConflictOnReparent(t *testing.T) {
 	repo, mock := newDocumentRepoMock(t)
 	doc := sampleDocument()
 
-	mock.ExpectExec("UPDATE documents").
+	mock.ExpectQuery("UPDATE documents").
 		WillReturnError(&pq.Error{Code: "23505", Constraint: "uq_documents_sibling_slug"})
 
-	err := repo.Update(context.Background(), &doc)
+	_, err := repo.Update(context.Background(), &doc, nil, false)
 
 	var apiErr *apierror.Error
 	require.ErrorAs(t, err, &apiErr)
 	assert.Equal(t, 409, apiErr.StatusCode())
+}
+
+// --- path addressing ---
+
+func TestDocumentRepo_GetByPathInProject(t *testing.T) {
+	repo, mock := newDocumentRepoMock(t)
+	doc := sampleDocument()
+	projID := uuid.New()
+
+	mock.ExpectQuery("WITH RECURSIVE seg").
+		WithArgs(projID, pq.Array([]string{"architecture", "adr", "adr-004"})).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "depth"}).AddRow(doc.ID, 3))
+	mock.ExpectQuery("FROM documents d").WillReturnRows(documentRows(doc))
+
+	got, depth, err := repo.GetByPathInProject(context.Background(), projID,
+		[]string{"architecture", "adr", "adr-004"})
+
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, doc.ID, got.ID)
+	assert.Equal(t, 3, depth)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// A path that only resolves part-way returns how far it got, so the caller can
+// name the segment that failed instead of only saying "not found".
+func TestDocumentRepo_GetByPathInProject_PartialWalkReportsDepth(t *testing.T) {
+	repo, mock := newDocumentRepoMock(t)
+
+	mock.ExpectQuery("WITH RECURSIVE seg").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "depth"}).AddRow(uuid.New(), 2))
+
+	got, depth, err := repo.GetByPathInProject(context.Background(), uuid.New(),
+		[]string{"architecture", "adr", "adr-004"})
+
+	require.NoError(t, err)
+	assert.Nil(t, got)
+	assert.Equal(t, 2, depth, "two segments resolved; the third is the one to name")
+}
+
+func TestDocumentRepo_GetByPathInProject_NoSegmentsMatched(t *testing.T) {
+	repo, mock := newDocumentRepoMock(t)
+
+	mock.ExpectQuery("WITH RECURSIVE seg").WillReturnError(sql.ErrNoRows)
+
+	got, depth, err := repo.GetByPathInProject(context.Background(), uuid.New(), []string{"nope"})
+
+	require.NoError(t, err)
+	assert.Nil(t, got)
+	assert.Equal(t, 0, depth)
+}
+
+func TestDocumentRepo_GetByPathInProject_EmptyPath(t *testing.T) {
+	repo, _ := newDocumentRepoMock(t)
+
+	got, depth, err := repo.GetByPathInProject(context.Background(), uuid.New(), nil)
+
+	require.NoError(t, err)
+	assert.Nil(t, got)
+	assert.Equal(t, 0, depth)
 }
 
 func TestDocumentRepo_SoftDelete(t *testing.T) {

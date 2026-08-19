@@ -20,6 +20,17 @@ type Document struct {
 	StorageKey string     `json:"storage_key" db:"storage_key"`
 	Position   int        `json:"position" db:"position"`
 
+	// Version is a monotonic counter bumped by every write to the body or the
+	// title. It is what makes a conditional write possible: a caller sends back
+	// the version it read as base_version, and a write whose base_version no
+	// longer matches is refused instead of silently overwriting somebody else's
+	// edit. A move in the tree does not bump it — see
+	// migrations/20260820101_document_version.sql.
+	//
+	// Always populated on a read, so every caller has the value it would need to
+	// write safely without asking for it specially.
+	Version int `json:"version" db:"version"`
+
 	CreatedBy     uuid.UUID `json:"created_by" db:"created_by"`
 	CreatedByType ActorType `json:"created_by_type" db:"created_by_type"`
 

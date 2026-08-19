@@ -2510,6 +2510,10 @@ type MockDocumentRepository struct {
 	failSearchTextOnly bool
 	errToReturn        error
 	createErr          error
+	// beforeUpdate runs once, inside Update, before the version is compared. It is
+	// how a test lands a competing write in the gap between "the service read the
+	// document" and "the service wrote it" without needing real concurrency.
+	beforeUpdate func()
 }
 
 func NewMockDocumentRepository() *MockDocumentRepository {
@@ -2581,19 +2585,80 @@ func (m *MockDocumentRepository) GetByIDInWorkspace(_ context.Context, id, works
 	return &copied, nil
 }
 
-func (m *MockDocumentRepository) Update(_ context.Context, doc *domain.Document) error {
-	if m.errToReturn != nil {
-		return m.errToReturn
+// Update mirrors the real conditional write: the version compare, the bump and
+// the field writes happen together under the lock, so a test can drive two
+// interleaved writers and see the same refusal production would give.
+//
+// beforeUpdate, when set, runs after the row has been read and before it is
+// compared — the seam a test uses to land a competing write in the middle of
+// this one.
+func (m *MockDocumentRepository) Update(_ context.Context, doc *domain.Document, expectedVersion *int, bumpVersion bool) (int, error) {
+	// The hook runs before errToReturn is read, so a test can arm a failure that
+	// applies to this write only and not to the read that preceded it.
+	if m.beforeUpdate != nil {
+		hook := m.beforeUpdate
+		m.beforeUpdate = nil
+		hook()
 	}
+	if m.errToReturn != nil {
+		return 0, m.errToReturn
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	existing, ok := m.items[doc.ID]
 	if !ok || existing.DeletedAt != nil {
-		return apierror.NotFound("Document")
+		return 0, apierror.NotFound("Document")
+	}
+	if expectedVersion != nil && existing.Version != *expectedVersion {
+		return existing.Version, repository.ErrDocumentVersionMismatch
+	}
+
+	newVersion := existing.Version
+	if bumpVersion {
+		newVersion++
 	}
 	copied := *doc
+	copied.Version = newVersion
 	m.items[doc.ID] = &copied
-	return nil
+	return newVersion, nil
+}
+
+// GetByPathInProject walks the slug path the same way the recursive CTE does,
+// including the part that matters: a soft-deleted document is not a step, at any
+// level.
+func (m *MockDocumentRepository) GetByPathInProject(_ context.Context, projectID uuid.UUID, segments []string) (*domain.Document, int, error) {
+	if m.errToReturn != nil {
+		return nil, 0, m.errToReturn
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	var parent *uuid.UUID
+	var current *domain.Document
+	for depth, slug := range segments {
+		current = nil
+		for _, d := range m.items {
+			if d.ProjectID != projectID || d.DeletedAt != nil || d.Slug != slug {
+				continue
+			}
+			if (parent == nil) != (d.ParentID == nil) {
+				continue
+			}
+			if parent != nil && *parent != *d.ParentID {
+				continue
+			}
+			current = d
+			break
+		}
+		if current == nil {
+			return nil, depth, nil
+		}
+		id := current.ID
+		parent = &id
+	}
+	copied := *current
+	return &copied, len(segments), nil
 }
 
 func (m *MockDocumentRepository) SoftDelete(_ context.Context, id uuid.UUID, at time.Time, by uuid.UUID, byType domain.ActorType) error {
