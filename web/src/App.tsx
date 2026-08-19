@@ -16,6 +16,7 @@ import { InitiativesPage } from "@/pages/initiatives";
 import { TriagePage } from "@/pages/triage";
 import { ProjectUpdatesPage } from "@/pages/project-updates";
 import { CalendarPage } from "@/pages/calendar";
+import { DocsPage } from "@/pages/docs";
 import { WorkspaceSettingsPage } from "@/pages/workspace-settings";
 import NotificationSettingsPage from "@/pages/notification-settings";
 import { OrgChartPage } from "@/pages/org-chart";
@@ -143,6 +144,10 @@ export function App() {
           <Route
             path="w/:wsSlug/p/:projectSlug/calendar"
             element={<CalendarPage />}
+          />
+          <Route
+            path="w/:wsSlug/p/:projectSlug/docs"
+            element={<DocsPage />}
           />
           <Route
             path="w/:wsSlug/p/:projectSlug/updates"

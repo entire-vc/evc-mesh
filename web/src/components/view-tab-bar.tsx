@@ -4,11 +4,14 @@ import {
   Bookmark,
   BookmarkPlus,
   Calendar,
+  Check,
   Columns3,
+  FileText,
   FilterX,
   GitBranch,
   List,
   MoreVertical,
+  NotebookText,
   Share2,
   Trash2,
 } from "lucide-react";
@@ -32,10 +35,10 @@ import { Input } from "@/components/ui/input";
 import { useSavedViewStore } from "@/stores/saved-view-store";
 import { isBoardFiltersAtDefault } from "@/lib/board-saved-view";
 import { toast } from "@/components/ui/toast";
-import type { ViewType } from "@/types";
+import type { ProjectViewTab, ViewType } from "@/types";
 
 interface ViewTabBarProps {
-  currentView: "board" | "list" | "timeline" | "calendar";
+  currentView: ProjectViewTab;
   wsSlug: string;
   projectSlug: string;
   projectId?: string;
@@ -56,16 +59,33 @@ const TABS = [
     path: (ws: string, proj: string) => `/w/${ws}/p/${proj}/list`,
   },
   {
+    id: "calendar" as const,
+    label: "Calendar",
+    Icon: Calendar,
+    path: (ws: string, proj: string) => `/w/${ws}/p/${proj}/calendar`,
+  },
+  {
+    id: "docs" as const,
+    label: "Docs",
+    Icon: NotebookText,
+    path: (ws: string, proj: string) => `/w/${ws}/p/${proj}/docs`,
+  },
+] as const;
+
+// Secondary formats — reachable from the kebab rather than the strip, which is
+// capped at four tabs so it still fits next to the breadcrumbs on a laptop.
+const FORMATS = [
+  {
     id: "timeline" as const,
     label: "Timeline",
     Icon: GitBranch,
     path: (ws: string, proj: string) => `/w/${ws}/p/${proj}/timeline`,
   },
   {
-    id: "calendar" as const,
-    label: "Calendar",
-    Icon: Calendar,
-    path: (ws: string, proj: string) => `/w/${ws}/p/${proj}/calendar`,
+    id: "updates" as const,
+    label: "Updates",
+    Icon: FileText,
+    path: (ws: string, proj: string) => `/w/${ws}/p/${proj}/updates`,
   },
 ] as const;
 
@@ -75,6 +95,11 @@ const VIEW_TYPE_PATH: Record<ViewType, (ws: string, proj: string) => string> = {
   timeline: (ws, proj) => `/w/${ws}/p/${proj}/timeline`,
   calendar: (ws, proj) => `/w/${ws}/p/${proj}/calendar`,
 };
+
+// Docs has no server-side saved-view type, so it must not reach createView().
+function isSavedViewType(view: ProjectViewTab): view is ViewType {
+  return view !== "docs";
+}
 
 export function ViewTabBar({
   currentView,
@@ -105,6 +130,8 @@ export function ViewTabBar({
       fetchViews(projectId);
     }
   }, [projectId, fetchViews]);
+
+  const activeFormat = FORMATS.find((f) => f.id === currentView);
 
   // Filter views for current view type
   const relevantViews = views.filter((v) => v.view_type === currentView);
@@ -152,7 +179,7 @@ export function ViewTabBar({
   };
 
   const handleSave = async () => {
-    if (!saveName.trim() || !projectId) return;
+    if (!saveName.trim() || !projectId || !isSavedViewType(currentView)) return;
     setIsSaving(true);
     try {
       await createView(projectId, {
@@ -202,91 +229,133 @@ export function ViewTabBar({
           );
         })}
 
-        {/* Saved Views menu */}
-        {projectId && (
-          <div className="ml-1 flex items-center border-l border-border pl-1">
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <button
-                  className="flex h-7 w-7 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
-                  title="Saved views"
-                >
-                  <MoreVertical className="h-3.5 w-3.5" />
-                </button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="start" className="w-56">
-                {/* Save current view */}
-                <DropdownMenuItem
-                  onClick={() => setSaveDialogOpen(true)}
-                  className="gap-2"
-                >
-                  <BookmarkPlus className="h-3.5 w-3.5" />
-                  Save current view
-                </DropdownMenuItem>
-
-                {/* Reset filters — board only; list/timeline/calendar don't
-                    report their filter state into currentViewState. */}
-                {currentView === "board" && (
+        {/* Formats + saved views */}
+        <div className="ml-1 flex items-center border-l border-border pl-1">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                className={cn(
+                  "flex h-7 w-7 items-center justify-center rounded hover:bg-muted hover:text-foreground",
+                  // The strip cannot show an active state for a format that
+                  // lives inside the menu, so the trigger carries it instead.
+                  activeFormat
+                    ? "bg-muted text-foreground"
+                    : "text-muted-foreground",
+                )}
+                title={
+                  activeFormat
+                    ? `${activeFormat.label} - more views`
+                    : "More views"
+                }
+              >
+                <MoreVertical className="h-3.5 w-3.5" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-56">
+              <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                Formats
+              </DropdownMenuLabel>
+              {FORMATS.map(({ id, label, Icon, path }) => {
+                const isActive = currentView === id;
+                return (
                   <DropdownMenuItem
-                    onClick={filtersAtDefault ? undefined : handleResetFilters}
-                    aria-disabled={filtersAtDefault}
-                    className={cn(
-                      "gap-2",
-                      filtersAtDefault && "pointer-events-none opacity-50",
-                    )}
+                    key={id}
+                    onClick={() => {
+                      if (!isActive) {
+                        navigate(path(wsSlug, projectSlug));
+                      }
+                    }}
+                    className="gap-2"
+                    aria-current={isActive ? "page" : undefined}
                   >
-                    <FilterX className="h-3.5 w-3.5" />
-                    Reset filters
+                    <Icon className="h-3.5 w-3.5" />
+                    <span className="flex-1">{label}</span>
+                    {isActive && <Check className="h-3.5 w-3.5" />}
                   </DropdownMenuItem>
-                )}
+                );
+              })}
 
-                {/* Personal views */}
-                {personalViews.length > 0 && (
-                  <>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-muted-foreground">
-                      My views
-                    </DropdownMenuLabel>
-                    {personalViews.map((view) => (
-                      <SavedViewRow
-                        key={view.id}
-                        view={view}
-                        onApply={() => handleApply(view)}
-                        onToggleShare={() => void handleToggleShare(view)}
-                        onDelete={() => void handleDelete(view)}
-                      />
-                    ))}
-                  </>
-                )}
+              {/* Saved views need a project to scope them to. */}
+              {projectId && (
+                <>
+                  <DropdownMenuSeparator />
 
-                {/* Shared views */}
-                {sharedViews.length > 0 && (
-                  <>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-muted-foreground">
-                      Shared views
-                    </DropdownMenuLabel>
-                    {sharedViews.map((view) => (
-                      <SavedViewRow
-                        key={view.id}
-                        view={view}
-                        onApply={() => handleApply(view)}
-                        onToggleShare={() => void handleToggleShare(view)}
-                        onDelete={() => void handleDelete(view)}
-                      />
-                    ))}
-                  </>
-                )}
+                  {/* Docs has no server-side saved-view type, so it can't be
+                      saved as one. */}
+                  {isSavedViewType(currentView) && (
+                    <DropdownMenuItem
+                      onClick={() => setSaveDialogOpen(true)}
+                      className="gap-2"
+                    >
+                      <BookmarkPlus className="h-3.5 w-3.5" />
+                      Save current view
+                    </DropdownMenuItem>
+                  )}
 
-                {!hasViews && (
-                  <div className="px-2 py-2 text-center text-xs text-muted-foreground">
-                    No saved views yet
-                  </div>
-                )}
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </div>
-        )}
+                  {/* Reset filters — board only; list/timeline/calendar don't
+                      report their filter state into currentViewState. */}
+                  {currentView === "board" && (
+                    <DropdownMenuItem
+                      onClick={filtersAtDefault ? undefined : handleResetFilters}
+                      aria-disabled={filtersAtDefault}
+                      className={cn(
+                        "gap-2",
+                        filtersAtDefault && "pointer-events-none opacity-50",
+                      )}
+                    >
+                      <FilterX className="h-3.5 w-3.5" />
+                      Reset filters
+                    </DropdownMenuItem>
+                  )}
+
+                  {/* Personal views */}
+                  {personalViews.length > 0 && (
+                    <>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                        My views
+                      </DropdownMenuLabel>
+                      {personalViews.map((view) => (
+                        <SavedViewRow
+                          key={view.id}
+                          view={view}
+                          onApply={() => handleApply(view)}
+                          onToggleShare={() => void handleToggleShare(view)}
+                          onDelete={() => void handleDelete(view)}
+                        />
+                      ))}
+                    </>
+                  )}
+
+                  {/* Shared views */}
+                  {sharedViews.length > 0 && (
+                    <>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                        Shared views
+                      </DropdownMenuLabel>
+                      {sharedViews.map((view) => (
+                        <SavedViewRow
+                          key={view.id}
+                          view={view}
+                          onApply={() => handleApply(view)}
+                          onToggleShare={() => void handleToggleShare(view)}
+                          onDelete={() => void handleDelete(view)}
+                        />
+                      ))}
+                    </>
+                  )}
+
+                  {!hasViews && (
+                    <div className="px-2 py-2 text-center text-xs text-muted-foreground">
+                      No saved views yet
+                    </div>
+                  )}
+                </>
+              )}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
       </div>
 
       {/* Save view dialog */}
