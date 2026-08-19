@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -22,16 +23,33 @@ func NewProjectMemberRepo(db *sqlx.DB) *ProjectMemberRepo {
 	return &ProjectMemberRepo{db: db}
 }
 
+// Create inserts a project membership row. workspace_id is derived from the
+// project itself (never taken from the caller) so it can never disagree with
+// fk_pm_project_workspace, and so a caller cannot forge tenancy by passing a
+// mismatched value — there isn't one to pass. A project_id that does not
+// resolve leaves the SELECT empty rather than raising the usual FK error, so
+// RowsAffected is checked explicitly instead of silently reporting success.
 func (r *ProjectMemberRepo) Create(ctx context.Context, member *domain.ProjectMember) error {
 	const q = `
-		INSERT INTO project_members (id, project_id, user_id, agent_id, role, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		INSERT INTO project_members (id, project_id, workspace_id, user_id, agent_id, role, created_at, updated_at)
+		SELECT $1, $2, p.workspace_id, $3, $4, $5, $6, $7
+		FROM projects p WHERE p.id = $2
 	`
-	_, err := r.db.ExecContext(ctx, q,
+	res, err := r.db.ExecContext(ctx, q,
 		member.ID, member.ProjectID, member.UserID, member.AgentID,
 		member.Role, member.CreatedAt, member.UpdatedAt,
 	)
-	return err
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return fmt.Errorf("project_member_repo: project %s not found", member.ProjectID)
+	}
+	return nil
 }
 
 func (r *ProjectMemberRepo) GetByProjectAndUser(ctx context.Context, projectID, userID uuid.UUID) (*domain.ProjectMember, error) {
