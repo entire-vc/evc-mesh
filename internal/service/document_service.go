@@ -153,6 +153,8 @@ func (s *documentService) Create(ctx context.Context, input CreateDocumentInput)
 		return nil, err
 	}
 
+	s.indexBody(ctx, doc.ID, input.Body)
+
 	return doc, nil
 }
 
@@ -200,6 +202,9 @@ func (s *documentService) Update(ctx context.Context, id, workspaceID uuid.UUID,
 	if doc == nil {
 		return nil, apierror.NotFound("Document")
 	}
+
+	// Set when this call replaces the body, so the index is rewritten only then.
+	var indexedBody *string
 
 	if input.Title != nil {
 		title := strings.TrimSpace(*input.Title)
@@ -259,6 +264,7 @@ func (s *documentService) Update(ctx context.Context, id, workspaceID uuid.UUID,
 			return nil, apierror.InternalError("failed to upload document body to storage")
 		}
 		doc.Body = *input.Body
+		indexedBody = input.Body
 	}
 
 	// Stamped on every path that reaches the write, not per-field: a caller who
@@ -271,6 +277,12 @@ func (s *documentService) Update(ctx context.Context, id, workspaceID uuid.UUID,
 	doc.UpdatedByType = &updatedByType
 	if upErr := s.documentRepo.Update(ctx, doc); upErr != nil {
 		return nil, upErr
+	}
+
+	// Only when the body actually changed. A rename or a move must not rewrite a
+	// megabyte of search text to store the same bytes back.
+	if indexedBody != nil {
+		s.indexBody(ctx, doc.ID, *indexedBody)
 	}
 
 	// Re-read so the caller gets the resolved display names alongside the ids —
@@ -307,6 +319,52 @@ func (s *documentService) Delete(ctx context.Context, id, workspaceID, deletedBy
 func (s *documentService) ListByProject(ctx context.Context, projectID uuid.UUID, pg pagination.Params) (*pagination.Page[domain.Document], error) {
 	pg.Normalize()
 	return s.documentRepo.ListByProject(ctx, projectID, pg)
+}
+
+// maxSearchResults caps a page of hits. A picker shows a handful; a caller that
+// wants the whole project has ListByProject.
+const maxSearchResults = 50
+
+// defaultSearchResults is what a caller gets for asking without saying.
+const defaultSearchResults = 20
+
+func (s *documentService) Search(
+	ctx context.Context,
+	projectID, workspaceID uuid.UUID,
+	query string,
+	limit int,
+) ([]domain.DocumentSearchHit, error) {
+	q := strings.TrimSpace(query)
+	if q == "" {
+		// Not "everything". An empty query through a search endpoint is a caller
+		// bug or an unguarded keystroke, and answering it with the project's whole
+		// document set is how a search box becomes a full-table scan on every
+		// backspace.
+		return nil, apierror.ValidationError(map[string]string{
+			"q": "q is required",
+		})
+	}
+	if limit <= 0 {
+		limit = defaultSearchResults
+	}
+	if limit > maxSearchResults {
+		limit = maxSearchResults
+	}
+	return s.documentRepo.SearchInProject(ctx, projectID, workspaceID, q, limit)
+}
+
+// indexBody records the text the search index is built from.
+//
+// Deliberately non-fatal. The body is already in object storage by the time this
+// runs, and that is the copy that matters: failing the caller's save because the
+// INDEX could not be updated would trade a working document for a working search
+// box. The document stays findable by title, and the next save reindexes it.
+//
+// The ordering is the invariant worth keeping: upload, then row, then index. It
+// means search can lag the body, and can never describe a document whose stored
+// text says something else.
+func (s *documentService) indexBody(ctx context.Context, documentID uuid.UUID, body string) {
+	_ = s.documentRepo.SetSearchText(ctx, documentID, body)
 }
 
 // requireParentInProject refuses a parent that does not exist or belongs to a

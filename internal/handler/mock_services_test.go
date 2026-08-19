@@ -957,6 +957,7 @@ type MockDocumentService struct {
 	UpdateFunc             func(ctx context.Context, id, workspaceID uuid.UUID, input service.UpdateDocumentInput) (*domain.Document, error)
 	DeleteFunc             func(ctx context.Context, id, workspaceID, deletedBy uuid.UUID, deletedByType domain.ActorType) error
 	ListByProjectFunc      func(ctx context.Context, projectID uuid.UUID, pg pagination.Params) (*pagination.Page[domain.Document], error)
+	SearchFunc             func(ctx context.Context, projectID, workspaceID uuid.UUID, query string, limit int) ([]domain.DocumentSearchHit, error)
 }
 
 func (m *MockDocumentService) Create(ctx context.Context, input service.CreateDocumentInput) (*domain.Document, error) {
@@ -1102,5 +1103,12 @@ func (m *MockAgentSessionRepository) GetPreviousStartedAt(ctx context.Context, a
 	return nil, nil
 }
 func (m *MockAgentSessionRepository) GetTaskCostSummary(ctx context.Context, taskID uuid.UUID) (*domain.TaskCostSummary, error) {
+	return nil, nil
+}
+
+func (m *MockDocumentService) Search(ctx context.Context, projectID, workspaceID uuid.UUID, query string, limit int) ([]domain.DocumentSearchHit, error) {
+	if m.SearchFunc != nil {
+		return m.SearchFunc(ctx, projectID, workspaceID, query, limit)
+	}
 	return nil, nil
 }

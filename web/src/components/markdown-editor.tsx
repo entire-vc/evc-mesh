@@ -200,6 +200,15 @@ export function MarkdownEditor({
     projectId &&
     typeof projectSettings?.tr_share_id === "string" &&
     !!projectSettings.tr_share_id;
+  // Team Relay appears as a scope only when the project is connected to one.
+  // A switcher with a single option is a control that cannot do anything.
+  const docLinkScopes = useMemo(
+    () =>
+      hasTrIntegration
+        ? ([{ id: "docs", label: "Docs" }, { id: "relay", label: "Team Relay" }] as const)
+        : ([{ id: "docs", label: "Docs" }] as const),
+    [hasTrIntegration],
+  );
 
   // Keep a ref to the latest value so async upload callbacks don't use stale closures
   const valueRef = useRef(value);
@@ -616,6 +625,10 @@ export function MarkdownEditor({
               activeIndex={docLinks.activeIndex}
               onPick={docLinks.pick}
               onHover={docLinks.setActiveIndex}
+              scope={docLinks.scope}
+              scopes={docLinkScopes}
+              onScope={docLinks.setScope}
+              loading={docLinks.loading}
             />
           )}
           {dragOver && (

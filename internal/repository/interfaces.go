@@ -262,6 +262,18 @@ type DocumentRepository interface {
 	// chain. Re-parenting uses it to refuse the cycles that would otherwise
 	// detach a subtree from every listing that walks down from the roots.
 	HasAncestor(ctx context.Context, docID, ancestorID uuid.UUID) (bool, error)
+	// SetSearchText stores the copy of the body that the full-text index is built
+	// from. Called after the body reaches object storage, never instead of it —
+	// S3 stays canonical and this is only what makes the row findable.
+	//
+	// Its own method rather than a column on Update: the text can be megabytes,
+	// and threading it through the row struct would put it in every read that
+	// scans one.
+	SetSearchText(ctx context.Context, documentID uuid.UUID, text string) error
+	// SearchInProject ranks the project's live documents against a query, over
+	// title AND content. workspaceID is the tenancy check, the same one
+	// GetByIDInWorkspace applies: a project id alone is not proof of ownership.
+	SearchInProject(ctx context.Context, projectID, workspaceID uuid.UUID, query string, limit int) ([]domain.DocumentSearchHit, error)
 }
 
 // DocumentAttachmentRepository manages persistence for the files uploaded into a

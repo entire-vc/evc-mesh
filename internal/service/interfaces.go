@@ -361,6 +361,10 @@ type DocumentService interface {
 	// delete is a change, and the restore path needs to be able to say who made it.
 	Delete(ctx context.Context, id, workspaceID, deletedBy uuid.UUID, deletedByType domain.ActorType) error
 	ListByProject(ctx context.Context, projectID uuid.UUID, pg pagination.Params) (*pagination.Page[domain.Document], error)
+	// Search ranks the project's documents against a query, over title AND
+	// content. workspaceID is the tenancy check; an empty query is refused rather
+	// than answered with everything.
+	Search(ctx context.Context, projectID, workspaceID uuid.UUID, query string, limit int) ([]domain.DocumentSearchHit, error)
 }
 
 // UploadDocumentAttachmentInput holds parameters for uploading a file into a

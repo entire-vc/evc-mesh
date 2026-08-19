@@ -955,6 +955,10 @@ func main() {
 	// what that permission already covers, and it is held by the same roles as
 	// create_task (owner/admin/member and agents), so nothing gains or loses reach.
 	api.GET("/projects/:proj_id/documents", documentHandler.List, projAccess)
+	// Static segment before the parameterised sibling routes, and under
+	// /projects/:proj_id so the tenant is named by the path rather than by a
+	// query parameter.
+	api.GET("/projects/:proj_id/documents/search", documentHandler.Search, projAccess)
 	api.POST("/projects/:proj_id/documents", documentHandler.Create, projAccess, rbac(mw.PermUploadArtifact))
 	api.GET("/documents/:doc_id", documentHandler.GetByID, wsAccess)
 	api.PATCH("/documents/:doc_id", documentHandler.Update, wsAccess, rbac(mw.PermUploadArtifact))

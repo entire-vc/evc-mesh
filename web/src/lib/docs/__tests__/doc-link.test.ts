@@ -205,3 +205,14 @@ describe("matching documents", () => {
     expect(matchDocuments(DOCS, "zzzz")).toEqual([]);
   });
 });
+
+describe("the match markers", () => {
+  it("are exactly the codepoints the API emits", async () => {
+    // Pinned on this side too. The Go repository writes these into the snippet
+    // and cannot import them from here; a drift on either side would show up as
+    // "nothing is ever highlighted", which looks like a styling bug and is not.
+    const { MATCH_START, MATCH_END } = await import("@/lib/docs/document-search");
+    expect(MATCH_START.codePointAt(0)).toBe(0xe000);
+    expect(MATCH_END.codePointAt(0)).toBe(0xe001);
+  });
+});
