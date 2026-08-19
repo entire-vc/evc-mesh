@@ -23,6 +23,8 @@ import { cn } from "@/lib/cn";
 import { Button } from "@/components/ui/button";
 import { MarkdownRenderer } from "@/components/markdown-renderer";
 import { RelayDocPicker } from "@/components/RelayDocPicker";
+import { DocLinkMenu } from "@/components/doc-link-menu";
+import { useDocLinkPicker } from "@/hooks/use-doc-link-picker";
 import { getAccessToken } from "@/lib/api";
 import { artifactDownloadPath, documentAttachmentDownloadPath } from "@/lib/artifact-links";
 import { uploadDocumentAttachment } from "@/lib/document-attachments";
@@ -190,6 +192,10 @@ export function MarkdownEditor({
   const [dragOver, setDragOver] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
 
+  // `[[` links a document from this project. Unlike the Relay picker below it is
+  // not gated on an integration: our own documents are always there.
+  const docLinks = useDocLinkPicker(projectId, value, onChange, textareaRef);
+
   const hasTrIntegration =
     projectId &&
     typeof projectSettings?.tr_share_id === "string" &&
@@ -275,6 +281,10 @@ export function MarkdownEditor({
   // Tab key: insert two spaces instead of losing focus
   // ---------------------------------------------------------------------------
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    // The document-link menu gets the key first, and Tab means "accept this
+    // suggestion" while it is open. Indenting instead would be the one keystroke
+    // a writer cannot take back without also losing the menu.
+    if (docLinks.onKeyDown(e)) return;
     if (e.key === "Tab") {
       e.preventDefault();
       insertText("  ");
@@ -583,8 +593,15 @@ export function MarkdownEditor({
           <textarea
             ref={textareaRef}
             value={value}
-            onChange={(e) => onChange(e.target.value)}
+            onChange={(e) => {
+              onChange(e.target.value);
+              docLinks.onValueChange(
+                e.target.value,
+                e.target.selectionStart ?? e.target.value.length,
+              );
+            }}
             onKeyDown={handleKeyDown}
+            onBlur={docLinks.close}
             onPaste={(e) => void handlePaste(e)}
             placeholder={placeholder}
             rows={rows}
@@ -593,6 +610,14 @@ export function MarkdownEditor({
               "w-full resize-none bg-transparent px-3 py-2 font-mono text-sm leading-relaxed placeholder:text-muted-foreground focus:outline-none disabled:cursor-not-allowed disabled:opacity-50",
             )}
           />
+          {docLinks.trigger && (
+            <DocLinkMenu
+              suggestions={docLinks.suggestions}
+              activeIndex={docLinks.activeIndex}
+              onPick={docLinks.pick}
+              onHover={docLinks.setActiveIndex}
+            />
+          )}
           {dragOver && (
             <div className="pointer-events-none absolute inset-0 flex items-center justify-center rounded-b-lg border-2 border-dashed border-primary bg-primary/5">
               <span className="text-sm font-medium text-primary">

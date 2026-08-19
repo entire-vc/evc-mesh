@@ -15,6 +15,8 @@ import { cn } from "@/lib/cn";
 import { formatRelative } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { DocLinkMenu } from "@/components/doc-link-menu";
+import { useDocLinkPicker } from "@/hooks/use-doc-link-picker";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { type MentionEntry } from "@/components/markdown-renderer";
@@ -231,6 +233,11 @@ export function CommentList({ taskId, projId }: CommentListProps) {
 
   const { enabled: hasTrIntegration } = useProjectTrIntegration(projId);
 
+  // `[[` links a document from this project — the same affordance the task
+  // description has, deliberately identical in behaviour to the `@` menu right
+  // beside it.
+  const docLinks = useDocLinkPicker(projId, body, setBody, textareaRef);
+
   // @-mention autocomplete state
   const [mentionQuery, setMentionQuery] = useState<string | null>(null);
   const [mentionSuggestions, setMentionSuggestions] = useState<Mentionable[]>([]);
@@ -285,6 +292,7 @@ export function CommentList({ taskId, projId }: CommentListProps) {
     const val = e.target.value;
     setBody(val);
     const cursorPos = e.target.selectionStart ?? val.length;
+    docLinks.onValueChange(val, cursorPos);
     const textBefore = val.slice(0, cursorPos);
     const atMatch = textBefore.match(/@([^\s@]*)$/);
     if (atMatch) {
@@ -306,6 +314,10 @@ export function CommentList({ taskId, projId }: CommentListProps) {
   };
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    // The document menu gets the key first when it is the one that is open. The
+    // two cannot both be open: `@` and `[[` are different triggers, and each
+    // closes on any text that is not its own.
+    if (docLinks.onKeyDown(e)) return;
     if (mentionQuery === null || mentionSuggestions.length === 0) return;
     if (e.key === "ArrowDown") {
       e.preventDefault();
@@ -557,12 +569,23 @@ export function CommentList({ taskId, projId }: CommentListProps) {
               ))}
             </div>
           )}
+          {docLinks.trigger && (
+            <div className="absolute bottom-full left-0 z-50 mb-1">
+              <DocLinkMenu
+                suggestions={docLinks.suggestions}
+                activeIndex={docLinks.activeIndex}
+                onPick={docLinks.pick}
+                onHover={docLinks.setActiveIndex}
+              />
+            </div>
+          )}
           <Textarea
             ref={textareaRef}
             value={body}
             onChange={handleBodyChange}
             onKeyDown={handleKeyDown}
-            placeholder="Write a comment… type @ to mention someone"
+            onBlur={docLinks.close}
+            placeholder="Write a comment… @ to mention, [[ to link a document"
             rows={3}
           />
           <div className="flex items-center justify-between">
