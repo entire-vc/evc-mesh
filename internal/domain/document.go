@@ -7,7 +7,7 @@ import (
 )
 
 // DocumentSource says whether a document was written here or copied in from an
-// external source. See migrations/20260820108_document_external_source.sql for
+// external source. See migrations/20260820110_document_external_source.sql for
 // why this is a discriminator column rather than something inferred from which
 // of the source_* fields are NULL.
 type DocumentSource string
@@ -62,7 +62,7 @@ type Document struct {
 	// where this document came from. On an own document (the only kind this PR
 	// can produce — nothing yet writes the others) SourceKind is "own" and the
 	// rest are nil; on a copy all five are populated. See
-	// migrations/20260820108_document_external_source.sql for the full
+	// migrations/20260820110_document_external_source.sql for the full
 	// reasoning, including why this is enforced in the database rather than
 	// trusted to whichever caller writes the row.
 	SourceKind   DocumentSource `json:"source_kind" db:"source_kind"`
