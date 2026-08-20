@@ -52,6 +52,57 @@ components:
           additionalProperties:
             type: string
 
+    # ---------- Secrets (write-only store) ----------
+    # There is deliberately no `value` property, on this schema or any other.
+    # The value goes in once through POST and no endpoint returns it; the
+    # fields below are exactly what scripts/env-inventory.py prints, so a
+    # masked list can be compared against the host inventory line for line.
+    Secret:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          example: GITHUB_TOKEN
+        scope:
+          type: string
+          enum: [workspace, project, agent]
+        project_id:
+          type: string
+          format: uuid
+        agent_id:
+          type: string
+          format: uuid
+        value_sha256_prefix:
+          type: string
+          description: First 8 hex of sha256(plaintext), computed once at write time.
+          example: 3b1f9a02
+        value_length:
+          type: integer
+          example: 40
+        value_char_class:
+          type: string
+          description: Which character classes the value contains, '+'-joined.
+          example: a-z+A-Z+0-9
+        expires_at:
+          type: string
+          format: date-time
+        created_by:
+          type: string
+          format: uuid
+        created_by_type:
+          type: string
+          enum: [user, agent]
+        created_at:
+          type: string
+          format: date-time
+        rotated_at:
+          type: string
+          format: date-time
+          description: Set once a newer row supersedes this one. Null means this is the current value.
+
     # ---------- Pagination wrapper ----------
     PaginatedResponse:
       type: object
@@ -6264,6 +6315,193 @@ paths:
                 $ref: "#/components/schemas/Error"
         "503":
           description: Spark catalog unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/workspaces/{ws_id}/secrets:
+    parameters:
+      - name: ws_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Secrets]
+      summary: List secrets (masked — no endpoint returns a value)
+      description: >
+        Returns the masked metadata for every current secret in scope: the
+        workspace-scoped ones always, plus the project- or agent-scoped ones
+        for whichever of project_id / agent_id is supplied. The fields are the
+        ones `scripts/env-inventory.py` prints (name, sha256[:8], length,
+        character class), so a UI list and the host inventory can be compared
+        directly. There is no endpoint, here or elsewhere, that returns a
+        secret's value — see the write-only note on POST below.
+      operationId: listSecrets
+      parameters:
+        - name: project_id
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - name: agent_id
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Masked secret metadata
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Secret"
+        "403":
+          description: Requires the manage_secrets permission (owner/admin only — no agent key holds it)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    post:
+      tags: [Secrets]
+      summary: Create a secret (write-only — the value is never readable again)
+      description: >
+        Stores an encrypted value that no read path can return. This is the
+        only legal channel for a human to hand an agent a credential: a value
+        pasted into a chat message or a task comment is retained forever and
+        re-read by every later session, which is the leak this endpoint exists
+        to close. To replace a value, rotate it — there is no update, and
+        nothing to pre-fill an edit form with.
+      operationId: createSecret
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, scope, value]
+              properties:
+                name:
+                  type: string
+                  pattern: "^[A-Z][A-Z0-9_]*$"
+                  description: Becomes the env var name on the lane.
+                  example: GITHUB_TOKEN
+                scope:
+                  type: string
+                  enum: [workspace, project, agent]
+                project_id:
+                  type: string
+                  format: uuid
+                  description: Required for project scope, rejected otherwise. Must name a project in this workspace.
+                agent_id:
+                  type: string
+                  format: uuid
+                  description: Required for agent scope, rejected otherwise. Must name an agent in this workspace.
+                value:
+                  type: string
+                  description: The plaintext. Sent once and never returned by any endpoint.
+                expires_at:
+                  type: string
+                  format: date-time
+                  description: Optional. An expired secret does not materialize; the lane gets a named error rather than an empty variable.
+      responses:
+        "201":
+          description: Created — masked metadata only
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Secret"
+        "400":
+          description: Validation failed (name shape, scope/ref mismatch, expiry in the past)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: A current secret with this name already exists in this scope — rotate it instead
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/secrets/{secret_id}/rotate:
+    parameters:
+      - name: secret_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [Secrets]
+      summary: Replace a secret's value (insert, not update)
+      description: >
+        Stamps the named row as superseded and inserts a replacement, in one
+        transaction. The name and scope come from the existing row, not the
+        body — a rotate cannot rename a secret or move it to another scope.
+        A secret_id naming an already-superseded row is refused with 409
+        rather than redirected to whichever row is current now.
+      operationId: rotateSecret
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [value]
+              properties:
+                value:
+                  type: string
+                expires_at:
+                  type: string
+                  format: date-time
+      responses:
+        "200":
+          description: Rotated — masked metadata of the new current row
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Secret"
+        "404":
+          description: No such secret in this workspace
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: This version has already been superseded — reload and act on the current one
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/secrets/{secret_id}:
+    parameters:
+      - name: secret_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    delete:
+      tags: [Secrets]
+      summary: Stop a secret materializing (history is kept)
+      description: >
+        Stamps the current row as superseded with no replacement. The write
+        history stays queryable — the same append-only posture as the activity
+        log — but the secret is no longer written into any lane's env file.
+      operationId: deleteSecret
+      responses:
+        "204":
+          description: Deleted
+        "404":
+          description: No such secret in this workspace
           content:
             application/json:
               schema:

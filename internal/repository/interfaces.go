@@ -1144,6 +1144,27 @@ type SecretRepository interface {
 	// secrets in workspaceID, plus project-scope ones for projectID (if
 	// given), plus agent-scope ones for agentID (if given).
 	ListCurrent(ctx context.Context, workspaceID uuid.UUID, projectID, agentID *uuid.UUID) ([]domain.Secret, error)
+	// GetByID returns the masked metadata for one row by id, scoped to
+	// workspaceID. It exists so the API can address a secret the way a UI
+	// list hands it back — by id — while Rotate and Delete keep operating on
+	// the (scope, name) identity that the partial unique indexes are built
+	// on. The returned Secret carries RotatedAt, so a caller can tell a
+	// current row from a superseded one and refuse to act on the latter
+	// rather than silently redirecting the write to whichever row is current
+	// now. Returns apierror.NotFound when the id names nothing in this
+	// workspace — same answer for "no such row" and "another tenant's row",
+	// so the two stay indistinguishable.
+	GetByID(ctx context.Context, workspaceID, id uuid.UUID) (domain.Secret, error)
+	// AssertScopeRefInWorkspace reports whether the project_id / agent_id a
+	// caller supplied actually belong to workspaceID. The DB cannot answer
+	// this on its own: secrets.project_id and secrets.agent_id are foreign
+	// keys to projects(id) and agents(id) with no workspace predicate, so a
+	// row naming ANOTHER tenant's project satisfies every constraint on the
+	// table. Returns apierror.ValidationError naming the offending field,
+	// with the same message for "no such project" and "not your project" so
+	// the endpoint cannot be used to enumerate another tenant's projects.
+	// A nil id is not checked — absent is not the same as foreign.
+	AssertScopeRefInWorkspace(ctx context.Context, workspaceID uuid.UUID, projectID, agentID *uuid.UUID) error
 }
 
 // SecretMaterializer decrypts current secret values for spawn-time env-file

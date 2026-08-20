@@ -1365,6 +1365,11 @@ type SecretService interface {
 	// the given resolution (workspace scope always, plus project/agent
 	// scope when the corresponding ID is non-nil).
 	List(ctx context.Context, workspaceID uuid.UUID, projectID, agentID *uuid.UUID) ([]domain.Secret, error)
+	// GetByID returns masked metadata for one secret by id within a
+	// workspace, so a caller holding an id from the list view can resolve it
+	// to the (scope, name) identity Rotate and Delete operate on. Like every
+	// other method here it returns domain.Secret, which has no value field.
+	GetByID(ctx context.Context, workspaceID, id uuid.UUID) (domain.Secret, error)
 }
 
 // SecretMaterializationService decrypts current secret values for

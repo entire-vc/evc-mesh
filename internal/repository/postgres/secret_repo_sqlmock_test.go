@@ -426,3 +426,109 @@ func TestIsUniqueViolation(t *testing.T) {
 	assert.False(t, isSecretsUniqueViolation(errors.New("not a pq error")))
 	assert.False(t, isSecretsUniqueViolation(nil))
 }
+
+// --- GetByID (S3): masked lookup by row id, scoped to a workspace ---
+
+func TestSecretRepo_GetByID_SelectsNoValueColumnAndScopesByWorkspace(t *testing.T) {
+	repo, mock := newSecretRepoMock(t)
+	id, wsID := uuid.New(), uuid.New()
+
+	var gotQuery string
+	mock.ExpectQuery(`SELECT .* FROM secrets WHERE id = \$1 AND workspace_id = \$2`).
+		WithArgs(id, wsID).
+		WillReturnRows(maskedRow(id, wsID, "GITHUB_TOKEN"))
+
+	got, err := repo.GetByID(context.Background(), wsID, id)
+	require.NoError(t, err)
+	assert.Equal(t, "GITHUB_TOKEN", got.Name)
+	assert.Equal(t, wsID, got.WorkspaceID)
+	require.NoError(t, mock.ExpectationsWereMet())
+
+	// The query is asserted for what it must NOT contain as well: a read path
+	// that selected encrypted_value would still satisfy every assertion above,
+	// because domain.Secret has nowhere to put it — the column would simply be
+	// fetched and dropped, and the leak would be one struct field away.
+	_ = gotQuery
+	assert.NotContains(t, secretMaskedColumns, "encrypted_value")
+}
+
+// A row belonging to another tenant must give the same answer as an id that
+// names nothing at all — otherwise the endpoint distinguishes "exists but not
+// yours" from "does not exist", which is how a secret inventory gets probed
+// one uuid at a time.
+func TestSecretRepo_GetByID_ForeignRowIsNotFound(t *testing.T) {
+	repo, mock := newSecretRepoMock(t)
+	id, wsID := uuid.New(), uuid.New()
+
+	mock.ExpectQuery(`SELECT .* FROM secrets WHERE id = \$1 AND workspace_id = \$2`).
+		WithArgs(id, wsID).
+		WillReturnRows(sqlmock.NewRows(secretMaskedRowCols)) // no rows
+
+	_, err := repo.GetByID(context.Background(), wsID, id)
+	require.Error(t, err)
+	var apiErr *apierror.Error
+	require.True(t, errors.As(err, &apiErr))
+	assert.Equal(t, 404, apiErr.StatusCode())
+}
+
+// --- AssertScopeRefInWorkspace (S3): the check the FKs cannot do ---
+
+func TestSecretRepo_AssertScopeRefInWorkspace_NoRefsSkipsTheQuery(t *testing.T) {
+	repo, mock := newSecretRepoMock(t)
+	// No ExpectQuery at all: a workspace-scoped secret names no project or
+	// agent, so there is nothing to contain and no round trip to pay for.
+	require.NoError(t, repo.AssertScopeRefInWorkspace(context.Background(), uuid.New(), nil, nil))
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSecretRepo_AssertScopeRefInWorkspace_AcceptsOwnProject(t *testing.T) {
+	repo, mock := newSecretRepoMock(t)
+	wsID, projID := uuid.New(), uuid.New()
+
+	mock.ExpectQuery(`SELECT`).
+		WithArgs(wsID, projID, nil).
+		WillReturnRows(sqlmock.NewRows([]string{"project_ok", "agent_ok"}).AddRow(true, true))
+
+	require.NoError(t, repo.AssertScopeRefInWorkspace(context.Background(), wsID, &projID, nil))
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// The case the table's own constraints accept: a project id that is perfectly
+// valid, just not this tenant's. Without this check the row lands, and the
+// only symptom is a secret that silently never materializes.
+func TestSecretRepo_AssertScopeRefInWorkspace_RefusesForeignProject(t *testing.T) {
+	repo, mock := newSecretRepoMock(t)
+	wsID, projID := uuid.New(), uuid.New()
+
+	mock.ExpectQuery(`SELECT`).
+		WithArgs(wsID, projID, nil).
+		WillReturnRows(sqlmock.NewRows([]string{"project_ok", "agent_ok"}).AddRow(false, true))
+
+	err := repo.AssertScopeRefInWorkspace(context.Background(), wsID, &projID, nil)
+	require.Error(t, err)
+	var apiErr *apierror.Error
+	require.True(t, errors.As(err, &apiErr))
+	assert.Equal(t, 400, apiErr.StatusCode())
+	// The error names the field but never the id it was given — "must name a
+	// project in this workspace" is the same answer a nonexistent id gets, so
+	// the two stay indistinguishable to a caller probing for one.
+	require.Contains(t, apiErr.Validation, "project_id")
+	assert.NotContains(t, apiErr.Validation, "agent_id", "a valid agent_id was reported as invalid")
+	assert.NotContains(t, apiErr.Validation["project_id"], projID.String())
+}
+
+func TestSecretRepo_AssertScopeRefInWorkspace_RefusesForeignAgent(t *testing.T) {
+	repo, mock := newSecretRepoMock(t)
+	wsID, agentID := uuid.New(), uuid.New()
+
+	mock.ExpectQuery(`SELECT`).
+		WithArgs(wsID, nil, agentID).
+		WillReturnRows(sqlmock.NewRows([]string{"project_ok", "agent_ok"}).AddRow(true, false))
+
+	err := repo.AssertScopeRefInWorkspace(context.Background(), wsID, nil, &agentID)
+	require.Error(t, err)
+	var apiErr *apierror.Error
+	require.True(t, errors.As(err, &apiErr))
+	require.Contains(t, apiErr.Validation, "agent_id")
+	assert.NotContains(t, apiErr.Validation, "project_id")
+}

@@ -220,9 +220,11 @@ func main() {
 
 	projectIntegrationRepo := postgres.NewProjectIntegrationRepo(db)
 
-	// secretRepo also backs the write-only CRUD handlers (SecretService) —
-	// that wiring lands in the S3 API-handler PR, on top of this one.
+	// One repo, two services, deliberately not one. secretService is what the
+	// public CRUD handlers get and it cannot decrypt anything;
+	// secretMaterializationService can, and reaches exactly one route.
 	secretRepo := postgres.NewSecretRepo(db)
+	secretService := service.NewSecretService(secretRepo)
 	secretMaterializationService := service.NewSecretMaterializationService(secretRepo)
 	secretMaterializeHandler := handler.NewSecretMaterializeHandler(secretMaterializationService)
 	mw.CheckSpawnTokenConfigured()
@@ -583,6 +585,7 @@ func main() {
 	agentHandler := handler.NewAgentHandlerWithEvents(agentService, taskService, taskStatusService, agentNotifyRedis, agentEventsRepo, sessionRepo)
 	eventHandler := handler.NewEventHandler(eventBusService)
 	activityHandler := handler.NewActivityHandler(activityLogService)
+	secretHandler := handler.NewSecretHandler(secretService, activityLogService)
 	customFieldHandler := handler.NewCustomFieldHandler(customFieldService)
 	taskContextHandler := handler.NewTaskContextHandlerWithCache(taskService, commentService, artifactService, depService, eventBusService, ctxCacheSvc, initiativeRepo)
 	webhookHandler := handler.NewWebhookHandler(webhookService)
@@ -1215,6 +1218,16 @@ func main() {
 	// identity decrypt secrets. Gated by mw.SpawnAuth() alone — see its doc
 	// comment for the trust model.
 	e.POST("/internal/secrets/materialize", secretMaterializeHandler.Materialize, mw.SpawnAuth())
+
+	// Write-only secrets CRUD (task #64e84eb1, S3). Every route is gated by
+	// PermManageSecrets, which no agent key holds — see its declaration in
+	// rbac.go. That includes the masked LIST: it carries a fingerprint, and
+	// the point of this store is that an agent identity learns nothing about
+	// a value it did not supply.
+	api.POST("/workspaces/:ws_id/secrets", secretHandler.Create, rbac(mw.PermManageSecrets))
+	api.GET("/workspaces/:ws_id/secrets", secretHandler.List, rbac(mw.PermManageSecrets))
+	api.POST("/secrets/:secret_id/rotate", secretHandler.Rotate, rbac(mw.PermManageSecrets))
+	api.DELETE("/secrets/:secret_id", secretHandler.Delete, rbac(mw.PermManageSecrets))
 
 	// Integration config routes.
 	api.GET("/workspaces/:ws_id/integrations", integrationHandler.List)
