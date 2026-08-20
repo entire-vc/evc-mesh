@@ -188,11 +188,21 @@ type AuthConfig struct {
 	AllowRegistration bool
 }
 
-// WebhookConfig holds inbound webhook validation settings.
+// WebhookConfig holds inbound webhook validation settings, plus the token
+// used for the one OUTBOUND GitHub call the done-evidence gate makes (live
+// PR-status verification, #5f7f8c6e) — kept alongside the webhook secret
+// since both are "how Mesh talks to GitHub about PRs" settings.
 type WebhookConfig struct {
 	// GitHubSecret is the HMAC-SHA256 secret for validating GitHub webhook payloads.
 	// If empty, signature validation is skipped (backward-compatible).
 	GitHubSecret string
+	// GitHubToken authenticates the done-evidence gate's live PR-status
+	// check against the GitHub REST API. If empty, the live check is
+	// disabled entirely (the gate falls back to the cached vcs_links.status,
+	// exactly as it did before this existed) — anonymous GitHub reads are
+	// rate-limited to 60/hour and cannot see private repos, so an empty
+	// token isn't a usable "read-only anonymous" mode for a private org.
+	GitHubToken string
 }
 
 // VAPIDConfig holds Web Push VAPID key material.
@@ -261,6 +271,7 @@ func Load() *Config {
 		},
 		Webhook: WebhookConfig{
 			GitHubSecret: getEnv("MESH_GITHUB_WEBHOOK_SECRET", ""),
+			GitHubToken:  getEnvOrFile("MESH_GITHUB_TOKEN", "MESH_GITHUB_TOKEN_FILE"),
 		},
 		Embedding: EmbeddingConfig{
 			Provider:        getEnv("EMBEDDING_PROVIDER", "none"),

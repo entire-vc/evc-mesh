@@ -129,6 +129,50 @@ events (even when no transition occurs) so GitHub does not retry; genuine
 processing failures are logged and returned as `200 {"status":"error_logged"}`
 to avoid retry storms.
 
+## Done-evidence gate: live PR-status check (outbound)
+
+The webhook above is how `vcs_links.status` normally stays current — but a
+webhook delivery can be missed, delayed, or simply never fire for a link that
+was created (e.g. via `add_vcs_link`) for a PR that GitHub had already
+merged before the link existed. When that happens, `move_task→done` used to
+trust the stale cached status unconditionally and block the move even though
+the PR was long since merged.
+
+To close that gap, the `move_task→done` done-evidence gate makes ONE
+outbound call to the GitHub REST API (`GET /repos/{owner}/{repo}/pulls/{n}`)
+whenever a linked PR's cached status says "not merged" — before blocking, it
+asks GitHub directly:
+
+- **GitHub confirms merged** → the move proceeds, and the cached
+  `vcs_links.status` is healed to `merged` so the next read doesn't need
+  another round trip.
+- **GitHub confirms still open** → the move is blocked, same as before, but
+  the error message says the block reflects a live read, not a stale cache.
+- **The call fails or times out** (network error, rate limit, GitHub down) →
+  falls back to the cached status exactly as before this existed; the error
+  message says a live check could not be performed and states when the
+  cached record was made.
+
+This call is authenticated by:
+
+```
+MESH_GITHUB_TOKEN=<token with read access to Pull requests>
+```
+
+(or `MESH_GITHUB_TOKEN_FILE=<path>` to read it from a file, same convention
+as `MESH_METRICS_TOKEN_FILE`). **If unset, the live check is disabled
+entirely** — anonymous GitHub reads are rate-limited to 60/hour and cannot
+see private repos, so an empty token is not a usable "read-only anonymous"
+mode for a private org; the gate simply falls back to the cached status,
+exactly as it behaved before this check existed.
+
+A caller who already knows a PR's real status (independent of what GitHub or
+the webhook says) can still correct the record by hand with
+`add_vcs_link ... status=merged` — that write is stamped in the link's
+`metadata.status_declared_manually` with who declared it and when, so it
+stays distinguishable from a status the gate actually measured (webhook
+delivery or this live check).
+
 ## Database
 
 Migration `20260522055_vcs_links_extend.sql` adds a non-unique lookup index for
@@ -198,6 +242,7 @@ debugging:
 | Surface | Direction | Where |
 |---------|-----------|-------|
 | **GitHub webhook (this doc)** | inbound: GitHub → Mesh | `POST /webhooks/github`, global secret `MESH_GITHUB_WEBHOOK_SECRET` |
+| **Done-evidence live PR check** | outbound: Mesh → GitHub REST API | one-off call from the `move_task→done` gate, token `MESH_GITHUB_TOKEN` (optional; see below) |
 | **Outbound webhooks** | outbound: Mesh → your service | per-workspace, see [`webhooks.md`](./../webhooks.md) |
 | **Workspace integration toggles** | config flags | `integration_configs` (e.g. the "Connect GitHub" UI toggle) |
 | **Team Relay** | outbound artifact push | per-project, separate integration |

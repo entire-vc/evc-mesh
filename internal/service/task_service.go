@@ -13,6 +13,7 @@ import (
 	"github.com/lib/pq"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	githubapi "github.com/entire-vc/evc-mesh/internal/integration/github"
 	"github.com/entire-vc/evc-mesh/internal/repository"
 	pgRepo "github.com/entire-vc/evc-mesh/internal/repository/postgres"
 	"github.com/entire-vc/evc-mesh/pkg/actorctx"
@@ -48,6 +49,7 @@ type taskService struct {
 	userRepo          repository.UserRepository
 	commentRepo       repository.CommentRepository
 	vcsLinkRepo       repository.VCSLinkRepository
+	githubPRChecker   githubapi.PullRequestChecker
 	autoTransSvc      AutoTransitionService
 	ruleSvc           RuleService
 	rulesConfigSvc    RulesService
@@ -197,6 +199,18 @@ func WithCommentRepoTask(cr repository.CommentRepository) TaskServiceOption {
 // Skipped (fails open) if not wired.
 func WithVCSLinkRepoTask(vr repository.VCSLinkRepository) TaskServiceOption {
 	return func(s *taskService) { s.vcsLinkRepo = vr }
+}
+
+// WithGitHubPRChecker enables a LIVE GitHub check in the done-evidence gate:
+// when a linked PR's cached status says "not merged", the gate asks GitHub
+// directly before blocking, instead of trusting a status that is only ever
+// as fresh as the last webhook delivery (#5f7f8c6e — a PR merged 9.5h
+// earlier still blocked move_task→done because the webhook that would have
+// updated the cached record never fired for this particular link).
+// Optional: if unset, the gate falls back to the cached status exactly as
+// before (fails open on the live check, not on the gate itself).
+func WithGitHubPRChecker(c githubapi.PullRequestChecker) TaskServiceOption {
+	return func(s *taskService) { s.githubPRChecker = c }
 }
 
 // SetAutoTransitionService implements TaskServiceAutoTransitionConfigurable,
@@ -677,9 +691,28 @@ func (s *taskService) MoveTask(ctx context.Context, taskID uuid.UUID, input Move
 					links, linksErr := s.vcsLinkRepo.ListByTask(ctx, taskID)
 					if linksErr == nil {
 						for _, l := range links {
-							if l.LinkType == domain.VCSLinkTypePR && l.Status != domain.VCSLinkStatusMerged && l.Status != domain.VCSLinkStatusClosed {
-								return &DoneEvidenceError{PRURL: l.URL, PRTitle: l.Title, PRStatus: string(l.Status)}
+							if l.LinkType != domain.VCSLinkTypePR || l.Status == domain.VCSLinkStatusMerged || l.Status == domain.VCSLinkStatusClosed {
+								continue
 							}
+							// Cached status says not-yet-merged (or unknown).
+							// Before blocking, ask GitHub directly — the cache
+							// is only ever as fresh as the last webhook
+							// delivery, and a delivery can be missed, delayed,
+							// or (the reported incident) simply never arrive
+							// for a link created after the PR was already
+							// merged.
+							if merged, live := s.isPRMergedOnGitHub(ctx, l); live {
+								if merged {
+									// Self-heal the cache so the next read —
+									// and the next agent hitting this gate —
+									// doesn't pay for another GitHub round
+									// trip or hit the same stale block.
+									s.healVCSLinkStatus(ctx, l)
+									continue
+								}
+								return &DoneEvidenceError{PRURL: l.URL, PRTitle: l.Title, PRStatus: string(l.Status), PRStatusCheckedLive: true}
+							}
+							return &DoneEvidenceError{PRURL: l.URL, PRTitle: l.Title, PRStatus: string(l.Status), PRLinkedAt: l.CreatedAt}
 						}
 					}
 				} else if s.commentRepo != nil {
@@ -1618,6 +1651,48 @@ func (e *HumanGateFrozenError) Error() string {
 	return "task is human-gated: awaiting human sign-off; only a user may move it to backlog/done/cancelled"
 }
 
+// githubLiveCheckTimeout bounds a single done-evidence-gate GitHub round
+// trip so an unreachable/slow API can't stall a move_task call — it falls
+// back to the cached status instead (see isPRMergedOnGitHub).
+const githubLiveCheckTimeout = 5 * time.Second
+
+// isPRMergedOnGitHub asks GitHub directly whether the linked PR has been
+// merged, bypassing the (possibly stale) cached vcs_links.status. Returns
+// live=false when the check could not be performed at all — no checker
+// wired, the URL doesn't parse as a GitHub PR, or the API call itself
+// failed — callers MUST treat that as "couldn't verify", never as "not
+// merged", and fall back to the cached status instead.
+func (s *taskService) isPRMergedOnGitHub(ctx context.Context, l domain.VCSLink) (merged bool, live bool) {
+	if s.githubPRChecker == nil || l.Provider != domain.VCSProviderGitHub {
+		return false, false
+	}
+	owner, repo, number, ok := githubapi.ParsePullRequestURL(l.URL)
+	if !ok {
+		return false, false
+	}
+	ghCtx, cancel := context.WithTimeout(ctx, githubLiveCheckTimeout)
+	defer cancel()
+	state, err := s.githubPRChecker.GetPullRequestState(ghCtx, owner, repo, number)
+	if err != nil {
+		log.Printf("[done-evidence-gate] live github check failed for %s/%s#%d (link=%s task=%s): %v — falling back to cached status %q",
+			owner, repo, number, l.ID, l.TaskID, err, l.Status)
+		return false, false
+	}
+	return state.Merged, true
+}
+
+// healVCSLinkStatus persists a live-verified "merged" status so future reads
+// don't need another GitHub round trip and don't hit the same stale block.
+// Best-effort: a failure here does not block the move — the caller already
+// independently verified the PR is merged via the live GitHub check, and
+// this is only a cache write, not the source of truth.
+func (s *taskService) healVCSLinkStatus(ctx context.Context, l domain.VCSLink) {
+	l.Status = domain.VCSLinkStatusMerged
+	if _, err := s.vcsLinkRepo.Upsert(ctx, &l); err != nil {
+		log.Printf("[done-evidence-gate] failed to self-heal vcs_link %s status to merged: %v", l.ID, err)
+	}
+}
+
 // DoneEvidenceError is returned when a task is moved to done but evidence is
 // missing or a linked PR has not been merged (or explicitly closed) yet.
 type DoneEvidenceError struct {
@@ -1627,32 +1702,59 @@ type DoneEvidenceError struct {
 	PRURL    string
 	PRTitle  string
 	PRStatus string
+	// PRStatusCheckedLive is true when this block reflects a GitHub API call
+	// made just now (the gate asked GitHub directly and it said "not merged")
+	// rather than the cached vcs_links.status. This is current truth, not a
+	// stale cache — the message must not invite a "maybe it's just stale"
+	// re-link when it isn't.
+	PRStatusCheckedLive bool
+	// PRLinkedAt is when this VCS link was first recorded. Only rendered
+	// when PRStatusCheckedLive is false, to make clear the cached status
+	// might be stale (e.g. GitHub was unreachable, so the gate fell back to
+	// this recorded value) rather than currently verified.
+	PRLinkedAt time.Time
 }
 
 func (e *DoneEvidenceError) Error() string {
-	if e.PRURL != "" {
-		ref := e.PRTitle
-		if ref == "" {
-			ref = e.PRURL
-		}
-		// No "justification comment" escape hatch exists on this branch —
-		// VCSLinkCount > 0 blocks unconditionally on an unmerged/unrecorded
-		// PR link, comments are only consulted when there is NO VCS link at
-		// all. A message promising one taught agents to write a comment,
-		// hit the same 422 again, and conclude the gate itself was broken
-		// (#df734dd9). If the recorded status is empty, the likely cause is
-		// that the link was created for a PR that was already merged before
-		// linking — no webhook will ever arrive to fix that after the fact.
-		if e.PRStatus == "" {
-			return fmt.Sprintf(
-				"PR «%s» has no recorded merge status — if it's actually merged, re-link it with an explicit status "+
-					"(add_vcs_link ... status=merged); if it genuinely isn't merged yet, merge it first", ref)
-		}
-		return fmt.Sprintf(
-			"PR «%s» is not merged (recorded status: %s) — if that's stale, re-link it with an explicit status "+
-				"(add_vcs_link ... status=merged); otherwise merge it first", ref, e.PRStatus)
+	if e.PRURL == "" {
+		return "done requires evidence: add a PR/VCS link, artifact upload, or comment with proof before closing"
 	}
-	return "done requires evidence: add a PR/VCS link, artifact upload, or comment with proof before closing"
+	ref := e.PRTitle
+	if ref == "" {
+		ref = e.PRURL
+	}
+	// No "justification comment" escape hatch exists on this branch —
+	// VCSLinkCount > 0 blocks unconditionally on an unmerged/unrecorded
+	// PR link, comments are only consulted when there is NO VCS link at
+	// all. A message promising one taught agents to write a comment,
+	// hit the same 422 again, and conclude the gate itself was broken
+	// (#df734dd9).
+	if e.PRStatusCheckedLive {
+		// The gate just asked GitHub and got a definitive "not merged" —
+		// don't suggest "if that's stale", there is no cache involved here.
+		return fmt.Sprintf(
+			"PR «%s» is not merged (verified live against GitHub just now) — merge it first, or if this "+
+				"read is wrong, re-link it with an explicit status (add_vcs_link ... status=merged)", ref)
+	}
+	// Live verification was unavailable (no checker wired, the URL doesn't
+	// parse as a GitHub PR, or the GitHub API call itself failed) — fall
+	// back to the cached record, same as before this fix, but say so
+	// explicitly plus WHEN that record was made, so the reader understands
+	// "this might be stale" rather than "the PR is genuinely still open".
+	linkedAt := e.PRLinkedAt.UTC().Format(time.RFC3339)
+	if e.PRStatus == "" {
+		// The likely cause: the link was created for a PR that was already
+		// merged before linking — no webhook will ever arrive to fix that
+		// after the fact.
+		return fmt.Sprintf(
+			"PR «%s» has no recorded merge status (linked %s; could not verify live against GitHub) — if it's "+
+				"actually merged, re-link it with an explicit status (add_vcs_link ... status=merged); if it "+
+				"genuinely isn't merged yet, merge it first", ref, linkedAt)
+	}
+	return fmt.Sprintf(
+		"PR «%s» is not merged (recorded status: %s, linked %s; could not verify live against GitHub) — if "+
+			"that's stale, re-link it with an explicit status (add_vcs_link ... status=merged); otherwise merge it first",
+		ref, e.PRStatus, linkedAt)
 }
 
 // dodBlockingGates returns the names of required DoD gates that have not yet passed.
