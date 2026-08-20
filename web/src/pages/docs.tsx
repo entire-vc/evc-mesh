@@ -860,7 +860,7 @@ export function DocsPage() {
               {/* Title and actions share one row. They used to be two: the
                   actions owned a full-width line of their own above the title,
                   which cost a row of vertical space and bought nothing. */}
-              <div className="mt-2 flex items-center gap-3">
+              <div className="mt-2 flex flex-wrap items-center gap-y-1 gap-x-3">
                 {/* `truncate` needs the `min-w-0`, or the flex item refuses to
                     shrink below its text and shoves the actions off the row.
                     The full title stays reachable on hover and to a screen
@@ -872,8 +872,16 @@ export function DocsPage() {
                   {openDoc.title}
                 </h1>
 
-                {/* `shrink-0`: the title gives way, the actions never move. */}
-                <div className="flex shrink-0 items-center gap-2">
+                {/* The actions themselves wrap onto a second line once the
+                    row can't fit them next to the title (narrow viewports,
+                    or a long SaveIndicator message like the conflict
+                    notice) — `min-w-0` lets this group shrink at all, and
+                    `flex-wrap` is what turns "shrink" into "wrap" instead of
+                    silently overflowing the row's `overflow-hidden`
+                    ancestor. `shrink-0` here used to pin the actions at
+                    their full unwrapped width regardless of available
+                    space, which is exactly what pushed them off-screen. */}
+                <div className="flex min-w-0 flex-wrap items-center gap-2">
                   {/* How many conversations are open on this page, and the
                       switch for the rail that holds them. */}
                   <DocCommentToggle
