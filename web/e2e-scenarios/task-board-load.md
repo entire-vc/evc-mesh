@@ -11,8 +11,12 @@
 
 ## Given
 
-- A dedicated CI user exists in Mesh (`E2E_USER_EMAIL` / `E2E_USER_PASSWORD`), a
-  workspace **member** — not an owner, and not a member of any project
+- A dedicated CI user exists in Mesh (`E2E_USER_EMAIL` / `E2E_USER_PASSWORD`)
+  with the workspace role **`viewer`** — every write permission is refused by
+  the server (`internal/middleware/rbac.go`), so the credential in CI cannot
+  create, update or delete anything even if it leaks. `member` was the first
+  choice and was wrong: that role carries create/update/**delete** task and
+  create-project rights
 - Mesh authenticates natively (`POST /api/v1/auth/login`). There is no Casdoor /
   OIDC flow in this app; an earlier revision of this scenario assumed one and
   drove it against a host that does not resolve
@@ -63,6 +67,14 @@ Inline in `task-board.spec.ts`, and **unconditional** — it previously sat behi
   `ErrTokenReused`). Replaying a saved cookie into a second browser context
   would make the suite kill its own session. One context, one login — which
   also keeps the suite inside the 5-requests/minute cap on `/auth/login`.
+
+## Artifact hygiene
+
+`trace` and `screenshot` are **off**, deliberately. Every API call here carries
+`Authorization: Bearer <live token>`; a trace records headers, and GitHub masks
+secrets in logs but not inside uploaded artifacts. Playwright cannot redact
+headers from a trace, so a failing run would otherwise publish a working token
+and real task titles into `playwright-report`.
 
 ## Negative controls (what proves the asserts are alive)
 

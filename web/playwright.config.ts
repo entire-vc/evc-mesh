@@ -30,8 +30,18 @@ export default defineConfig({
 
   use: {
     baseURL: process.env.APP_BASE_URL || "https://mesh.entire.host",
-    trace: "retain-on-failure",
-    screenshot: "only-on-failure",
+    // Traces and screenshots are OFF deliberately, and this is a security
+    // decision rather than a preference. A trace records request and response
+    // headers, and every API call in this suite carries
+    // `Authorization: Bearer <live access token>` for an account that can read
+    // the whole workspace. `retain-on-failure` uploads that trace as a CI
+    // artifact, and GitHub masks secrets in logs but NOT inside artifact files
+    // — so a failing run had a path to publish a working token plus real task
+    // titles. Playwright cannot redact headers from a trace, so the only
+    // honest setting is off. Failures stay diagnosable because every
+    // assertion carries an explicit message.
+    trace: "off",
+    screenshot: "off",
   },
 
   projects: [
