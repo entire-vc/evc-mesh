@@ -16,6 +16,7 @@ function makeDoc(overrides: Partial<ProjectDocument> = {}): ProjectDocument {
     created_by_type: "user",
     created_at: "2026-08-01T00:00:00Z",
     updated_at: "2026-08-14T09:30:00Z",
+    version: 1,
     ...overrides,
   };
 }
