@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -289,4 +290,68 @@ func (r *DocumentCommentRepo) ListByDocument(
 	}
 
 	return pagination.NewPage(items, totalCount, pg), nil
+}
+
+// ListAnchorsByDocument returns the anchor of every live comment on the document
+// that has one.
+//
+// anchor_exact IS NOT NULL is the whole filter, and it is the definition of
+// "anchored" the schema uses: a comment on the document as a whole, and a reply
+// inheriting its parent's anchor, both have no quote and so have nothing to
+// re-find. Resolved threads are included on purpose — resolving a conversation
+// says nothing about whether its offsets still describe the text, and skipping
+// them would leave exactly the rows nobody looks at pointing at the wrong words.
+func (r *DocumentCommentRepo) ListAnchorsByDocument(ctx context.Context, documentID uuid.UUID) ([]repository.DocumentCommentAnchorRow, error) {
+	const q = `
+		SELECT dc.id, dc.anchor_exact, dc.anchor_prefix, dc.anchor_suffix, dc.anchor_start, dc.anchor_end
+		  FROM document_comments dc
+		 WHERE dc.document_id = $1
+		   AND dc.deleted_at IS NULL
+		   AND dc.anchor_exact IS NOT NULL
+		 ORDER BY dc.created_at ASC, dc.id ASC`
+
+	var rows []repository.DocumentCommentAnchorRow
+	if err := r.db.SelectContext(ctx, &rows, q, documentID); err != nil {
+		return nil, err
+	}
+	return rows, nil
+}
+
+// UpdateAnchorPositions writes the whole document's re-anchored offsets in one
+// statement.
+//
+// UPDATE ... FROM (VALUES ...) rather than a loop of UPDATEs: the pass either
+// describes the body that was just written or it does not, and a loop that dies
+// half-way through leaves a document whose comments disagree about which
+// revision they are anchored to — a state no reader could detect and no later
+// pass would repair, because every row would look individually plausible.
+//
+// updated_at is deliberately NOT touched. Moving an offset is bookkeeping about
+// where the text went, not an edit of the comment; bumping it would make every
+// autosave look like somebody had just revised a hundred comments.
+func (r *DocumentCommentRepo) UpdateAnchorPositions(ctx context.Context, positions []repository.DocumentCommentAnchorPosition) error {
+	if len(positions) == 0 {
+		return nil
+	}
+
+	values := make([]string, 0, len(positions))
+	args := make([]any, 0, len(positions)*5)
+	for i, p := range positions {
+		base := i * 5
+		values = append(values, fmt.Sprintf("($%d::uuid, $%d::text, $%d::text, $%d::int, $%d::int)",
+			base+1, base+2, base+3, base+4, base+5))
+		args = append(args, p.ID, nullIfEmpty(p.Prefix), nullIfEmpty(p.Suffix), p.Start, p.End)
+	}
+
+	q := `
+		UPDATE document_comments dc
+		   SET anchor_prefix = v.prefix,
+		       anchor_suffix = v.suffix,
+		       anchor_start  = v.start,
+		       anchor_end    = v.end
+		  FROM (VALUES ` + strings.Join(values, ", ") + `) AS v(id, prefix, suffix, start, "end")
+		 WHERE dc.id = v.id AND dc.deleted_at IS NULL`
+
+	_, err := r.db.ExecContext(ctx, q, args...)
+	return err
 }

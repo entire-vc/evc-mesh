@@ -12,7 +12,7 @@ import {
   useDocumentCommentStore,
   type DocumentCommentThread,
 } from "@/stores/document-comment";
-import type { DocumentComment } from "@/types";
+import type { DocumentComment, DocumentCommentAnchor } from "@/types";
 import {
   anchorHintFraction,
   buildAnchorFromSelection,
@@ -32,10 +32,20 @@ import { clearHighlights, paintHighlights } from "./highlight";
  * Where a thread sits relative to the text on screen.
  *
  * `orphaned` is the server's word: the anchor kept its quote and lost its
- * offsets, so nobody knows where it was. `detached` is ours: the offsets are
- * still there, but the quote is no longer in the document — somebody edited the
- * words out from under it. Both are shown, and neither is highlighted, because
- * there is nothing truthful to highlight.
+ * offsets, because a save could not find the quote in the markdown any more.
+ * `detached` is ours: the quote is not in the rendered text on this screen.
+ * Both are shown, and neither is highlighted, because there is nothing truthful
+ * to highlight.
+ *
+ * They answer different questions, which is why both exist and why a missing
+ * position does not settle ours. The server asks "is this quote still in the
+ * markdown"; we ask "is it on the screen the reader is looking at". The two can
+ * disagree in one direction — an edit that wraps the quoted words in syntax the
+ * markdown scan will not step over leaves them plainly visible while the server
+ * can no longer locate them — and in that case the reader should still see the
+ * highlight they had yesterday. So the quote is looked for either way, and the
+ * position is used as what it has always been here: a hint for choosing between
+ * repeats, absent when the server has none to offer.
  */
 export type ThreadPlacement = "anchored" | "detached" | "orphaned" | "page";
 
@@ -44,6 +54,44 @@ export interface PlacedThread extends DocumentCommentThread {
   /** Where the quote is in the rendered text. Only set when anchored. */
   span: CharSpan | null;
   resolved: boolean;
+}
+
+/**
+ * Decide where one thread sits, from its anchor and the text on screen.
+ *
+ * Pure and exported so it can be tested: it is the branch that decides whether a
+ * reader keeps the highlight they had yesterday, and it used to live inside a
+ * useMemo where nothing could reach it.
+ *
+ * The quote is looked for whether or not the anchor carries a position. The
+ * position is a hint for choosing between repeats — that is all it has ever been
+ * on this path — and its absence is the absence of a hint, not an instruction to
+ * stop looking. Short-circuiting on it would hand a reader's highlight to the
+ * server's answer to a different question: the server orphans an anchor when the
+ * quote cannot be found in the saved MARKDOWN, and an edit that wraps the quoted
+ * words in syntax the markdown scan will not step over leaves them plainly
+ * visible on screen while the server can no longer locate them.
+ */
+export function placeAnchor(
+  anchor: DocumentCommentAnchor | null | undefined,
+  rendered: string,
+  source: string,
+): { placement: ThreadPlacement; span: CharSpan | null } {
+  if (!anchor || !anchor.exact) {
+    return { placement: "page", span: null };
+  }
+  const span = rendered
+    ? locateQuoteInRendered(rendered, anchor, anchorHintFraction(source, anchor))
+    : null;
+  if (span) {
+    return { placement: "anchored", span };
+  }
+  // Not on screen. Which of the two "not attached" states to report is the
+  // server's call when it has made one: it nulls the offsets only after failing
+  // to find the quote in the saved markdown, which is a stronger statement than
+  // ours and the one an agent reading the API is being shown too.
+  const orphaned = anchor.start === null || anchor.start === undefined;
+  return { placement: orphaned ? "orphaned" : "detached", span: null };
 }
 
 /** A selection waiting to become a comment. */
@@ -201,29 +249,15 @@ export function useDocComments({
   flatRef.current = flat;
 
   // ---- Place the threads ---------------------------------------------------
-  const threads = useMemo<PlacedThread[]>(() => {
-    const rendered = flat?.text ?? "";
-    return toThreads(comments).map((thread) => {
-      const anchor = thread.root.anchor;
-      const resolved = thread.root.resolved_at !== null;
-
-      if (!anchor || !anchor.exact) {
-        return { ...thread, placement: "page" as const, span: null, resolved };
-      }
-      if (anchor.start === null || anchor.start === undefined) {
-        return { ...thread, placement: "orphaned" as const, span: null, resolved };
-      }
-      const span = rendered
-        ? locateQuoteInRendered(rendered, anchor, anchorHintFraction(source, anchor))
-        : null;
-      return {
+  const threads = useMemo<PlacedThread[]>(
+    () =>
+      toThreads(comments).map((thread) => ({
         ...thread,
-        placement: span ? ("anchored" as const) : ("detached" as const),
-        span,
-        resolved,
-      };
-    });
-  }, [comments, flat, source]);
+        ...placeAnchor(thread.root.anchor, flat?.text ?? "", source),
+        resolved: thread.root.resolved_at !== null,
+      })),
+    [comments, flat, source],
+  );
 
   const unresolvedCount = threads.filter((t) => !t.resolved).length;
 

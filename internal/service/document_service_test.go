@@ -22,6 +22,7 @@ type documentFixture struct {
 	svc       *documentService
 	repo      *MockDocumentRepository
 	storage   *MockStorageClient
+	comments  *MockDocumentCommentRepository
 	projectID uuid.UUID
 	wsID      uuid.UUID
 }
@@ -35,14 +36,16 @@ func setupDocumentService(t *testing.T) *documentFixture {
 	repo := NewMockDocumentRepository().WithProjectWorkspace(projectID, wsID)
 	storage := NewMockStorageClient()
 	projectRepo := NewMockProjectRepository()
+	comments := NewMockDocumentCommentRepository()
 	require.NoError(t, projectRepo.Create(context.Background(), &domain.Project{ID: projectID, WorkspaceID: wsID}))
 
 	timeNow = func() time.Time { return frozenTime }
 
 	return &documentFixture{
-		svc:       NewDocumentService(repo, storage, projectRepo).(*documentService),
+		svc:       NewDocumentService(repo, storage, projectRepo, comments).(*documentService),
 		repo:      repo,
 		storage:   storage,
+		comments:  comments,
 		projectID: projectID,
 		wsID:      wsID,
 	}
@@ -387,7 +390,7 @@ func TestDocumentService_NoStorageConfigured(t *testing.T) {
 	projectRepo := NewMockProjectRepository()
 	require.NoError(t, projectRepo.Create(context.Background(), &domain.Project{ID: projectID, WorkspaceID: uuid.New()}))
 
-	svc := NewDocumentService(repo, nil, projectRepo)
+	svc := NewDocumentService(repo, nil, projectRepo, NewMockDocumentCommentRepository())
 
 	_, err := svc.Create(context.Background(), CreateDocumentInput{ProjectID: projectID, Title: "No storage"})
 
@@ -467,7 +470,7 @@ func TestDocumentService_NoStorageConfigured_ReadAndUpdate(t *testing.T) {
 	projectRepo := NewMockProjectRepository()
 	require.NoError(t, projectRepo.Create(ctx, &domain.Project{ID: projectID, WorkspaceID: wsID}))
 
-	svc := NewDocumentService(repo, nil, projectRepo)
+	svc := NewDocumentService(repo, nil, projectRepo, NewMockDocumentCommentRepository())
 
 	t.Run("read", func(t *testing.T) {
 		_, err := svc.GetByIDInWorkspace(ctx, docID, wsID)
