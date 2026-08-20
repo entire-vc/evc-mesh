@@ -2129,6 +2129,7 @@ func (s *taskService) CheckoutTask(ctx context.Context, taskID uuid.UUID, ttlMin
 	if task == nil {
 		return nil, apierror.NotFound("Task")
 	}
+	wasTodo := false
 	if status, sErr := s.statusRepo.GetByID(ctx, task.StatusID); sErr == nil && status != nil {
 		switch status.Category {
 		case domain.StatusCategoryDone, domain.StatusCategoryCancelled:
@@ -2140,6 +2141,7 @@ func (s *taskService) CheckoutTask(ctx context.Context, taskID uuid.UUID, ttlMin
 					"task must be moved to in_progress by a human before agent checkout",
 				)
 			}
+			wasTodo = true
 		}
 	}
 
@@ -2187,6 +2189,12 @@ func (s *taskService) CheckoutTask(ctx context.Context, taskID uuid.UUID, ttlMin
 	}
 	s.logActivity(ctx, task.ProjectID, taskID, "task.checkout_acquired", payload)
 
+	// Reflect the checkout on the board: a card in an agent's hands belongs in
+	// In Progress, not in Todo.
+	if wasTodo {
+		s.reflectCheckoutInStatus(ctx, task, actorID)
+	}
+
 	return &CheckoutResult{
 		TaskID:          taskID,
 		CheckoutToken:   token,
@@ -2195,6 +2203,71 @@ func (s *taskService) CheckoutTask(ctx context.Context, taskID uuid.UUID, ttlMin
 		DelegationLevel: task.DelegationLevel,
 		ProjectID:       task.ProjectID,
 	}, nil
+}
+
+// reflectCheckoutInStatus moves a just-checked-out todo task into the project's
+// first in_progress status, so that work in an agent's hands is visible on the
+// board instead of being indistinguishable from untouched todo.
+//
+// Why the move is made as SYSTEM and never fails the checkout:
+//
+// The lock is already held when this runs — the work IS in someone's hands, and
+// that is a fact, not a request. The status change reports the fact; it does not
+// grant permission. Refusing it (a capacity rule, a workflow gate, a transient
+// status-repo error) would not stop the agent working the card, it would only
+// hide the card again — which is precisely the bug this exists to fix. So every
+// failure here is logged and swallowed: the caller still gets its lock.
+//
+// Concretely, the workspace runs an active block-enforcement
+// `capacity_limit.max_in_progress` rule with limit 2, counted per ACTOR. That rule
+// was authored when nothing ever entered in_progress, so it has been dormant, and
+// under an agent actor it would begin refusing the 3rd concurrent card of a
+// sanctioned fan-out (the fleet convention allows one own card plus up to three
+// delegated). Moving as SYSTEM — the same actor the lease reaper uses for the
+// mirror-image transition in task_lease_reaper.go — keeps this path a report
+// rather than a second, accidental throttle. The WIP throttle that actually binds
+// is the checkout itself and the fan-out cap, neither of which is weakened here.
+// Re-tuning or retiring that rule is a policy decision, deliberately left to its
+// owner rather than made silently as a side effect of a visibility fix.
+func (s *taskService) reflectCheckoutInStatus(ctx context.Context, task *domain.Task, actorID uuid.UUID) {
+	inProgressID := s.findStatusIDByCategory(ctx, task.ProjectID, domain.StatusCategoryInProgress)
+	if inProgressID == nil {
+		log.Printf("[checkout-auto-progress] no in_progress status for project %s, task %s stays in todo",
+			task.ProjectID, task.ID)
+		return
+	}
+
+	sysCtx := actorctx.WithActor(ctx, uuid.Nil, domain.ActorTypeSystem)
+	if err := s.MoveTask(sysCtx, task.ID, MoveTaskInput{StatusID: inProgressID, Source: "checkout"}); err != nil {
+		// Fail open: the checkout stands, only the board display is degraded.
+		log.Printf("[checkout-auto-progress] WARNING: task %s stays in todo after checkout by %s: %v",
+			task.ID, actorID, err)
+		s.logActivity(ctx, task.ProjectID, task.ID, "task.checkout_auto_progress_failed", map[string]interface{}{
+			"reason":         err.Error(),
+			"checked_out_by": actorID.String(),
+		})
+		return
+	}
+	s.logActivity(ctx, task.ProjectID, task.ID, "task.checkout_auto_progress", map[string]interface{}{
+		"checked_out_by": actorID.String(),
+	})
+}
+
+// findStatusIDByCategory returns the ID of the project's first status in the given
+// category, or nil when the project has none.
+func (s *taskService) findStatusIDByCategory(ctx context.Context, projectID uuid.UUID, cat domain.StatusCategory) *uuid.UUID {
+	statuses, err := s.statusRepo.ListByProject(ctx, projectID)
+	if err != nil {
+		log.Printf("[checkout-auto-progress] cannot list statuses for project %s: %v", projectID, err)
+		return nil
+	}
+	for i := range statuses {
+		if statuses[i].Category == cat {
+			id := statuses[i].ID
+			return &id
+		}
+	}
+	return nil
 }
 
 // ReleaseCheckout clears the checkout on a task. The token must match.
