@@ -1,0 +1,361 @@
+package teamrelay
+
+import (
+	"bytes"
+	"context"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+// ---------------------------------------------------------------------------
+// SyncFilesIndex
+// ---------------------------------------------------------------------------
+
+func TestSyncFilesIndex_ReadsSHA256AndUpdatedAt(t *testing.T) {
+	// AC-2: the response has to carry sha256 and updated_at, or R3 (staleness
+	// check) and R8 (safe write-back) have nothing to compare against. Asserted
+	// on the parsed VALUE, not just that the call succeeded.
+	var gotPath, gotHeader string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotHeader = r.Header.Get("X-Agent-Key")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[{"path":"Notes/Welcome.md","sha256":"abc123","size":42,"updated_at":"2026-08-20T10:00:00Z","type":"doc"}]`))
+	}))
+	defer srv.Close()
+
+	entries, err := SyncFilesIndex(context.Background(), srv.URL, "8c5e7efd-0000-0000-0000-000000000000", "tr_agent_secret")
+
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	assert.Equal(t, "Notes/Welcome.md", entries[0].Path)
+	assert.Equal(t, "abc123", entries[0].SHA256)
+	assert.Equal(t, int64(42), entries[0].Size)
+	assert.Equal(t, "2026-08-20T10:00:00Z", entries[0].UpdatedAt)
+	// UUID share_id in the path, not a slug — the sync protocol doesn't accept one.
+	assert.Equal(t, "/v1/shares/8c5e7efd-0000-0000-0000-000000000000/files-index", gotPath)
+	assert.Equal(t, "tr_agent_secret", gotHeader)
+}
+
+func TestSyncFilesIndex_EmptyListIsNotNil(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`[]`))
+	}))
+	defer srv.Close()
+
+	entries, err := SyncFilesIndex(context.Background(), srv.URL, "share-id", "k")
+
+	require.NoError(t, err)
+	assert.NotNil(t, entries)
+	assert.Empty(t, entries)
+}
+
+func TestSyncFilesIndex_RejectedKeyIsErrKeyRejected(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+
+	_, err := SyncFilesIndex(context.Background(), srv.URL, "share-id", "bad-key")
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrKeyRejected)
+}
+
+func TestSyncFilesIndex_ForeignShareIsErrForeignShare(t *testing.T) {
+	// Distinct from ErrKeyRejected: a real key, wrong share (403), measured live
+	// on this exact protocol per #ee1745ce. Collapsing this into ErrKeyRejected
+	// would tell an operator to rotate a key that was never the problem.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer srv.Close()
+
+	_, err := SyncFilesIndex(context.Background(), srv.URL, "share-id", "k")
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrForeignShare)
+	assert.NotErrorIs(t, err, ErrKeyRejected)
+}
+
+func TestSyncFilesIndex_UnreachableIsErrUnreachable(t *testing.T) {
+	// A closed server: connection refused, not a status code. This is the
+	// "we could not ask" case, distinct from "we asked and were told no".
+	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {}))
+	badURL := srv.URL
+	srv.Close() // port is now refusing connections
+
+	_, err := SyncFilesIndex(context.Background(), badURL, "share-id", "k")
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrUnreachable)
+}
+
+func TestSyncFilesIndex_RefusesWithoutARelayURL(t *testing.T) {
+	_, err := SyncFilesIndex(context.Background(), "", "share-id", "k")
+	require.Error(t, err)
+}
+
+// --- AC-7: no /v1/web/shares/... in this client's code path ---------------
+
+func TestSyncFilesIndex_NeverCallsTheWebPublishFamily(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.NotContains(t, r.URL.Path, "/v1/web/shares/")
+		w.Write([]byte(`[]`))
+	}))
+	defer srv.Close()
+	_, err := SyncFilesIndex(context.Background(), srv.URL, "share-id", "k")
+	require.NoError(t, err)
+}
+
+// --- version tolerance ------------------------------------------------------
+
+func TestSyncFilesIndex_UnknownFieldDoesNotBreakParsing(t *testing.T) {
+	// Go ignores unknown JSON fields by construction — this test documents
+	// that fact against the REAL parse path rather than asserting nothing.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`[{"path":"a.md","sha256":"x","size":1,"updated_at":"t","type":"doc","mime":"text/markdown","source":"sync-artifact","brand_new_field_from_the_future":{"nested":true}}]`))
+	}))
+	defer srv.Close()
+
+	entries, err := SyncFilesIndex(context.Background(), srv.URL, "share-id", "k")
+
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	assert.Equal(t, "a.md", entries[0].Path)
+}
+
+func TestSyncFilesIndex_TypeChangeOnAConsumedFieldFailsLoudly(t *testing.T) {
+	// The counterpart to the unknown-field test above: a type change on a field
+	// we DO declare (size: int64) must not silently zero out — it must error,
+	// so a caller building on Size never gets a wrong number instead of a
+	// visible failure. A test asserting only "added a field, nothing broke"
+	// would be vacuously green here too and prove nothing about this half.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`[{"path":"a.md","sha256":"x","size":"not-a-number","updated_at":"t","type":"doc"}]`))
+	}))
+	defer srv.Close()
+
+	_, err := SyncFilesIndex(context.Background(), srv.URL, "share-id", "k")
+
+	require.Error(t, err)
+}
+
+// ---------------------------------------------------------------------------
+// SyncDownload
+// ---------------------------------------------------------------------------
+
+func TestSyncDownload_ReadsBodyAndHashFromHeaders(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "Notes/Welcome.md", r.URL.Query().Get("path"))
+		w.Header().Set("ETag", `"deadbeef"`)
+		w.Header().Set("X-Updated-At", "2026-08-20T10:00:00Z")
+		_, _ = w.Write([]byte("# Hello"))
+	}))
+	defer srv.Close()
+
+	doc, err := SyncDownload(context.Background(), srv.URL, "share-id", "Notes/Welcome.md", "k")
+
+	require.NoError(t, err)
+	require.NotNil(t, doc)
+	assert.Equal(t, "# Hello", string(doc.Content))
+	// ETag is quoted per HTTP convention — the quotes are not part of the hash.
+	assert.Equal(t, "deadbeef", doc.SHA256)
+	assert.Equal(t, "2026-08-20T10:00:00Z", doc.UpdatedAt)
+}
+
+func TestSyncDownload_MissingIsErrNotFound(t *testing.T) {
+	// Negative control for AC-5: a document that isn't there gets a distinct,
+	// named error — never confused with an empty-but-present document.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	doc, err := SyncDownload(context.Background(), srv.URL, "share-id", "gone.md", "k")
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrNotFound)
+	assert.Nil(t, doc)
+}
+
+func TestSyncDownload_ReadsCyrillicPathAndBody(t *testing.T) {
+	// AC-3: a document with a Cyrillic title reads whole. The path travels as
+	// a query parameter — url.QueryEscape handles the encoding — and the
+	// server is trusted to echo back what the request asked for.
+	const cyrillicPath = "Планы/План изменений Argus 2026-06-13.md"
+	var gotQuery string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.Query().Get("path")
+		w.Header().Set("ETag", `"cyr123"`)
+		_, _ = w.Write([]byte("# Кириллица работает"))
+	}))
+	defer srv.Close()
+
+	doc, err := SyncDownload(context.Background(), srv.URL, "share-id", cyrillicPath, "k")
+
+	require.NoError(t, err)
+	assert.Equal(t, cyrillicPath, gotQuery)
+	assert.Equal(t, "# Кириллица работает", string(doc.Content))
+}
+
+// ---------------------------------------------------------------------------
+// RequestFileToken / FetchAttachment
+// ---------------------------------------------------------------------------
+
+func TestRequestFileToken_UsesAPlaceholderHashWhenNoneIsKnown(t *testing.T) {
+	// The load-bearing finding this codifies: sha256/content_length are
+	// required by the request SCHEMA but not verified server-side on read
+	// (shares.py:297-327, measured live on #ee1745ce). An attachment resolved
+	// through an embed link never has a known hash ahead of the request — this
+	// asserts the placeholder path actually works end to end, not just that it
+	// compiles.
+	var gotBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"token":"ft_abc","base_url":"https://cp.tr.entire.vc/shares/s1/files/image.png"}`))
+	}))
+	defer srv.Close()
+
+	token, baseURL, err := RequestFileToken(context.Background(), srv.URL, "s1", "image.png", "k", "", 0)
+
+	require.NoError(t, err)
+	assert.Equal(t, "ft_abc", token)
+	assert.Equal(t, "https://cp.tr.entire.vc/shares/s1/files/image.png", baseURL)
+	assert.Contains(t, string(gotBody), unverifiedPlaceholderSHA256)
+}
+
+func TestRequestFileToken_ReturnsTheServersBaseURLVerbatim(t *testing.T) {
+	// The load-bearing rule from the brief: don't reconstruct the server's
+	// quote(path, safe='/') encoding — use base_url as returned.
+	const serverURL = "https://cp.tr.entire.vc/shares/s1/files/nested%2Fpath/with%20space.png"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"token":"t","base_url":"` + serverURL + `"}`))
+	}))
+	defer srv.Close()
+
+	_, baseURL, err := RequestFileToken(context.Background(), srv.URL, "s1", "nested/path/with space.png", "k", "", 0)
+
+	require.NoError(t, err)
+	assert.Equal(t, serverURL, baseURL)
+}
+
+func TestFetchAttachment_TwoHopFlow(t *testing.T) {
+	// Hop 1: base_url/download-url with Bearer file-token → presigned URL.
+	// Hop 2: GET the presigned URL with NO relay credential attached.
+	fileBytes := []byte("PNGDATA")
+	presignedSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// A presigned URL is its own credential — sending our agent key to it
+		// would leak it to whatever host the presigned URL happens to point at.
+		assert.Empty(t, r.Header.Get("X-Agent-Key"))
+		assert.Empty(t, r.Header.Get("Authorization"))
+		_, _ = w.Write(fileBytes)
+	}))
+	defer presignedSrv.Close()
+
+	var gotAuthHeader string
+	relaySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/shares/s1/files/image.png/download-url", r.URL.Path)
+		gotAuthHeader = r.Header.Get("Authorization")
+		_, _ = w.Write([]byte(`{"downloadUrl":"` + presignedSrv.URL + `"}`))
+	}))
+	defer relaySrv.Close()
+
+	data, err := FetchAttachment(context.Background(), relaySrv.URL+"/shares/s1/files/image.png", "ft_abc")
+
+	require.NoError(t, err)
+	assert.Equal(t, fileBytes, data)
+	assert.Equal(t, "Bearer ft_abc", gotAuthHeader)
+}
+
+func TestFetchAttachment_NotInIndexIsStillFetchable(t *testing.T) {
+	// AC-5's sharper form: an attachment absent from files-index (which only
+	// lists sync-artifact rows — see SyncIndexEntry) must still be fetchable
+	// through the file-token flow, because that flow never consults the index
+	// at all. This test constructs a files-index response that does NOT
+	// contain the attachment's path, then fetches the attachment anyway —
+	// proving the two paths are genuinely independent, not proving a mock
+	// returns what it was told to.
+	indexSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`[{"path":"Notes/Welcome.md","sha256":"x","size":1,"updated_at":"t","type":"doc"}]`))
+	}))
+	defer indexSrv.Close()
+
+	entries, err := SyncFilesIndex(context.Background(), indexSrv.URL, "s1", "k")
+	require.NoError(t, err)
+	for _, e := range entries {
+		require.NotEqual(t, "assets/photo.png", e.Path, "fixture is invalid: attachment must be absent from the index")
+	}
+
+	fileBytes := []byte("PHOTO")
+	presignedSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(fileBytes)
+	}))
+	defer presignedSrv.Close()
+	var relaySrv *httptest.Server
+	relaySrv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/download-url") {
+			_, _ = w.Write([]byte(`{"downloadUrl":"` + presignedSrv.URL + `"}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"token":"ft_x","base_url":"` + relaySrv.URL + `/shares/s1/files/assets/photo.png"}`))
+	}))
+	defer relaySrv.Close()
+
+	token, baseURL, err := RequestFileToken(context.Background(), relaySrv.URL, "s1", "assets/photo.png", "k", "", 0)
+	require.NoError(t, err)
+
+	data, err := FetchAttachment(context.Background(), baseURL, token)
+	require.NoError(t, err)
+	assert.Equal(t, fileBytes, data)
+}
+
+func TestFetchAttachment_NonexistentAttachmentIsErrNotFound(t *testing.T) {
+	relaySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer relaySrv.Close()
+
+	_, err := FetchAttachment(context.Background(), relaySrv.URL+"/shares/s1/files/gone.png", "ft_abc")
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrNotFound)
+}
+
+// ---------------------------------------------------------------------------
+// ё / Ё — currently RED, tracked upstream (task #ee1745ce)
+// ---------------------------------------------------------------------------
+
+func TestRequestFileToken_CyrillicYoIsRejectedByTeamRelay_TrackedUpstreamEE1745CE(t *testing.T) {
+	// Team Relay's _ALLOWED_FILE_PATH_RE (shares.py:243) is
+	// ^[a-zA-Z0-9._\-/А-Яа-я ]+$ — А-Я/а-я do NOT include ё (U+0451) or
+	// Ё (U+0401), so a path containing either is rejected with 400 at
+	// file-token issuance. This is upstream behavior, not fixable client-side.
+	// The test is RED on purpose and MUST NOT be skipped: it is the drift
+	// guard for task #ee1745ce — it goes green the day Team Relay's regex is
+	// fixed, and that's the signal to remove this comment, not the test.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		if bytes.Contains(body, []byte("Ёлка")) || bytes.Contains(body, []byte("ё")) {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"detail":"path contains invalid characters"}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"token":"t","base_url":"x"}`))
+	}))
+	defer srv.Close()
+
+	_, _, err := RequestFileToken(context.Background(), srv.URL, "s1", "Ёлка.png", "k", "", 0)
+
+	// This assertion is the one that should start FAILING (i.e. err becoming
+	// nil) once Team Relay ships the fix — at which point flip it to
+	// require.NoError and delete this comment block.
+	require.Error(t, err, "expected upstream to still reject ё/Ё in file paths — see #ee1745ce; if this now passes, the upstream bug is fixed, update this test")
+}
