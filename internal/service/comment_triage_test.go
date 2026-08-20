@@ -122,6 +122,36 @@ func (env triageTestEnv) systemComments() []domain.Comment {
 	return out
 }
 
+// releaseComments returns only the system comments that ANNOUNCE a human_gate
+// release. Split out 2026-08-20 (#17829fcf) because the withdrawal-miss notice
+// added by that task is also a system comment: an `assert.Empty(systemComments())`
+// negative control would now pass or fail for reasons unrelated to whether the
+// gate was released. Every such control below asserts on THIS list instead, so it
+// still fails if a release ever leaks — the notice cannot mask it, and a renamed
+// release body would leave releaseComments empty AND withdrawalMissNotices
+// non-empty, which the paired assertions catch rather than silently accept.
+func (env triageTestEnv) releaseComments() []domain.Comment {
+	var out []domain.Comment
+	for _, c := range env.systemComments() {
+		if strings.Contains(c.Body, "human_gate снят") {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// withdrawalMissNotices returns the system comments posted by reportWithdrawalMiss
+// (#17829fcf AC2) — the trace that a withdrawal-shaped comment did NOT count.
+func (env triageTestEnv) withdrawalMissNotices() []domain.Comment {
+	var out []domain.Comment
+	for _, c := range env.systemComments() {
+		if strings.Contains(c.Body, "human_gate по-прежнему поднят") {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
 // seedTask inserts a task with the given status and returns its ID.
 func (env triageTestEnv) seedTask(statusID uuid.UUID) uuid.UUID {
 	taskID := uuid.New()
@@ -1523,11 +1553,19 @@ func TestReleaseHumanGateOnWithdrawal_QuotedNegatorOnly_KeepsGate(t *testing.T) 
 	cases := []struct {
 		name string
 		body string
+		// wantNotice: whether #17829fcf's withdrawal-miss notice fires. It does
+		// ONLY where the citation sits in the region an ASSERTED negator would
+		// have counted — "right words, right place, formatted as a quote". A
+		// negator quoted elsewhere is overwhelmingly a paste (triageExitNegators
+		// contains "resolved", so CI logs match), and gets no notice. Either way
+		// the gate must stay armed — that is what this test is for, and it is
+		// asserted for every case below.
+		wantNotice bool
 	}{
-		{"inline code", "Механизм: негатор (`не нужен`) того же автора снимает флаг."},
-		{"fenced block", "Словарь негаторов:\n```\nне нужен\nснят\nresolved\n```\nЭто справка."},
-		{"blockquote", "Цитирую тред:\n> ask не нужен, снят\n\nПросто фиксирую."},
-		{"the live probe #a073a896 body", liveProbeSummaryBody},
+		{"inline code", "Механизм: негатор (`не нужен`) того же автора снимает флаг.", true},
+		{"fenced block", "Словарь негаторов:\n```\nне нужен\nснят\nresolved\n```\nЭто справка.", true},
+		{"blockquote", "Цитирую тред:\n> ask не нужен, снят\n\nПросто фиксирую.", false},
+		{"the live probe #a073a896 body", liveProbeSummaryBody, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1547,7 +1585,19 @@ func TestReleaseHumanGateOnWithdrawal_QuotedNegatorOnly_KeepsGate(t *testing.T) 
 
 			assert.Empty(t, env.taskMover.humanGateCalls(),
 				"a QUOTED negator is not a withdrawal — the gate must stay armed")
-			assert.Empty(t, env.systemComments())
+			assert.Empty(t, env.releaseComments(),
+				"and nothing may announce a release that did not happen")
+			// #17829fcf: the no-op is no longer SILENT. The author owns the live
+			// marker here, so they are told why their words did not count —
+			// this is the one difference from the pre-#17829fcf expectation of
+			// zero system comments, and it must be a notice, never a release.
+			if tc.wantNotice {
+				require.Len(t, env.withdrawalMissNotices(), 1)
+				assert.Contains(t, env.withdrawalMissNotices()[0].Body, "только внутри кода")
+			} else {
+				assert.Empty(t, env.withdrawalMissNotices(),
+					"a negator quoted outside the searched region reads as a paste, not a missed withdrawal")
+			}
 		})
 	}
 }
@@ -1581,8 +1631,15 @@ func TestReleaseHumanGateOnWithdrawal_SummaryThenRealWithdrawal(t *testing.T) {
 	require.Len(t, gateCalls, 1, "the real withdrawal must still release (PR #451 not broken)")
 	assert.Equal(t, taskID, gateCalls[0].taskID)
 	assert.False(t, gateCalls[0].value)
-	require.Len(t, env.systemComments(), 1)
-	assert.Contains(t, env.systemComments()[0].Body, "human_gate снят")
+	require.Len(t, env.releaseComments(), 1,
+		"exactly one release announcement — from the real withdrawal, not from the summary")
+	assert.Contains(t, env.releaseComments()[0].Body, "human_gate снят")
+	// The summary earned a miss notice (#17829fcf); the withdrawal that worked
+	// must NOT also earn one — a comment cannot both release and be reported
+	// as not having released.
+	assert.Empty(t, env.withdrawalMissNotices(),
+		"the summary quotes its negators outside the searched region — a paste, not a missed withdrawal; "+
+			"and the withdrawal that WORKED must never be reported as a miss")
 }
 
 // TestReleaseHumanGateOnWithdrawal_MarkerQuotingNegators_KeepsOwnership covers the
@@ -1752,7 +1809,17 @@ func TestReleaseHumanGateOnWithdrawal_LongStatusReport_LeavesGateIntact(t *testi
 
 	assert.Empty(t, env.taskMover.humanGateCalls(),
 		"the report's mid-body negators are about a different topic / a superseded framing — the live ask must stay gated")
-	assert.Empty(t, env.systemComments())
+	assert.Empty(t, env.releaseComments(),
+		"#17829fcf must not have widened the scope: this body still releases nothing")
+	// #17829fcf explicitly declined to widen the scope, so this control is
+	// unchanged in the only way that matters. What IS new: the report now says
+	// out loud that the gate stayed up and which region the server read. The
+	// notice is deliberately NOT phrased as "your withdrawal was rejected" —
+	// this body is a genuine status update, and asserting intent here would be
+	// wrong.
+	require.Len(t, env.withdrawalMissNotices(), 1)
+	assert.Contains(t, env.withdrawalMissNotices()[0].Body, "последний абзац")
+	assert.NotContains(t, env.withdrawalMissNotices()[0].Body, "отклонён")
 }
 
 // TestReleaseHumanGateOnWithdrawal_LongStatusReportThenRealWithdrawal is AC2:
