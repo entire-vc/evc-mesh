@@ -39,7 +39,7 @@ func setupDocumentSearch(t *testing.T) *documentSearchFixture {
 	storage := NewMockStorageClient()
 
 	return &documentSearchFixture{
-		svc:       NewDocumentService(repo, storage, projects).(*documentService),
+		svc:       NewDocumentService(repo, storage, projects, NewMockDocumentCommentRepository()).(*documentService),
 		repo:      repo,
 		storage:   storage,
 		projectID: projectID,

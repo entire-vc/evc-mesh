@@ -360,6 +360,46 @@ type DocumentCommentRepository interface {
 	// answers is an answer to nothing.
 	SoftDelete(ctx context.Context, id uuid.UUID, at time.Time) error
 	ListByDocument(ctx context.Context, documentID uuid.UUID, filter DocumentCommentFilter, pg pagination.Params) (*pagination.Page[domain.DocumentComment], error)
+	// ListAnchorsByDocument returns the anchor of every live comment on the
+	// document that has one, resolved threads included. It is the input to the
+	// re-anchoring pass that runs after the body is rewritten, so it is not
+	// paginated and not filtered: an anchor left out of the pass is an anchor
+	// left pointing at whatever now occupies its old offsets, and "resolved"
+	// describes a conversation, not whether its offsets may lie.
+	ListAnchorsByDocument(ctx context.Context, documentID uuid.UUID) ([]DocumentCommentAnchorRow, error)
+	// UpdateAnchorPositions moves each listed comment's offsets to where its
+	// quote now sits, or nulls them when it no longer sits anywhere. One
+	// statement for the whole document: a per-row loop could be interrupted
+	// half-way and leave some rows describing the new body and some the old,
+	// which is worse than either, and impossible to tell apart from both.
+	UpdateAnchorPositions(ctx context.Context, positions []DocumentCommentAnchorPosition) error
+}
+
+// DocumentCommentAnchorRow is one comment's anchor, with the id needed to write
+// it back. Just the anchor: the re-anchoring pass has no use for the body, the
+// author or the resolution triple, and a document with a hundred comments should
+// not pull a hundred bodies through to move five offsets.
+type DocumentCommentAnchorRow struct {
+	ID     uuid.UUID `db:"id"`
+	Exact  string    `db:"anchor_exact"`
+	Prefix *string   `db:"anchor_prefix"`
+	Suffix *string   `db:"anchor_suffix"`
+	Start  *int      `db:"anchor_start"`
+	End    *int      `db:"anchor_end"`
+}
+
+// DocumentCommentAnchorPosition is where one comment's anchor should now sit.
+//
+// Start and End are nil together to orphan it. The pair is nil-or-both by the
+// same schema check that governs the columns, so a caller cannot express
+// "orphaned, and here are the offsets" — the state the flag-shaped design would
+// have allowed and this one cannot.
+type DocumentCommentAnchorPosition struct {
+	ID     uuid.UUID
+	Prefix string
+	Suffix string
+	Start  *int
+	End    *int
 }
 
 // AgentFilter defines filtering options for listing agents.
