@@ -809,6 +809,8 @@ export interface TeamDirectoryAgent {
 export interface TeamDirectoryHuman {
   id: string;
   name: string;
+  /** The @-handle. What the mention renderers match an `@word` against. */
+  username: string;
   email: string;
   avatar_url: string;
   role: string;

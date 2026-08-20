@@ -1172,6 +1172,19 @@ type MentionService interface {
 	CountUnseen(ctx context.Context, mentionedID uuid.UUID, mentionedKind string) (int64, error)
 }
 
+// DocumentMentionService is MentionService for @-mentions inside document
+// comments.
+//
+// Separate from MentionService rather than a widened version of it: the view it
+// returns names a document and no task, and merging the two would mean a
+// nullable task id on a shared view that every consumer has to branch on anyway
+// — the same branch, minus the compiler checking that it happened.
+type DocumentMentionService interface {
+	List(ctx context.Context, mentionedID uuid.UUID, mentionedKind string, filter repository.MentionFilter) ([]domain.DocumentCommentMentionView, error)
+	MarkSeen(ctx context.Context, commentID, mentionedID uuid.UUID) error
+	CountUnseen(ctx context.Context, mentionedID uuid.UUID, mentionedKind string) (int64, error)
+}
+
 // RelayPublisher is the optional interface for publishing artifacts to Team Relay.
 // Publish returns the artifact's public (browser-renderable) URL and the agent key
 // that was used to authenticate the upload (empty string for public shares or when

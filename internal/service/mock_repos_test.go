@@ -1559,6 +1559,11 @@ func (m *MockNotificationService) TelegramReachable(context.Context, uuid.UUID) 
 type MockAgentService struct {
 	mu     sync.RWMutex
 	bySlug map[string]*domain.Agent // key: workspaceID.String()+":"+slug
+	// errToReturn makes GetBySlug fail. "Nobody by that name" and "the lookup
+	// broke" are different answers — the first is a typo the author must be told
+	// about, the second is not — and telling them apart needs a mock that can
+	// produce both.
+	errToReturn error
 }
 
 func NewMockAgentService() *MockAgentService {
@@ -1574,6 +1579,9 @@ func (m *MockAgentService) AddAgent(workspaceID uuid.UUID, a *domain.Agent) {
 func (m *MockAgentService) GetBySlug(_ context.Context, workspaceID uuid.UUID, slug string) (*domain.Agent, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+	if m.errToReturn != nil {
+		return nil, m.errToReturn
+	}
 	a := m.bySlug[workspaceID.String()+":"+slug]
 	return a, nil
 }

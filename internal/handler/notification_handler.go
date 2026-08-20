@@ -226,11 +226,20 @@ var deliverableChannels = map[string]bool{
 // through NotificationService.Notify. Subscribing to anything else is the same
 // dead-end as an unknown channel: stored, echoed back, never delivered.
 //
-// Keep in step with the Notify call sites (task_service.go, comment_service.go).
+// Keep in step with the Notify call sites (task_service.go, comment_service.go,
+// document_comment_mentions.go).
 var dispatchableEvents = map[string]bool{
-	"task.assigned":          true,
-	"task.status_changed":    true,
-	"task.mentioned":         true,
+	"task.assigned":       true,
+	"task.status_changed": true,
+	"task.mentioned":      true,
+	// An @-mention inside a comment on a document page. Distinct from
+	// task.mentioned because the payload names a document and no task, and a
+	// subscriber has to know which of the two it is holding before trying to open
+	// one. Existing task.mentioned subscribers were opted in by
+	// migrations/20260820103_create_document_comment_mentions.sql: an event type
+	// that appears in no stored `events` array is dispatched perfectly and
+	// delivered to nobody.
+	"document.mentioned":     true,
 	"task.blocking_triage":   true,
 	"task.reviewer_assigned": true,
 	"task.ready_for_review":  true,

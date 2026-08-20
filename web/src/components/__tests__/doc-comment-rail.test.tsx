@@ -124,7 +124,7 @@ describe("DocCommentRail — a thread", () => {
     renderRail(controller);
 
     fireEvent.click(screen.getByRole("button", { name: /reply/i }));
-    fireEvent.change(screen.getByPlaceholderText("Reply..."), { target: { value: "Looking at it now" } });
+    fireEvent.change(screen.getByPlaceholderText("Reply… @ to mention"), { target: { value: "Looking at it now" } });
     fireEvent.click(screen.getByRole("button", { name: "Reply" }));
 
     await waitFor(() =>
@@ -293,7 +293,7 @@ describe("DocCommentRail — the draft composer", () => {
     renderRail(controller);
 
     expect(screen.getByText(/could not be pinned/i)).toBeInTheDocument();
-    fireEvent.change(screen.getByPlaceholderText("Add a comment..."), { target: { value: "Why?" } });
+    fireEvent.change(screen.getByPlaceholderText("Add a comment… @ to mention"), { target: { value: "Why?" } });
     fireEvent.click(screen.getByRole("button", { name: "Comment" }));
     await waitFor(() => expect(controller.submitDraft).toHaveBeenCalledWith("Why?"));
   });

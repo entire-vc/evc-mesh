@@ -151,8 +151,14 @@ type TeamDirectoryAgent struct {
 
 // TeamDirectoryHuman is the human member profile for team directory API.
 type TeamDirectoryHuman struct {
-	ID                 uuid.UUID       `json:"id"`
-	Name               string          `json:"name"`
+	ID   uuid.UUID `json:"id"`
+	Name string    `json:"name"`
+	// Username is the @-handle, present for the same reason an agent carries
+	// Slug: the directory is what a renderer consults to decide whether an
+	// `@word` in a comment is a mention. Without it agents highlighted and
+	// people did not, so "@pavel — @daedalus" rendered one as a mention and the
+	// other as prose even though both had been notified.
+	Username           string          `json:"username"`
 	Email              string          `json:"email"`
 	AvatarURL          string          `json:"avatar_url"`
 	Role               string          `json:"role"`

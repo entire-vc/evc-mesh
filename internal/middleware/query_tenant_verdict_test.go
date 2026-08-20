@@ -157,8 +157,16 @@ var declaredQueryTenantParams = map[string]string{
 	"comment_handler.go:GetMyComments.workspace_id": "narrows: AND p.workspace_id = $%d — pinned by c.author_id = $1",
 	"comment_handler.go:GetMyComments.project_id":   "narrows: AND t.project_id = $%d — pinned by c.author_id = $1",
 
-	// GET /me/mentions — same shape, pinned to the mention's recipient.
-	"mention_handler.go:List.project_id": "narrows: AND t.project_id = $ — pinned by cm.mentioned_id = $1",
+	// GET /me/mentions and GET /me/document-mentions — same shape, pinned to the
+	// mention's recipient. The verdict is recorded once against the shared helper
+	// both routes parse through, rather than twice against the handlers calling
+	// it: the filter it builds is applied to a query whose first predicate is
+	// already the caller's own id, so a foreign project_id can only remove rows
+	// the caller was entitled to, never add one they were not.
+	// The verdict below quotes the document-mention query; the task-mention
+	// caller's is the same shape one table over ("AND t.project_id = $", pinned by
+	// "cm.mentioned_id = $1") and holds for the same reason.
+	"document_mention_handler.go:parseMentionFilter.project_id": "narrows: AND d.project_id = $ — pinned by dcm.mentioned_id = $1",
 
 	// GET /projects/:proj_id/events — pinned by the path parameter, which projAccess
 	// and WorkspaceRLS have both already resolved.
