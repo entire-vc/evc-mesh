@@ -6,6 +6,13 @@ on:
     paths:
       - 'cmd/**'
       - 'internal/**'
+      # pkg/** compiles into the serving binary exactly like internal/** does,
+      # but was missing here, so a change confined to it built fine, passed CI,
+      # merged — and never reached prod. Noticed while shipping the
+      # pkg/encryption fix (#5a94ad64): that PR happens to touch cmd/ and
+      # migrations/ too, so it deploys, but a follow-up patch to the crypto
+      # alone would have gone nowhere with nothing to show for it.
+      - 'pkg/**'
       - 'go.mod'
       - 'go.sum'
       - 'migrations/**'

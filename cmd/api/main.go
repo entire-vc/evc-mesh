@@ -17,6 +17,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
+	"github.com/entire-vc/evc-mesh/pkg/encryption"
 	"github.com/entire-vc/evc-mesh/pkg/metrics"
 
 	"github.com/redis/go-redis/v9"
@@ -48,6 +49,21 @@ var (
 func main() {
 	// 1. Load configuration from environment.
 	cfg := config.Load()
+
+	// Say out loud, once, whether integration credentials are actually being
+	// encrypted at rest. Previously the only signal was a log line emitted
+	// lazily on the first Encrypt/Decrypt call — on a quiet instance that can
+	// be days after boot, buried in request logs, and it read identically
+	// whether the key was missing or merely mistyped. Publishing it as a gauge
+	// makes "the control is off" alertable instead of something discovered by
+	// reading rows. Checked before anything is opened: it needs no
+	// dependencies, and a deployment that demanded encryption should not get
+	// as far as a half-initialised process.
+	if err := encryption.Validate(); err != nil {
+		log.Fatalf("Refusing to start: %v", err)
+	}
+	encState, encRequired := encryption.Status()
+	metrics.SetIntegrationEncryptionState(encState.String(), encRequired)
 
 	// 2. Connect to PostgreSQL.
 	db, err := postgres.NewDB(cfg.Database.DSN())

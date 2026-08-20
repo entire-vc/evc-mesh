@@ -101,20 +101,55 @@ func (r *ProjectIntegrationRepo) GetByShareSlug(ctx context.Context, shareSlug s
 }
 
 // Upsert inserts or updates a project integration. When agent_key is NULL, the existing value is preserved.
+//
+// The write runs in a transaction because of the plaintext escape hatch below;
+// see upsertQuery for why a single statement still needs one.
 func (r *ProjectIntegrationRepo) Upsert(ctx context.Context, pi *domain.ProjectIntegration) error {
 	settings := pi.Settings
 	if settings == nil {
 		settings = json.RawMessage("{}")
 	}
 	var encKey *string
+	storingPlaintext := false
 	if pi.AgentKey != "" {
 		enc, err := encryption.Encrypt(pi.AgentKey)
 		if err != nil {
 			return err
 		}
+		// Encrypt degrades to a passthrough on a deployment with no key
+		// configured — a documented self-hosting mode. The DB trigger rejects
+		// unencrypted credentials by default, so this one caller, which knows
+		// encryption is genuinely unavailable rather than merely skipped, has
+		// to say so explicitly.
+		storingPlaintext = !encryption.IsEncrypted(enc)
 		encKey = &enc
 	}
-	const q = `
+
+	tx, err := r.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if storingPlaintext {
+		if _, err := tx.ExecContext(ctx, `SET LOCAL mesh.allow_plaintext_agent_key = 'on'`); err != nil {
+			return err
+		}
+	}
+
+	if _, err := tx.ExecContext(ctx, upsertQuery,
+		pi.ID, pi.ProjectID, pi.Type, pi.Enabled, []byte(settings), encKey,
+		pi.CreatedAt, pi.UpdatedAt, pi.CreatedBy,
+	); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// upsertQuery is separated out only so Upsert reads as the transaction it is.
+// SET LOCAL is scoped to the surrounding transaction, which is what keeps the
+// plaintext exemption from leaking to the next user of a pooled connection.
+const upsertQuery = `
 		INSERT INTO project_integrations (id, project_id, type, enabled, settings, agent_key, created_at, updated_at, created_by)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		ON CONFLICT (project_id, type)
@@ -124,12 +159,6 @@ func (r *ProjectIntegrationRepo) Upsert(ctx context.Context, pi *domain.ProjectI
 			agent_key  = CASE WHEN EXCLUDED.agent_key IS NOT NULL THEN EXCLUDED.agent_key ELSE project_integrations.agent_key END,
 			updated_at = EXCLUDED.updated_at
 	`
-	_, err := r.db.ExecContext(ctx, q,
-		pi.ID, pi.ProjectID, pi.Type, pi.Enabled, []byte(settings), encKey,
-		pi.CreatedAt, pi.UpdatedAt, pi.CreatedBy,
-	)
-	return err
-}
 
 // Delete removes the integration of the given type for the project.
 func (r *ProjectIntegrationRepo) Delete(ctx context.Context, projectID uuid.UUID, intType string) error {

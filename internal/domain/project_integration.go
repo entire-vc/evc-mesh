@@ -14,10 +14,17 @@ type ProjectIntegration struct {
 	Type      string          `json:"type" db:"type"`
 	Enabled   bool            `json:"enabled" db:"enabled"`
 	Settings  json.RawMessage `json:"settings" db:"settings"`
-	AgentKey  string          `json:"agent_key,omitempty" db:"agent_key"` // plaintext in memory; encrypted in DB
-	CreatedAt time.Time       `json:"created_at" db:"created_at"`
-	UpdatedAt time.Time       `json:"updated_at" db:"updated_at"`
-	CreatedBy *uuid.UUID      `json:"created_by,omitempty" db:"created_by"`
+	// AgentKey is plaintext in memory and encrypted at rest, but ONLY when it
+	// travels through the repository layer: the encryption lives in
+	// ProjectIntegrationRepo, so a row provisioned with direct SQL bypasses it
+	// entirely. That is how the 2026-06 Team Relay credentials came to sit in
+	// the clear while this comment claimed otherwise. The DB-side CHECK
+	// constraint (migration 20260820108) is what makes the claim true for
+	// every write path rather than just this one.
+	AgentKey  string     `json:"agent_key,omitempty" db:"agent_key"`
+	CreatedAt time.Time  `json:"created_at" db:"created_at"`
+	UpdatedAt time.Time  `json:"updated_at" db:"updated_at"`
+	CreatedBy *uuid.UUID `json:"created_by,omitempty" db:"created_by"`
 }
 
 // TeamRelaySettings holds the Team Relay-specific configuration.
