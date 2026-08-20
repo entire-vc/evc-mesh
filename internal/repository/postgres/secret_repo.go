@@ -167,7 +167,7 @@ func (r *SecretRepo) Create(ctx context.Context, input domain.CreateSecretInput)
 		input.CreatedBy, input.CreatedByType,
 	)
 	if err != nil {
-		if isUniqueViolation(err) {
+		if isSecretsUniqueViolation(err) {
 			return domain.Secret{}, apierror.Conflict(fmt.Sprintf(
 				"a current secret named %s already exists in this scope — use rotate to replace its value", input.Name))
 		}
@@ -340,9 +340,13 @@ func (r *SecretRepo) ResolveCurrentValues(ctx context.Context, workspaceID uuid.
 	return out, nil
 }
 
-// isUniqueViolation matches the convention already used in
-// document_repo.go: *pq.Error with SQLSTATE 23505.
-func isUniqueViolation(err error) bool {
+// isSecretsUniqueViolation matches the convention already used in
+// document_repo.go: *pq.Error with SQLSTATE 23505. Named for this package
+// rather than plain isUniqueViolation — document_external_source_db_test.go
+// (merged same day, unrelated PR) declares its own same-package helper of
+// that name for a different signature; two files in one package can't share
+// an unexported symbol name.
+func isSecretsUniqueViolation(err error) bool {
 	var pqErr *pq.Error
 	return errors.As(err, &pqErr) && pqErr.Code == "23505"
 }

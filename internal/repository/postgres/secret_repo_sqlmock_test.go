@@ -418,11 +418,11 @@ func TestResolveCurrentValues_QueryErrorPropagates(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-// --- isUniqueViolation ---
+// --- isSecretsUniqueViolation ---
 
 func TestIsUniqueViolation(t *testing.T) {
-	assert.True(t, isUniqueViolation(&pq.Error{Code: "23505"}))
-	assert.False(t, isUniqueViolation(&pq.Error{Code: "23503"}))
-	assert.False(t, isUniqueViolation(errors.New("not a pq error")))
-	assert.False(t, isUniqueViolation(nil))
+	assert.True(t, isSecretsUniqueViolation(&pq.Error{Code: "23505"}))
+	assert.False(t, isSecretsUniqueViolation(&pq.Error{Code: "23503"}))
+	assert.False(t, isSecretsUniqueViolation(errors.New("not a pq error")))
+	assert.False(t, isSecretsUniqueViolation(nil))
 }
