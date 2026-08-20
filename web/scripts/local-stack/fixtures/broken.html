@@ -1,0 +1,26 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      html, body { margin: 0; }
+      /* The genuinely uncapturable case: a fixed PIXEL height, not tied to the
+         viewport at all. No amount of growing the outer browser viewport makes
+         this box taller, so #bottom stays below the fold forever. This is the
+         negative control — the tool must NOTICE this and refuse to emit a
+         screenshot, rather than silently produce a frame that looks fine but
+         cuts #bottom off (exactly the D7 trap this script exists to catch). */
+      .scroller { height: 300px; overflow-y: auto; box-sizing: border-box; padding: 8px; }
+      .filler { height: 900px; background: linear-gradient(#eef, #fee); }
+      #top { background: lightgreen; padding: 8px; }
+      #bottom { background: lightcoral; padding: 8px; }
+    </style>
+  </head>
+  <body>
+    <div class="scroller">
+      <div id="top">TOP marker</div>
+      <div class="filler"></div>
+      <div id="bottom">BOTTOM marker</div>
+    </div>
+  </body>
+</html>

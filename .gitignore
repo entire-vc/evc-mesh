@@ -12,6 +12,9 @@ Thumbs.db
 bin/
 /api
 /mcp
+
+# scripts/local-stack.sh runtime state (pids, logs, screenshots) — throwaway
+.local-stack/
 *.exe
 *.exe~
 *.dll
