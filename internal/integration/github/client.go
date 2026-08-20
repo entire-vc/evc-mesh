@@ -69,7 +69,7 @@ type pullRequestResponse struct {
 // GetPullRequestState calls GET /repos/{owner}/{repo}/pulls/{number}.
 func (c *Client) GetPullRequestState(ctx context.Context, owner, repo string, number int) (PullRequestState, error) {
 	url := fmt.Sprintf("%s/repos/%s/%s/pulls/%d", c.baseURL, owner, repo, number)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
 	if err != nil {
 		return PullRequestState{}, fmt.Errorf("build github pr request: %w", err)
 	}

@@ -1662,7 +1662,7 @@ const githubLiveCheckTimeout = 5 * time.Second
 // wired, the URL doesn't parse as a GitHub PR, or the API call itself
 // failed — callers MUST treat that as "couldn't verify", never as "not
 // merged", and fall back to the cached status instead.
-func (s *taskService) isPRMergedOnGitHub(ctx context.Context, l domain.VCSLink) (merged bool, live bool) {
+func (s *taskService) isPRMergedOnGitHub(ctx context.Context, l domain.VCSLink) (merged, live bool) {
 	if s.githubPRChecker == nil || l.Provider != domain.VCSProviderGitHub {
 		return false, false
 	}
