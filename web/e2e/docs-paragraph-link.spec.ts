@@ -41,25 +41,26 @@ async function withF1Fixture(
 
   await fn();
 
-  if (process.env.PW_FAIL_ON_CONSOLE_ERROR === "1") {
-    const ceErrs = await page.evaluate(
-      () => (window as unknown as Record<string, string[]>).__ceErrs ?? [],
-    );
-    expect(ceErrs, "console.error calls detected (F1)").toHaveLength(0);
-  }
+  // Unconditional, like task-board.spec.ts. These used to sit behind
+  // PW_FAIL_ON_CONSOLE_ERROR / PW_FAIL_ON_5XX, which CI never set — an assert
+  // guarded by an opt-in flag is an assert that runs nowhere. Setting the
+  // flags in the workflow would have worked until someone edited the env
+  // block; not having a flag cannot be undone by accident.
+  const ceErrs = await page.evaluate(
+    () => (window as unknown as Record<string, string[]>).__ceErrs ?? [],
+  );
+  expect(ceErrs, "console.error calls detected (F1)").toHaveLength(0);
 
-  if (process.env.PW_FAIL_ON_5XX === "1") {
-    const http5xx = await page.evaluate(() =>
-      performance
-        .getEntriesByType("resource")
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        .filter((r: any) => r.responseStatus >= 500)
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        .map((r: any) => `${r.responseStatus} ${r.name}`),
-    );
-    expect(http5xx, "HTTP 5xx responses detected (F1)").toHaveLength(0);
-    expect(pageErrors, "Uncaught page errors detected (F1)").toHaveLength(0);
-  }
+  const http5xx = await page.evaluate(() =>
+    performance
+      .getEntriesByType("resource")
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      .filter((r: any) => r.responseStatus >= 500)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      .map((r: any) => `${r.responseStatus} ${r.name}`),
+  );
+  expect(http5xx, "HTTP 5xx responses detected (F1)").toHaveLength(0);
+  expect(pageErrors, "Uncaught page errors detected (F1)").toHaveLength(0);
 }
 
 // The exact banner strings from web/src/pages/docs.tsx's AnchorNotice — a
@@ -103,13 +104,13 @@ function paragraphs(...blocks: string[]): string {
 }
 
 test.describe.serial("Docs — paragraph link survives edits (docs-paragraph-link)", () => {
-  // Skip when Casdoor credentials are not configured (e.g. CI without secrets).
-  // Skipped tests exit 0 — the job stays green in REPORT mode. Same idiom as
-  // task-board.spec.ts's per-test skip, applied once for the whole group.
-  test.skip(
-    !process.env.CASDOOR_AGENT_USER || !process.env.CASDOOR_AGENT_PASSWORD,
-    "CASDOOR_AGENT_USER / CASDOOR_AGENT_PASSWORD not set — authed E2E skipped",
-  );
+  // No credentials gate here on purpose. This block used to skip unless
+  // CASDOOR_AGENT_USER / CASDOOR_AGENT_PASSWORD were set — names this suite
+  // never uses and CI never sets, so all four tests skipped on every run
+  // while the required check stayed green. e2e/global-setup.ts already fails
+  // the whole run, loudly, when the credentials this suite actually uses
+  // (E2E_USER_EMAIL / E2E_USER_PASSWORD) are missing, so an unconfigured
+  // environment cannot reach this point and be mistaken for a passing one.
 
   let page: Page;
   let api: APIRequestContext;
