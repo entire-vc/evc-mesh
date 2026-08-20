@@ -1592,6 +1592,21 @@ func (s *memoryService) ExtractFromEvent(ctx context.Context, event *domain.Even
 		return nil
 	}
 
+	// Same sanitizer as the Remember path — this writes into the same table and
+	// feeds the same recall, so leaving it uncovered would be a bypass of the
+	// guard rather than an exemption from it. If anything this path needs it
+	// MORE: the content is derived from an event payload, not authored by an
+	// agent, so an injected instruction can arrive here without anyone having
+	// typed it.
+	//
+	// Dropped rather than returned as an error, unlike Remember: there is no
+	// caller to show a reason to, and failing the event would let one poisoned
+	// event stall extraction for everything behind it.
+	if v := scanMemoryContent(mem.Content); v != nil && !memorySanitizerDisabled() {
+		log.Printf("memory extract from event: dropping auto-extracted memory key=%q: %s", mem.Key, v.Error())
+		return nil
+	}
+
 	if err := s.memRepo.Upsert(ctx, mem); err != nil {
 		return fmt.Errorf("memory extract from event: upsert: %w", err)
 	}
@@ -1779,6 +1794,19 @@ func (s *memoryService) ImportMemories(ctx context.Context, workspaceID uuid.UUI
 			Tags:        item.Tags,
 			SourceType:  sourceType,
 			Relevance:   0.5,
+		}
+
+		// Third write path into the same table, so the same guard applies. An
+		// import blob is wholly caller-supplied and lands in every agent's
+		// recall, which makes it the cheapest way to plant content in the
+		// fleet's context if it were exempt.
+		//
+		// Skipped and counted out rather than failing the whole import: one bad
+		// item should not discard a good blob, and the log line names the key
+		// and the rule so the caller can find it.
+		if v := scanMemoryContent(item.Content); v != nil && !memorySanitizerDisabled() {
+			log.Printf("memory import: skipping key=%s: %s", item.Key, v.Error())
+			continue
 		}
 
 		if err := s.memRepo.Upsert(ctx, mem); err != nil {
