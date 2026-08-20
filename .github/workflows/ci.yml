@@ -568,10 +568,13 @@ jobs:
           path: web/coverage/
 
   # ─── D. React authed E2E (Playwright, F1 harness) ──────────────────────────
-  # Login-once via Casdoor storageState; asserts no console.error / HTTP 5xx.
+  # Logs in once through Mesh's own /api/v1/auth/login (this app has no Casdoor
+  # flow), then asserts the API honours the session, the shell routes into the
+  # workspace, and nothing logs a console error / page error / failed API call.
   # ENFORCE mode: failures block merge (enforced 2026-06-22, burn-in complete).
-  # Requires repo variables: APP_BASE_URL, CASDOOR_BASE_URL
-  # Requires repo secrets: CASDOOR_AGENT_USER, CASDOOR_AGENT_PASSWORD
+  # Requires repo variable: APP_BASE_URL
+  # Requires repo secrets: E2E_USER_EMAIL, E2E_USER_PASSWORD
+  # Missing secrets fail the job on purpose — see web/e2e/global-setup.ts.
   playwright-e2e:
     name: "Authed E2E"
     runs-on: ubuntu-latest
@@ -620,9 +623,8 @@ jobs:
         run: npx playwright test
         env:
           APP_BASE_URL: ${{ vars.APP_BASE_URL || 'https://mesh.entire.host' }}
-          CASDOOR_BASE_URL: ${{ vars.CASDOOR_BASE_URL || 'https://auth.entire.host' }}
-          CASDOOR_AGENT_USER: ${{ secrets.CASDOOR_AGENT_USER }}
-          CASDOOR_AGENT_PASSWORD: ${{ secrets.CASDOOR_AGENT_PASSWORD }}
+          E2E_USER_EMAIL: ${{ secrets.E2E_USER_EMAIL }}
+          E2E_USER_PASSWORD: ${{ secrets.E2E_USER_PASSWORD }}
       - uses: actions/upload-artifact@v7
         if: always()
         with:
