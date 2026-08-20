@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
 // Resolving a quotation to a comment anchor, server-side.
@@ -215,22 +216,20 @@ func verbatimOccurrences(source, needle string) []span {
 // feeds is maxSkipRun, a limit on how much markdown may sit between two letters
 // of a quote; an emoji is not markdown syntax and does not appear in such a run.
 func tolerantOccurrences(source, needle string) []span {
-	src, srcOffsets := runesWithOffsets(source)
-	ndl := []rune(needle)
-	if len(ndl) == 0 {
+	if needle == "" {
 		return nil
 	}
+	first, _ := utf8.DecodeRuneInString(needle)
 
 	var spans []span
-	first := ndl[0]
-	for start := 0; start < len(src); start++ {
+	for start, r := range source {
 		// Only start where the first character could match — literally, or as the
 		// head of a whitespace run.
-		if src[start] != first && (!unicode.IsSpace(first) || !unicode.IsSpace(src[start])) {
+		if r != first && (!unicode.IsSpace(first) || !unicode.IsSpace(r)) {
 			continue
 		}
-		if end, ok := tolerantMatchAt(source, src, srcOffsets, ndl, start); ok {
-			spans = append(spans, span{srcOffsets[start], end})
+		if end, ok := tolerantMatchAt(source, needle, start); ok {
+			spans = append(spans, span{start, end})
 			if len(spans) >= maxTolerantCandidates {
 				break
 			}
@@ -239,45 +238,67 @@ func tolerantOccurrences(source, needle string) []span {
 	return spans
 }
 
-// tolerantMatchAt tries to match needle starting exactly at rune index from.
-// Returns the BYTE offset one past the match.
-func tolerantMatchAt(source string, src []rune, offsets []int, needle []rune, from int) (int, bool) {
+// tolerantMatchAt tries to match needle starting exactly at BYTE offset from in
+// source, and returns the byte offset one past the match.
+//
+// Byte offsets rather than an index into a pre-decoded []rune, deliberately: this
+// is the one scan both directions of the primitive share. ResolveQuote sweeps it
+// across the document, and SpanMatchesQuote runs it once at an offset a client
+// supplied — which it can only do if a position in this function's vocabulary is
+// the same thing as a position in the anchor column's. Decoding the whole body to
+// address it would also make the guard pay 5 MiB of allocation to check one
+// sentence.
+func tolerantMatchAt(source, needle string, from int) (int, bool) {
+	if from < 0 || from >= len(source) || !utf8.RuneStart(source[from]) {
+		return 0, false
+	}
 	i, j := 0, from
 
 	for i < len(needle) {
-		if j >= len(src) {
+		if j >= len(source) {
 			return 0, false
 		}
 
-		nc, sc := needle[i], src[j]
+		nc, nw := utf8.DecodeRuneInString(needle[i:])
+		sc, sw := utf8.DecodeRuneInString(source[j:])
 		if nc == sc {
-			i++
-			j++
+			i += nw
+			j += sw
 			continue
 		}
 
 		// Whitespace is compared as runs: any run matches any run.
 		if unicode.IsSpace(nc) && unicode.IsSpace(sc) {
-			for i < len(needle) && unicode.IsSpace(needle[i]) {
-				i++
+			for i < len(needle) {
+				r, w := utf8.DecodeRuneInString(needle[i:])
+				if !unicode.IsSpace(r) {
+					break
+				}
+				i += w
 			}
-			for j < len(src) && unicode.IsSpace(src[j]) {
-				j++
+			for j < len(source) {
+				r, w := utf8.DecodeRuneInString(source[j:])
+				if !unicode.IsSpace(r) {
+					break
+				}
+				j += w
 			}
 			continue
 		}
 
 		// Skip a run of source-only markdown before giving up on this start.
+		// Counted in runes, like the frontend counts it in UTF-16 units: the cap
+		// is on how much markdown may sit between two letters of the quote, and a
+		// byte count would make that budget depend on the alphabet.
 		skipped := 0
-		for j < len(src) && skipped < maxSkipRun {
-			if tail := linkTail.FindString(source[offsets[j]:]); tail != "" {
-				n := len([]rune(tail))
-				j += n
-				skipped += n
+		for j < len(source) && skipped < maxSkipRun {
+			if tail := linkTail.FindString(source[j:]); tail != "" {
+				j += len(tail)
+				skipped += utf8.RuneCountInString(tail)
 				continue
 			}
-			r := src[j]
-			if r > 0x7f || !markupChars[byte(r)] {
+			c := source[j]
+			if c > 0x7f || !markupChars[c] {
 				break
 			}
 			j++
@@ -288,21 +309,66 @@ func tolerantMatchAt(source string, src []rune, offsets []int, needle []rune, fr
 		}
 	}
 
-	return offsets[j], true
+	return j, true
 }
 
-// runesWithOffsets decodes the source once into runes and the byte offset each
-// rune starts at, with a final entry for the end of the string so that offsets[j]
-// is valid for j == len(runes).
-func runesWithOffsets(s string) (runes []rune, offsets []int) {
-	runes = make([]rune, 0, len(s))
-	offsets = make([]int, 0, len(s)+1)
-	for i, r := range s {
-		runes = append(runes, r)
-		offsets = append(offsets, i)
+// SpanMatchesQuote reports whether [start, end) really is where quote sits in
+// body — ResolveQuote read backwards, for an anchor a client computed itself.
+//
+// It exists because the anchor columns are documented as byte offsets into the
+// markdown and nothing used to hold a writer to that. Two independently written
+// clients put different units in them (PR #619 bytes, PR #621 character indices
+// into the rendered text), and on ASCII the two are the same number, so both
+// looked correct. On Cyrillic they differ by about half, and the row that results
+// points confidently at a different sentence with no error anywhere.
+//
+// Three things it deliberately is NOT:
+//
+//   - not body[start:end] == quote. That equality is false for every legitimate
+//     anchor whose selection crossed inline markup: the raw slice keeps the
+//     markup (`**revert the image** first`) and the quote, taken from the
+//     rendered text, does not (`revert the image first`). A strict-equality guard
+//     would reject the correct client.
+//   - not a UTF-8 validity check. A character offset almost always lands on a
+//     valid rune boundary too — just not the right one — so a guard that only
+//     looks at the encoding passes the exact bug it was written to catch. The
+//     boundary test below is a cheap precondition, never the evidence.
+//   - not a re-resolution. A quote occurring several times is fine here: the
+//     caller told us which occurrence, and the question is only whether that
+//     occurrence is the one they named.
+func SpanMatchesQuote(body string, start, end int, quote string) bool {
+	if quote == "" || start < 0 || end <= start || end > len(body) {
+		return false
 	}
-	offsets = append(offsets, len(s))
-	return runes, offsets
+	// Cheap precondition, not the check: a span that splits a character cannot be
+	// a selection of one, and slicing on it would produce replacement characters
+	// rather than the text.
+	if !utf8.RuneStart(body[start]) || (end < len(body) && !utf8.RuneStart(body[end])) {
+		return false
+	}
+
+	// A quote whose edges carry whitespace names the same range as its trimmed
+	// form; ResolveQuote trims, so accepting both keeps the two directions
+	// agreeing about one anchor.
+	for _, candidate := range quoteForms(quote) {
+		if body[start:end] == candidate {
+			return true
+		}
+		if matchEnd, ok := tolerantMatchAt(body, candidate, start); ok && matchEnd == end {
+			return true
+		}
+	}
+	return false
+}
+
+// quoteForms is the quote as sent and, when they differ, as ResolveQuote would
+// have stored it.
+func quoteForms(quote string) []string {
+	trimmed := strings.TrimSpace(quote)
+	if trimmed == quote || trimmed == "" {
+		return []string{quote}
+	}
+	return []string{quote, trimmed}
 }
 
 // bestByContext scores each candidate on how much of the supplied neighbourhood

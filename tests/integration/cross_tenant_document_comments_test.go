@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -28,14 +29,24 @@ const documentCommentQuote = "the production database password"
 func (tn *tenant) createDocumentComment(t *testing.T, docID string) string {
 	t.Helper()
 
+	// The offsets are LOCATED in the document, not written down. They used to be
+	// the literals 20 and 52, which sliced " production database password is" —
+	// three bytes off the quote they claimed to mark. Nothing noticed, because
+	// until the anchor guard the server never opened the document and any pair of
+	// numbers was accepted. Computing them here means this fixture cannot drift
+	// from documentBody again.
+	start := strings.Index(documentBody, documentCommentQuote)
+	require.GreaterOrEqual(t, start, 0,
+		"fixture is broken: documentBody does not contain the quote this anchors on")
+
 	resp := tn.env.Post(t, "/api/v1/documents/"+docID+"/comments", map[string]any{
 		"body": documentCommentBody,
 		"anchor": map[string]any{
 			"exact":  documentCommentQuote,
-			"prefix": "the ",
+			"prefix": "runbook\n",
 			"suffix": " is in 1Password",
-			"start":  20,
-			"end":    52,
+			"start":  start,
+			"end":    start + len(documentCommentQuote),
 		},
 	})
 	raw := tn.env.ReadBody(t, resp)

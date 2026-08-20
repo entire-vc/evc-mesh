@@ -10,6 +10,7 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/repository"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
+	"github.com/entire-vc/evc-mesh/pkg/mdoc"
 	"github.com/entire-vc/evc-mesh/pkg/pagination"
 )
 
@@ -26,9 +27,23 @@ const maxDocumentCommentBodyBytes = 16 << 10 // 16 KiB
 // document a second time, once per comment, in the name of "context".
 const maxAnchorTextBytes = 2000
 
+// DocumentBodyReader loads a document together with its markdown, inside a
+// workspace. It is the narrow slice of DocumentService this file needs: the body
+// is fetched from object storage by the service, not by the repository, and the
+// anchor guard below cannot check an offset without the text it points into.
+type DocumentBodyReader interface {
+	GetByIDInWorkspace(ctx context.Context, id, workspaceID uuid.UUID) (*domain.Document, error)
+}
+
 type documentCommentService struct {
 	commentRepo  repository.DocumentCommentRepository
 	documentRepo repository.DocumentRepository
+
+	// documentBody loads the markdown an anchor's offsets are checked against.
+	// Required, not an option: with it absent the anchor guard fails closed and
+	// every anchored comment is refused, so a call site that forgot it must fail
+	// to compile rather than to run.
+	documentBody DocumentBodyReader
 
 	// The @-mention dependencies, all optional and all nil-checked at the point
 	// of use. They are options rather than constructor arguments because the
@@ -92,12 +107,20 @@ func WithDocumentCommentWSPublisher(p WSPublisher) DocumentCommentServiceOption 
 // check rather than a convenience: every entry point resolves the document inside
 // the caller's workspace first, so a comment id or a document id from another
 // tenant has nothing to attach to.
+// documentBody is used on one path only — checking that an anchor's offsets
+// point at the anchor's own quote — so the ordinary comment, which has no
+// offsets, still costs no object-storage read.
 func NewDocumentCommentService(
 	commentRepo repository.DocumentCommentRepository,
 	documentRepo repository.DocumentRepository,
+	documentBody DocumentBodyReader,
 	opts ...DocumentCommentServiceOption,
 ) DocumentCommentService {
-	s := &documentCommentService{commentRepo: commentRepo, documentRepo: documentRepo}
+	s := &documentCommentService{
+		commentRepo:  commentRepo,
+		documentRepo: documentRepo,
+		documentBody: documentBody,
+	}
 	for _, opt := range opts {
 		opt(s)
 	}
@@ -130,6 +153,9 @@ func (s *documentCommentService) Create(ctx context.Context, input CreateDocumen
 	anchor, err := validateAnchor(input.Anchor)
 	if err != nil {
 		return nil, err
+	}
+	if aerr := s.requireAnchorInThisDocument(ctx, doc, input.WorkspaceID, anchor); aerr != nil {
+		return nil, aerr
 	}
 
 	var parentID *uuid.UUID
@@ -398,6 +424,101 @@ func (s *documentCommentService) enriched(ctx context.Context, comment *domain.D
 		return fresh
 	}
 	return comment
+}
+
+// requireAnchorInThisDocument refuses an anchor whose offsets do not point at its
+// own quote in this document's markdown.
+//
+// ## Why the server has to check this at all
+//
+// anchor_start/anchor_end are documented — in the column comments of
+// 20260819100_create_document_comments.sql — as BYTE offsets into the markdown,
+// half-open. Until this check existed, nothing enforced it: validateAnchor read
+// the sign, the order and the length of the fields and never opened the document,
+// so the coordinate system was decided by whichever client wrote the row.
+//
+// That is not hypothetical. Two independently written frontends put different
+// units in these columns — PR #619 UTF-8 byte offsets into the markdown, with a
+// conversion module and its own Cyrillic tests; PR #621 character indices into
+// the editor's rendered text, stated in its header as deliberately not markdown
+// byte offsets. On ASCII the two are the same number and both look correct. On a
+// Russian document they differ by about half, and the row that results points
+// confidently at a different sentence — with no error, at write time or at read
+// time. This runs while document_comments still holds zero rows, which is the
+// only moment the format can be fixed without migrating anything.
+//
+// ## Why it is a 400 and not a repair
+//
+// The server could re-resolve the quote and store the offsets it found. It does
+// not, because a client that sent the wrong units will go on sending them, and
+// silently correcting the write leaves both sides believing they agree. A 400
+// naming the units is what makes the disagreement visible while it is still one
+// client's bug rather than a column full of mixed coordinates.
+func (s *documentCommentService) requireAnchorInThisDocument(
+	ctx context.Context,
+	doc *domain.Document,
+	workspaceID uuid.UUID,
+	anchor *domain.DocumentCommentAnchor,
+) error {
+	// No anchor, or an orphaned one (quote kept, position deliberately absent):
+	// there are no offsets to be wrong about, and refusing to record a comment
+	// whose range the client honestly could not find would lose the comment.
+	if anchor == nil || anchor.Start == nil || anchor.End == nil {
+		return nil
+	}
+
+	body, err := s.documentBodyFor(ctx, doc, workspaceID)
+	if err != nil {
+		return err
+	}
+
+	if mdoc.SpanMatchesQuote(body, *anchor.Start, *anchor.End, anchor.Exact) {
+		return nil
+	}
+
+	return apierror.ValidationError(map[string]string{
+		"anchor.start": fmt.Sprintf(
+			"anchor.start/anchor.end must be UTF-8 BYTE offsets into the document's markdown, "+
+				"half-open [start, end); [%d, %d) does not contain anchor.exact. The usual cause "+
+				"is character or UTF-16 indices, or indices into the rendered text rather than "+
+				"the markdown — on a document with non-ASCII text those are a different number "+
+				"and point at other words. The other cause is that the document was edited since "+
+				"the selection was made: re-read the body and re-locate the quote, or send the "+
+				"quote with no offsets to store the comment as orphaned. "+
+				"POST /api/v1/documents/%s/resolve-anchor computes the offsets from a quotation.",
+			*anchor.Start, *anchor.End, doc.ID),
+	})
+}
+
+// documentBodyFor returns the document's markdown.
+//
+// It fails closed. A body that cannot be read is not evidence that the anchor is
+// fine — it is the absence of evidence either way, and the whole point of this
+// check is that a wrong anchor is indistinguishable from a right one once it is
+// in the table.
+func (s *documentCommentService) documentBodyFor(
+	ctx context.Context,
+	doc *domain.Document,
+	workspaceID uuid.UUID,
+) (string, error) {
+	if s.documentBody == nil {
+		return "", apierror.ServiceUnavailable("document body reader not configured")
+	}
+	withBody, err := s.documentBody.GetByIDInWorkspace(ctx, doc.ID, workspaceID)
+	if err != nil {
+		return "", err
+	}
+	if withBody == nil {
+		return "", apierror.NotFound("Document")
+	}
+	if withBody.Body == "" {
+		// An empty body has no range to select, so an anchored comment on one is
+		// either a client bug or a body that failed to load as an empty string.
+		return "", apierror.ValidationError(map[string]string{
+			"anchor.start": "this document has no body, so there is no range for an anchor to point at",
+		})
+	}
+	return withBody.Body, nil
 }
 
 // validateAnchor checks the selector pair and normalizes it, returning nil for a

@@ -165,7 +165,7 @@ func setupDocumentMentions(t *testing.T) *documentMentionFixture {
 	agents.AddAgent(base.wsID, &domain.Agent{ID: agentID, Slug: "daedalus", Name: "Daedalus"})
 	users.AddUser(base.wsID, &domain.User{ID: userID, Username: "pavel", Name: "Pavel"})
 
-	base.svc = NewDocumentCommentService(base.comments, base.docs,
+	base.svc = NewDocumentCommentService(base.comments, base.docs, base.docs,
 		WithDocumentCommentAgentService(agents),
 		WithDocumentCommentUserRepo(users),
 		WithDocumentCommentMentionRepo(mentions),
@@ -703,7 +703,7 @@ func TestDelivery_MissingChannelsDegradeRatherThanPanic(t *testing.T) {
 
 	// Resolution wired, delivery not: no agent notifier, no notification
 	// service, no WebSocket publisher.
-	svc := NewDocumentCommentService(base.comments, base.docs,
+	svc := NewDocumentCommentService(base.comments, base.docs, base.docs,
 		WithDocumentCommentAgentService(agents),
 		WithDocumentCommentUserRepo(users),
 		WithDocumentCommentMentionRepo(mentionRepo),
