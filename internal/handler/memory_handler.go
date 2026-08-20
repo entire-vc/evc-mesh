@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -43,13 +44,26 @@ type rememberRequest struct {
 	SourceURL    *string            `json:"source_url,omitempty"`
 	SourceTaskID *uuid.UUID         `json:"source_task_id,omitempty"` // Mesh task that produced this memory (Amendment 2/3)
 	ThreadID     *string            `json:"thread_id,omitempty"`      // explicit thread override; auto-derived from source task when omitted
+
+	// Reason is what this write is for — recorded on the revision so a future
+	// reader can judge whether the memory still applies. Optional today;
+	// rejected when empty once MESH_MEMORY_REQUIRE_REASON is on.
+	Reason string `json:"reason,omitempty"`
+
+	// ExpectedVersion makes the write conditional: it succeeds only if the
+	// stored version still matches. Omit for last-write-wins, which stays the
+	// default so existing callers are unaffected.
+	ExpectedVersion *int `json:"expected_version,omitempty"`
 }
 
 // rememberResponse wraps the upserted memory with the operation outcome.
 type rememberResponse struct {
-	Memory     *domain.Memory `json:"memory"`
-	Outcome    string         `json:"outcome"`                // "created" or "updated"
-	NearDupKey string         `json:"near_dup_key,omitempty"` // non-empty when a near-duplicate was detected
+	Memory  *domain.Memory `json:"memory"`
+	Outcome string         `json:"outcome"` // "created" or "updated"
+	// Version is the version this write produced. Pass it back as
+	// expected_version to make a follow-up write conditional on nothing else
+	// having changed in between.
+	Version int `json:"version"`
 	// EmbeddingPending is true when this write is not yet findable by dense/vector
 	// recall (embedding happens asynchronously) — see RememberResult.EmbeddingPending.
 	// Not omitempty: false is as meaningful as true here (e.g. no embedder configured).
@@ -194,15 +208,32 @@ func (h *MemoryHandler) Remember(c echo.Context) error {
 		}
 	}
 
-	result, err := h.memoryService.Remember(c.Request().Context(), mem)
+	result, err := h.memoryService.Remember(c.Request().Context(), mem, domain.MemoryWriteIntent{
+		Reason:          req.Reason,
+		ExpectedVersion: req.ExpectedVersion,
+		ActorAgentID:    mem.AgentID,
+	})
 	if err != nil {
+		// A lost conditional write is 409, not 500: the request was well-formed
+		// and the server is healthy — someone else simply got there first. The
+		// body names both versions so the caller can re-read and re-apply
+		// without a second round trip to find out what it lost to.
+		var conflict *domain.MemoryVersionConflictError
+		if errors.As(err, &conflict) {
+			return c.JSON(http.StatusConflict, echo.Map{
+				"error":            conflict.Error(),
+				"key":              conflict.Key,
+				"expected_version": conflict.Expected,
+				"actual_version":   conflict.Actual,
+			})
+		}
 		return handleError(c, err)
 	}
 
 	return c.JSON(http.StatusOK, rememberResponse{
 		Memory:           mem,
 		Outcome:          result.Outcome,
-		NearDupKey:       result.NearDupKey,
+		Version:          result.Version,
 		EmbeddingPending: result.EmbeddingPending,
 	})
 }
@@ -589,7 +620,7 @@ func (h *MemoryHandler) Delete(c echo.Context) error {
 		isAdmin = role == domain.RoleOwner || role == domain.RoleAdmin
 	}
 
-	if err := h.memoryService.Forget(c.Request().Context(), id, agentID, isAdmin); err != nil {
+	if err := h.memoryService.Forget(c.Request().Context(), id, agentID, isAdmin, c.QueryParam("reason")); err != nil {
 		return handleError(c, err)
 	}
 

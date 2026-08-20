@@ -1253,10 +1253,10 @@ type MentionablesService interface {
 type RememberResult struct {
 	// Outcome is "created" or "updated".
 	Outcome string
-	// NearDupKey is set when a near-duplicate memory (Hamming distance ≤ 10 bits) was
-	// detected at write time. It holds the key of the closest existing near-duplicate.
-	// Empty when no near-duplicate was found.
-	NearDupKey string
+	// Version is the version this write produced: 1 for a create, previous+1 for
+	// an update. A caller that wants its next write to be conditional passes this
+	// value back as expected_version.
+	Version int
 	// EmbeddingPending is true when Remember fired an async embedding goroutine
 	// (embedAndStore) that has not necessarily completed by the time this result
 	// is returned. While pending, the row is invisible to the dense/vector recall
@@ -1271,7 +1271,12 @@ type RememberResult struct {
 
 // MemoryService provides business logic for agent persistent memory.
 type MemoryService interface {
-	Remember(ctx context.Context, mem *domain.Memory) (RememberResult, error)
+	// Remember writes a memory. intent carries the reason for the write and,
+	// optionally, the version the caller expects to be overwriting — a mismatch
+	// returns *domain.MemoryVersionConflictError instead of overwriting.
+	Remember(ctx context.Context, mem *domain.Memory, intent domain.MemoryWriteIntent) (RememberResult, error)
+	// ListRevisions returns one memory's recorded history, newest version first.
+	ListRevisions(ctx context.Context, memoryID uuid.UUID, limit int) ([]domain.MemoryRevision, error)
 	// Recall runs a hybrid (BM25 + vector) search. It FAILS OPEN when the embedder
 	// is down: results are still returned, served by the BM25 arm alone. The
 	// returned domain.SearchMode says which mode the call was actually served in
@@ -1292,7 +1297,9 @@ type MemoryService interface {
 	GetProjectKnowledge(ctx context.Context, workspaceID uuid.UUID, projectID *uuid.UUID, filter domain.MemoryListFilter) ([]domain.Memory, int64, error)
 	// SetProjectKnowledge upserts a project-scoped knowledge entry. Returns "created" or "updated".
 	SetProjectKnowledge(ctx context.Context, input SetProjectKnowledgeInput) (*domain.Memory, string, error)
-	Forget(ctx context.Context, id uuid.UUID, actorAgentID *uuid.UUID, isAdmin bool) error
+	// Forget removes a memory, first recording what it said and why it is being
+	// removed, so that a deletion does not erase the fact that it happened.
+	Forget(ctx context.Context, id uuid.UUID, actorAgentID *uuid.UUID, isAdmin bool, reason string) error
 	GetByID(ctx context.Context, id uuid.UUID) (*domain.Memory, error)
 	// ExportMemories returns YAML-encoded memories for the given workspace (optionally filtered by project).
 	ExportMemories(ctx context.Context, workspaceID uuid.UUID, projectID *uuid.UUID) ([]byte, error)

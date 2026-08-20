@@ -44,7 +44,7 @@ func TestMemoryRepoDB_MarkEmbeddingModel_SetsModelLeavesVectorUntouched(t *testi
 		Scope:       domain.ScopeWorkspace,
 		SourceType:  domain.SourceAgent,
 	}
-	require.NoError(t, repo.Upsert(ctx, mem))
+	require.NoError(t, repo.Upsert(ctx, mem, domain.MemoryWriteIntent{}))
 	require.NoError(t, repo.UpdateEmbedding(ctx, mem.ID, []float32{0.1, 0.2}, "old-model", 2))
 
 	require.NoError(t, repo.MarkEmbeddingModel(ctx, mem.ID, "multilingual-e5-small"))
@@ -82,7 +82,7 @@ func newUnembeddedMemory(t *testing.T, ctx context.Context, repo *MemoryRepo, ws
 		Scope:       domain.ScopeWorkspace,
 		SourceType:  domain.SourceAgent,
 	}
-	require.NoError(t, repo.Upsert(ctx, mem))
+	require.NoError(t, repo.Upsert(ctx, mem, domain.MemoryWriteIntent{}))
 	return mem
 }
 

@@ -29,7 +29,7 @@ func TestMemoryRepoDB_ListNotYetChunked_ExcludesExpiredAndDefaultsLimit(t *testi
 		Scope:       domain.ScopeWorkspace,
 		SourceType:  domain.SourceAgent,
 	}
-	require.NoError(t, repo.Upsert(ctx, unchunked))
+	require.NoError(t, repo.Upsert(ctx, unchunked, domain.MemoryWriteIntent{}))
 
 	got, err := repo.ListNotYetChunked(ctx, wsID, 0)
 	require.NoError(t, err, "limit<=0 must default rather than error")
@@ -55,7 +55,7 @@ func TestMemoryRepoDB_ListNotYetChunked_ExcludesRowsWithChunks(t *testing.T) {
 		Scope:       domain.ScopeWorkspace,
 		SourceType:  domain.SourceAgent,
 	}
-	require.NoError(t, repo.Upsert(ctx, chunked))
+	require.NoError(t, repo.Upsert(ctx, chunked, domain.MemoryWriteIntent{}))
 	require.NoError(t, chunkRepo.ReplaceChunks(ctx, chunked.ID, []domain.MemoryChunk{
 		{ChunkIdx: 0, ChunkStart: 0, ChunkEnd: 7, Embedding: "x", EmbeddingModel: "m", EmbeddingDim: 4},
 	}))

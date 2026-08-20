@@ -780,11 +780,17 @@ func (m *MockRulesService) SetWorkflowTemplates(ctx context.Context, workspaceID
 // Only the methods needed by CanonicalUpdatesHandler are fully wired;
 // all others are no-ops.
 type MockMemoryService struct {
-	ListMemoriesFunc   func(ctx context.Context, filter domain.MemoryListFilter) (*service.RecallResult, error)
-	RecallFunc         func(ctx context.Context, opts domain.RecallOpts) ([]domain.ScoredMemory, domain.SearchMode, error)
-	RecallStatsFunc    func(ctx context.Context, opts domain.RecallOpts) ([]domain.ScoredMemory, domain.RecallStats, error)
-	GetByIDFunc        func(ctx context.Context, id uuid.UUID) (*domain.Memory, error)
-	RememberFunc       func(ctx context.Context, mem *domain.Memory) (service.RememberResult, error)
+	ListMemoriesFunc func(ctx context.Context, filter domain.MemoryListFilter) (*service.RecallResult, error)
+	RecallFunc       func(ctx context.Context, opts domain.RecallOpts) ([]domain.ScoredMemory, domain.SearchMode, error)
+	RecallStatsFunc  func(ctx context.Context, opts domain.RecallOpts) ([]domain.ScoredMemory, domain.RecallStats, error)
+	GetByIDFunc      func(ctx context.Context, id uuid.UUID) (*domain.Memory, error)
+	RememberFunc     func(ctx context.Context, mem *domain.Memory) (service.RememberResult, error)
+	// RememberIntentFunc takes precedence over RememberFunc when set, for tests
+	// that need to see the write intent (reason / expected_version).
+	RememberIntentFunc func(ctx context.Context, mem *domain.Memory, intent domain.MemoryWriteIntent) (service.RememberResult, error)
+	ListRevisionsFunc  func(ctx context.Context, memoryID uuid.UUID, limit int) ([]domain.MemoryRevision, error)
+	LastRememberIntent domain.MemoryWriteIntent
+	LastForgetReason   string
 	ForgetFunc         func(ctx context.Context, id uuid.UUID, actorAgentID *uuid.UUID, isAdmin bool) error
 	FindRelatedFunc    func(ctx context.Context, memoryID uuid.UUID, limit int) ([]domain.ScoredMemory, error)
 	BackfillChunksFunc func(ctx context.Context, workspaceID uuid.UUID, limit int) (int, error)
@@ -805,11 +811,22 @@ func (m *MockMemoryService) ListMemories(ctx context.Context, filter domain.Memo
 	return &service.RecallResult{Items: []domain.ScoredMemory{}}, nil
 }
 
-func (m *MockMemoryService) Remember(ctx context.Context, mem *domain.Memory) (service.RememberResult, error) {
+func (m *MockMemoryService) Remember(ctx context.Context, mem *domain.Memory, intent domain.MemoryWriteIntent) (service.RememberResult, error) {
+	m.LastRememberIntent = intent
+	if m.RememberIntentFunc != nil {
+		return m.RememberIntentFunc(ctx, mem, intent)
+	}
 	if m.RememberFunc != nil {
 		return m.RememberFunc(ctx, mem)
 	}
 	return service.RememberResult{Outcome: "created"}, nil
+}
+
+func (m *MockMemoryService) ListRevisions(ctx context.Context, memoryID uuid.UUID, limit int) ([]domain.MemoryRevision, error) {
+	if m.ListRevisionsFunc != nil {
+		return m.ListRevisionsFunc(ctx, memoryID, limit)
+	}
+	return nil, nil
 }
 func (m *MockMemoryService) Recall(ctx context.Context, opts domain.RecallOpts) ([]domain.ScoredMemory, domain.SearchMode, error) {
 	if m.RecallFunc != nil {
@@ -840,7 +857,8 @@ func (m *MockMemoryService) GetProjectKnowledge(ctx context.Context, workspaceID
 func (m *MockMemoryService) SetProjectKnowledge(ctx context.Context, input service.SetProjectKnowledgeInput) (*domain.Memory, string, error) {
 	return nil, "", nil
 }
-func (m *MockMemoryService) Forget(ctx context.Context, id uuid.UUID, actorAgentID *uuid.UUID, isAdmin bool) error {
+func (m *MockMemoryService) Forget(ctx context.Context, id uuid.UUID, actorAgentID *uuid.UUID, isAdmin bool, reason string) error {
+	m.LastForgetReason = reason
 	if m.ForgetFunc != nil {
 		return m.ForgetFunc(ctx, id, actorAgentID, isAdmin)
 	}

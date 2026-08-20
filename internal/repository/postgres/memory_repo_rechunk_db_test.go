@@ -32,7 +32,7 @@ func chunkedMemory(t *testing.T, repo *MemoryRepo, wsID uuid.UUID, key, content 
 		Scope:       domain.ScopeWorkspace,
 		SourceType:  domain.SourceAgent,
 	}
-	require.NoError(t, repo.Upsert(ctx, mem))
+	require.NoError(t, repo.Upsert(ctx, mem, domain.MemoryWriteIntent{}))
 	chunkRepo := NewMemoryChunkRepo(repo.db)
 	require.NoError(t, chunkRepo.ReplaceChunks(ctx, mem.ID, []domain.MemoryChunk{
 		{ChunkIdx: 0, ChunkStart: 0, ChunkEnd: chunkEnd, Embedding: "vec", EmbeddingModel: "m", EmbeddingDim: 4},
@@ -126,7 +126,7 @@ func TestMemoryRepoDB_ListNeedingRechunk_ExcludesUnchunkedMemories(t *testing.T)
 		Scope:       domain.ScopeWorkspace,
 		SourceType:  domain.SourceAgent,
 	}
-	require.NoError(t, repo.Upsert(ctx, unchunked))
+	require.NoError(t, repo.Upsert(ctx, unchunked, domain.MemoryWriteIntent{}))
 
 	got, err := repo.ListNeedingRechunk(ctx, wsID, 0)
 	require.NoError(t, err)
@@ -147,7 +147,7 @@ func TestMemoryRepoDB_ListNeedingRechunk_ExcludesExpired(t *testing.T) {
 		SourceType:  domain.SourceAgent,
 		ExpiresAt:   &past,
 	}
-	require.NoError(t, repo.Upsert(ctx, mem))
+	require.NoError(t, repo.Upsert(ctx, mem, domain.MemoryWriteIntent{}))
 	chunkRepo := NewMemoryChunkRepo(repo.db)
 	require.NoError(t, chunkRepo.ReplaceChunks(ctx, mem.ID, []domain.MemoryChunk{
 		{ChunkIdx: 0, ChunkStart: 0, ChunkEnd: len(mem.Content) + 30, Embedding: "vec", EmbeddingModel: "m", EmbeddingDim: 4},
@@ -198,7 +198,7 @@ func TestMemoryRepoDB_UpdateEmbeddingKeepUpdatedAt_HoldsTimestampAndStillWritesV
 		Scope:       domain.ScopeWorkspace,
 		SourceType:  domain.SourceAgent,
 	}
-	require.NoError(t, repo.Upsert(ctx, mem))
+	require.NoError(t, repo.Upsert(ctx, mem, domain.MemoryWriteIntent{}))
 
 	var before time.Time
 	require.NoError(t, repo.db.GetContext(ctx, &before, `SELECT updated_at FROM memories WHERE id = $1`, mem.ID))
@@ -240,7 +240,7 @@ func TestMemoryRepoDB_UpdateEmbeddingKeepUpdatedAt_UnencodableVectorIsReported(t
 		Scope:       domain.ScopeWorkspace,
 		SourceType:  domain.SourceAgent,
 	}
-	require.NoError(t, repo.Upsert(ctx, mem))
+	require.NoError(t, repo.Upsert(ctx, mem, domain.MemoryWriteIntent{}))
 
 	inf := float32(math.Inf(1)) // encoding/json refuses non-finite floats
 	err := repo.UpdateEmbeddingKeepUpdatedAt(ctx, mem.ID, []float32{inf}, "e5-small", 1)

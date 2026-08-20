@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"fmt"
 	"slices"
 	"time"
 
@@ -137,8 +138,15 @@ type Memory struct {
 	// Distinct from ExpiresAt: expiry is about retention, validity is about truth.
 	ValidUntil *time.Time `json:"valid_until,omitempty" db:"valid_until"`
 	// ContentSimhash is a 64-bit simhash of the memory content (3-gram shingles, FNV-64a).
-	// Used for write-time and periodic near-duplicate detection. Nil when not yet computed.
+	// Used for periodic near-duplicate detection by the reconciler. Nil when not yet computed.
 	ContentSimhash *int64 `json:"content_simhash,omitempty" db:"content_simhash"`
+
+	// Version is bumped on every write to this memory and is what a conditional
+	// write is conditional on. Starts at 1. Rows written before migration
+	// 20260820109 carry the default 1 without a matching revision row — they
+	// have no recorded history, which is the honest state rather than a
+	// fabricated one.
+	Version int `json:"version" db:"version"`
 
 	// Embedding fields — populated only when an embedding provider is configured.
 	// Embedding is the raw float32 vector; it is not serialised to JSON for API responses.
@@ -515,4 +523,81 @@ type MemoryEdge struct {
 	WorkspaceID      uuid.UUID                  `json:"workspace_id" db:"workspace_id"`
 	CreatedAt        time.Time                  `json:"created_at" db:"created_at"`
 	LastTraversedAt  *time.Time                 `json:"last_traversed_at,omitempty" db:"last_traversed_at"`
+}
+
+// ── Versioning and revision history ─────────────────────────────────────────
+
+// Memory revision actions.
+const (
+	// MemoryActionCreated is the first version of a key.
+	MemoryActionCreated = "created"
+	// MemoryActionUpdated is any later write to an existing key.
+	MemoryActionUpdated = "updated"
+	// MemoryActionForgotten records the content a forget removed, so that
+	// "what did this say before someone deleted it" stays answerable.
+	MemoryActionForgotten = "forgotten"
+)
+
+// MemoryRevision is one historical version of a memory: what it asserted at
+// that version, and why the author says it came to assert it.
+type MemoryRevision struct {
+	ID       uuid.UUID      `json:"id" db:"id"`
+	MemoryID uuid.UUID      `json:"memory_id" db:"memory_id"`
+	Version  int            `json:"version" db:"version"`
+	Content  string         `json:"content" db:"content"`
+	Tags     pq.StringArray `json:"tags" db:"tags"`
+	Action   string         `json:"action" db:"action"`
+	// Reason is nil for writes made before the reason requirement was switched
+	// on. Absent and blank are different states and are kept different: blank is
+	// rejected by a table CHECK, absent means "this predates the requirement".
+	Reason       *string    `json:"reason,omitempty" db:"reason"`
+	ActorAgentID *uuid.UUID `json:"actor_agent_id,omitempty" db:"actor_agent_id"`
+	CreatedAt    time.Time  `json:"created_at" db:"created_at"`
+}
+
+// MemoryWriteIntent carries the caller's intent for a single memory write:
+// why it is happening, and what state it believes it is overwriting.
+//
+// It is a required argument of MemoryRepository.Upsert rather than a set of
+// optional fields on Memory, so that adding a fourth write path into the
+// memories table cannot silently produce an unversioned, unexplained write.
+// The compiler asks the question instead of a reviewer having to notice.
+type MemoryWriteIntent struct {
+	// Action is one of the MemoryAction* constants. Empty means "derive it":
+	// created when the row is new, updated otherwise.
+	Action string
+
+	// Reason is the author's statement of why this version exists. May be empty
+	// while MESH_MEMORY_REQUIRE_REASON is off; the service layer, not the
+	// repository, owns that policy.
+	Reason string
+
+	// ExpectedVersion, when non-nil, makes the write conditional: it succeeds
+	// only if the stored version still equals this value. Nil means
+	// last-write-wins, which is the pre-existing behaviour and stays the
+	// default so that callers who have not opted in are unaffected.
+	ExpectedVersion *int
+
+	// ActorAgentID is who is writing. Nil for system paths with no agent
+	// identity (reconcilers, imports).
+	ActorAgentID *uuid.UUID
+}
+
+// MemoryVersionConflictError is returned when a conditional write loses a race:
+// the stored version no longer matches what the caller expected.
+//
+// It names both numbers because "conflict" alone leaves the caller unable to
+// decide what to do next, and re-reading to find out is another round trip that
+// can itself be raced.
+type MemoryVersionConflictError struct {
+	Key      string
+	Expected int
+	Actual   int
+}
+
+func (e *MemoryVersionConflictError) Error() string {
+	return fmt.Sprintf(
+		"memory %q was modified by someone else: you expected version %d, stored version is %d; re-read it and re-apply your change",
+		e.Key, e.Expected, e.Actual,
+	)
 }

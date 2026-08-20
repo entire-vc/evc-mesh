@@ -94,7 +94,7 @@ func TestRemember_CollapsedKey_ResolvesToWinnerNotRetired(t *testing.T) {
 	winner.WorkspaceID, winner.Key, winner.Content = ws.ID, key, "winner content"
 	winner.Scope, winner.SourceType = domain.ScopeWorkspace, domain.SourceAgent
 	winner.Status, winner.Tags = domain.MemoryStatusActive, []string{"kind:learning"}
-	require.NoError(t, memRepo.Upsert(ctx, winner))
+	require.NoError(t, memRepo.Upsert(ctx, winner, domain.MemoryWriteIntent{}))
 
 	_, err = db.ExecContext(ctx, `UPDATE memories SET superseded_by=$1 WHERE id=$2`, winner.ID, loserID)
 	require.NoError(t, err)
@@ -110,7 +110,7 @@ func TestRemember_CollapsedKey_ResolvesToWinnerNotRetired(t *testing.T) {
 		WorkspaceID: ws.ID, Key: key, Content: "third write",
 		Scope: domain.ScopeWorkspace, SourceType: domain.SourceAgent,
 		Tags: []string{"kind:learning"},
-	})
+	}, domain.MemoryWriteIntent{})
 	require.NoError(t, err)
 	assert.Equal(t, "updated", result.Outcome, "must upsert the live row, not create a third")
 
@@ -161,13 +161,13 @@ func TestRemember_CollapsedKey_ReviewNeededIsAlsoCurrent(t *testing.T) {
 		Scope: domain.ScopeWorkspace, SourceType: domain.SourceAgent,
 		Status: domain.MemoryStatusReviewNeeded, Tags: []string{"kind:learning"},
 	}
-	require.NoError(t, memRepo.Upsert(ctx, m))
+	require.NoError(t, memRepo.Upsert(ctx, m, domain.MemoryWriteIntent{}))
 
 	result, err := svc.Remember(ctx, &domain.Memory{
 		WorkspaceID: ws.ID, Key: key, Content: "v2",
 		Scope: domain.ScopeWorkspace, SourceType: domain.SourceAgent,
 		Tags: []string{"kind:learning"},
-	})
+	}, domain.MemoryWriteIntent{})
 	require.NoError(t, err)
 	assert.Equal(t, "updated", result.Outcome, "review_needed must be found by GetByKey — status='active' would miss it and fork")
 

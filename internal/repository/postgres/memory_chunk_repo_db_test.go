@@ -41,7 +41,7 @@ func setupMemoryChunkDBTest(t *testing.T) (*MemoryChunkRepo, *MemoryRepo, uuid.U
 		Scope:       domain.ScopeWorkspace,
 		SourceType:  domain.SourceAgent,
 	}
-	require.NoError(t, memRepo.Upsert(context.Background(), mem))
+	require.NoError(t, memRepo.Upsert(context.Background(), mem, domain.MemoryWriteIntent{}))
 
 	return NewMemoryChunkRepo(db), memRepo, mem.ID
 }

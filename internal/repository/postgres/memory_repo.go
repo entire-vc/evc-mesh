@@ -59,6 +59,7 @@ type memoryRow struct {
 	ValidFrom      *time.Time          `db:"valid_from"`
 	ValidUntil     *time.Time          `db:"valid_until"`
 	ContentSimhash *int64              `db:"content_simhash"`
+	Version        int                 `db:"version"`
 }
 
 func (r *memoryRow) toDomain() domain.Memory {
@@ -89,17 +90,29 @@ func (r *memoryRow) toDomain() domain.Memory {
 		ValidFrom:       r.ValidFrom,
 		ValidUntil:      r.ValidUntil,
 		ContentSimhash:  r.ContentSimhash,
+		Version:         r.Version,
 	}
 }
 
 const memoryColumns = `id, workspace_id, project_id, agent_id, key, content, scope, tags,
 	source_type, source_event_id, source_url, relevance, importance_score, created_at, updated_at, expires_at,
 	last_accessed_at, archived, thread_id, source_task_id,
-	status, freshness_score, superseded_by, valid_from, valid_until, content_simhash`
+	status, freshness_score, superseded_by, valid_from, valid_until, content_simhash, version`
 
 // Upsert inserts a new memory or updates content, tags, relevance, and expires_at on conflict.
 // The unique constraint is on (workspace_id, project_id, agent_id, key, scope).
-func (r *MemoryRepo) Upsert(ctx context.Context, m *domain.Memory) error {
+//
+// Every write goes through one transaction that bumps memories.version and
+// appends the matching memory_revisions row. The two cannot come apart: a
+// version with no snapshot would be a claim of history we cannot produce, and a
+// snapshot with no version bump would let a conditional write succeed against
+// content that had already moved.
+//
+// When intent.ExpectedVersion is non-nil the write is conditional and returns
+// *domain.MemoryVersionConflictError if the stored version has moved. Nil keeps
+// the previous last-write-wins behaviour, so callers that have not opted in are
+// unaffected.
+func (r *MemoryRepo) Upsert(ctx context.Context, m *domain.Memory, intent domain.MemoryWriteIntent) (err error) {
 	if m.ID == uuid.Nil {
 		m.ID = uuid.New()
 	}
@@ -131,12 +144,14 @@ func (r *MemoryRepo) Upsert(ctx context.Context, m *domain.Memory) error {
 			id, workspace_id, project_id, agent_id, key, content, scope,
 			tags, source_type, source_event_id, source_url, relevance, importance_score,
 			created_at, updated_at, expires_at, thread_id, source_task_id,
-			status, freshness_score, superseded_by, valid_from, valid_until, content_simhash
+			status, freshness_score, superseded_by, valid_from, valid_until, content_simhash,
+			version
 		) VALUES (
 			$1, $2, $3, $4, $5, $6, $7,
 			$8, $9, $10, $11, $12, $13,
 			$14, $15, $16, $17, $18,
-			$19, $20, $21, $22, $23, $24
+			$19, $20, $21, $22, $23, $24,
+			$25
 		)
 		ON CONFLICT (id) DO UPDATE
 			SET content          = EXCLUDED.content,
@@ -153,15 +168,138 @@ func (r *MemoryRepo) Upsert(ctx context.Context, m *domain.Memory) error {
 			    superseded_by    = EXCLUDED.superseded_by,
 			    valid_from       = EXCLUDED.valid_from,
 			    valid_until      = EXCLUDED.valid_until,
-			    content_simhash  = EXCLUDED.content_simhash
+			    content_simhash  = EXCLUDED.content_simhash,
+			    version          = EXCLUDED.version
 	`
-	_, err := r.db.ExecContext(ctx, q,
+	tx, err := r.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	// Lock the existing row (if any) for the duration of the transaction, so a
+	// concurrent writer cannot read the same version, decide it matches, and
+	// bump on top of us. Without FOR UPDATE the check below would be advisory:
+	// both racers could read version N, both find it equal to their
+	// expectation, and both write N+1 — the exact failure the expected-version
+	// argument exists to prevent.
+	//
+	// ⚠️ Not covered by a red test. Removing this clause leaves
+	// TestConcurrentWrite_StaleExpectedVersionIsRefused green at 2 and at 8
+	// concurrent writers (measured 2026-08-20): they serialise through the pool
+	// anyway, so the comparison alone catches them. The clause is kept as the
+	// correct guard for a two-statement read-modify-write, not because the
+	// suite proves it. If you are tempted to delete it because "the tests still
+	// pass" — that is precisely the evidence this note exists to pre-empt.
+	var storedVersion int
+	found := true
+	if selErr := tx.GetContext(ctx, &storedVersion,
+		`SELECT version FROM memories WHERE id = $1 FOR UPDATE`, m.ID); selErr != nil {
+		if !errors.Is(selErr, sql.ErrNoRows) {
+			err = selErr
+			return err
+		}
+		found = false
+	}
+
+	if intent.ExpectedVersion != nil {
+		// A conditional write against a key that does not exist is also a
+		// conflict: the caller believes it is editing something, and creating
+		// it instead would silently turn an edit into a create.
+		actual := 0
+		if found {
+			actual = storedVersion
+		}
+		if actual != *intent.ExpectedVersion {
+			err = &domain.MemoryVersionConflictError{
+				Key:      m.Key,
+				Expected: *intent.ExpectedVersion,
+				Actual:   actual,
+			}
+			return err
+		}
+	}
+
+	action := intent.Action
+	if action == "" {
+		if found {
+			action = domain.MemoryActionUpdated
+		} else {
+			action = domain.MemoryActionCreated
+		}
+	}
+	m.Version = storedVersion + 1
+	if !found {
+		m.Version = 1
+	}
+
+	if _, err = tx.ExecContext(ctx, q,
 		m.ID, m.WorkspaceID, m.ProjectID, m.AgentID, m.Key, m.Content, m.Scope,
 		tags, m.SourceType, m.SourceEventID, m.SourceURL, m.Relevance, m.ImportanceScore,
 		m.CreatedAt, m.UpdatedAt, m.ExpiresAt, m.ThreadID, m.SourceTaskID,
 		m.Status, m.FreshnessScore, m.SupersededBy, m.ValidFrom, m.ValidUntil, m.ContentSimhash,
-	)
+		m.Version,
+	); err != nil {
+		return err
+	}
+
+	// Empty reason is stored as NULL, not as "". The CHECK rejects blank, and
+	// the two states mean different things: NULL is "written before the reason
+	// requirement existed", blank would be "someone answered the question with
+	// nothing".
+	var reason *string
+	if trimmed := strings.TrimSpace(intent.Reason); trimmed != "" {
+		reason = &trimmed
+	}
+
+	if _, err = tx.ExecContext(ctx, `
+		INSERT INTO memory_revisions (memory_id, version, content, tags, action, reason, actor_agent_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		m.ID, m.Version, m.Content, tags, action, reason, intent.ActorAgentID,
+	); err != nil {
+		return err
+	}
+
+	err = tx.Commit()
 	return err
+}
+
+// AppendRevision records one revision row directly, without touching the
+// memories row. Used by the forget path, which needs to snapshot content it is
+// about to delete: there is no version to bump because the row is going away.
+func (r *MemoryRepo) AppendRevision(ctx context.Context, rev domain.MemoryRevision) error {
+	tags := rev.Tags
+	if tags == nil {
+		tags = pq.StringArray{}
+	}
+	_, err := r.db.ExecContext(ctx, `
+		INSERT INTO memory_revisions (memory_id, version, content, tags, action, reason, actor_agent_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		rev.MemoryID, rev.Version, rev.Content, tags, rev.Action, rev.Reason, rev.ActorAgentID)
+	return err
+}
+
+// ListRevisions returns the recorded history of one memory, newest version
+// first, capped at limit (limit <= 0 means 50).
+func (r *MemoryRepo) ListRevisions(ctx context.Context, memoryID uuid.UUID, limit int) ([]domain.MemoryRevision, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	var rows []domain.MemoryRevision
+	err := r.db.SelectContext(ctx, &rows, `
+		SELECT id, memory_id, version, content, tags, action, reason, actor_agent_id, created_at
+		FROM memory_revisions
+		WHERE memory_id = $1
+		ORDER BY version DESC
+		LIMIT $2`, memoryID, limit)
+	if err != nil {
+		return nil, err
+	}
+	return rows, nil
 }
 
 // GetByID returns a memory by its primary key, or nil if not found.

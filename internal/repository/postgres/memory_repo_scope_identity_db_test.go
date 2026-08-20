@@ -88,7 +88,7 @@ func TestMemoryRepoDB_WorkspaceScope_IdentityIgnoresProjectAndAgent(t *testing.T
 		Scope:       domain.ScopeWorkspace,
 		SourceType:  domain.SourceAgent,
 	}
-	require.NoError(t, repo.Upsert(ctx, m1))
+	require.NoError(t, repo.Upsert(ctx, m1, domain.MemoryWriteIntent{}))
 
 	// Same workspace+key, but looked up with a DIFFERENT project_id — must
 	// still find m1 (identity does not include project_id for scope=workspace).
@@ -115,7 +115,7 @@ func TestMemoryRepoDB_WorkspaceScope_IdentityIgnoresProjectAndAgent(t *testing.T
 	// there must still be exactly ONE row for (wsID, key) afterward.
 	m1.ProjectID = &proj2
 	m1.Content = "v2"
-	require.NoError(t, repo.Upsert(ctx, m1))
+	require.NoError(t, repo.Upsert(ctx, m1, domain.MemoryWriteIntent{}))
 
 	var count int
 	require.NoError(t, repo.db.GetContext(ctx, &count,
@@ -140,13 +140,13 @@ func TestMemoryRepoDB_ProjectScope_IdentityIsPerProject(t *testing.T) {
 		ID: uuid.New(), WorkspaceID: wsID, ProjectID: &proj1, Key: key,
 		Content: "proj1 content", Scope: domain.ScopeProject, SourceType: domain.SourceAgent,
 	}
-	require.NoError(t, repo.Upsert(ctx, m1))
+	require.NoError(t, repo.Upsert(ctx, m1, domain.MemoryWriteIntent{}))
 
 	m2 := &domain.Memory{
 		ID: uuid.New(), WorkspaceID: wsID, ProjectID: &proj2, Key: key,
 		Content: "proj2 content", Scope: domain.ScopeProject, SourceType: domain.SourceAgent,
 	}
-	require.NoError(t, repo.Upsert(ctx, m2))
+	require.NoError(t, repo.Upsert(ctx, m2, domain.MemoryWriteIntent{}))
 
 	require.NotEqual(t, m1.ID, m2.ID, "test setup sanity check")
 
@@ -197,7 +197,7 @@ func TestMemoryRepoDB_AgentScope_IdentityIgnoresProject(t *testing.T) {
 		ID: uuid.New(), WorkspaceID: wsID, AgentID: &agent1, ProjectID: &proj1, Key: key,
 		Content: "agent1 content", Scope: domain.ScopeAgent, SourceType: domain.SourceAgent,
 	}
-	require.NoError(t, repo.Upsert(ctx, m1))
+	require.NoError(t, repo.Upsert(ctx, m1, domain.MemoryWriteIntent{}))
 
 	// Different project_id on the lookup must still find m1 — agent-scope
 	// identity ignores project_id.
@@ -211,7 +211,7 @@ func TestMemoryRepoDB_AgentScope_IdentityIgnoresProject(t *testing.T) {
 		ID: uuid.New(), WorkspaceID: wsID, AgentID: &agent2, Key: key,
 		Content: "agent2 content", Scope: domain.ScopeAgent, SourceType: domain.SourceAgent,
 	}
-	require.NoError(t, repo.Upsert(ctx, m2))
+	require.NoError(t, repo.Upsert(ctx, m2, domain.MemoryWriteIntent{}))
 
 	found2, err := repo.GetByKey(ctx, wsID, nil, &agent2, key, domain.ScopeAgent)
 	require.NoError(t, err)
