@@ -22,12 +22,25 @@ between fixing a message and rebasing a branch. It is advisory by construction:
 it lives on whichever machine installed it, and a fresh clone, another machine,
 a web edit or `--no-verify` all walk past it.
 
-**`Vendor trailer gate`** — a required status check, and the layer that actually
-holds. Branch protection is the only gate every merge path consults. This
+**`Vendor trailer gate`** — the CI check, and the layer intended to hold the
+line. Branch protection is the only gate every merge path consults. This
 repository already learned that with the `hold` label, which two of our own
 wrapper scripts honoured while the web merge button, `gh pr merge`, a direct
 REST `PUT` and the merge queue all ignored it — so it looked enforced for six
 weeks while stopping nothing. See [hold-gate.md](hold-gate.md).
+
+> **Today this check is NOT in the required-checks list, so it reports without
+> blocking.** It is red on an offending pull request and our merge-train tooling
+> holds on that, but the web merge button, `gh pr merge`, a direct REST `PUT`
+> and the merge queue do not consult a non-required check. Writing "required"
+> here before branch protection says so would repeat the `hold` mistake this
+> file cites — a stated guarantee nothing enforces.
+>
+> Adding it to the required list needs one prior observation: this check has
+> never yet reported in a `merge_group` run, and that can only be seen once a
+> pull request actually goes through the queue. A required check that stays
+> silent on `merge_group` wedges the repository permanently. Observe that run
+> first, then arm it.
 
 ## Why a branch trailer matters under squash merge
 
@@ -40,9 +53,9 @@ commit time closes both.
 
 ## What each context reads
 
-`pull_request` reads the commits on the branch. This is the run that stops
-things: a pull request cannot enter the merge queue while a required check is
-red.
+`pull_request` reads the commits on the branch. This is the run that reports on
+the branch as it stands, and — once the check is required — the run that stops a
+pull request from entering the merge queue.
 
 `merge_group` reads the commits the queue is about to merge — the squash commits
 themselves. It has to run there regardless, because a required check that
