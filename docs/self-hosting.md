@@ -321,7 +321,8 @@ nothing.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `MESH_INTEGRATION_ENCRYPTION_KEY` | *(empty)* | Base64 32-byte AES-256-GCM key encrypting stored integration credentials. **Empty means those credentials are stored in plaintext** — the API only logs a warning. See the [Security Checklist](#security-checklist). Generate with `openssl rand -base64 32`. |
+| `MESH_INTEGRATION_ENCRYPTION_KEY` | *(empty)* | Base64 32-byte AES-256-GCM key encrypting stored integration credentials. **Empty means those credentials are stored in plaintext** — the API logs a warning at startup and exports `mesh_integration_encryption_active 0`. See the [Security Checklist](#security-checklist). Generate with `openssl rand -base64 32`. |
+| `MESH_INTEGRATION_ENCRYPTION_REQUIRED` | `false` | Refuse to start, and refuse to store a credential, when the key above is missing or malformed. Recommended once you hold real credentials: a mistyped key otherwise degrades to plaintext storage and nothing fails. |
 | `MESH_GITHUB_WEBHOOK_SECRET` | *(empty)* | HMAC-SHA256 secret for inbound GitHub webhooks. Empty disables signature validation, i.e. anyone who can reach the webhook endpoint can post to it. |
 | `MESH_TEAMRELAY_TRANSPORT_ENABLED` | `false` | Push artifacts to Team Relay. Must be the exact string `true`. |
 | `MESH_TEAMRELAY_RELAY_URL` | *(empty)* | Team Relay API base URL. Empty makes relay search and preview return `503`. |
@@ -952,6 +953,33 @@ docker compose -f docker-compose.prod.yml --env-file .env config | \
     ```bash
     openssl rand -base64 32
     ```
+
+    Then set `MESH_INTEGRATION_ENCRYPTION_REQUIRED=true`, which turns "the key
+    is missing or malformed" from a warning into a refusal to start. The two
+    settings answer different questions: the key makes encryption *possible*,
+    the flag makes a broken key *visible*. A typo in the key alone produces a
+    perfectly healthy-looking instance that stores every credential in the
+    clear.
+
+    Watch `mesh_integration_encryption_active` — it is `1` when credentials are
+    actually being encrypted and `0` when they are not. It is worth an alert:
+    the failure mode has no other symptom, because writes succeed either way.
+
+    **Credentials stored before you set the key stay in plaintext.** Encryption
+    happens on write, so existing rows are untouched by turning it on. Rewrite
+    them with the one-off tool, which verifies each value round-trips before it
+    replaces it and does the whole set in one transaction:
+
+    ```bash
+    go run ./cmd/encrypt-integration-keys --dry-run   # report only
+    go run ./cmd/encrypt-integration-keys             # rewrite
+    ```
+
+    From this version a database trigger refuses any *new* unencrypted
+    credential in `project_integrations.agent_key`, whatever wrote it — the API,
+    `psql`, or an ops script. An instance running without an encryption key is
+    still supported and unaffected: the API grants that exemption explicitly for
+    the write it knows it cannot encrypt.
 
 12. **Set `MESH_BASE_URL`** -- Not a confidentiality issue, but the one people
     hit: unset, it falls back to `http://localhost:5173` and every workspace
