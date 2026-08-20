@@ -143,7 +143,7 @@ type Memory struct {
 
 	// Version is bumped on every write to this memory and is what a conditional
 	// write is conditional on. Starts at 1. Rows written before migration
-	// 20260820109 carry the default 1 without a matching revision row — they
+	// 20260820112 carry the default 1 without a matching revision row — they
 	// have no recorded history, which is the honest state rather than a
 	// fabricated one.
 	Version int `json:"version" db:"version"`
