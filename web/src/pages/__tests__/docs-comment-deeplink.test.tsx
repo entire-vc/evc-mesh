@@ -18,7 +18,13 @@ vi.mock("react-router", async () => {
   return { ...actual, useNavigate: () => mockedNavigate };
 });
 
-vi.mock("@/lib/api", () => ({ api: vi.fn(), getAccessToken: vi.fn(() => null) }));
+vi.mock("@/lib/api", async () => {
+  // Keep the real ApiRequestError — DocsPage checks `err instanceof
+  // ApiRequestError` on every save failure, which throws instead of just
+  // being false if the mock drops the class.
+  const actual = await vi.importActual<typeof import("@/lib/api")>("@/lib/api");
+  return { ...actual, api: vi.fn(), getAccessToken: vi.fn(() => null) };
+});
 vi.mock("@/components/ui/toast", () => ({
   toast: { error: vi.fn(), success: vi.fn() },
 }));
@@ -69,6 +75,7 @@ const DOC: ProjectDocument = {
   created_by_type: "user",
   created_at: "2026-08-01T00:00:00Z",
   updated_at: "2026-08-01T00:00:00Z",
+  version: 1,
 };
 
 function makeComment(over: Partial<DocumentComment> & { id: string }): DocumentComment {

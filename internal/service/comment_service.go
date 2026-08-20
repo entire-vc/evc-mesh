@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	"github.com/entire-vc/evc-mesh/internal/presence"
 	"github.com/entire-vc/evc-mesh/internal/repository"
 	"github.com/entire-vc/evc-mesh/pkg/actorctx"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
@@ -628,6 +629,7 @@ type commentService struct {
 	ctxCacheInv    ContextCacheInvalidator
 	userRepo       repository.UserRepository
 	mentionRepo    repository.CommentMentionRepository
+	deliveryRepo   repository.CommentDeliveryOutcomeRepository
 	wsPublisher    WSPublisher
 	taskSvc        TaskService
 }
@@ -653,6 +655,17 @@ func WithCommentUserRepo(r repository.UserRepository) CommentServiceOption {
 // WithCommentMentionRepo sets the mention repository for persisting comment_mentions rows.
 func WithCommentMentionRepo(r repository.CommentMentionRepository) CommentServiceOption {
 	return func(s *commentService) { s.mentionRepo = r }
+}
+
+// WithCommentDeliveryOutcomeRepo sets the repository that records, for every
+// @-addressed handle on a comment, whether it reached anybody and why.
+//
+// Optional like every other dependency here: when it is nil the delivery
+// record is simply not written, and mentions behave exactly as they did
+// before. Nothing on the comment path is failed because the verdict about it
+// could not be stored.
+func WithCommentDeliveryOutcomeRepo(r repository.CommentDeliveryOutcomeRepository) CommentServiceOption {
+	return func(s *commentService) { s.deliveryRepo = r }
 }
 
 // WithCommentWSPublisher sets the WS publisher used to push badge-update events to users.
@@ -1008,10 +1021,44 @@ func (s *commentService) Delete(ctx context.Context, id uuid.UUID) error {
 	return nil
 }
 
-// ListByTask returns a paginated list of comments for the given task.
+// ListByTask returns a paginated list of comments for the given task, each
+// carrying the record of what became of the handles it addressed.
 func (s *commentService) ListByTask(ctx context.Context, taskID uuid.UUID, filter repository.CommentFilter, pg pagination.Params) (*pagination.Page[domain.Comment], error) {
 	pg.Normalize()
-	return s.commentRepo.ListByTask(ctx, taskID, filter, pg)
+	page, err := s.commentRepo.ListByTask(ctx, taskID, filter, pg)
+	if err != nil || page == nil {
+		return page, err
+	}
+	s.attachDeliveryOutcomes(ctx, page.Items)
+	return page, nil
+}
+
+// attachDeliveryOutcomes fills in Delivery for a batch of comments in one
+// query, so the record is visible wherever the thread is read rather than
+// only to whoever thinks to go looking for it.
+//
+// Best-effort by design: a thread still renders if the delivery record cannot
+// be read. The failure is logged rather than swallowed, because "no rows" and
+// "could not read the rows" would otherwise both render as "everything was
+// delivered" — the precise ambiguity this feature exists to remove.
+func (s *commentService) attachDeliveryOutcomes(ctx context.Context, comments []domain.Comment) {
+	if s.deliveryRepo == nil || len(comments) == 0 {
+		return
+	}
+	ids := make([]uuid.UUID, 0, len(comments))
+	for i := range comments {
+		ids = append(ids, comments[i].ID)
+	}
+	byComment, err := s.deliveryRepo.ListByCommentIDs(ctx, ids)
+	if err != nil {
+		log.Printf("[comment-delivery] could not read delivery outcomes for %d comments: %v", len(ids), err)
+		return
+	}
+	for i := range comments {
+		if rows, ok := byComment[comments[i].ID]; ok {
+			comments[i].Delivery = rows
+		}
+	}
 }
 
 // ListByAuthor returns the caller's own comments, newest first (activity feed).
@@ -1111,15 +1158,43 @@ func (s *commentService) notifyMentions(
 	}
 	now := timeNow()
 
+	// The task's status category, resolved once: it decides whether the card is
+	// in the feed a mentioned agent actually polls, which is the difference
+	// between a comment they will be handed and one they will never see.
+	taskInTodo := s.taskIsInTodoCategory(ctx, task)
+
 	seenID := make(map[uuid.UUID]bool)
 	var dbRows []domain.CommentMention
+	// One verdict per addressed handle, recorded whether or not the handle
+	// resolved. This slice is the thing that makes a failed mention visible;
+	// before it existed, an unresolvable handle wrote nothing anywhere.
+	outcomes := make([]domain.CommentDeliveryOutcome, 0, len(newSlugs))
 
 	for _, slug := range newSlugs {
+		// Whether this handle named somebody at all. A handle that resolves to
+		// nothing is the case with no trace today, so it gets its own row at
+		// the bottom of the loop rather than falling off the end silently.
+		resolved := false
+
 		// Try agent lookup first.
 		if s.agentSvc != nil {
 			agent, err := s.agentSvc.GetBySlug(ctx, workspaceID, slug)
+			if err == nil && agent != nil {
+				resolved = true
+			}
 			if err == nil && agent != nil && !seenID[agent.ID] {
 				seenID[agent.ID] = true
+				isSelf := actorType == domain.ActorTypeAgent && agent.ID == actorID
+				outcomes = append(outcomes, newOutcomeRow(comment.ID, deliveryFacts{
+					Slug:            slug,
+					Agent:           agent,
+					SelfMention:     isSelf,
+					StreamConnected: presence.IsConnected(agent.ID),
+					InTaskQueue: taskInTodo &&
+						task.AssigneeType == domain.AssigneeTypeAgent &&
+						task.AssigneeID != nil && *task.AssigneeID == agent.ID,
+					Presence: agent.ComputedStatus(presence.IsConnected(agent.ID)),
+				}, now))
 				dbRows = append(dbRows, domain.CommentMention{
 					CommentID:     comment.ID,
 					MentionedID:   agent.ID,
@@ -1127,7 +1202,7 @@ func (s *commentService) notifyMentions(
 					MentionedSlug: slug,
 					ExtractedAt:   now,
 				})
-				if s.agentNotifySvc != nil && (actorType != domain.ActorTypeAgent || agent.ID != actorID) {
+				if s.agentNotifySvc != nil && !isSelf {
 					s.agentNotifySvc.NotifyAgent(ctx, agent.ID, AgentNotification{
 						EventType:   "task.mentioned",
 						Timestamp:   now,
@@ -1145,6 +1220,12 @@ func (s *commentService) notifyMentions(
 						TaskID:    task.ID,
 						ProjectID: task.ProjectID,
 						Payload:   map[string]any{"mentioned_slug": slug},
+						// If the durable store rejects the event, the verdict
+						// recorded a moment ago is no longer true. Downgrade it
+						// rather than leaving a confident "delivered" standing
+						// over a write that did not happen — a stale optimistic
+						// record is the failure mode this whole table replaces.
+						OnPersistErr: s.markDeliveryFailed(comment.ID, slug),
 					})
 				}
 				continue
@@ -1154,8 +1235,23 @@ func (s *commentService) notifyMentions(
 		// Fall back to user lookup.
 		if s.userRepo != nil {
 			user, err := s.userRepo.GetByUsername(ctx, workspaceID, slug)
-			if err == nil && user != nil && !seenID[user.ID] &&
-				(actorType != domain.ActorTypeUser || user.ID != actorID) {
+			if err == nil && user != nil {
+				resolved = true
+			}
+			if err == nil && user != nil && !seenID[user.ID] {
+				isSelf := actorType == domain.ActorTypeUser && user.ID == actorID
+				outcomes = append(outcomes, newOutcomeRow(comment.ID, deliveryFacts{
+					Slug:            slug,
+					User:            user,
+					SelfMention:     isSelf,
+					HasSubscription: s.userHasMentionSubscription(ctx, user.ID),
+				}, now))
+				if isSelf {
+					// Recorded above as skipped/self_mention; nothing to send,
+					// and no Mention-feed row for naming yourself.
+					seenID[user.ID] = true
+					continue
+				}
 				seenID[user.ID] = true
 				dbRows = append(dbRows, domain.CommentMention{
 					CommentID:     comment.ID,
@@ -1195,11 +1291,106 @@ func (s *commentService) notifyMentions(
 				s.notifyUserMention(ctx, comment, task, workspaceID, user.ID, actorName)
 			}
 		}
+
+		if !resolved {
+			// The expensive silent case: the comment is published, the handle
+			// is highlighted in the rendered body, and it addresses nobody.
+			// Until this row, that was indistinguishable from the handle never
+			// having been written — a lookup that records only its successes
+			// cannot tell "nobody asked" from "every ask missed".
+			outcomes = append(outcomes, newOutcomeRow(comment.ID, deliveryFacts{
+				Slug: slug,
+			}, now))
+		}
 	}
 
 	if s.mentionRepo != nil && len(dbRows) > 0 {
 		_ = s.mentionRepo.InsertBatch(ctx, dbRows)
 	}
+	if s.deliveryRepo != nil && len(outcomes) > 0 {
+		if err := s.deliveryRepo.InsertBatch(ctx, outcomes); err != nil {
+			log.Printf("[comment-delivery] failed to record delivery outcomes for comment %s: %v", comment.ID, err)
+		}
+	}
+}
+
+// markDeliveryFailed returns the callback that downgrades one recorded verdict
+// to failed when the durable event write errors.
+//
+// Returns nil when there is no repository to write to, which is what keeps the
+// notification payload free of a closure that would do nothing — and keeps the
+// hook's own "is it set" check meaningful.
+func (s *commentService) markDeliveryFailed(commentID uuid.UUID, slug string) func(error) {
+	if s.deliveryRepo == nil {
+		return nil
+	}
+	repo := s.deliveryRepo
+	return func(persistErr error) {
+		// Deliberately a fresh background context: this runs inside dispatch's
+		// own goroutine, long after the request that created the comment has
+		// returned and its context has been cancelled. Reusing that context
+		// would make the downgrade fail exactly when it is needed.
+		if err := repo.MarkFailed(context.Background(), commentID, slug, domain.ReasonEventPersistFailed); err != nil {
+			log.Printf("[comment-delivery] could not downgrade %s/@%s to failed after persist error %v: %v",
+				commentID, slug, persistErr, err)
+		}
+	}
+}
+
+// taskIsInTodoCategory reports whether the task currently sits in a
+// todo-category status — i.e. whether it is in the feed an assigned agent
+// polls via GET /agents/me/tasks?status_category=todo.
+//
+// Fails CLOSED: if the status cannot be read, the answer is "not in the
+// queue". The alternative would let an unreadable status render as a
+// confident "delivered", which is the shape of error this record exists to
+// eliminate — an unknown must never be reported as a reassurance.
+func (s *commentService) taskIsInTodoCategory(ctx context.Context, task *domain.Task) bool {
+	if s.statusRepo == nil || task == nil {
+		return false
+	}
+	status, err := s.statusRepo.GetByID(ctx, task.StatusID)
+	if err != nil || status == nil {
+		return false
+	}
+	return status.Category == domain.StatusCategoryTodo
+}
+
+// userHasMentionSubscription reports whether the mentioned person has any
+// notification preference row that could carry a mention.
+//
+// Fails CLOSED for the same reason as above, with one extra consideration: a
+// person who has never opened notification settings has no preference row at
+// all, and dispatch then produces nothing on any channel without erroring.
+// That is the state this answer is mostly reporting, and calling it
+// "subscribed" because the lookup failed would hide precisely it.
+func (s *commentService) userHasMentionSubscription(ctx context.Context, userID uuid.UUID) bool {
+	if s.notifySvc == nil {
+		return false
+	}
+	prefs, err := s.notifySvc.GetPreferences(ctx, userID)
+	if err != nil {
+		return false
+	}
+	// The same three conditions dispatch applies, in the same order: a row
+	// belonging to this user, enabled, and listing this event. Re-deriving the
+	// gate loosely here would produce a report that disagrees with the code it
+	// is reporting on, which is worse than no report.
+	for i := range prefs {
+		p := prefs[i]
+		if p.UserID == nil || *p.UserID != userID {
+			continue
+		}
+		if !p.IsEnabled {
+			continue
+		}
+		for _, ev := range p.Events {
+			if ev == "task.mentioned" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // notifyUserMention dispatches the "task.mentioned" notification event for one

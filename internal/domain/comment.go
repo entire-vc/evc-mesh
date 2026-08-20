@@ -23,4 +23,15 @@ type Comment struct {
 
 	// Computed (not a DB column — populated via subquery in SELECT).
 	AuthorName *string `json:"author_name,omitempty" db:"author_name"`
+
+	// Delivery is what became of each @-addressed handle on this comment:
+	// who it reached, over which path, and — when it reached nobody — the
+	// named reason. Populated by a separate lookup, never scanned from the
+	// comments table, hence db:"-".
+	//
+	// omitempty is deliberate: a comment that addressed nobody carries no
+	// delivery record, and an empty array next to every ordinary comment
+	// would be noise on the one field whose whole value is that it only
+	// appears when there is something to say.
+	Delivery []CommentDeliveryOutcome `json:"delivery,omitempty" db:"-"`
 }
