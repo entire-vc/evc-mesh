@@ -11,7 +11,7 @@ import (
 //
 // The task-comment equivalent is CommentMention, and the shape is deliberately
 // identical: the two live in separate tables only because their parent comments
-// do (see migrations/20260820102_create_document_comment_mentions.sql).
+// do (see migrations/20260820103_create_document_comment_mentions.sql).
 type DocumentCommentMention struct {
 	CommentID     uuid.UUID  `db:"comment_id"`
 	MentionedID   uuid.UUID  `db:"mentioned_id"`

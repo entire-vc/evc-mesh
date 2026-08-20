@@ -18,6 +18,7 @@ import { MentionText } from "@/components/mention-text";
 import { useMentionPicker } from "@/hooks/use-mention-picker";
 import { useMentionDirectory } from "@/hooks/use-mention-directory";
 import { useWorkspaceStore } from "@/stores/workspace";
+import { apiErrorMessage } from "@/lib/api-error";
 import { cn } from "@/lib/cn";
 import { formatRelative } from "@/lib/utils";
 import type {
@@ -147,7 +148,12 @@ function Composer({
       await onSubmit(body);
       setValue("");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to save");
+      // The field detail, not the generic "Validation failed" the server puts
+      // in `message`: a refused @-mention names the slug that resolved to
+      // nobody and says how to write an @ that is not a mention, and that
+      // sentence is the entire remedy for the failure this feature exists to
+      // make visible.
+      setError(apiErrorMessage(err));
     } finally {
       setBusy(false);
     }

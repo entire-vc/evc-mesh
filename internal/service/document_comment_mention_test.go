@@ -682,3 +682,75 @@ func TestDocumentMentionService_SurfacesRepositoryErrors(t *testing.T) {
 
 	assert.ErrorIs(t, svc.MarkSeen(ctx, uuid.New(), uuid.New()), boom)
 }
+
+// ---------------------------------------------------------------------------
+// The optional dependencies, absent
+// ---------------------------------------------------------------------------
+
+// TestDelivery_MissingChannelsDegradeRatherThanPanic: every notification
+// collaborator is an option, and a deployment that has not wired one must lose
+// that channel rather than the comment. The mention row is still written, so the
+// inbox has it even when nothing could be pushed.
+func TestDelivery_MissingChannelsDegradeRatherThanPanic(t *testing.T) {
+	base := setupDocumentCommentService(t)
+
+	agents := NewMockAgentService()
+	users := NewMockUserRepository()
+	mentionRepo := NewMockDocumentCommentMentionRepository()
+	agentID, userID := uuid.New(), uuid.New()
+	agents.AddAgent(base.wsID, &domain.Agent{ID: agentID, Slug: "daedalus"})
+	users.AddUser(base.wsID, &domain.User{ID: userID, Username: "pavel"})
+
+	// Resolution wired, delivery not: no agent notifier, no notification
+	// service, no WebSocket publisher.
+	svc := NewDocumentCommentService(base.comments, base.docs,
+		WithDocumentCommentAgentService(agents),
+		WithDocumentCommentUserRepo(users),
+		WithDocumentCommentMentionRepo(mentionRepo),
+	)
+
+	in := base.createInput()
+	in.Body = "@daedalus and @pavel"
+
+	c, err := svc.Create(context.Background(), in)
+
+	require.NoError(t, err)
+	require.NotNil(t, c)
+	assert.Len(t, mentionRepo.Rows(), 2, "the mention is still recorded for the inbox")
+}
+
+// TestDelivery_AFailedBadgeDoesNotStopTheNotification: the WebSocket badge is
+// the extra, not the delivery. Losing it must not cost the recipient the email
+// and the bell as well.
+func TestDelivery_AFailedBadgeDoesNotStopTheNotification(t *testing.T) {
+	f := setupDocumentMentions(t)
+	f.wsPub.err = errors.New("redis unavailable")
+
+	_, err := f.comment(context.Background(), "@pavel look")
+
+	require.NoError(t, err)
+	assert.Len(t, f.notify.Calls(), 1, "the subscribed channels still get it")
+}
+
+// TestCreate_AUserLookupFailureIsNotReportedAsATypo is the user-side half of
+// TestCreate_LookupFailureIsNotReportedAsATypo: agents are checked first, so
+// reaching the user repository at all needs a slug no agent claims.
+func TestCreate_AUserLookupFailureIsNotReportedAsATypo(t *testing.T) {
+	f := setupDocumentMentions(t)
+	boom := errors.New("users table unavailable")
+	f.users.errToReturn = boom
+
+	_, err := f.comment(context.Background(), "ping @pavel")
+
+	require.ErrorIs(t, err, boom)
+	var apiErr *apierror.Error
+	assert.False(t, errors.As(err, &apiErr), "an infrastructure failure is not a 400 about the body")
+}
+
+// TestTruncateRunes_CountsCharactersNotBytes: a body under the limit in
+// characters but over it in bytes is not truncated, which is the branch a
+// byte-only length check would skip.
+func TestTruncateRunes_CountsCharactersNotBytes(t *testing.T) {
+	cyrillic := strings.Repeat("я", 150) // 150 runes, 300 bytes
+	assert.Equal(t, cyrillic, truncateRunes(cyrillic, 200))
+}

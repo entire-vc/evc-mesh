@@ -236,7 +236,7 @@ var dispatchableEvents = map[string]bool{
 	// task.mentioned because the payload names a document and no task, and a
 	// subscriber has to know which of the two it is holding before trying to open
 	// one. Existing task.mentioned subscribers were opted in by
-	// migrations/20260820102_create_document_comment_mentions.sql: an event type
+	// migrations/20260820103_create_document_comment_mentions.sql: an event type
 	// that appears in no stored `events` array is dispatched perfectly and
 	// delivered to nobody.
 	"document.mentioned":     true,

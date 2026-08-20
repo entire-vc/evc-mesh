@@ -266,3 +266,22 @@ func TestDocumentMentionedIsSubscribable(t *testing.T) {
 	assert.Contains(t, defaultSubscribedEvents(), "document.mentioned",
 		"a new preference row must include it by default, as it does every other mention event")
 }
+
+// TestMentionHandler_List_StillRejectsMalformedFilters guards the refactor that
+// moved this parsing into parseMentionFilter: the task-mention inbox must go on
+// refusing exactly what it refused before, or a limit the document inbox rejects
+// would be silently accepted here.
+func TestMentionHandler_List_StillRejectsMalformedFilters(t *testing.T) {
+	h := NewMentionHandler(nil)
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, "/me/mentions?limit=999", http.NoBody)
+	req = req.WithContext(actorctx.WithActor(req.Context(), uuid.New(), domain.ActorTypeUser))
+	c := e.NewContext(req, httptest.NewRecorder())
+
+	err := h.List(c)
+
+	var apiErr *apierror.Error
+	require.ErrorAs(t, err, &apiErr)
+	assert.Equal(t, http.StatusBadRequest, apiErr.StatusCode())
+	assert.Contains(t, apiErr.Validation, "limit")
+}

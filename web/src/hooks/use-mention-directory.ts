@@ -10,14 +10,16 @@ import { useWorkspaceStore } from "@/stores/workspace";
  * comment: fetchTeamDirectory is unconditional, so a hook mounted in a list item
  * would issue one request per comment on screen.
  *
- * Agents and humans both, unlike the task comment list, which builds the same
- * map from agents alone and therefore leaves a mentioned person as plain text
- * even though the server delivered the notification. Human slugs come from the
- * mentionables endpoint's own source — the username — which the team directory
- * does not carry, so a person is matched on the handle the directory does
- * expose and falls back to plain text when there is none. That is the correct
- * failure: unhighlighted reads as "this is not a mention", which is wrong-but-
- * visible, where a wrong link would be wrong-and-followed.
+ * Agents AND humans, unlike the task comment list, which builds the same map
+ * from agents alone. That asymmetry was visible: a comment reading
+ * "@pavel — @daedalus" highlighted the agent and left the person as prose, so
+ * the one delivery that definitely happened looked like it had not. It needed
+ * the directory to carry a human's username, which it now does.
+ *
+ * A slug the directory does not know stays plain text. That is the honest
+ * rendering of "this addresses nobody" — and since the server refuses an
+ * unresolvable mention outright, the only way to get here is a name that
+ * stopped resolving after the fact.
  */
 export function useMentionDirectory(): {
   mentionables: Map<string, MentionEntry>;
@@ -43,8 +45,7 @@ export function useMentionDirectory(): {
       if (agent.slug) map.set(agent.slug, { kind: "agent" });
     }
     for (const human of teamDirectory.humans) {
-      const slug = (human as { username?: string }).username;
-      if (slug) map.set(slug, { kind: "user" });
+      if (human.username) map.set(human.username, { kind: "user" });
     }
     return map;
   }, [teamDirectory]);
