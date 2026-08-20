@@ -1,7 +1,11 @@
 import {
   type HTMLAttributes,
+  type MouseEvent as ReactMouseEvent,
+  type ReactElement,
   type ReactNode,
+  cloneElement,
   createContext,
+  isValidElement,
   useCallback,
   useContext,
   useEffect,
@@ -45,15 +49,35 @@ export function DropdownMenu({ children }: { children: ReactNode }) {
 
 export function DropdownMenuTrigger({
   children,
-  asChild: _asChild,
+  asChild,
+  onClick,
   ...props
 }: HTMLAttributes<HTMLButtonElement> & {
   asChild?: boolean;
 }) {
   const { open, setOpen } = useContext(DropdownMenuContext);
-  const handleClick = useCallback(() => {
-    setOpen(!open);
-  }, [open, setOpen]);
+  const handleClick = useCallback(
+    (event: ReactMouseEvent<HTMLButtonElement>) => {
+      onClick?.(event);
+      setOpen(!open);
+    },
+    [open, setOpen, onClick],
+  );
+
+  // asChild mirrors Radix: merge our onClick + props onto the child instead
+  // of wrapping it in another <button>. Wrapping produces <button><button/>
+  // </button> at every call site that passes a <Button>/<button> child —
+  // invalid HTML and a React hydration warning on every render.
+  if (asChild && isValidElement(children)) {
+    const child = children as ReactElement<HTMLAttributes<HTMLButtonElement>>;
+    return cloneElement(child, {
+      ...props,
+      onClick: (event: ReactMouseEvent<HTMLButtonElement>) => {
+        child.props.onClick?.(event);
+        handleClick(event);
+      },
+    });
+  }
 
   return (
     <button type="button" onClick={handleClick} {...props}>

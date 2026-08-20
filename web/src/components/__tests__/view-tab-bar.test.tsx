@@ -56,9 +56,8 @@ describe("ViewTabBar", () => {
     const labels = within(strip)
       .getAllByRole("button")
       .map((b) => b.textContent?.trim());
-    // Trailing empties are the kebab trigger (DropdownMenuTrigger ignores
-    // asChild and wraps the button it is given).
-    expect(labels).toEqual(["Board", "List", "Calendar", "Docs", "", ""]);
+    // Trailing empty is the icon-only kebab trigger (MoreVertical, no text).
+    expect(labels).toEqual(["Board", "List", "Calendar", "Docs", ""]);
   });
 
   it("navigates to the docs route from the Docs tab", () => {
