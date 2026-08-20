@@ -66,3 +66,8 @@ deploy/docker/mesh/volumes/
 web/test-results/
 web/playwright-report/
 web/e2e/.auth/
+
+# Python bytecode. Note this does not untrack scripts/ci/__pycache__, which was
+# committed before any rule existed and is left alone here deliberately.
+__pycache__/
+*.pyc
