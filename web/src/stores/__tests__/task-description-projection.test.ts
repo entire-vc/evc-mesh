@@ -97,3 +97,40 @@ describe("board task list — description projection (#32f4c087)", () => {
     expect(useTaskStore.getState().tasksById[TASK]!.description).toBe("");
   });
 });
+
+describe("duplicating a task built from a projected list item", () => {
+  it("re-reads the task so the copy is not silently description-less", async () => {
+    // GET /tasks/:id, then POST the duplicate.
+    mockedApi
+      .mockResolvedValueOnce(taskFixture({ description: "the full spec" }))
+      .mockResolvedValueOnce(taskFixture({ id: "44444444-4444-4444-4444-444444444444" }));
+
+    // Exactly what a board card holds: no description key at all.
+    await useTaskStore.getState().duplicateTask(taskFixture({ has_description: true }));
+
+    const [firstUrl] = mockedApi.mock.calls[0]!;
+    expect(firstUrl).toBe(`/api/v1/tasks/${TASK}`);
+
+    const [, postOptions] = mockedApi.mock.calls[1]!;
+    expect(postOptions.method).toBe("POST");
+    expect(postOptions.body.description).toBe("the full spec");
+  });
+
+  it("does not round-trip when the task already carries its description", async () => {
+    mockedApi.mockResolvedValueOnce(taskFixture({ id: "44444444-4444-4444-4444-444444444444" }));
+
+    await useTaskStore.getState().duplicateTask(taskFixture({ description: "already here" }));
+
+    expect(mockedApi.mock.calls).toHaveLength(1);
+    const [, postOptions] = mockedApi.mock.calls[0]!;
+    expect(postOptions.body.description).toBe("already here");
+  });
+
+  it("treats an explicitly empty description as a value, not as absence", async () => {
+    mockedApi.mockResolvedValueOnce(taskFixture({ id: "44444444-4444-4444-4444-444444444444" }));
+
+    await useTaskStore.getState().duplicateTask(taskFixture({ description: "" }));
+
+    expect(mockedApi.mock.calls).toHaveLength(1);
+  });
+});

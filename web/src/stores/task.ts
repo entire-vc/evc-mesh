@@ -182,7 +182,15 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   },
 
   duplicateTask: async (task: Task): Promise<Task> => {
-    const req = buildDuplicateRequest(task);
+    // A task object from a board/list fetch carries no description — the board
+    // asks for the list without one. Copying straight from it would produce a
+    // duplicate whose description is silently empty, and nothing would report
+    // it. Today every caller happens to hold a task the slide-over already
+    // fetched in full; re-reading here means that stays true for callers that
+    // do not exist yet. `undefined` means "not sent"; an empty string is a real
+    // value and needs no round-trip.
+    const source = task.description === undefined ? await get().fetchTask(task.id) : task;
+    const req = buildDuplicateRequest(source);
     const newTask = await api<Task>(
       `/api/v1/projects/${task.project_id}/tasks`,
       { method: "POST", body: req },
