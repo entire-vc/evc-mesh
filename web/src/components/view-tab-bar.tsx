@@ -59,9 +59,13 @@ const TABS = [
     path: (ws: string, proj: string) => `/w/${ws}/p/${proj}/list`,
   },
   {
+    // Four icons plus the kebab do not fit next to the breadcrumbs at 393px,
+    // so calendar moves into the kebab there and the strip keeps board,
+    // list and docs.
     id: "calendar" as const,
     label: "Calendar",
     Icon: Calendar,
+    hideOnMobile: true,
     path: (ws: string, proj: string) => `/w/${ws}/p/${proj}/calendar`,
   },
   {
@@ -88,6 +92,13 @@ const FORMATS = [
     path: (ws: string, proj: string) => `/w/${ws}/p/${proj}/updates`,
   },
 ] as const;
+
+// Derived from TABS so the strip and the menu cannot disagree about which
+// tabs are hidden on a phone.
+const MOBILE_ONLY_TABS = TABS.filter(
+  (t): t is Extract<(typeof TABS)[number], { hideOnMobile: true }> =>
+    "hideOnMobile" in t && t.hideOnMobile === true,
+);
 
 const VIEW_TYPE_PATH: Record<ViewType, (ws: string, proj: string) => string> = {
   board: (ws, proj) => `/w/${ws}/p/${proj}`,
@@ -132,6 +143,9 @@ export function ViewTabBar({
   }, [projectId, fetchViews]);
 
   const activeFormat = FORMATS.find((f) => f.id === currentView);
+  // Tabs the strip hides below `sm` are reachable only from this menu there,
+  // so the trigger has to show their active state at that width.
+  const mobileOnlyTabActive = MOBILE_ONLY_TABS.some((t) => t.id === currentView);
 
   // Filter views for current view type
   const relevantViews = views.filter((v) => v.view_type === currentView);
@@ -205,7 +219,9 @@ export function ViewTabBar({
   return (
     <>
       <div className={cn("flex items-center gap-0", className)}>
-        {TABS.map(({ id, label, Icon, path }) => {
+        {TABS.map((tab) => {
+          const { id, label, Icon, path } = tab;
+          const hideOnMobile = "hideOnMobile" in tab && tab.hideOnMobile;
           const isActive = currentView === id;
           return (
             <button
@@ -216,7 +232,8 @@ export function ViewTabBar({
                 }
               }}
               className={cn(
-                "flex h-9 items-center gap-1.5 border-b-2 px-1.5 sm:px-3 text-sm transition-colors",
+                hideOnMobile ? "hidden sm:flex" : "flex",
+                "h-9 items-center gap-1.5 border-b-2 px-1.5 sm:px-3 text-sm transition-colors",
                 isActive
                   ? "border-primary font-medium text-foreground"
                   : "border-transparent font-normal text-muted-foreground hover:text-foreground",
@@ -232,26 +249,42 @@ export function ViewTabBar({
         {/* Formats + saved views */}
         <div className="ml-1 flex items-center border-l border-border pl-1">
           <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <button
-                className={cn(
-                  "flex h-7 w-7 items-center justify-center rounded hover:bg-muted hover:text-foreground",
-                  // The strip cannot show an active state for a format that
-                  // lives inside the menu, so the trigger carries it instead.
-                  activeFormat
-                    ? "bg-muted text-foreground"
-                    : "text-muted-foreground",
-                )}
-                title={
-                  activeFormat
-                    ? `${activeFormat.label} - more views`
-                    : "More views"
-                }
-              >
-                <MoreVertical className="h-3.5 w-3.5" />
-              </button>
+            <DropdownMenuTrigger
+              className={cn(
+                "flex h-7 w-7 items-center justify-center rounded hover:bg-muted hover:text-foreground",
+                // The strip cannot show an active state for a format that
+                // lives inside the menu, so the trigger carries it instead.
+                activeFormat ? "bg-muted text-foreground" : "text-muted-foreground",
+                // Below `sm` the same is true of any tab the strip drops.
+                mobileOnlyTabActive && "max-sm:bg-muted max-sm:text-foreground",
+              )}
+              title={
+                activeFormat ? `${activeFormat.label} - more views` : "More views"
+              }
+            >
+              <MoreVertical className="h-3.5 w-3.5" />
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start" className="w-56">
+              {MOBILE_ONLY_TABS.map(({ id, label, Icon, path }) => {
+                const isActive = currentView === id;
+                return (
+                  <DropdownMenuItem
+                    key={id}
+                    onClick={() => {
+                      if (!isActive) {
+                        navigate(path(wsSlug, projectSlug));
+                      }
+                    }}
+                    className="gap-2 sm:hidden"
+                    aria-current={isActive ? "page" : undefined}
+                  >
+                    <Icon className="h-3.5 w-3.5" />
+                    <span className="flex-1">{label}</span>
+                    {isActive && <Check className="h-3.5 w-3.5" />}
+                  </DropdownMenuItem>
+                );
+              })}
+
               <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-muted-foreground">
                 Formats
               </DropdownMenuLabel>

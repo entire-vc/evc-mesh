@@ -547,25 +547,25 @@ export function Header({ onToggleSidebar, installable, onInstall }: HeaderProps)
           <>
             <Link
               to={`/w/${wsSlug}`}
-              className="hover:text-foreground transition-colors"
+              className="min-w-0 shrink truncate max-w-[80px] sm:max-w-[160px] hover:text-foreground transition-colors"
             >
-              <span className="truncate max-w-[80px] sm:max-w-[160px]">{currentWorkspace.name}</span>
+              {currentWorkspace.name}
             </Link>
             {currentProject && (
               <>
-                <ChevronRight className="h-3 w-3" />
+                <ChevronRight className="h-3 w-3 shrink-0" />
                 <Link
                   to={`/w/${wsSlug}/p/${projectSlug}`}
-                  className="hover:text-foreground transition-colors font-medium text-foreground"
+                  className="min-w-0 shrink truncate max-w-[100px] sm:max-w-none hover:text-foreground transition-colors font-medium text-foreground"
                 >
-                  <span className="truncate max-w-[100px] sm:max-w-none">{currentProject.name}</span>
+                  {currentProject.name}
                 </Link>
               </>
             )}
             {!currentProject && workspacePage && (
               <>
-                <ChevronRight className="h-3 w-3" />
-                <span className="flex items-center gap-1.5 font-medium text-foreground">
+                <ChevronRight className="h-3 w-3 shrink-0" />
+                <span className="flex min-w-0 items-center gap-1.5 font-medium text-foreground">
                   <workspacePage.icon className="h-3.5 w-3.5" />
                   {workspacePage.title}
                 </span>
@@ -582,7 +582,7 @@ export function Header({ onToggleSidebar, installable, onInstall }: HeaderProps)
           wsSlug={wsSlug}
           projectSlug={projectSlug}
           projectId={currentProject?.id}
-          className="ml-1 sm:ml-4"
+          className="ml-1 shrink-0 sm:ml-4"
         />
       )}
 
