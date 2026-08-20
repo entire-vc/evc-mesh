@@ -1342,3 +1342,39 @@ type MemoryService interface {
 	// (TaskID, queryHash).
 	RecallGraph(ctx context.Context, opts domain.RecallGraphOpts) ([]domain.RecallGraphResult, error)
 }
+
+// SecretService is the write-only secrets API (task #64e84eb1). Every method
+// takes or returns domain.Secret, which has no field that can carry a value
+// — there is no method on this interface a handler could wire to a GET route
+// and accidentally leak plaintext through. Value-bearing operations live on
+// SecretMaterializationService instead, a deliberately separate interface.
+type SecretService interface {
+	// Create validates and stores a new secret. Returns apierror.Conflict if
+	// a current secret already exists for the same workspace/scope/name.
+	Create(ctx context.Context, input domain.CreateSecretInput) (domain.Secret, error)
+	// Rotate replaces the current value for (workspaceID, scope, name) with
+	// a new one, in one transaction — the old row is stamped rotated_at and
+	// kept, never edited or removed. Returns apierror.NotFound if there is
+	// no current secret to rotate.
+	Rotate(ctx context.Context, workspaceID uuid.UUID, scope domain.SecretScope, projectID, agentID *uuid.UUID, name string, input domain.CreateSecretInput) (domain.Secret, error)
+	// Delete ends materialization for (workspaceID, scope, name) — the
+	// current row is stamped rotated_at with no replacement. History stays
+	// queryable.
+	Delete(ctx context.Context, workspaceID uuid.UUID, scope domain.SecretScope, projectID, agentID *uuid.UUID, name string, deletedBy uuid.UUID, deletedByType domain.ActorType) error
+	// List returns masked metadata for every current secret reachable from
+	// the given resolution (workspace scope always, plus project/agent
+	// scope when the corresponding ID is non-nil).
+	List(ctx context.Context, workspaceID uuid.UUID, projectID, agentID *uuid.UUID) ([]domain.Secret, error)
+}
+
+// SecretMaterializationService decrypts current secret values for
+// spawn-time env-file materialization (S4). Wire it into exactly one
+// handler — the internal spawn-hook endpoint dispatcher/fiddler call — and
+// nowhere a browser session or a general agent tool can reach.
+type SecretMaterializationService interface {
+	// ResolveForSpawn decrypts every current secret in scope for the given
+	// resolution. An expired secret is returned with Expired=true and an
+	// empty Value rather than omitted, so the caller can name it in a loud
+	// spawn error instead of writing a silently empty variable.
+	ResolveForSpawn(ctx context.Context, workspaceID uuid.UUID, projectID, agentID *uuid.UUID) ([]domain.MaterializedSecret, error)
+}
