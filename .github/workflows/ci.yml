@@ -647,6 +647,28 @@ jobs:
           fi
       - name: Run Playwright E2E
         working-directory: web
+        # WHERE THIS WRITES, AND AS WHOM — read this before changing the suite.
+        #
+        # E2E_USER_EMAIL is e2e-ci@entire.vc. It is a member of exactly ONE
+        # workspace, `e2e-ci-sandbox`, and of NO real workspace: asking the
+        # production workspace for anything under this credential answers
+        # 403 "workspace access denied". The suite asserts that membership list
+        # itself, so putting this account back into a real workspace turns the
+        # check red rather than quietly widening what a GitHub secret can reach.
+        #
+        # Inside the sandbox its role is `member` (create/update/delete tasks,
+        # documents, comments — see internal/middleware/rbac.go). It is NOT the
+        # owner: admin@entire.vc is, so this credential cannot delete the
+        # workspace or change anyone's role, and a human can clean the sandbox
+        # up. `viewer` was the previous setting and made the required check
+        # structurally unable to test any write path, which is what §1n asks for.
+        #
+        # What a run leaves behind: nothing. Every document and comment it makes
+        # is named "[e2e] … <run id>" and deleted in afterAll (comments first —
+        # a document delete is soft and orphans its comment routes), and the
+        # suite prints the sandbox's document list afterwards. Two rows are
+        # permanent fixtures the reads depend on: project `e2e-fixtures` and the
+        # task "E2E read fixture — do not delete".
         run: npx playwright test
         env:
           APP_BASE_URL: ${{ vars.APP_BASE_URL || 'https://mesh.entire.host' }}

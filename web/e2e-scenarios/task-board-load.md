@@ -4,23 +4,26 @@
 **Scenario ID:** task-board-load
 **Owner:** Linus
 **Created:** 2026-06-18
-**Updated:** 2026-08-20 — rewritten against how this app actually authenticates
-**Spec file:** `web/e2e/task-board.spec.ts`
+**Updated:** 2026-08-20 — moved to the E2E sandbox workspace; the suite now also
+covers a write path (`docs-write-path.md`)
+**Spec file:** `web/e2e/authed-app.spec.ts` (renamed from `task-board.spec.ts`)
 
 ---
 
 ## Given
 
-- A dedicated CI user exists in Mesh (`E2E_USER_EMAIL` / `E2E_USER_PASSWORD`)
-  with the workspace role **`viewer`** — every write permission is refused by
-  the server (`internal/middleware/rbac.go`), so the credential in CI cannot
-  create, update or delete anything even if it leaks. `member` was the first
-  choice and was wrong: that role carries create/update/**delete** task and
-  create-project rights
+- A dedicated CI user exists in Mesh (`E2E_USER_EMAIL` / `E2E_USER_PASSWORD`).
+  It belongs to exactly one workspace — the scratch **`e2e-ci-sandbox`** — with
+  role **`member`**, and to no real workspace. The isolation, not the role, is
+  what bounds a leaked credential: `member` inside a sandbox that holds nothing
+  but its own fixtures can do nothing worth doing, while `viewer` in the real
+  workspace could read every task in it and still prove no write path (§1n).
+  `admin@entire.vc` owns the sandbox, so CI cannot delete it or change roles
 - Mesh authenticates natively (`POST /api/v1/auth/login`). There is no Casdoor /
   OIDC flow in this app; an earlier revision of this scenario assumed one and
   drove it against a host that does not resolve
-- The workspace contains tasks (the read-path assert requires real rows)
+- The sandbox contains the permanent fixture task "E2E read fixture — do not
+  delete" (the read assert names it, rather than settling for `total_count > 0`)
 
 ## When
 
@@ -32,8 +35,9 @@
 
 - Login returns 200 and an access token — a wrong password fails the run here
 - `/api/v1/auth/me` returns **our** user's email and `is_active: true`
-- The workspace list is a non-empty array, and workspace task search returns a
-  page with an `items` array and `total_count > 0`
+- The workspace list is **exactly** `[e2e-ci-sandbox]` — a blast-radius assert:
+  adding this credential to a real workspace turns the check red the same day
+- Workspace task search returns a page whose `items` contain the fixture task
 - The browser is **not** on `/login` (AppLayout redirects anonymous visitors
   there, so staying off it is the auth assert)
 - The URL settled inside `/w/<workspace-slug>/…` and workspace navigation rendered
@@ -51,7 +55,7 @@
 
 ## F1 fixture
 
-Inline in `task-board.spec.ts`, and **unconditional** — it previously sat behind
+Inline in `authed-app.spec.ts`, and **unconditional** — it previously sat behind
 `PW_FAIL_ON_CONSOLE_ERROR` / `PW_FAIL_ON_5XX`, which CI never set:
 - `window.__ceErrs` collector injected via `addInitScript`
 - `page.on("pageerror")` for uncaught exceptions
@@ -61,7 +65,9 @@ Inline in `task-board.spec.ts`, and **unconditional** — it previously sat behi
 
 ## Test data
 
-- No fixture data seeded — reads existing workspace data.
+- Reads the sandbox fixtures (`e2e-fixtures` project + the fixture task).
+  Documents and comments created by the write scenario are cleaned up there —
+  see `docs-write-path.md`.
 - **No `storageState`.** Refresh tokens rotate one-shot and reuse of a revoked
   token revokes every session for the user (`internal/auth/service.go`,
   `ErrTokenReused`). Replaying a saved cookie into a second browser context
@@ -86,5 +92,6 @@ and real task titles into `playwright-report`.
 
 ## Out of scope
 
+- Document and comment writes — `docs-write-path.md`, same spec file
 - Task creation / editing / deletion (separate scenarios)
 - Mobile viewport (separate visual scenario per §1k)
