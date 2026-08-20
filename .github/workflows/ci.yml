@@ -597,15 +597,8 @@ jobs:
         timeout-minutes: 5
         continue-on-error: true
         run: |
-          for attempt in 1 2 3; do
-            if timeout 90 false; then
-              exit 0
-            fi
-            echo "::warning::apt attempt $attempt stalled or failed; retrying"
-            sleep 10
-          done
-          echo "::warning::playwright install-deps failed after 3 attempts"
-          exit 1
+          echo "CONTROL B: sleep 900 with NO inner timeout; the 5-minute STEP timeout must kill this"
+          sleep 900
       - name: Install Playwright chromium
         working-directory: web
         timeout-minutes: 5
