@@ -1120,3 +1120,44 @@ type ProjectIntegrationRepository interface {
 	Delete(ctx context.Context, projectID uuid.UUID, intType string) error
 	ListByProject(ctx context.Context, projectID uuid.UUID) ([]domain.ProjectIntegration, error)
 }
+
+// SecretRepository manages the write-only secrets store (task #64e84eb1).
+// Every method here returns or accepts domain.Secret, which has no field
+// capable of carrying a value — that is what makes "no read path returns
+// plaintext or ciphertext" a property the compiler can help enforce, not
+// just something a test happens to check.
+type SecretRepository interface {
+	// Create encrypts input.Value and inserts a new current row. Returns
+	// apierror.Conflict if a current (unrotated) secret already exists for
+	// the same workspace/scope/name — callers must Rotate instead.
+	Create(ctx context.Context, input domain.CreateSecretInput) (domain.Secret, error)
+	// Rotate stamps the current row's rotated_at and inserts a new current
+	// row with the new value, in one transaction. Returns apierror.NotFound
+	// if there is no current secret to rotate.
+	Rotate(ctx context.Context, workspaceID uuid.UUID, scope domain.SecretScope, projectID, agentID *uuid.UUID, name string, input domain.CreateSecretInput) (domain.Secret, error)
+	// Delete stamps rotated_at on the current row without inserting a
+	// replacement, ending materialization for that name. History is kept,
+	// not hard-deleted — same audit-trail posture as activity_log.
+	Delete(ctx context.Context, workspaceID uuid.UUID, scope domain.SecretScope, projectID, agentID *uuid.UUID, name string, deletedBy uuid.UUID, deletedByType domain.ActorType) error
+	// ListCurrent returns the masked metadata (never a value) for every
+	// current secret in scope for the given resolution: all workspace-scope
+	// secrets in workspaceID, plus project-scope ones for projectID (if
+	// given), plus agent-scope ones for agentID (if given).
+	ListCurrent(ctx context.Context, workspaceID uuid.UUID, projectID, agentID *uuid.UUID) ([]domain.Secret, error)
+}
+
+// SecretMaterializer decrypts current secret values for spawn-time env-file
+// materialization (task #64e84eb1, S4). This is a SEPARATE interface from
+// SecretRepository on purpose: SecretRepository is what the public secrets
+// API (S3) is built on, and it has no method that can return a value at all.
+// Wire this interface into exactly one caller — the spawn-hook endpoint —
+// never into anything a browser session or a general agent tool reaches.
+type SecretMaterializer interface {
+	// ResolveCurrentValues decrypts every CURRENT secret in scope for the
+	// given resolution and reports each one's expiry state explicitly — an
+	// expired entry is returned WITH Expired=true and an empty Value, so the
+	// caller can name it in a loud spawn error rather than silently omit the
+	// variable (the task explicitly rejects a silent empty var as worse than
+	// a loud failure).
+	ResolveCurrentValues(ctx context.Context, workspaceID uuid.UUID, projectID, agentID *uuid.UUID) ([]domain.MaterializedSecret, error)
+}
