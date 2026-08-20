@@ -333,7 +333,7 @@ function CommentBody({
 // One thread
 // ---------------------------------------------------------------------------
 
-function Thread({
+export function Thread({
   thread,
   controller,
   directory,

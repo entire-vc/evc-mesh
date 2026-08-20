@@ -28,6 +28,7 @@ import {
 import { DocEditor } from "@/components/doc-editor";
 import { DocWatchToggle } from "@/components/doc-watch-toggle";
 import { DocMeta } from "@/components/doc-meta";
+import { DocCommentTree } from "@/components/doc-comment-tree";
 import { DocTree, moveTargets } from "@/components/doc-tree";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { ResizableDivider } from "@/components/resizable-divider";
@@ -967,6 +968,7 @@ export function DocsPage() {
                       space that is there and grows when the body needs more. */}
                   <div
                     ref={comments.containerRef}
+                    data-testid="doc-measured-body"
                     className="relative flex flex-1 flex-col"
                   >
                     {editing ? (
@@ -1002,6 +1004,16 @@ export function DocsPage() {
                     )}
                     <DocCommentAffordance controller={comments} />
                   </div>
+                  {/* Outside `comments.containerRef` on purpose: that element is
+                      flattened into "the text of this document" to locate each
+                      quote, so a discussion rendered inside it would become part
+                      of the haystack and anchors would start matching comment
+                      bodies. See doc-comment-tree.tsx. */}
+                  <DocCommentTree
+                    controller={comments}
+                    showResolved={showResolved}
+                    onShowResolvedChange={setShowResolved}
+                  />
                 </article>
 
                 {railOpen && (
