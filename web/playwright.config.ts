@@ -11,7 +11,11 @@ import { defineConfig, devices } from "@playwright/test";
  *
  * Required env:
  *   APP_BASE_URL       — e.g. https://mesh.entire.host
- *   E2E_USER_EMAIL     — dedicated CI user (workspace member, not owner)
+ *   E2E_USER_EMAIL     — dedicated CI user: `member` of the scratch workspace
+ *                        `e2e-ci-sandbox` and of NO real workspace, so the
+ *                        suite can exercise write paths without the credential
+ *                        in GitHub secrets reaching anything that matters.
+ *                        See the "Run Playwright E2E" step in ci.yml.
  *   E2E_USER_PASSWORD  — its password
  *
  * global-setup fails the run when the credentials are absent, so an
