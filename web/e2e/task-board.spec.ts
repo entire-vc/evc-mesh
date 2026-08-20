@@ -99,7 +99,7 @@ test("the API honours the session and reports our user", async () => {
   expect(me.status(), "/api/v1/auth/me must accept the session").toBe(200);
 
   const who = (await me.json()) as { email?: string; is_active?: boolean };
-  expect(who.email?.toLowerCase()).toBe("PLANTED-BREAK-not-our-user@example.invalid");
+  expect(who.email?.toLowerCase()).toBe(email().toLowerCase());
   expect(who.is_active, "the E2E user must be active").toBe(true);
 
   // The authenticated data plane answers with a real payload, reached the way
