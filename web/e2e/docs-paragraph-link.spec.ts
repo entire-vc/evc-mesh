@@ -169,6 +169,33 @@ test.describe.serial("Docs — paragraph link survives edits (docs-paragraph-lin
       .toBe(expectedBody);
   }
 
+  // waitForConsistentRead alone turned out not to be enough (live on this PR's
+  // own CI run, not a guess): it polls through Playwright's APIRequestContext,
+  // and confirming THAT client sees the new body does not prove the browser
+  // tab's own navigation request will — scenario 2 still rendered the
+  // pre-PATCH 3-paragraph document after waitForConsistentRead had already
+  // confirmed the API returned 4 paragraphs. Whatever routes those two reads
+  // differently is a further layer this task did not reach; what a real
+  // reader would do when a page looks wrong is reload, so that is what closes
+  // the loop here regardless of which layer is still lagging: goto, then
+  // reload until the page's own DOM carries a string that can only be there
+  // once the edit is visible.
+  async function gotoUntilFresh(url: string, freshMarker: string): Promise<void> {
+    await page.goto(url, { waitUntil: "networkidle" });
+    const deadline = Date.now() + 8_000;
+    for (;;) {
+      if ((await page.getByText(freshMarker, { exact: true }).count()) > 0) {
+        return;
+      }
+      if (Date.now() > deadline) {
+        throw new Error(
+          `page kept rendering stale content after repeated reloads — marker not found: "${freshMarker}" (#659b9f32)`,
+        );
+      }
+      await page.reload({ waitUntil: "networkidle" });
+    }
+  }
+
   test.beforeAll(async ({ browser }) => {
     const context = await browser.newContext();
     await context.grantPermissions(["clipboard-read", "clipboard-write"]);
@@ -321,8 +348,7 @@ test.describe.serial("Docs — paragraph link survives edits (docs-paragraph-lin
       });
       expect(patchRes.ok(), `PATCH failed: ${patchRes.status()}`).toBeTruthy();
       await waitForConsistentRead(patchedBody);
-
-      await page.goto(linkUrl, { waitUntil: "networkidle" });
+      await gotoUntilFresh(linkUrl, INSERTED_ABOVE());
 
       // Four blocks now, not the original three — this is what makes the run
       // sensitive to "the PATCH never reached the page" (#659b9f32): the old
@@ -371,8 +397,7 @@ test.describe.serial("Docs — paragraph link survives edits (docs-paragraph-lin
       });
       expect(patchRes.ok(), `PATCH failed: ${patchRes.status()}`).toBeTruthy();
       await waitForConsistentRead(patchedBody);
-
-      await page.goto(linkUrl, { waitUntil: "networkidle" });
+      await gotoUntilFresh(linkUrl, EDITED_TEXT);
 
       const hit = page.locator(".mesh-doc-anchor-hit");
       await expect(hit).toHaveCount(1);
@@ -400,8 +425,7 @@ test.describe.serial("Docs — paragraph link survives edits (docs-paragraph-lin
       });
       expect(patchRes.ok(), `PATCH failed: ${patchRes.status()}`).toBeTruthy();
       await waitForConsistentRead(patchedBody);
-
-      await page.goto(linkUrl, { waitUntil: "networkidle" });
+      await gotoUntilFresh(linkUrl, LOST_TEXT);
 
       await expect(page.locator(".mesh-doc-anchor-hit")).toHaveCount(0);
 
