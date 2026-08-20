@@ -99,9 +99,11 @@ interface SortableTaskCardProps {
   statusCategory?: StatusCategory;
   onClick: () => void;
   onEditClick: () => void;
+  /** Display name of the card's checkout holder, when it is resolvable. */
+  checkedOutByName?: string;
 }
 
-function SortableTaskCard({ task, columnId, statusCategory, onClick, onEditClick }: SortableTaskCardProps) {
+function SortableTaskCard({ task, columnId, statusCategory, onClick, onEditClick, checkedOutByName }: SortableTaskCardProps) {
   const {
     attributes,
     listeners,
@@ -128,6 +130,7 @@ function SortableTaskCard({ task, columnId, statusCategory, onClick, onEditClick
         statusCategory={statusCategory}
         onClick={onClick}
         onEditClick={() => onEditClick()}
+        checkedOutByName={checkedOutByName}
       />
     </div>
   );
@@ -144,9 +147,11 @@ interface BoardColumnProps {
   onAddTask: (statusId?: string) => void;
   onTaskClick: (task: Task) => void;
   onTaskEdit: (task: Task) => void;
+  /** Resolves a checkout holder's id to a display name. */
+  holderNameById: Map<string, string>;
 }
 
-function BoardColumn({ col, tasks, dndEnabled, onAddTask, onTaskClick, onTaskEdit }: BoardColumnProps) {
+function BoardColumn({ col, tasks, dndEnabled, onAddTask, onTaskClick, onTaskEdit, holderNameById }: BoardColumnProps) {
   const { setNodeRef, isOver } = useDroppable({ id: `column-${col.id}` });
 
   const taskIds = useMemo(() => tasks.map((t) => t.id), [tasks]);
@@ -207,6 +212,9 @@ function BoardColumn({ col, tasks, dndEnabled, onAddTask, onTaskClick, onTaskEdi
               statusCategory={col.status?.category}
               onClick={() => onTaskClick(task)}
               onEditClick={() => onTaskEdit(task)}
+              checkedOutByName={
+                task.checked_out_by ? holderNameById.get(task.checked_out_by) : undefined
+              }
             />
           ))}
         </SortableContext>
@@ -484,6 +492,23 @@ export function BoardPage() {
       }
     }
     return Array.from(byId.values()).sort((a, b) => a.name.localeCompare(b.name));
+  }, [projectMembers, tasks]);
+
+  // id → display name for checkout holders. Built from the same two sources as
+  // assigneeCandidates: project members cover the normal case, and assignees seen
+  // on loaded tasks cover a holder who is not a formal member of this project.
+  const holderNameById = useMemo(() => {
+    const byId = new Map<string, string>();
+    for (const m of projectMembers) {
+      if (m.user) byId.set(m.user.id, m.user.name || m.user.email);
+      else if (m.agent_id) byId.set(m.agent_id, m.agent_name ?? "Agent");
+    }
+    for (const task of tasks) {
+      if (task.assignee_id && task.assignee_name && !byId.has(task.assignee_id)) {
+        byId.set(task.assignee_id, task.assignee_name);
+      }
+    }
+    return byId;
   }, [projectMembers, tasks]);
 
   // ---------------------------------------------------------------------------
@@ -897,6 +922,7 @@ export function BoardPage() {
                 onAddTask={openCreateDialog}
                 onTaskClick={handleTaskClick}
                 onTaskEdit={handleTaskClick}
+                holderNameById={holderNameById}
               />
             ))}
 

@@ -282,6 +282,14 @@ export interface Task {
   recurring_schedule_id?: string | null;
   recurring_instance_number?: number | null;
   dod_checks?: Record<string, DodCheck>;
+  /**
+   * Who currently holds the exclusive work-lock, and until when. Both are
+   * omitted by the server when the task is not checked out. A checkout is what
+   * "an agent has this in their hands right now" actually means — the status
+   * column alone cannot say it, which is why the card renders it separately.
+   */
+  checked_out_by?: string | null;
+  checkout_expires?: string | null;
 }
 
 export interface Comment {

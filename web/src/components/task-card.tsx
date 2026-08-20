@@ -1,5 +1,5 @@
 import { forwardRef, type HTMLAttributes } from "react";
-import { AlignLeft, ExternalLink, GitBranch, Paperclip, Pencil, RefreshCw } from "lucide-react";
+import { AlignLeft, ExternalLink, GitBranch, Hand, Paperclip, Pencil, RefreshCw } from "lucide-react";
 import { parseISO } from "date-fns";
 import { cn } from "@/lib/cn";
 import { Badge } from "@/components/ui/badge";
@@ -33,10 +33,16 @@ interface TaskCardProps extends HTMLAttributes<HTMLDivElement> {
   statusCategory?: StatusCategory;
   /** Called when the explicit edit icon is clicked. Receives the mouse event (already stopped propagation). */
   onEditClick?: (e: React.MouseEvent) => void;
+  /**
+   * Display name of the checkout holder, when the parent can resolve it. Only
+   * used when the holder differs from the assignee — in the usual case the
+   * assignee avatar already says who, and repeating it is noise.
+   */
+  checkedOutByName?: string;
 }
 
 export const TaskCard = forwardRef<HTMLDivElement, TaskCardProps>(
-  ({ task, isDragging, statusCategory, onEditClick, className, ...props }, ref) => {
+  ({ task, isDragging, statusCategory, onEditClick, checkedOutByName, className, ...props }, ref) => {
     const borderColor =
       priorityBorderColors[task.priority] ?? "border-l-transparent";
 
@@ -51,6 +57,18 @@ export const TaskCard = forwardRef<HTMLDivElement, TaskCardProps>(
 
     const dueDateOverdue =
       task.due_date ? isOverdue(task.due_date, statusCategory) : false;
+
+    // A held card and an untouched one used to look identical, which is how a
+    // board showing an empty In Progress column came to be read as "nobody
+    // started anything" while twelve cards were in agents' hands (#5f9c5117).
+    // Live and lapsed are drawn differently on purpose: a lapsed lock means the
+    // holder's session died, so the card is NOT being worked despite appearances.
+    const checkoutExpiry = task.checked_out_by && task.checkout_expires
+      ? parseISO(task.checkout_expires)
+      : null;
+    const checkoutLapsed = checkoutExpiry !== null && checkoutExpiry < new Date();
+    const holderIsSomeoneElse =
+      Boolean(checkedOutByName) && task.checked_out_by !== task.assignee_id;
 
     return (
       <div
@@ -144,6 +162,29 @@ export const TaskCard = forwardRef<HTMLDivElement, TaskCardProps>(
 
           {task.delegation_level && task.delegation_level !== "review" && (
             <DelegationLevelBadge value={task.delegation_level} />
+          )}
+
+          {checkoutExpiry && (
+            <span
+              className={cn(
+                "inline-flex items-center gap-0.5 text-xs",
+                checkoutLapsed ? "text-amber-600" : "text-muted-foreground",
+              )}
+              title={
+                checkoutLapsed
+                  ? `Work lock lapsed ${formatRelative(task.checkout_expires!)} — the holder's session is gone, nobody is on this`
+                  : `In ${holderIsSomeoneElse ? checkedOutByName : "hand"}${holderIsSomeoneElse ? "'s hands" : "s"} until ${formatRelative(task.checkout_expires!)}`
+              }
+              data-testid="checkout-indicator"
+              data-checkout-state={checkoutLapsed ? "lapsed" : "live"}
+            >
+              <Hand className="h-3.5 w-3.5" aria-hidden="true" />
+              <span className="sr-only">
+                {checkoutLapsed ? "Work lock lapsed" : "Checked out"}
+              </span>
+              {holderIsSomeoneElse && <span>{checkedOutByName}</span>}
+              <span>{formatRelative(task.checkout_expires!)}</span>
+            </span>
           )}
 
           {hasArtifacts && (
