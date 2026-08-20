@@ -19,7 +19,7 @@ type ProjectIntegration struct {
 	// ProjectIntegrationRepo, so a row provisioned with direct SQL bypasses it
 	// entirely. That is how the 2026-06 Team Relay credentials came to sit in
 	// the clear while this comment claimed otherwise. The DB-side CHECK
-	// constraint (migration 20260820107) is what makes the claim true for
+	// constraint (migration 20260820108) is what makes the claim true for
 	// every write path rather than just this one.
 	AgentKey  string     `json:"agent_key,omitempty" db:"agent_key"`
 	CreatedAt time.Time  `json:"created_at" db:"created_at"`
