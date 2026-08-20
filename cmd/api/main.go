@@ -1358,6 +1358,7 @@ func main() {
 	api.POST("/memories/rechunk-stale", memoryHandler.RechunkStale)
 	api.GET("/memories/:id", memoryHandler.GetByID)
 	api.GET("/memories/:id/related", memoryHandler.FindRelated)
+	api.GET("/memories/:id/revisions", memoryHandler.Revisions)
 	api.DELETE("/memories/:id", memoryHandler.Delete)
 	api.GET("/projects/:proj_id/knowledge", memoryHandler.GetProjectKnowledge, projAccess)
 	api.POST("/projects/:proj_id/knowledge", memoryHandler.SetProjectKnowledge, projAccess)

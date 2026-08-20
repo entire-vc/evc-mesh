@@ -504,3 +504,36 @@ func TestNoUngatedWritePathIntoMemories(t *testing.T) {
 			strings.Join(ungated, "\n  "))
 	}
 }
+
+func TestRequireMemoryReason_OnlyExplicitTruthEnables(t *testing.T) {
+	// Anything that is not an explicit yes leaves enforcement OFF. A typo in the
+	// variable must fail in the direction that keeps the fleet writing, not in
+	// the one that rejects every memory write until someone notices.
+	for _, tc := range []struct {
+		value string
+		want  bool
+	}{
+		{"1", true}, {"true", true}, {"TRUE", true}, {" true ", true},
+		{"", false}, {"0", false}, {"false", false},
+		{"yes", false}, {"on", false}, {"tru", false},
+	} {
+		t.Setenv(requireMemoryReasonEnv, tc.value)
+		if got := requireMemoryReason(); got != tc.want {
+			t.Errorf("%q: got %v, want %v", tc.value, got, tc.want)
+		}
+	}
+}
+
+func TestTrimmedOrNil_BlankIsAbsent(t *testing.T) {
+	// Blank and absent are stored differently on purpose: the column rejects
+	// blank, and NULL means "written before a reason was required".
+	for _, blank := range []string{"", "   ", "\t", "\n  \t"} {
+		if got := trimmedOrNil(blank); got != nil {
+			t.Errorf("%q must become NULL, got %q", blank, *got)
+		}
+	}
+	got := trimmedOrNil("  the host moved  ")
+	if got == nil || *got != "the host moved" {
+		t.Errorf("a real reason must survive, trimmed; got %v", got)
+	}
+}

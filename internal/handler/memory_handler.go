@@ -570,6 +570,48 @@ func (h *MemoryHandler) GetByID(c echo.Context) error {
 	return c.JSON(http.StatusOK, mem)
 }
 
+// Revisions handles GET /api/v1/memories/:id/revisions
+//
+// Without this route the history is written and unreadable — the revision rows
+// would exist, and no caller could see what a memory used to assert or why it
+// changed, which is the whole point of keeping them.
+func (h *MemoryHandler) Revisions(c echo.Context) error {
+	id, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid memory id"))
+	}
+
+	// Authorise against the memory's own workspace BEFORE returning any history.
+	// Revisions carry full prior content, so an unscoped read here would hand
+	// out the text of memories the caller cannot read through GetByID — a
+	// tenant boundary hole opened by the audit trail rather than by the table
+	// it audits. 404 rather than 403, matching GetByID, so this cannot be used
+	// to probe which ids exist.
+	mem, err := h.memoryService.GetByID(c.Request().Context(), id)
+	if err != nil {
+		return handleError(c, err)
+	}
+	if mem == nil || !h.workspaceAllowed(c, mem.WorkspaceID) {
+		return handleError(c, apierror.NotFound("Memory"))
+	}
+
+	limit := 50
+	if raw := c.QueryParam("limit"); raw != "" {
+		if n, convErr := strconv.Atoi(raw); convErr == nil && n > 0 {
+			limit = n
+		}
+	}
+
+	revs, err := h.memoryService.ListRevisions(c.Request().Context(), id, limit)
+	if err != nil {
+		return handleError(c, err)
+	}
+	if revs == nil {
+		revs = []domain.MemoryRevision{}
+	}
+	return c.JSON(http.StatusOK, echo.Map{"items": revs, "count": len(revs)})
+}
+
 // Delete handles DELETE /api/v1/memories/:id
 func (h *MemoryHandler) Delete(c echo.Context) error {
 	idStr := c.Param("id")
