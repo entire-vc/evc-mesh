@@ -1,0 +1,21 @@
+# Labels that mean "do not merge this yet".
+#
+# Data, not code, so the list can be changed without touching workflow logic —
+# and so the one place that decides what "held" means is greppable from both the
+# workflow and a human's eye.
+#
+# This list MUST stay identical to HOLD_LABELS in the fleet tooling
+# (bob/scripts/fleet_gate_labels.py), which is what ~/bin/gh-merge and
+# ~/bin/mesh-merge-train read. Two copies of one rule drift silently, and a
+# label that guards some merge paths but not others is worse than no label at
+# all, because it gets believed and then stops being watched — that is exactly
+# the incident this gate exists to close.
+#
+# Blank lines and #-comments are ignored. Matching is case-insensitive.
+
+hold
+no-automerge
+do-not-merge
+wip
+blocked
+needs-review
