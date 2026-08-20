@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"strings"
+	"unicode"
 
 	"github.com/google/uuid"
 
@@ -111,6 +112,20 @@ func documentStorageKey(projectID, documentID uuid.UUID) string {
 	return fmt.Sprintf("documents/%s/%s.md", projectID, documentID)
 }
 
+// hasLetterOrDigit reports whether a mdoc.Slugify result is actually useful as a
+// slug rather than a degenerate leftover. Slugify trims leading/trailing hyphens
+// but keeps underscores verbatim, so a title made only of punctuation/emoji with
+// an underscore among it (e.g. "🎉 _ 🎉") slugifies to a non-empty "_" that still
+// names nothing — checking for "" alone misses that case.
+func hasLetterOrDigit(s string) bool {
+	for _, r := range s {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			return true
+		}
+	}
+	return false
+}
+
 // Create stores the markdown body and records the document.
 func (s *documentService) Create(ctx context.Context, input CreateDocumentInput) (*domain.Document, error) {
 	title := strings.TrimSpace(input.Title)
@@ -144,14 +159,24 @@ func (s *documentService) Create(ctx context.Context, input CreateDocumentInput)
 		}
 	}
 
-	slug := slugify(input.Slug)
-	if slug == "" {
-		slug = slugify(title)
+	// mdoc.Slugify, not the ASCII-only slugify() below (that one is for API-key
+	// prefixes) — a Russian title has no ASCII letters or digits at all, and the
+	// ASCII rule dropped every one of them, leaving only the hyphens the spaces
+	// turned into. Two differently-worded Russian titles in the same folder both
+	// slugified to "-" or "--" and collided on the (project_id, parent_id, slug)
+	// uniqueness constraint, so the second document was refused outright.
+	slug := mdoc.Slugify(input.Slug)
+	if !hasLetterOrDigit(slug) {
+		slug = mdoc.Slugify(title)
 	}
-	if slug == "" {
-		// A title with no ASCII letters or digits at all slugifies to nothing.
-		// Falling back to the id keeps the row addressable instead of refusing a
-		// document whose title happens to be written in another script.
+	if !hasLetterOrDigit(slug) {
+		// A title with no letters or digits in ANY script — pure punctuation or
+		// emoji — usually slugifies to "", but not always: mdoc.Slugify trims
+		// leading/trailing hyphens yet keeps underscores, so a title with an
+		// underscore among otherwise-dropped characters still comes out non-empty.
+		// hasLetterOrDigit is why this checks for a letter/digit rather than "".
+		// Falling back to the id keeps the row addressable instead of refusing
+		// the document outright.
 		slug = "doc-" + id.String()[:8]
 	}
 
