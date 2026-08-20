@@ -457,7 +457,15 @@ func diagnoseNegatorMiss(body string) negatorMissReason {
 	if negatorAsserted(strings.ToLower(stripped)) {
 		return negatorMissOutOfScope
 	}
-	if negatorAsserted(strings.ToLower(body)) {
+	// The quoted case is scoped on the RAW body deliberately: report it only when
+	// the citation sits where an ASSERTION would have counted — i.e. the author
+	// put the right words in the right place and merely formatted them as a
+	// quote. A negator quoted anywhere else is overwhelmingly a paste, not a
+	// withdrawal: triageExitNegators contains "resolved", so a fenced CI log or a
+	// JSON status field matches, and reporting those would put a gate notice on
+	// every log paste. That noise is the failure mode this whole task is the
+	// mirror image of — see the anti-noise controls in the tests.
+	if negatorAsserted(strings.ToLower(negatorScope(body))) {
 		return negatorMissOnlyQuoted
 	}
 	return ""

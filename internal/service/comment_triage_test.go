@@ -1553,11 +1553,19 @@ func TestReleaseHumanGateOnWithdrawal_QuotedNegatorOnly_KeepsGate(t *testing.T) 
 	cases := []struct {
 		name string
 		body string
+		// wantNotice: whether #17829fcf's withdrawal-miss notice fires. It does
+		// ONLY where the citation sits in the region an ASSERTED negator would
+		// have counted — "right words, right place, formatted as a quote". A
+		// negator quoted elsewhere is overwhelmingly a paste (triageExitNegators
+		// contains "resolved", so CI logs match), and gets no notice. Either way
+		// the gate must stay armed — that is what this test is for, and it is
+		// asserted for every case below.
+		wantNotice bool
 	}{
-		{"inline code", "Механизм: негатор (`не нужен`) того же автора снимает флаг."},
-		{"fenced block", "Словарь негаторов:\n```\nне нужен\nснят\nresolved\n```\nЭто справка."},
-		{"blockquote", "Цитирую тред:\n> ask не нужен, снят\n\nПросто фиксирую."},
-		{"the live probe #a073a896 body", liveProbeSummaryBody},
+		{"inline code", "Механизм: негатор (`не нужен`) того же автора снимает флаг.", true},
+		{"fenced block", "Словарь негаторов:\n```\nне нужен\nснят\nresolved\n```\nЭто справка.", true},
+		{"blockquote", "Цитирую тред:\n> ask не нужен, снят\n\nПросто фиксирую.", false},
+		{"the live probe #a073a896 body", liveProbeSummaryBody, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1583,8 +1591,13 @@ func TestReleaseHumanGateOnWithdrawal_QuotedNegatorOnly_KeepsGate(t *testing.T) 
 			// marker here, so they are told why their words did not count —
 			// this is the one difference from the pre-#17829fcf expectation of
 			// zero system comments, and it must be a notice, never a release.
-			require.Len(t, env.withdrawalMissNotices(), 1)
-			assert.Contains(t, env.withdrawalMissNotices()[0].Body, "только внутри кода")
+			if tc.wantNotice {
+				require.Len(t, env.withdrawalMissNotices(), 1)
+				assert.Contains(t, env.withdrawalMissNotices()[0].Body, "только внутри кода")
+			} else {
+				assert.Empty(t, env.withdrawalMissNotices(),
+					"a negator quoted outside the searched region reads as a paste, not a missed withdrawal")
+			}
 		})
 	}
 }
@@ -1624,8 +1637,9 @@ func TestReleaseHumanGateOnWithdrawal_SummaryThenRealWithdrawal(t *testing.T) {
 	// The summary earned a miss notice (#17829fcf); the withdrawal that worked
 	// must NOT also earn one — a comment cannot both release and be reported
 	// as not having released.
-	assert.Len(t, env.withdrawalMissNotices(), 1,
-		"only the quoted-negator summary is reported as a miss")
+	assert.Empty(t, env.withdrawalMissNotices(),
+		"the summary quotes its negators outside the searched region — a paste, not a missed withdrawal; "+
+			"and the withdrawal that WORKED must never be reported as a miss")
 }
 
 // TestReleaseHumanGateOnWithdrawal_MarkerQuotingNegators_KeepsOwnership covers the

@@ -96,9 +96,43 @@ func TestDiagnoseNegatorMiss(t *testing.T) {
 			want: negatorMissOnlyQuoted,
 		},
 		{
-			name: "negator only inside a fenced block",
+			// Quoted-only is reported only where an ASSERTED negator would have
+			// counted — here the fence IS the last paragraph, so the author put
+			// the right words in the right place and only formatted them as a
+			// citation.
+			name: "negator quoted in the last paragraph",
+			body: "Отзыв:\n\n```\nответ больше не нужен\n```",
+			want: negatorMissOnlyQuoted,
+		},
+		{
+			// MEASURED, and a real limit of the narrowing: lastParagraph splits
+			// on BLANK LINES, so a fence with no blank line around it does not
+			// end the paragraph and this whole body is "the last paragraph".
+			// The narrowing therefore only suppresses pastes that are
+			// blank-line separated — which is the markdown convention, and the
+			// shape of the log-paste case below, but not a guarantee.
+			// Deliberately not "fixed": teaching lastParagraph about fences
+			// would change the DECISION path too, and that path's narrowing has
+			// its own live justification (#1e5be182). Residual noise here is a
+			// one-line notice; the alternative risks re-opening a released-gate
+			// incident.
+			name: "documenting fence with no blank lines is still reported (known limit)",
 			body: "Словарь:\n```\nне нужен\nснят\n```\nСправка, не отзыв.",
 			want: negatorMissOnlyQuoted,
+		},
+		{
+			name: "the same fence, blank-line separated, is NOT reported",
+			body: "Словарь:\n\n```\nне нужен\nснят\n```\n\nСправка, не отзыв.",
+			want: "",
+		},
+		{
+			// triageExitNegators contains "resolved", so a pasted log or JSON
+			// status field matches it. Reporting these would put a gate notice
+			// on every log paste — the exact noise this task is the mirror
+			// image of.
+			name: "a pasted log containing \"resolved\" is not a missed withdrawal",
+			body: "Прогнал ещё раз, вот вывод:\n\n```\ndeps: 14 resolved, 0 conflicts\n```\n\nИтог: причина та же, копаю дальше.",
+			want: "",
 		},
 		// --- the silences that must stay silent -----------------------------
 		{
