@@ -40,6 +40,11 @@ const (
 	DocumentDeletedEvent = "document.deleted"
 )
 
+// inAppChannel is the notification_preferences channel that feeds the bell.
+// Named here because the watch path provisions it, and a typo would provision a
+// channel nothing dispatches to — the silent failure this whole file is about.
+const inAppChannel = "web_push"
+
 // defaultQuietWindow is how long an editor must be idle before their edits are
 // announced.
 //
@@ -206,7 +211,123 @@ func (s *documentWatchService) Watch(ctx context.Context, documentID, workspaceI
 	}, true); err != nil {
 		return nil, err
 	}
+	// Pressing Watch is a request to be told, and until this call existed it was
+	// only a request to be *counted*: delivery to a person runs through
+	// notification_preferences, a row nothing creates on a user's behalf. A
+	// workspace whose members had never opened Notification Settings therefore
+	// had no deliverable channel at all, so every watched change was handed to
+	// dispatch, matched no preference row, and vanished — while the notice
+	// recorded the watcher as a recipient. Measured on prod 2026-08-20: one
+	// preference row in the entire database, none in this workspace, and the
+	// notifications table empty since it was created.
+	if kind == "user" {
+		s.ensureInAppDelivery(ctx, workspaceID, actorID)
+	}
 	return s.repo.GetState(ctx, documentID, actorID, kind)
+}
+
+// ensureInAppDelivery gives an explicitly-subscribed person somewhere for their
+// document notifications to arrive.
+//
+// Deliberately narrow, because it edits settings the person owns:
+//   - only the in-app channel (web_push). Watching a page is not consent to be
+//     emailed or messaged on Telegram.
+//   - only the three document event types, unioned into whatever the row already
+//     carries. It never removes an event and never touches another channel.
+//   - a row the person has switched OFF is left off. An explicit "no in-app
+//     notifications" outranks the implicit request inside a Watch click; the
+//     subscription is still recorded, and the log says why nothing will arrive.
+//
+// It runs only for an explicit Watch, never for AutoSubscribe: silently
+// re-adding an event type to the settings of everyone who ever commented would
+// be exactly the sort of thing an unsubscribe exists to prevent.
+//
+// Best-effort by construction — a subscription that was written must not be
+// rolled back because the preference row could not be.
+func (s *documentWatchService) ensureInAppDelivery(ctx context.Context, workspaceID, userID uuid.UUID) {
+	if s.notifySvc == nil {
+		return
+	}
+	prefs, err := s.notifySvc.GetPreferences(ctx, userID)
+	if err != nil {
+		log.Printf("[docwatch] user %s watched a document in workspace %s but their notification preferences could not be read, so in-app delivery is unconfirmed: %v",
+			userID, workspaceID, err)
+		return
+	}
+
+	var inApp *domain.NotificationPreference
+	for i := range prefs {
+		p := &prefs[i]
+		if p.UserID == nil || *p.UserID != userID || p.WorkspaceID != workspaceID {
+			continue
+		}
+		// Any enabled channel that already carries all three event types is
+		// enough — someone who subscribed by email does not also need the bell.
+		if p.IsEnabled && coversAll(p.Events, documentWatchEvents()) {
+			return
+		}
+		if p.Channel == inAppChannel {
+			inApp = p
+		}
+	}
+
+	if inApp != nil && !inApp.IsEnabled {
+		log.Printf("[docwatch] user %s watched a document in workspace %s with in-app notifications switched off — subscription recorded, nothing will be delivered there",
+			userID, workspaceID)
+		return
+	}
+
+	pref := &domain.NotificationPreference{
+		WorkspaceID: workspaceID,
+		UserID:      &userID,
+		Channel:     inAppChannel,
+		Events:      documentWatchEvents(),
+		IsEnabled:   true,
+	}
+	if inApp != nil {
+		pref.ID = inApp.ID
+		pref.Config = inApp.Config
+		pref.Events = unionEvents(inApp.Events, documentWatchEvents())
+	}
+	if _, err := s.notifySvc.UpsertPreferences(ctx, pref); err != nil {
+		log.Printf("[docwatch] user %s watched a document in workspace %s but the in-app channel could not be provisioned, so nothing will be delivered there: %v",
+			userID, workspaceID, err)
+	}
+}
+
+// documentWatchEvents is the set a watcher is subscribed to. Returned fresh each
+// call: the value ends up in a preference row that callers mutate.
+func documentWatchEvents() []string {
+	return []string{DocumentChangedEvent, DocumentCommentedEvent, DocumentDeletedEvent}
+}
+
+// coversAll reports whether every wanted event is present in have.
+func coversAll(have, wanted []string) bool {
+	for _, w := range wanted {
+		found := false
+		for _, h := range have {
+			if h == w {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
+}
+
+// unionEvents adds the missing wanted events to have, preserving order and
+// never dropping one the person already had.
+func unionEvents(have, wanted []string) []string {
+	out := append([]string(nil), have...)
+	for _, w := range wanted {
+		if !coversAll(out, []string{w}) {
+			out = append(out, w)
+		}
+	}
+	return out
 }
 
 func (s *documentWatchService) Unwatch(ctx context.Context, documentID, workspaceID uuid.UUID) (*domain.DocumentWatchState, error) {
