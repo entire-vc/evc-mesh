@@ -417,13 +417,19 @@ const (
 	negatorMissOutOfScope negatorMissReason = "negator-outside-searched-scope"
 	// negatorMissBlockerStillOpen: a negator IS in scope, but so is a
 	// blockerStillOpenMarkers phrase, which overrides it (#3948173f). A
-	// thorough withdrawal that explains what is "не закрыт" kills its own
-	// negator this way — the second mine measured on #58d8bb8d.
+	// thorough withdrawal that also says what is "не закрыт" kills its own
+	// negator this way. NOTE #17829fcf named this as the second cause of the
+	// #58d8bb8d failure; measuring it showed otherwise — the phrase there was
+	// "не закрытая", and containsNegatorWholeWord needs a word boundary, so no
+	// veto ran and paragraph scope alone explains that miss. The trap is real
+	// but only for the short forms. See TestDiagnoseNegatorMiss.
 	negatorMissBlockerStillOpen negatorMissReason = "blocker-still-open-marker-in-same-scope"
-	// negatorMissOnlyQuoted: every negator sits in inline code, a fenced block
-	// or a blockquote, so stripQuotedSpans removed it (#5c69b4e5). Deliberate
-	// — quoting is not asserting — but indistinguishable from success to the
-	// author, so it is reported too.
+	// negatorMissOnlyQuoted: the negator sits in inline code, a fenced block or
+	// a blockquote, so stripQuotedSpans removed it (#5c69b4e5). Deliberate —
+	// quoting is not asserting — but indistinguishable from success to the
+	// author, so it is reported when the citation sits where an ASSERTION would
+	// have counted. Quoted anywhere else it is not reported at all; see
+	// diagnoseNegatorMiss for why (pasted logs match "resolved").
 	negatorMissOnlyQuoted negatorMissReason = "negator-only-inside-quoted-span"
 )
 
