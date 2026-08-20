@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"strings"
+	"unicode"
 
 	"github.com/google/uuid"
 
@@ -42,6 +44,16 @@ type documentService struct {
 	storage      DocumentStore
 	projectRepo  repository.ProjectRepository
 
+	// commentRepo is what makes a body write also move the comments anchored into
+	// that body. It is a required dependency rather than an option, unlike watch
+	// below, and the difference is deliberate: a deployment with notifications
+	// unwired simply announces nothing, which is visible and harmless, whereas a
+	// deployment with re-anchoring unwired serves offsets that point at whatever
+	// text has since taken their place, and says orphaned:false while doing it.
+	// An optional correctness pass is a defect with a configuration flag in front
+	// of it.
+	commentRepo repository.DocumentCommentRepository
+
 	// watch is optional. Without it documents behave exactly as they did before
 	// subscriptions existed: nothing is recorded, nothing is announced. It is a
 	// dependency of the write paths rather than the other way round because a
@@ -68,12 +80,14 @@ func NewDocumentService(
 	documentRepo repository.DocumentRepository,
 	store DocumentStore,
 	projectRepo repository.ProjectRepository,
+	commentRepo repository.DocumentCommentRepository,
 	opts ...DocumentServiceOption,
 ) DocumentService {
 	svc := &documentService{
 		documentRepo: documentRepo,
 		storage:      store,
 		projectRepo:  projectRepo,
+		commentRepo:  commentRepo,
 	}
 	for _, opt := range opts {
 		opt(svc)
@@ -96,6 +110,20 @@ func NewDocumentService(
 // artifact path, not a convention to copy.
 func documentStorageKey(projectID, documentID uuid.UUID) string {
 	return fmt.Sprintf("documents/%s/%s.md", projectID, documentID)
+}
+
+// hasLetterOrDigit reports whether a mdoc.Slugify result is actually useful as a
+// slug rather than a degenerate leftover. Slugify trims leading/trailing hyphens
+// but keeps underscores verbatim, so a title made only of punctuation/emoji with
+// an underscore among it (e.g. "🎉 _ 🎉") slugifies to a non-empty "_" that still
+// names nothing — checking for "" alone misses that case.
+func hasLetterOrDigit(s string) bool {
+	for _, r := range s {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			return true
+		}
+	}
+	return false
 }
 
 // Create stores the markdown body and records the document.
@@ -131,14 +159,24 @@ func (s *documentService) Create(ctx context.Context, input CreateDocumentInput)
 		}
 	}
 
-	slug := slugify(input.Slug)
-	if slug == "" {
-		slug = slugify(title)
+	// mdoc.Slugify, not the ASCII-only slugify() below (that one is for API-key
+	// prefixes) — a Russian title has no ASCII letters or digits at all, and the
+	// ASCII rule dropped every one of them, leaving only the hyphens the spaces
+	// turned into. Two differently-worded Russian titles in the same folder both
+	// slugified to "-" or "--" and collided on the (project_id, parent_id, slug)
+	// uniqueness constraint, so the second document was refused outright.
+	slug := mdoc.Slugify(input.Slug)
+	if !hasLetterOrDigit(slug) {
+		slug = mdoc.Slugify(title)
 	}
-	if slug == "" {
-		// A title with no ASCII letters or digits at all slugifies to nothing.
-		// Falling back to the id keeps the row addressable instead of refusing a
-		// document whose title happens to be written in another script.
+	if !hasLetterOrDigit(slug) {
+		// A title with no letters or digits in ANY script — pure punctuation or
+		// emoji — usually slugifies to "", but not always: mdoc.Slugify trims
+		// leading/trailing hyphens yet keeps underscores, so a title with an
+		// underscore among otherwise-dropped characters still comes out non-empty.
+		// hasLetterOrDigit is why this checks for a letter/digit rather than "".
+		// Falling back to the id keeps the row addressable instead of refusing
+		// the document outright.
 		slug = "doc-" + id.String()[:8]
 	}
 
@@ -424,6 +462,11 @@ func (s *documentService) updateOnce(ctx context.Context, id, workspaceID uuid.U
 	// document it produced is a different document to search.
 	if newBody != nil {
 		s.indexBody(ctx, doc.ID, *newBody)
+		// The markdown the comments are anchored into has just been replaced, so
+		// every stored offset now describes a document that no longer exists.
+		// Same condition as the reindex, and for the same reason: the body is
+		// what both of them are about.
+		s.reanchorComments(ctx, doc.ID, *newBody)
 	}
 
 	// Fold this write into the pending change-notice for its author. One row
@@ -599,6 +642,115 @@ func (s *documentService) Search(
 // The ordering is the invariant worth keeping: upload, then row, then index. It
 // means search can lag the body, and can never describe a document whose stored
 // text says something else.
+// reanchorComments re-locates every anchored comment on the document in the
+// markdown that was just written, and orphans the ones whose text is gone.
+//
+// ## What was wrong without it
+//
+// The offsets are a TextPositionSelector into one particular revision of a body
+// that is a single mutable object with no revision to pin them to. PATCH rewrote
+// that object and touched nothing else, so inserting one paragraph above a
+// comment left its offsets addressing the paragraph above instead — and
+// `orphaned`, which is computed as "were offsets ever written" rather than "is
+// the text still there", went on answering false. Measured on prod (#90dd31f9):
+// three consecutive edits, three times the stored anchor pointed at somebody
+// else's sentence, three times the API said it was fine.
+//
+// That survived review because the only client reading those offsets barely uses
+// them — the web editor re-finds the quote in the rendered text itself and treats
+// the position as a tie-break hint. A derived value whose one consumer ignores it
+// is not working, it is unobserved, and the MCP docs surface is the consumer that
+// would have believed it.
+//
+// ## Why it is best-effort, and what that costs
+//
+// The document row and the body object are already written by the time this
+// runs, and they must be: a comment pass that failed must not un-write an edit
+// the author saw succeed. So a failure here is logged, not returned, and the
+// residue is honest — the offsets stay stale until the next write of this
+// document, which is the state that existed on every write before this function
+// did. Bounded and self-healing, but real; the loud log line is what makes it
+// findable rather than theoretical.
+//
+// The whole document's rows move in one statement for the same reason, so the
+// failure can only be "none of them moved" and never "some of them did".
+// stringOrEmpty reads a nullable text column. NULL and ” mean the same thing
+// for a neighbourhood — the repository writes ” as NULL so that "never
+// anchored" stays one value in the column rather than two.
+func stringOrEmpty(v *string) string {
+	if v == nil {
+		return ""
+	}
+	return *v
+}
+
+func (s *documentService) reanchorComments(ctx context.Context, documentID uuid.UUID, body string) {
+	if s.commentRepo == nil {
+		log.Printf("[documents] re-anchor skipped for document %s: no comment repository wired — stored anchors will describe the previous body", documentID)
+		return
+	}
+
+	anchors, err := s.commentRepo.ListAnchorsByDocument(ctx, documentID)
+	if err != nil {
+		log.Printf("[documents] re-anchor failed to read anchors for document %s: %v — stored anchors now describe the previous body", documentID, err)
+		return
+	}
+	if len(anchors) == 0 {
+		return
+	}
+
+	positions := make([]repository.DocumentCommentAnchorPosition, 0, len(anchors))
+	orphaned := 0
+	for _, a := range anchors {
+		prev := mdoc.Anchor{
+			Exact:  a.Exact,
+			Prefix: stringOrEmpty(a.Prefix),
+			Suffix: stringOrEmpty(a.Suffix),
+		}
+		if a.Start != nil {
+			prev.Start = *a.Start
+		}
+
+		located, ok := mdoc.Reanchor(body, prev)
+		if !ok {
+			// The quote is gone from the document. Null the offsets, which is how
+			// this schema spells orphaned, and keep the quote and its old
+			// neighbourhood: they are what the comment was about, and what a later
+			// edit restoring the text would be re-found by. An already-orphaned
+			// anchor takes this branch too and is written back unchanged, so a
+			// quote that comes BACK is re-adopted rather than orphaned forever.
+			positions = append(positions, repository.DocumentCommentAnchorPosition{
+				ID:     a.ID,
+				Prefix: prev.Prefix,
+				Suffix: prev.Suffix,
+			})
+			orphaned++
+			continue
+		}
+
+		start, end := located.Start, located.End
+		positions = append(positions, repository.DocumentCommentAnchorPosition{
+			ID: a.ID,
+			// The neighbourhood is retaken from the document at the match, not
+			// carried over: it exists to disambiguate this quote in THIS document,
+			// and a prefix describing text that was deleted two edits ago
+			// disambiguates nothing. Same rule as anchorAt on the create path.
+			Prefix: located.Prefix,
+			Suffix: located.Suffix,
+			Start:  &start,
+			End:    &end,
+		})
+	}
+
+	if err := s.commentRepo.UpdateAnchorPositions(ctx, positions); err != nil {
+		log.Printf("[documents] re-anchor failed to write %d anchors for document %s: %v — stored anchors now describe the previous body", len(positions), documentID, err)
+		return
+	}
+	if orphaned > 0 {
+		log.Printf("[documents] re-anchor on document %s: %d of %d anchored comments lost their text and were orphaned", documentID, orphaned, len(positions))
+	}
+}
+
 func (s *documentService) indexBody(ctx context.Context, documentID uuid.UUID, body string) {
 	_ = s.documentRepo.SetSearchText(ctx, documentID, body)
 }

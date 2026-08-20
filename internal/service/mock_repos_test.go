@@ -2913,6 +2913,9 @@ type MockDocumentCommentRepository struct {
 	documentWorkspace map[uuid.UUID]uuid.UUID
 	errToReturn       error
 	createErr         error
+	anchorListErr     error
+	anchorWriteErr    error
+	anchorWrites      int
 }
 
 func NewMockDocumentCommentRepository() *MockDocumentCommentRepository {
@@ -2956,6 +2959,29 @@ func (m *MockDocumentCommentRepository) Count() int {
 	return len(m.items)
 }
 
+// copyDocumentComment is a DEEP copy: the anchor is a pointer, and a shallow
+// copy hands the caller the very struct the mock will later mutate. That aliasing
+// makes "did this write change the anchor?" unanswerable — a value read before
+// the write silently becomes the value after it — which is exactly the question
+// the re-anchoring tests ask. The real repository scans fresh rows and cannot
+// alias; a mock that can is a mock that hides regressions.
+func copyDocumentComment(c *domain.DocumentComment) *domain.DocumentComment {
+	copied := *c
+	if c.Anchor != nil {
+		anchor := *c.Anchor
+		if c.Anchor.Start != nil {
+			start := *c.Anchor.Start
+			anchor.Start = &start
+		}
+		if c.Anchor.End != nil {
+			end := *c.Anchor.End
+			anchor.End = &end
+		}
+		copied.Anchor = &anchor
+	}
+	return &copied
+}
+
 func (m *MockDocumentCommentRepository) Create(_ context.Context, comment *domain.DocumentComment) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -2965,8 +2991,7 @@ func (m *MockDocumentCommentRepository) Create(_ context.Context, comment *domai
 	if m.errToReturn != nil {
 		return m.errToReturn
 	}
-	copied := *comment
-	m.items[comment.ID] = &copied
+	m.items[comment.ID] = copyDocumentComment(comment)
 	return nil
 }
 
@@ -2980,8 +3005,7 @@ func (m *MockDocumentCommentRepository) GetByID(_ context.Context, id uuid.UUID)
 	if !ok || c.DeletedAt != nil {
 		return nil, nil
 	}
-	copied := *c
-	return &copied, nil
+	return copyDocumentComment(c), nil
 }
 
 func (m *MockDocumentCommentRepository) GetByIDInWorkspace(_ context.Context, id, workspaceID uuid.UUID) (*domain.DocumentComment, error) {
@@ -2997,8 +3021,7 @@ func (m *MockDocumentCommentRepository) GetByIDInWorkspace(_ context.Context, id
 	if m.documentWorkspace[c.DocumentID] != workspaceID {
 		return nil, nil
 	}
-	copied := *c
-	return &copied, nil
+	return copyDocumentComment(c), nil
 }
 
 func (m *MockDocumentCommentRepository) Update(_ context.Context, comment *domain.DocumentComment) error {
@@ -3078,7 +3101,7 @@ func (m *MockDocumentCommentRepository) ListByDocument(
 				continue
 			}
 		}
-		items = append(items, *c)
+		items = append(items, *copyDocumentComment(c))
 	}
 	sort.Slice(items, func(i, j int) bool {
 		if !items[i].CreatedAt.Equal(items[j].CreatedAt) {
@@ -3087,6 +3110,97 @@ func (m *MockDocumentCommentRepository) ListByDocument(
 		return items[i].ID.String() < items[j].ID.String()
 	})
 	return pagination.NewPage(items, len(items), pg), nil
+}
+
+// ListAnchorsByDocument mirrors the real query's filter exactly: live comments
+// that carry a quote, resolved threads included. A mock that quietly skipped
+// resolved threads would make the service look correct on a case the database
+// treats differently, which is the whole failure mode a mock is supposed to not
+// introduce.
+func (m *MockDocumentCommentRepository) ListAnchorsByDocument(_ context.Context, documentID uuid.UUID) ([]repository.DocumentCommentAnchorRow, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.anchorListErr != nil {
+		return nil, m.anchorListErr
+	}
+	if m.errToReturn != nil {
+		return nil, m.errToReturn
+	}
+
+	var rows []repository.DocumentCommentAnchorRow
+	var ordered []*domain.DocumentComment
+	for _, c := range m.items {
+		if c.DocumentID != documentID || c.DeletedAt != nil || c.Anchor == nil || c.Anchor.Exact == "" {
+			continue
+		}
+		ordered = append(ordered, c)
+	}
+	sort.Slice(ordered, func(i, j int) bool {
+		if !ordered[i].CreatedAt.Equal(ordered[j].CreatedAt) {
+			return ordered[i].CreatedAt.Before(ordered[j].CreatedAt)
+		}
+		return ordered[i].ID.String() < ordered[j].ID.String()
+	})
+	for _, c := range ordered {
+		prefix, suffix := c.Anchor.Prefix, c.Anchor.Suffix
+		rows = append(rows, repository.DocumentCommentAnchorRow{
+			ID:     c.ID,
+			Exact:  c.Anchor.Exact,
+			Prefix: &prefix,
+			Suffix: &suffix,
+			Start:  c.Anchor.Start,
+			End:    c.Anchor.End,
+		})
+	}
+	return rows, nil
+}
+
+// UpdateAnchorPositions writes the offsets back, and counts the calls so a test
+// can tell "the pass ran and found nothing to move" from "the pass never ran" —
+// two states that produce identical rows and opposite conclusions.
+func (m *MockDocumentCommentRepository) UpdateAnchorPositions(_ context.Context, positions []repository.DocumentCommentAnchorPosition) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.anchorWrites++
+	if m.anchorWriteErr != nil {
+		return m.anchorWriteErr
+	}
+	if m.errToReturn != nil {
+		return m.errToReturn
+	}
+	for _, p := range positions {
+		c, ok := m.items[p.ID]
+		if !ok || c.DeletedAt != nil || c.Anchor == nil {
+			continue
+		}
+		c.Anchor.Prefix, c.Anchor.Suffix = p.Prefix, p.Suffix
+		c.Anchor.Start, c.Anchor.End = p.Start, p.End
+	}
+	return nil
+}
+
+// AnchorWrites is how many times the re-anchoring pass reached the write.
+func (m *MockDocumentCommentRepository) AnchorWrites() int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.anchorWrites
+}
+
+// FailAnchorListWith / FailAnchorWriteWith break one half of the pass each, so a
+// test can prove the document write still succeeds when re-anchoring cannot run
+// — the trade this best-effort pass deliberately makes.
+func (m *MockDocumentCommentRepository) FailAnchorListWith(err error) *MockDocumentCommentRepository {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.anchorListErr = err
+	return m
+}
+
+func (m *MockDocumentCommentRepository) FailAnchorWriteWith(err error) *MockDocumentCommentRepository {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.anchorWriteErr = err
+	return m
 }
 
 // searchText mirrors what the trigger indexes, so a service test can assert that

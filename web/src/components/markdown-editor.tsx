@@ -25,7 +25,8 @@ import { MarkdownRenderer } from "@/components/markdown-renderer";
 import { RelayDocPicker } from "@/components/RelayDocPicker";
 import { DocLinkMenu } from "@/components/doc-link-menu";
 import { useDocLinkPicker } from "@/hooks/use-doc-link-picker";
-import { getAccessToken } from "@/lib/api";
+import { api } from "@/lib/api";
+import { toast } from "@/components/ui/toast";
 import { artifactDownloadPath, documentAttachmentDownloadPath } from "@/lib/artifact-links";
 import { uploadDocumentAttachment } from "@/lib/document-attachments";
 import type { Artifact, ArtifactType } from "@/types";
@@ -91,35 +92,61 @@ function isImageFile(file: File): boolean {
   return file.type.startsWith("image/");
 }
 
+/**
+ * Tell the user an upload failed, by name, and take the placeholder back out.
+ *
+ * A failure here used to be reported by splicing `<!-- upload failed: ... -->`
+ * into the description in place of the "Uploading..." placeholder. That is not
+ * a message: an HTML comment renders as nothing, so in Preview — and in the
+ * saved task description, which is where the text ends up — the user saw the
+ * placeholder disappear and nothing take its place. It also quietly wrote the
+ * comment into text the user was about to save. A toast says it where the user
+ * is looking, and leaves their text as they wrote it.
+ */
+function reportUploadFailure(
+  file: File,
+  err: unknown,
+  placeholder: string,
+  currentValue: string,
+  onChange: (value: string) => void,
+): void {
+  const detail = err instanceof Error ? err.message : "upload failed";
+  toast.error(`Could not attach ${file.name}`, { description: detail });
+  onChange(currentValue.replace(placeholder, ""));
+}
+
+/**
+ * Upload a file as an attachment on a task.
+ *
+ * Routed through `api()` with a FormData body, which api() passes to fetch
+ * untouched and without a Content-Type of its own (see serializeBody there) —
+ * the browser must set that header itself because it carries the multipart
+ * boundary.
+ *
+ * This used to be a raw fetch, for exactly that Content-Type reason, and the
+ * cost of that shortcut was the whole of this bug: api() is also where a 401 is
+ * turned into a token refresh and a replay of the request. Mesh access tokens
+ * live 15 minutes in tab memory (internal/auth/service.go) and are only
+ * refreshed when something gets a 401 back, so an upload attempted across that
+ * boundary was the one action on a task that could not recover — it just threw,
+ * while every neighbouring action (autosave, posting a comment) sailed through.
+ * That is why the defect reads as "sometimes it doesn't attach" rather than as
+ * a broken button. Same fix as PR #620 made for document attachments.
+ */
 export async function uploadArtifact(
   taskId: string,
   file: File,
   artifactType?: ArtifactType,
 ): Promise<Artifact> {
-  const token = getAccessToken();
-  const baseUrl = import.meta.env.VITE_API_URL || "";
-
   const form = new FormData();
   form.append("file", file, file.name);
   form.append("name", file.name);
   form.append("artifact_type", artifactType ?? detectArtifactType(file.type));
 
-  const headers: HeadersInit = {};
-  if (token) {
-    headers["Authorization"] = `Bearer ${token}`;
-  }
-
-  const res = await fetch(
-    `${baseUrl}/api/v1/tasks/${taskId}/artifacts`,
-    { method: "POST", headers, body: form },
-  );
-
-  if (!res.ok) {
-    const err = (await res.json().catch(() => ({}))) as { message?: string };
-    throw new Error(err.message ?? `Upload failed (${res.status})`);
-  }
-
-  return (await res.json()) as Artifact;
+  return api<Artifact>(`/api/v1/tasks/${taskId}/artifacts`, {
+    method: "POST",
+    body: form,
+  });
 }
 
 
@@ -366,12 +393,7 @@ export function MarkdownEditor({
           onChange(valueRef.current.replace(placeholder, finalMd));
           if (artifact) notifyUploaded(artifact);
         } catch (err) {
-          onChange(
-            valueRef.current.replace(
-              placeholder,
-              `<!-- image upload failed: ${err instanceof Error ? err.message : "unknown error"} -->`,
-            ),
-          );
+          reportUploadFailure(renamedFile, err, placeholder, valueRef.current, onChange);
         } finally {
           setUploading(false);
         }
@@ -423,12 +445,7 @@ export function MarkdownEditor({
         onChange(valueRef.current.replace(placeholder, finalMd));
         if (artifact) notifyUploaded(artifact);
       } catch (err) {
-        onChange(
-          valueRef.current.replace(
-            placeholder,
-            `<!-- upload failed: ${err instanceof Error ? err.message : "unknown error"} -->`,
-          ),
-        );
+        reportUploadFailure(file, err, placeholder, valueRef.current, onChange);
       } finally {
         setUploading(false);
       }

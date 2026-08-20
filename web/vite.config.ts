@@ -53,8 +53,11 @@ export default defineConfig({
   server: {
     port: 3000,
     proxy: {
+      // Target port is configurable so a second API instance (e.g. scripts/local-stack.sh,
+      // on its own throwaway port to avoid colliding with another dev API already on 8005)
+      // can be proxied to without editing this file. Defaults to 8005 — unchanged behavior.
       "/api": {
-        target: "http://localhost:8005",
+        target: `http://localhost:${process.env.VITE_DEV_API_PORT || 8005}`,
         changeOrigin: true,
       },
     },

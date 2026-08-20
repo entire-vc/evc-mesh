@@ -209,6 +209,15 @@ func TestOutline_AnchorDropsPunctuationAndInlineMarkup(t *testing.T) {
 		"Text is what the document says; only the anchor is normalised")
 }
 
+// Slugify is exported for reuse by document slug generation
+// (internal/service/document_service.go), which needs the same unicode-aware
+// rule but its own fallback for an empty result — this locks down that unlike
+// anchorize, Slugify returns "" rather than substituting anything.
+func TestSlugify_ReturnsEmptyRatherThanAFallback(t *testing.T) {
+	assert.Equal(t, "", Slugify("***"))
+	assert.Equal(t, "регламент-дежурства", Slugify("Регламент дежурства"))
+}
+
 func TestOutline_HeadingWithNoSluggableCharacters(t *testing.T) {
 	got := Outline("## ***\n\n## +++\n")
 

@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { useNotificationStore } from "@/stores/notification";
 import { useAuthStore } from "@/stores/auth";
 import { useWorkspaceStore } from "@/stores/workspace";
+import { useProjectStore } from "@/stores/project";
 import type { Notification } from "@/types";
 
 // ---------------------------------------------------------------------------
@@ -14,9 +15,11 @@ import type { Notification } from "@/types";
 export function NotificationBell() {
   const navigate = useNavigate();
   const { isAuthenticated } = useAuthStore();
-  // Still needed by handleOpenSettings below — the notification-settings route
-  // is workspace-scoped. handleNotificationClick no longer needs it.
+  // Needed by handleOpenSettings (the notification-settings route is
+  // workspace-scoped) and by the document branch of handleNotificationClick,
+  // which has no deep-link resolver to fall back on.
   const { currentWorkspace } = useWorkspaceStore();
+  const { projects } = useProjectStore();
   const {
     notifications,
     unreadCount,
@@ -76,10 +79,29 @@ export function NotificationBell() {
 
       if (taskId) {
         navigate(`/t/${taskId}`);
+        setOpen(false);
+        return;
+      }
+
+      // A document notification carries document_id and no task_id, so the
+      // branch above left it inert: the bell showed it and clicking did
+      // nothing. There is no /d/:id resolver, so the route is assembled here
+      // from the workspace and the project the metadata names.
+      const documentId = meta?.document_id as string | undefined;
+      const projectId = meta?.project_id as string | undefined;
+      if (documentId && currentWorkspace) {
+        const project = projects.find((p) => p.id === projectId);
+        if (project) {
+          const commentId = meta?.comment_id as string | undefined;
+          const query = commentId ? `?comment=${commentId}` : "";
+          navigate(
+            `/w/${currentWorkspace.slug}/p/${project.slug}/docs/${documentId}${query}`,
+          );
+        }
       }
       setOpen(false);
     },
-    [markAsRead, navigate],
+    [markAsRead, navigate, currentWorkspace, projects],
   );
 
   const handleMarkAll = useCallback(

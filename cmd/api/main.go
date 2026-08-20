@@ -109,6 +109,7 @@ func main() {
 	memoryEdgesRepo := postgres.NewMemoryEdgesRepo(db)
 	memoryChunkRepo := postgres.NewMemoryChunkRepo(db)
 	commentMentionRepo := postgres.NewCommentMentionRepo(db)
+	commentDeliveryRepo := postgres.NewCommentDeliveryOutcomeRepo(db)
 	documentCommentMentionRepo := postgres.NewDocumentCommentMentionRepo(db)
 
 	// 5. Create auth service.
@@ -331,6 +332,7 @@ func main() {
 		service.WithCommentAgentService(agentService),
 		service.WithCommentUserRepo(userRepo),
 		service.WithCommentMentionRepo(commentMentionRepo),
+		service.WithCommentDeliveryOutcomeRepo(commentDeliveryRepo),
 		service.WithCommentWSPublisher(wsPublisher),
 		service.WithCommentStatusRepo(taskStatusRepo),
 		service.WithCommentProjectRepo(projectRepo),
@@ -464,7 +466,11 @@ func main() {
 		documentWatchQuietWindow(),
 	)
 
-	documentService := service.NewDocumentService(documentRepo, documentStore, projectRepo,
+	// The comment repository is here because a body write moves the comments
+	// anchored into that body: PATCH re-resolves every anchor against the markdown
+	// it just stored, and nulls the ones whose text is gone. It is a required
+	// argument, not an option — see the field's note in documentService.
+	documentService := service.NewDocumentService(documentRepo, documentStore, projectRepo, documentCommentRepo,
 		service.WithDocumentWatch(documentWatchService))
 
 	// The attachment service takes the full StorageClient, not documentStore: an

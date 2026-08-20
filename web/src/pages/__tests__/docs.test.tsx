@@ -8,10 +8,14 @@ vi.mock("react-router", async () => {
   return { ...actual, useNavigate: () => mockedNavigate };
 });
 
-vi.mock("@/lib/api", () => ({
-  api: vi.fn(),
-  getAccessToken: vi.fn(() => null),
-}));
+vi.mock("@/lib/api", async () => {
+  // Keep the real ApiRequestError: the page does `err instanceof
+  // ApiRequestError` to tell a version conflict from any other failure, and a
+  // mock that dropped the class would make that check throw instead of just
+  // being false.
+  const actual = await vi.importActual<typeof import("@/lib/api")>("@/lib/api");
+  return { ...actual, api: vi.fn(), getAccessToken: vi.fn(() => null) };
+});
 
 vi.mock("@/components/ui/toast", () => ({
   toast: { error: vi.fn(), success: vi.fn() },
@@ -92,7 +96,7 @@ vi.mock("@/components/doc-editor", () => ({
 
 vi.mock("@/lib/clipboard", () => ({ copyText: vi.fn(() => Promise.resolve()) }));
 
-import { api } from "@/lib/api";
+import { api, ApiRequestError } from "@/lib/api";
 import { toast } from "@/components/ui/toast";
 import { copyText } from "@/lib/clipboard";
 import { anchorFromHash, anchorToHash } from "@/lib/docs/anchor";
@@ -129,6 +133,7 @@ function makeDoc(overrides: Partial<ProjectDocument> & { id: string }): ProjectD
     created_by_type: "user",
     created_at: "2026-08-01T00:00:00Z",
     updated_at: "2026-08-01T00:00:00Z",
+    version: 1,
     ...overrides,
   };
 }
@@ -314,7 +319,8 @@ describe("DocsPage — open, view and edit", () => {
     expect(patched).toHaveLength(0); // debounced, not per keystroke
     await vi.advanceTimersByTimeAsync(2000);
 
-    expect(patched).toEqual([{ body: "hello world" }]);
+    // base_version travels on every save — the version read on load (1).
+    expect(patched).toEqual([{ body: "hello world", base_version: 1 }]);
     expect(await screen.findByText("Saved")).toBeInTheDocument();
   });
 
@@ -332,6 +338,106 @@ describe("DocsPage — open, view and edit", () => {
     expect(await screen.findByText(/Not saved: network down/)).toBeInTheDocument();
     // The text is still in the editor — the failure must not eat it.
     expect(screen.getByRole("textbox")).toHaveValue("unsaved words");
+  });
+
+  it("shows the conflict message and keeps the draft when the save is refused", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let getCalls = 0;
+    let patchCalls = 0;
+    mockRoutes([doc], (path, opts) => {
+      if (path === "/api/v1/documents/doc-1" && opts?.method === "PATCH") {
+        patchCalls++;
+        return Promise.reject(
+          new ApiRequestError(
+            "Document was modified since you read it.",
+            "document_version_conflict",
+            409,
+          ),
+        );
+      }
+      if (path === "/api/v1/documents/doc-1" && !opts?.method) {
+        getCalls++;
+        // First GET is the initial open; the second is the re-read the
+        // conflict triggers, reporting what the other tab actually saved.
+        return Promise.resolve(
+          getCalls === 1
+            ? { ...doc, body: "hello", version: 1 }
+            : { ...doc, body: "hello from the other tab", version: 2 },
+        );
+      }
+      return undefined;
+    });
+    renderDocs("doc-1");
+
+    fireEvent.click(await screen.findByRole("button", { name: /edit/i }));
+    fireEvent.change(screen.getByRole("textbox"), {
+      target: { value: "my own edit" },
+    });
+    await vi.advanceTimersByTimeAsync(2000);
+
+    expect(
+      await screen.findByText("this page changed elsewhere"),
+    ).toBeInTheDocument();
+    // Neither text was silently lost: the reader's own draft is still here...
+    expect(screen.getByRole("textbox")).toHaveValue("my own edit");
+    // ...and the other tab's save was never overwritten — no second PATCH.
+    expect(patchCalls).toBe(1);
+    expect(getCalls).toBe(2);
+  });
+
+  it("does not retry on its own after a conflict — only a new edit re-arms the save, this time with the refreshed version", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let getCalls = 0;
+    const patched: unknown[] = [];
+    mockRoutes([doc], (path, opts) => {
+      if (path === "/api/v1/documents/doc-1" && opts?.method === "PATCH") {
+        patched.push(opts.body);
+        // Conflict once, on the version read at load; succeed once the
+        // caller comes back with the version the re-read reported.
+        const body = opts.body as { base_version?: number };
+        if (body.base_version === 1) {
+          return Promise.reject(
+            new ApiRequestError("stale", "document_version_conflict", 409),
+          );
+        }
+        return Promise.resolve({ ...doc, body: "my own edit, retried", version: 3 });
+      }
+      if (path === "/api/v1/documents/doc-1" && !opts?.method) {
+        getCalls++;
+        return Promise.resolve(
+          getCalls === 1
+            ? { ...doc, body: "hello", version: 1 }
+            : { ...doc, body: "hello from the other tab", version: 2 },
+        );
+      }
+      return undefined;
+    });
+    renderDocs("doc-1");
+
+    fireEvent.click(await screen.findByRole("button", { name: /edit/i }));
+    fireEvent.change(screen.getByRole("textbox"), {
+      target: { value: "my own edit" },
+    });
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(await screen.findByText("this page changed elsewhere")).toBeInTheDocument();
+
+    // No further keystroke: waiting alone must not fire another PATCH — a
+    // blind retry on the timer is exactly the loop this guards against.
+    await vi.advanceTimersByTimeAsync(10000);
+    expect(patched).toHaveLength(1);
+
+    // A genuine new edit is what re-arms the debounce, now against the
+    // version the conflict's re-read learned (2).
+    fireEvent.change(screen.getByRole("textbox"), {
+      target: { value: "my own edit, retried" },
+    });
+    await vi.advanceTimersByTimeAsync(2000);
+
+    expect(patched).toEqual([
+      { body: "my own edit", base_version: 1 },
+      { body: "my own edit, retried", base_version: 2 },
+    ]);
+    expect(await screen.findByText("Saved")).toBeInTheDocument();
   });
 
   it("saves pending keystrokes when the document is left before the debounce fires", async () => {
@@ -365,7 +471,9 @@ describe("DocsPage — open, view and edit", () => {
     // Leaving well inside the 2s window.
     unmount();
 
-    await waitFor(() => expect(patched).toEqual([{ body: "half-typed" }]));
+    await waitFor(() =>
+      expect(patched).toEqual([{ body: "half-typed", base_version: 1 }]),
+    );
   });
 
   it("reports a document that cannot be loaded", async () => {

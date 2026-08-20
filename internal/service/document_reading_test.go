@@ -208,6 +208,19 @@ func TestDocumentService_GetByPath_FirstSegmentMissing(t *testing.T) {
 	assert.Contains(t, apiErr.Details, `"nowhere"`)
 }
 
+// A document whose slug was derived (not explicitly set) from a Cyrillic title
+// resolves by path the same as any other — the fix is in slug generation, not in
+// how a slug, once assigned, gets looked up.
+func TestDocumentService_GetByPath_ResolvesACyrillicDerivedSlug(t *testing.T) {
+	f := setupDocumentService(t)
+	doc := f.create(t, "Регламент выката", "# Регламент\n")
+
+	got, err := f.svc.GetByPath(context.Background(), f.projectID, "регламент-выката")
+	require.NoError(t, err)
+
+	assert.Equal(t, doc.ID, got.ID)
+}
+
 func TestDocumentService_GetByPath_EmptyPath(t *testing.T) {
 	f := setupDocumentService(t)
 

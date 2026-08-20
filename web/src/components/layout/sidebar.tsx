@@ -19,7 +19,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { MeshIcon } from "@/components/mesh-icon";
-import { api } from "@/lib/api";
+import { fetchUnseenMentionCount } from "@/lib/mentions/inbox";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { useCapabilitiesStore } from "@/stores/capabilities";
 import { useProjectStore } from "@/stores/project";
@@ -108,11 +108,13 @@ export function Sidebar({ collapsed }: SidebarProps) {
   const isActivityRoute = location.pathname.includes("/activity");
 
   // Fetch unseen mention count once on mount, then refresh on cache invalidation.
+  // Both inboxes: a badge counting only task mentions is the same contradiction
+  // the Mentions tab had — the bell says two, the sidebar says none.
   useEffect(() => {
     if (unseenFetchedRef.current) return;
     unseenFetchedRef.current = true;
-    api<{ count: number }>("/api/v1/me/mentions/unseen_count")
-      .then(({ count }) => {
+    fetchUnseenMentionCount()
+      .then((count) => {
         localStorage.setItem("mesh_unseen_ts", String(Date.now()));
         localStorage.setItem("mesh_unseen_count", String(count));
         setUnseenCount(count);
@@ -128,9 +130,15 @@ export function Sidebar({ collapsed }: SidebarProps) {
     return () => wsUnsubscribe(channel);
   }, [user?.id, wsSubscribe, wsUnsubscribe]);
 
-  // Increment badge on incoming mention.created event.
+  // Increment badge on an incoming mention.
+  //
+  // The server publishes "mention.badge" for both task and document mentions
+  // (comment_service.go, document_comment_mentions.go); "mention.created" is
+  // what this listener was originally written against and no publisher has ever
+  // emitted it. Both names are accepted rather than one renamed, so this stays
+  // correct whichever the server sends.
   useEffect(() => {
-    if (lastEvent?.type === "mention.created") {
+    if (lastEvent?.type === "mention.badge" || lastEvent?.type === "mention.created") {
       setUnseenCount((n) => n + 1);
     }
   }, [lastEvent]);

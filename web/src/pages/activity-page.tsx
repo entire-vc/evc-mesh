@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router";
-import { AtSign, MessageSquare } from "lucide-react";
+import { AtSign, FileText, ListTodo, MessageSquare } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { api } from "@/lib/api";
 import { useProjectStore } from "@/stores/project";
@@ -9,7 +9,14 @@ import { useWebSocketStore } from "@/stores/websocket";
 import { MarkdownRenderer } from "@/components/markdown-renderer";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "@/components/ui/toast";
-import type { CommentView, CommentViewPage, Mention } from "@/types";
+import {
+  fetchMentionInbox,
+  markMentionSeen,
+  mentionHref,
+  type MentionInboxItem,
+  type MentionSource,
+} from "@/lib/mentions/inbox";
+import type { CommentView, CommentViewPage } from "@/types";
 
 // Persists which mention IDs have been rendered in the feed (shown-state).
 // Distinguishes "new" (never rendered) from "shown" (rendered, not yet clicked).
@@ -76,7 +83,7 @@ const lastVisitKey = (ws: string | undefined) => `mesh:activity:last_visit:${ws 
 type MentionDisplayState = "new" | "shown" | "opened";
 
 function getMentionDisplayState(
-  mention: Mention,
+  mention: MentionInboxItem,
   shownIds: Set<string>,
 ): MentionDisplayState {
   if (mention.seen_at) return "opened";
@@ -91,7 +98,11 @@ export function ActivityPage() {
   const { currentWorkspace } = useWorkspaceStore();
   const { lastEvent } = useWebSocketStore();
   const [activeTab, setActiveTab] = useState<Tab>("mentions");
-  const [mentions, setMentions] = useState<Mention[]>([]);
+  const [mentions, setMentions] = useState<MentionInboxItem[]>([]);
+  // Which of the two inboxes did not answer. Rendered rather than swallowed:
+  // "no mentions" from a screen that failed to look is the defect this whole
+  // change exists to remove, and a silent merge would rebuild it here.
+  const [mentionsFailed, setMentionsFailed] = useState<MentionSource[]>([]);
   const [myComments, setMyComments] = useState<CommentView[]>([]);
   const [recentComments, setRecentComments] = useState<CommentView[]>([]);
   const [loading, setLoading] = useState(false);
@@ -109,14 +120,15 @@ export function ActivityPage() {
   const fetchMentions = useCallback(async () => {
     setLoading(true);
     try {
-      const data = await api<Mention[]>("/api/v1/me/mentions", { params: { limit: 50 } });
-      const sorted = [...(data ?? [])].sort((a, b) => {
-        if (!a.seen_at && b.seen_at) return -1;
-        if (a.seen_at && !b.seen_at) return 1;
-        return new Date(b.extracted_at).getTime() - new Date(a.extracted_at).getTime();
-      });
-      setMentions(sorted);
+      const { items, failed } = await fetchMentionInbox(50);
+      setMentions(items);
+      setMentionsFailed(failed);
+      if (failed.length > 0) toast.error("Some mentions could not be loaded");
     } catch {
+      // fetchMentionInbox reports a failed source rather than throwing, so
+      // reaching here means both sources are gone — say so instead of
+      // rendering an empty inbox.
+      setMentionsFailed(["task", "document"]);
       toast.error("Failed to load mentions");
     } finally {
       setLoading(false);
@@ -217,15 +229,22 @@ export function ActivityPage() {
   // Keep feed live: refetch when a new mention arrives via WebSocket.
   // New mention is not yet in shownIdsRef so it renders as "new".
   useEffect(() => {
-    if (lastEvent?.type === "mention.created" && activeTab === "mentions") {
+    // The server publishes "mention.badge" (comment_service.go,
+    // document_comment_mentions.go); "mention.created" was what this listener
+    // was written against and never fired. Both are accepted so the live feed
+    // works without renaming an event three other places would have to follow.
+    if (
+      (lastEvent?.type === "mention.badge" || lastEvent?.type === "mention.created") &&
+      activeTab === "mentions"
+    ) {
       void fetchMentions();
     }
   }, [lastEvent, activeTab, fetchMentions]);
 
   const handleMentionClick = useCallback(
-    (mention: Mention) => {
+    (mention: MentionInboxItem) => {
       if (!mention.seen_at) {
-        api(`/api/v1/me/mentions/${mention.comment_id}/seen`, { method: "POST" })
+        markMentionSeen(mention)
           .then(() => {
             setMentions((prev) =>
               prev.map((m) =>
@@ -239,9 +258,8 @@ export function ActivityPage() {
           .catch(() => {});
       }
       const project = projects.find((p) => p.id === mention.project_id);
-      if (wsSlug && project) {
-        navigate(`/w/${wsSlug}/p/${project.slug}/t/${mention.task_id}`);
-      }
+      const href = mentionHref(mention, wsSlug, project?.slug);
+      if (href) navigate(href);
     },
     [wsSlug, navigate, projects],
   );
@@ -288,6 +306,7 @@ export function ActivityPage() {
       {activeTab === "mentions" && (
         <MentionsTab
           mentions={mentions}
+          failed={mentionsFailed}
           loading={loading}
           lastVisit={lastVisit}
           shownIds={shownIdsRef.current}
@@ -325,16 +344,18 @@ export function ActivityPage() {
 
 function MentionsTab({
   mentions,
+  failed,
   loading,
   lastVisit,
   shownIds,
   onMentionClick,
 }: {
-  mentions: Mention[];
+  mentions: MentionInboxItem[];
+  failed: MentionSource[];
   loading: boolean;
   lastVisit: Date | null;
   shownIds: Set<string>;
-  onMentionClick: (m: Mention) => void;
+  onMentionClick: (m: MentionInboxItem) => void;
 }) {
   const { fresh, shown } = useMemo(() => splitByLastVisit(mentions, lastVisit), [mentions, lastVisit]);
 
@@ -348,19 +369,35 @@ function MentionsTab({
     );
   }
 
+  // The empty state is a claim about the world, so it is only made when both
+  // inboxes actually answered. With a source missing, say that instead.
   if (mentions.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center py-16 text-center text-muted-foreground">
         <AtSign className="mb-3 h-8 w-8 opacity-30" />
-        <p className="text-sm">
-          No mentions yet. When someone tags you with @username, it'll show up here.
-        </p>
+        {failed.length > 0 ? (
+          <p className="text-sm" data-testid="mentions-load-failed">
+            {failedSourcesMessage(failed)} This list is incomplete — reload to try again.
+          </p>
+        ) : (
+          <p className="text-sm">
+            No mentions yet. When someone tags you with @username, it'll show up here.
+          </p>
+        )}
       </div>
     );
   }
 
   return (
     <div className="space-y-4">
+      {failed.length > 0 && (
+        <p
+          className="rounded-md border border-amber-400/40 bg-amber-50/50 px-3 py-2 text-xs text-muted-foreground dark:bg-amber-950/20"
+          data-testid="mentions-load-failed"
+        >
+          {failedSourcesMessage(failed)} Some mentions may be missing from this list.
+        </p>
+      )}
       {fresh.length > 0 && (
         <section className="space-y-2">
           <SectionHeader label="Новое" count={fresh.length} accent />
@@ -480,14 +517,22 @@ function CommentCard({
   );
 }
 
+/** Names the inbox that did not answer, so the reader knows what is missing. */
+function failedSourcesMessage(failed: MentionSource[]): string {
+  if (failed.length > 1) return "Mentions could not be loaded.";
+  return failed[0] === "document"
+    ? "Mentions in documents could not be loaded."
+    : "Mentions on tasks could not be loaded.";
+}
+
 function splitByLastVisit(
-  mentions: Mention[],
+  mentions: MentionInboxItem[],
   lastVisit: Date | null,
-): { fresh: Mention[]; shown: Mention[] } {
+): { fresh: MentionInboxItem[]; shown: MentionInboxItem[] } {
   if (!lastVisit) return { fresh: [], shown: mentions };
   const cutoff = lastVisit.getTime();
-  const fresh: Mention[] = [];
-  const shown: Mention[] = [];
+  const fresh: MentionInboxItem[] = [];
+  const shown: MentionInboxItem[] = [];
   for (const m of mentions) {
     if (new Date(m.extracted_at).getTime() > cutoff) fresh.push(m);
     else shown.push(m);
@@ -517,9 +562,9 @@ function MentionCard({
   shownIds,
   onClick,
 }: {
-  mention: Mention;
+  mention: MentionInboxItem;
   shownIds: Set<string>;
-  onClick: (m: Mention) => void;
+  onClick: (m: MentionInboxItem) => void;
 }) {
   const displayState = getMentionDisplayState(mention, shownIds);
   const isNew = displayState === "new";
@@ -530,9 +575,14 @@ function MentionCard({
       ? mention.comment_body.slice(0, 200) + "…"
       : mention.comment_body;
 
+  // Which object was tagged, said in the row itself: a title alone does not
+  // tell a reader whether clicking opens a task or a document.
+  const SourceIcon = mention.source === "document" ? FileText : ListTodo;
+
   return (
     <button
       onClick={() => onClick(mention)}
+      data-testid={`mention-card-${mention.source}`}
       className={cn(
         "w-full cursor-pointer rounded-lg border p-3 text-left transition-colors hover:bg-white/[0.02] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-blue-500/40",
         isNew && "border-primary/30 bg-primary/5",
@@ -547,8 +597,12 @@ function MentionCard({
         )}
         <div className={cn("min-w-0 flex-1", !isNew && "pl-4")}>
           <div className="flex flex-wrap items-center gap-2">
+            <SourceIcon
+              className="h-3.5 w-3.5 shrink-0 text-muted-foreground"
+              aria-label={mention.source === "document" ? "Document" : "Task"}
+            />
             <span className={cn("truncate text-sm", isNew && "font-medium")}>
-              {mention.task_title}
+              {mention.title}
             </span>
             <span className="shrink-0 text-xs text-muted-foreground">
               {formatRelative(mention.extracted_at)}

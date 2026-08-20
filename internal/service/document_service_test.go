@@ -22,6 +22,7 @@ type documentFixture struct {
 	svc       *documentService
 	repo      *MockDocumentRepository
 	storage   *MockStorageClient
+	comments  *MockDocumentCommentRepository
 	projectID uuid.UUID
 	wsID      uuid.UUID
 }
@@ -35,14 +36,16 @@ func setupDocumentService(t *testing.T) *documentFixture {
 	repo := NewMockDocumentRepository().WithProjectWorkspace(projectID, wsID)
 	storage := NewMockStorageClient()
 	projectRepo := NewMockProjectRepository()
+	comments := NewMockDocumentCommentRepository()
 	require.NoError(t, projectRepo.Create(context.Background(), &domain.Project{ID: projectID, WorkspaceID: wsID}))
 
 	timeNow = func() time.Time { return frozenTime }
 
 	return &documentFixture{
-		svc:       NewDocumentService(repo, storage, projectRepo).(*documentService),
+		svc:       NewDocumentService(repo, storage, projectRepo, comments).(*documentService),
 		repo:      repo,
 		storage:   storage,
+		comments:  comments,
 		projectID: projectID,
 		wsID:      wsID,
 	}
@@ -126,16 +129,99 @@ func TestDocumentService_Create_UnknownProject(t *testing.T) {
 	assert.Equal(t, 404, apiErr.StatusCode())
 }
 
-// A title with no ASCII letters or digits slugifies to nothing. Refusing it would
-// make the API reject a perfectly good document for being written in another
-// script, so the id stands in.
-func TestDocumentService_Create_NonLatinTitleStillGetsASlug(t *testing.T) {
+// The slug generator is unicode-aware (mdoc.Slugify — the same rule as heading
+// anchors), not ASCII-only: a Cyrillic title gets a slug built from its own
+// letters, not a fallback to the id. Before this, every non-Latin title
+// slugified to a bare run of hyphens ("-", "--"), so two Russian-titled
+// documents in the same folder collided on the (project_id, parent_id, slug)
+// uniqueness constraint and the second was refused outright.
+func TestDocumentService_Create_CyrillicTitleGetsAMeaningfulSlug(t *testing.T) {
 	f := setupDocumentService(t)
 
-	doc := f.create(t, "Заметки", "")
+	doc := f.create(t, "Регламент выката", "")
 
-	assert.NotEmpty(t, doc.Slug)
+	assert.Equal(t, "регламент-выката", doc.Slug)
+}
+
+// Two differently-worded Cyrillic titles in one folder must not collapse onto
+// the same degenerate slug — that's the exact defect this task reports.
+func TestDocumentService_Create_TwoCyrillicTitlesInSameFolderGetDistinctSlugs(t *testing.T) {
+	f := setupDocumentService(t)
+
+	first := f.create(t, "Регламент выката", "")
+	second := f.create(t, "Правила дежурства", "")
+
+	assert.NotEqual(t, first.Slug, second.Slug)
+	assert.Equal(t, "регламент-выката", first.Slug)
+	assert.Equal(t, "правила-дежурства", second.Slug)
+}
+
+// A mixed-script title keeps both scripts rather than dropping the non-Latin
+// half, which the old ASCII-only rule did ("Смешанный Mixed 42" -> "-mixed-42").
+func TestDocumentService_Create_MixedScriptTitleKeepsBothScripts(t *testing.T) {
+	f := setupDocumentService(t)
+
+	doc := f.create(t, "Смешанный Mixed 42", "")
+
+	assert.Equal(t, "смешанный-mixed-42", doc.Slug)
+}
+
+// Latin with diacritics is also unicode.IsLetter, so it now survives instead of
+// being dropped by the old ASCII range.
+func TestDocumentService_Create_LatinWithDiacriticsIsPreserved(t *testing.T) {
+	f := setupDocumentService(t)
+
+	doc := f.create(t, "Ünïcode Ïssue", "")
+
+	assert.Equal(t, "ünïcode-ïssue", doc.Slug)
+}
+
+// Plain latin is the regression check: unchanged from before this fix.
+func TestDocumentService_Create_PlainLatinTitleUnaffected(t *testing.T) {
+	f := setupDocumentService(t)
+
+	doc := f.create(t, "Latin Test Page", "")
+
+	assert.Equal(t, "latin-test-page", doc.Slug)
+}
+
+// A title made only of emoji has no letters or digits, and Slugify's trim only
+// strips leading/trailing '-' — so a pure-emoji title collapses to "" (all
+// hyphens, entirely trimmed) and hits the fallback the same way it always did.
+func TestDocumentService_Create_EmojiOnlyTitleFallsBackToID(t *testing.T) {
+	f := setupDocumentService(t)
+
+	doc := f.create(t, "!!! 🎉🎉🎉 ---", "")
+
 	assert.Equal(t, "doc-"+doc.ID.String()[:8], doc.Slug)
+}
+
+// The sharper case: Slugify's trim strips only '-', not '_', so a title with an
+// underscore among otherwise-dropped characters slugifies to a NON-empty string
+// ("_") that still has no letter or digit. A bare `slug == ""` check misses this
+// exactly the class of bug this task reports, just one layer further down — this
+// is why hasLetterOrDigit checks for a letter/digit rather than for emptiness.
+func TestDocumentService_Create_UnderscoreOnlyTitleFallsBackToID(t *testing.T) {
+	f := setupDocumentService(t)
+
+	doc := f.create(t, "🎉 _ 🎉", "")
+
+	assert.Equal(t, "doc-"+doc.ID.String()[:8], doc.Slug)
+}
+
+// An explicit non-ASCII slug (input.Slug) gets the same unicode-aware treatment
+// as one derived from the title — the old ASCII-only rule applied to whichever
+// one an agent thought to pass.
+func TestDocumentService_Create_ExplicitNonLatinSlugIsUnicodeAware(t *testing.T) {
+	f := setupDocumentService(t)
+
+	doc, err := f.svc.Create(context.Background(), CreateDocumentInput{
+		ProjectID: f.projectID, Title: "Notes", Slug: "Заметки",
+		CreatedBy: uuid.New(), CreatedByType: domain.ActorTypeUser,
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, "заметки", doc.Slug)
 }
 
 // The row is what makes the object reachable, so a failed insert must not leave
@@ -387,7 +473,7 @@ func TestDocumentService_NoStorageConfigured(t *testing.T) {
 	projectRepo := NewMockProjectRepository()
 	require.NoError(t, projectRepo.Create(context.Background(), &domain.Project{ID: projectID, WorkspaceID: uuid.New()}))
 
-	svc := NewDocumentService(repo, nil, projectRepo)
+	svc := NewDocumentService(repo, nil, projectRepo, NewMockDocumentCommentRepository())
 
 	_, err := svc.Create(context.Background(), CreateDocumentInput{ProjectID: projectID, Title: "No storage"})
 
@@ -467,7 +553,7 @@ func TestDocumentService_NoStorageConfigured_ReadAndUpdate(t *testing.T) {
 	projectRepo := NewMockProjectRepository()
 	require.NoError(t, projectRepo.Create(ctx, &domain.Project{ID: projectID, WorkspaceID: wsID}))
 
-	svc := NewDocumentService(repo, nil, projectRepo)
+	svc := NewDocumentService(repo, nil, projectRepo, NewMockDocumentCommentRepository())
 
 	t.Run("read", func(t *testing.T) {
 		_, err := svc.GetByIDInWorkspace(ctx, docID, wsID)

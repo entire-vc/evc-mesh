@@ -1,0 +1,67 @@
+#!/usr/bin/env python3
+"""Reject a commit message carrying a tool-attribution trailer.
+
+The fast half of a two-layer gate. This one fails in milliseconds, before the
+commit exists, which is the difference between "fix the message" and "rebase the
+branch and force-push". It is deliberately NOT the enforcement layer: a hook
+lives on whichever machine installed it, and a fresh clone, another machine, a
+web edit or `--no-verify` all walk straight past it. The check that actually
+holds is the required status check in .github/workflows/vendor-trailer-gate.yml,
+because branch protection is the only thing every merge path consults.
+
+Install (per clone):
+
+    git config core.hooksPath .githooks
+
+Reads .github/vendor-trailer-terms.txt so there is one term list in this
+repository rather than two that drift.
+"""
+import re
+import sys
+from pathlib import Path
+
+TERMS = Path(__file__).resolve().parent.parent / ".github" / "vendor-trailer-terms.txt"
+
+
+def main() -> int:
+    if len(sys.argv) < 2:
+        return 0
+    try:
+        vendors = [
+            line.strip()
+            for line in TERMS.read_text(encoding="utf-8").splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        ]
+    except OSError:
+        # A hook is advisory, and a developer whose clone predates the term file
+        # should not be unable to commit. The required check still holds the line.
+        return 0
+    if not vendors:
+        return 0
+
+    alternation = "|".join(re.escape(v) for v in sorted(vendors, key=len, reverse=True))
+    pattern = re.compile(
+        rf"^.{{0,4}}Generated (?:with|by) \[?(?:{alternation})\b.*$"
+        rf"|^Co-Authored-By:\s*(?:{alternation})\b.*$",
+        re.I | re.M,
+    )
+
+    message = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+    # Ignore the comment block git appends to the editor buffer.
+    body = "\n".join(ln for ln in message.splitlines() if not ln.startswith("#"))
+
+    hits = sorted({h.strip() for h in pattern.findall(body)})
+    if not hits:
+        return 0
+
+    print("commit-msg: refusing — the message carries a tool-attribution trailer:")
+    for hit in hits:
+        print(f"    {hit}")
+    print()
+    print("Remove the line and commit again. A commit message is addressed by its SHA,")
+    print("so once it reaches main the only remedy is rewriting public history.")
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

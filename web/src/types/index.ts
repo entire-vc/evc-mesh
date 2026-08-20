@@ -288,6 +288,29 @@ export interface Comment {
   is_internal: boolean;
   created_at: string;
   updated_at: string;
+  /**
+   * What became of each @-addressed handle on this comment. Absent when the
+   * comment addressed nobody — which is why it is optional rather than an
+   * empty array: "no handles" and "handles that all failed" must not render
+   * the same way.
+   */
+  delivery?: CommentDeliveryOutcome[];
+}
+
+/**
+ * One verdict per @-addressed handle. `reason` is never empty, including on
+ * delivered rows, where it names which path carried the comment.
+ */
+export interface CommentDeliveryOutcome {
+  comment_id: string;
+  recipient_slug: string;
+  recipient_id?: string;
+  recipient_kind: "agent" | "user" | "unknown";
+  outcome: "delivered" | "skipped" | "failed";
+  reason: string;
+  channel: string;
+  recipient_presence: string;
+  decided_at: string;
 }
 
 export interface CommentView {
@@ -382,6 +405,10 @@ export interface ProjectDocument {
   updated_at: string;
   deleted_at?: string | null;
   body?: string;
+  // Monotonic counter bumped by every write to title or body. The value a
+  // caller read is what it sends back as base_version on the next write —
+  // see UpdateDocumentRequest.base_version.
+  version: number;
 }
 
 export interface CreateDocumentRequest {
@@ -401,6 +428,10 @@ export interface UpdateDocumentRequest {
   clear_parent?: boolean;
   position?: number;
   body?: string;
+  // The version last read from the server. Omitted, the API writes
+  // unconditionally; sent and stale, it 409s with document_version_conflict
+  // instead of silently overwriting a change that landed in between.
+  base_version?: number;
 }
 
 // A comment anchored to a run of a document's text — the W3C Web Annotation
@@ -523,6 +554,31 @@ export interface Mention {
   seen_at: string | null;
   task_id: string;
   task_title: string;
+  project_id: string;
+  comment_body: string;
+  author_id: string;
+  author_name: string;
+}
+
+/**
+ * An @-mention inside a document comment — the shape of GET /me/document-mentions.
+ *
+ * A sibling of Mention rather than a widened version of it: this one names a
+ * document and no task, and folding the two into one struct with a nullable
+ * `task_id` would push "which of the two am I holding" onto every reader.
+ * The union that lets a screen show both is MentionInboxItem
+ * (`@/lib/mentions/inbox`).
+ */
+export interface DocumentMention {
+  comment_id: string;
+  mentioned_id: string;
+  mentioned_kind: string;
+  mentioned_slug: string;
+  extracted_at: string;
+  seen_at: string | null;
+  document_id: string;
+  document_title: string;
+  document_slug: string;
   project_id: string;
   comment_body: string;
   author_id: string;

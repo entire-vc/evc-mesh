@@ -63,6 +63,7 @@ import {
   anchorToHash,
 } from "@/lib/docs/anchor";
 import { useDocComments } from "@/lib/doc-comments/use-doc-comments";
+import { ApiRequestError } from "@/lib/api";
 import {
   DOC_TREE_DEFAULT_WIDTH,
   DOC_TREE_MAX_WIDTH,
@@ -84,10 +85,21 @@ type SaveState =
   | { status: "idle" }
   | { status: "saving" }
   | { status: "saved" }
-  | { status: "error"; message: string };
+  | { status: "error"; message: string }
+  // The write was refused because base_version no longer matched — nothing was
+  // written, not the row and not the draft still sitting in the editor.
+  | { status: "conflict" };
 
 function errorMessage(err: unknown, fallback: string): string {
   return err instanceof Error ? err.message : fallback;
+}
+
+// The one 409 a document PATCH can return that means "refused, not failed":
+// the row exists, the request was well-formed, and the caller's base_version
+// is simply stale. Every other error — network, 500, validation — stays a
+// plain "error" so it keeps the Retry affordance that a conflict does not get.
+function isVersionConflict(err: unknown): boolean {
+  return err instanceof ApiRequestError && err.code === "document_version_conflict";
 }
 
 // ---------------------------------------------------------------------------
@@ -322,6 +334,17 @@ function SaveIndicator({
       </span>
     );
   }
+  if (state.status === "conflict") {
+    // Approved copy (#c8a9bbce), verbatim — no Retry button and no added
+    // hint about what to do next. Typing further re-arms the debounce on its
+    // own; a button here would be a second, unapproved sentence.
+    return (
+      <span className="flex items-center gap-1 text-xs text-destructive">
+        <AlertCircle className="h-3 w-3" />
+        this page changed elsewhere
+      </span>
+    );
+  }
   return null;
 }
 
@@ -412,6 +435,13 @@ export function DocsPage() {
   const savedBodyRef = useRef("");
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // The version last known to be on the server — what the next PATCH sends as
+  // base_version. A ref, not state: bumping it must not itself recreate
+  // flushBody, or a conflict's re-read would retrigger the debounce below and
+  // turn "show one message" into a silent auto-retry over whatever the other
+  // tab just saved.
+  const docVersionRef = useRef<number | null>(null);
+
   // Read by the "leaving the document" cleanup below, which runs on a render
   // where docId is already the next document but these still hold the one being
   // left behind.
@@ -430,6 +460,7 @@ export function DocsPage() {
       setOpenDoc(null);
       setDraft("");
       savedBodyRef.current = "";
+      docVersionRef.current = null;
       setLoadError(null);
       setEditing(false);
       return;
@@ -445,6 +476,7 @@ export function DocsPage() {
         const body = doc.body ?? "";
         setDraft(body);
         savedBodyRef.current = body;
+        docVersionRef.current = doc.version;
         // View mode on open, every time — switching document must not leave the
         // next one sitting in an editor the user did not ask for.
         setEditing(false);
@@ -472,16 +504,35 @@ export function DocsPage() {
     if (body === savedBodyRef.current) return;
     setSaveState({ status: "saving" });
     try {
-      await updateDocument(doc.id, { body });
+      const updated = await updateDocument(doc.id, {
+        body,
+        base_version: docVersionRef.current ?? undefined,
+      });
       savedBodyRef.current = body;
+      docVersionRef.current = updated.version;
       setSaveState({ status: "saved" });
     } catch (err) {
+      if (isVersionConflict(err)) {
+        // Refused, not failed: neither the row nor `draft` was touched. Re-read
+        // so the ref holds the real current version — otherwise every future
+        // save would keep 409ing on the same stale number. `draft` is left
+        // alone on purpose: overwriting it with the server's text would be the
+        // same silent loss this exists to prevent, just in the other direction.
+        try {
+          const fresh = await getDocument(doc.id);
+          docVersionRef.current = fresh.version;
+        } catch {
+          // Best-effort re-read; the conflict notice below stands regardless.
+        }
+        setSaveState({ status: "conflict" });
+        return;
+      }
       setSaveState({
         status: "error",
         message: errorMessage(err, "save failed"),
       });
     }
-  }, [openDoc, draft, updateDocument]);
+  }, [openDoc, draft, updateDocument, getDocument]);
 
   // Debounced autosave, mirroring the task description editor.
   useEffect(() => {
@@ -506,10 +557,14 @@ export function DocsPage() {
       const body = draftRef.current;
       if (body === savedBodyRef.current) return;
       savedBodyRef.current = body;
-      void updateDocument(doc.id, { body }).catch((err: unknown) => {
-        toast.error(
-          `"${doc.title}" was not saved: ${errorMessage(err, "save failed")}`,
-        );
+      void updateDocument(doc.id, {
+        body,
+        base_version: docVersionRef.current ?? undefined,
+      }).catch((err: unknown) => {
+        const message = isVersionConflict(err)
+          ? "this page changed elsewhere"
+          : errorMessage(err, "save failed");
+        toast.error(`"${doc.title}" was not saved: ${message}`);
       });
     };
   }, [docId, updateDocument]);
@@ -558,6 +613,33 @@ export function DocsPage() {
   useEffect(() => {
     if (comments.draft) setRailOpen(true);
   }, [comments.draft]);
+
+  // Arriving from a mention: `?comment=<id>` names the comment somebody was
+  // tagged in, so open the rail and focus its thread. The id may be a reply, so
+  // it is matched against roots and replies both — focusing wants the root.
+  //
+  // A query parameter rather than the hash, which paragraph anchors (D6) own:
+  // the two would otherwise overwrite each other when a mention lands on a
+  // paragraph that is also linked.
+  //
+  // Runs once the threads are loaded and only while the id is unchanged, so
+  // clicking a different thread afterwards is not undone on the next render.
+  const focusedCommentId = useMemo(
+    () => new URLSearchParams(location.search).get("comment"),
+    [location.search],
+  );
+  const focusThread = comments.focusThread;
+  useEffect(() => {
+    if (!focusedCommentId || comments.isLoading) return;
+    const thread = comments.threads.find(
+      (t) =>
+        t.root.id === focusedCommentId ||
+        t.replies.some((r) => r.id === focusedCommentId),
+    );
+    if (!thread) return;
+    setRailOpen(true);
+    focusThread(thread.root.id);
+  }, [focusedCommentId, comments.threads, comments.isLoading, focusThread]);
 
   const toggleRail = useCallback(() => {
     setRailOpen((prev) => {

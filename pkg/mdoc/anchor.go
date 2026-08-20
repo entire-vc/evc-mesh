@@ -157,12 +157,7 @@ func ResolveQuote(source, quote, prefix, suffix string) (*Anchor, error) {
 		return nil, &QuoteTooLongError{Bytes: len(exact)}
 	}
 
-	candidates := verbatimOccurrences(source, exact)
-	if len(candidates) == 0 && len(source) <= tolerantScanMaxSource {
-		// The fallback for a quote taken from the rendered page: its characters
-		// exist in the markdown with syntax interleaved.
-		candidates = tolerantOccurrences(source, exact)
-	}
+	candidates := occurrences(source, exact)
 
 	switch len(candidates) {
 	case 0:
@@ -179,6 +174,94 @@ func ResolveQuote(source, quote, prefix, suffix string) (*Anchor, error) {
 		}
 	}
 	return nil, &AmbiguousQuoteError{Quote: exact, Matches: len(candidates)}
+}
+
+// occurrences finds every place the quote could be sitting: literally, or —
+// when it occurs nowhere literally — with markdown syntax interleaved between
+// its characters, the shape a quote taken from the rendered page has.
+//
+// Shared by ResolveQuote and Reanchor so that the set of places a quote can be
+// found is one definition. The two differ in what they do when that set has more
+// than one member, and nothing else; splitting the scan as well would let the
+// create path and the re-anchor path disagree about whether a quote is present
+// at all, which is the disagreement nobody would ever see.
+func occurrences(source, exact string) []span {
+	candidates := verbatimOccurrences(source, exact)
+	if len(candidates) == 0 && len(source) <= tolerantScanMaxSource {
+		candidates = tolerantOccurrences(source, exact)
+	}
+	return candidates
+}
+
+// Reanchor re-locates an anchor in a document that has been edited since the
+// anchor was taken, and reports whether the quoted text is still there.
+//
+// ok=false means orphaned: the words the comment was written about are no longer
+// in the document. The caller nulls the stored offsets, which is how this schema
+// spells "orphaned" — see chk_document_comments_anchor_position. It does NOT mean
+// "leave the old offsets alone": offsets that survive an edit they no longer
+// describe are the defect this exists to remove.
+//
+// ## Why this is not ResolveQuote
+//
+// ResolveQuote refuses a quote it finds in several places and the context does
+// not settle, and that refusal is right where it lives: a caller creating a
+// comment can be asked for more context, and silently picking one of eleven
+// occurrences of "the API" is a confidently wrong anchor with nothing to notice.
+//
+// Here there is no caller to ask — the edit has already happened — so the same
+// refusal would ORPHAN a comment whose text is still present, word for word, the
+// first time anybody edits an unrelated paragraph of a document where its quote
+// occurs twice. Orphaning live text is a worse answer than picking between two
+// copies of it.
+//
+// And here, unlike there, something is known that settles it: where the quote
+// used to be. An edit moves text by roughly the size of the edit, so the nearest
+// occurrence to the old position is the one this anchor meant. That is exactly
+// the tie-break the frontend applies (bestCandidate's hint in anchor.ts, fed by
+// anchorHintFraction), so a re-anchored offset and the highlight the reader sees
+// agree by construction rather than by luck.
+//
+// Context still wins over proximity — a quote whose neighbourhood survived is
+// placed by its neighbourhood, and distance only breaks a tie between equally
+// well-contextualised repeats. Same ordering as bestCandidate, same reason.
+func Reanchor(source string, prev Anchor) (*Anchor, bool) {
+	exact := strings.TrimSpace(prev.Exact)
+	if exact == "" || len(exact) > maxQuoteBytes {
+		return nil, false
+	}
+
+	candidates := occurrences(source, exact)
+	if len(candidates) == 0 {
+		return nil, false
+	}
+	return anchorAt(source, exact, bestByContextThenHint(source, candidates, prev.Prefix, prev.Suffix, prev.Start)), true
+}
+
+// bestByContextThenHint picks the candidate whose neighbourhood agrees most with
+// the remembered one, breaking a tie by whichever sits nearest the position the
+// anchor used to hold.
+//
+// A single lexicographic pass on (score desc, distance asc), which is
+// bestCandidate in anchor.ts line for line. Unlike bestByContext it always
+// returns a winner: its caller has a hint, and "no winner" is not one of the
+// answers re-anchoring is allowed to give.
+func bestByContextThenHint(source string, candidates []span, prefix, suffix string, hint int) span {
+	best := candidates[0]
+	bestScore := -1
+	bestDistance := 0
+
+	for _, c := range candidates {
+		score := contextScore(source, c, prefix, suffix)
+		distance := c.start - hint
+		if distance < 0 {
+			distance = -distance
+		}
+		if score > bestScore || (score == bestScore && distance < bestDistance) {
+			best, bestScore, bestDistance = c, score, distance
+		}
+	}
+	return best
 }
 
 // span is a half-open byte range in the source.
