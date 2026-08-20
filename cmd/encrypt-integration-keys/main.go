@@ -54,10 +54,8 @@ func main() {
 }
 
 func run(dryRun bool, projectFilter string) error {
-	state, _ := encryption.Status()
-	if state != encryption.KeyOK {
-		return fmt.Errorf("%s is %s — refusing to run: without a usable key this tool "+
-			"would rewrite every row to itself and report success", encryption.EnvKey, state)
+	if err := requireKey(); err != nil {
+		return err
 	}
 
 	db, err := sql.Open("postgres", buildDSN())
@@ -69,6 +67,25 @@ func run(dryRun bool, projectFilter string) error {
 		return fmt.Errorf("ping db: %w", pingErr)
 	}
 
+	return backfill(db, dryRun, projectFilter)
+}
+
+// requireKey refuses the run when encryption is not actually available. Without
+// this the tool would re-encrypt every row to itself — Encrypt degrades to a
+// passthrough — and report a successful backfill.
+func requireKey() error {
+	state, _ := encryption.Status()
+	if state != encryption.KeyOK {
+		return fmt.Errorf("%s is %s — refusing to run: without a usable key this tool "+
+			"would rewrite every row to itself and report success", encryption.EnvKey, state)
+	}
+	return nil
+}
+
+// backfill is separated from run so it can be driven against a mock database:
+// the round-trip check and the abort paths are the parts worth testing, and
+// they are the parts hardest to reach through a real connection.
+func backfill(db *sql.DB, dryRun bool, projectFilter string) error {
 	rows, err := load(db, projectFilter)
 	if err != nil {
 		return err
