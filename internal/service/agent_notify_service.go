@@ -35,6 +35,19 @@ type AgentNotification struct {
 	TaskID      uuid.UUID      `json:"task_id,omitempty"`    // Kept for Redis/SSE consumers
 	ProjectID   uuid.UUID      `json:"project_id,omitempty"` // Kept for Redis/SSE consumers
 	Payload     map[string]any `json:"payload,omitempty"`    // Deprecated — kept for backwards compat
+
+	// OnPersistErr, when set, is called with the error from the durable
+	// agent_events write — and only when that write actually failed.
+	//
+	// It exists because dispatch runs in its own goroutine and every failure
+	// on this path is handled by logging it, which means a caller who wants to
+	// record what became of a notification has no way to learn it did not
+	// survive. json:"-" keeps it out of the payload; a func field would
+	// otherwise make the whole event unmarshalable.
+	//
+	// Called synchronously inside dispatch, so implementations must be quick
+	// and must not call back into anything that dispatches.
+	OnPersistErr func(error) `json:"-"`
 }
 
 // criticalSSEEventTypes receive a 7-day retention window in agent_events instead of the default 24h.
@@ -144,6 +157,9 @@ func (s *agentNotifyService) dispatch(agentID uuid.UUID, event AgentNotification
 		if persistErr := s.agentEventsRepo.Create(bgCtx, agentEvent); persistErr != nil {
 			// Non-fatal: log and continue. Redis pub/sub still delivers live.
 			log.Printf("[agent-notify] failed to persist event %s for agent %s: %v", event.EventID, agentID, persistErr)
+			if event.OnPersistErr != nil {
+				event.OnPersistErr(persistErr)
+			}
 		}
 	}
 

@@ -109,6 +109,7 @@ func main() {
 	memoryEdgesRepo := postgres.NewMemoryEdgesRepo(db)
 	memoryChunkRepo := postgres.NewMemoryChunkRepo(db)
 	commentMentionRepo := postgres.NewCommentMentionRepo(db)
+	commentDeliveryRepo := postgres.NewCommentDeliveryOutcomeRepo(db)
 	documentCommentMentionRepo := postgres.NewDocumentCommentMentionRepo(db)
 
 	// 5. Create auth service.
@@ -331,6 +332,7 @@ func main() {
 		service.WithCommentAgentService(agentService),
 		service.WithCommentUserRepo(userRepo),
 		service.WithCommentMentionRepo(commentMentionRepo),
+		service.WithCommentDeliveryOutcomeRepo(commentDeliveryRepo),
 		service.WithCommentWSPublisher(wsPublisher),
 		service.WithCommentStatusRepo(taskStatusRepo),
 		service.WithCommentProjectRepo(projectRepo),

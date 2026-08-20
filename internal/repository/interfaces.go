@@ -571,6 +571,20 @@ type CommentMentionRepository interface {
 	CountUnseen(ctx context.Context, mentionedID uuid.UUID, mentionedKind string) (int64, error)
 }
 
+// CommentDeliveryOutcomeRepository manages persistence for
+// comment_delivery_outcomes rows — one verdict per @-addressed handle on a
+// comment, including handles that resolved to nobody.
+//
+// Separate from CommentMentionRepository on purpose. That one is the Mention
+// feed and is keyed on a resolved recipient id; this one is the delivery
+// record and is keyed on the handle as written, which is the only key that
+// survives a handle resolving to nothing.
+type CommentDeliveryOutcomeRepository interface {
+	InsertBatch(ctx context.Context, rows []domain.CommentDeliveryOutcome) error
+	MarkFailed(ctx context.Context, commentID uuid.UUID, slug, reason string) error
+	ListByCommentIDs(ctx context.Context, commentIDs []uuid.UUID) (map[uuid.UUID][]domain.CommentDeliveryOutcome, error)
+}
+
 // DocumentCommentMentionRepository manages persistence for
 // document_comment_mentions rows.
 //
