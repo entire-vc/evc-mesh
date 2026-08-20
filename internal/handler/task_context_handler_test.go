@@ -124,6 +124,17 @@ func serveTaskContext(t *testing.T, h *TaskContextHandler, e *echo.Echo, taskID 
 // applied to two of three read paths, and nothing noticed the third. This test
 // fails when a handler learns to read artifacts without also redacting them, so
 // a fourth path cannot reopen the hole silently.
+//
+// Narrower than it looks: os.ReadDir(".") only ever sees this package, and the
+// match is file-granularity (a second, unredacted read path added next to an
+// already-covered call site in the same file passes for free). The primary
+// defense against both gaps is now domain.Artifact.MarshalJSON — it redacts at
+// serialization time, so no handler in any package can forget to call
+// anything. See internal/domain/artifact_test.go for the tests that exercise
+// that structurally, including a leak-through-nesting and a leak-in-a-slice
+// case this scan cannot see at all. This test stays as a second, independent
+// layer over the explicit stripSensitiveMetadata call sites that still exist
+// here for defense-in-depth.
 func TestArtifactReadPathsAllRedact(t *testing.T) {
 	// Non-test sources only: this file mentions both strings itself, and matching
 	// its own text would make the check pass for the wrong reason.

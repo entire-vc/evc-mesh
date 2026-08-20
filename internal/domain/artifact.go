@@ -45,3 +45,68 @@ type Artifact struct {
 	UploadedByType UploaderType    `json:"uploaded_by_type" db:"uploaded_by_type"`
 	CreatedAt      time.Time       `json:"created_at" db:"created_at"`
 }
+
+// sensitiveArtifactMetadataKeys lists Metadata keys that must never reach an
+// API response. These are internal service credentials the platform needs in
+// order to act on an artifact's behalf (e.g. push it to TeamRelay) but that
+// grant access to whoever holds them, so a caller with read access to the
+// artifact must never see them. This is the single place a new one is added —
+// MarshalJSON below reads from it, so every response shape picks it up
+// automatically.
+var sensitiveArtifactMetadataKeys = []string{
+	"tr_agent_key",
+}
+
+// RedactedMetadata returns a.Metadata with every key in
+// sensitiveArtifactMetadataKeys removed. MarshalJSON calls this automatically,
+// so callers normally never need to call it directly; it is exported for the
+// rare case that needs a redacted copy without a full JSON round-trip.
+//
+// Malformed/non-object Metadata is returned unchanged rather than dropped or
+// panicked on — metadata we cannot parse is not a credential-leak vector we
+// know how to redact, and silently discarding legitimate data on a parse
+// hiccup would be its own bug.
+func (a Artifact) RedactedMetadata() json.RawMessage {
+	if len(a.Metadata) == 0 {
+		return a.Metadata
+	}
+	var m map[string]any
+	if err := json.Unmarshal(a.Metadata, &m); err != nil {
+		return a.Metadata
+	}
+	changed := false
+	for _, k := range sensitiveArtifactMetadataKeys {
+		if _, ok := m[k]; ok {
+			delete(m, k)
+			changed = true
+		}
+	}
+	if !changed {
+		return a.Metadata
+	}
+	b, err := json.Marshal(m)
+	if err != nil {
+		return a.Metadata
+	}
+	return b
+}
+
+// MarshalJSON redacts sensitive metadata keys before serialising an Artifact.
+//
+// This is the structural fix for a defect class, not a single leak: a handler
+// that reads an artifact from the service layer and forgets to call a
+// redaction helper before writing the HTTP response used to serve
+// tr_agent_key in the clear (see GET /tasks/:id/context, which did exactly
+// this for months). Putting the redaction inside Artifact's own JSON encoding
+// means it runs for every response shape — a lone artifact, a slice of them,
+// one nested inside a larger struct — regardless of which package or handler
+// produced it, and regardless of whether that code even knows this type
+// carries a secret. Forgetting to redact stops being possible to forget.
+//
+// Value receiver so it satisfies json.Marshaler for both Artifact and
+// *Artifact (a pointer's method set includes its value-receiver methods).
+func (a Artifact) MarshalJSON() ([]byte, error) {
+	a.Metadata = a.RedactedMetadata()
+	type artifactAlias Artifact
+	return json.Marshal(artifactAlias(a))
+}
