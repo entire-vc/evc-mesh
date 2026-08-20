@@ -157,6 +157,7 @@ env:
     internal/handler/memory_handler.go
     internal/domain/memory.go
     internal/service/memory_service.go
+    internal/service/memory_sanitizer.go
     internal/repository/postgres/memory_repo.go
     internal/repository/postgres/memory_edges_repo.go
     internal/repository/postgres/memory_chunk_rank.go
