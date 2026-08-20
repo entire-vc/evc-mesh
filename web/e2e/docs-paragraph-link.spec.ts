@@ -133,25 +133,44 @@ test.describe.serial("Docs — paragraph link survives edits (docs-paragraph-lin
   }
 
   test.beforeAll(async ({ browser }) => {
-    const context = await browser.newContext({
-      storageState: "e2e/.auth/user.json",
-    });
+    const context = await browser.newContext();
     await context.grantPermissions(["clipboard-read", "clipboard-write"]);
-    page = await context.newPage();
-    // Shares cookies (incl. the httpOnly refresh cookie) with `context` — the
-    // app's own api() helper trades that cookie for a Bearer access token the
-    // same way, via POST /api/v1/auth/refresh (internal/handler/auth_handler.go).
-    api = context.request;
 
-    const refreshRes = await api.post("/api/v1/auth/refresh");
+    // Log in through the endpoint the app itself uses, exactly as
+    // task-board.spec.ts does. This suite deliberately has no storageState:
+    // refresh tokens are single-use (internal/auth/service.go,
+    // ErrTokenReused), so a replayed session file kills its own session on
+    // the second test — see the header comment in playwright.config.ts.
+    //
+    // This block used to open the context with `storageState:
+    // "e2e/.auth/user.json"` and trade the refresh cookie for a Bearer. No
+    // step produces that file: global-setup.ts only validates env vars and
+    // does no browser work. The spec therefore could not run at all, which
+    // went unnoticed because it also skipped itself unconditionally.
+    const loginRes = await context.request.post("/api/v1/auth/login", {
+      data: {
+        email: process.env.E2E_USER_EMAIL,
+        password: process.env.E2E_USER_PASSWORD,
+      },
+    });
     expect(
-      refreshRes.ok(),
-      `POST /api/v1/auth/refresh failed: ${refreshRes.status()} ${await refreshRes.text()}`,
-    ).toBeTruthy();
-    const refreshBody = (await refreshRes.json()) as {
-      tokens: { access_token: string };
+      loginRes.status(),
+      `login as ${process.env.E2E_USER_EMAIL} must succeed — E2E credentials are wrong or the user is disabled`,
+    ).toBe(200);
+    const loginBody = (await loginRes.json()) as {
+      tokens?: { access_token?: string };
     };
-    accessToken = refreshBody.tokens.access_token;
+    expect(
+      loginBody.tokens?.access_token,
+      "login must return an access token",
+    ).toBeTruthy();
+    accessToken = loginBody.tokens!.access_token!;
+
+    page = await context.newPage();
+    // The page authenticates itself from the httpOnly refresh cookie the
+    // login left in this context's jar, the same trade web/src/lib/api.ts
+    // performs on load.
+    api = context.request;
 
     const wsRes = await api.get("/api/v1/workspaces", { headers: authHeaders() });
     expect(wsRes.ok(), `GET /api/v1/workspaces failed: ${wsRes.status()}`).toBeTruthy();
