@@ -558,6 +558,33 @@ export function DocsPage() {
     if (comments.draft) setRailOpen(true);
   }, [comments.draft]);
 
+  // Arriving from a mention: `?comment=<id>` names the comment somebody was
+  // tagged in, so open the rail and focus its thread. The id may be a reply, so
+  // it is matched against roots and replies both — focusing wants the root.
+  //
+  // A query parameter rather than the hash, which paragraph anchors (D6) own:
+  // the two would otherwise overwrite each other when a mention lands on a
+  // paragraph that is also linked.
+  //
+  // Runs once the threads are loaded and only while the id is unchanged, so
+  // clicking a different thread afterwards is not undone on the next render.
+  const focusedCommentId = useMemo(
+    () => new URLSearchParams(location.search).get("comment"),
+    [location.search],
+  );
+  const focusThread = comments.focusThread;
+  useEffect(() => {
+    if (!focusedCommentId || comments.isLoading) return;
+    const thread = comments.threads.find(
+      (t) =>
+        t.root.id === focusedCommentId ||
+        t.replies.some((r) => r.id === focusedCommentId),
+    );
+    if (!thread) return;
+    setRailOpen(true);
+    focusThread(thread.root.id);
+  }, [focusedCommentId, comments.threads, comments.isLoading, focusThread]);
+
   const toggleRail = useCallback(() => {
     setRailOpen((prev) => {
       saveDocCommentsRailOpen(!prev);

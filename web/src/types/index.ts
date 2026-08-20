@@ -529,6 +529,31 @@ export interface Mention {
   author_name: string;
 }
 
+/**
+ * An @-mention inside a document comment — the shape of GET /me/document-mentions.
+ *
+ * A sibling of Mention rather than a widened version of it: this one names a
+ * document and no task, and folding the two into one struct with a nullable
+ * `task_id` would push "which of the two am I holding" onto every reader.
+ * The union that lets a screen show both is MentionInboxItem
+ * (`@/lib/mentions/inbox`).
+ */
+export interface DocumentMention {
+  comment_id: string;
+  mentioned_id: string;
+  mentioned_kind: string;
+  mentioned_slug: string;
+  extracted_at: string;
+  seen_at: string | null;
+  document_id: string;
+  document_title: string;
+  document_slug: string;
+  project_id: string;
+  comment_body: string;
+  author_id: string;
+  author_name: string;
+}
+
 export interface UnseenCountResponse {
   count: number;
 }
