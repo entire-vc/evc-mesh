@@ -41,10 +41,6 @@ async function withF1Fixture(
 
   await fn();
 
-  // TEMPORARY NEGATIVE CONTROL — reverted before merge. Proves these asserts
-  // execute and can fail the job, rather than passing because nothing ran.
-  await page.evaluate(() => console.error("F1 NEGATIVE CONTROL 662a07d7"));
-
   // Unconditional, like task-board.spec.ts. These used to sit behind
   // PW_FAIL_ON_CONSOLE_ERROR / PW_FAIL_ON_5XX, which CI never set — an assert
   // guarded by an opt-in flag is an assert that runs nowhere. Setting the
