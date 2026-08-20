@@ -246,7 +246,15 @@ export interface Task {
   project_id: string;
   status_id: string;
   title: string;
-  description: string;
+  /**
+   * Optional because list responses can be asked to omit it. The board fetches
+   * tasks with include_description=false — descriptions were 77% of that payload
+   * and no card renders one. `undefined` here means "not sent", not "empty";
+   * read has_description for the flag, and GET /tasks/:id for the text.
+   */
+  description?: string;
+  /** Always sent on list responses. True when the task has non-blank description text. */
+  has_description?: boolean;
   assignee_id: string | null;
   assignee_type: AssigneeType;
   assignee_name?: string | null;

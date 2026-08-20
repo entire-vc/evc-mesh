@@ -395,11 +395,52 @@ func (h *TaskHandler) SearchGlobal(c echo.Context) error {
 		return handleError(c, err)
 	}
 
-	for i := range page.Items {
-		page.Items[i].URL = computeTaskURL(c.Request(), page.Items[i].ID)
-	}
+	decorateTaskList(c, page.Items)
 
 	return c.JSON(http.StatusOK, page)
+}
+
+// decorateTaskList fills in the per-response fields of a list of tasks: the
+// computed URL, the has_description flag, and — if the caller asked for it — the
+// removal of the description bodies themselves.
+//
+// Both list-shaped endpoints go through here on purpose. has_description must
+// mean the same thing everywhere it appears, and the version of this change that
+// touched only one of them left the other reporting has_description:false for
+// every task that had one.
+func decorateTaskList(c echo.Context, items []domain.Task) {
+	includeDesc := includeDescriptionRequested(c)
+	for i := range items {
+		items[i].URL = computeTaskURL(c.Request(), items[i].ID)
+		// Computed BEFORE any blanking below, so has_description describes the
+		// task and not the projection the caller happened to ask for.
+		items[i].HasDescription = strings.TrimSpace(items[i].Description) != ""
+		if !includeDesc {
+			items[i].Description = ""
+		}
+	}
+}
+
+// includeDescriptionRequested reports whether this list response should carry the
+// full task descriptions. Default is TRUE — the caller has to ask to lose them.
+//
+// The default is deliberate and the opposite of what the perf ticket proposed.
+// Descriptions are 77% of the board's payload and the board renders none of it,
+// so "just drop it from the list" looks free. It is not: the fleet dispatcher's
+// dependency-park gate (_task_prose_gated in mesh-dispatcher.py) scans the
+// description of every task in a todo feed for phrases like "после merge" /
+// "blocked on #". Serve that list without descriptions and the gate does not
+// error — it silently matches nothing, and tasks that should park in backlog get
+// auto-triaged into Pavel's queue instead. Opt-in keeps the byte win where it is
+// worth having (one caller, the board) and keeps every reader that has been
+// relying on this field for months working unchanged.
+func includeDescriptionRequested(c echo.Context) bool {
+	switch strings.ToLower(strings.TrimSpace(c.QueryParam("include_description"))) {
+	case "false", "0", "no":
+		return false
+	default:
+		return true
+	}
 }
 
 // Update handles PATCH /tasks/:task_id
@@ -637,9 +678,7 @@ func (h *TaskHandler) List(c echo.Context) error {
 		return handleError(c, err)
 	}
 
-	for i := range page.Items {
-		page.Items[i].URL = computeTaskURL(c.Request(), page.Items[i].ID)
-	}
+	decorateTaskList(c, page.Items)
 
 	return c.JSON(http.StatusOK, page)
 }

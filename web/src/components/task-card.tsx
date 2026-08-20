@@ -40,7 +40,10 @@ export const TaskCard = forwardRef<HTMLDivElement, TaskCardProps>(
     const borderColor =
       priorityBorderColors[task.priority] ?? "border-l-transparent";
 
-    const hasDescription = Boolean(task.description && task.description.trim().length > 0);
+    // has_description comes from the server; the local check is the fallback for
+    // a cached task object from before the field existed.
+    const hasDescription =
+      task.has_description ?? Boolean(task.description && task.description.trim().length > 0);
     const hasVcsLinks = (task.vcs_link_count ?? 0) > 0;
     const hasArtifacts = (task.artifact_count ?? 0) > 0;
     const hasSubtasks = (task.subtask_count ?? 0) > 0;

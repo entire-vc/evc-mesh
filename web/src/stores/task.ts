@@ -58,14 +58,34 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     try {
       const data = await api<PaginatedResponse<Task>>(
         `/api/v1/projects/${projectId}/tasks`,
-        { params: { page_size: "200", ...params } },
+        // include_description=false: descriptions were 703 KB of the 917 KB this
+        // call returned for a 200-task board, and nothing on a card renders them.
+        // Callers that need the text fetch the task itself. An older API that does
+        // not know the param ignores it and returns the full payload, so a
+        // frontend deploy that lands before the backend one is merely slow.
+        { params: { page_size: "200", include_description: "false", ...params } },
       );
       const items = data.items ?? [];
+      const prevById = get().tasksById;
       set({
         tasks: items,
         tasksById: {
-          ...get().tasksById,
-          ...Object.fromEntries(items.map((task) => [task.id, task])),
+          ...prevById,
+          ...Object.fromEntries(
+            items.map((task) => {
+              // Merge rather than overwrite: these items carry no description, and
+              // the slide-over renders currentTask.description from this cache
+              // while its own fetch is still in flight. A blind overwrite blanks
+              // the text of an already-opened task for that window.
+              const known = prevById[task.id]?.description;
+              return [
+                task.id,
+                task.description === undefined && known !== undefined
+                  ? { ...task, description: known }
+                  : task,
+              ] as const;
+            }),
+          ),
         },
         total: data.total_count ?? data.total ?? 0,
         page: data.page,
