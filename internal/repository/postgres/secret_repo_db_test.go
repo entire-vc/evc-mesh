@@ -15,7 +15,7 @@ import (
 )
 
 // These tests run against a real Postgres because the guarantee under test
-// is a database trigger (migration 20260820110) — the whole point is that
+// is a database trigger (migration 20260820111) — the whole point is that
 // it holds for writers that never go through this repository, and nothing
 // in the Go test suite alone can demonstrate that. Mirrors the shape of
 // project_integration_encryption_db_test.go for the same reason.

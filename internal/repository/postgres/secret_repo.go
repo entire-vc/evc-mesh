@@ -140,7 +140,7 @@ func scopeRefColumns(scope domain.SecretScope, projectID, agentID *uuid.UUID) (p
 }
 
 // Create encrypts input.Value and inserts a new current row. The DB trigger
-// (migration 20260820110) is the backstop that makes "plaintext never
+// (migration 20260820111) is the backstop that makes "plaintext never
 // reaches the table" true even if this method's own Encrypt call were ever
 // bypassed or removed by a future edit.
 func (r *SecretRepo) Create(ctx context.Context, input domain.CreateSecretInput) (domain.Secret, error) {
