@@ -82,3 +82,38 @@ func TestSpawnAuth_EmptyConfiguredTokenNeverMatchesEmptyHeader(t *testing.T) {
 	rec := runSpawnAuth(t, "")
 	assert.Equal(t, http.StatusUnauthorized, rec.Code)
 }
+
+func withSpawnTokenRequired(t *testing.T, value string) {
+	t.Helper()
+	old, hadOld := os.LookupEnv(EnvSpawnTokenRequired)
+	if value == "" {
+		_ = os.Unsetenv(EnvSpawnTokenRequired)
+	} else {
+		_ = os.Setenv(EnvSpawnTokenRequired, value)
+	}
+	t.Cleanup(func() {
+		if hadOld {
+			_ = os.Setenv(EnvSpawnTokenRequired, old)
+		} else {
+			_ = os.Unsetenv(EnvSpawnTokenRequired)
+		}
+	})
+}
+
+func TestCheckSpawnTokenConfigured_ConfiguredDoesNotExit(t *testing.T) {
+	// The configured branch just logs and returns — must not touch the
+	// EnvSpawnTokenRequired fatal path at all, configured or not.
+	withSpawnToken(t, "some-token")
+	withSpawnTokenRequired(t, "1")
+	assert.NotPanics(t, CheckSpawnTokenConfigured)
+}
+
+func TestCheckSpawnTokenConfigured_UnconfiguredAndNotRequiredWarnsOnly(t *testing.T) {
+	// Unconfigured + EnvSpawnTokenRequired unset must warn and return, not
+	// exit — this is the expected local-dev/test shape (materialization
+	// endpoint simply refuses every request per SpawnAuth's fail-closed
+	// behavior, nothing fatal about it).
+	withSpawnToken(t, "")
+	withSpawnTokenRequired(t, "")
+	assert.NotPanics(t, CheckSpawnTokenConfigured)
+}
