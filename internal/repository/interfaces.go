@@ -545,6 +545,45 @@ type DocumentCommentMentionRepository interface {
 	CountUnseen(ctx context.Context, mentionedID uuid.UUID, mentionedKind string) (int64, error)
 }
 
+// DocumentWatchRepository manages document subscriptions and the pending
+// change-notices that make coalescing possible.
+//
+// The two live behind one interface because they are one feature: a notice is
+// only ever created for a document somebody might be watching, and it is only
+// ever read in order to find out who.
+type DocumentWatchRepository interface {
+	// Subscribe records a subscription. An automatic source (author, commenter)
+	// must not resurrect a muted row — that is what makes unsubscribing stick —
+	// so `force` is set only by the explicit Watch button.
+	Subscribe(ctx context.Context, w domain.DocumentWatcher, force bool) error
+
+	// Unsubscribe mutes the caller's subscription, creating the tombstone row if
+	// none existed. Reports whether anything is now muted for this principal.
+	Unsubscribe(ctx context.Context, documentID, watcherID uuid.UUID, watcherKind string) error
+
+	// GetState answers "am I watching this, and how many others are".
+	GetState(ctx context.Context, documentID, watcherID uuid.UUID, watcherKind string) (*domain.DocumentWatchState, error)
+
+	// ListLiveWatchers returns the document's non-muted watchers.
+	ListLiveWatchers(ctx context.Context, documentID uuid.UUID) ([]domain.DocumentWatcher, error)
+
+	// RecordChange folds one edit into the open notice for (document, actor),
+	// opening one if there is none. This is the write that a hundred autosaves
+	// collapse into a hundred UPDATEs of a single row.
+	RecordChange(ctx context.Context, n domain.DocumentChangeNotice) error
+
+	// ClaimPendingNotices atomically takes ownership of the notices whose actor
+	// has been quiet since `quietBefore` and that nobody else has claimed.
+	//
+	// Atomic claim rather than select-then-update: two API replicas run this
+	// sweeper, and a non-atomic read would let both dispatch the same notice.
+	ClaimPendingNotices(ctx context.Context, quietBefore time.Time, limit int) ([]domain.DocumentChangeNotice, error)
+
+	// FinishNotice records the outcome of a dispatch: how many principals were
+	// told, and why nobody was if that is the answer.
+	FinishNotice(ctx context.Context, id uuid.UUID, recipients int, dispatchErr string) error
+}
+
 // RefreshToken represents a stored refresh token record.
 type RefreshToken struct {
 	ID        uuid.UUID  `db:"id"`

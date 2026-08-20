@@ -9,6 +9,7 @@ import (
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/repository"
+	"github.com/entire-vc/evc-mesh/pkg/actorctx"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 	"github.com/entire-vc/evc-mesh/pkg/mdoc"
 	"github.com/entire-vc/evc-mesh/pkg/pagination"
@@ -60,10 +61,22 @@ type documentCommentService struct {
 	agentNotifySvc AgentNotifyService
 	notifySvc      NotificationService
 	wsPublisher    WSPublisher
+
+	// watch subscribes commenters to the page they just joined the conversation
+	// on, and tells its other watchers. Optional for the same reason as the
+	// mention dependencies: commenting works without it.
+	watch DocumentWatchService
 }
 
 // DocumentCommentServiceOption configures optional collaborators on the service.
 type DocumentCommentServiceOption func(*documentCommentService)
+
+// WithDocumentCommentWatch wires document subscriptions into the comment path:
+// the commenter is auto-subscribed, and the document's watchers are told at
+// once — commenting is not coalesced, see DocumentWatchService.NotifyComment.
+func WithDocumentCommentWatch(w DocumentWatchService) DocumentCommentServiceOption {
+	return func(s *documentCommentService) { s.watch = w }
+}
 
 // WithDocumentCommentAgentService sets the agent lookup used to resolve @-slugs
 // to agents.
@@ -210,8 +223,48 @@ func (s *documentCommentService) Create(ctx context.Context, input CreateDocumen
 	}
 
 	s.deliverMentions(ctx, comment, doc, input.WorkspaceID, recipients)
+	s.deliverToWatchers(ctx, comment, doc, input.WorkspaceID, recipients)
 
 	return s.enriched(ctx, comment), nil
+}
+
+// deliverToWatchers subscribes the author to the page and tells everyone else
+// who follows it.
+//
+// Ordered after deliverMentions and given the same recipient list on purpose:
+// somebody who was @-mentioned in this comment AND watches the page has already
+// been told, by the more specific of the two routes. Sending the watch copy as
+// well would mean the reward for subscribing is being notified twice.
+func (s *documentCommentService) deliverToWatchers(
+	ctx context.Context,
+	comment *domain.DocumentComment,
+	doc *domain.Document,
+	workspaceID uuid.UUID,
+	mentioned []documentMentionRecipient,
+) {
+	if s.watch == nil {
+		return
+	}
+
+	// Joining a conversation is a subscription to it. Automatic, so it cannot
+	// overwrite an earlier unsubscribe — see DocumentWatchRepo.Subscribe.
+	s.watch.AutoSubscribe(ctx, doc.ID, comment.AuthorID, string(comment.AuthorType), domain.WatchSourceCommenter)
+
+	already := make(map[uuid.UUID]bool, len(mentioned))
+	for _, r := range mentioned {
+		already[r.id] = true
+	}
+
+	s.watch.NotifyComment(ctx, NotifyDocumentCommentInput{
+		Document:        doc,
+		WorkspaceID:     workspaceID,
+		CommentID:       comment.ID,
+		Body:            comment.Body,
+		ActorID:         comment.AuthorID,
+		ActorKind:       string(comment.AuthorType),
+		ActorName:       actorctx.NameFromContext(ctx),
+		AlreadyNotified: already,
+	})
 }
 
 // ListByDocument returns a page of the document's live comments.

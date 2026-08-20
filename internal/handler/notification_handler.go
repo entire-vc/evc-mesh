@@ -239,7 +239,19 @@ var dispatchableEvents = map[string]bool{
 	// migrations/20260820103_create_document_comment_mentions.sql: an event type
 	// that appears in no stored `events` array is dispatched perfectly and
 	// delivered to nobody.
-	"document.mentioned":     true,
+	"document.mentioned": true,
+	// The three document-subscription events. Delivery is gated twice: by these
+	// preference rows, and by an explicit per-document Watch, which is why the
+	// backfill in migrations/20260820105_create_document_watchers.sql can opt
+	// existing subscribers in without turning anything on for anyone who never
+	// presses the button.
+	//
+	// Three types rather than one so that a subscriber can keep conversations
+	// and switch off edits, or the reverse — the two arrive at completely
+	// different rates, which is the same fact that makes the edit path coalesce.
+	"document.changed":       true,
+	"document.commented":     true,
+	"document.deleted":       true,
 	"task.blocking_triage":   true,
 	"task.reviewer_assigned": true,
 	"task.ready_for_review":  true,

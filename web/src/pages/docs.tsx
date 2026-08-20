@@ -26,6 +26,7 @@ import {
   DocCommentToggle,
 } from "@/components/doc-comment-rail";
 import { DocEditor } from "@/components/doc-editor";
+import { DocWatchToggle } from "@/components/doc-watch-toggle";
 import { DocMeta } from "@/components/doc-meta";
 import { DocTree, moveTargets } from "@/components/doc-tree";
 import { ConfirmDialog } from "@/components/confirm-dialog";
@@ -798,6 +799,7 @@ export function DocsPage() {
                     open={railOpen}
                     onToggle={toggleRail}
                   />
+                  <DocWatchToggle documentId={openDoc.id} />
                   <SaveIndicator state={saveState} onRetry={() => void flushBody()} />
                   {editing ? (
                     <Button
