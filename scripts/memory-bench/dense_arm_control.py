@@ -237,12 +237,27 @@ def run(expect: str, top_k: int) -> int:
 
     client = MeshMemoryClient(question_id="dense-arm-control")
     try:
+        # `search_settle_ok` only on the "alive" path: `remember()` embeds
+        # asynchronously (task a2e00afd), so a store-then-immediately-search
+        # question like this one can race the embedding write and see gold
+        # missing for reasons that have nothing to do with this PR. Retrying
+        # the search a few times (never re-storing) closes that timing gap
+        # without weakening the check: a dense arm that never contributes
+        # still exhausts the budget and fails exactly as before. NOT applied
+        # on the "dead" path — that path WANTS gold missing, and settling
+        # would only slow down a check that has nothing to wait for.
+        settle_ok = (
+            (lambda results: GOLD_INDEX in retrieved_session_indices(results))
+            if expect == "alive"
+            else None
+        )
         results = client.ingest_and_search(
             sessions=SESSIONS,
             dates=DATES,
             format_session_text=format_session_text,
             query=QUERY,
             top_k=top_k,
+            search_settle_ok=settle_ok,
         )
     except BaseException as exc:  # noqa: BLE001 — reported, not swallowed
         # Same rule as the rest of the harness: could not measure => 2, never 1.

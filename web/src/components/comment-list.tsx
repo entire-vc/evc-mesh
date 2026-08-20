@@ -10,18 +10,28 @@ import {
 import { BookOpen, Bot, Edit2, Lock, Reply, Trash2, User } from "lucide-react";
 import { RelayDocPicker } from "@/components/RelayDocPicker";
 import { useProjectTrIntegration } from "@/hooks/useProjectTrIntegration";
-import { api, getMentionables } from "@/lib/api";
+import { api } from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { formatRelative } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { DocLinkMenu } from "@/components/doc-link-menu";
+import { useDocLinkPicker } from "@/hooks/use-doc-link-picker";
+import { MentionMenu } from "@/components/mention-menu";
+import { useMentionPicker } from "@/hooks/use-mention-picker";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { type MentionEntry } from "@/components/markdown-renderer";
 import { MarkdownWithRelay } from "@/components/MarkdownWithRelay";
 import { useRulesStore } from "@/stores/rules";
 import { useWorkspaceStore } from "@/stores/workspace";
-import type { ActorType, Comment, CreateCommentRequest, Mentionable, PaginatedResponse } from "@/types";
+import type {
+  ActorType,
+  Comment,
+  CommentDeliveryOutcome,
+  CreateCommentRequest,
+  PaginatedResponse,
+} from "@/types";
 
 interface CommentListProps {
   taskId: string;
@@ -46,6 +56,49 @@ function ActorLabel({ type, name }: { type: ActorType; name?: string }) {
       <ActorIcon type={type} />
       {displayName}
     </span>
+  );
+}
+
+/**
+ * The delivery record for one comment: which handles it addressed, and what
+ * became of each.
+ *
+ * Renders the API's own identifiers verbatim — `skipped`, `no_queue_path`,
+ * `recipient_offline` — rather than prose. That is deliberate on two counts.
+ * The values are a stable machine vocabulary shared with the REST payload and
+ * the database, so a reader who sees one here can grep for it. And visible
+ * product copy is gated on an explicit approval that this change does not
+ * carry, so inventing friendlier sentences here would ship unapproved voice.
+ *
+ * Nothing renders when a comment addressed nobody, which is most comments.
+ */
+function DeliveryRecord({ rows }: { rows?: CommentDeliveryOutcome[] }) {
+  if (!rows || rows.length === 0) return null;
+
+  return (
+    <div className="mt-1.5 flex flex-wrap items-center gap-1">
+      {rows.map((row) => (
+        <Badge
+          key={row.recipient_slug}
+          variant="outline"
+          className={cn(
+            "gap-1 font-mono text-[10px] font-normal",
+            row.outcome === "delivered" && "text-muted-foreground",
+            // Not-delivered is the state worth seeing across a room, since the
+            // whole defect being fixed is that it currently looks like success.
+            row.outcome === "skipped" && "text-yellow-600",
+            row.outcome === "failed" && "text-destructive",
+          )}
+          title={`@${row.recipient_slug} · ${row.outcome} · ${row.reason} · channel=${row.channel} · presence=${row.recipient_presence}`}
+        >
+          <span>@{row.recipient_slug}</span>
+          <span aria-hidden="true">·</span>
+          <span>{row.outcome}</span>
+          <span aria-hidden="true">·</span>
+          <span>{row.reason}</span>
+        </Badge>
+      ))}
+    </div>
   );
 }
 
@@ -191,6 +244,8 @@ function CommentItem({
             wsSlug={wsSlug}
           />
         )}
+
+        <DeliveryRecord rows={comment.delivery} />
       </div>
 
       {replies.length > 0 && (
@@ -231,14 +286,27 @@ export function CommentList({ taskId, projId }: CommentListProps) {
 
   const { enabled: hasTrIntegration } = useProjectTrIntegration(projId);
 
-  // @-mention autocomplete state
-  const [mentionQuery, setMentionQuery] = useState<string | null>(null);
-  const [mentionSuggestions, setMentionSuggestions] = useState<Mentionable[]>([]);
-  const [mentionIndex, setMentionIndex] = useState(0);
-  const [mentionStart, setMentionStart] = useState(-1);
-  const mentionDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // `[[` links a document from this project — the same affordance the task
+  // description has, deliberately identical in behaviour to the `@` menu right
+  // beside it.
+  const docLinks = useDocLinkPicker(projId, body, setBody, textareaRef);
+  // Team Relay appears as a scope only when the project is connected to one.
+  // A switcher with a single option is a control that cannot do anything.
+  const docLinkScopes = useMemo(
+    () =>
+      hasTrIntegration
+        ? ([{ id: "docs", label: "Docs" }, { id: "relay", label: "Team Relay" }] as const)
+        : ([{ id: "docs", label: "Docs" }] as const),
+    [hasTrIntegration],
+  );
 
+  // The `@` menu, now the shared one — the same hook and the same dropdown the
+  // document comment rail uses. It was implemented inline here and nowhere else,
+  // which is precisely the gap use-doc-link-picker.ts describes in its header;
+  // lifting it is what let document comments have it without a second copy.
   const { currentWorkspace } = useWorkspaceStore();
+  const mentions = useMentionPicker(currentWorkspace?.id, body, setBody, textareaRef);
+
   const { teamDirectory, fetchTeamDirectory } = useRulesStore();
 
   useEffect(() => {
@@ -258,70 +326,20 @@ export function CommentList({ taskId, projId }: CommentListProps) {
 
   const wsSlug = currentWorkspace?.slug;
 
-  const closeMention = () => {
-    setMentionQuery(null);
-    setMentionSuggestions([]);
-    setMentionIndex(0);
-  };
-
-  const insertMention = (m: Mentionable) => {
-    const pos = textareaRef.current?.selectionStart ?? body.length;
-    const before = body.slice(0, mentionStart);
-    const after = body.slice(pos);
-    const next = `${before}@${m.slug} ${after}`;
-    setBody(next);
-    closeMention();
-    requestAnimationFrame(() => {
-      if (textareaRef.current) {
-        const cursor = mentionStart + m.slug.length + 2;
-        textareaRef.current.selectionStart = cursor;
-        textareaRef.current.selectionEnd = cursor;
-        textareaRef.current.focus();
-      }
-    });
-  };
-
   const handleBodyChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const val = e.target.value;
     setBody(val);
     const cursorPos = e.target.selectionStart ?? val.length;
-    const textBefore = val.slice(0, cursorPos);
-    const atMatch = textBefore.match(/@([^\s@]*)$/);
-    if (atMatch) {
-      const query = atMatch[1] ?? "";
-      const atPos = cursorPos - query.length - 1;
-      setMentionStart(atPos);
-      setMentionQuery(query);
-      setMentionIndex(0);
-      if (mentionDebounce.current) clearTimeout(mentionDebounce.current);
-      mentionDebounce.current = setTimeout(() => {
-        if (!currentWorkspace) return;
-        getMentionables(currentWorkspace.id, query)
-          .then((items) => setMentionSuggestions(items ?? []))
-          .catch(() => setMentionSuggestions([]));
-      }, 150);
-    } else {
-      closeMention();
-    }
+    docLinks.onValueChange(val, cursorPos);
+    mentions.onValueChange(val, cursorPos);
   };
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (mentionQuery === null || mentionSuggestions.length === 0) return;
-    if (e.key === "ArrowDown") {
-      e.preventDefault();
-      setMentionIndex((i) => Math.min(i + 1, mentionSuggestions.length - 1));
-    } else if (e.key === "ArrowUp") {
-      e.preventDefault();
-      setMentionIndex((i) => Math.max(i - 1, 0));
-    } else if (e.key === "Enter" || e.key === "Tab") {
-      const m = mentionSuggestions[mentionIndex];
-      if (m) {
-        e.preventDefault();
-        insertMention(m);
-      }
-    } else if (e.key === "Escape") {
-      closeMention();
-    }
+    // The document menu gets the key first when it is the one that is open. The
+    // two cannot both be open: `@` and `[[` are different triggers, and each
+    // closes on any text that is not its own.
+    if (docLinks.onKeyDown(e)) return;
+    mentions.onKeyDown(e);
   };
 
   const [page, setPage] = useState(1);
@@ -530,31 +548,19 @@ export function CommentList({ taskId, projId }: CommentListProps) {
               </button>
             </div>
           )}
-          {mentionQuery !== null && mentionSuggestions.length > 0 && (
-            <div className="absolute bottom-full left-0 right-0 mb-1 z-50 max-h-48 overflow-y-auto rounded-md border border-border bg-background shadow-md">
-              {mentionSuggestions.map((m, i) => (
-                <button
-                  key={m.id}
-                  type="button"
-                  className={cn(
-                    "flex w-full items-center gap-2 px-3 py-2 text-sm hover:bg-muted",
-                    i === mentionIndex && "bg-muted",
-                  )}
-                  onMouseDown={(e) => {
-                    e.preventDefault();
-                    insertMention(m);
-                  }}
-                >
-                  {m.kind === "agent" ? (
-                    <Bot className="h-3.5 w-3.5 shrink-0 text-violet-500" />
-                  ) : (
-                    <User className="h-3.5 w-3.5 shrink-0 text-sky-500" />
-                  )}
-                  <span className="font-mono text-xs text-muted-foreground">@{m.slug}</span>
-                  <span className="truncate">{m.display_name}</span>
-                  <span className="ml-auto text-[10px] capitalize text-muted-foreground">{m.kind}</span>
-                </button>
-              ))}
+          <MentionMenu picker={mentions} />
+          {docLinks.trigger && (
+            <div className="absolute bottom-full left-0 z-50 mb-1">
+              <DocLinkMenu
+                suggestions={docLinks.suggestions}
+                activeIndex={docLinks.activeIndex}
+                onPick={docLinks.pick}
+                onHover={docLinks.setActiveIndex}
+                scope={docLinks.scope}
+                scopes={docLinkScopes}
+                onScope={docLinks.setScope}
+                loading={docLinks.loading}
+              />
             </div>
           )}
           <Textarea
@@ -562,7 +568,8 @@ export function CommentList({ taskId, projId }: CommentListProps) {
             value={body}
             onChange={handleBodyChange}
             onKeyDown={handleKeyDown}
-            placeholder="Write a comment… type @ to mention someone"
+            onBlur={docLinks.close}
+            placeholder="Write a comment… @ to mention, [[ to link a document"
             rows={3}
           />
           <div className="flex items-center justify-between">

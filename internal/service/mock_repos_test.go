@@ -1079,11 +1079,11 @@ func (m *MockCommentRepository) ListReplies(_ context.Context, parentCommentID u
 	return result, nil
 }
 
-func (m *MockCommentRepository) ListByAuthor(_ context.Context, _ uuid.UUID, _ repository.CommentViewFilter) ([]domain.CommentView, *time.Time, error) {
+func (m *MockCommentRepository) ListByAuthor(_ context.Context, _ uuid.UUID, _ repository.CommentViewFilter) ([]domain.CommentView, *domain.CommentCursor, error) {
 	return []domain.CommentView{}, nil, m.errToReturn
 }
 
-func (m *MockCommentRepository) ListRecentByWorkspace(_ context.Context, _ uuid.UUID, _ repository.CommentViewFilter) ([]domain.CommentView, *time.Time, error) {
+func (m *MockCommentRepository) ListRecentByWorkspace(_ context.Context, _ uuid.UUID, _ repository.CommentViewFilter) ([]domain.CommentView, *domain.CommentCursor, error) {
 	return []domain.CommentView{}, nil, m.errToReturn
 }
 
@@ -1299,6 +1299,20 @@ func (m *MockAgentRepository) GetByID(_ context.Context, id uuid.UUID) (*domain.
 	return a, nil
 }
 
+// SetAPIKeySHA256 mirrors the real repository's guard: the write only lands
+// while the bcrypt hash the caller verified against is still the current one.
+func (m *MockAgentRepository) SetAPIKeySHA256(_ context.Context, agentID uuid.UUID, digest, expectedBcryptHash string) error {
+	if m.errToReturn != nil {
+		return m.errToReturn
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if a, ok := m.items[agentID]; ok && a.APIKeyHash == expectedBcryptHash {
+		a.APIKeySHA256 = digest
+	}
+	return nil
+}
+
 func (m *MockAgentRepository) GetByAPIKeyPrefix(_ context.Context, workspaceID uuid.UUID, prefix string) (*domain.Agent, error) {
 	if m.errToReturn != nil {
 		return nil, m.errToReturn
@@ -1477,6 +1491,12 @@ func (m *MockAgentNotifyService) Calls() []AgentNotification {
 type MockNotificationService struct {
 	mu    sync.Mutex
 	calls []domain.NotificationEvent
+	// prefs is a real store, not a nil return: the watch path decides whether to
+	// provision a channel by reading what is already there, so a mock that always
+	// answers "no preferences" would make every such test pass for the wrong
+	// reason.
+	prefs   []domain.NotificationPreference
+	prefErr error
 }
 
 func NewMockNotificationService() *MockNotificationService {
@@ -1497,12 +1517,61 @@ func (m *MockNotificationService) Calls() []domain.NotificationEvent {
 	return out
 }
 
-func (m *MockNotificationService) GetPreferences(_ context.Context, _ uuid.UUID) ([]domain.NotificationPreference, error) {
-	return nil, nil
+func (m *MockNotificationService) GetPreferences(_ context.Context, userID uuid.UUID) ([]domain.NotificationPreference, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.prefErr != nil {
+		return nil, m.prefErr
+	}
+	var out []domain.NotificationPreference
+	for _, p := range m.prefs {
+		if p.UserID != nil && *p.UserID == userID {
+			out = append(out, p)
+		}
+	}
+	return out, nil
 }
 
+// UpsertPreferences matches the production repository's key — one row per
+// (workspace, actor, channel) — because a mock that appended instead would hide
+// exactly the duplicate-row bug that key exists to prevent.
 func (m *MockNotificationService) UpsertPreferences(_ context.Context, pref *domain.NotificationPreference) (*domain.NotificationPreference, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i := range m.prefs {
+		p := &m.prefs[i]
+		if p.WorkspaceID == pref.WorkspaceID && p.Channel == pref.Channel &&
+			p.UserID != nil && pref.UserID != nil && *p.UserID == *pref.UserID {
+			p.Events = pref.Events
+			p.IsEnabled = pref.IsEnabled
+			return p, nil
+		}
+	}
+	m.prefs = append(m.prefs, *pref)
 	return pref, nil
+}
+
+// SeedPreference installs a row the code under test will find.
+func (m *MockNotificationService) SeedPreference(p domain.NotificationPreference) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.prefs = append(m.prefs, p)
+}
+
+// Preferences returns a copy of the store.
+func (m *MockNotificationService) Preferences() []domain.NotificationPreference {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]domain.NotificationPreference, len(m.prefs))
+	copy(out, m.prefs)
+	return out
+}
+
+// FailPreferenceReads makes GetPreferences report err.
+func (m *MockNotificationService) FailPreferenceReads(err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.prefErr = err
 }
 
 func (m *MockNotificationService) DeletePreference(_ context.Context, _, _ uuid.UUID) error {
@@ -1533,6 +1602,10 @@ func (m *MockNotificationService) TelegramBotInfo(context.Context, uuid.UUID) (s
 	return "", false
 }
 
+func (m *MockNotificationService) TelegramReachable(context.Context, uuid.UUID) (reachable bool, reason string) {
+	return false, ""
+}
+
 // ---------------------------------------------------------------------------
 // MockAgentService — minimal stub for comment mention tests.
 // Only GetBySlug is implemented; all other methods panic.
@@ -1541,6 +1614,11 @@ func (m *MockNotificationService) TelegramBotInfo(context.Context, uuid.UUID) (s
 type MockAgentService struct {
 	mu     sync.RWMutex
 	bySlug map[string]*domain.Agent // key: workspaceID.String()+":"+slug
+	// errToReturn makes GetBySlug fail. "Nobody by that name" and "the lookup
+	// broke" are different answers — the first is a typo the author must be told
+	// about, the second is not — and telling them apart needs a mock that can
+	// produce both.
+	errToReturn error
 }
 
 func NewMockAgentService() *MockAgentService {
@@ -1556,6 +1634,9 @@ func (m *MockAgentService) AddAgent(workspaceID uuid.UUID, a *domain.Agent) {
 func (m *MockAgentService) GetBySlug(_ context.Context, workspaceID uuid.UUID, slug string) (*domain.Agent, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+	if m.errToReturn != nil {
+		return nil, m.errToReturn
+	}
 	a := m.bySlug[workspaceID.String()+":"+slug]
 	return a, nil
 }
@@ -2470,4 +2551,715 @@ func (m *MockWorkspaceMembershipReader) IsWorkspaceMember(_ context.Context, wor
 		return true, nil
 	}
 	return m.allowed[workspaceID.String()+"/"+userID.String()], nil
+}
+
+// ---------------------------------------------------------------------------
+// MockDocumentRepository
+// ---------------------------------------------------------------------------
+
+// MockDocumentRepository is an in-memory repository.DocumentRepository.
+//
+// workspaceOf maps a project to its tenant so that GetByIDInWorkspace can refuse
+// a document belonging to another one — the cross-tenant behaviour is the point
+// of several of the tests, so the mock has to be able to get it wrong.
+type MockDocumentRepository struct {
+	mu          sync.RWMutex
+	items       map[uuid.UUID]*domain.Document
+	workspaceOf map[uuid.UUID]uuid.UUID
+	searchText  map[uuid.UUID]string
+	// failSearchTextOnly makes SetSearchText fail while every other call
+	// succeeds — the shape needed to prove that a failed INDEX write does not
+	// fail the document write.
+	failSearchTextOnly bool
+	errToReturn        error
+	createErr          error
+	// beforeUpdate runs once, inside Update, before the version is compared. It is
+	// how a test lands a competing write in the gap between "the service read the
+	// document" and "the service wrote it" without needing real concurrency.
+	beforeUpdate func()
+}
+
+func NewMockDocumentRepository() *MockDocumentRepository {
+	return &MockDocumentRepository{
+		items:       make(map[uuid.UUID]*domain.Document),
+		workspaceOf: make(map[uuid.UUID]uuid.UUID),
+	}
+}
+
+// WithProjectWorkspace declares which tenant a project belongs to.
+func (m *MockDocumentRepository) WithProjectWorkspace(projectID, workspaceID uuid.UUID) *MockDocumentRepository {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.workspaceOf[projectID] = workspaceID
+	return m
+}
+
+// Seed inserts a document directly, bypassing Create.
+func (m *MockDocumentRepository) Seed(doc *domain.Document) *MockDocumentRepository {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	copied := *doc
+	m.items[doc.ID] = &copied
+	return m
+}
+
+func (m *MockDocumentRepository) Create(_ context.Context, doc *domain.Document) error {
+	if m.createErr != nil {
+		return m.createErr
+	}
+	if m.errToReturn != nil {
+		return m.errToReturn
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	copied := *doc
+	m.items[doc.ID] = &copied
+	return nil
+}
+
+func (m *MockDocumentRepository) GetByID(_ context.Context, id uuid.UUID) (*domain.Document, error) {
+	if m.errToReturn != nil {
+		return nil, m.errToReturn
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	doc, ok := m.items[id]
+	if !ok || doc.DeletedAt != nil {
+		return nil, nil
+	}
+	copied := *doc
+	return &copied, nil
+}
+
+func (m *MockDocumentRepository) GetByIDInWorkspace(_ context.Context, id, workspaceID uuid.UUID) (*domain.Document, error) {
+	if m.errToReturn != nil {
+		return nil, m.errToReturn
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	doc, ok := m.items[id]
+	if !ok || doc.DeletedAt != nil {
+		return nil, nil
+	}
+	if m.workspaceOf[doc.ProjectID] != workspaceID {
+		return nil, nil
+	}
+	copied := *doc
+	return &copied, nil
+}
+
+// Update mirrors the real conditional write: the version compare, the bump and
+// the field writes happen together under the lock, so a test can drive two
+// interleaved writers and see the same refusal production would give.
+//
+// beforeUpdate, when set, runs after the row has been read and before it is
+// compared — the seam a test uses to land a competing write in the middle of
+// this one.
+func (m *MockDocumentRepository) Update(_ context.Context, doc *domain.Document, expectedVersion *int, bumpVersion bool) (int, error) {
+	// The hook runs before errToReturn is read, so a test can arm a failure that
+	// applies to this write only and not to the read that preceded it.
+	if m.beforeUpdate != nil {
+		hook := m.beforeUpdate
+		m.beforeUpdate = nil
+		hook()
+	}
+	if m.errToReturn != nil {
+		return 0, m.errToReturn
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	existing, ok := m.items[doc.ID]
+	if !ok || existing.DeletedAt != nil {
+		return 0, apierror.NotFound("Document")
+	}
+	if expectedVersion != nil && existing.Version != *expectedVersion {
+		return existing.Version, repository.ErrDocumentVersionMismatch
+	}
+
+	newVersion := existing.Version
+	if bumpVersion {
+		newVersion++
+	}
+	copied := *doc
+	copied.Version = newVersion
+	m.items[doc.ID] = &copied
+	return newVersion, nil
+}
+
+// GetByPathInProject walks the slug path the same way the recursive CTE does,
+// including the part that matters: a soft-deleted document is not a step, at any
+// level.
+func (m *MockDocumentRepository) GetByPathInProject(_ context.Context, projectID uuid.UUID, segments []string) (*domain.Document, int, error) {
+	if m.errToReturn != nil {
+		return nil, 0, m.errToReturn
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	var parent *uuid.UUID
+	var current *domain.Document
+	for depth, slug := range segments {
+		current = nil
+		for _, d := range m.items {
+			if d.ProjectID != projectID || d.DeletedAt != nil || d.Slug != slug {
+				continue
+			}
+			if (parent == nil) != (d.ParentID == nil) {
+				continue
+			}
+			if parent != nil && *parent != *d.ParentID {
+				continue
+			}
+			current = d
+			break
+		}
+		if current == nil {
+			return nil, depth, nil
+		}
+		id := current.ID
+		parent = &id
+	}
+	copied := *current
+	return &copied, len(segments), nil
+}
+
+func (m *MockDocumentRepository) SoftDelete(_ context.Context, id uuid.UUID, at time.Time, by uuid.UUID, byType domain.ActorType) error {
+	if m.errToReturn != nil {
+		return m.errToReturn
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	doc, ok := m.items[id]
+	if !ok || doc.DeletedAt != nil {
+		return apierror.NotFound("Document")
+	}
+	// Mirrors the recursive statement in the real repository: the subtree goes
+	// with the document, or a child outlives its parent — and every row it touches
+	// records who made the change, the delete included.
+	stamp := at
+	editor, editorType := by, byType
+	var markSubtree func(parent uuid.UUID)
+	markSubtree = func(parent uuid.UUID) {
+		for _, d := range m.items {
+			if d.ParentID != nil && *d.ParentID == parent && d.DeletedAt == nil {
+				d.DeletedAt = &stamp
+				d.UpdatedBy = &editor
+				d.UpdatedByType = &editorType
+				markSubtree(d.ID)
+			}
+		}
+	}
+	doc.DeletedAt = &stamp
+	doc.UpdatedBy = &editor
+	doc.UpdatedByType = &editorType
+	markSubtree(id)
+	return nil
+}
+
+func (m *MockDocumentRepository) ListByProject(_ context.Context, projectID uuid.UUID, pg pagination.Params) (*pagination.Page[domain.Document], error) {
+	if m.errToReturn != nil {
+		return nil, m.errToReturn
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var items []domain.Document
+	for _, d := range m.items {
+		if d.ProjectID == projectID && d.DeletedAt == nil {
+			items = append(items, *d)
+		}
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].Position != items[j].Position {
+			return items[i].Position < items[j].Position
+		}
+		return items[i].CreatedAt.Before(items[j].CreatedAt)
+	})
+	return pagination.NewPage(items, len(items), pg), nil
+}
+
+func (m *MockDocumentRepository) HasAncestor(_ context.Context, docID, ancestorID uuid.UUID) (bool, error) {
+	if m.errToReturn != nil {
+		return false, m.errToReturn
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	seen := map[uuid.UUID]bool{}
+	cur, ok := m.items[docID]
+	for ok && cur != nil && cur.ParentID != nil && !seen[*cur.ParentID] {
+		if *cur.ParentID == ancestorID {
+			return true, nil
+		}
+		seen[*cur.ParentID] = true
+		cur, ok = m.items[*cur.ParentID]
+	}
+	return false, nil
+}
+
+// ---------------------------------------------------------------------------
+// MockDocumentAttachmentRepository
+// ---------------------------------------------------------------------------
+
+// MockDocumentAttachmentRepository is an in-memory
+// repository.DocumentAttachmentRepository.
+//
+// documentOf maps an attachment's document to its tenant, the same way
+// MockDocumentRepository's workspaceOf maps a project to one: refusing another
+// tenant's attachment is the behaviour several tests are about, so the mock has
+// to be able to get it wrong.
+type MockDocumentAttachmentRepository struct {
+	mu          sync.RWMutex
+	items       map[uuid.UUID]*domain.DocumentAttachment
+	workspaceOf map[uuid.UUID]uuid.UUID
+	errToReturn error
+	createErr   error
+}
+
+func NewMockDocumentAttachmentRepository() *MockDocumentAttachmentRepository {
+	return &MockDocumentAttachmentRepository{
+		items:       make(map[uuid.UUID]*domain.DocumentAttachment),
+		workspaceOf: make(map[uuid.UUID]uuid.UUID),
+	}
+}
+
+// WithDocumentWorkspace declares which tenant a document belongs to.
+func (m *MockDocumentAttachmentRepository) WithDocumentWorkspace(documentID, workspaceID uuid.UUID) *MockDocumentAttachmentRepository {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.workspaceOf[documentID] = workspaceID
+	return m
+}
+
+func (m *MockDocumentAttachmentRepository) Create(_ context.Context, att *domain.DocumentAttachment) error {
+	if m.createErr != nil {
+		return m.createErr
+	}
+	if m.errToReturn != nil {
+		return m.errToReturn
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	copied := *att
+	m.items[att.ID] = &copied
+	return nil
+}
+
+func (m *MockDocumentAttachmentRepository) GetByIDInWorkspace(_ context.Context, id, workspaceID uuid.UUID) (*domain.DocumentAttachment, error) {
+	if m.errToReturn != nil {
+		return nil, m.errToReturn
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	att, ok := m.items[id]
+	if !ok || att.DeletedAt != nil {
+		return nil, nil
+	}
+	if m.workspaceOf[att.DocumentID] != workspaceID {
+		return nil, nil
+	}
+	copied := *att
+	return &copied, nil
+}
+
+func (m *MockDocumentAttachmentRepository) ListByDocument(_ context.Context, documentID uuid.UUID, pg pagination.Params) (*pagination.Page[domain.DocumentAttachment], error) {
+	if m.errToReturn != nil {
+		return nil, m.errToReturn
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var items []domain.DocumentAttachment
+	for _, a := range m.items {
+		if a.DocumentID == documentID && a.DeletedAt == nil {
+			items = append(items, *a)
+		}
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if !items[i].CreatedAt.Equal(items[j].CreatedAt) {
+			return items[i].CreatedAt.Before(items[j].CreatedAt)
+		}
+		return items[i].ID.String() < items[j].ID.String()
+	})
+	return pagination.NewPage(items, len(items), pg), nil
+}
+
+func (m *MockDocumentAttachmentRepository) SoftDelete(_ context.Context, id uuid.UUID, at time.Time) error {
+	if m.errToReturn != nil {
+		return m.errToReturn
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	att, ok := m.items[id]
+	if !ok || att.DeletedAt != nil {
+		return apierror.NotFound("Attachment")
+	}
+	stamp := at
+	att.DeletedAt = &stamp
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// MockDocumentCommentRepository
+// ---------------------------------------------------------------------------
+
+// MockDocumentCommentRepository is an in-memory
+// repository.DocumentCommentRepository.
+//
+// documentWorkspace maps a document to its tenant so that GetByIDInWorkspace can
+// refuse a comment on another one — the cross-tenant behaviour is the point of
+// several of the tests, so the mock has to be able to get it wrong.
+type MockDocumentCommentRepository struct {
+	mu                sync.RWMutex
+	items             map[uuid.UUID]*domain.DocumentComment
+	documentWorkspace map[uuid.UUID]uuid.UUID
+	errToReturn       error
+	createErr         error
+	anchorListErr     error
+	anchorWriteErr    error
+	anchorWrites      int
+}
+
+func NewMockDocumentCommentRepository() *MockDocumentCommentRepository {
+	return &MockDocumentCommentRepository{
+		items:             make(map[uuid.UUID]*domain.DocumentComment),
+		documentWorkspace: make(map[uuid.UUID]uuid.UUID),
+	}
+}
+
+// WithDocumentWorkspace declares which tenant a document belongs to.
+func (m *MockDocumentCommentRepository) WithDocumentWorkspace(documentID, workspaceID uuid.UUID) *MockDocumentCommentRepository {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.documentWorkspace[documentID] = workspaceID
+	return m
+}
+
+// FailWith makes every call return err.
+func (m *MockDocumentCommentRepository) FailWith(err error) *MockDocumentCommentRepository {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.errToReturn = err
+	return m
+}
+
+// FailCreateWith makes only Create return err, so a test can prove the service
+// surfaces a write failure without also breaking the reads that precede it.
+func (m *MockDocumentCommentRepository) FailCreateWith(err error) *MockDocumentCommentRepository {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.createErr = err
+	return m
+}
+
+// Count is how many comments were actually written, so a test asserting that a
+// refused request stored nothing can check the table rather than infer it from
+// the error it got back.
+func (m *MockDocumentCommentRepository) Count() int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return len(m.items)
+}
+
+// copyDocumentComment is a DEEP copy: the anchor is a pointer, and a shallow
+// copy hands the caller the very struct the mock will later mutate. That aliasing
+// makes "did this write change the anchor?" unanswerable — a value read before
+// the write silently becomes the value after it — which is exactly the question
+// the re-anchoring tests ask. The real repository scans fresh rows and cannot
+// alias; a mock that can is a mock that hides regressions.
+func copyDocumentComment(c *domain.DocumentComment) *domain.DocumentComment {
+	copied := *c
+	if c.Anchor != nil {
+		anchor := *c.Anchor
+		if c.Anchor.Start != nil {
+			start := *c.Anchor.Start
+			anchor.Start = &start
+		}
+		if c.Anchor.End != nil {
+			end := *c.Anchor.End
+			anchor.End = &end
+		}
+		copied.Anchor = &anchor
+	}
+	return &copied
+}
+
+func (m *MockDocumentCommentRepository) Create(_ context.Context, comment *domain.DocumentComment) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.createErr != nil {
+		return m.createErr
+	}
+	if m.errToReturn != nil {
+		return m.errToReturn
+	}
+	m.items[comment.ID] = copyDocumentComment(comment)
+	return nil
+}
+
+func (m *MockDocumentCommentRepository) GetByID(_ context.Context, id uuid.UUID) (*domain.DocumentComment, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.errToReturn != nil {
+		return nil, m.errToReturn
+	}
+	c, ok := m.items[id]
+	if !ok || c.DeletedAt != nil {
+		return nil, nil
+	}
+	return copyDocumentComment(c), nil
+}
+
+func (m *MockDocumentCommentRepository) GetByIDInWorkspace(_ context.Context, id, workspaceID uuid.UUID) (*domain.DocumentComment, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.errToReturn != nil {
+		return nil, m.errToReturn
+	}
+	c, ok := m.items[id]
+	if !ok || c.DeletedAt != nil {
+		return nil, nil
+	}
+	if m.documentWorkspace[c.DocumentID] != workspaceID {
+		return nil, nil
+	}
+	return copyDocumentComment(c), nil
+}
+
+func (m *MockDocumentCommentRepository) Update(_ context.Context, comment *domain.DocumentComment) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.errToReturn != nil {
+		return m.errToReturn
+	}
+	existing, ok := m.items[comment.ID]
+	if !ok || existing.DeletedAt != nil {
+		return apierror.NotFound("Comment")
+	}
+	// Mirrors the real UPDATE's SET list: body, the resolution triple and
+	// updated_at. The anchor is deliberately not writable here either, so a test
+	// that expected an edit to move it would fail rather than pass on the mock.
+	existing.Body = comment.Body
+	existing.ResolvedAt = comment.ResolvedAt
+	existing.ResolvedBy = comment.ResolvedBy
+	existing.ResolvedByType = comment.ResolvedByType
+	existing.UpdatedAt = comment.UpdatedAt
+	return nil
+}
+
+func (m *MockDocumentCommentRepository) SoftDelete(_ context.Context, id uuid.UUID, at time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.errToReturn != nil {
+		return m.errToReturn
+	}
+	root, ok := m.items[id]
+	if !ok || root.DeletedAt != nil {
+		return apierror.NotFound("Comment")
+	}
+	stamp := at
+	root.DeletedAt = &stamp
+	// The replies go with the root, one level deep — the same reach as the real
+	// statement's `id = $1 OR parent_comment_id = $1`.
+	for _, c := range m.items {
+		if c.ParentCommentID != nil && *c.ParentCommentID == id && c.DeletedAt == nil {
+			c.DeletedAt = &stamp
+		}
+	}
+	return nil
+}
+
+func (m *MockDocumentCommentRepository) ListByDocument(
+	_ context.Context,
+	documentID uuid.UUID,
+	filter repository.DocumentCommentFilter,
+	pg pagination.Params,
+) (*pagination.Page[domain.DocumentComment], error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.errToReturn != nil {
+		return nil, m.errToReturn
+	}
+
+	resolvedRoots := map[uuid.UUID]bool{}
+	for _, c := range m.items {
+		if c.DeletedAt == nil && c.ParentCommentID == nil && c.ResolvedAt != nil {
+			resolvedRoots[c.ID] = true
+		}
+	}
+
+	var items []domain.DocumentComment
+	for _, c := range m.items {
+		if c.DocumentID != documentID || c.DeletedAt != nil {
+			continue
+		}
+		if !filter.IncludeResolved {
+			// Hidden by THREAD, as the real predicate is: COALESCE(parent, id).
+			root := c.ID
+			if c.ParentCommentID != nil {
+				root = *c.ParentCommentID
+			}
+			if resolvedRoots[root] {
+				continue
+			}
+		}
+		items = append(items, *copyDocumentComment(c))
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if !items[i].CreatedAt.Equal(items[j].CreatedAt) {
+			return items[i].CreatedAt.Before(items[j].CreatedAt)
+		}
+		return items[i].ID.String() < items[j].ID.String()
+	})
+	return pagination.NewPage(items, len(items), pg), nil
+}
+
+// ListAnchorsByDocument mirrors the real query's filter exactly: live comments
+// that carry a quote, resolved threads included. A mock that quietly skipped
+// resolved threads would make the service look correct on a case the database
+// treats differently, which is the whole failure mode a mock is supposed to not
+// introduce.
+func (m *MockDocumentCommentRepository) ListAnchorsByDocument(_ context.Context, documentID uuid.UUID) ([]repository.DocumentCommentAnchorRow, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.anchorListErr != nil {
+		return nil, m.anchorListErr
+	}
+	if m.errToReturn != nil {
+		return nil, m.errToReturn
+	}
+
+	var rows []repository.DocumentCommentAnchorRow
+	var ordered []*domain.DocumentComment
+	for _, c := range m.items {
+		if c.DocumentID != documentID || c.DeletedAt != nil || c.Anchor == nil || c.Anchor.Exact == "" {
+			continue
+		}
+		ordered = append(ordered, c)
+	}
+	sort.Slice(ordered, func(i, j int) bool {
+		if !ordered[i].CreatedAt.Equal(ordered[j].CreatedAt) {
+			return ordered[i].CreatedAt.Before(ordered[j].CreatedAt)
+		}
+		return ordered[i].ID.String() < ordered[j].ID.String()
+	})
+	for _, c := range ordered {
+		prefix, suffix := c.Anchor.Prefix, c.Anchor.Suffix
+		rows = append(rows, repository.DocumentCommentAnchorRow{
+			ID:     c.ID,
+			Exact:  c.Anchor.Exact,
+			Prefix: &prefix,
+			Suffix: &suffix,
+			Start:  c.Anchor.Start,
+			End:    c.Anchor.End,
+		})
+	}
+	return rows, nil
+}
+
+// UpdateAnchorPositions writes the offsets back, and counts the calls so a test
+// can tell "the pass ran and found nothing to move" from "the pass never ran" —
+// two states that produce identical rows and opposite conclusions.
+func (m *MockDocumentCommentRepository) UpdateAnchorPositions(_ context.Context, positions []repository.DocumentCommentAnchorPosition) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.anchorWrites++
+	if m.anchorWriteErr != nil {
+		return m.anchorWriteErr
+	}
+	if m.errToReturn != nil {
+		return m.errToReturn
+	}
+	for _, p := range positions {
+		c, ok := m.items[p.ID]
+		if !ok || c.DeletedAt != nil || c.Anchor == nil {
+			continue
+		}
+		c.Anchor.Prefix, c.Anchor.Suffix = p.Prefix, p.Suffix
+		c.Anchor.Start, c.Anchor.End = p.Start, p.End
+	}
+	return nil
+}
+
+// AnchorWrites is how many times the re-anchoring pass reached the write.
+func (m *MockDocumentCommentRepository) AnchorWrites() int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.anchorWrites
+}
+
+// FailAnchorListWith / FailAnchorWriteWith break one half of the pass each, so a
+// test can prove the document write still succeeds when re-anchoring cannot run
+// — the trade this best-effort pass deliberately makes.
+func (m *MockDocumentCommentRepository) FailAnchorListWith(err error) *MockDocumentCommentRepository {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.anchorListErr = err
+	return m
+}
+
+func (m *MockDocumentCommentRepository) FailAnchorWriteWith(err error) *MockDocumentCommentRepository {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.anchorWriteErr = err
+	return m
+}
+
+// searchText mirrors what the trigger indexes, so a service test can assert that
+// the body actually reached the index rather than that a method was called.
+func (m *MockDocumentRepository) SetSearchText(_ context.Context, documentID uuid.UUID, text string) error {
+	if m.failSearchTextOnly {
+		return assertAnError{}
+	}
+	if m.errToReturn != nil {
+		return m.errToReturn
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.searchText == nil {
+		m.searchText = make(map[uuid.UUID]string)
+	}
+	m.searchText[documentID] = text
+	return nil
+}
+
+// SearchText reports what was indexed for a document, for assertions.
+func (m *MockDocumentRepository) SearchText(documentID uuid.UUID) (string, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	text, ok := m.searchText[documentID]
+	return text, ok
+}
+
+func (m *MockDocumentRepository) SearchInProject(
+	_ context.Context,
+	projectID, workspaceID uuid.UUID,
+	query string,
+	limit int,
+) ([]domain.DocumentSearchHit, error) {
+	if m.errToReturn != nil {
+		return nil, m.errToReturn
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var hits []domain.DocumentSearchHit
+	for _, doc := range m.items {
+		if doc.ProjectID != projectID || doc.DeletedAt != nil {
+			continue
+		}
+		if m.workspaceOf[doc.ProjectID] != workspaceID {
+			continue
+		}
+		// Substring over title AND indexed text — a stand-in for the tsvector,
+		// enough to tell "searched the content" from "searched the title".
+		haystack := strings.ToLower(doc.Title + " " + m.searchText[doc.ID])
+		if !strings.Contains(haystack, strings.ToLower(query)) {
+			continue
+		}
+		hits = append(hits, domain.DocumentSearchHit{
+			ID: doc.ID, ProjectID: doc.ProjectID, Title: doc.Title, Slug: doc.Slug,
+		})
+		if len(hits) >= limit {
+			break
+		}
+	}
+	return hits, nil
 }

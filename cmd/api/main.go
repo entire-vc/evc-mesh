@@ -17,6 +17,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
+	"github.com/entire-vc/evc-mesh/pkg/encryption"
 	"github.com/entire-vc/evc-mesh/pkg/metrics"
 
 	"github.com/redis/go-redis/v9"
@@ -49,6 +50,21 @@ func main() {
 	// 1. Load configuration from environment.
 	cfg := config.Load()
 
+	// Say out loud, once, whether integration credentials are actually being
+	// encrypted at rest. Previously the only signal was a log line emitted
+	// lazily on the first Encrypt/Decrypt call — on a quiet instance that can
+	// be days after boot, buried in request logs, and it read identically
+	// whether the key was missing or merely mistyped. Publishing it as a gauge
+	// makes "the control is off" alertable instead of something discovered by
+	// reading rows. Checked before anything is opened: it needs no
+	// dependencies, and a deployment that demanded encryption should not get
+	// as far as a half-initialised process.
+	if err := encryption.Validate(); err != nil {
+		log.Fatalf("Refusing to start: %v", err)
+	}
+	encState, encRequired := encryption.Status()
+	metrics.SetIntegrationEncryptionState(encState.String(), encRequired)
+
 	// 2. Connect to PostgreSQL.
 	db, err := postgres.NewDB(cfg.Database.DSN())
 	if err != nil {
@@ -80,6 +96,10 @@ func main() {
 	taskDependencyRepo := postgres.NewTaskDependencyRepo(db)
 	commentRepo := postgres.NewCommentRepo(db)
 	artifactRepo := postgres.NewArtifactRepo(db)
+	documentRepo := postgres.NewDocumentRepo(db)
+	documentAttachmentRepo := postgres.NewDocumentAttachmentRepo(db)
+	documentCommentRepo := postgres.NewDocumentCommentRepo(db)
+	documentWatchRepo := postgres.NewDocumentWatchRepo(db)
 	agentRepo := postgres.NewAgentRepo(db)
 	eventBusRepo := postgres.NewEventBusMessageRepo(db)
 	activityLogRepo := postgres.NewActivityLogRepo(db)
@@ -105,6 +125,8 @@ func main() {
 	memoryEdgesRepo := postgres.NewMemoryEdgesRepo(db)
 	memoryChunkRepo := postgres.NewMemoryChunkRepo(db)
 	commentMentionRepo := postgres.NewCommentMentionRepo(db)
+	commentDeliveryRepo := postgres.NewCommentDeliveryOutcomeRepo(db)
+	documentCommentMentionRepo := postgres.NewDocumentCommentMentionRepo(db)
 
 	// 5. Create auth service.
 	authService := auth.NewService(
@@ -197,6 +219,13 @@ func main() {
 	webhookService := service.NewWebhookService(webhookRepo, service.WithSlackService(slackService))
 
 	projectIntegrationRepo := postgres.NewProjectIntegrationRepo(db)
+
+	// secretRepo also backs the write-only CRUD handlers (SecretService) —
+	// that wiring lands in the S3 API-handler PR, on top of this one.
+	secretRepo := postgres.NewSecretRepo(db)
+	secretMaterializationService := service.NewSecretMaterializationService(secretRepo)
+	secretMaterializeHandler := handler.NewSecretMaterializeHandler(secretMaterializationService)
+	mw.CheckSpawnTokenConfigured()
 
 	agentActLogRepo := postgres.NewAgentActivityLogRepo(db)
 	// The cache wrapper is applied at construction so that EVERY consumer of
@@ -319,12 +348,14 @@ func main() {
 
 	// Real service implementations (replacing stubs from earlier sprints).
 	mentionService := service.NewMentionService(commentMentionRepo)
+	documentMentionService := service.NewDocumentMentionService(documentCommentMentionRepo)
 
 	commentService := service.NewCommentService(commentRepo, taskRepo, activityLogRepo,
 		service.WithCommentAgentNotify(agentNotifySvc),
 		service.WithCommentAgentService(agentService),
 		service.WithCommentUserRepo(userRepo),
 		service.WithCommentMentionRepo(commentMentionRepo),
+		service.WithCommentDeliveryOutcomeRepo(commentDeliveryRepo),
 		service.WithCommentWSPublisher(wsPublisher),
 		service.WithCommentStatusRepo(taskStatusRepo),
 		service.WithCommentProjectRepo(projectRepo),
@@ -391,8 +422,13 @@ func main() {
 
 	// rulesService, customFieldService, and notificationService were already created above (before taskService).
 
-	// Initialize S3 storage client for artifacts.
+	// Initialize S3 storage client for artifacts and document bodies.
 	var artifactService service.ArtifactService
+	// documentStore stays nil until the client is proven usable — a typed-nil
+	// *S3Client in an interface is not nil, and the service's "storage not
+	// configured" branch tests exactly that.
+	var documentStore service.DocumentStore
+	var attachmentStore service.StorageClient
 	s3Client, s3Err := storage.NewS3Client(
 		cfg.S3.Endpoint,
 		cfg.S3.AccessKeyID,
@@ -436,7 +472,62 @@ func main() {
 		}
 
 		artifactService = service.NewArtifactService(artifactRepo, s3Client, activityLogRepo)
+		documentStore = s3Client
+		attachmentStore = s3Client
 	}
+	// Document subscriptions. Built before the document service because that
+	// service takes it: every write path folds an edit into a pending notice, and
+	// a document created without one would have no author subscribed to it.
+	//
+	// The quiet window is how long an editor must stop typing before their
+	// session is announced. It is configurable because the right value is a
+	// judgement about how people work, not a property of the system: it only has
+	// to sit far above the editor's 2-second autosave debounce and far below the
+	// length of a sitting.
+	documentWatchService := service.NewDocumentWatchService(
+		documentWatchRepo, documentRepo, notificationService, agentNotifySvc,
+		documentWatchQuietWindow(),
+	)
+
+	// The comment repository is here because a body write moves the comments
+	// anchored into that body: PATCH re-resolves every anchor against the markdown
+	// it just stored, and nulls the ones whose text is gone. It is a required
+	// argument, not an option — see the field's note in documentService.
+	documentService := service.NewDocumentService(documentRepo, documentStore, projectRepo, documentCommentRepo,
+		service.WithDocumentWatch(documentWatchService))
+
+	// The attachment service takes the full StorageClient, not documentStore: an
+	// attachment is fetched by the browser through a presigned URL (an <img> cannot
+	// send an Authorization header), so it needs the GetPresignedURL that the
+	// narrower document-body port deliberately omits. attachmentStore stays nil for
+	// the same reason documentStore does — a typed-nil *S3Client in an interface is
+	// not nil, and the service's "storage not configured" branch tests exactly that.
+	documentAttachmentService := service.NewDocumentAttachmentService(documentAttachmentRepo, documentRepo, attachmentStore)
+
+	// It takes the document repository so every entry point can resolve the
+	// document inside the caller's workspace before touching a comment, and the
+	// document SERVICE for the one path that needs the markdown itself: checking
+	// that an anchor's byte offsets point at the anchor's own quote. The body
+	// lives in object storage, so the repository alone cannot answer that — and a
+	// guard reading an always-empty body would reject every anchored comment.
+	//
+	// The @-mention options are what make a mention in a document comment arrive
+	// rather than merely be stored. All six are required for the feature to be
+	// whole: agentService and userRepo resolve a slug (and, crucially, decide
+	// whether it resolves at all — without them the service refuses to guess and
+	// says so in the log), documentCommentMentionRepo records who was named,
+	// agentNotifySvc is an agent's channel, and notificationService plus
+	// wsPublisher are a person's.
+	documentCommentService := service.NewDocumentCommentService(
+		documentCommentRepo, documentRepo, documentService,
+		service.WithDocumentCommentAgentService(agentService),
+		service.WithDocumentCommentUserRepo(userRepo),
+		service.WithDocumentCommentMentionRepo(documentCommentMentionRepo),
+		service.WithDocumentCommentAgentNotifier(agentNotifySvc),
+		service.WithDocumentCommentNotificationService(notificationService),
+		service.WithDocumentCommentWSPublisher(wsPublisher),
+		service.WithDocumentCommentWatch(documentWatchService),
+	)
 
 	// Wire Team Relay publisher into artifact service (best-effort; fires on upload).
 	projectIntegrationService := service.NewProjectIntegrationService(projectIntegrationRepo)
@@ -484,6 +575,10 @@ func main() {
 	statusHandler := handler.NewTaskStatusHandler(taskStatusService)
 	commentHandler := handler.NewCommentHandler(commentService, taskService)
 	artifactHandler := handler.NewArtifactHandler(artifactService, taskService)
+	documentHandler := handler.NewDocumentHandler(documentService)
+	documentAttachmentHandler := handler.NewDocumentAttachmentHandler(documentAttachmentService)
+	documentCommentHandler := handler.NewDocumentCommentHandler(documentCommentService)
+	documentWatchHandler := handler.NewDocumentWatchHandler(documentWatchService)
 	depHandler := handler.NewDependencyHandler(depService, taskService)
 	agentHandler := handler.NewAgentHandlerWithEvents(agentService, taskService, taskStatusService, agentNotifyRedis, agentEventsRepo, sessionRepo)
 	eventHandler := handler.NewEventHandler(eventBusService)
@@ -513,9 +608,10 @@ func main() {
 	autoTransHandler := handler.NewAutoTransitionHandler(autoTransitionSvc)
 	memoryHandler := handler.NewMemoryHandler(memoryService, workspaceMemberRepo)
 	mentionHandler := handler.NewMentionHandler(mentionService)
+	documentMentionHandler := handler.NewDocumentMentionHandler(documentMentionService)
 	projectIntegrationHandler := handler.NewProjectIntegrationHandler(projectIntegrationService)
 	trSearchHandler := handler.NewTrSearchHandler(projectIntegrationService)
-	trPreviewURLHandler := handler.NewTrPreviewURLHandler(projectIntegrationService)
+	trDocumentHandler := handler.NewTrDocumentHandler(projectIntegrationService)
 	canonicalUpdatesHandler := handler.NewCanonicalUpdatesHandler(memoryService, sessionRepo, agentService)
 	mentionablesService := service.NewMentionablesService(agentRepo, userRepo)
 	mentionablesHandler := handler.NewMentionablesHandler(mentionablesService)
@@ -620,6 +716,33 @@ func main() {
 	go activityTracker.Run(activityCtx)
 	log.Println("Agent activity tracker started")
 
+	// Document-watch sweeper: turns pending change-notices into notifications
+	// once their author has stopped typing for the quiet window.
+	//
+	// A 60-second tick against a 5-minute default window: the tick is the
+	// granularity of the delay, not the delay itself, and a notice is never sent
+	// early because the quiet test is a timestamp comparison inside the claim,
+	// not a property of when the sweeper happened to run. Two replicas running
+	// this at once is safe — the claim is atomic (FOR UPDATE SKIP LOCKED).
+	watchSweepCtx, watchSweepCancel := context.WithCancel(context.Background())
+	go func() {
+		ticker := time.NewTicker(60 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				if n, err := documentWatchService.SweepPendingNotices(watchSweepCtx); err != nil {
+					log.Printf("[doc-watch] ERROR sweeping pending change notices: %v", err)
+				} else if n > 0 {
+					log.Printf("[doc-watch] dispatched %d coalesced document change notice(s)", n)
+				}
+			case <-watchSweepCtx.Done():
+				return
+			}
+		}
+	}()
+	defer watchSweepCancel()
+
 	// Checkout reaper: periodically releases orphan task-locks whose TTL has expired.
 	// Complements the lazy expiry in AtomicCheckout — handles tasks that no agent
 	// retries after the original holder's session dies.
@@ -680,6 +803,7 @@ func main() {
 		RPM:         cfg.RateLimit.AuthRPM,
 		KeyFunc:     mw.RateLimitKeyByIP,
 		RedisClient: sharedRedis,
+		Name:        "auth-login",
 	}))
 	loginGroup.POST("/register", authHandler.Register)
 	loginGroup.POST("/login", authHandler.Login)
@@ -699,6 +823,7 @@ func main() {
 		RPM:         cfg.RateLimit.RefreshRPM,
 		KeyFunc:     mw.RateLimitKeyByIP,
 		RedisClient: sharedRedis,
+		Name:        "auth-refresh",
 	}))
 	refreshGroup.POST("/refresh", authHandler.Refresh)
 
@@ -709,6 +834,7 @@ func main() {
 		RPM:         cfg.RateLimit.AuthRPM,
 		KeyFunc:     mw.RateLimitKeyByIP,
 		RedisClient: sharedRedis,
+		Name:        "invite-accept",
 	}))
 	invitePublicGroup.GET("/:token", inviteHandler.GetByToken)
 	invitePublicGroup.POST("/:token/accept", inviteHandler.Accept)
@@ -749,6 +875,7 @@ func main() {
 		RPM:         cfg.RateLimit.APIRPM,
 		KeyFunc:     mw.RateLimitKeyByIP,
 		RedisClient: sharedRedis,
+		Name:        "workspace-icon",
 	})
 	v1.GET("/workspaces/:ws_id/icon", workspaceHandler.GetIcon, iconRateLimit)
 	// HEAD as well: it is what `curl -I` and cache validators send, and Echo
@@ -776,6 +903,7 @@ func main() {
 		RPM:         cfg.RateLimit.APIRPM,
 		KeyFunc:     mw.RateLimitKeyByActor,
 		RedisClient: sharedRedis,
+		Name:        "api",
 	}))
 
 	// Auth - protected.
@@ -919,6 +1047,108 @@ func main() {
 	api.GET("/tasks/:task_id/artifacts/:artifact_id/download", artifactHandler.Download, wsAccess)
 	api.DELETE("/artifacts/:artifact_id", artifactHandler.Delete, wsAccess, rbac(mw.PermUploadArtifact))
 
+	// Document routes. The project-scoped pair takes projAccess; the object routes
+	// take wsAccess, because RequireProjectMember answers 500 on a path with no
+	// :proj_id in it.
+	//
+	// PermUploadArtifact is the closest existing write permission: a document is
+	// project content whose body is written into object storage, which is exactly
+	// what that permission already covers, and it is held by the same roles as
+	// create_task (owner/admin/member and agents), so nothing gains or loses reach.
+	api.GET("/projects/:proj_id/documents", documentHandler.List, projAccess)
+	// Static segment before the parameterised sibling routes, and under
+	// /projects/:proj_id so the tenant is named by the path rather than by a
+	// query parameter.
+	api.GET("/projects/:proj_id/documents/search", documentHandler.Search, projAccess)
+	api.POST("/projects/:proj_id/documents", documentHandler.Create, projAccess, rbac(mw.PermUploadArtifact))
+	api.GET("/documents/:doc_id", documentHandler.GetByID, wsAccess)
+	api.PATCH("/documents/:doc_id", documentHandler.Update, wsAccess, rbac(mw.PermUploadArtifact))
+	api.DELETE("/documents/:doc_id", documentHandler.Delete, wsAccess, rbac(mw.PermUploadArtifact))
+
+	// Reading a document in pieces, for callers that should not have to fetch the
+	// whole page to work with one part of it — an agent answering a question about
+	// one section otherwise pays for every section.
+	//
+	// All reads, so wsAccess and no rbac: whoever may GET the document may ask for
+	// its outline, for a section of it, or for where a sentence in it sits.
+	//
+	// resolve-anchor is a POST that changes nothing. It has to be a POST — its
+	// input is a quotation of up to 2000 bytes, which does not belong in a query
+	// string — and it is deliberately not behind a write permission, because it
+	// writes nothing. It exists because an agent has no text selection to compute a
+	// comment anchor from, and computing byte offsets from text is exactly where it
+	// gets them wrong: a Cyrillic quote at byte 853 is at character 475, and an
+	// anchor off by that much points at a different sentence with total confidence.
+	api.GET("/documents/:doc_id/outline", documentHandler.Outline, wsAccess)
+	api.GET("/documents/:doc_id/section", documentHandler.Section, wsAccess)
+	api.POST("/documents/:doc_id/resolve-anchor", documentHandler.ResolveAnchor, wsAccess)
+
+	// Subscribing to a document's changes. No RBAC beyond workspace access on
+	// purpose: asking to be told about a page you can already read grants
+	// nothing you did not already have, and requiring a write permission to
+	// follow a document would lock read-only members out of the one feature that
+	// exists for people who are not editing.
+	api.GET("/documents/:doc_id/watch", documentWatchHandler.Get, wsAccess)
+	api.PUT("/documents/:doc_id/watch", documentWatchHandler.Watch, wsAccess)
+	api.DELETE("/documents/:doc_id/watch", documentWatchHandler.Unwatch, wsAccess)
+
+	// Addressing a document by its slug path instead of its uuid, because agents
+	// think in paths and making them resolve an id first adds a call to every
+	// single access.
+	//
+	// projAccess, like the rest of the project-scoped pair: the only id on the
+	// route is :proj_id, and the segments after by-path are slugs inside the
+	// project the guard has already checked the caller against — they can name
+	// nothing outside it.
+	//
+	// A trailing wildcard rather than a query parameter, so the URL reads the way
+	// the path is written. It cannot collide with the collection route above: Echo
+	// matches the literal `documents` segment first, and `by-path` is a literal
+	// segment no document slug lookup starts from by accident.
+	api.GET("/projects/:proj_id/documents/by-path/*", documentHandler.GetByPath, projAccess)
+
+	// Document attachment routes. The upload/list pair hangs off :doc_id, which
+	// already resolves a tenant; the object routes name the attachment directly and
+	// are guarded by the :att_id resolver.
+	//
+	// :att_id appears under exactly one collection segment — document-attachments —
+	// and must stay that way: resolvers are keyed on the parameter name alone, so
+	// mounting the same id under /documents/:doc_id/attachments/:att_id as well
+	// would make the name ambiguous (TestScopedParamNamesAreUnambiguous).
+	//
+	// PermUploadArtifact for the writes, same reasoning as the document routes: an
+	// attachment is project content whose bytes go to object storage, which is
+	// literally what that permission covers.
+	api.GET("/documents/:doc_id/attachments", documentAttachmentHandler.List, wsAccess)
+	api.POST("/documents/:doc_id/attachments", documentAttachmentHandler.Upload, wsAccess, rbac(mw.PermUploadArtifact))
+	api.GET("/document-attachments/:att_id/download", documentAttachmentHandler.Download, wsAccess)
+	api.DELETE("/document-attachments/:att_id", documentAttachmentHandler.Delete, wsAccess, rbac(mw.PermUploadArtifact))
+
+	// Document comment routes — Confluence-style inline comments on document text.
+	//
+	// The list/create pair hangs off :doc_id, which already resolves a tenant; the
+	// object routes name the comment directly and are guarded by the :dcom_id
+	// resolver. wsAccess throughout, not projAccess: none of these paths carry a
+	// :proj_id, and RequireProjectMember answers 500 on a path without one.
+	//
+	// :dcom_id appears under exactly one collection segment — document-comments —
+	// and must stay that way: resolvers are keyed on the parameter name alone, so
+	// mounting the same id under /documents/:doc_id/comments/:dcom_id as well
+	// would make the name ambiguous (TestScopedParamNamesAreUnambiguous). It is
+	// spelled :dcom_id rather than :comment_id for the same reason — that name is
+	// taken by task comments, whose resolver reads the unrelated `comments` table.
+	//
+	// PermAddComment for the writes: commenting on a document is the same act the
+	// permission already names, held by the same roles (owner/admin/member and
+	// agents), so nothing gains or loses reach. Resolve/unresolve sit under it too
+	// — putting a thread away is part of taking part in it, not an admin power.
+	api.GET("/documents/:doc_id/comments", documentCommentHandler.List, wsAccess)
+	api.POST("/documents/:doc_id/comments", documentCommentHandler.Create, wsAccess, rbac(mw.PermAddComment))
+	api.PATCH("/document-comments/:dcom_id", documentCommentHandler.Update, wsAccess, rbac(mw.PermAddComment))
+	api.POST("/document-comments/:dcom_id/resolve", documentCommentHandler.Resolve, wsAccess, rbac(mw.PermAddComment))
+	api.POST("/document-comments/:dcom_id/unresolve", documentCommentHandler.Unresolve, wsAccess, rbac(mw.PermAddComment))
+	api.DELETE("/document-comments/:dcom_id", documentCommentHandler.Delete, wsAccess, rbac(mw.PermAddComment))
+
 	// Agent routes.
 	// NOTE: /agents/me/* routes MUST be registered before /agents/:agent_id to avoid
 	// "me" being parsed as a UUID parameter.
@@ -979,6 +1209,13 @@ func main() {
 	e.POST("/webhooks/github", vcsLinkHandler.GitHubWebhook)
 	e.POST("/api/v1/integrations/github/webhook", vcsLinkHandler.GitHubWebhook)
 
+	// Secret materialization — deliberately OUTSIDE the `api` group. DualAuth
+	// there accepts a user JWT or ANY agent's API key; this route must accept
+	// neither, since either would let something wielding an ordinary agent
+	// identity decrypt secrets. Gated by mw.SpawnAuth() alone — see its doc
+	// comment for the trust model.
+	e.POST("/internal/secrets/materialize", secretMaterializeHandler.Materialize, mw.SpawnAuth())
+
 	// Integration config routes.
 	api.GET("/workspaces/:ws_id/integrations", integrationHandler.List)
 	api.POST("/workspaces/:ws_id/integrations", integrationHandler.Configure, rbac(mw.PermManageWebhooks))
@@ -996,7 +1233,10 @@ func main() {
 
 	// TR document search and authenticated preview-url resolution (Team Relay share contents).
 	api.GET("/projects/:proj_id/tr/search", trSearchHandler.Search, projAccess)
-	api.GET("/projects/:proj_id/tr/preview-url", trPreviewURLHandler.Get, projAccess)
+	// The Team Relay document is read server-side and rendered by our own editor
+	// (D10). The route it replaces resolved an iframe src for an embedded
+	// TeamRelay page; the iframe, its 6s timeout and its dead end are gone with it.
+	api.GET("/projects/:proj_id/tr/document", trDocumentHandler.Get, projAccess)
 
 	// Analytics routes.
 	api.GET("/workspaces/:ws_id/analytics", analyticsHandler.GetMetrics)
@@ -1118,6 +1358,17 @@ func main() {
 	api.GET("/me/mentions", mentionHandler.List)
 	api.GET("/me/mentions/unseen_count", mentionHandler.UnseenCount)
 	api.POST("/me/mentions/:comment_id/seen", mentionHandler.MarkSeen)
+	// The same inbox for @-mentions inside document comments. Separate routes
+	// rather than a widened /me/mentions: the rows name a document and no task,
+	// and folding them in would put a nullable task_id on a response shape three
+	// existing screens read as non-null.
+	//
+	// :dcom_id is resolved to a workspace by workspaceParamResolvers, so
+	// RequireWorkspaceMemberScoped (group-level, above) refuses another tenant's
+	// comment id here exactly as it does on /document-comments/:dcom_id.
+	api.GET("/me/document-mentions", documentMentionHandler.List)
+	api.GET("/me/document-mentions/unseen_count", documentMentionHandler.UnseenCount)
+	api.POST("/me/document-mentions/:dcom_id/seen", documentMentionHandler.MarkSeen)
 	api.GET("/workspaces/:ws_id/mentionables", mentionablesHandler.Search)
 
 	// Current user's active tasks (excludes done/cancelled).
@@ -1392,4 +1643,35 @@ func redactInviteToken(uri string) string {
 		return prefix + "<redacted>" + rest[end:]
 	}
 	return prefix + "<redacted>"
+}
+
+// documentWatchQuietWindow reads DOCUMENT_WATCH_QUIET_WINDOW, the idle period an
+// editor must leave before their edits are announced to a document's watchers.
+//
+// It exists as a knob because the right value is a judgement about how people
+// work rather than a property of the system. The bounds are not: a window at or
+// below the editor's 2-second autosave debounce coalesces nothing and restores
+// the notification storm the feature was built to prevent, so a value that small
+// is refused rather than honoured. An unparseable or out-of-range value falls
+// back to the default and says so — a typo here would otherwise be discovered as
+// "why is everyone getting a hundred emails".
+func documentWatchQuietWindow() time.Duration {
+	const (
+		minWindow = 30 * time.Second
+		maxWindow = 24 * time.Hour
+	)
+	raw := strings.TrimSpace(os.Getenv("DOCUMENT_WATCH_QUIET_WINDOW"))
+	if raw == "" {
+		return 0 // service applies its own default
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil {
+		log.Printf("[doc-watch] DOCUMENT_WATCH_QUIET_WINDOW=%q is not a duration (e.g. \"5m\") — using the default", raw)
+		return 0
+	}
+	if d < minWindow || d > maxWindow {
+		log.Printf("[doc-watch] DOCUMENT_WATCH_QUIET_WINDOW=%s is outside [%s, %s] — using the default", d, minWindow, maxWindow)
+		return 0
+	}
+	return d
 }

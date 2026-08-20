@@ -7,6 +7,10 @@
 - **Node.js 20+** and **pnpm** (for the frontend; CI builds on Node 22)
 - 2 GB RAM minimum
 - 10 GB disk space
+- **Outbound HTTPS (port 443) from the `api` container**, if you intend to use
+  the Telegram notification channel — it calls `api.telegram.org` directly. See
+  [Telegram notifications](#telegram-notifications). Nothing else in Mesh needs
+  outbound internet access, so a locked-down network is otherwise fine.
 
 > Running a **production** install? Skip to
 > [Production Deployment](#production-deployment) — it is a different compose
@@ -208,10 +212,52 @@ Only set the variables below if you want Mesh to send the mail itself.
 > uniqueness on `lower(email)`. `Carol@Example.COM` and `carol@example.com` are
 > the same account.
 
+### Telegram notifications
+
+The Telegram channel is configured per workspace from the **Integrations**
+page, not through environment variables. It has one infrastructure
+requirement, and it is easy to miss because nothing else in Mesh has it:
+
+> **The `api` container must be able to reach `api.telegram.org` on port 443.**
+> Either allow outbound HTTPS to that host, or give the container an
+> `HTTPS_PROXY` / `HTTP_PROXY` that can.
+
+Check from the host running the container:
+
+```bash
+curl -sS --max-time 10 https://api.telegram.org
+# healthy: {"ok":false,"error_code":404,...}  <- a reply at all is the point
+# blocked: curl: (28) Operation timed out
+```
+
+and from inside the container itself, which is the answer that actually
+matters — host and container do not always have the same egress:
+
+```bash
+docker compose exec api curl -sS --max-time 10 https://api.telegram.org
+```
+
+Without that route the channel fails in a way that looks like nothing is
+wrong: the bot is configured, the settings page offers the connect link, users
+bind their accounts successfully — and no message is ever delivered, because
+every send times out. Mesh reports this rather than leaving you to guess:
+
+- **Notification settings** shows *"Telegram notifications cannot be delivered
+  right now"* with the reason, above the Telegram controls.
+- **The API log** names the host and the fix on every failed call, e.g.
+  `telegram sendMessage: cannot reach https://api.telegram.org — check that
+  this host has outbound HTTPS (443) access to it, or set HTTPS_PROXY ...`
+
+If you do not use the Telegram channel, none of this applies — leave it
+unconfigured and Mesh never calls out.
+
 ### MCP server
 
 Read by the `mesh-mcp` binary (`cmd/mcp`), not by the API. In SSE mode
-`docker-compose.prod.yml` sets the transport, host and port for you.
+`docker-compose.prod.yml` sets the transport, host and port for you, and also
+proxies it under `/mcp/` on the same origin as the web UI (`nginx.conf`) —
+`https://<your-host>/mcp/sse` works out of the box once `MESH_BASE_URL` is set,
+with no separate port to open.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -220,7 +266,7 @@ Read by the `mesh-mcp` binary (`cmd/mcp`), not by the API. In SSE mode
 | `MESH_AGENT_KEY` | *(none)* | Agent key for stdio mode. **Required** — stdio mode exits without it. Ignored in SSE mode, where each connection carries its own key. |
 | `MESH_MCP_HOST` | `0.0.0.0` | SSE listen host |
 | `MESH_MCP_PORT` | `8081` | SSE listen port |
-| `MESH_MCP_PUBLIC_URL` | *(empty)* | Public base URL of the SSE server (e.g. `https://mesh.example.com/mcp`). Empty means the message endpoint is advertised as a path relative to whatever URL the client connected to, which is correct for localhost, a published container port and a reverse proxy alike. Set it only for clients that require an absolute endpoint URL. |
+| `MESH_MCP_PUBLIC_URL` | *(empty — the binary's own default; see note)* | Public base URL of the SSE server (e.g. `https://mesh.example.com/mcp`). Empty means the message endpoint is advertised as a path relative to whatever URL the client connected to — correct for localhost and a directly-published container port, but **not** for a reverse proxy that strips a path prefix (like the bundled nginx's `/mcp/` route), which needs the prefix included explicitly. |
 | `MESH_MCP_PROFILE` | `full` | `full` (49 tools) or `core` (21 tools). Applies to stdio mode; in SSE mode the profile is chosen by which endpoint the client connects to (`/sse` vs `/core/sse`). |
 
 See [Agent onboarding](agent-onboarding.md) for issuing keys and connecting a
@@ -275,7 +321,8 @@ nothing.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `MESH_INTEGRATION_ENCRYPTION_KEY` | *(empty)* | Base64 32-byte AES-256-GCM key encrypting stored integration credentials. **Empty means those credentials are stored in plaintext** — the API only logs a warning. See the [Security Checklist](#security-checklist). Generate with `openssl rand -base64 32`. |
+| `MESH_INTEGRATION_ENCRYPTION_KEY` | *(empty)* | Base64 32-byte AES-256-GCM key encrypting stored integration credentials. **Empty means those credentials are stored in plaintext** — the API logs a warning at startup and exports `mesh_integration_encryption_active 0`. See the [Security Checklist](#security-checklist). Generate with `openssl rand -base64 32`. |
+| `MESH_INTEGRATION_ENCRYPTION_REQUIRED` | `false` | Refuse to start, and refuse to store a credential, when the key above is missing or malformed. Recommended once you hold real credentials: a mistyped key otherwise degrades to plaintext storage and nothing fails. |
 | `MESH_GITHUB_WEBHOOK_SECRET` | *(empty)* | HMAC-SHA256 secret for inbound GitHub webhooks. Empty disables signature validation, i.e. anyone who can reach the webhook endpoint can post to it. |
 | `MESH_TEAMRELAY_TRANSPORT_ENABLED` | `false` | Push artifacts to Team Relay. Must be the exact string `true`. |
 | `MESH_TEAMRELAY_RELAY_URL` | *(empty)* | Team Relay API base URL. Empty makes relay search and preview return `503`. |
@@ -621,7 +668,7 @@ Services included in `docker-compose.prod.yml`:
 | `minio` | *(internal)* | MinIO object storage — required env: `MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY` |
 | `api` | `${API_PORT:-8005}` | Mesh API server (Go binary, runs DB migrations on startup) |
 | `mcp` | `${MCP_PORT:-8081}` | MCP server in SSE mode for remote agents |
-| `nginx` | `${HTTP_PORT:-80}` | Nginx serving the React SPA, proxying `/api` and `/ws` to the API |
+| `nginx` | `${HTTP_PORT:-80}` | Nginx serving the React SPA, proxying `/api`, `/ws` and `/mcp` (SSE, see [Agent onboarding](agent-onboarding.md)) |
 | `prometheus` | `${PROMETHEUS_PORT:-9090}` | Prometheus scraping `/metrics` from the API |
 | `grafana` | `${GRAFANA_PORT:-3001}` | Grafana dashboards — password set by `GRAFANA_PASSWORD` (required, no default) |
 
@@ -906,6 +953,33 @@ docker compose -f docker-compose.prod.yml --env-file .env config | \
     ```bash
     openssl rand -base64 32
     ```
+
+    Then set `MESH_INTEGRATION_ENCRYPTION_REQUIRED=true`, which turns "the key
+    is missing or malformed" from a warning into a refusal to start. The two
+    settings answer different questions: the key makes encryption *possible*,
+    the flag makes a broken key *visible*. A typo in the key alone produces a
+    perfectly healthy-looking instance that stores every credential in the
+    clear.
+
+    Watch `mesh_integration_encryption_active` — it is `1` when credentials are
+    actually being encrypted and `0` when they are not. It is worth an alert:
+    the failure mode has no other symptom, because writes succeed either way.
+
+    **Credentials stored before you set the key stay in plaintext.** Encryption
+    happens on write, so existing rows are untouched by turning it on. Rewrite
+    them with the one-off tool, which verifies each value round-trips before it
+    replaces it and does the whole set in one transaction:
+
+    ```bash
+    go run ./cmd/encrypt-integration-keys --dry-run   # report only
+    go run ./cmd/encrypt-integration-keys             # rewrite
+    ```
+
+    From this version a database trigger refuses any *new* unencrypted
+    credential in `project_integrations.agent_key`, whatever wrote it — the API,
+    `psql`, or an ops script. An instance running without an encryption key is
+    still supported and unaffected: the API grants that exemption explicitly for
+    the write it knows it cannot encrypt.
 
 12. **Set `MESH_BASE_URL`** -- Not a confidentiality issue, but the one people
     hit: unset, it falls back to `http://localhost:5173` and every workspace

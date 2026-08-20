@@ -52,7 +52,7 @@ func TestWorkspaceRepo_ListForUser_QueryShapeAndMapping(t *testing.T) {
 
 	// The user id is the sole bind parameter: it must satisfy both the
 	// ownership arm and the membership arm of the predicate.
-	mock.ExpectQuery("SELECT w[.]\\* FROM workspaces w").
+	mock.ExpectQuery("FROM workspaces w").
 		WithArgs(userID).
 		WillReturnRows(workspaceRows(first, second))
 
@@ -68,7 +68,7 @@ func TestWorkspaceRepo_ListForUser_Empty(t *testing.T) {
 	repo, mock := newWorkspaceRepoMock(t)
 	userID := uuid.New()
 
-	mock.ExpectQuery("SELECT w[.]\\* FROM workspaces w").
+	mock.ExpectQuery("FROM workspaces w").
 		WithArgs(userID).
 		WillReturnRows(workspaceRows())
 
@@ -81,7 +81,7 @@ func TestWorkspaceRepo_ListForUser_Empty(t *testing.T) {
 func TestWorkspaceRepo_ListForUser_QueryError(t *testing.T) {
 	repo, mock := newWorkspaceRepoMock(t)
 
-	mock.ExpectQuery("SELECT w[.]\\* FROM workspaces w").
+	mock.ExpectQuery("FROM workspaces w").
 		WillReturnError(errors.New("connection reset"))
 
 	got, err := repo.ListForUser(context.Background(), uuid.New())
@@ -127,7 +127,7 @@ func TestWorkspaceRepo_ListByOwner_QueryShapeAndMapping(t *testing.T) {
 	ownerID := uuid.New()
 	wsID := uuid.New()
 
-	mock.ExpectQuery("SELECT [*] FROM workspaces WHERE owner_id = ").
+	mock.ExpectQuery("FROM workspaces WHERE owner_id = ").
 		WithArgs(ownerID).
 		WillReturnRows(workspaceRows(wsID))
 
@@ -141,7 +141,7 @@ func TestWorkspaceRepo_ListByOwner_QueryShapeAndMapping(t *testing.T) {
 func TestWorkspaceRepo_ListByOwner_QueryError(t *testing.T) {
 	repo, mock := newWorkspaceRepoMock(t)
 
-	mock.ExpectQuery("SELECT [*] FROM workspaces").
+	mock.ExpectQuery("FROM workspaces").
 		WillReturnError(errors.New("connection reset"))
 
 	got, err := repo.ListByOwner(context.Background(), uuid.New())

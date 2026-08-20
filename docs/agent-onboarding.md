@@ -249,20 +249,32 @@ curl -s -o /dev/null -w '%{http_code}\n' \
 
 ## 4. Behind a reverse proxy
 
-The bundled nginx (`deploy/docker/mesh/nginx.conf`) proxies `/api/`, `/ws` and
-`/health` only — **it does not proxy MCP**. The Integrations page in the web UI
-suggests `https://<your-host>/mcp/sse`; on a stock install that path hits the
-SPA fallback and returns HTML. Either connect straight to `${MCP_PORT:-8081}`,
-or add the route to whichever proxy you actually run.
+The bundled nginx (`deploy/docker/mesh/nginx.conf`) proxies `/mcp/` under the
+same origin as the web UI, alongside `/api/`, `/ws` and `/health` — no extra
+configuration needed on a stock `docker compose` install. `MESH_MCP_PUBLIC_URL`
+defaults to `${MESH_BASE_URL}/mcp` in `docker-compose.prod.yml`, so setting
+`MESH_BASE_URL` (which you already do for invite links) is enough to make
+`https://<your-host>/mcp/sse` — the address the Integrations page in the web UI
+shows you — actually work.
 
-Serving MCP under a path prefix needs both halves:
+Running your own reverse proxy instead of the bundled one, or serving MCP under
+a path prefix on infrastructure you built by hand? Both halves below are what
+the bundled setup does for you automatically; do them yourself:
 
 1. A proxy route that strips the prefix:
 
    ```nginx
    location /mcp/ {
+       # A literal upstream (proxy_pass http://mcp:8081/;) is simpler and
+       # fine if MCP is a hard dependency of your setup — nginx resolves it
+       # once at config load and refuses to start if it's down. The bundled
+       # nginx uses a resolver + variable instead, because it treats mcp as
+       # optional and must not take the web UI down with it (see
+       # deploy/docker/mesh/nginx.conf for the full form). Use whichever
+       # matches how you actually run mcp.
        proxy_pass http://mcp:8081/;   # trailing slash strips the /mcp prefix
        proxy_http_version 1.1;
+       proxy_set_header Host $host;
        proxy_set_header Connection "";
        proxy_buffering off;           # required: SSE must not be buffered
        proxy_read_timeout 3600s;
@@ -272,7 +284,9 @@ Serving MCP under a path prefix needs both halves:
    ```
    # Caddy
    handle_path /mcp/* {
-       reverse_proxy mcp:8081
+       reverse_proxy mcp:8081 {
+           header_up Host localhost   # see the DNS-rebinding note below
+       }
    }
    ```
 
@@ -290,12 +304,30 @@ Serving MCP under a path prefix needs both halves:
    `/message` upstream.
 
 Serving MCP on its own hostname or port instead? Leave `MESH_MCP_PUBLIC_URL`
-empty. Relative endpoints resolve correctly on their own; the variable exists
-for path prefixes and for clients that refuse relative endpoints.
+empty (or unset it — the bundled compose file's default only fires when the
+variable is entirely absent). Relative endpoints resolve correctly on their
+own; the variable exists for path prefixes and for clients that refuse
+relative endpoints.
 
 `proxy_buffering off` is not optional. A buffering proxy holds the SSE stream
 until it has enough bytes to flush, and the connection looks like it hangs at
 the handshake.
+
+### DNS-rebinding guard and loopback proxies
+
+`mcp-go` ≥ v0.57.0 rejects a request with `403 Forbidden: invalid Host header`
+when the **local address of the accepted connection** is loopback and the
+`Host` header doesn't say so. It checks the connection's own local address, not
+the address MCP is listening on — binding to `0.0.0.0` does not avoid this.
+
+This never fires inside the bundled `docker compose` network: nginx dials `mcp`
+by its container IP, which is never loopback. It fires the moment your reverse
+proxy runs on the **same host** as `mesh-mcp` and reaches it over `127.0.0.1`
+or `localhost` — a manual (non-Docker) install, or a second proxy layer in
+front of the bundle. Fix: make the proxy send `Host: localhost` on that route,
+same as the Caddy example above (`header_up Host localhost`) — the app never
+uses the Host header for anything except this check, so overriding it here is
+safe.
 
 ---
 
@@ -330,7 +362,8 @@ Two caveats:
 | `403` on `/sse` | Key present but rejected | Key rotated, deleted, or expired (365 days) — issue a new one |
 | SSE connects, then nothing happens | Proxy buffering the stream | `proxy_buffering off` |
 | Client posts to `0.0.0.0` or to a 404 | Advertised endpoint does not match the client's route | Upgrade; set `MESH_MCP_PUBLIC_URL` if MCP sits under a path prefix |
-| `https://<host>/mcp/sse` returns HTML | Bundled nginx does not proxy MCP | Connect to port `8081`, or add the route (§4) |
+| `https://<host>/mcp/sse` returns HTML | Running a custom reverse proxy without the `/mcp/` route, or `MESH_BASE_URL`/`MESH_MCP_PUBLIC_URL` pointing somewhere the proxy doesn't route from | On the bundled nginx, set `MESH_BASE_URL`; on your own proxy, add the route (§4) |
+| `403 Forbidden: invalid Host header` on `/mcp/sse` | DNS-rebinding guard — proxy reaches `mesh-mcp` over loopback with a non-`localhost` Host | Set `Host: localhost` on that route (§4) |
 | `list_projects` returns `[]` and `create_task` says `agent is not a member of this project` | The key works; the agent is in the workspace but not on the project | Add it to each project it must work in (§1.1) |
 | Fewer tools than expected | Connected to the core profile | Use `/sse`, or unset `MESH_MCP_PROFILE` for stdio |
 | `Invalid transport "…"` | Typo in `MESH_MCP_TRANSPORT` | Only `stdio` and `sse` are valid |

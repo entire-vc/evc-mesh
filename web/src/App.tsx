@@ -16,6 +16,7 @@ import { InitiativesPage } from "@/pages/initiatives";
 import { TriagePage } from "@/pages/triage";
 import { ProjectUpdatesPage } from "@/pages/project-updates";
 import { CalendarPage } from "@/pages/calendar";
+import { DocsPage } from "@/pages/docs";
 import { WorkspaceSettingsPage } from "@/pages/workspace-settings";
 import NotificationSettingsPage from "@/pages/notification-settings";
 import { OrgChartPage } from "@/pages/org-chart";
@@ -143,6 +144,17 @@ export function App() {
           <Route
             path="w/:wsSlug/p/:projectSlug/calendar"
             element={<CalendarPage />}
+          />
+          <Route
+            path="w/:wsSlug/p/:projectSlug/docs"
+            element={<DocsPage />}
+          />
+          {/* A selected document is its own URL so it can be linked and
+              reloaded. It must be registered here: the catch-all below
+              redirects anything unrouted to "/" without a word. */}
+          <Route
+            path="w/:wsSlug/p/:projectSlug/docs/:docId"
+            element={<DocsPage />}
           />
           <Route
             path="w/:wsSlug/p/:projectSlug/updates"

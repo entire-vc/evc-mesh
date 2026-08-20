@@ -34,6 +34,19 @@ type artifactRow struct {
 	CreatedAt      time.Time           `db:"created_at"`
 }
 
+// artifactSelectCols is every column artifactRow scans, listed explicitly —
+// see agentSelectCols in agent_repo.go for why `SELECT *` (bare or alias-
+// qualified, e.g. `a.*`) is unsafe: sqlx refuses to scan a column with no
+// matching struct field, so an additive migration to this table breaks every
+// read until redeployed.
+const artifactSelectCols = `id, task_id, name, artifact_type, mime_type, storage_key, size_bytes, checksum_sha256, metadata, uploaded_by, uploaded_by_type, created_at`
+
+// artifactSelectColsQualified is artifactSelectCols with every column
+// prefixed `a.`, for queries that JOIN artifacts against other tables whose
+// column names could otherwise collide (e.g. both tasks and artifacts have
+// created_at).
+const artifactSelectColsQualified = `a.id, a.task_id, a.name, a.artifact_type, a.mime_type, a.storage_key, a.size_bytes, a.checksum_sha256, a.metadata, a.uploaded_by, a.uploaded_by_type, a.created_at`
+
 func (r *artifactRow) toDomain() domain.Artifact {
 	return domain.Artifact{
 		ID:             r.ID,
@@ -83,7 +96,7 @@ func (r *ArtifactRepo) Create(ctx context.Context, artifact *domain.Artifact) er
 }
 
 func (r *ArtifactRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.Artifact, error) {
-	const q = `SELECT * FROM artifacts WHERE id = $1`
+	const q = `SELECT ` + artifactSelectCols + ` FROM artifacts WHERE id = $1`
 	var row artifactRow
 	if err := r.db.GetContext(ctx, &row, q, id); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -100,7 +113,7 @@ func (r *ArtifactRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.Artif
 // so callers can treat it as a 404 without leaking cross-workspace IDs.
 func (r *ArtifactRepo) GetByIDInWorkspace(ctx context.Context, id, workspaceID uuid.UUID) (*domain.Artifact, error) {
 	const q = `
-		SELECT a.*
+		SELECT ` + artifactSelectColsQualified + `
 		  FROM artifacts a
 		  JOIN tasks t ON a.task_id = t.id AND t.deleted_at IS NULL
 		  JOIN projects p ON t.project_id = p.id
@@ -159,7 +172,7 @@ func (r *ArtifactRepo) ListByTask(ctx context.Context, taskID uuid.UUID, pg pagi
 
 	// Data
 	dataQ := fmt.Sprintf(
-		`SELECT * FROM artifacts WHERE task_id = $1 ORDER BY created_at DESC %s`,
+		`SELECT `+artifactSelectCols+` FROM artifacts WHERE task_id = $1 ORDER BY created_at DESC %s`,
 		paginationClause(pg),
 	)
 	var rows []artifactRow

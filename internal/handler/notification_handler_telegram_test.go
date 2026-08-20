@@ -190,20 +190,36 @@ func TestUpdatePreferences_TelegramReenableAfterDisableIssuesFreshToken(t *testi
 
 // --- GET /notifications/telegram-bot-info ------------------------------------
 
-// telegramBotInfoService is mockNotificationService with a fixed
-// TelegramBotInfo answer — the outer method shadows the embedded stub.
+// telegramBotInfoService is mockNotificationService with fixed
+// TelegramBotInfo/TelegramReachable answers — the outer methods shadow the
+// embedded stubs. probeCalls counts the reachability probes the handler makes,
+// because "does not probe when there is nothing to probe" is a property worth
+// holding onto: the probe is a network round trip on a page load.
 type telegramBotInfoService struct {
 	mockNotificationService
 	botUsername string
 	available   bool
+	reachable   bool
+	reason      string
+	probeCalls  int
 }
 
 func (s *telegramBotInfoService) TelegramBotInfo(context.Context, uuid.UUID) (string, bool) {
 	return s.botUsername, s.available
 }
 
+func (s *telegramBotInfoService) TelegramReachable(context.Context, uuid.UUID) (reachable bool, reason string) {
+	s.probeCalls++
+	return s.reachable, s.reason
+}
+
 func newTelegramBotInfoServer(userID uuid.UUID, members map[string]string, botUsername string, available bool) *echo.Echo {
-	h := NewNotificationHandler(&telegramBotInfoService{botUsername: botUsername, available: available}, &mockWorkspaceMemberRepo{members: members})
+	return newTelegramBotInfoServerWith(userID, members,
+		&telegramBotInfoService{botUsername: botUsername, available: available, reachable: available})
+}
+
+func newTelegramBotInfoServerWith(userID uuid.UUID, members map[string]string, svc *telegramBotInfoService) *echo.Echo {
+	h := NewNotificationHandler(svc, &mockWorkspaceMemberRepo{members: members})
 
 	e := echo.New()
 	e.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
@@ -231,6 +247,69 @@ func TestGetTelegramBotInfo_MemberSeesIt(t *testing.T) {
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
 	assert.Equal(t, true, body["available"])
 	assert.Equal(t, "mesh_bot", body["bot_username"])
+}
+
+// TestGetTelegramBotInfo_ConfiguredButUnreachableIsReported is the case the
+// probe was added for: a bot is configured and its token decrypts, so the
+// page's old "available" check is satisfied and it renders the connect UI —
+// while this host cannot actually reach api.telegram.org, and every message
+// the user then subscribes to will be silently dropped. The response has to
+// carry the difference, and say something a self-hoster can act on.
+func TestGetTelegramBotInfo_ConfiguredButUnreachableIsReported(t *testing.T) {
+	wsID, member := uuid.New(), uuid.New()
+	svc := &telegramBotInfoService{
+		botUsername: "mesh_bot",
+		available:   true,
+		reachable:   false,
+		reason:      "This server cannot reach api.telegram.org. Telegram notifications will not be delivered until the api container is allowed outbound HTTPS (port 443) to api.telegram.org, or an HTTPS_PROXY is configured for it.",
+	}
+	e := newTelegramBotInfoServerWith(member, map[string]string{wsID.String() + "/" + member.String(): "member"}, svc)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/notifications/telegram-bot-info?workspace_id="+wsID.String(), http.NoBody)
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	assert.Equal(t, true, body["available"], "a configured bot is still configured")
+	assert.Equal(t, false, body["reachable"])
+	assert.Contains(t, body["unavailable_reason"], "api.telegram.org")
+	assert.Contains(t, body["unavailable_reason"], "HTTPS_PROXY",
+		"the reason names the symptom but not either remedy")
+}
+
+// TestGetTelegramBotInfo_ReachableWorkspaceReportsNoReason: the healthy answer
+// carries no scary text for the page to render.
+func TestGetTelegramBotInfo_ReachableWorkspaceReportsNoReason(t *testing.T) {
+	wsID, member := uuid.New(), uuid.New()
+	e := newTelegramBotInfoServer(member, map[string]string{wsID.String() + "/" + member.String(): "member"}, "mesh_bot", true)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/notifications/telegram-bot-info?workspace_id="+wsID.String(), http.NoBody)
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	assert.Equal(t, true, body["reachable"])
+	assert.Equal(t, "", body["unavailable_reason"])
+}
+
+// TestGetTelegramBotInfo_NoBotSkipsTheProbe: with no bot configured there is
+// nothing to probe with, and the probe is a network call on a page load — so
+// the known answer is returned without making one.
+func TestGetTelegramBotInfo_NoBotSkipsTheProbe(t *testing.T) {
+	wsID, member := uuid.New(), uuid.New()
+	svc := &telegramBotInfoService{available: false}
+	e := newTelegramBotInfoServerWith(member, map[string]string{wsID.String() + "/" + member.String(): "member"}, svc)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/notifications/telegram-bot-info?workspace_id="+wsID.String(), http.NoBody)
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Zero(t, svc.probeCalls, "probed Telegram with no bot configured")
 }
 
 func TestGetTelegramBotInfo_NonMemberIsForbidden(t *testing.T) {

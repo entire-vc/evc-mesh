@@ -54,8 +54,8 @@ export default function NotificationSettingsPage() {
 
   const [selectedEvents, setSelectedEvents] = useState<Set<string>>(
     new Set([
-      "task.assigned", "task.status_changed", "comment.created", "task.mentioned", "task.blocking_triage",
-      "task.reviewer_assigned", "task.ready_for_review",
+      "task.assigned", "task.status_changed", "comment.created", "task.mentioned",
+      "document.mentioned", "task.blocking_triage", "task.reviewer_assigned", "task.ready_for_review",
     ]),
   );
   const [isEnabled, setIsEnabled] = useState(true);
@@ -68,8 +68,8 @@ export default function NotificationSettingsPage() {
   const [pushLoading, setPushLoading] = useState(false);
   const [pushEvents, setPushEvents] = useState<Set<string>>(
     new Set([
-      'task.assigned', 'task.status_changed', 'comment.created', 'task.mentioned', 'task.blocking_triage',
-      'task.reviewer_assigned', 'task.ready_for_review',
+      'task.assigned', 'task.status_changed', 'comment.created', 'task.mentioned',
+      'document.mentioned', 'task.blocking_triage', 'task.reviewer_assigned', 'task.ready_for_review',
     ]),
   );
   const [pushEventsSaving, setPushEventsSaving] = useState(false);
@@ -78,8 +78,8 @@ export default function NotificationSettingsPage() {
   const [emailEnabled, setEmailEnabled] = useState(true);
   const [emailEvents, setEmailEvents] = useState<Set<string>>(
     new Set([
-      "task.assigned", "task.status_changed", "comment.created", "task.mentioned", "task.blocking_triage",
-      "task.reviewer_assigned", "task.ready_for_review",
+      "task.assigned", "task.status_changed", "comment.created", "task.mentioned",
+      "document.mentioned", "task.blocking_triage", "task.reviewer_assigned", "task.ready_for_review",
     ]),
   );
   const [emailAddress, setEmailAddress] = useState("");
@@ -93,8 +93,8 @@ export default function NotificationSettingsPage() {
   const [telegramEnabled, setTelegramEnabled] = useState(true);
   const [telegramEvents, setTelegramEvents] = useState<Set<string>>(
     new Set([
-      "task.assigned", "task.status_changed", "comment.created", "task.mentioned", "task.blocking_triage",
-      "task.reviewer_assigned", "task.ready_for_review",
+      "task.assigned", "task.status_changed", "comment.created", "task.mentioned",
+      "document.mentioned", "task.blocking_triage", "task.reviewer_assigned", "task.ready_for_review",
     ]),
   );
   const [telegramUsername, setTelegramUsername] = useState("");
@@ -102,6 +102,7 @@ export default function NotificationSettingsPage() {
   const [telegramBindLink, setTelegramBindLink] = useState<string | null>(null);
   const [telegramSaving, setTelegramSaving] = useState(false);
   const [telegramSaved, setTelegramSaved] = useState(false);
+  const [telegramUnbinding, setTelegramUnbinding] = useState(false);
 
   useEffect(() => {
     void (async () => {
@@ -314,21 +315,33 @@ export default function NotificationSettingsPage() {
     });
   };
 
-  const handleSaveTelegram = async () => {
+  // Save and Disconnect are the same PUT; the only difference is that
+  // disconnecting turns the channel off.
+  //
+  // That is the whole mechanism: the server carries chat_id forward only while
+  // is_enabled is true, so saving a disabled row drops the binding and any
+  // outstanding bind token with it. Disconnect therefore needs no API of its
+  // own — it is the disable path with a name, which is the part that was
+  // actually missing. Nothing on this page told a user that turning the toggle
+  // off and saving is how you stop the bot messaging you, so in practice
+  // nobody could.
+  const submitTelegram = async (unbind: boolean) => {
     if (!wsID) return;
     const trimmed = telegramUsername.trim();
-    if (telegramEnabled && !trimmed) {
+    const nextEnabled = unbind ? false : telegramEnabled;
+    if (nextEnabled && !trimmed) {
       toast.error("Enter your Telegram username");
       return;
     }
 
-    setTelegramSaving(true);
+    if (unbind) setTelegramUnbinding(true);
+    else setTelegramSaving(true);
     try {
       const updated = await updatePreferences({
         workspace_id: wsID,
         channel: "telegram",
         events: Array.from(telegramEvents),
-        is_enabled: telegramEnabled,
+        is_enabled: nextEnabled,
         config: { telegram_username: trimmed },
       });
       const cfg = updated.config as TelegramPreferenceConfig | undefined;
@@ -338,16 +351,29 @@ export default function NotificationSettingsPage() {
           ? `https://t.me/${telegramBotInfo.bot_username}?start=${cfg.telegram_bind_token}`
           : null,
       );
-      setTelegramSaved(true);
-      setTimeout(() => setTelegramSaved(false), 2000);
+      if (unbind) {
+        setTelegramEnabled(false);
+        toast.success("Telegram disconnected — the bot can no longer message you");
+      } else {
+        setTelegramSaved(true);
+        setTimeout(() => setTelegramSaved(false), 2000);
+      }
     } catch (err) {
       toast.error(
-        err instanceof Error ? err.message : "Failed to save Telegram notification settings",
+        err instanceof Error
+          ? err.message
+          : unbind
+            ? "Failed to disconnect Telegram"
+            : "Failed to save Telegram notification settings",
       );
     } finally {
-      setTelegramSaving(false);
+      if (unbind) setTelegramUnbinding(false);
+      else setTelegramSaving(false);
     }
   };
+
+  const handleSaveTelegram = () => submitTelegram(false);
+  const handleDisconnectTelegram = () => submitTelegram(true);
 
   return (
     <div className="mx-auto max-w-2xl space-y-6 p-6">
@@ -426,7 +452,9 @@ export default function NotificationSettingsPage() {
           toggleTelegramEvent={toggleTelegramEvent}
           telegramSaving={telegramSaving}
           telegramSaved={telegramSaved}
+          telegramUnbinding={telegramUnbinding}
           onSave={() => void handleSaveTelegram()}
+          onDisconnect={() => void handleDisconnectTelegram()}
         />
       )}
     </div>

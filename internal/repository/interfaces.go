@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
@@ -199,8 +200,15 @@ type CommentFilter struct {
 type CommentViewFilter struct {
 	Limit       int
 	Before      *time.Time // cursor: return items created before this timestamp
+	BeforeID    *uuid.UUID // cursor tie-breaker, paired with Before: (created_at, id) < (Before, BeforeID). Optional — a lone Before still applies the old strict-timestamp comparison, for backward compat with cursors issued before this field existed.
 	WorkspaceID *uuid.UUID // optional workspace scope (used by ListByAuthor)
 	ProjectID   *uuid.UUID // optional project scope (used by ListByAuthor)
+	// IncludeInternal, when true, drops the default `is_internal = false`
+	// predicate on ListRecentByWorkspace — see #a7ae4c76. Not honored by
+	// ListByAuthor (a caller's own comments aren't the internal-mentions
+	// corpus this exists for). Defaults to false: excluded, same as before
+	// this field existed.
+	IncludeInternal bool
 }
 
 // CommentRepository manages persistence for comments.
@@ -211,8 +219,8 @@ type CommentRepository interface {
 	Delete(ctx context.Context, id uuid.UUID) error
 	ListByTask(ctx context.Context, taskID uuid.UUID, filter CommentFilter, pg pagination.Params) (*pagination.Page[domain.Comment], error)
 	ListReplies(ctx context.Context, parentCommentID uuid.UUID) ([]domain.Comment, error)
-	ListByAuthor(ctx context.Context, authorID uuid.UUID, filter CommentViewFilter) ([]domain.CommentView, *time.Time, error)
-	ListRecentByWorkspace(ctx context.Context, wsID uuid.UUID, filter CommentViewFilter) ([]domain.CommentView, *time.Time, error)
+	ListByAuthor(ctx context.Context, authorID uuid.UUID, filter CommentViewFilter) ([]domain.CommentView, *domain.CommentCursor, error)
+	ListRecentByWorkspace(ctx context.Context, wsID uuid.UUID, filter CommentViewFilter) ([]domain.CommentView, *domain.CommentCursor, error)
 	// HasAnyComment returns true when the task has at least one comment.
 	HasAnyComment(ctx context.Context, taskID uuid.UUID) (bool, error)
 	// HasRecentCommentBy returns true when the task has a non-internal comment by authorID
@@ -231,6 +239,167 @@ type ArtifactRepository interface {
 	ListByTask(ctx context.Context, taskID uuid.UUID, pg pagination.Params) (*pagination.Page[domain.Artifact], error)
 	// UpdateMetadata overwrites the JSONB metadata column for a single artifact.
 	UpdateMetadata(ctx context.Context, id uuid.UUID, metadata json.RawMessage) error
+}
+
+// DocumentRepository manages persistence for project documents. Every read here
+// hides soft-deleted rows; only Create and Update write.
+type DocumentRepository interface {
+	Create(ctx context.Context, doc *domain.Document) error
+	GetByID(ctx context.Context, id uuid.UUID) (*domain.Document, error)
+	// GetByIDInWorkspace is like GetByID but returns nil when the document's
+	// project does not belong to workspaceID — the defense-in-depth ownership
+	// check behind the /documents/:doc_id routes.
+	GetByIDInWorkspace(ctx context.Context, id, workspaceID uuid.UUID) (*domain.Document, error)
+	// GetByPathInProject resolves a slug path — ["architecture", "adr", "adr-004"]
+	// — to the document it names, walking down from the project's top level. It
+	// returns the document, or nil with the number of segments that did resolve so
+	// the caller can say where the path went wrong instead of only that it did.
+	//
+	// Live rows only, at every level: a soft-deleted document is not a step you can
+	// walk through, and its slug is free for a sibling to take.
+	GetByPathInProject(ctx context.Context, projectID uuid.UUID, segments []string) (doc *domain.Document, resolvedDepth int, err error)
+	// Update writes title, parent_id, position, updated_at and the updated_by
+	// pair. Nothing else on a document is mutable: the body is in object storage,
+	// and project_id and slug are what its siblings are unique against.
+	//
+	// expectedVersion, when non-nil, makes the write conditional: the UPDATE only
+	// matches a row still at that version, and a row that has moved on is left
+	// untouched and reported as ErrDocumentVersionMismatch. The compare and the
+	// write are one statement on purpose — a service that read the version and
+	// then wrote would leave open exactly the window the check exists to close.
+	//
+	// bumpVersion sets version = version + 1 in the same statement. It is passed
+	// rather than inferred because only the caller knows whether this write
+	// touched the document's content: a move in the tree must not bump.
+	//
+	// Returns the version the row now carries. On ErrDocumentVersionMismatch that
+	// is the version actually stored, which is what the caller has to be told to
+	// be able to retry.
+	Update(ctx context.Context, doc *domain.Document, expectedVersion *int, bumpVersion bool) (version int, err error)
+	// SoftDelete stamps deleted_at, freeing the slug for a new sibling, and
+	// records who did it: a delete is a change to the row, and "last updated by"
+	// has to survive a restore to be worth anything.
+	SoftDelete(ctx context.Context, id uuid.UUID, at time.Time, by uuid.UUID, byType domain.ActorType) error
+	ListByProject(ctx context.Context, projectID uuid.UUID, pg pagination.Params) (*pagination.Page[domain.Document], error)
+	// HasAncestor reports whether ancestorID appears above docID in the parent
+	// chain. Re-parenting uses it to refuse the cycles that would otherwise
+	// detach a subtree from every listing that walks down from the roots.
+	HasAncestor(ctx context.Context, docID, ancestorID uuid.UUID) (bool, error)
+	// SetSearchText stores the copy of the body that the full-text index is built
+	// from. Called after the body reaches object storage, never instead of it —
+	// S3 stays canonical and this is only what makes the row findable.
+	//
+	// Its own method rather than a column on Update: the text can be megabytes,
+	// and threading it through the row struct would put it in every read that
+	// scans one.
+	SetSearchText(ctx context.Context, documentID uuid.UUID, text string) error
+	// SearchInProject ranks the project's live documents against a query, over
+	// title AND content. workspaceID is the tenancy check, the same one
+	// GetByIDInWorkspace applies: a project id alone is not proof of ownership.
+	SearchInProject(ctx context.Context, projectID, workspaceID uuid.UUID, query string, limit int) ([]domain.DocumentSearchHit, error)
+}
+
+// ErrDocumentVersionMismatch reports that a conditional document write found the
+// row at a version other than the one the caller expected, so nothing was
+// written. DocumentRepository.Update returns the version actually stored
+// alongside it.
+//
+// A sentinel rather than a typed error carrying the number, because the number is
+// already in the other return value and two copies of it could disagree.
+var ErrDocumentVersionMismatch = errors.New("document version mismatch")
+
+// DocumentAttachmentRepository manages persistence for the files uploaded into a
+// document. Every read here hides soft-deleted rows; only Create writes.
+//
+// There is no Update: nothing about an attachment is mutable. The name is what was
+// uploaded, and the storage key is derived from the immutable id — a rename that
+// moved the key would orphan the object it used to name.
+type DocumentAttachmentRepository interface {
+	Create(ctx context.Context, att *domain.DocumentAttachment) error
+	// GetByIDInWorkspace returns nil when the attachment's document belongs to a
+	// project outside workspaceID, or when either row is soft-deleted. Callers
+	// answer 404 on nil, so a stranger's id and a nonexistent one look the same.
+	GetByIDInWorkspace(ctx context.Context, id, workspaceID uuid.UUID) (*domain.DocumentAttachment, error)
+	ListByDocument(ctx context.Context, documentID uuid.UUID, pg pagination.Params) (*pagination.Page[domain.DocumentAttachment], error)
+	// SoftDelete stamps deleted_at. The stored object is deliberately left alone —
+	// see documentAttachmentService.Delete.
+	SoftDelete(ctx context.Context, id uuid.UUID, at time.Time) error
+}
+
+// DocumentCommentFilter narrows a document's comment listing.
+type DocumentCommentFilter struct {
+	// IncludeResolved keeps resolved threads in the result. It defaults to false
+	// — a resolved thread is one somebody deliberately put away, and the reading
+	// view is the default one — and it filters by THREAD, not by comment: a
+	// resolved root takes its replies with it, or a listing would show answers to
+	// a question that is no longer there.
+	//
+	// Same shape and same default as CommentFilter.IncludeInternal.
+	IncludeResolved bool
+}
+
+// DocumentCommentRepository manages persistence for comments anchored to a
+// document's text. Every read here hides soft-deleted rows.
+type DocumentCommentRepository interface {
+	Create(ctx context.Context, comment *domain.DocumentComment) error
+	// GetByID ignores tenancy and is only for the checks that already have a
+	// tenant-scoped object in hand — validating that a reply's parent lives on
+	// the same document. Never call it with an id straight off the wire.
+	GetByID(ctx context.Context, id uuid.UUID) (*domain.DocumentComment, error)
+	// GetByIDInWorkspace returns nil when the comment's document belongs to a
+	// project outside workspaceID, or when any row in that chain is soft-deleted.
+	// Callers answer 404 on nil, so a stranger's id and a nonexistent one look
+	// the same.
+	GetByIDInWorkspace(ctx context.Context, id, workspaceID uuid.UUID) (*domain.DocumentComment, error)
+	// Update writes body, the resolution triple and updated_at — the whole of
+	// what is mutable. The anchor is not: it records what the comment was written
+	// about, and rewriting it would relabel the past.
+	Update(ctx context.Context, comment *domain.DocumentComment) error
+	// SoftDelete stamps deleted_at on the comment and, when it is a thread root,
+	// on its replies in the same statement: a reply that outlived the comment it
+	// answers is an answer to nothing.
+	SoftDelete(ctx context.Context, id uuid.UUID, at time.Time) error
+	ListByDocument(ctx context.Context, documentID uuid.UUID, filter DocumentCommentFilter, pg pagination.Params) (*pagination.Page[domain.DocumentComment], error)
+	// ListAnchorsByDocument returns the anchor of every live comment on the
+	// document that has one, resolved threads included. It is the input to the
+	// re-anchoring pass that runs after the body is rewritten, so it is not
+	// paginated and not filtered: an anchor left out of the pass is an anchor
+	// left pointing at whatever now occupies its old offsets, and "resolved"
+	// describes a conversation, not whether its offsets may lie.
+	ListAnchorsByDocument(ctx context.Context, documentID uuid.UUID) ([]DocumentCommentAnchorRow, error)
+	// UpdateAnchorPositions moves each listed comment's offsets to where its
+	// quote now sits, or nulls them when it no longer sits anywhere. One
+	// statement for the whole document: a per-row loop could be interrupted
+	// half-way and leave some rows describing the new body and some the old,
+	// which is worse than either, and impossible to tell apart from both.
+	UpdateAnchorPositions(ctx context.Context, positions []DocumentCommentAnchorPosition) error
+}
+
+// DocumentCommentAnchorRow is one comment's anchor, with the id needed to write
+// it back. Just the anchor: the re-anchoring pass has no use for the body, the
+// author or the resolution triple, and a document with a hundred comments should
+// not pull a hundred bodies through to move five offsets.
+type DocumentCommentAnchorRow struct {
+	ID     uuid.UUID `db:"id"`
+	Exact  string    `db:"anchor_exact"`
+	Prefix *string   `db:"anchor_prefix"`
+	Suffix *string   `db:"anchor_suffix"`
+	Start  *int      `db:"anchor_start"`
+	End    *int      `db:"anchor_end"`
+}
+
+// DocumentCommentAnchorPosition is where one comment's anchor should now sit.
+//
+// Start and End are nil together to orphan it. The pair is nil-or-both by the
+// same schema check that governs the columns, so a caller cannot express
+// "orphaned, and here are the offsets" — the state the flag-shaped design would
+// have allowed and this one cannot.
+type DocumentCommentAnchorPosition struct {
+	ID     uuid.UUID
+	Prefix string
+	Suffix string
+	Start  *int
+	End    *int
 }
 
 // AgentFilter defines filtering options for listing agents.
@@ -259,6 +428,12 @@ type AgentRepository interface {
 	Create(ctx context.Context, agent *domain.Agent) error
 	GetByID(ctx context.Context, id uuid.UUID) (*domain.Agent, error)
 	GetByAPIKeyPrefix(ctx context.Context, workspaceID uuid.UUID, prefix string) (*domain.Agent, error)
+	// SetAPIKeySHA256 fills in the fast-verification digest for an agent whose
+	// row still predates it. expectedBcryptHash guards the write: it is the hash
+	// the caller just verified the presented key against, so a rotation that
+	// landed in between makes the UPDATE match no row rather than stamping a
+	// digest of the superseded key onto the new one.
+	SetAPIKeySHA256(ctx context.Context, agentID uuid.UUID, digest, expectedBcryptHash string) error
 	// GetBySlug returns the agent with the given slug in a workspace, or (nil, nil) if not found.
 	GetBySlug(ctx context.Context, workspaceID uuid.UUID, slug string) (*domain.Agent, error)
 	Update(ctx context.Context, agent *domain.Agent) error
@@ -394,6 +569,73 @@ type CommentMentionRepository interface {
 	List(ctx context.Context, mentionedID uuid.UUID, mentionedKind string, filter MentionFilter) ([]domain.CommentMentionView, error)
 	MarkSeen(ctx context.Context, commentID, mentionedID uuid.UUID) error
 	CountUnseen(ctx context.Context, mentionedID uuid.UUID, mentionedKind string) (int64, error)
+}
+
+// CommentDeliveryOutcomeRepository manages persistence for
+// comment_delivery_outcomes rows — one verdict per @-addressed handle on a
+// comment, including handles that resolved to nobody.
+//
+// Separate from CommentMentionRepository on purpose. That one is the Mention
+// feed and is keyed on a resolved recipient id; this one is the delivery
+// record and is keyed on the handle as written, which is the only key that
+// survives a handle resolving to nothing.
+type CommentDeliveryOutcomeRepository interface {
+	InsertBatch(ctx context.Context, rows []domain.CommentDeliveryOutcome) error
+	MarkFailed(ctx context.Context, commentID uuid.UUID, slug, reason string) error
+	ListByCommentIDs(ctx context.Context, commentIDs []uuid.UUID) (map[uuid.UUID][]domain.CommentDeliveryOutcome, error)
+}
+
+// DocumentCommentMentionRepository manages persistence for
+// document_comment_mentions rows.
+//
+// Deliberately the same four operations as CommentMentionRepository, over the
+// same MentionFilter: a mention on a document page and a mention on a task are
+// the same thing to whoever was named, and the read side should not be two
+// different shapes because the write side has two parent tables.
+type DocumentCommentMentionRepository interface {
+	InsertBatch(ctx context.Context, mentions []domain.DocumentCommentMention) error
+	List(ctx context.Context, mentionedID uuid.UUID, mentionedKind string, filter MentionFilter) ([]domain.DocumentCommentMentionView, error)
+	MarkSeen(ctx context.Context, commentID, mentionedID uuid.UUID) error
+	CountUnseen(ctx context.Context, mentionedID uuid.UUID, mentionedKind string) (int64, error)
+}
+
+// DocumentWatchRepository manages document subscriptions and the pending
+// change-notices that make coalescing possible.
+//
+// The two live behind one interface because they are one feature: a notice is
+// only ever created for a document somebody might be watching, and it is only
+// ever read in order to find out who.
+type DocumentWatchRepository interface {
+	// Subscribe records a subscription. An automatic source (author, commenter)
+	// must not resurrect a muted row — that is what makes unsubscribing stick —
+	// so `force` is set only by the explicit Watch button.
+	Subscribe(ctx context.Context, w domain.DocumentWatcher, force bool) error
+
+	// Unsubscribe mutes the caller's subscription, creating the tombstone row if
+	// none existed. Reports whether anything is now muted for this principal.
+	Unsubscribe(ctx context.Context, documentID, watcherID uuid.UUID, watcherKind string) error
+
+	// GetState answers "am I watching this, and how many others are".
+	GetState(ctx context.Context, documentID, watcherID uuid.UUID, watcherKind string) (*domain.DocumentWatchState, error)
+
+	// ListLiveWatchers returns the document's non-muted watchers.
+	ListLiveWatchers(ctx context.Context, documentID uuid.UUID) ([]domain.DocumentWatcher, error)
+
+	// RecordChange folds one edit into the open notice for (document, actor),
+	// opening one if there is none. This is the write that a hundred autosaves
+	// collapse into a hundred UPDATEs of a single row.
+	RecordChange(ctx context.Context, n domain.DocumentChangeNotice) error
+
+	// ClaimPendingNotices atomically takes ownership of the notices whose actor
+	// has been quiet since `quietBefore` and that nobody else has claimed.
+	//
+	// Atomic claim rather than select-then-update: two API replicas run this
+	// sweeper, and a non-atomic read would let both dispatch the same notice.
+	ClaimPendingNotices(ctx context.Context, quietBefore time.Time, limit int) ([]domain.DocumentChangeNotice, error)
+
+	// FinishNotice records the outcome of a dispatch: how many principals were
+	// told, and why nobody was if that is the answer.
+	FinishNotice(ctx context.Context, id uuid.UUID, recipients int, dispatchErr string) error
 }
 
 // RefreshToken represents a stored refresh token record.
@@ -877,4 +1119,45 @@ type ProjectIntegrationRepository interface {
 	Upsert(ctx context.Context, pi *domain.ProjectIntegration) error
 	Delete(ctx context.Context, projectID uuid.UUID, intType string) error
 	ListByProject(ctx context.Context, projectID uuid.UUID) ([]domain.ProjectIntegration, error)
+}
+
+// SecretRepository manages the write-only secrets store (task #64e84eb1).
+// Every method here returns or accepts domain.Secret, which has no field
+// capable of carrying a value — that is what makes "no read path returns
+// plaintext or ciphertext" a property the compiler can help enforce, not
+// just something a test happens to check.
+type SecretRepository interface {
+	// Create encrypts input.Value and inserts a new current row. Returns
+	// apierror.Conflict if a current (unrotated) secret already exists for
+	// the same workspace/scope/name — callers must Rotate instead.
+	Create(ctx context.Context, input domain.CreateSecretInput) (domain.Secret, error)
+	// Rotate stamps the current row's rotated_at and inserts a new current
+	// row with the new value, in one transaction. Returns apierror.NotFound
+	// if there is no current secret to rotate.
+	Rotate(ctx context.Context, workspaceID uuid.UUID, scope domain.SecretScope, projectID, agentID *uuid.UUID, name string, input domain.CreateSecretInput) (domain.Secret, error)
+	// Delete stamps rotated_at on the current row without inserting a
+	// replacement, ending materialization for that name. History is kept,
+	// not hard-deleted — same audit-trail posture as activity_log.
+	Delete(ctx context.Context, workspaceID uuid.UUID, scope domain.SecretScope, projectID, agentID *uuid.UUID, name string, deletedBy uuid.UUID, deletedByType domain.ActorType) error
+	// ListCurrent returns the masked metadata (never a value) for every
+	// current secret in scope for the given resolution: all workspace-scope
+	// secrets in workspaceID, plus project-scope ones for projectID (if
+	// given), plus agent-scope ones for agentID (if given).
+	ListCurrent(ctx context.Context, workspaceID uuid.UUID, projectID, agentID *uuid.UUID) ([]domain.Secret, error)
+}
+
+// SecretMaterializer decrypts current secret values for spawn-time env-file
+// materialization (task #64e84eb1, S4). This is a SEPARATE interface from
+// SecretRepository on purpose: SecretRepository is what the public secrets
+// API (S3) is built on, and it has no method that can return a value at all.
+// Wire this interface into exactly one caller — the spawn-hook endpoint —
+// never into anything a browser session or a general agent tool reaches.
+type SecretMaterializer interface {
+	// ResolveCurrentValues decrypts every CURRENT secret in scope for the
+	// given resolution and reports each one's expiry state explicitly — an
+	// expired entry is returned WITH Expired=true and an empty Value, so the
+	// caller can name it in a loud spawn error rather than silently omit the
+	// variable (the task explicitly rejects a silent empty var as worse than
+	// a loud failure).
+	ResolveCurrentValues(ctx context.Context, workspaceID uuid.UUID, projectID, agentID *uuid.UUID) ([]domain.MaterializedSecret, error)
 }

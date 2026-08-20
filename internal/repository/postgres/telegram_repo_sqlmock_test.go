@@ -29,7 +29,7 @@ func TestIntegrationRepo_ListActiveByProvider(t *testing.T) {
 	now := time.Now()
 	cfg, _ := json.Marshal(map[string]string{"bot_token": "enc", "bot_username": "mesh_bot"})
 
-	mock.ExpectQuery("SELECT \\* FROM integration_configs WHERE provider = \\$1 AND is_active = true").
+	mock.ExpectQuery("FROM integration_configs WHERE provider = \\$1 AND is_active = true").
 		WithArgs("telegram").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "workspace_id", "provider", "config", "is_active", "created_at", "updated_at"}).
 			AddRow(intID, wsID, "telegram", cfg, true, now, now))
@@ -49,7 +49,7 @@ func TestIntegrationRepo_ListActiveByProvider_Empty(t *testing.T) {
 	t.Cleanup(func() { _ = rawDB.Close() })
 	repo := NewIntegrationRepo(sqlx.NewDb(rawDB, "postgres"))
 
-	mock.ExpectQuery("SELECT \\* FROM integration_configs WHERE provider = \\$1 AND is_active = true").
+	mock.ExpectQuery("FROM integration_configs WHERE provider = \\$1 AND is_active = true").
 		WithArgs("telegram").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "workspace_id", "provider", "config", "is_active", "created_at", "updated_at"}))
 
@@ -68,7 +68,7 @@ func TestProjectRepo_ListForUserInWorkspace(t *testing.T) {
 	wsID, userID, projID := uuid.New(), uuid.New(), uuid.New()
 	now := time.Now()
 
-	mock.ExpectQuery("SELECT p\\.\\* FROM projects p").
+	mock.ExpectQuery("FROM projects p").
 		WithArgs(wsID, userID).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id", "workspace_id", "name", "description", "slug", "icon", "settings",
@@ -91,7 +91,7 @@ func TestProjectRepo_ListForUserInWorkspace_NoProjects(t *testing.T) {
 
 	wsID, userID := uuid.New(), uuid.New()
 
-	mock.ExpectQuery("SELECT p\\.\\* FROM projects p").
+	mock.ExpectQuery("FROM projects p").
 		WithArgs(wsID, userID).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id", "workspace_id", "name", "description", "slug", "icon", "settings",

@@ -170,14 +170,45 @@ const commentViewSelect = `SELECT
 			(SELECT COALESCE(NULLIF(u.display_name, ''), SPLIT_PART(u.email, '@', 1)) FROM users u WHERE u.id = c.author_id)
 		ELSE ''
 	END AS author_name,
+	c.is_internal,
 	c.created_at,
 	c.updated_at
 FROM comments c
 JOIN tasks t ON t.id = c.task_id AND t.deleted_at IS NULL
 JOIN projects p ON p.id = t.project_id AND p.deleted_at IS NULL`
 
+// cursorWhere appends the `before`/`before_id` page-boundary condition to where,
+// returning the updated where clause and args. With both Before and BeforeID
+// set it compares the (created_at, id) tuple, which is immune to ties on
+// created_at alone; a lone Before (old-style cursor, issued before this field
+// existed) falls back to the original strict-timestamp comparison so an
+// already-open client mid-pagination keeps working.
+func cursorWhere(where string, args []any, filter repository.CommentViewFilter) (whereOut string, argsOut []any) {
+	if filter.Before == nil {
+		return where, args
+	}
+	if filter.BeforeID != nil {
+		args = append(args, *filter.Before, *filter.BeforeID)
+		where += fmt.Sprintf(` AND (c.created_at, c.id) < ($%d, $%d)`, len(args)-1, len(args))
+		return where, args
+	}
+	args = append(args, *filter.Before)
+	where += fmt.Sprintf(` AND c.created_at < $%d`, len(args))
+	return where, args
+}
+
+// nextCommentCursor derives the next page's cursor from the last row of a
+// full page (len(rows) == limit signals more rows may follow).
+func nextCommentCursor(rows []domain.CommentView, limit int) *domain.CommentCursor {
+	if len(rows) != limit {
+		return nil
+	}
+	last := rows[len(rows)-1]
+	return &domain.CommentCursor{CreatedAt: last.CreatedAt, ID: last.CommentID}
+}
+
 // ListByAuthor returns the caller's own comments across workspaces, newest first.
-func (r *CommentRepo) ListByAuthor(ctx context.Context, authorID uuid.UUID, filter repository.CommentViewFilter) ([]domain.CommentView, *time.Time, error) {
+func (r *CommentRepo) ListByAuthor(ctx context.Context, authorID uuid.UUID, filter repository.CommentViewFilter) ([]domain.CommentView, *domain.CommentCursor, error) {
 	limit := filter.Limit
 	if limit <= 0 {
 		limit = 50
@@ -197,13 +228,10 @@ func (r *CommentRepo) ListByAuthor(ctx context.Context, authorID uuid.UUID, filt
 		args = append(args, *filter.ProjectID)
 		where += fmt.Sprintf(` AND t.project_id = $%d`, len(args))
 	}
-	if filter.Before != nil {
-		args = append(args, *filter.Before)
-		where += fmt.Sprintf(` AND c.created_at < $%d`, len(args))
-	}
+	where, args = cursorWhere(where, args, filter)
 
 	args = append(args, limit)
-	q := commentViewSelect + ` WHERE ` + where + fmt.Sprintf(` ORDER BY c.created_at DESC LIMIT $%d`, len(args))
+	q := commentViewSelect + ` WHERE ` + where + fmt.Sprintf(` ORDER BY c.created_at DESC, c.id DESC LIMIT $%d`, len(args))
 
 	var rows []domain.CommentView
 	if err := r.db.SelectContext(ctx, &rows, q, args...); err != nil {
@@ -213,16 +241,11 @@ func (r *CommentRepo) ListByAuthor(ctx context.Context, authorID uuid.UUID, filt
 		rows = []domain.CommentView{}
 	}
 
-	var nextCursor *time.Time
-	if len(rows) == limit {
-		t := rows[len(rows)-1].CreatedAt
-		nextCursor = &t
-	}
-	return rows, nextCursor, nil
+	return rows, nextCommentCursor(rows, limit), nil
 }
 
 // ListRecentByWorkspace returns workspace-wide recent comments, newest first.
-func (r *CommentRepo) ListRecentByWorkspace(ctx context.Context, wsID uuid.UUID, filter repository.CommentViewFilter) ([]domain.CommentView, *time.Time, error) {
+func (r *CommentRepo) ListRecentByWorkspace(ctx context.Context, wsID uuid.UUID, filter repository.CommentViewFilter) ([]domain.CommentView, *domain.CommentCursor, error) {
 	limit := filter.Limit
 	if limit <= 0 {
 		limit = 50
@@ -232,15 +255,14 @@ func (r *CommentRepo) ListRecentByWorkspace(ctx context.Context, wsID uuid.UUID,
 	}
 
 	args := []any{wsID}
-	where := `p.workspace_id = $1 AND c.is_internal = false`
-
-	if filter.Before != nil {
-		args = append(args, *filter.Before)
-		where += fmt.Sprintf(` AND c.created_at < $%d`, len(args))
+	where := `p.workspace_id = $1`
+	if !filter.IncludeInternal {
+		where += ` AND c.is_internal = false`
 	}
+	where, args = cursorWhere(where, args, filter)
 
 	args = append(args, limit)
-	q := commentViewSelect + ` WHERE ` + where + fmt.Sprintf(` ORDER BY c.created_at DESC LIMIT $%d`, len(args))
+	q := commentViewSelect + ` WHERE ` + where + fmt.Sprintf(` ORDER BY c.created_at DESC, c.id DESC LIMIT $%d`, len(args))
 
 	var rows []domain.CommentView
 	if err := r.db.SelectContext(ctx, &rows, q, args...); err != nil {
@@ -250,12 +272,7 @@ func (r *CommentRepo) ListRecentByWorkspace(ctx context.Context, wsID uuid.UUID,
 		rows = []domain.CommentView{}
 	}
 
-	var nextCursor *time.Time
-	if len(rows) == limit {
-		t := rows[len(rows)-1].CreatedAt
-		nextCursor = &t
-	}
-	return rows, nextCursor, nil
+	return rows, nextCommentCursor(rows, limit), nil
 }
 
 // HasAnyComment returns true when the task has at least one comment.

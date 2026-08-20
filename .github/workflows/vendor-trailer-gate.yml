@@ -1,0 +1,79 @@
+name: Vendor trailer gate
+
+# Keeps tool-attribution trailers out of this repository's commit history.
+#
+# ## Why a required check and not a local hook
+#
+# A `commit-msg` hook lives on the machine that happens to have installed it. It
+# is the right first line — it fails in a second, before the commit exists — but
+# it is advisory by construction: a fresh clone, a different machine, a web edit
+# or `--no-verify` all walk straight past it. Branch protection is the only gate
+# every merge path consults, which is the lesson the `hold` label taught this
+# repository the expensive way: it was honoured by our two wrapper scripts and
+# ignored by the web button, `gh pr merge`, a direct REST PUT and the merge
+# queue, so it looked enforced for six weeks while changing nothing.
+#
+# ## Scope
+#
+# Going forward, on this repository. Existing history is untouched: force-pushing
+# a public branch with a merge queue enabled breaks every clone and fork,
+# invalidates signed tags and release artefacts, and orphans every reference to a
+# commit SHA — including `/api/v1/version`, which reports the deployed one.
+#
+# ## Why it must run on merge_group too
+#
+# A required check that reports nothing on `merge_group` wedges the repository:
+# every queue entry waits forever for a context that is never requested. Same
+# reasoning as hold-gate.yml and the note at the top of ci.yml. It is also not
+# ceremonial here — the merge_group run reads the squash messages themselves,
+# which is the only way to see a body a human retyped in the merge box.
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, synchronize, ready_for_review]
+  merge_group:
+    types: [checks_requested]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: vendor-trailer-gate-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # The job name is the required-check context string. Changing it silently
+  # un-arms the gate — branch protection keeps waiting for a context no workflow
+  # produces, which reads as "pending" rather than as "misconfigured".
+  vendor-trailer-gate:
+    name: Vendor trailer gate
+    runs-on: ubuntu-latest
+    steps:
+      # Both files, not just the list. Fetching the data and forgetting the code
+      # that reads it fails the job — correctly, since this gate refuses on any
+      # unknown — but for a reason that has nothing to do with commit messages,
+      # and a required check red for the wrong reason is a wedged repository.
+      - name: Check out the gate
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            .github/vendor-trailer-terms.txt
+            .github/scripts/vendor_trailer_gate.py
+          sparse-checkout-cone-mode: false
+
+      - name: Confirm the gate was actually checked out
+        run: |
+          test -f .github/scripts/vendor_trailer_gate.py || { echo "::error::vendor_trailer_gate.py missing after checkout"; exit 1; }
+          test -f .github/vendor-trailer-terms.txt       || { echo "::error::vendor-trailer-terms.txt missing after checkout"; exit 1; }
+
+      - name: Refuse any commit message carrying a tool-attribution trailer
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          MERGE_GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha }}
+          MERGE_GROUP_HEAD_SHA: ${{ github.event.merge_group.head_sha }}
+        run: python3 .github/scripts/vendor_trailer_gate.py

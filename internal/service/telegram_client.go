@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 )
 
 // TelegramAPIBaseURL is the default Telegram Bot API endpoint. Tests point
@@ -41,6 +42,50 @@ type TelegramChat struct {
 type TelegramUser struct {
 	ID       int64  `json:"id"`
 	Username string `json:"username"`
+}
+
+// TelegramUnreachableError reports that the Telegram Bot API could not be
+// reached at all — the request never came back with an HTTP response, so
+// nothing is known about the token, the chat, or the bot.
+//
+// It exists because the underlying failure says "context deadline exceeded",
+// and a self-hoster reading that in a log will go looking at their token,
+// their bot, their chat id and their clock long before they think to check
+// whether the api container is allowed to make outbound HTTPS calls at all —
+// which, on the instance this was diagnosed on, was the entire problem. The
+// message names the host that could not be reached and the two things that fix
+// it, so the log line is the answer rather than the start of a search.
+type TelegramUnreachableError struct {
+	// Host is the API endpoint that could not be reached, without the bot
+	// token that appears in the full request URL.
+	Host string
+	// Method is the Bot API method that was being called.
+	Method string
+	// Err is the transport failure, with the bot token redacted.
+	Err error
+}
+
+func (e *TelegramUnreachableError) Error() string {
+	return fmt.Sprintf(
+		"telegram %s: cannot reach %s — check that this host has outbound HTTPS (443) access to it, or set HTTPS_PROXY for the api container; verify with: curl -sS --max-time 10 %s (underlying error: %v)",
+		e.Method, e.Host, e.Host, e.Err)
+}
+
+func (e *TelegramUnreachableError) Unwrap() error { return e.Err }
+
+// redactToken removes the bot token from a transport error before it is
+// logged. http.Client failures are *url.Error, whose message embeds the full
+// request URL — and the Bot API puts the token in the path, so every
+// connection failure was printing a live credential into the log.
+func redactToken(err error, token string) error {
+	if err == nil || token == "" {
+		return err
+	}
+	msg := strings.ReplaceAll(err.Error(), token, "<bot-token-redacted>")
+	if escaped := url.PathEscape(token); escaped != token {
+		msg = strings.ReplaceAll(msg, escaped, "<bot-token-redacted>")
+	}
+	return errors.New(msg)
 }
 
 // TelegramAPIError wraps a non-OK response from the Telegram Bot API.
@@ -126,7 +171,10 @@ func (c *httpTelegramClient) call(ctx context.Context, token, method string, bod
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("telegram %s: %w", method, err)
+		// No HTTP response came back at all: DNS, TCP, TLS, proxy or timeout.
+		// Every one of those is "this host cannot talk to Telegram", which is
+		// a different problem from anything the API itself can report.
+		return &TelegramUnreachableError{Host: c.baseURL, Method: method, Err: redactToken(err, token)}
 	}
 	defer func() { _ = resp.Body.Close() }()
 

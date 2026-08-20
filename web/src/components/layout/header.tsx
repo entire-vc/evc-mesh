@@ -39,7 +39,7 @@ import {
 import { ViewTabBar } from "@/components/view-tab-bar";
 import { NotificationBell } from "@/components/notification-bell";
 import { api } from "@/lib/api";
-import type { PaginatedResponse, Task } from "@/types";
+import type { PaginatedResponse, ProjectViewTab, Task } from "@/types";
 
 // ---------------------------------------------------------------------------
 // TaskSearchResult — enriched result for display
@@ -411,12 +411,17 @@ interface HeaderProps {
   onInstall?: () => void;
 }
 
-function useCurrentView(): "board" | "list" | "timeline" | "calendar" | null {
+// Also gates whether the view strip renders at all: a project route missing
+// from here gets no tabs.
+function useCurrentView(): ProjectViewTab | null {
   const location = useLocation();
   const path = location.pathname;
   if (path.endsWith("/list")) return "list";
   if (path.endsWith("/timeline")) return "timeline";
   if (path.endsWith("/calendar")) return "calendar";
+  // /docs and /docs/:docId are the same tab — matching only the bare path left
+  // an open document with no tab highlighted and no view strip at all.
+  if (/\/docs(\/[^/]+)?\/?$/.test(path)) return "docs";
   // Check if we're on a project page (board is the default project view)
   if (/\/w\/[^/]+\/p\/[^/]+\/?$/.test(path)) return "board";
   return null;

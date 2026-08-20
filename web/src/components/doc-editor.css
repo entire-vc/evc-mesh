@@ -1,0 +1,345 @@
+/*
+ * Styling for document bodies.
+ *
+ * Scoped to .mesh-doc-prose, which is applied to the ProseMirror contenteditable
+ * in BOTH modes — the viewer and the editor are the same engine, so they must be
+ * the same stylesheet too. Two stylesheets is how the two hand-written renderers
+ * drifted in the first place.
+ *
+ * @milkdown/kit ships no theme (that is what Crepe is for, and Crepe brings a Vue
+ * runtime and katex with it), so this is the whole visual layer.
+ */
+
+@import "@milkdown/kit/prose/view/style/prosemirror.css";
+@import "@milkdown/kit/prose/tables/style/tables.css";
+@import "@milkdown/kit/prose/gapcursor/style/gapcursor.css";
+
+.mesh-doc-prose {
+  line-height: 1.65;
+  word-break: break-word;
+}
+
+/*
+ * ---- filling the column ----
+ *
+ * The editable surface takes the height its box is given instead of stopping at
+ * min-h-[8rem] and leaving a dead area under it — an editor you cannot click
+ * into for most of its height reads as broken.
+ *
+ * This is a stylesheet rather than utility classes because the chain has to
+ * cross TWO elements we do not render and cannot put a className on:
+ * <Milkdown /> renders a wrapper, Milkdown puts its own `.milkdown` div inside
+ * that, and ProseMirror mounts the contenteditable inside THAT. Miss either one
+ * and the fill stops there — the editable area stays at its min-height while
+ * the box around it is tall, which is the bug this is here to fix.
+ *
+ * The selectors stay pinned to those two wrapper levels. A blanket
+ * `.mesh-doc-editor-body div` would also hit the divs inside the document
+ * itself (tables, code blocks) and turn the prose into flex boxes.
+ *
+ * `flex: 1 1 auto` everywhere, never `flex-basis: 0` and never `min-height: 0`:
+ * every box here must be able to fill the space that is there AND to outgrow it
+ * when the document is longer than the viewport. Growing is what keeps the
+ * single scroller on the page column instead of nesting one inside the editor.
+ */
+.mesh-doc-editor-body > div,
+.mesh-doc-editor-body > div > .milkdown {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+}
+
+.mesh-doc-editor-body .mesh-doc-prose {
+  flex: 1 1 auto;
+}
+
+/* ---- blocks ---- */
+
+.mesh-doc-prose > * + * {
+  margin-top: 0.65em;
+}
+
+.mesh-doc-prose h1,
+.mesh-doc-prose h2,
+.mesh-doc-prose h3,
+.mesh-doc-prose h4,
+.mesh-doc-prose h5,
+.mesh-doc-prose h6 {
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.mesh-doc-prose h1 { font-size: 1.5rem; margin-top: 1.2em; }
+.mesh-doc-prose h2 { font-size: 1.25rem; margin-top: 1.1em; }
+.mesh-doc-prose h3 { font-size: 1.125rem; margin-top: 1em; }
+.mesh-doc-prose h4,
+.mesh-doc-prose h5,
+.mesh-doc-prose h6 { font-size: 1rem; margin-top: 1em; }
+
+.mesh-doc-prose a {
+  color: hsl(var(--primary));
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.mesh-doc-prose hr {
+  border: 0;
+  border-top: 1px solid hsl(var(--border));
+  margin: 1.25em 0;
+}
+
+.mesh-doc-prose blockquote {
+  border-left: 4px solid hsl(var(--border));
+  padding-left: 1rem;
+  color: hsl(var(--muted-foreground));
+  font-style: italic;
+}
+
+.mesh-doc-prose code {
+  border-radius: 0.25rem;
+  background: hsl(var(--muted));
+  padding: 0.1em 0.3em;
+  font-family: var(--mesh-font-mono, ui-monospace, monospace);
+  font-size: 0.85em;
+}
+
+.mesh-doc-prose pre {
+  overflow-x: auto;
+  border-radius: 0.5rem;
+  background: hsl(var(--muted));
+  padding: 0.75rem 1rem;
+  font-family: var(--mesh-font-mono, ui-monospace, monospace);
+  font-size: 0.85em;
+  line-height: 1.5;
+}
+
+.mesh-doc-prose pre code {
+  background: transparent;
+  padding: 0;
+  font-size: inherit;
+}
+
+.mesh-doc-prose img {
+  max-width: 100%;
+  border-radius: 4px;
+}
+
+/* ---- lists ---- */
+
+.mesh-doc-prose ul,
+.mesh-doc-prose ol {
+  padding-left: 1.5rem;
+}
+
+.mesh-doc-prose ul { list-style: disc; }
+.mesh-doc-prose ul ul { list-style: circle; }
+.mesh-doc-prose ul ul ul { list-style: square; }
+.mesh-doc-prose ol { list-style: decimal; }
+.mesh-doc-prose ol ol { list-style: lower-alpha; }
+.mesh-doc-prose ol ol ol { list-style: lower-roman; }
+
+/* Nested lists sit tight against their parent item — a blank line's worth of
+   margin between levels reads as separate lists. */
+.mesh-doc-prose li > ul,
+.mesh-doc-prose li > ol {
+  margin-top: 0.15em;
+}
+
+.mesh-doc-prose li > * + * {
+  margin-top: 0.35em;
+}
+
+/* ---- task list items ----
+   The checkbox is drawn rather than rendered as an <input>: the list item is a
+   ProseMirror node with a `checked` attribute, and a real input inside a
+   contenteditable fights the editor for the click. */
+
+.mesh-doc-prose li[data-item-type="task"] {
+  list-style: none;
+  margin-left: -1.25rem;
+  padding-left: 1.6rem;
+  position: relative;
+}
+
+.mesh-doc-prose li[data-item-type="task"]::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0.35em;
+  width: 0.95em;
+  height: 0.95em;
+  border: 1.5px solid hsl(var(--border));
+  border-radius: 0.2em;
+  background: hsl(var(--background));
+}
+
+.mesh-doc-prose li[data-item-type="task"][data-checked="true"]::before {
+  background: hsl(var(--primary));
+  border-color: hsl(var(--primary));
+}
+
+.mesh-doc-prose li[data-item-type="task"][data-checked="true"]::after {
+  content: "";
+  position: absolute;
+  left: 0.3em;
+  top: 0.5em;
+  width: 0.3em;
+  height: 0.55em;
+  border: solid hsl(var(--primary-foreground));
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+.mesh-doc-prose li[data-item-type="task"][data-checked="true"] {
+  color: hsl(var(--muted-foreground));
+}
+
+/* ---- tables ---- */
+
+.mesh-doc-prose table {
+  border-collapse: collapse;
+  width: 100%;
+  display: table;
+  font-size: 0.95em;
+}
+
+/* Column alignment — the thing the old renderer could not express at all — is a
+   per-cell `alignment` attribute that prosemirror-tables writes out as an inline
+   `style="text-align: …"`. So there is deliberately no rule for it here: an
+   inline style already wins, and a second declaration of the same thing is the
+   kind of duplicate that goes stale. */
+.mesh-doc-prose th,
+.mesh-doc-prose td {
+  border: 1px solid hsl(var(--border));
+  padding: 0.4em 0.6em;
+  vertical-align: top;
+}
+
+.mesh-doc-prose th {
+  background: hsl(var(--muted));
+  font-weight: 600;
+}
+
+.mesh-doc-prose .tableWrapper {
+  overflow-x: auto;
+}
+
+.mesh-doc-prose .selectedCell::after {
+  background: hsl(var(--primary) / 0.12);
+}
+
+/* ---- footnotes ----
+   The GFM preset renders a definition as
+   <dl data-type="footnote_definition"><dt>label</dt><dd>body</dd></dl>
+   and a reference as <sup data-type="footnote_reference">label</sup>. */
+
+.mesh-doc-prose dl[data-type="footnote_definition"] {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  column-gap: 0.5rem;
+  font-size: 0.9em;
+  color: hsl(var(--muted-foreground));
+  padding-top: 0.5rem;
+  border-top: 1px solid hsl(var(--border));
+}
+
+/* Consecutive definitions are one block of notes, not a box each. */
+.mesh-doc-prose
+  dl[data-type="footnote_definition"]
+  + dl[data-type="footnote_definition"] {
+  border-top: 0;
+  padding-top: 0;
+  margin-top: 0.25em;
+}
+
+.mesh-doc-prose dl[data-type="footnote_definition"] > dt {
+  font-weight: 600;
+  color: hsl(var(--primary));
+  white-space: nowrap;
+}
+
+.mesh-doc-prose dl[data-type="footnote_definition"] > dt::before {
+  content: "[";
+}
+
+.mesh-doc-prose dl[data-type="footnote_definition"] > dt::after {
+  content: "]";
+}
+
+.mesh-doc-prose dl[data-type="footnote_definition"] > dd > * + * {
+  margin-top: 0.35em;
+}
+
+.mesh-doc-prose sup[data-type="footnote_reference"] {
+  color: hsl(var(--primary));
+  font-weight: 600;
+}
+
+.mesh-doc-prose sup[data-type="footnote_reference"]::before {
+  content: "[";
+}
+
+.mesh-doc-prose sup[data-type="footnote_reference"]::after {
+  content: "]";
+}
+
+/* ---- raw HTML atoms ----
+   The commonmark html node is an atom rendered as inert text (never injected as
+   markup). Making it look inert matters: a reader should be able to tell that
+   the <script> in their document is a literal string. */
+
+.mesh-doc-prose [data-type="html"] {
+  font-family: var(--mesh-font-mono, ui-monospace, monospace);
+  font-size: 0.85em;
+  background: hsl(var(--muted));
+  border: 1px dashed hsl(var(--border));
+  border-radius: 0.25rem;
+  padding: 0 0.25em;
+  color: hsl(var(--muted-foreground));
+}
+
+/* ---- editing affordances ---- */
+
+.mesh-doc-prose:focus {
+  outline: none;
+}
+
+.mesh-doc-prose[contenteditable="false"] {
+  min-height: 0;
+}
+
+.mesh-doc-prose .ProseMirror-selectednode {
+  outline: 2px solid hsl(var(--ring));
+}
+
+/* ---- linked paragraph ----
+   The target of a "copy link to this paragraph" link, revealed on arrival. The
+   tint fades on its own rather than on a timer in JS: the highlight is a hint
+   about how the reader got here, and a permanent one would read as document
+   state. The left rule stays, so the paragraph is still identifiable after the
+   fade — which matters most in exactly the case where the text has changed and
+   the reader is being told so. */
+
+.mesh-doc-prose > .mesh-doc-anchor-hit {
+  border-left: 3px solid hsl(var(--primary));
+  margin-left: -0.75rem;
+  padding-left: calc(0.75rem - 3px);
+  border-radius: 2px;
+  animation: mesh-doc-anchor-fade 3.5s ease-out forwards;
+}
+
+@keyframes mesh-doc-anchor-fade {
+  from {
+    background-color: hsl(var(--primary) / 0.14);
+  }
+  to {
+    background-color: transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mesh-doc-prose > .mesh-doc-anchor-hit {
+    animation: none;
+    background-color: transparent;
+  }
+}

@@ -167,8 +167,11 @@ func (s *rulesService) GetTeamDirectory(ctx context.Context, workspaceID uuid.UU
 	humans := make([]domain.TeamDirectoryHuman, 0, len(members))
 	for _, m := range members {
 		humans = append(humans, domain.TeamDirectoryHuman{
-			ID:                 m.User.ID,
-			Name:               m.User.Name,
+			ID:   m.User.ID,
+			Name: m.User.Name,
+			// The @-handle, so the renderers can tell a mention of a person from
+			// an @ in prose — see TeamDirectoryHuman.Username.
+			Username:           m.User.Username,
 			Email:              m.User.Email,
 			AvatarURL:          m.User.AvatarURL,
 			Role:               m.Role,

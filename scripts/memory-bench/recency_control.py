@@ -248,6 +248,80 @@ def run(expect: str, top_k: int) -> int:
         print(f"{REASON_PREFIX} control-unarmed — gold absent with decay off")
         return EXIT_INCONCLUSIVE
 
+    if aged and rank_off >= len(client_off.ranked_records):
+        # The floor. Decay penalises gold, so the only movement this arm can
+        # ever observe is DOWNWARD — and gold is already in the last position
+        # there is. `rank_on > rank_off` is then unsatisfiable, which makes the
+        # pass condition unreachable rather than merely unmet: the control
+        # cannot go green for the right reason, only red for a wrong one.
+        #
+        # Without this branch that red is a MISDIAGNOSIS. The next test below
+        # reports "the bench is still blind to memory age — either the backdate
+        # did not reach the rows, or the decay parameter did not reach the
+        # server", and neither is true when gold is simply pinned to the floor.
+        # A reader acting on that message investigates the backdate plumbing,
+        # which is working. Same class as the `rank_off is None` branch above,
+        # and it gets the same verdict: state that the instrument had no power,
+        # do not report a measurement it could not take.
+        #
+        # Observed live on run 32084076208: gold_rank=5 of rows=5 in all four
+        # (age_mode x decay) measurements. The cause is NOT this fixture, which
+        # is a strict content winner both by --selftest's stem overlap
+        # ([3,2,2,1,0]) and by Postgres's own OR-arm ts_rank_cd
+        # (0.4/0.3/0.3/0.2/0.1 = 0.1 x matched lexemes, gold the only row
+        # matching all four of 'user'&'decis'&'apart'&'leas'). It is
+        # mergeORScoredRows (memory_repo.go): a strict-AND hit keeps its
+        # ts_rank_cd against the AND tsquery (cover density — 0.025 for gold)
+        # while OR-only rows are scored against the OR tsquery and discounted
+        # 0.8x (0.24 here). The two numbers come from different tsqueries and
+        # are not comparable, so the row that matched EVERY term sorts last.
+        # Tracked separately; this branch only stops the control from blaming
+        # the wrong subsystem while that is fixed.
+        print(
+            f"\n⚠ INCONCLUSIVE — gold is already last (rank {rank_off} of "
+            f"{len(client_off.ranked_records)}) with decay OFF, so the positive "
+            "control has no headroom: decay can only demote, and there is "
+            "nowhere below last. This says nothing about whether the bench can "
+            "see age — the instrument is at its floor, not the mechanism. "
+            "Fix the ranking that puts the strongest content match last, and "
+            "this control re-arms on its own."
+        )
+        print(f"{REASON_PREFIX} control-unarmed — gold already last with decay off")
+        return EXIT_INCONCLUSIVE
+
+    if aged and rank_on is None:
+        # Gold was retrieved without decay and is absent WITH it. Two different
+        # things produce that, and this arm cannot tell them apart:
+        #
+        #   * decay demoted gold clean out of the candidate pool — movement in
+        #     exactly the predicted direction, and arguably the strongest pass
+        #     this control could ever record; or
+        #   * gold never arrived for a reason that has nothing to do with age.
+        #     `gold_rank`'s own caveat applies — `ranked_records` is what
+        #     SURVIVED to the client, and scope/tags are post-filters over a
+        #     workspace-wide pool, so a perfectly indexed fixture can be missing.
+        #
+        # Calling it a pass would certify a measurement whose cause is not
+        # established, which is the one thing a control may never do. So:
+        # unarmed, with its own reason.
+        #
+        # Before this branch existed the comparisons below reached
+        # `rank_on < rank_off` with rank_on=None and raised
+        # `TypeError: '<' not supported between instances of 'NoneType' and
+        # 'int'`. A traceback exits non-zero, so the required job went red with
+        # no verdict at all — the same queue-blocking non-measurement this file
+        # is being fixed for, reached by the *success* case of the very demotion
+        # the control exists to observe.
+        print(
+            f"\n⚠ INCONCLUSIVE — gold ranks {rank_off} with decay off and is "
+            "absent from the ranked result entirely with decay on. That is "
+            "either a demotion past the end of the pool or a fixture that never "
+            "arrived, and this arm cannot separate the two. Re-run; if it "
+            "persists, compare rows_returned against the haystack size."
+        )
+        print(f"{REASON_PREFIX} control-unarmed — gold absent with decay on")
+        return EXIT_INCONCLUSIVE
+
     if aged:
         # ── AC2: the positive control ─────────────────────────────────────────
         #

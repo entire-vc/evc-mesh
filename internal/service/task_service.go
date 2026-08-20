@@ -2129,6 +2129,7 @@ func (s *taskService) CheckoutTask(ctx context.Context, taskID uuid.UUID, ttlMin
 	if task == nil {
 		return nil, apierror.NotFound("Task")
 	}
+	wasTodo := false
 	if status, sErr := s.statusRepo.GetByID(ctx, task.StatusID); sErr == nil && status != nil {
 		switch status.Category {
 		case domain.StatusCategoryDone, domain.StatusCategoryCancelled:
@@ -2140,6 +2141,7 @@ func (s *taskService) CheckoutTask(ctx context.Context, taskID uuid.UUID, ttlMin
 					"task must be moved to in_progress by a human before agent checkout",
 				)
 			}
+			wasTodo = true
 		}
 	}
 
@@ -2187,6 +2189,12 @@ func (s *taskService) CheckoutTask(ctx context.Context, taskID uuid.UUID, ttlMin
 	}
 	s.logActivity(ctx, task.ProjectID, taskID, "task.checkout_acquired", payload)
 
+	// Reflect the checkout on the board: a card in an agent's hands belongs in
+	// In Progress, not in Todo.
+	if wasTodo {
+		s.reflectCheckoutInStatus(ctx, task, actorID)
+	}
+
 	return &CheckoutResult{
 		TaskID:          taskID,
 		CheckoutToken:   token,
@@ -2195,6 +2203,71 @@ func (s *taskService) CheckoutTask(ctx context.Context, taskID uuid.UUID, ttlMin
 		DelegationLevel: task.DelegationLevel,
 		ProjectID:       task.ProjectID,
 	}, nil
+}
+
+// reflectCheckoutInStatus moves a just-checked-out todo task into the project's
+// first in_progress status, so that work in an agent's hands is visible on the
+// board instead of being indistinguishable from untouched todo.
+//
+// Why the move is made as SYSTEM and never fails the checkout:
+//
+// The lock is already held when this runs — the work IS in someone's hands, and
+// that is a fact, not a request. The status change reports the fact; it does not
+// grant permission. Refusing it (a capacity rule, a workflow gate, a transient
+// status-repo error) would not stop the agent working the card, it would only
+// hide the card again — which is precisely the bug this exists to fix. So every
+// failure here is logged and swallowed: the caller still gets its lock.
+//
+// Concretely, the workspace runs an active block-enforcement
+// `capacity_limit.max_in_progress` rule with limit 2, counted per ACTOR. That rule
+// was authored when nothing ever entered in_progress, so it has been dormant, and
+// under an agent actor it would begin refusing the 3rd concurrent card of a
+// sanctioned fan-out (the fleet convention allows one own card plus up to three
+// delegated). Moving as SYSTEM — the same actor the lease reaper uses for the
+// mirror-image transition in task_lease_reaper.go — keeps this path a report
+// rather than a second, accidental throttle. The WIP throttle that actually binds
+// is the checkout itself and the fan-out cap, neither of which is weakened here.
+// Re-tuning or retiring that rule is a policy decision, deliberately left to its
+// owner rather than made silently as a side effect of a visibility fix.
+func (s *taskService) reflectCheckoutInStatus(ctx context.Context, task *domain.Task, actorID uuid.UUID) {
+	inProgressID := s.findStatusIDByCategory(ctx, task.ProjectID, domain.StatusCategoryInProgress)
+	if inProgressID == nil {
+		log.Printf("[checkout-auto-progress] no in_progress status for project %s, task %s stays in todo",
+			task.ProjectID, task.ID)
+		return
+	}
+
+	sysCtx := actorctx.WithActor(ctx, uuid.Nil, domain.ActorTypeSystem)
+	if err := s.MoveTask(sysCtx, task.ID, MoveTaskInput{StatusID: inProgressID, Source: "checkout"}); err != nil {
+		// Fail open: the checkout stands, only the board display is degraded.
+		log.Printf("[checkout-auto-progress] WARNING: task %s stays in todo after checkout by %s: %v",
+			task.ID, actorID, err)
+		s.logActivity(ctx, task.ProjectID, task.ID, "task.checkout_auto_progress_failed", map[string]interface{}{
+			"reason":         err.Error(),
+			"checked_out_by": actorID.String(),
+		})
+		return
+	}
+	s.logActivity(ctx, task.ProjectID, task.ID, "task.checkout_auto_progress", map[string]interface{}{
+		"checked_out_by": actorID.String(),
+	})
+}
+
+// findStatusIDByCategory returns the ID of the project's first status in the given
+// category, or nil when the project has none.
+func (s *taskService) findStatusIDByCategory(ctx context.Context, projectID uuid.UUID, cat domain.StatusCategory) *uuid.UUID {
+	statuses, err := s.statusRepo.ListByProject(ctx, projectID)
+	if err != nil {
+		log.Printf("[checkout-auto-progress] cannot list statuses for project %s: %v", projectID, err)
+		return nil
+	}
+	for i := range statuses {
+		if statuses[i].Category == cat {
+			id := statuses[i].ID
+			return &id
+		}
+	}
+	return nil
 }
 
 // ReleaseCheckout clears the checkout on a task. The token must match.
@@ -2341,12 +2414,17 @@ func (s *taskService) applyReviewAssignee(ctx context.Context, task *domain.Task
 		return
 	}
 
+	// Capture the current holder before it is overwritten below — this is the real
+	// "old" for the activity entry and comment, not the caller's request (there is
+	// no caller here; the server is moving the task on its own).
+	oldAssigneeID := task.AssigneeID
+	oldAssigneeType := task.AssigneeType
+
 	// Stash the current assignee so a later bounce out of review (MoveTask's
 	// restorePreReviewAssignee) can return the task to whoever was doing the work,
 	// instead of stranding it on the reviewer.
-	prevAssigneeType := task.AssigneeType
-	task.PreReviewAssigneeID = task.AssigneeID
-	task.PreReviewAssigneeType = &prevAssigneeType
+	task.PreReviewAssigneeID = oldAssigneeID
+	task.PreReviewAssigneeType = &oldAssigneeType
 
 	task.AssigneeID = reviewerID
 	task.AssigneeType = assigneeType
@@ -2360,14 +2438,16 @@ func (s *taskService) applyReviewAssignee(ctx context.Context, task *domain.Task
 		return
 	}
 	log.Printf("[review-assign] task %s assigned to set_reviewer=%q on review", task.ID, tr.OnTransition.SetReviewer)
+	const reason = "set_reviewer on review transition"
 	s.logActivity(ctx, task.ProjectID, task.ID, "task.assigned", map[string]interface{}{
-		"assignee_id": map[string]interface{}{"old": nil, "new": reviewerID.String()},
-		"reason":      "set_reviewer on review transition",
+		"assignee_id": map[string]interface{}{"old": oldAssigneeID, "new": reviewerID.String()},
+		"reason":      reason,
 	})
 	s.notifyAssignedAgent(ctx, task, "task.assigned", map[string]any{
-		"assignee_id": map[string]any{"old": nil, "new": reviewerID.String()},
-		"reason":      "set_reviewer on review transition",
+		"assignee_id": map[string]any{"old": oldAssigneeID, "new": reviewerID.String()},
+		"reason":      reason,
 	})
+	s.postAssigneeChangeComment(ctx, task, oldAssigneeID, reviewerID, reason)
 }
 
 // restorePreReviewAssignee returns the task to whoever held it before applyReviewAssignee
@@ -2398,6 +2478,10 @@ func (s *taskService) restorePreReviewAssignee(ctx context.Context, task *domain
 		return
 	}
 
+	// Capture the reviewer (the current holder, about to be overwritten) as the real
+	// "old" for the activity entry and comment.
+	oldAssigneeID := task.AssigneeID
+
 	task.AssigneeID = prevAssigneeID
 	task.AssigneeType = prevAssigneeType
 	if err := s.ensureAssigneeProjectMember(ctx, task.ProjectID, task.AssigneeID, task.AssigneeType); err != nil {
@@ -2416,14 +2500,52 @@ func (s *taskService) restorePreReviewAssignee(ctx context.Context, task *domain
 		restoredID = prevAssigneeID.String()
 	}
 	log.Printf("[review-assign] task %s assignee restored to pre-review holder on bounce out of review", task.ID)
+	const reason = "restored pre-review assignee on bounce out of review"
 	s.logActivity(ctx, task.ProjectID, task.ID, "task.assigned", map[string]interface{}{
-		"assignee_id": map[string]interface{}{"old": nil, "new": restoredID},
-		"reason":      "restored pre-review assignee on bounce out of review",
+		"assignee_id": map[string]interface{}{"old": oldAssigneeID, "new": restoredID},
+		"reason":      reason,
 	})
 	s.notifyAssignedAgent(ctx, task, "task.assigned", map[string]any{
-		"assignee_id": map[string]any{"old": nil, "new": restoredID},
-		"reason":      "restored pre-review assignee on bounce out of review",
+		"assignee_id": map[string]any{"old": oldAssigneeID, "new": restoredID},
+		"reason":      reason,
 	})
+	s.postAssigneeChangeComment(ctx, task, oldAssigneeID, prevAssigneeID, reason)
+}
+
+// postAssigneeChangeComment writes an audit comment on the card explaining a
+// server-initiated (not caller-requested) assignee change — applyReviewAssignee's
+// reviewer bounce and restorePreReviewAssignee's restore are the only two write
+// paths that move assignee_id without the caller asking for it, and both were
+// previously silent: the activity log recorded "old": nil, and no comment was
+// posted at all, so an agent reading the thread had no way to tell the card had
+// moved out from under them (source: task f06ebeb7). A comment-post failure must
+// not unwind the assignee change itself — it is logged loudly and the change stands.
+func (s *taskService) postAssigneeChangeComment(ctx context.Context, task *domain.Task, oldID, newID *uuid.UUID, reason string) {
+	if s.commentRepo == nil {
+		return
+	}
+	describe := func(id *uuid.UUID) string {
+		if id == nil {
+			return "(unassigned)"
+		}
+		return id.String()
+	}
+	now := timeNow()
+	comment := &domain.Comment{
+		ID:         uuid.New(),
+		TaskID:     task.ID,
+		AuthorID:   uuid.Nil,
+		AuthorType: domain.ActorTypeSystem,
+		Body: fmt.Sprintf(
+			"🔄 Авто-смена исполнителя: %s → %s (%s).",
+			describe(oldID), describe(newID), reason,
+		),
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	if err := s.commentRepo.Create(ctx, comment); err != nil {
+		log.Printf("[review-assign] WARNING: failed to post assignee-change comment on task %s: %v", task.ID, err)
+	}
 }
 
 // resolveSetReviewer resolves a SetReviewer config value to an agent UUID.

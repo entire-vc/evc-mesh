@@ -46,6 +46,13 @@ type IntegrationRepo struct {
 	db *sqlx.DB
 }
 
+// integrationConfigSelectCols is every column integrationConfigRow scans,
+// listed explicitly — see agentSelectCols in agent_repo.go for why
+// `SELECT *` is unsafe: sqlx refuses to scan a column with no matching
+// struct field, so an additive migration to this table breaks every read
+// until redeployed.
+const integrationConfigSelectCols = `id, workspace_id, provider, config, is_active, created_at, updated_at`
+
 // NewIntegrationRepo creates a new IntegrationRepo.
 func NewIntegrationRepo(db *sqlx.DB) *IntegrationRepo {
 	return &IntegrationRepo{db: db}
@@ -72,7 +79,7 @@ func (r *IntegrationRepo) Upsert(ctx context.Context, cfg *domain.IntegrationCon
 
 // GetByID retrieves an integration config by its ID.
 func (r *IntegrationRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.IntegrationConfig, error) {
-	const q = `SELECT * FROM integration_configs WHERE id = $1`
+	const q = `SELECT ` + integrationConfigSelectCols + ` FROM integration_configs WHERE id = $1`
 	var row integrationConfigRow
 	if err := r.db.GetContext(ctx, &row, q, id); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -86,7 +93,7 @@ func (r *IntegrationRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.In
 
 // GetByProvider retrieves the integration config for a workspace+provider pair.
 func (r *IntegrationRepo) GetByProvider(ctx context.Context, workspaceID uuid.UUID, provider domain.IntegrationProvider) (*domain.IntegrationConfig, error) {
-	const q = `SELECT * FROM integration_configs WHERE workspace_id = $1 AND provider = $2`
+	const q = `SELECT ` + integrationConfigSelectCols + ` FROM integration_configs WHERE workspace_id = $1 AND provider = $2`
 	var row integrationConfigRow
 	if err := r.db.GetContext(ctx, &row, q, workspaceID, string(provider)); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -144,7 +151,7 @@ func (r *IntegrationRepo) Delete(ctx context.Context, id uuid.UUID) error {
 
 // ListByWorkspace returns all integration configs for a workspace.
 func (r *IntegrationRepo) ListByWorkspace(ctx context.Context, workspaceID uuid.UUID) ([]domain.IntegrationConfig, error) {
-	const q = `SELECT * FROM integration_configs WHERE workspace_id = $1 ORDER BY provider ASC`
+	const q = `SELECT ` + integrationConfigSelectCols + ` FROM integration_configs WHERE workspace_id = $1 ORDER BY provider ASC`
 	var rows []integrationConfigRow
 	if err := r.db.SelectContext(ctx, &rows, q, workspaceID); err != nil {
 		return nil, err
@@ -159,7 +166,7 @@ func (r *IntegrationRepo) ListByWorkspace(ctx context.Context, workspaceID uuid.
 // ListActiveByProvider returns every active integration config for one
 // provider across all workspaces.
 func (r *IntegrationRepo) ListActiveByProvider(ctx context.Context, provider domain.IntegrationProvider) ([]domain.IntegrationConfig, error) {
-	const q = `SELECT * FROM integration_configs WHERE provider = $1 AND is_active = true ORDER BY workspace_id ASC`
+	const q = `SELECT ` + integrationConfigSelectCols + ` FROM integration_configs WHERE provider = $1 AND is_active = true ORDER BY workspace_id ASC`
 	var rows []integrationConfigRow
 	if err := r.db.SelectContext(ctx, &rows, q, string(provider)); err != nil {
 		return nil, err

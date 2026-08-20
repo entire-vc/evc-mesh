@@ -13,6 +13,7 @@ const PUSH_EVENTS = [
   { key: "task.status_changed", label: "Status changed", desc: "When a task status changes" },
   { key: "comment.created", label: "New comment", desc: "When a comment is added" },
   { key: "task.mentioned", label: "Mention", desc: "When someone @mentions you" },
+  { key: "document.mentioned", label: "Mention on a document", desc: "When someone @mentions you on a document page" },
   { key: "task.blocking_triage", label: "Blocking triage", desc: "When a task you blocked is auto-moved to triage" },
   { key: "task.reviewer_assigned", label: "Review requested", desc: "When you're set as the reviewer on a task" },
   { key: "task.ready_for_review", label: "Ready for review", desc: "When a task you're reviewing moves to a review status" },

@@ -45,6 +45,12 @@ type templateRow struct {
 	UpdatedAt           time.Time            `db:"updated_at"`
 }
 
+// templateSelectCols is every column templateRow scans, listed explicitly —
+// see agentSelectCols in agent_repo.go for why `SELECT *` is unsafe: sqlx
+// refuses to scan a column with no matching struct field, so an additive
+// migration to this table breaks every read until redeployed.
+const templateSelectCols = `id, project_id, name, description, title_template, description_template, priority, labels, estimated_hours, custom_fields, assignee_id, assignee_type, status_id, created_by, created_at, updated_at`
+
 func (r *templateRow) toDomain() domain.TaskTemplate {
 	t := domain.TaskTemplate{
 		ID:                  r.ID,
@@ -116,7 +122,7 @@ func (repo *TaskTemplateRepo) Create(ctx context.Context, tmpl *domain.TaskTempl
 func (repo *TaskTemplateRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.TaskTemplate, error) {
 	var row templateRow
 	err := repo.db.GetContext(ctx, &row,
-		`SELECT * FROM task_templates WHERE id = $1`, id)
+		`SELECT `+templateSelectCols+` FROM task_templates WHERE id = $1`, id)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, apierror.NotFound("template not found")
@@ -131,7 +137,7 @@ func (repo *TaskTemplateRepo) GetByID(ctx context.Context, id uuid.UUID) (*domai
 func (repo *TaskTemplateRepo) List(ctx context.Context, projectID uuid.UUID) ([]domain.TaskTemplate, error) {
 	var rows []templateRow
 	err := repo.db.SelectContext(ctx, &rows,
-		`SELECT * FROM task_templates WHERE project_id = $1 ORDER BY created_at ASC`, projectID)
+		`SELECT `+templateSelectCols+` FROM task_templates WHERE project_id = $1 ORDER BY created_at ASC`, projectID)
 	if err != nil {
 		return nil, fmt.Errorf("TaskTemplateRepo.List: %w", err)
 	}

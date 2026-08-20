@@ -1,22 +1,7 @@
 import { useCallback, useState } from "react";
 import { Check, Copy } from "lucide-react";
 import { Button } from "@/components/ui/button";
-
-async function copyText(value: string) {
-  try {
-    await navigator.clipboard.writeText(value);
-  } catch {
-    // Fallback for browsers without the async clipboard API, and for any
-    // non-secure origin — a self-hosted instance is often reached over plain
-    // http, where navigator.clipboard is undefined.
-    const textArea = document.createElement("textarea");
-    textArea.value = value;
-    document.body.appendChild(textArea);
-    textArea.select();
-    document.execCommand("copy");
-    document.body.removeChild(textArea);
-  }
-}
+import { copyText } from "@/lib/clipboard";
 
 interface InviteLinkBoxProps {
   url: string;

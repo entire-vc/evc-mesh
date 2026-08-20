@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	"github.com/entire-vc/evc-mesh/internal/presence"
 	"github.com/entire-vc/evc-mesh/internal/repository"
 	"github.com/entire-vc/evc-mesh/pkg/actorctx"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
@@ -236,8 +237,24 @@ var triageExitNegators = []string{
 }
 
 // hasNegatorInScope reports whether body carries a triageExitNegators substring,
-// scoped to text at-or-after the comment's OWN blocking marker (the LAST one, if
-// several) — never text that only precedes it.
+// scoped by negatorScope: text at-or-after the comment's OWN blocking marker
+// (the LAST one, if several) — or, when the body carries NO marker, the body's
+// OWN LAST PARAGRAPH. Never text that only precedes either boundary.
+//
+// READ THAT SECOND HALF BEFORE THE HISTORY BELOW. The marker-less case is the
+// ordinary shape of a real withdrawal, and the scope there is the last
+// paragraph — NOT the whole body. An earlier revision of this comment said
+// "the whole body is used", and the paragraph that superseded it (#1e5be182,
+// four paragraphs down) was easy to stop short of: an agent whose withdrawal
+// silently failed came here to find out why, read the older sentence as
+// current, and concluded the mechanism agreed with them. Measured live
+// 2026-08-20 on #58d8bb8d (prod-sha a635137, Bill): three withdrawals by the
+// marker's own owner, clearable_by_owner=true — a detailed one with the
+// negator in its heading and a two-paragraph one with the negator FIRST both
+// no-opped; the same words as a single line cleared the gate instantly. The
+// superseded sentence is kept below, marked, because the reasoning that
+// produced it is still the reasoning behind the marker case — but it no
+// longer describes the marker-less one. Filed as #17829fcf.
 //
 // Fixed 2026-07-30 (task #c375905c, live incident on #7f646f08, found by Riker):
 // a whole-body strings.Contains search let a comment self-negate its OWN marker
@@ -247,9 +264,12 @@ var triageExitNegators = []string{
 // brand-new marker as pre-cancelled, silently handing ownership of the live ask
 // to whoever's marker preceded it. A marker is conventionally the operative ask
 // of a comment; analysis before it is context, not itself the thing negated —
-// so only text from the marker onward is searched. A comment with no marker at
-// all (the ordinary shape of a real withdrawal — a separate later comment with
-// nothing else in it) has no scope to restrict, so the whole body is used.
+// so only text from the marker onward is searched. [SUPERSEDED by #1e5be182,
+// below — this revision continued: "A comment with no marker at all (the
+// ordinary shape of a real withdrawal — a separate later comment with nothing
+// else in it) has no scope to restrict, so the whole body is used." That has
+// NOT been true since 2026-07-30; a marker-less body is scoped to its last
+// paragraph.]
 //
 // Extended 2026-07-30 (task #5c69b4e5, live probe #a073a896): the body is first
 // passed through stripQuotedSpans, so only text the comment ASSERTS is searched —
@@ -336,28 +356,139 @@ func isRepeatPingNegation(haystack string, start, end int) bool {
 	return false
 }
 
-func hasNegatorInScope(body string) bool {
-	scope := stripQuotedSpans(body)
-	if matches := blockingMarkerRegex.FindAllStringIndex(scope, -1); len(matches) > 0 {
-		scope = scope[matches[len(matches)-1][0]:]
-	} else {
-		scope = lastParagraph(scope)
+// negatorScope returns the region of an already-stripQuotedSpans'd body that
+// hasNegatorInScope searches: from the LAST blocking marker onward if the body
+// carries one, else the body's own last paragraph. Split out of
+// hasNegatorInScope 2026-08-20 (#17829fcf) so the DIAGNOSIS of a withdrawal
+// that did not count (diagnoseNegatorMiss) computes the boundary with the same
+// code as the DECISION, rather than a second copy of it — two copies of "where
+// does the server look" would drift, and drift here means the server explains
+// its refusal by a rule it is no longer applying.
+func negatorScope(stripped string) string {
+	if matches := blockingMarkerRegex.FindAllStringIndex(stripped, -1); len(matches) > 0 {
+		return stripped[matches[len(matches)-1][0]:]
 	}
-	lower := strings.ToLower(scope)
+	return lastParagraph(stripped)
+}
+
+// blockerStillOpenInScope reports whether an already-lower-cased scope asserts
+// that the blocker itself is still live (see blockerStillOpenMarkers).
+func blockerStillOpenInScope(lowerScope string) bool {
 	for _, m := range blockerStillOpenMarkers {
-		if containsNegatorWholeWord(lower, m) {
-			return false
+		if containsNegatorWholeWord(lowerScope, m) {
+			return true
 		}
 	}
+	return false
+}
+
+// negatorAsserted reports whether an already-lower-cased scope asserts a
+// withdrawal negator that survives the isRepeatPingNegation filter. It does
+// NOT consider blockerStillOpenInScope — that veto is applied by the caller,
+// so a diagnosis can tell "no negator here at all" apart from "a negator that
+// this body's own words overrode".
+func negatorAsserted(lowerScope string) bool {
 	for _, n := range triageExitNegators {
-		for _, start := range wholeWordMatches(lower, n) {
-			end := start + len(n)
-			if !isRepeatPingNegation(lower, start, end) {
+		for _, start := range wholeWordMatches(lowerScope, n) {
+			if !isRepeatPingNegation(lowerScope, start, start+len(n)) {
 				return true
 			}
 		}
 	}
 	return false
+}
+
+func hasNegatorInScope(body string) bool {
+	lower := strings.ToLower(negatorScope(stripQuotedSpans(body)))
+	if blockerStillOpenInScope(lower) {
+		return false
+	}
+	return negatorAsserted(lower)
+}
+
+// negatorMissReason names why a body that DOES mention a withdrawal negator was
+// nevertheless not read as a withdrawal. Empty means "nothing to explain" —
+// either the negator counted, or the body never asserted one at all (an
+// ordinary comment, which must stay silent).
+type negatorMissReason string
+
+const (
+	// negatorMissOutOfScope: the body asserts a negator, but only outside the
+	// region negatorScope searches. This is the shape #17829fcf was filed for.
+	negatorMissOutOfScope negatorMissReason = "negator-outside-searched-scope"
+	// negatorMissBlockerStillOpen: a negator IS in scope, but so is a
+	// blockerStillOpenMarkers phrase, which overrides it (#3948173f). A
+	// thorough withdrawal that also says what is "не закрыт" kills its own
+	// negator this way. NOTE #17829fcf named this as the second cause of the
+	// #58d8bb8d failure; measuring it showed otherwise — the phrase there was
+	// "не закрытая", and containsNegatorWholeWord needs a word boundary, so no
+	// veto ran and paragraph scope alone explains that miss. The trap is real
+	// but only for the short forms. See TestDiagnoseNegatorMiss.
+	negatorMissBlockerStillOpen negatorMissReason = "blocker-still-open-marker-in-same-scope"
+	// negatorMissOnlyQuoted: the negator sits in inline code, a fenced block or
+	// a blockquote, so stripQuotedSpans removed it (#5c69b4e5). Deliberate —
+	// quoting is not asserting — but indistinguishable from success to the
+	// author, so it is reported when the citation sits where an ASSERTION would
+	// have counted. Quoted anywhere else it is not reported at all; see
+	// diagnoseNegatorMiss for why (pasted logs match "resolved").
+	negatorMissOnlyQuoted negatorMissReason = "negator-only-inside-quoted-span"
+)
+
+// diagnoseNegatorMiss explains why hasNegatorInScope(body) came back false on a
+// body that nevertheless talks about withdrawing. Returns "" when there is
+// genuinely nothing to say.
+//
+// Added 2026-08-20 (#17829fcf). The rejection branch it feeds used to be a bare
+// `return` with not one line of log: a withdrawal that missed the scope and a
+// withdrawal that was never written produced byte-identical outcomes, and so did
+// a withdrawal that WORKED — the author sees their comment published either way.
+// Silence in the direction of "the gate stays up forever" is the exact failure
+// releaseHumanGateOnWithdrawal exists to prevent (#7f646f08 sat gated 20 days),
+// and our own rules push agents toward the thorough comment shape that fails.
+//
+// Deliberately NOT reported: a negator filtered by isRepeatPingNegation
+// ("повторный ask здесь не нужен"). That phrase is what CLAUDE-workflow §0b
+// TELLS agents to write when declining to re-ping, so it appears constantly on
+// gated cards with no withdrawal intended; announcing a non-withdrawal there
+// would be pure noise. See #3948173f for why it stopped counting.
+func diagnoseNegatorMiss(body string) negatorMissReason {
+	stripped := stripQuotedSpans(body)
+	lowerScope := strings.ToLower(negatorScope(stripped))
+
+	if negatorAsserted(lowerScope) {
+		if blockerStillOpenInScope(lowerScope) {
+			return negatorMissBlockerStillOpen
+		}
+		return "" // it counted — hasNegatorInScope returned true; caller should not be here
+	}
+	if negatorAsserted(strings.ToLower(stripped)) {
+		return negatorMissOutOfScope
+	}
+	// The quoted case is scoped on the RAW body deliberately: report it only when
+	// the citation sits where an ASSERTION would have counted — i.e. the author
+	// put the right words in the right place and merely formatted them as a
+	// quote. A negator quoted anywhere else is overwhelmingly a paste, not a
+	// withdrawal: triageExitNegators contains "resolved", so a fenced CI log or a
+	// JSON status field matches, and reporting those would put a gate notice on
+	// every log paste. That noise is the failure mode this whole task is the
+	// mirror image of — see the anti-noise controls in the tests.
+	if negatorAsserted(strings.ToLower(negatorScope(body))) {
+		return negatorMissOnlyQuoted
+	}
+	return ""
+}
+
+// withdrawalMissHint is the agent-facing explanation posted for each
+// negatorMissReason. Negator vocabulary inside these strings is deliberately
+// wrapped in backticks: stripQuotedSpans drops code spans, so this system
+// comment cannot itself be read as a withdrawal by any later scan.
+var withdrawalMissHint = map[negatorMissReason]string{
+	negatorMissOutOfScope: "слова отзыва есть, но вне области, которую читает сервер — " +
+		"при комменте без блокирующего маркера ею является **последний абзац**, и только он.",
+	negatorMissBlockerStillOpen: "слова отзыва попали в область, но там же стоит утверждение, " +
+		"что блокер всё ещё жив (`не закрыт` / `не забыт` / `still blocked`) — оно перебивает отзыв в той же области.",
+	negatorMissOnlyQuoted: "слова отзыва встречаются только внутри кода, цитаты или блока — " +
+		"процитированный отзыв не считается заявленным.",
 }
 
 // paragraphBreakRegex matches one or more consecutive blank (or whitespace-only)
@@ -498,6 +629,7 @@ type commentService struct {
 	ctxCacheInv    ContextCacheInvalidator
 	userRepo       repository.UserRepository
 	mentionRepo    repository.CommentMentionRepository
+	deliveryRepo   repository.CommentDeliveryOutcomeRepository
 	wsPublisher    WSPublisher
 	taskSvc        TaskService
 }
@@ -523,6 +655,17 @@ func WithCommentUserRepo(r repository.UserRepository) CommentServiceOption {
 // WithCommentMentionRepo sets the mention repository for persisting comment_mentions rows.
 func WithCommentMentionRepo(r repository.CommentMentionRepository) CommentServiceOption {
 	return func(s *commentService) { s.mentionRepo = r }
+}
+
+// WithCommentDeliveryOutcomeRepo sets the repository that records, for every
+// @-addressed handle on a comment, whether it reached anybody and why.
+//
+// Optional like every other dependency here: when it is nil the delivery
+// record is simply not written, and mentions behave exactly as they did
+// before. Nothing on the comment path is failed because the verdict about it
+// could not be stored.
+func WithCommentDeliveryOutcomeRepo(r repository.CommentDeliveryOutcomeRepository) CommentServiceOption {
+	return func(s *commentService) { s.deliveryRepo = r }
 }
 
 // WithCommentWSPublisher sets the WS publisher used to push badge-update events to users.
@@ -784,13 +927,14 @@ func (s *commentService) Create(ctx context.Context, comment *domain.Comment) er
 				commentBody = commentBody[:200]
 			}
 			s.notifySvc.Notify(ctx, domain.NotificationEvent{
-				WorkspaceID: proj.WorkspaceID,
-				TaskID:      &taskIDCopy,
-				ProjectID:   &projIDCopy,
-				EventType:   "comment.created",
-				Title:       "New comment on: " + task.Title,
-				Body:        commentBody,
-				Labels:      []string(task.Labels),
+				WorkspaceID:     proj.WorkspaceID,
+				TaskID:          &taskIDCopy,
+				ProjectID:       &projIDCopy,
+				EventType:       "comment.created",
+				Title:           "New comment on: " + task.Title,
+				Body:            commentBody,
+				RelevantUserIDs: s.commentParticipants(ctx, comment, task),
+				Labels:          []string(task.Labels),
 				Metadata: map[string]any{
 					"task_id":    task.ID,
 					"task_title": task.Title,
@@ -877,28 +1021,74 @@ func (s *commentService) Delete(ctx context.Context, id uuid.UUID) error {
 	return nil
 }
 
-// ListByTask returns a paginated list of comments for the given task.
+// ListByTask returns a paginated list of comments for the given task, each
+// carrying the record of what became of the handles it addressed.
 func (s *commentService) ListByTask(ctx context.Context, taskID uuid.UUID, filter repository.CommentFilter, pg pagination.Params) (*pagination.Page[domain.Comment], error) {
 	pg.Normalize()
-	return s.commentRepo.ListByTask(ctx, taskID, filter, pg)
+	page, err := s.commentRepo.ListByTask(ctx, taskID, filter, pg)
+	if err != nil || page == nil {
+		return page, err
+	}
+	s.attachDeliveryOutcomes(ctx, page.Items)
+	return page, nil
+}
+
+// attachDeliveryOutcomes fills in Delivery for a batch of comments in one
+// query, so the record is visible wherever the thread is read rather than
+// only to whoever thinks to go looking for it.
+//
+// Best-effort by design: a thread still renders if the delivery record cannot
+// be read. The failure is logged rather than swallowed, because "no rows" and
+// "could not read the rows" would otherwise both render as "everything was
+// delivered" — the precise ambiguity this feature exists to remove.
+func (s *commentService) attachDeliveryOutcomes(ctx context.Context, comments []domain.Comment) {
+	if s.deliveryRepo == nil || len(comments) == 0 {
+		return
+	}
+	ids := make([]uuid.UUID, 0, len(comments))
+	for i := range comments {
+		ids = append(ids, comments[i].ID)
+	}
+	byComment, err := s.deliveryRepo.ListByCommentIDs(ctx, ids)
+	if err != nil {
+		log.Printf("[comment-delivery] could not read delivery outcomes for %d comments: %v", len(ids), err)
+		return
+	}
+	for i := range comments {
+		if rows, ok := byComment[comments[i].ID]; ok {
+			comments[i].Delivery = rows
+		}
+	}
 }
 
 // ListByAuthor returns the caller's own comments, newest first (activity feed).
 func (s *commentService) ListByAuthor(ctx context.Context, authorID uuid.UUID, filter repository.CommentViewFilter) (*domain.CommentViewPage, error) {
-	items, nextCursor, err := s.commentRepo.ListByAuthor(ctx, authorID, filter)
+	items, cursor, err := s.commentRepo.ListByAuthor(ctx, authorID, filter)
 	if err != nil {
 		return nil, err
 	}
-	return &domain.CommentViewPage{Items: items, NextCursor: nextCursor}, nil
+	return commentViewPage(items, cursor), nil
 }
 
 // ListRecentByWorkspace returns workspace-wide recent comments, newest first (activity feed).
 func (s *commentService) ListRecentByWorkspace(ctx context.Context, wsID uuid.UUID, filter repository.CommentViewFilter) (*domain.CommentViewPage, error) {
-	items, nextCursor, err := s.commentRepo.ListRecentByWorkspace(ctx, wsID, filter)
+	items, cursor, err := s.commentRepo.ListRecentByWorkspace(ctx, wsID, filter)
 	if err != nil {
 		return nil, err
 	}
-	return &domain.CommentViewPage{Items: items, NextCursor: nextCursor}, nil
+	return commentViewPage(items, cursor), nil
+}
+
+// commentViewPage splits a repo-level tuple cursor back into the page's two
+// JSON fields — NextCursor (RFC3339, read by old and new clients alike) and
+// NextCursorID (the tie-breaker new clients should echo back as before_id).
+func commentViewPage(items []domain.CommentView, cursor *domain.CommentCursor) *domain.CommentViewPage {
+	page := &domain.CommentViewPage{Items: items}
+	if cursor != nil {
+		page.NextCursor = &cursor.CreatedAt
+		page.NextCursorID = &cursor.ID
+	}
+	return page
 }
 
 // buildTaskSnap constructs the task snapshot map used in agent notifications.
@@ -968,15 +1158,43 @@ func (s *commentService) notifyMentions(
 	}
 	now := timeNow()
 
+	// The task's status category, resolved once: it decides whether the card is
+	// in the feed a mentioned agent actually polls, which is the difference
+	// between a comment they will be handed and one they will never see.
+	taskInTodo := s.taskIsInTodoCategory(ctx, task)
+
 	seenID := make(map[uuid.UUID]bool)
 	var dbRows []domain.CommentMention
+	// One verdict per addressed handle, recorded whether or not the handle
+	// resolved. This slice is the thing that makes a failed mention visible;
+	// before it existed, an unresolvable handle wrote nothing anywhere.
+	outcomes := make([]domain.CommentDeliveryOutcome, 0, len(newSlugs))
 
 	for _, slug := range newSlugs {
+		// Whether this handle named somebody at all. A handle that resolves to
+		// nothing is the case with no trace today, so it gets its own row at
+		// the bottom of the loop rather than falling off the end silently.
+		resolved := false
+
 		// Try agent lookup first.
 		if s.agentSvc != nil {
 			agent, err := s.agentSvc.GetBySlug(ctx, workspaceID, slug)
+			if err == nil && agent != nil {
+				resolved = true
+			}
 			if err == nil && agent != nil && !seenID[agent.ID] {
 				seenID[agent.ID] = true
+				isSelf := actorType == domain.ActorTypeAgent && agent.ID == actorID
+				outcomes = append(outcomes, newOutcomeRow(comment.ID, deliveryFacts{
+					Slug:            slug,
+					Agent:           agent,
+					SelfMention:     isSelf,
+					StreamConnected: presence.IsConnected(agent.ID),
+					InTaskQueue: taskInTodo &&
+						task.AssigneeType == domain.AssigneeTypeAgent &&
+						task.AssigneeID != nil && *task.AssigneeID == agent.ID,
+					Presence: agent.ComputedStatus(presence.IsConnected(agent.ID)),
+				}, now))
 				dbRows = append(dbRows, domain.CommentMention{
 					CommentID:     comment.ID,
 					MentionedID:   agent.ID,
@@ -984,7 +1202,7 @@ func (s *commentService) notifyMentions(
 					MentionedSlug: slug,
 					ExtractedAt:   now,
 				})
-				if s.agentNotifySvc != nil && (actorType != domain.ActorTypeAgent || agent.ID != actorID) {
+				if s.agentNotifySvc != nil && !isSelf {
 					s.agentNotifySvc.NotifyAgent(ctx, agent.ID, AgentNotification{
 						EventType:   "task.mentioned",
 						Timestamp:   now,
@@ -1002,6 +1220,12 @@ func (s *commentService) notifyMentions(
 						TaskID:    task.ID,
 						ProjectID: task.ProjectID,
 						Payload:   map[string]any{"mentioned_slug": slug},
+						// If the durable store rejects the event, the verdict
+						// recorded a moment ago is no longer true. Downgrade it
+						// rather than leaving a confident "delivered" standing
+						// over a write that did not happen — a stale optimistic
+						// record is the failure mode this whole table replaces.
+						OnPersistErr: s.markDeliveryFailed(comment.ID, slug),
 					})
 				}
 				continue
@@ -1011,8 +1235,23 @@ func (s *commentService) notifyMentions(
 		// Fall back to user lookup.
 		if s.userRepo != nil {
 			user, err := s.userRepo.GetByUsername(ctx, workspaceID, slug)
-			if err == nil && user != nil && !seenID[user.ID] &&
-				(actorType != domain.ActorTypeUser || user.ID != actorID) {
+			if err == nil && user != nil {
+				resolved = true
+			}
+			if err == nil && user != nil && !seenID[user.ID] {
+				isSelf := actorType == domain.ActorTypeUser && user.ID == actorID
+				outcomes = append(outcomes, newOutcomeRow(comment.ID, deliveryFacts{
+					Slug:            slug,
+					User:            user,
+					SelfMention:     isSelf,
+					HasSubscription: s.userHasMentionSubscription(ctx, user.ID),
+				}, now))
+				if isSelf {
+					// Recorded above as skipped/self_mention; nothing to send,
+					// and no Mention-feed row for naming yourself.
+					seenID[user.ID] = true
+					continue
+				}
 				seenID[user.ID] = true
 				dbRows = append(dbRows, domain.CommentMention{
 					CommentID:     comment.ID,
@@ -1052,11 +1291,106 @@ func (s *commentService) notifyMentions(
 				s.notifyUserMention(ctx, comment, task, workspaceID, user.ID, actorName)
 			}
 		}
+
+		if !resolved {
+			// The expensive silent case: the comment is published, the handle
+			// is highlighted in the rendered body, and it addresses nobody.
+			// Until this row, that was indistinguishable from the handle never
+			// having been written — a lookup that records only its successes
+			// cannot tell "nobody asked" from "every ask missed".
+			outcomes = append(outcomes, newOutcomeRow(comment.ID, deliveryFacts{
+				Slug: slug,
+			}, now))
+		}
 	}
 
 	if s.mentionRepo != nil && len(dbRows) > 0 {
 		_ = s.mentionRepo.InsertBatch(ctx, dbRows)
 	}
+	if s.deliveryRepo != nil && len(outcomes) > 0 {
+		if err := s.deliveryRepo.InsertBatch(ctx, outcomes); err != nil {
+			log.Printf("[comment-delivery] failed to record delivery outcomes for comment %s: %v", comment.ID, err)
+		}
+	}
+}
+
+// markDeliveryFailed returns the callback that downgrades one recorded verdict
+// to failed when the durable event write errors.
+//
+// Returns nil when there is no repository to write to, which is what keeps the
+// notification payload free of a closure that would do nothing — and keeps the
+// hook's own "is it set" check meaningful.
+func (s *commentService) markDeliveryFailed(commentID uuid.UUID, slug string) func(error) {
+	if s.deliveryRepo == nil {
+		return nil
+	}
+	repo := s.deliveryRepo
+	return func(persistErr error) {
+		// Deliberately a fresh background context: this runs inside dispatch's
+		// own goroutine, long after the request that created the comment has
+		// returned and its context has been cancelled. Reusing that context
+		// would make the downgrade fail exactly when it is needed.
+		if err := repo.MarkFailed(context.Background(), commentID, slug, domain.ReasonEventPersistFailed); err != nil {
+			log.Printf("[comment-delivery] could not downgrade %s/@%s to failed after persist error %v: %v",
+				commentID, slug, persistErr, err)
+		}
+	}
+}
+
+// taskIsInTodoCategory reports whether the task currently sits in a
+// todo-category status — i.e. whether it is in the feed an assigned agent
+// polls via GET /agents/me/tasks?status_category=todo.
+//
+// Fails CLOSED: if the status cannot be read, the answer is "not in the
+// queue". The alternative would let an unreadable status render as a
+// confident "delivered", which is the shape of error this record exists to
+// eliminate — an unknown must never be reported as a reassurance.
+func (s *commentService) taskIsInTodoCategory(ctx context.Context, task *domain.Task) bool {
+	if s.statusRepo == nil || task == nil {
+		return false
+	}
+	status, err := s.statusRepo.GetByID(ctx, task.StatusID)
+	if err != nil || status == nil {
+		return false
+	}
+	return status.Category == domain.StatusCategoryTodo
+}
+
+// userHasMentionSubscription reports whether the mentioned person has any
+// notification preference row that could carry a mention.
+//
+// Fails CLOSED for the same reason as above, with one extra consideration: a
+// person who has never opened notification settings has no preference row at
+// all, and dispatch then produces nothing on any channel without erroring.
+// That is the state this answer is mostly reporting, and calling it
+// "subscribed" because the lookup failed would hide precisely it.
+func (s *commentService) userHasMentionSubscription(ctx context.Context, userID uuid.UUID) bool {
+	if s.notifySvc == nil {
+		return false
+	}
+	prefs, err := s.notifySvc.GetPreferences(ctx, userID)
+	if err != nil {
+		return false
+	}
+	// The same three conditions dispatch applies, in the same order: a row
+	// belonging to this user, enabled, and listing this event. Re-deriving the
+	// gate loosely here would produce a report that disagrees with the code it
+	// is reporting on, which is worse than no report.
+	for i := range prefs {
+		p := prefs[i]
+		if p.UserID == nil || *p.UserID != userID {
+			continue
+		}
+		if !p.IsEnabled {
+			continue
+		}
+		for _, ev := range p.Events {
+			if ev == "task.mentioned" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // notifyUserMention dispatches the "task.mentioned" notification event for one
@@ -1393,7 +1727,18 @@ const minReaffirmToWithdrawalGap = 30 * time.Minute
 //   - comment.Body must ASSERT a withdrawal negator (hasNegatorInScope: the same
 //     triageExitNegators vocabulary enforceTriageExit uses, matched against the body
 //     with code spans, fences and blockquotes stripped — a comment that merely QUOTES
-//     "не нужен" while explaining the mechanism withdraws nothing);
+//     "не нужен" while explaining the mechanism withdraws nothing). ⚠️ The match is
+//     NOT run over the whole body: hasNegatorInScope searches only negatorScope —
+//     text at-or-after the body's own LAST blocking marker, or, for the marker-less
+//     comment that a real withdrawal usually is, the body's LAST PARAGRAPH. A
+//     thorough withdrawal whose negator sits in a heading or a first paragraph is
+//     a no-op — measured live on #58d8bb8d, 2026-08-20. A second, narrower trap
+//     sits next to it: blockerStillOpenMarkers in the SAME scope override the
+//     negator, so "…не нужен, но регресс-тест не закрыт" withdraws nothing.
+//     That one matches only the short forms; the inflected "не закрытая" does
+//     NOT veto (containsNegatorWholeWord needs a word boundary) — both pinned in
+//     TestDiagnoseNegatorMiss. Since #17829fcf neither miss is silent — see
+//     reportWithdrawalMiss;
 //   - of all prior comments that hasBlockingMarker, the CHRONOLOGICALLY LAST one
 //     must be authored by this SAME agent (task #5d3d2402: that marker's OWN body
 //     may itself carry a negator — e.g. it doubled as an FYI aside — and that no
@@ -1609,6 +1954,7 @@ func (s *commentService) releaseHumanGateOnWithdrawal(ctx context.Context, comme
 		return
 	}
 	if !hasNegatorInScope(comment.Body) {
+		s.reportWithdrawalMiss(ctx, comment, task)
 		return
 	}
 
@@ -1760,6 +2106,63 @@ func (s *commentService) releaseHumanGateOnWithdrawal(ctx context.Context, comme
 			TaskID:    task.ID,
 			ProjectID: task.ProjectID,
 		})
+	}
+}
+
+// reportWithdrawalMiss leaves a trace when a comment on a gated task talks about
+// withdrawing the ask but did not satisfy hasNegatorInScope — AC2 of #17829fcf.
+//
+// The log line fires for every such comment. The task-thread notice is narrower:
+// only for the agent who OWNS the live marker, i.e. the one agent whose
+// withdrawal could have succeeded, so the advice it gives is actionable rather
+// than addressed to a bystander who never had that power.
+//
+// It deliberately does NOT claim the author intended a withdrawal. Intent is not
+// recoverable from comment text — that is the whole finding of #1e5be182, where a
+// genuine status update carried mid-body negators about other topics while its
+// final paragraph reaffirmed the ask. So the notice states two facts that hold in
+// BOTH readings: the gate is still up, and here is the region the server read.
+// A notice that said "твой отзыв отклонён" would be wrong on every status update.
+func (s *commentService) reportWithdrawalMiss(ctx context.Context, comment *domain.Comment, task *domain.Task) {
+	reason := diagnoseNegatorMiss(comment.Body)
+	if reason == "" {
+		return
+	}
+	log.Printf("[human-gate] task %s: comment %s by agent %s mentions a withdrawal but human_gate stays true — %s",
+		task.ID, comment.ID, comment.AuthorID, reason)
+
+	scan, err := s.scanHumanGateOwnership(ctx, task.ID, &comment.ID)
+	if err != nil || !scan.found {
+		return
+	}
+	if scan.markerAuthorType != domain.ActorTypeAgent || scan.markerAuthorID != comment.AuthorID {
+		return
+	}
+
+	hint := withdrawalMissHint[reason]
+	if hint == "" {
+		return
+	}
+	now := timeNow()
+	sysComment := &domain.Comment{
+		ID:         uuid.New(),
+		TaskID:     task.ID,
+		AuthorID:   systemActorID,
+		AuthorType: domain.ActorTypeSystem,
+		Body: "🔒 human_gate по-прежнему поднят — этот коммент его не снял: " + hint +
+			"\n\nЕсли отзыв был намеренным, повтори его **отдельным комментарием**, где слова отзыва " +
+			"(`не нужен` / `не требуется` / `снят` / …) стоят в последнем абзаце и рядом с ними нет " +
+			"утверждений, что блокер жив. Разбор и пробы оставляй предыдущим комментарием — они отзыв не портят. " +
+			"После — перечитай `human_gate`.",
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	if err := s.commentRepo.Create(ctx, sysComment); err != nil {
+		log.Printf("[human-gate] WARNING: create withdrawal-miss notice on task %s failed: %v", task.ID, err)
+		return
+	}
+	if s.ctxCacheInv != nil {
+		s.ctxCacheInv.Invalidate(ctx, task.ID)
 	}
 }
 

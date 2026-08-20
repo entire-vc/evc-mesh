@@ -9,6 +9,7 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/repository"
 	"github.com/entire-vc/evc-mesh/internal/service"
+	"github.com/entire-vc/evc-mesh/pkg/mdoc"
 	"github.com/entire-vc/evc-mesh/pkg/pagination"
 )
 
@@ -238,10 +239,11 @@ func (m *MockCommentService) GetHumanGateOwner(ctx context.Context, taskID uuid.
 
 // MockTaskDependencyService implements service.TaskDependencyService for testing.
 type MockTaskDependencyService struct {
-	CreateFunc     func(ctx context.Context, dep *domain.TaskDependency) error
-	DeleteFunc     func(ctx context.Context, id uuid.UUID) error
-	ListByTaskFunc func(ctx context.Context, taskID uuid.UUID) ([]domain.TaskDependency, error)
-	CheckCycleFunc func(ctx context.Context, taskID, dependsOnTaskID uuid.UUID) (bool, error)
+	CreateFunc                   func(ctx context.Context, dep *domain.TaskDependency) error
+	DeleteFunc                   func(ctx context.Context, id uuid.UUID) error
+	ListByTaskFunc               func(ctx context.Context, taskID uuid.UUID) ([]domain.TaskDependency, error)
+	ListByTaskBothDirectionsFunc func(ctx context.Context, taskID uuid.UUID) (outgoing, incoming []domain.EnrichedTaskDependency, err error)
+	CheckCycleFunc               func(ctx context.Context, taskID, dependsOnTaskID uuid.UUID) (bool, error)
 }
 
 func (m *MockTaskDependencyService) Create(ctx context.Context, dep *domain.TaskDependency) error {
@@ -263,6 +265,13 @@ func (m *MockTaskDependencyService) ListByTask(ctx context.Context, taskID uuid.
 		return m.ListByTaskFunc(ctx, taskID)
 	}
 	return nil, nil
+}
+
+func (m *MockTaskDependencyService) ListByTaskBothDirections(ctx context.Context, taskID uuid.UUID) (outgoing, incoming []domain.EnrichedTaskDependency, err error) {
+	if m.ListByTaskBothDirectionsFunc != nil {
+		return m.ListByTaskBothDirectionsFunc(ctx, taskID)
+	}
+	return nil, nil, nil
 }
 
 func (m *MockTaskDependencyService) CheckCycle(ctx context.Context, taskID, dependsOnTaskID uuid.UUID) (bool, error) {
@@ -942,6 +951,165 @@ func (m *MockArtifactService) ListByTask(ctx context.Context, taskID uuid.UUID, 
 	return nil, nil
 }
 
+// MockDocumentService implements service.DocumentService for testing.
+type MockDocumentService struct {
+	CreateFunc             func(ctx context.Context, input service.CreateDocumentInput) (*domain.Document, error)
+	GetByIDInWorkspaceFunc func(ctx context.Context, id, workspaceID uuid.UUID) (*domain.Document, error)
+	UpdateFunc             func(ctx context.Context, id, workspaceID uuid.UUID, input service.UpdateDocumentInput) (*domain.Document, error)
+	DeleteFunc             func(ctx context.Context, id, workspaceID, deletedBy uuid.UUID, deletedByType domain.ActorType) error
+	ListByProjectFunc      func(ctx context.Context, projectID uuid.UUID, pg pagination.Params) (*pagination.Page[domain.Document], error)
+	SearchFunc             func(ctx context.Context, projectID, workspaceID uuid.UUID, query string, limit int) ([]domain.DocumentSearchHit, error)
+	OutlineFunc            func(ctx context.Context, id, workspaceID uuid.UUID) (*service.DocumentOutline, error)
+	SectionFunc            func(ctx context.Context, id, workspaceID uuid.UUID, ref string) (*service.DocumentSection, error)
+	GetByPathFunc          func(ctx context.Context, projectID uuid.UUID, path string) (*domain.Document, error)
+	ResolveAnchorFunc      func(ctx context.Context, id, workspaceID uuid.UUID, input service.ResolveAnchorInput) (*mdoc.Anchor, error)
+}
+
+func (m *MockDocumentService) Outline(ctx context.Context, id, workspaceID uuid.UUID) (*service.DocumentOutline, error) {
+	if m.OutlineFunc != nil {
+		return m.OutlineFunc(ctx, id, workspaceID)
+	}
+	return nil, nil
+}
+
+func (m *MockDocumentService) Section(ctx context.Context, id, workspaceID uuid.UUID, ref string) (*service.DocumentSection, error) {
+	if m.SectionFunc != nil {
+		return m.SectionFunc(ctx, id, workspaceID, ref)
+	}
+	return nil, nil
+}
+
+func (m *MockDocumentService) GetByPath(ctx context.Context, projectID uuid.UUID, path string) (*domain.Document, error) {
+	if m.GetByPathFunc != nil {
+		return m.GetByPathFunc(ctx, projectID, path)
+	}
+	return nil, nil
+}
+
+func (m *MockDocumentService) ResolveAnchor(ctx context.Context, id, workspaceID uuid.UUID, input service.ResolveAnchorInput) (*mdoc.Anchor, error) {
+	if m.ResolveAnchorFunc != nil {
+		return m.ResolveAnchorFunc(ctx, id, workspaceID, input)
+	}
+	return nil, nil
+}
+
+func (m *MockDocumentService) Create(ctx context.Context, input service.CreateDocumentInput) (*domain.Document, error) {
+	if m.CreateFunc != nil {
+		return m.CreateFunc(ctx, input)
+	}
+	return nil, nil
+}
+
+func (m *MockDocumentService) GetByIDInWorkspace(ctx context.Context, id, workspaceID uuid.UUID) (*domain.Document, error) {
+	if m.GetByIDInWorkspaceFunc != nil {
+		return m.GetByIDInWorkspaceFunc(ctx, id, workspaceID)
+	}
+	return nil, nil
+}
+
+func (m *MockDocumentService) Update(ctx context.Context, id, workspaceID uuid.UUID, input service.UpdateDocumentInput) (*domain.Document, error) {
+	if m.UpdateFunc != nil {
+		return m.UpdateFunc(ctx, id, workspaceID, input)
+	}
+	return nil, nil
+}
+
+func (m *MockDocumentService) Delete(ctx context.Context, id, workspaceID, deletedBy uuid.UUID, deletedByType domain.ActorType) error {
+	if m.DeleteFunc != nil {
+		return m.DeleteFunc(ctx, id, workspaceID, deletedBy, deletedByType)
+	}
+	return nil
+}
+
+func (m *MockDocumentService) ListByProject(ctx context.Context, projectID uuid.UUID, pg pagination.Params) (*pagination.Page[domain.Document], error) {
+	if m.ListByProjectFunc != nil {
+		return m.ListByProjectFunc(ctx, projectID, pg)
+	}
+	return nil, nil
+}
+
+// MockDocumentAttachmentService implements service.DocumentAttachmentService for testing.
+type MockDocumentAttachmentService struct {
+	UploadFunc         func(ctx context.Context, input service.UploadDocumentAttachmentInput) (*domain.DocumentAttachment, error)
+	GetDownloadURLFunc func(ctx context.Context, id, workspaceID uuid.UUID, inline bool) (string, error)
+	ListByDocumentFunc func(ctx context.Context, documentID, workspaceID uuid.UUID, pg pagination.Params) (*pagination.Page[domain.DocumentAttachment], error)
+	DeleteFunc         func(ctx context.Context, id, workspaceID uuid.UUID) error
+}
+
+func (m *MockDocumentAttachmentService) Upload(ctx context.Context, input service.UploadDocumentAttachmentInput) (*domain.DocumentAttachment, error) {
+	if m.UploadFunc != nil {
+		return m.UploadFunc(ctx, input)
+	}
+	return nil, nil
+}
+
+func (m *MockDocumentAttachmentService) GetDownloadURL(ctx context.Context, id, workspaceID uuid.UUID, inline bool) (string, error) {
+	if m.GetDownloadURLFunc != nil {
+		return m.GetDownloadURLFunc(ctx, id, workspaceID, inline)
+	}
+	return "", nil
+}
+
+func (m *MockDocumentAttachmentService) ListByDocument(ctx context.Context, documentID, workspaceID uuid.UUID, pg pagination.Params) (*pagination.Page[domain.DocumentAttachment], error) {
+	if m.ListByDocumentFunc != nil {
+		return m.ListByDocumentFunc(ctx, documentID, workspaceID, pg)
+	}
+	return nil, nil
+}
+
+func (m *MockDocumentAttachmentService) Delete(ctx context.Context, id, workspaceID uuid.UUID) error {
+	if m.DeleteFunc != nil {
+		return m.DeleteFunc(ctx, id, workspaceID)
+	}
+	return nil
+}
+
+// MockDocumentCommentService implements service.DocumentCommentService for testing.
+type MockDocumentCommentService struct {
+	CreateFunc func(ctx context.Context, input service.CreateDocumentCommentInput) (*domain.DocumentComment, error)
+
+	ListByDocumentFunc func(ctx context.Context, documentID, workspaceID uuid.UUID, filter repository.DocumentCommentFilter, pg pagination.Params) (*pagination.Page[domain.DocumentComment], error)
+
+	UpdateFunc      func(ctx context.Context, id, workspaceID uuid.UUID, input service.UpdateDocumentCommentInput) (*domain.DocumentComment, error)
+	SetResolvedFunc func(ctx context.Context, id, workspaceID uuid.UUID, input service.ResolveDocumentCommentInput) (*domain.DocumentComment, error)
+	DeleteFunc      func(ctx context.Context, id, workspaceID, actorID uuid.UUID, actorType domain.ActorType) error
+}
+
+func (m *MockDocumentCommentService) Create(ctx context.Context, input service.CreateDocumentCommentInput) (*domain.DocumentComment, error) {
+	if m.CreateFunc != nil {
+		return m.CreateFunc(ctx, input)
+	}
+	return nil, nil
+}
+
+func (m *MockDocumentCommentService) ListByDocument(ctx context.Context, documentID, workspaceID uuid.UUID, filter repository.DocumentCommentFilter, pg pagination.Params) (*pagination.Page[domain.DocumentComment], error) {
+	if m.ListByDocumentFunc != nil {
+		return m.ListByDocumentFunc(ctx, documentID, workspaceID, filter, pg)
+	}
+	return nil, nil
+}
+
+func (m *MockDocumentCommentService) Update(ctx context.Context, id, workspaceID uuid.UUID, input service.UpdateDocumentCommentInput) (*domain.DocumentComment, error) {
+	if m.UpdateFunc != nil {
+		return m.UpdateFunc(ctx, id, workspaceID, input)
+	}
+	return nil, nil
+}
+
+func (m *MockDocumentCommentService) SetResolved(ctx context.Context, id, workspaceID uuid.UUID, input service.ResolveDocumentCommentInput) (*domain.DocumentComment, error) {
+	if m.SetResolvedFunc != nil {
+		return m.SetResolvedFunc(ctx, id, workspaceID, input)
+	}
+	return nil, nil
+}
+
+func (m *MockDocumentCommentService) Delete(ctx context.Context, id, workspaceID, actorID uuid.UUID, actorType domain.ActorType) error {
+	if m.DeleteFunc != nil {
+		return m.DeleteFunc(ctx, id, workspaceID, actorID, actorType)
+	}
+	return nil
+}
+
 type MockAgentSessionRepository struct {
 	GetPreviousStartedAtFunc func(ctx context.Context, agentID uuid.UUID) (*time.Time, error)
 }
@@ -968,5 +1136,58 @@ func (m *MockAgentSessionRepository) GetPreviousStartedAt(ctx context.Context, a
 	return nil, nil
 }
 func (m *MockAgentSessionRepository) GetTaskCostSummary(ctx context.Context, taskID uuid.UUID) (*domain.TaskCostSummary, error) {
+	return nil, nil
+}
+
+func (m *MockDocumentService) Search(ctx context.Context, projectID, workspaceID uuid.UUID, query string, limit int) ([]domain.DocumentSearchHit, error) {
+	if m.SearchFunc != nil {
+		return m.SearchFunc(ctx, projectID, workspaceID, query, limit)
+	}
+	return nil, nil
+}
+
+// MockProjectIntegrationService is a service.ProjectIntegrationService whose
+// every method is a swappable func, so a test names only the behaviour it is
+// about.
+type MockProjectIntegrationService struct {
+	GetTeamRelayFunc    func(ctx context.Context, projectID uuid.UUID) (*domain.ProjectIntegration, error)
+	UpsertTeamRelayFunc func(ctx context.Context, projectID uuid.UUID, input service.UpsertProjectIntegrationInput) (*domain.ProjectIntegration, error)
+	DeleteTeamRelayFunc func(ctx context.Context, projectID uuid.UUID) error
+	ListFunc            func(ctx context.Context, projectID uuid.UUID) ([]domain.ProjectIntegration, error)
+	SearchTRFunc        func(ctx context.Context, shareSlug, q string, limit int) ([]domain.RelayFileItem, error)
+}
+
+func (m *MockProjectIntegrationService) GetTeamRelay(ctx context.Context, projectID uuid.UUID) (*domain.ProjectIntegration, error) {
+	if m.GetTeamRelayFunc != nil {
+		return m.GetTeamRelayFunc(ctx, projectID)
+	}
+	return nil, nil
+}
+
+func (m *MockProjectIntegrationService) UpsertTeamRelay(ctx context.Context, projectID uuid.UUID, input service.UpsertProjectIntegrationInput) (*domain.ProjectIntegration, error) {
+	if m.UpsertTeamRelayFunc != nil {
+		return m.UpsertTeamRelayFunc(ctx, projectID, input)
+	}
+	return nil, nil
+}
+
+func (m *MockProjectIntegrationService) DeleteTeamRelay(ctx context.Context, projectID uuid.UUID) error {
+	if m.DeleteTeamRelayFunc != nil {
+		return m.DeleteTeamRelayFunc(ctx, projectID)
+	}
+	return nil
+}
+
+func (m *MockProjectIntegrationService) List(ctx context.Context, projectID uuid.UUID) ([]domain.ProjectIntegration, error) {
+	if m.ListFunc != nil {
+		return m.ListFunc(ctx, projectID)
+	}
+	return nil, nil
+}
+
+func (m *MockProjectIntegrationService) SearchTR(ctx context.Context, shareSlug, q string, limit int) ([]domain.RelayFileItem, error) {
+	if m.SearchTRFunc != nil {
+		return m.SearchTRFunc(ctx, shareSlug, q, limit)
+	}
 	return nil, nil
 }

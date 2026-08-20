@@ -2,14 +2,11 @@ package handler
 
 import (
 	"net/http"
-	"strconv"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
-	"github.com/entire-vc/evc-mesh/internal/repository"
 	"github.com/entire-vc/evc-mesh/internal/service"
 	"github.com/entire-vc/evc-mesh/pkg/actorctx"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
@@ -33,35 +30,10 @@ func (h *MentionHandler) List(c echo.Context) error {
 		return apierror.Unauthorized("authentication required")
 	}
 
-	filter := repository.MentionFilter{Limit: 50}
-
-	if v := c.QueryParam("seen"); v != "" {
-		b, err := strconv.ParseBool(v)
-		if err != nil {
-			return apierror.ValidationError(map[string]string{"seen": "must be true or false"})
-		}
-		filter.Seen = &b
-	}
-	if v := c.QueryParam("since"); v != "" {
-		t, err := time.Parse(time.RFC3339, v)
-		if err != nil {
-			return apierror.ValidationError(map[string]string{"since": "must be RFC3339 timestamp"})
-		}
-		filter.Since = &t
-	}
-	if v := c.QueryParam("project_id"); v != "" {
-		id, err := uuid.Parse(v)
-		if err != nil {
-			return apierror.ValidationError(map[string]string{"project_id": "must be a UUID"})
-		}
-		filter.ProjectID = &id
-	}
-	if v := c.QueryParam("limit"); v != "" {
-		n, err := strconv.Atoi(v)
-		if err != nil || n < 1 || n > 100 {
-			return apierror.ValidationError(map[string]string{"limit": "must be 1-100"})
-		}
-		filter.Limit = n
+	// Shared with the document-mention inbox — see parseMentionFilter.
+	filter, err := parseMentionFilter(c)
+	if err != nil {
+		return err
 	}
 
 	kind := mentionKind(actorType)

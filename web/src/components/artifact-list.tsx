@@ -110,11 +110,17 @@ export function ArtifactList({ taskId, refreshKey, projId, onRelayDocSelect }: A
       setUploading(true);
       try {
         for (const file of files) {
-          const artifact = await uploadArtifact(taskId, file);
-          setArtifacts((prev) => [...prev, artifact]);
+          // Caught per file rather than around the loop: one refused file
+          // should not silently abandon the rest of a multi-file drop.
+          try {
+            const artifact = await uploadArtifact(taskId, file);
+            setArtifacts((prev) => [...prev, artifact]);
+          } catch (err) {
+            toast.error(`Could not attach ${file.name}`, {
+              description: err instanceof Error ? err.message : "upload failed",
+            });
+          }
         }
-      } catch {
-        // error toast could go here
       } finally {
         setUploading(false);
       }
@@ -156,38 +162,23 @@ export function ArtifactList({ taskId, refreshKey, projId, onRelayDocSelect }: A
     [handleUploadFiles],
   );
 
-  // Open = for TR private-share artifacts, build the authenticated docs URL
-  // directly from tr_public_url + ?agent_key= (both stored in metadata at upload
-  // time). For older artifacts without tr_agent_key in metadata, fall back to the
-  // preview-url endpoint which resolves the key server-side. For non-TR artifacts,
-  // use the S3 presigned URL.
-  const handleOpen = async (artifactId: string, trPublicUrl?: string, trAgentKey?: string) => {
+  // Open = a Team Relay artifact opens in Team Relay; anything else opens through
+  // its S3 presigned URL.
+  //
+  // It used to ask the server to mint a short-lived embed token first and open
+  // THAT. The token existed to authenticate an <iframe> we embedded, and the
+  // iframe is gone (D10) — a Team Relay document is now read and rendered by our
+  // own editor. Minting an embed token to open a new browser tab was the last
+  // caller of that machinery, and keeping a credential-minting endpoint alive for
+  // it would have left exactly the orphan this unit set out to remove.
+  //
+  // Named change, not a silent one: on a PRIVATE share the reader previously got
+  // an authenticated view via that token and now gets Team Relay's own page,
+  // where they sign in as themselves. That is what every other "Open in Team
+  // Relay" control in this product already does, and it is the correct party to
+  // be deciding whether this person may read that share.
+  const handleOpen = async (artifactId: string, trPublicUrl?: string) => {
     if (trPublicUrl) {
-      if (trAgentKey) {
-        // Fast path: agent key is in metadata — build the authenticated URL directly.
-        const u = new URL(trPublicUrl);
-        u.searchParams.set("agent_key", trAgentKey);
-        window.open(u.toString(), "_blank");
-        return;
-      }
-      // Fallback for older artifacts (no tr_agent_key) or public shares: try the
-      // preview-url endpoint which appends the key server-side.
-      if (projId) {
-        try {
-          const relayUrl =
-            "relay://" + new URL(trPublicUrl).pathname.replace(/^\/+/, "");
-          const prev = await api<{ available: boolean; iframe_src?: string }>(
-            `/api/v1/projects/${projId}/tr/preview-url?relay_url=${encodeURIComponent(relayUrl)}`,
-          );
-          if (prev.available && prev.iframe_src) {
-            window.open(prev.iframe_src, "_blank");
-            return;
-          }
-        } catch {
-          // fall through
-        }
-      }
-      // Public share or preview-url unavailable — open bare URL.
       window.open(trPublicUrl, "_blank");
       return;
     }
@@ -358,9 +349,6 @@ export function ArtifactList({ taskId, refreshKey, projId, onRelayDocSelect }: A
                       artifact.id,
                       typeof artifact.metadata?.tr_public_url === "string"
                         ? artifact.metadata.tr_public_url
-                        : undefined,
-                      typeof artifact.metadata?.tr_agent_key === "string"
-                        ? artifact.metadata.tr_agent_key
                         : undefined,
                     )
                   }

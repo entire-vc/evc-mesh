@@ -23,7 +23,9 @@ interface TelegramTabProps {
   toggleTelegramEvent: (key: string) => void;
   telegramSaving: boolean;
   telegramSaved: boolean;
+  telegramUnbinding: boolean;
   onSave: () => void;
+  onDisconnect: () => void;
 }
 
 export function TelegramTab({
@@ -38,7 +40,9 @@ export function TelegramTab({
   toggleTelegramEvent,
   telegramSaving,
   telegramSaved,
+  telegramUnbinding,
   onSave,
+  onDisconnect,
 }: TelegramTabProps) {
   return (
     <Card>
@@ -68,6 +72,30 @@ export function TelegramTab({
           </div>
         ) : (
           <>
+            {/* A configured bot on a host that cannot reach Telegram is the
+                failure this banner exists for: everything below still works,
+                the connect link still opens, the account still binds — and
+                nothing is ever delivered. Shown above the controls rather
+                than replacing them, because the bot is genuinely configured
+                and the fix is on the server, not on this page. */}
+            {!telegramBotInfo.reachable && (
+              <div
+                role="alert"
+                className="flex items-start gap-3 rounded-lg border border-destructive/50 bg-destructive/5 p-3"
+              >
+                <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-destructive" />
+                <div>
+                  <p className="font-medium">
+                    Telegram notifications cannot be delivered right now
+                  </p>
+                  <p className="text-sm text-muted-foreground">
+                    {telegramBotInfo.unavailable_reason ||
+                      "This server could not reach the Telegram Bot API."}
+                  </p>
+                </div>
+              </div>
+            )}
+
             {/* Master toggle */}
             <div className="flex items-center justify-between rounded-lg border border-border p-3">
               <div>
@@ -110,10 +138,20 @@ export function TelegramTab({
                 className="mt-1 w-full rounded-md border border-border bg-background px-3 py-1.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               />
               {telegramChatID ? (
-                <p className="flex items-center gap-1.5 pt-1 text-sm text-teal-600">
-                  <Check className="h-4 w-4" />
-                  Connected — @{telegramBotInfo.bot_username} can message you
-                </p>
+                <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+                  <p className="flex items-center gap-1.5 text-sm text-teal-600">
+                    <Check className="h-4 w-4" />
+                    Connected — @{telegramBotInfo.bot_username} can message you
+                  </p>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={onDisconnect}
+                    disabled={telegramUnbinding}
+                  >
+                    {telegramUnbinding ? "Disconnecting..." : "Disconnect"}
+                  </Button>
+                </div>
               ) : telegramBindLink ? (
                 <a
                   href={telegramBindLink}

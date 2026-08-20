@@ -173,9 +173,30 @@ func (h *NotificationHandler) GetTelegramBotInfo(c echo.Context) error {
 	}
 
 	botUsername, available := h.svc.TelegramBotInfo(c.Request().Context(), wsID)
+
+	// "available" only ever meant "a bot is configured and its token
+	// decrypts" — a question answered entirely from the database. That is not
+	// the same as the channel working, and the gap between the two is where a
+	// real instance sat silently broken: the bot was configured, the settings
+	// page looked healthy, people connected their accounts, and no message was
+	// ever delivered because the api container had no route to
+	// api.telegram.org. The probe is what closes that gap, so it is reported
+	// on the same response the page already reads rather than behind a second
+	// endpoint the page would have to remember to call.
+	//
+	// Only asked when a bot is configured: with nothing to probe with, the
+	// answer is already known and a network round trip would just make the
+	// page slower to say so.
+	reachable, reason := false, ""
+	if available {
+		reachable, reason = h.svc.TelegramReachable(c.Request().Context(), wsID)
+	}
+
 	return c.JSON(http.StatusOK, map[string]any{
-		"available":    available,
-		"bot_username": botUsername,
+		"available":          available,
+		"bot_username":       botUsername,
+		"reachable":          reachable,
+		"unavailable_reason": reason,
 	})
 }
 
@@ -205,11 +226,32 @@ var deliverableChannels = map[string]bool{
 // through NotificationService.Notify. Subscribing to anything else is the same
 // dead-end as an unknown channel: stored, echoed back, never delivered.
 //
-// Keep in step with the Notify call sites (task_service.go, comment_service.go).
+// Keep in step with the Notify call sites (task_service.go, comment_service.go,
+// document_comment_mentions.go).
 var dispatchableEvents = map[string]bool{
-	"task.assigned":          true,
-	"task.status_changed":    true,
-	"task.mentioned":         true,
+	"task.assigned":       true,
+	"task.status_changed": true,
+	"task.mentioned":      true,
+	// An @-mention inside a comment on a document page. Distinct from
+	// task.mentioned because the payload names a document and no task, and a
+	// subscriber has to know which of the two it is holding before trying to open
+	// one. Existing task.mentioned subscribers were opted in by
+	// migrations/20260820103_create_document_comment_mentions.sql: an event type
+	// that appears in no stored `events` array is dispatched perfectly and
+	// delivered to nobody.
+	"document.mentioned": true,
+	// The three document-subscription events. Delivery is gated twice: by these
+	// preference rows, and by an explicit per-document Watch, which is why the
+	// backfill in migrations/20260820105_create_document_watchers.sql can opt
+	// existing subscribers in without turning anything on for anyone who never
+	// presses the button.
+	//
+	// Three types rather than one so that a subscriber can keep conversations
+	// and switch off edits, or the reverse — the two arrive at completely
+	// different rates, which is the same fact that makes the edit path coalesce.
+	"document.changed":       true,
+	"document.commented":     true,
+	"document.deleted":       true,
 	"task.blocking_triage":   true,
 	"task.reviewer_assigned": true,
 	"task.ready_for_review":  true,

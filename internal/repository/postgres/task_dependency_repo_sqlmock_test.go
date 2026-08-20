@@ -32,7 +32,7 @@ func newTaskDependencyRepoMock(t *testing.T) (*TaskDependencyRepo, sqlmock.Sqlmo
 
 func TestTaskDependencyRepo_GetByID(t *testing.T) {
 	ctx := context.Background()
-	const q = `SELECT * FROM task_dependencies WHERE id = $1`
+	const q = `SELECT ` + taskDependencySelectCols + ` FROM task_dependencies WHERE id = $1`
 
 	t.Run("returns the edge with its type and endpoints", func(t *testing.T) {
 		repo, mock := newTaskDependencyRepoMock(t)

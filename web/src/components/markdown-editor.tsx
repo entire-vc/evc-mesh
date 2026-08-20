@@ -3,6 +3,7 @@ import {
   type DragEvent,
   type KeyboardEvent,
   useCallback,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -22,8 +23,12 @@ import { cn } from "@/lib/cn";
 import { Button } from "@/components/ui/button";
 import { MarkdownRenderer } from "@/components/markdown-renderer";
 import { RelayDocPicker } from "@/components/RelayDocPicker";
-import { getAccessToken } from "@/lib/api";
-import { artifactDownloadPath } from "@/lib/artifact-links";
+import { DocLinkMenu } from "@/components/doc-link-menu";
+import { useDocLinkPicker } from "@/hooks/use-doc-link-picker";
+import { api } from "@/lib/api";
+import { toast } from "@/components/ui/toast";
+import { artifactDownloadPath, documentAttachmentDownloadPath } from "@/lib/artifact-links";
+import { uploadDocumentAttachment } from "@/lib/document-attachments";
 import type { Artifact, ArtifactType } from "@/types";
 
 // Pending image: clipboard File + placeholder text used before upload
@@ -37,11 +42,29 @@ interface MarkdownEditorProps {
   onChange: (value: string) => void;
   /** Present when editing an existing task — enables immediate image upload */
   taskId?: string;
+  /**
+   * Present when editing a document body — uploads become document attachments
+   * instead of task artifacts. Mutually exclusive with taskId in practice; if
+   * both arrive, the document wins, because that is the owner of the text being
+   * edited.
+   */
+  documentId?: string;
   projectId?: string;
   projectSettings?: Record<string, unknown>;
   placeholder?: string;
   rows?: number;
   disabled?: boolean;
+  /**
+   * Replaces the footer hint. The default mentions task attachments, which is
+   * wrong wherever this editor is not editing a task (documents, for one).
+   */
+  hint?: string;
+  /**
+   * Set false to drop the upload affordances entirely, rather than offer buttons
+   * that insert a placeholder nothing will ever replace. Only needed where there
+   * is neither a task nor a document to own the bytes.
+   */
+  attachments?: boolean;
   /** Callback fired after a file is successfully uploaded as artifact */
   onArtifactUploaded?: (artifact: Artifact) => void;
   /** @deprecated Use onArtifactUploaded instead */
@@ -69,35 +92,61 @@ function isImageFile(file: File): boolean {
   return file.type.startsWith("image/");
 }
 
+/**
+ * Tell the user an upload failed, by name, and take the placeholder back out.
+ *
+ * A failure here used to be reported by splicing `<!-- upload failed: ... -->`
+ * into the description in place of the "Uploading..." placeholder. That is not
+ * a message: an HTML comment renders as nothing, so in Preview — and in the
+ * saved task description, which is where the text ends up — the user saw the
+ * placeholder disappear and nothing take its place. It also quietly wrote the
+ * comment into text the user was about to save. A toast says it where the user
+ * is looking, and leaves their text as they wrote it.
+ */
+function reportUploadFailure(
+  file: File,
+  err: unknown,
+  placeholder: string,
+  currentValue: string,
+  onChange: (value: string) => void,
+): void {
+  const detail = err instanceof Error ? err.message : "upload failed";
+  toast.error(`Could not attach ${file.name}`, { description: detail });
+  onChange(currentValue.replace(placeholder, ""));
+}
+
+/**
+ * Upload a file as an attachment on a task.
+ *
+ * Routed through `api()` with a FormData body, which api() passes to fetch
+ * untouched and without a Content-Type of its own (see serializeBody there) —
+ * the browser must set that header itself because it carries the multipart
+ * boundary.
+ *
+ * This used to be a raw fetch, for exactly that Content-Type reason, and the
+ * cost of that shortcut was the whole of this bug: api() is also where a 401 is
+ * turned into a token refresh and a replay of the request. Mesh access tokens
+ * live 15 minutes in tab memory (internal/auth/service.go) and are only
+ * refreshed when something gets a 401 back, so an upload attempted across that
+ * boundary was the one action on a task that could not recover — it just threw,
+ * while every neighbouring action (autosave, posting a comment) sailed through.
+ * That is why the defect reads as "sometimes it doesn't attach" rather than as
+ * a broken button. Same fix as PR #620 made for document attachments.
+ */
 export async function uploadArtifact(
   taskId: string,
   file: File,
   artifactType?: ArtifactType,
 ): Promise<Artifact> {
-  const token = getAccessToken();
-  const baseUrl = import.meta.env.VITE_API_URL || "";
-
   const form = new FormData();
   form.append("file", file, file.name);
   form.append("name", file.name);
   form.append("artifact_type", artifactType ?? detectArtifactType(file.type));
 
-  const headers: HeadersInit = {};
-  if (token) {
-    headers["Authorization"] = `Bearer ${token}`;
-  }
-
-  const res = await fetch(
-    `${baseUrl}/api/v1/tasks/${taskId}/artifacts`,
-    { method: "POST", headers, body: form },
-  );
-
-  if (!res.ok) {
-    const err = (await res.json().catch(() => ({}))) as { message?: string };
-    throw new Error(err.message ?? `Upload failed (${res.status})`);
-  }
-
-  return (await res.json()) as Artifact;
+  return api<Artifact>(`/api/v1/tasks/${taskId}/artifacts`, {
+    method: "POST",
+    body: form,
+  });
 }
 
 
@@ -152,11 +201,14 @@ export function MarkdownEditor({
   value,
   onChange,
   taskId,
+  documentId,
   projectId,
   projectSettings,
   placeholder = "Write a description... (Markdown supported)",
   rows = 6,
   disabled = false,
+  hint,
+  attachments = true,
   onArtifactUploaded,
   onImageUploaded,
   onPendingImage,
@@ -167,10 +219,23 @@ export function MarkdownEditor({
   const [dragOver, setDragOver] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
 
+  // `[[` links a document from this project. Unlike the Relay picker below it is
+  // not gated on an integration: our own documents are always there.
+  const docLinks = useDocLinkPicker(projectId, value, onChange, textareaRef);
+
   const hasTrIntegration =
     projectId &&
     typeof projectSettings?.tr_share_id === "string" &&
     !!projectSettings.tr_share_id;
+  // Team Relay appears as a scope only when the project is connected to one.
+  // A switcher with a single option is a control that cannot do anything.
+  const docLinkScopes = useMemo(
+    () =>
+      hasTrIntegration
+        ? ([{ id: "docs", label: "Docs" }, { id: "relay", label: "Team Relay" }] as const)
+        : ([{ id: "docs", label: "Docs" }] as const),
+    [hasTrIntegration],
+  );
 
   // Keep a ref to the latest value so async upload callbacks don't use stale closures
   const valueRef = useRef(value);
@@ -252,6 +317,10 @@ export function MarkdownEditor({
   // Tab key: insert two spaces instead of losing focus
   // ---------------------------------------------------------------------------
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    // The document-link menu gets the key first, and Tab means "accept this
+    // suggestion" while it is open. Indenting instead would be the one keystroke
+    // a writer cannot take back without also losing the menu.
+    if (docLinks.onKeyDown(e)) return;
     if (e.key === "Tab") {
       e.preventDefault();
       insertText("  ");
@@ -261,8 +330,43 @@ export function MarkdownEditor({
   // ---------------------------------------------------------------------------
   // Clipboard paste: detect image files
   // ---------------------------------------------------------------------------
+  // Where uploaded bytes go.
+  //
+  // One seam rather than an `if (taskId) … else if (documentId) …` at each of the
+  // four upload sites (paste, picker, drop, toolbar state). Both owners answer
+  // the same two questions — where to POST the file, and what stable path to
+  // write into the markdown — and the rest of the editor only needs the answers.
+  //
+  // `null` means there is no owner yet: the task-create flow, where files are
+  // held as pending images until the task exists. A document is never in that
+  // state, because the Docs page creates the row before it can be edited.
+  // ---------------------------------------------------------------------------
+  const uploadTarget = useMemo(() => {
+    if (documentId) {
+      return {
+        upload: async (file: File) => {
+          const att = await uploadDocumentAttachment(documentId, file);
+          // No Artifact to hand back: onArtifactUploaded is a task-side
+          // affordance (it refreshes the task's attachment list), and a document
+          // has no such list on screen.
+          return { url: documentAttachmentDownloadPath(att.id), artifact: null };
+        },
+      };
+    }
+    if (taskId) {
+      return {
+        upload: async (file: File) => {
+          const artifact = await uploadArtifact(taskId, file);
+          return { url: artifactDownloadPath(artifact.id), artifact };
+        },
+      };
+    }
+    return null;
+  }, [documentId, taskId]);
+
   const handlePaste = useCallback(
     async (e: ClipboardEvent<HTMLTextAreaElement>) => {
+      if (!attachments) return;
       const items = Array.from(e.clipboardData.items);
       const imageItem = items.find((item) => item.type.startsWith("image/"));
       if (!imageItem) return;
@@ -277,36 +381,30 @@ export function MarkdownEditor({
       const fileName = `pasted-image-${Date.now()}.${ext}`;
       const renamedFile = new File([file], fileName, { type: file.type });
 
-      if (taskId) {
-        // Task exists — upload immediately and insert real URL
+      if (uploadTarget) {
+        // The owner exists — upload immediately and insert the real path
         setUploading(true);
         const placeholder = `![Uploading ${fileName}...]()`;
         insertText(placeholder);
 
         try {
-          const artifact = await uploadArtifact(taskId, renamedFile);
-          const imageUrl = artifactDownloadPath(artifact.id);
+          const { url: imageUrl, artifact } = await uploadTarget.upload(renamedFile);
           const finalMd = `![${fileName}](${imageUrl})`;
           onChange(valueRef.current.replace(placeholder, finalMd));
-          notifyUploaded(artifact);
+          if (artifact) notifyUploaded(artifact);
         } catch (err) {
-          onChange(
-            valueRef.current.replace(
-              placeholder,
-              `<!-- image upload failed: ${err instanceof Error ? err.message : "unknown error"} -->`,
-            ),
-          );
+          reportUploadFailure(renamedFile, err, placeholder, valueRef.current, onChange);
         } finally {
           setUploading(false);
         }
       } else {
-        // No taskId yet (create flow) — insert placeholder and notify parent
+        // No owner yet (task-create flow) — insert placeholder and notify parent
         const placeholder = `![${fileName}](pending:${fileName})`;
         insertText(placeholder);
         onPendingImage?.({ file: renamedFile, placeholder });
       }
     },
-    [taskId, onChange, insertText, notifyUploaded, onPendingImage],
+    [attachments, uploadTarget, onChange, insertText, notifyUploaded, onPendingImage],
   );
 
   // ---------------------------------------------------------------------------
@@ -323,7 +421,7 @@ export function MarkdownEditor({
     async (file: File) => {
       const image = isImageFile(file);
 
-      if (!taskId) {
+      if (!uploadTarget) {
         if (image) {
           const placeholder = `![${file.name}](pending:${file.name})`;
           insertText(placeholder);
@@ -340,25 +438,19 @@ export function MarkdownEditor({
       insertText(placeholder);
 
       try {
-        const artifact = await uploadArtifact(taskId, file);
-        const url = artifactDownloadPath(artifact.id);
+        const { url, artifact } = await uploadTarget.upload(file);
         const finalMd = image
           ? `![${file.name}](${url})`
           : `[${file.name}](${url})`;
         onChange(valueRef.current.replace(placeholder, finalMd));
-        notifyUploaded(artifact);
+        if (artifact) notifyUploaded(artifact);
       } catch (err) {
-        onChange(
-          valueRef.current.replace(
-            placeholder,
-            `<!-- upload failed: ${err instanceof Error ? err.message : "unknown error"} -->`,
-          ),
-        );
+        reportUploadFailure(file, err, placeholder, valueRef.current, onChange);
       } finally {
         setUploading(false);
       }
     },
-    [taskId, onChange, insertText, notifyUploaded, onPendingImage],
+    [uploadTarget, onChange, insertText, notifyUploaded, onPendingImage],
   );
 
   const handleFileChange = useCallback(
@@ -394,6 +486,7 @@ export function MarkdownEditor({
       e.preventDefault();
       e.stopPropagation();
       setDragOver(false);
+      if (!attachments) return;
 
       const files = Array.from(e.dataTransfer.files);
       if (!files.length) return;
@@ -402,7 +495,7 @@ export function MarkdownEditor({
         await handleUploadFile(file);
       }
     },
-    [handleUploadFile],
+    [attachments, handleUploadFile],
   );
 
   // Ref for the general file attachment picker (all file types)
@@ -430,21 +523,25 @@ export function MarkdownEditor({
         <ToolbarButton title="Bullet list" onClick={handleList}>
           <List className="h-3.5 w-3.5" />
         </ToolbarButton>
-        <ToolbarButton
-          title={taskId ? "Insert image" : "Insert image (available after task is created)"}
-          onClick={handleImageButtonClick}
-        >
-          <Image className="h-3.5 w-3.5" />
-        </ToolbarButton>
-        <ToolbarButton
-          title="Attach file"
-          onClick={() => attachInputRef.current?.click()}
-          disabled={!taskId}
-          disabledTooltip="Файл можно прикрепить после создания задачи"
-        >
-          <Paperclip className="h-3.5 w-3.5" />
-        </ToolbarButton>
-        {hasTrIntegration && (
+        {attachments && (
+          <>
+            <ToolbarButton
+              title={uploadTarget ? "Insert image" : "Insert image (available after task is created)"}
+              onClick={handleImageButtonClick}
+            >
+              <Image className="h-3.5 w-3.5" />
+            </ToolbarButton>
+            <ToolbarButton
+              title="Attach file"
+              onClick={() => attachInputRef.current?.click()}
+              disabled={!uploadTarget}
+              disabledTooltip="Файл можно прикрепить после создания задачи"
+            >
+              <Paperclip className="h-3.5 w-3.5" />
+            </ToolbarButton>
+          </>
+        )}
+        {hasTrIntegration && attachments && (
           <>
             <div className="mx-1 h-3.5 w-px bg-border" />
             <ToolbarButton title="Attach Obsidian doc" onClick={() => setPickerOpen(true)}>
@@ -522,8 +619,15 @@ export function MarkdownEditor({
           <textarea
             ref={textareaRef}
             value={value}
-            onChange={(e) => onChange(e.target.value)}
+            onChange={(e) => {
+              onChange(e.target.value);
+              docLinks.onValueChange(
+                e.target.value,
+                e.target.selectionStart ?? e.target.value.length,
+              );
+            }}
             onKeyDown={handleKeyDown}
+            onBlur={docLinks.close}
             onPaste={(e) => void handlePaste(e)}
             placeholder={placeholder}
             rows={rows}
@@ -532,6 +636,18 @@ export function MarkdownEditor({
               "w-full resize-none bg-transparent px-3 py-2 font-mono text-sm leading-relaxed placeholder:text-muted-foreground focus:outline-none disabled:cursor-not-allowed disabled:opacity-50",
             )}
           />
+          {docLinks.trigger && (
+            <DocLinkMenu
+              suggestions={docLinks.suggestions}
+              activeIndex={docLinks.activeIndex}
+              onPick={docLinks.pick}
+              onHover={docLinks.setActiveIndex}
+              scope={docLinks.scope}
+              scopes={docLinkScopes}
+              onScope={docLinks.setScope}
+              loading={docLinks.loading}
+            />
+          )}
           {dragOver && (
             <div className="pointer-events-none absolute inset-0 flex items-center justify-center rounded-b-lg border-2 border-dashed border-primary bg-primary/5">
               <span className="text-sm font-medium text-primary">
@@ -545,12 +661,16 @@ export function MarkdownEditor({
       {/* Hint */}
       {!showPreview && (
         <div className="border-t border-border px-3 py-1 text-[11px] text-muted-foreground">
-          Markdown supported &middot; Paste, drop, or attach files
-          {!taskId && " (uploads after task is saved)"}
+          {hint ?? (
+            <>
+              Markdown supported &middot; Paste, drop, or attach files
+              {!uploadTarget && " (uploads after task is saved)"}
+            </>
+          )}
         </div>
       )}
 
-      {hasTrIntegration && (
+      {hasTrIntegration && attachments && (
         <RelayDocPicker
           projId={projectId!}
           open={pickerOpen}

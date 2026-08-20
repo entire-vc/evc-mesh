@@ -246,7 +246,15 @@ export interface Task {
   project_id: string;
   status_id: string;
   title: string;
-  description: string;
+  /**
+   * Optional because list responses can be asked to omit it. The board fetches
+   * tasks with include_description=false — descriptions were 77% of that payload
+   * and no card renders one. `undefined` here means "not sent", not "empty";
+   * read has_description for the flag, and GET /tasks/:id for the text.
+   */
+  description?: string;
+  /** Always sent on list responses. True when the task has non-blank description text. */
+  has_description?: boolean;
   assignee_id: string | null;
   assignee_type: AssigneeType;
   assignee_name?: string | null;
@@ -274,6 +282,14 @@ export interface Task {
   recurring_schedule_id?: string | null;
   recurring_instance_number?: number | null;
   dod_checks?: Record<string, DodCheck>;
+  /**
+   * Who currently holds the exclusive work-lock, and until when. Both are
+   * omitted by the server when the task is not checked out. A checkout is what
+   * "an agent has this in their hands right now" actually means — the status
+   * column alone cannot say it, which is why the card renders it separately.
+   */
+  checked_out_by?: string | null;
+  checkout_expires?: string | null;
 }
 
 export interface Comment {
@@ -288,6 +304,29 @@ export interface Comment {
   is_internal: boolean;
   created_at: string;
   updated_at: string;
+  /**
+   * What became of each @-addressed handle on this comment. Absent when the
+   * comment addressed nobody — which is why it is optional rather than an
+   * empty array: "no handles" and "handles that all failed" must not render
+   * the same way.
+   */
+  delivery?: CommentDeliveryOutcome[];
+}
+
+/**
+ * One verdict per @-addressed handle. `reason` is never empty, including on
+ * delivered rows, where it names which path carried the comment.
+ */
+export interface CommentDeliveryOutcome {
+  comment_id: string;
+  recipient_slug: string;
+  recipient_id?: string;
+  recipient_kind: "agent" | "user" | "unknown";
+  outcome: "delivered" | "skipped" | "failed";
+  reason: string;
+  channel: string;
+  recipient_presence: string;
+  decided_at: string;
 }
 
 export interface CommentView {
@@ -300,6 +339,7 @@ export interface CommentView {
   author_id: string;
   author_name: string;
   author_kind: string;
+  is_internal: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -307,6 +347,11 @@ export interface CommentView {
 export interface CommentViewPage {
   items: CommentView[];
   next_cursor: string | null;
+  // Tie-breaker paired with next_cursor: created_at alone is not unique (a
+  // page boundary landing inside a group of same-timestamp comments would
+  // otherwise silently drop the rest of the group — #c6dc694e). Echo both
+  // back as before/before_id on the next "Load more" request.
+  next_cursor_id: string | null;
 }
 
 export interface TaskDependency {
@@ -315,6 +360,13 @@ export interface TaskDependency {
   depends_on_task_id: string;
   dependency_type: DependencyType;
   created_at: string;
+  related_task_title?: string;
+  related_task_status_id?: string;
+}
+
+export interface TaskDependencyList {
+  outgoing: TaskDependency[];
+  incoming: TaskDependency[];
 }
 
 export interface Agent {
@@ -339,6 +391,114 @@ export interface Agent {
   callback_url?: string;
   created_at: string;
   updated_at: string;
+}
+
+// A markdown page inside a project. Named ProjectDocument rather than Document
+// because `Document` is a DOM global: a type by that name shadows it inside any
+// file that imports it, and `document.querySelector` then type-errors somewhere
+// unrelated.
+//
+// `body` is absent from the list response — the API fills it in only for the
+// single-document read (GET /documents/:id), so treat it as optional everywhere.
+export interface ProjectDocument {
+  id: string;
+  project_id: string;
+  parent_id: string | null;
+  slug: string;
+  title: string;
+  storage_key: string;
+  position: number;
+  created_by: string;
+  created_by_type: ActorType;
+  // Actor names and the last editor are being added to the document responses
+  // by a separate change. Optional here so the page that shows them renders
+  // against today's API too, and starts naming the editor the moment the field
+  // appears — same treatment Task gives created_by_name.
+  created_by_name?: string | null;
+  updated_by?: string | null;
+  updated_by_name?: string | null;
+  created_at: string;
+  updated_at: string;
+  deleted_at?: string | null;
+  body?: string;
+  // Monotonic counter bumped by every write to title or body. The value a
+  // caller read is what it sends back as base_version on the next write —
+  // see UpdateDocumentRequest.base_version.
+  version: number;
+}
+
+export interface CreateDocumentRequest {
+  title: string;
+  slug?: string;
+  parent_id?: string | null;
+  position?: number;
+  body?: string;
+}
+
+export interface UpdateDocumentRequest {
+  title?: string;
+  parent_id?: string;
+  // The API cannot read "move to the root" from parent_id: null — a null in the
+  // JSON is indistinguishable from an omitted field once bound into *uuid.UUID.
+  // clear_parent is the backend's explicit spelling for it.
+  clear_parent?: boolean;
+  position?: number;
+  body?: string;
+  // The version last read from the server. Omitted, the API writes
+  // unconditionally; sent and stale, it 409s with document_version_conflict
+  // instead of silently overwriting a change that landed in between.
+  base_version?: number;
+}
+
+// A comment anchored to a run of a document's text — the W3C Web Annotation
+// selector pair, the same shape Hypothesis stores.
+//
+// `start`/`end` are **byte** offsets into the document's markdown, half-open,
+// and are NOT JavaScript string indices. Convert with lib/doc-comments/offsets.
+//
+// Three states are legal, and the server enforces them:
+//   - no quote            -> not anchored (a page-level comment, or a reply)
+//   - quote + offsets     -> anchored
+//   - quote, offsets null -> orphaned: we know what it was about, not where
+//
+// `orphaned` is computed by the server from whether the offsets are present. It
+// is never sent on a write.
+export interface DocumentCommentAnchor {
+  exact: string;
+  prefix: string;
+  suffix: string;
+  start: number | null;
+  end: number | null;
+  orphaned?: boolean;
+}
+
+export interface DocumentComment {
+  id: string;
+  document_id: string;
+  parent_comment_id: string | null;
+  author_id: string;
+  author_type: ActorType;
+  author_name?: string | null;
+  body: string;
+  /** Null when the comment was never anchored. A reply never carries one. */
+  anchor: DocumentCommentAnchor | null;
+  resolved_at: string | null;
+  resolved_by: string | null;
+  resolved_by_type: ActorType | null;
+  resolved_by_name?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateDocumentCommentRequest {
+  body: string;
+  /** Set only on a reply. The server refuses a reply to a reply. */
+  parent_comment_id?: string;
+  /**
+   * Omitted for a page-level comment, and forbidden on a reply — a reply
+   * inherits its parent's anchor and the server answers 400 if it carries one.
+   */
+  anchor?: Omit<DocumentCommentAnchor, "orphaned">;
 }
 
 export interface Artifact {
@@ -410,6 +570,31 @@ export interface Mention {
   seen_at: string | null;
   task_id: string;
   task_title: string;
+  project_id: string;
+  comment_body: string;
+  author_id: string;
+  author_name: string;
+}
+
+/**
+ * An @-mention inside a document comment — the shape of GET /me/document-mentions.
+ *
+ * A sibling of Mention rather than a widened version of it: this one names a
+ * document and no task, and folding the two into one struct with a nullable
+ * `task_id` would push "which of the two am I holding" onto every reader.
+ * The union that lets a screen show both is MentionInboxItem
+ * (`@/lib/mentions/inbox`).
+ */
+export interface DocumentMention {
+  comment_id: string;
+  mentioned_id: string;
+  mentioned_kind: string;
+  mentioned_slug: string;
+  extracted_at: string;
+  seen_at: string | null;
+  document_id: string;
+  document_title: string;
+  document_slug: string;
   project_id: string;
   comment_body: string;
   author_id: string;
@@ -553,6 +738,16 @@ export interface SparkInstallResponse {
 
 export type ViewType = "board" | "list" | "timeline" | "calendar";
 
+/**
+ * Tabs reachable from the project view strip.
+ *
+ * Superset of ViewType on purpose: Docs is a navigation destination, not a
+ * savable view. The server's saved-view enum (internal/service/
+ * saved_view_service.go) only accepts board/list/timeline/calendar, so widening
+ * ViewType itself would let the UI POST a view_type the API rejects.
+ */
+export type ProjectViewTab = ViewType | "docs";
+
 export interface SavedView {
   id: string;
   project_id: string;
@@ -686,6 +881,8 @@ export interface TeamDirectoryAgent {
 export interface TeamDirectoryHuman {
   id: string;
   name: string;
+  /** The @-handle. What the mention renderers match an `@word` against. */
+  username: string;
   email: string;
   avatar_url: string;
   role: string;
@@ -919,8 +1116,18 @@ export interface TelegramPreferenceConfig {
 }
 
 export interface TelegramBotInfo {
+  /** A bot is configured for this workspace and its token decrypts. */
   available: boolean;
   bot_username: string;
+  /**
+   * This server could actually reach the Telegram Bot API just now. Distinct
+   * from `available`, which only says a bot is on file: a configured bot on a
+   * host with no outbound route to api.telegram.org looks perfectly healthy
+   * and delivers nothing.
+   */
+  reachable: boolean;
+  /** Why the channel cannot deliver, ready to show. Empty when it can. */
+  unavailable_reason: string;
 }
 
 // Recurring tasks types

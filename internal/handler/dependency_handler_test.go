@@ -134,15 +134,19 @@ func TestDependencyHandler_Create_ServiceError(t *testing.T) {
 func TestDependencyHandler_List_Success(t *testing.T) {
 	taskID := uuid.New()
 	now := time.Now()
-	deps := []domain.TaskDependency{
-		{ID: uuid.New(), TaskID: taskID, DependsOnTaskID: uuid.New(), DependencyType: domain.DependencyTypeBlocks, CreatedAt: now},
-		{ID: uuid.New(), TaskID: taskID, DependsOnTaskID: uuid.New(), DependencyType: domain.DependencyTypeRelatesTo, CreatedAt: now},
+	parentTitle := "Parent task"
+	outgoing := []domain.EnrichedTaskDependency{
+		{TaskDependency: domain.TaskDependency{ID: uuid.New(), TaskID: taskID, DependsOnTaskID: uuid.New(), DependencyType: domain.DependencyTypeIsChildOf, CreatedAt: now}, RelatedTaskTitle: &parentTitle},
+	}
+	childTitle := "Child task"
+	incoming := []domain.EnrichedTaskDependency{
+		{TaskDependency: domain.TaskDependency{ID: uuid.New(), TaskID: uuid.New(), DependsOnTaskID: taskID, DependencyType: domain.DependencyTypeIsChildOf, CreatedAt: now}, RelatedTaskTitle: &childTitle},
 	}
 
 	mockSvc := &MockTaskDependencyService{
-		ListByTaskFunc: func(ctx context.Context, tid uuid.UUID) ([]domain.TaskDependency, error) {
+		ListByTaskBothDirectionsFunc: func(ctx context.Context, tid uuid.UUID) ([]domain.EnrichedTaskDependency, []domain.EnrichedTaskDependency, error) {
 			assert.Equal(t, taskID, tid)
-			return deps, nil
+			return outgoing, incoming, nil
 		},
 	}
 
@@ -159,17 +163,20 @@ func TestDependencyHandler_List_Success(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusOK, rec.Code)
 
-	var result []domain.TaskDependency
+	var result dependencyListResponse
 	err = json.Unmarshal(rec.Body.Bytes(), &result)
 	require.NoError(t, err)
-	assert.Len(t, result, 2)
+	assert.Len(t, result.Outgoing, 1)
+	assert.Len(t, result.Incoming, 1)
+	assert.Equal(t, "Parent task", *result.Outgoing[0].RelatedTaskTitle)
+	assert.Equal(t, "Child task", *result.Incoming[0].RelatedTaskTitle)
 }
 
 func TestDependencyHandler_List_Empty(t *testing.T) {
 	taskID := uuid.New()
 	mockSvc := &MockTaskDependencyService{
-		ListByTaskFunc: func(ctx context.Context, tid uuid.UUID) ([]domain.TaskDependency, error) {
-			return []domain.TaskDependency{}, nil
+		ListByTaskBothDirectionsFunc: func(ctx context.Context, tid uuid.UUID) ([]domain.EnrichedTaskDependency, []domain.EnrichedTaskDependency, error) {
+			return []domain.EnrichedTaskDependency{}, []domain.EnrichedTaskDependency{}, nil
 		},
 	}
 

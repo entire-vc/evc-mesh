@@ -90,15 +90,17 @@ export function DropdownMenuItem({
   return (
     <div
       role="menuitem"
+      {...props}
       className={cn(
         "relative flex cursor-pointer select-none items-center rounded-md px-2 py-1.5 text-sm outline-none hover:bg-accent hover:text-accent-foreground",
         className,
       )}
+      // Spread first: with {...props} last, an item's own onClick replaced this
+      // one and the menu stayed open after every click.
       onClick={(e) => {
         props.onClick?.(e);
         setOpen(false);
       }}
-      {...props}
     />
   );
 }

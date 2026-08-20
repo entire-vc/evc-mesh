@@ -12,6 +12,9 @@ Thumbs.db
 bin/
 /api
 /mcp
+
+# scripts/local-stack.sh runtime state (pids, logs, screenshots) — throwaway
+.local-stack/
 *.exe
 *.exe~
 *.dll
@@ -58,3 +61,13 @@ tmp/
 *.tmp
 .mcp.json
 deploy/docker/mesh/volumes/
+
+# Playwright local run output (traces can contain a live session)
+web/test-results/
+web/playwright-report/
+web/e2e/.auth/
+
+# Python bytecode. Note this does not untrack scripts/ci/__pycache__, which was
+# committed before any rule existed and is left alone here deliberately.
+__pycache__/
+*.pyc

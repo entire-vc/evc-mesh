@@ -24,6 +24,12 @@ func NewCustomFieldDefinitionRepo(db *sqlx.DB) *CustomFieldDefinitionRepo {
 	return &CustomFieldDefinitionRepo{db: db}
 }
 
+// customFieldSelectCols is every column domain.CustomFieldDefinition scans,
+// listed explicitly — see agentSelectCols in agent_repo.go for why `SELECT *`
+// is unsafe: sqlx refuses to scan a column with no matching struct field, so
+// an additive migration to this table breaks every read until redeployed.
+const customFieldSelectCols = `id, project_id, name, slug, field_type, description, options, default_value, is_required, is_visible_to_agents, position, created_at`
+
 func (r *CustomFieldDefinitionRepo) Create(ctx context.Context, field *domain.CustomFieldDefinition) error {
 	const q = `
 		INSERT INTO custom_field_definitions (
@@ -48,7 +54,7 @@ func (r *CustomFieldDefinitionRepo) Create(ctx context.Context, field *domain.Cu
 }
 
 func (r *CustomFieldDefinitionRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.CustomFieldDefinition, error) {
-	const q = `SELECT * FROM custom_field_definitions WHERE id = $1`
+	const q = `SELECT ` + customFieldSelectCols + ` FROM custom_field_definitions WHERE id = $1`
 	var field domain.CustomFieldDefinition
 	if err := r.db.GetContext(ctx, &field, q, id); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -104,7 +110,7 @@ func (r *CustomFieldDefinitionRepo) Delete(ctx context.Context, id uuid.UUID) er
 }
 
 func (r *CustomFieldDefinitionRepo) ListByProject(ctx context.Context, projectID uuid.UUID) ([]domain.CustomFieldDefinition, error) {
-	const q = `SELECT * FROM custom_field_definitions WHERE project_id = $1 ORDER BY position ASC`
+	const q = `SELECT ` + customFieldSelectCols + ` FROM custom_field_definitions WHERE project_id = $1 ORDER BY position ASC`
 	var fields []domain.CustomFieldDefinition
 	if err := r.db.SelectContext(ctx, &fields, q, projectID); err != nil {
 		return nil, err
@@ -116,7 +122,7 @@ func (r *CustomFieldDefinitionRepo) ListByProject(ctx context.Context, projectID
 }
 
 func (r *CustomFieldDefinitionRepo) ListVisibleToAgents(ctx context.Context, projectID uuid.UUID) ([]domain.CustomFieldDefinition, error) {
-	const q = `SELECT * FROM custom_field_definitions WHERE project_id = $1 AND is_visible_to_agents = TRUE ORDER BY position ASC`
+	const q = `SELECT ` + customFieldSelectCols + ` FROM custom_field_definitions WHERE project_id = $1 AND is_visible_to_agents = TRUE ORDER BY position ASC`
 	var fields []domain.CustomFieldDefinition
 	if err := r.db.SelectContext(ctx, &fields, q, projectID); err != nil {
 		return nil, err

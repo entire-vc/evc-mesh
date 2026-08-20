@@ -1,4 +1,4 @@
-import { type FormEvent, useCallback, useEffect, useState } from "react";
+import { type FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { Navigate, Outlet, useLocation, useNavigate, useParams } from "react-router";
 import { cn } from "@/lib/cn";
 import { useAuthStore } from "@/stores/auth";
@@ -43,7 +43,14 @@ export function AppLayout() {
   );
   const [initialized, setInitialized] = useState(false);
 
+  // Sidebar state the user had before Docs forced it to icons — see the Docs
+  // effect below. null means "nothing to restore".
+  const preDocsCollapsed = useRef<boolean | null>(null);
+
   const toggleSidebar = useCallback(() => {
+    // A manual toggle is an explicit preference and outranks the automatic
+    // restore on leaving Docs.
+    preDocsCollapsed.current = null;
     setSidebarCollapsed((prev) => !prev);
   }, []);
 
@@ -101,6 +108,29 @@ export function AppLayout() {
     mq.addEventListener("change", handler);
     return () => mq.removeEventListener("change", handler);
   }, []);
+
+  // Docs brings its own document-tree column, so the project sidebar collapses
+  // to icons on entry to avoid three competing columns, and is restored on
+  // exit. Only route transitions act; if the user toggles the sidebar while in
+  // Docs, toggleSidebar clears the memo and their choice sticks on the way out.
+  // The trailing segment is optional because /docs/:docId is Docs too: without
+  // it, opening a document counted as leaving Docs and the sidebar sprang back
+  // to three columns on the first click in the tree.
+  const isDocsRoute = /\/w\/[^/]+\/p\/[^/]+\/docs(\/[^/]+)?\/?$/.test(
+    location.pathname,
+  );
+  const wasDocsRoute = useRef(false);
+  useEffect(() => {
+    if (isDocsRoute === wasDocsRoute.current) return;
+    wasDocsRoute.current = isDocsRoute;
+    if (isDocsRoute) {
+      preDocsCollapsed.current = sidebarCollapsed;
+      setSidebarCollapsed(true);
+    } else if (preDocsCollapsed.current !== null) {
+      setSidebarCollapsed(preDocsCollapsed.current);
+      preDocsCollapsed.current = null;
+    }
+  }, [isDocsRoute, sidebarCollapsed]);
 
   const isDeepLinkRoute =
     location.pathname.startsWith("/t/") ||

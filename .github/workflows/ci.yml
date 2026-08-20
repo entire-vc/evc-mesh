@@ -34,10 +34,23 @@ concurrency:
 permissions:
   contents: read
 
+# Every job carries `timeout-minutes`. GitHub's default is 360 (six hours), and
+# this workflow runs on `merge_group` — so a job that hangs holds the whole merge
+# queue behind it, which is how #72d1bf09 (queue stalled 5h) started life as
+# "the benchmark is hanging". The ceilings below are ~4-6x the p100 measured over
+# the last 8 green runs (slowest: coverage-gate 5.7m, test 5.2m), and every one is
+# under the ruleset's `check_response_timeout_minutes: 60`. That ordering is the
+# point: a stuck job must die and report a DEFINITE failure the queue can act on,
+# rather than going quiet and leaving the queue to time out on "no response" —
+# a cancelled/absent check does not evict the entry cleanly.
+# memory-bench.yml already does this (45m branch arm, 50m prod arm); this file was
+# the half of the merge-queue surface that did not, and the gap was missed once by
+# checking only the workflow that had been blamed.
 jobs:
   self-host-env:
     name: "Self-host env (no new required vars)"
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
       # A compose variable that is required with no default breaks upgrades
@@ -72,6 +85,7 @@ jobs:
   lint:
     name: Lint
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
       # Lives here rather than beside the coverage gate's own self-check, which
@@ -94,6 +108,7 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: lint
     services:
       postgres:
@@ -156,6 +171,7 @@ jobs:
   integration:
     name: "Integration tests (REPORT)"
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     continue-on-error: true
     needs: build
     services:
@@ -279,12 +295,67 @@ jobs:
           TEST_DB_DSN: "host=localhost port=5432 user=mesh password=mesh dbname=mesh sslmode=disable"
         run: go test ./tests/integration/ -v -tags=integration -timeout=120s
 
+  # ─── A2. Repo-layer integration tests ──────────────────────────────────────
+  # internal/repository/postgres/integration_test.go carries `//go:build
+  # integration` and was invisible to every other job: the Test job runs
+  # `go test ./...` with no build tag (so the file is excluded from
+  # compilation entirely), and the Integration job above passes `-tags=integration`
+  # but scopes to ./tests/integration/ only. Net effect: ~9 repo-level tests —
+  # including the ones that exist specifically to catch a field present in an
+  # UPDATE but missing from the matching INSERT (the reviewer_id class of bug,
+  # #564) — never ran in CI. Unlike the Integration job above, this one is a
+  # normal blocking job (no continue-on-error): it exists to be a real gate,
+  # not a report.
+  repo-integration:
+    name: "Repo tests (integration)"
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: lint
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: mesh
+          POSTGRES_PASSWORD: mesh
+          POSTGRES_DB: mesh
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U mesh"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Install goose
+        run: go install github.com/pressly/goose/v3/cmd/goose@latest
+      - name: Run migrations
+        env:
+          GOOSE_DRIVER: postgres
+          GOOSE_DBSTRING: "postgres://mesh:mesh@localhost:5432/mesh?sslmode=disable"
+        run: goose -dir migrations up
+      - name: Run repo-layer integration tests
+        env:
+          # DATABASE_URL is for this package's other DB tests (the ones with
+          # no build tag, e.g. user_repo_test.go's userRepoTestDB) which the
+          # Test job already exercises — setting it here too means running
+          # this job doesn't accidentally skip them. TEST_DATABASE_URL is
+          # what integration_test.go's testDB() actually reads.
+          DATABASE_URL: "postgres://mesh:mesh@localhost:5432/mesh?sslmode=disable"
+          TEST_DATABASE_URL: "postgres://mesh:mesh@localhost:5432/mesh?sslmode=disable"
+        run: go test ./internal/repository/postgres/... -v -race -tags=integration
+
   # ─── B. Affected-set coverage gate (Go) ────────────────────────────────────
   # Coverage ≥80% on changed_packages ∪ reverse_dep_closure.
   # ENFORCE mode: failures block merge (enforced 2026-06-22, burn-in complete).
   coverage-gate:
     name: "Go coverage ≥80% (affected-set)"
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: lint
     services:
       postgres:
@@ -472,6 +543,7 @@ jobs:
   frontend-coverage:
     name: "Frontend coverage (vitest, REPORT)"
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     continue-on-error: true
     steps:
       - uses: actions/checkout@v7
@@ -496,15 +568,24 @@ jobs:
           path: web/coverage/
 
   # ─── D. React authed E2E (Playwright, F1 harness) ──────────────────────────
-  # Login-once via Casdoor storageState; asserts no console.error / HTTP 5xx.
+  # Logs in once through Mesh's own /api/v1/auth/login (this app has no Casdoor
+  # flow), then asserts the API honours the session, the shell routes into the
+  # workspace, and nothing logs a console error / page error / failed API call.
   # ENFORCE mode: failures block merge (enforced 2026-06-22, burn-in complete).
-  # Requires repo variables: APP_BASE_URL, CASDOOR_BASE_URL
-  # Requires repo secrets: CASDOOR_AGENT_USER, CASDOOR_AGENT_PASSWORD
+  # Requires repo variable: APP_BASE_URL
+  # Requires repo secrets: E2E_USER_EMAIL, E2E_USER_PASSWORD
+  # Missing secrets fail the job on purpose — see web/e2e/global-setup.ts.
   playwright-e2e:
     name: "Authed E2E"
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     container:
-      image: mcr.microsoft.com/playwright:v1.44.0-jammy
+      # Pinned to the SAME version as playwright-core in web/pnpm-lock.yaml, on
+      # purpose: matched, the browsers this job needs are already baked into the
+      # image at /ms-playwright and nothing is fetched at run time. Mismatched,
+      # Playwright deletes the image's browsers and re-downloads its own from
+      # cdn.playwright.dev on every run. The step below is what enforces this.
+      image: mcr.microsoft.com/playwright:v1.62.1-jammy
       options: --ipc=host
     steps:
       - uses: actions/checkout@v7
@@ -519,17 +600,80 @@ jobs:
       - name: Install dependencies
         working-directory: web
         run: pnpm install --frozen-lockfile
-      - name: Install Playwright browsers
+      - name: Install Playwright system deps (apt, best-effort)
         working-directory: web
-        run: npx playwright install --with-deps chromium
+        timeout-minutes: 5
+        # Best-effort: the runner image (mcr.microsoft.com/playwright) already ships
+        # chromium's system libraries. Verified on this branch by forcing all three
+        # apt attempts to fail and then launching chromium anyway:
+        # CHROMIUM_LAUNCHED version=151.0.7922.34. The browser download below and the
+        # E2E run remain hard-required.
+        continue-on-error: true
+        run: |
+          for attempt in 1 2 3; do
+            if timeout 90 npx playwright install-deps chromium; then
+              exit 0
+            fi
+            echo "::warning::apt attempt $attempt stalled or failed; retrying"
+            sleep 10
+          done
+          echo "::warning::playwright install-deps failed after 3 attempts"
+          exit 1
+      # A no-op that touches no network — it exists to PROVE that, and to fail
+      # loudly the day it stops being true.
+      #
+      # Until 2026-08-20 the image was pinned at v1.44.0 while web/package.json
+      # asked for @playwright/test ^1.62.1, so every run deleted the image's
+      # browsers and pulled 301 MiB from cdn.playwright.dev (chromium 184.3 MiB
+      # + headless shell 114.7 MiB + ffmpeg 2.3 MiB). On 2026-08-19 that CDN
+      # geo-blocked the runner — "<Details>this service is not available in your
+      # location</Details>" — and evicted a 19/19-green PR (#614) from the merge
+      # queue. `Authed E2E` is a required check with enforce_admins=true, so an
+      # external CDN was a hard dependency of merging anything at all.
+      #
+      # PLAYWRIGHT_DOWNLOAD_HOST points every download at a closed port, so a
+      # missing browser fails in milliseconds against 127.0.0.1 instead of
+      # quietly reaching the CDN and going green. That is the whole guarantee:
+      # this step passing means zero bytes came from outside.
+      - name: Chromium ships with the image (downloads black-holed)
+        working-directory: web
+        timeout-minutes: 3
+        env:
+          PLAYWRIGHT_DOWNLOAD_HOST: http://127.0.0.1:9
+        run: |
+          if ! npx playwright install chromium; then
+            echo "::error::Playwright tried to download a browser, so the container image and web/pnpm-lock.yaml have drifted. Fix: set container.image in this job to mcr.microsoft.com/playwright:v<version>-jammy, where <version> is playwright-core's version in web/pnpm-lock.yaml. Do not delete this step to make it green — it is what keeps cdn.playwright.dev out of the merge path."
+            exit 1
+          fi
       - name: Run Playwright E2E
         working-directory: web
+        # WHERE THIS WRITES, AND AS WHOM — read this before changing the suite.
+        #
+        # E2E_USER_EMAIL is e2e-ci@entire.vc. It is a member of exactly ONE
+        # workspace, `e2e-ci-sandbox`, and of NO real workspace: asking the
+        # production workspace for anything under this credential answers
+        # 403 "workspace access denied". The suite asserts that membership list
+        # itself, so putting this account back into a real workspace turns the
+        # check red rather than quietly widening what a GitHub secret can reach.
+        #
+        # Inside the sandbox its role is `member` (create/update/delete tasks,
+        # documents, comments — see internal/middleware/rbac.go). It is NOT the
+        # owner: admin@entire.vc is, so this credential cannot delete the
+        # workspace or change anyone's role, and a human can clean the sandbox
+        # up. `viewer` was the previous setting and made the required check
+        # structurally unable to test any write path, which is what §1n asks for.
+        #
+        # What a run leaves behind: nothing. Every document and comment it makes
+        # is named "[e2e] … <run id>" and deleted in afterAll (comments first —
+        # a document delete is soft and orphans its comment routes), and the
+        # suite prints the sandbox's document list afterwards. Two rows are
+        # permanent fixtures the reads depend on: project `e2e-fixtures` and the
+        # task "E2E read fixture — do not delete".
         run: npx playwright test
         env:
           APP_BASE_URL: ${{ vars.APP_BASE_URL || 'https://mesh.entire.host' }}
-          CASDOOR_BASE_URL: ${{ vars.CASDOOR_BASE_URL || 'https://auth.entire.host' }}
-          CASDOOR_AGENT_USER: ${{ secrets.CASDOOR_AGENT_USER }}
-          CASDOOR_AGENT_PASSWORD: ${{ secrets.CASDOOR_AGENT_PASSWORD }}
+          E2E_USER_EMAIL: ${{ secrets.E2E_USER_EMAIL }}
+          E2E_USER_PASSWORD: ${{ secrets.E2E_USER_PASSWORD }}
       - uses: actions/upload-artifact@v7
         if: always()
         with:
@@ -539,6 +683,7 @@ jobs:
   build:
     name: Build
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     needs: test
     steps:
       - uses: actions/checkout@v7

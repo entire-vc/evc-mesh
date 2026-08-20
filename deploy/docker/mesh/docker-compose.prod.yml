@@ -143,6 +143,7 @@ services:
       # nothing — the template's own note said to edit this block by hand,
       # which is a workaround standing in for the one line it describes.
       MESH_INTEGRATION_ENCRYPTION_KEY: ${MESH_INTEGRATION_ENCRYPTION_KEY:-}
+      MESH_INTEGRATION_ENCRYPTION_REQUIRED: ${MESH_INTEGRATION_ENCRYPTION_REQUIRED:-}
       # Unset means inbound GitHub webhook signatures are not verified.
       MESH_GITHUB_WEBHOOK_SECRET: ${MESH_GITHUB_WEBHOOK_SECRET:-}
       CASDOOR_ENDPOINT: ${CASDOOR_ENDPOINT:-}
@@ -251,11 +252,16 @@ services:
       MESH_MCP_TRANSPORT: sse
       MESH_MCP_HOST: "0.0.0.0"
       MESH_MCP_PORT: "8081"
-      # Only needed when a reverse proxy serves MCP under a path prefix
-      # (e.g. https://mesh.example.com/mcp). Empty is correct otherwise: the
-      # message endpoint is then advertised relative to the URL the client
-      # connected to. See docs/agent-onboarding.md.
-      MESH_MCP_PUBLIC_URL: ${MESH_MCP_PUBLIC_URL:-}
+      # nginx.conf proxies MCP under the /mcp/ path prefix and strips it
+      # before forwarding — so a relative message endpoint would resolve
+      # from the CLIENT's connection URL and lose the prefix entirely (the
+      # request lands on / instead of /mcp/, which nginx routes to the SPA,
+      # not mcp). Defaulting from MESH_BASE_URL (the operator already sets
+      # this for invite links) means a fresh install gets a working URL
+      # transport with no extra variable to learn. Set MESH_MCP_PUBLIC_URL
+      # explicitly only to override — e.g. serving MCP on a different
+      # path/host than the web UI.
+      MESH_MCP_PUBLIC_URL: ${MESH_MCP_PUBLIC_URL:-${MESH_BASE_URL}/mcp}
       # Gates this service's own GET /metrics — a separate promhttp handler
       # in a separate binary from the api service, not covered by that
       # service's MESH_METRICS_TOKEN wiring. Same file + explicit-var-wins

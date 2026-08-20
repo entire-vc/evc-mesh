@@ -171,6 +171,83 @@ var workspaceParamResolvers = []workspaceParamResolver{
 	                            FROM saved_views v
 	                            JOIN projects p ON v.project_id = p.id
 	                           WHERE v.id = $1`)},
+	// A document names its tenant through its project. Soft-deleted documents
+	// still resolve here: the guard's question is "whose is this", and a deleted
+	// document is still that tenant's. The repository's deleted_at filter is what
+	// turns the read into a 404 — for its owner and a stranger alike, so the two
+	// answers stay indistinguishable.
+	{param: "doc_id", resolve: uuidResolver(`SELECT p.workspace_id
+	                           FROM documents d
+	                           JOIN projects p ON d.project_id = p.id
+	                          WHERE d.id = $1`)},
+	// An attachment names its tenant through its document, which names it through
+	// its project — one join hop further than :doc_id, and the reason a document
+	// attachment is its own table rather than an artifact: artifacts hang off a
+	// task, and a document has none, so there would be nothing to join through.
+	//
+	// Soft-deleted rows still resolve here, for the same reason they do above: the
+	// guard's question is "whose is this", and a deleted attachment is still that
+	// tenant's. The repository's deleted_at filters are what turn the read into a
+	// 404 — for its owner and a stranger alike, so the two answers stay
+	// indistinguishable.
+	//
+	// This entry is what makes /document-attachments/:att_id a guarded route at
+	// all: nothing else in its path names a tenant, so without a resolver
+	// RequireWorkspaceMemberScoped would see a route with nothing to check and wave
+	// it through, exactly as it did for /events/:event_id.
+	//
+	// No notFoundResource, deliberately — this follows :doc_id rather than
+	// :artifact_id, and the two differ for a reason. notFoundResource turns "this
+	// id resolves to nothing" into a 404 instead of the 403 a wrong-tenant id
+	// gets, which makes those two answers distinguishable. :artifact_id can afford
+	// that because newVictimFixture hands the route-coverage suite a REAL artifact,
+	// so the distinction is never exercised against a guessed id. Giving :att_id
+	// the same treatment would need the same fixture — a document plus an upload —
+	// and that fixture has no object-storage skip path, so it would turn
+	// TestCrossTenant_NonMemberIsRefusedOnEveryScopedRoute from a
+	// storage-independent gate into one that fails wherever MinIO is absent.
+	// (Measured: with notFoundResource set, that test fails on both
+	// /document-attachments routes with 404 where it requires 403.) Omitting it
+	// makes an unknown attachment id and another tenant's attachment id both
+	// answer 403 — the stronger of the two behaviours anyway.
+	{param: "att_id", resolve: uuidResolver(`SELECT p.workspace_id
+	                           FROM document_attachments a
+	                           JOIN documents d ON a.document_id = d.id
+	                           JOIN projects p ON d.project_id = p.id
+	                          WHERE a.id = $1`)},
+	// An inline comment on a document names its tenant exactly the way an
+	// attachment does — through its document, which names it through its project.
+	//
+	// Spelled :dcom_id, not :comment_id, and the rename is load-bearing for the
+	// same reason :atr_id is: resolvers are keyed on the parameter name alone, and
+	// :comment_id above reads the `comments` table, which holds task comments and
+	// knows nothing about these. One name over two tables would send every
+	// document comment id to the wrong lookup and refuse every legitimate request
+	// — the bug /projects/:proj_id/auto-transition-rules/:rule_id was one step
+	// away from. TestScopedParamNamesAreUnambiguous is what keeps it from coming
+	// back, and it is why this id must stay under exactly one collection segment
+	// (/document-comments/:dcom_id) and never also be mounted at
+	// /documents/:doc_id/comments/:dcom_id.
+	//
+	// Soft-deleted rows still resolve here, as they do for :doc_id and :att_id:
+	// the guard's question is "whose is this", and a deleted comment is still that
+	// tenant's. The repository's deleted_at filters are what turn the read into a
+	// 404 — for its owner and a stranger alike, so the two answers stay
+	// indistinguishable.
+	//
+	// No notFoundResource, following :att_id rather than :artifact_id. That field
+	// turns "this id resolves to nothing" into a 404 instead of the 403 a
+	// wrong-tenant id gets, which is only safe where the route-coverage fixture
+	// supplies a REAL object so the distinction is never exercised against a
+	// guessed id. There is no document-comment fixture in newVictimFixture, so
+	// setting it would make TestCrossTenant_NonMemberIsRefusedOnEveryScopedRoute
+	// see 404 where it requires 403. Omitting it answers 403 to an unknown id and
+	// another tenant's id alike — the stronger behaviour anyway.
+	{param: "dcom_id", resolve: uuidResolver(`SELECT p.workspace_id
+	                            FROM document_comments dc
+	                            JOIN documents d ON dc.document_id = d.id
+	                            JOIN projects p ON d.project_id = p.id
+	                           WHERE dc.id = $1`)},
 	{param: "webhook_id", resolve: uuidResolver(`SELECT workspace_id FROM webhook_configs WHERE id = $1`)},
 	{param: "int_id", resolve: uuidResolver(`SELECT workspace_id FROM integration_configs WHERE id = $1`)},
 	{param: "tmpl_id", resolve: uuidResolver(`SELECT p.workspace_id

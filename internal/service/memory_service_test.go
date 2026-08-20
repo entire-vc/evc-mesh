@@ -3252,6 +3252,93 @@ func TestEmbedConcurrencyUnboundedByDefault(t *testing.T) {
 	}
 }
 
+// TestRecallEmbedConcurrencyBound is the regression guard for #3d10774e: the recall
+// query-embed call (RecallWithStats' vector-arm goroutine) previously ignored
+// embedSem entirely, so EMBEDDING_CONCURRENCY bounded only embedAndStore and every
+// concurrent recall fired its own unbounded embed call straight at the embedder.
+// N concurrent recalls against a slow embedder must now observe the same
+// EMBEDDING_CONCURRENCY cap embedAndStore already respected.
+func TestRecallEmbedConcurrencyBound(t *testing.T) {
+	repo := &mockMemoryRepo{}
+	tracker := &concurrencyTrackingEmbedder{dim: 4, sleep: 20 * time.Millisecond}
+	const limit = 2
+	svc := NewMemoryService(repo, &mockMemoryEdgeRepo{}, tracker, MemoryWithEmbedConcurrency(limit))
+
+	const calls = 10
+	var wg sync.WaitGroup
+	wg.Add(calls)
+	for i := 0; i < calls; i++ {
+		go func() {
+			defer wg.Done()
+			_, _, err := svc.Recall(context.Background(), domain.RecallOpts{
+				Query:       "some recall query",
+				WorkspaceID: uuid.New(),
+				Limit:       10,
+			})
+			assert.NoError(t, err)
+		}()
+	}
+	wg.Wait()
+
+	if got := tracker.calls.Load(); got != calls {
+		t.Fatalf("expected all %d recall query embeds to complete, got %d", calls, got)
+	}
+	if got := tracker.maxInFlight.Load(); got > int64(limit) {
+		t.Fatalf("observed max in-flight recall embeds = %d, want <= %d (concurrency limit)", got, limit)
+	}
+}
+
+// TestRecallEmbedConcurrencyUnboundedByDefault mirrors TestEmbedConcurrencyUnboundedByDefault
+// for the recall query-embed call site: omitting MemoryWithEmbedConcurrency must not impose
+// any artificial serialization on concurrent recalls.
+func TestRecallEmbedConcurrencyUnboundedByDefault(t *testing.T) {
+	repo := &mockMemoryRepo{}
+	tracker := &concurrencyTrackingEmbedder{dim: 4, sleep: 30 * time.Millisecond}
+	svc := NewMemoryService(repo, &mockMemoryEdgeRepo{}, tracker) // no MemoryWithEmbedConcurrency
+
+	const calls = 8
+	var wg sync.WaitGroup
+	wg.Add(calls)
+	for i := 0; i < calls; i++ {
+		go func() {
+			defer wg.Done()
+			_, _, err := svc.Recall(context.Background(), domain.RecallOpts{
+				Query:       "some recall query",
+				WorkspaceID: uuid.New(),
+				Limit:       10,
+			})
+			assert.NoError(t, err)
+		}()
+	}
+	wg.Wait()
+
+	if got := tracker.maxInFlight.Load(); got <= 2 {
+		t.Fatalf("expected unbounded concurrency (observed max in-flight = %d), the semaphore must not gate when concurrency is unconfigured", got)
+	}
+}
+
+// TestBatchEmbedConcurrencyBound verifies BatchEmbed also acquires embedSem (#3d10774e
+// call site :1775) — it shares the budget with embedAndStore/RecallWithStats even though
+// its own loop is sequential, so a manual backfill run concurrently with live write/recall
+// traffic counts against the same cap instead of adding an unbounded extra caller.
+func TestBatchEmbedConcurrencyBound(t *testing.T) {
+	memories := make([]domain.Memory, 5)
+	for i := range memories {
+		memories[i] = domain.Memory{ID: uuid.New(), Key: "k", Content: "content"}
+	}
+	repo := &mockMemoryRepo{needEmbedding: memories}
+	tracker := &concurrencyTrackingEmbedder{dim: 4, sleep: 5 * time.Millisecond}
+	const limit = 2
+	svc := NewMemoryService(repo, &mockMemoryEdgeRepo{}, tracker, MemoryWithEmbedConcurrency(limit))
+
+	n, err := svc.BatchEmbed(context.Background(), uuid.New())
+	require.NoError(t, err)
+	assert.Equal(t, len(memories), n)
+	if got := tracker.maxInFlight.Load(); got > int64(limit) {
+		t.Fatalf("observed max in-flight batch embeds = %d, want <= %d (concurrency limit)", got, limit)
+	}
+}
+
 // concurrencyTrackingEmbedder is a fake Embedder for concurrency tests. Embed sleeps to
 // simulate a slow, CPU-bound embedding backend and atomically tracks the current and peak
 // number of in-flight calls, plus a total completed-calls counter.
@@ -3479,6 +3566,73 @@ func TestEmbedAndStore_Legacy_EmbedFailureIncrementsCounter(t *testing.T) {
 
 	assert.Greater(t, testutilCounterValue(t, "store"), before,
 		"an embedder failure must be visible as a metric, not only as a log line")
+}
+
+// TestRecall_EmbedFailureIncrementsCounter is the recall-path sibling of the two
+// EmbedFailureIncrementsCounter tests above — and it was the missing one (#dd53f9d5):
+// mesh_memory_embed_failures_total{op="recall"} has two call sites in RecallWithStats
+// (memory_service.go, semaphore-wait and Embed() error) and neither had a test proving
+// either one actually moves the counter. A Grafana alert was about to be built on top of
+// a label nothing had ever verified fires.
+func TestRecall_EmbedFailureIncrementsCounter(t *testing.T) {
+	before := testutilCounterValue(t, "recall")
+
+	repo := &mockMemoryRepo{
+		fullTextSearchRankedFn: func(_ context.Context, _ uuid.UUID, _ *uuid.UUID, _ string, _ domain.MemorySearchFilter, _ int) ([]domain.ScoredMemory, error) {
+			return nil, nil // bm25 arm succeeds with zero rows — isolates the failure to the embed call
+		},
+	}
+	svc := NewMemoryService(repo, &mockMemoryEdgeRepo{}, alwaysFailsEmbedder{dim: 4})
+
+	_, mode, err := svc.Recall(context.Background(), domain.RecallOpts{
+		Query:       "a query the dense arm cannot embed",
+		WorkspaceID: uuid.New(),
+		Limit:       10,
+	})
+
+	require.NoError(t, err, "an embedder failure on recall must fail OPEN to bm25, not surface as an error")
+	assert.Equal(t, domain.SearchModeBM25Only, mode, "the dense arm did not run — the served mode must say so")
+	assert.Greater(t, testutilCounterValue(t, "recall"), before,
+		"a recall-path embed failure must increment mesh_memory_embed_failures_total{op=\"recall\"} — this is the exact counter the Grafana alert in #dd53f9d5 watches")
+}
+
+// TestRecall_EmbedSemaphoreTimeoutIncrementsCounter covers the OTHER recall-path call
+// site: a recall queued behind a full embedSem (#3d10774e/PR #611) whose own context
+// deadline expires before a slot frees. acquireEmbedSem returns ctx.Err() WITHOUT ever
+// calling Embed — a distinct code path from the one above, and the one #611's fix
+// actually introduced. Reuses concurrencyTrackingEmbedder (already used by the
+// TestRecallEmbedConcurrencyBound family) rather than adding a third embedder mock.
+func TestRecall_EmbedSemaphoreTimeoutIncrementsCounter(t *testing.T) {
+	before := testutilCounterValue(t, "recall")
+
+	repo := &mockMemoryRepo{}
+	tracker := &concurrencyTrackingEmbedder{dim: 4, sleep: 200 * time.Millisecond}
+	svc := NewMemoryService(repo, &mockMemoryEdgeRepo{}, tracker, MemoryWithEmbedConcurrency(1))
+
+	// Occupy the single semaphore slot with a call that will not finish for 200ms.
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		_, _, _ = svc.Recall(context.Background(), domain.RecallOpts{
+			Query: "occupies the only slot", WorkspaceID: uuid.New(), Limit: 10,
+		})
+	}()
+	time.Sleep(20 * time.Millisecond) // let the goroutine above actually acquire the slot first
+
+	// A second call whose deadline is far shorter than the slot-holder's remaining
+	// sleep — it must time out WAITING for the semaphore, never reaching Embed at all.
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	_, mode, err := svc.Recall(ctx, domain.RecallOpts{
+		Query: "queued behind the slot", WorkspaceID: uuid.New(), Limit: 10,
+	})
+	wg.Wait()
+
+	require.NoError(t, err, "a semaphore-queue timeout must fail OPEN to bm25, not surface as an error")
+	assert.Equal(t, domain.SearchModeBM25Only, mode)
+	assert.Greater(t, testutilCounterValue(t, "recall"), before,
+		"a recall stuck behind a full embed semaphore past its own context deadline must increment mesh_memory_embed_failures_total{op=\"recall\"} — the PR #611 queue-timeout path, untested until now")
 }
 
 // ---------------------------------------------------------------------------

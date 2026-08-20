@@ -356,11 +356,14 @@ export function IntegrationsPage() {
                       <div className="space-y-3">
                         <div className="rounded-lg border border-dashed border-border bg-muted/30 p-3">
                           <p className="text-xs font-medium text-muted-foreground mb-1">
-                            SSE Endpoint
+                            SSE Endpoint (remote agents)
                           </p>
                           <code className="block rounded bg-background px-2 py-1.5 text-xs font-mono select-all">
                             {window.location.origin}/mcp/sse
                           </code>
+                          <p className="text-xs text-muted-foreground mt-1.5">
+                            Requires your deployment to route <code className="rounded bg-muted px-1">/mcp</code> to the MCP server. If it does not connect, use the stdio config below.
+                          </p>
                         </div>
 
                         <div className="rounded-lg border border-dashed border-border bg-muted/30 p-3">

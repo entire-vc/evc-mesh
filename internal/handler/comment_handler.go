@@ -198,6 +198,13 @@ func (h *CommentHandler) GetMyComments(c echo.Context) error {
 		}
 		filter.Before = &t
 	}
+	if v := c.QueryParam("before_id"); v != "" {
+		id, err := uuid.Parse(v)
+		if err != nil {
+			return c.JSON(http.StatusBadRequest, apierror.ValidationError(map[string]string{"before_id": "must be a UUID"}))
+		}
+		filter.BeforeID = &id
+	}
 	if v := c.QueryParam("workspace_id"); v != "" {
 		id, err := uuid.Parse(v)
 		if err != nil {
@@ -245,6 +252,18 @@ func (h *CommentHandler) GetRecentByWorkspace(c echo.Context) error {
 			return c.JSON(http.StatusBadRequest, apierror.ValidationError(map[string]string{"before": "must be RFC3339 timestamp"}))
 		}
 		filter.Before = &t
+	}
+	if v := c.QueryParam("before_id"); v != "" {
+		id, parseErr := uuid.Parse(v)
+		if parseErr != nil {
+			return c.JSON(http.StatusBadRequest, apierror.ValidationError(map[string]string{"before_id": "must be a UUID"}))
+		}
+		filter.BeforeID = &id
+	}
+	if v := c.QueryParam("include_internal"); v != "" {
+		if b, parseErr := strconv.ParseBool(v); parseErr == nil {
+			filter.IncludeInternal = b
+		}
 	}
 
 	page, err := h.commentService.ListRecentByWorkspace(c.Request().Context(), wsID, filter)

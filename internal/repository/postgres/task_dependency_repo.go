@@ -22,6 +22,13 @@ func NewTaskDependencyRepo(db *sqlx.DB) *TaskDependencyRepo {
 	return &TaskDependencyRepo{db: db}
 }
 
+// taskDependencySelectCols is every column domain.TaskDependency scans,
+// listed explicitly — see agentSelectCols in agent_repo.go for why
+// `SELECT *` is unsafe: sqlx refuses to scan a column with no matching
+// struct field, so an additive migration to this table breaks every read
+// until redeployed.
+const taskDependencySelectCols = `id, task_id, depends_on_task_id, dependency_type, created_at`
+
 func (r *TaskDependencyRepo) Create(ctx context.Context, dep *domain.TaskDependency) error {
 	const q = `
 		INSERT INTO task_dependencies (id, task_id, depends_on_task_id, dependency_type, created_at)
@@ -35,7 +42,7 @@ func (r *TaskDependencyRepo) Create(ctx context.Context, dep *domain.TaskDepende
 
 // GetByID returns the dependency, or (nil, nil) when no row matches.
 func (r *TaskDependencyRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.TaskDependency, error) {
-	const q = `SELECT * FROM task_dependencies WHERE id = $1`
+	const q = `SELECT ` + taskDependencySelectCols + ` FROM task_dependencies WHERE id = $1`
 	var dep domain.TaskDependency
 	if err := r.db.GetContext(ctx, &dep, q, id); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -61,7 +68,7 @@ func (r *TaskDependencyRepo) Delete(ctx context.Context, id uuid.UUID) error {
 
 // ListByTask returns all dependencies where the given task depends on another.
 func (r *TaskDependencyRepo) ListByTask(ctx context.Context, taskID uuid.UUID) ([]domain.TaskDependency, error) {
-	const q = `SELECT * FROM task_dependencies WHERE task_id = $1 ORDER BY created_at ASC`
+	const q = `SELECT ` + taskDependencySelectCols + ` FROM task_dependencies WHERE task_id = $1 ORDER BY created_at ASC`
 	var deps []domain.TaskDependency
 	if err := r.db.SelectContext(ctx, &deps, q, taskID); err != nil {
 		return nil, err
@@ -74,7 +81,7 @@ func (r *TaskDependencyRepo) ListByTask(ctx context.Context, taskID uuid.UUID) (
 
 // ListDependents returns all dependencies where another task depends on the given task.
 func (r *TaskDependencyRepo) ListDependents(ctx context.Context, taskID uuid.UUID) ([]domain.TaskDependency, error) {
-	const q = `SELECT * FROM task_dependencies WHERE depends_on_task_id = $1 ORDER BY created_at ASC`
+	const q = `SELECT ` + taskDependencySelectCols + ` FROM task_dependencies WHERE depends_on_task_id = $1 ORDER BY created_at ASC`
 	var deps []domain.TaskDependency
 	if err := r.db.SelectContext(ctx, &deps, q, taskID); err != nil {
 		return nil, err

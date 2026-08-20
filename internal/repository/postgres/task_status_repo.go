@@ -24,6 +24,12 @@ func NewTaskStatusRepo(db *sqlx.DB) *TaskStatusRepo {
 	return &TaskStatusRepo{db: db}
 }
 
+// taskStatusSelectCols is every column domain.TaskStatus scans, listed
+// explicitly — see agentSelectCols in agent_repo.go for why `SELECT *` is
+// unsafe: sqlx refuses to scan a column with no matching struct field, so an
+// additive migration to this table breaks every read until redeployed.
+const taskStatusSelectCols = `id, project_id, name, slug, color, position, category, is_default, auto_transition`
+
 func (r *TaskStatusRepo) Create(ctx context.Context, status *domain.TaskStatus) error {
 	const q = `
 		INSERT INTO task_statuses (id, project_id, name, slug, color, position, category, is_default, auto_transition)
@@ -42,7 +48,7 @@ func (r *TaskStatusRepo) Create(ctx context.Context, status *domain.TaskStatus) 
 }
 
 func (r *TaskStatusRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.TaskStatus, error) {
-	const q = `SELECT * FROM task_statuses WHERE id = $1`
+	const q = `SELECT ` + taskStatusSelectCols + ` FROM task_statuses WHERE id = $1`
 	var status domain.TaskStatus
 	if err := r.db.GetContext(ctx, &status, q, id); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -91,7 +97,7 @@ func (r *TaskStatusRepo) Delete(ctx context.Context, id uuid.UUID) error {
 }
 
 func (r *TaskStatusRepo) ListByProject(ctx context.Context, projectID uuid.UUID) ([]domain.TaskStatus, error) {
-	const q = `SELECT * FROM task_statuses WHERE project_id = $1 ORDER BY position ASC`
+	const q = `SELECT ` + taskStatusSelectCols + ` FROM task_statuses WHERE project_id = $1 ORDER BY position ASC`
 	var statuses []domain.TaskStatus
 	if err := r.db.SelectContext(ctx, &statuses, q, projectID); err != nil {
 		return nil, err
@@ -103,7 +109,7 @@ func (r *TaskStatusRepo) ListByProject(ctx context.Context, projectID uuid.UUID)
 }
 
 func (r *TaskStatusRepo) GetDefaultForProject(ctx context.Context, projectID uuid.UUID) (*domain.TaskStatus, error) {
-	const q = `SELECT * FROM task_statuses WHERE project_id = $1 AND is_default = TRUE LIMIT 1`
+	const q = `SELECT ` + taskStatusSelectCols + ` FROM task_statuses WHERE project_id = $1 AND is_default = TRUE LIMIT 1`
 	var status domain.TaskStatus
 	if err := r.db.GetContext(ctx, &status, q, projectID); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {

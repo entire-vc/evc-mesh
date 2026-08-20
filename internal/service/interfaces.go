@@ -12,6 +12,7 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/eventbus"
 	"github.com/entire-vc/evc-mesh/internal/repository"
+	"github.com/entire-vc/evc-mesh/pkg/mdoc"
 	"github.com/entire-vc/evc-mesh/pkg/pagination"
 )
 
@@ -247,6 +248,13 @@ type TaskDependencyService interface {
 	Create(ctx context.Context, dep *domain.TaskDependency) error
 	Delete(ctx context.Context, id uuid.UUID) error
 	ListByTask(ctx context.Context, taskID uuid.UUID) ([]domain.TaskDependency, error)
+	// ListByTaskBothDirections returns taskID's dependencies split by direction,
+	// each enriched with the related task's title and status. Outgoing = edges
+	// where taskID is task_id (unchanged ListByTask semantics). Incoming = edges
+	// where taskID is depends_on_task_id — e.g. the is_child_of edges its own
+	// subtasks recorded, which ListByTask alone never surfaced because it only
+	// ever queried WHERE task_id = $1.
+	ListByTaskBothDirections(ctx context.Context, taskID uuid.UUID) (outgoing, incoming []domain.EnrichedTaskDependency, err error)
 	// CheckCycle validates that adding a dependency does not create a circular reference.
 	CheckCycle(ctx context.Context, taskID, dependsOnTaskID uuid.UUID) (bool, error)
 }
@@ -303,6 +311,263 @@ type ArtifactService interface {
 	GetDownloadURL(ctx context.Context, id uuid.UUID, inline bool) (string, error)
 	Delete(ctx context.Context, id uuid.UUID) error
 	ListByTask(ctx context.Context, taskID uuid.UUID, pg pagination.Params) (*pagination.Page[domain.Artifact], error)
+}
+
+// CreateDocumentInput holds parameters for creating a project document.
+// ProjectID comes from the route, never from the request body.
+type CreateDocumentInput struct {
+	ProjectID uuid.UUID  `json:"project_id"`
+	ParentID  *uuid.UUID `json:"parent_id"`
+	// Slug is optional; an empty one is derived from the title.
+	Slug     string `json:"slug"`
+	Title    string `json:"title"`
+	Body     string `json:"body"`
+	Position int    `json:"position"`
+
+	CreatedBy     uuid.UUID        `json:"created_by"`
+	CreatedByType domain.ActorType `json:"created_by_type"`
+}
+
+// UpdateDocumentInput holds the fields for partially updating a document. A nil
+// field is left alone.
+type UpdateDocumentInput struct {
+	Title    *string    `json:"title"`
+	ParentID *uuid.UUID `json:"parent_id"`
+	// ClearParent moves the document to the top level. It is a separate flag
+	// because an absent parent_id and a null one are the same nil pointer once
+	// bound — the same reason updateTaskRequest carries ClearReviewer.
+	ClearParent bool    `json:"clear_parent"`
+	Position    *int    `json:"position"`
+	Body        *string `json:"body"`
+
+	// AppendBody adds text to the end of the document instead of replacing it.
+	//
+	// A separate field rather than a mode flag on Body, because the two have
+	// different conflict semantics and that difference is the point: a replacement
+	// overwrites whatever arrived since the writer last read, so it needs
+	// BaseVersion to be safe, while an append cannot destroy an edit it never
+	// looked at. Appending is also the commonest thing an agent does to a document
+	// — a report, a decision record, a run log — and requiring read-compare-write
+	// on it would invent a race in the one operation that does not have one.
+	//
+	// Sending both is refused: "replace the body and also add to it" has no
+	// meaning, and picking an order for the caller would silently drop one.
+	AppendBody *string `json:"append_body"`
+
+	// BaseVersion is the document version the caller believes it is editing. When
+	// set, the write lands only if the stored version still matches; a mismatch is
+	// DocumentVersionConflictError carrying the version now stored, and nothing is
+	// written — not the row, not the object in storage.
+	//
+	// Absent means an unconditional write. That is a deliberate compatibility
+	// choice, not an oversight — see documentService.Update for what it buys and
+	// what it costs.
+	BaseVersion *int `json:"base_version"`
+
+	// UpdatedBy is the caller, resolved from the request by the handler — never
+	// taken from the request body, which would let anyone sign an edit with
+	// somebody else's name. It is required rather than optional: a mutation that
+	// left "last updated by" as it found it would report the previous editor as
+	// the current one, which is worse than the NULL the legacy rows carry.
+	UpdatedBy     uuid.UUID        `json:"updated_by"`
+	UpdatedByType domain.ActorType `json:"updated_by_type"`
+}
+
+// DocumentService provides business logic for project documents: metadata in
+// Postgres, markdown body in object storage.
+type DocumentService interface {
+	Create(ctx context.Context, input CreateDocumentInput) (*domain.Document, error)
+	// GetByIDInWorkspace returns the document with its body, and only when it
+	// belongs to workspaceID (defense-in-depth after wsAccess).
+	GetByIDInWorkspace(ctx context.Context, id, workspaceID uuid.UUID) (*domain.Document, error)
+	Update(ctx context.Context, id, workspaceID uuid.UUID, input UpdateDocumentInput) (*domain.Document, error)
+	// Delete soft-deletes the document and its descendants; the stored body is
+	// kept. deletedBy is recorded as the last editor of every row it touches — a
+	// delete is a change, and the restore path needs to be able to say who made it.
+	Delete(ctx context.Context, id, workspaceID, deletedBy uuid.UUID, deletedByType domain.ActorType) error
+	ListByProject(ctx context.Context, projectID uuid.UUID, pg pagination.Params) (*pagination.Page[domain.Document], error)
+	// Search ranks the project's documents against a query, over title AND
+	// content. workspaceID is the tenancy check; an empty query is refused rather
+	// than answered with everything.
+	Search(ctx context.Context, projectID, workspaceID uuid.UUID, query string, limit int) ([]domain.DocumentSearchHit, error)
+
+	// Outline returns the document's heading structure, computed from the body on
+	// every call. See pkg/mdoc for why it is never stored.
+	Outline(ctx context.Context, id, workspaceID uuid.UUID) (*DocumentOutline, error)
+	// Section returns one heading and the markdown it owns — subsections
+	// included, the next sibling excluded. ref is an anchor from the outline or
+	// the heading text.
+	//
+	// It exists so that an agent answering a question about one section does not
+	// have to read, and pay for, the whole page.
+	Section(ctx context.Context, id, workspaceID uuid.UUID, ref string) (*DocumentSection, error)
+	// GetByPath resolves a slug path within a project — "architecture/adr/adr-004"
+	// — to the document it names, body included.
+	GetByPath(ctx context.Context, projectID uuid.UUID, path string) (*domain.Document, error)
+	// ResolveAnchor turns a quotation into a comment anchor against the document's
+	// current body: byte offsets plus the quote and its neighbours, the shape
+	// document_comments stores.
+	ResolveAnchor(ctx context.Context, id, workspaceID uuid.UUID, input ResolveAnchorInput) (*mdoc.Anchor, error)
+}
+
+// DocumentOutline is a document's heading structure.
+type DocumentOutline struct {
+	DocumentID uuid.UUID `json:"document_id"`
+	Title      string    `json:"title"`
+	// Version of the body the outline was computed from, so a caller that reads
+	// the outline and then writes has the base_version to write safely with,
+	// without a second read.
+	Version int            `json:"version"`
+	Outline []mdoc.Heading `json:"outline"`
+}
+
+// DocumentSection is one heading of a document and the markdown under it.
+type DocumentSection struct {
+	DocumentID uuid.UUID `json:"document_id"`
+	// Version of the body this section was cut from — see DocumentOutline.Version.
+	Version int          `json:"version"`
+	Heading mdoc.Heading `json:"heading"`
+	Content string       `json:"content"`
+}
+
+// ResolveAnchorInput is a quotation to locate in a document.
+//
+// Prefix and Suffix are optional and are used only to tell repeats of the same
+// quote apart. They are not stored as given: the anchor's neighbourhood is taken
+// from the document at the match, so an anchor describes where the text is rather
+// than what the caller believed was around it.
+type ResolveAnchorInput struct {
+	Quote  string `json:"quote"`
+	Prefix string `json:"prefix"`
+	Suffix string `json:"suffix"`
+}
+
+// UploadDocumentAttachmentInput holds parameters for uploading a file into a
+// document.
+//
+// WorkspaceID is the caller's, resolved from the route by wsAccess — never taken
+// from the request body. It is what makes DocumentID checkable: without it the
+// service would attach the file to whatever document id it was handed, including
+// another tenant's.
+type UploadDocumentAttachmentInput struct {
+	DocumentID  uuid.UUID `json:"document_id"`
+	WorkspaceID uuid.UUID `json:"workspace_id"`
+
+	Name     string `json:"name"`
+	MimeType string `json:"mime_type"`
+	// Size is the length the client declared. It is checked against the cap, and
+	// then checked again while reading — see documentAttachmentService.Upload.
+	Size   int64     `json:"size"`
+	Reader io.Reader `json:"-"`
+
+	UploadedBy     uuid.UUID        `json:"uploaded_by"`
+	UploadedByType domain.ActorType `json:"uploaded_by_type"`
+}
+
+// DocumentAttachmentService provides business logic for the files uploaded into a
+// document: metadata in Postgres, bytes in object storage, handed to the browser
+// as presigned URLs.
+type DocumentAttachmentService interface {
+	Upload(ctx context.Context, input UploadDocumentAttachmentInput) (*domain.DocumentAttachment, error)
+	// GetDownloadURL generates a presigned URL, and only when the attachment
+	// belongs to workspaceID. inline=true omits Content-Disposition so the browser
+	// renders the file — that is what makes an <img> display instead of download.
+	GetDownloadURL(ctx context.Context, id, workspaceID uuid.UUID, inline bool) (string, error)
+	// ListByDocument lists a document's live attachments, and only when the
+	// document belongs to workspaceID.
+	ListByDocument(ctx context.Context, documentID, workspaceID uuid.UUID, pg pagination.Params) (*pagination.Page[domain.DocumentAttachment], error)
+	// Delete soft-deletes the attachment; the stored object is kept.
+	Delete(ctx context.Context, id, workspaceID uuid.UUID) error
+}
+
+// CreateDocumentCommentInput holds parameters for commenting on a document.
+//
+// DocumentID comes from the route and WorkspaceID from the caller's resolved
+// tenant — never from the request body. WorkspaceID is what makes DocumentID
+// checkable: without it the service would hang the comment off whatever document
+// id it was handed, including another tenant's.
+type CreateDocumentCommentInput struct {
+	DocumentID  uuid.UUID `json:"document_id"`
+	WorkspaceID uuid.UUID `json:"workspace_id"`
+
+	// ParentCommentID makes this a reply. The parent must live on the same
+	// document and must itself be top-level.
+	ParentCommentID *uuid.UUID `json:"parent_comment_id"`
+
+	Body string `json:"body"`
+
+	// Anchor is the selected text this comment is about, absent for a comment on
+	// the document as a whole and forbidden on a reply (a reply inherits its
+	// parent's anchor rather than carrying a copy that can drift from it).
+	//
+	// It carries offsets, so it is for a caller that has a selection to measure:
+	// the editor, where the numbers fall out of the selection itself. A caller
+	// without one sends Quote instead and the server measures.
+	Anchor *domain.DocumentCommentAnchor `json:"anchor"`
+
+	// Quote is the text the comment is about, for a caller with no selection — an
+	// agent over MCP. The server locates it in the document's markdown with
+	// mdoc.ResolveQuote and builds the anchor from where it actually sits.
+	//
+	// It exists because an agent computing byte offsets itself gets them wrong,
+	// and wrong offsets do not fail: they point at different words. Measured on a
+	// live Cyrillic body (2026-08-19), a naive character index gave 475 where the
+	// byte answer was 853. Quote and Anchor are therefore mutually exclusive —
+	// see resolveCommentAnchor for why accepting both is not a convenience.
+	Quote string `json:"quote"`
+
+	// QuotePrefix and QuoteSuffix are the text the caller saw immediately before
+	// and after the quote, and are used only to tell repeats of one phrase apart.
+	// They are not stored as given: the stored neighbourhood is read from the
+	// document at the match. Without them a repeated quote is refused rather than
+	// guessed at.
+	QuotePrefix string `json:"quote_prefix"`
+	QuoteSuffix string `json:"quote_suffix"`
+
+	AuthorID   uuid.UUID        `json:"author_id"`
+	AuthorType domain.ActorType `json:"author_type"`
+}
+
+// UpdateDocumentCommentInput holds the fields for editing a comment.
+//
+// Only the body: the anchor records what was written about and the author records
+// who wrote it, and an edit that could move either would let a comment be
+// relabelled onto text its author never read.
+type UpdateDocumentCommentInput struct {
+	Body string `json:"body"`
+
+	// EditorID/EditorType are the caller. The service refuses an edit by anybody
+	// but the author, so these are an authorization input, not a record of one.
+	EditorID   uuid.UUID        `json:"editor_id"`
+	EditorType domain.ActorType `json:"editor_type"`
+}
+
+// ResolveDocumentCommentInput holds the actor and the direction of a resolution
+// change. Unlike an edit, resolving is not restricted to the author: the point of
+// a resolved thread is that whoever addressed the feedback can put it away.
+type ResolveDocumentCommentInput struct {
+	// Resolved is the state being asked for, not a toggle: a toggle applied twice
+	// by two clients racing on the same thread lands wherever the ordering did.
+	Resolved  bool             `json:"resolved"`
+	ActorID   uuid.UUID        `json:"actor_id"`
+	ActorType domain.ActorType `json:"actor_type"`
+}
+
+// DocumentCommentService provides business logic for comments anchored to a
+// document's text: threading, resolution and the tenancy checks behind them.
+type DocumentCommentService interface {
+	Create(ctx context.Context, input CreateDocumentCommentInput) (*domain.DocumentComment, error)
+	// ListByDocument lists a document's live comments, and only when the document
+	// belongs to workspaceID.
+	ListByDocument(ctx context.Context, documentID, workspaceID uuid.UUID, filter repository.DocumentCommentFilter, pg pagination.Params) (*pagination.Page[domain.DocumentComment], error)
+	// Update edits the body of the caller's OWN comment; anybody else's is a 403.
+	Update(ctx context.Context, id, workspaceID uuid.UUID, input UpdateDocumentCommentInput) (*domain.DocumentComment, error)
+	// SetResolved resolves or unresolves a thread. Only a thread root can be
+	// resolved — resolution is a property of the conversation, not of one line in
+	// it — and it is idempotent, so re-resolving does not rewrite who resolved it.
+	SetResolved(ctx context.Context, id, workspaceID uuid.UUID, input ResolveDocumentCommentInput) (*domain.DocumentComment, error)
+	// Delete soft-deletes the caller's own comment, and its replies with it.
+	Delete(ctx context.Context, id, workspaceID, actorID uuid.UUID, actorType domain.ActorType) error
 }
 
 // RegisterAgentInput holds parameters for registering a new agent.
@@ -930,6 +1195,19 @@ type MentionService interface {
 	CountUnseen(ctx context.Context, mentionedID uuid.UUID, mentionedKind string) (int64, error)
 }
 
+// DocumentMentionService is MentionService for @-mentions inside document
+// comments.
+//
+// Separate from MentionService rather than a widened version of it: the view it
+// returns names a document and no task, and merging the two would mean a
+// nullable task id on a shared view that every consumer has to branch on anyway
+// — the same branch, minus the compiler checking that it happened.
+type DocumentMentionService interface {
+	List(ctx context.Context, mentionedID uuid.UUID, mentionedKind string, filter repository.MentionFilter) ([]domain.DocumentCommentMentionView, error)
+	MarkSeen(ctx context.Context, commentID, mentionedID uuid.UUID) error
+	CountUnseen(ctx context.Context, mentionedID uuid.UUID, mentionedKind string) (int64, error)
+}
+
 // RelayPublisher is the optional interface for publishing artifacts to Team Relay.
 // Publish returns the artifact's public (browser-renderable) URL and the agent key
 // that was used to authenticate the upload (empty string for public shares or when
@@ -1063,4 +1341,40 @@ type MemoryService interface {
 	// importance_score < 0.4 are dropped. Results are cached in-process for 5 minutes keyed by
 	// (TaskID, queryHash).
 	RecallGraph(ctx context.Context, opts domain.RecallGraphOpts) ([]domain.RecallGraphResult, error)
+}
+
+// SecretService is the write-only secrets API (task #64e84eb1). Every method
+// takes or returns domain.Secret, which has no field that can carry a value
+// — there is no method on this interface a handler could wire to a GET route
+// and accidentally leak plaintext through. Value-bearing operations live on
+// SecretMaterializationService instead, a deliberately separate interface.
+type SecretService interface {
+	// Create validates and stores a new secret. Returns apierror.Conflict if
+	// a current secret already exists for the same workspace/scope/name.
+	Create(ctx context.Context, input domain.CreateSecretInput) (domain.Secret, error)
+	// Rotate replaces the current value for (workspaceID, scope, name) with
+	// a new one, in one transaction — the old row is stamped rotated_at and
+	// kept, never edited or removed. Returns apierror.NotFound if there is
+	// no current secret to rotate.
+	Rotate(ctx context.Context, workspaceID uuid.UUID, scope domain.SecretScope, projectID, agentID *uuid.UUID, name string, input domain.CreateSecretInput) (domain.Secret, error)
+	// Delete ends materialization for (workspaceID, scope, name) — the
+	// current row is stamped rotated_at with no replacement. History stays
+	// queryable.
+	Delete(ctx context.Context, workspaceID uuid.UUID, scope domain.SecretScope, projectID, agentID *uuid.UUID, name string, deletedBy uuid.UUID, deletedByType domain.ActorType) error
+	// List returns masked metadata for every current secret reachable from
+	// the given resolution (workspace scope always, plus project/agent
+	// scope when the corresponding ID is non-nil).
+	List(ctx context.Context, workspaceID uuid.UUID, projectID, agentID *uuid.UUID) ([]domain.Secret, error)
+}
+
+// SecretMaterializationService decrypts current secret values for
+// spawn-time env-file materialization (S4). Wire it into exactly one
+// handler — the internal spawn-hook endpoint dispatcher/fiddler call — and
+// nowhere a browser session or a general agent tool can reach.
+type SecretMaterializationService interface {
+	// ResolveForSpawn decrypts every current secret in scope for the given
+	// resolution. An expired secret is returned with Expired=true and an
+	// empty Value rather than omitted, so the caller can name it in a loud
+	// spawn error instead of writing a silently empty variable.
+	ResolveForSpawn(ctx context.Context, workspaceID uuid.UUID, projectID, agentID *uuid.UUID) ([]domain.MaterializedSecret, error)
 }

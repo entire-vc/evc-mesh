@@ -132,8 +132,17 @@ export const useNotificationStore = create<NotificationState>((set, get) => ({
       set({ telegramBotInfo: data });
     } catch {
       // Fail closed, same reasoning as fetchEmailAvailability: an instance we
-      // couldn't ask is treated as having no bot configured.
-      set({ telegramBotInfo: { available: false, bot_username: "" } });
+      // couldn't ask is treated as having no bot configured — and therefore
+      // as unable to deliver, since claiming reachability we never confirmed
+      // is the exact false reassurance this field was added to remove.
+      set({
+        telegramBotInfo: {
+          available: false,
+          bot_username: "",
+          reachable: false,
+          unavailable_reason: "",
+        },
+      });
     }
   },
 

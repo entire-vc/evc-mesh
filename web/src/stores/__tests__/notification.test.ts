@@ -152,7 +152,12 @@ describe("fetchEmailAvailability", () => {
 
 describe("fetchTelegramBotInfo", () => {
   it("stores the server's bot info, scoped by workspace_id in the query string", async () => {
-    mockedApi.mockResolvedValue({ available: true, bot_username: "mesh_bot" });
+    mockedApi.mockResolvedValue({
+      available: true,
+      bot_username: "mesh_bot",
+      reachable: true,
+      unavailable_reason: "",
+    });
 
     await useNotificationStore.getState().fetchTelegramBotInfo("ws1");
 
@@ -162,12 +167,19 @@ describe("fetchTelegramBotInfo", () => {
     expect(useNotificationStore.getState().telegramBotInfo).toEqual({
       available: true,
       bot_username: "mesh_bot",
+      reachable: true,
+      unavailable_reason: "",
     });
   });
 
   it("fails closed on a request error", async () => {
     useNotificationStore.setState({
-      telegramBotInfo: { available: true, bot_username: "mesh_bot" },
+      telegramBotInfo: {
+        available: true,
+        bot_username: "mesh_bot",
+        reachable: true,
+        unavailable_reason: "",
+      },
     });
     mockedApi.mockRejectedValue(new Error("network error"));
 
@@ -176,6 +188,8 @@ describe("fetchTelegramBotInfo", () => {
     expect(useNotificationStore.getState().telegramBotInfo).toEqual({
       available: false,
       bot_username: "",
+      reachable: false,
+      unavailable_reason: "",
     });
   });
 });

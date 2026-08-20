@@ -47,6 +47,12 @@ func (r *vcsLinkRow) toDomain() domain.VCSLink {
 	}
 }
 
+// vcsLinkSelectCols is every column vcsLinkRow scans, listed explicitly —
+// see agentSelectCols in agent_repo.go for why `SELECT *` is unsafe: sqlx
+// refuses to scan a column with no matching struct field, so an additive
+// migration to this table breaks every read until redeployed.
+const vcsLinkSelectCols = `id, task_id, provider, link_type, external_id, url, title, status, metadata, created_at`
+
 // VCSLinkRepo implements repository.VCSLinkRepository with PostgreSQL.
 type VCSLinkRepo struct {
 	db *sqlx.DB
@@ -81,7 +87,7 @@ func (r *VCSLinkRepo) Create(ctx context.Context, link *domain.VCSLink) error {
 
 // GetByID retrieves a VCS link by its ID.
 func (r *VCSLinkRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.VCSLink, error) {
-	const q = `SELECT * FROM vcs_links WHERE id = $1`
+	const q = `SELECT ` + vcsLinkSelectCols + ` FROM vcs_links WHERE id = $1`
 	var row vcsLinkRow
 	if err := r.db.GetContext(ctx, &row, q, id); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -109,7 +115,7 @@ func (r *VCSLinkRepo) Delete(ctx context.Context, id uuid.UUID) error {
 
 // ListByTask returns all VCS links for a given task.
 func (r *VCSLinkRepo) ListByTask(ctx context.Context, taskID uuid.UUID) ([]domain.VCSLink, error) {
-	const q = `SELECT * FROM vcs_links WHERE task_id = $1 ORDER BY created_at ASC`
+	const q = `SELECT ` + vcsLinkSelectCols + ` FROM vcs_links WHERE task_id = $1 ORDER BY created_at ASC`
 	var rows []vcsLinkRow
 	if err := r.db.SelectContext(ctx, &rows, q, taskID); err != nil {
 		return nil, err
@@ -174,7 +180,7 @@ func (r *VCSLinkRepo) Upsert(ctx context.Context, link *domain.VCSLink) (bool, e
 // newest first by created_at. Returns an empty slice when no row matches.
 func (r *VCSLinkRepo) ListByExternalID(ctx context.Context, provider domain.VCSProvider, linkType domain.VCSLinkType, externalID string) ([]domain.VCSLink, error) {
 	const q = `
-		SELECT * FROM vcs_links
+		SELECT ` + vcsLinkSelectCols + ` FROM vcs_links
 		WHERE provider = $1 AND link_type = $2 AND external_id = $3
 		ORDER BY created_at DESC
 	`
