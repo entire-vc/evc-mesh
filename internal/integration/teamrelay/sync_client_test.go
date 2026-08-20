@@ -247,6 +247,70 @@ func TestRequestFileToken_ReturnsTheServersBaseURLVerbatim(t *testing.T) {
 	assert.Equal(t, serverURL, baseURL)
 }
 
+// --- Deliberate asymmetry vs Team Relay's browser-facing embed path --------
+//
+// Verified live (task #836ebffe, real Chromium against a request-line-logging
+// server): a browser requesting `<img src="/{slug}/_assets/pic#1.png">`
+// truncates everything from '#' onward BEFORE the request is sent — the
+// server never sees it — and a target containing '?' loses everything from
+// '?' onward the same way, one hop later, when SvelteKit's router splits it
+// as a query string it never forwards. This client has no browser in its
+// path, so it must NOT reproduce either truncation: a real attachment named
+// "pic#1.png" is unreachable through the browser embed path but must remain
+// reachable through this one, because our POST body is JSON, not a URL a
+// browser parses.
+func TestRequestFileToken_DoesNotTruncateHashUnlikeTheBrowserEmbedPath(t *testing.T) {
+	var gotBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotBody, _ = io.ReadAll(r.Body)
+		_, _ = w.Write([]byte(`{"token":"t","base_url":"x"}`))
+	}))
+	defer srv.Close()
+
+	_, _, err := RequestFileToken(context.Background(), srv.URL, "s1", "pic#1.png", "k", "", 0)
+
+	require.NoError(t, err)
+	// A browser would never send "#1.png" at all (RFC 3986 fragment). This
+	// server-to-server call must, or the attachment becomes unreachable.
+	assert.Contains(t, string(gotBody), `"path":"pic#1.png"`)
+}
+
+func TestRequestFileToken_DoesNotDropQueryTailUnlikeTheBrowserEmbedPath(t *testing.T) {
+	var gotBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotBody, _ = io.ReadAll(r.Body)
+		_, _ = w.Write([]byte(`{"token":"t","base_url":"x"}`))
+	}))
+	defer srv.Close()
+
+	_, _, err := RequestFileToken(context.Background(), srv.URL, "s1", "pic?x.png", "k", "", 0)
+
+	require.NoError(t, err)
+	// SvelteKit's router would match only "pic" and silently drop "?x.png" —
+	// verified live. This path must carry the whole target through.
+	assert.Contains(t, string(gotBody), `"path":"pic?x.png"`)
+}
+
+func TestRequestFileToken_TolerateMalformedPercentEscapeUnlikeGosURLParser(t *testing.T) {
+	// A literal '%' not followed by two hex digits is a legal Obsidian
+	// filename character with no encoding intent behind it — verified live
+	// that a real browser passes it through unmodified. net/url.Parse and
+	// url.PathUnescape both hard-fail on it (verified via go run,
+	// task #836ebffe) — which is exactly why this call must never route the
+	// raw target through either: it goes into a JSON body untouched instead.
+	var gotBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotBody, _ = io.ReadAll(r.Body)
+		_, _ = w.Write([]byte(`{"token":"t","base_url":"x"}`))
+	}))
+	defer srv.Close()
+
+	_, _, err := RequestFileToken(context.Background(), srv.URL, "s1", "pic%file.png", "k", "", 0)
+
+	require.NoError(t, err)
+	assert.Contains(t, string(gotBody), `"path":"pic%file.png"`)
+}
+
 func TestFetchAttachment_TwoHopFlow(t *testing.T) {
 	// Hop 1: base_url/download-url with Bearer file-token → presigned URL.
 	// Hop 2: GET the presigned URL with NO relay credential attached.

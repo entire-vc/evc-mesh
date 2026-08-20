@@ -203,17 +203,34 @@ type fileTokenResponse struct {
 const unverifiedPlaceholderSHA256 = "0000000000000000000000000000000000000000000000000000000000000000"
 
 // RequestFileToken exchanges scoped access for one attachment path via
-// POST /v1/shares/{shareID}/file-token. sha256Hint and contentLength may be
-// left as "" / 0 when unknown — see fileTokenRequest's doc comment for why
-// that is safe on this endpoint specifically, and only this one.
+// POST /v1/shares/{shareID}/file-token (shares.py:671-726). sha256Hint and
+// contentLength may be left as "" / 0 when unknown — see fileTokenRequest's
+// doc comment for why that is safe on this endpoint specifically, and only
+// this one.
+//
+// path travels in the JSON request body, never through net/url.Parse or
+// url.PathUnescape — deliberately. Team Relay's OWN embed-image path (a
+// browser requesting `<img src="/{slug}/_assets/{target}">`) truncates a
+// target containing '#' at the fragment boundary before the request is even
+// sent, and silently drops anything from '?' onward as a query string the
+// router never forwards (verified live against a real browser, task
+// #836ebffe) — neither happens here, because this call is server-to-server
+// JSON, not a URL a browser parses. A malformed '%' escape (not followed by
+// two hex bytes — legal in a filename nobody meant as a URI) would also make
+// net/url.Parse/PathUnescape hard-fail where the browser's own request
+// pipeline tolerates it fine. So: '#', '?' and an unescaped/malformed '%' all
+// reach the relay in path exactly as parsed from the `![[...]]` token,
+// matching what a byte-for-byte-identical attachment name would need — this
+// is a deliberate, one-directional divergence from what Team Relay's browser
+// clients can address, not an oversight.
 //
 // The returned baseURL is the server's own already-encoded URL
 // (base_url = f"{base}/shares/{share_id}/files/{quote(path, safe='/')}",
-// shares.py) — pass it to FetchAttachment verbatim. Do not re-derive it from
-// path with url.PathEscape or url.QueryEscape: Python's quote(path, safe='/')
-// does not match either one exactly (both encode differently for at least
-// some of !'()* and space), and reconstructing it would silently diverge for
-// the inputs where it matters.
+// shares.py:725) — pass it to FetchAttachment verbatim. Do not re-derive it
+// from path with url.PathEscape or url.QueryEscape: Python's
+// quote(path, safe='/') does not match either one exactly (both encode
+// differently for at least some of !'()* and space), and reconstructing it
+// would silently diverge for the inputs where it matters.
 func RequestFileToken(ctx context.Context, relayURL, shareID, path, agentKey, sha256Hint string, contentLength int64) (token, baseURL string, err error) {
 	if relayURL == "" {
 		return "", "", fmt.Errorf("teamrelay: relay URL not configured")
