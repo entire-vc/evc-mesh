@@ -66,6 +66,12 @@ function renderPage() {
   );
 }
 
+// Only the active tab's content is in the DOM — switch tabs before asserting
+// on a channel's controls.
+function switchToTab(name: RegExp) {
+  fireEvent.click(screen.getByRole("tab", { name }));
+}
+
 // The row's toggle button carries no accessible name of its own (the label is
 // a sibling <p>, not inside the <button>) — walk up to the row and pull the
 // switch out of it. Throws (rather than returning undefined) so a bad
@@ -104,9 +110,43 @@ beforeEach(() => {
 });
 afterEach(() => vi.clearAllMocks());
 
+describe("NotificationSettingsPage — tabs", () => {
+  it("shows In-App by default, with the other channels' controls not mounted", async () => {
+    mockedApi.mockResolvedValue({ preferences: [] });
+
+    renderPage();
+
+    expect(screen.getByRole("tab", { name: /In-App/ })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    expect(screen.getByText("Enable notifications")).toBeInTheDocument();
+    expect(screen.queryByText("Enable email notifications")).not.toBeInTheDocument();
+    expect(screen.queryByText("Enable Telegram notifications")).not.toBeInTheDocument();
+  });
+
+  it("switches tabs on click, mounting only the selected channel's content", async () => {
+    mockApiByRoute({ preferences: [] });
+
+    renderPage();
+    expect(screen.queryByLabelText("Email address")).not.toBeInTheDocument();
+
+    switchToTab(/Email/);
+
+    expect(screen.getByRole("tab", { name: /Email/ })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    await waitFor(() =>
+      expect(screen.getByLabelText("Email address")).toBeInTheDocument(),
+    );
+    expect(screen.queryByText("Enable notifications")).not.toBeInTheDocument();
+  });
+});
+
 describe("NotificationSettingsPage — Browser Push hydration (task 9d837f67)", () => {
   it("shows the saved browser_push event set on load, not the hardcoded default", async () => {
-    // "task.assigned" is ON in the hardcoded default (notification-settings.tsx:85-89);
+    // "task.assigned" is ON in the hardcoded default (notification-settings/index.tsx);
     // the saved pref below deliberately excludes it, so a stale default is
     // distinguishable from a correctly hydrated one.
     mockedApi.mockResolvedValue({
@@ -117,16 +157,17 @@ describe("NotificationSettingsPage — Browser Push hydration (task 9d837f67)", 
     });
 
     renderPage();
+    switchToTab(/Browser Push/);
 
     // Poll on the condition the fix actually changes — "Mention" is already
     // true under the untouched default, so it can't distinguish pass/fail.
     await waitFor(() => {
-      expect(switchInRowLabeled("Task assigned", 1)).toHaveAttribute(
+      expect(switchInRowLabeled("Task assigned")).toHaveAttribute(
         "aria-checked",
         "false",
       );
     });
-    expect(switchInRowLabeled("Mention", 1)).toHaveAttribute("aria-checked", "true");
+    expect(switchInRowLabeled("Mention")).toHaveAttribute("aria-checked", "true");
   });
 
   it("does not apply a browser_push preference belonging to a different workspace", async () => {
@@ -139,13 +180,14 @@ describe("NotificationSettingsPage — Browser Push hydration (task 9d837f67)", 
     });
 
     renderPage();
+    switchToTab(/Browser Push/);
     await waitFor(() => expect(mockedApi).toHaveBeenCalled());
 
     // Falls back to the hardcoded default (task.mentioned stays selected)
     // since the fetched pref is scoped to a workspace the user isn't viewing.
     // Give the hydration effect a real chance to (wrongly) apply first.
     await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(switchInRowLabeled("Mention", 1)).toHaveAttribute("aria-checked", "true");
+    expect(switchInRowLabeled("Mention")).toHaveAttribute("aria-checked", "true");
   });
 
   it("keeps the saved browser_push event set across a subscribe/unsubscribe cycle", async () => {
@@ -161,13 +203,14 @@ describe("NotificationSettingsPage — Browser Push hydration (task 9d837f67)", 
     });
 
     renderPage();
+    switchToTab(/Browser Push/);
     await waitFor(() => expect(mockedApi).toHaveBeenCalled());
-    // Panel is gated behind live subscription, so the toggles aren't on
-    // screen while unsubscribed. Asserted on the browser-push panel's own
-    // wording rather than the row label "Mention": that label is also a row in
-    // the shared NOTIFICATION_EVENTS list the in-app/email/telegram sections
-    // render unconditionally, so its presence no longer says anything about
-    // this panel.
+    // Panel is gated behind live subscription, so the per-event toggle rows
+    // aren't on screen while unsubscribed. Asserted on the browser-push
+    // panel's own description wording rather than the row label "Mention":
+    // each tab only mounts while active (see index.tsx), so nothing else on
+    // screen could produce a false match here either way — this is just the
+    // more specific assertion.
     expect(
       screen.queryByText("When someone @mentions you"),
     ).not.toBeInTheDocument();
@@ -175,12 +218,12 @@ describe("NotificationSettingsPage — Browser Push hydration (task 9d837f67)", 
     screen.getByRole("button", { name: /Enable/ }).click();
 
     await waitFor(() => {
-      expect(switchInRowLabeled("Task assigned", 1)).toHaveAttribute(
+      expect(switchInRowLabeled("Task assigned")).toHaveAttribute(
         "aria-checked",
         "false",
       );
     });
-    expect(switchInRowLabeled("Mention", 1)).toHaveAttribute("aria-checked", "true");
+    expect(switchInRowLabeled("Mention")).toHaveAttribute("aria-checked", "true");
   });
 });
 
@@ -224,6 +267,7 @@ describe("NotificationSettingsPage — Email channel", () => {
     mockApiByRoute({ preferences: [] });
 
     renderPage();
+    switchToTab(/Email/);
 
     await waitFor(() =>
       expect(screen.getByLabelText("Email address")).toHaveValue("account@example.com"),
@@ -243,6 +287,7 @@ describe("NotificationSettingsPage — Email channel", () => {
     });
 
     renderPage();
+    switchToTab(/Email/);
 
     await waitFor(() =>
       expect(screen.getByLabelText("Email address")).toHaveValue("custom@example.com"),
@@ -250,14 +295,15 @@ describe("NotificationSettingsPage — Email channel", () => {
     // "New comment" is the only subscribed event on the stored row — reusing
     // the account default here would silently mean "someone's edited address
     // came with an event set that isn't theirs."
-    expect(switchInRowLabeled("New comment", 2)).toHaveAttribute("aria-checked", "true");
-    expect(switchInRowLabeled("Task assigned", 2)).toHaveAttribute("aria-checked", "false");
+    expect(switchInRowLabeled("New comment")).toHaveAttribute("aria-checked", "true");
+    expect(switchInRowLabeled("Task assigned")).toHaveAttribute("aria-checked", "false");
   });
 
   it("shows an unavailable notice and hides the controls when SMTP is not configured", async () => {
     mockApiByRoute({ preferences: [], available: false });
 
     renderPage();
+    switchToTab(/Email/);
 
     await waitFor(() =>
       expect(screen.getByText("Email notifications are not available")).toBeInTheDocument(),
@@ -265,18 +311,27 @@ describe("NotificationSettingsPage — Email channel", () => {
     expect(screen.queryByLabelText("Email address")).not.toBeInTheDocument();
   });
 
+  it("marks the Email tab itself as unavailable when SMTP is not configured", async () => {
+    mockApiByRoute({ preferences: [], available: false });
+
+    renderPage();
+
+    await waitFor(() =>
+      expect(screen.getByRole("tab", { name: /Email/ })).toHaveTextContent("unavailable"),
+    );
+  });
+
   it("saves the email channel with the address wrapped in config", async () => {
     let savedBody: unknown;
     mockApiByRoute({ preferences: [], onSave: (body) => { savedBody = body; } });
 
     renderPage();
+    switchToTab(/Email/);
     await waitFor(() =>
       expect(screen.getByLabelText("Email address")).toHaveValue("account@example.com"),
     );
 
-    const saveButtons = screen.getAllByRole("button", { name: /Save preferences/ });
-    const emailSaveButton = saveButtons[saveButtons.length - 1];
-    if (!emailSaveButton) throw new Error("expected an email Save preferences button");
+    const emailSaveButton = screen.getByRole("button", { name: /Save preferences/ });
     emailSaveButton.click();
 
     await waitFor(() => expect(savedBody).toBeDefined());
@@ -293,11 +348,22 @@ describe("NotificationSettingsPage — Telegram channel", () => {
     mockApiByRoute({ preferences: [], telegramAvailable: false });
 
     renderPage();
+    switchToTab(/Telegram/);
 
     await waitFor(() =>
       expect(screen.getByText("Telegram is not connected")).toBeInTheDocument(),
     );
     expect(screen.queryByLabelText("Telegram username")).not.toBeInTheDocument();
+  });
+
+  it("marks the Telegram tab itself as unavailable when no bot is connected", async () => {
+    mockApiByRoute({ preferences: [], telegramAvailable: false });
+
+    renderPage();
+
+    await waitFor(() =>
+      expect(screen.getByRole("tab", { name: /Telegram/ })).toHaveTextContent("unavailable"),
+    );
   });
 
   it("shows a connect link built from the bot username and a fresh bind token", async () => {
@@ -315,6 +381,7 @@ describe("NotificationSettingsPage — Telegram channel", () => {
     });
 
     renderPage();
+    switchToTab(/Telegram/);
 
     await waitFor(() => {
       const link = screen.getByRole("link", { name: /Open @mesh_bot to finish connecting/ });
@@ -337,6 +404,7 @@ describe("NotificationSettingsPage — Telegram channel", () => {
     });
 
     renderPage();
+    switchToTab(/Telegram/);
 
     await waitFor(() =>
       expect(screen.getByText(/Connected — @mesh_bot can message you/)).toBeInTheDocument(),
@@ -357,6 +425,7 @@ describe("NotificationSettingsPage — Telegram channel", () => {
     });
 
     renderPage();
+    switchToTab(/Telegram/);
     await waitFor(() =>
       expect(screen.getByLabelText("Telegram username")).toBeInTheDocument(),
     );
@@ -365,9 +434,7 @@ describe("NotificationSettingsPage — Telegram channel", () => {
       target: { value: "alice" },
     });
 
-    const saveButtons = screen.getAllByRole("button", { name: /Save preferences/ });
-    const telegramSaveButton = saveButtons[saveButtons.length - 1];
-    if (!telegramSaveButton) throw new Error("expected a telegram Save preferences button");
+    const telegramSaveButton = screen.getByRole("button", { name: /Save preferences/ });
     telegramSaveButton.click();
 
     await waitFor(() => expect(savedBody).toBeDefined());
