@@ -9,7 +9,7 @@
  * been taken to the comment.
  */
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router";
 
 const mockedNavigate = vi.fn();
@@ -165,9 +165,11 @@ describe("DocsPage — ?comment= deep link", () => {
     expect(isFocused(a)).toBe(false);
   });
 
-  it("opens a rail the reader had collapsed — the default is open, so this is the real assertion", async () => {
-    // Without this the previous test proves nothing about opening: an untouched
-    // rail is open already (docs-layout-storage.ts:83).
+  it("opens a rail the reader had collapsed", async () => {
+    // Kept explicit even though the rail now starts closed for everyone
+    // (#a4a8db69 — the thread tree became the reading surface): a stored "0" is
+    // a reader who *chose* to close it, and a deep link has to override that
+    // choice, not merely coincide with the default.
     localStorage.setItem("mesh_docs_comments_rail", "0");
     mockRoutes([THREAD_A_ROOT, THREAD_B_ROOT]);
     renderDocs("?comment=root-b");
@@ -200,15 +202,39 @@ describe("DocsPage — ?comment= deep link", () => {
   });
 
   it("focuses nothing when the link names a comment this document does not have", async () => {
+    // The rail is opened here by the reader, not by the link: since #a4a8db69
+    // it starts closed, and an id that matches no thread never opens it (the
+    // effect returns before setRailOpen). Seeding the open state keeps this
+    // test about focus — a bogus id must not land the amber border on some
+    // arbitrary thread — instead of silently retesting the default.
+    localStorage.setItem("mesh_docs_comments_rail", "1");
     mockRoutes([THREAD_A_ROOT]);
     renderDocs("?comment=does-not-exist");
 
-    await screen.findByTestId("doc-comment-rail");
+    const rail = await screen.findByTestId("doc-comment-rail");
+    // Scoped to the rail: the thread tree under the document (#D7) renders the
+    // same threads with the same testid, so an unscoped query counts each
+    // conversation twice and stops meaning what it says.
     await waitFor(() =>
-      expect(screen.getAllByTestId("doc-comment-thread")).toHaveLength(1),
+      expect(within(rail).getAllByTestId("doc-comment-thread")).toHaveLength(1),
     );
     for (const t of screen.getAllByTestId("doc-comment-thread")) {
       expect(isFocused(t)).toBe(false);
     }
+  });
+
+  it("does not open the rail for an id that matches nothing", async () => {
+    // The other half of the test above, and the behaviour the closed default
+    // introduced: a stale or wrong ?comment= link must not pop a panel open
+    // with nothing highlighted in it. The discussion is still reachable — the
+    // tree under the document renders either way.
+    mockRoutes([THREAD_A_ROOT]);
+    renderDocs("?comment=does-not-exist");
+
+    await screen.findByTestId("doc-view");
+    await waitFor(() =>
+      expect(screen.getAllByTestId("doc-comment-thread").length).toBeGreaterThan(0),
+    );
+    expect(screen.queryByTestId("doc-comment-rail")).not.toBeInTheDocument();
   });
 });
