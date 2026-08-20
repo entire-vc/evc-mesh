@@ -236,8 +236,24 @@ var triageExitNegators = []string{
 }
 
 // hasNegatorInScope reports whether body carries a triageExitNegators substring,
-// scoped to text at-or-after the comment's OWN blocking marker (the LAST one, if
-// several) — never text that only precedes it.
+// scoped by negatorScope: text at-or-after the comment's OWN blocking marker
+// (the LAST one, if several) — or, when the body carries NO marker, the body's
+// OWN LAST PARAGRAPH. Never text that only precedes either boundary.
+//
+// READ THAT SECOND HALF BEFORE THE HISTORY BELOW. The marker-less case is the
+// ordinary shape of a real withdrawal, and the scope there is the last
+// paragraph — NOT the whole body. An earlier revision of this comment said
+// "the whole body is used", and the paragraph that superseded it (#1e5be182,
+// four paragraphs down) was easy to stop short of: an agent whose withdrawal
+// silently failed came here to find out why, read the older sentence as
+// current, and concluded the mechanism agreed with them. Measured live
+// 2026-08-20 on #58d8bb8d (prod-sha a635137, Bill): three withdrawals by the
+// marker's own owner, clearable_by_owner=true — a detailed one with the
+// negator in its heading and a two-paragraph one with the negator FIRST both
+// no-opped; the same words as a single line cleared the gate instantly. The
+// superseded sentence is kept below, marked, because the reasoning that
+// produced it is still the reasoning behind the marker case — but it no
+// longer describes the marker-less one. Filed as #17829fcf.
 //
 // Fixed 2026-07-30 (task #c375905c, live incident on #7f646f08, found by Riker):
 // a whole-body strings.Contains search let a comment self-negate its OWN marker
@@ -247,9 +263,12 @@ var triageExitNegators = []string{
 // brand-new marker as pre-cancelled, silently handing ownership of the live ask
 // to whoever's marker preceded it. A marker is conventionally the operative ask
 // of a comment; analysis before it is context, not itself the thing negated —
-// so only text from the marker onward is searched. A comment with no marker at
-// all (the ordinary shape of a real withdrawal — a separate later comment with
-// nothing else in it) has no scope to restrict, so the whole body is used.
+// so only text from the marker onward is searched. [SUPERSEDED by #1e5be182,
+// below — this revision continued: "A comment with no marker at all (the
+// ordinary shape of a real withdrawal — a separate later comment with nothing
+// else in it) has no scope to restrict, so the whole body is used." That has
+// NOT been true since 2026-07-30; a marker-less body is scoped to its last
+// paragraph.]
 //
 // Extended 2026-07-30 (task #5c69b4e5, live probe #a073a896): the body is first
 // passed through stripQuotedSpans, so only text the comment ASSERTS is searched —
@@ -336,28 +355,125 @@ func isRepeatPingNegation(haystack string, start, end int) bool {
 	return false
 }
 
-func hasNegatorInScope(body string) bool {
-	scope := stripQuotedSpans(body)
-	if matches := blockingMarkerRegex.FindAllStringIndex(scope, -1); len(matches) > 0 {
-		scope = scope[matches[len(matches)-1][0]:]
-	} else {
-		scope = lastParagraph(scope)
+// negatorScope returns the region of an already-stripQuotedSpans'd body that
+// hasNegatorInScope searches: from the LAST blocking marker onward if the body
+// carries one, else the body's own last paragraph. Split out of
+// hasNegatorInScope 2026-08-20 (#17829fcf) so the DIAGNOSIS of a withdrawal
+// that did not count (diagnoseNegatorMiss) computes the boundary with the same
+// code as the DECISION, rather than a second copy of it — two copies of "where
+// does the server look" would drift, and drift here means the server explains
+// its refusal by a rule it is no longer applying.
+func negatorScope(stripped string) string {
+	if matches := blockingMarkerRegex.FindAllStringIndex(stripped, -1); len(matches) > 0 {
+		return stripped[matches[len(matches)-1][0]:]
 	}
-	lower := strings.ToLower(scope)
+	return lastParagraph(stripped)
+}
+
+// blockerStillOpenInScope reports whether an already-lower-cased scope asserts
+// that the blocker itself is still live (see blockerStillOpenMarkers).
+func blockerStillOpenInScope(lowerScope string) bool {
 	for _, m := range blockerStillOpenMarkers {
-		if containsNegatorWholeWord(lower, m) {
-			return false
+		if containsNegatorWholeWord(lowerScope, m) {
+			return true
 		}
 	}
+	return false
+}
+
+// negatorAsserted reports whether an already-lower-cased scope asserts a
+// withdrawal negator that survives the isRepeatPingNegation filter. It does
+// NOT consider blockerStillOpenInScope — that veto is applied by the caller,
+// so a diagnosis can tell "no negator here at all" apart from "a negator that
+// this body's own words overrode".
+func negatorAsserted(lowerScope string) bool {
 	for _, n := range triageExitNegators {
-		for _, start := range wholeWordMatches(lower, n) {
-			end := start + len(n)
-			if !isRepeatPingNegation(lower, start, end) {
+		for _, start := range wholeWordMatches(lowerScope, n) {
+			if !isRepeatPingNegation(lowerScope, start, start+len(n)) {
 				return true
 			}
 		}
 	}
 	return false
+}
+
+func hasNegatorInScope(body string) bool {
+	lower := strings.ToLower(negatorScope(stripQuotedSpans(body)))
+	if blockerStillOpenInScope(lower) {
+		return false
+	}
+	return negatorAsserted(lower)
+}
+
+// negatorMissReason names why a body that DOES mention a withdrawal negator was
+// nevertheless not read as a withdrawal. Empty means "nothing to explain" —
+// either the negator counted, or the body never asserted one at all (an
+// ordinary comment, which must stay silent).
+type negatorMissReason string
+
+const (
+	// negatorMissOutOfScope: the body asserts a negator, but only outside the
+	// region negatorScope searches. This is the shape #17829fcf was filed for.
+	negatorMissOutOfScope negatorMissReason = "negator-outside-searched-scope"
+	// negatorMissBlockerStillOpen: a negator IS in scope, but so is a
+	// blockerStillOpenMarkers phrase, which overrides it (#3948173f). A
+	// thorough withdrawal that explains what is "не закрыт" kills its own
+	// negator this way — the second mine measured on #58d8bb8d.
+	negatorMissBlockerStillOpen negatorMissReason = "blocker-still-open-marker-in-same-scope"
+	// negatorMissOnlyQuoted: every negator sits in inline code, a fenced block
+	// or a blockquote, so stripQuotedSpans removed it (#5c69b4e5). Deliberate
+	// — quoting is not asserting — but indistinguishable from success to the
+	// author, so it is reported too.
+	negatorMissOnlyQuoted negatorMissReason = "negator-only-inside-quoted-span"
+)
+
+// diagnoseNegatorMiss explains why hasNegatorInScope(body) came back false on a
+// body that nevertheless talks about withdrawing. Returns "" when there is
+// genuinely nothing to say.
+//
+// Added 2026-08-20 (#17829fcf). The rejection branch it feeds used to be a bare
+// `return` with not one line of log: a withdrawal that missed the scope and a
+// withdrawal that was never written produced byte-identical outcomes, and so did
+// a withdrawal that WORKED — the author sees their comment published either way.
+// Silence in the direction of "the gate stays up forever" is the exact failure
+// releaseHumanGateOnWithdrawal exists to prevent (#7f646f08 sat gated 20 days),
+// and our own rules push agents toward the thorough comment shape that fails.
+//
+// Deliberately NOT reported: a negator filtered by isRepeatPingNegation
+// ("повторный ask здесь не нужен"). That phrase is what CLAUDE-workflow §0b
+// TELLS agents to write when declining to re-ping, so it appears constantly on
+// gated cards with no withdrawal intended; announcing a non-withdrawal there
+// would be pure noise. See #3948173f for why it stopped counting.
+func diagnoseNegatorMiss(body string) negatorMissReason {
+	stripped := stripQuotedSpans(body)
+	lowerScope := strings.ToLower(negatorScope(stripped))
+
+	if negatorAsserted(lowerScope) {
+		if blockerStillOpenInScope(lowerScope) {
+			return negatorMissBlockerStillOpen
+		}
+		return "" // it counted — hasNegatorInScope returned true; caller should not be here
+	}
+	if negatorAsserted(strings.ToLower(stripped)) {
+		return negatorMissOutOfScope
+	}
+	if negatorAsserted(strings.ToLower(body)) {
+		return negatorMissOnlyQuoted
+	}
+	return ""
+}
+
+// withdrawalMissHint is the agent-facing explanation posted for each
+// negatorMissReason. Negator vocabulary inside these strings is deliberately
+// wrapped in backticks: stripQuotedSpans drops code spans, so this system
+// comment cannot itself be read as a withdrawal by any later scan.
+var withdrawalMissHint = map[negatorMissReason]string{
+	negatorMissOutOfScope: "слова отзыва есть, но вне области, которую читает сервер — " +
+		"при комменте без блокирующего маркера ею является **последний абзац**, и только он.",
+	negatorMissBlockerStillOpen: "слова отзыва попали в область, но там же стоит утверждение, " +
+		"что блокер всё ещё жив (`не закрыт` / `не забыт` / `still blocked`) — оно перебивает отзыв в той же области.",
+	negatorMissOnlyQuoted: "слова отзыва встречаются только внутри кода, цитаты или блока — " +
+		"процитированный отзыв не считается заявленным.",
 }
 
 // paragraphBreakRegex matches one or more consecutive blank (or whitespace-only)
@@ -1406,7 +1522,18 @@ const minReaffirmToWithdrawalGap = 30 * time.Minute
 //   - comment.Body must ASSERT a withdrawal negator (hasNegatorInScope: the same
 //     triageExitNegators vocabulary enforceTriageExit uses, matched against the body
 //     with code spans, fences and blockquotes stripped — a comment that merely QUOTES
-//     "не нужен" while explaining the mechanism withdraws nothing);
+//     "не нужен" while explaining the mechanism withdraws nothing). ⚠️ The match is
+//     NOT run over the whole body: hasNegatorInScope searches only negatorScope —
+//     text at-or-after the body's own LAST blocking marker, or, for the marker-less
+//     comment that a real withdrawal usually is, the body's LAST PARAGRAPH. A
+//     thorough withdrawal whose negator sits in a heading or a first paragraph is
+//     a no-op — measured live on #58d8bb8d, 2026-08-20. A second, narrower trap
+//     sits next to it: blockerStillOpenMarkers in the SAME scope override the
+//     negator, so "…не нужен, но регресс-тест не закрыт" withdraws nothing.
+//     That one matches only the short forms; the inflected "не закрытая" does
+//     NOT veto (containsNegatorWholeWord needs a word boundary) — both pinned in
+//     TestDiagnoseNegatorMiss. Since #17829fcf neither miss is silent — see
+//     reportWithdrawalMiss;
 //   - of all prior comments that hasBlockingMarker, the CHRONOLOGICALLY LAST one
 //     must be authored by this SAME agent (task #5d3d2402: that marker's OWN body
 //     may itself carry a negator — e.g. it doubled as an FYI aside — and that no
@@ -1622,6 +1749,7 @@ func (s *commentService) releaseHumanGateOnWithdrawal(ctx context.Context, comme
 		return
 	}
 	if !hasNegatorInScope(comment.Body) {
+		s.reportWithdrawalMiss(ctx, comment, task)
 		return
 	}
 
@@ -1773,6 +1901,63 @@ func (s *commentService) releaseHumanGateOnWithdrawal(ctx context.Context, comme
 			TaskID:    task.ID,
 			ProjectID: task.ProjectID,
 		})
+	}
+}
+
+// reportWithdrawalMiss leaves a trace when a comment on a gated task talks about
+// withdrawing the ask but did not satisfy hasNegatorInScope — AC2 of #17829fcf.
+//
+// The log line fires for every such comment. The task-thread notice is narrower:
+// only for the agent who OWNS the live marker, i.e. the one agent whose
+// withdrawal could have succeeded, so the advice it gives is actionable rather
+// than addressed to a bystander who never had that power.
+//
+// It deliberately does NOT claim the author intended a withdrawal. Intent is not
+// recoverable from comment text — that is the whole finding of #1e5be182, where a
+// genuine status update carried mid-body negators about other topics while its
+// final paragraph reaffirmed the ask. So the notice states two facts that hold in
+// BOTH readings: the gate is still up, and here is the region the server read.
+// A notice that said "твой отзыв отклонён" would be wrong on every status update.
+func (s *commentService) reportWithdrawalMiss(ctx context.Context, comment *domain.Comment, task *domain.Task) {
+	reason := diagnoseNegatorMiss(comment.Body)
+	if reason == "" {
+		return
+	}
+	log.Printf("[human-gate] task %s: comment %s by agent %s mentions a withdrawal but human_gate stays true — %s",
+		task.ID, comment.ID, comment.AuthorID, reason)
+
+	scan, err := s.scanHumanGateOwnership(ctx, task.ID, &comment.ID)
+	if err != nil || !scan.found {
+		return
+	}
+	if scan.markerAuthorType != domain.ActorTypeAgent || scan.markerAuthorID != comment.AuthorID {
+		return
+	}
+
+	hint := withdrawalMissHint[reason]
+	if hint == "" {
+		return
+	}
+	now := timeNow()
+	sysComment := &domain.Comment{
+		ID:         uuid.New(),
+		TaskID:     task.ID,
+		AuthorID:   systemActorID,
+		AuthorType: domain.ActorTypeSystem,
+		Body: "🔒 human_gate по-прежнему поднят — этот коммент его не снял: " + hint +
+			"\n\nЕсли отзыв был намеренным, повтори его **отдельным комментарием**, где слова отзыва " +
+			"(`не нужен` / `не требуется` / `снят` / …) стоят в последнем абзаце и рядом с ними нет " +
+			"утверждений, что блокер жив. Разбор и пробы оставляй предыдущим комментарием — они отзыв не портят. " +
+			"После — перечитай `human_gate`.",
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	if err := s.commentRepo.Create(ctx, sysComment); err != nil {
+		log.Printf("[human-gate] WARNING: create withdrawal-miss notice on task %s failed: %v", task.ID, err)
+		return
+	}
+	if s.ctxCacheInv != nil {
+		s.ctxCacheInv.Invalidate(ctx, task.ID)
 	}
 }
 
