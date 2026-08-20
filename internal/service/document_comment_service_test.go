@@ -27,6 +27,12 @@ type documentCommentFixture struct {
 	wsID        uuid.UUID
 	author      uuid.UUID
 	otherPerson uuid.UUID
+
+	// Where "the API" actually sits in documentCommentBody, in the units the
+	// anchor columns are documented in — bytes, half-open. Located rather than
+	// invented: the service checks that an anchor's offsets contain its own
+	// quote, so a made-up offset would fail for a reason no test here is about.
+	quoteStart, quoteEnd int
 }
 
 func setupDocumentCommentService(t *testing.T) *documentCommentFixture {
@@ -35,14 +41,19 @@ func setupDocumentCommentService(t *testing.T) *documentCommentFixture {
 	projectID, wsID, documentID := uuid.New(), uuid.New(), uuid.New()
 
 	docs := NewMockDocumentRepository().WithProjectWorkspace(projectID, wsID)
-	docs.Seed(&domain.Document{ID: documentID, ProjectID: projectID, Title: "Runbook"})
+	docs.Seed(&domain.Document{
+		ID: documentID, ProjectID: projectID, Title: "Runbook", Body: documentCommentBody,
+	})
 
 	comments := NewMockDocumentCommentRepository().WithDocumentWorkspace(documentID, wsID)
 
 	timeNow = func() time.Time { return frozenTime }
 
+	at := strings.Index(documentCommentBody, documentCommentQuote)
+	require.GreaterOrEqual(t, at, 0, "fixture body does not contain the quote it anchors on")
+
 	return &documentCommentFixture{
-		svc:         NewDocumentCommentService(comments, docs),
+		svc:         NewDocumentCommentService(comments, docs, docs),
 		comments:    comments,
 		docs:        docs,
 		documentID:  documentID,
@@ -50,8 +61,19 @@ func setupDocumentCommentService(t *testing.T) *documentCommentFixture {
 		wsID:        wsID,
 		author:      uuid.New(),
 		otherPerson: uuid.New(),
+		quoteStart:  at,
+		quoteEnd:    at + len(documentCommentQuote),
 	}
 }
+
+// documentCommentBody is the markdown the fixture document holds. The anchors in
+// these tests are located in it rather than made up: since the service checks
+// that an anchor's offsets point at its own quote, an invented offset would fail
+// for a reason the test is not about.
+const documentCommentBody = "Send the token to authenticate the API with a token header.\n"
+
+// documentCommentQuote is the fixture's anchored text.
+const documentCommentQuote = "the API"
 
 func (f *documentCommentFixture) createInput() CreateDocumentCommentInput {
 	return CreateDocumentCommentInput{
@@ -59,8 +81,8 @@ func (f *documentCommentFixture) createInput() CreateDocumentCommentInput {
 		WorkspaceID: f.wsID,
 		Body:        "this contradicts the paragraph above",
 		Anchor: &domain.DocumentCommentAnchor{
-			Exact: "the API", Prefix: "authenticate ", Suffix: " with a token",
-			Start: intPointer(10), End: intPointer(17),
+			Exact: documentCommentQuote, Prefix: "authenticate ", Suffix: " with a token",
+			Start: intPointer(f.quoteStart), End: intPointer(f.quoteEnd),
 		},
 		AuthorID:   f.author,
 		AuthorType: domain.ActorTypeUser,
@@ -97,7 +119,7 @@ func TestDocumentCommentService_Create(t *testing.T) {
 	require.NotNil(t, c.Anchor)
 	assert.Equal(t, "the API", c.Anchor.Exact)
 	require.NotNil(t, c.Anchor.Start)
-	assert.Equal(t, 10, *c.Anchor.Start)
+	assert.Equal(t, f.quoteStart, *c.Anchor.Start)
 	assert.False(t, c.Anchor.IsOrphaned())
 }
 
@@ -767,6 +789,7 @@ func TestDocumentCommentService_Create_FallsBackWhenTheReReadFails(t *testing.T)
 	svc := &documentCommentService{
 		commentRepo:  &readFailsAfterWriteRepo{MockDocumentCommentRepository: f.comments},
 		documentRepo: f.docs,
+		documentBody: f.docs,
 	}
 
 	c, err := svc.Create(context.Background(), f.createInput())

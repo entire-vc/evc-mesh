@@ -459,9 +459,12 @@ func main() {
 	// not nil, and the service's "storage not configured" branch tests exactly that.
 	documentAttachmentService := service.NewDocumentAttachmentService(documentAttachmentRepo, documentRepo, attachmentStore)
 
-	// No storage dependency: a comment's text is a column, not an object. It takes
-	// the document repository so every entry point can resolve the document inside
-	// the caller's workspace before touching a comment.
+	// It takes the document repository so every entry point can resolve the
+	// document inside the caller's workspace before touching a comment, and the
+	// document SERVICE for the one path that needs the markdown itself: checking
+	// that an anchor's byte offsets point at the anchor's own quote. The body
+	// lives in object storage, so the repository alone cannot answer that — and a
+	// guard reading an always-empty body would reject every anchored comment.
 	//
 	// The @-mention options are what make a mention in a document comment arrive
 	// rather than merely be stored. All six are required for the feature to be
@@ -470,7 +473,8 @@ func main() {
 	// says so in the log), documentCommentMentionRepo records who was named,
 	// agentNotifySvc is an agent's channel, and notificationService plus
 	// wsPublisher are a person's.
-	documentCommentService := service.NewDocumentCommentService(documentCommentRepo, documentRepo,
+	documentCommentService := service.NewDocumentCommentService(
+		documentCommentRepo, documentRepo, documentService,
 		service.WithDocumentCommentAgentService(agentService),
 		service.WithDocumentCommentUserRepo(userRepo),
 		service.WithDocumentCommentMentionRepo(documentCommentMentionRepo),
