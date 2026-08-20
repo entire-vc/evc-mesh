@@ -499,7 +499,30 @@ type CreateDocumentCommentInput struct {
 	// Anchor is the selected text this comment is about, absent for a comment on
 	// the document as a whole and forbidden on a reply (a reply inherits its
 	// parent's anchor rather than carrying a copy that can drift from it).
+	//
+	// It carries offsets, so it is for a caller that has a selection to measure:
+	// the editor, where the numbers fall out of the selection itself. A caller
+	// without one sends Quote instead and the server measures.
 	Anchor *domain.DocumentCommentAnchor `json:"anchor"`
+
+	// Quote is the text the comment is about, for a caller with no selection — an
+	// agent over MCP. The server locates it in the document's markdown with
+	// mdoc.ResolveQuote and builds the anchor from where it actually sits.
+	//
+	// It exists because an agent computing byte offsets itself gets them wrong,
+	// and wrong offsets do not fail: they point at different words. Measured on a
+	// live Cyrillic body (2026-08-19), a naive character index gave 475 where the
+	// byte answer was 853. Quote and Anchor are therefore mutually exclusive —
+	// see resolveCommentAnchor for why accepting both is not a convenience.
+	Quote string `json:"quote"`
+
+	// QuotePrefix and QuoteSuffix are the text the caller saw immediately before
+	// and after the quote, and are used only to tell repeats of one phrase apart.
+	// They are not stored as given: the stored neighbourhood is read from the
+	// document at the match. Without them a repeated quote is refused rather than
+	// guessed at.
+	QuotePrefix string `json:"quote_prefix"`
+	QuoteSuffix string `json:"quote_suffix"`
 
 	AuthorID   uuid.UUID        `json:"author_id"`
 	AuthorType domain.ActorType `json:"author_type"`
