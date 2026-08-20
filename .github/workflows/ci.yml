@@ -592,9 +592,23 @@ jobs:
       - name: Install dependencies
         working-directory: web
         run: pnpm install --frozen-lockfile
-      - name: Install Playwright browsers
+      - name: Install Playwright system deps (apt)
         working-directory: web
-        run: npx playwright install --with-deps chromium
+        timeout-minutes: 5
+        run: |
+          for attempt in 1 2 3; do
+            if timeout 90 npx playwright install-deps chromium; then
+              exit 0
+            fi
+            echo "::warning::apt attempt $attempt stalled or failed; retrying"
+            sleep 10
+          done
+          echo "::warning::playwright install-deps failed after 3 attempts"
+          exit 1
+      - name: Install Playwright chromium
+        working-directory: web
+        timeout-minutes: 5
+        run: npx playwright install chromium
       - name: Run Playwright E2E
         working-directory: web
         run: npx playwright test
