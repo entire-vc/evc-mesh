@@ -1,0 +1,47 @@
+name: Caddyfile drift check (mesh-vm)
+
+# Catches the case deploy-caddy.yml alone cannot: someone edits
+# /etc/caddy/Caddyfile directly on the host (as has happened repeatedly —
+# Mesh e8c44540) instead of going through a PR. Runs on a schedule so drift
+# is caught even when nothing touches deploy/caddy/mesh-vm.Caddyfile in a
+# while. A "these two copies MUST stay identical" comment does not enforce
+# anything by itself — this job is the enforcement.
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'   # every 6h
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  drift-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup SSH
+        uses: webfactory/ssh-agent@v0.10.0
+        with:
+          ssh-private-key: ${{ secrets.DEPLOY_SSH_KEY }}
+
+      - name: Configure hel01 jump
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          ssh-keyscan -H 66.151.34.194 >> ~/.ssh/known_hosts 2>/dev/null || true
+          {
+            echo "Host mesh-vm"
+            echo "  HostName 10.10.10.10"
+            echo "  User root"
+            echo "  ProxyJump hel01-jump"
+            echo "  StrictHostKeyChecking accept-new"
+            echo "Host hel01-jump"
+            echo "  HostName 66.151.34.194"
+            echo "  User ghdeploy"
+            echo "  StrictHostKeyChecking accept-new"
+          } >> ~/.ssh/config
+          chmod 600 ~/.ssh/config
+
+      - name: Compare repo copy against live host (read-only)
+        run: ./scripts/caddy-drift-check.sh deploy/caddy/mesh-vm.Caddyfile

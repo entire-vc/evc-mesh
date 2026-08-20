@@ -1,0 +1,107 @@
+{
+	auto_https off
+}
+:80 {
+	# --- Compression (Mesh #32f4c087, 2026-08-20) ---------------------------
+	# Nothing was compressed before this: the board shipped ~2.5 MB raw on every
+	# load (1.5 MB JS + 91 KB CSS + ~917 KB of task JSON).
+	#
+	# THE PATH EXCLUSION BELOW IS LOAD-BEARING. Do not "simplify" it away.
+	# Measured live on prod 2026-08-20 18:55 UTC: a site-wide `encode` — even
+	# with a response `match` block that deliberately omitted text/event-stream —
+	# still swallowed the SSE response headers at
+	# /api/v1/agents/me/events/stream. encode has to buffer the response to
+	# decide whether to compress it, and an idle SSE stream never produces
+	# enough bytes for that decision, so the client got NOTHING for 8s+ while
+	# the app itself (127.0.0.1:8005) was answering instantly. Filtering on the
+	# response Content-Type is too late; the request path is the only guard that
+	# runs early enough. Rolled back within 3 minutes and re-applied in this
+	# narrowed form.
+	#
+	# /api/v1/agents/me/events/stream is the only streaming handler in the API
+	# (verified: it is the sole caller of Response().Flush() in internal/handler).
+	# /mcp/* is the MCP SSE transport, /ws is a websocket upgrade, /s3/* is
+	# binary object storage with range requests — none of them want an encoder.
+	@compressible {
+		not path /api/v1/agents/me/events/stream
+		not path /mcp/*
+		not path /ws
+		not path /s3/*
+	}
+	encode @compressible zstd gzip {
+		match {
+			header Content-Type text/html*
+			header Content-Type text/css*
+			header Content-Type text/plain*
+			header Content-Type text/javascript*
+			header Content-Type application/json*
+			header Content-Type application/javascript*
+			header Content-Type application/manifest+json*
+			header Content-Type image/svg+xml*
+			header Content-Type application/wasm*
+		}
+	}
+
+	handle /api/* {
+		reverse_proxy 127.0.0.1:8005
+	}
+	handle /ws {
+		reverse_proxy 127.0.0.1:8005
+	}
+	handle /health {
+		reverse_proxy 127.0.0.1:8005
+	}
+	handle_path /mcp/* {
+		# Host is rewritten to a loopback value on purpose. mcp-go >= v0.57.0
+		# applies DNS-rebinding protection: a connection whose LOCAL address is
+		# loopback (which this one is -- Caddy dials 127.0.0.1:8081) but whose
+		# Host header is not, gets 403 "invalid Host header". That guard exists
+		# for an MCP server a browser can reach at localhost; here the caller is
+		# already authenticated by agent key, and the only thing upstream of us
+		# is this proxy. Removing this line makes /mcp/sse 403 for every client.
+		# The server does not use Host for anything: message endpoints are
+		# advertised from MESH_MCP_PUBLIC_URL (.env.prod), not derived from Host.
+		reverse_proxy 127.0.0.1:8081 {
+			header_up Host localhost
+		}
+	}
+	handle_path /s3/* {
+		reverse_proxy 127.0.0.1:9000 {
+			header_up Host 127.0.0.1:9000
+		}
+	}
+	handle /webhooks/* {
+		reverse_proxy 127.0.0.1:8005
+	}
+
+	# Vite writes a content hash into every filename under /assets/, so a given
+	# URL's bytes can never change -> cache forever. Kept as its own handle (no
+	# try_files) so a request for a DELETED asset hash 404s instead of falling
+	# back to index.html and getting an immutable HTML page cached in its place.
+	handle /assets/* {
+		root * /opt/evc-mesh/web/dist
+		header Cache-Control "public, max-age=31536000, immutable"
+		file_server
+	}
+	handle {
+		root * /opt/evc-mesh/web/dist
+		# index.html / sw.js / manifest / icons are unhashed: they MUST revalidate,
+		# or a deploy leaves clients on a shell pointing at asset hashes that no
+		# longer exist. etag/last-modified make the revalidation a cheap 304.
+		header Cache-Control "no-cache"
+		try_files {path} /index.html
+		file_server
+	}
+}
+
+# Prometheus metrics endpoint — accessible via hel01 DNAT from tw-mon only
+:9105 {
+	handle /metrics {
+		reverse_proxy 127.0.0.1:8005
+	}
+	handle /mcp-metrics {
+		rewrite * /metrics
+		reverse_proxy 127.0.0.1:8081
+	}
+	respond 404
+}
