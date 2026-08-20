@@ -110,11 +110,17 @@ export function ArtifactList({ taskId, refreshKey, projId, onRelayDocSelect }: A
       setUploading(true);
       try {
         for (const file of files) {
-          const artifact = await uploadArtifact(taskId, file);
-          setArtifacts((prev) => [...prev, artifact]);
+          // Caught per file rather than around the loop: one refused file
+          // should not silently abandon the rest of a multi-file drop.
+          try {
+            const artifact = await uploadArtifact(taskId, file);
+            setArtifacts((prev) => [...prev, artifact]);
+          } catch (err) {
+            toast.error(`Could not attach ${file.name}`, {
+              description: err instanceof Error ? err.message : "upload failed",
+            });
+          }
         }
-      } catch {
-        // error toast could go here
       } finally {
         setUploading(false);
       }
