@@ -614,7 +614,7 @@ jobs:
         working-directory: web
         timeout-minutes: 5
         run: |
-          node -e "const {chromium}=require('playwright');(async()=>{const b=await chromium.launch();const p=await b.newPage();await p.setContent('<h1>ok</h1>');console.log('CHROMIUM_LAUNCHED version='+b.version()+' title='+await p.title());await b.close();})().catch(e=>{console.error('LAUNCH_FAILED',e.message);process.exit(1)})"
+          node -e "const {chromium}=require('@playwright/test');(async()=>{const b=await chromium.launch();const p=await b.newPage();await p.setContent('<h1>ok</h1>');console.log('CHROMIUM_LAUNCHED version='+b.version()+' title='+await p.title());await b.close();})().catch(e=>{console.error('LAUNCH_FAILED',e.message);process.exit(1)})"
       - name: Run Playwright E2E
         working-directory: web
         run: npx playwright test
