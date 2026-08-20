@@ -4,7 +4,9 @@ import {
   ArrowRight,
   AtSign,
   CheckSquare,
+  FileText,
   Inbox,
+  ListTodo,
   MonitorDot,
 } from "lucide-react";
 import { cn } from "@/lib/cn";
@@ -14,8 +16,13 @@ import { useWorkspaceStore } from "@/stores/workspace";
 import { useProjectStore } from "@/stores/project";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  fetchMentionInbox,
+  mentionHref,
+  type MentionInboxItem,
+  type MentionSource,
+} from "@/lib/mentions/inbox";
 import type {
-  Mention,
   PaginatedResponse,
   Task,
   TeamDirectory,
@@ -73,23 +80,23 @@ function WidgetEmpty({
 
 function MentionsWidget() {
   const { wsSlug } = useParams<{ wsSlug: string }>();
-  const [mentions, setMentions] = useState<Mention[]>([]);
+  const { projects } = useProjectStore();
+  const [mentions, setMentions] = useState<MentionInboxItem[]>([]);
+  const [failed, setFailed] = useState<MentionSource[]>([]);
   const [loading, setLoading] = useState(true);
 
+  // Both inboxes, same as the Activity tab — a widget that reads only task
+  // mentions is the same wrong answer in a smaller box.
   useEffect(() => {
-    api<Mention[]>("/api/v1/me/mentions", { params: { limit: 10 } })
-      .then((data) => {
-        const sorted = [...(data ?? [])].sort((a, b) => {
-          if (!a.seen_at && b.seen_at) return -1;
-          if (a.seen_at && !b.seen_at) return 1;
-          return (
-            new Date(b.extracted_at).getTime() -
-            new Date(a.extracted_at).getTime()
-          );
-        });
-        setMentions(sorted);
+    fetchMentionInbox(10)
+      .then(({ items, failed: failedSources }) => {
+        setMentions(items.slice(0, 10));
+        setFailed(failedSources);
       })
-      .catch(() => setMentions([]))
+      .catch(() => {
+        setMentions([]);
+        setFailed(["task", "document"]);
+      })
       .finally(() => setLoading(false));
   }, []);
 
@@ -120,13 +127,30 @@ function MentionsWidget() {
         {loading ? (
           <WidgetSkeleton rows={4} />
         ) : mentions.length === 0 ? (
-          <WidgetEmpty icon={AtSign} message="No mentions yet" />
+          <WidgetEmpty
+            icon={AtSign}
+            message={
+              failed.length > 0
+                ? "Mentions could not be loaded"
+                : "No mentions yet"
+            }
+          />
         ) : (
           <ul className="space-y-0.5">
-            {mentions.map((m) => (
+            {mentions.map((m) => {
+              const project = projects.find((p) => p.id === m.project_id);
+              // Task mentions keep the /t/:id resolver, which finds its own
+              // slugs. Documents have no such resolver, so their link needs the
+              // project — without it there is nowhere honest to point.
+              const to =
+                m.source === "task"
+                  ? `/t/${m.task_id}`
+                  : mentionHref(m, wsSlug, project?.slug);
+              const SourceIcon = m.source === "document" ? FileText : ListTodo;
+              return (
               <li key={m.comment_id}>
                 <Link
-                  to={`/t/${m.task_id}`}
+                  to={to ?? activityTo}
                   className={cn(
                     "flex items-center gap-2 rounded-md px-2 py-1.5 text-xs hover:bg-muted",
                     !m.seen_at && "font-medium",
@@ -137,20 +161,25 @@ function MentionsWidget() {
                   ) : (
                     <span className="h-1.5 w-1.5 shrink-0" />
                   )}
+                  <SourceIcon
+                    className="h-3 w-3 shrink-0 text-muted-foreground"
+                    aria-label={m.source === "document" ? "Document" : "Task"}
+                  />
                   <span
                     className={cn(
                       "min-w-0 flex-1 truncate",
                       m.seen_at && "text-muted-foreground",
                     )}
                   >
-                    {m.task_title}
+                    {m.title}
                   </span>
                   <span className="shrink-0 text-[10px] text-muted-foreground">
                     {formatShort(m.extracted_at)}
                   </span>
                 </Link>
               </li>
-            ))}
+              );
+            })}
           </ul>
         )}
       </CardContent>
