@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -918,4 +919,158 @@ func TestWatch_CommentServiceWiresBothHalves(t *testing.T) {
 		"only the bystander gets the watch copy")
 	assert.Equal(t, []uuid.UUID{mentionedUser}, byEvent[DocumentMentionedEvent],
 		"the named person gets the mention, which is the more specific of the two")
+}
+
+// --- the bell a watcher actually hears ---------------------------------------
+//
+// Everything above proves a notification was handed to a channel. These prove
+// the channel exists. Until the provisioning below, a person who pressed Watch
+// was recorded as a watcher, counted as a recipient, and reached by nothing:
+// delivery to a human runs through notification_preferences, and no code path
+// created a row on their behalf. Measured on prod 2026-08-20 — one preference
+// row in the entire database, none in the workspace doing the watching, and the
+// notifications table empty since the day it was created.
+
+// prefFor returns the caller's row on channel ch, or nil.
+func watchPrefFor(prefs []domain.NotificationPreference, userID uuid.UUID, ch string) *domain.NotificationPreference {
+	for i := range prefs {
+		p := &prefs[i]
+		if p.Channel == ch && p.UserID != nil && *p.UserID == userID {
+			return p
+		}
+	}
+	return nil
+}
+
+func TestWatch_ExplicitUserWatchProvisionsTheBell(t *testing.T) {
+	w := setupWatch(t)
+	doc := w.create(t, "Billing", "start")
+
+	watcher := uuid.New()
+	_, err := w.watch.Watch(w.userCtx(watcher, "Alice"), doc.ID, w.docs.wsID)
+	require.NoError(t, err)
+
+	p := watchPrefFor(w.notify.Preferences(), watcher, "web_push")
+	require.NotNil(t, p, "pressing Watch has to leave the person somewhere to be told")
+	assert.True(t, p.IsEnabled)
+	assert.Equal(t, w.docs.wsID, p.WorkspaceID)
+	assert.ElementsMatch(t,
+		[]string{DocumentChangedEvent, DocumentCommentedEvent, DocumentDeletedEvent},
+		[]string(p.Events),
+	)
+}
+
+// TestWatch_ProvisioningKeepsEventsTheUserAlreadyHad — the repository's upsert
+// replaces the events array wholesale, so a provisioning step that wrote only
+// its own three would silently unsubscribe the person from everything else they
+// had chosen.
+func TestWatch_ProvisioningKeepsEventsTheUserAlreadyHad(t *testing.T) {
+	w := setupWatch(t)
+	doc := w.create(t, "Billing", "start")
+
+	watcher := uuid.New()
+	w.notify.SeedPreference(domain.NotificationPreference{
+		ID: uuid.New(), WorkspaceID: w.docs.wsID, UserID: &watcher,
+		Channel: "web_push", Events: []string{"task.assigned"}, IsEnabled: true,
+	})
+
+	_, err := w.watch.Watch(w.userCtx(watcher, "Alice"), doc.ID, w.docs.wsID)
+	require.NoError(t, err)
+
+	p := watchPrefFor(w.notify.Preferences(), watcher, "web_push")
+	require.NotNil(t, p)
+	assert.ElementsMatch(t,
+		[]string{"task.assigned", DocumentChangedEvent, DocumentCommentedEvent, DocumentDeletedEvent},
+		[]string(p.Events),
+	)
+	assert.Len(t, w.notify.Preferences(), 1, "one row per (workspace, user, channel), not a second one")
+}
+
+// TestWatch_ASwitchedOffBellStaysOff — an explicit "no in-app notifications"
+// outranks the implicit request inside a Watch click. The subscription is still
+// recorded; what must not happen is the setting being flipped back on for them.
+func TestWatch_ASwitchedOffBellStaysOff(t *testing.T) {
+	w := setupWatch(t)
+	doc := w.create(t, "Billing", "start")
+
+	watcher := uuid.New()
+	w.notify.SeedPreference(domain.NotificationPreference{
+		ID: uuid.New(), WorkspaceID: w.docs.wsID, UserID: &watcher,
+		Channel: "web_push", Events: []string{"task.assigned"}, IsEnabled: false,
+	})
+
+	st, err := w.watch.Watch(w.userCtx(watcher, "Alice"), doc.ID, w.docs.wsID)
+	require.NoError(t, err)
+	assert.True(t, st.Watching, "the subscription is recorded either way")
+
+	p := watchPrefFor(w.notify.Preferences(), watcher, "web_push")
+	require.NotNil(t, p)
+	assert.False(t, p.IsEnabled, "a channel the person turned off is not turned back on for them")
+	assert.ElementsMatch(t, []string{"task.assigned"}, []string(p.Events))
+}
+
+// TestWatch_AnotherEnabledChannelIsEnough — somebody subscribed by email does
+// not also need a bell row created for them.
+func TestWatch_AnotherEnabledChannelIsEnough(t *testing.T) {
+	w := setupWatch(t)
+	doc := w.create(t, "Billing", "start")
+
+	watcher := uuid.New()
+	w.notify.SeedPreference(domain.NotificationPreference{
+		ID: uuid.New(), WorkspaceID: w.docs.wsID, UserID: &watcher, Channel: "email",
+		Events:    []string{DocumentChangedEvent, DocumentCommentedEvent, DocumentDeletedEvent},
+		IsEnabled: true,
+	})
+
+	_, err := w.watch.Watch(w.userCtx(watcher, "Alice"), doc.ID, w.docs.wsID)
+	require.NoError(t, err)
+
+	assert.Nil(t, watchPrefFor(w.notify.Preferences(), watcher, "web_push"))
+	assert.Len(t, w.notify.Preferences(), 1)
+}
+
+// TestWatch_AutoSubscribeLeavesPreferencesAlone — being auto-subscribed for
+// commenting is not a request to be notified, and silently re-adding an event
+// type to the settings of everyone who ever commented is what unsubscribing
+// exists to prevent.
+func TestWatch_AutoSubscribeLeavesPreferencesAlone(t *testing.T) {
+	w := setupWatch(t)
+	doc := w.create(t, "Billing", "start")
+
+	commenter := uuid.New()
+	w.watch.AutoSubscribe(context.Background(), doc.ID, commenter, "user", domain.WatchSourceCommenter)
+
+	st, err := w.repo.GetState(context.Background(), doc.ID, commenter, "user")
+	require.NoError(t, err)
+	require.True(t, st.Watching, "positive control: the subscription itself was written")
+	assert.Empty(t, w.notify.Preferences())
+}
+
+// TestWatch_AgentWatchLeavesPreferencesAlone — an agent is reached over its own
+// channel and has no preference row to provision; writing one would file a user
+// setting under an agent id.
+func TestWatch_AgentWatchLeavesPreferencesAlone(t *testing.T) {
+	w := setupWatch(t)
+	doc := w.create(t, "Billing", "start")
+
+	agent := uuid.New()
+	ctx := actorctx.WithActorName(actorctx.WithActor(context.Background(), agent, domain.ActorTypeAgent), "Bill")
+	_, err := w.watch.Watch(ctx, doc.ID, w.docs.wsID)
+	require.NoError(t, err)
+
+	assert.Empty(t, w.notify.Preferences())
+}
+
+// TestWatch_UnreadablePreferencesDoNotLoseTheSubscription — provisioning is a
+// courtesy that rides along with the subscription; it may not take it down.
+func TestWatch_UnreadablePreferencesDoNotLoseTheSubscription(t *testing.T) {
+	w := setupWatch(t)
+	doc := w.create(t, "Billing", "start")
+
+	w.notify.FailPreferenceReads(errors.New("preferences unavailable"))
+
+	watcher := uuid.New()
+	st, err := w.watch.Watch(w.userCtx(watcher, "Alice"), doc.ID, w.docs.wsID)
+	require.NoError(t, err)
+	assert.True(t, st.Watching)
 }

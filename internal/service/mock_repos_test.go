@@ -1491,6 +1491,12 @@ func (m *MockAgentNotifyService) Calls() []AgentNotification {
 type MockNotificationService struct {
 	mu    sync.Mutex
 	calls []domain.NotificationEvent
+	// prefs is a real store, not a nil return: the watch path decides whether to
+	// provision a channel by reading what is already there, so a mock that always
+	// answers "no preferences" would make every such test pass for the wrong
+	// reason.
+	prefs   []domain.NotificationPreference
+	prefErr error
 }
 
 func NewMockNotificationService() *MockNotificationService {
@@ -1511,12 +1517,61 @@ func (m *MockNotificationService) Calls() []domain.NotificationEvent {
 	return out
 }
 
-func (m *MockNotificationService) GetPreferences(_ context.Context, _ uuid.UUID) ([]domain.NotificationPreference, error) {
-	return nil, nil
+func (m *MockNotificationService) GetPreferences(_ context.Context, userID uuid.UUID) ([]domain.NotificationPreference, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.prefErr != nil {
+		return nil, m.prefErr
+	}
+	var out []domain.NotificationPreference
+	for _, p := range m.prefs {
+		if p.UserID != nil && *p.UserID == userID {
+			out = append(out, p)
+		}
+	}
+	return out, nil
 }
 
+// UpsertPreferences matches the production repository's key — one row per
+// (workspace, actor, channel) — because a mock that appended instead would hide
+// exactly the duplicate-row bug that key exists to prevent.
 func (m *MockNotificationService) UpsertPreferences(_ context.Context, pref *domain.NotificationPreference) (*domain.NotificationPreference, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i := range m.prefs {
+		p := &m.prefs[i]
+		if p.WorkspaceID == pref.WorkspaceID && p.Channel == pref.Channel &&
+			p.UserID != nil && pref.UserID != nil && *p.UserID == *pref.UserID {
+			p.Events = pref.Events
+			p.IsEnabled = pref.IsEnabled
+			return p, nil
+		}
+	}
+	m.prefs = append(m.prefs, *pref)
 	return pref, nil
+}
+
+// SeedPreference installs a row the code under test will find.
+func (m *MockNotificationService) SeedPreference(p domain.NotificationPreference) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.prefs = append(m.prefs, p)
+}
+
+// Preferences returns a copy of the store.
+func (m *MockNotificationService) Preferences() []domain.NotificationPreference {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]domain.NotificationPreference, len(m.prefs))
+	copy(out, m.prefs)
+	return out
+}
+
+// FailPreferenceReads makes GetPreferences report err.
+func (m *MockNotificationService) FailPreferenceReads(err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.prefErr = err
 }
 
 func (m *MockNotificationService) DeletePreference(_ context.Context, _, _ uuid.UUID) error {

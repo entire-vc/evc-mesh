@@ -205,6 +205,8 @@ func (s *notificationService) dispatch(event domain.NotificationEvent) {
 		return
 	}
 
+	logUndeliverableTarget(event, prefs, members)
+
 	meta, _ := json.Marshal(event.Metadata)
 	if meta == nil {
 		meta = json.RawMessage(`{}`)
@@ -477,6 +479,50 @@ func (s *notificationService) dispatch(event domain.NotificationEvent) {
 			}
 		}
 	}
+}
+
+// logUndeliverableTarget records the case where an event addressed to one
+// specific person can reach them on no channel at all.
+//
+// Every filter below this point is a `continue`, so "the recipient has no
+// enabled preference row" and "there was nobody to tell" produce byte-identical
+// output: nothing. That is the same silence a real delivery failure makes, and
+// it is what let a document watcher be counted as a recipient of a notification
+// that was never going to arrive — a preference row is created only by a person
+// visiting Notification Settings, and on prod (2026-08-20) exactly one existed
+// in the whole database.
+//
+// This does not deliver anything and does not change who is reached. It makes
+// the drop say so once, with the reason, so the next person to ask "was it sent
+// or was there nobody?" can answer from the log instead of from the schema.
+func logUndeliverableTarget(
+	event domain.NotificationEvent,
+	prefs []domain.NotificationPreference,
+	members map[uuid.UUID]bool,
+) {
+	if event.TargetUserID == nil {
+		return
+	}
+	target := *event.TargetUserID
+
+	if !members[target] {
+		log.Printf("[notification] %s addressed to user %s was dropped: they are not a member of workspace %s",
+			event.EventType, target, event.WorkspaceID)
+		return
+	}
+
+	for i := range prefs {
+		p := &prefs[i]
+		if p.UserID == nil || *p.UserID != target || !p.IsEnabled {
+			continue
+		}
+		if containsInStringArray(p.Events, event.EventType) {
+			return
+		}
+	}
+
+	log.Printf("[notification] %s addressed to user %s in workspace %s reached no channel: they have no enabled preference for this event type",
+		event.EventType, target, event.WorkspaceID)
 }
 
 // relevantToUser reports whether userID is one of the people this event is
