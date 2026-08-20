@@ -1,0 +1,27 @@
+# Tool-attribution trailers that must not appear in a commit message here.
+#
+# Only the ATTRIBUTION SHAPE is matched — "Co-Authored-By: <name>" and
+# "Generated with/by <name>". A bare product name is never matched and must
+# never be: a commit subject like "docs: config examples for Claude Code, Codex
+# CLI, OpenCode" is documentation about clients we support, and a check that
+# reddened on it would be switched off within a week, deservedly.
+#
+# ── This file is a deliberate second copy ────────────────────────────────────
+#
+# The canonical list lives in the fleet tooling repository. A GitHub Actions job
+# cannot import a module from another repository — the same constraint that
+# forced `.github/hold-labels.txt` to exist, and the same reason this copy can
+# drift out of step with it.
+#
+# Drift is caught by a test, not by this comment. `.github/hold-labels.txt`
+# shipped with its own drift on day one — six of nine entries — under a header
+# saying the two copies MUST stay identical. A warning does not compare
+# anything. The comparison lives in the fleet merge-train self-test, where an
+# unreadable file counts as a failure rather than as agreement.
+
+Claude Code
+Claude
+Anthropic
+ChatGPT
+Copilot
+Codex
