@@ -435,6 +435,25 @@ func (s *memoryService) Remember(ctx context.Context, mem *domain.Memory) (Remem
 			"content": "content is required",
 		})
 	}
+
+	// Write-path sanitizer. Memory written here is injected into other agents'
+	// context on their next recall, so content that carries an instruction or a
+	// live credential is refused with a named reason rather than stored. Runs
+	// before any repository work so a refused write touches nothing, and covers
+	// SetProjectKnowledge too — that path builds a domain.Memory and calls
+	// straight through here. See memory_sanitizer.go for what this does NOT
+	// catch; it is a partial control and must not be sold as more than that.
+	if v := scanMemoryContent(mem.Content); v != nil {
+		if memorySanitizerDisabled() {
+			log.Printf("memory sanitizer DISABLED via %s: allowing write of key=%q that violates %s",
+				memorySanitizerDisabledEnv, mem.Key, v.Label)
+		} else {
+			return RememberResult{}, apierror.ValidationError(map[string]string{
+				"content": v.Error(),
+			})
+		}
+	}
+
 	if mem.WorkspaceID == uuid.Nil {
 		return RememberResult{}, apierror.ValidationError(map[string]string{
 			"workspace_id": "workspace_id is required",
