@@ -107,6 +107,7 @@ import { toast } from "@/components/ui/toast";
 import { copyText } from "@/lib/clipboard";
 import { anchorFromHash, anchorToHash } from "@/lib/docs/anchor";
 import { DOC_TREE_DEFAULT_WIDTH } from "@/lib/docs-layout-storage";
+import { MATCH_END, MATCH_START } from "@/lib/docs/document-search";
 import { DocsPage } from "@/pages/docs";
 import { useDocumentStore } from "@/stores/document";
 import { useProjectStore } from "@/stores/project";
@@ -147,13 +148,19 @@ function makeDoc(overrides: Partial<ProjectDocument> & { id: string }): ProjectD
 
 const LIST_PATH = "/api/v1/projects/proj-1/documents";
 
+type MockApiOpts = {
+  method?: string;
+  body?: unknown;
+  params?: Record<string, string | number | undefined>;
+};
+
 /** Answers the list endpoint; anything else must be handled by the test. */
 function mockRoutes(
   docs: ProjectDocument[],
-  extra?: (path: string, opts?: { method?: string; body?: unknown }) => unknown,
+  extra?: (path: string, opts?: MockApiOpts) => unknown,
 ) {
   mockedApi.mockImplementation(
-    (path: string, opts?: { method?: string; body?: unknown }) => {
+    (path: string, opts?: MockApiOpts) => {
       // Method-checked: POST goes to the same path as the list, and a branch
       // that only matched the path answered creates with the listing.
       if (path === LIST_PATH && (opts?.method ?? "GET") === "GET") {
@@ -1301,5 +1308,88 @@ describe("DocsPage — narrow screens: the route decides which column you get", 
     // has yielded the screen — a dead link would otherwise be a dead end.
     fireEvent.click(screen.getByRole("button", { name: /^Documents$/ }));
     expect(mockedNavigate).toHaveBeenCalledWith("/w/acme/p/demo/docs");
+  });
+});
+
+describe("DocsPage — search", () => {
+  const SEARCH_PATH = "/api/v1/projects/proj-1/documents/search";
+
+  it("renders a search box in the tree column", async () => {
+    mockRoutes([]);
+    renderDocs();
+
+    expect(
+      await screen.findByRole("searchbox", { name: /search documents/i }),
+    ).toBeInTheDocument();
+  });
+
+  it("finds a document by a phrase from its body, not just its title", async () => {
+    const docs = [makeDoc({ id: "doc-1", title: "Runbook" })];
+    mockRoutes(docs, (path, opts) => {
+      if (path === SEARCH_PATH && (opts?.method ?? "GET") === "GET") {
+        expect(opts?.params).toMatchObject({ q: "rotate the key" });
+        return Promise.resolve({
+          items: [
+            {
+              id: "doc-1",
+              title: "Runbook",
+              snippet: `...${MATCH_START}rotate the key${MATCH_END} before...`,
+              snippet_is_match: true,
+            },
+          ],
+        });
+      }
+      return undefined;
+    });
+
+    renderDocs();
+    fireEvent.change(
+      await screen.findByRole("searchbox", { name: /search documents/i }),
+      { target: { value: "rotate the key" } },
+    );
+
+    // The highlighted run, not a plain title match — this is the search
+    // reaching the body, which is what the tree's own title list never did.
+    const hit = await screen.findByText("rotate the key");
+    expect(hit.tagName).toBe("MARK");
+  });
+
+  it("opens the matched document and restores the tree", async () => {
+    const docs = [makeDoc({ id: "doc-1", title: "Other" })];
+    mockRoutes(docs, (path, opts) => {
+      if (path === SEARCH_PATH && (opts?.method ?? "GET") === "GET") {
+        return Promise.resolve({
+          items: [{ id: "doc-1", title: "Other", snippet: "", snippet_is_match: false }],
+        });
+      }
+      return undefined;
+    });
+
+    renderDocs();
+    const box = await screen.findByRole("searchbox", { name: /search documents/i });
+    fireEvent.change(box, { target: { value: "other" } });
+
+    fireEvent.click(await screen.findByRole("button", { name: /Other/ }));
+
+    expect(mockedNavigate).toHaveBeenCalledWith("/w/acme/p/demo/docs/doc-1");
+    // Picking a result is a way to a document, not a new column — the query
+    // clears and the ordinary tree comes back.
+    expect(box).toHaveValue("");
+  });
+
+  it("does not query the server for an empty query", async () => {
+    mockRoutes([makeDoc({ id: "doc-1", title: "Runbook" })], (path) => {
+      if (path === SEARCH_PATH) throw new Error("must not search on an empty query");
+      return undefined;
+    });
+
+    renderDocs();
+    const box = await screen.findByRole("searchbox", { name: /search documents/i });
+    fireEvent.change(box, { target: { value: "x" } });
+    fireEvent.change(box, { target: { value: "" } });
+
+    // Nothing to assert on directly — the mock above throws if it is called.
+    // Give the debounce window a chance to fire before the test ends.
+    await new Promise((r) => setTimeout(r, 250));
   });
 });
