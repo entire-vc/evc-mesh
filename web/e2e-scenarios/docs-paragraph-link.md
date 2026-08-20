@@ -4,7 +4,7 @@
 **Scenario ID:** docs-paragraph-link
 **Owner:** Garfield
 **Created:** 2026-08-19
-**Spec file:** `web/e2e/docs-paragraph-link.spec.ts` — **lands in a follow-up PR, see "Sequencing" below**
+**Spec file:** `web/e2e/docs-paragraph-link.spec.ts`
 
 ---
 
