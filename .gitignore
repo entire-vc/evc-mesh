@@ -58,3 +58,8 @@ tmp/
 *.tmp
 .mcp.json
 deploy/docker/mesh/volumes/
+
+# Playwright local run output (traces can contain a live session)
+web/test-results/
+web/playwright-report/
+web/e2e/.auth/
