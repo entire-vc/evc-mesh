@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"regexp"
 	"time"
 
 	"github.com/google/uuid"
@@ -15,6 +16,21 @@ import (
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 	"github.com/entire-vc/evc-mesh/pkg/encryption"
 )
+
+// teamRelayIntegrationType is the project_integrations.type value for a Team
+// Relay integration — the only integration type with a fixed, checkable
+// credential shape today.
+const teamRelayIntegrationType = "team_relay"
+
+// teamRelayAgentKeyPattern matches a genuine Team Relay agent key:
+// "tr_agent_" + 48 lowercase hex chars, 57 chars total. Any AgentKey bound
+// for a team_relay row that doesn't match this shape is rejected at write
+// time (see Upsert) rather than stored and left to fail as an opaque 401
+// against Team Relay later — the failure mode that shipped 11 double-
+// encrypted rows silently on 2026-08-20 (task f824032d): a malformed value
+// (there, ciphertext-shaped) sailed through Upsert and only surfaced as an
+// authentication error against a different system a day later.
+var teamRelayAgentKeyPattern = regexp.MustCompile(`^tr_agent_[0-9a-f]{48}$`)
 
 type projectIntegrationRow struct {
 	ID        uuid.UUID  `db:"id"`
@@ -112,6 +128,9 @@ func (r *ProjectIntegrationRepo) Upsert(ctx context.Context, pi *domain.ProjectI
 	var encKey *string
 	storingPlaintext := false
 	if pi.AgentKey != "" {
+		if pi.Type == teamRelayIntegrationType && !teamRelayAgentKeyPattern.MatchString(pi.AgentKey) {
+			return apierror.BadRequest("team_relay agent_key must be \"tr_agent_\" followed by 48 lowercase hex characters")
+		}
 		enc, err := encryption.Encrypt(pi.AgentKey)
 		if err != nil {
 			return err
