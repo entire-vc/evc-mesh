@@ -55,13 +55,9 @@ async function withF1Fixture(
 }
 
 test.describe("Task board — load", () => {
-  test.beforeEach(({}, testInfo) => {
-    // Skip when Casdoor credentials are not configured (e.g. CI without secrets).
-    // Skipped tests exit 0 — the job stays green in REPORT mode.
-    if (!process.env.CASDOOR_AGENT_USER || !process.env.CASDOOR_AGENT_PASSWORD) {
-      testInfo.skip(true, "CASDOOR_AGENT_USER / CASDOOR_AGENT_PASSWORD not set — authed E2E skipped");
-    }
-  });
+  // No credential-missing skip here: global-setup.ts throws before any test
+  // runs when CASDOOR_AGENT_USER/PASSWORD are absent, so this suite either
+  // runs authed for real or the whole job fails loudly. See global-setup.ts.
 
   test("board loads and contains at least one task column", async ({ page }) => {
     await withF1Fixture(page, async () => {

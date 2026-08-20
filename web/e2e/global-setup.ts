@@ -24,16 +24,16 @@ export default async function globalSetup(_config: FullConfig) {
   const pass = process.env.CASDOOR_AGENT_PASSWORD;
 
   if (!user || !pass) {
-    // In REPORT mode, missing creds → skip rather than hard-fail
-    console.warn(
-      "[global-setup] CASDOOR_AGENT_USER / CASDOOR_AGENT_PASSWORD not set; " +
-        "e2e/.auth/user.json will be empty — authed tests will run unauthenticated."
+    // "Authed E2E" is a required status check on main (branch protection,
+    // enforce_admins: true) — it must be able to go red. Skipping here made
+    // every run report "2 skipped" as a pass, so the required check was
+    // green regardless of whether the app actually worked (task #40ea4053).
+    throw new Error(
+      "[global-setup] CASDOOR_AGENT_USER / CASDOOR_AGENT_PASSWORD not set — " +
+        "cannot run authed E2E. This is a required check; it cannot silently " +
+        "skip. Add the repo secrets (see .github/workflows/ci.yml) or drop " +
+        "'Authed E2E' from required_status_checks if authed E2E is not wanted."
     );
-    // Write empty storage state so tests don't crash on missing file
-    const authDir = path.join(__dirname, ".auth");
-    fs.mkdirSync(authDir, { recursive: true });
-    fs.writeFileSync(path.join(authDir, "user.json"), JSON.stringify({ cookies: [], origins: [] }));
-    return;
   }
 
   const browser = await chromium.launch();
