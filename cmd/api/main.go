@@ -83,6 +83,7 @@ func main() {
 	documentRepo := postgres.NewDocumentRepo(db)
 	documentAttachmentRepo := postgres.NewDocumentAttachmentRepo(db)
 	documentCommentRepo := postgres.NewDocumentCommentRepo(db)
+	documentWatchRepo := postgres.NewDocumentWatchRepo(db)
 	agentRepo := postgres.NewAgentRepo(db)
 	eventBusRepo := postgres.NewEventBusMessageRepo(db)
 	activityLogRepo := postgres.NewActivityLogRepo(db)
@@ -449,7 +450,22 @@ func main() {
 		documentStore = s3Client
 		attachmentStore = s3Client
 	}
-	documentService := service.NewDocumentService(documentRepo, documentStore, projectRepo)
+	// Document subscriptions. Built before the document service because that
+	// service takes it: every write path folds an edit into a pending notice, and
+	// a document created without one would have no author subscribed to it.
+	//
+	// The quiet window is how long an editor must stop typing before their
+	// session is announced. It is configurable because the right value is a
+	// judgement about how people work, not a property of the system: it only has
+	// to sit far above the editor's 2-second autosave debounce and far below the
+	// length of a sitting.
+	documentWatchService := service.NewDocumentWatchService(
+		documentWatchRepo, documentRepo, notificationService, agentNotifySvc,
+		documentWatchQuietWindow(),
+	)
+
+	documentService := service.NewDocumentService(documentRepo, documentStore, projectRepo,
+		service.WithDocumentWatch(documentWatchService))
 
 	// The attachment service takes the full StorageClient, not documentStore: an
 	// attachment is fetched by the browser through a presigned URL (an <img> cannot
@@ -481,6 +497,7 @@ func main() {
 		service.WithDocumentCommentAgentNotifier(agentNotifySvc),
 		service.WithDocumentCommentNotificationService(notificationService),
 		service.WithDocumentCommentWSPublisher(wsPublisher),
+		service.WithDocumentCommentWatch(documentWatchService),
 	)
 
 	// Wire Team Relay publisher into artifact service (best-effort; fires on upload).
@@ -532,6 +549,7 @@ func main() {
 	documentHandler := handler.NewDocumentHandler(documentService)
 	documentAttachmentHandler := handler.NewDocumentAttachmentHandler(documentAttachmentService)
 	documentCommentHandler := handler.NewDocumentCommentHandler(documentCommentService)
+	documentWatchHandler := handler.NewDocumentWatchHandler(documentWatchService)
 	depHandler := handler.NewDependencyHandler(depService, taskService)
 	agentHandler := handler.NewAgentHandlerWithEvents(agentService, taskService, taskStatusService, agentNotifyRedis, agentEventsRepo, sessionRepo)
 	eventHandler := handler.NewEventHandler(eventBusService)
@@ -668,6 +686,33 @@ func main() {
 	activityCtx, activityCancel := context.WithCancel(context.Background())
 	go activityTracker.Run(activityCtx)
 	log.Println("Agent activity tracker started")
+
+	// Document-watch sweeper: turns pending change-notices into notifications
+	// once their author has stopped typing for the quiet window.
+	//
+	// A 60-second tick against a 5-minute default window: the tick is the
+	// granularity of the delay, not the delay itself, and a notice is never sent
+	// early because the quiet test is a timestamp comparison inside the claim,
+	// not a property of when the sweeper happened to run. Two replicas running
+	// this at once is safe — the claim is atomic (FOR UPDATE SKIP LOCKED).
+	watchSweepCtx, watchSweepCancel := context.WithCancel(context.Background())
+	go func() {
+		ticker := time.NewTicker(60 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				if n, err := documentWatchService.SweepPendingNotices(watchSweepCtx); err != nil {
+					log.Printf("[doc-watch] ERROR sweeping pending change notices: %v", err)
+				} else if n > 0 {
+					log.Printf("[doc-watch] dispatched %d coalesced document change notice(s)", n)
+				}
+			case <-watchSweepCtx.Done():
+				return
+			}
+		}
+	}()
+	defer watchSweepCancel()
 
 	// Checkout reaper: periodically releases orphan task-locks whose TTL has expired.
 	// Complements the lazy expiry in AtomicCheckout — handles tasks that no agent
@@ -1003,6 +1048,15 @@ func main() {
 	api.GET("/documents/:doc_id/outline", documentHandler.Outline, wsAccess)
 	api.GET("/documents/:doc_id/section", documentHandler.Section, wsAccess)
 	api.POST("/documents/:doc_id/resolve-anchor", documentHandler.ResolveAnchor, wsAccess)
+
+	// Subscribing to a document's changes. No RBAC beyond workspace access on
+	// purpose: asking to be told about a page you can already read grants
+	// nothing you did not already have, and requiring a write permission to
+	// follow a document would lock read-only members out of the one feature that
+	// exists for people who are not editing.
+	api.GET("/documents/:doc_id/watch", documentWatchHandler.Get, wsAccess)
+	api.PUT("/documents/:doc_id/watch", documentWatchHandler.Watch, wsAccess)
+	api.DELETE("/documents/:doc_id/watch", documentWatchHandler.Unwatch, wsAccess)
 
 	// Addressing a document by its slug path instead of its uuid, because agents
 	// think in paths and making them resolve an id first adds a call to every
@@ -1548,4 +1602,35 @@ func redactInviteToken(uri string) string {
 		return prefix + "<redacted>" + rest[end:]
 	}
 	return prefix + "<redacted>"
+}
+
+// documentWatchQuietWindow reads DOCUMENT_WATCH_QUIET_WINDOW, the idle period an
+// editor must leave before their edits are announced to a document's watchers.
+//
+// It exists as a knob because the right value is a judgement about how people
+// work rather than a property of the system. The bounds are not: a window at or
+// below the editor's 2-second autosave debounce coalesces nothing and restores
+// the notification storm the feature was built to prevent, so a value that small
+// is refused rather than honoured. An unparseable or out-of-range value falls
+// back to the default and says so — a typo here would otherwise be discovered as
+// "why is everyone getting a hundred emails".
+func documentWatchQuietWindow() time.Duration {
+	const (
+		minWindow = 30 * time.Second
+		maxWindow = 24 * time.Hour
+	)
+	raw := strings.TrimSpace(os.Getenv("DOCUMENT_WATCH_QUIET_WINDOW"))
+	if raw == "" {
+		return 0 // service applies its own default
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil {
+		log.Printf("[doc-watch] DOCUMENT_WATCH_QUIET_WINDOW=%q is not a duration (e.g. \"5m\") — using the default", raw)
+		return 0
+	}
+	if d < minWindow || d > maxWindow {
+		log.Printf("[doc-watch] DOCUMENT_WATCH_QUIET_WINDOW=%s is outside [%s, %s] — using the default", d, minWindow, maxWindow)
+		return 0
+	}
+	return d
 }

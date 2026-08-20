@@ -41,6 +41,23 @@ type documentService struct {
 	documentRepo repository.DocumentRepository
 	storage      DocumentStore
 	projectRepo  repository.ProjectRepository
+
+	// watch is optional. Without it documents behave exactly as they did before
+	// subscriptions existed: nothing is recorded, nothing is announced. It is a
+	// dependency of the write paths rather than the other way round because a
+	// document must remain editable on a deployment where notifications are not
+	// wired up at all.
+	watch DocumentWatchService
+}
+
+// DocumentServiceOption configures optional collaborators.
+type DocumentServiceOption func(*documentService)
+
+// WithDocumentWatch wires the subscription service into the document write
+// paths: the author is subscribed on create, every edit folds into a pending
+// change-notice, and a delete tells the watchers before their rows go with it.
+func WithDocumentWatch(w DocumentWatchService) DocumentServiceOption {
+	return func(s *documentService) { s.watch = w }
 }
 
 // NewDocumentService returns a DocumentService backed by the given repositories
@@ -51,12 +68,17 @@ func NewDocumentService(
 	documentRepo repository.DocumentRepository,
 	store DocumentStore,
 	projectRepo repository.ProjectRepository,
+	opts ...DocumentServiceOption,
 ) DocumentService {
-	return &documentService{
+	svc := &documentService{
 		documentRepo: documentRepo,
 		storage:      store,
 		projectRepo:  projectRepo,
 	}
+	for _, opt := range opts {
+		opt(svc)
+	}
+	return svc
 }
 
 // documentStorageKey is the object key for a document body:
@@ -159,6 +181,14 @@ func (s *documentService) Create(ctx context.Context, input CreateDocumentInput)
 	}
 
 	s.indexBody(ctx, doc.ID, input.Body)
+
+	// You should not learn about your own page last. Auto-subscribing the author
+	// is what makes the feature useful without anybody having to discover a
+	// button; it is safe to make automatic only because unsubscribing leaves a
+	// tombstone that the automatic path will not overwrite.
+	if s.watch != nil {
+		s.watch.AutoSubscribe(ctx, doc.ID, createdBy, string(createdByType), domain.WatchSourceAuthor)
+	}
 
 	return doc, nil
 }
@@ -292,6 +322,10 @@ func (s *documentService) updateOnce(ctx context.Context, id, workspaceID uuid.U
 		return nil, &DocumentVersionConflictError{CurrentVersion: doc.Version}
 	}
 
+	// Read before anything mutates doc, so the notice can name the span it
+	// covers even when several writes fold into one.
+	versionBefore := doc.Version
+
 	if input.Title != nil {
 		title := strings.TrimSpace(*input.Title)
 		if title == "" {
@@ -392,6 +426,24 @@ func (s *documentService) updateOnce(ctx context.Context, id, workspaceID uuid.U
 		s.indexBody(ctx, doc.ID, *newBody)
 	}
 
+	// Fold this write into the pending change-notice for its author. One row
+	// UPDATE, no delivery: the editor autosaves every two seconds, and the whole
+	// point of the notice is that a hundred of these produce one notification
+	// once the author stops typing. A move in the tree records nothing —
+	// contentChanged is false for it, and it does not even bump the version.
+	if s.watch != nil && contentChanged {
+		s.watch.RecordChange(ctx, RecordDocumentChangeInput{
+			Document:     doc,
+			WorkspaceID:  workspaceID,
+			ActorID:      updatedBy,
+			ActorKind:    string(updatedByType),
+			FromVersion:  versionBefore,
+			ToVersion:    doc.Version,
+			TitleChanged: input.Title != nil,
+			BodyChanged:  newBody != nil,
+		})
+	}
+
 	// Re-read so the caller gets the resolved display names alongside the ids —
 	// the same enrich-after-write the comment service does. A failure here is not
 	// fatal: the write succeeded, and answering 500 would tell the caller their
@@ -480,7 +532,22 @@ func (s *documentService) Delete(ctx context.Context, id, workspaceID, deletedBy
 	if doc == nil {
 		return apierror.NotFound("Document")
 	}
-	return s.documentRepo.SoftDelete(ctx, id, timeNow(), deletedBy, deletedByType)
+	if delErr := s.documentRepo.SoftDelete(ctx, id, timeNow(), deletedBy, deletedByType); delErr != nil {
+		return delErr
+	}
+
+	// Announced after the delete succeeded, never before: a notification saying
+	// a page is gone, sent for a delete that then failed, is worse than no
+	// notification at all.
+	//
+	// Only this document, not the descendants it took with it. A subtree delete
+	// notifying every watcher of every page under it is a fan-out nobody asked
+	// for, and the notification for the parent is the one that explains what
+	// happened.
+	if s.watch != nil {
+		s.watch.NotifyDeleted(ctx, doc, workspaceID)
+	}
+	return nil
 }
 
 // ListByProject returns a paginated list of the project's live documents.

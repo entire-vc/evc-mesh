@@ -179,6 +179,9 @@ func TestSortedEvents_MatchesWhitelistSorted(t *testing.T) {
 
 	assert.Equal(t, []string{
 		"comment.created",
+		"document.changed",
+		"document.commented",
+		"document.deleted",
 		"document.mentioned",
 		"task.assigned",
 		"task.blocking_triage",
