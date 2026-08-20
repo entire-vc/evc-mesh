@@ -143,7 +143,7 @@ test("the authenticated shell loads into the workspace, cleanly", async () => {
   expect(
     new URL(page.url()).pathname,
     "an authenticated session must not be bounced to /login"
-  ).toMatch(/^\/PLANTED-BREAK-this-path-cannot-exist/);
+  ).not.toMatch(/^\/login/);
 
   // BEHAVIOR assert: the shell resolved a workspace and routed into it
   // ("/" → /w/<workspace-slug>/activity in AppLayout).
