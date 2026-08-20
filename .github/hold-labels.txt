@@ -11,11 +11,23 @@
 # all, because it gets believed and then stops being watched — that is exactly
 # the incident this gate exists to close.
 #
+# It drifted immediately. This file shipped with six of the fleet's nine names:
+# `no-merge`, `dont-merge` and `needs-independent-review` were honoured by both
+# wrappers and invisible here, so a PR carrying one would have been refused by
+# `gh-merge` and merged by the queue — the original defect in miniature, inside
+# its own fix. Nothing was exposed (none of the three is a defined label on this
+# repository, so no PR could carry one), which is precisely why writing the
+# warning was not the same as being protected by it. The comparison is now a
+# test: `mesh-merge-train --test` fails if the two lists differ.
+#
 # Blank lines and #-comments are ignored. Matching is case-insensitive.
 
 hold
 no-automerge
+no-merge
 do-not-merge
+dont-merge
 wip
 blocked
 needs-review
+needs-independent-review
