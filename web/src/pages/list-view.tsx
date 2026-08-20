@@ -1560,7 +1560,7 @@ function EnhancedTitleCell({
   }
 
   const hasSubtasks = (task.subtask_count ?? 0) > 0;
-  const hasDescription = !!task.description;
+  const hasDescription = task.has_description ?? !!task.description;
   const artifactCount = task.artifact_count ?? 0;
   const subtaskCount = task.subtask_count ?? 0;
 

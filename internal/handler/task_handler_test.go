@@ -2022,3 +2022,163 @@ func TestTaskHandler_Update_OmittedReviewerLeavesItUntouched(t *testing.T) {
 	require.NotNil(t, got.ReviewerType)
 	assert.Equal(t, domain.AssigneeTypeAgent, *got.ReviewerType)
 }
+
+// --- include_description projection (#32f4c087) ------------------------------
+//
+// The board's task list was 77% description bytes for cards that never render a
+// description. These tests pin the three things that made the obvious fix unsafe:
+// the default must stay INCLUSIVE (the fleet dispatcher reads descriptions out of
+// this list to decide whether a task is prose-gated), the opt-out must drop the
+// KEY and not just blank it, and has_description must describe the task rather
+// than the projection — otherwise the card loses its "has a description" glyph.
+
+func listTasksForDescriptionTest(t *testing.T, query string) map[string]any {
+	t.Helper()
+	projectID := uuid.New()
+	now := time.Now()
+	tasks := []domain.Task{
+		{ID: uuid.New(), ProjectID: projectID, Title: "with", Description: "a long spec", CreatedAt: now, UpdatedAt: now},
+		{ID: uuid.New(), ProjectID: projectID, Title: "without", Description: "", CreatedAt: now, UpdatedAt: now},
+		{ID: uuid.New(), ProjectID: projectID, Title: "whitespace", Description: "   \n\t ", CreatedAt: now, UpdatedAt: now},
+	}
+	mockSvc := &MockTaskService{
+		ListFunc: func(ctx context.Context, pid uuid.UUID, filter repository.TaskFilter, pg pagination.Params) (*pagination.Page[domain.Task], error) {
+			return pagination.NewPage(tasks, len(tasks), pg), nil
+		},
+	}
+	h, e := setupTaskTest(mockSvc)
+	req := httptest.NewRequest(http.MethodGet, "/?page=1&page_size=10"+query, http.NoBody)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/projects/:proj_id/tasks")
+	c.SetParamNames("proj_id")
+	c.SetParamValues(projectID.String())
+
+	require.NoError(t, h.List(c))
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	// Decode into map[string]any, NOT domain.Task: unmarshalling into the struct
+	// turns an absent key and an empty string into the same zero value, which is
+	// exactly the distinction under test.
+	var raw map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &raw))
+	return raw
+}
+
+func rawItems(t *testing.T, raw map[string]any) []map[string]any {
+	t.Helper()
+	items, ok := raw["items"].([]any)
+	require.True(t, ok, "response has no items array")
+	out := make([]map[string]any, 0, len(items))
+	for _, it := range items {
+		m, ok := it.(map[string]any)
+		require.True(t, ok)
+		out = append(out, m)
+	}
+	return out
+}
+
+// The default must not change. The fleet dispatcher's dependency-park gate greps
+// the description of every task in a list feed; serving it a description-less
+// list does not fail loudly, it silently stops matching.
+func TestTaskHandler_List_IncludesDescriptionByDefault(t *testing.T) {
+	items := rawItems(t, listTasksForDescriptionTest(t, ""))
+	require.Len(t, items, 3)
+	assert.Equal(t, "a long spec", items[0]["description"],
+		"description must be present by default — opting OUT is the caller's choice")
+	assert.Equal(t, true, items[0]["has_description"])
+}
+
+func TestTaskHandler_List_ExcludeDescriptionDropsTheKey(t *testing.T) {
+	items := rawItems(t, listTasksForDescriptionTest(t, "&include_description=false"))
+	require.Len(t, items, 3)
+	for _, it := range items {
+		_, present := it["description"]
+		assert.False(t, present,
+			"include_description=false must omit the key, not send an empty string: %v", it["title"])
+	}
+}
+
+// The whole point of the projection: the card keeps its glyph. has_description
+// reflects the task, not what the caller asked to be sent — and whitespace-only
+// text is not a description.
+func TestTaskHandler_List_HasDescriptionSurvivesExclusion(t *testing.T) {
+	for _, q := range []string{"", "&include_description=false"} {
+		items := rawItems(t, listTasksForDescriptionTest(t, q))
+		require.Len(t, items, 3)
+		assert.Equal(t, true, items[0]["has_description"], "q=%q: real description", q)
+		assert.Equal(t, false, items[1]["has_description"], "q=%q: empty description", q)
+		assert.Equal(t, false, items[2]["has_description"], "q=%q: whitespace-only description", q)
+	}
+}
+
+// Only an explicit negative opts out. A typo, an empty value, or an unrelated
+// word must fall back to the safe side, because the failure mode of guessing
+// wrong here is silent.
+func TestTaskHandler_List_ExclusionRequiresAnExplicitNegative(t *testing.T) {
+	for _, q := range []string{
+		"&include_description=true",
+		"&include_description=",
+		"&include_description=maybe",
+		"&include_description=FALSEY",
+	} {
+		items := rawItems(t, listTasksForDescriptionTest(t, q))
+		_, present := items[0]["description"]
+		assert.True(t, present, "%q must NOT be read as an opt-out", q)
+	}
+	// ...and the spellings that must work, including case and the numeric form.
+	for _, q := range []string{
+		"&include_description=false",
+		"&include_description=FALSE",
+		"&include_description=0",
+		"&include_description=no",
+	} {
+		items := rawItems(t, listTasksForDescriptionTest(t, q))
+		_, present := items[0]["description"]
+		assert.False(t, present, "%q must be read as an opt-out", q)
+	}
+}
+
+// SearchGlobal shares the list decorator with List. It is here because the first
+// version of this change patched only one of the two call sites — they contain a
+// byte-identical block — and left global search reporting has_description:false
+// for every task that had one. A silently wrong flag is worse than an absent one.
+func TestTaskHandler_SearchGlobal_DecoratesLikeList(t *testing.T) {
+	now := time.Now()
+	tasks := []domain.Task{
+		{ID: uuid.New(), Title: "with", Description: "a long spec", CreatedAt: now, UpdatedAt: now},
+		{ID: uuid.New(), Title: "without", Description: "", CreatedAt: now, UpdatedAt: now},
+	}
+	mockSvc := &MockTaskService{
+		SearchFunc: func(ctx context.Context, wsID uuid.UUID, filter repository.TaskFilter, pg pagination.Params) (*pagination.Page[domain.Task], error) {
+			return pagination.NewPage(tasks, len(tasks), pg), nil
+		},
+	}
+	h, e := setupTaskTest(mockSvc)
+
+	call := func(query string) []map[string]any {
+		req := httptest.NewRequest(http.MethodGet, "/?search=spec"+query, http.NoBody)
+		rec := httptest.NewRecorder()
+		c := e.NewContext(req, rec)
+		c.SetPath("/workspaces/:ws_id/tasks")
+		c.SetParamNames("ws_id")
+		c.SetParamValues(uuid.New().String())
+		require.NoError(t, h.SearchGlobal(c))
+		require.Equal(t, http.StatusOK, rec.Code)
+		var raw map[string]any
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &raw))
+		return rawItems(t, raw)
+	}
+
+	items := call("")
+	require.Len(t, items, 2)
+	assert.Equal(t, true, items[0]["has_description"], "search must set the flag too")
+	assert.Equal(t, false, items[1]["has_description"])
+	assert.Equal(t, "a long spec", items[0]["description"], "search still includes bodies by default")
+
+	slim := call("&include_description=false")
+	require.Len(t, slim, 2)
+	_, present := slim[0]["description"]
+	assert.False(t, present)
+	assert.Equal(t, true, slim[0]["has_description"], "flag survives exclusion in search too")
+}
