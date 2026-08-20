@@ -194,3 +194,30 @@ func TestDocumentCommentService_Create_RefusesAnAnchorWhenTheBodyCannotBeRead(t 
 	_, err = svc.Create(context.Background(), in)
 	require.NoError(t, err)
 }
+
+// The guard runs after the reply check, and this pins that order. A reply that
+// carries an anchor at all is refused whatever its offsets say, and "a reply
+// inherits its parent's anchor" is the answer that tells the caller what to
+// change; leading with "your offsets are wrong" would send them to fix the one
+// thing that is not the problem.
+func TestDocumentCommentService_Create_ReplyWithAnAnchorFailsOnBeingAReply(t *testing.T) {
+	f := setupDocumentCommentService(t)
+	seedCyrillicBody(t, f)
+
+	quote := "первым делом"
+	at := strings.Index(cyrillicDocumentBody, quote)
+	root, err := f.svc.Create(context.Background(), anchoredInput(f, quote, at, at+len(quote)))
+	require.NoError(t, err)
+
+	// Offsets that are wrong AND on a reply: the reply rule has to be the one
+	// that answers.
+	reply := anchoredInput(f, quote, 0, 4)
+	reply.ParentCommentID = &root.ID
+
+	_, err = f.svc.Create(context.Background(), reply)
+
+	require.Error(t, err)
+	var apiErr *apierror.Error
+	require.ErrorAs(t, err, &apiErr)
+	assert.Contains(t, apiErr.Validation["anchor"], "inherits its parent's anchor")
+}

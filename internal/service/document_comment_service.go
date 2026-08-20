@@ -154,10 +154,6 @@ func (s *documentCommentService) Create(ctx context.Context, input CreateDocumen
 	if err != nil {
 		return nil, err
 	}
-	if aerr := s.requireAnchorInThisDocument(ctx, doc, input.WorkspaceID, anchor); aerr != nil {
-		return nil, aerr
-	}
-
 	var parentID *uuid.UUID
 	if input.ParentCommentID != nil {
 		parent, perr := s.requireReplyableParent(ctx, *input.ParentCommentID, doc.ID)
@@ -182,6 +178,18 @@ func (s *documentCommentService) Create(ctx context.Context, input CreateDocumen
 	recipients, err := s.resolveMentions(ctx, input.WorkspaceID, body, nil)
 	if err != nil {
 		return nil, err
+	}
+
+	// After the reply check, deliberately: a reply that carries an anchor at all
+	// is refused whatever its offsets say, and "a reply inherits its parent's
+	// anchor" is the answer that tells the caller what to change.
+	//
+	// And after the mention check, for cost rather than meaning: resolving slugs
+	// is a lookup we already hold, while this fetches the document body from
+	// object storage. A request wrong in both ways should not pay for the
+	// download to be told about the slug.
+	if aerr := s.requireAnchorInThisDocument(ctx, doc, input.WorkspaceID, anchor); aerr != nil {
+		return nil, aerr
 	}
 
 	now := timeNow()
