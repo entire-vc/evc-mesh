@@ -24,29 +24,46 @@ const documentCommentBody = "SECRET-COMMENT-4f1b2e07 the failover runbook is wro
 // anchor alone still leaks the document.
 const documentCommentQuote = "the production database password"
 
+// documentCommentPrefix is the text immediately before the quote in documentBody.
+// Read out of the body rather than written down for the same reason the offsets
+// are: a neighbourhood that does not match the document is not a neighbourhood.
+const documentCommentPrefix = "runbook\n"
+
+// documentCommentAnchor is where the quote sits in documentBody, in the units the
+// anchor columns are documented in — UTF-8 bytes, half-open.
+//
+// LOCATED, not written down. These used to be the literals 20 and 52, which
+// sliced " production database password is" — three bytes off the quote they
+// claimed to mark, and wrong from the day they were typed. Nothing noticed,
+// because until the anchor guard the server never opened the document and any
+// pair of numbers was accepted. Deriving them here means the fixture cannot drift
+// from documentBody again, and the round-trip assertion below cannot drift from
+// what was sent.
+func documentCommentAnchor(t *testing.T) (start, end int) {
+	t.Helper()
+	at := strings.Index(documentBody, documentCommentQuote)
+	require.GreaterOrEqual(t, at, 0,
+		"fixture is broken: documentBody does not contain the quote this anchors on")
+	require.True(t, strings.HasSuffix(documentBody[:at], documentCommentPrefix),
+		"fixture is broken: documentCommentPrefix is not what precedes the quote")
+	return at, at + len(documentCommentQuote)
+}
+
 // createDocumentComment leaves an anchored comment on this tenant's document and
 // returns its id.
 func (tn *tenant) createDocumentComment(t *testing.T, docID string) string {
 	t.Helper()
 
-	// The offsets are LOCATED in the document, not written down. They used to be
-	// the literals 20 and 52, which sliced " production database password is" —
-	// three bytes off the quote they claimed to mark. Nothing noticed, because
-	// until the anchor guard the server never opened the document and any pair of
-	// numbers was accepted. Computing them here means this fixture cannot drift
-	// from documentBody again.
-	start := strings.Index(documentBody, documentCommentQuote)
-	require.GreaterOrEqual(t, start, 0,
-		"fixture is broken: documentBody does not contain the quote this anchors on")
+	start, end := documentCommentAnchor(t)
 
 	resp := tn.env.Post(t, "/api/v1/documents/"+docID+"/comments", map[string]any{
 		"body": documentCommentBody,
 		"anchor": map[string]any{
 			"exact":  documentCommentQuote,
-			"prefix": "runbook\n",
+			"prefix": documentCommentPrefix,
 			"suffix": " is in 1Password",
 			"start":  start,
-			"end":    start + len(documentCommentQuote),
+			"end":    end,
 		},
 	})
 	raw := tn.env.ReadBody(t, resp)
@@ -202,12 +219,13 @@ func TestCrossTenant_DocumentCommentsAreNotReachableFromAnotherWorkspace(t *test
 
 		// The anchor round-trips whole. Offsets without the quote could not be
 		// re-found after an edit; the quote without offsets is an orphan.
+		wantStart, wantEnd := documentCommentAnchor(t)
 		assert.Equal(t, documentCommentQuote, got.Anchor.Exact)
-		assert.Equal(t, "the ", got.Anchor.Prefix)
+		assert.Equal(t, documentCommentPrefix, got.Anchor.Prefix)
 		require.NotNil(t, got.Anchor.Start)
-		assert.Equal(t, 20, *got.Anchor.Start)
+		assert.Equal(t, wantStart, *got.Anchor.Start)
 		require.NotNil(t, got.Anchor.End)
-		assert.Equal(t, 52, *got.Anchor.End)
+		assert.Equal(t, wantEnd, *got.Anchor.End)
 		assert.False(t, got.Anchor.Orphaned)
 
 		// And the owner can resolve their own thread, which is what the intruder
