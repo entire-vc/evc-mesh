@@ -94,18 +94,49 @@ func TestDecideDelivery_AsleepButCardIsTheirsIsDelivered(t *testing.T) {
 		"presence must be reported even when the verdict is delivered")
 }
 
-// A live stream beats the queue: the recipient is reading right now.
-func TestDecideDelivery_LiveStreamIsItsOwnChannel(t *testing.T) {
+// Regression, found on prod and not findable here: an OPEN EVENT STREAM IS
+// NOT DELIVERY.
+//
+// The first version of this decision treated a live stream connection as a
+// reaching path. Measured against production the day it shipped, that made
+// nearly every agent mention report `delivered/event_stream` — because every
+// lane in this fleet holds the stream open and discards the event body, then
+// polls for todo-category tasks and finds nothing. The recipient never saw
+// the comment; the record said delivered.
+//
+// That is exactly the silent success this whole feature exists to abolish,
+// so a connected stream must NOT lift the verdict on its own. It is recorded
+// as presence, where it is simply a true statement about a socket.
+func TestDecideDelivery_OpenStreamIsPresenceNotDelivery(t *testing.T) {
+	out, reason, channel, presence := decideDelivery(deliveryFacts{
+		Slug:            "bill",
+		Agent:           agentWithHeartbeat(time.Second),
+		StreamConnected: true,  // socket open …
+		InTaskQueue:     false, // … but the card is not in their queue
+		Presence:        domain.ComputedStatusOnline,
+	})
+	assert.Equal(t, domain.DeliverySkipped, out,
+		"an open stream must not be reported as reach on its own")
+	assert.Equal(t, domain.ReasonNoQueuePath, reason)
+	assert.Equal(t, domain.ChannelNone, channel)
+	assert.Equal(t, string(domain.ComputedStatusOnline), presence,
+		"the connection is still recorded — as presence, which is what it is")
+}
+
+// The other half of that regression: a connected stream must not suppress a
+// genuine queue delivery either. Fixing the over-claim by ignoring the field
+// entirely would be a different wrong answer.
+func TestDecideDelivery_OpenStreamDoesNotMaskAQueueDelivery(t *testing.T) {
 	out, reason, channel, _ := decideDelivery(deliveryFacts{
-		Slug:            "riker",
+		Slug:            "bill",
 		Agent:           agentWithHeartbeat(time.Second),
 		StreamConnected: true,
-		InTaskQueue:     false,
+		InTaskQueue:     true,
 		Presence:        domain.ComputedStatusOnline,
 	})
 	assert.Equal(t, domain.DeliveryDelivered, out)
-	assert.Equal(t, domain.ReasonEventStream, reason)
-	assert.Equal(t, domain.ChannelEventStream, channel)
+	assert.Equal(t, domain.ReasonTaskQueue, reason)
+	assert.Equal(t, domain.ChannelTaskQueue, channel)
 }
 
 // The case with no trace at all today: a handle that names nobody. The comment
@@ -171,6 +202,7 @@ func TestDecideDelivery_NoBranchEverReturnsAnEmptyReason(t *testing.T) {
 		{Slug: "self", Agent: live, SelfMention: true},
 		{Slug: "self-user", User: user, SelfMention: true},
 		{Slug: "stream", Agent: live, StreamConnected: true, Presence: domain.ComputedStatusOnline},
+		{Slug: "stream-queued", Agent: live, StreamConnected: true, InTaskQueue: true, Presence: domain.ComputedStatusOnline},
 		{Slug: "queue", Agent: live, InTaskQueue: true, Presence: domain.ComputedStatusOnline},
 		{Slug: "offline", Agent: dead, Presence: domain.ComputedStatusOffline},
 		{Slug: "noqueue", Agent: live, Presence: domain.ComputedStatusOnline},

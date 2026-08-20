@@ -13,8 +13,11 @@ import (
 // makes the record useful is not the verb but the reason beside it.
 const (
 	// DeliveryDelivered means the comment is reachable by the recipient through
-	// a path they consume: a live event stream, the task queue they poll, or a
-	// notification channel they subscribed to. Which one is in Channel.
+	// a path they demonstrably consume: the task queue an agent polls, or a
+	// notification channel a person subscribed to. Which one is in Channel.
+	//
+	// The bar is consumption, not transmission. Anything Mesh merely emitted
+	// belongs in presence or in a log, not here.
 	DeliveryDelivered = "delivered"
 
 	// DeliverySkipped means no delivery was attempted, or none could reach.
@@ -29,10 +32,6 @@ const (
 // "delivered" without saying by what route is the same unfalsifiable claim as
 // a sender-side counter, which is the failure this whole record replaces.
 const (
-	// ReasonEventStream — the recipient has a live event-stream connection
-	// open, so the mention is on a channel they are reading right now.
-	ReasonEventStream = "event_stream"
-
 	// ReasonTaskQueue — the task is assigned to the recipient and sits in a
 	// todo-category status, so it is in the feed they poll
 	// (GET /agents/me/tasks?status_category=todo). This holds whether or not
@@ -77,8 +76,11 @@ const (
 )
 
 // Delivery channels — what the verdict is about.
+// No ChannelEventStream. Holding an event-stream connection open is recorded
+// as presence, never as reach: measured on prod, every lane in this fleet
+// keeps that socket open and discards the event body, so a stream-based
+// "delivered" was true of the socket and false of the recipient.
 const (
-	ChannelEventStream  = "event_stream"
 	ChannelTaskQueue    = "task_queue"
 	ChannelNotification = "notification"
 	ChannelNone         = "none"

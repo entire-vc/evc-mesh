@@ -28,6 +28,20 @@ type deliveryFacts struct {
 
 	// StreamConnected is true when the recipient agent has a live event-stream
 	// connection open right now.
+	//
+	// It feeds presence and NOTHING ELSE. An open socket is not consumption:
+	// measured on prod 2026-08-20, every lane in this fleet holds this stream
+	// open and every one of them discards the event body — the client's own
+	// loop says "we do NOT act on events: any event just WAKES the poll loop",
+	// and the poll then asks only for todo-category tasks. Treating the open
+	// connection as delivery reported `delivered/event_stream` for a mention
+	// the recipient provably never saw, which is this card's defect wearing a
+	// new label.
+	//
+	// Restoring a stream-delivery verdict needs evidence Mesh does not have:
+	// that THIS client acts on THIS event type. Until such a signal exists,
+	// the conservative direction is the only honest one — under-report reach,
+	// never over-report it.
 	StreamConnected bool
 
 	// InTaskQueue is true when this task is assigned to the recipient agent AND
@@ -52,9 +66,12 @@ type deliveryFacts struct {
 //  1. Self-mention and unresolved handles come first because they are certain
 //     and terminal — no path exists and none was ever going to.
 //
-//  2. Then the two reaching paths, live stream before queue. Either one is a
-//     genuine delivery; naming which one is what stops "delivered" from being
-//     the unfalsifiable sender-side claim it replaces.
+//  2. Then the one reaching path there is evidence for: the queue the
+//     recipient polls. Naming it is what stops "delivered" from being the
+//     unfalsifiable sender-side claim it replaces.
+//
+//     An open event-stream connection is deliberately NOT a second such path
+//     — see StreamConnected above for the measurement that removed it.
 //
 //  3. Only then the two ways of not reaching, and their order is the whole
 //     point of AC2. An agent whose lane is down and who has no claim on this
@@ -92,9 +109,6 @@ func decideDelivery(f deliveryFacts) (outcome, reason, channel, presence string)
 
 	p := presenceOf(f)
 
-	if f.StreamConnected {
-		return domain.DeliveryDelivered, domain.ReasonEventStream, domain.ChannelEventStream, p
-	}
 	if f.InTaskQueue {
 		return domain.DeliveryDelivered, domain.ReasonTaskQueue, domain.ChannelTaskQueue, p
 	}
