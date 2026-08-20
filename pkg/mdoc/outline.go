@@ -254,9 +254,12 @@ func parseATX(text string) (level int, heading string, ok bool) {
 	return level, body, true
 }
 
-// anchorize turns heading text into a URL-shaped fragment, GitHub's scheme:
+// Slugify turns text into a URL-shaped fragment, GitHub's heading-anchor scheme:
 // lower-cased, everything that is not a letter, a digit, a space, a hyphen or an
-// underscore dropped, spaces collapsed into hyphens.
+// underscore dropped, spaces collapsed into hyphens. Returns "" if nothing survives
+// the filter — callers pick their own fallback for that case (anchorize's is
+// below; document slug generation in internal/service/document_service.go has its
+// own, since a bare "section" would collide across every such document).
 //
 // unicode.IsLetter and IsDigit rather than an ASCII range, deliberately. Half the
 // documents here are written in Russian, and an ASCII-only slugifier reduces
@@ -265,7 +268,7 @@ func parseATX(text string) (level int, heading string, ok bool) {
 //
 // Dropping punctuation is also what makes inline markup disappear on its own:
 // `## The **bold** word` anchors as `the-bold-word` without a markdown parser.
-func anchorize(text string) string {
+func Slugify(text string) string {
 	var b strings.Builder
 	b.Grow(len(text))
 	for _, r := range strings.ToLower(text) {
@@ -278,7 +281,11 @@ func anchorize(text string) string {
 			b.WriteByte('-')
 		}
 	}
-	slug := strings.Trim(b.String(), "-")
+	return strings.Trim(b.String(), "-")
+}
+
+func anchorize(text string) string {
+	slug := Slugify(text)
 	if slug == "" {
 		// A heading made entirely of punctuation, or of emoji. It still has to be
 		// addressable, and the duplicate counter below is what keeps several of
