@@ -4,6 +4,7 @@ import {
   type BrowserContext,
   type Page,
 } from "@playwright/test";
+import { loginWithRetry } from "./auth-helper";
 
 /**
  * E2E scenario: authed-app-load
@@ -39,24 +40,22 @@ const failedApiCalls: string[] = [];
 const email = () => process.env.E2E_USER_EMAIL!;
 
 test.beforeAll(async ({ browser }) => {
+  // A 429 retry honours the server's own Retry-After (up to 65s, see
+  // auth-helper.ts) — give the hook enough room for one such wait plus the
+  // rest of its own work. Default hook timeout (60s, playwright.config.ts)
+  // would otherwise fail the retry itself, not just the thing it's retrying.
+  test.setTimeout(120_000);
+
   context = await browser.newContext();
 
   // Log in through the real endpoint the app uses. The response carries the
   // access token; the httpOnly refresh cookie lands in this context's jar.
-  const res = await context.request.post("/api/v1/auth/login", {
-    data: { email: email(), password: process.env.E2E_USER_PASSWORD },
-  });
-  expect(
-    res.status(),
-    `login as ${email()} must succeed — E2E credentials are wrong or the user is disabled`
-  ).toBe(200);
-
-  const body = (await res.json()) as {
-    tokens?: { access_token?: string };
-    user?: { email?: string };
-  };
-  expect(body.tokens?.access_token, "login must return an access token").toBeTruthy();
-  accessToken = body.tokens!.access_token!;
+  const { accessToken: token } = await loginWithRetry(
+    context.request,
+    email(),
+    process.env.E2E_USER_PASSWORD!
+  );
+  accessToken = token;
 
   page = await context.newPage();
   await page.addInitScript(() => {

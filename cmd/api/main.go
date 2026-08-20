@@ -796,6 +796,7 @@ func main() {
 		RPM:         cfg.RateLimit.AuthRPM,
 		KeyFunc:     mw.RateLimitKeyByIP,
 		RedisClient: sharedRedis,
+		Name:        "auth-login",
 	}))
 	loginGroup.POST("/register", authHandler.Register)
 	loginGroup.POST("/login", authHandler.Login)
@@ -815,6 +816,7 @@ func main() {
 		RPM:         cfg.RateLimit.RefreshRPM,
 		KeyFunc:     mw.RateLimitKeyByIP,
 		RedisClient: sharedRedis,
+		Name:        "auth-refresh",
 	}))
 	refreshGroup.POST("/refresh", authHandler.Refresh)
 
@@ -825,6 +827,7 @@ func main() {
 		RPM:         cfg.RateLimit.AuthRPM,
 		KeyFunc:     mw.RateLimitKeyByIP,
 		RedisClient: sharedRedis,
+		Name:        "invite-accept",
 	}))
 	invitePublicGroup.GET("/:token", inviteHandler.GetByToken)
 	invitePublicGroup.POST("/:token/accept", inviteHandler.Accept)
@@ -865,6 +868,7 @@ func main() {
 		RPM:         cfg.RateLimit.APIRPM,
 		KeyFunc:     mw.RateLimitKeyByIP,
 		RedisClient: sharedRedis,
+		Name:        "workspace-icon",
 	})
 	v1.GET("/workspaces/:ws_id/icon", workspaceHandler.GetIcon, iconRateLimit)
 	// HEAD as well: it is what `curl -I` and cache validators send, and Echo
@@ -892,6 +896,7 @@ func main() {
 		RPM:         cfg.RateLimit.APIRPM,
 		KeyFunc:     mw.RateLimitKeyByActor,
 		RedisClient: sharedRedis,
+		Name:        "api",
 	}))
 
 	// Auth - protected.

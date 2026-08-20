@@ -9,10 +9,25 @@ import (
 	"testing"
 	"time"
 
+	"github.com/alicebob/miniredis/v2"
 	"github.com/labstack/echo/v4"
+	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// newTestRedis spins up a miniredis instance for Redis-backed rate limiter
+// tests, mirroring the pattern used elsewhere in the codebase
+// (internal/service/agent_notify_service_test.go).
+func newTestRedis(t *testing.T) *redis.Client {
+	t.Helper()
+	mr, err := miniredis.Run()
+	require.NoError(t, err)
+	t.Cleanup(mr.Close)
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = rdb.Close() })
+	return rdb
+}
 
 // ---------------------------------------------------------------------------
 // Minimal rate limiter implementation for testing purposes.
@@ -392,6 +407,80 @@ func TestRateLimit_RefreshFleetFlood_NotThrottled(t *testing.T) {
 // TestRateLimit_AgentPollStorm_NotThrottled verifies that a high-frequency agent
 // polling /agents/me/tasks is limited per-actor (agent key), not per-IP.
 // Multiple agents from the same IP must each have their own independent bucket.
+// TestRateLimit_Redis_NameRequired verifies that a Redis-backed limiter
+// configured without Name panics at construction time rather than silently
+// sharing a counter with another limiter at request time.
+func TestRateLimit_Redis_NameRequired(t *testing.T) {
+	rdb := newTestRedis(t)
+
+	assert.Panics(t, func() {
+		RateLimit(RateLimitConfig{
+			Enabled:     true,
+			RPM:         5,
+			KeyFunc:     RateLimitKeyByIP,
+			RedisClient: rdb,
+			// Name deliberately omitted.
+		})
+	}, "RateLimit must refuse to build a Redis-backed limiter with no Name")
+}
+
+// TestRateLimit_Redis_NamespacesDoNotShareCounter is the regression test for
+// `#603f340a`: /auth/login (5 RPM) and /auth/refresh (60 RPM) both keyed by
+// client IP shared one Redis counter because the key carried no per-limiter
+// identity, so refresh traffic alone could exhaust login's budget. With Name
+// set, flooding the high-RPM limiter (simulating the agent fleet hammering
+// /auth/refresh from one IP) must not cost the low-RPM limiter (simulating
+// /auth/login) a single request of its own, independent 5 RPM budget.
+func TestRateLimit_Redis_NamespacesDoNotShareCounter(t *testing.T) {
+	rdb := newTestRedis(t)
+	const sharedKey = "10.10.10.1" // e.g. both resolve to the same (broken) RealIP()
+	const loginRPM = 5
+	const refreshRPM = 60
+
+	loginMW := RateLimit(RateLimitConfig{
+		Enabled:     true,
+		RPM:         loginRPM,
+		KeyFunc:     func(c echo.Context) string { return sharedKey },
+		RedisClient: rdb,
+		Name:        "auth-login",
+	})
+	refreshMW := RateLimit(RateLimitConfig{
+		Enabled:     true,
+		RPM:         refreshRPM,
+		KeyFunc:     func(c echo.Context) string { return sharedKey },
+		RedisClient: rdb,
+		Name:        "auth-refresh",
+	})
+	handler := func(c echo.Context) error { return c.NoContent(http.StatusOK) }
+	wrappedLogin := loginMW(handler)
+	wrappedRefresh := refreshMW(handler)
+
+	e := echo.New()
+	doReq := func(wrapped echo.HandlerFunc) int {
+		req := httptest.NewRequest(http.MethodPost, "/", http.NoBody)
+		rec := httptest.NewRecorder()
+		c := e.NewContext(req, rec)
+		require.NoError(t, wrapped(c))
+		return rec.Code
+	}
+
+	// Flood the refresh limiter well past login's entire 5 RPM budget —
+	// this is the agent fleet's normal refresh cadence, nothing anomalous.
+	for i := 0; i < refreshRPM; i++ {
+		assert.Equal(t, http.StatusOK, doReq(wrappedRefresh),
+			"refresh request %d should pass its own 60 RPM budget", i+1)
+	}
+
+	// Login, from the SAME key, must still have its full 5 RPM budget intact —
+	// none of it was spent by refresh traffic on a different limiter.
+	for i := 0; i < loginRPM; i++ {
+		assert.Equal(t, http.StatusOK, doReq(wrappedLogin),
+			"login request %d must not be blocked by unrelated refresh traffic", i+1)
+	}
+	assert.Equal(t, http.StatusTooManyRequests, doReq(wrappedLogin),
+		"login's own 6th request in the window should still be blocked (its own limit, unaffected by refresh)")
+}
+
 func TestRateLimit_AgentPollStorm_NotThrottled(t *testing.T) {
 	e := echo.New()
 	const apiRPM = 600

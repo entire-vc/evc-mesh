@@ -4,6 +4,7 @@ import {
   type APIRequestContext,
   type Page,
 } from "@playwright/test";
+import { loginWithRetry } from "./auth-helper";
 
 /**
  * E2E scenario: docs-paragraph-link
@@ -129,6 +130,11 @@ test.describe.serial("Docs — paragraph link survives edits (docs-paragraph-lin
   }
 
   test.beforeAll(async ({ browser }) => {
+    // A 429 retry honours the server's own Retry-After (up to 65s, see
+    // auth-helper.ts) — give the hook enough room for one such wait plus the
+    // rest of its own work (workspace lookup, document creation).
+    test.setTimeout(120_000);
+
     const context = await browser.newContext();
     await context.grantPermissions(["clipboard-read", "clipboard-write"]);
 
@@ -143,24 +149,12 @@ test.describe.serial("Docs — paragraph link survives edits (docs-paragraph-lin
     // step produces that file: global-setup.ts only validates env vars and
     // does no browser work. The spec therefore could not run at all, which
     // went unnoticed because it also skipped itself unconditionally.
-    const loginRes = await context.request.post("/api/v1/auth/login", {
-      data: {
-        email: process.env.E2E_USER_EMAIL,
-        password: process.env.E2E_USER_PASSWORD,
-      },
-    });
-    expect(
-      loginRes.status(),
-      `login as ${process.env.E2E_USER_EMAIL} must succeed — E2E credentials are wrong or the user is disabled`,
-    ).toBe(200);
-    const loginBody = (await loginRes.json()) as {
-      tokens?: { access_token?: string };
-    };
-    expect(
-      loginBody.tokens?.access_token,
-      "login must return an access token",
-    ).toBeTruthy();
-    accessToken = loginBody.tokens!.access_token!;
+    const { accessToken: token } = await loginWithRetry(
+      context.request,
+      process.env.E2E_USER_EMAIL!,
+      process.env.E2E_USER_PASSWORD!
+    );
+    accessToken = token;
 
     page = await context.newPage();
     // The page authenticates itself from the httpOnly refresh cookie the
