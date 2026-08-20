@@ -249,6 +249,18 @@ var declaredBodyTenantFields = map[string]string{
 	"agent_handler.go:reportSessionRequest.task_id":               "benign: a reference on the calling agent's own session",
 	"rule_handler.go:createRuleRequest.agent_id":                  "benign: narrows who a rule applies to, inside the guarded :ws_id/:proj_id it is created in",
 	"project_integration_handler.go:teamRelayResponse.project_id": "benign: a response struct, never bound from a request",
+
+	// POST /internal/secrets/materialize is the one route in this codebase
+	// deliberately registered outside the `api` group (e.* not api.*, see
+	// cmd/api/main.go), gated by middleware.SpawnAuth's shared spawn-infra
+	// secret instead of a per-caller JWT/agent-key. There is no tenant
+	// identity on the request to check these fields against — the caller
+	// IS the trusted spawner, already holding the same level of trust as
+	// MESH_INTEGRATION_ENCRYPTION_KEY itself — so the ids are the scope
+	// resolution input, not something a workspace guard could narrow.
+	"secret_materialize_handler.go:materializeRequest.workspace_id": "checked: possession of the SpawnAuth shared secret (X-Spawn-Token) IS the authorization for any workspace named in the body — the caller is trusted global spawn infra (mesh-dispatcher.py/fiddler.py), not a workspace member, by the same trust model as holding MESH_INTEGRATION_ENCRYPTION_KEY itself; see spawn_auth.go SpawnAuth doc comment",
+	"secret_materialize_handler.go:materializeRequest.project_id":   "benign: narrows the already-authorized workspace_id above to a sub-scope, inert reference — same SpawnAuth trust model",
+	"secret_materialize_handler.go:materializeRequest.agent_id":     "benign: narrows the already-authorized workspace_id above to a sub-scope, inert reference — same SpawnAuth trust model",
 }
 
 // bodyTenantFieldNames are the json field names that identify a tenant, or an

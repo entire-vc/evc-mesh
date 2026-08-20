@@ -11,9 +11,19 @@ import (
 
 // redisRateLimiter implements a sliding window counter using Redis.
 //
-// Key pattern : ratelimit:{key}:{window}
+// Key pattern : ratelimit:{name}:{key}:{window}
 //
-//	where {window} = Unix timestamp divided by 60 (current minute bucket).
+//	where {name} is this limiter's namespace (RateLimitConfig.Name — e.g.
+//	"auth-login" vs "auth-refresh") and {window} = Unix timestamp divided by
+//	60 (current minute bucket).
+//
+// {name} is load-bearing, not cosmetic. Two RateLimit() call sites configured
+// with different RPMs but the same KeyFunc (e.g. both keyed by client IP)
+// produce the same {key} for the same client — without {name} in the Redis
+// key they would INCR the identical counter and each just compares it against
+// its own RPM, so traffic on one route silently spends the other route's
+// budget. See the RateLimitConfig.Name doc comment for the live incident this
+// was found from.
 //
 // Algorithm   : INCR the counter for the current window bucket, set a 2-minute
 //
@@ -27,18 +37,21 @@ import (
 // as the INCR.
 type redisRateLimiter struct {
 	client *redis.Client
+	name   string
 	rpm    int
 }
 
-func newRedisRateLimiter(client *redis.Client, rpm int) *redisRateLimiter {
-	return &redisRateLimiter{client: client, rpm: rpm}
+func newRedisRateLimiter(client *redis.Client, name string, rpm int) *redisRateLimiter {
+	return &redisRateLimiter{client: client, name: name, rpm: rpm}
 }
 
 // windowKey returns the Redis key for the given rate-limit identity and the
-// current one-minute window bucket.
+// current one-minute window bucket, namespaced by this limiter's name so
+// distinct limiters (login vs refresh vs invite, ...) never share a counter
+// even when their KeyFunc happens to resolve to the same value.
 func (r *redisRateLimiter) windowKey(key string) string {
 	window := time.Now().Unix() / 60
-	return fmt.Sprintf("ratelimit:%s:%d", key, window)
+	return fmt.Sprintf("ratelimit:%s:%s:%d", r.name, key, window)
 }
 
 // allow returns true if the request is within the rate limit, and false if it
@@ -69,7 +82,7 @@ func (r *redisRateLimiter) allow(ctx context.Context, key string) (bool, error) 
 // unavailable the request is allowed through (fail-open) and the error is
 // logged to the Echo logger.
 func rateLimitRedis(cfg RateLimitConfig) echo.MiddlewareFunc {
-	rl := newRedisRateLimiter(cfg.RedisClient, cfg.RPM)
+	rl := newRedisRateLimiter(cfg.RedisClient, cfg.Name, cfg.RPM)
 
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {

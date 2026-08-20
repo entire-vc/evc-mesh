@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -41,12 +42,16 @@ func documentRows(docs ...domain.Document) *sqlmock.Rows {
 	rows := sqlmock.NewRows([]string{
 		"id", "project_id", "parent_id", "slug", "title", "storage_key",
 		"position", "version", "created_by", "created_by_type", "updated_by", "updated_by_type",
-		"created_at", "updated_at", "deleted_at", "created_by_name", "updated_by_name",
+		"created_at", "updated_at", "deleted_at",
+		"source_kind", "source_share", "source_path", "source_sha256", "synced_at", "external_author",
+		"created_by_name", "updated_by_name",
 	})
 	for _, d := range docs {
 		rows.AddRow(d.ID, d.ProjectID, d.ParentID, d.Slug, d.Title, d.StorageKey,
 			d.Position, d.Version, d.CreatedBy, d.CreatedByType, d.UpdatedBy, d.UpdatedByType,
-			d.CreatedAt, d.UpdatedAt, d.DeletedAt, d.CreatedByName, d.UpdatedByName)
+			d.CreatedAt, d.UpdatedAt, d.DeletedAt,
+			d.SourceKind, d.SourceShare, d.SourcePath, d.SourceSHA256, d.SyncedAt, d.ExternalAuthor,
+			d.CreatedByName, d.UpdatedByName)
 	}
 	return rows
 }
@@ -72,9 +77,28 @@ func sampleDocument() domain.Document {
 		UpdatedByType: &editorType,
 		CreatedAt:     now,
 		UpdatedAt:     now,
+		SourceKind:    domain.DocumentSourceOwn,
 		CreatedByName: &creatorName,
 		UpdatedByName: &editorName,
 	}
+}
+
+// sampleExternalDocument is a copy of a Team Relay page — the shape the copy
+// arm of chk_documents_source_shape requires: every source_* column populated,
+// external_author legitimately nil (see document_external_source migration —
+// Team Relay names no per-file author).
+func sampleExternalDocument() domain.Document {
+	d := sampleDocument()
+	d.ID = uuid.New()
+	share, path, sha := "share-abc123", "notes/runbook.md", strings.Repeat("a", 64)
+	syncedAt := d.CreatedAt
+	d.SourceKind = domain.DocumentSourceTeamRelay
+	d.SourceShare = &share
+	d.SourcePath = &path
+	d.SourceSHA256 = &sha
+	d.SyncedAt = &syncedAt
+	d.ExternalAuthor = nil
+	return d
 }
 
 func TestDocumentRepo_Create(t *testing.T) {
@@ -152,6 +176,38 @@ func TestDocumentRepo_GetByID(t *testing.T) {
 	require.NotNil(t, got.UpdatedByType)
 	assert.Equal(t, domain.ActorTypeAgent, *got.UpdatedByType)
 	assert.Empty(t, got.Body, "the body is not a column; the service fills it from storage")
+	assert.Equal(t, domain.DocumentSourceOwn, got.SourceKind, "sampleDocument is an own document")
+	assert.Nil(t, got.SourceShare)
+	assert.Nil(t, got.SourceSHA256)
+	assert.Nil(t, got.SyncedAt)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// A copy's five source_* columns have to survive the round trip through
+// documentRow just as faithfully as the own-document fields above — this is
+// what R3 will read to decide whether a copy is stale.
+func TestDocumentRepo_GetByID_ExternalDocumentCarriesItsSource(t *testing.T) {
+	repo, mock := newDocumentRepoMock(t)
+	doc := sampleExternalDocument()
+
+	mock.ExpectQuery("FROM documents d WHERE d.id = \\$1 AND d.deleted_at IS NULL").
+		WithArgs(doc.ID).
+		WillReturnRows(documentRows(doc))
+
+	got, err := repo.GetByID(context.Background(), doc.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+
+	assert.Equal(t, domain.DocumentSourceTeamRelay, got.SourceKind)
+	require.NotNil(t, got.SourceShare)
+	assert.Equal(t, *doc.SourceShare, *got.SourceShare)
+	require.NotNil(t, got.SourcePath)
+	assert.Equal(t, *doc.SourcePath, *got.SourcePath)
+	require.NotNil(t, got.SourceSHA256)
+	assert.Equal(t, *doc.SourceSHA256, *got.SourceSHA256)
+	require.NotNil(t, got.SyncedAt)
+	assert.Equal(t, *doc.SyncedAt, *got.SyncedAt)
+	assert.Nil(t, got.ExternalAuthor, "Team Relay names no per-file author today — nil is the honest value")
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 

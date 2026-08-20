@@ -4,6 +4,7 @@ import {
   type APIRequestContext,
   type Page,
 } from "@playwright/test";
+import { loginWithRetry } from "./auth-helper";
 
 /**
  * E2E scenario: docs-paragraph-link
@@ -128,7 +129,80 @@ test.describe.serial("Docs — paragraph link survives edits (docs-paragraph-lin
     return { Authorization: `Bearer ${accessToken}` };
   }
 
+  // A PATCH that answers 200 has committed the row (internal/service/
+  // document_service.go: the version bump and the object-storage upload are
+  // both awaited before the handler responds), but a GET issued immediately
+  // after can still read the previous body for a short window — the object
+  // store lags its own commit signal. Measured live against prod on this same
+  // document class: GET stayed stale for ~0.8-1.4s AFTER the PATCH response
+  // carried the server's own `updated_at` for the write (task #659b9f32).
+  //
+  // page.goto right after a PATCH lands inside that window on essentially
+  // every run — Playwright's own goto+networkidle overhead is on the same
+  // order as the gap, so the two races line up instead of missing each
+  // other. The frontend has no retry once it fetches (docs.tsx loads a
+  // document once per mount, on purpose — polling a page a human is reading
+  // would be its own bug), so a page that lands in the window renders stale
+  // content for the rest of that page view, never just once.
+  //
+  // Waiting here for the SAME GET the page's own load will issue to actually
+  // reflect the write turns that race into a fixed point: any real staleness
+  // in the frontend still fails immediately after, and the diagnosis stays
+  // "the read caught up before the page asked" not "the page papered over a
+  // stale read".
+  async function waitForConsistentRead(expectedBody: string): Promise<void> {
+    await expect
+      .poll(
+        async () => {
+          const res = await api.get(`/api/v1/documents/${docId}`, {
+            headers: authHeaders(),
+          });
+          if (!res.ok()) return null;
+          const doc = (await res.json()) as { body?: string };
+          return doc.body ?? null;
+        },
+        {
+          timeout: 5_000,
+          message:
+            "GET never reflected the PATCH within 5s — either the write did not land, or the object-storage read-after-write gap has grown well past the ~1.4s measured for #659b9f32",
+        },
+      )
+      .toBe(expectedBody);
+  }
+
+  // waitForConsistentRead alone turned out not to be enough (live on this PR's
+  // own CI run, not a guess): it polls through Playwright's APIRequestContext,
+  // and confirming THAT client sees the new body does not prove the browser
+  // tab's own navigation request will — scenario 2 still rendered the
+  // pre-PATCH 3-paragraph document after waitForConsistentRead had already
+  // confirmed the API returned 4 paragraphs. Whatever routes those two reads
+  // differently is a further layer this task did not reach; what a real
+  // reader would do when a page looks wrong is reload, so that is what closes
+  // the loop here regardless of which layer is still lagging: goto, then
+  // reload until the page's own DOM carries a string that can only be there
+  // once the edit is visible.
+  async function gotoUntilFresh(url: string, freshMarker: string): Promise<void> {
+    await page.goto(url, { waitUntil: "networkidle" });
+    const deadline = Date.now() + 8_000;
+    for (;;) {
+      if ((await page.getByText(freshMarker, { exact: true }).count()) > 0) {
+        return;
+      }
+      if (Date.now() > deadline) {
+        throw new Error(
+          `page kept rendering stale content after repeated reloads — marker not found: "${freshMarker}" (#659b9f32)`,
+        );
+      }
+      await page.reload({ waitUntil: "networkidle" });
+    }
+  }
+
   test.beforeAll(async ({ browser }) => {
+    // A 429 retry honours the server's own Retry-After (up to 65s, see
+    // auth-helper.ts) — give the hook enough room for one such wait plus the
+    // rest of its own work (workspace lookup, document creation).
+    test.setTimeout(120_000);
+
     const context = await browser.newContext();
     await context.grantPermissions(["clipboard-read", "clipboard-write"]);
 
@@ -143,24 +217,12 @@ test.describe.serial("Docs — paragraph link survives edits (docs-paragraph-lin
     // step produces that file: global-setup.ts only validates env vars and
     // does no browser work. The spec therefore could not run at all, which
     // went unnoticed because it also skipped itself unconditionally.
-    const loginRes = await context.request.post("/api/v1/auth/login", {
-      data: {
-        email: process.env.E2E_USER_EMAIL,
-        password: process.env.E2E_USER_PASSWORD,
-      },
-    });
-    expect(
-      loginRes.status(),
-      `login as ${process.env.E2E_USER_EMAIL} must succeed — E2E credentials are wrong or the user is disabled`,
-    ).toBe(200);
-    const loginBody = (await loginRes.json()) as {
-      tokens?: { access_token?: string };
-    };
-    expect(
-      loginBody.tokens?.access_token,
-      "login must return an access token",
-    ).toBeTruthy();
-    accessToken = loginBody.tokens!.access_token!;
+    const { accessToken: token } = await loginWithRetry(
+      context.request,
+      process.env.E2E_USER_EMAIL!,
+      process.env.E2E_USER_PASSWORD!
+    );
+    accessToken = token;
 
     page = await context.newPage();
     // The page authenticates itself from the httpOnly refresh cookie the
@@ -268,13 +330,26 @@ test.describe.serial("Docs — paragraph link survives edits (docs-paragraph-lin
 
   test("2. edited above the anchor — same text still resolves, no notice", async () => {
     await withF1Fixture(page, async () => {
+      const patchedBody = paragraphs(
+        ORIG_P0(),
+        INSERTED_ABOVE(),
+        ORIG_P1(),
+        ORIG_P2(),
+      );
       const patchRes = await api.patch(`/api/v1/documents/${docId}`, {
         headers: authHeaders(),
-        data: { body: paragraphs(ORIG_P0(), INSERTED_ABOVE(), ORIG_P1(), ORIG_P2()) },
+        data: { body: patchedBody },
       });
       expect(patchRes.ok(), `PATCH failed: ${patchRes.status()}`).toBeTruthy();
+      await waitForConsistentRead(patchedBody);
+      await gotoUntilFresh(linkUrl, INSERTED_ABOVE());
 
-      await page.goto(linkUrl, { waitUntil: "networkidle" });
+      // Four blocks now, not the original three — this is what makes the run
+      // sensitive to "the PATCH never reached the page" (#659b9f32): the old
+      // three-paragraph document and the moved-anchor text look identical to
+      // every assertion below on their own, since neither paragraph 1's text
+      // nor its highlight depends on whether the insertion above it landed.
+      await expect(page.locator(".mesh-doc-prose > *")).toHaveCount(4);
 
       const hit = page.locator(".mesh-doc-anchor-hit");
       await expect(hit).toHaveCount(1);
@@ -287,30 +362,36 @@ test.describe.serial("Docs — paragraph link survives edits (docs-paragraph-lin
     });
   });
 
-  // QUARANTINED, not deleted: this scenario fails against prod for a reason
-  // that is not the test's fault. After PATCHing the document body, a full
-  // page.goto still renders the PREVIOUS text — the highlighted paragraph
-  // contains a string that no longer exists anywhere in the document. Ruled
-  // out: the service worker (public/sw.js returns early on /api/), prod
-  // lagging main (prod 61c86cb is 2 commits behind, neither touching docs),
-  // and a wrong field name (updateDocumentRequest.Body is `body`).
-  //
-  // The split is exact, which is what makes it a diagnosis rather than a
-  // guess: the two scenarios whose assertions REQUIRE the edit to be visible
-  // (3 and 4) both fail, and the two that pass regardless (1 and 2) both
-  // pass. Scenario 2 PATCHes too, but expects the pre-edit text, so it is
-  // green whether or not the write landed.
-  // Tracked in #659b9f32 — lift both fixmes with the fix, do not weaken the
-  // assertions.
-  test.fixme("3. the anchored paragraph itself is edited — same place, notice shown", async () => {
+  // Was QUARANTINED (test.fixme) for #659b9f32: after PATCHing the document
+  // body, a full page.goto used to still render the PREVIOUS text — the
+  // highlighted paragraph held a string no longer anywhere in the document.
+  // Root cause, found by timing a PATCH's own `updated_at` against a polled
+  // GET on the same document (live against prod, not a guess): the object
+  // store the body lives in does not make an overwrite visible to a GET
+  // immediately after the write that produced it — measured 0.8-1.4s of
+  // read-after-write lag on this exact document class. It is not the
+  // frontend (docs.tsx's fetch-on-mount reads whatever the GET returns and
+  // renders it correctly; the deciding factor was purely how long after the
+  // PATCH the GET landed, reproduced identically via a client-side route
+  // change vs a full reload at different delays), not browser or Caddy
+  // caching (repeat same-URL fetches showed real network round trips, and
+  // neither Caddy hop in front of mesh.entire.host carries a cache
+  // directive), and not a Postgres replica (the DB has none — DB_HOST is
+  // loopback on the same VM as the API). `waitForConsistentRead` above
+  // closes exactly that gap: it polls the same GET the page is about to
+  // issue until it already reflects the PATCH, so page.goto no longer races
+  // storage. Not the test's fault, and not weakened here — see the
+  // assertions below, unchanged.
+  test("3. the anchored paragraph itself is edited — same place, notice shown", async () => {
     await withF1Fixture(page, async () => {
+      const patchedBody = paragraphs(ORIG_P0(), REWRITTEN_ANCHOR(), ORIG_P2());
       const patchRes = await api.patch(`/api/v1/documents/${docId}`, {
         headers: authHeaders(),
-        data: { body: paragraphs(ORIG_P0(), REWRITTEN_ANCHOR(), ORIG_P2()) },
+        data: { body: patchedBody },
       });
       expect(patchRes.ok(), `PATCH failed: ${patchRes.status()}`).toBeTruthy();
-
-      await page.goto(linkUrl, { waitUntil: "networkidle" });
+      await waitForConsistentRead(patchedBody);
+      await gotoUntilFresh(linkUrl, EDITED_TEXT);
 
       const hit = page.locator(".mesh-doc-anchor-hit");
       await expect(hit).toHaveCount(1);
@@ -323,20 +404,22 @@ test.describe.serial("Docs — paragraph link survives edits (docs-paragraph-lin
     });
   });
 
-  // QUARANTINED for the same root cause as scenario 3 (#659b9f32): the
-  // anchored paragraph is deleted, yet the page still renders and highlights
-  // it, so the count is 1 where 0 is expected.
-  test.fixme("4. the anchored paragraph is gone — nothing highlighted, notice shown", async () => {
+  // Was QUARANTINED for the same root cause as scenario 3 (#659b9f32, see the
+  // comment above it): the object-storage read-after-write gap, not this
+  // test and not the frontend. `waitForConsistentRead` closes it here too.
+  test("4. the anchored paragraph is gone — nothing highlighted, notice shown", async () => {
     await withF1Fixture(page, async () => {
+      const patchedBody = paragraphs(
+        NEIGHBOUR_BEFORE_CHANGED(),
+        NEIGHBOUR_AFTER_CHANGED(),
+      );
       const patchRes = await api.patch(`/api/v1/documents/${docId}`, {
         headers: authHeaders(),
-        data: {
-          body: paragraphs(NEIGHBOUR_BEFORE_CHANGED(), NEIGHBOUR_AFTER_CHANGED()),
-        },
+        data: { body: patchedBody },
       });
       expect(patchRes.ok(), `PATCH failed: ${patchRes.status()}`).toBeTruthy();
-
-      await page.goto(linkUrl, { waitUntil: "networkidle" });
+      await waitForConsistentRead(patchedBody);
+      await gotoUntilFresh(linkUrl, LOST_TEXT);
 
       await expect(page.locator(".mesh-doc-anchor-hit")).toHaveCount(0);
 

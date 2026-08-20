@@ -58,14 +58,34 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     try {
       const data = await api<PaginatedResponse<Task>>(
         `/api/v1/projects/${projectId}/tasks`,
-        { params: { page_size: "200", ...params } },
+        // include_description=false: descriptions were 703 KB of the 917 KB this
+        // call returned for a 200-task board, and nothing on a card renders them.
+        // Callers that need the text fetch the task itself. An older API that does
+        // not know the param ignores it and returns the full payload, so a
+        // frontend deploy that lands before the backend one is merely slow.
+        { params: { page_size: "200", include_description: "false", ...params } },
       );
       const items = data.items ?? [];
+      const prevById = get().tasksById;
       set({
         tasks: items,
         tasksById: {
-          ...get().tasksById,
-          ...Object.fromEntries(items.map((task) => [task.id, task])),
+          ...prevById,
+          ...Object.fromEntries(
+            items.map((task) => {
+              // Merge rather than overwrite: these items carry no description, and
+              // the slide-over renders currentTask.description from this cache
+              // while its own fetch is still in flight. A blind overwrite blanks
+              // the text of an already-opened task for that window.
+              const known = prevById[task.id]?.description;
+              return [
+                task.id,
+                task.description === undefined && known !== undefined
+                  ? { ...task, description: known }
+                  : task,
+              ] as const;
+            }),
+          ),
         },
         total: data.total_count ?? data.total ?? 0,
         page: data.page,
@@ -162,7 +182,15 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   },
 
   duplicateTask: async (task: Task): Promise<Task> => {
-    const req = buildDuplicateRequest(task);
+    // A task object from a board/list fetch carries no description — the board
+    // asks for the list without one. Copying straight from it would produce a
+    // duplicate whose description is silently empty, and nothing would report
+    // it. Today every caller happens to hold a task the slide-over already
+    // fetched in full; re-reading here means that stays true for callers that
+    // do not exist yet. `undefined` means "not sent"; an empty string is a real
+    // value and needs no round-trip.
+    const source = task.description === undefined ? await get().fetchTask(task.id) : task;
+    const req = buildDuplicateRequest(source);
     const newTask = await api<Task>(
       `/api/v1/projects/${task.project_id}/tasks`,
       { method: "POST", body: req },

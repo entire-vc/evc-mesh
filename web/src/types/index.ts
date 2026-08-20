@@ -246,7 +246,15 @@ export interface Task {
   project_id: string;
   status_id: string;
   title: string;
-  description: string;
+  /**
+   * Optional because list responses can be asked to omit it. The board fetches
+   * tasks with include_description=false — descriptions were 77% of that payload
+   * and no card renders one. `undefined` here means "not sent", not "empty";
+   * read has_description for the flag, and GET /tasks/:id for the text.
+   */
+  description?: string;
+  /** Always sent on list responses. True when the task has non-blank description text. */
+  has_description?: boolean;
   assignee_id: string | null;
   assignee_type: AssigneeType;
   assignee_name?: string | null;
@@ -274,6 +282,14 @@ export interface Task {
   recurring_schedule_id?: string | null;
   recurring_instance_number?: number | null;
   dod_checks?: Record<string, DodCheck>;
+  /**
+   * Who currently holds the exclusive work-lock, and until when. Both are
+   * omitted by the server when the task is not checked out. A checkout is what
+   * "an agent has this in their hands right now" actually means — the status
+   * column alone cannot say it, which is why the card renders it separately.
+   */
+  checked_out_by?: string | null;
+  checkout_expires?: string | null;
 }
 
 export interface Comment {

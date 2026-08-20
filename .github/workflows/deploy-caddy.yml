@@ -1,0 +1,92 @@
+name: Deploy Caddyfile to mesh VM (via hel01)
+
+# Ships deploy/caddy/mesh-vm.Caddyfile to /etc/caddy/Caddyfile on mesh-vm.
+# Fail-closed: `caddy validate` runs against the CANDIDATE file (uploaded to a
+# throwaway path, never the live path) before anything touches the live
+# config. A validate failure stops the job — nothing is copied over the
+# running file and `caddy reload` never runs. See docs/deploy-caddy.md.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'deploy/caddy/mesh-vm.Caddyfile'
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-caddy-prod
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup SSH
+        uses: webfactory/ssh-agent@v0.10.0
+        with:
+          ssh-private-key: ${{ secrets.DEPLOY_SSH_KEY }}
+
+      # CI reaches the private mesh VM only via the hel01 forwarding-only jump user.
+      # See docs/DEPLOY_HEL01.md.
+      - name: Configure hel01 jump
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          ssh-keyscan -H 66.151.34.194 >> ~/.ssh/known_hosts 2>/dev/null || true
+          {
+            echo "Host mesh-vm"
+            echo "  HostName 10.10.10.10"
+            echo "  User root"
+            echo "  ProxyJump hel01-jump"
+            echo "  StrictHostKeyChecking accept-new"
+            echo "Host hel01-jump"
+            echo "  HostName 66.151.34.194"
+            echo "  User ghdeploy"
+            echo "  StrictHostKeyChecking accept-new"
+          } >> ~/.ssh/config
+          chmod 600 ~/.ssh/config
+
+      # Upload the CANDIDATE to a throwaway path and validate it there.
+      # Nothing under /etc/caddy/ is touched by this step — a bad candidate
+      # never gets near the live file or a reload.
+      - name: Upload candidate + validate (fail-closed)
+        run: |
+          rsync -avz deploy/caddy/mesh-vm.Caddyfile mesh-vm:/tmp/Caddyfile.candidate
+          ssh mesh-vm 'caddy validate --config /tmp/Caddyfile.candidate --adapter caddyfile'
+
+      # Only reached if validate above exited 0.
+      - name: Backup, swap, reload (fail-closed)
+        run: |
+          ssh mesh-vm 'set -e
+            STAMP=$(date -u +%Y%m%d-%H%M%S)
+            cp -p /etc/caddy/Caddyfile "/etc/caddy/Caddyfile.bak.${STAMP}-pre-ci-deploy-${GITHUB_SHA:0:8}"
+            mv /tmp/Caddyfile.candidate /etc/caddy/Caddyfile
+            caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+            systemctl reload caddy'
+        env:
+          GITHUB_SHA: ${{ github.sha }}
+
+      - name: Smoke test
+        run: |
+          for i in $(seq 1 10); do
+            CODE=$(curl -s -o /dev/null -w '%{http_code}' https://mesh.entire.host/api/v1/healthz/version) || CODE=000
+            if [ "$CODE" = "200" ]; then
+              echo "Smoke OK: healthz/version → 200"
+              exit 0
+            fi
+            echo "Waiting for reload to settle (attempt $i/10, got $CODE)..."
+            sleep 2
+          done
+          echo "::error::Smoke test FAILED: /api/v1/healthz/version never returned 200 after reload"
+          exit 1
+
+      # Confirms the file that's actually live now matches what we just shipped —
+      # the drift check (caddy-drift-check.yml) runs on a schedule, this makes
+      # a bad deploy fail loud in the SAME run instead of waiting for the next
+      # scheduled tick.
+      - name: Confirm no drift post-deploy
+        run: ./scripts/caddy-drift-check.sh deploy/caddy/mesh-vm.Caddyfile

@@ -86,7 +86,13 @@ func setupRecallGraphBenchData(t *testing.T, db *sqlx.DB, memCount, edgeCount in
 				"($%d, $%d, $%d, 'bench content', 'workspace', 'agent', 1.0, $%d, '{}', NOW(), NOW())",
 				base, base+1, base+2, base+3,
 			)
-			args = append(args, id, wsID, "bench-mem-"+id.String()[:8], importance)
+			// Key off the row's index, not the first 8 hex of its UUID. The
+			// truncated form gives a 32-bit space, and `uq_mem_ws_key` is a
+			// UNIQUE constraint — at the 5000 rows this bench seeds that is a
+			// birthday collision roughly 1 run in 340, surfacing as
+			// `duplicate key value violates constraint "uq_mem_ws_key"` in a
+			// test about query latency. The index is unique by construction.
+			args = append(args, id, wsID, fmt.Sprintf("bench-mem-%06d", batchStart+i), importance)
 		}
 		_, err := db.ExecContext(ctx, sb.String(), args...)
 		require.NoError(t, err, "bulk memory insert (batch starting at %d)", batchStart)

@@ -29,6 +29,21 @@ type RateLimitConfig struct {
 	// in-memory token bucket, enabling shared state across multiple API instances.
 	// When nil, the in-memory token bucket is used (single-instance mode).
 	RedisClient *redis.Client
+	// Name namespaces this limiter's counters in Redis (e.g. "auth-login",
+	// "auth-refresh", "invite-accept"). REQUIRED whenever RedisClient is set.
+	//
+	// Without it, two RateLimit() call sites that happen to produce the same
+	// KeyFunc value (e.g. both keyed by the same client IP) silently share ONE
+	// Redis counter even though each was configured with its own RPM — every
+	// INCR from either route counts against both limits. Found live 2026-08-20
+	// (`#603f340a`): /auth/login (5 RPM) and /auth/refresh (60 RPM) both used
+	// RateLimitKeyByIP, so routine refresh traffic from the agent fleet alone
+	// exhausted the shared counter and login got 429'd for a reason that had
+	// nothing to do with login attempts. Proven live: one POST /auth/refresh
+	// (garbage token, otherwise rejected 401) incremented the exact Redis key
+	// /auth/login's next check reads. RPM alone cannot express "these two
+	// routes must not share a bucket" — the key namespace has to say it.
+	Name string
 }
 
 // limiterEntry wraps a token-bucket limiter with the last-used timestamp
@@ -125,6 +140,14 @@ func RateLimit(cfg RateLimitConfig) echo.MiddlewareFunc {
 
 	// Prefer Redis-backed limiter when a client is provided.
 	if cfg.RedisClient != nil {
+		if cfg.Name == "" {
+			// Fail loud at startup, not silently at request time. An empty
+			// Name here reproduces the exact bucket-collision class this
+			// field exists to prevent (see the Name doc comment) — better a
+			// panic on boot than two limiters quietly sharing a counter in
+			// prod for weeks.
+			panic("middleware.RateLimit: Name is required when RedisClient is set (each Redis-backed limiter needs its own key namespace)")
+		}
 		return rateLimitRedis(cfg)
 	}
 

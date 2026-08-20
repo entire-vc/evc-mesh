@@ -934,3 +934,77 @@ describe("DocsPage — links to a paragraph", () => {
     expect(screen.queryByText(/no longer in this document/i)).toBeNull();
   });
 });
+
+describe("DocsPage — the discussion under the page", () => {
+  const doc = makeDoc({ id: "doc-1", title: "Deploy" });
+  const BODY = "Run the migration first, then swap the image.\n";
+
+  /** One anchored comment, quoting words that really are in BODY. */
+  function comment() {
+    return {
+      id: "dc-1",
+      document_id: "doc-1",
+      parent_comment_id: null,
+      author_id: "u1",
+      author_type: "user",
+      author_name: "Pavel",
+      body: "Say why the order matters.",
+      anchor: {
+        exact: "Run the migration first",
+        prefix: "",
+        suffix: "",
+        start: 0,
+        end: 23,
+        orphaned: false,
+      },
+      resolved_at: null,
+      resolved_by: null,
+      resolved_by_type: null,
+      created_at: "2026-08-19T10:00:00Z",
+      updated_at: "2026-08-19T10:00:00Z",
+    };
+  }
+
+  function mockWithComments(items: unknown[]) {
+    mockRoutes([doc], (path, opts) => {
+      if (path === "/api/v1/documents/doc-1" && !opts?.method) {
+        return Promise.resolve({ ...doc, body: BODY });
+      }
+      if (path === "/api/v1/documents/doc-1/comments") {
+        return Promise.resolve({ items, has_more: false });
+      }
+      return undefined;
+    });
+  }
+
+  it("renders the tree OUTSIDE the element the comment layer measures", async () => {
+    // The load-bearing structural invariant, and the reason this test is at page
+    // level rather than in the component's own file. `doc-measured-body` is
+    // flattened into "the text of this document" to locate each quote. If the
+    // discussion is rendered inside it, every comment body joins the haystack —
+    // and a quote starts resolving to the text of a comment about it. That
+    // failure is silent, gets worse the more people talk, and no assertion
+    // inside doc-comment-tree.test.tsx can see it, because the component does
+    // not choose where it is mounted.
+    mockWithComments([comment()]);
+    renderDocs("doc-1");
+
+    const tree = await screen.findByTestId("doc-comment-tree");
+    const measured = screen.getByTestId("doc-measured-body");
+
+    expect(measured).toBeInTheDocument();
+    expect(measured.contains(tree)).toBe(false);
+    // Positive control on the probe itself: `contains` must be capable of
+    // returning true here, or the assertion above passes for a container that
+    // matched nothing.
+    expect(measured.contains(screen.getByTestId("doc-view"))).toBe(true);
+  });
+
+  it("shows no section on a page with no comments", async () => {
+    mockWithComments([]);
+    renderDocs("doc-1");
+
+    await screen.findByTestId("doc-view");
+    expect(screen.queryByTestId("doc-comment-tree")).not.toBeInTheDocument();
+  });
+});

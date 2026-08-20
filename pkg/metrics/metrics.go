@@ -5,6 +5,7 @@
 package metrics
 
 import (
+	"log"
 	"strconv"
 	"time"
 
@@ -134,6 +135,21 @@ var (
 		},
 		[]string{"result"},
 	)
+	// IntegrationEncryptionActive is 1 when integration credentials
+	// (project_integrations.agent_key, Telegram bot tokens) are actually being
+	// encrypted at rest, and 0 when the process is storing them in the clear
+	// because MESH_INTEGRATION_ENCRYPTION_KEY is missing or malformed.
+	//
+	// It exists because those two situations are otherwise indistinguishable
+	// from a working one at every layer a human looks at: the API returns 200,
+	// writes succeed, and the only evidence is the shape of bytes in a column
+	// nobody reads. Set once at startup — the key is read once per process.
+	IntegrationEncryptionActive = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "mesh_integration_encryption_active",
+			Help: "1 if integration credentials are encrypted at rest, 0 if stored as plaintext",
+		},
+	)
 )
 
 // RecordMCPToolCall records a single MCP tool call with its outcome status.
@@ -179,4 +195,18 @@ func RecordMemoryRecall(searchMode string) {
 // key).
 func RecordAgentAuth(result string) {
 	AgentAuthTotal.WithLabelValues(result).Inc()
+}
+
+// SetIntegrationEncryptionState publishes the encryption-at-rest state for
+// integration credentials. Called once at startup with the state resolved by
+// pkg/encryption; state is "ok", "invalid" or "absent", and required reports
+// whether the deployment demanded encryption.
+func SetIntegrationEncryptionState(state string, required bool) {
+	if state == "ok" {
+		IntegrationEncryptionActive.Set(1)
+		return
+	}
+	IntegrationEncryptionActive.Set(0)
+	log.Printf("metrics: integration encryption INACTIVE (state=%s required=%t) — "+
+		"credentials are being stored as plaintext", state, required)
 }

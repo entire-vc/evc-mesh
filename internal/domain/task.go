@@ -58,13 +58,26 @@ const (
 
 // Task is the central entity -- a unit of work that can be assigned to users or agents.
 type Task struct {
-	ID           uuid.UUID    `json:"id" db:"id"`
-	ProjectID    uuid.UUID    `json:"project_id" db:"project_id"`
-	StatusID     uuid.UUID    `json:"status_id" db:"status_id"`
-	Title        string       `json:"title" db:"title"`
-	Description  string       `json:"description" db:"description"`
-	AssigneeID   *uuid.UUID   `json:"assignee_id" db:"assignee_id"`
-	AssigneeType AssigneeType `json:"assignee_type" db:"assignee_type"`
+	ID        uuid.UUID `json:"id" db:"id"`
+	ProjectID uuid.UUID `json:"project_id" db:"project_id"`
+	StatusID  uuid.UUID `json:"status_id" db:"status_id"`
+	Title     string    `json:"title" db:"title"`
+	// Description is the heaviest field on a task by a wide margin and the board
+	// does not render it: on the Mesh dev project it was 703 911 of the 916 923
+	// bytes (77%) that GET /projects/:id/tasks?page_size=200 put on the wire, to
+	// draw cards that show a title, an assignee, a priority and some labels.
+	//
+	// `omitempty` so a list asked for with include_description=false drops the key
+	// outright rather than sending 200 empty strings — and so a client can tell
+	// "not sent" from "sent, and empty". Same arrangement as Document.Body.
+	Description string `json:"description,omitempty" db:"description"`
+	// HasDescription carries the one bit of the description the board actually
+	// uses — the little "has a description" glyph on a card — so dropping the text
+	// removes data without removing the affordance. Always set on list responses,
+	// regardless of whether Description itself was included.
+	HasDescription bool         `json:"has_description" db:"-"`
+	AssigneeID     *uuid.UUID   `json:"assignee_id" db:"assignee_id"`
+	AssigneeType   AssigneeType `json:"assignee_type" db:"assignee_type"`
 	// AssignedBy records whether the current assignee was set by a human, a rule engine, or the system.
 	// When set to AssignmentSourceHuman, only another human-source call may override the assignment.
 	AssignedBy AssignmentSource `json:"assigned_by" db:"assigned_by"`

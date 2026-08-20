@@ -70,20 +70,29 @@ export function saveDocTreeWidth(width: number): void {
 const RAIL_KEY = "mesh_docs_comments_rail";
 
 /**
- * Whether the comments rail is open. Defaults to open.
+ * Whether the comments rail is open. Defaults to closed.
  *
- * A closed-by-default rail is how a feature ships and nobody finds it: the only
- * other sign that a document has comments is a highlight in text you have to
- * already be reading. Open by default, and remembered once the reader has an
- * opinion — the same treatment the tree width gets, and for the same reason.
+ * It defaulted to open while the rail was the *only* surface: a closed rail
+ * would have been a feature nobody finds, since the sole other sign of a
+ * comment is a highlight in text you have to already be reading. The thread
+ * tree under the document (#D7) removed that condition — discovery now happens
+ * below the text, on every width, without anyone opening anything.
+ *
+ * With both surfaces open at once a wide screen showed the same discussion
+ * twice, under the same `COMMENTS` heading, and gave up its right third to do
+ * it. Pavel's call, 2026-08-20 (`#a4a8db69`): the rail starts closed and the
+ * tree is the reading surface. Nothing is lost — the rail still opens itself
+ * the moment a reader selects text and starts a comment (`docs.tsx`, the draft
+ * effect), which is when a working surface is actually wanted, and the choice
+ * is remembered once the reader has made one.
  */
 export function loadDocCommentsRailOpen(): boolean {
   try {
     const raw = localStorage.getItem(RAIL_KEY);
-    if (raw === null) return true;
+    if (raw === null) return false;
     return raw === "1";
   } catch {
-    return true;
+    return false;
   }
 }
 

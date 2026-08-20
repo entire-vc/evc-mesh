@@ -37,6 +37,13 @@ type documentRow struct {
 	UpdatedAt     time.Time         `db:"updated_at"`
 	DeletedAt     *time.Time        `db:"deleted_at"`
 
+	SourceKind     domain.DocumentSource `db:"source_kind"`
+	SourceShare    *string               `db:"source_share"`
+	SourcePath     *string               `db:"source_path"`
+	SourceSHA256   *string               `db:"source_sha256"`
+	SyncedAt       *time.Time            `db:"synced_at"`
+	ExternalAuthor *string               `db:"external_author"`
+
 	// Computed by documentEnrichedSelect, not stored — see actorNameExpr.
 	CreatedByName *string `db:"created_by_name"`
 	UpdatedByName *string `db:"updated_by_name"`
@@ -47,7 +54,8 @@ type documentRow struct {
 // serves the plain reads and the ones that JOIN projects (both tables have
 // created_at). See artifactSelectCols for why no query here uses `SELECT *`.
 const documentSelectCols = `d.id, d.project_id, d.parent_id, d.slug, d.title, d.storage_key, d.position, d.version,
-	d.created_by, d.created_by_type, d.updated_by, d.updated_by_type, d.created_at, d.updated_at, d.deleted_at`
+	d.created_by, d.created_by_type, d.updated_by, d.updated_by_type, d.created_at, d.updated_at, d.deleted_at,
+	d.source_kind, d.source_share, d.source_path, d.source_sha256, d.synced_at, d.external_author`
 
 // documentEnrichedSelect is documentSelectCols plus the two display names, each
 // resolved through to the agent or user that authored the change rather than read
@@ -75,6 +83,14 @@ func (r *documentRow) toDomain() domain.Document {
 		CreatedAt:     r.CreatedAt,
 		UpdatedAt:     r.UpdatedAt,
 		DeletedAt:     r.DeletedAt,
+
+		SourceKind:     r.SourceKind,
+		SourceShare:    r.SourceShare,
+		SourcePath:     r.SourcePath,
+		SourceSHA256:   r.SourceSHA256,
+		SyncedAt:       r.SyncedAt,
+		ExternalAuthor: r.ExternalAuthor,
+
 		CreatedByName: r.CreatedByName,
 		UpdatedByName: r.UpdatedByName,
 	}

@@ -17,6 +17,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
+	"github.com/entire-vc/evc-mesh/pkg/encryption"
 	"github.com/entire-vc/evc-mesh/pkg/metrics"
 
 	"github.com/redis/go-redis/v9"
@@ -48,6 +49,21 @@ var (
 func main() {
 	// 1. Load configuration from environment.
 	cfg := config.Load()
+
+	// Say out loud, once, whether integration credentials are actually being
+	// encrypted at rest. Previously the only signal was a log line emitted
+	// lazily on the first Encrypt/Decrypt call — on a quiet instance that can
+	// be days after boot, buried in request logs, and it read identically
+	// whether the key was missing or merely mistyped. Publishing it as a gauge
+	// makes "the control is off" alertable instead of something discovered by
+	// reading rows. Checked before anything is opened: it needs no
+	// dependencies, and a deployment that demanded encryption should not get
+	// as far as a half-initialised process.
+	if err := encryption.Validate(); err != nil {
+		log.Fatalf("Refusing to start: %v", err)
+	}
+	encState, encRequired := encryption.Status()
+	metrics.SetIntegrationEncryptionState(encState.String(), encRequired)
 
 	// 2. Connect to PostgreSQL.
 	db, err := postgres.NewDB(cfg.Database.DSN())
@@ -203,6 +219,13 @@ func main() {
 	webhookService := service.NewWebhookService(webhookRepo, service.WithSlackService(slackService))
 
 	projectIntegrationRepo := postgres.NewProjectIntegrationRepo(db)
+
+	// secretRepo also backs the write-only CRUD handlers (SecretService) —
+	// that wiring lands in the S3 API-handler PR, on top of this one.
+	secretRepo := postgres.NewSecretRepo(db)
+	secretMaterializationService := service.NewSecretMaterializationService(secretRepo)
+	secretMaterializeHandler := handler.NewSecretMaterializeHandler(secretMaterializationService)
+	mw.CheckSpawnTokenConfigured()
 
 	agentActLogRepo := postgres.NewAgentActivityLogRepo(db)
 	// The cache wrapper is applied at construction so that EVERY consumer of
@@ -780,6 +803,7 @@ func main() {
 		RPM:         cfg.RateLimit.AuthRPM,
 		KeyFunc:     mw.RateLimitKeyByIP,
 		RedisClient: sharedRedis,
+		Name:        "auth-login",
 	}))
 	loginGroup.POST("/register", authHandler.Register)
 	loginGroup.POST("/login", authHandler.Login)
@@ -799,6 +823,7 @@ func main() {
 		RPM:         cfg.RateLimit.RefreshRPM,
 		KeyFunc:     mw.RateLimitKeyByIP,
 		RedisClient: sharedRedis,
+		Name:        "auth-refresh",
 	}))
 	refreshGroup.POST("/refresh", authHandler.Refresh)
 
@@ -809,6 +834,7 @@ func main() {
 		RPM:         cfg.RateLimit.AuthRPM,
 		KeyFunc:     mw.RateLimitKeyByIP,
 		RedisClient: sharedRedis,
+		Name:        "invite-accept",
 	}))
 	invitePublicGroup.GET("/:token", inviteHandler.GetByToken)
 	invitePublicGroup.POST("/:token/accept", inviteHandler.Accept)
@@ -849,6 +875,7 @@ func main() {
 		RPM:         cfg.RateLimit.APIRPM,
 		KeyFunc:     mw.RateLimitKeyByIP,
 		RedisClient: sharedRedis,
+		Name:        "workspace-icon",
 	})
 	v1.GET("/workspaces/:ws_id/icon", workspaceHandler.GetIcon, iconRateLimit)
 	// HEAD as well: it is what `curl -I` and cache validators send, and Echo
@@ -876,6 +903,7 @@ func main() {
 		RPM:         cfg.RateLimit.APIRPM,
 		KeyFunc:     mw.RateLimitKeyByActor,
 		RedisClient: sharedRedis,
+		Name:        "api",
 	}))
 
 	// Auth - protected.
@@ -1180,6 +1208,13 @@ func main() {
 	// alias documented in the integrations UI.
 	e.POST("/webhooks/github", vcsLinkHandler.GitHubWebhook)
 	e.POST("/api/v1/integrations/github/webhook", vcsLinkHandler.GitHubWebhook)
+
+	// Secret materialization — deliberately OUTSIDE the `api` group. DualAuth
+	// there accepts a user JWT or ANY agent's API key; this route must accept
+	// neither, since either would let something wielding an ordinary agent
+	// identity decrypt secrets. Gated by mw.SpawnAuth() alone — see its doc
+	// comment for the trust model.
+	e.POST("/internal/secrets/materialize", secretMaterializeHandler.Materialize, mw.SpawnAuth())
 
 	// Integration config routes.
 	api.GET("/workspaces/:ws_id/integrations", integrationHandler.List)

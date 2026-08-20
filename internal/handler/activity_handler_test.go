@@ -154,6 +154,112 @@ func TestActivityHandler_ListByTask_KeepsChangesWithPermission(t *testing.T) {
 	}
 }
 
+func newTaskMovedTestEntry() domain.ActivityLog {
+	return domain.ActivityLog{
+		ID:         uuid.New(),
+		EntityType: "task",
+		EntityID:   uuid.New(),
+		Action:     "task.moved",
+		ActorID:    uuid.New(),
+		ActorType:  domain.ActorTypeAgent,
+		Changes:    json.RawMessage(`{"source":"api","status":{"new":"In Progress","old":"Todo"}}`),
+	}
+}
+
+func newTaskAssignedTestEntry() domain.ActivityLog {
+	return domain.ActivityLog{
+		ID:         uuid.New(),
+		EntityType: "task",
+		EntityID:   uuid.New(),
+		Action:     "task.assigned",
+		ActorID:    uuid.New(),
+		ActorType:  domain.ActorTypeAgent,
+		Changes:    json.RawMessage(`{"assignee_id":{"new":"` + uuid.New().String() + `","old":null},"assignee_type":{"new":"agent","old":""}}`),
+	}
+}
+
+// TestActivityHandler_ListByTask_KeepsStatusChangesForAgentWithoutPermission
+// is the regression test for task a43785cc: GET /tasks/{id}/activity was
+// reporting Changes=null on 820 of 820 task.moved events. The write side
+// (MoveTask/logActivity in task_service.go) was never the bug — a prod DB
+// read confirmed every task.moved row has always carried a populated
+// Changes.status.{old,new}. The bug is this handler's redaction: an agent
+// caller never holds PermExportAuditLog (see callerHasExportAuditLogPerm),
+// so the blanket redaction added for cab1e85f nils Changes on every action
+// for every agent — including task.moved and task.assigned, whose payload
+// (status names, assignee UUIDs, a closed set of enum/reason values) was
+// never the leak vector cab1e85f closed. review-verify-driver reads exactly
+// Changes.status off task.moved to compute how long a card has sat in its
+// current status; seeing it always null, it fell back to task.updated_at,
+// which the driver's own comments reset, and misjudged fresh cards as stale.
+//
+// It is a negative control by construction: on the handler as merged for
+// cab1e85f (blanket redaction, no per-action allowlist) this fails for both
+// cases below, because Changes was nil for task.moved/task.assigned too —
+// confirmed by running it against `git checkout origin/main --
+// internal/handler/activity_handler.go` before this fix landed.
+func TestActivityHandler_ListByTask_KeepsStatusChangesForAgentWithoutPermission(t *testing.T) {
+	taskID := uuid.New()
+	cases := []struct {
+		name  string
+		entry domain.ActivityLog
+	}{
+		{"task.moved", newTaskMovedTestEntry()},
+		{"task.assigned", newTaskAssignedTestEntry()},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			entry := tc.entry
+			mockSvc := &MockActivityLogService{
+				ListByTaskFunc: func(ctx context.Context, tid uuid.UUID, pg pagination.Params) (*pagination.Page[domain.ActivityLog], error) {
+					assert.Equal(t, taskID, tid)
+					return pagination.NewPage([]domain.ActivityLog{entry}, 1, pg), nil
+				},
+			}
+			h, _ := setupActivityTest(mockSvc)
+
+			// Agent caller — mw.IsAgent(c) is true, so
+			// callerHasExportAuditLogPerm always returns false regardless of
+			// role, exactly like review-verify-driver's requests.
+			rec := doListByTask(t, h, taskID, true, "")
+			require.Equal(t, http.StatusOK, rec.Code)
+
+			var page pagination.Page[domain.ActivityLog]
+			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &page))
+			require.Len(t, page.Items, 1)
+			require.NotNil(t, page.Items[0].Changes,
+				"status/assignee diffs carry no free text — must survive redaction for an agent caller")
+			assert.JSONEq(t, string(entry.Changes), string(page.Items[0].Changes),
+				"the full status/assignee diff must reach the caller unmodified")
+		})
+	}
+}
+
+// TestActivityHandler_ListByTask_StillRedactsTaskUpdatedForAgent pins that
+// widening the allowlist did not widen too far: task.updated carries
+// title/description diffs (the actual cab1e85f leak vector) and must stay
+// redacted for an agent caller exactly as before.
+func TestActivityHandler_ListByTask_StillRedactsTaskUpdatedForAgent(t *testing.T) {
+	taskID := uuid.New()
+	entry := newActivityTestEntry() // Action: "task.updated", carries leakedSecret
+	mockSvc := &MockActivityLogService{
+		ListByTaskFunc: func(ctx context.Context, tid uuid.UUID, pg pagination.Params) (*pagination.Page[domain.ActivityLog], error) {
+			return pagination.NewPage([]domain.ActivityLog{entry}, 1, pg), nil
+		},
+	}
+	h, _ := setupActivityTest(mockSvc)
+
+	rec := doListByTask(t, h, taskID, true, "")
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var page pagination.Page[domain.ActivityLog]
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &page))
+	require.Len(t, page.Items, 1)
+	assert.JSONEq(t, "null", string(page.Items[0].Changes))
+	assert.NotContains(t, rec.Body.String(), leakedSecret)
+}
+
 // TestActivityHandler_ListByTask_InvalidTaskID pins the existing 400 path so
 // the redaction change above it in the handler cannot have altered it.
 func TestActivityHandler_ListByTask_InvalidTaskID(t *testing.T) {
