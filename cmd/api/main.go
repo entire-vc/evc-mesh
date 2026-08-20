@@ -220,6 +220,13 @@ func main() {
 
 	projectIntegrationRepo := postgres.NewProjectIntegrationRepo(db)
 
+	// secretRepo also backs the write-only CRUD handlers (SecretService) —
+	// that wiring lands in the S3 API-handler PR, on top of this one.
+	secretRepo := postgres.NewSecretRepo(db)
+	secretMaterializationService := service.NewSecretMaterializationService(secretRepo)
+	secretMaterializeHandler := handler.NewSecretMaterializeHandler(secretMaterializationService)
+	mw.CheckSpawnTokenConfigured()
+
 	agentActLogRepo := postgres.NewAgentActivityLogRepo(db)
 	// The cache wrapper is applied at construction so that EVERY consumer of
 	// AgentService gets it — the three auth middlewares and the WebSocket
@@ -1196,6 +1203,13 @@ func main() {
 	// alias documented in the integrations UI.
 	e.POST("/webhooks/github", vcsLinkHandler.GitHubWebhook)
 	e.POST("/api/v1/integrations/github/webhook", vcsLinkHandler.GitHubWebhook)
+
+	// Secret materialization — deliberately OUTSIDE the `api` group. DualAuth
+	// there accepts a user JWT or ANY agent's API key; this route must accept
+	// neither, since either would let something wielding an ordinary agent
+	// identity decrypt secrets. Gated by mw.SpawnAuth() alone — see its doc
+	// comment for the trust model.
+	e.POST("/internal/secrets/materialize", secretMaterializeHandler.Materialize, mw.SpawnAuth())
 
 	// Integration config routes.
 	api.GET("/workspaces/:ws_id/integrations", integrationHandler.List)
