@@ -2892,6 +2892,15 @@ func (m *MockDocumentCommentRepository) FailCreateWith(err error) *MockDocumentC
 	return m
 }
 
+// Count is how many comments were actually written, so a test asserting that a
+// refused request stored nothing can check the table rather than infer it from
+// the error it got back.
+func (m *MockDocumentCommentRepository) Count() int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return len(m.items)
+}
+
 func (m *MockDocumentCommentRepository) Create(_ context.Context, comment *domain.DocumentComment) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

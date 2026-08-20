@@ -29,8 +29,10 @@ const maxAnchorTextBytes = 2000
 
 // DocumentBodyReader loads a document together with its markdown, inside a
 // workspace. It is the narrow slice of DocumentService this file needs: the body
-// is fetched from object storage by the service, not by the repository, and the
-// anchor guard below cannot check an offset without the text it points into.
+// is fetched from object storage by the service, not by the repository, and
+// neither direction of the anchor can be done without the text — the guard
+// cannot check an offset it cannot read, and the resolver cannot find a quote in
+// a document it has not got.
 type DocumentBodyReader interface {
 	GetByIDInWorkspace(ctx context.Context, id, workspaceID uuid.UUID) (*domain.Document, error)
 }
@@ -39,10 +41,11 @@ type documentCommentService struct {
 	commentRepo  repository.DocumentCommentRepository
 	documentRepo repository.DocumentRepository
 
-	// documentBody loads the markdown an anchor's offsets are checked against.
-	// Required, not an option: with it absent the anchor guard fails closed and
-	// every anchored comment is refused, so a call site that forgot it must fail
-	// to compile rather than to run.
+	// documentBody loads the markdown the anchor is measured against — checked
+	// against, for offsets a client sent; searched, for a quote the server is asked
+	// to locate. Required, not an option: with it absent both paths fail closed and
+	// every anchored comment is refused, so a call site that forgot it must fail to
+	// compile rather than to run.
 	documentBody DocumentBodyReader
 
 	// The @-mention dependencies, all optional and all nil-checked at the point
@@ -107,9 +110,10 @@ func WithDocumentCommentWSPublisher(p WSPublisher) DocumentCommentServiceOption 
 // check rather than a convenience: every entry point resolves the document inside
 // the caller's workspace first, so a comment id or a document id from another
 // tenant has nothing to attach to.
-// documentBody is used on one path only — checking that an anchor's offsets
-// point at the anchor's own quote — so the ordinary comment, which has no
-// offsets, still costs no object-storage read.
+// documentBody is used only where the comment says something about position —
+// checking offsets a client measured, or resolving a quote the server measures —
+// so the ordinary comment, which says nothing about position, still costs no
+// object-storage read.
 func NewDocumentCommentService(
 	commentRepo repository.DocumentCommentRepository,
 	documentRepo repository.DocumentRepository,
@@ -154,18 +158,35 @@ func (s *documentCommentService) Create(ctx context.Context, input CreateDocumen
 	if err != nil {
 		return nil, err
 	}
+
+	quote := strings.TrimSpace(input.Quote)
+	if verr := requireOneWayOfSayingWhere(anchor, quote, input.QuotePrefix, input.QuoteSuffix); verr != nil {
+		return nil, verr
+	}
+
 	var parentID *uuid.UUID
 	if input.ParentCommentID != nil {
 		parent, perr := s.requireReplyableParent(ctx, *input.ParentCommentID, doc.ID)
 		if perr != nil {
 			return nil, perr
 		}
-		if anchor != nil {
-			// A reply with its own anchor is two claims about what one thread is
-			// about, and nothing keeps them pointing at the same words once the
-			// document is edited. The reply inherits the root's anchor instead.
+		// A reply with its own anchor is two claims about what one thread is
+		// about, and nothing keeps them pointing at the same words once the
+		// document is edited. The reply inherits the root's anchor instead.
+		//
+		// Named by whichever field the caller actually used, so an agent that sent
+		// a quote is not told about an `anchor` it never mentioned. Refused here,
+		// before either is turned into a position, so a reply carrying a quote is
+		// told the real problem rather than "no such quote" from a resolution that
+		// should not have been attempted — and does not pay a body fetch to be
+		// turned away.
+		if anchor != nil || quote != "" {
+			field := "anchor"
+			if quote != "" {
+				field = "quote"
+			}
 			return nil, apierror.ValidationError(map[string]string{
-				"anchor": "a reply inherits its parent's anchor and cannot carry one of its own",
+				field: "a reply inherits its parent's anchor and cannot carry one of its own",
 			})
 		}
 		id := parent.ID
@@ -180,15 +201,23 @@ func (s *documentCommentService) Create(ctx context.Context, input CreateDocumen
 		return nil, err
 	}
 
-	// After the reply check, deliberately: a reply that carries an anchor at all
-	// is refused whatever its offsets say, and "a reply inherits its parent's
-	// anchor" is the answer that tells the caller what to change.
+	// Both directions of the anchor need the document's markdown, and both are
+	// placed here for the same two reasons.
 	//
-	// And after the mention check, for cost rather than meaning: resolving slugs
-	// is a lookup we already hold, while this fetches the document body from
-	// object storage. A request wrong in both ways should not pay for the
-	// download to be told about the slug.
-	if aerr := s.requireAnchorInThisDocument(ctx, doc, input.WorkspaceID, anchor); aerr != nil {
+	// After the reply check: a reply that says anything about position is refused
+	// whatever it says, and "a reply inherits its parent's anchor" is the answer
+	// that tells the caller what to change.
+	//
+	// After the mention check, for cost rather than meaning: resolving slugs is a
+	// lookup we already hold, while this fetches the document body from object
+	// storage. A request wrong in both ways should not pay for the download to be
+	// told about the slug.
+	if quote != "" {
+		anchor, err = s.anchorFromQuote(ctx, doc, input.WorkspaceID, quote, input.QuotePrefix, input.QuoteSuffix)
+		if err != nil {
+			return nil, err
+		}
+	} else if aerr := s.requireAnchorInThisDocument(ctx, doc, input.WorkspaceID, anchor); aerr != nil {
 		return nil, aerr
 	}
 
@@ -434,6 +463,90 @@ func (s *documentCommentService) enriched(ctx context.Context, comment *domain.D
 	return comment
 }
 
+// requireOneWayOfSayingWhere refuses a request that answers "what is this comment
+// about" twice, or that supplies only the narrowing context for an answer it
+// never gave.
+//
+// `anchor` and `quote` are alternatives, not a pair. An anchor carries offsets
+// and comes from a caller that measured a selection; a quote carries text and
+// asks the server to measure. A request with both is a caller asserting where the
+// text is while also asking where it is, and the server would have to pick one of
+// the two answers silently on every write — which is the class of failure this
+// whole endpoint is being changed to remove, not one to reintroduce in a new
+// field.
+//
+// The quote_prefix/quote_suffix half is the same rule read the other way: they
+// disambiguate a quote and mean nothing without one. Silently ignoring them would
+// let a caller believe they had narrowed a search that never ran.
+func requireOneWayOfSayingWhere(anchor *domain.DocumentCommentAnchor, quote, quotePrefix, quoteSuffix string) error {
+	if quote == "" {
+		if quotePrefix != "" || quoteSuffix != "" {
+			return apierror.ValidationError(map[string]string{
+				"quote": "quote is required when quote_prefix or quote_suffix is given: they narrow a " +
+					"quote to one of its occurrences and have nothing to narrow on their own",
+			})
+		}
+		return nil
+	}
+	if anchor != nil {
+		return apierror.ValidationError(map[string]string{
+			"quote": "give either quote or anchor, not both: anchor carries offsets you measured, " +
+				"quote asks the server to measure them. Send quote alone if you do not have a " +
+				"selection to measure — that is what it is for.",
+		})
+	}
+	if len(quotePrefix) > maxAnchorTextBytes || len(quoteSuffix) > maxAnchorTextBytes {
+		// Neither is stored — the anchor's neighbourhood is read from the document
+		// at the match — so this is not a column limit but a bound on the work:
+		// context is scored against every occurrence of the quote, so an unbounded
+		// one turns a repeated word into an arbitrarily long scan.
+		return apierror.ValidationError(map[string]string{
+			"quote_prefix": fmt.Sprintf(
+				"quote_prefix and quote_suffix must each be at most %d bytes; they exist to tell "+
+					"repeats of one phrase apart, and a sentence either side is enough",
+				maxAnchorTextBytes),
+		})
+	}
+	return nil
+}
+
+// anchorFromQuote locates the quote in the document's markdown and returns the
+// anchor for it — the server doing the measuring that the caller cannot.
+//
+// It resolves against pkg/mdoc, the same package the anchor guard below reads
+// backwards and the same one POST /documents/:doc_id/resolve-anchor calls. That
+// is deliberate and it is the point of the card: a second implementation of "find
+// this quote" would put an agent's comment and a human's comment on the same
+// sentence in different places, and the disagreement is invisible until somebody
+// notices two highlights where there should be one.
+//
+// Refusals are mapped by anchorResolveError, shared with resolve-anchor for the
+// same reason. In particular the ambiguous case travels intact so that
+// handleError can render its match count as a number the caller can act on:
+// "occurs 4 times" tells an agent to add context, "ambiguous" tells it nothing.
+func (s *documentCommentService) anchorFromQuote(
+	ctx context.Context,
+	doc *domain.Document,
+	workspaceID uuid.UUID,
+	quote, quotePrefix, quoteSuffix string,
+) (*domain.DocumentCommentAnchor, error) {
+	body, err := s.documentBodyFor(ctx, doc, workspaceID, "quote")
+	if err != nil {
+		return nil, err
+	}
+
+	resolved, err := mdoc.ResolveQuote(body, quote, quotePrefix, quoteSuffix)
+	if err != nil {
+		return nil, anchorResolveError(err)
+	}
+
+	// The neighbourhood is the document's, not the caller's: an anchor describes
+	// where the text is, so it can re-find itself after an edit even if the caller
+	// remembered its surroundings slightly wrong.
+	start, end := resolved.Start, resolved.End
+	return domain.NewDocumentCommentAnchor(resolved.Exact, resolved.Prefix, resolved.Suffix, &start, &end), nil
+}
+
 // requireAnchorInThisDocument refuses an anchor whose offsets do not point at its
 // own quote in this document's markdown.
 //
@@ -475,7 +588,7 @@ func (s *documentCommentService) requireAnchorInThisDocument(
 		return nil
 	}
 
-	body, err := s.documentBodyFor(ctx, doc, workspaceID)
+	body, err := s.documentBodyFor(ctx, doc, workspaceID, "anchor.start")
 	if err != nil {
 		return err
 	}
@@ -501,13 +614,21 @@ func (s *documentCommentService) requireAnchorInThisDocument(
 // documentBodyFor returns the document's markdown.
 //
 // It fails closed. A body that cannot be read is not evidence that the anchor is
-// fine — it is the absence of evidence either way, and the whole point of this
-// check is that a wrong anchor is indistinguishable from a right one once it is
-// in the table.
+// fine — it is the absence of evidence either way, and the whole point of the
+// check above is that a wrong anchor is indistinguishable from a right one once
+// it is in the table. The quote path fails closed for a nearer reason: a quote
+// resolved against a body that failed to load as "" would come back "no such
+// quote in this document", which is true, actionable-looking, and wrong about
+// why.
+//
+// field is the request field to blame in a refusal — `anchor.start` for offsets a
+// caller measured, `quote` for text the server was asked to measure. A validation
+// error naming a field the caller never sent reads as a bug in their request.
 func (s *documentCommentService) documentBodyFor(
 	ctx context.Context,
 	doc *domain.Document,
 	workspaceID uuid.UUID,
+	field string,
 ) (string, error) {
 	if s.documentBody == nil {
 		return "", apierror.ServiceUnavailable("document body reader not configured")
@@ -523,7 +644,8 @@ func (s *documentCommentService) documentBodyFor(
 		// An empty body has no range to select, so an anchored comment on one is
 		// either a client bug or a body that failed to load as an empty string.
 		return "", apierror.ValidationError(map[string]string{
-			"anchor.start": "this document has no body, so there is no range for an anchor to point at",
+			field: "this document has no body, so there is no text for an anchor to point at " +
+				"or for a quote to be found in",
 		})
 	}
 	return withBody.Body, nil
