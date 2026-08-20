@@ -687,3 +687,235 @@ func TestWatch_DeletionTellsTheWatchers(t *testing.T) {
 	assert.Equal(t, DocumentDeletedEvent, calls[0].EventType)
 	assert.Contains(t, calls[0].Body, "Billing", "the title is the message: the page is gone")
 }
+
+// --- refusals ---------------------------------------------------------------
+//
+// Every one of these is a path where answering "fine" would write a
+// subscription row for somebody who is not entitled to one, or for a document
+// that is not there. They are cheap to get wrong precisely because the happy
+// path keeps working when they are.
+
+// TestWatch_RefusesAnUnauthenticatedCaller — the subscriber is read from the
+// authenticated actor, never from the request, so an absent actor has no
+// honest answer.
+func TestWatch_RefusesAnUnauthenticatedCaller(t *testing.T) {
+	w := setupWatch(t)
+	doc := w.create(t, "Billing", "start")
+	ctx := context.Background() // no actor
+
+	for name, call := range map[string]func() (*domain.DocumentWatchState, error){
+		"watch":   func() (*domain.DocumentWatchState, error) { return w.watch.Watch(ctx, doc.ID, w.docs.wsID) },
+		"unwatch": func() (*domain.DocumentWatchState, error) { return w.watch.Unwatch(ctx, doc.ID, w.docs.wsID) },
+		"state":   func() (*domain.DocumentWatchState, error) { return w.watch.State(ctx, doc.ID, w.docs.wsID) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, err := call()
+			require.Error(t, err)
+			assert.Nil(t, got)
+		})
+	}
+}
+
+// TestWatch_RefusesAnActorOfAnUnknownKind guards the (id, kind) pair from the
+// other side: a kind the watcher table's CHECK would reject must be refused
+// before it reaches the insert, not after.
+func TestWatch_RefusesAnActorOfAnUnknownKind(t *testing.T) {
+	w := setupWatch(t)
+	doc := w.create(t, "Billing", "start")
+	ctx := actorctx.WithActor(context.Background(), uuid.New(), domain.ActorType("service"))
+
+	_, err := w.watch.Watch(ctx, doc.ID, w.docs.wsID)
+
+	require.Error(t, err)
+}
+
+// TestWatch_RefusesADocumentInAnotherWorkspace — the workspace check is what
+// makes the subscription tenant-scoped; without it a caller could follow a page
+// they cannot read and receive its title and edit counts.
+func TestWatch_RefusesADocumentInAnotherWorkspace(t *testing.T) {
+	w := setupWatch(t)
+	doc := w.create(t, "Billing", "start")
+	ctx := w.userCtx(uuid.New(), "Stranger")
+
+	_, err := w.watch.Watch(ctx, doc.ID, uuid.New()) // some other workspace
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Document")
+}
+
+// TestWatch_RefusesAMissingDocument — same for an id that resolves to nothing.
+func TestWatch_RefusesAMissingDocument(t *testing.T) {
+	w := setupWatch(t)
+	ctx := w.userCtx(uuid.New(), "Bob")
+
+	for name, call := range map[string]func() (*domain.DocumentWatchState, error){
+		"watch":   func() (*domain.DocumentWatchState, error) { return w.watch.Watch(ctx, uuid.New(), w.docs.wsID) },
+		"unwatch": func() (*domain.DocumentWatchState, error) { return w.watch.Unwatch(ctx, uuid.New(), w.docs.wsID) },
+		"state":   func() (*domain.DocumentWatchState, error) { return w.watch.State(ctx, uuid.New(), w.docs.wsID) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := call()
+			require.Error(t, err)
+		})
+	}
+}
+
+// TestWatch_AutoSubscribeIgnoresAnActorItCannotFile — the automatic path runs
+// alongside somebody else's write and must never fail it, but it also must not
+// write a row whose kind the table would reject.
+func TestWatch_AutoSubscribeIgnoresAnActorItCannotFile(t *testing.T) {
+	w := setupWatch(t)
+	doc := w.create(t, "Billing", "start")
+	ctx := context.Background()
+
+	w.watch.AutoSubscribe(ctx, doc.ID, uuid.New(), "service", domain.WatchSourceCommenter)
+	w.watch.AutoSubscribe(ctx, doc.ID, uuid.Nil, "user", domain.WatchSourceCommenter)
+
+	live, err := w.repo.ListLiveWatchers(ctx, doc.ID)
+	require.NoError(t, err)
+	assert.Empty(t, live)
+}
+
+// TestWatch_SweepSurvivesADocumentDeletedMidWindow. The notice outlives the
+// page when a delete lands between the last edit and the sweep; it must be
+// closed with a reason rather than left pending forever or crashing the sweep.
+func TestWatch_SweepSurvivesADocumentDeletedMidWindow(t *testing.T) {
+	w := setupWatch(t)
+	doc := w.create(t, "Billing", "start")
+
+	require.NoError(t, w.repo.Subscribe(context.Background(), domain.DocumentWatcher{
+		DocumentID: doc.ID, WatcherID: uuid.New(), WatcherKind: "user", Source: domain.WatchSourceExplicit,
+	}, true))
+	w.edit(t, doc, uuid.New(), "an edit")
+
+	remover := uuid.New()
+	require.NoError(t, w.docs.svc.Delete(w.userCtx(remover, "Alice"), doc.ID, w.docs.wsID, remover, domain.ActorTypeUser))
+	w.notify.mu.Lock()
+	w.notify.calls = nil // the deletion notice is a different test's subject
+	w.notify.mu.Unlock()
+
+	w.advance(w.window + time.Minute)
+	sent, err := w.watch.SweepPendingNotices(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 1, sent, "the notice is still claimed and closed")
+
+	assert.Empty(t, w.notify.Calls(), "no edit notification for a page that no longer exists")
+	n := w.repo.noticeAt(0)
+	require.NotNil(t, n.DispatchError, "and the reason is recorded rather than left as silence")
+}
+
+// TestWatch_NewServiceFallsBackToTheDefaultWindow — a zero or negative window
+// would make every notice instantly eligible and undo the coalescing entirely.
+func TestWatch_NewServiceFallsBackToTheDefaultWindow(t *testing.T) {
+	svc := NewDocumentWatchService(newMemWatchRepo(), nil, nil, nil, 0).(*documentWatchService)
+	assert.Equal(t, defaultQuietWindow, svc.quietWindow)
+
+	svc = NewDocumentWatchService(newMemWatchRepo(), nil, nil, nil, -time.Hour).(*documentWatchService)
+	assert.Equal(t, defaultQuietWindow, svc.quietWindow)
+}
+
+// TestWatch_CommentSubscribesItsAuthorAndTellsTheOthers exercises the comment
+// path end to end through the comment service, which is where the two halves
+// (auto-subscribe, notify) are actually wired.
+func TestWatch_CommentSubscribesItsAuthorAndTellsTheOthers(t *testing.T) {
+	w := setupWatch(t)
+	doc := w.create(t, "Billing", "start")
+
+	watcher := uuid.New()
+	require.NoError(t, w.repo.Subscribe(context.Background(), domain.DocumentWatcher{
+		DocumentID: doc.ID, WatcherID: watcher, WatcherKind: "user", Source: domain.WatchSourceExplicit,
+	}, true))
+
+	author := uuid.New()
+	// The commenter was not watching before; commenting subscribes them.
+	w.watch.AutoSubscribe(context.Background(), doc.ID, author, "user", domain.WatchSourceCommenter)
+	w.watch.NotifyComment(context.Background(), NotifyDocumentCommentInput{
+		Document: doc, WorkspaceID: w.docs.wsID, CommentID: uuid.New(),
+		Body: "what about refunds?", ActorID: author, ActorKind: "user", ActorName: "Alice",
+	})
+
+	st, err := w.repo.GetState(context.Background(), doc.ID, author, "user")
+	require.NoError(t, err)
+	assert.True(t, st.Watching)
+	assert.Equal(t, domain.WatchSourceCommenter, st.Source)
+
+	calls := w.notify.Calls()
+	require.Len(t, calls, 1, "the commenter is not notified about their own comment")
+	require.NotNil(t, calls[0].TargetUserID)
+	assert.Equal(t, watcher, *calls[0].TargetUserID)
+}
+
+// TestWatch_NotifyCommentIsSilentWithNoWatchers — no watchers is not an error,
+// and must not produce a lookup-failure log that would devalue the real one.
+func TestWatch_NotifyCommentIsSilentWithNoWatchers(t *testing.T) {
+	w := setupWatch(t)
+	doc := w.create(t, "Billing", "start")
+
+	w.watch.NotifyComment(context.Background(), NotifyDocumentCommentInput{
+		Document: doc, WorkspaceID: w.docs.wsID, CommentID: uuid.New(),
+		Body: "nobody follows this", ActorID: uuid.New(), ActorKind: "user",
+	})
+	w.watch.NotifyDeleted(w.userCtx(uuid.New(), "Alice"), doc, w.docs.wsID)
+
+	assert.Empty(t, w.notify.Calls())
+	assert.Empty(t, w.agents.Calls())
+}
+
+// TestWatch_CommentServiceWiresBothHalves is the wiring test.
+//
+// Everything else here exercises the watch service directly. This one goes
+// through DocumentCommentService.Create, because that is where the two halves
+// are actually connected — and a missing option there would disable the whole
+// comment path while every other test in this file still passed.
+func TestWatch_CommentServiceWiresBothHalves(t *testing.T) {
+	base := setupDocumentCommentService(t)
+
+	repo := newMemWatchRepo()
+	notify := NewMockNotificationService()
+	watch := NewDocumentWatchService(repo, base.docs, notify, NewMockAgentNotifyService(), time.Minute)
+
+	agents := NewMockAgentService()
+	users := NewMockUserRepository()
+	mentionedUser := uuid.New()
+	users.AddUser(base.wsID, &domain.User{ID: mentionedUser, Username: "pavel", Name: "Pavel"})
+
+	base.svc = NewDocumentCommentService(base.comments, base.docs, base.docs,
+		WithDocumentCommentAgentService(agents),
+		WithDocumentCommentUserRepo(users),
+		WithDocumentCommentNotificationService(notify),
+		WithDocumentCommentWatch(watch),
+	)
+
+	ctx := context.Background()
+	// A bystander who follows the page, and the person the comment names — who
+	// also follows it, and must not be told twice.
+	bystander := uuid.New()
+	for _, id := range []uuid.UUID{bystander, mentionedUser} {
+		require.NoError(t, repo.Subscribe(ctx, domain.DocumentWatcher{
+			DocumentID: base.documentID, WatcherID: id, WatcherKind: "user", Source: domain.WatchSourceExplicit,
+		}, true))
+	}
+
+	in := base.createInput()
+	in.Body = "@pavel does this still hold?"
+	_, err := base.svc.Create(ctx, in)
+	require.NoError(t, err)
+
+	// Half one: commenting subscribed the author.
+	st, err := repo.GetState(ctx, base.documentID, base.author, "user")
+	require.NoError(t, err)
+	assert.True(t, st.Watching, "joining the conversation subscribes you to it")
+	assert.Equal(t, domain.WatchSourceCommenter, st.Source)
+
+	// Half two: the watchers were told — the bystander through the watch path,
+	// the named person through the mention path, and neither of them twice.
+	byEvent := map[string][]uuid.UUID{}
+	for _, call := range notify.Calls() {
+		require.NotNil(t, call.TargetUserID)
+		byEvent[call.EventType] = append(byEvent[call.EventType], *call.TargetUserID)
+	}
+	assert.Equal(t, []uuid.UUID{bystander}, byEvent[DocumentCommentedEvent],
+		"only the bystander gets the watch copy")
+	assert.Equal(t, []uuid.UUID{mentionedUser}, byEvent[DocumentMentionedEvent],
+		"the named person gets the mention, which is the more specific of the two")
+}
