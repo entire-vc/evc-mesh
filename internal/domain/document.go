@@ -6,6 +6,17 @@ import (
 	"github.com/google/uuid"
 )
 
+// DocumentSource says whether a document was written here or copied in from an
+// external source. See migrations/20260820108_document_external_source.sql for
+// why this is a discriminator column rather than something inferred from which
+// of the source_* fields are NULL.
+type DocumentSource string
+
+const (
+	DocumentSourceOwn       DocumentSource = "own"
+	DocumentSourceTeamRelay DocumentSource = "team_relay"
+)
+
 // Document is a markdown page inside a project. Only its metadata lives in
 // Postgres; the markdown itself is an object in S3/MinIO addressed by StorageKey.
 //
@@ -46,6 +57,26 @@ type Document struct {
 	CreatedAt time.Time  `json:"created_at" db:"created_at"`
 	UpdatedAt time.Time  `json:"updated_at" db:"updated_at"`
 	DeletedAt *time.Time `json:"deleted_at,omitempty" db:"deleted_at"`
+
+	// SourceKind, SourceShare, SourcePath, SourceSHA256 and SyncedAt describe
+	// where this document came from. On an own document (the only kind this PR
+	// can produce — nothing yet writes the others) SourceKind is "own" and the
+	// rest are nil; on a copy all five are populated. See
+	// migrations/20260820108_document_external_source.sql for the full
+	// reasoning, including why this is enforced in the database rather than
+	// trusted to whichever caller writes the row.
+	SourceKind   DocumentSource `json:"source_kind" db:"source_kind"`
+	SourceShare  *string        `json:"source_share,omitempty" db:"source_share"`
+	SourcePath   *string        `json:"source_path,omitempty" db:"source_path"`
+	SourceSHA256 *string        `json:"source_sha256,omitempty" db:"source_sha256"`
+	SyncedAt     *time.Time     `json:"synced_at,omitempty" db:"synced_at"`
+
+	// ExternalAuthor is who the source says wrote the page, as free text — Team
+	// Relay names no per-file author anywhere in its sync or web-publish APIs
+	// (verified against entire-vc/evc-team-relay@main, 2026-08-20), so this is
+	// nil on every copy today. It is not a foreign key: the author is not a
+	// principal in this workspace and has no rights to grant.
+	ExternalAuthor *string `json:"external_author,omitempty" db:"external_author"`
 
 	// Computed (not DB columns — populated via correlated subqueries in SELECT,
 	// the same arrangement as Comment.AuthorName).
