@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 
@@ -62,6 +63,14 @@ func (c capturingArg) Match(v driver.Value) bool {
 
 func capture(into *string) sqlmock.Argument { return capturingArg{into: into} }
 
+// trAgentKey builds a Team Relay agent key matching the shape Upsert
+// requires ("tr_agent_" + 48 lowercase hex chars) from a single repeated hex
+// digit, so each test case can stay visually distinct without hand-counting
+// hex digits. hexDigit must be one of 0-9a-f.
+func trAgentKey(hexDigit string) string {
+	return "tr_agent_" + strings.Repeat(hexDigit, 48)
+}
+
 func sampleIntegration(agentKey string) *domain.ProjectIntegration {
 	now := time.Now().UTC()
 	return &domain.ProjectIntegration{
@@ -80,7 +89,7 @@ func TestUpsertSendsCiphertextToTheDatabase(t *testing.T) {
 	setEncryptionKey(t, 91)
 	repo, mock := newProjectIntegrationRepoMock(t)
 
-	plaintext := "tr_agent_0123456789abcdef"
+	plaintext := trAgentKey("1")
 	var captured string
 
 	mock.ExpectBegin()
@@ -123,7 +132,7 @@ func TestUpsertRequestsThePlaintextExemptionOnlyWhenItCannotEncrypt(t *testing.T
 			WillReturnResult(sqlmock.NewResult(0, 1))
 		mock.ExpectCommit()
 
-		require.NoError(t, repo.Upsert(context.Background(), sampleIntegration("tr_agent_plain")))
+		require.NoError(t, repo.Upsert(context.Background(), sampleIntegration(trAgentKey("2"))))
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
 
@@ -136,7 +145,7 @@ func TestUpsertRequestsThePlaintextExemptionOnlyWhenItCannotEncrypt(t *testing.T
 			WillReturnResult(sqlmock.NewResult(0, 1))
 		mock.ExpectCommit()
 
-		require.NoError(t, repo.Upsert(context.Background(), sampleIntegration("tr_agent_plain")))
+		require.NoError(t, repo.Upsert(context.Background(), sampleIntegration(trAgentKey("3"))))
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
 
@@ -162,8 +171,39 @@ func TestUpsertRollsBackWhenTheWriteFails(t *testing.T) {
 		WillReturnError(errors.New("boom"))
 	mock.ExpectRollback()
 
-	err := repo.Upsert(context.Background(), sampleIntegration("tr_agent_something"))
+	err := repo.Upsert(context.Background(), sampleIntegration(trAgentKey("4")))
 	require.Error(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// Upsert must refuse a team_relay AgentKey that doesn't match the expected
+// "tr_agent_" + 48 hex chars shape, and refuse it BEFORE opening a
+// transaction — a ciphertext-shaped value (the f824032d double-encryption
+// bug) must fail loudly here, on write, rather than silently landing in
+// Postgres and surfacing as a 401 against Team Relay a day later.
+func TestUpsertRejectsAMalformedTeamRelayAgentKey(t *testing.T) {
+	setEncryptionKey(t, 131)
+	repo, mock := newProjectIntegrationRepoMock(t)
+	// No ExpectBegin: the malformed value must be caught before any DB call.
+
+	cases := []string{
+		"",                                    // handled separately (no-op), not this path
+		"tr_agent_short",                      // too short
+		"tr_agent_" + strings.Repeat("a", 47), // one char short
+		"tr_agent_" + strings.Repeat("a", 49), // one char long
+		"tr_agent_" + strings.Repeat("G", 48), // uppercase, not hex
+		"not_even_the_right_prefix",
+		// A ciphertext-shaped value — exactly the f824032d incident shape.
+		"enc:v1:" + strings.Repeat("Q", 108),
+	}
+	for _, bad := range cases {
+		if bad == "" {
+			continue
+		}
+		err := repo.Upsert(context.Background(), sampleIntegration(bad))
+		require.Error(t, err, "expected rejection for %q", bad)
+		assert.Contains(t, err.Error(), "tr_agent_")
+	}
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -173,7 +213,7 @@ func TestUpsertPropagatesABeginFailure(t *testing.T) {
 
 	mock.ExpectBegin().WillReturnError(errors.New("no connection"))
 
-	require.Error(t, repo.Upsert(context.Background(), sampleIntegration("tr_agent_x")))
+	require.Error(t, repo.Upsert(context.Background(), sampleIntegration(trAgentKey("5"))))
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 

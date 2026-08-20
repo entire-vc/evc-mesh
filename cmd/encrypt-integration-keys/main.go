@@ -82,6 +82,62 @@ func requireKey() error {
 	return nil
 }
 
+// maxUnwrapLayers bounds the loop in unwrapLayers. Real data has never needed
+// more than 2 (the 2026-08-20 double-encryption incident, task f824032d); the
+// margin exists only so genuinely corrupt data fails loudly instead of
+// looping forever.
+const maxUnwrapLayers = 4
+
+// unwrapLayers decrypts stored repeatedly until the result is no longer
+// itself ciphertext, returning the true plaintext and how many layers were
+// stripped to get there.
+//
+// This exists because a single encryption.IsEncrypted(stored) check — "does
+// it carry the enc:v1: prefix?" — cannot distinguish three states that all
+// look identical to a prefix-only check: genuine plaintext (0 layers),
+// legacy encrypted-but-unprefixed data written before the prefix existed —
+// pkg/encryption's "state 3" (1 layer, needs re-wrapping with the prefix),
+// and data that was encrypted twice (2+ layers). The 2026-08-20 incident was
+// exactly the second case misclassified as the first: a row Upserted through
+// the pre-#657 repo code (encrypted, no prefix yet) was mistaken for
+// plaintext by the old prefix-only check and encrypted a second time on top
+// of its own ciphertext. Task f824032d.
+func unwrapLayers(stored string) (plain string, layers int, err error) {
+	cur := stored
+	for layers = 0; layers < maxUnwrapLayers; layers++ {
+		if encryption.IsEncrypted(cur) {
+			next, derr := encryption.Decrypt(cur)
+			if derr != nil {
+				return "", layers, derr
+			}
+			cur = next
+			continue
+		}
+		// Untagged: Decrypt tries base64-decode + AEAD-open and returns the
+		// input unchanged, with no error, when either step fails. That
+		// unchanged result is the signal that cur is true plaintext rather
+		// than another layer — the untagged branch never errors, so this
+		// loop only ever exits via convergence or the layer cap.
+		next, _ := encryption.Decrypt(cur)
+		if next == cur {
+			return cur, layers, nil
+		}
+		cur = next
+	}
+	return "", layers, fmt.Errorf(
+		"did not converge after %d layers — possible corrupt data or a credential that happens to look like ciphertext",
+		maxUnwrapLayers)
+}
+
+// pendingRow pairs a row that needs a rewrite with its already-unwrapped
+// plaintext, so the write loop below never has to guess which of r.stored /
+// r.plain is safe to feed to Encrypt.
+type pendingRow struct {
+	row
+	plain  string
+	layers int
+}
+
 // backfill is separated from run so it can be driven against a mock database:
 // the round-trip check and the abort paths are the parts worth testing, and
 // they are the parts hardest to reach through a real connection.
@@ -91,19 +147,31 @@ func backfill(db *sql.DB, dryRun bool, projectFilter string) error {
 		return err
 	}
 
-	var pending []row
+	var pending []pendingRow
 	alreadyEncrypted := 0
 	for _, r := range rows {
-		if encryption.IsEncrypted(r.stored) {
+		plain, layers, uerr := unwrapLayers(r.stored)
+		if uerr != nil {
+			return fmt.Errorf("row %s: %w", r.id, uerr)
+		}
+		// Exactly one layer, and the stored form already carries the
+		// current prefix: this row is already in the target shape. Leave
+		// it alone — a backfill that rewrites (and re-nonces) rows it
+		// doesn't need to touch is a backfill nobody trusts to re-run.
+		if layers == 1 && encryption.IsEncrypted(r.stored) {
 			alreadyEncrypted++
 			continue
 		}
-		pending = append(pending, r)
+		// layers == 0: genuine plaintext, first encryption.
+		// layers >= 2: over-encrypted (the f824032d bug shape) — unwrapLayers
+		// already recovered the true plaintext underneath; encrypt that,
+		// not r.stored.
+		pending = append(pending, pendingRow{row: r, plain: plain, layers: layers})
 	}
 
 	fmt.Printf("rows with a credential: %d\n", len(rows))
 	fmt.Printf("  already encrypted   : %d\n", alreadyEncrypted)
-	fmt.Printf("  to encrypt          : %d\n", len(pending))
+	fmt.Printf("  to fix              : %d\n", len(pending))
 
 	if len(pending) == 0 {
 		fmt.Println("nothing to do")
@@ -117,7 +185,7 @@ func backfill(db *sql.DB, dryRun bool, projectFilter string) error {
 	defer func() { _ = tx.Rollback() }()
 
 	for _, r := range pending {
-		sealed, err := encryption.Encrypt(r.stored)
+		sealed, err := encryption.Encrypt(r.plain)
 		if err != nil {
 			return fmt.Errorf("row %s: encrypt: %w", r.id, err)
 		}
@@ -127,15 +195,23 @@ func backfill(db *sql.DB, dryRun bool, projectFilter string) error {
 		if err != nil {
 			return fmt.Errorf("row %s: verify decrypt: %w", r.id, err)
 		}
-		if back != r.stored {
+		if back != r.plain {
 			return errors.New("row " + r.id + ": round trip did not reproduce the original value — aborting, no rows changed")
 		}
 		if !encryption.IsEncrypted(sealed) {
 			return errors.New("row " + r.id + ": produced value is not marked encrypted — aborting")
 		}
 
-		fmt.Printf("  %s project=%s type=%s: %d chars -> %d chars (%s)\n",
-			r.id, r.projectID, r.intType, len(r.stored), len(sealed), encryption.Prefix+"…")
+		// Never print r.plain itself — only its shape (length + a short,
+		// non-identifying prefix), which is what an operator or an
+		// acceptance check needs to confirm the recovered value looks like a
+		// real credential rather than leftover ciphertext.
+		plainPrefix := r.plain
+		if len(plainPrefix) > 9 {
+			plainPrefix = plainPrefix[:9]
+		}
+		fmt.Printf("  %s project=%s type=%s: stored %d chars (%d layer(s)) -> plaintext %d chars, prefix %q -> resealed %d chars\n",
+			r.id, r.projectID, r.intType, len(r.stored), r.layers, len(r.plain), plainPrefix, len(sealed))
 
 		if dryRun {
 			continue
@@ -169,24 +245,36 @@ func backfill(db *sql.DB, dryRun bool, projectFilter string) error {
 	return verify(db, projectFilter)
 }
 
-// verify re-reads through a fresh query and asserts that no unencrypted
-// credential is left behind, so the exit code reflects the end state rather
-// than the fact that the UPDATEs did not error.
+// verify re-reads through a fresh query and asserts every row is in the
+// canonical single-encrypted shape — not merely "carries the prefix", which
+// a double-encrypted row also does. That stronger check is what makes this
+// tool's own re-run the idempotency proof for task f824032d's acceptance
+// criterion #3, rather than something argued from reading the diff.
 func verify(db *sql.DB, projectFilter string) error {
 	rows, err := load(db, projectFilter)
 	if err != nil {
 		return err
 	}
-	left := 0
+	plaintextLeft, overEncryptedLeft := 0, 0
 	for _, r := range rows {
-		if !encryption.IsEncrypted(r.stored) {
-			left++
+		_, layers, uerr := unwrapLayers(r.stored)
+		if uerr != nil {
+			return fmt.Errorf("post-check: row %s: %w", r.id, uerr)
+		}
+		switch {
+		case layers == 0:
+			plaintextLeft++
+		case layers >= 2:
+			overEncryptedLeft++
 		}
 	}
-	if left != 0 {
-		return fmt.Errorf("post-check: %d row(s) still hold a plaintext credential", left)
+	if plaintextLeft != 0 {
+		return fmt.Errorf("post-check: %d row(s) still hold a plaintext credential", plaintextLeft)
 	}
-	fmt.Printf("post-check: all %d row(s) with a credential are encrypted\n", len(rows))
+	if overEncryptedLeft != 0 {
+		return fmt.Errorf("post-check: %d row(s) are still over-encrypted (2+ layers)", overEncryptedLeft)
+	}
+	fmt.Printf("post-check: all %d row(s) with a credential are correctly single-encrypted\n", len(rows))
 	return nil
 }
 
