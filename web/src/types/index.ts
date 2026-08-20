@@ -288,6 +288,29 @@ export interface Comment {
   is_internal: boolean;
   created_at: string;
   updated_at: string;
+  /**
+   * What became of each @-addressed handle on this comment. Absent when the
+   * comment addressed nobody — which is why it is optional rather than an
+   * empty array: "no handles" and "handles that all failed" must not render
+   * the same way.
+   */
+  delivery?: CommentDeliveryOutcome[];
+}
+
+/**
+ * One verdict per @-addressed handle. `reason` is never empty, including on
+ * delivered rows, where it names which path carried the comment.
+ */
+export interface CommentDeliveryOutcome {
+  comment_id: string;
+  recipient_slug: string;
+  recipient_id?: string;
+  recipient_kind: "agent" | "user" | "unknown";
+  outcome: "delivered" | "skipped" | "failed";
+  reason: string;
+  channel: string;
+  recipient_presence: string;
+  decided_at: string;
 }
 
 export interface CommentView {

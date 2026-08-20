@@ -25,7 +25,13 @@ import { type MentionEntry } from "@/components/markdown-renderer";
 import { MarkdownWithRelay } from "@/components/MarkdownWithRelay";
 import { useRulesStore } from "@/stores/rules";
 import { useWorkspaceStore } from "@/stores/workspace";
-import type { ActorType, Comment, CreateCommentRequest, PaginatedResponse } from "@/types";
+import type {
+  ActorType,
+  Comment,
+  CommentDeliveryOutcome,
+  CreateCommentRequest,
+  PaginatedResponse,
+} from "@/types";
 
 interface CommentListProps {
   taskId: string;
@@ -50,6 +56,49 @@ function ActorLabel({ type, name }: { type: ActorType; name?: string }) {
       <ActorIcon type={type} />
       {displayName}
     </span>
+  );
+}
+
+/**
+ * The delivery record for one comment: which handles it addressed, and what
+ * became of each.
+ *
+ * Renders the API's own identifiers verbatim — `skipped`, `no_queue_path`,
+ * `recipient_offline` — rather than prose. That is deliberate on two counts.
+ * The values are a stable machine vocabulary shared with the REST payload and
+ * the database, so a reader who sees one here can grep for it. And visible
+ * product copy is gated on an explicit approval that this change does not
+ * carry, so inventing friendlier sentences here would ship unapproved voice.
+ *
+ * Nothing renders when a comment addressed nobody, which is most comments.
+ */
+function DeliveryRecord({ rows }: { rows?: CommentDeliveryOutcome[] }) {
+  if (!rows || rows.length === 0) return null;
+
+  return (
+    <div className="mt-1.5 flex flex-wrap items-center gap-1">
+      {rows.map((row) => (
+        <Badge
+          key={row.recipient_slug}
+          variant="outline"
+          className={cn(
+            "gap-1 font-mono text-[10px] font-normal",
+            row.outcome === "delivered" && "text-muted-foreground",
+            // Not-delivered is the state worth seeing across a room, since the
+            // whole defect being fixed is that it currently looks like success.
+            row.outcome === "skipped" && "text-yellow-600",
+            row.outcome === "failed" && "text-destructive",
+          )}
+          title={`@${row.recipient_slug} · ${row.outcome} · ${row.reason} · channel=${row.channel} · presence=${row.recipient_presence}`}
+        >
+          <span>@{row.recipient_slug}</span>
+          <span aria-hidden="true">·</span>
+          <span>{row.outcome}</span>
+          <span aria-hidden="true">·</span>
+          <span>{row.reason}</span>
+        </Badge>
+      ))}
+    </div>
   );
 }
 
@@ -195,6 +244,8 @@ function CommentItem({
             wsSlug={wsSlug}
           />
         )}
+
+        <DeliveryRecord rows={comment.delivery} />
       </div>
 
       {replies.length > 0 && (
