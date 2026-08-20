@@ -580,7 +580,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     container:
-      image: mcr.microsoft.com/playwright:v1.44.0-jammy
+      # Pinned to the SAME version as playwright-core in web/pnpm-lock.yaml, on
+      # purpose: matched, the browsers this job needs are already baked into the
+      # image at /ms-playwright and nothing is fetched at run time. Mismatched,
+      # Playwright deletes the image's browsers and re-downloads its own from
+      # cdn.playwright.dev on every run. The step below is what enforces this.
+      image: mcr.microsoft.com/playwright:v1.62.1-jammy
       options: --ipc=host
     steps:
       - uses: actions/checkout@v7
@@ -614,10 +619,32 @@ jobs:
           done
           echo "::warning::playwright install-deps failed after 3 attempts"
           exit 1
-      - name: Install Playwright chromium
+      # A no-op that touches no network — it exists to PROVE that, and to fail
+      # loudly the day it stops being true.
+      #
+      # Until 2026-08-20 the image was pinned at v1.44.0 while web/package.json
+      # asked for @playwright/test ^1.62.1, so every run deleted the image's
+      # browsers and pulled 301 MiB from cdn.playwright.dev (chromium 184.3 MiB
+      # + headless shell 114.7 MiB + ffmpeg 2.3 MiB). On 2026-08-19 that CDN
+      # geo-blocked the runner — "<Details>this service is not available in your
+      # location</Details>" — and evicted a 19/19-green PR (#614) from the merge
+      # queue. `Authed E2E` is a required check with enforce_admins=true, so an
+      # external CDN was a hard dependency of merging anything at all.
+      #
+      # PLAYWRIGHT_DOWNLOAD_HOST points every download at a closed port, so a
+      # missing browser fails in milliseconds against 127.0.0.1 instead of
+      # quietly reaching the CDN and going green. That is the whole guarantee:
+      # this step passing means zero bytes came from outside.
+      - name: Chromium ships with the image (downloads black-holed)
         working-directory: web
-        timeout-minutes: 5
-        run: npx playwright install chromium
+        timeout-minutes: 3
+        env:
+          PLAYWRIGHT_DOWNLOAD_HOST: http://127.0.0.1:9
+        run: |
+          if ! npx playwright install chromium; then
+            echo "::error::Playwright tried to download a browser, so the container image and web/pnpm-lock.yaml have drifted. Fix: set container.image in this job to mcr.microsoft.com/playwright:v<version>-jammy, where <version> is playwright-core's version in web/pnpm-lock.yaml. Do not delete this step to make it green — it is what keeps cdn.playwright.dev out of the merge path."
+            exit 1
+          fi
       - name: Run Playwright E2E
         working-directory: web
         run: npx playwright test
