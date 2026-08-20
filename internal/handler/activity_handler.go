@@ -124,7 +124,8 @@ func (h *ActivityHandler) ListByTask(c echo.Context) error {
 	// and a prior revision can carry a secret that was pasted in and then
 	// removed (see task cab1e85f: a rotated prod password leaked exactly this
 	// way). Callers without the permission still get the event itself
-	// (action/actor/created_at), just not the diff.
+	// (action/actor/created_at), just not the diff — except for the actions
+	// in safeActivityActions below, whose diff was never the leak vector.
 	if !callerHasExportAuditLogPerm(c) {
 		redactActivityChanges(page.Items)
 	}
@@ -146,11 +147,48 @@ func callerHasExportAuditLogPerm(c echo.Context) bool {
 	return mw.RoleHasPermission(role, mw.PermExportAuditLog)
 }
 
-// redactActivityChanges clears Changes on every entry in place, so a caller
-// without PermExportAuditLog sees only the event's metadata, never the
-// field-level diff.
+// safeActivityActions lists activity actions whose Changes payload is a
+// fixed shape — status names, assignee UUIDs, a closed set of enum values —
+// and never carries arbitrary user-authored text. They are exempt from the
+// PermExportAuditLog redaction below.
+//
+// This is deliberately narrow, not "everything except task.updated/
+// task.created": adding an action here is a claim that every field ever
+// written into its Changes map (present and future) is machine-generated,
+// and that claim has to be re-checked by hand against task_service.go, not
+// assumed. Unlisted actions — including any added later — stay redacted by
+// default (fail closed), same as an unresolved role in callerHasExportAuditLogPerm.
+//
+//   - task.moved: MoveTask (internal/service/task_service.go) writes
+//     status.{old,new} as resolved status *names*, source as one of a fixed
+//     set of caller tags ("api"/"checkout"/...), position as an int. No task
+//     field value ever reaches this map.
+//   - task.assigned: AssignTask and the review-assignee helpers write
+//     assignee_id/assignee_type as UUIDs/enum values and reason as one of a
+//     handful of code-literal strings (e.g. "set_reviewer on review
+//     transition"). Same shape guarantee.
+//
+// Found while fixing task a43785cc: review-verify-driver reads exactly
+// Changes.status.{old,new} off task.moved to compute how long a task has sat
+// in its current status (status_entered_at() in
+// bob/scripts/review-verify-driver.py) — every agent caller is exempt from
+// PermExportAuditLog, so the blanket redaction made that field permanently
+// null for the one consumer that depended on it, and the driver silently
+// fell back to task.updated_at, which its own comments reset.
+var safeActivityActions = map[string]bool{
+	"task.moved":    true,
+	"task.assigned": true,
+}
+
+// redactActivityChanges clears Changes on every entry in place, except for
+// safeActivityActions, so a caller without PermExportAuditLog sees only the
+// event's metadata for actions that can carry a field-level diff of
+// user-authored content, never the diff itself.
 func redactActivityChanges(items []domain.ActivityLog) {
 	for i := range items {
+		if safeActivityActions[items[i].Action] {
+			continue
+		}
 		items[i].Changes = nil
 	}
 }
