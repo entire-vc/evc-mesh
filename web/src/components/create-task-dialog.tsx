@@ -22,10 +22,9 @@ import { useAuthStore } from "@/stores/auth";
 import { useTemplateStore } from "@/stores/template";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { useRulesStore } from "@/stores/rules";
-import { getAccessToken } from "@/lib/api";
-import { artifactDownloadPath } from "@/lib/artifact-links";
+import { uploadPendingImages } from "@/lib/pending-images";
 import { inlineLabel } from "@/lib/user-display";
-import type { AssigneeType, Artifact, Priority, DelegationLevel, CreateTaskRequest } from "@/types";
+import type { AssigneeType, Priority, DelegationLevel, CreateTaskRequest } from "@/types";
 import { DelegationLevelSelect } from "@/components/delegation-level-select";
 
 interface CreateTaskDialogProps {
@@ -192,37 +191,11 @@ export function CreateTaskDialog({
 
       // Upload any images that were pasted before the task existed
       if (pendingImagesRef.current.length > 0 && createdTask?.id) {
-        let updatedDescription = description.trim();
-        const token = getAccessToken();
-        const baseUrl = import.meta.env.VITE_API_URL || "";
-
-        for (const pending of pendingImagesRef.current) {
-          try {
-            const form = new FormData();
-            form.append("file", pending.file, pending.file.name);
-            form.append("name", pending.file.name);
-            form.append("artifact_type", "image");
-
-            const headers: HeadersInit = {};
-            if (token) headers["Authorization"] = `Bearer ${token}`;
-
-            const res = await fetch(
-              `${baseUrl}/api/v1/tasks/${createdTask.id}/artifacts`,
-              { method: "POST", headers, body: form },
-            );
-
-            if (res.ok) {
-              const artifact = (await res.json()) as Artifact;
-              const realMd = `![${pending.file.name}](${artifactDownloadPath(artifact.id)})`;
-              updatedDescription = updatedDescription.replace(
-                pending.placeholder,
-                realMd,
-              );
-            }
-          } catch {
-            // leave the placeholder in place — not fatal
-          }
-        }
+        const updatedDescription = await uploadPendingImages(
+          createdTask.id,
+          pendingImagesRef.current,
+          description.trim(),
+        );
 
         // If description changed (URLs replaced), patch the task
         if (updatedDescription !== description.trim()) {
