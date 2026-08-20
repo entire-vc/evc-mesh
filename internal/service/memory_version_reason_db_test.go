@@ -296,3 +296,101 @@ func mustMemoryID(t *testing.T, db *sqlx.DB, wsID uuid.UUID, key string) uuid.UU
 		wsID, key).Scan(&id))
 	return id
 }
+
+// ── Service-level error paths (no database; the mock repo is the point) ──────
+
+func newMockedMemoryService(repo *mockMemoryRepo) MemoryService {
+	return NewMemoryService(repo, nil, embedding.NewNoopEmbedder())
+}
+
+func TestListRevisions_ServiceErrorPaths(t *testing.T) {
+	ctx := context.Background()
+	id := uuid.New()
+
+	t.Run("an unknown memory is 404, not an empty history", func(t *testing.T) {
+		svc := newMockedMemoryService(&mockMemoryRepo{
+			getByIDFn: func(context.Context, uuid.UUID) (*domain.Memory, error) { return nil, nil },
+		})
+		_, err := svc.ListRevisions(ctx, id, 10)
+		require.Error(t, err, "returning an empty list would say 'this memory has no history', "+
+			"which is a different and false statement")
+	})
+
+	t.Run("a lookup failure surfaces", func(t *testing.T) {
+		boom := errors.New("db down")
+		svc := newMockedMemoryService(&mockMemoryRepo{
+			getByIDFn: func(context.Context, uuid.UUID) (*domain.Memory, error) { return nil, boom },
+		})
+		_, err := svc.ListRevisions(ctx, id, 10)
+		require.ErrorIs(t, err, boom)
+	})
+
+	t.Run("a history read failure surfaces", func(t *testing.T) {
+		boom := errors.New("select failed")
+		svc := newMockedMemoryService(&mockMemoryRepo{
+			getByIDFn: func(_ context.Context, mid uuid.UUID) (*domain.Memory, error) {
+				return &domain.Memory{ID: mid}, nil
+			},
+			listRevisionsFn: func(context.Context, uuid.UUID, int) ([]domain.MemoryRevision, error) {
+				return nil, boom
+			},
+		})
+		_, err := svc.ListRevisions(ctx, id, 10)
+		require.ErrorIs(t, err, boom)
+	})
+}
+
+func TestForget_ServiceErrorPaths(t *testing.T) {
+	ctx := context.Background()
+	id := uuid.New()
+	owner := uuid.New()
+	live := func() *domain.Memory {
+		return &domain.Memory{ID: id, Content: "x", Version: 3, AgentID: &owner}
+	}
+
+	t.Run("an unknown memory is 404", func(t *testing.T) {
+		svc := newMockedMemoryService(&mockMemoryRepo{
+			getByIDFn: func(context.Context, uuid.UUID) (*domain.Memory, error) { return nil, nil },
+		})
+		require.Error(t, svc.Forget(ctx, id, &owner, false, "r"))
+	})
+
+	t.Run("an agent may not delete somebody else's memory", func(t *testing.T) {
+		other := uuid.New()
+		repo := &mockMemoryRepo{
+			getByIDFn: func(context.Context, uuid.UUID) (*domain.Memory, error) { return live(), nil },
+		}
+		require.Error(t, newMockedMemoryService(repo).Forget(ctx, id, &other, false, "r"))
+		assert.Empty(t, repo.appendedRevisions,
+			"a refused delete must not leave a 'forgotten' revision behind")
+	})
+
+	t.Run("a failed snapshot aborts the delete", func(t *testing.T) {
+		deleted := false
+		boom := errors.New("append failed")
+		repo := &mockMemoryRepo{
+			getByIDFn:        func(context.Context, uuid.UUID) (*domain.Memory, error) { return live(), nil },
+			appendRevisionFn: func(context.Context, domain.MemoryRevision) error { return boom },
+			deleteFn:         func(context.Context, uuid.UUID) error { deleted = true; return nil },
+		}
+		err := newMockedMemoryService(repo).Forget(ctx, id, &owner, false, "r")
+		require.ErrorIs(t, err, boom)
+		assert.False(t, deleted,
+			"if the record of what was removed cannot be written, the content must stay")
+	})
+
+	t.Run("the snapshot carries the content, the next version and the reason", func(t *testing.T) {
+		repo := &mockMemoryRepo{
+			getByIDFn: func(context.Context, uuid.UUID) (*domain.Memory, error) { return live(), nil },
+			deleteFn:  func(context.Context, uuid.UUID) error { return nil },
+		}
+		require.NoError(t, newMockedMemoryService(repo).Forget(ctx, id, &owner, false, "no longer true"))
+		require.Len(t, repo.appendedRevisions, 1)
+		rev := repo.appendedRevisions[0]
+		assert.Equal(t, domain.MemoryActionForgotten, rev.Action)
+		assert.Equal(t, 4, rev.Version, "the deletion is the next version, not a rewrite of the last")
+		assert.Equal(t, "x", rev.Content)
+		require.NotNil(t, rev.Reason)
+		assert.Equal(t, "no longer true", *rev.Reason)
+	})
+}
