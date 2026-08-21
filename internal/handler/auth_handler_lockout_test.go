@@ -43,7 +43,28 @@ func newTestRedisForLockout(t *testing.T) *redis.Client {
 func newAuthHandlerTestWithLockout(t *testing.T, userRepo *authTestUserRepo, maxFailures int) (*AuthHandler, *echo.Echo) {
 	t.Helper()
 	h, e := newAuthHandlerTest(userRepo)
-	h.WithLoginLockout(mw.NewLoginLockout(newTestRedisForLockout(t), maxFailures, time.Hour))
+	// PINNED clock, not the wall clock. LoginLockout buckets by
+	// time.Now().Unix()/window, so any test firing a SEQUENCE of requests
+	// silently loses its earlier increments if the sequence straddles a
+	// bucket boundary — the later attempt lands in a fresh bucket and comes
+	// back 401 where the test expects 429.
+	//
+	// This is not theoretical. It flaked on CI with a 1-minute window, was
+	// "fixed" by widening the window to an hour, and then flaked AGAIN on
+	// 2026-08-21 — failing the deploy of an already-merged security change
+	// (evc-mesh #689) on an assertion that is green 30/30 locally. Widening
+	// only lowers the probability: the local run is ~0.5s per iteration, CI
+	// is ~23x slower at ~11.7s, so CI has ~23x the exposure to a boundary it
+	// cannot control.
+	//
+	// A fixed clock removes the class outright rather than making it rarer.
+	// A rare flake on the test guarding a security property is worse than a
+	// frequent one, because it gets waved through as noise.
+	frozen := time.Unix(1_700_000_000, 0)
+	h.WithLoginLockout(mw.NewLoginLockout(
+		newTestRedisForLockout(t), maxFailures, time.Hour,
+		mw.WithLoginLockoutClock(func() time.Time { return frozen }),
+	))
 	return h, e
 }
 

@@ -200,3 +200,78 @@ func TestLoginLockout_Reset_RedisError_IsReported(t *testing.T) {
 	err := l.Reset(context.Background(), "user@example.com")
 	assert.Error(t, err, "a Redis error on Reset must be returned to the caller for logging")
 }
+
+// TestLoginLockout_CountIsLostAcrossAWindowBoundary pins down the mechanism
+// behind the CI flake that failed the deploy of #689 on 2026-08-21, and
+// documents the production property it exposes.
+//
+// LoginLockout buckets by wall clock (windowKey: nowUnix / windowSeconds).
+// Increments therefore accrue against whichever bucket happens to be current
+// at the moment of each call — so a sequence of failures that straddles a
+// boundary does NOT accumulate: the attempts after the boundary start from
+// zero in a fresh key.
+//
+// Two consequences, and both are worth having in a test rather than in
+// someone's head:
+//
+//  1. TESTS: any test firing a sequence against the real clock is flaky by
+//     construction. That is why the handler-level tests pin their clock.
+//     This test is the negative control for that decision — remove the
+//     pinning there and this is the failure you get, non-deterministically.
+//
+//  2. PRODUCTION: an attacker who times attempts around a boundary gets up
+//     to 2*maxFailures guesses in quick succession (maxFailures at the end of
+//     one window, maxFailures at the start of the next) instead of
+//     maxFailures. That is inherent to every fixed-window counter, it is a
+//     known and accepted trade for the cheapness of INCR+EXPIRE, and at the
+//     production window (15 min) it means 20 guesses rather than 10 in the
+//     worst case — still far below what brute-forcing a password needs. It
+//     is accepted, not unnoticed.
+func TestLoginLockout_CountIsLostAcrossAWindowBoundary(t *testing.T) {
+	const maxFailures = 3
+	const window = time.Hour
+
+	rdb := newTestRedis(t)
+
+	// Start 2 seconds before a bucket boundary, so the sequence below
+	// straddles it at a moment we choose rather than one the CI scheduler
+	// chooses for us.
+	boundary := (time.Now().Unix()/int64(window.Seconds()) + 1) * int64(window.Seconds())
+	var offset int64
+	clock := func() time.Time { return time.Unix(boundary-2+offset, 0) }
+
+	l := NewLoginLockout(rdb, maxFailures, window, WithLoginLockoutClock(clock))
+	ctx := context.Background()
+
+	// Three failures BEFORE the boundary — budget exactly exhausted, not yet
+	// locked (the lock fires on the maxFailures+1'th).
+	for i := 0; i < maxFailures; i++ {
+		locked, _, err := l.RecordFailure(ctx, "victim@example.com")
+		require.NoError(t, err)
+		require.False(t, locked, "failure %d of %d must not lock yet", i+1, maxFailures)
+	}
+
+	// Cross the boundary. In the same window this next failure would be the
+	// (maxFailures+1)'th and MUST lock.
+	offset = 4
+
+	locked, _, err := l.RecordFailure(ctx, "victim@example.com")
+	require.NoError(t, err)
+	assert.False(t, locked,
+		"documents the fixed-window property: the count does not carry across a "+
+			"bucket boundary, so this attempt starts a fresh budget instead of locking. "+
+			"If this ever becomes true, the bucketing was replaced by something with "+
+			"carry-over — update the handler tests' clock-pinning rationale to match.")
+
+	// Same call without crossing a boundary DOES lock — proving the assertion
+	// above is about the boundary and not about RecordFailure being broken.
+	offset = 5
+	for i := 0; i < maxFailures-1; i++ {
+		_, _, err := l.RecordFailure(ctx, "victim@example.com")
+		require.NoError(t, err)
+	}
+	locked, _, err = l.RecordFailure(ctx, "victim@example.com")
+	require.NoError(t, err)
+	assert.True(t, locked,
+		"within one window the counter accumulates normally and locks at maxFailures+1")
+}

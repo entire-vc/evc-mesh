@@ -44,6 +44,29 @@ type LoginLockout struct {
 	client      *redis.Client
 	maxFailures int
 	window      time.Duration
+	// now yields the current time. Injectable ONLY so tests can pin it; nil
+	// means time.Now and that is what production always uses. It exists
+	// because the failure counter buckets by wall-clock (see windowKey), so
+	// a test firing a sequence of requests that happens to straddle a bucket
+	// boundary loses the earlier increments and fails — not because the code
+	// is wrong, but because the clock moved underneath it. That is not
+	// hypothetical: it flaked on CI twice, and the second time it failed the
+	// deploy of an already-merged security fix. Widening the window (the
+	// earlier mitigation, 1min -> 1h) only makes the boundary rarer; it
+	// cannot make it impossible, and a rare flake on the test that guards a
+	// security property is worse than a frequent one because it gets
+	// dismissed as noise.
+	now func() time.Time
+}
+
+// LoginLockoutOption configures a LoginLockout at construction.
+type LoginLockoutOption func(*LoginLockout)
+
+// WithLoginLockoutClock pins the clock LoginLockout reads. Test-only in
+// practice; production calls NewLoginLockout without options and gets
+// time.Now.
+func WithLoginLockoutClock(now func() time.Time) LoginLockoutOption {
+	return func(l *LoginLockout) { l.now = now }
 }
 
 // NewLoginLockout builds a LoginLockout backed by client. maxFailures <= 0
@@ -52,8 +75,20 @@ type LoginLockout struct {
 // sharing client — it is baked into the Redis key (see windowKey), so a
 // mismatched window across instances would silently split one identifier's
 // budget across multiple keys.
-func NewLoginLockout(client *redis.Client, maxFailures int, window time.Duration) *LoginLockout {
-	return &LoginLockout{client: client, maxFailures: maxFailures, window: window}
+func NewLoginLockout(client *redis.Client, maxFailures int, window time.Duration, opts ...LoginLockoutOption) *LoginLockout {
+	l := &LoginLockout{client: client, maxFailures: maxFailures, window: window}
+	for _, opt := range opts {
+		opt(l)
+	}
+	return l
+}
+
+// nowUnix is the single place this type reads the clock.
+func (l *LoginLockout) nowUnix() int64 {
+	if l.now != nil {
+		return l.now().Unix()
+	}
+	return time.Now().Unix()
 }
 
 // windowSeconds returns l.window in whole seconds, floored at 1. A caller
@@ -75,8 +110,8 @@ func (l *LoginLockout) windowSeconds() int64 {
 // bucket-by-wall-clock approach, same reasoning for why it's good enough:
 // the boundary imprecision this trades away is irrelevant at brute-force
 // timescales).
-func (l *LoginLockout) windowKey(identifier string) string {
-	bucket := time.Now().Unix() / l.windowSeconds()
+func (l *LoginLockout) windowKey(identifier string, nowUnix int64) string {
+	bucket := nowUnix / l.windowSeconds()
 	return fmt.Sprintf("loginlock:%s:%d", identifier, bucket)
 }
 
@@ -95,7 +130,12 @@ func (l *LoginLockout) RecordFailure(ctx context.Context, identifier string) (lo
 	if l.maxFailures <= 0 || l.client == nil {
 		return false, 0, nil
 	}
-	rkey := l.windowKey(identifier)
+	// One clock read for the whole call. Previously windowKey and the
+	// Retry-After computation below each called time.Now() separately, so a
+	// boundary landing between them produced a Retry-After belonging to a
+	// different window than the key that was just incremented.
+	nowUnix := l.nowUnix()
+	rkey := l.windowKey(identifier, nowUnix)
 	windowSecs := l.windowSeconds()
 
 	var incrCmd *redis.IntCmd
@@ -118,7 +158,7 @@ func (l *LoginLockout) RecordFailure(ctx context.Context, identifier string) (lo
 		return false, 0, nil
 	}
 
-	secondsIntoWindow := time.Now().Unix() % windowSecs
+	secondsIntoWindow := nowUnix % windowSecs
 	retryAfterSecs = int(windowSecs - secondsIntoWindow)
 	return true, retryAfterSecs, nil
 }
@@ -132,7 +172,7 @@ func (l *LoginLockout) Reset(ctx context.Context, identifier string) error {
 	if l.maxFailures <= 0 || l.client == nil {
 		return nil
 	}
-	if err := l.client.Del(ctx, l.windowKey(identifier)).Err(); err != nil {
+	if err := l.client.Del(ctx, l.windowKey(identifier, l.nowUnix())).Err(); err != nil {
 		return fmt.Errorf("login lockout reset: %w", err)
 	}
 	return nil
