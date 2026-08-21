@@ -74,10 +74,11 @@ describe("TaskCard false-open indicator", () => {
     );
     const els = indicators();
     expect(els).toHaveLength(1);
-    expect(els[0].getAttribute("data-false-open-kind")).toBe(
+    const el = els[0]!;
+    expect(el.getAttribute("data-false-open-kind")).toBe(
       "all-children-closed",
     );
-    expect(els[0].getAttribute("title")).toContain("80");
+    expect(el.getAttribute("title")).toContain("80");
   });
 
   // #65dc5949's own shape (task #c80fe88f review, 2026-08-20): one open
@@ -99,9 +100,10 @@ describe("TaskCard false-open indicator", () => {
     );
     const els = indicators();
     expect(els).toHaveLength(1);
-    expect(els[0].getAttribute("data-false-open-kind")).toBe(
+    const el = els[0]!;
+    expect(el.getAttribute("data-false-open-kind")).toBe(
       "only-parked-children-left",
     );
-    expect(els[0].getAttribute("title")).toContain("1");
+    expect(el.getAttribute("title")).toContain("1");
   });
 });
