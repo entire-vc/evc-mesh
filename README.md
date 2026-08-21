@@ -256,6 +256,18 @@ Or connect via SSE for remote agents:
 
 The MCP server exposes 49 tools for managing projects, tasks, comments, artifacts, events, rules, memory, and more. See [MCP Reference](docs/mcp-reference.md) for the full tool catalog, and [Agent Onboarding](docs/agent-onboarding.md) for connecting an agent to a self-hosted instance.
 
+**Two implementations exist, on purpose.** `./cmd/mcp` in this repo and the
+standalone [`evc-mesh-mcp`](https://github.com/entire-vc/evc-mesh-mcp) server
+both implement the same MCP tool set (`internal/mcp` in each — Go's
+`internal/` visibility rules mean one cannot import the other across
+modules). `evc-mesh-mcp` is the one under active development and gets new
+tools/fixes first; `./cmd/mcp` here is the copy this repo builds and deploys
+alongside the API. If you are choosing which to run, prefer
+`evc-mesh-mcp`. `cmd/mcp-drift-check` (run in CI on both repos) diffs the two
+`internal/mcp` trees function-by-function and fails the build on
+unreviewed drift — see `cmd/mcp-drift-check/allow.txt` for the currently
+known, tracked differences.
+
 ## Documentation
 
 | Document | Description |
