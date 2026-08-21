@@ -580,7 +580,13 @@ func main() {
 	}
 	eb, err = eventbus.New(context.Background(), ebCfg, eventBusRepo)
 	if err != nil {
-		log.Printf("WARNING: Event bus unavailable, running without NATS/Redis: %v", err)
+		// Loud degradation, not silent — mirrors the MESH_TRUSTED_PROXIES
+		// pattern below: a control nobody can see failing gets trusted and
+		// stops being checked. Surfaced three ways: this WARN, the /health
+		// field below, and the mesh_event_bus_enabled gauge on /metrics.
+		log.Printf("WARNING: Event bus unavailable, running without NATS/Redis: %v — "+
+			"event publishing (WS broadcast, cross-agent notifications, event history) "+
+			"is disabled for this process", err)
 		eb = nil
 	} else {
 		// Wire the event bus publisher into the event bus service.
@@ -590,6 +596,7 @@ func main() {
 		// Start background workers (PG writer + cleanup).
 		eb.Start()
 	}
+	metrics.SetEventBusEnabled(eb != nil)
 	// Wire memory service into eventBusService for memory extraction on Publish().
 	// Done outside the NATS block so memory extraction works even without NATS.
 	if configurable, ok := eventBusService.(service.EventBusServiceConfigurable); ok {
@@ -760,6 +767,7 @@ func main() {
 			"status":            "ok",
 			"service":           "evc-mesh-api",
 			"client_ip_trusted": ipTrusted,
+			"event_bus_enabled": eb != nil,
 		})
 	})
 

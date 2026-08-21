@@ -172,6 +172,23 @@ var (
 			Help: "1 if MESH_TRUSTED_PROXIES is configured and c.RealIP() reflects a verified client IP, 0 if not (per-IP rate limiting has no client granularity)",
 		},
 	)
+
+	// EventBusEnabled is 1 when mesh-api successfully connected to NATS/Redis
+	// and is running with the event bus, 0 when eventbus.New() failed and the
+	// process fell back to running without it.
+	//
+	// At 0, event publishing (WS broadcast, cross-agent notifications, event
+	// history) is silently unavailable — the API keeps serving requests, but
+	// nothing observes that a whole subsystem is missing. Set once at
+	// startup — this is a deployment-topology fact, not a per-request
+	// measurement. Surfaced three ways: the startup WARN log, the /health
+	// field below, and this gauge on /metrics.
+	EventBusEnabled = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "mesh_event_bus_enabled",
+			Help: "1 if the event bus (NATS/Redis) connected successfully at startup, 0 if mesh-api is running without it",
+		},
+	)
 )
 
 // RecordMCPToolCall records a single MCP tool call with its outcome status.
@@ -242,4 +259,15 @@ func SetClientIPTrusted(trusted bool) {
 		return
 	}
 	ClientIPTrusted.Set(0)
+}
+
+// SetEventBusEnabled publishes whether mesh-api is running with a working
+// event bus (eventbus.New() succeeded) or fell back to running without one.
+// Called once at startup — see cmd/api/main.go.
+func SetEventBusEnabled(enabled bool) {
+	if enabled {
+		EventBusEnabled.Set(1)
+		return
+	}
+	EventBusEnabled.Set(0)
 }
