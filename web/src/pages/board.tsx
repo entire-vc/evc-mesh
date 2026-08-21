@@ -316,6 +316,7 @@ export function BoardPage() {
   const [sortBy, setSortBy] = useState<SortBy>("updated");
   const [showClosed, setShowClosed] = useState(false);
   const [showSubtasks, setShowSubtasks] = useState(false);
+  const [humanGateOnly, setHumanGateOnly] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [priorityFilter, setPriorityFilter] = useState<string>("all");
   const [assigneeFilter, setAssigneeFilter] = useState<string>("all");
@@ -403,6 +404,7 @@ export function BoardPage() {
       }
       setShowClosed(saved.showClosed ?? false);
       setShowSubtasks(saved.showSubtasks ?? false);
+      setHumanGateOnly(saved.humanGateOnly ?? false);
       setSearchQuery(saved.searchQuery ?? "");
       setPriorityFilter(saved.priorityFilter ?? "all");
       setAssigneeFilter(saved.assigneeFilter ?? "all");
@@ -423,6 +425,7 @@ export function BoardPage() {
       sortBy,
       showClosed,
       showSubtasks,
+      humanGateOnly,
       searchQuery,
       priorityFilter,
       assigneeFilter,
@@ -438,6 +441,7 @@ export function BoardPage() {
     sortBy,
     showClosed,
     showSubtasks,
+    humanGateOnly,
     searchQuery,
     priorityFilter,
     assigneeFilter,
@@ -531,6 +535,7 @@ export function BoardPage() {
       ) {
         return false;
       }
+      if (humanGateOnly && !task.human_gate) return false;
       return true;
     });
 
@@ -543,6 +548,7 @@ export function BoardPage() {
     priorityFilter,
     assigneeFilter,
     assigneeIdsFilter,
+    humanGateOnly,
     selectedTags,
     cfFilters,
   ]);
@@ -777,6 +783,7 @@ export function BoardPage() {
         groupBy,
         showClosed,
         showSubtasks,
+        humanGateOnly,
         sortBy,
       }),
     );
@@ -790,6 +797,7 @@ export function BoardPage() {
     groupBy,
     showClosed,
     showSubtasks,
+    humanGateOnly,
     sortBy,
     setCurrentViewState,
   ]);
@@ -807,6 +815,7 @@ export function BoardPage() {
       setGroupBy(restored.groupBy);
       setShowClosed(restored.showClosed);
       setShowSubtasks(restored.showSubtasks);
+      setHumanGateOnly(restored.humanGateOnly);
       // No sort_by on the view: keep whatever sort is currently active.
       if (restored.sortBy) setSortBy(restored.sortBy);
       clearPendingView();
@@ -825,6 +834,7 @@ export function BoardPage() {
     setSelectedTags(BOARD_FILTER_DEFAULTS.selectedTags);
     setShowClosed(BOARD_FILTER_DEFAULTS.showClosed);
     setShowSubtasks(BOARD_FILTER_DEFAULTS.showSubtasks);
+    setHumanGateOnly(BOARD_FILTER_DEFAULTS.humanGateOnly);
     clearResetFiltersRequest();
   }, [resetFiltersRequest, clearResetFiltersRequest]);
 
@@ -868,6 +878,8 @@ export function BoardPage() {
           onSortByChange={setSortBy}
           showClosed={showClosed}
           onShowClosedChange={setShowClosed}
+          humanGateOnly={humanGateOnly}
+          onHumanGateOnlyChange={setHumanGateOnly}
           showSubtasks={showSubtasks}
           onShowSubtasksChange={setShowSubtasks}
           searchQuery={searchQuery}

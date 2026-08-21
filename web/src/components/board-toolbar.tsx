@@ -9,7 +9,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Search, ChevronDown, ChevronUp, ArrowUpDown, Plus, RefreshCw, Filter, Users, X } from "lucide-react";
+import { Search, ChevronDown, ChevronUp, ArrowUpDown, Plus, RefreshCw, Filter, Lock, Users, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
@@ -61,6 +61,10 @@ export interface BoardToolbarProps {
   // Closed toggle
   showClosed: boolean;
   onShowClosedChange: (v: boolean) => void;
+
+  // "Waiting on me" (human_gate=true) toggle
+  humanGateOnly: boolean;
+  onHumanGateOnlyChange: (v: boolean) => void;
 
   // Subtasks toggle
   showSubtasks: boolean;
@@ -278,6 +282,8 @@ export function BoardToolbar({
   onSortByChange,
   showClosed,
   onShowClosedChange,
+  humanGateOnly,
+  onHumanGateOnlyChange,
   showSubtasks,
   onShowSubtasksChange,
   searchQuery,
@@ -376,6 +382,11 @@ export function BoardToolbar({
             Closed
           </ToggleButton>
 
+          <ToggleButton active={humanGateOnly} onClick={() => onHumanGateOnlyChange(!humanGateOnly)}>
+            <Lock className="h-3 w-3" aria-hidden="true" />
+            Waiting on me
+          </ToggleButton>
+
           <Select value={assigneeFilter} onChange={(e) => onAssigneeFilterChange(e.target.value)} className="h-8 w-36 text-xs">
             <option value="all">All Assignees</option>
             <option value="user">User</option>
@@ -469,6 +480,11 @@ export function BoardToolbar({
 
           <ToggleButton active={showClosed} onClick={() => onShowClosedChange(!showClosed)}>
             Closed
+          </ToggleButton>
+
+          <ToggleButton active={humanGateOnly} onClick={() => onHumanGateOnlyChange(!humanGateOnly)}>
+            <Lock className="h-3 w-3" aria-hidden="true" />
+            Waiting on me
           </ToggleButton>
 
           <Select value={assigneeFilter} onChange={(e) => onAssigneeFilterChange(e.target.value)} className="h-8 w-32 text-xs">
