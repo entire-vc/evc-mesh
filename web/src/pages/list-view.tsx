@@ -13,6 +13,7 @@ import {
   ArrowUpDown,
   ChevronDown,
   ChevronRight,
+  CircleCheck,
   GitBranch,
   List,
   Loader2,
@@ -20,6 +21,7 @@ import {
   Paperclip,
   Pencil,
   Plus,
+  Snowflake,
   Trash2,
   X,
 } from "lucide-react";
@@ -1655,6 +1657,28 @@ function EnhancedTitleCell({
             <span className="flex items-center gap-0.5 text-muted-foreground/60">
               <GitBranch className="h-3 w-3" aria-hidden="true" />
               <span className="text-[10px]">{subtaskCount}</span>
+            </span>
+          )}
+          {task.false_open?.all_children_closed && (
+            <span
+              className="flex items-center text-emerald-600 dark:text-emerald-400"
+              title={`False-open: все подзадачи закрыты, карточка без изменений ${task.false_open.stale_days} дн. — стоит пересмотреть приоритет`}
+            >
+              <CircleCheck
+                className="h-3 w-3"
+                aria-label="False-open: all subtasks closed"
+              />
+            </span>
+          )}
+          {task.false_open?.only_parked_children_left && (
+            <span
+              className="flex items-center text-sky-600 dark:text-sky-400"
+              title={`Остались только backlog-подзадачи (${task.false_open.open_children_count}), карточка без изменений ${task.false_open.stale_days} дн. — работа есть, но не движется`}
+            >
+              <Snowflake
+                className="h-3 w-3"
+                aria-label="False-open: only parked subtasks left"
+              />
             </span>
           )}
         </span>
