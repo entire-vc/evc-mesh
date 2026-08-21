@@ -3,6 +3,8 @@ package service
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -569,9 +571,14 @@ func folderSlug(raw string) string {
 		return slug
 	}
 	// A directory name with no letter/digit in any script — rare, but the same
-	// shape Create's own fallback handles. A stable per-name hash-free fallback
-	// isn't available without an id to fall back to the way document creation
-	// has one, so this falls back to a fixed marker rather than colliding two
-	// differently-punctuated folders onto the same slug.
-	return "folder-" + fmt.Sprintf("%x", []byte(raw))[:16]
+	// shape Create's own fallback handles. A stable per-name digest keeps two
+	// differently-punctuated folders from colliding onto the same slug.
+	//
+	// Hashed rather than hex-of-the-raw-bytes: the raw form is only as long as
+	// the name, so a short name like "-" or "..." produced fewer than the 16
+	// hex characters this truncates to and PANICKED with a slice-bounds error,
+	// taking down the whole mount for one oddly-named folder. A digest is
+	// always 64 characters wide regardless of input length.
+	sum := sha256.Sum256([]byte(raw))
+	return "folder-" + hex.EncodeToString(sum[:])[:16]
 }

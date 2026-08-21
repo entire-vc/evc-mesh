@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -39,6 +40,30 @@ type fakeRelaySyncClient struct {
 	downloadFn     func(path string) (*teamrelay.SyncDocument, error)
 	downloadResult *teamrelay.SyncDocument
 	downloadErr    error
+
+	// defaultDocs is the "the source agrees with the copy we seeded" response,
+	// registered per path by seedCopy. Its only job is to keep this double
+	// ANSWERING on paths a test never scripted, so that a mutation which
+	// wrongly reaches the network fails on the assertion that test is about
+	// rather than on a nil dereference inside the service.
+	//
+	// This is not a convenience. A fixture that returns (nil, nil) makes every
+	// mutation on the download path die at `remote.SHA256` before the counter
+	// is ever read, so the test goes red for a reason it was not written to
+	// detect -- and a control that fails for the wrong reason is a broken
+	// control, indistinguishable from a working one at a glance.
+	defaultDocs map[string]*teamrelay.SyncDocument
+}
+
+// seedRemote registers the default response for path: a source whose content
+// and hash match what the local copy already holds.
+func (f *fakeRelaySyncClient) seedRemote(path, body, sha256 string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.defaultDocs == nil {
+		f.defaultDocs = map[string]*teamrelay.SyncDocument{}
+	}
+	f.defaultDocs[path] = &teamrelay.SyncDocument{Content: []byte(body), SHA256: sha256}
 }
 
 func (f *fakeRelaySyncClient) FilesIndex(_ context.Context, _, _, _ string) ([]teamrelay.SyncIndexEntry, error) {
@@ -56,7 +81,22 @@ func (f *fakeRelaySyncClient) Download(_ context.Context, _, _, path, _ string) 
 	if f.downloadFn != nil {
 		return f.downloadFn(path)
 	}
-	return f.downloadResult, f.downloadErr
+	if f.downloadErr != nil {
+		return nil, f.downloadErr
+	}
+	if f.downloadResult != nil {
+		return f.downloadResult, nil
+	}
+
+	f.mu.Lock()
+	remote, ok := f.defaultDocs[path]
+	f.mu.Unlock()
+	if ok {
+		return remote, nil
+	}
+	// Never (nil, nil): an unscripted path is a fixture gap, and it must say so
+	// by name instead of handing the caller a nil document to dereference.
+	return nil, fmt.Errorf("fakeRelaySyncClient: no download fixture for path %q", path)
 }
 
 func (f *fakeRelaySyncClient) callCount() int {
@@ -128,6 +168,22 @@ func setupMountFixture(t *testing.T, mountPath string) *mountFixture {
 	}
 }
 
+// setTTLSeconds rewrites the project's Team Relay settings with an explicit
+// sync TTL, so a test can assert the CONFIGURED value is what gates the
+// refresh rather than the compiled-in default.
+func (f *mountFixture) setTTLSeconds(t *testing.T, seconds int) {
+	t.Helper()
+	pi, err := f.piRepo.Get(context.Background(), f.projectID, "team_relay")
+	require.NoError(t, err)
+	settingsJSON, err := json.Marshal(domain.TeamRelaySettings{
+		ShareID:        testRelayShareID,
+		SyncTTLSeconds: seconds,
+	})
+	require.NoError(t, err)
+	pi.Settings = settingsJSON
+	require.NoError(t, f.piRepo.Upsert(context.Background(), pi))
+}
+
 // seedCopy inserts an already-mounted Team Relay copy document, synced at
 // syncedAt with body and sha256 as given.
 func (f *mountFixture) seedCopy(t *testing.T, sourcePath, body, sha256 string, syncedAt time.Time) *domain.Document {
@@ -135,6 +191,12 @@ func (f *mountFixture) seedCopy(t *testing.T, sourcePath, body, sha256 string, s
 	id := uuid.New()
 	key := documentStorageKey(f.projectID, id)
 	require.NoError(t, f.storage.Upload(context.Background(), key, strings.NewReader(body), int64(len(body)), documentContentType))
+
+	// The source starts out AGREEING with the copy. A test that wants a
+	// diverged source overrides this (downloadResult/downloadFn); a test that
+	// asserts "we never asked" gets a live, counting double either way, so the
+	// counter assertion is what fails when the gate is removed.
+	f.client.seedRemote(sourcePath, body, sha256)
 
 	share := testRelayShareID
 	path := sourcePath
