@@ -448,7 +448,7 @@ func TestArtifactService_GetDownloadURL_Disposition(t *testing.T) {
 	svc, artifactRepo, storage := setupArtifactService()
 	ctx := context.Background()
 	id := uuid.New()
-	artifactRepo.items[id] = &domain.Artifact{ID: id, Name: "test.png", StorageKey: "ws/task/id/test.png"}
+	artifactRepo.items[id] = &domain.Artifact{ID: id, Name: "test.png", StorageKey: "ws/task/id/test.png", MimeType: "image/png"}
 
 	_, err := svc.GetDownloadURL(ctx, id, false)
 	require.NoError(t, err)
@@ -456,7 +456,75 @@ func TestArtifactService_GetDownloadURL_Disposition(t *testing.T) {
 
 	_, err = svc.GetDownloadURL(ctx, id, true)
 	require.NoError(t, err)
-	assert.Empty(t, storage.lastFilename, "inline preview must omit filename so no Content-Disposition header is set")
+	assert.Empty(t, storage.lastFilename, "inline preview of a safe-listed type must omit filename so no Content-Disposition header is set")
+}
+
+// TestArtifactService_GetDownloadURL_HTMLNeverInlines is the regression test for
+// b2f7ba41: the artifact bucket is proxied through our own origin, so serving
+// text/html without Content-Disposition: attachment lets it execute as a page
+// on mesh.entire.host with the reader's session. inline=true must not bypass
+// that for any type outside the explicit safe-list, no matter what the caller
+// requests — this asserts the negative (still forced to attachment) so the
+// test would have failed against the pre-fix code, which honoured inline
+// unconditionally.
+func TestArtifactService_GetDownloadURL_HTMLNeverInlines(t *testing.T) {
+	svc, artifactRepo, storage := setupArtifactService()
+	ctx := context.Background()
+	id := uuid.New()
+	artifactRepo.items[id] = &domain.Artifact{ID: id, Name: "report.html", StorageKey: "ws/task/id/report.html", MimeType: "text/html; charset=utf-8"}
+
+	_, err := svc.GetDownloadURL(ctx, id, true)
+	require.NoError(t, err)
+	assert.Equal(t, "report.html", storage.lastFilename, "text/html must always get Content-Disposition: attachment, even when inline=true was requested")
+}
+
+// TestArtifactService_GetDownloadURL_UnknownMimeTypeNeverInlines guards the
+// default: a type not on the explicit allowlist (including an artifact with
+// no MimeType recorded at all) must download, not render. The allowlist must
+// stay opt-in, never opt-out.
+func TestArtifactService_GetDownloadURL_UnknownMimeTypeNeverInlines(t *testing.T) {
+	svc, artifactRepo, storage := setupArtifactService()
+	ctx := context.Background()
+	id := uuid.New()
+	artifactRepo.items[id] = &domain.Artifact{ID: id, Name: "data.bin", StorageKey: "ws/task/id/data.bin"}
+
+	_, err := svc.GetDownloadURL(ctx, id, true)
+	require.NoError(t, err)
+	assert.Equal(t, "data.bin", storage.lastFilename, "a MIME type absent from the allowlist must always download")
+}
+
+// ---------------------------------------------------------------------------
+// TestIsInlineSafeMimeType
+// ---------------------------------------------------------------------------
+
+func TestIsInlineSafeMimeType(t *testing.T) {
+	tests := []struct {
+		mimeType string
+		want     bool
+	}{
+		{"image/png", true},
+		{"image/jpeg", true},
+		{"image/gif", true},
+		{"image/webp", true},
+		{"application/pdf", true},
+		{"image/png; charset=binary", true},
+		{"IMAGE/PNG", true},
+		{"text/html", false},
+		{"text/html; charset=utf-8", false},
+		{"text/plain", false},
+		{"text/markdown", false},
+		// SVG carries its own <script>/event-handler surface — it must NOT be
+		// treated as passive raster data despite the image/ prefix.
+		{"image/svg+xml", false},
+		{"application/javascript", false},
+		{"application/xml", false},
+		{"", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.mimeType, func(t *testing.T) {
+			assert.Equal(t, tt.want, isInlineSafeMimeType(tt.mimeType))
+		})
+	}
 }
 
 // ---------------------------------------------------------------------------

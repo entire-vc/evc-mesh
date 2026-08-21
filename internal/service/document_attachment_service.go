@@ -175,13 +175,18 @@ func (s *documentAttachmentService) GetDownloadURL(ctx context.Context, id, work
 		return "", apierror.ServiceUnavailable("storage backend not configured")
 	}
 
-	// Same argument semantics as artifactService.GetDownloadURL: a non-empty
-	// filename sets Content-Disposition: attachment, which forces a download.
-	// inline drops it so the browser renders the response using its Content-Type —
-	// without this an <img> pointed at the URL downloads a file instead of showing
-	// a picture.
+	// Same argument semantics as artifactService.GetDownloadURL, including the
+	// same allowlist guard: a non-empty filename sets Content-Disposition:
+	// attachment, which forces a download. inline drops it so the browser
+	// renders the response using its Content-Type — without this an <img>
+	// pointed at the URL downloads a file instead of showing a picture. But
+	// only for a type on inlineSafeMimeTypes: att.MimeType is inferred from
+	// the uploader's Content-Type header or filename extension (see
+	// inferMimeType) and is not otherwise validated, so an attachment
+	// uploaded as text/html must still always download — this bucket is
+	// proxied through our own origin (b2f7ba41).
 	filename := att.Name
-	if inline {
+	if inline && isInlineSafeMimeType(att.MimeType) {
 		filename = ""
 	}
 
