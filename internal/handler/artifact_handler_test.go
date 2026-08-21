@@ -63,6 +63,49 @@ func TestArtifactHandler_GetByID_StripsTrAgentKey(t *testing.T) {
 	assert.Equal(t, "https://relay.example.com/f", rawMeta["tr_public_url"])
 }
 
+// TestArtifactHandler_GetByID_CarriesDownloadPath proves the response carries
+// the stable machine-readable download path alongside tr_public_url, and
+// that tr_public_url itself is unchanged by this addition (task #97c60be9:
+// tr_public_url must stay exactly as-is on shares where it already works).
+func TestArtifactHandler_GetByID_CarriesDownloadPath(t *testing.T) {
+	artifactID := uuid.New()
+	wsID := uuid.New()
+
+	mockSvc := &MockArtifactService{
+		GetByIDInWorkspaceFunc: func(_ context.Context, id, _ uuid.UUID) (*domain.Artifact, error) {
+			return &domain.Artifact{
+				ID:       id,
+				Name:     "report.md",
+				Metadata: json.RawMessage(`{"tr_public_url":"https://relay.example.com/f"}`),
+			}, nil
+		},
+	}
+
+	h, e := setupArtifactTest(mockSvc)
+
+	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.Set("workspace_id", wsID)
+	c.SetPath("/artifacts/:artifact_id")
+	c.SetParamNames("artifact_id")
+	c.SetParamValues(artifactID.String())
+
+	require.NoError(t, h.GetByID(c))
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var result map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &result))
+
+	assert.Equal(t, "/api/v1/artifacts/"+artifactID.String()+"/download", result["download_path"],
+		"download_path must be the stable endpoint path, not a presigned URL")
+
+	rawMeta, ok := result["metadata"].(map[string]any)
+	require.True(t, ok, "metadata should be a JSON object")
+	assert.Equal(t, "https://relay.example.com/f", rawMeta["tr_public_url"],
+		"tr_public_url must remain present and unchanged for existing consumers")
+}
+
 // --- Download handler tests ---
 
 func TestArtifactHandler_Download_Disposition(t *testing.T) {
@@ -142,7 +185,9 @@ func TestArtifactHandler_List_StripsTrAgentKey(t *testing.T) {
 
 	var result struct {
 		Items []struct {
-			Metadata map[string]any `json:"metadata"`
+			ID           string         `json:"id"`
+			Metadata     map[string]any `json:"metadata"`
+			DownloadPath string         `json:"download_path"`
 		} `json:"items"`
 	}
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &result))
@@ -150,5 +195,7 @@ func TestArtifactHandler_List_StripsTrAgentKey(t *testing.T) {
 
 	for i, item := range result.Items {
 		assert.NotContains(t, item.Metadata, "tr_agent_key", "item %d: tr_agent_key must not appear in list response", i)
+		assert.Equal(t, "/api/v1/artifacts/"+item.ID+"/download", item.DownloadPath,
+			"item %d: download_path must be the stable endpoint path for that artifact's own ID", i)
 	}
 }
