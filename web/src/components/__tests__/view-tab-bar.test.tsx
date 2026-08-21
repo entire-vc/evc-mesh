@@ -56,9 +56,10 @@ describe("ViewTabBar", () => {
     const labels = within(strip)
       .getAllByRole("button")
       .map((b) => b.textContent?.trim());
-    // Trailing empties are the kebab trigger (DropdownMenuTrigger ignores
-    // asChild and wraps the button it is given).
-    expect(labels).toEqual(["Board", "List", "Calendar", "Docs", "", ""]);
+    // One trailing empty: the kebab trigger itself. There used to be two —
+    // DropdownMenuTrigger ignores `asChild` and rendered its own button around
+    // the one it was given, which is invalid HTML.
+    expect(labels).toEqual(["Board", "List", "Calendar", "Docs", ""]);
   });
 
   it("navigates to the docs route from the Docs tab", () => {
@@ -81,6 +82,8 @@ describe("ViewTabBar", () => {
     const menu = openKebab();
     const formats = within(menu).getAllByRole("menuitem");
     expect(formats.map((i) => i.textContent?.trim())).toEqual([
+      // Phone-only entry; present in the DOM at every width, hidden above `sm`.
+      "Calendar",
       "Timeline",
       "Updates",
       "Save current view",
@@ -120,6 +123,48 @@ describe("ViewTabBar", () => {
   it("keeps the Formats group when there is no project id", () => {
     renderBar("board");
     const menu = openKebab();
-    expect(within(menu).getAllByRole("menuitem")).toHaveLength(2);
+    // Timeline + Updates, plus the phone-only Calendar entry, which is in the
+    // DOM at every width and hidden with `sm:hidden`.
+    expect(within(menu).getAllByRole("menuitem")).toHaveLength(3);
+  });
+
+  // ---------------------------------------------------------------------
+  // Phone layout: four icons plus the kebab do not fit next to the
+  // breadcrumbs at 393px. jsdom applies no media queries, so these assert
+  // the responsive classes; the rendered proof is the 393px screenshot.
+  // ---------------------------------------------------------------------
+
+  it("drops Calendar from the strip below sm and keeps the other three", () => {
+    renderBar("board");
+    expect(screen.getByRole("button", { name: "Calendar" }).className).toContain(
+      "hidden sm:flex",
+    );
+    for (const name of ["Board", "List", "Docs"]) {
+      expect(screen.getByRole("button", { name }).className).not.toContain(
+        "hidden",
+      );
+    }
+  });
+
+  it("offers Calendar in the kebab, shown only below sm", () => {
+    renderBar("board");
+    openKebab();
+    const item = screen.getByRole("menuitem", { name: /calendar/i });
+    expect(item.className).toContain("sm:hidden");
+    fireEvent.click(item);
+    expect(navigate).toHaveBeenCalledWith("/w/acme/p/mesh/calendar");
+  });
+
+  it("marks the kebab active at phone width when Calendar is current", () => {
+    renderBar("calendar");
+    const trigger = screen.getByRole("button", { name: /more views/i });
+    expect(trigger.className).toContain("max-sm:bg-muted");
+  });
+
+  it("nests no button inside another button", () => {
+    renderBar("board", "project-1");
+    openKebab();
+    const nested = Array.from(document.querySelectorAll("button button"));
+    expect(nested).toEqual([]);
   });
 });
