@@ -2052,7 +2052,7 @@ func (s *commentService) releaseHumanGateOnWithdrawal(ctx context.Context, comme
 	if hasBlockingMarker(comment.Body) {
 		log.Printf("[human-gate] task %s: comment %s by agent %s carries both a withdrawal negator and a fresh Blocking marker — ambiguous, gate left as-is (not cleared)",
 			task.ID, comment.ID, comment.AuthorID)
-		s.reportWithdrawalMarkerConflict(ctx, comment, task)
+		s.reportWithdrawalMarkerConflict(ctx, task)
 		return
 	}
 
