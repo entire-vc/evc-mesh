@@ -112,10 +112,14 @@ export function ArtifactPreviewDialog({
   const kind = previewKindFor(artifact);
 
   return (
-    <Dialog open onOpenChange={(open) => !open && onClose()}>
+    <Dialog open onOpenChange={(open) => !open && onClose()} className="max-w-4xl">
       <DialogContent
         onClose={onClose}
-        className="flex max-h-[85vh] w-full max-w-4xl flex-col p-0"
+        data-testid="artifact-preview"
+        // No `w-full`: the Dialog wrapper is already full-width, and adding it here
+        // makes the box 100% of the viewport PLUS the `mx-4` margins, which
+        // overflows the right edge on a phone. Measured at 393px.
+        className="flex max-h-[85vh] flex-col p-0"
       >
         <DialogHeader className="shrink-0 border-b border-border px-5 py-4 pr-12 text-left">
           <DialogTitle className="truncate text-base">{artifact.name}</DialogTitle>
