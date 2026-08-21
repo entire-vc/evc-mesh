@@ -1,7 +1,11 @@
 import {
   type HTMLAttributes,
+  type MouseEvent as ReactMouseEvent,
+  type ReactElement,
   type ReactNode,
+  cloneElement,
   createContext,
+  isValidElement,
   useCallback,
   useContext,
   useEffect,
@@ -45,18 +49,46 @@ export function DropdownMenu({ children }: { children: ReactNode }) {
 
 export function DropdownMenuTrigger({
   children,
-  asChild: _asChild,
+  asChild = false,
+  className,
+  onClick,
   ...props
 }: HTMLAttributes<HTMLButtonElement> & {
   asChild?: boolean;
 }) {
   const { open, setOpen } = useContext(DropdownMenuContext);
-  const handleClick = useCallback(() => {
-    setOpen(!open);
-  }, [open, setOpen]);
+  const toggle = useCallback(
+    (event: ReactMouseEvent<HTMLElement>) => {
+      onClick?.(event as ReactMouseEvent<HTMLButtonElement>);
+      setOpen(!open);
+    },
+    [open, setOpen, onClick],
+  );
+
+  if (asChild) {
+    if (!isValidElement(children)) {
+      if (import.meta.env.DEV) {
+        console.error(
+          "DropdownMenuTrigger: asChild requires a single valid React element child.",
+        );
+      }
+      return null;
+    }
+    // Hand our props to the child instead of wrapping it in our own <button> —
+    // a wrapped Button rendered <button><button/></button>, invalid HTML.
+    const child = children as ReactElement<HTMLAttributes<HTMLElement>>;
+    return cloneElement(child, {
+      ...props,
+      className: cn(child.props.className, className),
+      onClick: (event: ReactMouseEvent<HTMLElement>) => {
+        child.props.onClick?.(event);
+        toggle(event);
+      },
+    });
+  }
 
   return (
-    <button type="button" onClick={handleClick} {...props}>
+    <button type="button" className={className} onClick={toggle} {...props}>
       {children}
     </button>
   );
