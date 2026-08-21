@@ -38,7 +38,7 @@ func setupMemoryChunkTest(t *testing.T) (*MemoryChunkRepo, *MemoryRepo, uuid.UUI
 		Scope:       domain.ScopeWorkspace,
 		SourceType:  domain.SourceAgent,
 	}
-	require.NoError(t, memRepo.Upsert(context.Background(), mem))
+	require.NoError(t, memRepo.Upsert(context.Background(), mem, domain.MemoryWriteIntent{}))
 
 	return NewMemoryChunkRepo(db), memRepo, mem.ID
 }
@@ -176,7 +176,7 @@ func TestMemoryRepo_ListNotYetChunked_IndependentOfEmbeddingModel(t *testing.T) 
 		SourceType:     domain.SourceAgent,
 		EmbeddingModel: "multilingual-e5-small",
 	}
-	require.NoError(t, memRepo.Upsert(ctx, unchunked))
+	require.NoError(t, memRepo.Upsert(ctx, unchunked, domain.MemoryWriteIntent{}))
 	// Upsert doesn't necessarily write embedding_model on insert depending on its column
 	// list — set it explicitly via the same path production code uses, so this test
 	// reflects the real pre-chunking row shape regardless of Upsert's exact column set.

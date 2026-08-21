@@ -903,7 +903,20 @@ type IntegrationRepository interface {
 
 // MemoryRepository manages persistence for agent memories (knowledge base).
 type MemoryRepository interface {
-	Upsert(ctx context.Context, mem *domain.Memory) error
+	// Upsert writes a memory and, in the same transaction, bumps its version and
+	// appends a revision row. intent carries why the write is happening and, when
+	// ExpectedVersion is set, what state it expects to overwrite — a conditional
+	// write returns *domain.MemoryVersionConflictError if that state has moved.
+	//
+	// intent is a required argument so that a new write path into the memories
+	// table has to state its intent rather than inheriting an unversioned,
+	// unexplained default.
+	Upsert(ctx context.Context, mem *domain.Memory, intent domain.MemoryWriteIntent) error
+	// ListRevisions returns one memory's recorded history, newest version first.
+	ListRevisions(ctx context.Context, memoryID uuid.UUID, limit int) ([]domain.MemoryRevision, error)
+	// AppendRevision records a revision row on its own, for the forget path,
+	// which snapshots content it is about to delete.
+	AppendRevision(ctx context.Context, rev domain.MemoryRevision) error
 	GetByID(ctx context.Context, id uuid.UUID) (*domain.Memory, error)
 	GetByKey(ctx context.Context, workspaceID uuid.UUID, projectID, agentID *uuid.UUID, key string, scope domain.MemoryScope) (*domain.Memory, error)
 	// FullTextSearch ranks memories by tsvector relevance (ts_rank_cd). When recencyWeight > 0

@@ -38,10 +38,6 @@ var keySlugRegex = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*[a-z0-9]$`)
 // does not supply an explicit min_importance. Entries below this score are noise.
 const defaultMinImportance float32 = 0.4
 
-// maxNearDupHamming is the Hamming distance threshold for near-duplicate detection.
-// Two memories whose content_simhash values differ by ≤ 10 bits are considered near-dups.
-const maxNearDupHamming = 10
-
 // entityKeywords are canonical domain terms that boost importance_score when found
 // in memory content, signalling higher decision-relevance.
 var entityKeywords = []string{"icp", "architecture", "license", "security", "money"}
@@ -419,7 +415,7 @@ func resolveProjectSlug(tags []string) (string, bool) {
 // Remember upserts a memory entry. It returns "created" if the key did not exist before,
 // or "updated" if an existing entry was overwritten.
 // After a successful upsert, it asynchronously embeds the content when an embedder is configured.
-func (s *memoryService) Remember(ctx context.Context, mem *domain.Memory) (RememberResult, error) {
+func (s *memoryService) Remember(ctx context.Context, mem *domain.Memory, intent domain.MemoryWriteIntent) (RememberResult, error) {
 	if mem.Key == "" {
 		return RememberResult{}, apierror.ValidationError(map[string]string{
 			"key": "key is required",
@@ -433,6 +429,25 @@ func (s *memoryService) Remember(ctx context.Context, mem *domain.Memory) (Remem
 	if mem.Content == "" {
 		return RememberResult{}, apierror.ValidationError(map[string]string{
 			"content": "content is required",
+		})
+	}
+
+	// A memory with no stated reason is the cheapest thing to write and the
+	// most expensive thing to read later: the next agent gets an assertion with
+	// no way to judge why it was made or whether it still holds.
+	//
+	// Enforcement is behind a flag that currently defaults to OFF, and that is
+	// a deployment constraint rather than a soft opinion. The `remember` tool
+	// every agent calls has no reason parameter yet, and the binary carrying
+	// that tool is rebuilt and installed by hand (Mesh #3d448464). Turning this
+	// on before the tool ships would reject every memory write in the fleet,
+	// and the repair would itself need a manual rebuild. So: accept-and-record
+	// now, measure how many writes arrive with a reason, flip the flag once
+	// they do. The rejection path below is the finished behaviour, not a
+	// placeholder — it is switched on by one environment variable.
+	if requireMemoryReason() && strings.TrimSpace(intent.Reason) == "" {
+		return RememberResult{}, apierror.ValidationError(map[string]string{
+			"reason": "reason is required: say what this memory is for, so a future thread can judge whether it still applies; memory was not written",
 		})
 	}
 
@@ -562,20 +577,26 @@ func (s *memoryService) Remember(ctx context.Context, mem *domain.Memory) (Remem
 		mem.FreshnessScore = 1.0
 	}
 
-	// ── Simhash: compute 64-bit fingerprint and detect near-duplicates ──────────
-	// A near-dup is a different memory (different key) whose content_simhash is
-	// within maxNearDupHamming bits. Detected synchronously at write time so
-	// callers are notified immediately without waiting for the 6h reconciler.
+	// ── Simhash: compute and store the 64-bit fingerprint ──────────────────────
+	// Stored for the 6-hourly reconciler's consolidation pass. It is no longer
+	// consulted at write time; see the note below.
 	hash := ComputeSimhash(mem.Content)
 	mem.ContentSimhash = &hash
 
-	var nearDupKey string
-	if hash != 0 {
-		excludeID := mem.ID // may be uuid.Nil for new creates; FindBySimhashProximity handles that
-		if dups, dupErr := s.memRepo.FindBySimhashProximity(ctx, mem.WorkspaceID, hash, maxNearDupHamming, excludeID, 1); dupErr == nil && len(dups) > 0 {
-			nearDupKey = dups[0].Key
-		}
-	}
+	// Write-time near-duplicate reporting was REMOVED here on 2026-08-20 (Mesh
+	// #0ba5e66a) after measuring it against 100 live memories: at the shipped
+	// threshold of 10 bits it fired on 19.7% of unrelated prose pairs, gave 91%
+	// of memories at least one "near-duplicate" partner, and carried 7.6%
+	// precision. No threshold fixes it — real duplicates span 1..12 bits and
+	// unrelated prose spans 2..28, so the ranges overlap across almost the whole
+	// useful band, and returning the distance alongside the key would not help a
+	// caller decide either. A field that is wrong 92% of the time does not just
+	// fail to inform; it teaches its readers to skip that part of the response,
+	// and the next signal put there inherits the habit.
+	//
+	// The simhash itself is still computed and stored above: the 6-hourly
+	// reconciler uses it for consolidation, which is a different question asked
+	// over a different population, and is not affected by this removal.
 
 	// Cache the source-task lookup — used for both thread_id propagation and
 	// Amendment 2/3 edge hooks below. One query, two consumers.
@@ -590,7 +611,14 @@ func (s *memoryService) Remember(ctx context.Context, mem *domain.Memory) (Remem
 		mem.ThreadID = sourceTask.ThreadID
 	}
 
-	if err := s.memRepo.Upsert(ctx, mem); err != nil {
+	if err := s.memRepo.Upsert(ctx, mem, intent); err != nil {
+		// A lost conditional write is the caller's answer, not an internal
+		// failure: it is returned unwrapped so the handler can map it to 409
+		// and hand the caller both version numbers.
+		var conflict *domain.MemoryVersionConflictError
+		if errors.As(err, &conflict) {
+			return RememberResult{}, err
+		}
 		return RememberResult{}, fmt.Errorf("memory remember: upsert: %w", err)
 	}
 
@@ -717,7 +745,7 @@ func (s *memoryService) Remember(ctx context.Context, mem *domain.Memory) (Remem
 		}
 	}
 
-	return RememberResult{Outcome: outcome, NearDupKey: nearDupKey, EmbeddingPending: embeddingPending}, nil
+	return RememberResult{Outcome: outcome, Version: mem.Version, EmbeddingPending: embeddingPending}, nil
 }
 
 // defaultExpiresAt applies the server-side TTL policy when the caller does not supply expires_at.
@@ -1456,7 +1484,9 @@ func (s *memoryService) SetProjectKnowledge(ctx context.Context, input SetProjec
 		Relevance:   1.0,
 	}
 
-	remResult, err := s.Remember(ctx, mem)
+	remResult, err := s.Remember(ctx, mem, domain.MemoryWriteIntent{
+		Reason: "project knowledge upsert",
+	})
 	if err != nil {
 		return nil, "", fmt.Errorf("set_project_knowledge: %w", err)
 	}
@@ -1505,7 +1535,7 @@ func (s *memoryService) SetProjectKnowledge(ctx context.Context, input SetProjec
 
 // Forget deletes a memory by ID. Agents may only delete their own agent-scope memories.
 // Admins (isAdmin=true) may delete any memory.
-func (s *memoryService) Forget(ctx context.Context, id uuid.UUID, actorAgentID *uuid.UUID, isAdmin bool) error {
+func (s *memoryService) Forget(ctx context.Context, id uuid.UUID, actorAgentID *uuid.UUID, isAdmin bool, reason string) error {
 	mem, err := s.memRepo.GetByID(ctx, id)
 	if err != nil {
 		return fmt.Errorf("memory forget: get by id: %w", err)
@@ -1524,10 +1554,60 @@ func (s *memoryService) Forget(ctx context.Context, id uuid.UUID, actorAgentID *
 		}
 	}
 
+	if requireMemoryReason() && strings.TrimSpace(reason) == "" {
+		return apierror.ValidationError(map[string]string{
+			"reason": "reason is required: say why this memory should stop being recalled; memory was not deleted",
+		})
+	}
+
+	// Record what is being removed BEFORE removing it. Order matters: if the
+	// delete succeeded and the snapshot then failed, the content would be gone
+	// with no record of what it had been — the one outcome this is here to
+	// prevent. Written this way round, a failure to record aborts the delete
+	// and the caller still has the memory.
+	if err := s.memRepo.AppendRevision(ctx, domain.MemoryRevision{
+		MemoryID:     mem.ID,
+		Version:      mem.Version + 1,
+		Content:      mem.Content,
+		Tags:         mem.Tags,
+		Action:       domain.MemoryActionForgotten,
+		Reason:       trimmedOrNil(reason),
+		ActorAgentID: actorAgentID,
+	}); err != nil {
+		return fmt.Errorf("memory forget: record revision: %w", err)
+	}
+
 	if err := s.memRepo.Delete(ctx, id); err != nil {
 		return fmt.Errorf("memory forget: delete: %w", err)
 	}
 	return nil
+}
+
+// trimmedOrNil returns nil for a blank string. Blank and absent are stored
+// differently on purpose: the column's CHECK rejects blank, and NULL carries the
+// distinct meaning "written before a reason was required".
+func trimmedOrNil(s string) *string {
+	t := strings.TrimSpace(s)
+	if t == "" {
+		return nil
+	}
+	return &t
+}
+
+// ListRevisions returns the recorded history of one memory, newest first.
+func (s *memoryService) ListRevisions(ctx context.Context, memoryID uuid.UUID, limit int) ([]domain.MemoryRevision, error) {
+	mem, err := s.memRepo.GetByID(ctx, memoryID)
+	if err != nil {
+		return nil, fmt.Errorf("memory revisions: get by id: %w", err)
+	}
+	if mem == nil {
+		return nil, apierror.NotFound("Memory")
+	}
+	revs, err := s.memRepo.ListRevisions(ctx, memoryID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("memory revisions: list: %w", err)
+	}
+	return revs, nil
 }
 
 // GetByID returns a single memory by primary key.
@@ -1607,7 +1687,9 @@ func (s *memoryService) ExtractFromEvent(ctx context.Context, event *domain.Even
 		return nil
 	}
 
-	if err := s.memRepo.Upsert(ctx, mem); err != nil {
+	if err := s.memRepo.Upsert(ctx, mem, domain.MemoryWriteIntent{
+		Reason: "extracted from event payload",
+	}); err != nil {
 		return fmt.Errorf("memory extract from event: upsert: %w", err)
 	}
 
@@ -1809,7 +1891,9 @@ func (s *memoryService) ImportMemories(ctx context.Context, workspaceID uuid.UUI
 			continue
 		}
 
-		if err := s.memRepo.Upsert(ctx, mem); err != nil {
+		if err := s.memRepo.Upsert(ctx, mem, domain.MemoryWriteIntent{
+			Reason: "bulk import",
+		}); err != nil {
 			log.Printf("memory import: upsert key=%s: %v", item.Key, err)
 			continue
 		}

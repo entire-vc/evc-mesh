@@ -259,3 +259,18 @@ func memorySanitizerDisabled() bool {
 	}
 	return false
 }
+
+// ── Reason requirement ──────────────────────────────────────────────────────
+
+// requireMemoryReasonEnv switches on rejection of memory writes that carry no
+// reason. It defaults to OFF; see the call site in Remember for why the flip is
+// staged behind the MCP tool shipping a reason parameter.
+const requireMemoryReasonEnv = "MESH_MEMORY_REQUIRE_REASON"
+
+// requireMemoryReason reports whether a missing reason should be refused.
+// Anything other than "1"/"true" (case-insensitive) leaves enforcement off, so
+// a typo in the variable fails in the safe direction: writes keep working.
+func requireMemoryReason() bool {
+	v := strings.ToLower(strings.TrimSpace(os.Getenv(requireMemoryReasonEnv)))
+	return v == "1" || v == "true"
+}

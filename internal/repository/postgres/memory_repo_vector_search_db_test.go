@@ -63,7 +63,7 @@ func newMemory(t *testing.T, repo *MemoryRepo, wsID uuid.UUID, key string) *doma
 		Scope:       domain.ScopeWorkspace,
 		SourceType:  domain.SourceAgent,
 	}
-	require.NoError(t, repo.Upsert(context.Background(), mem))
+	require.NoError(t, repo.Upsert(context.Background(), mem, domain.MemoryWriteIntent{}))
 	return mem
 }
 

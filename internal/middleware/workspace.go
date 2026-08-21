@@ -403,9 +403,19 @@ func resolveProjectWorkspace(ctx context.Context, _ *sqlx.DB, projectRepo reposi
 // it has to be — the whole point of the route is that a subscriber who was never
 // in the workspace can still get themselves out of it, which a membership guard
 // would forbid.
+//
+// /memories/:id/revisions returns the prior CONTENT of a memory, so it is if
+// anything more sensitive than /memories/:id and is checked the same way and in
+// the same place: MemoryHandler.Revisions resolves the memory first and answers
+// 404 unless the caller belongs to its workspace, before the history is read at
+// all. It is listed here for the same reason as its sibling — the parameter is
+// spelled :id, which unrelated routes would also match if it were resolved
+// centrally — and the handler-side check is covered by a test that goes red
+// when the check is removed.
 var workspaceScopeHandlerCheckedRoutes = map[string]bool{
 	"/api/v1/memories/:id":                       true,
 	"/api/v1/memories/:id/related":               true,
+	"/api/v1/memories/:id/revisions":             true,
 	"/api/v1/notifications/preferences/:pref_id": true,
 }
 

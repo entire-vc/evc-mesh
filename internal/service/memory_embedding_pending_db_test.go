@@ -103,7 +103,7 @@ func TestRemember_EmbeddingPending_SignaledWhileGoroutineInFlight(t *testing.T) 
 		Tags:        []string{"kind:learning"},
 	}
 
-	result, err := svc.Remember(ctx, mem)
+	result, err := svc.Remember(ctx, mem, domain.MemoryWriteIntent{})
 	require.NoError(t, err)
 	require.NotEqual(t, uuid.Nil, mem.ID, "Remember must assign an ID before returning")
 

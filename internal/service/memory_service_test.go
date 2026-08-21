@@ -90,13 +90,39 @@ type mockMemoryRepo struct {
 	archiveStaleWorkspaceCheckpointsFn func(ctx context.Context, olderThan time.Duration, maxImportance float64) (int64, error)
 	vectorSearchFn                     func(ctx context.Context, vec []float32, wsID uuid.UUID, projID *uuid.UUID, filter domain.MemorySearchFilter, limit int) ([]domain.ScoredMemory, error)
 	findPinnedFn                       func(ctx context.Context, wsID uuid.UUID, projID *uuid.UUID) ([]domain.Memory, error)
+
+	// Versioning/history hooks. lastUpsertIntent and appendedRevisions are
+	// captured rather than hooked so a test can assert on what the service
+	// asked for without having to supply a stub first.
+	lastUpsertIntent  domain.MemoryWriteIntent
+	upsertCalls       int
+	appendedRevisions []domain.MemoryRevision
+	appendRevisionFn  func(ctx context.Context, rev domain.MemoryRevision) error
+	listRevisionsFn   func(ctx context.Context, memoryID uuid.UUID, limit int) ([]domain.MemoryRevision, error)
 }
 
-func (m *mockMemoryRepo) Upsert(ctx context.Context, mem *domain.Memory) error {
+func (m *mockMemoryRepo) Upsert(ctx context.Context, mem *domain.Memory, intent domain.MemoryWriteIntent) error {
+	m.lastUpsertIntent = intent
+	m.upsertCalls++
 	if m.upsertFn != nil {
 		return m.upsertFn(ctx, mem)
 	}
 	return nil
+}
+
+func (m *mockMemoryRepo) AppendRevision(ctx context.Context, rev domain.MemoryRevision) error {
+	m.appendedRevisions = append(m.appendedRevisions, rev)
+	if m.appendRevisionFn != nil {
+		return m.appendRevisionFn(ctx, rev)
+	}
+	return nil
+}
+
+func (m *mockMemoryRepo) ListRevisions(ctx context.Context, memoryID uuid.UUID, limit int) ([]domain.MemoryRevision, error) {
+	if m.listRevisionsFn != nil {
+		return m.listRevisionsFn(ctx, memoryID, limit)
+	}
+	return nil, nil
 }
 
 func (m *mockMemoryRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.Memory, error) {
@@ -390,7 +416,7 @@ func TestRemember_CreateNew(t *testing.T) {
 	svc := newMemoryService(repo)
 	mem := baseMemory(wsID)
 
-	result, err := svc.Remember(context.Background(), mem)
+	result, err := svc.Remember(context.Background(), mem, domain.MemoryWriteIntent{})
 
 	require.NoError(t, err)
 	assert.Equal(t, "created", result.Outcome)
@@ -430,7 +456,7 @@ func TestRemember_UpdateExisting(t *testing.T) {
 		Scope:       domain.ScopeProject,
 	}
 
-	result, err := svc.Remember(context.Background(), mem)
+	result, err := svc.Remember(context.Background(), mem, domain.MemoryWriteIntent{})
 
 	require.NoError(t, err)
 	assert.Equal(t, "updated", result.Outcome)
@@ -459,7 +485,7 @@ func TestRemember_SetsSimhash(t *testing.T) {
 	mem := baseMemory(wsID)
 	mem.Content = "this is a longer content that will get a valid simhash fingerprint"
 
-	_, err := svc.Remember(context.Background(), mem)
+	_, err := svc.Remember(context.Background(), mem, domain.MemoryWriteIntent{})
 	require.NoError(t, err)
 	require.NotNil(t, capturedMem)
 	assert.NotNil(t, capturedMem.ContentSimhash, "ContentSimhash must be set after Remember()")
@@ -486,7 +512,7 @@ func TestRemember_SetsStatusActive(t *testing.T) {
 	svc := newMemoryService(repo)
 	mem := baseMemory(wsID)
 
-	_, err := svc.Remember(context.Background(), mem)
+	_, err := svc.Remember(context.Background(), mem, domain.MemoryWriteIntent{})
 	require.NoError(t, err)
 	require.NotNil(t, capturedMem)
 	assert.Equal(t, domain.MemoryStatusActive, capturedMem.Status)
@@ -563,7 +589,7 @@ func TestRemember_InvalidKey(t *testing.T) {
 				Scope:       domain.ScopeProject,
 			}
 
-			_, err := svc.Remember(context.Background(), mem)
+			_, err := svc.Remember(context.Background(), mem, domain.MemoryWriteIntent{})
 
 			require.Error(t, err)
 			var apiErr *apierror.Error
@@ -755,7 +781,7 @@ func TestDefaultExpiresAt_KindSessionCheckpointTag(t *testing.T) {
 		Scope:       domain.ScopeWorkspace,
 		Tags:        []string{"kind:session-checkpoint", "owner:linus"},
 	}
-	_, err := svc.Remember(context.Background(), mem)
+	_, err := svc.Remember(context.Background(), mem, domain.MemoryWriteIntent{})
 	require.NoError(t, err)
 	require.NotNil(t, capturedMem)
 	require.NotNil(t, capturedMem.ExpiresAt, "kind:session-checkpoint must get expires_at TTL")
@@ -824,7 +850,7 @@ func TestForget_OwnAgentScope(t *testing.T) {
 
 	svc := newMemoryService(repo)
 
-	err := svc.Forget(context.Background(), memID, &agentID, false)
+	err := svc.Forget(context.Background(), memID, &agentID, false, "")
 
 	require.NoError(t, err)
 	assert.True(t, deleteCalled)
@@ -854,7 +880,7 @@ func TestForget_OtherAgentScope(t *testing.T) {
 	svc := newMemoryService(repo)
 
 	// A different agent attempts to delete the memory.
-	err := svc.Forget(context.Background(), memID, &otherAgentID, false)
+	err := svc.Forget(context.Background(), memID, &otherAgentID, false, "")
 
 	require.Error(t, err)
 	var apiErr *apierror.Error
@@ -892,7 +918,7 @@ func TestForget_AdminCanDeleteAny(t *testing.T) {
 
 	// Admin (isAdmin=true, actorAgentID unrelated) can delete any memory.
 	someOtherID := uuid.New()
-	err := svc.Forget(context.Background(), memID, &someOtherID, true)
+	err := svc.Forget(context.Background(), memID, &someOtherID, true, "")
 
 	require.NoError(t, err)
 	assert.True(t, deleteCalled)
@@ -1219,7 +1245,7 @@ func TestRemember_SetsImportanceScore(t *testing.T) {
 		Scope:       domain.ScopeProject,
 		Tags:        []string{"kind:decision"},
 	}
-	_, err := svc.Remember(context.Background(), mem)
+	_, err := svc.Remember(context.Background(), mem, domain.MemoryWriteIntent{})
 	require.NoError(t, err)
 	assert.InDelta(t, 0.8, upserted.ImportanceScore, 0.001, "kind:decision should score 0.8")
 }
@@ -1257,7 +1283,7 @@ func TestRemember_ReinforcementBoost(t *testing.T) {
 		Scope:       domain.ScopeProject,
 		Tags:        []string{"kind:decision", "team:backend"},
 	}
-	_, err := svc.Remember(context.Background(), mem)
+	_, err := svc.Remember(context.Background(), mem, domain.MemoryWriteIntent{})
 	require.NoError(t, err)
 	// base 0.8 (decision) + 0.1 reinforcement = 0.9
 	assert.InDelta(t, 0.9, upserted.ImportanceScore, 0.001)
@@ -1338,7 +1364,7 @@ func TestRemember_Hook1_RelatesTo(t *testing.T) {
 		Tags:        []string{"arch", "decision", "postgres"},
 	}
 
-	_, err := svc.Remember(context.Background(), mem)
+	_, err := svc.Remember(context.Background(), mem, domain.MemoryWriteIntent{})
 
 	require.NoError(t, err)
 	require.NotNil(t, capturedEdge, "relates_to edge should be created on ≥60%% tag overlap")
@@ -1392,7 +1418,7 @@ func TestRemember_Hook1_NoEdgeBelowThreshold(t *testing.T) {
 		Tags:        []string{"arch"},
 	}
 
-	_, err := svc.Remember(context.Background(), mem)
+	_, err := svc.Remember(context.Background(), mem, domain.MemoryWriteIntent{})
 
 	require.NoError(t, err)
 	assert.False(t, edgeCalled, "no edge should be created when tag overlap is below 60%%")
@@ -1447,7 +1473,7 @@ func TestRemember_Hook3_DerivedFrom(t *testing.T) {
 		Tags:        []string{"kind:incident"},
 	}
 
-	_, err := svc.Remember(context.Background(), mem)
+	_, err := svc.Remember(context.Background(), mem, domain.MemoryWriteIntent{})
 
 	require.NoError(t, err)
 	require.NotNil(t, capturedEdge, "derived_from edge should be created for incident referencing another memory")
@@ -1635,7 +1661,7 @@ func TestRemember_SlugResolution(t *testing.T) {
 			Scope:       domain.ScopeProject,
 			Tags:        []string{"kind:session-checkpoint", "project:mesh", "owner:garfield"},
 		}
-		_, err := svc.Remember(context.Background(), mem)
+		_, err := svc.Remember(context.Background(), mem, domain.MemoryWriteIntent{})
 		require.NoError(t, err)
 		require.NotNil(t, upserted.ProjectID, "project_id must be set when project:mesh tag resolves on scope=project")
 		assert.Equal(t, projID, *upserted.ProjectID)
@@ -1672,7 +1698,7 @@ func TestRemember_SlugResolution(t *testing.T) {
 			Scope:       domain.ScopeWorkspace,
 			Tags:        []string{"kind:session-checkpoint", "project:mesh", "owner:garfield"},
 		}
-		_, err := svc.Remember(context.Background(), mem)
+		_, err := svc.Remember(context.Background(), mem, domain.MemoryWriteIntent{})
 		require.NoError(t, err)
 		assert.Nil(t, upserted.ProjectID, "scope=workspace must never get an auto-populated project_id")
 	})
@@ -1706,7 +1732,7 @@ func TestRemember_SlugResolution(t *testing.T) {
 			Scope:       domain.ScopeAgent,
 			Tags:        []string{"kind:session-checkpoint", "project:mesh", "owner:garfield"},
 		}
-		_, err := svc.Remember(context.Background(), mem)
+		_, err := svc.Remember(context.Background(), mem, domain.MemoryWriteIntent{})
 		require.NoError(t, err)
 		assert.Nil(t, upserted.ProjectID, "scope=agent must never get an auto-populated project_id")
 	})
@@ -1731,7 +1757,7 @@ func TestRemember_SlugResolution(t *testing.T) {
 			Scope:       domain.ScopeProject,
 			Tags:        []string{"project:mesh"},
 		}
-		_, err := svc.Remember(context.Background(), mem)
+		_, err := svc.Remember(context.Background(), mem, domain.MemoryWriteIntent{})
 		require.NoError(t, err)
 		require.NotNil(t, upserted.ProjectID)
 		assert.Equal(t, existingProjID, *upserted.ProjectID, "explicit project_id must not be overwritten")
@@ -1754,7 +1780,7 @@ func TestRemember_SlugResolution(t *testing.T) {
 			Scope:       domain.ScopeWorkspace,
 			Tags:        []string{"project:mesh"},
 		}
-		_, err := svc.Remember(context.Background(), mem)
+		_, err := svc.Remember(context.Background(), mem, domain.MemoryWriteIntent{})
 		require.NoError(t, err)
 		assert.Nil(t, upserted.ProjectID)
 	})
@@ -1777,7 +1803,7 @@ func TestRemember_SlugResolution(t *testing.T) {
 			Scope:       domain.ScopeWorkspace,
 			Tags:        []string{"project:mesh-dev", "project:spark"},
 		}
-		_, err := svc.Remember(context.Background(), mem)
+		_, err := svc.Remember(context.Background(), mem, domain.MemoryWriteIntent{})
 		require.NoError(t, err)
 		assert.Nil(t, upserted.ProjectID)
 	})
@@ -1804,7 +1830,7 @@ func TestRemember_SlugResolution(t *testing.T) {
 			Scope:       domain.ScopeWorkspace,
 			Tags:        []string{"project:mesh-dev"},
 		}
-		_, err := svc.Remember(context.Background(), mem)
+		_, err := svc.Remember(context.Background(), mem, domain.MemoryWriteIntent{})
 		require.NoError(t, err)
 		assert.Nil(t, upserted.ProjectID)
 	})
@@ -1842,7 +1868,7 @@ func TestRemember_ExplicitProjectIDNormalizedByScope(t *testing.T) {
 			Content:     "content",
 			Scope:       domain.ScopeWorkspace,
 		}
-		_, err := svc.Remember(context.Background(), mem)
+		_, err := svc.Remember(context.Background(), mem, domain.MemoryWriteIntent{})
 		require.NoError(t, err)
 		assert.Nil(t, upserted.ProjectID, "an explicit project_id must not survive on scope=workspace")
 	})
@@ -1866,7 +1892,7 @@ func TestRemember_ExplicitProjectIDNormalizedByScope(t *testing.T) {
 			Content:     "content",
 			Scope:       domain.ScopeAgent,
 		}
-		_, err := svc.Remember(context.Background(), mem)
+		_, err := svc.Remember(context.Background(), mem, domain.MemoryWriteIntent{})
 		require.NoError(t, err)
 		assert.Nil(t, upserted.ProjectID, "an explicit project_id must not survive on scope=agent")
 	})
@@ -1890,7 +1916,7 @@ func TestRemember_ExplicitProjectIDNormalizedByScope(t *testing.T) {
 			Content:     "content",
 			Scope:       domain.ScopeProject,
 		}
-		_, err := svc.Remember(context.Background(), mem)
+		_, err := svc.Remember(context.Background(), mem, domain.MemoryWriteIntent{})
 		require.NoError(t, err)
 		require.NotNil(t, upserted.ProjectID, "scope=project must keep a caller-supplied project_id")
 		assert.Equal(t, explicitProjID, *upserted.ProjectID)
@@ -2042,7 +2068,7 @@ func TestRemember_Amendment2_ThreadIDEdges(t *testing.T) {
 			Scope:        domain.ScopeWorkspace,
 			SourceTaskID: &taskID,
 		}
-		_, err := svc.Remember(context.Background(), mem)
+		_, err := svc.Remember(context.Background(), mem, domain.MemoryWriteIntent{})
 		require.NoError(t, err)
 		require.NotNil(t, createdEdge, "relates_to edge must be created for same-thread candidate")
 		assert.Equal(t, existingMemID, createdEdge.MemoryToID)
@@ -2076,7 +2102,7 @@ func TestRemember_Amendment2_ThreadIDEdges(t *testing.T) {
 			Scope:        domain.ScopeWorkspace,
 			SourceTaskID: &taskID,
 		}
-		_, err := svc.Remember(context.Background(), mem)
+		_, err := svc.Remember(context.Background(), mem, domain.MemoryWriteIntent{})
 		require.NoError(t, err)
 		require.NotNil(t, upsertedMem.ThreadID, "thread_id must be propagated from source task")
 		assert.Equal(t, threadID, *upsertedMem.ThreadID)
@@ -2108,7 +2134,7 @@ func TestRemember_Amendment2_ThreadIDEdges(t *testing.T) {
 			Scope:        domain.ScopeWorkspace,
 			SourceTaskID: &taskID,
 		}
-		_, err := svc.Remember(context.Background(), mem)
+		_, err := svc.Remember(context.Background(), mem, domain.MemoryWriteIntent{})
 		require.NoError(t, err)
 		assert.False(t, edgeCalled, "no weight=1.0 edge when task has no thread_id")
 	})
@@ -2136,7 +2162,7 @@ func TestRemember_Amendment2_ThreadIDEdges(t *testing.T) {
 			SourceTaskID: &taskID,
 			ThreadID:     &tid,
 		}
-		_, err := svc.Remember(context.Background(), mem)
+		_, err := svc.Remember(context.Background(), mem, domain.MemoryWriteIntent{})
 		require.NoError(t, err)
 		// FindByThreadID is still called when ThreadID is pre-set on mem (even w/o taskRepo)
 		// — the edge repo is the gate; this test verifies no panic / no crash.
@@ -2191,7 +2217,7 @@ func TestRemember_Amendment3_TaskGraphBridge(t *testing.T) {
 			Scope:        domain.ScopeWorkspace,
 			SourceTaskID: &taskID,
 		}
-		_, err := svc.Remember(context.Background(), mem)
+		_, err := svc.Remember(context.Background(), mem, domain.MemoryWriteIntent{})
 		require.NoError(t, err)
 		require.NotNil(t, createdEdge, "derived_from edge must be created for parent task memory")
 		assert.Equal(t, parentMemID, createdEdge.MemoryToID)
@@ -2246,7 +2272,7 @@ func TestRemember_Amendment3_TaskGraphBridge(t *testing.T) {
 			Scope:        domain.ScopeWorkspace,
 			SourceTaskID: &taskID,
 		}
-		_, err := svc.Remember(context.Background(), mem)
+		_, err := svc.Remember(context.Background(), mem, domain.MemoryWriteIntent{})
 		require.NoError(t, err)
 		require.NotNil(t, createdEdge, "derived_from edge must be created for depends_on task memory")
 		assert.Equal(t, depMemID, createdEdge.MemoryToID)
@@ -2283,7 +2309,7 @@ func TestRemember_Amendment3_TaskGraphBridge(t *testing.T) {
 			Scope:        domain.ScopeWorkspace,
 			SourceTaskID: &taskID,
 		}
-		_, err := svc.Remember(context.Background(), mem)
+		_, err := svc.Remember(context.Background(), mem, domain.MemoryWriteIntent{})
 		require.NoError(t, err)
 		assert.False(t, edgeCalled, "no derived_from edge when task has no related tasks")
 	})
