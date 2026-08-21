@@ -10,6 +10,8 @@ function baseProps(overrides: Partial<BoardToolbarProps> = {}): BoardToolbarProp
     onSortByChange: vi.fn(),
     showClosed: false,
     onShowClosedChange: vi.fn(),
+    humanGateOnly: false,
+    onHumanGateOnlyChange: vi.fn(),
     showSubtasks: false,
     onShowSubtasksChange: vi.fn(),
     searchQuery: "",
@@ -62,5 +64,14 @@ describe("BoardToolbar dropdown triggers", () => {
     fireEvent.click(sortOption);
 
     expect(onSortByChange).toHaveBeenCalledWith("updated");
+  });
+
+  it("Waiting on me toggle calls onHumanGateOnlyChange with the flipped value", () => {
+    const onHumanGateOnlyChange = vi.fn();
+    render(<BoardToolbar {...baseProps({ humanGateOnly: false, onHumanGateOnlyChange })} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /Waiting on me/i }));
+
+    expect(onHumanGateOnlyChange).toHaveBeenCalledWith(true);
   });
 });

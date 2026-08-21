@@ -6,6 +6,7 @@ const sample: BoardFilterState = {
   sortBy: "due_date",
   showClosed: true,
   showSubtasks: true,
+  humanGateOnly: true,
   searchQuery: "urgent fix",
   priorityFilter: "high",
   assigneeFilter: "agent",

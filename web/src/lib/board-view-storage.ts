@@ -13,6 +13,7 @@ export interface BoardFilterState {
   sortBy: string;
   showClosed: boolean;
   showSubtasks: boolean;
+  humanGateOnly: boolean;
   searchQuery: string;
   priorityFilter: string;
   assigneeFilter: string;
