@@ -1,6 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router";
+import {
+  AA_NON_TEXT,
+  AA_TEXT,
+  brandkitThemes,
+  contrast,
+} from "@/test-utils/brandkit-contrast";
 
 const mockedNavigate = vi.fn();
 vi.mock("react-router", async () => {
@@ -830,6 +836,61 @@ describe("DocsPage — move", () => {
     await waitFor(() => expect(screen.getByLabelText("Collapse Other")).toBeInTheDocument());
     fireEvent.click(screen.getByLabelText("Collapse Other"));
     expect(screen.queryByText("Child")).not.toBeInTheDocument();
+  });
+
+  it("fills the picked destination with the light secondary surface, not the accent", async () => {
+    // Pinned deliberately, and it is the same pin the tree carries. The dialog
+    // shipped with `--accent` on the picked row and on hover — a saturated teal
+    // block under the inherited near-black text — and that is what was reported
+    // as "the highlight is dark, it was supposed to be the light green one".
+    mockRoutes([parent, child, other]);
+    renderDocs();
+
+    await screen.findByText("Child");
+    openMoveDialogFor("Child");
+    fireEvent.click(await screen.findByRole("option", { name: /Other/ }));
+
+    const picked = screen.getByRole("option", { name: /Other/ });
+    expect(picked).toHaveClass("bg-secondary");
+    expect(picked).toHaveClass("text-secondary-foreground");
+    expect(picked).not.toHaveClass("bg-accent");
+    // Hover is a neutral tint, not the brand fill: every row the pointer
+    // crossed used to turn into a solid teal block.
+    expect(picked).toHaveClass("hover:bg-muted");
+    expect(picked.className).not.toContain("hover:bg-accent");
+  });
+
+  it("gives the picked destination a cue beyond its fill", async () => {
+    // --secondary and --muted are close in lightness by design, so the pick
+    // cannot rest on the fill alone — same reasoning as the tree row.
+    mockRoutes([parent, child, other]);
+    renderDocs();
+
+    await screen.findByText("Child");
+    openMoveDialogFor("Child");
+    fireEvent.click(await screen.findByRole("option", { name: /Other/ }));
+
+    const picked = screen.getByRole("option", { name: /Other/ });
+    expect(picked).toHaveClass("font-medium");
+    expect(picked.querySelector("[data-selected-bar]")).toBeInTheDocument();
+
+    const notPicked = screen.getByRole("option", { name: /Top level/ });
+    expect(notPicked).not.toHaveClass("bg-secondary");
+    expect(notPicked.querySelector("[data-selected-bar]")).toBeNull();
+  });
+
+  it("keeps the destination list readable in both themes", () => {
+    // The pairing is theme tokens, so the readability check belongs to the
+    // tokens. Eyeballing is what put --accent here in the first place.
+    const { light, dark } = brandkitThemes();
+
+    expect(contrast(light, "--secondary", "--secondary-foreground")).toBeGreaterThanOrEqual(AA_TEXT);
+    expect(contrast(dark, "--secondary", "--secondary-foreground")).toBeGreaterThanOrEqual(AA_TEXT);
+    // What it replaced, and why it was reported.
+    expect(contrast(light, "--accent", "--foreground")).toBeLessThan(AA_TEXT);
+    // The bar has to stay visible on the fill it sits on (WCAG 1.4.11).
+    expect(contrast(light, "--secondary", "--primary")).toBeGreaterThanOrEqual(AA_NON_TEXT);
+    expect(contrast(dark, "--secondary", "--primary")).toBeGreaterThanOrEqual(AA_NON_TEXT);
   });
 });
 

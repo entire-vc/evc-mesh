@@ -192,6 +192,41 @@ function TitleDialog({
  * list also states the illegal moves by omission — the document's own subtree is
  * simply not in it.
  */
+/**
+ * A destination row, and the row that is currently picked.
+ *
+ * Same pairing the tree itself uses (`doc-tree.tsx`), and for the same reason:
+ * `--accent` is a saturated teal, not a tint, so filling a row with it and
+ * leaving the inherited body foreground on top measures 2.82:1 in light and
+ * 1.73:1 in dark — under the 4.5:1 AA floor. The dialog shipped with exactly
+ * that pairing on both the pick and the hover, which is what "the highlight is
+ * dark, it was supposed to be the light green one" is reporting. `--secondary`
+ * is the light teal-green of the palette and carries its own foreground.
+ *
+ * `--secondary` and `--muted` (the hover tint) sit close in lightness on
+ * purpose, so the pick is not left to the fill alone: it also gets the brand
+ * bar at the row edge and heavier text — again as in the tree, so a picked row
+ * looks the same in both places.
+ */
+const MOVE_OPTION =
+  "group relative flex w-full items-center gap-1.5 rounded px-2 py-1.5 text-left text-sm hover:bg-muted";
+const MOVE_OPTION_SELECTED = "bg-secondary font-medium text-secondary-foreground";
+
+/**
+ * The second cue on a picked row. A real element rather than a border: the row
+ * encodes tree depth in its left padding, and a border would shift every nested
+ * title by 3px.
+ */
+function SelectedBar() {
+  return (
+    <span
+      aria-hidden="true"
+      data-selected-bar=""
+      className="absolute inset-y-1 left-0 w-[3px] rounded-full bg-primary"
+    />
+  );
+}
+
 function MoveDialog({
   open,
   doc,
@@ -229,10 +264,11 @@ function MoveDialog({
                 aria-selected={selected === null}
                 onClick={() => setSelected(null)}
                 className={cn(
-                  "flex w-full items-center gap-1.5 rounded px-2 py-1.5 text-left text-sm hover:bg-accent",
-                  selected === null && "bg-accent font-medium",
+                  MOVE_OPTION,
+                  selected === null && MOVE_OPTION_SELECTED,
                 )}
               >
+                {selected === null && <SelectedBar />}
                 <NotebookText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                 <span className="truncate">Top level</span>
                 {currentParent === null && (
@@ -250,11 +286,12 @@ function MoveDialog({
                   aria-selected={selected === target.id}
                   onClick={() => setSelected(target.id)}
                   className={cn(
-                    "flex w-full items-center gap-1.5 rounded px-2 py-1.5 text-left text-sm hover:bg-accent",
-                    selected === target.id && "bg-accent font-medium",
+                    MOVE_OPTION,
+                    selected === target.id && MOVE_OPTION_SELECTED,
                   )}
                   style={{ paddingLeft: `${8 + depth * 12}px` }}
                 >
+                  {selected === target.id && <SelectedBar />}
                   <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                   <span className="truncate">{target.title}</span>
                   {currentParent === target.id && (
