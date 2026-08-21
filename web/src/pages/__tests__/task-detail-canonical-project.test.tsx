@@ -61,6 +61,7 @@ const TASK: Task = {
   assignee_id: null,
   assignee_type: "unassigned",
   priority: "medium",
+  human_gate: false,
   parent_task_id: null,
   position: 0,
   due_date: null,

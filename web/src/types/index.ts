@@ -290,6 +290,26 @@ export interface Task {
    */
   checked_out_by?: string | null;
   checkout_expires?: string | null;
+  /**
+   * Sticky flag set when a human sign-off is required — always sent (never
+   * omitted) by both list and detail responses. See human_gate_class for
+   * hard/soft, and human_gate_info for who/since (detail responses only).
+   */
+  human_gate: boolean;
+  human_gate_class?: "hard" | "soft";
+  human_gate_armed_at?: string | null;
+  /** Populated only by GET /tasks/:id when human_gate is true — not on list rows. */
+  human_gate_info?: HumanGateInfo | null;
+}
+
+export interface HumanGateInfo {
+  gated: boolean;
+  owner_agent_id?: string | null;
+  owner_name?: string;
+  marker_comment_id?: string | null;
+  marker_created_at?: string | null;
+  clearable_by_owner: boolean;
+  reason_if_not?: string;
 }
 
 export interface Comment {
