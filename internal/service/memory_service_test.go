@@ -297,10 +297,6 @@ func (m *mockMemoryRepo) ArchiveStaleWorkspaceCheckpoints(ctx context.Context, o
 	return 0, nil
 }
 
-func (m *mockMemoryRepo) FindBySimhashProximity(_ context.Context, _ uuid.UUID, _ int64, _ int, _ uuid.UUID, _ int) ([]domain.Memory, error) {
-	return nil, nil
-}
-
 func (m *mockMemoryRepo) FindPinned(ctx context.Context, wsID uuid.UUID, projID *uuid.UUID) ([]domain.Memory, error) {
 	if m.findPinnedFn != nil {
 		return m.findPinnedFn(ctx, wsID, projID)
