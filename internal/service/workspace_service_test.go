@@ -97,6 +97,23 @@ func TestWorkspaceService_Create(t *testing.T) {
 			wantErr: true,
 			errCode: http.StatusBadRequest,
 		},
+		{
+			// Regression test for #85fd1ef2: a zero OwnerID used to be
+			// persisted as-is, producing a workspace nothing could
+			// subsequently read, write, or delete (the auto-add-membership
+			// step below is gated on the same OwnerID and silently no-ops).
+			// The handler already refuses the one caller class that used to
+			// send OwnerID==Nil (agents have no user_id); this is the
+			// service's own backstop against any future caller doing it
+			// again.
+			name: "error - nil owner ID",
+			workspace: &domain.Workspace{
+				Name:    "Acme Corp",
+				OwnerID: uuid.Nil,
+			},
+			wantErr: true,
+			errCode: http.StatusBadRequest,
+		},
 	}
 
 	for _, tt := range tests {
