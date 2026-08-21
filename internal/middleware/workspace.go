@@ -162,6 +162,18 @@ var workspaceParamResolvers = []workspaceParamResolver{
 	// all, and for a user JWT it can only read a workspace that a route parameter
 	// had already resolved — which on these routes was none.
 	{param: "event_id", resolve: uuidResolver(`SELECT workspace_id FROM event_bus_messages WHERE id = $1`)},
+	// A secret names its tenant directly. /secrets/:secret_id is a flat route
+	// in exactly the sense described above — nothing else in its path says
+	// which workspace it addresses — and it is the one route class where an
+	// unguarded flat id would be worst: rotating another tenant's secret
+	// replaces a credential they still rely on. rbac(PermManageSecrets) is
+	// not the guard here; on a user JWT it can only read a workspace some
+	// resolver already produced, which without this entry would be none.
+	//
+	// No notFoundResource: the handler's own GetByID scopes by workspace and
+	// answers NotFound for a foreign row anyway, so both layers give a
+	// stranger the same answer for "no such secret" and "not yours".
+	{param: "secret_id", resolve: uuidResolver(`SELECT workspace_id FROM secrets WHERE id = $1`)},
 	{param: "comment_id", resolve: uuidResolver(`SELECT p.workspace_id
 	                               FROM comments c
 	                               JOIN tasks t ON c.task_id = t.id AND t.deleted_at IS NULL

@@ -70,6 +70,14 @@ func (s *secretService) Create(ctx context.Context, input domain.CreateSecretInp
 	if err := validateCreateInput(input); err != nil {
 		return domain.Secret{}, err
 	}
+	// project_id and agent_id arrive in the request body, where no route
+	// parameter names them and the workspace guard therefore never sees them.
+	// The table's foreign keys accept another tenant's ids, so this check is
+	// the only thing standing between a create and a row that references a
+	// project the caller cannot see.
+	if err := s.repo.AssertScopeRefInWorkspace(ctx, input.WorkspaceID, input.ProjectID, input.AgentID); err != nil {
+		return domain.Secret{}, err
+	}
 	return s.repo.Create(ctx, input)
 }
 
@@ -86,6 +94,13 @@ func (s *secretService) Rotate(ctx context.Context, workspaceID uuid.UUID, scope
 	if err := validateCreateInput(input); err != nil {
 		return domain.Secret{}, err
 	}
+	// Rotate's scope refs normally come from a row this workspace already
+	// owns, so this is belt-and-braces there — but the method is callable
+	// with any refs, and a containment check that only runs on the path
+	// someone remembered to route through it is not a containment check.
+	if err := s.repo.AssertScopeRefInWorkspace(ctx, workspaceID, projectID, agentID); err != nil {
+		return domain.Secret{}, err
+	}
 	return s.repo.Rotate(ctx, workspaceID, scope, projectID, agentID, name, input)
 }
 
@@ -95,6 +110,10 @@ func (s *secretService) Delete(ctx context.Context, workspaceID uuid.UUID, scope
 
 func (s *secretService) List(ctx context.Context, workspaceID uuid.UUID, projectID, agentID *uuid.UUID) ([]domain.Secret, error) {
 	return s.repo.ListCurrent(ctx, workspaceID, projectID, agentID)
+}
+
+func (s *secretService) GetByID(ctx context.Context, workspaceID, id uuid.UUID) (domain.Secret, error) {
+	return s.repo.GetByID(ctx, workspaceID, id)
 }
 
 var _ SecretService = (*secretService)(nil)

@@ -279,6 +279,17 @@ jobs:
           JWT_ISSUER: "mesh-ci"
           # Disable rate limiting so integration tests don't hit auth RPM
           MESH_RATE_LIMIT_ENABLED: "false"
+          # Encryption key for the secrets store and project_integrations.
+          # NOT a secret: it is a fixed, published, CI-only value that protects
+          # nothing — the throwaway Postgres it writes to is destroyed with the
+          # runner. It is here because without a key pkg/encryption.Encrypt
+          # returns the PLAINTEXT unchanged, and the secrets table's trigger
+          # then rejects the row for lacking an enc:v1: prefix. That failure
+          # would surface as every fixture using newVictimFixture breaking at
+          # setup, far from its cause. REQUIRED=1 so a future key mistake fails
+          # loudly here instead of silently downgrading to plaintext.
+          MESH_INTEGRATION_ENCRYPTION_KEY: "ZXZjLW1lc2gtY2ktaW50ZWdyYXRpb24tdGVzdC1rMzI="
+          MESH_INTEGRATION_ENCRYPTION_REQUIRED: "1"
           APP_ENV: test
         run: |
           go build -o /tmp/mesh-api ./cmd/api
