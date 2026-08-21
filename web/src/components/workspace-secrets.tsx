@@ -33,10 +33,19 @@ import type { CreateSecretRequest, Secret } from "@/types";
 //   * no "reveal" toggle. There is nothing to reveal.
 //   * delete stops materialization; it does not erase history.
 //
-// ⚠️ COPY IS A DRAFT. Every user-visible string below (headings, labels,
-// helper text, error text, button labels) is a proposal pending Pavel's
-// approval per §1r.A — see S8. The mechanism ships now; the words may change.
-// Do not treat the strings here as approved by their presence in main.
+// COPY STATUS (§1r.A). Pavel approved a specific table of strings on
+// 2026-08-21 (task #705013f4): the section heading and its subtitle, both
+// input placeholders, Store/Storing, the seven column headers, the empty
+// state, both dialog titles and bodies, Replace/Replacing, and the two
+// validation errors. Those are approved and must not be reworded casually.
+//
+// NOT covered by that approval, and still pending: the three success toasts,
+// the four "Could not …" error fallbacks, the rotate dialog's own placeholder
+// and validation string, the two Cancel buttons, the delete-confirm button
+// label, and the "expired" badge. They are each either an existing string
+// elsewhere in this app or a mechanical inflection of an approved word — but
+// "not new voice" is an argument, not an approval. Presence in main does not
+// make them approved.
 // ---------------------------------------------------------------------------
 
 const NAME_PATTERN = /^[A-Z][A-Z0-9_]*$/;

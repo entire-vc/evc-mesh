@@ -1098,9 +1098,18 @@ export type SecretScope = "workspace" | "project" | "agent";
 
 // The masked view of a secret. There is deliberately no `value` field: the API
 // has no endpoint that returns one, so a component that tried to render a value
-// would not compile. The remaining fields are exactly what
-// scripts/env-inventory.py prints, so the UI list and the host inventory can be
-// read side by side.
+// would not compile.
+//
+// The four MASKING fields — name, value_sha256_prefix, value_length,
+// value_char_class — are 1:1 with what scripts/env-inventory.py prints
+// (NAME / FP / LEN / CHARS), so the UI list and the host inventory can be read
+// side by side. That parity is deliberate and is the point of the comparison.
+//
+// It does NOT extend to the rest of this struct. scope, project_id, agent_id,
+// expires_at, created_by, created_at and rotated_at have no counterpart in the
+// script and cannot have one: env-inventory.py scans static .env/plist/JSON
+// carriers, which carry no audit metadata at all. Earlier wording here claimed
+// the whole struct matched the script; that was false.
 export interface Secret {
   id: string;
   name: string;

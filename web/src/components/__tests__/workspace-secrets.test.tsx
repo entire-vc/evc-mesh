@@ -58,8 +58,10 @@ describe("WorkspaceSecrets", () => {
 
     await screen.findByTestId("secret-list");
 
-    // The masked fields, by their rendered values — the same set
-    // scripts/env-inventory.py emits.
+    // The four masking fields, by their rendered values — 1:1 with what
+    // scripts/env-inventory.py emits (NAME / FP / LEN / CHARS). Scope is
+    // asserted too, but it is Mesh's own field: the script has no notion of
+    // scope, so this list is a superset of the script's, not a copy of it.
     expect(screen.getByText("GITHUB_TOKEN")).toBeInTheDocument();
     expect(screen.getByText("3b1f9a02")).toBeInTheDocument();
     expect(screen.getByText("40")).toBeInTheDocument();
