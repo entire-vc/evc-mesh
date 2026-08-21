@@ -59,6 +59,7 @@ type taskService struct {
 	notifySvc         NotificationService
 	ctxCacheInv       ContextCacheInvalidator
 	wsMembership      WorkspaceMembershipReader
+	listRevisionRepo  repository.TaskListRevisionRepository
 }
 
 // NewTaskService returns a new TaskService backed by the given repositories.
@@ -167,6 +168,17 @@ func WithNotificationService(ns NotificationService) TaskServiceOption {
 func WithProjectMemberRepoTask(pmr repository.ProjectMemberRepository) TaskServiceOption {
 	return func(s *taskService) {
 		s.projectMemberRepo = pmr
+	}
+}
+
+// WithTaskListRevisionRepo sets the repository used to read the per-project
+// task_list_revision counter (ADR-0004). When unset, List behaves exactly as
+// it did before this option existed: no staleness check, no ListRevision
+// stamped on the returned page — callers who never send list_revision are
+// completely unaffected either way.
+func WithTaskListRevisionRepo(r repository.TaskListRevisionRepository) TaskServiceOption {
+	return func(s *taskService) {
+		s.listRevisionRepo = r
 	}
 }
 
@@ -550,7 +562,35 @@ func (s *taskService) GetByShortID(ctx context.Context, prefix string) (*domain.
 
 func (s *taskService) List(ctx context.Context, projectID uuid.UUID, filter repository.TaskFilter, pg pagination.Params) (*pagination.Page[domain.Task], error) {
 	pg.Normalize()
-	return s.taskRepo.List(ctx, projectID, filter, pg)
+
+	// Revision validation (ADR-0004): only runs when the repo is wired AND the
+	// caller sent a nonzero list_revision (i.e. this isn't page 1 of a fresh
+	// walk). No repo wired means no wiring done yet, not "not applicable" —
+	// but that's a deploy-ordering concern, not something List can fix, so it
+	// degrades to "no check" rather than erroring every call.
+	var currentRevision int64
+	if s.listRevisionRepo != nil {
+		var err error
+		currentRevision, err = s.listRevisionRepo.GetRevision(ctx, projectID)
+		if err != nil {
+			return nil, err
+		}
+		if pg.ListRevision != 0 && pg.ListRevision != currentRevision {
+			return nil, &ListRevisionStaleError{
+				Requested: pg.ListRevision,
+				Current:   currentRevision,
+			}
+		}
+	}
+
+	page, err := s.taskRepo.List(ctx, projectID, filter, pg)
+	if err != nil {
+		return nil, err
+	}
+	if s.listRevisionRepo != nil {
+		page.ListRevision = currentRevision
+	}
+	return page, nil
 }
 
 func (s *taskService) Search(ctx context.Context, workspaceID uuid.UUID, filter repository.TaskFilter, pg pagination.Params) (*pagination.Page[domain.Task], error) {
@@ -1608,6 +1648,23 @@ type CASConflictError struct {
 func (e *CASConflictError) Error() string {
 	return fmt.Sprintf("cas_conflict: task status is %s (updated_at=%s)",
 		e.CurrentStatusID, e.CurrentUpdatedAt.Format(time.RFC3339))
+}
+
+// ListRevisionStaleError is returned by List (ADR-0004,
+// dev-docs/adrs/0004-task-list-revision-and-stale-cursor.md) when a caller's
+// list_revision no longer matches the project's current task_list_revision —
+// meaning tasks/artifacts/vcs_links changed since the page the caller is
+// continuing from was issued. The handler maps this to HTTP 410 Gone with
+// the exact body shape ADR-0004 Decision 4 specifies: restarting pagination
+// from page 1 (no list_revision) is the only correct recovery, never a
+// silent fallback to a fresh or stale snapshot under the same page number.
+type ListRevisionStaleError struct {
+	Requested int64
+	Current   int64
+}
+
+func (e *ListRevisionStaleError) Error() string {
+	return fmt.Sprintf("list_revision_stale: requested %d, current %d", e.Requested, e.Current)
 }
 
 // RuleViolationError is returned when a governance rule blocks an action.

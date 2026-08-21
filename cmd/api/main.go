@@ -355,6 +355,10 @@ func main() {
 		// user assignment, so this wiring is load-bearing, not optional —
 		// TestTaskServiceWiresTheAssigneeTenancyGuard reads it back out of this file.
 		service.WithWorkspaceMembershipReader(postgres.NewWorkspaceMembershipReader(db)),
+		// Enables stale-cursor rejection on list_tasks (ADR-0004). Without
+		// this, List behaves exactly as it did before the option existed —
+		// see WithTaskListRevisionRepo's doc comment.
+		service.WithTaskListRevisionRepo(postgres.NewTaskListRevisionRepo(db)),
 	)
 
 	// Wire auto-transition service. It calls taskService.MoveTask, so taskService must already
