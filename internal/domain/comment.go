@@ -22,7 +22,18 @@ type Comment struct {
 	UpdatedAt       time.Time       `json:"updated_at" db:"updated_at"`
 
 	// Computed (not a DB column — populated via subquery in SELECT).
-	AuthorName *string `json:"author_name,omitempty" db:"author_name"`
+	//
+	// No omitempty: a nil AuthorName (system-authored comment, or an agent
+	// whose row is soft-deleted) must still serialize the key as JSON
+	// `null`, not omit it entirely. omitempty on a *string treats a nil
+	// pointer as "empty" and drops the field, which made system-authored
+	// comments the only branch of this CASE (comment_repo.go's
+	// commentEnrichedSelect) to come back with author_name missing from the
+	// response altogether instead of null like every other unresolved
+	// branch. Consumers already use optional chaining (comment.author_name?.),
+	// which treats null and undefined identically, so this does not change
+	// any rendering behavior — only the wire shape.
+	AuthorName *string `json:"author_name" db:"author_name"`
 
 	// Delivery is what became of each @-addressed handle on this comment:
 	// who it reached, over which path, and — when it reached nobody — the

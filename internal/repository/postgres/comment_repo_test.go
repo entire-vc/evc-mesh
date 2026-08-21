@@ -161,3 +161,83 @@ func TestCommentRepo_ListByTask_ManyComments_TailIsReachable(t *testing.T) {
 	require.NotEmpty(t, newestPage.Items)
 	assert.Equal(t, newestID, newestPage.Items[0].ID, "sort_dir=desc page 1 must contain the newest comment first")
 }
+
+// TestCommentRepo_ListByTask_AuthorNameJSONShape is the regression + negative
+// control for #444502cb: a system-authored comment's author_name CASE branch
+// (commentEnrichedSelect in comment_repo.go) falls to its ELSE NULL arm, and
+// domain.Comment.AuthorName used to carry `json:"author_name,omitempty"` — a
+// nil *string is "empty" under Go's omitempty rule, so the key vanished from
+// the response entirely instead of serializing as `"author_name":null` like
+// every other unresolved branch of the same CASE. Pre-fix this test's first
+// subtest fails on `_, ok := raw["author_name"]` (ok=false); post-fix the key
+// is present with a JSON null value.
+func TestCommentRepo_ListByTask_AuthorNameJSONShape(t *testing.T) {
+	db := testDB(t)
+	_, proj, status := createTestProject(t, db)
+	taskRepo := NewTaskRepo(db)
+	commentRepo := NewCommentRepo(db)
+	ctx := context.Background()
+
+	taskID := createTestTaskForComments(t, taskRepo, proj.ID, status.ID)
+
+	t.Run("system-authored comment: author_name key present, value null", func(t *testing.T) {
+		sysComment := &domain.Comment{
+			ID:         uuid.New(),
+			TaskID:     taskID,
+			AuthorID:   uuid.Nil,
+			AuthorType: domain.ActorTypeSystem,
+			Body:       "🔓 Auto: system comment",
+			IsInternal: false,
+			CreatedAt:  time.Now().UTC().Truncate(time.Microsecond),
+			UpdatedAt:  time.Now().UTC().Truncate(time.Microsecond),
+		}
+		require.NoError(t, commentRepo.Create(ctx, sysComment))
+
+		fetched, err := commentRepo.GetByID(ctx, sysComment.ID)
+		require.NoError(t, err)
+		require.NotNil(t, fetched)
+		assert.Nil(t, fetched.AuthorName, "Go-side value stays nil — only the JSON wire shape changes")
+
+		b, err := json.Marshal(fetched)
+		require.NoError(t, err)
+		var raw map[string]interface{}
+		require.NoError(t, json.Unmarshal(b, &raw))
+
+		val, ok := raw["author_name"]
+		assert.True(t, ok, "author_name key must be PRESENT in the JSON body, not omitted")
+		assert.Nil(t, val, "author_name value must be JSON null for a system-authored comment")
+	})
+
+	t.Run("negative control: agent/user comment with a valid author still returns the real name", func(t *testing.T) {
+		userID := createTestUser(t, db, "author-name-shape")
+		var displayName string
+		require.NoError(t, db.GetContext(ctx, &displayName, "SELECT display_name FROM users WHERE id = $1", userID))
+
+		userComment := &domain.Comment{
+			ID:         uuid.New(),
+			TaskID:     taskID,
+			AuthorID:   userID,
+			AuthorType: domain.ActorTypeUser,
+			Body:       "a real user comment",
+			IsInternal: false,
+			CreatedAt:  time.Now().UTC().Truncate(time.Microsecond),
+			UpdatedAt:  time.Now().UTC().Truncate(time.Microsecond),
+		}
+		require.NoError(t, commentRepo.Create(ctx, userComment))
+
+		fetched, err := commentRepo.GetByID(ctx, userComment.ID)
+		require.NoError(t, err)
+		require.NotNil(t, fetched)
+		require.NotNil(t, fetched.AuthorName)
+		assert.Equal(t, displayName, *fetched.AuthorName)
+
+		b, err := json.Marshal(fetched)
+		require.NoError(t, err)
+		var raw map[string]interface{}
+		require.NoError(t, json.Unmarshal(b, &raw))
+
+		val, ok := raw["author_name"]
+		assert.True(t, ok, "author_name key must be present")
+		assert.Equal(t, displayName, val, "a valid author's real name must be untouched by the null-key fix")
+	})
+}
