@@ -394,20 +394,29 @@ func TestFetchAttachment_NonexistentAttachmentIsErrNotFound(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// ё / Ё — currently RED, tracked upstream (task #ee1745ce)
+// Generic server-side rejection propagation
 // ---------------------------------------------------------------------------
 
-func TestRequestFileToken_CyrillicYoIsRejectedByTeamRelay_TrackedUpstreamEE1745CE(t *testing.T) {
-	// Team Relay's _ALLOWED_FILE_PATH_RE (shares.py:243) is
-	// ^[a-zA-Z0-9._\-/А-Яа-я ]+$ — А-Я/а-я do NOT include ё (U+0451) or
-	// Ё (U+0401), so a path containing either is rejected with 400 at
-	// file-token issuance. This is upstream behavior, not fixable client-side.
-	// The test is RED on purpose and MUST NOT be skipped: it is the drift
-	// guard for task #ee1745ce — it goes green the day Team Relay's regex is
-	// fixed, and that's the signal to remove this comment, not the test.
+// This test used to be pinned to a specific upstream bug (ё/Ё rejected by
+// Team Relay's file-path regex, task #ee1745ce) and framed as a drift guard:
+// "currently RED on purpose, goes green the day upstream ships a fix." That
+// premise was stale before the test even merged — evc-team-relay#213 (ё/Ё
+// added to the allowed pattern) deployed ~2s before evc-mesh#671 merged the
+// "still RED, tracked upstream" comment, three hours later. And the test
+// could never have gone green OR red from upstream's actual state either
+// way: it runs entirely against its own httptest mock, never against real
+// Team Relay, so nothing about TR's live regex is observable from it.
+// Verified live 2026-08-20: a path containing ё/Ё is accepted (200) by real
+// Team Relay today, not rejected — task #a353fbb1.
+//
+// What the test correctly verified all along — our client surfaces a 400
+// from the relay rather than swallowing it — has nothing to do with ё. That
+// part is real and kept below, with the mock's rejection trigger now an
+// arbitrary string instead of a claim about a specific character.
+func TestRequestFileToken_PropagatesServerRejection(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
-		if bytes.Contains(body, []byte("Ёлка")) || bytes.Contains(body, []byte("ё")) {
+		if bytes.Contains(body, []byte("reject-me")) {
 			w.WriteHeader(http.StatusBadRequest)
 			_, _ = w.Write([]byte(`{"detail":"path contains invalid characters"}`))
 			return
@@ -416,10 +425,27 @@ func TestRequestFileToken_CyrillicYoIsRejectedByTeamRelay_TrackedUpstreamEE1745C
 	}))
 	defer srv.Close()
 
-	_, _, err := RequestFileToken(context.Background(), srv.URL, "s1", "Ёлка.png", "k", "", 0)
+	_, _, err := RequestFileToken(context.Background(), srv.URL, "s1", "reject-me.png", "k", "", 0)
+	require.Error(t, err, "client must surface a server-side path rejection, not swallow it")
+}
 
-	// This assertion is the one that should start FAILING (i.e. err becoming
-	// nil) once Team Relay ships the fix — at which point flip it to
-	// require.NoError and delete this comment block.
-	require.Error(t, err, "expected upstream to still reject ё/Ё in file paths — see #ee1745ce; if this now passes, the upstream bug is fixed, update this test")
+// Negative control for the test above: the same mock, but a path it accepts.
+// Without this, TestRequestFileToken_PropagatesServerRejection could pass
+// vacuously against a mock (or a mutated client) that errors unconditionally.
+func TestRequestFileToken_PropagatesServerRejection_AcceptedPathSucceeds(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		if bytes.Contains(body, []byte("reject-me")) {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"detail":"path contains invalid characters"}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"token":"t","base_url":"x"}`))
+	}))
+	defer srv.Close()
+
+	token, baseURL, err := RequestFileToken(context.Background(), srv.URL, "s1", "fine.png", "k", "", 0)
+	require.NoError(t, err)
+	assert.Equal(t, "t", token)
+	assert.Equal(t, "x", baseURL)
 }
