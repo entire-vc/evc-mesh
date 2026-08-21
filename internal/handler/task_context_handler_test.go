@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -118,90 +116,17 @@ func serveTaskContext(t *testing.T, h *TaskContextHandler, e *echo.Echo, taskID 
 	return rec
 }
 
-// Architecture guard for the defect class, not the single instance.
+// TestArtifactReadPathsAllRedact used to live here as a source-text scanner:
+// it grepped this package's non-test .go files for known artifactService read
+// calls and required each file to also mention stripSensitiveMetadata. That
+// caught the original defect class (#58a0e7aa — this exact handler had the
+// read but not the guard) but only within this one package, only at file
+// granularity, and only for the read methods it knew the names of (#4b33a6fd).
 //
-// The bug was not "a field was forgotten" — it was that a redaction guard was
-// applied to two of three read paths, and nothing noticed the third. This test
-// fails when a handler learns to read artifacts without also redacting them, so
-// a fourth path cannot reopen the hole silently.
-func TestArtifactReadPathsAllRedact(t *testing.T) {
-	// Non-test sources only: this file mentions both strings itself, and matching
-	// its own text would make the check pass for the wrong reason.
-	entries, err := os.ReadDir(".")
-	require.NoError(t, err)
-
-	scanned, withReads := 0, 0
-	for _, entry := range entries {
-		name := entry.Name()
-		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
-			continue
-		}
-		scanned++
-
-		raw, readErr := os.ReadFile(name)
-		require.NoError(t, readErr)
-		src := stripGoComments(string(raw))
-
-		// Every way a handler can obtain an artifact from the service layer.
-		if !strings.Contains(src, "artifactService.ListByTask") &&
-			!strings.Contains(src, "artifactService.GetByIDInWorkspace") &&
-			!strings.Contains(src, "artifactService.GetByID(") {
-			continue
-		}
-		withReads++
-
-		// assert.True rather than assert.Contains: the latter dumps the whole
-		// source file into the failure output and buries the message.
-		assert.True(t, strings.Contains(src, "stripSensitiveMetadata"),
-			"%s reads artifacts from the service but never calls stripSensitiveMetadata — "+
-				"tr_agent_key and any future secret in artifact metadata would reach the "+
-				"API response, which is exactly how GET /tasks/:id/context leaked it", name)
-	}
-
-	// Guards the guard: if the match strings ever stop matching (a rename, a
-	// wrapper, a move to another package) this test would silently scan nothing
-	// and pass. Both counts must be non-zero for a green result to mean anything.
-	require.NotZero(t, scanned, "scanned no handler sources — the scan itself is broken")
-	require.NotZero(t, withReads,
-		"found no artifact read paths at all — the match strings no longer match "+
-			"the code, so this test is passing vacuously rather than verifying anything")
-}
-
-// stripGoComments blanks out // and /* */ comments so the scan above judges code
-// rather than prose. Without it a file that merely *mentions* the guard in a
-// comment satisfies the check — which is not hypothetical: the comment written
-// above the fix in task_context_handler.go names the function, and an early
-// version of this test stayed green when the call itself was deleted.
-//
-// Deliberately not a Go parser: this only has to be conservative enough that a
-// real call site is never blanked, and string literals containing "//" would at
-// worst cost a false alarm, never a silent pass.
-func stripGoComments(src string) string {
-	var out strings.Builder
-	out.Grow(len(src))
-
-	inBlock, inLine := false, false
-	for i := 0; i < len(src); i++ {
-		switch {
-		case inLine:
-			if src[i] == '\n' {
-				inLine = false
-				out.WriteByte('\n')
-			}
-		case inBlock:
-			if src[i] == '*' && i+1 < len(src) && src[i+1] == '/' {
-				inBlock = false
-				i++
-			}
-		case src[i] == '/' && i+1 < len(src) && src[i+1] == '/':
-			inLine = true
-			i++
-		case src[i] == '/' && i+1 < len(src) && src[i+1] == '*':
-			inBlock = true
-			i++
-		default:
-			out.WriteByte(src[i])
-		}
-	}
-	return out.String()
-}
+// Redaction is no longer a call each handler must remember — it is on
+// domain.Artifact.MarshalJSON, so it runs for every caller in every package
+// automatically. See internal/domain/artifact_test.go for the guarantee test,
+// including a negative control that constructs an Artifact in a throwaway
+// handler this package has never heard of and confirms it still redacts —
+// which is the structural equivalent of "a fourth read path can't reopen the
+// hole silently", without needing to enumerate read-method names to scan for.

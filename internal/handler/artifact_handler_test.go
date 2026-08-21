@@ -22,41 +22,8 @@ func setupArtifactTest(mockSvc *MockArtifactService) (*ArtifactHandler, *echo.Ec
 	return h, e
 }
 
-// --- stripSensitiveMetadata unit tests ---
-
-func TestStripSensitiveMetadata_RemovesTrAgentKey(t *testing.T) {
-	art := &domain.Artifact{
-		ID:       uuid.New(),
-		Metadata: json.RawMessage(`{"tr_public_url":"https://example.com/file.txt","tr_agent_key":"tr_agent_abc123"}`),
-	}
-	stripSensitiveMetadata(art)
-
-	var m map[string]any
-	require.NoError(t, json.Unmarshal(art.Metadata, &m))
-	assert.NotContains(t, m, "tr_agent_key")
-	assert.Equal(t, "https://example.com/file.txt", m["tr_public_url"])
-}
-
-func TestStripSensitiveMetadata_PreservesOtherKeys(t *testing.T) {
-	art := &domain.Artifact{
-		ID:       uuid.New(),
-		Metadata: json.RawMessage(`{"tr_public_url":"https://example.com/file.txt","custom":"value"}`),
-	}
-	before := string(art.Metadata)
-	stripSensitiveMetadata(art)
-	assert.JSONEq(t, before, string(art.Metadata))
-}
-
-func TestStripSensitiveMetadata_NilMetadata(t *testing.T) {
-	art := &domain.Artifact{ID: uuid.New(), Metadata: nil}
-	assert.NotPanics(t, func() { stripSensitiveMetadata(art) })
-	assert.Nil(t, art.Metadata)
-}
-
-func TestStripSensitiveMetadata_EmptyMetadata(t *testing.T) {
-	art := &domain.Artifact{ID: uuid.New(), Metadata: json.RawMessage{}}
-	assert.NotPanics(t, func() { stripSensitiveMetadata(art) })
-}
+// Redaction unit tests now live on the type itself:
+// internal/domain/artifact_test.go (domain.Artifact.MarshalJSON).
 
 // --- GetByID handler tests ---
 

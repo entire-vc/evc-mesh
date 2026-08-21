@@ -45,3 +45,53 @@ type Artifact struct {
 	UploadedByType UploaderType    `json:"uploaded_by_type" db:"uploaded_by_type"`
 	CreatedAt      time.Time       `json:"created_at" db:"created_at"`
 }
+
+// sensitiveArtifactMetadataKeys are Metadata fields the service layer needs
+// internally but that must never reach an API response. tr_agent_key is a
+// long-lived TeamRelay share credential.
+var sensitiveArtifactMetadataKeys = []string{"tr_agent_key"}
+
+// MarshalJSON redacts sensitiveArtifactMetadataKeys from Metadata before
+// serialising. This runs for every caller that turns an Artifact into JSON —
+// handler, package, or future read path alike — because it is on the type,
+// not on each call site. The previous approach (a helper each handler had to
+// remember to call) missed the GET /tasks/:id/context path for months
+// (#58a0e7aa) before anyone noticed; a per-callsite guard can always be
+// forgotten again by the next one. This can't be.
+func (a Artifact) MarshalJSON() ([]byte, error) {
+	type alias Artifact // same fields/tags, no MarshalJSON — avoids recursion
+	out := alias(a)
+	out.Metadata = redactArtifactMetadata(a.Metadata)
+	return json.Marshal(out)
+}
+
+func redactArtifactMetadata(raw json.RawMessage) json.RawMessage {
+	if len(raw) == 0 {
+		// A non-nil zero-length RawMessage ("") is not valid JSON — passing it
+		// through unchanged makes encoding/json fail the whole marshal with
+		// "unexpected end of JSON input" (caught by
+		// TestArtifact_MarshalJSON_EmptyMetadata). nil marshals to `null`,
+		// which is what a genuinely absent Metadata should look like anyway.
+		return nil
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		// Not a JSON object we can inspect — pass through rather than drop
+		// legitimate metadata on an unexpected shape.
+		return raw
+	}
+	changed := false
+	for _, k := range sensitiveArtifactMetadataKeys {
+		if _, ok := m[k]; ok {
+			delete(m, k)
+			changed = true
+		}
+	}
+	if !changed {
+		return raw
+	}
+	if b, err := json.Marshal(m); err == nil {
+		return b
+	}
+	return raw
+}
