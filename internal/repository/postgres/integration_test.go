@@ -391,6 +391,64 @@ func TestTaskRepo_CreateAndGetByID(t *testing.T) {
 	assert.Equal(t, pq.StringArray{"test", "integration"}, got.Labels)
 }
 
+// TestTaskRepo_Update_LabelsRoundTrip is the repository-level regression test for
+// labels surviving Update, not just Create. Create's round trip is already covered
+// by TestTaskRepo_CreateAndGetByID above; this closes the matching gap on the
+// Update path — same category of bug as TestTaskRepo_Create_ReviewerRoundTrip
+// below (a field present in one write path's SQL but silently missing from the
+// other's). Reported live 2026-08-20 (task #19d927d9): update_task(labels=[...])
+// via the fleet's MCP tool call returned labels=[] on the following get_task. At
+// this repo/DB layer the write path could not be made to reproduce that symptom
+// (see PR description for the live-reproduction evidence at the API layer); this
+// test exists so a REAL future regression here — e.g. someone editing the columns
+// list in the Update SQL and missing "labels" — fails loudly instead of silently.
+func TestTaskRepo_Update_LabelsRoundTrip(t *testing.T) {
+	db := testDB(t)
+	_, proj, status := createTestProject(t, db)
+	repo := NewTaskRepo(db)
+	ctx := context.Background()
+
+	task := &domain.Task{
+		ID:            uuid.New(),
+		ProjectID:     proj.ID,
+		StatusID:      status.ID,
+		Title:         "Task for labels update round-trip",
+		AssigneeType:  domain.AssigneeTypeUnassigned,
+		Priority:      domain.PriorityMedium,
+		Labels:        pq.StringArray{"initial"},
+		CreatedBy:     uuid.New(),
+		CreatedByType: domain.ActorTypeUser,
+		CreatedAt:     time.Now().UTC().Truncate(time.Microsecond),
+		UpdatedAt:     time.Now().UTC().Truncate(time.Microsecond),
+	}
+	require.NoError(t, repo.Create(ctx, task))
+
+	got, err := repo.GetByID(ctx, task.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, pq.StringArray{"initial"}, got.Labels, "labels must survive Create before we even test Update")
+
+	// Update to a different, larger label set — mirrors update_task(labels=[...]).
+	got.Labels = pq.StringArray{"x", "y", "z"}
+	got.UpdatedAt = time.Now().UTC().Truncate(time.Microsecond)
+	require.NoError(t, repo.Update(ctx, got))
+
+	afterUpdate, err := repo.GetByID(ctx, task.ID)
+	require.NoError(t, err)
+	require.NotNil(t, afterUpdate)
+	assert.Equal(t, pq.StringArray{"x", "y", "z"}, afterUpdate.Labels, "labels set via Update must round-trip through GetByID, not come back empty")
+
+	// Clearing labels back to empty must persist as an empty array, not error or no-op.
+	afterUpdate.Labels = pq.StringArray{}
+	afterUpdate.UpdatedAt = time.Now().UTC().Truncate(time.Microsecond)
+	require.NoError(t, repo.Update(ctx, afterUpdate))
+
+	afterClear, err := repo.GetByID(ctx, task.ID)
+	require.NoError(t, err)
+	require.NotNil(t, afterClear)
+	assert.Empty(t, afterClear.Labels, "clearing labels via Update must persist as empty, not silently keep the old set")
+}
+
 // TestTaskRepo_Create_ReviewerRoundTrip is the repository-level regression test
 // for the reviewer_id/reviewer_type columns missing from Create's INSERT: a
 // service-layer test with a mocked repo cannot see a real INSERT silently
