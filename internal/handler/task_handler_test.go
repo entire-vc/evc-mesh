@@ -2182,3 +2182,46 @@ func TestTaskHandler_SearchGlobal_DecoratesLikeList(t *testing.T) {
 	assert.False(t, present)
 	assert.Equal(t, true, slim[0]["has_description"], "flag survives exclusion in search too")
 }
+
+// ListSubtasks is a third list-shaped endpoint (list-view.tsx's inline subtask
+// expansion renders it through the same EnhancedTitleCell as the board/list, which
+// trusts has_description over a live text check). Before decorateTaskList was
+// wired in here too, HasDescription was left at its Go zero value for every
+// subtask row — a subtask with real description text reported
+// has_description:false and the card silently lost its glyph, even though this
+// endpoint never truncates the text itself. Caught auditing consumers of the
+// #32f4c087 projection.
+func TestTaskHandler_ListSubtasks_HasDescriptionAndURLAreDecorated(t *testing.T) {
+	parentID := uuid.New()
+	now := time.Now()
+	subtasks := []domain.Task{
+		{ID: uuid.New(), ParentTaskID: &parentID, Title: "with", Description: "real text", CreatedAt: now, UpdatedAt: now},
+		{ID: uuid.New(), ParentTaskID: &parentID, Title: "without", Description: "", CreatedAt: now, UpdatedAt: now},
+	}
+	mockSvc := &MockTaskService{
+		ListSubtasksFunc: func(ctx context.Context, pid uuid.UUID) ([]domain.Task, error) {
+			return subtasks, nil
+		},
+	}
+	h, e := setupTaskTest(mockSvc)
+	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/tasks/:task_id/subtasks")
+	c.SetParamNames("task_id")
+	c.SetParamValues(parentID.String())
+
+	require.NoError(t, h.ListSubtasks(c))
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var raw map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &raw))
+	items := rawItems(t, raw)
+	require.Len(t, items, 2)
+
+	assert.Equal(t, true, items[0]["has_description"], "subtask with real text must report has_description:true")
+	assert.Equal(t, "real text", items[0]["description"], "ListSubtasks never truncates — no caller asked it to")
+	assert.NotEmpty(t, items[0]["url"], "decorateTaskList also fills in the URL, which this endpoint never set before")
+
+	assert.Equal(t, false, items[1]["has_description"])
+}
