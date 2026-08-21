@@ -32,12 +32,15 @@ services:
   nats:
     image: nats:2-alpine
     restart: unless-stopped
-    command: ["--jetstream", "--store_dir", "/data", "--http_port", "8222"]
+    command: ["-c", "/etc/nats/nats-server.conf"]
+    environment:
+      NATS_STREAM_MAX_BYTES: ${NATS_STREAM_MAX_BYTES:-10737418240}
     ports:
       - "${NATS_PORT:-4223}:4222"
       - "${NATS_MONITOR_PORT:-8223}:8222"
     volumes:
       - ./volumes/nats/data:/data
+      - ./nats-server.conf:/etc/nats/nats-server.conf:ro
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:8222/healthz"]
       interval: 5s
