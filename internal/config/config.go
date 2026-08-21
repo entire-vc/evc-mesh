@@ -282,7 +282,7 @@ func Load() *Config {
 			MonitorURL:     getEnv("NATS_MONITOR_URL", "http://localhost:8223"),
 			StreamMaxBytes: getEnvInt64("NATS_STREAM_MAX_BYTES", 10*1024*1024*1024), // 10 GB
 			StreamMaxAge:   getEnvDuration("NATS_STREAM_MAX_AGE", 30*24*time.Hour),  // 30 days
-			MaxMsgSize:     int32(getEnvInt("NATS_MAX_MSG_SIZE", 256*1024)),         // 256 KB
+			MaxMsgSize:     getEnvInt32("NATS_MAX_MSG_SIZE", 256*1024),              // 256 KB
 			Replicas:       getEnvInt("NATS_REPLICAS", 1),
 		},
 		S3: S3Config{
@@ -405,6 +405,19 @@ func getEnvInt64(key string, defaultVal int64) int64 {
 	if val, ok := os.LookupEnv(key); ok {
 		if i, err := strconv.ParseInt(val, 10, 64); err == nil {
 			return i
+		}
+	}
+	return defaultVal
+}
+
+// getEnvInt32 parses directly into int32's own range, unlike
+// int32(getEnvInt(...)) — that cast truncates silently on a value outside
+// int32 bounds (e.g. a typo'd NATS_MAX_MSG_SIZE) instead of falling back to
+// the default the way every other malformed-input case in this file does.
+func getEnvInt32(key string, defaultVal int32) int32 {
+	if val, ok := os.LookupEnv(key); ok {
+		if i, err := strconv.ParseInt(val, 10, 32); err == nil {
+			return int32(i)
 		}
 	}
 	return defaultVal

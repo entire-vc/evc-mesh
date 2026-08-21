@@ -134,3 +134,15 @@ func TestLoad_NATSStreamMaxBytesInvalidFallsBackToDefault(t *testing.T) {
 
 	assert.Equal(t, int64(10*1024*1024*1024), cfg.NATS.StreamMaxBytes)
 }
+
+// A NATS_MAX_MSG_SIZE outside int32's range must fall back to the default,
+// not wrap silently. int32(getEnvInt(...)) truncated a value like this into
+// an unrelated, possibly negative, number instead — caught by CodeQL on
+// PR #720 before this test existed.
+func TestLoad_NATSMaxMsgSizeOutOfInt32RangeFallsBackToDefault(t *testing.T) {
+	t.Setenv("NATS_MAX_MSG_SIZE", "5000000000") // > math.MaxInt32
+
+	cfg := Load()
+
+	assert.Equal(t, int32(256*1024), cfg.NATS.MaxMsgSize)
+}
