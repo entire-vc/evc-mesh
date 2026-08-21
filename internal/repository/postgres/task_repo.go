@@ -741,6 +741,11 @@ func (r *TaskRepo) List(ctx context.Context, projectID uuid.UUID, filter reposit
 			conditions = append(conditions, "due_date IS NULL")
 		}
 	}
+	if filter.HumanGate != nil {
+		conditions = append(conditions, fmt.Sprintf("human_gate = $%d", argIdx))
+		args = append(args, *filter.HumanGate)
+		argIdx++
+	}
 
 	// Custom field JSONB filters.
 	for slug, cf := range filter.CustomFields {

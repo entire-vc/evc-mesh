@@ -634,6 +634,7 @@ type listTasksQuery struct {
 	Priority       string `query:"priority"`
 	Labels         string `query:"labels"`
 	Search         string `query:"search"`
+	HumanGate      string `query:"human_gate"`
 }
 
 // List handles GET /projects/:proj_id/tasks
@@ -688,6 +689,11 @@ func (h *TaskHandler) List(c echo.Context) error {
 	}
 	if q.Labels != "" {
 		filter.Labels = []string{q.Labels}
+	}
+	if q.HumanGate != "" {
+		if hg, parseErr := strconv.ParseBool(q.HumanGate); parseErr == nil {
+			filter.HumanGate = &hg
+		}
 	}
 	// status= and status_id= both accept comma-separated UUIDs.
 	for _, raw := range strings.Split(q.Status+","+q.StatusID, ",") {

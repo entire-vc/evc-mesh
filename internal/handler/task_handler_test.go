@@ -1179,6 +1179,52 @@ func TestTaskHandler_List_StatusIDFilter(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rec.Code)
 }
 
+// TestTaskHandler_List_HumanGateFilter (#098468fa subtask): human_gate=true and
+// human_gate=false are each forwarded as the matching TaskFilter.HumanGate value;
+// an absent or unparseable value must NOT silently constrain the query (nil).
+func TestTaskHandler_List_HumanGateFilter(t *testing.T) {
+	projectID := uuid.New()
+
+	cases := []struct {
+		name      string
+		query     string
+		wantNil   bool
+		wantValue bool
+	}{
+		{name: "true", query: "?human_gate=true", wantValue: true},
+		{name: "false", query: "?human_gate=false", wantValue: false},
+		{name: "absent", query: "", wantNil: true},
+		{name: "garbage_value_not_silently_false", query: "?human_gate=maybe", wantNil: true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			mockSvc := &MockTaskService{
+				ListFunc: func(_ context.Context, _ uuid.UUID, filter repository.TaskFilter, pg pagination.Params) (*pagination.Page[domain.Task], error) {
+					if tc.wantNil {
+						assert.Nil(t, filter.HumanGate)
+					} else {
+						require.NotNil(t, filter.HumanGate)
+						assert.Equal(t, tc.wantValue, *filter.HumanGate)
+					}
+					return pagination.NewPage([]domain.Task{}, 0, pg), nil
+				},
+			}
+			h, e := setupTaskTest(mockSvc)
+
+			req := httptest.NewRequest(http.MethodGet, "/"+tc.query, http.NoBody)
+			rec := httptest.NewRecorder()
+			c := e.NewContext(req, rec)
+			c.SetPath("/projects/:proj_id/tasks")
+			c.SetParamNames("proj_id")
+			c.SetParamValues(projectID.String())
+
+			require.NoError(t, h.List(c))
+			assert.Equal(t, http.StatusOK, rec.Code)
+		})
+	}
+}
+
 // TestTaskHandler_List_OffsetPagination verifies that offset=50 advances to page 2.
 func TestTaskHandler_List_OffsetPagination(t *testing.T) {
 	projectID := uuid.New()
