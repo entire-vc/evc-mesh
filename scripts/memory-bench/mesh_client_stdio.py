@@ -416,7 +416,15 @@ def _parse_tool_payload(result: Any) -> dict[str, Any]:
     try:
         parsed = json.loads(text)
     except json.JSONDecodeError:
-        return {"error": f"non-JSON tool response: {text[:200]!r}"}
+        # 200 chars cut this off mid-URL on a recall/remember call (long
+        # workspace_id + query + tags_any query string), silently discarding
+        # the transport-layer cause that follows the URL in a Go url.Error
+        # ("...": dial tcp ...: connection refused) — see #352a0b11, where
+        # every gate run for 5+ days reported a truncated, undiagnosable
+        # error. 4000 comfortably covers the longest URL this harness
+        # constructs plus its trailing cause, while still bounding an
+        # unrelated giant body (e.g. an HTML error page) from flooding logs.
+        return {"error": f"non-JSON tool response: {text[:4000]!r}"}
     if isinstance(parsed, list):
         return {"items": parsed}
     if isinstance(parsed, dict):

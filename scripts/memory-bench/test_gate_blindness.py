@@ -1092,6 +1092,24 @@ class TestSilentToolErrorIsSurfaced(unittest.TestCase):
         self.assertIn("error", payload)
         self.assertNotIn("text", payload, "the old silent-swallow shape must be gone")
 
+    def test_non_json_body_preserves_the_cause_past_a_long_url(self):
+        # #352a0b11: a real recall/remember call builds a long query string
+        # (workspace_id + query + tags_any=bench-<nonce>-<question_id> + ...),
+        # and Go's url.Error puts the transport-layer CAUSE after the quoted
+        # URL: `Get "http://...long-url...": dial tcp ...: connection
+        # refused`. At the old 200-char cutoff, every gate run for 5+ days
+        # lost the "dial tcp ... connection refused" suffix and kept only
+        # the URL — undiagnosable by construction. The fix must not
+        # reintroduce a cutoff shorter than a realistic URL plus its cause.
+        long_url = "http://127.0.0.1:8005/api/v1/memories/search?" + "&".join(
+            f"param{i}=value{i}" for i in range(20)
+        )
+        text = f'Get "{long_url}": dial tcp 127.0.0.1:8099: connect: connection refused'
+        self.assertGreater(len(text), 200, "the fixture must reproduce the real cutoff")
+        result = _ToolResult(text=text, is_error=False)
+        payload = mc._parse_tool_payload(result)
+        self.assertIn("dial tcp 127.0.0.1:8099: connect: connection refused", payload["error"])
+
     def test_valid_json_dict_on_success_passes_through_unchanged(self):
         result = _ToolResult(
             text='{"items": [], "search_mode": "bm25-only", "degraded": true}'
