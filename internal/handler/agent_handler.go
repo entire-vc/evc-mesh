@@ -314,6 +314,12 @@ type heartbeatRequest struct {
 	CurrentTaskID *string        `json:"current_task_id"`
 }
 
+// heartbeatStatusMaxLen mirrors the DB column width for agents.heartbeat_status
+// (VARCHAR(20), migration 20260314039_agent_monitoring.sql). A status longer than
+// this fails the INSERT/UPDATE at the DB layer with an unhelpful 500 unless
+// rejected here first.
+const heartbeatStatusMaxLen = 20
+
 // Heartbeat handles POST /agents/heartbeat
 // The agent_id is expected to be set in the context by auth middleware.
 func (h *AgentHandler) Heartbeat(c echo.Context) error {
@@ -329,6 +335,13 @@ func (h *AgentHandler) Heartbeat(c echo.Context) error {
 
 	var req heartbeatRequest
 	_ = c.Bind(&req) // optional body; empty body is fine
+
+	if len(req.Status) > heartbeatStatusMaxLen {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest(fmt.Sprintf(
+			"status must be <=%d chars; use message for free-form text (got %d chars)",
+			heartbeatStatusMaxLen, len(req.Status),
+		)))
+	}
 
 	// Auto-set status to "busy" when processing a task (unless explicitly set otherwise).
 	if req.CurrentTaskID != nil && *req.CurrentTaskID != "" && req.Status == "" {
