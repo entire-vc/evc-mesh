@@ -85,10 +85,8 @@ func (s *workspaceService) Create(ctx context.Context, workspace *domain.Workspa
 		return err
 	}
 
-	// Auto-add the creator as workspace owner. OwnerID is guaranteed non-nil
-	// by the check above; workspaceMemberRepo is nil only in constructions
-	// (some tests) that don't wire one up.
-	if s.workspaceMemberRepo != nil {
+	// Auto-add the creator as workspace owner.
+	if workspace.OwnerID != uuid.Nil && s.workspaceMemberRepo != nil {
 		now := time.Now()
 		member := &domain.WorkspaceMember{
 			ID:          uuid.New(),
