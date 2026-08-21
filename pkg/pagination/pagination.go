@@ -66,6 +66,13 @@ type Page[T any] struct {
 	PageSize   int  `json:"page_size"`
 	TotalPages int  `json:"total_pages"`
 	HasMore    bool `json:"has_more"`
+
+	// Truncated is set by a handler that dropped content from individual items
+	// (e.g. blanked long descriptions) to keep the serialized response under a
+	// size ceiling. Item count, order, and offsets are unaffected — this only
+	// ever means "some item(s) in this page lost a large field"; omitempty so
+	// existing consumers never see the field at all.
+	Truncated bool `json:"truncated,omitempty"`
 }
 
 // NewPage creates a new Page from a slice of items and a total count.

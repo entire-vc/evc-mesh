@@ -2183,6 +2183,94 @@ func TestTaskHandler_SearchGlobal_DecoratesLikeList(t *testing.T) {
 	assert.Equal(t, true, slim[0]["has_description"], "flag survives exclusion in search too")
 }
 
+// TestTaskHandler_List_SizeCeiling_TruncatesTailDescriptions reproduces the
+// live incident (Riker, 2026-08-20): a 200-item project list with full
+// descriptions serialized to 494,772 bytes in one line and blew the caller's
+// tool-output limit. Root cause and fix both live in enforceListSizeCeiling.
+func TestTaskHandler_List_SizeCeiling_TruncatesTailDescriptions(t *testing.T) {
+	projectID := uuid.New()
+	now := time.Now()
+
+	// One description alone crosses maxListDescriptionBytes (200_000), so the
+	// SECOND item is the first to get dropped — proves the ceiling engages
+	// mid-page, not only once the whole page is huge.
+	huge := strings.Repeat("x", maxListDescriptionBytes+1)
+	tasks := []domain.Task{
+		{ID: uuid.New(), Title: "first, huge", Description: huge, CreatedAt: now, UpdatedAt: now},
+		{ID: uuid.New(), Title: "second, dropped", Description: "should be blanked", CreatedAt: now, UpdatedAt: now},
+		{ID: uuid.New(), Title: "third, dropped", Description: "also blanked", CreatedAt: now, UpdatedAt: now},
+	}
+	mockSvc := &MockTaskService{
+		ListFunc: func(ctx context.Context, pid uuid.UUID, filter repository.TaskFilter, pg pagination.Params) (*pagination.Page[domain.Task], error) {
+			return pagination.NewPage(tasks, len(tasks), pg), nil
+		},
+	}
+	h, e := setupTaskTest(mockSvc)
+
+	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/projects/:proj_id/tasks")
+	c.SetParamNames("proj_id")
+	c.SetParamValues(projectID.String())
+
+	require.NoError(t, h.List(c))
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var raw map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &raw))
+	items := rawItems(t, raw)
+	require.Len(t, items, 3, "item count/order must be unaffected — only content is dropped")
+
+	assert.Equal(t, true, raw["truncated"], "page must flag that it dropped content")
+	assert.Len(t, items[0]["description"], maxListDescriptionBytes+1, "first item is under no prior budget — kept whole")
+	_, secondHasDesc := items[1]["description"]
+	_, thirdHasDesc := items[2]["description"]
+	assert.False(t, secondHasDesc, "second item crossed the ceiling — description dropped (omitempty, field absent)")
+	assert.False(t, thirdHasDesc, "third item stays dropped too")
+	assert.Equal(t, true, items[1]["has_description"], "has_description still reports the task HAS one — only the body is gone")
+
+	// The response itself must actually be small now, not just flagged.
+	assert.Less(t, len(rec.Body.Bytes()), maxListDescriptionBytes+10_000,
+		"response bytes must stay near the ceiling, not include every huge/dropped description")
+}
+
+// TestTaskHandler_List_SizeCeiling_SmallListUnaffected is the negative control
+// for the ceiling above: an ordinary small page must round-trip byte-for-byte
+// as before — no truncated flag, no dropped content.
+func TestTaskHandler_List_SizeCeiling_SmallListUnaffected(t *testing.T) {
+	projectID := uuid.New()
+	now := time.Now()
+	tasks := []domain.Task{
+		{ID: uuid.New(), Title: "normal", Description: "a perfectly ordinary spec", CreatedAt: now, UpdatedAt: now},
+	}
+	mockSvc := &MockTaskService{
+		ListFunc: func(ctx context.Context, pid uuid.UUID, filter repository.TaskFilter, pg pagination.Params) (*pagination.Page[domain.Task], error) {
+			return pagination.NewPage(tasks, len(tasks), pg), nil
+		},
+	}
+	h, e := setupTaskTest(mockSvc)
+
+	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/projects/:proj_id/tasks")
+	c.SetParamNames("proj_id")
+	c.SetParamValues(projectID.String())
+
+	require.NoError(t, h.List(c))
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var raw map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &raw))
+	items := rawItems(t, raw)
+	require.Len(t, items, 1)
+
+	_, hasTruncatedField := raw["truncated"]
+	assert.False(t, hasTruncatedField, "omitempty must keep the field off the wire when nothing was dropped")
+	assert.Equal(t, "a perfectly ordinary spec", items[0]["description"])
+}
+
 // ListSubtasks is a third list-shaped endpoint (list-view.tsx's inline subtask
 // expansion renders it through the same EnhancedTitleCell as the board/list, which
 // trusts has_description over a live text check). Before decorateTaskList was
