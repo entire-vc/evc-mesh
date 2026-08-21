@@ -23,7 +23,7 @@
 # Adding a NEW line for a genuinely-intentional future difference is fine —
 # just write the actual reason, not this baseline note.
 
-NewRESTClient	baseline drift 2026-08-21 (#46233e08): evc-mesh-mcp's ctor also reads MESH_BASIC_AUTH for proxy basic-auth; evc-mesh's copy predates that. See #3bc9f59d.
+NewRESTClient	baseline drift 2026-08-21 (#46233e08): evc-mesh's ctor also reads MESH_BASIC_AUTH for proxy basic-auth (a self-hosted-instance feature); evc-mesh-mcp's copy has no such logic. Direction corrected 2026-08-21 after verifier caught the reason stated backwards. See #3bc9f59d.
 NewServer	baseline drift 2026-08-21: evc-mesh-mcp wires a ReadCounter into Server that evc-mesh's copy doesn't have. See #3bc9f59d.
 RESTClient.CheckoutTask	baseline drift 2026-08-21: evc-mesh's version conditionally omits ttl_minutes from the request body; evc-mesh-mcp always sends it. Behaviorally different, not just refactored. See #3bc9f59d.
 RESTClient.ExtendCheckout	baseline drift 2026-08-21: same class as CheckoutTask above (conditional vs unconditional ttl_minutes in the body). See #3bc9f59d.
