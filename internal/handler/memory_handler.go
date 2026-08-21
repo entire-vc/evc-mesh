@@ -575,24 +575,18 @@ func (h *MemoryHandler) GetByID(c echo.Context) error {
 // Without this route the history is written and unreadable — the revision rows
 // would exist, and no caller could see what a memory used to assert or why it
 // changed, which is the whole point of keeping them.
+//
+// Authorization reads workspace_id off the revision rows themselves (migration
+// 20260821005), NOT off the live `memories` row via GetByID. The live row is
+// exactly what a `forget` removes, so a GetByID-based check 404s precisely for
+// the memories this endpoint exists to serve history for — the audit trail was
+// written and had no reader (b043153b). Every revision row, past or future,
+// carries the workspace it belongs to independently of whether the memory it
+// describes still exists.
 func (h *MemoryHandler) Revisions(c echo.Context) error {
 	id, err := uuid.Parse(c.Param("id"))
 	if err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid memory id"))
-	}
-
-	// Authorise against the memory's own workspace BEFORE returning any history.
-	// Revisions carry full prior content, so an unscoped read here would hand
-	// out the text of memories the caller cannot read through GetByID — a
-	// tenant boundary hole opened by the audit trail rather than by the table
-	// it audits. 404 rather than 403, matching GetByID, so this cannot be used
-	// to probe which ids exist.
-	mem, err := h.memoryService.GetByID(c.Request().Context(), id)
-	if err != nil {
-		return handleError(c, err)
-	}
-	if mem == nil || !h.workspaceAllowed(c, mem.WorkspaceID) {
-		return handleError(c, apierror.NotFound("Memory"))
 	}
 
 	limit := 50
@@ -606,6 +600,35 @@ func (h *MemoryHandler) Revisions(c echo.Context) error {
 	if err != nil {
 		return handleError(c, err)
 	}
+
+	if len(revs) > 0 {
+		// The one workspace-authorization signal we have is missing or belongs
+		// to someone else: 404, not 403 — matching GetByID, so this cannot be
+		// used to probe which ids exist. A nil WorkspaceID (a revision from
+		// before 20260821005 whose memory was already forgotten by the time it
+		// ran) fails closed rather than being treated as "no owner, so allow":
+		// an audit row we cannot attribute to a workspace must not be handed to
+		// an arbitrary caller just because it predates the fix.
+		if revs[0].WorkspaceID == nil || !h.workspaceAllowed(c, *revs[0].WorkspaceID) {
+			return handleError(c, apierror.NotFound("Memory"))
+		}
+	} else {
+		// No revision rows at all: either this memory predates the versioning
+		// migration and has never been written to since (a live memory can
+		// genuinely have zero history), or the id doesn't exist at all. The
+		// revisions table has no signal to authorize against either way, so
+		// fall back to the live row exactly as this endpoint did before
+		// 20260821005 — this is the one case that fallback is still correct
+		// for, since there is no forget involved.
+		mem, err := h.memoryService.GetByID(c.Request().Context(), id)
+		if err != nil {
+			return handleError(c, err)
+		}
+		if mem == nil || !h.workspaceAllowed(c, mem.WorkspaceID) {
+			return handleError(c, apierror.NotFound("Memory"))
+		}
+	}
+
 	if revs == nil {
 		revs = []domain.MemoryRevision{}
 	}

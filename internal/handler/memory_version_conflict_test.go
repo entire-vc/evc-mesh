@@ -128,22 +128,32 @@ func TestRemember_ForwardsReasonAndExpectedVersion(t *testing.T) {
 // workspace. Revision rows carry full prior CONTENT, so an unscoped read here
 // would leak the text of memories the caller cannot read through GetByID — a
 // tenant hole opened by the audit trail rather than by the table it audits.
+//
+// Authorization here reads workspace_id off the revision rows themselves
+// (migration 20260821005), not off a live GetByID lookup — see Revisions'
+// doc comment for why: GetByID is exactly what a `forget` breaks, and this
+// endpoint's whole reason to exist is answering "what did this used to say"
+// for memories a forget already removed. That design change means
+// ListRevisions IS now reached even for a foreign caller (there is no other
+// way to learn whose workspace the row belongs to) — the invariant that
+// matters is that its CONTENT never reaches a caller it doesn't belong to,
+// not that the call never happens.
 func TestRevisions_ScopedToOwningWorkspace(t *testing.T) {
 	ws := uuid.New()
 	other := uuid.New()
 	memID := uuid.New()
 	reason := "corrected after the cutover"
 
-	newHandler := func(memWorkspace uuid.UUID, called *bool) *MemoryHandler {
+	newHandler := func(memWorkspace uuid.UUID) *MemoryHandler {
 		return NewMemoryHandler(&MockMemoryService{
 			GetByIDFunc: func(_ context.Context, id uuid.UUID) (*domain.Memory, error) {
 				return &domain.Memory{ID: id, WorkspaceID: memWorkspace}, nil
 			},
 			ListRevisionsFunc: func(_ context.Context, id uuid.UUID, limit int) ([]domain.MemoryRevision, error) {
-				*called = true
 				return []domain.MemoryRevision{{
 					MemoryID: id, Version: 2, Content: "prod runs in Helsinki",
 					Action: domain.MemoryActionUpdated, Reason: &reason,
+					WorkspaceID: &memWorkspace,
 				}}, nil
 			},
 		}, &mockWorkspaceMemberRepo{})
@@ -162,8 +172,7 @@ func TestRevisions_ScopedToOwningWorkspace(t *testing.T) {
 	}
 
 	t.Run("caller in the owning workspace sees the history", func(t *testing.T) {
-		listed := false
-		rec := call(newHandler(ws, &listed), ws)
+		rec := call(newHandler(ws), ws)
 		if rec.Code != http.StatusOK {
 			t.Fatalf("got %d, want 200", rec.Code)
 		}
@@ -185,19 +194,119 @@ func TestRevisions_ScopedToOwningWorkspace(t *testing.T) {
 		}
 	})
 
-	t.Run("caller from another workspace gets 404 and no history is read", func(t *testing.T) {
-		listed := false
-		rec := call(newHandler(ws, &listed), other)
+	t.Run("caller from another workspace gets 404 and content never leaks", func(t *testing.T) {
+		rec := call(newHandler(ws), other)
 		if rec.Code != http.StatusNotFound {
 			t.Fatalf("got %d, want 404 — a foreign workspace must not read revisions", rec.Code)
-		}
-		if listed {
-			t.Error("ListRevisions must not even be reached for a foreign caller")
 		}
 		if strings.Contains(rec.Body.String(), "Helsinki") {
 			t.Error("prior content leaked into a denial response")
 		}
 	})
+}
+
+// TestRevisions_AfterForget_StillAuthorizedAndScoped is the actual bug this
+// migration (20260821005) fixes: after a `forget`, GetByID returns nil (the
+// memory row is gone) — the endpoint must still serve history to the owning
+// workspace by reading workspace_id off the revision rows, and must still
+// refuse a foreign workspace, using exactly the same denormalized field.
+func TestRevisions_AfterForget_StillAuthorizedAndScoped(t *testing.T) {
+	ws := uuid.New()
+	other := uuid.New()
+	memID := uuid.New()
+	reason := "cleanup after the probe"
+
+	newHandler := func() *MemoryHandler {
+		return NewMemoryHandler(&MockMemoryService{
+			// The memory is gone — this IS the forget scenario.
+			GetByIDFunc: func(_ context.Context, _ uuid.UUID) (*domain.Memory, error) {
+				return nil, nil
+			},
+			ListRevisionsFunc: func(_ context.Context, id uuid.UUID, limit int) ([]domain.MemoryRevision, error) {
+				return []domain.MemoryRevision{{
+					MemoryID: id, Version: 2, Content: "test data before cleanup",
+					Action: domain.MemoryActionForgotten, Reason: &reason,
+					WorkspaceID: &ws,
+				}}, nil
+			},
+		}, &mockWorkspaceMemberRepo{})
+	}
+
+	t.Run("owning workspace reads the forgotten revision even though GetByID is nil", func(t *testing.T) {
+		e := echo.New()
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/memories/"+memID.String()+"/revisions", http.NoBody)
+		rec := httptest.NewRecorder()
+		c := e.NewContext(req, rec)
+		c.SetParamNames("id")
+		c.SetParamValues(memID.String())
+		asAgent(c, uuid.New(), ws)
+		h := newHandler()
+		_ = h.Revisions(c)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("got %d, want 200 — this is exactly the case b043153b reports as 404", rec.Code)
+		}
+		if !strings.Contains(rec.Body.String(), "forgotten") {
+			t.Error("the forgotten-action revision must be in the response")
+		}
+	})
+
+	t.Run("foreign workspace still gets 404 after a forget, not an accidental allow", func(t *testing.T) {
+		e := echo.New()
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/memories/"+memID.String()+"/revisions", http.NoBody)
+		rec := httptest.NewRecorder()
+		c := e.NewContext(req, rec)
+		c.SetParamNames("id")
+		c.SetParamValues(memID.String())
+		asAgent(c, uuid.New(), other)
+		h := newHandler()
+		_ = h.Revisions(c)
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("got %d, want 404", rec.Code)
+		}
+		if strings.Contains(rec.Body.String(), "cleanup") {
+			t.Error("prior content leaked into a denial response")
+		}
+	})
+}
+
+// TestRevisions_NilWorkspaceIDFailsClosed covers the one gap the migration
+// cannot backfill: a revision whose memory was already forgotten BEFORE
+// 20260821005 ran has no live `memories` row to join against, so its
+// workspace_id stays NULL forever. Such a row must not become readable by
+// anyone just because it predates the fix — including the caller who would
+// have owned it, since the system has no way to confirm that.
+func TestRevisions_NilWorkspaceIDFailsClosed(t *testing.T) {
+	ws := uuid.New()
+	memID := uuid.New()
+
+	h := NewMemoryHandler(&MockMemoryService{
+		GetByIDFunc: func(_ context.Context, _ uuid.UUID) (*domain.Memory, error) {
+			return nil, nil // memory long gone
+		},
+		ListRevisionsFunc: func(_ context.Context, id uuid.UUID, _ int) ([]domain.MemoryRevision, error) {
+			return []domain.MemoryRevision{{
+				MemoryID: id, Version: 1, Content: "orphaned pre-migration row",
+				Action: domain.MemoryActionForgotten,
+				// WorkspaceID deliberately left nil.
+			}}, nil
+		},
+	}, &mockWorkspaceMemberRepo{})
+
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/memories/"+memID.String()+"/revisions", http.NoBody)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetParamNames("id")
+	c.SetParamValues(memID.String())
+	asAgent(c, uuid.New(), ws)
+	_ = h.Revisions(c)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("got %d, want 404 — an unattributable revision must fail closed, not open", rec.Code)
+	}
+	if strings.Contains(rec.Body.String(), "orphaned") {
+		t.Error("prior content leaked despite no workspace attribution")
+	}
 }
 
 func TestRevisions_EdgeCases(t *testing.T) {

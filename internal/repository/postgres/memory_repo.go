@@ -257,9 +257,9 @@ func (r *MemoryRepo) Upsert(ctx context.Context, m *domain.Memory, intent domain
 	}
 
 	if _, err = tx.ExecContext(ctx, `
-		INSERT INTO memory_revisions (memory_id, version, content, tags, action, reason, actor_agent_id)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-		m.ID, m.Version, m.Content, tags, action, reason, intent.ActorAgentID,
+		INSERT INTO memory_revisions (memory_id, version, content, tags, action, reason, actor_agent_id, workspace_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+		m.ID, m.Version, m.Content, tags, action, reason, intent.ActorAgentID, m.WorkspaceID,
 	); err != nil {
 		return err
 	}
@@ -277,9 +277,9 @@ func (r *MemoryRepo) AppendRevision(ctx context.Context, rev domain.MemoryRevisi
 		tags = pq.StringArray{}
 	}
 	_, err := r.db.ExecContext(ctx, `
-		INSERT INTO memory_revisions (memory_id, version, content, tags, action, reason, actor_agent_id)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-		rev.MemoryID, rev.Version, rev.Content, tags, rev.Action, rev.Reason, rev.ActorAgentID)
+		INSERT INTO memory_revisions (memory_id, version, content, tags, action, reason, actor_agent_id, workspace_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+		rev.MemoryID, rev.Version, rev.Content, tags, rev.Action, rev.Reason, rev.ActorAgentID, rev.WorkspaceID)
 	return err
 }
 
@@ -291,7 +291,7 @@ func (r *MemoryRepo) ListRevisions(ctx context.Context, memoryID uuid.UUID, limi
 	}
 	var rows []domain.MemoryRevision
 	err := r.db.SelectContext(ctx, &rows, `
-		SELECT id, memory_id, version, content, tags, action, reason, actor_agent_id, created_at
+		SELECT id, memory_id, version, content, tags, action, reason, actor_agent_id, created_at, workspace_id
 		FROM memory_revisions
 		WHERE memory_id = $1
 		ORDER BY version DESC
