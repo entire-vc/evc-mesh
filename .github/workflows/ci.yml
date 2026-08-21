@@ -104,6 +104,29 @@ jobs:
         uses: golangci/golangci-lint-action@v9
         with:
           version: "v2.11.3"
+          # The action's own `config verify` step has no way to point at a
+          # local schema (golangci-lint-action only forwards --config, never
+          # --schema, to that command) — it always fetches the schema over
+          # the network, putting an external host on the merge-queue
+          # critical path. PR #711 (a Caddyfile-only change, zero Go
+          # touched) got ejected from the queue when that fetch timed out,
+          # costing ~20min and a manual re-enqueue for a config file that
+          # hadn't changed (task #848579ba). Disabled here; replaced by the
+          # step below against a vendored copy.
+          verify: false
+      - name: golangci-lint config verify (local schema, no network)
+        # `--schema` is a real (if hidden/"debugging purpose only") flag on
+        # `golangci-lint config verify` in v2.11.x — it accepts a local file
+        # path and skips the network fetch entirely. Schema pinned to match
+        # `version` above; see .github/golangci-schema.json for where to
+        # re-vendor it from when that version changes.
+        #
+        # NB for a future version bump: golangci-lint v2.12 removed this
+        # flag — `config verify` there always validates against an
+        # embedded schema with no network call of its own, so upgrading
+        # past v2.11.x means deleting this workaround (both steps here,
+        # `verify: false` above included) rather than adjusting it.
+        run: golangci-lint config verify --schema .github/golangci-schema.json
 
   test:
     name: Test

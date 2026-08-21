@@ -67,6 +67,13 @@ jobs:
         uses: golangci/golangci-lint-action@v9
         with:
           version: "v2.11.3"
+          # See .github/workflows/ci.yml for why verify is disabled here and
+          # replaced by the step below — the action's built-in `config
+          # verify` cannot target a local schema and always calls out over
+          # the network (task #848579ba, PR #711 merge-queue eject).
+          verify: false
+      - name: golangci-lint config verify (local schema, no network)
+        run: golangci-lint config verify --schema .github/golangci-schema.json
 
   test:
     name: Test
