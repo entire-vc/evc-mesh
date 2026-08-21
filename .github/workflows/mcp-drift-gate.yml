@@ -29,12 +29,14 @@ on:
       - 'internal/mcp/**'
       - 'cmd/mcp/**'
       - 'cmd/mcp-drift-check/**'
+      - '.github/workflows/mcp-drift-gate.yml'
   push:
     branches: [main]
     paths:
       - 'internal/mcp/**'
       - 'cmd/mcp/**'
       - 'cmd/mcp-drift-check/**'
+      - '.github/workflows/mcp-drift-gate.yml'
   merge_group:
     types: [checks_requested]
 
