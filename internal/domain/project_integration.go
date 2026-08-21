@@ -36,6 +36,27 @@ type TeamRelaySettings struct {
 	ShareSlug          string `json:"share_slug"`
 	Subfolder          string `json:"subfolder"`
 	IncludeProjectSlug bool   `json:"include_project_slug"`
+
+	// DocsMountPath is where the share's subtree is grafted into this project's
+	// Docs tree, as a slug path ("Team Relay" or "External/Notes") — the SAME
+	// syntax GetByPathInProject already walks. Empty means the subtree IS the
+	// project's top level (Pavel's second mount mode): there is deliberately no
+	// separate flag for that case, because "no path segments to walk" and "walk
+	// these segments" are the same operation with a different (possibly empty)
+	// segment list, not two behaviours. See
+	// service.teamRelayMountService.resolveOrCreateFolderPath — that function is
+	// what both modes go through, and it is the one place a second branch would
+	// have crept in if this had been a bool instead.
+	DocsMountPath string `json:"docs_mount_path,omitempty"`
+
+	// SyncTTLSeconds is how long a mounted copy is served without checking its
+	// source on open. Zero (the unset zero value, indistinguishable here from
+	// "explicitly zero" — nothing today needs to ask for a zero-second TTL) means
+	// "use DefaultTeamRelaySyncTTL". Settings UI to change this per-project is
+	// R5's job; this field exists now so R3 has one source of truth for the
+	// value to read rather than inventing a second place to store it ahead of
+	// that UI landing.
+	SyncTTLSeconds int `json:"sync_ttl_seconds,omitempty"`
 }
 
 // RelayFileItem represents a file entry returned by the Team Relay share file-list API.
