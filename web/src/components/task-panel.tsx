@@ -19,6 +19,7 @@ import {
   Link,
   ListTree,
   Loader2,
+  Lock,
   Package,
   Pencil,
   RefreshCw,
@@ -638,6 +639,39 @@ export function TaskPanel({
               </option>
             ))}
         </Select>
+
+        {/* Human gate */}
+        {currentTask.human_gate && (
+          <>
+            <label className="flex items-center gap-1 pt-1 text-xs text-muted-foreground">
+              <Lock className="h-3 w-3 text-amber-600 dark:text-amber-400" />
+              Human gate
+            </label>
+            <div className="flex flex-col items-start gap-1 pt-0.5">
+              <Badge
+                variant="secondary"
+                className="gap-1 border-amber-300 bg-amber-100 text-[10px] font-medium text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300"
+                data-testid="human-gate-badge"
+                data-human-gate-class={currentTask.human_gate_class ?? "hard"}
+              >
+                {currentTask.human_gate_class === "soft"
+                  ? "Soft gate — awaiting sign-off"
+                  : "Hard gate — awaiting sign-off"}
+              </Badge>
+              {currentTask.human_gate_info?.owner_name && (
+                <span className="text-[11px] text-muted-foreground">
+                  Raised by {currentTask.human_gate_info.owner_name}
+                  {currentTask.human_gate_info.marker_created_at && (
+                    <>
+                      {" "}
+                      · {formatRelative(currentTask.human_gate_info.marker_created_at)}
+                    </>
+                  )}
+                </span>
+              )}
+            </div>
+          </>
+        )}
 
         {/* Priority */}
         <label className="pt-1 text-xs text-muted-foreground">
