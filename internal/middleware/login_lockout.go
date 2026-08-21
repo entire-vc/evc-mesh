@@ -56,17 +56,27 @@ func NewLoginLockout(client *redis.Client, maxFailures int, window time.Duration
 	return &LoginLockout{client: client, maxFailures: maxFailures, window: window}
 }
 
+// windowSeconds returns l.window in whole seconds, floored at 1. A caller
+// that (mis)configures window <= 0 must not turn into a divide-by-zero in
+// windowKey NOR — the sharper failure this floor actually prevents — into
+// an Expire(key, 0) in RecordFailure: Redis treats a zero/negative TTL as
+// "delete immediately", which would silently wipe the just-incremented
+// counter before the next request ever saw it, making the lockout a no-op
+// under a misconfigured window instead of degrading to a merely-short one.
+func (l *LoginLockout) windowSeconds() int64 {
+	if s := int64(l.window.Seconds()); s > 0 {
+		return s
+	}
+	return 1
+}
+
 // windowKey returns the Redis key for identifier's current fixed window,
 // mirroring redisRateLimiter.windowKey in ratelimit_redis.go (same
 // bucket-by-wall-clock approach, same reasoning for why it's good enough:
 // the boundary imprecision this trades away is irrelevant at brute-force
 // timescales).
 func (l *LoginLockout) windowKey(identifier string) string {
-	windowSecs := int64(l.window.Seconds())
-	if windowSecs <= 0 {
-		windowSecs = 1
-	}
-	bucket := time.Now().Unix() / windowSecs
+	bucket := time.Now().Unix() / l.windowSeconds()
 	return fmt.Sprintf("loginlock:%s:%d", identifier, bucket)
 }
 
@@ -86,13 +96,17 @@ func (l *LoginLockout) RecordFailure(ctx context.Context, identifier string) (lo
 		return false, 0, nil
 	}
 	rkey := l.windowKey(identifier)
+	windowSecs := l.windowSeconds()
 
 	var incrCmd *redis.IntCmd
 	_, err = l.client.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
 		incrCmd = pipe.Incr(ctx, rkey)
 		// 2x window TTL so a request that lands right at a bucket boundary
 		// still sees an accurate count, same reasoning as ratelimit_redis.go.
-		pipe.Expire(ctx, rkey, 2*l.window)
+		// Built from the FLOORED windowSecs, not the raw (possibly zero)
+		// l.window — see windowSeconds' doc comment for why that distinction
+		// is load-bearing, not cosmetic.
+		pipe.Expire(ctx, rkey, 2*time.Duration(windowSecs)*time.Second)
 		return nil
 	})
 	if err != nil {
@@ -104,10 +118,6 @@ func (l *LoginLockout) RecordFailure(ctx context.Context, identifier string) (lo
 		return false, 0, nil
 	}
 
-	windowSecs := int64(l.window.Seconds())
-	if windowSecs <= 0 {
-		windowSecs = 1
-	}
 	secondsIntoWindow := time.Now().Unix() % windowSecs
 	retryAfterSecs = int(windowSecs - secondsIntoWindow)
 	return true, retryAfterSecs, nil

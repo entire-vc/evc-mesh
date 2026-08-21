@@ -236,3 +236,46 @@ func TestAuthHandler_Login_TwoAccountsSameIP_DoNotShareBudget(t *testing.T) {
 		"bob's account must not be affected by alice's failures, even from the same source IP")
 	assert.NotEmpty(t, respBody["tokens"])
 }
+
+// newAuthHandlerTestWithBrokenLockout wires a LoginLockout whose Redis
+// connection is already closed, so every RecordFailure/Reset call returns
+// an error — covers AuthHandler.Login's fail-open logging branches on both
+// the failure-recording and the reset path (a live Redis never errors in
+// the tests above, so those two branches are otherwise dead in this suite).
+func newAuthHandlerTestWithBrokenLockout(t *testing.T, userRepo *authTestUserRepo, maxFailures int) (*AuthHandler, *echo.Echo) {
+	t.Helper()
+	h, e := newAuthHandlerTest(userRepo)
+	rdb := newTestRedisForLockout(t)
+	require.NoError(t, rdb.Close())
+	h.WithLoginLockout(mw.NewLoginLockout(rdb, maxFailures, time.Hour))
+	return h, e
+}
+
+// Covers the `lockErr != nil` branch in AuthHandler.Login: a Redis error
+// while recording a failure must be logged and fall through to the normal
+// 401 — it must NOT surface as a 5xx, and must NOT accidentally read as
+// "locked".
+func TestAuthHandler_Login_LockoutRecordFailureError_FallsThroughTo401(t *testing.T) {
+	userRepo := newAuthTestUserRepo()
+	h, e := newAuthHandlerTestWithBrokenLockout(t, userRepo, 3)
+	registerUser(t, h, e, "owner@example.com", "CorrectPass1")
+
+	rec, _ := doLogin(t, h, e, "owner@example.com", "wrong-password", "")
+	assert.Equal(t, http.StatusUnauthorized, rec.Code,
+		"a Redis error recording the failure must fail open to a normal 401, not 5xx or 429")
+}
+
+// Covers the `resetErr != nil` branch: a Redis error while resetting the
+// counter on a SUCCESSFUL login must be logged but must NOT fail the login
+// itself — the user already proved their password, that must not now hinge
+// on Redis being up.
+func TestAuthHandler_Login_LockoutResetError_LoginStillSucceeds(t *testing.T) {
+	userRepo := newAuthTestUserRepo()
+	h, e := newAuthHandlerTestWithBrokenLockout(t, userRepo, 3)
+	registerUser(t, h, e, "owner@example.com", "CorrectPass1")
+
+	rec, respBody := doLogin(t, h, e, "owner@example.com", "CorrectPass1", "")
+	assert.Equal(t, http.StatusOK, rec.Code,
+		"a Redis error on the post-success reset must not fail the login itself")
+	assert.NotEmpty(t, respBody["tokens"])
+}

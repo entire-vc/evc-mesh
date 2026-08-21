@@ -147,3 +147,56 @@ func TestRateLimitKeyByIP_TwoAccountsSameIP_ShareOneBucket_BEFORE(t *testing.T) 
 	assert.Equal(t, http.StatusTooManyRequests, doReq(),
 		"BEFORE the fix: an unrelated account sharing the same (mis-resolved) IP is denied service")
 }
+
+// TestLoginLockout_ZeroWindow_FallsBackToOneSecondBucket exercises the
+// windowSecs<=0 defensive fallback in both windowKey and RecordFailure's
+// Retry-After computation — a caller that (mis)configures a zero or
+// negative window must not divide by zero or produce a nonsensical bucket.
+func TestLoginLockout_ZeroWindow_FallsBackToOneSecondBucket(t *testing.T) {
+	rdb := newTestRedis(t)
+	l := NewLoginLockout(rdb, 1, 0) // window=0, deliberately misconfigured
+	ctx := context.Background()
+
+	locked, _, err := l.RecordFailure(ctx, "user@example.com")
+	require.NoError(t, err)
+	assert.False(t, locked, "1st failure (maxFailures=1) must not lock yet")
+
+	locked, retryAfter, err := l.RecordFailure(ctx, "user@example.com")
+	require.NoError(t, err)
+	assert.True(t, locked, "2nd failure must lock — proves the zero-window fallback still buckets correctly")
+	assert.GreaterOrEqual(t, retryAfter, 0, "retryAfter must still be a sane (non-negative) value with a degenerate window")
+}
+
+// TestLoginLockout_RecordFailure_RedisError_FailsOpen exercises the fail-open
+// path when Redis itself errors (not merely "budget exceeded") — a closed
+// client is the simplest reliable way to force go-redis to return an error.
+func TestLoginLockout_RecordFailure_RedisError_FailsOpen(t *testing.T) {
+	rdb := newTestRedis(t)
+	l := NewLoginLockout(rdb, 3, time.Hour)
+	require.NoError(t, rdb.Close())
+
+	locked, retryAfter, err := l.RecordFailure(context.Background(), "user@example.com")
+	assert.Error(t, err, "a Redis error must be returned to the caller for logging")
+	assert.False(t, locked, "on a Redis error the lockout must fail OPEN, never locked")
+	assert.Equal(t, 0, retryAfter)
+}
+
+// TestLoginLockout_Reset_MaxFailuresNonPositive_NoOp covers Reset's disabled
+// path (mirrors TestLoginLockout_MaxFailuresNonPositive_Disabled, which only
+// exercised RecordFailure's disabled branch).
+func TestLoginLockout_Reset_MaxFailuresNonPositive_NoOp(t *testing.T) {
+	rdb := newTestRedis(t)
+	l := NewLoginLockout(rdb, 0, time.Hour)
+	assert.NoError(t, l.Reset(context.Background(), "user@example.com"))
+}
+
+// TestLoginLockout_Reset_RedisError_IsReported mirrors the RecordFailure
+// Redis-error test above, for Reset's own error path.
+func TestLoginLockout_Reset_RedisError_IsReported(t *testing.T) {
+	rdb := newTestRedis(t)
+	l := NewLoginLockout(rdb, 3, time.Hour)
+	require.NoError(t, rdb.Close())
+
+	err := l.Reset(context.Background(), "user@example.com")
+	assert.Error(t, err, "a Redis error on Reset must be returned to the caller for logging")
+}
