@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"sync"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/repository"
+	"github.com/entire-vc/evc-mesh/pkg/actorctx"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 	"github.com/entire-vc/evc-mesh/pkg/pagination"
 )
@@ -838,6 +840,67 @@ func TestVCSLinkService_Create_ExplicitMergedStatusIsStored(t *testing.T) {
 	stored, err := h.repo.GetByID(context.Background(), link.ID)
 	require.NoError(t, err)
 	assert.Equal(t, domain.VCSLinkStatusMerged, stored.Status)
+}
+
+// An explicit status leaves a visible trail distinguishing "someone declared
+// this" from "this was measured" (webhook delivery, or a live GitHub check —
+// #5f7f8c6e): a gate that a caller can silence by self-declaration only
+// protects until the first agent it inconveniences, unless the declaration
+// itself is attributable.
+func TestVCSLinkService_Create_ExplicitStatusStampsManualDeclarationTrail(t *testing.T) {
+	h := newHarness(t)
+	task := h.makeTask(t, domain.StatusCategoryReview)
+
+	agentID := uuid.New()
+	ctx := actorctx.WithActor(context.Background(), agentID, domain.ActorTypeAgent)
+
+	link, _, err := h.svc.Create(ctx, domain.CreateVCSLinkInput{
+		TaskID:     task.ID,
+		LinkType:   domain.VCSLinkTypePR,
+		ExternalID: "40",
+		URL:        "https://github.com/entire-vc/evc-mesh-mcp/pull/40",
+		Status:     domain.VCSLinkStatusMerged,
+	})
+	require.NoError(t, err)
+
+	var meta map[string]interface{}
+	require.NoError(t, json.Unmarshal(link.Metadata, &meta))
+	declRaw, ok := meta["status_declared_manually"]
+	require.True(t, ok, "metadata must record that this status was declared, not measured")
+	decl, ok := declRaw.(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, "merged", decl["status"])
+	assert.Equal(t, "agent", decl["by_type"])
+	assert.Equal(t, agentID.String(), decl["by_id"])
+	assert.NotEmpty(t, decl["at"])
+
+	// The trail must round-trip through a read, not just be present on the
+	// synchronous response.
+	stored, err := h.repo.GetByID(context.Background(), link.ID)
+	require.NoError(t, err)
+	var storedMeta map[string]interface{}
+	require.NoError(t, json.Unmarshal(stored.Metadata, &storedMeta))
+	assert.Contains(t, storedMeta, "status_declared_manually")
+}
+
+// An implicit status (the default "open" a PR link gets when the caller
+// doesn't say otherwise) is not a declaration of anything — it must not be
+// stamped, since there's nothing here anyone claimed to know.
+func TestVCSLinkService_Create_ImplicitStatusDoesNotStampManualDeclarationTrail(t *testing.T) {
+	h := newHarness(t)
+	task := h.makeTask(t, domain.StatusCategoryInProgress)
+
+	link, _, err := h.svc.Create(context.Background(), domain.CreateVCSLinkInput{
+		TaskID:     task.ID,
+		LinkType:   domain.VCSLinkTypePR,
+		ExternalID: "41",
+		URL:        "https://github.com/entire-vc/evc-mesh/pull/41",
+	})
+	require.NoError(t, err)
+
+	var meta map[string]interface{}
+	require.NoError(t, json.Unmarshal(link.Metadata, &meta))
+	assert.NotContains(t, meta, "status_declared_manually")
 }
 
 // Re-linking with an explicit status must succeed even when a link to the

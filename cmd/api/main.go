@@ -28,6 +28,7 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/embedding"
 	"github.com/entire-vc/evc-mesh/internal/eventbus"
 	"github.com/entire-vc/evc-mesh/internal/handler"
+	githubapi "github.com/entire-vc/evc-mesh/internal/integration/github"
 	"github.com/entire-vc/evc-mesh/internal/integration/teamrelay"
 	mw "github.com/entire-vc/evc-mesh/internal/middleware"
 	"github.com/entire-vc/evc-mesh/internal/reconciler"
@@ -317,6 +318,21 @@ func main() {
 		service.WithTelegramService(telegramClient, integrationRepo, workspaceRepo, projectRepo),
 	)
 
+	// githubClient enables the done-evidence gate's live PR-status check
+	// (#5f7f8c6e: a merged PR blocked move_task->done because the cached
+	// vcs_links.status never got updated by a webhook delivery). Left as a
+	// nil PullRequestChecker interface — not a typed nil *Client — when no
+	// token is configured, so the gate's `s.githubPRChecker != nil` check
+	// correctly sees "not wired" rather than a non-nil interface wrapping a
+	// nil pointer.
+	var githubClient githubapi.PullRequestChecker
+	if cfg.Webhook.GitHubToken != "" {
+		githubClient = githubapi.NewClient(cfg.Webhook.GitHubToken)
+		log.Printf("[config] GitHub live PR-status check enabled for the done-evidence gate")
+	} else {
+		log.Printf("[config] MESH_GITHUB_TOKEN not set — done-evidence gate will rely on cached VCS link status only (no live GitHub check)")
+	}
+
 	taskService := service.NewTaskService(taskRepo, taskStatusRepo, taskDependencyRepo, activityLogRepo,
 		service.WithCustomFieldService(customFieldService),
 		service.WithProjectRepo(projectRepo),
@@ -330,8 +346,9 @@ func main() {
 		service.WithProjectMemberRepoTask(projectMemberRepo),
 		service.WithTaskAgentRepo(agentRepo),
 		service.WithUserRepoTask(userRepo),
-		service.WithCommentRepoTask(commentRepo), // enables review-evidence gate
-		service.WithVCSLinkRepoTask(vcsLinkRepo), // enables done-evidence gate
+		service.WithCommentRepoTask(commentRepo),  // enables review-evidence gate
+		service.WithVCSLinkRepoTask(vcsLinkRepo),  // enables done-evidence gate
+		service.WithGitHubPRChecker(githubClient), // live PR-status check for the done-evidence gate (nil-safe if MESH_GITHUB_TOKEN unset — see below)
 		// Human half of the assignee tenancy guard. Without it the user path of
 		// assertAssigneeInProjectWorkspace cannot be decided and refuses every
 		// user assignment, so this wiring is load-bearing, not optional —

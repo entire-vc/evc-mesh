@@ -14,6 +14,7 @@ import (
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/repository"
+	"github.com/entire-vc/evc-mesh/pkg/actorctx"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 )
 
@@ -118,6 +119,20 @@ func (s *vcsLinkService) Create(ctx context.Context, input domain.CreateVCSLinkI
 	status := input.Status
 	if !explicitStatus && linkType == domain.VCSLinkTypePR {
 		status = domain.VCSLinkStatusOpen
+	}
+
+	if explicitStatus {
+		// A hand-declared status (add_vcs_link ... status=merged) is the
+		// documented way to correct a stale/missing record — but the same
+		// call is indistinguishable in shape from declaring something merged
+		// that isn't. A gate removable by self-declaration only protects
+		// until the first agent it inconveniences (#5f7f8c6e), so record WHO
+		// declared it and WHEN, distinguishable from a status the done-
+		// evidence gate measured itself (webhook delivery or a live GitHub
+		// check) — those never go through this branch. Merges into whatever
+		// metadata the caller already supplied rather than discarding it.
+		actorID, actorType := actorctx.FromContext(ctx)
+		metadata = stampManualStatusDeclaration(metadata, status, actorID, actorType, time.Now())
 	}
 
 	link := &domain.VCSLink{
@@ -555,6 +570,41 @@ func (s *vcsLinkService) lookupRef(ctx context.Context, ref TaskRef) (uuid.UUID,
 		return t.ID, true
 	}
 	return uuid.Nil, false
+}
+
+// stampManualStatusDeclaration records who declared a VCS link's status by
+// hand (an explicit status passed to add_vcs_link) and when, as a
+// "status_declared_manually" object nested in the link's metadata. This is
+// the trail that lets a reader tell a self-declared status apart from one
+// the done-evidence gate actually measured (a GitHub webhook delivery, or a
+// live API check — see taskService.healVCSLinkStatus, which never calls
+// this function). Merges into whatever metadata the caller already
+// supplied; falls back to the untouched input on a marshal failure rather
+// than losing caller-supplied metadata.
+func stampManualStatusDeclaration(raw json.RawMessage, status domain.VCSLinkStatus, actorID uuid.UUID, actorType domain.ActorType, at time.Time) json.RawMessage {
+	m := map[string]interface{}{}
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &m); err != nil {
+			m = map[string]interface{}{}
+		}
+	}
+	declaration := map[string]interface{}{
+		"status": string(status),
+		"at":     at.UTC().Format(time.RFC3339),
+	}
+	if actorType != "" {
+		declaration["by_type"] = string(actorType)
+	}
+	if actorID != uuid.Nil {
+		declaration["by_id"] = actorID.String()
+	}
+	m["status_declared_manually"] = declaration
+
+	out, err := json.Marshal(m)
+	if err != nil {
+		return raw
+	}
+	return out
 }
 
 func shortSHA(s string) string {
