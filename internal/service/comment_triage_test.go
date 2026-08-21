@@ -49,6 +49,46 @@ func TestHasBlockingMarker(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// blockingMarkerClassForSlug (contract §5, task #4dc9467b)
+// ---------------------------------------------------------------------------
+
+func TestBlockingMarkerClassForSlug(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		slug string
+		want domain.HumanGateClass
+	}{
+		{"no tag defaults hard", "❓ **Blocking @pavel**: need decision X", "pavel", domain.HumanGateClassHard},
+		{"tag after bold, before colon", "❓ **Blocking @pavel** [soft]: can wait", "pavel", domain.HumanGateClassSoft},
+		{"tag after colon in question text", "❓ **Blocking @pavel**: [soft] can wait", "pavel", domain.HumanGateClassSoft},
+		{"tag case-insensitive and spaced", "❓ **Blocking @pavel**: [ Soft ] ok", "pavel", domain.HumanGateClassSoft},
+		{"no bold no emoji still tags", "Blocking @pavel [soft] ok", "pavel", domain.HumanGateClassSoft},
+		{
+			"tag on unrelated later line does not soften this marker",
+			"❓ **Blocking @pavel**: need decision X\n\nunrelated aside [soft] mentioned here",
+			"pavel", domain.HumanGateClassHard,
+		},
+		{
+			"tag on a DIFFERENT marker's line does not soften this one",
+			"❓ **Blocking @pavel**: need decision X\n❓ **Blocking @garfield** [soft]: fyi too",
+			"pavel", domain.HumanGateClassHard,
+		},
+		{
+			"tag inside a quoted line is stripped, marker stays hard",
+			"> ❓ **Blocking @pavel** [soft]: quoted example from docs\n❓ **Blocking @pavel**: real ask",
+			"pavel", domain.HumanGateClassHard,
+		},
+		{"slug not present on any marker line defaults hard", "just text [soft]", "pavel", domain.HumanGateClassHard},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, blockingMarkerClassForSlug(tt.body, tt.slug))
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
 // enforceBlockingTriage (via Create / Update)
 // ---------------------------------------------------------------------------
 
@@ -184,6 +224,73 @@ func TestEnforceBlockingTriage_BlockingHuman_MovesToTriage(t *testing.T) {
 	assert.Equal(t, domain.ActorTypeSystem, sys[0].AuthorType)
 	assert.Contains(t, sys[0].Body, "переведена в triage")
 	assert.Contains(t, sys[0].Body, "@pavel")
+}
+
+// TestEnforceBlockingTriage_SoftTag_SetsClassSoft is AC1 (contract §5, task #4dc9467b):
+// the ONLY input this task adds — a "[soft]" tag on the marker's own line — must reach
+// SetHumanGateClass as domain.HumanGateClassSoft.
+func TestEnforceBlockingTriage_SoftTag_SetsClassSoft(t *testing.T) {
+	env := setupTriageEnv(t, true)
+	taskID := env.seedTask(env.inProgressID)
+
+	comment := &domain.Comment{
+		TaskID:     taskID,
+		AuthorID:   uuid.New(),
+		AuthorType: domain.ActorTypeAgent,
+		Body:       "❓ **Blocking @pavel** [soft]: can this wait a day?",
+	}
+	require.NoError(t, env.svc.Create(context.Background(), comment))
+
+	classCalls := env.taskMover.classCalls()
+	require.Len(t, classCalls, 1)
+	assert.Equal(t, taskID, classCalls[0].taskID)
+	assert.Equal(t, domain.HumanGateClassSoft, classCalls[0].class)
+}
+
+// TestEnforceBlockingTriage_NoTag_SetsClassHard is the reverse control for AC4: the
+// ordinary, undecorated marker (the overwhelming majority of real usage) must still
+// explicitly classify hard — never left unset / inferred from residual state.
+func TestEnforceBlockingTriage_NoTag_SetsClassHard(t *testing.T) {
+	env := setupTriageEnv(t, true)
+	taskID := env.seedTask(env.inProgressID)
+
+	comment := &domain.Comment{
+		TaskID:     taskID,
+		AuthorID:   uuid.New(),
+		AuthorType: domain.ActorTypeAgent,
+		Body:       "❓ **Blocking @pavel**: need decision X",
+	}
+	require.NoError(t, env.svc.Create(context.Background(), comment))
+
+	classCalls := env.taskMover.classCalls()
+	require.Len(t, classCalls, 1)
+	assert.Equal(t, domain.HumanGateClassHard, classCalls[0].class)
+}
+
+// TestEnforceBlockingTriage_SubsequentHardMarker_DowngradesFromSoft is the other half of
+// AC4's "does not stick soft": a soft-tagged marker followed (same unreleased task, no
+// SetHumanGate(false) in between) by an ordinary hard marker must re-classify back to
+// hard on the second arm — the CLASS tracks the LATEST live question, not the first.
+func TestEnforceBlockingTriage_SubsequentHardMarker_DowngradesFromSoft(t *testing.T) {
+	env := setupTriageEnv(t, true)
+	taskID := env.seedTask(env.inProgressID)
+
+	soft := &domain.Comment{
+		TaskID: taskID, AuthorID: uuid.New(), AuthorType: domain.ActorTypeAgent,
+		Body: "❓ **Blocking @pavel** [soft]: minor question",
+	}
+	require.NoError(t, env.svc.Create(context.Background(), soft))
+
+	hard := &domain.Comment{
+		TaskID: taskID, AuthorID: uuid.New(), AuthorType: domain.ActorTypeAgent,
+		Body: "❓ **Blocking @pavel**: actually this is urgent",
+	}
+	require.NoError(t, env.svc.Create(context.Background(), hard))
+
+	classCalls := env.taskMover.classCalls()
+	require.Len(t, classCalls, 2)
+	assert.Equal(t, domain.HumanGateClassSoft, classCalls[0].class)
+	assert.Equal(t, domain.HumanGateClassHard, classCalls[1].class, "a later hard marker must downgrade an unreleased soft gate")
 }
 
 func TestEnforceBlockingTriage_FYIMarker_NoOp(t *testing.T) {

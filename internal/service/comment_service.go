@@ -585,6 +585,36 @@ func extractMentionSlugs(body string) []string {
 	return out
 }
 
+// blockingMarkerClassRegex matches an optional "[soft]" class tag (contract
+// docs/human-gate-decision-recorded.md §5). Case-insensitive, independent of the
+// marker's own anchor so every existing "❓ **Blocking @user**: …" marker keeps working
+// unchanged with the implicit default (hard) — a soft class must be requested
+// explicitly by whoever asks the question, never inferred.
+var blockingMarkerClassRegex = regexp.MustCompile(`(?i)\[\s*soft\s*\]`)
+
+// blockingMarkerClassForSlug returns the human_gate_class the "Blocking @slug" marker
+// naming slug requests: soft if THAT marker's own line also carries a "[soft]" tag,
+// hard otherwise (fail-closed default — a card is never softened by omission).
+//
+// Scoped to the specific marker line that names slug, not the whole comment body: a
+// body may legitimately carry unrelated bracketed text elsewhere (an aside, a quoted
+// example) that must not reclassify a marker it doesn't belong to — same attribution
+// hazard blockingMarkerSlugs' own doc calls out for slug resolution.
+func blockingMarkerClassForSlug(body, slug string) domain.HumanGateClass {
+	stripped := stripQuotedSpans(body)
+	for _, line := range strings.Split(stripped, "\n") {
+		m := blockingMarkerRegex.FindStringSubmatch(line)
+		if len(m) < 2 || strings.ToLower(m[1]) != slug {
+			continue
+		}
+		if blockingMarkerClassRegex.MatchString(line) {
+			return domain.HumanGateClassSoft
+		}
+		return domain.HumanGateClassHard
+	}
+	return domain.HumanGateClassHard
+}
+
 // blockingMarkerSlugs returns unique lowercase slugs captured by blockingMarkerRegex —
 // i.e. only the @-mention that directly follows the "Blocking" keyword on each marker
 // line, NOT every @-mention anywhere in the comment body. A body can legitimately carry
@@ -1465,6 +1495,11 @@ func (s *commentService) notifyUserMention(
 // comment. Every step is best-effort — failures are logged but never block the comment
 // mutation that triggered them.
 //
+// The marker's own line may also carry an optional "[soft]" tag (contract
+// docs/human-gate-decision-recorded.md §5, task #4dc9467b) — e.g.
+// "❓ **Blocking @pavel** [soft]: …" — which classifies the resulting human_gate as
+// soft (see blockingMarkerClassForSlug) instead of the fail-closed default hard.
+//
 // Guards (in order):
 //   - required deps (taskSvc/statusRepo/userRepo) present, else no-op;
 //   - body actually carries a Blocking marker, else no-op;
@@ -1514,6 +1549,16 @@ func (s *commentService) enforceBlockingTriage(ctx context.Context, comment *dom
 	// delivery on it made a live ask vanish silently — see the check's own note.
 	if setErr := s.taskSvc.SetHumanGate(ctx, task.ID, true); setErr != nil {
 		log.Printf("[comment-triage] WARNING: SetHumanGate on task %s failed: %v", task.ID, setErr)
+	}
+
+	// Classify the gate this exact marker requests (contract §5, task #4dc9467b).
+	// Computed from userSlug's own marker line, not the whole body — see
+	// blockingMarkerClassForSlug's doc. Set unconditionally (not only when soft) so a
+	// later hard marker on an unreleased task correctly downgrades it back — the same
+	// fail-closed direction SetHumanGate(false) already applies on release.
+	gateClass := blockingMarkerClassForSlug(comment.Body, userSlug)
+	if setErr := s.taskSvc.SetHumanGateClass(ctx, task.ID, gateClass); setErr != nil {
+		log.Printf("[comment-triage] WARNING: SetHumanGateClass(%s) on task %s failed: %v", gateClass, task.ID, setErr)
 	}
 
 	// auto-mode tasks self-manage; triage escalation is suppressed (flag already set above).

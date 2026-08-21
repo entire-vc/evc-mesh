@@ -2235,12 +2235,18 @@ type humanGateCall struct {
 	value  bool
 }
 
+type classSetCall struct {
+	taskID uuid.UUID
+	class  domain.HumanGateClass
+}
+
 type fakeTaskMover struct {
 	TaskService
-	mu           sync.Mutex
-	moves        []moveCall
-	gateSetCalls []humanGateCall
-	err          error
+	mu            sync.Mutex
+	moves         []moveCall
+	gateSetCalls  []humanGateCall
+	classSetCalls []classSetCall
+	err           error
 }
 
 func (f *fakeTaskMover) MoveTask(_ context.Context, taskID uuid.UUID, input MoveTaskInput) error {
@@ -2254,6 +2260,13 @@ func (f *fakeTaskMover) SetHumanGate(_ context.Context, taskID uuid.UUID, value 
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.gateSetCalls = append(f.gateSetCalls, humanGateCall{taskID: taskID, value: value})
+	return nil
+}
+
+func (f *fakeTaskMover) SetHumanGateClass(_ context.Context, taskID uuid.UUID, class domain.HumanGateClass) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.classSetCalls = append(f.classSetCalls, classSetCall{taskID: taskID, class: class})
 	return nil
 }
 
@@ -2272,6 +2285,12 @@ func (f *fakeTaskMover) humanGateCalls() []humanGateCall {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]humanGateCall(nil), f.gateSetCalls...)
+}
+
+func (f *fakeTaskMover) classCalls() []classSetCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]classSetCall(nil), f.classSetCalls...)
 }
 
 // ---------------------------------------------------------------------------
