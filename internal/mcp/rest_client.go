@@ -8,6 +8,7 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"net/textproto"
 	"net/url"
 	"os"
 	"strings"
@@ -115,7 +116,7 @@ func (c *RESTClient) doJSON(ctx context.Context, method, path string, body, resu
 }
 
 // doMultipart executes a multipart/form-data POST and decodes the JSON response into result.
-func (c *RESTClient) doMultipart(ctx context.Context, path string, fields map[string]string, fileField, fileName string, fileContent []byte, result any) error {
+func (c *RESTClient) doMultipart(ctx context.Context, path string, fields map[string]string, fileField, fileName, fileContentType string, fileContent []byte, result any) error {
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)
 
@@ -126,8 +127,18 @@ func (c *RESTClient) doMultipart(ctx context.Context, path string, fields map[st
 		}
 	}
 
-	// Write file content as a form file.
-	fw, err := mw.CreateFormFile(fileField, fileName)
+	// Write file content as a form file. CreateFormFile is not used because it
+	// hardcodes application/octet-stream, which discards the caller's MIME type
+	// and forces the server to fall back to guessing from the filename.
+	partHeader := make(textproto.MIMEHeader)
+	partHeader.Set("Content-Disposition",
+		fmt.Sprintf(`form-data; name="%s"; filename="%s"`, escapeQuotes(fileField), escapeQuotes(fileName)))
+	if fileContentType == "" {
+		fileContentType = "application/octet-stream"
+	}
+	partHeader.Set("Content-Type", fileContentType)
+
+	fw, err := mw.CreatePart(partHeader)
 	if err != nil {
 		return fmt.Errorf("create form file: %w", err)
 	}
@@ -334,13 +345,27 @@ func (c *RESTClient) ListComments(ctx context.Context, taskID string, params map
 }
 
 // UploadArtifact uploads an artifact to a task using multipart form.
-func (c *RESTClient) UploadArtifact(ctx context.Context, taskID, name, artifactType, mimeType string, content []byte) (map[string]any, error) {
+// UploadArtifact posts an artifact to a task as multipart/form-data.
+//
+// mimeType is attached to the file part rather than discarded (it used to be an
+// accepted-but-unused parameter). The server infers an artifact's MIME type from
+// the part's Content-Type first and only falls back to guessing from the
+// filename, so dropping it meant every MCP upload was typed by its extension —
+// which is how a file full of base64 text came to be stored as image/png.
+func (c *RESTClient) UploadArtifact(ctx context.Context, taskID, name, artifactType, mimeType string, content []byte, metadata map[string]any) (map[string]any, error) {
 	fields := map[string]string{
 		"name":          name,
 		"artifact_type": artifactType,
 	}
+	if len(metadata) > 0 {
+		metaBytes, err := json.Marshal(metadata)
+		if err != nil {
+			return nil, fmt.Errorf("marshal metadata: %w", err)
+		}
+		fields["metadata"] = string(metaBytes)
+	}
 	var result map[string]any
-	if err := c.doMultipart(ctx, "/api/v1/tasks/"+taskID+"/artifacts", fields, "file", name, content, &result); err != nil {
+	if err := c.doMultipart(ctx, "/api/v1/tasks/"+taskID+"/artifacts", fields, "file", name, mimeType, content, &result); err != nil {
 		return nil, err
 	}
 	return result, nil
@@ -948,3 +973,9 @@ func (c *RESTClient) ExportWorkspaceConfig(ctx context.Context, workspaceID stri
 	}
 	return string(data), nil
 }
+
+// escapeQuotes mirrors mime/multipart's own (unexported) quoting for
+// Content-Disposition parameter values.
+var quoteEscaper = strings.NewReplacer("\\", "\\\\", `"`, "\\\"")
+
+func escapeQuotes(s string) string { return quoteEscaper.Replace(s) }

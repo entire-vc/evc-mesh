@@ -451,13 +451,15 @@ func (s *Server) registerAdvancedTools() {
 	), s.tracked("list_comments", s.handleListComments))
 
 	s.mcpServer.AddTool(mcpsdk.NewTool("upload_artifact",
-		mcpsdk.WithDescription("Upload an artifact (file, code, log, etc.) to a task."),
+		mcpsdk.WithDescription("Upload an artifact (file, code, log, etc.) to a task. Inline content travels through the model context, so for a binary larger than a few KB prefer the REST endpoint instead: POST /api/v1/tasks/<task_id>/artifacts as multipart/form-data with -H 'X-Agent-Key: $MESH_AGENT_KEY' -F 'name=<file>' -F 'artifact_type=image' -F 'file=@<path>;type=image/png' — the bytes then never enter the context and cannot be truncated on the way."),
 		mcpsdk.WithString("task_id", mcpsdk.Required(), mcpsdk.Description("Task ID.")),
 		mcpsdk.WithString("name", mcpsdk.Required(), mcpsdk.Description("Artifact filename.")),
-		mcpsdk.WithString("content", mcpsdk.Required(), mcpsdk.Description("Artifact content (text or base64-encoded).")),
+		mcpsdk.WithString("content", mcpsdk.Required(), mcpsdk.Description("Artifact content. Plain text by default; set encoding=\"base64\" to send binary.")),
+		mcpsdk.WithString("encoding", mcpsdk.Description("How to interpret content: \"text\" (stored as-is) or \"base64\" (decoded before storing). Required for binary — without it a base64 string is stored literally as the file body."), mcpsdk.DefaultString("text")),
+		mcpsdk.WithString("sha256", mcpsdk.Description("Optional hex sha256 of the DECODED bytes. Verified before upload; a mismatch fails the call. Recommended for binary, since it is the only check that catches a payload truncated in transit.")),
 		mcpsdk.WithString("artifact_type", mcpsdk.Description("Type: file, code, log, report, link, image, data."), mcpsdk.DefaultString("file")),
-		mcpsdk.WithString("mime_type", mcpsdk.Description("MIME type. Auto-detected from name if omitted.")),
-		mcpsdk.WithObject("metadata", mcpsdk.Description("Additional metadata.")),
+		mcpsdk.WithString("mime_type", mcpsdk.Description("MIME type. Auto-detected from name if omitted. For png/jpeg/gif/pdf/zip the content is checked against the type's magic bytes and the upload is refused on a mismatch.")),
+		mcpsdk.WithObject("metadata", mcpsdk.Description("Additional metadata, stored on the artifact as JSON.")),
 	), s.tracked("upload_artifact", s.handleUploadArtifact))
 
 	s.mcpServer.AddTool(mcpsdk.NewTool("list_artifacts",

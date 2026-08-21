@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -34,6 +35,20 @@ type mockAPIState struct {
 	artifacts map[string][]map[string]any // taskID -> artifacts
 	events    []map[string]any
 	deps      []map[string]any
+
+	// uploads records what the server actually received for each artifact
+	// upload: the raw file bytes and the Content-Type of the file part.
+	// Asserting only on the 201 is what let the base64 defect live in prod for
+	// months — the response looks identical whether the bytes are a PNG or the
+	// ASCII of a base64 string.
+	uploads []recordedUpload
+}
+
+type recordedUpload struct {
+	name        string
+	fileBytes   []byte
+	contentType string
+	metadata    string
 }
 
 func newMockAPIState() *mockAPIState {
@@ -416,6 +431,15 @@ func buildMockServer(state *mockAPIState) *httptest.Server {
 			_ = r.ParseMultipartForm(10 << 20)
 			name := r.FormValue("name")
 			artifactType := r.FormValue("artifact_type")
+
+			rec := recordedUpload{name: name, metadata: r.FormValue("metadata")}
+			if f, fh, ferr := r.FormFile("file"); ferr == nil {
+				rec.fileBytes, _ = io.ReadAll(f)
+				rec.contentType = fh.Header.Get("Content-Type")
+				_ = f.Close()
+			}
+			state.uploads = append(state.uploads, rec)
+
 			artID := uuid.New().String()
 			art := map[string]any{
 				"id":            artID,
