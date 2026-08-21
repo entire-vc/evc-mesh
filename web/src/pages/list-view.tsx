@@ -16,6 +16,7 @@ import {
   GitBranch,
   List,
   Loader2,
+  Lock,
   Paperclip,
   Pencil,
   Plus,
@@ -1107,6 +1108,17 @@ export function ListViewPage() {
                                         <span className="text-xs text-muted-foreground hover:text-foreground transition-colors">
                                           {subtask.title}
                                         </span>
+                                        {subtask.human_gate && (
+                                          <span
+                                            className="flex-shrink-0"
+                                            title="Waiting on a human sign-off"
+                                          >
+                                            <Lock
+                                              className="h-3 w-3 text-amber-600 dark:text-amber-400"
+                                              aria-label="Waiting on a human sign-off"
+                                            />
+                                          </span>
+                                        )}
                                       </div>
                                     </td>
 
@@ -1612,6 +1624,21 @@ function EnhancedTitleCell({
 
         {/* Visual indicators */}
         <span className="flex items-center gap-1 ml-1 flex-shrink-0">
+          {task.human_gate && (
+            <span
+              className="flex items-center text-amber-600 dark:text-amber-400"
+              title={
+                task.human_gate_class === "soft"
+                  ? "Waiting on a human sign-off (soft — auto-releases after a timeout)"
+                  : "Waiting on a human sign-off"
+              }
+            >
+              <Lock
+                className="h-3 w-3"
+                aria-label="Waiting on a human sign-off"
+              />
+            </span>
+          )}
           {hasDescription && (
             <AlignLeft
               className="h-3 w-3 text-muted-foreground/60"
