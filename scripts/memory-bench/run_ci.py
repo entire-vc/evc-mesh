@@ -123,6 +123,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
+import corpus_sanitize  # noqa: E402 — needs the sys.path line above
 from fixture_ages import AGE_MODE_NOW  # noqa: E402 — needs the sys.path line above
 
 DATA_FILE = SCRIPT_DIR / "data" / "lme_s_24.json"
@@ -1752,6 +1753,24 @@ def cmd_run(args: argparse.Namespace) -> int:
         print(f"Mesh: {mesh_url}")
         print(f"Judge: {judge_model} @ {judge_base_url}")
         print(f"Chat: {chat_model}")
+
+    # Pre-flight: the write path refuses invisible characters and
+    # instruction-override phrases, and this corpus carries both. The harness
+    # normalises them at store time (task #82e42882); this asserts, BEFORE any
+    # ingest and before a paid run spends anything, that the rewrite reaches
+    # only distractor sessions.
+    #
+    # It has to be checked rather than assumed. Rewriting a distractor cannot
+    # move recall@k — the metric scores against `answer_session_ids`. Rewriting
+    # a gold session silently biases every arm while they all still report a
+    # number, which is the exact failure this benchmark is being repaired from.
+    touched = corpus_sanitize.assert_only_distractors_touched(dataset)
+    if touched:
+        labels = sorted({l for t in touched for l in t.labels})
+        print(
+            f"Corpus: {len(touched)} distractor session(s) normalised for the "
+            f"write path ({', '.join(labels)}); 0 answer-bearing sessions touched"
+        )
     print()
 
     # `--repeat N` (baseline capture only) runs the dataset N times so the
