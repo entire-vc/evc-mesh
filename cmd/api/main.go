@@ -1683,7 +1683,13 @@ func main() {
 	// past DefaultHumanGateSoftTimeout; a hard-classified gate is structurally
 	// unreachable from this sweep (see FindSoftTimedOutGates in task_repo.go) — no
 	// interval here can accidentally release one, so a short poll interval is safe.
-	humanGateSoftTimeoutSvc := service.NewHumanGateSoftTimeoutService(taskRepo, commentRepo, 0)
+	humanGateSoftWindow := humanGateSoftTimeoutWindow()
+	humanGateSoftTimeoutSvc := service.NewHumanGateSoftTimeoutService(taskRepo, commentRepo, humanGateSoftWindow)
+	if humanGateSoftWindow > 0 {
+		log.Printf("[human-gate-soft-timeout] window overridden via HUMAN_GATE_SOFT_TIMEOUT=%s", humanGateSoftWindow)
+	} else {
+		log.Printf("[human-gate-soft-timeout] window = default %s", service.DefaultHumanGateSoftTimeout)
+	}
 	go func() {
 		ticker := time.NewTicker(15 * time.Minute)
 		defer ticker.Stop()
@@ -1844,6 +1850,38 @@ func documentWatchQuietWindow() time.Duration {
 	}
 	if d < minWindow || d > maxWindow {
 		log.Printf("[doc-watch] DOCUMENT_WATCH_QUIET_WINDOW=%s is outside [%s, %s] — using the default", d, minWindow, maxWindow)
+		return 0
+	}
+	return d
+}
+
+// humanGateSoftTimeoutWindow reads HUMAN_GATE_SOFT_TIMEOUT, the arm-age past which a
+// soft-classified human_gate is eligible for the 15-minute sweeper's release (contract
+// docs/human-gate-decision-recorded.md §5, task #4dc9467b).
+//
+// It exists as a knob for the same reason DefaultHumanGateSoftTimeout (24h) was a
+// hardcoded constant until now: proving the sweeper actually releases a gate at prod
+// scale costs one full window of real wait time, which makes the mechanism cheaper to
+// believe than to verify. A lower bound still applies — a window at or below the
+// sweeper's own 15-minute tick would race the first tick after arming and make a
+// release look flaky when it isn't, so a value that small is refused rather than
+// honoured. An unparseable or out-of-range value falls back to the default and says so.
+func humanGateSoftTimeoutWindow() time.Duration {
+	const (
+		minWindow = 15 * time.Minute
+		maxWindow = 30 * 24 * time.Hour
+	)
+	raw := strings.TrimSpace(os.Getenv("HUMAN_GATE_SOFT_TIMEOUT"))
+	if raw == "" {
+		return 0 // service applies its own default (DefaultHumanGateSoftTimeout)
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil {
+		log.Printf("[human-gate-soft-timeout] HUMAN_GATE_SOFT_TIMEOUT=%q is not a duration (e.g. \"2h\") — using the default", raw)
+		return 0
+	}
+	if d < minWindow || d > maxWindow {
+		log.Printf("[human-gate-soft-timeout] HUMAN_GATE_SOFT_TIMEOUT=%s is outside [%s, %s] — using the default", d, minWindow, maxWindow)
 		return 0
 	}
 	return d
