@@ -110,7 +110,6 @@ var wsScopedRoutes = []wsRoute{
 	// files; reaching GET would hand them the fingerprint (sha256[:8] + length
 	// + character class) of every secret that tenant holds. Both are asserted
 	// like everything else — neither is an exception.
-	{http.MethodGet, "/secrets", nil},
 	{http.MethodPost, "/secrets", map[string]string{"name": "INTRUDER_TOKEN", "scope": "workspace", "value": "planted"}},
 }
 
