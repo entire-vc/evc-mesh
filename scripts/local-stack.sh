@@ -34,8 +34,21 @@ REDIS_PORT="${LOCAL_STACK_REDIS_PORT:-56379}"
 API_PORT="${LOCAL_STACK_API_PORT:-8095}"
 WEB_PORT="${LOCAL_STACK_WEB_PORT:-3007}"
 
-PG_CONTAINER="mesh-local-stack-pg"
-REDIS_CONTAINER="mesh-local-stack-redis"
+# Container names used to be fixed constants regardless of port — so a second
+# agent picking a free PG_PORT/REDIS_PORT (exactly what check_port_free's own
+# error message told them to do) still collided on `docker rm -f` at the
+# start of `up`, silently nuking the first agent's running stand (#5729d210,
+# measured live 2026-08-21: stand A's containers were recreated out from
+# under it at new ports by stand B, A's API then failed every DB call while
+# `status` kept reporting green — see the reachability rewrite below).
+# Scoping the name to the stack identifier means two stands never share a
+# container name in the first place. Override LOCAL_STACK_NAME for a memorable
+# name; it defaults to PG_PORT since that's already the per-agent knob.
+STACK_ID="${LOCAL_STACK_NAME:-$PG_PORT}"
+STACK_LABEL="mesh-local-stack"
+
+PG_CONTAINER="mesh-local-stack-pg-${STACK_ID}"
+REDIS_CONTAINER="mesh-local-stack-redis-${STACK_ID}"
 
 SEED_EMAIL="local-stack@example.test"
 SEED_PASSWORD="LocalStack1"
@@ -63,8 +76,26 @@ check_port_free() {
   local owner
   owner="$(port_owner "$port")"
   if [ -n "$owner" ]; then
-    die "port ${port} (for ${what}) is already in use by: ${owner}. Set LOCAL_STACK_${what^^}_PORT to a free one, or this may be another agent's stack — check before killing anything."
+    die "port ${port} (for ${what}) is already in use by: ${owner}. Set LOCAL_STACK_${what^^}_PORT to a free one — container names are now scoped to the port (or LOCAL_STACK_NAME), so 'up' only ever touches its own containers, never another agent's."
   fi
+}
+
+safe_rm_container() {
+  # Removes a container by name, but only if it actually carries our stack
+  # label — refuses instead of blindly `docker rm -f`ing whatever happens to
+  # own that name. Belt-and-suspenders on top of the per-stack naming above:
+  # naming already prevents cross-stack collisions in the normal case, this
+  # catches the residual case of a same-named container that isn't ours.
+  local name="$1"
+  local existing
+  existing="$(docker ps -aq --filter "name=^${name}\$" 2>/dev/null || true)"
+  [ -z "$existing" ] && return 0
+  local label
+  label="$(docker inspect --format "{{ index .Config.Labels \"${STACK_LABEL}\" }}" "$name" 2>/dev/null || true)"
+  if [ "$label" != "$STACK_ID" ]; then
+    die "container ${name} exists but is not labeled ${STACK_LABEL}=${STACK_ID} (found: '${label:-<none>}') — refusing to remove a container that may not be ours. Investigate manually: docker inspect ${name}"
+  fi
+  docker rm -f "$name" >/dev/null 2>&1 || true
 }
 
 wait_for_http() {
@@ -94,12 +125,13 @@ cmd_up() {
   check_port_free "$API_PORT" api
   check_port_free "$WEB_PORT" web
 
-  log "starting throwaway postgres (port ${PG_PORT}) and redis (port ${REDIS_PORT})"
-  docker rm -f "$PG_CONTAINER" "$REDIS_CONTAINER" >/dev/null 2>&1 || true
-  docker run -d --name "$PG_CONTAINER" \
+  log "starting throwaway postgres (port ${PG_PORT}) and redis (port ${REDIS_PORT}), stack id ${STACK_ID}"
+  safe_rm_container "$PG_CONTAINER"
+  safe_rm_container "$REDIS_CONTAINER"
+  docker run -d --name "$PG_CONTAINER" --label "${STACK_LABEL}=${STACK_ID}" \
     -e POSTGRES_USER=mesh -e POSTGRES_PASSWORD=mesh -e POSTGRES_DB=mesh \
     -p "${PG_PORT}:5432" postgres:16-alpine >/dev/null
-  docker run -d --name "$REDIS_CONTAINER" \
+  docker run -d --name "$REDIS_CONTAINER" --label "${STACK_LABEL}=${STACK_ID}" \
     -p "${REDIS_PORT}:6379" redis:7-alpine >/dev/null
 
   log "waiting for postgres to accept connections"
@@ -289,16 +321,45 @@ cmd_selftest() {
 }
 
 cmd_status() {
-  echo "postgres (${PG_CONTAINER}):"
-  docker ps --filter "name=${PG_CONTAINER}" --format '  {{.Status}} on port {{.Ports}}' 2>/dev/null || true
-  echo "redis (${REDIS_CONTAINER}):"
-  docker ps --filter "name=${REDIS_CONTAINER}" --format '  {{.Status}} on port {{.Ports}}' 2>/dev/null || true
-  echo "API (port ${API_PORT}):"
-  [ -f "$STATE_DIR/api.pid" ] && kill -0 "$(cat "$STATE_DIR/api.pid")" 2>/dev/null \
-    && echo "  running, pid $(cat "$STATE_DIR/api.pid")" || echo "  not running"
-  echo "vite (port ${WEB_PORT}):"
-  [ -f "$STATE_DIR/vite.pid" ] && kill -0 "$(cat "$STATE_DIR/vite.pid")" 2>/dev/null \
-    && echo "  running, pid $(cat "$STATE_DIR/vite.pid")" || echo "  not running"
+  # Checks REACHABILITY, not "does a pid/container exist" — the latter stayed
+  # green on a stand whose postgres container had been ripped out from under
+  # it by another agent (#5729d210: `status` said "running" / "Up" on every
+  # line while the API was 500ing on every request, only api.log showed the
+  # truth). A container that exists but refuses connections, or a pid that's
+  # alive but wedged, must print red here.
+  local red green reset
+  red=$'\033[31m'; green=$'\033[32m'; reset=$'\033[0m'
+  ok() { printf '  %s%s%s\n' "$green" "$1" "$reset"; }
+  bad() { printf '  %sDOWN — %s%s\n' "$red" "$1" "$reset"; }
+
+  echo "postgres (${PG_CONTAINER}, port ${PG_PORT}):"
+  if docker exec "$PG_CONTAINER" pg_isready -U mesh >/dev/null 2>&1; then
+    ok "up, accepting connections"
+  else
+    bad "container missing or not accepting connections"
+  fi
+
+  echo "redis (${REDIS_CONTAINER}, port ${REDIS_PORT}):"
+  if [ "$(docker exec "$REDIS_CONTAINER" redis-cli ping 2>/dev/null)" = "PONG" ]; then
+    ok "up, responding to PING"
+  else
+    bad "container missing or not responding"
+  fi
+
+  echo "API (${API_URL}):"
+  if curl -fsS -o /dev/null "$API_URL/health" 2>/dev/null; then
+    ok "up, /health OK"
+  else
+    bad "/health unreachable"
+  fi
+
+  echo "vite (${WEB_URL}):"
+  if curl -fsS -o /dev/null "$WEB_URL/" 2>/dev/null; then
+    ok "up, responding"
+  else
+    bad "not responding"
+  fi
+
   [ -f "$STATE_DIR/seed.json" ] && { echo "seeded doc:"; jq -r '"  " + .doc_url' "$STATE_DIR/seed.json"; }
 }
 
@@ -320,8 +381,9 @@ cmd_teardown() {
     [ -n "$pids" ] && kill -9 $pids >/dev/null 2>&1 || true
   done
 
-  log "removing postgres and redis containers"
-  docker rm -f "$PG_CONTAINER" "$REDIS_CONTAINER" >/dev/null 2>&1 || true
+  log "removing postgres and redis containers (stack id ${STACK_ID})"
+  safe_rm_container "$PG_CONTAINER"
+  safe_rm_container "$REDIS_CONTAINER"
 
   sleep 1
   local remaining=""
