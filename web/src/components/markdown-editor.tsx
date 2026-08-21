@@ -153,17 +153,35 @@ export async function uploadArtifact(
 // ---------------------------------------------------------------------------
 // Toolbar button
 // ---------------------------------------------------------------------------
+
+/**
+ * Idle/hover. `--accent`/`--foreground` measured 2.82:1 (light) / 1.73:1 (dark)
+ * — near-invisible on dark. `--secondary`/`--secondary-foreground` measures
+ * 16.31:1 / 11.39:1. Same pairing as the doc-editor toolbar fix (#630) — one
+ * fix for one defect, not two colours that drift apart.
+ */
+const TOOLBAR_HOVER =
+  "text-muted-foreground transition-colors hover:bg-secondary hover:text-secondary-foreground";
+
+/**
+ * Held down. `--secondary` is a light tint, so a pressed button can't be told
+ * from a hovered one by fill alone — darkening the fill is the bug above.
+ * Pressing adds a cue instead: a brand-coloured inset ring, 5.78:1 (light) /
+ * 6.59:1 (dark) against the fill, clearing the 3:1 WCAG non-text floor.
+ */
+const TOOLBAR_PRESSED =
+  "active:bg-secondary active:text-secondary-foreground active:ring-1 active:ring-inset active:ring-primary";
+
 interface ToolbarButtonProps {
   title: string;
   onClick: () => void;
   children: React.ReactNode;
-  active?: boolean;
   disabled?: boolean;
   /** Custom tooltip shown on hover when disabled (native title is suppressed on disabled buttons). */
   disabledTooltip?: string;
 }
 
-function ToolbarButton({ title, onClick, children, active, disabled, disabledTooltip }: ToolbarButtonProps) {
+function ToolbarButton({ title, onClick, children, disabled, disabledTooltip }: ToolbarButtonProps) {
   const btn = (
     <button
       type="button"
@@ -171,8 +189,9 @@ function ToolbarButton({ title, onClick, children, active, disabled, disabledToo
       onClick={disabled ? undefined : onClick}
       disabled={disabled}
       className={cn(
-        "flex h-7 w-7 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
-        active && "bg-accent text-foreground",
+        "flex h-7 w-7 items-center justify-center rounded",
+        TOOLBAR_HOVER,
+        TOOLBAR_PRESSED,
         disabled && "cursor-not-allowed opacity-40 hover:bg-transparent hover:text-muted-foreground",
       )}
     >
