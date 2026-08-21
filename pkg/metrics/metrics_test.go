@@ -41,3 +41,15 @@ func TestSetClientIPTrusted(t *testing.T) {
 	SetClientIPTrusted(false)
 	assert.Equal(t, float64(0), testutil.ToFloat64(ClientIPTrusted))
 }
+
+// mesh_event_bus_enabled is the only signal that says whether mesh-api is
+// actually running with a working NATS/Redis event bus — the API keeps
+// serving requests identically either way, so a wrong value here is exactly
+// as invisible as the two cases above.
+func TestSetEventBusEnabled(t *testing.T) {
+	SetEventBusEnabled(true)
+	assert.Equal(t, float64(1), testutil.ToFloat64(EventBusEnabled))
+
+	SetEventBusEnabled(false)
+	assert.Equal(t, float64(0), testutil.ToFloat64(EventBusEnabled))
+}
