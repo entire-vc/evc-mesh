@@ -396,10 +396,24 @@ jobs:
       # Single source of truth for what this gate covers. Both the guard step and
       # the run step read it, so they cannot disagree about the selection.
       TENANCY_RUN_RE: "^(TestCrossTenant|TestCrossWorkspace|TestRBACLite|TestSecretsRBAC|TestSecretsPlaintext|TestWorkspaceListing|TestAgentTaskFeedIsWorkspaceScoped)"
-      # Measured on the tree that introduced this job: 50 tests match. The guard
-      # below refuses to run if the count drops. Raise this number when you add
-      # tenancy tests; lowering it is a deliberate act that must be explained.
+      # Measured on the tree that introduced this job: 50 tests match. The
+      # pre-flight guard refuses to run if the count drops. Raise this number
+      # when you add tenancy tests; lowering it is a deliberate act that must be
+      # explained.
       TENANCY_MIN_TESTS: "50"
+      # ...and 46 of those 50 actually EXECUTE. Selection is not execution: on
+      # the first run of this job, 4 selected tests skipped —
+      # TestRBACLite_{Owner,Member,Agent}* are unconditional
+      # `t.Skip("TODO: implement RBAC lite first")` placeholders, and
+      # TestCrossTenant_SparkInstallRequiresMembership is env-gated on
+      # TEST_SPARK_ENABLED. A selection floor alone would therefore accept a
+      # tree where every real assertion had been replaced by t.Skip: the count
+      # holds, the job is green, and the gate guards nothing. So the run step
+      # asserts on tests that PASSED, which is the number with teeth. The
+      # RBACLite placeholders stay in the pattern deliberately — when someone
+      # implements RBAC lite they come under the gate for free, and this floor
+      # goes to 49.
+      TENANCY_MIN_PASSED: "46"
     steps:
       - uses: actions/checkout@v7
 
@@ -499,7 +513,21 @@ jobs:
         env:
           TEST_API_URL: "http://localhost:8005"
           TEST_DB_DSN: "host=localhost port=5432 user=mesh password=mesh dbname=mesh sslmode=disable"
-        run: go test ./tests/integration/ -v -tags=integration -timeout=300s -run "$TENANCY_RUN_RE"
+        run: |
+          # pipefail, or `tee` returns 0 and a failing suite reads as a pass.
+          set -o pipefail
+          go test ./tests/integration/ -v -tags=integration -timeout=300s \
+            -run "$TENANCY_RUN_RE" 2>&1 | tee /tmp/tenancy.log
+          # `--- PASS:` at column 0 is a top-level test; subtests are indented.
+          passed=$(grep -cE '^--- PASS: ' /tmp/tenancy.log || true)
+          skipped=$(grep -cE '^--- SKIP: ' /tmp/tenancy.log || true)
+          echo "executed: $passed passed, $skipped skipped (floor is $TENANCY_MIN_PASSED passed)"
+          grep -E '^--- SKIP: ' /tmp/tenancy.log || true
+          if [ "$passed" -lt "$TENANCY_MIN_PASSED" ]; then
+            echo "::error::Tenancy gate: $passed tests passed, below the floor of $TENANCY_MIN_PASSED."
+            echo "::error::go test exited 0, so nothing FAILED — tests were skipped or removed instead. A gate that guards fewer assertions than it claims is not a gate."
+            exit 1
+          fi
 
   # ─── A2. Repo-layer integration tests ──────────────────────────────────────
   # internal/repository/postgres/integration_test.go carries `//go:build
