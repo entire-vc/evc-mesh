@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -123,6 +124,42 @@ func TestLeaseReaper_HappyPath_MovesToTodo(t *testing.T) {
 
 	if len(h.notify.notified) != 1 || h.notify.notified[0] != *task.AssigneeID {
 		t.Errorf("expected agent notification to task assignee")
+	}
+}
+
+// TestLeaseReaper_SystemComment_NamesCheckoutTTLNotHeartbeat guards against the
+// misleading comment text: FindExpiredInProgressCheckouts (task_repo.go) sweeps
+// purely on checkout_expires < now() and never reads heartbeat/last_heartbeat, so
+// the audit comment must name checkout TTL expiry + extend_checkout as the real
+// cause/remedy, not heartbeat (see task fe8ddfa0 for the misdiagnosis this fixes).
+func TestLeaseReaper_SystemComment_NamesCheckoutTTLNotHeartbeat(t *testing.T) {
+	h := newReaperHarness()
+	projectID := uuid.New()
+	h.addTodoStatus(t, projectID)
+	h.addExpiredTask(t, projectID, domain.AssigneeTypeAgent)
+
+	_, err := h.reaper.SweepExpiredLeases(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	h.commentRepo.mu.RLock()
+	defer h.commentRepo.mu.RUnlock()
+	if len(h.commentRepo.items) != 1 {
+		t.Fatalf("expected 1 system comment, got %d", len(h.commentRepo.items))
+	}
+	var body string
+	for _, c := range h.commentRepo.items {
+		body = c.Body
+	}
+	if strings.Contains(body, "without heartbeat") || strings.Contains(body, "без heartbeat") {
+		t.Errorf("comment still blames heartbeat, got: %q", body)
+	}
+	if !strings.Contains(body, "extend_checkout") {
+		t.Errorf("comment must name extend_checkout as the remedy, got: %q", body)
+	}
+	if !strings.Contains(body, "TTL") {
+		t.Errorf("comment must name checkout TTL expiry as the cause, got: %q", body)
 	}
 }
 

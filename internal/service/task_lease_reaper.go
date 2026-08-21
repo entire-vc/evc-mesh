@@ -120,7 +120,7 @@ func (r *checkoutLeaseReaper) postSystemComment(ctx context.Context, task *domai
 	comment := &domain.Comment{
 		ID:         uuid.New(),
 		TaskID:     task.ID,
-		Body:       "🔄 Checkout lease expired without heartbeat — задача возвращена в todo, слот ёмкости освобождён.",
+		Body:       "🔄 Checkout TTL истёк — задача возвращена в todo, слот ёмкости освобождён. Чтобы удержать задачу дольше, зовите extend_checkout до истечения TTL (heartbeat на это не влияет).",
 		AuthorID:   uuid.Nil,
 		AuthorType: domain.ActorTypeSystem,
 		CreatedAt:  timeNow(),

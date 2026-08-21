@@ -368,6 +368,100 @@ func TestAgentHandler_Heartbeat_InvalidAgentIDType(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
 }
 
+// TestAgentHandler_Heartbeat_StatusExactly20Chars_OK verifies the boundary: a
+// status of exactly heartbeatStatusMaxLen (20) chars must succeed — this is the
+// DB column width (agents.heartbeat_status VARCHAR(20)), so 20 is the largest
+// value that must still work.
+func TestAgentHandler_Heartbeat_StatusExactly20Chars_OK(t *testing.T) {
+	agentID := uuid.New()
+	status20 := strings.Repeat("a", 20)
+	var gotStatus string
+	mockSvc := &MockAgentService{
+		HeartbeatFunc: func(ctx context.Context, id uuid.UUID, input *service.HeartbeatInput) error {
+			gotStatus = input.Status
+			return nil
+		},
+	}
+
+	h, e := setupAgentTest(mockSvc)
+
+	body := `{"status":"` + status20 + `"}`
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/agents/heartbeat")
+	c.Set("agent_id", agentID)
+
+	err := h.Heartbeat(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, rec.Code, "20-char status must be accepted (boundary)")
+	assert.Equal(t, status20, gotStatus)
+}
+
+// TestAgentHandler_Heartbeat_Status21Chars_BadRequest verifies the boundary: a
+// status of 21 chars (one over the VARCHAR(20) column width) must be rejected
+// with 400 BEFORE it reaches the DB layer, not a 500 from a truncation/length
+// constraint violation. The error message must name both the limit and the
+// `message` field as the place for free-form text.
+func TestAgentHandler_Heartbeat_Status21Chars_BadRequest(t *testing.T) {
+	agentID := uuid.New()
+	status21 := strings.Repeat("a", 21)
+	serviceCalled := false
+	mockSvc := &MockAgentService{
+		HeartbeatFunc: func(ctx context.Context, id uuid.UUID, input *service.HeartbeatInput) error {
+			serviceCalled = true
+			return nil
+		},
+	}
+
+	h, e := setupAgentTest(mockSvc)
+
+	body := `{"status":"` + status21 + `"}`
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/agents/heartbeat")
+	c.Set("agent_id", agentID)
+
+	err := h.Heartbeat(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusBadRequest, rec.Code, "21-char status must be rejected as 400, not reach the DB as a 500")
+	assert.False(t, serviceCalled, "service must not be called once validation rejects the request")
+
+	var result apierror.Error
+	err = json.Unmarshal(rec.Body.Bytes(), &result)
+	require.NoError(t, err)
+	assert.Contains(t, result.Message, "20", "error must name the length limit")
+	assert.Contains(t, result.Message, "message", "error must point to the `message` field for free-form text")
+}
+
+// TestAgentHandler_Heartbeat_EmptyStatus_OK verifies the fix doesn't break the
+// working path: an empty/omitted status must still succeed.
+func TestAgentHandler_Heartbeat_EmptyStatus_OK(t *testing.T) {
+	agentID := uuid.New()
+	mockSvc := &MockAgentService{
+		HeartbeatFunc: func(ctx context.Context, id uuid.UUID, input *service.HeartbeatInput) error {
+			return nil
+		},
+	}
+
+	h, e := setupAgentTest(mockSvc)
+
+	body := `{"status":""}`
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/agents/heartbeat")
+	c.Set("agent_id", agentID)
+
+	err := h.Heartbeat(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
 func TestAgentHandler_Heartbeat_ServiceError(t *testing.T) {
 	agentID := uuid.New()
 	mockSvc := &MockAgentService{
