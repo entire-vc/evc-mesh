@@ -112,8 +112,9 @@ interface RelayHit {
 /**
  * Search the project's Team Relay vault.
  *
- * The endpoint predates this unit — it is what RelayDocPicker has always used —
- * so the scope is wired to it rather than reimplemented. It returns no snippet,
+ * The endpoint predates this unit — it is what the old RelayDocPicker dialog
+ * always used, before R6 folded it into AttachDocDialog's "relay" scope — so
+ * the scope is wired to it rather than reimplemented. It returns no snippet,
  * and the path stands in for one: it is what tells two documents with the same
  * name apart, which is the job a snippet does in the other scope.
  */

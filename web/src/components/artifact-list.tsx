@@ -1,6 +1,5 @@
 import { type DragEvent, useCallback, useEffect, useRef, useState } from "react";
 import {
-  BookOpen,
   Database,
   Download,
   ExternalLink,
@@ -11,7 +10,6 @@ import {
   Link,
   Package,
   Trash2,
-  Upload,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { toast } from "@/components/ui/toast";
@@ -20,8 +18,12 @@ import { useProjectTrIntegration } from "@/hooks/useProjectTrIntegration";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { RelayDocPicker } from "@/components/RelayDocPicker";
+import { AttachmentSourceMenu } from "@/components/AttachmentSourceMenu";
 import { uploadArtifact } from "@/lib/task-artifacts";
+import { documentMarkdownLink } from "@/lib/docs/doc-link";
+import type { DocumentSearchHit } from "@/lib/docs/document-search";
+import { useProjectStore } from "@/stores/project";
+import { useWorkspaceStore } from "@/stores/workspace";
 import type { Artifact, ArtifactType, PaginatedResponse } from "@/types";
 
 interface ArtifactListProps {
@@ -30,7 +32,15 @@ interface ArtifactListProps {
   refreshKey?: number;
   projId?: string;
   projectSettings?: Record<string, unknown>;
-  onRelayDocSelect?: (relayUrl: string) => void;
+  /**
+   * A markdown snippet — `[title](/w/.../docs/id)` for one of our own Docs,
+   * or a bare `relay://...` URL for a Team Relay document (MarkdownWithRelay
+   * recognises both the bare and the `[label](relay://...)` forms) — to
+   * insert wherever the caller keeps the task description draft. Named for
+   * what it carries, not for which of the two sources produced it: the
+   * caller appends either kind identically.
+   */
+  onDocInsert?: (markdown: string) => void;
 }
 
 const artifactTypeIcons: Record<ArtifactType, typeof File> = {
@@ -74,17 +84,40 @@ function canPreviewInline(mimeType: string): boolean {
   return !NON_PREVIEWABLE_MIME_PREFIXES.some((prefix) => mimeType.startsWith(prefix));
 }
 
-export function ArtifactList({ taskId, refreshKey, projId, onRelayDocSelect }: ArtifactListProps) {
+export function ArtifactList({ taskId, refreshKey, projId, onDocInsert }: ArtifactListProps) {
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
   const [loading, setLoading] = useState(true);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [dragOver, setDragOver] = useState(false);
-  const [pickerOpen, setPickerOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const { enabled: hasTrIntegration } = useProjectTrIntegration(projId);
+  const currentWorkspace = useWorkspaceStore((s) => s.currentWorkspace);
+  const projects = useProjectStore((s) => s.projects);
+  const currentProject = useProjectStore((s) => s.currentProject);
+
+  const handlePickDoc = useCallback(
+    (hit: DocumentSearchHit) => {
+      if (!onDocInsert) return;
+      const wsSlug = currentWorkspace?.slug;
+      const project =
+        projects.find((p) => p.id === projId) ??
+        (currentProject?.id === projId ? currentProject : undefined);
+      if (!wsSlug || !project) return;
+      onDocInsert(documentMarkdownLink(hit.title, wsSlug, project.slug, hit.id));
+    },
+    [onDocInsert, currentWorkspace, projects, currentProject, projId],
+  );
+
+  const handlePickRelay = useCallback(
+    (hit: DocumentSearchHit) => {
+      if (!onDocInsert || !hit.relayUrl) return;
+      onDocInsert(hit.relayUrl);
+    },
+    [onDocInsert],
+  );
 
   const fetchArtifacts = useCallback(async () => {
     try {
@@ -244,7 +277,10 @@ export function ArtifactList({ taskId, refreshKey, projId, onRelayDocSelect }: A
     );
   }
 
-  // Upload zone (shared between empty and populated states)
+  // Upload zone (shared between empty and populated states). "browse files",
+  // "from Docs" and "attach Obsidian doc" used to be three separately-styled
+  // controls a writer had to learn one at a time (R6) — one AttachmentSourceMenu
+  // now owns all three, including the two AttachDocDialog instances it opens.
   const uploadZone = (
     <div
       className={`flex flex-col items-center rounded-lg border-2 border-dashed px-4 py-6 transition-colors ${
@@ -256,28 +292,17 @@ export function ArtifactList({ taskId, refreshKey, projId, onRelayDocSelect }: A
       onDragLeave={handleDragLeave}
       onDrop={(e) => void handleDrop(e)}
     >
-      <Upload className="mb-2 h-6 w-6 text-muted-foreground" />
-      <p className="text-sm text-muted-foreground">
-        {uploading ? "Uploading..." : "Drop files here or"}
+      <p className="mb-1 text-sm text-muted-foreground">
+        {uploading ? "Uploading..." : "Drop files here, or"}
       </p>
       {!uploading && (
-        <button
-          type="button"
-          className="mt-1 text-sm font-medium text-primary hover:underline"
-          onClick={() => fileInputRef.current?.click()}
-        >
-          browse files
-        </button>
-      )}
-      {hasTrIntegration && onRelayDocSelect && !uploading && (
-        <button
-          type="button"
-          className="mt-1 flex items-center gap-1 text-sm font-medium text-primary hover:underline"
-          onClick={() => setPickerOpen(true)}
-        >
-          <BookOpen className="h-3.5 w-3.5" />
-          attach Obsidian doc
-        </button>
+        <AttachmentSourceMenu
+          projId={projId}
+          hasTrIntegration={hasTrIntegration}
+          onPickFiles={() => fileInputRef.current?.click()}
+          onPickDoc={handlePickDoc}
+          onPickRelay={handlePickRelay}
+        />
       )}
       <input
         ref={fileInputRef}
@@ -297,14 +322,6 @@ export function ArtifactList({ taskId, refreshKey, projId, onRelayDocSelect }: A
           <p className="text-sm">No artifacts uploaded yet.</p>
         </div>
         {uploadZone}
-        {hasTrIntegration && onRelayDocSelect && (
-          <RelayDocPicker
-            projId={projId!}
-            open={pickerOpen}
-            onClose={() => setPickerOpen(false)}
-            onSelect={(url) => { onRelayDocSelect(url); setPickerOpen(false); }}
-          />
-        )}
       </div>
     );
   }
@@ -382,14 +399,6 @@ export function ArtifactList({ taskId, refreshKey, projId, onRelayDocSelect }: A
         );
       })}
       {uploadZone}
-      {hasTrIntegration && onRelayDocSelect && (
-        <RelayDocPicker
-          projId={projId!}
-          open={pickerOpen}
-          onClose={() => setPickerOpen(false)}
-          onSelect={(url) => { onRelayDocSelect(url); setPickerOpen(false); }}
-        />
-      )}
     </div>
   );
 }
