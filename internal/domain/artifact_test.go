@@ -85,3 +85,42 @@ func TestArtifact_MarshalJSON_ThroughPointer(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotContains(t, string(b), "secret")
 }
+
+// TestArtifact_MarshalJSON_DownloadPath proves every serialised Artifact
+// carries the stable, machine-readable download path — the counterpart to
+// metadata.tr_public_url that stays valid regardless of the Team Relay
+// share's visibility (task #97c60be9).
+func TestArtifact_MarshalJSON_DownloadPath(t *testing.T) {
+	id := uuid.New()
+	art := Artifact{ID: id}
+
+	b, err := json.Marshal(art)
+	require.NoError(t, err)
+
+	var decoded map[string]any
+	require.NoError(t, json.Unmarshal(b, &decoded))
+
+	want := "/api/v1/artifacts/" + id.String() + "/download"
+	assert.Equal(t, want, decoded["download_path"])
+}
+
+// TestArtifact_MarshalJSON_DownloadPath_IgnoresInputField proves the field is
+// always computed from ID — a caller cannot smuggle a different value (e.g.
+// an absolute URL, or a path pointing at a different artifact) through by
+// pre-populating DownloadPath before marshaling. This is the guard against
+// DownloadPath silently becoming an attacker-controlled redirect if the
+// struct is ever built from untrusted input elsewhere.
+func TestArtifact_MarshalJSON_DownloadPath_IgnoresInputField(t *testing.T) {
+	id := uuid.New()
+	art := Artifact{ID: id, DownloadPath: "https://evil.example.com/steal"}
+
+	b, err := json.Marshal(art)
+	require.NoError(t, err)
+
+	var decoded map[string]any
+	require.NoError(t, json.Unmarshal(b, &decoded))
+
+	want := "/api/v1/artifacts/" + id.String() + "/download"
+	assert.Equal(t, want, decoded["download_path"])
+	assert.NotContains(t, decoded["download_path"], "evil.example.com")
+}
