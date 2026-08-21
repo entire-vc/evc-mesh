@@ -1,6 +1,5 @@
 import {
   type FormEvent,
-  type KeyboardEvent,
   useCallback,
   useEffect,
   useMemo,
@@ -14,15 +13,11 @@ import { api } from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { formatRelative } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
-import { DocLinkMenu } from "@/components/doc-link-menu";
-import { useDocLinkPicker } from "@/hooks/use-doc-link-picker";
-import { MentionMenu } from "@/components/mention-menu";
-import { useMentionPicker } from "@/hooks/use-mention-picker";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { type MentionEntry } from "@/components/markdown-renderer";
+import { type MentionEntry } from "@/components/markdown-view";
 import { MarkdownWithRelay } from "@/components/MarkdownWithRelay";
+import { RichTextEditor } from "@/components/rich-text-editor";
 import { useRulesStore } from "@/stores/rules";
 import { useWorkspaceStore } from "@/stores/workspace";
 import type {
@@ -210,12 +205,13 @@ function CommentItem({
 
         {isEditing ? (
           <div className="mt-1.5 space-y-2">
-            <Textarea
-              ref={editRef}
+            <RichTextEditor
               value={editBody}
-              onChange={(e) => setEditBody(e.target.value)}
-              rows={3}
-              className="text-sm"
+              onChange={setEditBody}
+              projId={projId}
+              taskId={comment.task_id}
+              minHeight="4rem"
+              hint={null}
             />
             <div className="flex items-center gap-2 justify-end">
               <Button
@@ -286,27 +282,7 @@ export function CommentList({ taskId, projId }: CommentListProps) {
 
   const { enabled: hasTrIntegration } = useProjectTrIntegration(projId);
 
-  // `[[` links a document from this project — the same affordance the task
-  // description has, deliberately identical in behaviour to the `@` menu right
-  // beside it.
-  const docLinks = useDocLinkPicker(projId, body, setBody, textareaRef);
-  // Team Relay appears as a scope only when the project is connected to one.
-  // A switcher with a single option is a control that cannot do anything.
-  const docLinkScopes = useMemo(
-    () =>
-      hasTrIntegration
-        ? ([{ id: "docs", label: "Docs" }, { id: "relay", label: "Team Relay" }] as const)
-        : ([{ id: "docs", label: "Docs" }] as const),
-    [hasTrIntegration],
-  );
-
-  // The `@` menu, now the shared one — the same hook and the same dropdown the
-  // document comment rail uses. It was implemented inline here and nowhere else,
-  // which is precisely the gap use-doc-link-picker.ts describes in its header;
-  // lifting it is what let document comments have it without a second copy.
   const { currentWorkspace } = useWorkspaceStore();
-  const mentions = useMentionPicker(currentWorkspace?.id, body, setBody, textareaRef);
-
   const { teamDirectory, fetchTeamDirectory } = useRulesStore();
 
   useEffect(() => {
@@ -325,22 +301,6 @@ export function CommentList({ taskId, projId }: CommentListProps) {
   }, [teamDirectory]);
 
   const wsSlug = currentWorkspace?.slug;
-
-  const handleBodyChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    const val = e.target.value;
-    setBody(val);
-    const cursorPos = e.target.selectionStart ?? val.length;
-    docLinks.onValueChange(val, cursorPos);
-    mentions.onValueChange(val, cursorPos);
-  };
-
-  const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    // The document menu gets the key first when it is the one that is open. The
-    // two cannot both be open: `@` and `[[` are different triggers, and each
-    // closes on any text that is not its own.
-    if (docLinks.onKeyDown(e)) return;
-    mentions.onKeyDown(e);
-  };
 
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(false);
@@ -548,29 +508,14 @@ export function CommentList({ taskId, projId }: CommentListProps) {
               </button>
             </div>
           )}
-          <MentionMenu picker={mentions} />
-          {docLinks.trigger && (
-            <div className="absolute bottom-full left-0 z-50 mb-1">
-              <DocLinkMenu
-                suggestions={docLinks.suggestions}
-                activeIndex={docLinks.activeIndex}
-                onPick={docLinks.pick}
-                onHover={docLinks.setActiveIndex}
-                scope={docLinks.scope}
-                scopes={docLinkScopes}
-                onScope={docLinks.setScope}
-                loading={docLinks.loading}
-              />
-            </div>
-          )}
-          <Textarea
-            ref={textareaRef}
+          <RichTextEditor
             value={body}
-            onChange={handleBodyChange}
-            onKeyDown={handleKeyDown}
-            onBlur={docLinks.close}
+            onChange={setBody}
+            projId={projId}
+            taskId={taskId}
             placeholder="Write a comment… @ to mention, [[ to link a document"
-            rows={3}
+            minHeight="4.5rem"
+            hint={null}
           />
           <div className="flex items-center justify-between">
             <label className="flex items-center gap-2 text-sm text-muted-foreground">

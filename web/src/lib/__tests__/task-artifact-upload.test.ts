@@ -57,7 +57,7 @@ describe("uploadArtifact", () => {
 
     const { setAccessToken } = await import("@/lib/api");
     setAccessToken("stale-token");
-    const { uploadArtifact } = await import("@/components/markdown-editor");
+    const { uploadArtifact } = await import("@/lib/task-artifacts");
 
     const result = await uploadArtifact("task-1", new File(["abc"], "pic.png", { type: "image/png" }));
 
@@ -81,7 +81,7 @@ describe("uploadArtifact", () => {
 
     const { setAccessToken } = await import("@/lib/api");
     setAccessToken("tok");
-    const { uploadArtifact } = await import("@/components/markdown-editor");
+    const { uploadArtifact } = await import("@/lib/task-artifacts");
 
     await uploadArtifact("task-1", new File(["abc"], "pic.png", { type: "image/png" }));
 
@@ -109,7 +109,7 @@ describe("uploadArtifact", () => {
 
     const { setAccessToken } = await import("@/lib/api");
     setAccessToken("tok");
-    const { uploadArtifact } = await import("@/components/markdown-editor");
+    const { uploadArtifact } = await import("@/lib/task-artifacts");
 
     await expect(
       uploadArtifact("task-1", new File(["abc"], "pic.png", { type: "image/png" })),

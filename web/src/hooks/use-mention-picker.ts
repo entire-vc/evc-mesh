@@ -17,11 +17,18 @@ import type { Mentionable } from "@/types";
 /**
  * Typing `@` in a comment box and getting a person or an agent out of it.
  *
- * One hook for every surface that takes a comment, which is the gap
- * use-doc-link-picker.ts names in its own header: the `@` menu was implemented
- * once, inline in the task comment list, and was therefore absent from document
- * comments. Adding it to document comments by copying those sixty lines would
- * have reopened the same gap for the next editor somebody adds.
+ * One hook for every textarea-based surface that takes a comment. The gap it
+ * closes: the `@` menu was implemented once, inline in the task comment list,
+ * and was therefore absent from document comments. Adding it to document
+ * comments by copying those sixty lines would have reopened the same gap for
+ * the next editor somebody adds.
+ *
+ * Its remaining caller is the document comment rail. Task comments and task
+ * descriptions moved to the rich text editor, where the trigger is read off
+ * ProseMirror positions rather than a caret offset (lib/milkdown/suggestion.ts)
+ * — a different mechanism for the same affordance, sharing the menu markup via
+ * MentionMenu. (This header used to point at use-doc-link-picker.ts, which was
+ * deleted in that move.)
  *
  * The caller owns its textarea and its markup; this owns when the menu is open,
  * what is in it, and what the text becomes.
