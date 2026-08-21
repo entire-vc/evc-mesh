@@ -15,6 +15,7 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	mw "github.com/entire-vc/evc-mesh/internal/middleware"
 	"github.com/entire-vc/evc-mesh/internal/service"
 	"github.com/entire-vc/evc-mesh/internal/storage"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
@@ -133,7 +134,21 @@ func (h *WorkspaceHandler) List(c echo.Context) error {
 }
 
 // Create handles POST /workspaces
+//
+// Agent-key callers are refused outright rather than routed through the same
+// path a user takes. There is no scenario where an agent needs its own
+// workspace, and the naive alternative — resolve owner_id from whatever
+// identity is on the request — has no good answer for an agent: an agent has
+// no user_id to fall back to, so that path used to silently create a
+// workspace with owner_id all-zero and zero rows in workspace_members. Every
+// subsequent call (read, write, delete) against that workspace 403'd,
+// including for its own creator: a write-only orphan reachable by nothing
+// (task #85fd1ef2; live instance repaired by hand, see that task's comments).
 func (h *WorkspaceHandler) Create(c echo.Context) error {
+	if mw.IsAgent(c) {
+		return c.JSON(http.StatusForbidden, apierror.Forbidden("agents cannot create workspaces"))
+	}
+
 	var req createWorkspaceRequest
 	if err := c.Bind(&req); err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))

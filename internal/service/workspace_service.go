@@ -48,6 +48,21 @@ func (s *workspaceService) Create(ctx context.Context, workspace *domain.Workspa
 		})
 	}
 
+	// A workspace with no owner is unrecoverable through the API: every
+	// permission check in this codebase resolves a caller's role via
+	// workspace_members, and OwnerID==Nil means that auto-add-membership step
+	// below never runs — the workspace exists but nothing can read, write, or
+	// delete it (task #85fd1ef2, a real orphan reached exactly this way,
+	// repaired by hand). The handler already refuses the one caller class that
+	// used to produce this (agents have no user_id to fall back to), but
+	// enforcing it here too means a future second caller of this method can't
+	// reintroduce the same ghost by skipping that check.
+	if workspace.OwnerID == uuid.Nil {
+		return apierror.ValidationError(map[string]string{
+			"owner_id": "a workspace must have an owner",
+		})
+	}
+
 	if workspace.Slug == "" {
 		workspace.Slug = slugify(workspace.Name)
 	}
@@ -70,8 +85,10 @@ func (s *workspaceService) Create(ctx context.Context, workspace *domain.Workspa
 		return err
 	}
 
-	// Auto-add the creator as workspace owner.
-	if workspace.OwnerID != uuid.Nil && s.workspaceMemberRepo != nil {
+	// Auto-add the creator as workspace owner. OwnerID is guaranteed non-nil
+	// by the check above; workspaceMemberRepo is nil only in constructions
+	// (some tests) that don't wire one up.
+	if s.workspaceMemberRepo != nil {
 		now := time.Now()
 		member := &domain.WorkspaceMember{
 			ID:          uuid.New(),
