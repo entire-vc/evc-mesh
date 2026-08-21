@@ -1573,6 +1573,10 @@ func (s *memoryService) Forget(ctx context.Context, id uuid.UUID, actorAgentID *
 		Action:       domain.MemoryActionForgotten,
 		Reason:       trimmedOrNil(reason),
 		ActorAgentID: actorAgentID,
+		// Captured from the still-live row, one step before it stops existing —
+		// this is what lets the Revisions endpoint authorize this exact row
+		// after the delete below removes the memory it would otherwise check.
+		WorkspaceID: &mem.WorkspaceID,
 	}); err != nil {
 		return fmt.Errorf("memory forget: record revision: %w", err)
 	}

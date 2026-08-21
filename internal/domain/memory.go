@@ -547,6 +547,13 @@ type MemoryRevision struct {
 	Content  string         `json:"content" db:"content"`
 	Tags     pq.StringArray `json:"tags" db:"tags"`
 	Action   string         `json:"action" db:"action"`
+	// WorkspaceID is denormalized from the memory this revision belongs to,
+	// set at write time by both Upsert and Forget — NOT read from the live
+	// `memories` row, so it survives the memory being deleted. Nil only for
+	// revisions written before migration 20260821005 whose memory was already
+	// forgotten by the time it ran (see that migration's backfill comment);
+	// every other row, past or future, has it set.
+	WorkspaceID *uuid.UUID `json:"workspace_id,omitempty" db:"workspace_id"`
 	// Reason is nil for writes made before the reason requirement was switched
 	// on. Absent and blank are different states and are kept different: blank is
 	// rejected by a table CHECK, absent means "this predates the requirement".
