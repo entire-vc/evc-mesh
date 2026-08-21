@@ -360,6 +360,15 @@ func (c *fakeCommentService) ListRecentByWorkspace(context.Context, uuid.UUID, r
 func (c *fakeCommentService) GetHumanGateOwner(context.Context, uuid.UUID) (*domain.HumanGateInfo, error) {
 	return nil, nil
 }
+func (c *fakeCommentService) RecordHumanGateDecision(context.Context, domain.RecordHumanGateDecisionInput) (*domain.HumanGateDecision, error) {
+	return nil, nil
+}
+func (c *fakeCommentService) RevokeHumanGateDecision(context.Context, domain.RevokeHumanGateDecisionInput) error {
+	return nil
+}
+func (c *fakeCommentService) ListHumanGateDecisions(context.Context, uuid.UUID) ([]domain.HumanGateDecision, error) {
+	return nil, nil
+}
 
 // ---------------------------------------------------------------------------
 // Test fixtures.

@@ -285,6 +285,20 @@ type CommentService interface {
 	// ask (task #040cddcf), read-only — see the domain.HumanGateInfo and
 	// commentService.scanHumanGateOwnership doc comments for the full rule.
 	GetHumanGateOwner(ctx context.Context, taskID uuid.UUID) (*domain.HumanGateInfo, error)
+	// RecordHumanGateDecision appends a decision record (task #c56339b1, the
+	// third human_gate exit) and, if the task's gate is currently live,
+	// releases it as a CONSEQUENCE of the record — never independently. See
+	// docs/human-gate-decision-recorded.md §3 in the evc-mesh repo.
+	RecordHumanGateDecision(ctx context.Context, input domain.RecordHumanGateDecisionInput) (*domain.HumanGateDecision, error)
+	// RevokeHumanGateDecision appends a revocation row for an existing
+	// decision and re-freezes the task's gate (contract §3, P3: a human can
+	// always revoke, and the card freezes back so the dispute is recorded).
+	// Callers MUST verify the caller is a human user before invoking this —
+	// see the handler-level check mirroring task_handler.go's PATCH guard.
+	RevokeHumanGateDecision(ctx context.Context, input domain.RevokeHumanGateDecisionInput) error
+	// ListHumanGateDecisions returns every decision/revocation row recorded
+	// on a task, newest first.
+	ListHumanGateDecisions(ctx context.Context, taskID uuid.UUID) ([]domain.HumanGateDecision, error)
 }
 
 // UploadArtifactInput holds parameters for uploading an artifact.

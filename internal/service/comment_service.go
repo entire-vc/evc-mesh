@@ -632,6 +632,7 @@ type commentService struct {
 	deliveryRepo   repository.CommentDeliveryOutcomeRepository
 	wsPublisher    WSPublisher
 	taskSvc        TaskService
+	hgdRepo        repository.HumanGateDecisionRepository
 }
 
 // CommentServiceOption configures optional dependencies for CommentService.
@@ -701,6 +702,16 @@ func WithCommentNotificationService(ns NotificationService) CommentServiceOption
 // enforcement step is skipped entirely.
 func WithCommentTaskService(ts TaskService) CommentServiceOption {
 	return func(s *commentService) { s.taskSvc = ts }
+}
+
+// WithHumanGateDecisionRepo injects the repository backing the third
+// human_gate exit — "decision recorded" (task #c56339b1, contract
+// docs/human-gate-decision-recorded.md). Optional — if unset,
+// RecordHumanGateDecision/RevokeHumanGateDecision return an error and
+// enforceBlockingTriage's repeat-check is skipped (arms as before this
+// feature existed).
+func WithHumanGateDecisionRepo(repo repository.HumanGateDecisionRepository) CommentServiceOption {
+	return func(s *commentService) { s.hgdRepo = repo }
 }
 
 // NewCommentService returns a new CommentService backed by the given repositories.
@@ -1479,6 +1490,18 @@ func (s *commentService) enforceBlockingTriage(ctx context.Context, comment *dom
 		if len(blockingSlugs) > 0 {
 			log.Printf("[comment-triage] WARNING: Blocking marker on task %s names unresolved slug(s) %v (typo, agent, or unregistered user) — human_gate not armed", task.ID, blockingSlugs)
 		}
+		return
+	}
+
+	// Repeat-question prevention (contract §6, task #c56339b1): if this marker
+	// is a reply to an already-answered marker thread (comment.ParentCommentID
+	// matches a recorded decision's question_ref), or explicitly cites an
+	// already-decided canonical_key in its metadata, do NOT arm — point at the
+	// existing record instead and leave the task feedable. This is identity
+	// matching by KEY, never by text similarity (contract §8: a reformulated
+	// question with neither reference is not caught, by design).
+	if existing := s.findLiveHumanGateDecision(ctx, task.ID, comment); existing != nil {
+		s.postExistingDecisionNotice(ctx, task, existing)
 		return
 	}
 
