@@ -396,6 +396,7 @@ func (h *TaskHandler) SearchGlobal(c echo.Context) error {
 	}
 
 	decorateTaskList(c, page.Items)
+	enforceListSizeCeiling(page)
 
 	return c.JSON(http.StatusOK, page)
 }
@@ -418,6 +419,40 @@ func decorateTaskList(c echo.Context, items []domain.Task) {
 		if !includeDesc {
 			items[i].Description = ""
 		}
+	}
+}
+
+// maxListDescriptionBytes bounds how many bytes of description content a
+// single list-shaped response may carry before the handler starts dropping
+// descriptions from the tail of the page. Measured live (Riker, 2026-08-20):
+// a full 200-item project list with descriptions serialized to 494,772 bytes
+// in one line and blew the caller's tool-output limit; the same shape hit a
+// workspace-wide search response at 124,847 bytes the same day. Description
+// bytes dominate a list response (~77% of payload — see
+// includeDescriptionRequested) so bounding them is what actually caps size.
+const maxListDescriptionBytes = 200_000
+
+// enforceListSizeCeiling drops descriptions from the tail of a task list, in
+// item order, once the running total of description bytes crosses
+// maxListDescriptionBytes. It never removes an item, changes item order, or
+// touches count/offset/total_count — pagination stays exactly as requested —
+// it only blanks the Description field on the items past the ceiling and
+// flags the page as Truncated. A caller that hits this can recover a dropped
+// description with get_task(task_id), or avoid it up front with a smaller
+// page_size / include_description=false. A page whose descriptions were
+// already excluded (include_description=false) or that never approaches the
+// ceiling is completely unaffected.
+func enforceListSizeCeiling(page *pagination.Page[domain.Task]) {
+	total := 0
+	for i := range page.Items {
+		if total > maxListDescriptionBytes {
+			if page.Items[i].Description != "" {
+				page.Items[i].Description = ""
+				page.Truncated = true
+			}
+			continue
+		}
+		total += len(page.Items[i].Description)
 	}
 }
 
@@ -679,6 +714,7 @@ func (h *TaskHandler) List(c echo.Context) error {
 	}
 
 	decorateTaskList(c, page.Items)
+	enforceListSizeCeiling(page)
 
 	return c.JSON(http.StatusOK, page)
 }
