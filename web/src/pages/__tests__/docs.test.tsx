@@ -100,6 +100,7 @@ import { api, ApiRequestError } from "@/lib/api";
 import { toast } from "@/components/ui/toast";
 import { copyText } from "@/lib/clipboard";
 import { anchorFromHash, anchorToHash } from "@/lib/docs/anchor";
+import { DOC_TREE_DEFAULT_WIDTH } from "@/lib/docs-layout-storage";
 import { DocsPage } from "@/pages/docs";
 import { useDocumentStore } from "@/stores/document";
 import { useProjectStore } from "@/stores/project";
@@ -1006,5 +1007,104 @@ describe("DocsPage — the discussion under the page", () => {
 
     await screen.findByTestId("doc-view");
     expect(screen.queryByTestId("doc-comment-tree")).not.toBeInTheDocument();
+  });
+});
+
+describe("DocsPage — narrow screens: the route decides which column you get", () => {
+  const doc = makeDoc({ id: "doc-1", title: "Runbook" });
+
+  /**
+   * jsdom does not evaluate media queries, so "is it on screen at 393px" is not
+   * a question the DOM can answer here. What it can answer is the mechanism
+   * that decides it: which of the two columns carries `hidden`, and whether the
+   * `md:` escape hatch that keeps the desktop two-column is still on both. The
+   * live 393px/1440px proof is the screenshot pair on the card.
+   */
+  function columns(container: HTMLElement) {
+    const tree = container.querySelector("aside");
+    const page = container.querySelector("section");
+    if (!tree || !page) throw new Error("expected a tree column and a page column");
+    return { tree, page };
+  }
+
+  it("gives the screen to the tree when no page is open", async () => {
+    mockRoutes([doc]);
+    const { container } = renderDocs();
+    await screen.findByText("Runbook");
+
+    const { tree, page } = columns(container);
+    expect(tree.className).not.toMatch(/(^|\s)hidden(\s|$)/);
+    expect(page.className).toMatch(/(^|\s)hidden(\s|$)/);
+  });
+
+  it("gives the screen to the page once one is open", async () => {
+    mockRoutes([doc], (path) =>
+      path === "/api/v1/documents/doc-1"
+        ? Promise.resolve({ ...doc, body: "text" })
+        : undefined,
+    );
+    const { container } = renderDocs("doc-1");
+    await screen.findByTestId("doc-view");
+
+    const { tree, page } = columns(container);
+    expect(tree.className).toMatch(/(^|\s)hidden(\s|$)/);
+    expect(page.className).not.toMatch(/(^|\s)hidden(\s|$)/);
+  });
+
+  it("keeps both columns from `md` up, whichever half the route is showing", async () => {
+    mockRoutes([doc]);
+    const { container, unmount } = renderDocs();
+    await screen.findByText("Runbook");
+
+    // The negative control for the whole change: a fix that swapped one column
+    // for the other unconditionally would pass both tests above and quietly
+    // take the second column away from every desktop.
+    let cols = columns(container);
+    expect(cols.tree.className).toContain("md:flex");
+    expect(cols.page.className).toContain("md:flex");
+    unmount();
+
+    mockRoutes([doc], (path) =>
+      path === "/api/v1/documents/doc-1"
+        ? Promise.resolve({ ...doc, body: "text" })
+        : undefined,
+    );
+    const second = renderDocs("doc-1");
+    await screen.findByTestId("doc-view");
+
+    cols = columns(second.container);
+    expect(cols.tree.className).toContain("md:flex");
+    expect(cols.page.className).toContain("md:flex");
+  });
+
+  it("carries the dragged width as a variable, not as an inline width", async () => {
+    mockRoutes([doc]);
+    const { container } = renderDocs();
+    await screen.findByText("Runbook");
+
+    // An inline `width` outranks every class, so the tree would keep its
+    // desktop width on a 393px screen and push the page off the side. The
+    // width has to arrive as a custom property that only `md:w-[…]` consumes.
+    const { tree } = columns(container);
+    expect(tree.style.width).toBe("");
+    expect(tree.style.getPropertyValue("--doc-tree-width")).toBe(
+      `${DOC_TREE_DEFAULT_WIDTH}px`,
+    );
+    expect(tree.className).toContain("md:w-[var(--doc-tree-width)]");
+  });
+
+  it("offers a way back from a page that fails to load", async () => {
+    mockRoutes([doc], (path) =>
+      path === "/api/v1/documents/doc-1"
+        ? Promise.reject(new Error("Document not found"))
+        : undefined,
+    );
+    renderDocs("doc-1");
+    await screen.findByText("Document not found");
+
+    // This is the one state with no breadcrumbs, so on a phone — where the tree
+    // has yielded the screen — a dead link would otherwise be a dead end.
+    fireEvent.click(screen.getByRole("button", { name: /^Documents$/ }));
+    expect(mockedNavigate).toHaveBeenCalledWith("/w/acme/p/demo/docs");
   });
 });

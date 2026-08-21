@@ -1,4 +1,5 @@
 import {
+  type CSSProperties,
   type FormEvent,
   useCallback,
   useEffect,
@@ -758,10 +759,24 @@ export function DocsPage() {
   // page that owns two independently scrolling columns.
   return (
     <div className="flex h-full min-h-0 overflow-hidden">
-      {/* Document tree */}
+      {/* Document tree.
+
+          Below `md` the two columns do not fit side by side, so the route
+          decides which one you get: no `:docId` in the URL means the tree owns
+          the screen, opening a page hands the screen to the page, and the
+          "Documents" crumb walks back. Both states are real routes, so Back
+          works and a deep link still lands on the page itself.
+
+          The resizable width has to be a variable rather than an inline
+          `width`: an inline style outranks every class, so it would keep the
+          tree at its desktop width on a phone. `md:w-[…]` applies it only where
+          there is a divider to drag. */}
       <aside
-        className="hidden min-h-0 shrink-0 flex-col pr-3 md:flex"
-        style={{ width: `${treeWidth}px` }}
+        className={cn(
+          "min-h-0 w-full shrink-0 flex-col pr-3 md:flex md:w-[var(--doc-tree-width)]",
+          docId ? "hidden" : "flex",
+        )}
+        style={{ "--doc-tree-width": `${treeWidth}px` } as CSSProperties}
       >
         <div className="flex items-center justify-between gap-2 pb-2">
           <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
@@ -832,8 +847,14 @@ export function DocsPage() {
         onCommit={saveDocTreeWidth}
       />
 
-      {/* Document area */}
-      <section className="flex min-w-0 flex-1 flex-col overflow-hidden md:pl-6">
+      {/* Document area — the other half of the route-decides-the-column rule
+          above: hidden below `md` until a page is actually open. */}
+      <section
+        className={cn(
+          "min-w-0 flex-1 flex-col overflow-hidden md:flex md:pl-6",
+          docId ? "flex" : "hidden",
+        )}
+      >
         {docLoading ? (
           <div className="space-y-3 pt-1">
             <Skeleton className="h-4 w-48" />
@@ -845,6 +866,19 @@ export function DocsPage() {
           <div className="flex flex-1 flex-col items-center justify-center gap-2 p-6 text-center">
             <AlertCircle className="h-8 w-8 text-destructive" />
             <p className="text-sm text-destructive">{loadError}</p>
+            {/* The only state on this page that renders no breadcrumbs, so on a
+                phone — where the tree has yielded the screen to the page — a
+                dead link would otherwise be a dead end. `md:hidden` because on
+                desktop the tree is right there and this would be clutter. */}
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="mt-1 md:hidden"
+              onClick={() => navigate(docsPath)}
+            >
+              Documents
+            </Button>
           </div>
         ) : openDoc ? (
           <>
@@ -861,14 +895,22 @@ export function DocsPage() {
               {/* Title and actions share one row. They used to be two: the
                   actions owned a full-width line of their own above the title,
                   which cost a row of vertical space and bought nothing. */}
-              <div className="mt-2 flex flex-wrap items-center gap-y-1 gap-x-3">
+              {/* One row from `md` up. On a phone the four actions leave the
+                  title about three characters, so there it takes a line of its
+                  own and the actions sit under it — the desktop row is
+                  unchanged. The split is driven by the `w-full md:flex-1` on
+                  the title below rather than by `flex-col` on this row, so the
+                  row keeps the `flex-wrap` that stops a long SaveIndicator
+                  message (the 409 conflict notice) from overflowing on desktop
+                  too. */}
+              <div className="mt-2 flex flex-wrap items-center gap-y-2 gap-x-3">
                 {/* `truncate` needs the `min-w-0`, or the flex item refuses to
                     shrink below its text and shoves the actions off the row.
                     The full title stays reachable on hover and to a screen
                     reader, so nothing is actually lost to the ellipsis. */}
                 <h1
                   title={openDoc.title}
-                  className="min-w-0 flex-1 truncate text-2xl font-semibold tracking-tight md:text-3xl"
+                  className="w-full min-w-0 truncate text-2xl font-semibold tracking-tight md:flex-1 md:text-3xl"
                 >
                   {openDoc.title}
                 </h1>
