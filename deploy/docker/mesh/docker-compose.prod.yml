@@ -62,12 +62,25 @@ services:
   nats:
     image: nats:2.10-alpine
     restart: unless-stopped
-    command: ["-c", "/etc/nats/nats-server.conf"]
+    # Same mechanism as docker-compose.yml (dev) -- see that file's comment
+    # and #21e7808a. No host bind-mount for the config; the container writes
+    # its own conf file at startup from the environment, so nothing depends
+    # on the host path this compose file happens to run from.
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        cat > /etc/nats/nats-server.conf <<CONF
+        jetstream {
+          store_dir: "/data"
+          max_file_store: $$NATS_STREAM_MAX_BYTES
+        }
+        http_port: 8222
+        CONF
+        exec nats-server -c /etc/nats/nats-server.conf
     environment:
       NATS_STREAM_MAX_BYTES: ${NATS_STREAM_MAX_BYTES:-10737418240}
     volumes:
       - ./volumes/nats/data:/data
-      - ./nats-server.conf:/etc/nats/nats-server.conf:ro
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:8222/healthz"]
       interval: 30s
