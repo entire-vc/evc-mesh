@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"sync"
@@ -1790,6 +1791,133 @@ func TestTaskService_List(t *testing.T) {
 			assert.Equal(t, tt.wantLen, page.TotalCount)
 		})
 	}
+}
+
+// ---------------------------------------------------------------------------
+// TestTaskService_List_RevisionValidation — ADR-0004 stale-cursor rejection
+// ---------------------------------------------------------------------------
+
+// stubTaskListRevisionRepo is a scripted repository.TaskListRevisionRepository:
+// GetRevision always returns the configured value, ignoring projectID (these
+// tests only ever exercise one project at a time).
+type stubTaskListRevisionRepo struct {
+	revision int64
+	err      error
+	calls    int
+}
+
+func (r *stubTaskListRevisionRepo) GetRevision(_ context.Context, _ uuid.UUID) (int64, error) {
+	r.calls++
+	return r.revision, r.err
+}
+
+func setupTaskServiceWithListRevisionRepo(revision int64) (*taskService, *MockTaskRepository, *stubTaskListRevisionRepo) {
+	taskRepo := NewMockTaskRepository()
+	statusRepo := NewMockTaskStatusRepository()
+	depRepo := NewMockTaskDependencyRepository()
+	activityRepo := NewMockActivityLogRepository()
+	revRepo := &stubTaskListRevisionRepo{revision: revision}
+
+	svc := newTestTaskService(taskRepo, statusRepo, depRepo, activityRepo,
+		WithTaskListRevisionRepo(revRepo),
+	).(*taskService)
+	timeNow = func() time.Time { return frozenTime }
+	return svc, taskRepo, revRepo
+}
+
+// TestTaskService_List_RevisionValidation_FreshWalk_StampsCurrentRevision is
+// page 1 of a new walk: no list_revision sent, no staleness check possible or
+// needed (ADR-0004 Decision 3) — the response is stamped with whatever the
+// project's current revision actually is, for the caller to echo back later.
+func TestTaskService_List_RevisionValidation_FreshWalk_StampsCurrentRevision(t *testing.T) {
+	svc, taskRepo, _ := setupTaskServiceWithListRevisionRepo(47)
+	ctx := context.Background()
+	projID := uuid.New()
+	taskRepo.items[uuid.New()] = &domain.Task{ID: uuid.New(), ProjectID: projID}
+
+	page, err := svc.List(ctx, projID, repository.TaskFilter{}, pagination.Params{Page: 1, PageSize: 50})
+
+	require.NoError(t, err)
+	assert.Equal(t, int64(47), page.ListRevision)
+}
+
+// TestTaskService_List_RevisionValidation_MatchingRevision_Succeeds is page 2+
+// of a walk where nothing changed: the caller's list_revision matches the
+// project's current revision exactly, so the page proceeds normally and is
+// re-stamped with the same value.
+func TestTaskService_List_RevisionValidation_MatchingRevision_Succeeds(t *testing.T) {
+	svc, taskRepo, _ := setupTaskServiceWithListRevisionRepo(47)
+	ctx := context.Background()
+	projID := uuid.New()
+	taskRepo.items[uuid.New()] = &domain.Task{ID: uuid.New(), ProjectID: projID}
+
+	page, err := svc.List(ctx, projID, repository.TaskFilter{}, pagination.Params{Page: 2, PageSize: 50, ListRevision: 47})
+
+	require.NoError(t, err)
+	assert.Equal(t, int64(47), page.ListRevision)
+}
+
+// TestTaskService_List_RevisionValidation_StaleRevision_Rejected is the core
+// acceptance case: a cursor issued before a mutation is presented on a later
+// page, after tasks/artifacts/vcs_links changed for this project (current
+// revision has moved from 47 to 52). List must reject outright — no silent
+// fallback to page 1, no silently serving the requested offset against the
+// new state (ADR-0004 Decision 4's explicit "what must NOT happen").
+func TestTaskService_List_RevisionValidation_StaleRevision_Rejected(t *testing.T) {
+	svc, taskRepo, revRepo := setupTaskServiceWithListRevisionRepo(52)
+	ctx := context.Background()
+	projID := uuid.New()
+	taskRepo.items[uuid.New()] = &domain.Task{ID: uuid.New(), ProjectID: projID}
+
+	page, err := svc.List(ctx, projID, repository.TaskFilter{}, pagination.Params{Page: 2, PageSize: 50, ListRevision: 47})
+
+	require.Error(t, err)
+	assert.Nil(t, page)
+	var staleErr *ListRevisionStaleError
+	require.ErrorAs(t, err, &staleErr)
+	assert.Equal(t, int64(47), staleErr.Requested)
+	assert.Equal(t, int64(52), staleErr.Current)
+	// The repo must actually have been consulted — a rejection based on a
+	// zero-value default would be indistinguishable from a real check.
+	assert.Equal(t, 1, revRepo.calls)
+}
+
+// TestTaskService_List_RevisionValidation_GetRevisionError_Propagates ensures
+// a failure reading the revision (e.g. a DB error) surfaces as a real error
+// rather than being swallowed into "no check" or a false positive/negative.
+func TestTaskService_List_RevisionValidation_GetRevisionError_Propagates(t *testing.T) {
+	svc, _, revRepo := setupTaskServiceWithListRevisionRepo(0)
+	revRepo.err = errors.New("connection reset")
+	ctx := context.Background()
+
+	page, err := svc.List(ctx, uuid.New(), repository.TaskFilter{}, pagination.Params{Page: 1, PageSize: 50})
+
+	require.Error(t, err)
+	assert.Nil(t, page)
+	assert.Contains(t, err.Error(), "connection reset")
+}
+
+func TestListRevisionStaleError_Error_MessageNamesBothRevisions(t *testing.T) {
+	err := &ListRevisionStaleError{Requested: 47, Current: 52}
+	assert.Contains(t, err.Error(), "47")
+	assert.Contains(t, err.Error(), "52")
+}
+
+// TestTaskService_List_RevisionValidation_NoRepoWired_BehavesAsBeforeThisFeature
+// is the backward-compat guarantee: an existing caller of NewTaskService that
+// never adds WithTaskListRevisionRepo gets exactly the pre-ADR-0004 behavior
+// — no check, no error, ListRevision left at its zero value — regardless of
+// what the caller sends in list_revision.
+func TestTaskService_List_RevisionValidation_NoRepoWired_BehavesAsBeforeThisFeature(t *testing.T) {
+	svc, taskRepo, _ := setupTaskService()
+	ctx := context.Background()
+	projID := uuid.New()
+	taskRepo.items[uuid.New()] = &domain.Task{ID: uuid.New(), ProjectID: projID}
+
+	page, err := svc.List(ctx, projID, repository.TaskFilter{}, pagination.Params{Page: 2, PageSize: 50, ListRevision: 999})
+
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), page.ListRevision)
 }
 
 // ---------------------------------------------------------------------------

@@ -1462,6 +1462,21 @@ func handleError(c echo.Context, err error) error {
 		})
 	}
 
+	// ADR-0004 Decision 4: 410, not a silent fallback to page 1 or to the
+	// requested offset against the new state — a plausible-looking 200 here
+	// is exactly the defect class ad22bfda exists to close.
+	var listRevErr *service.ListRevisionStaleError
+	if errors.As(err, &listRevErr) {
+		return c.JSON(http.StatusGone, map[string]interface{}{
+			"error": "list_revision_stale",
+			"message": fmt.Sprintf(
+				"task_list_revision changed since this cursor was issued (had %d, now %d); restart pagination from page 1",
+				listRevErr.Requested, listRevErr.Current),
+			"requested_revision": listRevErr.Requested,
+			"current_revision":   listRevErr.Current,
+		})
+	}
+
 	if apiErr, ok := err.(*apierror.Error); ok {
 		return c.JSON(apiErr.StatusCode(), apiErr)
 	}
