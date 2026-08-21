@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -643,6 +644,59 @@ func main() {
 	e := echo.New()
 	e.HideBanner = true
 
+	// MESH_TRUSTED_PROXIES gates whether c.RealIP() (used by
+	// mw.RateLimitKeyByIP, and therefore by the /auth/login per-IP limiter
+	// registered below) can be trusted. See RateLimitKeyByIP's doc comment
+	// (internal/middleware/ratelimit.go) for the incident this exists to
+	// prevent: a reverse-proxy hop that does not itself trust its own
+	// upstream overwrites X-Forwarded-For with its own peer address, so
+	// EVERY external client resolves to the SAME IP and a per-IP limiter
+	// becomes one shared bucket for the whole internet — the opposite of
+	// its purpose, and a built-in DoS (#5d759aad).
+	//
+	// Configuring this does NOT fix a misconfigured upstream proxy — our own
+	// Caddy config on mesh-vm is deploy/caddy/mesh-vm.Caddyfile, tracked
+	// separately (PR #677). It only tells mesh-api which additional network
+	// ranges, beyond the loopback/link-local/private-net Echo trusts by
+	// default, are allowed to relay a client IP via X-Forwarded-For.
+	//
+	// Left unset, mesh-api does not pretend to have per-client IP
+	// granularity it cannot verify: e.IPExtractor stays at Echo's untouched
+	// default, and the /auth/login per-IP limiter below is disabled outright
+	// (see loginGroup) rather than silently operating as one shared bucket.
+	var trustedProxyNets []*net.IPNet
+	for _, cidr := range cfg.RateLimit.TrustedProxies {
+		_, ipNet, err := net.ParseCIDR(cidr)
+		if err != nil {
+			log.Printf("[config] MESH_TRUSTED_PROXIES: ignoring invalid CIDR %q: %v", cidr, err)
+			continue
+		}
+		trustedProxyNets = append(trustedProxyNets, ipNet)
+	}
+	ipTrusted := len(trustedProxyNets) > 0
+	if ipTrusted {
+		trustOpts := make([]echo.TrustOption, 0, len(trustedProxyNets))
+		for _, ipNet := range trustedProxyNets {
+			trustOpts = append(trustOpts, echo.TrustIPRange(ipNet))
+		}
+		e.IPExtractor = echo.ExtractIPFromXFFHeader(trustOpts...)
+		log.Printf("[config] MESH_TRUSTED_PROXIES configured (%d range(s)) — per-IP rate "+
+			"limiting on /auth/login is ACTIVE", len(trustedProxyNets))
+	} else {
+		// Loud degradation, not silent — per this file's own deep-verify
+		// discipline, a control nobody can see failing gets trusted and
+		// stops being checked. Surfaced three ways: this WARN, the /health
+		// field below, and the mesh_client_ip_trusted gauge on /metrics.
+		log.Printf("[config] MESH_TRUSTED_PROXIES is unset — client IP cannot be verified " +
+			"through the reverse-proxy chain, so /auth/login has NO per-IP rate-limit " +
+			"granularity (it is disabled, not silently shared across every client). " +
+			"Brute-force protection for /auth/login now relies solely on the per-account " +
+			"failed-login lockout (MESH_RATE_LIMIT_AUTH_MAX_FAILURES, default 10/15min). " +
+			"Set MESH_TRUSTED_PROXIES to the CIDR(s) of your trusted reverse-proxy hop(s) " +
+			"to restore per-IP granularity.")
+	}
+	metrics.SetClientIPTrusted(ipTrusted)
+
 	// Prometheus metrics — registered early so every request is counted.
 	e.Use(mw.Metrics())
 
@@ -689,9 +743,10 @@ func main() {
 
 	// Health check.
 	e.GET("/health", func(c echo.Context) error {
-		return c.JSON(200, map[string]string{
-			"status":  "ok",
-			"service": "evc-mesh-api",
+		return c.JSON(200, map[string]any{
+			"status":            "ok",
+			"service":           "evc-mesh-api",
+			"client_ip_trusted": ipTrusted,
 		})
 	})
 
@@ -725,6 +780,14 @@ func main() {
 		Password: cfg.Redis.Password,
 		DB:       cfg.Redis.DB,
 	})
+
+	// Per-account failed-login lockout for /auth/login — the primary
+	// brute-force defense (see mw.LoginLockout's doc comment). Wired
+	// unconditionally: unlike the IP-based limiter below it does not depend
+	// on trusting the reverse-proxy chain at all.
+	authHandler.WithLoginLockout(mw.NewLoginLockout(
+		sharedRedis, cfg.RateLimit.AuthMaxFailures, cfg.RateLimit.AuthLockoutWindow,
+	))
 
 	// WebSocket Hub for real-time event streaming.
 	wsRedis := sharedRedis
@@ -818,17 +881,45 @@ func main() {
 
 	// --- Public routes (no auth required) ---
 
-	// login/register: tight per-IP brute-force protection (5 RPM default).
-	// These are credential endpoints — the fleet never calls them in bulk.
+	// register: tight per-IP brute-force/spam protection (5 RPM default).
+	// Unlike /login (below), there is no account to key a failure-lockout
+	// counter on before one exists — per-IP is the only defense here, so
+	// its Enabled flag is left as-is (cfg.RateLimit.Enabled only) rather
+	// than additionally gated on trusted-proxy config. On an untrustworthy
+	// topology this keeps register's existing (imperfect: shared-bucket)
+	// protection rather than leaving it with none at all — a call this
+	// card does not need to make, since register brute-forcing isn't the
+	// credential-stuffing threat #5d759aad is about.
+	registerGroup := v1.Group("/auth")
+	registerGroup.Use(mw.RateLimit(mw.RateLimitConfig{
+		Enabled:     cfg.RateLimit.Enabled,
+		RPM:         cfg.RateLimit.AuthRPM,
+		KeyFunc:     mw.RateLimitKeyByIP,
+		RedisClient: sharedRedis,
+		Name:        "auth-register",
+	}))
+	registerGroup.POST("/register", authHandler.Register)
+
+	// login: per-IP limiting here is now a SECONDARY layer, only enabled
+	// when the client IP can actually be trusted (ipTrusted, computed at
+	// Echo-instance setup above from MESH_TRUSTED_PROXIES). The PRIMARY
+	// defense is the per-account failed-login lockout wired into
+	// authHandler above (mw.LoginLockout) — it works regardless of
+	// reverse-proxy topology, which per-IP limiting fundamentally cannot.
+	// Left enabled with an untrustworthy IP, this middleware reproduces the
+	// exact defect #5d759aad reports: c.RealIP() resolves to ONE address
+	// for all external traffic, so this "per-IP" limiter becomes a single
+	// shared 5 RPM bucket for the entire internet — worse than no limiter,
+	// since it also denies real users. Disabling it here is what "IP-ключ
+	// НЕ включается" (the accepted decision, task comment) means in code.
 	loginGroup := v1.Group("/auth")
 	loginGroup.Use(mw.RateLimit(mw.RateLimitConfig{
-		Enabled:     cfg.RateLimit.Enabled,
+		Enabled:     cfg.RateLimit.Enabled && ipTrusted,
 		RPM:         cfg.RateLimit.AuthRPM,
 		KeyFunc:     mw.RateLimitKeyByIP,
 		RedisClient: sharedRedis,
 		Name:        "auth-login",
 	}))
-	loginGroup.POST("/register", authHandler.Register)
 	loginGroup.POST("/login", authHandler.Login)
 
 	// GET /auth/config: unauthenticated, no side effects — the login/register
