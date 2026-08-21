@@ -98,7 +98,7 @@ export function DocLinkMenu({
             className={cn(
               "rounded px-2 py-0.5 text-[11px]",
               s.id === scope
-                ? "bg-accent text-foreground"
+                ? "bg-secondary font-medium text-secondary-foreground"
                 : "text-muted-foreground hover:text-foreground",
             )}
           >
@@ -143,7 +143,9 @@ export function DocLinkMenu({
               onMouseEnter={() => onHover(index)}
               className={cn(
                 "flex w-full items-start gap-2 rounded px-2 py-1.5 text-left text-xs",
-                index === activeIndex ? "bg-accent text-foreground" : "text-muted-foreground",
+                index === activeIndex
+                  ? "bg-secondary font-medium text-secondary-foreground"
+                  : "text-muted-foreground",
               )}
             >
               <FileText className="mt-0.5 h-3.5 w-3.5 shrink-0" />

@@ -97,6 +97,24 @@ function reportUploadFailure(file: File, err: unknown): void {
   });
 }
 
+/**
+ * Idle/hover. `--accent`/`--foreground` measured 2.82:1 (light) / 1.73:1
+ * (dark) — near-invisible on dark. `--secondary`/`--secondary-foreground`
+ * measures 16.31:1 / 11.39:1. Same pairing as the doc-editor toolbar fix
+ * (#630) — one fix for one defect, not two colours that drift apart.
+ */
+const TOOLBAR_HOVER =
+  "transition-colors hover:bg-secondary hover:text-secondary-foreground";
+
+/**
+ * Held down. `--secondary` is a light tint, so a pressed button can't be told
+ * from a hovered one by fill alone — darkening the fill is the bug above.
+ * Pressing adds a cue instead: a brand-coloured inset ring, 5.78:1 (light) /
+ * 6.59:1 (dark) against the fill, clearing the 3:1 WCAG non-text floor.
+ */
+const TOOLBAR_PRESSED =
+  "active:bg-secondary active:text-secondary-foreground active:ring-1 active:ring-inset active:ring-primary";
+
 function ToolbarButton({
   title,
   onClick,
@@ -117,7 +135,12 @@ function ToolbarButton({
       // has nothing to apply to.
       onMouseDown={(e) => e.preventDefault()}
       onClick={onClick}
-      className="flex h-7 w-7 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-muted-foreground"
+      className={cn(
+        "flex h-7 w-7 items-center justify-center rounded text-muted-foreground",
+        TOOLBAR_HOVER,
+        TOOLBAR_PRESSED,
+        "disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-muted-foreground",
+      )}
     >
       {children}
     </button>
@@ -637,7 +660,7 @@ function RichTextEditorInner({
           />
           <button
             type="submit"
-            className="h-7 rounded px-2 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
+            className={cn("h-7 rounded px-2 text-xs text-muted-foreground", TOOLBAR_HOVER)}
           >
             Apply
           </button>
