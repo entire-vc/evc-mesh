@@ -685,6 +685,91 @@ func TestLogin_InactiveUser(t *testing.T) {
 	assert.Contains(t, err.Error(), "inactive")
 }
 
+// AC (#734ca49e): a deactivated account probed with a WRONG password must
+// be indistinguishable from a nonexistent account — same error TYPE, not
+// merely the same string. Before the fix, IsActive was checked BEFORE the
+// password, so this exact request (wrong password, inactive account)
+// returned ErrUserInactive — a body an attacker could tell apart from
+// ErrInvalidCredentials in one request, no brute force needed, revealing
+// "an account exists at this email" on an instance where registration is
+// closed.
+//
+// MUTATION CONTROL: put the `if !user.IsActive { return nil, nil,
+// ErrUserInactive }` block back BEFORE the bcrypt.CompareHashAndPassword
+// call in Service.Login (i.e. restore the pre-fix order) and this test
+// must go RED — err would be ErrUserInactive, not ErrInvalidCredentials,
+// and the ErrorIs assertion below fails.
+//
+// Verified red on the pre-fix ordering (IsActive checked before the
+// password) — actual captured output:
+//
+//	--- FAIL: TestLogin_InactiveUser_WrongPassword_IndistinguishableFromNonexistent (0.08s)
+//	    service_test.go:719:
+//	        	Error Trace:	internal/auth/service_test.go:719
+//	        	Error:      	Target error should be in err chain:
+//	        	            	expected: "[401] invalid email or password"
+//	        	            	in chain: "[401] user account is inactive"
+//	        	Messages:   	a WRONG password against a deactivated account must
+//	        	            	return the SAME error as a nonexistent account — not
+//	        	            	ErrUserInactive
+//	    service_test.go:727:
+//	        	Error:      	Not equal:
+//	        	            	expected: "[401] invalid email or password"
+//	        	            	actual  : "[401] user account is inactive"
+//	FAIL
+func TestLogin_InactiveUser_WrongPassword_IndistinguishableFromNonexistent(t *testing.T) {
+	svc, userRepo, _, _, _ := newTestService()
+
+	_, _, err := svc.Register(context.Background(), "inactive-wrongpw@example.com", "StrongP4ss", "User")
+	require.NoError(t, err)
+
+	userRepo.mu.Lock()
+	for _, u := range userRepo.users {
+		if u.Email == "inactive-wrongpw@example.com" {
+			u.IsActive = false
+		}
+	}
+	userRepo.mu.Unlock()
+
+	_, _, inactiveErr := svc.Login(context.Background(), "inactive-wrongpw@example.com", "TotallyWrongPassword1")
+	require.Error(t, inactiveErr)
+	assert.ErrorIs(t, inactiveErr, ErrInvalidCredentials,
+		"a WRONG password against a deactivated account must return the SAME error as a nonexistent account — not ErrUserInactive")
+	assert.NotErrorIs(t, inactiveErr, ErrUserInactive,
+		"ErrUserInactive must never surface for an incorrect password — that is exactly the oracle this fix closes")
+
+	_, _, nonexistentErr := svc.Login(context.Background(), "no-such-account@example.com", "TotallyWrongPassword1")
+	require.Error(t, nonexistentErr)
+
+	assert.Equal(t, nonexistentErr.Error(), inactiveErr.Error(),
+		"deactivated-account-wrong-password and nonexistent-account-wrong-password must produce byte-identical error text")
+}
+
+// AC (#734ca49e), the complementary case: a deactivated account probed with
+// the CORRECT password must still get the clear "account is inactive"
+// response, not be folded into ErrInvalidCredentials. At that point the
+// caller has already proven they hold the credential — telling the actual
+// owner what happened to their account is not a leak.
+func TestLogin_InactiveUser_CorrectPassword_StillReturnsClearInactiveError(t *testing.T) {
+	svc, userRepo, _, _, _ := newTestService()
+
+	_, _, err := svc.Register(context.Background(), "inactive-rightpw@example.com", "StrongP4ss", "User")
+	require.NoError(t, err)
+
+	userRepo.mu.Lock()
+	for _, u := range userRepo.users {
+		if u.Email == "inactive-rightpw@example.com" {
+			u.IsActive = false
+		}
+	}
+	userRepo.mu.Unlock()
+
+	_, _, err = svc.Login(context.Background(), "inactive-rightpw@example.com", "StrongP4ss")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrUserInactive,
+		"the CORRECT password on a deactivated account must still surface the clear inactive-account error")
+}
+
 // ---------------------------------------------------------------------------
 // Tests: RefreshTokens
 // ---------------------------------------------------------------------------

@@ -243,6 +243,40 @@ func (s *Service) Register(ctx context.Context, email, password, name string) (*
 }
 
 // Login authenticates a user by email and password and returns a token pair.
+//
+// The password check runs BEFORE the IsActive check, deliberately. The
+// previous order (IsActive first) let anyone probe whether a deactivated
+// account exists at a given email in a single request, with no guessing
+// involved: a garbage password against a deactivated account returned
+// ErrUserInactive, while the identical garbage password against a
+// nonexistent (or active) account returned ErrInvalidCredentials — a
+// distinguishable body for free, no rate limit or brute force needed. On
+// our prod, where self-registration is closed, "an account exists here"
+// is itself the sensitive fact (see #734ca49e).
+//
+// Checking the password first closes that: a WRONG password against a
+// deactivated account now returns the same ErrInvalidCredentials as a
+// nonexistent account, indistinguishable from it. Only the CORRECT
+// password on a deactivated account still surfaces ErrUserInactive — which
+// is correct and intentional: at that point the caller has already proven
+// they own the credential, so telling them plainly that the account is
+// deactivated is not a leak, it's the account owner learning what actually
+// happened to their own account.
+//
+// This does mean bcrypt now runs unconditionally for a deactivated
+// account's login attempts too (previously short-circuited before it) —
+// negligible cost next to a normal login, and irrelevant next to the
+// oracle it closes.
+//
+// Side effect callers must know about: a wrong password against a
+// deactivated account now returns ErrInvalidCredentials instead of
+// ErrUserInactive, so it now counts against mw.LoginLockout's per-account
+// failure budget in internal/handler/auth_handler.go (which keys off
+// errors.Is(err, ErrInvalidCredentials)) — it did not before. That is
+// correct: someone submitting wrong passwords against a deactivated
+// account is still a brute-force attempt and must consume the budget like
+// any other wrong guess. See
+// TestAuthHandler_Login_InactiveAccount_WrongPassword_CountsAgainstLockoutBudget.
 func (s *Service) Login(ctx context.Context, email, password string) (*domain.User, *TokenPair, error) {
 	user, err := s.userRepo.GetByEmail(ctx, NormalizeEmail(email))
 	if err != nil {
@@ -252,13 +286,13 @@ func (s *Service) Login(ctx context.Context, email, password string) (*domain.Us
 		return nil, nil, ErrInvalidCredentials
 	}
 
-	if !user.IsActive {
-		return nil, nil, ErrUserInactive
-	}
-
 	err = bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password))
 	if err != nil {
 		return nil, nil, ErrInvalidCredentials
+	}
+
+	if !user.IsActive {
+		return nil, nil, ErrUserInactive
 	}
 
 	tokens, err := s.generateTokenPair(user)

@@ -300,3 +300,65 @@ func TestAuthHandler_Login_LockoutResetError_LoginStillSucceeds(t *testing.T) {
 		"a Redis error on the post-success reset must not fail the login itself")
 	assert.NotEmpty(t, respBody["tokens"])
 }
+
+// AC (#734ca49e): reordering auth.Service.Login to check the password
+// BEFORE IsActive has a side effect that must be explicit, not discovered
+// later — a WRONG password against a DEACTIVATED account now returns
+// auth.ErrInvalidCredentials (it used to return auth.ErrUserInactive,
+// which AuthHandler.Login's lockout branch deliberately ignores — see its
+// doc comment). Since the lockout branch keys purely on
+// errors.Is(err, auth.ErrInvalidCredentials), this deactivated account's
+// wrong-password attempts now consume the SAME per-account failure budget
+// as any other account's wrong guesses — correct, because someone
+// submitting wrong passwords against a deactivated account is still a
+// brute-force attempt, and no code change to auth_handler.go was needed to
+// get this: it already gated on error TYPE, not on account state.
+//
+// Before the #734ca49e fix, this test would have failed to lock: the
+// deactivated account's wrong-password attempts returned ErrUserInactive,
+// which the `errors.Is(err, auth.ErrInvalidCredentials)` guard in
+// AuthHandler.Login does not match, so RecordFailure was never called and
+// the budget never moved — every attempt would have come back a plain 401,
+// never a 429, however many were sent.
+func TestAuthHandler_Login_InactiveAccount_WrongPassword_CountsAgainstLockoutBudget(t *testing.T) {
+	const maxFailures = 2
+	userRepo := newAuthTestUserRepo()
+	h, e := newAuthHandlerTestWithLockout(t, userRepo, maxFailures)
+	registerUser(t, h, e, "inactive-budget@example.com", "CorrectPass1")
+
+	// Deactivate the account directly in the repo (mirrors the pattern used
+	// in internal/auth/service_test.go's TestLogin_InactiveUser).
+	userRepo.mu.Lock()
+	for _, u := range userRepo.users {
+		if u.Email == "inactive-budget@example.com" {
+			u.IsActive = false
+		}
+	}
+	userRepo.mu.Unlock()
+
+	// The first maxFailures wrong-password attempts against the deactivated
+	// account must be ordinary 401s (not yet locked, not the inactive
+	// message — see the indistinguishability test in internal/auth for that
+	// property; this test is about the BUDGET, not the body).
+	var last *httptest.ResponseRecorder
+	for i := 0; i < maxFailures; i++ {
+		last, _ = doLogin(t, h, e, "inactive-budget@example.com", "wrong-password", "")
+		require.Equal(t, http.StatusUnauthorized, last.Code, "attempt %d of %d must be a normal 401, not yet locked", i+1, maxFailures)
+	}
+
+	// The (maxFailures+1)th wrong-password attempt must lock the account —
+	// proving the deactivated account's wrong guesses DO consume the
+	// failure budget, same as any active account's.
+	last, _ = doLogin(t, h, e, "inactive-budget@example.com", "wrong-password", "")
+	require.Equal(t, http.StatusTooManyRequests, last.Code,
+		"a deactivated account's wrong-password attempts must count against the lockout budget, same as any other account's")
+
+	// Negative control: the CORRECT password on this now-locked, deactivated
+	// account must NOT be treated as a brute-force success either — it
+	// still returns the clear "account is inactive" error (service-layer
+	// property, tested directly in internal/auth), and critically must NOT
+	// be let through the lockout as if it were a valid login.
+	rec, respBody := doLogin(t, h, e, "inactive-budget@example.com", "CorrectPass1", "")
+	assert.NotEqual(t, http.StatusOK, rec.Code, "a deactivated account must never receive tokens, even with the correct password and even while rate-limited")
+	assert.Empty(t, respBody["tokens"], "no tokens must ever be issued to a deactivated account")
+}
