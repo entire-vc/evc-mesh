@@ -267,8 +267,8 @@ func TestLoginLockout_CountIsLostAcrossAWindowBoundary(t *testing.T) {
 	// above is about the boundary and not about RecordFailure being broken.
 	offset = 5
 	for i := 0; i < maxFailures-1; i++ {
-		_, _, err := l.RecordFailure(ctx, "victim@example.com")
-		require.NoError(t, err)
+		_, _, loopErr := l.RecordFailure(ctx, "victim@example.com")
+		require.NoError(t, loopErr)
 	}
 	locked, _, err = l.RecordFailure(ctx, "victim@example.com")
 	require.NoError(t, err)
