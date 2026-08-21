@@ -1094,6 +1094,53 @@ describe("DocsPage — the discussion under the page", () => {
       });
       expect(screen.queryByTestId("doc-comment-rail")).not.toBeInTheDocument();
     });
+
+    /**
+     * Acceptance criterion 2 — the entry for a comment on the document as a
+     * whole is not lost by hiding one of the two surfaces.
+     *
+     * This was the weakest part of the fix's evidence: it held only by
+     * reading the code (`Composer` lives in the rail, so hiding the tree
+     * cannot take it away). Reading is not a check — a later refactor that
+     * moved the composer into the tree would break the criterion while every
+     * other test here stayed green, because none of them looks at whether the
+     * discussion is still *writable*.
+     *
+     * What makes the claim true is structural: `doc-comment-tree.tsx` imports
+     * the very same `Thread` from `doc-comment-rail.tsx`, so whichever
+     * surface is on screen carries the same reply entry. The assertion below
+     * pins that, on the page-as-a-whole thread specifically — the one class
+     * of thread that has nowhere else to live.
+     */
+    it("AC2: the page-as-a-whole thread stays writable in BOTH rail states", async () => {
+      for (const railOpen of [true, false] as const) {
+        mockWithComments([comment(), pageComment(), orphanedComment()]);
+        localStorage.setItem("mesh_docs_comments_rail", railOpen ? "1" : "0");
+        const { unmount } = renderDocs("doc-1");
+
+        await screen.findByTestId(
+          railOpen ? "doc-comment-rail" : "doc-comment-tree",
+        );
+        // The thread that exists only as "the document as a whole" — it has no
+        // anchor to fall back to, so if a surface drops it, it is unreachable.
+        const whole = await screen.findByText("On the page as a whole");
+        const card = whole.closest('[data-testid="doc-comment-thread"]');
+        expect(card).not.toBeNull();
+
+        // Writable, not merely visible: a reply entry inside that very thread.
+        expect(
+          within(card as HTMLElement).getByRole("button", { name: /reply/i }),
+        ).toBeInTheDocument();
+
+        // And the switch between the two surfaces is always on screen, so the
+        // reader is never stranded on the one that is currently hidden.
+        expect(screen.getByTestId("doc-comment-toggle")).toBeInTheDocument();
+
+        unmount();
+        localStorage.clear();
+        vi.clearAllMocks();
+      }
+    });
   });
 });
 
