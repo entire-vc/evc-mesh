@@ -661,6 +661,38 @@ func (m *MockTaskRepository) SetHumanGate(_ context.Context, taskID uuid.UUID, v
 	return nil
 }
 
+func (m *MockTaskRepository) SetHumanGateClass(_ context.Context, taskID uuid.UUID, class domain.HumanGateClass) error {
+	if m.errToReturn != nil {
+		return m.errToReturn
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if t, ok := m.items[taskID]; ok {
+		t.HumanGateClass = class
+		m.items[taskID] = t
+	}
+	return nil
+}
+
+func (m *MockTaskRepository) FindSoftTimedOutGates(_ context.Context, cutoff time.Time) ([]domain.HumanGateSoftTimeoutCandidate, error) {
+	if m.errToReturn != nil {
+		return nil, m.errToReturn
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var out []domain.HumanGateSoftTimeoutCandidate
+	for _, t := range m.items {
+		if !t.HumanGate || t.HumanGateClass != domain.HumanGateClassSoft || t.HumanGateArmedAt == nil {
+			continue
+		}
+		if t.HumanGateArmedAt.After(cutoff) {
+			continue
+		}
+		out = append(out, domain.HumanGateSoftTimeoutCandidate{TaskID: t.ID, ArmedAt: *t.HumanGateArmedAt})
+	}
+	return out, nil
+}
+
 func (m *MockTaskRepository) SetShipped(_ context.Context, taskID uuid.UUID, value bool) error {
 	if m.errToReturn != nil {
 		return m.errToReturn

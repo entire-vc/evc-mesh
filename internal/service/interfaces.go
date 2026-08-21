@@ -194,6 +194,10 @@ type TaskService interface {
 	// SetHumanGate arms (value=true) or clears (value=false) the sticky human-gate flag.
 	// When armed, only a human actor may move the task to backlog/done/cancelled.
 	SetHumanGate(ctx context.Context, taskID uuid.UUID, value bool) error
+	// SetHumanGateClass classifies the task's human_gate as hard (never timed out) or
+	// soft (eligible for HumanGateSoftTimeoutService once armed past its window). See
+	// domain.HumanGateClass and docs/human-gate-decision-recorded.md §5.
+	SetHumanGateClass(ctx context.Context, taskID uuid.UUID, class domain.HumanGateClass) error
 	// ShipTask marks the task as terminally shipped (is_shipped=true). Once set,
 	// MoveTask to any non-done category returns TaskShippedError (422).
 	// Pass shipped=false to clear the flag (unship).

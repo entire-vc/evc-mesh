@@ -1985,7 +1985,13 @@ func (m *mockTaskRepo) ListOpenByRecurringScheduleID(_ context.Context, _, _ uui
 }
 
 func (m *mockTaskRepo) SetHumanGate(_ context.Context, _ uuid.UUID, _ bool) error { return nil }
-func (m *mockTaskRepo) SetShipped(_ context.Context, _ uuid.UUID, _ bool) error   { return nil }
+func (m *mockTaskRepo) SetHumanGateClass(_ context.Context, _ uuid.UUID, _ domain.HumanGateClass) error {
+	return nil
+}
+func (m *mockTaskRepo) FindSoftTimedOutGates(_ context.Context, _ time.Time) ([]domain.HumanGateSoftTimeoutCandidate, error) {
+	return nil, nil
+}
+func (m *mockTaskRepo) SetShipped(_ context.Context, _ uuid.UUID, _ bool) error { return nil }
 func (m *mockTaskRepo) SetDodCheck(_ context.Context, _ uuid.UUID, _, _, _ string) error {
 	return nil
 }
