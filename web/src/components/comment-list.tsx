@@ -306,6 +306,17 @@ export function CommentList({ taskId, projId }: CommentListProps) {
   const [hasMore, setHasMore] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
 
+  // The panel reuses one CommentList instance across every task the user
+  // views in a session (task-panel.tsx switches `currentTask` without
+  // unmounting) — so a fetch for a task the user has since navigated away
+  // from can resolve AFTER the current task's own fetch already has, and
+  // without this guard would overwrite the right comments with the wrong
+  // task's. Mirrors the mountedRef pattern in useProjectTrIntegration and
+  // the `cancelled` flag in MarkdownView, both touched by the same rewrite
+  // that introduced this gap. See task c39ea2aa.
+  const taskIdRef = useRef(taskId);
+  taskIdRef.current = taskId;
+
   // sort_dir=desc requests the NEWEST page first — the unparameterized GET
   // this used to send defaults to oldest-first, so a thread with more than
   // one page silently showed only its earliest comments (the freshest
@@ -314,20 +325,24 @@ export function CommentList({ taskId, projId }: CommentListProps) {
   // order. See task 4222c17d (D4) / parent diagnosis 9855f866.
   const fetchComments = useCallback(
     async (pageNum: number, append: boolean) => {
+      const requestedTaskId = taskId;
       try {
         const data = await api<PaginatedResponse<Comment>>(
           `/api/v1/tasks/${taskId}/comments`,
           { params: { sort_dir: "desc", page: pageNum } },
         );
+        if (taskIdRef.current !== requestedTaskId) return;
         const items = data.items ?? [];
         setComments((prev) => (append ? [...prev, ...items] : items));
         setHasMore(data.has_more);
         setPage(data.page);
       } catch {
-        // silently fail — will show empty list
+        // silently fail — will show empty list (only if still on-task)
       } finally {
-        setLoading(false);
-        setLoadingMore(false);
+        if (taskIdRef.current === requestedTaskId) {
+          setLoading(false);
+          setLoadingMore(false);
+        }
       }
     },
     [taskId],
