@@ -1032,11 +1032,6 @@ type MemoryRepository interface {
 	// Never archives entries tagged canonical/pavel-decision/kind:decision/kind:incident.
 	// Called from the 6h memory cleanup scheduler.
 	ArchiveStaleWorkspaceCheckpoints(ctx context.Context, olderThan time.Duration, maxImportance float64) (int64, error)
-	// FindBySimhashProximity returns non-archived memories in workspaceID whose content_simhash
-	// differs from simhash by at most maxHamming bits (Hamming distance via bit_count XOR).
-	// excludeID is excluded from results (avoids self-match on upsert of an existing key).
-	// Returns up to limit results ordered by importance_score DESC.
-	FindBySimhashProximity(ctx context.Context, workspaceID uuid.UUID, simhash int64, maxHamming int, excludeID uuid.UUID, limit int) ([]domain.Memory, error)
 	// FindPinned returns all non-archived memories tagged kind:pinned in the workspace.
 	// If projectID is non-nil, both workspace-scoped and project-scoped pinned memories are returned.
 	FindPinned(ctx context.Context, workspaceID uuid.UUID, projectID *uuid.UUID) ([]domain.Memory, error)

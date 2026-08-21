@@ -1460,37 +1460,6 @@ func (r *MemoryRepo) ArchiveStaleWorkspaceCheckpoints(ctx context.Context, older
 	return result.RowsAffected()
 }
 
-// FindBySimhashProximity returns non-archived, non-expired memories in workspaceID whose
-// content_simhash XOR-distance from simhash is at most maxHamming bits.
-// excludeID is excluded (avoids self-match during upsert of an existing key).
-// Requires PostgreSQL 14+ for bit_count().
-func (r *MemoryRepo) FindBySimhashProximity(ctx context.Context, workspaceID uuid.UUID, simhash int64, maxHamming int, excludeID uuid.UUID, limit int) ([]domain.Memory, error) {
-	if limit <= 0 {
-		limit = 5
-	}
-	var rows []memoryRow
-	err := r.db.SelectContext(ctx, &rows,
-		fmt.Sprintf(`SELECT %s FROM memories
-			WHERE workspace_id     = $1
-			  AND content_simhash  IS NOT NULL
-			  AND id               != $2
-			  AND archived         = false
-			  AND (expires_at IS NULL OR expires_at > NOW())
-			  AND bit_count((content_simhash # $3)::bit(64)) <= $4
-			ORDER BY importance_score DESC, updated_at DESC
-			LIMIT $5`, memoryColumns),
-		workspaceID, excludeID, simhash, maxHamming, limit,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("find by simhash proximity: %w", err)
-	}
-	memories := make([]domain.Memory, len(rows))
-	for i, row := range rows {
-		memories[i] = row.toDomain()
-	}
-	return memories, nil
-}
-
 // FindPinned returns all non-archived, non-expired memories tagged kind:pinned in workspaceID.
 // If projectID is non-nil, returns pinned memories from both workspace and project scope.
 func (r *MemoryRepo) FindPinned(ctx context.Context, workspaceID uuid.UUID, projectID *uuid.UUID) ([]domain.Memory, error) {
