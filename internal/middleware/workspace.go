@@ -179,6 +179,16 @@ var workspaceParamResolvers = []workspaceParamResolver{
 	                               JOIN tasks t ON c.task_id = t.id AND t.deleted_at IS NULL
 	                               JOIN projects p ON t.project_id = p.id
 	                              WHERE c.id = $1`)},
+	// A human_gate_decision names its tenant through its task, same shape as
+	// comment_id above. POST /human-gate-decisions/:decision_id/revoke is the
+	// only route naming this object directly (task #c56339b1) — without this
+	// resolver a caller could revoke another tenant's decision by guessing or
+	// enumerating its id, re-freezing a task they have no access to.
+	{param: "decision_id", resolve: uuidResolver(`SELECT p.workspace_id
+	                                FROM human_gate_decisions hgd
+	                                JOIN tasks t ON hgd.task_id = t.id AND t.deleted_at IS NULL
+	                                JOIN projects p ON t.project_id = p.id
+	                               WHERE hgd.id = $1`), notFoundResource: "HumanGateDecision"},
 	{param: "view_id", resolve: uuidResolver(`SELECT p.workspace_id
 	                            FROM saved_views v
 	                            JOIN projects p ON v.project_id = p.id

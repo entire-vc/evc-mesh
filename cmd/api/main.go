@@ -95,6 +95,7 @@ func main() {
 	taskStatusRepo := postgres.NewTaskStatusRepo(db)
 	taskDependencyRepo := postgres.NewTaskDependencyRepo(db)
 	commentRepo := postgres.NewCommentRepo(db)
+	humanGateDecisionRepo := postgres.NewHumanGateDecisionRepo(db)
 	artifactRepo := postgres.NewArtifactRepo(db)
 	documentRepo := postgres.NewDocumentRepo(db)
 	documentAttachmentRepo := postgres.NewDocumentAttachmentRepo(db)
@@ -364,6 +365,7 @@ func main() {
 		service.WithCommentContextCacheInvalidator(ctxCacheSvc),
 		service.WithCommentNotificationService(notificationService),
 		service.WithCommentTaskService(taskService),
+		service.WithHumanGateDecisionRepo(humanGateDecisionRepo),
 	)
 	depService := service.NewTaskDependencyService(taskDependencyRepo, taskRepo, activityLogRepo)
 	activityLogService := service.NewActivityLogService(activityLogRepo)
@@ -576,6 +578,7 @@ func main() {
 		WithCommentService(commentService)
 	statusHandler := handler.NewTaskStatusHandler(taskStatusService)
 	commentHandler := handler.NewCommentHandler(commentService, taskService)
+	humanGateDecisionHandler := handler.NewHumanGateDecisionHandler(commentService, taskService)
 	artifactHandler := handler.NewArtifactHandler(artifactService, taskService)
 	documentHandler := handler.NewDocumentHandler(documentService)
 	documentAttachmentHandler := handler.NewDocumentAttachmentHandler(documentAttachmentService)
@@ -1041,6 +1044,14 @@ func main() {
 	api.POST("/tasks/:task_id/comments", commentHandler.Create, wsAccess, rbac(mw.PermAddComment))
 	api.PATCH("/comments/:comment_id", commentHandler.Update, rbac(mw.PermAddComment))
 	api.DELETE("/comments/:comment_id", commentHandler.Delete, rbac(mw.PermAddComment))
+
+	// Third human_gate exit — "decision recorded" (task #c56339b1, contract
+	// docs/human-gate-decision-recorded.md). Revoke enforces user-only inside
+	// the handler itself (mirrors task_handler.go's PATCH human_gate 403), not
+	// via rbac, since an agent can legitimately hold PermAddComment.
+	api.GET("/tasks/:task_id/human-gate-decisions", humanGateDecisionHandler.List, wsAccess)
+	api.POST("/tasks/:task_id/human-gate-decisions", humanGateDecisionHandler.Create, wsAccess, rbac(mw.PermAddComment))
+	api.POST("/human-gate-decisions/:decision_id/revoke", humanGateDecisionHandler.Revoke, rbac(mw.PermAddComment))
 
 	// Artifact routes.
 	api.GET("/tasks/:task_id/artifacts", artifactHandler.List, wsAccess)
