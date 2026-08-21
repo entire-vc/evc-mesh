@@ -63,6 +63,7 @@ type TaskFilter struct {
 	Labels         []string
 	Search         string
 	HasDueDate     *bool
+	HumanGate      *bool
 	CustomFields   map[string]CustomFieldFilter // key = field slug
 }
 

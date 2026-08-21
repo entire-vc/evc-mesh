@@ -632,6 +632,74 @@ func TestTaskRepo_ListWithFilters(t *testing.T) {
 	assert.Equal(t, 5, page.TotalCount)
 }
 
+// TestTaskRepo_List_HumanGateFilter (#098468fa subtask): human_gate=true/false must
+// each return exactly the tasks carrying that value — proven with both arms present
+// in the same project, so a filter that matched everything (or nothing) would fail.
+func TestTaskRepo_List_HumanGateFilter(t *testing.T) {
+	db := testDB(t)
+	_, proj, status := createTestProject(t, db)
+	repo := NewTaskRepo(db)
+	ctx := context.Background()
+
+	gated := &domain.Task{
+		ID:            uuid.New(),
+		ProjectID:     proj.ID,
+		StatusID:      status.ID,
+		Title:         "Gated " + uuid.New().String()[:4],
+		AssigneeType:  domain.AssigneeTypeUnassigned,
+		Priority:      domain.PriorityMedium,
+		CustomFields:  json.RawMessage(`{}`),
+		Labels:        pq.StringArray{},
+		CreatedBy:     uuid.New(),
+		CreatedByType: domain.ActorTypeUser,
+		CreatedAt:     time.Now().UTC().Truncate(time.Microsecond),
+		UpdatedAt:     time.Now().UTC().Truncate(time.Microsecond),
+	}
+	require.NoError(t, repo.Create(ctx, gated))
+	// human_gate is not settable via Create/Update by design (armed only through
+	// SetHumanGate/comment-marker service logic) — flip it directly for the fixture.
+	_, err := db.ExecContext(ctx, "UPDATE tasks SET human_gate = true WHERE id = $1", gated.ID)
+	require.NoError(t, err)
+
+	notGated := &domain.Task{
+		ID:            uuid.New(),
+		ProjectID:     proj.ID,
+		StatusID:      status.ID,
+		Title:         "Not gated " + uuid.New().String()[:4],
+		AssigneeType:  domain.AssigneeTypeUnassigned,
+		Priority:      domain.PriorityMedium,
+		CustomFields:  json.RawMessage(`{}`),
+		Labels:        pq.StringArray{},
+		CreatedBy:     uuid.New(),
+		CreatedByType: domain.ActorTypeUser,
+		CreatedAt:     time.Now().UTC().Truncate(time.Microsecond),
+		UpdatedAt:     time.Now().UTC().Truncate(time.Microsecond),
+	}
+	require.NoError(t, repo.Create(ctx, notGated))
+
+	pg := pagination.Params{Page: 1, PageSize: 10}
+
+	trueFlag := true
+	page, err := repo.List(ctx, proj.ID, repository.TaskFilter{HumanGate: &trueFlag}, pg)
+	require.NoError(t, err)
+	require.Len(t, page.Items, 1)
+	assert.Equal(t, gated.ID, page.Items[0].ID)
+	assert.True(t, page.Items[0].HumanGate)
+
+	falseFlag := false
+	page, err = repo.List(ctx, proj.ID, repository.TaskFilter{HumanGate: &falseFlag}, pg)
+	require.NoError(t, err)
+	require.Len(t, page.Items, 1)
+	assert.Equal(t, notGated.ID, page.Items[0].ID)
+	assert.False(t, page.Items[0].HumanGate)
+
+	// No filter at all — both arms present, negative control that the filter isn't
+	// silently narrowing every query.
+	page, err = repo.List(ctx, proj.ID, repository.TaskFilter{}, pg)
+	require.NoError(t, err)
+	assert.Equal(t, 2, page.TotalCount)
+}
+
 func TestTaskRepo_ListSubtasks(t *testing.T) {
 	db := testDB(t)
 	_, proj, status := createTestProject(t, db)
