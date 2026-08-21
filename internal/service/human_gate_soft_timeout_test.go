@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -173,5 +174,104 @@ func TestHumanGateSoftTimeoutService_DefaultWindow(t *testing.T) {
 	}
 	if n != 0 {
 		t.Fatalf("a just-armed soft gate must not be due under the default (24h) window, got %d released", n)
+	}
+}
+
+// TestHumanGateSoftTimeoutService_FindError_Propagates proves a repository lookup
+// failure surfaces as an error instead of being swallowed as "nothing due".
+func TestHumanGateSoftTimeoutService_FindError_Propagates(t *testing.T) {
+	taskRepo := NewMockTaskRepository()
+	commentRepo := NewMockCommentRepository()
+	svc := NewHumanGateSoftTimeoutService(taskRepo, commentRepo, time.Hour)
+	taskRepo.errToReturn = errors.New("db unreachable")
+
+	n, err := svc.SweepExpiredSoftGates(context.Background())
+	if err == nil {
+		t.Fatal("expected FindSoftTimedOutGates error to propagate")
+	}
+	if n != 0 {
+		t.Fatalf("expected 0 released on lookup failure, got %d", n)
+	}
+}
+
+// failSetHumanGateRepo wraps MockTaskRepository so FindSoftTimedOutGates succeeds
+// normally (the mock's shared errToReturn would fail BOTH calls, which can't isolate
+// "lookup ok, release fails") while SetHumanGate always fails.
+type failSetHumanGateRepo struct {
+	*MockTaskRepository
+	err error
+}
+
+func (r *failSetHumanGateRepo) SetHumanGate(context.Context, uuid.UUID, bool) error {
+	return r.err
+}
+
+// TestHumanGateSoftTimeoutService_SetHumanGateError_SkipsBestEffort proves a release
+// failure on one candidate is logged and skipped (not counted, not fatal to the sweep)
+// rather than aborting the whole batch or panicking.
+func TestHumanGateSoftTimeoutService_SetHumanGateError_SkipsBestEffort(t *testing.T) {
+	mockRepo := NewMockTaskRepository()
+	taskRepo := &failSetHumanGateRepo{MockTaskRepository: mockRepo, err: errors.New("write conflict")}
+	commentRepo := NewMockCommentRepository()
+	svc := NewHumanGateSoftTimeoutService(taskRepo, commentRepo, time.Hour)
+	ancient := time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
+	seedGateTask(t, mockRepo, domain.HumanGateClassSoft, true, timePtr(ancient))
+
+	n, err := svc.SweepExpiredSoftGates(context.Background())
+	if err != nil {
+		t.Fatalf("a per-candidate SetHumanGate failure must not fail the whole sweep: %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("expected 0 released when SetHumanGate errors, got %d", n)
+	}
+	if len(commentRepo.items) != 0 {
+		t.Fatal("must not post a release comment for a candidate whose release failed")
+	}
+}
+
+// TestHumanGateSoftTimeoutService_NilCommentRepo_StillReleases mirrors
+// MonitorPromotionService's "commentRepo may be nil" contract: the release itself must
+// not depend on comment posting succeeding or even being configured.
+func TestHumanGateSoftTimeoutService_NilCommentRepo_StillReleases(t *testing.T) {
+	taskRepo := NewMockTaskRepository()
+	svc := NewHumanGateSoftTimeoutService(taskRepo, nil, time.Hour)
+	ancient := time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
+	id := seedGateTask(t, taskRepo, domain.HumanGateClassSoft, true, timePtr(ancient))
+
+	n, err := svc.SweepExpiredSoftGates(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("expected 1 released even with no comment repo configured, got %d", n)
+	}
+	got, _ := taskRepo.GetByID(context.Background(), id)
+	if got.HumanGate {
+		t.Fatal("expected human_gate to be released regardless of comment posting")
+	}
+}
+
+// TestHumanGateSoftTimeoutService_CommentCreateError_StillCountsRelease proves a
+// failure posting the release comment does not undo or hide the release itself — the
+// gate is already unfrozen by the time the comment is attempted, so a comment failure
+// must be logged, not treated as sweep failure.
+func TestHumanGateSoftTimeoutService_CommentCreateError_StillCountsRelease(t *testing.T) {
+	taskRepo := NewMockTaskRepository()
+	commentRepo := NewMockCommentRepository()
+	svc := NewHumanGateSoftTimeoutService(taskRepo, commentRepo, time.Hour)
+	ancient := time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
+	id := seedGateTask(t, taskRepo, domain.HumanGateClassSoft, true, timePtr(ancient))
+	commentRepo.errToReturn = errors.New("comment write failed")
+
+	n, err := svc.SweepExpiredSoftGates(context.Background())
+	if err != nil {
+		t.Fatalf("a comment-posting failure must not fail the sweep: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("expected the release to still count even if the comment failed, got %d", n)
+	}
+	got, _ := taskRepo.GetByID(context.Background(), id)
+	if got.HumanGate {
+		t.Fatal("expected human_gate to be released despite the comment failure")
 	}
 }
