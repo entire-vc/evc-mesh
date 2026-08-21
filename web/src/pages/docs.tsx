@@ -1050,12 +1050,23 @@ export function DocsPage() {
                       flattened into "the text of this document" to locate each
                       quote, so a discussion rendered inside it would become part
                       of the haystack and anchors would start matching comment
-                      bodies. See doc-comment-tree.tsx. */}
-                  <DocCommentTree
-                    controller={comments}
-                    showResolved={showResolved}
-                    onShowResolvedChange={setShowResolved}
-                  />
+                      bodies. See doc-comment-tree.tsx.
+
+                      Mounted only while the rail is closed. The rail and the
+                      tree are the same threads through the same controller —
+                      mounting both at once (railOpen === true) painted every
+                      thread twice, which is exactly the bug `#a4a8db69`
+                      intended to close by defaulting the rail to closed and
+                      never did for a reader who opens it (`#a9df0f4a`). They
+                      are two views of one surface, not two surfaces: one is
+                      shown at a time. */}
+                  {!railOpen && (
+                    <DocCommentTree
+                      controller={comments}
+                      showResolved={showResolved}
+                      onShowResolvedChange={setShowResolved}
+                    />
+                  )}
                 </article>
 
                 {railOpen && (

@@ -1008,6 +1008,140 @@ describe("DocsPage — the discussion under the page", () => {
     await screen.findByTestId("doc-view");
     expect(screen.queryByTestId("doc-comment-tree")).not.toBeInTheDocument();
   });
+
+  describe("the rail and the tree are mutually exclusive (#a9df0f4a)", () => {
+    /** Never resolves in BODY — the server's placement, not ours. */
+    function pageComment() {
+      return {
+        id: "dc-page",
+        document_id: "doc-1",
+        parent_comment_id: null,
+        author_id: "u1",
+        author_type: "user",
+        author_name: "Pavel",
+        body: "A note on the document as a whole.",
+        anchor: null,
+        resolved_at: null,
+        resolved_by: null,
+        resolved_by_type: null,
+        created_at: "2026-08-19T09:00:00Z",
+        updated_at: "2026-08-19T09:00:00Z",
+      };
+    }
+
+    /** A quote the current page text no longer contains — orphaned by the server. */
+    function orphanedComment() {
+      return {
+        id: "dc-orphan",
+        document_id: "doc-1",
+        parent_comment_id: null,
+        author_id: "u1",
+        author_type: "user",
+        author_name: "Pavel",
+        body: "This text isn't here any more.",
+        anchor: {
+          exact: "a sentence that got deleted",
+          prefix: "",
+          suffix: "",
+          start: null,
+          end: null,
+          orphaned: true,
+        },
+        resolved_at: null,
+        resolved_by: null,
+        resolved_by_type: null,
+        created_at: "2026-08-19T08:00:00Z",
+        updated_at: "2026-08-19T08:00:00Z",
+      };
+    }
+
+    /**
+     * Pavel's report on `#a9df0f4a`: with the rail open, the same three
+     * threads — one anchored to text, one on the page as a whole, one
+     * orphaned — painted twice on one screen. The data was never duplicated
+     * (`Comments 3` in the header was always right); only the rendering was.
+     * `#a4a8db69` made the rail start closed, which hides the bug on first
+     * load but does nothing once a reader opens it — this is the composition
+     * test that catches the open state, which no test inside
+     * doc-comment-rail.test.tsx or doc-comment-tree.test.tsx can see, because
+     * neither component knows the other is mounted.
+     */
+    it("renders each thread exactly once with the rail open, and hides the tree", async () => {
+      mockWithComments([comment(), pageComment(), orphanedComment()]);
+      localStorage.setItem("mesh_docs_comments_rail", "1");
+      renderDocs("doc-1");
+
+      await screen.findByTestId("doc-comment-rail");
+      await waitFor(() => {
+        expect(screen.getAllByTestId("doc-comment-thread")).toHaveLength(3);
+      });
+      // If the tree were still mounted alongside the rail, this list would
+      // have 6 entries, not 3 — and the tree would be findable at all.
+      expect(screen.queryByTestId("doc-comment-tree")).not.toBeInTheDocument();
+    });
+
+    it("NEGATIVE CONTROL: with the rail closed, the tree alone carries all three", async () => {
+      // Guards the test above from going vacuous on a future refactor that
+      // renamed or removed one surface entirely rather than fixing the
+      // composition: closed, the tree must still show everything.
+      mockWithComments([comment(), pageComment(), orphanedComment()]);
+      localStorage.setItem("mesh_docs_comments_rail", "0");
+      renderDocs("doc-1");
+
+      await screen.findByTestId("doc-comment-tree");
+      await waitFor(() => {
+        expect(screen.getAllByTestId("doc-comment-thread")).toHaveLength(3);
+      });
+      expect(screen.queryByTestId("doc-comment-rail")).not.toBeInTheDocument();
+    });
+
+    /**
+     * Acceptance criterion 2 — the entry for a comment on the document as a
+     * whole is not lost by hiding one of the two surfaces.
+     *
+     * This was the weakest part of the fix's evidence: it held only by
+     * reading the code (`Composer` lives in the rail, so hiding the tree
+     * cannot take it away). Reading is not a check — a later refactor that
+     * moved the composer into the tree would break the criterion while every
+     * other test here stayed green, because none of them looks at whether the
+     * discussion is still *writable*.
+     *
+     * What makes the claim true is structural: `doc-comment-tree.tsx` imports
+     * the very same `Thread` from `doc-comment-rail.tsx`, so whichever
+     * surface is on screen carries the same reply entry. The assertion below
+     * pins that, on the page-as-a-whole thread specifically — the one class
+     * of thread that has nowhere else to live.
+     */
+    it("AC2: the page-as-a-whole thread stays writable in BOTH rail states", async () => {
+      for (const railOpen of [true, false] as const) {
+        mockWithComments([comment(), pageComment(), orphanedComment()]);
+        localStorage.setItem("mesh_docs_comments_rail", railOpen ? "1" : "0");
+        const { unmount } = renderDocs("doc-1");
+
+        await screen.findByTestId(
+          railOpen ? "doc-comment-rail" : "doc-comment-tree",
+        );
+        // The thread that exists only as "the document as a whole" — it has no
+        // anchor to fall back to, so if a surface drops it, it is unreachable.
+        const whole = await screen.findByText("On the page as a whole");
+        const card = whole.closest('[data-testid="doc-comment-thread"]');
+        expect(card).not.toBeNull();
+
+        // Writable, not merely visible: a reply entry inside that very thread.
+        expect(
+          within(card as HTMLElement).getByRole("button", { name: /reply/i }),
+        ).toBeInTheDocument();
+
+        // And the switch between the two surfaces is always on screen, so the
+        // reader is never stranded on the one that is currently hidden.
+        expect(screen.getByTestId("doc-comment-toggle")).toBeInTheDocument();
+
+        unmount();
+        localStorage.clear();
+        vi.clearAllMocks();
+      }
+    });
+  });
 });
 
 describe("DocsPage — narrow screens: the route decides which column you get", () => {
