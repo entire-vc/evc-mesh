@@ -339,7 +339,7 @@ func (h *TaskHandler) attachHumanGateInfo(ctx context.Context, task *domain.Task
 // refusal that names no door.
 //
 // So the fix is not to widen the permission (the wall is correct — see
-// TestUpdateTask_AgentStillCannotClearGate) and not to report
+// TestGateRefusal_AgentCanNeverActuallyClearTheGate) and not to report
 // clearable_by_owner=false to agents (that would hide the one exit that
 // works). It is to make the refusal self-explanatory.
 //
