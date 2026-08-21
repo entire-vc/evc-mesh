@@ -66,6 +66,7 @@ type victimFixture struct {
 	linkID      string
 	recurringID string
 	secretID    string
+	decisionID  string
 }
 
 // newVictimFixture registers an ordinary user and populates their workspace with
@@ -183,6 +184,16 @@ func (f *victimFixture) createFlatObjects(t *testing.T) {
 
 	f.commentID = f.create(t, "POST", "/api/v1/tasks/"+f.taskID+"/comments", map[string]any{
 		"body": "Victim confidential task — comment body",
+	})
+
+	// Third human_gate exit (task #c56339b1): provenance=direct requires the
+	// authenticated caller to BE decided_by, which this fixture satisfies
+	// since it posts as the victim themselves.
+	f.decisionID = f.create(t, "POST", "/api/v1/tasks/"+f.taskID+"/human-gate-decisions", map[string]any{
+		"canonical_key": "canonical-decision-xtp-fixture-" + f.taskID,
+		"decided_by":    f.env.UserID,
+		"provenance":    "direct",
+		"channel":       "mesh",
 	})
 
 	f.viewID = f.create(t, "POST", "/api/v1/projects/"+f.projectID+"/views", map[string]any{
@@ -324,6 +335,7 @@ func (f *victimFixture) concreteURL(pattern string) string {
 		":link_id":      f.linkID,
 		":recurring_id": f.recurringID,
 		":secret_id":    f.secretID,
+		":decision_id":  f.decisionID,
 	}
 	segments := strings.Split(pattern, "/")
 	for i, seg := range segments {

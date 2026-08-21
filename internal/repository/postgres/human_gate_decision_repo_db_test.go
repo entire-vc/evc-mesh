@@ -14,8 +14,8 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/domain"
 )
 
-func provPtr(p domain.HumanGateProvenance) *domain.HumanGateProvenance { return &p }
-func chanPtr(c domain.HumanGateChannel) *domain.HumanGateChannel      { return &c }
+// provPtr/chanPtr live in human_gate_decision_repo_sqlmock_test.go (no build
+// tag, so both this file and the sqlmock tests can use them).
 
 // TestHumanGateDecisionRepo_AppendOnly_RejectsUpdate proves the DB-level
 // immutability guarantee (migration 20260821001) independently of any Go

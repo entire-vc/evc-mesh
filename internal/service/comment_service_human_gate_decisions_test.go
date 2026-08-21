@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"sort"
 	"strings"
 	"sync"
@@ -22,13 +23,20 @@ import (
 // query behavior is separately proven against actual Postgres in
 // internal/repository/postgres/human_gate_decision_repo_db_test.go.
 type fakeHGDRepo struct {
-	mu   sync.Mutex
-	rows []domain.HumanGateDecision
+	mu        sync.Mutex
+	rows      []domain.HumanGateDecision
+	createErr error // when set, Create fails on its NEXT call only, then clears
+	getErr    error // when set, GetByID fails on its NEXT call only, then clears
 }
 
 func (f *fakeHGDRepo) Create(_ context.Context, d *domain.HumanGateDecision) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.createErr != nil {
+		err := f.createErr
+		f.createErr = nil
+		return err
+	}
 	if d.ID == uuid.Nil {
 		d.ID = uuid.New()
 	}
@@ -60,6 +68,11 @@ func (f *fakeHGDRepo) hydrateLocked(d domain.HumanGateDecision) domain.HumanGate
 func (f *fakeHGDRepo) GetByID(_ context.Context, id uuid.UUID) (*domain.HumanGateDecision, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.getErr != nil {
+		err := f.getErr
+		f.getErr = nil
+		return nil, err
+	}
 	for _, d := range f.rows {
 		if d.ID == id {
 			hyd := f.hydrateLocked(d)
@@ -114,8 +127,10 @@ func (f *fakeHGDRepo) ListByTask(_ context.Context, taskID uuid.UUID) ([]domain.
 // assertion pass or fail for the wrong reason.
 type fakeHumanGateTaskService struct {
 	TaskService
-	mu    sync.Mutex
-	tasks map[uuid.UUID]*domain.Task
+	mu         sync.Mutex
+	tasks      map[uuid.UUID]*domain.Task
+	getErr     error // when set, GetByID fails on its NEXT call only, then clears
+	setGateErr error // when set, SetHumanGate fails on its NEXT call only, then clears
 }
 
 func newFakeHumanGateTaskService() *fakeHumanGateTaskService {
@@ -131,6 +146,11 @@ func (f *fakeHumanGateTaskService) seed(task *domain.Task) {
 func (f *fakeHumanGateTaskService) GetByID(_ context.Context, id uuid.UUID) (*domain.Task, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.getErr != nil {
+		err := f.getErr
+		f.getErr = nil
+		return nil, err
+	}
 	t, ok := f.tasks[id]
 	if !ok {
 		return nil, nil
@@ -142,6 +162,11 @@ func (f *fakeHumanGateTaskService) GetByID(_ context.Context, id uuid.UUID) (*do
 func (f *fakeHumanGateTaskService) SetHumanGate(_ context.Context, id uuid.UUID, value bool) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.setGateErr != nil {
+		err := f.setGateErr
+		f.setGateErr = nil
+		return err
+	}
 	if t, ok := f.tasks[id]; ok {
 		t.HumanGate = value
 	}
@@ -458,3 +483,370 @@ func TestEnforceBlockingTriage_CanonicalKeyCitation_DoesNotArm(t *testing.T) {
 
 	assert.Empty(t, env.taskMover.humanGateCalls(), "citing a live canonical_key must not arm the gate")
 }
+
+// ---------------------------------------------------------------------------
+// Guard clauses, error branches, and small helpers not reached by the
+// happy-path tests above.
+// ---------------------------------------------------------------------------
+
+func TestRecordHumanGateDecision_NoRepoConfigured(t *testing.T) {
+	svc := NewCommentService(NewMockCommentRepository(), NewMockTaskRepository(), NewMockActivityLogRepository(),
+		WithCommentTaskService(newFakeHumanGateTaskService())).(*commentService)
+	_, err := svc.RecordHumanGateDecision(context.Background(), domain.RecordHumanGateDecisionInput{})
+	require.ErrorIs(t, err, ErrHumanGateDecisionRepoUnavailable)
+}
+
+func TestRecordHumanGateDecision_NoTaskServiceConfigured(t *testing.T) {
+	svc := NewCommentService(NewMockCommentRepository(), NewMockTaskRepository(), NewMockActivityLogRepository(),
+		WithHumanGateDecisionRepo(&fakeHGDRepo{})).(*commentService)
+	_, err := svc.RecordHumanGateDecision(context.Background(), domain.RecordHumanGateDecisionInput{})
+	require.Error(t, err)
+}
+
+func TestRecordHumanGateDecision_RepoCreateError(t *testing.T) {
+	env := setupHGDEnv(t)
+	taskID, pavel := uuid.New(), uuid.New()
+	env.taskSvc.seed(&domain.Task{ID: taskID, HumanGate: true})
+	ref := uuid.New()
+	env.hgdRepo.createErr = errInjectedTest
+
+	_, err := env.svc.RecordHumanGateDecision(context.Background(), domain.RecordHumanGateDecisionInput{
+		TaskID: taskID, QuestionRef: &ref, DecidedBy: pavel,
+		Provenance: domain.HumanGateProvenanceDirect, Channel: domain.HumanGateChannelMesh,
+	})
+	require.Error(t, err)
+	assert.True(t, env.taskSvc.humanGate(taskID), "a failed record must not release the gate")
+}
+
+// TestRecordHumanGateDecision_TaskLookupError_StillReturnsTheDecision proves
+// the record itself is not lost when the post-write task lookup fails — the
+// ledger write already committed; only the release-as-consequence step is
+// best-effort.
+func TestRecordHumanGateDecision_TaskLookupError_StillReturnsTheDecision(t *testing.T) {
+	env := setupHGDEnv(t)
+	taskID, pavel := uuid.New(), uuid.New()
+	env.taskSvc.seed(&domain.Task{ID: taskID, HumanGate: true})
+	env.taskSvc.getErr = errInjectedTest
+	ref := uuid.New()
+
+	d, err := env.svc.RecordHumanGateDecision(context.Background(), domain.RecordHumanGateDecisionInput{
+		TaskID: taskID, QuestionRef: &ref, DecidedBy: pavel,
+		Provenance: domain.HumanGateProvenanceDirect, Channel: domain.HumanGateChannelMesh,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, d, "the decision was written even though the follow-up lookup failed")
+}
+
+func TestRecordHumanGateDecision_SetHumanGateError_StillReturnsTheDecision(t *testing.T) {
+	env := setupHGDEnv(t)
+	taskID, pavel := uuid.New(), uuid.New()
+	env.taskSvc.seed(&domain.Task{ID: taskID, HumanGate: true})
+	env.taskSvc.setGateErr = errInjectedTest
+	ref := uuid.New()
+
+	d, err := env.svc.RecordHumanGateDecision(context.Background(), domain.RecordHumanGateDecisionInput{
+		TaskID: taskID, QuestionRef: &ref, DecidedBy: pavel,
+		Provenance: domain.HumanGateProvenanceDirect, Channel: domain.HumanGateChannelMesh,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, d)
+}
+
+func TestRecordHumanGateDecision_SystemCommentCreateError_DoesNotFail(t *testing.T) {
+	env := setupHGDEnv(t)
+	taskID, pavel := uuid.New(), uuid.New()
+	env.taskSvc.seed(&domain.Task{ID: taskID, HumanGate: true})
+	env.commentRepo.errToReturn = errInjectedTest
+	ref := uuid.New()
+
+	d, err := env.svc.RecordHumanGateDecision(context.Background(), domain.RecordHumanGateDecisionInput{
+		TaskID: taskID, QuestionRef: &ref, DecidedBy: pavel,
+		Provenance: domain.HumanGateProvenanceDirect, Channel: domain.HumanGateChannelMesh,
+	})
+	require.NoError(t, err, "a system-comment failure must not fail the recording")
+	require.NotNil(t, d)
+}
+
+func TestRecordHumanGateDecision_NotifiesAssigneeAgent(t *testing.T) {
+	commentRepo := NewMockCommentRepository()
+	taskRepo := NewMockTaskRepository()
+	activityRepo := NewMockActivityLogRepository()
+	hgdRepo := &fakeHGDRepo{}
+	taskSvc := newFakeHumanGateTaskService()
+	agentNotify := NewMockAgentNotifyService()
+	projectRepo := NewMockProjectRepository()
+
+	projID, wsID := uuid.New(), uuid.New()
+	projectRepo.items[projID] = &domain.Project{ID: projID, WorkspaceID: wsID}
+
+	svc := NewCommentService(commentRepo, taskRepo, activityRepo,
+		WithCommentTaskService(taskSvc),
+		WithHumanGateDecisionRepo(hgdRepo),
+		WithCommentAgentNotify(agentNotify),
+		WithCommentProjectRepo(projectRepo),
+	).(*commentService)
+
+	taskID, agentID, pavel := uuid.New(), uuid.New(), uuid.New()
+	taskSvc.seed(&domain.Task{
+		ID: taskID, ProjectID: projID, HumanGate: true,
+		AssigneeType: domain.AssigneeTypeAgent, AssigneeID: &agentID,
+	})
+	ref := uuid.New()
+
+	_, err := svc.RecordHumanGateDecision(context.Background(), domain.RecordHumanGateDecisionInput{
+		TaskID: taskID, QuestionRef: &ref, DecidedBy: pavel,
+		Provenance: domain.HumanGateProvenanceDirect, Channel: domain.HumanGateChannelMesh,
+	})
+	require.NoError(t, err)
+
+	calls := agentNotify.Calls()
+	require.Len(t, calls, 1)
+	assert.Equal(t, "task.human_gate_released", calls[0].EventType)
+	assert.Equal(t, wsID, calls[0].WorkspaceID)
+}
+
+func TestRevokeHumanGateDecision_NoRepoConfigured(t *testing.T) {
+	svc := NewCommentService(NewMockCommentRepository(), NewMockTaskRepository(), NewMockActivityLogRepository(),
+		WithCommentTaskService(newFakeHumanGateTaskService())).(*commentService)
+	err := svc.RevokeHumanGateDecision(context.Background(), domain.RevokeHumanGateDecisionInput{
+		RevokedByType: domain.ActorTypeUser, Reason: "x",
+	})
+	require.ErrorIs(t, err, ErrHumanGateDecisionRepoUnavailable)
+}
+
+func TestRevokeHumanGateDecision_NoTaskServiceConfigured(t *testing.T) {
+	svc := NewCommentService(NewMockCommentRepository(), NewMockTaskRepository(), NewMockActivityLogRepository(),
+		WithHumanGateDecisionRepo(&fakeHGDRepo{})).(*commentService)
+	err := svc.RevokeHumanGateDecision(context.Background(), domain.RevokeHumanGateDecisionInput{
+		RevokedByType: domain.ActorTypeUser, Reason: "x",
+	})
+	require.Error(t, err)
+}
+
+func TestRevokeHumanGateDecision_EmptyReason(t *testing.T) {
+	env := setupHGDEnv(t)
+	err := env.svc.RevokeHumanGateDecision(context.Background(), domain.RevokeHumanGateDecisionInput{
+		DecisionID: uuid.New(), RevokedBy: uuid.New(), RevokedByType: domain.ActorTypeUser, Reason: "",
+	})
+	require.Error(t, err)
+}
+
+func TestRevokeHumanGateDecision_LookupError(t *testing.T) {
+	env := setupHGDEnv(t)
+	env.hgdRepo.getErr = errInjectedTest
+	err := env.svc.RevokeHumanGateDecision(context.Background(), domain.RevokeHumanGateDecisionInput{
+		DecisionID: uuid.New(), RevokedBy: uuid.New(), RevokedByType: domain.ActorTypeUser, Reason: "x",
+	})
+	require.Error(t, err)
+}
+
+func TestRevokeHumanGateDecision_NotFound(t *testing.T) {
+	env := setupHGDEnv(t)
+	err := env.svc.RevokeHumanGateDecision(context.Background(), domain.RevokeHumanGateDecisionInput{
+		DecisionID: uuid.New(), RevokedBy: uuid.New(), RevokedByType: domain.ActorTypeUser, Reason: "x",
+	})
+	require.ErrorIs(t, err, ErrHumanGateDecisionNotFound)
+}
+
+// TestRevokeHumanGateDecision_CannotRevokeARevocation proves a revocation
+// row itself cannot be targeted by a second revoke (contract: append-only,
+// no second-order corrections).
+func TestRevokeHumanGateDecision_CannotRevokeARevocation(t *testing.T) {
+	env := setupHGDEnv(t)
+	taskID, pavel := uuid.New(), uuid.New()
+	env.taskSvc.seed(&domain.Task{ID: taskID, HumanGate: true})
+	ref := uuid.New()
+
+	d, err := env.svc.RecordHumanGateDecision(context.Background(), domain.RecordHumanGateDecisionInput{
+		TaskID: taskID, QuestionRef: &ref, DecidedBy: pavel,
+		Provenance: domain.HumanGateProvenanceDirect, Channel: domain.HumanGateChannelMesh,
+	})
+	require.NoError(t, err)
+	require.NoError(t, env.svc.RevokeHumanGateDecision(context.Background(), domain.RevokeHumanGateDecisionInput{
+		DecisionID: d.ID, RevokedBy: pavel, RevokedByType: domain.ActorTypeUser, Reason: "first",
+	}))
+
+	revocations, err := env.hgdRepo.ListByTask(context.Background(), taskID)
+	require.NoError(t, err)
+	var revocationID uuid.UUID
+	for _, r := range revocations {
+		if !r.IsDecision() {
+			revocationID = r.ID
+		}
+	}
+	require.NotEqual(t, uuid.Nil, revocationID)
+
+	err = env.svc.RevokeHumanGateDecision(context.Background(), domain.RevokeHumanGateDecisionInput{
+		DecisionID: revocationID, RevokedBy: pavel, RevokedByType: domain.ActorTypeUser, Reason: "second",
+	})
+	require.ErrorIs(t, err, ErrHumanGateDecisionCannotRevokeRevocation)
+}
+
+func TestRevokeHumanGateDecision_RevocationCreateError(t *testing.T) {
+	env := setupHGDEnv(t)
+	taskID, pavel := uuid.New(), uuid.New()
+	env.taskSvc.seed(&domain.Task{ID: taskID, HumanGate: true})
+	ref := uuid.New()
+	d, err := env.svc.RecordHumanGateDecision(context.Background(), domain.RecordHumanGateDecisionInput{
+		TaskID: taskID, QuestionRef: &ref, DecidedBy: pavel,
+		Provenance: domain.HumanGateProvenanceDirect, Channel: domain.HumanGateChannelMesh,
+	})
+	require.NoError(t, err)
+
+	env.hgdRepo.createErr = errInjectedTest
+	err = env.svc.RevokeHumanGateDecision(context.Background(), domain.RevokeHumanGateDecisionInput{
+		DecisionID: d.ID, RevokedBy: pavel, RevokedByType: domain.ActorTypeUser, Reason: "x",
+	})
+	require.Error(t, err)
+}
+
+func TestRevokeHumanGateDecision_TaskLookupError_StillSucceeds(t *testing.T) {
+	env := setupHGDEnv(t)
+	taskID, pavel := uuid.New(), uuid.New()
+	env.taskSvc.seed(&domain.Task{ID: taskID, HumanGate: true})
+	ref := uuid.New()
+	d, err := env.svc.RecordHumanGateDecision(context.Background(), domain.RecordHumanGateDecisionInput{
+		TaskID: taskID, QuestionRef: &ref, DecidedBy: pavel,
+		Provenance: domain.HumanGateProvenanceDirect, Channel: domain.HumanGateChannelMesh,
+	})
+	require.NoError(t, err)
+
+	env.taskSvc.getErr = errInjectedTest
+	err = env.svc.RevokeHumanGateDecision(context.Background(), domain.RevokeHumanGateDecisionInput{
+		DecisionID: d.ID, RevokedBy: pavel, RevokedByType: domain.ActorTypeUser, Reason: "x",
+	})
+	require.NoError(t, err, "the revocation row is written regardless of the follow-up task lookup")
+}
+
+func TestRevokeHumanGateDecision_SetHumanGateError_StillSucceeds(t *testing.T) {
+	env := setupHGDEnv(t)
+	taskID, pavel := uuid.New(), uuid.New()
+	env.taskSvc.seed(&domain.Task{ID: taskID, HumanGate: true})
+	ref := uuid.New()
+	d, err := env.svc.RecordHumanGateDecision(context.Background(), domain.RecordHumanGateDecisionInput{
+		TaskID: taskID, QuestionRef: &ref, DecidedBy: pavel,
+		Provenance: domain.HumanGateProvenanceDirect, Channel: domain.HumanGateChannelMesh,
+	})
+	require.NoError(t, err)
+
+	env.taskSvc.setGateErr = errInjectedTest
+	err = env.svc.RevokeHumanGateDecision(context.Background(), domain.RevokeHumanGateDecisionInput{
+		DecisionID: d.ID, RevokedBy: pavel, RevokedByType: domain.ActorTypeUser, Reason: "x",
+	})
+	require.NoError(t, err)
+}
+
+func TestRevokeHumanGateDecision_SystemCommentCreateError_DoesNotFail(t *testing.T) {
+	env := setupHGDEnv(t)
+	taskID, pavel := uuid.New(), uuid.New()
+	env.taskSvc.seed(&domain.Task{ID: taskID, HumanGate: true})
+	ref := uuid.New()
+	d, err := env.svc.RecordHumanGateDecision(context.Background(), domain.RecordHumanGateDecisionInput{
+		TaskID: taskID, QuestionRef: &ref, DecidedBy: pavel,
+		Provenance: domain.HumanGateProvenanceDirect, Channel: domain.HumanGateChannelMesh,
+	})
+	require.NoError(t, err)
+
+	env.commentRepo.errToReturn = errInjectedTest
+	err = env.svc.RevokeHumanGateDecision(context.Background(), domain.RevokeHumanGateDecisionInput{
+		DecisionID: d.ID, RevokedBy: pavel, RevokedByType: domain.ActorTypeUser, Reason: "x",
+	})
+	require.NoError(t, err)
+}
+
+func TestListHumanGateDecisions_NoRepoConfigured(t *testing.T) {
+	svc := NewCommentService(NewMockCommentRepository(), NewMockTaskRepository(), NewMockActivityLogRepository()).(*commentService)
+	_, err := svc.ListHumanGateDecisions(context.Background(), uuid.New())
+	require.ErrorIs(t, err, ErrHumanGateDecisionRepoUnavailable)
+}
+
+func TestListHumanGateDecisions_ReturnsRepoResult(t *testing.T) {
+	env := setupHGDEnv(t)
+	taskID, pavel := uuid.New(), uuid.New()
+	env.taskSvc.seed(&domain.Task{ID: taskID, HumanGate: false})
+	ref := uuid.New()
+	require.NoError(t, env.hgdRepo.Create(context.Background(), &domain.HumanGateDecision{
+		TaskID: taskID, QuestionRef: &ref, DecidedBy: pavel,
+		Provenance: ptr(domain.HumanGateProvenanceDirect), Channel: ptr(domain.HumanGateChannelMesh),
+	}))
+	list, err := env.svc.ListHumanGateDecisions(context.Background(), taskID)
+	require.NoError(t, err)
+	require.Len(t, list, 1)
+}
+
+func TestFindLiveHumanGateDecision_NoRepoConfigured(t *testing.T) {
+	svc := NewCommentService(NewMockCommentRepository(), NewMockTaskRepository(), NewMockActivityLogRepository()).(*commentService)
+	got := svc.findLiveHumanGateDecision(context.Background(), uuid.New(), &domain.Comment{})
+	assert.Nil(t, got)
+}
+
+func TestPostExistingDecisionNotice_UnknownProvenanceAndCommentCreateError(t *testing.T) {
+	env := setupHGDEnv(t)
+	taskID := uuid.New()
+	env.taskSvc.seed(&domain.Task{ID: taskID})
+	env.commentRepo.errToReturn = errInjectedTest
+
+	// A nil Provenance exercises the "unknown" label branch — real rows
+	// always have one, but the notice must not panic on data that doesn't.
+	env.svc.postExistingDecisionNotice(context.Background(), &domain.Task{ID: taskID}, &domain.HumanGateDecision{
+		ID: uuid.New(), CreatedAt: time.Now(),
+	})
+	// No assertion beyond "did not panic" — the failure path is logged only.
+}
+
+func TestExtractCanonicalKeyFromMetadata(t *testing.T) {
+	assert.Nil(t, extractCanonicalKeyFromMetadata(nil))
+	assert.Nil(t, extractCanonicalKeyFromMetadata([]byte(``)))
+	assert.Nil(t, extractCanonicalKeyFromMetadata([]byte(`not json`)))
+	assert.Nil(t, extractCanonicalKeyFromMetadata([]byte(`{}`)))
+	assert.Nil(t, extractCanonicalKeyFromMetadata([]byte(`{"canonical_key":""}`)))
+	got := extractCanonicalKeyFromMetadata([]byte(`{"canonical_key":"canonical-decision-x"}`))
+	require.NotNil(t, got)
+	assert.Equal(t, "canonical-decision-x", *got)
+}
+
+func TestValidateDecisionInput(t *testing.T) {
+	ref := uuid.New()
+	base := domain.RecordHumanGateDecisionInput{
+		TaskID: uuid.New(), QuestionRef: &ref, DecidedBy: uuid.New(),
+		Provenance: domain.HumanGateProvenanceDirect, Channel: domain.HumanGateChannelMesh,
+	}
+
+	t.Run("missing task_id", func(t *testing.T) {
+		in := base
+		in.TaskID = uuid.Nil
+		require.Error(t, validateDecisionInput(in))
+	})
+	t.Run("missing decided_by", func(t *testing.T) {
+		in := base
+		in.DecidedBy = uuid.Nil
+		require.Error(t, validateDecisionInput(in))
+	})
+	t.Run("missing both refs", func(t *testing.T) {
+		in := base
+		in.QuestionRef = nil
+		require.Error(t, validateDecisionInput(in))
+	})
+	t.Run("bad provenance", func(t *testing.T) {
+		in := base
+		in.Provenance = "smoke-signal"
+		require.Error(t, validateDecisionInput(in))
+	})
+	t.Run("bad channel", func(t *testing.T) {
+		in := base
+		in.Channel = "carrier-pigeon"
+		require.Error(t, validateDecisionInput(in))
+	})
+	t.Run("valid", func(t *testing.T) {
+		require.NoError(t, validateDecisionInput(base))
+	})
+}
+
+func TestProvenanceLabel_UnknownValue(t *testing.T) {
+	assert.Equal(t, "smoke-signal", provenanceLabel(domain.HumanGateProvenance("smoke-signal")))
+}
+
+// errInjectedTest is a plain sentinel used across this file's error-injection
+// tests — its identity doesn't matter, only that Create/GetByID/SetHumanGate
+// return it and the code under test propagates or logs it correctly.
+var errInjectedTest = errors.New("injected test error")
