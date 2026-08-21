@@ -2026,6 +2026,36 @@ func (s *commentService) releaseHumanGateOnWithdrawal(ctx context.Context, comme
 		return
 	}
 
+	// #081f1354: a comment that withdraws a prior ask AND raises a fresh
+	// "❓ Blocking @user" marker of its own is genuinely ambiguous — negatorScope
+	// anchors to this comment's OWN last marker when one is present, so a
+	// negator word anywhere at-or-after that marker reads as "in scope"
+	// regardless of whether the author meant to cancel a DIFFERENT, earlier ask
+	// or this brand-new one. Textually these two intents are indistinguishable.
+	//
+	// Live repro (throwaway task, same-session, 2026-08-21): task already
+	// human_gate=true from an earlier marker; one comment posts a fresh marker
+	// followed by "Предыдущий вопрос снят — …" → enforceBlockingTriage (which
+	// runs first in the same request) reaffirms the gate on the new marker,
+	// then this function, unaware a marker was just reasserted, read "снят" as
+	// negating it and cleared human_gate=false in the same request — the new
+	// ask silently vanished the instant it was raised, and human_gate_armed_at
+	// was left holding this comment's timestamp despite the flag ending false.
+	//
+	// Fail closed (contract's own stated preference, §5 "safer to freeze extra
+	// than to thaw needed"): one comment, one intention. When both are present,
+	// leave the gate exactly as enforceBlockingTriage already set it — do NOT
+	// also process the withdrawal — and tell the author why, so the silence
+	// doesn't read as success. This does not touch the case of an ordinary
+	// withdrawal-only comment (no marker) or a marker-only comment (no negator
+	// word) — hasNegatorInScope above already gates entry to this branch.
+	if hasBlockingMarker(comment.Body) {
+		log.Printf("[human-gate] task %s: comment %s by agent %s carries both a withdrawal negator and a fresh Blocking marker — ambiguous, gate left as-is (not cleared)",
+			task.ID, comment.ID, comment.AuthorID)
+		s.reportWithdrawalMarkerConflict(ctx, comment, task)
+		return
+	}
+
 	scan, err := s.scanHumanGateOwnership(ctx, task.ID, &comment.ID)
 	if err != nil {
 		log.Printf("[human-gate] WARNING: ListByTask on task %s failed: %v", task.ID, err)
@@ -2227,6 +2257,37 @@ func (s *commentService) reportWithdrawalMiss(ctx context.Context, comment *doma
 	}
 	if err := s.commentRepo.Create(ctx, sysComment); err != nil {
 		log.Printf("[human-gate] WARNING: create withdrawal-miss notice on task %s failed: %v", task.ID, err)
+		return
+	}
+	if s.ctxCacheInv != nil {
+		s.ctxCacheInv.Invalidate(ctx, task.ID)
+	}
+}
+
+// reportWithdrawalMarkerConflict posts the system notice for the case
+// releaseHumanGateOnWithdrawal refuses on purpose (#081f1354): a comment that
+// both withdraws a prior ask and raises a fresh Blocking marker of its own.
+// Mirrors reportWithdrawalMiss's shape but is a distinct reason — the negator
+// DID count, it was refused for a different one, and conflating the two
+// notices would tell the author "reword the negator" when the actual fix is
+// "split this into two comments".
+func (s *commentService) reportWithdrawalMarkerConflict(ctx context.Context, comment *domain.Comment, task *domain.Task) {
+	now := timeNow()
+	sysComment := &domain.Comment{
+		ID:         uuid.New(),
+		TaskID:     task.ID,
+		AuthorID:   systemActorID,
+		AuthorType: domain.ActorTypeSystem,
+		Body: "🔒 human_gate по-прежнему поднят — этот коммент нёс И слова отзыва, И новый `❓ Blocking @user`, " +
+			"это противоречиво, поэтому гейт оставлен как есть (не снят). " +
+			"Если хотел снять старый вопрос и задать новый — раздели на два комментария: " +
+			"сперва отзыв старого отдельным комментарием (после него гейт снимется), " +
+			"затем новый `❓ **Blocking @user**` — он взведёт гейт заново на этот вопрос.",
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	if err := s.commentRepo.Create(ctx, sysComment); err != nil {
+		log.Printf("[human-gate] WARNING: create withdrawal-marker-conflict notice on task %s failed: %v", task.ID, err)
 		return
 	}
 	if s.ctxCacheInv != nil {

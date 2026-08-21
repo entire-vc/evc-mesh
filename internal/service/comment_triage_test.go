@@ -192,6 +192,21 @@ func (env triageTestEnv) withdrawalMissNotices() []domain.Comment {
 	return out
 }
 
+// withdrawalMarkerConflictNotices returns the system comments posted by
+// reportWithdrawalMarkerConflict (#081f1354) — the trace that a comment carrying
+// BOTH a withdrawal negator AND a fresh Blocking marker was refused as
+// ambiguous, distinct from withdrawalMissNotices (a negator that plain didn't
+// count) even though both share the "human_gate по-прежнему поднят" opener.
+func (env triageTestEnv) withdrawalMarkerConflictNotices() []domain.Comment {
+	var out []domain.Comment
+	for _, c := range env.systemComments() {
+		if strings.Contains(c.Body, "И слова отзыва, И новый") {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
 // seedTask inserts a task with the given status and returns its ID.
 func (env triageTestEnv) seedTask(statusID uuid.UUID) uuid.UUID {
 	taskID := uuid.New()

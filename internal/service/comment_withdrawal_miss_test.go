@@ -266,6 +266,77 @@ func TestReleaseHumanGateOnWithdrawal_BlockerStillOpenPhrase_ExplainsWhy(t *test
 		"this body's negator DID reach the scope — do not blame paragraph order")
 }
 
+// ---------------------------------------------------------------------------
+// Task #081f1354 — a comment that withdraws AND raises a fresh marker in one
+// breath must not silently thaw the card.
+//
+// Live repro (throwaway task, same session, 2026-08-21): task already
+// human_gate=true from an earlier marker. One comment posts a fresh
+// "❓ Blocking @pavel" followed by "Предыдущий вопрос снят — …" —
+// enforceBlockingTriage (runs first, same request) reaffirms the gate on the
+// new marker; releaseHumanGateOnWithdrawal, unaware a marker was just
+// reasserted in the SAME comment, read "снят" as negating it and cleared
+// human_gate=false before the request even finished — the new ask vanished
+// the instant it was raised. get_task before: human_gate=true. After this one
+// comment: human_gate=false, human_gate_armed_at stamped to the very comment
+// that (net) left the gate down.
+// ---------------------------------------------------------------------------
+
+// negatorThenFreshMarkerBody is the exact shape that reproduced live: a fresh
+// marker, then a negator word in the paragraph after it. negatorScope anchors
+// to THIS comment's own last marker, so "снят" reads as in-scope regardless of
+// which ask the author meant it for.
+const negatorThenFreshMarkerBody = "❓ **Blocking @pavel**: тестовый вопрос, версия B (переформулирован)?\n\n" +
+	"Предыдущий вопрос снят — был основан на устаревших данных."
+
+func TestReleaseHumanGateOnWithdrawal_FreshMarkerInSameComment_DoesNotRelease(t *testing.T) {
+	env := setupTriageEnv(t, true)
+	taskID := env.seedGatedTask(env.inProgressID)
+	askerID := uuid.New()
+	env.seedAgentBlockingComment(taskID, askerID)
+
+	ctx := actorctx.WithActor(context.Background(), askerID, domain.ActorTypeAgent)
+	require.NoError(t, env.svc.Create(ctx, &domain.Comment{
+		TaskID: taskID, AuthorID: askerID, AuthorType: domain.ActorTypeAgent,
+		Body: negatorThenFreshMarkerBody,
+	}))
+
+	// enforceBlockingTriage (runs first, same request) legitimately reaffirms
+	// the gate on the fresh marker — that call is expected and correct. What
+	// must NOT happen is releaseHumanGateOnWithdrawal placing a SECOND call
+	// clearing it back to false.
+	gateCalls := env.taskMover.humanGateCalls()
+	for _, c := range gateCalls {
+		assert.True(t, c.value, "no call may clear the gate — that would be the bug reproducing")
+	}
+	notices := env.withdrawalMarkerConflictNotices()
+	require.Len(t, notices, 1, "the author must be told why the withdrawal was refused, not left to silence")
+	assert.Equal(t, domain.ActorTypeSystem, notices[0].AuthorType)
+}
+
+// TestReleaseHumanGateOnWithdrawal_NegatorAloneStillReleases is the negative
+// control demanded by the task's own AC3: the SAME negator wording, with the
+// marker line removed, must still release exactly as before this fix — proof
+// the new guard is scoped to "this comment ALSO carries a marker", not to the
+// negator wording itself.
+func TestReleaseHumanGateOnWithdrawal_NegatorAloneStillReleases(t *testing.T) {
+	env := setupTriageEnv(t, true)
+	taskID := env.seedGatedTask(env.inProgressID)
+	askerID := uuid.New()
+	env.seedAgentBlockingComment(taskID, askerID)
+
+	ctx := actorctx.WithActor(context.Background(), askerID, domain.ActorTypeAgent)
+	require.NoError(t, env.svc.Create(ctx, &domain.Comment{
+		TaskID: taskID, AuthorID: askerID, AuthorType: domain.ActorTypeAgent,
+		Body: "Предыдущий вопрос снят — был основан на устаревших данных.",
+	}))
+
+	gateCalls := env.taskMover.humanGateCalls()
+	require.Len(t, gateCalls, 1, "no marker in this body — the guard must not fire, negator releases as before")
+	assert.False(t, gateCalls[0].value)
+	assert.Empty(t, env.withdrawalMarkerConflictNotices())
+}
+
 // TestReportWithdrawalMiss_BystanderGetsNoNotice bounds the noise. Every agent
 // comment on a gated task passes through this path, but only the live marker's
 // OWNER could have withdrawn the ask, so only they get told. Telling a bystander
