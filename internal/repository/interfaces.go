@@ -146,8 +146,22 @@ type TaskRepository interface {
 	// Used by SupersedeRecurringInstances to close previous open instances.
 	ListOpenByRecurringScheduleID(ctx context.Context, scheduleID, exceptTaskID uuid.UUID) ([]domain.Task, error)
 	// SetHumanGate atomically sets the human_gate sticky flag without touching other fields.
-	// Pass true to arm the gate, false to clear it (human sign-off received).
+	// Pass true to arm the gate, false to clear it (human sign-off received). Arming also
+	// stamps human_gate_armed_at = now() and leaves human_gate_class untouched (whatever
+	// SetHumanGateClass most recently set, default 'hard'); clearing resets
+	// human_gate_class back to 'hard' — fail-closed, so a class configured for one ask
+	// never silently carries over onto the task's next, unrelated ask.
 	SetHumanGate(ctx context.Context, taskID uuid.UUID, value bool) error
+	// SetHumanGateClass classifies the task's (currently armed or next) human_gate as
+	// domain.HumanGateClassHard (never timed out) or domain.HumanGateClassSoft (eligible
+	// for FindSoftTimedOutGates once armed past the sweep's window). Mechanism-only:
+	// nothing in the arm/release path calls this on its own — see contract §5.
+	SetHumanGateClass(ctx context.Context, taskID uuid.UUID, class domain.HumanGateClass) error
+	// FindSoftTimedOutGates returns armed, soft-classified gates whose
+	// human_gate_armed_at is at or before cutoff. A hard-classified gate is excluded by
+	// the human_gate_class predicate itself, never by cutoff — passing an arbitrarily
+	// far-future cutoff still cannot select one (see task_repo_human_gate_class_db_test.go).
+	FindSoftTimedOutGates(ctx context.Context, cutoff time.Time) ([]domain.HumanGateSoftTimeoutCandidate, error)
 	// SetShipped atomically sets the is_shipped flag. Pass true to mark the task as
 	// terminally shipped; false to clear the flag (unship).
 	SetShipped(ctx context.Context, taskID uuid.UUID, value bool) error

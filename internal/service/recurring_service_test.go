@@ -289,7 +289,10 @@ func (s *StubTaskService) ValidateAssigneeForProject(_ context.Context, _ uuid.U
 }
 
 func (s *StubTaskService) SetHumanGate(_ context.Context, _ uuid.UUID, _ bool) error { return nil }
-func (s *StubTaskService) ShipTask(_ context.Context, _ uuid.UUID, _ bool) error     { return nil }
+func (s *StubTaskService) SetHumanGateClass(_ context.Context, _ uuid.UUID, _ domain.HumanGateClass) error {
+	return nil
+}
+func (s *StubTaskService) ShipTask(_ context.Context, _ uuid.UUID, _ bool) error { return nil }
 func (s *StubTaskService) SetDodCheck(_ context.Context, _ uuid.UUID, _, _, _ string) error {
 	return nil
 }

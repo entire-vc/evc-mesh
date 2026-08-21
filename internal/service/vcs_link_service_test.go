@@ -206,7 +206,13 @@ func (r *fakeTaskRepo) ListOpenByRecurringScheduleID(context.Context, uuid.UUID,
 }
 
 func (r *fakeTaskRepo) SetHumanGate(context.Context, uuid.UUID, bool) error { return nil }
-func (r *fakeTaskRepo) SetShipped(context.Context, uuid.UUID, bool) error   { return nil }
+func (r *fakeTaskRepo) SetHumanGateClass(context.Context, uuid.UUID, domain.HumanGateClass) error {
+	return nil
+}
+func (r *fakeTaskRepo) FindSoftTimedOutGates(context.Context, time.Time) ([]domain.HumanGateSoftTimeoutCandidate, error) {
+	return nil, nil
+}
+func (r *fakeTaskRepo) SetShipped(context.Context, uuid.UUID, bool) error { return nil }
 func (r *fakeTaskRepo) SetDodCheck(context.Context, uuid.UUID, string, string, string) error {
 	return nil
 }
@@ -330,7 +336,10 @@ func (t *fakeTaskService) SupersedeRecurringInstances(context.Context, uuid.UUID
 }
 
 func (t *fakeTaskService) SetHumanGate(context.Context, uuid.UUID, bool) error { return nil }
-func (t *fakeTaskService) ShipTask(context.Context, uuid.UUID, bool) error     { return nil }
+func (t *fakeTaskService) SetHumanGateClass(context.Context, uuid.UUID, domain.HumanGateClass) error {
+	return nil
+}
+func (t *fakeTaskService) ShipTask(context.Context, uuid.UUID, bool) error { return nil }
 func (t *fakeTaskService) SetDodCheck(context.Context, uuid.UUID, string, string, string) error {
 	return nil
 }

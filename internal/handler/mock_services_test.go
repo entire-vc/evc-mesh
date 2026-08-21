@@ -571,7 +571,10 @@ func (m *MockTaskService) SupersedeRecurringInstances(_ context.Context, _, _ uu
 }
 
 func (m *MockTaskService) SetHumanGate(_ context.Context, _ uuid.UUID, _ bool) error { return nil }
-func (m *MockTaskService) ShipTask(_ context.Context, _ uuid.UUID, _ bool) error     { return nil }
+func (m *MockTaskService) SetHumanGateClass(_ context.Context, _ uuid.UUID, _ domain.HumanGateClass) error {
+	return nil
+}
+func (m *MockTaskService) ShipTask(_ context.Context, _ uuid.UUID, _ bool) error { return nil }
 func (m *MockTaskService) SetDodCheck(_ context.Context, _ uuid.UUID, _, _, _ string) error {
 	return nil
 }

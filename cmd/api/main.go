@@ -1665,6 +1665,33 @@ func main() {
 	}()
 	log.Println("Monitor promotion sweeper started (60s interval)")
 
+	// 10b-ter. human_gate soft-timeout sweeper (task #b1d5c742, contract
+	// docs/human-gate-decision-recorded.md §5). Releases soft-classified gates armed
+	// past DefaultHumanGateSoftTimeout; a hard-classified gate is structurally
+	// unreachable from this sweep (see FindSoftTimedOutGates in task_repo.go) — no
+	// interval here can accidentally release one, so a short poll interval is safe.
+	humanGateSoftTimeoutSvc := service.NewHumanGateSoftTimeoutService(taskRepo, commentRepo, 0)
+	go func() {
+		ticker := time.NewTicker(15 * time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+				n, err := humanGateSoftTimeoutSvc.SweepExpiredSoftGates(ctx)
+				cancel()
+				if err != nil {
+					log.Printf("[human-gate-soft-timeout] ERROR sweeping expired soft gates: %v", err)
+				} else if n > 0 {
+					log.Printf("[human-gate-soft-timeout] released %d soft-classified gate(s)", n)
+				}
+			case <-schedulerShutdownCh:
+				return
+			}
+		}
+	}()
+	log.Println("human_gate soft-timeout sweeper started (15m interval)")
+
 	// 10c. Stale session sweeper — end agent sessions left active longer than 6h every hour.
 	go func() {
 		ticker := time.NewTicker(1 * time.Hour)

@@ -114,6 +114,14 @@ type Task struct {
 	// HumanGate is a sticky flag set when a human (Pavel) sign-off is required.
 	// Once set, only a human actor may move the task to backlog/done/cancelled.
 	HumanGate bool `json:"human_gate" db:"human_gate"`
+	// HumanGateClass classifies the current (or most recently armed) human_gate as
+	// hard (never timed out) or soft (timeout-eligible). Read-only here — written only
+	// through TaskRepository.SetHumanGate/.SetHumanGateClass, never through Update().
+	// See domain.HumanGateClass.
+	HumanGateClass HumanGateClass `json:"human_gate_class" db:"human_gate_class"`
+	// HumanGateArmedAt is when human_gate was last flipped false->true, or nil if never
+	// armed. Read-only here for the same reason as HumanGateClass above.
+	HumanGateArmedAt *time.Time `json:"human_gate_armed_at,omitempty" db:"human_gate_armed_at"`
 	// IsShipped marks the task as terminally shipped. Once set, MoveTask to any
 	// non-done category returns 422. Cleared only by an explicit PATCH /tasks/:id/unship.
 	IsShipped bool `json:"is_shipped" db:"is_shipped"`

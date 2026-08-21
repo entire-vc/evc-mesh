@@ -2720,6 +2720,12 @@ func (s *taskService) SetHumanGate(ctx context.Context, taskID uuid.UUID, value 
 	return s.taskRepo.SetHumanGate(ctx, taskID, value)
 }
 
+// SetHumanGateClass classifies the task's human_gate as hard or soft. See
+// domain.HumanGateClass.
+func (s *taskService) SetHumanGateClass(ctx context.Context, taskID uuid.UUID, class domain.HumanGateClass) error {
+	return s.taskRepo.SetHumanGateClass(ctx, taskID, class)
+}
+
 // ShipTask marks the task as terminally shipped when shipped=true. Once shipped,
 // MoveTask to any non-done category is rejected with TaskShippedError.
 // Pass shipped=false to clear the flag (unship).

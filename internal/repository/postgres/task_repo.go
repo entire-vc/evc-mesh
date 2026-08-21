@@ -71,7 +71,7 @@ const taskBaseColsNoAlias = `
 	checked_out_by, checkout_token, checkout_expires, checkout_acquired_at,
 	delegation_level, thread_id, human_gate, is_shipped, assigned_by, dod_checks,
 	completion_signal, status_changed_at, pre_review_assignee_id, pre_review_assignee_type,
-	reviewer_id, reviewer_type`
+	reviewer_id, reviewer_type, human_gate_class, human_gate_armed_at`
 
 const taskComputedCols = `
 	(SELECT COUNT(*) FROM tasks st WHERE st.parent_task_id = tasks.id AND st.deleted_at IS NULL) AS subtask_count,
@@ -157,6 +157,8 @@ type taskRow struct {
 	DelegationLevel  domain.DelegationLevel  `db:"delegation_level"`
 	ThreadID         *string                 `db:"thread_id"`
 	HumanGate        bool                    `db:"human_gate"`
+	HumanGateClass   domain.HumanGateClass   `db:"human_gate_class"`
+	HumanGateArmedAt *time.Time              `db:"human_gate_armed_at"`
 	IsShipped        bool                    `db:"is_shipped"`
 	AssignedBy       domain.AssignmentSource `db:"assigned_by"`
 	DodChecks        domain.DodChecks        `db:"dod_checks"`
@@ -212,6 +214,8 @@ func (r *taskRow) toDomain() domain.Task {
 		DelegationLevel:         r.DelegationLevel,
 		ThreadID:                r.ThreadID,
 		HumanGate:               r.HumanGate,
+		HumanGateClass:          r.HumanGateClass,
+		HumanGateArmedAt:        r.HumanGateArmedAt,
 		IsShipped:               r.IsShipped,
 		AssignedBy:              r.AssignedBy,
 		DodChecks:               r.DodChecks,
@@ -520,8 +524,18 @@ func (r *TaskRepo) Update(ctx context.Context, task *domain.Task) error {
 }
 
 // SetHumanGate atomically sets the human_gate column without touching other task fields.
+// Arming (value=true) also stamps human_gate_armed_at = NOW() and leaves
+// human_gate_class as-is (default 'hard' unless SetHumanGateClass overrode it before this
+// call). Clearing (value=false) resets human_gate_class back to 'hard' — fail-closed, so a
+// soft classification never survives past the ask it was set for.
 func (r *TaskRepo) SetHumanGate(ctx context.Context, taskID uuid.UUID, value bool) error {
-	const q = `UPDATE tasks SET human_gate = $2, updated_at = NOW() WHERE id = $1 AND deleted_at IS NULL`
+	const q = `
+		UPDATE tasks SET
+			human_gate = $2,
+			human_gate_class = CASE WHEN $2 THEN human_gate_class ELSE 'hard' END,
+			human_gate_armed_at = CASE WHEN $2 THEN NOW() ELSE human_gate_armed_at END,
+			updated_at = NOW()
+		WHERE id = $1 AND deleted_at IS NULL`
 	dbStart := time.Now()
 	res, err := r.db.ExecContext(ctx, q, taskID, value)
 	pkgmetrics.RecordDBQuery("task.set_human_gate", time.Since(dbStart))
@@ -533,6 +547,64 @@ func (r *TaskRepo) SetHumanGate(ctx context.Context, taskID uuid.UUID, value boo
 		return apierror.NotFound("Task")
 	}
 	return nil
+}
+
+// SetHumanGateClass atomically sets the human_gate_class column without touching other
+// task fields. See domain.HumanGateClass and interfaces.go for the contract.
+func (r *TaskRepo) SetHumanGateClass(ctx context.Context, taskID uuid.UUID, class domain.HumanGateClass) error {
+	const q = `UPDATE tasks SET human_gate_class = $2, updated_at = NOW() WHERE id = $1 AND deleted_at IS NULL`
+	dbStart := time.Now()
+	res, err := r.db.ExecContext(ctx, q, taskID, string(class))
+	pkgmetrics.RecordDBQuery("task.set_human_gate_class", time.Since(dbStart))
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return apierror.NotFound("Task")
+	}
+	return nil
+}
+
+// FindSoftTimedOutGates returns armed, soft-classified gates armed at or before cutoff.
+//
+// The `human_gate_class = 'soft'` predicate is a fixed literal in this query text, not
+// derived from cutoff or any other argument — that is the structural proof required by
+// contract §5.1: a hard-classified row is unreachable from this function regardless of
+// what cutoff is passed, including an arbitrarily far-future one. See
+// task_repo_human_gate_class_db_test.go for the live negative control (a hard fixture
+// armed decades ago, queried with a decades-future cutoff, still absent from the result).
+func (r *TaskRepo) FindSoftTimedOutGates(ctx context.Context, cutoff time.Time) ([]domain.HumanGateSoftTimeoutCandidate, error) {
+	const q = `
+		SELECT id, human_gate_armed_at
+		FROM tasks
+		WHERE deleted_at IS NULL
+		  AND human_gate = true
+		  AND human_gate_class = 'soft'
+		  AND human_gate_armed_at IS NOT NULL
+		  AND human_gate_armed_at <= $1`
+	type row struct {
+		ID               uuid.UUID    `db:"id"`
+		HumanGateArmedAt sql.NullTime `db:"human_gate_armed_at"`
+	}
+	var rows []row
+	dbStart := time.Now()
+	err := r.db.SelectContext(ctx, &rows, q, cutoff)
+	pkgmetrics.RecordDBQuery("task.find_soft_timed_out_gates", time.Since(dbStart))
+	if err != nil {
+		return nil, err
+	}
+	out := make([]domain.HumanGateSoftTimeoutCandidate, 0, len(rows))
+	for _, rw := range rows {
+		if !rw.HumanGateArmedAt.Valid {
+			continue
+		}
+		out = append(out, domain.HumanGateSoftTimeoutCandidate{
+			TaskID:  rw.ID,
+			ArmedAt: rw.HumanGateArmedAt.Time,
+		})
+	}
+	return out, nil
 }
 
 // SetShipped atomically sets the is_shipped column without touching other task fields.
