@@ -320,6 +320,96 @@ func (h *TaskHandler) attachHumanGateInfo(ctx context.Context, task *domain.Task
 	task.HumanGateInfo = info
 }
 
+// gateClearRefusal builds the message for the 403 an agent gets when it PATCHes
+// human_gate true→false. It NEVER changes the outcome — the refusal stands
+// either way; it only decides what the refusal SAYS.
+//
+// Why this exists (task #4c448e11, P1). The refusal used to be the bare string
+// "clearing human_gate requires user authentication", which names no
+// alternative. An agent that reads human_gate_info.clearable_by_owner=true,
+// tries the obvious endpoint, and is told only that it needs to be a user
+// concludes — reasonably, and wrongly — that the gate has no agent-reachable
+// exit at all. That conclusion was reached and acted on repeatedly: Bill twice
+// told Wally to "clear it yourself" on #b2e6578a (17 days stalled), a third
+// agent repeated the same instruction, and the escalation that finally landed
+// (#4c448e11) reported to Pavel as fact that "an agent cannot clear the gate
+// under any circumstances". The prod audit trail says otherwise: withdrawal
+// released 66 gates and Pavel-comment 57, i.e. the agent-reachable exit is the
+// BUSIER of the two. Every one of those wrong conclusions is consistent with a
+// refusal that names no door.
+//
+// So the fix is not to widen the permission (the wall is correct — see
+// TestUpdateTask_AgentStillCannotClearGate) and not to report
+// clearable_by_owner=false to agents (that would hide the one exit that
+// works). It is to make the refusal self-explanatory.
+//
+// Fail-safe: any lookup failure falls back to the generic form. A hint is a
+// nicety; it must never turn a 403 into a 500.
+func (h *TaskHandler) gateClearRefusal(ctx context.Context, task *domain.Task, actorID uuid.UUID) string {
+	const base = "clearing human_gate requires user authentication"
+	// Named once so the two branches that point at it cannot drift apart.
+	const recordDecision = "if a human has ALREADY decided this out of band (chat, TG, voice), " +
+		"record that decision instead: POST /api/v1/tasks/{task_id}/human-gate-decisions " +
+		"— that clears the gate and preserves the answer"
+
+	generic := base + ". This PATCH is reserved for users, but the gate has two agent-reachable exits: " +
+		"withdraw the ask if you own it (see human_gate_info.owner_name), or " + recordDecision + "."
+
+	if h.commentService == nil {
+		return generic
+	}
+	info, err := h.commentService.GetHumanGateOwner(ctx, task.ID)
+	if err != nil || info == nil {
+		log.Printf("[human-gate] WARNING: refusal hint for task %s fell back to generic: %v", task.ID, err)
+		return generic
+	}
+
+	switch {
+	case info.OwnerAgentID != nil && *info.OwnerAgentID == actorID && info.ClearableByOwner:
+		return base + ". You own this ask, so you can clear it yourself right now — but by " +
+			"WITHDRAWING it, not by this PATCH. Post a NEW comment whose LAST PARAGRAPH withdraws " +
+			"the ask, using one of the negator words the server matches: " +
+			"\"не нужен\", \"не нужно\", \"не требуется\", \"снят\", \"resolved\". " +
+			"Keep it to one short line, and do NOT re-quote the \"Blocking @\" marker — a quoted " +
+			"marker re-arms the gate instead of clearing it. Then re-read human_gate to confirm. " +
+			"Alternatively, " + recordDecision + "."
+
+	case info.OwnerAgentID != nil && *info.OwnerAgentID == actorID && !info.ClearableByOwner:
+		return base + ". You own this ask but cannot withdraw it yet (reason_if_not=" +
+			info.ReasonIfNot + "): " + withdrawalBlockedAdvice(info.ReasonIfNot) +
+			" Meanwhile, " + recordDecision + "."
+
+	case info.OwnerAgentID != nil:
+		return base + ". The live ask on this task is owned by " + info.OwnerName +
+			", and only its author can withdraw it — asking them via a comment will NOT wake them " +
+			"(a gated task is not fed to any lane), so reach them with a separate, ungated task. " +
+			"Otherwise, " + recordDecision + "."
+
+	default:
+		// no_live_marker: armed by raw PATCH or by the UI, so there is no author
+		// to withdraw it. This is the one shape with genuinely no withdrawal path.
+		return base + ". This gate has no live marker (reason_if_not=" + info.ReasonIfNot +
+			"), so it was armed without an ask an author could withdraw — there is no withdrawal " +
+			"path here by construction. " + strings.ToUpper(recordDecision[:1]) + recordDecision[1:] + "."
+	}
+}
+
+// withdrawalBlockedAdvice turns a reason_if_not into the thing to actually do.
+// Both non-empty reasons are TIME-based: the withdrawal becomes available on its
+// own, so the advice is to wait, not to act.
+func withdrawalBlockedAdvice(reason string) string {
+	switch reason {
+	case "reaffirm_pending":
+		return "another agent reaffirmed the ask more recently than you raised it, so withdrawal " +
+			"unlocks once 30 minutes have passed since that marker — no action needed, just retry later."
+	case "raw_armed":
+		return "the gate was raw-armed (PATCH/UI) before your marker existed, so withdrawal unlocks " +
+			"30 minutes after your marker — no action needed, just retry later."
+	default:
+		return "retry once the reaffirm gap has elapsed."
+	}
+}
+
 // GetByID handles GET /tasks/:task_id
 // Falls back to short-ID lookup when task_id is a 6–12 char hex prefix rather than a full UUID.
 func (h *TaskHandler) GetByID(c echo.Context) error {
@@ -547,9 +637,10 @@ func (h *TaskHandler) Update(c echo.Context) error {
 		// Only a human user may clear the gate (true → false).
 		// Agents clearing the gate bypass the sign-off mechanism.
 		if task.HumanGate && !*req.HumanGate {
-			_, actorType := actorctx.FromContext(c.Request().Context())
+			actorID, actorType := actorctx.FromContext(c.Request().Context())
 			if actorType != domain.ActorTypeUser {
-				return c.JSON(http.StatusForbidden, apierror.Forbidden("clearing human_gate requires user authentication"))
+				return c.JSON(http.StatusForbidden,
+					apierror.Forbidden(h.gateClearRefusal(c.Request().Context(), task, actorID)))
 			}
 		}
 		task.HumanGate = *req.HumanGate
