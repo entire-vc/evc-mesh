@@ -158,6 +158,45 @@ type Task struct {
 	// persisted, populated only by GET handlers when HumanGate is true, same
 	// pattern as URL above.
 	HumanGateInfo *HumanGateInfo `json:"human_gate_info,omitempty"`
+	// FalseOpen surfaces the "false-open" graph signal (task #c80fe88f, sibling
+	// of #65dc5949 which sat 80 days in urgent although every subtask had been
+	// closed since June): priority and created_at describe the CARD, not
+	// whether the WORK under it is still moving, and Mesh already has the
+	// graph data to say so. Populated only for parent tasks (SubtaskCount > 0)
+	// whose own status is still open, on every enriched list/get query — same
+	// computed-field mechanism as SubtaskCount itself, not a separate fetch.
+	FalseOpen *FalseOpenSignal `json:"false_open,omitempty"`
+}
+
+// FalseOpenSignal reports whether an open umbrella's own content is stale
+// relative to its subtasks. Two mutually exclusive flags on purpose, not one
+// merged bool: task #c80fe88f's review found that a single "false-open" flag
+// built to also catch #65dc5949 (which has one still-open BACKLOG child,
+// c0afa1c5) would equally catch umbrellas that are correctly blocked on a
+// parked dependency — the exact opposite failure the fleet had already
+// separately catalogued (#d68b8466, "correctly-blocked-not-neglected").
+// Blending the two populations would make the signal as untrustworthy as the
+// priority field it's meant to replace.
+type FalseOpenSignal struct {
+	// AllChildrenClosed: every subtask is done/cancelled (StaleDays >=
+	// FalseOpenStaleDays). Content is provably finished — the strong signal,
+	// safe to show as "this umbrella can probably be re-triaged".
+	AllChildrenClosed bool `json:"all_children_closed"`
+	// OnlyParkedChildrenLeft: at least one subtask is still open, and every
+	// open subtask sits in backlog — none todo/in_progress/review/triage
+	// (StaleDays >= FalseOpenStaleDays). Weaker: content exists, it just
+	// isn't moving. This is the bucket #65dc5949 belongs to (blocked on
+	// backlog child c0afa1c5), never AllChildrenClosed.
+	OnlyParkedChildrenLeft bool `json:"only_parked_children_left"`
+	// OpenChildrenCount is how many subtasks are still in a non-terminal
+	// status right now (any category other than done/cancelled).
+	OpenChildrenCount int `json:"open_children_count"`
+	// StaleDays is days since the umbrella's own last activity: the newer of
+	// its updated_at and its most recent comment's created_at. Both flags
+	// above require StaleDays >= FalseOpenStaleDays to fire — a parent whose
+	// children just closed minutes ago is not yet a signal, it's a card that
+	// hasn't caught up.
+	StaleDays int `json:"stale_days"`
 }
 
 // HumanGateInfo exposes, read-only, the ownership service.commentService
