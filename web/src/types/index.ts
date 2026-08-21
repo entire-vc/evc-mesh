@@ -1090,6 +1090,45 @@ export interface CreateVCSLinkRequest {
 
 export type IntegrationProvider = "slack" | "github" | "spark" | "mcp" | "telegram";
 
+// ---------------------------------------------------------------------------
+// Secrets (write-only store)
+// ---------------------------------------------------------------------------
+
+export type SecretScope = "workspace" | "project" | "agent";
+
+// The masked view of a secret. There is deliberately no `value` field: the API
+// has no endpoint that returns one, so a component that tried to render a value
+// would not compile. The remaining fields are exactly what
+// scripts/env-inventory.py prints, so the UI list and the host inventory can be
+// read side by side.
+export interface Secret {
+  id: string;
+  name: string;
+  scope: SecretScope;
+  project_id?: string;
+  agent_id?: string;
+  value_sha256_prefix: string;
+  value_length: number;
+  value_char_class: string;
+  expires_at?: string;
+  created_by: string;
+  created_by_type: "user" | "agent";
+  created_at: string;
+  rotated_at?: string;
+}
+
+// The create payload. `value` lives only here and only long enough to be
+// POSTed — it is never stored in component state beyond the open form, and
+// never written back from a response, because no response carries one.
+export interface CreateSecretRequest {
+  name: string;
+  scope: SecretScope;
+  project_id?: string;
+  agent_id?: string;
+  value: string;
+  expires_at?: string;
+}
+
 export interface IntegrationConfig {
   id: string;
   workspace_id: string;
