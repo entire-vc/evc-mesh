@@ -72,6 +72,19 @@
 		}
 	}
 
+	# --- MIME-sniffing (Mesh #e8c44540, 2026-08-21) --------------------------
+	# Site-level on purpose: it must also cover /s3/*, which serves objects
+	# uploaded by users. Without it a browser is free to disregard the
+	# Content-Type MinIO reports and execute an upload as script or stylesheet
+	# if the bytes look like one -- the one surface here where the content is
+	# not written by us.
+	#
+	# Chosen as the header this repo's Caddy deploy pipeline was first proven
+	# with end to end: the two prior deploys were a no-op and a change with no
+	# externally visible effect, so "a config edit reaches prod" had never
+	# actually been observed. This one is visible in `curl -sI`.
+	header X-Content-Type-Options "nosniff"
+
 	handle /api/* {
 		reverse_proxy 127.0.0.1:8005
 	}
