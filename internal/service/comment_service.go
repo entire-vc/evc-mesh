@@ -2271,7 +2271,7 @@ func (s *commentService) reportWithdrawalMiss(ctx context.Context, comment *doma
 // DID count, it was refused for a different one, and conflating the two
 // notices would tell the author "reword the negator" when the actual fix is
 // "split this into two comments".
-func (s *commentService) reportWithdrawalMarkerConflict(ctx context.Context, comment *domain.Comment, task *domain.Task) {
+func (s *commentService) reportWithdrawalMarkerConflict(ctx context.Context, task *domain.Task) {
 	now := timeNow()
 	sysComment := &domain.Comment{
 		ID:         uuid.New(),
