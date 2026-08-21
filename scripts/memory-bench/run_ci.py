@@ -1764,7 +1764,9 @@ def cmd_run(args: argparse.Namespace) -> int:
     # move recall@k — the metric scores against `answer_session_ids`. Rewriting
     # a gold session silently biases every arm while they all still report a
     # number, which is the exact failure this benchmark is being repaired from.
-    touched = corpus_sanitize.assert_only_distractors_touched(dataset)
+    touched = corpus_sanitize.assert_only_distractors_touched(
+        dataset, format_session_text
+    )
     if touched:
         labels = sorted({l for t in touched for l in t.labels})
         print(

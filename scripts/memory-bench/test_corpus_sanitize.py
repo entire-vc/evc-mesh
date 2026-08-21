@@ -124,6 +124,45 @@ class TestAgainstRealCorpus(unittest.TestCase):
             f"{len(touched)}/{total} sessions rewritten — detector is too broad",
         )
 
+    def test_audit_scans_the_string_the_write_path_sends(self):
+        """The pre-flight must scan the REAL formatted bytes, not a lookalike.
+
+        `run_ci.format_session_text` capitalises the role and prepends a
+        `[Conversation date: …]` line; the local fallback does neither. Auditing
+        the fallback's output would answer a question nobody asked — the
+        guarantee wanted is "what `_store` sends is clean". Injecting the real
+        formatter is what makes that true, so it is asserted rather than
+        described. (The earlier docstring claimed the two could not disagree;
+        independent review showed they can.)
+        """
+        import run_ci
+
+        session = [{"role": "user", "content": "hi"}]
+        self.assertNotEqual(
+            corpus_sanitize.session_text(session, date="2023-05-01"),
+            run_ci.format_session_text(session, date="2023-05-01"),
+            "fallback and write-path formatters now agree — this test is moot, "
+            "but the injection it guards should stay",
+        )
+
+        # A violation placed in the date line is visible ONLY to the real
+        # formatter: the fallback with no date, and any audit that ignores
+        # dates, would both miss it.
+        q = {
+            "question_id": "fmt-probe",
+            "answer_session_ids": [],
+            "haystack_session_ids": ["s0"],
+            "haystack_dates": ["2023-05-01​"],
+            "haystack_sessions": [session],
+        }
+        self.assertEqual(
+            corpus_sanitize.audit([q], run_ci.format_session_text),
+            corpus_sanitize.audit([q], run_ci.format_session_text),
+        )
+        touched = corpus_sanitize.audit([q], run_ci.format_session_text)
+        self.assertEqual(len(touched), 1, "real formatter must see the date line")
+        self.assertIn("invisible-character", touched[0].labels)
+
     def test_gold_rewrite_raises(self):
         """Mutation: make a gold session violate; the pre-flight must refuse.
 

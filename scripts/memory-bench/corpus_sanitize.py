@@ -103,12 +103,27 @@ def normalise(text: str) -> Normalised:
     return Normalised(text, tuple(labels))
 
 
-def session_text(session: Iterable[dict]) -> str:
-    """Join a haystack session the way run_ci.format_session_text does.
+def session_text(session: Iterable[dict], date: str = "") -> str:
+    """Fallback formatter for inspecting a corpus without importing run_ci.
 
-    Only used for *inspecting* a corpus (the pre-flight audit below). The live
-    write path normalises the already-formatted string, so the two cannot
-    disagree about what was scanned.
+    ⚠️ This is NOT the live write path's formatter. `run_ci.format_session_text`
+    capitalises the role and prepends a `[Conversation date: …]` line; this one
+    does neither, so the two scan *different strings*.
+
+    That difference is why `audit` takes a `formatter` argument: the pre-flight
+    check passes run_ci's real one, so what it scans is byte-identical to what
+    `_store` will send. This fallback exists only for standalone use (tests,
+    ad-hoc corpus inspection) where importing run_ci would be circular.
+
+    An earlier version of this docstring claimed the two "cannot disagree",
+    which was an overclaim — they can, and only the injected formatter makes
+    the guarantee real. Caught in independent review.
+
+    Kept deliberately NOT equivalent to run_ci's: `date` is accepted and
+    ignored. Making the fallback match would erase the difference the injection
+    exists to bridge, and `test_audit_scans_the_string_the_write_path_sends`
+    would then pass whether or not the injected formatter is honoured — which
+    it did, briefly, until a mutation caught it.
     """
     return "\n".join(
         f"{t.get('role', '')}: {t.get('content', '')}" for t in session
@@ -123,14 +138,24 @@ class Touched(NamedTuple):
     is_gold: bool
 
 
-def audit(dataset: list[dict]) -> list[Touched]:
-    """Report every session normalisation would rewrite, gold ones included."""
+def audit(dataset: list[dict], formatter=None) -> list[Touched]:
+    """Report every session normalisation would rewrite, gold ones included.
+
+    `formatter` must be the SAME callable the write path uses — pass
+    `run_ci.format_session_text`. Auditing a differently-formatted string would
+    make this check answer a question nobody asked: the guarantee wanted here is
+    "the bytes `_store` sends are clean", not "some rendering of the session is".
+    Defaults to the local fallback for standalone use.
+    """
+    fmt = formatter or session_text
     out: list[Touched] = []
     for q in dataset:
         gold = set(q.get("answer_session_ids") or [])
         ids = q.get("haystack_session_ids") or []
+        dates = q.get("haystack_dates") or []
         for i, sess in enumerate(q.get("haystack_sessions") or []):
-            res = normalise(session_text(sess))
+            date = dates[i] if i < len(dates) else ""
+            res = normalise(fmt(sess, date=date))
             if not res.changed:
                 continue
             sid = ids[i] if i < len(ids) else ""
@@ -150,7 +175,7 @@ class GoldSessionRewritten(RuntimeError):
     """Normalisation would alter a session that carries an answer."""
 
 
-def assert_only_distractors_touched(dataset: list[dict]) -> list[Touched]:
+def assert_only_distractors_touched(dataset: list[dict], formatter=None) -> list[Touched]:
     """Fail loudly if normalisation reaches a gold session.
 
     Today the answer is 0 of 9 — every affected session is a distractor, so the
@@ -160,7 +185,7 @@ def assert_only_distractors_touched(dataset: list[dict]) -> list[Touched]:
     number, which is the failure mode this whole card exists to remove. So it
     raises here, before a paid run, instead of being discovered in one.
     """
-    touched = audit(dataset)
+    touched = audit(dataset, formatter)
     gold = [t for t in touched if t.is_gold]
     if gold:
         detail = "; ".join(
