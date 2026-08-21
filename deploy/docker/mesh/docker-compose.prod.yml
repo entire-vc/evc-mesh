@@ -130,6 +130,14 @@ services:
       REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
       REDIS_DB: ${REDIS_DB:-0}
       NATS_URL: ${NATS_URL:-nats://nats:4222}
+      # MESH_EVENTS stream limits + the monitoring endpoint used to discover
+      # the host's real storage limit if NATS_STREAM_MAX_BYTES is too big for
+      # it. See .env.prod.example for the "why" on each of these.
+      NATS_MONITOR_URL: ${NATS_MONITOR_URL:-http://nats:8222}
+      NATS_STREAM_MAX_BYTES: ${NATS_STREAM_MAX_BYTES:-10737418240}
+      NATS_STREAM_MAX_AGE: ${NATS_STREAM_MAX_AGE:-720h}
+      NATS_MAX_MSG_SIZE: ${NATS_MAX_MSG_SIZE:-262144}
+      NATS_REPLICAS: ${NATS_REPLICAS:-1}
       S3_ENDPOINT: ${S3_ENDPOINT:-minio:9000}
       S3_ACCESS_KEY_ID: ${MINIO_ACCESS_KEY:?MINIO_ACCESS_KEY is required}
       S3_SECRET_ACCESS_KEY: ${MINIO_SECRET_KEY:?MINIO_SECRET_KEY is required}

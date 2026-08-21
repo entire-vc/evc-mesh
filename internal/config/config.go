@@ -176,9 +176,25 @@ func (c RedisConfig) Addr() string {
 	return fmt.Sprintf("%s:%d", c.Host, c.Port)
 }
 
-// NATSConfig holds NATS connection settings.
+// NATSConfig holds NATS connection settings, including the JetStream
+// MESH_EVENTS stream's storage limits. StreamMaxBytes/StreamMaxAge/
+// MaxMsgSize/Replicas mirror eventbus.DefaultConfig()'s hardcoded values as
+// their defaults below — env vars override per-deployment (e.g. a smaller
+// disk needs a smaller NATS_STREAM_MAX_BYTES than the 10 GB default).
 type NATSConfig struct {
 	URL string
+	// MonitorURL is the NATS monitoring HTTP endpoint (started via
+	// nats-server's --http_port), used only to discover the server's real
+	// storage limit when the configured StreamMaxBytes is rejected as
+	// insufficient — see internal/eventbus/nats.go ensureStream(). Distinct
+	// from URL (the client protocol port) because nats-server exposes them
+	// on two different ports/addresses, and — inside the prod compose
+	// network — under different defaults than local dev.
+	MonitorURL     string
+	StreamMaxBytes int64         // NATS_STREAM_MAX_BYTES, default 10 GB
+	StreamMaxAge   time.Duration // NATS_STREAM_MAX_AGE, default 30 days
+	MaxMsgSize     int32         // NATS_MAX_MSG_SIZE, default 256 KB
+	Replicas       int           // NATS_REPLICAS, default 1
 }
 
 // S3Config holds S3-compatible storage settings (MinIO or AWS S3).
@@ -262,7 +278,12 @@ func Load() *Config {
 			DB:       getEnvInt("REDIS_DB", 0),
 		},
 		NATS: NATSConfig{
-			URL: getEnv("NATS_URL", "nats://localhost:4223"),
+			URL:            getEnv("NATS_URL", "nats://localhost:4223"),
+			MonitorURL:     getEnv("NATS_MONITOR_URL", "http://localhost:8223"),
+			StreamMaxBytes: getEnvInt64("NATS_STREAM_MAX_BYTES", 10*1024*1024*1024), // 10 GB
+			StreamMaxAge:   getEnvDuration("NATS_STREAM_MAX_AGE", 30*24*time.Hour),  // 30 days
+			MaxMsgSize:     int32(getEnvInt("NATS_MAX_MSG_SIZE", 256*1024)),         // 256 KB
+			Replicas:       getEnvInt("NATS_REPLICAS", 1),
 		},
 		S3: S3Config{
 			Endpoint:        getEnv("S3_ENDPOINT", "localhost:9002"),
@@ -374,6 +395,15 @@ func getEnvOrFile(key, fileKey string) string {
 func getEnvInt(key string, defaultVal int) int {
 	if val, ok := os.LookupEnv(key); ok {
 		if i, err := strconv.Atoi(val); err == nil {
+			return i
+		}
+	}
+	return defaultVal
+}
+
+func getEnvInt64(key string, defaultVal int64) int64 {
+	if val, ok := os.LookupEnv(key); ok {
+		if i, err := strconv.ParseInt(val, 10, 64); err == nil {
 			return i
 		}
 	}

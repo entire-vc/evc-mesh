@@ -573,10 +573,15 @@ func main() {
 	// 6a. Connect to NATS and Redis for the event bus (graceful: continue without if unavailable).
 	var eb *eventbus.EventBus
 	ebCfg := eventbus.EventBusConfig{
-		NATSUrl:       cfg.NATS.URL,
-		RedisAddr:     cfg.Redis.Addr(),
-		RedisPassword: cfg.Redis.Password,
-		RedisDB:       cfg.Redis.DB,
+		NATSUrl:        cfg.NATS.URL,
+		NATSMonitorURL: cfg.NATS.MonitorURL,
+		RedisAddr:      cfg.Redis.Addr(),
+		RedisPassword:  cfg.Redis.Password,
+		RedisDB:        cfg.Redis.DB,
+		NATSReplicas:   cfg.NATS.Replicas,
+		StreamMaxAge:   cfg.NATS.StreamMaxAge,
+		StreamMaxBytes: cfg.NATS.StreamMaxBytes,
+		MaxMsgSize:     cfg.NATS.MaxMsgSize,
 	}
 	eb, err = eventbus.New(context.Background(), ebCfg, eventBusRepo)
 	if err != nil {
