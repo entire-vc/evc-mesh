@@ -322,6 +322,26 @@ type DocumentRepository interface {
 	// chain. Re-parenting uses it to refuse the cycles that would otherwise
 	// detach a subtree from every listing that walks down from the roots.
 	HasAncestor(ctx context.Context, docID, ancestorID uuid.UUID) (bool, error)
+	// GetBySourceInProject finds a copy by its origin — (project_id, source_share,
+	// source_path), the partial unique index migration 20260820110 enforces for
+	// every non-'own' row (uq_documents_source). Nil, nil when no such copy
+	// exists. This is what makes mounting a share idempotent: a re-run only
+	// creates the files-index entries that have no row yet, instead of walking
+	// the whole share into duplicates every time it runs.
+	GetBySourceInProject(ctx context.Context, projectID uuid.UUID, sourceShare, sourcePath string) (*domain.Document, error)
+	// CreateExternalCopy inserts a document whose source_kind is not 'own'.
+	// Create's own INSERT list omits source_kind and its four companions on
+	// purpose — see DocumentRepo.Create — relying on the column's DEFAULT 'own'
+	// for the only kind that method ever produces. A copy has to write all five
+	// explicitly (the CHECK constraint requires it), so it needs a distinct
+	// INSERT rather than a branch inside Create.
+	CreateExternalCopy(ctx context.Context, doc *domain.Document) error
+	// RefreshSyncedCopy stamps a copy as checked-against-its-source as of
+	// syncedAt, recording the hash observed at that check. bumpVersion is true
+	// only when the body was actually rewritten alongside this call — the
+	// caller already knows whether the hash changed (that decision is made once,
+	// by whoever calls this, and is not re-derived here from the two hashes).
+	RefreshSyncedCopy(ctx context.Context, id uuid.UUID, sourceSHA256 string, syncedAt time.Time, bumpVersion bool) (version int, err error)
 	// SetSearchText stores the copy of the body that the full-text index is built
 	// from. Called after the body reaches object storage, never instead of it —
 	// S3 stays canonical and this is only what makes the row findable.

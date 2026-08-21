@@ -371,6 +371,81 @@ func (r *DocumentRepo) HasAncestor(ctx context.Context, docID, ancestorID uuid.U
 	return found, nil
 }
 
+// GetBySourceInProject looks up a copy by (project_id, source_share,
+// source_path) — see uq_documents_source. Only ever matches a non-'own' row:
+// an 'own' document's source_share is always NULL, and NULL never equals a
+// supplied string, so this cannot accidentally return one of those.
+func (r *DocumentRepo) GetBySourceInProject(ctx context.Context, projectID uuid.UUID, sourceShare, sourcePath string) (*domain.Document, error) {
+	q := documentEnrichedSelect + `
+		  FROM documents d
+		 WHERE d.project_id = $1 AND d.source_share = $2 AND d.source_path = $3 AND d.deleted_at IS NULL`
+	var row documentRow
+	if err := r.db.GetContext(ctx, &row, q, projectID, sourceShare, sourcePath); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	d := row.toDomain()
+	return &d, nil
+}
+
+// CreateExternalCopy inserts a copy document — the five source_* /
+// synced_at columns are named explicitly, unlike Create's INSERT list, because
+// a copy is required to populate all of them (chk_documents_source_shape) and
+// none of them has a default suitable for a copy the way 'own' is for
+// source_kind.
+func (r *DocumentRepo) CreateExternalCopy(ctx context.Context, doc *domain.Document) error {
+	const q = `
+		INSERT INTO documents (
+			id, project_id, parent_id, slug, title, storage_key,
+			position, created_by, created_by_type, updated_by, updated_by_type,
+			created_at, updated_at, version,
+			source_kind, source_share, source_path, source_sha256, synced_at, external_author
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
+			$15, $16, $17, $18, $19, $20)
+	`
+	_, err := r.db.ExecContext(ctx, q,
+		doc.ID, doc.ProjectID, doc.ParentID, doc.Slug, doc.Title, doc.StorageKey,
+		doc.Position, doc.CreatedBy, doc.CreatedByType, doc.UpdatedBy, doc.UpdatedByType,
+		doc.CreatedAt, doc.UpdatedAt, doc.Version,
+		doc.SourceKind, doc.SourceShare, doc.SourcePath, doc.SourceSHA256, doc.SyncedAt, doc.ExternalAuthor,
+	)
+	if isDocumentSlugConflict(err) {
+		return apierror.Conflict("a document with this slug already exists in this location")
+	}
+	return err
+}
+
+// RefreshSyncedCopy stamps synced_at/source_sha256 as of this check, bumping
+// version only when bumpVersion says the body was rewritten alongside it — see
+// the interface doc comment for why that decision is not re-derived here.
+//
+// source_kind <> 'own' in the WHERE clause is a belt-and-suspenders check: an
+// 'own' document should never reach this call, but if one somehow did, this
+// refuses to stamp sync metadata onto a row the CHECK constraint requires to
+// have none.
+func (r *DocumentRepo) RefreshSyncedCopy(ctx context.Context, id uuid.UUID, sourceSHA256 string, syncedAt time.Time, bumpVersion bool) (int, error) {
+	versionExpr := "version"
+	if bumpVersion {
+		versionExpr = "version + 1"
+	}
+	q := `
+		UPDATE documents
+		   SET source_sha256 = $2, synced_at = $3, updated_at = $3, version = ` + versionExpr + `
+		 WHERE id = $1 AND deleted_at IS NULL AND source_kind <> 'own'
+		RETURNING version`
+	var newVersion int
+	err := r.db.GetContext(ctx, &newVersion, q, id, sourceSHA256, syncedAt)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, apierror.NotFound("Document")
+		}
+		return 0, err
+	}
+	return newVersion, nil
+}
+
 // isDocumentSlugConflict reports whether err is the partial unique index on
 // (project, parent, slug) refusing a duplicate among live siblings — a caller
 // mistake worth a 409, not a 500. Constraint-named rather than code-only so an

@@ -2828,6 +2828,59 @@ func (m *MockDocumentRepository) HasAncestor(_ context.Context, docID, ancestorI
 	return false, nil
 }
 
+// GetBySourceInProject mirrors uq_documents_source: a match on
+// (project_id, source_share, source_path) among live, non-'own' rows.
+func (m *MockDocumentRepository) GetBySourceInProject(_ context.Context, projectID uuid.UUID, sourceShare, sourcePath string) (*domain.Document, error) {
+	if m.errToReturn != nil {
+		return nil, m.errToReturn
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, d := range m.items {
+		if d.ProjectID != projectID || d.DeletedAt != nil || d.SourceKind == domain.DocumentSourceOwn {
+			continue
+		}
+		if d.SourceShare != nil && *d.SourceShare == sourceShare && d.SourcePath != nil && *d.SourcePath == sourcePath {
+			copied := *d
+			return &copied, nil
+		}
+	}
+	return nil, nil
+}
+
+// CreateExternalCopy stores a copy row exactly as Create stores an own one —
+// the mock doesn't need two code paths just because the real repository does
+// (its reason is the INSERT column list, which doesn't exist here).
+func (m *MockDocumentRepository) CreateExternalCopy(ctx context.Context, doc *domain.Document) error {
+	return m.Create(ctx, doc)
+}
+
+// RefreshSyncedCopy is Update's version-bump logic narrowed to the two fields
+// a sync check touches, so a test can assert on synced_at/source_sha256
+// without also asserting on title/parent_id/position, which this call never
+// changes.
+func (m *MockDocumentRepository) RefreshSyncedCopy(_ context.Context, id uuid.UUID, sourceSHA256 string, syncedAt time.Time, bumpVersion bool) (int, error) {
+	if m.errToReturn != nil {
+		return 0, m.errToReturn
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	existing, ok := m.items[id]
+	if !ok || existing.DeletedAt != nil {
+		return 0, apierror.NotFound("Document")
+	}
+	newVersion := existing.Version
+	if bumpVersion {
+		newVersion++
+	}
+	sha := sourceSHA256
+	existing.SourceSHA256 = &sha
+	existing.SyncedAt = &syncedAt
+	existing.UpdatedAt = syncedAt
+	existing.Version = newVersion
+	return newVersion, nil
+}
+
 // ---------------------------------------------------------------------------
 // MockDocumentAttachmentRepository
 // ---------------------------------------------------------------------------

@@ -511,12 +511,19 @@ func main() {
 		documentWatchQuietWindow(),
 	)
 
+	// Constructed here, ahead of documentService, because documentService's
+	// optional Team Relay refresher needs it to resolve a project's share/agent
+	// key on every open of a mounted copy.
+	projectIntegrationService := service.NewProjectIntegrationService(projectIntegrationRepo)
+	teamRelayMountService := service.NewTeamRelayMountService(documentRepo, documentStore, projectIntegrationService)
+
 	// The comment repository is here because a body write moves the comments
 	// anchored into that body: PATCH re-resolves every anchor against the markdown
 	// it just stored, and nulls the ones whose text is gone. It is a required
 	// argument, not an option — see the field's note in documentService.
 	documentService := service.NewDocumentService(documentRepo, documentStore, projectRepo, documentCommentRepo,
-		service.WithDocumentWatch(documentWatchService))
+		service.WithDocumentWatch(documentWatchService),
+		service.WithTeamRelayRefresher(teamRelayMountService))
 
 	// The attachment service takes the full StorageClient, not documentStore: an
 	// attachment is fetched by the browser through a presigned URL (an <img> cannot
@@ -552,7 +559,8 @@ func main() {
 	)
 
 	// Wire Team Relay publisher into artifact service (best-effort; fires on upload).
-	projectIntegrationService := service.NewProjectIntegrationService(projectIntegrationRepo)
+	// projectIntegrationService itself is constructed earlier, alongside
+	// teamRelayMountService — see the comment there.
 	relayClient := teamrelay.NewClient(projectIntegrationRepo, taskRepo, projectRepo)
 	if asc, ok := artifactService.(service.ArtifactServiceConfigurable); ok {
 		asc.SetRelayPublisher(relayClient)
@@ -636,6 +644,7 @@ func main() {
 	projectIntegrationHandler := handler.NewProjectIntegrationHandler(projectIntegrationService)
 	trSearchHandler := handler.NewTrSearchHandler(projectIntegrationService)
 	trDocumentHandler := handler.NewTrDocumentHandler(projectIntegrationService)
+	trMountHandler := handler.NewTrMountHandler(teamRelayMountService)
 	canonicalUpdatesHandler := handler.NewCanonicalUpdatesHandler(memoryService, sessionRepo, agentService)
 	mentionablesService := service.NewMentionablesService(agentRepo, userRepo)
 	mentionablesHandler := handler.NewMentionablesHandler(mentionablesService)
@@ -1369,6 +1378,10 @@ func main() {
 	// (D10). The route it replaces resolved an iframe src for an embedded
 	// TeamRelay page; the iframe, its 6s timeout and its dead end are gone with it.
 	api.GET("/projects/:proj_id/tr/document", trDocumentHandler.Get, projAccess)
+	// R3: materialize the configured share into this project's Docs tree.
+	// Explicit action, not implicit on a tree read — see TrMountHandler's doc
+	// comment.
+	api.POST("/projects/:proj_id/tr/mount", trMountHandler.Sync, projAccess, rbac(mw.PermManageWebhooks))
 
 	// Analytics routes.
 	api.GET("/workspaces/:ws_id/analytics", analyticsHandler.GetMetrics)

@@ -60,6 +60,13 @@ type documentService struct {
 	// document must remain editable on a deployment where notifications are not
 	// wired up at all.
 	watch DocumentWatchService
+
+	// trRefresher is optional, the same way watch is: without it a Team Relay
+	// copy is served exactly as it was last synced, forever — which for a
+	// deployment with no Team Relay integration wired up never differs from
+	// the alternative anyway, since no document there is ever SourceKind
+	// team_relay in the first place.
+	trRefresher TeamRelayRefresher
 }
 
 // DocumentServiceOption configures optional collaborators.
@@ -70,6 +77,12 @@ type DocumentServiceOption func(*documentService)
 // change-notice, and a delete tells the watchers before their rows go with it.
 func WithDocumentWatch(w DocumentWatchService) DocumentServiceOption {
 	return func(s *documentService) { s.watch = w }
+}
+
+// WithTeamRelayRefresher wires the R3 freshness check into GetByIDInWorkspace —
+// see the call site there for what it does and does not do on failure.
+func WithTeamRelayRefresher(r TeamRelayRefresher) DocumentServiceOption {
+	return func(s *documentService) { s.trRefresher = r }
 }
 
 // NewDocumentService returns a DocumentService backed by the given repositories
@@ -245,6 +258,23 @@ func (s *documentService) GetByIDInWorkspace(ctx context.Context, id, workspaceI
 	}
 	if doc == nil {
 		return nil, apierror.NotFound("Document")
+	}
+
+	// A Team Relay copy gets one chance, right here on open, to check whether
+	// its TTL has elapsed and — only then — whether its source has actually
+	// moved. This is the sole call site: nothing on the tree-list path
+	// (ListByProject) touches the relay, which is what keeps a Docs tree read
+	// from repeating the walk-the-whole-share storm §3.6 warns about.
+	//
+	// A refresh failure (key rejected, relay unreachable, ...) is logged, not
+	// returned: the copy already on hand is still a real, readable document,
+	// and refusing to serve it because the source could not be re-checked
+	// would make a transient relay hiccup take down every mounted page at
+	// once. The next open tries again.
+	if s.trRefresher != nil && doc.SourceKind == domain.DocumentSourceTeamRelay {
+		if refreshErr := s.trRefresher.RefreshIfStale(ctx, doc); refreshErr != nil {
+			log.Printf("[documents] team relay refresh failed for %s: %v — serving last synced copy", doc.ID, refreshErr)
+		}
 	}
 
 	if s.storage == nil {
