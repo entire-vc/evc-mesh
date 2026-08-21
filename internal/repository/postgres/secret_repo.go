@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -299,6 +300,64 @@ func (r *SecretRepo) ListCurrent(ctx context.Context, workspaceID uuid.UUID, pro
 		result = append(result, rows[i].toDomain())
 	}
 	return result, nil
+}
+
+// GetByID returns one row's masked metadata, scoped to workspaceID. It
+// selects secretMaskedColumns like every other read path here, so the value
+// has no column to arrive in. The workspace_id predicate is part of the
+// WHERE clause rather than a post-fetch check: a row belonging to another
+// tenant produces the same NotFound as an id that names nothing, so the API
+// cannot be used to probe for the existence of another workspace's secrets.
+func (r *SecretRepo) GetByID(ctx context.Context, workspaceID, id uuid.UUID) (domain.Secret, error) {
+	q := fmt.Sprintf(`SELECT %s FROM secrets WHERE id = $1 AND workspace_id = $2`, secretMaskedColumns)
+	var row secretRow
+	if err := r.db.GetContext(ctx, &row, q, id, workspaceID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return domain.Secret{}, apierror.NotFound("Secret")
+		}
+		return domain.Secret{}, err
+	}
+	return row.toDomain(), nil
+}
+
+// AssertScopeRefInWorkspace verifies in one round-trip that whichever of
+// project_id / agent_id the caller supplied belongs to workspaceID.
+//
+// This is not redundant with the table's foreign keys. secrets.project_id
+// references projects(id) with no workspace predicate, so a create naming
+// another tenant's project id satisfies the FK, the scope CHECK and the
+// partial unique index alike — the row lands, referencing a project the
+// caller cannot see. Nothing downstream would catch it either: the
+// materializer matches on workspace_id AND project_id together, so the row
+// would simply never resolve, which reads as a silently broken secret rather
+// than as the tenancy error it is.
+func (r *SecretRepo) AssertScopeRefInWorkspace(ctx context.Context, workspaceID uuid.UUID, projectID, agentID *uuid.UUID) error {
+	if projectID == nil && agentID == nil {
+		return nil
+	}
+	const q = `SELECT
+		($2::uuid IS NULL OR EXISTS (
+			SELECT 1 FROM projects WHERE id = $2 AND workspace_id = $1 AND deleted_at IS NULL)) AS project_ok,
+		($3::uuid IS NULL OR EXISTS (
+			SELECT 1 FROM agents WHERE id = $3 AND workspace_id = $1 AND deleted_at IS NULL)) AS agent_ok`
+	var res struct {
+		ProjectOK bool `db:"project_ok"`
+		AgentOK   bool `db:"agent_ok"`
+	}
+	if err := r.db.GetContext(ctx, &res, q, workspaceID, projectID, agentID); err != nil {
+		return err
+	}
+	fields := map[string]string{}
+	if !res.ProjectOK {
+		fields["project_id"] = "must name a project in this workspace"
+	}
+	if !res.AgentOK {
+		fields["agent_id"] = "must name an agent in this workspace"
+	}
+	if len(fields) > 0 {
+		return apierror.ValidationError(fields)
+	}
+	return nil
 }
 
 // ResolveCurrentValues is the ONLY method in this package that decrypts a

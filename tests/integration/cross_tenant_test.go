@@ -104,6 +104,14 @@ var wsScopedRoutes = []wsRoute{
 
 	{http.MethodGet, "/mentionables", nil},
 	{http.MethodGet, "/comments/recent", nil},
+
+	// The secret store. A non-member reaching POST here would plant a
+	// credential that another tenant's lanes then materialize into their env
+	// files; reaching GET would hand them the fingerprint (sha256[:8] + length
+	// + character class) of every secret that tenant holds. Both are asserted
+	// like everything else — neither is an exception.
+	{http.MethodGet, "/secrets", nil},
+	{http.MethodPost, "/secrets", map[string]string{"name": "INTRUDER_TOKEN", "scope": "workspace", "value": "planted"}},
 }
 
 // wsPublicRoute is a workspace-scoped route that is deliberately readable

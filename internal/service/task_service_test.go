@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	githubapi "github.com/entire-vc/evc-mesh/internal/integration/github"
 	"github.com/entire-vc/evc-mesh/internal/repository"
 	"github.com/entire-vc/evc-mesh/pkg/actorctx"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
@@ -2829,6 +2830,245 @@ func setupTaskServiceWithDoneGate() (*taskService, *MockTaskRepository, *MockTas
 	).(*taskService)
 	timeNow = func() time.Time { return frozenTime }
 	return svc, taskRepo, statusRepo, vcsRepo, commentRepo
+}
+
+// fakeGitHubPRChecker is a scripted githubapi.PullRequestChecker for the
+// done-evidence gate's live-check branch (#5f7f8c6e). It records every call
+// so tests can assert the gate actually consulted it rather than passing/
+// failing for an unrelated reason.
+type fakeGitHubPRChecker struct {
+	mu                  sync.Mutex
+	state               githubapi.PullRequestState
+	err                 error
+	calls               int
+	lastOwner, lastRepo string
+	lastNumber          int
+}
+
+func (f *fakeGitHubPRChecker) GetPullRequestState(_ context.Context, owner, repo string, number int) (githubapi.PullRequestState, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls++
+	f.lastOwner, f.lastRepo, f.lastNumber = owner, repo, number
+	if f.err != nil {
+		return githubapi.PullRequestState{}, f.err
+	}
+	return f.state, nil
+}
+
+func (f *fakeGitHubPRChecker) callCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.calls
+}
+
+func setupTaskServiceWithDoneGateAndGitHubChecker(checker githubapi.PullRequestChecker) (*taskService, *MockTaskRepository, *MockTaskStatusRepository, *MockVCSLinkRepository, *MockCommentRepository) {
+	taskRepo := NewMockTaskRepository()
+	statusRepo := NewMockTaskStatusRepository()
+	depRepo := NewMockTaskDependencyRepository()
+	activityRepo := NewMockActivityLogRepository()
+	vcsRepo := NewMockVCSLinkRepository()
+	commentRepo := NewMockCommentRepository()
+
+	svc := newTestTaskService(taskRepo, statusRepo, depRepo, activityRepo,
+		WithVCSLinkRepoTask(vcsRepo),
+		WithCommentRepoTask(commentRepo),
+		WithGitHubPRChecker(checker),
+	).(*taskService)
+	timeNow = func() time.Time { return frozenTime }
+	return svc, taskRepo, statusRepo, vcsRepo, commentRepo
+}
+
+// The reported incident: PR merged on GitHub, but the cached vcs_links
+// record still says "open" (the webhook that would have updated it never
+// arrived for this link). The gate must ask GitHub directly and let the
+// move through — without any manual add_vcs_link intervention.
+func TestTaskService_MoveTask_DoneGate_PassesWhenGitHubReportsLiveMerged(t *testing.T) {
+	projectID := uuid.New()
+	taskID := uuid.New()
+	statusID := uuid.New()
+	linkID := uuid.New()
+
+	checker := &fakeGitHubPRChecker{state: githubapi.PullRequestState{Merged: true, State: "closed"}}
+	svc, taskRepo, statusRepo, vcsRepo, _ := setupTaskServiceWithDoneGateAndGitHubChecker(checker)
+
+	taskRepo.items[taskID] = &domain.Task{
+		ID:           taskID,
+		ProjectID:    projectID,
+		StatusID:     uuid.New(),
+		Title:        "Task with a PR merged 9.5h ago on GitHub",
+		VCSLinkCount: 1,
+	}
+	statusRepo.items[statusID] = &domain.TaskStatus{
+		ID:        statusID,
+		ProjectID: projectID,
+		Category:  domain.StatusCategoryDone,
+	}
+	vcsRepo.items = append(vcsRepo.items, domain.VCSLink{
+		ID:         linkID,
+		TaskID:     taskID,
+		Provider:   domain.VCSProviderGitHub,
+		LinkType:   domain.VCSLinkTypePR,
+		Status:     domain.VCSLinkStatusOpen, // stale cached record
+		URL:        "https://github.com/entire-vc/evc-mesh/pull/427",
+		Title:      "feat: something already merged",
+		ExternalID: "427",
+	})
+
+	err := svc.MoveTask(context.Background(), taskID, MoveTaskInput{StatusID: &statusID})
+
+	require.NoError(t, err, "a GitHub-merged PR must not block move_task->done without manual intervention")
+	assert.Equal(t, 1, checker.callCount())
+	assert.Equal(t, "entire-vc", checker.lastOwner)
+	assert.Equal(t, "evc-mesh", checker.lastRepo)
+	assert.Equal(t, 427, checker.lastNumber)
+
+	// Self-heal: the cache should now reflect what GitHub said, so a
+	// follow-up read (or another agent hitting the same gate) doesn't need
+	// another round trip and doesn't see a misleading "open" anywhere.
+	links, lerr := vcsRepo.ListByTask(context.Background(), taskID)
+	require.NoError(t, lerr)
+	require.Len(t, links, 1)
+	assert.Equal(t, domain.VCSLinkStatusMerged, links[0].Status, "the cached status should be healed to merged after a live-verified merge")
+}
+
+// The other direction: a PR that is genuinely still open on GitHub must
+// continue to block the move — the live check is not a way to route around
+// a real "not merged yet".
+func TestTaskService_MoveTask_DoneGate_BlockedWhenGenuinelyStillOpenOnGitHub(t *testing.T) {
+	projectID := uuid.New()
+	taskID := uuid.New()
+	statusID := uuid.New()
+
+	checker := &fakeGitHubPRChecker{state: githubapi.PullRequestState{Merged: false, State: "open"}}
+	svc, taskRepo, statusRepo, vcsRepo, _ := setupTaskServiceWithDoneGateAndGitHubChecker(checker)
+
+	taskRepo.items[taskID] = &domain.Task{
+		ID:           taskID,
+		ProjectID:    projectID,
+		StatusID:     uuid.New(),
+		Title:        "Task with a genuinely open PR",
+		VCSLinkCount: 1,
+	}
+	statusRepo.items[statusID] = &domain.TaskStatus{
+		ID:        statusID,
+		ProjectID: projectID,
+		Category:  domain.StatusCategoryDone,
+	}
+	vcsRepo.items = append(vcsRepo.items, domain.VCSLink{
+		ID:         uuid.New(),
+		TaskID:     taskID,
+		Provider:   domain.VCSProviderGitHub,
+		LinkType:   domain.VCSLinkTypePR,
+		Status:     domain.VCSLinkStatusOpen,
+		URL:        "https://github.com/entire-vc/evc-mesh/pull/500",
+		Title:      "feat: still in review",
+		ExternalID: "500",
+	})
+
+	err := svc.MoveTask(context.Background(), taskID, MoveTaskInput{StatusID: &statusID})
+
+	require.Error(t, err)
+	var doneErr *DoneEvidenceError
+	require.ErrorAs(t, err, &doneErr)
+	assert.True(t, doneErr.PRStatusCheckedLive, "the block must reflect a live GitHub read, not the cache")
+	assert.Contains(t, doneErr.Error(), "verified live against GitHub")
+	assert.Equal(t, 1, checker.callCount())
+
+	// Cache must NOT be healed — GitHub said it's still open.
+	links, lerr := vcsRepo.ListByTask(context.Background(), taskID)
+	require.NoError(t, lerr)
+	require.Len(t, links, 1)
+	assert.Equal(t, domain.VCSLinkStatusOpen, links[0].Status)
+}
+
+// When GitHub is unreachable, the gate must fall back to the cached status
+// (never treat "couldn't verify" as either "merged" or "not merged" — this
+// is the pre-existing fail-closed behavior) and the error message must say
+// the live check couldn't be performed, so the reader understands this is
+// possibly a stale cache rather than a definitive "still open" read.
+func TestTaskService_MoveTask_DoneGate_FallsBackToCachedStatusWhenGitHubUnreachable(t *testing.T) {
+	projectID := uuid.New()
+	taskID := uuid.New()
+	statusID := uuid.New()
+	linkedAt := frozenTime.Add(-9*time.Hour - 30*time.Minute)
+
+	checker := &fakeGitHubPRChecker{err: fmt.Errorf("dial tcp: connection refused")}
+	svc, taskRepo, statusRepo, vcsRepo, _ := setupTaskServiceWithDoneGateAndGitHubChecker(checker)
+
+	taskRepo.items[taskID] = &domain.Task{
+		ID:           taskID,
+		ProjectID:    projectID,
+		StatusID:     uuid.New(),
+		Title:        "Task with a PR and GitHub unreachable",
+		VCSLinkCount: 1,
+	}
+	statusRepo.items[statusID] = &domain.TaskStatus{
+		ID:        statusID,
+		ProjectID: projectID,
+		Category:  domain.StatusCategoryDone,
+	}
+	vcsRepo.items = append(vcsRepo.items, domain.VCSLink{
+		ID:         uuid.New(),
+		TaskID:     taskID,
+		Provider:   domain.VCSProviderGitHub,
+		LinkType:   domain.VCSLinkTypePR,
+		Status:     domain.VCSLinkStatusOpen,
+		URL:        "https://github.com/entire-vc/evc-mesh/pull/600",
+		Title:      "feat: unknown live state",
+		ExternalID: "600",
+		CreatedAt:  linkedAt,
+	})
+
+	err := svc.MoveTask(context.Background(), taskID, MoveTaskInput{StatusID: &statusID})
+
+	require.Error(t, err)
+	var doneErr *DoneEvidenceError
+	require.ErrorAs(t, err, &doneErr)
+	assert.False(t, doneErr.PRStatusCheckedLive, "an unreachable GitHub must not be reported as a live verdict")
+	assert.Contains(t, doneErr.Error(), "could not verify live against GitHub")
+	assert.Contains(t, doneErr.Error(), "open")
+	assert.Contains(t, doneErr.Error(), linkedAt.UTC().Format(time.RFC3339), "the message should say when the stale record was made")
+}
+
+// No GitHub checker wired at all (e.g. GITHUB_TOKEN-less deployments that
+// choose not to enable it) — must behave exactly as before this fix: fall
+// back to the cached status without erroring or panicking on a nil checker.
+func TestTaskService_MoveTask_DoneGate_NoCheckerWired_FallsBackToCachedStatus(t *testing.T) {
+	projectID := uuid.New()
+	taskID := uuid.New()
+	statusID := uuid.New()
+
+	svc, taskRepo, statusRepo, vcsRepo, _ := setupTaskServiceWithDoneGate() // no checker wired
+
+	taskRepo.items[taskID] = &domain.Task{
+		ID:           taskID,
+		ProjectID:    projectID,
+		StatusID:     uuid.New(),
+		Title:        "Task with a PR, no checker wired",
+		VCSLinkCount: 1,
+	}
+	statusRepo.items[statusID] = &domain.TaskStatus{
+		ID:        statusID,
+		ProjectID: projectID,
+		Category:  domain.StatusCategoryDone,
+	}
+	vcsRepo.items = append(vcsRepo.items, domain.VCSLink{
+		ID:         uuid.New(),
+		TaskID:     taskID,
+		Provider:   domain.VCSProviderGitHub,
+		LinkType:   domain.VCSLinkTypePR,
+		Status:     domain.VCSLinkStatusOpen,
+		URL:        "https://github.com/entire-vc/evc-mesh/pull/601",
+		ExternalID: "601",
+	})
+
+	err := svc.MoveTask(context.Background(), taskID, MoveTaskInput{StatusID: &statusID})
+
+	require.Error(t, err)
+	var doneErr *DoneEvidenceError
+	require.ErrorAs(t, err, &doneErr)
+	assert.False(t, doneErr.PRStatusCheckedLive)
 }
 
 func TestTaskService_MoveTask_DoneGate_BlockedWhenPROpen(t *testing.T) {

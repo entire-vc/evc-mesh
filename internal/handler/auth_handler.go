@@ -2,6 +2,7 @@ package handler
 
 import (
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"os"
@@ -18,11 +19,24 @@ import (
 // AuthHandler handles HTTP requests for authentication endpoints.
 type AuthHandler struct {
 	authService *auth.Service
+	// loginLockout is the account-level failed-login counter (see
+	// mw.LoginLockout's doc comment). nil when not wired via
+	// WithLoginLockout — Login then falls back to whatever protection the
+	// surrounding per-IP RateLimit middleware provides, which per
+	// RateLimitKeyByIP's doc comment may be none at all on an untrustworthy
+	// reverse-proxy topology.
+	loginLockout *mw.LoginLockout
 }
 
 // NewAuthHandler creates a new AuthHandler with the given auth service.
 func NewAuthHandler(as *auth.Service) *AuthHandler {
 	return &AuthHandler{authService: as}
+}
+
+// WithLoginLockout wires the Redis-backed per-account failed-login counter
+// into the handler. Optional (see the loginLockout field doc comment).
+func (h *AuthHandler) WithLoginLockout(l *mw.LoginLockout) {
+	h.loginLockout = l
 }
 
 // refreshCookieName is the httpOnly cookie carrying the refresh token. It is
@@ -208,9 +222,47 @@ func (h *AuthHandler) Login(c echo.Context) error {
 		}))
 	}
 
-	user, tokens, err := h.authService.Login(c.Request().Context(), req.Email, req.Password)
+	ctx := c.Request().Context()
+	// Normalized identifier for the failure lockout — same normalization
+	// auth.Service.Login applies internally (auth.NormalizeEmail), so
+	// "A@x.com" and "a@x.com" share one budget instead of each getting a
+	// fresh one (which would make the lockout trivially bypassable by
+	// varying case).
+	identifier := auth.NormalizeEmail(req.Email)
+
+	user, tokens, err := h.authService.Login(ctx, req.Email, req.Password)
 	if err != nil {
+		// Account-level failure lockout — the PRIMARY brute-force defense
+		// for this endpoint (see mw.LoginLockout's doc comment). Only a
+		// wrong-password attempt counts: ErrInvalidCredentials is returned
+		// identically whether the account exists or not (see
+		// auth.Service.Login), so this branch cannot become an
+		// account-enumeration oracle, and it deliberately does NOT fire on
+		// ErrUserInactive or an infra error — neither is a brute-force
+		// signal, and spending a legitimate owner's failure budget on them
+		// would be its own bug.
+		if h.loginLockout != nil && errors.Is(err, auth.ErrInvalidCredentials) {
+			locked, retryAfter, lockErr := h.loginLockout.RecordFailure(ctx, identifier)
+			if lockErr != nil {
+				// Fail open: log and fall through to the normal 401 below.
+				// A Redis outage must not be able to lock every account out.
+				c.Logger().Errorf("login lockout: record failure: %v", lockErr)
+			} else if locked {
+				return tooManyLoginAttemptsJSON(c, retryAfter)
+			}
+		}
 		return handleError(c, err)
+	}
+
+	// The correct password is NEVER blocked by the lockout above, no matter
+	// how many prior wrong guesses (the owner's own typos, or an attacker's)
+	// were recorded against this identifier — see mw.LoginLockout's doc
+	// comment for why that property is load-bearing. Reset now so the
+	// identifier starts with a full budget again.
+	if h.loginLockout != nil {
+		if resetErr := h.loginLockout.Reset(ctx, identifier); resetErr != nil {
+			c.Logger().Errorf("login lockout: reset: %v", resetErr)
+		}
 	}
 
 	setRefreshCookie(c, tokens.RefreshToken, h.authService.RefreshTokenTTL())
@@ -219,6 +271,19 @@ func (h *AuthHandler) Login(c echo.Context) error {
 		"user":   user,
 		"tokens": tokenResponse(tokens),
 	})
+}
+
+// tooManyLoginAttemptsJSON writes the 429 response for an identifier that
+// has exceeded its failed-login budget. Status, body and Retry-After are
+// identical whether or not an account with this identifier exists — the
+// lockout counter is kept for the identifier STRING (see
+// mw.LoginLockout's doc comment), never for a resolved account row, so this
+// response can never be used to enumerate which emails have accounts here.
+func tooManyLoginAttemptsJSON(c echo.Context, retryAfterSecs int) error {
+	if retryAfterSecs > 0 {
+		c.Response().Header().Set("Retry-After", fmt.Sprintf("%d", retryAfterSecs))
+	}
+	return c.JSON(http.StatusTooManyRequests, apierror.TooManyRequests("too many failed login attempts, try again later"))
 }
 
 // Refresh handles POST /api/v1/auth/refresh. The refresh token comes from the

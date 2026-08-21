@@ -6,7 +6,7 @@ vi.mock("@/components/ui/toast", () => ({
   toast: Object.assign(vi.fn(), { error: vi.fn(), success: vi.fn(), info: vi.fn() }),
 }));
 
-vi.mock("@/components/markdown-editor", () => ({
+vi.mock("@/lib/task-artifacts", () => ({
   uploadArtifact: vi.fn(),
 }));
 
@@ -16,7 +16,7 @@ vi.mock("@/lib/api", async () => {
 });
 
 import { ArtifactList } from "@/components/artifact-list";
-import { uploadArtifact } from "@/components/markdown-editor";
+import { uploadArtifact } from "@/lib/task-artifacts";
 import { toast } from "@/components/ui/toast";
 
 // The list renders a loading skeleton until its first fetch settles; the file

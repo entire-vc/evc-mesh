@@ -13,7 +13,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { MentionMenu } from "@/components/mention-menu";
+import { MentionPickerMenu } from "@/components/mention-menu";
 import { MentionText } from "@/components/mention-text";
 import { useMentionPicker } from "@/hooks/use-mention-picker";
 import { useMentionDirectory } from "@/hooks/use-mention-directory";
@@ -176,7 +176,7 @@ function Composer({
 
   return (
     <div className="relative space-y-2">
-      <MentionMenu picker={mentions} />
+      <MentionPickerMenu picker={mentions} />
       <Textarea
         ref={ref}
         rows={3}

@@ -1,7 +1,7 @@
-import { uploadArtifact } from "@/components/markdown-editor";
+import { uploadArtifact } from "@/lib/task-artifacts";
 import { artifactDownloadPath } from "@/lib/artifact-links";
 import { toast } from "@/components/ui/toast";
-import type { PendingImage } from "@/components/markdown-editor";
+import type { PendingImage } from "@/lib/task-artifacts";
 
 /**
  * Upload images that were pasted into a task's description before the task
@@ -9,7 +9,7 @@ import type { PendingImage } from "@/components/markdown-editor";
  *
  * This used to be an inline loop in create-task-dialog with its own raw fetch
  * against the same /api/v1/tasks/:id/artifacts endpoint, which gave it the same
- * lapsed-token defect as the editor's uploader: no 401 refresh, so a paste from
+ * lapsed-token defect as the uploader in lib/task-artifacts: no 401 refresh, so a paste from
  * a tab open longer than the 15-minute token lifetime failed outright. Going
  * through uploadArtifact (which goes through api()) is what fixes that here.
  *

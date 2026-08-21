@@ -13,7 +13,8 @@ import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { DatePickerPopover } from "@/components/date-picker-popover";
-import { MarkdownEditor, type PendingImage } from "@/components/markdown-editor";
+import { RichTextEditor } from "@/components/rich-text-editor";
+import { type PendingImage } from "@/lib/task-artifacts";
 import { Bot, Tag, User, X } from "lucide-react";
 import { useTaskStore } from "@/stores/task";
 import { useProjectStore } from "@/stores/project";
@@ -264,13 +265,12 @@ export function CreateTaskDialog({
           />
 
           {/* Description */}
-          <MarkdownEditor
+          <RichTextEditor
             value={description}
             onChange={setDescription}
-            projectId={currentProject?.id}
-            projectSettings={currentProject?.settings}
-            placeholder="Add a description... (Markdown, paste images)"
-            rows={3}
+            projId={currentProject?.id}
+            placeholder="Add a description..."
+            minHeight="5rem"
             onPendingImage={(pending) => {
               pendingImagesRef.current.push(pending);
             }}

@@ -782,6 +782,18 @@ func (h *TaskHandler) ListSubtasks(c echo.Context) error {
 		return handleError(c, err)
 	}
 
+	// Third list-shaped endpoint through the shared decorator (#32f4c087 follow-up).
+	// ListSubtasks never truncates description text — no caller asked it to, and
+	// this handler does not read include_description — but without this call
+	// HasDescription is left at its Go zero value (false) for every item, because
+	// it is computed here rather than carried by the repository row. A subtask
+	// with a real description would report has_description:false, and the list
+	// view's card (which trusts has_description over a live text check, see
+	// EnhancedTitleCell) would hide the glyph despite the text being right there
+	// in the same payload. decorateTaskList also fills in URL, which this
+	// endpoint never set.
+	decorateTaskList(c, subtasks)
+
 	return c.JSON(http.StatusOK, map[string]any{"items": subtasks})
 }
 

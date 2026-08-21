@@ -116,6 +116,13 @@ function renderPage() {
   );
 }
 
+// Only the active tab's content is in the DOM (feat/notification-settings-tabs
+// split the page into per-channel tabs) — switch to Telegram before asserting
+// on anything this file cares about, mirroring notification-settings.test.tsx.
+function switchToTelegramTab() {
+  fireEvent.click(screen.getByRole("tab", { name: /Telegram/ }));
+}
+
 beforeEach(() => {
   mockedApi.mockReset();
   mockedGetPermissionState.mockReset().mockResolvedValue("granted");
@@ -143,6 +150,7 @@ describe("NotificationSettingsPage — Telegram disconnect", () => {
     });
 
     renderPage();
+    switchToTelegramTab();
 
     await waitFor(() =>
       expect(
@@ -166,6 +174,7 @@ describe("NotificationSettingsPage — Telegram disconnect", () => {
     });
 
     renderPage();
+    switchToTelegramTab();
 
     const disconnect = await waitFor(() =>
       screen.getByRole("button", { name: /Disconnect/ }),
@@ -191,6 +200,7 @@ describe("NotificationSettingsPage — Telegram disconnect", () => {
     });
 
     renderPage();
+    switchToTelegramTab();
 
     const disconnect = await waitFor(() =>
       screen.getByRole("button", { name: /Disconnect/ }),
@@ -217,13 +227,15 @@ describe("NotificationSettingsPage — Telegram disconnect", () => {
     });
 
     renderPage();
+    switchToTelegramTab();
 
-    const saveButtons = await waitFor(() =>
-      screen.getAllByRole("button", { name: /Save preferences/ }),
-    );
-    const telegramSave = saveButtons[saveButtons.length - 1];
-    if (!telegramSave) throw new Error("expected a telegram Save preferences button");
-    fireEvent.click(telegramSave);
+    // Wait for the preferences hydration effect to finish (signalled by
+    // Disconnect appearing, same as the other tests here) before clicking
+    // Save — Save itself renders immediately, unconditionally, so clicking
+    // it before hydration populates telegramUsername hits the empty-username
+    // validation guard and silently no-ops instead of saving.
+    await waitFor(() => screen.getByRole("button", { name: /Disconnect/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Save preferences/ }));
 
     await waitFor(() => expect(savedBody).toBeDefined());
     expect(savedBody).toMatchObject({ is_enabled: true });
@@ -240,6 +252,7 @@ describe("NotificationSettingsPage — Telegram disconnect", () => {
     });
 
     renderPage();
+    switchToTelegramTab();
 
     const disconnect = await waitFor(() =>
       screen.getByRole("button", { name: /Disconnect/ }),
@@ -269,6 +282,7 @@ describe("NotificationSettingsPage — Telegram reachability", () => {
     });
 
     renderPage();
+    switchToTelegramTab();
 
     const alert = await waitFor(() => screen.getByRole("alert"));
     expect(alert).toHaveTextContent(/cannot be delivered right now/i);
@@ -283,6 +297,7 @@ describe("NotificationSettingsPage — Telegram reachability", () => {
     });
 
     renderPage();
+    switchToTelegramTab();
 
     // The bound account resolves from the preferences fetch, which lands after
     // the bot-info fetch that raises the banner — so wait on the later of the
@@ -295,6 +310,7 @@ describe("NotificationSettingsPage — Telegram reachability", () => {
     mockTelegramApi({ preferences: [boundTelegramPref()] });
 
     renderPage();
+    switchToTelegramTab();
 
     await waitFor(() => screen.getByRole("button", { name: /Disconnect/ }));
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();

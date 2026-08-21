@@ -228,6 +228,29 @@ type CommentRepository interface {
 	HasRecentCommentBy(ctx context.Context, taskID, authorID uuid.UUID, since time.Time, minLength int) (bool, error)
 }
 
+// HumanGateDecisionRepository persists the append-only ledger backing the
+// third human_gate exit — "the question was answered, the answer arrived
+// through another channel" (task #c56339b1, docs/human-gate-decision-recorded.md).
+type HumanGateDecisionRepository interface {
+	// Create inserts a new decision row (RevokesID nil) or revocation row
+	// (RevokesID set). The append-only DB trigger rejects any UPDATE, so
+	// there is deliberately no Update method on this interface.
+	Create(ctx context.Context, d *domain.HumanGateDecision) error
+	// GetByID returns one row with RevokedAt populated from a later
+	// revocation row if one targets it (always nil on a revocation row
+	// itself — a revocation cannot itself be revoked).
+	GetByID(ctx context.Context, id uuid.UUID) (*domain.HumanGateDecision, error)
+	// FindLiveByRef returns the most recent UNREVOKED decision on taskID
+	// matching questionRef or canonicalKey (either argument may be nil, but
+	// not both), or nil if none exists. This is the exact query
+	// enforceBlockingTriage's repeat-check (contract §6) runs before arming
+	// human_gate.
+	FindLiveByRef(ctx context.Context, taskID uuid.UUID, questionRef *uuid.UUID, canonicalKey *string) (*domain.HumanGateDecision, error)
+	// ListByTask returns every row (decisions and revocations) for a task,
+	// newest first.
+	ListByTask(ctx context.Context, taskID uuid.UUID) ([]domain.HumanGateDecision, error)
+}
+
 // ArtifactRepository manages persistence for artifacts.
 type ArtifactRepository interface {
 	Create(ctx context.Context, artifact *domain.Artifact) error
@@ -1157,6 +1180,27 @@ type SecretRepository interface {
 	// secrets in workspaceID, plus project-scope ones for projectID (if
 	// given), plus agent-scope ones for agentID (if given).
 	ListCurrent(ctx context.Context, workspaceID uuid.UUID, projectID, agentID *uuid.UUID) ([]domain.Secret, error)
+	// GetByID returns the masked metadata for one row by id, scoped to
+	// workspaceID. It exists so the API can address a secret the way a UI
+	// list hands it back — by id — while Rotate and Delete keep operating on
+	// the (scope, name) identity that the partial unique indexes are built
+	// on. The returned Secret carries RotatedAt, so a caller can tell a
+	// current row from a superseded one and refuse to act on the latter
+	// rather than silently redirecting the write to whichever row is current
+	// now. Returns apierror.NotFound when the id names nothing in this
+	// workspace — same answer for "no such row" and "another tenant's row",
+	// so the two stay indistinguishable.
+	GetByID(ctx context.Context, workspaceID, id uuid.UUID) (domain.Secret, error)
+	// AssertScopeRefInWorkspace reports whether the project_id / agent_id a
+	// caller supplied actually belong to workspaceID. The DB cannot answer
+	// this on its own: secrets.project_id and secrets.agent_id are foreign
+	// keys to projects(id) and agents(id) with no workspace predicate, so a
+	// row naming ANOTHER tenant's project satisfies every constraint on the
+	// table. Returns apierror.ValidationError naming the offending field,
+	// with the same message for "no such project" and "not your project" so
+	// the endpoint cannot be used to enumerate another tenant's projects.
+	// A nil id is not checked — absent is not the same as foreign.
+	AssertScopeRefInWorkspace(ctx context.Context, workspaceID uuid.UUID, projectID, agentID *uuid.UUID) error
 }
 
 // SecretMaterializer decrypts current secret values for spawn-time env-file

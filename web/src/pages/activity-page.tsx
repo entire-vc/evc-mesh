@@ -6,7 +6,7 @@ import { api } from "@/lib/api";
 import { useProjectStore } from "@/stores/project";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { useWebSocketStore } from "@/stores/websocket";
-import { MarkdownRenderer } from "@/components/markdown-renderer";
+import { MarkdownView } from "@/components/markdown-view";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "@/components/ui/toast";
 import {
@@ -510,7 +510,7 @@ function CommentCard({
           {showAuthor ? comment.author_name : comment.project_name}
         </p>
         <div className="line-clamp-2 text-xs text-muted-foreground">
-          <MarkdownRenderer content={preview} className="text-xs" />
+          <MarkdownView content={preview} className="text-xs" />
         </div>
       </div>
     </button>
@@ -610,7 +610,7 @@ function MentionCard({
           </div>
           <p className="mb-1 text-xs text-muted-foreground">{mention.author_name}</p>
           <div className="line-clamp-2 text-xs text-muted-foreground">
-            <MarkdownRenderer content={preview} className="text-xs" />
+            <MarkdownView content={preview} className="text-xs" />
           </div>
         </div>
       </div>

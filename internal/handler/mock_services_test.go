@@ -179,13 +179,16 @@ func (m *MockTaskStatusService) Reorder(ctx context.Context, projectID uuid.UUID
 
 // MockCommentService implements service.CommentService for testing.
 type MockCommentService struct {
-	CreateFunc                func(ctx context.Context, comment *domain.Comment) error
-	UpdateFunc                func(ctx context.Context, comment *domain.Comment) error
-	DeleteFunc                func(ctx context.Context, id uuid.UUID) error
-	ListByTaskFunc            func(ctx context.Context, taskID uuid.UUID, filter repository.CommentFilter, pg pagination.Params) (*pagination.Page[domain.Comment], error)
-	ListByAuthorFunc          func(ctx context.Context, authorID uuid.UUID, filter repository.CommentViewFilter) (*domain.CommentViewPage, error)
-	ListRecentByWorkspaceFunc func(ctx context.Context, wsID uuid.UUID, filter repository.CommentViewFilter) (*domain.CommentViewPage, error)
-	GetHumanGateOwnerFunc     func(ctx context.Context, taskID uuid.UUID) (*domain.HumanGateInfo, error)
+	CreateFunc                  func(ctx context.Context, comment *domain.Comment) error
+	UpdateFunc                  func(ctx context.Context, comment *domain.Comment) error
+	DeleteFunc                  func(ctx context.Context, id uuid.UUID) error
+	ListByTaskFunc              func(ctx context.Context, taskID uuid.UUID, filter repository.CommentFilter, pg pagination.Params) (*pagination.Page[domain.Comment], error)
+	ListByAuthorFunc            func(ctx context.Context, authorID uuid.UUID, filter repository.CommentViewFilter) (*domain.CommentViewPage, error)
+	ListRecentByWorkspaceFunc   func(ctx context.Context, wsID uuid.UUID, filter repository.CommentViewFilter) (*domain.CommentViewPage, error)
+	GetHumanGateOwnerFunc       func(ctx context.Context, taskID uuid.UUID) (*domain.HumanGateInfo, error)
+	RecordHumanGateDecisionFunc func(ctx context.Context, input domain.RecordHumanGateDecisionInput) (*domain.HumanGateDecision, error)
+	RevokeHumanGateDecisionFunc func(ctx context.Context, input domain.RevokeHumanGateDecisionInput) error
+	ListHumanGateDecisionsFunc  func(ctx context.Context, taskID uuid.UUID) ([]domain.HumanGateDecision, error)
 }
 
 func (m *MockCommentService) Create(ctx context.Context, comment *domain.Comment) error {
@@ -233,6 +236,27 @@ func (m *MockCommentService) ListRecentByWorkspace(ctx context.Context, wsID uui
 func (m *MockCommentService) GetHumanGateOwner(ctx context.Context, taskID uuid.UUID) (*domain.HumanGateInfo, error) {
 	if m.GetHumanGateOwnerFunc != nil {
 		return m.GetHumanGateOwnerFunc(ctx, taskID)
+	}
+	return nil, nil
+}
+
+func (m *MockCommentService) RecordHumanGateDecision(ctx context.Context, input domain.RecordHumanGateDecisionInput) (*domain.HumanGateDecision, error) {
+	if m.RecordHumanGateDecisionFunc != nil {
+		return m.RecordHumanGateDecisionFunc(ctx, input)
+	}
+	return nil, nil
+}
+
+func (m *MockCommentService) RevokeHumanGateDecision(ctx context.Context, input domain.RevokeHumanGateDecisionInput) error {
+	if m.RevokeHumanGateDecisionFunc != nil {
+		return m.RevokeHumanGateDecisionFunc(ctx, input)
+	}
+	return nil
+}
+
+func (m *MockCommentService) ListHumanGateDecisions(ctx context.Context, taskID uuid.UUID) ([]domain.HumanGateDecision, error) {
+	if m.ListHumanGateDecisionsFunc != nil {
+		return m.ListHumanGateDecisionsFunc(ctx, taskID)
 	}
 	return nil, nil
 }

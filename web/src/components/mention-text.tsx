@@ -1,6 +1,6 @@
 import { Fragment, type ReactNode } from "react";
 import { Link } from "react-router";
-import type { MentionEntry } from "@/components/markdown-renderer";
+import type { MentionEntry } from "@/components/markdown-view";
 
 /**
  * Plain text with its `@mentions` picked out.

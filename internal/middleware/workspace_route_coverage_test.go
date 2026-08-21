@@ -240,6 +240,8 @@ var declaredBodyTenantFields = map[string]string{
 	"initiative_handler.go:linkProjectRequest.project_id":              "checked: initiativeService.LinkProject requires the initiative's own workspace",
 	"task_handler.go:moveToProjectRequest.project_id":                  "checked: taskService.MoveToProject requires the task's own workspace",
 	"project_member_handler.go:addAgentMemberRequest.agent_id":         "checked: projectMemberService.AddAgentMember requires the project's own workspace",
+	"secret_handler.go:createSecretRequest.project_id":                 "checked: secretService.Create -> repo.AssertScopeRefInWorkspace, the FK does not carry a workspace predicate",
+	"secret_handler.go:createSecretRequest.agent_id":                   "checked: same call — an agent id from another tenant is refused with the same message as a nonexistent one",
 
 	// Scoped by something other than the id in the body: the row these end up on is
 	// already pinned to a tenant the guard checked, and the id is stored as an
@@ -249,6 +251,8 @@ var declaredBodyTenantFields = map[string]string{
 	"agent_handler.go:reportSessionRequest.task_id":               "benign: a reference on the calling agent's own session",
 	"rule_handler.go:createRuleRequest.agent_id":                  "benign: narrows who a rule applies to, inside the guarded :ws_id/:proj_id it is created in",
 	"project_integration_handler.go:teamRelayResponse.project_id": "benign: a response struct, never bound from a request",
+	"secret_handler.go:secretResponse.project_id":                 "benign: a response struct, never bound from a request",
+	"secret_handler.go:secretResponse.agent_id":                   "benign: a response struct, never bound from a request",
 
 	// POST /internal/secrets/materialize is the one route in this codebase
 	// deliberately registered outside the `api` group (e.* not api.*, see

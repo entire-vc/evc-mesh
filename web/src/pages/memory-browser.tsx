@@ -22,7 +22,7 @@ import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
-import { MarkdownRenderer } from "@/components/markdown-renderer";
+import { MarkdownView } from "@/components/markdown-view";
 import {
   MemoryFiltersPanel,
   countActiveFilters,
@@ -113,7 +113,7 @@ function MemoryCard({ memory, onDelete }: MemoryCardProps) {
               !expanded && "line-clamp-3",
             )}
           >
-            <MarkdownRenderer content={memory.content} />
+            <MarkdownView content={memory.content} />
           </div>
 
           {/* Expand / collapse toggle */}

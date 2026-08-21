@@ -31,6 +31,16 @@ const (
 	PermExportAuditLog  Permission = "export_audit_log"
 	PermManageWebhooks  Permission = "manage_webhooks"
 	PermManageRules     Permission = "manage_rules"
+	// PermManageSecrets gates the write-only secret store (task #64e84eb1).
+	// It is deliberately absent from agentPerms: the whole point of the store
+	// is that a human hands over a credential and no agent identity can read
+	// it back, and an agent able to rotate or delete a secret could replace a
+	// value with one it chose and then materialize it — a read of its own
+	// plaintext by another route. Members and viewers are excluded for the
+	// same reason the masked list is gated: sha256[:8] plus length plus
+	// character class is a fingerprint, and confirming a guess against it is
+	// cheaper than not having it.
+	PermManageSecrets Permission = "manage_secrets"
 )
 
 // permissionMatrix maps a role name to the set of permissions it holds.
@@ -57,6 +67,7 @@ var permissionMatrix = map[string]map[Permission]bool{
 		PermExportAuditLog:  true,
 		PermManageWebhooks:  true,
 		PermManageRules:     true,
+		PermManageSecrets:   true,
 	},
 	domain.RoleAdmin: {
 		// Admin has the same permissions as owner.
@@ -76,6 +87,7 @@ var permissionMatrix = map[string]map[Permission]bool{
 		PermExportAuditLog:  true,
 		PermManageWebhooks:  true,
 		PermManageRules:     true,
+		PermManageSecrets:   true,
 	},
 	domain.RoleMember: {
 		PermCreateProject:  true,

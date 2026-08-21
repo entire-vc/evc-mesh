@@ -65,6 +65,8 @@ type victimFixture struct {
 	ruleID      string
 	linkID      string
 	recurringID string
+	secretID    string
+	decisionID  string
 }
 
 // newVictimFixture registers an ordinary user and populates their workspace with
@@ -184,6 +186,16 @@ func (f *victimFixture) createFlatObjects(t *testing.T) {
 		"body": "Victim confidential task — comment body",
 	})
 
+	// Third human_gate exit (task #c56339b1): provenance=direct requires the
+	// authenticated caller to BE decided_by, which this fixture satisfies
+	// since it posts as the victim themselves.
+	f.decisionID = f.create(t, "POST", "/api/v1/tasks/"+f.taskID+"/human-gate-decisions", map[string]any{
+		"canonical_key": "canonical-decision-xtp-fixture-" + f.taskID,
+		"decided_by":    f.env.UserID,
+		"provenance":    "direct",
+		"channel":       "mesh",
+	})
+
 	f.viewID = f.create(t, "POST", "/api/v1/projects/"+f.projectID+"/views", map[string]any{
 		"name": "Victim View",
 	})
@@ -220,6 +232,20 @@ func (f *victimFixture) createFlatObjects(t *testing.T) {
 	f.recurringID = f.create(t, "POST", "/api/v1/projects/"+f.projectID+"/recurring", map[string]any{
 		"title_template": "Victim recurring task",
 		"frequency":      "weekly",
+	})
+
+	// A real secret, so /secrets/:secret_id is exercised against an object that
+	// actually exists. Without this the fixture has no :secret_id and
+	// concreteURL falls back to dummyUUID — the intruder would be refused a
+	// secret that does not exist anywhere, which passes while proving nothing
+	// about reaching a REAL one. The value never appears in any response, so
+	// unlike the other fixtures there is no marker string to assert on; the
+	// status code and the survival check in
+	// TestCrossTenant_StrangerCannotRotateOrDeleteASecret carry the assertion.
+	f.secretID = f.create(t, "POST", "/api/v1/workspaces/"+f.wsID+"/secrets", map[string]any{
+		"name":  "VICTIM_TOKEN",
+		"scope": "workspace",
+		"value": "victim-secret-token",
 	})
 }
 
@@ -308,6 +334,8 @@ func (f *victimFixture) concreteURL(pattern string) string {
 		":rule_id":      f.ruleID,
 		":link_id":      f.linkID,
 		":recurring_id": f.recurringID,
+		":secret_id":    f.secretID,
+		":decision_id":  f.decisionID,
 	}
 	segments := strings.Split(pattern, "/")
 	for i, seg := range segments {
@@ -430,6 +458,54 @@ func TestCrossTenant_StrangerCannotWriteAgentActivity(t *testing.T) {
 	require.NoError(t, victim.env.DB.QueryRowContext(context.Background(),
 		"SELECT COUNT(*) FROM agent_activity_log WHERE agent_id = $1", victim.agentID).Scan(&count))
 	assert.Zero(t, count, "the forged activity row reached another tenant's log")
+}
+
+// TestCrossTenant_StrangerCannotRotateOrDeleteASecret pins the secret store's
+// write routes the way TestCrossTenant_StrangerCannotWriteAgentActivity pins the
+// activity log: for a write, a 403 alone is not the whole assertion — the row
+// must still be there, unchanged, afterwards.
+//
+// Rotate and Delete both work by stamping rotated_at on the CURRENT row, so a
+// refusal that leaked through would not look like corruption on the next read.
+// It would look like the secret quietly ceasing to exist: the materializer only
+// resolves rows with rotated_at IS NULL, so the victim's lanes would stop
+// receiving the value on their next spawn and the failure would surface as a
+// missing environment variable, far from here. Hence the survival check.
+func TestCrossTenant_StrangerCannotRotateOrDeleteASecret(t *testing.T) {
+	victim := newVictimFixture(t, "xts-victim")
+	require.NotEmpty(t, victim.secretID, "fixture has no secret — the test below would prove nothing")
+
+	intruder := NewTestEnv(t)
+	defer intruder.Cleanup(t)
+	intruder.Register(t, uniqueEmail("xts-intruder"), "TestPass123", "Intruder")
+
+	stillCurrent := func(t *testing.T) bool {
+		t.Helper()
+		var rotated *time.Time
+		require.NoError(t, victim.env.DB.QueryRowContext(context.Background(),
+			"SELECT rotated_at FROM secrets WHERE id = $1", victim.secretID).Scan(&rotated))
+		return rotated == nil
+	}
+	require.True(t, stillCurrent(t), "fixture secret is not current before the test even starts")
+
+	t.Run("rotate", func(t *testing.T) {
+		resp := intruder.Post(t, "/api/v1/secrets/"+victim.secretID+"/rotate", map[string]any{
+			"value": "planted-by-an-unrelated-stranger",
+		})
+		body := string(intruder.ReadBody(t, resp))
+		assert.Equal(t, http.StatusForbidden, resp.StatusCode,
+			"a stranger rotated another tenant's secret (status %d, body %s)", resp.StatusCode, body)
+		assert.NotContains(t, body, "victim-secret-token", "the refusal echoed the secret's value")
+		assert.True(t, stillCurrent(t), "a stranger's rotate superseded another tenant's secret")
+	})
+
+	t.Run("delete", func(t *testing.T) {
+		resp := intruder.doRequest(t, http.MethodDelete, "/api/v1/secrets/"+victim.secretID, nil)
+		body := string(intruder.ReadBody(t, resp))
+		assert.Equal(t, http.StatusForbidden, resp.StatusCode,
+			"a stranger deleted another tenant's secret (status %d, body %s)", resp.StatusCode, body)
+		assert.True(t, stillCurrent(t), "a stranger's delete ended another tenant's secret")
+	})
 }
 
 // TestCrossTenant_ScopedRoutesStillWorkForTheirOwner is the other half: widening

@@ -100,6 +100,30 @@ type RateLimitConfig struct {
 	RefreshRPM int
 	// APIRPM is the maximum requests per minute for API endpoints (per actor).
 	APIRPM int
+	// TrustedProxies is a list of CIDR ranges, in addition to the
+	// loopback/link-local/private-net ranges Echo trusts by default, whose
+	// X-Forwarded-For entries are trusted when resolving the client's real
+	// IP (echo.ExtractIPFromXFFHeader). Empty (the default) means mesh-api
+	// does not trust ANY additional hop's X-Forwarded-For — c.RealIP() (and
+	// therefore RateLimitKeyByIP) falls back to Echo's untouched default
+	// behavior, and the per-IP limiter on /auth/login is disabled outright
+	// rather than pretending to have per-client granularity it cannot
+	// verify. See RateLimitKeyByIP's doc comment (internal/middleware/
+	// ratelimit.go) for the incident this exists to prevent.
+	TrustedProxies []string
+	// AuthMaxFailures is the number of failed /auth/login attempts a single
+	// account identifier (normalized email, from the request body — not an
+	// IP) may accrue within AuthLockoutWindow before further WRONG-password
+	// attempts against that identifier are rejected with 429. A request
+	// carrying the CORRECT password is never blocked by this counter,
+	// regardless of how many prior failures were recorded — see
+	// internal/handler/auth_handler.go Login. This is the primary
+	// brute-force defense for login: unlike per-IP limiting, it works
+	// identically no matter what the reverse-proxy topology does to
+	// X-Forwarded-For. <= 0 disables the lockout.
+	AuthMaxFailures int
+	// AuthLockoutWindow is the sliding window AuthMaxFailures is counted over.
+	AuthLockoutWindow time.Duration
 }
 
 // ServerConfig holds HTTP server settings.
@@ -188,11 +212,21 @@ type AuthConfig struct {
 	AllowRegistration bool
 }
 
-// WebhookConfig holds inbound webhook validation settings.
+// WebhookConfig holds inbound webhook validation settings, plus the token
+// used for the one OUTBOUND GitHub call the done-evidence gate makes (live
+// PR-status verification, #5f7f8c6e) — kept alongside the webhook secret
+// since both are "how Mesh talks to GitHub about PRs" settings.
 type WebhookConfig struct {
 	// GitHubSecret is the HMAC-SHA256 secret for validating GitHub webhook payloads.
 	// If empty, signature validation is skipped (backward-compatible).
 	GitHubSecret string
+	// GitHubToken authenticates the done-evidence gate's live PR-status
+	// check against the GitHub REST API. If empty, the live check is
+	// disabled entirely (the gate falls back to the cached vcs_links.status,
+	// exactly as it did before this existed) — anonymous GitHub reads are
+	// rate-limited to 60/hour and cannot see private repos, so an empty
+	// token isn't a usable "read-only anonymous" mode for a private org.
+	GitHubToken string
 }
 
 // VAPIDConfig holds Web Push VAPID key material.
@@ -250,10 +284,13 @@ func Load() *Config {
 			AllowOrigins: getEnvStringSlice("MESH_CORS_ORIGINS", []string{"*"}),
 		},
 		RateLimit: RateLimitConfig{
-			Enabled:    getEnvBool("MESH_RATE_LIMIT_ENABLED", true),
-			AuthRPM:    getEnvInt("MESH_RATE_LIMIT_AUTH_RPM", 5),
-			RefreshRPM: getEnvInt("MESH_RATE_LIMIT_REFRESH_RPM", 60),
-			APIRPM:     getEnvInt("MESH_RATE_LIMIT_API_RPM", 600),
+			Enabled:           getEnvBool("MESH_RATE_LIMIT_ENABLED", true),
+			AuthRPM:           getEnvInt("MESH_RATE_LIMIT_AUTH_RPM", 5),
+			RefreshRPM:        getEnvInt("MESH_RATE_LIMIT_REFRESH_RPM", 60),
+			APIRPM:            getEnvInt("MESH_RATE_LIMIT_API_RPM", 600),
+			TrustedProxies:    getEnvStringSlice("MESH_TRUSTED_PROXIES", nil),
+			AuthMaxFailures:   getEnvInt("MESH_RATE_LIMIT_AUTH_MAX_FAILURES", 10),
+			AuthLockoutWindow: getEnvDuration("MESH_RATE_LIMIT_AUTH_LOCKOUT_WINDOW", 15*time.Minute),
 		},
 		Spark: SparkConfig{
 			URL:     getEnv("MESH_SPARK_URL", ""),
@@ -261,6 +298,7 @@ func Load() *Config {
 		},
 		Webhook: WebhookConfig{
 			GitHubSecret: getEnv("MESH_GITHUB_WEBHOOK_SECRET", ""),
+			GitHubToken:  getEnvOrFile("MESH_GITHUB_TOKEN", "MESH_GITHUB_TOKEN_FILE"),
 		},
 		Embedding: EmbeddingConfig{
 			Provider:        getEnv("EMBEDDING_PROVIDER", "none"),

@@ -29,3 +29,15 @@ func TestSetIntegrationEncryptionState(t *testing.T) {
 		})
 	}
 }
+
+// mesh_client_ip_trusted is the loud-degradation signal for #5d759aad: 0
+// means /auth/login's per-IP limiter has no real per-client granularity.
+// A wrong value here is exactly as invisible as the integration-encryption
+// case above — the API keeps answering requests either way.
+func TestSetClientIPTrusted(t *testing.T) {
+	SetClientIPTrusted(true)
+	assert.Equal(t, float64(1), testutil.ToFloat64(ClientIPTrusted))
+
+	SetClientIPTrusted(false)
+	assert.Equal(t, float64(0), testutil.ToFloat64(ClientIPTrusted))
+}

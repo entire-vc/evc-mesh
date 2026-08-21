@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   DOC_LINK_TRIGGER,
-  applyDocLinkInsertion,
   documentHref,
   documentMarkdownLink,
   findDocLinkTrigger,
@@ -105,57 +104,6 @@ describe("the trigger", () => {
     // caret is, not wherever the last `[[` happens to sit.
     const text = "[[run and later [[deploy";
     expect(findDocLinkTrigger(text, 5)).toEqual({ start: 0, query: "run" });
-  });
-});
-
-describe("accepting a suggestion", () => {
-  const link = "[Deploy runbook](/w/acme/p/demo/docs/d1)";
-
-  it("replaces the trigger and everything typed after it", () => {
-    const text = "See [[run for details";
-    const caret = 9; // just after "run"
-    const trigger = findDocLinkTrigger(text, caret)!;
-
-    const out = applyDocLinkInsertion(text, trigger, caret, link);
-
-    expect(out.value).toBe(`See ${link} for details`);
-  });
-
-  it("leaves the caret past the link, ready for the next word", () => {
-    const text = "See [[run";
-    const trigger = findDocLinkTrigger(text, text.length)!;
-
-    const out = applyDocLinkInsertion(text, trigger, text.length, link);
-
-    expect(out.value).toBe(`See ${link} `);
-    expect(out.caret).toBe(out.value.length);
-    // And specifically NOT inside the URL, which is where a naive
-    // "insert at cursor" leaves it.
-    expect(out.value.slice(out.caret)).toBe("");
-  });
-
-  it("keeps the text after the caret intact", () => {
-    const text = "before [[q after";
-    const caret = 10;
-    const trigger = findDocLinkTrigger(text, caret)!;
-
-    expect(applyDocLinkInsertion(text, trigger, caret, link).value).toBe(
-      `before ${link} after`,
-    );
-  });
-
-  it("does not add a second space when the sentence already has one", () => {
-    // Caught by the test above before it was true: appending unconditionally
-    // leaves a stray space in the middle of the writer's prose, every time the
-    // link is dropped into a gap rather than at the end.
-    const text = "See [[run for details";
-    const caret = 9;
-    const trigger = findDocLinkTrigger(text, caret)!;
-
-    const out = applyDocLinkInsertion(text, trigger, caret, link);
-
-    expect(out.value).toBe(`See ${link} for details`);
-    expect(out.value).not.toContain("  ");
   });
 });
 

@@ -195,7 +195,7 @@ func TestUpsertPreservesExistingCredentialWithoutRewriting(t *testing.T) {
 	ctx := context.Background()
 
 	now := time.Now().UTC().Truncate(time.Microsecond)
-	plaintext := "tr_agent_keepme"
+	plaintext := "tr_agent_" + strings.Repeat("e", 48)
 	require.NoError(t, repo.Upsert(ctx, &domain.ProjectIntegration{
 		ID: uuid.New(), ProjectID: projID, Type: "team_relay", Enabled: true,
 		Settings: json.RawMessage(`{}`), AgentKey: plaintext, CreatedAt: now, UpdatedAt: now,
@@ -226,7 +226,7 @@ func TestUpsertWithoutKeyStoresPlaintextViaExemption(t *testing.T) {
 	repo := NewProjectIntegrationRepo(db)
 	ctx := context.Background()
 	now := time.Now().UTC().Truncate(time.Microsecond)
-	plaintext := "tr_agent_no_key_configured"
+	plaintext := "tr_agent_" + strings.Repeat("f", 48)
 
 	require.NoError(t, repo.Upsert(ctx, &domain.ProjectIntegration{
 		ID: uuid.New(), ProjectID: projID, Type: "team_relay", Enabled: true,

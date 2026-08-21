@@ -1,5 +1,35 @@
 {
 	auto_https off
+
+	# --- Client IP through the hel01 hop (Mesh #71f2ca77, #5d759aad) ---------
+	# LOAD-BEARING FOR RATE LIMITING. Removing this silently turns per-IP
+	# limiting on /api/v1/auth/login into ONE shared bucket for the entire
+	# internet -- and nothing errors when it happens.
+	#
+	# Topology: hel01 (public, terminates TLS) -> mesh-vm:80 -> 127.0.0.1:8005.
+	# hel01 has no trusted_proxies of its own, which is correct: it is the trust
+	# boundary, so it OVERWRITES whatever X-Forwarded-For a client sent with the
+	# real peer address. The true client IP therefore does arrive here.
+	#
+	# Without the line below, this hop then does the same thing to hel01 -- it
+	# does not trust the incoming XFF and overwrites it with its peer, 10.10.10.1.
+	# Measured on prod: POST /api/v1/auth/login with a spoofed
+	# X-Forwarded-For: 203.0.113.77 produced NO ratelimit:203.0.113.77:* key in
+	# Redis; the request landed in ratelimit:10.10.10.1:* -- i.e. every external
+	# client shared one 5 RPM bucket. That is not a weak limiter, it is a DoS
+	# primitive: one machine looping on /auth/login locks every real user,
+	# the agent fleet and CI out of login.
+	#
+	# Scope is deliberately ONE host, not the /24. hel01 is 10.10.10.1 on vmbr1
+	# (mesh-vm is .10; billing .20, spark .30, argus .60 are peers on the same
+	# bridge). Widening this to 10.10.10.0/24 or 10.0.0.0/8 would let a
+	# neighbouring guest forge client IPs. Spoofing from the internet is not
+	# possible while hel01 keeps resetting XFF at the perimeter -- that property
+	# is what makes trusting this one hop safe, so do not add trusted_proxies to
+	# hel01 without revisiting this.
+	servers {
+		trusted_proxies static 10.10.10.1/32
+	}
 }
 :80 {
 	# --- Compression (Mesh #32f4c087, 2026-08-20) ---------------------------

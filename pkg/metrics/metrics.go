@@ -150,6 +150,28 @@ var (
 			Help: "1 if integration credentials are encrypted at rest, 0 if stored as plaintext",
 		},
 	)
+
+	// ClientIPTrusted is 1 when MESH_TRUSTED_PROXIES is configured (so
+	// c.RealIP() reflects the actual client IP via a verified
+	// X-Forwarded-For chain) and 0 when it is not.
+	//
+	// At 0, per-IP rate limiting on /auth/login has NO per-client
+	// granularity — see RateLimitKeyByIP's doc comment
+	// (internal/middleware/ratelimit.go) for the incident this exists to
+	// surface: without a trusted proxy chain, every external client can
+	// resolve to the SAME address, silently turning a per-IP limiter into
+	// one shared bucket for the whole internet. Set once at startup —
+	// this is a deployment-topology fact, not a per-request measurement.
+	// Alert on this being 0 in any deployment that expects per-IP
+	// granularity; it is expected (and loudly logged, see cmd/api/main.go)
+	// to be 0 on a self-host instance that hasn't configured its reverse
+	// proxy chain.
+	ClientIPTrusted = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "mesh_client_ip_trusted",
+			Help: "1 if MESH_TRUSTED_PROXIES is configured and c.RealIP() reflects a verified client IP, 0 if not (per-IP rate limiting has no client granularity)",
+		},
+	)
 )
 
 // RecordMCPToolCall records a single MCP tool call with its outcome status.
@@ -209,4 +231,15 @@ func SetIntegrationEncryptionState(state string, required bool) {
 	IntegrationEncryptionActive.Set(0)
 	log.Printf("metrics: integration encryption INACTIVE (state=%s required=%t) — "+
 		"credentials are being stored as plaintext", state, required)
+}
+
+// SetClientIPTrusted publishes whether mesh-api trusts its reverse-proxy
+// chain's X-Forwarded-For (MESH_TRUSTED_PROXIES configured). Called once at
+// startup — see cmd/api/main.go.
+func SetClientIPTrusted(trusted bool) {
+	if trusted {
+		ClientIPTrusted.Set(1)
+		return
+	}
+	ClientIPTrusted.Set(0)
 }
