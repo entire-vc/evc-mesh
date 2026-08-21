@@ -54,9 +54,18 @@ components:
 
     # ---------- Secrets (write-only store) ----------
     # There is deliberately no `value` property, on this schema or any other.
-    # The value goes in once through POST and no endpoint returns it; the
-    # fields below are exactly what scripts/env-inventory.py prints, so a
-    # masked list can be compared against the host inventory line for line.
+    # The value goes in once through POST and no endpoint returns it.
+    #
+    # Four of the fields below — name, value_sha256_prefix, value_length,
+    # value_char_class — are 1:1 with what scripts/env-inventory.py prints
+    # (NAME / FP / LEN / CHARS), so a masked list can be compared against the
+    # host inventory line for line on those columns.
+    #
+    # It does NOT extend to the rest of the schema. scope, project_id,
+    # agent_id, expires_at, created_by, created_by_type, created_at and
+    # rotated_at have no counterpart in the script and cannot have one:
+    # env-inventory.py scans static .env/plist/JSON carriers, which carry no
+    # audit metadata at all.
     Secret:
       type: object
       properties:
@@ -6334,11 +6343,15 @@ paths:
       description: >
         Returns the masked metadata for every current secret in scope: the
         workspace-scoped ones always, plus the project- or agent-scoped ones
-        for whichever of project_id / agent_id is supplied. The fields are the
-        ones `scripts/env-inventory.py` prints (name, sha256[:8], length,
-        character class), so a UI list and the host inventory can be compared
-        directly. There is no endpoint, here or elsewhere, that returns a
-        secret's value — see the write-only note on POST below.
+        for whichever of project_id / agent_id is supplied. Four of the
+        fields — name, sha256[:8], length, character class — are 1:1 with
+        what `scripts/env-inventory.py` prints, so a UI list and the host
+        inventory can be compared directly on those columns. The rest
+        (scope, created_by, created_at, expires_at, rotated_at, ...) are
+        Mesh's own audit fields with no counterpart in the script, which only
+        scans static .env/plist/JSON files and has no such metadata. There is
+        no endpoint, here or elsewhere, that returns a secret's value — see
+        the write-only note on POST below.
       operationId: listSecrets
       parameters:
         - name: project_id

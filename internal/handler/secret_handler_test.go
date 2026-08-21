@@ -208,8 +208,12 @@ func TestSecretHandler_ListReturnsMaskedFieldsOnly(t *testing.T) {
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &out))
 	require.Len(t, out, 1)
 
-	// The fields scripts/env-inventory.py prints, by the names it prints them
-	// under. This is the AC's "1-в-1 with env-inventory.py" made checkable.
+	// Only name, value_sha256_prefix, value_length and value_char_class are
+	// 1:1 with what scripts/env-inventory.py prints (NAME / FP / LEN / CHARS).
+	// scope, created_by and created_at asserted below are Mesh's own audit
+	// fields with no counterpart in the script — it scans static
+	// .env/plist/JSON files, which carry no such metadata — so this list is
+	// a superset of the script's output, not a copy of it.
 	for _, field := range []string{"name", "scope", "value_sha256_prefix", "value_length", "value_char_class", "created_by", "created_at"} {
 		assert.Contains(t, out[0], field, "masked list is missing %s", field)
 	}
