@@ -3,6 +3,7 @@ import { Link, useLocation, useNavigate, useParams } from "react-router";
 import {
   Activity,
   BarChart2,
+  BookOpen,
   Bot,
   Brain,
   ChevronRight,
@@ -26,6 +27,7 @@ import { cn } from "@/lib/cn";
 import { useAuthStore } from "@/stores/auth";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { useProjectStore } from "@/stores/project";
+import { useTaskStore } from "@/stores/task";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Avatar } from "@/components/ui/avatar";
@@ -402,6 +404,48 @@ function TaskSearchBox({ wsSlug }: { wsSlug: string | undefined }) {
 }
 
 // ---------------------------------------------------------------------------
+// useOpenTaskDocsLink — Docs link for the task's OWN project
+// ---------------------------------------------------------------------------
+
+// A task can be opened while a *different* project is selected in the
+// sidebar (direct link into someone else's project, cross-project search
+// result, etc.) — currentProject/:projectSlug lag or disagree in that case.
+// Resolve the docs target from the open task's own project_id instead of
+// trusting the URL or the sidebar selection, so the icon always points at
+// the docs that actually belong to what's on screen.
+function useOpenTaskDocsLink(): { wsSlug: string; projectSlug: string } | null {
+  const { wsSlug, taskId } = useParams();
+  const { projects } = useProjectStore();
+  const openTask = useTaskStore((state) =>
+    taskId ? state.tasksById[taskId] ?? null : null,
+  );
+
+  if (!wsSlug || !taskId || !openTask) return null;
+  const project = projects.find((p) => p.id === openTask.project_id);
+  if (!project) return null;
+  return { wsSlug, projectSlug: project.slug };
+}
+
+function DocsShortcutLink({
+  wsSlug,
+  projectSlug,
+}: {
+  wsSlug: string;
+  projectSlug: string;
+}) {
+  return (
+    <Link
+      to={`/w/${wsSlug}/p/${projectSlug}/docs`}
+      title="Project docs"
+      aria-label="Project docs"
+      className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+    >
+      <BookOpen className="h-4 w-4" />
+    </Link>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // HeaderProps
 // ---------------------------------------------------------------------------
 
@@ -519,6 +563,7 @@ export function Header({ onToggleSidebar, installable, onInstall }: HeaderProps)
   const currentView = useCurrentView();
   const teamView = useTeamView();
   const workspacePage = useWorkspacePage();
+  const openTaskDocsLink = useOpenTaskDocsLink();
   const [isDark, setIsDark] = useState(
     document.documentElement.classList.contains("dark"),
   );
@@ -593,6 +638,15 @@ export function Header({ onToggleSidebar, installable, onInstall }: HeaderProps)
 
       <div className="flex-1" />
 
+      {/* Docs shortcut — only while a task is open, and only for the project
+          that task actually belongs to (see useOpenTaskDocsLink above). */}
+      {openTaskDocsLink && (
+        <DocsShortcutLink
+          wsSlug={openTaskDocsLink.wsSlug}
+          projectSlug={openTaskDocsLink.projectSlug}
+        />
+      )}
+
       {/* Search */}
       <TaskSearchBox wsSlug={wsSlug} />
 
@@ -612,16 +666,9 @@ export function Header({ onToggleSidebar, installable, onInstall }: HeaderProps)
         </Button>
       )}
 
-      {/* Theme toggle */}
-      <Button variant="ghost" size="icon" onClick={toggleTheme} className="hidden sm:inline-flex">
-        {isDark ? (
-          <Sun className="h-4 w-4" />
-        ) : (
-          <Moon className="h-4 w-4" />
-        )}
-      </Button>
-
-      {/* User menu */}
+      {/* User menu — theme toggle lives here (not a header button): it's a
+          personal setting touched rarely, and the item shows which theme is
+          ACTIVE right now, not just an icon that flips after the click. */}
       <DropdownMenu>
         <DropdownMenuTrigger>
           <Avatar name={user?.name || "User"} src={user?.avatar_url} size="sm" />
@@ -631,6 +678,18 @@ export function Header({ onToggleSidebar, installable, onInstall }: HeaderProps)
             <p className="text-sm font-medium">{user?.name}</p>
             <p className="text-xs text-muted-foreground">{user?.email}</p>
           </div>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem onClick={toggleTheme}>
+            {isDark ? (
+              <Moon className="mr-2 h-4 w-4" />
+            ) : (
+              <Sun className="mr-2 h-4 w-4" />
+            )}
+            <span className="flex-1">Theme</span>
+            <span className="text-xs text-muted-foreground">
+              {isDark ? "Dark" : "Light"}
+            </span>
+          </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem onClick={logout}>
             <LogOut className="mr-2 h-4 w-4" />
