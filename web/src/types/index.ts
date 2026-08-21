@@ -300,6 +300,15 @@ export interface Task {
   human_gate_armed_at?: string | null;
   /** Populated only by GET /tasks/:id when human_gate is true — not on list rows. */
   human_gate_info?: HumanGateInfo | null;
+  /**
+   * The "false-open" graph signal (task #c80fe88f): sent on both list and
+   * detail responses for any parent task (subtask_count > 0) whose own
+   * status is still open, regardless of whether either flag has actually
+   * fired yet — the board decides what to render, the server always reports
+   * the raw state. Absent for leaf tasks and for tasks whose own status is
+   * already done/cancelled.
+   */
+  false_open?: FalseOpenSignal | null;
 }
 
 export interface HumanGateInfo {
@@ -310,6 +319,20 @@ export interface HumanGateInfo {
   marker_created_at?: string | null;
   clearable_by_owner: boolean;
   reason_if_not?: string;
+}
+
+/**
+ * See internal/domain/task.go FalseOpenSignal. Two mutually exclusive flags
+ * on purpose, not one merged bool — #65dc5949 (one open BACKLOG child) must
+ * light up only_parked_children_left, never all_children_closed, or the
+ * signal equally mislabels umbrellas correctly blocked on a live parked
+ * dependency.
+ */
+export interface FalseOpenSignal {
+  all_children_closed: boolean;
+  only_parked_children_left: boolean;
+  open_children_count: number;
+  stale_days: number;
 }
 
 export interface Comment {

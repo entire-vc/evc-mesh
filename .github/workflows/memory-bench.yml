@@ -298,6 +298,7 @@ jobs:
           python scripts/memory-bench/test_bench_window.py
           python scripts/memory-bench/test_fixture_ages.py
           python scripts/memory-bench/test_search_settle.py
+          python scripts/memory-bench/test_confirm_embedder_alive.py
           python scripts/memory-bench/dense_arm_control.py --selftest
           python scripts/memory-bench/prod_window.py --selftest
           python scripts/memory-bench/fixture_ages.py --selftest
@@ -607,6 +608,26 @@ jobs:
             echo "::error::dispatched mcp_ref='${MCP_REF_INPUT}' resolved to ${MCP_COMMIT:-<unset>}, but the binary carries '${built:-<unstamped>}' — this run would have measured a client nobody asked for"
             exit 1
           fi
+
+      # ---------------------------------------------------------------------
+      # Re-confirm the embedder is ALIVE right before anything measures
+      # through it, not just at its own startup step. Several minutes and
+      # several steps (migrations, Go build, bootstrap, mesh-mcp checkout +
+      # cross-compile) separate "Start the local embedder" from the first
+      # step that actually depends on it — long enough for a crash or an
+      # OOM-kill in between to go unnoticed until a scored question fails.
+      # Without this, a dead embedder here reads as N individual recall
+      # misses that silently accumulate into an INCONCLUSIVE verdict
+      # (#352a0b11 — 24/24 "could not run", no named cause). This step turns
+      # that into one loud, specific failure at the earliest point it can be
+      # caught, instead of a mystery diagnosed after the fact from
+      # embedder.log.
+      # ---------------------------------------------------------------------
+      - name: Confirm the embedder is still alive before measuring
+        if: steps.scope.outputs.relevant == 'true'
+        run: |
+          bash scripts/memory-bench/confirm_embedder_alive.sh \
+            http://127.0.0.1:8099/healthz scripts/memory-bench/embedder.log
 
       # ---------------------------------------------------------------------
       # The dense-arm control, run BEFORE the scored bench so a severed vector
