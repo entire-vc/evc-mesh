@@ -132,7 +132,7 @@ func (c *RESTClient) doMultipart(ctx context.Context, path string, fields map[st
 	// and forces the server to fall back to guessing from the filename.
 	partHeader := make(textproto.MIMEHeader)
 	partHeader.Set("Content-Disposition",
-		fmt.Sprintf(`form-data; name="%s"; filename="%s"`, escapeQuotes(fileField), escapeQuotes(fileName)))
+		fmt.Sprintf("form-data; name=%q; filename=%q", escapeQuotes(fileField), escapeQuotes(fileName)))
 	if fileContentType == "" {
 		fileContentType = "application/octet-stream"
 	}

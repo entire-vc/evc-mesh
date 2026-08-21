@@ -687,13 +687,13 @@ func (s *Server) handleUploadArtifact(ctx context.Context, request mcpsdk.CallTo
 		return errResult("%v", err)
 	}
 
-	if err := verifyArtifactChecksum(mcpsdk.ParseString(request, "sha256", ""), data); err != nil {
+	if err = verifyArtifactChecksum(mcpsdk.ParseString(request, "sha256", ""), data); err != nil {
 		return errResult("%v", err)
 	}
 
 	// Refuse rather than store content that contradicts its declared type. The
 	// bug this guards was invisible precisely because the upload succeeded.
-	if err := validateArtifactMagic(mimeType, data); err != nil {
+	if err = validateArtifactMagic(mimeType, data); err != nil {
 		return errResult("%v", err)
 	}
 
