@@ -833,6 +833,23 @@ type VCSLinkRepository interface {
 	ListByExternalID(ctx context.Context, provider domain.VCSProvider, linkType domain.VCSLinkType, externalID string) ([]domain.VCSLink, error)
 }
 
+// TaskListRevisionRepository reads the per-project task_list_revision counter
+// (ADR-0004, dev-docs/adrs/0004-task-list-revision-and-stale-cursor.md). The
+// counter itself is incremented entirely by DB triggers (migration
+// 20260821004) on writes to tasks/artifacts/vcs_links -- there is
+// deliberately no Increment/Bump method here, since no Go code path should
+// ever need to bump it directly (a call site that did would race the
+// trigger-driven writers and double-count). GetRevision is read-only,
+// consumed by the future list_tasks handler (subtask #6, not built here) to
+// stamp/validate the `list_revision` pagination field.
+type TaskListRevisionRepository interface {
+	// GetRevision returns the current revision for projectID, or 0 if no row
+	// exists yet (a project created before the backfill ran, or a project with
+	// zero tasks/artifacts/vcs_links so far -- both self-heal to a real row on
+	// the first trigger-driven bump).
+	GetRevision(ctx context.Context, projectID uuid.UUID) (int64, error)
+}
+
 // RuleRepository manages persistence for governance rules.
 type RuleRepository interface {
 	Create(ctx context.Context, rule *domain.Rule) error
