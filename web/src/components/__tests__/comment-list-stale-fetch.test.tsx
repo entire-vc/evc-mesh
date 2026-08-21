@@ -113,4 +113,65 @@ describe("CommentList — stale response after a task switch", () => {
     expect(screen.getByText("B's comment")).toBeInTheDocument();
     expect(screen.queryByText("A's comment")).not.toBeInTheDocument();
   });
+
+  // Same race, different symptom: `hasMore` is set in the same unguarded
+  // block as `comments`, so a stale response doesn't just show the wrong
+  // thread — it can also clobber whether the "Load more" button renders at
+  // all. This is the mechanism behind the second, previously-unconnected
+  // report on #bad889e0 (a 112-comment task, has_more legitimately true,
+  // Pavel saw no "Load more" control): task A has few comments (has_more
+  // false), task B has many (has_more true) — A's late response must not
+  // erase B's true has_more.
+  it("does not let a late response for a previous task hide the current task's Load more control", async () => {
+    let resolveTaskA: (value: unknown) => void;
+    const taskAPromise = new Promise((resolve) => {
+      resolveTaskA = resolve;
+    });
+
+    mockedApi.mockImplementation((path: string) => {
+      if (path === "/api/v1/tasks/task-a/comments") return taskAPromise;
+      if (path === "/api/v1/tasks/task-b/comments") {
+        return Promise.resolve({
+          items: [makeComment("c-b", "task-b", "B's comment")],
+          total_count: 112,
+          page: 1,
+          page_size: 50,
+          total_pages: 3,
+          has_more: true,
+        });
+      }
+      throw new Error(`unexpected path ${path}`);
+    });
+
+    const { rerender } = render(
+      <MemoryRouter>
+        <CommentList taskId="task-a" projId={PROJECT.id} />
+      </MemoryRouter>,
+    );
+
+    rerender(
+      <MemoryRouter>
+        <CommentList taskId="task-b" projId={PROJECT.id} />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Load more")).toBeInTheDocument();
+    });
+
+    // A's fetch resolves late, with a small has_more:false thread — this must
+    // not erase B's legitimately-true has_more.
+    resolveTaskA!({
+      items: [makeComment("c-a", "task-a", "A's comment")],
+      total_count: 1,
+      page: 1,
+      page_size: 50,
+      total_pages: 1,
+      has_more: false,
+    });
+
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(screen.getByText("Load more")).toBeInTheDocument();
+  });
 });
