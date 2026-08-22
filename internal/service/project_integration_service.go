@@ -67,6 +67,7 @@ func (s *projectIntegrationService) UpsertTeamRelay(ctx context.Context, project
 		ShareSlug:          input.ShareSlug,
 		Subfolder:          input.Subfolder,
 		IncludeProjectSlug: input.IncludeProjectSlug,
+		DocsMountPath:      input.DocsMountPath,
 	}
 	settingsJSON, _ := json.Marshal(settings)
 
