@@ -768,6 +768,23 @@ export function ListViewPage() {
         {/* Spacer */}
         <div className="flex-1" />
 
+        {/* Full create screen — alongside the per-group inline quick-add
+            below, not instead of it. Quick-add stays for fast title-only
+            capture; this is the entry point when the rest of the fields
+            (description, assignee, labels, ...) matter. */}
+        <Button
+          size="sm"
+          className="h-8 w-8 p-0"
+          onClick={() => {
+            if (wsSlug && currentProject) {
+              navigate(`/w/${wsSlug}/p/${currentProject.slug}/new`);
+            }
+          }}
+          title="New Task"
+        >
+          <Plus className="h-4 w-4" />
+        </Button>
+
         {/* Column picker */}
         <ColumnPicker columns={allColumns} onChange={handleColumnChange} />
       </div>
