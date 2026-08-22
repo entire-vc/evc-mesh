@@ -1021,6 +1021,14 @@ type MockCommentRepository struct {
 	items              map[uuid.UUID]*domain.Comment
 	errToReturn        error
 	enrichedAuthorName *string // simulates SQL CASE WHEN author_name subquery
+	// createFailFor, when set, is consulted BEFORE errToReturn on every Create
+	// call. It exists because errToReturn is a blanket switch that fails EVERY
+	// call uniformly — useless for a scenario where the comment under test
+	// must persist (so the service reaches its own follow-up write) and only
+	// THAT follow-up write (e.g. a system notice) fails. Predicate on the
+	// comment itself rather than a call counter: a counter is order-dependent
+	// and silently wrong the moment an unrelated write is added ahead of it.
+	createFailFor func(*domain.Comment) bool
 }
 
 func NewMockCommentRepository() *MockCommentRepository {
@@ -1028,6 +1036,9 @@ func NewMockCommentRepository() *MockCommentRepository {
 }
 
 func (m *MockCommentRepository) Create(_ context.Context, c *domain.Comment) error {
+	if m.createFailFor != nil && m.createFailFor(c) {
+		return fmt.Errorf("mock: forced Create failure")
+	}
 	if m.errToReturn != nil {
 		return m.errToReturn
 	}
