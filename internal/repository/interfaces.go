@@ -1202,6 +1202,16 @@ type ProjectIntegrationRepository interface {
 	Upsert(ctx context.Context, pi *domain.ProjectIntegration) error
 	Delete(ctx context.Context, projectID uuid.UUID, intType string) error
 	ListByProject(ctx context.Context, projectID uuid.UUID) ([]domain.ProjectIntegration, error)
+	// SetKeyExpiry records the credential's expiry and how the value was
+	// obtained. expiresAt nil clears both fields back to "unknown". Deliberately
+	// separate from Upsert: Upsert is called on every settings save (share,
+	// enabled, subfolder, ...) and folding expiry into it would silently wipe a
+	// previously-recorded date whenever an unrelated field changes.
+	SetKeyExpiry(ctx context.Context, projectID uuid.UUID, intType string, expiresAt *time.Time, source string) error
+	// RecordSyncCheck stamps the outcome of the most recent attempt to reach the
+	// integration's source. errMsg is stored only when status is "error".
+	// Separate from Upsert for the same reason as SetKeyExpiry.
+	RecordSyncCheck(ctx context.Context, projectID uuid.UUID, intType string, checkedAt time.Time, status, errMsg string) error
 }
 
 // SecretRepository manages the write-only secrets store (task #64e84eb1).

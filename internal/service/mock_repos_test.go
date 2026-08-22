@@ -2367,6 +2367,45 @@ func (m *MockProjectIntegrationRepository) ListByProject(_ context.Context, proj
 	return result, nil
 }
 
+func (m *MockProjectIntegrationRepository) SetKeyExpiry(_ context.Context, projectID uuid.UUID, intType string, expiresAt *time.Time, source string) error {
+	if m.err != nil {
+		return m.err
+	}
+	pi, ok := m.byKey[projectID][intType]
+	if !ok {
+		return apierror.NotFound("ProjectIntegration")
+	}
+	pi.KeyExpiresAt = expiresAt
+	if expiresAt != nil {
+		src := source
+		pi.KeyExpirySource = &src
+	} else {
+		pi.KeyExpirySource = nil
+	}
+	return nil
+}
+
+func (m *MockProjectIntegrationRepository) RecordSyncCheck(_ context.Context, projectID uuid.UUID, intType string, checkedAt time.Time, status, errMsg string) error {
+	if m.err != nil {
+		return m.err
+	}
+	pi, ok := m.byKey[projectID][intType]
+	if !ok {
+		return apierror.NotFound("ProjectIntegration")
+	}
+	checked := checkedAt
+	pi.LastSyncCheckedAt = &checked
+	st := status
+	pi.LastSyncStatus = &st
+	if status == "error" && errMsg != "" {
+		msg := errMsg
+		pi.LastSyncError = &msg
+	} else {
+		pi.LastSyncError = nil
+	}
+	return nil
+}
+
 var _ repository.ProjectIntegrationRepository = (*MockProjectIntegrationRepository)(nil)
 
 // ---------------------------------------------------------------------------
