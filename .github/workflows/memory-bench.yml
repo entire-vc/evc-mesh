@@ -876,8 +876,12 @@ jobs:
                  echo
                  echo "\`arm-mismatch\` means the baseline on disk was captured against a"
                  echo "different target than this run — re-snap with \`--arm branch\`, do not"
-                 echo "hand-edit. A red nobody can clear gets bypassed, so this does not fail"
-                 echo "the check; the alert below is what stops it being silent." ;;
+                 echo "hand-edit. A red nobody can clear gets bypassed on the FIRST such run,"
+                 echo "so this step alone does not fail the check — the alert below opens or"
+                 echo "updates the tracking issue instead. If that issue was ALREADY open when"
+                 echo "this run started (i.e. this is not the first consecutive occurrence),"
+                 echo "the escalation step below this one fails the job on purpose: a first"
+                 echo "occurrence gets a quiet grace period, a second one turns the badge red." ;;
               *) echo "❌ Gate exited $rc." ;;
             esac
             echo
@@ -956,6 +960,7 @@ jobs:
       # alert, which is why this is not simply `env.MCP_REF == 'main'`.
       # ---------------------------------------------------------------------
       - name: Alert — the required recall gate is blind (INCONCLUSIVE)
+        id: alert
         if: >-
           !cancelled()
           && steps.scope.outputs.relevant == 'true'
@@ -978,6 +983,55 @@ jobs:
             quality is the advisory prod canary.
           run-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # ---------------------------------------------------------------------
+      # ESCALATION — a SECOND consecutive blind run turns THIS run red.
+      #
+      # #352a0b11 AC5: from #587 (opened 2026-08-17) to the run that surfaced
+      # this gap (32447862443, 2026-08-21), this arm sat INCONCLUSIVE across at
+      # least three straight nightlies while every job kept reporting
+      # `success` — the tracking issue existed and nobody read it, because
+      # nothing about the workflow's own colour said "look here". "An issue
+      # was opened" turned out not to be sufficient; the badge has to say it
+      # too, or the next blind spell repeats this one.
+      #
+      # WHY NOT FAIL ON THE FIRST rc=2, THE WAY THIS LOOKED BEFORE THIS PR:
+      # the advisory arm's own exit step (below, `memory-bench` job) already
+      # reasoned this through and landed on "no" — "a check that is red
+      # forever is one people learn to scroll past, which is how the real
+      # rc=1 would get ignored too". A same-day infra blip (a Docker Hub
+      # mirror hiccup, one bad `context deadline exceeded`) is exactly the
+      # transient case that reasoning protects, and this arm sees the same
+      # class of blip. So: the FIRST occurrence behaves exactly as before —
+      # it opens/updates the tracking issue and the job stays green, same as
+      # every arm. Only once `episode-status: existing` comes back — meaning
+      # the SAME episode was still open when this run started, i.e. the LAST
+      # run's alert went unaddressed — does this run fail. That is the
+      # difference between "red on any blip" (rejected, see above) and "red
+      # once the blip has already been visible for a full cycle and nobody
+      # acted" (this).
+      #
+      # SCOPED NARROWER THAN THE ALERT ABOVE, on purpose: this step drops
+      # `merge_group` from the alert's `!= 'pull_request'`. The alert may
+      # still comment on a merge_group run (posting is harmless), but FAILING
+      # a merge_group run would block the queue on an infra cause no queued
+      # PR can fix — precisely the #342 failure mode this whole arm exists to
+      # avoid, and precisely why `pull_request` was already excluded. A
+      # schedule or push run blocks nobody: nothing is waiting on its result,
+      # which is exactly why it is safe to let it go red.
+      - name: Escalate — the merge gate has been blind since the last run
+        if: >-
+          !cancelled()
+          && steps.scope.outputs.relevant == 'true'
+          && steps.gate.outputs.rc == '2'
+          && steps.alert.outputs.episode-status == 'existing'
+          && github.event_name != 'pull_request'
+          && github.event_name != 'merge_group'
+          && (github.event_name != 'workflow_dispatch'
+              || env.MCP_REF == '' || env.MCP_REF == 'main')
+        run: |
+          echo "::error::Memory recall gate has been INCONCLUSIVE (${{ steps.gate.outputs.reason }}) across at least two consecutive runs on this event type, and the tracking issue opened for it is still open. Failing this run so the badge stops reporting green while the merge gate cannot enforce anything. This does not block any PR or merge_group run — only schedule/push/dispatch reach this step."
+          exit 1
 
       # EVENT SCOPING IS IDENTICAL TO THE ALERT ABOVE — read the two `if:`s
       # together. `test_gate_blindness.py` extracts both and fails if they
