@@ -237,6 +237,53 @@ export function TaskPanel({
   const [draftSubmitting, setDraftSubmitting] = useState(false);
   const [draftError, setDraftError] = useState<string | null>(null);
 
+  // Snapshot of what the draft looked like on mount (createDefaults baked
+  // in), so "empty" means "still what was presented", not "falsy" — a
+  // board/calendar "create in this status/date" flow pre-fills
+  // draftStatusId/draftDueDate before the user types anything, and that
+  // pre-fill must not itself count as a dirty draft.
+  const draftInitialRef = useRef({
+    statusId: createDefaults?.statusId ?? "",
+    dueDate: createDefaults?.dueDate ?? "",
+  });
+  const isDraftDirty =
+    isCreateMode &&
+    (draftTitle.trim() !== "" ||
+      draftDescription.trim() !== "" ||
+      draftPriority !== "none" ||
+      draftDelegationLevel !== "review" ||
+      draftLabels.length > 0 ||
+      draftStatusId !== draftInitialRef.current.statusId ||
+      draftDueDate !== draftInitialRef.current.dueDate ||
+      draftAssigneeValue !== "unassigned" ||
+      draftReviewerValue !== "unassigned");
+
+  // Warn on tab close/reload with an unsaved draft. This does NOT cover
+  // in-app route navigation elsewhere (sidebar links, browser back) —
+  // react-router's useBlocker requires a data router (createBrowserRouter +
+  // RouterProvider), and this app mounts a plain <BrowserRouter> (App.tsx).
+  // Flagged to the task rather than silently left unguarded or silently
+  // migrating the router.
+  useEffect(() => {
+    if (!isDraftDirty) return;
+    const handler = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [isDraftDirty]);
+
+  const handleBackClick = () => {
+    if (
+      isDraftDirty &&
+      !window.confirm("Discard this task? Your unsaved changes will be lost.")
+    ) {
+      return;
+    }
+    onBack?.();
+  };
+
   // Reset navigation stack when the root task changes
   useEffect(() => {
     setTaskIdStack([]);
@@ -1711,7 +1758,7 @@ export function TaskPanel({
               {onBack && (
                 <button
                   type="button"
-                  onClick={onBack}
+                  onClick={handleBackClick}
                   className="flex shrink-0 items-center gap-1 rounded p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
                   aria-label={backLabel}
                   title={backLabel}
