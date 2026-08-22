@@ -124,3 +124,82 @@ func TestArtifact_MarshalJSON_DownloadPath_IgnoresInputField(t *testing.T) {
 	assert.Equal(t, want, decoded["download_path"])
 	assert.NotContains(t, decoded["download_path"], "evil.example.com")
 }
+
+// artifactWithSecret builds an Artifact carrying a tr_agent_key secret in its
+// Metadata, for the redaction-coverage tests below. Ported from the closed
+// PR #674 (superseded on main by this file's own MarshalJSON tests, but three
+// of #674's cases were never carried over — see the tests that use this
+// helper for why each one still earns its place).
+func artifactWithSecret(id uuid.UUID) Artifact {
+	return Artifact{
+		ID:   id,
+		Name: "report.md",
+		Metadata: json.RawMessage(
+			`{"tr_public_url":"https://relay.example.com/f","tr_agent_key":"tr_agent_secret"}`,
+		),
+	}
+}
+
+// TestArtifact_MarshalJSON_RedactsInSlice proves redaction survives the exact
+// shape ListByTask returns to a caller (e.g. inside pagination.Page[Artifact]
+// .Items) — a plain []Artifact, marshaled directly with no per-item loop
+// calling a redaction helper. This follows from MarshalJSON being defined on
+// the type (encoding/json calls it for every element when marshaling a
+// slice), but it wasn't asserted anywhere on main until now — ported from the
+// closed PR #674.
+func TestArtifact_MarshalJSON_RedactsInSlice(t *testing.T) {
+	items := []Artifact{artifactWithSecret(uuid.New()), artifactWithSecret(uuid.New())}
+
+	b, err := json.Marshal(items)
+	require.NoError(t, err)
+
+	assert.NotContains(t, string(b), "tr_agent_secret")
+}
+
+// TestArtifact_MarshalJSON_RedactsWhenNestedInUnrelatedResponse proves
+// redaction survives an Artifact embedded arbitrarily deep inside a larger,
+// unrelated response shape — e.g. GET /tasks/:id/context, which nests an
+// artifact list under an "artifacts" key alongside task/comments/deps. A
+// second such nested read path could be added anywhere, including a file
+// that already has an unrelated redacted call site elsewhere, and it still
+// can't leak — because redaction runs from MarshalJSON on the type itself,
+// not from a per-call-site helper. Ported from the closed PR #674.
+func TestArtifact_MarshalJSON_RedactsWhenNestedInUnrelatedResponse(t *testing.T) {
+	art := artifactWithSecret(uuid.New())
+
+	resp := map[string]any{
+		"task":      struct{ Title string }{"unrelated task"},
+		"artifacts": []Artifact{art},
+	}
+
+	b, err := json.Marshal(resp)
+	require.NoError(t, err)
+
+	assert.NotContains(t, string(b), "tr_agent_secret")
+}
+
+// TestArtifact_RedactedMetadata_DoesNotMutateReceiver proves
+// redactArtifactMetadata returns a redacted copy rather than mutating the
+// caller's Metadata bytes in place. This is a genuinely independent property
+// from the other tests in this file: they all prove metadata gets redacted
+// on the way OUT (into a JSON response); this one guards the opposite
+// direction — that computing a redacted response never corrupts the artifact
+// still sitting in memory (and, transitively, whatever might write that
+// same in-memory object back to storage or a cache afterwards). A mutating
+// implementation would permanently lose tr_agent_key from the object even
+// though the caller only asked for a display copy — data loss in the
+// opposite direction from the leak this whole redaction effort defends
+// against. Ported from the closed PR #674 (there it exercised a public
+// RedactedMetadata() method; main's redaction lives in the unexported
+// redactArtifactMetadata function called from MarshalJSON, so this calls
+// that directly — the property under test is identical).
+func TestArtifact_RedactedMetadata_DoesNotMutateReceiver(t *testing.T) {
+	art := artifactWithSecret(uuid.New())
+	original := string(art.Metadata)
+
+	_ = redactArtifactMetadata(art.Metadata)
+
+	assert.Equal(t, original, string(art.Metadata),
+		"redactArtifactMetadata must return a redacted copy, not mutate the caller's "+
+			"raw metadata bytes in place")
+}
