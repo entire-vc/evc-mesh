@@ -311,6 +311,76 @@ func TestGetReadsNewKeyExpiryAndSyncStatusColumns(t *testing.T) {
 	assert.Equal(t, "connection refused", *got.LastSyncError)
 }
 
+// GetByShareSlug must return the same five new columns as Get — the Team
+// Relay webhook callback that resolves an integration by share_slug needs
+// key_expires_at/last_sync_* just as much as a direct project lookup does.
+func TestGetByShareSlugReadsNewColumns(t *testing.T) {
+	setEncryptionKey(t, 163)
+	repo, mock := newProjectIntegrationRepoMock(t)
+
+	projID := uuid.New()
+	now := time.Now().UTC()
+	expiresAt := now.Add(30 * 24 * time.Hour)
+	checkedAt := now.Add(-2 * time.Hour)
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT id, project_id, type, enabled, settings, agent_key")).
+		WithArgs("probe-slug").
+		WillReturnRows(sqlmock.NewRows([]string{
+			"id", "project_id", "type", "enabled", "settings", "agent_key",
+			"created_at", "updated_at", "created_by",
+			"key_expires_at", "key_expiry_source", "last_sync_checked_at", "last_sync_status", "last_sync_error",
+		}).AddRow(uuid.New(), projID, "team_relay", true, []byte(`{"share_slug":"probe-slug"}`), nil, now, now, nil,
+			expiresAt, "source", checkedAt, "ok", nil))
+
+	got, err := repo.GetByShareSlug(context.Background(), "probe-slug")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+
+	require.NotNil(t, got.KeyExpiresAt)
+	assert.True(t, expiresAt.Equal(*got.KeyExpiresAt))
+	require.NotNil(t, got.KeyExpirySource)
+	assert.Equal(t, "source", *got.KeyExpirySource)
+	require.NotNil(t, got.LastSyncCheckedAt)
+	assert.True(t, checkedAt.Equal(*got.LastSyncCheckedAt))
+	require.NotNil(t, got.LastSyncStatus)
+	assert.Equal(t, "ok", *got.LastSyncStatus)
+	assert.Nil(t, got.LastSyncError, "ok status carries no error message")
+}
+
+// ListByProject must surface the same five new columns for every row it
+// returns — the project settings screen lists key/sync state per integration.
+func TestListByProjectReadsNewColumns(t *testing.T) {
+	setEncryptionKey(t, 167)
+	repo, mock := newProjectIntegrationRepoMock(t)
+
+	projID := uuid.New()
+	now := time.Now().UTC()
+	expiresAt := now.Add(60 * 24 * time.Hour)
+	checkedAt := now.Add(-10 * time.Minute)
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT id, project_id, type, enabled, settings, agent_key")).
+		WithArgs(projID).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"id", "project_id", "type", "enabled", "settings", "agent_key",
+			"created_at", "updated_at", "created_by",
+			"key_expires_at", "key_expiry_source", "last_sync_checked_at", "last_sync_status", "last_sync_error",
+		}).AddRow(uuid.New(), projID, "team_relay", true, []byte(`{}`), nil, now, now, nil,
+			expiresAt, "manual", checkedAt, "key_expired", nil))
+
+	got, err := repo.ListByProject(context.Background(), projID)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+
+	row := got[0]
+	require.NotNil(t, row.KeyExpiresAt)
+	assert.True(t, expiresAt.Equal(*row.KeyExpiresAt))
+	require.NotNil(t, row.KeyExpirySource)
+	assert.Equal(t, "manual", *row.KeyExpirySource)
+	require.NotNil(t, row.LastSyncCheckedAt)
+	assert.True(t, checkedAt.Equal(*row.LastSyncCheckedAt))
+	require.NotNil(t, row.LastSyncStatus)
+	assert.Equal(t, "key_expired", *row.LastSyncStatus)
+	assert.Nil(t, row.LastSyncError)
+}
+
 func TestSetKeyExpiry(t *testing.T) {
 	t.Run("sets expiry and source", func(t *testing.T) {
 		repo, mock := newProjectIntegrationRepoMock(t)
@@ -346,6 +416,18 @@ func TestSetKeyExpiry(t *testing.T) {
 
 		err := repo.SetKeyExpiry(context.Background(), uuid.New(), "team_relay", &expiresAt, "manual")
 		require.Error(t, err)
+	})
+
+	t.Run("ExecContext failure propagates rather than being swallowed", func(t *testing.T) {
+		repo, mock := newProjectIntegrationRepoMock(t)
+		expiresAt := time.Now()
+
+		mock.ExpectExec(regexp.QuoteMeta("UPDATE project_integrations")).
+			WillReturnError(errors.New("connection reset"))
+
+		err := repo.SetKeyExpiry(context.Background(), uuid.New(), "team_relay", &expiresAt, "manual")
+		require.Error(t, err)
+		require.NoError(t, mock.ExpectationsWereMet())
 	})
 }
 
@@ -388,6 +470,30 @@ func TestRecordSyncCheck(t *testing.T) {
 			WillReturnResult(sqlmock.NewResult(0, 1))
 
 		require.NoError(t, repo.RecordSyncCheck(context.Background(), projID, "team_relay", checkedAt, "key_expired", "leftover message"))
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("ExecContext failure propagates rather than being swallowed", func(t *testing.T) {
+		repo, mock := newProjectIntegrationRepoMock(t)
+		checkedAt := time.Now()
+
+		mock.ExpectExec(regexp.QuoteMeta("UPDATE project_integrations")).
+			WillReturnError(errors.New("connection reset"))
+
+		err := repo.RecordSyncCheck(context.Background(), uuid.New(), "team_relay", checkedAt, "ok", "")
+		require.Error(t, err)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("no matching row surfaces NotFound", func(t *testing.T) {
+		repo, mock := newProjectIntegrationRepoMock(t)
+		checkedAt := time.Now()
+
+		mock.ExpectExec(regexp.QuoteMeta("UPDATE project_integrations")).
+			WillReturnResult(sqlmock.NewResult(0, 0))
+
+		err := repo.RecordSyncCheck(context.Background(), uuid.New(), "team_relay", checkedAt, "ok", "")
+		require.Error(t, err)
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
 }
