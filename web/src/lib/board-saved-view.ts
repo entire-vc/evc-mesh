@@ -38,6 +38,7 @@ export interface BoardSavedViewState {
   groupBy: GroupBy;
   showClosed: boolean;
   showSubtasks: boolean;
+  humanGateOnly: boolean;
   sortBy: SortBy;
 }
 
@@ -62,6 +63,7 @@ export function buildBoardSavedViewState(state: BoardSavedViewState): {
       group_by: state.groupBy,
       show_closed: state.showClosed,
       show_subtasks: state.showSubtasks,
+      human_gate_only: state.humanGateOnly,
     },
     sortBy: state.sortBy,
   };
@@ -87,6 +89,7 @@ export function readBoardSavedViewState(
       : "status",
     showClosed: Boolean(filters.show_closed),
     showSubtasks: Boolean(filters.show_subtasks),
+    humanGateOnly: Boolean(filters.human_gate_only),
     ...(sortBy && SORT_BY_VALUES.includes(sortBy as SortBy)
       ? { sortBy: sortBy as SortBy }
       : {}),
@@ -108,6 +111,7 @@ export const BOARD_FILTER_DEFAULTS: Omit<BoardSavedViewState, "groupBy" | "sortB
   selectedTags: [],
   showClosed: false,
   showSubtasks: false,
+  humanGateOnly: false,
 };
 
 /** True when a saved-view-shaped filters payload matches the reset defaults
@@ -122,6 +126,7 @@ export function isBoardFiltersAtDefault(filters: Record<string, unknown>): boole
     countActiveCFFilters(restored.cfFilters) === 0 &&
     restored.selectedTags.length === 0 &&
     restored.showClosed === BOARD_FILTER_DEFAULTS.showClosed &&
-    restored.showSubtasks === BOARD_FILTER_DEFAULTS.showSubtasks
+    restored.showSubtasks === BOARD_FILTER_DEFAULTS.showSubtasks &&
+    restored.humanGateOnly === BOARD_FILTER_DEFAULTS.humanGateOnly
   );
 }

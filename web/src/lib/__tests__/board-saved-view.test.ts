@@ -16,6 +16,7 @@ const fullState: BoardSavedViewState = {
   groupBy: "priority",
   showClosed: true,
   showSubtasks: true,
+  humanGateOnly: true,
   sortBy: "due_date",
 };
 
@@ -43,6 +44,7 @@ describe("board saved-view capture/restore", () => {
       group_by: "priority",
       show_closed: true,
       show_subtasks: true,
+      human_gate_only: true,
     });
     expect(sortBy).toBe("due_date");
   });
@@ -75,6 +77,7 @@ describe("board saved-view capture/restore", () => {
       groupBy: "status",
       showClosed: false,
       showSubtasks: false,
+      humanGateOnly: false,
     });
   });
 
@@ -113,6 +116,7 @@ describe("isBoardFiltersAtDefault (Reset filters menu item's disabled state)", (
       selectedTags: [],
       showClosed: false,
       showSubtasks: false,
+      humanGateOnly: false,
     });
     expect(isBoardFiltersAtDefault(filters)).toBe(true);
   });
@@ -125,6 +129,7 @@ describe("isBoardFiltersAtDefault (Reset filters menu item's disabled state)", (
     ["selectedTags", { tags: ["prod"] }],
     ["showClosed", { show_closed: true }],
     ["showSubtasks", { show_subtasks: true }],
+    ["humanGateOnly", { human_gate_only: true }],
   ])("is false when %s differs from default", (_name, filters) => {
     expect(isBoardFiltersAtDefault(filters)).toBe(false);
   });

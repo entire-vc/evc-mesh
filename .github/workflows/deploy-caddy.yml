@@ -61,9 +61,18 @@ jobs:
       # Only reached if validate above exited 0.
       - name: Backup, swap, reload (fail-closed)
         run: |
+          # ${GITHUB_SHA:0:8} used to sit inside the single-quoted remote
+          # script below, so it expanded on mesh-vm's shell (where GITHUB_SHA
+          # doesn't exist) instead of the runner's — silently empty backup
+          # suffix. Expand it here, on the runner, then splice the resulting
+          # value into the still-single-quoted remote script as a literal
+          # double-quoted fragment. $STAMP / $(date ...) stay untouched
+          # inside single quotes on both sides of the splice, so they still
+          # evaluate on mesh-vm (its clock, not the runner's).
+          SHORT_SHA="${GITHUB_SHA:0:8}"
           ssh mesh-vm 'set -e
             STAMP=$(date -u +%Y%m%d-%H%M%S)
-            cp -p /etc/caddy/Caddyfile "/etc/caddy/Caddyfile.bak.${STAMP}-pre-ci-deploy-${GITHUB_SHA:0:8}"
+            cp -p /etc/caddy/Caddyfile "/etc/caddy/Caddyfile.bak.${STAMP}-pre-ci-deploy-'"$SHORT_SHA"'"
             mv /tmp/Caddyfile.candidate /etc/caddy/Caddyfile
             caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
             systemctl reload caddy'

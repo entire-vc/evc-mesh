@@ -133,4 +133,18 @@ describe("TaskDetailPage — canonical project slug", () => {
 
     expect(mockedNavigate).toHaveBeenCalledTimes(1);
   });
+
+  // Negative control from the acceptance criteria: a taskId that doesn't
+  // exist must still produce TaskPanel's normal "Task not found." state, not
+  // a redirect to nowhere. `currentTask` is null here (the id isn't in the
+  // store), so the effect's `!currentTask` guard should keep it a no-op
+  // regardless of which slug the URL carries.
+  it("does not redirect for a taskId that does not exist, under any slug", async () => {
+    renderAt(`/w/ws-006901c7/p/local-sync/t/does-not-exist`);
+
+    await screen.findByTestId("task-panel");
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(mockedNavigate).not.toHaveBeenCalled();
+  });
 });

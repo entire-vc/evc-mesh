@@ -2,6 +2,7 @@ package domain
 
 import (
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -44,6 +45,21 @@ type Artifact struct {
 	UploadedBy     uuid.UUID       `json:"uploaded_by" db:"uploaded_by"`
 	UploadedByType UploaderType    `json:"uploaded_by_type" db:"uploaded_by_type"`
 	CreatedAt      time.Time       `json:"created_at" db:"created_at"`
+
+	// DownloadPath is not stored — it is computed in MarshalJSON below, from
+	// ID alone, on every response that serialises an Artifact. It is the
+	// stable, always-valid counterpart to metadata.tr_public_url: on a
+	// PRIVATE Team Relay share that URL 401s for anything without a TR
+	// login, and it was the ONLY link-shaped field on an artifact, so an
+	// automated consumer (verifier subagent, acceptance script) had nowhere
+	// else to go. This field names the real path instead —
+	// GET <DownloadPath> with a valid X-Agent-Key/session returns
+	// {"url": "<presigned S3 URL>"}. Deliberately a PATH, not the presigned
+	// URL itself: the task response this rides along on gets cached
+	// (ContextCacheService, 60s) and pasted into comments/logs, and a
+	// presigned URL is short-lived — shipping it here would just relocate
+	// the dead-link problem to a later timestamp.
+	DownloadPath string `json:"download_path"`
 }
 
 // sensitiveArtifactMetadataKeys are Metadata fields the service layer needs
@@ -62,6 +78,10 @@ func (a Artifact) MarshalJSON() ([]byte, error) {
 	type alias Artifact // same fields/tags, no MarshalJSON — avoids recursion
 	out := alias(a)
 	out.Metadata = redactArtifactMetadata(a.Metadata)
+	// Canonical machine path to the bytes — see the DownloadPath field doc.
+	// Matches the route registered in cmd/api/main.go:
+	// api.GET("/artifacts/:artifact_id/download", ...).
+	out.DownloadPath = fmt.Sprintf("/api/v1/artifacts/%s/download", a.ID)
 	return json.Marshal(out)
 }
 
