@@ -199,11 +199,53 @@ jobs:
   recall-gate-branch:
     name: Memory recall gate
     runs-on: ubuntu-latest
-    # ~10 min of bench against a local build, plus build + model download on a
-    # cold cache. Generous rather than tight: a timeout here reads as a gate
-    # failure, and this is the arm that blocks merges. A capture runs the whole
-    # bench `repeat` times, so it gets the same headroom the prod arm gets.
-    timeout-minutes: ${{ (inputs.update_baseline && 120) || 45 }}
+    # Sized against the job's MEASURED worst case, not against its median and
+    # not against an estimate. The comment here used to say "~10 min of bench
+    # ... generous rather than tight" while the budget was 45 and the real thing
+    # takes 40+. Measured 2026-08-22, then re-derived independently by a second
+    # pass over the workflow's FULL run history (150 runs), job-level timings for
+    # this job only:
+    #
+    #   measuring runs that COMPLETED : 39.97, 40.28, 40.43, 40.63 min  (n=4)
+    #   runs killed by this timeout   : 45.40, 45.42, 45.42, 45.45 min  (n=4)
+    #   no-op runs (memory untouched) : 0.7 - 1.3 min
+    #
+    # Read the second row before raising this by a notch: those runs did not
+    # finish, so 45.4 is a floor on what they needed, not what they needed.
+    #
+    # WHERE THE TIME ACTUALLY GOES, because that is what sizes the budget.
+    # Almost none of it is bench work. The gate step's log shows questions ending
+    # in the harness's `MESH_MCP_HTTP_TIMEOUT_SECS: 120` deadline —
+    # `[NN/24] ... ! (12X.Xs)` — while the ones that beat the embed queue return
+    # in ~4s. The split VARIES per run and the bad case is the one that sizes
+    # this: run 32590095200 (completed) was 16/24 timed out, run 32590768351
+    # (killed) was 20/20 of the questions it reached. That is the blindness
+    # tracked in issue #587, open since 2026-08-17, and it is NOT fixed here.
+    # This budget only has to be large enough that a blind run still REACHES a
+    # verdict instead of being killed mid-question:
+    #
+    #   worst case = 24 questions * ~124.7s = 49.9 min of pure client timeout
+    #              + 2.5-2.9 min setup-to-gate-start  (measured, not guessed)
+    #              + 4.0 min power check              (measured)
+    #              ~= 57 min
+    #
+    # So 60 would have been another coin flip, three minutes from losing — the
+    # same mistake as 45, just later in the distribution. 75 leaves ~18 min /
+    # ~30% over the empirical worst case. The asymmetry justifies the slack:
+    # overshooting costs runner minutes on a run that was already dead,
+    # undershooting turns a REQUIRED check under `enforce_admins: true` red for
+    # every PR touching a memory path, with no override for anyone — and it
+    # presents as `cancelled`, which reads like an aborted run rather than a
+    # gate verdict, so the next person debugs their own branch first (#739 lost
+    # two consecutive runs and a session to exactly that misread).
+    #
+    # Raise this WITH a fresh measurement, not by instinct — a stale reason is
+    # how it got to 45. Better than raising it: close #587, and the worst case
+    # above collapses from ~50 min of timeouts to a few minutes of real work.
+    #
+    # A capture (`update_baseline`) runs the whole bench `repeat` times, so it
+    # keeps the same 120 it always had.
+    timeout-minutes: ${{ (inputs.update_baseline && 120) || 75 }}
     permissions:
       contents: read
       issues: write
