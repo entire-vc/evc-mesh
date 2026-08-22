@@ -644,6 +644,11 @@ jobs:
         if: steps.scope.outputs.relevant == 'true'
         env:
           MESH_MCP_BIN: ${{ github.workspace }}/mesh-mcp-bin
+          # This arm ingests its own haystack then searches it immediately —
+          # see the comment on "Run the recall gate against the branch build"
+          # below for why that races the query-embed against this same
+          # question's write-embeds on the CI-only CPU embedder.
+          MESH_MCP_HTTP_TIMEOUT_SECS: '120'
           RECALL_GRAPH_ENABLED: 'true'
           BENCH_RUN_NONCE: ${{ github.run_id }}-${{ github.run_attempt }}-b-ctl
         run: |
@@ -683,6 +688,7 @@ jobs:
         if: ${{ !cancelled() && steps.scope.outputs.relevant == 'true' }}
         env:
           MESH_MCP_BIN: ${{ github.workspace }}/mesh-mcp-bin
+          MESH_MCP_HTTP_TIMEOUT_SECS: '120'
           RECALL_GRAPH_ENABLED: 'true'
           BENCH_RUN_NONCE: ${{ github.run_id }}-${{ github.run_attempt }}-b-age
           BENCH_BACKDATE_DSN: postgres://mesh:mesh@127.0.0.1:5432/mesh?sslmode=disable
@@ -704,6 +710,7 @@ jobs:
         if: ${{ !cancelled() && steps.scope.outputs.relevant == 'true' }}
         env:
           MESH_MCP_BIN: ${{ github.workspace }}/mesh-mcp-bin
+          MESH_MCP_HTTP_TIMEOUT_SECS: '120'
           RECALL_GRAPH_ENABLED: 'true'
           BENCH_RUN_NONCE: ${{ github.run_id }}-${{ github.run_attempt }}-b-age-neg
           # Deliberately NO BENCH_BACKDATE_DSN: this arm's corpus must be born at
@@ -742,6 +749,7 @@ jobs:
         if: steps.scope.outputs.relevant == 'true' && steps.mode.outputs.capture == 'true'
         env:
           MESH_MCP_BIN: ${{ github.workspace }}/mesh-mcp-bin
+          MESH_MCP_HTTP_TIMEOUT_SECS: '120'
           RECALL_GRAPH_ENABLED: 'true'
           LME_TOP_K: '10'
           BENCH_RUN_NONCE: ${{ github.run_id }}-${{ github.run_attempt }}-c
@@ -809,6 +817,17 @@ jobs:
         if: ${{ !cancelled() && steps.scope.outputs.relevant == 'true' && steps.mode.outputs.capture != 'true' }}
         env:
           MESH_MCP_BIN: ${{ github.workspace }}/mesh-mcp-bin
+          # This job's harness ingests ~45 sessions immediately before searching
+          # each question (mesh_client_stdio.py's `ingest_and_search`, no settle
+          # wait on this path). recall's query-embed then queues behind those
+          # same-question write-embeds on the API's shared embedSem
+          # (memory_service.go's RecallWithStats, intentional read/write fairness
+          # from #3d10774e) — and ci_embedder.py (bge-small on CPU) is slow enough
+          # that the queue alone can exceed mesh-mcp's REST client's default 30s,
+          # failing the whole recall call as "context deadline exceeded" though
+          # nothing is broken (#352a0b11 subtask 7, live evidence: run 32524227911).
+          # 120s is headroom, not a guess at exact worst-case queue depth.
+          MESH_MCP_HTTP_TIMEOUT_SECS: '120'
           RECALL_GRAPH_ENABLED: 'true'
           LME_TOP_K: '10'
           BENCH_RUN_NONCE: ${{ github.run_id }}-${{ github.run_attempt }}-b
@@ -999,6 +1018,7 @@ jobs:
         if: ${{ !cancelled() && steps.scope.outputs.relevant == 'true' }}
         env:
           MESH_MCP_BIN: ${{ github.workspace }}/mesh-mcp-bin
+          MESH_MCP_HTTP_TIMEOUT_SECS: '120'
           RECALL_GRAPH_ENABLED: 'true'
           BENCH_RUN_NONCE: ${{ github.run_id }}-${{ github.run_attempt }}-b-pwr
         run: |
