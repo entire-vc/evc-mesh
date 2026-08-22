@@ -983,3 +983,15 @@ func TestTaskRepo_ConcurrentCreate_NoTaskNumberConflict(t *testing.T) {
 		assert.Equal(t, i+1, n, "task_numbers must be consecutive and unique")
 	}
 }
+
+// TestNegativeControl_699f4ec7 is a DELIBERATE, TEMPORARY regression for the
+// negative-control proof on Mesh card #699f4ec7 ([CI·Mesh] `Repo tests
+// (integration)` называет себя гейтом, но его нет в required). It exists only
+// to make `go test ./internal/repository/postgres/... -tags=integration` fail
+// on this branch's PR so we can confirm GitHub actually refuses the merge
+// once this check is added to required_status_checks.contexts, naming this
+// exact check as the reason. Revert this commit before merging protection
+// changes for real; delete this branch after the negative control is proven.
+func TestNegativeControl_699f4ec7(t *testing.T) {
+	t.Fatal("negative control for #699f4ec7 — repo-integration required-check flip: this test is meant to fail")
+}
