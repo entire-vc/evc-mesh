@@ -126,6 +126,26 @@ inputs:
     description: '`secrets.GITHUB_TOKEN`. Composite actions do not inherit secrets.'
     required: true
 
+outputs:
+  episode-status:
+    description: >-
+      `new` (mode=alert just opened the issue — first occurrence), `existing`
+      (mode=alert found the issue already open — a continuing episode, whether
+      or not this reason-kind had already been posted), `closed` (mode=resolve
+      closed one) or `none` (mode=resolve found nothing to clear).
+
+      This is the "did we already know about this" signal a caller needs to
+      escalate safely: a `new` episode alerts quietly, same as before, because
+      a first occurrence may be a transient blip and a check that turns red on
+      every blip trains its readers to ignore it. `existing` means the SAME
+      episode was still open on THIS run too — nobody cleared it since the
+      last time this arm reported in — and is the only condition under which a
+      caller may fail its job loudly without repeating the mistake this file's
+      header describes (a red nobody can clear gets bypassed; a red that
+      NAMES an already-known, still-open episode is not that — see
+      `recall-gate-branch`'s escalation step in memory-bench.yml).
+    value: ${{ steps.episode.outputs.episode-status }}
+
 runs:
   using: composite
   steps:
@@ -135,6 +155,7 @@ runs:
     # episode mutes its own re-alerts via the dedup key. Splitting the modes
     # into two steps would put the lookup back to two copies, one layer down.
     - name: Raise or clear the tracking issue
+      id: episode
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.github-token }}
@@ -170,10 +191,12 @@ runs:
         if [ "$MODE" = "resolve" ]; then
           if [ -z "$num" ]; then
             echo "No open episode titled '${TITLE}' — nothing to clear."
+            echo "episode-status=none" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           gh issue close "$num" --comment "${RECOVERY_NOTE} Safety net restored: ${RUN_URL}"
           echo "Closed episode #${num}."
+          echo "episode-status=closed" >> "$GITHUB_OUTPUT"
           exit 0
         fi
 
@@ -243,6 +266,7 @@ runs:
             gh issue create --title "$TITLE" --body "$body"
           fi
           echo "Opened tracking issue: ${TITLE}"
+          echo "episode-status=new" >> "$GITHUB_OUTPUT"
           exit 0
         fi
 
@@ -263,7 +287,9 @@ runs:
                  --jq '([.body] + ((.comments // []) | map(.body))) | map(. // "") | join("\n")')"
         if printf '%s' "$seen" | grep -qF "$marker"; then
           echo "Issue #${num} already reports '${REASON_KIND}' — not commenting again."
+          echo "episode-status=existing" >> "$GITHUB_OUTPUT"
           exit 0
         fi
         gh issue comment "$num" --body "$body"
         echo "Commented on tracking issue #${num}."
+        echo "episode-status=existing" >> "$GITHUB_OUTPUT"
