@@ -103,8 +103,9 @@ export interface PendingSelection {
 }
 
 export interface DraftThread {
-  anchor: NonNullable<import("@/types").CreateDocumentCommentRequest["anchor"]>;
-  span: CharSpan;
+  /** Null for a comment on the document as a whole — no quote, no span. */
+  anchor: NonNullable<import("@/types").CreateDocumentCommentRequest["anchor"]> | null;
+  span: CharSpan | null;
   /** The quote could not be placed in the markdown; it will save orphaned. */
   unplaceable: boolean;
 }
@@ -128,6 +129,8 @@ export interface DocCommentsController {
   pendingSelection: PendingSelection | null;
   /** Turn the current selection into a draft thread. */
   startDraft: () => void;
+  /** Start a draft with no quote and no span — a comment on the page as a whole. */
+  startPageDraft: () => void;
   draft: DraftThread | null;
   cancelDraft: () => void;
   submitDraft: (body: string) => Promise<void>;
@@ -281,7 +284,8 @@ export function useDocComments({
       else ranges.push(range);
     }
 
-    if (draft) {
+    // A page draft has no span — nothing on screen to paint for it.
+    if (draft?.span) {
       const range = rangeFromSpan(flat, draft.span);
       if (range) active.push(range);
     }
@@ -392,12 +396,32 @@ export function useDocComments({
     window.getSelection()?.removeAllRanges();
   }, [pendingSelection, source]);
 
+  /**
+   * Start a comment on the document as a whole — reachable without a text
+   * selection, unlike `startDraft`. No anchor, no span: `buildAnchorFromSelection`
+   * is deliberately not on this path, because there is no selection to build one
+   * from.
+   */
+  const startPageDraft = useCallback(() => {
+    setDraft({ anchor: null, span: null, unplaceable: false });
+    setActiveThreadId(null);
+    setPendingSelection(null);
+    window.getSelection()?.removeAllRanges();
+  }, []);
+
   const cancelDraft = useCallback(() => setDraft(null), []);
 
   const submitDraft = useCallback(
     async (body: string) => {
       if (!documentId || !draft) return;
-      const created = await createComment(documentId, { body, anchor: draft.anchor });
+      // `anchor` must be OMITTED for a page-level comment, not sent as null —
+      // the request type only allows leaving the key out (see
+      // CreateDocumentCommentRequest), matching how a reply already goes
+      // through with no anchor key at all.
+      const created = await createComment(
+        documentId,
+        draft.anchor ? { body, anchor: draft.anchor } : { body },
+      );
       setDraft(null);
       setActiveThreadId(created.id);
       onCommentCreated?.();
@@ -461,6 +485,7 @@ export function useDocComments({
     focusThread: setActiveThreadId,
     pendingSelection,
     startDraft,
+    startPageDraft,
     draft,
     cancelDraft,
     submitDraft,
