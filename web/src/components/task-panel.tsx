@@ -77,6 +77,7 @@ import type {
 import { DelegationLevelSelect } from "@/components/delegation-level-select";
 import {
   getTaskCostSummary,
+  recordHumanGateDecision,
   type TaskCostSummary,
 } from "@/lib/api";
 import { CostQualityBlock } from "@/components/cost-quality-block";
@@ -182,6 +183,7 @@ export function TaskPanel({
   const [hideEmpty, setHideEmpty] = useState(true);
   const [recurringHistoryOpen, setRecurringHistoryOpen] = useState(false);
   const [costSummary, setCostSummary] = useState<TaskCostSummary | null>(null);
+  const [clearingGate, setClearingGate] = useState(false);
   // Bumped whenever DependencyList reports a change, so both SubtaskList
   // mounts (mobile + desktop tabs) refetch — an is_child_of edge added or
   // removed there changes the Subtasks tab without the user reopening the card.
@@ -518,6 +520,44 @@ export function TaskPanel({
       onTaskUpdated?.();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to change status");
+    }
+  };
+
+  // Clears human_gate the only legitimate way: records a decision via
+  // POST /tasks/:id/human-gate-decisions (task #c56339b1), never a raw
+  // PATCH {human_gate:false} — that 403s for every caller by design (task
+  // #295). Only rendered for an authenticated human user (see JSX below);
+  // the handler independently re-enforces this — provenance="direct"
+  // requires the authenticated caller to BE decided_by, so an agent
+  // session cannot call this path even if it reached the button.
+  const handleClearHumanGate = async () => {
+    if (!currentTask || !user) return;
+    const questionRef = currentTask.human_gate_info?.marker_comment_id;
+    if (!questionRef) return; // no live marker to answer — nothing to reference
+    if (
+      !window.confirm(
+        "Clear the human gate on this task? This records that the question was answered and unfreezes the task.",
+      )
+    ) {
+      return;
+    }
+    setClearingGate(true);
+    try {
+      await recordHumanGateDecision(currentTask.id, {
+        question_ref: questionRef,
+        decided_by: user.id,
+        provenance: "direct",
+        channel: "mesh",
+      });
+      if (taskId) await fetchTask(taskId);
+      onTaskUpdated?.();
+      toast.success("Gate cleared");
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "Failed to clear human gate",
+      );
+    } finally {
+      setClearingGate(false);
     }
   };
 
@@ -1149,6 +1189,27 @@ export function TaskPanel({
                     </>
                   )}
                 </span>
+              )}
+              {/* Human-only: an authenticated agent session does not exist
+                  in this app (agents call the REST API directly, never this
+                  SPA), and the backend independently 403s provenance=direct
+                  for anyone who isn't the decided_by user — this check is
+                  belt, the handler is suspenders. */}
+              {user && currentTask.human_gate_info?.marker_comment_id && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-6 px-2 text-[11px]"
+                  data-testid="human-gate-clear-button"
+                  disabled={clearingGate}
+                  onClick={() => void handleClearHumanGate()}
+                >
+                  {clearingGate ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    "Clear gate"
+                  )}
+                </Button>
               )}
             </div>
           </>

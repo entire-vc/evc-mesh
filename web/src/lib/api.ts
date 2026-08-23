@@ -274,3 +274,48 @@ export async function getTaskCostSummary(
 ): Promise<TaskCostSummary> {
   return api<TaskCostSummary>(`/api/v1/tasks/${taskId}/cost-summary`);
 }
+
+// --- human_gate decisions ---------------------------------------------
+
+/**
+ * Body for POST /api/v1/tasks/:task_id/human-gate-decisions. Mirrors
+ * internal/handler/human_gate_decision_handler.go's recordDecisionRequest —
+ * this is the ONLY legitimate way to clear human_gate from the web app; a
+ * raw PATCH {human_gate:false} 403s for every caller (task #295), by design.
+ */
+export interface RecordHumanGateDecisionRequest {
+  /** The live marker comment this decision answers. Required unless
+   * canonical_key is set (server-side XOR — see validateDecisionInput). */
+  question_ref?: string;
+  canonical_key?: string;
+  /** Must equal the authenticated user's own id when provenance="direct" —
+   * the handler 403s otherwise (provenance=direct is unforgeable by
+   * construction: it requires the caller's own authenticated user id). */
+  decided_by: string;
+  provenance: "direct" | "bridged" | "attested";
+  channel: "mesh" | "telegram" | "chat" | "voice" | "in-person";
+  quote?: string;
+}
+
+export interface HumanGateDecision {
+  id: string;
+  task_id: string;
+  question_ref?: string | null;
+  canonical_key?: string | null;
+  decided_by: string;
+  provenance?: string | null;
+  channel?: string | null;
+  quote?: string | null;
+  recorded_by?: string | null;
+  created_at: string;
+}
+
+export async function recordHumanGateDecision(
+  taskId: string,
+  body: RecordHumanGateDecisionRequest,
+): Promise<HumanGateDecision> {
+  return api<HumanGateDecision>(`/api/v1/tasks/${taskId}/human-gate-decisions`, {
+    method: "POST",
+    body,
+  });
+}
