@@ -812,14 +812,30 @@ type WebhookRepository interface {
 
 // VCSLinkRepository manages persistence for VCS links.
 type VCSLinkRepository interface {
+	// Create inserts a new link, but returns apierror.Conflict (never a raw
+	// driver error) instead of inserting when a row already exists on this
+	// task whose url names the same real-world object — regardless of that
+	// row's provider (#0fbed572 defect 3: provider alone is not a stable
+	// identity across a provider correction, so matching only the unique
+	// index let a corrected re-add slip past as a silent duplicate).
 	Create(ctx context.Context, link *domain.VCSLink) error
 	GetByID(ctx context.Context, id uuid.UUID) (*domain.VCSLink, error)
 	Delete(ctx context.Context, id uuid.UUID) error
 	ListByTask(ctx context.Context, taskID uuid.UUID) ([]domain.VCSLink, error)
-	// Upsert inserts a new link or updates status/title/metadata on conflict
-	// of (task_id, provider, link_type, external_id). Used by the GitHub
-	// webhook orchestrator so repeated deliveries (opened → synchronize →
-	// closed) update the same row rather than failing the unique index.
+	// Upsert inserts a new link, or updates one in place when an existing row's
+	// url names the same real-world object (domain.NormalizeVCSURL) —
+	// REGARDLESS of provider or external_id. Used by the GitHub webhook
+	// orchestrator so repeated deliveries (opened → synchronize → closed)
+	// update the same row rather than failing the unique index, and by the
+	// manual re-link path so correcting a wrongly-inferred provider
+	// (#0fbed572) fixes the existing row instead of inserting a second one.
+	// If more than one existing row already names that same url — leftover
+	// corruption from matching by (task_id, provider, link_type,
+	// external_id) alone — the oldest survives and the rest are deleted as
+	// part of the same update; a genuinely different url is never touched.
+	// A caller-visible identity collision (e.g. against a DIFFERENT link
+	// already owning the target provider+external_id pair) surfaces as
+	// apierror.Conflict, never a raw driver error.
 	// On the update branch, id and created_at are NOT touched — they keep the
 	// existing row's values, never the caller-supplied link's. Upsert mutates
 	// *link in place to those actual persisted values so callers never echo a

@@ -1,6 +1,7 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
+import { MessageSquare } from "lucide-react";
 import { useMentionDirectory } from "@/hooks/use-mention-directory";
-import { Thread } from "@/components/doc-comment-rail";
+import { Composer, Thread } from "@/components/doc-comment-rail";
 import type {
   DocCommentsController,
   PlacedThread,
@@ -35,6 +36,21 @@ import type {
  * second thread renderer here is what would let the two surfaces disagree, and
  * "the tree at the bottom shows the same thing" is the acceptance criterion, not
  * a nicety.
+ *
+ * ## The composer at the bottom is always mounted (Pavel, 2026-08-23, `#744ae979`)
+ *
+ * A prior change (`e2e40de`, `#a9df0f4a`) mounted this section only while the
+ * rail was closed, to stop the two surfaces painting the same thread twice.
+ * Pavel's read: hiding the tree behind the rail was the wrong fix for that —
+ * the tree is where a comment gets *started* as much as where it gets *read*,
+ * so it stays on screen with the rail open or closed, and a reader who opens
+ * the rail is not supposed to lose the surface they were writing in. The
+ * duplicate-render bug this used to guard against is real, but the fix for it
+ * is scoping a query to one surface at a time (`within(rail)` /
+ * `within(tree)`), not un-mounting one of them — see `docs.test.tsx`.
+ *
+ * The section itself therefore no longer returns `null` on an empty page: the
+ * composer needs somewhere to render even before the first comment exists.
  */
 
 /**
@@ -74,19 +90,19 @@ export function DocCommentTree({
   showResolved,
   onShowResolvedChange,
 }: DocCommentTreeProps) {
-  const { threads } = controller;
+  const { threads, readOnly } = controller;
   // Once for the whole tree, not once per comment — see the hook's own note.
   const directory = useMentionDirectory();
+
+  // Remounts the composer on Cancel, which is the only way to clear it: it
+  // keeps its own typed text (see doc-comment-rail.tsx), and unlike the
+  // rail's draft box there is no `draft` state here whose absence would take
+  // the box away — this one has to stay on screen.
+  const [composerKey, setComposerKey] = useState(0);
 
   const ordered = useMemo(() => inDocumentOrder(threads), [threads]);
   const visible = showResolved ? ordered : ordered.filter((t) => !t.resolved);
   const resolvedCount = ordered.filter((t) => t.resolved).length;
-
-  // No section at all on a page nobody has commented on. An empty heading under
-  // every document would be a permanent invitation to nothing, and it would put
-  // a new string in front of every reader for the sake of the rare page that
-  // has a discussion.
-  if (ordered.length === 0) return null;
 
   return (
     <section
@@ -111,16 +127,38 @@ export function DocCommentTree({
         )}
       </div>
 
-      <div className="space-y-3">
-        {visible.map((thread) => (
-          <Thread
-            key={thread.root.id}
-            thread={thread}
-            controller={controller}
-            directory={directory}
+      {ordered.length === 0 ? (
+        <div className="flex flex-col items-start gap-1 pb-4 text-xs text-muted-foreground">
+          <MessageSquare className="h-5 w-5" />
+          <p>No comments yet.</p>
+        </div>
+      ) : (
+        <div className="space-y-3 pb-4">
+          {visible.map((thread) => (
+            <Thread
+              key={thread.root.id}
+              thread={thread}
+              controller={controller}
+              directory={directory}
+            />
+          ))}
+        </div>
+      )}
+
+      {/* The one entry point that needs no selection and no prior click — see
+          the header note. Absent while read-only, matching every other way to
+          start a comment (`DocCommentAffordance`, `DocCommentPageEntry`). */}
+      {!readOnly && (
+        <div className="border-t border-border pt-4">
+          <Composer
+            key={composerKey}
+            placeholder="Add a comment… @ to mention"
+            submitLabel="Comment"
+            onSubmit={controller.submitPageComment}
+            onCancel={() => setComposerKey((n) => n + 1)}
           />
-        ))}
-      </div>
+        </div>
+      )}
     </section>
   );
 }

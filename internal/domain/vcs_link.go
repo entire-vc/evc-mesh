@@ -2,6 +2,7 @@ package domain
 
 import (
 	"encoding/json"
+	"net/url"
 	"strings"
 	"time"
 
@@ -99,6 +100,40 @@ type VCSLink struct {
 	Status     VCSLinkStatus   `json:"status" db:"status"`
 	Metadata   json.RawMessage `json:"metadata" db:"metadata"`
 	CreatedAt  time.Time       `json:"created_at" db:"created_at"`
+}
+
+// NormalizeVCSURL folds cosmetic differences in a VCS object's URL — scheme
+// case, http vs https, and a trailing slash — into one comparable string, so
+// two calls that name the SAME PR/MR/commit are recognised as the same
+// object even when they spell its URL slightly differently. This is what
+// lets a re-link with a corrected provider (#0fbed572: a self-hosted GitLab
+// URL first mis-recorded as provider=github) find the existing row by what
+// the URL actually names, instead of by (provider, external_id) — the pair
+// that changes across exactly the correction being made, which is why
+// matching on it could never find the row it was trying to fix.
+//
+// It deliberately does NOT touch path casing, query strings, or anything
+// else that could be semantically meaningful: folding too aggressively is
+// the inverse failure (#0fbed572 defect 2) — a GitHub PR and a GitLab MR
+// that happen to share a number must NOT normalize to the same string, or
+// re-linking one silently erases the other.
+func NormalizeVCSURL(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	u, err := url.Parse(trimmed)
+	if err != nil || u.Host == "" {
+		// Not a parseable absolute URL — still fold the one difference that
+		// costs nothing (a trailing slash), so a malformed value at least
+		// compares consistently against itself across calls.
+		return strings.TrimRight(trimmed, "/")
+	}
+	u.Scheme = strings.ToLower(u.Scheme)
+	if u.Scheme == "http" {
+		u.Scheme = "https"
+	}
+	u.Host = strings.ToLower(u.Host)
+	u.Path = strings.TrimRight(u.Path, "/")
+	u.Fragment = ""
+	return u.String()
 }
 
 // CreateVCSLinkInput holds the data needed to create a VCS link.

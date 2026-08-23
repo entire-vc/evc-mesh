@@ -97,6 +97,7 @@ function makeController(
     draft: null,
     cancelDraft: vi.fn(),
     submitDraft: vi.fn(async () => {}),
+    submitPageComment: vi.fn(async () => {}),
     reply: vi.fn(async () => {}),
     edit: vi.fn(async () => {}),
     setResolved: vi.fn(async () => {}),
@@ -243,10 +244,16 @@ describe("DocCommentTree — resolved threads", () => {
 });
 
 describe("DocCommentTree — the surface itself", () => {
-  it("renders nothing at all on a page with no comments", () => {
-    const { container } = renderTree(makeController({ threads: [] }));
-    expect(container).toBeEmptyDOMElement();
-    expect(screen.queryByTestId("doc-comment-tree")).not.toBeInTheDocument();
+  it("still renders the section — with its composer — on a page with no comments", () => {
+    // #744ae979: the section used to return null here. It can't any more —
+    // the composer that lives under the document needs somewhere to render
+    // before the first comment exists, not only after.
+    renderTree(makeController({ threads: [] }));
+    expect(screen.getByTestId("doc-comment-tree")).toBeInTheDocument();
+    expect(screen.getByText("No comments yet.")).toBeInTheDocument();
+    expect(
+      screen.getByPlaceholderText("Add a comment… @ to mention"),
+    ).toBeInTheDocument();
   });
 
   it("still renders the section when every thread is resolved and hidden", () => {
@@ -278,5 +285,44 @@ describe("DocCommentTree — the surface itself", () => {
     renderTree(makeController({ threads: [makeThread("t1", { start: 10, end: 20 })] }));
     expect(screen.getByText("quote t1")).toBeInTheDocument();
     expect(screen.getByText("comment t1")).toBeInTheDocument();
+  });
+});
+
+describe("DocCommentTree — the composer that lives at the bottom (#744ae979)", () => {
+  it("is there with a page open, no click and no selection needed first", () => {
+    renderTree(makeController({ threads: [makeThread("t1", { start: 10, end: 20 })] }));
+    expect(
+      screen.getByPlaceholderText("Add a comment… @ to mention"),
+    ).toBeInTheDocument();
+  });
+
+  it("submits straight through submitPageComment, not the draft/rail path", () => {
+    const submitPageComment = vi.fn(async () => {});
+    const startPageDraft = vi.fn();
+    const submitDraft = vi.fn(async () => {});
+    renderTree(
+      makeController({ threads: [], submitPageComment, startPageDraft, submitDraft }),
+    );
+
+    fireEvent.change(screen.getByPlaceholderText("Add a comment… @ to mention"), {
+      target: { value: "A note from the bottom." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /^comment$/i }));
+
+    expect(submitPageComment).toHaveBeenCalledWith("A note from the bottom.");
+    // The point of NOT reusing the draft path: touching it here would also
+    // pop the rail's own draft box open (they share one `draft` field).
+    expect(startPageDraft).not.toHaveBeenCalled();
+    expect(submitDraft).not.toHaveBeenCalled();
+  });
+
+  it("is absent while the page is read-only, like every other way to start a comment", () => {
+    // Doubles as the negative control for the two tests above: it proves the
+    // same query can and does fail to find the composer, so their passing is
+    // not an artefact of `getByPlaceholderText` matching something else.
+    renderTree(makeController({ threads: [], readOnly: true }));
+    expect(
+      screen.queryByPlaceholderText("Add a comment… @ to mention"),
+    ).not.toBeInTheDocument();
   });
 });

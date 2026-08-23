@@ -4,16 +4,17 @@
 # Binary output directory
 BIN_DIR := bin
 API_BINARY := $(BIN_DIR)/mesh-api
-MCP_BINARY := $(BIN_DIR)/mesh-mcp
+# No MCP_BINARY here on purpose: the MCP server lives in its own repository
+# (entire-vc/evc-mesh-mcp). This repo's copy (cmd/mcp + internal/mcp) was a
+# duplicate that had drifted 12 tools behind and was deleted — Mesh #e85e4e05.
 
 # Database connection (matches docker-compose defaults)
 DB_DSN ?= postgres://mesh:mesh@localhost:5437/mesh?sslmode=disable
 
-## build: Compile API and MCP server binaries
+## build: Compile the API binary
 build:
 	@mkdir -p $(BIN_DIR)
 	go build -o $(API_BINARY) ./cmd/api
-	go build -o $(MCP_BINARY) ./cmd/mcp
 
 ## build-prod: Cross-compile API binary for Linux/amd64 with embedded build metadata
 build-prod:
@@ -167,7 +168,17 @@ ci-project-env:
 	fi
 
 ## ci-services-up: Start postgres + redis + nats via dev docker-compose.
+##
+## Reaps stale mesh-ci-* projects from killed sessions FIRST (see
+## scripts/ci/reap_stale_ci_containers.py — the EXIT trap in ci-test below
+## cannot survive SIGKILL, so this is the backstop that doesn't depend on the
+## dying process running any cleanup at all). Runs on every `ci-services-up`
+## call, i.e. every time someone is about to start a new CI stack anyway, so
+## steady-state container count self-corrects on ordinary fleet usage.
+## Best-effort: `|| true` so a bug in the reaper never blocks CI from running.
 ci-services-up: ci-project-env
+	@echo "── Reaping stale CI containers from killed sessions ─────────────"
+	@python3 $(CURDIR)/scripts/ci/reap_stale_ci_containers.py || true
 	@echo "── Starting CI services (postgres redis nats) ──────────────────"
 	docker compose -f $(DEPLOY_COMPOSE) up -d --wait postgres redis nats
 	@echo "── Services ready ✓"
@@ -193,8 +204,25 @@ ci-services-down:
 ## forever, which is the majority case that produced #03eed881 — a failing
 ## `make ci` is a normal, frequent outcome, not an edge case worth
 ## leaving unhandled.
+##
+## That fix is still incomplete on its own (#01fc9e81): EXIT alone is not
+## guaranteed to run for every way this shell dies, and NOTHING can trap
+## SIGKILL — the most common way a run actually dies here (hung-turn-
+## watchdog, a fiddler relaunch, /switch, Ctrl+C, the rm guard force-killing
+## a wedged lane). Two changes:
+##   1. Also trap INT/TERM/HUP so a plain kill/Ctrl+C runs the same cleanup
+##      instead of relying on bash's default signal disposition to get there.
+##      Still necessary, still not sufficient — SIGKILL bypasses this too.
+##   2. Write a liveness marker (.ci-active-pid: this shell's own PID plus
+##      its own `ps -o lstart=`) before doing anything else, so that a run
+##      killed by SIGKILL — which leaves the marker behind pointing at a now-
+##      dead PID — can be told apart from a genuinely live run by
+##      scripts/ci/reap_stale_ci_containers.py (invoked from ci-services-up),
+##      which is the actual backstop for the case this trap can't cover.
 ci-test: ci-services-up
-	@trap '$(MAKE) ci-services-down' EXIT; \
+	@trap '$(MAKE) ci-services-down; rm -f $(DEPLOY_DIR)/.ci-active-pid' EXIT; \
+	trap 'exit 143' INT TERM HUP; \
+	printf '%s\n%s\n' "$$$$" "$$(ps -o lstart= -p $$$$)" > $(DEPLOY_DIR)/.ci-active-pid; \
 	echo "── Migrations ──────────────────────────────────────────────────"; \
 	GOOSE_DRIVER=postgres GOOSE_DBSTRING="$(CI_DB_DSN)" \
 		$(GOOSE) -dir migrations up && \
@@ -207,8 +235,8 @@ ci-test: ci-services-up
 
 ## ci-build: Compile Go binaries + frontend typecheck + build.
 ci-build:
-	@echo "── Build (Go API + MCP) ────────────────────────────────────────"
-	go build -o /dev/null ./cmd/api ./cmd/mcp
+	@echo "── Build (Go API) ──────────────────────────────────────────────"
+	go build -o /dev/null ./cmd/api
 	@echo "── Frontend: typecheck (negative controls first) ────────────────"
 	./scripts/assert-typecheck-is-not-vacuous.sh
 	./scripts/assert-typecheck-covers-e2e.sh

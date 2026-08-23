@@ -811,7 +811,7 @@ var validStatusCategories = map[domain.StatusCategory]struct{}{
 // filter applied in SQL.
 //
 // limit is accepted under both names: the MCP client has always sent page_size
-// (internal/mcp/tools.go, get_my_tasks), and "limit" is what a hand-written
+// (evc-mesh-mcp, internal/mcp/tools.go, get_my_tasks), and "limit" is what a hand-written
 // caller reaches for. Neither was read before this change, so an agent asking
 // for 50 tasks was served all of them.
 func parseAgentFeedFilter(c echo.Context) (repository.AssigneeTaskFilter, error) {

@@ -166,15 +166,29 @@ func (s *vcsLinkService) Create(ctx context.Context, input domain.CreateVCSLinkI
 		// is safe to return as-is either way.
 		created, err := s.repo.Upsert(ctx, link)
 		if err != nil {
-			return nil, false, fmt.Errorf("create vcs link: %w", err)
+			return nil, false, wrapVCSLinkRepoErr(err)
 		}
 		return link, created, nil
 	}
 
 	if err := s.repo.Create(ctx, link); err != nil {
-		return nil, false, fmt.Errorf("create vcs link: %w", err)
+		return nil, false, wrapVCSLinkRepoErr(err)
 	}
 	return link, true, nil
+}
+
+// wrapVCSLinkRepoErr wraps a repository error for logging context, EXCEPT
+// when it is already an *apierror.Error — the repo (#0fbed572) returns
+// apierror.Conflict directly for a caller-actionable identity collision, and
+// the HTTP layer's error mapping type-asserts on *apierror.Error rather than
+// unwrapping (handleError in task_handler.go), so wrapping it here would
+// silently downgrade a clear 409 into a generic 500.
+func wrapVCSLinkRepoErr(err error) error {
+	var apiErr *apierror.Error
+	if errors.As(err, &apiErr) {
+		return apiErr
+	}
+	return fmt.Errorf("create vcs link: %w", err)
 }
 
 // GetByID retrieves a VCS link by ID.

@@ -42,7 +42,7 @@ SCRIPT = Path(__file__).resolve().parent / "scope_relevant.sh"
 MEMORY_PATHS = "\n".join([
     "internal/service/memory_service.go",
     "internal/repository/postgres/memory_repo.go",
-    "internal/mcp/tools.go",
+    "internal/handler/memory_handler.go",
     "scripts/memory-bench/",
 ])
 
@@ -100,7 +100,7 @@ class ScopeNarrowsOnBothDiffableEvents(unittest.TestCase):
     """The positive half: the predicate must be able to answer BOTH ways."""
 
     def test_memory_path_is_gated_on_pull_request(self):
-        repo, base, head, tmp = _repo_with_change(["internal/mcp/tools.go"])
+        repo, base, head, tmp = _repo_with_change(["internal/handler/memory_handler.go"])
         with tmp:
             rc, _, rel = run_scope(repo, EVENT_NAME="pull_request", BASE_SHA=base, HEAD_SHA=head)
         self.assertEqual(rc, 0)
@@ -108,7 +108,7 @@ class ScopeNarrowsOnBothDiffableEvents(unittest.TestCase):
 
     def test_memory_path_is_gated_on_merge_group(self):
         """The #347 direction. Narrowing must not open a way to main unmeasured."""
-        repo, base, head, tmp = _repo_with_change(["internal/mcp/tools.go"])
+        repo, base, head, tmp = _repo_with_change(["internal/handler/memory_handler.go"])
         with tmp:
             rc, _, rel = run_scope(repo, EVENT_NAME="merge_group", BASE_SHA=base, HEAD_SHA=head)
         self.assertEqual(rc, 0)
@@ -193,7 +193,7 @@ class UnknownReadsAsGated(unittest.TestCase):
 
     def test_empty_memory_paths_gates(self):
         """The list not reaching the step must not read as `nothing is relevant`."""
-        repo, base, head, tmp = _repo_with_change(["internal/mcp/tools.go"])
+        repo, base, head, tmp = _repo_with_change(["internal/handler/memory_handler.go"])
         with tmp:
             _, out, rel = run_scope(
                 repo, EVENT_NAME="merge_group",

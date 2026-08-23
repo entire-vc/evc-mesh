@@ -185,8 +185,14 @@ cd web && pnpm install && pnpm dev
 
 ### 5. Start the MCP server (optional)
 
+The MCP server is a separate module —
+[`evc-mesh-mcp`](https://github.com/entire-vc/evc-mesh-mcp) — not part of this
+repository:
+
 ```bash
-MESH_MCP_PORT=8081 go run ./cmd/mcp --transport sse
+go install github.com/entire-vc/evc-mesh-mcp@latest
+MESH_API_URL=http://localhost:8005 MESH_MCP_PORT=8081 \
+  evc-mesh-mcp --transport sse
 ```
 
 `--transport` is the only flag; the port is set via `MESH_MCP_PORT`. See
@@ -228,10 +234,10 @@ Connect any MCP-compatible agent to Mesh. Example for Claude Code (`.mcp.json`):
 {
   "mcpServers": {
     "evc-mesh": {
-      "command": "go",
-      "args": ["run", "./cmd/mcp"],
-      "cwd": "/path/to/evc-mesh",
+      "command": "evc-mesh-mcp",
+      "args": ["--transport", "stdio"],
       "env": {
+        "MESH_API_URL": "http://localhost:8005",
         "MESH_AGENT_KEY": "agk_workspace_your-key-here"
       }
     }
@@ -254,19 +260,14 @@ Or connect via SSE for remote agents:
 }
 ```
 
-The MCP server exposes 49 tools for managing projects, tasks, comments, artifacts, events, rules, memory, and more. See [MCP Reference](docs/mcp-reference.md) for the full tool catalog, and [Agent Onboarding](docs/agent-onboarding.md) for connecting an agent to a self-hosted instance.
+The MCP server exposes 61 tools for managing projects, tasks, comments, artifacts, events, rules, memory, and more. See [MCP Reference](docs/mcp-reference.md) for the full tool catalog, and [Agent Onboarding](docs/agent-onboarding.md) for connecting an agent to a self-hosted instance.
 
-**Two implementations exist, on purpose.** `./cmd/mcp` in this repo and the
-standalone [`evc-mesh-mcp`](https://github.com/entire-vc/evc-mesh-mcp) server
-both implement the same MCP tool set (`internal/mcp` in each — Go's
-`internal/` visibility rules mean one cannot import the other across
-modules). `evc-mesh-mcp` is the one under active development and gets new
-tools/fixes first; `./cmd/mcp` here is the copy this repo builds and deploys
-alongside the API. If you are choosing which to run, prefer
-`evc-mesh-mcp`. `cmd/mcp-drift-check` (run in CI on both repos) diffs the two
-`internal/mcp` trees function-by-function and fails the build on
-unreviewed drift — see `cmd/mcp-drift-check/allow.txt` for the currently
-known, tracked differences.
+**There is one implementation, and it is not in this repository.** Until
+2026-08 this repo carried a second copy of the same server under `./cmd/mcp`
+(+ `internal/mcp`). Go's `internal/` visibility rules mean neither module can
+import the other, so the two copies were maintained by hand and drifted — the
+copy here was 12 tools behind when it was removed. Only
+[`evc-mesh-mcp`](https://github.com/entire-vc/evc-mesh-mcp) remains.
 
 ## Documentation
 

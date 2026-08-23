@@ -303,7 +303,13 @@ describe("DocsPage — open, view and edit", () => {
     renderDocs("doc-1");
 
     expect(await screen.findByTestId("doc-view")).toHaveTextContent("Run the thing.");
-    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+    // Scoped to the measured body, not the whole page: since #744ae979 the
+    // page legitimately carries one textbox outside it — the always-mounted
+    // comment composer under the document — and that one is not what this
+    // test is about.
+    expect(
+      within(screen.getByTestId("doc-measured-body")).queryByRole("textbox"),
+    ).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /edit/i })).toBeInTheDocument();
   });
 
@@ -1069,15 +1075,43 @@ describe("DocsPage — the discussion under the page", () => {
     expect(measured.contains(screen.getByTestId("doc-view"))).toBe(true);
   });
 
-  it("shows no section on a page with no comments", async () => {
+  it("still renders the section — with its composer — on a page with no comments", async () => {
+    // #744ae979: the tree used to unmount entirely here. It can't any more —
+    // it carries the bottom composer, which needs somewhere to render before
+    // the first comment exists.
     mockWithComments([]);
     renderDocs("doc-1");
 
     await screen.findByTestId("doc-view");
-    expect(screen.queryByTestId("doc-comment-tree")).not.toBeInTheDocument();
+    expect(screen.getByTestId("doc-comment-tree")).toBeInTheDocument();
+    expect(
+      screen.getByPlaceholderText("Add a comment… @ to mention"),
+    ).toBeInTheDocument();
   });
 
-  describe("the rail and the tree are mutually exclusive (#a9df0f4a)", () => {
+  /**
+   * AC1 — the bottom form is available with NO selection and NO prior click,
+   * in both rail states. This is the load-bearing test for the card's whole
+   * premise: `#a9df0f4a`'s fix hid this exact composer whenever the rail was
+   * open, and Pavel's decision is specifically that the hiding was wrong.
+   */
+  it.each([
+    ["closed", "0"],
+    ["open", "1"],
+  ] as const)("AC1: the bottom composer is available with the rail %s", async (_label, stored) => {
+    mockWithComments([comment()]);
+    localStorage.setItem("mesh_docs_comments_rail", stored);
+    renderDocs("doc-1");
+
+    const tree = await screen.findByTestId("doc-comment-tree");
+    if (stored === "1") await screen.findByTestId("doc-comment-rail");
+
+    expect(
+      within(tree).getByPlaceholderText("Add a comment… @ to mention"),
+    ).toBeInTheDocument();
+  });
+
+  describe("the rail and the tree render together, once per surface (#744ae979)", () => {
     /** Never resolves in BODY — the server's placement, not ours. */
     function pageComment() {
       return {
@@ -1124,34 +1158,32 @@ describe("DocsPage — the discussion under the page", () => {
     }
 
     /**
-     * Pavel's report on `#a9df0f4a`: with the rail open, the same three
-     * threads — one anchored to text, one on the page as a whole, one
-     * orphaned — painted twice on one screen. The data was never duplicated
-     * (`Comments 3` in the header was always right); only the rendering was.
-     * `#a4a8db69` made the rail start closed, which hides the bug on first
-     * load but does nothing once a reader opens it — this is the composition
-     * test that catches the open state, which no test inside
-     * doc-comment-rail.test.tsx or doc-comment-tree.test.tsx can see, because
-     * neither component knows the other is mounted.
+     * Pavel's reversal of `#a9df0f4a` (2026-08-23, `#744ae979`): the rail and
+     * the tree are supposed to show the discussion at the same time, not take
+     * turns. So with the rail open, each of the three threads legitimately
+     * appears TWICE on screen — once per surface — which is why the count
+     * that matters is per-surface, not per-document. Counting unscoped here
+     * would make a correct implementation look like the `#a9df0f4a` bug; that
+     * trap is exactly why the card's AC4 asked for this reformulation before
+     * any test got written.
      */
-    it("renders each thread exactly once with the rail open, and hides the tree", async () => {
+    it("renders each thread exactly once PER SURFACE with the rail open, and keeps the tree", async () => {
       mockWithComments([comment(), pageComment(), orphanedComment()]);
       localStorage.setItem("mesh_docs_comments_rail", "1");
       renderDocs("doc-1");
 
-      await screen.findByTestId("doc-comment-rail");
+      const rail = await screen.findByTestId("doc-comment-rail");
+      const tree = await screen.findByTestId("doc-comment-tree");
       await waitFor(() => {
-        expect(screen.getAllByTestId("doc-comment-thread")).toHaveLength(3);
+        expect(within(rail).getAllByTestId("doc-comment-thread")).toHaveLength(3);
       });
-      // If the tree were still mounted alongside the rail, this list would
-      // have 6 entries, not 3 — and the tree would be findable at all.
-      expect(screen.queryByTestId("doc-comment-tree")).not.toBeInTheDocument();
+      expect(within(tree).getAllByTestId("doc-comment-thread")).toHaveLength(3);
+      // Six on the page as a whole: three threads, two surfaces, nothing
+      // repeated a third time within either one.
+      expect(screen.getAllByTestId("doc-comment-thread")).toHaveLength(6);
     });
 
-    it("NEGATIVE CONTROL: with the rail closed, the tree alone carries all three", async () => {
-      // Guards the test above from going vacuous on a future refactor that
-      // renamed or removed one surface entirely rather than fixing the
-      // composition: closed, the tree must still show everything.
+    it("with the rail closed, the tree alone carries all three", async () => {
       mockWithComments([comment(), pageComment(), orphanedComment()]);
       localStorage.setItem("mesh_docs_comments_rail", "0");
       renderDocs("doc-1");
@@ -1161,6 +1193,29 @@ describe("DocsPage — the discussion under the page", () => {
         expect(screen.getAllByTestId("doc-comment-thread")).toHaveLength(3);
       });
       expect(screen.queryByTestId("doc-comment-rail")).not.toBeInTheDocument();
+    });
+
+    it("NEGATIVE CONTROL: closing the rail after opening it drops it back to the tree's three", async () => {
+      // Guards the two tests above from going vacuous on a future refactor
+      // that always renders 3 (e.g. de-duplicating across surfaces, which
+      // would silently defeat AC1 — the bottom form must work independently
+      // of the rail). Toggling within one render proves the count actually
+      // tracks `railOpen` rather than being a fixture artefact.
+      mockWithComments([comment(), pageComment(), orphanedComment()]);
+      localStorage.setItem("mesh_docs_comments_rail", "1");
+      renderDocs("doc-1");
+
+      await screen.findByTestId("doc-comment-rail");
+      await waitFor(() => {
+        expect(screen.getAllByTestId("doc-comment-thread")).toHaveLength(6);
+      });
+
+      fireEvent.click(screen.getByTestId("doc-comment-toggle"));
+
+      await waitFor(() => {
+        expect(screen.queryByTestId("doc-comment-rail")).not.toBeInTheDocument();
+      });
+      expect(screen.getAllByTestId("doc-comment-thread")).toHaveLength(3);
     });
 
     /**
@@ -1179,6 +1234,11 @@ describe("DocsPage — the discussion under the page", () => {
      * surface is on screen carries the same reply entry. The assertion below
      * pins that, on the page-as-a-whole thread specifically — the one class
      * of thread that has nowhere else to live.
+     *
+     * Scoped to the tree rather than an unscoped `findByText`: since the tree
+     * is now always mounted, the same text is on screen twice with the rail
+     * open (once per surface), and an unscoped query would throw on the
+     * duplicate instead of testing writability at all.
      */
     it("AC2: the page-as-a-whole thread stays writable in BOTH rail states", async () => {
       for (const railOpen of [true, false] as const) {
@@ -1186,12 +1246,12 @@ describe("DocsPage — the discussion under the page", () => {
         localStorage.setItem("mesh_docs_comments_rail", railOpen ? "1" : "0");
         const { unmount } = renderDocs("doc-1");
 
-        await screen.findByTestId(
-          railOpen ? "doc-comment-rail" : "doc-comment-tree",
-        );
+        const tree = await screen.findByTestId("doc-comment-tree");
+        if (railOpen) await screen.findByTestId("doc-comment-rail");
+
         // The thread that exists only as "the document as a whole" — it has no
         // anchor to fall back to, so if a surface drops it, it is unreachable.
-        const whole = await screen.findByText("On the page as a whole");
+        const whole = await within(tree).findByText("On the page as a whole");
         const card = whole.closest('[data-testid="doc-comment-thread"]');
         expect(card).not.toBeNull();
 
@@ -1259,17 +1319,23 @@ describe("DocsPage — the discussion under the page", () => {
       };
     }
 
+    // Scoped to the rail throughout: since #744ae979 the tree carries its own
+    // permanently-mounted composer with the identical placeholder and submit
+    // label (reused copy, not a coincidence — see #744ae979's instruction not
+    // to invent new strings), so an unscoped query now matches two composers
+    // whenever the rail is open.
+
     it("AC1: reaches the composer with nothing selected, rail already open", async () => {
       mockWithComposePost([], createdPageComment);
       localStorage.setItem("mesh_docs_comments_rail", "1");
       renderDocs("doc-1");
 
-      await screen.findByTestId("doc-comment-rail");
+      const rail = await screen.findByTestId("doc-comment-rail");
       // jsdom's window.getSelection() is collapsed by default — there is no
       // selection here, unlike every other way to reach the composer.
       fireEvent.click(screen.getByTestId("doc-comment-page-entry"));
 
-      await screen.findByPlaceholderText(/@ to mention/i);
+      await within(rail).findByPlaceholderText(/@ to mention/i);
     });
 
     it("AC1: reaches the composer with nothing selected, rail starts closed", async () => {
@@ -1282,10 +1348,11 @@ describe("DocsPage — the discussion under the page", () => {
 
       fireEvent.click(screen.getByTestId("doc-comment-page-entry"));
 
-      // The click opens the rail itself — the composer has to render somewhere,
-      // and the tree (the other surface) never carries one.
-      await screen.findByTestId("doc-comment-rail");
-      expect(screen.getByPlaceholderText(/@ to mention/i)).toBeInTheDocument();
+      // The click opens the rail itself — the composer has to render somewhere.
+      const rail = await screen.findByTestId("doc-comment-rail");
+      expect(
+        within(rail).getByPlaceholderText(/@ to mention/i),
+      ).toBeInTheDocument();
     });
 
     it("AC2: the request omits anchor, and the reply is placed as page — same wording a live page thread uses", async () => {
@@ -1297,19 +1364,20 @@ describe("DocsPage — the discussion under the page", () => {
       localStorage.setItem("mesh_docs_comments_rail", "1");
       renderDocs("doc-1");
 
-      await screen.findByTestId("doc-comment-rail");
+      const rail = await screen.findByTestId("doc-comment-rail");
       fireEvent.click(screen.getByTestId("doc-comment-page-entry"));
-      fireEvent.change(await screen.findByPlaceholderText(/@ to mention/i), {
+      fireEvent.change(await within(rail).findByPlaceholderText(/@ to mention/i), {
         target: { value: "A note on the whole page." },
       });
-      fireEvent.click(screen.getByRole("button", { name: /^comment$/i }));
+      fireEvent.click(within(rail).getByRole("button", { name: /^comment$/i }));
 
       // `findByText` alone, not chained into `.toBeInTheDocument()` on its
       // resolved value: this component re-renders more than once while the
       // draft settles, and a node `findByText` matched on one poll can be
       // gone by the time a *separate* synchronous assertion runs against that
-      // same reference. `findByText` throwing IS the check.
-      await screen.findByText("A note on the whole page.");
+      // same reference. `findByText` throwing IS the check. Scoped to the
+      // rail: once the reply lands, the tree renders the identical text too.
+      await within(rail).findByText("A note on the whole page.");
 
       // Not `anchor: null` — the key must be absent, per
       // CreateDocumentCommentRequest's own contract ("omitted for a page-level
@@ -1322,26 +1390,32 @@ describe("DocsPage — the discussion under the page", () => {
       // rendered with the exact wording an existing live page-thread already
       // carries (PlacementNotice), not a new string this task would have had
       // to introduce under its own gate.
-      await screen.findByText("On the page as a whole");
+      expect(within(rail).getByText("On the page as a whole")).toBeInTheDocument();
     });
 
-    it("AC3: the new thread is not doubled between the rail and the tree", async () => {
+    it("AC4: the new thread appears once per surface, not twice within either one", async () => {
+      // Reformulated per the card's trap note: with both surfaces mounted,
+      // one thread legitimately paints twice on the page as a whole — once in
+      // the rail, once in the tree. What must NOT happen is either surface
+      // showing its own copy more than once.
       mockWithComposePost([], createdPageComment);
       localStorage.setItem("mesh_docs_comments_rail", "1");
       renderDocs("doc-1");
 
-      await screen.findByTestId("doc-comment-rail");
+      const rail = await screen.findByTestId("doc-comment-rail");
+      const tree = await screen.findByTestId("doc-comment-tree");
       fireEvent.click(screen.getByTestId("doc-comment-page-entry"));
-      fireEvent.change(await screen.findByPlaceholderText(/@ to mention/i), {
+      fireEvent.change(await within(rail).findByPlaceholderText(/@ to mention/i), {
         target: { value: "A note on the whole page." },
       });
-      fireEvent.click(screen.getByRole("button", { name: /^comment$/i }));
+      fireEvent.click(within(rail).getByRole("button", { name: /^comment$/i }));
 
-      await screen.findByText("A note on the whole page.");
-      // Exactly one card for the one thread that now exists — not two, which
-      // is what mounting both surfaces at once (the #a9df0f4a bug) would give.
-      expect(screen.getAllByTestId("doc-comment-thread")).toHaveLength(1);
-      expect(screen.queryByTestId("doc-comment-tree")).not.toBeInTheDocument();
+      await within(rail).findByText("A note on the whole page.");
+      await waitFor(() => {
+        expect(within(tree).getAllByTestId("doc-comment-thread")).toHaveLength(1);
+      });
+      expect(within(rail).getAllByTestId("doc-comment-thread")).toHaveLength(1);
+      expect(screen.getAllByTestId("doc-comment-thread")).toHaveLength(2);
     });
   });
 });

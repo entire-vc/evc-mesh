@@ -74,6 +74,7 @@ function makeController(
     draft: null,
     cancelDraft: vi.fn(),
     submitDraft: vi.fn(async () => {}),
+    submitPageComment: vi.fn(async () => {}),
     reply: vi.fn(async () => {}),
     edit: vi.fn(async () => {}),
     setResolved: vi.fn(async () => {}),

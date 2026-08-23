@@ -134,6 +134,17 @@ export interface DocCommentsController {
   draft: DraftThread | null;
   cancelDraft: () => void;
   submitDraft: (body: string) => Promise<void>;
+  /**
+   * Creates a page-level comment straight away — no draft, no anchor, no span.
+   * For the composer that sits permanently under the document (`#744ae979`):
+   * that composer has no "start" step to click, so it cannot go through
+   * `startPageDraft`/`submitDraft`'s two-step state (setting `draft` there
+   * would also pop the rail's OWN draft box open, since the two composers
+   * share one `draft` field — a phantom empty box the reader never asked for).
+   * Same wire shape as `submitDraft`'s page branch: `anchor` omitted, not sent
+   * as `null`.
+   */
+  submitPageComment: (body: string) => Promise<void>;
 
   reply: (rootId: string, body: string) => Promise<void>;
   edit: (id: string, body: string) => Promise<void>;
@@ -429,6 +440,16 @@ export function useDocComments({
     [documentId, draft, createComment, onCommentCreated],
   );
 
+  const submitPageComment = useCallback(
+    async (body: string) => {
+      if (!documentId) return;
+      const created = await createComment(documentId, { body });
+      setActiveThreadId(created.id);
+      onCommentCreated?.();
+    },
+    [documentId, createComment, onCommentCreated],
+  );
+
   const reply = useCallback(
     async (rootId: string, body: string) => {
       if (!documentId) return;
@@ -489,6 +510,7 @@ export function useDocComments({
     draft,
     cancelDraft,
     submitDraft,
+    submitPageComment,
     reply,
     edit,
     setResolved,

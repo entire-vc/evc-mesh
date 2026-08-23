@@ -244,9 +244,8 @@ Configure in `.mcp.json`:
 {
   "mcpServers": {
     "evc-mesh": {
-      "command": "go",
-      "args": ["run", "./cmd/mcp"],
-      "cwd": "/path/to/evc-mesh",
+      "command": "evc-mesh-mcp",
+      "args": ["--transport", "stdio"],
       "env": {
         "MESH_AGENT_KEY": "agk_workspace_your-key"
       }

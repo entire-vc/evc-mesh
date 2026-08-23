@@ -233,12 +233,18 @@ jobs:
               -X main.BuildVersion=${BUILD_VERSION} \
               -X main.BuildEnv=prod" \
             -o mesh-api ./cmd/api
-          # cmd/mcp has no BuildSHA/BuildVersion vars (no ldflags -X target) —
-          # it also serves as the stdio binary agents run locally, so it isn't
-          # versioned the same way. See #814c39b7: this build+deploy exists at
-          # all because deploy-backend.yml used to trigger on cmd/** while only
-          # ever building mesh-api, silently leaving mesh-mcp.service undeployed.
-          GOOS=linux GOARCH=amd64 go build -ldflags "-w -s" -o mesh-mcp ./cmd/mcp
+          # This job used to build and deploy mesh-mcp from ./cmd/mcp too
+          # (#814c39b7). It no longer does: mesh-vm's mesh-mcp.service is
+          # deployed by evc-mesh-mcp's own deploy-mesh-vm.yml, from the single
+          # implementation that also ships to the fleet. Two pipelines writing
+          # /opt/evc-mesh/bin/mesh-mcp meant whichever ran last won, and this
+          # one ran on every backend merge — so it silently reverted the other
+          # (measured: 8 mesh-mcp.rollback-*-ci-auto anchors on mesh-vm over
+          # 2026-08-21..22, each one this job overwriting the live binary).
+          # ./cmd/mcp is now gone from this repository entirely (#e85e4e05):
+          # the self-hosted compose stack installs the MCP server from
+          # evc-mesh-mcp at a pinned SHA instead (deploy/docker/mesh/Dockerfile),
+          # so there is no copy left here for anything to build.
 
       - name: Setup SSH
         uses: webfactory/ssh-agent@v0.10.0
@@ -287,21 +293,6 @@ jobs:
           rsync -avz --checksum mesh-api mesh-vm:/opt/evc-mesh/bin/mesh-api.new
           rsync -avz mesh-api.sha256 mesh-vm:/opt/evc-mesh/bin/mesh-api.new.sha256
 
-          sha256sum mesh-mcp | cut -d' ' -f1 > mesh-mcp.sha256
-          rsync -avz --checksum mesh-mcp mesh-vm:/opt/evc-mesh/bin/mesh-mcp.new
-          rsync -avz mesh-mcp.sha256 mesh-vm:/opt/evc-mesh/bin/mesh-mcp.new.sha256
-
-      # mesh-api and mesh-mcp are swapped+restarted+smoke-tested as two fully
-      # independent step-pairs, mesh-api's pair first. This is deliberate: if
-      # they shared one step (as an earlier version of this file did), a
-      # failure anywhere in the mesh-mcp half made GitHub Actions skip the
-      # next step by default — which was mesh-api's own smoke test. That
-      # dropped exactly the verification this workflow exists to provide
-      # (mesh-api's own healthz/version check) for a reason unrelated to
-      # mesh-api. Keeping the pairs separate means a mesh-mcp-only failure
-      # still fails the job (nothing here is a v2-doesn't-deploy escape
-      # hatch), but it can no longer erase the record of whether mesh-api's
-      # OWN deploy was independently confirmed healthy first.
       - name: Atomic swap and restart (mesh-api)
         run: |
           ssh mesh-vm 'set -e
@@ -335,63 +326,9 @@ jobs:
           fi
           echo "Deploy verified: ${DEPLOYED}"
 
-      - name: Atomic swap and restart (mesh-mcp)
-        run: |
-          ssh mesh-vm 'set -e
-            # Keep one rollback anchor of the outgoing mesh-mcp binary — this
-            # service used to be deployed by hand and that convention (a dated
-            # rollback copy alongside the live binary) is already established
-            # on this host; CI keeps it rather than silently dropping it.
-            if [ -f /opt/evc-mesh/bin/mesh-mcp ]; then
-              cp -p /opt/evc-mesh/bin/mesh-mcp "/opt/evc-mesh/bin/mesh-mcp.rollback-$(date -u +%Y%m%d-%H%M%S)-ci-auto"
-            fi
-            EXPECTED_MCP=$(cat /opt/evc-mesh/bin/mesh-mcp.new.sha256)
-            mv /opt/evc-mesh/bin/mesh-mcp.new /opt/evc-mesh/bin/mesh-mcp
-            rm -f /opt/evc-mesh/bin/mesh-mcp.new.sha256
-            ACTUAL_MCP=$(sha256sum /opt/evc-mesh/bin/mesh-mcp | cut -d" " -f1)
-            if [ "$EXPECTED_MCP" != "$ACTUAL_MCP" ]; then
-              echo "mesh-mcp binary swap assertion FAILED: expected $EXPECTED_MCP got $ACTUAL_MCP" >&2
-              exit 1
-            fi
-            systemctl restart mesh-mcp'
-
-      - name: Smoke test (mesh-mcp)
-        run: |
-          # mesh-mcp (cmd/mcp) has no version endpoint (see build step) — verify
-          # the running SSE process is executing the exact bytes just uploaded,
-          # not merely that a file of that name exists, by hashing the live
-          # process's own binary via /proc/<pid>/exe rather than the file on
-          # disk (a restart failure would leave the OLD process running against
-          # the NEW file, which a plain `sha256sum /opt/.../mesh-mcp` cannot see).
-          MCP_OK=""
-          for i in $(seq 1 15); do
-            RESULT=$(ssh mesh-vm '
-              EXPECTED=$(sha256sum /opt/evc-mesh/bin/mesh-mcp | cut -d" " -f1)
-              PID=$(systemctl show mesh-mcp -p MainPID --value)
-              if [ -z "$PID" ] || [ "$PID" = "0" ]; then echo "NO_PID"; exit 0; fi
-              ACTUAL=$(sha256sum /proc/$PID/exe 2>/dev/null | cut -d" " -f1)
-              if [ "$EXPECTED" = "$ACTUAL" ]; then echo OK; else echo "MISMATCH $EXPECTED $ACTUAL"; fi
-            ' 2>/dev/null) || true
-            if [ "$RESULT" = "OK" ]; then
-              MCP_OK=1
-              break
-            fi
-            echo "Waiting for mesh-mcp to restart on the new binary (attempt $i/15): ${RESULT:-no response}"
-            sleep 2
-          done
-          if [ -z "$MCP_OK" ]; then
-            echo "::error::mesh-mcp smoke test FAILED: running process never matched the uploaded binary (${RESULT:-no response})"
-            exit 1
-          fi
-          if ! ssh mesh-vm 'curl -sf -o /dev/null http://127.0.0.1:8081/metrics'; then
-            echo "::error::mesh-mcp smoke test FAILED: /metrics not responding after restart"
-            exit 1
-          fi
-          echo "mesh-mcp deploy verified: running process binary matches upload"
-
-      # Written only after BOTH binaries swapped, restarted, and smoke-tested
-      # clean — this timestamp is what the burst-deploy guard reads to decide
-      # whether the next deploy is too soon; it must reflect a fully verified
-      # deploy, not merely a completed upload.
+      # Written only after mesh-api swapped, restarted, and smoke-tested clean
+      # — this timestamp is what the burst-deploy guard reads to decide whether
+      # the next deploy is too soon; it must reflect a fully verified deploy,
+      # not merely a completed upload.
       - name: Record deploy timestamp
         run: ssh mesh-vm 'date +%s > /opt/evc-mesh/.last-backend-deploy'

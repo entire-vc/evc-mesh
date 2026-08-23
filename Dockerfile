@@ -6,7 +6,10 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /bin/mesh-api ./cmd/api
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /bin/mesh-mcp ./cmd/mcp
+# The MCP server is NOT built here: it lives in entire-vc/evc-mesh-mcp. This
+# repo's copy was a duplicate and was deleted (Mesh #e85e4e05). The image that
+# self-hosting actually uses is deploy/docker/mesh/Dockerfile, which installs
+# the MCP server from that module at a pinned SHA.
 
 # Stage 2: Build frontend
 FROM node:22-alpine AS web-builder
@@ -21,7 +24,6 @@ RUN pnpm build
 FROM alpine:3.19
 RUN apk add --no-cache ca-certificates tzdata wget
 COPY --from=go-builder /bin/mesh-api /usr/local/bin/mesh-api
-COPY --from=go-builder /bin/mesh-mcp /usr/local/bin/mesh-mcp
 COPY --from=web-builder /app/dist /srv/web
 COPY migrations/ /app/migrations/
 WORKDIR /app

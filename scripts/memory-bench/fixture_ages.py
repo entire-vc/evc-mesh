@@ -96,7 +96,8 @@ ENV_APPLY_DECAY = "BENCH_APPLY_RECENCY_DECAY"
 # ---------------------------------------------------------------------------
 # MIRROR of evc-mesh-mcp's recall auto-classifier. NOT the authority.
 #
-# `internal/mcp/tools.go` classifies EVERY recall by its query text and then
+# `evc-mesh-mcp/internal/mcp/tools.go` classifies EVERY recall by its query
+# text and then
 # does `if pp.ApplyDecay { applyDecay = true }` — a profile can turn decay ON
 # over the caller's explicit `false`, and `ProfileTemporal` also forces
 # `order_by=decayed_relevance:desc` and a **7-day** half-life instead of 30.
