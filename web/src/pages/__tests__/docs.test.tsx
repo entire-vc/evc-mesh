@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router";
 import {
@@ -1208,6 +1208,140 @@ describe("DocsPage — the discussion under the page", () => {
         localStorage.clear();
         vi.clearAllMocks();
       }
+    });
+  });
+
+  describe("comment on the page as a whole, no selection required (#41d01325)", () => {
+    // jsdom has no layout, so it has no scrollIntoView — the rail calls it on
+    // the thread it focuses, and submitting a draft focuses the new thread.
+    beforeAll(() => {
+      Element.prototype.scrollIntoView = vi.fn();
+    });
+
+    /**
+     * `mockWithComments` only answers the GET; this also answers the POST that
+     * `submitDraft` sends, and hands the sent body back to the test so AC2 can
+     * assert on the wire shape rather than trusting what the code claims to send.
+     */
+    function mockWithComposePost(
+      items: unknown[],
+      onPost: (body: unknown) => unknown,
+    ) {
+      mockRoutes([doc], (path, opts) => {
+        if (path === "/api/v1/documents/doc-1" && !opts?.method) {
+          return Promise.resolve({ ...doc, body: BODY });
+        }
+        if (path === "/api/v1/documents/doc-1/comments") {
+          if ((opts?.method ?? "GET") === "POST") {
+            return Promise.resolve(onPost(opts?.body));
+          }
+          return Promise.resolve({ items, has_more: false });
+        }
+        return undefined;
+      });
+    }
+
+    function createdPageComment(body: unknown) {
+      return {
+        id: "dc-page-new",
+        document_id: "doc-1",
+        parent_comment_id: null,
+        author_id: "u1",
+        author_type: "user",
+        author_name: "Pavel",
+        body: (body as { body: string }).body,
+        anchor: null,
+        resolved_at: null,
+        resolved_by: null,
+        resolved_by_type: null,
+        created_at: "2026-08-23T12:00:00Z",
+        updated_at: "2026-08-23T12:00:00Z",
+      };
+    }
+
+    it("AC1: reaches the composer with nothing selected, rail already open", async () => {
+      mockWithComposePost([], createdPageComment);
+      localStorage.setItem("mesh_docs_comments_rail", "1");
+      renderDocs("doc-1");
+
+      await screen.findByTestId("doc-comment-rail");
+      // jsdom's window.getSelection() is collapsed by default — there is no
+      // selection here, unlike every other way to reach the composer.
+      fireEvent.click(screen.getByTestId("doc-comment-page-entry"));
+
+      await screen.findByPlaceholderText(/@ to mention/i);
+    });
+
+    it("AC1: reaches the composer with nothing selected, rail starts closed", async () => {
+      mockWithComposePost([], createdPageComment);
+      localStorage.setItem("mesh_docs_comments_rail", "0");
+      renderDocs("doc-1");
+
+      await screen.findByTestId("doc-view");
+      expect(screen.queryByTestId("doc-comment-rail")).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByTestId("doc-comment-page-entry"));
+
+      // The click opens the rail itself — the composer has to render somewhere,
+      // and the tree (the other surface) never carries one.
+      await screen.findByTestId("doc-comment-rail");
+      expect(screen.getByPlaceholderText(/@ to mention/i)).toBeInTheDocument();
+    });
+
+    it("AC2: the request omits anchor, and the reply is placed as page — same wording a live page thread uses", async () => {
+      let sentBody: unknown;
+      mockWithComposePost([], (body) => {
+        sentBody = body;
+        return createdPageComment(body);
+      });
+      localStorage.setItem("mesh_docs_comments_rail", "1");
+      renderDocs("doc-1");
+
+      await screen.findByTestId("doc-comment-rail");
+      fireEvent.click(screen.getByTestId("doc-comment-page-entry"));
+      fireEvent.change(await screen.findByPlaceholderText(/@ to mention/i), {
+        target: { value: "A note on the whole page." },
+      });
+      fireEvent.click(screen.getByRole("button", { name: /^comment$/i }));
+
+      // `findByText` alone, not chained into `.toBeInTheDocument()` on its
+      // resolved value: this component re-renders more than once while the
+      // draft settles, and a node `findByText` matched on one poll can be
+      // gone by the time a *separate* synchronous assertion runs against that
+      // same reference. `findByText` throwing IS the check.
+      await screen.findByText("A note on the whole page.");
+
+      // Not `anchor: null` — the key must be absent, per
+      // CreateDocumentCommentRequest's own contract ("omitted for a page-level
+      // comment"). A `null` value is a different wire shape even though both
+      // are falsy in JS.
+      expect(sentBody).not.toHaveProperty("anchor");
+      expect(sentBody).toEqual({ body: "A note on the whole page." });
+
+      // What the server hands back is what `placeAnchor` turns into "page" —
+      // rendered with the exact wording an existing live page-thread already
+      // carries (PlacementNotice), not a new string this task would have had
+      // to introduce under its own gate.
+      await screen.findByText("On the page as a whole");
+    });
+
+    it("AC3: the new thread is not doubled between the rail and the tree", async () => {
+      mockWithComposePost([], createdPageComment);
+      localStorage.setItem("mesh_docs_comments_rail", "1");
+      renderDocs("doc-1");
+
+      await screen.findByTestId("doc-comment-rail");
+      fireEvent.click(screen.getByTestId("doc-comment-page-entry"));
+      fireEvent.change(await screen.findByPlaceholderText(/@ to mention/i), {
+        target: { value: "A note on the whole page." },
+      });
+      fireEvent.click(screen.getByRole("button", { name: /^comment$/i }));
+
+      await screen.findByText("A note on the whole page.");
+      // Exactly one card for the one thread that now exists — not two, which
+      // is what mounting both surfaces at once (the #a9df0f4a bug) would give.
+      expect(screen.getAllByTestId("doc-comment-thread")).toHaveLength(1);
+      expect(screen.queryByTestId("doc-comment-tree")).not.toBeInTheDocument();
     });
   });
 });
