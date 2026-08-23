@@ -1,2 +1,5 @@
 overrides:
   undici: '>=7.28.0 <8'
+
+patchedDependencies:
+  '@milkdown/ctx@7.22.1': patches/@milkdown__ctx@7.22.1.patch
