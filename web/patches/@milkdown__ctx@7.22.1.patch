@@ -1,0 +1,59 @@
+diff --git a/lib/index.js b/lib/index.js
+index b0ef69bc7c48c8bc0275ffe7d5b494e5ec0c68f5..927fbe97c8fbf72b7597eff79ed6437d1d25f817 100644
+--- a/lib/index.js
++++ b/lib/index.js
+@@ -252,16 +252,27 @@ var Timer = class {
+ 	#listener;
+ 	#eventUniqId;
+ 	#status;
++	// PATCH (evc-mesh #c4112e5e): `start()` used to leave the timeout half of
++	// this race scheduled forever — resolving via the event listener cleared
++	// the listener but never the `setTimeout`, so it still fired ~`timeout`ms
++	// later and called the now-stale `#removeListener`. In a test harness that
++	// tears the DOM/global environment down between files, that late call
++	// throws `ReferenceError: removeEventListener is not defined` instead of
++	// silently no-oping. `#timeoutId` lets the listener path cancel it,
++	// exactly like the timeout path already cancels the listener.
++	#timeoutId;
+ 	constructor(clock, type) {
+ 		this.#promise = null;
+ 		this.#listener = null;
+ 		this.#status = "pending";
++		this.#timeoutId = null;
+ 		this.start = () => {
+ 			this.#promise ??= new Promise((resolve, reject) => {
+ 				this.#listener = (e) => {
+ 					if (!(e instanceof CustomEvent)) return;
+ 					if (e.detail.id === this.#eventUniqId) {
+ 						this.#status = "resolved";
++						this.#clearTimeout();
+ 						this.#removeListener();
+ 						e.stopImmediatePropagation();
+ 						resolve();
+@@ -283,9 +294,17 @@ var Timer = class {
+ 		};
+ 		this.#removeListener = () => {
+ 			if (this.#listener) removeEventListener(this.type.name, this.#listener);
++			this.#listener = null;
++		};
++		this.#clearTimeout = () => {
++			if (this.#timeoutId !== null) {
++				clearTimeout(this.#timeoutId);
++				this.#timeoutId = null;
++			}
+ 		};
+ 		this.#waitTimeout = (ifTimeout) => {
+-			setTimeout(() => {
++			this.#timeoutId = setTimeout(() => {
++				this.#timeoutId = null;
+ 				ifTimeout();
+ 			}, this.type.timeout);
+ 		};
+@@ -297,6 +316,7 @@ var Timer = class {
+ 		return this.#status;
+ 	}
+ 	#removeListener;
++	#clearTimeout;
+ 	#waitTimeout;
+ };
+ var TimerType = class {
