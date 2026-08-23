@@ -3,6 +3,7 @@ import {
   Database,
   Download,
   ExternalLink,
+  Eye,
   File,
   FileCode,
   FileText,
@@ -24,6 +25,8 @@ import { documentMarkdownLink } from "@/lib/docs/doc-link";
 import type { DocumentSearchHit } from "@/lib/docs/document-search";
 import { useProjectStore } from "@/stores/project";
 import { useWorkspaceStore } from "@/stores/workspace";
+import { ArtifactPreviewDialog } from "@/components/artifact-preview-dialog";
+import { previewKindFor } from "@/lib/artifact-preview";
 import type { Artifact, ArtifactType, PaginatedResponse } from "@/types";
 
 interface ArtifactListProps {
@@ -63,26 +66,10 @@ const artifactTypeBadgeVariant: Record<ArtifactType, "default" | "secondary" | "
   data: "outline",
 };
 
-// Mime types browsers download rather than render inline regardless of the
-// Content-Disposition header. Hide "Open in new tab" for these so the button
-// doesn't promise a preview it can't deliver.
-const NON_PREVIEWABLE_MIME_PREFIXES = [
-  "application/zip",
-  "application/x-7z-compressed",
-  "application/x-rar-compressed",
-  "application/x-tar",
-  "application/gzip",
-  "application/x-gzip",
-  "application/vnd.openxmlformats-officedocument",
-  "application/vnd.ms-excel",
-  "application/vnd.ms-powerpoint",
-  "application/msword",
-  "application/octet-stream",
-];
-
-function canPreviewInline(mimeType: string): boolean {
-  return !NON_PREVIEWABLE_MIME_PREFIXES.some((prefix) => mimeType.startsWith(prefix));
-}
+// Deciding how an artifact opens now lives in lib/artifact-preview, because the
+// decision has three outcomes rather than two: render it here, hand it to the
+// browser, or offer only Download. See that module for why text is no longer in
+// the "hand it to the browser" bucket.
 
 export function ArtifactList({ taskId, refreshKey, projId, onDocInsert }: ArtifactListProps) {
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
@@ -91,6 +78,7 @@ export function ArtifactList({ taskId, refreshKey, projId, onDocInsert }: Artifa
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [dragOver, setDragOver] = useState(false);
+  const [previewing, setPreviewing] = useState<Artifact | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const { enabled: hasTrIntegration } = useProjectTrIntegration(projId);
@@ -331,6 +319,11 @@ export function ArtifactList({ taskId, refreshKey, projId, onDocInsert }: Artifa
       {artifacts.map((artifact) => {
         const Icon = artifactTypeIcons[artifact.artifact_type] ?? File;
         const badgeVariant = artifactTypeBadgeVariant[artifact.artifact_type] ?? "secondary";
+        const previewKind = previewKindFor(artifact);
+        const trPublicUrl =
+          typeof artifact.metadata?.tr_public_url === "string"
+            ? artifact.metadata.tr_public_url
+            : undefined;
 
         return (
           <div
@@ -355,25 +348,40 @@ export function ArtifactList({ taskId, refreshKey, projId, onDocInsert }: Artifa
             </div>
 
             <div className="ml-3 flex shrink-0 items-center gap-1">
-              {(typeof artifact.metadata?.tr_public_url === "string" ||
-                canPreviewInline(artifact.mime_type)) && (
+              {/* A Team Relay artifact keeps opening in Team Relay: the bytes
+                  are not ours to render and the share decides who may read
+                  them. Checked before the kind, so it wins. */}
+              {trPublicUrl ? (
                 <Button
                   variant="ghost"
                   size="icon"
                   className="h-8 w-8"
-                  onClick={() =>
-                    void handleOpen(
-                      artifact.id,
-                      typeof artifact.metadata?.tr_public_url === "string"
-                        ? artifact.metadata.tr_public_url
-                        : undefined,
-                    )
-                  }
+                  onClick={() => void handleOpen(artifact.id, trPublicUrl)}
                   title="Open in new tab"
                 >
                   <ExternalLink className="h-4 w-4" />
                 </Button>
-              )}
+              ) : previewKind === "markdown" || previewKind === "text" ? (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8"
+                  onClick={() => setPreviewing(artifact)}
+                  title="Preview"
+                >
+                  <Eye className="h-4 w-4" />
+                </Button>
+              ) : previewKind === "external" ? (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8"
+                  onClick={() => void handleOpen(artifact.id)}
+                  title="Open in new tab"
+                >
+                  <ExternalLink className="h-4 w-4" />
+                </Button>
+              ) : null}
               <Button
                 variant="ghost"
                 size="icon"
@@ -399,6 +407,11 @@ export function ArtifactList({ taskId, refreshKey, projId, onDocInsert }: Artifa
         );
       })}
       {uploadZone}
+      <ArtifactPreviewDialog
+        artifact={previewing}
+        onClose={() => setPreviewing(null)}
+        onDownload={(id, name) => void handleDownload(id, name)}
+      />
     </div>
   );
 }

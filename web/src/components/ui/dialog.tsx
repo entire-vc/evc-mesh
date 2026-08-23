@@ -13,9 +13,16 @@ interface DialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   children: React.ReactNode;
+  /**
+   * Width override for the centring wrapper. The wrapper, not the content, is
+   * what caps a dialog's width — a `max-w-*` on DialogContent alone is silently
+   * clamped by this element and has no effect. Defaults to the previous fixed
+   * `max-w-lg`, so every existing dialog is unchanged.
+   */
+  className?: string;
 }
 
-export function Dialog({ open, onOpenChange, children }: DialogProps) {
+export function Dialog({ open, onOpenChange, children, className }: DialogProps) {
   useEffect(() => {
     if (open) {
       document.body.style.overflow = "hidden";
@@ -44,7 +51,7 @@ export function Dialog({ open, onOpenChange, children }: DialogProps) {
       onClick={handleBackdropClick}
     >
       <div className="fixed inset-0 bg-black/50" />
-      <div className="relative z-50 w-full max-w-lg">{children}</div>
+      <div className={cn("relative z-50 w-full max-w-lg", className)}>{children}</div>
     </div>,
     document.body,
   );
