@@ -37,6 +37,7 @@ vendor/
 !.env.example
 !.env.prod.example
 !.env.development
+!.env.benchmark.example
 
 # Claude Code
 .claude/
