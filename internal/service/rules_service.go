@@ -353,7 +353,12 @@ func (s *rulesService) UpdateAgentProfile(ctx context.Context, agentID uuid.UUID
 		agent.ResponsibilityZone = *profile.ResponsibilityZone
 	}
 	if profile.EscalationTo != nil {
-		agent.EscalationTo = &profile.EscalationTo
+		escBytes, err := json.Marshal(*profile.EscalationTo)
+		if err != nil {
+			return fmt.Errorf("marshal escalation_to: %w", err)
+		}
+		raw := json.RawMessage(escBytes)
+		agent.EscalationTo = &raw
 	}
 	if profile.AcceptsFrom != nil {
 		agent.AcceptsFrom = profile.AcceptsFrom
@@ -883,15 +888,15 @@ func (s *rulesService) importTeamConfig(ctx context.Context, workspaceID uuid.UU
 		}
 
 		// Marshal capabilities and accepts_from slices back to JSON.
+		// EscalationTo is already a plain string — no marshalling needed.
 		capJSON, _ := json.Marshal(ac.Capabilities)
 		acceptsJSON, _ := json.Marshal(ac.AcceptsFrom)
-		escalationJSON, _ := json.Marshal(ac.EscalationTo)
 
 		profile := domain.AgentProfileUpdate{
 			Role:               &ac.Role,
 			Capabilities:       capJSON,
 			ResponsibilityZone: &ac.ResponsibilityZone,
-			EscalationTo:       escalationJSON,
+			EscalationTo:       &ac.EscalationTo,
 			AcceptsFrom:        acceptsJSON,
 			MaxConcurrentTasks: &ac.MaxConcurrentTasks,
 			WorkingHours:       &ac.WorkingHours,

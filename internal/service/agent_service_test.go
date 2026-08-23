@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
@@ -99,6 +100,70 @@ func TestAgentService_Register(t *testing.T) {
 				stored, _ := agentRepo.GetByID(context.Background(), agent.ID)
 				require.NotNil(t, stored)
 				assert.Equal(t, agent.APIKeyHash, stored.APIKeyHash)
+			},
+		},
+		{
+			name: "success - profile fields omitted get sane defaults, not zero values",
+			input: func(ws *domain.Workspace) RegisterAgentInput {
+				return RegisterAgentInput{
+					WorkspaceID: ws.ID,
+					Name:        "Bare Agent",
+					AgentType:   domain.AgentTypeClaudeCode,
+				}
+			},
+			wantErr: false,
+			checkFunc: func(t *testing.T, out *RegisterAgentOutput, _ *MockAgentRepository) {
+				agent := out.Agent
+				assert.Equal(t, "developer", agent.Role, "omitted role should default, not land empty")
+				assert.Equal(t, "24/7", agent.WorkingHours, "omitted working_hours should default, not land empty")
+				assert.Equal(t, defaultMaxConcurrentTasks, agent.MaxConcurrentTasks,
+					"omitted max_concurrent_tasks must not silently stay 0 — that reads as \"takes no tasks\" (#85714565)")
+				assert.Equal(t, "", agent.ResponsibilityZone, "zone has no universal default — omitted stays empty, not invented")
+				assert.Nil(t, agent.EscalationTo)
+				// AcceptsFrom is intentionally left nil at the service layer —
+				// AgentRepo.Create (the real Postgres repo) defaults a nil
+				// value to ["*"], which is what "omitted" should mean here.
+				// The mock repo used by this test does not replicate that
+				// guard, so this only asserts the service does not invent an
+				// empty array of its own.
+				assert.Nil(t, agent.AcceptsFrom)
+			},
+		},
+		{
+			name: "success - explicit profile fields are respected as-is, including a deliberate zero",
+			input: func(ws *domain.Workspace) RegisterAgentInput {
+				role := "reviewer"
+				zone := "Mesh — QA"
+				hours := "9-18 MSK"
+				zero := 0
+				escalation := "Garfield"
+				acceptsFrom := json.RawMessage(`["Linus","Riker"]`)
+				return RegisterAgentInput{
+					WorkspaceID:        ws.ID,
+					Name:               "Configured Agent",
+					AgentType:          domain.AgentTypeClaudeCode,
+					Role:               &role,
+					ResponsibilityZone: &zone,
+					WorkingHours:       &hours,
+					MaxConcurrentTasks: &zero,
+					EscalationTo:       &escalation,
+					AcceptsFrom:        acceptsFrom,
+					Capabilities:       map[string]any{"code-review": true},
+				}
+			},
+			wantErr: false,
+			checkFunc: func(t *testing.T, out *RegisterAgentOutput, _ *MockAgentRepository) {
+				agent := out.Agent
+				assert.Equal(t, "reviewer", agent.Role)
+				assert.Equal(t, "Mesh — QA", agent.ResponsibilityZone)
+				assert.Equal(t, "9-18 MSK", agent.WorkingHours)
+				assert.Equal(t, 0, agent.MaxConcurrentTasks,
+					"an explicit 0 (deliberately paused) must survive, not be upgraded to the default")
+				require.NotNil(t, agent.EscalationTo)
+				assert.JSONEq(t, `"Garfield"`, string(*agent.EscalationTo))
+				assert.JSONEq(t, `["Linus","Riker"]`, string(agent.AcceptsFrom))
+				require.NotNil(t, agent.Capabilities)
+				assert.JSONEq(t, `{"code-review":true}`, string(agent.Capabilities))
 			},
 		},
 		{

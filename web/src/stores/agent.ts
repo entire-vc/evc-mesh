@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { api } from "@/lib/api";
 import type {
   Agent,
+  AgentProfileUpdateRequest,
   AgentType,
   PaginatedResponse,
   RegisterAgentRequest,
@@ -26,6 +27,13 @@ interface AgentState {
   updateAgent: (
     agentId: string,
     req: { name?: string; agent_type?: AgentType; profile_description?: string; callback_url?: string; parent_agent_id?: string; supervisor_user_id?: string; role?: string },
+  ) => Promise<Agent>;
+  // Separate endpoint (PUT /agents/:id/profile) — the fields it accepts
+  // (responsibility_zone, escalation_to, accepts_from, max_concurrent_tasks,
+  // working_hours) aren't reachable through PATCH /agents/:id at all.
+  updateAgentProfile: (
+    agentId: string,
+    req: AgentProfileUpdateRequest,
   ) => Promise<Agent>;
   deleteAgent: (agentId: string) => Promise<void>;
   regenerateKey: (agentId: string) => Promise<RegenerateKeyResponse>;
@@ -77,6 +85,22 @@ export const useAgentStore = create<AgentState>((set) => ({
       method: "PATCH",
       body: req,
     });
+    set((state) => ({
+      agents: state.agents.map((a) => (a.id === agentId ? agent : a)),
+    }));
+    return agent;
+  },
+
+  updateAgentProfile: async (
+    agentId: string,
+    req: AgentProfileUpdateRequest,
+  ): Promise<Agent> => {
+    // 204 No Content on success — re-fetch to get the merged agent back.
+    await api<void>(`/api/v1/agents/${agentId}/profile`, {
+      method: "PUT",
+      body: req,
+    });
+    const agent = await api<Agent>(`/api/v1/agents/${agentId}`);
     set((state) => ({
       agents: state.agents.map((a) => (a.id === agentId ? agent : a)),
     }));

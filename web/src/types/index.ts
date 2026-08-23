@@ -421,7 +421,16 @@ export interface Agent {
   agent_type: AgentType;
   status: AgentStatus;
   role?: string;
-  capabilities: string[];
+  // API returns an object ({}) rather than string[] — same shape as
+  // TeamDirectoryAgent.capabilities below, normalize with asStringArray.
+  capabilities: Record<string, unknown> | string[];
+  responsibility_zone?: string;
+  // A single name/handle (e.g. "Garfield"), not a list — matches the MCP
+  // tool and the YAML team-config contract (TeamAgentConfig.EscalationTo).
+  escalation_to?: string | null;
+  accepts_from?: string[];
+  max_concurrent_tasks?: number;
+  working_hours?: string;
   metadata: Record<string, unknown>;
   last_heartbeat: string | null;
   heartbeat_status?: string;
@@ -742,6 +751,24 @@ export interface RegisterAgentRequest {
   name: string;
   agent_type: AgentType;
   capabilities?: Record<string, unknown>;
+  role?: string;
+  responsibility_zone?: string;
+  escalation_to?: string;
+  accepts_from?: string[];
+  max_concurrent_tasks?: number;
+  working_hours?: string;
+}
+
+/** PUT /agents/:id/profile — partial update, omitted fields are left untouched. */
+export interface AgentProfileUpdateRequest {
+  role?: string;
+  capabilities?: Record<string, unknown>;
+  responsibility_zone?: string;
+  escalation_to?: string;
+  accepts_from?: string[];
+  max_concurrent_tasks?: number;
+  working_hours?: string;
+  profile_description?: string;
 }
 
 export interface RegisterAgentResponse {

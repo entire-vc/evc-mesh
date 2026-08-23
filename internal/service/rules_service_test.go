@@ -31,6 +31,21 @@ func (noopMemberRepo) UpdateRole(context.Context, uuid.UUID, uuid.UUID, string) 
 func (noopMemberRepo) Delete(context.Context, uuid.UUID, uuid.UUID) error             { return nil }
 func (noopMemberRepo) CountOwners(context.Context, uuid.UUID) (int, error)            { return 0, nil }
 
+// noopWsRuleRepo is a minimal repository.WorkspaceRuleConfigRepository stub
+// for tests that exercise ExportConfig and only care about the Team section —
+// GetByType returning (nil, nil) means "no rule of this type configured",
+// which ExportConfig already handles as an empty/omitted section.
+type noopWsRuleRepo struct{}
+
+func (noopWsRuleRepo) Upsert(context.Context, *domain.WorkspaceRuleConfig) error { return nil }
+func (noopWsRuleRepo) GetByType(context.Context, uuid.UUID, string) (*domain.WorkspaceRuleConfig, error) {
+	return nil, nil
+}
+func (noopWsRuleRepo) ListByWorkspace(context.Context, uuid.UUID) ([]domain.WorkspaceRuleConfig, error) {
+	return nil, nil
+}
+func (noopWsRuleRepo) Delete(context.Context, uuid.UUID, string) error { return nil }
+
 // --------------------------------------------------------------------------
 // isAgentAllowedByActors
 // --------------------------------------------------------------------------
@@ -306,6 +321,49 @@ func TestUpdateAgentProfile_AllFieldsSetAppliesEverything(t *testing.T) {
 	assert.Equal(t, 5, got.MaxConcurrentTasks)
 	assert.Equal(t, "10:00-18:00", got.WorkingHours)
 	assert.Equal(t, "Full replace", got.ProfileDescription)
+}
+
+// TestEscalationTo_SurvivesUpdateAndExportRoundTrip is the regression test
+// for a real bug found in code review of task #85714565: EscalationTo is a
+// single name (matches the MCP tool's mcpsdk.ParseString and
+// TeamAgentConfig.EscalationTo, both plain strings), NOT a list. Before this
+// fix, AgentProfileUpdate.EscalationTo was json.RawMessage and the new UI
+// sent a JSON array — ExportConfig's `json.Unmarshal(a.EscalationTo,
+// &escalation)` into a plain Go string always failed on an array, and the
+// `if jsonErr == nil` guard swallowed the error, so every exported
+// team-config YAML silently showed escalation_to empty for any agent
+// configured through the UI. This proves the full path — set via
+// UpdateAgentProfile, read back via ExportConfig — carries the value.
+func TestEscalationTo_SurvivesUpdateAndExportRoundTrip(t *testing.T) {
+	agentRepo := NewMockAgentRepository()
+	wsRepo := NewMockWorkspaceRepository()
+	ws := &domain.Workspace{ID: uuid.New(), Name: "Acme", Slug: "acme"}
+	wsRepo.items[ws.ID] = ws
+
+	svc := NewRulesService(noopWsRuleRepo{}, nil, nil, agentRepo, noopMemberRepo{}, wsRepo, nil)
+
+	agentID := uuid.New()
+	require.NoError(t, agentRepo.Create(context.Background(), &domain.Agent{
+		ID:          agentID,
+		WorkspaceID: ws.ID,
+		Name:        "test-agent",
+		Slug:        "test-agent",
+	}))
+
+	err := svc.UpdateAgentProfile(context.Background(), agentID, domain.AgentProfileUpdate{
+		EscalationTo: strPtr("Garfield"),
+	})
+	require.NoError(t, err)
+
+	got, err := agentRepo.GetByID(context.Background(), agentID)
+	require.NoError(t, err)
+	require.NotNil(t, got.EscalationTo, "UpdateAgentProfile must actually store the value")
+	assert.JSONEq(t, `"Garfield"`, string(*got.EscalationTo))
+
+	yamlBytes, err := svc.ExportConfig(context.Background(), ws.ID)
+	require.NoError(t, err)
+	assert.Contains(t, string(yamlBytes), "escalation_to: Garfield",
+		"export must not silently drop escalation_to for an agent configured through the UI")
 }
 
 // TestImportTeamConfig_AgentProfile_AppliesAllFields exercises the
