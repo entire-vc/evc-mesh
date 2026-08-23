@@ -154,7 +154,11 @@ GraphQL request also returns HTTP 200 with nulls plus an `errors` array, so
 
 ### MCP Tools
 
-- MCP server lives in `cmd/mcp/` and calls the REST API via HTTP
+- The MCP server is NOT in this repository: it is a separate module,
+  [`evc-mesh-mcp`](https://github.com/entire-vc/evc-mesh-mcp), and it talks to
+  this API over HTTP like any other client. Tool changes go there. (This repo
+  carried a duplicate copy under `cmd/mcp` until 2026-08; it drifted 12 tools
+  behind and was removed.)
 - Tool definitions follow outcome-oriented naming (e.g., `move_task` not `update_status`)
 - Each tool should have a clear description and document all parameters
 

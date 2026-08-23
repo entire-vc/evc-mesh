@@ -125,10 +125,13 @@ The client spawns `mesh-mcp` and talks JSON-RPC over its stdin/stdout. The key
 comes from the environment and is required — without `MESH_AGENT_KEY` the
 process exits immediately.
 
-Build the binary once:
+Install the binary once. It comes from its own module, not from this
+repository — pin a commit instead of `@latest` if you want a reproducible
+install:
 
 ```bash
-go build -o ~/bin/mesh-mcp ./cmd/mcp
+GOBIN=~/bin go install github.com/entire-vc/evc-mesh-mcp@latest
+# installs ~/bin/evc-mesh-mcp
 ```
 
 Minimal working MCP client config (`.mcp.json` for Claude Code, same shape for
@@ -138,7 +141,7 @@ Cline and other MCP clients):
 {
   "mcpServers": {
     "evc-mesh": {
-      "command": "/home/you/bin/mesh-mcp",
+      "command": "/home/you/bin/evc-mesh-mcp",
       "env": {
         "MESH_API_URL": "https://mesh.example.com",
         "MESH_AGENT_KEY": "agk_ws-68fcb656_…"
@@ -158,11 +161,11 @@ Confirm it works before involving the agent:
 printf '%s\n' \
   '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"probe","version":"1"}}}' \
   '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' \
-| MESH_API_URL=https://mesh.example.com MESH_AGENT_KEY=agk_… mesh-mcp
+| MESH_API_URL=https://mesh.example.com MESH_AGENT_KEY=agk_… evc-mesh-mcp
 ```
 
 On success stderr shows `Authenticated as agent: my-agent (…)` and stdout
-carries a `tools/list` result with 49 tools.
+carries a `tools/list` result with 61 tools (25 on `MESH_MCP_PROFILE=core`).
 
 ### SSE — remote agents, several at once
 

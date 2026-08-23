@@ -19,7 +19,9 @@ Both layers share the same data and real-time event infrastructure.
          │                 │               │
          │          ┌──────▼──────┐        │
          │          │  MCP Server │        │
-         │          │  (cmd/mcp)  │        │
+         │          │(evc-mesh-mcp│        │
+         │          │  — separate │        │
+         │          │   module)   │        │
          │          └──────┬──────┘        │
          │                 │ HTTP          │
          ▼                 ▼               ▼
@@ -66,16 +68,26 @@ The main server handling all HTTP traffic:
 - Health check at `/health`
 - Database migrations on startup (Goose)
 
-### cmd/mcp — MCP Server
+### evc-mesh-mcp — MCP Server (separate repository)
 
-A separate process that implements the Model Context Protocol for AI agents:
+A separate process that implements the Model Context Protocol for agent
+clients. It is **not part of this repository** — it lives in
+[`entire-vc/evc-mesh-mcp`](https://github.com/entire-vc/evc-mesh-mcp):
 
-- Supports **stdio** transport (for local agents like Claude Code) and **HTTP SSE** transport (for remote agents)
+- Supports **stdio** transport (for local clients) and **HTTP SSE** transport (for remote ones)
 - Calls the REST API via HTTP — does not access the database directly
-- 49 tools across 11 categories
+- 61 tools (`MESH_MCP_PROFILE=full`), 25 on the `core` profile
 - Authenticates using agent API keys
 
-The MCP server is intentionally separate from the API server. This ensures a single audit trail (all operations go through the REST API) and allows independent scaling.
+The MCP server is intentionally separate from the API server. This ensures a
+single audit trail (all operations go through the REST API) and allows
+independent scaling.
+
+Until 2026-08 this repository also carried a copy of that server under
+`cmd/mcp` + `internal/mcp`. Go's `internal/` visibility rules mean neither
+module can import the other, so the two were kept in step by hand and did not
+stay in step: the copy here was 12 tools behind when it was removed (Mesh
+#e85e4e05). There is now exactly one implementation.
 
 ## Data Layer
 

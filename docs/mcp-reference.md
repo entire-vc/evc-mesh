@@ -24,11 +24,12 @@ Tools are organized into 11 categories:
 | Auto-Transition Rules | 0 | ⚠️ Documented below but **not implemented** — these tools are not registered by the server |
 | Task Checkout | 3 | Exclusive task locking with TTL to prevent double-work |
 
-> **Note:** in this repository the MCP server is `./cmd/mcp`, built as the
-> `mesh-mcp` binary and shipped in the same image as the API. Some snippets
-> below were written for the standalone
-> [github.com/entire-vc/evc-mesh-mcp](https://github.com/entire-vc/evc-mesh-mcp)
-> package and use its paths; substitute `./cmd/mcp` / `mesh-mcp`.
+> **Note:** the MCP server is **not** in this repository. It is the standalone
+> module [github.com/entire-vc/evc-mesh-mcp](https://github.com/entire-vc/evc-mesh-mcp),
+> and every snippet below uses its paths. This repo carried a duplicate copy
+> under `./cmd/mcp` until 2026-08; it had drifted 12 tools behind and was
+> removed (Mesh #e85e4e05), so a snippet naming `./cmd/mcp` is stale, not an
+> alternative.
 
 ---
 
@@ -57,15 +58,15 @@ Add to your project's `.mcp.json` or `~/.claude.json`:
 }
 ```
 
-If running from source (from this repository):
+If running from source (from a checkout of `evc-mesh-mcp`):
 
 ```json
 {
   "mcpServers": {
     "evc-mesh": {
       "command": "go",
-      "args": ["run", "./cmd/mcp"],
-      "cwd": "/path/to/evc-mesh",
+      "args": ["run", "."],
+      "cwd": "/path/to/evc-mesh-mcp",
       "env": {
         "MESH_API_URL": "https://your-mesh-instance.example.com",
         "MESH_AGENT_KEY": "agk_your-workspace_your-key"

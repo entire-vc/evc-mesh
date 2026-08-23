@@ -142,23 +142,36 @@ ssh root@prod-host
 
 ---
 
-## evc-mesh-mcp deploy (manual — no CI)
+## evc-mesh-mcp deploy
 
-evc-mesh-mcp has no CD pipeline. **Mandatory order:**
+**The MCP server is not built from this repository.** It lives in
+`entire-vc/evc-mesh-mcp` and ships from that repository's own workflow
+(`.github/workflows/deploy-mesh-vm.yml`, dispatched by hand: `dry-run` prints
+the plan and changes nothing, `deploy` swaps, `rollback` reverts). That
+workflow takes a rollback anchor before the swap and reverts automatically if
+its smoke test fails — prefer it over the manual steps below.
+
+This repo used to carry a duplicate copy under `cmd/mcp`, and this runbook
+built from it. It had drifted 12 tools behind and was deleted (Mesh
+#e85e4e05); the steps below are kept only as the by-hand fallback for when the
+workflow itself is unavailable.
+
+**Mandatory order:**
 `migrate (goose up)` → `binary swap` → `restart`. Never swap the binary before migrations pass.
 
 > evc-mesh-mcp does not run its own migrations — it reads the same DB as the evc-mesh API.
 > The goose step below ensures the shared schema is up-to-date before the new binary serves traffic.
 
 ```bash
-# 1. Build for the prod target (cross-compile from Mac/Linux dev machine)
-GOOS=linux GOARCH=amd64 go build -o evc-mesh-mcp ./cmd/mcp
+# 1. Build for the prod target, from a checkout of entire-vc/evc-mesh-mcp
+#    (NOT from this repository)
+GOOS=linux GOARCH=amd64 go build -o mesh-mcp .
 
 # 2. Copy binary to prod
-scp evc-mesh-mcp root@prod-host:/opt/evc-mesh-mcp/evc-mesh-mcp.new
+scp mesh-mcp root@mesh-vm:/opt/evc-mesh/bin/mesh-mcp.new
 
 # 3. On the prod host: run migrations FIRST, then swap binary
-ssh root@prod-host
+ssh root@mesh-vm
 
   # STEP 1 — Run evc-mesh DB migrations (fail-closed).
   # goose CLI is installed at /opt/evc-mesh/bin/goose by the CI migrate job.
@@ -169,12 +182,15 @@ ssh root@prod-host
   DB_URL="postgres://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT:-5432}/${DB_NAME}?sslmode=${DB_SSL_MODE:-disable}"
   /opt/evc-mesh/bin/goose -dir /opt/evc-mesh/migrations postgres "$DB_URL" up
 
-  # STEP 2 — Swap binary (only after migrations succeed)
-  mv /opt/evc-mesh-mcp/evc-mesh-mcp /opt/evc-mesh-mcp/evc-mesh-mcp.bak.$(date +%Y%m%d-%H%M%S)
-  mv /opt/evc-mesh-mcp/evc-mesh-mcp.new /opt/evc-mesh-mcp/evc-mesh-mcp
+  # STEP 2 — Swap binary (only after migrations succeed).
+  # Verified live 2026-08-23: the unit is `mesh-mcp.service` and the binary is
+  # /opt/evc-mesh/bin/mesh-mcp — there is no /opt/evc-mesh-mcp directory, which
+  # is what the earlier version of these steps named.
+  mv /opt/evc-mesh/bin/mesh-mcp /opt/evc-mesh/bin/mesh-mcp.rollback-$(date +%Y%m%d-%H%M%S)-manual
+  mv /opt/evc-mesh/bin/mesh-mcp.new /opt/evc-mesh/bin/mesh-mcp
 
   # STEP 3 — Restart
-  sudo systemctl restart evc-mesh-mcp
+  sudo systemctl restart mesh-mcp
 
   # STEP 4 — Smoke test. The MCP SSE server has no /health route; it serves
   # /metrics, /sse and /message. /metrics is the unauthenticated liveness probe.

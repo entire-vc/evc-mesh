@@ -134,8 +134,10 @@ outcome-oriented tools like `move_task`, `add_comment`, `publish_summary`, and
 `get_project_context`.
 
 ```bash
-# Connect via stdio (for Claude Code, Cline, Aider)
-go run ./cmd/mcp
+# Connect via stdio (for Claude Code, Cline, Aider).
+# The server is a separate module — install it first:
+#   go install github.com/entire-vc/evc-mesh-mcp@latest
+evc-mesh-mcp --transport stdio
 
 # Connect via HTTP SSE (for browser-based or remote agents)
 # Endpoint: http://localhost:8081/sse

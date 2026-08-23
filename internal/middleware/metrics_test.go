@@ -96,8 +96,11 @@ func TestMetricsAuth_CorrectTokenAllowed(t *testing.T) {
 }
 
 // MetricsAuthHTTP carries the same contract as MetricsAuth for plain
-// net/http servers (e.g. cmd/mcp's mux, which doesn't run Echo). MetricsAuth
-// wraps this — these cases pin the one implementation both stacks share.
+// net/http servers — those that don't run Echo. MetricsAuth wraps it, so these
+// cases pin the one implementation both stacks share. Keep them even though no
+// non-Echo server ships from this repo today (cmd/mcp, the one that did, was a
+// duplicate and was deleted — Mesh #e85e4e05): MetricsAuth still routes through
+// this function, so these are tests of the live path, not of dead code.
 
 func newMetricsHTTPRequest(authHeader string) (*http.Request, *httptest.ResponseRecorder) {
 	req := httptest.NewRequest(http.MethodGet, "/metrics", http.NoBody)

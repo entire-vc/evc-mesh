@@ -4,16 +4,17 @@
 # Binary output directory
 BIN_DIR := bin
 API_BINARY := $(BIN_DIR)/mesh-api
-MCP_BINARY := $(BIN_DIR)/mesh-mcp
+# No MCP_BINARY here on purpose: the MCP server lives in its own repository
+# (entire-vc/evc-mesh-mcp). This repo's copy (cmd/mcp + internal/mcp) was a
+# duplicate that had drifted 12 tools behind and was deleted — Mesh #e85e4e05.
 
 # Database connection (matches docker-compose defaults)
 DB_DSN ?= postgres://mesh:mesh@localhost:5437/mesh?sslmode=disable
 
-## build: Compile API and MCP server binaries
+## build: Compile the API binary
 build:
 	@mkdir -p $(BIN_DIR)
 	go build -o $(API_BINARY) ./cmd/api
-	go build -o $(MCP_BINARY) ./cmd/mcp
 
 ## build-prod: Cross-compile API binary for Linux/amd64 with embedded build metadata
 build-prod:
@@ -234,8 +235,8 @@ ci-test: ci-services-up
 
 ## ci-build: Compile Go binaries + frontend typecheck + build.
 ci-build:
-	@echo "── Build (Go API + MCP) ────────────────────────────────────────"
-	go build -o /dev/null ./cmd/api ./cmd/mcp
+	@echo "── Build (Go API) ──────────────────────────────────────────────"
+	go build -o /dev/null ./cmd/api
 	@echo "── Frontend: typecheck (negative controls first) ────────────────"
 	./scripts/assert-typecheck-is-not-vacuous.sh
 	./scripts/assert-typecheck-covers-e2e.sh
