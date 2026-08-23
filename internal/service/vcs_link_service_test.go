@@ -745,6 +745,171 @@ func TestHandlePR_ActionOpened_NoTransition(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// HandleGitLabMergeRequestEvent (#bc39d781) — GitLab counterpart of the
+// HandleGitHubPullRequestEvent tests above. Both delegate their terminal-
+// state handling to the same applyPRTransitionPolicy, so these tests exist
+// to prove GitLab payloads actually REACH that shared policy correctly
+// (task-ref resolution, link upsert, state→terminal mapping) — not to
+// re-verify transition mechanics the GitHub tests above already cover.
+// ---------------------------------------------------------------------------
+
+func mergedMREvent(iid int, taskID uuid.UUID, title string) GitLabWebhookEvent {
+	return GitLabWebhookEvent{
+		Action:      "merge",
+		MRIID:       iid,
+		MRTitle:     title,
+		MRBody:      "",
+		MRURL:       "https://git.entire.host/entire-vc/evc-mesh/-/merge_requests/" + uintToString(iid),
+		MRState:     "merged",
+		MergeSHA:    "deadbeefcafebabe",
+		ProjectPath: "entire-vc/evc-mesh",
+	}
+}
+
+func TestHandleMR_MergedFromInProgress_TransitionsToReview(t *testing.T) {
+	h := newHarness(t)
+	task := h.makeTask(t, domain.StatusCategoryInProgress)
+
+	ev := mergedMREvent(101, task.ID, "MESH-"+task.ID.String())
+
+	res, err := h.svc.HandleGitLabMergeRequestEvent(context.Background(), ev)
+	require.NoError(t, err)
+	assert.True(t, res.Transitioned)
+	assert.Equal(t, "in_progress", res.OldStatus)
+	assert.Equal(t, "review", res.NewStatus)
+	assert.Equal(t, h.statusIDs[domain.StatusCategoryReview], h.taskRepo.tasks[task.ID].StatusID)
+
+	require.Len(t, h.commentSvc.created, 1)
+	c := h.commentSvc.created[0]
+	assert.Contains(t, c.Body, "MR !101 merged")
+	assert.Contains(t, c.Body, "moved to review")
+	assert.JSONEq(t, `{"source":"gitlab-webhook"}`, string(c.Metadata))
+
+	links, _ := h.repo.ListByTask(context.Background(), task.ID)
+	require.Len(t, links, 1)
+	assert.Equal(t, domain.VCSLinkStatusMerged, links[0].Status)
+	assert.Equal(t, domain.VCSProviderGitLab, links[0].Provider)
+	assert.Equal(t, "101", links[0].ExternalID)
+}
+
+func TestHandleMR_MergedFromReview_TransitionsToDone(t *testing.T) {
+	h := newHarness(t)
+	task := h.makeTask(t, domain.StatusCategoryReview)
+
+	ev := mergedMREvent(202, task.ID, "MESH-"+task.ID.String())
+
+	res, err := h.svc.HandleGitLabMergeRequestEvent(context.Background(), ev)
+	require.NoError(t, err)
+	assert.True(t, res.Transitioned)
+	assert.Equal(t, "done", res.NewStatus)
+	assert.Equal(t, h.statusIDs[domain.StatusCategoryDone], h.taskRepo.tasks[task.ID].StatusID)
+}
+
+func TestHandleMR_ClosedWithoutMerge_NoStatusChange(t *testing.T) {
+	h := newHarness(t)
+	task := h.makeTask(t, domain.StatusCategoryInProgress)
+
+	ev := GitLabWebhookEvent{
+		Action:      "close",
+		MRIID:       303,
+		MRTitle:     "MESH-" + task.ID.String(),
+		MRState:     "closed",
+		MRURL:       "https://git.entire.host/entire-vc/evc-mesh/-/merge_requests/303",
+		ProjectPath: "entire-vc/evc-mesh",
+	}
+
+	res, err := h.svc.HandleGitLabMergeRequestEvent(context.Background(), ev)
+	require.NoError(t, err)
+	assert.False(t, res.Transitioned)
+	assert.Equal(t, "closed_without_merge", res.Reason)
+	assert.Empty(t, h.taskSvc.moveCalls)
+
+	links, _ := h.repo.ListByTask(context.Background(), task.ID)
+	require.Len(t, links, 1)
+	assert.Equal(t, domain.VCSLinkStatusClosed, links[0].Status)
+
+	require.Len(t, h.commentSvc.created, 1)
+	assert.Contains(t, h.commentSvc.created[0].Body, "MR !303 closed without merge")
+}
+
+// GitLab's "opened" and transient "locked" states must NOT be treated as
+// terminal — only "merged"/"closed" trigger the transition policy at all
+// (mirrors TestHandlePR_ActionOpened_NoTransition's "not_closed" gate).
+func TestHandleMR_StillOpen_NoTransition(t *testing.T) {
+	h := newHarness(t)
+	task := h.makeTask(t, domain.StatusCategoryInProgress)
+
+	ev := GitLabWebhookEvent{
+		Action:      "open",
+		MRIID:       900,
+		MRTitle:     "MESH-" + task.ID.String(),
+		MRState:     "opened",
+		MRURL:       "https://git.entire.host/entire-vc/evc-mesh/-/merge_requests/900",
+		ProjectPath: "entire-vc/evc-mesh",
+	}
+
+	res, err := h.svc.HandleGitLabMergeRequestEvent(context.Background(), ev)
+	require.NoError(t, err)
+	assert.False(t, res.Transitioned)
+	assert.Equal(t, "not_closed", res.Reason)
+	assert.Empty(t, h.taskSvc.moveCalls)
+
+	links, _ := h.repo.ListByTask(context.Background(), task.ID)
+	require.Len(t, links, 1)
+	assert.Equal(t, domain.VCSLinkStatusOpen, links[0].Status)
+}
+
+func TestHandleMR_MeshRefInBody_Resolves(t *testing.T) {
+	h := newHarness(t)
+	task := h.makeTask(t, domain.StatusCategoryInProgress)
+
+	ev := GitLabWebhookEvent{
+		Action:      "merge",
+		MRIID:       404,
+		MRTitle:     "fix: unrelated title",
+		MRBody:      "Refs MESH-" + task.ID.String(),
+		MRState:     "merged",
+		MergeSHA:    "cafebabe",
+		MRURL:       "https://git.entire.host/entire-vc/evc-mesh/-/merge_requests/404",
+		ProjectPath: "entire-vc/evc-mesh",
+	}
+
+	res, err := h.svc.HandleGitLabMergeRequestEvent(context.Background(), ev)
+	require.NoError(t, err)
+	assert.Equal(t, task.ID, res.TaskID)
+	assert.True(t, res.Transitioned)
+}
+
+// A multi-MR task must wait for every linked PR/MR (of either provider) to
+// go terminal before transitioning — proves HandleGitLabMergeRequestEvent
+// feeds into the SAME shared pendingCount check the GitHub tests exercise
+// (TestHandlePR_MultiPR_PartialMerge_NoTransition), not a parallel copy of
+// it that could silently diverge.
+func TestHandleMR_MultiMR_PartialMerge_NoTransition(t *testing.T) {
+	h := newHarness(t)
+	task := h.makeTask(t, domain.StatusCategoryInProgress)
+
+	// A still-open sibling MR already linked to the task.
+	sibling := &domain.VCSLink{
+		ID:         uuid.New(),
+		TaskID:     task.ID,
+		Provider:   domain.VCSProviderGitLab,
+		LinkType:   domain.VCSLinkTypePR,
+		ExternalID: "500",
+		URL:        "https://git.entire.host/entire-vc/evc-mesh/-/merge_requests/500",
+		Status:     domain.VCSLinkStatusOpen,
+	}
+	require.NoError(t, h.repo.Create(context.Background(), sibling))
+
+	ev := mergedMREvent(501, task.ID, "MESH-"+task.ID.String())
+	res, err := h.svc.HandleGitLabMergeRequestEvent(context.Background(), ev)
+	require.NoError(t, err)
+	assert.False(t, res.Transitioned)
+	assert.Equal(t, "awaiting_other_prs", res.Reason)
+	assert.Empty(t, h.taskSvc.moveCalls)
+}
+
+// ---------------------------------------------------------------------------
 // Create: link_type canonicalisation.
 // ---------------------------------------------------------------------------
 

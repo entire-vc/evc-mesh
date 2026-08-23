@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -29,13 +30,16 @@ import (
 
 // stubVCSLinkService captures the GitHubWebhookEvent passed by the handler.
 type stubVCSLinkService struct {
-	mu              sync.Mutex
-	handleCalls     []service.GitHubWebhookEvent
-	handleResult    service.PRHandleResult
-	handleErr       error
-	createCalls     []domain.CreateVCSLinkInput
-	createReturn    *domain.VCSLink
-	createReturnErr error
+	mu                 sync.Mutex
+	handleCalls        []service.GitHubWebhookEvent
+	handleResult       service.PRHandleResult
+	handleErr          error
+	gitlabHandleCalls  []service.GitLabWebhookEvent
+	gitlabHandleResult service.PRHandleResult
+	gitlabHandleErr    error
+	createCalls        []domain.CreateVCSLinkInput
+	createReturn       *domain.VCSLink
+	createReturnErr    error
 	// createReturnCreated defaults to true (a fresh insert) so existing tests
 	// that don't care about the upsert-vs-insert distinction keep observing
 	// the historical 201. Set false to simulate the upsert-onto-existing-row
@@ -109,6 +113,22 @@ func (s *stubVCSLinkService) lastHandleEvent() (service.GitHubWebhookEvent, bool
 		return service.GitHubWebhookEvent{}, false
 	}
 	return s.handleCalls[len(s.handleCalls)-1], true
+}
+
+func (s *stubVCSLinkService) HandleGitLabMergeRequestEvent(_ context.Context, ev service.GitLabWebhookEvent) (service.PRHandleResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.gitlabHandleCalls = append(s.gitlabHandleCalls, ev)
+	return s.gitlabHandleResult, s.gitlabHandleErr
+}
+
+func (s *stubVCSLinkService) lastGitLabHandleEvent() (service.GitLabWebhookEvent, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.gitlabHandleCalls) == 0 {
+		return service.GitLabWebhookEvent{}, false
+	}
+	return s.gitlabHandleCalls[len(s.gitlabHandleCalls)-1], true
 }
 
 // memDedupStore is an in-memory WebhookDedupStore used in handler tests so
@@ -354,6 +374,204 @@ func TestGitHubWebhook_NoSignatureWhenSecretConfigured(t *testing.T) {
 	require.NoError(t, h.GitHubWebhook(c))
 	assert.Equal(t, http.StatusUnauthorized, rec.Code)
 	assert.Empty(t, svc.handleCalls)
+}
+
+// ---------------------------------------------------------------------------
+// GitLabWebhook (#bc39d781) — mirrors the GitHubWebhook tests above, adapted
+// to GitLab's auth model (a shared X-Gitlab-Token secret, not an HMAC
+// signature) and payload shape (object_attributes nesting).
+// ---------------------------------------------------------------------------
+
+func newMergeRequestRequest(t *testing.T, body []byte, event, token string) *http.Request {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/webhooks/gitlab", bytes.NewReader(body))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	if event != "" {
+		req.Header.Set("X-Gitlab-Event", event)
+	}
+	if token != "" {
+		req.Header.Set("X-Gitlab-Token", token)
+	}
+	return req
+}
+
+func newMergeRequestPayload(t *testing.T, action string, iid int, title, description, state, mergeSHA string) []byte {
+	t.Helper()
+	payload := map[string]any{
+		"object_kind": "merge_request",
+		"project": map[string]any{
+			"path_with_namespace": "entire-vc/evc-mesh",
+			"web_url":             "https://git.entire.host/entire-vc/evc-mesh",
+		},
+		"object_attributes": map[string]any{
+			"iid":              iid,
+			"title":            title,
+			"description":      description,
+			"state":            state,
+			"action":           action,
+			"source_branch":    "feature-branch",
+			"url":              "https://git.entire.host/entire-vc/evc-mesh/-/merge_requests/" + itoaTest(iid),
+			"merge_commit_sha": mergeSHA,
+		},
+	}
+	b, err := json.Marshal(payload)
+	require.NoError(t, err)
+	return b
+}
+
+// Missing X-Gitlab-Event → 400, not 404 (the AC this task exists for: today
+// there is no route at all, so this is what proves the route now exists AND
+// validates its input the same way the GitHub route does).
+func TestGitLabWebhook_MissingEventHeader_400(t *testing.T) {
+	svc := &stubVCSLinkService{}
+	h := NewVCSLinkHandler(svc)
+
+	body := newMergeRequestPayload(t, "merge", 42, "MESH-"+uuid.New().String(), "", "merged", "abc1234567")
+	req := newMergeRequestRequest(t, body, "", "")
+
+	rec := httptest.NewRecorder()
+	c := echo.New().NewContext(req, rec)
+
+	require.NoError(t, h.GitLabWebhook(c))
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	assert.Contains(t, fmt.Sprint(resp["message"]), "X-Gitlab-Event")
+	assert.Empty(t, svc.gitlabHandleCalls, "service must not be invoked when X-Gitlab-Event is missing")
+}
+
+func TestGitLabWebhook_MissingTokenWhenSecretConfigured_401(t *testing.T) {
+	svc := &stubVCSLinkService{}
+	h := NewVCSLinkHandler(svc, WithGitLabWebhookSecret("s3cret"))
+
+	body := newMergeRequestPayload(t, "merge", 1, "MESH-"+uuid.New().String(), "", "merged", "")
+	req := newMergeRequestRequest(t, body, "Merge Request Hook", "")
+
+	rec := httptest.NewRecorder()
+	c := echo.New().NewContext(req, rec)
+
+	require.NoError(t, h.GitLabWebhook(c))
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	assert.Empty(t, svc.gitlabHandleCalls)
+}
+
+func TestGitLabWebhook_InvalidToken_401(t *testing.T) {
+	svc := &stubVCSLinkService{}
+	h := NewVCSLinkHandler(svc, WithGitLabWebhookSecret("s3cret"))
+
+	body := newMergeRequestPayload(t, "merge", 2, "MESH-"+uuid.New().String(), "", "merged", "")
+	req := newMergeRequestRequest(t, body, "Merge Request Hook", "wrong-token")
+
+	rec := httptest.NewRecorder()
+	c := echo.New().NewContext(req, rec)
+
+	require.NoError(t, h.GitLabWebhook(c))
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	assert.Empty(t, svc.gitlabHandleCalls)
+}
+
+func TestGitLabWebhook_ValidToken_Passes(t *testing.T) {
+	svc := &stubVCSLinkService{}
+	h := NewVCSLinkHandler(svc, WithGitLabWebhookSecret("s3cret"))
+
+	body := newMergeRequestPayload(t, "merge", 3, "MESH-"+uuid.New().String(), "", "merged", "abc")
+	req := newMergeRequestRequest(t, body, "Merge Request Hook", "s3cret")
+
+	rec := httptest.NewRecorder()
+	c := echo.New().NewContext(req, rec)
+
+	require.NoError(t, h.GitLabWebhook(c))
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Len(t, svc.gitlabHandleCalls, 1)
+}
+
+// A non-"Merge Request Hook" event (Push Hook, Note Hook, ...) must be
+// accepted and ignored — same policy as GitHubWebhook's unhandled-event
+// default case — not rejected or errored.
+func TestGitLabWebhook_UnhandledEventType_IgnoredNotError(t *testing.T) {
+	svc := &stubVCSLinkService{}
+	h := NewVCSLinkHandler(svc)
+
+	req := newMergeRequestRequest(t, []byte(`{}`), "Push Hook", "")
+	rec := httptest.NewRecorder()
+	c := echo.New().NewContext(req, rec)
+
+	require.NoError(t, h.GitLabWebhook(c))
+	assert.Equal(t, http.StatusOK, rec.Code)
+	var resp map[string]string
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	assert.Equal(t, "ignored", resp["status"])
+	assert.Empty(t, svc.gitlabHandleCalls)
+}
+
+// TestGitLabWebhook_MergeRequest_DelegatesToService asserts the handler
+// extracts every field the orchestrator needs and passes them through,
+// mirroring TestGitHubWebhook_PullRequest_DelegatesToService.
+func TestGitLabWebhook_MergeRequest_DelegatesToService(t *testing.T) {
+	svc := &stubVCSLinkService{
+		gitlabHandleResult: service.PRHandleResult{
+			TaskID:       uuid.New(),
+			OldStatus:    "in_progress",
+			NewStatus:    "review",
+			Transitioned: true,
+			Reason:       "transitioned",
+		},
+	}
+	h := NewVCSLinkHandler(svc)
+
+	taskID := uuid.New()
+	body := newMergeRequestPayload(t, "merge", 123, "MESH-"+taskID.String(), "body-text", "merged", "deadbeefcafef00d1234567")
+	req := newMergeRequestRequest(t, body, "Merge Request Hook", "")
+
+	rec := httptest.NewRecorder()
+	c := echo.New().NewContext(req, rec)
+
+	require.NoError(t, h.GitLabWebhook(c))
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	ev, ok := svc.lastGitLabHandleEvent()
+	require.True(t, ok, "service.HandleGitLabMergeRequestEvent should have been called")
+	assert.Equal(t, "merge", ev.Action)
+	assert.Equal(t, 123, ev.MRIID)
+	assert.Equal(t, "MESH-"+taskID.String(), ev.MRTitle)
+	assert.Equal(t, "body-text", ev.MRBody)
+	assert.Equal(t, "merged", ev.MRState)
+	assert.Equal(t, "deadbeefcafef00d1234567", ev.MergeSHA)
+	assert.Equal(t, "entire-vc/evc-mesh", ev.ProjectPath)
+}
+
+// A service-layer error must not surface as a 5xx — same "log and ack"
+// policy as GitHub, so GitLab doesn't retry-storm us.
+func TestGitLabWebhook_MergeRequest_ServiceErrorReturns200Logged(t *testing.T) {
+	svc := &stubVCSLinkService{
+		gitlabHandleErr: errors.New("db down"),
+	}
+	h := NewVCSLinkHandler(svc)
+
+	body := newMergeRequestPayload(t, "merge", 42, "MESH-"+uuid.New().String(), "", "merged", "abc1234")
+	req := newMergeRequestRequest(t, body, "Merge Request Hook", "")
+	rec := httptest.NewRecorder()
+	c := echo.New().NewContext(req, rec)
+
+	require.NoError(t, h.GitLabWebhook(c))
+	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
+// No secret configured → no token required at all (backward-compatible
+// default, same policy as GitHub's HMAC-less mode).
+func TestGitLabWebhook_NoSecretConfigured_TokenNotRequired(t *testing.T) {
+	svc := &stubVCSLinkService{}
+	h := NewVCSLinkHandler(svc) // no WithGitLabWebhookSecret
+
+	body := newMergeRequestPayload(t, "merge", 5, "MESH-"+uuid.New().String(), "", "merged", "")
+	req := newMergeRequestRequest(t, body, "Merge Request Hook", "")
+
+	rec := httptest.NewRecorder()
+	c := echo.New().NewContext(req, rec)
+
+	require.NoError(t, h.GitLabWebhook(c))
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Len(t, svc.gitlabHandleCalls, 1)
 }
 
 // ---------------------------------------------------------------------------
