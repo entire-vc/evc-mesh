@@ -358,6 +358,42 @@ written *before* the verdict branches, so it still exists on an INCONCLUSIVE or
 a refused capture, and a failure to write is logged but never changes the
 verdict: an observability artifact must not be able to fail a required check.
 
+## The corpus we measure on is not byte-identical to LongMemEval-S
+
+Since `1f803fd` (PR #660, task `#f78232c4`) the `remember` write path refuses
+content carrying an invisible/direction-altering character or an
+instruction-override phrase. The corpus contains both, so 9 of its 1150
+sessions are normalised before they are stored (`corpus_sanitize.py`, policy
+decision on task `#82e42882`):
+
+| rule | sessions | what is in the corpus | what we do |
+|---|---:|---|---|
+| `invisible-character` | 6 | `U+200B` only, 16 occurrences | drop the character |
+| `instruction-override` | 3 | literally `ignore all previous` / `Ignore all instructions prior` | replace the phrase with a visible marker |
+
+**All 9 are distractors — none carries an answer.** That is what makes the
+rewrite safe rather than merely small: the metric is recall@k against
+`answer_session_ids`, so rewriting a distractor cannot move it. The property is
+asserted before every run, not assumed — `assert_only_distractors_touched`
+raises if a refresh of the corpus ever puts a violation in a gold session, and
+`test_corpus_sanitize.py` proves that check can fail by mutating one in.
+
+Sessions are rewritten, never dropped. Removing a session would shrink the
+haystack, which makes its question *easier* and inflates the score.
+
+Two consequences worth stating plainly:
+
+- **Our numbers are no longer strictly comparable to published LongMemEval-S
+  results.** The difference is 9 distractor sessions out of 1150 and the
+  expected effect on recall@k is negligible — but "negligible" is an estimate,
+  not a measurement, and the difference is real.
+- **We do not exempt the bench agent from the write-path gate.** That was the
+  alternative, and it was rejected: it would add a fourth way into `memories`
+  bypassing the sanitizer, gated only on agent identity, with the bench key
+  living in CI — and it would put the adversarial content into the database for
+  real, since the harness writes at `scope=workspace`, the same space the
+  fleet's `recall` reads.
+
 ## Fixture AGE, and why the corpus is backdated
 
 `remember` has no `created_at` field, so every fixture the bench writes is born at
