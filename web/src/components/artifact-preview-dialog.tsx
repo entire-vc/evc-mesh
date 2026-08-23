@@ -16,6 +16,7 @@ import {
   truncateForPreview,
 } from "@/lib/artifact-preview";
 import type { Artifact } from "@/types";
+import { apiErrorMessage } from "@/lib/api-error";
 
 interface ArtifactPreviewDialogProps {
   /** The artifact to show, or null when the viewer is closed. */
@@ -94,7 +95,7 @@ export function ArtifactPreviewDialog({
         if (cancelled || controller.signal.aborted) return;
         setState({
           status: "error",
-          message: err instanceof Error ? err.message : "could not load file",
+          message: apiErrorMessage(err, "could not load file"),
         });
       }
     })();

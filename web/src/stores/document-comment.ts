@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { api } from "@/lib/api";
+import { apiErrorMessage } from "@/lib/api-error";
 import type {
   CreateDocumentCommentRequest,
   DocumentComment,
@@ -7,7 +8,7 @@ import type {
 } from "@/types";
 
 function getErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : "Request failed";
+  return apiErrorMessage(error, "Request failed");
 }
 
 const PAGE_SIZE = 200;

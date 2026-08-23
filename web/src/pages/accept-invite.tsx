@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { api, setAccessToken } from "@/lib/api";
 import { useAuthStore } from "@/stores/auth";
+import { apiErrorMessage } from "@/lib/api-error";
 
 interface InviteInfo {
   id: string;
@@ -74,7 +75,7 @@ export function AcceptInvitePage() {
       await fetchMe();
       navigate("/", { replace: true });
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to accept invite");
+      setError(apiErrorMessage(err, "Failed to accept invite"));
     } finally {
       setIsSubmitting(false);
     }

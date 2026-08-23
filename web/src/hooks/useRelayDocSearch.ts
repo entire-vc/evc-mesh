@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
+import { apiErrorMessage } from "@/lib/api-error";
 
 export interface RelayDoc {
   title: string;
@@ -47,7 +48,7 @@ export function useRelayDocSearch(query: string, projId: string) {
         if (mountedRef.current) setResults(data.docs ?? []);
       } catch (err) {
         if (!mountedRef.current) return;
-        setError(err instanceof Error ? err.message : "Search failed");
+        setError(apiErrorMessage(err, "Search failed"));
         setResults([]);
       } finally {
         if (mountedRef.current) setIsLoading(false);

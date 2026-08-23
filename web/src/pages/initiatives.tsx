@@ -24,6 +24,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "@/components/ui/toast";
 import { cn } from "@/lib/cn";
+import { apiErrorMessage } from "@/lib/api-error";
 import type {
   CreateInitiativeRequest,
   Initiative,
@@ -156,7 +157,7 @@ function NewInitiativeForm({
         toast.success("Initiative created");
         onClose();
       } catch (err) {
-        toast.error(err instanceof Error ? err.message : "Failed to create initiative");
+        toast.error(apiErrorMessage(err, "Failed to create initiative"));
       } finally {
         setSubmitting(false);
       }
@@ -269,7 +270,7 @@ function InitiativeDetail({
       setSelectedProjectId("");
       toast.success("Project linked");
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to link project");
+      toast.error(apiErrorMessage(err, "Failed to link project"));
     } finally {
       setLinking(false);
     }
@@ -283,7 +284,7 @@ function InitiativeDetail({
         setDetail(updated);
         toast.success("Project unlinked");
       } catch (err) {
-        toast.error(err instanceof Error ? err.message : "Failed to unlink project");
+        toast.error(apiErrorMessage(err, "Failed to unlink project"));
       }
     },
     [detail.id, unlinkProject, getInitiative],
@@ -297,7 +298,7 @@ function InitiativeDetail({
       toast.success("Initiative deleted");
       onBack();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to delete initiative");
+      toast.error(apiErrorMessage(err, "Failed to delete initiative"));
       setDeleting(false);
     }
   }, [detail, deleteInitiative, onBack]);

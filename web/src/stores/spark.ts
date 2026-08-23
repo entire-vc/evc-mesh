@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { api } from "@/lib/api";
 import type { SparkAgentManifest, SparkInstallResponse } from "@/types";
+import { apiErrorMessage } from "@/lib/api-error";
 
 interface SparkState {
   // Catalog state
@@ -47,7 +48,7 @@ export const useSparkStore = create<SparkState>((set) => ({
       );
       set({ agents: response.items ?? [], isLoading: false });
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Failed to search Spark catalog";
+      const message = apiErrorMessage(err, "Failed to search Spark catalog");
       set({ isLoading: false, error: message, agents: [] });
     }
   },
@@ -61,7 +62,7 @@ export const useSparkStore = create<SparkState>((set) => ({
       );
       set({ popularAgents: response.items ?? [], isLoading: false });
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Failed to load popular agents";
+      const message = apiErrorMessage(err, "Failed to load popular agents");
       set({ isLoading: false, error: message, popularAgents: [] });
     }
   },
@@ -75,7 +76,7 @@ export const useSparkStore = create<SparkState>((set) => ({
       set({ selectedAgent: manifest, isLoading: false });
       return manifest;
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Failed to fetch agent";
+      const message = apiErrorMessage(err, "Failed to fetch agent");
       set({ isLoading: false, error: message });
       return null;
     }
@@ -101,7 +102,7 @@ export const useSparkStore = create<SparkState>((set) => ({
       set({ isInstalling: false, lastInstallResult: result });
       return result;
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Failed to install agent";
+      const message = apiErrorMessage(err, "Failed to install agent");
       set({ isInstalling: false, error: message });
       // Re-throw so caller can handle it
       throw err;

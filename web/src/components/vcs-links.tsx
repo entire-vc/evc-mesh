@@ -15,6 +15,7 @@ import { Select } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/cn";
 import type { VCSLink, VCSLinkType, CreateVCSLinkRequest } from "@/types";
+import { apiErrorMessage } from "@/lib/api-error";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -95,7 +96,7 @@ export function VCSLinks({ taskId }: VCSLinksProps) {
       setShowForm(false);
       setForm({ link_type: "pr", external_id: "", url: "", title: "", provider: "github" });
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Failed to create link.");
+      setError(apiErrorMessage(err, "Failed to create link."));
     } finally {
       setSubmitting(false);
     }

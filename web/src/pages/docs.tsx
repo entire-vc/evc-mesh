@@ -68,6 +68,7 @@ import {
 } from "@/lib/docs/anchor";
 import { useDocComments } from "@/lib/doc-comments/use-doc-comments";
 import { ApiRequestError } from "@/lib/api";
+import { apiErrorMessage } from "@/lib/api-error";
 import {
   type DocumentSearchHit,
   searchDocuments,
@@ -104,7 +105,7 @@ type SaveState =
   | { status: "conflict" };
 
 function errorMessage(err: unknown, fallback: string): string {
-  return err instanceof Error ? err.message : fallback;
+  return apiErrorMessage(err, fallback);
 }
 
 // The one 409 a document PATCH can return that means "refused, not failed":

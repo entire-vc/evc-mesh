@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { Task } from "@/types";
+import { apiErrorMessage } from "@/lib/api-error";
 
 interface SubtaskListProps {
   taskId: string;
@@ -66,7 +67,7 @@ export function SubtaskList({ taskId, onOpenSubtask, refreshKey }: SubtaskListPr
       setShowForm(false);
     } catch (err: unknown) {
       setError(
-        err instanceof Error ? err.message : "Failed to add subtask.",
+        apiErrorMessage(err, "Failed to add subtask."),
       );
     } finally {
       setSubmitting(false);

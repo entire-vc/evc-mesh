@@ -20,6 +20,7 @@ import { useProjectStore } from "@/stores/project";
 import { useAgentStore } from "@/stores/agent";
 import { useAuthStore } from "@/stores/auth";
 import { useWorkspaceStore } from "@/stores/workspace";
+import { apiErrorMessage } from "@/lib/api-error";
 import type {
   AssigneeType,
   CreateRecurringRequest,
@@ -257,7 +258,7 @@ export function CreateRecurringDialog({
       onOpenChange(false);
     } catch (err) {
       setError(
-        err instanceof Error ? err.message : "Failed to save recurring schedule",
+        apiErrorMessage(err, "Failed to save recurring schedule"),
       );
     } finally {
       setIsSubmitting(false);

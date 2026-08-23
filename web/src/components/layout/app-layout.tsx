@@ -13,6 +13,7 @@ import { Header } from "./header";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { apiErrorMessage } from "@/lib/api-error";
 import {
   Card,
   CardContent,
@@ -259,7 +260,7 @@ function NoWorkspacesScreen() {
         const ws = await createWorkspace({ name: name.trim(), slug: slug.trim() });
         navigate(`/w/${ws.slug}`, { replace: true });
       } catch (err) {
-        setError(err instanceof Error ? err.message : "Failed to create workspace");
+        setError(apiErrorMessage(err, "Failed to create workspace"));
       } finally {
         setCreating(false);
       }

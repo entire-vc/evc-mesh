@@ -29,6 +29,7 @@ import {
   emptyFilter,
 } from "@/components/memory/memory-filters";
 import type { Memory, MemoryFilter, MemoryOrderBy } from "@/types";
+import { apiErrorMessage } from "@/lib/api-error";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -248,7 +249,7 @@ function CreateMemoryForm({ onSubmit, workspaceId }: CreateMemoryFormProps) {
       setTagsRaw("");
       setScope("workspace");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to create memory");
+      setError(apiErrorMessage(err, "Failed to create memory"));
     } finally {
       setSubmitting(false);
     }

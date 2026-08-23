@@ -27,6 +27,7 @@ import type { CreateProjectUpdateRequest, ProjectUpdate, UpdateStatus } from "@/
 import { Columns3, List, GitBranch, FileText } from "lucide-react";
 import { Link } from "react-router";
 import { cn } from "@/lib/cn";
+import { apiErrorMessage } from "@/lib/api-error";
 
 const STATUS_CONFIG: Record<UpdateStatus, { label: string; color: string; icon: React.ReactNode }> = {
   on_track: {
@@ -190,7 +191,7 @@ function NewUpdateForm({
         toast.success("Update posted");
         onClose();
       } catch (err) {
-        toast.error(err instanceof Error ? err.message : "Failed to create update");
+        toast.error(apiErrorMessage(err, "Failed to create update"));
       } finally {
         setSubmitting(false);
       }
