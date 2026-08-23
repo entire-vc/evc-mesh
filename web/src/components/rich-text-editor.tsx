@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   Bold,
-  BookOpen,
   Code,
   Image as ImageIcon,
   Italic,
@@ -33,7 +32,6 @@ import { callCommand, replaceAll } from "@milkdown/kit/utils";
 import { Milkdown, MilkdownProvider, useEditor, useInstance } from "@milkdown/react";
 import { cn } from "@/lib/cn";
 import { toast } from "@/components/ui/toast";
-import { RelayDocPicker } from "@/components/RelayDocPicker";
 import { DocLinkMenu } from "@/components/doc-link-menu";
 import { MentionMenu, type Mentionable } from "@/components/mention-menu";
 import { useProjectTrIntegration } from "@/hooks/useProjectTrIntegration";
@@ -201,7 +199,6 @@ function RichTextEditorInner({
   const [uploading, setUploading] = useState(false);
   const [linkOpen, setLinkOpen] = useState(false);
   const [linkHref, setLinkHref] = useState("");
-  const [relayOpen, setRelayOpen] = useState(false);
   const [suggestion, setSuggestion] = useState<Suggestion | null>(null);
   const [menuAt, setMenuAt] = useState<{ left: number; top: number } | null>(null);
   const [activeIndex, setActiveIndex] = useState(0);
@@ -543,20 +540,6 @@ function RichTextEditorInner({
     setLinkOpen(false);
   };
 
-  const handleRelaySelect = useCallback(
-    (relayUrl: string) => {
-      withView((view) => {
-        const { state } = view;
-        // Its own paragraph, as the textarea version did: the relay renderer
-        // splits these out of the text and draws a card, which cannot sit
-        // mid-sentence.
-        view.dispatch(state.tr.replaceSelectionWith(state.schema.text(relayUrl), false));
-        view.focus();
-      });
-    },
-    [withView],
-  );
-
   const handleClick = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
     handleArtifactLinkClick(e);
   }, []);
@@ -634,12 +617,6 @@ function RichTextEditorInner({
           className="hidden"
           onChange={handleFiles}
         />
-
-        {hasTrIntegration && (
-          <ToolbarButton title="Attach Obsidian doc" onClick={() => setRelayOpen(true)}>
-            <BookOpen className="h-3.5 w-3.5" />
-          </ToolbarButton>
-        )}
 
         <div className="flex-1" />
         {uploading && <span className="mr-2 text-xs text-muted-foreground">Uploading...</span>}
@@ -732,14 +709,6 @@ function RichTextEditorInner({
           document.body,
         )}
 
-      {hasTrIntegration && projId && (
-        <RelayDocPicker
-          projId={projId}
-          open={relayOpen}
-          onClose={() => setRelayOpen(false)}
-          onSelect={handleRelaySelect}
-        />
-      )}
     </div>
   );
 }
