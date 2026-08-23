@@ -93,6 +93,7 @@ function makeController(
     focusThread: vi.fn(),
     pendingSelection: null,
     startDraft: vi.fn(),
+    startPageDraft: vi.fn(),
     draft: null,
     cancelDraft: vi.fn(),
     submitDraft: vi.fn(async () => {}),

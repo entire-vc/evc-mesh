@@ -25,6 +25,7 @@ import {
 import { DocBreadcrumbs } from "@/components/doc-breadcrumbs";
 import {
   DocCommentAffordance,
+  DocCommentPageEntry,
   DocCommentRail,
   DocCommentToggle,
 } from "@/components/doc-comment-rail";
@@ -1101,6 +1102,13 @@ export function DocsPage() {
                     controller={comments}
                     open={railOpen}
                     onToggle={toggleRail}
+                  />
+                  {/* Not gated on railOpen: this is the entry that must work
+                      whichever of the two mutually-exclusive surfaces
+                      (`#a9df0f4a`) currently has the discussion. */}
+                  <DocCommentPageEntry
+                    controller={comments}
+                    onOpenRail={() => setRailOpen(true)}
                   />
                   <DocWatchToggle documentId={openDoc.id} />
                   <SaveIndicator state={saveState} onRetry={() => void flushBody()} />
